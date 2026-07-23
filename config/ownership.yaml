@@ -1,0 +1,535 @@
+{
+  "schema_version": 1,
+  "allowed_lifecycles": [
+    "startup",
+    "live",
+    "task_snapshot",
+    "test_only",
+    "lab"
+  ],
+  "task_snapshot_allowlist": [
+    "app.config_schema_version",
+    "app.architecture_baseline",
+    "model.*",
+    "runtime.*",
+    "langchain_adapter.*",
+    "workflow.*",
+    "multi_agent.*",
+    "rag.*",
+    "qdrant.collection_schema_version",
+    "qdrant.distance"
+  ],
+  "derived_task_snapshot_values": [
+    "resolved_qdrant_collection",
+    "resolved_qdrant_index_version",
+    "resolved_qdrant_index_generation_id"
+  ],
+  "groups": [
+    {
+      "owner": "bootstrap.processes",
+      "lifecycle": "startup",
+      "fields": [
+        "app.name",
+        "app.environment",
+        "app.deployment_scope",
+        "app.log_level",
+        "app.debug"
+      ]
+    },
+    {
+      "owner": "bootstrap.settings",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "app.config_schema_version",
+        "app.architecture_baseline"
+      ]
+    },
+    {
+      "owner": "apps.api.server",
+      "lifecycle": "startup",
+      "fields": [
+        "api.host",
+        "api.port",
+        "api.shutdown_grace_seconds",
+        "api.document_upload_transport"
+      ]
+    },
+    {
+      "owner": "apps.api.request_limits",
+      "lifecycle": "live",
+      "fields": [
+        "api.request_timeout_seconds",
+        "api.max_control_request_body_bytes"
+      ]
+    },
+    {
+      "owner": "apps.api.sse",
+      "lifecycle": "live",
+      "fields": [
+        "api.sse_heartbeat_seconds"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.connection_factory",
+      "lifecycle": "startup",
+      "fields": [
+        "database.dsn",
+        "database.query_pool_mode",
+        "database.query_pool_size",
+        "database.query_pool_max_overflow",
+        "database.operational_connection_reserve",
+        "database.statement_timeout_ms",
+        "database.application_name"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.guard_runner",
+      "lifecycle": "startup",
+      "fields": [
+        "database.guard_dsn",
+        "database.guard_pool_mode",
+        "database.guard_connection_budget",
+        "database.guard_connection_scope"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.guard_runner",
+      "lifecycle": "live",
+      "fields": [
+        "database.guard_disconnect_action",
+        "database.guard_healthcheck_seconds"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.event_listener",
+      "lifecycle": "startup",
+      "fields": [
+        "database.listen_dsn",
+        "database.listen_pool_mode",
+        "database.listener_connections_per_process",
+        "database.listen_connection_scope"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.event_listener",
+      "lifecycle": "live",
+      "fields": [
+        "database.listener_healthcheck_seconds"
+      ]
+    },
+    {
+      "owner": "workers.task.registry",
+      "lifecycle": "startup",
+      "fields": [
+        "coordination.registry_backend",
+        "coordination.claim_strategy",
+        "coordination.worker_concurrency"
+      ]
+    },
+    {
+      "owner": "workers.task.registry",
+      "lifecycle": "live",
+      "fields": [
+        "coordination.claim_batch_size",
+        "coordination.claim_poll_interval_ms",
+        "coordination.claim_poll_jitter_ms",
+        "coordination.priority_aging_seconds",
+        "coordination.strict_fifo_required"
+      ]
+    },
+    {
+      "owner": "workers.task.lease_manager",
+      "lifecycle": "live",
+      "fields": [
+        "coordination.lease_duration_seconds",
+        "coordination.heartbeat_interval_seconds",
+        "coordination.lease_grace_seconds",
+        "coordination.max_missed_heartbeats",
+        "coordination.recovery_poll_seconds",
+        "coordination.lease_time_source",
+        "coordination.fencing_token_strategy",
+        "coordination.heartbeat_execution"
+      ]
+    },
+    {
+      "owner": "workers.task.retry_policy",
+      "lifecycle": "live",
+      "fields": [
+        "coordination.max_attempts",
+        "coordination.retry_base_seconds",
+        "coordination.retry_max_seconds"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.fencing",
+      "lifecycle": "live",
+      "fields": [
+        "coordination.advisory_lock_enabled",
+        "coordination.require_same_physical_session",
+        "coordination.fenced_checkpointer_enabled",
+        "coordination.advisory_lock_key_strategy"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.tool_execution_ledger",
+      "lifecycle": "live",
+      "fields": [
+        "coordination.tool_execution_ledger_enabled"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.event_log",
+      "lifecycle": "startup",
+      "fields": [
+        "event_stream.store_backend",
+        "event_stream.replay_source"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.event_listener",
+      "lifecycle": "startup",
+      "fields": [
+        "event_stream.wakeup_backend",
+        "event_stream.notify_payload_mode",
+        "event_stream.notify_payload_limit_bytes",
+        "event_stream.listener_uses_dedicated_session",
+        "event_stream.task_ready_channel",
+        "event_stream.stream_ready_channel"
+      ]
+    },
+    {
+      "owner": "adapters.persistence.event_log",
+      "lifecycle": "live",
+      "fields": [
+        "event_stream.replay_page_size",
+        "event_stream.subscriber_buffer_events",
+        "event_stream.catchup_poll_seconds"
+      ]
+    },
+    {
+      "owner": "apps.api.sse",
+      "lifecycle": "live",
+      "fields": [
+        "event_stream.model_delta_mode",
+        "event_stream.live_delta_coalesce_ms"
+      ]
+    },
+    {
+      "owner": "adapters.model.gateway",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "model.provider",
+        "model.main.model_id",
+        "model.main.temperature",
+        "model.main.max_output_tokens",
+        "model.main.timeout_seconds",
+        "model.main.max_retries",
+        "model.main.tool_calling_required",
+        "model.main.prompt_cache_enabled",
+        "model.compact.model_id",
+        "model.compact.temperature",
+        "model.compact.max_output_tokens",
+        "model.compact.timeout_seconds",
+        "model.compact.max_retries",
+        "model.compact.tool_calling_required",
+        "model.compact.prompt_cache_enabled"
+      ]
+    },
+    {
+      "owner": "runtime.agent_runtime",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "runtime.executor",
+        "runtime.max_steps",
+        "runtime.max_tool_calls",
+        "runtime.max_parallel_read_tools",
+        "runtime.max_parallel_write_tools",
+        "runtime.model_timeout_seconds",
+        "runtime.tool_timeout_seconds",
+        "runtime.cancellation_poll_seconds",
+        "runtime.context_soft_limit_ratio",
+        "runtime.tool_result_artifact_threshold_bytes",
+        "runtime.write_tools_default_enabled"
+      ]
+    },
+    {
+      "owner": "adapters.langchain.registry",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "langchain_adapter.enabled",
+        "langchain_adapter.allowed_scope",
+        "langchain_adapter.agent_executor_enabled",
+        "langchain_adapter.memory_enabled"
+      ]
+    },
+    {
+      "owner": "adapters.langgraph.workflow",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "workflow.control_plane",
+        "workflow.checkpointer_backend",
+        "workflow.checkpointing_enabled",
+        "workflow.human_interrupt_enabled",
+        "workflow.interrupt_boundary",
+        "workflow.runtime_loop_owner",
+        "workflow.graph_version",
+        "workflow.node_retry_max_attempts",
+        "workflow.node_timeout_seconds"
+      ]
+    },
+    {
+      "owner": "application.multi_agent.supervisor",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "multi_agent.enabled",
+        "multi_agent.backend",
+        "multi_agent.topology",
+        "multi_agent.worker_executor",
+        "multi_agent.static_agent_node_limit",
+        "multi_agent.max_parallel_agent_invocations",
+        "multi_agent.max_agent_invocation_attempts_per_task",
+        "multi_agent.max_tokens_per_agent_invocation"
+      ]
+    },
+    {
+      "owner": "adapters.llama_index",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "rag.llama_index.enabled",
+        "rag.llama_index.role",
+        "rag.llama_index.agent_executor_enabled",
+        "rag.llama_index.query_engine_generates_final_answer",
+        "rag.llama_index.fusion_enabled"
+      ]
+    },
+    {
+      "owner": "application.knowledge.ingestion",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "rag.ingestion.chunk_size_tokens",
+        "rag.ingestion.chunk_overlap_tokens",
+        "rag.ingestion.embedding_batch_size",
+        "rag.ingestion.upsert_batch_size",
+        "rag.ingestion.document_versioning_enabled",
+        "rag.ingestion.outbox_required",
+        "rag.ingestion.parser_version",
+        "rag.ingestion.chunker_version",
+        "rag.ingestion.index_schema_version"
+      ]
+    },
+    {
+      "owner": "adapters.embedding.bge_m3",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "rag.embedding.model_id",
+        "rag.embedding.revision",
+        "rag.embedding.vector_size",
+        "rag.embedding.max_input_tokens",
+        "rag.embedding.device",
+        "rag.embedding.precision",
+        "rag.embedding.dense_enabled",
+        "rag.embedding.sparse_enabled",
+        "rag.embedding.dense_vector_name",
+        "rag.embedding.sparse_vector_name"
+      ]
+    },
+    {
+      "owner": "application.knowledge.retrieval",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "rag.retrieval.fusion_owner",
+        "rag.retrieval.fusion_method",
+        "rag.retrieval.dense_top_k",
+        "rag.retrieval.sparse_top_k",
+        "rag.retrieval.fused_top_k",
+        "rag.retrieval.rerank_top_k",
+        "rag.retrieval.answer_context_k",
+        "rag.retrieval.metadata_filter_required",
+        "rag.retrieval.acl_filter_required",
+        "rag.retrieval.citations_required"
+      ]
+    },
+    {
+      "owner": "adapters.reranker.bge",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "rag.reranker.enabled",
+        "rag.reranker.model_id",
+        "rag.reranker.revision",
+        "rag.reranker.batch_size",
+        "rag.reranker.device",
+        "rag.reranker.precision",
+        "rag.reranker.timeout_seconds",
+        "rag.reranker.failure_mode"
+      ]
+    },
+    {
+      "owner": "adapters.qdrant.client_factory",
+      "lifecycle": "startup",
+      "fields": [
+        "qdrant.url",
+        "qdrant.request_timeout_seconds",
+        "qdrant.prefer_grpc",
+        "qdrant.api_key_required"
+      ]
+    },
+    {
+      "owner": "adapters.qdrant.alias_resolver",
+      "lifecycle": "live",
+      "fields": [
+        "qdrant.read_alias"
+      ]
+    },
+    {
+      "owner": "adapters.qdrant.index_manager",
+      "lifecycle": "live",
+      "fields": [
+        "qdrant.write_collection",
+        "qdrant.derived_index"
+      ]
+    },
+    {
+      "owner": "adapters.qdrant.index_manager",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "qdrant.collection_schema_version",
+        "qdrant.distance"
+      ]
+    },
+    {
+      "owner": "adapters.qdrant.retrieval",
+      "lifecycle": "live",
+      "fields": [
+        "qdrant.payload_acl_filter_required"
+      ]
+    },
+    {
+      "owner": "adapters.artifacts.factory",
+      "lifecycle": "startup",
+      "fields": [
+        "artifact_store.backend",
+        "artifact_store.local_root",
+        "artifact_store.bucket",
+        "artifact_store.endpoint",
+        "artifact_store.region"
+      ]
+    },
+    {
+      "owner": "application.artifacts.upload_service",
+      "lifecycle": "live",
+      "fields": [
+        "artifact_store.max_artifact_bytes",
+        "artifact_store.presigned_url_ttl_seconds"
+      ]
+    },
+    {
+      "owner": "application.policy.engine",
+      "lifecycle": "live",
+      "fields": [
+        "policy.revision",
+        "policy.default_effect",
+        "policy.write_tools_require_approval",
+        "policy.network_tools_require_allowlist",
+        "policy.shell_tools_enabled",
+        "policy.path_sandbox_enabled",
+        "policy.tenant_filter_required",
+        "policy.max_tool_argument_bytes",
+        "policy.max_tool_result_bytes",
+        "policy.redact_secrets"
+      ]
+    },
+    {
+      "owner": "adapters.observability.otel",
+      "lifecycle": "startup",
+      "fields": [
+        "observability.otel_enabled",
+        "observability.otel_service_name",
+        "observability.otel_exporter_endpoint",
+        "observability.trace_sample_ratio",
+        "observability.record_prompt_body",
+        "observability.record_tool_result_body",
+        "observability.metrics_enabled"
+      ]
+    },
+    {
+      "owner": "adapters.observability.langfuse",
+      "lifecycle": "startup",
+      "fields": [
+        "observability.langfuse_enabled"
+      ]
+    },
+    {
+      "owner": "evaluation.runner",
+      "lifecycle": "startup",
+      "fields": [
+        "evaluation.ragas_enabled",
+        "evaluation.ragas_offline_only",
+        "evaluation.online_judge_in_ci",
+        "evaluation.benchmark_isolated_process",
+        "evaluation.rag_gold_set_path",
+        "evaluation.task_benchmark_path",
+        "evaluation.rag_metrics",
+        "evaluation.task_metrics",
+        "evaluation.multi_agent_metrics"
+      ]
+    },
+    {
+      "owner": "evaluation.judge_adapter",
+      "lifecycle": "startup",
+      "fields": [
+        "evaluation.judge.enabled",
+        "evaluation.judge.model_id",
+        "evaluation.judge.model_revision",
+        "evaluation.judge.prompt_version",
+        "evaluation.judge.temperature",
+        "evaluation.judge.calibration_set_path"
+      ]
+    },
+    {
+      "owner": "adapters.testing.fault_injector",
+      "lifecycle": "test_only",
+      "fields": [
+        "testing.failpoints_enabled",
+        "testing.allow_fault_injection",
+        "testing.allowed_failpoints"
+      ]
+    },
+    {
+      "owner": "tests.support.concurrency",
+      "lifecycle": "test_only",
+      "fields": [
+        "testing.deterministic_concurrency_required",
+        "testing.real_postgresql_required",
+        "testing.sleep_based_race_tests_forbidden",
+        "testing.controllable_clock_enabled"
+      ]
+    },
+    {
+      "owner": "bootstrap.feature_registry",
+      "lifecycle": "lab",
+      "fields": [
+        "optional_labs.runtime_mid_loop_resume",
+        "optional_labs.dynamic_agent_spawn",
+        "optional_labs.agent_mailbox",
+        "optional_labs.crewai_benchmark",
+        "optional_labs.mcp_adapter",
+        "optional_labs.langfuse_profile",
+        "optional_labs.redis_streams_coordination",
+        "optional_labs.advanced_compaction"
+      ]
+    },
+    {
+      "owner": "bootstrap.adapter_factory",
+      "lifecycle": "startup",
+      "fields": [
+        "secrets.anthropic_api_key",
+        "secrets.qdrant_api_key",
+        "secrets.artifact_access_key",
+        "secrets.artifact_secret_key",
+        "secrets.langfuse_public_key",
+        "secrets.langfuse_secret_key",
+        "secrets.otel_exporter_headers"
+      ]
+    }
+  ]
+}

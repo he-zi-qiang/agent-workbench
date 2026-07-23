@@ -11,26 +11,30 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-Only **PR-001 Bootstrap** has been implemented and locally tested. Runtime, RAG,
-workflow, multi-Agent, API and UI capabilities remain planned and must not be
-described as implemented.
+**PR-001 Bootstrap** and **PR-002 Config CI** have been implemented and
+validated locally. Runtime, RAG, workflow, multi-Agent, API and UI capabilities
+remain planned and must not be described as implemented.
 
 ## Local configuration check
 
 Prerequisites are Python 3.12 and `uv`.
 
 1. Install the locked development environment with
-   `uv sync --frozen --group dev`.
+   `uv sync --frozen --group dev --no-editable`.
 2. Copy `.env.example` to `.env` and replace local-only placeholders.
 3. Run:
 
 ```bash
-uv run agent-config-check
+uv run agent-config-check --profile development
+uv run ruff format --check .
+uv run ruff check .
+uv run pyright
 uv run pytest
 ```
 
 The configuration check validates structure and security invariants. It does
-not connect to PostgreSQL, Qdrant or an online model.
+not connect to PostgreSQL, Qdrant or an online model. Once dependencies are
+synchronized, tests and static checks can run offline.
 
 ## Design sources
 

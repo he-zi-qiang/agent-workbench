@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Config, architecture, lint, type and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked development environment
+        run: uv sync --frozen --group dev --no-editable
+
+      - name: Keep quality checks offline
+        run: echo "UV_OFFLINE=1" >> "$GITHUB_ENV"
+
+      - name: Verify lock file
+        run: uv lock --check --offline
+
+      - name: Check formatting and lint
+        run: |
+          uv run --no-sync ruff format --check .
+          uv run --no-sync ruff check .
+
+      - name: Type-check framework-neutral source
+        run: uv run --no-sync pyright
+
+      - name: Validate development and test profiles
+        env:
+          AW_DATABASE__DSN: postgresql+asyncpg://agent:ci-only@postgres:5432/agent_workbench
+          AW_DATABASE__GUARD_DSN: postgresql+asyncpg://agent:ci-only@postgres:5432/agent_workbench
+          AW_DATABASE__LISTEN_DSN: postgresql+asyncpg://agent:ci-only@postgres:5432/agent_workbench
+        run: |
+          uv run --no-sync agent-config-check --profile development
+          uv run --no-sync agent-config-check --profile test
+
+      - name: Validate production configuration contract
+        env:
+          AW_DATABASE__DSN: postgresql+asyncpg://agent:ci-only@postgres:5432/agent_workbench
+          AW_DATABASE__GUARD_DSN: postgresql+asyncpg://agent:ci-only@postgres:5432/agent_workbench
+          AW_DATABASE__LISTEN_DSN: postgresql+asyncpg://agent:ci-only@postgres:5432/agent_workbench
+          AW_MODEL__MAIN__MODEL_ID: ci-contract-main-model
+          AW_MODEL__COMPACT__MODEL_ID: ci-contract-compact-model
+          AW_RAG__EMBEDDING__REVISION: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          AW_RAG__RERANKER__REVISION: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          AW_SECRETS__ANTHROPIC_API_KEY: ci-contract-anthropic-key
+          AW_SECRETS__QDRANT_API_KEY: ci-contract-qdrant-key
+        run: uv run --no-sync agent-config-check --profile production
+
+      - name: Run deterministic tests
+        run: uv run --no-sync pytest -q
+
+      - name: Enforce dependency license policy
+        run: >-
+          uv run --no-sync pip-licenses
+          --from mixed
+          --ignore-packages agent-workbench
+          --allow-only
+          "MIT;MIT License;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0 OR BSD-2-Clause;PSF-2.0"
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install verified Gitleaks CLI
+        env:
+          GITLEAKS_ARCHIVE: gitleaks_8.30.1_linux_x64.tar.gz
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl --fail --location --silent --show-error \
+            --output "${GITLEAKS_ARCHIVE}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/${GITLEAKS_ARCHIVE}"
+          echo "${GITLEAKS_SHA256}  ${GITLEAKS_ARCHIVE}" | sha256sum --check
+          tar --extract --gzip --file "${GITLEAKS_ARCHIVE}" gitleaks
+
+      - name: Scan Git history for secrets
+        run: ./gitleaks git --redact --no-banner --verbose .

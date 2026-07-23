@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_workbench.bootstrap.paths import TEST_CONFIG_FILE
 from agent_workbench.bootstrap.config_check import main, run
+from agent_workbench.bootstrap.paths import TEST_CONFIG_FILE
 
 
 def _required_environment(monkeypatch) -> None:

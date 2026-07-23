@@ -4,7 +4,7 @@
 >
 > 日期：2026-07-22
 >
-> 状态：实施计划已形成；PR-001 Bootstrap 已建立并通过本地测试，产品能力仍未实现
+> 状态：PR-001 Bootstrap 与 PR-002 Config CI 已实现并通过本地验证；产品能力仍未实现
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
 >
@@ -1442,7 +1442,7 @@ known limitations
 - [x] `uv` 已可用，锁文件和冻结依赖检查通过；
 - [ ] Docker 可用性留待首次 Compose 切片验证；
 - [x] 当前配置基线复制到正式项目而不是重新手写；
-- [ ] GitHub Actions 或等价 CI 尚未建立；
+- [x] GitHub Actions CI 已建立；远程运行结果由对应 PR checks 留证；
 - [ ] PostgreSQL/Qdrant/ArtifactStore 本地端口留待 WP03–WP05 的 Compose
   切片锁定；
 - [x] 当前离线测试不调用 Anthropic/BGE 真实依赖；

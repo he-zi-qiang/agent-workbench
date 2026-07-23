@@ -1,0 +1,20 @@
+# Production contract overlay.
+#
+# This file deliberately contains no credentials, DSNs, deployable model IDs,
+# or model revisions. Operators must inject those values through AW_* process
+# environment variables or flat mounted secret files. `agent-config-check
+# --profile production` therefore fails closed unless all required deployment
+# values are supplied.
+
+[app]
+environment = "production"
+deployment_scope = "remote"
+log_level = "INFO"
+debug = false
+
+[qdrant]
+url = "https://qdrant.example.invalid"
+api_key_required = true
+
+[observability]
+otel_exporter_endpoint = "https://otel.example.invalid"
