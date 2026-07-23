@@ -34,8 +34,9 @@ uv run pytest
 
 ## 设计依据
 
-- [架构与技术选型基线](../outputs/general-agent-platform-implementation-baseline-v1.md)
-- [代码实施计划](../outputs/agent-workbench-code-implementation-plan-v1.md)
+- [文档索引](docs/README.md)
+- [架构与技术选型基线 v1.3](docs/architecture-baseline.md)
+- [代码实施计划 v1.0](docs/implementation-plan.md)
 - [配置管理契约](docs/configuration.md)
 
 clean-room 边界见 [NOTICE.md](NOTICE.md) 和

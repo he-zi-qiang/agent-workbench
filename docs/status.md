@@ -1,5 +1,15 @@
 # 实施状态
 
+## 文档基线
+
+状态：**已纳入 Git 版本管理**。
+
+- [架构与技术选型基线 v1.3](./architecture-baseline.md)；
+- [代码实施计划 v1.0](./implementation-plan.md)；
+- [配置管理契约 schema 1.1](./configuration.md)。
+
+这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
+
 ## PR-001 Bootstrap
 
 状态：**已实现并通过本地测试，已纳入 Git 版本管理**。

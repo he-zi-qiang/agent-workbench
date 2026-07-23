@@ -34,8 +34,9 @@ not connect to PostgreSQL, Qdrant or an online model.
 
 ## Design sources
 
-- [Architecture baseline](../outputs/general-agent-platform-implementation-baseline-v1.md)
-- [Code implementation plan](../outputs/agent-workbench-code-implementation-plan-v1.md)
+- [Documentation index (Chinese)](docs/README.md)
+- [Architecture and technology baseline v1.3 (Chinese)](docs/architecture-baseline.md)
+- [Code implementation plan v1.0 (Chinese)](docs/implementation-plan.md)
 - [Configuration contract](docs/configuration.md)
 
 See [NOTICE.md](NOTICE.md) and [docs/compliance.md](docs/compliance.md) for the

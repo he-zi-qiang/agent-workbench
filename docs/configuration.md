@@ -14,7 +14,7 @@
 两者是不同版本轴。
 
 配置字段对应的代码所有者、工作包与集成测试见
-[代码实施计划 v1.0](../../outputs/agent-workbench-code-implementation-plan-v1.md)。
+[代码实施计划 v1.0](./implementation-plan.md)。
 
 正式代码库映射为：
 
