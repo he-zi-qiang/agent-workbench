@@ -27,5 +27,6 @@
 
 ## 当前事实
 
-截至 2026-07-23，仅 PR-001 Bootstrap 已实现并完成本地验证。Runtime、RAG、
-LangGraph Task、PostgreSQL 协调、Multi-Agent、API、UI 和部署仍是计划能力。
+截至 2026-07-23，PR-001 Bootstrap 与 PR-002 Config CI 已实现并完成本地
+验证。Runtime、RAG、LangGraph Task、PostgreSQL 协调、Multi-Agent、API、
+UI 和部署仍是计划能力。

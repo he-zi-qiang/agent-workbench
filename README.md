@@ -13,24 +13,29 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-目前只完成了 **PR-001 Bootstrap**，并通过本地测试。Runtime、RAG、Workflow、
-Multi-Agent、API 和 UI 仍处于 Planned 状态，不能描述为已经实现。
+目前已完成 **PR-001 Bootstrap** 与 **PR-002 Config CI** 的本地实现和验证。
+Runtime、RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，不能
+描述为已经实现。
 
 ## 本地配置检查
 
 前置条件：Python 3.12 和 `uv`。
 
 1. 安装锁定后的开发环境：
-   `uv sync --frozen --group dev`。
+   `uv sync --frozen --group dev --no-editable`。
 2. 将 `.env.example` 复制为 `.env`，替换仅用于本地开发的占位值。
 3. 执行：
 
 ```bash
-uv run agent-config-check
+uv run agent-config-check --profile development
+uv run ruff format --check .
+uv run ruff check .
+uv run pyright
 uv run pytest
 ```
 
 配置检查只验证结构和安全不变量，不会连接 PostgreSQL、Qdrant 或在线模型。
+测试和静态检查在依赖同步完成后可以离线运行。
 
 ## 设计依据
 

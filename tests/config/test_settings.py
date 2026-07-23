@@ -16,12 +16,9 @@ from agent_workbench.bootstrap.paths import (
 )
 from agent_workbench.bootstrap.settings import Settings, load_settings
 
-
 CONFIG_FILE = DEFAULT_CONFIG_FILE
 PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
-POSTGRES_DSN = (
-    "postgresql+asyncpg://agent:unit-test@postgres:5432/agent_workbench"
-)
+POSTGRES_DSN = "postgresql+asyncpg://agent:unit-test@postgres:5432/agent_workbench"
 
 
 def valid_payload() -> dict:
@@ -62,26 +59,16 @@ def test_default_configuration_is_valid_and_secret_safe() -> None:
     assert settings.workflow.control_plane == "langgraph"
     assert settings.database.guard_connection_scope == "task_pinned"
     assert settings.api.document_upload_transport == "artifact_data_plane"
-    assert (
-        settings.event_stream.model_delta_mode
-        == "ephemeral_sse_coalesced"
-    )
+    assert settings.event_stream.model_delta_mode == "ephemeral_sse_coalesced"
     assert POSTGRES_DSN not in str(settings.public_config())
     assert "unit-test-key" not in str(settings.public_config())
-    assert (
-        settings.public_config()["model"]["main"]["max_output_tokens"] == 8192
-    )
+    assert settings.public_config()["model"]["main"]["max_output_tokens"] == 8192
     assert settings.public_config()["qdrant"]["api_key_required"] is False
-    assert (
-        settings.public_config()["secrets"]["anthropic_api_key"]
-        == "<configured>"
-    )
+    assert settings.public_config()["secrets"]["anthropic_api_key"] == "<configured>"
     assert Settings.model_config["secrets_nested_subdir"] is False
     assert len(settings.fingerprint()) == 64
     assert len(settings.policy_fingerprint()) == 64
-    assert settings.policy_identity().startswith(
-        f"{settings.policy.revision}:"
-    )
+    assert settings.policy_identity().startswith(f"{settings.policy.revision}:")
     semantics = settings.run_semantics_snapshot()
     assert set(semantics) == {
         "config_schema_version",
@@ -104,10 +91,7 @@ def test_default_configuration_is_valid_and_secret_safe() -> None:
         task_semantics["qdrant_index"]["resolved_collection_name"]
         == "knowledge_bge_m3_v1"
     )
-    assert (
-        task_semantics["qdrant_index"]["resolved_index_version"]
-        == "bge-m3-v1"
-    )
+    assert task_semantics["qdrant_index"]["resolved_index_version"] == "bge-m3-v1"
     for live_section in (
         "api",
         "database",
@@ -341,31 +325,21 @@ def test_public_fingerprint_changes_with_non_secret_semantics_only() -> None:
     assert first.policy_fingerprint() == policy_settings.policy_fingerprint()
     assert first.policy_identity() != policy_settings.policy_identity()
     assert (
-        first.run_semantics_fingerprint()
-        == policy_settings.run_semantics_fingerprint()
+        first.run_semantics_fingerprint() == policy_settings.run_semantics_fingerprint()
     )
 
     stale_label_payload = deepcopy(first_payload)
     stale_label_payload["policy"]["max_tool_argument_bytes"] = 32_768
     stale_label_settings = Settings(**stale_label_payload)
-    assert (
-        stale_label_settings.policy.revision
-        == first.policy.revision
-    )
-    assert (
-        stale_label_settings.policy_fingerprint()
-        != first.policy_fingerprint()
-    )
+    assert stale_label_settings.policy.revision == first.policy.revision
+    assert stale_label_settings.policy_fingerprint() != first.policy_fingerprint()
     assert stale_label_settings.policy_identity() != first.policy_identity()
 
     lab_payload = deepcopy(first_payload)
     lab_payload["optional_labs"]["mcp_adapter"] = True
     lab_settings = Settings(**lab_payload)
     assert first.fingerprint() != lab_settings.fingerprint()
-    assert (
-        first.run_semantics_fingerprint()
-        == lab_settings.run_semantics_fingerprint()
-    )
+    assert first.run_semantics_fingerprint() == lab_settings.run_semantics_fingerprint()
     first_task_revision = first.task_run_semantics_revision(
         resolved_qdrant_collection="knowledge_bge_m3_v1",
         resolved_qdrant_index_version="bge-m3-v1",
@@ -443,8 +417,7 @@ def test_test_overlay_uses_only_canonical_failpoints(
     )
     assert settings.testing.failpoints_enabled is True
     assert (
-        set(settings.testing.allowed_failpoints)
-        == settings_module.CANONICAL_FAILPOINTS
+        set(settings.testing.allowed_failpoints) == settings_module.CANONICAL_FAILPOINTS
     )
 
 
@@ -489,7 +462,7 @@ def test_parent_json_dotenv_variable_is_rejected(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="non-leaf.*dotenv"):
+    with pytest.raises(ValueError, match=r"non-leaf.*dotenv"):
         load_settings(env_file=dotenv)
 
 
@@ -511,12 +484,11 @@ def test_toml_overlay_cannot_contain_a_dsn(
     _clear_agent_workbench_environment(monkeypatch)
     overlay = tmp_path / "unsafe.toml"
     overlay.write_text(
-        "[database]\n"
-        f'dsn = "{POSTGRES_DSN}"\n',
+        f'[database]\ndsn = "{POSTGRES_DSN}"\n',
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="must not contain database.dsn"):
+    with pytest.raises(ValueError, match=r"must not contain database\.dsn"):
         load_settings(config_file=overlay)
 
 
@@ -576,8 +548,7 @@ def test_flat_mounted_secret_files_are_supported(
     assert settings.database.guard_dsn.get_secret_value() == POSTGRES_DSN
     assert (
         settings.secrets.anthropic_api_key is not None
-        and settings.secrets.anthropic_api_key.get_secret_value()
-        == "mounted-test-key"
+        and settings.secrets.anthropic_api_key.get_secret_value() == "mounted-test-key"
     )
 
 
@@ -618,9 +589,7 @@ def test_different_env_and_mounted_secret_fails_closed(
     _set_required_database_environment(monkeypatch)
     secrets_dir = tmp_path / "secrets"
     secrets_dir.mkdir()
-    mounted_value = (
-        "postgresql+asyncpg://agent:different@postgres:5432/agent_workbench"
-    )
+    mounted_value = "postgresql+asyncpg://agent:different@postgres:5432/agent_workbench"
     (secrets_dir / "AW_DATABASE__DSN").write_text(
         mounted_value,
         encoding="utf-8",

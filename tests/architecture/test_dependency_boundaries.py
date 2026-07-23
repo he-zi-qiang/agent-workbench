@@ -1,0 +1,383 @@
+"""Static architecture guards for dependency and configuration boundaries.
+
+The checks deliberately derive their scope from the product source tree instead
+of requiring future packages to exist.  The package root is already core source,
+so the framework guard is active today; later ``domain``, ``runtime``,
+``knowledge``, ``workflows``, and ``application`` modules are covered
+automatically.
+"""
+
+from __future__ import annotations
+
+import ast
+from dataclasses import dataclass
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_ROOT = PROJECT_ROOT / "src" / "agent_workbench"
+
+# These packages are the only product-side boundaries at which concrete
+# frameworks, SDKs, process configuration, or interface concerns may enter.
+OUTER_BOUNDARY_PACKAGES = frozenset(
+    {"_config", "adapters", "apps", "bootstrap", "interfaces", "workers"}
+)
+
+# Keep this list explicit: a new concrete integration must make a conscious
+# architecture decision instead of silently leaking into framework-neutral code.
+FORBIDDEN_CORE_IMPORTS = frozenset(
+    {
+        # Agent/RAG/workflow frameworks
+        "crewai",
+        "langchain",
+        "langchain_community",
+        "langchain_core",
+        "langgraph",
+        "llama_index",
+        # HTTP interface frameworks
+        "fastapi",
+        "starlette",
+        # Model and ML SDKs
+        "anthropic",
+        "cohere",
+        "flagembedding",
+        "google.genai",
+        "google.generativeai",
+        "huggingface_hub",
+        "mistralai",
+        "openai",
+        "sentence_transformers",
+        "torch",
+        "transformers",
+        # Persistence, queue, search, and telemetry SDKs
+        "asyncpg",
+        "boto3",
+        "botocore",
+        "celery",
+        "opentelemetry",
+        "psycopg",
+        "psycopg2",
+        "qdrant_client",
+        "redis",
+        "sqlalchemy",
+    }
+)
+
+OUTER_PROJECT_IMPORTS = frozenset(
+    f"agent_workbench.{package}" for package in OUTER_BOUNDARY_PACKAGES
+)
+
+# Raw source loading belongs to bootstrap.  Process entry points may eventually
+# call the public bootstrap.load_settings() facade, but must not depend on these
+# implementation modules or source libraries.
+RAW_CONFIG_IMPORTS = frozenset(
+    {
+        "agent_workbench.bootstrap.Settings",
+        "agent_workbench.bootstrap.paths",
+        "agent_workbench.bootstrap.settings",
+        "dotenv",
+        "pydantic_settings",
+        "tomllib",
+    }
+)
+
+ENVIRONMENT_MEMBERS = frozenset(
+    {"environ", "environb", "getenv", "getenvb", "putenv", "unsetenv"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ImportReference:
+    """One import recovered from a product module."""
+
+    module: str
+    line: int
+
+
+@dataclass(frozen=True, slots=True)
+class SourceReference:
+    """One policy-sensitive source access recovered from a product module."""
+
+    file: Path
+    line: int
+    expression: str
+
+
+def _product_python_files() -> tuple[Path, ...]:
+    """Return packaged code plus future top-level process entry points."""
+
+    roots = (PACKAGE_ROOT, PROJECT_ROOT / "apps", PROJECT_ROOT / "workers")
+    files = {
+        file
+        for root in roots
+        if root.is_dir()
+        for file in root.rglob("*.py")
+        if "__pycache__" not in file.parts
+    }
+    return tuple(sorted(files))
+
+
+def _package_section(file: Path) -> str | None:
+    """Return the first package below agent_workbench, if one exists."""
+
+    if not file.is_relative_to(PACKAGE_ROOT):
+        return None
+    relative = file.relative_to(PACKAGE_ROOT)
+    return relative.parts[0] if len(relative.parts) > 1 else None
+
+
+def _is_bootstrap(file: Path) -> bool:
+    return _package_section(file) == "bootstrap"
+
+
+def _core_python_files() -> tuple[Path, ...]:
+    """Select framework-neutral code without naming not-yet-created packages."""
+
+    return tuple(
+        file
+        for file in _product_python_files()
+        if file.is_relative_to(PACKAGE_ROOT)
+        and _package_section(file) not in OUTER_BOUNDARY_PACKAGES
+    )
+
+
+def _module_name(file: Path) -> tuple[str, ...] | None:
+    if not file.is_relative_to(PACKAGE_ROOT):
+        return None
+    relative = file.relative_to(PACKAGE_ROOT).with_suffix("")
+    parts = ("agent_workbench", *relative.parts)
+    return parts[:-1] if parts[-1] == "__init__" else parts
+
+
+def _resolve_from_import(
+    file: Path,
+    *,
+    module: str | None,
+    level: int,
+) -> str | None:
+    if level == 0:
+        return module
+
+    current_module = _module_name(file)
+    if current_module is None:
+        return module
+
+    package = current_module if file.name == "__init__.py" else current_module[:-1]
+    keep = len(package) - (level - 1)
+    if keep < 0:
+        return module
+
+    resolved = (*package[:keep], *((module or "").split(".")))
+    return ".".join(part for part in resolved if part)
+
+
+def _import_references(file: Path) -> tuple[ImportReference, ...]:
+    tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+    references: list[ImportReference] = []
+    importlib_modules = {"importlib"}
+    import_module_functions: set[str] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                references.append(ImportReference(alias.name, node.lineno))
+                if alias.name == "importlib":
+                    importlib_modules.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            resolved = _resolve_from_import(
+                file,
+                module=node.module,
+                level=node.level,
+            )
+            if resolved:
+                references.append(ImportReference(resolved, node.lineno))
+                references.extend(
+                    ImportReference(f"{resolved}.{alias.name}", node.lineno)
+                    for alias in node.names
+                    if alias.name != "*"
+                )
+            if node.level == 0 and node.module == "importlib":
+                import_module_functions.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "import_module"
+                )
+
+    # A literal dynamic import is still a static architecture dependency.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        first_argument = node.args[0]
+        if not isinstance(first_argument, ast.Constant) or not isinstance(
+            first_argument.value, str
+        ):
+            continue
+
+        is_import = (
+            isinstance(node.func, ast.Name)
+            and node.func.id in import_module_functions | {"__import__"}
+        ) or (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "import_module"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in importlib_modules
+        )
+        if is_import:
+            references.append(ImportReference(first_argument.value, node.lineno))
+
+    return tuple(references)
+
+
+def _matches_module(module: str, prefixes: frozenset[str]) -> bool:
+    normalized = module.casefold()
+    return any(
+        normalized == prefix.casefold()
+        or normalized.startswith(f"{prefix.casefold()}.")
+        for prefix in prefixes
+    )
+
+
+def _format_import_violations(
+    violations: list[tuple[Path, ImportReference]],
+) -> str:
+    return "\n".join(
+        f"{file.relative_to(PROJECT_ROOT)}:{reference.line}: imports {reference.module}"
+        for file, reference in violations
+    )
+
+
+def _environment_references(file: Path) -> tuple[SourceReference, ...]:
+    tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+    os_modules = {"os"}
+    direct_members: dict[str, str] = {}
+    references: set[SourceReference] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "os":
+                    os_modules.add(alias.asname or alias.name)
+        elif (
+            isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "os"
+        ):
+            direct_members.update(
+                {
+                    alias.asname or alias.name: alias.name
+                    for alias in node.names
+                    if alias.name in ENVIRONMENT_MEMBERS
+                }
+            )
+            references.update(
+                SourceReference(
+                    file,
+                    node.lineno,
+                    f"from os import {alias.name}",
+                )
+                for alias in node.names
+                if alias.name == "*" or alias.name in ENVIRONMENT_MEMBERS
+            )
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in ENVIRONMENT_MEMBERS
+            and isinstance(node.value, ast.Name)
+            and node.value.id in os_modules
+        ):
+            references.add(
+                SourceReference(file, node.lineno, f"{node.value.id}.{node.attr}")
+            )
+        elif isinstance(node, ast.Name) and node.id in direct_members:
+            references.add(SourceReference(file, node.lineno, direct_members[node.id]))
+
+    return tuple(sorted(references, key=lambda item: (item.line, item.expression)))
+
+
+def _format_source_violations(violations: list[SourceReference]) -> str:
+    return "\n".join(
+        f"{item.file.relative_to(PROJECT_ROOT)}:{item.line}: accesses {item.expression}"
+        for item in violations
+    )
+
+
+def test_core_keeps_frameworks_and_concrete_sdks_at_outer_boundaries() -> None:
+    core_files = _core_python_files()
+    assert core_files, "core source discovery must scan at least the package root"
+
+    violations = [
+        (file, reference)
+        for file in core_files
+        for reference in _import_references(file)
+        if _matches_module(reference.module, FORBIDDEN_CORE_IMPORTS)
+    ]
+
+    assert not violations, (
+        "framework-neutral core imports a concrete framework or SDK; move the "
+        "integration behind an adapter:\n"
+        f"{_format_import_violations(violations)}"
+    )
+
+
+def test_core_does_not_reverse_depend_on_outer_project_layers() -> None:
+    core_files = _core_python_files()
+    assert core_files, "core source discovery must not be vacuous"
+
+    violations = [
+        (file, reference)
+        for file in core_files
+        for reference in _import_references(file)
+        if _matches_module(reference.module, OUTER_PROJECT_IMPORTS)
+    ]
+
+    assert not violations, (
+        "core code reverse-depends on bootstrap/adapter/interface code:\n"
+        f"{_format_import_violations(violations)}"
+    )
+
+
+def test_raw_configuration_sources_are_confined_to_bootstrap() -> None:
+    product_files = _product_python_files()
+    assert product_files, "product source discovery must not be vacuous"
+
+    observed = [
+        (file, reference)
+        for file in product_files
+        for reference in _import_references(file)
+        if _matches_module(reference.module, RAW_CONFIG_IMPORTS)
+    ]
+    assert observed, (
+        "the guard must observe the existing bootstrap configuration imports; "
+        "otherwise source discovery or AST extraction has regressed"
+    )
+
+    violations = [
+        (file, reference) for file, reference in observed if not _is_bootstrap(file)
+    ]
+    assert not violations, (
+        "raw configuration loading is allowed only in agent_workbench.bootstrap; "
+        "inject a narrow configuration object instead:\n"
+        f"{_format_import_violations(violations)}"
+    )
+
+
+def test_business_modules_do_not_read_process_environment_directly() -> None:
+    product_files = _product_python_files()
+    assert product_files, "product source discovery must not be vacuous"
+
+    observed = [
+        reference
+        for file in product_files
+        for reference in _environment_references(file)
+    ]
+    assert any(_is_bootstrap(reference.file) for reference in observed), (
+        "the guard must observe bootstrap's existing os.environ access; otherwise "
+        "source discovery or AST extraction has regressed"
+    )
+
+    violations = [
+        reference for reference in observed if not _is_bootstrap(reference.file)
+    ]
+    assert not violations, (
+        "business modules must receive validated configuration from bootstrap, "
+        "not read or mutate process environment directly:\n"
+        f"{_format_source_violations(violations)}"
+    )

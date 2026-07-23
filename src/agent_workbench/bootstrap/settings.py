@@ -22,9 +22,10 @@ import os
 import re
 import tomllib
 import warnings
-from importlib.metadata import PackageNotFoundError, version as distribution_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
@@ -85,8 +86,6 @@ SECRET_LIKE_ENV_KEYS = frozenset(
         "AW_SECRETS__LANGFUSE_PUBLIC_KEY",
         "AW_SECRETS__LANGFUSE_SECRET_KEY",
         "AW_SECRETS__OTEL_EXPORTER_HEADERS",
-        "AW_SECRETS__ADMIN_TOKEN",
-        "AW_SECRETS__WEBHOOK_TOKEN",
     }
 )
 MAX_SINGLE_SECRET_FILE_BYTES = 65_536
@@ -120,9 +119,7 @@ def _validate_service_endpoint(
     if parsed.scheme.lower() not in {"http", "https"} or not hostname:
         raise ValueError(f"{field_name} must be an HTTP(S) service URL")
     if parsed.username is not None or parsed.password is not None:
-        raise ValueError(
-            f"{field_name} must not embed userinfo credentials"
-        )
+        raise ValueError(f"{field_name} must not embed userinfo credentials")
     if parsed.query or parsed.fragment:
         raise ValueError(
             f"{field_name} must not contain query credentials or a fragment"
@@ -157,9 +154,7 @@ class ApiSettings(StrictModel):
     sse_heartbeat_seconds: int = Field(default=15, ge=1, le=300)
     shutdown_grace_seconds: int = Field(default=30, ge=1, le=600)
     max_control_request_body_bytes: int = Field(default=2_097_152, ge=1024)
-    document_upload_transport: Literal["artifact_data_plane"] = (
-        "artifact_data_plane"
-    )
+    document_upload_transport: Literal["artifact_data_plane"] = "artifact_data_plane"
 
 
 class DatabaseSettings(StrictModel):
@@ -223,16 +218,12 @@ class CoordinationSettings(StrictModel):
     strict_fifo_required: Literal[False] = False
 
     lease_time_source: Literal["postgresql_clock"] = "postgresql_clock"
-    fencing_token_strategy: Literal["monotonic_lease_epoch"] = (
-        "monotonic_lease_epoch"
-    )
-    advisory_lock_key_strategy: Literal["stable_signed_int64"] = (
-        "stable_signed_int64"
-    )
+    fencing_token_strategy: Literal["monotonic_lease_epoch"] = "monotonic_lease_epoch"
+    advisory_lock_key_strategy: Literal["stable_signed_int64"] = "stable_signed_int64"
     heartbeat_execution: Literal["independent_task"] = "independent_task"
 
     @model_validator(mode="after")
-    def validate_timing(self) -> "CoordinationSettings":
+    def validate_timing(self) -> CoordinationSettings:
         safety_floor = (
             self.heartbeat_interval_seconds * (self.max_missed_heartbeats + 1)
             + self.lease_grace_seconds
@@ -260,9 +251,7 @@ class EventStreamSettings(StrictModel):
     replay_page_size: int = Field(default=500, ge=1, le=10_000)
     subscriber_buffer_events: int = Field(default=256, ge=1)
     catchup_poll_seconds: int = Field(default=10, ge=1)
-    model_delta_mode: Literal["ephemeral_sse_coalesced"] = (
-        "ephemeral_sse_coalesced"
-    )
+    model_delta_mode: Literal["ephemeral_sse_coalesced"] = "ephemeral_sse_coalesced"
     live_delta_coalesce_ms: int = Field(default=50, ge=1, le=1000)
 
 
@@ -298,7 +287,7 @@ class RuntimeSettings(StrictModel):
     write_tools_default_enabled: Literal[False] = False
 
     @model_validator(mode="after")
-    def validate_budgets(self) -> "RuntimeSettings":
+    def validate_budgets(self) -> RuntimeSettings:
         if self.max_tool_calls < self.max_steps:
             raise ValueError("max_tool_calls must be >= max_steps")
         return self
@@ -338,7 +327,7 @@ class MultiAgentSettings(StrictModel):
     max_tokens_per_agent_invocation: int = Field(default=16_000, ge=256)
 
     @model_validator(mode="after")
-    def validate_agent_budget(self) -> "MultiAgentSettings":
+    def validate_agent_budget(self) -> MultiAgentSettings:
         if (
             self.max_parallel_agent_invocations
             > self.max_agent_invocation_attempts_per_task
@@ -352,9 +341,7 @@ class MultiAgentSettings(StrictModel):
 
 class LlamaIndexSettings(StrictModel):
     enabled: bool = True
-    role: Literal["ingestion_and_retrieval_adapter"] = (
-        "ingestion_and_retrieval_adapter"
-    )
+    role: Literal["ingestion_and_retrieval_adapter"] = "ingestion_and_retrieval_adapter"
     agent_executor_enabled: Literal[False] = False
     query_engine_generates_final_answer: Literal[False] = False
     fusion_enabled: Literal[False] = False
@@ -372,7 +359,7 @@ class IngestionSettings(StrictModel):
     index_schema_version: str = Field(min_length=1)
 
     @model_validator(mode="after")
-    def validate_chunks(self) -> "IngestionSettings":
+    def validate_chunks(self) -> IngestionSettings:
         if self.chunk_overlap_tokens >= self.chunk_size_tokens:
             raise ValueError("chunk_overlap_tokens must be < chunk_size_tokens")
         return self
@@ -401,7 +388,7 @@ class EmbeddingSettings(StrictModel):
         return cleaned
 
     @model_validator(mode="after")
-    def validate_vector_names(self) -> "EmbeddingSettings":
+    def validate_vector_names(self) -> EmbeddingSettings:
         if self.dense_vector_name == self.sparse_vector_name:
             raise ValueError("dense and sparse vector names must be different")
         return self
@@ -420,11 +407,9 @@ class RetrievalSettings(StrictModel):
     citations_required: Literal[True] = True
 
     @model_validator(mode="after")
-    def validate_candidate_funnel(self) -> "RetrievalSettings":
+    def validate_candidate_funnel(self) -> RetrievalSettings:
         if self.fused_top_k > self.dense_top_k + self.sparse_top_k:
-            raise ValueError(
-                "fused_top_k must be <= dense_top_k + sparse_top_k"
-            )
+            raise ValueError("fused_top_k must be <= dense_top_k + sparse_top_k")
         if self.rerank_top_k > self.fused_top_k:
             raise ValueError("rerank_top_k must be <= fused_top_k")
         if self.answer_context_k > self.rerank_top_k:
@@ -463,7 +448,7 @@ class RagSettings(StrictModel):
     reranker: RerankerSettings
 
     @model_validator(mode="after")
-    def validate_index_versions(self) -> "RagSettings":
+    def validate_index_versions(self) -> RagSettings:
         if self.ingestion.chunk_size_tokens > self.embedding.max_input_tokens:
             raise ValueError(
                 "chunk_size_tokens must not exceed embedding max_input_tokens"
@@ -489,7 +474,7 @@ class QdrantSettings(StrictModel):
         return _validate_service_endpoint(value, field_name="qdrant.url")
 
     @model_validator(mode="after")
-    def validate_alias_strategy(self) -> "QdrantSettings":
+    def validate_alias_strategy(self) -> QdrantSettings:
         if self.read_alias == self.write_collection:
             raise ValueError(
                 "read_alias and write_collection must differ to support "
@@ -554,7 +539,7 @@ class EvaluationJudgeSettings(StrictModel):
     model_id: str = Field(min_length=1)
     model_revision: str = Field(min_length=1)
     prompt_version: str = Field(min_length=1)
-    temperature: Literal[0.0] = 0.0
+    temperature: float = Field(default=0.0, ge=0.0, le=0.0)
     calibration_set_path: str = Field(min_length=1)
 
 
@@ -588,9 +573,7 @@ class TestingSettings(StrictModel):
     ) -> tuple[str, ...]:
         unknown = sorted(set(values) - CANONICAL_FAILPOINTS)
         if unknown:
-            raise ValueError(
-                "unknown failpoint names: " + ", ".join(unknown)
-            )
+            raise ValueError("unknown failpoint names: " + ", ".join(unknown))
         if len(values) != len(set(values)):
             raise ValueError("allowed_failpoints must not contain duplicates")
         return values
@@ -615,8 +598,6 @@ class SecretsSettings(StrictModel):
     langfuse_public_key: SecretStr | None = None
     langfuse_secret_key: SecretStr | None = None
     otel_exporter_headers: SecretStr | None = None
-    admin_token: SecretStr | None = None
-    webhook_token: SecretStr | None = None
 
 
 class Settings(BaseSettings):
@@ -642,23 +623,29 @@ class Settings(BaseSettings):
     optional_labs: OptionalLabsSettings
     secrets: SecretsSettings = Field(default_factory=SecretsSettings)
 
-    model_config = SettingsConfigDict(
-        env_prefix="AW_",
-        env_nested_delimiter="__",
-        env_ignore_empty=True,
-        env_file=None,
-        secrets_dir=None,
-        # GHSA-4xgf-cpjx-pc3j affected nested-subdirectory traversal before
-        # pydantic-settings 2.14.2. This project uses flat "__" filenames.
-        secrets_nested_subdir=False,
-        secrets_dir_max_size=1_048_576,
-        secrets_dir_missing="ok",
-        toml_file=str(DEFAULT_CONFIG_FILE),
-        extra="forbid",
-        frozen=True,
-        validate_default=True,
-        hide_input_in_errors=True,
-        case_sensitive=False,
+    # Some pydantic-settings source keys are consumed at runtime before they
+    # appear in the package's SettingsConfigDict type surface. Keep the cast
+    # local to this third-party typing boundary.
+    model_config = cast(
+        SettingsConfigDict,
+        {
+            "env_prefix": "AW_",
+            "env_nested_delimiter": "__",
+            "env_ignore_empty": True,
+            "env_file": None,
+            "secrets_dir": None,
+            # GHSA-4xgf-cpjx-pc3j affected nested-subdirectory traversal before
+            # pydantic-settings 2.14.2. This project uses flat "__" filenames.
+            "secrets_nested_subdir": False,
+            "secrets_dir_max_size": 1_048_576,
+            "secrets_dir_missing": "ok",
+            "toml_file": str(DEFAULT_CONFIG_FILE),
+            "extra": "forbid",
+            "frozen": True,
+            "validate_default": True,
+            "hide_input_in_errors": True,
+            "case_sensitive": False,
+        },
     )
 
     @classmethod
@@ -683,7 +670,7 @@ class Settings(BaseSettings):
         )
 
     @model_validator(mode="after")
-    def validate_architecture_and_environment(self) -> "Settings":
+    def validate_architecture_and_environment(self) -> Settings:
         if self.coordination.worker_concurrency > (
             self.database.guard_connection_budget
         ):
@@ -702,9 +689,7 @@ class Settings(BaseSettings):
             self.database.guard_healthcheck_seconds
             > self.coordination.heartbeat_interval_seconds
         ):
-            raise ValueError(
-                "guard_healthcheck_seconds must be <= heartbeat interval"
-            )
+            raise ValueError("guard_healthcheck_seconds must be <= heartbeat interval")
 
         fault_injection_requested = (
             self.testing.failpoints_enabled
@@ -729,9 +714,7 @@ class Settings(BaseSettings):
         if self.model.provider == "fake" and self.app.environment != "test":
             raise ValueError("the fake model provider is test-only")
 
-        if self.observability.langfuse_enabled != (
-            self.optional_labs.langfuse_profile
-        ):
+        if self.observability.langfuse_enabled != (self.optional_labs.langfuse_profile):
             raise ValueError(
                 "langfuse_enabled and optional_labs.langfuse_profile "
                 "must be enabled or disabled together"
@@ -749,9 +732,7 @@ class Settings(BaseSettings):
             self.app.environment == "production"
             and self.app.deployment_scope != "remote"
         ):
-            raise ValueError(
-                "production requires app.deployment_scope=remote"
-            )
+            raise ValueError("production requires app.deployment_scope=remote")
 
         if self.qdrant.api_key_required and not self._secret_is_configured(
             self.secrets.qdrant_api_key
@@ -761,13 +742,10 @@ class Settings(BaseSettings):
         if self.app.deployment_scope == "remote":
             if not self.qdrant.api_key_required:
                 raise ValueError(
-                    "remote deployment requires "
-                    "qdrant.api_key_required=true"
+                    "remote deployment requires qdrant.api_key_required=true"
                 )
             if urlsplit(self.qdrant.url).scheme.lower() != "https":
-                raise ValueError(
-                    "remote deployment requires a Qdrant HTTPS URL"
-                )
+                raise ValueError("remote deployment requires a Qdrant HTTPS URL")
         elif urlsplit(self.qdrant.url).hostname not in LOCAL_QDRANT_HOSTS:
             raise ValueError(
                 "local deployment scope requires a local/Compose Qdrant host"
@@ -775,34 +753,23 @@ class Settings(BaseSettings):
 
         if self.artifact_store.backend == "s3":
             if not self.artifact_store.bucket or not self.artifact_store.endpoint:
-                raise ValueError(
-                    "S3 artifact store requires both bucket and endpoint"
-                )
+                raise ValueError("S3 artifact store requires both bucket and endpoint")
             if not (
                 self._secret_is_configured(self.secrets.artifact_access_key)
-                and self._secret_is_configured(
-                    self.secrets.artifact_secret_key
-                )
+                and self._secret_is_configured(self.secrets.artifact_secret_key)
             ):
                 raise ValueError("S3 artifact store credentials are missing")
 
-        if self.observability.langfuse_enabled:
-            if not (
-                self._secret_is_configured(self.secrets.langfuse_public_key)
-                and self._secret_is_configured(
-                    self.secrets.langfuse_secret_key
-                )
-            ):
-                raise ValueError("Langfuse is enabled but its keys are missing")
+        if self.observability.langfuse_enabled and not (
+            self._secret_is_configured(self.secrets.langfuse_public_key)
+            and self._secret_is_configured(self.secrets.langfuse_secret_key)
+        ):
+            raise ValueError("Langfuse is enabled but its keys are missing")
 
         if self.evaluation.judge.enabled:
             if self._looks_like_placeholder(self.evaluation.judge.model_id):
-                raise ValueError(
-                    "enabled evaluation judge requires a pinned model_id"
-                )
-            if self._looks_like_placeholder(
-                self.evaluation.judge.model_revision
-            ):
+                raise ValueError("enabled evaluation judge requires a pinned model_id")
+            if self._looks_like_placeholder(self.evaluation.judge.model_revision):
                 raise ValueError(
                     "enabled evaluation judge requires a pinned model_revision"
                 )
@@ -817,16 +784,12 @@ class Settings(BaseSettings):
             raise ValueError("debug must be false in production")
 
         if self.app.deployment_scope != "remote":
-            raise ValueError(
-                "production requires app.deployment_scope=remote"
-            )
+            raise ValueError("production requires app.deployment_scope=remote")
 
         if self.model.provider == "anthropic" and not self._secret_is_configured(
             self.secrets.anthropic_api_key
         ):
-            raise ValueError(
-                "Anthropic provider requires a non-placeholder API key"
-            )
+            raise ValueError("Anthropic provider requires a non-placeholder API key")
 
         for profile_name, profile in (
             ("main", self.model.main),
@@ -848,9 +811,7 @@ class Settings(BaseSettings):
                 )
 
         enabled_labs = [
-            name
-            for name, enabled in self.optional_labs.model_dump().items()
-            if enabled
+            name for name, enabled in self.optional_labs.model_dump().items() if enabled
         ]
         if enabled_labs:
             raise ValueError(
@@ -911,9 +872,7 @@ class Settings(BaseSettings):
             "multi_agent": public["multi_agent"],
             "rag": public["rag"],
             "qdrant_index": {
-                "collection_schema_version": qdrant[
-                    "collection_schema_version"
-                ],
+                "collection_schema_version": qdrant["collection_schema_version"],
                 "distance": qdrant["distance"],
             },
         }
@@ -926,18 +885,11 @@ class Settings(BaseSettings):
     ) -> dict[str, Any]:
         """Bind Task semantics to a concrete Qdrant index, never an alias."""
 
-        if (
-            resolved_qdrant_collection is None
-            and resolved_qdrant_index_version is None
-        ):
+        if resolved_qdrant_collection is None and resolved_qdrant_index_version is None:
             return self.run_semantics_snapshot()
-        if (
-            resolved_qdrant_collection is None
-            or resolved_qdrant_index_version is None
-        ):
+        if resolved_qdrant_collection is None or resolved_qdrant_index_version is None:
             raise ValueError(
-                "resolved Qdrant collection and index version must be "
-                "provided together"
+                "resolved Qdrant collection and index version must be provided together"
             )
 
         collection = resolved_qdrant_collection.strip()
@@ -1043,8 +995,6 @@ SENSITIVE_KEYS = {
     "langfuse_public_key",
     "langfuse_secret_key",
     "otel_exporter_headers",
-    "admin_token",
-    "webhook_token",
     "password",
     "credential",
     "credentials",
@@ -1060,19 +1010,19 @@ SENSITIVE_KEY_SUFFIXES = (
 
 def _redact_mapping(value: Any, key: str = "") -> Any:
     normalized_key = key.lower()
-    if (
-        normalized_key in SENSITIVE_KEYS
-        or normalized_key.endswith(SENSITIVE_KEY_SUFFIXES)
+    if normalized_key in SENSITIVE_KEYS or normalized_key.endswith(
+        SENSITIVE_KEY_SUFFIXES
     ):
         configured = value not in (None, "", [], {}, ())
         return "<configured>" if configured else "<unset>"
     if isinstance(value, dict):
+        mapping = cast(dict[str, Any], value)
         return {
             child_key: _redact_mapping(child_value, child_key)
-            for child_key, child_value in value.items()
+            for child_key, child_value in mapping.items()
         }
     if isinstance(value, list):
-        return [_redact_mapping(item) for item in value]
+        return [_redact_mapping(item) for item in cast(list[Any], value)]
     return value
 
 
@@ -1123,9 +1073,7 @@ def _read_mounted_secret_values(
             raise ValueError(f"mounted secret is not a regular file: {name}")
         size = resolved.stat().st_size
         if size > MAX_SINGLE_SECRET_FILE_BYTES:
-            raise ValueError(
-                f"mounted secret exceeds per-file size limit: {name}"
-            )
+            raise ValueError(f"mounted secret exceeds per-file size limit: {name}")
         values[name] = resolved.read_text(encoding="utf-8").strip()
     return values
 
@@ -1156,10 +1104,7 @@ def _reject_conflicting_secret_sources(
 
 def _resolve_path(value: str | Path) -> Path:
     path = Path(value)
-    if not path.is_absolute():
-        path = (Path.cwd() / path).resolve()
-    else:
-        path = path.resolve()
+    path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
     return path
 
 
@@ -1212,9 +1157,7 @@ def _allowed_environment_keys() -> set[str]:
         for name, field in model_type.model_fields.items():
             child_path = (*path, name)
             annotation = field.annotation
-            if isinstance(annotation, type) and issubclass(
-                annotation, BaseModel
-            ):
+            if isinstance(annotation, type) and issubclass(annotation, BaseModel):
                 visit(annotation, child_path)
             else:
                 allowed.add("AW_" + "__".join(child_path).upper())
@@ -1236,8 +1179,7 @@ def _reject_unknown_environment_variables() -> None:
     if duplicate_keys:
         raise ValueError(
             "duplicate Agent Workbench environment variables after "
-            "case normalization: "
-            + ", ".join(sorted(duplicate_keys))
+            "case normalization: " + ", ".join(sorted(duplicate_keys))
         )
 
     allowed = _allowed_environment_keys()
@@ -1248,8 +1190,7 @@ def _reject_unknown_environment_variables() -> None:
     )
     if unknown:
         raise ValueError(
-            "unknown Agent Workbench environment variables: "
-            + ", ".join(unknown)
+            "unknown Agent Workbench environment variables: " + ", ".join(unknown)
         )
 
 
@@ -1274,8 +1215,7 @@ def _reject_unknown_dotenv_variables(env_file: Path | None) -> None:
     if duplicate_keys:
         raise ValueError(
             "duplicate Agent Workbench dotenv variables after case "
-            "normalization: "
-            + ", ".join(sorted(duplicate_keys))
+            "normalization: " + ", ".join(sorted(duplicate_keys))
         )
     if unknown_keys:
         raise ValueError(
@@ -1292,10 +1232,9 @@ def _parse_release_version(raw_version: str) -> tuple[int, int, int]:
         raw_version,
     )
     if match is None:
-        raise RuntimeError(
-            "cannot parse installed pydantic-settings release version"
-        )
-    return tuple(int(part) for part in match.groups())
+        raise RuntimeError("cannot parse installed pydantic-settings release version")
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch)
 
 
 def _assert_safe_pydantic_settings_version() -> None:
@@ -1307,11 +1246,7 @@ def _assert_safe_pydantic_settings_version() -> None:
         ) from exc
 
     installed = _parse_release_version(raw_version)
-    if not (
-        MIN_PYDANTIC_SETTINGS_VERSION
-        <= installed
-        < MAX_PYDANTIC_SETTINGS_VERSION
-    ):
+    if not (MIN_PYDANTIC_SETTINGS_VERSION <= installed < MAX_PYDANTIC_SETTINGS_VERSION):
         raise RuntimeError(
             "unsafe or unsupported pydantic-settings version: require "
             ">=2.14.2,<3 (excludes CVE-2026-58203 affected releases)"
@@ -1348,9 +1283,7 @@ def load_settings(
 
     configured_secrets_dir = secrets_dir or _read_control_env("AW_SECRETS_DIR")
     selected_secrets_dir = (
-        _resolve_path(configured_secrets_dir)
-        if configured_secrets_dir
-        else None
+        _resolve_path(configured_secrets_dir) if configured_secrets_dir else None
     )
     _reject_conflicting_secret_sources(selected_secrets_dir)
 
@@ -1361,8 +1294,8 @@ def load_settings(
         model_config = runtime_model_config
 
     loaded = LoadedSettings(
-        _env_file=selected_env_file,
-        _secrets_dir=selected_secrets_dir,
+        _env_file=selected_env_file,  # pyright: ignore[reportCallIssue]
+        _secrets_dir=selected_secrets_dir,  # pyright: ignore[reportCallIssue]
     )
     if (
         loaded.app.environment == "production"

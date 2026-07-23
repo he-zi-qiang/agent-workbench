@@ -1338,13 +1338,15 @@ v1 没有进程/容器级不可信代码执行，因此只能称为“Tool 权�
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-工作区已建立 `agent-workbench/` PR-001 Bootstrap：Python 3.12 src layout、
-锁文件、正式配置加载器、脱敏 config-check 与配置契约测试已经存在。Agent
-Runtime、RAG、Workflow 等产品能力尚未实现，因此当前状态必须如实标记：
+工作区已建立 PR-001 Bootstrap 与 PR-002 Config CI：Python 3.12 src
+layout、锁文件、正式配置加载器、脱敏 config-check、字段级 ownership、
+架构测试与 CI 合同已经存在。Agent Runtime、RAG、Workflow 等产品能力尚未
+实现，因此当前状态必须如实标记：
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
 | 工程与配置 Bootstrap | ✓ | ✓ | ✓ |  |
+| 配置 ownership / CI | ✓ | ✓ | ✓ |  |
 | 自研 Runtime | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |

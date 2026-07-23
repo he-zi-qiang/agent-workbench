@@ -4,6 +4,9 @@
 
 - `config.default.toml`：可提交、无真实密钥的默认值；
 - `config.test.toml`：测试环境深度合并覆盖，专门开启确定性 failpoint；
+- `config.production.toml`：无密钥的 production 合同覆盖，缺少部署注入时
+  必须失败关闭；
+- `config/ownership.yaml`：230 个配置叶子字段的唯一 owner 与生命周期登记；
 - `.env.example`：本地开发需要注入的 DSN、模型 ID 和密钥名称；
 - `src/agent_workbench/bootstrap/settings.py`：Pydantic Settings 类型、来源优先级、脱敏快照和跨域不变量；
 - `tests/config/test_settings.py`：配置契约测试；
@@ -21,10 +24,13 @@
 ```text
 config/
 ├── config.default.toml
-└── config.test.toml
+├── config.test.toml
+├── config.production.toml
+└── ownership.yaml
 src/agent_workbench/bootstrap/settings.py
 .env.example
 tests/config/test_settings.py
+tests/architecture/test_config_ownership.py
 ```
 
 ## 1. 加载规则
@@ -54,6 +60,19 @@ AW_RAG__RETRIEVAL__RERANK_TOP_K=10
 `AW_CONFIG_FILE` 在 `load_settings()` 调用时解析，而不是在 Python 模块
 import 时解析。overlay 应使用绝对路径；默认文件先加载，overlay 通过
 `deep_merge=True` 覆盖，环境变量最终胜出。
+
+`agent-config-check` 还提供三个仓库内命名 profile：
+
+```text
+development → 只加载 config.default.toml
+test        → 再叠加 config.test.toml
+production  → 再叠加 config.production.toml
+```
+
+命名 profile 与任意 `--config` overlay 互斥。该命令只验证配置合同、版本、
+脱敏和跨域不变量，不会启动模型、数据库、向量库或任何尚未实现的 Adapter。
+production profile 故意不提交 DSN、API key、真实模型 ID 和 revision；未由
+部署环境或 mounted secret 完整注入时，检查必须失败。
 
 生产环境不读取 `.env`。生产密钥应由部署系统作为环境变量或 mounted
 secret 注入；TOML、Git、事件、日志和 trace 中都不能出现真实密钥。
@@ -391,29 +410,37 @@ Optional Lab 为 true 就拒绝启动。
 
 ```bash
 cp .env.example .env
-uv run --frozen agent-config-check
+uv run --frozen agent-config-check --profile development
 ```
 
 确定性协调测试：
 
 ```bash
-AW_CONFIG_FILE=/absolute/path/to/config.test.toml uv run --frozen pytest -q
+uv run --frozen agent-config-check --profile test
+uv run --frozen pytest -q
 ```
 
 依赖：
 
 ```bash
-uv sync --frozen --group dev
+uv sync --frozen --group dev --no-editable
 ```
 
 提交前至少执行：
 
 ```bash
-uv lock --check
-uv run --frozen python -m py_compile src/agent_workbench/bootstrap/settings.py
-uv run --frozen python -c "import tomllib, pathlib; [tomllib.load(p.open('rb')) for p in pathlib.Path('config').glob('*.toml')]"
-uv run --frozen pytest -q
+uv lock --check --offline
+UV_OFFLINE=1 uv run --no-sync ruff format --check .
+UV_OFFLINE=1 uv run --no-sync ruff check .
+UV_OFFLINE=1 uv run --no-sync pyright
+UV_OFFLINE=1 uv run --no-sync pytest -q
 ```
+
+`config/ownership.yaml` 使用 JSON-compatible YAML，使架构测试无需额外
+YAML parser 即可读取。CI 会递归提取 Pydantic Settings 的全部叶子字段，
+要求每个字段恰好登记一次，并强制生命周期只能是
+`startup/live/task_snapshot/test_only/lab`。Task snapshot 使用正向
+allowlist；`testing.*` 只能是 `test_only`，`optional_labs.*` 只能是 `lab`。
 
 配置测试至少覆盖：transaction pooling 拒绝、lease/heartbeat 关系、guard
 连接预算、Qdrant 单一融合、RAG top-k 漏斗、生产 revision pin、生产
