@@ -1,0 +1,43 @@
+# Optional test overlay:
+#   AW_CONFIG_FILE=/absolute/path/to/config.test.toml pytest
+#
+# config.default.toml is loaded first; this file deep-merges over it.
+
+[app]
+environment = "test"
+log_level = "DEBUG"
+
+[model]
+provider = "fake"
+
+[model.main]
+model_id = "fake-main"
+prompt_cache_enabled = false
+
+[model.compact]
+model_id = "fake-compact"
+prompt_cache_enabled = false
+
+[coordination]
+lease_duration_seconds = 40
+heartbeat_interval_seconds = 10
+lease_grace_seconds = 5
+claim_poll_interval_ms = 10
+claim_poll_jitter_ms = 0
+recovery_poll_seconds = 1
+
+[observability]
+trace_sample_ratio = 0.0
+
+[testing]
+failpoints_enabled = true
+allow_fault_injection = true
+allowed_failpoints = [
+  "after_claim_commit_before_advisory_lock",
+  "after_node_before_checkpoint",
+  "after_fence_row_lock",
+  "after_final_checkpoint_before_registry_update",
+  "after_approval_commit_before_dispatch",
+  "after_artifact_write_before_ledger_commit",
+  "after_qdrant_upsert_before_outbox_ack",
+]

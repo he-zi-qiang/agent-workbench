@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-workbench"
+version = "0.1.0"
+description = "A framework-neutral Agent runtime with Chat/RAG and Task workflows."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "pydantic>=2.12,<3",
+  "pydantic-settings>=2.14.2,<3",
+  "python-dotenv>=1,<2",
+]
+
+[project.scripts]
+agent-config-check = "agent_workbench.bootstrap.config_check:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8,<10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_workbench"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"config/config.default.toml" = "agent_workbench/_config/config.default.toml"
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+exclude = ["**/__pycache__"]

@@ -1,0 +1,321 @@
+# Agent Workbench v1 configuration baseline.
+#
+# This file is committed to source control and must contain no real secret.
+# Deployment-specific values override it through AW_* environment variables.
+# Nested keys use "__", for example:
+#   AW_COORDINATION__LEASE_DURATION_SECONDS=120
+
+[app]
+name = "agent-workbench"
+environment = "development"
+# "local" permits an unauthenticated Compose Qdrant; any remote scope does not.
+deployment_scope = "local"
+log_level = "INFO"
+debug = false
+config_schema_version = "1.1"
+architecture_baseline = "1.3"
+
+[api]
+host = "0.0.0.0"
+port = 8000
+request_timeout_seconds = 180
+sse_heartbeat_seconds = 15
+shutdown_grace_seconds = 30
+# JSON/metadata control plane only; document bytes use ArtifactStore data plane.
+max_control_request_body_bytes = 2097152
+document_upload_transport = "artifact_data_plane"
+
+[database]
+# dsn, guard_dsn and listen_dsn are secret-like deployment values and are
+# intentionally absent. Supply them through .env / secret injection.
+query_pool_mode = "direct"
+guard_pool_mode = "direct"
+listen_pool_mode = "direct"
+query_pool_size = 10
+query_pool_max_overflow = 10
+guard_connection_budget = 4
+listener_connections_per_process = 1
+operational_connection_reserve = 10
+statement_timeout_ms = 30000
+application_name = "agent-workbench"
+guard_connection_scope = "task_pinned"
+listen_connection_scope = "process_pinned"
+guard_disconnect_action = "cancel_and_reclaim"
+guard_healthcheck_seconds = 5
+listener_healthcheck_seconds = 30
+
+[coordination]
+registry_backend = "postgresql"
+claim_strategy = "skip_locked"
+worker_concurrency = 2
+claim_batch_size = 1
+claim_poll_interval_ms = 1000
+claim_poll_jitter_ms = 250
+lease_duration_seconds = 90
+heartbeat_interval_seconds = 20
+lease_grace_seconds = 10
+max_missed_heartbeats = 2
+recovery_poll_seconds = 15
+priority_aging_seconds = 300
+max_attempts = 5
+retry_base_seconds = 2
+retry_max_seconds = 60
+advisory_lock_enabled = true
+require_same_physical_session = true
+fenced_checkpointer_enabled = true
+tool_execution_ledger_enabled = true
+strict_fifo_required = false
+lease_time_source = "postgresql_clock"
+fencing_token_strategy = "monotonic_lease_epoch"
+advisory_lock_key_strategy = "stable_signed_int64"
+heartbeat_execution = "independent_task"
+
+[event_stream]
+store_backend = "postgresql"
+wakeup_backend = "postgres_listen_notify"
+replay_source = "run_events"
+notify_payload_mode = "cursor_only"
+notify_payload_limit_bytes = 7900
+listener_uses_dedicated_session = true
+task_ready_channel = "agent_task_ready"
+stream_ready_channel = "agent_stream_ready"
+replay_page_size = 500
+subscriber_buffer_events = 256
+catchup_poll_seconds = 10
+# Model deltas are live SSE only; durable events store structured/final content.
+model_delta_mode = "ephemeral_sse_coalesced"
+live_delta_coalesce_ms = 50
+
+[model]
+provider = "anthropic"
+
+[model.main]
+# Exact provider model IDs must be supplied by deployment config and pinned.
+model_id = "not-configured-sonnet"
+temperature = 0.0
+max_output_tokens = 8192
+timeout_seconds = 120
+max_retries = 2
+tool_calling_required = true
+prompt_cache_enabled = true
+
+[model.compact]
+model_id = "not-configured-haiku"
+temperature = 0.0
+max_output_tokens = 2048
+timeout_seconds = 45
+max_retries = 2
+tool_calling_required = false
+prompt_cache_enabled = true
+
+[runtime]
+executor = "claude_like"
+max_steps = 12
+max_tool_calls = 32
+max_parallel_read_tools = 4
+max_parallel_write_tools = 1
+model_timeout_seconds = 120
+tool_timeout_seconds = 60
+cancellation_poll_seconds = 1
+context_soft_limit_ratio = 0.75
+tool_result_artifact_threshold_bytes = 65536
+write_tools_default_enabled = false
+
+[langchain_adapter]
+enabled = true
+allowed_scope = "model_and_tool_adapters"
+agent_executor_enabled = false
+memory_enabled = false
+
+[workflow]
+control_plane = "langgraph"
+checkpointer_backend = "postgresql"
+checkpointing_enabled = true
+human_interrupt_enabled = true
+interrupt_boundary = "graph_node"
+runtime_loop_owner = "custom_runtime"
+graph_version = "v1"
+node_retry_max_attempts = 2
+node_timeout_seconds = 600
+
+[multi_agent]
+enabled = true
+backend = "custom_supervisor_workers"
+topology = "fixed_langgraph"
+worker_executor = "custom_runtime"
+# Static compiled-graph guard, separate from durable invocation budgets.
+static_agent_node_limit = 6
+max_parallel_agent_invocations = 3
+max_agent_invocation_attempts_per_task = 12
+max_tokens_per_agent_invocation = 16000
+
+[rag.llama_index]
+enabled = true
+role = "ingestion_and_retrieval_adapter"
+agent_executor_enabled = false
+query_engine_generates_final_answer = false
+fusion_enabled = false
+
+[rag.ingestion]
+chunk_size_tokens = 512
+chunk_overlap_tokens = 64
+embedding_batch_size = 16
+upsert_batch_size = 64
+document_versioning_enabled = true
+outbox_required = true
+parser_version = "v1"
+chunker_version = "token-512-64-v1"
+index_schema_version = "bge-m3-v1"
+
+[rag.embedding]
+model_id = "BAAI/bge-m3"
+# Replace "main" with a Hugging Face commit SHA before a production release.
+revision = "main"
+vector_size = 1024
+max_input_tokens = 8192
+device = "auto"
+precision = "float16"
+dense_enabled = true
+sparse_enabled = true
+dense_vector_name = "dense"
+sparse_vector_name = "sparse"
+
+[rag.retrieval]
+fusion_owner = "qdrant"
+fusion_method = "rrf"
+dense_top_k = 40
+sparse_top_k = 40
+fused_top_k = 40
+rerank_top_k = 8
+answer_context_k = 8
+metadata_filter_required = true
+acl_filter_required = true
+citations_required = true
+
+[rag.reranker]
+enabled = true
+model_id = "BAAI/bge-reranker-v2-m3"
+# Replace "main" with a Hugging Face commit SHA before a production release.
+revision = "main"
+batch_size = 8
+device = "auto"
+precision = "float16"
+timeout_seconds = 15
+failure_mode = "fail_open_with_fused_results"
+
+[qdrant]
+url = "http://qdrant:6333"
+read_alias = "knowledge_active"
+write_collection = "knowledge_bge_m3_v1"
+collection_schema_version = 1
+request_timeout_seconds = 10
+prefer_grpc = true
+distance = "cosine"
+derived_index = true
+payload_acl_filter_required = true
+# Only a local deployment may be false; every remote scope requires true + HTTPS.
+api_key_required = false
+
+[artifact_store]
+backend = "local"
+local_root = "./var/artifacts"
+bucket = ""
+endpoint = ""
+region = ""
+max_artifact_bytes = 104857600
+presigned_url_ttl_seconds = 300
+
+[policy]
+revision = "policy-v1"
+default_effect = "deny"
+write_tools_require_approval = true
+network_tools_require_allowlist = true
+shell_tools_enabled = false
+path_sandbox_enabled = true
+tenant_filter_required = true
+max_tool_argument_bytes = 65536
+max_tool_result_bytes = 10485760
+redact_secrets = true
+
+[observability]
+otel_enabled = true
+otel_service_name = "agent-workbench"
+otel_exporter_endpoint = "http://otel-collector:4317"
+trace_sample_ratio = 1.0
+record_prompt_body = false
+record_tool_result_body = false
+metrics_enabled = true
+langfuse_enabled = false
+
+[evaluation]
+ragas_enabled = true
+ragas_offline_only = true
+online_judge_in_ci = false
+benchmark_isolated_process = true
+rag_gold_set_path = "./evals/rag/gold.jsonl"
+task_benchmark_path = "./evals/tasks/cases.yaml"
+rag_metrics = [
+  "recall_at_k",
+  "precision_at_k",
+  "mrr",
+  "ndcg_at_k",
+  "rerank_ndcg_delta",
+  "rerank_recall_at_k",
+  "rerank_latency_ms",
+  "faithfulness",
+  "factual_correctness",
+  "answer_relevance",
+  "abstention_rate",
+  "abstention_accuracy",
+  "citation_precision",
+  "citation_recall",
+  "citation_locator_accuracy",
+  "retrieval_latency_ms",
+  "generation_latency_ms",
+  "token_usage",
+  "cost",
+]
+task_metrics = [
+  "completion_rate",
+  "recovery_rate",
+  "node_retry_count",
+  "human_intervention_count",
+  "latency_ms",
+  "token_usage",
+  "cost",
+]
+multi_agent_metrics = [
+  "node_count",
+  "partial_failure_rate",
+  "merge_latency_ms",
+  "per_node_context_tokens",
+  "per_node_budget_usage",
+]
+
+[evaluation.judge]
+enabled = false
+model_id = "not-configured-eval-judge"
+model_revision = "not-configured"
+prompt_version = "rag-judge-v1"
+temperature = 0.0
+calibration_set_path = "./evals/rag/judge-calibration.jsonl"
+
+[testing]
+failpoints_enabled = false
+allow_fault_injection = false
+# Allowlist only; each test fixture activates the one point it needs.
+allowed_failpoints = []
+deterministic_concurrency_required = true
+real_postgresql_required = true
+sleep_based_race_tests_forbidden = true
+controllable_clock_enabled = true
+
+[optional_labs]
+runtime_mid_loop_resume = false
+dynamic_agent_spawn = false
+agent_mailbox = false
+crewai_benchmark = false
+mcp_adapter = false
+langfuse_profile = false
+redis_streams_coordination = false
+advanced_compaction = false
