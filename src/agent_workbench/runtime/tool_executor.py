@@ -9,6 +9,10 @@ The timeout lives here rather than in the loop above it. A serial loop has no
 other way to survive a handler that never returns: budgets bound how much a run
 may spend, not how long a single await may block.
 
+Two limits apply: the tool's own declared timeout and whatever is left of the
+run's deadline. The shorter wins, because a tool allowed an hour inside a run
+with ten seconds left would outlive the run that authorized it.
+
 What is deliberately missing is argument validation against the tool schema and
 the hook that may rewrite those arguments. Both belong to the tool gateway, and
 both change what "final arguments" means, so they arrive together rather than
@@ -26,6 +30,7 @@ from agent_workbench.domain.policies import ExecutionContext
 from agent_workbench.domain.tools import ToolCall, ToolResult
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
+from agent_workbench.runtime.budgets import effective_tool_timeout
 
 
 class ToolExecutor:
@@ -45,7 +50,12 @@ class ToolExecutor:
         *,
         context: ExecutionContext,
         cancellation: CancellationToken,
+        run_budget_seconds: float | None = None,
     ) -> ToolResult:
+        limit = effective_tool_timeout(
+            binding.spec.timeout_seconds,
+            run_budget_seconds=run_budget_seconds,
+        )
         invocation = ToolInvocation(
             call=call,
             context=context,
@@ -54,21 +64,17 @@ class ToolExecutor:
         )
         started = self._monotonic()
 
+        if limit <= 0:
+            return self._failure(
+                call, self._timeout_error(call, limit, binding), started
+            )
+
         try:
-            async with asyncio.timeout(binding.spec.timeout_seconds):
+            async with asyncio.timeout(limit):
                 result = await binding.handler(invocation)
         except TimeoutError:
             return self._failure(
-                call,
-                ErrorInfo(
-                    code="tool_timeout",
-                    message=(
-                        f"{call.tool_name} exceeded its "
-                        f"{binding.spec.timeout_seconds}s timeout"
-                    ),
-                    retryable=True,
-                ),
-                started,
+                call, self._timeout_error(call, limit, binding), started
             )
         except OperationCancelledError as exc:
             return self._failure(call, exc.to_error_info(), started)
@@ -96,6 +102,23 @@ class ToolExecutor:
                 started,
             )
         return self._attach_duration(result, started)
+
+    def _timeout_error(
+        self,
+        call: ToolCall,
+        limit: float,
+        binding: ToolBinding,
+    ) -> ErrorInfo:
+        bound = (
+            f"its {limit:g}s timeout"
+            if limit >= binding.spec.timeout_seconds
+            else f"the run's remaining {limit:g}s"
+        )
+        return ErrorInfo(
+            code="tool_timeout",
+            message=f"{call.tool_name} exceeded {bound}",
+            retryable=True,
+        )
 
     def _failure(
         self,

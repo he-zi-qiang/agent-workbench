@@ -15,7 +15,8 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 目前已完成 **PR-001 Bootstrap**、**PR-002 Config CI**、**PR-003 Domain**、
 **PR-004 Ports + Fakes**、**PR-005 CLI Skeleton**、**PR-006 Runtime Serial
-Loop** 与 **PR-007 Policy + Tool Gateway** 的本地实现和验证。Hook Bus、
+Loop**、**PR-007 Policy + Tool Gateway** 与 **PR-008 Runtime Budgets** 的本地
+实现和验证。Hook Bus、
 并行只读调度、RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，
 不能描述为已经实现。
 
@@ -43,6 +44,12 @@ schema 校验与授权决定之后才会运行。策略若返回 `allow_with_mod
 重写后的参数会被重新校验并重新提交决定——能在检查之后改参数，就等于同时绕过
 两道检查。JSON Schema 只支持一个明确的子集，超出子集的 schema 在装配阶段就被
 拒绝，而不是在调用时被静默跳过。
+
+PR-008 把各层时限收敛成一个下界：单次模型调用的有效 deadline 是
+`min(运行时 envelope, run 剩余时间)`（模型 profile 自己的超时由 Adapter 在更
+内层施加），单个 Tool 的时限是 `min(工具声明的超时, run 剩余时间)`——一个被批准
+一小时的工具，不该活得比批准它的 run 还久。取消在流式过程中于下一个事件边界生效，
+并通过关闭生成器传导到 Adapter；模型完全静默时由 deadline 兜底。
 
 ## 快速体验
 
