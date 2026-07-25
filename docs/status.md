@@ -70,4 +70,54 @@ Gitleaks 8.30.1 working-tree/history scan: passed
 ```
 
 该 PR 只证明配置和 CI 合同，不代表 API、Worker、模型或外部 Adapter 已经
-启动。下一增量仍是 PR-003 Domain。
+启动。
+
+## PR-003 Domain
+
+状态：**已实现并通过本地测试**。
+
+已交付 `src/agent_workbench/domain/`，只依赖标准库与 Pydantic：
+
+- `schema.py`：`DomainModel`/`VersionedModel` 基类、schema 版本闭合校验、
+  `extra="forbid"`、frozen 与 `hide_input_in_errors`；
+- `identifiers.py`：平台自铸 ID 前缀与生成器，同时接受 provider 原样
+  ID（`toolu_...`）；
+- `errors.py`：13 个稳定 `ErrorCode`、`ErrorInfo` 与领域异常层级；
+- `artifacts.py`：`ArtifactRef`（content-addressed，不含 URL/路径）；
+- `messages.py`：provider-neutral 消息与 text/tool_use/tool_result 块；
+- `tools.py`：`ToolSpec`/`ToolCall`/`ToolResult` 与 `align_results()`；
+- `context.py`：`ContextPacket`/`ContextChunk`/`Citation`/`SourceLocator`；
+- `policies.py`：`PrincipalContext`、`AuthorizationEnvelope`、
+  `ExecutionContext`、`PolicyDecision`；
+- `runs.py`：`TraceContext`、`RunBudget`/`BudgetUsage`/`TokenUsage`、
+  `AgentRunRequest`、`AgentOutcome`、Runtime 状态机与 `StopReason` 词汇表；
+- `events.py`：基线 6.7 的 19 种事件、统一 envelope 与 durability 映射。
+
+已经被编码为构造期校验（而不是注释）的不变量：
+
+- 每个 `ToolCall` 恰有一个 `ToolResult`，提交顺序按模型调用顺序稳定；
+- write/external/destructive Tool 必须 exclusive 且声明 permission scope；
+- 失败 `ToolResult` 必须携带 `ErrorInfo`，成功的必须不携带；
+- `ModelDelta`/`ToolProgress` 恒为 transient 且不得携带 stream sequence，
+  durable 事件必须携带；`event_type` 必须与 payload 一致；
+- Citation 必须落在同一 `ContextPacket` 的 chunk 与相同 document version 上；
+- 预算耗尽的 run 报告为 failed + 结构化 `stop_reason`，不伪装成 completed；
+- 第三方异常转 `ErrorInfo` 时只保留异常类型名，丢弃消息正文。
+
+2026-07-25 验证证据：
+
+```text
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 219 passed（其中 domain 新增 159 项）
+development/test/production config profile: status=ok
+golden 序列化基线：tests/domain/golden/domain_v1.json（13 个聚合）
+```
+
+本 PR 不新增依赖，`pyproject.toml` 与 `uv.lock` 未改动，`uv lock --check`
+由 CI 执行。
+
+仍不属于 PR-003 的内容：Ports 与 Fake Adapter（PR-004）、CLI 纵向切片
+（PR-005）、Runtime 循环本身（PR-006 起）。领域对象存在且有契约测试，
+按项目纪律只能标记为 Implemented/Tested，不能标记为 Demonstrated。

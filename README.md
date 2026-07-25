@@ -13,9 +13,13 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-目前已完成 **PR-001 Bootstrap** 与 **PR-002 Config CI** 的本地实现和验证。
-Runtime、RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，不能
-描述为已经实现。
+目前已完成 **PR-001 Bootstrap**、**PR-002 Config CI** 与 **PR-003 Domain**
+的本地实现和验证。Runtime 循环、RAG、Workflow、Multi-Agent、API 和 UI 仍
+处于 Planned 状态，不能描述为已经实现。
+
+PR-003 交付的是框架无关的领域契约：消息、工具、事件、上下文、运行预算、
+策略决定与错误分类，全部只依赖标准库与 Pydantic。工具调用与结果的配对、
+事件持久性、引用可溯源等不变量以构造期校验的形式固定下来。
 
 ## 本地配置检查
 

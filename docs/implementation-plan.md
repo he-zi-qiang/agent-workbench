@@ -4,7 +4,8 @@
 >
 > 日期：2026-07-22
 >
-> 状态：PR-001 Bootstrap 与 PR-002 Config CI 已实现并通过本地验证；产品能力仍未实现
+> 状态：PR-001 Bootstrap、PR-002 Config CI 与 PR-003 Domain（WP01-01）已实现
+> 并通过本地验证；Ports/Fake、Runtime 及其之后的产品能力仍未实现
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
 >
