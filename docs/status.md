@@ -356,3 +356,55 @@ CLI golden 文件逐字节未变——这次重构对 demo 行为完全等价
 尚未存在）——目前唯一能改写参数的来源是 PolicyEngine，重新校验/再授权的骨架
 已经就位，接 Hook 时复用同一条路径。同样不含并行只读调度（WP02-04 / PR-009）、
 大结果 Artifact 化（WP12）与真实 Model Adapter（WP02-06/07）。
+
+## PR-008 Runtime Budgets
+
+状态：**已实现并通过本地测试**。
+
+PR-006 已经做掉了循环上限（`max_steps` / `max_tool_calls` / token / cost）与
+轮次边界上的取消。本 PR 补的是**时限**：在实施计划 5.2 之前，一个停住不动的
+模型流会让整个 run 无限期挂起——预算约束的是花费，不是单次 await 的时长。
+
+已交付：
+
+- `runtime/budgets.py`：纯粹的 deadline 运算。
+  `effective_model_deadline()` 返回各层下界的最小值**以及它来自哪一层**；
+  `effective_tool_timeout()` 用 run 剩余时间约束单个工具；
+- Runtime：单次模型调用套 `asyncio.timeout(有效 deadline)`；流式过程中在每个
+  事件边界检查取消；退出时显式 `aclose()` 生成器；
+- ToolExecutor / Gateway：`run_budget_seconds` 一路传到执行处。
+
+本 PR 固定下来的行为：
+
+- **有效 deadline 是一个下界，不是几个互不相关的定时器**：
+  `min(运行时 envelope, run 剩余时间)`。模型 profile 自己的超时由 Adapter 在更
+  内层施加——只有 Adapter 知道 profile 映射到哪个具体模型——两层嵌套，短的先触发；
+- **哪一层到期决定了怎么报**：run deadline 到期是预算结果（`budget_exceeded` +
+  `stop_reason="deadline"`，run 结束）；超出 envelope 是 provider 问题
+  （`provider_error`，`retryable=True`）。两者相等时按 run deadline 报，因为它的
+  到期后果更严重。同一个"模型卡住"的场景有两个测试，只有配置不同、结论不同；
+- **工具不能活得比批准它的 run 更久**：`min(工具声明超时, run 剩余时间)`，
+  且每次调用重新计算——第一个工具跑得慢，第二个能用的就更少；
+- **取消在下一个事件边界生效**，并通过关闭生成器传导到 Adapter（测试用生成器
+  `finally` 里的标志位断言 `closed is True`）。模型完全静默时由 deadline 兜底，
+  所以"有界时间内停止"两条路径都有覆盖；
+- 卡住的模型调用**不会**产生 `ModelCompleted`——它确实没有完成。
+
+取消测试不使用 sleep：cancel 是在事件 sink 观察到第一个 `ModelDelta` 时发出的，
+因此交错是确定的。三个超时测试各等 50 毫秒真实时间，有界且必然触发。
+
+2026-07-25 验证证据：
+
+```text
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 414 passed（新增 budgets 12 + runtime 5）
+development/test config profile: status=ok
+CLI golden 文件逐字节未变
+```
+
+范围说明：三层 retry 计数（model / graph node / task）中只有 model 这一层的
+deadline 在本 PR 内；node 与 task 层属于 WP06/WP08。真实 Adapter 的
+`max_retries` 要等 WP02-06 的 Anthropic Adapter。Hook Bus（WP02-05）与并行只读
+调度（WP02-04）仍未实现。

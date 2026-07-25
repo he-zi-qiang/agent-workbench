@@ -235,6 +235,7 @@ class ToolGateway:
         context: ExecutionContext,
         cancellation: CancellationToken,
         sink: EventSink,
+        run_budget_seconds: float | None = None,
     ) -> ToolResult:
         """Run an authorized call and record however it ended."""
 
@@ -249,6 +250,7 @@ class ToolGateway:
             prepared.call,
             context=context,
             cancellation=cancellation,
+            run_budget_seconds=run_budget_seconds,
         )
         await self._record(result, sink=sink)
         return result

@@ -21,7 +21,8 @@ what the model sees by finishing one tool sooner than another.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -58,6 +59,7 @@ from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec, align_r
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
 from agent_workbench.ports.model import (
+    ModelEvent,
     ModelFinishReason,
     ModelPort,
     ModelRequest,
@@ -65,10 +67,19 @@ from agent_workbench.ports.model import (
     ModelToolCallProposed,
     ModelUsageReported,
 )
+from agent_workbench.runtime.budgets import (
+    effective_model_deadline,
+    remaining_run_seconds,
+)
 from agent_workbench.runtime.state import RunStateMachine
 from agent_workbench.runtime.tool_gateway import PreparedCall, ToolGateway
 
 DEFAULT_MODEL_LABEL = "scripted-fake"
+
+# Mirrors runtime.model_timeout_seconds. It is the runtime's own envelope for
+# any single model call; the adapter still applies the model profile's timeout
+# inside it, so the shorter of the two fires first.
+DEFAULT_MODEL_TIMEOUT_SECONDS = 120.0
 
 # Matches the domain's BoundedText ceiling. Writing a longer answer to the
 # artifact store instead of clipping it belongs with context management.
@@ -95,6 +106,9 @@ class _ModelTurn:
     usage: TokenUsage
     finish: ModelFinishReason | None
     error: ErrorInfo | None
+    # Set when the turn failed for a reason the loop must report as something
+    # other than a plain error, such as running out of run deadline.
+    stop_reason: StopReason | None = None
 
 
 @dataclass(slots=True)
@@ -116,6 +130,7 @@ class ClaudeLikeAgentRuntime:
         gateway: ToolGateway,
         policy_identity: str,
         model_label: str = DEFAULT_MODEL_LABEL,
+        model_timeout_seconds: float | None = DEFAULT_MODEL_TIMEOUT_SECONDS,
         clock: Callable[[], datetime] | None = None,
         model_call_ids: Callable[[], str] | None = None,
     ) -> None:
@@ -127,6 +142,7 @@ class ClaudeLikeAgentRuntime:
         # to describe. It is recorded with every decision this run makes.
         self._policy_identity = policy_identity
         self._model_label = model_label
+        self._model_timeout_seconds = model_timeout_seconds
         self._clock = clock if clock is not None else _utc_now
         self._model_call_ids = (
             model_call_ids if model_call_ids is not None else new_model_call_id
@@ -200,7 +216,13 @@ class ClaudeLikeAgentRuntime:
                 )
 
             machine.to("model_streaming")
-            turn = await self._stream_model(request, sink, ledger, specs)
+            turn = await self._stream_model(
+                request,
+                sink,
+                ledger,
+                specs,
+                cancellation,
+            )
             ledger.usage = ledger.usage.merged(BudgetUsage(steps=1, tokens=turn.usage))
 
             terminal = await self._terminal_for_turn(
@@ -215,6 +237,7 @@ class ClaudeLikeAgentRuntime:
                 return terminal
 
             await self._run_tool_batch(
+                request,
                 sink,
                 machine,
                 cancellation,
@@ -243,7 +266,24 @@ class ClaudeLikeAgentRuntime:
         sink: EventSink,
         ledger: _RunLedger,
         specs: tuple[ToolSpec, ...],
+        cancellation: CancellationToken,
     ) -> _ModelTurn:
+        deadline = effective_model_deadline(
+            envelope_seconds=self._model_timeout_seconds,
+            run_deadline=request.budget.deadline,
+            now=self._clock(),
+        )
+        if deadline.expired:
+            # No time left to start: reported before a model call is paid for.
+            return _ModelTurn(
+                text="",
+                calls=(),
+                usage=TokenUsage(),
+                finish="error",
+                error=deadline.to_error(),
+                stop_reason=deadline.stop_reason(),
+            )
+
         model_call_id = self._model_call_ids()
         await sink.emit(
             ModelStarted(
@@ -253,6 +293,59 @@ class ClaudeLikeAgentRuntime:
             )
         )
 
+        stream = self._model.stream(
+            ModelRequest(
+                model_profile=request.model_profile,
+                system_prompt=request.system_prompt,
+                messages=tuple(ledger.messages),
+                tools=specs,
+            )
+        )
+        try:
+            async with asyncio.timeout(deadline.seconds):
+                turn = await self._consume(stream, sink, model_call_id, cancellation)
+        except TimeoutError:
+            return _ModelTurn(
+                text="",
+                calls=(),
+                usage=TokenUsage(),
+                finish="error",
+                error=deadline.to_error(),
+                stop_reason=deadline.stop_reason(),
+            )
+        except OperationCancelledError:
+            return _ModelTurn("", (), TokenUsage(), "cancelled", None)
+        except Exception as exc:
+            # An adapter fault is a run outcome, not the caller's exception.
+            return _ModelTurn(
+                text="",
+                calls=(),
+                usage=TokenUsage(),
+                finish="error",
+                error=ErrorInfo.from_exception(exc, default_code="provider_error"),
+            )
+
+        if turn.finish is not None and turn.finish != "cancelled":
+            await sink.emit(
+                ModelCompleted(
+                    model_call_id=model_call_id,
+                    finish_reason=turn.finish,
+                    usage=turn.usage,
+                    text=turn.text,
+                    tool_call_ids=tuple(call.tool_call_id for call in turn.calls),
+                )
+            )
+        return turn
+
+    async def _consume(
+        self,
+        stream: AsyncIterator[ModelEvent],
+        sink: EventSink,
+        model_call_id: str,
+        cancellation: CancellationToken,
+    ) -> _ModelTurn:
+        """Drain one model stream, stopping early if the run was cancelled."""
+
         text_parts: list[str] = []
         calls: list[ToolCall] = []
         tokens = TokenUsage()
@@ -260,15 +353,11 @@ class ClaudeLikeAgentRuntime:
         error: ErrorInfo | None = None
 
         try:
-            stream = self._model.stream(
-                ModelRequest(
-                    model_profile=request.model_profile,
-                    system_prompt=request.system_prompt,
-                    messages=tuple(ledger.messages),
-                    tools=specs,
-                )
-            )
             async for event in stream:
+                if cancellation.cancelled:
+                    # Observed at the next event boundary. A stream that goes
+                    # quiet instead is bounded by the deadline above.
+                    return _ModelTurn("", (), tokens, "cancelled", None)
                 if isinstance(event, ModelTextDelta):
                     text_parts.append(event.text)
                     await sink.emit(
@@ -283,30 +372,15 @@ class ClaudeLikeAgentRuntime:
                     error = event.error
                     if event.usage.total:
                         tokens = event.usage
-        except OperationCancelledError:
-            return _ModelTurn("", (), tokens, "cancelled", None)
-        except Exception as exc:
-            # An adapter fault is a run outcome, not the caller's exception.
-            return _ModelTurn(
-                "",
-                (),
-                tokens,
-                "error",
-                ErrorInfo.from_exception(exc, default_code="provider_error"),
-            )
+        finally:
+            if isinstance(stream, AsyncGenerator):
+                # Closing the generator is how cancellation and deadlines reach
+                # the adapter, and through it the request it holds open.
+                await stream.aclose()
 
-        text = _clip("".join(text_parts))
-        if finish is not None:
-            await sink.emit(
-                ModelCompleted(
-                    model_call_id=model_call_id,
-                    finish_reason=finish,
-                    usage=tokens,
-                    text=text,
-                    tool_call_ids=tuple(call.tool_call_id for call in calls),
-                )
-            )
-        return _ModelTurn(text, tuple(calls), tokens, finish, error)
+        return _ModelTurn(
+            _clip("".join(text_parts)), tuple(calls), tokens, finish, error
+        )
 
     async def _terminal_for_turn(
         self,
@@ -340,7 +414,7 @@ class ClaudeLikeAgentRuntime:
                 request,
                 sink,
                 machine,
-                "error",
+                turn.stop_reason or "error",
                 turn.error
                 or ErrorInfo(
                     code="provider_error",
@@ -392,6 +466,7 @@ class ClaudeLikeAgentRuntime:
 
     async def _run_tool_batch(
         self,
+        request: AgentRunRequest,
         sink: EventSink,
         machine: RunStateMachine,
         cancellation: CancellationToken,
@@ -452,6 +527,12 @@ class ClaudeLikeAgentRuntime:
                         context=context,
                         cancellation=cancellation,
                         sink=sink,
+                        # Recomputed per call: a slow first tool leaves less
+                        # for the second, and the run's deadline bounds both.
+                        run_budget_seconds=remaining_run_seconds(
+                            request.budget.deadline,
+                            now=self._clock(),
+                        ),
                     )
                 )
 

@@ -12,8 +12,9 @@ LangChain and later comparison adapters stay behind explicit ports.
 ## Current status
 
 **PR-001 Bootstrap**, **PR-002 Config CI**, **PR-003 Domain**, **PR-004 Ports +
-Fakes**, **PR-005 CLI Skeleton**, **PR-006 Runtime Serial Loop** and **PR-007
-Policy + Tool Gateway** have been implemented and validated locally. The hook
+Fakes**, **PR-005 CLI Skeleton**, **PR-006 Runtime Serial Loop**, **PR-007
+Policy + Tool Gateway** and **PR-008 Runtime Budgets** have been implemented
+and validated locally. The hook
 bus, the parallel read scheduler, RAG, workflow, multi-Agent, API and UI
 capabilities remain planned and must not be described as implemented.
 
@@ -49,6 +50,14 @@ arguments are validated again and re-submitted for a decision -- rewriting
 after the checks would be a way past both. JSON Schema support is a documented
 subset, and a schema reaching beyond it is refused when the gateway is
 assembled rather than silently unenforced at call time.
+
+PR-008 collapses the layered time limits into a single bound. One model call is
+allowed `min(runtime envelope, time left in the run)` -- the model profile's own
+timeout is applied by the adapter, one level further in -- and one tool call is
+allowed `min(its declared timeout, time left in the run)`, because a tool
+granted an hour should not outlive the run that authorized it. Cancellation
+takes effect at the next stream event and reaches the adapter by closing the
+generator; a model that goes silent instead is bounded by the deadline.
 
 ## Try it
 

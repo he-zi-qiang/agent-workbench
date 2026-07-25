@@ -19,7 +19,7 @@ from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
 from agent_workbench.adapters.policy import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry, read_document_tool
 from agent_workbench.domain.errors import ErrorInfo
-from agent_workbench.domain.events import EventEnvelope
+from agent_workbench.domain.events import EventEnvelope, ToolFailed
 from agent_workbench.domain.messages import ToolResultBlock, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import (
@@ -183,6 +183,7 @@ def _execute(
     request: AgentRunRequest | None = None,
     bindings: Sequence[ToolBinding] | None = None,
     cancellation: CancellationSource | None = None,
+    model_timeout_seconds: float | None = None,
 ) -> _Execution:
     registry = StaticToolRegistry(
         bindings if bindings is not None else [read_document_tool(CORPUS)]
@@ -203,6 +204,7 @@ def _execute(
                 executor=ToolExecutor(monotonic=_ticking()),
             ),
             policy_identity=POLICY_IDENTITY,
+            model_timeout_seconds=model_timeout_seconds,
             clock=_clock,
             model_call_ids=_ids("mc"),
         )
@@ -596,3 +598,155 @@ def test_the_model_is_told_why_its_arguments_were_rejected() -> None:
     assert isinstance(block, ToolResultBlock)
     assert block.status == "error"
     assert "invalid_tool_input" in block.text
+
+
+class _StallingModel:
+    """A model that starts a stream and then never produces anything."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        try:
+            await asyncio.sleep(30)
+            yield TextDelta(text="unreachable")  # pragma: no cover
+        finally:
+            # Runs when the runtime closes the generator, which is how a
+            # deadline or a cancellation reaches the adapter.
+            self.closed = True
+
+
+class _ChattyModel:
+    """A model that keeps streaming text and never finishes on its own."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.emitted = 0
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        try:
+            while True:
+                self.emitted += 1
+                yield TextDelta(text=f"chunk {self.emitted} ")
+        finally:
+            self.closed = True
+
+
+def test_a_stalled_model_is_stopped_by_the_runtime_envelope() -> None:
+    model = _StallingModel()
+
+    run = _execute(model, model_timeout_seconds=0.05)
+
+    assert run.outcome.status == "failed"
+    assert run.outcome.stop_reason == "error"
+    assert run.outcome.error is not None
+    assert run.outcome.error.code == "provider_error"
+    assert run.outcome.error.retryable is True
+    assert model.closed is True
+
+
+def test_a_stalled_model_is_stopped_by_the_run_deadline() -> None:
+    """The same stall, reported as a budget outcome rather than a provider one."""
+
+    model = _StallingModel()
+    budget = RunBudget(
+        max_steps=4,
+        max_tool_calls=8,
+        deadline=CLOCK + timedelta(seconds=0.05),
+    )
+
+    run = _execute(
+        model,
+        request=_request(budget=budget),
+        model_timeout_seconds=600,
+    )
+
+    assert run.outcome.status == "failed"
+    assert run.outcome.stop_reason == "deadline"
+    assert run.outcome.error is not None
+    assert run.outcome.error.code == "budget_exceeded"
+    assert model.closed is True
+
+
+def test_a_stalled_model_never_records_a_completion() -> None:
+    run = _execute(_StallingModel(), model_timeout_seconds=0.05)
+
+    assert run.durable_types == ["RunStarted", "ModelStarted", "RunFailed"]
+    assert "ModelCompleted" not in run.durable_types
+
+
+def test_cancellation_stops_the_stream_at_the_next_event_boundary() -> None:
+    """No sleeping: the cancel is requested from the first delta it observes."""
+
+    model = _ChattyModel()
+    cancellation = CancellationSource()
+    registry = StaticToolRegistry([read_document_tool(CORPUS)])
+
+    async def scenario() -> tuple[AgentOutcome, list[EventEnvelope]]:
+        log = InMemoryEventLog(clock=_clock, event_ids=_ids("evt"))
+        live: list[EventEnvelope] = []
+
+        def observe(envelope: EventEnvelope) -> None:
+            live.append(envelope)
+            if envelope.event_type == "ModelDelta":
+                cancellation.cancel("operator stopped the task")
+
+        runtime = ClaudeLikeAgentRuntime(
+            model=model,
+            gateway=ToolGateway(
+                registry=registry,
+                policy=EnvelopePolicyEngine(registry=registry),
+            ),
+            policy_identity=POLICY_IDENTITY,
+            clock=_clock,
+            model_call_ids=_ids("mc"),
+        )
+        outcome = await runtime.run(
+            _request(),
+            ObservingEventSink(
+                inner=ScopedEventSink(log=log, scope=SCOPE),
+                observer=observe,
+            ),
+            cancellation,
+        )
+        return outcome, list(await log.read(SCOPE.stream_id))
+
+    outcome, durable = asyncio.run(scenario())
+
+    assert outcome.status == "cancelled"
+    assert outcome.stop_reason == "cancelled"
+    # One delta was emitted, the cancel was observed, and the stream stopped.
+    assert model.emitted == 2
+    assert model.closed is True
+    assert [envelope.event_type for envelope in durable][-1] == "RunCancelled"
+
+
+def test_a_tool_cannot_outlive_the_run_deadline() -> None:
+    """The tool declares 5s; the run has 50ms left, and the run wins."""
+
+    async def handler(invocation: ToolInvocation) -> ToolResult:
+        await asyncio.sleep(30)
+        raise AssertionError("unreachable")
+
+    slow = ToolBinding(spec=_spec("read_document"), handler=handler)
+    budget = RunBudget(
+        max_steps=4,
+        max_tool_calls=8,
+        deadline=CLOCK + timedelta(seconds=0.05),
+    )
+
+    run = _execute(
+        _tool_round(),
+        request=_request(budget=budget),
+        bindings=[slow],
+        model_timeout_seconds=600,
+    )
+    failure = next(
+        envelope.payload
+        for envelope in run.durable
+        if envelope.event_type == "ToolFailed"
+    )
+
+    assert isinstance(failure, ToolFailed)
+    assert failure.error.code == "tool_timeout"
+    assert "run's remaining" in failure.error.message

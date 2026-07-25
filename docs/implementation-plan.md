@@ -5,8 +5,8 @@
 > 日期：2026-07-22
 >
 > 状态：WP00、WP01 已完成（PR-001～PR-005）；WP02 进行中，PR-006 Runtime
-> Serial Loop 与 PR-007 Policy + Tool Gateway（WP02-01/02、schema 校验与
-> 再授权）已实现并通过本地验证。Hook Bus（WP02-05）、并行只读调度
+> Serial Loop、PR-007 Policy + Tool Gateway 与 PR-008 Runtime Budgets
+> （WP02-01/02/03）已实现并通过本地验证。Hook Bus（WP02-05）、并行只读调度
 > （WP02-04）与真实 Model Adapter（WP02-06/07）仍未实现
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)

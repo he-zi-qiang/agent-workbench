@@ -215,6 +215,7 @@ agent-workbench/
 │   │   ├── state.py               # 7.1 状态机的可执行表
 │   │   ├── tool_registry.py
 │   │   ├── tool_gateway.py       # schema → policy → timeout → 归一化
+│   │   ├── budgets.py            # 有效 deadline = 各层下界取 min
 │   │   ├── schema_validation.py  # 受支持的 JSON Schema 子集
 │   │   ├── tool_executor.py
 │   │   ├── tool_scheduler.py
@@ -1363,6 +1364,7 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | CLI 纵向切片（walking skeleton） | ✓ | ✓ | ✓ | ✓ |
 | 自研 Runtime：串行 Tool Loop | ✓ | ✓ | ✓ | ✓ |
 | 自研 Runtime：Tool Gateway 与 schema 校验 | ✓ | ✓ | ✓ | ✓ |
+| 自研 Runtime：预算、deadline 与取消传播 | ✓ | ✓ | ✓ |  |
 | 自研 Runtime：并行只读调度、Hook Bus | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
