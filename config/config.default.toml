@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.1"
+config_schema_version = "1.2"
 architecture_baseline = "1.3"
 
 [api]
@@ -87,11 +87,15 @@ model_delta_mode = "ephemeral_sse_coalesced"
 live_delta_coalesce_ms = 50
 
 [model]
-provider = "anthropic"
+provider = "deepseek"
+# DeepSeek speaks an OpenAI-compatible protocol; a compatible gateway or a
+# local server can be pointed at here instead. Anything but loopback must be
+# HTTPS, because every request carries the provider API key.
+base_url = "https://api.deepseek.com"
 
 [model.main]
 # Exact provider model IDs must be supplied by deployment config and pinned.
-model_id = "not-configured-sonnet"
+model_id = "not-configured-deepseek-main"
 temperature = 0.0
 max_output_tokens = 8192
 timeout_seconds = 120
@@ -100,7 +104,7 @@ tool_calling_required = true
 prompt_cache_enabled = true
 
 [model.compact]
-model_id = "not-configured-haiku"
+model_id = "not-configured-deepseek-compact"
 temperature = 0.0
 max_output_tokens = 2048
 timeout_seconds = 45

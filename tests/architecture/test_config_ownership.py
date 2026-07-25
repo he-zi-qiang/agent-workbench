@@ -19,7 +19,9 @@ EXPECTED_LIFECYCLES = frozenset(
 EXPECTED_TASK_SNAPSHOT_ALLOWLIST = (
     "app.config_schema_version",
     "app.architecture_baseline",
-    "model.*",
+    "model.provider",
+    "model.main.*",
+    "model.compact.*",
     "runtime.*",
     "langchain_adapter.*",
     "workflow.*",

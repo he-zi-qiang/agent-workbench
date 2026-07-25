@@ -6,8 +6,9 @@
 >
 > 状态：WP00、WP01 已完成（PR-001～PR-005）；WP02 进行中，PR-006 Runtime
 > Serial Loop、PR-007 Policy + Tool Gateway、PR-008 Runtime Budgets、
-> PR-009 Parallel Reads 与 PR-010 Hook Bus（WP02-01～05）已实现并通过本地
-> 验证。真实 Model Adapter（WP02-06/07）仍未实现
+> PR-009 Parallel Reads、PR-010 Hook Bus（WP02-01～05）与 PR-011 DeepSeek
+> Provider Contract 已实现并通过本地验证。DeepSeek Adapter 本体与 LangChain
+> 互操作（WP02-06/07）仍未实现
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
 >
@@ -1360,7 +1361,7 @@ PR 默认不调用在线模型或在线 RAGAS judge。
 
 ## 9. 首批 PR 顺序
 
-以下顺序可以直接作为前 14 个 PR。原计划把 WP02-05 的 Hook Bus 留在 WP02 内部
+以下顺序可以直接作为前 16 个 PR。原计划把 WP02-05 的 Hook Bus 留在 WP02 内部
 未编号，实施时把它排进了 PR-010，其后的持久化车道整体后移一位：
 
 1. **PR-001 Bootstrap**：目录、`pyproject.toml`、`uv.lock`、配置迁移；
@@ -1375,15 +1376,19 @@ PR 默认不调用在线模型或在线 RAGAS judge。
 9. **PR-009 Parallel Reads**：稳定提交顺序；
 10. **PR-010 Hook Bus**（WP02-05）：Hook 改写参数后复用 Gateway 的重校验与
     再授权；Hook 抛错或超时一律 fail closed；
-11. **PR-011 PostgreSQL/Artifact Base**：迁移、Conversation、local artifact；
-12. **PR-012 Upload/Outbox**：流式上传与事实/outbox 原子性；
-13. **PR-013 Dense Retrieval Kernel**：LlamaIndex、BGE dense、Qdrant
+11. **PR-011 DeepSeek Provider Contract**（WP02-06 前半）：配置 schema 换
+    Provider、`model.base_url`、密钥与 ownership；不引入依赖；
+12. **PR-012 DeepSeek Model Adapter**（WP02-06 后半）：OpenAI 兼容的流式
+    Adapter 与 contract test；**需要新依赖与重新生成的 `uv.lock`**；
+13. **PR-013 PostgreSQL/Artifact Base**：迁移、Conversation、local artifact；
+14. **PR-014 Upload/Outbox**：流式上传与事实/outbox 原子性；
+15. **PR-015 Dense Retrieval Kernel**：LlamaIndex、BGE dense、Qdrant
     候选检索；只开放内部 Port/测试入口，不注册外部 Chat/RAG 路由；
-14. **PR-014 Authorized RAG Slice**：PostgreSQL ACL 前置过滤与候选二次
+16. **PR-016 Authorized RAG Slice**：PostgreSQL ACL 前置过滤与候选二次
     重验、回答提交前 revision 校验、revoke barrier 和 citation；全部通过后
     才注册外部 Chat/RAG 路由。
 
-PR-014 合并后再安排 hybrid/rerank 和 LangGraph 两条车道。这样两个 PR
+PR-016 合并后再安排 hybrid/rerank 和 LangGraph 两条车道。这样两个 PR
 各自只有一个主要行为变化，同时不会短暂发布一个缺少最终 ACL 授权的检索
 接口。
 

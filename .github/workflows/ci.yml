@@ -69,7 +69,7 @@ jobs:
           AW_MODEL__COMPACT__MODEL_ID: ci-contract-compact-model
           AW_RAG__EMBEDDING__REVISION: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           AW_RAG__RERANKER__REVISION: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-          AW_SECRETS__ANTHROPIC_API_KEY: ci-contract-anthropic-key
+          AW_SECRETS__DEEPSEEK_API_KEY: ci-contract-deepseek-key
           AW_SECRETS__QDRANT_API_KEY: ci-contract-qdrant-key
         run: uv run --no-sync agent-config-check --profile production
 

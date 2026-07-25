@@ -10,7 +10,9 @@
   "task_snapshot_allowlist": [
     "app.config_schema_version",
     "app.architecture_baseline",
-    "model.*",
+    "model.provider",
+    "model.main.*",
+    "model.compact.*",
     "runtime.*",
     "langchain_adapter.*",
     "workflow.*",
@@ -212,6 +214,13 @@
       "fields": [
         "event_stream.model_delta_mode",
         "event_stream.live_delta_coalesce_ms"
+      ]
+    },
+    {
+      "owner": "adapters.model.deepseek",
+      "lifecycle": "startup",
+      "fields": [
+        "model.base_url"
       ]
     },
     {
@@ -522,7 +531,7 @@
       "owner": "bootstrap.adapter_factory",
       "lifecycle": "startup",
       "fields": [
-        "secrets.anthropic_api_key",
+        "secrets.deepseek_api_key",
         "secrets.qdrant_api_key",
         "secrets.artifact_access_key",
         "secrets.artifact_secret_key",

@@ -13,8 +13,9 @@
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 因本次字段统一与安全加固升级为 `1.1`；
-两者是不同版本轴。
+当前架构基线为 `1.3`，配置 schema 为 `1.2`（`1.1` → `1.2` 的原因是模型
+Provider 从 Anthropic 换成 DeepSeek，并新增 `model.base_url`）；两者是不同
+版本轴。
 
 配置字段对应的代码所有者、工作包与集成测试见
 [代码实施计划 v1.0](./implementation-plan.md)。
@@ -206,8 +207,12 @@ claim_batch_size <= min(worker_concurrency, guard_connection_budget)
 - Task 控制平面只有 LangGraph；
 - Agent Tool Loop 只有自研 `claude_like` Runtime；
 - `ModelPort` 保持 provider-neutral，但 v1 可配置的生产 Adapter 只有
-  Anthropic；新增 Provider 时升级配置 schema，而不是接受一个无法启动的
+  DeepSeek；新增或更换 Provider 时升级配置 schema，而不是接受一个无法启动的
   provider 字符串；
+- `model.base_url` 只能是 HTTPS，除非指向 loopback：每一次请求都带着 provider
+  API key；它同时禁止 userinfo、query string 和 fragment；
+- `model.base_url` 是部署状态，不进入 Task 恢复快照——恢复一个旧 Task 不该
+  连回它当初的端点，迁移端点也不该改变一个在跑的 Task 的语义；
 - LangChain 只能作为 model/tool adapter，不能启用 AgentExecutor 或 Memory；
 - LlamaIndex 只能 ingestion/retrieval，不能生成最终回答或二次融合；
 - dense+sparse fusion 只由 Qdrant Query API 的 RRF 执行；

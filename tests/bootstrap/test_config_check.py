@@ -42,7 +42,7 @@ def test_config_check_cli_prints_only_redacted_values(
 ) -> None:
     _required_environment(monkeypatch)
     canary = "agent-workbench-config-check-secret-canary"
-    monkeypatch.setenv("AW_SECRETS__ANTHROPIC_API_KEY", canary)
+    monkeypatch.setenv("AW_SECRETS__DEEPSEEK_API_KEY", canary)
 
     exit_code = main(
         [

@@ -31,7 +31,7 @@ def valid_payload() -> dict:
     )
     payload["model"]["main"]["model_id"] = "unit-main"
     payload["model"]["compact"]["model_id"] = "unit-compact"
-    payload["secrets"] = {"anthropic_api_key": "unit-test-key"}
+    payload["secrets"] = {"deepseek_api_key": "unit-test-key"}
     return payload
 
 
@@ -46,7 +46,7 @@ def production_payload() -> dict:
     payload["qdrant"]["url"] = "https://qdrant.example.test"
     payload["qdrant"]["api_key_required"] = True
     payload["secrets"].update(
-        anthropic_api_key="configured-unit-test-key",
+        deepseek_api_key="configured-unit-test-key",
         qdrant_api_key="configured-qdrant-test-key",
     )
     return payload
@@ -64,7 +64,7 @@ def test_default_configuration_is_valid_and_secret_safe() -> None:
     assert "unit-test-key" not in str(settings.public_config())
     assert settings.public_config()["model"]["main"]["max_output_tokens"] == 8192
     assert settings.public_config()["qdrant"]["api_key_required"] is False
-    assert settings.public_config()["secrets"]["anthropic_api_key"] == "<configured>"
+    assert settings.public_config()["secrets"]["deepseek_api_key"] == "<configured>"
     assert Settings.model_config["secrets_nested_subdir"] is False
     assert len(settings.fingerprint()) == 64
     assert len(settings.policy_fingerprint()) == 64
@@ -302,7 +302,7 @@ def test_public_service_endpoints_cannot_embed_credentials(
 def test_public_fingerprint_changes_with_non_secret_semantics_only() -> None:
     first_payload = valid_payload()
     second_payload = deepcopy(first_payload)
-    second_payload["secrets"]["anthropic_api_key"] = "another-secret"
+    second_payload["secrets"]["deepseek_api_key"] = "another-secret"
 
     first = Settings(**first_payload)
     second = Settings(**second_payload)
@@ -435,7 +435,7 @@ def test_unknown_prefixed_environment_variable_fails_fast(
     ("name", "value"),
     [
         ("AW_DATABASE", '{"dsn":"must-not-bypass"}'),
-        ("AW_SECRETS", '{"anthropic_api_key":"must-not-bypass"}'),
+        ("AW_SECRETS", '{"deepseek_api_key":"must-not-bypass"}'),
     ],
 )
 def test_parent_json_environment_variable_is_rejected(
@@ -458,7 +458,7 @@ def test_parent_json_dotenv_variable_is_rejected(
     _set_required_database_environment(monkeypatch)
     dotenv = tmp_path / ".env"
     dotenv.write_text(
-        'AW_SECRETS={"anthropic_api_key":"must-not-bypass"}\n',
+        'AW_SECRETS={"deepseek_api_key":"must-not-bypass"}\n',
         encoding="utf-8",
     )
 
@@ -512,7 +512,7 @@ def test_dotenv_cannot_turn_a_development_profile_into_production(
                 f"AW_RAG__RERANKER__REVISION={'b' * 40}",
                 "AW_QDRANT__URL=https://qdrant.example.test",
                 "AW_QDRANT__API_KEY_REQUIRED=true",
-                "AW_SECRETS__ANTHROPIC_API_KEY=configured-test-key",
+                "AW_SECRETS__DEEPSEEK_API_KEY=configured-test-key",
                 "AW_SECRETS__QDRANT_API_KEY=configured-qdrant-test-key",
             ]
         ),
@@ -536,7 +536,7 @@ def test_flat_mounted_secret_files_are_supported(
         "AW_DATABASE__LISTEN_DSN",
     ):
         (secrets_dir / filename).write_text(POSTGRES_DSN, encoding="utf-8")
-    (secrets_dir / "AW_SECRETS__ANTHROPIC_API_KEY").write_text(
+    (secrets_dir / "AW_SECRETS__DEEPSEEK_API_KEY").write_text(
         "mounted-test-key",
         encoding="utf-8",
     )
@@ -547,8 +547,8 @@ def test_flat_mounted_secret_files_are_supported(
     )
     assert settings.database.guard_dsn.get_secret_value() == POSTGRES_DSN
     assert (
-        settings.secrets.anthropic_api_key is not None
-        and settings.secrets.anthropic_api_key.get_secret_value() == "mounted-test-key"
+        settings.secrets.deepseek_api_key is not None
+        and settings.secrets.deepseek_api_key.get_secret_value() == "mounted-test-key"
     )
 
 
@@ -613,10 +613,10 @@ def test_whitespace_different_env_and_mounted_secret_fails_closed(
 ) -> None:
     _clear_agent_workbench_environment(monkeypatch)
     _set_required_database_environment(monkeypatch)
-    monkeypatch.setenv("AW_SECRETS__ANTHROPIC_API_KEY", "same-value ")
+    monkeypatch.setenv("AW_SECRETS__DEEPSEEK_API_KEY", "same-value ")
     secrets_dir = tmp_path / "secrets"
     secrets_dir.mkdir()
-    (secrets_dir / "AW_SECRETS__ANTHROPIC_API_KEY").write_text(
+    (secrets_dir / "AW_SECRETS__DEEPSEEK_API_KEY").write_text(
         "same-value",
         encoding="utf-8",
     )
@@ -712,3 +712,69 @@ def test_runtime_dependency_guard_rejects_prerelease_lookalike(
 
     with pytest.raises(RuntimeError, match="cannot parse"):
         settings_module._assert_safe_pydantic_settings_version()
+
+
+def test_only_a_provider_with_a_shipped_adapter_is_configurable() -> None:
+    """A provider string the process cannot start on fails at boot, not later."""
+
+    payload = valid_payload()
+    payload["model"]["provider"] = "anthropic"
+
+    with pytest.raises(ValidationError):
+        Settings(**payload)
+
+
+def test_the_model_endpoint_must_be_encrypted_unless_it_is_loopback() -> None:
+    """Every request to it carries the provider API key."""
+
+    payload = valid_payload()
+    payload["model"]["base_url"] = "http://api.deepseek.com"
+
+    with pytest.raises(ValidationError, match="must use HTTPS"):
+        Settings(**payload)
+
+
+def test_a_local_compatible_server_may_be_plain_http() -> None:
+    payload = valid_payload()
+    payload["model"]["base_url"] = "http://localhost:11434"
+
+    assert Settings(**payload).model.base_url == "http://localhost:11434"
+
+
+def test_the_model_endpoint_refuses_embedded_credentials() -> None:
+    payload = valid_payload()
+    payload["model"]["base_url"] = "https://key:secret@api.deepseek.com"
+
+    with pytest.raises(ValidationError):
+        Settings(**payload)
+
+
+def test_the_model_endpoint_is_not_part_of_run_semantics() -> None:
+    """Resuming a task must not restore where the model used to be reachable."""
+
+    payload = valid_payload()
+    moved = deepcopy(payload)
+    moved["model"]["base_url"] = "https://deepseek.internal.example"
+
+    original = Settings(**payload)
+    relocated = Settings(**moved)
+
+    assert "base_url" not in original.run_semantics_snapshot()["model"]
+    assert original.run_semantics_snapshot() == relocated.run_semantics_snapshot()
+    assert original.run_semantics_revision() == relocated.run_semantics_revision()
+    # The startup revision still notices: it is the full configuration.
+    assert original.revision() != relocated.revision()
+
+
+def test_production_requires_a_real_provider_key() -> None:
+    payload = production_payload()
+    payload["secrets"]["deepseek_api_key"] = "replace-me"
+
+    with pytest.raises(ValidationError, match="DeepSeek provider requires"):
+        Settings(**payload)
+
+
+def test_the_configuration_schema_version_is_pinned() -> None:
+    """Adding a provider changed the contract, so the schema version moved."""
+
+    assert Settings(**valid_payload()).app.config_schema_version == "1.2"

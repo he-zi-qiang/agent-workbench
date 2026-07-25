@@ -39,10 +39,12 @@ FORBIDDEN_CORE_IMPORTS = frozenset(
         # Model and ML SDKs
         "anthropic",
         "cohere",
+        "deepseek",
         "flagembedding",
         "google.genai",
         "google.generativeai",
         "huggingface_hub",
+        "httpx",
         "mistralai",
         "openai",
         "sentence_transformers",

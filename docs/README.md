@@ -10,7 +10,7 @@
 |---|---:|---|
 | [架构与技术选型基线](./architecture-baseline.md) | v1.3 | 锁定产品边界、分层、组件职责、可靠性协议和技术选型 |
 | [代码实施计划](./implementation-plan.md) | v1.0 | 将目标架构拆成工作包、PR、迁移、测试门禁和证据包 |
-| [配置管理契约](./configuration.md) | schema 1.1 | 定义配置来源、密钥规则、快照语义和跨域校验 |
+| [配置管理契约](./configuration.md) | schema 1.2 | 定义配置来源、密钥规则、快照语义和跨域校验 |
 
 ## 项目治理
 
@@ -30,6 +30,6 @@
 截至 2026-07-25，PR-001 Bootstrap、PR-002 Config CI、PR-003 Domain、
 PR-004 Ports + Fakes、PR-005 CLI Skeleton、PR-006 Runtime Serial Loop 与
 PR-007 Policy + Tool Gateway、PR-008 Runtime Budgets、PR-009 Parallel Reads
-与 PR-010 Hook Bus 已实现并完成本地验证；`agent-cli demo` 演示的是
+、PR-010 Hook Bus 与 PR-011 DeepSeek Provider Contract 已实现并完成本地验证；`agent-cli demo` 演示的是
 完整一轮 模型 → Tool → ToolResult → 模型。Hook Bus、并行只读调度、RAG、
 LangGraph Task、PostgreSQL 协调、Multi-Agent、API、UI 和部署仍是计划能力。

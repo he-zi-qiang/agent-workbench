@@ -79,7 +79,7 @@ SECRET_LIKE_ENV_KEYS = frozenset(
         "AW_DATABASE__DSN",
         "AW_DATABASE__GUARD_DSN",
         "AW_DATABASE__LISTEN_DSN",
-        "AW_SECRETS__ANTHROPIC_API_KEY",
+        "AW_SECRETS__DEEPSEEK_API_KEY",
         "AW_SECRETS__QDRANT_API_KEY",
         "AW_SECRETS__ARTIFACT_ACCESS_KEY",
         "AW_SECRETS__ARTIFACT_SECRET_KEY",
@@ -91,7 +91,8 @@ SECRET_LIKE_ENV_KEYS = frozenset(
 MAX_SINGLE_SECRET_FILE_BYTES = 65_536
 MIN_PYDANTIC_SETTINGS_VERSION = (2, 14, 2)
 MAX_PYDANTIC_SETTINGS_VERSION = (3, 0, 0)
-LOCAL_QDRANT_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "qdrant"})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+LOCAL_QDRANT_HOSTS = LOOPBACK_HOSTS | frozenset({"qdrant"})
 
 
 def _validate_service_endpoint(
@@ -143,7 +144,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.1"] = "1.1"
+    config_schema_version: Literal["1.2"] = "1.2"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -266,11 +267,21 @@ class ModelProfileSettings(StrictModel):
 
 
 class ModelSettings(StrictModel):
-    # ModelPort stays provider-neutral, but v1 only ships the Anthropic
-    # production adapter. "fake" exists solely for deterministic tests.
-    provider: Literal["anthropic", "fake"] = "anthropic"
+    # ModelPort stays provider-neutral, but only a provider with a shipped
+    # adapter may be configured: a provider string the process cannot start on
+    # is a deployment that fails at the first model call instead of at boot.
+    # "fake" exists solely for deterministic tests.
+    provider: Literal["deepseek", "fake"] = "deepseek"
+    # The API endpoint, not the model. DeepSeek speaks an OpenAI-compatible
+    # protocol, so this also covers a compatible gateway or a local server.
+    base_url: str = "https://api.deepseek.com"
     main: ModelProfileSettings
     compact: ModelProfileSettings
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        return _validate_service_endpoint(value, field_name="model.base_url")
 
 
 class RuntimeSettings(StrictModel):
@@ -591,7 +602,7 @@ class OptionalLabsSettings(StrictModel):
 
 
 class SecretsSettings(StrictModel):
-    anthropic_api_key: SecretStr | None = None
+    deepseek_api_key: SecretStr | None = None
     qdrant_api_key: SecretStr | None = None
     artifact_access_key: SecretStr | None = None
     artifact_secret_key: SecretStr | None = None
@@ -734,6 +745,16 @@ class Settings(BaseSettings):
         ):
             raise ValueError("production requires app.deployment_scope=remote")
 
+        model_endpoint = urlsplit(self.model.base_url)
+        if (
+            model_endpoint.scheme.lower() != "https"
+            and model_endpoint.hostname not in LOOPBACK_HOSTS
+        ):
+            # Every request to this endpoint carries the provider API key.
+            raise ValueError(
+                "model.base_url must use HTTPS unless it is a loopback address"
+            )
+
         if self.qdrant.api_key_required and not self._secret_is_configured(
             self.secrets.qdrant_api_key
         ):
@@ -786,10 +807,10 @@ class Settings(BaseSettings):
         if self.app.deployment_scope != "remote":
             raise ValueError("production requires app.deployment_scope=remote")
 
-        if self.model.provider == "anthropic" and not self._secret_is_configured(
-            self.secrets.anthropic_api_key
+        if self.model.provider == "deepseek" and not self._secret_is_configured(
+            self.secrets.deepseek_api_key
         ):
-            raise ValueError("Anthropic provider requires a non-placeholder API key")
+            raise ValueError("the DeepSeek provider requires a non-placeholder API key")
 
         for profile_name, profile in (
             ("main", self.model.main),
@@ -862,10 +883,15 @@ class Settings(BaseSettings):
 
         public = self.public_config()
         qdrant = public["qdrant"]
+        model = cast(dict[str, Any], public["model"]).copy()
+        # Where a model is reachable is deployment state. Resuming a task must
+        # not restore an old endpoint, and moving one must not change what a
+        # running task means.
+        model.pop("base_url", None)
         return {
             "config_schema_version": self.app.config_schema_version,
             "architecture_baseline": self.app.architecture_baseline,
-            "model": public["model"],
+            "model": model,
             "runtime": public["runtime"],
             "langchain_adapter": public["langchain_adapter"],
             "workflow": public["workflow"],
@@ -988,7 +1014,7 @@ SENSITIVE_KEYS = {
     "dsn",
     "guard_dsn",
     "listen_dsn",
-    "anthropic_api_key",
+    "deepseek_api_key",
     "qdrant_api_key",
     "artifact_access_key",
     "artifact_secret_key",
