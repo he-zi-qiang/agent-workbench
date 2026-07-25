@@ -13,10 +13,10 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 **PR-001 Bootstrap**, **PR-002 Config CI**, **PR-003 Domain**, **PR-004 Ports +
 Fakes**, **PR-005 CLI Skeleton**, **PR-006 Runtime Serial Loop**, **PR-007
-Policy + Tool Gateway** and **PR-008 Runtime Budgets** have been implemented
-and validated locally. The hook
-bus, the parallel read scheduler, RAG, workflow, multi-Agent, API and UI
-capabilities remain planned and must not be described as implemented.
+Policy + Tool Gateway**, **PR-008 Runtime Budgets** and **PR-009 Parallel
+Reads** have been implemented and validated locally. The hook bus, the real
+model adapter, RAG, workflow, multi-Agent, API and UI capabilities remain
+planned and must not be described as implemented.
 
 PR-003 delivers the framework-neutral domain contracts -- messages, tools,
 events, context, run budgets, policy decisions and error codes -- using nothing
@@ -58,6 +58,13 @@ allowed `min(its declared timeout, time left in the run)`, because a tool
 granted an hour should not outlive the run that authorized it. Cancellation
 takes effect at the next stream event and reaches the adapter by closing the
 generator; a model that goes silent instead is bounded by the deadline.
+
+PR-009 runs consecutive read-only tools in one batch concurrently, while write,
+external and destructive tools each take a group of their own -- "side effects
+cross a barrier" stops being a sentence and becomes a shape in memory. The
+grouping is a pure function, checkable without an event loop, and execution
+order still says nothing about submission order: results reach the model in the
+order it asked for them.
 
 ## Try it
 

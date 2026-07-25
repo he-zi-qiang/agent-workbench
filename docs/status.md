@@ -408,3 +408,56 @@ CLI golden 文件逐字节未变
 deadline 在本 PR 内；node 与 task 层属于 WP06/WP08。真实 Adapter 的
 `max_retries` 要等 WP02-06 的 Anthropic Adapter。Hook Bus（WP02-05）与并行只读
 调度（WP02-04）仍未实现。
+
+## PR-009 Parallel Reads
+
+状态：**已实现并通过本地测试**。
+
+补上基线不变量 4 与 5：`parallel` 工具可以并发，`write/external/destructive`
+必须过 exclusive 屏障；执行顺序与提交顺序彻底分离。
+
+已交付：
+
+- `runtime/tool_scheduler.py`：`plan_tool_batches()` 是一个**纯函数**——
+  接收一批已授权调用，返回执行分组。并发 bug 难观察更难复现，所以"谁能和谁
+  一起跑"这个决定放在不需要事件循环就能验证的代码里；
+- Runtime 执行阶段按组推进：组内 `asyncio.gather`，组间顺序执行。
+
+分组规则只有两条：
+
+1. **保持模型的顺序**：从左到右扫描，连续的 parallel 调用累积成一组，因此
+   排在写操作之前的读，绝不会在它之后执行；
+2. **exclusive 调用自成一组**：写/外部/破坏性工具在领域层就被强制为
+   exclusive（`ToolSpec` 构造期校验），所以"副作用要过屏障"从文档里的一句话
+   变成了内存里的形状——它两侧都不会有东西在飞。
+
+本 PR 固定下来的行为：
+
+- **提交顺序永远是模型的调用顺序**，与完成顺序无关。测试用一对握手 handler
+  证明：`waits` 必须等 `opens` 打开闸门才能返回，所以完成顺序是
+  `[fast, slow]`，而提交给模型的顺序是 `[slow, fast]`；
+- **并发是被证明的，不是被假设的**：上面那对 handler 在串行调度下会互相
+  等死（由工具超时兜底），因此这个测试同时证明了"确实并发"和"顺序稳定"；
+- **exclusive 工具旁边永远没有别人**：探针记录同时在场的 handler 数，
+  写工具那一格恒为 1；
+- `max_parallel_read_tools`（对应配置同名字段，默认 4）限制同时在场数量；
+- 取消发生在组与组之间：**已在飞的组保留真实结果**，尚未开始的组拿到
+  cancelled 结果——取消停止未开始的工作，不改写已经发生的事。
+
+2026-07-25 验证证据：
+
+```text
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 428 passed（新增 scheduler 9 + runtime 5）
+development/test config profile: status=ok
+CLI golden 文件逐字节未变
+```
+
+范围说明：CLI demo 仍然只调用一个工具。M1 验收里"两个只读 Tool"的固定演示
+留到评测/演示工作包——golden 文件是逐字节比对的，把它钉在并发执行的事件交错上，
+等于承诺一个调度器并不保证的顺序。并发性由上面的握手测试证明，那是更强的证据。
+
+不含 Hook Bus（WP02-05）与真实 Anthropic Adapter（WP02-06/07）。WP02 至此
+只剩这两项。

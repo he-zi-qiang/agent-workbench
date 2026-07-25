@@ -216,6 +216,7 @@ agent-workbench/
 │   │   ├── tool_registry.py
 │   │   ├── tool_gateway.py       # schema → policy → timeout → 归一化
 │   │   ├── budgets.py            # 有效 deadline = 各层下界取 min
+│   │   ├── tool_scheduler.py     # 纯函数：并发分组与 exclusive 屏障
 │   │   ├── schema_validation.py  # 受支持的 JSON Schema 子集
 │   │   ├── tool_executor.py
 │   │   ├── tool_scheduler.py
@@ -1365,7 +1366,8 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | 自研 Runtime：串行 Tool Loop | ✓ | ✓ | ✓ | ✓ |
 | 自研 Runtime：Tool Gateway 与 schema 校验 | ✓ | ✓ | ✓ | ✓ |
 | 自研 Runtime：预算、deadline 与取消传播 | ✓ | ✓ | ✓ |  |
-| 自研 Runtime：并行只读调度、Hook Bus | ✓ |  |  |  |
+| 自研 Runtime：并行只读调度与 exclusive 屏障 | ✓ | ✓ | ✓ |  |
+| 自研 Runtime：Hook Bus、真实 Model Adapter | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
 | PostgreSQL coordination | ✓ |  |  |  |

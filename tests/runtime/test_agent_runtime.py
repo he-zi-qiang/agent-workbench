@@ -184,6 +184,7 @@ def _execute(
     bindings: Sequence[ToolBinding] | None = None,
     cancellation: CancellationSource | None = None,
     model_timeout_seconds: float | None = None,
+    max_parallel_read_tools: int = 4,
 ) -> _Execution:
     registry = StaticToolRegistry(
         bindings if bindings is not None else [read_document_tool(CORPUS)]
@@ -205,6 +206,7 @@ def _execute(
             ),
             policy_identity=POLICY_IDENTITY,
             model_timeout_seconds=model_timeout_seconds,
+            max_parallel_read_tools=max_parallel_read_tools,
             clock=_clock,
             model_call_ids=_ids("mc"),
         )
@@ -443,7 +445,7 @@ def test_an_already_cancelled_run_never_calls_the_model() -> None:
     assert run.durable_types == ["RunStarted", "RunCancelled"]
 
 
-def test_cancellation_mid_batch_still_answers_every_call() -> None:
+def test_cancellation_between_groups_still_answers_every_call() -> None:
     """The ids were already shown to the model; the run owes them answers."""
 
     cancellation = CancellationSource()
@@ -462,13 +464,44 @@ def test_cancellation_mid_batch_still_answers_every_call() -> None:
         request=_request(tool_names=("read_document", "text_statistics")),
         bindings=[first.binding, second.binding],
         cancellation=cancellation,
+        # One call per group, so the cancel lands between them.
+        max_parallel_read_tools=1,
     )
 
     assert len(first.calls) == 1
     assert second.calls == []
     assert run.outcome.status == "cancelled"
     assert run.durable_types.count("ToolProposed") == 2
+    assert run.durable_types.count("ToolFailed") == 1
     assert run.durable_types[-1] == "RunCancelled"
+
+
+def test_a_call_already_in_flight_keeps_its_real_result() -> None:
+    """Cancellation stops what has not started; it does not rewrite history."""
+
+    cancellation = CancellationSource()
+    first = _Recorder("read_document", on_call=lambda: cancellation.cancel("stopped"))
+    second = _Recorder("text_statistics", content="counted")
+    calls = (
+        ToolCall(tool_call_id="toolu_1", tool_name="read_document"),
+        ToolCall(tool_call_id="toolu_2", tool_name="text_statistics"),
+    )
+    model = FakeModel(
+        [ScriptedTurn(text="Working.", tool_calls=calls, usage=USAGE)],
+    )
+
+    run = _execute(
+        model,
+        request=_request(tool_names=("read_document", "text_statistics")),
+        bindings=[first.binding, second.binding],
+        cancellation=cancellation,
+    )
+
+    # Both were in the same group and both ran; the run still ends cancelled.
+    assert len(first.calls) == 1
+    assert len(second.calls) == 1
+    assert run.durable_types.count("ToolCompleted") == 2
+    assert run.outcome.status == "cancelled"
 
 
 def test_an_expired_deadline_stops_before_the_model_call() -> None:
@@ -750,3 +783,207 @@ def test_a_tool_cannot_outlive_the_run_deadline() -> None:
     assert isinstance(failure, ToolFailed)
     assert failure.error.code == "tool_timeout"
     assert "run's remaining" in failure.error.message
+
+
+def _binding(
+    name: str,
+    handler: object,
+    *,
+    exclusive: bool = False,
+    timeout_seconds: int = 1,
+) -> ToolBinding:
+    spec = (
+        ToolSpec(
+            name=name,
+            description="A side-effecting tool.",
+            input_schema={"type": "object"},
+            concurrency="exclusive",
+            risk="write",
+            idempotency="keyed",
+            timeout_seconds=timeout_seconds,
+            permission_scopes=("artifact:write",),
+        )
+        if exclusive
+        else ToolSpec(
+            name=name,
+            description="A read-only tool.",
+            input_schema={"type": "object"},
+            concurrency="parallel",
+            risk="read",
+            idempotency="safe",
+            timeout_seconds=timeout_seconds,
+        )
+    )
+    return ToolBinding(spec=spec, handler=handler)  # pyright: ignore[reportArgumentType]
+
+
+class _Handshake:
+    """Handlers that can only finish if they are in flight at the same time.
+
+    A serial scheduler makes the waiting handler hit its timeout instead, so
+    this proves concurrency without sleeping on a hope.
+    """
+
+    def __init__(self) -> None:
+        self.gate: asyncio.Event | None = None
+        self.finished: list[str] = []
+
+    def _event(self) -> asyncio.Event:
+        if self.gate is None:
+            self.gate = asyncio.Event()
+        return self.gate
+
+    async def waiter(self, invocation: ToolInvocation) -> ToolResult:
+        await self._event().wait()
+        self.finished.append(invocation.call.tool_call_id)
+        return ToolResult.succeeded(invocation.call, content="waited")
+
+    async def opener(self, invocation: ToolInvocation) -> ToolResult:
+        self._event().set()
+        self.finished.append(invocation.call.tool_call_id)
+        return ToolResult.succeeded(invocation.call, content="opened")
+
+
+class _Probe:
+    """Records how many handlers are inside at once."""
+
+    def __init__(self) -> None:
+        self.inflight = 0
+        self.max_inflight = 0
+        self.max_inflight_beside_exclusive = 0
+
+    def handler(self, *, exclusive: bool = False) -> object:
+        async def run(invocation: ToolInvocation) -> ToolResult:
+            self.inflight += 1
+            self.max_inflight = max(self.max_inflight, self.inflight)
+            if exclusive:
+                self.max_inflight_beside_exclusive = max(
+                    self.max_inflight_beside_exclusive,
+                    self.inflight,
+                )
+            # Yield once so anything running concurrently gets in.
+            await asyncio.sleep(0)
+            self.inflight -= 1
+            return ToolResult.succeeded(invocation.call, content="ok")
+
+        return run
+
+
+def test_read_only_tools_in_one_batch_run_concurrently() -> None:
+    handshake = _Handshake()
+    calls = (
+        ToolCall(tool_call_id="toolu_slow", tool_name="waits"),
+        ToolCall(tool_call_id="toolu_fast", tool_name="opens"),
+    )
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Working.", tool_calls=calls, usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(tool_names=("waits", "opens")),
+        bindings=[
+            _binding("waits", handshake.waiter),
+            _binding("opens", handshake.opener),
+        ],
+    )
+
+    assert run.outcome.status == "completed"
+    # The first call could only finish because the second was already running.
+    assert handshake.finished == ["toolu_fast", "toolu_slow"]
+
+
+def test_results_are_submitted_in_call_order_not_completion_order() -> None:
+    """The scheduler may reorder execution; it may not reorder the answer."""
+
+    handshake = _Handshake()
+    calls = (
+        ToolCall(tool_call_id="toolu_slow", tool_name="waits"),
+        ToolCall(tool_call_id="toolu_fast", tool_name="opens"),
+    )
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Working.", tool_calls=calls, usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(tool_names=("waits", "opens")),
+        bindings=[
+            _binding("waits", handshake.waiter),
+            _binding("opens", handshake.opener),
+        ],
+    )
+    fake = run.model
+    assert isinstance(fake, FakeModel)
+    submitted = [
+        block.tool_call_id
+        for block in fake.requests[1].messages[-1].content
+        if isinstance(block, ToolResultBlock)
+    ]
+
+    assert handshake.finished == ["toolu_fast", "toolu_slow"]
+    assert submitted == ["toolu_slow", "toolu_fast"]
+
+
+def test_an_exclusive_tool_never_runs_beside_another() -> None:
+    probe = _Probe()
+    calls = (
+        ToolCall(tool_call_id="toolu_1", tool_name="read_a"),
+        ToolCall(tool_call_id="toolu_2", tool_name="read_b"),
+        ToolCall(tool_call_id="toolu_3", tool_name="write_c"),
+        ToolCall(tool_call_id="toolu_4", tool_name="read_d"),
+    )
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Working.", tool_calls=calls, usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            tool_names=("read_a", "read_b", "write_c", "read_d"),
+            max_tool_risk="write",
+        ),
+        bindings=[
+            _binding("read_a", probe.handler()),
+            _binding("read_b", probe.handler()),
+            _binding("write_c", probe.handler(exclusive=True), exclusive=True),
+            _binding("read_d", probe.handler()),
+        ],
+    )
+
+    assert run.outcome.status == "completed"
+    assert probe.max_inflight == 2
+    assert probe.max_inflight_beside_exclusive == 1
+
+
+def test_the_parallel_ceiling_bounds_how_many_run_at_once() -> None:
+    probe = _Probe()
+    calls = tuple(
+        ToolCall(tool_call_id=f"toolu_{index}", tool_name=f"read_{index}")
+        for index in range(4)
+    )
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Working.", tool_calls=calls, usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(tool_names=tuple(f"read_{index}" for index in range(4))),
+        bindings=[_binding(f"read_{index}", probe.handler()) for index in range(4)],
+        max_parallel_read_tools=2,
+    )
+
+    assert run.outcome.status == "completed"
+    assert probe.max_inflight == 2
