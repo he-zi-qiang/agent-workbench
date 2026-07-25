@@ -183,7 +183,13 @@ SAMPLES: dict[str, VersionedModel] = {
 
 
 def _discover_aggregates() -> set[type[VersionedModel]]:
-    """Import every domain module, then collect VersionedModel subclasses."""
+    """Import every domain module, then collect its VersionedModel subclasses.
+
+    The result is filtered by module rather than taken from
+    ``__subclasses__()`` wholesale: ports and adapters define aggregates too,
+    and picking them up here would make this test depend on which other test
+    module happened to be imported first.
+    """
 
     for module in pkgutil.iter_modules(domain_package.__path__):
         importlib.import_module(f"{domain_package.__name__}.{module.name}")
@@ -192,14 +198,15 @@ def _discover_aggregates() -> set[type[VersionedModel]]:
 
     def visit(model: type[VersionedModel]) -> None:
         for subclass in model.__subclasses__():
-            found.add(subclass)
+            if subclass.__module__.startswith(f"{domain_package.__name__}."):
+                found.add(subclass)
             visit(subclass)
 
     visit(VersionedModel)
     return found
 
 
-def test_samples_cover_every_aggregate() -> None:
+def test_samples_cover_every_domain_aggregate() -> None:
     discovered = {model.__name__ for model in _discover_aggregates()}
     assert discovered == set(SAMPLES), (
         "every serialized aggregate needs a sample so the round-trip, version "

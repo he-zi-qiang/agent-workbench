@@ -121,3 +121,67 @@ golden 序列化基线：tests/domain/golden/domain_v1.json（13 个聚合）
 仍不属于 PR-003 的内容：Ports 与 Fake Adapter（PR-004）、CLI 纵向切片
 （PR-005）、Runtime 循环本身（PR-006 起）。领域对象存在且有契约测试，
 按项目纪律只能标记为 Implemented/Tested，不能标记为 Demonstrated。
+
+## PR-004 Ports + Fakes
+
+状态：**已实现并通过本地测试**。
+
+`src/agent_workbench/ports/`（框架无关 Protocol）：
+
+- `model.py`：`ModelRequest`、`ModelEvent`（text_delta / tool_call / usage /
+  completed）、`ModelPort.stream()`；
+- `tools.py`：`ToolHandler`、`ToolInvocation`、`ToolBinding`、`ToolRegistry`；
+- `agent_executor.py`：`AgentExecutor.run(request, emit, cancellation)`；
+- `policy.py`：`PolicyEngine.decide(call, context)`；
+- `event_log.py`：`EventScope`、`EventCursor`、`EventLogPort`、`EventSink`；
+- `conversation_store.py`：`ConversationSession`、`StoredMessage`、
+  `ConversationStore`；
+- `artifact_store.py`：`ArtifactStore`；
+- `cancellation.py`：`CancellationToken` 协议、`CancellationSource`、
+  `NullCancellationToken`。
+
+`src/agent_workbench/adapters/`（无外部依赖的实现）：
+
+- `models/fake.py`：脚本化 `FakeModel`（可重放最后一轮，供死循环测试）；
+- `tools/`：`StaticToolRegistry` 与两个无副作用 Tool（`read_document`、
+  `text_statistics`）；
+- `memory/`：`InMemoryEventLog`、`InMemoryConversationStore`、
+  `InMemoryArtifactStore`；
+- `policy/envelope.py`：`EnvelopePolicyEngine`（deny-by-default 的过渡实现）；
+- `events.py`：`ScopedEventSink`；
+- `testing.py`：`fake_stack()` 组合出完整栈，字段类型全部写成 Port，
+  由 Pyright 静态验证结构一致性。
+
+本 PR 固定下来的行为：
+
+- **sequence 由 log 分配**，durable 事件在流内单调无洞，transient 事件返回后
+  即丢弃且不占用 sequence——SSE cursor 因此是可信的续传位置；
+- **跨租户读与不存在完全同形**（同一 `NotFoundError`、同一文案），
+  artifact 与 conversation 都有针对性测试；
+- `ModelRequest` 只携带 model profile，不含 model id / temperature / key；
+- Tool call id 从 provider 原样穿过 proposal → 执行 → tool 消息 → 下一次
+  ModelRequest（`test_fake_stack.py` 端到端断言）；
+- `EventCursor.decode()` 对畸形输入统一 fail closed，且不解释拒绝原因。
+
+领域侧的唯一改动：新增 `not_found` 错误码与 `NotFoundError`，用于统一
+"不存在 / 无权知道它存在"两种情况。
+
+2026-07-25 验证证据：
+
+```text
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 290 passed（contracts 新增 71）
+development/test config profile: status=ok
+```
+
+测试用 `asyncio.run()` 驱动协程，**不引入 pytest-asyncio**，
+`pyproject.toml` 与 `uv.lock` 保持不变。
+
+按各自工作包推迟的 Port（不在本 PR 冻结）：`IngestionPort`、
+`RetrieverPort`、`EmbeddingPort`、`SparseEncoderPort`、`RerankerPort`、
+`DocumentStore`、`OutboxPort`（WP03–WP05）；`TaskRegistry`（WP07）；
+`ApprovalStore`（WP10）；`TelemetryPort`（WP12）；`SandboxPort`、
+`MemoryPort`（更后）。先冻结一个没有实现来校验的协议，正是契约在第一个
+使用者出现前就漂移的方式。
