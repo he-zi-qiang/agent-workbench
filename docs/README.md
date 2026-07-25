@@ -28,6 +28,8 @@
 ## 当前事实
 
 截至 2026-07-25，PR-001 Bootstrap、PR-002 Config CI、PR-003 Domain、
-PR-004 Ports + Fakes 与 PR-005 CLI Skeleton 已实现并完成本地验证；WP01
-走完，`agent-cli demo` 是第一条可运行的纵向切片。Runtime 循环、RAG、
-LangGraph Task、PostgreSQL 协调、Multi-Agent、API、UI 和部署仍是计划能力。
+PR-004 Ports + Fakes、PR-005 CLI Skeleton 与 PR-006 Runtime Serial Loop 已实现
+并完成本地验证；`agent-cli demo` 演示的是完整一轮
+模型 → Tool → ToolResult → 模型。Tool Gateway（schema 校验与 Hook）、并行只读
+调度、RAG、LangGraph Task、PostgreSQL 协调、Multi-Agent、API、UI 和部署仍是
+计划能力。

@@ -14,9 +14,10 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 ## 当前状态
 
 目前已完成 **PR-001 Bootstrap**、**PR-002 Config CI**、**PR-003 Domain**、
-**PR-004 Ports + Fakes** 与 **PR-005 CLI Skeleton** 的本地实现和验证。
-Runtime 循环、RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，
-不能描述为已经实现。
+**PR-004 Ports + Fakes**、**PR-005 CLI Skeleton** 与 **PR-006 Runtime Serial
+Loop** 的本地实现和验证。Tool Gateway（schema 校验与 Hook）、并行只读调度、
+RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，不能描述为已经
+实现。
 
 PR-003 交付的是框架无关的领域契约：消息、工具、事件、上下文、运行预算、
 策略决定与错误分类，全部只依赖标准库与 Pydantic。工具调用与结果的配对、
@@ -27,11 +28,15 @@ PR-004 在其上定义了 Model、Tool、Agent、Event 与 Store 的 Protocol，
 无副作用 Tool 和 deny-by-default 策略引擎。契约测试因此可以离线、确定性地
 运行，不需要数据库、向量库或在线模型。
 
-PR-005 把这些零件接成第一条可运行的纵向切片：输入 → 脚本化模型 → 统一事件
-→ 输出。CLI 只消费事件与返回的 `AgentOutcome`；流式回答来自 transient
-delta，时间线来自运行结束后对 durable log 的重放，两者的差异正是持久性规则
-本身。当前的单轮 executor 不拥有 tool loop——模型提出工具调用时它会先记录
-再让 run 失败，而不是默默丢弃。
+PR-005 把这些零件接成第一条可运行的纵向切片：输入 → 模型 → 统一事件 → 输出。
+CLI 只消费事件与返回的 `AgentOutcome`；流式回答来自 transient delta，时间线
+来自运行结束后对 durable log 的重放，两者的差异正是持久性规则本身。
+
+PR-006 补上自研 `ClaudeLikeAgentRuntime`：串行
+`模型 → Tool → ToolResult → 模型` 循环，基线 7.1 的状态机被写成可执行的转移表，
+非法转移直接抛错。每个已暴露的 `tool_call_id` 恰有一个 `ToolResult`——未知工具、
+被策略拒绝、handler 抛异常、超时、批次中途取消都会产出结果而不是留空；提交顺序
+永远是模型的调用顺序。
 
 ## 快速体验
 
@@ -40,10 +45,10 @@ uv run agent-cli demo
 ```
 
 脚本化模型离线运行，不联网、不连数据库；同一条命令的输出逐字节可复现。
-想看"没有 tool loop 时提出工具调用会怎样"：
+想看被策略拒绝时 handler 完全不会被调用：
 
 ```bash
-uv run agent-cli demo --propose-tool read_document
+uv run agent-cli demo --deny
 ```
 
 ## 本地配置检查

@@ -241,3 +241,62 @@ DSN 才能看一句脚本化回答属于仪式而非安全；从校验过的配�
 `bootstrap/container.py` 的职责，与第一个真实 adapter 一起落地。真正的
 model-tool 循环仍属于 WP02（PR-006 起），本 PR 没有、也不允许提前实现第二个
 循环。
+
+## PR-006 Runtime Serial Loop
+
+状态：**已实现并通过本地测试**。
+
+自研 `ClaudeLikeAgentRuntime` 落地，替换 PR-005 的 walking-skeleton executor
+（`SingleTurnAgentExecutor` 及其测试已删除，不与新 Runtime 并存）。
+
+已交付 `src/agent_workbench/runtime/`，只依赖 domain 与 ports：
+
+- `state.py`：把基线 7.1 的状态机写成可执行转移表 + `RunStateMachine`。
+  非法转移抛 `InvalidStateTransition`，因此“跳过授权直接执行”这类实现错误
+  在第一次发生时就会失败，而不是产出一条看起来合理的运行记录；
+- `tool_executor.py`：单次已授权调用的执行原语，负责超时与异常归一化；
+- `agent_runtime.py`：串行 `model → tool → result → model` 循环本体。
+
+本 PR 固定下来的不变量：
+
+- **每个已暴露的 `tool_call_id` 恰有一个 `ToolResult`**——未知工具、被拒、
+  handler 抛异常、超时、批次中途取消，全部产出结果而不是留空。少一个结果，
+  模型就会永远等一个不会到来的回答；
+- **提交顺序永远是模型的调用顺序**：串行执行下两者本就一致，仍然强制过一次
+  `align_results()`，这样 PR-009 的并行调度器无法通过“谁先跑完”改变模型看到
+  的内容；
+- **超时属于 executor 而不是循环**：串行循环没有别的办法从一个不返回的
+  handler 里恢复，预算约束的是花费不是单次 await 的时长；
+- **Tool 只有经过 PolicyEngine 才会执行**：deny 分支下 handler 调用数为 0；
+  `allow_with_modified_input` 目前直接拒绝——重写后的参数必须重新做 schema
+  校验与再授权，而做这件事的 Tool Gateway 还没到，所以宁可拒绝也不在未校验
+  的输入上执行；
+- **循环有上限**：`max_steps` / `max_tool_calls` / deadline 在每轮开工前检查，
+  一个永远提工具调用的模型会被 `max_steps` 终止（有测试）；
+- handler 越权回答别的 `tool_call_id` 时，只让它自己那次调用失败，不会同时
+  破坏两个 id 的配对。
+
+CLI demo 随之升级为完整一轮：`agent-cli demo` 现在演示
+模型 → `read_document` → ToolResult → 模型 → 回答；`--deny` 演示 deny 分支
+（handler 不被调用，模型仍收到该 id 的答复）；`--tool none` 回到单轮文本。
+
+2026-07-25 验证证据：
+
+```text
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 360 passed（runtime 新增 49）
+development/test config profile: status=ok
+agent-cli demo / --deny / --tool none: 退出码 0
+```
+
+`pyproject.toml` 与 `uv.lock` 未改动。测试套件里有且只有一处等待真实时间：
+tool 超时测试固定耗时 1 秒（`ToolSpec.timeout_seconds` 的域下限就是 1 秒），
+是有界且确定的，不是靠 sleep 碰运气的竞态测试。
+
+范围说明：本 PR 不含 **schema 校验**与 **Hook 重校验**（两者一起定义“最终参数”
+的含义，属于 PR-007 Tool Gateway）、**并行只读调度**（PR-009）、大结果
+Artifact 化（WP12）、真实 Anthropic Adapter（WP02-06）。因此基线不变量 2 目前
+只实现了授权那一半；demo 中的两个 Tool 自己校验参数类型，`invalid_tool_input`
+路径由它们覆盖。

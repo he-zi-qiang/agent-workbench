@@ -79,7 +79,7 @@ jobs:
       - name: Smoke the installed CLI entry point
         run: |
           uv run --no-sync agent-cli demo --format json > cli-demo.jsonl
-          diff -u tests/cli/golden/demo_completed.jsonl cli-demo.jsonl
+          diff -u tests/cli/golden/demo_tool_round.jsonl cli-demo.jsonl
 
       - name: Enforce dependency license policy
         run: >-

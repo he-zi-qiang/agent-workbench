@@ -32,11 +32,15 @@ from agent_workbench.domain.events import (
     ModelCompleted,
     ModelDelta,
     ModelStarted,
+    PermissionResolved,
     RunCancelled,
     RunCompleted,
     RunFailed,
     RunStarted,
+    ToolCompleted,
+    ToolFailed,
     ToolProposed,
+    ToolStarted,
 )
 from agent_workbench.domain.runs import AgentOutcome
 
@@ -110,7 +114,12 @@ class TextRenderer:
 
     def on_event(self, envelope: EventEnvelope) -> None:
         payload = envelope.payload
-        if isinstance(payload, ModelDelta):
+        if isinstance(payload, ModelStarted) and self._streamed:
+            # A second model call is a second turn of the loop; running its
+            # text into the previous answer would hide the tool round between
+            # them.
+            self.stream.write("\n")
+        elif isinstance(payload, ModelDelta):
             self.stream.write(payload.text)
             self._streamed = True
 
@@ -132,8 +141,8 @@ def format_timeline_row(envelope: EventEnvelope) -> str:
 
     sequence = "-" if envelope.sequence is None else str(envelope.sequence)
     summary = summarize_payload(envelope.payload)
-    row = f"{sequence:>3}  {envelope.event_type:<16}"
-    return f"{row}  {summary}" if summary else row
+    row = f"{sequence:>3}  {envelope.event_type:<19}"
+    return f"{row}  {summary}" if summary else row.rstrip()
 
 
 def summarize_payload(payload: EventPayload) -> str:
@@ -159,9 +168,21 @@ def summarize_payload(payload: EventPayload) -> str:
         )
     if isinstance(payload, ToolProposed):
         return (
-            f"{payload.tool_name} args={payload.argument_bytes}B "
+            f"{payload.tool_name} risk={payload.risk or 'unknown'} "
+            f"args={payload.argument_bytes}B "
             f"sha256={payload.argument_sha256[:12]}…"
         )
+    if isinstance(payload, PermissionResolved):
+        return f"{payload.tool_call_id} {payload.effect} ({payload.reason_code})"
+    if isinstance(payload, ToolStarted):
+        return f"{payload.tool_call_id} {payload.tool_name}"
+    if isinstance(payload, ToolCompleted):
+        return (
+            f"{payload.tool_call_id} {payload.duration_ms}ms "
+            f"out={payload.output_bytes}B"
+        )
+    if isinstance(payload, ToolFailed):
+        return f"{payload.tool_call_id} {payload.error.code}: {payload.error.message}"
     if isinstance(payload, RunCompleted):
         return f"{payload.stop_reason} steps={payload.usage.steps}"
     if isinstance(payload, RunFailed):

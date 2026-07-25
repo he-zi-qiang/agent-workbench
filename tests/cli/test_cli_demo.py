@@ -15,22 +15,16 @@ from pathlib import Path
 import pytest
 
 from agent_workbench.apps.cli.demo import DEMO_REPLY
-from agent_workbench.apps.cli.main import EXIT_COMPLETED, EXIT_FAILED, main
+from agent_workbench.apps.cli.main import EXIT_COMPLETED, main
 from agent_workbench.apps.cli.rendering import TIMELINE_HEADER
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
 SCENARIOS: dict[str, tuple[tuple[str, ...], str]] = {
-    "completed_text": (("demo",), "demo_completed.txt"),
-    "completed_json": (("demo", "--format", "json"), "demo_completed.jsonl"),
-    "refusal_text": (
-        ("demo", "--propose-tool", "read_document"),
-        "demo_tool_refusal.txt",
-    ),
-    "refusal_json": (
-        ("demo", "--propose-tool", "read_document", "--format", "json"),
-        "demo_tool_refusal.jsonl",
-    ),
+    "tool_round_text": (("demo",), "demo_tool_round.txt"),
+    "tool_round_json": (("demo", "--format", "json"), "demo_tool_round.jsonl"),
+    "text_only": (("demo", "--tool", "none"), "demo_text_only.txt"),
+    "denied": (("demo", "--deny"), "demo_denied.txt"),
 }
 
 
@@ -134,19 +128,40 @@ def test_the_scripted_reply_flows_through_to_the_answer() -> None:
     assert DEMO_REPLY not in transcript
 
 
-def test_a_proposed_tool_call_fails_the_run() -> None:
-    """The skeleton owns no tool loop, and says so instead of dropping it."""
+def test_the_default_demo_runs_a_full_tool_round() -> None:
+    """Model, tool, result, model: the loop the runtime owns."""
 
-    code, transcript = _run("demo", "--propose-tool", "read_document")
+    code, transcript = _run("demo")
+    timeline = transcript.split(TIMELINE_HEADER, maxsplit=1)[1]
 
-    assert code == EXIT_FAILED
-    assert "ToolProposed" in transcript
-    assert "owns no tool loop" in transcript
-    assert "outcome: failed (error)" in transcript
+    assert code == EXIT_COMPLETED
+    for event in ("ToolProposed", "PermissionResolved", "ToolStarted", "ToolCompleted"):
+        assert event in timeline
+    assert timeline.count("ModelStarted") == 2
 
 
-def test_the_refusal_records_a_digest_rather_than_the_arguments() -> None:
-    _, transcript = _run("demo", "--propose-tool", "read_document", "--format", "json")
+def test_a_denied_call_never_starts_its_handler() -> None:
+    """The model still receives an answer for the id it was shown."""
+
+    code, transcript = _run("demo", "--deny")
+    timeline = transcript.split(TIMELINE_HEADER, maxsplit=1)[1]
+
+    assert code == EXIT_COMPLETED
+    assert "deny (outside_submitted_envelope)" in timeline
+    assert "ToolFailed" in timeline
+    assert "ToolStarted" not in timeline
+
+
+def test_the_text_only_demo_runs_a_single_turn() -> None:
+    _, transcript = _run("demo", "--tool", "none")
+    timeline = transcript.split(TIMELINE_HEADER, maxsplit=1)[1]
+
+    assert timeline.count("ModelStarted") == 1
+    assert "ToolProposed" not in timeline
+
+
+def test_a_proposal_records_a_digest_rather_than_the_arguments() -> None:
+    _, transcript = _run("demo", "--format", "json")
     proposed = next(
         record["event"]["payload"]
         for record in _records(transcript)
@@ -162,7 +177,7 @@ def test_the_refusal_records_a_digest_rather_than_the_arguments() -> None:
 
 def test_an_unregistered_tool_choice_is_rejected_by_the_parser() -> None:
     with pytest.raises(SystemExit) as excinfo:
-        _run("demo", "--propose-tool", "rm_rf")
+        _run("demo", "--tool", "rm_rf")
 
     assert excinfo.value.code == 2
 

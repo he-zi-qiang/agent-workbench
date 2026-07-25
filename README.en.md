@@ -12,9 +12,10 @@ LangChain and later comparison adapters stay behind explicit ports.
 ## Current status
 
 **PR-001 Bootstrap**, **PR-002 Config CI**, **PR-003 Domain**, **PR-004 Ports +
-Fakes** and **PR-005 CLI Skeleton** have been implemented and validated locally.
-The runtime loop, RAG, workflow, multi-Agent, API and UI capabilities remain
-planned and must not be described as implemented.
+Fakes**, **PR-005 CLI Skeleton** and **PR-006 Runtime Serial Loop** have been
+implemented and validated locally. The tool gateway (schema validation and
+hooks), the parallel read scheduler, RAG, workflow, multi-Agent, API and UI
+capabilities remain planned and must not be described as implemented.
 
 PR-003 delivers the framework-neutral domain contracts -- messages, tools,
 events, context, run budgets, policy decisions and error codes -- using nothing
@@ -29,11 +30,17 @@ deny-by-default policy engine. Contract tests therefore run offline and
 deterministically, without a database, a vector store or a live model.
 
 PR-005 connects those pieces into the first runnable vertical slice: input,
-scripted model, unified events, output. The CLI consumes only events and the
-returned outcome. Streamed text comes from transient deltas while the timeline
-is replayed from the durable log, and the difference between them is the
-durability rule itself. The current single-turn executor owns no tool loop: a
-proposed tool call is recorded and then fails the run rather than being dropped.
+model, unified events, output. The CLI consumes only events and the returned
+outcome. Streamed text comes from transient deltas while the timeline is
+replayed from the durable log, and the difference between them is the
+durability rule itself.
+
+PR-006 adds the custom `ClaudeLikeAgentRuntime`: a serial `model -> tool ->
+result -> model` loop whose state machine is an executable transition table
+rather than a diagram, so an illegal phase change raises instead of producing a
+plausible-looking run. Every exposed `tool_call_id` ends with exactly one
+`ToolResult` -- unknown tool, denied call, raising handler, timeout, mid-batch
+cancellation -- and results are always submitted in the model's own call order.
 
 ## Try it
 
@@ -42,10 +49,10 @@ uv run agent-cli demo
 ```
 
 The scripted model runs offline and the output is byte identical on every run.
-To see what happens when a tool is proposed but no loop exists:
+To see a denied call, where the handler never runs at all:
 
 ```bash
-uv run agent-cli demo --propose-tool read_document
+uv run agent-cli demo --deny
 ```
 
 ## Local configuration check
