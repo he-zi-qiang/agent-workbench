@@ -68,12 +68,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="The assistant turn the scripted model replays.",
     )
     demo.add_argument(
-        "--propose-tool",
-        choices=DEMO_TOOL_NAMES,
+        "--tool",
+        choices=(*DEMO_TOOL_NAMES, "none"),
+        default="read_document",
         help=(
-            "Script the model into proposing this tool. The single-turn "
-            "executor owns no tool loop, so the run fails instead of leaving "
-            "the call unanswered."
+            "Which tool the scripted model calls before answering. "
+            "'none' runs a single text-only turn."
+        ),
+    )
+    demo.add_argument(
+        "--deny",
+        action="store_true",
+        help=(
+            "Submit an envelope that permits no tool. The handler never runs "
+            "and the model still receives an answer for its call."
         ),
     )
     demo.add_argument(
@@ -107,7 +115,8 @@ def run_demo(args: argparse.Namespace, stream: TextIO) -> AgentOutcome:
     demo = build_demo(
         prompt=args.prompt,
         reply=args.reply,
-        propose_tool=args.propose_tool,
+        tool=None if args.tool == "none" else args.tool,
+        deny_tools=args.deny,
         max_steps=args.max_steps,
         max_tool_calls=args.max_tool_calls,
     )

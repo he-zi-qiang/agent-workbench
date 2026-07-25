@@ -211,8 +211,8 @@ agent-workbench/
 │   │   ├── sandbox.py
 │   │   └── telemetry.py
 │   ├── runtime/
-│   │   ├── agent_runtime.py
-│   │   ├── loop.py
+│   │   ├── agent_runtime.py       # 循环本体
+│   │   ├── state.py               # 7.1 状态机的可执行表
 │   │   ├── tool_registry.py
 │   │   ├── tool_executor.py
 │   │   ├── tool_scheduler.py
@@ -1347,10 +1347,10 @@ ownership、架构测试与 CI 合同已经存在，第 6 节的领域契约（�
 Pydantic 的框架无关类型，并带有 JSON golden 与不变量测试。Agent Runtime
 循环、RAG、Workflow 等产品能力尚未实现，因此当前状态必须如实标记。
 
-表中唯一标为 Demonstrated 的是 CLI walking skeleton：`agent-cli demo` 是一条
-逐字节可复现、由 golden 文件与 CI smoke 守护的固定演示。它证明的仅仅是
-“输入 → 脚本化模型 → 统一事件 → 输出”这条链路，不包含 Tool 执行、检索或
-恢复。
+表中标为 Demonstrated 的两项都由同一条固定演示 `agent-cli demo` 覆盖：逐字节
+可复现，由 golden 文件与 CI smoke 守护。它现在证明的是“输入 → 模型 → Tool →
+ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 handler 不被调用。
+它不包含 schema 校验、Hook、并行读、检索与恢复——那些能力在表中仍是 Planned。
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
@@ -1359,7 +1359,8 @@ Pydantic 的框架无关类型，并带有 JSON golden 与不变量测试。Agen
 | 领域契约与事件协议 | ✓ | ✓ | ✓ |  |
 | Ports 与 Fake Adapter | ✓ | ✓ | ✓ |  |
 | CLI 纵向切片（walking skeleton） | ✓ | ✓ | ✓ | ✓ |
-| 自研 Runtime | ✓ |  |  |  |
+| 自研 Runtime：串行 Tool Loop | ✓ | ✓ | ✓ | ✓ |
+| 自研 Runtime：Tool Gateway、并行读、Hook | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
 | PostgreSQL coordination | ✓ |  |  |  |

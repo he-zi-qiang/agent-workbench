@@ -1,0 +1,16 @@
+> Who owns hybrid fusion?
+Let me check the corpus.
+Qdrant owns hybrid fusion: one Query API call fuses the dense and sparse hits with RRF.
+
+--- durable timeline ---
+  1  RunStarted           chat profile=main max_steps=4 tools=read_document, text_statistics
+  2  ModelStarted         mc_demo_0001 model=scripted-fake
+  3  ModelCompleted       tool_use in=118 out=31
+  4  ToolProposed         read_document risk=read args=23B sha256=1b91ab1c6437…
+  5  PermissionResolved   toolu_demo_1 deny (outside_submitted_envelope)
+  6  ToolFailed           toolu_demo_1 policy_denied: denied: outside_submitted_envelope
+  7  ModelStarted         mc_demo_0002 model=scripted-fake
+  8  ModelCompleted       stop in=204 out=24
+  9  RunCompleted         completed steps=2
+
+outcome: completed (completed) steps=2 tool_calls=1 tokens=1337
