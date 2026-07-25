@@ -176,11 +176,11 @@ bootstrap ───────────────→ 仅负责组装
 
 ```text
 agent-workbench/
-├── apps/
-│   ├── api/                       # FastAPI、REST、SSE
-│   ├── cli/                       # 调试和演示入口
-│   └── web/                       # React + TypeScript，后期加入
+├── web/                           # React + TypeScript，后期加入
 ├── src/agent_workbench/
+│   ├── apps/                      # 进程入口（打包进 wheel）
+│   │   ├── api/                   # FastAPI、REST、SSE
+│   │   └── cli/                   # 调试和演示入口
 │   ├── domain/
 │   │   ├── schema.py              # 序列化基类与 schema 版本
 │   │   ├── identifiers.py         # ID 约束与生成器
@@ -1345,7 +1345,12 @@ Python 3.12 src layout、锁文件、正式配置加载器、脱敏 config-check
 ownership、架构测试与 CI 合同已经存在，第 6 节的领域契约（消息、Tool、
 事件、ContextPacket、运行预算、Policy 决定与错误分类）也已落地为只依赖
 Pydantic 的框架无关类型，并带有 JSON golden 与不变量测试。Agent Runtime
-循环、RAG、Workflow 等产品能力尚未实现，因此当前状态必须如实标记：
+循环、RAG、Workflow 等产品能力尚未实现，因此当前状态必须如实标记。
+
+表中唯一标为 Demonstrated 的是 CLI walking skeleton：`agent-cli demo` 是一条
+逐字节可复现、由 golden 文件与 CI smoke 守护的固定演示。它证明的仅仅是
+“输入 → 脚本化模型 → 统一事件 → 输出”这条链路，不包含 Tool 执行、检索或
+恢复。
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
@@ -1353,6 +1358,7 @@ Pydantic 的框架无关类型，并带有 JSON golden 与不变量测试。Agen
 | 配置 ownership / CI | ✓ | ✓ | ✓ |  |
 | 领域契约与事件协议 | ✓ | ✓ | ✓ |  |
 | Ports 与 Fake Adapter | ✓ | ✓ | ✓ |  |
+| CLI 纵向切片（walking skeleton） | ✓ | ✓ | ✓ | ✓ |
 | 自研 Runtime | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |

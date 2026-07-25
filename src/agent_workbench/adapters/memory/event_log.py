@@ -32,10 +32,18 @@ def _utc_now() -> datetime:
 class InMemoryEventLog:
     """Append-only log with per-stream sequences, held in process memory."""
 
-    def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        event_ids: Callable[[], str] | None = None,
+    ) -> None:
         # The clock is injected so recovery and replay tests can produce
-        # reproducible timestamps instead of racing the wall clock.
+        # reproducible timestamps instead of racing the wall clock. Event ids
+        # are injected for the same reason: a demo whose transcript is byte
+        # identical on every run can be pinned by a golden file.
         self._clock = clock if clock is not None else _utc_now
+        self._event_ids = event_ids
         self._streams: dict[str, list[EventEnvelope]] = {}
         self._next_sequence: dict[str, int] = {}
         self._lock = asyncio.Lock()
@@ -61,6 +69,7 @@ class InMemoryEventLog:
                 run_id=scope.run_id,
                 timestamp=self._clock(),
                 sequence=sequence,
+                event_id=self._event_ids() if self._event_ids is not None else None,
                 task_id=scope.task_id,
                 graph_node_id=scope.graph_node_id,
                 parent_event_id=parent_event_id,

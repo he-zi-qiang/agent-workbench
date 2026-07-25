@@ -185,3 +185,59 @@ development/test config profile: status=ok
 `ApprovalStore`（WP10）；`TelemetryPort`（WP12）；`SandboxPort`、
 `MemoryPort`（更后）。先冻结一个没有实现来校验的协议，正是契约在第一个
 使用者出现前就漂移的方式。
+
+## PR-005 CLI Skeleton
+
+状态：**已实现并通过本地测试**。
+
+第一个跑通的纵向切片：输入 → 脚本化模型 → 统一事件 → 输出。
+
+已交付：
+
+- `src/agent_workbench/apps/cli/`：`main.py`（argparse 与退出码）、
+  `demo.py`（确定性场景装配）、`rendering.py`（文本与 JSONL 两种渲染器）；
+- `agent-cli` console script，CI 用已安装的 wheel 跑 smoke 并与 golden 比对；
+- `src/agent_workbench/adapters/agents/single_turn.py`：
+  `SingleTurnAgentExecutor`，满足 `AgentExecutor` 协议的 walking skeleton；
+- `adapters/events.py` 增加 `ObservingEventSink`（live tee，让订阅者看到
+  transient 事件）；`InMemoryEventLog` 与 `fake_stack()` 增加可注入的
+  `event_ids`，与既有 `clock` 注入同一目的；
+- 领域侧新增 `canonical_arguments()` / `argument_digest()`：事件记录参数摘要
+  而不是参数本身，WP10 的副作用 ledger 复用同一份规范形式。
+
+本 PR 固定下来的行为：
+
+- **CLI 只消费统一事件与返回的 `AgentOutcome`**，不触碰 executor、模型
+  adapter 或 store 的内部；
+- **两个视图取自不同来源**：流式回答来自 live transient delta，时间线来自
+  运行结束后对 durable log 的重放。重放拿不到的东西，重连的客户端也拿不到；
+- **skeleton 不拥有 tool loop，并且拒绝得很大声**：模型提出工具调用时，先落
+  一条 durable `ToolProposed`，再让整个 run 失败。默默丢弃会让模型永远等一个
+  不会到来的 ToolResult，正是不变量 1 要防的情况；
+- 预算在开工前检查（过期 deadline 时模型调用次数为 0）；
+- adapter 异常变成结构化 outcome，且只保留异常类型名——
+  测试用 `sk-ant-` canary 断言 provider 异常正文不进入 outcome 与事件；
+- `max_tokens` 截断的回答报告为 failed，不伪装成 completed；
+- 事件里没有 prompt 正文，测试用 canary prompt 断言 JSONL 中不出现。
+
+demo 模式冻结时钟、用计数器生成事件 ID，因此**同一条命令的输出逐字节可复现**，
+由 4 个 golden 文件（文本/JSONL × 完成/拒绝）守护。
+
+2026-07-25 验证证据：
+
+```text
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 328 passed（cli 19 + 单轮 executor 19）
+development/test config profile: status=ok
+agent-cli demo / --propose-tool read_document: 退出码 0 / 1
+```
+
+`pyproject.toml` 只增加 `agent-cli` 入口，未新增依赖，`uv.lock` 未改动。
+
+范围说明：demo 不加载 Settings。它不连数据库、向量库和任何 provider，要求注入
+DSN 才能看一句脚本化回答属于仪式而非安全；从校验过的配置做真实依赖注入是
+`bootstrap/container.py` 的职责，与第一个真实 adapter 一起落地。真正的
+model-tool 循环仍属于 WP02（PR-006 起），本 PR 没有、也不允许提前实现第二个
+循环。

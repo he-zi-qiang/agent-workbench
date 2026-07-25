@@ -8,10 +8,11 @@ free.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from agent_workbench.domain.events import EventEnvelope, EventPayload
-from agent_workbench.ports.event_log import EventLogPort, EventScope
+from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,4 +35,28 @@ class ScopedEventSink:
         )
 
 
-__all__ = ["ScopedEventSink"]
+@dataclass(frozen=True, slots=True)
+class ObservingEventSink:
+    """Reports every emitted envelope to a live observer, then delegates.
+
+    A live subscriber has to see transient events, and those never reach the
+    durable log by definition. The sink is the single point both kinds pass
+    through, so tee-ing here is what lets a terminal or an SSE connection show
+    token deltas while replay still returns only what was persisted.
+    """
+
+    inner: EventSink
+    observer: Callable[[EventEnvelope], None]
+
+    async def emit(
+        self,
+        payload: EventPayload,
+        *,
+        parent_event_id: str | None = None,
+    ) -> EventEnvelope:
+        envelope = await self.inner.emit(payload, parent_event_id=parent_event_id)
+        self.observer(envelope)
+        return envelope
+
+
+__all__ = ["ObservingEventSink", "ScopedEventSink"]
