@@ -11,10 +11,10 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-**PR-001 Bootstrap**, **PR-002 Config CI**, **PR-003 Domain** and **PR-004
-Ports + Fakes** have been implemented and validated locally. The runtime loop,
-RAG, workflow, multi-Agent, API and UI capabilities remain planned and must not
-be described as implemented.
+**PR-001 Bootstrap**, **PR-002 Config CI**, **PR-003 Domain**, **PR-004 Ports +
+Fakes** and **PR-005 CLI Skeleton** have been implemented and validated locally.
+The runtime loop, RAG, workflow, multi-Agent, API and UI capabilities remain
+planned and must not be described as implemented.
 
 PR-003 delivers the framework-neutral domain contracts -- messages, tools,
 events, context, run budgets, policy decisions and error codes -- using nothing
@@ -27,6 +27,26 @@ with dependency-free implementations: a scripted model, in-memory event log,
 conversation store and artifact store, two side-effect-free tools and a
 deny-by-default policy engine. Contract tests therefore run offline and
 deterministically, without a database, a vector store or a live model.
+
+PR-005 connects those pieces into the first runnable vertical slice: input,
+scripted model, unified events, output. The CLI consumes only events and the
+returned outcome. Streamed text comes from transient deltas while the timeline
+is replayed from the durable log, and the difference between them is the
+durability rule itself. The current single-turn executor owns no tool loop: a
+proposed tool call is recorded and then fails the run rather than being dropped.
+
+## Try it
+
+```bash
+uv run agent-cli demo
+```
+
+The scripted model runs offline and the output is byte identical on every run.
+To see what happens when a tool is proposed but no loop exists:
+
+```bash
+uv run agent-cli demo --propose-tool read_document
+```
 
 ## Local configuration check
 

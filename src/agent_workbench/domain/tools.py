@@ -12,6 +12,8 @@ and to send to a model.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterable, Sequence
 from typing import Annotated, Literal
 
@@ -178,6 +180,30 @@ class ToolResult(VersionedModel):
         )
 
 
+def canonical_arguments(arguments: JsonObject) -> str:
+    """Return the one canonical JSON form of a call's arguments.
+
+    There is exactly one canonicalization on purpose. Events record a digest of
+    this form instead of the arguments themselves, and the side-effect ledger
+    keys a retry on the same form; a second, slightly different canonicalization
+    would eventually disagree with the first and turn a retry into a second real
+    effect.
+    """
+
+    return json.dumps(
+        arguments,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def argument_digest(arguments: JsonObject) -> str:
+    """SHA-256 of :func:`canonical_arguments`, as lowercase hex."""
+
+    return hashlib.sha256(canonical_arguments(arguments).encode("utf-8")).hexdigest()
+
+
 def align_results(
     calls: Sequence[ToolCall],
     results: Iterable[ToolResult],
@@ -231,4 +257,6 @@ __all__ = [
     "ToolRisk",
     "ToolSpec",
     "align_results",
+    "argument_digest",
+    "canonical_arguments",
 ]

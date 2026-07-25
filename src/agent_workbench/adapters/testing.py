@@ -56,9 +56,15 @@ def fake_stack(
     turns: Sequence[ScriptedTurn] = (),
     corpus: Mapping[str, str] | None = None,
     clock: Callable[[], datetime] | None = None,
+    event_ids: Callable[[], str] | None = None,
     repeat_last_turn: bool = False,
 ) -> FakeStack:
-    """Build a stack from a model script and an in-memory corpus."""
+    """Build a stack from a model script and an in-memory corpus.
+
+    ``clock`` and ``event_ids`` are injected together when a caller needs a
+    transcript that is identical on every run, such as the CLI demo and the
+    golden files that guard it.
+    """
 
     registry = StaticToolRegistry(
         [
@@ -70,7 +76,7 @@ def fake_stack(
         model=FakeModel(turns, repeat_last=repeat_last_turn),
         registry=registry,
         policy=EnvelopePolicyEngine(registry=registry),
-        events=InMemoryEventLog(clock=clock),
+        events=InMemoryEventLog(clock=clock, event_ids=event_ids),
         conversations=InMemoryConversationStore(),
         artifacts=InMemoryArtifactStore(),
         cancellation=CancellationSource(),

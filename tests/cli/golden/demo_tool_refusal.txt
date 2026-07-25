@@ -1,0 +1,12 @@
+> Who owns hybrid fusion?
+Qdrant owns hybrid fusion: one Query API call fuses the dense and sparse hits with RRF.
+
+--- durable timeline ---
+  1  RunStarted        chat profile=main max_steps=4 tools=read_document, text_statistics
+  2  ModelStarted      mc_demo_0001 model=scripted-fake
+  3  ModelCompleted    tool_use in=118 out=24
+  4  ToolProposed      read_document args=23B sha256=1b91ab1c6437…
+  5  RunFailed         error internal_error: this executor owns no tool loop, so 1 proposed tool call(s) were recorded and left unanswered; the model-tool loop arrives with the custom runtime
+
+outcome: failed (error) steps=1 tool_calls=0 tokens=1102
+error: internal_error: this executor owns no tool loop, so 1 proposed tool call(s) were recorded and left unanswered; the model-tool loop arrives with the custom runtime

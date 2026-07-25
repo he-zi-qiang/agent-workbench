@@ -15,6 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
+agent-cli = "agent_workbench.apps.cli.main:main"
 agent-config-check = "agent_workbench.bootstrap.config_check:main"
 
 [dependency-groups]

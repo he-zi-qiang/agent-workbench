@@ -4,9 +4,9 @@
 >
 > 日期：2026-07-22
 >
-> 状态：PR-001 Bootstrap、PR-002 Config CI、PR-003 Domain（WP01-01）与
-> PR-004 Ports + Fakes（WP01-02～05）已实现并通过本地验证；CLI 纵向切片、
-> Runtime 及其之后的产品能力仍未实现
+> 状态：PR-001 Bootstrap、PR-002 Config CI、PR-003 Domain（WP01-01）、
+> PR-004 Ports + Fakes（WP01-02～05）与 PR-005 CLI Skeleton（WP01-06）已实现
+> 并通过本地验证；WP01 至此完成，Runtime 循环及其之后的产品能力仍未实现
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
 >
@@ -162,15 +162,17 @@ flowchart LR
 
 ```text
 agent-workbench/
-├── apps/
-│   ├── api/
-│   │   ├── main.py
-│   │   ├── dependencies.py
-│   │   └── routes/
-│   ├── cli/
-│   │   └── main.py
-│   └── web/
+├── web/
 ├── src/agent_workbench/
+│   ├── apps/
+│   │   ├── api/
+│   │   │   ├── main.py
+│   │   │   ├── dependencies.py
+│   │   │   └── routes/
+│   │   └── cli/
+│   │       ├── main.py
+│   │       ├── demo.py
+│   │       └── rendering.py
 │   ├── domain/
 │   ├── ports/
 │   ├── runtime/
@@ -193,9 +195,9 @@ agent-workbench/
 │       ├── container.py
 │       ├── readiness.py
 │       └── processes.py
-├── workers/
-│   ├── task_worker.py
-│   └── ingestion_worker.py
+│   └── workers/
+│       ├── task_worker.py
+│       └── ingestion_worker.py
 ├── tests/
 │   ├── architecture/
 │   ├── config/
@@ -217,6 +219,10 @@ agent-workbench/
 ├── uv.lock
 └── docker-compose.yml
 ```
+
+进程入口位于包内 `src/agent_workbench/apps` 与 `src/agent_workbench/workers`，
+而不是仓库顶层：wheel 只打包 `src/agent_workbench`，顶层目录中的入口无法成为
+已安装的 console script。前端 `web/` 不进入 Python 包。
 
 ### 4.2 四个生产入口
 
