@@ -182,6 +182,8 @@ agent-workbench/
 │   └── web/                       # React + TypeScript，后期加入
 ├── src/agent_workbench/
 │   ├── domain/
+│   │   ├── schema.py              # 序列化基类与 schema 版本
+│   │   ├── identifiers.py         # ID 约束与生成器
 │   │   ├── messages.py
 │   │   ├── events.py
 │   │   ├── runs.py
@@ -1338,15 +1340,19 @@ v1 没有进程/容器级不可信代码执行，因此只能称为“Tool 权�
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-工作区已建立 PR-001 Bootstrap 与 PR-002 Config CI：Python 3.12 src
-layout、锁文件、正式配置加载器、脱敏 config-check、字段级 ownership、
-架构测试与 CI 合同已经存在。Agent Runtime、RAG、Workflow 等产品能力尚未
-实现，因此当前状态必须如实标记：
+工作区已建立 PR-001 Bootstrap、PR-002 Config CI 与 PR-003 Domain：
+Python 3.12 src layout、锁文件、正式配置加载器、脱敏 config-check、字段级
+ownership、架构测试与 CI 合同已经存在，第 6 节的领域契约（消息、Tool、
+事件、ContextPacket、运行预算、Policy 决定与错误分类）也已落地为只依赖
+Pydantic 的框架无关类型，并带有 JSON golden 与不变量测试。Agent Runtime
+循环、RAG、Workflow 等产品能力尚未实现，因此当前状态必须如实标记：
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
 | 工程与配置 Bootstrap | ✓ | ✓ | ✓ |  |
 | 配置 ownership / CI | ✓ | ✓ | ✓ |  |
+| 领域契约与事件协议 | ✓ | ✓ | ✓ |  |
+| Ports 与 Fake Adapter | ✓ |  |  |  |
 | 自研 Runtime | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |

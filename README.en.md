@@ -11,9 +11,15 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-**PR-001 Bootstrap** and **PR-002 Config CI** have been implemented and
-validated locally. Runtime, RAG, workflow, multi-Agent, API and UI capabilities
-remain planned and must not be described as implemented.
+**PR-001 Bootstrap**, **PR-002 Config CI** and **PR-003 Domain** have been
+implemented and validated locally. The runtime loop, RAG, workflow, multi-Agent,
+API and UI capabilities remain planned and must not be described as implemented.
+
+PR-003 delivers the framework-neutral domain contracts -- messages, tools,
+events, context, run budgets, policy decisions and error codes -- using nothing
+but the standard library and Pydantic. Invariants such as one result per tool
+call, event durability and grounded citations are enforced at construction time
+rather than described in comments.
 
 ## Local configuration check
 

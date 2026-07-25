@@ -1,0 +1,311 @@
+{
+  "AgentOutcome": {
+    "agent_run_id": "run_0000000000000000000000000000001",
+    "citations": [
+      {
+        "chunk_id": "chunk_1",
+        "document_id": "doc_1",
+        "document_version": "v3",
+        "locator": {
+          "char_end": null,
+          "char_start": null,
+          "page": 4,
+          "paragraph": 2
+        },
+        "quote": "one dense and sparse fusion per query"
+      }
+    ],
+    "error": null,
+    "output_ref": null,
+    "output_text": "Qdrant owns fusion.",
+    "schema_version": 1,
+    "status": "completed",
+    "stop_reason": "completed",
+    "usage": {
+      "cost_micro_usd": 4200,
+      "steps": 2,
+      "tokens": {
+        "cache_read_tokens": 900,
+        "cache_write_tokens": 0,
+        "input_tokens": 1200,
+        "output_tokens": 340
+      },
+      "tool_calls": 3
+    }
+  },
+  "AgentRunRequest": {
+    "budget": {
+      "deadline": "2026-07-25T03:14:15Z",
+      "max_cost_micro_usd": 500000,
+      "max_steps": 8,
+      "max_tool_calls": 24,
+      "max_total_tokens": 120000
+    },
+    "context": null,
+    "envelope": {
+      "allowed_tools": [
+        "export_artifact",
+        "knowledge_search"
+      ],
+      "approval_required_risks": [
+        "write",
+        "external",
+        "destructive"
+      ],
+      "denied_tools": [
+        "shell"
+      ],
+      "max_tool_risk": "write",
+      "schema_version": 1
+    },
+    "messages": [
+      {
+        "content": [
+          {
+            "kind": "text",
+            "text": "Which component owns hybrid fusion?"
+          }
+        ],
+        "role": "user",
+        "schema_version": 1
+      }
+    ],
+    "model_profile": "main",
+    "principal": {
+      "principal_id": "user_demo",
+      "schema_version": 1,
+      "scopes": [
+        "artifact:write",
+        "knowledge:read"
+      ],
+      "tenant_id": "tenant_demo"
+    },
+    "run_kind": "chat",
+    "schema_version": 1,
+    "stream_id": "stream_0000000000000000000000000000001",
+    "system_prompt": "Answer only from the provided context.",
+    "tool_names": [
+      "knowledge_search"
+    ],
+    "trace": {
+      "agent_run_id": "run_0000000000000000000000000000001",
+      "graph_node_id": null,
+      "parent_agent_run_id": null,
+      "task_id": null,
+      "workflow_thread_id": null
+    }
+  },
+  "ArtifactRef": {
+    "artifact_id": "art_0000000000000000000000000000001",
+    "filename": "research-report.pdf",
+    "kind": "report",
+    "media_type": "application/pdf",
+    "schema_version": 1,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size_bytes": 2048,
+    "tenant_id": "tenant_demo"
+  },
+  "AuthorizationEnvelope": {
+    "allowed_tools": [
+      "export_artifact",
+      "knowledge_search"
+    ],
+    "approval_required_risks": [
+      "write",
+      "external",
+      "destructive"
+    ],
+    "denied_tools": [
+      "shell"
+    ],
+    "max_tool_risk": "write",
+    "schema_version": 1
+  },
+  "ContextPacket": {
+    "chunks": [
+      {
+        "chunk_id": "chunk_1",
+        "document_id": "doc_1",
+        "document_version": "v3",
+        "locator": {
+          "char_end": null,
+          "char_start": null,
+          "page": 4,
+          "paragraph": 2
+        },
+        "score": 0.83,
+        "tenant_id": "tenant_demo",
+        "text": "Qdrant performs one dense and sparse fusion per query."
+      }
+    ],
+    "citations": [
+      {
+        "chunk_id": "chunk_1",
+        "document_id": "doc_1",
+        "document_version": "v3",
+        "locator": {
+          "char_end": null,
+          "char_start": null,
+          "page": 4,
+          "paragraph": 2
+        },
+        "quote": "one dense and sparse fusion per query"
+      }
+    ],
+    "retrieval_trace_id": "trace_1",
+    "schema_version": 1,
+    "token_estimate": 96
+  },
+  "EventEnvelope": {
+    "durability": "durable",
+    "event_id": "evt_0000000000000000000000000000001",
+    "event_type": "RunStarted",
+    "graph_node_id": null,
+    "parent_event_id": null,
+    "payload": {
+      "budget": {
+        "deadline": "2026-07-25T03:14:15Z",
+        "max_cost_micro_usd": 500000,
+        "max_steps": 8,
+        "max_tool_calls": 24,
+        "max_total_tokens": 120000
+      },
+      "kind": "RunStarted",
+      "model_profile": "main",
+      "run_kind": "chat",
+      "tool_names": [
+        "knowledge_search"
+      ]
+    },
+    "run_id": "run_0000000000000000000000000000001",
+    "schema_version": 1,
+    "sequence": 1,
+    "stream_id": "stream_0000000000000000000000000000001",
+    "task_id": null,
+    "timestamp": "2026-07-25T03:14:15Z"
+  },
+  "ExecutionContext": {
+    "agent_run_id": "run_0000000000000000000000000000001",
+    "envelope": {
+      "allowed_tools": [
+        "export_artifact",
+        "knowledge_search"
+      ],
+      "approval_required_risks": [
+        "write",
+        "external",
+        "destructive"
+      ],
+      "denied_tools": [
+        "shell"
+      ],
+      "max_tool_risk": "write",
+      "schema_version": 1
+    },
+    "graph_node_id": "node_research_internal",
+    "lease_epoch": 7,
+    "policy_identity": "2026-07-a:9f2c1d4b5e6a7b8c",
+    "principal": {
+      "principal_id": "user_demo",
+      "schema_version": 1,
+      "scopes": [
+        "artifact:write",
+        "knowledge:read"
+      ],
+      "tenant_id": "tenant_demo"
+    },
+    "schema_version": 1,
+    "task_id": "task_0000000000000000000000000000001",
+    "workflow_thread_id": "thread_000000000000000000000000000001"
+  },
+  "Message": {
+    "content": [
+      {
+        "kind": "text",
+        "text": "Looking that up."
+      },
+      {
+        "arguments": {
+          "query": "vector index",
+          "top_k": 8
+        },
+        "kind": "tool_use",
+        "tool_call_id": "toolu_01demo",
+        "tool_name": "knowledge_search"
+      }
+    ],
+    "role": "assistant",
+    "schema_version": 1
+  },
+  "PolicyDecision": {
+    "effect": "allow_with_modified_input",
+    "modified_input": {
+      "query": "vector index",
+      "top_k": 8
+    },
+    "reason_code": "argument_clamped",
+    "requires_approval": false,
+    "schema_version": 1
+  },
+  "PrincipalContext": {
+    "principal_id": "user_demo",
+    "schema_version": 1,
+    "scopes": [
+      "artifact:write",
+      "knowledge:read"
+    ],
+    "tenant_id": "tenant_demo"
+  },
+  "ToolCall": {
+    "arguments": {
+      "query": "vector index",
+      "top_k": 8
+    },
+    "model_call_id": "mc_0000000000000000000000000000001",
+    "schema_version": 1,
+    "tool_call_id": "toolu_01demo",
+    "tool_name": "knowledge_search"
+  },
+  "ToolResult": {
+    "artifact": {
+      "artifact_id": "art_0000000000000000000000000000001",
+      "filename": "research-report.pdf",
+      "kind": "report",
+      "media_type": "application/pdf",
+      "schema_version": 1,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 2048,
+      "tenant_id": "tenant_demo"
+    },
+    "content": "3 passages retrieved",
+    "duration_ms": 412,
+    "error": null,
+    "schema_version": 1,
+    "status": "ok",
+    "tool_call_id": "toolu_01demo",
+    "tool_name": "knowledge_search"
+  },
+  "ToolSpec": {
+    "concurrency": "exclusive",
+    "description": "Write the approved report to the artifact store.",
+    "idempotency": "keyed",
+    "input_schema": {
+      "properties": {
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "export_artifact",
+    "output_schema": {
+      "type": "object"
+    },
+    "permission_scopes": [
+      "artifact:write"
+    ],
+    "risk": "write",
+    "schema_version": 1,
+    "timeout_seconds": 120
+  }
+}

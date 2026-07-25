@@ -1,0 +1,147 @@
+"""Event envelope rules: durability, cursors and payload agreement."""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta, timezone
+from typing import get_args
+
+import pytest
+from pydantic import ValidationError
+
+from agent_workbench.domain.events import (
+    DURABLE_EVENT_TYPES,
+    EVENT_DURABILITY,
+    TRANSIENT_EVENT_TYPES,
+    EventEnvelope,
+    EventType,
+    ModelDelta,
+    RunCompleted,
+    ToolProgress,
+    ToolProposed,
+)
+from agent_workbench.domain.runs import BudgetUsage
+
+TIMESTAMP = datetime(2026, 7, 25, 3, 14, 15, tzinfo=UTC)
+
+
+def _envelope(**overrides: object) -> EventEnvelope:
+    defaults: dict[str, object] = {
+        "payload": RunCompleted(stop_reason="completed", usage=BudgetUsage()),
+        "stream_id": "stream_1",
+        "run_id": "run_1",
+        "timestamp": TIMESTAMP,
+        "sequence": 7,
+        "event_id": "evt_1",
+    }
+    merged = defaults | overrides
+    return EventEnvelope.for_payload(**merged)  # pyright: ignore[reportArgumentType]
+
+
+def test_every_event_type_declares_a_durability() -> None:
+    assert set(get_args(EventType)) == set(EVENT_DURABILITY)
+
+
+def test_only_streamed_chatter_is_transient() -> None:
+    """Everything else must survive a reconnect via the durable log."""
+
+    assert sorted(TRANSIENT_EVENT_TYPES) == ["ModelDelta", "ToolProgress"]
+    assert "ModelCompleted" in DURABLE_EVENT_TYPES
+    assert TRANSIENT_EVENT_TYPES.isdisjoint(DURABLE_EVENT_TYPES)
+
+
+def test_durability_follows_the_payload_not_the_caller() -> None:
+    delta = _envelope(
+        payload=ModelDelta(model_call_id="mc_1", text="hi"),
+        sequence=None,
+    )
+
+    assert delta.event_type == "ModelDelta"
+    assert delta.durability == "transient"
+
+
+def test_a_transient_event_must_not_claim_a_cursor_position() -> None:
+    """`(stream_id, sequence)` is the SSE replay cursor; deltas are not stored."""
+
+    with pytest.raises(ValidationError, match="transient event carries none"):
+        _envelope(
+            payload=ToolProgress(tool_call_id="toolu_1", message="halfway"),
+            sequence=3,
+        )
+
+
+def test_a_durable_event_must_carry_its_stream_sequence() -> None:
+    with pytest.raises(ValidationError, match="sequence assigned by its stream"):
+        _envelope(sequence=None)
+
+
+def test_a_declared_durability_cannot_contradict_the_event_type() -> None:
+    payload = ModelDelta(model_call_id="mc_1", text="hi")
+
+    with pytest.raises(ValidationError, match="is transient, not durable"):
+        EventEnvelope(
+            event_id="evt_1",
+            stream_id="stream_1",
+            run_id="run_1",
+            event_type="ModelDelta",
+            durability="durable",
+            timestamp=TIMESTAMP,
+            payload=payload,
+            sequence=1,
+        )
+
+
+def test_event_type_and_payload_must_agree() -> None:
+    with pytest.raises(ValidationError, match="disagrees with payload"):
+        EventEnvelope(
+            event_id="evt_1",
+            stream_id="stream_1",
+            run_id="run_1",
+            event_type="RunFailed",
+            durability="durable",
+            timestamp=TIMESTAMP,
+            payload=RunCompleted(stop_reason="completed"),
+            sequence=1,
+        )
+
+
+def test_timestamps_are_normalized_to_utc() -> None:
+    local = datetime(2026, 7, 25, 11, 14, 15, tzinfo=timezone(timedelta(hours=8)))
+
+    envelope = _envelope(timestamp=local)
+
+    assert envelope.timestamp == TIMESTAMP
+    assert envelope.timestamp.utcoffset() == timedelta(0)
+
+
+def test_a_naive_timestamp_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _envelope(timestamp=datetime(2026, 7, 25, 3, 14, 15))
+
+
+def test_tool_proposals_record_a_digest_instead_of_arguments() -> None:
+    """The log is read by operators and shipped to tracing backends."""
+
+    payload = ToolProposed(
+        tool_call_id="toolu_1",
+        tool_name="knowledge_search",
+        argument_bytes=42,
+        argument_sha256="b" * 64,
+        risk="read",
+    )
+    serialized = json.loads(payload.model_dump_json())
+
+    assert "arguments" not in serialized
+    assert serialized["argument_sha256"] == "b" * 64
+
+
+def test_sequence_starts_at_one() -> None:
+    with pytest.raises(ValidationError):
+        _envelope(sequence=0)
+
+
+def test_task_events_can_carry_their_graph_node() -> None:
+    envelope = _envelope(task_id="task_1", graph_node_id="node_export")
+
+    assert envelope.task_id == "task_1"
+    assert envelope.graph_node_id == "node_export"
