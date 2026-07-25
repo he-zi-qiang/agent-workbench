@@ -17,8 +17,8 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 **PR-004 Ports + Fakes**、**PR-005 CLI Skeleton**、**PR-006 Runtime Serial
 Loop**、**PR-007 Policy + Tool Gateway**、**PR-008 Runtime Budgets** 与
 **PR-009 Parallel Reads**、**PR-010 Hook Bus** 与 **PR-011 DeepSeek Provider
-Contract** 的本地实现和验证。DeepSeek Adapter 本体、RAG、Workflow、
-Multi-Agent、API 和 UI 仍处于 Planned 状态，不能描述为已经实现。
+Contract** 与 **PR-012 DeepSeek Model Adapter** 的本地实现和验证。RAG、
+Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，不能描述为已经实现。
 
 PR-003 交付的是框架无关的领域契约：消息、工具、事件、上下文、运行预算、
 策略决定与错误分类，全部只依赖标准库与 Pydantic。工具调用与结果的配对、
@@ -63,6 +63,12 @@ Hook 抛错或超时一律视为拦截，因为"坏掉的安全规则"绝不能�
 `model.provider`、`model.base_url`、密钥字段与 ownership 登记，配置 schema
 随之升到 `1.2`——Runtime 一行未改，这正是 `ModelPort` 存在的理由。端点必须是
 HTTPS（loopback 除外），且不进入 Task 恢复快照。
+
+PR-012 落地 Adapter 本体：OpenAI 兼容的流式接口，工具调用的 JSON 参数分片
+**攒齐才发**（半截 JSON 绝不能进 schema 校验和策略），HTTP 错误只带状态码不带
+响应体（聊天补全的错误体可能回显 prompt）。测试用 `httpx.MockTransport` 喂真实
+线格式字节，CI 依然离线；其中一条端到端测试直接断言"**Runtime 分不出它和脚本化
+模型的区别**"——同一条 durable 时间线。
 
 ## 快速体验
 

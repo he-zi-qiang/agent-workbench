@@ -572,3 +572,76 @@ CLI golden 文件逐字节未变
 另注：CI 的依赖许可证 allowlist 目前是
 `MIT / BSD-2 / BSD-3 / Apache-2.0 OR BSD-2-Clause / PSF-2.0`，**不含纯
 Apache-2.0**。选 HTTP 客户端时需要一并确认许可证，或显式扩展 allowlist。
+
+## PR-012 DeepSeek Model Adapter
+
+状态：**已实现并通过本地测试**。
+
+第一个与进程外世界通信的 Adapter，也是第一个引入外部依赖的 PR。
+
+已交付：
+
+- `adapters/models/deepseek.py`：`DeepSeekModel` 实现 `ModelPort`，走 DeepSeek
+  的 OpenAI 兼容 chat completions 流式接口；
+- `httpx` 依赖（BSD-3）与重新生成的 `uv.lock`；
+- CI 许可证 allowlist 扩展（见下）。
+
+本 PR 固定下来的行为：
+
+- **工具调用攒齐才发**：provider 把一次调用的 JSON 参数拆成多个分片流下来，
+  Adapter 按 index 缓冲，直到流声明结束才组装成 `ToolCall`。半截 JSON 绝不能
+  进 schema 校验和策略——`ports/model.py` 的契约就是这么写的，现在有实现来兑现；
+- **每条流都以 `ModelStreamCompleted` 结尾**，包括失败的那些。让调用方去区分
+  "provider 停了"和"adapter 抛了"，就是让它在某处一定弄错；
+- **线上的东西一个字都不往回引**：HTTP 错误只带状态码，不读也不引用响应体——
+  聊天补全的错误体可能把发出去的 prompt 原样回显，而错误文本会流进事件、日志和
+  模型自己的上下文（canary 测试守住）；
+- 传输层异常只保留异常类型名（URL 及其 query 可能出现在消息里）；
+- **不认识的 finish_reason 报错而不是猜**（例如 `content_filter`）；
+- 参数无法解析、缺 id 或缺名字 → 报 provider 错误。猜一个参数等于把模型从没要求
+  过的东西送到 handler 面前；
+- `stream_options.include_usage` 必开：拿不到 token 账目的 run 没法执行 token
+  预算。DeepSeek 的 `prompt_cache_hit_tokens` 也一并映射（其他兼容服务上缺省为 0）。
+
+测试用 `httpx.MockTransport` 喂**真实线格式字节**，CI 依然完全离线。其中一条端到端
+测试直接断言 **Runtime 分不出它和脚本化模型的区别**：同样的两轮工具循环，durable
+时间线与 `tests/runtime` 里 FakeModel 那条逐项相同。这是 `ModelPort` 这层抽象的
+验收标准，不是"我检查过了"。
+
+### 许可证 allowlist 扩展
+
+加 `httpx` 时 CI 的许可证门禁拦下了它的传递依赖 `certifi`（MPL-2.0）。核查后发现
+这不是 httpx 的问题——**原 allowlist 与项目自己选定的技术栈冲突**：
+
+| 依赖 | 许可证 | 原 allowlist |
+|---|---|---|
+| certifi | MPL-2.0 | ❌ |
+| asyncpg | Apache-2.0 | ❌ |
+| qdrant-client | Apache-2.0 | ❌ |
+| opentelemetry-sdk | Apache-2.0 | ❌ |
+
+PR-002 那份清单看起来是照着当时已有的 21 个包写的，是描述而非策略。现在把策略写
+明确（见 `docs/compliance.md`）：允许宽松许可证与文件级弱 copyleft，拒绝强
+copyleft（GPL/AGPL/LGPL）与未声明许可证。allowlist 同时列 SPDX 与 classifier
+两种拼写，因为 `pip-licenses` 只照搬包元数据里写的那种。
+
+2026-07-25 验证证据：
+
+```text
+uv lock --check --offline: passed
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 473 passed（deepseek 新增 21）
+dependency license allowlist: passed
+CLI golden 文件逐字节未变
+```
+
+`uv lock --check` 与许可证门禁是前十个 PR 里唯一只能靠 CI 验证的两项，本次起可以
+在本地跑（`uv` 按 CI 固定的 0.11.31 装在一次性 venv 里，未污染项目 `.venv`）。
+
+范围说明：Adapter 尚未接进 Bootstrap——`base_url`、API key 与 profile 目前由构造
+参数注入，从校验过的 Settings 组装是 `bootstrap/container.py`（WP00-03）的职责。
+LangChain model/tool 互操作 Adapter（WP02-07）仍未实现。**model ID 与工具调用支持
+情况请对照 DeepSeek 当前文档确认后再投产**；本 PR 的 contract test 钉住的是线格式
+处理，不是某个具体模型的能力。
