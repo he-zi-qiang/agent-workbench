@@ -15,7 +15,10 @@
 - `uv.lock` 是解析后依赖图的唯一事实源；
 - Runtime 启动时继续执行独立的安全版本下限检查；
 - Optional Labs 不进入 production 主依赖路径；
-- CI 使用锁定版本的 `pip-licenses` 执行依赖许可证 allowlist；
+- CI 使用锁定版本的 `pip-licenses` 执行依赖许可证 allowlist。策略是：允许宽松
+  许可证与文件级弱 copyleft（MIT、BSD-2/3、Apache-2.0、MPL-2.0、PSF-2.0），
+  拒绝强 copyleft（GPL / AGPL / LGPL）与未声明许可证。allowlist 同时列出 SPDX
+  与 classifier 两种拼写，因为 `pip-licenses` 只会照搬包元数据里写的那一种；
 - CI 下载 MIT 许可的 Gitleaks CLI 时校验固定 SHA-256，再扫描完整 Git 历史；
 - 引入第一个外部框架 Adapter 前，机器可读的许可证与漏洞报告必须成为
   merge gate。

@@ -1370,7 +1370,8 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | 自研 Runtime：并行只读调度与 exclusive 屏障 | ✓ | ✓ | ✓ |  |
 | 自研 Runtime：Hook Bus 与参数重写重校验 | ✓ | ✓ | ✓ |  |
 | 模型 Provider 配置契约（DeepSeek） | ✓ | ✓ | ✓ |  |
-| 真实 Model Adapter（DeepSeek HTTP / LangChain） | ✓ |  |  |  |
+| DeepSeek Model Adapter（流式 HTTP） | ✓ | ✓ | ✓ |  |
+| LangChain model/tool 互操作 Adapter | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
 | PostgreSQL coordination | ✓ |  |  |  |

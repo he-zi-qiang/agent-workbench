@@ -14,10 +14,10 @@ LangChain and later comparison adapters stay behind explicit ports.
 **PR-001 Bootstrap**, **PR-002 Config CI**, **PR-003 Domain**, **PR-004 Ports +
 Fakes**, **PR-005 CLI Skeleton**, **PR-006 Runtime Serial Loop**, **PR-007
 Policy + Tool Gateway**, **PR-008 Runtime Budgets**, **PR-009 Parallel Reads**
-**PR-010 Hook Bus** and **PR-011 DeepSeek Provider Contract** have been
-implemented and validated locally. The DeepSeek adapter itself, RAG, workflow,
-multi-Agent, API and UI capabilities remain planned and must not be described
-as implemented.
+**PR-010 Hook Bus**, **PR-011 DeepSeek Provider Contract** and **PR-012
+DeepSeek Model Adapter** have been implemented and validated locally. RAG,
+workflow, multi-Agent, API and UI capabilities remain planned and must not be
+described as implemented.
 
 PR-003 delivers the framework-neutral domain contracts -- messages, tools,
 events, context, run budgets, policy decisions and error codes -- using nothing
@@ -78,6 +78,15 @@ changes only the configuration contract -- provider, base URL, secret field and
 ownership entries, with the config schema moving to `1.2` -- and not a line of
 the runtime, which is what `ModelPort` exists for. The endpoint must be HTTPS
 unless it is loopback, and it stays out of task recovery snapshots.
+
+PR-012 lands the adapter itself, over the provider's OpenAI-compatible
+streaming API. A tool call is emitted whole -- the provider streams its
+arguments as JSON fragments, and partial JSON must never reach schema
+validation or policy -- and an HTTP error carries a status code and nothing
+else, because a chat completion error body can echo the prompt. Tests drive it
+with `httpx.MockTransport` over real wire-format bytes, so CI stays offline;
+one of them asserts end to end that the runtime cannot tell this adapter from
+the scripted one.
 
 ## Try it
 

@@ -81,13 +81,17 @@ jobs:
           uv run --no-sync agent-cli demo --format json > cli-demo.jsonl
           diff -u tests/cli/golden/demo_tool_round.jsonl cli-demo.jsonl
 
+      # Permissive and file-level-copyleft licences are allowed; strong
+      # copyleft (GPL, AGPL, LGPL) and unstated licences are not, which is what
+      # this gate exists to catch. Both SPDX and classifier spellings are listed
+      # because pip-licenses reports whatever the package metadata states.
       - name: Enforce dependency license policy
         run: >-
           uv run --no-sync pip-licenses
           --from mixed
           --ignore-packages agent-workbench
           --allow-only
-          "MIT;MIT License;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0 OR BSD-2-Clause;PSF-2.0"
+          "MIT;MIT License;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0"
 
   secret-scan:
     name: Secret scan

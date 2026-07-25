@@ -7,8 +7,8 @@
 > 状态：WP00、WP01 已完成（PR-001～PR-005）；WP02 进行中，PR-006 Runtime
 > Serial Loop、PR-007 Policy + Tool Gateway、PR-008 Runtime Budgets、
 > PR-009 Parallel Reads、PR-010 Hook Bus（WP02-01～05）与 PR-011 DeepSeek
-> Provider Contract 已实现并通过本地验证。DeepSeek Adapter 本体与 LangChain
-> 互操作（WP02-06/07）仍未实现
+> Provider Contract 与 PR-012 DeepSeek Model Adapter（WP02-06）已实现并通过
+> 本地验证。WP02 只剩 LangChain model/tool 互操作 Adapter（WP02-07）
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
 >
@@ -1379,7 +1379,7 @@ PR 默认不调用在线模型或在线 RAGAS judge。
 11. **PR-011 DeepSeek Provider Contract**（WP02-06 前半）：配置 schema 换
     Provider、`model.base_url`、密钥与 ownership；不引入依赖；
 12. **PR-012 DeepSeek Model Adapter**（WP02-06 后半）：OpenAI 兼容的流式
-    Adapter 与 contract test；**需要新依赖与重新生成的 `uv.lock`**；
+    Adapter 与 contract test；引入 `httpx`，并相应扩展许可证 allowlist；
 13. **PR-013 PostgreSQL/Artifact Base**：迁移、Conversation、local artifact；
 14. **PR-014 Upload/Outbox**：流式上传与事实/outbox 原子性；
 15. **PR-015 Dense Retrieval Kernel**：LlamaIndex、BGE dense、Qdrant
