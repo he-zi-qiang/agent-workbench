@@ -512,3 +512,63 @@ CLI golden 文件逐字节未变（demo 不装 Hook，空 bus 是 no-op）
 没有 hook 相关配置，因此 `config/ownership.yaml` 无需改动。把 Hook 变成可配置
 （以及 `after_tool` / 会话级 Hook）要等 Bootstrap Container 能注入它们时再说。
 本 PR 只实现 `before_tool` 一个阶段。
+
+## PR-011 DeepSeek Provider Contract
+
+状态：**已实现并通过本地测试**。
+
+模型 Provider 由 Anthropic 改为 **DeepSeek**（OpenAI 兼容协议）。
+
+这次改动最值得记的一点是：**Runtime、Gateway、Scheduler、Domain 一行都没改。**
+换 Provider 只动了配置契约和（尚未实现的）Adapter，这正是 `ModelPort` 存在的
+理由。相应地，它也不是改一行能完事的——`model.provider` 是被冻结成 `Literal`
+的，`configuration.md` 早就写明"新增 Provider 时升级配置 schema，而不是接受
+一个无法启动的 provider 字符串"，所以这是一次 schema 迁移。
+
+已交付：
+
+- `model.provider: Literal["deepseek", "fake"]`（`anthropic` 已移除——没有
+  Adapter 的 provider 字符串不该是可配置的）；
+- 新增 `model.base_url`，默认 `https://api.deepseek.com`；沿用与 Qdrant/OTel
+  同一套 endpoint 校验（禁 userinfo / query / fragment）；
+- `secrets.deepseek_api_key` 取代 `anthropic_api_key`，同步更新
+  `SECRET_LIKE_ENV_KEYS`、脱敏键表、mounted-secret 文件名与 CI 环境；
+- `config_schema_version` `1.1` → `1.2`；
+- `config/ownership.yaml`：新增 `model.base_url`（owner
+  `adapters.model.deepseek`，lifecycle `startup`）与 `secrets.deepseek_api_key`。
+
+顺带修掉了一个**潜伏的快照违规**：Task snapshot 的正向 allowlist 原本写的是
+`model.*`，而 `configuration.md` §7 明确规定 endpoint 不得进入恢复快照。加上
+`model.base_url` 会让它直接违规，所以 allowlist 收窄为
+`model.provider` / `model.main.*` / `model.compact.*`，`run_semantics_snapshot()`
+显式剔除 `base_url`。**迁移端点不改变一个在跑的 Task 的语义，恢复旧 Task 也不会
+连回它当初的端点**——两条都有测试。
+
+新增的安全规则：
+
+- **`model.base_url` 必须是 HTTPS，除非指向 loopback**。每一次请求都带着
+  provider API key，所以这条比 Qdrant 那条更严（Qdrant 只在 `remote` 时强制
+  HTTPS，模型端点则是无条件的，只给本地兼容服务开口子）。
+
+2026-07-25 验证证据：
+
+```text
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 452 passed（config 新增 7）
+development/test/production config profile: status=ok（config_schema_version=1.2）
+CLI golden 文件逐字节未变
+```
+
+`pyproject.toml` 与 `uv.lock` 未改动——本 PR 不引入任何依赖。
+
+范围说明：**Adapter 本体不在本 PR 内**。DeepSeek 的流式接口需要一个 HTTP
+客户端（`httpx`），也就是需要新依赖与重新生成的 `uv.lock`，而当前工作环境里
+没有 `uv`。`tests/architecture/test_dependency_boundaries.py` 已经预先把
+`httpx`、`openai`、`deepseek` 加进核心层禁止导入清单，Adapter 落地时不会悄悄
+渗进 Runtime。
+
+另注：CI 的依赖许可证 allowlist 目前是
+`MIT / BSD-2 / BSD-3 / Apache-2.0 OR BSD-2-Clause / PSF-2.0`，**不含纯
+Apache-2.0**。选 HTTP 客户端时需要一并确认许可证，或显式扩展 allowlist。

@@ -16,9 +16,9 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 目前已完成 **PR-001 Bootstrap**、**PR-002 Config CI**、**PR-003 Domain**、
 **PR-004 Ports + Fakes**、**PR-005 CLI Skeleton**、**PR-006 Runtime Serial
 Loop**、**PR-007 Policy + Tool Gateway**、**PR-008 Runtime Budgets** 与
-**PR-009 Parallel Reads** 与 **PR-010 Hook Bus** 的本地实现和验证。真实 Model
-Adapter、RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，不能描述为
-已经实现。
+**PR-009 Parallel Reads**、**PR-010 Hook Bus** 与 **PR-011 DeepSeek Provider
+Contract** 的本地实现和验证。DeepSeek Adapter 本体、RAG、Workflow、
+Multi-Agent、API 和 UI 仍处于 Planned 状态，不能描述为已经实现。
 
 PR-003 交付的是框架无关的领域契约：消息、工具、事件、上下文、运行预算、
 策略决定与错误分类，全部只依赖标准库与 Pydantic。工具调用与结果的配对、
@@ -58,6 +58,11 @@ PR-009 让同一批里连续的只读工具并发执行，写/外部/破坏性�
 PR-010 加入 Hook：部署方可以在工具调用被判定之前检查、改写或拦截它。Hook 改写
 过的参数会**重新走一遍 schema 校验与授权**——能在检查之后改参数就等于绕过检查；
 Hook 抛错或超时一律视为拦截，因为"坏掉的安全规则"绝不能等于"放行"。
+
+模型 Provider 选用 **DeepSeek**（OpenAI 兼容协议）。PR-011 只换配置契约：
+`model.provider`、`model.base_url`、密钥字段与 ownership 登记，配置 schema
+随之升到 `1.2`——Runtime 一行未改，这正是 `ModelPort` 存在的理由。端点必须是
+HTTPS（loopback 除外），且不进入 Task 恢复快照。
 
 ## 快速体验
 

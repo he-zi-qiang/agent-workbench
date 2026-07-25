@@ -807,7 +807,7 @@ production 使用的 BGE-M3 embedding revision 和 BGE reranker revision
 | 包与锁定 | `uv` + `pyproject.toml` | 环境和依赖可复现 |
 | 类型/校验 | Pydantic v2 + `pydantic-settings>=2.14.2,<3` + Pyright | 协议与边界清晰；启动时校验实际安装版本，排除 CVE-2026-58203 受影响版本 |
 | API | FastAPI | Python Agent 项目常见、支持异步 |
-| 模型 | Provider-neutral `ModelPort`；首个 Anthropic Adapter | 主循环用 Sonnet-class，compact 用 Haiku-class；具体版本由配置锁定 |
+| 模型 | Provider-neutral `ModelPort`；首个 DeepSeek Adapter（OpenAI 兼容协议） | 具体 model ID、endpoint 与超时全部由配置锁定；换 Provider 只换 Adapter 与配置 schema，Runtime 不动 |
 | 前端事件 | REST command + SSE event | 简单、可恢复；审批使用独立 REST command |
 | 前端 | React + TypeScript | 只展示 Chat 引用、Task 图、事件流和审批 |
 | 应用数据库 | PostgreSQL + Alembic | conversation、registry、event、approval、checkpoint、文档元数据的事实源 |
@@ -1369,7 +1369,8 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | 自研 Runtime：预算、deadline 与取消传播 | ✓ | ✓ | ✓ |  |
 | 自研 Runtime：并行只读调度与 exclusive 屏障 | ✓ | ✓ | ✓ |  |
 | 自研 Runtime：Hook Bus 与参数重写重校验 | ✓ | ✓ | ✓ |  |
-| 真实 Model Adapter（Anthropic / LangChain） | ✓ |  |  |  |
+| 模型 Provider 配置契约（DeepSeek） | ✓ | ✓ | ✓ |  |
+| 真实 Model Adapter（DeepSeek HTTP / LangChain） | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
 | PostgreSQL coordination | ✓ |  |  |  |

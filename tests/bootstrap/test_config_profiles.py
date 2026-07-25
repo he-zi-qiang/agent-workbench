@@ -33,8 +33,8 @@ def _production_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AW_RAG__EMBEDDING__REVISION", "a" * 40)
     monkeypatch.setenv("AW_RAG__RERANKER__REVISION", "b" * 40)
     monkeypatch.setenv(
-        "AW_SECRETS__ANTHROPIC_API_KEY",
-        "ci-contract-anthropic-key",
+        "AW_SECRETS__DEEPSEEK_API_KEY",
+        "ci-contract-deepseek-key",
     )
     monkeypatch.setenv(
         "AW_SECRETS__QDRANT_API_KEY",
@@ -90,7 +90,7 @@ def test_named_production_profile_validates_contract_without_starting_services(
     assert payload["environment"] == "production"
     assert payload["deployment_scope"] == "remote"
     assert "adapter" not in json.dumps(payload).lower()
-    assert "ci-contract-anthropic-key" not in json.dumps(payload)
+    assert "ci-contract-deepseek-key" not in json.dumps(payload)
     assert "ci-contract-qdrant-key" not in json.dumps(payload)
 
 
