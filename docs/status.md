@@ -461,3 +461,54 @@ CLI golden 文件逐字节未变
 
 不含 Hook Bus（WP02-05）与真实 Anthropic Adapter（WP02-06/07）。WP02 至此
 只剩这两项。
+
+## PR-010 Hook Bus
+
+状态：**已实现并通过本地测试**。
+
+补上 WP02-05：部署方提供的 Hook 可以在工具调用被判定之前检查、改写或拦截它。
+WP02 至此只剩真实 Model Adapter。
+
+> 编号说明：原计划 §9 的首批 PR 列表把 Hook Bus 留在 WP02 内部未编号，
+> PR-010 是 PostgreSQL/Artifact Base。实施时把 Hook Bus 排进 PR-010，其后
+> 持久化车道整体后移一位（现为 PR-011～PR-014），计划文档已同步。
+
+已交付：
+
+- `ports/hooks.py`：`ToolCallHook` 协议与 `HookOutcome`（不变 / 改写参数 /
+  拦截）。Hook **返回决定，不修改传入的调用**；能改的只有 arguments——
+  工具名和 call id 属于模型的请求和那条必须回答它的结果；
+- `runtime/hook_bus.py`：按注册顺序跑一遍，每个 Hook 看到的是上一个产出的结果。
+
+本 PR 固定下来的行为：
+
+- **Hook 改写过的参数重新走 schema 校验，然后才进授权**——能在检查之后改参数，
+  就等于绕过检查。这条路径和 PolicyEngine 的 `allow_with_modified_input`
+  复用同一套 Gateway 逻辑（PR-007 就是按这个形状搭的）；
+- **失败即拦截，不是忽略**：Hook 抛异常或超时，被检查的那次调用直接被拦下。
+  反过来——把坏掉的 Hook 当成放行——会让部署方写的每条安全规则在出 bug 的
+  瞬间静默消失；
+- **Hook 有时限**（默认 5 秒），和它守护的工具同样理由：一个无界 await 就能
+  让一条慢规则拖住整个 run；
+- **只跑一遍**：后面的 Hook 改写不会重新触发前面的 Hook。多轮需要一条收敛
+  规则，而说不清的规则等于没人能 review 的规则；
+- **Hook 看不到已经失败的调用**：未知工具、参数非法的调用在 Hook 之前就被拒，
+  Hook 负责塑形合法输入，不是给坏输入当第二个解析器；
+- Hook 异常正文不外泄，只保留异常类型名（`sk-ant-` canary 测试）；
+- Hook 名字必须唯一——审计行必须能说清是谁拦的。
+
+2026-07-25 验证证据：
+
+```text
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 445 passed（新增 hook_bus 12 + gateway 5）
+development/test config profile: status=ok
+CLI golden 文件逐字节未变（demo 不装 Hook，空 bus 是 no-op）
+```
+
+范围说明：Hook 目前在代码里装配，没有对应的 Settings 字段——`runtime.*` 里
+没有 hook 相关配置，因此 `config/ownership.yaml` 无需改动。把 Hook 变成可配置
+（以及 `after_tool` / 会话级 Hook）要等 Bootstrap Container 能注入它们时再说。
+本 PR 只实现 `before_tool` 一个阶段。

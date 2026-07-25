@@ -24,7 +24,9 @@ from agent_workbench.domain.schema import JsonObject
 from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
+from agent_workbench.ports.hooks import HookOutcome
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
+from agent_workbench.runtime.hook_bus import HookBus
 from agent_workbench.runtime.schema_validation import UnsupportedToolSchema
 from agent_workbench.runtime.tool_executor import ToolExecutor
 from agent_workbench.runtime.tool_gateway import PreparedCall, ToolGateway
@@ -129,7 +131,11 @@ class _Harness:
         """Take one call through every gateway phase, as the loop would."""
 
         await self.gateway.propose(call, sink=self.sink)
-        prepared = await self.gateway.prepare(call, sink=self.sink)
+        prepared = await self.gateway.prepare(
+            call,
+            context=CONTEXT,
+            sink=self.sink,
+        )
         if isinstance(prepared, ToolResult):
             return prepared
         authorized = await self.gateway.authorize(
@@ -337,9 +343,96 @@ def test_a_prepared_call_carries_its_binding() -> None:
     harness = _Harness()
 
     async def scenario() -> PreparedCall | ToolResult:
-        return await harness.gateway.prepare(_call(query="x"), sink=harness.sink)
+        return await harness.gateway.prepare(
+            _call(query="x"),
+            context=CONTEXT,
+            sink=harness.sink,
+        )
 
     prepared = asyncio.run(scenario())
 
     assert isinstance(prepared, PreparedCall)
     assert prepared.binding.spec.name == "search"
+
+
+class _Hook:
+    """A hook that returns a fixed outcome and records what it saw."""
+
+    def __init__(self, name: str, outcome: HookOutcome) -> None:
+        self.name = name
+        self.seen: list[ToolCall] = []
+        self._outcome = outcome
+
+    async def before_tool(
+        self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> HookOutcome:
+        self.seen.append(call)
+        return self._outcome
+
+
+def test_a_hook_rewrite_is_revalidated_and_then_authorized() -> None:
+    hook = _Hook("clamp", HookOutcome.rewrite({"query": "fusion", "top_k": 5}))
+    policy = _ScriptedPolicy(PolicyDecision.allow("within_limits"))
+    harness = _Harness(policy=policy, hooks=HookBus([hook]))
+
+    result, events = _execute(harness, _call(query="fusion", top_k=9))
+
+    assert result.status == "ok"
+    # The handler ran on what the hook produced, and the policy decided on it.
+    assert harness.tool.calls[0].arguments == {"query": "fusion", "top_k": 5}
+    assert policy.seen[0].arguments == {"query": "fusion", "top_k": 5}
+    assert events.count("PermissionResolved") == 1
+
+
+def test_a_hook_rewrite_into_invalid_arguments_is_refused() -> None:
+    """A hook that could edit past the check would be a way around it."""
+
+    hook = _Hook("broken", HookOutcome.rewrite({"query": "fusion", "top_k": 99}))
+    policy = _ScriptedPolicy()
+    harness = _Harness(policy=policy, hooks=HookBus([hook]))
+
+    result, _ = _execute(harness, _call(query="fusion"))
+
+    assert harness.tool.calls == []
+    assert policy.seen == []
+    assert result.error is not None
+    assert result.error.code == "invalid_tool_input"
+
+
+def test_a_blocking_hook_stops_the_call_before_any_decision() -> None:
+    hook = _Hook("guard", HookOutcome.block("query mentions a forbidden path"))
+    policy = _ScriptedPolicy()
+    harness = _Harness(policy=policy, hooks=HookBus([hook]))
+
+    result, events = _execute(harness, _call(query="fusion"))
+
+    assert harness.tool.calls == []
+    assert policy.seen == []
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+    assert "blocked by hook guard" in result.error.message
+    assert events == ["ToolProposed", "ToolFailed"]
+
+
+def test_hooks_never_see_a_call_that_failed_validation() -> None:
+    """Hooks shape valid input; they are not a second parser for broken input."""
+
+    hook = _Hook("observer", HookOutcome.unchanged())
+    harness = _Harness(hooks=HookBus([hook]))
+
+    result, _ = _execute(harness, _call(top_k=3))
+
+    assert hook.seen == []
+    assert result.error is not None
+    assert result.error.code == "invalid_tool_input"
+
+
+def test_hooks_never_see_an_unknown_tool() -> None:
+    hook = _Hook("observer", HookOutcome.unchanged())
+    harness = _Harness(hooks=HookBus([hook]))
+
+    _execute(harness, ToolCall(tool_call_id="toolu_1", tool_name="nope"))
+
+    assert hook.seen == []

@@ -10,6 +10,7 @@ from agent_workbench.runtime.agent_runtime import (
     DEFAULT_MODEL_LABEL,
     ClaudeLikeAgentRuntime,
 )
+from agent_workbench.runtime.hook_bus import HookBus, HookBusOutcome
 from agent_workbench.runtime.schema_validation import (
     SUPPORTED_KEYWORDS,
     UnsupportedToolSchema,
@@ -31,6 +32,8 @@ __all__ = [
     "SUPPORTED_KEYWORDS",
     "TERMINAL_STATES",
     "ClaudeLikeAgentRuntime",
+    "HookBus",
+    "HookBusOutcome",
     "InvalidStateTransition",
     "PreparedCall",
     "RunStateMachine",

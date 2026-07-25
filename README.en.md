@@ -13,8 +13,8 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 **PR-001 Bootstrap**, **PR-002 Config CI**, **PR-003 Domain**, **PR-004 Ports +
 Fakes**, **PR-005 CLI Skeleton**, **PR-006 Runtime Serial Loop**, **PR-007
-Policy + Tool Gateway**, **PR-008 Runtime Budgets** and **PR-009 Parallel
-Reads** have been implemented and validated locally. The hook bus, the real
+Policy + Tool Gateway**, **PR-008 Runtime Budgets**, **PR-009 Parallel Reads**
+and **PR-010 Hook Bus** have been implemented and validated locally. The real
 model adapter, RAG, workflow, multi-Agent, API and UI capabilities remain
 planned and must not be described as implemented.
 
@@ -65,6 +65,12 @@ cross a barrier" stops being a sentence and becomes a shape in memory. The
 grouping is a pure function, checkable without an event loop, and execution
 order still says nothing about submission order: results reach the model in the
 order it asked for them.
+
+PR-010 adds hooks: deployment-supplied code that inspects, rewrites or blocks a
+proposed tool call before anything judges it. Whatever a hook rewrites goes back
+through schema validation and authorization, because editing arguments after
+the checks would be a way around them, and a hook that raises or hangs blocks
+the call -- a broken safety rule must never become permission.
 
 ## Try it
 
