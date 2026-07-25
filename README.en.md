@@ -12,9 +12,9 @@ LangChain and later comparison adapters stay behind explicit ports.
 ## Current status
 
 **PR-001 Bootstrap**, **PR-002 Config CI**, **PR-003 Domain**, **PR-004 Ports +
-Fakes**, **PR-005 CLI Skeleton** and **PR-006 Runtime Serial Loop** have been
-implemented and validated locally. The tool gateway (schema validation and
-hooks), the parallel read scheduler, RAG, workflow, multi-Agent, API and UI
+Fakes**, **PR-005 CLI Skeleton**, **PR-006 Runtime Serial Loop** and **PR-007
+Policy + Tool Gateway** have been implemented and validated locally. The hook
+bus, the parallel read scheduler, RAG, workflow, multi-Agent, API and UI
 capabilities remain planned and must not be described as implemented.
 
 PR-003 delivers the framework-neutral domain contracts -- messages, tools,
@@ -41,6 +41,14 @@ rather than a diagram, so an illegal phase change raises instead of producing a
 plausible-looking run. Every exposed `tool_call_id` ends with exactly one
 `ToolResult` -- unknown tool, denied call, raising handler, timeout, mid-batch
 cancellation -- and results are always submitted in the model's own call order.
+
+PR-007 moves those checks into the one tool gateway: a handler runs only after
+its *final* arguments have passed both schema validation and an authorization
+decision. When a policy answers `allow_with_modified_input`, the rewritten
+arguments are validated again and re-submitted for a decision -- rewriting
+after the checks would be a way past both. JSON Schema support is a documented
+subset, and a schema reaching beyond it is refused when the gateway is
+assembled rather than silently unenforced at call time.
 
 ## Try it
 

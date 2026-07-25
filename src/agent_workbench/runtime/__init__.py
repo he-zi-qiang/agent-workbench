@@ -10,6 +10,12 @@ from agent_workbench.runtime.agent_runtime import (
     DEFAULT_MODEL_LABEL,
     ClaudeLikeAgentRuntime,
 )
+from agent_workbench.runtime.schema_validation import (
+    SUPPORTED_KEYWORDS,
+    UnsupportedToolSchema,
+    assert_schema_supported,
+    validate_arguments,
+)
 from agent_workbench.runtime.state import (
     ALLOWED_TRANSITIONS,
     TERMINAL_STATES,
@@ -17,13 +23,20 @@ from agent_workbench.runtime.state import (
     RunStateMachine,
 )
 from agent_workbench.runtime.tool_executor import ToolExecutor
+from agent_workbench.runtime.tool_gateway import PreparedCall, ToolGateway
 
 __all__ = [
     "ALLOWED_TRANSITIONS",
     "DEFAULT_MODEL_LABEL",
+    "SUPPORTED_KEYWORDS",
     "TERMINAL_STATES",
     "ClaudeLikeAgentRuntime",
     "InvalidStateTransition",
+    "PreparedCall",
     "RunStateMachine",
     "ToolExecutor",
+    "ToolGateway",
+    "UnsupportedToolSchema",
+    "assert_schema_supported",
+    "validate_arguments",
 ]

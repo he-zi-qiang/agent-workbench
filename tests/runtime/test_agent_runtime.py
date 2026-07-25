@@ -36,7 +36,7 @@ from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.model import ModelEvent, ModelPort, ModelRequest
 from agent_workbench.ports.model import ModelTextDelta as TextDelta
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
-from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor
+from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor, ToolGateway
 
 CLOCK = datetime(2026, 7, 25, 3, 14, 15, tzinfo=UTC)
 SCOPE = EventScope(stream_id="stream_1", run_id="run_1")
@@ -197,10 +197,12 @@ def _execute(
         )
         runtime = ClaudeLikeAgentRuntime(
             model=model,
-            registry=registry,
-            policy=EnvelopePolicyEngine(registry=registry),
+            gateway=ToolGateway(
+                registry=registry,
+                policy=EnvelopePolicyEngine(registry=registry),
+                executor=ToolExecutor(monotonic=_ticking()),
+            ),
             policy_identity=POLICY_IDENTITY,
-            executor=ToolExecutor(monotonic=_ticking()),
             clock=_clock,
             model_call_ids=_ids("mc"),
         )
@@ -238,8 +240,10 @@ def test_the_runtime_satisfies_the_agent_executor_protocol() -> None:
     registry = StaticToolRegistry([])
     runtime: AgentExecutor = ClaudeLikeAgentRuntime(
         model=FakeModel(()),
-        registry=registry,
-        policy=EnvelopePolicyEngine(registry=registry),
+        gateway=ToolGateway(
+            registry=registry,
+            policy=EnvelopePolicyEngine(registry=registry),
+        ),
         policy_identity=POLICY_IDENTITY,
     )
 
@@ -550,3 +554,45 @@ def test_usage_accumulates_across_turns() -> None:
 
     assert run.outcome.usage.tokens.input_tokens == 200
     assert run.outcome.usage.tokens.output_tokens == 40
+
+
+def test_invalid_arguments_are_answered_without_reaching_the_policy() -> None:
+    """Schema validation precedes authorization, so the order is observable."""
+
+    call = ToolCall(
+        tool_call_id="toolu_1",
+        tool_name="read_document",
+        arguments={"document_id": 42},
+    )
+
+    run = _execute(_tool_round(call))
+
+    assert run.outcome.status == "completed"
+    assert run.durable_types == [
+        "RunStarted",
+        "ModelStarted",
+        "ModelCompleted",
+        "ToolProposed",
+        "ToolFailed",
+        "ModelStarted",
+        "ModelCompleted",
+        "RunCompleted",
+    ]
+    assert "PermissionResolved" not in run.durable_types
+
+
+def test_the_model_is_told_why_its_arguments_were_rejected() -> None:
+    call = ToolCall(
+        tool_call_id="toolu_1",
+        tool_name="read_document",
+        arguments={"wrong_key": "doc_1"},
+    )
+
+    run = _execute(_tool_round(call))
+    model = run.model
+    assert isinstance(model, FakeModel)
+    block = model.requests[1].messages[-1].content[0]
+
+    assert isinstance(block, ToolResultBlock)
+    assert block.status == "error"
+    assert "invalid_tool_input" in block.text

@@ -25,21 +25,20 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from agent_workbench.domain.errors import ErrorInfo, OperationCancelledError
+from agent_workbench.domain.errors import (
+    AgentWorkbenchError,
+    ErrorInfo,
+    OperationCancelledError,
+)
 from agent_workbench.domain.events import (
     ContextBuilt,
     ModelCompleted,
     ModelDelta,
     ModelStarted,
-    PermissionResolved,
     RunCancelled,
     RunCompleted,
     RunFailed,
     RunStarted,
-    ToolCompleted,
-    ToolFailed,
-    ToolProposed,
-    ToolStarted,
 )
 from agent_workbench.domain.identifiers import new_model_call_id
 from agent_workbench.domain.messages import (
@@ -55,15 +54,7 @@ from agent_workbench.domain.runs import (
     StopReason,
     TokenUsage,
 )
-from agent_workbench.domain.tools import (
-    ToolCall,
-    ToolResult,
-    ToolRisk,
-    ToolSpec,
-    align_results,
-    argument_digest,
-    canonical_arguments,
-)
+from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec, align_results
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
 from agent_workbench.ports.model import (
@@ -74,10 +65,8 @@ from agent_workbench.ports.model import (
     ModelToolCallProposed,
     ModelUsageReported,
 )
-from agent_workbench.ports.policy import PolicyEngine
-from agent_workbench.ports.tools import ToolBinding, ToolRegistry
 from agent_workbench.runtime.state import RunStateMachine
-from agent_workbench.runtime.tool_executor import ToolExecutor
+from agent_workbench.runtime.tool_gateway import PreparedCall, ToolGateway
 
 DEFAULT_MODEL_LABEL = "scripted-fake"
 
@@ -124,21 +113,19 @@ class ClaudeLikeAgentRuntime:
         self,
         *,
         model: ModelPort,
-        registry: ToolRegistry,
-        policy: PolicyEngine,
+        gateway: ToolGateway,
         policy_identity: str,
-        executor: ToolExecutor | None = None,
         model_label: str = DEFAULT_MODEL_LABEL,
         clock: Callable[[], datetime] | None = None,
         model_call_ids: Callable[[], str] | None = None,
     ) -> None:
         self._model = model
-        self._registry = registry
-        self._policy = policy
+        # Tools are reached only through the gateway: resolving, validating,
+        # authorizing and running them is one component's job, not the loop's.
+        self._gateway = gateway
         # The operator label paired with the fingerprint of the rules it claims
         # to describe. It is recorded with every decision this run makes.
         self._policy_identity = policy_identity
-        self._executor = executor if executor is not None else ToolExecutor()
         self._model_label = model_label
         self._clock = clock if clock is not None else _utc_now
         self._model_call_ids = (
@@ -176,9 +163,17 @@ class ClaudeLikeAgentRuntime:
                 )
             )
 
-        specs = self._resolve_advertised_tools(request)
-        if isinstance(specs, ErrorInfo):
-            return await self._failed(request, sink, machine, "error", specs, ledger)
+        try:
+            specs = self._gateway.advertise(request.tool_names)
+        except AgentWorkbenchError as exc:
+            return await self._failed(
+                request,
+                sink,
+                machine,
+                "error",
+                exc.to_error_info(),
+                ledger,
+            )
 
         while True:
             if cancellation.cancelled:
@@ -241,24 +236,6 @@ class ClaudeLikeAgentRuntime:
             workflow_thread_id=request.trace.workflow_thread_id,
             graph_node_id=request.trace.graph_node_id,
         )
-
-    def _resolve_advertised_tools(
-        self,
-        request: AgentRunRequest,
-    ) -> tuple[ToolSpec, ...] | ErrorInfo:
-        specs: list[ToolSpec] = []
-        for name in request.tool_names:
-            binding = self._registry.get(name)
-            if binding is None:
-                return ErrorInfo(
-                    code="unknown_tool",
-                    message=(
-                        f"the run requested a tool this process does not "
-                        f"register: {name}"
-                    ),
-                )
-            specs.append(binding.spec)
-        return tuple(specs)
 
     async def _stream_model(
         self,
@@ -423,153 +400,66 @@ class ClaudeLikeAgentRuntime:
         *,
         context: ExecutionContext,
     ) -> None:
+        """Take one batch of proposed calls through the gateway's phases."""
+
         machine.to("validating_tools")
         for call in turn.calls:
-            await sink.emit(
-                ToolProposed(
-                    tool_call_id=call.tool_call_id,
-                    tool_name=call.tool_name,
-                    argument_bytes=len(
-                        canonical_arguments(call.arguments).encode("utf-8")
-                    ),
-                    argument_sha256=argument_digest(call.arguments),
-                    risk=self._risk_of(call),
-                )
-            )
+            await self._gateway.propose(call, sink=sink)
 
         results: list[ToolResult] = []
-        known: list[tuple[ToolBinding, ToolCall]] = []
+        prepared: list[PreparedCall] = []
         for call in turn.calls:
-            binding = self._registry.get(call.tool_name)
-            if binding is None:
-                results.append(
-                    await self._record_failure(
-                        sink,
-                        call,
-                        ErrorInfo(
-                            code="unknown_tool",
-                            message=f"no tool named {call.tool_name}",
-                        ),
-                    )
-                )
+            outcome = await self._gateway.prepare(call, sink=sink)
+            if isinstance(outcome, ToolResult):
+                results.append(outcome)
             else:
-                known.append((binding, call))
+                prepared.append(outcome)
 
-        authorized: list[tuple[ToolBinding, ToolCall]] = []
-        if known:
+        authorized: list[PreparedCall] = []
+        if prepared:
             machine.to("authorizing")
-            for binding, call in known:
-                decision = await self._policy.decide(call, context)
-                await sink.emit(
-                    PermissionResolved(
-                        tool_call_id=call.tool_call_id,
-                        effect=decision.effect,
-                        reason_code=decision.reason_code,
-                    )
+            for candidate in prepared:
+                outcome = await self._gateway.authorize(
+                    candidate,
+                    context=context,
+                    sink=sink,
                 )
-                if decision.effect == "allow":
-                    authorized.append((binding, call))
-                    continue
-                if decision.effect == "deny":
-                    results.append(
-                        await self._record_failure(
-                            sink,
-                            call,
-                            ErrorInfo(
-                                code="policy_denied",
-                                message=f"denied: {decision.reason_code}",
-                            ),
-                        )
-                    )
-                    continue
-                # Rewritten arguments have to be re-validated against the tool
-                # schema and re-authorized before they may run. The gateway
-                # that does both is not here yet, so the call is refused
-                # rather than executed on unchecked input.
-                results.append(
-                    await self._record_failure(
-                        sink,
-                        call,
-                        ErrorInfo(
-                            code="policy_denied",
-                            message=(
-                                "argument rewriting requires the tool gateway's "
-                                "re-validation"
-                            ),
-                        ),
-                    )
-                )
+                if isinstance(outcome, ToolResult):
+                    results.append(outcome)
+                else:
+                    authorized.append(outcome)
 
         if authorized:
             machine.to("executing_tools")
-            for binding, call in authorized:
+            for candidate in authorized:
                 if cancellation.cancelled:
                     # The run is ending, but this id was already shown to the
                     # model and still owes an answer.
                     results.append(
-                        await self._record_failure(
-                            sink,
-                            call,
+                        await self._gateway.refuse(
+                            candidate.call,
                             ErrorInfo(
                                 code="cancelled",
                                 message="the run was cancelled before this call ran",
                             ),
+                            sink=sink,
                         )
                     )
                     continue
-                await sink.emit(
-                    ToolStarted(
-                        tool_call_id=call.tool_call_id,
-                        tool_name=call.tool_name,
+                results.append(
+                    await self._gateway.invoke(
+                        candidate,
+                        context=context,
+                        cancellation=cancellation,
+                        sink=sink,
                     )
                 )
-                result = await self._executor.execute(
-                    binding,
-                    call,
-                    context=context,
-                    cancellation=cancellation,
-                )
-                await self._record_result(sink, result)
-                results.append(result)
 
         machine.to("recording_results")
         aligned = align_results(turn.calls, results)
         ledger.messages.append(assistant_message(text=turn.text, tool_calls=turn.calls))
         ledger.messages.append(tool_message(aligned))
         ledger.usage = ledger.usage.merged(BudgetUsage(tool_calls=len(turn.calls)))
-
-    def _risk_of(self, call: ToolCall) -> ToolRisk | None:
-        binding = self._registry.get(call.tool_name)
-        return binding.spec.risk if binding is not None else None
-
-    async def _record_failure(
-        self,
-        sink: EventSink,
-        call: ToolCall,
-        error: ErrorInfo,
-    ) -> ToolResult:
-        result = ToolResult.failed(call, error)
-        await self._record_result(sink, result)
-        return result
-
-    async def _record_result(self, sink: EventSink, result: ToolResult) -> None:
-        if result.status == "error" and result.error is not None:
-            await sink.emit(
-                ToolFailed(
-                    tool_call_id=result.tool_call_id,
-                    error=result.error,
-                    duration_ms=result.duration_ms or 0,
-                )
-            )
-            return
-        await sink.emit(
-            ToolCompleted(
-                tool_call_id=result.tool_call_id,
-                duration_ms=result.duration_ms or 0,
-                output_bytes=len(result.content.encode("utf-8")),
-                artifact=result.artifact,
-            )
-        )
 
     async def _failed(
         self,
