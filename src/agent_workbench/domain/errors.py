@@ -30,6 +30,7 @@ ErrorCode = Literal[
     "cancelled",
     "budget_exceeded",
     "output_too_large",
+    "not_found",
     "stale_execution",
     "incompatible_schema",
     "provider_error",
@@ -152,6 +153,17 @@ class OutputTooLargeError(AgentWorkbenchError):
     code: ClassVar[ErrorCode] = "output_too_large"
 
 
+class NotFoundError(AgentWorkbenchError):
+    """The object does not exist, or the caller may not learn that it does.
+
+    Both cases raise the same error on purpose. If a cross-tenant lookup failed
+    differently from a missing id, the difference would itself confirm that the
+    object exists.
+    """
+
+    code: ClassVar[ErrorCode] = "not_found"
+
+
 class StaleExecutionError(AgentWorkbenchError):
     """A fenced write was rejected: the lease or epoch is no longer current.
 
@@ -190,6 +202,7 @@ __all__ = [
     "ErrorInfo",
     "ErrorMessage",
     "IncompatibleSchemaError",
+    "NotFoundError",
     "OperationCancelledError",
     "OutputTooLargeError",
     "PolicyDeniedError",

@@ -27,6 +27,6 @@
 
 ## 当前事实
 
-截至 2026-07-25，PR-001 Bootstrap、PR-002 Config CI 与 PR-003 Domain 已实现
-并完成本地验证。Runtime 循环、RAG、LangGraph Task、PostgreSQL 协调、
-Multi-Agent、API、UI 和部署仍是计划能力。
+截至 2026-07-25，PR-001 Bootstrap、PR-002 Config CI、PR-003 Domain 与
+PR-004 Ports + Fakes 已实现并完成本地验证。Runtime 循环、RAG、LangGraph
+Task、PostgreSQL 协调、Multi-Agent、API、UI 和部署仍是计划能力。

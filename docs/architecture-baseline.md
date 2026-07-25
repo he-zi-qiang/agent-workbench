@@ -1352,7 +1352,7 @@ Pydantic 的框架无关类型，并带有 JSON golden 与不变量测试。Agen
 | 工程与配置 Bootstrap | ✓ | ✓ | ✓ |  |
 | 配置 ownership / CI | ✓ | ✓ | ✓ |  |
 | 领域契约与事件协议 | ✓ | ✓ | ✓ |  |
-| Ports 与 Fake Adapter | ✓ |  |  |  |
+| Ports 与 Fake Adapter | ✓ | ✓ | ✓ |  |
 | 自研 Runtime | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
