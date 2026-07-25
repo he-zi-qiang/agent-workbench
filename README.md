@@ -14,10 +14,10 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 ## 当前状态
 
 目前已完成 **PR-001 Bootstrap**、**PR-002 Config CI**、**PR-003 Domain**、
-**PR-004 Ports + Fakes**、**PR-005 CLI Skeleton** 与 **PR-006 Runtime Serial
-Loop** 的本地实现和验证。Tool Gateway（schema 校验与 Hook）、并行只读调度、
-RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，不能描述为已经
-实现。
+**PR-004 Ports + Fakes**、**PR-005 CLI Skeleton**、**PR-006 Runtime Serial
+Loop** 与 **PR-007 Policy + Tool Gateway** 的本地实现和验证。Hook Bus、
+并行只读调度、RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，
+不能描述为已经实现。
 
 PR-003 交付的是框架无关的领域契约：消息、工具、事件、上下文、运行预算、
 策略决定与错误分类，全部只依赖标准库与 Pydantic。工具调用与结果的配对、
@@ -37,6 +37,12 @@ PR-006 补上自研 `ClaudeLikeAgentRuntime`：串行
 非法转移直接抛错。每个已暴露的 `tool_call_id` 恰有一个 `ToolResult`——未知工具、
 被策略拒绝、handler 抛异常、超时、批次中途取消都会产出结果而不是留空；提交顺序
 永远是模型的调用顺序。
+
+PR-007 把这些检查收进唯一的 Tool Gateway：handler 只在**最终参数**同时通过
+schema 校验与授权决定之后才会运行。策略若返回 `allow_with_modified_input`，
+重写后的参数会被重新校验并重新提交决定——能在检查之后改参数，就等于同时绕过
+两道检查。JSON Schema 只支持一个明确的子集，超出子集的 schema 在装配阶段就被
+拒绝，而不是在调用时被静默跳过。
 
 ## 快速体验
 

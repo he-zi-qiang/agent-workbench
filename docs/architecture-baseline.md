@@ -214,6 +214,8 @@ agent-workbench/
 │   │   ├── agent_runtime.py       # 循环本体
 │   │   ├── state.py               # 7.1 状态机的可执行表
 │   │   ├── tool_registry.py
+│   │   ├── tool_gateway.py       # schema → policy → timeout → 归一化
+│   │   ├── schema_validation.py  # 受支持的 JSON Schema 子集
 │   │   ├── tool_executor.py
 │   │   ├── tool_scheduler.py
 │   │   ├── policy_engine.py
@@ -1350,7 +1352,7 @@ Pydantic 的框架无关类型，并带有 JSON golden 与不变量测试。Agen
 表中标为 Demonstrated 的两项都由同一条固定演示 `agent-cli demo` 覆盖：逐字节
 可复现，由 golden 文件与 CI smoke 守护。它现在证明的是“输入 → 模型 → Tool →
 ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 handler 不被调用。
-它不包含 schema 校验、Hook、并行读、检索与恢复——那些能力在表中仍是 Planned。
+它不包含 Hook、并行读、检索与恢复——那些能力在表中仍是 Planned。
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
@@ -1360,7 +1362,8 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | Ports 与 Fake Adapter | ✓ | ✓ | ✓ |  |
 | CLI 纵向切片（walking skeleton） | ✓ | ✓ | ✓ | ✓ |
 | 自研 Runtime：串行 Tool Loop | ✓ | ✓ | ✓ | ✓ |
-| 自研 Runtime：Tool Gateway、并行读、Hook | ✓ |  |  |  |
+| 自研 Runtime：Tool Gateway 与 schema 校验 | ✓ | ✓ | ✓ | ✓ |
+| 自研 Runtime：并行只读调度、Hook Bus | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
 | PostgreSQL coordination | ✓ |  |  |  |

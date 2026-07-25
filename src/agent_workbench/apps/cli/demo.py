@@ -41,7 +41,7 @@ from agent_workbench.domain.tools import ToolCall, ToolName
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventLogPort, EventScope
-from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor
+from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor, ToolGateway
 
 DEMO_CLOCK = datetime(2026, 7, 25, 3, 14, 15, tzinfo=UTC)
 DEMO_MONOTONIC_STEP = 0.004
@@ -148,12 +148,15 @@ def build_demo(
         clock=_frozen_clock,
         event_ids=_sequential_ids("evt_demo"),
     )
-    runtime = ClaudeLikeAgentRuntime(
-        model=stack.model,
+    gateway = ToolGateway(
         registry=stack.registry,
         policy=stack.policy,
-        policy_identity=DEMO_POLICY_IDENTITY,
         executor=ToolExecutor(monotonic=_ticking_monotonic()),
+    )
+    runtime = ClaudeLikeAgentRuntime(
+        model=stack.model,
+        gateway=gateway,
+        policy_identity=DEMO_POLICY_IDENTITY,
         clock=_frozen_clock,
         model_call_ids=_sequential_ids("mc_demo"),
     )

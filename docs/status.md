@@ -300,3 +300,59 @@ tool 超时测试固定耗时 1 秒（`ToolSpec.timeout_seconds` 的域下限就
 Artifact 化（WP12）、真实 Anthropic Adapter（WP02-06）。因此基线不变量 2 目前
 只实现了授权那一半；demo 中的两个 Tool 自己校验参数类型，`invalid_tool_input`
 路径由它们覆盖。
+
+## PR-007 Policy + Tool Gateway
+
+状态：**已实现并通过本地测试**。
+
+把“这次调用能不能跑”收进唯一的 `ToolGateway`，并补上基线不变量 2 与 3
+缺的那一半：schema 校验与参数被改写后的重新校验/再授权。
+
+已交付：
+
+- `runtime/schema_validation.py`：一个**明确划定范围**的 JSON Schema 子集
+  （type / properties / required / additionalProperties / items / enum /
+  minimum / maximum / minLength / maxLength / pattern / minItems / maxItems）。
+  超出子集的 schema 在**装配阶段**被拒绝，而不是在调用时被静默跳过——一个会
+  忽略 `oneOf` 的校验器，会把每次调用都报成合法却什么都没校验；
+- `runtime/tool_gateway.py`：`propose / prepare / authorize / invoke / refuse`
+  五个阶段方法 + `advertise()`。Runtime 的批次循环退化成对它的编排，状态机
+  仍留在 Runtime；
+- `agent_runtime.py` 相应瘦身：不再直接持有 registry / policy / executor，
+  只依赖 `ToolGateway`（构造签名随之简化为 `model` + `gateway`）。
+
+本 PR 固定下来的行为：
+
+- **handler 只在“最终参数”同时通过 schema 校验与授权决定之后才运行**。
+  “最终”是关键词：策略返回 `allow_with_modified_input` 时，重写后的参数会被
+  重新校验并重新提交决定；能在检查之后改参数，就等于同时绕过两道检查；
+- **重写循环有界**（默认 3 轮）。一直改参数的引擎会被拒绝，而不是被无限重试；
+- **重写成非法参数时调用被拒**，handler 调用数为 0（有测试）；
+- **顺序可观测**：schema 校验先于授权，所以参数非法的调用连 `PermissionResolved`
+  都不会产生——`tests/runtime/test_agent_runtime.py` 直接断言这条时间线；
+- **参数体积上限**（默认 65536 字节，对应 `policy.max_tool_argument_bytes`）在
+  解析之前拦截；
+- **校验错误只报路径和期望，不报值**：这些消息会进入事件、运维日志和模型自己的
+  上下文，用 canary 测试守住；
+- Gateway 同时拥有一次调用的审计轨迹（proposal / permission / start /
+  completion / failure），事件因此不可能和它实际做的事不一致。
+
+2026-07-25 验证证据：
+
+```text
+ruff format --check: passed
+ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest: 398 passed（新增 schema 24 + gateway 14）
+development/test config profile: status=ok
+CLI golden 文件逐字节未变——这次重构对 demo 行为完全等价
+```
+
+`pyproject.toml` 与 `uv.lock` 未改动：JSON Schema 子集是自研的，没有引入
+`jsonschema` 依赖。工具 schema 都写在本仓库里，为了 8 个关键字引入一个完整
+实现并不划算；代价是子集必须显式，扩展它是这个文件里的一次自觉修改。
+
+范围说明：不含 **Hook Bus**（WP02-05，`ports/hooks.py` 与 `runtime/hook_bus.py`
+尚未存在）——目前唯一能改写参数的来源是 PolicyEngine，重新校验/再授权的骨架
+已经就位，接 Hook 时复用同一条路径。同样不含并行只读调度（WP02-04 / PR-009）、
+大结果 Artifact 化（WP12）与真实 Model Adapter（WP02-06/07）。
