@@ -29,6 +29,7 @@
 
 截至 2026-07-25，PR-001 Bootstrap、PR-002 Config CI、PR-003 Domain、
 PR-004 Ports + Fakes、PR-005 CLI Skeleton、PR-006 Runtime Serial Loop 与
-PR-007 Policy + Tool Gateway 与 PR-008 Runtime Budgets 已实现并完成本地验证；`agent-cli demo` 演示的是
+PR-007 Policy + Tool Gateway、PR-008 Runtime Budgets 与 PR-009 Parallel Reads
+已实现并完成本地验证；`agent-cli demo` 演示的是
 完整一轮 模型 → Tool → ToolResult → 模型。Hook Bus、并行只读调度、RAG、
 LangGraph Task、PostgreSQL 协调、Multi-Agent、API、UI 和部署仍是计划能力。

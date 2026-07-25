@@ -15,10 +15,9 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 目前已完成 **PR-001 Bootstrap**、**PR-002 Config CI**、**PR-003 Domain**、
 **PR-004 Ports + Fakes**、**PR-005 CLI Skeleton**、**PR-006 Runtime Serial
-Loop**、**PR-007 Policy + Tool Gateway** 与 **PR-008 Runtime Budgets** 的本地
-实现和验证。Hook Bus、
-并行只读调度、RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，
-不能描述为已经实现。
+Loop**、**PR-007 Policy + Tool Gateway**、**PR-008 Runtime Budgets** 与
+**PR-009 Parallel Reads** 的本地实现和验证。Hook Bus、真实 Model Adapter、
+RAG、Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，不能描述为已经实现。
 
 PR-003 交付的是框架无关的领域契约：消息、工具、事件、上下文、运行预算、
 策略决定与错误分类，全部只依赖标准库与 Pydantic。工具调用与结果的配对、
@@ -50,6 +49,10 @@ PR-008 把各层时限收敛成一个下界：单次模型调用的有效 deadli
 内层施加），单个 Tool 的时限是 `min(工具声明的超时, run 剩余时间)`——一个被批准
 一小时的工具，不该活得比批准它的 run 还久。取消在流式过程中于下一个事件边界生效，
 并通过关闭生成器传导到 Adapter；模型完全静默时由 deadline 兜底。
+
+PR-009 让同一批里连续的只读工具并发执行，写/外部/破坏性工具则各自独占一组——
+"副作用要过屏障"因此不再只是文档里的一句话。分组是一个**纯函数**，不需要事件
+循环就能验证；执行顺序可以变，提交给模型的顺序永远是它自己的调用顺序。
 
 ## 快速体验
 

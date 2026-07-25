@@ -73,6 +73,10 @@ from agent_workbench.runtime.budgets import (
 )
 from agent_workbench.runtime.state import RunStateMachine
 from agent_workbench.runtime.tool_gateway import PreparedCall, ToolGateway
+from agent_workbench.runtime.tool_scheduler import (
+    DEFAULT_MAX_PARALLEL_READS,
+    plan_tool_batches,
+)
 
 DEFAULT_MODEL_LABEL = "scripted-fake"
 
@@ -131,6 +135,7 @@ class ClaudeLikeAgentRuntime:
         policy_identity: str,
         model_label: str = DEFAULT_MODEL_LABEL,
         model_timeout_seconds: float | None = DEFAULT_MODEL_TIMEOUT_SECONDS,
+        max_parallel_read_tools: int = DEFAULT_MAX_PARALLEL_READS,
         clock: Callable[[], datetime] | None = None,
         model_call_ids: Callable[[], str] | None = None,
     ) -> None:
@@ -143,6 +148,9 @@ class ClaudeLikeAgentRuntime:
         self._policy_identity = policy_identity
         self._model_label = model_label
         self._model_timeout_seconds = model_timeout_seconds
+        # Mirrors runtime.max_parallel_read_tools. Exclusive tools ignore it:
+        # they are always a group of one.
+        self._max_parallel_read_tools = max_parallel_read_tools
         self._clock = clock if clock is not None else _utc_now
         self._model_call_ids = (
             model_call_ids if model_call_ids is not None else new_model_call_id
@@ -506,33 +514,23 @@ class ClaudeLikeAgentRuntime:
 
         if authorized:
             machine.to("executing_tools")
-            for candidate in authorized:
+            for group in plan_tool_batches(
+                authorized,
+                max_parallel=self._max_parallel_read_tools,
+            ):
                 if cancellation.cancelled:
-                    # The run is ending, but this id was already shown to the
-                    # model and still owes an answer.
-                    results.append(
-                        await self._gateway.refuse(
-                            candidate.call,
-                            ErrorInfo(
-                                code="cancelled",
-                                message="the run was cancelled before this call ran",
-                            ),
-                            sink=sink,
-                        )
-                    )
+                    # The run is ending, but these ids were already shown to
+                    # the model and still owe an answer. Groups already in
+                    # flight keep their real results.
+                    results.extend(await self._refuse_cancelled(group, sink=sink))
                     continue
-                results.append(
-                    await self._gateway.invoke(
-                        candidate,
+                results.extend(
+                    await self._run_group(
+                        group,
+                        request=request,
                         context=context,
                         cancellation=cancellation,
                         sink=sink,
-                        # Recomputed per call: a slow first tool leaves less
-                        # for the second, and the run's deadline bounds both.
-                        run_budget_seconds=remaining_run_seconds(
-                            request.budget.deadline,
-                            now=self._clock(),
-                        ),
                     )
                 )
 
@@ -541,6 +539,54 @@ class ClaudeLikeAgentRuntime:
         ledger.messages.append(assistant_message(text=turn.text, tool_calls=turn.calls))
         ledger.messages.append(tool_message(aligned))
         ledger.usage = ledger.usage.merged(BudgetUsage(tool_calls=len(turn.calls)))
+
+    async def _run_group(
+        self,
+        group: tuple[PreparedCall, ...],
+        *,
+        request: AgentRunRequest,
+        context: ExecutionContext,
+        cancellation: CancellationToken,
+        sink: EventSink,
+    ) -> tuple[ToolResult, ...]:
+        """Run one group, concurrently when it holds more than one call."""
+
+        # Recomputed per group: a slow group leaves less for the next, and the
+        # run's deadline bounds every one of them.
+        budget = remaining_run_seconds(request.budget.deadline, now=self._clock())
+
+        async def invoke(prepared: PreparedCall) -> ToolResult:
+            return await self._gateway.invoke(
+                prepared,
+                context=context,
+                cancellation=cancellation,
+                sink=sink,
+                run_budget_seconds=budget,
+            )
+
+        if len(group) == 1:
+            return (await invoke(group[0]),)
+        return tuple(await asyncio.gather(*(invoke(prepared) for prepared in group)))
+
+    async def _refuse_cancelled(
+        self,
+        group: tuple[PreparedCall, ...],
+        *,
+        sink: EventSink,
+    ) -> tuple[ToolResult, ...]:
+        return tuple(
+            [
+                await self._gateway.refuse(
+                    prepared.call,
+                    ErrorInfo(
+                        code="cancelled",
+                        message="the run was cancelled before this call ran",
+                    ),
+                    sink=sink,
+                )
+                for prepared in group
+            ]
+        )
 
     async def _failed(
         self,
