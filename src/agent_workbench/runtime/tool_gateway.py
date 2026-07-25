@@ -6,11 +6,16 @@ run, with these arguments, right now" instead of one per integration.
 
 The gateway enforces the order the baseline requires: a handler runs only after
 its final arguments have passed schema validation *and* an authorization
-decision. "Final" is the load-bearing word. When a policy answers
-``allow_with_modified_input`` the rewritten arguments are validated again and
-re-submitted for a decision, because an engine that could rewrite arguments
-after the checks would be a way past both of them. The loop is bounded: an
-engine that keeps rewriting is refused rather than run.
+decision. "Final" is the load-bearing word, and two things can change what the
+arguments are.
+
+Hooks run first, before authorization, and may rewrite or block. Whatever they
+produce is validated again, because a hook that could edit arguments after the
+check would be a way around it.
+
+A policy may then answer ``allow_with_modified_input``, and that rewrite is
+validated and re-submitted for a decision for the same reason. That loop is
+bounded: an engine that keeps rewriting is refused rather than run.
 
 It also owns the audit trail for a call. Proposal, permission, start,
 completion and failure are emitted here, so the events cannot disagree with
@@ -54,6 +59,7 @@ from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
 from agent_workbench.ports.policy import PolicyEngine
 from agent_workbench.ports.tools import ToolBinding, ToolRegistry
+from agent_workbench.runtime.hook_bus import HookBus
 from agent_workbench.runtime.schema_validation import (
     assert_schema_supported,
     validate_arguments,
@@ -86,6 +92,7 @@ class ToolGateway:
         registry: ToolRegistry,
         policy: PolicyEngine,
         executor: ToolExecutor | None = None,
+        hooks: HookBus | None = None,
         max_argument_bytes: int = DEFAULT_MAX_ARGUMENT_BYTES,
         max_policy_rounds: int = DEFAULT_MAX_POLICY_ROUNDS,
     ) -> None:
@@ -100,6 +107,7 @@ class ToolGateway:
         self._registry = registry
         self._policy = policy
         self._executor = executor if executor is not None else ToolExecutor()
+        self._hooks = hooks if hooks is not None else HookBus()
         self._max_argument_bytes = max_argument_bytes
         self._max_policy_rounds = max_policy_rounds
 
@@ -138,9 +146,10 @@ class ToolGateway:
         self,
         call: ToolCall,
         *,
+        context: ExecutionContext,
         sink: EventSink,
     ) -> PreparedCall | ToolResult:
-        """Resolve the tool and check the arguments it was given."""
+        """Resolve the tool, check its arguments, and let hooks shape them."""
 
         binding = self._registry.get(call.tool_name)
         if binding is None:
@@ -153,24 +162,46 @@ class ToolGateway:
                 sink=sink,
             )
 
-        size = len(canonical_arguments(call.arguments).encode("utf-8"))
-        if size > self._max_argument_bytes:
+        rejected = self._check(binding, call)
+        if rejected is not None:
+            return await self.refuse(call, rejected, sink=sink)
+
+        if self._hooks.is_empty:
+            return PreparedCall(binding=binding, call=call)
+
+        outcome = await self._hooks.before_tool(call, context)
+        if outcome.blocked:
             return await self.refuse(
                 call,
                 ErrorInfo(
-                    code="invalid_tool_input",
-                    message=(
-                        f"arguments are {size} bytes, over the "
-                        f"{self._max_argument_bytes} byte ceiling"
-                    ),
+                    code="policy_denied",
+                    message=f"blocked by hook {outcome.blocked_by}: {outcome.reason}",
                 ),
                 sink=sink,
             )
 
-        invalid = self._validate(binding, call)
-        if invalid is not None:
-            return await self.refuse(call, invalid, sink=sink)
-        return PreparedCall(binding=binding, call=call)
+        if outcome.rewritten:
+            # Whatever a hook produced is input like any other, and is checked
+            # like any other.
+            rejected = self._check(binding, outcome.call)
+            if rejected is not None:
+                return await self.refuse(call, rejected, sink=sink)
+
+        return PreparedCall(binding=binding, call=outcome.call)
+
+    def _check(self, binding: ToolBinding, call: ToolCall) -> ErrorInfo | None:
+        """Size and schema, applied to whatever the arguments currently are."""
+
+        size = len(canonical_arguments(call.arguments).encode("utf-8"))
+        if size > self._max_argument_bytes:
+            return ErrorInfo(
+                code="invalid_tool_input",
+                message=(
+                    f"arguments are {size} bytes, over the "
+                    f"{self._max_argument_bytes} byte ceiling"
+                ),
+            )
+        return self._validate(binding, call)
 
     async def authorize(
         self,

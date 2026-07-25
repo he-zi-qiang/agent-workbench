@@ -492,7 +492,11 @@ class ClaudeLikeAgentRuntime:
         results: list[ToolResult] = []
         prepared: list[PreparedCall] = []
         for call in turn.calls:
-            outcome = await self._gateway.prepare(call, sink=sink)
+            outcome = await self._gateway.prepare(
+                call,
+                context=context,
+                sink=sink,
+            )
             if isinstance(outcome, ToolResult):
                 results.append(outcome)
             else:

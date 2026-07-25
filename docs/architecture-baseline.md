@@ -195,6 +195,7 @@ agent-workbench/
 │   ├── ports/
 │   │   ├── model.py
 │   │   ├── agent_executor.py
+│   │   ├── hooks.py
 │   │   ├── event_log.py
 │   │   ├── conversation_store.py
 │   │   ├── task_registry.py
@@ -1367,7 +1368,8 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | 自研 Runtime：Tool Gateway 与 schema 校验 | ✓ | ✓ | ✓ | ✓ |
 | 自研 Runtime：预算、deadline 与取消传播 | ✓ | ✓ | ✓ |  |
 | 自研 Runtime：并行只读调度与 exclusive 屏障 | ✓ | ✓ | ✓ |  |
-| 自研 Runtime：Hook Bus、真实 Model Adapter | ✓ |  |  |  |
+| 自研 Runtime：Hook Bus 与参数重写重校验 | ✓ | ✓ | ✓ |  |
+| 真实 Model Adapter（Anthropic / LangChain） | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
 | PostgreSQL coordination | ✓ |  |  |  |
