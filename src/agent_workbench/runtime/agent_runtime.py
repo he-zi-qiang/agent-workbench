@@ -22,7 +22,7 @@ what the model sees by finishing one tool sooner than another.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -30,6 +30,7 @@ from agent_workbench.domain.errors import (
     AgentWorkbenchError,
     ErrorInfo,
     OperationCancelledError,
+    ToolPairingError,
 )
 from agent_workbench.domain.events import (
     ContextBuilt,
@@ -122,6 +123,23 @@ class _RunLedger:
     messages: list[Message]
     usage: BudgetUsage = field(default_factory=BudgetUsage)
     answer: str = ""
+
+
+def _repeated_call_ids(calls: Sequence[ToolCall]) -> tuple[str, ...]:
+    """Ids proposed more than once in one turn, in the order first repeated.
+
+    A tool_call_id is what a result answers to. Two calls sharing one leave no
+    way to say which result belongs to which, so the turn is not something this
+    runtime can execute -- whatever the model meant by it.
+    """
+
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for call in calls:
+        if call.tool_call_id in seen and call.tool_call_id not in repeated:
+            repeated.append(call.tool_call_id)
+        seen.add(call.tool_call_id)
+    return tuple(repeated)
 
 
 class ClaudeLikeAgentRuntime:
@@ -266,7 +284,7 @@ class ClaudeLikeAgentRuntime:
             if terminal is not None:
                 return terminal
 
-            await self._run_tool_batch(
+            terminal = await self._run_tool_batch(
                 request,
                 sink,
                 machine,
@@ -275,6 +293,8 @@ class ClaudeLikeAgentRuntime:
                 ledger,
                 context=context,
             )
+            if terminal is not None:
+                return terminal
 
             if cancellation.cancelled:
                 return await self._cancelled(request, sink, machine, ledger)
@@ -487,6 +507,27 @@ class ClaudeLikeAgentRuntime:
             )
 
         if turn.calls:
+            duplicated = _repeated_call_ids(turn.calls)
+            if duplicated:
+                # Checked before anything is prepared, authorized or run. The
+                # pairing rule that catches this otherwise runs after the
+                # handlers, which meant a model repeating an id got its tool
+                # executed once per repetition and the run then died on the
+                # bookkeeping. A malformed proposal must cost nothing.
+                return await self._failed(
+                    request,
+                    sink,
+                    machine,
+                    "error",
+                    ErrorInfo(
+                        code="provider_error",
+                        message=(
+                            "the model proposed the same tool_call_id more "
+                            f"than once: {', '.join(duplicated)}"
+                        ),
+                    ),
+                    ledger,
+                )
             return None
 
         if turn.finish == "tool_use":
@@ -523,7 +564,7 @@ class ClaudeLikeAgentRuntime:
         ledger: _RunLedger,
         *,
         context: ExecutionContext,
-    ) -> None:
+    ) -> AgentOutcome | None:
         """Take one batch of proposed calls through the gateway's phases."""
 
         machine.to("validating_tools")
@@ -610,7 +651,22 @@ class ClaudeLikeAgentRuntime:
                 )
 
         machine.to("recording_results")
-        aligned = align_results(turn.calls, results)
+        try:
+            aligned = align_results(turn.calls, results)
+        except ToolPairingError as exc:
+            # Unreachable by way of duplicate ids, which are refused before
+            # dispatch. It stays because the caller was promised a terminal
+            # outcome: a graph node needs something it can record and route on,
+            # and a traceback is neither. An invariant this runtime broke is
+            # still this runtime's to report.
+            return await self._failed(
+                request,
+                sink,
+                machine,
+                "error",
+                exc.to_error_info(),
+                ledger,
+            )
         ledger.messages.append(assistant_message(text=turn.text, tool_calls=turn.calls))
         ledger.messages.append(tool_message(aligned))
         # Only the admitted calls are charged. A call refused *because* the

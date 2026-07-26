@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from itertools import count
+from typing import Any
 
 from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
 from agent_workbench.adapters.memory import InMemoryEventLog
@@ -19,7 +20,7 @@ from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
 from agent_workbench.adapters.policy import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry, read_document_tool
 from agent_workbench.domain.errors import ErrorInfo
-from agent_workbench.domain.events import EventEnvelope, ToolFailed
+from agent_workbench.domain.events import EventEnvelope, RunFailed, ToolFailed
 from agent_workbench.domain.messages import ToolResultBlock, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import (
@@ -37,6 +38,7 @@ from agent_workbench.ports.model import ModelEvent, ModelPort, ModelRequest
 from agent_workbench.ports.model import ModelTextDelta as TextDelta
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor, ToolGateway
+from agent_workbench.runtime.tool_gateway import PreparedCall
 
 CLOCK = datetime(2026, 7, 25, 3, 14, 15, tzinfo=UTC)
 SCOPE = EventScope(stream_id="stream_1", run_id="run_1")
@@ -1354,3 +1356,150 @@ def test_a_run_without_a_cost_ceiling_is_unaffected() -> None:
     )
 
     assert run.outcome.status == "completed"
+
+
+def test_a_repeated_tool_call_id_runs_nothing() -> None:
+    """P1-8. A tool_call_id is what a result answers to.
+
+    Two calls sharing one leave no way to say which result belongs to which.
+    The pairing rule caught it, but only after the handlers had run -- so a
+    model repeating an id got its tool executed once per repetition, and the
+    run then died on the bookkeeping.
+    """
+
+    recorder = _Recorder("read_document", risk="read")
+    duplicate = ToolCall(tool_call_id="toolu_same", tool_name="read_document")
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Twice.", tool_calls=(duplicate, duplicate), usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(model, bindings=[recorder.binding])
+
+    assert recorder.calls == []
+    assert run.outcome.status == "failed"
+
+
+def test_the_repeated_id_run_ends_in_an_outcome_not_an_exception() -> None:
+    """``AgentExecutor`` promises a terminal outcome for predictable failures.
+
+    It used to raise ``ToolPairingError`` straight through ``run()``, so a
+    graph node got a traceback rather than something it could record or route
+    on. That is a contract violation, not merely bad ordering.
+    """
+
+    duplicate = ToolCall(tool_call_id="toolu_same", tool_name="read_document")
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Twice.", tool_calls=(duplicate, duplicate), usage=USAGE),
+        ]
+    )
+
+    run = _execute(model)
+    failure = next(
+        envelope.payload
+        for envelope in run.durable
+        if envelope.event_type == "RunFailed"
+    )
+
+    assert isinstance(failure, RunFailed)
+    assert failure.stop_reason == "error"
+    assert failure.error.code == "provider_error"
+    assert "toolu_same" in failure.error.message
+
+
+def test_distinct_ids_in_one_turn_are_unaffected() -> None:
+    """The control: the refusal is about repetition, not about several calls."""
+
+    recorder = _Recorder("read_document", risk="read")
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Two reads.",
+                tool_calls=(
+                    ToolCall(tool_call_id="toolu_1", tool_name="read_document"),
+                    ToolCall(tool_call_id="toolu_2", tool_name="read_document"),
+                ),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(model, bindings=[recorder.binding])
+
+    assert len(recorder.calls) == 2
+    assert run.outcome.status == "completed"
+
+
+def test_the_same_id_across_two_turns_is_not_a_repetition() -> None:
+    """Uniqueness is per turn. Ids only have to be distinguishable among peers."""
+
+    recorder = _Recorder("read_document", risk="read")
+    call = ToolCall(tool_call_id="toolu_1", tool_name="read_document")
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Once.", tool_calls=(call,), usage=USAGE),
+            ScriptedTurn(text="Again.", tool_calls=(call,), usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(model, bindings=[recorder.binding])
+
+    assert len(recorder.calls) == 2
+    assert run.outcome.status == "completed"
+
+
+class _MisPairingGateway(ToolGateway):
+    """A gateway that answers a call with somebody else's id.
+
+    Nothing in the shipped code does this. It exists because the pairing
+    backstop is otherwise unreachable -- duplicate ids are refused before
+    dispatch -- and an unreachable branch that nobody has run is a claim, not
+    a guarantee.
+    """
+
+    async def invoke(self, prepared: PreparedCall, **kwargs: Any) -> ToolResult:
+        result = await super().invoke(prepared, **kwargs)
+        return result.model_copy(update={"tool_call_id": "toolu_not_the_one_asked"})
+
+
+def test_a_broken_pairing_invariant_is_reported_not_raised() -> None:
+    """Whatever this runtime got wrong, it is still this runtime's to report.
+
+    A graph node needs something it can record and route on. A traceback out
+    of ``run()`` is neither, and the executor contract says so.
+    """
+
+    registry = StaticToolRegistry([read_document_tool(CORPUS)])
+    call = ToolCall(
+        tool_call_id="toolu_1",
+        tool_name="read_document",
+        arguments={"document_id": "doc_1"},
+    )
+    model = FakeModel([ScriptedTurn(text="Reading.", tool_calls=(call,), usage=USAGE)])
+
+    async def scenario() -> AgentOutcome:
+        log = InMemoryEventLog(clock=_clock, event_ids=_ids("evt"))
+        runtime = ClaudeLikeAgentRuntime(
+            model=model,
+            gateway=_MisPairingGateway(
+                registry=registry,
+                policy=EnvelopePolicyEngine(registry=registry),
+                executor=ToolExecutor(monotonic=_ticking()),
+            ),
+            policy_identity=POLICY_IDENTITY,
+            clock=_clock,
+            model_call_ids=_ids("mc"),
+        )
+        return await runtime.run(
+            _request(), ScopedEventSink(log=log, scope=SCOPE), CancellationSource()
+        )
+
+    outcome = asyncio.run(scenario())
+
+    assert outcome.status == "failed"
+    assert outcome.stop_reason == "error"
