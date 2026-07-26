@@ -22,9 +22,10 @@ what the model sees by finishing one tool sooner than another.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Protocol, runtime_checkable
 
 from agent_workbench.domain.errors import (
     AgentWorkbenchError,
@@ -123,6 +124,24 @@ class _RunLedger:
     messages: list[Message]
     usage: BudgetUsage = field(default_factory=BudgetUsage)
     answer: str = ""
+
+
+@runtime_checkable
+class _Closable(Protocol):
+    """Anything that can be told the caller is finished with it."""
+
+    async def aclose(self) -> None: ...
+
+
+async def _aclose(stream: AsyncIterator[ModelEvent]) -> None:
+    """Close a stream that can be closed, whatever concrete type it is.
+
+    ``aclose`` is the protocol; ``AsyncGenerator`` is only the most common
+    thing that satisfies it.
+    """
+
+    if isinstance(stream, _Closable):
+        await stream.aclose()
 
 
 def _repeated_call_ids(calls: Sequence[ToolCall]) -> tuple[str, ...]:
@@ -423,10 +442,14 @@ class ClaudeLikeAgentRuntime:
                     if event.usage.total:
                         tokens = event.usage
         finally:
-            if isinstance(stream, AsyncGenerator):
-                # Closing the generator is how cancellation and deadlines reach
-                # the adapter, and through it the request it holds open.
-                await stream.aclose()
+            # Closing the stream is how cancellation and deadlines reach the
+            # adapter, and through it whatever connection it holds open. The
+            # port promises an AsyncIterator, not an AsyncGenerator, so asking
+            # for the concrete type meant an adapter that returned any other
+            # closable iterator was simply never closed -- and a leak of that
+            # shape shows up as exhausted connections under load, far from the
+            # line that caused it.
+            await _aclose(stream)
 
         return _ModelTurn(
             _clip("".join(text_parts)), tuple(calls), tokens, finish, error
