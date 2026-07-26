@@ -13,9 +13,13 @@ agree rather than trusting that they were changed together.
 from __future__ import annotations
 
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     MetaData,
@@ -23,6 +27,7 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -84,14 +89,166 @@ messages = Table(
     Index("ix_messages_session_id_sequence", "session_id", "sequence"),
 )
 
-# The artifact table arrives with the upload data plane, where its rows have to
-# be written in the same transaction as the document version they belong to.
-# Adding it here would be schema nothing writes to.
+DIGEST_LENGTH = 64
+FILENAME_LENGTH = 255
+
+artifacts = Table(
+    "artifacts",
+    metadata,
+    Column("artifact_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("kind", String(32), nullable=False),
+    Column("media_type", String(128), nullable=False),
+    Column("size_bytes", BigInteger, nullable=False),
+    Column("sha256", String(DIGEST_LENGTH), nullable=False),
+    Column("filename", String(FILENAME_LENGTH), nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Index("ix_artifacts_tenant_id_artifact_id", "tenant_id", "artifact_id"),
+)
+
+upload_intents = Table(
+    "upload_intents",
+    metadata,
+    Column("upload_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
+    # What the client promised before it transferred anything. Completion
+    # compares the stored object against these, so a transfer that delivered
+    # something else cannot become a document version.
+    Column("declared_size_bytes", BigInteger, nullable=False),
+    Column("declared_sha256", String(DIGEST_LENGTH), nullable=False),
+    Column("media_type", String(128), nullable=False),
+    Column("filename", String(FILENAME_LENGTH), nullable=True),
+    Column("status", String(16), nullable=False),
+    # Set when the intent is completed, which is what makes completing the same
+    # upload twice return the same version instead of creating a second one.
+    Column("version_id", String(IDENTIFIER_LENGTH), nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    CheckConstraint(
+        "status IN ('pending', 'completed')",
+        name="upload_intents_status",
+    ),
+    Index("ix_upload_intents_tenant_id_upload_id", "tenant_id", "upload_id"),
+)
+
+documents = Table(
+    "documents",
+    metadata,
+    Column("document_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("knowledge_base_id", String(IDENTIFIER_LENGTH), nullable=False),
+    # Monotonic per document. A stale outbox event carries an older value and
+    # is discarded by the worker rather than applied over newer content.
+    Column("source_revision", BigInteger, nullable=False),
+    Column("deleted", Boolean, nullable=False, server_default=text("false")),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Index(
+        "ix_documents_tenant_id_knowledge_base_id",
+        "tenant_id",
+        "knowledge_base_id",
+    ),
+)
+
+document_versions = Table(
+    "document_versions",
+    metadata,
+    Column("version_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column(
+        "document_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("source_revision", BigInteger, nullable=False),
+    Column("artifact_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("content_sha256", String(DIGEST_LENGTH), nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    UniqueConstraint(
+        "document_id",
+        "source_revision",
+        name="uq_document_versions_document_id_source_revision",
+    ),
+)
+
+document_acl = Table(
+    "document_acl",
+    metadata,
+    Column(
+        "document_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("principal_id", String(IDENTIFIER_LENGTH), primary_key=True),
+)
+
+outbox_events = Table(
+    "outbox_events",
+    metadata,
+    # The database assigns the position, so ordering does not depend on any
+    # producer's clock or on the order two transactions happened to start in.
+    Column("sequence", BigInteger, Identity(always=True), primary_key=True),
+    Column("event_id", String(IDENTIFIER_LENGTH), nullable=False, unique=True),
+    # No foreign key to documents on purpose: a deletion event has to outlive
+    # the row it describes, otherwise the index can never be told to forget it.
+    Column("document_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("source_revision", BigInteger, nullable=False),
+    Column("kind", String(32), nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column("claimed_by", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("claimed_at", DateTime(timezone=True), nullable=True),
+    Column("acked_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint(
+        "kind IN ('document_upserted', 'document_deleted', 'acl_changed')",
+        name="outbox_events_kind",
+    ),
+    Index(
+        "ix_outbox_events_pending",
+        "sequence",
+        postgresql_where=text("acked_at IS NULL"),
+    ),
+)
+
 
 __all__ = [
+    "DIGEST_LENGTH",
+    "FILENAME_LENGTH",
     "IDENTIFIER_LENGTH",
     "NAMING_CONVENTION",
+    "artifacts",
     "conversation_sessions",
+    "document_acl",
+    "document_versions",
+    "documents",
     "messages",
     "metadata",
+    "outbox_events",
+    "upload_intents",
 ]
