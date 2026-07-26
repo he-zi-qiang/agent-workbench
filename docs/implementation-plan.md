@@ -1362,7 +1362,7 @@ PR 默认不调用在线模型或在线 RAGAS judge。
 
 ## 9. 首批 PR 顺序
 
-以下顺序可以直接作为前 16 个 PR。原计划把 WP02-05 的 Hook Bus 留在 WP02 内部
+以下顺序可以直接作为前 17 个 PR。原计划把 WP02-05 的 Hook Bus 留在 WP02 内部
 未编号，实施时把它排进了 PR-010，其后的持久化车道整体后移一位：
 
 1. **PR-001 Bootstrap**：目录、`pyproject.toml`、`uv.lock`、配置迁移；
@@ -1382,14 +1382,15 @@ PR 默认不调用在线模型或在线 RAGAS judge。
 12. **PR-012 DeepSeek Model Adapter**（WP02-06 后半）：OpenAI 兼容的流式
     Adapter 与 contract test；引入 `httpx`，并相应扩展许可证 allowlist；
 13. **PR-013 PostgreSQL/Artifact Base**：迁移、Conversation、local artifact；
-14. **PR-014 Upload/Outbox**：流式上传与事实/outbox 原子性；
-15. **PR-015 Dense Retrieval Kernel**：LlamaIndex、BGE dense、Qdrant
+14. **PR-014 Upload/Outbox**：文档事实与 outbox 原子性、竞争领取；
+15. **PR-015 Upload API**：FastAPI 上传路由、控制面 413 门禁与窄配置投影；
+16. **PR-016 Dense Retrieval Kernel**：LlamaIndex、BGE dense、Qdrant
     候选检索；只开放内部 Port/测试入口，不注册外部 Chat/RAG 路由；
-16. **PR-016 Authorized RAG Slice**：PostgreSQL ACL 前置过滤与候选二次
+17. **PR-017 Authorized RAG Slice**：PostgreSQL ACL 前置过滤与候选二次
     重验、回答提交前 revision 校验、revoke barrier 和 citation；全部通过后
     才注册外部 Chat/RAG 路由。
 
-PR-016 合并后再安排 hybrid/rerank 和 LangGraph 两条车道。这样两个 PR
+PR-017 合并后再安排 hybrid/rerank 和 LangGraph 两条车道。这样两个 PR
 各自只有一个主要行为变化，同时不会短暂发布一个缺少最终 ACL 授权的检索
 接口。
 

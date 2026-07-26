@@ -776,3 +776,71 @@ outbox 的 claim **不是 lease**：worker 死了，它领的事件就一直被�
 任何东西回收它。lease 时长、heartbeat、fencing 属于协调工作包；在这里做一半会
 得到一个看起来可恢复、实际不可恢复的东西，比一个明显的缺口更糟。S3/presigned
 传输与 `document_deleted` / `acl_changed` 两类事件的产生路径同样留待后续。
+
+## PR-015 Upload API
+
+状态：**已实现并通过本地测试（含真实 PostgreSQL）**。WP03 至此完成。
+
+WP03-07：FastAPI 上传路由与控制面 request-limit 中间件。
+
+已交付：
+
+- `apps/api/`：`main.py`（应用工厂 + `agent-api` 入口）、`dependencies.py`、
+  `middleware.py`、`identity.py`、`state.py`、`routes/`（uploads / artifacts /
+  health）；
+- `bootstrap/projections.py`：`ApiRuntimeConfig` 等**窄配置对象**；
+- `ArtifactStore.put_stream()`：流式写入，两个实现都补齐。
+
+本 PR 固定下来的行为：
+
+- **两个平面共用一个服务器**。控制请求是描述工作的 JSON，被
+  `api.max_control_request_body_bytes` 限制住并在超限时返回 **413**；数据面
+  （`PUT /v1/uploads/{id}/content`）豁免——把文档传输限制在控制面大小上，
+  等于不支持上传；
+- **限制不信任 `Content-Length`**：中间件读到比上限多一个字节为止。缓冲这么多
+  正是上限本身允许的量，也是唯一能对"声明了长度却不遵守"的请求做出正确判断的
+  办法。有一条测试专门用分块 body 且不声明长度来打这个点；
+- **本地存储边读边写**：分块落盘、边写边算哈希与字节数，全程不在内存里持有整个
+  对象；在检疫文件名下写完才改名发布，所以失败或超限留下的是一个检疫文件，
+  而不是一个别人能读到的半成品；
+- **跨租户读与不存在完全同形**：状态码、响应体都一样（有测试直接比对两者）；
+- **传输前先读 intent**：未知上传或别的租户的上传在写入第一个字节之前就被拒；
+- liveness 不碰数据库（碰了就会在与它无关的故障里报告进程已死，让编排器无故重启
+  它）；readiness 碰，但有 2 秒上限。
+
+**配置只有一个入口这条规则被架构守卫强制执行了。** `apps/api` 最初直接依赖
+`bootstrap.settings`，`test_raw_configuration_sources_are_confined_to_bootstrap`
+立刻拦下，报错信息就是设计说明："inject a narrow configuration object instead"。
+于是补上 `bootstrap/projections.py`：API 拿到的是 `ApiRuntimeConfig`，看不到
+检索漏斗、协调时序或评测指标，DSN 仍以 `SecretStr` 形式传递、只在构造引擎时
+解包——一个配置对象的 repr 因此打不出 DSN。
+
+**身份是接口层的结果，不是请求体字段。** 目前只有一个读 header 的开发用解析器，
+所以 `deployment_scope == "remote"` 时**装配阶段直接拒绝启动**：暴露这个服务的
+办法是先实现一个真的身份提供方，而不是记得别把它暴露出去。
+
+2026-07-25 验证证据：
+
+```text
+本机 PostgreSQL 15.14
+pytest（有库）: 541 passed
+pytest（无库，等同主 CI job）: 496 passed, 45 skipped
+ruff / pyright (strict, src): 全部通过
+uv lock --check --offline / 许可证 allowlist: 通过
+CLI golden 文件逐字节未变
+```
+
+CI 的 `postgres` job 现在同时跑 `tests/api`。
+
+**修掉一个会挂住生产的 bug。** 413 中间件缓冲请求后，用一个"永远返回空 body"的
+`receive` 替换了原来的。Starlette 的流式响应会在同一个通道上等
+`http.disconnect`——它永远等不到，于是 artifact 下载整个挂死。测试跑不完暴露了
+它；现在缓冲消息放完之后会**回落到原始通道**。
+
+另一处也是测试抓的：数据面豁免最初写成了路由前缀 `/v1/uploads`，把**声明端点
+一起豁免了**，413 门禁形同虚设。改成一个精确谓词
+`is_data_plane_path()`——只有以 `/content` 结尾的那一条路由算数据面。
+
+范围说明：Chat / Task / SSE / Approval 路由属于 WP13；S3 presigned 传输、
+`document_deleted` 与 `acl_changed` 事件路径仍未实现。真正的身份提供方要等
+D0 决策检查点（WP04 前）。
