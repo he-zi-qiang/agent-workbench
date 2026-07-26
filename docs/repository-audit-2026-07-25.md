@@ -306,7 +306,9 @@ Graph node 拿不到可记录、可路由的结果。
 修复方向：非注释、非 `[DONE]` 的非法 frame fail closed；限制累计文本与 partial
 arguments；把 provider 解码/领域校验异常归一化为终态 error。
 
-### P1-10 Outbox claim 在 worker 崩溃后不可恢复
+### P1-10 Outbox claim 在 worker 崩溃后不可恢复 —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 涉及：
 
@@ -776,3 +778,35 @@ Settings → `DeepSeekProfile` 的投影仍不存在，因为 DeepSeek 还没装
 顺带说明：写这条时 receive 回调一开始一直返回 `http.request`，导致
 `StreamingResponse` 空转——它在轮询结束响应的 `http.disconnect`。与之前 413
 中间件那个挂起是同一个成因。
+### P1-10 Outbox lease 与 fencing（2026-07-26）
+
+行为变化：claim 成为**租约**，并带一个 fencing token。Alembic `0003` 给
+`outbox_events` 增加 `lease_until` 与 `claim_token`，以及按到期时间的部分索引。
+
+**为什么单有到期是不够的——这是本条唯一需要判断的地方。** 一个只是卡住的 worker
+（长 GC、网络分区）在租约到期时仍然活着。它回来之后会去 ack 一个**另一个 worker
+此刻正在处理**的单元；那次 ack 会把别人的在途工作标记为完成，而别人真正做完的结果
+反而看起来像重复劳动。所以每次 claim 铸一个 token，ack 必须带当前的那个；过期
+token 匹配不到任何行，被拒绝。
+
+`StaleExecutionError` 从 PR-003 起就定义着，docstring 明写「fenced write 被拒：
+lease 或 epoch 已不是当前的」，一直**没有生产者**。这是第三个这种形状——前两个是
+P0-2 的 `PermissionRequested` 与 P1-3 的 `acl_changed`。
+
+到期时间一律读**数据库时钟**（`now()`），不读 worker 的：两个 worker 对时间的分歧，
+正是同一个租约被握两次的方式。
+
+ack 靠 **rowcount** 判断，因为一条匹配不到任何行的 UPDATE 是成功的——只看异常
+永远发现不了「我 ack 的那行已经不归我了」。
+
+迁移会把**迁移前已 claim 但未 ack 的行释放**（清空 `claimed_by`/`claimed_at`）：
+它们没有租约也没有 token，既不可回收也不可 ack，正好卡在这次修复要消除的状态里。
+释放是安全的——未 ack 的事件本就是欠着的工作，最坏情况是被重复应用一次，而 ingestion
+侧无论如何都必须幂等。
+
+**仍然缺少的是 heartbeat**：一个诚实地做慢活的 worker 无法延长自己的租约，会丢掉它。
+那属于 ingestion worker 本身；在它存在之前，租约应当设得比最慢的一个工作单元更长。
+这一点写进了模块 docstring，不是隐含的。
+
+回归测试 6 条（含 2 条对照：租约未到期不会被别人抢走；回收方可以正常 ack）。
+**验证过是有牙的**：撤掉过期回收失败 3 条，撤掉 fence 失败 2 条。

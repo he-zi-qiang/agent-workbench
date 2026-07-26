@@ -59,6 +59,7 @@ SAMPLES: dict[str, VersionedModel] = {
             "knowledge_base_id": "kb_main",
             "authorized_principals": ["user_demo"],
         },
+        claim_token="clm_0000000000000000000000000000001",
     ),
     "ModelRequest": ModelRequest(
         model_profile="main",
