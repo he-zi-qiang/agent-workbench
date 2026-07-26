@@ -572,3 +572,147 @@ def test_losing_the_creation_race_does_not_grant_a_write(tmp_path: Path) -> None
 
     assert (winners, refusals) == (1, 1)
     assert owner_id in {OWNER, "user_neighbour"}
+
+
+def test_re_uploading_identical_content_applies_a_revoked_grant(
+    tmp_path: Path,
+) -> None:
+    """P1-3. Re-sending the same bytes is how you say "same document, new audience".
+
+    Revoking a grant this way produced nothing at all: the digest matched, the
+    method returned the existing version early, and the ACL rows were never
+    touched. The index went on answering with a document whose owner had
+    already taken it away.
+    """
+
+    async def scenario(harness: Harness) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        await _upload(harness, granted=("user_2", "user_3"))
+        before = await harness.documents.authorized_principals(
+            document_id="doc_1", tenant_id=TENANT, principal_id=OWNER
+        )
+        await _upload(harness, granted=("user_2",))
+        after = await harness.documents.authorized_principals(
+            document_id="doc_1", tenant_id=TENANT, principal_id=OWNER
+        )
+        return before, after
+
+    before, after = _run(scenario, tmp_path)
+
+    assert before == (OWNER, "user_2", "user_3")
+    assert after == (OWNER, "user_2")
+
+
+def test_the_revoked_principal_can_no_longer_read_the_document(
+    tmp_path: Path,
+) -> None:
+    """The stored rows are what the read rule consults, so this is the effect."""
+
+    async def scenario(harness: Harness) -> None:
+        await _upload(harness, granted=("user_2",))
+        await _upload(harness, granted=())
+        await harness.documents.document(
+            document_id="doc_1", tenant_id=TENANT, principal_id="user_2"
+        )
+
+    with pytest.raises(NotFoundError):
+        _run(scenario, tmp_path)
+
+
+def test_an_acl_change_without_new_content_emits_acl_changed(
+    tmp_path: Path,
+) -> None:
+    """The index cannot re-filter what it is never told about."""
+
+    async def scenario(harness: Harness) -> list[tuple[str, int, Any]]:
+        await _upload(harness, granted=("user_2", "user_3"))
+        await _upload(harness, granted=("user_2",))
+        events = await harness.outbox.claim(worker_id="worker_1")
+        return [
+            (event.kind, event.source_revision, event.payload["authorized_principals"])
+            for event in events
+        ]
+
+    assert _run(scenario, tmp_path) == [
+        ("document_upserted", 1, [OWNER, "user_2", "user_3"]),
+        ("acl_changed", 2, [OWNER, "user_2"]),
+    ]
+
+
+def test_an_acl_change_takes_a_revision_but_not_a_version(tmp_path: Path) -> None:
+    """A version records content. Nothing about the content changed."""
+
+    async def scenario(harness: Harness) -> tuple[int, list[int]]:
+        await _upload(harness, granted=("user_2",))
+        await _upload(harness, granted=())
+        async with harness.engine.connect() as connection:
+            revision = (
+                await connection.execute(select(documents.c.source_revision))
+            ).scalar_one()
+        versions = await harness.documents.versions(
+            document_id="doc_1", tenant_id=TENANT, principal_id=OWNER
+        )
+        return cast(int, revision), [version.source_revision for version in versions]
+
+    assert _run(scenario, tmp_path) == (2, [1])
+
+
+def test_identical_content_and_identical_acl_still_change_nothing(
+    tmp_path: Path,
+) -> None:
+    """The control: idempotency survives. Only a real difference emits an event."""
+
+    async def scenario(harness: Harness) -> tuple[int, int, list[str]]:
+        await _upload(harness, granted=("user_2",))
+        await _upload(harness, granted=("user_2",))
+        async with harness.engine.connect() as connection:
+            revision = (
+                await connection.execute(select(documents.c.source_revision))
+            ).scalar_one()
+        events = await harness.outbox.claim(worker_id="worker_1")
+        return cast(int, revision), len(events), [event.kind for event in events]
+
+    assert _run(scenario, tmp_path) == (1, 1, ["document_upserted"])
+
+
+def test_the_order_of_a_grant_list_is_not_a_change(tmp_path: Path) -> None:
+    """Comparing sets, not sequences: a reordered list is the same audience."""
+
+    async def scenario(harness: Harness) -> list[str]:
+        await _upload(harness, granted=("user_2", "user_3"))
+        await _upload(harness, granted=("user_3", "user_2"))
+        events = await harness.outbox.claim(worker_id="worker_1")
+        return [event.kind for event in events]
+
+    assert _run(scenario, tmp_path) == ["document_upserted"]
+
+
+def test_content_after_an_acl_change_takes_the_next_revision(tmp_path: Path) -> None:
+    """Version revisions become sparse, and that is the point.
+
+    Revision 2 was an authorization change, so the next content lands at 3. A
+    consumer orders events by one monotonic counter per document; if an ACL
+    event and a content event could share a revision, arriving out of order
+    would be indistinguishable from arriving twice.
+    """
+
+    async def scenario(harness: Harness) -> tuple[list[int], list[tuple[str, int]]]:
+        await _upload(harness, granted=("user_2",))
+        await _upload(harness, granted=())
+        await _upload(harness, content=b"Revised passage.\n")
+        versions = await harness.documents.versions(
+            document_id="doc_1", tenant_id=TENANT, principal_id=OWNER
+        )
+        events = await harness.outbox.claim(worker_id="worker_1")
+        return (
+            [version.source_revision for version in versions],
+            [(event.kind, event.source_revision) for event in events],
+        )
+
+    revisions, events = _run(scenario, tmp_path)
+
+    assert revisions == [1, 3]
+    assert events == [
+        ("document_upserted", 1),
+        ("acl_changed", 2),
+        ("document_upserted", 3),
+    ]
