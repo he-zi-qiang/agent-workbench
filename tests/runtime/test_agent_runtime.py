@@ -152,6 +152,7 @@ def _request(
     tool_names: Sequence[ToolName] = ("read_document",),
     allowed_tools: Sequence[ToolName] | None = None,
     max_tool_risk: str = "read",
+    approval_required_risks: Sequence[str] = ("write", "external", "destructive"),
 ) -> AgentRunRequest:
     permitted = tuple(tool_names) if allowed_tools is None else tuple(allowed_tools)
     return AgentRunRequest.model_validate(
@@ -167,6 +168,7 @@ def _request(
             "envelope": AuthorizationEnvelope(
                 allowed_tools=permitted,
                 max_tool_risk=max_tool_risk,
+                approval_required_risks=tuple(approval_required_risks),
             ),
             "budget": budget
             if budget is not None
@@ -951,6 +953,9 @@ def test_an_exclusive_tool_never_runs_beside_another() -> None:
         request=_request(
             tool_names=("read_a", "read_b", "write_c", "read_d"),
             max_tool_risk="write",
+            # This test is about the exclusive barrier, so the envelope does
+            # not put the write tool behind an approval it would never get.
+            approval_required_risks=(),
         ),
         bindings=[
             _binding("read_a", probe.handler()),
@@ -987,3 +992,123 @@ def test_the_parallel_ceiling_bounds_how_many_run_at_once() -> None:
 
     assert run.outcome.status == "completed"
     assert probe.max_inflight == 2
+
+
+def test_a_tool_needing_approval_never_reaches_its_handler() -> None:
+    """P0-2. "Allow, pending approval" is not permission to run.
+
+    The envelope puts write tools behind approval by default, and no approval
+    facility exists, so the effect must not happen. An irreversible write that
+    nobody agreed to cannot be undone by building the approval machinery later.
+    """
+
+    recorder = _Recorder("export_artifact", risk="write")
+    call = ToolCall(tool_call_id="toolu_1", tool_name="export_artifact")
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Exporting.", tool_calls=(call,), usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            tool_names=("export_artifact",),
+            max_tool_risk="write",
+        ),
+        bindings=[recorder.binding],
+    )
+    failure = next(
+        envelope.payload
+        for envelope in run.durable
+        if envelope.event_type == "ToolFailed"
+    )
+
+    assert recorder.calls == []
+    assert isinstance(failure, ToolFailed)
+    assert failure.error.code == "approval_required"
+
+
+def test_the_audit_trail_says_a_human_was_needed_not_that_it_was_denied() -> None:
+    """A refusal for want of a decision is not the same as a decision to refuse."""
+
+    recorder = _Recorder("export_artifact", risk="write")
+    call = ToolCall(tool_call_id="toolu_1", tool_name="export_artifact")
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Exporting.", tool_calls=(call,), usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(tool_names=("export_artifact",), max_tool_risk="write"),
+        bindings=[recorder.binding],
+    )
+
+    assert run.durable_types == [
+        "RunStarted",
+        "ModelStarted",
+        "ModelCompleted",
+        "ToolProposed",
+        "PermissionResolved",
+        "PermissionRequested",
+        "ToolFailed",
+        "ModelStarted",
+        "ModelCompleted",
+        "RunCompleted",
+    ]
+
+
+def test_the_model_is_told_the_call_awaits_approval() -> None:
+    """The model has to be able to tell "not allowed" from "not yet decided"."""
+
+    recorder = _Recorder("export_artifact", risk="write")
+    call = ToolCall(tool_call_id="toolu_1", tool_name="export_artifact")
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Exporting.", tool_calls=(call,), usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(tool_names=("export_artifact",), max_tool_risk="write"),
+        bindings=[recorder.binding],
+    )
+    fake = run.model
+    assert isinstance(fake, FakeModel)
+    block = fake.requests[1].messages[-1].content[0]
+
+    assert isinstance(block, ToolResultBlock)
+    assert block.status == "error"
+    assert "approval_required" in block.text
+
+
+def test_an_envelope_without_an_approval_requirement_still_runs() -> None:
+    """The refusal follows the requirement, not the risk class by itself."""
+
+    recorder = _Recorder("export_artifact", risk="write")
+    call = ToolCall(tool_call_id="toolu_1", tool_name="export_artifact")
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Exporting.", tool_calls=(call,), usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            tool_names=("export_artifact",),
+            max_tool_risk="write",
+            approval_required_risks=(),
+        ),
+        bindings=[recorder.binding],
+    )
+
+    assert len(recorder.calls) == 1
+    assert run.outcome.status == "completed"
