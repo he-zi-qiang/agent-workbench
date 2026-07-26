@@ -17,6 +17,13 @@ A policy may then answer ``allow_with_modified_input``, and that rewrite is
 validated and re-submitted for a decision for the same reason. That loop is
 bounded: an engine that keeps rewriting is refused rather than run.
 
+A decision that requires human approval is not a decision to run. Until the
+approval boundary exists -- a durable request, a recorded human answer, a run
+that can pause and be resumed by whichever worker picks it up -- a call that
+needs one is refused here. Treating "allow, pending approval" as "allow" is how
+a write tool performs an irreversible effect that nobody agreed to, and no
+amount of later approval machinery can undo an effect already dispatched.
+
 It also owns the audit trail for a call. Proposal, permission, start,
 completion and failure are emitted here, so the events cannot disagree with
 what the gateway actually did. Argument bodies never appear in them -- a size
@@ -40,6 +47,7 @@ from agent_workbench.domain.errors import (
     UnknownToolError,
 )
 from agent_workbench.domain.events import (
+    PermissionRequested,
     PermissionResolved,
     ToolCompleted,
     ToolFailed,
@@ -233,6 +241,16 @@ class ToolGateway:
                     sink=sink,
                 )
 
+            if decision.requires_approval:
+                # Checked before either allow branch, so a rewrite cannot carry
+                # an approval requirement past this point either.
+                return await self._await_approval(
+                    prepared.binding,
+                    call,
+                    reason_code=decision.reason_code,
+                    sink=sink,
+                )
+
             if decision.effect == "allow":
                 return PreparedCall(binding=prepared.binding, call=call)
 
@@ -254,6 +272,41 @@ class ToolGateway:
                 message=(
                     "the policy engine kept rewriting the arguments after "
                     f"{self._max_policy_rounds} rounds"
+                ),
+            ),
+            sink=sink,
+        )
+
+    async def _await_approval(
+        self,
+        binding: ToolBinding,
+        call: ToolCall,
+        *,
+        reason_code: str,
+        sink: EventSink,
+    ) -> ToolResult:
+        """Record that a human decision is needed, and refuse until it exists.
+
+        The request is emitted before the refusal so the audit trail says what
+        was actually wanted: not that the call was forbidden, but that nobody
+        was there to permit it. When the approval boundary lands, this is the
+        point that pauses the run instead of answering it.
+        """
+
+        await sink.emit(
+            PermissionRequested(
+                tool_call_id=call.tool_call_id,
+                required_scopes=binding.spec.permission_scopes,
+                risk=binding.spec.risk,
+            )
+        )
+        return await self.refuse(
+            call,
+            ErrorInfo(
+                code="approval_required",
+                message=(
+                    f"{call.tool_name} requires human approval "
+                    f"({reason_code}), and no approval facility exists yet"
                 ),
             ),
             sink=sink,

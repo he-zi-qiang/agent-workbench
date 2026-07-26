@@ -119,7 +119,9 @@ GitHub Actions 的 quality、postgres、secret scan 均成功：
 修复方向：默认改为 loopback；Header Identity Resolver 启用时在 Settings 和
 装配层双重强制 loopback/Unix socket；增加真实 socket 失败测试。
 
-### P0-2 审批要求被 Gateway 忽略
+### P0-2 审批要求被 Gateway 忽略 —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 涉及：
 
@@ -326,3 +328,37 @@ ModelPort 允许一般 `AsyncIterator`，但 timeout/cancel 只对具体
 
 每个修复应保持“一项主要行为变化一个 PR”，并为审计中描述的触发条件加入回归
 测试。没有回归测试的修复不能把本报告中的对应项标记为关闭。
+
+## 7. 修复记录
+
+按 §6 的顺序逐条修复。一项主要行为变化一个 PR，且必须先有覆盖触发条件的回归
+测试，才能把对应缺陷标记为关闭。
+
+### P0-2 审批 fail closed（2026-07-26）
+
+行为变化：`ToolGateway.authorize()` 在两个 allow 分支**之前**检查
+`decision.requires_approval`。为真时发出 `PermissionRequested`，随后以
+`approval_required` 拒绝该次调用，handler 不再被触及。
+
+之所以是拒绝而不是暂停 run：审批设施（`ApprovalStore`、恢复入口）属于 WP10，
+尚未实现。在它到位之前，唯一诚实的语义是「这次调用需要人来决定，而这里没有人
+可以决定」。等 WP10 完成后，这一分支改为挂起并等待裁决，Gateway 之外无需改动
+——`PermissionRequested` 事件与 `approval_required` 错误码从 PR-003 起就已经在
+Domain 里定义好，此前一直没有写入方。
+
+模型侧看到的是一条 `status="error"` 的 tool result，正文含 `approval_required`，
+因此模型能区分「不被允许」和「尚未裁决」，run 本身继续正常收尾。
+
+回归测试（6 条，撤掉修复后前 5 条全部失败）：
+
+| 测试 | 断言 |
+|---|---|
+| `test_a_decision_requiring_approval_does_not_reach_the_handler` | handler 零调用；错误码 `approval_required`；事件序列 |
+| `test_a_rewrite_cannot_smuggle_a_call_past_its_approval_requirement` | allow_modified 分支同样被拦 |
+| `test_a_tool_needing_approval_never_reaches_its_handler` | Runtime 级完整 run，副作用为零 |
+| `test_the_audit_trail_says_a_human_was_needed_not_that_it_was_denied` | 持久事件序列含 `PermissionRequested` |
+| `test_the_model_is_told_the_call_awaits_approval` | 回灌给模型的 tool result 可区分两种拒绝 |
+| `test_an_envelope_without_an_approval_requirement_still_runs` | 对照组：拒绝跟的是审批要求，不是风险等级 |
+
+最后一条是对照组，因此在撤掉修复后仍然通过——正是它保证前五条不是由「write
+工具一律拒绝」这种过度实现凑出来的。

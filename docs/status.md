@@ -42,7 +42,8 @@
 
 1. 默认 `api.host = "0.0.0.0"`，开发 Header Identity Resolver 可能被本机之外
    的调用者访问并伪造身份；
-2. `requires_approval=True` 没有阻止 write tool 执行；
+2. ~~`requires_approval=True` 没有阻止 write tool 执行~~（2026-07-26 已修复，
+   见下方 P0-2 一节）；
 3. Upload/Document/Artifact 缺少同 tenant 内的 owner/ACL 对象授权；
 4. tool/token/cost budget 不是硬上限；
 5. Policy 改写可绕过参数字节上限，Policy/Hook deadline 不完整；
@@ -50,8 +51,9 @@
 7. Outbox claim 没有 lease/fence，worker 崩溃后不可恢复。
 
 完整触发条件、文件位置和建议修复顺序见
-[仓库核验报告](./repository-audit-2026-07-25.md)。本轮只校正文档，没有把上述
-生产逻辑缺陷标记为已修复。
+[仓库核验报告](./repository-audit-2026-07-25.md)。核验那一轮只校正文档，没有改
+生产逻辑；此后的修复各自一个 PR，逐条记在下面，并同步回核验报告的第 7 节。
+纪律是：**没有覆盖触发条件的回归测试，任何一条都不算关闭。**
 
 ## PR-001 Bootstrap
 
@@ -928,3 +930,37 @@ demo、以及定义它的领域模块）。新增一处就要改清单，也就�
 不能笼统宣称完整租户隔离已完成。README 与简历同样不得升级这一项；`scopes`
 目前由调用方在请求头里自述，因此不是权限来源，只是让真实解析器接入时不必改动
 下游的形状占位。
+
+## P0-2 审批 fail closed
+
+状态：**已实现并通过本地测试**。核验报告 §4 的 P0-2、§6 修复顺序第 2 项。
+
+`ToolGateway.authorize()` 现在在两个 allow 分支之前检查
+`decision.requires_approval`。为真时发出 `PermissionRequested`，然后以
+`approval_required` 拒绝这次调用；handler 不再被触及。
+
+这里的判断是：`effect="allow", requires_approval=True` 不是许可，是**尚未裁决**。
+在此之前 `requires_approval` 是一个纯粹的只写字段——`domain/policies.py` 定义它、
+`EnvelopePolicyEngine` 按风险等级设置它，而整个 `runtime/` 包没有任何一处读它。
+于是「需要审批」这个信息在从 Policy 流向执行的路上被无声丢弃了，而丢弃的方向
+恰好是放行。
+
+之所以是拒绝而不是挂起等待：审批设施（`ApprovalStore`、恢复入口）属于 WP10，
+现在不存在。「需要人来决定，但这里没有人可以决定」只能落到拒绝上。等 WP10 到位
+后这一分支改为挂起并等待裁决，改动仍然限于 Gateway——`PermissionRequested` 事件
+与 `approval_required` 错误码从 PR-003 起就在 Domain 里定义好了，此前一直没有
+写入方，这次只是终于把它们接上。
+
+模型侧拿到的是 `status="error"` 且正文含 `approval_required` 的 tool result，
+因此能区分「不被允许」和「尚未裁决」；run 本身继续正常收尾，不会因为一次待审批
+的调用而失败。
+
+回归测试 6 条：Gateway 级 2 条（含 `allow_modified` 改写分支同样被拦），Runtime
+级 4 条（完整 run 副作用为零、持久事件序列、回灌给模型的错误正文，以及一条对照
+组）。**验证过是有牙的**：临时撤掉那个分支后前 5 条全部失败。第 6 条对照组在
+撤掉后仍然通过——正是它保证前 5 条不是靠「write 工具一律拒绝」这种过度实现凑出
+来的，拒绝跟的是审批要求本身，不是风险等级。
+
+范围说明：只改这一件事。P0-1（loopback 强制）、P1-6（改写绕过字节上限）
+与 P1-7（Policy/Hook deadline）都在同一个文件附近，但各自是独立的行为变化，
+留给各自的 PR。

@@ -436,3 +436,43 @@ def test_hooks_never_see_an_unknown_tool() -> None:
     _execute(harness, ToolCall(tool_call_id="toolu_1", tool_name="nope"))
 
     assert hook.seen == []
+
+
+def test_a_decision_requiring_approval_does_not_reach_the_handler() -> None:
+    """P0-2. The gateway is where "allow, pending approval" stops."""
+
+    policy = _ScriptedPolicy(
+        PolicyDecision.allow("write_needs_review", requires_approval=True)
+    )
+    harness = _Harness(policy=policy)
+
+    result, events = _execute(harness, _call(query="fusion"))
+
+    assert harness.tool.calls == []
+    assert result.error is not None
+    assert result.error.code == "approval_required"
+    assert events == [
+        "ToolProposed",
+        "PermissionResolved",
+        "PermissionRequested",
+        "ToolFailed",
+    ]
+
+
+def test_a_rewrite_cannot_smuggle_a_call_past_its_approval_requirement() -> None:
+    """The check sits before both allow branches, so a rewrite cannot skip it."""
+
+    policy = _ScriptedPolicy(
+        PolicyDecision.allow_modified(
+            "clamped",
+            {"query": "fusion", "top_k": 5},
+            requires_approval=True,
+        )
+    )
+    harness = _Harness(policy=policy)
+
+    result, _ = _execute(harness, _call(query="fusion", top_k=9))
+
+    assert harness.tool.calls == []
+    assert result.error is not None
+    assert result.error.code == "approval_required"
