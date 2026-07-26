@@ -269,6 +269,10 @@ WP04 前新增一个窄 ADR：要么把 v1 明确限制为单用户本地演示�
 Identity Adapter。未完成该 ADR 时，可以测试 tenant 隔离，但不能在简历中
 宣称已经实现生产级多租户认证。
 
+**已完成**：[ADR-012 身份边界](./adr/0012-identity-boundary.md) 选择"领域层
+多租户、部署层单机"，并把"只有身份解析边界能构造 `PrincipalContext`"做成
+架构测试。生产级多租户认证在能力表中保持 Planned。
+
 ---
 
 ## 5. 配置项到代码所有者
@@ -1400,7 +1404,7 @@ PR-017 合并后再安排 hybrid/rerank 和 LangGraph 两条车道。这样两�
 
 | 检查点 | 发生时机 | 必须回答 |
 |---|---|---|
-| D0 Identity Boundary | WP04 前 | v1 是单用户演示还是接入已认证 Principal Adapter |
+| D0 Identity Boundary | WP04 前 | v1 是单用户演示还是接入已认证 Principal Adapter —— **已决**，见 [ADR-012](./adr/0012-identity-boundary.md)：领域层多租户 + 部署层单机 |
 | D1 Contract Freeze | WP01 | DTO/Port 是否足够稳定，框架类型是否泄漏 |
 | D2 Runtime Sign-off | WP02 | Tool 协议、取消、预算、Policy 是否有证据 |
 | D3 RAG Default | WP05 | hybrid/rerank 是否真的改善质量 |
