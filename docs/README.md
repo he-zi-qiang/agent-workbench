@@ -46,6 +46,7 @@
 lease/fencing/checkpoint/LISTEN、Multi-Agent、生产身份认证、S3、UI 和完整部署。
 DeepSeek Adapter 尚未接入 Bootstrap/API/CLI，也没有真实服务 E2E。
 
-安全边界：当前开发身份解析器信任请求头，而默认 API host 是 `0.0.0.0`。修复
-监听地址校验和生产身份认证之前，API 只能在受控本机环境使用，不能暴露到局域网
-或公网。完整证据与已知问题见[实施状态](./status.md)。
+安全边界：当前开发身份解析器信任请求头。监听地址已强制为 loopback（默认
+`127.0.0.1`，Settings 与装配层双重校验，并有真实 socket 测试），但生产身份认证
+仍未实现，因此 API 只能在受控本机环境使用。完整证据与已知问题见
+[实施状态](./status.md)。

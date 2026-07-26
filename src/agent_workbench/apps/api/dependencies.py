@@ -25,6 +25,7 @@ from agent_workbench.adapters.persistence import (
 )
 from agent_workbench.application.uploads import UploadService
 from agent_workbench.apps.api.identity import HeaderPrincipalResolver
+from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.documents import DocumentStore
@@ -67,6 +68,17 @@ def build_dependencies(config: ApiRuntimeConfig) -> ApiDependencies:
         raise InsecureDeploymentError(
             "the API has no production identity provider yet; "
             "app.deployment_scope must be 'local' until one exists"
+        )
+    if not is_loopback_bind_address(config.host):
+        # Settings rejects this too. Checked again here because a scope of
+        # "local" says what a deployment calls itself, and the bind address is
+        # what actually decides who can reach the header resolver -- and this
+        # is the layer that chooses that resolver, so this is where refusing
+        # to pair the two belongs.
+        raise InsecureDeploymentError(
+            f"the API resolves identity from request headers, so it may only "
+            f"bind a loopback address; {config.host!r} is reachable from other "
+            f"machines"
         )
     if config.artifacts.backend != "local":
         raise InsecureDeploymentError(

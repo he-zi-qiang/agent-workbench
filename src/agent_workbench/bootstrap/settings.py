@@ -45,6 +45,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 
 CONTROL_ENV_VARS = {
@@ -149,13 +150,29 @@ class AppSettings(StrictModel):
 
 
 class ApiSettings(StrictModel):
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
     request_timeout_seconds: int = Field(default=180, ge=1, le=3600)
     sse_heartbeat_seconds: int = Field(default=15, ge=1, le=300)
     shutdown_grace_seconds: int = Field(default=30, ge=1, le=600)
     max_control_request_body_bytes: int = Field(default=2_097_152, ge=1024)
     document_upload_transport: Literal["artifact_data_plane"] = "artifact_data_plane"
+
+    @field_validator("host")
+    @classmethod
+    def refuse_reachable_bind_address(cls, value: str) -> str:
+        # ADR-012. The only identity resolver that exists reads two request
+        # headers, so any interface this binds is an interface on which callers
+        # name themselves. The rule is unconditional rather than conditioned on
+        # deployment_scope because the scope is a label, and a label is not
+        # what decides who resolves identity. When a real identity provider
+        # lands, this validator gains a condition; it does not go away.
+        if not is_loopback_bind_address(value):
+            raise ValueError(
+                f"api.host must be a loopback address until the API has a real "
+                f"identity provider; {value!r} is reachable from other machines"
+            )
+        return value
 
 
 class DatabaseSettings(StrictModel):

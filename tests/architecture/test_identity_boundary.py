@@ -97,6 +97,13 @@ def test_the_api_refuses_a_remote_deployment_scope() -> None:
     """The refusal is what makes deferring a real identity provider safe.
 
     ADR-012 rests on it: relax this and the decision it records lapses with it.
+
+    This covers the scope label and nothing else. It once read as though it
+    guarded the whole boundary, and for a while the committed default was
+    ``0.0.0.0`` -- a ``local`` process listening on every interface, past a
+    green test. The bind address is a separate property with its own tests in
+    ``tests/api/test_bind_address.py``, which open a socket rather than read
+    a label.
     """
 
     source = (PACKAGE_ROOT / "apps" / "api" / "dependencies.py").read_text(

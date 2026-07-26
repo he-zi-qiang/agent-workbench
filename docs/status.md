@@ -40,8 +40,8 @@
 
 当前阻断项：
 
-1. 默认 `api.host = "0.0.0.0"`，开发 Header Identity Resolver 可能被本机之外
-   的调用者访问并伪造身份；
+1. ~~默认 `api.host = "0.0.0.0"`，开发 Header Identity Resolver 可能被本机
+   之外的调用者访问并伪造身份~~（2026-07-26 已修复，见下方 P0-1 一节）；
 2. ~~`requires_approval=True` 没有阻止 write tool 执行~~（2026-07-26 已修复，
    见下方 P0-2 一节）；
 3. Upload/Document/Artifact 缺少同 tenant 内的 owner/ACL 对象授权；
@@ -864,9 +864,9 @@ WP03-07：FastAPI 上传路由与控制面 request-limit 中间件。
 解包——一个配置对象的 repr 因此打不出 DSN。
 
 **身份是接口层的结果，不是请求体字段。** 目前只有一个读 header 的开发用解析器，
-`deployment_scope == "remote"` 时会在装配阶段拒绝启动。但当前默认 host 是
-`0.0.0.0`，名义上的 local scope 仍可能监听所有网卡；因此这道检查不足以阻止
-意外暴露，修复前只能用于受控本机开发。
+`deployment_scope == "remote"` 时会在装配阶段拒绝启动。写这一节时默认 host 还是
+`0.0.0.0`，名义上的 local scope 仍可能监听所有网卡，所以这道检查当时不足以阻止
+意外暴露；监听地址的强制校验见下方 P0-1 一节（2026-07-26）。
 
 2026-07-25 验证证据：
 
@@ -917,7 +917,7 @@ ACL 过滤的意义完全取决于 principal 从哪里来。
 原 ADR 依赖“开发身份只能随 loopback 监听运行”这一安全前提。2026-07-25 核验
 发现当前实现并未强制它：默认 `api.host = "0.0.0.0"`，local scope 不检查实际
 监听地址。因此 remote 拒绝装配只能算部分护栏，不能证明缺口无法被意外暴露。
-ADR 已补记这一实现偏差。
+ADR 已补记这一实现偏差，并在 2026-07-26 修复（见下方 P0-1 一节）。
 
 新增 `tests/architecture/test_identity_boundary.py`，把 ADR 里的规则变成可执行
 的：`PrincipalContext` 只能在一份显式清单里的模块中构造（API 的解析器、CLI 的
@@ -964,3 +964,41 @@ demo、以及定义它的领域模块）。新增一处就要改清单，也就�
 范围说明：只改这一件事。P0-1（loopback 强制）、P1-6（改写绕过字节上限）
 与 P1-7（Policy/Hook deadline）都在同一个文件附近，但各自是独立的行为变化，
 留给各自的 PR。
+
+## P0-1 监听地址强制 loopback
+
+状态：**已实现并通过本地测试**。核验报告 §4 的 P0-1、§6 修复顺序第 1 项。
+
+`api.host` 默认从 `0.0.0.0` 改为 `127.0.0.1`；`ApiSettings.host` 只接受 loopback
+地址；`build_dependencies()` 在选定 Header Resolver 之前再校验一次。
+
+**规则是无条件的，没有以 `deployment_scope` 为条件。** scope 是部署给自己贴的
+标签，而决定谁能触达 Header Resolver 的是绑定地址——把标签当作绑定地址的代理，
+正是这条缺陷成立的原因。remote scope 拒绝装配的检查保持不变，两者互不替代。
+
+为什么两层都校验：`ApiRuntimeConfig` 可以不经 Settings 构造（测试就这么做），
+而装配层正是选定 Header Resolver 的那一层，拒绝把它和一个可达地址配在一起的
+判断，属于那里。
+
+不是 `localhost` 的主机名一律拒绝，而不是去解析它：解析在校验时和 bind 时可以
+给出两个答案，DNS 在两者之间还能改变，「不确定」的安全答案是否。
+
+新增 `tests/api/test_bind_address.py`，16 条，覆盖提交默认值、Settings、装配和
+真实 socket 四层。**验证过是有牙的**：撤掉 Settings 校验失败 6 条，撤掉装配层
+校验失败 1 条，只把默认值改回 `0.0.0.0` 失败 5 条，三者全撤失败 11 条。
+
+其中 socket 那两条刻意绕开 `Settings`，直接读 `config.default.toml` 的原始值来
+`bind()`——只见过校验器放行的值的 socket 测试，抓不到校验器本身写错，而这一条
+要在校验器都被删掉时仍然成立。三者全撤那次，它是靠一次**成功的跨接口连接**抓到
+缺陷的，不是靠读字符串。
+
+配套的对照组同样必需：同一条连接在 `0.0.0.0` 绑定下必须连得上。没有它，
+「连接被拒绝」既可能说明护栏有效，也可能说明探针指向了一个本来就没人监听的端口。
+这正是这条缺陷能活下来的机制——`test_the_api_refuses_a_remote_deployment_scope`
+断言的是 scope 标签，读起来却像在守护整个身份边界。该测试保留（scope 那一半它
+确实守住了），docstring 已写明它不覆盖监听地址。
+
+范围说明：这挡住的是**意外暴露**，不是认证。反向代理、SSH 端口转发或容器端口
+映射仍可以把 loopback 进程送上网络——那是部署方的选择，代码拦不住，也不该假装
+拦得住。生产身份认证仍是 Planned，README 与能力表不因此升级。Settings 叶子字段
+数不变（231），没有新增配置项。
