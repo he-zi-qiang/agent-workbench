@@ -44,7 +44,8 @@
    之外的调用者访问并伪造身份~~（2026-07-26 已修复，见下方 P0-1 一节）；
 2. ~~`requires_approval=True` 没有阻止 write tool 执行~~（2026-07-26 已修复，
    见下方 P0-2 一节）；
-3. Upload/Document/Artifact 缺少同 tenant 内的 owner/ACL 对象授权；
+3. Upload/Document/Artifact 缺少同 tenant 内的 owner/ACL 对象授权（Upload 与
+   Document 于 2026-07-26 修复，见下方 P1-1 一节；Artifact 仍然开着）；
 4. tool/token/cost budget 不是硬上限；
 5. Policy 改写可绕过参数字节上限，Policy/Hook deadline 不完整；
 6. DeepSeek 对损坏 SSE frame fail open，Artifact 下载不是真正流式；
@@ -1002,3 +1003,57 @@ demo、以及定义它的领域模块）。新增一处就要改清单，也就�
 映射仍可以把 loopback 进程送上网络——那是部署方的选择，代码拦不住，也不该假装
 拦得住。生产身份认证仍是 Planned，README 与能力表不因此升级。Settings 叶子字段
 数不变（231），没有新增配置项。
+
+## P1-1 上传与文档的对象级授权
+
+状态：**已实现并通过本地测试（含真实 PostgreSQL）**。核验报告 §4 的 P1-1、
+§6 修复顺序第 3 项的前半。
+
+`DocumentStore` 的每个方法都显式接收 `principal_id`；`UploadService` 与三条上传
+路由把接口层解析出的 principal 一路传下去。此前整条链路只往下传 tenant，于是同
+一个 tenant 里的任何人只要知道 upload id，就能替 owner 传输、替 owner 完成，或者
+把自己的 upload 指向别人的 document、覆盖内容并替换 ACL。
+
+**读和写是两条不同的规则**，这是这一条最重要的判断：
+
+| 操作 | 谁可以 |
+|---|---|
+| 观察 / 传输 / 完成一个 upload | 声明它的那个 principal |
+| 向已存在的文档提交新版本 | 文档 owner，**仅此** |
+| 读文档、版本列表、授权名单 | owner **或** ACL 授权的 principal |
+
+把 ACL 同时当作写授权，会让「授权某人查看」悄悄变成「授权某人覆盖」——那是没有
+任何人打算给出的权限。所以 `_is_granted()` 只服务读路径，写路径只比 owner。
+
+**授权检查与写在同一把锁下。** `_locked_document()` 现在返回整行（revision、
+owner、knowledge base），检查放在 `FOR UPDATE` 之后：先检查再取锁，判断的是一份
+可能已经不是被写对象的行。条件插入那条竞态分支同理——检查放在
+`ON CONFLICT DO NOTHING` **之后**，对最终握住的那一行做，否则「输掉创建竞态」
+反而成了获得写权限的路径。
+
+KB 不一致用新的 `KnowledgeBaseMismatchError` 拒绝（409）。它不是授权失败——调用方
+确实是 owner——而是一个与已提交事实矛盾的断言：接受它会让 document 行停在 KB-A，
+而 outbox 事件告诉索引 KB-B。沿用 `UploadVerificationError` 的既有做法复用
+`invalid_tool_input` 错误码，**没有新增领域错误词汇**。
+
+拒绝一律是 404，与「不存在」「别的 tenant 的」完全同形。
+
+回归测试 17 条。新增 `tests/api/test_upload_authorization.py`（10 条）**固定
+tenant、只换 principal**，并且**故意把 upload id 和 document id 交给攻击者**——
+那正是要防的处境，id 会出现在日志、URL 和工单里，「难猜」不是授权规则。另有
+7 条落在持久化层，因为读规则目前没有 HTTP 面。
+
+**验证过是有牙的**：撤掉 upload owner 检查失败 3 条，撤掉 document owner 检查
+失败 3 条，撤掉 KB 检查失败 2 条，三者全撤失败 8/10（通过的 2 条正是对照组），
+撤掉读授权失败 3 条。并发竞态那条单独验证过：把写授权挪到条件插入**之前**，
+它连续 6 次全部失败。
+
+写这些测试时改掉了自己两条虚的断言：一条下载 owner 原来的 artifact 来证明「内容
+还在」——但接管会写**新的** artifact 并把文档指过去，原 artifact 两种情况下都还在，
+所以那条断言恒真；改成直接查库断言版本数、revision 与 digest。另一条只断言 404
+正文里没有文件名，而放行时正文本来也没有文件名，同样恒真；改成状态码和正文一起断言。
+
+**已知残留**：`document_id` 由调用方指定，因此邻居仍可通过「用别人的 id 得到
+404、用新 id 得到 201」区分出某个 document id 是否存在。消掉它要改成服务端铸造
+document id，那是 API 形状变更而不是授权变更，不在本 PR。P1-2（Artifact 对象
+授权）与 P1-3（相同内容重传忽略 ACL 撤销）仍然开着，各自一个 PR。

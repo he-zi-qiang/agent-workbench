@@ -14,6 +14,11 @@ that the index will faithfully reproduce.
 
 What the caller never supplies is a location. Object keys come from the store,
 which is the difference between "upload a document" and "write to this path".
+
+Nor does the caller supply an identity. Every call takes the principal the
+interface layer resolved, and passes it down: a tenant says whose database this
+is, not who is asking, and an upload id that authorized its own completion
+would be a bearer token printed in every log line that mentions it.
 """
 
 from __future__ import annotations
@@ -72,6 +77,7 @@ class UploadService:
         *,
         upload_id: str,
         tenant_id: str,
+        principal_id: str,
         artifact_id: str,
         document_id: str,
         knowledge_base_id: str,
@@ -80,9 +86,12 @@ class UploadService:
     ) -> DocumentVersion:
         """Verify the transferred object, then commit the version and its event."""
 
+        # Reads the caller's own upload, so someone else's is refused before
+        # the artifact is even looked at.
         intent = await self.documents.upload_intent(
             upload_id=upload_id,
             tenant_id=tenant_id,
+            principal_id=principal_id,
         )
         # head() is tenant-scoped, so an artifact belonging to someone else is
         # not found rather than mismatched: the difference would confirm it
@@ -96,6 +105,7 @@ class UploadService:
         return await self.documents.commit_version(
             upload_id=upload_id,
             tenant_id=tenant_id,
+            principal_id=principal_id,
             document_id=document_id,
             knowledge_base_id=knowledge_base_id,
             version_id=version_id or new_id(VERSION_ID_PREFIX),
