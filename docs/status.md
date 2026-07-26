@@ -51,7 +51,12 @@
    （2026-07-26 已修复，见下方 P1-6 / P1-7 一节）；
 6. ~~DeepSeek 对损坏 SSE frame fail open，Artifact 下载不是真正流式~~
    （2026-07-26 均已修复，见下方 P1-9 / P1-4 两节）；
-7. Outbox claim 没有 lease/fence，worker 崩溃后不可恢复。
+7. ~~Outbox claim 没有 lease/fence，worker 崩溃后不可恢复~~
+   （2026-07-26 已修复，见下方 P1-10 一节）。
+
+**七条阻断项已全部关闭**，核验报告的 14 条缺陷同样全部修复并附回归测试。每一条的
+触发条件、判断依据、有牙验证结果与**明确留下的缺口**记在下面各自的小节里；报告的
+§7 是同一份记录的另一半。
 
 完整触发条件、文件位置和建议修复顺序见
 [仓库核验报告](./repository-audit-2026-07-25.md)。核验那一轮只校正文档，没有改
@@ -1311,3 +1316,31 @@ body 消息（Starlette 总补一条**空**终止消息，单次整体 yield 也
 
 **验证过是有牙的**：路由改回「整体读入 + 单片 yield」失败 1 条，撤掉 `iter_chunks()`
 授权检查失败 1 条。
+## P1-10 Outbox lease 与 fencing
+
+状态：**已实现并通过本地测试（含真实 PostgreSQL 与 Alembic 往返）**。核验报告 §4 的
+P1-10，也是审计要求「在真正启用 ingestion worker 之前」完成的一条。
+
+claim 成为**租约**并带 fencing token。Alembic `0003` 给 `outbox_events` 增加
+`lease_until` 与 `claim_token` 及按到期时间的部分索引。
+
+**为什么单有到期不够。** 一个只是卡住的 worker（长 GC、网络分区）在租约到期时仍然
+活着。它回来后会 ack 一个**另一个 worker 此刻正在处理**的单元，把别人的在途工作标记
+为完成，而别人真正做完的结果反而像重复劳动。所以每次 claim 铸一个 token，ack 必须带
+当前的那个。
+
+`StaleExecutionError` 从 PR-003 起定义、docstring 明写用途，一直**没有生产者**——
+第三个这种形状（前两个是 P0-2 的 `PermissionRequested` 与 P1-3 的 `acl_changed`）。
+
+到期一律读**数据库时钟**：两个 worker 对时间的分歧正是同一租约被握两次的方式。
+ack 靠 **rowcount** 判断，因为匹配不到任何行的 UPDATE 是成功的。
+
+迁移会释放迁移前已 claim 未 ack 的行——它们没有租约也没有 token，既不可回收也不可
+ack，正卡在这次修复要消除的状态里。释放是安全的：未 ack 的事件本就是欠着的工作，
+最坏是被重复应用一次，而 ingestion 侧无论如何必须幂等。
+
+**仍缺 heartbeat**：诚实做慢活的 worker 无法延长租约、会丢掉它。那属于 ingestion
+worker 本身；在它存在前，租约应设得比最慢的工作单元更长。已写进模块 docstring。
+
+6 条测试（含 2 条对照）。**验证过是有牙的**：撤掉过期回收失败 3 条，撤掉 fence
+失败 2 条。

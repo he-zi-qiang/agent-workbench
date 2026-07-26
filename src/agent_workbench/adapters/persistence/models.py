@@ -224,6 +224,13 @@ outbox_events = Table(
     ),
     Column("claimed_by", String(IDENTIFIER_LENGTH), nullable=True),
     Column("claimed_at", DateTime(timezone=True), nullable=True),
+    # A claim is a lease, not a possession. It expires so a worker that dies
+    # holding one does not take its share of the queue with it.
+    Column("lease_until", DateTime(timezone=True), nullable=True),
+    # The fence. Every claim mints a new one, so an acknowledgement from a
+    # worker whose lease was already reclaimed matches nothing and is refused
+    # rather than silently marking somebody else's work done.
+    Column("claim_token", String(IDENTIFIER_LENGTH), nullable=True),
     Column("acked_at", DateTime(timezone=True), nullable=True),
     CheckConstraint(
         "kind IN ('document_upserted', 'document_deleted', 'acl_changed')",
@@ -232,6 +239,12 @@ outbox_events = Table(
     Index(
         "ix_outbox_events_pending",
         "sequence",
+        postgresql_where=text("acked_at IS NULL"),
+    ),
+    # Reclaim scans by expiry, so it must not walk the whole unacked backlog.
+    Index(
+        "ix_outbox_events_lease",
+        "lease_until",
         postgresql_where=text("acked_at IS NULL"),
     ),
 )

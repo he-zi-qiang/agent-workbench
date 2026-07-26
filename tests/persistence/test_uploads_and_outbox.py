@@ -27,7 +27,7 @@ from agent_workbench.adapters.persistence import (
 )
 from agent_workbench.adapters.persistence.models import documents, outbox_events
 from agent_workbench.application.uploads import UploadService, UploadVerificationError
-from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.errors import NotFoundError, StaleExecutionError
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.ports.documents import KnowledgeBaseMismatchError
 
@@ -447,7 +447,9 @@ def test_acknowledging_clears_the_pending_work(tmp_path: Path) -> None:
         await _upload(harness)
         before = await harness.outbox.pending_count()
         events = await harness.outbox.claim(worker_id="worker_1")
-        await harness.outbox.ack(event_id=events[0].event_id)
+        await harness.outbox.ack(
+            event_id=events[0].event_id, claim_token=events[0].claim_token
+        )
         return before, await harness.outbox.pending_count()
 
     assert _run(scenario, tmp_path) == (1, 0)
@@ -720,3 +722,92 @@ def test_content_after_an_acl_change_takes_the_next_revision(tmp_path: Path) -> 
         ("acl_changed", 2),
         ("document_upserted", 3),
     ]
+
+
+def test_an_expired_lease_is_claimable_again(tmp_path: Path) -> None:
+    """P1-10. A worker that dies holding a claim used to keep it forever.
+
+    Nothing reclaimed it, so its share of the queue became invisible -- the
+    exact failure ``SKIP LOCKED`` was chosen over queue partitioning to avoid.
+    """
+
+    async def scenario(harness: Harness) -> tuple[str, str]:
+        await _upload(harness)
+        first = await harness.outbox.claim(worker_id="worker_1", lease_seconds=0.05)
+        await asyncio.sleep(0.1)
+        second = await harness.outbox.claim(worker_id="worker_2")
+        return first[0].claim_token, second[0].claim_token
+
+    first_token, second_token = _run(scenario, tmp_path)
+
+    assert first_token != second_token
+
+
+def test_a_current_lease_is_not_taken_from_its_holder(tmp_path: Path) -> None:
+    """The control: expiry reclaims, it does not simply hand work around."""
+
+    async def scenario(harness: Harness) -> int:
+        await _upload(harness)
+        await harness.outbox.claim(worker_id="worker_1", lease_seconds=30)
+        return len(await harness.outbox.claim(worker_id="worker_2"))
+
+    assert _run(scenario, tmp_path) == 0
+
+
+def test_a_stale_worker_cannot_acknowledge_reclaimed_work(tmp_path: Path) -> None:
+    """The reason expiry alone would be unsafe.
+
+    A worker that merely stalled -- a long pause, a partition -- is still
+    alive when its lease expires. Coming back, it would mark as done a unit
+    another worker is holding right now, and that worker's real result would
+    then look like duplicate work.
+    """
+
+    async def scenario(harness: Harness) -> None:
+        await _upload(harness)
+        stalled = await harness.outbox.claim(worker_id="worker_1", lease_seconds=0.05)
+        await asyncio.sleep(0.1)
+        await harness.outbox.claim(worker_id="worker_2")
+        await harness.outbox.ack(
+            event_id=stalled[0].event_id, claim_token=stalled[0].claim_token
+        )
+
+    with pytest.raises(StaleExecutionError):
+        _run(scenario, tmp_path)
+
+
+def test_the_reclaiming_worker_can_acknowledge(tmp_path: Path) -> None:
+    """The control: the fence refuses a stale token, not every token."""
+
+    async def scenario(harness: Harness) -> int:
+        await _upload(harness)
+        await harness.outbox.claim(worker_id="worker_1", lease_seconds=0.05)
+        await asyncio.sleep(0.1)
+        current = await harness.outbox.claim(worker_id="worker_2")
+        await harness.outbox.ack(
+            event_id=current[0].event_id, claim_token=current[0].claim_token
+        )
+        return await harness.outbox.pending_count()
+
+    assert _run(scenario, tmp_path) == 0
+
+
+def test_acknowledging_an_unknown_event_is_refused(tmp_path: Path) -> None:
+    """An UPDATE that matches nothing succeeds, so the rowcount is the check."""
+
+    async def scenario(harness: Harness) -> None:
+        await _upload(harness)
+        await harness.outbox.ack(event_id="obx_missing", claim_token="clm_whatever")
+
+    with pytest.raises(StaleExecutionError):
+        _run(scenario, tmp_path)
+
+
+def test_a_lease_of_zero_is_refused(tmp_path: Path) -> None:
+    """A lease that has already expired hands live work to the next caller."""
+
+    async def scenario(harness: Harness) -> None:
+        await harness.outbox.claim(worker_id="worker_1", lease_seconds=0)
+
+    with pytest.raises(ValueError, match="lease_seconds"):
+        _run(scenario, tmp_path)
