@@ -160,6 +160,34 @@ def _run(
     return asyncio.run(scenario()), wire
 
 
+def _run_bounded(
+    responder: Callable[[httpx.Request], httpx.Response],
+    *,
+    max_argument_chars: int,
+) -> tuple[list[ModelEvent], _Wire]:
+    """Same as ``_run``, with the adapter's argument ceiling made small."""
+
+    wire = _Wire(responder)
+
+    async def scenario() -> list[ModelEvent]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(wire)) as client:
+            model = DeepSeekModel(
+                client=client,
+                api_key=API_KEY,
+                base_url=BASE_URL,
+                profiles=PROFILES,
+                max_argument_chars=max_argument_chars,
+            )
+            return [
+                event
+                async for event in model.stream(
+                    ModelRequest(messages=(user_message("hi"),))
+                )
+            ]
+
+    return asyncio.run(scenario()), wire
+
+
 def _completion(events: list[ModelEvent]) -> ModelStreamCompleted:
     last = events[-1]
     assert isinstance(last, ModelStreamCompleted)
@@ -361,8 +389,10 @@ def test_an_unsupported_finish_reason_is_reported_rather_than_guessed() -> None:
     assert "content_filter" in completion.error.message
 
 
-def test_unreadable_frames_are_skipped_rather_than_fatal() -> None:
-    body = b": keep-alive comment\n\ndata: {not json}\n\n" + _sse(
+def test_comments_and_blank_lines_are_skipped() -> None:
+    """Framing that carries no data is not data, and never was."""
+
+    body = b": keep-alive comment\n\n\n" + _sse(
         _text_chunk("still here"), _finish_chunk("stop")
     )
 
@@ -372,6 +402,124 @@ def test_unreadable_frames_are_skipped_rather_than_fatal() -> None:
         "still here"
     ]
     assert _completion(events).finish_reason == "stop"
+
+
+def test_an_unreadable_data_frame_ends_the_stream() -> None:
+    """P1-9. This test replaced one asserting the opposite.
+
+    The old ``test_unreadable_frames_are_skipped_rather_than_fatal`` wrote the
+    defect down as the intended behaviour, and passed for it. Skipping a frame
+    is only harmless if frames are independent, and tool-argument fragments are
+    not: see the test below.
+    """
+
+    body = b"data: {not json}\n\n" + _sse(
+        _text_chunk("still here"), _finish_chunk("stop")
+    )
+
+    events, _ = _run(_serve(body))
+    completion = _completion(events)
+
+    assert completion.finish_reason == "error"
+    assert completion.error is not None
+    assert completion.error.code == "provider_error"
+
+
+def test_a_frame_that_is_not_an_object_ends_the_stream() -> None:
+    """Valid JSON is not the same as a chunk."""
+
+    body = b'data: ["not", "a", "chunk"]\n\n' + _sse(_finish_chunk("stop"))
+
+    completion = _completion(_run(_serve(body))[0])
+
+    assert completion.finish_reason == "error"
+
+
+def test_a_dropped_fragment_cannot_become_a_different_tool_call() -> None:
+    """The reason skipping is not harmless.
+
+    Tool arguments arrive as fragments and are concatenated. Drop one from the
+    middle and the rest can still form a perfectly valid JSON object -- a call
+    the model never made, with arguments nobody chose, proposed as though it
+    had. Reproduced before the fix: the handler was offered
+    ``{"document_id": "doc_SAFE"}``.
+    """
+
+    body = (
+        _sse(
+            _tool_fragment(
+                index=0,
+                call_id="call_1",
+                name="read_document",
+                arguments='{"document_id": "doc_SAFE',
+            ),
+            done=False,
+        )
+        + b'data: {"choices": [BROKEN\n\n'
+        + _sse(
+            _tool_fragment(index=0, arguments='_BUT_TRUNCATED"}'),
+            _finish_chunk("tool_calls"),
+        )
+    )
+
+    events, _ = _run(_serve(body))
+
+    assert [event for event in events if isinstance(event, ModelToolCallProposed)] == []
+    assert _completion(events).finish_reason == "error"
+
+
+def test_an_over_long_text_delta_is_reported_not_raised() -> None:
+    """A provider's limits are not this process's contract.
+
+    ``BoundedText`` caps a delta at 4096 characters, and constructing one over
+    that raised a Pydantic ``ValidationError`` straight out of ``ModelPort``.
+    """
+
+    body = _sse(_text_chunk("x" * 5000), _finish_chunk("stop"))
+
+    completion = _completion(_run(_serve(body))[0])
+
+    assert completion.finish_reason == "error"
+    assert completion.error is not None
+    assert completion.error.code == "provider_error"
+
+
+def test_accumulated_tool_arguments_are_bounded() -> None:
+    """The one thing here that grows with whatever the provider sends."""
+
+    body = _sse(
+        _tool_fragment(
+            index=0, call_id="call_1", name="read_document", arguments="x" * 400
+        ),
+        _finish_chunk("tool_calls"),
+    )
+
+    events, _ = _run_bounded(_serve(body), max_argument_chars=64)
+    completion = _completion(events)
+
+    assert completion.finish_reason == "error"
+    assert completion.error is not None
+    assert "ceiling" in completion.error.message
+
+
+def test_arguments_inside_the_ceiling_still_assemble() -> None:
+    """The control: the bound is a bound, not a refusal to accept tool calls."""
+
+    body = _sse(
+        _tool_fragment(
+            index=0,
+            call_id="call_1",
+            name="read_document",
+            arguments='{"document_id": "doc_1"}',
+        ),
+        _finish_chunk("tool_calls"),
+    )
+
+    events, _ = _run_bounded(_serve(body), max_argument_chars=64)
+    proposed = [event for event in events if isinstance(event, ModelToolCallProposed)]
+
+    assert len(proposed) == 1
+    assert proposed[0].call.arguments == {"document_id": "doc_1"}
 
 
 def test_an_unknown_profile_fails_without_calling_the_provider() -> None:
