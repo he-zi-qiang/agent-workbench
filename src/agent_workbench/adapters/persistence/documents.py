@@ -7,7 +7,10 @@ commits would create both of the failures that ordering cannot fix: a document
 nothing will ever index, and an index entry for content that was rolled back.
 
 Revisions are taken while the document row is locked, which is what makes them
-monotonic under concurrent uploads rather than merely distinct.
+monotonic under concurrent uploads rather than merely distinct. Ownership is
+checked under that same lock, and for the same reason: a check that released
+the row before writing would authorize against a document that no longer looks
+like the one being written to.
 
 Completion is idempotent twice over. Completing the same upload again returns
 the version it already produced, and re-uploading content identical to the
@@ -17,6 +20,7 @@ make the index redo work that would produce the same rows.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
 from sqlalchemy import func, insert, select, update
@@ -33,9 +37,23 @@ from agent_workbench.adapters.persistence.models import (
 )
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.identifiers import new_id
-from agent_workbench.ports.documents import Document, DocumentVersion, UploadIntent
+from agent_workbench.ports.documents import (
+    Document,
+    DocumentVersion,
+    KnowledgeBaseMismatchError,
+    UploadIntent,
+)
 
 OUTBOX_EVENT_PREFIX = "obx"
+
+
+@dataclass(frozen=True, slots=True)
+class _LockedDocument:
+    """A document row held under ``FOR UPDATE``, with what decides the write."""
+
+    revision: int
+    owner_id: str
+    knowledge_base_id: str
 
 
 class PostgresDocumentStore:
@@ -84,15 +102,20 @@ class PostgresDocumentStore:
                 raise ValueError(f"upload {upload_id} already exists") from exc
         return intent
 
-    async def upload_intent(self, *, upload_id: str, tenant_id: str) -> UploadIntent:
+    async def upload_intent(
+        self, *, upload_id: str, tenant_id: str, principal_id: str
+    ) -> UploadIntent:
         async with self._engine.connect() as connection:
-            return await self._require_intent(connection, upload_id, tenant_id)
+            return await self._require_intent(
+                connection, upload_id, tenant_id, principal_id
+            )
 
     async def commit_version(
         self,
         *,
         upload_id: str,
         tenant_id: str,
+        principal_id: str,
         document_id: str,
         knowledge_base_id: str,
         version_id: str,
@@ -107,6 +130,7 @@ class PostgresDocumentStore:
                 connection,
                 upload_id,
                 tenant_id,
+                principal_id,
                 for_update=True,
             )
 
@@ -128,7 +152,7 @@ class PostgresDocumentStore:
                     .values(
                         document_id=document_id,
                         tenant_id=tenant_id,
-                        owner_id=intent.owner_id,
+                        owner_id=principal_id,
                         knowledge_base_id=knowledge_base_id,
                         source_revision=0,
                     )
@@ -142,6 +166,12 @@ class PostgresDocumentStore:
                 if current is None:  # pragma: no cover - the row exists by now
                     raise NotFoundError("document not found")
 
+            # Checked once, on whichever row is now held: the one that was
+            # already there, or the one this transaction lost the race to
+            # create. Losing that race must not be a way to acquire a write.
+            self._require_writable(current, principal_id, knowledge_base_id)
+
+            revision_before = current.revision
             latest = await self._latest_version(connection, document_id)
             if latest is not None and latest.content_sha256 == digest:
                 # Identical content. Advancing the revision would make the
@@ -149,7 +179,7 @@ class PostgresDocumentStore:
                 await self._mark_completed(connection, upload_id, latest.version_id)
                 return latest
 
-            revision = current + 1
+            revision = revision_before + 1
             await connection.execute(
                 update(documents)
                 .where(documents.c.document_id == document_id)
@@ -192,7 +222,9 @@ class PostgresDocumentStore:
             await self._mark_completed(connection, upload_id, version.version_id)
             return version
 
-    async def document(self, *, document_id: str, tenant_id: str) -> Document:
+    async def document(
+        self, *, document_id: str, tenant_id: str, principal_id: str
+    ) -> Document:
         async with self._engine.connect() as connection:
             row = (
                 await connection.execute(
@@ -210,7 +242,7 @@ class PostgresDocumentStore:
             ).first()
         if row is None:
             raise NotFoundError("document not found")
-        return Document(
+        document = Document(
             document_id=cast(str, row.document_id),
             tenant_id=cast(str, row.tenant_id),
             owner_id=cast(str, row.owner_id),
@@ -218,14 +250,22 @@ class PostgresDocumentStore:
             source_revision=cast(int, row.source_revision),
             deleted=cast(bool, row.deleted),
         )
+        if document.owner_id != principal_id and not await self._is_granted(
+            document_id, principal_id
+        ):
+            raise NotFoundError("document not found")
+        return document
 
     async def versions(
         self,
         *,
         document_id: str,
         tenant_id: str,
+        principal_id: str,
     ) -> tuple[DocumentVersion, ...]:
-        await self.document(document_id=document_id, tenant_id=tenant_id)
+        await self.document(
+            document_id=document_id, tenant_id=tenant_id, principal_id=principal_id
+        )
         async with self._engine.connect() as connection:
             rows = (
                 await connection.execute(
@@ -255,8 +295,11 @@ class PostgresDocumentStore:
         *,
         document_id: str,
         tenant_id: str,
+        principal_id: str,
     ) -> tuple[str, ...]:
-        owned = await self.document(document_id=document_id, tenant_id=tenant_id)
+        owned = await self.document(
+            document_id=document_id, tenant_id=tenant_id, principal_id=principal_id
+        )
         async with self._engine.connect() as connection:
             rows = (
                 await connection.execute(
@@ -268,11 +311,53 @@ class PostgresDocumentStore:
         granted = {cast(str, row.principal_id) for row in rows}
         return tuple(sorted({owned.owner_id, *granted}))
 
+    async def _is_granted(self, document_id: str, principal_id: str) -> bool:
+        """Whether the ACL names this principal.
+
+        Reading answers to the owner or a granted principal; writing answers to
+        the owner alone. Keeping them separate is the point -- a grant to read
+        a document that also conferred the right to overwrite it would be a
+        permission nobody chose to hand out.
+        """
+
+        async with self._engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    select(document_acl.c.principal_id)
+                    .where(document_acl.c.document_id == document_id)
+                    .where(document_acl.c.principal_id == principal_id)
+                )
+            ).first()
+        return row is not None
+
+    @staticmethod
+    def _require_writable(
+        current: _LockedDocument,
+        principal_id: str,
+        knowledge_base_id: str,
+    ) -> None:
+        """Whether this principal may commit a new version to this document."""
+
+        if current.owner_id != principal_id:
+            # Someone else's document. Committing here would overwrite its
+            # content and replace its ACL -- the write the tenant boundary
+            # alone never stopped. Only the owner writes; a read grant is a
+            # grant to read.
+            raise NotFoundError("document not found")
+        if current.knowledge_base_id != knowledge_base_id:
+            # The caller owns it, so this is not a refusal to answer -- it is a
+            # claim that contradicts the row. Accepting it would leave the row
+            # in one knowledge base and tell the index another.
+            raise KnowledgeBaseMismatchError(
+                "the document is not in the named knowledge base"
+            )
+
     async def _require_intent(
         self,
         connection: AsyncConnection,
         upload_id: str,
         tenant_id: str,
+        principal_id: str,
         *,
         for_update: bool = False,
     ) -> UploadIntent:
@@ -296,6 +381,11 @@ class PostgresDocumentStore:
         row = (await connection.execute(query)).first()
         if row is None:
             raise NotFoundError("upload not found")
+        if cast(str, row.owner_id) != principal_id:
+            # Another principal's upload. Its filename and media type are that
+            # principal's, and completing it would attribute their document to
+            # a transfer they did not make.
+            raise NotFoundError("upload not found")
         return UploadIntent(
             upload_id=cast(str, row.upload_id),
             tenant_id=cast(str, row.tenant_id),
@@ -313,18 +403,24 @@ class PostgresDocumentStore:
         connection: AsyncConnection,
         document_id: str,
         tenant_id: str,
-    ) -> int | None:
-        """Hold the document row and return its revision, or ``None`` if absent.
+    ) -> _LockedDocument | None:
+        """Hold the document row and return it, or ``None`` if absent.
 
         A freshly created row carries revision 0 and is raised to 1 before the
         transaction commits, so a committed document is always at 1 or above.
         The lock is what makes revisions monotonic under concurrent uploads
-        rather than merely distinct.
+        rather than merely distinct -- and it is also what makes the ownership
+        check meaningful, since the row cannot change between the two.
         """
 
         row = (
             await connection.execute(
-                select(documents.c.source_revision, documents.c.tenant_id)
+                select(
+                    documents.c.source_revision,
+                    documents.c.tenant_id,
+                    documents.c.owner_id,
+                    documents.c.knowledge_base_id,
+                )
                 .where(documents.c.document_id == document_id)
                 .with_for_update()
             )
@@ -335,7 +431,11 @@ class PostgresDocumentStore:
             # Another tenant's document id. Answering anything but "not found"
             # would confirm it exists.
             raise NotFoundError("document not found")
-        return cast(int, row.source_revision)
+        return _LockedDocument(
+            revision=cast(int, row.source_revision),
+            owner_id=cast(str, row.owner_id),
+            knowledge_base_id=cast(str, row.knowledge_base_id),
+        )
 
     async def _latest_version(
         self,

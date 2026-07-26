@@ -44,7 +44,8 @@ LangGraph 功能。
 API 测试不真实绑定 socket，预算测试没有覆盖越界批次，审批测试只验证 Policy DTO。
 
 > 本节记录的是 2026-07-25 核验当时的状态，不随后续修复改写。截至 2026-07-26，
-> 上列第 1、2 项已修复并有回归测试，逐条记录见 §7；第 3、4 项仍然开着。
+> 上列第 1、2 项已修复并有回归测试，逐条记录见 §7；第 3 项修掉了 Upload/Document
+> 一半（P1-1），Artifact 一半（P1-2）与第 4 项仍然开着。
 
 ## 2. 已实现能力
 
@@ -146,7 +147,9 @@ Policy 可返回 `effect="allow", requires_approval=True`，但 Gateway 只判�
 修复方向：审批设施完成前 fail closed；完成后发出权限请求并暂停 run，审批前绝不
 进入 `invoke()`。
 
-### P1-1 同 tenant 的非 owner 可接管上传并覆盖文档
+### P1-1 同 tenant 的非 owner 可接管上传并覆盖文档 —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 涉及：
 
@@ -404,3 +407,56 @@ socket 那两条刻意绕开 `Settings`。只见过校验器放行的值的 sock
 范围说明：这挡住的是**意外暴露**，不是认证。反向代理、SSH 端口转发或容器端口
 映射仍可以把 loopback 进程送上网络——那是部署方的选择，代码拦不住，也不该假装
 拦得住。生产身份认证仍是 Planned，能力表不因此升级。
+
+### P1-1 上传与文档的对象级授权（2026-07-26）
+
+行为变化：`DocumentStore` 的每个方法都显式接收 `principal_id`，不再只接收
+tenant。`UploadService` 与三条上传路由把接口层解析出的 principal 一路传下去。
+
+**读和写是两条不同的规则**，这是本条的核心判断：
+
+| 操作 | 谁可以 |
+|---|---|
+| 观察 / 传输 / 完成一个 upload | 声明它的那个 principal |
+| 向已存在的文档提交新版本 | 文档 owner，**仅此** |
+| 读文档、版本列表、授权名单 | owner **或** ACL 授权的 principal |
+
+把 ACL 同时当作写授权，会让「授权某人查看」悄悄变成「授权某人覆盖」——那是没有
+任何人打算给出的权限。所以 `_is_granted()` 只服务读路径，写路径只比 owner。
+
+**授权检查与写在同一把锁下。** `_locked_document()` 现在返回整行（revision、
+owner、knowledge base），检查放在 `FOR UPDATE` 之后：先检查再取锁的写法，会对着
+一份可能已经不是被写对象的行做判断。条件插入那条竞态分支同样如此——检查放在
+`ON CONFLICT DO NOTHING` **之后**，对最终握住的那一行做，否则输掉竞态反而成了
+获得写权限的路径。
+
+KB 不一致（既有文档属 KB-A 却提交 KB-B）用新的 `KnowledgeBaseMismatchError`
+拒绝，映射为 409。它不是授权失败——调用方确实是 owner——而是一个与已提交事实
+矛盾的断言；接受它会让 document 行停在 KB-A 而 outbox 事件告诉索引 KB-B。
+沿用 `UploadVerificationError` 的既有做法复用 `invalid_tool_input` 错误码，
+不新增领域词汇。
+
+拒绝一律是 `NotFoundError`（404），与「不存在」和「别的 tenant 的」完全同形。
+
+回归测试 17 条：
+
+- `tests/api/test_upload_authorization.py`（10 条，HTTP 层）——**固定 tenant、
+  只换 principal**，并且**故意把 upload id 和 document id 交给攻击者**，因为那
+  正是要防的处境；id 会出现在日志、URL 和工单里，「难猜」不是授权规则。含 3 条
+  对照（owner 仍可提交第二版、邻居可以拥有自己的文档、拒绝时不泄漏声明的文件名
+  且必须同时断言状态码）。
+- `tests/persistence/test_uploads_and_outbox.py`（7 条）——读规则没有 HTTP 面，
+  只能在这一层测；外加一条并发创建竞态测试。
+
+**验证过是有牙的**：撤掉 upload owner 检查失败 3 条，撤掉 document owner 检查
+失败 3 条，撤掉 KB 检查失败 2 条，三者全撤失败 8/10（通过的 2 条正是对照组），
+撤掉读授权失败 3 条。竞态那条单独验证：把写授权挪到条件插入**之前**，它连续
+6 次全部失败。
+
+原有的 IDOR 测试全部只换 tenant，因此这一整类缺陷从头到尾都是绿灯。审计原文
+「现有 IDOR 测试只换 tenant」说的就是这件事。
+
+**已知残留（不在本条范围）**：`document_id` 由调用方指定，因此邻居仍可通过
+「用别人的 id 提交得到 404、用新 id 得到 201」区分出某个 document id 是否存在。
+消除它需要改成服务端铸造 document id，属于 API 形状变更，不是授权变更。
+P1-2（Artifact 对象授权）与 P1-3（相同内容重传忽略 ACL 撤销）仍然开着。

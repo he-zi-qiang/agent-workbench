@@ -101,11 +101,12 @@ async def create_upload(
 async def transfer(upload_id: str, request: Request) -> ContentResponse:
     dependencies = dependencies_of(request)
     principal = dependencies.principals.resolve(request)
-    # The intent is read first, so an unknown upload or another tenant's is
-    # refused before a single byte is stored.
+    # The intent is read first, so an upload that is unknown, another tenant's
+    # or another principal's is refused before a single byte is stored.
     intent = await dependencies.documents.upload_intent(
         upload_id=upload_id,
         tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
     )
 
     async def chunks() -> AsyncIterator[bytes]:
@@ -138,6 +139,7 @@ async def complete(
     return await dependencies.uploads.complete_upload(
         upload_id=upload_id,
         tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
         artifact_id=body.artifact_id,
         document_id=body.document_id,
         knowledge_base_id=body.knowledge_base_id,

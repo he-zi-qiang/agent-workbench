@@ -30,6 +30,7 @@ from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.bootstrap import load_settings
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig, project_api
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
+from agent_workbench.ports.documents import KnowledgeBaseMismatchError
 
 API_TITLE = "Agent Workbench"
 
@@ -40,6 +41,7 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     NotFoundError: 404,
     UnauthenticatedError: 401,
     UploadVerificationError: 409,
+    KnowledgeBaseMismatchError: 409,
     OutputTooLargeError: 413,
 }
 
