@@ -20,9 +20,46 @@ from agent_workbench.domain.messages import user_message
 from agent_workbench.domain.schema import DOMAIN_SCHEMA_VERSION, VersionedModel
 from agent_workbench.domain.tools import ToolSpec
 from agent_workbench.ports.conversation_store import ConversationSession, StoredMessage
+from agent_workbench.ports.documents import Document, DocumentVersion, UploadIntent
 from agent_workbench.ports.model import ModelRequest
+from agent_workbench.ports.outbox import OutboxEvent
 
 SAMPLES: dict[str, VersionedModel] = {
+    "UploadIntent": UploadIntent(
+        upload_id="upl_0000000000000000000000000000001",
+        tenant_id="tenant_demo",
+        owner_id="user_demo",
+        declared_size_bytes=2048,
+        declared_sha256="a" * 64,
+        media_type="application/pdf",
+        filename="research-report.pdf",
+    ),
+    "DocumentVersion": DocumentVersion(
+        version_id="ver_0000000000000000000000000000001",
+        document_id="doc_0000000000000000000000000000001",
+        source_revision=3,
+        artifact_id="art_0000000000000000000000000000001",
+        content_sha256="b" * 64,
+    ),
+    "Document": Document(
+        document_id="doc_0000000000000000000000000000001",
+        tenant_id="tenant_demo",
+        owner_id="user_demo",
+        knowledge_base_id="kb_main",
+        source_revision=3,
+    ),
+    "OutboxEvent": OutboxEvent(
+        sequence=7,
+        event_id="obx_0000000000000000000000000000001",
+        document_id="doc_0000000000000000000000000000001",
+        source_revision=3,
+        kind="document_upserted",
+        payload={
+            "tenant_id": "tenant_demo",
+            "knowledge_base_id": "kb_main",
+            "authorized_principals": ["user_demo"],
+        },
+    ),
     "ModelRequest": ModelRequest(
         model_profile="main",
         system_prompt="Answer only from the provided context.",

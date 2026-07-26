@@ -713,3 +713,66 @@ document/version/ACL 仓储与 S3 Adapter 属于 WP03-04～09，不在本 PR。
 `artifacts` 表随它们一起落地，迁移计划表已相应改为 `0001_conversations` +
 `0002_artifacts_uploads`。三个 DSN 里本 PR 只建了普通查询用的那一个；guard 与
 listener 引擎要等协调工作包，那时它们的连接规则才开始有意义。
+
+## PR-014 Upload/Outbox
+
+状态：**已实现并通过本地测试（含真实 PostgreSQL）**。
+
+WP03-04～06、08、09：上传用例、document/version/ACL 仓储、ingestion outbox
+与竞争领取。
+
+已交付：
+
+- `ports/documents.py` / `ports/outbox.py`：`DocumentStore`、`OutboxPort`
+  及其 DTO（PR-004 里刻意推迟冻结的两个 Port，现在有实现来校验了）；
+- `adapters/persistence/documents.py`、`outbox.py`；
+- `application/uploads.py`：`UploadService`（首个应用服务层）；
+- 迁移 `0002_documents_outbox`：`artifacts`、`upload_intents`、`documents`、
+  `document_versions`、`document_acl`、`outbox_events`。
+
+本 PR 固定下来的行为：
+
+- **version 与它的 outbox 事件同事务提交**。拆成两次提交会同时制造两种排序
+  修不好的故障：一个永远不会被索引的文档，和一条指向已回滚内容的索引项。
+  测试用 `monkeypatch` 把 outbox 插入换成会触发 CHECK 约束失败的版本——它在
+  document 与 version 行已经写入之后才失败——断言两者都没留下；
+- **revision 在锁住 document 行的前提下推进**，因此是**单调的**而不只是互不相同；
+- **新建文档用条件插入再加锁**：两个上传竞争创建同一个新文档时，都读不到行，
+  普通 INSERT 会让后者撞主键。`ON CONFLICT DO NOTHING` 之后重新加锁，拿到的
+  要么是自己插的行，要么是抢先者的；
+- **完成是双重幂等的**：同一个 upload 再完成一次返回它已经产出的 version；
+  内容与当前版本完全相同时不推进 revision——重发的请求不该让索引重做一遍
+  产出完全相同行的工作；
+- **完成时两边都不信**：读取已存对象自身的 size 与 digest，与传输发生**之前**
+  客户端声明的值比对。传错的字节、或声明了自己没有的摘要，都在这里失败，
+  而不是变成一个索引会忠实复现的 document version；
+- **outbox 没有指向 documents 的外键**：删除事件必须比它描述的那一行活得更久，
+  否则索引永远无法被告知遗忘它；
+- outbox payload 携带 `authorized_principals`，索引的过滤条件要靠它；
+- `SKIP LOCKED` 领取：两个 worker 并发各领 3 条，合计 6 条、零重叠（有测试）。
+
+2026-07-25 验证证据：
+
+```text
+本机 PostgreSQL 15.14
+alembic upgrade head（0001 → 0002）: 通过，零漂移
+pytest（有库）: 525 passed
+pytest（无库，等同主 CI job）: 496 passed, 29 skipped
+ruff / pyright (strict, src): 全部通过
+uv lock --check --offline / 许可证 allowlist: 通过
+```
+
+**并发测试抓到了一个真实缺陷**：最初的实现在两个上传同时创建同一个新文档时会
+撞主键失败。这不是测试写错了，是实现漏了竞争窗口——已按上面的条件插入模式修复。
+
+反射式 Port 契约测试（PR-004 建立）也拦了一次：四个新聚合必须补进样例表才能
+通过 round-trip / 版本 / golden 三重检查。
+
+范围说明：**没有 HTTP**。FastAPI 上传路由与 2 MiB 控制面 request-limit
+中间件（WP03-07）留给独立 PR——它引入的是另一个方向的表面（依赖、应用装配、
+中间件、413 语义），和本 PR 的"事实与 outbox 原子性"是两件事。
+
+outbox 的 claim **不是 lease**：worker 死了，它领的事件就一直被领着，这里没有
+任何东西回收它。lease 时长、heartbeat、fencing 属于协调工作包；在这里做一半会
+得到一个看起来可恢复、实际不可恢复的东西，比一个明显的缺口更糟。S3/presigned
+传输与 `document_deleted` / `acl_changed` 两类事件的产生路径同样留待后续。
