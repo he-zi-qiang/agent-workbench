@@ -44,8 +44,8 @@ LangGraph 功能。
 API 测试不真实绑定 socket，预算测试没有覆盖越界批次，审批测试只验证 Policy DTO。
 
 > 本节记录的是 2026-07-25 核验当时的状态，不随后续修复改写。截至 2026-07-26，
-> 上列第 1、2 项已修复并有回归测试，逐条记录见 §7；第 3 项修掉了 Upload/Document
-> 一半（P1-1、P1-3），Artifact 一半（P1-2）与第 4 项仍然开着。
+> 上列第 1、2、3 项已修复并有回归测试，逐条记录见 §7（P0-1、P0-2、P1-1、P1-3、
+> P1-2）；第 4 项（预算硬上限）仍然开着。
 
 ## 2. 已实现能力
 
@@ -169,7 +169,9 @@ ID 后可替 owner 传输或完成，也可把自己的 upload 指向他人的 d
 document owner/ACL 与 knowledge-base 权限；补同 tenant/不同 principal 的 IDOR
 矩阵。
 
-### P1-2 Artifact 缺对象级授权
+### P1-2 Artifact 缺对象级授权 —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 涉及：
 
@@ -495,3 +497,47 @@ document 路由，artifact 下载的对象授权是 P1-2），所以这里不放
 
 新增一条不变量测试：ACL 变更占掉 revision 2 之后，下一次内容变更必须落在 3，
 事件序列为 `document_upserted(1) → acl_changed(2) → document_upserted(3)`。
+
+### P1-2 Artifact 对象授权（2026-07-26）
+
+行为变化：`ArtifactStore.put`/`put_stream` 记录 `owner_id`，`get`/`head` 接收
+`principal_id`。artifact 由存储它的 principal 拥有，其他人一律 not found。
+
+**owner 放在存储自己的元数据里，不放进 `ArtifactRef`。** 这是本条唯一需要设计
+判断的地方：`ArtifactRef` 会随消息和事件流转，而「谁能读这些字节」是被存对象的
+属性，不是指针的属性——指针若携带它，等于把答案连同问题一起发出去。附带好处是
+领域模型不变，`domain_v1.json` golden 基线与 `DOMAIN_SCHEMA_VERSION` 都不受影响。
+
+审计原文说「在 PostgreSQL 持久化 owner/对象关系」。实际没有走这条路：`artifacts`
+表虽然在 schema 里，但至今没有任何写入方，`LocalArtifactStore` 一直把元数据放在
+blob 旁边的 sidecar。把授权搬进 PostgreSQL 会让文件存储适配器依赖数据库引擎，
+且那张表按其模块 docstring 的说法尚未「挣得自己的位置」。把 owner 记进存储自身的
+元数据，对未来的 S3 适配器是同一个形状（对象元数据），也不引入这层依赖。
+
+sidecar 改为带 `format` 标记的信封。不认识的信封视为不存在：写于 ownership 之前的
+元数据说不出谁可以读它，而「答不上来」的安全解读是否。
+
+回归测试 20 条：
+
+- `tests/contracts/test_artifact_store.py`（6 条 × 2 个 store = 12）——共享契约，
+  in-memory 与 filesystem 都跑，所以规则对每个后端都被钉住；
+- `tests/contracts/test_local_artifact_metadata.py`（5 条）——sidecar 本身；
+- `tests/api/test_upload_authorization.py`（3 条）——HTTP 面。
+
+**验证过是有牙的**：同时撤掉两个 store 的 owner 检查失败 10 条（跨 store、跨层）；
+撤掉 `format` 兜底失败 1 条；撤掉 `isinstance` 兜底失败 1 条。每道防线各有一条
+测试专属于它。
+
+过程中又抓到自己一条恒真断言：原本用集合收集三种拒绝的文案、断言集合只有一个
+元素——但被放行的那次什么都不往集合里加，于是集合仍然只有一个元素。改成按顺序
+记录三次结果（放行记 `"allowed"`），断言三次都是同一条拒绝。
+
+**已知残留（明确的功能缺口，不是疏漏）**：artifact 归存储它的 principal 所有，
+**文档 ACL 触及不到它**——没有任何东西能把 artifact 反查回引用它的 document
+version。因此被授权读文档的 principal 能看到文档存在，却下载不了字节。这是
+fail-closed 且不完整，顺序如此。已用一条测试把这个限制钉住
+（`test_a_read_grant_does_not_yet_reach_the_bytes`），反查落地时必须**有意地**
+改掉它。补齐需要 `document_versions.artifact_id` 上的索引与一个新的 DocumentStore
+方法，属于独立变更。
+
+P1-4（Artifact 下载整体读入内存）仍然开着，就在同一条路径上。

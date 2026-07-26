@@ -1,9 +1,13 @@
 """In-memory artifact store.
 
 Object keys are generated here, never supplied by a caller, and every read is
-scoped by tenant. Both properties are the point of the adapter rather than
-incidental: they are the behaviours the local-filesystem and S3-compatible
-stores will have to reproduce, and the ones a test can pin now.
+scoped by tenant *and* principal. All three are the point of the adapter rather
+than incidental: they are the behaviours the local-filesystem and
+S3-compatible stores have to reproduce, and the ones a test can pin now.
+
+The owner is held beside the reference, not inside it. An ``ArtifactRef``
+travels in messages and events, and who may read the bytes is a fact about the
+stored object rather than about the pointer to it.
 """
 
 from __future__ import annotations
@@ -20,12 +24,13 @@ class InMemoryArtifactStore:
     """Content-addressed byte storage held in process memory."""
 
     def __init__(self) -> None:
-        self._objects: dict[str, tuple[ArtifactRef, bytes]] = {}
+        self._objects: dict[str, tuple[ArtifactRef, str, bytes]] = {}
 
     async def put(
         self,
         *,
         tenant_id: str,
+        owner_id: str,
         kind: ArtifactKind,
         media_type: str,
         content: bytes,
@@ -40,13 +45,14 @@ class InMemoryArtifactStore:
             sha256=hashlib.sha256(content).hexdigest(),
             filename=filename,
         )
-        self._objects[ref.artifact_id] = (ref, content)
+        self._objects[ref.artifact_id] = (ref, owner_id, content)
         return ref
 
     async def put_stream(
         self,
         *,
         tenant_id: str,
+        owner_id: str,
         kind: ArtifactKind,
         media_type: str,
         chunks: AsyncIterator[bytes],
@@ -74,30 +80,37 @@ class InMemoryArtifactStore:
 
         return await self.put(
             tenant_id=tenant_id,
+            owner_id=owner_id,
             kind=kind,
             media_type=media_type,
             content=b"".join(parts),
             filename=filename,
         )
 
-    async def get(self, *, tenant_id: str, artifact_id: str) -> bytes:
-        _, content = self._resolve(tenant_id=tenant_id, artifact_id=artifact_id)
+    async def get(
+        self, *, tenant_id: str, artifact_id: str, principal_id: str
+    ) -> bytes:
+        _, _, content = self._resolve(tenant_id, artifact_id, principal_id)
         return content
 
-    async def head(self, *, tenant_id: str, artifact_id: str) -> ArtifactRef:
-        ref, _ = self._resolve(tenant_id=tenant_id, artifact_id=artifact_id)
+    async def head(
+        self, *, tenant_id: str, artifact_id: str, principal_id: str
+    ) -> ArtifactRef:
+        ref, _, _ = self._resolve(tenant_id, artifact_id, principal_id)
         return ref
 
     def _resolve(
-        self,
-        *,
-        tenant_id: str,
-        artifact_id: str,
-    ) -> tuple[ArtifactRef, bytes]:
+        self, tenant_id: str, artifact_id: str, principal_id: str
+    ) -> tuple[ArtifactRef, str, bytes]:
         stored = self._objects.get(artifact_id)
-        # A wrong tenant and a missing id fail identically. Any difference --
-        # message, error type or timing -- would confirm the object exists.
-        if stored is None or stored[0].tenant_id != tenant_id:
+        # A wrong tenant, a wrong principal and a missing id fail identically.
+        # Any difference -- message, error type or timing -- would confirm the
+        # object exists.
+        if (
+            stored is None
+            or stored[0].tenant_id != tenant_id
+            or stored[1] != principal_id
+        ):
             raise NotFoundError("artifact not found")
         return stored
 

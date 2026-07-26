@@ -44,8 +44,8 @@
    之外的调用者访问并伪造身份~~（2026-07-26 已修复，见下方 P0-1 一节）；
 2. ~~`requires_approval=True` 没有阻止 write tool 执行~~（2026-07-26 已修复，
    见下方 P0-2 一节）；
-3. Upload/Document/Artifact 缺少同 tenant 内的 owner/ACL 对象授权（Upload 与
-   Document 于 2026-07-26 修复，见下方 P1-1 一节；Artifact 仍然开着）；
+3. ~~Upload/Document/Artifact 缺少同 tenant 内的 owner/ACL 对象授权~~
+   （2026-07-26 全部修复，见下方 P1-1、P1-3、P1-2 三节）；
 4. tool/token/cost budget 不是硬上限；
 5. Policy 改写可绕过参数字节上限，Policy/Hook deadline 不完整；
 6. DeepSeek 对损坏 SSE frame fail open，Artifact 下载不是真正流式；
@@ -1085,3 +1085,43 @@ document 路由，artifact 下载的对象授权还是 P1-2），所以没有放
 **验证过是有牙的，而且是双向的**：撤掉调和失败 4 条；只撤掉「集合未变则直接返回」
 那道早退失败 3 条，其中一条是原有的幂等测试。第二个方向是必需的——没有它，
 「每次重传都推进 revision 并发事件」这种过度实现同样能让前 4 条变绿。
+
+## P1-2 Artifact 对象授权
+
+状态：**已实现并通过本地测试**。核验报告 §4 的 P1-2，§6 修复顺序第 3 项的后半。
+
+`ArtifactStore.put`/`put_stream` 记录 `owner_id`，`get`/`head` 接收 `principal_id`。
+artifact 归存储它的 principal 所有，其他人一律 not found——与「不存在」「别的
+tenant 的」三者同形。此前同 tenant 的任何人只要知道 artifact id 就能下载，而 id
+会出现在 tool result、事件 payload 和 URL 里；UUID 难猜不是授权。
+
+**owner 放在存储自己的元数据里，不放进 `ArtifactRef`。** 这是这条唯一需要设计
+判断的地方：`ArtifactRef` 随消息和事件流转，而「谁能读这些字节」是被存对象的属性，
+不是指针的属性——指针若携带它，等于把答案连同问题一起发出去。附带好处是领域模型
+没变，golden 基线和 `DOMAIN_SCHEMA_VERSION` 都不受影响。
+
+**没有按审计原文走 PostgreSQL。** 审计写的是「在 PostgreSQL 持久化 owner/对象
+关系」。`artifacts` 表虽在 schema 里却至今没有写入方，`LocalArtifactStore` 一直用
+blob 旁的 sidecar；把授权搬进数据库会让文件存储适配器依赖数据库引擎，而那张表按
+其模块 docstring 的说法还没「挣得自己的位置」。记进存储自身的元数据，对未来的 S3
+适配器是同一形状（对象元数据），也不引入这层依赖。这是有意偏离修复方向，不是遗漏。
+
+sidecar 改为带 `format` 标记的信封，不认识的信封视为不存在。
+
+回归测试 20 条：共享契约 6 条 × 2 个 store（in-memory 与 filesystem 都跑，规则对
+每个后端都被钉住）、sidecar 专属 5 条、HTTP 面 3 条。
+
+**验证过是有牙的**：同时撤掉两个 store 的 owner 检查失败 10 条（跨 store、跨层）；
+撤掉 `format` 兜底失败 1 条；撤掉 `isinstance` 兜底失败 1 条——每道防线各有一条
+测试专属于它。写的过程中又抓到自己一条恒真断言：原本用集合收集三种拒绝的文案并
+断言集合只有一个元素，但被放行的那次什么都不加，集合照样只有一个元素；改成按顺序
+记录三次结果，放行记 `"allowed"`。
+
+**已知残留，是明确的功能缺口而不是疏漏**：artifact 归存储它的 principal 所有，
+**文档 ACL 触及不到它**——没有东西能把 artifact 反查回引用它的 document version。
+于是被授权读文档的 principal 看得到文档存在，却下载不了字节。fail-closed 且不完整，
+顺序如此。已用 `test_a_read_grant_does_not_yet_reach_the_bytes` 把这个限制钉住，
+反查落地时必须**有意地**改掉它；补齐需要 `document_versions.artifact_id` 上的索引
+和一个新的 DocumentStore 方法，属于独立变更。
+
+P1-4（下载整体读入内存，不是真正的分块流式）仍然开着，就在同一条路径上。

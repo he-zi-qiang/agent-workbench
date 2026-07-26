@@ -115,6 +115,7 @@ async def transfer(upload_id: str, request: Request) -> ContentResponse:
 
     stored = await dependencies.artifacts.put_stream(
         tenant_id=principal.tenant_id,
+        owner_id=principal.principal_id,
         kind="source_document",
         media_type=intent.media_type,
         chunks=chunks(),
