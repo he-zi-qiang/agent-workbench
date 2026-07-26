@@ -1246,7 +1246,8 @@ web
 
 | Migration | 工作包 | 核心对象 |
 |---|---|---|
-| `0001_conversations_artifacts` | WP03 | `conversation_sessions`、`messages`、`artifacts`、upload intents |
+| `0001_conversations` | WP03 | `conversation_sessions`、`messages` |
+| `0002_artifacts_uploads` | WP03 | `artifacts`、upload intents（与 document version 同事务写入时才有意义） |
 | `0002_documents_outbox` | WP03–05 | `documents`、`document_versions`、ACL、`ingestion_jobs`、`outbox_events`、aggregate `source_revision/last_applied_revision`、`qdrant_index_generations` |
 | `0003_task_registry` | WP06–07 | `task_runs`、语义快照、graph/index revision、submitted policy revision/fingerprint、`resolved_qdrant_index_generation_id` FK/reservation |
 | `0004_event_streams` | WP07 | `run_event_streams`、`run_events` |

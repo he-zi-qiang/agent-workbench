@@ -93,6 +93,53 @@ jobs:
           --allow-only
           "MIT;MIT License;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0"
 
+  postgres:
+    name: Migrations and PostgreSQL-backed stores
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: agent_workbench_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent -d agent_workbench_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.31"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked development environment
+        run: uv sync --frozen --group dev --no-editable
+
+      - name: Apply migrations
+        env:
+          AW_DATABASE__DSN: postgresql+asyncpg://agent:ci-only@localhost:5432/agent_workbench_test
+        run: uv run --no-sync alembic upgrade head
+
+      - name: Run the database-backed suites
+        env:
+          AGENT_WORKBENCH_TEST_DSN: postgresql+asyncpg://agent:ci-only@localhost:5432/agent_workbench_test
+        run: uv run --no-sync pytest -q tests/contracts tests/persistence
+
   secret-scan:
     name: Secret scan
     runs-on: ubuntu-latest

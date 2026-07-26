@@ -645,3 +645,71 @@ CLI golden 文件逐字节未变
 LangChain model/tool 互操作 Adapter（WP02-07）仍未实现。**model ID 与工具调用支持
 情况请对照 DeepSeek 当前文档确认后再投产**；本 PR 的 contract test 钉住的是线格式
 处理，不是某个具体模型的能力。
+
+## PR-013 PostgreSQL/Artifact Base
+
+状态：**已实现并通过本地测试（含真实 PostgreSQL）**。
+
+第一次有了真正的持久化：WP03-01～03（session factory + Alembic、PostgreSQL
+ConversationStore、本地 ArtifactStore）。
+
+已交付：
+
+- `adapters/persistence/`：`models.py`（SQLAlchemy **Core** 表，不是 ORM——
+  仓储的职责就是把行显式映射成领域对象，identity map 和惰性加载只会再引入一
+  套隐式的"何时读"）、`engine.py`、`conversation_store.py`；
+- `migrations/` + `alembic.ini`：`0001_conversations`；
+- `adapters/artifacts/local.py`：`LocalArtifactStore`。
+
+本 PR 固定下来的行为：
+
+- **位置在锁住会话行的前提下分配**：同一会话的两次 append 在锁上串行，
+  `sequence` 因此是**无洞的**而不只是唯一的。数据库另有
+  `UNIQUE(session_id, sequence)`——锁一旦被绕过，写入会失败而不是悄悄复用位置。
+  有测试并发发 5 条断言拿到 `[1,2,3,4,5]`；
+- **消息按领域对象存取**（JSONB，含 schema 版本），读回时过同一个模型。
+  用本进程不认识的契约写下的行会在边界上 fail closed，而不是半懂不懂地进入
+  模型上下文；
+- **`statement_timeout` 设在连接级**而不是每条查询：逐条设置的超时迟早会有人忘；
+- **本地 Artifact 先写 blob 再写元数据**——中途崩溃留下的是一个没人引用的
+  blob（垃圾），而不是一个指向不存在字节的引用（谎言）；
+- **元数据放在 blob 旁边而不是建表**：目前除了按 id 点查没有任何查询，
+  只服务点查的表是"伪装成索引的 schema"。等上传落地、artifact 行必须与
+  document version 同事务写入时，那张表才有存在的理由；
+- 跨租户读与不存在**完全同形**——沿用 in-memory 既有的常量文案（不含 id）。
+
+契约测试重构成**一套跑两种实现**：`tests/contracts/` 的 conversation 与
+artifact 套件现在参数化在 `memory`/`postgres` 与 `memory`/`local` 上。一个 Port
+有两个实现和两套测试，就等于有两个契约。
+
+`tests/persistence/test_migrations.py` 断言迁移与模型元数据描述的是同一个
+schema（`compare_metadata`），并跑一遍 downgrade → upgrade。没人跑过的
+downgrade 会在需要它的那次事故里才被发现。**这个测试验证过是有牙的**：给模型
+加一列会让它失败。
+
+2026-07-25 验证证据：
+
+```text
+本机 PostgreSQL 15.14（专用库 agent_workbench_test）
+alembic upgrade head: 通过，schema 与模型零漂移
+ruff format --check / ruff check: passed
+pyright (strict, src): 0 errors, 0 warnings
+pytest（有库）: 498 passed
+pytest（无库，等同主 CI job）: 484 passed, 14 skipped
+```
+
+CI 新增 `postgres` job：`postgres:16`（按 digest 固定）service，先跑迁移再跑
+两个数据库相关套件。主 `quality` job 保持完全离线，数据库参数化用例在那里跳过。
+
+两条安全护栏：
+
+- 测试用的 DSN 变量是 `AGENT_WORKBENCH_TEST_DSN`，**故意不在 `AW_` 命名空间内**
+  ——settings 会拒绝任何未登记的 `AW_*`，那道守卫比前缀对称更值钱；
+- 该 DSN 指向的库名必须以 `_test` 结尾，否则直接拒绝。这些套件会 TRUNCATE，
+  导错 DSN 应该得到一个被跳过的套件，而不是一个被清空的数据库。
+
+范围说明：上传数据面（create-upload / 流式或 presigned / complete）、Outbox、
+document/version/ACL 仓储与 S3 Adapter 属于 WP03-04～09，不在本 PR。
+`artifacts` 表随它们一起落地，迁移计划表已相应改为 `0001_conversations` +
+`0002_artifacts_uploads`。三个 DSN 里本 PR 只建了普通查询用的那一个；guard 与
+listener 引擎要等协调工作包，那时它们的连接规则才开始有意义。
