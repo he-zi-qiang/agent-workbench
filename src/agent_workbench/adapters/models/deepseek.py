@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Final, cast
 
 import httpx
+from pydantic import ValidationError
 
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.messages import (
@@ -54,6 +55,25 @@ from agent_workbench.ports.model import (
 CHAT_COMPLETIONS_PATH: Final[str] = "/chat/completions"
 DONE_SENTINEL: Final[str] = "[DONE]"
 DATA_PREFIX: Final[str] = "data:"
+
+# A tool call's arguments arrive in fragments and are held until the stream
+# ends, so they are the one thing here that grows with what a provider sends.
+DEFAULT_MAX_ARGUMENT_CHARS: Final[int] = 262_144
+
+
+class _OversizedFragment(Exception):
+    """Accumulated tool arguments passed the ceiling this adapter will hold."""
+
+
+class _UnreadableFrame(Exception):
+    """A ``data:`` frame this adapter could not decode.
+
+    Skipping one is not neutral. Tool arguments arrive as fragments that are
+    concatenated, so dropping a fragment from the middle can leave the rest
+    forming a different, perfectly valid JSON object -- a call the model never
+    made, with arguments nobody chose, proposed as though it had.
+    """
+
 
 # The provider's vocabulary, mapped onto the port's. Anything unlisted is a
 # protocol the adapter was not written against, and is reported as an error
@@ -93,7 +113,10 @@ class DeepSeekModel:
         api_key: str,
         base_url: str,
         profiles: Mapping[ModelProfileName, DeepSeekProfile],
+        max_argument_chars: int = DEFAULT_MAX_ARGUMENT_CHARS,
     ) -> None:
+        if max_argument_chars < 1:
+            raise ValueError("max_argument_chars must be positive")
         # The client is supplied rather than built here: connection lifetime
         # belongs to whoever assembles the process.
         self._client = client
@@ -102,6 +125,7 @@ class DeepSeekModel:
         self._api_key = api_key
         self._url = base_url.rstrip("/") + CHAT_COMPLETIONS_PATH
         self._profiles = dict(profiles)
+        self._max_argument_chars = max_argument_chars
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
         profile = self._profiles.get(request.model_profile)
@@ -152,14 +176,46 @@ class DeepSeekModel:
                     return
 
                 async for line in response.aiter_lines():
-                    chunk = _parse_line(line)
-                    if chunk is None:
-                        continue
+                    try:
+                        chunk = _parse_line(line)
+                        if chunk is None:
+                            continue
 
-                    for event in _text_events(chunk):
-                        yield event
+                        for event in _text_events(chunk):
+                            yield event
 
-                    _absorb_tool_fragments(chunk, partials)
+                        _absorb_tool_fragments(
+                            chunk, partials, self._max_argument_chars
+                        )
+                    except (_UnreadableFrame, _OversizedFragment) as exc:
+                        # Fail closed. Whatever this stream was going to say,
+                        # this adapter can no longer say it faithfully.
+                        yield ModelStreamCompleted(
+                            finish_reason="error",
+                            error=ErrorInfo(
+                                code="provider_error",
+                                message=f"the provider stream was unusable: {exc}",
+                            ),
+                            usage=usage,
+                        )
+                        return
+                    except ValidationError:
+                        # A delta that violates a domain bound -- an over-long
+                        # text chunk, most likely. The provider's own limits
+                        # are not this process's contract, and a caller of
+                        # ModelPort must not receive a Pydantic traceback.
+                        yield ModelStreamCompleted(
+                            finish_reason="error",
+                            error=ErrorInfo(
+                                code="provider_error",
+                                message=(
+                                    "the provider sent a chunk this process "
+                                    "cannot represent"
+                                ),
+                            ),
+                            usage=usage,
+                        )
+                        return
 
                     chunk_usage = _usage_of(chunk)
                     if chunk_usage is not None:
@@ -322,11 +378,12 @@ def _parse_line(line: str) -> dict[str, Any] | None:
         return None
     try:
         decoded = json.loads(data)
-    except json.JSONDecodeError:
-        # A frame the adapter cannot read is skipped rather than fatal: the
-        # stream still has to end with a completion event either way.
-        return None
-    return _as_object(decoded)
+    except json.JSONDecodeError as exc:
+        raise _UnreadableFrame("a data frame was not valid JSON") from exc
+    frame = _as_object(decoded)
+    if frame is None:
+        raise _UnreadableFrame("a data frame was not a JSON object")
+    return frame
 
 
 def _first_choice(chunk: dict[str, Any]) -> dict[str, Any] | None:
@@ -352,6 +409,7 @@ def _text_events(chunk: dict[str, Any]) -> list[ModelTextDelta]:
 def _absorb_tool_fragments(
     chunk: dict[str, Any],
     partials: dict[int, _PartialToolCall],
+    max_argument_chars: int,
 ) -> None:
     choice = _first_choice(chunk)
     if choice is None:
@@ -384,6 +442,13 @@ def _absorb_tool_fragments(
             partial.name = name
         arguments = function.get("arguments")
         if isinstance(arguments, str):
+            if len(partial.arguments) + len(arguments) > max_argument_chars:
+                # The one thing here that grows with what the provider chooses
+                # to send. Refusing is cheaper than discovering the ceiling
+                # after the process has already held the whole of it.
+                raise _OversizedFragment(
+                    f"tool arguments passed the {max_argument_chars} character ceiling"
+                )
             partial.arguments += arguments
 
 

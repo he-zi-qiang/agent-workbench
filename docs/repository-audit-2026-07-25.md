@@ -289,7 +289,9 @@ Graph node 拿不到可记录、可路由的结果。
 修复方向：模型 turn 完成后、任何授权或执行前检查 call ID 唯一性；违规整轮失败、
 零 handler 调用，并归一化为终态 outcome 而非异常。
 
-### P1-9 DeepSeek 对损坏 SSE frame fail open
+### P1-9 DeepSeek 对损坏 SSE frame fail open —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 涉及：
 
@@ -665,3 +667,33 @@ policy 异常逃逸是同一种形状。`_run_tool_batch` 现在返回 `AgentOut
 
 **验证过是有牙的**：撤掉预检失败 2 条，撤掉 backstop 失败 1 条——两处各有测试
 专属于它。
+
+### P1-9 DeepSeek SSE frame fail closed（2026-07-26）
+
+行为变化三处。
+
+**一、无法解码的 `data:` frame 结束整条流。** 此前静默跳过。跳过之所以不是中性的，
+在于工具参数是按片段拼接的：从中间丢掉一片，剩下的仍可能拼成一份**完全合法的
+JSON**——一个模型从未发出的调用，带着没人选过的参数，被当作模型的意图提上去。
+已复现：中间插入一个损坏 frame 后，handler 拿到的是
+`{"document_id": "doc_SAFE"}`，而模型本意是更长的那一串。注释行、空行与 `[DONE]`
+仍然跳过——它们本来就不携带数据。
+
+**二、领域校验错误归一化为终态 error 事件。** `BoundedText` 把单个 delta 限制在
+4096 字符，超过时构造 `ModelTextDelta` 抛出的 Pydantic `ValidationError`
+**直接逃出了 `ModelPort`**。provider 自己的限制不是本进程的契约，`ModelPort` 的
+调用方不该拿到一个 Pydantic traceback。
+
+**三、累积的工具参数有上限。** 那是这里唯一随 provider 发送量增长的东西。默认
+256 KiB 字符，构造参数可调；不新增配置项，与 gateway 的 `policy_timeout_seconds`
+同一种做法。
+
+**这里有一条测试把缺陷本身写成了预期行为**：
+`test_unreadable_frames_are_skipped_rather_than_fatal`——它断言的正是要修掉的东西，
+并且一直是绿的。已替换为 `test_an_unreadable_data_frame_ends_the_stream`，旧名字与
+这段历史记在新测试的 docstring 里。这比 P0-1 那种「守错对象」更直接：不是守护了
+错误的对象，而是守护了错误本身。
+
+回归测试 8 条（含 2 条对照：注释与空行仍然跳过、上限之内的参数照常拼装）。
+**验证过是有牙的**：撤掉 frame fail-closed 失败 3 条，撤掉 `ValidationError`
+归一化失败 1 条，撤掉参数上限失败 1 条。

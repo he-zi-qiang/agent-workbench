@@ -49,7 +49,8 @@
 4. ~~tool/token/cost budget 不是硬上限~~（2026-07-26 已修复，见下方 P1-5 一节）；
 5. ~~Policy 改写可绕过参数字节上限，Policy/Hook deadline 不完整~~
    （2026-07-26 已修复，见下方 P1-6 / P1-7 一节）；
-6. DeepSeek 对损坏 SSE frame fail open，Artifact 下载不是真正流式；
+6. ~~DeepSeek 对损坏 SSE frame fail open~~（2026-07-26 已修复，见下方 P1-9
+   一节）；Artifact 下载不是真正流式；
 7. Outbox claim 没有 lease/fence，worker 崩溃后不可恢复。
 
 完整触发条件、文件位置和建议修复顺序见
@@ -1222,3 +1223,30 @@ policy 归一化后，能终止的 3 条失败，另外 2 条**永远挂住**（
 的结果）实际走一遍——生产代码里没有任何东西会这么做。
 
 **验证过是有牙的**：撤掉预检失败 2 条，撤掉 backstop 失败 1 条，两处各有专属测试。
+
+## P1-9 DeepSeek SSE frame fail closed
+
+状态：**已实现并通过本地测试**。核验报告 §4 的 P1-9。
+
+三处行为变化：
+
+1. **无法解码的 `data:` frame 结束整条流**（此前静默跳过）。跳过不是中性的：工具
+   参数按片段拼接，从中间丢掉一片，剩下的仍可能拼成一份**完全合法的 JSON**——
+   一个模型从未发出的调用，带着没人选过的参数。已复现：插入一个损坏 frame 后，
+   handler 拿到 `{"document_id": "doc_SAFE"}`，而模型本意更长。注释行、空行、
+   `[DONE]` 仍然跳过，它们本来就不携带数据。
+2. **领域校验错误归一化为终态 error。** `BoundedText` 限制单个 delta 为 4096 字符，
+   超过时构造 `ModelTextDelta` 抛的 `ValidationError` **直接逃出了 `ModelPort`**。
+   provider 自己的限制不是本进程的契约，Port 的调用方不该拿到 Pydantic traceback。
+3. **累积工具参数有上限**（默认 256 KiB 字符，构造参数可调）。那是这里唯一随
+   provider 发送量增长的东西。不新增配置项，与 gateway 的 `policy_timeout_seconds`
+   同一种做法。
+
+**有一条测试把缺陷本身写成了预期行为**：
+`test_unreadable_frames_are_skipped_rather_than_fatal`，断言的正是要修掉的东西，
+一直是绿的。已替换，旧名字与这段历史记在新测试的 docstring 里。这比 P0-1 那种
+「守错对象」更直接——不是守护了错误的对象，而是守护了错误本身。
+
+8 条测试（含 2 条对照：注释与空行仍然跳过、上限之内的参数照常拼装）。**验证过是
+有牙的**：撤掉 frame fail-closed 失败 3 条，撤掉 `ValidationError` 归一化失败
+1 条，撤掉参数上限失败 1 条。
