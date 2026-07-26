@@ -47,7 +47,8 @@
 3. ~~Upload/Document/Artifact 缺少同 tenant 内的 owner/ACL 对象授权~~
    （2026-07-26 全部修复，见下方 P1-1、P1-3、P1-2 三节）；
 4. ~~tool/token/cost budget 不是硬上限~~（2026-07-26 已修复，见下方 P1-5 一节）；
-5. Policy 改写可绕过参数字节上限，Policy/Hook deadline 不完整；
+5. ~~Policy 改写可绕过参数字节上限，Policy/Hook deadline 不完整~~
+   （2026-07-26 已修复，见下方 P1-6 / P1-7 一节）；
 6. DeepSeek 对损坏 SSE frame fail open，Artifact 下载不是真正流式；
 7. Outbox claim 没有 lease/fence，worker 崩溃后不可恢复。
 
@@ -1164,3 +1165,36 @@ PR 负责删掉这个分支。
 值得记一笔：改完之后既有 610 条测试**一条都没红**。审计说的「预算测试没有覆盖越界
 批次」正是这个意思——现有两条上限测试的预算都恰好卡在整数倍上（`max_tool_calls=4`、
 每轮 2 个调用），从没构造出越界的那一批，所以这一整类缺陷全程绿灯。
+
+## P1-6 / P1-7 Gateway 的尺寸上限与时间界
+
+状态：**已实现并通过本地测试**。核验报告 §4 的 P1-6 与 P1-7，§6 修复顺序第 5 项的
+一部分。两条各自一个提交。
+
+**P1-6：Policy 改写受参数字节上限约束。** `authorize()` 的改写分支从 `_validate()`
+改为 `_check()`——与原始参数、与 Hook 改写同一道检查。此前 Hook 改写走完整检查而
+Policy 改写只重跑 schema，于是 `max_argument_bytes` 约束的是模型能发多少、不是
+Policy 能替换成多少：上限 64 字节时一次改写把 10,000 字节送进 handler，run 正常
+完成。schema 说 `query` 是字符串，没说一万个字符不行。3 条测试，撤掉失败 2 条。
+
+**P1-7：Policy 与 Hook 受 run deadline 约束并 fail closed。** 三处：
+
+1. Policy 引擎此前完全无界——部署方提供的代码坐在每次调用的必经路径上，卡住就把
+   run 拖过它自己的 deadline。现在界是 `min(gateway 自带 policy 超时, run 剩余)`。
+   gateway 保留自带默认值（5 秒），这样调用方忘记传剩余时间时**仍然有界**；默认成
+   None 才是同一类 fail-open。
+2. Policy 抛出的异常归一化为拒绝。**复现时发现比审计写的更严重**：异常直接逃出
+   `authorize()`，调用方拿到 traceback 而不是终态结果，违反 `AgentExecutor` 的协议
+   约定；而且正文原样带出——复现消息里就有 `dsn=postgres://u:sk-ant-canary@h/db`。
+   现在只有异常**类型名**过界，与 Hook Bus 早已遵守的规则一致。
+3. Hook 取 `min(自身超时, run 剩余)`，逐个重算。此前每个 hook 都持有完整超时，只剩
+   2 秒的 run 仍可能在一个 hook 里花 5 秒——本该结束 run 的 deadline，恰恰是 run
+   唯一管不住的东西。剩余为 0 时不启动任何 hook 或 policy 调用，并拒绝该次调用。
+
+拒绝理由里带上**是哪一个界耗尽的**，因为两种后果相同但指向不同的排查方向——和
+`ModelCallDeadline.source` 同一个判断。
+
+9 条测试（gateway 6 + hook bus 3，含 2 条对照）。**有牙验证有一点特别**：撤掉
+policy 归一化后，能终止的 3 条失败，另外 2 条**永远挂住**（后台跑 8 秒未结束才强
+杀）——无界等待正是缺陷本身，它表现为挂起而不是断言失败。hook 那侧同理：撤掉后
+1 条失败、1 条挂 30 秒。

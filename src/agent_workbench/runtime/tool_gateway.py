@@ -24,6 +24,14 @@ needs one is refused here. Treating "allow, pending approval" as "allow" is how
 a write tool performs an irreversible effect that nobody agreed to, and no
 amount of later approval machinery can undo an effect already dispatched.
 
+Everything the gateway consults is bounded and fails closed. A policy engine
+that hangs used to hang the run, and one that raised sent its exception -- and
+whatever a backend put in the message -- straight out through the caller, so a
+run got an exception instead of a terminal outcome. Both now become an ordinary
+refusal, and only the exception's type name crosses the boundary. The bound is
+the smaller of the gateway's own timeout and whatever the run has left, because
+a deadline that inner work can outlive is not a deadline.
+
 It also owns the audit trail for a call. Proposal, permission, start,
 completion and failure are emitted here, so the events cannot disagree with
 what the gateway actually did. Argument bodies never appear in them -- a size
@@ -36,6 +44,7 @@ rewrite happened; recording what it produced arrives with that ledger.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
@@ -54,7 +63,7 @@ from agent_workbench.domain.events import (
     ToolProposed,
     ToolStarted,
 )
-from agent_workbench.domain.policies import ExecutionContext
+from agent_workbench.domain.policies import ExecutionContext, PolicyDecision
 from agent_workbench.domain.tools import (
     ToolCall,
     ToolResult,
@@ -82,6 +91,11 @@ DEFAULT_MAX_ARGUMENT_BYTES: Final[int] = 65_536
 # the tool disagree, and the call is refused rather than retried forever.
 DEFAULT_MAX_POLICY_ROUNDS: Final[int] = 3
 
+# A policy engine is deployment-supplied code on the path of every call. It
+# gets a bound of its own so that forgetting to pass the run's remaining time
+# still leaves one, rather than leaving none.
+DEFAULT_POLICY_TIMEOUT_SECONDS: Final[float] = 5.0
+
 
 @dataclass(frozen=True, slots=True)
 class PreparedCall:
@@ -103,9 +117,12 @@ class ToolGateway:
         hooks: HookBus | None = None,
         max_argument_bytes: int = DEFAULT_MAX_ARGUMENT_BYTES,
         max_policy_rounds: int = DEFAULT_MAX_POLICY_ROUNDS,
+        policy_timeout_seconds: float = DEFAULT_POLICY_TIMEOUT_SECONDS,
     ) -> None:
         if max_policy_rounds < 1:
             raise ValueError("max_policy_rounds must be positive")
+        if policy_timeout_seconds <= 0:
+            raise ValueError("policy_timeout_seconds must be positive")
         # Every registered schema is checked once, here. A tool whose schema
         # this validator cannot enforce stops the process now rather than
         # silently accepting anything later.
@@ -118,6 +135,7 @@ class ToolGateway:
         self._hooks = hooks if hooks is not None else HookBus()
         self._max_argument_bytes = max_argument_bytes
         self._max_policy_rounds = max_policy_rounds
+        self._policy_timeout_seconds = policy_timeout_seconds
 
     def advertise(self, names: Sequence[str]) -> tuple[ToolSpec, ...]:
         """Specifications for the tools a run may use.
@@ -156,6 +174,7 @@ class ToolGateway:
         *,
         context: ExecutionContext,
         sink: EventSink,
+        remaining_run_seconds: float | None = None,
     ) -> PreparedCall | ToolResult:
         """Resolve the tool, check its arguments, and let hooks shape them."""
 
@@ -177,7 +196,9 @@ class ToolGateway:
         if self._hooks.is_empty:
             return PreparedCall(binding=binding, call=call)
 
-        outcome = await self._hooks.before_tool(call, context)
+        outcome = await self._hooks.before_tool(
+            call, context, remaining_run_seconds=remaining_run_seconds
+        )
         if outcome.blocked:
             return await self.refuse(
                 call,
@@ -217,12 +238,16 @@ class ToolGateway:
         *,
         context: ExecutionContext,
         sink: EventSink,
+        remaining_run_seconds: float | None = None,
     ) -> PreparedCall | ToolResult:
         """Decide the call, re-checking any arguments the policy rewrites."""
 
         call = prepared.call
         for _ in range(self._max_policy_rounds):
-            decision = await self._policy.decide(call, context)
+            verdict = await self._decide(call, context, remaining_run_seconds)
+            if isinstance(verdict, ErrorInfo):
+                return await self.refuse(call, verdict, sink=sink)
+            decision = verdict
             await sink.emit(
                 PermissionResolved(
                     tool_call_id=call.tool_call_id,
@@ -279,6 +304,48 @@ class ToolGateway:
             ),
             sink=sink,
         )
+
+    async def _decide(
+        self,
+        call: ToolCall,
+        context: ExecutionContext,
+        remaining_run_seconds: float | None,
+    ) -> PolicyDecision | ErrorInfo:
+        """Ask the policy engine, bounded, and never let it throw.
+
+        A policy engine is deployment-supplied code sitting on the path of
+        every call. Letting it hang held the run past its own deadline, and
+        letting it raise sent the exception -- and whatever a backend wrote
+        into the message, which has included a DSN -- out through a caller that
+        was promised a terminal outcome. Both are refusals here, and only the
+        exception's type name crosses the boundary.
+        """
+
+        bound = self._policy_timeout_seconds
+        if remaining_run_seconds is not None:
+            bound = min(bound, remaining_run_seconds)
+        if bound <= 0:
+            return ErrorInfo(
+                code="policy_denied",
+                message="the run had no time left to reach a policy decision",
+            )
+
+        try:
+            async with asyncio.timeout(bound):
+                return await self._policy.decide(call, context)
+        except TimeoutError:
+            return ErrorInfo(
+                code="policy_denied",
+                message=f"the policy engine exceeded its {bound:g}s bound",
+            )
+        except AgentWorkbenchError as exc:
+            # Our own errors already carry a vetted message.
+            return exc.to_error_info()
+        except Exception as exc:
+            return ErrorInfo(
+                code="policy_denied",
+                message=f"the policy engine raised {type(exc).__name__}",
+            )
 
     async def _await_approval(
         self,

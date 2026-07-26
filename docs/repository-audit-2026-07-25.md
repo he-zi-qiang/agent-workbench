@@ -238,7 +238,9 @@ run 随后以 `stop_reason="max_steps"` 失败——**不是** `max_tool_calls`�
 修复方向：dispatch 前预留 tool-call 配额；每轮合并 usage 后、完成 run 前再次检查；
 按固定 model revision 接入计价器。
 
-### P1-6 Policy 改写绕过参数大小限制
+### P1-6 Policy 改写绕过参数大小限制 —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 涉及：
 
@@ -250,7 +252,9 @@ run 随后以 `stop_reason="max_steps"` 失败——**不是** `max_tool_calls`�
 
 修复方向：Policy 与 Hook 的每轮改写统一调用完整 `_check()`。
 
-### P1-7 Policy/Hook 不受完整 run deadline 约束
+### P1-7 Policy/Hook 不受完整 run deadline 约束 —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 涉及：
 
@@ -586,3 +590,47 @@ run 走多远，不是单次 provider 调用返回多少；后者是 provider �
 值得记一笔的是：改完之后既有 610 条测试**一条都没红**。审计说的「预算测试没有
 覆盖越界批次」就是这个意思——现有两条上限测试的预算都恰好卡在整数倍上
 （`max_tool_calls=4`、每轮 2 个调用），从来没有构造出越界的那一批。
+
+### P1-6 Policy 改写受参数字节上限约束（2026-07-26）
+
+行为变化：`authorize()` 的改写分支从 `_validate()` 改为 `_check()`——与原始参数、
+与 Hook 改写走的是同一道检查。
+
+Hook 改写一直走完整检查，Policy 改写只重跑 schema。于是 `max_argument_bytes`
+约束的是模型能发多少，而不是 Policy 能替换成多少：上限设为 64 字节时，一次改写
+把 10,000 字节送进 handler，run 正常完成。schema 说 `query` 是字符串，并没有说
+一万个字符不行。
+
+回归测试 3 条（含 1 条对照：改写在上限之内仍然照常执行，说明拒绝跟的是尺寸而不是
+「发生了改写」这件事）。**验证过是有牙的**：撤掉修复失败 2 条。
+
+### P1-7 Policy 与 Hook 受 run deadline 约束并 fail closed（2026-07-26）
+
+行为变化有三处。
+
+**一、Policy 引擎有了自己的时间界。** 它是部署方提供的代码，坐在每一次调用的必经
+路径上；此前完全无界，卡住就把整个 run 拖过它自己的 deadline。现在界是
+`min(gateway 自己的 policy 超时, run 剩余时间)`。gateway 保留一个自带的默认值
+（5 秒），这样即使调用方忘记传剩余时间，也仍然有界而不是无界——默认值为 None 时
+退化成无界，正是同一类 fail-open。
+
+**二、Policy 抛出的异常归一化为拒绝。** 复现时发现的情况比审计描述的更严重：异常
+**直接逃出了 `authorize()`**，调用方拿到的是 traceback 而不是终态结果，这违反
+`AgentExecutor` 「必须返回终态 outcome」的协议约定；而且异常正文原样带出——复现
+用的消息里就有 `dsn=postgres://u:sk-ant-canary@h/db`。现在只有异常**类型名**过界，
+与 Hook Bus 早已遵守的规则一致。我们自己的 `AgentWorkbenchError` 例外，其消息是
+经过审的。
+
+**三、Hook 取 `min(自身超时, run 剩余时间)`，且逐个 hook 重算。** 此前每个 hook
+都持有完整超时，于是只剩 2 秒的 run 仍可能在一个 hook 里花掉 5 秒——本该结束 run
+的 deadline，恰恰是 run 唯一管不住的东西。剩余时间为 0 时不启动任何 hook 或 policy
+调用，并同样拒绝该次调用。
+
+拒绝理由里带上**是哪一个界耗尽了**（「its 5s timeout」还是「the 2s the run had
+left」）。两种后果相同，但对读审计线的人指向完全不同的地方——和
+`ModelCallDeadline.source` 是同一个判断。
+
+回归测试 9 条（gateway 6 条 + hook bus 3 条，含 2 条对照）。**验证过是有牙的**：
+撤掉 policy 归一化后，能终止的 3 条失败，另外 2 条**永远挂住**（后台跑 8 秒仍未
+结束才强杀）——无界等待正是这条缺陷本身，只是它表现为挂起而不是断言失败；撤掉
+hook 的剩余时间后失败 1 条，另 1 条同样挂住 30 秒。
