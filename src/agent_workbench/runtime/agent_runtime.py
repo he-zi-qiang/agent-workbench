@@ -537,6 +537,12 @@ class ClaudeLikeAgentRuntime:
         allowance = max(request.budget.max_tool_calls - ledger.usage.tool_calls, 0)
         admitted = turn.calls[:allowance]
 
+        # Re-read for each phase: the run's deadline bounds the policy engine
+        # and the hooks exactly as it bounds the tools they guard, and a slow
+        # phase leaves less for the next.
+        def remaining() -> float | None:
+            return remaining_run_seconds(request.budget.deadline, now=self._clock())
+
         results: list[ToolResult] = []
         for call in turn.calls[allowance:]:
             results.append(
@@ -559,6 +565,7 @@ class ClaudeLikeAgentRuntime:
                 call,
                 context=context,
                 sink=sink,
+                remaining_run_seconds=remaining(),
             )
             if isinstance(outcome, ToolResult):
                 results.append(outcome)
@@ -573,6 +580,7 @@ class ClaudeLikeAgentRuntime:
                     candidate,
                     context=context,
                     sink=sink,
+                    remaining_run_seconds=remaining(),
                 )
                 if isinstance(outcome, ToolResult):
                     results.append(outcome)

@@ -71,8 +71,15 @@ class _Staller:
         raise AssertionError("unreachable")
 
 
-def _run(bus: HookBus, call: ToolCall = CALL) -> HookBusOutcome:
-    return asyncio.run(bus.before_tool(call, CONTEXT))
+def _run(
+    bus: HookBus,
+    call: ToolCall = CALL,
+    *,
+    remaining_run_seconds: float | None = None,
+) -> HookBusOutcome:
+    return asyncio.run(
+        bus.before_tool(call, CONTEXT, remaining_run_seconds=remaining_run_seconds)
+    )
 
 
 def test_an_outcome_cannot_both_rewrite_and_block() -> None:
@@ -185,3 +192,41 @@ def test_arbitrary_json_arguments_survive_a_rewrite() -> None:
     rewriter = _Recorder("rewriter", HookOutcome.rewrite(nested))
 
     assert _run(HookBus([rewriter])).call.arguments == nested
+
+
+def test_a_hook_is_bounded_by_what_the_run_has_left() -> None:
+    """P1-7. Each hook holding its full timeout outlived the run's deadline."""
+
+    outcome = _run(
+        HookBus([_Staller("slow")], timeout_seconds=30.0),
+        remaining_run_seconds=0.05,
+    )
+
+    assert outcome.blocked is True
+    assert outcome.blocked_by == "slow"
+    assert outcome.reason is not None
+    assert "the run had left" in outcome.reason
+
+
+def test_a_hook_is_not_consulted_with_no_time_left() -> None:
+    """Nothing to spend, so nothing is started -- and the call is still refused."""
+
+    recorder = _Recorder("watcher")
+
+    outcome = _run(HookBus([recorder]), remaining_run_seconds=0.0)
+
+    assert recorder.seen == []
+    assert outcome.blocked is True
+
+
+def test_the_hooks_own_timeout_still_applies_when_it_is_smaller() -> None:
+    """The control: the run's clock does not replace the hook's own bound."""
+
+    outcome = _run(
+        HookBus([_Staller("slow")], timeout_seconds=0.05),
+        remaining_run_seconds=30.0,
+    )
+
+    assert outcome.blocked is True
+    assert outcome.reason is not None
+    assert "its 0.05s timeout" in outcome.reason

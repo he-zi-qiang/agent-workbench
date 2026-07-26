@@ -66,6 +66,20 @@ class HookBus:
         self._hooks = tuple(hooks)
         self._timeout_seconds = timeout_seconds
 
+    def _bound(self, remaining_run_seconds: float | None) -> tuple[float, str]:
+        """The smaller of this bus's timeout and what the run has left.
+
+        The source travels with the number. Both outcomes refuse the call, but
+        "this hook is slow" and "this run is nearly over" send whoever reads
+        the audit line to different places.
+        """
+
+        if remaining_run_seconds is None or self._timeout_seconds < (
+            remaining_run_seconds
+        ):
+            return self._timeout_seconds, "its {:g}s timeout"
+        return remaining_run_seconds, "the {:g}s the run had left"
+
     @property
     def is_empty(self) -> bool:
         return not self._hooks
@@ -78,22 +92,39 @@ class HookBus:
         self,
         call: ToolCall,
         context: ExecutionContext,
+        *,
+        remaining_run_seconds: float | None = None,
     ) -> HookBusOutcome:
-        """Run one pass, returning the final call or the hook that stopped it."""
+        """Run one pass, returning the final call or the hook that stopped it.
+
+        ``remaining_run_seconds`` is what the run has left. Hooks are bounded
+        by the smaller of it and their own timeout, and it is re-read for each
+        hook: a slow first hook leaves less for the second.
+        """
 
         current = call
         rewritten = False
 
         for hook in self._hooks:
+            bound, described = self._bound(remaining_run_seconds)
+            if bound <= 0:
+                # No time to start. Refusing is the same answer a hook that
+                # ran out of time would get, and for the same reason.
+                return HookBusOutcome(
+                    call=current,
+                    rewritten=rewritten,
+                    blocked_by=hook.name,
+                    reason="the run had no time left to consult this hook",
+                )
             try:
-                async with asyncio.timeout(self._timeout_seconds):
+                async with asyncio.timeout(bound):
                     outcome = await hook.before_tool(current, context)
             except TimeoutError:
                 return HookBusOutcome(
                     call=current,
                     rewritten=rewritten,
                     blocked_by=hook.name,
-                    reason=f"the hook exceeded its {self._timeout_seconds:g}s timeout",
+                    reason=f"the hook exceeded {described.format(bound)}",
                 )
             except Exception as exc:
                 # Only the exception type crosses the boundary: hook code is

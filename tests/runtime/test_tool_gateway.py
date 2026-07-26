@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from itertools import count
+from typing import NoReturn
 
 import pytest
 
@@ -476,3 +477,171 @@ def test_a_rewrite_cannot_smuggle_a_call_past_its_approval_requirement() -> None
     assert harness.tool.calls == []
     assert result.error is not None
     assert result.error.code == "approval_required"
+
+
+def test_a_policy_rewrite_is_held_to_the_argument_ceiling() -> None:
+    """P1-6. The byte limit was something a policy could opt out of.
+
+    Hook rewrites already went back through the whole check; policy rewrites
+    re-ran only the schema. A schema that says ``query`` is a string says
+    nothing about ten thousand of them.
+    """
+
+    policy = _ScriptedPolicy(
+        PolicyDecision.allow_modified("expand", {"query": "x" * 10_000}),
+        PolicyDecision.allow("would_permit_it"),
+    )
+    harness = _Harness(policy=policy, max_argument_bytes=64)
+
+    result, _ = _execute(harness, _call(query="small"))
+
+    assert harness.tool.calls == []
+    assert result.error is not None
+    assert result.error.code == "invalid_tool_input"
+
+
+def test_the_ceiling_refusal_does_not_quote_the_arguments() -> None:
+    """Sizes go in the message; contents never do."""
+
+    policy = _ScriptedPolicy(
+        PolicyDecision.allow_modified("expand", {"query": "secret" * 2_000}),
+        PolicyDecision.allow("would_permit_it"),
+    )
+    harness = _Harness(policy=policy, max_argument_bytes=64)
+
+    result, _ = _execute(harness, _call(query="small"))
+
+    assert result.error is not None
+    assert "secret" not in result.error.message
+
+
+def test_a_rewrite_inside_the_ceiling_still_runs() -> None:
+    """The control: the check is the size, not the fact of a rewrite."""
+
+    policy = _ScriptedPolicy(
+        PolicyDecision.allow_modified("clamp", {"query": "fusion", "top_k": 5}),
+        PolicyDecision.allow("permitted"),
+    )
+    harness = _Harness(policy=policy, max_argument_bytes=64)
+
+    result, _ = _execute(harness, _call(query="fusion", top_k=9))
+
+    assert result.error is None
+    assert harness.tool.calls[0].arguments["top_k"] == 5
+
+
+class _Hanging:
+    """A policy engine that never answers."""
+
+    async def decide(self, call: ToolCall, context: ExecutionContext) -> NoReturn:
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+
+class _Raising:
+    """A policy engine whose backend failure carries a secret in its message."""
+
+    async def decide(self, call: ToolCall, context: ExecutionContext) -> NoReturn:
+        raise RuntimeError("policy backend down: dsn=postgres://u:sk-ant-canary@h/db")
+
+
+def test_a_policy_engine_that_hangs_is_refused_not_awaited() -> None:
+    """P1-7. Deployment-supplied code sits on the path of every call."""
+
+    harness = _Harness(policy=_Hanging(), policy_timeout_seconds=0.05)
+
+    result, events = _execute(harness, _call(query="fusion"))
+
+    assert harness.tool.calls == []
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+    assert events == ["ToolProposed", "ToolFailed"]
+
+
+def test_a_policy_engine_that_raises_becomes_a_refusal() -> None:
+    """P1-7. The caller was promised a terminal outcome, not an exception.
+
+    It used to escape ``authorize`` entirely, so a run reported neither
+    success nor failure -- it reported a traceback.
+    """
+
+    harness = _Harness(policy=_Raising())
+
+    result, _ = _execute(harness, _call(query="fusion"))
+
+    assert harness.tool.calls == []
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+
+
+def test_only_the_exception_type_crosses_the_policy_boundary() -> None:
+    """A backend's message is not vetted, and has carried a DSN."""
+
+    harness = _Harness(policy=_Raising())
+
+    result, _ = _execute(harness, _call(query="fusion"))
+
+    assert result.error is not None
+    assert "RuntimeError" in result.error.message
+    assert "sk-ant-canary" not in result.error.message
+    assert "postgres://" not in result.error.message
+
+
+def test_the_run_deadline_bounds_the_policy_engine() -> None:
+    """The run's remaining time wins when it is the smaller of the two."""
+
+    harness = _Harness(policy=_Hanging(), policy_timeout_seconds=30.0)
+
+    async def scenario() -> ToolResult:
+        await harness.gateway.propose(_call(query="fusion"), sink=harness.sink)
+        prepared = await harness.gateway.prepare(
+            _call(query="fusion"), context=CONTEXT, sink=harness.sink
+        )
+        assert not isinstance(prepared, ToolResult)
+        return await harness.gateway.authorize(  # pyright: ignore[reportReturnType]
+            prepared,
+            context=CONTEXT,
+            sink=harness.sink,
+            remaining_run_seconds=0.05,
+        )
+
+    result = asyncio.run(scenario())
+
+    assert isinstance(result, ToolResult)
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+
+
+def test_a_run_with_no_time_left_does_not_start_a_policy_call() -> None:
+    """Nothing to spend, so nothing is started."""
+
+    policy = _ScriptedPolicy(PolicyDecision.allow("would_permit_it"))
+    harness = _Harness(policy=policy)
+
+    async def scenario() -> ToolResult:
+        prepared = await harness.gateway.prepare(
+            _call(query="fusion"), context=CONTEXT, sink=harness.sink
+        )
+        assert not isinstance(prepared, ToolResult)
+        return await harness.gateway.authorize(  # pyright: ignore[reportReturnType]
+            prepared,
+            context=CONTEXT,
+            sink=harness.sink,
+            remaining_run_seconds=0.0,
+        )
+
+    result = asyncio.run(scenario())
+
+    assert isinstance(result, ToolResult)
+    assert policy.seen == []
+
+
+def test_a_policy_that_answers_in_time_is_unaffected() -> None:
+    """The control: the bound is a bound, not a refusal."""
+
+    harness = _Harness(policy=_ScriptedPolicy(PolicyDecision.allow("permitted")))
+
+    result, _ = _execute(harness, _call(query="fusion"))
+
+    assert result.error is None
+    assert len(harness.tool.calls) == 1
