@@ -24,8 +24,15 @@ own context.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from typing import Any, Final, cast
 
@@ -60,6 +67,19 @@ DATA_PREFIX: Final[str] = "data:"
 # ends, so they are the one thing here that grows with what a provider sends.
 DEFAULT_MAX_ARGUMENT_CHARS: Final[int] = 262_144
 
+# Doubled per attempt. An immediate retry of a 429 is a way of asking to be
+# rate limited harder.
+RETRY_BACKOFF_SECONDS: Final[float] = 0.5
+
+
+class _RetryableFailure:
+    """A failure from before anything was emitted, so retrying it is safe."""
+
+    __slots__ = ("error",)
+
+    def __init__(self, error: ErrorInfo) -> None:
+        self.error = error
+
 
 class _OversizedFragment(Exception):
     """Accumulated tool arguments passed the ceiling this adapter will hold."""
@@ -87,11 +107,25 @@ FINISH_REASONS: Final[Mapping[str, ModelFinishReason]] = {
 
 @dataclass(frozen=True, slots=True)
 class DeepSeekProfile:
-    """The concrete model behind one profile name."""
+    """The concrete model behind one profile name, and how to call it.
+
+    The reliability fields mirror ``model.<profile>`` in the configuration
+    contract. They lived there with no consumer, so a deployment could set a
+    timeout or a retry count and get neither.
+    """
 
     model_id: str
     temperature: float = 0.0
     max_output_tokens: int | None = None
+    timeout_seconds: float = 120.0
+    max_retries: int = 0
+    tool_calling_required: bool = False
+
+    def __post_init__(self) -> None:
+        if self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if self.max_retries < 0:
+            raise ValueError("max_retries must not be negative")
 
 
 @dataclass(slots=True)
@@ -114,6 +148,7 @@ class DeepSeekModel:
         base_url: str,
         profiles: Mapping[ModelProfileName, DeepSeekProfile],
         max_argument_chars: int = DEFAULT_MAX_ARGUMENT_CHARS,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if max_argument_chars < 1:
             raise ValueError("max_argument_chars must be positive")
@@ -126,8 +161,18 @@ class DeepSeekModel:
         self._url = base_url.rstrip("/") + CHAT_COMPLETIONS_PATH
         self._profiles = dict(profiles)
         self._max_argument_chars = max_argument_chars
+        # Injected so a retry test need not wait out its own backoff.
+        self._sleep = sleep
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        """Stream one completion, retrying only what is safe to retry.
+
+        Retrying after any event has left this adapter would repeat text the
+        caller already saw, so the only retryable failure is one that happens
+        before the first event: a transport fault reaching the provider, or a
+        retryable error status. Anything that goes wrong mid-stream is final.
+        """
+
         profile = self._profiles.get(request.model_profile)
         if profile is None:
             yield ModelStreamCompleted(
@@ -138,6 +183,29 @@ class DeepSeekModel:
                 ),
             )
             return
+
+        for attempt in range(profile.max_retries + 1):
+            retry: ErrorInfo | None = None
+            async for event in self._attempt(request, profile):
+                if isinstance(event, _RetryableFailure):
+                    retry = event.error
+                    break
+                yield event
+            if retry is None:
+                return
+            if attempt == profile.max_retries:
+                yield ModelStreamCompleted(finish_reason="error", error=retry)
+                return
+            await self._sleep(RETRY_BACKOFF_SECONDS * (2**attempt))
+
+    async def _attempt(
+        self, request: ModelRequest, profile: DeepSeekProfile
+    ) -> AsyncIterator[ModelEvent | _RetryableFailure]:
+        """One call, signalling a retryable failure rather than yielding one.
+
+        Only the two places that can fail before anything has been emitted
+        signal; once bytes are flowing, every failure here is terminal.
+        """
 
         payload = self._payload(request, profile)
         headers = {
@@ -150,6 +218,7 @@ class DeepSeekModel:
         usage = TokenUsage()
         finish: ModelFinishReason | None = None
         failure: ErrorInfo | None = None
+        emitted = False
 
         try:
             async with self._client.stream(
@@ -157,22 +226,26 @@ class DeepSeekModel:
                 self._url,
                 json=payload,
                 headers=headers,
+                timeout=profile.timeout_seconds,
             ) as response:
                 if response.status_code >= 400:
                     # The body is not read and not quoted: a chat completion
                     # error can echo the prompt back.
-                    yield ModelStreamCompleted(
-                        finish_reason="error",
-                        error=ErrorInfo(
-                            code="provider_error",
-                            message=(
-                                "the provider rejected the request with HTTP "
-                                f"{response.status_code}"
-                            ),
-                            retryable=response.status_code >= 500
-                            or response.status_code == 429,
+                    rejected = ErrorInfo(
+                        code="provider_error",
+                        message=(
+                            "the provider rejected the request with HTTP "
+                            f"{response.status_code}"
                         ),
+                        retryable=response.status_code >= 500
+                        or response.status_code == 429,
                     )
+                    if rejected.retryable:
+                        yield _RetryableFailure(rejected)
+                    else:
+                        yield ModelStreamCompleted(
+                            finish_reason="error", error=rejected
+                        )
                     return
 
                 async for line in response.aiter_lines():
@@ -182,6 +255,7 @@ class DeepSeekModel:
                             continue
 
                         for event in _text_events(chunk):
+                            emitted = True
                             yield event
 
                         _absorb_tool_fragments(
@@ -227,15 +301,19 @@ class DeepSeekModel:
         except httpx.HTTPError as exc:
             # Transport faults stay transport faults: the type is descriptive
             # enough and the message may quote the URL and its query.
-            yield ModelStreamCompleted(
-                finish_reason="error",
-                error=ErrorInfo(
-                    code="provider_error",
-                    message=f"the request to the provider failed: {type(exc).__name__}",
-                    retryable=True,
-                ),
-                usage=usage,
+            failed = ErrorInfo(
+                code="provider_error",
+                message=f"the request to the provider failed: {type(exc).__name__}",
+                retryable=True,
             )
+            if emitted:
+                # Mid-stream: retrying would repeat what the caller already
+                # received, so this attempt is the whole story.
+                yield ModelStreamCompleted(
+                    finish_reason="error", error=failed, usage=usage
+                )
+            else:
+                yield _RetryableFailure(failed)
             return
 
         if failure is not None:
@@ -291,6 +369,10 @@ class DeepSeekModel:
             payload["max_tokens"] = max_tokens
         if request.tools:
             payload["tools"] = _tool_definitions(request.tools)
+            if profile.tool_calling_required:
+                # Only meaningful alongside tools: sending it without any would
+                # ask the provider to require a choice from an empty set.
+                payload["tool_choice"] = "required"
         return payload
 
 
