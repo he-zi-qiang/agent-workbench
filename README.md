@@ -3,7 +3,7 @@
 中文 | [English](README.en.md)
 
 Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Agent
-平台项目，提供两种产品模式：
+平台项目，目标是提供两种产品模式：
 
 - **Chat Mode**：多轮对话、知识库问答和带权限校验的 RAG；
 - **Task Mode**：可恢复的 LangGraph 工作流和可控 Multi-Agent 协作。
@@ -13,62 +13,32 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-目前已完成 **PR-001 Bootstrap**、**PR-002 Config CI**、**PR-003 Domain**、
-**PR-004 Ports + Fakes**、**PR-005 CLI Skeleton**、**PR-006 Runtime Serial
-Loop**、**PR-007 Policy + Tool Gateway**、**PR-008 Runtime Budgets** 与
-**PR-009 Parallel Reads**、**PR-010 Hook Bus** 与 **PR-011 DeepSeek Provider
-Contract** 与 **PR-012 DeepSeek Model Adapter** 的本地实现和验证。RAG、
-Workflow、Multi-Agent、API 和 UI 仍处于 Planned 状态，不能描述为已经实现。
+截至 2026-07-25，`main@f071323` 已合并 **PR-001～PR-015**，并完成
+ADR-012 身份边界决策。当前已经实现并测试：
 
-PR-003 交付的是框架无关的领域契约：消息、工具、事件、上下文、运行预算、
-策略决定与错误分类，全部只依赖标准库与 Pydantic。工具调用与结果的配对、
-事件持久性、引用可溯源等不变量以构造期校验的形式固定下来。
+- 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
+- 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
+  deadline、取消、并行只读调度、exclusive 屏障和 Hook Bus；
+- DeepSeek OpenAI-compatible 流式 Adapter 的离线协议契约；
+- PostgreSQL ConversationStore、Alembic 迁移、Document/Version/ACL、
+  事务 Outbox 与 `SKIP LOCKED` 竞争领取；
+- Local ArtifactStore，以及 FastAPI Upload/Artifact/Health API。
 
-PR-004 在其上定义了 Model、Tool、Agent、Event 与 Store 的 Protocol，并给出
-一套零外部依赖的实现：脚本化 FakeModel、内存事件日志/会话库/产物库、两个
-无副作用 Tool 和 deny-by-default 策略引擎。契约测试因此可以离线、确定性地
-运行，不需要数据库、向量库或在线模型。
+这些能力仍有明确边界：
 
-PR-005 把这些零件接成第一条可运行的纵向切片：输入 → 模型 → 统一事件 → 输出。
-CLI 只消费事件与返回的 `AgentOutcome`；流式回答来自 transient delta，时间线
-来自运行结束后对 durable log 的重放，两者的差异正是持久性规则本身。
+- DeepSeek Adapter 尚未接入 Bootstrap/API/CLI 的进程装配，也没有真实在线模型
+  E2E；当前 `agent-cli demo` 仍使用脚本化 FakeModel。
+- 已实现的是上传相关 API，不是完整 Chat/Task API。Chat RAG、LangGraph Task、
+  Multi-Agent、SSE、Approval、UI、生产身份认证和部署仍为 Planned。
+- PostgreSQL 已用于会话、文档和 Outbox；Task Registry、lease、fencing、
+  checkpoint 与 `LISTEN/NOTIFY` 协调尚未实现。
 
-PR-006 补上自研 `ClaudeLikeAgentRuntime`：串行
-`模型 → Tool → ToolResult → 模型` 循环，基线 7.1 的状态机被写成可执行的转移表，
-非法转移直接抛错。每个已暴露的 `tool_call_id` 恰有一个 `ToolResult`——未知工具、
-被策略拒绝、handler 抛异常、超时、批次中途取消都会产出结果而不是留空；提交顺序
-永远是模型的调用顺序。
+> **安全警告：** 当前 Identity Adapter 只信任请求头，且默认
+> `api.host = "0.0.0.0"`。在 loopback 强制校验落地前，`agent-api` 只能用于
+> 受控的本机开发，不得暴露到局域网、容器端口映射或公网。
 
-PR-007 把这些检查收进唯一的 Tool Gateway：handler 只在**最终参数**同时通过
-schema 校验与授权决定之后才会运行。策略若返回 `allow_with_modified_input`，
-重写后的参数会被重新校验并重新提交决定——能在检查之后改参数，就等于同时绕过
-两道检查。JSON Schema 只支持一个明确的子集，超出子集的 schema 在装配阶段就被
-拒绝，而不是在调用时被静默跳过。
-
-PR-008 把各层时限收敛成一个下界：单次模型调用的有效 deadline 是
-`min(运行时 envelope, run 剩余时间)`（模型 profile 自己的超时由 Adapter 在更
-内层施加），单个 Tool 的时限是 `min(工具声明的超时, run 剩余时间)`——一个被批准
-一小时的工具，不该活得比批准它的 run 还久。取消在流式过程中于下一个事件边界生效，
-并通过关闭生成器传导到 Adapter；模型完全静默时由 deadline 兜底。
-
-PR-009 让同一批里连续的只读工具并发执行，写/外部/破坏性工具则各自独占一组——
-"副作用要过屏障"因此不再只是文档里的一句话。分组是一个**纯函数**，不需要事件
-循环就能验证；执行顺序可以变，提交给模型的顺序永远是它自己的调用顺序。
-
-PR-010 加入 Hook：部署方可以在工具调用被判定之前检查、改写或拦截它。Hook 改写
-过的参数会**重新走一遍 schema 校验与授权**——能在检查之后改参数就等于绕过检查；
-Hook 抛错或超时一律视为拦截，因为"坏掉的安全规则"绝不能等于"放行"。
-
-模型 Provider 选用 **DeepSeek**（OpenAI 兼容协议）。PR-011 只换配置契约：
-`model.provider`、`model.base_url`、密钥字段与 ownership 登记，配置 schema
-随之升到 `1.2`——Runtime 一行未改，这正是 `ModelPort` 存在的理由。端点必须是
-HTTPS（loopback 除外），且不进入 Task 恢复快照。
-
-PR-012 落地 Adapter 本体：OpenAI 兼容的流式接口，工具调用的 JSON 参数分片
-**攒齐才发**（半截 JSON 绝不能进 schema 校验和策略），HTTP 错误只带状态码不带
-响应体（聊天补全的错误体可能回显 prompt）。测试用 `httpx.MockTransport` 喂真实
-线格式字节，CI 依然离线；其中一条端到端测试直接断言"**Runtime 分不出它和脚本化
-模型的区别**"——同一条 durable 时间线。
+完整增量、测试证据、已知缺陷和未实现边界见
+[实施状态](docs/status.md)。
 
 ## 快速体验
 

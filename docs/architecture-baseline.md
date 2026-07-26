@@ -6,7 +6,7 @@
 >
 > 状态：已接受的目标架构；后续改变核心边界时必须新增 ADR，而不是直接穿透分层
 >
-> 实现状态：**Planned**；本文不是功能完成声明，能力只有通过测试和演示后才能标记为 Implemented
+> 实现状态：**部分实现**；Resume v1 尚未完成，逐项证据见第 17 节
 >
 > 目标：面向校招展示一个“Chat + RAG、Task + Multi-Agent、自研 Claude Code 风格 Runtime”的通用 Agent 项目
 
@@ -890,7 +890,7 @@ Task Worker 和 Ingestion Worker 是同一代码库的不同进程入口，不�
 | LlamaIndex 主 RAG | LangChain RAG 主链 | 文档 ingestion/retrieval 更聚焦；LangChain 保留最薄生态互操作 |
 | Qdrant | pgvector/Chroma/Milvus | hybrid 与 payload filter 更突出；代价是双库一致性和额外资源，因此只作派生索引 |
 | LangGraph Task | 纯自研工作流/CrewAI process | checkpoint、interrupt、fan-out/fan-in 更适合长期流程；不能接管内部 Tool Loop |
-| PostgreSQL coordination | Redis/Celery | 组件更少且可靠性语义可解释；吞吐极限较低，用指标决定是否升级 |
+| PostgreSQL Task coordination | Redis/Celery | 组件更少且可靠性语义可解释；吞吐极限较低，用指标决定是否升级 |
 | REST commands + SSE events | 全量 WebSocket | 当前交互主要是服务端流式输出，SSE 更简单且天然支持 `Last-Event-ID` |
 | 固定 Graph Multi-Agent | 群聊式/递归 Agent | 可测试、可恢复、预算清晰；动态委派推迟到 Optional Lab |
 | OTel 必做、Langfuse 可选 | 只依赖 LLM SaaS tracing | 标准遥测不绑定平台，同时保留 LLM 专用 UI 的扩展空间 |
@@ -1354,17 +1354,17 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-工作区已建立 PR-001 Bootstrap、PR-002 Config CI 与 PR-003 Domain：
-Python 3.12 src layout、锁文件、正式配置加载器、脱敏 config-check、字段级
-ownership、架构测试与 CI 合同已经存在，第 6 节的领域契约（消息、Tool、
-事件、ContextPacket、运行预算、Policy 决定与错误分类）也已落地为只依赖
-Pydantic 的框架无关类型，并带有 JSON golden 与不变量测试。Agent Runtime
-循环、RAG、Workflow 等产品能力尚未实现，因此当前状态必须如实标记。
+截至 2026-07-25，PR-001～PR-015 与 ADR-012 已合并。工程基线、领域契约、
+Ports、Fake Adapter、自研 Runtime、DeepSeek 协议 Adapter、PostgreSQL
+ConversationStore、Local ArtifactStore、文档/版本/ACL/事务 Outbox，以及
+Upload / Artifact / Health API 已经落地并有测试。DeepSeek Adapter 仍未接入
+进程装配，RAG、LangGraph Workflow、Task 协调、Multi-Agent 和生产部署仍未实现。
 
 表中标为 Demonstrated 的两项都由同一条固定演示 `agent-cli demo` 覆盖：逐字节
 可复现，由 golden 文件与 CI smoke 守护。它现在证明的是“输入 → 模型 → Tool →
 ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 handler 不被调用。
-它不包含 Hook、并行读、检索与恢复——那些能力在表中仍是 Planned。
+它不包含 Hook、并行读、真实模型、检索与恢复；不能把“有 contract test”写成
+“已经在线演示”。
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
@@ -1380,12 +1380,23 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | 自研 Runtime：Hook Bus 与参数重写重校验 | ✓ | ✓ | ✓ |  |
 | 模型 Provider 配置契约（DeepSeek） | ✓ | ✓ | ✓ |  |
 | DeepSeek Model Adapter（流式 HTTP） | ✓ | ✓ | ✓ |  |
+| PostgreSQL ConversationStore + Alembic migrations | ✓ | ✓ | ✓ |  |
+| Local ArtifactStore | ✓ | ✓ | ✓ |  |
+| Document / Version / ACL / transactional Outbox | ✓ | ✓ | ✓ |  |
+| Upload / Artifact / Health API | ✓ | ✓ | ✓ |  |
+| tenant-scoped 数据访问（以可信 PrincipalContext 为前提） | ✓ | ✓ | ✓ |  |
+| 生产身份认证 | ✓ |  |  |  |
 | LangChain model/tool 互操作 Adapter | ✓ |  |  |  |
 | Chat + RAG | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
-| PostgreSQL coordination | ✓ |  |  |  |
+| PostgreSQL Task coordination | ✓ |  |  |  |
 | Multi-Agent | ✓ |  |  |  |
 | UI / deployment / observability | ✓ |  |  |  |
+
+当前身份边界存在一个阻断项：开发 Header Identity Resolver 信任调用方自报的
+tenant/principal，而默认 `api.host = "0.0.0.0"`；`deployment_scope =
+"local"` 并不会限制实际监听地址。修复前 API 只能在受控本机环境使用，不能把
+“remote scope 会拒绝启动”表述成“无法被意外暴露”。
 
 每个 milestone 合并时更新这张表，并链接测试报告、评测结果、演示视频或 release tag。没有证据的功能不能写成简历中的已实现成果。
 
