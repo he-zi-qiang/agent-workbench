@@ -6,9 +6,52 @@
 
 - [架构与技术选型基线 v1.3](./architecture-baseline.md)；
 - [代码实施计划 v1.0](./implementation-plan.md)；
-- [配置管理契约 schema 1.1](./configuration.md)。
+- [配置管理契约 schema 1.2](./configuration.md)；
+- [2026-07-25 仓库核验报告](./repository-audit-2026-07-25.md)。
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
+
+## 2026-07-25 仓库核验总览
+
+核验基线：`main@f071323`，PR-001～PR-015 与 ADR-012 已合并。当前配置登记
+231 个 Settings 叶子字段、47 个组。
+
+已经实现并有测试证据：
+
+- Domain、Ports、Fake Adapter、可复现 CLI；
+- 自研 Runtime 的串行 Tool Loop、Policy/Tool Gateway、预算与取消、并行只读、
+  exclusive 屏障和 Hook Bus；
+- DeepSeek 流式 HTTP Adapter 的离线 contract tests；
+- PostgreSQL ConversationStore、Document/Version/ACL、事务 Outbox；
+- Local ArtifactStore 与 Upload / Artifact / Health API。
+
+明确尚未实现：
+
+- Chat RAG、LlamaIndex、Qdrant、BGE、RAGAS；
+- LangGraph Task、Task Registry、lease/fencing/checkpoint、Multi-Agent；
+- 生产身份认证、S3、Worker、SSE、UI、Docker Compose；
+- DeepSeek 的进程级装配和真实服务 E2E。
+
+本次门禁共收集 544 项测试。无数据库环境为 499 passed、45 skipped；PostgreSQL
+16 集成套件为 160 passed，Alembic `0001 → 0002` 通过。两组测试有重叠，不能
+相加。Ruff、Pyright、三 profile、CLI golden、许可证、Gitleaks 与 Actionlint
+均通过；GitHub Actions 证据见
+[run 30184299195](https://github.com/he-zi-qiang/agent-workbench/actions/runs/30184299195)。
+
+当前阻断项：
+
+1. 默认 `api.host = "0.0.0.0"`，开发 Header Identity Resolver 可能被本机之外
+   的调用者访问并伪造身份；
+2. `requires_approval=True` 没有阻止 write tool 执行；
+3. Upload/Document/Artifact 缺少同 tenant 内的 owner/ACL 对象授权；
+4. tool/token/cost budget 不是硬上限；
+5. Policy 改写可绕过参数字节上限，Policy/Hook deadline 不完整；
+6. DeepSeek 对损坏 SSE frame fail open，Artifact 下载不是真正流式；
+7. Outbox claim 没有 lease/fence，worker 崩溃后不可恢复。
+
+完整触发条件、文件位置和建议修复顺序见
+[仓库核验报告](./repository-audit-2026-07-25.md)。本轮只校正文档，没有把上述
+生产逻辑缺陷标记为已修复。
 
 ## PR-001 Bootstrap
 
@@ -459,7 +502,8 @@ CLI golden 文件逐字节未变
 留到评测/演示工作包——golden 文件是逐字节比对的，把它钉在并发执行的事件交错上，
 等于承诺一个调度器并不保证的顺序。并发性由上面的握手测试证明，那是更强的证据。
 
-不含 Hook Bus（WP02-05）与真实 Anthropic Adapter（WP02-06/07）。WP02 至此
+不含 Hook Bus（WP02-05）与真实 Model Adapter（后来确定为 DeepSeek，
+WP02-06/07）。WP02 至此
 只剩这两项。
 
 ## PR-010 Hook Bus
@@ -471,7 +515,8 @@ WP02 至此只剩真实 Model Adapter。
 
 > 编号说明：原计划 §9 的首批 PR 列表把 Hook Bus 留在 WP02 内部未编号，
 > PR-010 是 PostgreSQL/Artifact Base。实施时把 Hook Bus 排进 PR-010，其后
-> 持久化车道整体后移一位（现为 PR-011～PR-014），计划文档已同步。
+> Provider 占用 PR-011～PR-012，持久化与上传车道落在 PR-013～PR-015，
+> 计划文档已同步。
 
 已交付：
 
@@ -710,9 +755,9 @@ CI 新增 `postgres` job：`postgres:16`（按 digest 固定）service，先跑�
 
 范围说明：上传数据面（create-upload / 流式或 presigned / complete）、Outbox、
 document/version/ACL 仓储与 S3 Adapter 属于 WP03-04～09，不在本 PR。
-`artifacts` 表随它们一起落地，迁移计划表已相应改为 `0001_conversations` +
-`0002_artifacts_uploads`。三个 DSN 里本 PR 只建了普通查询用的那一个；guard 与
-listener 引擎要等协调工作包，那时它们的连接规则才开始有意义。
+`artifacts` 表后来随 PR-014 落入实际迁移 `0002_documents_outbox`。三个 DSN
+里本 PR 只建了普通查询用的那一个；guard 与 listener 引擎要等协调工作包，
+那时它们的连接规则才开始有意义。
 
 ## PR-014 Upload/Outbox
 
@@ -779,7 +824,8 @@ outbox 的 claim **不是 lease**：worker 死了，它领的事件就一直被�
 
 ## PR-015 Upload API
 
-状态：**已实现并通过本地测试（含真实 PostgreSQL）**。WP03 至此完成。
+状态：**已实现并通过本地测试（含真实 PostgreSQL）**。WP03 的本地存储与
+Upload/Outbox 基线完成；S3/presigned 与完整对象授权仍未完成。
 
 WP03-07：FastAPI 上传路由与控制面 request-limit 中间件。
 
@@ -816,8 +862,9 @@ WP03-07：FastAPI 上传路由与控制面 request-limit 中间件。
 解包——一个配置对象的 repr 因此打不出 DSN。
 
 **身份是接口层的结果，不是请求体字段。** 目前只有一个读 header 的开发用解析器，
-所以 `deployment_scope == "remote"` 时**装配阶段直接拒绝启动**：暴露这个服务的
-办法是先实现一个真的身份提供方，而不是记得别把它暴露出去。
+`deployment_scope == "remote"` 时会在装配阶段拒绝启动。但当前默认 host 是
+`0.0.0.0`，名义上的 local scope 仍可能监听所有网卡；因此这道检查不足以阻止
+意外暴露，修复前只能用于受控本机开发。
 
 2026-07-25 验证证据：
 
@@ -865,9 +912,10 @@ ACL 过滤的意义完全取决于 principal 从哪里来。
 时钟偏移、令牌撤销各自都是能微妙出错的地方，且现在没有任何消费者压力，还需要
 一份基线 13.1 尚未覆盖的令牌层威胁模型）。
 
-**推迟之所以安全，不在于"打算以后做"，而在于这个缺口无法被意外发上线**：唯一
-的解析器读请求头，而配置成 `remote` 的进程在装配阶段就拒绝启动。这是整个决定
-成立的依据；那道拒绝一旦放宽，ADR 同时失效。
+原 ADR 依赖“开发身份只能随 loopback 监听运行”这一安全前提。2026-07-25 核验
+发现当前实现并未强制它：默认 `api.host = "0.0.0.0"`，local scope 不检查实际
+监听地址。因此 remote 拒绝装配只能算部分护栏，不能证明缺口无法被意外暴露。
+ADR 已补记这一实现偏差。
 
 新增 `tests/architecture/test_identity_boundary.py`，把 ADR 里的规则变成可执行
 的：`PrincipalContext` 只能在一份显式清单里的模块中构造（API 的解析器、CLI 的
@@ -875,6 +923,8 @@ demo、以及定义它的领域模块）。新增一处就要改清单，也就�
 **验证过是有牙的**：在 `runtime/` 下放一个构造点会让它按模块名报错。同一个文件
 还断言 remote 拒绝装配的那两行仍然在位。
 
-能力表相应更新：租户隔离标为 Implemented/Tested，**生产级身份认证明确保持
-Planned**。README 与简历同样不得升级这一项；`scopes` 目前由调用方在请求头里
-自述，因此不是权限来源，只是让真实解析器接入时不必改动下游的形状占位。
+能力表相应更新：tenant-scoped 数据访问标为 Implemented/Tested，**生产级身份
+认证明确保持 Planned**。同 tenant 不同 principal 的对象级授权仍有已知缺口，
+不能笼统宣称完整租户隔离已完成。README 与简历同样不得升级这一项；`scopes`
+目前由调用方在请求头里自述，因此不是权限来源，只是让真实解析器接入时不必改动
+下游的形状占位。

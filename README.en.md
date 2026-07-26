@@ -1,7 +1,7 @@
 # Agent Workbench
 
-Agent Workbench is a clean-room portfolio project for building a general Agent
-platform with two product modes:
+Agent Workbench is a clean-room portfolio project whose target is a general
+Agent platform with two product modes:
 
 - Chat Mode: multi-turn conversation and authorized RAG;
 - Task Mode: recoverable LangGraph workflows and controlled multi-Agent work.
@@ -11,82 +11,36 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-**PR-001 Bootstrap**, **PR-002 Config CI**, **PR-003 Domain**, **PR-004 Ports +
-Fakes**, **PR-005 CLI Skeleton**, **PR-006 Runtime Serial Loop**, **PR-007
-Policy + Tool Gateway**, **PR-008 Runtime Budgets**, **PR-009 Parallel Reads**
-**PR-010 Hook Bus**, **PR-011 DeepSeek Provider Contract** and **PR-012
-DeepSeek Model Adapter** have been implemented and validated locally. RAG,
-workflow, multi-Agent, API and UI capabilities remain planned and must not be
-described as implemented.
+As of 2026-07-25, `main@f071323` contains **PR-001 through PR-015** and the
+ADR-012 identity decision. Implemented and tested today:
 
-PR-003 delivers the framework-neutral domain contracts -- messages, tools,
-events, context, run budgets, policy decisions and error codes -- using nothing
-but the standard library and Pydantic. Invariants such as one result per tool
-call, event durability and grounded citations are enforced at construction time
-rather than described in comments.
+- framework-neutral domain contracts, ports, fake adapters and a reproducible
+  CLI demo;
+- the custom `ClaudeLikeAgentRuntime`, including its tool loop, schema/policy
+  gateway, deadlines, cancellation, parallel reads, exclusive barriers and
+  hooks;
+- an offline contract-tested DeepSeek OpenAI-compatible streaming adapter;
+- PostgreSQL conversations, migrations, documents, versions, ACLs,
+  transactional outbox and `SKIP LOCKED` claiming;
+- a local artifact store and FastAPI upload/artifact/health endpoints.
 
-PR-004 adds the model, tool, agent, event and store protocols on top, together
-with dependency-free implementations: a scripted model, in-memory event log,
-conversation store and artifact store, two side-effect-free tools and a
-deny-by-default policy engine. Contract tests therefore run offline and
-deterministically, without a database, a vector store or a live model.
+The boundaries are equally important:
 
-PR-005 connects those pieces into the first runnable vertical slice: input,
-model, unified events, output. The CLI consumes only events and the returned
-outcome. Streamed text comes from transient deltas while the timeline is
-replayed from the durable log, and the difference between them is the
-durability rule itself.
+- The DeepSeek adapter is not wired into Bootstrap, the API or the CLI, and
+  there is no live-provider E2E. `agent-cli demo` still uses the scripted model.
+- The implemented HTTP surface is an upload slice, not Chat or Task. RAG,
+  LangGraph workflows, multi-Agent execution, SSE, approvals, UI, production
+  identity and deployment remain planned.
+- PostgreSQL task registry, leases, fencing, checkpoints and LISTEN/NOTIFY
+  coordination are not implemented.
 
-PR-006 adds the custom `ClaudeLikeAgentRuntime`: a serial `model -> tool ->
-result -> model` loop whose state machine is an executable transition table
-rather than a diagram, so an illegal phase change raises instead of producing a
-plausible-looking run. Every exposed `tool_call_id` ends with exactly one
-`ToolResult` -- unknown tool, denied call, raising handler, timeout, mid-batch
-cancellation -- and results are always submitted in the model's own call order.
+> **Security warning:** the current identity adapter trusts request headers and
+> the default API host is `0.0.0.0`. Until loopback-only binding is enforced,
+> `agent-api` is for controlled local development only and must not be exposed
+> to a LAN, a published container port or the Internet.
 
-PR-007 moves those checks into the one tool gateway: a handler runs only after
-its *final* arguments have passed both schema validation and an authorization
-decision. When a policy answers `allow_with_modified_input`, the rewritten
-arguments are validated again and re-submitted for a decision -- rewriting
-after the checks would be a way past both. JSON Schema support is a documented
-subset, and a schema reaching beyond it is refused when the gateway is
-assembled rather than silently unenforced at call time.
-
-PR-008 collapses the layered time limits into a single bound. One model call is
-allowed `min(runtime envelope, time left in the run)` -- the model profile's own
-timeout is applied by the adapter, one level further in -- and one tool call is
-allowed `min(its declared timeout, time left in the run)`, because a tool
-granted an hour should not outlive the run that authorized it. Cancellation
-takes effect at the next stream event and reaches the adapter by closing the
-generator; a model that goes silent instead is bounded by the deadline.
-
-PR-009 runs consecutive read-only tools in one batch concurrently, while write,
-external and destructive tools each take a group of their own -- "side effects
-cross a barrier" stops being a sentence and becomes a shape in memory. The
-grouping is a pure function, checkable without an event loop, and execution
-order still says nothing about submission order: results reach the model in the
-order it asked for them.
-
-PR-010 adds hooks: deployment-supplied code that inspects, rewrites or blocks a
-proposed tool call before anything judges it. Whatever a hook rewrites goes back
-through schema validation and authorization, because editing arguments after
-the checks would be a way around them, and a hook that raises or hangs blocks
-the call -- a broken safety rule must never become permission.
-
-The model provider is DeepSeek, over its OpenAI-compatible protocol. PR-011
-changes only the configuration contract -- provider, base URL, secret field and
-ownership entries, with the config schema moving to `1.2` -- and not a line of
-the runtime, which is what `ModelPort` exists for. The endpoint must be HTTPS
-unless it is loopback, and it stays out of task recovery snapshots.
-
-PR-012 lands the adapter itself, over the provider's OpenAI-compatible
-streaming API. A tool call is emitted whole -- the provider streams its
-arguments as JSON fragments, and partial JSON must never reach schema
-validation or policy -- and an HTTP error carries a status code and nothing
-else, because a chat completion error body can echo the prompt. Tests drive it
-with `httpx.MockTransport` over real wire-format bytes, so CI stays offline;
-one of them asserts end to end that the runtime cannot tell this adapter from
-the scripted one.
+See [the implementation status](docs/status.md) for the complete increment
+history, test evidence, known defects and remaining scope.
 
 ## Try it
 

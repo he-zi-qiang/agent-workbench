@@ -6,7 +6,7 @@
 - `config.test.toml`：测试环境深度合并覆盖，专门开启确定性 failpoint；
 - `config.production.toml`：无密钥的 production 合同覆盖，缺少部署注入时
   必须失败关闭；
-- `config/ownership.yaml`：230 个配置叶子字段的唯一 owner 与生命周期登记；
+- `config/ownership.yaml`：231 个配置叶子字段的唯一 owner 与生命周期登记；
 - `.env.example`：本地开发需要注入的 DSN、模型 ID 和密钥名称；
 - `src/agent_workbench/bootstrap/settings.py`：Pydantic Settings 类型、来源优先级、脱敏快照和跨域不变量；
 - `tests/config/test_settings.py`：配置契约测试；

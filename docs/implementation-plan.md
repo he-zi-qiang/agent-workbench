@@ -4,15 +4,14 @@
 >
 > 日期：2026-07-22
 >
-> 状态：WP00、WP01 已完成（PR-001～PR-005）；WP02 进行中，PR-006 Runtime
-> Serial Loop、PR-007 Policy + Tool Gateway、PR-008 Runtime Budgets、
-> PR-009 Parallel Reads、PR-010 Hook Bus（WP02-01～05）与 PR-011 DeepSeek
-> Provider Contract 与 PR-012 DeepSeek Model Adapter（WP02-06）已实现并通过
-> 本地验证。WP02 只剩 LangChain model/tool 互操作 Adapter（WP02-07）
+> 状态：PR-001～PR-015 与 D0 已合并。WP02-01～06 已完成，WP02-07
+> LangChain 互操作尚未开始；WP03 的 PostgreSQL ConversationStore、本地文件
+> 存储、Document/ACL/Outbox 和 Upload API 基线已完成；WP04 Dense Retrieval
+> 是下一阶段。WP00 的 Worker Container/FaultInjector 和延后冻结的 Ports 仍开放
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
 >
-> 配置依据：[配置管理基线 schema 1.1](./configuration.md)
+> 配置依据：[配置管理基线 schema 1.2](./configuration.md)
 >
 > 目标：把“Chat + RAG、Task + Multi-Agent、自研 Claude Code 风格 Runtime”
 > 落成一个可测试、可恢复、可评测、适合校招展示的通用 Agent 项目
@@ -546,7 +545,7 @@ ClaudeLikeAgentRuntime
 | WP02-03 | step/tool/token/deadline 预算与 CancellationToken |
 | WP02-04 | read-only parallel scheduler；执行顺序与提交顺序分离 |
 | WP02-05 | Hook 修改参数后重新 schema + Policy 校验 |
-| WP02-06 | Anthropic ModelPort Adapter；配置只传 model profile |
+| WP02-06 | DeepSeek ModelPort Adapter；配置只传 model profile |
 | WP02-07 | 最薄 LangChain model/tool Adapter 与 round-trip contract |
 
 ### 不变量测试
@@ -1248,20 +1247,31 @@ web
 
 ## 7. 数据库迁移计划
 
+已发布的 Alembic revision 不回写、不重编号。尚未实现的对象先按逻辑迁移列出，
+revision ID 到真正开工并核对依赖关系时再确定，避免计划表与已发布 migration
+发生编号冲突。
+
+### 7.1 已落地迁移
+
 | Migration | 工作包 | 核心对象 |
 |---|---|---|
 | `0001_conversations` | WP03 | `conversation_sessions`、`messages` |
-| `0002_artifacts_uploads` | WP03 | `artifacts`、upload intents（与 document version 同事务写入时才有意义） |
-| `0002_documents_outbox` | WP03–05 | `documents`、`document_versions`、ACL、`ingestion_jobs`、`outbox_events`、aggregate `source_revision/last_applied_revision`、`qdrant_index_generations` |
-| `0003_task_registry` | WP06–07 | `task_runs`、语义快照、graph/index revision、submitted policy revision/fingerprint、`resolved_qdrant_index_generation_id` FK/reservation |
-| `0004_event_streams` | WP07 | `run_event_streams`、`run_events` |
-| `0005_coordination` | WP08 | lease/epoch/attempt/available_at/recovery/dead-letter 字段与索引 |
-| `0006_approvals_ledger` | WP10 | `approvals` 的 decision/version/status/tenant 索引；`tool_executions` 的 operation key、request hash、intent/result/reconciliation、lease epoch/effective policy 字段；`task_runs.resume_kind/resume_ref/approval_id` |
-| `0007_agent_budgets` | WP11 | 持久 Agent invocation attempt/budget |
+| `0002_documents_outbox` | WP03 | `artifacts`、`upload_intents`、`documents`、`document_versions`、ACL、`outbox_events` |
 
 LangGraph checkpoint 表由锁定版本的 saver migration 管理，但其版本必须记录。
 
-### 7.1 必须存在的唯一约束
+### 7.2 计划逻辑迁移（revision ID 待定）
+
+| 逻辑迁移 | 工作包 | 核心对象 |
+|---|---|---|
+| Ingestion state | WP04–05 | `ingestion_jobs`、`last_applied_revision`、`qdrant_index_generations` |
+| Task Registry | WP06–07 | `task_runs`、语义快照、graph/index revision、submitted policy identity、resolved index generation reservation |
+| Event streams | WP07 | `run_event_streams`、`run_events` |
+| Coordination | WP08 | lease/epoch/attempt/available_at/recovery/dead-letter 字段与索引 |
+| Approvals ledger | WP10 | `approvals`、`tool_executions`、resume reference 与 effective policy 字段 |
+| Agent budgets | WP11 | 持久 Agent invocation attempt/budget |
+
+### 7.3 必须存在的唯一约束
 
 ```text
 task_runs       UNIQUE(owner_id, submission_dedup_key)
@@ -1270,7 +1280,7 @@ approvals       UNIQUE(task_id, graph_node_operation_id)
 tool_executions UNIQUE(task_id, operation_key)
 ```
 
-### 7.2 状态机
+### 7.4 状态机
 
 Task 状态至少包含：
 
@@ -1287,7 +1297,7 @@ dead_letter
 
 所有转换通过 Repository 条件更新；接口层不能直接写状态字符串。
 
-### 7.3 一致性边界
+### 7.5 一致性边界
 
 - PostgreSQL 是 conversation sessions/messages、Task Registry、run events、
   approvals、documents/ACL/outbox 和 `tool_executions` 的事实源；
@@ -1308,7 +1318,7 @@ dead_letter
 | Config/Architecture/Domain | 无外部服务 | 每个 PR |
 | Runtime/Workflow unit | FakeModel/FakeTool | 每个 PR |
 | Adapter contracts | mocked SDK/锁定框架版本 | 每个 PR |
-| PostgreSQL coordination | 真实 PostgreSQL | 每个 PR |
+| PostgreSQL Task coordination | 真实 PostgreSQL | 每个 PR |
 | RAG integration | PostgreSQL + Qdrant + 小模型 fixture | PR 或分层缓存 |
 | Recovery multi-process | PostgreSQL + Qdrant + ArtifactStore | 每个主分支合并 |
 | Offline eval | 固定语料、无在线 judge | 主分支/Nightly |
