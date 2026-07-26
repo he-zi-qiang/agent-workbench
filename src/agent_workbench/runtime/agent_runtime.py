@@ -187,6 +187,28 @@ class ClaudeLikeAgentRuntime:
                 )
             )
 
+        if request.budget.max_cost_micro_usd is not None:
+            # Nothing produces cost_micro_usd: no pricer exists, so this
+            # ceiling would sit at zero for the whole run and never fire. A
+            # limit that cannot be enforced must not be accepted as one --
+            # the caller asked for a guarantee, and silently not providing it
+            # is worse than refusing. Delete this branch in the change that
+            # introduces a cost meter, not before.
+            return await self._failed(
+                request,
+                sink,
+                machine,
+                "error",
+                ErrorInfo(
+                    code="invalid_tool_input",
+                    message=(
+                        "max_cost_micro_usd was requested, but this runtime has "
+                        "no cost meter and cannot enforce a cost ceiling"
+                    ),
+                ),
+                ledger,
+            )
+
         try:
             specs = self._gateway.advertise(request.tool_names)
         except AgentWorkbenchError as exc:
@@ -445,6 +467,25 @@ class ClaudeLikeAgentRuntime:
                 ledger,
             )
 
+        # Checked here, after this turn's tokens are in the ledger and before
+        # either continuing or completing. The top-of-loop check runs before a
+        # turn and so cannot see what that turn spent; without this, a run that
+        # blew its token ceiling reported "completed", and one that blew it
+        # while proposing tools went on to run them.
+        exceeded = request.budget.stop_reason_for(ledger.usage, now=self._clock())
+        if exceeded is not None:
+            return await self._failed(
+                request,
+                sink,
+                machine,
+                exceeded,
+                ErrorInfo(
+                    code="budget_exceeded",
+                    message=f"the run passed its ceiling: {exceeded}",
+                ),
+                ledger,
+            )
+
         if turn.calls:
             return None
 
@@ -489,9 +530,31 @@ class ClaudeLikeAgentRuntime:
         for call in turn.calls:
             await self._gateway.propose(call, sink=sink)
 
+        # The ceiling is spent before the batch runs, not counted after it. A
+        # turn proposing more calls than remain used to run all of them and
+        # report the overrun afterwards, which is an accounting entry, not a
+        # limit: the side effects had already happened.
+        allowance = max(request.budget.max_tool_calls - ledger.usage.tool_calls, 0)
+        admitted = turn.calls[:allowance]
+
         results: list[ToolResult] = []
+        for call in turn.calls[allowance:]:
+            results.append(
+                await self._gateway.refuse(
+                    call,
+                    ErrorInfo(
+                        code="budget_exceeded",
+                        message=(
+                            "the run reached its tool-call ceiling before this "
+                            "call was dispatched"
+                        ),
+                    ),
+                    sink=sink,
+                )
+            )
+
         prepared: list[PreparedCall] = []
-        for call in turn.calls:
+        for call in admitted:
             outcome = await self._gateway.prepare(
                 call,
                 context=context,
@@ -542,7 +605,10 @@ class ClaudeLikeAgentRuntime:
         aligned = align_results(turn.calls, results)
         ledger.messages.append(assistant_message(text=turn.text, tool_calls=turn.calls))
         ledger.messages.append(tool_message(aligned))
-        ledger.usage = ledger.usage.merged(BudgetUsage(tool_calls=len(turn.calls)))
+        # Only the admitted calls are charged. A call refused *because* the
+        # ceiling was reached must not itself consume the ceiling, or the
+        # ledger would report spending more than the budget allowed.
+        ledger.usage = ledger.usage.merged(BudgetUsage(tool_calls=len(admitted)))
 
     async def _run_group(
         self,
