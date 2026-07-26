@@ -34,7 +34,13 @@ from agent_workbench.domain.tools import ToolCall, ToolName, ToolResult, ToolSpe
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import CancellationSource
 from agent_workbench.ports.event_log import EventScope
-from agent_workbench.ports.model import ModelEvent, ModelPort, ModelRequest
+from agent_workbench.ports.model import (
+    ModelEvent,
+    ModelPort,
+    ModelRequest,
+    ModelStreamCompleted,
+    ModelUsageReported,
+)
 from agent_workbench.ports.model import ModelTextDelta as TextDelta
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor, ToolGateway
@@ -1503,3 +1509,78 @@ def test_a_broken_pairing_invariant_is_reported_not_raised() -> None:
 
     assert outcome.status == "failed"
     assert outcome.stop_reason == "error"
+
+
+class _ClosableStream:
+    """A closable ``AsyncIterator`` that is not an ``AsyncGenerator``.
+
+    Exactly what ``ModelPort`` permits and what the runtime used to skip. A
+    real adapter shaped like this -- one wrapping a connection it has to
+    release -- leaked it, and a leak of that shape surfaces as exhausted
+    connections far away from the line that caused it.
+    """
+
+    def __init__(self, events: Sequence[ModelEvent]) -> None:
+        self._events = list(events)
+        self.closed = False
+
+    def __aiter__(self) -> _ClosableStream:
+        return self
+
+    async def __anext__(self) -> ModelEvent:
+        if not self._events:
+            raise StopAsyncIteration
+        return self._events.pop(0)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _ClosableModel:
+    """A model whose stream is closable but not a generator."""
+
+    def __init__(self) -> None:
+        self.stream_object = _ClosableStream(
+            [
+                ModelUsageReported(usage=USAGE),
+                ModelStreamCompleted(finish_reason="stop"),
+            ]
+        )
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+        return self.stream_object
+
+
+def test_a_closable_stream_that_is_not_a_generator_is_closed() -> None:
+    """P2-2. ``aclose`` is the protocol; ``AsyncGenerator`` is one satisfier."""
+
+    model = _ClosableModel()
+
+    run = _execute(model)
+
+    assert model.stream_object.closed is True
+    assert run.outcome.status == "completed"
+
+
+def test_a_stream_with_no_aclose_does_not_break_the_run() -> None:
+    """The control: closing is offered where possible, never required."""
+
+    class _Bare:
+        def __init__(self) -> None:
+            self._events = [ModelStreamCompleted(finish_reason="stop")]
+
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> ModelEvent:
+            if not self._events:
+                raise StopAsyncIteration
+            return self._events.pop(0)
+
+    class _BareModel:
+        def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+            return _Bare()  # pyright: ignore[reportReturnType]
+
+    run = _execute(_BareModel())  # pyright: ignore[reportArgumentType]
+
+    assert run.outcome.status == "completed"

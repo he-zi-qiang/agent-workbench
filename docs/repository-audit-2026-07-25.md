@@ -324,7 +324,9 @@ reclaim；ack 比较 worker/token/epoch 与更新 rowcount。
 `timeout_seconds`、`max_retries`、`tool_calling_required` 已存在于 Settings，但
 DeepSeekProfile 与 HTTP 调用没有消费它们。进程装配前必须对齐配置语义。
 
-### P2-2 Runtime 只关闭具体 AsyncGenerator
+### P2-2 Runtime 只关闭具体 AsyncGenerator —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 ModelPort 允许一般 `AsyncIterator`，但 timeout/cancel 只对具体
 `AsyncGenerator` 调用 `aclose()`。自定义可关闭 iterator 可能泄漏连接。
@@ -728,3 +730,18 @@ Settings → `DeepSeekProfile` 的投影仍不存在，因为 DeepSeek 还没装
 最后那条一开始**没有咬住**：我写的测试用的是一个格式损坏的响应体，它走的是 P1-9 的
 坏 frame 路径，根本到不了那个守卫。改成用一个真正在中途抛 `ReadError` 的响应流
 （`_CutStream`）之后才成立。
+### P2-2 关闭任意可关闭的流（2026-07-26）
+
+行为变化：`_stream_model` 的 `finally` 从 `isinstance(stream, AsyncGenerator)`
+改为一个 `_Closable` Protocol（只要求有 `aclose`）。
+
+`ModelPort` 承诺的是 `AsyncIterator`，不是 `AsyncGenerator`。所以一个返回其它
+可关闭迭代器的 adapter——例如包着一个必须释放的连接的那种——**从来没有被关过**。
+这类泄漏的表现是压力下连接耗尽，离真正出问题的那行很远。
+
+`aclose` 才是协议，`AsyncGenerator` 只是最常见的满足者；把规则写进 Protocol 而
+不是具体类型，正是这个代码库一贯的做法。
+
+回归测试 2 条：一个可关闭但不是 generator 的流必须被关闭；一个没有 `aclose` 的流
+不能让 run 出错（对照——关闭是「能则关」，不是「必须有」）。**验证过是有牙的**：
+改回只关 `AsyncGenerator` 失败 1 条。

@@ -1276,3 +1276,17 @@ Settings → `DeepSeekProfile` 的投影仍不存在，因为 DeepSeek 还没装
 
 最后那条一开始**没咬住**：我写的测试用了一个格式损坏的响应体，走的是 P1-9 的坏 frame
 路径，到不了那个守卫。换成真正在中途抛 `ReadError` 的响应流之后才成立。
+## P2-2 关闭任意可关闭的流
+
+状态：**已实现并通过本地测试**。核验报告 §4 的 P2-2。
+
+`_stream_model` 的 `finally` 从 `isinstance(stream, AsyncGenerator)` 改为一个
+`_Closable` Protocol（只要求有 `aclose`）。
+
+`ModelPort` 承诺的是 `AsyncIterator` 而不是 `AsyncGenerator`，所以一个返回其它
+可关闭迭代器的 adapter——比如包着一个必须释放的连接的那种——**从来没有被关过**。
+这类泄漏表现为压力下连接耗尽，离真正出问题的那行很远。`aclose` 才是协议，
+`AsyncGenerator` 只是最常见的满足者。
+
+2 条测试（含 1 条对照：没有 `aclose` 的流不能让 run 出错——关闭是「能则关」，
+不是「必须有」）。**验证过是有牙的**：改回只关 `AsyncGenerator` 失败 1 条。
