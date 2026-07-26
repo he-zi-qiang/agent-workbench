@@ -1,9 +1,9 @@
-"""Reading artifacts back, tenant-scoped.
+"""Reading artifacts back, scoped to the principal that stored them.
 
-The store answers identically for "not yours" and "not there", and this route
-does nothing to undo that: both become the same 404. A different status, a
-different body or a different latency would each confirm that an object
-somebody guessed at exists.
+The store answers identically for "not yours", "not your tenant's" and "not
+there", and this route does nothing to undo that: all become the same 404. A
+different status, a different body or a different latency would each confirm
+that an object somebody guessed at exists.
 """
 
 from __future__ import annotations
@@ -25,10 +25,12 @@ async def download(artifact_id: str, request: Request) -> StreamingResponse:
     described = await dependencies.artifacts.head(
         tenant_id=principal.tenant_id,
         artifact_id=artifact_id,
+        principal_id=principal.principal_id,
     )
     content = await dependencies.artifacts.get(
         tenant_id=principal.tenant_id,
         artifact_id=artifact_id,
+        principal_id=principal.principal_id,
     )
 
     async def body() -> AsyncIterator[bytes]:

@@ -110,6 +110,7 @@ async def _upload(
     )
     stored = await harness.artifacts.put(
         tenant_id=tenant_id,
+        owner_id=owner,
         kind="source_document",
         media_type="text/plain",
         content=content,
@@ -221,6 +222,7 @@ def test_completing_the_same_upload_twice_returns_one_version(
         )
         stored = await harness.artifacts.put(
             tenant_id=TENANT,
+            owner_id=OWNER,
             kind="source_document",
             media_type="text/plain",
             content=CONTENT,
@@ -323,6 +325,7 @@ def test_a_transfer_that_delivered_other_bytes_is_refused(tmp_path: Path) -> Non
         )
         other = await harness.artifacts.put(
             tenant_id=TENANT,
+            owner_id=OWNER,
             kind="source_document",
             media_type="text/plain",
             # Same length, different bytes: the digest check is what has to
@@ -354,6 +357,7 @@ def test_another_tenant_cannot_complete_the_upload(tmp_path: Path) -> None:
         )
         stored = await harness.artifacts.put(
             tenant_id=TENANT,
+            owner_id=OWNER,
             kind="source_document",
             media_type="text/plain",
             content=CONTENT,

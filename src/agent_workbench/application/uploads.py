@@ -93,12 +93,14 @@ class UploadService:
             tenant_id=tenant_id,
             principal_id=principal_id,
         )
-        # head() is tenant-scoped, so an artifact belonging to someone else is
-        # not found rather than mismatched: the difference would confirm it
-        # exists.
+        # head() is scoped to this principal, so an artifact stored by anyone
+        # else is not found rather than mismatched: the difference would
+        # confirm it exists. It also means a completion cannot adopt bytes the
+        # caller did not transfer.
         stored = await self.artifacts.head(
             tenant_id=tenant_id,
             artifact_id=artifact_id,
+            principal_id=principal_id,
         )
         self._verify(intent, stored)
 

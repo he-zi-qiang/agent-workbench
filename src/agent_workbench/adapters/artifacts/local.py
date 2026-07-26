@@ -12,10 +12,16 @@ would be schema pretending to be an index. When uploads arrive and artifact
 rows have to be written in the same transaction as the document version they
 belong to, that is when the table earns its place.
 
-Reads are tenant-scoped and answer identically for "not yours" and "not there"
--- the same constant message, with no id in it. Distinguishing them would
-confirm that another tenant's object exists, which is the whole of what an
-id-guessing probe is trying to learn.
+That metadata now records an owner. Reads answer identically for "not yours",
+"not your tenant's" and "not there" -- the same constant message, with no id in
+it. Distinguishing them would confirm that an object somebody guessed at
+exists, which is the whole of what an id-guessing probe is trying to learn.
+
+The owner sits in the store's own envelope rather than inside the serialized
+``ArtifactRef``, because the reference travels in messages and events and must
+stay a pointer. An envelope this store does not recognise is treated as
+missing: metadata written before ownership existed cannot say who may read it,
+and the safe reading of "no answer" is no.
 """
 
 from __future__ import annotations
@@ -24,10 +30,13 @@ import hashlib
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import cast
 
 from agent_workbench.domain.artifacts import ArtifactKind, ArtifactRef
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.identifiers import new_artifact_id
+
+METADATA_FORMAT = 2
 
 BLOB_SUFFIX = ".bin"
 METADATA_SUFFIX = ".json"
@@ -47,6 +56,7 @@ class LocalArtifactStore:
         self,
         *,
         tenant_id: str,
+        owner_id: str,
         kind: ArtifactKind,
         media_type: str,
         content: bytes,
@@ -69,16 +79,14 @@ class LocalArtifactStore:
         # unreferenced blob, which is garbage, rather than a reference to bytes
         # that are not there, which is a lie.
         self._blob_path(tenant_id, artifact_id).write_bytes(content)
-        self._metadata_path(tenant_id, artifact_id).write_text(
-            reference.model_dump_json(),
-            encoding="utf-8",
-        )
+        self._write_metadata(tenant_id, artifact_id, owner_id, reference)
         return reference
 
     async def put_stream(
         self,
         *,
         tenant_id: str,
+        owner_id: str,
         kind: ArtifactKind,
         media_type: str,
         chunks: AsyncIterator[bytes],
@@ -131,25 +139,63 @@ class LocalArtifactStore:
                 filename=filename,
             )
             quarantine.replace(self._blob_path(tenant_id, artifact_id))
-            self._metadata_path(tenant_id, artifact_id).write_text(
-                reference.model_dump_json(),
-                encoding="utf-8",
-            )
+            self._write_metadata(tenant_id, artifact_id, owner_id, reference)
             return reference
         finally:
             quarantine.unlink(missing_ok=True)
 
-    async def get(self, *, tenant_id: str, artifact_id: str) -> bytes:
+    async def get(
+        self, *, tenant_id: str, artifact_id: str, principal_id: str
+    ) -> bytes:
+        # Authorized from the metadata before the blob is opened, so an
+        # unauthorized read never touches the bytes it was refused.
+        self._authorized(tenant_id, artifact_id, principal_id)
         path = self._blob_path(tenant_id, artifact_id)
         if not path.is_file():
             raise NotFoundError("artifact not found")
         return path.read_bytes()
 
-    async def head(self, *, tenant_id: str, artifact_id: str) -> ArtifactRef:
+    async def head(
+        self, *, tenant_id: str, artifact_id: str, principal_id: str
+    ) -> ArtifactRef:
+        return self._authorized(tenant_id, artifact_id, principal_id)
+
+    def _write_metadata(
+        self,
+        tenant_id: str,
+        artifact_id: str,
+        owner_id: str,
+        reference: ArtifactRef,
+    ) -> None:
+        self._metadata_path(tenant_id, artifact_id).write_text(
+            json.dumps(
+                {
+                    "format": METADATA_FORMAT,
+                    "owner_id": owner_id,
+                    "reference": reference.model_dump(mode="json"),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _authorized(
+        self, tenant_id: str, artifact_id: str, principal_id: str
+    ) -> ArtifactRef:
+        """The reference, if this principal stored it. Otherwise not found."""
+
         path = self._metadata_path(tenant_id, artifact_id)
         if not path.is_file():
             raise NotFoundError("artifact not found")
-        return ArtifactRef.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        envelope: object = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(envelope, dict):
+            raise NotFoundError("artifact not found")
+        stored = cast("dict[str, object]", envelope)
+        if (
+            stored.get("format") != METADATA_FORMAT
+            or stored.get("owner_id") != principal_id
+        ):
+            raise NotFoundError("artifact not found")
+        return ArtifactRef.model_validate(stored["reference"])
 
     def _tenant_directory(self, tenant_id: str) -> Path:
         return self._contained(self._root / tenant_id)
@@ -178,6 +224,7 @@ class LocalArtifactStore:
 
 __all__ = [
     "BLOB_SUFFIX",
+    "METADATA_FORMAT",
     "METADATA_SUFFIX",
     "QUARANTINE_SUFFIX",
     "LocalArtifactStore",

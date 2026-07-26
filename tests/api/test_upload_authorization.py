@@ -332,3 +332,58 @@ def test_the_rejected_move_leaves_no_outbox_event(tmp_path: Path) -> None:
         return int(events), int(revision)
 
     assert _run(scenario, tmp_path) == (1, 1)
+
+
+# --- downloading somebody else's bytes ----------------------------------------
+
+
+def test_a_neighbour_cannot_download_the_uploaded_bytes(tmp_path: Path) -> None:
+    """P1-2. The artifact id comes back in the transfer response and travels."""
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, str]:
+        completed = await _upload(client, OWNER_HEADERS)
+        artifact = completed.json()["artifact_id"]
+        response = await client.get(
+            f"/v1/artifacts/{artifact}", headers=NEIGHBOUR_HEADERS
+        )
+        return response.status_code, response.text
+
+    status, body = _run(scenario, tmp_path)
+
+    assert status == 404
+    assert "private-notes.txt" not in body
+
+
+def test_a_read_grant_does_not_yet_reach_the_bytes(tmp_path: Path) -> None:
+    """A known limitation, pinned so it cannot change without somebody noticing.
+
+    Artifacts are owned by the principal that stored them. The document ACL
+    does not reach them, because nothing maps an artifact back to the document
+    version that references it. A granted principal can therefore see that the
+    document exists and not download it.
+
+    Fail-closed and incomplete, in that order. When the reverse lookup lands,
+    this test is the one that has to change, deliberately.
+    """
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        completed = await _upload(client, OWNER_HEADERS, granted=(NEIGHBOUR,))
+        artifact = completed.json()["artifact_id"]
+        response = await client.get(
+            f"/v1/artifacts/{artifact}", headers=NEIGHBOUR_HEADERS
+        )
+        return response.status_code
+
+    assert _run(scenario, tmp_path) == 404
+
+
+def test_the_uploader_can_still_download_what_they_stored(tmp_path: Path) -> None:
+    """The control."""
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, str]:
+        completed = await _upload(client, OWNER_HEADERS)
+        artifact = completed.json()["artifact_id"]
+        response = await client.get(f"/v1/artifacts/{artifact}", headers=OWNER_HEADERS)
+        return response.status_code, response.text
+
+    assert _run(scenario, tmp_path) == (200, CONTENT.decode())
