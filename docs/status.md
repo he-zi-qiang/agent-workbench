@@ -49,8 +49,8 @@
 4. ~~tool/token/cost budget 不是硬上限~~（2026-07-26 已修复，见下方 P1-5 一节）；
 5. ~~Policy 改写可绕过参数字节上限，Policy/Hook deadline 不完整~~
    （2026-07-26 已修复，见下方 P1-6 / P1-7 一节）；
-6. ~~DeepSeek 对损坏 SSE frame fail open~~（2026-07-26 已修复，见下方 P1-9
-   一节）；Artifact 下载不是真正流式；
+6. ~~DeepSeek 对损坏 SSE frame fail open，Artifact 下载不是真正流式~~
+   （2026-07-26 均已修复，见下方 P1-9 / P1-4 两节）；
 7. Outbox claim 没有 lease/fence，worker 崩溃后不可恢复。
 
 完整触发条件、文件位置和建议修复顺序见
@@ -1290,3 +1290,24 @@ Settings → `DeepSeekProfile` 的投影仍不存在，因为 DeepSeek 还没装
 
 2 条测试（含 1 条对照：没有 `aclose` 的流不能让 run 出错——关闭是「能则关」，
 不是「必须有」）。**验证过是有牙的**：改回只关 `AsyncGenerator` 失败 1 条。
+## P1-4 Artifact 分块流式下载
+
+状态：**已实现并通过本地测试**。核验报告 §4 的 P1-4。
+
+`ArtifactStore` 增加 `iter_chunks()`，两个 store 各自实现，下载路由改用它。此前
+`Path.read_bytes()` 把最多 100 MiB 读完再包进 `StreamingResponse`——名义流式，
+峰值内存是每个并发下载一整个对象。
+
+`iter_chunks()` **不是 `async def`**：授权必须在调用时发生，而不是拉第一块时。
+只在首次迭代才拒绝的协程会让路由先承诺 200、再发现无可发送，那对客户端与网络中断
+无法区分。
+
+7 条测试（共享契约 5 条跑两个 store，HTTP 面 2 条）。
+
+**HTTP 那条写了三遍才对**，前两遍都是恒真断言，都在有牙验证时被自己抓出来：
+内容小于默认分块（一片本就正确）→ 换成大于两个分块；httpx `ASGITransport` 把响应
+缓冲成一片（两种实现都报 1）→ 改成直接驱动 ASGI 数 `http.response.body`；数所有
+body 消息（Starlette 总补一条**空**终止消息，单次整体 yield 也是 2 片）→ 只数非空片。
+
+**验证过是有牙的**：路由改回「整体读入 + 单片 yield」失败 1 条，撤掉 `iter_chunks()`
+授权检查失败 1 条。

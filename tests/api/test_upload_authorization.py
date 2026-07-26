@@ -32,6 +32,7 @@ from agent_workbench.apps.api.main import build_app
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
 from agent_workbench.bootstrap.settings import Settings
+from agent_workbench.ports.artifact_store import DEFAULT_CHUNK_BYTES
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 
@@ -387,3 +388,107 @@ def test_the_uploader_can_still_download_what_they_stored(tmp_path: Path) -> Non
         return response.status_code, response.text
 
     assert _run(scenario, tmp_path) == (200, CONTENT.decode())
+
+
+def test_the_download_leaves_the_app_in_more_than_one_piece(tmp_path: Path) -> None:
+    """P1-4. "StreamingResponse" over one whole ``bytes`` streams nothing.
+
+    Counted off the ASGI wire rather than through the test client, which
+    buffers a response into a single piece and would report success either
+    way. What is asserted here is the number of ``http.response.body``
+    messages the application actually emits.
+
+    The object is deliberately larger than one chunk; below that size a single
+    piece is the correct answer and would prove nothing.
+    """
+
+    big = b"x" * (DEFAULT_CHUNK_BYTES * 2 + 17)
+
+    async def execute() -> tuple[int, bytes]:
+        engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))
+        finally:
+            await engine.dispose()
+
+        app, dependencies = build_app(project_api(_settings(tmp_path)))
+        try:
+            transport = httpx.ASGITransport(app=app)  # pyright: ignore[reportArgumentType]
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://api.test"
+            ) as client:
+                completed = await _upload(client, OWNER_HEADERS, content=big)
+            artifact = completed.json()["artifact_id"]
+
+            sent: list[dict[str, Any]] = []
+
+            # One request message, then disconnect. A receive() that kept
+            # answering "http.request" spins StreamingResponse forever: it
+            # polls for the disconnect that ends the response.
+            pending = [
+                {"type": "http.request", "body": b"", "more_body": False},
+                {"type": "http.disconnect"},
+            ]
+
+            async def receive() -> dict[str, Any]:
+                return pending.pop(0) if pending else {"type": "http.disconnect"}
+
+            async def send(message: dict[str, Any]) -> None:
+                sent.append(message)
+
+            await app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "GET",
+                    "path": f"/v1/artifacts/{artifact}",
+                    "raw_path": f"/v1/artifacts/{artifact}".encode(),
+                    "query_string": b"",
+                    "root_path": "",
+                    "scheme": "http",
+                    "headers": [
+                        (key.encode(), value.encode())
+                        for key, value in OWNER_HEADERS.items()
+                    ],
+                    "client": ("127.0.0.1", 51234),
+                    "server": ("api.test", 80),
+                },
+                receive,
+                send,
+            )
+            # Non-empty only. Starlette always appends a final empty body
+            # message to close the response, so counting every one of them
+            # would report two pieces for a single whole-object yield -- which
+            # is exactly the shape this test exists to reject.
+            bodies = [
+                message["body"]
+                for message in sent
+                if message["type"] == "http.response.body" and message.get("body")
+            ]
+            return len(bodies), b"".join(bodies)
+        finally:
+            await dependencies.dispose()
+
+    count, body = asyncio.run(execute())
+
+    assert body == big
+    assert count > 1
+
+
+def test_a_refused_download_never_starts_a_body(tmp_path: Path) -> None:
+    """The status has to be decided before the first byte leaves."""
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, bytes]:
+        completed = await _upload(client, OWNER_HEADERS)
+        artifact = completed.json()["artifact_id"]
+        async with client.stream(
+            "GET", f"/v1/artifacts/{artifact}", headers=NEIGHBOUR_HEADERS
+        ) as response:
+            return response.status_code, await response.aread()
+
+    status, body = _run(scenario, tmp_path)
+
+    assert status == 404
+    assert CONTENT not in body

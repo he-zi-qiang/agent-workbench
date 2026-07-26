@@ -35,6 +35,7 @@ from typing import cast
 from agent_workbench.domain.artifacts import ArtifactKind, ArtifactRef
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.identifiers import new_artifact_id
+from agent_workbench.ports.artifact_store import DEFAULT_CHUNK_BYTES
 
 METADATA_FORMAT = 2
 
@@ -159,6 +160,43 @@ class LocalArtifactStore:
         self, *, tenant_id: str, artifact_id: str, principal_id: str
     ) -> ArtifactRef:
         return self._authorized(tenant_id, artifact_id, principal_id)
+
+    def iter_chunks(
+        self,
+        *,
+        tenant_id: str,
+        artifact_id: str,
+        principal_id: str,
+        chunk_bytes: int = DEFAULT_CHUNK_BYTES,
+    ) -> AsyncIterator[bytes]:
+        """Read the blob a piece at a time.
+
+        Authorization happens here, not inside the generator: a caller gets its
+        refusal when it asks, rather than after whatever it was building around
+        the answer has already committed to succeeding.
+        """
+
+        if chunk_bytes < 1:
+            raise ValueError("chunk_bytes must be positive")
+        self._authorized(tenant_id, artifact_id, principal_id)
+        path = self._blob_path(tenant_id, artifact_id)
+        if not path.is_file():
+            raise NotFoundError("artifact not found")
+        return self._read(path, chunk_bytes)
+
+    @staticmethod
+    async def _read(path: Path, chunk_bytes: int) -> AsyncIterator[bytes]:
+        """Blocking reads, as everywhere else in this store.
+
+        Acceptable for a local development store and not what a deployment
+        should run; the bounded executor that keeps blocking adapters off the
+        event loop belongs to the coordination work package, and the object
+        store this stands in for is async to begin with.
+        """
+
+        with path.open("rb") as handle:
+            while chunk := handle.read(chunk_bytes):
+                yield chunk
 
     def _write_metadata(
         self,

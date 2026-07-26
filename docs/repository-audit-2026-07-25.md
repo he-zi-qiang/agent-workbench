@@ -200,7 +200,9 @@ digest 相同会提前返回旧 version，既不替换 ACL，也不产生 `acl_c
 修复方向：分别比较内容与 ACL；内容相同、ACL 不同时原子更新 ACL、推进授权
 revision 并写 outbox。
 
-### P1-4 Artifact 下载会整体读入内存
+### P1-4 Artifact 下载会整体读入内存 —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 涉及：
 
@@ -745,3 +747,32 @@ Settings → `DeepSeekProfile` 的投影仍不存在，因为 DeepSeek 还没装
 回归测试 2 条：一个可关闭但不是 generator 的流必须被关闭；一个没有 `aclose` 的流
 不能让 run 出错（对照——关闭是「能则关」，不是「必须有」）。**验证过是有牙的**：
 改回只关 `AsyncGenerator` 失败 1 条。
+### P1-4 Artifact 分块流式下载（2026-07-26）
+
+行为变化：`ArtifactStore` 增加 `iter_chunks()`，两个 store 各自实现，下载路由改用
+它。此前 `Path.read_bytes()` 先把最多 100 MiB 读完，再把单个 `bytes` 包进
+`StreamingResponse`——名义上是流式，峰值内存却是每个并发下载一整个对象，慢客户端
+还会把它一直握着。
+
+`iter_chunks()` **不是 `async def`**：授权必须发生在调用时，而不是拉第一块时。
+只在首次迭代才拒绝的协程，会让路由先承诺一个 200、再发现无可发送——那对客户端
+与网络中断无法区分。
+
+回归测试 7 条：共享契约 5 条（两个 store 都跑，含空对象产出零块、chunk_bytes=0
+被拒），HTTP 面 2 条。
+
+**HTTP 那条测试写了三遍才对**，两次都是恒真断言，都在验证阶段被自己抓出来：
+
+1. 内容只有 200 多字节，小于默认 256 KiB 分块——一片本来就是正确答案，改回缓冲版
+   照样通过。改成上传大于两个分块的对象。
+2. 通过 httpx 的 `ASGITransport` 数分片：它把响应缓冲成一片，两种实现都报 1。
+   改成直接驱动 ASGI、数 `http.response.body` 消息。
+3. 数所有 body 消息：Starlette 总会补一条**空的**终止消息，于是单次整体 yield 也
+   是「2 片」，`> 1` 恒成立。改成只数非空片。
+
+**验证过是有牙的**：把路由改回「整体读入 + 单片 yield」失败 1 条；撤掉
+`iter_chunks()` 的授权检查失败 1 条。
+
+顺带说明：写这条时 receive 回调一开始一直返回 `http.request`，导致
+`StreamingResponse` 空转——它在轮询结束响应的 `http.disconnect`。与之前 413
+中间件那个挂起是同一个成因。
