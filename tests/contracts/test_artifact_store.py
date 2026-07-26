@@ -272,3 +272,101 @@ def test_a_streamed_artifact_is_owned_too(artifacts: StoreHarness) -> None:
 
     with pytest.raises(NotFoundError):
         artifacts.run(scenario)
+
+
+def test_chunks_reassemble_into_the_stored_bytes(artifacts: StoreHarness) -> None:
+    """P1-4. Whatever the pieces are, they have to add back up."""
+
+    async def scenario(store: ArtifactStore) -> bytes:
+        ref = await _stored(store)
+        parts: list[bytes] = []
+        async for chunk in store.iter_chunks(
+            tenant_id=TENANT,
+            artifact_id=ref.artifact_id,
+            principal_id=OWNER,
+            chunk_bytes=7,
+        ):
+            parts.append(chunk)
+        return b"".join(parts)
+
+    assert artifacts.run(scenario) == CONTENT
+
+
+def test_no_chunk_exceeds_the_requested_size(artifacts: StoreHarness) -> None:
+    """The point of the whole change: peak memory is one chunk, not one object."""
+
+    async def scenario(store: ArtifactStore) -> tuple[int, int]:
+        ref = await _stored(store)
+        sizes = [
+            len(chunk)
+            async for chunk in store.iter_chunks(
+                tenant_id=TENANT,
+                artifact_id=ref.artifact_id,
+                principal_id=OWNER,
+                chunk_bytes=7,
+            )
+        ]
+        return max(sizes), len(sizes)
+
+    largest, count = artifacts.run(scenario)
+
+    assert largest <= 7
+    # More than one, or "chunked" would mean nothing here.
+    assert count > 1
+
+
+def test_a_neighbour_is_refused_before_the_first_chunk(
+    artifacts: StoreHarness,
+) -> None:
+    """The refusal has to land on the call, not on the first iteration.
+
+    A caller that only learned mid-stream would already have committed to
+    succeeding -- for the HTTP route, a 200 that stops partway, which a client
+    cannot tell from a dropped connection.
+    """
+
+    async def scenario(store: ArtifactStore) -> None:
+        ref = await _stored(store)
+        store.iter_chunks(
+            tenant_id=TENANT, artifact_id=ref.artifact_id, principal_id=NEIGHBOUR
+        )
+
+    with pytest.raises(NotFoundError):
+        artifacts.run(scenario)
+
+
+def test_an_empty_artifact_yields_nothing(artifacts: StoreHarness) -> None:
+    """Zero chunks, not one empty chunk, and not an error."""
+
+    async def scenario(store: ArtifactStore) -> list[bytes]:
+        ref = await store.put(
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            kind="tool_result",
+            media_type="text/plain",
+            content=b"",
+        )
+        return [
+            chunk
+            async for chunk in store.iter_chunks(
+                tenant_id=TENANT, artifact_id=ref.artifact_id, principal_id=OWNER
+            )
+        ]
+
+    assert artifacts.run(scenario) == []
+
+
+def test_a_chunk_size_of_zero_is_refused(artifacts: StoreHarness) -> None:
+    """An iterator that can never advance is a hang, not a download."""
+
+    async def scenario(store: ArtifactStore) -> None:
+        ref = await _stored(store)
+        store.iter_chunks(
+            tenant_id=TENANT,
+            artifact_id=ref.artifact_id,
+            principal_id=OWNER,
+            chunk_bytes=0,
+        )
+
+    with pytest.raises(ValueError, match="chunk_bytes"):
+        artifacts.run(scenario)

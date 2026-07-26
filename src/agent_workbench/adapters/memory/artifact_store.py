@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from agent_workbench.domain.artifacts import ArtifactKind, ArtifactRef
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.identifiers import new_artifact_id
+from agent_workbench.ports.artifact_store import DEFAULT_CHUNK_BYTES
 
 
 class InMemoryArtifactStore:
@@ -98,6 +99,31 @@ class InMemoryArtifactStore:
     ) -> ArtifactRef:
         ref, _, _ = self._resolve(tenant_id, artifact_id, principal_id)
         return ref
+
+    def iter_chunks(
+        self,
+        *,
+        tenant_id: str,
+        artifact_id: str,
+        principal_id: str,
+        chunk_bytes: int = DEFAULT_CHUNK_BYTES,
+    ) -> AsyncIterator[bytes]:
+        """Slice what is already in memory.
+
+        Pointless here on its own -- the object is in memory either way. It
+        exists so the contract tests run against two implementations rather
+        than one, which is what makes them a contract.
+        """
+
+        if chunk_bytes < 1:
+            raise ValueError("chunk_bytes must be positive")
+        _, _, content = self._resolve(tenant_id, artifact_id, principal_id)
+        return self._slice(content, chunk_bytes)
+
+    @staticmethod
+    async def _slice(content: bytes, chunk_bytes: int) -> AsyncIterator[bytes]:
+        for start in range(0, len(content), chunk_bytes):
+            yield content[start : start + chunk_bytes]
 
     def _resolve(
         self, tenant_id: str, artifact_id: str, principal_id: str
