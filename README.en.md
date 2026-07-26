@@ -34,10 +34,12 @@ The boundaries are equally important:
 - PostgreSQL task registry, leases, fencing, checkpoints and LISTEN/NOTIFY
   coordination are not implemented.
 
-> **Security warning:** the current identity adapter trusts request headers and
-> the default API host is `0.0.0.0`. Until loopback-only binding is enforced,
-> `agent-api` is for controlled local development only and must not be exposed
-> to a LAN, a published container port or the Internet.
+> **Security warning:** the current identity adapter trusts request headers, so
+> `agent-api` is for controlled local development only and must not be exposed to
+> a LAN, a published container port or the Internet. The bind address is now
+> forced to loopback (default `127.0.0.1`, checked in settings and again at
+> assembly), but that prevents accidental exposure; it is not authentication,
+> and a real identity provider is still unimplemented.
 
 See [the implementation status](docs/status.md) for the complete increment
 history, test evidence, known defects and remaining scope.

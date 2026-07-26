@@ -1393,10 +1393,10 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | Multi-Agent | ✓ |  |  |  |
 | UI / deployment / observability | ✓ |  |  |  |
 
-当前身份边界存在一个阻断项：开发 Header Identity Resolver 信任调用方自报的
-tenant/principal，而默认 `api.host = "0.0.0.0"`；`deployment_scope =
-"local"` 并不会限制实际监听地址。修复前 API 只能在受控本机环境使用，不能把
-“remote scope 会拒绝启动”表述成“无法被意外暴露”。
+当前身份边界的事实：开发 Header Identity Resolver 信任调用方自报的
+tenant/principal，所以生产身份认证仍是 Planned。监听地址已强制为 loopback
+（2026-07-26），Settings 与进程装配层各自拒绝可被其他机器访问的绑定地址；
+这挡住了意外暴露，但不构成认证，能力表中的认证一栏不因此升级。
 
 每个 milestone 合并时更新这张表，并链接测试报告、评测结果、演示视频或 release tag。没有证据的功能不能写成简历中的已实现成果。
 

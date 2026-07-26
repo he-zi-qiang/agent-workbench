@@ -33,9 +33,10 @@ ADR-012 身份边界决策。当前已经实现并测试：
 - PostgreSQL 已用于会话、文档和 Outbox；Task Registry、lease、fencing、
   checkpoint 与 `LISTEN/NOTIFY` 协调尚未实现。
 
-> **安全警告：** 当前 Identity Adapter 只信任请求头，且默认
-> `api.host = "0.0.0.0"`。在 loopback 强制校验落地前，`agent-api` 只能用于
-> 受控的本机开发，不得暴露到局域网、容器端口映射或公网。
+> **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
+> 受控的本机开发，不得暴露到局域网、容器端口映射或公网。监听地址已强制为
+> loopback（默认 `127.0.0.1`，Settings 与装配层双重校验），但那是防止意外暴露的
+> 机制，不是身份认证——真实身份提供方仍未实现。
 
 完整增量、测试证据、已知缺陷和未实现边界见
 [实施状态](docs/status.md)。
