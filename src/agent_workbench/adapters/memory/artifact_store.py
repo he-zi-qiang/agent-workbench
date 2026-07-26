@@ -9,9 +9,10 @@ stores will have to reproduce, and the ones a test can pin now.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import AsyncIterator
 
 from agent_workbench.domain.artifacts import ArtifactKind, ArtifactRef
-from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.identifiers import new_artifact_id
 
 
@@ -41,6 +42,43 @@ class InMemoryArtifactStore:
         )
         self._objects[ref.artifact_id] = (ref, content)
         return ref
+
+    async def put_stream(
+        self,
+        *,
+        tenant_id: str,
+        kind: ArtifactKind,
+        media_type: str,
+        chunks: AsyncIterator[bytes],
+        max_bytes: int,
+        filename: str | None = None,
+    ) -> ArtifactRef:
+        """Accumulate the stream, refusing it the moment it overruns.
+
+        Held in memory by definition, so the ceiling is the only thing keeping
+        a sender from deciding how much of it to use.
+        """
+
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
+
+        parts: list[bytes] = []
+        size = 0
+        async for chunk in chunks:
+            size += len(chunk)
+            if size > max_bytes:
+                raise OutputTooLargeError(
+                    f"the upload exceeds the {max_bytes} byte ceiling"
+                )
+            parts.append(chunk)
+
+        return await self.put(
+            tenant_id=tenant_id,
+            kind=kind,
+            media_type=media_type,
+            content=b"".join(parts),
+            filename=filename,
+        )
 
     async def get(self, *, tenant_id: str, artifact_id: str) -> bytes:
         _, content = self._resolve(tenant_id=tenant_id, artifact_id=artifact_id)

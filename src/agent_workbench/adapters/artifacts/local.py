@@ -22,14 +22,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 from agent_workbench.domain.artifacts import ArtifactKind, ArtifactRef
-from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.identifiers import new_artifact_id
 
 BLOB_SUFFIX = ".bin"
 METADATA_SUFFIX = ".json"
+QUARANTINE_SUFFIX = ".part"
 
 
 class LocalArtifactStore:
@@ -73,6 +75,70 @@ class LocalArtifactStore:
         )
         return reference
 
+    async def put_stream(
+        self,
+        *,
+        tenant_id: str,
+        kind: ArtifactKind,
+        media_type: str,
+        chunks: AsyncIterator[bytes],
+        max_bytes: int,
+        filename: str | None = None,
+    ) -> ArtifactRef:
+        """Write chunks straight to disk, hashing and counting as they land.
+
+        Nothing is published under its final name until the whole stream has
+        arrived, so a transfer that fails or overruns leaves a quarantine file
+        rather than a half-written artifact somebody could read.
+
+        The writes are ordinary blocking file calls. That is acceptable for a
+        local development store and is not what a deployment should run: the
+        bounded executor that keeps blocking adapters off the event loop
+        belongs to the coordination work package, and the object store this
+        stands in for is async to begin with.
+        """
+
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
+
+        artifact_id = new_artifact_id()
+        directory = self._tenant_directory(tenant_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        quarantine = self._contained(
+            directory / f"{artifact_id}{QUARANTINE_SUFFIX}",
+        )
+
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with quarantine.open("wb") as handle:
+                async for chunk in chunks:
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise OutputTooLargeError(
+                            f"the upload exceeds the {max_bytes} byte ceiling"
+                        )
+                    digest.update(chunk)
+                    handle.write(chunk)
+
+            reference = ArtifactRef(
+                artifact_id=artifact_id,
+                tenant_id=tenant_id,
+                kind=kind,
+                media_type=media_type,
+                size_bytes=size,
+                sha256=digest.hexdigest(),
+                filename=filename,
+            )
+            quarantine.replace(self._blob_path(tenant_id, artifact_id))
+            self._metadata_path(tenant_id, artifact_id).write_text(
+                reference.model_dump_json(),
+                encoding="utf-8",
+            )
+            return reference
+        finally:
+            quarantine.unlink(missing_ok=True)
+
     async def get(self, *, tenant_id: str, artifact_id: str) -> bytes:
         path = self._blob_path(tenant_id, artifact_id)
         if not path.is_file():
@@ -110,4 +176,9 @@ class LocalArtifactStore:
         return resolved
 
 
-__all__ = ["BLOB_SUFFIX", "METADATA_SUFFIX", "LocalArtifactStore"]
+__all__ = [
+    "BLOB_SUFFIX",
+    "METADATA_SUFFIX",
+    "QUARANTINE_SUFFIX",
+    "LocalArtifactStore",
+]

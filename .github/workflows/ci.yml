@@ -140,7 +140,7 @@ jobs:
       - name: Run the database-backed suites
         env:
           AGENT_WORKBENCH_TEST_DSN: postgresql+asyncpg://agent:ci-only@localhost:5432/agent_workbench_test
-        run: uv run --no-sync pytest -q tests/contracts tests/persistence
+        run: uv run --no-sync pytest -q tests/contracts tests/persistence tests/api
 
   secret-scan:
     name: Secret scan
