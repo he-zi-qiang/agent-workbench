@@ -83,15 +83,17 @@ jobs:
 
       # Permissive and file-level-copyleft licences are allowed; strong
       # copyleft (GPL, AGPL, LGPL) and unstated licences are not, which is what
-      # this gate exists to catch. Both SPDX and classifier spellings are listed
-      # because pip-licenses reports whatever the package metadata states.
+      # this gate exists to catch. Matching is exact string comparison against
+      # whatever the package metadata states, so every spelling has to be
+      # listed on its own -- including compound expressions such as
+      # "MIT AND PSF-2.0", whose parts are both already allowed.
       - name: Enforce dependency license policy
         run: >-
           uv run --no-sync pip-licenses
           --from mixed
           --ignore-packages agent-workbench
           --allow-only
-          "MIT;MIT License;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0"
+          "MIT;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0"
 
   postgres:
     name: Migrations and PostgreSQL-backed stores
