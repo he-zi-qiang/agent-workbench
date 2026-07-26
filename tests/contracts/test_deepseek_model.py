@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any
 
 import httpx
+import pytest
 
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.memory import InMemoryEventLog
@@ -742,3 +743,192 @@ def test_the_runtime_cannot_tell_this_adapter_from_the_scripted_one() -> None:
         "ModelCompleted",
         "RunCompleted",
     ]
+
+
+# --- P2-1: reliability settings the adapter had no consumer for ---------------
+
+
+def _run_with(
+    responder: Callable[[httpx.Request], httpx.Response],
+    *,
+    profile: DeepSeekProfile,
+    request: ModelRequest | None = None,
+) -> tuple[list[ModelEvent], _Wire, list[float]]:
+    """Run one stream, recording the backoff delays instead of sleeping them."""
+
+    wire = _Wire(responder)
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    async def scenario() -> list[ModelEvent]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(wire)) as client:
+            model = DeepSeekModel(
+                client=client,
+                api_key=API_KEY,
+                base_url=BASE_URL,
+                profiles={"main": profile},
+                sleep=sleep,
+            )
+            return [
+                event
+                async for event in model.stream(
+                    request
+                    if request is not None
+                    else ModelRequest(messages=(user_message("hi"),))
+                )
+            ]
+
+    return asyncio.run(scenario()), wire, slept
+
+
+def test_the_profile_timeout_reaches_the_request() -> None:
+    """It was configurable and ignored, which is worse than not offering it."""
+
+    events, wire, _ = _run_with(
+        _serve(_sse(_finish_chunk("stop"))),
+        profile=DeepSeekProfile(model_id="deepseek-chat", timeout_seconds=7.5),
+    )
+
+    assert _completion(events).finish_reason == "stop"
+    assert wire.requests[0].extensions["timeout"]["read"] == 7.5
+
+
+def test_tool_calling_required_is_sent_with_the_tools() -> None:
+    _, wire, _ = _run_with(
+        _serve(_sse(_finish_chunk("stop"))),
+        profile=DeepSeekProfile(model_id="deepseek-chat", tool_calling_required=True),
+        request=ModelRequest(messages=(user_message("hi"),), tools=(SEARCH_SPEC,)),
+    )
+
+    assert wire.payload["tool_choice"] == "required"
+
+
+def test_tool_calling_required_is_omitted_when_there_are_no_tools() -> None:
+    """Requiring a choice from an empty set is not a request anyone can serve."""
+
+    _, wire, _ = _run_with(
+        _serve(_sse(_finish_chunk("stop"))),
+        profile=DeepSeekProfile(model_id="deepseek-chat", tool_calling_required=True),
+    )
+
+    assert "tool_choice" not in wire.payload
+
+
+def test_a_retryable_status_is_retried_up_to_the_configured_count() -> None:
+    attempts: list[int] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) <= 2:
+            return httpx.Response(503, content=b"")
+        return httpx.Response(200, content=_sse(_finish_chunk("stop")))
+
+    events, _, slept = _run_with(
+        responder, profile=DeepSeekProfile(model_id="deepseek-chat", max_retries=2)
+    )
+
+    assert len(attempts) == 3
+    assert _completion(events).finish_reason == "stop"
+    # Doubling, so a rate limit is not asked about harder each time.
+    assert slept == [0.5, 1.0]
+
+
+def test_a_non_retryable_status_is_not_retried() -> None:
+    """A 400 means the request was wrong, and it will be wrong again."""
+
+    attempts: list[int] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(400, content=b"")
+
+    events, _, _ = _run_with(
+        responder, profile=DeepSeekProfile(model_id="deepseek-chat", max_retries=3)
+    )
+
+    assert len(attempts) == 1
+    assert _completion(events).finish_reason == "error"
+
+
+class _CutStream(httpx.AsyncByteStream):
+    """A response body that delivers some bytes and then drops the connection.
+
+    A real mid-stream transport fault, which is the only thing that reaches
+    the guard being tested. A merely malformed body ends the stream for a
+    different reason and would leave that guard unexercised.
+    """
+
+    def __init__(self, prefix: bytes) -> None:
+        self._prefix = prefix
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._prefix
+        raise httpx.ReadError("the connection dropped mid-stream")
+
+
+def test_a_failure_after_the_first_event_is_never_retried() -> None:
+    """The whole reason retrying a stream needs a rule.
+
+    Bytes the caller has already seen cannot be un-seen, so a second attempt
+    would repeat them. Only a failure from before the first event is safe to
+    retry.
+    """
+
+    attempts: list[int] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(
+            200, stream=_CutStream(_sse(_text_chunk("half an answer"), done=False))
+        )
+
+    events, _, _ = _run_with(
+        responder, profile=DeepSeekProfile(model_id="deepseek-chat", max_retries=3)
+    )
+    deltas = [event for event in events if isinstance(event, ModelTextDelta)]
+
+    assert len(attempts) == 1
+    assert [delta.text for delta in deltas] == ["half an answer"]
+    assert _completion(events).finish_reason == "error"
+
+
+def test_exhausting_the_retries_reports_the_last_failure() -> None:
+    attempts: list[int] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(503, content=b"")
+
+    events, _, slept = _run_with(
+        responder, profile=DeepSeekProfile(model_id="deepseek-chat", max_retries=1)
+    )
+    completion = _completion(events)
+
+    assert len(attempts) == 2
+    assert len(slept) == 1
+    assert completion.finish_reason == "error"
+    assert completion.error is not None
+    assert "503" in completion.error.message
+
+
+def test_the_default_profile_does_not_retry() -> None:
+    """The control: retrying is what a deployment asks for, not the default."""
+
+    attempts: list[int] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(503, content=b"")
+
+    _run_with(responder, profile=DeepSeekProfile(model_id="deepseek-chat"))
+
+    assert len(attempts) == 1
+
+
+def test_an_impossible_profile_is_refused_at_construction() -> None:
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        DeepSeekProfile(model_id="deepseek-chat", timeout_seconds=0)
+    with pytest.raises(ValueError, match="max_retries"):
+        DeepSeekProfile(model_id="deepseek-chat", max_retries=-1)

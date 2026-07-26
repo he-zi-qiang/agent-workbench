@@ -317,7 +317,9 @@ claim owner 或 fence。当前文档已承认这只是竞争领取，不是 leas
 修复方向：启用 ingestion worker 前加入 `lease_until`、claim token/epoch、过期
 reclaim；ack 比较 worker/token/epoch 与更新 rowcount。
 
-### P2-1 DeepSeek 可靠性配置尚未进入 Adapter
+### P2-1 DeepSeek 可靠性配置尚未进入 Adapter —— 已修复（2026-07-26）
+
+修复见 §7。以下是缺陷成立时的原始记录，保留以便对照。
 
 `timeout_seconds`、`max_retries`、`tool_calling_required` 已存在于 Settings，但
 DeepSeekProfile 与 HTTP 调用没有消费它们。进程装配前必须对齐配置语义。
@@ -697,3 +699,32 @@ JSON**——一个模型从未发出的调用，带着没人选过的参数，�
 回归测试 8 条（含 2 条对照：注释与空行仍然跳过、上限之内的参数照常拼装）。
 **验证过是有牙的**：撤掉 frame fail-closed 失败 3 条，撤掉 `ValidationError`
 归一化失败 1 条，撤掉参数上限失败 1 条。
+
+### P2-1 DeepSeek 可靠性配置接入 Adapter（2026-07-26）
+
+行为变化：`DeepSeekProfile` 增加 `timeout_seconds`、`max_retries`、
+`tool_calling_required`，adapter 实际消费它们。此前三者在 Settings 里有定义、有校验，
+却没有任何消费者——部署方可以配一个超时或重试次数，两样都不会发生。
+
+**重试语义是这条里唯一需要判断的地方。** 流式调用一旦吐出过事件就不能重试：调用方
+已经看到的字节收不回来，第二次尝试会把它们再发一遍。所以只有**第一个事件之前**发生
+的失败可以重试——到达 provider 的传输故障，以及可重试的错误状态（5xx、429）。
+`_attempt()` 用 `_RetryableFailure` 信号表达这一点，`stream()` 是它外面的重试循环。
+非可重试状态（如 400）不重试：请求本来就是错的，再发一次还是错的。
+
+退避按次翻倍。立刻重试一个 429，等于要求被更狠地限流。`sleep` 可注入，测试不必真的
+等自己的退避。
+
+`tool_calling_required` 只在有 tools 时才发 `tool_choice: "required"`——没有工具却
+要求必须选一个，是没人能满足的请求。
+
+Settings → `DeepSeekProfile` 的投影仍不存在，因为 DeepSeek 还没装配进进程
+（WP02-06/07）。本条修的是「配置语义在 adapter 侧对齐」，装配是那两个 PR 的事。
+
+回归测试 9 条（含 2 条对照：默认不重试；无 tools 时不发 `tool_choice`）。
+**验证过是有牙的**：撤掉 timeout 失败 1 条，撤掉 tool_choice 失败 1 条，撤掉可重试
+状态信号失败 2 条，撤掉「已发事件则不重试」守卫失败 1 条。
+
+最后那条一开始**没有咬住**：我写的测试用的是一个格式损坏的响应体，它走的是 P1-9 的
+坏 frame 路径，根本到不了那个守卫。改成用一个真正在中途抛 `ReadError` 的响应流
+（`_CutStream`）之后才成立。
