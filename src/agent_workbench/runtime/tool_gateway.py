@@ -255,12 +255,15 @@ class ToolGateway:
                 return PreparedCall(binding=prepared.binding, call=call)
 
             # allow_with_modified_input: the rewritten arguments are not yet
-            # trusted. They go back through validation and through the policy
-            # engine before anything runs on them.
+            # trusted. They go back through the *whole* check -- size as well
+            # as schema -- and through the policy engine before anything runs
+            # on them. Re-running only the schema let a rewrite deliver
+            # arguments the original call could never have carried, which made
+            # the byte ceiling something a policy could opt out of.
             rewritten = call.model_copy(
                 update={"arguments": decision.modified_input or {}}
             )
-            invalid = self._validate(prepared.binding, rewritten)
+            invalid = self._check(prepared.binding, rewritten)
             if invalid is not None:
                 return await self.refuse(call, invalid, sink=sink)
             call = rewritten
