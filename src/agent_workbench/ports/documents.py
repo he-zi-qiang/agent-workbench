@@ -14,7 +14,11 @@ delivered something else can therefore never become a version.
 Revisions are monotonic per document. Every change takes the next one, and an
 outbox event carries the revision it describes, so an event that arrives late
 can be recognized as describing a past state rather than applied over a newer
-one.
+one. A change of audience counts: re-sending identical bytes with a different
+grant list revokes access and takes a revision, because a revocation that
+produced no event would leave the index answering with a document its owner
+had already taken away. Version rows are therefore sparse in revision space --
+a version records content, and that revision changed nothing about it.
 
 Every method takes the calling principal, not only its tenant. A tenant is who
 you share a database with, not who you are: inside one, an upload id or a

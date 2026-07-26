@@ -14,8 +14,14 @@ like the one being written to.
 
 Completion is idempotent twice over. Completing the same upload again returns
 the version it already produced, and re-uploading content identical to the
-current version does not mint a new revision -- a re-sent request should not
+current version does not mint a new version -- a re-sent request should not
 make the index redo work that would produce the same rows.
+
+Identical content is not the same as an identical request, though. The grant
+list travels with it, so the ACL is reconciled on that path too: re-sending the
+same bytes with somebody dropped is how a revocation is expressed, and treating
+it as a no-op would leave the index serving a document to a principal its owner
+had already removed.
 """
 
 from __future__ import annotations
@@ -174,8 +180,21 @@ class PostgresDocumentStore:
             revision_before = current.revision
             latest = await self._latest_version(connection, document_id)
             if latest is not None and latest.content_sha256 == digest:
-                # Identical content. Advancing the revision would make the
-                # index redo work that produces exactly the same rows.
+                # Identical content, so no new version. The ACL may still have
+                # changed, and a revocation that produced no event would leave
+                # the index answering with a document its owner had already
+                # taken away -- silently, and for as long as nobody re-uploaded
+                # different bytes.
+                await self._reconcile_acl(
+                    connection,
+                    document_id=document_id,
+                    tenant_id=tenant_id,
+                    knowledge_base_id=knowledge_base_id,
+                    owner_id=current.owner_id,
+                    granted_principals=granted_principals,
+                    revision_before=revision_before,
+                    version_id=latest.version_id,
+                )
                 await self._mark_completed(connection, upload_id, latest.version_id)
                 return latest
 
@@ -490,6 +509,69 @@ class PostgresDocumentStore:
             artifact_id=cast(str, row.artifact_id),
             content_sha256=cast(str, row.content_sha256),
         )
+
+    async def _reconcile_acl(
+        self,
+        connection: AsyncConnection,
+        *,
+        document_id: str,
+        tenant_id: str,
+        knowledge_base_id: str,
+        owner_id: str,
+        granted_principals: tuple[str, ...],
+        revision_before: int,
+        version_id: str,
+    ) -> None:
+        """Apply an ACL change that arrived without a content change.
+
+        Re-uploading identical bytes is the ordinary way to say "same document,
+        different audience". Taking the revision is what makes the change
+        orderable against content changes: the index has one monotonic counter
+        per document, and an authorization event that reused a revision could
+        not be told apart from one that arrived late.
+
+        No new version row is written. The content did not change, and a
+        version exists to record content.
+        """
+
+        desired = frozenset(granted_principals)
+        if await self._granted_principals(connection, document_id) == desired:
+            return
+
+        revision = revision_before + 1
+        await self._replace_acl(connection, document_id, granted_principals)
+        await connection.execute(
+            update(documents)
+            .where(documents.c.document_id == document_id)
+            .values(source_revision=revision)
+        )
+        await self._record_outbox(
+            connection,
+            document_id=document_id,
+            revision=revision,
+            kind="acl_changed",
+            payload={
+                "tenant_id": tenant_id,
+                "knowledge_base_id": knowledge_base_id,
+                "version_id": version_id,
+                "authorized_principals": sorted({owner_id, *granted_principals}),
+            },
+        )
+
+    @staticmethod
+    async def _granted_principals(
+        connection: AsyncConnection, document_id: str
+    ) -> frozenset[str]:
+        """The ACL as stored, read inside the caller's transaction."""
+
+        rows = (
+            await connection.execute(
+                select(document_acl.c.principal_id).where(
+                    document_acl.c.document_id == document_id
+                )
+            )
+        ).all()
+        return frozenset(cast(str, row.principal_id) for row in rows)
 
     async def _replace_acl(
         self,
