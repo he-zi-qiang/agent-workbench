@@ -1112,3 +1112,245 @@ def test_an_envelope_without_an_approval_requirement_still_runs() -> None:
 
     assert len(recorder.calls) == 1
     assert run.outcome.status == "completed"
+
+
+# --- P1-5: ceilings that bind before the spend, not after it ------------------
+
+
+def _three_reads() -> tuple[_Recorder, _Recorder, _Recorder, FakeModel]:
+    """One turn proposing three read calls, then a final answer."""
+
+    recorders = (_Recorder("read_a"), _Recorder("read_b"), _Recorder("read_c"))
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Reading three.",
+                tool_calls=(
+                    ToolCall(tool_call_id="toolu_1", tool_name="read_a"),
+                    ToolCall(tool_call_id="toolu_2", tool_name="read_b"),
+                    ToolCall(tool_call_id="toolu_3", tool_name="read_c"),
+                ),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+    return (*recorders, model)
+
+
+def test_a_batch_over_the_tool_ceiling_does_not_dispatch_the_excess() -> None:
+    """P1-5. The ceiling is spent before the batch, not counted after it.
+
+    A turn proposing more calls than remain used to run every one of them and
+    report the overrun afterwards. Side effects that have already happened are
+    an accounting entry, not a limit.
+    """
+
+    first, second, third, model = _three_reads()
+
+    _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2),
+            tool_names=("read_a", "read_b", "read_c"),
+        ),
+        bindings=[first.binding, second.binding, third.binding],
+    )
+
+    assert len(first.calls) + len(second.calls) + len(third.calls) == 2
+    assert third.calls == []
+
+
+def test_the_ledger_never_reports_more_tool_calls_than_the_ceiling() -> None:
+    """A budget the usage report can exceed is not a budget."""
+
+    first, second, third, model = _three_reads()
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2),
+            tool_names=("read_a", "read_b", "read_c"),
+        ),
+        bindings=[first.binding, second.binding, third.binding],
+    )
+
+    assert run.outcome.usage.tool_calls == 2
+    assert run.outcome.stop_reason == "max_tool_calls"
+
+
+def test_a_call_refused_for_budget_still_answers_its_id() -> None:
+    """Every proposed id owes a result, whatever the reason it did not run."""
+
+    first, second, third, model = _three_reads()
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2),
+            tool_names=("read_a", "read_b", "read_c"),
+        ),
+        bindings=[first.binding, second.binding, third.binding],
+    )
+    failure = next(
+        envelope.payload
+        for envelope in run.durable
+        if envelope.event_type == "ToolFailed"
+    )
+
+    assert isinstance(failure, ToolFailed)
+    assert failure.tool_call_id == "toolu_3"
+    assert failure.error.code == "budget_exceeded"
+
+
+def test_a_batch_inside_the_ceiling_runs_in_full() -> None:
+    """The control: the refusal is the ceiling, not the batch size.
+
+    The budget leaves headroom on purpose. A ceiling consumed exactly stops the
+    next turn, which is pre-existing behaviour and would hide what this asserts.
+    """
+
+    first, second, third, model = _three_reads()
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=4, max_tool_calls=4),
+            tool_names=("read_a", "read_b", "read_c"),
+        ),
+        bindings=[first.binding, second.binding, third.binding],
+    )
+
+    assert len(first.calls) + len(second.calls) + len(third.calls) == 3
+    assert run.outcome.status == "completed"
+
+
+def test_a_run_that_passes_its_token_ceiling_is_not_completed() -> None:
+    """P1-5. The top-of-loop check cannot see what the turn it precedes spent."""
+
+    model = FakeModel([ScriptedTurn(text="Done.", usage=USAGE)])
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2, max_total_tokens=1)
+        ),
+    )
+
+    assert run.outcome.status == "failed"
+    assert run.outcome.stop_reason == "token_budget"
+    assert run.outcome.usage.tokens.total == USAGE.total
+
+
+def test_tools_do_not_run_after_the_token_ceiling_is_passed() -> None:
+    """A turn that blew the ceiling must not go on to spend side effects."""
+
+    recorder = _Recorder("read_a")
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Reading.",
+                tool_calls=(ToolCall(tool_call_id="toolu_1", tool_name="read_a"),),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2, max_total_tokens=1),
+            tool_names=("read_a",),
+        ),
+        bindings=[recorder.binding],
+    )
+
+    assert recorder.calls == []
+    assert run.outcome.stop_reason == "token_budget"
+
+
+def test_a_run_inside_its_token_ceiling_still_completes() -> None:
+    """The control."""
+
+    model = FakeModel([ScriptedTurn(text="Done.", usage=USAGE)])
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2, max_total_tokens=10_000)
+        ),
+    )
+
+    assert run.outcome.status == "completed"
+
+
+def test_the_step_ceiling_stops_before_tools_nothing_can_read() -> None:
+    """The last step went to the model, so a tool result has no reader left.
+
+    Running them anyway spends real side effects to produce output that is
+    discarded, which is the same defect as the tool ceiling in a different
+    place.
+    """
+
+    recorder = _Recorder("read_a")
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Reading.",
+                tool_calls=(ToolCall(tool_call_id="toolu_1", tool_name="read_a"),),
+                usage=USAGE,
+            )
+        ],
+        repeat_last=True,
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=1, max_tool_calls=1),
+            tool_names=("read_a",),
+        ),
+        bindings=[recorder.binding],
+    )
+
+    assert recorder.calls == []
+    assert run.outcome.stop_reason == "max_steps"
+
+
+def test_a_cost_ceiling_nothing_can_measure_is_refused() -> None:
+    """P1-5. No pricer exists, so cost_micro_usd stays zero and never fires.
+
+    A ceiling that cannot be enforced must not be accepted as one: the caller
+    asked for a guarantee, and silently not providing it is worse than saying
+    so.
+    """
+
+    recorder = _Recorder("read_a")
+    model = FakeModel([ScriptedTurn(text="Done.", usage=USAGE)])
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2, max_cost_micro_usd=1),
+            tool_names=("read_a",),
+        ),
+        bindings=[recorder.binding],
+    )
+
+    assert run.outcome.status == "failed"
+    assert run.outcome.error is not None
+    assert "cost meter" in run.outcome.error.message
+    assert run.durable_types == ["RunStarted", "RunFailed"]
+
+
+def test_a_run_without_a_cost_ceiling_is_unaffected() -> None:
+    """The control: the refusal is the unenforceable ceiling, not the budget."""
+
+    model = FakeModel([ScriptedTurn(text="Done.", usage=USAGE)])
+
+    run = _execute(
+        model, request=_request(budget=RunBudget(max_steps=2, max_tool_calls=2))
+    )
+
+    assert run.outcome.status == "completed"
