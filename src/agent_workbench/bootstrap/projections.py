@@ -16,6 +16,7 @@ print one.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -45,6 +46,31 @@ class ArtifactStoreConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelProfileConfig:
+    """One named profile, and how calls made under it should behave."""
+
+    model_id: str
+    temperature: float
+    max_output_tokens: int | None
+    timeout_seconds: float
+    max_retries: int
+    tool_calling_required: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ModelConfig:
+    """The provider, and the profiles a run may ask for by name."""
+
+    provider: str
+    base_url: str
+    # Absent is a real state, and the projection says so rather than papering
+    # over it: a process may be configured without a key, and refusing to
+    # assemble is the factory's job, not this one's.
+    api_key: SecretStr | None
+    profiles: Mapping[str, ModelProfileConfig]
+
+
+@dataclass(frozen=True, slots=True)
 class ApiRuntimeConfig:
     """Everything the API process needs, and nothing else."""
 
@@ -56,6 +82,7 @@ class ApiRuntimeConfig:
     max_control_request_body_bytes: int
     database: DatabaseConfig
     artifacts: ArtifactStoreConfig
+    model: ModelConfig
 
 
 def project_api(settings: Settings) -> ApiRuntimeConfig:
@@ -80,6 +107,25 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             local_root=settings.artifact_store.local_root,
             max_artifact_bytes=settings.artifact_store.max_artifact_bytes,
         ),
+        model=ModelConfig(
+            provider=settings.model.provider,
+            base_url=settings.model.base_url,
+            api_key=settings.secrets.deepseek_api_key,
+            profiles={
+                name: ModelProfileConfig(
+                    model_id=profile.model_id,
+                    temperature=profile.temperature,
+                    max_output_tokens=profile.max_output_tokens,
+                    timeout_seconds=float(profile.timeout_seconds),
+                    max_retries=profile.max_retries,
+                    tool_calling_required=profile.tool_calling_required,
+                )
+                for name, profile in (
+                    ("main", settings.model.main),
+                    ("compact", settings.model.compact),
+                )
+            },
+        ),
     )
 
 
@@ -87,5 +133,7 @@ __all__ = [
     "ApiRuntimeConfig",
     "ArtifactStoreConfig",
     "DatabaseConfig",
+    "ModelConfig",
+    "ModelProfileConfig",
     "project_api",
 ]
