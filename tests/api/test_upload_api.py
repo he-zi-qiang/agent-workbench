@@ -84,7 +84,9 @@ def _run(
         finally:
             await engine.dispose()
 
-        app, dependencies = build_app(project_api(_settings(root, **overrides)))
+        app, dependencies = build_app(
+            project_api(_settings(root, **overrides)), with_chat=False
+        )
         transport = httpx.ASGITransport(app=app)  # pyright: ignore[reportArgumentType]
         try:
             async with httpx.AsyncClient(
@@ -377,7 +379,7 @@ def test_the_api_refuses_to_assemble_for_a_remote_deployment(
     )
 
     with pytest.raises(InsecureDeploymentError, match="identity provider"):
-        build_dependencies(project_api(settings))
+        build_dependencies(project_api(settings), with_chat=False)
 
 
 def test_the_application_is_assembled_once_per_process(tmp_path: Path) -> None:
@@ -415,7 +417,7 @@ def test_the_app_factory_returns_the_limit_wrapped_application(
 ) -> None:
     from agent_workbench.apps.api.middleware import ControlPlaneLimit
 
-    dependencies = build_dependencies(project_api(_settings(tmp_path)))
+    dependencies = build_dependencies(project_api(_settings(tmp_path)), with_chat=False)
     try:
         assert isinstance(create_app(dependencies), ControlPlaneLimit)
     finally:

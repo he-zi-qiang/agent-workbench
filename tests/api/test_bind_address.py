@@ -124,14 +124,14 @@ def test_assembly_refuses_a_reachable_host_that_arrived_another_way() -> None:
     config = dataclasses.replace(project_api(_settings()), host="0.0.0.0")
 
     with pytest.raises(InsecureDeploymentError, match="loopback"):
-        build_dependencies(config)
+        build_dependencies(config, with_chat=False)
 
 
 def test_assembly_accepts_the_configured_default() -> None:
     """The refusal is specific; it does not simply reject every deployment."""
 
     config: ApiRuntimeConfig = project_api(_settings())
-    dependencies = build_dependencies(config)
+    dependencies = build_dependencies(config, with_chat=False)
 
     assert is_loopback_bind_address(dependencies.config.host)
 
