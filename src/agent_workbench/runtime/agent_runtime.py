@@ -515,7 +515,7 @@ class ClaudeLikeAgentRuntime:
         # turn and so cannot see what that turn spent; without this, a run that
         # blew its token ceiling reported "completed", and one that blew it
         # while proposing tools went on to run them.
-        exceeded = request.budget.stop_reason_for(ledger.usage, now=self._clock())
+        exceeded = request.budget.overrun_reason_for(ledger.usage, now=self._clock())
         if exceeded is not None:
             return await self._failed(
                 request,
@@ -530,6 +530,26 @@ class ClaudeLikeAgentRuntime:
             )
 
         if turn.calls:
+            # The model wants to continue, so the question changes from "did
+            # this overrun?" to "may it start more work?" -- and the answer to
+            # the second is no once the allowance is used up. Dispatching here
+            # would buy side effects for results the last step has no reader
+            # for. A turn that finished instead is completed below: spending
+            # the allowance exactly is not overspending it.
+            spent = request.budget.stop_reason_for(ledger.usage, now=self._clock())
+            if spent is not None:
+                return await self._failed(
+                    request,
+                    sink,
+                    machine,
+                    spent,
+                    ErrorInfo(
+                        code="budget_exceeded",
+                        message=f"the run stopped at its ceiling: {spent}",
+                    ),
+                    ledger,
+                )
+
             duplicated = _repeated_call_ids(turn.calls)
             if duplicated:
                 # Checked before anything is prepared, authorized or run. The

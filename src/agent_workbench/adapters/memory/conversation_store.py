@@ -50,10 +50,13 @@ class InMemoryConversationStore:
         *,
         session_id: str,
         tenant_id: str,
+        principal_id: str,
         messages: tuple[Message, ...],
     ) -> tuple[StoredMessage, ...]:
         async with self._lock:
-            self._require_session(session_id=session_id, tenant_id=tenant_id)
+            self._require_session(
+                session_id=session_id, tenant_id=tenant_id, principal_id=principal_id
+            )
             stored = self._messages[session_id]
             appended = tuple(
                 StoredMessage(
@@ -72,10 +75,13 @@ class InMemoryConversationStore:
         *,
         session_id: str,
         tenant_id: str,
+        principal_id: str,
         limit: int | None = None,
     ) -> tuple[StoredMessage, ...]:
         async with self._lock:
-            self._require_session(session_id=session_id, tenant_id=tenant_id)
+            self._require_session(
+                session_id=session_id, tenant_id=tenant_id, principal_id=principal_id
+            )
             stored = tuple(self._messages[session_id])
         return stored if limit is None else stored[:limit]
 
@@ -84,9 +90,16 @@ class InMemoryConversationStore:
         *,
         session_id: str,
         tenant_id: str,
+        principal_id: str,
     ) -> ConversationSession:
         session = self._sessions.get(session_id)
-        if session is None or session.tenant_id != tenant_id:
+        # A wrong tenant, a wrong principal and a missing session answer
+        # identically: any difference would confirm somebody else's exists.
+        if (
+            session is None
+            or session.tenant_id != tenant_id
+            or session.owner_id != principal_id
+        ):
             raise NotFoundError("conversation session not found")
         return session
 

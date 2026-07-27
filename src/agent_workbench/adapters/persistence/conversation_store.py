@@ -35,7 +35,13 @@ from agent_workbench.ports.conversation_store import (
 
 
 class PostgresConversationStore:
-    """Persistent chat sessions, scoped by tenant on every query."""
+    """Persistent chat sessions, scoped to their owner on every query.
+
+    A session answers to the principal that created it. Scoping by tenant alone
+    would make a session id a capability: knowing one would be enough to read
+    somebody's whole conversation and to append to it, and a session id travels
+    through URLs and logs like any other.
+    """
 
     __slots__ = ("_engine",)
 
@@ -78,13 +84,16 @@ class PostgresConversationStore:
         *,
         session_id: str,
         tenant_id: str,
+        principal_id: str,
         messages: tuple[Message, ...],
     ) -> tuple[StoredMessage, ...]:
         if not messages:
             return ()
 
         async with self._engine.begin() as connection:
-            await self._locked_session(connection, session_id, tenant_id)
+            # Ownership is checked under the same lock that orders the append,
+            # so a session cannot change hands between the check and the write.
+            await self._locked_session(connection, session_id, tenant_id, principal_id)
 
             next_sequence = await self._next_sequence(connection, session_id)
             stored: list[StoredMessage] = []
@@ -115,13 +124,14 @@ class PostgresConversationStore:
         *,
         session_id: str,
         tenant_id: str,
+        principal_id: str,
         limit: int | None = None,
     ) -> tuple[StoredMessage, ...]:
         if limit is not None and limit < 1:
             raise ValueError("limit must be positive")
 
         async with self._engine.connect() as connection:
-            await self._require_session(connection, session_id, tenant_id)
+            await self._require_session(connection, session_id, tenant_id, principal_id)
 
             query = (
                 select(
@@ -152,6 +162,7 @@ class PostgresConversationStore:
         connection: AsyncConnection,
         session_id: str,
         tenant_id: str,
+        principal_id: str,
     ) -> None:
         """Take the session row for update, so appends to it serialize."""
 
@@ -159,6 +170,7 @@ class PostgresConversationStore:
             select(conversation_sessions.c.session_id)
             .where(conversation_sessions.c.session_id == session_id)
             .where(conversation_sessions.c.tenant_id == tenant_id)
+            .where(conversation_sessions.c.owner_id == principal_id)
             .with_for_update()
         )
         if result.first() is None:
@@ -169,15 +181,18 @@ class PostgresConversationStore:
         connection: AsyncConnection,
         session_id: str,
         tenant_id: str,
+        principal_id: str,
     ) -> None:
         result = await connection.execute(
             select(conversation_sessions.c.session_id)
             .where(conversation_sessions.c.session_id == session_id)
             .where(conversation_sessions.c.tenant_id == tenant_id)
+            .where(conversation_sessions.c.owner_id == principal_id)
         )
         if result.first() is None:
-            # A wrong tenant and a missing session are the same answer: telling
-            # them apart would confirm that someone else's session exists.
+            # A wrong tenant, a wrong principal and a missing session are the
+            # same answer: telling them apart would confirm somebody else's
+            # session exists.
             raise NotFoundError("conversation session not found")
 
     async def _next_sequence(

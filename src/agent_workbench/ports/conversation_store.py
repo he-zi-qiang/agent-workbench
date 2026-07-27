@@ -57,12 +57,15 @@ class ConversationStore(Protocol):
         *,
         session_id: str,
         tenant_id: str,
+        principal_id: str,
         messages: tuple[Message, ...],
     ) -> tuple[StoredMessage, ...]:
         """Append a turn and return the stored messages with their positions.
 
-        Raises ``NotFoundError`` when the session does not exist for this
-        tenant, so a wrong tenant cannot append to a session it cannot see.
+        A session answers to the principal that created it. Raises
+        ``NotFoundError`` for an unknown id, another tenant's, and another
+        principal's alike -- appending to somebody else's conversation puts
+        words in it that they will read back as their own history.
         """
         ...
 
@@ -71,9 +74,15 @@ class ConversationStore(Protocol):
         *,
         session_id: str,
         tenant_id: str,
+        principal_id: str,
         limit: int | None = None,
     ) -> tuple[StoredMessage, ...]:
-        """Return messages in sequence order, oldest first."""
+        """Messages in sequence order, oldest first, for their owner only.
+
+        A conversation is the most personal thing this system stores. Scoping
+        it to a tenant says whose database it is, not whose conversation it
+        is, and a session id travels through URLs and logs like any other.
+        """
         ...
 
 
