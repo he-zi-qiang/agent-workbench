@@ -1,0 +1,23 @@
+{"question": "how are dense and sparse results combined", "document_id": "doc_fusion"}
+{"question": "what performs the fusion", "document_id": "doc_fusion"}
+{"question": "why is fusing twice a problem", "document_id": "doc_fusion"}
+{"question": "does the retrieval adapter re-rank results", "document_id": "doc_fusion"}
+{"question": "what decides whether a principal may read a chunk", "document_id": "doc_authorization"}
+{"question": "is the vector index the authority on permissions", "document_id": "doc_authorization"}
+{"question": "what happens if a grant is revoked mid-answer", "document_id": "doc_authorization"}
+{"question": "when is a candidate re-checked", "document_id": "doc_authorization"}
+{"question": "how large is a chunk", "document_id": "doc_chunking"}
+{"question": "why does the tokenizer matter for the index identity", "document_id": "doc_chunking"}
+{"question": "what is chunk overlap for", "document_id": "doc_chunking"}
+{"question": "what happens to a sentence spanning a boundary", "document_id": "doc_chunking"}
+{"question": "when is tool call quota reserved", "document_id": "doc_budgets"}
+{"question": "why are token ceilings checked after a call", "document_id": "doc_budgets"}
+{"question": "what happens to calls beyond the ceiling", "document_id": "doc_budgets"}
+{"question": "is a budget accounted for after the work", "document_id": "doc_budgets"}
+{"question": "how does a subscriber resume a stream", "document_id": "doc_events"}
+{"question": "why are sequences gap free", "document_id": "doc_events"}
+{"question": "are transient events stored", "document_id": "doc_events"}
+{"question": "what assigns an event its position", "document_id": "doc_events"}
+{"question": "what is an outbox claim", "document_id": "doc_outbox"}
+{"question": "what happens when a worker dies holding a claim", "document_id": "doc_outbox"}
+{"question": "what is a fencing token for", "document_id": "doc_outbox"}
