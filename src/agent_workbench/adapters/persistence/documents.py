@@ -29,7 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -47,6 +47,7 @@ from agent_workbench.ports.documents import (
     Document,
     DocumentVersion,
     KnowledgeBaseMismatchError,
+    ReadableDocument,
     UploadIntent,
 )
 
@@ -305,6 +306,60 @@ class PostgresDocumentStore:
                 source_revision=cast(int, row.source_revision),
                 artifact_id=cast(str, row.artifact_id),
                 content_sha256=cast(str, row.content_sha256),
+            )
+            for row in rows
+        )
+
+    async def readable_versions(
+        self,
+        *,
+        tenant_id: str,
+        principal_id: str,
+        document_ids: tuple[str, ...],
+    ) -> tuple[ReadableDocument, ...]:
+        """One query for a whole batch of candidates.
+
+        Per-document calls would be one round trip each, and worse, they would
+        each see a slightly different moment -- a revoke landing midway would
+        leave some candidates checked before it and some after. A single
+        statement gives the batch one consistent answer.
+
+        Owner or granted, the same rule ``document()`` applies; deleted
+        documents are excluded, because a tombstone the index has not caught
+        up with is the other half of the same staleness problem.
+        """
+
+        if not document_ids:
+            return ()
+
+        granted = (
+            select(document_acl.c.document_id)
+            .where(document_acl.c.principal_id == principal_id)
+            .scalar_subquery()
+        )
+        query = (
+            select(
+                documents.c.document_id,
+                documents.c.knowledge_base_id,
+                documents.c.source_revision,
+            )
+            .where(documents.c.document_id.in_(document_ids))
+            .where(documents.c.tenant_id == tenant_id)
+            .where(documents.c.deleted.is_(False))
+            .where(
+                or_(
+                    documents.c.owner_id == principal_id,
+                    documents.c.document_id.in_(granted),
+                )
+            )
+        )
+        async with self._engine.connect() as connection:
+            rows = (await connection.execute(query)).all()
+        return tuple(
+            ReadableDocument(
+                document_id=cast(str, row.document_id),
+                knowledge_base_id=cast(str, row.knowledge_base_id),
+                source_revision=cast(int, row.source_revision),
             )
             for row in rows
         )
