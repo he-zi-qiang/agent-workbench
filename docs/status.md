@@ -1598,3 +1598,37 @@ Adapter 至今没有进程级装配：`ApiRuntimeConfig` 里没有 model/rag/qdr
 
 在低余量下草率塞进这样一块装配变更，正是这份文档里反复记录的那类错误的来源。
 `knowledge_search` Tool（WP04-08）同理，它属于 agentic 路径，需要同一套装配。
+
+## PR-019 模型装配与配置投影
+
+状态：**已实现并通过本地测试**。WP02-07 的前半：把 DeepSeek Adapter 变成进程能真正
+构造出来的东西。
+
+`ApiRuntimeConfig` 新增 `model` 投影（provider、base_url、api_key、两个 profile 及
+其可靠性字段），并新增 `bootstrap/model_factory.py` 从投影构造 `DeepSeekModel`。
+
+**这是配置从「承诺」变成「能力」的地方。** 在此之前每一层校验的都是形状——model_id
+是非空字符串、base_url 是个 URL——而这些都不说明进程真能触达 provider。
+
+**一个装配不出可用模型的进程，比一个拒绝启动的进程更糟。** 它能通过健康检查、能接
+请求、然后每一个请求都在 provider 那边失败——配置错误于是变成一次事故，而症状离
+成因隔了好几层。所以缺 key、空白 key、占位 model_id、没有 adapter 的 provider，
+四种情况都在启动时拒绝。
+
+**占位 model_id 在所有环境都拒绝，不只 production。** Settings 层的
+`_looks_like_placeholder` 只在 production 生效，而committed defaults 里就是
+`not-configured-deepseek-main`——一个开发进程「什么都答不上来」，仍然是什么都答不
+上来。这是有意与 Settings 层不同的严格度，不是重复校验。
+
+拒绝信息里点名**是哪几个 profile 没有 pin**：一句「有地方配错了」要靠二分才能行动。
+API key 不出现在任何拒绝信息里——启动错误会进日志和工单。
+
+7 条测试：四种拒绝各一条、profile 命名一条、key 不泄漏一条，外加一条对照（配置正确
+时确实构造出 `DeepSeekModel` 且满足 `ModelPort`）。
+
+### 未包含：路由注册
+
+装配 Chat 路由还差两块：Qdrant 客户端与 embedder。embedder 是个真问题——唯一的真实
+实现在**可选依赖**后面，所以给 API 进程装 chat 意味着要么让 API 依赖那个 extra，要么
+在 extra 缺席时拒绝装配 chat。后者与本文件里其他每一处的做法一致（拒绝而不是假装），
+但那是下一个变更，不是这一个。
