@@ -126,6 +126,44 @@ class RunBudget(DomainModel):
             raise ValueError("max_tool_calls must be >= max_steps")
         return self
 
+    def overrun_reason_for(
+        self,
+        usage: BudgetUsage,
+        *,
+        now: datetime | None = None,
+    ) -> StopReason | None:
+        """Return which ceiling this run has *passed*, or ``None``.
+
+        The counterpart to ``stop_reason_for``, and a different question.
+        "May I start more work?" is answered by whether the allowance is used
+        up; "did this run overrun?" is answered by whether it was exceeded.
+        Asking the first one after a turn makes ``max_steps=1`` reject a run
+        the model finished in one step -- the allowance was spent exactly, not
+        overspent, and throwing the answer away is not what the caller asked
+        for.
+
+        Tokens and cost are different in kind: a model that reported 120 when
+        the ceiling was 1 really did overrun, and no earlier check could have
+        prevented it, because what a call will cost is unknowable before making
+        it.
+        """
+
+        if usage.steps > self.max_steps:
+            return "max_steps"
+        if usage.tool_calls > self.max_tool_calls:
+            return "max_tool_calls"
+        if self.max_total_tokens is not None and usage.tokens.total > (
+            self.max_total_tokens
+        ):
+            return "token_budget"
+        if self.max_cost_micro_usd is not None and usage.cost_micro_usd > (
+            self.max_cost_micro_usd
+        ):
+            return "cost_budget"
+        if self.deadline is not None and now is not None and now >= self.deadline:
+            return "deadline"
+        return None
+
     def stop_reason_for(
         self,
         usage: BudgetUsage,

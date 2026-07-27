@@ -1584,3 +1584,44 @@ def test_a_stream_with_no_aclose_does_not_break_the_run() -> None:
     run = _execute(_BareModel())  # pyright: ignore[reportArgumentType]
 
     assert run.outcome.status == "completed"
+
+
+def test_a_one_step_budget_completes_a_run_the_model_finished_in_one_step() -> None:
+    """Spending an allowance exactly is not overspending it.
+
+    A defect I introduced with the P1-5 hard ceilings: the post-turn check
+    reused ``stop_reason_for``, which answers "may I start more work?" and is
+    documented as being evaluated before a turn, never after. Asked afterwards
+    it made ``max_steps=N`` behave as ``N-1`` on the completion path -- the
+    model answered, and the answer was thrown away.
+    """
+
+    model = FakeModel([ScriptedTurn(text="Done in one step.", usage=USAGE)])
+
+    run = _execute(
+        model, request=_request(budget=RunBudget(max_steps=1, max_tool_calls=1))
+    )
+
+    assert run.outcome.status == "completed"
+    assert run.outcome.output_text == "Done in one step."
+
+
+def test_a_token_ceiling_still_fails_a_run_that_passed_it() -> None:
+    """The control the fix above must not weaken: an overrun is still a failure.
+
+    Tokens are different in kind from steps. What a model call costs is
+    unknowable before making it, so passing the ceiling is only ever
+    observable afterwards -- which is why the post-turn check exists at all.
+    """
+
+    model = FakeModel([ScriptedTurn(text="Expensive.", usage=USAGE)])
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2, max_total_tokens=1)
+        ),
+    )
+
+    assert run.outcome.status == "failed"
+    assert run.outcome.stop_reason == "token_budget"
