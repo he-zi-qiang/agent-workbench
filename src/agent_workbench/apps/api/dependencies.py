@@ -27,9 +27,11 @@ from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
+from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.persistence import (
     PostgresConversationStore,
     PostgresDocumentStore,
+    PostgresEventLog,
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
@@ -49,6 +51,7 @@ from agent_workbench.bootstrap.projections import ApiRuntimeConfig
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.documents import DocumentStore
+from agent_workbench.ports.event_log import EventLogPort, EventScope
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 
 
@@ -72,6 +75,7 @@ class ApiDependencies:
     chat: ChatService | None
     chat_unavailable: str | None
     http: httpx.AsyncClient | None
+    events: EventLogPort
 
     @property
     def max_control_request_body_bytes(self) -> int:
@@ -84,6 +88,19 @@ class ApiDependencies:
     @property
     def serves_chat(self) -> bool:
         return self.chat is not None
+
+    def sink_for(self, *, stream_id: str, run_id: str) -> ScopedEventSink:
+        """The sink one run writes into.
+
+        A stream per session and a run per turn: a subscriber follows the
+        session and resumes from wherever it left off, while each turn stays
+        identifiable inside it.
+        """
+
+        return ScopedEventSink(
+            log=self.events,
+            scope=EventScope(stream_id=stream_id, run_id=run_id),
+        )
 
     async def dispose(self) -> None:
         if self.http is not None:
@@ -153,6 +170,7 @@ def build_dependencies(
         chat=chat,
         chat_unavailable=unavailable,
         http=http,
+        events=PostgresEventLog(engine),
     )
 
 
