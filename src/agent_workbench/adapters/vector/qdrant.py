@@ -28,6 +28,7 @@ from qdrant_client import AsyncQdrantClient, models
 from agent_workbench.domain.errors import IncompatibleSchemaError
 from agent_workbench.ports.vector_index import (
     DENSE_VECTOR_NAME,
+    SPARSE_VECTOR_NAME,
     IndexedChunk,
     ScoredChunk,
 )
@@ -72,6 +73,11 @@ class QdrantVectorIndex:
                         distance=models.Distance.COSINE,
                     )
                 },
+                # Declared whether or not this process has a sparse encoder. A
+                # collection created without it could not gain one later
+                # without a rebuild, and the cost of an unused named vector is
+                # nothing until points carry one.
+                sparse_vectors_config={SPARSE_VECTOR_NAME: models.SparseVectorParams()},
             )
         except Exception:
             # Another process created it between the check and the call. That
@@ -115,7 +121,7 @@ class QdrantVectorIndex:
             points=[
                 models.PointStruct(
                     id=point_id(chunk.chunk_id),
-                    vector={DENSE_VECTOR_NAME: list(chunk.vector)},
+                    vector=_vectors(chunk),
                     payload={
                         "chunk_id": chunk.chunk_id,
                         "document_id": chunk.document_id,
@@ -134,6 +140,58 @@ class QdrantVectorIndex:
             wait=True,
         )
         return len(chunks)
+
+    async def search_hybrid(
+        self,
+        *,
+        vector: tuple[float, ...],
+        sparse_indices: tuple[int, ...],
+        sparse_values: tuple[float, ...],
+        tenant_id: str,
+        knowledge_base_id: str,
+        authorized_principals: tuple[str, ...],
+        limit: int,
+        dense_limit: int,
+        sparse_limit: int,
+    ) -> tuple[ScoredChunk, ...]:
+        """One request: two prefetches and an RRF fusion, all inside Qdrant."""
+
+        narrowing = self._narrowing(
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            authorized_principals=authorized_principals,
+        )
+        # The filter is stated on each prefetch rather than once on the fusion.
+        # Qdrant appears to push an outer filter down -- both spellings return
+        # the same points here, and a test that swaps them does not fail -- so
+        # this is not load-bearing today. It is written this way because the
+        # narrowing is per-arm in intent: each prefetch should be choosing
+        # among candidates this principal may read, and relying on a push-down
+        # to make that true would make the guarantee a property of the engine's
+        # optimiser rather than of this query.
+        response = await self._client.query_points(
+            collection_name=self._collection,
+            prefetch=[
+                models.Prefetch(
+                    query=list(vector),
+                    using=DENSE_VECTOR_NAME,
+                    filter=narrowing,
+                    limit=dense_limit,
+                ),
+                models.Prefetch(
+                    query=models.SparseVector(
+                        indices=list(sparse_indices), values=list(sparse_values)
+                    ),
+                    using=SPARSE_VECTOR_NAME,
+                    filter=narrowing,
+                    limit=sparse_limit,
+                ),
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=limit,
+            with_payload=True,
+        )
+        return tuple(_scored(point) for point in response.points)
 
     async def search(
         self,
@@ -157,39 +215,46 @@ class QdrantVectorIndex:
             collection_name=self._collection,
             query=list(vector),
             using=DENSE_VECTOR_NAME,
-            query_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="tenant_id",
-                        match=models.MatchValue(value=tenant_id),
-                    ),
-                    models.FieldCondition(
-                        key="knowledge_base_id",
-                        match=models.MatchValue(value=knowledge_base_id),
-                    ),
-                    models.FieldCondition(
-                        key="authorized_principals",
-                        match=models.MatchAny(any=list(authorized_principals)),
-                    ),
-                ]
+            query_filter=self._narrowing(
+                tenant_id=tenant_id,
+                knowledge_base_id=knowledge_base_id,
+                authorized_principals=authorized_principals,
             ),
             limit=limit,
             with_payload=True,
         )
 
-        return tuple(
-            ScoredChunk(
-                chunk_id=_text(point.payload, "chunk_id"),
-                document_id=_text(point.payload, "document_id"),
-                document_version=_text(point.payload, "document_version"),
-                tenant_id=_text(point.payload, "tenant_id"),
-                knowledge_base_id=_text(point.payload, "knowledge_base_id"),
-                source_revision=_number(point.payload, "source_revision"),
-                text=_text(point.payload, "text"),
-                ordinal=_number(point.payload, "ordinal"),
-                score=point.score,
-            )
-            for point in response.points
+        return tuple(_scored(point) for point in response.points)
+
+    @staticmethod
+    def _narrowing(
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        authorized_principals: tuple[str, ...],
+    ) -> models.Filter:
+        """The candidate narrowing, shared by every search on this index.
+
+        One definition rather than one per method: two copies are two chances
+        for the hybrid path to narrow differently from the dense one, and a
+        difference there is a difference in who can be retrieved.
+        """
+
+        return models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="tenant_id",
+                    match=models.MatchValue(value=tenant_id),
+                ),
+                models.FieldCondition(
+                    key="knowledge_base_id",
+                    match=models.MatchValue(value=knowledge_base_id),
+                ),
+                models.FieldCondition(
+                    key="authorized_principals",
+                    match=models.MatchAny(any=list(authorized_principals)),
+                ),
+            ]
         )
 
     async def delete_document(self, *, tenant_id: str, document_id: str) -> None:
@@ -233,6 +298,43 @@ def _number(payload: dict[str, Any] | None, key: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise IncompatibleSchemaError(f"indexed point has no integer {key!r}")
     return value
+
+
+def _vectors(chunk: IndexedChunk) -> dict[str, Any]:
+    """Named vectors for one point, omitting sparse when there is none.
+
+    Writing an empty sparse vector would make a point that matches every sparse
+    query at zero weight rather than one that matches none.
+    """
+
+    vectors: dict[str, Any] = {DENSE_VECTOR_NAME: list(chunk.vector)}
+    if chunk.sparse_indices:
+        vectors[SPARSE_VECTOR_NAME] = models.SparseVector(
+            indices=list(chunk.sparse_indices),
+            values=list(chunk.sparse_values),
+        )
+    return vectors
+
+
+def _scored(point: Any) -> ScoredChunk:
+    """One returned point, as the domain sees it.
+
+    Note what is absent: the payload's copy of the ACL. A caller that could
+    read it might treat it as the answer, and it is only ever a narrowing --
+    PostgreSQL decides, before and after.
+    """
+
+    return ScoredChunk(
+        chunk_id=_text(point.payload, "chunk_id"),
+        document_id=_text(point.payload, "document_id"),
+        document_version=_text(point.payload, "document_version"),
+        tenant_id=_text(point.payload, "tenant_id"),
+        knowledge_base_id=_text(point.payload, "knowledge_base_id"),
+        source_revision=_number(point.payload, "source_revision"),
+        text=_text(point.payload, "text"),
+        ordinal=_number(point.payload, "ordinal"),
+        score=point.score,
+    )
 
 
 __all__ = ["FILTER_KEYS", "POINT_NAMESPACE", "QdrantVectorIndex", "point_id"]

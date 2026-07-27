@@ -41,6 +41,12 @@ from agent_workbench.domain.schema import DomainModel
 # between the two is a collection whose vectors nothing can query.
 DENSE_VECTOR_NAME = "dense"
 
+# Sparse lives beside dense in the same collection, under its own name, because
+# fusing them requires one query over one set of points. Two collections would
+# mean two queries and a fusion performed here -- which the baseline forbids
+# for a reason: a second fusion invents an ordering neither retriever produced.
+SPARSE_VECTOR_NAME = "sparse"
+
 
 class IndexedChunk(DomainModel):
     """One chunk as the index holds it: its vector, and what filters it."""
@@ -58,6 +64,12 @@ class IndexedChunk(DomainModel):
     text: str
     ordinal: int = Field(ge=0)
     vector: tuple[float, ...]
+    # Absent when the process has no sparse encoder. A point without them is
+    # still dense-searchable, so a collection can hold both while sparse is
+    # being rolled out -- and a query that prefetches sparse simply does not
+    # match it, rather than failing.
+    sparse_indices: tuple[int, ...] = ()
+    sparse_values: tuple[float, ...] = ()
 
 
 class ScoredChunk(DomainModel):
@@ -114,6 +126,29 @@ class VectorIndexPort(Protocol):
         """
         ...
 
+    async def search_hybrid(
+        self,
+        *,
+        vector: tuple[float, ...],
+        sparse_indices: tuple[int, ...],
+        sparse_values: tuple[float, ...],
+        tenant_id: str,
+        knowledge_base_id: str,
+        authorized_principals: tuple[str, ...],
+        limit: int,
+        dense_limit: int,
+        sparse_limit: int,
+    ) -> tuple[ScoredChunk, ...]:
+        """Dense and sparse candidates, fused once, by the index.
+
+        One request. The two prefetches and the fusion happen inside Qdrant, so
+        this process never holds two ranked lists -- which is the only way to
+        be sure it never combines them a second time. A relative-score fusion
+        applied on top of RRF produces an ordering neither retriever produced
+        and no evaluation can attribute.
+        """
+        ...
+
     async def delete_document(self, *, tenant_id: str, document_id: str) -> None:
         """Remove every point belonging to one document."""
         ...
@@ -121,6 +156,7 @@ class VectorIndexPort(Protocol):
 
 __all__ = [
     "DENSE_VECTOR_NAME",
+    "SPARSE_VECTOR_NAME",
     "IndexedChunk",
     "ScoredChunk",
     "VectorIndexPort",
