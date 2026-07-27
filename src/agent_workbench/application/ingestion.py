@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from agent_workbench.application.chunking import Chunker
 from agent_workbench.ports.embedding import EmbeddingPort
 from agent_workbench.ports.ingestion import DocumentParser
+from agent_workbench.ports.sparse import SparseEncoderPort, SparseVector
 from agent_workbench.ports.vector_index import IndexedChunk, VectorIndexPort
 
 CHUNK_ID_PREFIX = "chk"
@@ -57,6 +58,11 @@ class IngestionService:
     chunker: Chunker
     embedder: EmbeddingPort
     index: VectorIndexPort
+    # Absent when the process has no sparse runtime. Points are then written
+    # dense-only, and they stay retrievable -- what must not happen is a
+    # collection where some versions carry term weights and some do not
+    # without anything recording which, so the identity below says.
+    sparse_encoder: SparseEncoderPort | None = None
 
     @property
     def index_identity(self) -> str:
@@ -67,7 +73,14 @@ class IngestionService:
         collection -- and must not silently share chunk ids either.
         """
 
-        return f"{self.embedder.identity}+{self.chunker.identity}"
+        dense_and_chunks = f"{self.embedder.identity}+{self.chunker.identity}"
+        if self.sparse_encoder is None:
+            return dense_and_chunks
+        # Sparse changes what a point *is*, not just what else it carries: a
+        # hybrid query over a half-sparse collection ranks the dense-only
+        # points by one arm and the rest by two. Different identity, different
+        # chunk ids, so the two never share a point.
+        return f"{dense_and_chunks}+{self.sparse_encoder.identity}"
 
     def chunk_id(self, document_version: str, ordinal: int) -> str:
         """The stable id for one chunk of one version under this identity."""
@@ -76,6 +89,24 @@ class IngestionService:
             f"{self.index_identity}|{document_version}|{ordinal}".encode()
         ).hexdigest()
         return f"{CHUNK_ID_PREFIX}_{digest[:32]}"
+
+    async def _sparse_for(self, texts: tuple[str, ...]) -> tuple[SparseVector, ...]:
+        """Term weights for each chunk, or empty ones when there is no encoder.
+
+        Encoded in the same all-or-nothing way as the dense vectors: a failure
+        must not leave a version whose first chunks match terms and whose rest
+        do not, because that version would rank against itself.
+        """
+
+        if self.sparse_encoder is None:
+            return tuple(SparseVector() for _ in texts)
+        weights = await self.sparse_encoder.encode_documents(texts)
+        if len(weights) != len(texts):
+            raise ValueError(
+                f"the sparse encoder returned {len(weights)} vectors "
+                f"for {len(texts)} chunks"
+            )
+        return weights
 
     async def ingest(self, request: IngestionRequest) -> tuple[IndexedChunk, ...]:
         """Index one version, returning what was written."""
@@ -98,6 +129,8 @@ class IngestionService:
                 f"the embedder returned {len(vectors)} vectors for {len(chunks)} chunks"
             )
 
+        sparse = await self._sparse_for(tuple(chunk.text for chunk in chunks))
+
         indexed = tuple(
             IndexedChunk(
                 chunk_id=self.chunk_id(request.document_version, chunk.ordinal),
@@ -111,8 +144,10 @@ class IngestionService:
                 text=chunk.text,
                 ordinal=chunk.ordinal,
                 vector=vector,
+                sparse_indices=weights.indices,
+                sparse_values=weights.values,
             )
-            for chunk, vector in zip(chunks, vectors, strict=True)
+            for chunk, vector, weights in zip(chunks, vectors, sparse, strict=True)
         )
         await self.index.upsert(indexed)
         return indexed

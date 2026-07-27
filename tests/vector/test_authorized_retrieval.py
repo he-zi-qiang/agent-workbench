@@ -97,11 +97,14 @@ class _Harness:
             index=index,
         )
 
-    def retrieval(self, index: Any = None) -> RetrievalService:
+    def retrieval(
+        self, index: Any = None, *, sparse_encoder: Any = None
+    ) -> RetrievalService:
         return RetrievalService(
             embedder=self.embedder,
             index=index if index is not None else self.index,
             documents=self.store,
+            sparse_encoder=sparse_encoder,
         )
 
     async def publish(
@@ -389,3 +392,66 @@ def test_a_regranted_document_still_fails_the_second_check() -> None:
 
     with pytest.raises(SourcesChangedError):
         _run(scenario)
+
+
+# --- which retriever is this ------------------------------------------------
+
+
+class _OneTermSparse:
+    """A sparse encoder whose single term matches what ingestion wrote."""
+
+    @property
+    def vocabulary_size(self) -> int:
+        return 250002
+
+    @property
+    def identity(self) -> str:
+        return "sparse-v1"
+
+    async def encode_documents(self, texts: tuple[str, ...]) -> tuple[Any, ...]:
+        from agent_workbench.ports.sparse import SparseVector
+
+        return tuple(SparseVector(indices=(99,), values=(1.0,)) for _ in texts)
+
+    async def encode_query(self, text: str) -> Any:
+        from agent_workbench.ports.sparse import SparseVector
+
+        return SparseVector(indices=(99,), values=(1.0,))
+
+
+def test_the_mode_says_dense_without_a_sparse_encoder() -> None:
+    """An evaluation report must not be able to label a dense run as hybrid."""
+
+    async def scenario(harness: _Harness) -> str:
+        return harness.retrieval().mode
+
+    assert _run(scenario) == "dense"
+
+
+def test_the_mode_says_hybrid_with_one() -> None:
+    """The control: an ablation comparing the two must not compare one to itself."""
+
+    async def scenario(harness: _Harness) -> str:
+        return harness.retrieval(sparse_encoder=_OneTermSparse()).mode
+
+    assert _run(scenario) == "hybrid"
+
+
+def test_hybrid_retrieval_still_authorizes_against_postgresql() -> None:
+    """Adding an arm must not add a way past the check that follows it."""
+
+    async def scenario(harness: _Harness) -> int:
+        await harness.publish(granted=())
+        service = harness.retrieval(sparse_encoder=_OneTermSparse())
+        context = await service.retrieve(
+            RetrievalRequest(
+                query="fusion",
+                tenant_id=TENANT,
+                principal_id=STRANGER,
+                knowledge_base_id=KB,
+                top_k=5,
+            )
+        )
+        return len(context.packet.chunks)
+
+    assert _run(scenario) == 0
