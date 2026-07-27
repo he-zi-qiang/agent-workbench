@@ -95,6 +95,18 @@ jobs:
           --allow-only
           "MIT;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0;BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0;3-Clause BSD License"
 
+      # The embedding extra is deliberately absent here: the runtime and the
+      # weights are several gigabytes, and every gate above runs without them.
+      # Asserted rather than assumed -- if it ever gets installed by accident,
+      # the offline-CI property would be lost silently, and the skip count
+      # below would quietly drop to zero.
+      - name: Confirm the optional embedding runtime is not installed
+        run: >-
+          uv run --no-sync python -c
+          "import importlib.util, sys;
+          sys.exit(0 if importlib.util.find_spec('sentence_transformers') is None
+          else 'the embedding extra must not be installed in CI')"
+
   stateful:
     name: Migrations, PostgreSQL and Qdrant-backed stores
     runs-on: ubuntu-latest

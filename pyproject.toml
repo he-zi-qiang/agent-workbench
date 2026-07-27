@@ -24,6 +24,15 @@ dependencies = [
   "uvicorn>=0.34,<1",
 ]
 
+[project.optional-dependencies]
+# The real embedder. Kept optional because the runtime and the weights together
+# are several gigabytes, and every gate except the embedding contract itself
+# runs without them. CI does not install this; see docs/status.md for what that
+# means for the capability table.
+embedding = [
+  "sentence-transformers>=3.3,<6",
+]
+
 [project.scripts]
 agent-api = "agent_workbench.apps.api.main:main"
 agent-cli = "agent_workbench.apps.cli.main:main"
