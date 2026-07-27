@@ -93,10 +93,10 @@ jobs:
           --from mixed
           --ignore-packages agent-workbench
           --allow-only
-          "MIT;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0"
+          "MIT;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0;BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0;3-Clause BSD License"
 
-  postgres:
-    name: Migrations and PostgreSQL-backed stores
+  stateful:
+    name: Migrations, PostgreSQL and Qdrant-backed stores
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -114,6 +114,13 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+
+      # Pinned by digest like every other image here: a tag can be moved, and
+      # an index built against a different server is not the one tested.
+      qdrant:
+        image: qdrant/qdrant@sha256:241edb9d7778327516ef218f8c74e1bd61b5ea42cd4f193cb8d0896199705636
+        ports:
+          - 6333:6333
 
     steps:
       - name: Check out repository
@@ -137,10 +144,26 @@ jobs:
           AW_DATABASE__DSN: postgresql+asyncpg://agent:ci-only@localhost:5432/agent_workbench_test
         run: uv run --no-sync alembic upgrade head
 
-      - name: Run the database-backed suites
+      - name: Wait for Qdrant
+        run: |
+          # The image ships no shell, so a container health check is not an
+          # option; the readiness endpoint is polled from the runner instead.
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://localhost:6333/readyz > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Qdrant did not become ready" >&2
+          exit 1
+
+      - name: Run the service-backed suites
         env:
           AGENT_WORKBENCH_TEST_DSN: postgresql+asyncpg://agent:ci-only@localhost:5432/agent_workbench_test
-        run: uv run --no-sync pytest -q tests/contracts tests/persistence tests/api
+          AGENT_WORKBENCH_TEST_QDRANT_URL: http://localhost:6333
+        run: >-
+          uv run --no-sync pytest -q
+          tests/contracts tests/persistence tests/api tests/vector
 
   secret-scan:
     name: Secret scan

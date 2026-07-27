@@ -1344,3 +1344,41 @@ worker 本身；在它存在前，租约应设得比最慢的工作单元更长�
 
 6 条测试（含 2 条对照）。**验证过是有牙的**：撤掉过期回收失败 3 条，撤掉 fence
 失败 2 条。
+
+## PR-016 Dense Retrieval Kernel（WP04 起步）
+
+状态：**已实现并通过本地测试（含真实 Qdrant）**。WP04-04 与 WP04-05 的索引侧；
+只开内部 Port，**不注册任何外部 Chat/RAG 路由**——按计划 §9，检索接口要等
+PR-017 的 ACL 二次重验落地后才对外可见。
+
+新增 `ports/vector_index.py` 与 `adapters/vector/qdrant.py`：collection schema、
+幂等 upsert、带 tenant / knowledge-base / ACL 过滤的 dense 搜索、按文档删除。
+
+三个判断写在代码里：
+
+1. **point id 是 chunk id 的 UUIDv5。** Qdrant 只收无符号整数和 UUID，而
+   at-least-once 投递配上生成式 id，等于每次重试都堆一份近似重复，检索会把它们
+   一起返回。稳定 id 才让重投是幂等的。
+2. **过滤在查询语句里，不在返回之后。** 先取 limit 再在 Python 里筛，会返回比
+   请求更少甚至为空的结果——取决于邻域碰巧怎么排——而且把租户边界挪进了调用方。
+   边界和计数属于同一条语句。有一条测试专门钉这个：两个不可见 chunk 比可见的更
+   靠近查询向量，limit=1 时必须返回那个可见的。
+3. **payload 过滤是缩小候选，不是授权。** 模块 docstring 明写：真正的授权在
+   PostgreSQL，Qdrant 返回后还要按 document/version 重验（PR-017）。把派生副本
+   当权限权威，正是陈旧索引变成数据泄漏的方式。
+
+**没有承诺 revision 顺序保证。** Port 里我一开始写了「旧 revision 不覆盖新的」，
+随即改掉了：Qdrant 没有条件写，任何检查都是 read-then-write，会输掉它声称能赢的
+竞态。顺序属于 ingestion worker 的单写者锁（WP05-07），这里只记录 revision 供那
+套协议比较。
+
+**测试基础设施**：CI 的 postgres job 改名为 `stateful`，加了 Qdrant 服务容器
+（按 digest 固定，与其它镜像一致）。Qdrant 镜像不带 shell，容器级 health check
+用不了，改在 runner 上轮询 `/readyz`。无服务时跳过 93 项并显式报出，不是静默跳过。
+
+14 条测试，全部对真实 Qdrant 跑。**验证过是有牙的**：撤掉 tenant 过滤失败 1 条，
+撤掉 knowledge-base 过滤失败 1 条，撤掉 ACL 过滤失败 2 条，撤掉维度校验失败 1 条。
+
+依赖新增 `qdrant-client`；许可证 allowlist 相应扩了三个既有宽松条款的不同拼写
+（numpy 的复合串、protobuf 的 `3-Clause BSD License`），做法与 PR-012 引入 httpx
+时一致。
