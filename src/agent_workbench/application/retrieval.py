@@ -30,6 +30,7 @@ from agent_workbench.domain.context import (
 )
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.embedding import EmbeddingPort
+from agent_workbench.ports.sparse import SparseEncoderPort
 from agent_workbench.ports.vector_index import ScoredChunk, VectorIndexPort
 
 # Asked of the index, before authorization removes some of them. A candidate
@@ -69,12 +70,59 @@ class SourcesChangedError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class RetrievalService:
-    """Dense retrieval, authorized against PostgreSQL on the way in and out."""
+    """Retrieval, authorized against PostgreSQL on the way in and out.
+
+    Hybrid when the process has a sparse encoder, dense when it does not. The
+    difference is reported rather than hidden: ``mode`` says which ran, so an
+    evaluation report cannot label a dense run as hybrid, and an ablation
+    comparing the two cannot accidentally compare one to itself.
+    """
 
     embedder: EmbeddingPort
     index: VectorIndexPort
     documents: DocumentStore
+    # Absent when the process has no sparse runtime. Retrieval then uses the
+    # dense arm alone -- which is a different retriever, not a degraded one,
+    # and says so.
+    sparse_encoder: SparseEncoderPort | None = None
     candidate_multiplier: int = DEFAULT_CANDIDATE_MULTIPLIER
+
+    @property
+    def mode(self) -> str:
+        """Which retriever this is, for a report to name."""
+
+        return "hybrid" if self.sparse_encoder is not None else "dense"
+
+    async def _candidates(self, request: RetrievalRequest) -> tuple[ScoredChunk, ...]:
+        """Ask the index, by whichever arms this process has."""
+
+        vector = await self.embedder.embed_query(request.query)
+        limit = request.top_k * self.candidate_multiplier
+        if self.sparse_encoder is None:
+            return await self.index.search(
+                vector=vector,
+                tenant_id=request.tenant_id,
+                knowledge_base_id=request.knowledge_base_id,
+                authorized_principals=(request.principal_id,),
+                limit=limit,
+            )
+
+        weights = await self.sparse_encoder.encode_query(request.query)
+        return await self.index.search_hybrid(
+            vector=vector,
+            sparse_indices=weights.indices,
+            sparse_values=weights.values,
+            tenant_id=request.tenant_id,
+            knowledge_base_id=request.knowledge_base_id,
+            authorized_principals=(request.principal_id,),
+            limit=limit,
+            # Each arm proposes a full candidate set; RRF is what narrows them
+            # to one. Halving them here would make fusion choose between two
+            # already-truncated lists, which is a different retriever from the
+            # one being evaluated.
+            dense_limit=limit,
+            sparse_limit=limit,
+        )
 
     async def retrieve(self, request: RetrievalRequest) -> AuthorizedContext:
         """Find, authorize, then build. In that order, and not another."""
@@ -82,14 +130,7 @@ class RetrievalService:
         if request.top_k < 1:
             raise ValueError("top_k must be positive")
 
-        vector = await self.embedder.embed_query(request.query)
-        candidates = await self.index.search(
-            vector=vector,
-            tenant_id=request.tenant_id,
-            knowledge_base_id=request.knowledge_base_id,
-            authorized_principals=(request.principal_id,),
-            limit=request.top_k * self.candidate_multiplier,
-        )
+        candidates = await self._candidates(request)
 
         # The whole point of this module. What came back was filtered by a copy
         # of the ACL; what may be read is decided here.

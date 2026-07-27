@@ -74,6 +74,7 @@ def _service(index: QdrantVectorIndex, **overrides: Any) -> IngestionService:
         ),
         embedder=overrides.get("embedder", DeterministicEmbedder(dimension=SIZE)),
         index=index,
+        sparse_encoder=overrides.get("sparse_encoder"),
     )
 
 
@@ -275,3 +276,99 @@ class _ShortEmbedder(DeterministicEmbedder):
     async def embed_documents(self, texts: tuple[str, ...]) -> tuple[Vector, ...]:
         full = await super().embed_documents(texts)
         return full[:-1]
+
+
+# --- sparse in the pipeline --------------------------------------------------
+
+
+class _FixedSparse:
+    """A sparse encoder with one term, so its presence is unmistakable."""
+
+    def __init__(self, term: int = 99, identity: str = "sparse-v1") -> None:
+        self._term = term
+        self._identity = identity
+
+    @property
+    def vocabulary_size(self) -> int:
+        return 250002
+
+    @property
+    def identity(self) -> str:
+        return self._identity
+
+    async def encode_documents(self, texts: tuple[str, ...]) -> tuple[Any, ...]:
+        from agent_workbench.ports.sparse import SparseVector
+
+        return tuple(SparseVector(indices=(self._term,), values=(1.0,)) for _ in texts)
+
+    async def encode_query(self, text: str) -> Any:
+        from agent_workbench.ports.sparse import SparseVector
+
+        return SparseVector(indices=(self._term,), values=(1.0,))
+
+
+def test_a_sparse_encoder_changes_the_index_identity() -> None:
+    """A half-sparse collection ranks some points by one arm and some by two.
+
+    Different identity means different chunk ids, so the two never share a
+    point and a re-index is what it looks like rather than a silent overlay.
+    """
+
+    async def scenario(index: QdrantVectorIndex) -> tuple[str, str]:
+        dense_only = _service(index)
+        hybrid = _service(index, sparse_encoder=_FixedSparse())
+        return dense_only.index_identity, hybrid.index_identity
+
+    dense_only, hybrid = _run(scenario)
+
+    assert dense_only != hybrid
+    assert dense_only in hybrid
+
+
+def test_two_sparse_encoders_do_not_share_chunk_ids() -> None:
+    async def scenario(index: QdrantVectorIndex) -> tuple[str, str]:
+        one = _service(index, sparse_encoder=_FixedSparse(identity="sparse-v1"))
+        other = _service(index, sparse_encoder=_FixedSparse(identity="sparse-v2"))
+        return one.chunk_id("ver_1", 0), other.chunk_id("ver_1", 0)
+
+    first, second = _run(scenario)
+
+    assert first != second
+
+
+def test_ingested_chunks_carry_term_weights() -> None:
+    """Written by ingestion, so a hybrid query has something to match."""
+
+    async def scenario(index: QdrantVectorIndex) -> tuple[int, int]:
+        service = _service(index, sparse_encoder=_FixedSparse())
+        written = await service.ingest(_request())
+        return len(written), len(written[0].sparse_indices)
+
+    count, terms = _run(scenario)
+
+    assert count > 0
+    assert terms == 1
+
+
+def test_without_an_encoder_chunks_carry_no_terms() -> None:
+    """The control: absence is absence, not an empty vector that matches all."""
+
+    async def scenario(index: QdrantVectorIndex) -> tuple[int, ...]:
+        written = await _service(index).ingest(_request())
+        return written[0].sparse_indices
+
+    assert _run(scenario) == ()
+
+
+def test_a_sparse_encoder_returning_the_wrong_count_is_refused() -> None:
+    """Weights are paired with chunks by position, as vectors are."""
+
+    class _Short(_FixedSparse):
+        async def encode_documents(self, texts: tuple[str, ...]) -> tuple[Any, ...]:
+            return (await super().encode_documents(texts))[:-1]
+
+    async def scenario(index: QdrantVectorIndex) -> None:
+        await _service(index, sparse_encoder=_Short()).ingest(_request())
+
+    with pytest.raises(ValueError, match="sparse encoder"):
+        _run(scenario)

@@ -1940,3 +1940,32 @@ Qdrant Query API，并禁止适配器再做一次 relative-score fusion——而
 
 8 条测试。**未做**：把 sparse encoder 接进摄取与检索链路，以及对照 dense 基线
 （`recall@1 0.957 / mrr 0.971`）的消融报告。
+
+## PR-028 把 sparse 接进摄取与检索链路
+
+状态：**已实现并通过本地测试（真实 Qdrant + 真实 PostgreSQL）**。
+
+`IngestionService` 与 `RetrievalService` 各自新增可选的 `sparse_encoder`。
+
+**没有 sparse encoder 时走 dense，而且不假装自己是 hybrid。** `RetrievalService.mode`
+如实返回 `"dense"` 或 `"hybrid"`——评测报告因此不可能把一次 dense 运行标成 hybrid，
+消融也不可能把一个检索器和它自己比。这是「缺席要可读」在这条链路上的形态。
+
+**sparse encoder 进入 index identity。** sparse 改变的是**一个点是什么**，不只是它额外
+携带了什么：一个半稀疏的 collection 会用一条支路给一部分点排序、用两条给另一部分排序。
+identity 不同则 chunk id 不同，两者永不共享同一个点，重建索引因此是看得见的，而不是一次
+静默覆盖。
+
+**没有权重时不写空稀疏向量**——空向量会「匹配所有稀疏查询、权重为零」，而不是「不匹配」。
+
+**sparse 与 dense 同样是全或无**：先整批编码再写入。失败若留下「前几个 chunk 匹配词项、
+其余不匹配」的版本，那个版本会自己和自己竞争排序。
+
+**两条支路各自拿完整候选数**，不各减半：RRF 的职责就是把两份完整候选收敛成一份，
+让它在两份已被截断的列表之间选，是另一个检索器，不是被评测的那个。
+
+8 条新测试。**验证过是有牙的**：摄取侧丢掉权重失败 1 条；sparse 不进 identity 失败 2 条；
+`mode` 恒返回 hybrid 失败 1 条。
+
+**未做**：消融报告本身。`scripts/run_rag_eval.py` 还需要接上 sparse encoder 并按 `mode`
+命名报告，才能对照 dense 基线（`recall@1 0.957 / mrr 0.971`）回答「hybrid 有没有用」。
