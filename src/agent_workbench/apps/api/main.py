@@ -25,7 +25,7 @@ from agent_workbench.application.uploads import UploadVerificationError
 from agent_workbench.apps.api.dependencies import ApiDependencies, build_dependencies
 from agent_workbench.apps.api.identity import UnauthenticatedError
 from agent_workbench.apps.api.middleware import ControlPlaneLimit
-from agent_workbench.apps.api.routes import artifacts, health, uploads
+from agent_workbench.apps.api.routes import artifacts, chat, health, uploads
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.bootstrap import load_settings
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig, project_api
@@ -62,6 +62,10 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
     app.include_router(health.router)
     app.include_router(uploads.router)
     app.include_router(artifacts.router)
+    if dependencies.serves_chat:
+        # Mounted only when the process can answer. A route that 500s per
+        # request is a worse answer than a 404 a client detects once.
+        app.include_router(chat.router)
 
     for failure, status_code in ERROR_STATUS.items():
         app.add_exception_handler(failure, _render_error(status_code))
