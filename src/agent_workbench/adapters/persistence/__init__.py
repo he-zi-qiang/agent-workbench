@@ -11,12 +11,14 @@ from agent_workbench.adapters.persistence.conversation_store import (
 )
 from agent_workbench.adapters.persistence.documents import PostgresDocumentStore
 from agent_workbench.adapters.persistence.engine import create_query_engine
+from agent_workbench.adapters.persistence.event_log import PostgresEventLog
 from agent_workbench.adapters.persistence.models import metadata
 from agent_workbench.adapters.persistence.outbox import PostgresOutbox
 
 __all__ = [
     "PostgresConversationStore",
     "PostgresDocumentStore",
+    "PostgresEventLog",
     "PostgresOutbox",
     "create_query_engine",
     "metadata",

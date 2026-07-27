@@ -265,3 +265,51 @@ __all__ = [
     "outbox_events",
     "upload_intents",
 ]
+
+
+# The stream row exists to be locked. A sequence has to be gap-free within its
+# stream for a cursor to mean "everything up to here", and the only way to get
+# that under concurrency is to serialise appends behind something -- an
+# Identity column would be unique and full of holes, because a rolled-back
+# transaction consumes a value it never writes.
+event_streams = Table(
+    "event_streams",
+    metadata,
+    Column("stream_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    # No tenant column. A stream's tenant is not on EventScope, and a column
+    # filled with something derived would be a fact nobody established --
+    # storing a wrong value is worse than storing none. It arrives when the
+    # scope carries a tenant, in the change that needs it.
+    Column("last_sequence", BigInteger, nullable=False, server_default="0"),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+)
+
+events = Table(
+    "events",
+    metadata,
+    Column("event_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("stream_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("run_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("sequence", BigInteger, nullable=False),
+    Column("event_type", String(64), nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("task_id", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("graph_node_id", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("parent_event_id", String(IDENTIFIER_LENGTH), nullable=True),
+    Column(
+        "recorded_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # If the stream lock is ever bypassed, the write fails instead of quietly
+    # reusing a position two subscribers would resume from differently.
+    UniqueConstraint("stream_id", "sequence", name="uq_events_stream_sequence"),
+    # The replay query: one stream, everything after a cursor, in order.
+    Index("ix_events_stream_sequence", "stream_id", "sequence"),
+)

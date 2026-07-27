@@ -30,9 +30,11 @@ from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.memory import (
     InMemoryArtifactStore,
     InMemoryConversationStore,
+    InMemoryEventLog,
 )
 from agent_workbench.adapters.persistence import (
     PostgresConversationStore,
+    PostgresEventLog,
     create_query_engine,
 )
 from agent_workbench.ports.artifact_store import ArtifactStore
@@ -85,6 +87,43 @@ def conversations(request: pytest.FixtureRequest) -> StoreHarness:
     if dsn is None:
         pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
     return StoreHarness(name="postgres", factory=_postgres_conversations(dsn))
+
+
+@asynccontextmanager
+async def _memory_events() -> AsyncIterator[Any]:
+    yield InMemoryEventLog()
+
+
+def _postgres_events(dsn: str) -> Callable[[], Any]:
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[Any]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(text("TRUNCATE events, event_streams CASCADE"))
+            yield PostgresEventLog(engine)
+        finally:
+            await engine.dispose()
+
+    return factory
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def event_logs(request: pytest.FixtureRequest) -> StoreHarness:
+    """Both event logs, so the contract is pinned per implementation.
+
+    The in-memory one made the contract executable; the PostgreSQL one has to
+    keep it under concurrency, and gap-free sequencing is exactly the property
+    that only shows up there.
+    """
+
+    if request.param == "memory":
+        return StoreHarness(name="memory", factory=_memory_events)
+
+    dsn = _test_dsn()
+    if dsn is None:
+        pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
+    return StoreHarness(name="postgres", factory=_postgres_events(dsn))
 
 
 @asynccontextmanager
