@@ -31,6 +31,12 @@ dependencies = [
 # means for the capability table.
 embedding = [
   "sentence-transformers>=3.3,<6",
+  # BGE's own library, and the only way to get BGE-M3's sparse lexical weights.
+  # sentence-transformers' SparseEncoder attaches a SparseAutoEncoder to models
+  # that declare no sparse head: for BGE-M3 that produces a 4096-dimensional
+  # re-encoding of the dense vector, not the 250002-dimensional term weights
+  # the model actually has. See ADR-013.
+  "FlagEmbedding>=1.3,<2",
 ]
 
 [project.scripts]
