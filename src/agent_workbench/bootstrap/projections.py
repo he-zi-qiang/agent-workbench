@@ -71,6 +71,36 @@ class ModelConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class QdrantConfig:
+    """Where the vector index lives, and what it is called."""
+
+    url: str
+    write_collection: str
+    api_key: SecretStr | None
+    request_timeout_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingConfig:
+    """Which model turns text into vectors, and how wide they are."""
+
+    model_id: str
+    revision: str
+    vector_size: int
+    batch_size: int
+    device: str
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalConfig:
+    """How much is asked for, and how much survives to the answer."""
+
+    chunk_size_tokens: int
+    chunk_overlap_tokens: int
+    answer_context_k: int
+
+
+@dataclass(frozen=True, slots=True)
 class ApiRuntimeConfig:
     """Everything the API process needs, and nothing else."""
 
@@ -83,6 +113,9 @@ class ApiRuntimeConfig:
     database: DatabaseConfig
     artifacts: ArtifactStoreConfig
     model: ModelConfig
+    qdrant: QdrantConfig
+    embedding: EmbeddingConfig
+    retrieval: RetrievalConfig
 
 
 def project_api(settings: Settings) -> ApiRuntimeConfig:
@@ -126,6 +159,24 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
                 )
             },
         ),
+        qdrant=QdrantConfig(
+            url=settings.qdrant.url,
+            write_collection=settings.qdrant.write_collection,
+            api_key=settings.secrets.qdrant_api_key,
+            request_timeout_seconds=settings.qdrant.request_timeout_seconds,
+        ),
+        embedding=EmbeddingConfig(
+            model_id=settings.rag.embedding.model_id,
+            revision=settings.rag.embedding.revision,
+            vector_size=settings.rag.embedding.vector_size,
+            batch_size=settings.rag.ingestion.embedding_batch_size,
+            device=settings.rag.embedding.device,
+        ),
+        retrieval=RetrievalConfig(
+            chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
+            chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
+            answer_context_k=settings.rag.retrieval.answer_context_k,
+        ),
     )
 
 
@@ -133,7 +184,10 @@ __all__ = [
     "ApiRuntimeConfig",
     "ArtifactStoreConfig",
     "DatabaseConfig",
+    "EmbeddingConfig",
     "ModelConfig",
     "ModelProfileConfig",
+    "QdrantConfig",
+    "RetrievalConfig",
     "project_api",
 ]
