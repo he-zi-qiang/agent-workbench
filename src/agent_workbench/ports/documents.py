@@ -34,6 +34,7 @@ another tenant's, since a distinguishable refusal is itself an answer.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 from pydantic import Field
@@ -93,6 +94,23 @@ class Document(VersionedModel):
     knowledge_base_id: Identifier
     source_revision: int = Field(ge=1)
     deleted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ReadableDocument:
+    """A document a principal may currently read, at the revision it is on.
+
+    The revision travels with the permission on purpose. Retrieval checks
+    authorization once when it builds a context and again before it commits an
+    answer, and "may still read" is not enough between those two moments: the
+    ACL can be replaced without the document being deleted. Since a grant
+    change advances the revision exactly as a content change does, comparing
+    the number catches both.
+    """
+
+    document_id: str
+    knowledge_base_id: str
+    source_revision: int
 
 
 @runtime_checkable
@@ -179,6 +197,26 @@ class DocumentStore(Protocol):
         """Versions oldest first, under the same read rule as ``document``."""
         ...
 
+    async def readable_versions(
+        self,
+        *,
+        tenant_id: str,
+        principal_id: str,
+        document_ids: tuple[str, ...],
+    ) -> tuple[ReadableDocument, ...]:
+        """Which of these documents this principal may read, right now.
+
+        Filters rather than raises: a retrieval asks about a batch of
+        candidates it did not choose, and one unreadable id among them is the
+        ordinary case, not an error.
+
+        This is the authorization. The vector index stores a copy of the ACL
+        to narrow a query, but that copy is only as fresh as the last time
+        somebody re-indexed the document -- and a revoked grant that has not
+        reached the index yet is exactly the case worth catching.
+        """
+        ...
+
     async def authorized_principals(
         self,
         *,
@@ -199,6 +237,7 @@ __all__ = [
     "DocumentStore",
     "DocumentVersion",
     "KnowledgeBaseMismatchError",
+    "ReadableDocument",
     "UploadIntent",
     "UploadStatus",
 ]

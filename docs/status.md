@@ -1498,3 +1498,55 @@ BAAI/bge-m3 @ main, sentence-transformers 5.6.1 / torch 2.13.0, CPU
 **能力表怎么标。** dense embedding 标为 Implemented + Tested，但**证据来自本地而不是
 CI**：CI 不装可选依赖，所以那 4 条在 CI 里始终跳过。README 与简历写「BGE-M3 dense
 retrieval 已验证」时必须同时说明证据是本地运行的，不能指向一条 CI 链接。
+
+## PR-017 Authorized RAG Slice
+
+状态：**已实现并通过本地测试（真实 Qdrant + 真实 PostgreSQL）**。WP04-06、WP04-10。
+
+**索引负责缩小候选，PostgreSQL 负责授权。** 这是两件不同的事，这个 PR 就是把这个
+区别落成代码。点的 payload 记录的是「上次索引这个文档时的 ACL」，而「上次索引」
+不等于「现在」——一秒钟前撤销的授权还没到达索引，索引会照样把 chunk 返回给那个
+刚被拿走权限的人。
+
+**每个候选在成为 context 之前都要对 PostgreSQL 重验。** 不是排序之后，不是组装
+citation 的时候，而是之前——因为下游每一步都是文本外泄的途径：进入 rerank 意味着
+被模型读过，进入 citation 意味着被用户看到。
+
+**授权检查两次，第二次不是冗余。** 构造 context 和提交答案之间隔着一次模型调用，
+授权可以在这中间被收回。每个文档被授权时的 revision 一路带下去，来源变动的答案
+被拒绝而不是交付。
+
+**比较 revision 而不是重问「我还能读吗」**，是因为前者能抓到**被替换过的 ACL**：
+撤销再重新授予，重问会说「能读」，而 revision 说 ACL 变过——这正是答案所依据的
+东西。P1-3 让授权变更和内容变更一样推进 revision，这条才成立。
+
+### barrier 测试
+
+WP04 的退出条件明确要求：在 Qdrant query 完成后、context 构造前提交 ACL revoke，
+被撤权的 chunk 不得进入 rerank、模型上下文、回答或 Citation。
+
+**实现方式：不在生产代码里开测试专用钩子。** 测试包装 `VectorIndexPort`，在
+`search()` 里调用真实实现后、返回前执行撤权。这精确等于要防的那个时间窗，确定性
+（不依赖 sleep，符合 `deterministic_concurrency_required`），且生产路径完全不知道
+自己正在被交错。
+
+9 条测试，含 3 条对照（owner 不受影响、未变更时确认通过、陌生人本来就拿不到）。
+
+**验证过是有牙的**：
+- 把重验换成「信任索引的 ACL 过滤」——这是真实会犯的错误写法——失败 2 条，且是
+  **断言失败**（被撤权的 chunk 真的进了 context），不是崩溃；
+- 撤掉答案提交前的第二次检查——失败 2 条。
+
+第一次尝试有牙验证时我用的破坏方式会让代码 `KeyError` 崩溃，那不是忠实的模拟：
+真实的错误是「有人删掉 PostgreSQL 重验、改为信任 payload 过滤」，而那种写法不会
+崩。改成忠实的版本后，测试是靠断言抓到泄漏的。
+
+### 尚未包含
+
+Chat 切片（WP04-07/08/09：ChatService、`knowledge_search` Tool、REST/CLI）不在本
+PR。按计划纪律，**外部 Chat/RAG 路由要等授权链路完整后才注册**——本 PR 补齐的正是
+这个前提，但路由本身属于下一个 PR。
+
+Citation 目前用 chunk ordinal 作为 paragraph 定位。字符级 offset 在切块时已经算出
+并保存在 `TextChunk.locator` 里，但还没有穿过索引 payload 传到检索侧；页码需要 PDF
+解析（同样未实现）。这是**已知的定位精度缺口**，不是遗漏。
