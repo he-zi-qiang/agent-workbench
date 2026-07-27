@@ -1898,3 +1898,45 @@ dense 走 `sentence-transformers`，sparse 走 `FlagEmbedding`——**这是已�
 
 **未做**：Qdrant 单次 dense+sparse RRF 融合（WP05-02）、reranker（WP05-03/04）、
 对照 dense 基线（`recall@1 0.957 / mrr 0.971`）的消融报告。
+
+## PR-027 Qdrant 单次 dense+sparse RRF 融合（WP05-02）
+
+状态：**已实现并通过本地测试（真实 Qdrant）**。
+
+collection 现在同时声明 dense 与 sparse 具名向量，`search_hybrid` 用一次
+`query_points` 发两条 prefetch 加一个 `FusionQuery(RRF)`。
+
+**融合发生在 Qdrant 内部，这个进程从不同时持有两份排序表。** 基线把融合所有者锁定为
+Qdrant Query API，并禁止适配器再做一次 relative-score fusion——而「不做第二次」最可靠
+的保证方式，就是让这一侧根本拿不到可以再融的两份列表。
+
+点没有稀疏权重时**不写空稀疏向量**：写了会让它「匹配所有稀疏查询、权重为零」，而不是
+「不匹配」。collection 因此可以在 sparse 铺开期间同时容纳两种点。
+
+`_narrowing` 抽成共享定义：dense 与 hybrid 两条路必须用同一份过滤器，两份拷贝就是两次
+让某一条路授权得不一样的机会。
+
+### 同一个错误，连续两个 PR
+
+第一版 8 条测试**全绿地通过了「删掉整条 sparse prefetch」**。原因与上一个 PR 那个恒真
+指标一字不差：collection 里只有 2 个点，而 `dense_limit=10`——**dense 自己就把两个点都
+取回来了**，`doc_lexical` 出现在结果里跟 sparse 毫无关系。
+
+改成每条支路 `limit=1`（小到只够够到自己那个点）后，撤掉 sparse prefetch 失败 2 条。
+
+**教训是同一条**：一个不可能排除任何东西的 limit，也不可能证明任何东西。上个 PR 出现在
+评测指标里，这个 PR 出现在测试夹具里。
+
+### 一处写下但未验证的断言，已订正
+
+代码注释里我写过「过滤器必须放在 prefetch 上，否则未授权点会占掉名额」。实测：移到融合
+查询上，8 条测试**全部照过**——Qdrant 会把外层过滤器下推。
+
+那句话是推测不是事实。已改为如实陈述：两种写法在这里等价；仍按 per-arm 写，是**不想让
+授权保证依赖查询优化器的行为**，但明说了测试区分不了这两种写法。
+
+顺带订正一条旧断言：`test_an_unauthorized_principal_gets_nothing_from_either_arm` 写错了
+对象——一个对谁都不返回结果的索引也能满足它。已改成同时断言该 principal **能**看到什么。
+
+8 条测试。**未做**：把 sparse encoder 接进摄取与检索链路，以及对照 dense 基线
+（`recall@1 0.957 / mrr 0.971`）的消融报告。
