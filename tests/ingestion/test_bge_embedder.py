@@ -24,6 +24,7 @@ from agent_workbench.adapters.embedding.bge import (
     BgeM3Embedder,
     EmbeddingBackendUnavailableError,
     load_sentence_transformer,
+    reported_dimension,
 )
 from agent_workbench.ports.embedding import EmbeddingPort
 
@@ -46,7 +47,7 @@ class _StandInEncoder:
     reports_dimension: bool = True
     calls: list[dict[str, object]] = field(default_factory=list)
 
-    def get_sentence_embedding_dimension(self) -> int | None:
+    def get_embedding_dimension(self) -> int | None:
         # A real model can return None -- the sentinel and the value have to be
         # separate here, or the None case is untestable.
         return self.dimension if self.reports_dimension else None
@@ -71,6 +72,14 @@ class _StandInEncoder:
             [float(len(text) + offset) for offset in range(self.dimension)]
             for text in sentences
         ]
+
+
+@dataclass
+class _LegacyNamedEncoder(_StandInEncoder):
+    """An older sentence-transformers, carrying only the previous name."""
+
+    def get_sentence_embedding_dimension(self) -> int | None:
+        return self.dimension if self.reports_dimension else None
 
 
 def _embedder(encoder: _StandInEncoder, **overrides: object) -> BgeM3Embedder:
@@ -178,6 +187,30 @@ def test_a_model_of_the_right_width_loads() -> None:
     embedder = _load(_StandInEncoder(dimension=4), expected=4)
 
     assert embedder.dimension == 4
+
+
+def test_either_dimension_accessor_name_is_accepted() -> None:
+    """The name changed across the supported version range.
+
+    Found by loading the real model, which warned that the old name is
+    deprecated -- a stand-in answers to whichever name it was written with, so
+    testing against one could never have shown this.
+    """
+
+    assert reported_dimension(_StandInEncoder(dimension=1024)) == 1024
+
+
+def test_the_previous_accessor_name_still_works() -> None:
+    """Older versions in the supported range carry only the old name."""
+
+    class _OldOnly(_LegacyNamedEncoder):
+        get_embedding_dimension = None  # type: ignore[assignment]
+
+    assert reported_dimension(_OldOnly(dimension=1024)) == 1024
+
+
+def test_a_model_with_neither_accessor_reports_nothing() -> None:
+    assert reported_dimension(object()) is None
 
 
 def test_a_non_positive_batch_size_is_refused() -> None:

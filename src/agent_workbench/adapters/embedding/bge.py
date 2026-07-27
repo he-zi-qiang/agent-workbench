@@ -44,11 +44,14 @@ class SentenceEncoder(Protocol):
 
     Declared here rather than imported, because the package may not be
     installed -- and type-checking must not depend on an optional extra. It
-    also states the surface plainly: two methods, and a change to either is a
-    change this adapter has to notice.
-    """
+    also states the surface plainly: a change to either method is a change this
+    adapter has to notice.
 
-    def get_sentence_embedding_dimension(self) -> int | None: ...
+    The dimension accessor is deliberately absent. Its name changed between
+    supported versions, so asking for one of them by name in a Protocol would
+    make the other version fail to satisfy it. ``reported_dimension`` below
+    does the asking.
+    """
 
     def encode(
         self,
@@ -97,6 +100,26 @@ def load_sentence_transformer(
     )
 
 
+def reported_dimension(model: object) -> int | None:
+    """Ask the model its output width, under whichever name it answers to.
+
+    sentence-transformers renamed ``get_sentence_embedding_dimension`` to
+    ``get_embedding_dimension``; the supported range spans both, and the old
+    name warns on the newer versions. Found by actually loading the model --
+    the stand-in encoder answers to whichever name it is written with, so no
+    amount of testing against it would have shown this.
+    """
+
+    for name in ("get_embedding_dimension", "get_sentence_embedding_dimension"):
+        accessor = getattr(model, name, None)
+        if accessor is None:
+            continue
+        value = accessor()
+        if value is not None:
+            return int(cast("int", value))
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class BgeM3Embedder:
     """Dense BGE-M3 vectors, batched, off the event loop."""
@@ -135,7 +158,7 @@ class BgeM3Embedder:
             raise ValueError("batch_size must be positive")
 
         model = loader(model_id, revision=revision, device=device)
-        reported = model.get_sentence_embedding_dimension()
+        reported = reported_dimension(model)
         if reported is None:
             raise ValueError(
                 f"{model_id}@{revision} does not report an embedding dimension"
@@ -201,4 +224,5 @@ __all__ = [
     "EmbeddingBackendUnavailableError",
     "SentenceEncoder",
     "load_sentence_transformer",
+    "reported_dimension",
 ]

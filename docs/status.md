@@ -1476,6 +1476,25 @@ adapter 针对一个本地 `SentenceEncoder` Protocol 编写——只声明实�
 有过一个缺陷：它用 `None` 当「沿用 dimension」的哨兵，导致「模型真的返回 None」这
 一路径无法表达，被一条测试的失败暴露出来。
 
-**能力表怎么标。** dense embedding 标为 Implemented；**Tested 一栏只能标 adapter
-逻辑**。真模型契约的证据依赖本地权重，CI 里不产生，因此在有可链接的本地运行记录
-之前，简历与 README 不得把「BGE-M3 dense retrieval」写成已验证能力。
+**真模型运行证据（2026-07-26，本地）**
+
+```text
+BAAI/bge-m3 @ main, sentence-transformers 5.6.1 / torch 2.13.0, CPU
+首次运行（含权重下载）：16 passed in 981.62s
+修复后重跑（权重已缓存）：19 passed in 81.61s，无告警
+```
+
+四条真模型断言全部通过：输出维度 = 配置的 1024、单位向量、确定性、相关文本比无关
+文本更接近查询。
+
+**真跑抓到一个 stand-in 结构上不可能发现的问题。** 首次运行报
+`FutureWarning: get_sentence_embedding_dimension 已改名为 get_embedding_dimension`。
+依赖范围 `>=3.3,<6` 跨越了两种命名：旧版本只有旧名，新版本两个都有但旧名告警。
+假 encoder 只会响应写它时用的那个名字，所以对它测多少次都不会暴露真实库改过名——
+这类问题只有真加载一次模型才会出现。已修：新增 `reported_dimension()` 按新名→旧名
+询问；`SentenceEncoder` Protocol 里**故意不声明维度访问器**，因为在 Protocol 里点名
+其中一个会让另一个版本无法满足它。补了 3 条测试覆盖两种命名与都没有的情况。
+
+**能力表怎么标。** dense embedding 标为 Implemented + Tested，但**证据来自本地而不是
+CI**：CI 不装可选依赖，所以那 4 条在 CI 里始终跳过。README 与简历写「BGE-M3 dense
+retrieval 已验证」时必须同时说明证据是本地运行的，不能指向一条 CI 链接。
