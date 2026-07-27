@@ -1763,3 +1763,37 @@ owner 检查，「邻居不能提问」与「邻居不能读历史」两条失�
 
 **仍未做**：SSE 订阅端点与 `Last-Event-ID` 恢复（WP06 传输层）、CLI chat 切片、
 `knowledge_search` Tool（WP04-08，属 agentic 路径）。
+
+## PR-024 SSE 订阅与断线恢复（WP06 传输层）
+
+状态：**已实现并通过本地测试（真实 PostgreSQL）**。
+
+`GET /v1/chat/sessions/{id}/events`：按 SSE 推送该会话的持久事件，客户端用
+`Last-Event-ID` 从断点续上。
+
+**订阅就是一次还没结束的重放。** 客户端发回它看到的最后一个 id，服务端发送其后的
+全部，然后继续发。所以没有单独的「追赶」路径——重连只是一次从更靠后位置开始的订阅。
+
+**cursor 就是 SSE 的 event id**，浏览器因此不需要客户端自己写任何恢复逻辑。它之所以
+成立，完全依赖序列无洞：订阅者分不清一个洞和一个还没到达的事件，有洞的日志会让
+「n 之后的全部」这个问题无法回答。这正是 #38 那样实现的理由。
+
+**畸形 cursor 从头开始，而不是拒绝连接。** 它来自可能跨过一次部署的浏览器；拒绝会让
+那个客户端完全无法重连，而且无从得知清掉它就好了。**指向别的 stream 的 cursor 被忽略**
+——沿用它的数字会静默跳过本流的事件。
+
+延迟由轮询间隔决定。配置里的 `wakeup_backend = "postgres_listen_notify"` **仍然没有
+消费者**——这是本仓库第五次出现「定义了却没接上」的形状，所以我在这里明说而不是让
+行为去暗示它。`catchup_poll_seconds` 与 `replay_page_size` 都真的被用上了。
+
+11 条测试。**验证过是有牙的**：忽略 `Last-Event-ID` 后，恢复那条失败。
+
+**过程中又抓到自己一条守错对象的测试**：`test_transient_events_are_never_sent` 名字
+指向流，实际验证的是日志——`read()` 按契约只返回 durable 事件，所以流里那个过滤是
+**不可达的**，删掉它一条测试都不会失败。已改名为
+`test_a_transient_event_never_reaches_a_subscriber` 并在 docstring 里写明这是由日志
+而非流保证的；生产代码里那个 guard 保留（类型上 sequence 可为 None），但注释直说它
+不可达、也没有测试覆盖它。
+
+**仍未做**：LISTEN/NOTIFY 唤醒（延迟仍受轮询间隔约束）、CLI chat 切片、
+`knowledge_search` Tool。

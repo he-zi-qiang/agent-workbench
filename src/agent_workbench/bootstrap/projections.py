@@ -101,6 +101,14 @@ class RetrievalConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class EventStreamConfig:
+    """How a subscriber catches up, and how much it may pull at once."""
+
+    replay_page_size: int
+    catchup_poll_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
 class ApiRuntimeConfig:
     """Everything the API process needs, and nothing else."""
 
@@ -109,10 +117,12 @@ class ApiRuntimeConfig:
     host: str
     port: int
     shutdown_grace_seconds: int
+    sse_heartbeat_seconds: int
     max_control_request_body_bytes: int
     database: DatabaseConfig
     artifacts: ArtifactStoreConfig
     model: ModelConfig
+    event_stream: EventStreamConfig
     qdrant: QdrantConfig
     embedding: EmbeddingConfig
     retrieval: RetrievalConfig
@@ -127,6 +137,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         host=settings.api.host,
         port=settings.api.port,
         shutdown_grace_seconds=settings.api.shutdown_grace_seconds,
+        sse_heartbeat_seconds=settings.api.sse_heartbeat_seconds,
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
         database=DatabaseConfig(
             dsn=settings.database.dsn,
@@ -159,6 +170,10 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
                 )
             },
         ),
+        event_stream=EventStreamConfig(
+            replay_page_size=settings.event_stream.replay_page_size,
+            catchup_poll_seconds=settings.event_stream.catchup_poll_seconds,
+        ),
         qdrant=QdrantConfig(
             url=settings.qdrant.url,
             write_collection=settings.qdrant.write_collection,
@@ -185,6 +200,7 @@ __all__ = [
     "ArtifactStoreConfig",
     "DatabaseConfig",
     "EmbeddingConfig",
+    "EventStreamConfig",
     "ModelConfig",
     "ModelProfileConfig",
     "QdrantConfig",
