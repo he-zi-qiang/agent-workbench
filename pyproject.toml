@@ -16,7 +16,10 @@ dependencies = [
   "pydantic>=2.12,<3",
   "pydantic-settings>=2.14.2,<3",
   "python-dotenv>=1,<2",
-  "qdrant-client>=1.12,<2",
+  # Matched to the server image pinned by digest in CI. Qdrant checks major
+  # and minor on connect, and a mismatch it only warns about today is a
+  # wire incompatibility it can enforce tomorrow.
+  "qdrant-client>=1.12,<1.13",
   "sqlalchemy[asyncio]>=2.0,<3",
   "uvicorn>=0.34,<1",
 ]
