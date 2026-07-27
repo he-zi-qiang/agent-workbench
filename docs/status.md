@@ -1841,3 +1841,60 @@ CI 没有嵌入运行时，而用确定性 embedder 跑出来的报告是在测�
 
 10 条 metric 测试全部对着手算得出的数字，21 条运行器测试含两条对照（完美检索器得 1、
 盲检索器得 0）。
+
+## PR-026 BGE-M3 sparse encoder（WP05-01）
+
+状态：**已实现；结构测试在所有环境下跑，真 lexical weights 已本地验证**。
+
+`SparseEncoderPort` 与 `BgeM3SparseEncoder`，走 **FlagEmbedding**（BGE 官方库），
+加入既有的 `embedding` 可选依赖组。
+
+### 差点走错的捷径
+
+`sentence-transformers` 5.x 提供了 `SparseEncoder`，项目已经依赖它，看起来不必再引库。
+动手前实测：
+
+```text
+BGE-M3 词表大小:        250002
+SparseEncoder 输出维度:   4096
+模块链:  Transformer → Pooling → Normalize → SparseAutoEncoder
+```
+
+模型卡没声明稀疏头时，它接了个 `SparseAutoEncoder`——把 1024 维 dense 向量压成 4096 维
+稀疏码。**那是对 dense 向量的有损重编码，不是词汇匹配。**
+
+危险在于它不报错：Qdrant 存得下、RRF 融得了、评测出数。那条 sparse 支路根本不做 term
+matching，现象只是「hybrid 好像没什么用」——一个会被归因为「这语料上 dense 已经够好」
+的结论，而不是「sparse 是假的」。架构基线 8.1 点名警告过这件事，我在 #32 里也写过
+「sparse 是 WP05-01，届时引 FlagEmbedding」——**我差点用一个看起来现成的 API 绕过自己
+写下的判断**。记为 [ADR-013](./adr/0013-bge-m3-sparse-encoder.md)。
+
+### 唯一能区分真假的断言
+
+加载时强制校验**稀疏维度等于分词器词表大小**。别的宽度都会产生 Qdrant 收得下、融合
+用得了、却一个词都不匹配的向量，所以这是唯一能判断这条支路是不是真的的检查。
+
+真模型验证（本地，2026-07-27）：12 passed in 53s，其中三条只有真权重在场才跑——维度
+实测 250002；真实词项有正权重且索引都在词表内；两段无关文本（「reciprocal rank
+fusion」与「preheat the oven」）加权的词项集合不同，**这是 term matching 才有的性质，
+4096 维那个假货不可能满足**。
+
+### 许可证门禁抓到一个真问题
+
+`FlagEmbedding` 的包元数据**没有声明许可证**，pip-licenses 报 `UNKNOWN`——而这道门禁
+存在的理由正是拦住未声明许可证。
+
+查证：它的 wheel 里附了 MIT LICENSE，只是缺 License 分类器。**没有把 `UNKNOWN` 加进
+allowlist**——那会让未来每一个未声明许可证的包自动通过，门禁就废了。改成用
+`--ignore-packages` 按包点名豁免，并把证据写进 CI 注释里：一个包、一行、一个必须有人
+写下来的理由。其余新增的都是宽松许可证的不同拼写，照常加进 allowlist。
+
+### 已知重复
+
+dense 走 `sentence-transformers`，sparse 走 `FlagEmbedding`——**这是已知重复，不是设计**。
+基线要求的是一次前向同时产出两种表示。若 FlagEmbedding 的 dense 输出被验证与现有结果
+一致，dense 应当合并过去；在验证之前不动，因为换 embedder 会改 index identity，那是一次
+全量重建索引。
+
+**未做**：Qdrant 单次 dense+sparse RRF 融合（WP05-02）、reranker（WP05-03/04）、
+对照 dense 基线（`recall@1 0.957 / mrr 0.971`）的消融报告。
