@@ -83,7 +83,7 @@ def _run(scenario: Callable[[httpx.AsyncClient], Awaitable[Any]], root: Path) ->
         finally:
             await engine.dispose()
 
-        app, dependencies = build_app(project_api(_settings(root)))
+        app, dependencies = build_app(project_api(_settings(root)), with_chat=False)
         transport = httpx.ASGITransport(app=app)  # pyright: ignore[reportArgumentType]
         try:
             async with httpx.AsyncClient(
@@ -412,7 +412,7 @@ def test_the_download_leaves_the_app_in_more_than_one_piece(tmp_path: Path) -> N
         finally:
             await engine.dispose()
 
-        app, dependencies = build_app(project_api(_settings(tmp_path)))
+        app, dependencies = build_app(project_api(_settings(tmp_path)), with_chat=False)
         try:
             transport = httpx.ASGITransport(app=app)  # pyright: ignore[reportArgumentType]
             async with httpx.AsyncClient(

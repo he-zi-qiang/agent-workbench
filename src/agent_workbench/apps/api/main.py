@@ -75,10 +75,17 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
     )
 
 
-def build_app(config: ApiRuntimeConfig) -> tuple[ASGIApp, ApiDependencies]:
-    """Assemble dependencies and the application they serve."""
+def build_app(
+    config: ApiRuntimeConfig, *, with_chat: bool = True
+) -> tuple[ASGIApp, ApiDependencies]:
+    """Assemble dependencies and the application they serve.
 
-    dependencies = build_dependencies(config)
+    ``with_chat`` is threaded through rather than hidden because assembling
+    chat loads the embedding model. Eager is right for a server; paying it in
+    something that only exercises uploads is not.
+    """
+
+    dependencies = build_dependencies(config, with_chat=with_chat)
     return create_app(dependencies), dependencies
 
 
