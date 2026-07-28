@@ -99,7 +99,7 @@ jobs:
           --from mixed
           --ignore-packages agent-workbench FlagEmbedding
           --allow-only
-          "MIT;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0;BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0;3-Clause BSD License;Apache 2.0 License;Apache License 2.0;Apache Software License; BSD License;Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT;Apache-2.0 AND CNRI-Python;Apache-2.0 AND MIT;ISC License (ISCL);MPL-2.0 AND MIT;Python Software Foundation License"
+          "MIT;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0;BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0;3-Clause BSD License;Apache 2.0 License;Apache License 2.0;Apache Software License; BSD License;Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT;Apache-2.0 AND CNRI-Python;Apache-2.0 AND MIT;ISC License (ISCL);MPL-2.0 AND MIT;Python Software Foundation License;MPL-2.0 AND (Apache-2.0 OR MIT);Apache-2.0 OR MIT"
 
       # The embedding extra is deliberately absent here: the runtime and the
       # weights are several gigabytes, and every gate above runs without them.

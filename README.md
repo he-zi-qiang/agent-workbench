@@ -39,6 +39,10 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
   fan-in 是排序并集，因此合并结果与分支完成顺序无关、重放一个分支不产生重复引用；
   revision 预算耗尽的 quality gate **不返回下一个节点**，而不是放行去审批——批准一份
   critic 明确否决的草稿，会让质量门恰在最该起作用时变成形式；
+- LangGraph Adapter：**编译**控制流声明而不是重述它，因此重放 checkpoint 的图与
+  控制流测试断言的图是同一份；`TaskState` 字段即图通道，两个引用通道挂与控制流
+  同一个排序并集 reducer；未注册的 graph version 失败关闭而不回退到最新图；
+  `resume` 不重传初始状态；
 - Task Agent node 只经 `AgentExecutor` 到达模型（不持有 registry / model port，
   否则就是第二个没有预算与 Policy 保证的 Runtime）；**失败的运行同样记录 run id
   与 usage**，否则 Task 会在一个看起来从没动过的预算里无限重试；`completed` 但没有
@@ -76,8 +80,9 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
   1.000，rerank delta 必然为 0；要测出它得先有更难的 gold set。
 - Task Agent node 只覆盖产物为 artifact 的四个节点；`plan`/`critic` 需要结构化
   输出解码契约，尚未实现。
-- **LangGraph adapter、PostgreSQL checkpointer 和 Task Worker 都不存在**，
-  `langgraph` 也还不是项目依赖。因此**还没有任何 Task 能端到端运行**。
+- LangGraph adapter 目前只配内存 checkpointer，**进程重启不保留执行位置**；
+  PostgreSQL checkpointer、Task Worker 和 Task 查询接口都不存在，因此
+  **还没有任何 Task 能在产品意义上端到端运行或恢复**。
 - LlamaIndex/LangChain Adapter、Task Registry、Multi-Agent、CrewAI 对比、UI、
   可观测性、生产身份认证和部署仍为 Planned。
 

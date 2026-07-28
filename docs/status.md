@@ -57,6 +57,82 @@ alembic 唯一 head        0009_chat_turn_lease
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-049 LangGraph Adapter 与 graph version 注册表
+
+状态：**已实现并通过本地全仓门禁；在功能分支 `pr-049-langgraph-adapter` 上，
+尚未合入 `main`**。对应 WP06-05。**本轮第一次引入 `langgraph` 依赖。**
+
+Adapter 拥有编译、checkpoint 和调度；**不拥有任何路由决定**。每条边都来自
+`workflows.research_graph`——所以"重放 checkpoint 的那张图"和"控制流测试断言的
+那张图"是同一份声明。在这里重述一条路由规则，就是造出第二份定义，而它会静默漂移，
+且只在恢复路径上暴露。
+
+### 依赖决策：主依赖，不是 extra
+
+`langgraph` 进 `[project.dependencies]` 而不是可选 extra。`embedding` extra 的存在
+理由是**体积**（运行时加权重好几个 GB）；langgraph 是纯 Python 小包，放进 extra
+只能换来"CI 跳过 workflow adapter 的测试"，也就是对它什么都证明不了。
+
+许可证门禁需要补两个字符串，都来自传递依赖，且都宽松：
+
+```text
+MPL-2.0 AND (Apache-2.0 OR MIT)   ← orjson
+Apache-2.0 OR MIT                 ← ormsgpack
+```
+
+`MPL-2.0` 本身早已在允许列表内，所以这是列表的**扩充**而不是策略放宽。用 CI 同款
+`pip-licenses --allow-only` 命令对 140 个包的实际解析结果逐个验证过，新增 17 个包
+（langchain-core、langgraph-checkpoint、langsmith、zstandard 等）全部通过。
+`uv lock --check --offline` 通过，uv 版本与 CI 固定的 `0.11.31` 一致。
+
+### 状态即通道，且不能悄悄少一个
+
+`TaskState` 以普通 mapping 进入图，字段就是图的通道。两个引用通道挂
+**与控制流同一个排序并集 reducer**，因此 LangGraph 自己的 fan-in 与
+`workflows.fan_in` 产生相同的合并结果。
+
+`TaskState` 新增字段而这里没加通道，会在**第一次 checkpoint round-trip 时被丢掉**。
+所以有一条测试直接断言两个字段集合相等，而不是指望它们自觉保持同步——破坏验证里
+删掉一个通道会让 3 条测试失败。
+
+### 预算耗尽走 `END`，不走 approval
+
+`route_quality_gate` 返回 `None` 时，adapter 映射到 LangGraph 的 `END`。这是一个
+**LangGraph 认识而领域不认识**的节点名，正是要点：图必须停下，而 `TaskNodeId`
+不该为了描述"停下"而多出一个成员。
+
+`resume` **不传初始状态**：状态已经属于 checkpoint，再传一次正是"崩溃后把原始输入
+追加两遍"的来源。测试用计数 handler 证明 `understand` 只跑过一次。
+
+graph version 注册表按版本编译并缓存。未注册的版本**失败关闭**，不回退到最新图——
+checkpoint 记录了它由哪个版本写入，猜错的代价恰好在最贵的时候产生。
+
+### 有牙验证
+
+六处等价改动，还原后逐字节一致：
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 预算耗尽路由到 `approval` | 1 |
+| `resume` 重新提交初始状态 | 2 |
+| `run` 不拒绝已存在的 thread | 1 |
+| 通道 reducer 改成覆盖 | 1 |
+| `resume` 忽略 graph version 不匹配 | 1 |
+| `GraphState` 少一个通道 | 3 |
+
+本轮全仓门禁：`907 passed / 260 skipped`（新增 12）；Ruff、Pyright 全过。
+langgraph 无 type stub，按包内既有的 FlagEmbedding / sentence-transformers 同款做法，
+用窄 `pyright: ignore` 加 `cast` 收窄，而不是为整个包放宽类型检查。
+
+### 本轮明确未做
+
+- **PostgreSQL checkpointer（WP06-06）**：当前用 `InMemorySaver`，因此
+  **进程重启不保留执行位置**，"从 checkpoint 恢复"尚无证据；
+- Task Worker / TaskService / Task 查询接口（WP06-07）、事件时间线（WP06-09）；
+- `plan`/`critic` 的结构化输出解码；`approval`/`export` 仍是无副作用占位；
+- thread → graph version 的映射目前在**进程内存**里，随 WP06-06 的持久
+  checkpointer 一并落库。
+
 ## 2026-07-28 PR-048 Agent node：只经 `AgentExecutor`，且失败也要记账
 
 状态：**已实现并通过本地全仓门禁；在功能分支
