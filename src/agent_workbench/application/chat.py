@@ -131,15 +131,19 @@ class ChatService:
     ) -> ChatTurn:
         """One turn: retrieve, answer, verify, persist."""
 
-        # Authenticate the session before paying for embedding and vector
-        # search. A guessed id must not be a way to make someone else's
-        # session trigger expensive work, even though the later append would
-        # eventually reject it.
-        await self.conversations.history(
+        # Authenticate the session and take the history snapshot before paying
+        # for embedding and vector search. A guessed id must not be a way to
+        # make someone else's session trigger expensive work, even though the
+        # later append would eventually reject it.
+        #
+        # The snapshot contains only committed conversation facts: raw user
+        # questions and answers that passed the release gate (or its safe
+        # refusal). Previous RAG passages are deliberately not stored, so a
+        # later turn cannot replay evidence whose ACL has since changed.
+        history = await self.conversations.history(
             session_id=request.session_id,
             tenant_id=request.tenant_id,
             principal_id=request.principal_id,
-            limit=1,
         )
 
         context = await self.retrieval.retrieve(
@@ -164,7 +168,12 @@ class ChatService:
 
         release = AnswerReleaseSink(sink)
         outcome = await self.executor.run(
-            _run_request(request, context.packet, self.budget),
+            _run_request(
+                request,
+                context.packet,
+                self.budget,
+                history=tuple(record.message for record in history),
+            ),
             release,
             cancellation if cancellation is not None else NullCancellationToken(),
         )
@@ -223,13 +232,22 @@ class ChatService:
 
 
 def _run_request(
-    request: ChatRequest, packet: ContextPacket, budget: RunBudget
+    request: ChatRequest,
+    packet: ContextPacket,
+    budget: RunBudget,
+    *,
+    history: tuple[Message, ...] = (),
 ) -> AgentRunRequest:
-    """Build the run, with no tools.
+    """Build the run from committed history plus this turn, with no tools.
 
     Fixed two-step means the model answers from what it was given. Advertising
     a retrieval tool here would quietly turn this into the agentic path, and
     the two are meant to be separable so one of them can be evaluated.
+
+    Earlier turns are replayed as conversation messages, not as their old RAG
+    prompts. Only the current question receives current evidence. Replaying an
+    old prompt would copy old document text across the release boundary after
+    its permission or source revision may have changed.
     """
 
     return AgentRunRequest(
@@ -242,7 +260,7 @@ def _run_request(
         # when it is written as a permission rather than as an intention.
         envelope=AuthorizationEnvelope(),
         system_prompt=SYSTEM_PROMPT,
-        messages=(user_message(_prompt(request.question, packet)),),
+        messages=(*history, user_message(_prompt(request.question, packet))),
         tool_names=(),
         budget=budget,
         context=packet,

@@ -11,9 +11,10 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-07-28, the main-branch baseline is `main@4d03f69`, and the current
-development branch is implementing the PR-035 secure answer-release baseline.
-Implemented with test evidence:
+As of 2026-07-28, the main-branch baseline is `main@4d03f69`. The current
+development branch has committed the PR-035 secure answer-release baseline and
+is implementing PR-036 sequential multi-turn context. Implemented with test
+evidence:
 
 - framework-neutral domain contracts, ports, fake adapters and a reproducible
   CLI demo;
@@ -29,8 +30,9 @@ Implemented with test evidence:
   APIs;
 - BGE-M3 dense embeddings, Qdrant dense/hybrid retrieval and offline RAG
   evaluation;
-- fixed two-step Chat with two ACL checks, an answer-release gate and a source
-  revision read barrier;
+- fixed two-step Chat with two ACL checks, an answer-release gate, a source
+  revision read barrier and sequential replay of committed conversation
+  messages;
 - a `knowledge_search` Tool adapter backed by the same `RetrievalService` as
   fixed retrieval.
 
@@ -42,9 +44,10 @@ The remaining boundaries are explicit:
   upload-to-search E2E is not yet connected.
 - The source-revision barrier prevents stale Qdrant points from being read, but
   physical replacement/deletion of old points is not yet implemented.
-- Chat still persists history around a single-turn fixed RAG call. Idempotent
-  turns, true multi-turn context and validation of the citations actually used
-  by the model remain to be built.
+- Chat now replays committed user questions and final answers into later
+  sequential turns. Concurrent-turn serialization, idempotent `chat_turns`, a
+  history token window/compaction, and validation of the citations actually
+  used by the model remain to be built.
 - `knowledge_search` is not yet assembled into an agentic retrieval mode, and
   that path still needs a final evidence-revision gate before an answer may be
   released.

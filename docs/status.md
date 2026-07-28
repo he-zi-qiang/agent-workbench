@@ -12,6 +12,36 @@
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
 
+## 2026-07-28 PR-036 顺序多轮上下文
+
+状态：**当前开发分支已实现并通过无外部依赖测试，尚未合入 `main`**。
+
+此前 ConversationStore 会保存消息，但每次模型调用只收到当前问题与当前
+`ContextPacket`，所以“有历史记录”并不等于“模型能多轮对话”。本轮把调用语义改为：
+
+```text
+读取并验证 session ownership
+→ 取得已经提交的 conversation history 快照
+→ 为当前问题执行一次新的授权检索
+→ 历史原始消息 + 当前 evidence prompt 交给 Runtime
+→ 最终授权后提交本轮 assistant 消息
+```
+
+只回放 ConversationStore 中已经存在的原始用户问题与最终 assistant 消息。上一轮 RAG
+passage 不进入历史，未通过发布门的候选答案也不会进入历史；因此后续轮次不会从内部
+prompt 重新带入旧 source revision 的原文。撤权路径只会回放安全拒答。
+
+本轮确定性测试证明：
+
+- 第二轮模型请求按 `user → assistant → user` 顺序收到第一轮已提交消息；
+- 当前问题只出现一次，且只有当前问题附带当前检索 evidence；
+- 撤权时生成过的候选秘密不会进入下一轮模型请求，只有安全拒答会进入。
+
+边界保持明确：这只是**顺序调用下的多轮上下文**。尚未建立 `chat_turns` 事实表，
+不同 Turn 并发时也尚未通过数据库串行化；请求重试、模型计费、消息和最终事件的幂等
+恢复属于下一可靠性切片。历史 token window/compaction 与模型实际使用 Citation 的
+结构化校验同样尚未完成。
+
 ## 2026-07-28 PR-035 安全发布基线
 
 状态：**当前开发分支已实现并通过本地确定性测试，尚未合入 `main`**。
@@ -71,7 +101,8 @@ pytest                   711 passed / 188 skipped / 1 environment failure
 - Qdrant 旧 Point 物理 replace/delete；当前已做到“不可读取”，尚未做到“已清理”；
 - Ingestion Worker 的 advisory lock、heartbeat、retry/dead-letter 和常驻进程；
 - Agentic `knowledge_search` 的 run-scoped evidence ledger 与最终提交门；
-- 幂等 `chat_turns`、真正多轮历史、模型实际引用校验；
+- 幂等 `chat_turns`、并发 Turn 串行化、历史 token window/compaction、模型实际引用
+  校验；
 - LangGraph Task、Task Registry、Multi-Agent、CrewAI benchmark。
 
 ## 2026-07-25 仓库核验总览

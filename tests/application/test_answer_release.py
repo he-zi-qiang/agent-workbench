@@ -315,3 +315,104 @@ def test_an_unauthorized_session_is_rejected_before_retrieval() -> None:
         return retrieval.retrieve_calls
 
     assert asyncio.run(scenario()) == 0
+
+
+def test_a_later_turn_replays_only_committed_conversation_history() -> None:
+    """Multi-turn context must not persist or replay an earlier RAG packet."""
+
+    async def scenario() -> tuple[list[str], list[str]]:
+        conversations = await _conversations()
+        retrieval = _EmptyRetrieval()
+        service = _chat(
+            retrieval,
+            conversations,
+            [
+                ScriptedTurn(text="first committed answer"),
+                ScriptedTurn(text="second committed answer"),
+            ],
+        )
+
+        await service.ask(_request(), _sink(InMemoryEventLog()))
+        await service.ask(
+            ChatRequest(
+                session_id="ses_1",
+                question="follow-up question",
+                principal=PrincipalContext(
+                    principal_id="user_1",
+                    tenant_id="tenant_a",
+                ),
+                knowledge_base_id="kb_main",
+                run_id="run_2",
+                stream_id="ses_1",
+            ),
+            ScopedEventSink(
+                log=InMemoryEventLog(),
+                scope=EventScope(stream_id="ses_1", run_id="run_2"),
+            ),
+        )
+
+        model = service.executor._model
+        assert isinstance(model, FakeModel)
+        second = model.requests[1]
+        return (
+            [message.role for message in second.messages],
+            [message.text() for message in second.messages],
+        )
+
+    roles, texts = asyncio.run(scenario())
+
+    assert roles == ["user", "assistant", "user"]
+    assert texts[0] == "private question"
+    assert texts[1] == "first committed answer"
+    assert texts[2].startswith("follow-up question")
+    assert texts[2].count("follow-up question") == 1
+
+
+def test_a_withheld_candidate_is_never_replayed_into_the_next_turn() -> None:
+    """Only the safe refusal crosses from a revoked turn into later context."""
+
+    async def scenario() -> str:
+        conversations = await _conversations()
+        service = _chat(
+            _ChangingRetrieval(),
+            conversations,
+            [
+                ScriptedTurn(text=SECRET),
+                ScriptedTurn(text="safe answer after retry"),
+            ],
+        )
+
+        await service.ask(_request(), _sink(InMemoryEventLog()))
+        service = _chat(
+            _EmptyRetrieval(),
+            conversations,
+            [ScriptedTurn(text="safe answer after retry")],
+        )
+        await service.ask(
+            ChatRequest(
+                session_id="ses_1",
+                question="try again",
+                principal=PrincipalContext(
+                    principal_id="user_1",
+                    tenant_id="tenant_a",
+                ),
+                knowledge_base_id="kb_main",
+                run_id="run_2",
+                stream_id="ses_1",
+            ),
+            ScopedEventSink(
+                log=InMemoryEventLog(),
+                scope=EventScope(stream_id="ses_1", run_id="run_2"),
+            ),
+        )
+
+        model = service.executor._model
+        assert isinstance(model, FakeModel)
+        return "\n".join(
+            message.model_dump_json() for message in model.requests[0].messages
+        )
+
+    replayed = asyncio.run(scenario())
+
+    assert SECRET not in replayed
+    assert "no longer able to read" in replayed
