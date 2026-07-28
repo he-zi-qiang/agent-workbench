@@ -227,6 +227,7 @@ def _ask(harness: _Harness, principal: str) -> ChatRequest:
         question="when does the acquisition close",
         principal=PrincipalContext(principal_id=principal, tenant_id=TENANT),
         knowledge_base_id=KB,
+        idempotency_key=f"request-{principal}",
     )
 
 

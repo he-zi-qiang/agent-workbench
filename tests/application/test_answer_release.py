@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -27,6 +28,10 @@ from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.events import AnswerCommitted, ModelCompleted, ModelDelta
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import RunBudget
+from agent_workbench.ports.conversation_store import (
+    ChatTurnConflictError,
+    StoredChatTurn,
+)
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 
@@ -176,6 +181,7 @@ def _request() -> ChatRequest:
             tenant_id="tenant_a",
         ),
         knowledge_base_id="kb_main",
+        idempotency_key="request-1",
         run_id="run_1",
         stream_id="ses_1",
     )
@@ -219,8 +225,57 @@ def test_chat_publishes_a_success_only_after_the_release_check() -> None:
     ) - 1
 
 
+def test_a_completed_request_retry_returns_the_original_turn_without_rerunning() -> (
+    None
+):
+    async def scenario() -> tuple[tuple[bool, int, int, int], int]:
+        conversations = await _conversations()
+        retrieval = _EmptyRetrieval()
+        service = _chat(retrieval, conversations, [ScriptedTurn(text=SECRET)])
+        log = InMemoryEventLog()
+
+        first = await service.ask(_request(), _sink(log))
+        repeated = await service.ask(_request(), _sink(log))
+        history = await service.history(
+            session_id="ses_1",
+            tenant_id="tenant_a",
+            principal_id="user_1",
+        )
+        model = service.executor._model
+        assert isinstance(model, FakeModel)
+        events = await log.read(SCOPE.stream_id)
+        return (
+            repeated == first,
+            retrieval.retrieve_calls,
+            len(model.requests),
+            sum(event.event_type == "AnswerCommitted" for event in events),
+        ), len(history)
+
+    counters, history_length = asyncio.run(scenario())
+
+    assert counters == (True, 1, 1, 1)
+    assert history_length == 2
+
+
+def test_reusing_a_request_key_for_different_content_fails_before_retrieval() -> None:
+    async def scenario() -> int:
+        conversations = await _conversations()
+        retrieval = _EmptyRetrieval()
+        service = _chat(retrieval, conversations, [ScriptedTurn(text=SECRET)])
+
+        await service.ask(_request(), _sink(InMemoryEventLog()))
+        with pytest.raises(ChatTurnConflictError, match="idempotency conflict"):
+            await service.ask(
+                replace(_request(), question="different question"),
+                _sink(InMemoryEventLog()),
+            )
+        return retrieval.retrieve_calls
+
+    assert asyncio.run(scenario()) == 1
+
+
 def test_chat_publishes_only_a_safe_refusal_when_sources_change() -> None:
-    async def scenario() -> tuple[list[str], tuple[Any, ...]]:
+    async def scenario() -> tuple[list[str], tuple[Any, ...], str]:
         conversations = await _conversations()
         service = _chat(
             _ChangingRetrieval(),
@@ -236,16 +291,92 @@ def test_chat_publishes_only_a_safe_refusal_when_sources_change() -> None:
             tenant_id="tenant_a",
             principal_id="user_1",
         )
-        return [message.role for message in history], await log.read(SCOPE.stream_id)
+        return (
+            [message.role for message in history],
+            await log.read(SCOPE.stream_id),
+            turn.outcome.output_text,
+        )
 
-    roles, events = asyncio.run(scenario())
+    roles, events, retained_output = asyncio.run(scenario())
     serialized = "\n".join(event.model_dump_json() for event in events)
 
     assert roles == ["user", "assistant"]
     assert SECRET not in serialized
+    assert retained_output == ""
     assert events[-1].event_type == "AnswerWithheld"
     assert SAFE_REFUSAL not in serialized
     assert "no longer able to read" in serialized
+
+
+class _FailFirstReleaseTransitionStore(InMemoryConversationStore):
+    """Inject the crash window after event publication, before DB visibility."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_release = True
+
+    async def mark_released(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        turn_id: str,
+    ) -> StoredChatTurn:
+        if self.fail_next_release:
+            self.fail_next_release = False
+            raise RuntimeError("injected failure after answer publication")
+        return await super().mark_released(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            turn_id=turn_id,
+        )
+
+
+def test_retry_heals_a_crash_after_answer_publication_without_duplication() -> None:
+    async def scenario() -> tuple[int, int, list[str], str]:
+        conversations = _FailFirstReleaseTransitionStore()
+        await conversations.create_session(
+            session_id="ses_1",
+            tenant_id="tenant_a",
+            owner_id="user_1",
+        )
+        service = _chat(
+            _EmptyRetrieval(),
+            conversations,
+            [ScriptedTurn(text=SECRET)],
+        )
+        log = InMemoryEventLog()
+
+        with pytest.raises(RuntimeError, match="injected failure"):
+            await service.ask(_request(), _sink(log))
+        history_before_retry = await service.history(
+            session_id="ses_1",
+            tenant_id="tenant_a",
+            principal_id="user_1",
+        )
+
+        recovered = await service.ask(_request(), _sink(log))
+        history = await service.history(
+            session_id="ses_1",
+            tenant_id="tenant_a",
+            principal_id="user_1",
+        )
+        events = await log.read(SCOPE.stream_id)
+        return (
+            len(history_before_retry),
+            sum(event.event_type == "AnswerCommitted" for event in events),
+            [message.role for message in history],
+            recovered.answer,
+        )
+
+    hidden_count, committed_events, roles, answer = asyncio.run(scenario())
+
+    assert hidden_count == 1
+    assert committed_events == 1
+    assert roles == ["user", "assistant"]
+    assert answer == SECRET
 
 
 def test_a_failed_model_run_is_not_saved_or_published_as_an_answer() -> None:
@@ -309,6 +440,7 @@ def test_an_unauthorized_session_is_rejected_before_retrieval() -> None:
                         tenant_id="tenant_a",
                     ),
                     knowledge_base_id="kb_main",
+                    idempotency_key="unauthorized-request",
                 ),
                 _sink(InMemoryEventLog()),
             )
@@ -342,6 +474,7 @@ def test_a_later_turn_replays_only_committed_conversation_history() -> None:
                     tenant_id="tenant_a",
                 ),
                 knowledge_base_id="kb_main",
+                idempotency_key="request-2",
                 run_id="run_2",
                 stream_id="ses_1",
             ),
@@ -397,6 +530,7 @@ def test_a_withheld_candidate_is_never_replayed_into_the_next_turn() -> None:
                     tenant_id="tenant_a",
                 ),
                 knowledge_base_id="kb_main",
+                idempotency_key="request-2",
                 run_id="run_2",
                 stream_id="ses_1",
             ),

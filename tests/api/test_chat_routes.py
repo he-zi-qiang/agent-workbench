@@ -38,7 +38,11 @@ NEIGHBOUR = "user_neighbour"
 OWNER_HEADERS = {"x-tenant-id": TENANT, "x-principal-id": OWNER}
 NEIGHBOUR_HEADERS = {"x-tenant-id": TENANT, "x-principal-id": NEIGHBOUR}
 
-TABLES = "messages, conversation_sessions, events, event_streams"
+TABLES = "chat_turns, messages, conversation_sessions, events, event_streams"
+
+
+def _turn_headers(headers: dict[str, str], key: str = "request-1") -> dict[str, str]:
+    return {**headers, "idempotency-key": key}
 
 
 def _dsn() -> str:
@@ -270,7 +274,7 @@ def test_a_mounted_route_answers(tmp_path: Path) -> None:
         session = await _open(client, OWNER_HEADERS)
         response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={"question": "what closed", "knowledge_base_id": "kb_main"},
         )
         payload = response.json()
@@ -283,6 +287,83 @@ def test_a_mounted_route_answers(tmp_path: Path) -> None:
     assert run_id.startswith("run_")
 
 
+def test_an_idempotency_key_is_required_for_each_turn(tmp_path: Path) -> None:
+    async def scenario(client: httpx.AsyncClient) -> int:
+        session = await _open(client, OWNER_HEADERS)
+        response = await client.post(
+            f"{CHAT_PREFIX}/sessions/{session}/messages",
+            headers=OWNER_HEADERS,
+            json={"question": "what closed", "knowledge_base_id": "kb_main"},
+        )
+        return response.status_code
+
+    assert _run_mounted(scenario, tmp_path) == 422
+
+
+def test_retrying_the_same_http_turn_returns_the_same_result_once(
+    tmp_path: Path,
+) -> None:
+    async def scenario(
+        client: httpx.AsyncClient,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+        session = await _open(client, OWNER_HEADERS)
+        path = f"{CHAT_PREFIX}/sessions/{session}/messages"
+        body = {"question": "what closed", "knowledge_base_id": "kb_main"}
+        first = await client.post(
+            path,
+            headers=_turn_headers(OWNER_HEADERS),
+            json=body,
+        )
+        repeated = await client.post(
+            path,
+            headers=_turn_headers(OWNER_HEADERS),
+            json=body,
+        )
+        history = await client.get(path, headers=OWNER_HEADERS)
+        assert first.status_code == repeated.status_code == 200
+        return (
+            first.json(),
+            repeated.json(),
+            [message["role"] for message in history.json()["messages"]],
+        )
+
+    first, repeated, roles = _run_mounted(scenario, tmp_path)
+
+    assert repeated == first
+    assert first["turn_id"].startswith("turn_")
+    assert roles == ["user", "assistant"]
+
+
+def test_reusing_an_http_idempotency_key_for_another_question_conflicts(
+    tmp_path: Path,
+) -> None:
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, list[str]]:
+        session = await _open(client, OWNER_HEADERS)
+        path = f"{CHAT_PREFIX}/sessions/{session}/messages"
+        headers = _turn_headers(OWNER_HEADERS)
+        first = await client.post(
+            path,
+            headers=headers,
+            json={"question": "what closed", "knowledge_base_id": "kb_main"},
+        )
+        assert first.status_code == 200
+        conflicting = await client.post(
+            path,
+            headers=headers,
+            json={"question": "what opened", "knowledge_base_id": "kb_main"},
+        )
+        history = await client.get(path, headers=OWNER_HEADERS)
+        return (
+            conflicting.status_code,
+            [message["role"] for message in history.json()["messages"]],
+        )
+
+    status_code, roles = _run_mounted(scenario, tmp_path)
+
+    assert status_code == 409
+    assert roles == ["user", "assistant"]
+
+
 def test_a_neighbour_cannot_ask_into_someone_elses_session(tmp_path: Path) -> None:
     """A session id in a URL is not a credential."""
 
@@ -290,7 +371,7 @@ def test_a_neighbour_cannot_ask_into_someone_elses_session(tmp_path: Path) -> No
         session = await _open(client, OWNER_HEADERS)
         response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=NEIGHBOUR_HEADERS,
+            headers=_turn_headers(NEIGHBOUR_HEADERS),
             json={"question": "what did they ask", "knowledge_base_id": "kb_main"},
         )
         return response.status_code
@@ -305,7 +386,7 @@ def test_a_neighbour_cannot_read_the_history(tmp_path: Path) -> None:
         session = await _open(client, OWNER_HEADERS)
         await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={"question": "my private question", "knowledge_base_id": "kb_main"},
         )
         response = await client.get(
@@ -324,7 +405,7 @@ def test_the_owner_reads_their_own_history(tmp_path: Path) -> None:
         session = await _open(client, OWNER_HEADERS)
         await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={"question": "what closed", "knowledge_base_id": "kb_main"},
         )
         response = await client.get(
@@ -344,7 +425,7 @@ def test_a_turn_writes_durable_events_into_the_sessions_stream(
         session = await _open(client, OWNER_HEADERS)
         response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={"question": "what closed", "knowledge_base_id": "kb_main"},
         )
         engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
@@ -376,7 +457,7 @@ def test_an_unknown_field_in_the_question_is_refused(tmp_path: Path) -> None:
         session = await _open(client, OWNER_HEADERS)
         response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={
                 "question": "hi",
                 "knowledge_base_id": "kb_main",

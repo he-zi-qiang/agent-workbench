@@ -26,6 +26,8 @@ does it.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 
 from agent_workbench.application.answer_release import AnswerReleaseSink
@@ -35,8 +37,9 @@ from agent_workbench.application.retrieval import (
     SourcesChangedError,
 )
 from agent_workbench.domain.context import Citation, ContextPacket
+from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.identifiers import new_id
-from agent_workbench.domain.messages import Message, assistant_message, user_message
+from agent_workbench.domain.messages import Message, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import (
     AgentOutcome,
@@ -46,7 +49,13 @@ from agent_workbench.domain.runs import (
 )
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import CancellationToken, NullCancellationToken
-from agent_workbench.ports.conversation_store import ConversationStore
+from agent_workbench.ports.conversation_store import (
+    ChatTurnBusyError,
+    ChatTurnConflictError,
+    ChatTurnResult,
+    ChatTurnStore,
+    StoredChatTurn,
+)
 from agent_workbench.ports.event_log import EventSink
 
 SYSTEM_PROMPT = (
@@ -67,6 +76,7 @@ REFUSAL = (
 class ChatTurn:
     """What one question produced."""
 
+    turn_id: str
     answer: str
     citations: tuple[Citation, ...]
     outcome: AgentOutcome
@@ -99,6 +109,7 @@ class ChatRequest:
     question: str
     principal: PrincipalContext
     knowledge_base_id: str
+    idempotency_key: str
     top_k: int = 8
     run_id: str = field(default_factory=lambda: new_id("run"))
     stream_id: str | None = None
@@ -118,7 +129,7 @@ class ChatService:
 
     retrieval: RetrievalService
     executor: AgentExecutor
-    conversations: ConversationStore
+    conversations: ChatTurnStore
     # No default. A turn's ceiling is a deployment decision, and a silent one
     # is how a runaway run becomes somebody's bill.
     budget: RunBudget
@@ -129,59 +140,74 @@ class ChatService:
         sink: EventSink,
         cancellation: CancellationToken | None = None,
     ) -> ChatTurn:
-        """One turn: retrieve, answer, verify, persist."""
+        """Claim, execute, authorize and release one idempotent turn."""
 
-        # Authenticate the session and take the history snapshot before paying
-        # for embedding and vector search. A guessed id must not be a way to
-        # make someone else's session trigger expensive work, even though the
-        # later append would eventually reject it.
-        #
-        # The snapshot contains only committed conversation facts: raw user
-        # questions and answers that passed the release gate (or its safe
-        # refusal). Previous RAG passages are deliberately not stored, so a
-        # later turn cannot replay evidence whose ACL has since changed.
-        history = await self.conversations.history(
+        claim = await self.conversations.claim_turn(
             session_id=request.session_id,
             tenant_id=request.tenant_id,
             principal_id=request.principal_id,
+            idempotency_key=request.idempotency_key,
+            request_hash=_request_hash(request),
+            run_id=request.run_id,
+            user_message=user_message(request.question),
         )
+        turn = claim.turn
+        if turn.run_id != request.run_id:
+            raise ChatTurnConflictError(
+                "the idempotent chat turn belongs to a different run id"
+            )
 
-        context = await self.retrieval.retrieve(
-            RetrievalRequest(
-                query=request.question,
+        if not claim.newly_claimed:
+            if turn.status in {"committed", "withheld"}:
+                return _public_turn(turn)
+            if turn.status == "release_pending":
+                released = await self._release(turn, request, sink)
+                return _public_turn(released)
+            if turn.status in {"failed", "cancelled"}:
+                if turn.failure_outcome is None:  # pragma: no cover - model invariant
+                    raise ChatTurnConflictError("terminal chat turn has no outcome")
+                raise ChatExecutionError(turn.failure_outcome)
+            raise ChatTurnBusyError("the idempotent chat turn is still running")
+
+        try:
+            context = await self.retrieval.retrieve(
+                RetrievalRequest(
+                    query=request.question,
+                    tenant_id=request.tenant_id,
+                    principal_id=request.principal_id,
+                    knowledge_base_id=request.knowledge_base_id,
+                    top_k=request.top_k,
+                )
+            )
+            release = AnswerReleaseSink(sink)
+            outcome = await self.executor.run(
+                _run_request(
+                    request,
+                    context.packet,
+                    self.budget,
+                    history=tuple(record.message for record in claim.history_before),
+                ),
+                release,
+                cancellation if cancellation is not None else NullCancellationToken(),
+            )
+        except Exception as exc:
+            await self.conversations.finish_failed(
+                session_id=request.session_id,
                 tenant_id=request.tenant_id,
                 principal_id=request.principal_id,
-                knowledge_base_id=request.knowledge_base_id,
-                top_k=request.top_k,
+                turn_id=turn.turn_id,
+                outcome=_exception_outcome(request.run_id, exc),
             )
-        )
+            raise
 
-        # Persisted before the model runs. A question the user asked is part of
-        # their history whether or not an answer ever arrives -- losing it on a
-        # provider failure would make the session disagree with what happened.
-        await self.conversations.append(
-            session_id=request.session_id,
-            tenant_id=request.tenant_id,
-            principal_id=request.principal_id,
-            messages=(user_message(request.question),),
-        )
-
-        release = AnswerReleaseSink(sink)
-        outcome = await self.executor.run(
-            _run_request(
-                request,
-                context.packet,
-                self.budget,
-                history=tuple(record.message for record in history),
-            ),
-            release,
-            cancellation if cancellation is not None else NullCancellationToken(),
-        )
         if outcome.status != "completed":
-            # RunFailed/RunCancelled already describe the terminal state. There
-            # is no answer to authorize or remember, and publishing an empty
-            # assistant message would turn an expected failure into a quiet
-            # success in the conversation history.
+            await self.conversations.finish_failed(
+                session_id=request.session_id,
+                tenant_id=request.tenant_id,
+                principal_id=request.principal_id,
+                turn_id=turn.turn_id,
+                outcome=outcome,
+            )
             raise ChatExecutionError(outcome)
 
         try:
@@ -191,26 +217,41 @@ class ChatService:
                 principal_id=request.principal_id,
             )
         except SourcesChangedError:
-            # The model has already written an answer. It is not delivered, and
-            # what goes into the history is the refusal -- storing the answer
-            # would leave the withheld text where the next turn reads it back.
-            await self._remember(request, REFUSAL)
-            await release.withhold(text=REFUSAL)
-            return ChatTurn(
+            result = ChatTurnResult(
+                # The denied candidate must not survive in a retry ledger,
+                # checkpoint, API object or later prompt.
+                outcome=outcome.model_copy(
+                    update={"output_text": "", "output_ref": None, "citations": ()}
+                ),
                 answer=REFUSAL,
-                citations=(),
-                outcome=outcome,
                 withheld=True,
             )
+        except Exception as exc:
+            await self.conversations.finish_failed(
+                session_id=request.session_id,
+                tenant_id=request.tenant_id,
+                principal_id=request.principal_id,
+                turn_id=turn.turn_id,
+                outcome=_exception_outcome(request.run_id, exc),
+            )
+            raise
+        else:
+            answer = outcome.output_text or ""
+            result = ChatTurnResult(
+                outcome=outcome,
+                answer=answer,
+                citations=context.packet.citations,
+            )
 
-        answer = outcome.output_text or ""
-        await self._remember(request, answer)
-        await release.commit(text=answer, citations=context.packet.citations)
-        return ChatTurn(
-            answer=answer,
-            citations=context.packet.citations,
-            outcome=outcome,
+        prepared = await self.conversations.prepare_release(
+            session_id=request.session_id,
+            tenant_id=request.tenant_id,
+            principal_id=request.principal_id,
+            turn_id=turn.turn_id,
+            result=result,
         )
+        released = await self._release(prepared, request, sink, release=release)
+        return _public_turn(released)
 
     async def history(
         self, *, session_id: str, tenant_id: str, principal_id: str
@@ -222,13 +263,80 @@ class ChatService:
         )
         return tuple(record.message for record in stored)
 
-    async def _remember(self, request: ChatRequest, text: str) -> None:
-        await self.conversations.append(
+    async def _release(
+        self,
+        turn: StoredChatTurn,
+        request: ChatRequest,
+        sink: EventSink,
+        *,
+        release: AnswerReleaseSink | None = None,
+    ) -> StoredChatTurn:
+        """Publish a prepared result, then make it visible in history.
+
+        The event append has a stable key. A crash after publication but before
+        the database transition is healed by a retry: the event log returns the
+        original envelope and ``mark_released`` appends the assistant once.
+        """
+
+        if turn.status != "release_pending" or turn.result is None:
+            raise ChatTurnConflictError("chat turn is not ready for release")
+        gate = release if release is not None else AnswerReleaseSink(sink)
+        event_key = f"chat-turn:{turn.turn_id}:answer"
+        if turn.result.withheld:
+            await gate.withhold(text=turn.result.answer, event_key=event_key)
+        else:
+            await gate.commit(
+                text=turn.result.answer,
+                citations=turn.result.citations,
+                event_key=event_key,
+            )
+        return await self.conversations.mark_released(
             session_id=request.session_id,
             tenant_id=request.tenant_id,
             principal_id=request.principal_id,
-            messages=(assistant_message(text=text),),
+            turn_id=turn.turn_id,
         )
+
+
+def _public_turn(turn: StoredChatTurn) -> ChatTurn:
+    """Convert a released durable fact to the public application result."""
+
+    if turn.status not in {"committed", "withheld"} or turn.result is None:
+        raise ChatTurnConflictError("chat turn is not released")
+    return ChatTurn(
+        turn_id=turn.turn_id,
+        answer=turn.result.answer,
+        citations=turn.result.citations,
+        outcome=turn.result.outcome,
+        withheld=turn.result.withheld,
+    )
+
+
+def _request_hash(request: ChatRequest) -> str:
+    """Hash only the semantic request fields covered by the idempotency key."""
+
+    canonical = json.dumps(
+        {
+            "knowledge_base_id": request.knowledge_base_id,
+            "question": request.question,
+            "top_k": request.top_k,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _exception_outcome(run_id: str, exc: Exception) -> AgentOutcome:
+    """Close a claimed turn after an adapter exception without leaking detail."""
+
+    return AgentOutcome(
+        agent_run_id=run_id,
+        status="failed",
+        stop_reason="error",
+        error=ErrorInfo.from_exception(exc),
+    )
 
 
 def _run_request(

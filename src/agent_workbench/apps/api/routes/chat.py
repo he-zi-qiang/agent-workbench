@@ -18,13 +18,16 @@ is delivered. This layer resolves who is asking and passes it down.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, status
+import hashlib
+from typing import Annotated
+
+from fastapi import APIRouter, Header, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_workbench.application.chat import ChatRequest, ChatService, new_session_id
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.context import Citation
-from agent_workbench.domain.identifiers import Identifier, new_id
+from agent_workbench.domain.identifiers import Identifier
 
 CHAT_PREFIX = "/v1/chat"
 
@@ -63,6 +66,7 @@ class AskResponse(BaseModel):
     citations: tuple[Citation, ...]
     withheld: bool
     run_id: Identifier
+    turn_id: Identifier
 
 
 class MessageView(BaseModel):
@@ -94,10 +98,28 @@ async def create_session(
 
 
 @router.post("/sessions/{session_id}/messages")
-async def ask(session_id: str, body: AskRequest, request: Request) -> AskResponse:
+async def ask(
+    session_id: str,
+    body: AskRequest,
+    request: Request,
+    idempotency_key: Annotated[
+        str,
+        Header(
+            alias="Idempotency-Key",
+            min_length=1,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:+=@/-]{0,127}$",
+        ),
+    ],
+) -> AskResponse:
     dependencies = dependencies_of(request)
     principal = dependencies.principals.resolve(request)
-    run_id = new_id("run")
+    run_id = _stable_run_id(
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+        session_id=session_id,
+        idempotency_key=idempotency_key,
+    )
 
     turn = await _chat(request).ask(
         ChatRequest(
@@ -105,6 +127,7 @@ async def ask(session_id: str, body: AskRequest, request: Request) -> AskRespons
             question=body.question,
             principal=principal,
             knowledge_base_id=body.knowledge_base_id,
+            idempotency_key=idempotency_key,
             top_k=body.top_k,
             run_id=run_id,
             stream_id=session_id,
@@ -119,6 +142,7 @@ async def ask(session_id: str, body: AskRequest, request: Request) -> AskRespons
         citations=turn.citations,
         withheld=turn.withheld,
         run_id=turn.outcome.agent_run_id,
+        turn_id=turn.turn_id,
     )
 
 
@@ -155,6 +179,21 @@ def _chat(request: Request) -> ChatService:
     if chat is None:  # pragma: no cover - the router is not mounted without one
         raise RuntimeError("the chat router was registered without a chat service")
     return chat
+
+
+def _stable_run_id(
+    *,
+    tenant_id: str,
+    principal_id: str,
+    session_id: str,
+    idempotency_key: str,
+) -> str:
+    """Derive the retry-stable run id without exposing the client key."""
+
+    material = "\x1f".join(
+        (tenant_id, principal_id, session_id, idempotency_key)
+    ).encode()
+    return f"run_{hashlib.sha256(material).hexdigest()}"
 
 
 __all__ = [
