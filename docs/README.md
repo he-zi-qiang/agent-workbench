@@ -35,9 +35,10 @@
 
 ## 当前事实
 
-截至 2026-07-28，`main@4d03f69` 已包含摄取 Worker 组件；当前开发分支已完成
-PR-035～PR-043 的 Chat 安全发布、多轮、EventLog 演进/幂等、Turn 幂等、原子授权
-发布、固定 lease、无流量恢复和原子过期增量。已经实现并测试：
+截至 2026-07-28，主分支基线为 **`main@e93d7a1`**。PR-035～PR-046 已全部合入：
+Chat 安全发布、多轮、EventLog 演进/幂等、Turn 幂等、原子授权发布、固定 lease、
+无流量恢复、原子过期，以及 Task 工作流状态、Reranker 和 sparse 加载守卫。
+已经实现并测试：
 
 - 框架无关的领域契约、Ports、Fake Adapter 和可复现 CLI；
 - 自研 Runtime 的串行 Tool Loop、Policy/Tool Gateway、预算与取消、并行只读
@@ -47,6 +48,9 @@ PR-035～PR-043 的 Chat 安全发布、多轮、EventLog 演进/幂等、Turn �
 - Local ArtifactStore，以及 Upload / Artifact / Health / Chat / SSE FastAPI 路由；
 - PostgreSQL EventLog 的 gap-free cursor、显式 envelope schema version 与生产者时间戳；
 - BGE-M3 Dense、Qdrant Dense/Hybrid、固定 2-step RAG 与检索评测；
+- BGE reranker：位于授权之后、`top_k` 之前，超时/异常窄回退到已授权顺序；
+- 缺少 `sparse_linear.pt` 时**拒绝构造** sparse 编码器，而不是静默用随机投影；
+- Task 工作流的 checkpoint-safe `TaskState` 与 `TaskWorkflowPort`（仅契约，无 adapter）；
 - Chat answer release gate、source revision 读取栅栏、已提交消息的顺序多轮回放、
   幂等 Turn ledger、固定执行 lease、`running/release_pending` 后台恢复、
   Turn 与 durable `ChatTurnExpired` 原子提交，以及 `knowledge_search` Tool Adapter；
@@ -55,7 +59,8 @@ PR-035～PR-043 的 Chat 安全发布、多轮、EventLog 演进/幂等、Turn �
 
 当前仍未完成：可靠常驻摄取 Worker、旧 Point 物理替换、历史 token
 window/compaction、可验证 Citation、Agentic Retrieval 最终 evidence gate、
-EventLog upcaster/poison-row 隔离、LlamaIndex/LangChain 互操作、LangGraph Task、
+EventLog upcaster/poison-row 隔离、LlamaIndex/LangChain 互操作、三臂消融的
+`hybrid-rerank` 臂、LangGraph Task adapter/节点/checkpointer/Worker、
 Task Registry、Multi-Agent、生产身份认证、UI 和完整部署。
 
 安全边界：当前开发身份解析器信任请求头。监听地址已强制为 loopback（默认
