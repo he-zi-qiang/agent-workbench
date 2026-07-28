@@ -34,7 +34,6 @@ from agent_workbench.application.answer_release import AnswerReleaseSink
 from agent_workbench.application.retrieval import (
     RetrievalRequest,
     RetrievalService,
-    SourcesChangedError,
 )
 from agent_workbench.domain.context import Citation, ContextPacket
 from agent_workbench.domain.errors import ErrorInfo
@@ -49,7 +48,9 @@ from agent_workbench.domain.runs import (
 )
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import CancellationToken, NullCancellationToken
+from agent_workbench.ports.chat_release import ChatReleaseCoordinator
 from agent_workbench.ports.conversation_store import (
+    AuthorizedRevision,
     ChatTurnBusyError,
     ChatTurnConflictError,
     ChatTurnResult,
@@ -130,6 +131,7 @@ class ChatService:
     retrieval: RetrievalService
     executor: AgentExecutor
     conversations: ChatTurnStore
+    releaser: ChatReleaseCoordinator
     # No default. A turn's ceiling is a deployment decision, and a silent one
     # is how a runaway run becomes somebody's bill.
     budget: RunBudget
@@ -142,6 +144,8 @@ class ChatService:
     ) -> ChatTurn:
         """Claim, execute, authorize and release one idempotent turn."""
 
+        if request.stream_id not in {None, request.session_id}:
+            raise ValueError("a Chat event stream must be its conversation session")
         claim = await self.conversations.claim_turn(
             session_id=request.session_id,
             tenant_id=request.tenant_id,
@@ -210,38 +214,19 @@ class ChatService:
             )
             raise ChatExecutionError(outcome)
 
-        try:
-            await self.retrieval.confirm_unchanged(
-                context,
-                tenant_id=request.tenant_id,
-                principal_id=request.principal_id,
-            )
-        except SourcesChangedError:
-            result = ChatTurnResult(
-                # The denied candidate must not survive in a retry ledger,
-                # checkpoint, API object or later prompt.
-                outcome=outcome.model_copy(
-                    update={"output_text": "", "output_ref": None, "citations": ()}
-                ),
-                answer=REFUSAL,
-                withheld=True,
-            )
-        except Exception as exc:
-            await self.conversations.finish_failed(
-                session_id=request.session_id,
-                tenant_id=request.tenant_id,
-                principal_id=request.principal_id,
-                turn_id=turn.turn_id,
-                outcome=_exception_outcome(request.run_id, exc),
-            )
-            raise
-        else:
-            answer = outcome.output_text or ""
-            result = ChatTurnResult(
-                outcome=outcome,
-                answer=answer,
-                citations=context.packet.citations,
-            )
+        answer = outcome.output_text or ""
+        result = ChatTurnResult(
+            outcome=outcome,
+            answer=answer,
+            authorized_revisions=tuple(
+                AuthorizedRevision(
+                    document_id=document_id,
+                    source_revision=source_revision,
+                )
+                for document_id, source_revision in context.authorized_revisions
+            ),
+            citations=context.packet.citations,
+        )
 
         prepared = await self.conversations.prepare_release(
             session_id=request.session_id,
@@ -250,7 +235,7 @@ class ChatService:
             turn_id=turn.turn_id,
             result=result,
         )
-        released = await self._release(prepared, request, sink, release=release)
+        released = await self._release(prepared, request, sink)
         return _public_turn(released)
 
     async def history(
@@ -268,33 +253,24 @@ class ChatService:
         turn: StoredChatTurn,
         request: ChatRequest,
         sink: EventSink,
-        *,
-        release: AnswerReleaseSink | None = None,
     ) -> StoredChatTurn:
-        """Publish a prepared result, then make it visible in history.
+        """Cross the final authorization fence and expose one durable result.
 
-        The event append has a stable key. A crash after publication but before
-        the database transition is healed by a retry: the event log returns the
-        original envelope and ``mark_released`` appends the assistant once.
+        PostgreSQL locks every cited source and commits the answer event,
+        assistant message and Turn transition in the same transaction. The
+        stable event key remains a defence against duplicate callers; no
+        answer-bearing state becomes externally visible before that unit of
+        work commits.
         """
 
-        if turn.status != "release_pending" or turn.result is None:
-            raise ChatTurnConflictError("chat turn is not ready for release")
-        gate = release if release is not None else AnswerReleaseSink(sink)
-        event_key = f"chat-turn:{turn.turn_id}:answer"
-        if turn.result.withheld:
-            await gate.withhold(text=turn.result.answer, event_key=event_key)
-        else:
-            await gate.commit(
-                text=turn.result.answer,
-                citations=turn.result.citations,
-                event_key=event_key,
-            )
-        return await self.conversations.mark_released(
-            session_id=request.session_id,
+        return await self.releaser.release(
+            turn=turn,
             tenant_id=request.tenant_id,
             principal_id=request.principal_id,
-            turn_id=turn.turn_id,
+            stream_id=request.session_id,
+            run_id=request.run_id,
+            refusal_text=REFUSAL,
+            sink=sink,
         )
 
 
@@ -361,7 +337,7 @@ def _run_request(
     return AgentRunRequest(
         trace=TraceContext(agent_run_id=request.run_id),
         run_kind="chat",
-        stream_id=request.stream_id or request.session_id,
+        stream_id=request.session_id,
         principal=request.principal,
         # Deny-shaped by default: an empty allowlist permits no tool at all,
         # which is what "the model does not decide whether to search" means

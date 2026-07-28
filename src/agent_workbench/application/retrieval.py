@@ -28,6 +28,7 @@ from agent_workbench.domain.context import (
     ContextPacket,
     SourceLocator,
 )
+from agent_workbench.ports.conversation_store import AuthorizedRevision
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.embedding import EmbeddingPort
 from agent_workbench.ports.sparse import SparseEncoderPort
@@ -183,9 +184,37 @@ class RetrievalService:
         revoked and re-granted between the two checks still fails.
         """
 
-        expected = dict(context.authorized_revisions)
+        revisions = tuple(
+            AuthorizedRevision(
+                document_id=document_id,
+                source_revision=source_revision,
+            )
+            for document_id, source_revision in context.authorized_revisions
+        )
+        if not await self.revisions_unchanged(
+            revisions,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        ):
+            raise SourcesChangedError(
+                "a document this answer was built from is no longer readable "
+                "at the revision it was read at"
+            )
+
+    async def revisions_unchanged(
+        self,
+        revisions: tuple[AuthorizedRevision, ...],
+        *,
+        tenant_id: str,
+        principal_id: str,
+    ) -> bool:
+        """Whether a persisted release snapshot is still readable unchanged."""
+
+        expected = {
+            revision.document_id: revision.source_revision for revision in revisions
+        }
         if not expected:
-            return
+            return True
 
         readable = await self.documents.readable_versions(
             tenant_id=tenant_id,
@@ -198,10 +227,8 @@ class RetrievalService:
 
         for document_id, revision in expected.items():
             if current.get(document_id) != revision:
-                raise SourcesChangedError(
-                    "a document this answer was built from is no longer readable "
-                    "at the revision it was read at"
-                )
+                return False
+        return True
 
 
 def _packet(chunks: tuple[ScoredChunk, ...]) -> ContextPacket:

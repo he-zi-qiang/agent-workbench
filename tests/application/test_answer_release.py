@@ -10,6 +10,7 @@ import pytest
 
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.memory import (
+    InMemoryChatReleaseCoordinator,
     InMemoryConversationStore,
     InMemoryEventLog,
 )
@@ -23,13 +24,18 @@ from agent_workbench.application.chat import (
     ChatService,
 )
 from agent_workbench.application.retrieval import AuthorizedContext
-from agent_workbench.domain.context import Citation, ContextPacket
+from agent_workbench.domain.context import (
+    Citation,
+    ContextChunk,
+    ContextPacket,
+)
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.events import AnswerCommitted, ModelCompleted, ModelDelta
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.conversation_store import (
     ChatTurnConflictError,
+    ChatTurnResult,
     StoredChatTurn,
 )
 from agent_workbench.ports.event_log import EventScope
@@ -133,6 +139,14 @@ class _EmptyRetrieval:
     async def confirm_unchanged(self, context: Any, **kwargs: Any) -> None:
         self.confirmed = True
 
+    async def revisions_unchanged(
+        self,
+        revisions: Any,
+        **kwargs: Any,
+    ) -> bool:
+        self.confirmed = True
+        return True
+
 
 class _ChangingRetrieval(_EmptyRetrieval):
     async def confirm_unchanged(self, context: Any, **kwargs: Any) -> None:
@@ -140,11 +154,20 @@ class _ChangingRetrieval(_EmptyRetrieval):
 
         raise SourcesChangedError("changed at the release barrier")
 
+    async def revisions_unchanged(
+        self,
+        revisions: Any,
+        **kwargs: Any,
+    ) -> bool:
+        return False
+
 
 def _chat(
     retrieval: Any,
     conversations: InMemoryConversationStore,
     turns: list[ScriptedTurn],
+    *,
+    releaser: Any | None = None,
 ) -> ChatService:
     registry = StaticToolRegistry([])
     return ChatService(
@@ -158,6 +181,14 @@ def _chat(
             policy_identity="test-policy",
         ),
         conversations=conversations,
+        releaser=(
+            releaser
+            if releaser is not None
+            else InMemoryChatReleaseCoordinator(
+                conversations=conversations,
+                revisions=retrieval,
+            )
+        ),
         budget=RunBudget(max_steps=1, max_tool_calls=1),
     )
 
@@ -322,6 +353,7 @@ class _FailFirstReleaseTransitionStore(InMemoryConversationStore):
         tenant_id: str,
         principal_id: str,
         turn_id: str,
+        withheld_result: ChatTurnResult | None = None,
     ) -> StoredChatTurn:
         if self.fail_next_release:
             self.fail_next_release = False
@@ -331,6 +363,7 @@ class _FailFirstReleaseTransitionStore(InMemoryConversationStore):
             tenant_id=tenant_id,
             principal_id=principal_id,
             turn_id=turn_id,
+            withheld_result=withheld_result,
         )
 
 
@@ -377,6 +410,101 @@ def test_retry_heals_a_crash_after_answer_publication_without_duplication() -> N
     assert committed_events == 1
     assert roles == ["user", "assistant"]
     assert answer == SECRET
+
+
+class _MutableRevisionRetrieval(_EmptyRetrieval):
+    def __init__(self) -> None:
+        self.allowed = True
+        self.confirmed = False
+        self.retrieve_calls = 0
+
+    async def retrieve(self, request: Any) -> AuthorizedContext:
+        self.retrieve_calls += 1
+        citation = Citation(
+            chunk_id="chunk_1",
+            document_id="doc_1",
+            document_version="version_1",
+        )
+        return AuthorizedContext(
+            packet=ContextPacket(
+                chunks=(
+                    ContextChunk(
+                        chunk_id="chunk_1",
+                        document_id="doc_1",
+                        document_version="version_1",
+                        tenant_id="tenant_a",
+                        text="authorized evidence",
+                    ),
+                ),
+                citations=(citation,),
+            ),
+            authorized_revisions=(("doc_1", 1),),
+        )
+
+    async def revisions_unchanged(
+        self,
+        revisions: Any,
+        **kwargs: Any,
+    ) -> bool:
+        self.confirmed = True
+        return self.allowed
+
+
+class _FailBeforePublicationCoordinator:
+    def __init__(self, inner: InMemoryChatReleaseCoordinator) -> None:
+        self.inner = inner
+        self.fail_next_release = True
+
+    async def release(self, **kwargs: Any) -> StoredChatTurn:
+        if self.fail_next_release:
+            self.fail_next_release = False
+            raise RuntimeError("injected failure before answer publication")
+        return await self.inner.release(**kwargs)
+
+
+def test_retry_reauthorizes_a_pending_candidate_before_publication() -> None:
+    async def scenario() -> tuple[str, str, list[str], list[str]]:
+        conversations = await _conversations()
+        retrieval = _MutableRevisionRetrieval()
+        releaser = _FailBeforePublicationCoordinator(
+            InMemoryChatReleaseCoordinator(
+                conversations=conversations,
+                revisions=retrieval,
+            )
+        )
+        service = _chat(
+            retrieval,
+            conversations,
+            [ScriptedTurn(text=SECRET)],
+            releaser=releaser,
+        )
+        log = InMemoryEventLog()
+
+        with pytest.raises(RuntimeError, match="before answer publication"):
+            await service.ask(_request(), _sink(log))
+        retrieval.allowed = False
+
+        recovered = await service.ask(_request(), _sink(log))
+        history = await service.history(
+            session_id="ses_1",
+            tenant_id="tenant_a",
+            principal_id="user_1",
+        )
+        events = await log.read(SCOPE.stream_id)
+        return (
+            recovered.answer,
+            recovered.outcome.output_text,
+            [message.text() for message in history],
+            [event.event_type for event in events],
+        )
+
+    answer, retained_output, history, event_types = asyncio.run(scenario())
+
+    assert "no longer able to read" in answer
+    assert retained_output == ""
+    assert SECRET not in "\n".join(history)
+    assert event_types.count("AnswerWithheld") == 1
+    assert "AnswerCommitted" not in event_types
 
 
 def test_a_failed_model_run_is_not_saved_or_published_as_an_answer() -> None:

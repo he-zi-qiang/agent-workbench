@@ -22,6 +22,7 @@ from agent_workbench.domain.runs import AgentOutcome
 from agent_workbench.domain.schema import DOMAIN_SCHEMA_VERSION, VersionedModel
 from agent_workbench.domain.tools import ToolSpec
 from agent_workbench.ports.conversation_store import (
+    AuthorizedRevision,
     ChatTurnClaim,
     ChatTurnResult,
     ConversationSession,
@@ -41,6 +42,12 @@ COMPLETED_OUTCOME = AgentOutcome(
 TURN_RESULT = ChatTurnResult(
     outcome=COMPLETED_OUTCOME,
     answer="Qdrant owns fusion.",
+    authorized_revisions=(
+        AuthorizedRevision(
+            document_id="doc_0000000000000000000000000000001",
+            source_revision=1,
+        ),
+    ),
     citations=(
         Citation(
             chunk_id="chunk_00000000000000000000000000001",

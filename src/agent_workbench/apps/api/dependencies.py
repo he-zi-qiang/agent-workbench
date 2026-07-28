@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.persistence import (
+    PostgresChatReleaseCoordinator,
     PostgresConversationStore,
     PostgresDocumentStore,
     PostgresEventLog,
@@ -221,6 +222,7 @@ def _assemble_chat(
             policy_identity=f"api-{config.deployment_scope}",
         ),
         conversations=PostgresConversationStore(engine),
+        releaser=PostgresChatReleaseCoordinator(engine),
         budget=RunBudget(max_steps=1, max_tool_calls=1),
     )
     return chat, None, client

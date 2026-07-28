@@ -177,6 +177,7 @@ async def _mounted(root: Path, engine: Any, index: Any) -> Any:
     from agent_workbench.adapters.embedding import DeterministicEmbedder
     from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
     from agent_workbench.adapters.persistence import (
+        PostgresChatReleaseCoordinator,
         PostgresConversationStore,
         PostgresDocumentStore,
     )
@@ -209,6 +210,7 @@ async def _mounted(root: Path, engine: Any, index: Any) -> Any:
             policy_identity="test-policy",
         ),
         conversations=PostgresConversationStore(engine),
+        releaser=PostgresChatReleaseCoordinator(engine),
         budget=RunBudget(max_steps=1, max_tool_calls=1),
     )
 

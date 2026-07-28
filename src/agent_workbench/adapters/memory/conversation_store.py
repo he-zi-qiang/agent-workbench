@@ -198,6 +198,7 @@ class InMemoryConversationStore:
         tenant_id: str,
         principal_id: str,
         turn_id: str,
+        withheld_result: ChatTurnResult | None = None,
     ) -> StoredChatTurn:
         """Publish the prepared fact as committed or withheld exactly once."""
 
@@ -209,27 +210,52 @@ class InMemoryConversationStore:
             )
             turn = self._require_turn(turn_id=turn_id, session_id=session_id)
             if turn.status in {"committed", "withheld"}:
+                if withheld_result is not None and turn.result != withheld_result:
+                    raise ChatTurnConflictError(
+                        "chat turn withheld result conflicts with its terminal fact"
+                    )
                 return turn
             if turn.status != "release_pending" or turn.result is None:
                 raise ChatTurnConflictError(
                     "chat turn cannot be released from its current state"
                 )
+            result = (
+                self._validated_withheld_result(turn, withheld_result)
+                if withheld_result is not None
+                else turn.result
+            )
 
             stored_assistant = StoredMessage(
                 message_id=new_message_id(),
                 session_id=session_id,
                 sequence=len(self._messages[session_id]) + 1,
-                message=assistant_message(text=turn.result.answer),
+                message=assistant_message(text=result.answer),
             )
             released = self._updated_turn(
                 turn,
-                status="withheld" if turn.result.withheld else "committed",
+                status="withheld" if result.withheld else "committed",
                 assistant_message_id=stored_assistant.message_id,
+                result=result,
             )
             self._messages[session_id].append(stored_assistant)
             self._turns[turn_id] = released
             self._active_turn_ids.pop(session_id, None)
             return released
+
+    @staticmethod
+    def _validated_withheld_result(
+        turn: StoredChatTurn,
+        result: ChatTurnResult,
+    ) -> ChatTurnResult:
+        if not result.withheld:
+            raise ChatTurnConflictError(
+                "a release result override must be a safe withheld result"
+            )
+        if result.outcome.agent_run_id != turn.run_id:
+            raise ChatTurnConflictError(
+                "a withheld result must belong to the chat turn's run"
+            )
+        return result
 
     async def finish_failed(
         self,

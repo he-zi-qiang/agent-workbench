@@ -91,66 +91,97 @@ class PostgresEventLog:
                 parent_event_id=parent_event_id,
             )
 
-        serialized_payload = payload.model_dump(mode="json")
         async with self._engine.begin() as connection:
-            last_sequence = await self._lock_stream(connection, scope)
-            if event_key is not None:
-                existing = (
-                    (
-                        await connection.execute(
-                            select(events).where(
-                                events.c.stream_id == scope.stream_id,
-                                events.c.event_key == event_key,
-                            )
+            return await self.append_durable_in_transaction(
+                connection,
+                scope,
+                payload,
+                parent_event_id=parent_event_id,
+                event_key=event_key,
+            )
+
+    async def append_durable_in_transaction(
+        self,
+        connection: AsyncConnection,
+        scope: EventScope,
+        payload: EventPayload,
+        *,
+        parent_event_id: str | None = None,
+        event_key: EventKey | None = None,
+    ) -> EventEnvelope:
+        """Append a durable event using the caller's open transaction.
+
+        This is intentionally a PostgreSQL-adapter capability rather than part
+        of ``EventLogPort``. Most producers should use :meth:`append`; the
+        release coordinator needs the narrower form so the authorization
+        fence, answer event and conversation transition either all commit or
+        all roll back.
+        """
+
+        durability = EVENT_DURABILITY[payload.kind]
+        if durability != "durable":
+            raise ValueError("an in-transaction event append must be durable")
+        event_key = validate_event_key(event_key)
+        serialized_payload = payload.model_dump(mode="json")
+
+        last_sequence = await self._lock_stream(connection, scope)
+        if event_key is not None:
+            existing = (
+                (
+                    await connection.execute(
+                        select(events).where(
+                            events.c.stream_id == scope.stream_id,
+                            events.c.event_key == event_key,
                         )
                     )
-                    .mappings()
-                    .first()
                 )
-                if existing is not None:
-                    _require_same_event(
-                        existing,
-                        scope=scope,
-                        payload=serialized_payload,
-                        parent_event_id=parent_event_id,
-                    )
-                    return _envelope_from_row(existing)
-
-            sequence = last_sequence + 1
-            envelope = EventEnvelope(
-                event_id=new_event_id(),
-                stream_id=scope.stream_id,
-                run_id=scope.run_id,
-                event_type=payload.kind,
-                durability=durability,
-                timestamp=self._clock(),
-                payload=payload,
-                sequence=sequence,
-                task_id=scope.task_id,
-                graph_node_id=scope.graph_node_id,
-                parent_event_id=parent_event_id,
+                .mappings()
+                .first()
             )
-            await connection.execute(
-                update(event_streams)
-                .where(event_streams.c.stream_id == scope.stream_id)
-                .values(last_sequence=sequence)
-            )
-            await connection.execute(
-                insert(events).values(
-                    event_id=envelope.event_id,
-                    stream_id=envelope.stream_id,
-                    run_id=envelope.run_id,
-                    sequence=sequence,
-                    schema_version=envelope.schema_version,
-                    event_type=envelope.event_type,
+            if existing is not None:
+                _require_same_event(
+                    existing,
+                    scope=scope,
                     payload=serialized_payload,
-                    recorded_at=envelope.timestamp,
-                    task_id=envelope.task_id,
-                    graph_node_id=envelope.graph_node_id,
-                    parent_event_id=envelope.parent_event_id,
-                    event_key=event_key,
+                    parent_event_id=parent_event_id,
                 )
+                return _envelope_from_row(existing)
+
+        sequence = last_sequence + 1
+        envelope = EventEnvelope(
+            event_id=new_event_id(),
+            stream_id=scope.stream_id,
+            run_id=scope.run_id,
+            event_type=payload.kind,
+            durability=durability,
+            timestamp=self._clock(),
+            payload=payload,
+            sequence=sequence,
+            task_id=scope.task_id,
+            graph_node_id=scope.graph_node_id,
+            parent_event_id=parent_event_id,
+        )
+        await connection.execute(
+            update(event_streams)
+            .where(event_streams.c.stream_id == scope.stream_id)
+            .values(last_sequence=sequence)
+        )
+        await connection.execute(
+            insert(events).values(
+                event_id=envelope.event_id,
+                stream_id=envelope.stream_id,
+                run_id=envelope.run_id,
+                sequence=sequence,
+                schema_version=envelope.schema_version,
+                event_type=envelope.event_type,
+                payload=serialized_payload,
+                recorded_at=envelope.timestamp,
+                task_id=envelope.task_id,
+                graph_node_id=envelope.graph_node_id,
+                parent_event_id=envelope.parent_event_id,
+                event_key=event_key,
             )
+        )
         return envelope
 
     async def read(

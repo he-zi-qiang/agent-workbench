@@ -19,7 +19,12 @@ from agent_workbench.ports.cancellation import (
     CancellationToken,
     NullCancellationToken,
 )
+from agent_workbench.ports.chat_release import (
+    ChatReleaseCoordinator,
+    EvidenceRevisionGuard,
+)
 from agent_workbench.ports.conversation_store import (
+    AuthorizedRevision,
     ChatTurnBusyError,
     ChatTurnClaim,
     ChatTurnConflictError,
@@ -59,8 +64,10 @@ from agent_workbench.ports.tools import (
 __all__ = [
     "AgentExecutor",
     "ArtifactStore",
+    "AuthorizedRevision",
     "CancellationSource",
     "CancellationToken",
+    "ChatReleaseCoordinator",
     "ChatTurnBusyError",
     "ChatTurnClaim",
     "ChatTurnConflictError",
@@ -73,6 +80,7 @@ __all__ = [
     "EventLogPort",
     "EventScope",
     "EventSink",
+    "EvidenceRevisionGuard",
     "IdempotencyKey",
     "ModelEvent",
     "ModelPort",

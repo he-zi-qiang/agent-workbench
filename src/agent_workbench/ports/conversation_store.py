@@ -20,7 +20,12 @@ from agent_workbench.domain.context import Citation
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.messages import Message
 from agent_workbench.domain.runs import AgentOutcome
-from agent_workbench.domain.schema import BoundedText, ShortText, VersionedModel
+from agent_workbench.domain.schema import (
+    BoundedText,
+    DomainModel,
+    ShortText,
+    VersionedModel,
+)
 
 IdempotencyKey = Annotated[
     str,
@@ -70,11 +75,19 @@ class StoredMessage(VersionedModel):
     message: Message
 
 
+class AuthorizedRevision(DomainModel):
+    """One document revision on which a pending answer is allowed to rely."""
+
+    document_id: Identifier
+    source_revision: int = Field(ge=1)
+
+
 class ChatTurnResult(VersionedModel):
     """The completed model outcome and the answer awaiting release."""
 
     outcome: AgentOutcome
     answer: BoundedText
+    authorized_revisions: tuple[AuthorizedRevision, ...]
     citations: tuple[Citation, ...] = ()
     withheld: bool = False
 
@@ -82,9 +95,15 @@ class ChatTurnResult(VersionedModel):
     def validate_release_candidate(self) -> ChatTurnResult:
         if self.outcome.status != "completed":
             raise ValueError("a release candidate requires a completed outcome")
+        revision_ids = tuple(
+            revision.document_id for revision in self.authorized_revisions
+        )
+        if revision_ids != tuple(sorted(set(revision_ids))):
+            raise ValueError("authorized revisions must be unique and sorted")
         if self.withheld:
             if (
                 self.citations
+                or self.authorized_revisions
                 or self.outcome.output_text
                 or self.outcome.output_ref is not None
                 or self.outcome.citations
@@ -94,6 +113,10 @@ class ChatTurnResult(VersionedModel):
                 )
         elif self.answer != self.outcome.output_text:
             raise ValueError("a committed answer must match the completed outcome")
+        elif set(revision_ids) != {citation.document_id for citation in self.citations}:
+            raise ValueError(
+                "authorized revisions must match the cited evidence documents"
+            )
         return self
 
 
@@ -275,8 +298,15 @@ class ChatTurnStore(ConversationStore, Protocol):
         tenant_id: str,
         principal_id: str,
         turn_id: str,
+        withheld_result: ChatTurnResult | None = None,
     ) -> StoredChatTurn:
-        """Append one assistant and commit/withhold the prepared result."""
+        """Append one assistant and commit/withhold the prepared result.
+
+        ``withheld_result`` is the only allowed override: an atomic release
+        fence uses it when the pending candidate's evidence changed. It must be
+        a scrubbed withheld result for the same run; callers cannot replace one
+        publishable answer with another.
+        """
         ...
 
     async def finish_failed(
@@ -293,6 +323,7 @@ class ChatTurnStore(ConversationStore, Protocol):
 
 
 __all__ = [
+    "AuthorizedRevision",
     "ChatTurnBusyError",
     "ChatTurnClaim",
     "ChatTurnConflictError",

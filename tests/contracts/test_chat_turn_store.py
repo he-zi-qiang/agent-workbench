@@ -13,6 +13,7 @@ from agent_workbench.domain.errors import ErrorInfo, NotFoundError
 from agent_workbench.domain.messages import assistant_message, user_message
 from agent_workbench.domain.runs import AgentOutcome
 from agent_workbench.ports.conversation_store import (
+    AuthorizedRevision,
     ChatTurnBusyError,
     ChatTurnClaim,
     ChatTurnConflictError,
@@ -64,6 +65,9 @@ def _completed(*, answer: str = "grounded answer") -> ChatTurnResult:
             output_text=answer,
         ),
         answer=answer,
+        authorized_revisions=(
+            AuthorizedRevision(document_id="document_1", source_revision=1),
+        ),
         citations=(
             Citation(
                 chunk_id="chunk_1",
@@ -83,6 +87,7 @@ def _withheld() -> ChatTurnResult:
             output_text="",
         ),
         answer="The source is no longer available.",
+        authorized_revisions=(),
         withheld=True,
     )
 
@@ -112,6 +117,7 @@ def test_a_withheld_turn_cannot_retain_the_denied_model_output() -> None:
                 output_text="denied candidate",
             ),
             answer="The source is no longer available.",
+            authorized_revisions=(),
             withheld=True,
         )
 
@@ -126,6 +132,7 @@ def test_a_committed_answer_matches_the_outcome_that_produced_it() -> None:
                 output_text="model result",
             ),
             answer="different answer",
+            authorized_revisions=(),
         )
 
 
@@ -549,6 +556,66 @@ def test_mark_released_uses_the_prepared_result_and_is_idempotent(
     assert first.assistant_message_id is not None
     assert second == first
     assert history == ["current question", result.answer]
+
+
+def test_final_authorization_can_replace_a_pending_candidate_with_a_safe_refusal(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(store: ChatTurnStore) -> tuple[StoredChatTurn, list[str]]:
+        await _with_session(store)
+        claim = await _claim(store)
+        await store.prepare_release(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            result=_completed(answer="candidate that was later revoked"),
+        )
+        released = await store.mark_released(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            withheld_result=_withheld(),
+        )
+        history = await store.history(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+        )
+        return released, [message.message.text() for message in history]
+
+    released, history = chat_turn_conversations.run(scenario)
+
+    assert released.status == "withheld"
+    assert released.result == _withheld()
+    assert "candidate that was later revoked" not in released.model_dump_json()
+    assert history == ["current question", _withheld().answer]
+
+
+def test_release_override_cannot_replace_one_publishable_answer_with_another(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(store: ChatTurnStore) -> None:
+        await _with_session(store)
+        claim = await _claim(store)
+        await store.prepare_release(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            result=_completed(),
+        )
+        await store.mark_released(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            withheld_result=_completed(answer="different publishable answer"),
+        )
+
+    with pytest.raises(ChatTurnConflictError, match="safe withheld"):
+        chat_turn_conversations.run(scenario)
 
 
 @pytest.mark.parametrize(

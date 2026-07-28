@@ -247,37 +247,109 @@ class PostgresConversationStore:
         tenant_id: str,
         principal_id: str,
         turn_id: str,
+        withheld_result: ChatTurnResult | None = None,
     ) -> StoredChatTurn:
         """Append the visible assistant only after publication has succeeded."""
 
         async with self._engine.begin() as connection:
             await self._locked_session(connection, session_id, tenant_id, principal_id)
-            turn = await self._locked_turn(
+            return await self.mark_released_in_transaction(
                 connection,
                 session_id=session_id,
                 turn_id=turn_id,
+                withheld_result=withheld_result,
             )
-            if turn.status in {"committed", "withheld"}:
-                return turn
-            if turn.status != "release_pending" or turn.result is None:
-                raise ChatTurnConflictError(
-                    "chat turn cannot be released from its current state"
-                )
 
-            stored_assistant = (
-                await self._append_messages(
-                    connection,
-                    session_id=session_id,
-                    messages=(assistant_message(text=turn.result.answer),),
+    async def mark_released_in_transaction(
+        self,
+        connection: AsyncConnection,
+        *,
+        session_id: str,
+        turn_id: str,
+        withheld_result: ChatTurnResult | None = None,
+    ) -> StoredChatTurn:
+        """Release a turn using a transaction whose session is already locked.
+
+        Only the PostgreSQL release coordinator should normally use this
+        method. It exists so the answer event and assistant history row share
+        the authorization-fence transaction; callers using the ordinary port
+        method still get their own authenticated transaction above.
+        """
+
+        turn = await self._locked_turn(
+            connection,
+            session_id=session_id,
+            turn_id=turn_id,
+        )
+        if turn.status in {"committed", "withheld"}:
+            if withheld_result is not None and turn.result != withheld_result:
+                raise ChatTurnConflictError(
+                    "chat turn withheld result conflicts with its terminal fact"
                 )
-            )[0]
-            released = self._updated_turn(
-                turn,
-                status="withheld" if turn.result.withheld else "committed",
-                assistant_message_id=stored_assistant.message_id,
+            return turn
+        if turn.status != "release_pending" or turn.result is None:
+            raise ChatTurnConflictError(
+                "chat turn cannot be released from its current state"
             )
-            await self._write_turn(connection, released)
-            return released
+        result = (
+            self._validated_withheld_result(turn, withheld_result)
+            if withheld_result is not None
+            else turn.result
+        )
+
+        stored_assistant = (
+            await self._append_messages(
+                connection,
+                session_id=session_id,
+                messages=(assistant_message(text=result.answer),),
+            )
+        )[0]
+        released = self._updated_turn(
+            turn,
+            status="withheld" if result.withheld else "committed",
+            assistant_message_id=stored_assistant.message_id,
+            result=result,
+        )
+        await self._write_turn(connection, released)
+        return released
+
+    async def lock_release_turn_in_transaction(
+        self,
+        connection: AsyncConnection,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        turn_id: str,
+    ) -> StoredChatTurn:
+        """Authenticate and lock the session and Turn for atomic publication."""
+
+        await self._locked_session(
+            connection,
+            session_id,
+            tenant_id,
+            principal_id,
+        )
+        return await self._locked_turn(
+            connection,
+            session_id=session_id,
+            turn_id=turn_id,
+        )
+
+    @staticmethod
+    def _validated_withheld_result(
+        turn: StoredChatTurn,
+        result: ChatTurnResult,
+    ) -> ChatTurnResult:
+        if not result.withheld:
+            raise ChatTurnConflictError(
+                "a release result override must be a safe withheld result"
+            )
+        if result.outcome.agent_run_id != turn.run_id:
+            raise ChatTurnConflictError(
+                "a withheld result must belong to the chat turn's run"
+            )
+        return result
 
     async def finish_failed(
         self,
