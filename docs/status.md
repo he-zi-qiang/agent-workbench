@@ -12,6 +12,55 @@
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
 
+## 2026-07-28 PR-043 Chat lease 过期原子终态
+
+状态：**当前开发分支已实现，尚未合入 `main`；静态检查与本地可运行门禁通过**。
+
+PR-041 让硬崩溃遗留的 `running` Turn 最终失败，但当时 reaper、claim 和迟到
+prepare 都可能写过期终态，Turn failure 与 durable Event 也不在同一个原子边界。
+PR-043 把 PostgreSQL 的过期语义收敛到唯一 writer：
+
+```text
+ChatExpirationCoordinator.expire_due
+  → SELECT oldest due running FOR UPDATE SKIP LOCKED
+  → failed(deadline, stale_execution) + clear lease
+  → ChatTurnExpired
+  → COMMIT one Turn
+```
+
+实现不变量：
+
+- PostgreSQL 中只有 `ChatExpirationCoordinator` 可以持久化
+  `stale_execution` 过期终态；普通 failure/cancellation writer、prepare 和 cleanup
+  都先锁 session/Turn，再用数据库时钟复核 lease；
+- claim 只创建或读取 Turn，不机会式回收。协调器提交前，同 key 仍观察原
+  `running`，新 key 仍得到 busy，不能先解锁 session、后补 Event；
+- 迟到的 `prepare_release`、`finish_failed` 和
+  `finish_running_if_current` 不写 candidate、failure、assistant 或 Event；它们在锁内
+  发现仍为 `running` 但 lease 已到期时抛 `ChatTurnLeaseExpiredError`，协调器已经提交
+  时只观察既有终态；调用方也不能把构造的 `stale_execution` outcome 送进普通
+  cleanup 绕过协调器；
+- 每个候选使用一个独立 PostgreSQL 事务。更新 Turn 后写 Event 失败，或 Event 写完后
+  出错，都会一起回滚；毒化候选保持 `running`，跨轮稳定扫描游标保证
+  `batch_size=1` 时后续 due Turn 仍可处理；
+- answer release 与 expiry 共用 SHA-256 派生的有界终态键
+  `chat-turn:{sha256(turn_id)}:terminal`。同一 Turn 的 answer 与 expiry 不能各占一个
+  幂等键；已存在的相同 `ChatTurnExpired` 可收敛，冲突 payload 则使该候选回滚；
+- `ChatTurnExpired` 只观察 Chat Turn 的发布生命周期。Runtime 可能已经有
+  `RunCompleted`；此时仍可随后出现 `ChatTurnExpired`，但不能伪造第二个
+  `RunFailed`，事件也不携带候选答案、引用或 output reference；
+- Memory coordinator 不宣称数据库耐久性或分布式原子性，但保持可观察失败回滚：
+  Event append 失败时 Turn 仍是 `running`、session 仍 busy、Event 不可见；成功后
+  Event 与 Turn 才在同一进程锁边界内一起可见。
+
+确定性测试覆盖两个事务 fail seam、`batch_size=1` 毒化候选隔离与跨轮推进、两个
+reaper 竞争、prepare/reaper
+竞态、claim 在原子提交前后的可见性、共享终态键以及 Runtime/Chat 两种终态事件的区分。
+本地全仓门禁为 `800 passed / 257 skipped / 1 deselected`；唯一 deselect 是当前
+受限沙箱禁止 `socket.bind()` 的 loopback 真实性测试。Ruff、Pyright、compileall、
+Alembic 唯一 head 与 `git diff --check` 均通过。真实 PostgreSQL 并发用例因未配置
+`AGENT_WORKBENCH_TEST_DSN` 而显式跳过，未被描述为已在本机执行。
+
 ## 2026-07-28 PR-042 Chat pending 发布无流量恢复
 
 状态：**当前开发分支已实现；无外部服务门禁与静态检查通过。真实 PostgreSQL
@@ -36,7 +85,7 @@ PR-041 关闭了 `running` 硬崩溃后永久 busy，但 `prepare_release` 已�
   共用同一契约，只返回 `release_pending`，按 `turn_id` 稳定排序并携带 session owner；
 - PostgreSQL 列表查询使用短连接普通 MVCC `SELECT + JOIN`，不把扫描事务或行锁带进
   模型/发布阶段；多个恢复器可看到同一候选，最终由 Turn 锁、terminal state 和稳定
-  answer `event_key` 幂等收敛；
+  `chat-turn:{sha256(turn_id)}:terminal` 幂等收敛；
 - `ChatPendingReleaseRecovery` 隔离单候选失败，后续候选仍会尝试；失败项保留 pending，
   下一轮继续重新授权，绝不把旧候选降级为未经检查的发布；
 - API lifespan 同时管理 running reaper 与 pending recovery；两者都只依赖
@@ -49,10 +98,9 @@ PR-041 关闭了 `running` 硬崩溃后永久 busy，但 `prepare_release` 已�
 Alembic head 检查通过。真实 PostgreSQL 契约还覆盖 owner scope、limit/order，以及
 普通 pending scan 不等待另一个 Worker 持有的 Turn 行锁。
 
-仍保留一个可靠性边界：execution lease 到期目前可由 reaper、claim 机会回收或迟到
-prepare 写入 `chat_turns`，但尚未与专用 durable `ChatTurnExpired` event 原子提交。
-下一切片会收拢 expiry writer，并避免误把 Chat 发布层终态伪装为第二个 Runtime
-`RunFailed`。
+本节当时保留的 execution expiry 多 writer 和裸 Turn failure 边界已由 PR-043
+关闭：claim/late prepare/cleanup 不再写过期事实，独立协调器按 Turn 原子提交
+`failed(stale_execution)` 与 `ChatTurnExpired`，且不伪装成 Runtime `RunFailed`。
 
 ## 2026-07-28 PR-041 Chat 固定执行 lease 与孤儿回收
 
@@ -78,28 +126,31 @@ lease 到期
   约束和过期扫描部分索引；升级时旧 `running` 行立即具备可回收截止时间；
 - claim 使用 PostgreSQL `statement_timestamp()` 计算
   `api.request_timeout_seconds + chat.orphan_grace_seconds`，不信任应用机器时钟；
-- claim 在检查 active Turn 前机会式终态化本 session 的过期 `running`，后台
-  reaper 延迟时新请求仍能解锁会话；
-- `prepare_release` 在 Turn 行锁内复核数据库时间；过期模型结果只会写稳定失败事实，
-  候选答案、event 和 assistant 都不会出现；
-- `ChatTurnReaper` 按 `(lease_until, turn_id)` 使用
-  `FOR UPDATE SKIP LOCKED` 批量回收；多个 API 实例可以竞争执行而不重复处理；
-- `finish_running_if_current` 只允许清理仍为 `running` 的 Turn，不能覆盖已经
-  `release_pending` 或终态的事实；
+- PR-043 后 claim 不再机会式终态化：协调器提交前，同 key 保持 `running`，新 key
+  保持 busy；
+- `prepare_release` 在 Turn 行锁内复核数据库时间；过期时只抛
+  `ChatTurnLeaseExpiredError`，不写候选、failure、Event 或 assistant；
+- `ChatTurnReaper` 委托 `ChatExpirationCoordinator` 按 `(lease_until, turn_id)`
+  使用 `FOR UPDATE SKIP LOCKED` 回收；Turn failure 与 `ChatTurnExpired` 在每 Turn
+  独立事务中提交，多个 API 实例可以竞争而不重复处理；
+- `finish_failed` 与 `finish_running_if_current` 同样在锁内复核 lease，只能清理
+  尚未过期的 `running`，不能覆盖 prepared/terminal，也不能成为第二个 expiry writer；
 - `asyncio.timeout` 现在真正消费 `api.request_timeout_seconds`；外层
   `CancelledError` 使用 shielded best-effort cleanup 后仍重新抛出；
 - Chat 路由用 `CancellationSource` 传递原因，并直接取消实际 Chat task，断开不再等待
   retrieval 自己轮询；API lifespan 先停止 reaper、有界排空 cleanup，再关闭
   HTTP/Qdrant/PostgreSQL 依赖。
 
-确定性契约覆盖同 key 到期不重跑、不同 key 的机会回收、迟到 prepare、不覆盖 pending、
-bounded reaper、两个 PostgreSQL Worker 的 `SKIP LOCKED`、请求 deadline 与外部 task
-取消。完整无外部服务门禁为 `763 passed / 237 skipped`；Ruff、Pyright、compileall
-通过，Alembic 唯一 head 为 `0009_chat_turn_lease`。
+PR-041 当时的契约覆盖固定 lease、请求 deadline、外部 task 取消和 terminal-only
+reaper；其中“不同 key 机会回收”和“迟到 prepare 直接写失败”的断言已由 PR-043
+替换为：原子提交前同 key 保持 running、新 key busy、late prepare 无写入，以及
+coordinator 提交后同 key 返回失败并允许新 key。PR-041 当时完整无外部服务门禁为
+`763 passed / 237 skipped`，Alembic 唯一 head 为 `0009_chat_turn_lease`；这不是
+PR-043 的当前门禁数字。
 
-本节最初保留的 `release_pending` 无人重试边界已由 PR-042 关闭。仍开放的是：
-execution lease 到期终态目前写入 `chat_turns`，还没有与专用 durable Chat 终态
-event 做原子提交。
+本节最初保留的 `release_pending` 无人重试边界已由 PR-042 关闭；execution lease
+的多 writer 与非原子 Event 边界已由 PR-043 关闭。固定 Chat lease 仍刻意不提供
+自动重放或故障转移。
 
 `0009` 当前按停机迁移设计：部署必须先停止旧版本写入，再升级 schema，最后启动新版本。
 它不是 expand/dual-write/contract 三阶段 migration，不支持新旧应用副本滚动共存。
@@ -180,9 +231,10 @@ Pyright、compileall 全部通过，Alembic 唯一 head 为 `0008_chat_turns`。
 PostgreSQL、Qdrant 或本地 BGE 权重；受沙箱禁止 `socket.bind()` 的单个真实性测试按
 既有方式从本轮本地门禁排除。
 
-本节最初记录的 `running` 永久 busy 风险已由 PR-041 的固定 lease 与 terminal-only
-reaper 关闭。它刻意不提供自动故障转移；若未来允许重新执行同一 Turn，必须同时加入
-owner、epoch、heartbeat、全写入 fencing、checkpoint 与 attempt-aware event。
+本节最初记录的 `running` 永久 busy 风险已由 PR-041 的固定 lease、PR-043 的单一
+expiry writer 与 terminal-only reaper 关闭。它刻意不提供自动故障转移；若未来允许
+重新执行同一 Turn，必须同时加入 owner、epoch、heartbeat、全写入 fencing、
+checkpoint 与 attempt-aware event。
 
 ## 2026-07-28 PR-038 durable Event 幂等发布
 

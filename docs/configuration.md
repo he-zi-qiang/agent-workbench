@@ -246,6 +246,22 @@ ACL/revision 发布栅栏，不重跑模型。`chat.orphan_action="terminal_fail
 `chat.automatic_retry=false` 使用单值 Literal 锁死：当前没有 checkpoint、attempt
 event 和副作用 ledger，过期 Turn 只能失败，不能自动重放。
 
+running reaper 必须调用 `ChatExpirationCoordinator`，不能直接调用
+ConversationStore 写过期行。claim 不机会式回收；`prepare_release`、普通 failure
+writer 和 cleanup 在 session/Turn 锁内复核 PostgreSQL 时间，发现 lease 已到期只报
+`ChatTurnLeaseExpiredError`、不写新事实；协调器已提交时只观察既有终态。唯一
+expiry writer 为每个 Turn 打开独立 PostgreSQL 事务，以
+`FOR UPDATE SKIP LOCKED` 选择候选，并把
+`failed(deadline, stale_execution)`、lease 清理和 durable `ChatTurnExpired` 一起
+提交；失败候选整体回滚，跨轮稳定扫描游标确保小 batch 下仍会推进到后续项。
+
+answer release 与 expiry 统一调用 `chat_turn_terminal_event_key(turn_id)`，实际键为
+`chat-turn:{sha256(turn_id)}:terminal`。SHA-256 使任意合法长度的 Turn ID 都映射到
+EventLog 的 128 字节上限内，也保证 answer/expiry 不会用两个键各自提交。
+`ChatTurnExpired` 是 Chat ledger 终态观察，不是 Runtime `RunFailed`。Memory double
+只承诺单进程可观察语义：Event 失败时 Turn 仍为 `running` 且 session 不释放，不宣称
+PostgreSQL 级耐久性。
+
 生产 deadline 只取 PostgreSQL 时钟。测试通过可控 clock 或条件推进
 `lease_until`，不用真实等待。`orphan_grace` 是清理余量，不是 heartbeat，也不能
 续租。`chat.disconnect_poll_seconds` 只负责观察 ASGI 断开；发现断开后会同时设置

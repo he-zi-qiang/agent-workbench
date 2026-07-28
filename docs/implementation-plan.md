@@ -7,8 +7,11 @@
 > 状态：截至 2026-07-28，主分支基线为 `main@4d03f69`，当前开发分支已完成
 > 自研 Runtime、PostgreSQL/Artifact/Document/ACL/Outbox、Dense/Hybrid RAG 与评测、
 > 固定检索 Chat/SSE、多轮上下文、EventLog 版本化与幂等键、`chat_turns` 请求幂等、
-> 原子发布、fixed-lease orphan recovery 和无人值守 pending 发布恢复。下一主线是
-> WP06 LangGraph Task MVP；
+> 原子发布、fixed-lease orphan recovery、无人值守 pending 发布恢复，以及
+> Turn + durable `ChatTurnExpired` 原子过期。PR-043 本地门禁为
+> `800 passed / 257 skipped / 1 deselected`，唯一 deselect 是沙箱禁止
+> `socket.bind()` 的 loopback 真实性测试；
+> 下一主线是 WP06 LangGraph Task MVP；
 > LlamaIndex/LangChain 互操作、
 > 可靠常驻 Ingestion Worker、Task Registry/lease/fencing、Multi-Agent 与 UI 仍开放
 >
@@ -639,6 +642,27 @@ PostgreSQL ACL 是最终授权事实；Qdrant payload filter 只是缩小候选�
 ContextPacket 和 Citation 之前丢弃。回答提交前再验证实际引用版本，权限
 revision 已变化时丢弃该答案并拒答或从剩余已授权上下文重新生成。
 
+### 已落地的 Chat Turn 可靠性契约
+
+PR-035～PR-043 已把 Chat 的 answer publication 与 fixed-lease expiry 收敛为以下
+实现基线，后续 Task 工作不能倒退这些不变量：
+
+- claim 不机会式回收；所有普通 `running → release_pending/failed/cancelled`
+  writer 都先锁 session/Turn，并在锁内复核数据库 lease；
+- late prepare/cleanup 不写 candidate、failure、assistant 或 Event；仍为
+  `running` 但 lease 已到期时只报 `ChatTurnLeaseExpiredError`，协调器已提交时只观察
+  既有终态；普通 writer 也拒绝外部构造的 `stale_execution` outcome；
+- `ChatExpirationCoordinator` 是唯一 expiry writer；每个 due Turn 使用一个独立
+  PostgreSQL 事务，将 `failed(deadline, stale_execution)`、清 lease 与
+  `ChatTurnExpired` 原子提交；
+- `FOR UPDATE SKIP LOCKED` 保证多个 reaper 不互等；单个毒化候选整体回滚并隔离，
+  不终止本批后续 Turn；
+- answer 与 expiry 共用有界
+  `chat-turn:{sha256(turn_id)}:terminal`，不能各自占用不同幂等键；
+- Memory double 只保持可观察失败回滚，不冒充 PostgreSQL 耐久事务；
+- `ChatTurnExpired` 可跟在 Runtime `RunCompleted` 之后，不能写成第二个
+  `RunFailed`。
+
 ### 退出条件
 
 - 固定语料和至少 20 个 gold questions；
@@ -743,17 +767,22 @@ token / cost / hardware metadata
 ### 固定研究图
 
 ```text
-planner
-→ researcher_a ┐
-→ researcher_b ┘ fan-in
-→ synthesizer
+understand
+→ plan
+→ route
+→ research_internal ┐
+→ research_external ┘ fan-in
+→ synthesize
 → critic
-→ quality gate ── revise → synthesizer
+→ quality_gate ── revise → synthesize
 → approval placeholder
 → export placeholder
 ```
 
 M3a 中 approval/export 先使用无副作用 Fake node；真实审批放在 WP10。
+以上名称是 `workflow.graph_version="v1"` 的 canonical node IDs，必须与架构基线、
+checkpoint metadata、事件和测试一致；重命名任一节点都必须提升 graph version，不能
+把旧 checkpoint 静默映射到新执行位置。
 
 ### 代码任务
 
@@ -796,7 +825,7 @@ M3a 中 approval/export 先使用无副作用 Fake node；真实审批放在 WP1
 | WP07-04 | 提交前解析并 reservation Qdrant concrete generation |
 | WP07-05 | `run_event_streams/run_events` repository |
 | WP07-06 | per-stream sequence 分配与 cursor codec |
-| WP07-07 | 合并文本 chunk、ModelCompleted、AnswerCommitted/Withheld、Tool/节点/终态 durable event |
+| WP07-07 | 合并文本 chunk、ModelCompleted、AnswerCommitted/Withheld、ChatTurnExpired、Tool/节点/终态 durable event |
 | WP07-08 | Task generation reservation、终态释放与 Task-aware safe GC |
 
 ### Task 提交事务

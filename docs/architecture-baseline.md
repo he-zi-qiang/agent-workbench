@@ -401,6 +401,7 @@ ModelDelta
 ModelCompleted
 AnswerCommitted
 AnswerWithheld
+ChatTurnExpired
 ToolProposed
 PermissionRequested
 PermissionResolved
@@ -434,18 +435,22 @@ PostgreSQL `event_streams/events` 是当前唯一持久事件事实源，`EventL
    `release_pending`，此状态不能出现在会话历史；
 3. 最终发布事务按稳定顺序锁定 conversation/Turn、所有引用 document row 和 event
    stream，在锁内重新检查 tenant、deleted、精确 revision 与实时 owner/ACL；
-4. 同一事务写 stream-local 稳定 `event_key` 的 `AnswerCommitted` 或不含候选答案的
-   `AnswerWithheld`，追加唯一可见 assistant，并把 Turn 转为
-   `committed/withheld`；任何一步失败必须一起回滚；
+4. 同一事务使用 `chat-turn:{sha256(turn_id)}:terminal` 写
+   `AnswerCommitted` 或不含候选答案的 `AnswerWithheld`，追加唯一可见 assistant，
+   并把 Turn 转为 `committed/withheld`；任何一步失败必须一起回滚；
 5. 所有内容、删除和 ACL writer 必须先锁同一 document row。这个共同写入协议使撤权
    与发布线性化；禁止绕过 Repository 直接执行不推进 revision 的 ACL-only 写入；
 6. `release_pending` 重试必须使用持久化的 revision 集合重新进入同一发布事务，不能
-   信任 prepare 时的授权结果。稳定 `event_key` 是重复调用防御，不替代原子事务；
+   信任 prepare 时的授权结果。SHA-256 派生的有界 `event_key` 同时被 expiry 使用，
+   让 answer/expiry 竞争在 EventLog 上冲突关闭；它是重复调用防御，不替代原子事务；
 7. Runtime/CLI/Task 的通用 `ModelCompleted` 契约保持不变，发布权限由拥有最终证据检查的
    application use case 决定。
 
 SSE/UI 只能把 `AnswerCommitted` 视为可展示的检索型答案，不能把 Chat 路径中的
 `ModelCompleted` 当作答案内容源。
+`ChatTurnExpired` 则只表示固定 Chat lease 在答案发布前到期。Runtime 可能已经写过
+`RunCompleted`，随后仍出现 `ChatTurnExpired`；它不是第二个 `RunFailed`，payload
+也没有候选正文、引用或 output reference。
 
 ### 6.8 Chat 固定执行 lease
 
@@ -454,13 +459,28 @@ SSE/UI 只能把 `AnswerCommitted` 视为可展示的检索型答案，不能把
 不可续租的 `lease_until`：
 
 - claim 以 PostgreSQL 时钟计算 `request_timeout + orphan_grace`；
+- claim 只创建或读取 Turn，不机会式终态化过期项。原子 expiry 提交前，同 key 仍读到
+  `running`，新 key 仍被 active-Turn 约束拒绝；
 - `running` 必须持有 lease，进入 `release_pending/failed/cancelled` 时必须清空；
-- request timeout、ASGI cancellation 和客户端断开只可条件终态化仍为 `running`
-  的 Turn，不能覆盖已准备或已提交事实；
-- `running → release_pending` 必须在 Turn 锁内验证数据库当前时间仍早于 lease；
-- reaper 使用 `FOR UPDATE SKIP LOCKED` 把到期 Turn 转为稳定失败，不追加 assistant，
-  不删除 user message，也不重新执行模型；
-- 同 key 重试返回原失败；业务重试必须使用新 key。
+- request timeout、ASGI cancellation、客户端断开和普通 run failure 只可在持有
+  session/Turn 锁、复核数据库当前时间仍早于 lease 后条件终态化 `running`；不能覆盖
+  prepared/terminal，也不能接受伪造的 `stale_execution` outcome；
+- `running → release_pending` 同样必须在 Turn 锁内复核数据库时间；迟到
+  `prepare_release` 或 cleanup 不写 candidate、failure、assistant 或 Event；仍为
+  `running` 但 lease 已到期时报告 `ChatTurnLeaseExpiredError`，协调器已提交时只观察
+  既有终态；
+- PostgreSQL 的唯一 expiry writer 是 `ChatExpirationCoordinator`。它使用
+  `FOR UPDATE SKIP LOCKED` 选择 due `running`，在同一事务写
+  `failed(deadline, stale_execution)`、清空 lease 并追加 durable
+  `ChatTurnExpired`；不删除 user message，也不重新执行模型；
+- answer release 与 expiry 必须共用 SHA-256 派生的有界终态键
+  `chat-turn:{sha256(turn_id)}:terminal`，不能各自使用不同后缀绕开互斥；
+- 每个 due Turn 使用一个独立 PostgreSQL 事务。单候选的 Turn/Event 任一步失败都整体
+  回滚并保持 `running`；该毒化候选在本轮隔离，稳定跨轮扫描游标保证即使
+  `batch_size=1`，后续候选也不会永久饥饿；
+- Memory double 不宣称数据库耐久性或分布式原子性，但必须保持同样的可观察失败语义：
+  Event 发布失败时不改变 Turn、不释放 session，成功后两者才在同一进程锁边界内可见；
+- coordinator 提交后，同 key 返回原 `stale_execution` 失败；业务重试必须使用新 key；
 - `release_pending` 由独立后台恢复器短查询发现，随后重新进入同一个原子
   ACL/revision 发布协调器；它不依赖请求流量，也不依赖 embedding/model 可用。
 
@@ -1404,12 +1424,15 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
 截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支在其上累计完成了
-`knowledge_search` Adapter 与 PR-035～PR-039。
+`knowledge_search` Adapter 与 PR-035～PR-043。
 工程基线、领域契约、Ports、Fake Adapter、自研 Runtime、DeepSeek 流式 Adapter 与
 API 装配、PostgreSQL Conversation/ChatTurn/EventLog、Local ArtifactStore、
 文档/版本/ACL/事务 Outbox、摄取组件、Dense/Hybrid RAG、固定检索 Chat、
+原子 answer release、pending/expiry 后台恢复以及
 Upload / Artifact / Health / Chat / SSE API 已落地并有测试。LangGraph Workflow、
-Task 协调、Multi-Agent、生产身份认证和生产部署仍未实现。
+Task 协调、Multi-Agent、生产身份认证和生产部署仍未实现。PR-043 本地门禁为
+`800 passed / 257 skipped / 1 deselected`；唯一 deselect 是当前沙箱禁止
+`socket.bind()` 的 loopback 真实性测试。
 
 表中标为 Demonstrated 的两项都由同一条固定演示 `agent-cli demo` 覆盖：逐字节
 可复现，由 golden 文件与 CI smoke 守护。它现在证明的是“输入 → 模型 → Tool →
@@ -1442,7 +1465,7 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | LangChain model/tool 互操作 Adapter | ✓ |  |  |  |
 | BGE-M3 + Qdrant Dense/Hybrid RAG 与离线评测 | ✓ | ✓ | ✓ |  |
 | 固定检索 Chat + RAG（ACL 双检、发布门、多轮、请求幂等） | ✓ | ✓ | ✓ |  |
-| Chat 固定执行 lease、取消清理、terminal-only reaper 与 pending 发布恢复 | ✓ | ✓ | ✓ |  |
+| Chat 固定 lease、原子 `ChatTurnExpired`、terminal-only reaper 与 pending 发布恢复 | ✓ | ✓ | ✓ |  |
 | Agentic `knowledge_search` 产品装配 | ✓ |  |  |  |
 | LlamaIndex ingestion/retrieval Adapter | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |

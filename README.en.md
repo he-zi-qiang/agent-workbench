@@ -12,9 +12,10 @@ LangChain and later comparison adapters stay behind explicit ports.
 ## Current status
 
 As of 2026-07-28, the main-branch baseline is `main@4d03f69`. The current
-development branch completes the PR-035 through PR-042 slices for secure
+development branch completes the PR-035 through PR-043 slices for secure
 answer release, multi-turn context, evolvable EventLog replay, idempotent
-Chat turns, atomic authorization fencing and traffic-independent recovery.
+Chat turns, atomic authorization fencing, traffic-independent recovery and
+atomic fixed-lease expiry.
 Implemented with test evidence:
 
 - framework-neutral domain contracts, ports, fake adapters and a reproducible
@@ -43,9 +44,16 @@ Implemented with test evidence:
 - a required API `Idempotency-Key`, non-interleaving active turns, no model
   rerun for a completed retry, and re-authorization of persisted evidence on a
   `release_pending` retry;
-- a fixed execution lease for `running` turns, safe request/disconnect
-  cancellation and a PostgreSQL `SKIP LOCKED` reaper that terminalizes
-  hard-crash orphans without automatically replaying model work;
+- a fixed execution lease for `running` turns; ordinary terminal writers
+  re-check the database clock under the Turn lock, while claim and late
+  prepare/cleanup never write an expiry fact;
+- a single `ChatExpirationCoordinator` that uses PostgreSQL `SKIP LOCKED` and
+  one transaction per Turn to commit the failed Turn and durable
+  `ChatTurnExpired` together, with poison-candidate isolation and a stable
+  cross-round scan cursor;
+- one bounded SHA-256 terminal key shared by answer publication and expiry;
+  `ChatTurnExpired` is a Chat-ledger observation, not another Runtime
+  `RunFailed`;
 - background recovery for prepared answers that re-runs the final ACL/revision
   fence and publishes atomically without relying on the original client; it
   remains active even when the embedding/model stack is unavailable;
@@ -61,8 +69,7 @@ The remaining boundaries are explicit:
 - The source-revision barrier prevents stale Qdrant points from being read, but
   physical replacement/deletion of old points is not yet implemented.
 - A history token window/compaction and validation of the citations actually
-  used by the model remain to be built. Atomic publication of a durable Chat
-  terminal event when the execution lease expires is also still open.
+  used by the model remain to be built.
 - EventLog rejects an unknown schema version, but version upcasters,
   poison-row isolation and skip semantics are not yet implemented.
 - `knowledge_search` is not yet assembled into an agentic retrieval mode, and

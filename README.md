@@ -14,8 +14,8 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 ## 当前状态
 
 截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支已完成
-PR-035～PR-042 的安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn、
-原子授权发布与无流量恢复切片。已经实现并有测试证据：
+PR-035～PR-043 的安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn、
+原子授权发布、无流量恢复与固定 lease 原子过期切片。已经实现并有测试证据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -34,8 +34,14 @@ PR-035～PR-042 的安全发布、多轮上下文、EventLog 可演进回放、�
   线性化；
 - Chat API 强制 `Idempotency-Key`，同一会话的活跃 Turn 不交错；已提交请求重试不再
   重跑模型，`release_pending` 重试会重新验证持久化的 evidence revision；
-- `running` Turn 使用固定执行 lease；请求 deadline、ASGI 取消和客户端断开会安全
-  终态化，硬崩溃遗留项由 PostgreSQL `SKIP LOCKED` reaper 回收，且绝不自动重跑；
+- `running` Turn 使用固定执行 lease；所有离开 `running` 的 writer 都在 Turn 锁内
+  复核数据库时间，claim 不机会式回收，迟到的 prepare/cleanup 不写裸终态；
+- 硬崩溃遗留项由 `ChatExpirationCoordinator` 使用 PostgreSQL `SKIP LOCKED` 回收；
+  每个 Turn 的 `failed(deadline, stale_execution)`、lease 清理和 durable
+  `ChatTurnExpired` 在独立事务中原子提交，一个毒化候选不会阻断后续候选；
+- 答案发布与过期竞争共用有界终态键
+  `chat-turn:{sha256(turn_id)}:terminal`，因此同一 Turn 不能同时提交两种终态事件；
+  `ChatTurnExpired` 是 Chat ledger 事实，不是第二个 Runtime `RunFailed`；
 - 后台 pending-release recovery 会重新执行最终 ACL/revision 栅栏并原子发布，
   不依赖原客户端用同一幂等键重试；即使 embedding/model 不可用也继续恢复；
 - 与固定检索共用 `RetrievalService` 的 `knowledge_search` Tool Adapter。
@@ -46,7 +52,6 @@ PR-035～PR-042 的安全发布、多轮上下文、EventLog 可演进回放、�
   多 Worker 外部副作用 fencing；上传后自动可检索的产品 E2E 尚未贯通。
 - 旧 Qdrant Point 已被 revision 栅栏阻止读取，但 replace/delete 物理清理尚未完成。
 - Chat 的历史 token window/compaction 和模型实际引用校验尚未实现；
-  lease 到期回收与 durable Chat 终态 Event 的原子提交仍待补齐。
   `knowledge_search` 尚未装配为可用的 Agentic Retrieval Mode。
 - EventLog 能拒绝未知 schema version，但尚未实现旧版本 upcaster、poison-row
   隔离/跳过策略。
