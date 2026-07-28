@@ -143,8 +143,16 @@ class RetrievalService:
             document.document_id: document.source_revision for document in readable
         }
 
+        # Readability alone is not enough. A point from an older content or ACL
+        # revision may remain in Qdrant while ingestion catches up, and accepting
+        # it merely because the document is still readable would expose text the
+        # current PostgreSQL snapshot no longer describes. Equality also rejects
+        # an impossible "future" point rather than letting the derived store get
+        # ahead of its authority.
         authorized = tuple(
-            candidate for candidate in candidates if candidate.document_id in revisions
+            candidate
+            for candidate in candidates
+            if revisions.get(candidate.document_id) == candidate.source_revision
         )[: request.top_k]
 
         return AuthorizedContext(
