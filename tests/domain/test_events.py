@@ -15,6 +15,7 @@ from agent_workbench.domain.events import (
     TRANSIENT_EVENT_TYPES,
     AnswerCommitted,
     AnswerWithheld,
+    ChatTurnExpired,
     EventEnvelope,
     EventType,
     ModelDelta,
@@ -51,6 +52,7 @@ def test_only_streamed_chatter_is_transient() -> None:
     assert "ModelCompleted" in DURABLE_EVENT_TYPES
     assert "AnswerCommitted" in DURABLE_EVENT_TYPES
     assert "AnswerWithheld" in DURABLE_EVENT_TYPES
+    assert "ChatTurnExpired" in DURABLE_EVENT_TYPES
     assert TRANSIENT_EVENT_TYPES.isdisjoint(DURABLE_EVENT_TYPES)
 
 
@@ -70,6 +72,56 @@ def test_answer_events_round_trip_through_the_discriminated_envelope() -> None:
 
     assert isinstance(restored.payload, AnswerCommitted)
     assert restored.payload.text == "checked"
+
+
+def test_chat_turn_expiry_round_trips_as_its_own_durable_terminal_event() -> None:
+    envelope = _envelope(payload=ChatTurnExpired(turn_id="turn_1"))
+
+    restored = EventEnvelope.model_validate_json(envelope.model_dump_json())
+
+    assert restored.event_type == "ChatTurnExpired"
+    assert restored.durability == "durable"
+    assert isinstance(restored.payload, ChatTurnExpired)
+    assert restored.payload == ChatTurnExpired(turn_id="turn_1")
+
+
+def test_chat_turn_expiry_has_only_fixed_safe_terminal_fields() -> None:
+    serialized = json.loads(ChatTurnExpired(turn_id="turn_1").model_dump_json())
+
+    assert serialized == {
+        "kind": "ChatTurnExpired",
+        "turn_id": "turn_1",
+        "status": "failed",
+        "stop_reason": "deadline",
+        "error_code": "stale_execution",
+        "retryable": False,
+    }
+    assert {
+        "answer",
+        "text",
+        "output_text",
+        "output_ref",
+        "citations",
+        "authorized_revisions",
+    }.isdisjoint(serialized)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", "committed"),
+        ("stop_reason", "completed"),
+        ("error_code", "provider_error"),
+        ("retryable", True),
+        ("output_text", "candidate answer"),
+    ],
+)
+def test_chat_turn_expiry_cannot_be_repurposed(
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        ChatTurnExpired.model_validate({"turn_id": "turn_1", field: value})
 
 
 def test_durability_follows_the_payload_not_the_caller() -> None:

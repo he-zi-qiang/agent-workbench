@@ -12,16 +12,18 @@ from pydantic import ValidationError
 from agent_workbench.domain.context import Citation
 from agent_workbench.domain.errors import ErrorInfo, NotFoundError
 from agent_workbench.domain.messages import assistant_message, user_message
-from agent_workbench.domain.runs import AgentOutcome
+from agent_workbench.domain.runs import AgentOutcome, stale_execution_outcome
 from agent_workbench.ports.conversation_store import (
     AuthorizedRevision,
     ChatTurnBusyError,
     ChatTurnClaim,
     ChatTurnConflictError,
+    ChatTurnLeaseExpiredError,
     ChatTurnResult,
     ChatTurnStore,
     PendingChatRelease,
     StoredChatTurn,
+    chat_turn_terminal_event_key,
 )
 
 SESSION = "session_1"
@@ -153,6 +155,17 @@ def _failed(*, cancelled: bool = False) -> AgentOutcome:
     )
 
 
+def test_chat_terminal_event_key_is_stable_and_bounded_for_long_identifiers() -> None:
+    long_turn_id = "t" * 128
+
+    first = chat_turn_terminal_event_key(long_turn_id)
+
+    assert first == chat_turn_terminal_event_key(long_turn_id)
+    assert first != chat_turn_terminal_event_key(f"{long_turn_id[:-1]}x")
+    assert first.endswith(":terminal")
+    assert len(first) <= 128
+
+
 def test_a_withheld_turn_cannot_retain_the_denied_model_output() -> None:
     with pytest.raises(ValidationError, match="must not retain model output"):
         ChatTurnResult(
@@ -263,7 +276,7 @@ def test_same_key_and_hash_return_the_original_turn(
     assert history == ["current question"]
 
 
-def test_same_key_after_expiry_returns_the_failed_fact_without_reexecution(
+def test_same_key_after_expiry_stays_running_until_the_expiration_coordinator(
     chat_turn_conversations: StoreHarness,
 ) -> None:
     async def scenario(
@@ -285,43 +298,36 @@ def test_same_key_after_expiry_returns_the_failed_fact_without_reexecution(
 
     assert first.turn.status == "running"
     assert retried.newly_claimed is False
-    assert retried.turn.status == "failed"
-    assert retried.turn.lease_until is None
-    assert retried.turn.failure_outcome is not None
-    assert retried.turn.failure_outcome.stop_reason == "deadline"
-    assert retried.turn.failure_outcome.error is not None
-    assert retried.turn.failure_outcome.error.code == "stale_execution"
-    assert retried.turn.failure_outcome.error.retryable is False
+    assert retried.turn.status == "running"
+    assert retried.turn.lease_until is not None
+    assert retried.turn.failure_outcome is None
     assert history == ["current question"]
 
 
-def test_an_expired_running_turn_is_reaped_before_claiming_the_next_key(
+def test_an_expired_running_turn_blocks_a_new_key_until_atomic_expiration(
     chat_turn_conversations: StoreHarness,
 ) -> None:
     async def scenario(
         store: ChatTurnStore,
-    ) -> tuple[ChatTurnClaim, ChatTurnClaim, ChatTurnClaim]:
+    ) -> ChatTurnClaim:
         await _with_session(store)
         first = await _claim(store)
         assert isinstance(store, _ExpiryControl)
         await store.expire_turn_for_test(first.turn.turn_id)
-        second = await _claim(
-            store,
-            key="request-2",
-            request_hash=OTHER_HASH,
-            run_id="run_0000000000000000000000000000002",
-            text="next question",
-        )
-        expired = await _claim(store)
-        return first, second, expired
+        with pytest.raises(ChatTurnBusyError, match="unfinished"):
+            await _claim(
+                store,
+                key="request-2",
+                request_hash=OTHER_HASH,
+                run_id="run_0000000000000000000000000000002",
+                text="next question",
+            )
+        return await _claim(store)
 
-    first, second, expired = chat_turn_conversations.run(scenario)
+    existing = chat_turn_conversations.run(scenario)
 
-    assert first.turn.status == "running"
-    assert expired.turn.status == "failed"
-    assert second.newly_claimed is True
-    assert second.turn.status == "running"
-    assert second.turn.lease_until is not None
+    assert existing.newly_claimed is False
+    assert existing.turn.status == "running"
 
 
 def test_same_key_with_a_different_hash_fails_closed(
@@ -590,24 +596,17 @@ def test_prepare_release_hides_the_assistant_and_is_idempotent(
     assert history == ["current question"]
 
 
-def test_late_prepare_terminalizes_an_expired_execution_without_the_candidate(
+def test_late_prepare_defers_expiration_to_the_atomic_coordinator(
     chat_turn_conversations: StoreHarness,
 ) -> None:
     async def scenario(
         store: ChatTurnStore,
-    ) -> tuple[StoredChatTurn, list[str]]:
+    ) -> tuple[AgentOutcome, StoredChatTurn, list[str]]:
         await _with_session(store)
         claim = await _claim(store)
         assert isinstance(store, _ExpiryControl)
         await store.expire_turn_for_test(claim.turn.turn_id)
-        expired = await store.prepare_release(
-            session_id=SESSION,
-            tenant_id=TENANT,
-            principal_id=OWNER,
-            turn_id=claim.turn.turn_id,
-            result=_completed(answer="late candidate"),
-        )
-        with pytest.raises(ChatTurnConflictError, match="cannot prepare release"):
+        with pytest.raises(ChatTurnLeaseExpiredError) as late:
             await store.prepare_release(
                 session_id=SESSION,
                 tenant_id=TENANT,
@@ -615,24 +614,28 @@ def test_late_prepare_terminalizes_an_expired_execution_without_the_candidate(
                 turn_id=claim.turn.turn_id,
                 result=_completed(answer="late candidate"),
             )
+        stored = (await _claim(store)).turn
         history = await store.history(
             session_id=SESSION,
             tenant_id=TENANT,
             principal_id=OWNER,
         )
-        return expired, [message.message.text() for message in history]
+        return (
+            late.value.outcome,
+            stored,
+            [message.message.text() for message in history],
+        )
 
-    expired, history = chat_turn_conversations.run(scenario)
+    outcome, stored, history = chat_turn_conversations.run(scenario)
 
-    assert expired.status == "failed"
-    assert expired.lease_until is None
-    assert expired.result is None
-    assert expired.assistant_message_id is None
-    assert expired.failure_outcome is not None
-    assert expired.failure_outcome.stop_reason == "deadline"
-    assert expired.failure_outcome.error is not None
-    assert expired.failure_outcome.error.code == "stale_execution"
-    assert "late candidate" not in expired.model_dump_json()
+    assert outcome.stop_reason == "deadline"
+    assert outcome.error is not None
+    assert outcome.error.code == "stale_execution"
+    assert stored.status == "running"
+    assert stored.result is None
+    assert stored.assistant_message_id is None
+    assert stored.failure_outcome is None
+    assert "late candidate" not in stored.model_dump_json()
     assert history == ["current question"]
 
 
@@ -944,6 +947,67 @@ def test_finish_failed_never_appends_an_assistant_and_is_idempotent(
     assert history == ["current question"]
 
 
+@pytest.mark.parametrize(
+    "method_name",
+    ["finish_failed", "finish_running_if_current"],
+)
+def test_failure_writers_defer_an_elapsed_lease_to_the_atomic_coordinator(
+    chat_turn_conversations: StoreHarness,
+    method_name: str,
+) -> None:
+    async def scenario(store: ChatTurnStore) -> StoredChatTurn:
+        await _with_session(store)
+        claim = await _claim(store)
+        assert isinstance(store, _ExpiryControl)
+        await store.expire_turn_for_test(claim.turn.turn_id)
+
+        writer = getattr(store, method_name)
+        with pytest.raises(ChatTurnLeaseExpiredError):
+            await writer(
+                session_id=SESSION,
+                tenant_id=TENANT,
+                principal_id=OWNER,
+                turn_id=claim.turn.turn_id,
+                outcome=_failed(),
+            )
+        return (await _claim(store)).turn
+
+    stored = chat_turn_conversations.run(scenario)
+
+    assert stored.status == "running"
+    assert stored.lease_until is not None
+    assert stored.failure_outcome is None
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    ["finish_failed", "finish_running_if_current"],
+)
+def test_generic_failure_writers_reject_a_forged_expiration_outcome(
+    chat_turn_conversations: StoreHarness,
+    method_name: str,
+) -> None:
+    async def scenario(store: ChatTurnStore) -> StoredChatTurn:
+        await _with_session(store)
+        claim = await _claim(store)
+
+        writer = getattr(store, method_name)
+        with pytest.raises(ValueError, match="ChatExpirationCoordinator"):
+            await writer(
+                session_id=SESSION,
+                tenant_id=TENANT,
+                principal_id=OWNER,
+                turn_id=claim.turn.turn_id,
+                outcome=stale_execution_outcome(RUN),
+            )
+        return (await _claim(store)).turn
+
+    stored = chat_turn_conversations.run(scenario)
+
+    assert stored.status == "running"
+    assert stored.failure_outcome is None
+
+
 def test_best_effort_cleanup_changes_only_the_still_running_turn(
     chat_turn_conversations: StoreHarness,
 ) -> None:
@@ -1012,59 +1076,6 @@ def test_best_effort_cleanup_never_overwrites_a_prepared_result(
     assert stored.turn.result == _completed()
 
 
-def test_reaper_fails_expired_turns_in_bounded_batches(
-    chat_turn_conversations: StoreHarness,
-) -> None:
-    async def scenario(
-        store: ChatTurnStore,
-    ) -> tuple[tuple[StoredChatTurn, ...], tuple[StoredChatTurn, ...]]:
-        await _with_session(store)
-        await store.create_session(
-            session_id="session_2",
-            tenant_id=TENANT,
-            owner_id=OWNER,
-        )
-        first = await _claim(store)
-        second = await _claim_in_session(
-            store,
-            session_id="session_2",
-            key="request-2",
-            request_hash=OTHER_HASH,
-            run_id="run_0000000000000000000000000000002",
-            text="another question",
-        )
-        assert isinstance(store, _ExpiryControl)
-        await store.expire_turn_for_test(first.turn.turn_id)
-        await store.expire_turn_for_test(second.turn.turn_id)
-        first_batch = await store.reap_expired_running(limit=1)
-        second_batch = await store.reap_expired_running(limit=10)
-        return first_batch, second_batch
-
-    first_batch, second_batch = chat_turn_conversations.run(scenario)
-
-    assert len(first_batch) == 1
-    assert len(second_batch) == 1
-    assert first_batch[0].turn_id != second_batch[0].turn_id
-    for expired in (*first_batch, *second_batch):
-        assert expired.status == "failed"
-        assert expired.lease_until is None
-        assert expired.failure_outcome is not None
-        assert expired.failure_outcome.stop_reason == "deadline"
-        assert expired.failure_outcome.error is not None
-        assert expired.failure_outcome.error.code == "stale_execution"
-        assert expired.failure_outcome.error.retryable is False
-
-
-def test_reaper_requires_a_positive_batch_limit(
-    chat_turn_conversations: StoreHarness,
-) -> None:
-    async def scenario(store: ChatTurnStore) -> None:
-        await store.reap_expired_running(limit=0)
-
-    with pytest.raises(ValueError, match="reaper limit must be positive"):
-        chat_turn_conversations.run(scenario)
-
-
 def test_postgres_pending_listing_does_not_claim_or_wait_on_rows(
     chat_turn_conversations: StoreHarness,
 ) -> None:
@@ -1105,64 +1116,6 @@ def test_postgres_pending_listing_does_not_claim_or_wait_on_rows(
     assert pending[0].turn.status == "release_pending"
     assert pending[0].tenant_id == TENANT
     assert pending[0].principal_id == OWNER
-
-
-def test_postgres_reaper_skips_a_turn_locked_by_another_worker(
-    chat_turn_conversations: StoreHarness,
-) -> None:
-    async def scenario(
-        store: ChatTurnStore,
-    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        if not isinstance(store, _RowLockControl):
-            pytest.skip("SKIP LOCKED is a PostgreSQL concurrency contract")
-        await _with_session(store)
-        await store.create_session(
-            session_id="session_2",
-            tenant_id=TENANT,
-            owner_id=OWNER,
-        )
-        first = await _claim(store)
-        second = await _claim_in_session(
-            store,
-            session_id="session_2",
-            key="request-2",
-            request_hash=OTHER_HASH,
-            run_id="run_0000000000000000000000000000002",
-            text="another question",
-        )
-        assert isinstance(store, _ExpiryControl)
-        await store.expire_turn_for_test(first.turn.turn_id)
-        await store.expire_turn_for_test(second.turn.turn_id)
-
-        locked = asyncio.Event()
-        release = asyncio.Event()
-        holder = asyncio.create_task(
-            store.hold_turn_lock_for_test(
-                first.turn.turn_id,
-                locked=locked,
-                release=release,
-            )
-        )
-        try:
-            await asyncio.wait_for(locked.wait(), timeout=10)
-            available = await asyncio.wait_for(
-                store.reap_expired_running(limit=10),
-                timeout=2,
-            )
-        finally:
-            release.set()
-            await asyncio.gather(holder, return_exceptions=True)
-        formerly_locked = await store.reap_expired_running(limit=10)
-        return (
-            tuple(turn.turn_id for turn in available),
-            tuple(turn.turn_id for turn in formerly_locked),
-        )
-
-    available, formerly_locked = chat_turn_conversations.run(scenario)
-
-    assert len(available) == 1
-    assert len(formerly_locked) == 1
-    assert available != formerly_locked
 
 
 def test_terminal_transitions_fail_closed(

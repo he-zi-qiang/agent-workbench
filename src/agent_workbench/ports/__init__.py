@@ -19,6 +19,7 @@ from agent_workbench.ports.cancellation import (
     CancellationToken,
     NullCancellationToken,
 )
+from agent_workbench.ports.chat_expiration import ChatExpirationCoordinator
 from agent_workbench.ports.chat_release import (
     ChatReleaseCoordinator,
     EvidenceRevisionGuard,
@@ -28,6 +29,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnBusyError,
     ChatTurnClaim,
     ChatTurnConflictError,
+    ChatTurnLeaseExpiredError,
     ChatTurnResult,
     ChatTurnStatus,
     ChatTurnStore,
@@ -37,6 +39,7 @@ from agent_workbench.ports.conversation_store import (
     RequestHash,
     StoredChatTurn,
     StoredMessage,
+    chat_turn_terminal_event_key,
 )
 from agent_workbench.ports.event_log import (
     EventCursor,
@@ -67,10 +70,12 @@ __all__ = [
     "AuthorizedRevision",
     "CancellationSource",
     "CancellationToken",
+    "ChatExpirationCoordinator",
     "ChatReleaseCoordinator",
     "ChatTurnBusyError",
     "ChatTurnClaim",
     "ChatTurnConflictError",
+    "ChatTurnLeaseExpiredError",
     "ChatTurnResult",
     "ChatTurnStatus",
     "ChatTurnStore",
@@ -98,4 +103,5 @@ __all__ = [
     "ToolHandler",
     "ToolInvocation",
     "ToolRegistry",
+    "chat_turn_terminal_event_key",
 ]

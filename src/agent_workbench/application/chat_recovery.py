@@ -12,6 +12,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from agent_workbench.ports.chat_expiration import ChatExpirationCoordinator
 from agent_workbench.ports.chat_release import ChatReleaseCoordinator
 from agent_workbench.ports.conversation_store import ChatTurnStore, StoredChatTurn
 from agent_workbench.ports.event_log import EventSink
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 class ChatTurnReaper:
     """Periodically converge hard-crash orphans to a stable failed fact."""
 
-    conversations: ChatTurnStore
+    expiration: ChatExpirationCoordinator
     poll_seconds: float
     batch_size: int
 
@@ -34,7 +35,7 @@ class ChatTurnReaper:
             raise ValueError("chat reaper batch_size must be positive")
 
     async def run_once(self) -> tuple[StoredChatTurn, ...]:
-        return await self.conversations.reap_expired_running(limit=self.batch_size)
+        return await self.expiration.expire_due(limit=self.batch_size)
 
     async def run_forever(self) -> None:
         """Run until the owning process cancels this background task."""

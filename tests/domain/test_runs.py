@@ -22,6 +22,7 @@ from agent_workbench.domain.runs import (
     RunBudget,
     TokenUsage,
     TraceContext,
+    stale_execution_outcome,
 )
 
 DEADLINE = datetime(2026, 7, 25, 4, 0, 0, tzinfo=UTC)
@@ -188,3 +189,15 @@ def test_a_cancelled_outcome_stops_for_cancellation() -> None:
 
     with pytest.raises(ValidationError, match="stops for cancellation"):
         AgentOutcome(agent_run_id="run_1", status="cancelled", stop_reason="error")
+
+
+def test_stale_execution_has_one_fixed_non_retryable_outcome() -> None:
+    outcome = stale_execution_outcome("run_1")
+
+    assert outcome.agent_run_id == "run_1"
+    assert outcome.status == "failed"
+    assert outcome.stop_reason == "deadline"
+    assert outcome.error is not None
+    assert outcome.error.code == "stale_execution"
+    assert outcome.error.message == "execution lease expired"
+    assert outcome.error.retryable is False

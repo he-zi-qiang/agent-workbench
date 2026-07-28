@@ -31,6 +31,7 @@ import hashlib
 import json
 import logging
 import math
+from contextlib import suppress
 from dataclasses import dataclass, field
 
 from agent_workbench.application.answer_release import AnswerReleaseSink
@@ -56,6 +57,7 @@ from agent_workbench.ports.conversation_store import (
     AuthorizedRevision,
     ChatTurnBusyError,
     ChatTurnConflictError,
+    ChatTurnLeaseExpiredError,
     ChatTurnResult,
     ChatTurnStore,
     StoredChatTurn,
@@ -223,11 +225,15 @@ class ChatService:
         except TimeoutError:
             outcome = _deadline_outcome(request.run_id)
             if turn is not None:
-                settled = await self._finish_running_best_effort(
-                    request=request,
-                    turn=turn,
-                    outcome=outcome,
-                )
+                try:
+                    settled = await self._finish_running_best_effort(
+                        request=request,
+                        turn=turn,
+                        outcome=outcome,
+                    )
+                except ChatTurnLeaseExpiredError as exc:
+                    settled = None
+                    outcome = exc.outcome
                 if settled is not None:
                     if settled.status in {"committed", "withheld"}:
                         return _public_turn(settled)
@@ -239,12 +245,20 @@ class ChatService:
             raise ChatExecutionError(outcome) from None
         except asyncio.CancelledError:
             if turn is not None:
-                await self._finish_running_best_effort(
-                    request=request,
-                    turn=turn,
-                    outcome=_cancelled_outcome(request.run_id),
-                )
+                # Cancellation remains cancellation to the disconnected
+                # caller; the coordinator will publish an elapsed lease.
+                with suppress(ChatTurnLeaseExpiredError):
+                    await self._finish_running_best_effort(
+                        request=request,
+                        turn=turn,
+                        outcome=_cancelled_outcome(request.run_id),
+                    )
             raise
+        except ChatTurnLeaseExpiredError as exc:
+            # Expiry has one durable writer: ChatExpirationCoordinator commits
+            # both the failed Turn and ChatTurnExpired. Request cleanup must
+            # not create a naked stale_execution row before that transaction.
+            raise ChatExecutionError(exc.outcome) from None
         except Exception as exc:
             outcome = (
                 exc.outcome
@@ -252,11 +266,22 @@ class ChatService:
                 else _exception_outcome(request.run_id, exc)
             )
             if turn is not None:
-                await self._finish_running_best_effort(
-                    request=request,
-                    turn=turn,
-                    outcome=outcome,
-                )
+                try:
+                    settled = await self._finish_running_best_effort(
+                        request=request,
+                        turn=turn,
+                        outcome=outcome,
+                    )
+                except ChatTurnLeaseExpiredError as expired:
+                    raise ChatExecutionError(expired.outcome) from None
+                if settled is not None:
+                    if settled.status in {"committed", "withheld"}:
+                        return _public_turn(settled)
+                    if (
+                        settled.status in {"failed", "cancelled"}
+                        and settled.failure_outcome is not None
+                    ):
+                        raise ChatExecutionError(settled.failure_outcome) from None
             raise
 
     async def _execute_new_turn(
@@ -320,10 +345,6 @@ class ChatService:
             turn_id=turn.turn_id,
             result=result,
         )
-        if prepared.status in {"failed", "cancelled"}:
-            if prepared.failure_outcome is None:  # pragma: no cover - invariant
-                raise ChatTurnConflictError("expired chat turn has no outcome")
-            raise ChatExecutionError(prepared.failure_outcome)
         released = await self._release(prepared, request, sink)
         return _public_turn(released)
 
@@ -345,6 +366,11 @@ class ChatService:
                     turn_id=turn.turn_id,
                     outcome=outcome,
                 )
+            except ChatTurnLeaseExpiredError:
+                # The caller must return this stable expiry outcome instead of
+                # the earlier timeout/provider exception. The row remains
+                # untouched for the atomic coordinator.
+                raise
             except Exception:
                 # The fixed lease is the final recovery path if the request's
                 # best-effort cleanup cannot reach PostgreSQL.

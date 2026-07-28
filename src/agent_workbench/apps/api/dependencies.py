@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.persistence import (
+    PostgresChatExpirationCoordinator,
     PostgresChatReleaseCoordinator,
     PostgresConversationStore,
     PostgresDocumentStore,
@@ -195,7 +196,7 @@ def build_dependencies(
         # process; otherwise "chat unavailable" would also mean "chat cannot
         # recover".
         chat_reaper=ChatTurnReaper(
-            conversations=conversations,
+            expiration=PostgresChatExpirationCoordinator(engine),
             poll_seconds=config.chat_recovery.reaper_poll_seconds,
             batch_size=config.chat_recovery.reaper_batch_size,
         ),

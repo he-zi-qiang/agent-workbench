@@ -17,6 +17,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnResult,
     ChatTurnStore,
     StoredChatTurn,
+    chat_turn_terminal_event_key,
 )
 from agent_workbench.ports.event_log import EventSink
 
@@ -58,7 +59,7 @@ class InMemoryChatReleaseCoordinator:
             withheld_result = _withheld(result, refusal_text)
             result = withheld_result
 
-        event_key = f"chat-turn:{turn.turn_id}:answer"
+        event_key = chat_turn_terminal_event_key(turn.turn_id)
         if result.withheld:
             await sink.emit(
                 AnswerWithheld(text=result.answer),

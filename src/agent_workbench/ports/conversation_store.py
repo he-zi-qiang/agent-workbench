@@ -12,6 +12,7 @@ from ambient state is one refactor away from returning another tenant's rows.
 
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import Annotated, Literal, Protocol, runtime_checkable
 
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
@@ -26,6 +27,7 @@ from agent_workbench.domain.schema import (
     ShortText,
     VersionedModel,
 )
+from agent_workbench.ports.event_log import EventKey
 
 IdempotencyKey = Annotated[
     str,
@@ -55,6 +57,29 @@ class ChatTurnConflictError(RuntimeError):
 
 class ChatTurnBusyError(RuntimeError):
     """Another unfinished turn already owns this conversation session."""
+
+
+class ChatTurnLeaseExpiredError(RuntimeError):
+    """A late result reached a Turn whose fixed execution lease has elapsed."""
+
+    def __init__(self, outcome: AgentOutcome) -> None:
+        if (
+            outcome.status != "failed"
+            or outcome.stop_reason != "deadline"
+            or outcome.error is None
+            or outcome.error.code != "stale_execution"
+            or outcome.error.retryable
+        ):
+            raise ValueError("lease expiry requires a stale_execution outcome")
+        self.outcome = outcome
+        super().__init__("chat turn execution lease expired")
+
+
+def chat_turn_terminal_event_key(turn_id: str) -> EventKey:
+    """Return the bounded idempotency key shared by all Chat terminal events."""
+
+    digest = sha256(turn_id.encode("utf-8")).hexdigest()
+    return f"chat-turn:{digest}:terminal"
 
 
 class ConversationSession(VersionedModel):
@@ -342,7 +367,12 @@ class ChatTurnStore(ConversationStore, Protocol):
         turn_id: str,
         outcome: AgentOutcome,
     ) -> StoredChatTurn:
-        """Finish a running turn as failed or cancelled, with no assistant."""
+        """Finish a live running turn as failed/cancelled, with no assistant.
+
+        An elapsed execution lease raises ``ChatTurnLeaseExpiredError`` without
+        changing the Turn. Only ``ChatExpirationCoordinator`` may persist that
+        terminal fact together with its durable event.
+        """
         ...
 
     async def finish_running_if_current(
@@ -357,19 +387,13 @@ class ChatTurnStore(ConversationStore, Protocol):
         """Best-effort cleanup that never overwrites pending or terminal facts.
 
         Returns the durable Turn observed under the transition lock. It
-        contains the supplied failure only when this call found ``running``;
-        otherwise it exposes the pending or terminal fact that won the race.
-        Request cancellation and exception cleanup use this weaker transition
-        because an atomic release may have committed concurrently.
+        contains the supplied failure only when this call found a live
+        ``running`` Turn; an elapsed lease raises
+        ``ChatTurnLeaseExpiredError`` without writing. Otherwise it exposes the
+        pending or terminal fact that won the race. Request cancellation and
+        exception cleanup use this weaker transition because an atomic release
+        may have committed concurrently.
         """
-        ...
-
-    async def reap_expired_running(
-        self,
-        *,
-        limit: int,
-    ) -> tuple[StoredChatTurn, ...]:
-        """Terminalize expired running Turns without re-executing them."""
         ...
 
     async def list_release_pending(
@@ -386,6 +410,7 @@ __all__ = [
     "ChatTurnBusyError",
     "ChatTurnClaim",
     "ChatTurnConflictError",
+    "ChatTurnLeaseExpiredError",
     "ChatTurnResult",
     "ChatTurnStatus",
     "ChatTurnStore",
@@ -396,4 +421,5 @@ __all__ = [
     "RequestHash",
     "StoredChatTurn",
     "StoredMessage",
+    "chat_turn_terminal_event_key",
 ]

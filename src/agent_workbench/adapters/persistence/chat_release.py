@@ -26,6 +26,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnConflictError,
     ChatTurnResult,
     StoredChatTurn,
+    chat_turn_terminal_event_key,
 )
 from agent_workbench.ports.event_log import EventScope, EventSink
 
@@ -120,7 +121,7 @@ class PostgresChatReleaseCoordinator:
                 connection,
                 scope,
                 payload,
-                event_key=f"chat-turn:{stored.turn_id}:answer",
+                event_key=chat_turn_terminal_event_key(stored.turn_id),
             )
             return await self._conversations.mark_released_in_transaction(
                 connection,

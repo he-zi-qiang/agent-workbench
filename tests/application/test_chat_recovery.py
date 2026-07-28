@@ -10,6 +10,7 @@ import pytest
 
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.memory import (
+    InMemoryChatExpirationCoordinator,
     InMemoryChatReleaseCoordinator,
     InMemoryConversationStore,
     InMemoryEventLog,
@@ -24,10 +25,16 @@ from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
     ChatTurnReaper,
 )
+from agent_workbench.application.retrieval import AuthorizedContext
+from agent_workbench.domain.context import ContextPacket
+from agent_workbench.domain.events import RunCompleted
 from agent_workbench.domain.messages import user_message
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import AgentOutcome, RunBudget
-from agent_workbench.ports.conversation_store import ChatTurnResult
+from agent_workbench.ports.conversation_store import (
+    ChatTurnLeaseExpiredError,
+    ChatTurnResult,
+)
 from agent_workbench.ports.event_log import EventScope
 
 TENANT = "tenant_a"
@@ -56,6 +63,28 @@ class _NeverExecutor:
     async def run(self, request: Any, emit: Any, cancellation: Any) -> Any:
         del request, emit, cancellation
         raise AssertionError("retrieval never completed")
+
+
+class _ImmediateRetrieval:
+    async def retrieve(self, request: Any) -> AuthorizedContext:
+        del request
+        return AuthorizedContext(packet=ContextPacket(), authorized_revisions=())
+
+    async def revisions_unchanged(self, revisions: Any, **kwargs: Any) -> bool:
+        del revisions, kwargs
+        return True
+
+
+class _AdvanceClockThenFail:
+    def __init__(self, advance: Any) -> None:
+        self._advance = advance
+        self.calls = 0
+
+    async def run(self, request: Any, emit: Any, cancellation: Any) -> AgentOutcome:
+        del request, emit, cancellation
+        self.calls += 1
+        self._advance()
+        raise RuntimeError("provider failed after the fixed lease")
 
 
 async def _service(
@@ -167,8 +196,68 @@ def test_request_timeout_is_a_stable_deadline_failure_not_a_busy_turn() -> None:
     assert retrieval_calls == 1
 
 
-def test_reaper_terminalizes_an_orphan_without_replaying_it() -> None:
-    async def scenario() -> tuple[str, str, bool]:
+def test_late_generic_failure_returns_the_same_expiry_fact_as_retry() -> None:
+    async def scenario() -> tuple[AgentOutcome, AgentOutcome, int, list[str]]:
+        current = [datetime(2026, 7, 28, tzinfo=UTC)]
+        conversations = InMemoryConversationStore(clock=lambda: current[0])
+        await conversations.create_session(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            owner_id=PRINCIPAL,
+        )
+        retrieval = _ImmediateRetrieval()
+        executor = _AdvanceClockThenFail(
+            lambda: current.__setitem__(0, current[0] + timedelta(seconds=36))
+        )
+        service = ChatService(
+            retrieval=retrieval,  # pyright: ignore[reportArgumentType]
+            executor=executor,
+            conversations=conversations,
+            releaser=InMemoryChatReleaseCoordinator(
+                conversations=conversations,
+                revisions=retrieval,
+            ),
+            budget=RunBudget(max_steps=1, max_tool_calls=1),
+            request_timeout_seconds=30,
+            orphan_grace_seconds=5,
+        )
+        request = _request(key="late-failure", run_id="run_late_failure")
+        with pytest.raises(ChatExecutionError) as first:
+            await service.ask(request, _sink(request.run_id))
+
+        log = InMemoryEventLog()
+        reaper = ChatTurnReaper(
+            expiration=InMemoryChatExpirationCoordinator(
+                conversations=conversations,
+                events=log,
+            ),
+            poll_seconds=1,
+            batch_size=1,
+        )
+        await reaper.run_once()
+        with pytest.raises(ChatExecutionError) as repeated:
+            await service.ask(request, _sink(request.run_id))
+
+        events = await log.read(SESSION)
+        return (
+            first.value.outcome,
+            repeated.value.outcome,
+            executor.calls,
+            [event.event_type for event in events],
+        )
+
+    first, repeated, calls, event_types = asyncio.run(scenario())
+
+    assert first == repeated
+    assert first.stop_reason == "deadline"
+    assert first.error is not None
+    assert first.error.code == "stale_execution"
+    assert calls == 1
+    assert event_types == ["ChatTurnExpired"]
+
+
+def test_reaper_terminalizes_an_orphan_with_one_chat_event_without_replay() -> None:
+    async def scenario() -> tuple[str, str, bool, list[str]]:
         current = [datetime(2026, 7, 28, tzinfo=UTC)]
         conversations = InMemoryConversationStore(clock=lambda: current[0])
         await conversations.create_session(
@@ -187,11 +276,21 @@ def test_reaper_terminalizes_an_orphan_without_replaying_it() -> None:
             lease_seconds=5,
         )
         current[0] += timedelta(seconds=6)
-        expired = await ChatTurnReaper(
-            conversations=conversations,
+        log = InMemoryEventLog()
+        await log.append(
+            EventScope(stream_id=SESSION, run_id="run_orphan"),
+            RunCompleted(stop_reason="completed"),
+        )
+        reaper = ChatTurnReaper(
+            expiration=InMemoryChatExpirationCoordinator(
+                conversations=conversations,
+                events=log,
+            ),
             poll_seconds=1,
             batch_size=10,
-        ).run_once()
+        )
+        expired = await reaper.run_once()
+        assert await reaper.run_once() == ()
         same_key = await conversations.claim_turn(
             session_id=SESSION,
             tenant_id=TENANT,
@@ -213,13 +312,21 @@ def test_reaper_terminalizes_an_orphan_without_replaying_it() -> None:
             lease_seconds=5,
         )
         assert orphan.turn.lease_until is not None
-        return expired[0].status, same_key.turn.status, next_key.newly_claimed
+        events = await log.read(SESSION)
+        return (
+            expired[0].status,
+            same_key.turn.status,
+            next_key.newly_claimed,
+            [event.event_type for event in events],
+        )
 
-    expired_status, repeated_status, next_claimed = asyncio.run(scenario())
+    expired_status, repeated_status, next_claimed, event_types = asyncio.run(scenario())
 
     assert expired_status == "failed"
     assert repeated_status == "failed"
     assert next_claimed is True
+    assert event_types == ["RunCompleted", "ChatTurnExpired"]
+    assert "RunFailed" not in event_types
 
 
 def test_a_model_result_arriving_after_expiry_cannot_be_prepared() -> None:
@@ -242,32 +349,44 @@ def test_a_model_result_arriving_after_expiry_cannot_be_prepared() -> None:
             lease_seconds=5,
         )
         current[0] += timedelta(seconds=6)
-        prepared = await conversations.prepare_release(
+        with pytest.raises(ChatTurnLeaseExpiredError):
+            await conversations.prepare_release(
+                session_id=SESSION,
+                tenant_id=TENANT,
+                principal_id=PRINCIPAL,
+                turn_id=claim.turn.turn_id,
+                result=ChatTurnResult(
+                    outcome=AgentOutcome(
+                        agent_run_id="run_late",
+                        status="completed",
+                        stop_reason="completed",
+                        output_text="late secret",
+                    ),
+                    answer="late secret",
+                    authorized_revisions=(),
+                ),
+            )
+        stored = await conversations.claim_turn(
             session_id=SESSION,
             tenant_id=TENANT,
             principal_id=PRINCIPAL,
-            turn_id=claim.turn.turn_id,
-            result=ChatTurnResult(
-                outcome=AgentOutcome(
-                    agent_run_id="run_late",
-                    status="completed",
-                    stop_reason="completed",
-                    output_text="late secret",
-                ),
-                answer="late secret",
-                authorized_revisions=(),
-            ),
+            idempotency_key="late",
+            request_hash="c" * 64,
+            run_id="run_late",
+            user_message=user_message("slow question"),
+            lease_seconds=5,
         )
         history = await conversations.history(
             session_id=SESSION,
             tenant_id=TENANT,
             principal_id=PRINCIPAL,
         )
-        return prepared.status, len(history)
+        assert "late secret" not in stored.turn.model_dump_json()
+        return stored.turn.status, len(history)
 
     status, history_size = asyncio.run(scenario())
 
-    assert status == "failed"
+    assert status == "running"
     assert history_size == 1
 
 
