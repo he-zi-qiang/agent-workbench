@@ -35,9 +35,9 @@
 
 ## 当前事实
 
-截至 2026-07-28，`main@4d03f69` 已包含摄取 Worker 组件；当前开发分支已提交
-PR-035 安全发布基线与 PR-036 顺序多轮上下文，并正在实施 EventLog 可演进回放
-元数据。已经实现并测试：
+截至 2026-07-28，`main@4d03f69` 已包含摄取 Worker 组件；当前开发分支已完成
+PR-035～PR-042 的 Chat 安全发布、多轮、EventLog 演进/幂等、Turn 幂等、原子授权
+发布、固定 lease 和无流量恢复增量。已经实现并测试：
 
 - 框架无关的领域契约、Ports、Fake Adapter 和可复现 CLI；
 - 自研 Runtime 的串行 Tool Loop、Policy/Tool Gateway、预算与取消、并行只读
@@ -47,13 +47,14 @@ PR-035 安全发布基线与 PR-036 顺序多轮上下文，并正在实施 Even
 - Local ArtifactStore，以及 Upload / Artifact / Health / Chat / SSE FastAPI 路由；
 - PostgreSQL EventLog 的 gap-free cursor、显式 envelope schema version 与生产者时间戳；
 - BGE-M3 Dense、Qdrant Dense/Hybrid、固定 2-step RAG 与检索评测；
-- Chat answer release gate、source revision 读取栅栏、已提交消息的顺序多轮回放和
+- Chat answer release gate、source revision 读取栅栏、已提交消息的顺序多轮回放、
+  幂等 Turn ledger、固定执行 lease、`running/release_pending` 后台恢复和
   `knowledge_search` Tool Adapter。
 
-当前仍未完成：可靠常驻摄取 Worker、旧 Point 物理替换、并发/幂等 Chat Turn、
-历史 token window/compaction、可验证 Citation、Agentic Retrieval 最终 evidence
-gate、EventLog upcaster/poison-row 隔离、LlamaIndex/LangChain 互操作、LangGraph
-Task、Task Registry、Multi-Agent、生产身份认证、UI 和完整部署。
+当前仍未完成：可靠常驻摄取 Worker、旧 Point 物理替换、Chat expiry 与终态 Event
+原子提交、历史 token window/compaction、可验证 Citation、Agentic Retrieval 最终
+evidence gate、EventLog upcaster/poison-row 隔离、LlamaIndex/LangChain 互操作、
+LangGraph Task、Task Registry、Multi-Agent、生产身份认证、UI 和完整部署。
 
 安全边界：当前开发身份解析器信任请求头。监听地址已强制为 loopback（默认
 `127.0.0.1`，Settings 与装配层双重校验，并有真实 socket 测试），但生产身份认证

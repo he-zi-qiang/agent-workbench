@@ -12,10 +12,10 @@ LangChain and later comparison adapters stay behind explicit ports.
 ## Current status
 
 As of 2026-07-28, the main-branch baseline is `main@4d03f69`. The current
-development branch completes the PR-035 through PR-041 slices for secure
+development branch completes the PR-035 through PR-042 slices for secure
 answer release, multi-turn context, evolvable EventLog replay, idempotent
-Chat turns, atomic authorization fencing and orphan recovery. Implemented with
-test evidence:
+Chat turns, atomic authorization fencing and traffic-independent recovery.
+Implemented with test evidence:
 
 - framework-neutral domain contracts, ports, fake adapters and a reproducible
   CLI demo;
@@ -46,6 +46,9 @@ test evidence:
 - a fixed execution lease for `running` turns, safe request/disconnect
   cancellation and a PostgreSQL `SKIP LOCKED` reaper that terminalizes
   hard-crash orphans without automatically replaying model work;
+- background recovery for prepared answers that re-runs the final ACL/revision
+  fence and publishes atomically without relying on the original client; it
+  remains active even when the embedding/model stack is unavailable;
 - a `knowledge_search` Tool adapter backed by the same `RetrievalService` as
   fixed retrieval.
 
@@ -58,8 +61,8 @@ The remaining boundaries are explicit:
 - The source-revision barrier prevents stale Qdrant points from being read, but
   physical replacement/deletion of old points is not yet implemented.
 - A history token window/compaction and validation of the citations actually
-  used by the model remain to be built. Unattended `release_pending` recovery
-  and a durable terminal event from the reaper are also still open.
+  used by the model remain to be built. Atomic publication of a durable Chat
+  terminal event when the execution lease expires is also still open.
 - EventLog rejects an unknown schema version, but version upcasters,
   poison-row isolation and skip semantics are not yet implemented.
 - `knowledge_search` is not yet assembled into an agentic retrieval mode, and

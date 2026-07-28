@@ -12,6 +12,48 @@
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
 
+## 2026-07-28 PR-042 Chat pending 发布无流量恢复
+
+状态：**当前开发分支已实现；无外部服务门禁与静态检查通过。真实 PostgreSQL
+并发用例因当前环境未配置测试 DSN 而跳过，尚未合入 `main`**。
+
+PR-041 关闭了 `running` 硬崩溃后永久 busy，但 `prepare_release` 已提交、
+原子发布尚未开始的窗口仍需要原客户端用同一 key 重试。若客户端消失，
+`release_pending` 会一直占用单会话 active Turn。本轮把该恢复改为与请求流量无关：
+
+```text
+短查询 list_release_pending
+  → 取 session 的 tenant/owner scope
+  → 重新进入 ChatReleaseCoordinator
+  → 锁 session/Turn/引用文档/event stream
+  → 重新校验当前 ACL + source_revision
+  → AnswerCommitted | AnswerWithheld + assistant + terminal Turn 原子提交
+```
+
+实现要点：
+
+- 新增 `PendingChatRelease` 端口模型和 `list_release_pending(limit)`；Memory/PostgreSQL
+  共用同一契约，只返回 `release_pending`，按 `turn_id` 稳定排序并携带 session owner；
+- PostgreSQL 列表查询使用短连接普通 MVCC `SELECT + JOIN`，不把扫描事务或行锁带进
+  模型/发布阶段；多个恢复器可看到同一候选，最终由 Turn 锁、terminal state 和稳定
+  answer `event_key` 幂等收敛；
+- `ChatPendingReleaseRecovery` 隔离单候选失败，后续候选仍会尝试；失败项保留 pending，
+  下一轮继续重新授权，绝不把旧候选降级为未经检查的发布；
+- API lifespan 同时管理 running reaper 与 pending recovery；两者都只依赖
+  PostgreSQL/EventLog，不依赖 embedding、Qdrant 或模型，因此 Chat 降级不可用时仍能
+  清理先前遗留状态；
+- 确定性测试模拟 `after_prepare_before_release`：不再发送原请求，后台恢复后仍只写
+  一个 `AnswerCommitted`，并证明会话可 claim 新 key；另测单候选失败不终止同批后续项。
+
+完整无外部服务门禁为 `771 passed / 242 skipped`；Ruff、Pyright、compileall 和
+Alembic head 检查通过。真实 PostgreSQL 契约还覆盖 owner scope、limit/order，以及
+普通 pending scan 不等待另一个 Worker 持有的 Turn 行锁。
+
+仍保留一个可靠性边界：execution lease 到期目前可由 reaper、claim 机会回收或迟到
+prepare 写入 `chat_turns`，但尚未与专用 durable `ChatTurnExpired` event 原子提交。
+下一切片会收拢 expiry writer，并避免误把 Chat 发布层终态伪装为第二个 Runtime
+`RunFailed`。
+
 ## 2026-07-28 PR-041 Chat 固定执行 lease 与孤儿回收
 
 状态：**当前开发分支已实现；无外部服务门禁、静态检查和迁移 head 检查通过。
@@ -55,9 +97,9 @@ bounded reaper、两个 PostgreSQL Worker 的 `SKIP LOCKED`、请求 deadline �
 取消。完整无外部服务门禁为 `763 passed / 237 skipped`；Ruff、Pyright、compileall
 通过，Alembic 唯一 head 为 `0009_chat_turn_lease`。
 
-边界仍然明确：`release_pending` 是可幂等恢复状态，但目前需要同 key 客户端重试；
-后台尚不会主动完成无人重试的 pending Turn。reaper 终态目前写入 `chat_turns`，
-还没有与 durable Chat 终态 event 做原子提交。这两项属于下一可靠性增量。
+本节最初保留的 `release_pending` 无人重试边界已由 PR-042 关闭。仍开放的是：
+execution lease 到期终态目前写入 `chat_turns`，还没有与专用 durable Chat 终态
+event 做原子提交。
 
 `0009` 当前按停机迁移设计：部署必须先停止旧版本写入，再升级 schema，最后启动新版本。
 它不是 expand/dual-write/contract 三阶段 migration，不支持新旧应用副本滚动共存。

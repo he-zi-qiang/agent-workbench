@@ -7,7 +7,8 @@
 > 状态：截至 2026-07-28，主分支基线为 `main@4d03f69`，当前开发分支已完成
 > 自研 Runtime、PostgreSQL/Artifact/Document/ACL/Outbox、Dense/Hybrid RAG 与评测、
 > 固定检索 Chat/SSE、多轮上下文、EventLog 版本化与幂等键、`chat_turns` 请求幂等、
-> 原子发布和 fixed-lease orphan recovery。下一主线是 WP06 LangGraph Task MVP；
+> 原子发布、fixed-lease orphan recovery 和无人值守 pending 发布恢复。下一主线是
+> WP06 LangGraph Task MVP；
 > LlamaIndex/LangChain 互操作、
 > 可靠常驻 Ingestion Worker、Task Registry/lease/fencing、Multi-Agent 与 UI 仍开放
 >

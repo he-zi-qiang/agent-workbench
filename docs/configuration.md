@@ -241,7 +241,8 @@ chat lease_until
 
 `api.request_timeout_seconds` 约束完整 Chat use case，不只约束单次模型 HTTP。
 `chat.reaper_poll_seconds` 和 `chat.reaper_batch_size` 控制 API lifespan 内的
-terminal-only reaper。`chat.orphan_action="terminal_fail"` 与
+terminal-only running reaper 与 pending-release recovery；后者重新进入当前
+ACL/revision 发布栅栏，不重跑模型。`chat.orphan_action="terminal_fail"` 与
 `chat.automatic_retry=false` 使用单值 Literal 锁死：当前没有 checkpoint、attempt
 event 和副作用 ledger，过期 Turn 只能失败，不能自动重放。
 

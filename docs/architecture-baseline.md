@@ -461,6 +461,8 @@ SSE/UI 只能把 `AnswerCommitted` 视为可展示的检索型答案，不能把
 - reaper 使用 `FOR UPDATE SKIP LOCKED` 把到期 Turn 转为稳定失败，不追加 assistant，
   不删除 user message，也不重新执行模型；
 - 同 key 重试返回原失败；业务重试必须使用新 key。
+- `release_pending` 由独立后台恢复器短查询发现，随后重新进入同一个原子
+  ACL/revision 发布协调器；它不依赖请求流量，也不依赖 embedding/model 可用。
 
 如果未来要把到期 Turn 重新交给其他执行者，`lease_owner + lease_epoch + heartbeat +
 所有 checkpoint/event/副作用写入 fencing` 必须一起加入，不能把固定 deadline 改名为
@@ -1440,7 +1442,7 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | LangChain model/tool 互操作 Adapter | ✓ |  |  |  |
 | BGE-M3 + Qdrant Dense/Hybrid RAG 与离线评测 | ✓ | ✓ | ✓ |  |
 | 固定检索 Chat + RAG（ACL 双检、发布门、多轮、请求幂等） | ✓ | ✓ | ✓ |  |
-| Chat 固定执行 lease、取消清理与 terminal-only reaper | ✓ | ✓ | ✓ |  |
+| Chat 固定执行 lease、取消清理、terminal-only reaper 与 pending 发布恢复 | ✓ | ✓ | ✓ |  |
 | Agentic `knowledge_search` 产品装配 | ✓ |  |  |  |
 | LlamaIndex ingestion/retrieval Adapter | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
