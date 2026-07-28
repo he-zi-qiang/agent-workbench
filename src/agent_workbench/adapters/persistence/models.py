@@ -125,8 +125,16 @@ chat_turns = Table(
     ),
     # These are complete versioned Pydantic aggregates. Repositories validate
     # them on every read instead of treating JSONB as an untyped cache.
-    Column("result", JSONB, nullable=True),
-    Column("failure_outcome", JSONB, nullable=True),
+    #
+    # none_as_null is not decoration. JSONB has two distinguishable emptinesses
+    # -- SQL NULL and the JSON value null -- and SQLAlchemy writes Python None
+    # as the latter by default. The lifecycle constraint below is phrased in
+    # SQL NULL, so without this a turn that has no failure stores json 'null',
+    # which IS NOT NULL, and every non-failed transition is rejected. These are
+    # the only nullable JSONB columns in the schema, which is why nothing
+    # before them needed to say this.
+    Column("result", JSONB(none_as_null=True), nullable=True),
+    Column("failure_outcome", JSONB(none_as_null=True), nullable=True),
     Column(
         "created_at",
         DateTime(timezone=True),
