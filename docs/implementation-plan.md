@@ -793,7 +793,7 @@ M3a 中 approval/export 先使用无副作用 Fake node；真实审批放在 WP1
 | WP07-04 | 提交前解析并 reservation Qdrant concrete generation |
 | WP07-05 | `run_event_streams/run_events` repository |
 | WP07-06 | per-stream sequence 分配与 cursor codec |
-| WP07-07 | 合并文本 chunk、ModelCompleted、Tool/节点/终态 durable event |
+| WP07-07 | 合并文本 chunk、ModelCompleted、AnswerCommitted/Withheld、Tool/节点/终态 durable event |
 | WP07-08 | Task generation reservation、终态释放与 Task-aware safe GC |
 
 ### Task 提交事务
@@ -832,8 +832,9 @@ generation 已进入不可保留状态，则回滚并重新解析，不提交悬
   retention/outbox 校验才能删除；
 - “解析 alias → alias 切换/GC → Task commit”barrier 下必须
   reserve-or-retry，不能形成悬空引用；
-- durable event 至少包含合并后的文本 chunk、`ModelCompleted`、Tool、
-  checkpoint/node、审批和终态，支持从最近 durable chunk 继续展示。
+- durable event 至少包含 `ModelCompleted`、Tool、checkpoint/node、审批和终态；
+  检索型 Chat 的正文必须等最终 evidence/ACL 复核后才进入 `AnswerCommitted`，
+  复核失败只写 `AnswerWithheld`，支持从最近 durable commit 继续展示。
 
 ---
 

@@ -7,9 +7,72 @@
 - [架构与技术选型基线 v1.3](./architecture-baseline.md)；
 - [代码实施计划 v1.0](./implementation-plan.md)；
 - [配置管理契约 schema 1.2](./configuration.md)；
-- [2026-07-25 仓库核验报告](./repository-audit-2026-07-25.md)。
+- [2026-07-25 仓库核验报告](./repository-audit-2026-07-25.md)；
+- [2026-07-27 仓库复核报告](./repository-audit-2026-07-27.md)。
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
+
+## 2026-07-28 PR-035 安全发布基线
+
+状态：**当前开发分支已实现并通过本地确定性测试，尚未合入 `main`**。
+
+本轮关闭了 2026-07-27 复核报告中的两条直接读取风险：
+
+1. **答案发布门**：固定 2-step Chat 不再把未完成最终 ACL 复核的模型正文写入
+   durable `ModelCompleted` 或 live `ModelDelta`。Runtime 事件仍保留调用、用量和终态，
+   但答案正文只在复核成功后进入 `AnswerCommitted`；撤权时只写安全的
+   `AnswerWithheld`。
+2. **source revision 读取栅栏**：Qdrant 候选除当前可读外，还必须满足
+   `candidate.source_revision == PostgreSQL 当前 source_revision`。旧 revision 和不可能的
+   future revision 都不能进入 `ContextPacket`。
+
+同时修正了三项相邻的 Chat 语义：
+
+- failed/cancelled AgentOutcome 不再保存空 assistant 消息或返回 HTTP 200；API 分别返回
+  结构化的 502/504/409 终态；
+- Route、`AgentRunRequest`、EventScope、AgentOutcome 和 API response 共用同一个
+  `run_id`，Chat stream 固定为 session ID；
+- session ownership 在 embedding/Qdrant 检索前验证，猜测 session ID 不能触发昂贵检索。
+
+确定性测试覆盖：
+
+```text
+正常路径：ModelCompleted 正文为空
+        → ACL/evidence confirm
+        → Conversation Store 写入
+        → AnswerCommitted 含最终答案
+
+撤权路径：模型已生成秘密文本
+        → confirm_unchanged 失败
+        → HTTP 只返回拒答
+        → History / EventLog / SSE 均不含秘密
+        → AnswerWithheld 只含安全替代文本
+
+失败路径：RunFailed/RunCancelled
+        → History 只保留 user message
+        → 无 AnswerCommitted/AnswerWithheld
+        → API 非 200
+```
+
+2026-07-28 本地质量门：
+
+```text
+ruff format --check .    passed（178 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+pytest                   711 passed / 188 skipped / 1 environment failure
+```
+
+唯一失败仍为受限沙箱禁止 `socket.bind()` 的 loopback 真实性测试；与本轮代码无关。
+外部 PostgreSQL、Qdrant 和真实 BGE 权重未配置的测试按契约跳过。
+
+本轮**没有**宣称完成：
+
+- Qdrant 旧 Point 物理 replace/delete；当前已做到“不可读取”，尚未做到“已清理”；
+- Ingestion Worker 的 advisory lock、heartbeat、retry/dead-letter 和常驻进程；
+- Agentic `knowledge_search` 的 run-scoped evidence ledger 与最终提交门；
+- 幂等 `chat_turns`、真正多轮历史、模型实际引用校验；
+- LangGraph Task、Task Registry、Multi-Agent、CrewAI benchmark。
 
 ## 2026-07-25 仓库核验总览
 

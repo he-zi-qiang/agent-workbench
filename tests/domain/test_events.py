@@ -13,6 +13,8 @@ from agent_workbench.domain.events import (
     DURABLE_EVENT_TYPES,
     EVENT_DURABILITY,
     TRANSIENT_EVENT_TYPES,
+    AnswerCommitted,
+    AnswerWithheld,
     EventEnvelope,
     EventType,
     ModelDelta,
@@ -47,7 +49,27 @@ def test_only_streamed_chatter_is_transient() -> None:
 
     assert sorted(TRANSIENT_EVENT_TYPES) == ["ModelDelta", "ToolProgress"]
     assert "ModelCompleted" in DURABLE_EVENT_TYPES
+    assert "AnswerCommitted" in DURABLE_EVENT_TYPES
+    assert "AnswerWithheld" in DURABLE_EVENT_TYPES
     assert TRANSIENT_EVENT_TYPES.isdisjoint(DURABLE_EVENT_TYPES)
+
+
+def test_only_the_answer_commit_event_makes_checked_text_public() -> None:
+    committed = AnswerCommitted(text="checked")
+    withheld = AnswerWithheld(text="safe refusal")
+
+    assert committed.text == "checked"
+    assert withheld.text == "safe refusal"
+    assert withheld.reason_code == "sources_changed"
+
+
+def test_answer_events_round_trip_through_the_discriminated_envelope() -> None:
+    envelope = _envelope(payload=AnswerCommitted(text="checked"))
+
+    restored = EventEnvelope.model_validate_json(envelope.model_dump_json())
+
+    assert isinstance(restored.payload, AnswerCommitted)
+    assert restored.payload.text == "checked"
 
 
 def test_durability_follows_the_payload_not_the_caller() -> None:

@@ -11,28 +11,46 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-07-25, `main@f071323` contains **PR-001 through PR-015** and the
-ADR-012 identity decision. Implemented and tested today:
+As of 2026-07-28, the main-branch baseline is `main@4d03f69`, and the current
+development branch is implementing the PR-035 secure answer-release baseline.
+Implemented with test evidence:
 
 - framework-neutral domain contracts, ports, fake adapters and a reproducible
   CLI demo;
 - the custom `ClaudeLikeAgentRuntime`, including its tool loop, schema/policy
-  gateway, deadlines, cancellation, parallel reads, exclusive barriers and
-  hooks;
-- an offline contract-tested DeepSeek OpenAI-compatible streaming adapter;
-- PostgreSQL conversations, migrations, documents, versions, ACLs,
-  transactional outbox and `SKIP LOCKED` claiming;
-- a local artifact store and FastAPI upload/artifact/health endpoints.
+  gateway, budgets and deadlines, cancellation, parallel read scheduling,
+  exclusive barriers and Hook Bus;
+- a DeepSeek OpenAI-compatible streaming adapter, configuration projection and
+  API assembly;
+- PostgreSQL conversations and Alembic migrations, document/version/ACL
+  storage, a transactional outbox, competitive `SKIP LOCKED` claiming and an
+  ingestion-worker component;
+- a local artifact store and FastAPI upload, artifact, health, Chat and SSE
+  APIs;
+- BGE-M3 dense embeddings, Qdrant dense/hybrid retrieval and offline RAG
+  evaluation;
+- fixed two-step Chat with two ACL checks, an answer-release gate and a source
+  revision read barrier;
+- a `knowledge_search` Tool adapter backed by the same `RetrievalService` as
+  fixed retrieval.
 
-The boundaries are equally important:
+The remaining boundaries are explicit:
 
-- The DeepSeek adapter is not wired into Bootstrap, the API or the CLI, and
-  there is no live-provider E2E. `agent-cli demo` still uses the scripted model.
-- The implemented HTTP surface is an upload slice, not Chat or Task. RAG,
-  LangGraph workflows, multi-Agent execution, SSE, approvals, UI, production
-  identity and deployment remain planned.
-- PostgreSQL task registry, leases, fencing, checkpoints and LISTEN/NOTIFY
-  coordination are not implemented.
+- `IngestionWorker` is still an invocable component rather than a reliable
+  resident process: heartbeat, retry/dead-letter handling and fencing of
+  external side effects across multiple workers are missing, and the product
+  upload-to-search E2E is not yet connected.
+- The source-revision barrier prevents stale Qdrant points from being read, but
+  physical replacement/deletion of old points is not yet implemented.
+- Chat still persists history around a single-turn fixed RAG call. Idempotent
+  turns, true multi-turn context and validation of the citations actually used
+  by the model remain to be built.
+- `knowledge_search` is not yet assembled into an agentic retrieval mode, and
+  that path still needs a final evidence-revision gate before an answer may be
+  released.
+- LlamaIndex and LangChain adapters, LangGraph Task workflows, the Task
+  Registry, multi-Agent execution, the CrewAI comparison, UI, production
+  authentication and deployment remain planned.
 
 > **Security warning:** the current identity adapter trusts request headers, so
 > `agent-api` is for controlled local development only and must not be exposed to

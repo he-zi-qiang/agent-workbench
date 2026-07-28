@@ -1,0 +1,317 @@
+"""The final authorization check, expressed as an event publication boundary."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+
+from agent_workbench.adapters.events import ScopedEventSink
+from agent_workbench.adapters.memory import (
+    InMemoryConversationStore,
+    InMemoryEventLog,
+)
+from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
+from agent_workbench.adapters.policy import EnvelopePolicyEngine
+from agent_workbench.adapters.tools import StaticToolRegistry
+from agent_workbench.application.answer_release import AnswerReleaseSink
+from agent_workbench.application.chat import (
+    ChatExecutionError,
+    ChatRequest,
+    ChatService,
+)
+from agent_workbench.application.retrieval import AuthorizedContext
+from agent_workbench.domain.context import Citation, ContextPacket
+from agent_workbench.domain.errors import ErrorInfo
+from agent_workbench.domain.events import AnswerCommitted, ModelCompleted, ModelDelta
+from agent_workbench.domain.policies import PrincipalContext
+from agent_workbench.domain.runs import RunBudget
+from agent_workbench.ports.event_log import EventScope
+from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
+
+SECRET = "the answer must not be public before its evidence is checked"
+SAFE_REFUSAL = "The answer was withheld."
+SCOPE = EventScope(stream_id="ses_1", run_id="run_1")
+
+
+def _sink(log: InMemoryEventLog) -> ScopedEventSink:
+    return ScopedEventSink(log=log, scope=SCOPE)
+
+
+def test_pre_commit_model_events_are_redacted_and_a_refusal_is_safe() -> None:
+    async def scenario() -> tuple[Any, Any, tuple[Any, ...]]:
+        log = InMemoryEventLog()
+        release = AnswerReleaseSink(_sink(log))
+        delta = await release.emit(ModelDelta(model_call_id="mc_1", text=SECRET))
+        completed = await release.emit(
+            ModelCompleted(
+                model_call_id="mc_1",
+                finish_reason="stop",
+                text=SECRET,
+            )
+        )
+        await release.withhold(text=SAFE_REFUSAL)
+        return delta, completed, await log.read(SCOPE.stream_id)
+
+    delta, completed, replayed = asyncio.run(scenario())
+    serialized = "\n".join(event.model_dump_json() for event in replayed)
+
+    assert delta.payload.text == ""
+    assert completed.payload.text == ""
+    assert SECRET not in serialized
+    assert [event.event_type for event in replayed] == [
+        "ModelCompleted",
+        "AnswerWithheld",
+    ]
+    assert SAFE_REFUSAL in serialized
+
+
+def test_a_checked_answer_is_published_once_after_model_completion() -> None:
+    citation = Citation(
+        chunk_id="chk_1",
+        document_id="doc_1",
+        document_version="ver_1",
+    )
+
+    async def scenario() -> tuple[Any, ...]:
+        log = InMemoryEventLog()
+        release = AnswerReleaseSink(_sink(log))
+        await release.emit(
+            ModelCompleted(
+                model_call_id="mc_1",
+                finish_reason="stop",
+                text=SECRET,
+            )
+        )
+        await release.commit(text=SECRET, citations=(citation,))
+        return await log.read(SCOPE.stream_id)
+
+    replayed = asyncio.run(scenario())
+
+    assert [event.event_type for event in replayed] == [
+        "ModelCompleted",
+        "AnswerCommitted",
+    ]
+    assert replayed[0].payload.text == ""
+    assert replayed[1].payload.text == SECRET
+    assert replayed[1].payload.citations == (citation,)
+
+
+def test_an_answer_release_sink_cannot_publish_both_outcomes() -> None:
+    async def scenario() -> None:
+        release = AnswerReleaseSink(_sink(InMemoryEventLog()))
+        await release.withhold(text=SAFE_REFUSAL)
+        await release.commit(text=SECRET, citations=())
+
+    with pytest.raises(RuntimeError, match="only once"):
+        asyncio.run(scenario())
+
+
+def test_the_generic_emit_method_cannot_bypass_the_release_gate() -> None:
+    async def scenario() -> None:
+        release = AnswerReleaseSink(_sink(InMemoryEventLog()))
+        await release.emit(AnswerCommitted(text=SECRET))
+
+    with pytest.raises(RuntimeError, match=r"commit\(\) or withhold\(\)"):
+        asyncio.run(scenario())
+
+
+class _EmptyRetrieval:
+    confirmed = False
+    retrieve_calls = 0
+
+    async def retrieve(self, request: Any) -> AuthorizedContext:
+        self.retrieve_calls += 1
+        return AuthorizedContext(packet=ContextPacket(), authorized_revisions=())
+
+    async def confirm_unchanged(self, context: Any, **kwargs: Any) -> None:
+        self.confirmed = True
+
+
+class _ChangingRetrieval(_EmptyRetrieval):
+    async def confirm_unchanged(self, context: Any, **kwargs: Any) -> None:
+        from agent_workbench.application.retrieval import SourcesChangedError
+
+        raise SourcesChangedError("changed at the release barrier")
+
+
+def _chat(
+    retrieval: Any,
+    conversations: InMemoryConversationStore,
+    turns: list[ScriptedTurn],
+) -> ChatService:
+    registry = StaticToolRegistry([])
+    return ChatService(
+        retrieval=retrieval,
+        executor=ClaudeLikeAgentRuntime(
+            model=FakeModel(turns),
+            gateway=ToolGateway(
+                registry=registry,
+                policy=EnvelopePolicyEngine(registry=registry),
+            ),
+            policy_identity="test-policy",
+        ),
+        conversations=conversations,
+        budget=RunBudget(max_steps=1, max_tool_calls=1),
+    )
+
+
+async def _conversations() -> InMemoryConversationStore:
+    conversations = InMemoryConversationStore()
+    await conversations.create_session(
+        session_id="ses_1",
+        tenant_id="tenant_a",
+        owner_id="user_1",
+    )
+    return conversations
+
+
+def _request() -> ChatRequest:
+    return ChatRequest(
+        session_id="ses_1",
+        question="private question",
+        principal=PrincipalContext(
+            principal_id="user_1",
+            tenant_id="tenant_a",
+        ),
+        knowledge_base_id="kb_main",
+        run_id="run_1",
+        stream_id="ses_1",
+    )
+
+
+def test_chat_publishes_a_success_only_after_the_release_check() -> None:
+    async def scenario() -> tuple[list[str], tuple[Any, ...], bool, str]:
+        conversations = await _conversations()
+        retrieval = _EmptyRetrieval()
+        service = _chat(retrieval, conversations, [ScriptedTurn(text=SECRET)])
+        log = InMemoryEventLog()
+
+        turn = await service.ask(_request(), _sink(log))
+
+        history = await service.history(
+            session_id="ses_1",
+            tenant_id="tenant_a",
+            principal_id="user_1",
+        )
+        return (
+            [message.role for message in history],
+            await log.read(SCOPE.stream_id),
+            retrieval.confirmed,
+            turn.outcome.agent_run_id,
+        )
+
+    roles, events, confirmed, run_id = asyncio.run(scenario())
+    serialized_before_commit = "\n".join(
+        event.model_dump_json() for event in events[:-1]
+    )
+
+    assert confirmed is True
+    assert run_id == "run_1"
+    assert {event.run_id for event in events} == {"run_1"}
+    assert roles == ["user", "assistant"]
+    assert events[-1].event_type == "AnswerCommitted"
+    assert SECRET not in serialized_before_commit
+    assert events[-1].payload.text == SECRET
+    assert [event.event_type for event in events].index("RunCompleted") < len(
+        events
+    ) - 1
+
+
+def test_chat_publishes_only_a_safe_refusal_when_sources_change() -> None:
+    async def scenario() -> tuple[list[str], tuple[Any, ...]]:
+        conversations = await _conversations()
+        service = _chat(
+            _ChangingRetrieval(),
+            conversations,
+            [ScriptedTurn(text=SECRET)],
+        )
+        log = InMemoryEventLog()
+
+        turn = await service.ask(_request(), _sink(log))
+        assert turn.withheld is True
+        history = await service.history(
+            session_id="ses_1",
+            tenant_id="tenant_a",
+            principal_id="user_1",
+        )
+        return [message.role for message in history], await log.read(SCOPE.stream_id)
+
+    roles, events = asyncio.run(scenario())
+    serialized = "\n".join(event.model_dump_json() for event in events)
+
+    assert roles == ["user", "assistant"]
+    assert SECRET not in serialized
+    assert events[-1].event_type == "AnswerWithheld"
+    assert SAFE_REFUSAL not in serialized
+    assert "no longer able to read" in serialized
+
+
+def test_a_failed_model_run_is_not_saved_or_published_as_an_answer() -> None:
+    async def scenario() -> tuple[list[str], str]:
+        conversations = await _conversations()
+        service = _chat(
+            _EmptyRetrieval(),
+            conversations,
+            [
+                ScriptedTurn(
+                    text=SECRET,
+                    error=ErrorInfo(
+                        code="provider_error",
+                        message="scripted provider failure",
+                    ),
+                ),
+            ],
+        )
+        log = InMemoryEventLog()
+
+        with pytest.raises(ChatExecutionError):
+            await service.ask(
+                _request(),
+                _sink(log),
+            )
+
+        history = await service.history(
+            session_id="ses_1",
+            tenant_id="tenant_a",
+            principal_id="user_1",
+        )
+        replayed = await log.read(SCOPE.stream_id)
+        return [message.role for message in history], "\n".join(
+            event.model_dump_json() for event in replayed
+        )
+
+    roles, serialized = asyncio.run(scenario())
+
+    assert roles == ["user"]
+    assert SECRET not in serialized
+    assert "AnswerCommitted" not in serialized
+    assert "AnswerWithheld" not in serialized
+    assert "RunFailed" in serialized
+
+
+def test_an_unauthorized_session_is_rejected_before_retrieval() -> None:
+    from agent_workbench.domain.errors import NotFoundError
+
+    async def scenario() -> int:
+        conversations = await _conversations()
+        retrieval = _EmptyRetrieval()
+        service = _chat(retrieval, conversations, [ScriptedTurn(text=SECRET)])
+
+        with pytest.raises(NotFoundError):
+            await service.ask(
+                ChatRequest(
+                    session_id="ses_1",
+                    question="make the owner pay for retrieval",
+                    principal=PrincipalContext(
+                        principal_id="user_neighbour",
+                        tenant_id="tenant_a",
+                    ),
+                    knowledge_base_id="kb_main",
+                ),
+                _sink(InMemoryEventLog()),
+            )
+        return retrieval.retrieve_calls
+
+    assert asyncio.run(scenario()) == 0

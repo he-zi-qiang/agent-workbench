@@ -20,7 +20,7 @@ import hashlib
 import os
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qdrant_client import AsyncQdrantClient
@@ -44,7 +44,8 @@ from agent_workbench.application.retrieval import (
     RetrievalService,
     SourcesChangedError,
 )
-from agent_workbench.ports.vector_index import ScoredChunk
+from agent_workbench.ports.documents import DocumentStore, ReadableDocument
+from agent_workbench.ports.vector_index import ScoredChunk, VectorIndexPort
 
 DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 QDRANT_URL_ENV_VAR = "AGENT_WORKBENCH_TEST_QDRANT_URL"
@@ -253,6 +254,91 @@ def test_a_stranger_gets_nothing(harness_unused: None = None) -> None:
     assert _run(scenario) == 0
 
 
+# --- source revision gate ----------------------------------------------------
+
+
+class _RevisionCandidates:
+    """An index copy that may lag behind PostgreSQL."""
+
+    def __init__(self, candidates: tuple[ScoredChunk, ...]) -> None:
+        self._candidates = candidates
+
+    async def search(self, **kwargs: Any) -> tuple[ScoredChunk, ...]:
+        return self._candidates
+
+
+class _ReadableAtRevision:
+    """The current authorization snapshot returned by PostgreSQL."""
+
+    def __init__(self, revision: int) -> None:
+        self._revision = revision
+
+    async def readable_versions(self, **kwargs: Any) -> tuple[ReadableDocument, ...]:
+        return (
+            ReadableDocument(
+                document_id="doc_1",
+                knowledge_base_id=KB,
+                source_revision=self._revision,
+            ),
+        )
+
+
+def _revision_candidate(revision: int, *, text: str) -> ScoredChunk:
+    return ScoredChunk(
+        chunk_id=f"chk_revision_{revision}",
+        document_id="doc_1",
+        document_version=f"ver_{revision}",
+        tenant_id=TENANT,
+        knowledge_base_id=KB,
+        source_revision=revision,
+        text=text,
+        ordinal=0,
+        score=1.0,
+    )
+
+
+def _retrieve_revision_candidates(
+    candidates: tuple[ScoredChunk, ...], *, current_revision: int
+) -> AuthorizedContext:
+    service = RetrievalService(
+        embedder=DeterministicEmbedder(dimension=SIZE),
+        index=cast(VectorIndexPort, _RevisionCandidates(candidates)),
+        documents=cast(DocumentStore, _ReadableAtRevision(current_revision)),
+    )
+    return asyncio.run(service.retrieve(_ask(OWNER)))
+
+
+def test_a_readable_document_does_not_authorize_a_stale_revision() -> None:
+    """Current access must not make removed text from an old point readable."""
+
+    context = _retrieve_revision_candidates(
+        (_revision_candidate(1, text="text removed in revision two"),),
+        current_revision=2,
+    )
+
+    assert context.packet.chunks == ()
+    assert context.packet.citations == ()
+    assert context.authorized_revisions == ()
+
+
+def test_the_candidate_at_the_current_revision_is_retained() -> None:
+    """The gate filters stale copies without filtering the current snapshot."""
+
+    context = _retrieve_revision_candidates(
+        (
+            _revision_candidate(1, text="stale text"),
+            _revision_candidate(2, text="current text"),
+        ),
+        current_revision=2,
+    )
+
+    assert tuple(chunk.text for chunk in context.packet.chunks) == ("current text",)
+    assert tuple(citation.chunk_id for citation in context.packet.citations) == (
+        "chk_revision_2",
+    )
+    assert context.authorized_revisions == (("doc_1", 2),)
+
+
 # --- the barrier -------------------------------------------------------------
 
 
@@ -320,19 +406,25 @@ def test_the_revoked_text_does_not_appear_anywhere_in_the_packet() -> None:
     assert "fourteenth" not in dumped
 
 
-def test_the_owner_is_unaffected_by_a_revoked_grant() -> None:
-    """The control: the revoke removed a grant, not the document."""
+def test_the_owner_remains_authorized_but_does_not_receive_a_stale_revision() -> None:
+    """A revoke does not revoke the owner, but it still advances the source."""
 
-    async def scenario(harness: _Harness) -> tuple[int, int]:
+    async def scenario(harness: _Harness) -> tuple[int, int, str]:
         await harness.publish(granted=(READER,))
         racing = _RevokingIndex(harness.index, harness)
         context = await harness.retrieval(index=racing).retrieve(_ask(OWNER))
-        return len(racing.returned), len(context.packet.chunks)
+        current = await harness.store.document(
+            document_id="doc_1",
+            tenant_id=TENANT,
+            principal_id=OWNER,
+        )
+        return len(racing.returned), len(context.packet.chunks), current.owner_id
 
-    from_index, in_context = _run(scenario)
+    from_index, in_context, owner = _run(scenario)
 
     assert from_index > 0
-    assert in_context > 0
+    assert in_context == 0
+    assert owner == OWNER
 
 
 # --- the second check --------------------------------------------------------

@@ -266,16 +266,21 @@ async def _open(client: httpx.AsyncClient, headers: dict[str, str]) -> str:
 def test_a_mounted_route_answers(tmp_path: Path) -> None:
     """The control the absence tests need: the router does work when present."""
 
-    async def scenario(client: httpx.AsyncClient) -> tuple[int, bool]:
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, bool, str]:
         session = await _open(client, OWNER_HEADERS)
         response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
             headers=OWNER_HEADERS,
             json={"question": "what closed", "knowledge_base_id": "kb_main"},
         )
-        return response.status_code, response.json()["withheld"]
+        payload = response.json()
+        return response.status_code, payload["withheld"], payload["run_id"]
 
-    assert _run_mounted(scenario, tmp_path) == (200, False)
+    status_code, withheld, run_id = _run_mounted(scenario, tmp_path)
+
+    assert status_code == 200
+    assert withheld is False
+    assert run_id.startswith("run_")
 
 
 def test_a_neighbour_cannot_ask_into_someone_elses_session(tmp_path: Path) -> None:
@@ -335,9 +340,9 @@ def test_a_turn_writes_durable_events_into_the_sessions_stream(
 ) -> None:
     """The whole reason the route waited for a durable log."""
 
-    async def scenario(client: httpx.AsyncClient) -> tuple[str, int]:
+    async def scenario(client: httpx.AsyncClient) -> tuple[str, str, set[str]]:
         session = await _open(client, OWNER_HEADERS)
-        await client.post(
+        response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
             headers=OWNER_HEADERS,
             json={"question": "what closed", "knowledge_base_id": "kb_main"},
@@ -345,20 +350,25 @@ def test_a_turn_writes_durable_events_into_the_sessions_stream(
         engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
         try:
             async with engine.connect() as connection:
-                stored = (
-                    await connection.execute(
-                        text("SELECT count(*) FROM events WHERE stream_id = :s"),
-                        {"s": session},
-                    )
-                ).scalar_one()
+                stored_run_ids = set(
+                    (
+                        await connection.execute(
+                            text(
+                                "SELECT DISTINCT run_id FROM events "
+                                "WHERE stream_id = :s"
+                            ),
+                            {"s": session},
+                        )
+                    ).scalars()
+                )
         finally:
             await engine.dispose()
-        return session, int(stored)
+        return session, response.json()["run_id"], stored_run_ids
 
-    session, stored = _run_mounted(scenario, tmp_path)
+    session, response_run_id, stored_run_ids = _run_mounted(scenario, tmp_path)
 
     assert session.startswith("ses_")
-    assert stored > 0
+    assert stored_run_ids == {response_run_id}
 
 
 def test_an_unknown_field_in_the_question_is_refused(tmp_path: Path) -> None:

@@ -14,17 +14,21 @@ from typing import Any
 
 from sqlalchemy import text
 
+from agent_workbench.adapters.events import ScopedEventSink
+from agent_workbench.adapters.memory import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
     PostgresEventLog,
     create_query_engine,
 )
+from agent_workbench.application.answer_release import AnswerReleaseSink
 from agent_workbench.apps.api.routes.events import (
     HEARTBEAT,
     LAST_EVENT_ID_HEADER,
+    _frame,
     _resume_from,
     _stream,
 )
-from agent_workbench.domain.events import ModelDelta, RunStarted
+from agent_workbench.domain.events import ModelCompleted, ModelDelta, RunStarted
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.event_log import EventCursor, EventScope
 
@@ -71,6 +75,37 @@ def test_a_malformed_cursor_starts_over_rather_than_failing() -> None:
     """
 
     assert _resume_from(_FakeRequest("not-a-cursor"), "ses_1") is None  # pyright: ignore[reportArgumentType]
+
+
+def test_uncommitted_answer_text_cannot_enter_an_sse_frame() -> None:
+    """SSE serializes only the redacted provider event and safe refusal."""
+
+    secret = "private answer generated before the final ACL check"
+
+    async def scenario() -> str:
+        log = InMemoryEventLog()
+        scope = EventScope(stream_id="ses_1", run_id="run_1")
+        release = AnswerReleaseSink(ScopedEventSink(log=log, scope=scope))
+        await release.emit(
+            ModelCompleted(
+                model_call_id="mc_1",
+                finish_reason="stop",
+                text=secret,
+            )
+        )
+        await release.withhold(text="safe refusal")
+        replayed = await log.read(scope.stream_id)
+        return "".join(
+            _frame(event, scope.stream_id, event.sequence)
+            for event in replayed
+            if event.sequence is not None
+        )
+
+    frames = asyncio.run(scenario())
+
+    assert secret not in frames
+    assert "safe refusal" in frames
+    assert "AnswerWithheld" in frames
 
 
 # --- the stream itself, against a real log -----------------------------------
