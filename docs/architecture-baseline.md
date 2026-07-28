@@ -399,6 +399,8 @@ ContextBuilt
 ModelStarted
 ModelDelta
 ModelCompleted
+AnswerCommitted
+AnswerWithheld
 ToolProposed
 PermissionRequested
 PermissionResolved
@@ -417,7 +419,24 @@ RunCancelled
 
 CLI、SSE、审计日志和 OpenTelemetry 消费同一事件协议，不各自发明回调。
 
-PostgreSQL `run_events` 是唯一持久事件事实源，`EventLogPort` 只是其框架无关接口。`ModelDelta`、高频 Tool progress 属于 transient stream，不逐 token 写数据库；只持久化合并后的 chunk、`ModelCompleted`、Tool/审批/节点状态、错误和终态。事件用于审计与观察，不替代 Conversation Store、LangGraph checkpoint 或 Runtime checkpoint。
+PostgreSQL `run_events` 是唯一持久事件事实源，`EventLogPort` 只是其框架无关接口。
+`ModelDelta`、高频 Tool progress 属于 transient stream，不逐 token 写数据库；
+`ModelCompleted`、Tool/审批/节点状态、错误和终态属于 durable event。事件用于审计与
+观察，不替代 Conversation Store、LangGraph checkpoint 或 Runtime checkpoint。
+
+对使用检索证据的 Chat，`ModelCompleted` 只表示 Provider 已经结束一次模型调用，**不等于
+答案已获准公开**。Chat application 必须在 Runtime 外包一层 answer release gate：
+
+1. 最终 ACL/evidence 复核前，`ModelDelta.text`、`ModelCompleted.text` 和
+   `output_ref` 不得进入公开 EventLog 或 live subscriber；
+2. 复核通过且 Conversation Store 成功写入后，才发布包含答案正文和引用的 durable
+   `AnswerCommitted`；
+3. 复核失败只发布不含候选答案的 `AnswerWithheld`；
+4. Runtime/CLI/Task 的通用 `ModelCompleted` 契约保持不变，发布权限由拥有最终证据检查的
+   application use case 决定。
+
+SSE/UI 只能把 `AnswerCommitted` 视为可展示的检索型答案，不能把 Chat 路径中的
+`ModelCompleted` 当作答案内容源。
 
 ## 7. 自研 Runtime 基线
 

@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
+from agent_workbench.application.chat import ChatExecutionError
 from agent_workbench.application.uploads import UploadVerificationError
 from agent_workbench.apps.api.dependencies import ApiDependencies, build_dependencies
 from agent_workbench.apps.api.identity import UnauthenticatedError
@@ -59,6 +60,34 @@ def _render_error(status_code: int) -> Callable[[Request, Exception], Response]:
     return handler
 
 
+def _render_chat_execution_error(request: Request, exc: Exception) -> Response:
+    """Expose a terminal run as a terminal run, never as an empty answer."""
+
+    if not isinstance(exc, ChatExecutionError):  # pragma: no cover - registered type
+        raise exc
+    outcome = exc.outcome
+    if outcome.status == "cancelled":
+        status_code = 409
+    elif outcome.stop_reason == "deadline":
+        status_code = 504
+    else:
+        status_code = 502
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "detail": str(exc),
+            "run_id": outcome.agent_run_id,
+            "status": outcome.status,
+            "stop_reason": outcome.stop_reason,
+            "error": (
+                outcome.error.model_dump(mode="json")
+                if outcome.error is not None
+                else None
+            ),
+        },
+    )
+
+
 def create_app(dependencies: ApiDependencies) -> ASGIApp:
     """Build the ASGI application around already-assembled dependencies."""
 
@@ -77,6 +106,7 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
 
     for failure, status_code in ERROR_STATUS.items():
         app.add_exception_handler(failure, _render_error(status_code))
+    app.add_exception_handler(ChatExecutionError, _render_chat_execution_error)
 
     # The data plane is exempt: capping a document transfer at the control
     # limit is the same as not accepting documents.

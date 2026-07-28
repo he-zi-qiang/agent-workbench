@@ -39,6 +39,7 @@ from agent_workbench.application.chat import REFUSAL, ChatRequest, ChatService
 from agent_workbench.application.chunking import Chunker
 from agent_workbench.application.ingestion import IngestionRequest, IngestionService
 from agent_workbench.application.retrieval import RetrievalService
+from agent_workbench.apps.api.routes.events import _frame
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import RunBudget, TokenUsage
@@ -329,6 +330,32 @@ def test_the_withheld_answer_does_not_enter_the_history() -> None:
 
     assert "fourteenth" not in dumped
     assert REFUSAL in dumped
+
+
+def test_the_withheld_answer_does_not_enter_the_event_log_or_sse() -> None:
+    """Every public exit is downstream of the same answer release gate."""
+
+    async def scenario(harness: _Harness) -> tuple[str, list[str]]:
+        await harness.publish(granted=(READER,))
+        await harness.open_session(READER)
+        service = _RevokingChat(harness)
+        sink = harness.sink()
+        await service.ask(_ask(harness, READER), sink)
+        events = await harness.log.read(sink.scope.stream_id)
+        frames = "".join(
+            _frame(event, sink.scope.stream_id, event.sequence)
+            for event in events
+            if event.sequence is not None
+        )
+        return frames, [event.event_type for event in events]
+
+    frames, event_types = _run(scenario)
+
+    assert ANSWER not in frames
+    assert SECRET not in frames
+    assert "AnswerCommitted" not in event_types
+    assert event_types[-1] == "AnswerWithheld"
+    assert REFUSAL in frames
 
 
 # --- the session belongs to somebody -----------------------------------------

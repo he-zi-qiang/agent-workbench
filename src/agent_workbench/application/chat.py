@@ -26,15 +26,16 @@ does it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from agent_workbench.application.answer_release import AnswerReleaseSink
 from agent_workbench.application.retrieval import (
     RetrievalRequest,
     RetrievalService,
     SourcesChangedError,
 )
 from agent_workbench.domain.context import Citation, ContextPacket
-from agent_workbench.domain.identifiers import new_id, new_stream_id
+from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.messages import Message, assistant_message, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import (
@@ -72,6 +73,18 @@ class ChatTurn:
     withheld: bool = False
 
 
+class ChatExecutionError(RuntimeError):
+    """The model-tool run ended without a publishable answer."""
+
+    def __init__(self, outcome: AgentOutcome) -> None:
+        self.outcome = outcome
+        super().__init__(
+            "the chat run did not complete"
+            if outcome.status == "failed"
+            else "the chat run was cancelled"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ChatRequest:
     """One question in one session, asked by one principal.
@@ -87,6 +100,8 @@ class ChatRequest:
     principal: PrincipalContext
     knowledge_base_id: str
     top_k: int = 8
+    run_id: str = field(default_factory=lambda: new_id("run"))
+    stream_id: str | None = None
 
     @property
     def tenant_id(self) -> str:
@@ -116,6 +131,17 @@ class ChatService:
     ) -> ChatTurn:
         """One turn: retrieve, answer, verify, persist."""
 
+        # Authenticate the session before paying for embedding and vector
+        # search. A guessed id must not be a way to make someone else's
+        # session trigger expensive work, even though the later append would
+        # eventually reject it.
+        await self.conversations.history(
+            session_id=request.session_id,
+            tenant_id=request.tenant_id,
+            principal_id=request.principal_id,
+            limit=1,
+        )
+
         context = await self.retrieval.retrieve(
             RetrievalRequest(
                 query=request.question,
@@ -136,11 +162,18 @@ class ChatService:
             messages=(user_message(request.question),),
         )
 
+        release = AnswerReleaseSink(sink)
         outcome = await self.executor.run(
             _run_request(request, context.packet, self.budget),
-            sink,
+            release,
             cancellation if cancellation is not None else NullCancellationToken(),
         )
+        if outcome.status != "completed":
+            # RunFailed/RunCancelled already describe the terminal state. There
+            # is no answer to authorize or remember, and publishing an empty
+            # assistant message would turn an expected failure into a quiet
+            # success in the conversation history.
+            raise ChatExecutionError(outcome)
 
         try:
             await self.retrieval.confirm_unchanged(
@@ -153,6 +186,7 @@ class ChatService:
             # what goes into the history is the refusal -- storing the answer
             # would leave the withheld text where the next turn reads it back.
             await self._remember(request, REFUSAL)
+            await release.withhold(text=REFUSAL)
             return ChatTurn(
                 answer=REFUSAL,
                 citations=(),
@@ -162,6 +196,7 @@ class ChatService:
 
         answer = outcome.output_text or ""
         await self._remember(request, answer)
+        await release.commit(text=answer, citations=context.packet.citations)
         return ChatTurn(
             answer=answer,
             citations=context.packet.citations,
@@ -198,9 +233,9 @@ def _run_request(
     """
 
     return AgentRunRequest(
-        trace=TraceContext(agent_run_id=new_id("run")),
+        trace=TraceContext(agent_run_id=request.run_id),
         run_kind="chat",
-        stream_id=new_stream_id(),
+        stream_id=request.stream_id or request.session_id,
         principal=request.principal,
         # Deny-shaped by default: an empty allowlist permits no tool at all,
         # which is what "the model does not decide whether to search" means
@@ -241,6 +276,7 @@ def new_session_id() -> str:
 __all__ = [
     "REFUSAL",
     "SYSTEM_PROMPT",
+    "ChatExecutionError",
     "ChatRequest",
     "ChatService",
     "ChatTurn",

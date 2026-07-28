@@ -62,6 +62,7 @@ class AskResponse(BaseModel):
     answer: str
     citations: tuple[Citation, ...]
     withheld: bool
+    run_id: Identifier
 
 
 class MessageView(BaseModel):
@@ -96,6 +97,7 @@ async def create_session(
 async def ask(session_id: str, body: AskRequest, request: Request) -> AskResponse:
     dependencies = dependencies_of(request)
     principal = dependencies.principals.resolve(request)
+    run_id = new_id("run")
 
     turn = await _chat(request).ask(
         ChatRequest(
@@ -104,16 +106,19 @@ async def ask(session_id: str, body: AskRequest, request: Request) -> AskRespons
             principal=principal,
             knowledge_base_id=body.knowledge_base_id,
             top_k=body.top_k,
+            run_id=run_id,
+            stream_id=session_id,
         ),
         # One stream per session, one run per turn: a subscriber follows the
         # conversation and resumes where it left off, and each turn stays
         # identifiable inside it.
-        dependencies.sink_for(stream_id=session_id, run_id=new_id("run")),
+        dependencies.sink_for(stream_id=session_id, run_id=run_id),
     )
     return AskResponse(
         answer=turn.answer,
         citations=turn.citations,
         withheld=turn.withheld,
+        run_id=turn.outcome.agent_run_id,
     )
 
 

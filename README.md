@@ -13,25 +13,29 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-07-25，`main@f071323` 已合并 **PR-001～PR-015**，并完成
-ADR-012 身份边界决策。当前已经实现并测试：
+截至 2026-07-28，主分支基线为 `main@4d03f69`，当前开发分支正在实施
+PR-035 安全发布基线。已经实现并有测试证据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
   deadline、取消、并行只读调度、exclusive 屏障和 Hook Bus；
-- DeepSeek OpenAI-compatible 流式 Adapter 的离线协议契约；
+- DeepSeek OpenAI-compatible 流式 Adapter、配置投影与 API 装配；
 - PostgreSQL ConversationStore、Alembic 迁移、Document/Version/ACL、
-  事务 Outbox 与 `SKIP LOCKED` 竞争领取；
-- Local ArtifactStore，以及 FastAPI Upload/Artifact/Health API。
+  事务 Outbox、`SKIP LOCKED` 竞争领取和摄取 Worker 组件；
+- Local ArtifactStore，以及 FastAPI Upload/Artifact/Health/Chat/SSE API；
+- BGE-M3 Dense Embedding、Qdrant Dense/Hybrid 检索和离线 RAG 评测；
+- 固定 2-step Chat 的 ACL 双重检查、答案发布门和 source revision 读取栅栏；
+- 与固定检索共用 `RetrievalService` 的 `knowledge_search` Tool Adapter。
 
 这些能力仍有明确边界：
 
-- DeepSeek Adapter 尚未接入 Bootstrap/API/CLI 的进程装配，也没有真实在线模型
-  E2E；当前 `agent-cli demo` 仍使用脚本化 FakeModel。
-- 已实现的是上传相关 API，不是完整 Chat/Task API。Chat RAG、LangGraph Task、
-  Multi-Agent、SSE、Approval、UI、生产身份认证和部署仍为 Planned。
-- PostgreSQL 已用于会话、文档和 Outbox；Task Registry、lease、fencing、
-  checkpoint 与 `LISTEN/NOTIFY` 协调尚未实现。
+- `IngestionWorker` 仍是可调用组件，没有常驻进程、heartbeat、retry/dead-letter 和
+  多 Worker 外部副作用 fencing；上传后自动可检索的产品 E2E 尚未贯通。
+- 旧 Qdrant Point 已被 revision 栅栏阻止读取，但 replace/delete 物理清理尚未完成。
+- Chat 仍是保存历史的单轮固定 RAG，尚未实现幂等 Turn、真正多轮上下文和模型实际引用
+  校验；`knowledge_search` 也尚未装配为可用的 Agentic Retrieval Mode。
+- LlamaIndex/LangChain Adapter、LangGraph Task、Task Registry、Multi-Agent、
+  CrewAI 对比、UI、生产身份认证和部署仍为 Planned。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
 > 受控的本机开发，不得暴露到局域网、容器端口映射或公网。监听地址已强制为

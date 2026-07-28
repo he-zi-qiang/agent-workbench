@@ -21,6 +21,8 @@
 - [实施状态](./status.md)：记录已经实现、测试或演示的能力；
 - [2026-07-25 仓库核验报告](./repository-audit-2026-07-25.md)：记录当前门禁、
   缺陷、能力边界和建议修复顺序；
+- [2026-07-27 仓库复核报告](./repository-audit-2026-07-27.md)：记录摄取 Worker、
+  `knowledge_search` 与 Chat/RAG 安全边界的最新复核；
 - [Clean-room 与合规说明](./compliance.md)：说明来源边界和可公开表述；
 - [仓库 NOTICE](../NOTICE.md)：声明本项目不包含来源不明的私有实现。
 
@@ -33,18 +35,21 @@
 
 ## 当前事实
 
-截至 2026-07-25，PR-001～PR-015 与 ADR-012 已合并。当前已经实现并测试：
+截至 2026-07-28，`main@4d03f69` 已包含摄取 Worker 组件，当前开发分支正在实施
+PR-035 安全发布基线。已经实现并测试：
 
 - 框架无关的领域契约、Ports、Fake Adapter 和可复现 CLI；
 - 自研 Runtime 的串行 Tool Loop、Policy/Tool Gateway、预算与取消、并行只读
   调度、exclusive 屏障和 Hook Bus；
-- DeepSeek OpenAI-compatible 流式协议 Adapter 的离线 contract tests；
-- PostgreSQL ConversationStore、文档/版本/ACL、事务 Outbox 与竞争领取；
-- Local ArtifactStore，以及 Upload / Artifact / Health FastAPI 路由。
+- DeepSeek OpenAI-compatible 流式协议 Adapter 与 API 装配；
+- PostgreSQL ConversationStore、文档/版本/ACL、事务 Outbox、竞争领取和摄取 Worker；
+- Local ArtifactStore，以及 Upload / Artifact / Health / Chat / SSE FastAPI 路由；
+- BGE-M3 Dense、Qdrant Dense/Hybrid、固定 2-step RAG 与检索评测；
+- Chat answer release gate、source revision 读取栅栏和 `knowledge_search` Tool Adapter。
 
-当前仍未实现 Chat RAG、LlamaIndex/Qdrant、LangGraph Task、Task Registry、
-lease/fencing/checkpoint/LISTEN、Multi-Agent、生产身份认证、S3、UI 和完整部署。
-DeepSeek Adapter 尚未接入 Bootstrap/API/CLI，也没有真实服务 E2E。
+当前仍未完成：可靠常驻摄取 Worker、旧 Point 物理替换、真正多轮/幂等 Chat Turn、
+可验证 Citation、Agentic Retrieval 最终 evidence gate、LlamaIndex/LangChain
+互操作、LangGraph Task、Task Registry、Multi-Agent、生产身份认证、UI 和完整部署。
 
 安全边界：当前开发身份解析器信任请求头。监听地址已强制为 loopback（默认
 `127.0.0.1`，Settings 与装配层双重校验，并有真实 socket 测试），但生产身份认证

@@ -30,6 +30,7 @@ from typing import Annotated, Final, Literal
 from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from agent_workbench.domain.artifacts import ArtifactRef, Sha256
+from agent_workbench.domain.context import Citation
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.identifiers import Identifier, new_event_id
 from agent_workbench.domain.policies import PolicyEffect
@@ -61,6 +62,8 @@ EventType = Literal[
     "ModelStarted",
     "ModelDelta",
     "ModelCompleted",
+    "AnswerCommitted",
+    "AnswerWithheld",
     "ToolProposed",
     "PermissionRequested",
     "PermissionResolved",
@@ -122,6 +125,28 @@ class ModelCompleted(DomainModel):
     text: BoundedText = ""
     output_ref: ArtifactRef | None = None
     tool_call_ids: tuple[Identifier, ...] = ()
+
+
+class AnswerCommitted(DomainModel):
+    """An answer that cleared its final evidence and authorization checks.
+
+    ``ModelCompleted`` records what the provider did. It is deliberately not
+    the publication boundary for retrieval-backed chat: a grant can be
+    withdrawn after the provider finishes and before the evidence is checked
+    again. Consumers may display answer text only from this event.
+    """
+
+    kind: Literal["AnswerCommitted"] = "AnswerCommitted"
+    text: BoundedText
+    citations: tuple[Citation, ...] = ()
+
+
+class AnswerWithheld(DomainModel):
+    """A safe replacement for an answer that failed its publication check."""
+
+    kind: Literal["AnswerWithheld"] = "AnswerWithheld"
+    reason_code: Literal["sources_changed"] = "sources_changed"
+    text: BoundedText
 
 
 class ToolProposed(DomainModel):
@@ -238,6 +263,8 @@ EventPayload = Annotated[
     | ModelStarted
     | ModelDelta
     | ModelCompleted
+    | AnswerCommitted
+    | AnswerWithheld
     | ToolProposed
     | PermissionRequested
     | PermissionResolved
@@ -263,6 +290,8 @@ EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "ModelStarted": "durable",
     "ModelDelta": "transient",
     "ModelCompleted": "durable",
+    "AnswerCommitted": "durable",
+    "AnswerWithheld": "durable",
     "ToolProposed": "durable",
     "PermissionRequested": "durable",
     "PermissionResolved": "durable",
@@ -366,6 +395,8 @@ __all__ = [
     "TRANSIENT_EVENT_TYPES",
     "AgentCompleted",
     "AgentDelegated",
+    "AnswerCommitted",
+    "AnswerWithheld",
     "ContextBuilt",
     "ContextCompacted",
     "Durability",
