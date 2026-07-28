@@ -4,19 +4,18 @@
 >
 > 日期：2026-07-22
 >
-> 状态：截至 2026-07-28，主分支基线为 `main@e93d7a1`。已合入：
+> 状态：截至 2026-07-28，主分支基线为 `main@341cbf5`。已合入：
 > 自研 Runtime、PostgreSQL/Artifact/Document/ACL/Outbox、Dense/Hybrid RAG 与评测、
 > Reranker、固定检索 Chat/SSE、多轮上下文、EventLog 版本化与幂等键、
 > `chat_turns` 请求幂等、原子发布、fixed-lease orphan recovery、
 > 无人值守 pending 发布恢复、Turn + durable `ChatTurnExpired` 原子过期，
-> 以及 WP06 的第一块——checkpoint-safe `TaskState` 与 `TaskWorkflowPort`。
-> `main@e93d7a1` 本地门禁为 `859 passed / 260 skipped`（260 项全部因缺
-> PostgreSQL/Qdrant/真实 BGE 权重而跳过，本轮无真实外部服务证据）；
-> WP06-02/04（条件路由与确定性 fan-in reducer）与 WP06-03 的 artifact 型
-> Agent node 已实现，尚未合入 `main`；下一主线是 WP06 余下部分：
-> `plan`/`critic` 的结构化输出解码、PostgreSQL checkpointer（WP06-06）
-> 与 Task Worker（WP06-07）；WP06-05 的 LangGraph adapter 已实现（内存
-> checkpointer，进程重启不保留执行位置）；
+> 以及 WP06 的 `TaskState`/`TaskWorkflowPort`、图控制流与确定性 fan-in
+> reducer（WP06-02/04）、artifact 型 Agent node（WP06-03）和 LangGraph
+> adapter（WP06-05，内存 checkpointer，进程重启不保留执行位置）。
+> `main@341cbf5` 门禁：无外部服务 `907 passed / 260 skipped`；配上真实
+> PostgreSQL 与 Qdrant 为 `1156 passed / 11 skipped`（剩余跳过项需 BGE 权重）；
+> 下一主线是 WP06 余下部分：PostgreSQL checkpointer（WP06-06）、
+> Task Worker（WP06-07）与 `plan`/`critic` 的结构化输出解码；
 > LlamaIndex/LangChain 互操作、可靠常驻 Ingestion Worker、
 > Task Registry/lease/fencing、Multi-Agent 与 UI 仍开放
 >

@@ -14,9 +14,9 @@
 
 ## 当前基线与编号对应
 
-主分支基线：**`main@e93d7a1`**（2026-07-28）。PR-047 在功能分支上，尚未合入 `main`。
+主分支基线：**`main@341cbf5`**（2026-07-28）。PR-047～PR-049 已全部合入。
 
-**PR-035～PR-046 的全部增量都已经合入 `main`。** 下面各节里写的"尚未合入 `main`"
+**PR-035～PR-049 的全部增量都已经合入 `main`。** 下面各节里写的"尚未合入 `main`"
 是当时开发分支上的状态，已按实际合并结果订正；每节保留的测试证据仍是**该增量当时**
 的门禁数字，不是当前数字。
 
@@ -32,26 +32,50 @@
 | PR-044 Task 工作流状态 | `#53` | `3538e26` |
 | PR-045 Reranker | `#54` | `3b7829b` |
 | PR-046 Sparse 加载守卫 | `#55` | `e93d7a1` |
+| 文档基线订正 | `#56` | `260ca0e` |
+| PR-047 控制流与 fan-in reducer | `#60` | `4ec04d2` |
+| PR-048 Agent node | `#58` | `0830e55` |
+| PR-049 LangGraph adapter | `#59` | `341cbf5` |
 
-### 2026-07-28 全仓门禁复核（`main@e93d7a1`）
+### 2026-07-28 全仓门禁复核（`main@341cbf5`）
 
 ```text
-ruff format --check .    passed（206 files）
+ruff format --check .    passed（214 files）
 ruff check .             passed
 pyright                  0 errors / 0 warnings
-pytest                   859 passed / 260 skipped
 agent-config-check       development / test / production 均为 status=ok
 alembic 唯一 head        0009_chat_turn_lease
+
+pytest（无外部服务）              907 passed / 260 skipped
+pytest（真实 PostgreSQL + Qdrant） 1156 passed /  11 skipped
 ```
 
-与此前几节的门禁数字有两处差别，都属于**环境差别而不是代码变化**：
+**两行 pytest 是同一套测试的两种环境，不能相加。** 第二行是本项目第一次真正跑通
+需要外部服务的那 260 项——它们全部通过。此前每一轮增量都只能写"真实 PostgreSQL
+用例因未配置 DSN 而跳过"，也就是说 lease、`SKIP LOCKED` 回收、原子发布、迁移这些
+不变量一直靠**跳过的测试**撑着。现在它们是实测过的。
 
-- 本轮环境允许 `socket.bind()`，因此 loopback 真实性测试**正常执行并通过**，没有
-  PR-043 记录的那 1 项 deselect；
-- 260 项跳过全部因为缺外部依赖：`AGENT_WORKBENCH_TEST_DSN`（PostgreSQL）、
-  `AGENT_WORKBENCH_TEST_QDRANT_URL` 与 `AGENT_WORKBENCH_TEST_EMBEDDING_MODEL`
-  （真实 BGE 权重）均未配置。**本轮没有产生任何真实外部服务证据**，PostgreSQL、
-  Qdrant 与真实权重相关的结论仍只能引用各增量当时留下的记录。
+剩下的 11 项跳过全部需要真实 BGE 权重
+（`AGENT_WORKBENCH_TEST_EMBEDDING_MODEL` 未设置）。
+
+复现方式（PostgreSQL 镜像 digest 与 CI 固定的一致）：
+
+```bash
+docker run -d --name aw-postgres -p 5433:5432 \
+  -e POSTGRES_USER=agent -e POSTGRES_PASSWORD=ci-only \
+  -e POSTGRES_DB=agent_workbench_test \
+  postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+export AGENT_WORKBENCH_TEST_DSN="postgresql+asyncpg://agent:ci-only@127.0.0.1:5433/agent_workbench_test"
+export AGENT_WORKBENCH_TEST_QDRANT_URL="http://localhost:6333"
+alembic upgrade head && pytest -q
+```
+
+容器映射到 **5433** 而不是 5432：开发机上可能已经跑着原生 PostgreSQL，它会遮蔽
+Docker 的端口映射，症状是 `role "agent" does not exist`——一个看起来像配置错误、
+实际是端口被占的失败。
+
+此前记录的 1 项 deselect 是当时沙箱禁止 `socket.bind()` 所致，属于**环境差别而不是
+代码变化**；本轮环境允许该调用，loopback 真实性测试正常执行并通过。
 
 `production` profile 需要 CI 同款环境变量（固定 model ID、40 位 embedding/reranker
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
@@ -59,8 +83,7 @@ revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会
 
 ## 2026-07-28 PR-049 LangGraph Adapter 与 graph version 注册表
 
-状态：**已实现并通过本地全仓门禁；在功能分支 `pr-049-langgraph-adapter` 上，
-尚未合入 `main`**。对应 WP06-05。**本轮第一次引入 `langgraph` 依赖。**
+状态：**已合入 `main`（GitHub `#59` / `341cbf5`）**。对应 WP06-05。**本轮第一次引入 `langgraph` 依赖。**
 
 Adapter 拥有编译、checkpoint 和调度；**不拥有任何路由决定**。每条边都来自
 `workflows.research_graph`——所以"重放 checkpoint 的那张图"和"控制流测试断言的
@@ -135,8 +158,7 @@ langgraph 无 type stub，按包内既有的 FlagEmbedding / sentence-transforme
 
 ## 2026-07-28 PR-048 Agent node：只经 `AgentExecutor`，且失败也要记账
 
-状态：**已实现并通过本地全仓门禁；在功能分支
-`pr-048-agent-nodes` 上，尚未合入 `main`**。对应 WP06-03。
+状态：**已合入 `main`（GitHub `#58` / `0830e55`）**。对应 WP06-03。
 
 节点通过 `AgentExecutor` 到达模型，除此之外没有别的路径——不持有 tool registry、
 不持有 model port、不持有 Runtime 内部对象。**一个能自己组装循环的节点，就是第二个
@@ -207,8 +229,7 @@ evidence/outcome 引用做 canary 断言它们不出现在 prompt 里。
 
 ## 2026-07-28 PR-047 固定研究图的确定性控制流与 fan-in reducer
 
-状态：**已实现并通过本地全仓门禁；在功能分支
-`pr-047-research-graph-control-flow` 上，尚未合入 `main`**。
+状态：**已合入 `main`（GitHub `#60` / `4ec04d2`）**。
 对应 WP06-02（条件路由）与 WP06-04（确定性 fan-out/fan-in reducer）。
 
 新增 `src/agent_workbench/workflows/`——框架无关的核心包，架构守卫已实际覆盖它
