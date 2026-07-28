@@ -12,6 +12,40 @@
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
 
+## 2026-07-28 PR-040 Chat 原子授权发布栅栏
+
+状态：**当前开发分支已实现并通过静态门禁与内存测试；真实 PostgreSQL/Qdrant
+并发用例因当前环境未配置服务而跳过，尚未合入 `main`**。
+
+PR-039 的稳定 `event_key` 能让重复发布返回同一个事件，但“先查 ACL、后写事件”的
+两个事务之间仍存在 TOCTOU：复核成功后可以恰好发生撤权；进程也可能在
+`prepare_release` 后退出，重试再把旧候选发布出去。本轮新增
+`ChatReleaseCoordinator`，生产适配器把以下步骤放进一个 PostgreSQL 事务：
+
+1. 固定按 `conversation session → chat turn → document_id 排序后的文档行
+   → event stream` 加锁；
+2. 在文档行锁内复核 tenant、deleted、精确 `source_revision` 与 owner/ACL；
+3. 若任何来源变化，构造不含候选正文、ArtifactRef、citation 与 revision 的安全
+   withheld 结果；
+4. 写唯一 `AnswerCommitted/AnswerWithheld`、追加 assistant message、把 Turn 转为
+   `committed/withheld`；
+5. 一起提交或一起回滚。
+
+所有合规的 Document/ACL writer 必须先锁同一 document row，再修改内容、revision
+或 ACL；这是发布栅栏成立的写入协议，不能用绕过 repository 的 ACL-only SQL 破坏。
+`ChatTurnResult` 现在持久化排序且唯一的 `authorized_revisions`，并强制其文档集合与
+citations 一致，因此 `release_pending` 重试具备完整的再授权输入。
+
+新增的 PostgreSQL/Qdrant 确定性竞态测试覆盖：
+
+- prepare 后故障、撤权先提交、同 key 重试：只能产生 `AnswerWithheld`，API 对象、
+  history、event 与 `chat_turns.result` 均不含候选正文；
+- 发布先取得文档锁、撤权并发到达：通过 `pg_blocking_pids()` 证明撤权事务真实等待，
+  发布提交后撤权才推进 revision，形成可解释的线性顺序。
+
+稳定 `event_key` 继续作为重复调用的防御，但已不再承担跨两个提交恢复一致性的职责。
+内存协调器仅保持同一可观察契约，不宣称提供跨进程授权栅栏。
+
 ## 2026-07-28 PR-039 幂等 Chat Turn 与发布恢复
 
 状态：**当前开发分支已实现并通过本地确定性测试；真实 PostgreSQL/Qdrant 用例因当前
@@ -39,10 +73,9 @@ running
 - `claim_turn` 在同一事务内完成 ownership 校验、历史快照、user message 和 Turn
   创建；鉴权先于幂等查询，错误主体不能利用 key 探测 Turn；
 - `release_pending` 只保存内部候选结果，**不写可见 assistant message**；
-- `AnswerCommitted/AnswerWithheld` 用稳定 `event_key` 发布成功后，
-  `mark_released` 才原子追加唯一 assistant 并转终态；
-- 进程在“答案事件已持久化、Turn 尚未转终态”之间崩溃时，同 key 重试会拿回原事件、
-  补做终态转换，不重跑模型、不重复事件、不重复历史；
+- `AnswerCommitted/AnswerWithheld` 使用稳定 `event_key`，重复调用不会重复事件；
+- PR-040 已进一步把最终授权复核、答案事件、assistant 与 Turn 终态合并为同一个
+  PostgreSQL 提交，取代本节最初的“先事件、后 Turn”两阶段实现；
 - withheld Turn 的持久化 `AgentOutcome` 会清空候选正文、ArtifactRef 和 citation，
   被拒绝的模型输出不能藏在 retry ledger 中。
 

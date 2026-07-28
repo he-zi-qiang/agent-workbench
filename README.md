@@ -14,8 +14,8 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 ## 当前状态
 
 截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支已完成
-PR-035～PR-039 的安全发布、多轮上下文、EventLog 可演进回放与幂等 Chat Turn
-可靠性切片。已经实现并有测试证据：
+PR-035～PR-040 的安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn
+与原子授权发布切片。已经实现并有测试证据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -29,8 +29,11 @@ PR-035～PR-039 的安全发布、多轮上下文、EventLog 可演进回放与�
 - BGE-M3 Dense Embedding、Qdrant Dense/Hybrid 检索和离线 RAG 评测；
 - 固定 2-step Chat 的 ACL 双重检查、答案发布门、source revision 读取栅栏、已提交
   会话消息的多轮回放，以及 PostgreSQL `chat_turns` 幂等事实源；
+- 最终 source revision/ACL 复核、`AnswerCommitted/AnswerWithheld`、assistant
+  history 和 Turn 终态在同一 PostgreSQL 事务中提交；撤权与答案发布由文档行锁
+  线性化；
 - Chat API 强制 `Idempotency-Key`，同一会话的活跃 Turn 不交错；已提交请求重试不再
-  重跑模型，“答案事件已写、Turn 尚未提交”的崩溃窗口可幂等恢复；
+  重跑模型，`release_pending` 重试会重新验证持久化的 evidence revision；
 - 与固定检索共用 `RetrievalService` 的 `knowledge_search` Tool Adapter。
 
 这些能力仍有明确边界：

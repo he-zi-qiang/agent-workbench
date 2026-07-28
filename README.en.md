@@ -12,9 +12,9 @@ LangChain and later comparison adapters stay behind explicit ports.
 ## Current status
 
 As of 2026-07-28, the main-branch baseline is `main@4d03f69`. The current
-development branch completes the PR-035 through PR-039 slices for secure
-answer release, multi-turn context, evolvable EventLog replay and idempotent
-Chat turns. Implemented with test evidence:
+development branch completes the PR-035 through PR-040 slices for secure
+answer release, multi-turn context, evolvable EventLog replay, idempotent
+Chat turns and atomic authorization fencing. Implemented with test evidence:
 
 - framework-neutral domain contracts, ports, fake adapters and a reproducible
   CLI demo;
@@ -36,9 +36,12 @@ Chat turns. Implemented with test evidence:
 - fixed two-step Chat with two ACL checks, an answer-release gate, a source
   revision read barrier, multi-turn replay and a PostgreSQL `chat_turns` fact
   ledger;
+- one PostgreSQL transaction for the final source-revision/ACL check, answer
+  event, assistant history and terminal Turn state, with document-row locks
+  linearizing answer publication against revocation;
 - a required API `Idempotency-Key`, non-interleaving active turns, no model
-  rerun for a completed retry, and recovery of the crash window between answer
-  event publication and the final turn transition;
+  rerun for a completed retry, and re-authorization of persisted evidence on a
+  `release_pending` retry;
 - a `knowledge_search` Tool adapter backed by the same `RetrievalService` as
   fixed retrieval.
 

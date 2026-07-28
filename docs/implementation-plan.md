@@ -1259,6 +1259,12 @@ revision ID 到真正开工并核对依赖关系时再确定，避免计划表�
 |---|---|---|
 | `0001_conversations` | WP03 | `conversation_sessions`、`messages` |
 | `0002_documents_outbox` | WP03 | `artifacts`、`upload_intents`、`documents`、`document_versions`、ACL、`outbox_events` |
+| `0003_outbox_lease` | WP04 | Outbox `lease_until`、`claim_token` 与过期扫描索引 |
+| `0004_event_log` | WP07 | `event_streams`、`events` 与流内无间隙 sequence |
+| `0005_last_applied_revision` | WP04–05 | Document 索引投影 revision 水位 |
+| `0006_event_schema_version` | WP07 | Event envelope schema version |
+| `0007_event_idempotency_key` | WP07 | stream-local durable `event_key` |
+| `0008_chat_turns` | WP03/WP07 | 幂等 Chat Turn ledger、生命周期与单会话活跃约束 |
 
 LangGraph checkpoint 表由锁定版本的 saver migration 管理，但其版本必须记录。
 
@@ -1266,9 +1272,8 @@ LangGraph checkpoint 表由锁定版本的 saver migration 管理，但其版本
 
 | 逻辑迁移 | 工作包 | 核心对象 |
 |---|---|---|
-| Ingestion state | WP04–05 | `ingestion_jobs`、`last_applied_revision`、`qdrant_index_generations` |
+| Ingestion state | WP04–05 | `ingestion_jobs`、`qdrant_index_generations` |
 | Task Registry | WP06–07 | `task_runs`、语义快照、graph/index revision、submitted policy identity、resolved index generation reservation |
-| Event streams | WP07 | `run_event_streams`、`run_events` |
 | Coordination | WP08 | lease/epoch/attempt/available_at/recovery/dead-letter 字段与索引 |
 | Approvals ledger | WP10 | `approvals`、`tool_executions`、resume reference 与 effective policy 字段 |
 | Agent budgets | WP11 | 持久 Agent invocation attempt/budget |

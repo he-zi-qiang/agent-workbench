@@ -430,12 +430,18 @@ PostgreSQL `event_streams/events` 是当前唯一持久事件事实源，`EventL
 
 1. 最终 ACL/evidence 复核前，`ModelDelta.text`、`ModelCompleted.text` 和
    `output_ref` 不得进入公开 EventLog 或 live subscriber；
-2. 复核完成后先把结果写为内部 `release_pending`，此状态不能出现在会话历史；
-3. 使用 stream-local 稳定 `event_key` 发布包含答案和引用的 durable
-   `AnswerCommitted`，或不含候选答案的 `AnswerWithheld`；
-4. 事件发布成功后才把 Turn 转为 `committed/withheld` 并原子追加可见 assistant
-   message；若进程在第 3、4 步之间崩溃，同 key 重试必须取回原事件并补做第 4 步；
-5. Runtime/CLI/Task 的通用 `ModelCompleted` 契约保持不变，发布权限由拥有最终证据检查的
+2. 模型结束后先把候选与精确的 `(document_id, source_revision)` 集合写为内部
+   `release_pending`，此状态不能出现在会话历史；
+3. 最终发布事务按稳定顺序锁定 conversation/Turn、所有引用 document row 和 event
+   stream，在锁内重新检查 tenant、deleted、精确 revision 与实时 owner/ACL；
+4. 同一事务写 stream-local 稳定 `event_key` 的 `AnswerCommitted` 或不含候选答案的
+   `AnswerWithheld`，追加唯一可见 assistant，并把 Turn 转为
+   `committed/withheld`；任何一步失败必须一起回滚；
+5. 所有内容、删除和 ACL writer 必须先锁同一 document row。这个共同写入协议使撤权
+   与发布线性化；禁止绕过 Repository 直接执行不推进 revision 的 ACL-only 写入；
+6. `release_pending` 重试必须使用持久化的 revision 集合重新进入同一发布事务，不能
+   信任 prepare 时的授权结果。稳定 `event_key` 是重复调用防御，不替代原子事务；
+7. Runtime/CLI/Task 的通用 `ModelCompleted` 契约保持不变，发布权限由拥有最终证据检查的
    application use case 决定。
 
 SSE/UI 只能把 `AnswerCommitted` 视为可展示的检索型答案，不能把 Chat 路径中的
