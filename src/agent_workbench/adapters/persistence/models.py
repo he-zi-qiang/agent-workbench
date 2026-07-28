@@ -22,9 +22,11 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -437,4 +439,115 @@ events = Table(
         unique=True,
         postgresql_where=text("event_key IS NOT NULL"),
     ),
+)
+
+
+# Where a graph's execution position lives. ADR-014 chose to implement
+# LangGraph's BaseCheckpointSaver against this stack rather than install the
+# official saver, so these tables are this project's Alembic chain rather than
+# a second migration history.
+#
+# The decomposition is not a design choice: it is what the contract asks for.
+# `aput` receives `new_versions`, the channels this write actually changed, so
+# channel values belong in a table keyed by version rather than copied into
+# every checkpoint; `aput_writes` records a task's output before the step that
+# consumes it is checkpointed, so it needs a table of its own.
+#
+# Everything LangGraph serialises stays opaque here. `serde.dumps_typed` returns
+# a (type, bytes) pair and `loads_typed` takes the same pair back, so both halves
+# are stored and neither is interpreted. Widening the columns into something
+# readable would mean this project claiming to understand a format it does not
+# own, and getting it wrong precisely when a checkpoint has to be recovered.
+#
+# The names carry a `workflow_` prefix because the ecosystem's unprefixed
+# `checkpoints` is a table the official saver creates with `IF NOT EXISTS` and
+# a different column layout. Nothing here should be silently adopted by it.
+
+workflow_checkpoints = Table(
+    "workflow_checkpoints",
+    metadata,
+    # This project's Identifier, so it is bounded like every other one.
+    Column("thread_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    # The remaining identifiers are minted by LangGraph, not by us. Bounding a
+    # value another library generates buys nothing and fails a legitimate run:
+    # `checkpoint_ns` grows with subgraph nesting and has no documented limit.
+    # It is the empty string for a flat graph, which is a value, not a default.
+    Column("checkpoint_ns", Text, primary_key=True),
+    Column("checkpoint_id", Text, primary_key=True),
+    # Null exactly at the root of a thread. The chain is what `parent_config`
+    # is read from, and what a fork walks back through.
+    Column("parent_checkpoint_id", Text, nullable=True),
+    Column("payload_type", Text, nullable=False),
+    Column("payload", LargeBinary, nullable=False),
+    # The one part that is not opaque. `alist(filter=...)` queries metadata by
+    # key, which bytes cannot answer; the contract documents this as a mapping
+    # of JSON scalars, and its own `get_checkpoint_metadata` strips NUL from
+    # strings -- the single thing that would make JSONB reject the row.
+    Column("metadata", JSONB, nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # No index beyond the primary key. Reading a thread's latest checkpoint is
+    # a descending scan of the key's third column under a fixed prefix, listing
+    # a thread's history is that same prefix, and deleting a thread is its
+    # first column. A metadata filter applies within one thread, whose history
+    # is bounded by the graph's steps.
+)
+
+workflow_checkpoint_blobs = Table(
+    "workflow_checkpoint_blobs",
+    metadata,
+    Column("thread_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("checkpoint_ns", Text, primary_key=True),
+    Column("channel", Text, primary_key=True),
+    # `ChannelVersions` allows str, int or float. Text is the only type that
+    # holds all three without deciding which one LangGraph is entitled to send.
+    Column("version", Text, primary_key=True),
+    # A channel that carried no value at this version is recorded, not omitted:
+    # the type says so and the payload is empty. Leaving the row out instead
+    # would make "never written" and "written as nothing" the same absence.
+    Column("payload_type", Text, nullable=False),
+    Column("payload", LargeBinary, nullable=False),
+    # A blob is reachable only through the `channel_versions` map inside a
+    # checkpoint's opaque payload, so no SQL join can date it from the
+    # checkpoints that reference it. Without its own timestamp the only
+    # possible retention is per-thread.
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+)
+
+workflow_checkpoint_writes = Table(
+    "workflow_checkpoint_writes",
+    metadata,
+    Column("thread_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("checkpoint_ns", Text, primary_key=True),
+    Column("checkpoint_id", Text, primary_key=True),
+    Column("task_id", Text, primary_key=True),
+    # Signed on purpose. Ordinary writes take their position in the batch;
+    # WRITES_IDX_MAP gives errors, interrupts and resumes negative positions so
+    # they cannot collide with a write that merely happened to be first.
+    Column("idx", Integer, primary_key=True),
+    Column("channel", Text, nullable=False),
+    Column("task_path", Text, nullable=False),
+    Column("payload_type", Text, nullable=False),
+    Column("payload", LargeBinary, nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # Deliberately no foreign key to workflow_checkpoints. Under LangGraph's
+    # default `durability="async"` the checkpoint put is not awaited before the
+    # next step's writes are issued, so a write routinely reaches the database
+    # before the row it names -- measured across every durability mode, a
+    # failing node and a resume. A foreign key here would not enforce an
+    # invariant; it would fail ordinary runs. See tests/persistence.
 )

@@ -81,6 +81,91 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-050（一）checkpointer 的表结构
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。对应 WP06-06 的第一步。
+[ADR-014](./adr/0014-own-postgres-checkpointer.md) 决定自研 saver，本轮只落**它要写进去的表**，
+saver 本身一行都还没写。
+
+### 三张表不是设计选择，是契约的形状
+
+`aput` 只收到 `new_versions`——本次真正变化的通道——所以通道值必须存在一张**按版本
+索引**的表里，而不是每个 checkpoint 复制一份；`aput_writes` 记录的是"某个 task 已经
+产出、但消费它的那一步还没 checkpoint"的中间结果，所以它需要自己的表。
+
+LangGraph 序列化出来的东西**在这里保持不透明**：`dumps_typed` 返回 `(type, bytes)`，
+`loads_typed` 收回同一个二元组，因此两半都存、都不解释。把它拆成"可读"的列，等于本
+项目声称自己理解一个并不属于它的格式，而理解错的代价恰好在恢复 checkpoint 时兑现。
+
+表名带 `workflow_` 前缀：生态里不带前缀的 `checkpoints` 正是官方 saver 用
+`CREATE TABLE IF NOT EXISTS` 建的表，列结构与这里不同，不该被它悄悄认领。
+
+### 实测：**不能**给 writes 加指向 checkpoints 的外键
+
+这是本轮唯一一个"看起来显然该做、实测证明会坏事"的决定。LangGraph 默认
+`durability="async"`，**不等 checkpoint 落库就发出下一步的 writes**。把 `aput` 人为拖慢
+50 ms 后测量：
+
+```text
+durability=async   11 次 writes 调用，11 次都在对应 checkpoint 提交之前开始
+durability=sync    11 次 writes 调用， 1 次在对应 checkpoint 提交之前开始
+```
+
+三种 durability 模式、一个抛异常的节点（ERROR write 路径）和一次 resume 都测过。
+所以外键在这里**不是约束不变量，而是让正常运行失败**。它的缺席由一条测试固定下来，
+测试的文档说明了原因，免得后来者把它当成疏漏"补上"。
+
+### 有牙验证
+
+12 处等价破坏，逐个只改数据库里的一件事，然后跑对应测试；全部失败，还原后全绿：
+
+| 破坏 | 失败测试 |
+|---|---|
+| 给 writes 加 checkpoints 外键 | 写入早于 checkpoint 的用例 |
+| blob 主键去掉 `version` | 一通道多版本共存的用例 |
+| blob 主键加宽到不再唯一 | 同通道同版本只存一次的用例 |
+| checkpoint 主键去掉 `checkpoint_ns` | 子图命名空间隔离的用例 |
+| writes 主键去掉 `idx` | 负数索引与普通写共存的用例 |
+| `idx >= 0` 约束 | 同上 |
+| `payload` 改成 text | msgpack 非 UTF-8 的用例 |
+| `metadata` 改成 bytea | 按 key 查询 metadata 的用例 |
+| 空 blob payload 被拒 | "写入了空值"与"从未写入"区分的用例 |
+| `checkpoint_id` 收窄到 16 字符 | 真实运行全量落库的用例 |
+| `task_path` 收窄到 8 字符 | 同上 |
+| `parent_checkpoint_id` 设为 NOT NULL | 同上 |
+
+最后一栏那三条来自同一个测试：它把 v1 图**真跑一遍**，把 LangGraph 实际要求存的每一行
+（11 个 checkpoint、40 个 blob、32 条 write）原样写进表里再读回来，逐字节比对。它证明的
+不是"某个手搓的行能存下"，而是"契约真正产生的东西能存下"。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（216 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+agent-config-check       development / test / production 均为 status=ok
+alembic 唯一 head        0010_workflow_checkpoints
+
+pytest（无外部服务）              907 passed / 271 skipped
+pytest（真实 PostgreSQL + Qdrant） 1167 passed /  11 skipped
+```
+
+新增 11 条测试全部需要真实 PostgreSQL，因此无外部服务那一列的 `passed` 不变、
+`skipped` 从 260 涨到 271。
+
+### 本轮明确未做
+
+- **saver 本身**：`BaseCheckpointSaver` 的 `aput` / `aput_writes` / `aget_tuple` /
+  `alist` 一个都没实现，`LangGraphTaskWorkflow` 仍默认 `InMemorySaver`，所以
+  **进程重启不保留执行位置这一条至今没有变化**；
+- **thread → graph version 的映射仍在进程内存里**。它没有进这三张表：按实施计划
+  §6 它属于 `task_runs.graph_version`，而 ADR-014 写明 checkpointer 不得成为 Task
+  产品状态的第二个 writer。它随 WP06-07 的 `task_runs` 落库；
+- checkpoint 的保留与清理策略。三张表都有 `created_at`（blob 只能靠它——它只能经由
+  checkpoint 不透明载荷里的 `channel_versions` 到达，SQL 无法把它 join 回来），但还
+  没有任何东西会删除它们。
+
 ## 2026-07-28 PR-049 LangGraph Adapter 与 graph version 注册表
 
 状态：**已合入 `main`（GitHub `#59` / `341cbf5`）**。对应 WP06-05。**本轮第一次引入 `langgraph` 依赖。**
