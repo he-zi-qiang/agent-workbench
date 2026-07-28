@@ -12,6 +12,56 @@
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
 
+## 2026-07-28 PR-041 Chat 固定执行 lease 与孤儿回收
+
+状态：**当前开发分支已实现；无外部服务门禁、静态检查和迁移 head 检查通过。
+真实 PostgreSQL 并发用例因当前环境未配置测试 DSN 而跳过，尚未合入 `main`**。
+
+同步 Chat 没有 checkpoint、attempt-aware event 或副作用恢复协议，因此硬崩溃后
+“把同一个 Turn 交给另一个 Worker 重跑”并不安全。本轮选择更小且可证明的语义：
+
+```text
+claim
+  → running + 固定 lease_until
+  → release_pending | failed | cancelled
+
+lease 到期
+  → failed(deadline, stale_execution)
+  ↛ running（禁止续租、转移和自动重跑）
+```
+
+实现要点：
+
+- 迁移 `0009_chat_turn_lease` 增加 `lease_until`、`running ⇔ lease 非空` 数据库
+  约束和过期扫描部分索引；升级时旧 `running` 行立即具备可回收截止时间；
+- claim 使用 PostgreSQL `statement_timestamp()` 计算
+  `api.request_timeout_seconds + chat.orphan_grace_seconds`，不信任应用机器时钟；
+- claim 在检查 active Turn 前机会式终态化本 session 的过期 `running`，后台
+  reaper 延迟时新请求仍能解锁会话；
+- `prepare_release` 在 Turn 行锁内复核数据库时间；过期模型结果只会写稳定失败事实，
+  候选答案、event 和 assistant 都不会出现；
+- `ChatTurnReaper` 按 `(lease_until, turn_id)` 使用
+  `FOR UPDATE SKIP LOCKED` 批量回收；多个 API 实例可以竞争执行而不重复处理；
+- `finish_running_if_current` 只允许清理仍为 `running` 的 Turn，不能覆盖已经
+  `release_pending` 或终态的事实；
+- `asyncio.timeout` 现在真正消费 `api.request_timeout_seconds`；外层
+  `CancelledError` 使用 shielded best-effort cleanup 后仍重新抛出；
+- Chat 路由用 `CancellationSource` 传递原因，并直接取消实际 Chat task，断开不再等待
+  retrieval 自己轮询；API lifespan 先停止 reaper、有界排空 cleanup，再关闭
+  HTTP/Qdrant/PostgreSQL 依赖。
+
+确定性契约覆盖同 key 到期不重跑、不同 key 的机会回收、迟到 prepare、不覆盖 pending、
+bounded reaper、两个 PostgreSQL Worker 的 `SKIP LOCKED`、请求 deadline 与外部 task
+取消。完整无外部服务门禁为 `763 passed / 237 skipped`；Ruff、Pyright、compileall
+通过，Alembic 唯一 head 为 `0009_chat_turn_lease`。
+
+边界仍然明确：`release_pending` 是可幂等恢复状态，但目前需要同 key 客户端重试；
+后台尚不会主动完成无人重试的 pending Turn。reaper 终态目前写入 `chat_turns`，
+还没有与 durable Chat 终态 event 做原子提交。这两项属于下一可靠性增量。
+
+`0009` 当前按停机迁移设计：部署必须先停止旧版本写入，再升级 schema，最后启动新版本。
+它不是 expand/dual-write/contract 三阶段 migration，不支持新旧应用副本滚动共存。
+
 ## 2026-07-28 PR-040 Chat 原子授权发布栅栏
 
 状态：**当前开发分支已实现并通过静态门禁与内存测试；真实 PostgreSQL/Qdrant
@@ -88,9 +138,9 @@ Pyright、compileall 全部通过，Alembic 唯一 head 为 `0008_chat_turns`。
 PostgreSQL、Qdrant 或本地 BGE 权重；受沙箱禁止 `socket.bind()` 的单个真实性测试按
 既有方式从本轮本地门禁排除。
 
-仍保留一个明确边界：`running` Turn 尚无 lease/heartbeat/reaper。若进程在模型执行期间
-硬崩溃，而不是在 `release_pending` 发布窗口崩溃，该 Turn 会保持 busy，需要运维恢复；
-在加入带 epoch 的 reclaim 以前不能宣称 Chat 执行阶段具备自动故障转移。
+本节最初记录的 `running` 永久 busy 风险已由 PR-041 的固定 lease 与 terminal-only
+reaper 关闭。它刻意不提供自动故障转移；若未来允许重新执行同一 Turn，必须同时加入
+owner、epoch、heartbeat、全写入 fencing、checkpoint 与 attempt-aware event。
 
 ## 2026-07-28 PR-038 durable Event 幂等发布
 

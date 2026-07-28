@@ -14,8 +14,8 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 ## 当前状态
 
 截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支已完成
-PR-035～PR-040 的安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn
-与原子授权发布切片。已经实现并有测试证据：
+PR-035～PR-041 的安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn、
+原子授权发布与孤儿回合恢复切片。已经实现并有测试证据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -34,6 +34,8 @@ PR-035～PR-040 的安全发布、多轮上下文、EventLog 可演进回放、�
   线性化；
 - Chat API 强制 `Idempotency-Key`，同一会话的活跃 Turn 不交错；已提交请求重试不再
   重跑模型，`release_pending` 重试会重新验证持久化的 evidence revision；
+- `running` Turn 使用固定执行 lease；请求 deadline、ASGI 取消和客户端断开会安全
+  终态化，硬崩溃遗留项由 PostgreSQL `SKIP LOCKED` reaper 回收，且绝不自动重跑；
 - 与固定检索共用 `RetrievalService` 的 `knowledge_search` Tool Adapter。
 
 这些能力仍有明确边界：
@@ -41,8 +43,8 @@ PR-035～PR-040 的安全发布、多轮上下文、EventLog 可演进回放、�
 - `IngestionWorker` 仍是可调用组件，没有常驻进程、heartbeat、retry/dead-letter 和
   多 Worker 外部副作用 fencing；上传后自动可检索的产品 E2E 尚未贯通。
 - 旧 Qdrant Point 已被 revision 栅栏阻止读取，但 replace/delete 物理清理尚未完成。
-- Chat 尚未实现 `running` Turn 的 lease/reaper，因此进程在模型执行中硬崩溃后需要
-  运维恢复；历史 token window/compaction 和模型实际引用校验也尚未实现。
+- Chat 的历史 token window/compaction 和模型实际引用校验尚未实现；
+  `release_pending` 的无人重试后台恢复及 reaper 终态 Event 仍待补齐。
   `knowledge_search` 尚未装配为可用的 Agentic Retrieval Mode。
 - EventLog 能拒绝未知 schema version，但尚未实现旧版本 upcaster、poison-row
   隔离/跳过策略。

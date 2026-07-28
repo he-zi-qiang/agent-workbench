@@ -6,7 +6,7 @@
 - `config.test.toml`：测试环境深度合并覆盖，专门开启确定性 failpoint；
 - `config.production.toml`：无密钥的 production 合同覆盖，缺少部署注入时
   必须失败关闭；
-- `config/ownership.yaml`：231 个配置叶子字段的唯一 owner 与生命周期登记；
+- `config/ownership.yaml`：237 个配置叶子字段的唯一 owner 与生命周期登记；
 - `.env.example`：本地开发需要注入的 DSN、模型 ID 和密钥名称；
 - `src/agent_workbench/bootstrap/settings.py`：Pydantic Settings 类型、来源优先级、脱敏快照和跨域不变量；
 - `tests/config/test_settings.py`：配置契约测试；
@@ -86,7 +86,7 @@ secret 注入；TOML、Git、事件、日志和 trace 中都不能出现真实�
 /run/secrets/AW_DATABASE__DSN
 /run/secrets/AW_DATABASE__GUARD_DSN
 /run/secrets/AW_DATABASE__LISTEN_DSN
-/run/secrets/AW_SECRETS__ANTHROPIC_API_KEY
+/run/secrets/AW_SECRETS__DEEPSEEK_API_KEY
 ```
 
 每个文件只保存对应值，通过 `AW_SECRETS_DIR=/run/secrets` 选择目录。
@@ -226,6 +226,35 @@ claim_batch_size <= min(worker_concurrency, guard_connection_budget)
 悄悄改变运行语义。
 
 ## 4. Lease 与故障注入校验
+
+### 4.1 Chat 固定执行 lease
+
+`[chat]` 与 `[coordination]` 不是同一组配置。前者约束同步、无 checkpoint 的
+Chat 请求；后者属于可恢复 Task Worker。
+
+```text
+chat lease_until
+= PostgreSQL claim 时刻
+  + api.request_timeout_seconds
+  + chat.orphan_grace_seconds
+```
+
+`api.request_timeout_seconds` 约束完整 Chat use case，不只约束单次模型 HTTP。
+`chat.reaper_poll_seconds` 和 `chat.reaper_batch_size` 控制 API lifespan 内的
+terminal-only reaper。`chat.orphan_action="terminal_fail"` 与
+`chat.automatic_retry=false` 使用单值 Literal 锁死：当前没有 checkpoint、attempt
+event 和副作用 ledger，过期 Turn 只能失败，不能自动重放。
+
+生产 deadline 只取 PostgreSQL 时钟。测试通过可控 clock 或条件推进
+`lease_until`，不用真实等待。`orphan_grace` 是清理余量，不是 heartbeat，也不能
+续租。`chat.disconnect_poll_seconds` 只负责观察 ASGI 断开；发现断开后会同时设置
+协作式 token 并取消实际 Chat task。
+
+`0009_chat_turn_lease` 是明确的停机迁移，不是 rolling migration。旧应用不会写
+`lease_until`，因此运行该迁移前必须先停止旧副本；需要滚动发布时应另行拆成
+add-nullable、双写/backfill、validate/enforce 三阶段。
+
+### 4.2 Task lease 与故障注入
 
 配置校验使用以下安全关系：
 

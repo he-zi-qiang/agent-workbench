@@ -6,8 +6,9 @@
 >
 > 状态：截至 2026-07-28，主分支基线为 `main@4d03f69`，当前开发分支已完成
 > 自研 Runtime、PostgreSQL/Artifact/Document/ACL/Outbox、Dense/Hybrid RAG 与评测、
-> 固定检索 Chat/SSE、多轮上下文、EventLog 版本化与幂等键、`chat_turns` 请求幂等和
-> 发布恢复。下一主线是 WP06 LangGraph Task MVP；LlamaIndex/LangChain 互操作、
+> 固定检索 Chat/SSE、多轮上下文、EventLog 版本化与幂等键、`chat_turns` 请求幂等、
+> 原子发布和 fixed-lease orphan recovery。下一主线是 WP06 LangGraph Task MVP；
+> LlamaIndex/LangChain 互操作、
 > 可靠常驻 Ingestion Worker、Task Registry/lease/fencing、Multi-Agent 与 UI 仍开放
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
@@ -1265,6 +1266,7 @@ revision ID 到真正开工并核对依赖关系时再确定，避免计划表�
 | `0006_event_schema_version` | WP07 | Event envelope schema version |
 | `0007_event_idempotency_key` | WP07 | stream-local durable `event_key` |
 | `0008_chat_turns` | WP03/WP07 | 幂等 Chat Turn ledger、生命周期与单会话活跃约束 |
+| `0009_chat_turn_lease` | WP03/WP07 | Chat 固定执行 deadline、过期索引与生命周期约束 |
 
 LangGraph checkpoint 表由锁定版本的 saver migration 管理，但其版本必须记录。
 

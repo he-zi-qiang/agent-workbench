@@ -447,6 +447,25 @@ PostgreSQL `event_streams/events` 是当前唯一持久事件事实源，`EventL
 SSE/UI 只能把 `AnswerCommitted` 视为可展示的检索型答案，不能把 Chat 路径中的
 `ModelCompleted` 当作答案内容源。
 
+### 6.8 Chat 固定执行 lease
+
+同步 Chat 与可恢复 Task 的 lease 语义不同。Chat 没有 mid-loop checkpoint，也没有
+可安全重放模型调用和副作用的 attempt ledger，因此 `running` Turn 只使用一个固定、
+不可续租的 `lease_until`：
+
+- claim 以 PostgreSQL 时钟计算 `request_timeout + orphan_grace`；
+- `running` 必须持有 lease，进入 `release_pending/failed/cancelled` 时必须清空；
+- request timeout、ASGI cancellation 和客户端断开只可条件终态化仍为 `running`
+  的 Turn，不能覆盖已准备或已提交事实；
+- `running → release_pending` 必须在 Turn 锁内验证数据库当前时间仍早于 lease；
+- reaper 使用 `FOR UPDATE SKIP LOCKED` 把到期 Turn 转为稳定失败，不追加 assistant，
+  不删除 user message，也不重新执行模型；
+- 同 key 重试返回原失败；业务重试必须使用新 key。
+
+如果未来要把到期 Turn 重新交给其他执行者，`lease_owner + lease_epoch + heartbeat +
+所有 checkpoint/event/副作用写入 fencing` 必须一起加入，不能把固定 deadline 改名为
+可恢复 lease 就宣称具备恢复能力。
+
 ## 7. 自研 Runtime 基线
 
 ### 7.1 状态机
@@ -1421,6 +1440,7 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | LangChain model/tool 互操作 Adapter | ✓ |  |  |  |
 | BGE-M3 + Qdrant Dense/Hybrid RAG 与离线评测 | ✓ | ✓ | ✓ |  |
 | 固定检索 Chat + RAG（ACL 双检、发布门、多轮、请求幂等） | ✓ | ✓ | ✓ |  |
+| Chat 固定执行 lease、取消清理与 terminal-only reaper | ✓ | ✓ | ✓ |  |
 | Agentic `knowledge_search` 产品装配 | ✓ |  |  |  |
 | LlamaIndex ingestion/retrieval Adapter | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
