@@ -176,3 +176,49 @@ def test_the_real_model_gives_different_terms_to_different_text() -> None:
     other = asyncio.run(encoder.encode_query("preheat the oven and rest the dough"))
 
     assert set(one.indices) != set(other.indices)
+
+
+def test_two_loads_of_one_revision_encode_a_query_identically() -> None:
+    """A pinned revision must mean one encoder, not a family of them.
+
+    This is the property the whole index identity rests on. `bge-m3@main`
+    appears in `index_identity`, so two processes that write points under that
+    string are asserting the points are comparable. If loading twice produces
+    two different encoders, the identity is a label over a random variable:
+    documents indexed by one process are searched with another's vector space,
+    every evaluation number is a single sample, and nothing raises.
+
+    Written as two loads in one process because that is the cheapest form that
+    can fail. Nothing here is specific to crossing a process boundary -- if the
+    weights come off disk, both loads read the same bytes.
+    """
+
+    one = _real()
+    other = _real()
+
+    first = asyncio.run(one.encode_query("reciprocal rank fusion"))
+    second = asyncio.run(other.encode_query("reciprocal rank fusion"))
+
+    assert first.indices == second.indices
+    assert first.values == second.values
+
+
+def test_the_lexical_projection_is_loaded_rather_than_initialised() -> None:
+    """Names the cause the test above can only report as a symptom.
+
+    BGE-M3's lexical weights come from a trained `sparse_linear` head. When a
+    loader silently skips it, the layer still exists and still has the right
+    shape, so every structural check passes -- the dimension guard in
+    `BgeM3SparseEncoder.load` included, because the width comes from the
+    tokenizer vocabulary and not from this projection. What a freshly
+    constructed `Linear` cannot do is produce the same numbers twice.
+    """
+
+    one = _real()
+    other = _real()
+
+    def projection(encoder: BgeM3SparseEncoder) -> Any:
+        inner = getattr(encoder.model, "model", encoder.model)
+        return inner.sparse_linear.weight.detach().float().cpu().tolist()
+
+    assert projection(one) == projection(other)

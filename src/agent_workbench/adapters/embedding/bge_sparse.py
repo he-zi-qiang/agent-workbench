@@ -51,11 +51,46 @@ def load_bge_m3(
             "install it with: uv sync --extra embedding"
         ) from exc
 
+    _require_lexical_projection(model_id, revision=revision)
     return cast(
         "LexicalEncoder",
         FlagEmbedding.BGEM3FlagModel(  # pyright: ignore[reportUnknownMemberType]
             model_id, revision=revision, use_fp16=use_fp16
         ),
+    )
+
+
+def _require_lexical_projection(model_id: str, *, revision: str) -> None:
+    """Refuse a checkout whose trained lexical head is not actually present.
+
+    BGE-M3 keeps ``sparse_linear.pt`` beside the base weights rather than
+    inside them, and FlagEmbedding does not treat its absence as an error: it
+    constructs a fresh ``Linear`` and carries on. Everything downstream then
+    succeeds while meaning nothing. The vectors are the right width -- the
+    width comes from the tokenizer vocabulary, not from this projection, so
+    the dimension guard in ``BgeM3SparseEncoder.load`` passes -- they are
+    merely a random projection, different in every process.
+
+    That failure has no symptom a caller can see. It cost this project two
+    retracted diagnoses and an ablation report whose hybrid arm was a sequence
+    of unrelated samples, so the check is here, before the model is built,
+    rather than left to whoever next notices that a number moved.
+    """
+
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:  # pragma: no cover - depends on the environment
+        return
+
+    cached = try_to_load_from_cache(model_id, "sparse_linear.pt", revision=revision)
+    if isinstance(cached, str):
+        return
+    raise SparseEncodingUnavailableError(
+        f"{model_id}@{revision} has no cached sparse_linear.pt, so its lexical "
+        "weights would be a randomly initialised projection rather than the "
+        'trained one. Fetch it with: python -c "from huggingface_hub import '
+        f"hf_hub_download; hf_hub_download('{model_id}', 'sparse_linear.pt', "
+        f"revision='{revision}')\""
     )
 
 

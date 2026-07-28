@@ -6,6 +6,6 @@
     "mrr": 1.0,
     "recall_at_1": 1.0,
     "recall_at_3": 1.0,
-    "retrieval_latency_ms": 7219.342937499732
+    "retrieval_latency_ms": 27892.206354500104
   }
 }
