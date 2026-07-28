@@ -53,6 +53,13 @@ Implemented with test evidence:
   whose revision budget is spent returns no next node rather than falling
   through to approval, because approving a draft the critic rejected turns the
   gate into a formality exactly when it matters;
+- a LangGraph adapter that **compiles** the control-flow declaration rather
+  than restating it, so the graph replaying a checkpoint and the graph the
+  control-flow tests assert on are one declaration; `TaskState` fields are the
+  graph's channels and the two reference channels carry the same sorted-union
+  reducer as the control flow; an unregistered graph version fails closed
+  instead of falling back to the newest graph; and `resume` never resubmits
+  the initial state;
 - Task agent nodes that reach the model only through `AgentExecutor`, holding
   no registry and no model port, since a node that could assemble its own loop
   would be a second runtime without the first one's budget, cancellation and
@@ -107,9 +114,10 @@ The remaining boundaries are explicit:
 - Task agent nodes cover only the four whose product is one artifact;
   `plan` and `critic` need a structured-output decoding contract and are not
   implemented.
-- The LangGraph adapter, the PostgreSQL checkpointer and the Task Worker do
-  not exist, and `langgraph` is not yet a project dependency, so no Task runs
-  end to end yet.
+- The LangGraph adapter is wired to an in-memory checkpointer only, so a
+  process restart does not preserve execution position. The PostgreSQL
+  checkpointer, the Task Worker and the Task query surface do not exist, so no
+  Task runs or recovers end to end in a product sense yet.
 - LlamaIndex and LangChain adapters, the Task Registry, multi-Agent execution,
   the CrewAI comparison, UI, observability, production authentication and
   deployment remain planned.

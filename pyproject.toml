@@ -13,6 +13,11 @@ dependencies = [
   "asyncpg>=0.30,<0.31",
   "fastapi>=0.115,<1",
   "httpx>=0.28.1",
+  # A main dependency rather than an extra. The embedding extra exists because
+  # its runtime and weights are gigabytes; langgraph is small and pure Python,
+  # so putting it behind an extra would buy nothing except a CI that skips the
+  # workflow adapter's tests and therefore proves nothing about it.
+  "langgraph>=0.6,<0.7",
   "pydantic>=2.12,<3",
   "pydantic-settings>=2.14.2,<3",
   "python-dotenv>=1,<2",

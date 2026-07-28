@@ -1479,7 +1479,8 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | 固定研究图的条件路由与确定性 fan-in reducer | ✓ | ✓ | ✓ |  |
 | Task Agent node：产物为 artifact 的四个节点 | ✓ | ✓ | ✓ |  |
 | Task Agent node：`plan`/`critic` 结构化输出解码 | ✓ |  |  |  |
-| LangGraph Task（adapter / checkpointer / Worker / 查询接口） | ✓ |  |  |  |
+| LangGraph Adapter 与 graph version 注册表（内存 checkpointer） | ✓ | ✓ | ✓ |  |
+| PostgreSQL checkpointer / Task Worker / 查询接口 | ✓ |  |  |  |
 | PostgreSQL Task coordination | ✓ |  |  |  |
 | Multi-Agent | ✓ |  |  |  |
 | UI / deployment / observability | ✓ |  |  |  |
