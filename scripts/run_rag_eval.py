@@ -35,6 +35,7 @@ from agent_workbench.adapters.ingestion import (
     ApproximateTokenCounter,
     TextDocumentParser,
 )
+from agent_workbench.adapters.reranking.bge_reranker import BgeReranker
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.chunking import Chunker
 from agent_workbench.application.ingestion import (
@@ -67,8 +68,17 @@ async def _measure(
     embedder: BgeM3Embedder,
     sparse: BgeM3SparseEncoder | None,
     client: AsyncQdrantClient,
+    reranker: BgeReranker | None = None,
 ) -> Any:
-    """Index the corpus and score the gold set with one retriever."""
+    """Index the corpus and score the gold set with one retriever.
+
+    The reranked arm asks the index for CANDIDATES rather than TOP_K and cuts
+    to TOP_K after scoring. That is not a second variable slipped into the
+    comparison -- it is what reranking is. A reranker handed exactly TOP_K
+    results can reorder them and never change which documents are returned,
+    so recall would be identical by construction and the measurement would be
+    of nothing. RetrievalService does the same thing for the same reason.
+    """
 
     collection = f"eval_{uuid.uuid4().hex}"
     index = QdrantVectorIndex(client, collection=collection)
@@ -98,6 +108,10 @@ async def _measure(
                 )
             )
 
+        # A reranker needs something to choose from; the other arms are
+        # measured at exactly the depth they answer at.
+        _limit = CANDIDATES if reranker is not None else TOP_K
+
         async def retrieve(question: str) -> Sequence[str]:
             vector = await embedder.embed_query(question)
             if sparse is None:
@@ -106,7 +120,7 @@ async def _measure(
                     tenant_id=TENANT,
                     knowledge_base_id=KB,
                     authorized_principals=(OWNER,),
-                    limit=TOP_K,
+                    limit=_limit,
                 )
             else:
                 weights = await sparse.encode_query(question)
@@ -117,7 +131,7 @@ async def _measure(
                     tenant_id=TENANT,
                     knowledge_base_id=KB,
                     authorized_principals=(OWNER,),
-                    limit=TOP_K,
+                    limit=_limit,
                     # Each arm proposes a full candidate set and RRF narrows
                     # them; truncating both to TOP_K first makes fusion choose
                     # between two already-shortened lists, which is a different
@@ -128,6 +142,15 @@ async def _measure(
                     dense_limit=CANDIDATES,
                     sparse_limit=CANDIDATES,
                 )
+            if reranker is not None:
+                scores = await reranker.rerank(
+                    question, tuple(hit.text for hit in hits)
+                )
+                # Descending, ties broken by the retriever's order, exactly as
+                # RetrievalService does -- a report produced by a different
+                # tie-break would not describe the code being shipped.
+                order = sorted(range(len(hits)), key=lambda i: (-scores[i], i))
+                hits = [hits[i] for i in order][:TOP_K]
             seen: list[str] = []
             for hit in hits:
                 if hit.document_id not in seen:
@@ -158,11 +181,33 @@ async def main() -> int:
         expected_vocabulary_size=VOCABULARY,
     )
 
+    # Skipped rather than fatal. The reranked arm needs a second set of
+    # weights, and a machine that has the embedder but not the reranker should
+    # still be able to produce the dense/hybrid comparison -- what it must not
+    # do is emit a three-arm report with one arm quietly missing, so the skip
+    # is printed and the report file for that arm is not written.
+    reranker: BgeReranker | None
+    try:
+        reranker = BgeReranker.load(
+            model_id="BAAI/bge-reranker-v2-m3", revision="main", batch_size=8
+        )
+    except Exception as unavailable:
+        reranker = None
+        print(
+            f"SKIPPING hybrid-rerank: {type(unavailable).__name__}: {unavailable}",
+            file=sys.stderr,
+        )
+
     client = AsyncQdrantClient(url=url)
     REPORTS.mkdir(parents=True, exist_ok=True)
+    arms: tuple[tuple[str, BgeM3SparseEncoder | None, BgeReranker | None], ...] = (
+        ("dense", None, None),
+        ("hybrid", sparse, None),
+        *((("hybrid-rerank", sparse, reranker),) if reranker is not None else ()),
+    )
     try:
-        for name, encoder in (("dense", None), ("hybrid", sparse)):
-            report = await _measure(embedder, encoder, client)
+        for name, encoder, cross in arms:
+            report = await _measure(embedder, encoder, client, cross)
             (REPORTS / f"{name}.json").write_text(
                 report.to_json() + "\n", encoding="utf-8"
             )
