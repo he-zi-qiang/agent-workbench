@@ -1,11 +1,11 @@
 {
-  "gold_digest": "f43571b25a871121",
+  "gold_digest": "a26070043b0ffde1",
   "index_identity": "BAAI/bge-m3@main+approx-word-v1-512-64",
-  "question_count": 23,
+  "question_count": 38,
   "scores": {
-    "mrr": 0.9710144927536232,
-    "recall_at_1": 0.9565217391304348,
-    "recall_at_3": 1.0,
-    "retrieval_latency_ms": 52.682834037113935
+    "mrr": 0.9605263157894737,
+    "recall_at_1": 0.9473684210526315,
+    "recall_at_3": 0.9736842105263158,
+    "retrieval_latency_ms": 48.96325050503947
   }
 }

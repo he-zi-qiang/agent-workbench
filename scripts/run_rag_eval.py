@@ -57,6 +57,9 @@ OWNER = "user_eval"
 # retriever to choose, which is the only condition under which recall means
 # something.
 TOP_K = 3
+# What each arm proposes before fusion, mirroring RetrievalService's
+# candidate_multiplier rather than inventing a second policy here.
+CANDIDATES = TOP_K * 4
 VOCABULARY = 250002
 
 
@@ -115,8 +118,15 @@ async def _measure(
                     knowledge_base_id=KB,
                     authorized_principals=(OWNER,),
                     limit=TOP_K,
-                    dense_limit=TOP_K,
-                    sparse_limit=TOP_K,
+                    # Each arm proposes a full candidate set and RRF narrows
+                    # them; truncating both to TOP_K first makes fusion choose
+                    # between two already-shortened lists, which is a different
+                    # retriever from the one being measured. RetrievalService
+                    # says the same thing in a comment -- and this script did
+                    # the opposite, which is what the first run of the expanded
+                    # corpus actually measured.
+                    dense_limit=CANDIDATES,
+                    sparse_limit=CANDIDATES,
                 )
             seen: list[str] = []
             for hit in hits:
