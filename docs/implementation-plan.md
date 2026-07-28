@@ -1302,7 +1302,7 @@ revision ID 到真正开工并核对依赖关系时再确定，避免计划表�
 | `0008_chat_turns` | WP03/WP07 | 幂等 Chat Turn ledger、生命周期与单会话活跃约束 |
 | `0009_chat_turn_lease` | WP03/WP07 | Chat 固定执行 deadline、过期索引与生命周期约束 |
 
-LangGraph checkpoint 表由锁定版本的 saver migration 管理，但其版本必须记录。
+LangGraph checkpoint 表原计划由锁定版本的 saver migration 管理；[ADR-014](./adr/0014-own-postgres-checkpointer.md) 改为自研 checkpointer，因此这些表进入本项目的 Alembic，迁移链仍只有一条 head。
 
 ### 7.2 计划逻辑迁移（revision ID 待定）
 
