@@ -57,6 +57,78 @@ alembic 唯一 head        0009_chat_turn_lease
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-048 Agent node：只经 `AgentExecutor`，且失败也要记账
+
+状态：**已实现并通过本地全仓门禁；在功能分支
+`pr-048-agent-nodes` 上，尚未合入 `main`**。对应 WP06-03。
+
+节点通过 `AgentExecutor` 到达模型，除此之外没有别的路径——不持有 tool registry、
+不持有 model port、不持有 Runtime 内部对象。**一个能自己组装循环的节点，就是第二个
+Runtime，而且不带第一个的预算、取消和 Policy 保证。** 测试直接断言节点实例只持有
+一个 `_executor` 字段。
+
+本轮只做**产物是一个 artifact 的节点**：`understand / research_internal /
+research_external / synthesize`。它们的状态贡献就是 `AgentOutcome.output_ref`
+已经携带的引用。`plan` 与 `critic` 需要把模型输出**解码成结构化值**（TaskStep 列表、
+pass/revise 决定），那需要一份解码契约，所以刻意不在本模块里。
+`ARTIFACT_PRODUCING_NODES` 在调用时校验，因此将来给某个节点加上结构化产物时，
+它不能继续走 artifact 那条路而把那个产物悄悄丢掉。
+
+### 失败的运行也要记账
+
+`AgentExecutor` 的契约是"预期失败返回终态 outcome，而不是抛异常——调用方是一个
+必须记录并路由的 graph node"。所以节点**先把 run id 和 usage 折进状态，再判断成败**：
+
+```text
+run → 记录 agent_run_id + usage → 判断是否可用 → 可用则返回，不可用则带着已记账的状态抛出
+```
+
+`AgentNodeFailedError` 携带那份**已经扣过费的状态**。只记录成功的节点，会让同一个
+Task 在一个"看起来从没动过"的预算里无限重试。对照组就是同一节点、同一次调用，
+唯一差别是 outcome 失败。
+
+### 完成但没有产物，是失败而不是空成功
+
+这四个节点的全部工作就是产出那个 artifact。`completed` 但 `output_ref is None`
+被判为失败——否则图会继续往下走，把一个背后什么都没有的目标交给下一个节点。
+`cancelled` 同理：即使 outcome 上挂着 artifact 引用也不采纳，因为它背后的工作是被
+中途停掉的。
+
+### 提示词是投影，不是转录
+
+节点只发送 objective 和 plan，**不发送先前节点累积的输出**。那些东西在 artifact
+store 里；把它们抄进 prompt，会让上下文随图增长而不是随问题增长。测试用
+evidence/outcome 引用做 canary 断言它们不出现在 prompt 里。
+
+`TaskRunContext`（trace/stream/principal/envelope/budget）**刻意不进 `TaskState`**：
+一个携带 principal 和授权信封的 checkpoint，会让 resume 重放 Task 启动时的授权，
+而不是重新推导它。由 Registry 在 claim 时提供。
+
+### 有牙验证
+
+六处等价改动，每处都**只**让对应的那一条测试失败，还原后逐字节一致：
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 只在成功时记账 | 1 |
+| 接受"完成但无产物" | 1 |
+| 把 cancelled 当作内容 | 1 |
+| prompt 回放累积引用 | 1 |
+| usage 覆盖而不是累加 | 1 |
+| `absorb_draft` 保留陈旧 review | 1 |
+
+本轮全仓门禁：`895 passed / 260 skipped`（新增 13）；Ruff、Pyright 全过，跳过项不变。
+
+### 本轮明确未做
+
+- `plan` 与 `critic` 两个节点（需要结构化输出解码契约）；
+- `approval` / `export` 占位节点；
+- LangGraph adapter、checkpointer、Task Worker、事件时间线。**仍然没有任何 Task
+  可以端到端运行**；本轮只是把"节点如何与模型交互、如何记账"这一层钉死。
+
+顺带把 `research_graph._evolve` 提升为公开的 `evolve`：重新校验这条规则原本要在
+两个模块里各写一遍，而重复的规则就是会漂移的规则。
+
 ## 2026-07-28 PR-047 固定研究图的确定性控制流与 fan-in reducer
 
 状态：**已实现并通过本地全仓门禁；在功能分支
