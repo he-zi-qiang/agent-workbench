@@ -45,8 +45,14 @@ Implemented with test evidence:
   makes every downstream check pass while meaning nothing; the error carries
   the command that retrieves the weights;
 - a checkpoint-safe `TaskState` and `TaskWorkflowPort` for the fixed Task
-  workflow (the first piece of WP06: contracts only, with no adapter, node
-  handlers, checkpointer or worker);
+  workflow;
+- conditional routing and a deterministic fan-in reducer for the fixed
+  research graph, framework-neutral and with no `langgraph` dependency: fan-in
+  is a sorted union, so the merged state does not depend on which branch
+  finished first and replaying a branch adds no duplicates; a quality gate
+  whose revision budget is spent returns no next node rather than falling
+  through to approval, because approving a draft the critic rejected turns the
+  gate into a formality exactly when it matters;
 - fixed two-step Chat with two ACL checks, an answer-release gate, a source
   revision read barrier, multi-turn replay and a PostgreSQL `chat_turns` fact
   ledger;
@@ -90,9 +96,10 @@ The remaining boundaries are explicit:
 - The `hybrid-rerank` arm of the three-way ablation has not been run: hybrid
   already scores 1.000 on the current 38-question gold set, so the rerank
   delta there is necessarily zero. Measuring it needs a harder gold set first.
-- LangGraph Task work is limited to the domain state and the port. The
-  adapter, node handlers, PostgreSQL checkpointer and Task Worker do not
-  exist, and `langgraph` is not yet a project dependency.
+- LangGraph Task work is limited to the domain state, the port and the graph's
+  control flow. Agent node handlers, the LangGraph adapter, the PostgreSQL
+  checkpointer and the Task Worker do not exist, and `langgraph` is not yet a
+  project dependency, so no Task runs end to end yet.
 - LlamaIndex and LangChain adapters, the Task Registry, multi-Agent execution,
   the CrewAI comparison, UI, observability, production authentication and
   deployment remain planned.

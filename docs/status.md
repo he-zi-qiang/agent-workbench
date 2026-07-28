@@ -14,7 +14,7 @@
 
 ## 当前基线与编号对应
 
-主分支基线：**`main@e93d7a1`**（2026-07-28）。
+主分支基线：**`main@e93d7a1`**（2026-07-28）。PR-047 在功能分支上，尚未合入 `main`。
 
 **PR-035～PR-046 的全部增量都已经合入 `main`。** 下面各节里写的"尚未合入 `main`"
 是当时开发分支上的状态，已按实际合并结果订正；每节保留的测试证据仍是**该增量当时**
@@ -56,6 +56,72 @@ alembic 唯一 head        0009_chat_turn_lease
 `production` profile 需要 CI 同款环境变量（固定 model ID、40 位 embedding/reranker
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
+
+## 2026-07-28 PR-047 固定研究图的确定性控制流与 fan-in reducer
+
+状态：**已实现并通过本地全仓门禁；在功能分支
+`pr-047-research-graph-control-flow` 上，尚未合入 `main`**。
+对应 WP06-02（条件路由）与 WP06-04（确定性 fan-out/fan-in reducer）。
+
+新增 `src/agent_workbench/workflows/`——框架无关的核心包，架构守卫已实际覆盖它
+（把 `import langgraph` 放进去会让 `test_core_keeps_frameworks_and_concrete_sdks_at_outer_boundaries`
+失败，已实测）。**边写成数据、路由写成纯函数**，因为一个嵌在已编译图里的路由决定，
+只能靠运行那张图来测试。LangGraph adapter 将来编译这份声明，而不是持有同一决定的
+第二份措辞。
+
+两条对恢复起支撑作用的性质放在这一层而不是 adapter 里：
+
+- **fan-in 是排序并集**。合并结果与哪个 research 分支先完成无关，重复合并同一份
+  contribution 也不改变结果。于是 fan-in 中途崩溃后的 checkpoint 会**收敛**，而不是
+  累积重复引用。测试直接断言交换律、幂等性，以及"重放一个分支等于没重放"；
+- **revision 预算耗尽的 quality gate 不返回下一个节点**。它返回 `None`，而不是
+  `approval`：把耗尽路由到审批，等于**批准一份 critic 明确否决的草稿**，恰好在质量门
+  最该起作用的时候把它变成形式。调用方必须显式处理这个值，不能靠忽略返回值走到审批。
+
+三条 quality gate 条件边各有测试，且**互为对照组**——`pass → approval`、
+`revise 且有预算 → synthesize`、`revise 且预算耗尽 → 无后继`，后两条唯一的差别就是预算。
+
+`begin_revision` 在推进计数的同时**丢弃旧 review**：`TaskState` 要求存储的 review 描述
+当前 `revision_count`，保留它要么校验失败，要么更糟——让下一次质量门读到一份关于
+**已被重写的草稿**的陈旧结论。
+
+### 一个本轮修掉的真实缺陷
+
+reducer 最初用 `model_copy(update=...)` 构造新状态。**Pydantic 的 `model_copy` 跳过
+校验器**，而 `DomainModel` 没有开 `revalidate_instances`，所以一个返回乱序或重复引用
+的 reducer 会被**原样存进 checkpoint**，直到以后某次读取才失败。改为经
+`model_validate` 重新校验的 `_evolve`。
+
+这一条的守卫只有在 reducer 真的回归时才起作用，所以测试**注入**那次回归
+（monkeypatch 掉 `merge_refs` 让它返回乱序），证明 `fan_in` 拒绝而不是落盘。
+修复前没有任何测试能发现这个问题——sabotage 4 只让这一条失败，正说明它此前是裸的。
+
+### 有牙验证
+
+五处等价改动，每处都让**对应**测试失败，还原后逐字节一致、23 条全过：
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 预算耗尽改为路由到 `approval` | 2 |
+| `merge_refs` 保留插入顺序（不排序） | 4 |
+| `begin_revision` 保留陈旧 review | 2 |
+| `_evolve` 改回 `model_copy` | 1 |
+| `route` 忽略空 plan | 1 |
+
+本轮全仓门禁：`882 passed / 260 skipped`（新增 23 条），Ruff format/check、Pyright
+`0 errors / 0 warnings` 全部通过。跳过项与 `main@e93d7a1` 完全相同，本增量不触碰
+任何外部依赖。
+
+### 本轮明确未做
+
+- **WP06-03 Agent node**：`understand / plan / research_* / synthesize / critic`
+  的处理函数尚不存在，本轮只有它们之间的控制流；
+- **WP06-05 LangGraph Adapter**：`langgraph` 仍不是项目依赖，`adapters/langgraph/`
+  不存在；
+- **WP06-06 PostgreSQL checkpointer**、**WP06-07 Task Worker / TaskService /
+  Task 查询接口**、**WP06-09 Task 事件时间线**；
+- 因此**没有任何 Task 可以端到端运行**，也没有 checkpoint 恢复证据。本节只证明
+  "下一个节点是谁"和"并行结果如何合并"这两件事是确定的、有界的、可测的。
 
 ## 2026-07-28 PR-046 Sparse 加载守卫：拒绝没有 lexical head 的编码器
 

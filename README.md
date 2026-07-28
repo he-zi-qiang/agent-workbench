@@ -34,8 +34,11 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 - 缺少 `sparse_linear.pt` 时**拒绝构造** sparse 编码器：FlagEmbedding 会静默换上
   一个随机初始化的投影，让下游每一道检查都通过而毫无意义，错误信息里带着取回
   权重的命令；
-- Task 工作流的 checkpoint-safe `TaskState` 与 `TaskWorkflowPort`（WP06 的第一块，
-  只有契约，尚无 adapter、节点、checkpointer 或 Worker）；
+- Task 工作流的 checkpoint-safe `TaskState` 与 `TaskWorkflowPort`；
+- 固定研究图的**条件路由与确定性 fan-in reducer**（框架无关，不依赖 `langgraph`）：
+  fan-in 是排序并集，因此合并结果与分支完成顺序无关、重放一个分支不产生重复引用；
+  revision 预算耗尽的 quality gate **不返回下一个节点**，而不是放行去审批——批准一份
+  critic 明确否决的草稿，会让质量门恰在最该起作用时变成形式；
 - 固定 2-step Chat 的 ACL 双重检查、答案发布门、source revision 读取栅栏、已提交
   会话消息的多轮回放，以及 PostgreSQL `chat_turns` 幂等事实源；
 - 最终 source revision/ACL 复核、`AnswerCommitted/AnswerWithheld`、assistant
@@ -66,8 +69,9 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
   隔离/跳过策略。
 - 三臂消融的 `hybrid-rerank` 臂尚未跑：hybrid 在当前 38 题 gold set 上已打满
   1.000，rerank delta 必然为 0；要测出它得先有更难的 gold set。
-- LangGraph Task 目前只有领域状态与 Port，**adapter、节点 handler、PostgreSQL
-  checkpointer 和 Task Worker 都不存在**；`langgraph` 也还不是项目依赖。
+- LangGraph Task 目前只有领域状态、Port 和图的控制流，**Agent node handler、
+  LangGraph adapter、PostgreSQL checkpointer 和 Task Worker 都不存在**；
+  `langgraph` 也还不是项目依赖。因此**还没有任何 Task 能端到端运行**。
 - LlamaIndex/LangChain Adapter、Task Registry、Multi-Agent、CrewAI 对比、UI、
   可观测性、生产身份认证和部署仍为 Planned。
 
