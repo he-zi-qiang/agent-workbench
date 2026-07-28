@@ -13,9 +13,10 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支已完成
-PR-035～PR-043 的安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn、
-原子授权发布、无流量恢复与固定 lease 原子过期切片。已经实现并有测试证据：
+截至 2026-07-28，主分支基线为 **`main@e93d7a1`**。PR-035～PR-046 已全部合入：
+安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn、原子授权发布、
+无流量恢复、固定 lease 原子过期，以及 Reranker、Task 工作流状态与 sparse
+加载守卫。已经实现并有测试证据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -27,6 +28,14 @@ PR-035～PR-043 的安全发布、多轮上下文、EventLog 可演进回放、�
 - PostgreSQL EventLog 的 per-stream gap-free sequence、显式 envelope schema version、
   生产者时间戳回放和 stream-local durable `event_key` 幂等写入；
 - BGE-M3 Dense Embedding、Qdrant Dense/Hybrid 检索和离线 RAG 评测；
+- BGE reranker：跑在**授权之后、`top_k` 之前**；Port 返回按位置对应的分数而不是
+  重排后的列表，因此"reranker 不可能引入提问者无权读的 passage"由构造成立。
+  超时、异常与分数条数不符都窄回退到已授权顺序，没有任何一条路径扩大授权范围；
+- 缺少 `sparse_linear.pt` 时**拒绝构造** sparse 编码器：FlagEmbedding 会静默换上
+  一个随机初始化的投影，让下游每一道检查都通过而毫无意义，错误信息里带着取回
+  权重的命令；
+- Task 工作流的 checkpoint-safe `TaskState` 与 `TaskWorkflowPort`（WP06 的第一块，
+  只有契约，尚无 adapter、节点、checkpointer 或 Worker）；
 - 固定 2-step Chat 的 ACL 双重检查、答案发布门、source revision 读取栅栏、已提交
   会话消息的多轮回放，以及 PostgreSQL `chat_turns` 幂等事实源；
 - 最终 source revision/ACL 复核、`AnswerCommitted/AnswerWithheld`、assistant
@@ -55,8 +64,12 @@ PR-035～PR-043 的安全发布、多轮上下文、EventLog 可演进回放、�
   `knowledge_search` 尚未装配为可用的 Agentic Retrieval Mode。
 - EventLog 能拒绝未知 schema version，但尚未实现旧版本 upcaster、poison-row
   隔离/跳过策略。
-- LlamaIndex/LangChain Adapter、LangGraph Task、Task Registry、Multi-Agent、
-  CrewAI 对比、UI、生产身份认证和部署仍为 Planned。
+- 三臂消融的 `hybrid-rerank` 臂尚未跑：hybrid 在当前 38 题 gold set 上已打满
+  1.000，rerank delta 必然为 0；要测出它得先有更难的 gold set。
+- LangGraph Task 目前只有领域状态与 Port，**adapter、节点 handler、PostgreSQL
+  checkpointer 和 Task Worker 都不存在**；`langgraph` 也还不是项目依赖。
+- LlamaIndex/LangChain Adapter、Task Registry、Multi-Agent、CrewAI 对比、UI、
+  可观测性、生产身份认证和部署仍为 Planned。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
 > 受控的本机开发，不得暴露到局域网、容器端口映射或公网。监听地址已强制为

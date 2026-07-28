@@ -1423,16 +1423,21 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支在其上累计完成了
-`knowledge_search` Adapter 与 PR-035～PR-043。
+截至 2026-07-28，主分支基线为 `main@e93d7a1`；`knowledge_search` Adapter 与
+PR-035～PR-046 均已合入。
 工程基线、领域契约、Ports、Fake Adapter、自研 Runtime、DeepSeek 流式 Adapter 与
 API 装配、PostgreSQL Conversation/ChatTurn/EventLog、Local ArtifactStore、
-文档/版本/ACL/事务 Outbox、摄取组件、Dense/Hybrid RAG、固定检索 Chat、
+文档/版本/ACL/事务 Outbox、摄取组件、Dense/Hybrid RAG、Reranker、固定检索 Chat、
 原子 answer release、pending/expiry 后台恢复以及
 Upload / Artifact / Health / Chat / SSE API 已落地并有测试。LangGraph Workflow、
-Task 协调、Multi-Agent、生产身份认证和生产部署仍未实现。PR-043 本地门禁为
-`800 passed / 257 skipped / 1 deselected`；唯一 deselect 是当前沙箱禁止
-`socket.bind()` 的 loopback 真实性测试。
+Task 协调、Multi-Agent、生产身份认证和生产部署仍未实现——Task 侧目前只有
+checkpoint-safe `TaskState` 与 `TaskWorkflowPort`，没有任何 adapter 或 Worker。
+
+`main@e93d7a1` 本地门禁为 `859 passed / 260 skipped`，Ruff、Pyright 与三个配置
+profile 均通过，Alembic 唯一 head 为 `0009_chat_turn_lease`。260 项跳过全部缺
+外部依赖（PostgreSQL DSN、Qdrant URL、真实 BGE 权重），因此这一轮**没有产生任何
+真实外部服务证据**。此前记录的 1 项 deselect 是当时沙箱禁止 `socket.bind()` 所致，
+本轮环境允许该调用，loopback 真实性测试正常执行并通过。
 
 表中标为 Demonstrated 的两项都由同一条固定演示 `agent-cli demo` 覆盖：逐字节
 可复现，由 golden 文件与 CI smoke 守护。它现在证明的是“输入 → 模型 → Tool →
@@ -1464,11 +1469,14 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | 生产身份认证 | ✓ |  |  |  |
 | LangChain model/tool 互操作 Adapter | ✓ |  |  |  |
 | BGE-M3 + Qdrant Dense/Hybrid RAG 与离线评测 | ✓ | ✓ | ✓ |  |
+| BGE reranker Adapter（授权后重排、窄 fail-open） | ✓ | ✓ | ✓ |  |
 | 固定检索 Chat + RAG（ACL 双检、发布门、多轮、请求幂等） | ✓ | ✓ | ✓ |  |
 | Chat 固定 lease、原子 `ChatTurnExpired`、terminal-only reaper 与 pending 发布恢复 | ✓ | ✓ | ✓ |  |
+| `knowledge_search` Tool Adapter（已实现，未装配进 ChatService） | ✓ | ✓ | ✓ |  |
 | Agentic `knowledge_search` 产品装配 | ✓ |  |  |  |
 | LlamaIndex ingestion/retrieval Adapter | ✓ |  |  |  |
-| LangGraph Task | ✓ |  |  |  |
+| Task 工作流 checkpoint-safe 状态与 `TaskWorkflowPort` | ✓ | ✓ | ✓ |  |
+| LangGraph Task（adapter / 节点 / checkpointer / Worker） | ✓ |  |  |  |
 | PostgreSQL Task coordination | ✓ |  |  |  |
 | Multi-Agent | ✓ |  |  |  |
 | UI / deployment / observability | ✓ |  |  |  |

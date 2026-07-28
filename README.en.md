@@ -11,11 +11,11 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-07-28, the main-branch baseline is `main@4d03f69`. The current
-development branch completes the PR-035 through PR-043 slices for secure
-answer release, multi-turn context, evolvable EventLog replay, idempotent
-Chat turns, atomic authorization fencing, traffic-independent recovery and
-atomic fixed-lease expiry.
+As of 2026-07-28, the main-branch baseline is `main@e93d7a1`. Slices PR-035
+through PR-046 are all merged: secure answer release, multi-turn context,
+evolvable EventLog replay, idempotent Chat turns, atomic authorization
+fencing, traffic-independent recovery, atomic fixed-lease expiry, and then
+reranking, the Task workflow state and the sparse-encoder loading guard.
 Implemented with test evidence:
 
 - framework-neutral domain contracts, ports, fake adapters and a reproducible
@@ -35,6 +35,18 @@ Implemented with test evidence:
   `event_key` idempotency;
 - BGE-M3 dense embeddings, Qdrant dense/hybrid retrieval and offline RAG
   evaluation;
+- a BGE reranker that runs after authorization and before `top_k`; the port
+  returns one score per passage positionally rather than a reordered list, so
+  "the reranker cannot introduce a passage the asker may not read" holds by
+  construction. Timeout, exception and a miscounted score list all fall back
+  narrowly to the authorized order, and no path widens what was authorized;
+- refusal to build a sparse encoder whose `sparse_linear.pt` is absent:
+  FlagEmbedding silently substitutes a freshly initialized projection, which
+  makes every downstream check pass while meaning nothing; the error carries
+  the command that retrieves the weights;
+- a checkpoint-safe `TaskState` and `TaskWorkflowPort` for the fixed Task
+  workflow (the first piece of WP06: contracts only, with no adapter, node
+  handlers, checkpointer or worker);
 - fixed two-step Chat with two ACL checks, an answer-release gate, a source
   revision read barrier, multi-turn replay and a PostgreSQL `chat_turns` fact
   ledger;
@@ -75,9 +87,15 @@ The remaining boundaries are explicit:
 - `knowledge_search` is not yet assembled into an agentic retrieval mode, and
   that path still needs a final evidence-revision gate before an answer may be
   released.
-- LlamaIndex and LangChain adapters, LangGraph Task workflows, the Task
-  Registry, multi-Agent execution, the CrewAI comparison, UI, production
-  authentication and deployment remain planned.
+- The `hybrid-rerank` arm of the three-way ablation has not been run: hybrid
+  already scores 1.000 on the current 38-question gold set, so the rerank
+  delta there is necessarily zero. Measuring it needs a harder gold set first.
+- LangGraph Task work is limited to the domain state and the port. The
+  adapter, node handlers, PostgreSQL checkpointer and Task Worker do not
+  exist, and `langgraph` is not yet a project dependency.
+- LlamaIndex and LangChain adapters, the Task Registry, multi-Agent execution,
+  the CrewAI comparison, UI, observability, production authentication and
+  deployment remain planned.
 
 > **Security warning:** the current identity adapter trusts request headers, so
 > `agent-api` is for controlled local development only and must not be exposed to

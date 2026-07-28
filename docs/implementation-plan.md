@@ -4,16 +4,18 @@
 >
 > 日期：2026-07-22
 >
-> 状态：截至 2026-07-28，主分支基线为 `main@4d03f69`，当前开发分支已完成
+> 状态：截至 2026-07-28，主分支基线为 `main@e93d7a1`。已合入：
 > 自研 Runtime、PostgreSQL/Artifact/Document/ACL/Outbox、Dense/Hybrid RAG 与评测、
-> 固定检索 Chat/SSE、多轮上下文、EventLog 版本化与幂等键、`chat_turns` 请求幂等、
-> 原子发布、fixed-lease orphan recovery、无人值守 pending 发布恢复，以及
-> Turn + durable `ChatTurnExpired` 原子过期。PR-043 本地门禁为
-> `800 passed / 257 skipped / 1 deselected`，唯一 deselect 是沙箱禁止
-> `socket.bind()` 的 loopback 真实性测试；
-> 下一主线是 WP06 LangGraph Task MVP；
-> LlamaIndex/LangChain 互操作、
-> 可靠常驻 Ingestion Worker、Task Registry/lease/fencing、Multi-Agent 与 UI 仍开放
+> Reranker、固定检索 Chat/SSE、多轮上下文、EventLog 版本化与幂等键、
+> `chat_turns` 请求幂等、原子发布、fixed-lease orphan recovery、
+> 无人值守 pending 发布恢复、Turn + durable `ChatTurnExpired` 原子过期，
+> 以及 WP06 的第一块——checkpoint-safe `TaskState` 与 `TaskWorkflowPort`。
+> `main@e93d7a1` 本地门禁为 `859 passed / 260 skipped`（260 项全部因缺
+> PostgreSQL/Qdrant/真实 BGE 权重而跳过，本轮无真实外部服务证据）；
+> 下一主线是 WP06 余下部分：LangGraph adapter、节点 handler、PostgreSQL
+> checkpointer 与 Task Worker；
+> LlamaIndex/LangChain 互操作、可靠常驻 Ingestion Worker、
+> Task Registry/lease/fencing、Multi-Agent 与 UI 仍开放
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
 >

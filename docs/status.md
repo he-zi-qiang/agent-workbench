@@ -12,9 +12,158 @@
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
 
+## 当前基线与编号对应
+
+主分支基线：**`main@e93d7a1`**（2026-07-28）。
+
+**PR-035～PR-046 的全部增量都已经合入 `main`。** 下面各节里写的"尚未合入 `main`"
+是当时开发分支上的状态，已按实际合并结果订正；每节保留的测试证据仍是**该增量当时**
+的门禁数字，不是当前数字。
+
+本文件的 `PR-0NN` 是**增量编号**——一个编号对应一次行为变化；GitHub 的 `#NN` 是
+**合并编号**——一次合并可以携带多个增量。两套编号不相等，也不能互相推算：
+
+| 文内增量 | GitHub 合并 | 提交 |
+|---|---|---|
+| PR-033 摄取 worker | `#49` | `4d03f69` |
+| PR-034 `knowledge_search` Tool | `#50` | `de426e2` |
+| PR-035 安全发布基线 | `#51` | `7025425` |
+| PR-036 ～ PR-043 Chat 可靠性 | `#52` | `07f4a27` |
+| PR-044 Task 工作流状态 | `#53` | `3538e26` |
+| PR-045 Reranker | `#54` | `3b7829b` |
+| PR-046 Sparse 加载守卫 | `#55` | `e93d7a1` |
+
+### 2026-07-28 全仓门禁复核（`main@e93d7a1`）
+
+```text
+ruff format --check .    passed（206 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+pytest                   859 passed / 260 skipped
+agent-config-check       development / test / production 均为 status=ok
+alembic 唯一 head        0009_chat_turn_lease
+```
+
+与此前几节的门禁数字有两处差别，都属于**环境差别而不是代码变化**：
+
+- 本轮环境允许 `socket.bind()`，因此 loopback 真实性测试**正常执行并通过**，没有
+  PR-043 记录的那 1 项 deselect；
+- 260 项跳过全部因为缺外部依赖：`AGENT_WORKBENCH_TEST_DSN`（PostgreSQL）、
+  `AGENT_WORKBENCH_TEST_QDRANT_URL` 与 `AGENT_WORKBENCH_TEST_EMBEDDING_MODEL`
+  （真实 BGE 权重）均未配置。**本轮没有产生任何真实外部服务证据**，PostgreSQL、
+  Qdrant 与真实权重相关的结论仍只能引用各增量当时留下的记录。
+
+`production` profile 需要 CI 同款环境变量（固定 model ID、40 位 embedding/reranker
+revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
+这一项失败关闭，这是配置契约的预期行为。
+
+## 2026-07-28 PR-046 Sparse 加载守卫：拒绝没有 lexical head 的编码器
+
+状态：**已合入 `main`（GitHub `#55` / `e93d7a1`）**。
+
+BGE-M3 训练好的 lexical 投影放在 `sparse_linear.pt` 里，和基础权重**并排**而不在其中。
+FlagEmbedding **不把这个文件的缺失当作错误**：它当场构造一个新的 `Linear(1024, 1)`
+然后继续。于是下游每一道检查都通过、又都毫无意义——模型加载成功；输出宽度确实是
+250002，但那个宽度来自 tokenizer 词表，**不来自这个投影**；编码器返回结构完好的
+sparse 向量。**只有数字是错的，而且是随机地错**，随机不触发任何告警。
+
+后果是：两个进程加载同一个固定 revision，拿到的是不同的权重。这让 `index_identity`
+变成**贴在一个随机变量上的标签**——一个进程写入的 point，被另一个进程的向量空间检索。
+本项目此前发布的每一个 hybrid 数字，都只是某个无关分布的一次采样。代价是两个被撤回
+的诊断（"短查询编码为空"不是错的，是**随机的**），以及一次结论会反转的消融。
+
+**修复是拒绝，不是下载。** 把文件取到本地只修好一台机器；拒绝构造一个投影不在缓存里
+的编码器修好所有机器，而且错误信息里带着取回它的命令。
+
+两条守卫，改动前都失败：
+
+- 同一个固定 revision 的同一查询，在两次加载之间必须编码为**同一个向量**——这正是
+  `index_identity` 赖以成立的契约；
+- 直接命名成因：一个**新构造**的 `Linear` 不可能两次产生相同的数字。症状测不出这一条。
+
+`evals/rag/reports/ABLATION.md` 与 `SPARSE-DIAGNOSIS.md` 已按加载修复后的重跑结果
+订正，`dense.json` / `hybrid.json` 同步更新，`hybrid-run1.json` 保留作对比。选择
+FlagEmbedding 的背景决策见 [ADR-013](./adr/0013-bge-m3-sparse-encoder.md)（PR-026
+留下）；本轮补的是那个决策**没有覆盖到的加载缺口**。
+
+附带修正：投影守卫的 `huggingface_hub` 导入对类型检查器屏蔽并经 `cast` 收窄。该库
+随 `embedding` extra 才安装，本机装了它、CI 没装，所以本地 pyright 通过而 CI 是唯一
+能看见这个错误的地方——处理方式与包内既有的 FlagEmbedding / sentence-transformers
+一致，不让一个可选依赖变成跑门禁的必需品。
+
+## 2026-07-28 PR-045 Reranker：重排已授权候选，fail-open 且不扩大范围
+
+状态：**已合入 `main`（GitHub `#54` / `3b7829b`）**。对应 WP05-03 / WP05-04。
+
+cross-encoder 同时读 query 和 passage，而检索器做不到：dense 与 sparse 都在**问题存在
+之前**就把 passage 编码完了。这值得在几十个候选上多花一个数量级的算力，也正是这一步
+需要 timeout 的原因。
+
+**Port 返回每个 passage 一个分数（按位置对应），而不是一个重排好的列表。** 一个返回
+passage 的 adapter 可以少还一个、重复一个、或者还回一个从没给过它的东西，而调用方
+分不清那是 bug 还是排序结果。分数让契约可以**按长度**校验，并把重排留给
+**知道 PostgreSQL 授权了什么**的那一层。于是"reranker 不可能引入一段提问者无权读的
+passage"**由构造成立，而不是靠信任**。
+
+位置固定在**授权之后、`top_k` 之前**：
+
+- 更早，cross-encoder 会读到提问者无权读的文本；
+- 更晚，它只能在检索器已经切好的名单里做提升，永远推翻不了检索器的选择——而那不是
+  消融要比较的东西。
+
+**fail-open 且窄。** timeout、异常、分数条数对不上，全都回退到**已授权的原顺序**：
+一个质量步骤不该把一个能用的回答变成一个错误。`CancelledError` **不捕获**——它继承
+`BaseException`，一个被取消的请求必须保持取消。回退目标就是输入列表本身，因此
+**没有任何一条路径会扩大已授权范围**。
+
+**缺 reranker 不损失 Chat 能力**，这和缺 embedder 不同：一个让回答变差，另一个让人
+根本无法构造查询。但由于**在端点上，未重排的进程和重排过的进程无法区分**，
+`ApiDependencies` 记录 `reranker_unavailable` 原因；否则一份针对静默未重排部署写出来
+的消融报告，会把差异记在模型头上。`RetrievalResult.reranked` 出于同一理由存在：它
+区分"真的重排过"与"fail-open 回退"，否则一次超时会被读成"rerank 没有差别"这种被
+制造出来的零结果。
+
+**未做**：三臂消融的 `hybrid-rerank` 臂仍未跑。hybrid 在当前 38 题 gold set 上已打满
+1.000，**rerank delta 在这里必然为 0**；要测出 rerank，先得有更难的 gold set，而不是
+先跑第三臂。详见 `evals/rag/reports/ABLATION.md`。
+
+## 2026-07-28 PR-044 Task 工作流的 checkpoint-safe 状态
+
+状态：**已合入 `main`（GitHub `#53` / `3538e26`）**。这是 WP06 的第一块，**只有领域
+状态与 Port**：LangGraph adapter、节点 handler、checkpointer 和 Task Worker 都还不存在。
+
+图的 checkpointer 被允许持久化这份状态，所以这个模块是围绕**什么绝不能进来**写的：
+
+```text
+执行位置      → checkpointer
+产品状态      → Task Registry
+大输入/大输出 → 各自的 store
+```
+
+每个字段都小且 JSON 可序列化。这份状态不允许长出 `current_step`、消息记录、文档正文
+或任何 provider/框架对象。
+
+**校验器拒绝，而不是规范化。** 未排序的 `depends_on` 是一个**错误**，而不是在这里被
+悄悄排好——建立规范顺序的是并行 fan-in 的 reducer，在入口处排序会**掩盖一个已经不再
+做这件事的 reducer**。plan 依赖只能指向排在它之前的 step，于是一个给定 DAG 只有一种
+拓扑表示，一个 checkpoint 也就只重放到一个状态、而不是若干个。同时禁止自依赖和重复
+依赖。
+
+`ports/task_workflow.py` 把 `thread_id` 与 `graph_version` 显式放在**每一次操作**上，
+adapter 不能拿一份不同的图定义去静默恢复一个 checkpoint。`resume` **刻意不接受初始
+`TaskState`**：状态已经属于 `thread_id` 指向的那个 checkpoint，再接受一次就使"崩溃后
+把原始输入追加两遍"重新成为可能。
+
+canonical v1 节点 ID 固定为 `understand / plan / route / research_internal /
+research_external / synthesize / critic / quality_gate / approval / export`，与架构
+基线、checkpoint metadata、事件和测试一致；重命名任一节点都必须提升 `graph_version`。
+
+golden 载荷集新增 `TaskState`：原有 13 个聚合**逐字节未变**，重新生成的文件只增 52 行、
+不删任何行。
+
 ## 2026-07-28 PR-043 Chat lease 过期原子终态
 
-状态：**当前开发分支已实现，尚未合入 `main`；静态检查与本地可运行门禁通过**。
+状态：**已合入 `main`（GitHub `#52` / `07f4a27`）；静态检查与本地可运行门禁通过**。
 
 PR-041 让硬崩溃遗留的 `running` Turn 最终失败，但当时 reaper、claim 和迟到
 prepare 都可能写过期终态，Turn failure 与 durable Event 也不在同一个原子边界。
@@ -63,8 +212,8 @@ Alembic 唯一 head 与 `git diff --check` 均通过。真实 PostgreSQL 并发�
 
 ## 2026-07-28 PR-042 Chat pending 发布无流量恢复
 
-状态：**当前开发分支已实现；无外部服务门禁与静态检查通过。真实 PostgreSQL
-并发用例因当前环境未配置测试 DSN 而跳过，尚未合入 `main`**。
+状态：**已合入 `main`（GitHub `#52` / `07f4a27`）；无外部服务门禁与静态检查通过。
+真实 PostgreSQL 并发用例在该增量当时因未配置测试 DSN 而跳过**。
 
 PR-041 关闭了 `running` 硬崩溃后永久 busy，但 `prepare_release` 已提交、
 原子发布尚未开始的窗口仍需要原客户端用同一 key 重试。若客户端消失，
@@ -104,8 +253,8 @@ Alembic head 检查通过。真实 PostgreSQL 契约还覆盖 owner scope、limi
 
 ## 2026-07-28 PR-041 Chat 固定执行 lease 与孤儿回收
 
-状态：**当前开发分支已实现；无外部服务门禁、静态检查和迁移 head 检查通过。
-真实 PostgreSQL 并发用例因当前环境未配置测试 DSN 而跳过，尚未合入 `main`**。
+状态：**已合入 `main`（GitHub `#52` / `07f4a27`）；无外部服务门禁、静态检查和迁移
+head 检查通过。真实 PostgreSQL 并发用例在该增量当时因未配置测试 DSN 而跳过**。
 
 同步 Chat 没有 checkpoint、attempt-aware event 或副作用恢复协议，因此硬崩溃后
 “把同一个 Turn 交给另一个 Worker 重跑”并不安全。本轮选择更小且可证明的语义：
@@ -157,8 +306,8 @@ PR-043 的当前门禁数字。
 
 ## 2026-07-28 PR-040 Chat 原子授权发布栅栏
 
-状态：**当前开发分支已实现并通过静态门禁与内存测试；真实 PostgreSQL/Qdrant
-并发用例因当前环境未配置服务而跳过，尚未合入 `main`**。
+状态：**已合入 `main`（GitHub `#52` / `07f4a27`）；静态门禁与内存测试通过。真实
+PostgreSQL/Qdrant 并发用例在该增量当时因未配置服务而跳过**。
 
 PR-039 的稳定 `event_key` 能让重复发布返回同一个事件，但“先查 ACL、后写事件”的
 两个事务之间仍存在 TOCTOU：复核成功后可以恰好发生撤权；进程也可能在
@@ -191,8 +340,8 @@ citations 一致，因此 `release_pending` 重试具备完整的再授权输入
 
 ## 2026-07-28 PR-039 幂等 Chat Turn 与发布恢复
 
-状态：**当前开发分支已实现并通过本地确定性测试；真实 PostgreSQL/Qdrant 用例因当前
-环境未配置服务而跳过，尚未合入 `main`**。
+状态：**已合入 `main`（GitHub `#52` / `07f4a27`）；本地确定性测试通过。真实
+PostgreSQL/Qdrant 用例在该增量当时因未配置服务而跳过**。
 
 本轮把“消息历史”与“一个请求执行到了哪里”分开建模。新增
 `ChatTurnStore`、PostgreSQL `chat_turns` 表和迁移 `0008_chat_turns`，生命周期为：
@@ -238,8 +387,8 @@ checkpoint 与 attempt-aware event。
 
 ## 2026-07-28 PR-038 durable Event 幂等发布
 
-状态：**当前开发分支已实现并通过内存契约与静态门禁；真实 PostgreSQL 契约因当前环境
-未配置测试 DSN 而跳过，尚未合入 `main`**。
+状态：**已合入 `main`（GitHub `#52` / `07f4a27`）；内存契约与静态门禁通过。真实
+PostgreSQL 契约在该增量当时因未配置测试 DSN 而跳过**。
 
 迁移 `0007_event_idempotency_key` 为 `events` 增加可空 `event_key`，并以
 `(stream_id, event_key) WHERE event_key IS NOT NULL` 唯一索引建立流内幂等边界。
@@ -256,8 +405,8 @@ EventLog 仍未提供历史 schema upcaster registry 与 poison-row 隔离/跳�
 
 ## 2026-07-28 PR-037 EventLog 版本化回放元数据
 
-状态：**当前开发分支已实现并通过本地静态门禁；真实 PostgreSQL 新用例因当前环境未
-配置测试 DSN 而跳过，尚未合入 `main`**。
+状态：**已合入 `main`（GitHub `#52` / `07f4a27`）；本地静态门禁通过。真实 PostgreSQL
+新用例在该增量当时因未配置测试 DSN 而跳过**。
 
 `EventEnvelope` 一直声明 `schema_version` 与 producer timestamp，但 PostgreSQL
 `events` 表此前没有保存版本，append 也没有写入 envelope timestamp。结果是：
@@ -286,7 +435,7 @@ poison-row 隔离/跳过策略；稳定幂等键已由后续 PR-038 补齐。
 
 ## 2026-07-28 PR-036 顺序多轮上下文
 
-状态：**当前开发分支已实现并通过无外部依赖测试，尚未合入 `main`**。
+状态：**已合入 `main`（GitHub `#52` / `07f4a27`）；无外部依赖测试通过**。
 
 此前 ConversationStore 会保存消息，但每次模型调用只收到当前问题与当前
 `ContextPacket`，所以“有历史记录”并不等于“模型能多轮对话”。本轮把调用语义改为：
@@ -315,7 +464,7 @@ prompt 重新带入旧 source revision 的原文。撤权路径只会回放安�
 
 ## 2026-07-28 PR-035 安全发布基线
 
-状态：**当前开发分支已实现并通过本地确定性测试，尚未合入 `main`**。
+状态：**已合入 `main`（GitHub `#51` / `7025425`）；本地确定性测试通过**。
 
 本轮关闭了 2026-07-27 复核报告中的两条直接读取风险：
 
