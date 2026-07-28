@@ -50,7 +50,8 @@ Chat 安全发布、多轮、EventLog 演进/幂等、Turn 幂等、原子授权
 - BGE-M3 Dense、Qdrant Dense/Hybrid、固定 2-step RAG 与检索评测；
 - BGE reranker：位于授权之后、`top_k` 之前，超时/异常窄回退到已授权顺序；
 - 缺少 `sparse_linear.pt` 时**拒绝构造** sparse 编码器，而不是静默用随机投影；
-- Task 工作流的 checkpoint-safe `TaskState` 与 `TaskWorkflowPort`（仅契约，无 adapter）；
+- Task 工作流的 checkpoint-safe `TaskState` 与 `TaskWorkflowPort`；
+- 固定研究图的条件路由与确定性 fan-in reducer（框架无关，无 `langgraph` 依赖）；
 - Chat answer release gate、source revision 读取栅栏、已提交消息的顺序多轮回放、
   幂等 Turn ledger、固定执行 lease、`running/release_pending` 后台恢复、
   Turn 与 durable `ChatTurnExpired` 原子提交，以及 `knowledge_search` Tool Adapter；
