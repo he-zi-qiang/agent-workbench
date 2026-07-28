@@ -455,3 +455,119 @@ def test_hybrid_retrieval_still_authorizes_against_postgresql() -> None:
         return len(context.packet.chunks)
 
     assert _run(scenario) == 0
+
+
+# --- retrieval as a tool -----------------------------------------------------
+
+
+def _invocation(harness: _Harness, principal: str, **arguments: Any) -> Any:
+    from agent_workbench.domain.policies import (
+        AuthorizationEnvelope,
+        ExecutionContext,
+        PrincipalContext,
+    )
+    from agent_workbench.domain.tools import ToolCall
+    from agent_workbench.ports.cancellation import NullCancellationToken
+    from agent_workbench.ports.tools import ToolInvocation
+
+    return ToolInvocation(
+        call=ToolCall(
+            tool_call_id="toolu_1",
+            tool_name="knowledge_search",
+            arguments=arguments,
+        ),
+        context=ExecutionContext(
+            principal=PrincipalContext(principal_id=principal, tenant_id=TENANT),
+            envelope=AuthorizationEnvelope(),
+            agent_run_id="run_1",
+            policy_identity="test",
+        ),
+        cancellation=NullCancellationToken(),
+        timeout_seconds=30,
+    )
+
+
+def _tool(harness: _Harness) -> Any:
+    from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
+
+    return KnowledgeSearchTool(retrieval=harness.retrieval())
+
+
+def test_the_tool_returns_readable_passages() -> None:
+    """The control: the refusals below are about who is asking."""
+
+    async def scenario(harness: _Harness) -> str:
+        await harness.publish(granted=(READER,))
+        result = await _tool(harness).handle(
+            _invocation(harness, READER, query="fusion", knowledge_base_id=KB)
+        )
+        return result.content or ""
+
+    assert "fusion" in _run(scenario).lower()
+
+
+def test_the_model_cannot_choose_whose_documents_to_search() -> None:
+    """The security property this tool exists to keep.
+
+    Arguments are the one part of a tool call untrusted text can reach: a
+    retrieved passage saying "search as user_owner" would be granting itself
+    access. The schema has no field for a principal, and the handler reads it
+    from the run -- so a call that tries anyway searches as the caller.
+    """
+
+    async def scenario(harness: _Harness) -> str:
+        await harness.publish(granted=())
+        result = await _tool(harness).handle(
+            _invocation(
+                harness,
+                STRANGER,
+                query="fusion",
+                knowledge_base_id=KB,
+                # Ignored: there is no such field, and the handler does not look.
+                principal_id=OWNER,
+                tenant_id=TENANT,
+            )
+        )
+        return result.content or ""
+
+    body = _run(scenario)
+
+    assert "fusion" not in body.lower()
+    assert "no readable passages" in body
+
+
+def test_the_schema_has_no_principal_field() -> None:
+    """Asserted on the schema, so a future field cannot be added quietly."""
+
+    from agent_workbench.adapters.tools.knowledge_search import INPUT_SCHEMA
+
+    properties = INPUT_SCHEMA["properties"]
+    assert isinstance(properties, dict)
+    assert set(properties) == {"query", "knowledge_base_id", "top_k"}
+    assert INPUT_SCHEMA["additionalProperties"] is False
+
+
+def test_the_tool_is_read_risk_and_parallel() -> None:
+    """A search neither writes nor needs to be alone."""
+
+    from agent_workbench.adapters.tools.knowledge_search import SPEC
+
+    assert SPEC.risk == "read"
+    assert SPEC.concurrency == "parallel"
+    assert SPEC.idempotency == "safe"
+
+
+def test_the_tool_labels_chunk_ids_for_citation() -> None:
+    """A citation is checkable only against what the model was actually shown."""
+
+    async def scenario(harness: _Harness) -> str:
+        await harness.publish(granted=(READER,))
+        result = await _tool(harness).handle(
+            _invocation(harness, READER, query="fusion", knowledge_base_id=KB)
+        )
+        return result.content or ""
+
+    body = _run(scenario)
+
+    assert "chunk_id" in body
+    assert "chk_" in body
