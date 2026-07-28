@@ -13,7 +13,7 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-07-28，主分支基线为 **`main@e93d7a1`**。PR-035～PR-046 已全部合入：
+截至 2026-07-28，主分支基线为 **`main@341cbf5`**。PR-035～PR-049 已全部合入：
 安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn、原子授权发布、
 无流量恢复、固定 lease 原子过期，以及 Reranker、Task 工作流状态与 sparse
 加载守卫。已经实现并有测试证据：

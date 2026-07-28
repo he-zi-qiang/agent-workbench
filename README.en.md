@@ -11,8 +11,8 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-07-28, the main-branch baseline is `main@e93d7a1`. Slices PR-035
-through PR-046 are all merged: secure answer release, multi-turn context,
+As of 2026-07-28, the main-branch baseline is `main@341cbf5`. Slices PR-035
+through PR-049 are all merged: secure answer release, multi-turn context,
 evolvable EventLog replay, idempotent Chat turns, atomic authorization
 fencing, traffic-independent recovery, atomic fixed-lease expiry, and then
 reranking, the Task workflow state and the sparse-encoder loading guard.
