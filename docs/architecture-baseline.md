@@ -1476,7 +1476,9 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | Agentic `knowledge_search` 产品装配 | ✓ |  |  |  |
 | LlamaIndex ingestion/retrieval Adapter | ✓ |  |  |  |
 | Task 工作流 checkpoint-safe 状态与 `TaskWorkflowPort` | ✓ | ✓ | ✓ |  |
-| LangGraph Task（adapter / 节点 / checkpointer / Worker） | ✓ |  |  |  |
+| 固定研究图的条件路由与确定性 fan-in reducer | ✓ | ✓ | ✓ |  |
+| Task Agent node（`AgentExecutor` 驱动的节点处理函数） | ✓ |  |  |  |
+| LangGraph Task（adapter / checkpointer / Worker / 查询接口） | ✓ |  |  |  |
 | PostgreSQL Task coordination | ✓ |  |  |  |
 | Multi-Agent | ✓ |  |  |  |
 | UI / deployment / observability | ✓ |  |  |  |
