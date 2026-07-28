@@ -26,8 +26,11 @@ does it.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
+import math
 from dataclasses import dataclass, field
 
 from agent_workbench.application.answer_release import AnswerReleaseSink
@@ -58,6 +61,8 @@ from agent_workbench.ports.conversation_store import (
     StoredChatTurn,
 )
 from agent_workbench.ports.event_log import EventSink
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "Answer only from the evidence given below. Cite the chunk ids you used. "
@@ -135,6 +140,20 @@ class ChatService:
     # No default. A turn's ceiling is a deployment decision, and a silent one
     # is how a runaway run becomes somebody's bill.
     budget: RunBudget
+    request_timeout_seconds: float
+    orphan_grace_seconds: float
+    _cleanup_tasks: set[asyncio.Task[StoredChatTurn | None]] = field(
+        default_factory=lambda: set[asyncio.Task[StoredChatTurn | None]](),
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("chat request timeout must be positive")
+        if self.orphan_grace_seconds <= 0:
+            raise ValueError("chat orphan grace must be positive")
 
     async def ask(
         self,
@@ -146,63 +165,129 @@ class ChatService:
 
         if request.stream_id not in {None, request.session_id}:
             raise ValueError("a Chat event stream must be its conversation session")
-        claim = await self.conversations.claim_turn(
-            session_id=request.session_id,
-            tenant_id=request.tenant_id,
-            principal_id=request.principal_id,
-            idempotency_key=request.idempotency_key,
-            request_hash=_request_hash(request),
-            run_id=request.run_id,
-            user_message=user_message(request.question),
-        )
-        turn = claim.turn
-        if turn.run_id != request.run_id:
-            raise ChatTurnConflictError(
-                "the idempotent chat turn belongs to a different run id"
-            )
 
-        if not claim.newly_claimed:
-            if turn.status in {"committed", "withheld"}:
-                return _public_turn(turn)
-            if turn.status == "release_pending":
-                released = await self._release(turn, request, sink)
-                return _public_turn(released)
-            if turn.status in {"failed", "cancelled"}:
-                if turn.failure_outcome is None:  # pragma: no cover - model invariant
-                    raise ChatTurnConflictError("terminal chat turn has no outcome")
-                raise ChatExecutionError(turn.failure_outcome)
-            raise ChatTurnBusyError("the idempotent chat turn is still running")
-
+        turn: StoredChatTurn | None = None
         try:
-            context = await self.retrieval.retrieve(
-                RetrievalRequest(
-                    query=request.question,
+            async with asyncio.timeout(self.request_timeout_seconds):
+                claim = await self.conversations.claim_turn(
+                    session_id=request.session_id,
                     tenant_id=request.tenant_id,
                     principal_id=request.principal_id,
-                    knowledge_base_id=request.knowledge_base_id,
-                    top_k=request.top_k,
+                    idempotency_key=request.idempotency_key,
+                    request_hash=_request_hash(request),
+                    run_id=request.run_id,
+                    user_message=user_message(request.question),
+                    lease_seconds=max(
+                        1,
+                        math.ceil(
+                            self.request_timeout_seconds + self.orphan_grace_seconds
+                        ),
+                    ),
                 )
-            )
-            release = AnswerReleaseSink(sink)
-            outcome = await self.executor.run(
-                _run_request(
+                turn = claim.turn
+                if turn.run_id != request.run_id:
+                    raise ChatTurnConflictError(
+                        "the idempotent chat turn belongs to a different run id"
+                    )
+
+                if not claim.newly_claimed:
+                    if turn.status in {"committed", "withheld"}:
+                        return _public_turn(turn)
+                    if turn.status in {"failed", "cancelled"}:
+                        if (
+                            turn.failure_outcome is None
+                        ):  # pragma: no cover - model invariant
+                            raise ChatTurnConflictError(
+                                "terminal chat turn has no outcome"
+                            )
+                        raise ChatExecutionError(turn.failure_outcome)
+                    if turn.status == "running":
+                        raise ChatTurnBusyError(
+                            "the idempotent chat turn is still running"
+                        )
+
+                if not claim.newly_claimed:
+                    released = await self._release(turn, request, sink)
+                    return _public_turn(released)
+                return await self._execute_new_turn(
                     request,
-                    context.packet,
-                    self.budget,
+                    sink,
+                    cancellation=(
+                        cancellation
+                        if cancellation is not None
+                        else NullCancellationToken()
+                    ),
+                    turn=turn,
                     history=tuple(record.message for record in claim.history_before),
-                ),
-                release,
-                cancellation if cancellation is not None else NullCancellationToken(),
-            )
+                )
+        except TimeoutError:
+            outcome = _deadline_outcome(request.run_id)
+            if turn is not None:
+                settled = await self._finish_running_best_effort(
+                    request=request,
+                    turn=turn,
+                    outcome=outcome,
+                )
+                if settled is not None:
+                    if settled.status in {"committed", "withheld"}:
+                        return _public_turn(settled)
+                    if (
+                        settled.status in {"failed", "cancelled"}
+                        and settled.failure_outcome is not None
+                    ):
+                        outcome = settled.failure_outcome
+            raise ChatExecutionError(outcome) from None
+        except asyncio.CancelledError:
+            if turn is not None:
+                await self._finish_running_best_effort(
+                    request=request,
+                    turn=turn,
+                    outcome=_cancelled_outcome(request.run_id),
+                )
+            raise
         except Exception as exc:
-            await self.conversations.finish_failed(
-                session_id=request.session_id,
+            outcome = (
+                exc.outcome
+                if isinstance(exc, ChatExecutionError)
+                else _exception_outcome(request.run_id, exc)
+            )
+            if turn is not None:
+                await self._finish_running_best_effort(
+                    request=request,
+                    turn=turn,
+                    outcome=outcome,
+                )
+            raise
+
+    async def _execute_new_turn(
+        self,
+        request: ChatRequest,
+        sink: EventSink,
+        *,
+        cancellation: CancellationToken,
+        turn: StoredChatTurn,
+        history: tuple[Message, ...],
+    ) -> ChatTurn:
+        context = await self.retrieval.retrieve(
+            RetrievalRequest(
+                query=request.question,
                 tenant_id=request.tenant_id,
                 principal_id=request.principal_id,
-                turn_id=turn.turn_id,
-                outcome=_exception_outcome(request.run_id, exc),
+                knowledge_base_id=request.knowledge_base_id,
+                top_k=request.top_k,
             )
-            raise
+        )
+        release = AnswerReleaseSink(sink)
+        outcome = await self.executor.run(
+            _run_request(
+                request,
+                context.packet,
+                self.budget,
+                history=history,
+            ),
+            release,
+            cancellation,
+        )
 
         if outcome.status != "completed":
             await self.conversations.finish_failed(
@@ -235,8 +320,70 @@ class ChatService:
             turn_id=turn.turn_id,
             result=result,
         )
+        if prepared.status in {"failed", "cancelled"}:
+            if prepared.failure_outcome is None:  # pragma: no cover - invariant
+                raise ChatTurnConflictError("expired chat turn has no outcome")
+            raise ChatExecutionError(prepared.failure_outcome)
         released = await self._release(prepared, request, sink)
         return _public_turn(released)
+
+    async def _finish_running_best_effort(
+        self,
+        *,
+        request: ChatRequest,
+        turn: StoredChatTurn,
+        outcome: AgentOutcome,
+    ) -> StoredChatTurn | None:
+        """Close an unfinished execution without hiding the original failure."""
+
+        async def finish() -> StoredChatTurn | None:
+            try:
+                return await self.conversations.finish_running_if_current(
+                    session_id=request.session_id,
+                    tenant_id=request.tenant_id,
+                    principal_id=request.principal_id,
+                    turn_id=turn.turn_id,
+                    outcome=outcome,
+                )
+            except Exception:
+                # The fixed lease is the final recovery path if the request's
+                # best-effort cleanup cannot reach PostgreSQL.
+                logger.exception(
+                    "failed to close interrupted chat turn %s",
+                    turn.turn_id,
+                )
+                return None
+
+        try:
+            # A second ASGI cancellation must not kill the cleanup or replace
+            # the original failure being propagated to the caller.
+            cleanup = asyncio.create_task(
+                finish(),
+                name=f"chat-turn-cleanup-{turn.turn_id}",
+            )
+            self._cleanup_tasks.add(cleanup)
+            cleanup.add_done_callback(self._cleanup_tasks.discard)
+            return await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            logger.warning(
+                "chat turn cleanup continues after repeated cancellation: %s",
+                turn.turn_id,
+            )
+            return None
+
+    async def drain_cleanup(self, *, timeout_seconds: float) -> None:
+        """Drain detached cleanup work before its database engine is closed."""
+
+        if timeout_seconds <= 0:
+            raise ValueError("cleanup shutdown timeout must be positive")
+        pending = tuple(self._cleanup_tasks)
+        if not pending:
+            return
+        _, still_pending = await asyncio.wait(pending, timeout=timeout_seconds)
+        for task in still_pending:
+            task.cancel()
+        if still_pending:
+            await asyncio.gather(*still_pending, return_exceptions=True)
 
     async def history(
         self, *, session_id: str, tenant_id: str, principal_id: str
@@ -312,6 +459,27 @@ def _exception_outcome(run_id: str, exc: Exception) -> AgentOutcome:
         status="failed",
         stop_reason="error",
         error=ErrorInfo.from_exception(exc),
+    )
+
+
+def _deadline_outcome(run_id: str) -> AgentOutcome:
+    return AgentOutcome(
+        agent_run_id=run_id,
+        status="failed",
+        stop_reason="deadline",
+        error=ErrorInfo(
+            code="budget_exceeded",
+            message="chat request deadline expired",
+            retryable=False,
+        ),
+    )
+
+
+def _cancelled_outcome(run_id: str) -> AgentOutcome:
+    return AgentOutcome(
+        agent_run_id=run_id,
+        status="cancelled",
+        stop_reason="cancelled",
     )
 
 

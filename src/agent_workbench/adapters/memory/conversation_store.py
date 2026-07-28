@@ -9,9 +9,11 @@ append path: a session that cannot be read must not be writable either.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.errors import ErrorInfo, NotFoundError
 from agent_workbench.domain.identifiers import new_id, new_message_id
 from agent_workbench.domain.messages import Message, assistant_message
 from agent_workbench.domain.runs import AgentOutcome
@@ -29,7 +31,11 @@ from agent_workbench.ports.conversation_store import (
 class InMemoryConversationStore:
     """Chat sessions and their messages, held in process memory."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
         self._sessions: dict[str, ConversationSession] = {}
         self._messages: dict[str, list[StoredMessage]] = {}
         self._turns: dict[str, StoredChatTurn] = {}
@@ -37,6 +43,7 @@ class InMemoryConversationStore:
         self._turn_ids_by_run_id: dict[str, str] = {}
         self._active_turn_ids: dict[str, str] = {}
         self._lock = asyncio.Lock()
+        self._clock = clock
 
     async def create_session(
         self,
@@ -98,15 +105,19 @@ class InMemoryConversationStore:
         request_hash: str,
         run_id: str,
         user_message: Message,
+        lease_seconds: int,
     ) -> ChatTurnClaim:
         """Atomically reserve one turn, its history, and its user message."""
 
+        if lease_seconds < 1:
+            raise ValueError("chat turn lease_seconds must be positive")
         async with self._lock:
             self._require_session(
                 session_id=session_id,
                 tenant_id=tenant_id,
                 principal_id=principal_id,
             )
+            self._expire_session_running(session_id)
             key = (session_id, idempotency_key)
             existing_turn_id = self._turn_ids_by_key.get(key)
             if existing_turn_id is not None:
@@ -142,6 +153,7 @@ class InMemoryConversationStore:
                 request_hash=request_hash,
                 run_id=run_id,
                 status="running",
+                lease_until=self._clock() + timedelta(seconds=lease_seconds),
                 user_message_id=stored_user.message_id,
             )
 
@@ -182,10 +194,15 @@ class InMemoryConversationStore:
                 raise ChatTurnConflictError(
                     "chat turn cannot prepare release from its current state"
                 )
+            if turn.lease_until is None:  # pragma: no cover - model invariant
+                raise ChatTurnConflictError("running chat turn has no execution lease")
+            if self._clock() >= turn.lease_until:
+                return self._expire_turn(turn)
 
             prepared = self._updated_turn(
                 turn,
                 status="release_pending",
+                lease_until=None,
                 result=result,
             )
             self._turns[turn_id] = prepared
@@ -289,11 +306,73 @@ class InMemoryConversationStore:
             failed = self._updated_turn(
                 turn,
                 status=outcome.status,
+                lease_until=None,
                 failure_outcome=outcome,
             )
             self._turns[turn_id] = failed
             self._active_turn_ids.pop(session_id, None)
             return failed
+
+    async def finish_running_if_current(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        turn_id: str,
+        outcome: AgentOutcome,
+    ) -> StoredChatTurn:
+        """Close only the still-running Turn; never overwrite later facts."""
+
+        if outcome.status not in {"failed", "cancelled"}:
+            raise ValueError(
+                "finish_running_if_current requires a failed or cancelled outcome"
+            )
+        async with self._lock:
+            self._require_session(
+                session_id=session_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            )
+            turn = self._require_turn(turn_id=turn_id, session_id=session_id)
+            if outcome.agent_run_id != turn.run_id:
+                raise ChatTurnConflictError(
+                    "chat turn cleanup outcome belongs to another run"
+                )
+            if turn.status != "running":
+                return turn
+            finished = self._updated_turn(
+                turn,
+                status=outcome.status,
+                lease_until=None,
+                failure_outcome=outcome,
+            )
+            self._turns[turn_id] = finished
+            self._active_turn_ids.pop(session_id, None)
+            return finished
+
+    async def reap_expired_running(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[StoredChatTurn, ...]:
+        """Fail expired executions in deterministic deadline/id order."""
+
+        if limit < 1:
+            raise ValueError("reaper limit must be positive")
+        async with self._lock:
+            now = self._clock()
+            expired = sorted(
+                (
+                    turn
+                    for turn in self._turns.values()
+                    if turn.status == "running"
+                    and turn.lease_until is not None
+                    and turn.lease_until <= now
+                ),
+                key=lambda turn: (turn.lease_until, turn.turn_id),
+            )[:limit]
+            return tuple(self._expire_turn(turn) for turn in expired)
 
     def _append_messages(
         self,
@@ -320,6 +399,31 @@ class InMemoryConversationStore:
             if message.message_id == turn.user_message_id:
                 return tuple(stored[:index])
         raise ChatTurnConflictError("chat turn user message is missing")
+
+    def _expire_session_running(self, session_id: str) -> None:
+        turn_id = self._active_turn_ids.get(session_id)
+        if turn_id is None:
+            return
+        turn = self._turns[turn_id]
+        if (
+            turn.status == "running"
+            and turn.lease_until is not None
+            and turn.lease_until <= self._clock()
+        ):
+            self._expire_turn(turn)
+
+    def _expire_turn(self, turn: StoredChatTurn) -> StoredChatTurn:
+        if turn.status != "running":
+            return turn
+        expired = self._updated_turn(
+            turn,
+            status="failed",
+            lease_until=None,
+            failure_outcome=_expired_outcome(turn.run_id),
+        )
+        self._turns[turn.turn_id] = expired
+        self._active_turn_ids.pop(turn.session_id, None)
+        return expired
 
     def _require_turn(self, *, turn_id: str, session_id: str) -> StoredChatTurn:
         turn = self._turns.get(turn_id)
@@ -356,3 +460,16 @@ class InMemoryConversationStore:
 
 
 __all__ = ["InMemoryConversationStore"]
+
+
+def _expired_outcome(run_id: str) -> AgentOutcome:
+    return AgentOutcome(
+        agent_run_id=run_id,
+        status="failed",
+        stop_reason="deadline",
+        error=ErrorInfo(
+            code="stale_execution",
+            message="chat turn execution lease expired",
+            retryable=False,
+        ),
+    )

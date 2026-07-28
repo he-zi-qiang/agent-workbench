@@ -14,7 +14,9 @@ exception.
 from __future__ import annotations
 
 import argparse
+import asyncio
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -97,7 +99,25 @@ def _render_chat_execution_error(request: Request, exc: Exception) -> Response:
 def create_app(dependencies: ApiDependencies) -> ASGIApp:
     """Build the ASGI application around already-assembled dependencies."""
 
-    app = FastAPI(title=API_TITLE, version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        reaper_task = (
+            asyncio.create_task(
+                dependencies.chat_reaper.run_forever(),
+                name="chat-turn-reaper",
+            )
+            if dependencies.chat_reaper is not None
+            else None
+        )
+        try:
+            yield
+        finally:
+            if reaper_task is not None:
+                reaper_task.cancel()
+                await asyncio.gather(reaper_task, return_exceptions=True)
+            await dependencies.dispose()
+
+    app = FastAPI(title=API_TITLE, version="0.1.0", lifespan=lifespan)
     setattr(app.state, STATE_ATTRIBUTE, dependencies)
 
     app.include_router(health.router)

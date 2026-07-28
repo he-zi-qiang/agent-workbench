@@ -175,6 +175,17 @@ class ApiSettings(StrictModel):
         return value
 
 
+class ChatSettings(StrictModel):
+    """Recovery policy for synchronous Chat executions."""
+
+    orphan_grace_seconds: int = Field(default=15, ge=1, le=3600)
+    reaper_poll_seconds: int = Field(default=15, ge=1, le=3600)
+    reaper_batch_size: int = Field(default=100, ge=1, le=10_000)
+    disconnect_poll_seconds: int = Field(default=1, ge=1, le=30)
+    orphan_action: Literal["terminal_fail"] = "terminal_fail"
+    automatic_retry: Literal[False] = False
+
+
 class DatabaseSettings(StrictModel):
     # DSNs are SecretStr because passwords are commonly embedded in them.
     dsn: SecretStr
@@ -633,6 +644,7 @@ class Settings(BaseSettings):
 
     app: AppSettings
     api: ApiSettings
+    chat: ChatSettings
     database: DatabaseSettings
     coordination: CoordinationSettings
     event_stream: EventStreamSettings

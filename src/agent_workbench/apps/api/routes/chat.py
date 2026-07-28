@@ -18,16 +18,23 @@ is delivered. This layer resolves who is asking and passes it down.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_workbench.application.chat import ChatRequest, ChatService, new_session_id
+from agent_workbench.application.chat import (
+    ChatRequest,
+    ChatService,
+    ChatTurn,
+    new_session_id,
+)
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.context import Citation
 from agent_workbench.domain.identifiers import Identifier
+from agent_workbench.ports.cancellation import CancellationSource
 
 CHAT_PREFIX = "/v1/chat"
 
@@ -121,22 +128,40 @@ async def ask(
         idempotency_key=idempotency_key,
     )
 
-    turn = await _chat(request).ask(
-        ChatRequest(
-            session_id=session_id,
-            question=body.question,
-            principal=principal,
-            knowledge_base_id=body.knowledge_base_id,
-            idempotency_key=idempotency_key,
-            top_k=body.top_k,
-            run_id=run_id,
-            stream_id=session_id,
+    cancellation = CancellationSource()
+    chat_task = asyncio.create_task(
+        _chat(request).ask(
+            ChatRequest(
+                session_id=session_id,
+                question=body.question,
+                principal=principal,
+                knowledge_base_id=body.knowledge_base_id,
+                idempotency_key=idempotency_key,
+                top_k=body.top_k,
+                run_id=run_id,
+                stream_id=session_id,
+            ),
+            # One stream per session, one run per turn: a subscriber follows
+            # the conversation and resumes where it left off.
+            dependencies.sink_for(stream_id=session_id, run_id=run_id),
+            cancellation,
         ),
-        # One stream per session, one run per turn: a subscriber follows the
-        # conversation and resumes where it left off, and each turn stays
-        # identifiable inside it.
-        dependencies.sink_for(stream_id=session_id, run_id=run_id),
+        name=f"chat-request-{run_id}",
     )
+    disconnect_watcher = asyncio.create_task(
+        _watch_disconnect(
+            request,
+            cancellation,
+            target=chat_task,
+            poll_seconds=dependencies.config.chat_recovery.disconnect_poll_seconds,
+        ),
+        name=f"chat-disconnect-{run_id}",
+    )
+    try:
+        turn = await chat_task
+    finally:
+        disconnect_watcher.cancel()
+        await asyncio.gather(disconnect_watcher, return_exceptions=True)
     return AskResponse(
         answer=turn.answer,
         citations=turn.citations,
@@ -194,6 +219,24 @@ def _stable_run_id(
         (tenant_id, principal_id, session_id, idempotency_key)
     ).encode()
     return f"run_{hashlib.sha256(material).hexdigest()}"
+
+
+async def _watch_disconnect(
+    request: Request,
+    cancellation: CancellationSource,
+    *,
+    target: asyncio.Task[ChatTurn],
+    poll_seconds: float,
+) -> None:
+    """Cancel actual work as well as setting the cooperative runtime signal."""
+
+    while not cancellation.cancelled:
+        if await request.is_disconnected():
+            cancellation.cancel("client_disconnected")
+            if not target.done():
+                target.cancel()
+            return
+        await asyncio.sleep(poll_seconds)
 
 
 __all__ = [

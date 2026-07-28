@@ -190,6 +190,8 @@ def _chat(
             )
         ),
         budget=RunBudget(max_steps=1, max_tool_calls=1),
+        request_timeout_seconds=30,
+        orphan_grace_seconds=5,
     )
 
 

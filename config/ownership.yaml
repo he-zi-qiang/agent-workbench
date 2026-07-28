@@ -72,6 +72,24 @@
       ]
     },
     {
+      "owner": "application.chat.recovery",
+      "lifecycle": "live",
+      "fields": [
+        "chat.orphan_grace_seconds",
+        "chat.reaper_poll_seconds",
+        "chat.reaper_batch_size",
+        "chat.disconnect_poll_seconds"
+      ]
+    },
+    {
+      "owner": "bootstrap.settings.chat_recovery_contract",
+      "lifecycle": "startup",
+      "fields": [
+        "chat.orphan_action",
+        "chat.automatic_retry"
+      ]
+    },
+    {
       "owner": "adapters.persistence.connection_factory",
       "lifecycle": "startup",
       "fields": [

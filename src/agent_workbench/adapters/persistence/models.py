@@ -108,6 +108,9 @@ chat_turns = Table(
     # A run is a globally addressable trace, so it cannot back two turns.
     Column("run_id", String(IDENTIFIER_LENGTH), nullable=False, unique=True),
     Column("status", String(32), nullable=False),
+    # Fixed execution deadline. It is present only while the model execution
+    # owns the Turn; moving to pending or any terminal state clears it.
+    Column("lease_until", DateTime(timezone=True), nullable=True),
     Column(
         "user_message_id",
         String(IDENTIFIER_LENGTH),
@@ -148,6 +151,11 @@ chat_turns = Table(
         name="chat_turns_status",
     ),
     CheckConstraint(
+        "(status = 'running' AND lease_until IS NOT NULL) OR "
+        "(status <> 'running' AND lease_until IS NULL)",
+        name="chat_turns_lease",
+    ),
+    CheckConstraint(
         "("
         "status = 'running' AND assistant_message_id IS NULL "
         "AND result IS NULL AND failure_outcome IS NULL"
@@ -172,6 +180,12 @@ chat_turns = Table(
         "session_id",
         unique=True,
         postgresql_where=text("status IN ('running', 'release_pending')"),
+    ),
+    Index(
+        "ix_chat_turns_expired_running",
+        "lease_until",
+        "turn_id",
+        postgresql_where=text("status = 'running'"),
     ),
 )
 

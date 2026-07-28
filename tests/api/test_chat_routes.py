@@ -22,12 +22,14 @@ import pytest
 from sqlalchemy import text
 
 from agent_workbench.adapters.persistence import create_query_engine
+from agent_workbench.application.chat import ChatTurn
 from agent_workbench.apps.api.dependencies import build_dependencies
 from agent_workbench.apps.api.main import create_app
-from agent_workbench.apps.api.routes.chat import CHAT_PREFIX
+from agent_workbench.apps.api.routes.chat import CHAT_PREFIX, _watch_disconnect
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
 from agent_workbench.bootstrap.settings import Settings
+from agent_workbench.ports.cancellation import CancellationSource
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 
@@ -131,6 +133,32 @@ def test_health_is_unaffected(tmp_path: Path) -> None:
     assert _run(scenario, tmp_path) == 200
 
 
+def test_http_disconnect_cancels_the_actual_chat_task() -> None:
+    """A cooperative token alone cannot interrupt retrieval or a blocked adapter."""
+
+    class _DisconnectedRequest:
+        async def is_disconnected(self) -> bool:
+            return True
+
+    async def scenario() -> tuple[bool, str, bool]:
+        async def blocked_chat() -> ChatTurn:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        target = asyncio.create_task(blocked_chat())
+        cancellation = CancellationSource()
+        await _watch_disconnect(
+            _DisconnectedRequest(),  # pyright: ignore[reportArgumentType]
+            cancellation,
+            target=target,
+            poll_seconds=0.001,
+        )
+        await asyncio.gather(target, return_exceptions=True)
+        return cancellation.cancelled, cancellation.reason, target.cancelled()
+
+    assert asyncio.run(scenario()) == (True, "client_disconnected", True)
+
+
 def test_the_reason_chat_is_absent_is_recorded(tmp_path: Path) -> None:
     """Reported once at assembly, so an operator is not left guessing."""
 
@@ -212,6 +240,8 @@ async def _mounted(root: Path, engine: Any, index: Any) -> Any:
         conversations=PostgresConversationStore(engine),
         releaser=PostgresChatReleaseCoordinator(engine),
         budget=RunBudget(max_steps=1, max_tool_calls=1),
+        request_timeout_seconds=30,
+        orphan_grace_seconds=5,
     )
 
 

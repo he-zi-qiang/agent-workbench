@@ -27,6 +27,16 @@ shutdown_grace_seconds = 30
 max_control_request_body_bytes = 2097152
 document_upload_transport = "artifact_data_plane"
 
+[chat]
+# A Chat request has one fixed execution lease. Expiry terminalizes the Turn;
+# it never transfers or automatically replays an uncheckpointed model run.
+orphan_grace_seconds = 15
+reaper_poll_seconds = 15
+reaper_batch_size = 100
+disconnect_poll_seconds = 1
+orphan_action = "terminal_fail"
+automatic_retry = false
+
 [database]
 # dsn, guard_dsn and listen_dsn are secret-like deployment values and are
 # intentionally absent. Supply them through .env / secret injection.

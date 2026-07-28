@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Protocol, runtime_checkable
 
 import pytest
 from harness import StoreHarness
@@ -30,6 +31,23 @@ RUN = "run_0000000000000000000000000000001"
 KEY = "request-1"
 REQUEST_HASH = "a" * 64
 OTHER_HASH = "b" * 64
+LEASE_SECONDS = 300
+
+
+@runtime_checkable
+class _ExpiryControl(Protocol):
+    async def expire_turn_for_test(self, turn_id: str) -> None: ...
+
+
+@runtime_checkable
+class _RowLockControl(Protocol):
+    async def hold_turn_lock_for_test(
+        self,
+        turn_id: str,
+        *,
+        locked: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None: ...
 
 
 async def _with_session(store: ChatTurnStore) -> ChatTurnStore:
@@ -44,6 +62,7 @@ async def _claim(
     request_hash: str = REQUEST_HASH,
     run_id: str = RUN,
     text: str = "current question",
+    lease_seconds: int = LEASE_SECONDS,
 ) -> ChatTurnClaim:
     return await store.claim_turn(
         session_id=SESSION,
@@ -53,6 +72,28 @@ async def _claim(
         request_hash=request_hash,
         run_id=run_id,
         user_message=user_message(text),
+        lease_seconds=lease_seconds,
+    )
+
+
+async def _claim_in_session(
+    store: ChatTurnStore,
+    *,
+    session_id: str,
+    key: str,
+    request_hash: str,
+    run_id: str,
+    text: str,
+) -> ChatTurnClaim:
+    return await store.claim_turn(
+        session_id=session_id,
+        tenant_id=TENANT,
+        principal_id=OWNER,
+        idempotency_key=key,
+        request_hash=request_hash,
+        run_id=run_id,
+        user_message=user_message(text),
+        lease_seconds=LEASE_SECONDS,
     )
 
 
@@ -169,6 +210,7 @@ def test_claim_snapshots_history_and_appends_the_user_once(
 
     assert claim.newly_claimed is True
     assert claim.turn.status == "running"
+    assert claim.turn.lease_until is not None
     assert claim.turn.user_message_id.startswith("msg_")
     assert history_before == ["previous question", "previous answer"]
     assert history_after == [
@@ -176,6 +218,17 @@ def test_claim_snapshots_history_and_appends_the_user_once(
         "previous answer",
         "current question",
     ]
+
+
+def test_claim_requires_a_positive_fixed_execution_lease(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(store: ChatTurnStore) -> None:
+        await _with_session(store)
+        await _claim(store, lease_seconds=0)
+
+    with pytest.raises(ValueError, match="lease_seconds must be positive"):
+        chat_turn_conversations.run(scenario)
 
 
 def test_same_key_and_hash_return_the_original_turn(
@@ -203,6 +256,67 @@ def test_same_key_and_hash_return_the_original_turn(
     assert second.newly_claimed is False
     assert second.turn == first.turn
     assert history == ["current question"]
+
+
+def test_same_key_after_expiry_returns_the_failed_fact_without_reexecution(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(
+        store: ChatTurnStore,
+    ) -> tuple[ChatTurnClaim, ChatTurnClaim, list[str]]:
+        await _with_session(store)
+        first = await _claim(store)
+        assert isinstance(store, _ExpiryControl)
+        await store.expire_turn_for_test(first.turn.turn_id)
+        retried = await _claim(store)
+        history = await store.history(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+        )
+        return first, retried, [message.message.text() for message in history]
+
+    first, retried, history = chat_turn_conversations.run(scenario)
+
+    assert first.turn.status == "running"
+    assert retried.newly_claimed is False
+    assert retried.turn.status == "failed"
+    assert retried.turn.lease_until is None
+    assert retried.turn.failure_outcome is not None
+    assert retried.turn.failure_outcome.stop_reason == "deadline"
+    assert retried.turn.failure_outcome.error is not None
+    assert retried.turn.failure_outcome.error.code == "stale_execution"
+    assert retried.turn.failure_outcome.error.retryable is False
+    assert history == ["current question"]
+
+
+def test_an_expired_running_turn_is_reaped_before_claiming_the_next_key(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(
+        store: ChatTurnStore,
+    ) -> tuple[ChatTurnClaim, ChatTurnClaim, ChatTurnClaim]:
+        await _with_session(store)
+        first = await _claim(store)
+        assert isinstance(store, _ExpiryControl)
+        await store.expire_turn_for_test(first.turn.turn_id)
+        second = await _claim(
+            store,
+            key="request-2",
+            request_hash=OTHER_HASH,
+            run_id="run_0000000000000000000000000000002",
+            text="next question",
+        )
+        expired = await _claim(store)
+        return first, second, expired
+
+    first, second, expired = chat_turn_conversations.run(scenario)
+
+    assert first.turn.status == "running"
+    assert expired.turn.status == "failed"
+    assert second.newly_claimed is True
+    assert second.turn.status == "running"
+    assert second.turn.lease_until is not None
 
 
 def test_same_key_with_a_different_hash_fails_closed(
@@ -245,6 +359,7 @@ def test_an_idempotency_key_is_scoped_to_its_session(
             request_hash=OTHER_HASH,
             run_id="run_0000000000000000000000000000002",
             user_message=user_message("an unrelated question"),
+            lease_seconds=LEASE_SECONDS,
         )
         return first.turn.turn_id, second.turn.turn_id
 
@@ -272,6 +387,7 @@ def test_a_run_id_can_back_only_one_turn(
             request_hash=OTHER_HASH,
             run_id=RUN,
             user_message=user_message("an unrelated question"),
+            lease_seconds=LEASE_SECONDS,
         )
 
     with pytest.raises(ChatTurnConflictError, match="run id conflict"):
@@ -395,6 +511,7 @@ def test_idempotency_keys_are_scoped_to_one_conversation(
             request_hash=OTHER_HASH,
             run_id="run_0000000000000000000000000000002",
             user_message=user_message("another conversation"),
+            lease_seconds=LEASE_SECONDS,
         )
         return first.turn.turn_id, second.turn.turn_id
 
@@ -422,6 +539,7 @@ def test_one_run_id_cannot_back_turns_in_two_conversations(
             request_hash=OTHER_HASH,
             run_id=RUN,
             user_message=user_message("another conversation"),
+            lease_seconds=LEASE_SECONDS,
         )
 
     with pytest.raises(ChatTurnConflictError, match="run id"):
@@ -461,8 +579,55 @@ def test_prepare_release_hides_the_assistant_and_is_idempotent(
     first, second, history = chat_turn_conversations.run(scenario)
 
     assert first.status == "release_pending"
+    assert first.lease_until is None
     assert first.assistant_message_id is None
     assert second == first
+    assert history == ["current question"]
+
+
+def test_late_prepare_terminalizes_an_expired_execution_without_the_candidate(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(
+        store: ChatTurnStore,
+    ) -> tuple[StoredChatTurn, list[str]]:
+        await _with_session(store)
+        claim = await _claim(store)
+        assert isinstance(store, _ExpiryControl)
+        await store.expire_turn_for_test(claim.turn.turn_id)
+        expired = await store.prepare_release(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            result=_completed(answer="late candidate"),
+        )
+        with pytest.raises(ChatTurnConflictError, match="cannot prepare release"):
+            await store.prepare_release(
+                session_id=SESSION,
+                tenant_id=TENANT,
+                principal_id=OWNER,
+                turn_id=claim.turn.turn_id,
+                result=_completed(answer="late candidate"),
+            )
+        history = await store.history(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+        )
+        return expired, [message.message.text() for message in history]
+
+    expired, history = chat_turn_conversations.run(scenario)
+
+    assert expired.status == "failed"
+    assert expired.lease_until is None
+    assert expired.result is None
+    assert expired.assistant_message_id is None
+    assert expired.failure_outcome is not None
+    assert expired.failure_outcome.stop_reason == "deadline"
+    assert expired.failure_outcome.error is not None
+    assert expired.failure_outcome.error.code == "stale_execution"
+    assert "late candidate" not in expired.model_dump_json()
     assert history == ["current question"]
 
 
@@ -553,6 +718,7 @@ def test_mark_released_uses_the_prepared_result_and_is_idempotent(
     first, second, history = chat_turn_conversations.run(scenario)
 
     assert first.status == expected_status
+    assert first.lease_until is None
     assert first.assistant_message_id is not None
     assert second == first
     assert history == ["current question", result.answer]
@@ -658,10 +824,190 @@ def test_finish_failed_never_appends_an_assistant_and_is_idempotent(
     first, second, history = chat_turn_conversations.run(scenario)
 
     assert first.status == outcome.status
+    assert first.lease_until is None
     assert first.assistant_message_id is None
     assert first.failure_outcome == outcome
     assert second == first
     assert history == ["current question"]
+
+
+def test_best_effort_cleanup_changes_only_the_still_running_turn(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(
+        store: ChatTurnStore,
+    ) -> tuple[StoredChatTurn, StoredChatTurn, ChatTurnClaim]:
+        await _with_session(store)
+        claim = await _claim(store)
+        first = await store.finish_running_if_current(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            outcome=_failed(),
+        )
+        second = await store.finish_running_if_current(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            outcome=_failed(),
+        )
+        stored = await _claim(store)
+        return first, second, stored
+
+    first, second, stored = chat_turn_conversations.run(scenario)
+
+    assert first.status == "failed"
+    assert second == first
+    assert stored.turn.status == "failed"
+    assert stored.turn.lease_until is None
+
+
+def test_best_effort_cleanup_never_overwrites_a_prepared_result(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(
+        store: ChatTurnStore,
+    ) -> tuple[StoredChatTurn, ChatTurnClaim]:
+        await _with_session(store)
+        claim = await _claim(store)
+        prepared = await store.prepare_release(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            result=_completed(),
+        )
+        changed = await store.finish_running_if_current(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            outcome=_failed(),
+        )
+        stored = await _claim(store)
+        assert stored.turn == prepared
+        return changed, stored
+
+    changed, stored = chat_turn_conversations.run(scenario)
+
+    assert changed.status == "release_pending"
+    assert changed == stored.turn
+    assert stored.turn.status == "release_pending"
+    assert stored.turn.lease_until is None
+    assert stored.turn.result == _completed()
+
+
+def test_reaper_fails_expired_turns_in_bounded_batches(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(
+        store: ChatTurnStore,
+    ) -> tuple[tuple[StoredChatTurn, ...], tuple[StoredChatTurn, ...]]:
+        await _with_session(store)
+        await store.create_session(
+            session_id="session_2",
+            tenant_id=TENANT,
+            owner_id=OWNER,
+        )
+        first = await _claim(store)
+        second = await _claim_in_session(
+            store,
+            session_id="session_2",
+            key="request-2",
+            request_hash=OTHER_HASH,
+            run_id="run_0000000000000000000000000000002",
+            text="another question",
+        )
+        assert isinstance(store, _ExpiryControl)
+        await store.expire_turn_for_test(first.turn.turn_id)
+        await store.expire_turn_for_test(second.turn.turn_id)
+        first_batch = await store.reap_expired_running(limit=1)
+        second_batch = await store.reap_expired_running(limit=10)
+        return first_batch, second_batch
+
+    first_batch, second_batch = chat_turn_conversations.run(scenario)
+
+    assert len(first_batch) == 1
+    assert len(second_batch) == 1
+    assert first_batch[0].turn_id != second_batch[0].turn_id
+    for expired in (*first_batch, *second_batch):
+        assert expired.status == "failed"
+        assert expired.lease_until is None
+        assert expired.failure_outcome is not None
+        assert expired.failure_outcome.stop_reason == "deadline"
+        assert expired.failure_outcome.error is not None
+        assert expired.failure_outcome.error.code == "stale_execution"
+        assert expired.failure_outcome.error.retryable is False
+
+
+def test_reaper_requires_a_positive_batch_limit(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(store: ChatTurnStore) -> None:
+        await store.reap_expired_running(limit=0)
+
+    with pytest.raises(ValueError, match="reaper limit must be positive"):
+        chat_turn_conversations.run(scenario)
+
+
+def test_postgres_reaper_skips_a_turn_locked_by_another_worker(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(
+        store: ChatTurnStore,
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        if not isinstance(store, _RowLockControl):
+            pytest.skip("SKIP LOCKED is a PostgreSQL concurrency contract")
+        await _with_session(store)
+        await store.create_session(
+            session_id="session_2",
+            tenant_id=TENANT,
+            owner_id=OWNER,
+        )
+        first = await _claim(store)
+        second = await _claim_in_session(
+            store,
+            session_id="session_2",
+            key="request-2",
+            request_hash=OTHER_HASH,
+            run_id="run_0000000000000000000000000000002",
+            text="another question",
+        )
+        assert isinstance(store, _ExpiryControl)
+        await store.expire_turn_for_test(first.turn.turn_id)
+        await store.expire_turn_for_test(second.turn.turn_id)
+
+        locked = asyncio.Event()
+        release = asyncio.Event()
+        holder = asyncio.create_task(
+            store.hold_turn_lock_for_test(
+                first.turn.turn_id,
+                locked=locked,
+                release=release,
+            )
+        )
+        try:
+            await asyncio.wait_for(locked.wait(), timeout=10)
+            available = await asyncio.wait_for(
+                store.reap_expired_running(limit=10),
+                timeout=2,
+            )
+        finally:
+            release.set()
+            await asyncio.gather(holder, return_exceptions=True)
+        formerly_locked = await store.reap_expired_running(limit=10)
+        return (
+            tuple(turn.turn_id for turn in available),
+            tuple(turn.turn_id for turn in formerly_locked),
+        )
+
+    available, formerly_locked = chat_turn_conversations.run(scenario)
+
+    assert len(available) == 1
+    assert len(formerly_locked) == 1
+    assert available != formerly_locked
 
 
 def test_terminal_transitions_fail_closed(
@@ -703,6 +1049,7 @@ def test_claim_checks_session_ownership_before_idempotency(
             request_hash=REQUEST_HASH,
             run_id=RUN,
             user_message=user_message("current question"),
+            lease_seconds=LEASE_SECONDS,
         )
 
     with pytest.raises(NotFoundError, match="conversation session not found"):

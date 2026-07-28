@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Protocol, runtime_checkable
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from agent_workbench.domain.context import Citation
 from agent_workbench.domain.identifiers import Identifier
@@ -129,6 +129,9 @@ class StoredChatTurn(VersionedModel):
     request_hash: RequestHash
     run_id: Identifier
     status: ChatTurnStatus
+    # A fixed execution lease, not a renewable worker claim. Expiry closes the
+    # Turn as failed; it never transfers this execution to another process.
+    lease_until: AwareDatetime | None = None
     user_message_id: Identifier
     assistant_message_id: Identifier | None = None
     result: ChatTurnResult | None = None
@@ -138,12 +141,18 @@ class StoredChatTurn(VersionedModel):
     def validate_lifecycle(self) -> StoredChatTurn:
         if self.status == "running":
             if (
-                self.assistant_message_id is not None
+                self.lease_until is None
+                or self.assistant_message_id is not None
                 or self.result is not None
                 or self.failure_outcome is not None
             ):
-                raise ValueError("a running turn contains only its user message")
+                raise ValueError(
+                    "a running turn requires its user message and execution lease"
+                )
             return self
+
+        if self.lease_until is not None:
+            raise ValueError("only a running turn may retain an execution lease")
 
         if self.status == "release_pending":
             if (
@@ -269,6 +278,7 @@ class ChatTurnStore(ConversationStore, Protocol):
         request_hash: str,
         run_id: str,
         user_message: Message,
+        lease_seconds: int,
     ) -> ChatTurnClaim:
         """Claim one turn, snapshot history, and append its user exactly once.
 
@@ -319,6 +329,33 @@ class ChatTurnStore(ConversationStore, Protocol):
         outcome: AgentOutcome,
     ) -> StoredChatTurn:
         """Finish a running turn as failed or cancelled, with no assistant."""
+        ...
+
+    async def finish_running_if_current(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        turn_id: str,
+        outcome: AgentOutcome,
+    ) -> StoredChatTurn:
+        """Best-effort cleanup that never overwrites pending or terminal facts.
+
+        Returns the durable Turn observed under the transition lock. It
+        contains the supplied failure only when this call found ``running``;
+        otherwise it exposes the pending or terminal fact that won the race.
+        Request cancellation and exception cleanup use this weaker transition
+        because an atomic release may have committed concurrently.
+        """
+        ...
+
+    async def reap_expired_running(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[StoredChatTurn, ...]:
+        """Terminalize expired running Turns without re-executing them."""
         ...
 
 

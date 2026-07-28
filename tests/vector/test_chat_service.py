@@ -141,6 +141,8 @@ class _Harness:
                 else releaser
             ),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
+            request_timeout_seconds=30,
+            orphan_grace_seconds=5,
         )
 
     def sink(self, request: ChatRequest) -> ScopedEventSink:
@@ -619,6 +621,8 @@ class _RevokingChat(ChatService):
             conversations=base.conversations,
             releaser=base.releaser,
             budget=base.budget,
+            request_timeout_seconds=base.request_timeout_seconds,
+            orphan_grace_seconds=base.orphan_grace_seconds,
         )
 
 

@@ -12,6 +12,7 @@ creating two active turns or two uses of an idempotency key.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import func, insert, select, update
@@ -24,7 +25,7 @@ from agent_workbench.adapters.persistence.models import (
     conversation_sessions,
 )
 from agent_workbench.adapters.persistence.models import messages as messages_table
-from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.errors import ErrorInfo, NotFoundError
 from agent_workbench.domain.identifiers import new_id, new_message_id
 from agent_workbench.domain.messages import Message, assistant_message
 from agent_workbench.domain.runs import AgentOutcome
@@ -121,9 +122,12 @@ class PostgresConversationStore:
         request_hash: str,
         run_id: str,
         user_message: Message,
+        lease_seconds: int,
     ) -> ChatTurnClaim:
         """Atomically authenticate, deduplicate, snapshot and append the user."""
 
+        if lease_seconds < 1:
+            raise ValueError("chat turn lease_seconds must be positive")
         try:
             async with self._engine.begin() as connection:
                 # Authorization deliberately precedes the idempotency query. A
@@ -133,6 +137,10 @@ class PostgresConversationStore:
                     session_id,
                     tenant_id,
                     principal_id,
+                )
+                await self._expire_session_running(
+                    connection,
+                    session_id=session_id,
                 )
 
                 existing = await self._turn_for_key(
@@ -172,6 +180,10 @@ class PostgresConversationStore:
                         messages=(user_message,),
                     )
                 )[0]
+                lease_until = await self._lease_deadline(
+                    connection,
+                    lease_seconds=lease_seconds,
+                )
                 turn = StoredChatTurn(
                     turn_id=new_id("turn"),
                     session_id=session_id,
@@ -179,6 +191,7 @@ class PostgresConversationStore:
                     request_hash=request_hash,
                     run_id=run_id,
                     status="running",
+                    lease_until=lease_until,
                     user_message_id=stored_user.message_id,
                 )
                 await connection.execute(
@@ -189,6 +202,7 @@ class PostgresConversationStore:
                         request_hash=turn.request_hash,
                         run_id=turn.run_id,
                         status=turn.status,
+                        lease_until=turn.lease_until,
                         user_message_id=turn.user_message_id,
                     )
                 )
@@ -229,12 +243,15 @@ class PostgresConversationStore:
                 raise ChatTurnConflictError(
                     "chat turn cannot prepare release from its current state"
                 )
+            if await self._running_expired(connection, turn):
+                return await self._expire_turn(connection, turn)
 
             # Constructing through Pydantic first proves the result belongs to
             # this run before either JSONB or lifecycle state is changed.
             prepared = self._updated_turn(
                 turn,
                 status="release_pending",
+                lease_until=None,
                 result=result,
             )
             await self._write_turn(connection, prepared)
@@ -307,6 +324,7 @@ class PostgresConversationStore:
         released = self._updated_turn(
             turn,
             status="withheld" if result.withheld else "committed",
+            lease_until=None,
             assistant_message_id=stored_assistant.message_id,
             result=result,
         )
@@ -383,10 +401,165 @@ class PostgresConversationStore:
             failed = self._updated_turn(
                 turn,
                 status=outcome.status,
+                lease_until=None,
                 failure_outcome=outcome,
             )
             await self._write_turn(connection, failed)
             return failed
+
+    async def finish_running_if_current(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        turn_id: str,
+        outcome: AgentOutcome,
+    ) -> StoredChatTurn:
+        """Close only a still-running Turn, never a fact that advanced."""
+
+        if outcome.status not in {"failed", "cancelled"}:
+            raise ValueError(
+                "finish_running_if_current requires a failed or cancelled outcome"
+            )
+        async with self._engine.begin() as connection:
+            await self._locked_session(connection, session_id, tenant_id, principal_id)
+            turn = await self._locked_turn(
+                connection,
+                session_id=session_id,
+                turn_id=turn_id,
+            )
+            if outcome.agent_run_id != turn.run_id:
+                raise ChatTurnConflictError(
+                    "chat turn cleanup outcome belongs to another run"
+                )
+            if turn.status != "running":
+                return turn
+            finished = self._updated_turn(
+                turn,
+                status=outcome.status,
+                lease_until=None,
+                failure_outcome=outcome,
+            )
+            await self._write_turn(connection, finished)
+            return finished
+
+    async def reap_expired_running(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[StoredChatTurn, ...]:
+        """Fail one SKIP LOCKED batch of expired fixed executions."""
+
+        if limit < 1:
+            raise ValueError("reaper limit must be positive")
+        async with self._engine.begin() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        select(chat_turns)
+                        .where(chat_turns.c.status == "running")
+                        .where(chat_turns.c.lease_until <= func.statement_timestamp())
+                        .order_by(
+                            chat_turns.c.lease_until,
+                            chat_turns.c.turn_id,
+                        )
+                        .limit(limit)
+                        .with_for_update(skip_locked=True)
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            reaped: list[StoredChatTurn] = []
+            for row in rows:
+                reaped.append(
+                    await self._expire_turn(
+                        connection,
+                        self._turn_from_row(row),
+                    )
+                )
+            return tuple(reaped)
+
+    async def _expire_session_running(
+        self,
+        connection: AsyncConnection,
+        *,
+        session_id: str,
+    ) -> StoredChatTurn | None:
+        """Opportunistically close this session's stale execution."""
+
+        row = (
+            (
+                await connection.execute(
+                    select(chat_turns)
+                    .where(chat_turns.c.session_id == session_id)
+                    .where(chat_turns.c.status == "running")
+                    .where(chat_turns.c.lease_until <= func.statement_timestamp())
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            return None
+        return await self._expire_turn(
+            connection,
+            self._turn_from_row(row),
+        )
+
+    @staticmethod
+    async def _running_expired(
+        connection: AsyncConnection,
+        turn: StoredChatTurn,
+    ) -> bool:
+        if turn.lease_until is None:  # pragma: no cover - model invariant
+            raise ChatTurnConflictError("running chat turn has no execution lease")
+        expired = (
+            await connection.execute(
+                select(chat_turns.c.lease_until <= func.statement_timestamp()).where(
+                    chat_turns.c.turn_id == turn.turn_id
+                )
+            )
+        ).scalar_one()
+        return expired
+
+    async def _expire_turn(
+        self,
+        connection: AsyncConnection,
+        turn: StoredChatTurn,
+    ) -> StoredChatTurn:
+        """Persist the one allowed result of a fixed execution lease expiring."""
+
+        if turn.status != "running":
+            return turn
+        expired = self._updated_turn(
+            turn,
+            status="failed",
+            lease_until=None,
+            failure_outcome=_expired_outcome(turn.run_id),
+        )
+        await self._write_turn(connection, expired)
+        return expired
+
+    @staticmethod
+    async def _lease_deadline(
+        connection: AsyncConnection,
+        *,
+        lease_seconds: int,
+    ) -> datetime:
+        """Derive a fixed deadline from PostgreSQL's statement clock."""
+
+        deadline = (
+            await connection.execute(
+                select(
+                    func.statement_timestamp()
+                    + func.make_interval(0, 0, 0, 0, 0, 0, lease_seconds)
+                )
+            )
+        ).scalar_one()
+        return cast(datetime, deadline)
 
     async def _append_messages(
         self,
@@ -553,6 +726,7 @@ class PostgresConversationStore:
             .where(chat_turns.c.turn_id == turn.turn_id)
             .values(
                 status=turn.status,
+                lease_until=turn.lease_until,
                 assistant_message_id=turn.assistant_message_id,
                 result=(
                     None if turn.result is None else turn.result.model_dump(mode="json")
@@ -580,6 +754,7 @@ class PostgresConversationStore:
                 "request_hash": row["request_hash"],
                 "run_id": row["run_id"],
                 "status": row["status"],
+                "lease_until": row["lease_until"],
                 "user_message_id": row["user_message_id"],
                 "assistant_message_id": row["assistant_message_id"],
                 "result": (
@@ -655,3 +830,18 @@ class PostgresConversationStore:
 
 
 __all__ = ["PostgresConversationStore"]
+
+
+def _expired_outcome(run_id: str) -> AgentOutcome:
+    """The non-retryable terminal fact for a lost fixed execution lease."""
+
+    return AgentOutcome(
+        agent_run_id=run_id,
+        status="failed",
+        stop_reason="deadline",
+        error=ErrorInfo(
+            code="stale_execution",
+            message="chat turn execution lease expired",
+            retryable=False,
+        ),
+    )
