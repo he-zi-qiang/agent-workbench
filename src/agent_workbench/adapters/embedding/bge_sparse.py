@@ -78,11 +78,19 @@ def _require_lexical_projection(model_id: str, *, revision: str) -> None:
     """
 
     try:
-        from huggingface_hub import try_to_load_from_cache
+        # Unresolvable to the type checker by design: huggingface_hub arrives
+        # with the 'embedding' extra, which CI does not install. Requiring it
+        # there would make an optional dependency mandatory for the gates.
+        from huggingface_hub import (  # pyright: ignore[reportMissingImports]
+            try_to_load_from_cache,  # pyright: ignore[reportUnknownVariableType]
+        )
     except ImportError:  # pragma: no cover - depends on the environment
+        # Nothing to check against. This runs only where the sparse runtime is
+        # absent too, so the encoder is about to fail for a plainer reason.
         return
 
-    cached = try_to_load_from_cache(model_id, "sparse_linear.pt", revision=revision)
+    lookup = cast("Callable[..., object]", try_to_load_from_cache)
+    cached = lookup(model_id, "sparse_linear.pt", revision=revision)
     if isinstance(cached, str):
         return
     raise SparseEncodingUnavailableError(
