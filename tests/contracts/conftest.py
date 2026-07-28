@@ -38,7 +38,7 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.ports.artifact_store import ArtifactStore
-from agent_workbench.ports.conversation_store import ConversationStore
+from agent_workbench.ports.conversation_store import ChatTurnStore, ConversationStore
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 REQUIRED_TEST_DATABASE_SUFFIX = "_test"
@@ -87,6 +87,40 @@ def conversations(request: pytest.FixtureRequest) -> StoreHarness:
     if dsn is None:
         pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
     return StoreHarness(name="postgres", factory=_postgres_conversations(dsn))
+
+
+@asynccontextmanager
+async def _memory_chat_turns() -> AsyncIterator[ChatTurnStore]:
+    yield InMemoryConversationStore()
+
+
+def _postgres_chat_turns(dsn: str) -> Callable[[], Any]:
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[ChatTurnStore]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text("TRUNCATE chat_turns, messages, conversation_sessions CASCADE")
+                )
+            yield PostgresConversationStore(engine)
+        finally:
+            await engine.dispose()
+
+    return factory
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def chat_turn_conversations(request: pytest.FixtureRequest) -> StoreHarness:
+    """One lifecycle contract exercised against both turn-ledger stores."""
+
+    if request.param == "memory":
+        return StoreHarness(name="memory", factory=_memory_chat_turns)
+
+    dsn = _test_dsn()
+    if dsn is None:
+        pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
+    return StoreHarness(name="postgres", factory=_postgres_chat_turns(dsn))
 
 
 @asynccontextmanager

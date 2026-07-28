@@ -44,6 +44,8 @@ NAMING_CONVENTION = {
 metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 IDENTIFIER_LENGTH = 128
+DIGEST_LENGTH = 64
+FILENAME_LENGTH = 255
 
 conversation_sessions = Table(
     "conversation_sessions",
@@ -89,8 +91,89 @@ messages = Table(
     Index("ix_messages_session_id_sequence", "session_id", "sequence"),
 )
 
-DIGEST_LENGTH = 64
-FILENAME_LENGTH = 255
+chat_turns = Table(
+    "chat_turns",
+    metadata,
+    Column("turn_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column(
+        "session_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("conversation_sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # Idempotency is scoped to the conversation. The caller may reuse the same
+    # transport key in another session without linking the two conversations.
+    Column("idempotency_key", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("request_hash", String(DIGEST_LENGTH), nullable=False),
+    # A run is a globally addressable trace, so it cannot back two turns.
+    Column("run_id", String(IDENTIFIER_LENGTH), nullable=False, unique=True),
+    Column("status", String(32), nullable=False),
+    Column(
+        "user_message_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("messages.message_id"),
+        nullable=False,
+    ),
+    Column(
+        "assistant_message_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("messages.message_id"),
+        nullable=True,
+    ),
+    # These are complete versioned Pydantic aggregates. Repositories validate
+    # them on every read instead of treating JSONB as an untyped cache.
+    Column("result", JSONB, nullable=True),
+    Column("failure_outcome", JSONB, nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    UniqueConstraint(
+        "session_id",
+        "idempotency_key",
+        name="uq_chat_turns_session_id_idempotency_key",
+    ),
+    CheckConstraint(
+        "status IN "
+        "('running', 'release_pending', 'committed', 'withheld', "
+        "'failed', 'cancelled')",
+        name="chat_turns_status",
+    ),
+    CheckConstraint(
+        "("
+        "status = 'running' AND assistant_message_id IS NULL "
+        "AND result IS NULL AND failure_outcome IS NULL"
+        ") OR ("
+        "status = 'release_pending' AND assistant_message_id IS NULL "
+        "AND result IS NOT NULL AND failure_outcome IS NULL"
+        ") OR ("
+        "status IN ('committed', 'withheld') "
+        "AND assistant_message_id IS NOT NULL "
+        "AND result IS NOT NULL AND failure_outcome IS NULL"
+        ") OR ("
+        "status IN ('failed', 'cancelled') AND assistant_message_id IS NULL "
+        "AND result IS NULL AND failure_outcome IS NOT NULL"
+        ")",
+        name="chat_turns_lifecycle",
+    ),
+    # PostgreSQL enforces the same non-interleaving invariant as the session
+    # row lock. The index is the final guard if a future writer bypasses this
+    # repository.
+    Index(
+        "uq_chat_turns_active_session",
+        "session_id",
+        unique=True,
+        postgresql_where=text("status IN ('running', 'release_pending')"),
+    ),
+)
 
 artifacts = Table(
     "artifacts",
@@ -261,6 +344,7 @@ __all__ = [
     "IDENTIFIER_LENGTH",
     "NAMING_CONVENTION",
     "artifacts",
+    "chat_turns",
     "conversation_sessions",
     "document_acl",
     "document_versions",
