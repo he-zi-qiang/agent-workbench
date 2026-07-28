@@ -20,6 +20,7 @@ delivered -- for the same reason the first check exists, one step later.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 from agent_workbench.domain.context import (
@@ -31,6 +32,7 @@ from agent_workbench.domain.context import (
 from agent_workbench.ports.conversation_store import AuthorizedRevision
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.embedding import EmbeddingPort
+from agent_workbench.ports.reranker import RerankerPort
 from agent_workbench.ports.sparse import SparseEncoderPort
 from agent_workbench.ports.vector_index import ScoredChunk, VectorIndexPort
 
@@ -38,6 +40,12 @@ from agent_workbench.ports.vector_index import ScoredChunk, VectorIndexPort
 # the caller may not read still costs a slot, so the funnel starts wider than
 # it ends.
 DEFAULT_CANDIDATE_MULTIPLIER = 4
+
+# Matches the rag.reranker.timeout_seconds default. Stated here as well because
+# this module must remain usable without the settings layer, and a service
+# constructed without a timeout must still have one -- an unbounded wait on an
+# optional quality step is how a fail-open design stops failing open.
+DEFAULT_RERANK_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +71,11 @@ class AuthorizedContext:
 
     packet: ContextPacket
     authorized_revisions: tuple[tuple[str, int], ...]
+    # Whether a reranker actually produced this order. False both when none is
+    # configured and when one failed open, because an ablation that cannot tell
+    # those apart from a successful rerank will report a fail-open run as
+    # "rerank made no difference" -- a null result manufactured by a timeout.
+    reranked: bool = False
 
 
 class SourcesChangedError(RuntimeError):
@@ -86,13 +99,23 @@ class RetrievalService:
     # dense arm alone -- which is a different retriever, not a degraded one,
     # and says so.
     sparse_encoder: SparseEncoderPort | None = None
+    # Absent when the process has no reranking runtime. Present, it reorders
+    # what PostgreSQL already authorized -- never what the index returned.
+    reranker: RerankerPort | None = None
+    rerank_timeout_seconds: float = DEFAULT_RERANK_TIMEOUT_SECONDS
     candidate_multiplier: int = DEFAULT_CANDIDATE_MULTIPLIER
 
     @property
     def mode(self) -> str:
-        """Which retriever this is, for a report to name."""
+        """Which retriever this is, for a report to name.
 
-        return "hybrid" if self.sparse_encoder is not None else "dense"
+        Names what is configured, not what happened on the last call: a
+        property cannot know that. Whether a given turn was actually reranked
+        is on its ``AuthorizedContext``.
+        """
+
+        base = "hybrid" if self.sparse_encoder is not None else "dense"
+        return f"{base}+rerank" if self.reranker is not None else base
 
     async def _candidates(self, request: RetrievalRequest) -> tuple[ScoredChunk, ...]:
         """Ask the index, by whichever arms this process has."""
@@ -154,19 +177,75 @@ class RetrievalService:
             candidate
             for candidate in candidates
             if revisions.get(candidate.document_id) == candidate.source_revision
-        )[: request.top_k]
+        )
+
+        # Reranking happens here and not a line earlier or later. Earlier, it
+        # would score passages the asker may not read -- the cross-encoder does
+        # read them. Later, it would be reordering a list already cut to top_k,
+        # which lets it promote within the retriever's choice but never
+        # overturn it, and that is not the thing being evaluated.
+        ranked, reranked = await self._rerank(request.query, authorized)
+        selected = ranked[: request.top_k]
 
         return AuthorizedContext(
-            packet=_packet(authorized),
+            packet=_packet(selected),
             authorized_revisions=tuple(
                 sorted(
                     (document_id, revisions[document_id])
-                    for document_id in {
-                        candidate.document_id for candidate in authorized
-                    }
+                    for document_id in {candidate.document_id for candidate in selected}
                 )
             ),
+            reranked=reranked,
         )
+
+    async def _rerank(
+        self, query: str, authorized: tuple[ScoredChunk, ...]
+    ) -> tuple[tuple[ScoredChunk, ...], bool]:
+        """Reorder authorized candidates, or return them untouched.
+
+        Fail-open, deliberately and narrowly. A reranker is a quality
+        improvement over an order that is already usable, so a timeout or a
+        broken model must not turn a working answer into an error. What it must
+        also not do is widen what the asker can see: the fallback is the input
+        list, and the success path is a permutation of that same list selected
+        by position, so no path through this method can produce a chunk that
+        was not authorized above.
+        """
+
+        if self.reranker is None or not authorized:
+            return authorized, False
+
+        passages = tuple(candidate.text for candidate in authorized)
+        try:
+            async with asyncio.timeout(self.rerank_timeout_seconds):
+                scores = await self.reranker.rerank(query, passages)
+        except Exception:
+            # Broad on purpose, and it covers the timeout: asyncio.timeout
+            # raises TimeoutError, which is an Exception. Every failure of an
+            # optional quality step has the same correct response, and
+            # enumerating the ways a model runtime can fail would be a list
+            # that goes stale silently.
+            #
+            # CancelledError is deliberately not caught -- it inherits
+            # BaseException, so it passes through here. A cancelled request
+            # must stay cancelled rather than fail open into finishing work
+            # nobody is waiting for.
+            return authorized, False
+
+        if len(scores) != len(authorized):
+            # An adapter is allowed to be slow or broken; it is not allowed to
+            # be misaligned, because misalignment is indistinguishable from a
+            # bad ranking once the scores are attached to the wrong passages.
+            return authorized, False
+
+        order = sorted(
+            range(len(authorized)),
+            # Descending by score, ties broken by the retriever's order rather
+            # than arbitrarily, so an unhelpful reranker degrades to the input
+            # instead of shuffling it.
+            key=lambda index: (-scores[index], index),
+        )
+        return tuple(authorized[index] for index in order), True
 
     async def confirm_unchanged(
         self, context: AuthorizedContext, *, tenant_id: str, principal_id: str

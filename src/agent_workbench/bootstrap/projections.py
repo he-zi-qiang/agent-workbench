@@ -92,6 +92,22 @@ class EmbeddingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RerankerConfig:
+    """Which cross-encoder reorders candidates, and how long it may take.
+
+    The timeout is projected as a float because it bounds an ``asyncio.timeout``
+    rather than a configuration display; keeping the settings integer would put
+    the conversion at the call site, where it is easy to forget once.
+    """
+
+    model_id: str
+    revision: str
+    batch_size: int
+    device: str
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class RetrievalConfig:
     """How much is asked for, and how much survives to the answer."""
 
@@ -136,6 +152,7 @@ class ApiRuntimeConfig:
     event_stream: EventStreamConfig
     qdrant: QdrantConfig
     embedding: EmbeddingConfig
+    reranker: RerankerConfig
     retrieval: RetrievalConfig
     chat_recovery: ChatRecoveryConfig
 
@@ -200,6 +217,13 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             batch_size=settings.rag.ingestion.embedding_batch_size,
             device=settings.rag.embedding.device,
         ),
+        reranker=RerankerConfig(
+            model_id=settings.rag.reranker.model_id,
+            revision=settings.rag.reranker.revision,
+            batch_size=settings.rag.reranker.batch_size,
+            device=settings.rag.reranker.device,
+            timeout_seconds=float(settings.rag.reranker.timeout_seconds),
+        ),
         retrieval=RetrievalConfig(
             chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
@@ -224,6 +248,7 @@ __all__ = [
     "ModelConfig",
     "ModelProfileConfig",
     "QdrantConfig",
+    "RerankerConfig",
     "RetrievalConfig",
     "project_api",
 ]

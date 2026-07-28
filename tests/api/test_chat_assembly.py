@@ -86,3 +86,63 @@ def test_nothing_is_substituted_for_the_missing_embedder(
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
 
     assert dependencies.chat is None
+
+
+def test_a_missing_reranker_does_not_cost_the_chat_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The asymmetry, stated where a future change would have to break it.
+
+    A missing embedder removes chat, because nothing can turn a question into a
+    query. A missing reranker only makes the answers worse, and treating the
+    two the same way would take a whole capability offline over a quality step.
+
+    Both factories are substituted because the real ones read the same optional
+    extra: with the extra absent the embedder fails first and returns early, so
+    a test that only removed the runtime would never reach the reranker branch
+    and would pass whatever that branch did.
+    """
+
+    from agent_workbench.apps.api import dependencies as assembly
+    from agent_workbench.bootstrap.reranker_factory import RerankerUnavailable
+
+    class _Embedder:
+        dimension = 1024
+        identity = "stub@v1"
+
+        async def embed_documents(self, texts: tuple[str, ...]) -> tuple[Any, ...]:
+            return tuple((0.0,) for _ in texts)
+
+        async def embed_query(self, text: str) -> Any:
+            return (0.0,)
+
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(
+        assembly,
+        "build_reranker",
+        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+    )
+
+    dependencies = build_dependencies(project_api(_settings(tmp_path)))
+
+    assert dependencies.serves_chat is True
+    assert dependencies.chat_unavailable is None
+    assert dependencies.reranker_unavailable == "no reranking runtime here"
+
+
+def test_an_unreranked_process_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing about a response reveals whether reranking ran.
+
+    So the process has to record it. An ablation report written against a
+    silently unreranked deployment would attribute the difference to the model.
+    """
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+    dependencies = build_dependencies(project_api(_settings(tmp_path)))
+
+    # Chat is unavailable here for the embedder's reason, and the reranker was
+    # never reached -- so the note is absent rather than misattributed.
+    assert dependencies.reranker_unavailable is None
