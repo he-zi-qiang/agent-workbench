@@ -38,8 +38,11 @@ from agent_workbench.adapters.persistence import (
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.vector import QdrantVectorIndex
-from agent_workbench.application.chat import ChatService
-from agent_workbench.application.chat_recovery import ChatTurnReaper
+from agent_workbench.application.chat import REFUSAL, ChatService
+from agent_workbench.application.chat_recovery import (
+    ChatPendingReleaseRecovery,
+    ChatTurnReaper,
+)
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.uploads import UploadService
 from agent_workbench.apps.api.identity import HeaderPrincipalResolver
@@ -76,6 +79,7 @@ class ApiDependencies:
     # leaving a route to fail per request.
     chat: ChatService | None
     chat_reaper: ChatTurnReaper | None
+    chat_pending_recovery: ChatPendingReleaseRecovery | None
     chat_unavailable: str | None
     http: httpx.AsyncClient | None
     qdrant: AsyncQdrantClient | None
@@ -164,12 +168,20 @@ def build_dependencies(
     )
     documents = PostgresDocumentStore(engine)
     artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
+    conversations = PostgresConversationStore(engine)
+    releaser = PostgresChatReleaseCoordinator(engine)
 
     chat, unavailable, http, qdrant = (
-        _assemble_chat(config, engine, documents)
+        _assemble_chat(
+            config,
+            documents,
+            conversations=conversations,
+            releaser=releaser,
+        )
         if with_chat
         else (None, "chat was not requested for this process", None, None)
     )
+    events = PostgresEventLog(engine)
     return ApiDependencies(
         config=config,
         engine=engine,
@@ -178,26 +190,39 @@ def build_dependencies(
         uploads=UploadService(documents=documents, artifacts=artifacts),
         principals=HeaderPrincipalResolver(),
         chat=chat,
-        chat_reaper=(
-            ChatTurnReaper(
-                conversations=chat.conversations,
-                poll_seconds=config.chat_recovery.reaper_poll_seconds,
-                batch_size=config.chat_recovery.reaper_batch_size,
-            )
-            if chat is not None
-            else None
+        # Recovery is intentionally independent of the embedding/model stack.
+        # A degraded API must still free sessions left by a previously healthy
+        # process; otherwise "chat unavailable" would also mean "chat cannot
+        # recover".
+        chat_reaper=ChatTurnReaper(
+            conversations=conversations,
+            poll_seconds=config.chat_recovery.reaper_poll_seconds,
+            batch_size=config.chat_recovery.reaper_batch_size,
+        ),
+        chat_pending_recovery=ChatPendingReleaseRecovery(
+            conversations=conversations,
+            releaser=releaser,
+            sink_for=lambda stream_id, run_id: ScopedEventSink(
+                log=events,
+                scope=EventScope(stream_id=stream_id, run_id=run_id),
+            ),
+            refusal_text=REFUSAL,
+            poll_seconds=config.chat_recovery.reaper_poll_seconds,
+            batch_size=config.chat_recovery.reaper_batch_size,
         ),
         chat_unavailable=unavailable,
         http=http,
         qdrant=qdrant,
-        events=PostgresEventLog(engine),
+        events=events,
     )
 
 
 def _assemble_chat(
     config: ApiRuntimeConfig,
-    engine: AsyncEngine,
     documents: PostgresDocumentStore,
+    *,
+    conversations: PostgresConversationStore,
+    releaser: PostgresChatReleaseCoordinator,
 ) -> tuple[
     ChatService | None,
     str | None,
@@ -245,8 +270,8 @@ def _assemble_chat(
             ),
             policy_identity=f"api-{config.deployment_scope}",
         ),
-        conversations=PostgresConversationStore(engine),
-        releaser=PostgresChatReleaseCoordinator(engine),
+        conversations=conversations,
+        releaser=releaser,
         budget=RunBudget(max_steps=1, max_tool_calls=1),
         request_timeout_seconds=config.request_timeout_seconds,
         orphan_grace_seconds=config.chat_recovery.orphan_grace_seconds,

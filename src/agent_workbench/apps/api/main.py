@@ -101,20 +101,24 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        reaper_task = (
-            asyncio.create_task(
-                dependencies.chat_reaper.run_forever(),
-                name="chat-turn-reaper",
+        background_tasks = tuple(
+            asyncio.create_task(worker.run_forever(), name=name)
+            for worker, name in (
+                (dependencies.chat_reaper, "chat-turn-reaper"),
+                (
+                    dependencies.chat_pending_recovery,
+                    "chat-pending-release-recovery",
+                ),
             )
-            if dependencies.chat_reaper is not None
-            else None
+            if worker is not None
         )
         try:
             yield
         finally:
-            if reaper_task is not None:
-                reaper_task.cancel()
-                await asyncio.gather(reaper_task, return_exceptions=True)
+            for task in background_tasks:
+                task.cancel()
+            if background_tasks:
+                await asyncio.gather(*background_tasks, return_exceptions=True)
             await dependencies.dispose()
 
     app = FastAPI(title=API_TITLE, version="0.1.0", lifespan=lifespan)

@@ -68,6 +68,8 @@ def test_chat_is_absent_and_says_why(
     assert dependencies.chat is None
     assert dependencies.chat_unavailable is not None
     assert "--extra embedding" in dependencies.chat_unavailable
+    assert dependencies.chat_reaper is not None
+    assert dependencies.chat_pending_recovery is not None
 
 
 def test_nothing_is_substituted_for_the_missing_embedder(

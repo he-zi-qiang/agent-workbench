@@ -35,6 +35,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnConflictError,
     ChatTurnResult,
     ConversationSession,
+    PendingChatRelease,
     StoredChatTurn,
     StoredMessage,
 )
@@ -480,6 +481,40 @@ class PostgresConversationStore:
                     )
                 )
             return tuple(reaped)
+
+    async def list_release_pending(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[PendingChatRelease, ...]:
+        """Read prepared Turns and their owner scope without claiming rows."""
+
+        if limit < 1:
+            raise ValueError("pending release limit must be positive")
+        query = (
+            select(
+                chat_turns,
+                conversation_sessions.c.tenant_id.label("release_tenant_id"),
+                conversation_sessions.c.owner_id.label("release_principal_id"),
+            )
+            .join(
+                conversation_sessions,
+                conversation_sessions.c.session_id == chat_turns.c.session_id,
+            )
+            .where(chat_turns.c.status == "release_pending")
+            .order_by(chat_turns.c.turn_id)
+            .limit(limit)
+        )
+        async with self._engine.connect() as connection:
+            rows = (await connection.execute(query)).mappings().all()
+        return tuple(
+            PendingChatRelease(
+                turn=self._turn_from_row(row),
+                tenant_id=cast(str, row["release_tenant_id"]),
+                principal_id=cast(str, row["release_principal_id"]),
+            )
+            for row in rows
+        )
 
     async def _expire_session_running(
         self,

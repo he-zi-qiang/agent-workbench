@@ -23,6 +23,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnConflictError,
     ChatTurnResult,
     ConversationSession,
+    PendingChatRelease,
     StoredChatTurn,
     StoredMessage,
 )
@@ -373,6 +374,33 @@ class InMemoryConversationStore:
                 key=lambda turn: (turn.lease_until, turn.turn_id),
             )[:limit]
             return tuple(self._expire_turn(turn) for turn in expired)
+
+    async def list_release_pending(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[PendingChatRelease, ...]:
+        """Snapshot prepared Turns in a deterministic recovery order."""
+
+        if limit < 1:
+            raise ValueError("pending release limit must be positive")
+        async with self._lock:
+            turns = sorted(
+                (
+                    turn
+                    for turn in self._turns.values()
+                    if turn.status == "release_pending"
+                ),
+                key=lambda turn: turn.turn_id,
+            )[:limit]
+            return tuple(
+                PendingChatRelease(
+                    turn=turn,
+                    tenant_id=self._sessions[turn.session_id].tenant_id,
+                    principal_id=self._sessions[turn.session_id].owner_id,
+                )
+                for turn in turns
+            )
 
     def _append_messages(
         self,

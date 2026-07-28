@@ -15,11 +15,15 @@ from agent_workbench.adapters.memory import (
     InMemoryEventLog,
 )
 from agent_workbench.application.chat import (
+    REFUSAL,
     ChatExecutionError,
     ChatRequest,
     ChatService,
 )
-from agent_workbench.application.chat_recovery import ChatTurnReaper
+from agent_workbench.application.chat_recovery import (
+    ChatPendingReleaseRecovery,
+    ChatTurnReaper,
+)
 from agent_workbench.domain.messages import user_message
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import AgentOutcome, RunBudget
@@ -265,3 +269,169 @@ def test_a_model_result_arriving_after_expiry_cannot_be_prepared() -> None:
 
     assert status == "failed"
     assert history_size == 1
+
+
+def test_release_pending_is_recovered_without_the_original_client_retry() -> None:
+    """The crash window after prepare must not hold the session forever."""
+
+    async def scenario() -> tuple[str, list[str], bool]:
+        conversations = InMemoryConversationStore()
+        await conversations.create_session(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            owner_id=PRINCIPAL,
+        )
+        claim = await conversations.claim_turn(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=PRINCIPAL,
+            idempotency_key="prepared",
+            request_hash="d" * 64,
+            run_id="run_prepared",
+            user_message=user_message("prepared question"),
+            lease_seconds=30,
+        )
+        await conversations.prepare_release(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=PRINCIPAL,
+            turn_id=claim.turn.turn_id,
+            result=ChatTurnResult(
+                outcome=AgentOutcome(
+                    agent_run_id="run_prepared",
+                    status="completed",
+                    stop_reason="completed",
+                    output_text="prepared answer",
+                ),
+                answer="prepared answer",
+                authorized_revisions=(),
+            ),
+        )
+        log = InMemoryEventLog()
+        recovery = ChatPendingReleaseRecovery(
+            conversations=conversations,
+            releaser=InMemoryChatReleaseCoordinator(
+                conversations=conversations,
+                revisions=_BlockingRetrieval(),
+            ),
+            sink_for=lambda stream_id, run_id: ScopedEventSink(
+                log=log,
+                scope=EventScope(stream_id=stream_id, run_id=run_id),
+            ),
+            refusal_text=REFUSAL,
+            poll_seconds=1,
+            batch_size=10,
+        )
+
+        recovered = await recovery.run_once()
+        repeated = await recovery.run_once()
+        next_turn = await conversations.claim_turn(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=PRINCIPAL,
+            idempotency_key="next",
+            request_hash="e" * 64,
+            run_id="run_next",
+            user_message=user_message("next question"),
+            lease_seconds=30,
+        )
+        events = await log.read(SESSION)
+        assert repeated == ()
+        return (
+            recovered[0].status,
+            [event.event_type for event in events],
+            next_turn.newly_claimed,
+        )
+
+    status, event_types, next_claimed = asyncio.run(scenario())
+
+    assert status == "committed"
+    assert event_types == ["AnswerCommitted"]
+    assert next_claimed is True
+
+
+def test_one_pending_release_failure_does_not_abort_the_rest_of_the_batch() -> None:
+    async def scenario() -> tuple[int, int, str, int]:
+        conversations = InMemoryConversationStore()
+        prepared = []
+        for suffix in ("a", "b"):
+            session_id = f"ses_{suffix}"
+            run_id = f"run_{suffix}"
+            await conversations.create_session(
+                session_id=session_id,
+                tenant_id=TENANT,
+                owner_id=PRINCIPAL,
+            )
+            claim = await conversations.claim_turn(
+                session_id=session_id,
+                tenant_id=TENANT,
+                principal_id=PRINCIPAL,
+                idempotency_key=f"request-{suffix}",
+                request_hash=suffix * 64,
+                run_id=run_id,
+                user_message=user_message(f"question {suffix}"),
+                lease_seconds=30,
+            )
+            prepared.append(
+                await conversations.prepare_release(
+                    session_id=session_id,
+                    tenant_id=TENANT,
+                    principal_id=PRINCIPAL,
+                    turn_id=claim.turn.turn_id,
+                    result=ChatTurnResult(
+                        outcome=AgentOutcome(
+                            agent_run_id=run_id,
+                            status="completed",
+                            stop_reason="completed",
+                            output_text=f"answer {suffix}",
+                        ),
+                        answer=f"answer {suffix}",
+                        authorized_revisions=(),
+                    ),
+                )
+            )
+
+        delegate = InMemoryChatReleaseCoordinator(
+            conversations=conversations,
+            revisions=_BlockingRetrieval(),
+        )
+        failed_turn_id = min(turn.turn_id for turn in prepared)
+
+        class _FailOneRelease:
+            async def release(self, **kwargs: Any) -> Any:
+                if kwargs["turn"].turn_id == failed_turn_id:
+                    raise RuntimeError("deterministic release failure")
+                return await delegate.release(**kwargs)
+
+        log = InMemoryEventLog()
+        recovery = ChatPendingReleaseRecovery(
+            conversations=conversations,
+            releaser=_FailOneRelease(),  # pyright: ignore[reportArgumentType]
+            sink_for=lambda stream_id, run_id: ScopedEventSink(
+                log=log,
+                scope=EventScope(stream_id=stream_id, run_id=run_id),
+            ),
+            refusal_text=REFUSAL,
+            poll_seconds=1,
+            batch_size=10,
+        )
+        recovered = await recovery.run_once()
+        remaining = await conversations.list_release_pending(limit=10)
+        events = []
+        for turn in prepared:
+            events.extend(await log.read(turn.session_id))
+        return (
+            len(recovered),
+            len(remaining),
+            remaining[0].turn.turn_id,
+            len(events),
+        )
+
+    recovered_count, remaining_count, remaining_turn_id, event_count = asyncio.run(
+        scenario()
+    )
+
+    assert recovered_count == 1
+    assert remaining_count == 1
+    assert remaining_turn_id.startswith("turn_")
+    assert event_count == 1

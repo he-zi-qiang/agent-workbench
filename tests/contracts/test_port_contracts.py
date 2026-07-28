@@ -26,6 +26,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnClaim,
     ChatTurnResult,
     ConversationSession,
+    PendingChatRelease,
     StoredChatTurn,
     StoredMessage,
 )
@@ -73,6 +74,11 @@ SAMPLES: dict[str, VersionedModel] = {
         newly_claimed=False,
     ),
     "ChatTurnResult": TURN_RESULT,
+    "PendingChatRelease": PendingChatRelease(
+        turn=STORED_TURN,
+        tenant_id="tenant_demo",
+        principal_id="user_demo",
+    ),
     "UploadIntent": UploadIntent(
         upload_id="upl_0000000000000000000000000000001",
         tenant_id="tenant_demo",

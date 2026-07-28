@@ -211,6 +211,20 @@ class ChatTurnClaim(VersionedModel):
         return self
 
 
+class PendingChatRelease(VersionedModel):
+    """One prepared Turn plus the session-owner scope needed to release it."""
+
+    turn: StoredChatTurn
+    tenant_id: Identifier
+    principal_id: Identifier
+
+    @model_validator(mode="after")
+    def validate_pending_turn(self) -> PendingChatRelease:
+        if self.turn.status != "release_pending":
+            raise ValueError("a pending Chat release requires release_pending status")
+        return self
+
+
 @runtime_checkable
 class ConversationStore(Protocol):
     """Persistent chat sessions and their messages."""
@@ -358,6 +372,14 @@ class ChatTurnStore(ConversationStore, Protocol):
         """Terminalize expired running Turns without re-executing them."""
         ...
 
+    async def list_release_pending(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[PendingChatRelease, ...]:
+        """List prepared Turns with the session-owner scope needed to resume."""
+        ...
+
 
 __all__ = [
     "AuthorizedRevision",
@@ -370,6 +392,7 @@ __all__ = [
     "ConversationSession",
     "ConversationStore",
     "IdempotencyKey",
+    "PendingChatRelease",
     "RequestHash",
     "StoredChatTurn",
     "StoredMessage",

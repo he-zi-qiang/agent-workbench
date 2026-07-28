@@ -20,6 +20,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnConflictError,
     ChatTurnResult,
     ChatTurnStore,
+    PendingChatRelease,
     StoredChatTurn,
 )
 
@@ -97,10 +98,14 @@ async def _claim_in_session(
     )
 
 
-def _completed(*, answer: str = "grounded answer") -> ChatTurnResult:
+def _completed(
+    *,
+    answer: str = "grounded answer",
+    run_id: str = RUN,
+) -> ChatTurnResult:
     return ChatTurnResult(
         outcome=AgentOutcome(
-            agent_run_id=RUN,
+            agent_run_id=run_id,
             status="completed",
             stop_reason="completed",
             output_text=answer,
@@ -784,6 +789,114 @@ def test_release_override_cannot_replace_one_publishable_answer_with_another(
         chat_turn_conversations.run(scenario)
 
 
+def test_release_pending_turns_are_listed_in_stable_order_with_owner_scope(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def prepare(
+        store: ChatTurnStore,
+        *,
+        session_id: str,
+        tenant_id: str,
+        owner_id: str,
+        suffix: str,
+    ) -> StoredChatTurn:
+        await store.create_session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+        )
+        run_id = f"run_pending_{suffix}"
+        claim = await store.claim_turn(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=owner_id,
+            idempotency_key=f"request-{suffix}",
+            request_hash=suffix * 64,
+            run_id=run_id,
+            user_message=user_message(f"question {suffix}"),
+            lease_seconds=LEASE_SECONDS,
+        )
+        return await store.prepare_release(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=owner_id,
+            turn_id=claim.turn.turn_id,
+            result=_completed(answer=f"answer {suffix}", run_id=run_id),
+        )
+
+    async def scenario(
+        store: ChatTurnStore,
+    ) -> tuple[
+        tuple[PendingChatRelease, ...],
+        tuple[PendingChatRelease, ...],
+        dict[str, tuple[str, str]],
+    ]:
+        first = await prepare(
+            store,
+            session_id=SESSION,
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            suffix="a",
+        )
+        second = await prepare(
+            store,
+            session_id="session_2",
+            tenant_id="tenant_b",
+            owner_id="user_2",
+            suffix="b",
+        )
+        third = await prepare(
+            store,
+            session_id="session_3",
+            tenant_id=TENANT,
+            owner_id="user_3",
+            suffix="c",
+        )
+        await store.create_session(
+            session_id="session_running",
+            tenant_id=TENANT,
+            owner_id=OWNER,
+        )
+        await _claim_in_session(
+            store,
+            session_id="session_running",
+            key="request-running",
+            request_hash="d" * 64,
+            run_id="run_running",
+            text="still running",
+        )
+        all_pending = await store.list_release_pending(limit=10)
+        limited = await store.list_release_pending(limit=2)
+        expected_scope = {
+            first.turn_id: (TENANT, OWNER),
+            second.turn_id: ("tenant_b", "user_2"),
+            third.turn_id: (TENANT, "user_3"),
+        }
+        return all_pending, limited, expected_scope
+
+    all_pending, limited, expected_scope = chat_turn_conversations.run(scenario)
+
+    ids = tuple(item.turn.turn_id for item in all_pending)
+    assert ids == tuple(sorted(expected_scope))
+    assert tuple(item.turn.turn_id for item in limited) == ids[:2]
+    assert all(item.turn.status == "release_pending" for item in all_pending)
+    assert {
+        item.turn.turn_id: (item.tenant_id, item.principal_id) for item in all_pending
+    } == expected_scope
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_pending_release_listing_requires_a_positive_limit(
+    chat_turn_conversations: StoreHarness,
+    limit: int,
+) -> None:
+    async def scenario(store: ChatTurnStore) -> None:
+        await store.list_release_pending(limit=limit)
+
+    with pytest.raises(ValueError, match="pending release limit must be positive"):
+        chat_turn_conversations.run(scenario)
+
+
 @pytest.mark.parametrize(
     "outcome",
     [
@@ -950,6 +1063,48 @@ def test_reaper_requires_a_positive_batch_limit(
 
     with pytest.raises(ValueError, match="reaper limit must be positive"):
         chat_turn_conversations.run(scenario)
+
+
+def test_postgres_pending_listing_does_not_claim_or_wait_on_rows(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    async def scenario(store: ChatTurnStore) -> tuple[PendingChatRelease, ...]:
+        if not isinstance(store, _RowLockControl):
+            pytest.skip("non-locking recovery reads are a PostgreSQL contract")
+        await _with_session(store)
+        claim = await _claim(store)
+        await store.prepare_release(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            result=_completed(),
+        )
+        locked = asyncio.Event()
+        release = asyncio.Event()
+        holder = asyncio.create_task(
+            store.hold_turn_lock_for_test(
+                claim.turn.turn_id,
+                locked=locked,
+                release=release,
+            )
+        )
+        try:
+            await asyncio.wait_for(locked.wait(), timeout=10)
+            return await asyncio.wait_for(
+                store.list_release_pending(limit=10),
+                timeout=2,
+            )
+        finally:
+            release.set()
+            await asyncio.gather(holder, return_exceptions=True)
+
+    pending = chat_turn_conversations.run(scenario)
+
+    assert len(pending) == 1
+    assert pending[0].turn.status == "release_pending"
+    assert pending[0].tenant_id == TENANT
+    assert pending[0].principal_id == OWNER
 
 
 def test_postgres_reaper_skips_a_turn_locked_by_another_worker(
