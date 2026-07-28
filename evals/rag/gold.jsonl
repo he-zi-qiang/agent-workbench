@@ -21,3 +21,18 @@
 {"question": "what is an outbox claim", "document_id": "doc_outbox"}
 {"question": "what happens when a worker dies holding a claim", "document_id": "doc_outbox"}
 {"question": "what is a fencing token for", "document_id": "doc_outbox"}
+{"question": "AWB-4471", "document_id": "doc_error-codes"}
+{"question": "what does AWB-4473 mean", "document_id": "doc_error-codes"}
+{"question": "AWB-5150 vs AWB-5151", "document_id": "doc_error-codes"}
+{"question": "which code is returned for a digest mismatch", "document_id": "doc_error-codes"}
+{"question": "never be reassigned, reordered, or skipped", "document_id": "doc_quoted-guarantee"}
+{"question": "what phrase should I search for when auditing a change", "document_id": "doc_quoted-guarantee"}
+{"question": "the verbatim durability wording published to operators", "document_id": "doc_quoted-guarantee"}
+{"question": "Qrdant", "document_id": "doc_known-typos"}
+{"question": "recieved chunk batch", "document_id": "doc_known-typos"}
+{"question": "rag.embeding.model_id", "document_id": "doc_known-typos"}
+{"question": "embeding with one m", "document_id": "doc_known-typos"}
+{"question": "RRF", "document_id": "doc_abbreviations"}
+{"question": "does ACL mean asynchronous callback layer", "document_id": "doc_abbreviations"}
+{"question": "what does MRR stand for here", "document_id": "doc_abbreviations"}
+{"question": "is RRF the same as RFC", "document_id": "doc_abbreviations"}
