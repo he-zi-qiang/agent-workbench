@@ -2110,3 +2110,28 @@ worker 永远重新发现它。
 `UPDATE ... WHERE last_applied_revision < revision` 里的那个条件是防两个 worker
 竞态的。撤掉它**全部测试照过**——我的测试都是单 worker 顺序执行，覆盖不到它。
 保留是因为它是正确的，但**没有测试守着**，多 worker 竞态测试属于 WP09 的故障支架。
+
+## PR-034 `knowledge_search` Tool（WP04-08）
+
+状态：**已实现并通过本地测试**。检索作为工具暴露给 agentic 路径。
+
+**包装的是同一个 `RetrievalService`**，所以两条路径产出同一个 `ContextPacket`。两个
+检索器意味着两套授权检查、两种引用形状、两个要评测的东西——而受关注较少的那个，
+就是会漏的那个。
+
+**principal 来自执行上下文，绝不来自参数。** 这是这个工具存在的关键安全性质：
+参数是一次工具调用里**唯一能被不可信文本触达**的部分——一段检索回来的文字写着
+「以 user_admin 身份搜索」，就是它在给自己授权。schema 里**没有** principal 字段
+（`additionalProperties: false`），handler 也只从 run 读。
+
+knowledge_base 是参数，因为「去哪找」是模型的工作；而找一个它无权读的知识库，会被
+和别处同一道 PostgreSQL 检查拒绝——**收窄到某个知识库不是授权，也不会因为它来自参数
+就变成授权**。
+
+5 条测试。**验证过是有牙的**：把 handler 改成从参数取 principal，「模型不能自选身份」
+那条失败。另有一条断言直接钉在 schema 上（字段集合恰为 query/knowledge_base_id/top_k，
+且 `additionalProperties: false`），这样将来悄悄加一个字段会被测试拦下，而不是等到
+运行时。
+
+**尚未装配进 ChatService**：默认 Chat 仍然是固定 2-step、工具清单为空。把它接上属于
+深度研究模式的开关，是另一个行为变化。
