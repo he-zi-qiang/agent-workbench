@@ -53,6 +53,14 @@ Implemented with test evidence:
   whose revision budget is spent returns no next node rather than falling
   through to approval, because approving a draft the critic rejected turns the
   gate into a formality exactly when it matters;
+- Task agent nodes that reach the model only through `AgentExecutor`, holding
+  no registry and no model port, since a node that could assemble its own loop
+  would be a second runtime without the first one's budget, cancellation and
+  policy guarantees. A failed run still records its run id and usage, or a Task
+  would retry forever inside a budget that never appears to move; a completed
+  run with no artifact is a failure rather than an empty success; and the
+  prompt projects the state instead of replaying earlier nodes' output, which
+  lives in the artifact store;
 - fixed two-step Chat with two ACL checks, an answer-release gate, a source
   revision read barrier, multi-turn replay and a PostgreSQL `chat_turns` fact
   ledger;
@@ -96,10 +104,12 @@ The remaining boundaries are explicit:
 - The `hybrid-rerank` arm of the three-way ablation has not been run: hybrid
   already scores 1.000 on the current 38-question gold set, so the rerank
   delta there is necessarily zero. Measuring it needs a harder gold set first.
-- LangGraph Task work is limited to the domain state, the port and the graph's
-  control flow. Agent node handlers, the LangGraph adapter, the PostgreSQL
-  checkpointer and the Task Worker do not exist, and `langgraph` is not yet a
-  project dependency, so no Task runs end to end yet.
+- Task agent nodes cover only the four whose product is one artifact;
+  `plan` and `critic` need a structured-output decoding contract and are not
+  implemented.
+- The LangGraph adapter, the PostgreSQL checkpointer and the Task Worker do
+  not exist, and `langgraph` is not yet a project dependency, so no Task runs
+  end to end yet.
 - LlamaIndex and LangChain adapters, the Task Registry, multi-Agent execution,
   the CrewAI comparison, UI, observability, production authentication and
   deployment remain planned.

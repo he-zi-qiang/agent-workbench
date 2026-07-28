@@ -12,10 +12,10 @@
 > 以及 WP06 的第一块——checkpoint-safe `TaskState` 与 `TaskWorkflowPort`。
 > `main@e93d7a1` 本地门禁为 `859 passed / 260 skipped`（260 项全部因缺
 > PostgreSQL/Qdrant/真实 BGE 权重而跳过，本轮无真实外部服务证据）；
-> WP06-02/04（固定研究图的条件路由与确定性 fan-in reducer）已实现，
-> 尚未合入 `main`；下一主线是 WP06 余下部分：Agent node handler（WP06-03）、
-> LangGraph adapter（WP06-05）、PostgreSQL checkpointer（WP06-06）与
-> Task Worker（WP06-07）；
+> WP06-02/04（条件路由与确定性 fan-in reducer）与 WP06-03 的 artifact 型
+> Agent node 已实现，尚未合入 `main`；下一主线是 WP06 余下部分：
+> `plan`/`critic` 的结构化输出解码、LangGraph adapter（WP06-05）、
+> PostgreSQL checkpointer（WP06-06）与 Task Worker（WP06-07）；
 > LlamaIndex/LangChain 互操作、可靠常驻 Ingestion Worker、
 > Task Registry/lease/fencing、Multi-Agent 与 UI 仍开放
 >

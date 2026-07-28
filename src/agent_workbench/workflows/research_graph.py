@@ -127,7 +127,7 @@ def next_nodes(node: TaskNodeId, state: TaskState) -> tuple[TaskNodeId, ...]:
     return _STATIC_EDGES[node]
 
 
-def _evolve(state: TaskState, **changes: object) -> TaskState:
+def evolve(state: TaskState, **changes: object) -> TaskState:
     """Return a re-validated copy of ``state``.
 
     ``model_copy`` is deliberately not used.  It skips validation, so a reducer
@@ -151,7 +151,7 @@ def begin_revision(state: TaskState) -> TaskState:
 
     if not state.can_revise:
         raise ValueError("revision budget is exhausted")
-    return _evolve(
+    return evolve(
         state,
         revision_count=state.revision_count + 1,
         review_result=None,
@@ -197,7 +197,7 @@ def fan_in(
     """
 
     collected = tuple(contributions)
-    return _evolve(
+    return evolve(
         state,
         evidence_refs=merge_refs(
             state.evidence_refs,
@@ -233,6 +233,7 @@ __all__ = [
     "ResearchContribution",
     "begin_revision",
     "declared_nodes",
+    "evolve",
     "fan_in",
     "merge_refs",
     "next_nodes",
