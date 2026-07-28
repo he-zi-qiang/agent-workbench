@@ -18,10 +18,11 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 
 from agent_workbench.adapters.persistence import create_query_engine, metadata
 from agent_workbench.bootstrap.paths import PROJECT_ROOT
+from agent_workbench.domain.schema import DOMAIN_SCHEMA_VERSION
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 # Alembic's env.py reads the DSN from the same variable the application does.
@@ -93,6 +94,81 @@ def test_the_migration_can_be_undone_and_reapplied(
     command.upgrade(config, "head")
 
     assert _differences(dsn) == []
+
+
+def test_event_schema_version_backfills_existing_rows_without_a_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rows from 0005 become explicit v1 rows; future writes cannot omit it."""
+
+    dsn = _dsn()
+    monkeypatch.setenv(MIGRATION_DSN_ENV_VAR, dsn)
+    config = _config()
+    command.upgrade(config, "head")
+    command.downgrade(config, "0005_last_applied_revision")
+
+    async def seed_old_event() -> None:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(text("TRUNCATE events, event_streams CASCADE"))
+                await connection.execute(
+                    text(
+                        "INSERT INTO event_streams (stream_id, last_sequence) "
+                        "VALUES ('str_before_schema_version', 1)"
+                    )
+                )
+                await connection.execute(
+                    text(
+                        "INSERT INTO events "
+                        "(event_id, stream_id, run_id, sequence, event_type, payload) "
+                        "VALUES "
+                        "('evt_before_schema_version', 'str_before_schema_version', "
+                        "'run_before_schema_version', 1, 'RunCompleted', "
+                        "CAST(:payload AS jsonb))"
+                    ),
+                    {"payload": '{"kind":"RunCompleted","stop_reason":"completed"}'},
+                )
+        finally:
+            await engine.dispose()
+
+    async def inspect_upgraded_event() -> tuple[int, str, str | None]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.connect() as connection:
+                version = (
+                    await connection.execute(
+                        text(
+                            "SELECT schema_version FROM events "
+                            "WHERE event_id = 'evt_before_schema_version'"
+                        )
+                    )
+                ).scalar_one()
+                column = (
+                    await connection.execute(
+                        text(
+                            "SELECT is_nullable, column_default "
+                            "FROM information_schema.columns "
+                            "WHERE table_schema = current_schema() "
+                            "AND table_name = 'events' "
+                            "AND column_name = 'schema_version'"
+                        )
+                    )
+                ).one()
+                return int(version), str(column.is_nullable), column.column_default
+        finally:
+            await engine.dispose()
+
+    try:
+        asyncio.run(seed_old_event())
+        command.upgrade(config, "head")
+        observed = asyncio.run(inspect_upgraded_event())
+    finally:
+        # Leave the shared integration database at the revision every other
+        # persistence test expects, even if the assertion or inspection fails.
+        command.upgrade(config, "head")
+
+    assert observed == (DOMAIN_SCHEMA_VERSION, "NO", None)
 
 
 def test_migrations_refuse_to_run_without_a_dsn(

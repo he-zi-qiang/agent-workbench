@@ -301,6 +301,10 @@ events = Table(
     Column("stream_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("run_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("sequence", BigInteger, nullable=False),
+    # Stored beside the payload rather than inferred from its shape. Replay
+    # must know which envelope contract produced a row before it attempts to
+    # interpret that row.
+    Column("schema_version", Integer, nullable=False),
     Column("event_type", String(64), nullable=False),
     Column("payload", JSONB, nullable=False),
     Column("task_id", String(IDENTIFIER_LENGTH), nullable=True),

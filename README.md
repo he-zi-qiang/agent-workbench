@@ -14,7 +14,8 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 ## 当前状态
 
 截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支已提交
-PR-035 安全发布基线，并正在实施 PR-036 顺序多轮上下文。已经实现并有测试证据：
+PR-035 安全发布基线与 PR-036 顺序多轮上下文，并正在实施 EventLog
+可演进回放元数据。已经实现并有测试证据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -23,6 +24,8 @@ PR-035 安全发布基线，并正在实施 PR-036 顺序多轮上下文。已�
 - PostgreSQL ConversationStore、Alembic 迁移、Document/Version/ACL、
   事务 Outbox、`SKIP LOCKED` 竞争领取和摄取 Worker 组件；
 - Local ArtifactStore，以及 FastAPI Upload/Artifact/Health/Chat/SSE API；
+- PostgreSQL EventLog 的 per-stream gap-free sequence、显式 envelope schema version
+  和生产者时间戳回放；
 - BGE-M3 Dense Embedding、Qdrant Dense/Hybrid 检索和离线 RAG 评测；
 - 固定 2-step Chat 的 ACL 双重检查、答案发布门、source revision 读取栅栏，以及
   已提交会话消息的顺序多轮回放；
@@ -36,6 +39,8 @@ PR-035 安全发布基线，并正在实施 PR-036 顺序多轮上下文。已�
 - Chat 已能在后续轮次回放已提交的用户问题与最终答案，但尚未实现并发 Turn 串行化、
   幂等 `chat_turns`、历史 token window/compaction 和模型实际引用校验；
   `knowledge_search` 也尚未装配为可用的 Agentic Retrieval Mode。
+- EventLog 能拒绝未知 schema version，但尚未实现旧版本 upcaster、poison-row
+  隔离/跳过策略和 terminal event 幂等键。
 - LlamaIndex/LangChain Adapter、LangGraph Task、Task Registry、Multi-Agent、
   CrewAI 对比、UI、生产身份认证和部署仍为 Planned。
 

@@ -13,8 +13,8 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 As of 2026-07-28, the main-branch baseline is `main@4d03f69`. The current
 development branch has committed the PR-035 secure answer-release baseline and
-is implementing PR-036 sequential multi-turn context. Implemented with test
-evidence:
+PR-036 sequential multi-turn context, and is implementing evolvable EventLog
+replay metadata. Implemented with test evidence:
 
 - framework-neutral domain contracts, ports, fake adapters and a reproducible
   CLI demo;
@@ -28,6 +28,8 @@ evidence:
   ingestion-worker component;
 - a local artifact store and FastAPI upload, artifact, health, Chat and SSE
   APIs;
+- PostgreSQL EventLog replay with per-stream gap-free sequences, an explicit
+  envelope schema version and the producer timestamp;
 - BGE-M3 dense embeddings, Qdrant dense/hybrid retrieval and offline RAG
   evaluation;
 - fixed two-step Chat with two ACL checks, an answer-release gate, a source
@@ -48,6 +50,9 @@ The remaining boundaries are explicit:
   sequential turns. Concurrent-turn serialization, idempotent `chat_turns`, a
   history token window/compaction, and validation of the citations actually
   used by the model remain to be built.
+- EventLog rejects an unknown schema version, but version upcasters,
+  poison-row isolation/skip semantics and terminal-event idempotency keys are
+  not yet implemented.
 - `knowledge_search` is not yet assembled into an agentic retrieval mode, and
   that path still needs a final evidence-revision gate before an answer may be
   released.

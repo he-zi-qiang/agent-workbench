@@ -12,6 +12,37 @@
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
 
+## 2026-07-28 PR-037 EventLog 版本化回放元数据
+
+状态：**当前开发分支已实现并通过本地静态门禁；真实 PostgreSQL 新用例因当前环境未
+配置测试 DSN 而跳过，尚未合入 `main`**。
+
+`EventEnvelope` 一直声明 `schema_version` 与 producer timestamp，但 PostgreSQL
+`events` 表此前没有保存版本，append 也没有写入 envelope timestamp。结果是：
+
+- 旧 row 回放时会被默认套用当前 schema version，消费者无法知道它由哪个契约产生；
+- append 返回的时间与 replay 返回的数据库落库时间不同，同一事件 round-trip 后发生
+  变化。
+
+本轮新增迁移 `0006_event_schema_version`，把已有 row 明确回填为 schema v1，随后移除
+临时 server default，要求以后每次 append 显式写版本。`PostgresEventLog` 现在同时写入
+`envelope.schema_version` 与 `envelope.timestamp`，read 时显式重建两者；未知版本会在
+领域模型边界失败关闭。
+
+相关测试覆盖：
+
+- append 返回值、数据库列和 replay envelope 的 schema version 完全一致；
+- 固定 producer clock 后，数据库与 replay 保留同一个时间；
+- 将持久 row 人为改成未知版本时，replay 拒绝解析；
+- 从 `0005` 升级时已有事件回填 v1，最终列为 `NOT NULL` 且没有残留 default。
+
+本地相关门禁为 `30 passed / 22 skipped`；仓库级无外部服务门禁（排除受当前沙箱禁止
+`socket.bind()` 的测试文件）为 `702 passed / 189 skipped`。Ruff format/check 与
+Pyright 全部通过，Alembic 唯一 head 为 `0006_event_schema_version`。跳过项需要
+PostgreSQL、Qdrant 或本地 BGE 权重。本轮尚未实现 schema upcaster registry、
+poison-row 隔离/跳过策略和 terminal event 的稳定幂等键，因此不能宣称事件升级与
+发布恢复已经完整完成。
+
 ## 2026-07-28 PR-036 顺序多轮上下文
 
 状态：**当前开发分支已实现并通过无外部依赖测试，尚未合入 `main`**。
