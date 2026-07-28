@@ -387,7 +387,7 @@ class RerankerPort(Protocol):
 每条事件至少包含：
 
 ```text
-event_id, schema_version, stream_id, task_id, run_id, sequence,
+event_id, event_key?, schema_version, stream_id, task_id, run_id, sequence,
 timestamp, parent_event_id, event_type, durability, payload
 ```
 
@@ -419,7 +419,8 @@ RunCancelled
 
 CLI、SSE、审计日志和 OpenTelemetry 消费同一事件协议，不各自发明回调。
 
-PostgreSQL `run_events` 是唯一持久事件事实源，`EventLogPort` 只是其框架无关接口。
+PostgreSQL `event_streams/events` 是当前唯一持久事件事实源，`EventLogPort` 只是其
+框架无关接口。
 `ModelDelta`、高频 Tool progress 属于 transient stream，不逐 token 写数据库；
 `ModelCompleted`、Tool/审批/节点状态、错误和终态属于 durable event。事件用于审计与
 观察，不替代 Conversation Store、LangGraph checkpoint 或 Runtime checkpoint。
@@ -429,10 +430,12 @@ PostgreSQL `run_events` 是唯一持久事件事实源，`EventLogPort` 只是�
 
 1. 最终 ACL/evidence 复核前，`ModelDelta.text`、`ModelCompleted.text` 和
    `output_ref` 不得进入公开 EventLog 或 live subscriber；
-2. 复核通过且 Conversation Store 成功写入后，才发布包含答案正文和引用的 durable
-   `AnswerCommitted`；
-3. 复核失败只发布不含候选答案的 `AnswerWithheld`；
-4. Runtime/CLI/Task 的通用 `ModelCompleted` 契约保持不变，发布权限由拥有最终证据检查的
+2. 复核完成后先把结果写为内部 `release_pending`，此状态不能出现在会话历史；
+3. 使用 stream-local 稳定 `event_key` 发布包含答案和引用的 durable
+   `AnswerCommitted`，或不含候选答案的 `AnswerWithheld`；
+4. 事件发布成功后才把 Turn 转为 `committed/withheld` 并原子追加可见 assistant
+   message；若进程在第 3、4 步之间崩溃，同 key 重试必须取回原事件并补做第 4 步；
+5. Runtime/CLI/Task 的通用 `ModelCompleted` 契约保持不变，发布权限由拥有最终证据检查的
    application use case 决定。
 
 SSE/UI 只能把 `AnswerCommitted` 视为可展示的检索型答案，不能把 Chat 路径中的
@@ -1373,11 +1376,13 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-截至 2026-07-25，PR-001～PR-015 与 ADR-012 已合并。工程基线、领域契约、
-Ports、Fake Adapter、自研 Runtime、DeepSeek 协议 Adapter、PostgreSQL
-ConversationStore、Local ArtifactStore、文档/版本/ACL/事务 Outbox，以及
-Upload / Artifact / Health API 已经落地并有测试。DeepSeek Adapter 仍未接入
-进程装配，RAG、LangGraph Workflow、Task 协调、Multi-Agent 和生产部署仍未实现。
+截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支在其上累计完成了
+`knowledge_search` Adapter 与 PR-035～PR-039。
+工程基线、领域契约、Ports、Fake Adapter、自研 Runtime、DeepSeek 流式 Adapter 与
+API 装配、PostgreSQL Conversation/ChatTurn/EventLog、Local ArtifactStore、
+文档/版本/ACL/事务 Outbox、摄取组件、Dense/Hybrid RAG、固定检索 Chat、
+Upload / Artifact / Health / Chat / SSE API 已落地并有测试。LangGraph Workflow、
+Task 协调、Multi-Agent、生产身份认证和生产部署仍未实现。
 
 表中标为 Demonstrated 的两项都由同一条固定演示 `agent-cli demo` 覆盖：逐字节
 可复现，由 golden 文件与 CI smoke 守护。它现在证明的是“输入 → 模型 → Tool →
@@ -1399,14 +1404,19 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | 自研 Runtime：Hook Bus 与参数重写重校验 | ✓ | ✓ | ✓ |  |
 | 模型 Provider 配置契约（DeepSeek） | ✓ | ✓ | ✓ |  |
 | DeepSeek Model Adapter（流式 HTTP） | ✓ | ✓ | ✓ |  |
-| PostgreSQL ConversationStore + Alembic migrations | ✓ | ✓ | ✓ |  |
+| PostgreSQL ConversationStore / `chat_turns` + Alembic migrations | ✓ | ✓ | ✓ |  |
+| PostgreSQL EventLog + durable event idempotency + SSE replay | ✓ | ✓ | ✓ |  |
 | Local ArtifactStore | ✓ | ✓ | ✓ |  |
 | Document / Version / ACL / transactional Outbox | ✓ | ✓ | ✓ |  |
+| Ingestion Worker 组件（非可靠常驻进程） | ✓ | ✓ | ✓ |  |
 | Upload / Artifact / Health API | ✓ | ✓ | ✓ |  |
 | tenant-scoped 数据访问（以可信 PrincipalContext 为前提） | ✓ | ✓ | ✓ |  |
 | 生产身份认证 | ✓ |  |  |  |
 | LangChain model/tool 互操作 Adapter | ✓ |  |  |  |
-| Chat + RAG | ✓ |  |  |  |
+| BGE-M3 + Qdrant Dense/Hybrid RAG 与离线评测 | ✓ | ✓ | ✓ |  |
+| 固定检索 Chat + RAG（ACL 双检、发布门、多轮、请求幂等） | ✓ | ✓ | ✓ |  |
+| Agentic `knowledge_search` 产品装配 | ✓ |  |  |  |
+| LlamaIndex ingestion/retrieval Adapter | ✓ |  |  |  |
 | LangGraph Task | ✓ |  |  |  |
 | PostgreSQL Task coordination | ✓ |  |  |  |
 | Multi-Agent | ✓ |  |  |  |

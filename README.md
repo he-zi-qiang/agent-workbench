@@ -13,9 +13,9 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支已提交
-PR-035 安全发布基线与 PR-036 顺序多轮上下文，并正在实施 EventLog
-可演进回放元数据。已经实现并有测试证据：
+截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支已完成
+PR-035～PR-039 的安全发布、多轮上下文、EventLog 可演进回放与幂等 Chat Turn
+可靠性切片。已经实现并有测试证据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -24,11 +24,13 @@ PR-035 安全发布基线与 PR-036 顺序多轮上下文，并正在实施 Even
 - PostgreSQL ConversationStore、Alembic 迁移、Document/Version/ACL、
   事务 Outbox、`SKIP LOCKED` 竞争领取和摄取 Worker 组件；
 - Local ArtifactStore，以及 FastAPI Upload/Artifact/Health/Chat/SSE API；
-- PostgreSQL EventLog 的 per-stream gap-free sequence、显式 envelope schema version
-  和生产者时间戳回放；
+- PostgreSQL EventLog 的 per-stream gap-free sequence、显式 envelope schema version、
+  生产者时间戳回放和 stream-local durable `event_key` 幂等写入；
 - BGE-M3 Dense Embedding、Qdrant Dense/Hybrid 检索和离线 RAG 评测；
-- 固定 2-step Chat 的 ACL 双重检查、答案发布门、source revision 读取栅栏，以及
-  已提交会话消息的顺序多轮回放；
+- 固定 2-step Chat 的 ACL 双重检查、答案发布门、source revision 读取栅栏、已提交
+  会话消息的多轮回放，以及 PostgreSQL `chat_turns` 幂等事实源；
+- Chat API 强制 `Idempotency-Key`，同一会话的活跃 Turn 不交错；已提交请求重试不再
+  重跑模型，“答案事件已写、Turn 尚未提交”的崩溃窗口可幂等恢复；
 - 与固定检索共用 `RetrievalService` 的 `knowledge_search` Tool Adapter。
 
 这些能力仍有明确边界：
@@ -36,11 +38,11 @@ PR-035 安全发布基线与 PR-036 顺序多轮上下文，并正在实施 Even
 - `IngestionWorker` 仍是可调用组件，没有常驻进程、heartbeat、retry/dead-letter 和
   多 Worker 外部副作用 fencing；上传后自动可检索的产品 E2E 尚未贯通。
 - 旧 Qdrant Point 已被 revision 栅栏阻止读取，但 replace/delete 物理清理尚未完成。
-- Chat 已能在后续轮次回放已提交的用户问题与最终答案，但尚未实现并发 Turn 串行化、
-  幂等 `chat_turns`、历史 token window/compaction 和模型实际引用校验；
-  `knowledge_search` 也尚未装配为可用的 Agentic Retrieval Mode。
+- Chat 尚未实现 `running` Turn 的 lease/reaper，因此进程在模型执行中硬崩溃后需要
+  运维恢复；历史 token window/compaction 和模型实际引用校验也尚未实现。
+  `knowledge_search` 尚未装配为可用的 Agentic Retrieval Mode。
 - EventLog 能拒绝未知 schema version，但尚未实现旧版本 upcaster、poison-row
-  隔离/跳过策略和 terminal event 幂等键。
+  隔离/跳过策略。
 - LlamaIndex/LangChain Adapter、LangGraph Task、Task Registry、Multi-Agent、
   CrewAI 对比、UI、生产身份认证和部署仍为 Planned。
 

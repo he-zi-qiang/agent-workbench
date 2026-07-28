@@ -12,9 +12,9 @@ LangChain and later comparison adapters stay behind explicit ports.
 ## Current status
 
 As of 2026-07-28, the main-branch baseline is `main@4d03f69`. The current
-development branch has committed the PR-035 secure answer-release baseline and
-PR-036 sequential multi-turn context, and is implementing evolvable EventLog
-replay metadata. Implemented with test evidence:
+development branch completes the PR-035 through PR-039 slices for secure
+answer release, multi-turn context, evolvable EventLog replay and idempotent
+Chat turns. Implemented with test evidence:
 
 - framework-neutral domain contracts, ports, fake adapters and a reproducible
   CLI demo;
@@ -29,12 +29,16 @@ replay metadata. Implemented with test evidence:
 - a local artifact store and FastAPI upload, artifact, health, Chat and SSE
   APIs;
 - PostgreSQL EventLog replay with per-stream gap-free sequences, an explicit
-  envelope schema version and the producer timestamp;
+  envelope schema version, the producer timestamp and stream-local durable
+  `event_key` idempotency;
 - BGE-M3 dense embeddings, Qdrant dense/hybrid retrieval and offline RAG
   evaluation;
 - fixed two-step Chat with two ACL checks, an answer-release gate, a source
-  revision read barrier and sequential replay of committed conversation
-  messages;
+  revision read barrier, multi-turn replay and a PostgreSQL `chat_turns` fact
+  ledger;
+- a required API `Idempotency-Key`, non-interleaving active turns, no model
+  rerun for a completed retry, and recovery of the crash window between answer
+  event publication and the final turn transition;
 - a `knowledge_search` Tool adapter backed by the same `RetrievalService` as
   fixed retrieval.
 
@@ -46,13 +50,12 @@ The remaining boundaries are explicit:
   upload-to-search E2E is not yet connected.
 - The source-revision barrier prevents stale Qdrant points from being read, but
   physical replacement/deletion of old points is not yet implemented.
-- Chat now replays committed user questions and final answers into later
-  sequential turns. Concurrent-turn serialization, idempotent `chat_turns`, a
-  history token window/compaction, and validation of the citations actually
-  used by the model remain to be built.
+- A `running` Chat turn does not yet have a lease/reaper, so a hard process
+  crash during model execution needs operator recovery. A history token
+  window/compaction and validation of the citations actually used by the model
+  remain to be built.
 - EventLog rejects an unknown schema version, but version upcasters,
-  poison-row isolation/skip semantics and terminal-event idempotency keys are
-  not yet implemented.
+  poison-row isolation and skip semantics are not yet implemented.
 - `knowledge_search` is not yet assembled into an agentic retrieval mode, and
   that path still needs a final evidence-revision gate before an answer may be
   released.

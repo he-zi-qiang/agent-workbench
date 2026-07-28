@@ -4,10 +4,11 @@
 >
 > 日期：2026-07-22
 >
-> 状态：PR-001～PR-015 与 D0 已合并。WP02-01～06 已完成，WP02-07
-> LangChain 互操作尚未开始；WP03 的 PostgreSQL ConversationStore、本地文件
-> 存储、Document/ACL/Outbox 和 Upload API 基线已完成；WP04 Dense Retrieval
-> 是下一阶段。WP00 的 Worker Container/FaultInjector 和延后冻结的 Ports 仍开放
+> 状态：截至 2026-07-28，主分支基线为 `main@4d03f69`，当前开发分支已完成
+> 自研 Runtime、PostgreSQL/Artifact/Document/ACL/Outbox、Dense/Hybrid RAG 与评测、
+> 固定检索 Chat/SSE、多轮上下文、EventLog 版本化与幂等键、`chat_turns` 请求幂等和
+> 发布恢复。下一主线是 WP06 LangGraph Task MVP；LlamaIndex/LangChain 互操作、
+> 可靠常驻 Ingestion Worker、Task Registry/lease/fencing、Multi-Agent 与 UI 仍开放
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
 >

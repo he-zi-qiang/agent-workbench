@@ -12,6 +12,71 @@
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
 
+## 2026-07-28 PR-039 幂等 Chat Turn 与发布恢复
+
+状态：**当前开发分支已实现并通过本地确定性测试；真实 PostgreSQL/Qdrant 用例因当前
+环境未配置服务而跳过，尚未合入 `main`**。
+
+本轮把“消息历史”与“一个请求执行到了哪里”分开建模。新增
+`ChatTurnStore`、PostgreSQL `chat_turns` 表和迁移 `0008_chat_turns`，生命周期为：
+
+```text
+running
+  → release_pending
+  → committed | withheld
+
+running
+  → failed | cancelled
+```
+
+核心不变量：
+
+- `POST /v1/chat/sessions/{session_id}/messages` 强制要求 `Idempotency-Key`；
+- `(session_id, idempotency_key)` 唯一，同键不同 request hash 返回 409；
+- `run_id` 全局唯一，并由 tenant/principal/session/key 稳定派生；
+- PostgreSQL 会话行锁和 partial unique index 共同保证每个会话最多一个
+  `running/release_pending` Turn；并发请求不会交错消息或重复计费；
+- `claim_turn` 在同一事务内完成 ownership 校验、历史快照、user message 和 Turn
+  创建；鉴权先于幂等查询，错误主体不能利用 key 探测 Turn；
+- `release_pending` 只保存内部候选结果，**不写可见 assistant message**；
+- `AnswerCommitted/AnswerWithheld` 用稳定 `event_key` 发布成功后，
+  `mark_released` 才原子追加唯一 assistant 并转终态；
+- 进程在“答案事件已持久化、Turn 尚未转终态”之间崩溃时，同 key 重试会拿回原事件、
+  补做终态转换，不重跑模型、不重复事件、不重复历史；
+- withheld Turn 的持久化 `AgentOutcome` 会清空候选正文、ArtifactRef 和 citation，
+  被拒绝的模型输出不能藏在 retry ledger 中。
+
+确定性测试覆盖同键重试、不同 hash 冲突、跨会话 key 作用域、全局 run 冲突、
+并发 claim、状态转换幂等、所有权先验、发布后故障注入和秘密不落盘。API response
+新增 `turn_id`，终态重试返回原 `turn_id/run_id/result`。
+
+本轮仓库级无外部服务门禁为 `747 passed / 223 skipped`；Ruff format/check、
+Pyright、compileall 全部通过，Alembic 唯一 head 为 `0008_chat_turns`。跳过项需要
+PostgreSQL、Qdrant 或本地 BGE 权重；受沙箱禁止 `socket.bind()` 的单个真实性测试按
+既有方式从本轮本地门禁排除。
+
+仍保留一个明确边界：`running` Turn 尚无 lease/heartbeat/reaper。若进程在模型执行期间
+硬崩溃，而不是在 `release_pending` 发布窗口崩溃，该 Turn 会保持 busy，需要运维恢复；
+在加入带 epoch 的 reclaim 以前不能宣称 Chat 执行阶段具备自动故障转移。
+
+## 2026-07-28 PR-038 durable Event 幂等发布
+
+状态：**当前开发分支已实现并通过内存契约与静态门禁；真实 PostgreSQL 契约因当前环境
+未配置测试 DSN 而跳过，尚未合入 `main`**。
+
+迁移 `0007_event_idempotency_key` 为 `events` 增加可空 `event_key`，并以
+`(stream_id, event_key) WHERE event_key IS NOT NULL` 唯一索引建立流内幂等边界。
+内存与 PostgreSQL EventLog 共用同一契约：
+
+- 同一 stream、同一 key、同一 scope/payload/parent 返回原 envelope；
+- 同键不同内容 fail closed，且不消耗 sequence；
+- 并发八次 append 只产生一个 event，下一事件 sequence 连续；
+- 同一 key 可在不同 stream 独立使用；
+- transient event 禁止携带 key；
+- `ScopedEventSink`、`ObservingEventSink` 和 `AnswerReleaseSink` 全链路透传 key。
+
+EventLog 仍未提供历史 schema upcaster registry 与 poison-row 隔离/跳过策略。
+
 ## 2026-07-28 PR-037 EventLog 版本化回放元数据
 
 状态：**当前开发分支已实现并通过本地静态门禁；真实 PostgreSQL 新用例因当前环境未
@@ -40,8 +105,7 @@
 `socket.bind()` 的测试文件）为 `702 passed / 189 skipped`。Ruff format/check 与
 Pyright 全部通过，Alembic 唯一 head 为 `0006_event_schema_version`。跳过项需要
 PostgreSQL、Qdrant 或本地 BGE 权重。本轮尚未实现 schema upcaster registry、
-poison-row 隔离/跳过策略和 terminal event 的稳定幂等键，因此不能宣称事件升级与
-发布恢复已经完整完成。
+poison-row 隔离/跳过策略；稳定幂等键已由后续 PR-038 补齐。
 
 ## 2026-07-28 PR-036 顺序多轮上下文
 
@@ -68,10 +132,9 @@ prompt 重新带入旧 source revision 的原文。撤权路径只会回放安�
 - 当前问题只出现一次，且只有当前问题附带当前检索 evidence；
 - 撤权时生成过的候选秘密不会进入下一轮模型请求，只有安全拒答会进入。
 
-边界保持明确：这只是**顺序调用下的多轮上下文**。尚未建立 `chat_turns` 事实表，
-不同 Turn 并发时也尚未通过数据库串行化；请求重试、模型计费、消息和最终事件的幂等
-恢复属于下一可靠性切片。历史 token window/compaction 与模型实际使用 Citation 的
-结构化校验同样尚未完成。
+本节落地时的边界是**顺序调用下的多轮上下文**；后续 PR-039 已补上
+`chat_turns` 事实表、并发非交错和请求/发布幂等恢复。历史 token window/compaction
+与模型实际使用 Citation 的结构化校验仍未完成。
 
 ## 2026-07-28 PR-035 安全发布基线
 
@@ -100,8 +163,9 @@ prompt 重新带入旧 source revision 的原文。撤权路径只会回放安�
 ```text
 正常路径：ModelCompleted 正文为空
         → ACL/evidence confirm
-        → Conversation Store 写入
+        → Chat Turn 写入内部 release_pending（History 不可见）
         → AnswerCommitted 含最终答案
+        → Turn 转 committed 并追加可见 assistant
 
 撤权路径：模型已生成秘密文本
         → confirm_unchanged 失败
@@ -132,8 +196,8 @@ pytest                   711 passed / 188 skipped / 1 environment failure
 - Qdrant 旧 Point 物理 replace/delete；当前已做到“不可读取”，尚未做到“已清理”；
 - Ingestion Worker 的 advisory lock、heartbeat、retry/dead-letter 和常驻进程；
 - Agentic `knowledge_search` 的 run-scoped evidence ledger 与最终提交门；
-- 幂等 `chat_turns`、并发 Turn 串行化、历史 token window/compaction、模型实际引用
-  校验；
+- 历史 token window/compaction、模型实际引用校验；幂等 `chat_turns` 和并发
+  Turn 非交错已由后续 PR-039 补齐；
 - LangGraph Task、Task Registry、Multi-Agent、CrewAI benchmark。
 
 ## 2026-07-25 仓库核验总览
