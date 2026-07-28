@@ -25,7 +25,7 @@ from agent_workbench.domain.events import (
     ModelCompleted,
     ModelDelta,
 )
-from agent_workbench.ports.event_log import EventSink
+from agent_workbench.ports.event_log import EventKey, EventSink
 
 
 @dataclass(slots=True)
@@ -40,6 +40,7 @@ class AnswerReleaseSink:
         payload: EventPayload,
         *,
         parent_event_id: str | None = None,
+        event_key: EventKey | None = None,
     ) -> EventEnvelope:
         """Forward an audit-safe form of a runtime event.
 
@@ -54,28 +55,42 @@ class AnswerReleaseSink:
             payload = payload.model_copy(update={"text": "", "output_ref": None})
         elif isinstance(payload, (AnswerCommitted, AnswerWithheld)):
             raise RuntimeError("answer events must pass through commit() or withhold()")
-        return await self.inner.emit(payload, parent_event_id=parent_event_id)
+        return await self.inner.emit(
+            payload,
+            parent_event_id=parent_event_id,
+            event_key=event_key,
+        )
 
     async def commit(
         self,
         *,
         text: str,
         citations: tuple[Citation, ...],
+        event_key: EventKey | None = None,
     ) -> EventEnvelope:
         """Publish an answer only after its caller completed the final check."""
 
         self._ensure_unreleased()
         envelope = await self.inner.emit(
-            AnswerCommitted(text=text, citations=citations)
+            AnswerCommitted(text=text, citations=citations),
+            event_key=event_key,
         )
         self._released = True
         return envelope
 
-    async def withhold(self, *, text: str) -> EventEnvelope:
+    async def withhold(
+        self,
+        *,
+        text: str,
+        event_key: EventKey | None = None,
+    ) -> EventEnvelope:
         """Publish only the safe replacement, never the rejected answer."""
 
         self._ensure_unreleased()
-        envelope = await self.inner.emit(AnswerWithheld(text=text))
+        envelope = await self.inner.emit(
+            AnswerWithheld(text=text),
+            event_key=event_key,
+        )
         self._released = True
         return envelope
 

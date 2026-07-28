@@ -301,6 +301,9 @@ events = Table(
     Column("stream_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("run_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("sequence", BigInteger, nullable=False),
+    # Optional because most observational events do not need idempotency. When
+    # present, the key identifies one durable append within this stream.
+    Column("event_key", String(IDENTIFIER_LENGTH), nullable=True),
     # Stored beside the payload rather than inferred from its shape. Replay
     # must know which envelope contract produced a row before it attempts to
     # interpret that row.
@@ -321,4 +324,11 @@ events = Table(
     UniqueConstraint("stream_id", "sequence", name="uq_events_stream_sequence"),
     # The replay query: one stream, everything after a cursor, in order.
     Index("ix_events_stream_sequence", "stream_id", "sequence"),
+    Index(
+        "uq_events_stream_event_key",
+        "stream_id",
+        "event_key",
+        unique=True,
+        postgresql_where=text("event_key IS NOT NULL"),
+    ),
 )

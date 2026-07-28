@@ -9,9 +9,9 @@ position they could not be replayed from.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Annotated, Final, Protocol, runtime_checkable
 
-from pydantic import Field, ValidationError
+from pydantic import Field, StringConstraints, ValidationError
 
 from agent_workbench.domain.errors import IncompatibleSchemaError
 from agent_workbench.domain.events import EventEnvelope, EventPayload
@@ -22,6 +22,31 @@ CURSOR_SEPARATOR = ":"
 # Enough for any 64-bit sequence; a longer run of digits is someone probing,
 # not a position this log ever handed out.
 MAX_SEQUENCE_DIGITS = 19
+EVENT_KEY_MAX_LENGTH: Final[int] = 128
+
+EventKey = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=EVENT_KEY_MAX_LENGTH),
+]
+
+
+class EventKeyConflictError(ValueError):
+    """One stream-local idempotency key was reused for different content."""
+
+
+def validate_event_key(event_key: object | None) -> EventKey | None:
+    """Apply the runtime boundary that a static annotation cannot enforce."""
+
+    if event_key is None:
+        return None
+    if (
+        not isinstance(event_key, str)
+        or not 1 <= len(event_key) <= EVENT_KEY_MAX_LENGTH
+    ):
+        raise ValueError(
+            f"event_key must contain between 1 and {EVENT_KEY_MAX_LENGTH} characters"
+        )
+    return event_key
 
 
 class EventScope(DomainModel):
@@ -79,11 +104,17 @@ class EventLogPort(Protocol):
         payload: EventPayload,
         *,
         parent_event_id: str | None = None,
+        event_key: EventKey | None = None,
     ) -> EventEnvelope:
         """Record one event and return the envelope that was produced.
 
         Durable payloads receive the next sequence of their stream. Transient
-        payloads are returned without a sequence and without being stored.
+        payloads are returned without a sequence and without being stored, so
+        they cannot carry an idempotency key.
+
+        A durable ``event_key`` is unique within its stream. Repeating the key
+        with the same scope, payload and parent returns the original envelope;
+        reusing it for different content fails closed.
         """
         ...
 
@@ -107,14 +138,19 @@ class EventSink(Protocol):
         payload: EventPayload,
         *,
         parent_event_id: str | None = None,
+        event_key: EventKey | None = None,
     ) -> EventEnvelope: ...
 
 
 __all__ = [
     "CURSOR_SEPARATOR",
+    "EVENT_KEY_MAX_LENGTH",
     "MAX_SEQUENCE_DIGITS",
     "EventCursor",
+    "EventKey",
+    "EventKeyConflictError",
     "EventLogPort",
     "EventScope",
     "EventSink",
+    "validate_event_key",
 ]
