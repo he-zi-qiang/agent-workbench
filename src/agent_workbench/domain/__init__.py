@@ -84,6 +84,14 @@ from agent_workbench.domain.schema import (
     JsonObject,
     VersionedModel,
 )
+from agent_workbench.domain.tasks import (
+    CANONICAL_V1_NODE_IDS,
+    ReviewDecision,
+    ReviewResult,
+    TaskNodeId,
+    TaskState,
+    TaskStep,
+)
 from agent_workbench.domain.tools import (
     ToolCall,
     ToolConcurrency,
@@ -97,6 +105,7 @@ from agent_workbench.domain.tools import (
 )
 
 __all__ = [
+    "CANONICAL_V1_NODE_IDS",
     "DOMAIN_SCHEMA_VERSION",
     "DURABLE_EVENT_TYPES",
     "EVENT_DURABILITY",
@@ -138,6 +147,8 @@ __all__ = [
     "PolicyEffect",
     "PrincipalContext",
     "ProviderError",
+    "ReviewDecision",
+    "ReviewResult",
     "RunBudget",
     "RunKind",
     "RunState",
@@ -145,6 +156,9 @@ __all__ = [
     "SourceLocator",
     "StaleExecutionError",
     "StopReason",
+    "TaskNodeId",
+    "TaskState",
+    "TaskStep",
     "TextBlock",
     "TokenUsage",
     "ToolCall",

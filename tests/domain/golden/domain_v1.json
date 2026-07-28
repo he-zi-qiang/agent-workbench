@@ -256,6 +256,58 @@
     ],
     "tenant_id": "tenant_demo"
   },
+  "TaskState": {
+    "agent_outcome_refs": [
+      "art_outcome_a",
+      "art_outcome_b"
+    ],
+    "approval_id": "apr_0000000000000000000000000000001",
+    "budget_usage": {
+      "cost_micro_usd": 4200,
+      "steps": 2,
+      "tokens": {
+        "cache_read_tokens": 900,
+        "cache_write_tokens": 0,
+        "input_tokens": 1200,
+        "output_tokens": 340
+      },
+      "tool_calls": 3
+    },
+    "draft_ref": "art_draft_1",
+    "evidence_refs": [
+      "art_evidence_a",
+      "art_evidence_b"
+    ],
+    "max_revisions": 2,
+    "objective": "Produce a verified retrieval architecture brief.",
+    "plan": [
+      {
+        "depends_on": [],
+        "objective": "Research internal evidence.",
+        "sequence": 1,
+        "step_id": "step_internal"
+      },
+      {
+        "depends_on": [
+          "step_internal"
+        ],
+        "objective": "Cross-check public evidence.",
+        "sequence": 2,
+        "step_id": "step_external"
+      }
+    ],
+    "review_result": {
+      "decision": "pass",
+      "issues": [],
+      "reviewed_draft_ref": "art_draft_1",
+      "revision_number": 0,
+      "score": 92,
+      "summary": "Grounded and complete."
+    },
+    "revision_count": 0,
+    "schema_version": 1,
+    "task_id": "task_0000000000000000000000000000001"
+  },
   "ToolCall": {
     "arguments": {
       "query": "vector index",
