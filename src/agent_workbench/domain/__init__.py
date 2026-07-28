@@ -39,6 +39,7 @@ from agent_workbench.domain.events import (
     TRANSIENT_EVENT_TYPES,
     AnswerCommitted,
     AnswerWithheld,
+    ChatTurnExpired,
     Durability,
     EventEnvelope,
     EventPayload,
@@ -75,6 +76,7 @@ from agent_workbench.domain.runs import (
     StopReason,
     TokenUsage,
     TraceContext,
+    stale_execution_outcome,
 )
 from agent_workbench.domain.schema import (
     DOMAIN_SCHEMA_VERSION,
@@ -110,6 +112,7 @@ __all__ = [
     "AuthorizationEnvelope",
     "BudgetExceededError",
     "BudgetUsage",
+    "ChatTurnExpired",
     "Citation",
     "ContentBlock",
     "ContextChunk",
@@ -163,6 +166,7 @@ __all__ = [
     "VersionedModel",
     "align_results",
     "assistant_message",
+    "stale_execution_outcome",
     "tool_message",
     "user_message",
 ]

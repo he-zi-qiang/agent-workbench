@@ -64,6 +64,7 @@ EventType = Literal[
     "ModelCompleted",
     "AnswerCommitted",
     "AnswerWithheld",
+    "ChatTurnExpired",
     "ToolProposed",
     "PermissionRequested",
     "PermissionResolved",
@@ -147,6 +148,24 @@ class AnswerWithheld(DomainModel):
     kind: Literal["AnswerWithheld"] = "AnswerWithheld"
     reason_code: Literal["sources_changed"] = "sources_changed"
     text: BoundedText
+
+
+class ChatTurnExpired(DomainModel):
+    """A fixed Chat execution lease expired before publication completed.
+
+    This is the Chat ledger's terminal observation, not a second verdict on
+    the runtime. A provider run may already have emitted ``RunCompleted`` while
+    its answer was still waiting to cross the publication boundary. Every
+    terminal attribute is therefore fixed, and candidate output has no field
+    through which it could enter the event stream.
+    """
+
+    kind: Literal["ChatTurnExpired"] = "ChatTurnExpired"
+    turn_id: Identifier
+    status: Literal["failed"] = "failed"
+    stop_reason: Literal["deadline"] = "deadline"
+    error_code: Literal["stale_execution"] = "stale_execution"
+    retryable: Literal[False] = False
 
 
 class ToolProposed(DomainModel):
@@ -265,6 +284,7 @@ EventPayload = Annotated[
     | ModelCompleted
     | AnswerCommitted
     | AnswerWithheld
+    | ChatTurnExpired
     | ToolProposed
     | PermissionRequested
     | PermissionResolved
@@ -292,6 +312,7 @@ EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "ModelCompleted": "durable",
     "AnswerCommitted": "durable",
     "AnswerWithheld": "durable",
+    "ChatTurnExpired": "durable",
     "ToolProposed": "durable",
     "PermissionRequested": "durable",
     "PermissionResolved": "durable",
@@ -397,6 +418,7 @@ __all__ = [
     "AgentDelegated",
     "AnswerCommitted",
     "AnswerWithheld",
+    "ChatTurnExpired",
     "ContextBuilt",
     "ContextCompacted",
     "Durability",

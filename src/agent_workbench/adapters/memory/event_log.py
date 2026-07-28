@@ -22,7 +22,12 @@ from agent_workbench.domain.events import (
     EventEnvelope,
     EventPayload,
 )
-from agent_workbench.ports.event_log import EventScope
+from agent_workbench.ports.event_log import (
+    EventKey,
+    EventKeyConflictError,
+    EventScope,
+    validate_event_key,
+)
 
 
 def _utc_now() -> datetime:
@@ -45,6 +50,7 @@ class InMemoryEventLog:
         self._clock = clock if clock is not None else _utc_now
         self._event_ids = event_ids
         self._streams: dict[str, list[EventEnvelope]] = {}
+        self._keyed: dict[tuple[str, str], EventEnvelope] = {}
         self._next_sequence: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
@@ -54,10 +60,25 @@ class InMemoryEventLog:
         payload: EventPayload,
         *,
         parent_event_id: str | None = None,
+        event_key: EventKey | None = None,
     ) -> EventEnvelope:
         durable = EVENT_DURABILITY[payload.kind] == "durable"
+        event_key = validate_event_key(event_key)
+        if not durable and event_key is not None:
+            raise ValueError("transient events cannot carry an event_key")
 
         async with self._lock:
+            if event_key is not None:
+                existing = self._keyed.get((scope.stream_id, event_key))
+                if existing is not None:
+                    _require_same_event(
+                        existing,
+                        scope=scope,
+                        payload=payload,
+                        parent_event_id=parent_event_id,
+                    )
+                    return existing
+
             sequence: int | None = None
             if durable:
                 sequence = self._next_sequence.get(scope.stream_id, 0) + 1
@@ -76,6 +97,8 @@ class InMemoryEventLog:
             )
             if durable:
                 self._streams.setdefault(scope.stream_id, []).append(envelope)
+                if event_key is not None:
+                    self._keyed[(scope.stream_id, event_key)] = envelope
 
         return envelope
 
@@ -99,6 +122,26 @@ class InMemoryEventLog:
                 if envelope.sequence is not None and envelope.sequence > after_sequence
             )
         return stored[:limit]
+
+
+def _require_same_event(
+    existing: EventEnvelope,
+    *,
+    scope: EventScope,
+    payload: EventPayload,
+    parent_event_id: str | None,
+) -> None:
+    if (
+        existing.stream_id != scope.stream_id
+        or existing.run_id != scope.run_id
+        or existing.task_id != scope.task_id
+        or existing.graph_node_id != scope.graph_node_id
+        or existing.payload != payload
+        or existing.parent_event_id != parent_event_id
+    ):
+        raise EventKeyConflictError(
+            "event_key already identifies a different durable event"
+        )
 
 
 __all__ = ["InMemoryEventLog"]

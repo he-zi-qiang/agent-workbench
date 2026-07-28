@@ -2,8 +2,8 @@
 
 The turn is fixed two-step: retrieve once, answer from what came back. What is
 worth testing is not that a scripted model produces a scripted answer -- it is
-the two authorization checks around it, and what the session ends up holding
-when the second one fails.
+the authorization check before retrieval and the revision-locked publication
+fence after generation, plus what the session holds when that fence refuses.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import hashlib
 import os
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qdrant_client import AsyncQdrantClient
@@ -25,11 +25,12 @@ from agent_workbench.adapters.ingestion import (
     ApproximateTokenCounter,
     TextDocumentParser,
 )
-from agent_workbench.adapters.memory import InMemoryEventLog
 from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
 from agent_workbench.adapters.persistence import (
+    PostgresChatReleaseCoordinator,
     PostgresConversationStore,
     PostgresDocumentStore,
+    PostgresEventLog,
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
@@ -43,7 +44,9 @@ from agent_workbench.apps.api.routes.events import _frame
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import RunBudget, TokenUsage
-from agent_workbench.ports.event_log import EventScope
+from agent_workbench.ports.chat_release import ChatReleaseCoordinator
+from agent_workbench.ports.conversation_store import StoredChatTurn
+from agent_workbench.ports.event_log import EventScope, EventSink
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 
 DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
@@ -63,7 +66,8 @@ SECRET = (
 
 TABLES = (
     "artifacts, upload_intents, document_acl, document_versions, documents, "
-    "outbox_events, messages, conversation_sessions"
+    "outbox_events, chat_turns, messages, conversation_sessions, events, "
+    "event_streams"
 )
 
 
@@ -94,7 +98,7 @@ class _Harness:
         self.conversations = conversations
         self.engine = engine
         self.embedder = DeterministicEmbedder(dimension=SIZE)
-        self.log = InMemoryEventLog()
+        self.log = PostgresEventLog(engine)
         self.session_id = f"ses_{uuid.uuid4().hex}"
         self.ingestion = IngestionService(
             parser=TextDocumentParser(),
@@ -105,7 +109,12 @@ class _Harness:
             index=index,
         )
 
-    def chat(self, *, answer: str = ANSWER) -> ChatService:
+    def chat(
+        self,
+        *,
+        answer: str = ANSWER,
+        releaser: ChatReleaseCoordinator | None = None,
+    ) -> ChatService:
         registry = StaticToolRegistry([])
         return ChatService(
             retrieval=RetrievalService(
@@ -126,15 +135,22 @@ class _Harness:
                 policy_identity="test-policy",
             ),
             conversations=self.conversations,
+            releaser=(
+                PostgresChatReleaseCoordinator(self.engine)
+                if releaser is None
+                else releaser
+            ),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
+            request_timeout_seconds=30,
+            orphan_grace_seconds=5,
         )
 
-    def sink(self) -> ScopedEventSink:
+    def sink(self, request: ChatRequest) -> ScopedEventSink:
         return ScopedEventSink(
             log=self.log,
             scope=EventScope(
-                stream_id=f"str_{uuid.uuid4().hex}",
-                run_id=f"run_{uuid.uuid4().hex}",
+                stream_id=self.session_id,
+                run_id=request.run_id,
             ),
         )
 
@@ -179,8 +195,29 @@ class _Harness:
             session_id=self.session_id, tenant_id=TENANT, owner_id=owner
         )
 
-    async def revoke(self) -> None:
+    async def revoke(
+        self,
+        *,
+        attempting: asyncio.Event | None = None,
+        acquired: asyncio.Event | None = None,
+        backend_pid: asyncio.Future[int] | None = None,
+    ) -> None:
         async with self.engine.begin() as connection:
+            pid = (
+                await connection.execute(text("SELECT pg_backend_pid()"))
+            ).scalar_one()
+            if backend_pid is not None and not backend_pid.done():
+                backend_pid.set_result(pid)
+            if attempting is not None:
+                attempting.set()
+            await connection.execute(
+                text(
+                    "SELECT document_id FROM documents "
+                    "WHERE document_id = 'doc_1' FOR UPDATE"
+                )
+            )
+            if acquired is not None:
+                acquired.set()
             await connection.execute(
                 text("DELETE FROM document_acl WHERE document_id = 'doc_1'")
             )
@@ -190,6 +227,22 @@ class _Harness:
                     "WHERE document_id = 'doc_1'"
                 )
             )
+
+    async def wait_until_blocked(self, backend_pid: int) -> None:
+        """Wait until PostgreSQL reports the concurrent writer's lock wait."""
+
+        for _ in range(200):
+            async with self.engine.connect() as connection:
+                blockers = (
+                    await connection.execute(
+                        text("SELECT pg_blocking_pids(:pid)"),
+                        {"pid": backend_pid},
+                    )
+                ).scalar_one()
+            if blockers:
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("the concurrent ACL revoke never blocked on the fence")
 
 
 def _run(scenario: Callable[[_Harness], Awaitable[Any]]) -> Any:
@@ -227,6 +280,7 @@ def _ask(harness: _Harness, principal: str) -> ChatRequest:
         question="when does the acquisition close",
         principal=PrincipalContext(principal_id=principal, tenant_id=TENANT),
         knowledge_base_id=KB,
+        idempotency_key=f"request-{principal}",
     )
 
 
@@ -237,7 +291,8 @@ def test_a_turn_answers_with_citations() -> None:
     async def scenario(harness: _Harness) -> tuple[str, int, bool]:
         await harness.publish(granted=(READER,))
         await harness.open_session(READER)
-        turn = await harness.chat().ask(_ask(harness, READER), harness.sink())
+        request = _ask(harness, READER)
+        turn = await harness.chat().ask(request, harness.sink(request))
         return turn.answer, len(turn.citations), turn.withheld
 
     answer, citations, withheld = _run(scenario)
@@ -254,7 +309,8 @@ def test_the_evidence_reaches_the_model_labelled_by_chunk_id() -> None:
         await harness.publish(granted=(READER,))
         await harness.open_session(READER)
         service = harness.chat()
-        turn = await service.ask(_ask(harness, READER), harness.sink())
+        request = _ask(harness, READER)
+        turn = await service.ask(request, harness.sink(request))
         model = service.executor._model
         assert isinstance(model, FakeModel)
         prompt = model.requests[0].messages[0].content[0].text
@@ -272,7 +328,8 @@ def test_the_question_and_the_answer_are_both_persisted() -> None:
         await harness.publish(granted=(READER,))
         await harness.open_session(READER)
         service = harness.chat()
-        await service.ask(_ask(harness, READER), harness.sink())
+        request = _ask(harness, READER)
+        await service.ask(request, harness.sink(request))
         history = await service.history(
             session_id=harness.session_id, tenant_id=TENANT, principal_id=READER
         )
@@ -287,7 +344,8 @@ def test_a_question_with_no_evidence_still_runs() -> None:
     async def scenario(harness: _Harness) -> tuple[int, bool]:
         await harness.publish(granted=())
         await harness.open_session(READER)
-        turn = await harness.chat().ask(_ask(harness, READER), harness.sink())
+        request = _ask(harness, READER)
+        turn = await harness.chat().ask(request, harness.sink(request))
         return len(turn.citations), turn.withheld
 
     assert _run(scenario) == (0, False)
@@ -303,7 +361,8 @@ def test_an_answer_is_withheld_when_a_source_is_revoked_mid_turn() -> None:
         await harness.publish(granted=(READER,))
         await harness.open_session(READER)
         service = _RevokingChat(harness)
-        turn = await service.ask(_ask(harness, READER), harness.sink())
+        request = _ask(harness, READER)
+        turn = await service.ask(request, harness.sink(request))
         return turn.answer, turn.withheld, len(turn.citations)
 
     answer, withheld, citations = _run(scenario)
@@ -320,7 +379,8 @@ def test_the_withheld_answer_does_not_enter_the_history() -> None:
         await harness.publish(granted=(READER,))
         await harness.open_session(READER)
         service = _RevokingChat(harness)
-        await service.ask(_ask(harness, READER), harness.sink())
+        request = _ask(harness, READER)
+        await service.ask(request, harness.sink(request))
         history = await service.history(
             session_id=harness.session_id, tenant_id=TENANT, principal_id=READER
         )
@@ -339,8 +399,9 @@ def test_the_withheld_answer_does_not_enter_the_event_log_or_sse() -> None:
         await harness.publish(granted=(READER,))
         await harness.open_session(READER)
         service = _RevokingChat(harness)
-        sink = harness.sink()
-        await service.ask(_ask(harness, READER), sink)
+        request = _ask(harness, READER)
+        sink = harness.sink(request)
+        await service.ask(request, sink)
         events = await harness.log.read(sink.scope.stream_id)
         frames = "".join(
             _frame(event, sink.scope.stream_id, event.sequence)
@@ -358,6 +419,176 @@ def test_the_withheld_answer_does_not_enter_the_event_log_or_sse() -> None:
     assert REFUSAL in frames
 
 
+def test_release_pending_retry_rechecks_revisions_and_scrubs_the_candidate() -> None:
+    """A crash after prepare cannot turn a later revoke into a stale release."""
+
+    async def scenario(harness: _Harness) -> tuple[str, bool, str, list[str]]:
+        await harness.publish(granted=(READER,))
+        await harness.open_session(READER)
+        request = _ask(harness, READER)
+        interrupted = _FailBeforeAtomicRelease()
+
+        with pytest.raises(_ReleaseInterrupted):
+            await harness.chat(releaser=interrupted).ask(
+                request,
+                harness.sink(request),
+            )
+        assert interrupted.called is True
+        async with harness.engine.connect() as connection:
+            prepared_status = (
+                await connection.execute(
+                    text(
+                        "SELECT status FROM chat_turns WHERE session_id = :session_id"
+                    ),
+                    {"session_id": harness.session_id},
+                )
+            ).scalar_one()
+        assert prepared_status == "release_pending"
+
+        # The Turn is now release_pending. Move the evidence and ACL before
+        # retrying the same idempotency key; the retry must authorize the
+        # stored revisions again, not trust the old prepared candidate.
+        await harness.revoke()
+        service = harness.chat()
+        turn = await service.ask(request, harness.sink(request))
+        history = await service.history(
+            session_id=harness.session_id,
+            tenant_id=TENANT,
+            principal_id=READER,
+        )
+        events = await harness.log.read(harness.session_id, limit=1000)
+        async with harness.engine.connect() as connection:
+            persisted_result = (
+                await connection.execute(
+                    text(
+                        "SELECT result FROM chat_turns WHERE session_id = :session_id"
+                    ),
+                    {"session_id": harness.session_id},
+                )
+            ).scalar_one()
+
+        public_and_persisted = "\n".join(
+            (
+                repr(
+                    {
+                        "answer": turn.answer,
+                        "citations": turn.citations,
+                        "outcome": turn.outcome,
+                        "withheld": turn.withheld,
+                    }
+                ),
+                repr([message.model_dump() for message in history]),
+                repr([event.model_dump() for event in events]),
+                repr(cast(object, persisted_result)),
+            )
+        )
+        return (
+            turn.answer,
+            turn.withheld,
+            public_and_persisted,
+            [event.event_type for event in events],
+        )
+
+    answer, withheld, dumped, event_types = _run(scenario)
+
+    assert answer == REFUSAL
+    assert withheld is True
+    assert ANSWER not in dumped
+    assert SECRET not in dumped
+    assert "AnswerCommitted" not in event_types
+    assert event_types[-1] == "AnswerWithheld"
+
+
+def test_document_lock_linearizes_release_before_a_concurrent_revoke() -> None:
+    """A revoke waits while the fenced answer transaction holds its source."""
+
+    async def scenario(
+        harness: _Harness,
+    ) -> tuple[str, bool, bool, int, int, list[str]]:
+        await harness.publish(granted=(READER,))
+        await harness.open_session(READER)
+        request = _ask(harness, READER)
+        barrier = _BarrierChatRelease(harness.engine)
+        chat_task = asyncio.create_task(
+            harness.chat(releaser=barrier).ask(
+                request,
+                harness.sink(request),
+            )
+        )
+        revoke_task: asyncio.Task[None] | None = None
+        try:
+            await asyncio.wait_for(barrier.authorization_locked.wait(), timeout=10)
+
+            attempting = asyncio.Event()
+            acquired = asyncio.Event()
+            backend_pid = asyncio.get_running_loop().create_future()
+            revoke_task = asyncio.create_task(
+                harness.revoke(
+                    attempting=attempting,
+                    acquired=acquired,
+                    backend_pid=backend_pid,
+                )
+            )
+            pid = await asyncio.wait_for(backend_pid, timeout=10)
+            await asyncio.wait_for(attempting.wait(), timeout=10)
+            await harness.wait_until_blocked(pid)
+            blocked_before_release = not acquired.is_set()
+
+            barrier.continue_release.set()
+            turn = await asyncio.wait_for(chat_task, timeout=10)
+            await asyncio.wait_for(revoke_task, timeout=10)
+
+            async with harness.engine.connect() as connection:
+                revision = (
+                    await connection.execute(
+                        text(
+                            "SELECT source_revision FROM documents "
+                            "WHERE document_id = 'doc_1'"
+                        )
+                    )
+                ).scalar_one()
+                grant_count = (
+                    await connection.execute(
+                        text(
+                            "SELECT count(*) FROM document_acl "
+                            "WHERE document_id = 'doc_1' "
+                            "AND principal_id = :principal_id"
+                        ),
+                        {"principal_id": READER},
+                    )
+                ).scalar_one()
+            events = await harness.log.read(harness.session_id, limit=1000)
+            return (
+                turn.answer,
+                turn.withheld,
+                blocked_before_release,
+                revision,
+                grant_count,
+                [event.event_type for event in events],
+            )
+        finally:
+            barrier.continue_release.set()
+            if not chat_task.done():
+                chat_task.cancel()
+            if revoke_task is not None and not revoke_task.done():
+                revoke_task.cancel()
+            await asyncio.gather(
+                chat_task,
+                *(() if revoke_task is None else (revoke_task,)),
+                return_exceptions=True,
+            )
+
+    answer, withheld, blocked, revision, grants, event_types = _run(scenario)
+
+    assert blocked is True
+    assert answer == ANSWER
+    assert withheld is False
+    assert revision == 2
+    assert grants == 0
+    assert "AnswerCommitted" in event_types
+    assert "AnswerWithheld" not in event_types
+
+
 # --- the session belongs to somebody -----------------------------------------
 
 
@@ -367,7 +598,8 @@ def test_a_neighbour_cannot_ask_into_someone_elses_session() -> None:
     async def scenario(harness: _Harness) -> None:
         await harness.publish(granted=(READER, "user_neighbour"))
         await harness.open_session(READER)
-        await harness.chat().ask(_ask(harness, "user_neighbour"), harness.sink())
+        request = _ask(harness, "user_neighbour")
+        await harness.chat().ask(request, harness.sink(request))
 
     with pytest.raises(NotFoundError):
         _run(scenario)
@@ -376,9 +608,9 @@ def test_a_neighbour_cannot_ask_into_someone_elses_session() -> None:
 class _RevokingChat(ChatService):
     """A chat service that revokes the grant while the model is answering.
 
-    Subclassed rather than hooked into production code: the window being
-    defended is between the run and the second check, and overriding the run is
-    the smallest way to stand inside it.
+    Subclassed rather than hooked into production code: the revoke lands after
+    generation and before the atomic release fence, and overriding the run is
+    the smallest way to stand inside that window.
     """
 
     def __init__(self, harness: _Harness) -> None:
@@ -387,7 +619,10 @@ class _RevokingChat(ChatService):
             retrieval=base.retrieval,
             executor=_RevokingExecutor(base.executor, harness),
             conversations=base.conversations,
+            releaser=base.releaser,
             budget=base.budget,
+            request_timeout_seconds=base.request_timeout_seconds,
+            orphan_grace_seconds=base.orphan_grace_seconds,
         )
 
 
@@ -400,3 +635,40 @@ class _RevokingExecutor:
         outcome = await self._inner.run(request, sink, cancellation)
         await self._harness.revoke()
         return outcome
+
+
+class _ReleaseInterrupted(RuntimeError):
+    """The process stopped after prepare and before entering publication."""
+
+
+class _FailBeforeAtomicRelease:
+    def __init__(self) -> None:
+        self.called = False
+
+    async def release(
+        self,
+        *,
+        turn: StoredChatTurn,
+        tenant_id: str,
+        principal_id: str,
+        stream_id: str,
+        run_id: str,
+        refusal_text: str,
+        sink: EventSink,
+    ) -> StoredChatTurn:
+        del turn, tenant_id, principal_id, stream_id, run_id, refusal_text, sink
+        self.called = True
+        raise _ReleaseInterrupted
+
+
+class _BarrierChatRelease(PostgresChatReleaseCoordinator):
+    """Hold the source locks so the test can observe PostgreSQL's wait graph."""
+
+    def __init__(self, engine: Any) -> None:
+        super().__init__(engine)
+        self.authorization_locked = asyncio.Event()
+        self.continue_release = asyncio.Event()
+
+    async def _after_authorization_locked(self) -> None:
+        self.authorization_locked.set()
+        await self.continue_release.wait()

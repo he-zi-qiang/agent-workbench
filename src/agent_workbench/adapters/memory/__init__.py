@@ -8,6 +8,12 @@ tests rather than to any deployed profile.
 """
 
 from agent_workbench.adapters.memory.artifact_store import InMemoryArtifactStore
+from agent_workbench.adapters.memory.chat_expiration import (
+    InMemoryChatExpirationCoordinator,
+)
+from agent_workbench.adapters.memory.chat_release import (
+    InMemoryChatReleaseCoordinator,
+)
 from agent_workbench.adapters.memory.conversation_store import (
     InMemoryConversationStore,
 )
@@ -15,6 +21,8 @@ from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 
 __all__ = [
     "InMemoryArtifactStore",
+    "InMemoryChatExpirationCoordinator",
+    "InMemoryChatReleaseCoordinator",
     "InMemoryConversationStore",
     "InMemoryEventLog",
 ]

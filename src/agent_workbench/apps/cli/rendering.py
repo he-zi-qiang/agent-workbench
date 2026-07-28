@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Protocol, TextIO
 
 from agent_workbench.domain.events import (
+    ChatTurnExpired,
     ContextBuilt,
     EventEnvelope,
     EventPayload,
@@ -183,6 +184,8 @@ def summarize_payload(payload: EventPayload) -> str:
         )
     if isinstance(payload, ToolFailed):
         return f"{payload.tool_call_id} {payload.error.code}: {payload.error.message}"
+    if isinstance(payload, ChatTurnExpired):
+        return f"{payload.turn_id} deadline stale_execution"
     if isinstance(payload, RunCompleted):
         return f"{payload.stop_reason} steps={payload.usage.steps}"
     if isinstance(payload, RunFailed):

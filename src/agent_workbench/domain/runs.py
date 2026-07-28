@@ -290,6 +290,27 @@ class AgentOutcome(VersionedModel):
         return self
 
 
+def stale_execution_outcome(run_id: str) -> AgentOutcome:
+    """Return the one terminal outcome allowed for an expired execution lease.
+
+    Lease expiry is a persisted fact shared by the request path, the recovery
+    coordinator and every storage adapter. Keeping its shape in the domain
+    prevents those writers from disagreeing about status, retryability or the
+    public error code.
+    """
+
+    return AgentOutcome(
+        agent_run_id=run_id,
+        status="failed",
+        stop_reason="deadline",
+        error=ErrorInfo(
+            code="stale_execution",
+            message="execution lease expired",
+            retryable=False,
+        ),
+    )
+
+
 __all__ = [
     "TERMINAL_RUN_STATES",
     "AgentOutcome",
@@ -304,4 +325,5 @@ __all__ = [
     "SystemPrompt",
     "TokenUsage",
     "TraceContext",
+    "stale_execution_outcome",
 ]

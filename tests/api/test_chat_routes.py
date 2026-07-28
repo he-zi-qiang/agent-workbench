@@ -22,12 +22,14 @@ import pytest
 from sqlalchemy import text
 
 from agent_workbench.adapters.persistence import create_query_engine
+from agent_workbench.application.chat import ChatTurn
 from agent_workbench.apps.api.dependencies import build_dependencies
 from agent_workbench.apps.api.main import create_app
-from agent_workbench.apps.api.routes.chat import CHAT_PREFIX
+from agent_workbench.apps.api.routes.chat import CHAT_PREFIX, _watch_disconnect
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
 from agent_workbench.bootstrap.settings import Settings
+from agent_workbench.ports.cancellation import CancellationSource
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 
@@ -38,7 +40,11 @@ NEIGHBOUR = "user_neighbour"
 OWNER_HEADERS = {"x-tenant-id": TENANT, "x-principal-id": OWNER}
 NEIGHBOUR_HEADERS = {"x-tenant-id": TENANT, "x-principal-id": NEIGHBOUR}
 
-TABLES = "messages, conversation_sessions, events, event_streams"
+TABLES = "chat_turns, messages, conversation_sessions, events, event_streams"
+
+
+def _turn_headers(headers: dict[str, str], key: str = "request-1") -> dict[str, str]:
+    return {**headers, "idempotency-key": key}
 
 
 def _dsn() -> str:
@@ -127,6 +133,32 @@ def test_health_is_unaffected(tmp_path: Path) -> None:
     assert _run(scenario, tmp_path) == 200
 
 
+def test_http_disconnect_cancels_the_actual_chat_task() -> None:
+    """A cooperative token alone cannot interrupt retrieval or a blocked adapter."""
+
+    class _DisconnectedRequest:
+        async def is_disconnected(self) -> bool:
+            return True
+
+    async def scenario() -> tuple[bool, str, bool]:
+        async def blocked_chat() -> ChatTurn:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        target = asyncio.create_task(blocked_chat())
+        cancellation = CancellationSource()
+        await _watch_disconnect(
+            _DisconnectedRequest(),  # pyright: ignore[reportArgumentType]
+            cancellation,
+            target=target,
+            poll_seconds=0.001,
+        )
+        await asyncio.gather(target, return_exceptions=True)
+        return cancellation.cancelled, cancellation.reason, target.cancelled()
+
+    assert asyncio.run(scenario()) == (True, "client_disconnected", True)
+
+
 def test_the_reason_chat_is_absent_is_recorded(tmp_path: Path) -> None:
     """Reported once at assembly, so an operator is not left guessing."""
 
@@ -173,6 +205,7 @@ async def _mounted(root: Path, engine: Any, index: Any) -> Any:
     from agent_workbench.adapters.embedding import DeterministicEmbedder
     from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
     from agent_workbench.adapters.persistence import (
+        PostgresChatReleaseCoordinator,
         PostgresConversationStore,
         PostgresDocumentStore,
     )
@@ -205,7 +238,10 @@ async def _mounted(root: Path, engine: Any, index: Any) -> Any:
             policy_identity="test-policy",
         ),
         conversations=PostgresConversationStore(engine),
+        releaser=PostgresChatReleaseCoordinator(engine),
         budget=RunBudget(max_steps=1, max_tool_calls=1),
+        request_timeout_seconds=30,
+        orphan_grace_seconds=5,
     )
 
 
@@ -270,7 +306,7 @@ def test_a_mounted_route_answers(tmp_path: Path) -> None:
         session = await _open(client, OWNER_HEADERS)
         response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={"question": "what closed", "knowledge_base_id": "kb_main"},
         )
         payload = response.json()
@@ -283,6 +319,83 @@ def test_a_mounted_route_answers(tmp_path: Path) -> None:
     assert run_id.startswith("run_")
 
 
+def test_an_idempotency_key_is_required_for_each_turn(tmp_path: Path) -> None:
+    async def scenario(client: httpx.AsyncClient) -> int:
+        session = await _open(client, OWNER_HEADERS)
+        response = await client.post(
+            f"{CHAT_PREFIX}/sessions/{session}/messages",
+            headers=OWNER_HEADERS,
+            json={"question": "what closed", "knowledge_base_id": "kb_main"},
+        )
+        return response.status_code
+
+    assert _run_mounted(scenario, tmp_path) == 422
+
+
+def test_retrying_the_same_http_turn_returns_the_same_result_once(
+    tmp_path: Path,
+) -> None:
+    async def scenario(
+        client: httpx.AsyncClient,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+        session = await _open(client, OWNER_HEADERS)
+        path = f"{CHAT_PREFIX}/sessions/{session}/messages"
+        body = {"question": "what closed", "knowledge_base_id": "kb_main"}
+        first = await client.post(
+            path,
+            headers=_turn_headers(OWNER_HEADERS),
+            json=body,
+        )
+        repeated = await client.post(
+            path,
+            headers=_turn_headers(OWNER_HEADERS),
+            json=body,
+        )
+        history = await client.get(path, headers=OWNER_HEADERS)
+        assert first.status_code == repeated.status_code == 200
+        return (
+            first.json(),
+            repeated.json(),
+            [message["role"] for message in history.json()["messages"]],
+        )
+
+    first, repeated, roles = _run_mounted(scenario, tmp_path)
+
+    assert repeated == first
+    assert first["turn_id"].startswith("turn_")
+    assert roles == ["user", "assistant"]
+
+
+def test_reusing_an_http_idempotency_key_for_another_question_conflicts(
+    tmp_path: Path,
+) -> None:
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, list[str]]:
+        session = await _open(client, OWNER_HEADERS)
+        path = f"{CHAT_PREFIX}/sessions/{session}/messages"
+        headers = _turn_headers(OWNER_HEADERS)
+        first = await client.post(
+            path,
+            headers=headers,
+            json={"question": "what closed", "knowledge_base_id": "kb_main"},
+        )
+        assert first.status_code == 200
+        conflicting = await client.post(
+            path,
+            headers=headers,
+            json={"question": "what opened", "knowledge_base_id": "kb_main"},
+        )
+        history = await client.get(path, headers=OWNER_HEADERS)
+        return (
+            conflicting.status_code,
+            [message["role"] for message in history.json()["messages"]],
+        )
+
+    status_code, roles = _run_mounted(scenario, tmp_path)
+
+    assert status_code == 409
+    assert roles == ["user", "assistant"]
+
+
 def test_a_neighbour_cannot_ask_into_someone_elses_session(tmp_path: Path) -> None:
     """A session id in a URL is not a credential."""
 
@@ -290,7 +403,7 @@ def test_a_neighbour_cannot_ask_into_someone_elses_session(tmp_path: Path) -> No
         session = await _open(client, OWNER_HEADERS)
         response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=NEIGHBOUR_HEADERS,
+            headers=_turn_headers(NEIGHBOUR_HEADERS),
             json={"question": "what did they ask", "knowledge_base_id": "kb_main"},
         )
         return response.status_code
@@ -305,7 +418,7 @@ def test_a_neighbour_cannot_read_the_history(tmp_path: Path) -> None:
         session = await _open(client, OWNER_HEADERS)
         await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={"question": "my private question", "knowledge_base_id": "kb_main"},
         )
         response = await client.get(
@@ -324,7 +437,7 @@ def test_the_owner_reads_their_own_history(tmp_path: Path) -> None:
         session = await _open(client, OWNER_HEADERS)
         await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={"question": "what closed", "knowledge_base_id": "kb_main"},
         )
         response = await client.get(
@@ -344,7 +457,7 @@ def test_a_turn_writes_durable_events_into_the_sessions_stream(
         session = await _open(client, OWNER_HEADERS)
         response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={"question": "what closed", "knowledge_base_id": "kb_main"},
         )
         engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
@@ -376,7 +489,7 @@ def test_an_unknown_field_in_the_question_is_refused(tmp_path: Path) -> None:
         session = await _open(client, OWNER_HEADERS)
         response = await client.post(
             f"{CHAT_PREFIX}/sessions/{session}/messages",
-            headers=OWNER_HEADERS,
+            headers=_turn_headers(OWNER_HEADERS),
             json={
                 "question": "hi",
                 "knowledge_base_id": "kb_main",

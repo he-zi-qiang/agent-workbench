@@ -6,6 +6,12 @@ schema those facts live in and the repositories that read and write them; the
 vector index is a derived copy and lives elsewhere.
 """
 
+from agent_workbench.adapters.persistence.chat_expiration import (
+    PostgresChatExpirationCoordinator,
+)
+from agent_workbench.adapters.persistence.chat_release import (
+    PostgresChatReleaseCoordinator,
+)
 from agent_workbench.adapters.persistence.conversation_store import (
     PostgresConversationStore,
 )
@@ -16,6 +22,8 @@ from agent_workbench.adapters.persistence.models import metadata
 from agent_workbench.adapters.persistence.outbox import PostgresOutbox
 
 __all__ = [
+    "PostgresChatExpirationCoordinator",
+    "PostgresChatReleaseCoordinator",
     "PostgresConversationStore",
     "PostgresDocumentStore",
     "PostgresEventLog",

@@ -14,7 +14,9 @@ exception.
 from __future__ import annotations
 
 import argparse
+import asyncio
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -37,6 +39,10 @@ from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.bootstrap import load_settings
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig, project_api
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
+from agent_workbench.ports.conversation_store import (
+    ChatTurnBusyError,
+    ChatTurnConflictError,
+)
 from agent_workbench.ports.documents import KnowledgeBaseMismatchError
 
 API_TITLE = "Agent Workbench"
@@ -49,6 +55,8 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     UnauthenticatedError: 401,
     UploadVerificationError: 409,
     KnowledgeBaseMismatchError: 409,
+    ChatTurnBusyError: 409,
+    ChatTurnConflictError: 409,
     OutputTooLargeError: 413,
 }
 
@@ -91,7 +99,29 @@ def _render_chat_execution_error(request: Request, exc: Exception) -> Response:
 def create_app(dependencies: ApiDependencies) -> ASGIApp:
     """Build the ASGI application around already-assembled dependencies."""
 
-    app = FastAPI(title=API_TITLE, version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        background_tasks = tuple(
+            asyncio.create_task(worker.run_forever(), name=name)
+            for worker, name in (
+                (dependencies.chat_reaper, "chat-turn-reaper"),
+                (
+                    dependencies.chat_pending_recovery,
+                    "chat-pending-release-recovery",
+                ),
+            )
+            if worker is not None
+        )
+        try:
+            yield
+        finally:
+            for task in background_tasks:
+                task.cancel()
+            if background_tasks:
+                await asyncio.gather(*background_tasks, return_exceptions=True)
+            await dependencies.dispose()
+
+    app = FastAPI(title=API_TITLE, version="0.1.0", lifespan=lifespan)
     setattr(app.state, STATE_ATTRIBUTE, dependencies)
 
     app.include_router(health.router)

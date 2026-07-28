@@ -12,7 +12,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from agent_workbench.domain.events import EventEnvelope, EventPayload
-from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
+from agent_workbench.ports.event_log import (
+    EventKey,
+    EventLogPort,
+    EventScope,
+    EventSink,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,11 +32,13 @@ class ScopedEventSink:
         payload: EventPayload,
         *,
         parent_event_id: str | None = None,
+        event_key: EventKey | None = None,
     ) -> EventEnvelope:
         return await self.log.append(
             self.scope,
             payload,
             parent_event_id=parent_event_id,
+            event_key=event_key,
         )
 
 
@@ -53,8 +60,13 @@ class ObservingEventSink:
         payload: EventPayload,
         *,
         parent_event_id: str | None = None,
+        event_key: EventKey | None = None,
     ) -> EventEnvelope:
-        envelope = await self.inner.emit(payload, parent_event_id=parent_event_id)
+        envelope = await self.inner.emit(
+            payload,
+            parent_event_id=parent_event_id,
+            event_key=event_key,
+        )
         self.observer(envelope)
         return envelope
 

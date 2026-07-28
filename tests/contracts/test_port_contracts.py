@@ -16,15 +16,69 @@ import pytest
 from pydantic import ValidationError
 
 import agent_workbench.ports as ports_package
+from agent_workbench.domain.context import Citation
 from agent_workbench.domain.messages import user_message
+from agent_workbench.domain.runs import AgentOutcome
 from agent_workbench.domain.schema import DOMAIN_SCHEMA_VERSION, VersionedModel
 from agent_workbench.domain.tools import ToolSpec
-from agent_workbench.ports.conversation_store import ConversationSession, StoredMessage
+from agent_workbench.ports.conversation_store import (
+    AuthorizedRevision,
+    ChatTurnClaim,
+    ChatTurnResult,
+    ConversationSession,
+    PendingChatRelease,
+    StoredChatTurn,
+    StoredMessage,
+)
 from agent_workbench.ports.documents import Document, DocumentVersion, UploadIntent
 from agent_workbench.ports.model import ModelRequest
 from agent_workbench.ports.outbox import OutboxEvent
 
+COMPLETED_OUTCOME = AgentOutcome(
+    agent_run_id="run_0000000000000000000000000000001",
+    status="completed",
+    stop_reason="completed",
+    output_text="Qdrant owns fusion.",
+)
+TURN_RESULT = ChatTurnResult(
+    outcome=COMPLETED_OUTCOME,
+    answer="Qdrant owns fusion.",
+    authorized_revisions=(
+        AuthorizedRevision(
+            document_id="doc_0000000000000000000000000000001",
+            source_revision=1,
+        ),
+    ),
+    citations=(
+        Citation(
+            chunk_id="chunk_00000000000000000000000000001",
+            document_id="doc_0000000000000000000000000000001",
+            document_version="ver_0000000000000000000000000000001",
+        ),
+    ),
+)
+STORED_TURN = StoredChatTurn(
+    turn_id="turn_000000000000000000000000000001",
+    session_id="session_0000000000000000000000000000001",
+    idempotency_key="request-1",
+    request_hash="a" * 64,
+    run_id=COMPLETED_OUTCOME.agent_run_id,
+    status="release_pending",
+    user_message_id="msg_0000000000000000000000000000001",
+    result=TURN_RESULT,
+)
+
 SAMPLES: dict[str, VersionedModel] = {
+    "ChatTurnClaim": ChatTurnClaim(
+        turn=STORED_TURN,
+        newly_claimed=False,
+    ),
+    "ChatTurnResult": TURN_RESULT,
+    "PendingChatRelease": PendingChatRelease(
+        turn=STORED_TURN,
+        tenant_id="tenant_demo",
+        principal_id="user_demo",
+    ),
     "UploadIntent": UploadIntent(
         upload_id="upl_0000000000000000000000000000001",
         tenant_id="tenant_demo",
@@ -90,6 +144,7 @@ SAMPLES: dict[str, VersionedModel] = {
         sequence=1,
         message=user_message("Who owns hybrid fusion?"),
     ),
+    "StoredChatTurn": STORED_TURN,
 }
 
 

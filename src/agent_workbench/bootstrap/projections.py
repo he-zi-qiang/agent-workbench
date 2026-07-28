@@ -109,6 +109,16 @@ class EventStreamConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ChatRecoveryConfig:
+    """How the API bounds and reaps an uncheckpointed Chat execution."""
+
+    orphan_grace_seconds: int
+    reaper_poll_seconds: int
+    reaper_batch_size: int
+    disconnect_poll_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
 class ApiRuntimeConfig:
     """Everything the API process needs, and nothing else."""
 
@@ -116,6 +126,7 @@ class ApiRuntimeConfig:
     log_level: str
     host: str
     port: int
+    request_timeout_seconds: int
     shutdown_grace_seconds: int
     sse_heartbeat_seconds: int
     max_control_request_body_bytes: int
@@ -126,6 +137,7 @@ class ApiRuntimeConfig:
     qdrant: QdrantConfig
     embedding: EmbeddingConfig
     retrieval: RetrievalConfig
+    chat_recovery: ChatRecoveryConfig
 
 
 def project_api(settings: Settings) -> ApiRuntimeConfig:
@@ -136,6 +148,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         log_level=settings.app.log_level,
         host=settings.api.host,
         port=settings.api.port,
+        request_timeout_seconds=settings.api.request_timeout_seconds,
         shutdown_grace_seconds=settings.api.shutdown_grace_seconds,
         sse_heartbeat_seconds=settings.api.sse_heartbeat_seconds,
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
@@ -192,12 +205,19 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
             answer_context_k=settings.rag.retrieval.answer_context_k,
         ),
+        chat_recovery=ChatRecoveryConfig(
+            orphan_grace_seconds=settings.chat.orphan_grace_seconds,
+            reaper_poll_seconds=settings.chat.reaper_poll_seconds,
+            reaper_batch_size=settings.chat.reaper_batch_size,
+            disconnect_poll_seconds=settings.chat.disconnect_poll_seconds,
+        ),
     )
 
 
 __all__ = [
     "ApiRuntimeConfig",
     "ArtifactStoreConfig",
+    "ChatRecoveryConfig",
     "DatabaseConfig",
     "EmbeddingConfig",
     "EventStreamConfig",

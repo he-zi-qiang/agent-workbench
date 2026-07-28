@@ -16,9 +16,11 @@ of a matching prefix.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +40,7 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.ports.artifact_store import ArtifactStore
-from agent_workbench.ports.conversation_store import ConversationStore
+from agent_workbench.ports.conversation_store import ChatTurnStore, ConversationStore
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 REQUIRED_TEST_DATABASE_SUFFIX = "_test"
@@ -87,6 +89,86 @@ def conversations(request: pytest.FixtureRequest) -> StoreHarness:
     if dsn is None:
         pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
     return StoreHarness(name="postgres", factory=_postgres_conversations(dsn))
+
+
+@asynccontextmanager
+async def _memory_chat_turns() -> AsyncIterator[ChatTurnStore]:
+    yield _LeaseControlledMemoryConversationStore()
+
+
+class _LeaseControlledMemoryConversationStore(InMemoryConversationStore):
+    """Contract-only clock control without weakening the production port."""
+
+    def __init__(self) -> None:
+        self._test_now = datetime(2026, 7, 28, tzinfo=UTC)
+        super().__init__(clock=lambda: self._test_now)
+
+    async def expire_turn_for_test(self, turn_id: str) -> None:
+        async with self._lock:
+            turn = self._turns[turn_id]
+            assert turn.lease_until is not None
+            self._test_now = turn.lease_until + timedelta(microseconds=1)
+
+
+class _LeaseControlledPostgresConversationStore(PostgresConversationStore):
+    """Contract-only SQL seams for deterministic deadline and lock tests."""
+
+    async def expire_turn_for_test(self, turn_id: str) -> None:
+        async with self._engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE chat_turns "
+                    "SET lease_until = statement_timestamp() - INTERVAL '1 second' "
+                    "WHERE turn_id = :turn_id AND status = 'running'"
+                ),
+                {"turn_id": turn_id},
+            )
+
+    async def hold_turn_lock_for_test(
+        self,
+        turn_id: str,
+        *,
+        locked: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        async with self._engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "SELECT turn_id FROM chat_turns WHERE turn_id = :turn_id FOR UPDATE"
+                ),
+                {"turn_id": turn_id},
+            )
+            locked.set()
+            await release.wait()
+
+
+def _postgres_chat_turns(dsn: str) -> Callable[[], Any]:
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[ChatTurnStore]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text("TRUNCATE chat_turns, messages, conversation_sessions CASCADE")
+                )
+            yield _LeaseControlledPostgresConversationStore(engine)
+        finally:
+            await engine.dispose()
+
+    return factory
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def chat_turn_conversations(request: pytest.FixtureRequest) -> StoreHarness:
+    """One lifecycle contract exercised against both turn-ledger stores."""
+
+    if request.param == "memory":
+        return StoreHarness(name="memory", factory=_memory_chat_turns)
+
+    dsn = _test_dsn()
+    if dsn is None:
+        pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
+    return StoreHarness(name="postgres", factory=_postgres_chat_turns(dsn))
 
 
 @asynccontextmanager

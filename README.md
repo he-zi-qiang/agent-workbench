@@ -13,8 +13,9 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-07-28，主分支基线为 `main@4d03f69`，当前开发分支正在实施
-PR-035 安全发布基线。已经实现并有测试证据：
+截至 2026-07-28，主分支基线为 `main@4d03f69`；当前开发分支已完成
+PR-035～PR-043 的安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn、
+原子授权发布、无流量恢复与固定 lease 原子过期切片。已经实现并有测试证据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -23,8 +24,26 @@ PR-035 安全发布基线。已经实现并有测试证据：
 - PostgreSQL ConversationStore、Alembic 迁移、Document/Version/ACL、
   事务 Outbox、`SKIP LOCKED` 竞争领取和摄取 Worker 组件；
 - Local ArtifactStore，以及 FastAPI Upload/Artifact/Health/Chat/SSE API；
+- PostgreSQL EventLog 的 per-stream gap-free sequence、显式 envelope schema version、
+  生产者时间戳回放和 stream-local durable `event_key` 幂等写入；
 - BGE-M3 Dense Embedding、Qdrant Dense/Hybrid 检索和离线 RAG 评测；
-- 固定 2-step Chat 的 ACL 双重检查、答案发布门和 source revision 读取栅栏；
+- 固定 2-step Chat 的 ACL 双重检查、答案发布门、source revision 读取栅栏、已提交
+  会话消息的多轮回放，以及 PostgreSQL `chat_turns` 幂等事实源；
+- 最终 source revision/ACL 复核、`AnswerCommitted/AnswerWithheld`、assistant
+  history 和 Turn 终态在同一 PostgreSQL 事务中提交；撤权与答案发布由文档行锁
+  线性化；
+- Chat API 强制 `Idempotency-Key`，同一会话的活跃 Turn 不交错；已提交请求重试不再
+  重跑模型，`release_pending` 重试会重新验证持久化的 evidence revision；
+- `running` Turn 使用固定执行 lease；所有离开 `running` 的 writer 都在 Turn 锁内
+  复核数据库时间，claim 不机会式回收，迟到的 prepare/cleanup 不写裸终态；
+- 硬崩溃遗留项由 `ChatExpirationCoordinator` 使用 PostgreSQL `SKIP LOCKED` 回收；
+  每个 Turn 的 `failed(deadline, stale_execution)`、lease 清理和 durable
+  `ChatTurnExpired` 在独立事务中原子提交，一个毒化候选不会阻断后续候选；
+- 答案发布与过期竞争共用有界终态键
+  `chat-turn:{sha256(turn_id)}:terminal`，因此同一 Turn 不能同时提交两种终态事件；
+  `ChatTurnExpired` 是 Chat ledger 事实，不是第二个 Runtime `RunFailed`；
+- 后台 pending-release recovery 会重新执行最终 ACL/revision 栅栏并原子发布，
+  不依赖原客户端用同一幂等键重试；即使 embedding/model 不可用也继续恢复；
 - 与固定检索共用 `RetrievalService` 的 `knowledge_search` Tool Adapter。
 
 这些能力仍有明确边界：
@@ -32,8 +51,10 @@ PR-035 安全发布基线。已经实现并有测试证据：
 - `IngestionWorker` 仍是可调用组件，没有常驻进程、heartbeat、retry/dead-letter 和
   多 Worker 外部副作用 fencing；上传后自动可检索的产品 E2E 尚未贯通。
 - 旧 Qdrant Point 已被 revision 栅栏阻止读取，但 replace/delete 物理清理尚未完成。
-- Chat 仍是保存历史的单轮固定 RAG，尚未实现幂等 Turn、真正多轮上下文和模型实际引用
-  校验；`knowledge_search` 也尚未装配为可用的 Agentic Retrieval Mode。
+- Chat 的历史 token window/compaction 和模型实际引用校验尚未实现；
+  `knowledge_search` 尚未装配为可用的 Agentic Retrieval Mode。
+- EventLog 能拒绝未知 schema version，但尚未实现旧版本 upcaster、poison-row
+  隔离/跳过策略。
 - LlamaIndex/LangChain Adapter、LangGraph Task、Task Registry、Multi-Agent、
   CrewAI 对比、UI、生产身份认证和部署仍为 Planned。
 

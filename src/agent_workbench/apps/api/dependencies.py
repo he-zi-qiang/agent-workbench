@@ -29,6 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.persistence import (
+    PostgresChatExpirationCoordinator,
+    PostgresChatReleaseCoordinator,
     PostgresConversationStore,
     PostgresDocumentStore,
     PostgresEventLog,
@@ -37,7 +39,11 @@ from agent_workbench.adapters.persistence import (
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.vector import QdrantVectorIndex
-from agent_workbench.application.chat import ChatService
+from agent_workbench.application.chat import REFUSAL, ChatService
+from agent_workbench.application.chat_recovery import (
+    ChatPendingReleaseRecovery,
+    ChatTurnReaper,
+)
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.uploads import UploadService
 from agent_workbench.apps.api.identity import HeaderPrincipalResolver
@@ -73,8 +79,11 @@ class ApiDependencies:
     # is kept beside it so startup can say so once, in words, instead of
     # leaving a route to fail per request.
     chat: ChatService | None
+    chat_reaper: ChatTurnReaper | None
+    chat_pending_recovery: ChatPendingReleaseRecovery | None
     chat_unavailable: str | None
     http: httpx.AsyncClient | None
+    qdrant: AsyncQdrantClient | None
     events: EventLogPort
 
     @property
@@ -103,8 +112,14 @@ class ApiDependencies:
         )
 
     async def dispose(self) -> None:
+        if self.chat is not None:
+            await self.chat.drain_cleanup(
+                timeout_seconds=self.config.shutdown_grace_seconds
+            )
         if self.http is not None:
             await self.http.aclose()
+        if self.qdrant is not None:
+            await self.qdrant.close()
         await self.engine.dispose()
 
 
@@ -154,12 +169,20 @@ def build_dependencies(
     )
     documents = PostgresDocumentStore(engine)
     artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
+    conversations = PostgresConversationStore(engine)
+    releaser = PostgresChatReleaseCoordinator(engine)
 
-    chat, unavailable, http = (
-        _assemble_chat(config, engine, documents)
+    chat, unavailable, http, qdrant = (
+        _assemble_chat(
+            config,
+            documents,
+            conversations=conversations,
+            releaser=releaser,
+        )
         if with_chat
-        else (None, "chat was not requested for this process", None)
+        else (None, "chat was not requested for this process", None, None)
     )
+    events = PostgresEventLog(engine)
     return ApiDependencies(
         config=config,
         engine=engine,
@@ -168,17 +191,45 @@ def build_dependencies(
         uploads=UploadService(documents=documents, artifacts=artifacts),
         principals=HeaderPrincipalResolver(),
         chat=chat,
+        # Recovery is intentionally independent of the embedding/model stack.
+        # A degraded API must still free sessions left by a previously healthy
+        # process; otherwise "chat unavailable" would also mean "chat cannot
+        # recover".
+        chat_reaper=ChatTurnReaper(
+            expiration=PostgresChatExpirationCoordinator(engine),
+            poll_seconds=config.chat_recovery.reaper_poll_seconds,
+            batch_size=config.chat_recovery.reaper_batch_size,
+        ),
+        chat_pending_recovery=ChatPendingReleaseRecovery(
+            conversations=conversations,
+            releaser=releaser,
+            sink_for=lambda stream_id, run_id: ScopedEventSink(
+                log=events,
+                scope=EventScope(stream_id=stream_id, run_id=run_id),
+            ),
+            refusal_text=REFUSAL,
+            poll_seconds=config.chat_recovery.reaper_poll_seconds,
+            batch_size=config.chat_recovery.reaper_batch_size,
+        ),
         chat_unavailable=unavailable,
         http=http,
-        events=PostgresEventLog(engine),
+        qdrant=qdrant,
+        events=events,
     )
 
 
 def _assemble_chat(
     config: ApiRuntimeConfig,
-    engine: AsyncEngine,
     documents: PostgresDocumentStore,
-) -> tuple[ChatService | None, str | None, httpx.AsyncClient | None]:
+    *,
+    conversations: PostgresConversationStore,
+    releaser: PostgresChatReleaseCoordinator,
+) -> tuple[
+    ChatService | None,
+    str | None,
+    httpx.AsyncClient | None,
+    AsyncQdrantClient | None,
+]:
     """Build the chat stack, or report the one reason it could not be built.
 
     The embedder is tried first because it is the only piece whose absence is
@@ -189,7 +240,7 @@ def _assemble_chat(
 
     embedder = build_embedder(config.embedding)
     if isinstance(embedder, EmbeddingUnavailable):
-        return None, embedder.reason, None
+        return None, embedder.reason, None, None
 
     # Constructed before the model because the adapter takes it: httpx opens
     # no socket until the first request, so a refusal below simply ends a
@@ -220,10 +271,13 @@ def _assemble_chat(
             ),
             policy_identity=f"api-{config.deployment_scope}",
         ),
-        conversations=PostgresConversationStore(engine),
+        conversations=conversations,
+        releaser=releaser,
         budget=RunBudget(max_steps=1, max_tool_calls=1),
+        request_timeout_seconds=config.request_timeout_seconds,
+        orphan_grace_seconds=config.chat_recovery.orphan_grace_seconds,
     )
-    return chat, None, client
+    return chat, None, client, qdrant
 
 
 __all__ = ["ApiDependencies", "InsecureDeploymentError", "build_dependencies"]

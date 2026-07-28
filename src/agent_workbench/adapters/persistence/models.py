@@ -44,6 +44,8 @@ NAMING_CONVENTION = {
 metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 IDENTIFIER_LENGTH = 128
+DIGEST_LENGTH = 64
+FILENAME_LENGTH = 255
 
 conversation_sessions = Table(
     "conversation_sessions",
@@ -89,8 +91,111 @@ messages = Table(
     Index("ix_messages_session_id_sequence", "session_id", "sequence"),
 )
 
-DIGEST_LENGTH = 64
-FILENAME_LENGTH = 255
+chat_turns = Table(
+    "chat_turns",
+    metadata,
+    Column("turn_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column(
+        "session_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("conversation_sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # Idempotency is scoped to the conversation. The caller may reuse the same
+    # transport key in another session without linking the two conversations.
+    Column("idempotency_key", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("request_hash", String(DIGEST_LENGTH), nullable=False),
+    # A run is a globally addressable trace, so it cannot back two turns.
+    Column("run_id", String(IDENTIFIER_LENGTH), nullable=False, unique=True),
+    Column("status", String(32), nullable=False),
+    # Fixed execution deadline. It is present only while the model execution
+    # owns the Turn; moving to pending or any terminal state clears it.
+    Column("lease_until", DateTime(timezone=True), nullable=True),
+    Column(
+        "user_message_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("messages.message_id"),
+        nullable=False,
+    ),
+    Column(
+        "assistant_message_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("messages.message_id"),
+        nullable=True,
+    ),
+    # These are complete versioned Pydantic aggregates. Repositories validate
+    # them on every read instead of treating JSONB as an untyped cache.
+    #
+    # none_as_null is not decoration. JSONB has two distinguishable emptinesses
+    # -- SQL NULL and the JSON value null -- and SQLAlchemy writes Python None
+    # as the latter by default. The lifecycle constraint below is phrased in
+    # SQL NULL, so without this a turn that has no failure stores json 'null',
+    # which IS NOT NULL, and every non-failed transition is rejected. These are
+    # the only nullable JSONB columns in the schema, which is why nothing
+    # before them needed to say this.
+    Column("result", JSONB(none_as_null=True), nullable=True),
+    Column("failure_outcome", JSONB(none_as_null=True), nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    UniqueConstraint(
+        "session_id",
+        "idempotency_key",
+        name="uq_chat_turns_session_id_idempotency_key",
+    ),
+    CheckConstraint(
+        "status IN "
+        "('running', 'release_pending', 'committed', 'withheld', "
+        "'failed', 'cancelled')",
+        name="chat_turns_status",
+    ),
+    CheckConstraint(
+        "(status = 'running' AND lease_until IS NOT NULL) OR "
+        "(status <> 'running' AND lease_until IS NULL)",
+        name="chat_turns_lease",
+    ),
+    CheckConstraint(
+        "("
+        "status = 'running' AND assistant_message_id IS NULL "
+        "AND result IS NULL AND failure_outcome IS NULL"
+        ") OR ("
+        "status = 'release_pending' AND assistant_message_id IS NULL "
+        "AND result IS NOT NULL AND failure_outcome IS NULL"
+        ") OR ("
+        "status IN ('committed', 'withheld') "
+        "AND assistant_message_id IS NOT NULL "
+        "AND result IS NOT NULL AND failure_outcome IS NULL"
+        ") OR ("
+        "status IN ('failed', 'cancelled') AND assistant_message_id IS NULL "
+        "AND result IS NULL AND failure_outcome IS NOT NULL"
+        ")",
+        name="chat_turns_lifecycle",
+    ),
+    # PostgreSQL enforces the same non-interleaving invariant as the session
+    # row lock. The index is the final guard if a future writer bypasses this
+    # repository.
+    Index(
+        "uq_chat_turns_active_session",
+        "session_id",
+        unique=True,
+        postgresql_where=text("status IN ('running', 'release_pending')"),
+    ),
+    Index(
+        "ix_chat_turns_expired_running",
+        "lease_until",
+        "turn_id",
+        postgresql_where=text("status = 'running'"),
+    ),
+)
 
 artifacts = Table(
     "artifacts",
@@ -261,6 +366,7 @@ __all__ = [
     "IDENTIFIER_LENGTH",
     "NAMING_CONVENTION",
     "artifacts",
+    "chat_turns",
     "conversation_sessions",
     "document_acl",
     "document_versions",
@@ -301,6 +407,13 @@ events = Table(
     Column("stream_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("run_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("sequence", BigInteger, nullable=False),
+    # Optional because most observational events do not need idempotency. When
+    # present, the key identifies one durable append within this stream.
+    Column("event_key", String(IDENTIFIER_LENGTH), nullable=True),
+    # Stored beside the payload rather than inferred from its shape. Replay
+    # must know which envelope contract produced a row before it attempts to
+    # interpret that row.
+    Column("schema_version", Integer, nullable=False),
     Column("event_type", String(64), nullable=False),
     Column("payload", JSONB, nullable=False),
     Column("task_id", String(IDENTIFIER_LENGTH), nullable=True),
@@ -317,4 +430,11 @@ events = Table(
     UniqueConstraint("stream_id", "sequence", name="uq_events_stream_sequence"),
     # The replay query: one stream, everything after a cursor, in order.
     Index("ix_events_stream_sequence", "stream_id", "sequence"),
+    Index(
+        "uq_events_stream_event_key",
+        "stream_id",
+        "event_key",
+        unique=True,
+        postgresql_where=text("event_key IS NOT NULL"),
+    ),
 )

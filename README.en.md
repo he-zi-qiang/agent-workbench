@@ -11,8 +11,11 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-07-28, the main-branch baseline is `main@4d03f69`, and the current
-development branch is implementing the PR-035 secure answer-release baseline.
+As of 2026-07-28, the main-branch baseline is `main@4d03f69`. The current
+development branch completes the PR-035 through PR-043 slices for secure
+answer release, multi-turn context, evolvable EventLog replay, idempotent
+Chat turns, atomic authorization fencing, traffic-independent recovery and
+atomic fixed-lease expiry.
 Implemented with test evidence:
 
 - framework-neutral domain contracts, ports, fake adapters and a reproducible
@@ -27,10 +30,33 @@ Implemented with test evidence:
   ingestion-worker component;
 - a local artifact store and FastAPI upload, artifact, health, Chat and SSE
   APIs;
+- PostgreSQL EventLog replay with per-stream gap-free sequences, an explicit
+  envelope schema version, the producer timestamp and stream-local durable
+  `event_key` idempotency;
 - BGE-M3 dense embeddings, Qdrant dense/hybrid retrieval and offline RAG
   evaluation;
-- fixed two-step Chat with two ACL checks, an answer-release gate and a source
-  revision read barrier;
+- fixed two-step Chat with two ACL checks, an answer-release gate, a source
+  revision read barrier, multi-turn replay and a PostgreSQL `chat_turns` fact
+  ledger;
+- one PostgreSQL transaction for the final source-revision/ACL check, answer
+  event, assistant history and terminal Turn state, with document-row locks
+  linearizing answer publication against revocation;
+- a required API `Idempotency-Key`, non-interleaving active turns, no model
+  rerun for a completed retry, and re-authorization of persisted evidence on a
+  `release_pending` retry;
+- a fixed execution lease for `running` turns; ordinary terminal writers
+  re-check the database clock under the Turn lock, while claim and late
+  prepare/cleanup never write an expiry fact;
+- a single `ChatExpirationCoordinator` that uses PostgreSQL `SKIP LOCKED` and
+  one transaction per Turn to commit the failed Turn and durable
+  `ChatTurnExpired` together, with poison-candidate isolation and a stable
+  cross-round scan cursor;
+- one bounded SHA-256 terminal key shared by answer publication and expiry;
+  `ChatTurnExpired` is a Chat-ledger observation, not another Runtime
+  `RunFailed`;
+- background recovery for prepared answers that re-runs the final ACL/revision
+  fence and publishes atomically without relying on the original client; it
+  remains active even when the embedding/model stack is unavailable;
 - a `knowledge_search` Tool adapter backed by the same `RetrievalService` as
   fixed retrieval.
 
@@ -42,9 +68,10 @@ The remaining boundaries are explicit:
   upload-to-search E2E is not yet connected.
 - The source-revision barrier prevents stale Qdrant points from being read, but
   physical replacement/deletion of old points is not yet implemented.
-- Chat still persists history around a single-turn fixed RAG call. Idempotent
-  turns, true multi-turn context and validation of the citations actually used
-  by the model remain to be built.
+- A history token window/compaction and validation of the citations actually
+  used by the model remain to be built.
+- EventLog rejects an unknown schema version, but version upcasters,
+  poison-row isolation and skip semantics are not yet implemented.
 - `knowledge_search` is not yet assembled into an agentic retrieval mode, and
   that path still needs a final evidence-revision gate before an answer may be
   released.
