@@ -54,6 +54,10 @@ from agent_workbench.bootstrap.embedding_factory import (
 from agent_workbench.bootstrap.model_factory import build_model
 from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig
+from agent_workbench.bootstrap.reranker_factory import (
+    RerankerUnavailable,
+    build_reranker,
+)
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.documents import DocumentStore
@@ -82,6 +86,12 @@ class ApiDependencies:
     chat_reaper: ChatTurnReaper | None
     chat_pending_recovery: ChatPendingReleaseRecovery | None
     chat_unavailable: str | None
+    # Chat still serves without one, so this is a quality note rather than a
+    # missing capability. Recorded because an unreranked process is
+    # indistinguishable from a reranked one at the endpoint, and an ablation
+    # written against a silently unreranked process would credit the difference
+    # to the model.
+    reranker_unavailable: str | None
     http: httpx.AsyncClient | None
     qdrant: AsyncQdrantClient | None
     events: EventLogPort
@@ -172,7 +182,7 @@ def build_dependencies(
     conversations = PostgresConversationStore(engine)
     releaser = PostgresChatReleaseCoordinator(engine)
 
-    chat, unavailable, http, qdrant = (
+    chat, unavailable, http, qdrant, no_reranker = (
         _assemble_chat(
             config,
             documents,
@@ -180,7 +190,7 @@ def build_dependencies(
             releaser=releaser,
         )
         if with_chat
-        else (None, "chat was not requested for this process", None, None)
+        else (None, "chat was not requested for this process", None, None, None)
     )
     events = PostgresEventLog(engine)
     return ApiDependencies(
@@ -212,6 +222,7 @@ def build_dependencies(
             batch_size=config.chat_recovery.reaper_batch_size,
         ),
         chat_unavailable=unavailable,
+        reranker_unavailable=no_reranker,
         http=http,
         qdrant=qdrant,
         events=events,
@@ -229,6 +240,7 @@ def _assemble_chat(
     str | None,
     httpx.AsyncClient | None,
     AsyncQdrantClient | None,
+    str | None,
 ]:
     """Build the chat stack, or report the one reason it could not be built.
 
@@ -240,7 +252,13 @@ def _assemble_chat(
 
     embedder = build_embedder(config.embedding)
     if isinstance(embedder, EmbeddingUnavailable):
-        return None, embedder.reason, None, None
+        return None, embedder.reason, None, None, None
+
+    # After the embedder, because a process that cannot chat has no use for a
+    # reranker and loading one would be several gigabytes spent on a capability
+    # that is not being served.
+    reranker = build_reranker(config.reranker)
+    no_reranker = reranker.reason if isinstance(reranker, RerankerUnavailable) else None
 
     # Constructed before the model because the adapter takes it: httpx opens
     # no socket until the first request, so a refusal below simply ends a
@@ -262,6 +280,8 @@ def _assemble_chat(
             embedder=embedder,
             index=QdrantVectorIndex(qdrant, collection=config.qdrant.write_collection),
             documents=documents,
+            reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
+            rerank_timeout_seconds=config.reranker.timeout_seconds,
         ),
         executor=ClaudeLikeAgentRuntime(
             model=model,
@@ -277,7 +297,7 @@ def _assemble_chat(
         request_timeout_seconds=config.request_timeout_seconds,
         orphan_grace_seconds=config.chat_recovery.orphan_grace_seconds,
     )
-    return chat, None, client, qdrant
+    return chat, None, client, qdrant, no_reranker
 
 
 __all__ = ["ApiDependencies", "InsecureDeploymentError", "build_dependencies"]
