@@ -57,6 +57,15 @@ from agent_workbench.ports.model import (
     ModelUsageReported,
 )
 from agent_workbench.ports.policy import PolicyEngine
+from agent_workbench.ports.task_workflow import (
+    GraphVersion,
+    TaskWorkflowPort,
+    TaskWorkflowResult,
+    WorkflowDisposition,
+    WorkflowGraphVersionMismatchError,
+    WorkflowThreadAlreadyExistsError,
+    WorkflowThreadNotFoundError,
+)
 from agent_workbench.ports.tools import (
     ToolBinding,
     ToolHandler,
@@ -86,6 +95,7 @@ __all__ = [
     "EventScope",
     "EventSink",
     "EvidenceRevisionGuard",
+    "GraphVersion",
     "IdempotencyKey",
     "ModelEvent",
     "ModelPort",
@@ -99,9 +109,15 @@ __all__ = [
     "RequestHash",
     "StoredChatTurn",
     "StoredMessage",
+    "TaskWorkflowPort",
+    "TaskWorkflowResult",
     "ToolBinding",
     "ToolHandler",
     "ToolInvocation",
     "ToolRegistry",
+    "WorkflowDisposition",
+    "WorkflowGraphVersionMismatchError",
+    "WorkflowThreadAlreadyExistsError",
+    "WorkflowThreadNotFoundError",
     "chat_turn_terminal_event_key",
 ]

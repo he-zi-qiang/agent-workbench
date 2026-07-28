@@ -43,6 +43,7 @@ from agent_workbench.domain.runs import (
     TraceContext,
 )
 from agent_workbench.domain.schema import DOMAIN_SCHEMA_VERSION, VersionedModel
+from agent_workbench.domain.tasks import ReviewResult, TaskState, TaskStep
 from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec
 
 GOLDEN_FILE = Path(__file__).parent / "golden" / "domain_v1.json"
@@ -178,6 +179,35 @@ SAMPLES: dict[str, VersionedModel] = {
         timestamp=TIMESTAMP,
         sequence=1,
         event_id="evt_0000000000000000000000000000001",
+    ),
+    "TaskState": TaskState(
+        task_id="task_0000000000000000000000000000001",
+        objective="Produce a verified retrieval architecture brief.",
+        plan=(
+            TaskStep(
+                step_id="step_internal",
+                sequence=1,
+                objective="Research internal evidence.",
+            ),
+            TaskStep(
+                step_id="step_external",
+                sequence=2,
+                objective="Cross-check public evidence.",
+                depends_on=("step_internal",),
+            ),
+        ),
+        evidence_refs=("art_evidence_a", "art_evidence_b"),
+        draft_ref="art_draft_1",
+        review_result=ReviewResult(
+            decision="pass",
+            reviewed_draft_ref="art_draft_1",
+            revision_number=0,
+            summary="Grounded and complete.",
+            score=92,
+        ),
+        approval_id="apr_0000000000000000000000000000001",
+        agent_outcome_refs=("art_outcome_a", "art_outcome_b"),
+        budget_usage=USAGE,
     ),
 }
 
