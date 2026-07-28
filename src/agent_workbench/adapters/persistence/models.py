@@ -151,6 +151,11 @@ documents = Table(
     # Monotonic per document. A stale outbox event carries an older value and
     # is discarded by the worker rather than applied over newer content.
     Column("source_revision", BigInteger, nullable=False),
+    # What the index has already been told about this document. Compared
+    # against an event's revision so a delayed event can be recognised as
+    # describing a past state rather than applied over a newer one -- a stable
+    # point id stops duplicate writes, and only this stops out-of-order ones.
+    Column("last_applied_revision", BigInteger, nullable=False, server_default="0"),
     Column("deleted", Boolean, nullable=False, server_default=text("false")),
     Column(
         "created_at",
