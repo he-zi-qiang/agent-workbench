@@ -81,6 +81,99 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-054 单 Worker runner：整条链第一次跑通
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第四步。
+`TaskWorker` 把仓储、恢复判定和工作流适配器接起来。
+
+### 它自己不做任何决定
+
+领任务是仓储的条件更新，判断两个事实合起来是什么意思是 `reconcile`，跑图是适配器的。
+这里只剩把它们连起来的循环，以及**什么时候停**。
+
+**"跑图"被表达成"再判断一次"**，而不是第二套状态机。Worker 启动一张图之后再问同一个问题：
+位置变了，答案就跟着变——从 `start` 变成 `settle_succeeded` 或 `wait_for_approval`。
+在 `ainvoke` 后面直接写"然后标记成功"，就是把恢复判定又抄了一遍措辞不同的版本，而改动原版之后
+还在跑的正是那份抄件。测试直接断言一次成功运行产生的 action 序列是
+`["start", "settle_succeeded"]`——**两次判断，不是一次**。
+
+循环**有上界**（3 次）。既不结束也不等待的图，Worker 结算不了；对它无限循环比如实记下来更糟，
+所以预算用尽就进 `failed`。
+
+每轮都**重新读 Registry**，不信任领取时那一行：图跑着的时候落下来的取消，正是判定的第一个分支
+要看到的事实。
+
+### 端口多了一个 `inspect`
+
+判定需要"这个 thread 停在哪"，而**不能靠试着 resume 再读异常**。所以
+`TaskWorkflowPort` 增加 `inspect(thread_id) -> CheckpointPosition | None`，
+`CheckpointPosition` 也从 application 移到端口——端口不能反向依赖 application，而"图停在哪"
+本来就是这个边界的词汇。
+
+适配器实现里有一处**诚实的取舍**：checkpoint 的版本若未记录或本进程建不出来，就**只报版本、
+不报待执行节点**——待执行节点是 LangGraph 对那张图的计算，要拿它就得先编译那张图。文档写明
+这不含糊：这种位置在任何人读它的待执行节点之前就已经被判定 park 了。
+
+### 有牙验证：11 处破坏，第一轮 10 处
+
+漏网的那一处是**"inspect 把建不出来的 checkpoint 报成当前图的版本"**——没有测试失败，因为
+现有用例里"Registry 的版本建不出来"总是先一步挡住，从来没走到"Registry 版本没问题、
+但**checkpoint** 是另一张建不出来的图写的"。
+
+补的测试构造了这个状态：先用一个**有** v9 的 Worker 把它跑起来（checkpoint 记下 v9），
+再把 Registry 的版本改成 v1 并重新排队，然后交给一个**没有** v9 的 Worker。这时若谎报成 v1，
+一个读不出来的 checkpoint 会显得"已完成"，Task 被结算成 succeeded——补上后 11 处全部被抓住。
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 信任领取时的行，不重新读 Registry | 1 |
+| 只判断一次，什么都不结算 | 3 |
+| 判断次数无上界 | 1 |
+| 抛异常的图被留在 running | 2 |
+| 失败原因带上 provider 的异常正文 | 1 |
+| park 时不带原因 | 2 |
+| 已终态的 Task 再结算一次 | 1 |
+| `start` 与 `resume` 对调 | 4 |
+| `inspect` 报告没有 checkpoint | 6 |
+| `inspect` 报告它没读过的待执行节点 | 2 |
+| `inspect` 谎报建不出来的 checkpoint 的版本 | **第一轮 0**，补测试后 1 |
+
+### 整条链的证据
+
+第一个 Worker 死在 `critic`，Task 进 `failed`；把它的 engine、saver、workflow、registry、
+handler 闭包**全部丢弃**；重新排队后，一个**从零构建**的 Worker 领走它并跑完——
+action 序列是 `["resume", "settle_succeeded"]`（不是 `start`），第二个进程里
+`understand` 与 `research_internal` 的调用次数是 **0**。
+
+（重新排队这一步是测试手工做的：按 lease 过期自动重排是 WP08 的 reaper，这条测试关心的是
+之后发生什么，不是谁触发的。）
+
+失败原因只记**异常类型**不记异常正文：provider 的异常文本里有请求体和 prompt 片段，而这个字符串
+会进事件和 API 响应。有测试断言 `"RuntimeError" in detail` 且 `"died mid-run" not in detail`。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（229 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0011_task_runs
+
+pytest（无外部服务）              938 passed / 344 skipped
+pytest（真实 PostgreSQL + Qdrant） 1271 passed /  11 skipped
+```
+
+### 本轮明确未做
+
+- **没有轮询循环、没有 `LISTEN/NOTIFY`**：只有 `run_once()`。什么时候再调一次是调用方的事，
+  长驻循环与唤醒属于协调；
+- **没有 lease、没有 advisory lock、没有 fencing**，所以这个 Worker **只能跑一个**。多 Worker
+  是 WP08，`FencedCheckpointer` 也在那里；
+- `load_state` 是注入的 callable 而不是端口：`input_ref` 指向什么由提交事务（WP07-02）决定，
+  在这里发明一个存储就是替那次改动先做了决定；
+- TaskService 与查询接口（含统一事件时间线，WP06-09）还没有；
+- `approval_decision` 恒为 `None`——本版没有任何图能中断，审批是 WP10。
+
 ## 2026-07-28 PR-053 Task Registry 仓储：状态机是数据，SQL 由它推导
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第三步。

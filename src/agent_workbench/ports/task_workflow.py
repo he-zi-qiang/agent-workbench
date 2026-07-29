@@ -59,6 +59,39 @@ class TaskWorkflowResult(DomainModel):
         return self
 
 
+class CheckpointPosition(DomainModel):
+    """Where a thread's graph stopped, in terms no framework object appears in.
+
+    ``graph_version`` is ``None`` for a checkpoint that never recorded which
+    graph wrote it. That is not the same as a mismatch, and it is not more
+    recoverable than one: an unlabelled position is one no process can claim to
+    understand.
+
+    ``pending_nodes`` is empty for a finished graph -- and also for a checkpoint
+    whose graph this process cannot build, because pending work is LangGraph's
+    own computation and asking for it requires compiling the graph that wrote
+    it. That case is not ambiguous in practice: a position whose version cannot
+    be built is parked before anything reads its pending nodes.
+    """
+
+    graph_version: GraphVersion | None = None
+    pending_nodes: tuple[TaskNodeId, ...] = ()
+    awaiting_approval_id: Identifier | None = None
+
+    @model_validator(mode="after")
+    def validate_interrupt(self) -> CheckpointPosition:
+        if self.awaiting_approval_id is not None and not self.pending_nodes:
+            # A graph waiting for an approval has not finished. Allowing both
+            # at once would make "finished" and "awaiting approval" depend on
+            # which one the reader checks first.
+            raise ValueError("a position awaiting an approval must have pending nodes")
+        return self
+
+    @property
+    def finished(self) -> bool:
+        return not self.pending_nodes
+
+
 class WorkflowThreadAlreadyExistsError(RuntimeError):
     """Raised when first-run input is submitted to an existing thread."""
 
@@ -128,8 +161,18 @@ class TaskWorkflowPort(Protocol):
         """
         ...
 
+    async def inspect(self, thread_id: Identifier) -> CheckpointPosition | None:
+        """Report where ``thread_id`` stands, without running anything.
+
+        ``None`` when the thread has no checkpoint. This is what lets a Worker
+        decide between starting, resuming and parking *before* it commits to
+        any of them, rather than by attempting one and reading the exception.
+        """
+        ...
+
 
 __all__ = [
+    "CheckpointPosition",
     "GraphVersion",
     "TaskWorkflowPort",
     "TaskWorkflowResult",

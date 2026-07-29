@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.ports.task_workflow import (
+    CheckpointPosition,
     TaskWorkflowPort,
     TaskWorkflowResult,
     WorkflowGraphVersionMismatchError,
@@ -73,6 +74,14 @@ class _FakeTaskWorkflow:
             state=checkpoint.state,
         )
 
+    async def inspect(self, thread_id: str) -> CheckpointPosition | None:
+        checkpoint = self._checkpoints.get(thread_id)
+        if checkpoint is None:
+            return None
+        return CheckpointPosition(
+            graph_version=checkpoint.graph_version, pending_nodes=("understand",)
+        )
+
 
 def _state() -> TaskState:
     return TaskState(task_id="task_1", objective="Compare retrieval strategies.")
@@ -82,6 +91,8 @@ def test_a_structural_fake_satisfies_the_runtime_checkable_port() -> None:
     assert isinstance(_FakeTaskWorkflow(), TaskWorkflowPort)
     assert inspect.iscoroutinefunction(TaskWorkflowPort.run)
     assert inspect.iscoroutinefunction(TaskWorkflowPort.resume)
+    # Deciding what to do with a thread must not require running it first.
+    assert inspect.iscoroutinefunction(TaskWorkflowPort.inspect)
 
 
 def test_identity_is_explicit_and_resume_cannot_accept_initial_state() -> None:
@@ -199,7 +210,11 @@ def test_structured_results_enforce_disposition_invariants() -> None:
 def test_the_port_surface_contains_no_framework_types() -> None:
     annotations = " ".join(
         repr(annotation)
-        for member in (TaskWorkflowPort.run, TaskWorkflowPort.resume)
+        for member in (
+            TaskWorkflowPort.run,
+            TaskWorkflowPort.resume,
+            TaskWorkflowPort.inspect,
+        )
         for annotation in inspect.get_annotations(member).values()
     ).lower()
 

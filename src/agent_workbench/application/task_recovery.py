@@ -31,8 +31,7 @@ from agent_workbench.domain.task_registry import (
     ApprovalDecision,
     TaskStatus,
 )
-from agent_workbench.domain.tasks import TaskNodeId
-from agent_workbench.ports.task_workflow import GraphVersion
+from agent_workbench.ports.task_workflow import CheckpointPosition, GraphVersion
 
 ReconciliationAction = Literal[
     # The Registry already reached a terminal fact. Do not run a graph; make
@@ -77,34 +76,6 @@ RESULTING_STATUS: Final[Mapping[ReconciliationAction, TaskStatus | None]] = {
 EXECUTING_ACTIONS: Final[frozenset[ReconciliationAction]] = frozenset(
     {"start", "resume", "resume_with_approval"}
 )
-
-
-@dataclass(frozen=True, slots=True)
-class CheckpointPosition:
-    """Where the graph stopped, in terms no framework object appears in.
-
-    ``graph_version`` is ``None`` for a checkpoint that never recorded which
-    graph wrote it. That is not the same as a mismatch and it is not more
-    recoverable than one: an unlabelled position is one this process cannot
-    claim to understand, so it takes the same route.
-    """
-
-    graph_version: GraphVersion | None
-    pending_nodes: tuple[TaskNodeId, ...] = ()
-    awaiting_approval_id: Identifier | None = None
-
-    def __post_init__(self) -> None:
-        if self.awaiting_approval_id is not None and not self.pending_nodes:
-            # A graph waiting for an approval has not finished. Accepting both
-            # at once would make the finished branch and the approval branch
-            # depend on which one the reader checks first.
-            raise ValueError(
-                "a checkpoint awaiting an approval must have pending nodes"
-            )
-
-    @property
-    def finished(self) -> bool:
-        return not self.pending_nodes
 
 
 @dataclass(frozen=True, slots=True)

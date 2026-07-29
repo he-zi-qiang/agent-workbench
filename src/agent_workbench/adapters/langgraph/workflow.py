@@ -44,6 +44,7 @@ from langgraph.graph import (  # pyright: ignore[reportMissingTypeStubs]
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.tasks import TaskNodeId, TaskState
 from agent_workbench.ports.task_workflow import (
+    CheckpointPosition,
     GraphVersion,
     TaskWorkflowResult,
     WorkflowGraphVersionMismatchError,
@@ -270,6 +271,29 @@ class LangGraphTaskWorkflow:
         # it again is how the original input gets appended twice.
         payload = await compiled.ainvoke(None, _config(thread_id, graph_version))
         return await self._result(compiled, thread_id, graph_version, payload)
+
+    async def inspect(self, thread_id: Identifier) -> CheckpointPosition | None:
+        checkpoint = await self._checkpoint(thread_id)
+        if checkpoint is None:
+            return None
+        written_by = checkpoint.metadata.get(GRAPH_VERSION_KEY)
+        if written_by is None or written_by not in self._builders:
+            # Pending work is LangGraph's own computation over the graph that
+            # wrote the checkpoint, so asking for it means compiling that
+            # graph. This process cannot, and does not need to: a position
+            # whose version is unrecorded or unknown is parked before anything
+            # reads its pending nodes.
+            return CheckpointPosition(graph_version=written_by)
+        snapshot = await self._graph(written_by, thread_id).aget_state(
+            _config(thread_id, written_by)
+        )
+        # No approval id yet: `approval` is a side-effect-free placeholder
+        # until WP10, so no graph in this build can interrupt. This is where
+        # the interrupt will be read from when one can.
+        return CheckpointPosition(
+            graph_version=written_by,
+            pending_nodes=tuple(snapshot.next),
+        )
 
     async def _checkpoint(self, thread_id: Identifier) -> Any | None:
         """The thread's latest checkpoint, or None if it has never run.
