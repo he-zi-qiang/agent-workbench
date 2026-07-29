@@ -81,6 +81,76 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-055 TaskService 与可切换的 FakeExecutor
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。
+补完 WP06-07 的 TaskService/查询接口，并完成 WP06-08。
+
+### TaskService：两件仓储**故意不做**的事
+
+**thread_id 与 graph_version 由它铸造，不由调用方给。** 仓储收下这两个字段是因为它们是行上的
+事实；**选**它们是决定。让调用方给 thread，重试就可能为同一个 dedup key 给出**不同**的 thread，
+唯一约束会直接拒绝——本该幂等的重试变成报错。让调用方给版本，客户端就能把自己钉在一个没人再部署
+的图上。
+
+**按 id 读是一条授权边界。** "不存在"和"不是你的"必须给出**同一个**答案——答案不同本身就是泄露，
+它确认了这个 id 存在。所以两者都是 `NotFoundError`，没有 "forbidden"。归属**两项都查**：只查
+tenant 会把一个租户的 Task 暴露给租户内每个人；只查 owner 会让跨租户的同名 id 撞进别人的 Task。
+有一条测试直接断言两种拒绝的**类型、code 与消息逐字相同**。
+
+### WP06-08：切换在节点注入，不在配置
+
+M3a 验收门槛是"**单个 Agent 节点**可切换 FakeExecutor/自研 Runtime"。本轮把
+`FakeAgentExecutor` 作为**正式代码**发布（不再只是测试替身），因为它换来的东西不是测试：整条
+Task 链路——提交、领取、跑图、checkpoint、崩溃后恢复——可以在**没有 provider、没有 key、没有
+费用**的情况下端到端跑完。
+
+**没有**去放宽 `runtime.executor`。那个单值 `Literal` 编码的是一条已冻结的不变量——
+**Tool Loop 只有一个所有者**。加一个 `"fake"` 值等于推翻它，而按项目规矩那需要先写 ADR、
+升 config schema 版本，不是顺手加个开关。有一条测试**正面钉住**这一点：
+`RuntimeSettings.model_validate({"executor": "fake"})` 必须失败。
+
+fake 只做边界真正承诺的两件事：**返回终态结果**、**观察取消**。取消返回 `cancelled` 结果而不是
+抛异常——调用方是个无论如何都要记录和路由的图节点，这正是只走happy path 的替身最容易漏掉的一条。
+其余全部是请求的函数：同一请求给同一结果（CI 不依赖模型），不同请求给**不同的 sha256**
+（常量摘要会让任何做去重的东西把两次无关的运行当成同一次），并且**记账不为零**——一次不花钱的运行
+会让所有预算检查静默通过。
+
+### 有牙验证
+
+9 处破坏，全部被抓住，0 处漏网：
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 读取时忽略 tenant / 忽略 owner | 1 / 2 |
+| "不是你的"与"不存在"给不同答案 | 1 |
+| thread_id 跨提交复用 | 1 |
+| graph_version 不来自服务的决定 | 1 |
+| fake 取消时抛异常而不是返回 | 1 |
+| 每个 fake artifact 同一个摘要 | 1 |
+| fake 运行不记账 | 1 |
+| fake 忽略脚本化的回答 | 2 |
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（233 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+
+pytest（无外部服务）              953 passed / 344 skipped
+pytest（真实 PostgreSQL + Qdrant） 1286 passed /  11 skipped
+```
+
+新增 15 条测试，**全部不需要外部服务**。
+
+### 本轮明确未做
+
+- **WP06-09 事件时间线**：Task 查询目前返回 Task 本身，不返回统一事件时间线；
+  那是 WP06 最后一条未满足的退出条件；
+- TaskService 不写入 `input_ref` 指向的东西——提交事务与输入存储是 WP07-02；
+- 没有 HTTP/CLI 入口调用它；组装点仍然不存在。
+
 ## 2026-07-28 PR-054 单 Worker runner：整条链第一次跑通
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第四步。

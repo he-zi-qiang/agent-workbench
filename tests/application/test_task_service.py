@@ -1,0 +1,180 @@
+"""Submitting a Task, and asking about one that may not be yours.
+
+Two things the Registry deliberately leaves to this layer are checked here: the
+thread id is minted rather than accepted, and a read by id answers the same way
+for "no such Task" and "not yours". The second is the one that matters -- a
+different answer for the two *is* the disclosure.
+
+No database. The Registry is a fake that records what it was handed, because
+what is under test is what this layer decides, not what PostgreSQL stores.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+
+from agent_workbench.application.tasks import TaskService
+from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.policies import PrincipalContext
+from agent_workbench.ports.task_registry import TaskRun, TaskSubmission
+from agent_workbench.workflows.research_graph import GRAPH_VERSION_V1
+
+OWNER = PrincipalContext(principal_id="user_1", tenant_id="tenant_a")
+OTHER_OWNER = PrincipalContext(principal_id="user_2", tenant_id="tenant_a")
+OTHER_TENANT = PrincipalContext(principal_id="user_1", tenant_id="tenant_b")
+
+
+class _FakeRegistry:
+    """Records submissions and hands back whatever it was told to hold."""
+
+    def __init__(self, existing: TaskRun | None = None) -> None:
+        self.submissions: list[TaskSubmission] = []
+        self._existing = existing
+
+    async def submit(self, submission: TaskSubmission) -> TaskRun:
+        self.submissions.append(submission)
+        return _task(
+            thread_id=submission.thread_id,
+            tenant_id=submission.tenant_id,
+            owner_id=submission.owner_id,
+            graph_version=submission.graph_version,
+        )
+
+    async def get(self, task_id: str) -> TaskRun | None:
+        return self._existing
+
+
+def _task(**overrides: Any) -> TaskRun:
+    now = datetime(2026, 7, 28, tzinfo=UTC)
+    base: dict[str, Any] = {
+        "task_id": "task_1",
+        "tenant_id": "tenant_a",
+        "owner_id": "user_1",
+        "thread_id": "thr_1",
+        "graph_version": GRAPH_VERSION_V1,
+        "input_ref": "input_1",
+        "submission_dedup_key": "dedup_1",
+        "status": "queued",
+        "created_at": now,
+        "updated_at": now,
+    }
+    base.update(overrides)
+    return TaskRun.model_validate(base)
+
+
+def _service(registry: Any) -> TaskService:
+    return TaskService(registry=registry)
+
+
+# --------------------------------------------------------------------------
+# Submitting
+
+
+def test_the_caller_names_neither_the_thread_nor_the_graph_version() -> None:
+    """Both are decisions, and neither belongs to a request.
+
+    A caller-supplied thread would let a retry hand the Registry a *different*
+    thread for the same key, which the unique constraint refuses -- turning an
+    idempotent retry into an error. A caller-supplied version would let a
+    client pin itself to a graph nobody deploys any more.
+    """
+
+    registry = _FakeRegistry()
+
+    task = asyncio.run(
+        _service(registry).submit(
+            OWNER, input_ref="input_1", submission_dedup_key="dedup_1"
+        )
+    )
+
+    submitted = registry.submissions[0]
+    assert submitted.thread_id
+    assert submitted.thread_id.startswith("thr_")
+    assert submitted.graph_version == GRAPH_VERSION_V1
+    assert task.thread_id == submitted.thread_id
+
+
+def test_identity_comes_from_the_principal_and_not_from_the_request() -> None:
+    registry = _FakeRegistry()
+
+    asyncio.run(
+        _service(registry).submit(
+            OTHER_TENANT, input_ref="input_1", submission_dedup_key="dedup_1"
+        )
+    )
+
+    submitted = registry.submissions[0]
+    assert submitted.tenant_id == OTHER_TENANT.tenant_id
+    assert submitted.owner_id == OTHER_TENANT.principal_id
+
+
+def test_two_submissions_mint_two_threads() -> None:
+    """The service does not deduplicate; the Registry's unique key does.
+
+    Minting one thread per call and letting the insert lose is what makes a
+    repeated key idempotent rather than an error. A service that remembered
+    threads itself would be a second, in-memory copy of that key.
+    """
+
+    registry = _FakeRegistry()
+    service = _service(registry)
+
+    async def scenario() -> None:
+        await service.submit(OWNER, input_ref="i", submission_dedup_key="k")
+        await service.submit(OWNER, input_ref="i", submission_dedup_key="k")
+
+    asyncio.run(scenario())
+
+    threads = {submission.thread_id for submission in registry.submissions}
+    assert len(threads) == 2
+
+
+# --------------------------------------------------------------------------
+# Reading
+
+
+def test_an_owner_reads_their_own_task() -> None:
+    task = asyncio.run(_service(_FakeRegistry(_task())).get(OWNER, "task_1"))
+
+    assert task.task_id == "task_1"
+
+
+@pytest.mark.parametrize(
+    ("principal", "label"),
+    [
+        (OTHER_OWNER, "another owner in the same tenant"),
+        (OTHER_TENANT, "the same owner id in another tenant"),
+    ],
+)
+def test_a_task_that_is_not_yours_is_not_found(
+    principal: PrincipalContext, label: str
+) -> None:
+    """Not "forbidden": that answer would confirm the id exists.
+
+    Both halves of ownership are checked. A tenant match alone would expose one
+    tenant's Tasks to everybody in it; an owner match alone would let an id
+    collide across tenants into somebody else's Task.
+    """
+
+    with pytest.raises(NotFoundError):
+        asyncio.run(_service(_FakeRegistry(_task())).get(principal, "task_1"))
+
+
+def test_a_task_that_does_not_exist_fails_the_same_way() -> None:
+    """The two answers have to be indistinguishable, so they are compared."""
+
+    missing = _service(_FakeRegistry(None))
+    forbidden = _service(_FakeRegistry(_task()))
+
+    with pytest.raises(NotFoundError) as absent:
+        asyncio.run(missing.get(OWNER, "task_1"))
+    with pytest.raises(NotFoundError) as not_mine:
+        asyncio.run(forbidden.get(OTHER_OWNER, "task_1"))
+
+    assert type(absent.value) is type(not_mine.value)
+    assert absent.value.code == not_mine.value.code
+    assert str(absent.value) == str(not_mine.value)
