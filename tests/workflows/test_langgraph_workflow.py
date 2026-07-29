@@ -12,11 +12,17 @@ import asyncio
 from typing import Any
 
 import pytest
+from langgraph.checkpoint.memory import (  # pyright: ignore[reportMissingTypeStubs]
+    InMemorySaver,
+)
 
 from agent_workbench.adapters.langgraph.workflow import (
     GRAPH_BUILDERS,
+    GRAPH_VERSION_KEY,
+    UNRECORDED_GRAPH_VERSION,
     GraphState,
     LangGraphTaskWorkflow,
+    build_v1_graph,
 )
 from agent_workbench.domain.tasks import ReviewResult, TaskState, TaskStep
 from agent_workbench.ports.task_workflow import (
@@ -146,6 +152,87 @@ def test_an_unregistered_graph_version_never_falls_back_to_the_newest() -> None:
         asyncio.run(
             _workflow().run(_state(), thread_id="thread_1", graph_version="v99")
         )
+
+
+# --------------------------------------------------------------------------
+# Workflow identity lives in the checkpoint, not in this object
+
+
+def test_every_checkpoint_records_which_graph_wrote_it() -> None:
+    """The mechanism the durable answers rest on.
+
+    ``get_checkpoint_metadata`` copies configurable scalars into each
+    checkpoint's metadata, so putting the version on the config is what makes
+    it survive the process. If it stopped landing there, ``resume`` would
+    silently start treating every thread as unversioned.
+    """
+
+    saver = InMemorySaver()
+
+    async def scenario() -> list[str]:
+        workflow = LangGraphTaskWorkflow(handlers=_handlers(), checkpointer=saver)
+        await workflow.run(_state(), thread_id="thread_1", graph_version="v1")
+        return [
+            tuple_.metadata.get(GRAPH_VERSION_KEY, UNRECORDED_GRAPH_VERSION)
+            async for tuple_ in saver.alist({"configurable": {"thread_id": "thread_1"}})
+        ]
+
+    recorded = asyncio.run(scenario())
+
+    assert recorded
+    assert set(recorded) == {"v1"}
+
+
+def test_a_second_adapter_over_the_same_checkpoint_sees_the_same_thread() -> None:
+    """Existence and version are read from the store, not from this instance.
+
+    Two adapters over one saver stand in for two processes: the second never
+    saw the run start, and must still refuse to start it again and still know
+    which graph wrote it.
+    """
+
+    saver = InMemorySaver()
+
+    async def scenario() -> tuple[Any, Any]:
+        first = LangGraphTaskWorkflow(handlers=_handlers(), checkpointer=saver)
+        await first.run(_state(), thread_id="thread_1", graph_version="v1")
+
+        second = LangGraphTaskWorkflow(handlers=_handlers(), checkpointer=saver)
+        with pytest.raises(WorkflowThreadAlreadyExistsError):
+            await second.run(_state(), thread_id="thread_1", graph_version="v1")
+        with pytest.raises(WorkflowGraphVersionMismatchError) as mismatch:
+            await second.resume(thread_id="thread_1", graph_version="v2")
+        resumed = await second.resume(thread_id="thread_1", graph_version="v1")
+        return mismatch.value.checkpoint_graph_version, resumed.disposition
+
+    checkpoint_version, disposition = asyncio.run(scenario())
+
+    assert checkpoint_version == "v1"
+    assert disposition == "completed"
+
+
+def test_a_checkpoint_with_no_recorded_version_refuses_to_resume() -> None:
+    """A thread this adapter did not write is not one it can claim to read.
+
+    The graph is driven directly here, with a config that carries no version --
+    which is what a checkpoint written before this was recorded looks like.
+    Guessing "it is probably the only registered version" would be a guess made
+    exactly when a wrong answer costs the most.
+    """
+
+    saver = InMemorySaver()
+
+    async def scenario() -> Any:
+        graph = build_v1_graph(_handlers()).compile(checkpointer=saver)
+        await graph.ainvoke(
+            _state().model_dump(), {"configurable": {"thread_id": "thread_1"}}
+        )
+        workflow = LangGraphTaskWorkflow(handlers=_handlers(), checkpointer=saver)
+        with pytest.raises(WorkflowGraphVersionMismatchError) as captured:
+            await workflow.resume(thread_id="thread_1", graph_version="v1")
+        return captured.value.checkpoint_graph_version
+
+    assert asyncio.run(scenario()) == UNRECORDED_GRAPH_VERSION
 
 
 def test_resume_does_not_resubmit_the_original_input() -> None:

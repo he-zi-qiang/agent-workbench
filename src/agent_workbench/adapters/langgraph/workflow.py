@@ -12,6 +12,16 @@ reducer, so LangGraph's own fan-in and this project's ``fan_in`` produce the
 same merge.  A field added to ``TaskState`` without a channel here would be
 dropped on the first checkpoint round trip, so a test asserts the two field
 sets are equal rather than trusting them to stay in step.
+
+Which graph version wrote a thread is recorded **in the checkpoint**, by
+putting it on the config LangGraph is invoked with: the contract's own
+``get_checkpoint_metadata`` copies scalars off ``configurable`` into every
+checkpoint's metadata.  It was previously a dictionary in this object, which
+made "does this thread exist" and "which graph wrote it" questions only the
+process that started the run could answer -- which are exactly the two
+questions a process that did *not* start it has to ask.  This is not Task product state
+duplicated here: ``task_runs.graph_version`` records what the Task was asked
+to run, while this records what actually wrote the execution position.
 """
 
 from __future__ import annotations
@@ -61,6 +71,16 @@ GraphSpec = Any
 # graph must stop, and TaskNodeId must not grow a member that only exists to
 # describe stopping.
 _EXHAUSTED: Final[str] = END
+
+# The configurable key that carries the graph version into checkpoint metadata.
+GRAPH_VERSION_KEY: Final[str] = "graph_version"
+
+# What a checkpoint that never recorded a version is reported as. It cannot
+# collide with a real one: GraphVersion must start alphanumeric, so no valid
+# version can equal this, and a caller comparing it to any version gets
+# "different" -- which is the answer, because a checkpoint this adapter did not
+# write is not one it can claim to understand.
+UNRECORDED_GRAPH_VERSION: Final[str] = "<unrecorded>"
 
 
 def _merge(
@@ -180,19 +200,19 @@ class LangGraphTaskWorkflow:
         builders: Mapping[GraphVersion, GraphBuilder] = GRAPH_BUILDERS,
     ) -> None:
         self._handlers = handlers
+        # The default is in-memory, which means "this process only". A caller
+        # that wants a thread to outlive its process passes a durable saver.
         self._checkpointer = checkpointer or cast("Any", InMemorySaver())
         self._builders = dict(builders)
         self._compiled: dict[GraphVersion, CompiledGraph] = {}
-        # Which graph version wrote a thread. LangGraph's checkpoint does not
-        # carry it, and inferring it from the state's shape would be a guess
-        # made exactly when a wrong answer is most expensive.
-        self._thread_versions: dict[str, GraphVersion] = {}
 
-    def _graph(self, graph_version: GraphVersion) -> CompiledGraph:
+    def _graph(
+        self, graph_version: GraphVersion, thread_id: Identifier
+    ) -> CompiledGraph:
         if graph_version not in self._builders:
             raise WorkflowGraphVersionMismatchError(
-                thread_id="",
-                checkpoint_graph_version="",
+                thread_id=thread_id,
+                checkpoint_graph_version=UNRECORDED_GRAPH_VERSION,
                 requested_graph_version=graph_version,
             )
         if graph_version not in self._compiled:
@@ -209,13 +229,15 @@ class LangGraphTaskWorkflow:
         thread_id: Identifier,
         graph_version: GraphVersion,
     ) -> TaskWorkflowResult:
-        if thread_id in self._thread_versions:
+        # Asked of the checkpoint, so a thread another process started is still
+        # an existing thread. This is a check and not a lock: two first runs
+        # racing on one thread_id are excluded by the Task lease, not here.
+        if await self._checkpoint(thread_id) is not None:
             raise WorkflowThreadAlreadyExistsError(thread_id)
-        compiled = self._graph(graph_version)
-        self._thread_versions[thread_id] = graph_version
+        compiled = self._graph(graph_version, thread_id)
         payload = await compiled.ainvoke(
             state.model_dump(),
-            _config(thread_id),
+            _config(thread_id, graph_version),
         )
         return await self._result(compiled, thread_id, graph_version, payload)
 
@@ -225,23 +247,40 @@ class LangGraphTaskWorkflow:
         thread_id: Identifier,
         graph_version: GraphVersion,
     ) -> TaskWorkflowResult:
-        written_by = self._thread_versions.get(thread_id)
-        if written_by is None:
+        checkpoint = await self._checkpoint(thread_id)
+        if checkpoint is None:
             raise WorkflowThreadNotFoundError(thread_id)
+        written_by = checkpoint.metadata.get(
+            GRAPH_VERSION_KEY, UNRECORDED_GRAPH_VERSION
+        )
         if written_by != graph_version:
             # The checkpoint is left exactly as it was: a mismatched resume is
             # a migration decision, and continuing under another graph would
-            # silently re-enter a node that means something else now.
+            # silently re-enter a node that means something else now. Checked
+            # before the graph is built, so a checkpoint written by a version
+            # this process no longer registers still reports what wrote it
+            # instead of "unknown version".
             raise WorkflowGraphVersionMismatchError(
                 thread_id=thread_id,
                 checkpoint_graph_version=written_by,
                 requested_graph_version=graph_version,
             )
-        compiled = self._graph(graph_version)
+        compiled = self._graph(graph_version, thread_id)
         # No initial state: it already belongs to the checkpoint, and passing
         # it again is how the original input gets appended twice.
-        payload = await compiled.ainvoke(None, _config(thread_id))
+        payload = await compiled.ainvoke(None, _config(thread_id, graph_version))
         return await self._result(compiled, thread_id, graph_version, payload)
+
+    async def _checkpoint(self, thread_id: Identifier) -> Any | None:
+        """The thread's latest checkpoint, or None if it has never run.
+
+        Deliberately asked without a graph version: whether a thread exists
+        does not depend on which graph is asking.
+        """
+
+        return await self._checkpointer.aget_tuple(
+            {"configurable": {"thread_id": thread_id}}
+        )
 
     async def _result(
         self,
@@ -250,7 +289,7 @@ class LangGraphTaskWorkflow:
         graph_version: GraphVersion,
         payload: Mapping[str, Any],
     ) -> TaskWorkflowResult:
-        snapshot = await compiled.aget_state(_config(thread_id))
+        snapshot = await compiled.aget_state(_config(thread_id, graph_version))
         pending = tuple(snapshot.next)
         return TaskWorkflowResult(
             thread_id=thread_id,
@@ -261,12 +300,23 @@ class LangGraphTaskWorkflow:
         )
 
 
-def _config(thread_id: str) -> dict[str, Any]:
-    return {"configurable": {"thread_id": thread_id}}
+def _config(thread_id: str, graph_version: GraphVersion) -> dict[str, Any]:
+    # `graph_version` is not read by LangGraph. It is here because
+    # `get_checkpoint_metadata` copies configurable scalars into every
+    # checkpoint's metadata, which is what makes the version durable and
+    # queryable without a table of this adapter's own.
+    return {
+        "configurable": {
+            "thread_id": thread_id,
+            GRAPH_VERSION_KEY: graph_version,
+        }
+    }
 
 
 __all__ = [
     "GRAPH_BUILDERS",
+    "GRAPH_VERSION_KEY",
+    "UNRECORDED_GRAPH_VERSION",
     "GraphBuilder",
     "GraphState",
     "LangGraphTaskWorkflow",

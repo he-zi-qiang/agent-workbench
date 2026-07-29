@@ -81,6 +81,85 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-050（三）workflow 身份进 checkpoint，端口层跨进程续跑
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-06 的最后一步。
+`LangGraphTaskWorkflow` 不再持有 `_thread_versions` 字典；"这个 thread 存在吗"和
+"它是哪张图写的"两个问题都改成**问 checkpointer**。
+
+### graph version 存哪里：选了第三个位置
+
+三个候选：`task_runs.graph_version`（实施计划 §6，属 WP06-07）、adapter 自己的一张表、
+或者**checkpoint 的 metadata**。选第三个。
+
+机制是契约自带的：`get_checkpoint_metadata` 会把 `config["configurable"]` 上的标量
+拷进每一个 checkpoint 的 metadata。所以 adapter 只要在调用图时把
+`{"configurable": {"thread_id": ..., "graph_version": ...}}` 传下去，版本就自动、逐个
+checkpoint 地持久化了——不需要 adapter 自己的表，也没有第二处需要保持同步的写入。
+
+**这不是把 Task 产品状态复制过来。** `task_runs.graph_version` 记的是"这个 Task 被要求
+用哪张图跑"；这里记的是"实际写下这个执行位置的是哪张图"。ADR-014 禁止的是 checkpointer
+成为前者的第二个 writer，而后者本来就属于架构基线 §9 说的"图执行位置"。
+
+代价也记下来：PR-049 时 `workflow.py` 里写着"LangGraph 的 checkpoint 不携带 graph
+version"。**那句话现在不成立了**，因为这次让它携带了。
+
+### 没记录版本的 checkpoint 拒绝续跑
+
+不是本 adapter 写的 checkpoint（本次改动之前的行，或者绕过 adapter 直接驱动的图）
+metadata 里没有 `graph_version`。这时 `resume` **失败关闭**，报出的
+`checkpoint_graph_version` 是 `<unrecorded>`——一个 `GraphVersion` 的正则
+（必须以字母数字开头）**永远匹配不上**的字符串，所以调用方拿它和任何真实版本比较都得到
+"不同"，而这正是答案。猜"大概就是唯一注册的那个版本"是在最贵的时刻做的猜测。
+
+版本比较**发生在编译图之前**：否则一个由本进程已不再注册的版本写的 checkpoint，会被报成
+"未知版本"而不是"它由 v1 写的"。
+
+`run` 的存在性检查也改成问 checkpoint，因此**另一个进程起过的 thread 不再是空闲的**。
+它是检查不是锁：两个 first run 抢同一个 `thread_id` 由 Task lease（WP08）排除，不在这里。
+
+### 有牙验证
+
+6 处破坏，全部被抓住，0 处漏网：
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 版本不放进 config，于是没有 checkpoint 记录它 | 7 |
+| 没记录版本时按调用方要的版本当作已记录 | 1 |
+| `run` 不问 thread 是否已存在 | 3 |
+| `resume` 完全不比较版本 | 4 |
+| 版本比较挪到编译图之后 | 2 |
+| `resume` 又去信任对象内存而不是 checkpoint | 6 |
+
+端口层的关键证据：第一个进程死在 `critic`，随后 adapter、saver、engine、连接池、
+handler 闭包**全部丢弃**，第二个进程只拿到 `thread_id` 和 graph version，
+`resume` 跑完全程——`understand` 与 `research_internal` 在第二次运行里调用次数为 **0**，
+返回的 `TaskWorkflowResult.state` 带着上一个进程采集的证据。
+
+另有一条测试直接对 `workflow_checkpoints.metadata` 做 JSONB 谓词查询，按 graph version
+选出 thread，并断言**没有任何 checkpoint 是未记录版本的**——这是把 metadata 存成 JSONB
+而不是不透明字节换来的东西。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（219 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0010_workflow_checkpoints
+
+pytest（无外部服务）              916 passed / 291 skipped
+pytest（真实 PostgreSQL + Qdrant） 1196 passed /  11 skipped
+```
+
+### 本轮明确未做
+
+- **仍然没有组装点构造 `PostgresCheckpointSaver`。** adapter 的默认值依旧是
+  `InMemorySaver`（含义现在是明确的："只在本进程内有效"），要跨进程的调用方自己传一个
+  持久 saver 进来。真正的装配点是 WP06-07 的 Task Worker；
+- `adelete_thread` 与 checkpoint 保留策略仍未做；
+- 两个进程同时对一个 thread 调 `run` 只被"检查"挡住，不被"锁"挡住。
+
 ## 2026-07-28 PR-050（二）saver 本身：跨进程恢复第一次有了证据
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。对应 WP06-06。
@@ -182,7 +261,10 @@ pytest（真实 PostgreSQL + Qdrant） 1188 passed /  11 skipped
 - **没有任何组装点构造它。** `LangGraphTaskWorkflow` 仍然默认 `InMemorySaver`，
   它的 `resume` 也仍然查**进程内存**里的 thread → graph version 映射，所以
   **端口层**的"重启后用原 `thread_id` 续跑"还没通——通的是 checkpointer 层。
-  把两者接起来要先决定 graph version 存在哪里，那是下一次变化；
+  把两者接起来要先决定 graph version 存在哪里，那是下一次变化
+  （已由上面的
+  [PR-050（三）](#2026-07-28-pr-050三workflow-身份进-checkpoint端口层跨进程续跑)完成：
+  版本进 checkpoint metadata）；
 - `adelete_thread` 未实现（基类的 `NotImplementedError` 原样保留），checkpoint 保留与
   清理策略同样还没有；
 - 并发写同一 thread 只靠随机版本号避免 blob 主键互相覆盖，**没有**跨进程的互斥；
