@@ -81,6 +81,90 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-051 Worker 的恢复判定：基线 §9.5 的七种情形
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第一步。
+
+Task Registry 表示产品生命周期，LangGraph checkpoint 表示图执行位置；本项目不把两者
+伪装成一个分布式事务，所以"领到一个 Task"就等于要判断**这两个事实合起来是什么意思**。
+架构基线 §9.5 把这个判断列成了七种情形，本轮把它写成一个**全函数**。
+
+### 为什么是纯函数
+
+将来调用它的 Worker 要同时持有 advisory lock、lease 和 guard 连接，这七个分支里的每一个
+经由真 Worker 去够都很贵——"图停在一个后来被拒绝的审批上"这种情形，要 lease、要锁、要一张
+能 interrupt 的图，跑完还只覆盖七分之一。写成对值的判断后，全部分支微秒级可达，Worker
+那边只剩真正需要 I/O 的部分。
+
+这和本仓已有的做法一致：`workflows/research_graph.py`（纯声明）先落，
+`adapters/langgraph/workflow.py`（执行）后落。
+
+### 判定顺序不是随意的
+
+终态**先于**读 checkpoint 判断：一个已取消、但 checkpoint 里还有待执行 node 的 Task，
+不是"还没跑完的活"，是"被人停下的活"。反过来先读 checkpoint 就会把它变回 running。
+
+`waiting_migration` **必须显式挡住**，不能落到后面：它不是终态，它的 checkpoint 看起来
+完全可恢复，只读 checkpoint 会把它直接放回去跑，撤销掉别人正等着做的那个决定。
+
+版本比较有两半，都进 `waiting_migration`：**本进程根本没有这张图**（未注册），和
+**checkpoint 是另一张图写的**。第三种情况是 checkpoint **没记录**版本——它不比"版本不一致"
+更可恢复，猜"大概就是 Task 注册的那个版本"是在最贵的地方做猜测。这一条正好接上
+[PR-050（三）](#2026-07-28-pr-050三workflow-身份进-checkpoint端口层跨进程续跑)：
+版本现在写在 checkpoint metadata 里，所以这个判断**在调用 resume 之前**就能做出，
+而不是去 catch 一个异常。
+
+"图已结束"与"停在审批"两条**互斥而不只是有序**：`CheckpointPosition` 拒绝被构造成
+"没有待执行 node 却在等审批"，所以两个分支谁也藏不住谁。
+
+### 一个诚实的说明
+
+七种情形里有两种（停在审批、审批已有决定）描述的是 **M3a 还产生不出来的图**——`approval`
+在 WP10 之前是无副作用占位节点。仍然实现它们，是因为另一条路是"对一张被中断的图静默回答
+resume"，而且输入结构为了让其它分支成立本来就得携带审批信息。这一点写在模块文档里。
+
+### 有牙验证
+
+11 处破坏，全部被抓住，0 处漏网。其中最值得记的一条：把 `waiting_migration` 的显式分支
+去掉后**只有 1 条测试失败**——而那条测试是做破坏验证之前**补上**的。第一版测试里
+"totality" 那条只断言"每种输入都得到某个 action"，`waiting_migration` 落到 `resume`
+一样满足它。全枚举不等于全断言。
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 终态检查挪到读 checkpoint 之后 | 5 |
+| `waiting_migration` 落到后面 | 1 |
+| 未注册的 graph version 照跑 | 1 |
+| 没记录版本的 checkpoint 当作匹配 | 1 |
+| 版本不一致照样 resume | 1 |
+| 已结束的图去 resume 而不是结算 | 2 |
+| 忽略审批决定 | 3 |
+| 等审批时仍占住 Worker | 1 |
+| `wait_for_migration` 不再改状态 | 2 |
+| 允许"已结束且在等审批" | 1 |
+| 决定里丢掉 approval id | 1 |
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（222 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+
+pytest（无外部服务）              935 passed / 291 skipped
+pytest（真实 PostgreSQL + Qdrant） 1215 passed /  11 skipped
+```
+
+新增 19 条测试，**全部不需要外部服务**，所以两列的 `passed` 同步 +19、`skipped` 不变。
+
+### 本轮明确未做
+
+- **没有 Worker 调用它**。claim/lease/advisory lock、`task_runs` 仓储与状态机
+  （WP07-01）、TaskService 与查询接口都还没有；
+- `TaskStatus` 只定义了基线点过名的七个状态，没有 `task_runs` 表、没有列、没有仓储。
+  这里定义的是**词汇表和判定**，不是存储；
+- 判定不涉及 Qdrant generation reservation（WP07-04）与取消传播的具体事件写入。
+
 ## 2026-07-28 PR-050（三）workflow 身份进 checkpoint，端口层跨进程续跑
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-06 的最后一步。
