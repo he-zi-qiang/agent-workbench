@@ -81,6 +81,113 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-050（二）saver 本身：跨进程恢复第一次有了证据
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。对应 WP06-06。
+`PostgresCheckpointSaver` 实现 `BaseCheckpointSaver` 的四个异步方法，写进
+[PR-050（一）](#2026-07-28-pr-050一checkpointer-的表结构)落的三张表。
+
+### 落在哪一层
+
+文件是 `adapters/langgraph/checkpointer.py`，不是 `adapters/persistence/`。表可以住在
+persistence 里——它们只是 SQL，而且必须和其它表共用一份 metadata，Alembic 漂移测试才
+看得见它们；但 saver 本身**依赖 langgraph**，放进 persistence 就等于让持久化层依赖一个
+工作流框架。`adapters/langgraph/` 仍然是"唯一允许 import langgraph 的包"。
+
+### 三个值得记下来的决定
+
+**一次事务写完 checkpoint 和它的 blob。** blob 只写了一半的 checkpoint 会恢复出一个
+少了通道的状态，而且恰好在恢复的时候恢复出来——那是最没人盯着的时刻。
+
+**`aput_writes` 有两条冲突规则，不是一条。** 普通写入**先到为准**：一个 task 重试时，
+它先前已经落库的写入不能被替换，否则恢复出来的那一步会看到同一份工作的第二个结果。
+error / interrupt / resume / scheduled 这些**负数槽位**相反，**后到为准**：最新的那个
+才是该 task 的当前状态。实现上按 `idx` 正负拆成两批，分别
+`ON CONFLICT DO NOTHING` 与 `DO UPDATE`。
+
+**`get_next_version` 带随机后缀。** 基类默认发整数版本号。那样两个进程写同一个 thread
+会为同一通道都算出 `n+1`，把不同的字节写进**同一个 blob 主键**，一方静默覆盖另一方。
+随机后缀让它们的 key 不同；32 位零填充的计数器让 `>`——pregel 循环用它判断哪些节点
+已经见过某个通道——仍然按数值排序。
+
+同步的一半（`get_tuple` / `list` / `put` / `put_writes` / `delete_thread`）**显式拒绝**并
+说明原因，而不是继承基类那个不带消息的 `NotImplementedError`：这里的同步入口只能自己
+起事件循环，而本项目每个调用者都已经在一个循环里了。
+
+`alist` **先读完再逐个 yield**。异步生成器如果跨 yield 持有连接，调用方消费多久就占用
+多久，提前 break 还会直接泄漏一条。代价写在注释里：不带 `limit` 的列举会把一个 thread
+的历史读进内存——上界是该 thread 跑过的步数。组装用三条查询（checkpoint、blob、write
+各一条），不是 2n+1 条。
+
+### 一个被实测纠正的预期
+
+LangGraph 自己的序列化把**元组还原成列表**（`('a','b')` → `['a','b']`，嵌套的也一样）。
+`InMemorySaver` 同样如此，所以这不是本实现的问题，而是契约的格式。`TaskState` 在
+`model_validate` 时把它们收回元组，因此恢复后的运行察觉不到——测试断言的是**恢复出的
+领域状态相等**，而不是逐个字段形状相等。第一版测试按形状比较，直接失败，这条记录的是
+纠正后的理解。
+
+### 有牙验证：13 处破坏，其中 1 处暴露了测试的漏洞
+
+每次只改实现里的一件事，跑整份测试文件，还原后重新确认全绿：
+
+| 破坏 | 被抓住的测试 |
+|---|---|
+| `aget_tuple` 取最旧而不是最新 | 3 条 |
+| `aget_tuple` 忽略 namespace | 1 条 |
+| 普通写入改成覆盖 | 1 条 |
+| 特殊写入改成丢弃 | 1 条 |
+| `empty` 通道被当成值还原 | 9 条 |
+| `alist` 忽略 `before` / `filter` / `limit` / thread | 各 1 条 |
+| 版本号不带随机后缀 | 1 条 |
+| 同步一半悄悄能用 | 5 条 |
+| 从不加载 pending writes | **第一轮：0 条** |
+| 不记录 parent checkpoint | 1 条 |
+
+倒数第二行是重点：**第一轮破坏验证发现"pending writes 根本不加载"没有任何测试会失败**。
+那不是无关紧要的——`research_internal` 与 `research_external` 在同一步并行，若一个成功
+一个崩溃，幸存者的结果已经记在该步的 checkpoint 上、但这一步没有完成；恢复时**只有失败
+的那一支可以重跑**，重放幸存者会把它的预算算两遍、把它调用过的东西再调一次。补上这条
+测试后 13 处破坏全部被抓住，0 处漏网。
+
+### 跨进程恢复的证据
+
+关键的一条测试：第一次运行在 `critic` 里抛异常；然后 handler、编译后的图、saver、engine、
+连接池**全部丢弃**，只留下 `thread_id`；第二个"进程"从零重建，`ainvoke(None, config)`
+接着跑完。断言是——第二次运行里 `understand` 与 `research_internal` 的调用次数为 **0**，
+`critic` 为 1，最终状态带着**上一个进程采集的证据**。
+
+配套的对照组用 `InMemorySaver` 做同一件事，证明它**做不到**——否则"从 checkpoint 恢复"
+和"从输入把整张图重跑一遍"在断言里长得一模一样。
+
+另有一组差分测试：同一张图、同一份输入，分别跑在 `InMemorySaver` 和本 saver 上，要求
+两者的最终状态与整段 checkpoint 历史一致。参考实现比"作者自己写下的期望"更适合当 oracle。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（218 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0010_workflow_checkpoints
+
+pytest（无外部服务）              913 passed / 286 skipped
+pytest（真实 PostgreSQL + Qdrant） 1188 passed /  11 skipped
+```
+
+新增 21 条测试，其中 6 条（同步拒绝、版本号）不需要数据库。
+
+### 本轮明确未做
+
+- **没有任何组装点构造它。** `LangGraphTaskWorkflow` 仍然默认 `InMemorySaver`，
+  它的 `resume` 也仍然查**进程内存**里的 thread → graph version 映射，所以
+  **端口层**的"重启后用原 `thread_id` 续跑"还没通——通的是 checkpointer 层。
+  把两者接起来要先决定 graph version 存在哪里，那是下一次变化；
+- `adelete_thread` 未实现（基类的 `NotImplementedError` 原样保留），checkpoint 保留与
+  清理策略同样还没有；
+- 并发写同一 thread 只靠随机版本号避免 blob 主键互相覆盖，**没有**跨进程的互斥；
+  真正的互斥是 WP08 的 lease 与 guard 连接。
+
 ## 2026-07-28 PR-050（一）checkpointer 的表结构
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。对应 WP06-06 的第一步。
@@ -158,7 +265,9 @@ pytest（真实 PostgreSQL + Qdrant） 1167 passed /  11 skipped
 
 - **saver 本身**：`BaseCheckpointSaver` 的 `aput` / `aput_writes` / `aget_tuple` /
   `alist` 一个都没实现，`LangGraphTaskWorkflow` 仍默认 `InMemorySaver`，所以
-  **进程重启不保留执行位置这一条至今没有变化**；
+  **进程重启不保留执行位置这一条至今没有变化**（这一条已由上面的
+  [PR-050（二）](#2026-07-28-pr-050二saver-本身跨进程恢复第一次有了证据)在
+  checkpointer 层解决）；
 - **thread → graph version 的映射仍在进程内存里**。它没有进这三张表：按实施计划
   §6 它属于 `task_runs.graph_version`，而 ADR-014 写明 checkpointer 不得成为 Task
   产品状态的第二个 writer。它随 WP06-07 的 `task_runs` 落库；

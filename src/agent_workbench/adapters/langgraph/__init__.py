@@ -8,6 +8,7 @@ the unit tests assert on cannot disagree.
 
 from __future__ import annotations
 
+from agent_workbench.adapters.langgraph.checkpointer import PostgresCheckpointSaver
 from agent_workbench.adapters.langgraph.workflow import (
     GRAPH_BUILDERS,
     LangGraphTaskWorkflow,
@@ -19,5 +20,6 @@ __all__ = [
     "GRAPH_BUILDERS",
     "LangGraphTaskWorkflow",
     "NodeHandler",
+    "PostgresCheckpointSaver",
     "build_v1_graph",
 ]
