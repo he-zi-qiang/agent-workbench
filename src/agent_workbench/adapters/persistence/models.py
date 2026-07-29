@@ -551,3 +551,87 @@ workflow_checkpoint_writes = Table(
     # failing node and a resume. A foreign key here would not enforce an
     # invariant; it would fail ordinary runs. See tests/persistence.
 )
+
+
+# The Task Registry: product lifecycle, as opposed to the execution position
+# the checkpoint tables above hold. The two are separate facts in separate
+# places on purpose, and the Worker's reconciliation decides what they jointly
+# mean rather than pretending they commit together.
+#
+# What is deliberately not here yet, each because it belongs to a work package
+# that has its own reasons: the lease, epoch, attempt counter, available_at
+# backoff and recovery reason are coordination (WP08), and a single Worker
+# needs none of them; the run-semantics snapshot and submitted policy identity
+# are WP07-03; the resolved Qdrant collection, index version and generation
+# reservation are WP07-04. Each arrives in its own migration, the way the chat
+# turn's execution lease arrived after the turn itself.
+
+task_runs = Table(
+    "task_runs",
+    metadata,
+    Column("task_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
+    # The workflow thread this Task's execution position lives under. Unique
+    # in both directions: a Task addresses exactly one thread, and a thread
+    # backs exactly one Task, so no reconciliation can ever be handed two
+    # Registry rows for one checkpoint.
+    Column("thread_id", String(IDENTIFIER_LENGTH), nullable=False, unique=True),
+    # What this Task was submitted to run. The checkpoint separately records
+    # what actually wrote its position; the two disagreeing is the entire
+    # migration case, so neither may be derived from the other.
+    Column("graph_version", String(64), nullable=False),
+    # Where the submitted input is stored. Large inputs do not live in this
+    # row, and a Task with no checkpoint is started from this reference.
+    Column("input_ref", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("submission_dedup_key", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("status", String(32), nullable=False),
+    # Why a Task stopped where it did. Required exactly for the states a human
+    # has to act on or account for, so "failed" can never be recorded without
+    # saying what failed, and a Task parked for a migration always carries the
+    # reconciliation's own sentence.
+    Column("status_detail", Text, nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # Resubmitting the same key returns the same Task rather than starting a
+    # second one. Scoped to the owner: two owners may reuse a key without
+    # either of them learning that the other did.
+    UniqueConstraint(
+        "owner_id",
+        "submission_dedup_key",
+        name="uq_task_runs_owner_id_submission_dedup_key",
+    ),
+    CheckConstraint(
+        "status IN "
+        "('queued', 'running', 'waiting_approval', 'waiting_migration', "
+        "'succeeded', 'failed', 'cancelled', 'dead_letter')",
+        name="task_runs_status",
+    ),
+    CheckConstraint(
+        "(status IN ('waiting_migration', 'failed', 'cancelled', 'dead_letter') "
+        "AND status_detail IS NOT NULL) OR "
+        "(status IN ('queued', 'running', 'waiting_approval', 'succeeded') "
+        "AND status_detail IS NULL)",
+        name="task_runs_status_detail",
+    ),
+    # The pick order for a Worker looking for work: oldest queued first. The
+    # partial index means that scan never walks the finished ones, which are
+    # eventually most of the table.
+    Index(
+        "ix_task_runs_queued",
+        "created_at",
+        "task_id",
+        postgresql_where=text("status = 'queued'"),
+    ),
+    Index("ix_task_runs_tenant_id_task_id", "tenant_id", "task_id"),
+)

@@ -5,10 +5,12 @@ state the graph carries, and it says in its first paragraph that product status
 belongs to the Task Registry rather than to ``TaskState``. Putting the status
 vocabulary beside the graph's own fields is how the two start being confused.
 
-These are the statuses the architecture baseline names, and nothing else. A
-status invented here would be one the coordination design has not reasoned
-about -- fencing, cancellation and the stale-lease reaper are all phrased in
-terms of this set.
+These are the statuses the implementation plan's state machine names, and
+nothing else. A status invented here would be one the coordination design has
+not reasoned about -- fencing, cancellation and the stale-lease reaper are all
+phrased in terms of this set. The set is duplicated once, as a database check
+constraint, and a test asserts the two agree rather than trusting that whoever
+adds the ninth status remembers both.
 """
 
 from __future__ import annotations
@@ -29,12 +31,15 @@ TaskStatus = Literal[
     "succeeded",
     "failed",
     "cancelled",
+    # Retried until the attempt budget ran out. Terminal for a Worker: it is
+    # what stops a poison task from being picked up forever.
+    "dead_letter",
 ]
 
 #: No Worker may resume these. A late claim on one of them propagates the
 #: terminal fact instead of running a graph.
 TERMINAL_STATUSES: Final[frozenset[TaskStatus]] = frozenset(
-    {"succeeded", "failed", "cancelled"}
+    {"succeeded", "failed", "cancelled", "dead_letter"}
 )
 
 #: The statuses cancellation has to work from, per the baseline's own list.

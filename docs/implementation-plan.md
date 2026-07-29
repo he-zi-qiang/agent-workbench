@@ -1302,6 +1302,7 @@ revision ID 到真正开工并核对依赖关系时再确定，避免计划表�
 | `0008_chat_turns` | WP03/WP07 | 幂等 Chat Turn ledger、生命周期与单会话活跃约束 |
 | `0009_chat_turn_lease` | WP03/WP07 | Chat 固定执行 deadline、过期索引与生命周期约束 |
 | `0010_workflow_checkpoints` | WP06 | `workflow_checkpoints`、`workflow_checkpoint_blobs`、`workflow_checkpoint_writes` |
+| `0011_task_runs` | WP06–07 | `task_runs` 产品生命周期、submission dedup、thread 双向唯一（lease/快照/reservation 各自留给 WP08、WP07-03、WP07-04） |
 
 LangGraph checkpoint 表原计划由锁定版本的 saver migration 管理；[ADR-014](./adr/0014-own-postgres-checkpointer.md) 改为自研 checkpointer，因此这些表进入本项目的 Alembic（`0010`），迁移链仍只有一条 head。
 

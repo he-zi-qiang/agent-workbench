@@ -81,6 +81,71 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-052 Task Registry 的行，以及一处订正
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第二步：
+`task_runs` 的产品生命周期，schema 与约束。仓储与 Worker 还没有。
+
+### 订正：状态少了一个
+
+[PR-051](#2026-07-28-pr-051-worker-的恢复判定基线-95-的七种情形) 的
+`TaskStatus` 写了七个状态，并声称"这是基线点过名的全部"。**实施计划 §7.4 列的是八个**，
+多一个 `dead_letter`（重试预算耗尽的毒任务）。本轮补上，并归入终态——它的作用正是让毒任务
+不再被反复领取。`reconcile` 不需要改：终态分支本来就按集合判断，全枚举测试也自动覆盖到它。
+
+### 这一轮**不**加的列
+
+按实施计划 §7.2 的分工，各自留给自己的工作包：lease、epoch、attempt、`available_at`
+退避与 recovery reason 属于协调（WP08），而**单 Worker 一个都不需要**；run semantics
+快照与 submitted policy identity 是 WP07-03；resolved Qdrant collection / index version /
+generation reservation 是 WP07-04。分开落是本仓已有的做法——`0008_chat_turns` 落 Turn，
+`0009_chat_turn_lease` 才落它的执行 lease。
+
+### 两条硬约束
+
+**一个 owner 的一个 submission key 不能开出第二个 Task。** "重复 submission key 返回同一
+Task"是退出条件；*返回*同一个是仓储的事，*不可能存在第二个*是这条唯一约束的事。它按 owner
+分域：全局唯一会让一个用户选的 key 拒绝掉另一个用户的提交，而且会告诉对方这件事发生了。
+
+**`thread_id` 双向唯一。** 一个 Task 对应恰好一个 thread，一个 thread 背后恰好一个 Task，
+因此 reconciliation 永远不会拿到"一个 checkpoint 对两行 Registry"。
+
+`status_detail` 的约束是**双向**的：`waiting_migration` / `failed` / `cancelled` /
+`dead_letter` 必须带原因，其余四个状态必须不带。只做前一半的话，一段解释会活过让它失效的那次
+转换，然后被当成一个其实没问题的 Task 的当前说明来读。
+
+### 有牙验证里的一个诚实结果
+
+7 处破坏，**6 处被抓住，1 处没有**——而那 1 处是有意义的：单独删掉状态词汇表的 CHECK，
+**没有任何测试失败**。原因是 `status_detail` 那条 CHECK 把状态配对成两组，一个未知状态两组
+都不属于，于是它自己就把行挡下来了。也就是说词汇表 CHECK 在可观测行为上是**冗余**的。
+
+它仍然保留：等哪天 `status_detail` 规则被放宽，词汇表就会在**没人察觉**的情况下失去约束。
+这个结论写进了那条测试的文档，测试本身也改成同时验证"带原因"和"不带原因"两种未知状态写法，
+而不是继续声称自己在验证那条已被覆盖的 CHECK。
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 单独删掉状态词汇表 CHECK | **0（冗余，已记录）** |
+| 数据库词汇表里少 `dead_letter` | 1 |
+| 需要人处理的状态可以不带原因 | 10 |
+| 不需要人处理的状态可以留着原因 | 5 |
+| 同一 owner 可以重复提交同一 key | 1 |
+| submission key 改成全局唯一 | 1 |
+| 两个 Task 共用一个 thread | 1 |
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（224 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0011_task_runs
+
+pytest（无外部服务）              937 passed / 307 skipped
+pytest（真实 PostgreSQL + Qdrant） 1233 passed /  11 skipped
+```
+
 ## 2026-07-28 PR-051 Worker 的恢复判定：基线 §9.5 的七种情形
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第一步。
