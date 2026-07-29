@@ -81,6 +81,80 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-053 Task Registry 仓储：状态机是数据，SQL 由它推导
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第三步。
+`TaskRegistry` 端口 + `PostgresTaskRegistry`。转换全部是**条件 UPDATE**，`WHERE` 里的
+合法来源状态**从领域的转换表推导**（`sources_for`），不在 SQL 里重写一遍——规则写两遍，
+留下来跑的总是没被改的那一遍。
+
+实施计划 §7.4 的"接口层不能直接写状态字符串"落实为：方法按**发生了什么**命名
+（`mark_succeeded` / `park_for_migration` / `await_approval` / `cancel`），没有
+`transition(to=...)` 这种把状态字符串又还给调用方的口子。
+
+`ALLOWED_TRANSITIONS` 里终态**没有任何出边**——"迟到的审批不能复活已取消的 Task"落到实处
+就是这一条。`waiting_migration` 同样没有出边：计划里没写谁执行迁移、怎么执行，凭空加一条边
+就是发明一个没人设计过的流程。这两点都有测试钉住。
+
+### 破坏验证发现的三件事，两件是真缺陷
+
+第一轮 11 处破坏只抓住 8 处。三处漏网各自的结论不同，都不是"补个断言"能了事的：
+
+**一、`start_next` 的 `status = 'queued'` 条件被删掉，没有测试失败。**
+写代码时的注释说"单 Worker 下它和子查询等价"。**实测证明这句话是错的**：让另一个事务先把该行
+改成 `running` 但不提交，再跑 claim——
+
+```text
+带 status 条件：返回 None
+去掉 status 条件：返回 task_x   ← 同一个 Task 被派发了两次
+```
+
+PostgreSQL 在行被并发更新后会**重新校验 UPDATE 的限定条件**，但**不会重跑限定条件里的
+子查询**，于是 `task_id = (SELECT ... WHERE status='queued')` 仍然匹配一个已经不是 queued
+的行。这个条件是唯一挡住重复派发的东西。注释已按实测改写，并补了对应测试。
+
+**二、`submit` 改成"先读后插"，没有测试失败。**原来的并发测试用 `asyncio.gather` 起 5 个
+提交，实测它们**确实并发**（全部开始早于任何一个结束），但在没有屏障的情况下几乎总是自然串行，
+race 根本没发生。改成**确定性**写法：另一个事务先插入冲突行且不提交，`submit` 会阻塞在唯一
+索引上，提交后它只能走"输掉"的那条分支。此时——
+
+```text
+ON CONFLICT DO NOTHING：返回赢家的 Task
+先读后插：            IntegrityError
+```
+
+（用强制屏障单独验过一次：5 个"先读后插"并发，4 个 IntegrityError。）
+
+**三、`_move` 里"该带原因/不该带原因"的检查删掉后没有测试失败——因为它根本到不了。**
+五个公开方法的**签名**已经决定了要不要 `reason`，多传或少传都是 `TypeError`。那段检查是
+死代码，删掉了。
+
+换上的是一个**真的够得着**的检查：`reason=""`。空串既满足列的 `NOT NULL`，也满足
+`status_detail` 的 CHECK，于是**写得进去、读不回来**——`TaskRun.status_detail` 要求非空。
+这是失败最糟糕的形状。现在用 `TaskRun` 同一个类型去校验，两边不可能各说各话；删掉这个检查会让
+2 条测试失败。
+
+补完之后 11 处破坏全部被抓住，0 处漏网。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（227 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0011_task_runs
+
+pytest（无外部服务）              938 passed / 334 skipped
+pytest（真实 PostgreSQL + Qdrant） 1261 passed /  11 skipped
+```
+
+### 本轮明确未做
+
+- Worker 还没有；仓储只是它要用的东西；
+- 没有 lease、没有 `SKIP LOCKED`、没有 advisory lock、没有 priority——多 Worker 是 WP08。
+  但上面那条"重复派发"的实测结论已经预先钉住了 WP08 里最容易写错的地方；
+- `waiting_migration` 与 `waiting_approval` 的出边留给各自的流程（迁移程序、WP10 审批）。
+
 ## 2026-07-28 PR-052 Task Registry 的行，以及一处订正
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第二步：

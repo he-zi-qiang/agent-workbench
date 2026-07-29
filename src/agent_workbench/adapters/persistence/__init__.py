@@ -20,6 +20,7 @@ from agent_workbench.adapters.persistence.engine import create_query_engine
 from agent_workbench.adapters.persistence.event_log import PostgresEventLog
 from agent_workbench.adapters.persistence.models import metadata
 from agent_workbench.adapters.persistence.outbox import PostgresOutbox
+from agent_workbench.adapters.persistence.task_registry import PostgresTaskRegistry
 
 __all__ = [
     "PostgresChatExpirationCoordinator",
@@ -28,6 +29,7 @@ __all__ = [
     "PostgresDocumentStore",
     "PostgresEventLog",
     "PostgresOutbox",
+    "PostgresTaskRegistry",
     "create_query_engine",
     "metadata",
 ]
