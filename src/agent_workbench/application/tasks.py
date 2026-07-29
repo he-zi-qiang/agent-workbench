@@ -21,13 +21,48 @@ from dataclasses import dataclass
 from typing import Final
 
 from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.events import EventEnvelope
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.policies import PrincipalContext
+from agent_workbench.domain.schema import DomainModel
+from agent_workbench.ports.event_log import EventCursor, EventLogPort
 from agent_workbench.ports.task_registry import TaskRegistry, TaskRun, TaskSubmission
 from agent_workbench.ports.task_workflow import GraphVersion
 from agent_workbench.workflows.research_graph import GRAPH_VERSION_V1
 
 TASK_THREAD_PREFIX: Final[str] = "thr"
+
+#: A timeline read is a client-supplied request. Unbounded, it is a way to ask
+#: the server to hold a whole Task's history in memory on demand.
+DEFAULT_TIMELINE_LIMIT: Final[int] = 200
+MAX_TIMELINE_LIMIT: Final[int] = 500
+
+
+def task_stream_id(task: TaskRun) -> Identifier:
+    """The one stream a Task's events belong to.
+
+    It is the workflow thread, and it is derived in exactly one place so the
+    writer and the reader cannot disagree about where a Task's events went. A
+    Task and a thread are one-to-one -- the Registry's unique constraint says
+    so in both directions -- which is what lets a single ``(stream, sequence)``
+    cursor mean "everything about this Task up to here".
+    """
+
+    return task.thread_id
+
+
+class TaskTimeline(DomainModel):
+    """One slice of a Task's events, and where to continue from.
+
+    ``cursor`` is absent only for an empty slice. It is what a client sends
+    back to resume, so it is the *last delivered* position rather than the end
+    of the stream: a slice that stopped at the limit and one that reached the
+    end resume identically.
+    """
+
+    task_id: Identifier
+    events: tuple[EventEnvelope, ...]
+    cursor: EventCursor | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +70,10 @@ class TaskService:
     """Open Tasks for a caller, and answer questions about their own."""
 
     registry: TaskRegistry
+    # Reading the timeline needs the log; opening and reading a Task do not.
+    # Optional so a deployment that only submits does not have to wire one, and
+    # so the M3a in-memory log and the WP07 durable one are the same swap.
+    events: EventLogPort | None = None
     # Which graph a newly submitted Task runs. A deployment decision rather
     # than a request parameter: a caller that could name a version could pin
     # itself to one nobody deploys any more, or to one that means something
@@ -80,6 +119,69 @@ class TaskService:
             raise NotFoundError(f"task not found: {task_id}")
         return task
 
+    async def timeline(
+        self,
+        principal: PrincipalContext,
+        task_id: Identifier,
+        *,
+        after: EventCursor | None = None,
+        limit: int = DEFAULT_TIMELINE_LIMIT,
+    ) -> TaskTimeline:
+        """This Task's events, in order, from ``after`` onwards.
+
+        The authorization check is the same one ``get`` performs, and it runs
+        *first*: a timeline read that answered differently for another owner's
+        Task would leak exactly what the Task read refuses to.
+
+        A cursor from another stream is refused rather than ignored. Ignoring
+        it would silently serve this Task's history to a client that asked to
+        continue a different one, and it is a client-supplied value.
+        """
+
+        if self.events is None:
+            raise TimelineUnavailableError(
+                "this task service was assembled without an event log"
+            )
+        if limit < 1:
+            raise ValueError("limit must be positive")
+
+        task = await self.get(principal, task_id)
+        stream_id = task_stream_id(task)
+        if after is not None and after.stream_id != stream_id:
+            raise NotFoundError(f"task not found: {task_id}")
+
+        recorded = await self.events.read(
+            stream_id,
+            after_sequence=None if after is None else after.sequence,
+            limit=min(limit, MAX_TIMELINE_LIMIT),
+        )
+        return TaskTimeline(
+            task_id=task.task_id,
+            events=recorded,
+            cursor=_cursor_after(stream_id, recorded, after),
+        )
+
+
+class TimelineUnavailableError(RuntimeError):
+    """The service can open and read Tasks, but was given no event log."""
+
+
+def _cursor_after(
+    stream_id: Identifier,
+    recorded: tuple[EventEnvelope, ...],
+    previous: EventCursor | None,
+) -> EventCursor | None:
+    last = next(
+        (event.sequence for event in reversed(recorded) if event.sequence is not None),
+        None,
+    )
+    if last is None:
+        # Nothing delivered, so the caller's position has not moved. Returning
+        # the end of the stream instead would skip anything that arrives
+        # between this read and the next one.
+        return previous
+    return EventCursor(stream_id=stream_id, sequence=last)
+
 
 def _belongs_to(task: TaskRun, principal: PrincipalContext) -> bool:
     # Both, not either. A tenant match alone would expose one tenant's Tasks to
@@ -91,4 +193,12 @@ def _belongs_to(task: TaskRun, principal: PrincipalContext) -> bool:
     )
 
 
-__all__ = ["TASK_THREAD_PREFIX", "TaskService"]
+__all__ = [
+    "DEFAULT_TIMELINE_LIMIT",
+    "MAX_TIMELINE_LIMIT",
+    "TASK_THREAD_PREFIX",
+    "TaskService",
+    "TaskTimeline",
+    "TimelineUnavailableError",
+    "task_stream_id",
+]

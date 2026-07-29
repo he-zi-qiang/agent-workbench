@@ -81,6 +81,76 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-056 统一事件时间线：WP06 最后一条退出条件
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-09。
+`TaskService.timeline()` 按游标切片返回一个 Task 的事件。
+
+### "统一"是指**一条流**
+
+一个 Task 的事件全部落在**它自己的 workflow thread** 这一条流上，所以
+`(stream_id, sequence)` 一个游标就等于"这个 Task 到此为止的全部"，重连的客户端也只回传
+一个值。Task 与 thread 是一对一——Registry 的唯一约束**双向**保证——这正是让单游标成立的
+前提。流 ID 的推导只写在 `task_stream_id()` **一个地方**，写入方和读取方不可能对"事件去哪了"
+产生分歧；把它改成所有 Task 共用一条流会让测试失败。
+
+### 三个不显眼但要紧的地方
+
+**授权检查在读日志之前，且用的是同一条。** 时间线如果对别人的 Task 给出不同答案，泄露的恰好
+是 Task 查询拒绝泄露的那件事——这个 id 存在。所以它先走 `get()`，两者同样是 `NotFoundError`。
+
+**外来游标是拒绝，不是忽略。** 游标是客户端提供的值；忽略它等于对一个"想接着看另一条流"的
+客户端，从头把**这个** Task 的历史端上去。
+
+**空切片不推进游标。** 返回流末尾会跳过"这次读和下次读之间到达"的事件；没投递出去，位置就
+没有移动。
+
+### 有牙验证里的又一个诚实结果
+
+7 处破坏，第一轮 6 处。漏网的是"**limit 不设上限**"——原测试传了一个超大 limit 然后断言
+"返回 3 条"，可库里本来就只有 3 条，**上限有没有生效根本看不出来**。
+
+它没有靠"多存 500 条事件"来修，而是搬到了能观察的地方：用一个**记录被要求了什么**的假日志，
+直接断言服务传给日志的 limit 是被夹住之后的值。PostgreSQL 那侧只保留"limit=0 被拒绝"。
+补完后 7 处全部被抓住。
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 先读日志再做授权 | 1 |
+| 忽略外来游标 | 1 |
+| 游标不推进 | 3 |
+| 空切片把游标推到流末尾 | 2 |
+| limit 不设上限 | **第一轮 0**，改测试后 1 |
+| 没有日志时返回空时间线 | 1 |
+| 所有 Task 共用一条流 | 1 |
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（234 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+
+pytest（无外部服务）              955 passed / 353 skipped
+pytest（真实 PostgreSQL + Qdrant） 1297 passed /  11 skipped
+```
+
+### WP06 退出条件
+
+**全部满足。** 事件时间线这一条按计划的说法"M3a 可用内存/测试 EventLog，WP07 替换为
+PostgreSQL durable EventLog，不改变接口"——本轮直接用了已经存在的 `PostgresEventLog`，
+所以那次替换已经不需要了；接口是 `EventLogPort`，两种实现同一个口子。
+
+### 本轮明确未做
+
+- **没有 HTTP/CLI 入口**：时间线只有服务方法，`event_stream.replay_source` 那套 SSE
+  与 `Last-Event-ID` 是 WP09；
+- Worker 目前**不往这条流里写**任何东西：写入的是 Agent 节点的 `EventSink`，而组装
+  Worker → 节点 → sink 的那个组装点还不存在（WP06 之后）。所以真实运行里这条流现在是空的，
+  测试用真实 `EventLogPort` 追加的是 Agent 运行会产生的同一种事件；
+- Task 生命周期本身还没有事件类型（`TaskSubmitted` 等）：`EventPayload` 是封闭联合，
+  加成员要动 schema 版本，属于 WP07-07。
+
 ## 2026-07-28 PR-055 TaskService 与可切换的 FakeExecutor
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。

@@ -17,7 +17,11 @@ from typing import Any
 
 import pytest
 
-from agent_workbench.application.tasks import TaskService
+from agent_workbench.application.tasks import (
+    DEFAULT_TIMELINE_LIMIT,
+    MAX_TIMELINE_LIMIT,
+    TaskService,
+)
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.task_registry import TaskRun, TaskSubmission
@@ -66,8 +70,24 @@ def _task(**overrides: Any) -> TaskRun:
     return TaskRun.model_validate(base)
 
 
-def _service(registry: Any) -> TaskService:
-    return TaskService(registry=registry)
+class _RecordingLog:
+    """Records the read it was asked for, and returns nothing."""
+
+    def __init__(self) -> None:
+        self.limits: list[int] = []
+
+    async def append(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover
+        raise AssertionError("the timeline never appends")
+
+    async def read(
+        self, stream_id: str, *, after_sequence: int | None = None, limit: int = 500
+    ) -> tuple[Any, ...]:
+        self.limits.append(limit)
+        return ()
+
+
+def _service(registry: Any, events: Any = None) -> TaskService:
+    return TaskService(registry=registry, events=events)
 
 
 # --------------------------------------------------------------------------
@@ -178,3 +198,33 @@ def test_a_task_that_does_not_exist_fails_the_same_way() -> None:
     assert type(absent.value) is type(not_mine.value)
     assert absent.value.code == not_mine.value.code
     assert str(absent.value) == str(not_mine.value)
+
+
+# --------------------------------------------------------------------------
+# What the timeline asks the log for
+
+
+def test_an_oversized_limit_is_capped_before_it_reaches_the_log() -> None:
+    """A read is a client-supplied request, and the cap is what bounds it.
+
+    Asserted against what the log was *asked* for, because observing it
+    through a real log would mean storing more events than the cap just to
+    watch it apply.
+    """
+
+    log = _RecordingLog()
+    service = _service(_FakeRegistry(_task()), log)
+
+    asyncio.run(service.timeline(OWNER, "task_1", limit=MAX_TIMELINE_LIMIT * 10))
+
+    assert log.limits == [MAX_TIMELINE_LIMIT]
+
+
+def test_an_ordinary_limit_is_passed_through_unchanged() -> None:
+    log = _RecordingLog()
+    service = _service(_FakeRegistry(_task()), log)
+
+    asyncio.run(service.timeline(OWNER, "task_1", limit=7))
+    asyncio.run(service.timeline(OWNER, "task_1"))
+
+    assert log.limits == [7, DEFAULT_TIMELINE_LIMIT]
