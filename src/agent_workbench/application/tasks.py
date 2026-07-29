@@ -17,14 +17,15 @@ never a "forbidden".
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final
 
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.events import EventEnvelope
 from agent_workbench.domain.identifiers import Identifier, new_id
-from agent_workbench.domain.policies import PrincipalContext
-from agent_workbench.domain.schema import DomainModel
+from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
+from agent_workbench.domain.schema import DomainModel, JsonObject
 from agent_workbench.ports.event_log import EventCursor, EventLogPort
 from agent_workbench.ports.task_registry import TaskRegistry, TaskRun, TaskSubmission
 from agent_workbench.ports.task_workflow import GraphVersion
@@ -66,10 +67,36 @@ class TaskTimeline(DomainModel):
 
 
 @dataclass(frozen=True, slots=True)
+class SubmittedSemantics:
+    """What a Task means, and under which rules it was granted.
+
+    Assembled once, at submission, from settings and policy -- never from the
+    request. A caller that could name its own semantics could pin a Task to a
+    model, an index or a permission ceiling nobody deployed.
+
+    The snapshot and the policy identity are separate on purpose. The snapshot
+    is restored on resume; policy is re-evaluated every time, and these two
+    fields only record which rules the caller was granted under, so the
+    effective authorization stays "submitted envelope intersected with current
+    policy" rather than "whatever was allowed then".
+    """
+
+    run_semantics_snapshot: JsonObject
+    run_semantics_revision: str
+    policy_revision: str
+    policy_fingerprint: str
+    authorization_envelope: AuthorizationEnvelope
+
+
+@dataclass(frozen=True, slots=True)
 class TaskService:
     """Open Tasks for a caller, and answer questions about their own."""
 
     registry: TaskRegistry
+    # How a submission's semantics are produced. A callable rather than a
+    # value, because the Qdrant alias a knowledge-using Task resolves is read
+    # per submission (WP07-04), not once at startup.
+    semantics: Callable[[], SubmittedSemantics]
     # Reading the timeline needs the log; opening and reading a Task do not.
     # Optional so a deployment that only submits does not have to wire one, and
     # so the M3a in-memory log and the WP07 durable one are the same swap.
@@ -96,6 +123,7 @@ class TaskService:
         into an error.
         """
 
+        decided = self.semantics()
         return await self.registry.submit(
             TaskSubmission(
                 tenant_id=principal.tenant_id,
@@ -104,6 +132,11 @@ class TaskService:
                 graph_version=self.graph_version,
                 input_ref=input_ref,
                 submission_dedup_key=submission_dedup_key,
+                run_semantics_snapshot=decided.run_semantics_snapshot,
+                run_semantics_revision=decided.run_semantics_revision,
+                submitted_policy_revision=decided.policy_revision,
+                submitted_policy_fingerprint=decided.policy_fingerprint,
+                submitted_authorization_envelope=decided.authorization_envelope,
             )
         )
 
@@ -197,6 +230,7 @@ __all__ = [
     "DEFAULT_TIMELINE_LIMIT",
     "MAX_TIMELINE_LIMIT",
     "TASK_THREAD_PREFIX",
+    "SubmittedSemantics",
     "TaskService",
     "TaskTimeline",
     "TimelineUnavailableError",

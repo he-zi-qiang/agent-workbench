@@ -28,13 +28,14 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.application.tasks import (
+    SubmittedSemantics,
     TaskService,
     TimelineUnavailableError,
     task_stream_id,
 )
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.events import RunCompleted, RunStarted, ToolStarted
-from agent_workbench.domain.policies import PrincipalContext
+from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.event_log import EventCursor, EventScope
 from agent_workbench.ports.task_registry import TaskRun
@@ -65,6 +66,13 @@ def _run(scenario: Callable[[TaskService, Any], Awaitable[Any]]) -> Any:
             service = TaskService(
                 registry=PostgresTaskRegistry(engine),
                 events=PostgresEventLog(engine),
+                semantics=lambda: SubmittedSemantics(
+                    run_semantics_snapshot={"model": {"provider": "deepseek"}},
+                    run_semantics_revision="1.2:v1.3:abc0123456789def",
+                    policy_revision="policy-1",
+                    policy_fingerprint="f" * 16,
+                    authorization_envelope=AuthorizationEnvelope(),
+                ),
             )
             return await scenario(service, PostgresEventLog(engine))
         finally:
@@ -285,7 +293,16 @@ def test_a_service_without_a_log_says_so_instead_of_returning_nothing() -> None:
     async def scenario() -> None:
         engine = create_query_engine(dsn, application_name="agent-workbench-tests")
         try:
-            service = TaskService(registry=PostgresTaskRegistry(engine))
+            service = TaskService(
+                registry=PostgresTaskRegistry(engine),
+                semantics=lambda: SubmittedSemantics(
+                    run_semantics_snapshot={},
+                    run_semantics_revision="r",
+                    policy_revision="p",
+                    policy_fingerprint="f",
+                    authorization_envelope=AuthorizationEnvelope(),
+                ),
+            )
             with pytest.raises(TimelineUnavailableError):
                 await service.timeline(OWNER, "task_1")
         finally:

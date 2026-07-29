@@ -123,6 +123,11 @@ def _submission(**overrides: Any) -> TaskSubmission:
         "graph_version": "v1",
         "input_ref": "input_1",
         "submission_dedup_key": "dedup_1",
+        "run_semantics_snapshot": {"model": {"provider": "deepseek"}},
+        "run_semantics_revision": "1.2:v1.3:abc0123456789def",
+        "submitted_policy_revision": "policy-1",
+        "submitted_policy_fingerprint": "f" * 16,
+        "submitted_authorization_envelope": {},
     }
     base.update(overrides)
     return TaskSubmission.model_validate(base)
@@ -148,7 +153,9 @@ def test_a_repeated_submission_key_returns_the_same_task() -> None:
         first = await registry.submit(_submission())
         second = await registry.submit(_submission())
         third = await registry.submit(_submission())
-        return first.task_id, second.task_id, len({first, second, third})
+        # Compared by value, not by identity: a Task now carries its
+        # submitted semantics, and a dict is not hashable.
+        return first.task_id, second.task_id, len({first == second, second == third})
 
     first_id, second_id, distinct = _run(scenario)
 
@@ -209,6 +216,11 @@ def test_a_submission_that_loses_the_race_returns_the_winner_s_task() -> None:
             "submission_dedup_key": "dedup_1",
             "status": "queued",
             "status_detail": None,
+            "run_semantics_snapshot": {"model": {"provider": "deepseek"}},
+            "run_semantics_revision": "1.2:v1.3:abc0123456789def",
+            "submitted_policy_revision": "policy-1",
+            "submitted_policy_fingerprint": "f" * 16,
+            "submitted_authorization_envelope": {},
         }
         returned = await _while_uncommitted(
             engine,
@@ -609,3 +621,86 @@ def test_the_event_is_not_visible_outside_the_transaction_that_writes_it() -> No
 
     assert seen == [0]
     assert committed == 1
+
+
+# --------------------------------------------------------------------------
+# What the Task meant when it was submitted
+
+
+def test_the_submitted_semantics_survive_a_round_trip() -> None:
+    """A resume restores what the Task meant, so it has to come back intact."""
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, ...]:
+        opened = await registry.submit(_submission())
+        reread = await registry.get(opened.task_id)
+        assert reread is not None
+        return (
+            reread.run_semantics_snapshot,
+            reread.run_semantics_revision,
+            reread.submitted_policy_revision,
+            reread.submitted_policy_fingerprint,
+            reread.submitted_authorization_envelope.max_tool_risk,
+        )
+
+    snapshot, revision, policy_revision, fingerprint, risk = _run(scenario)
+
+    assert snapshot == {"model": {"provider": "deepseek"}}
+    assert revision == "1.2:v1.3:abc0123456789def"
+    assert policy_revision == "policy-1"
+    assert fingerprint == "f" * 16
+    # The envelope comes back as the model, not as a dict: an authorization
+    # ceiling read as raw JSON is one nothing re-validates.
+    assert risk == "read"
+
+
+def test_a_key_reused_under_different_semantics_is_a_conflict() -> None:
+    """The same request under a different deployment is a different request.
+
+    Returning the first Task would run the caller's work under semantics it
+    never asked for -- which is the failure the snapshot exists to prevent,
+    arriving through the idempotency path instead of through a resume.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> None:
+        await registry.submit(_submission())
+        with pytest.raises(TaskSubmissionConflictError):
+            await registry.submit(
+                _submission(run_semantics_revision="1.2:v1.3:0000000000000000")
+            )
+
+    _run(scenario)
+
+
+def test_a_key_reused_under_a_different_policy_is_a_conflict() -> None:
+    """Policy identity is part of what a submission was, not decoration."""
+
+    async def scenario(registry: PostgresTaskRegistry) -> None:
+        await registry.submit(_submission())
+        with pytest.raises(TaskSubmissionConflictError):
+            await registry.submit(_submission(submitted_policy_fingerprint="0" * 16))
+
+    _run(scenario)
+
+
+def test_the_snapshot_a_task_carries_is_the_one_it_was_submitted_with() -> None:
+    """Two Tasks opened under different semantics keep their own.
+
+    A snapshot read from live settings at resume time would make an old Task
+    mean whatever the deployment means now.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, Any]:
+        first = await registry.submit(_submission())
+        second = await registry.submit(
+            _submission(
+                thread_id="thr_2",
+                submission_dedup_key="dedup_2",
+                run_semantics_snapshot={"model": {"provider": "other"}},
+            )
+        )
+        return first.run_semantics_snapshot, second.run_semantics_snapshot
+
+    first, second = _run(scenario)
+
+    assert first == {"model": {"provider": "deepseek"}}
+    assert second == {"model": {"provider": "other"}}

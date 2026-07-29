@@ -81,6 +81,68 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-058 WP07-03：Task 提交时的语义与授权身份落库
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。迁移 `0012`。
+
+`task_runs` 增加五列：`run_semantics_snapshot`、`run_semantics_revision`、
+`submitted_policy_revision`、`submitted_policy_fingerprint`、
+`submitted_authorization_envelope`。确定性快照的机制**此前已在 settings 层实现**
+（`run_semantics_snapshot()` / `task_run_semantics_revision()` / `policy_identity()`），
+本轮做的是把它**持久化**并让提交路径带上它。
+
+### 快照与 policy 身份分开存
+
+快照是**恢复时沿用**的东西；policy **每次 claim、每次 dispatch 都重新求值**。两列 policy
+身份只记录"调用方当时是在哪套规则下被授权的"，因此有效授权始终是
+"提交时的 envelope ∩ 当前规则"，而不是"当时允许什么就一直允许什么"。
+
+envelope 读回来是**模型**而不是裸 dict：一个当成 JSON 读的授权上限，是没有任何东西会再校验
+一遍的上限。
+
+### 三处"不能是可选"的地方
+
+**`TaskSubmission` 的这些字段是必填的。** 一个可以省略语义的提交会产出一个"恢复时无物可恢复"
+的 Task，而这个疏漏只会在恢复的那一刻才被发现。
+
+**列是 NOT NULL 且无默认值**，所以迁移在表里已有行时会直接失败。这是故意的：在这些列存在之前
+提交的 Task 没有"提交时语义"，回填一个占位符等于**编造**一份——而恢复时会把编造的那份当真。
+
+**`semantics` 是注入的 callable 而不是一个值**：涉及知识库的 Task 要在**每次提交**时解析
+Qdrant alias（WP07-04），不是启动时解析一次。
+
+### 幂等的判定范围跟着变宽
+
+同一个 dedup key 配**不同的语义修订或不同的 policy 指纹**，现在是
+`TaskSubmissionConflictError`。否则调用方的工作会在它从未要求过的语义下运行——正是快照要防的
+那个失败，只不过是从幂等路径而不是从恢复路径进来的。
+
+### 有牙验证
+
+4 处破坏。其中**两处是我自己写坏的空操作**（改了等价代码 / 加了个 `# noqa`），不算发现；
+如实记下来是因为"破坏了但测试没红"如果不追究，就会被当成覆盖率证明。真正的两处：
+
+| 破坏 | 结果 |
+|---|---|
+| 语义不算作"提交是什么"的一部分 | 2 条测试失败 |
+| 快照列改成 nullable | 迁移漂移测试 2 条失败（第一轮漏跑，因为它不在我选的目标文件里） |
+
+本轮门禁：
+
+```text
+ruff check / format      passed（235 files）
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0012_task_submitted_semantics
+pytest（无外部服务）              955 passed / 363 skipped
+pytest（真实 PostgreSQL + Qdrant） 1307 passed /  11 skipped
+```
+
+### 本轮明确未做
+
+- **没有任何地方从 settings 构造 `SubmittedSemantics`**：服务收一个 callable，组装点仍不存在；
+- Qdrant alias 解析与 generation reservation（WP07-04）没做，所以三个 `resolved_*` 列还没有；
+- 快照内容本身没有新增校验（"与两个 resolved 字段不一致时 fail closed"要等 WP07-04）。
+
 ## 2026-07-28 PR-057 WP07 开始：Task 与它的开场事件同事务提交
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP07-02 的第一半，

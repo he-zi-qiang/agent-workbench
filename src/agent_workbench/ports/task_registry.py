@@ -20,7 +20,8 @@ from typing import Annotated, Protocol, runtime_checkable
 from pydantic import StringConstraints
 
 from agent_workbench.domain.identifiers import Identifier
-from agent_workbench.domain.schema import DomainModel
+from agent_workbench.domain.policies import AuthorizationEnvelope
+from agent_workbench.domain.schema import DomainModel, JsonObject, ShortText
 from agent_workbench.domain.task_registry import TaskStatus
 from agent_workbench.ports.task_workflow import GraphVersion
 
@@ -48,6 +49,15 @@ class TaskSubmission(DomainModel):
     graph_version: GraphVersion
     input_ref: Identifier
     submission_dedup_key: Identifier
+    # What the Task means, decided once. Required rather than defaulted: a
+    # submission that could omit its semantics would produce a Task whose
+    # resume has nothing to restore, and the omission would only be noticed
+    # during recovery.
+    run_semantics_snapshot: JsonObject
+    run_semantics_revision: ShortText
+    submitted_policy_revision: ShortText
+    submitted_policy_fingerprint: ShortText
+    submitted_authorization_envelope: AuthorizationEnvelope
 
 
 class TaskRun(DomainModel):
@@ -60,6 +70,11 @@ class TaskRun(DomainModel):
     graph_version: GraphVersion
     input_ref: Identifier
     submission_dedup_key: Identifier
+    run_semantics_snapshot: JsonObject
+    run_semantics_revision: ShortText
+    submitted_policy_revision: ShortText
+    submitted_policy_fingerprint: ShortText
+    submitted_authorization_envelope: AuthorizationEnvelope
     status: TaskStatus
     status_detail: TaskStatusDetail | None = None
     created_at: datetime

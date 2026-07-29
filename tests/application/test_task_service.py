@@ -20,12 +20,21 @@ import pytest
 from agent_workbench.application.tasks import (
     DEFAULT_TIMELINE_LIMIT,
     MAX_TIMELINE_LIMIT,
+    SubmittedSemantics,
     TaskService,
 )
 from agent_workbench.domain.errors import NotFoundError
-from agent_workbench.domain.policies import PrincipalContext
+from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.ports.task_registry import TaskRun, TaskSubmission
 from agent_workbench.workflows.research_graph import GRAPH_VERSION_V1
+
+SEMANTICS = SubmittedSemantics(
+    run_semantics_snapshot={"model": {"provider": "deepseek"}},
+    run_semantics_revision="1.2:v1.3:abc0123456789def",
+    policy_revision="policy-1",
+    policy_fingerprint="f" * 16,
+    authorization_envelope=AuthorizationEnvelope(),
+)
 
 OWNER = PrincipalContext(principal_id="user_1", tenant_id="tenant_a")
 OTHER_OWNER = PrincipalContext(principal_id="user_2", tenant_id="tenant_a")
@@ -41,12 +50,7 @@ class _FakeRegistry:
 
     async def submit(self, submission: TaskSubmission) -> TaskRun:
         self.submissions.append(submission)
-        return _task(
-            thread_id=submission.thread_id,
-            tenant_id=submission.tenant_id,
-            owner_id=submission.owner_id,
-            graph_version=submission.graph_version,
-        )
+        return _task(**submission.model_dump())
 
     async def get(self, task_id: str) -> TaskRun | None:
         return self._existing
@@ -62,6 +66,11 @@ def _task(**overrides: Any) -> TaskRun:
         "graph_version": GRAPH_VERSION_V1,
         "input_ref": "input_1",
         "submission_dedup_key": "dedup_1",
+        "run_semantics_snapshot": {"model": {"provider": "deepseek"}},
+        "run_semantics_revision": "1.2:v1.3:abc0123456789def",
+        "submitted_policy_revision": "policy-1",
+        "submitted_policy_fingerprint": "f" * 16,
+        "submitted_authorization_envelope": {},
         "status": "queued",
         "created_at": now,
         "updated_at": now,
@@ -87,7 +96,7 @@ class _RecordingLog:
 
 
 def _service(registry: Any, events: Any = None) -> TaskService:
-    return TaskService(registry=registry, events=events)
+    return TaskService(registry=registry, events=events, semantics=lambda: SEMANTICS)
 
 
 # --------------------------------------------------------------------------

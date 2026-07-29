@@ -77,6 +77,11 @@ def _row(**overrides: Any) -> dict[str, Any]:
         "submission_dedup_key": "dedup_1",
         "status": "queued",
         "status_detail": None,
+        "run_semantics_snapshot": {"model": {"provider": "deepseek"}},
+        "run_semantics_revision": "1.2:v1.3:abc0123456789def",
+        "submitted_policy_revision": "policy-1",
+        "submitted_policy_fingerprint": "f" * 16,
+        "submitted_authorization_envelope": {},
     }
     base.update(overrides)
     return base

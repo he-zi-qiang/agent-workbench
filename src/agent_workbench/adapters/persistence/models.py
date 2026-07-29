@@ -585,6 +585,19 @@ task_runs = Table(
     # row, and a Task with no checkpoint is started from this reference.
     Column("input_ref", String(IDENTIFIER_LENGTH), nullable=False),
     Column("submission_dedup_key", String(IDENTIFIER_LENGTH), nullable=False),
+    # What this Task means, resolved at submission and never re-resolved.
+    # Deterministic semantics only: the settings layer builds it, and it
+    # excludes alias, policy, DSN, secret, endpoint and coordination -- a
+    # resume restores what the Task meant, not where the deployment was.
+    Column("run_semantics_snapshot", JSONB, nullable=False),
+    Column("run_semantics_revision", String(128), nullable=False),
+    # Policy identity is stored beside the snapshot rather than inside it,
+    # because policy is re-evaluated on every claim and every dispatch. These
+    # two record which rules the caller was granted under; the effective
+    # authorization is always that envelope intersected with current policy.
+    Column("submitted_policy_revision", String(128), nullable=False),
+    Column("submitted_policy_fingerprint", String(DIGEST_LENGTH), nullable=False),
+    Column("submitted_authorization_envelope", JSONB, nullable=False),
     Column("status", String(32), nullable=False),
     # Why a Task stopped where it did. Required exactly for the states a human
     # has to act on or account for, so "failed" can never be recorded without

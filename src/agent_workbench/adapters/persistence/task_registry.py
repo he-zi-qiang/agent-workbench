@@ -56,6 +56,8 @@ _SUBMISSION_IDENTITY = (
     "thread_id",
     "graph_version",
     "input_ref",
+    "run_semantics_revision",
+    "submitted_policy_fingerprint",
 )
 
 
@@ -79,7 +81,7 @@ class PostgresTaskRegistry:
             "task_id": new_id("task"),
             "status": "queued",
             "status_detail": None,
-            **submission.model_dump(),
+            **submission.model_dump(mode="json"),
         }
         async with self._engine.begin() as connection:
             # Insert-or-nothing, then read. The alternative -- read, then

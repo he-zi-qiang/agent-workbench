@@ -81,6 +81,11 @@ def _submission(**overrides: Any) -> TaskSubmission:
         "graph_version": "v1",
         "input_ref": "input_1",
         "submission_dedup_key": "dedup_1",
+        "run_semantics_snapshot": {"model": {"provider": "deepseek"}},
+        "run_semantics_revision": "1.2:v1.3:abc0123456789def",
+        "submitted_policy_revision": "policy-1",
+        "submitted_policy_fingerprint": "f" * 16,
+        "submitted_authorization_envelope": {},
     }
     base.update(overrides)
     return TaskSubmission.model_validate(base)
