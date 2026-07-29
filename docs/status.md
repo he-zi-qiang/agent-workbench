@@ -81,6 +81,62 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
 
+## 2026-07-28 PR-057 WP07 开始：Task 与它的开场事件同事务提交
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP07-02 的第一半，
+也是 WP07 的第一条退出条件：**状态和事件同事务提交**。
+
+新增一个事件类型 `TaskSubmitted`，`PostgresTaskRegistry.submit` 用**同一个连接、同一个事务**
+写入 `task_runs` 行和这条事件。二者要么一起提交，要么一起回滚——不会存在"有 Task 但没有任何
+东西说明它为什么存在"，也不会存在"事件描述了一个被回滚掉的 Task"。
+
+事件只带**提交决定了什么**，不带它引用的东西：objective 在 `input_ref` 后面。事件会被重放进
+时间线和 SSE 帧，调用方提交的正文没有理由在那里被复述一遍。
+
+日志是**默认构造**而不是可选注入：没有办法造出一个"跳过事件"的 registry，只能换一个日志。
+
+### 两处被测试逼出来的修正
+
+**冲突检查必须在 append 之前。** 同一个 dedup key 配不同请求，本来会先撞上事件的
+`event_key` 幂等校验，报成 `EventKeyConflictError`——一个关于本项目**自己记账方式**的错误，
+扔给一个只是犯了普通错误的调用方。挪到 append 前之后，它是 `TaskSubmissionConflictError`。
+
+**时间线不再有"空"这个状态。** 一个刚开出来的 Task，时间线上已经有它自己的开场事件了——
+因为二者同事务。相关测试从"没有事件"改成断言**第一条就是 `TaskSubmitted`**。
+
+### 有牙验证：6 处破坏，5 处被抓住
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 事件不带幂等 key | 1 |
+| 冲突检查挪到 append 之后 | 2 |
+| 事件写进另一条流 | 6 |
+| 干脆不写事件 | 11 |
+| `TaskSubmitted` 改成 transient | 38 |
+| **append 改成自己开事务** | **0** |
+
+最后一行是**没有修掉的**，如实记下来：`PostgresEventLog.append` 内部就是
+`begin()` + `append_durable_in_transaction`，所以从外部看，"用调用方的事务"和"自己开一个"
+在 append 那一刻**完全一样**——两者此时都还没提交。要区分只能在 `submit` 里加一个仅供测试
+存在的接缝。没有加。改为覆盖它确实成立的两条性质：**append 失败则 Task 不存在**，
+以及**重复提交不追加第二条事件**；再加一条从**第二个连接**观察、断言事务外看不到该事件。
+
+本轮门禁：
+
+```text
+ruff check / format      passed
+pyright                  0 errors / 0 warnings
+pytest（无外部服务）              955 passed / 359 skipped
+pytest（真实 PostgreSQL + Qdrant） 1303 passed /  11 skipped
+```
+
+### WP07 剩下的
+
+WP07-01（仓储与状态机）与 WP07-05/06（`events`/`event_streams`、per-stream sequence、
+cursor codec）此前已经落地。仍未做：WP07-02 的 `NOTIFY task_ready` 与输入存储、
+WP07-03 语义快照与 submitted policy identity、WP07-04/08 Qdrant generation reservation
+与 Task-aware GC、WP07-07 其余 durable 事件。
+
 ## 2026-07-28 PR-056 统一事件时间线：WP06 最后一条退出条件
 
 状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-09。

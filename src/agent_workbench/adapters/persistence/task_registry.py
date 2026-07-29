@@ -28,9 +28,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from agent_workbench.adapters.persistence.event_log import PostgresEventLog
 from agent_workbench.adapters.persistence.models import task_runs
+from agent_workbench.domain.events import TaskSubmitted
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.task_registry import TaskStatus, sources_for
+from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.task_registry import (
     TaskRun,
     TaskStatusDetail,
@@ -59,10 +62,17 @@ _SUBMISSION_IDENTITY = (
 class PostgresTaskRegistry:
     """``TaskRegistry`` over the ``task_runs`` table."""
 
-    __slots__ = ("_engine",)
+    __slots__ = ("_engine", "_events")
 
-    def __init__(self, engine: AsyncEngine) -> None:
+    def __init__(
+        self, engine: AsyncEngine, *, events: PostgresEventLog | None = None
+    ) -> None:
         self._engine = engine
+        # Defaulted rather than optional. A Task that exists without the event
+        # saying why is the failure this whole transaction exists to prevent,
+        # so there is no way to construct a registry that skips it -- only a
+        # way to hand it a different log.
+        self._events = events or PostgresEventLog(engine)
 
     async def submit(self, submission: TaskSubmission) -> TaskRun:
         values = {
@@ -83,17 +93,37 @@ class PostgresTaskRegistry:
                 )
             )
             row = await self._by_submission_key(connection, submission)
+            if row is not None:
+                # Before the event, not after. A key reused for a different
+                # request is a submission conflict; letting it reach the log
+                # would report it as an event-key conflict instead -- an error
+                # about this project's own bookkeeping, raised at a caller who
+                # made an ordinary mistake.
+                _require_same_submission(_to_run(row), submission)
+                # Same transaction, and idempotent by key: a Task and the event
+                # that opened it commit or roll back together, and a repeated
+                # submission that returns the first Task does not append a
+                # second event describing it.
+                await self._events.append_durable_in_transaction(
+                    connection,
+                    EventScope(
+                        stream_id=submission.thread_id,
+                        # A Task *is* the run at this level -- `task_runs` is
+                        # the table of them. No agent run exists yet, and
+                        # inventing an id for one would be a trace to nothing.
+                        run_id=row["task_id"],
+                        task_id=row["task_id"],
+                    ),
+                    TaskSubmitted(
+                        graph_version=submission.graph_version,
+                        input_ref=submission.input_ref,
+                    ),
+                    event_key=_submission_event_key(row["task_id"]),
+                )
 
         if row is None:  # pragma: no cover - inserted above, same transaction
             raise RuntimeError("the submitted task vanished inside its transaction")
-        stored = _to_run(row)
-        for field in _SUBMISSION_IDENTITY:
-            if getattr(stored, field) != getattr(submission, field):
-                raise TaskSubmissionConflictError(
-                    owner_id=submission.owner_id,
-                    submission_dedup_key=submission.submission_dedup_key,
-                )
-        return stored
+        return _to_run(row)
 
     async def get(self, task_id: Identifier) -> TaskRun | None:
         async with self._engine.connect() as connection:
@@ -218,6 +248,25 @@ class PostgresTaskRegistry:
             .mappings()
             .first()
         )
+
+
+def _require_same_submission(stored: TaskRun, submission: TaskSubmission) -> None:
+    for field in _SUBMISSION_IDENTITY:
+        if getattr(stored, field) != getattr(submission, field):
+            raise TaskSubmissionConflictError(
+                owner_id=submission.owner_id,
+                submission_dedup_key=submission.submission_dedup_key,
+            )
+
+
+def _submission_event_key(task_id: str) -> str:
+    """One durable submission event per Task, forever.
+
+    Derived from the Task rather than from the caller's key, because the Task
+    is what the event describes and it is already unique.
+    """
+
+    return f"task_submitted:{task_id}"
 
 
 def _to_run(row: RowMapping) -> TaskRun:

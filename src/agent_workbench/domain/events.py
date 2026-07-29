@@ -57,6 +57,7 @@ from agent_workbench.domain.tools import (
 )
 
 EventType = Literal[
+    "TaskSubmitted",
     "RunStarted",
     "ContextBuilt",
     "ModelStarted",
@@ -85,6 +86,24 @@ Durability = Literal["durable", "transient"]
 
 ModelFinishReason = Literal["stop", "tool_use", "max_tokens", "cancelled", "error"]
 PauseReason = Literal["approval", "migration"]
+
+
+class TaskSubmitted(DomainModel):
+    """A Task was opened, and this is the request it was opened for.
+
+    Written in the same transaction as the ``task_runs`` row, so a Task can
+    never exist without the event that says why -- and the event can never
+    describe a Task that was rolled back.
+
+    It carries what the submission decided and nothing the submission merely
+    referenced: the objective lives behind ``input_ref``, because an event is
+    replayed into timelines and SSE frames where a caller-supplied body has no
+    business being repeated.
+    """
+
+    kind: Literal["TaskSubmitted"] = "TaskSubmitted"
+    graph_version: ShortText
+    input_ref: Identifier
 
 
 class RunStarted(DomainModel):
@@ -277,7 +296,8 @@ class RunCancelled(DomainModel):
 
 
 EventPayload = Annotated[
-    RunStarted
+    TaskSubmitted
+    | RunStarted
     | ContextBuilt
     | ModelStarted
     | ModelDelta
@@ -305,6 +325,7 @@ EventPayload = Annotated[
 # Durability belongs to the event type. A caller cannot promote a token delta
 # into the durable log, and cannot demote a terminal state out of it.
 EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
+    "TaskSubmitted": "durable",
     "RunStarted": "durable",
     "ContextBuilt": "durable",
     "ModelStarted": "durable",

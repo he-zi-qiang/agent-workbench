@@ -103,7 +103,9 @@ async def _record(log: Any, task: TaskRun, count: int) -> None:
 
 
 def test_a_task_s_events_come_back_in_order_with_a_cursor() -> None:
-    async def scenario(service: TaskService, log: Any) -> tuple[list[int], Any, int]:
+    async def scenario(
+        service: TaskService, log: Any
+    ) -> tuple[list[int], Any, int, list[str]]:
         task = await _open(service)
         await _record(log, task, 5)
         timeline = await service.timeline(OWNER, task.task_id)
@@ -111,15 +113,19 @@ def test_a_task_s_events_come_back_in_order_with_a_cursor() -> None:
             [event.sequence for event in timeline.events],
             timeline.cursor,
             len(timeline.events),
+            [event.event_type for event in timeline.events],
         )
 
-    sequences, cursor, count = _run(scenario)
+    sequences, cursor, count, kinds = _run(scenario)
 
-    assert count == 5
+    # Six, not five: opening the Task is itself the first thing on its
+    # timeline, written in the same transaction as the row.
+    assert count == 6
+    assert kinds[0] == "TaskSubmitted"
     # Gap-free and ascending: the log's per-stream sequence, not a sort here.
-    assert sequences == [1, 2, 3, 4, 5]
+    assert sequences == [1, 2, 3, 4, 5, 6]
     assert cursor is not None
-    assert cursor.sequence == 5
+    assert cursor.sequence == 6
 
 
 def test_a_cursor_resumes_exactly_where_the_last_slice_stopped() -> None:
@@ -127,7 +133,7 @@ def test_a_cursor_resumes_exactly_where_the_last_slice_stopped() -> None:
 
     async def scenario(service: TaskService, log: Any) -> tuple[list[int], list[int]]:
         task = await _open(service)
-        await _record(log, task, 6)
+        await _record(log, task, 5)
         first = await service.timeline(OWNER, task.task_id, limit=4)
         assert first.cursor is not None
         second = await service.timeline(OWNER, task.task_id, after=first.cursor)
@@ -159,13 +165,34 @@ def test_a_cursor_at_the_end_of_the_stream_delivers_nothing_and_stays_put() -> N
     assert idle_cursor == previous
 
 
-def test_a_task_with_no_events_has_an_empty_timeline_and_no_cursor() -> None:
-    async def scenario(service: TaskService, log: Any) -> tuple[int, Any]:
+def test_a_freshly_opened_task_already_has_its_submission_on_the_timeline() -> None:
+    """Nothing has run, and the timeline is still not empty.
+
+    A Task cannot exist without the event that opened it -- they are written in
+    one transaction -- so "no events yet" is a state this timeline never has.
+    """
+
+    async def scenario(service: TaskService, log: Any) -> tuple[int, str, Any]:
         task = await _open(service)
         timeline = await service.timeline(OWNER, task.task_id)
-        return len(timeline.events), timeline.cursor
+        return (
+            len(timeline.events),
+            timeline.events[0].event_type,
+            timeline.cursor.sequence if timeline.cursor else None,
+        )
 
-    assert _run(scenario) == (0, None)
+    assert _run(scenario) == (1, "TaskSubmitted", 1)
+
+
+def test_an_empty_slice_past_the_end_returns_no_events() -> None:
+    async def scenario(service: TaskService, log: Any) -> int:
+        task = await _open(service)
+        caught_up = await service.timeline(OWNER, task.task_id)
+        assert caught_up.cursor is not None
+        idle = await service.timeline(OWNER, task.task_id, after=caught_up.cursor)
+        return len(idle.events)
+
+    assert _run(scenario) == 0
 
 
 def test_one_task_s_timeline_never_contains_another_s() -> None:
@@ -185,8 +212,8 @@ def test_one_task_s_timeline_never_contains_another_s() -> None:
 
     one, two = _run(scenario)
 
-    assert len(one) == 3
-    assert len(two) == 2
+    assert len(one) == 4
+    assert len(two) == 3
     assert set(one).isdisjoint(set(two))
 
 

@@ -25,10 +25,11 @@ from pydantic import ValidationError
 from sqlalchemy import select, text, update
 
 from agent_workbench.adapters.persistence import (
+    PostgresEventLog,
     PostgresTaskRegistry,
     create_query_engine,
 )
-from agent_workbench.adapters.persistence.models import task_runs
+from agent_workbench.adapters.persistence.models import events, task_runs
 from agent_workbench.domain.task_registry import (
     ALLOWED_TRANSITIONS,
     TERMINAL_STATUSES,
@@ -58,7 +59,9 @@ def _run(scenario: Callable[[PostgresTaskRegistry], Awaitable[Any]]) -> Any:
         engine = create_query_engine(dsn, application_name="agent-workbench-tests")
         try:
             async with engine.begin() as connection:
-                await connection.execute(text("TRUNCATE task_runs"))
+                await connection.execute(
+                    text("TRUNCATE task_runs, events, event_streams CASCADE")
+                )
             return await scenario(PostgresTaskRegistry(engine))
         finally:
             await engine.dispose()
@@ -77,7 +80,9 @@ def _run_with_engine(
         engine = create_query_engine(dsn, application_name="agent-workbench-tests")
         try:
             async with engine.begin() as connection:
-                await connection.execute(text("TRUNCATE task_runs"))
+                await connection.execute(
+                    text("TRUNCATE task_runs, events, event_streams CASCADE")
+                )
             return await scenario(engine, PostgresTaskRegistry(engine))
         finally:
             await engine.dispose()
@@ -472,3 +477,135 @@ def test_the_sql_condition_is_the_domain_table_and_not_a_second_copy() -> None:
     assert sources_for("cancelled") == {"queued", "running", "waiting_approval"}
     for terminal in TERMINAL_STATUSES:
         assert ALLOWED_TRANSITIONS[terminal] == frozenset()
+
+
+# --------------------------------------------------------------------------
+# The row and the event that opened it
+
+
+def test_opening_a_task_records_why_in_the_same_transaction() -> None:
+    """WP07's first exit condition: state and event commit together."""
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> tuple[Any, ...]:
+        task = await registry.submit(_submission())
+        async with engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        select(
+                            events.c.event_type, events.c.stream_id, events.c.payload
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return (
+            *(
+                (row["event_type"], row["stream_id"], row["payload"]["input_ref"])
+                for row in rows
+            ),
+            task.thread_id,
+        )
+
+    recorded = _run_with_engine(scenario)
+    thread_id = recorded[-1]
+
+    assert len(recorded) == 2
+    # On the Task's own stream, so it is the first thing on its timeline.
+    assert recorded[0] == ("TaskSubmitted", thread_id, "input_1")
+
+
+def test_a_repeated_submission_does_not_open_a_second_event() -> None:
+    """Idempotent by the Task, so a retried submission adds no history."""
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> int:
+        await registry.submit(_submission())
+        await registry.submit(_submission())
+        await registry.submit(_submission())
+        async with engine.connect() as connection:
+            return len((await connection.execute(select(events))).all())
+
+    assert _run_with_engine(scenario) == 1
+
+
+def test_a_submission_that_cannot_be_recorded_opens_no_task() -> None:
+    """The other direction of the same transaction.
+
+    A log that refuses the event must take the Task row down with it, or the
+    Registry would hold a Task nothing can explain.
+    """
+
+    class _RefusingLog(PostgresEventLog):
+        async def append_durable_in_transaction(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("the event log refused")
+
+    async def scenario(engine: Any, _: PostgresTaskRegistry) -> tuple[int, int]:
+        registry = PostgresTaskRegistry(engine, events=_RefusingLog(engine))
+        with pytest.raises(RuntimeError, match="refused"):
+            await registry.submit(_submission())
+        async with engine.connect() as connection:
+            tasks = len((await connection.execute(select(task_runs))).all())
+            recorded = len((await connection.execute(select(events))).all())
+        return tasks, recorded
+
+    assert _run_with_engine(scenario) == (0, 0)
+
+
+def test_a_conflicting_key_is_reported_as_a_submission_not_as_an_event() -> None:
+    """The caller made an ordinary mistake, and hears about that one.
+
+    The identity check runs before the append, so a key reused for a different
+    request never reaches the log -- where it would surface as a conflict about
+    this project's own event bookkeeping.
+    """
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> int:
+        await registry.submit(_submission())
+        with pytest.raises(TaskSubmissionConflictError):
+            await registry.submit(_submission(input_ref="input_2"))
+        async with engine.connect() as connection:
+            return len((await connection.execute(select(events))).all())
+
+    # And the refused submission left no second event behind.
+    assert _run_with_engine(scenario) == 1
+
+
+def test_the_event_is_not_visible_outside_the_transaction_that_writes_it() -> None:
+    """A reader must never see a Task's history before the Task.
+
+    Checked from a *second* connection while the append is in flight: nothing
+    outside sees the event until the transaction closes.
+
+    What this does not distinguish is "the registry's transaction" from "a
+    transaction the log opened one frame up" -- `append` calls the
+    in-transaction form, so both look identical from here, and separating them
+    would need a seam in `submit` that exists only for the test. The properties
+    that do the work are covered instead: a refused append opens no Task, and a
+    repeated submission appends nothing.
+    """
+
+    dsn = _dsn()
+    seen: list[int] = []
+
+    class _ObservingLog(PostgresEventLog):
+        async def append_durable_in_transaction(self, *args: Any, **kwargs: Any) -> Any:
+            appended = await super().append_durable_in_transaction(*args, **kwargs)
+            observer = create_query_engine(dsn, application_name="observer")
+            try:
+                async with observer.connect() as connection:
+                    seen.append(len((await connection.execute(select(events))).all()))
+            finally:
+                await observer.dispose()
+            return appended
+
+    async def scenario(engine: Any, _: PostgresTaskRegistry) -> int:
+        registry = PostgresTaskRegistry(engine, events=_ObservingLog(engine))
+        await registry.submit(_submission())
+        async with engine.connect() as connection:
+            return len((await connection.execute(select(events))).all())
+
+    committed = _run_with_engine(scenario)
+
+    assert seen == [0]
+    assert committed == 1
