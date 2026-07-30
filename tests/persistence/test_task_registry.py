@@ -167,6 +167,69 @@ def test_two_workers_claiming_concurrently_receive_one_task_only() -> None:
     assert claims[0].lease.epoch == 1
 
 
+def test_the_oldest_eligible_task_is_claimed_first() -> None:
+    """Among Tasks a Worker may take, the one waiting longest goes first.
+
+    Only the part both the baseline and the code agree on is pinned here:
+    ordering by creation among *eligible* rows. The code additionally leads with
+    `available_at`, and the baseline's own claim query leads with `priority` --
+    neither is asserted, because nothing states which of the two is intended,
+    and a test would be inventing that answer rather than checking it.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> list[str]:
+        opened = []
+        for index in range(3):
+            opened.append(
+                await registry.submit(
+                    _submission(
+                        thread_id=f"thr_o{index}",
+                        submission_dedup_key=f"dedup_o{index}",
+                    )
+                )
+            )
+        claimed = []
+        for index in range(3):
+            claim = await _claim(registry, f"worker_o{index}")
+            claimed.append(claim.task.task_id)
+        return claimed + [task.task_id for task in opened]
+
+    result = _run(scenario)
+
+    assert result[:3] == result[3:]
+
+
+def test_a_task_still_inside_its_backoff_is_not_claimed() -> None:
+    """The retry delay is enforced by the claim, not only written by the reaper.
+
+    A backoff nothing reads is a backoff that does not exist: the reaper would
+    set `available_at` and the next claim would take the Task anyway.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, Any]:
+        task = await registry.submit(_submission())
+        async with registry._engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(available_at=func.now() + text("interval '1 hour'"))
+            )
+        deferred = await registry.claim_next("worker_early", lease_seconds=60)
+        async with registry._engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(available_at=func.now() - text("interval '1 second'"))
+            )
+        due = await registry.claim_next("worker_due", lease_seconds=60)
+        return deferred, due
+
+    deferred, due = _run(scenario)
+
+    assert deferred is None
+    assert due is not None
+
+
 def test_an_old_epoch_cannot_heartbeat_or_settle_after_reclaim() -> None:
     async def scenario(registry: PostgresTaskRegistry) -> tuple[int, int]:
         task = await registry.submit(_submission())
@@ -197,6 +260,264 @@ def test_an_old_epoch_cannot_heartbeat_or_settle_after_reclaim() -> None:
         return first.lease.epoch, second.lease.epoch
 
     assert _run(scenario) == (1, 2)
+
+
+async def _expire(registry: PostgresTaskRegistry, task_id: str) -> None:
+    async with registry._engine.begin() as connection:
+        await connection.execute(
+            update(task_runs)
+            .where(task_runs.c.task_id == task_id)
+            .values(lease_until=func.now() - text("interval '1 second'"))
+        )
+
+
+async def _reclaim(
+    registry: PostgresTaskRegistry,
+    *,
+    limit: int = 10,
+    max_attempts: int = 5,
+    retry_base_seconds: int = 4,
+    retry_max_seconds: int = 600,
+) -> tuple[Any, ...]:
+    return await registry.reclaim_expired(
+        limit=limit,
+        max_attempts=max_attempts,
+        retry_base_seconds=retry_base_seconds,
+        retry_max_seconds=retry_max_seconds,
+    )
+
+
+def test_a_reaper_leaves_a_live_lease_alone() -> None:
+    """The reaper recovers abandoned work; it does not take work in progress.
+
+    Nothing else distinguishes a running Worker from a dead one at this layer --
+    both rows say `running` and name an owner. Only the deadline does. A reaper
+    that ignored it would hand a live Worker's Task to somebody else and run it
+    twice, which is the failure the whole lease design exists to prevent.
+
+    The deadline is checked twice, in the sweep's select and again in its
+    update, so removing either one alone changes nothing. This test is what
+    fails when *both* go, which is the property worth holding.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[int, str, Any]:
+        task = await registry.submit(_submission())
+        claim = await _claim(registry, "worker_live")
+        # No expiry: the lease has 60 seconds left.
+        reclaimed = await _reclaim(registry)
+        stored = await registry.get(task.task_id)
+        assert stored is not None
+        # The live Worker can still act, which is the point.
+        beat = await registry.heartbeat(claim.lease, lease_seconds=60)
+        return len(reclaimed), stored.status, beat.lease_owner
+
+    count, status, owner = _run(scenario)
+
+    assert count == 0
+    assert status == "running"
+    assert owner == "worker_live"
+
+
+def test_a_reaper_does_not_reopen_a_task_that_already_finished() -> None:
+    """Terminal is terminal, whatever a stale deadline says.
+
+    A settled Task drops its lease, so `lease_until` is null rather than
+    expired, and `NULL < now()` is not true -- which is why the sweep's
+    `status = 'running'` condition cannot be made to fail on its own: the
+    lease-lifecycle constraint means no non-running row can carry the expired
+    deadline it would need. The invariant is real and is what this asserts; the
+    condition guarding it is redundant until that constraint changes.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[int, str]:
+        task = await registry.submit(_submission())
+        claim = await _claim(registry)
+        await registry.mark_succeeded(claim.lease)
+        # Backdate every timestamp the reaper could key on. The row is
+        # terminal, and that alone must keep it out of the sweep.
+        async with registry._engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(
+                    updated_at=func.now() - text("interval '1 hour'"),
+                    available_at=func.now() - text("interval '1 hour'"),
+                )
+            )
+        reclaimed = await _reclaim(registry)
+        stored = await registry.get(task.task_id)
+        assert stored is not None
+        return len(reclaimed), stored.status
+
+    assert _run(scenario) == (0, "succeeded")
+
+
+def test_a_requeued_task_is_not_claimable_until_its_backoff_elapses() -> None:
+    """Without a delay a poison task is claimed, fails and is claimed again.
+
+    The attempt budget bounds how many times that happens; the backoff bounds
+    how fast. Dropping it turns a failing Task into a hot loop against whatever
+    it was failing to call.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[str, Any, bool]:
+        task = await registry.submit(_submission())
+        await _claim(registry)
+        await _expire(registry, task.task_id)
+        reclaimed = await _reclaim(registry, retry_base_seconds=30)
+        assert len(reclaimed) == 1
+        # Queued, but not yet available: a claim now finds nothing.
+        immediate = await registry.claim_next("worker_next", lease_seconds=60)
+        stored = await registry.get(task.task_id)
+        assert stored is not None
+        return stored.status, immediate, stored.available_at > stored.updated_at
+
+    status, immediate, deferred = _run(scenario)
+
+    assert status == "queued"
+    assert immediate is None
+    assert deferred
+
+
+def test_the_backoff_grows_with_each_attempt() -> None:
+    """Exponential, not fixed: the second wait is longer than the first.
+
+    Measured as the gap between attempts rather than against a wall clock, so
+    a slow machine reads the same as a fast one.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> list[float]:
+        task = await registry.submit(_submission())
+        delays: list[float] = []
+        for _ in range(3):
+            async with registry._engine.begin() as connection:
+                await connection.execute(
+                    update(task_runs)
+                    .where(task_runs.c.task_id == task.task_id)
+                    .values(available_at=func.now() - text("interval '1 hour'"))
+                )
+            await _claim(registry)
+            await _expire(registry, task.task_id)
+            reclaimed = await _reclaim(registry, retry_base_seconds=10, max_attempts=9)
+            assert len(reclaimed) == 1
+            stored = reclaimed[0]
+            delays.append((stored.available_at - stored.updated_at).total_seconds())
+        return delays
+
+    delays = _run(scenario)
+
+    # Three reclaims at attempts 1, 2, 3 with a 10s base: 10, 20, 40.
+    assert delays[0] < delays[1] < delays[2]
+    assert delays[1] >= delays[0] * 1.5
+
+
+def test_the_backoff_is_capped_rather_than_doubling_forever() -> None:
+    """An unbounded exponential eventually parks a Task past any horizon."""
+
+    async def scenario(registry: PostgresTaskRegistry) -> float:
+        task = await registry.submit(_submission())
+        for _ in range(4):
+            async with registry._engine.begin() as connection:
+                await connection.execute(
+                    update(task_runs)
+                    .where(task_runs.c.task_id == task.task_id)
+                    .values(available_at=func.now() - text("interval '1 hour'"))
+                )
+            await _claim(registry)
+            await _expire(registry, task.task_id)
+            reclaimed = await _reclaim(
+                registry, retry_base_seconds=10, retry_max_seconds=25, max_attempts=9
+            )
+            assert len(reclaimed) == 1
+        return (reclaimed[0].available_at - reclaimed[0].updated_at).total_seconds()
+
+    # Attempt 4 would want 80s; the cap is 25.
+    assert _run(scenario) <= 26
+
+
+def test_two_reapers_sweeping_together_each_recover_different_tasks() -> None:
+    """`SKIP LOCKED` is why a second reaper is useful rather than blocked.
+
+    Without it the second sweep waits on the first's row locks, so two reapers
+    are strictly slower than one -- and a reaper that blocks is one that stops
+    being run.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[int, int, int]:
+        tasks = []
+        for index in range(4):
+            task = await registry.submit(
+                _submission(
+                    thread_id=f"thr_r{index}",
+                    submission_dedup_key=f"dedup_r{index}",
+                )
+            )
+            await _claim(registry, f"worker_{index}")
+            await _expire(registry, task.task_id)
+            tasks.append(task)
+        first, second = await asyncio.gather(
+            _reclaim(registry, limit=2, retry_base_seconds=1),
+            _reclaim(registry, limit=2, retry_base_seconds=1),
+        )
+        recovered = {task.task_id for task in (*first, *second)}
+        return len(first), len(second), len(recovered)
+
+    first, second, distinct = _run(scenario)
+
+    # Every expired Task recovered exactly once between the two sweeps.
+    assert first + second == 4
+    assert distinct == 4
+
+
+def test_a_reclaim_racing_a_fresh_claim_does_not_undo_it() -> None:
+    """The update re-checks what the select saw, so a stale sweep loses.
+
+    A reaper selects an expired row, and before its update lands the Task is
+    claimed again -- new epoch, new deadline. Without the epoch and expiry
+    conditions on the update, the sweep would strip a live Worker's lease and
+    requeue the Task underneath it.
+    """
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> tuple[Any, ...]:
+        task = await registry.submit(_submission())
+        await _claim(registry, "worker_old")
+        await _expire(registry, task.task_id)
+
+        # Hold the row as a competing reaper would, so the real reclaim blocks
+        # on it; meanwhile the row is claimed afresh and committed.
+        holder = await engine.connect()
+        transaction = await holder.begin()
+        await holder.execute(
+            select(task_runs.c.task_id)
+            .where(task_runs.c.task_id == task.task_id)
+            .with_for_update()
+        )
+        sweeping = asyncio.create_task(_reclaim(registry, retry_base_seconds=1))
+        await asyncio.sleep(0.3)
+        await holder.execute(
+            update(task_runs)
+            .where(task_runs.c.task_id == task.task_id)
+            .values(
+                lease_owner="worker_new",
+                lease_epoch=task_runs.c.lease_epoch + 1,
+                lease_until=func.now() + text("interval '60 seconds'"),
+                heartbeat_at=func.now(),
+            )
+        )
+        await transaction.commit()
+        await holder.close()
+        reclaimed = await sweeping
+
+        stored = await registry.get(task.task_id)
+        assert stored is not None
+        return len(reclaimed), stored.status, stored.lease_owner
+
+    count, status, owner = _run_with_engine(scenario)
+
+    # The sweep recovered nothing: what it had selected was no longer expired.
+    assert count == 0
+    assert status == "running"
+    assert owner == "worker_new"
 
 
 def test_an_expired_claim_at_its_attempt_budget_is_dead_lettered() -> None:

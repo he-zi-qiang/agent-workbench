@@ -900,6 +900,199 @@ def test_fenced_saver_rejects_an_old_epoch_without_writing_checkpoint_or_writes(
     assert _run(scenario) == (0, 0)
 
 
+async def _refused_write(engine: Any, fence: CheckpointFence) -> tuple[int, int]:
+    """Attempt both fenced writes, require both to be refused, count the rows.
+
+    Both halves matter: `aput` and `aput_writes` fence independently, and a
+    guard that only covered one would leave the other writing under a token
+    the database has already invalidated.
+    """
+
+    saver = PostgresCheckpointSaver(engine, require_fence=True)
+    with pytest.raises(StaleExecutionError):
+        await saver.aput(
+            _fenced_config(fence),
+            _checkpoint(),
+            {"source": "loop", "step": 0},
+            {"objective": "00000000000000000000000000000001.0"},
+        )
+    with pytest.raises(StaleExecutionError):
+        await saver.aput_writes(
+            _fenced_config(fence, checkpoint_id="checkpoint_refused"),
+            [("objective", "must not persist")],
+            "task_node",
+        )
+    async with engine.connect() as connection:
+        checkpoints = len(
+            (await connection.execute(select(workflow_checkpoints))).all()
+        )
+        writes = len(
+            (await connection.execute(select(workflow_checkpoint_writes))).all()
+        )
+    return checkpoints, writes
+
+
+def test_fenced_saver_refuses_to_write_for_a_task_that_is_no_longer_running() -> None:
+    """A settled Task's thread is not a thread to keep writing.
+
+    The row moves to a terminal status and drops its lease together -- the
+    lease-lifecycle constraint requires exactly that, so a cancelled Task can
+    never still carry an owner or a deadline.
+
+    Which makes the fence's own ``status = 'running'`` condition redundant
+    today: the fence already demands a matching owner and an unexpired
+    deadline, and the constraint means only a running row can have either.
+    Removing that condition alone changes nothing observable, and a sabotage of
+    exactly that shape confirmed it. It stays as the direct statement of the
+    rule, because the day the constraint is relaxed -- keeping a terminal row's
+    lease for audit, say -- it becomes the only thing standing between a
+    settled Task and further writes to its thread.
+    """
+
+    async def scenario() -> tuple[int, int]:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (fence, _):
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        task_runs.update()
+                        .where(task_runs.c.task_id == fence.task_id)
+                        .values(
+                            status="cancelled",
+                            status_detail="the owner asked",
+                            lease_owner=None,
+                            lease_until=None,
+                            heartbeat_at=None,
+                        )
+                    )
+                return await _refused_write(engine, fence)
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0)
+
+
+def test_fenced_saver_refuses_a_fence_naming_another_worker() -> None:
+    """Holding *a* live lease is not holding *this* lease.
+
+    Without the owner condition, any Worker's fence would satisfy any other
+    Worker's row, and two processes could interleave writes on one thread while
+    both believed they were fenced.
+    """
+
+    async def scenario() -> tuple[int, int]:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (fence, _):
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        task_runs.update()
+                        .where(task_runs.c.task_id == fence.task_id)
+                        .values(lease_owner="worker_somebody_else")
+                    )
+                return await _refused_write(engine, fence)
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0)
+
+
+def test_fenced_saver_refuses_a_lease_that_has_already_expired() -> None:
+    """An expired lease is the ordinary way a Worker loses its claim.
+
+    Nothing revokes it actively: the reaper notices later, and until then the
+    row still carries this Worker and this epoch. The deadline is the only
+    thing that says the claim is over.
+    """
+
+    async def scenario() -> tuple[int, int]:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (fence, _):
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text(
+                            "UPDATE task_runs SET lease_until = "
+                            "statement_timestamp() - interval '1 second' "
+                            "WHERE task_id = :task_id"
+                        ),
+                        {"task_id": fence.task_id},
+                    )
+                return await _refused_write(engine, fence)
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0)
+
+
+def test_fenced_saver_refuses_a_fence_for_a_task_on_another_thread() -> None:
+    """The fence authorizes one thread, not every thread its Task can name.
+
+    Without the thread condition a fence would be a Worker-wide permit: a
+    correct lease for task A would authorize writes to any thread the caller
+    passed, including one belonging to another Task entirely.
+    """
+
+    async def scenario() -> tuple[int, int]:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (fence, _):
+                # The Task keeps its live lease; only the thread it owns moves.
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        task_runs.update()
+                        .where(task_runs.c.task_id == fence.task_id)
+                        .values(thread_id="thr_some_other_task")
+                    )
+                return await _refused_write(engine, fence)
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0)
+
+
+def test_a_required_fence_is_not_satisfied_by_one_without_a_guard() -> None:
+    """The advisory guard is part of the fence, not an optional extra.
+
+    A fence carrying a live lease but no guard session cannot be checked
+    against a lost guard at all, so accepting it would silently downgrade every
+    write to lease-only fencing -- which is exactly what the guard exists to
+    backstop, because a lease can look live to a Worker whose connection is
+    already gone.
+    """
+
+    async def scenario() -> tuple[type[BaseException] | None, int]:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (fence, _):
+                guardless = fence.model_copy(
+                    update={"guard_backend_pid": None, "guard_lock_key": None}
+                )
+                saver = PostgresCheckpointSaver(engine, require_fence=True)
+                raised: type[BaseException] | None = None
+                try:
+                    await saver.aput(
+                        _fenced_config(guardless),
+                        _checkpoint(),
+                        {"source": "loop", "step": 0},
+                        {"objective": "00000000000000000000000000000001.0"},
+                    )
+                except CheckpointFenceRequiredError as error:
+                    raised = type(error)
+                async with engine.connect() as connection:
+                    written = len(
+                        (await connection.execute(select(workflow_checkpoints))).all()
+                    )
+                return raised, written
+        finally:
+            await engine.dispose()
+
+    raised, written = _run(scenario)
+
+    assert raised is CheckpointFenceRequiredError
+    assert written == 0
+
+
 def test_fenced_saver_requires_a_fence_and_propagates_a_current_one() -> None:
     async def scenario() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], int]:
         engine = _engine()

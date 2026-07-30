@@ -159,6 +159,13 @@ class PostgresTaskRegistry:
         self, worker_id: Identifier, *, lease_seconds: int
     ) -> TaskClaim | None:
         """Claim one eligible Task without holding a transaction for its graph."""
+        # Two conditions here are defence in depth, established by sabotage:
+        # the update's `status`/`available_at` repeat what the locking select
+        # already guaranteed, since `FOR UPDATE` means the row cannot change
+        # between the two statements. And `skip_locked` is a liveness property
+        # rather than a correctness one -- without it a second claimer blocks
+        # behind the first instead of moving on, which no assertion about
+        # outcomes can see. Both stay; neither is load-bearing today.
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be positive")
         async with self._engine.begin() as connection:
@@ -265,6 +272,25 @@ class PostgresTaskRegistry:
             raise ValueError("reclaim limits and retry_base_seconds must be positive")
         if retry_max_seconds < retry_base_seconds:
             raise ValueError("retry_max_seconds must be >= retry_base_seconds")
+        # Four of the conditions below are deliberate defence in depth rather
+        # than load-bearing checks, and a sabotage round established which:
+        #
+        # * `status = 'running'` (both here and in the update) cannot fail. The
+        #   lease-lifecycle constraint gives a non-running row a NULL
+        #   `lease_until`, and `NULL < now()` is not true, so the expiry
+        #   condition already excludes every non-running row. It stays as the
+        #   direct statement of intent, and becomes load-bearing the day that
+        #   constraint is relaxed.
+        # * the update's `lease_epoch` and `lease_until` conditions cannot fail
+        #   either: the select above took `FOR UPDATE`, so the row cannot change
+        #   between the two statements. They stay because the day this select
+        #   stops locking -- or the update moves to its own transaction -- they
+        #   are the only thing standing between a sweep and a lease that was
+        #   renewed underneath it.
+        #
+        # Removing the expiry condition from *both* statements does fail a test,
+        # which is the property that actually matters: a live lease is left
+        # alone.
         recovered: list[TaskRun] = []
         async with self._engine.begin() as connection:
             expired = (

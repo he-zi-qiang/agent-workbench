@@ -66,11 +66,11 @@ EXPLAINED_STATUSES: Final[frozenset[TaskStatus]] = frozenset(
 #: plan says who resolves a migration or how, and an edge invented here would
 #: be a procedure nobody has designed. It arrives with that procedure.
 #:
-#: Some edges have no method on the registry yet. ``running -> queued`` is the
-#: stale-lease reaper's (WP08), ``running -> dead_letter`` is the attempt
-#: budget's (WP08), and ``waiting_approval -> queued`` is the approval
-#: decision's (WP10). They are here because the documents state them; the
-#: registry's methods stay limited to what a single Worker performs.
+#: Every edge here now has a caller except one. ``running -> queued`` is the
+#: stale-lease reaper's and ``running -> dead_letter`` the attempt budget's,
+#: both on ``reclaim_expired``; ``waiting_approval -> queued`` still has none,
+#: because the approval decision that performs it is WP10. It is listed anyway
+#: because the documents state it.
 ALLOWED_TRANSITIONS: Final[Mapping[TaskStatus, frozenset[TaskStatus]]] = (
     MappingProxyType(
         {
