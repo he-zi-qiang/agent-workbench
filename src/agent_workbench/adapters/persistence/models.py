@@ -31,7 +31,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 # Explicit naming keeps generated constraint names stable across databases, so
 # a migration can drop by name what an earlier one created by name.
@@ -553,6 +553,58 @@ workflow_checkpoint_writes = Table(
 )
 
 
+# Which concrete Qdrant index a Task may be bound to.
+#
+# The alias is not in here on purpose. An alias selects an index for *new*
+# requests; it is not recoverable semantics, because the thing it points at can
+# move while a Task is mid-run. What a Task stores is the generation it was
+# reserved against, and the foreign key from task_runs *is* that reservation:
+# while any Task still references a generation, the row cannot be deleted, so
+# neither can the collection it names.
+#
+# This is the minimum a reservation needs. The rest of a generation's life --
+# backfill progress, index_ready, retention windows -- belongs to the ingestion
+# state the plan assigns to WP04-05, and is deliberately absent rather than
+# guessed at here.
+
+qdrant_index_generations = Table(
+    "qdrant_index_generations",
+    metadata,
+    Column("generation_id", UUID(as_uuid=False), primary_key=True),
+    Column("collection_name", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("index_version", String(64), nullable=False),
+    # Only `active` may be newly reserved. `draining` keeps existing
+    # reservations valid while refusing new ones, which is what lets an alias
+    # switch drain instead of cutting; `retired` may be deleted once nothing
+    # references it.
+    Column("status", String(16), nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    CheckConstraint(
+        "status IN ('active', 'draining', 'retired')",
+        name="qdrant_index_generations_status",
+    ),
+    # One generation per (collection, version): the pair is what a Task's
+    # snapshot records, so two rows for it would make the snapshot ambiguous.
+    UniqueConstraint(
+        "collection_name",
+        "index_version",
+        name="uq_qdrant_index_generations_collection_name_index_version",
+    ),
+    # The resolver's query: the one generation currently taking reservations.
+    Index(
+        "uq_qdrant_index_generations_active",
+        "collection_name",
+        unique=True,
+        postgresql_where=text("status = 'active'"),
+    ),
+)
+
+
 # The Task Registry: product lifecycle, as opposed to the execution position
 # the checkpoint tables above hold. The two are separate facts in separate
 # places on purpose, and the Worker's reconciliation decides what they jointly
@@ -601,6 +653,20 @@ task_runs = Table(
     Column("submitted_policy_fingerprint", String(DIGEST_LENGTH), nullable=False),
     Column("submitted_authorization_envelope", JSONB, nullable=False),
     Column("submitted_principal_scopes", JSONB, nullable=False),
+    # The concrete index this Task was reserved against, resolved once at
+    # submission. All three or none: a Task that uses a knowledge base carries
+    # the full triple, and one that does not carries nothing. Half of it would
+    # be a snapshot nobody can act on.
+    Column("resolved_qdrant_collection", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("resolved_qdrant_index_version", String(64), nullable=True),
+    Column(
+        "resolved_qdrant_index_generation_id",
+        UUID(as_uuid=False),
+        # The reservation itself, and not a cache of Qdrant's routing state:
+        # while this row exists the generation cannot be deleted.
+        ForeignKey("qdrant_index_generations.generation_id"),
+        nullable=True,
+    ),
     Column("status", String(32), nullable=False),
     # A claim is deliberately separate from the Task's product status. The
     # epoch is monotonic across claims; an old Worker can therefore never
@@ -648,6 +714,24 @@ task_runs = Table(
         "('queued', 'running', 'waiting_approval', 'waiting_migration', "
         "'succeeded', 'failed', 'cancelled', 'dead_letter')",
         name="task_runs_status",
+    ),
+    CheckConstraint(
+        "(resolved_qdrant_collection IS NULL "
+        "AND resolved_qdrant_index_version IS NULL "
+        "AND resolved_qdrant_index_generation_id IS NULL) OR "
+        "(resolved_qdrant_collection IS NOT NULL "
+        "AND resolved_qdrant_index_version IS NOT NULL "
+        "AND resolved_qdrant_index_generation_id IS NOT NULL)",
+        name="task_runs_resolved_index",
+    ),
+    CheckConstraint(
+        "(resolved_qdrant_collection IS NULL "
+        "AND resolved_qdrant_index_version IS NULL "
+        "AND resolved_qdrant_index_generation_id IS NULL) OR "
+        "(resolved_qdrant_collection IS NOT NULL "
+        "AND resolved_qdrant_index_version IS NOT NULL "
+        "AND resolved_qdrant_index_generation_id IS NOT NULL)",
+        name="task_runs_resolved_index",
     ),
     CheckConstraint(
         "(status IN ('waiting_migration', 'failed', 'cancelled', 'dead_letter') "

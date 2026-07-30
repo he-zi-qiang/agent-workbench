@@ -36,6 +36,39 @@ TaskStatusDetail = Annotated[
 ]
 
 
+class IndexReservation(DomainModel):
+    """One concrete Qdrant index, reserved for one Task.
+
+    The alias that selected it is deliberately absent. An alias routes *new*
+    requests and can move while a Task is mid-run, so a Task that stored one
+    would silently change which corpus it was answering from. What it stores is
+    the generation, and the Registry's foreign key to it is the reservation:
+    while the Task exists, the generation cannot be deleted.
+    """
+
+    collection_name: Identifier
+    index_version: ShortText
+    generation_id: str
+
+
+class IndexGenerationNotReservableError(RuntimeError):
+    """The resolved generation stopped taking reservations before the commit.
+
+    Not a failure to report to the caller: the alias moved or the generation
+    began draining between resolution and commit, so the correct response is to
+    resolve again and retry. The transaction is already rolled back, so nothing
+    dangling was written.
+    """
+
+    def __init__(self, *, generation_id: str, found_status: str | None) -> None:
+        self.generation_id = generation_id
+        self.found_status = found_status
+        found = found_status if found_status is not None else "no such generation"
+        super().__init__(
+            f"index generation {generation_id} cannot be reserved: it is {found}"
+        )
+
+
 class TaskSubmission(DomainModel):
     """What a caller has to supply to open a Task.
 
@@ -65,6 +98,9 @@ class TaskSubmission(DomainModel):
     submitted_policy_fingerprint: ShortText
     submitted_authorization_envelope: AuthorizationEnvelope
     submitted_principal_scopes: tuple[PermissionScope, ...] = ()
+    # Absent for a Task that touches no knowledge base. Present ones are
+    # resolved before the transaction opens and reserved inside it.
+    index_reservation: IndexReservation | None = None
 
     @field_validator("submitted_principal_scopes")
     @classmethod
@@ -89,6 +125,12 @@ class TaskRun(DomainModel):
     submitted_policy_fingerprint: ShortText
     submitted_authorization_envelope: AuthorizationEnvelope
     submitted_principal_scopes: tuple[PermissionScope, ...] = ()
+    # The reservation as stored: three columns rather than the submission's
+    # nested value, because that is what the row holds and what a resume reads.
+    # All three or none -- the database enforces the same.
+    resolved_qdrant_collection: Identifier | None = None
+    resolved_qdrant_index_version: ShortText | None = None
+    resolved_qdrant_index_generation_id: str | None = None
     status: TaskStatus
     status_detail: TaskStatusDetail | None = None
     lease_owner: Identifier | None = None
@@ -241,6 +283,8 @@ class TaskRegistry(Protocol):
 
 __all__ = [
     "ExecutionLease",
+    "IndexGenerationNotReservableError",
+    "IndexReservation",
     "StaleExecutionError",
     "TaskClaim",
     "TaskRegistry",

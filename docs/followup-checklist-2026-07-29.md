@@ -55,16 +55,19 @@ ruff/pyright 全过。
 
 ## 1. WP07 收尾
 
-- [ ] **1.1 WP07-04：Qdrant generation reservation**（实测：`task_runs` **没有**
-      `resolved_qdrant_collection` / `resolved_qdrant_index_version` /
-      `resolved_qdrant_index_generation_id` 三列；settings 里的
-      `task_run_semantics_snapshot(resolved_...=)` 参数存在但无人持久化）
-      **完成条件**：提交事务前解析 alias → 具体 collection/index version；
-      同一事务锁定 `qdrant_index_generations` 行建立 reservation；三列落库；
-      generation 不可保留时回滚重解析（reserve-or-retry）。
-      **必须有的测试**：alias 切换后旧 Task 仍用原具体 collection；
-      快照与三列不一致时 fail closed；"解析 alias → 切换/GC → commit" barrier 下不出悬空引用。
-      这条也是 `TaskService.semantics` 当初设计成 callable 的原因。
+- [x] **1.1 WP07-04：Qdrant generation reservation**（2026-07-29 完成，迁移 `0017`）
+      新建 `qdrant_index_generations`（reservation 需要有东西可 reserve；它的 backfill /
+      readiness / retention 属 WP04-05，故意没造）。三列进 `task_runs`，**外键就是
+      reservation**——有 Task 引用时该 generation 删不掉。submit 事务内先
+      `SELECT ... FOR UPDATE` 锁住 generation 行、要求 `active`，否则整笔回滚由调用方
+      重解析（reserve-or-retry）。
+      **9 处破坏，8 处第一轮即被抓住**；第 9 处（"半个 reservation 可存"）是我把破坏写坏了
+      ——只改了 metadata 里的约束名，数据库里的约束仍在。直接在库里 DROP 该 CHECK 复验，
+      新增的 4 条参数化测试确实变红。
+      **仍未做**：alias→collection 的**每次提交解析**仍依赖启动时
+      `qdrant_startup` 校验的 alias↔collection 一致性，没有独立的 resolver 端口；
+      "快照与三列不一致时 fail closed" 只覆盖了 (collection, version, generation) 三元组
+      互相不匹配的情形，没覆盖快照 JSON 内部与三列不一致。
 - [ ] **1.2 WP07-08：终态释放 reservation + Task-aware safe GC**（依赖 1.1）
       **完成条件**：非终态 Task 引用的 generation 不可物理删除；终态后需同时满足
       WP05 的 retention/outbox 校验才可删；有恢复测试。

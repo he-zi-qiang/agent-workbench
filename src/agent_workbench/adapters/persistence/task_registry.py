@@ -30,7 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlalchemy.sql.elements import ColumnElement
 
 from agent_workbench.adapters.persistence.event_log import PostgresEventLog
-from agent_workbench.adapters.persistence.models import task_runs
+from agent_workbench.adapters.persistence.models import (
+    qdrant_index_generations,
+    task_runs,
+)
 from agent_workbench.domain.events import (
     EventPayload,
     TaskAwaitingApproval,
@@ -48,6 +51,8 @@ from agent_workbench.domain.task_registry import TaskStatus, sources_for
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.task_registry import (
     ExecutionLease,
+    IndexGenerationNotReservableError,
+    IndexReservation,
     StaleExecutionError,
     TaskClaim,
     TaskRun,
@@ -91,14 +96,68 @@ class PostgresTaskRegistry:
         # way to hand it a different log.
         self._events = events or PostgresEventLog(engine)
 
+    async def _reserve_generation(
+        self, connection: AsyncConnection, reservation: IndexReservation
+    ) -> None:
+        """Lock the generation and refuse anything but an active one.
+
+        Locked rather than merely read: a retirement committing between the
+        check and this Task's insert would leave a reservation pointing at an
+        index nothing is allowed to serve from. Holding the row means the
+        retirement waits for this transaction and then sees the reference.
+        """
+
+        status = (
+            await connection.execute(
+                select(qdrant_index_generations.c.status)
+                .where(
+                    qdrant_index_generations.c.generation_id
+                    == reservation.generation_id,
+                    qdrant_index_generations.c.collection_name
+                    == reservation.collection_name,
+                    qdrant_index_generations.c.index_version
+                    == reservation.index_version,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if status != "active":
+            # Rolls the whole submission back. The caller resolves again and
+            # retries rather than committing a dangling reference -- which is
+            # the "reserve or retry" barrier the baseline asks for.
+            raise IndexGenerationNotReservableError(
+                generation_id=reservation.generation_id,
+                found_status=None if status is None else str(status),
+            )
+
     async def submit(self, submission: TaskSubmission) -> TaskRun:
+        reservation = submission.index_reservation
         values = {
             "task_id": new_id("task"),
+            "resolved_qdrant_collection": (
+                None if reservation is None else reservation.collection_name
+            ),
+            "resolved_qdrant_index_version": (
+                None if reservation is None else reservation.index_version
+            ),
+            "resolved_qdrant_index_generation_id": (
+                None if reservation is None else reservation.generation_id
+            ),
             "status": "queued",
             "status_detail": None,
-            **submission.model_dump(mode="json"),
+            **{
+                field: value
+                for field, value in submission.model_dump(mode="json").items()
+                # The nested reservation is stored as three columns above.
+                if field != "index_reservation"
+            },
         }
         async with self._engine.begin() as connection:
+            if reservation is not None:
+                # Before the insert, so a generation that stopped taking
+                # reservations refuses the Task instead of being referenced by
+                # one. The lock is held for the rest of this transaction.
+                await self._reserve_generation(connection, reservation)
             # Insert-or-nothing, then read. The alternative -- read, then
             # insert if absent -- loses the race between two submissions of one
             # key with a duplicate-key error rather than idempotency.

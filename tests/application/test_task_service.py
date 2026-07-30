@@ -51,7 +51,7 @@ class _FakeRegistry:
 
     async def submit(self, submission: TaskSubmission) -> TaskRun:
         self.submissions.append(submission)
-        return _task(**submission.model_dump())
+        return _task(**_stored(submission))
 
     async def get(self, task_id: str) -> TaskRun | None:
         return self._existing
@@ -78,9 +78,35 @@ class _IdempotentFakeRegistry(_FakeRegistry):
         existing = self._by_key.get(key)
         if existing is not None:
             return existing
-        opened = _task(**submission.model_dump())
+        opened = _task(**_stored(submission))
         self._by_key[key] = opened
         return opened
+
+
+def _stored(submission: TaskSubmission) -> dict[str, Any]:
+    """The row shape a submission becomes, as the real adapter writes it.
+
+    The nested reservation flattens into three columns there, so the fake does
+    the same -- otherwise it would accept a submission the database cannot
+    store and hide exactly the mapping under test.
+    """
+
+    fields = submission.model_dump()
+    reservation = fields.pop("index_reservation", None)
+    fields.update(
+        {
+            "resolved_qdrant_collection": (
+                None if reservation is None else reservation["collection_name"]
+            ),
+            "resolved_qdrant_index_version": (
+                None if reservation is None else reservation["index_version"]
+            ),
+            "resolved_qdrant_index_generation_id": (
+                None if reservation is None else reservation["generation_id"]
+            ),
+        }
+    )
+    return fields
 
 
 def _task(**overrides: Any) -> TaskRun:

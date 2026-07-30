@@ -390,3 +390,35 @@ def test_the_terminal_set_is_the_one_the_registry_will_not_reopen() -> None:
 
     assert set(ALL_STATUSES) >= TERMINAL_STATUSES
     assert {"succeeded", "failed", "cancelled", "dead_letter"} == TERMINAL_STATUSES
+
+
+# --------------------------------------------------------------------------
+# A reservation is a triple or it is nothing
+
+
+@pytest.mark.parametrize(
+    "partial",
+    [
+        {"resolved_qdrant_collection": "kb_v3"},
+        {"resolved_qdrant_index_version": "3"},
+        {"resolved_qdrant_index_generation_id": "6f1d5a02-0000-4000-8000-000000000001"},
+        {"resolved_qdrant_collection": "kb_v3", "resolved_qdrant_index_version": "3"},
+    ],
+)
+def test_a_partial_index_reservation_cannot_be_stored(
+    partial: dict[str, Any],
+) -> None:
+    """Two of the three would describe an index nothing can look up.
+
+    A resume reads all three together -- collection, version and the generation
+    the reservation is held against. Any subset is a Task that appears bound to
+    a corpus while carrying no way to find it, which is worse than one that is
+    plainly unbound.
+    """
+
+    async def scenario(engine: AsyncEngine) -> None:
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as connection:
+                await connection.execute(insert(task_runs), [_row(**partial)])
+
+    _run(scenario)

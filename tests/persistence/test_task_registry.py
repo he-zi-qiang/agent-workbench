@@ -24,13 +24,18 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from agent_workbench.adapters.persistence import (
     PostgresEventLog,
     PostgresTaskRegistry,
     create_query_engine,
 )
-from agent_workbench.adapters.persistence.models import events, task_runs
+from agent_workbench.adapters.persistence.models import (
+    events,
+    qdrant_index_generations,
+    task_runs,
+)
 from agent_workbench.domain.task_registry import (
     ALLOWED_TRANSITIONS,
     TERMINAL_STATUSES,
@@ -38,6 +43,8 @@ from agent_workbench.domain.task_registry import (
 )
 from agent_workbench.ports.task_registry import (
     ExecutionLease,
+    IndexGenerationNotReservableError,
+    IndexReservation,
     StaleExecutionError,
     TaskRegistry,
     TaskSubmission,
@@ -63,7 +70,10 @@ def _run(scenario: Callable[[PostgresTaskRegistry], Awaitable[Any]]) -> Any:
         try:
             async with engine.begin() as connection:
                 await connection.execute(
-                    text("TRUNCATE task_runs, events, event_streams CASCADE")
+                    text(
+                        "TRUNCATE task_runs, events, event_streams, "
+                        "qdrant_index_generations CASCADE"
+                    )
                 )
             return await scenario(PostgresTaskRegistry(engine))
         finally:
@@ -84,7 +94,10 @@ def _run_with_engine(
         try:
             async with engine.begin() as connection:
                 await connection.execute(
-                    text("TRUNCATE task_runs, events, event_streams CASCADE")
+                    text(
+                        "TRUNCATE task_runs, events, event_streams, "
+                        "qdrant_index_generations CASCADE"
+                    )
                 )
             return await scenario(engine, PostgresTaskRegistry(engine))
         finally:
@@ -1474,3 +1487,201 @@ def test_the_snapshot_a_task_carries_is_the_one_it_was_submitted_with() -> None:
 
     assert first == {"model": {"provider": "deepseek"}}
     assert second == {"model": {"provider": "other"}}
+
+
+# --------------------------------------------------------------------------
+# The Qdrant index a Task is reserved against (WP07-04)
+
+GENERATION = "6f1d5a02-0000-4000-8000-000000000001"
+
+
+async def _generation(
+    registry: PostgresTaskRegistry,
+    *,
+    generation_id: str = GENERATION,
+    collection: str = "kb_v3",
+    index_version: str = "3",
+    status: str = "active",
+) -> IndexReservation:
+    async with registry._engine.begin() as connection:
+        await connection.execute(
+            qdrant_index_generations.insert().values(
+                generation_id=generation_id,
+                collection_name=collection,
+                index_version=index_version,
+                status=status,
+            )
+        )
+    return IndexReservation(
+        collection_name=collection,
+        index_version=index_version,
+        generation_id=generation_id,
+    )
+
+
+def test_a_submission_stores_the_concrete_index_it_reserved() -> None:
+    """Never the alias: the three columns are what a resume reads."""
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, ...]:
+        reservation = await _generation(registry)
+        opened = await registry.submit(_submission(index_reservation=reservation))
+        reread = await registry.get(opened.task_id)
+        assert reread is not None
+        return (
+            reread.resolved_qdrant_collection,
+            reread.resolved_qdrant_index_version,
+            reread.resolved_qdrant_index_generation_id,
+        )
+
+    assert _run(scenario) == ("kb_v3", "3", GENERATION)
+
+
+def test_a_task_that_reserves_nothing_stores_nothing() -> None:
+    """A Task touching no knowledge base has no index to be bound to."""
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, ...]:
+        opened = await registry.submit(_submission())
+        return (
+            opened.resolved_qdrant_collection,
+            opened.resolved_qdrant_index_version,
+            opened.resolved_qdrant_index_generation_id,
+        )
+
+    assert _run(scenario) == (None, None, None)
+
+
+@pytest.mark.parametrize("status", ["draining", "retired"])
+def test_a_generation_that_stopped_taking_reservations_refuses_the_task(
+    status: str,
+) -> None:
+    """Reserve-or-retry: the submission fails closed and writes nothing.
+
+    ``draining`` keeps existing reservations valid while refusing new ones, so
+    an alias switch can drain instead of cutting; ``retired`` refuses outright.
+    Either way the caller resolves again rather than committing a reference to
+    an index it may not serve from.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, int]:
+        reservation = await _generation(registry, status=status)
+        with pytest.raises(IndexGenerationNotReservableError) as captured:
+            await registry.submit(_submission(index_reservation=reservation))
+        async with registry._engine.connect() as connection:
+            tasks = len((await connection.execute(select(task_runs))).all())
+        return captured.value.found_status, tasks
+
+    found, tasks = _run(scenario)
+
+    assert found == status
+    # The whole submission rolled back, so there is no half-opened Task.
+    assert tasks == 0
+
+
+def test_a_reservation_naming_a_generation_that_does_not_exist_is_refused() -> None:
+    async def scenario(registry: PostgresTaskRegistry) -> Any:
+        phantom = IndexReservation(
+            collection_name="kb_v3",
+            index_version="3",
+            generation_id="6f1d5a02-0000-4000-8000-00000000dead",
+        )
+        with pytest.raises(IndexGenerationNotReservableError) as captured:
+            await registry.submit(_submission(index_reservation=phantom))
+        return captured.value.found_status
+
+    assert _run(scenario) is None
+
+
+def test_a_reservation_must_name_the_generation_s_own_collection() -> None:
+    """The triple is checked as a triple, not as an id with two labels.
+
+    A generation id paired with the wrong collection or version would store a
+    snapshot that disagrees with the index it points at -- which is precisely
+    the inconsistency the plan says must fail closed.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, Any]:
+        real = await _generation(registry)
+        mislabelled = real.model_copy(update={"collection_name": "kb_v2"})
+        with pytest.raises(IndexGenerationNotReservableError):
+            await registry.submit(_submission(index_reservation=mislabelled))
+        wrong_version = real.model_copy(update={"index_version": "2"})
+        with pytest.raises(IndexGenerationNotReservableError):
+            await registry.submit(
+                _submission(
+                    thread_id="thr_v2",
+                    submission_dedup_key="dedup_v2",
+                    index_reservation=wrong_version,
+                )
+            )
+        async with registry._engine.connect() as connection:
+            return len((await connection.execute(select(task_runs))).all()), None
+
+    assert _run(scenario) == (0, None)
+
+
+def test_a_reserved_generation_cannot_be_deleted_while_a_task_holds_it() -> None:
+    """The foreign key *is* the reservation.
+
+    Not a convention a future GC has to remember: while any Task references the
+    generation, deleting it is impossible, so the collection it names cannot be
+    reclaimed underneath a Task that is still going to read from it.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> None:
+        reservation = await _generation(registry)
+        await registry.submit(_submission(index_reservation=reservation))
+        with pytest.raises(IntegrityError):
+            async with registry._engine.begin() as connection:
+                await connection.execute(
+                    qdrant_index_generations.delete().where(
+                        qdrant_index_generations.c.generation_id
+                        == reservation.generation_id
+                    )
+                )
+
+    _run(scenario)
+
+
+def test_a_retirement_racing_a_submission_cannot_slip_between_check_and_insert() -> (
+    None
+):
+    """The generation row is locked, so the two orderings both stay consistent.
+
+    A retirement that commits first makes the submission fail closed; one that
+    arrives while the submission holds the row waits, and then finds the
+    reference. What must never happen is a committed Task pointing at a
+    generation that was retired without seeing it.
+    """
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> tuple[Any, ...]:
+        reservation = await _generation(registry)
+
+        # Retire the generation in a transaction that has not committed, then
+        # submit: the submission blocks on the locked row rather than reading a
+        # stale `active`.
+        retired = await _while_uncommitted(
+            engine,
+            qdrant_index_generations.update()
+            .where(
+                qdrant_index_generations.c.generation_id == reservation.generation_id
+            )
+            .values(status="retired"),
+            lambda: _submit_or_error(registry, reservation),
+        )
+        async with engine.connect() as connection:
+            tasks = len((await connection.execute(select(task_runs))).all())
+        return type(retired).__name__, tasks
+
+    error, tasks = _run_with_engine(scenario)
+
+    assert error == "IndexGenerationNotReservableError"
+    assert tasks == 0
+
+
+async def _submit_or_error(
+    registry: PostgresTaskRegistry, reservation: IndexReservation
+) -> object:
+    try:
+        return await registry.submit(_submission(index_reservation=reservation))
+    except IndexGenerationNotReservableError as error:
+        return error
