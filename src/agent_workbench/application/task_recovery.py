@@ -12,11 +12,11 @@ one of these branches expensive to reach in a test. Written as a decision over
 values, all of them are reachable in microseconds, and the Worker is left with
 only the part that genuinely needs I/O.
 
-Two branches -- an approval interrupt with and without a decision -- describe a
-graph M3a cannot yet produce: ``approval`` is a side-effect-free placeholder
-until WP10. They are here rather than deferred because the alternative is a
-function that silently answers "resume" for an interrupted graph, and because
-the input has to carry the approval anyway for the other branches to be sound.
+Two of the branches -- an approval interrupt with and without a decision -- are
+reached by a real interrupt: the ``approval`` node stops the graph, and the
+Worker asks the ledger whether anybody has answered before deciding which of the
+two it is. Neither branch resumes on the caller's word: what the Worker passes
+into the graph names the approval, and the node reads the decision itself.
 """
 
 from __future__ import annotations

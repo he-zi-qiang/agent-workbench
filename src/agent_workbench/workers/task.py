@@ -32,7 +32,9 @@ from dataclasses import dataclass
 from typing import Final
 
 from agent_workbench.application.task_recovery import Reconciliation, reconcile
+from agent_workbench.domain.task_registry import ApprovalDecision
 from agent_workbench.domain.tasks import TaskState
+from agent_workbench.ports.approvals import ApprovalStore
 from agent_workbench.ports.execution_guard import (
     ExecutionGuard,
     GuardFactory,
@@ -47,7 +49,9 @@ from agent_workbench.ports.task_registry import (
     TaskTransitionRejectedError,
 )
 from agent_workbench.ports.task_workflow import (
+    ApprovalResume,
     CheckpointFence,
+    CheckpointPosition,
     GraphVersion,
     TaskWorkflowPort,
 )
@@ -64,6 +68,21 @@ LoadState = Callable[[TaskRun], Awaitable[TaskState]]
 
 class _GuardLostError(RuntimeError):
     """Stop this Worker without writing after its execution guard was lost."""
+
+
+@dataclass(frozen=True, slots=True)
+class _DecidedApproval:
+    """An approval a human has answered, and the two things that answer decides.
+
+    A pending approval cannot be one of these, and that is the point: the type
+    is what stops "the ledger has a row" from being confused with "somebody
+    said yes or no".
+    """
+
+    decision: ApprovalDecision
+    #: What the graph is woken with. It names the approval and the version seen
+    #: and carries no verdict; the node re-reads the decision itself.
+    resume: ApprovalResume
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +119,12 @@ class TaskWorker:
     # ``None`` keeps the worker usable for narrow unit tests and migrations;
     # the production composition always supplies a session-pinned guard.
     guards: GuardFactory | None = None
+    # The approvals ledger, for the one question this Worker cannot answer from
+    # the checkpoint: has a human decided yet. Optional for the same reason the
+    # guard is, and with a louder consequence -- a Worker without one parks every
+    # interrupted Task instead of resuming it, which is the safe direction but a
+    # standstill, so it says so in the log rather than only here.
+    approvals: ApprovalStore | None = None
     # Test-only. ``None`` is the production no-op binding, so no controller
     # or test package crosses the normal composition boundary.
     fault_injector: FaultInjector | None = None
@@ -146,15 +171,17 @@ class TaskWorker:
                 task = current
 
                 position = await self.workflow.inspect(task.thread_id)
+                # Asked before deciding, not after: whether a graph stopped at an
+                # approval is the checkpoint's fact, and whether anybody answered
+                # is the ledger's. The reconciliation is a function of both, so
+                # both have to be in hand before it runs.
+                approval = await self._decided_approval(position)
                 decision = reconcile(
                     status=task.status,
                     graph_version=task.graph_version,
                     position=position,
                     buildable_versions=self.buildable_versions,
-                    # No approval can be pending: `approval` is a placeholder node
-                    # until WP10, so no graph in this build interrupts. When one
-                    # does, this is where the decision is read from.
-                    approval_decision=None,
+                    approval_decision=(None if approval is None else approval.decision),
                 )
                 decisions.append(decision)
 
@@ -164,7 +191,9 @@ class TaskWorker:
                     return TaskOutcome(task=task, decisions=tuple(decisions))
 
                 try:
-                    failure = await self._execute(task, lease, decision, guard)
+                    failure = await self._execute(
+                        task, lease, decision, guard, approval
+                    )
                 except StaleExecutionError:
                     # Reclaim or cancellation won while this graph was running.
                     # It is not this Worker's failure to write.
@@ -190,17 +219,53 @@ class TaskWorker:
             if guard is not None:
                 await guard.release()
 
+    async def _decided_approval(
+        self, position: CheckpointPosition | None
+    ) -> _DecidedApproval | None:
+        """The answer to the approval this thread is stopped on, if there is one.
+
+        ``None`` covers four different situations on purpose: the graph is not
+        at an approval, the approval has vanished, nobody has decided yet, and
+        this Worker has no ledger to ask. All four mean the same thing to the
+        reconciliation -- do not resume -- and distinguishing them there would
+        be inventing branches for differences no execution decision depends on.
+        """
+
+        if position is None or position.awaiting_approval_id is None:
+            return None
+        if self.approvals is None:
+            logger.warning(
+                "no approvals ledger is wired, so the task waiting on approval "
+                "%s cannot be resumed by this worker",
+                position.awaiting_approval_id,
+            )
+            return None
+        record = await self.approvals.get(position.awaiting_approval_id)
+        if record is None:
+            return None
+        status = record.status
+        if status == "pending":
+            return None
+        return _DecidedApproval(
+            decision=status,
+            resume=ApprovalResume(
+                approval_id=record.approval_id,
+                decision_version=record.decision_version,
+            ),
+        )
+
     async def _execute(
         self,
         task: TaskRun,
         lease: ExecutionLease,
         decision: Reconciliation,
         guard: ExecutionGuard | None,
+        approval: _DecidedApproval | None = None,
     ) -> str | None:
         """Run or resume the graph. Returns a reason when it failed."""
 
         execution = asyncio.create_task(
-            self._invoke_graph(task, lease, decision, guard),
+            self._invoke_graph(task, lease, decision, guard, approval),
             name=f"task-graph:{task.task_id}",
         )
         heartbeat = asyncio.create_task(
@@ -291,6 +356,7 @@ class TaskWorker:
         lease: ExecutionLease,
         decision: Reconciliation,
         guard: ExecutionGuard | None,
+        approval: _DecidedApproval | None,
     ) -> None:
         # A production Worker reaches this point only after an acquire. The
         # optional branch keeps narrow non-PostgreSQL workflow tests usable,
@@ -318,6 +384,17 @@ class TaskWorker:
                 thread_id=task.thread_id,
                 graph_version=task.graph_version,
                 checkpoint_fence=checkpoint_fence,
+                # Only where the decision says an approval is what is being
+                # resumed. An ordinary resume that carried one would be handing
+                # a wake-up to a graph that is not waiting for one, and the id
+                # is gated on the action rather than merely on the record so a
+                # future action that also has an approval in hand has to say so.
+                approval=(
+                    approval.resume
+                    if approval is not None
+                    and decision.action == "resume_with_approval"
+                    else None
+                ),
             )
 
     async def _heartbeat_loop(self, lease: ExecutionLease) -> None:

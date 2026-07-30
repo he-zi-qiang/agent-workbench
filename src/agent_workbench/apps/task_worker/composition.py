@@ -21,9 +21,11 @@ from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.langgraph import (
     LangGraphTaskWorkflow,
     PostgresCheckpointSaver,
+    build_approval_node,
 )
 from agent_workbench.adapters.langgraph.workflow import GRAPH_BUILDERS, NodeHandler
 from agent_workbench.adapters.persistence import (
+    PostgresApprovalStore,
     PostgresDocumentStore,
     PostgresEventLog,
     PostgresExecutionGuardFactory,
@@ -64,6 +66,7 @@ from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 from agent_workbench.workers.task import TaskWorker
+from agent_workbench.workflows.approval import TaskApprovalGate
 from agent_workbench.workflows.demo_handlers import build_demo_v1_handlers
 from agent_workbench.workflows.task_handlers import (
     TaskNodeInvocationProvider,
@@ -85,7 +88,13 @@ class TaskWorkerDependencies:
     artifacts: LocalArtifactStore
     events: PostgresEventLog
     registry: PostgresTaskRegistry
+    approvals: PostgresApprovalStore
     guards: PostgresExecutionGuardFactory
+    # What this process will actually run at each node. Exposed for the same
+    # reason the stores are: which handler set a deployment assembled is a
+    # deploy-time fact, and the difference between the interrupting approval
+    # node and no approval node at all is not visible anywhere else.
+    handlers: Mapping[TaskNodeId, NodeHandler]
     worker: TaskWorker
     http: httpx.AsyncClient | None = None
     qdrant: AsyncQdrantClient | None = None
@@ -154,6 +163,11 @@ def build_task_worker_dependencies(
         healthcheck_seconds=float(config.database.guard_healthcheck_seconds),
         application_name=f"{config.database.application_name}-guard",
     )
+    # Wired whatever the handlers are. The demo graph answers its own gate and
+    # never interrupts, but a Worker that could meet an interrupt without a
+    # ledger would park the Task instead of resuming it -- and the ledger costs
+    # nothing to hold.
+    approvals = PostgresApprovalStore(engine, events=events)
     if handlers is None:
         handlers, http, qdrant = _build_real_handlers(
             config,
@@ -162,6 +176,14 @@ def build_task_worker_dependencies(
             events=events,
             registry=registry,
         )
+        # The one node the handler factory cannot build: it has to interrupt,
+        # and interrupting belongs to the workflow framework, so it is assembled
+        # here from the framework-neutral gate.
+        real: dict[TaskNodeId, NodeHandler] = dict(handlers)
+        real["approval"] = build_approval_node(
+            TaskApprovalGate(approvals=approvals, registry=registry)
+        )
+        handlers = real
     inputs = TaskInputStore(artifacts)
     workflow = LangGraphTaskWorkflow(
         handlers=handlers,
@@ -170,6 +192,7 @@ def build_task_worker_dependencies(
     worker = TaskWorker(
         registry=registry,
         guards=guards,
+        approvals=approvals,
         workflow=workflow,
         load_state=inputs.load_state,
         buildable_versions=tuple(GRAPH_BUILDERS),
@@ -186,7 +209,9 @@ def build_task_worker_dependencies(
         artifacts=artifacts,
         events=events,
         registry=registry,
+        approvals=approvals,
         guards=guards,
+        handlers=handlers,
         worker=worker,
         http=http,
         qdrant=qdrant,

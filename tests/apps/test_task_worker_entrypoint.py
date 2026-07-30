@@ -33,6 +33,7 @@ from agent_workbench.bootstrap.projections import (
 from agent_workbench.bootstrap.settings import Settings
 from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.ports.model import ModelPort
+from agent_workbench.workflows.task_handlers import build_task_v1_handlers
 
 
 def _config(tmp_path: object) -> TaskWorkerRuntimeConfig:
@@ -152,6 +153,59 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
     http, qdrant = asyncio.run(scenario())
 
     assert (http, qdrant) == (True, True)
+
+
+def test_real_worker_assembles_the_human_gate_and_the_ledger_that_answers_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deployed Worker must be able to ask, and to hear the answer.
+
+    Both halves are liveness rather than safety. Without the node the router
+    already fails closed -- a graph with no approval handler stops at the gate
+    instead of exporting -- and without the ledger the Worker parks every
+    interrupted Task. Neither loses the human, and both bring every Task to a
+    standstill, which is worth catching here rather than in a deployment.
+    """
+
+    import agent_workbench.apps.task_worker.composition as composition
+    import agent_workbench.bootstrap.model_factory as model_factory
+
+    monkeypatch.setattr(
+        composition,
+        "build_embedder",
+        lambda config: DeterministicEmbedder(dimension=config.vector_size),
+    )
+    monkeypatch.setattr(
+        composition,
+        "build_sparse_encoder",
+        lambda _: composition.SparseEncodingUnavailable("dense-only test"),
+    )
+    monkeypatch.setattr(
+        model_factory,
+        "build_model",
+        lambda _, *, client: FakeModel(()),
+    )
+
+    async def scenario() -> tuple[bool, bool, bool]:
+        dependencies = build_task_worker_dependencies(_projected_config())
+        try:
+            return (
+                "approval" in dependencies.handlers,
+                dependencies.worker.approvals is dependencies.approvals,
+                # The control group for the node: the factory that builds every
+                # other handler does not build this one, so its presence is the
+                # composition root's doing rather than something inherited.
+                "approval"
+                not in build_task_v1_handlers(
+                    executor=FakeModel(()),  # type: ignore[arg-type]
+                    artifacts=dependencies.artifacts,
+                    invocations=None,  # type: ignore[arg-type]
+                ),
+            )
+        finally:
+            await dependencies.dispose()
+
+    assert asyncio.run(scenario()) == (True, True, True)
 
 
 def test_empty_queue_poll_exits_promptly_when_stop_is_requested() -> None:
