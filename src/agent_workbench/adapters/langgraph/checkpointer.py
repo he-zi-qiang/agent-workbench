@@ -39,7 +39,7 @@ from langgraph.checkpoint.base import (  # pyright: ignore[reportMissingTypeStub
 from langgraph.checkpoint.base import (
     CheckpointTuple as LangGraphCheckpointTuple,
 )
-from sqlalchemy import Select, and_, func, select, text, tuple_
+from sqlalchemy import Select, and_, delete, func, select, text, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -50,6 +50,7 @@ from agent_workbench.adapters.persistence.models import (
     workflow_checkpoint_writes,
     workflow_checkpoints,
 )
+from agent_workbench.domain.task_registry import TERMINAL_STATUSES
 from agent_workbench.ports.fault_injector import FaultInjector
 from agent_workbench.ports.task_registry import ExecutionLease, StaleExecutionError
 from agent_workbench.ports.task_workflow import (
@@ -120,6 +121,24 @@ class StaleCheckpointWriteError(StaleExecutionError):
                 worker_id=fence.worker_id,
                 epoch=fence.epoch,
             )
+        )
+
+
+class ThreadStillExecutingError(RuntimeError):
+    """A thread's checkpoints were asked for while its Task can still run.
+
+    Checkpoints *are* the execution position, so deleting them for a Task that
+    is not finished is not retention -- it is destroying the only thing a
+    restarted Worker could recover from, and it would look like a Task that
+    simply started over.
+    """
+
+    def __init__(self, *, thread_id: str, task_id: str, status: str) -> None:
+        self.thread_id = thread_id
+        self.task_id = task_id
+        self.status = status
+        super().__init__(
+            f"thread {thread_id} belongs to task {task_id}, which is {status}"
         )
 
 
@@ -629,6 +648,61 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
     ) -> None:
         _refuse_sync()
 
+    async def adelete_thread(self, thread_id: str) -> None:
+        """Delete one thread's checkpoints, blobs and writes in one transaction.
+
+        Refused while the owning Task can still run. This is the same ordering
+        the index reservation uses: the thing that keeps a resource alive is the
+        unfinished work referencing it, and only after that work reaches a
+        terminal state may the resource go.
+
+        Orphan writes need no separate rule. A write that names a checkpoint
+        which was never committed -- routine under LangGraph's default
+        durability -- still carries the thread it belongs to, so it is removed
+        with that thread and nothing else can strand it.
+
+        All three tables in one transaction, because a half-deleted thread is
+        the one shape worse than either keeping it or removing it: blobs whose
+        checkpoints are gone are unreachable bytes, and checkpoints whose blobs
+        are gone fail closed on read.
+        """
+
+        async with self._engine.begin() as connection:
+            owner = (
+                (
+                    await connection.execute(
+                        select(task_runs.c.task_id, task_runs.c.status)
+                        .where(task_runs.c.thread_id == thread_id)
+                        # Locked as defence in depth rather than because a
+                        # race is reachable: terminal statuses have no outgoing
+                        # edge in the transition table, so a row that reads
+                        # terminal here cannot become live before the deletes,
+                        # and a sabotage of this lock changes nothing
+                        # observable. It stays because the day a terminal Task
+                        # can be reopened -- a retry-from-finished, say -- it is
+                        # the only thing between that reopening and a thread
+                        # whose position has just been removed.
+                        .with_for_update()
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if owner is not None and owner["status"] not in TERMINAL_STATUSES:
+                raise ThreadStillExecutingError(
+                    thread_id=thread_id,
+                    task_id=owner["task_id"],
+                    status=str(owner["status"]),
+                )
+            for table in (
+                workflow_checkpoint_writes,
+                workflow_checkpoint_blobs,
+                workflow_checkpoints,
+            ):
+                await connection.execute(
+                    delete(table).where(table.c.thread_id == thread_id)
+                )
+
     def delete_thread(self, thread_id: str) -> None:
         _refuse_sync()
 
@@ -748,4 +822,5 @@ __all__ = [
     "CheckpointFenceRequiredError",
     "PostgresCheckpointSaver",
     "StaleCheckpointWriteError",
+    "ThreadStillExecutingError",
 ]

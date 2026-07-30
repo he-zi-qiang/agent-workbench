@@ -38,6 +38,7 @@ from agent_workbench.adapters.langgraph import (
 from agent_workbench.adapters.langgraph.checkpointer import (
     CheckpointCorruptionError,
     CheckpointFenceRequiredError,
+    ThreadStillExecutingError,
     _advisory_lock_parts,
 )
 from agent_workbench.adapters.persistence import (
@@ -1377,3 +1378,216 @@ def test_the_synchronous_half_refuses_rather_than_starting_a_loop(
 
     with pytest.raises(NotImplementedError, match="async-only"):
         getattr(saver, method)(*arguments)
+
+
+# --------------------------------------------------------------------------
+# Retention: deleting a thread's checkpoints (1.3)
+
+
+async def _counts(engine: Any) -> tuple[int, int, int]:
+    async with engine.connect() as connection:
+        return (
+            len((await connection.execute(select(workflow_checkpoints))).all()),
+            len((await connection.execute(select(workflow_checkpoint_blobs))).all()),
+            len((await connection.execute(select(workflow_checkpoint_writes))).all()),
+        )
+
+
+def test_deleting_a_thread_removes_its_checkpoints_blobs_and_writes() -> None:
+    """All three tables, or the thread is not gone -- it is broken.
+
+    Blobs whose checkpoints were removed are unreachable bytes; checkpoints
+    whose blobs were removed fail closed on read. A half-deleted thread is
+    worse than either keeping it or removing it.
+    """
+
+    async def scenario() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+        engine = _engine()
+        try:
+            saver = PostgresCheckpointSaver(engine)
+            await _drive(saver)
+            before = await _counts(engine)
+            await saver.adelete_thread(THREAD)
+            return before, await _counts(engine)
+        finally:
+            await engine.dispose()
+
+    before, after = _run(scenario)
+
+    # The run really did write to all three.
+    assert all(count > 0 for count in before)
+    assert after == (0, 0, 0)
+
+
+def test_deleting_a_thread_leaves_other_threads_alone() -> None:
+    async def scenario() -> tuple[int, int, int]:
+        engine = _engine()
+        try:
+            saver = PostgresCheckpointSaver(engine)
+            await _drive(saver, thread_id="thr_keep")
+            await _drive(saver, thread_id="thr_drop")
+            await saver.adelete_thread("thr_drop")
+            async with engine.connect() as connection:
+                rows = (
+                    await connection.execute(
+                        select(workflow_checkpoints.c.thread_id).distinct()
+                    )
+                ).all()
+            remaining = {row.thread_id for row in rows}
+            assert remaining == {"thr_keep"}
+            return await _counts(engine)
+        finally:
+            await engine.dispose()
+
+    assert all(count > 0 for count in _run(scenario))
+
+
+def test_an_orphan_write_is_removed_with_its_thread() -> None:
+    """Writes naming a checkpoint that never committed need no separate sweep.
+
+    They are routine -- under LangGraph's default durability a step's writes are
+    issued before its checkpoint commits -- and they still carry the thread they
+    belong to, so nothing can strand them.
+    """
+
+    async def scenario() -> tuple[int, tuple[int, int, int]]:
+        engine = _engine()
+        try:
+            saver = PostgresCheckpointSaver(engine)
+            orphan = {
+                "configurable": {
+                    "thread_id": THREAD,
+                    "checkpoint_id": "1f18a895-0000-0000-0000-never-committed",
+                }
+            }
+            await saver.aput_writes(
+                orphan,
+                [("objective", "a write whose checkpoint never landed")],
+                "task_orphan",
+            )
+            async with engine.connect() as connection:
+                orphans = len(
+                    (await connection.execute(select(workflow_checkpoint_writes))).all()
+                )
+            await saver.adelete_thread(THREAD)
+            return orphans, await _counts(engine)
+        finally:
+            await engine.dispose()
+
+    orphans, after = _run(scenario)
+
+    assert orphans == 1
+    assert after == (0, 0, 0)
+
+
+def test_a_threads_checkpoints_survive_while_its_task_can_still_run() -> None:
+    """Refused, not best-effort: this is the recovery position itself.
+
+    Deleting it for an unfinished Task would look, to the next Worker, exactly
+    like a Task that had never started -- so it would start over rather than
+    resume, and the loss would be invisible.
+    """
+
+    async def scenario() -> tuple[str, str, tuple[int, int, int]]:
+        engine = _engine()
+        try:
+            saver = PostgresCheckpointSaver(engine)
+            await _drive(saver)
+            registry = PostgresTaskRegistry(engine)
+            await registry.submit(
+                TaskSubmission(
+                    tenant_id="tenant_a",
+                    owner_id="user_1",
+                    thread_id=THREAD,
+                    graph_version="v1",
+                    input_ref="input_1",
+                    input_fingerprint="a" * 64,
+                    submission_dedup_key="dedup_retention",
+                    run_semantics_snapshot={"model": {"provider": "test"}},
+                    run_semantics_revision="test-v1",
+                    submitted_policy_revision="policy-v1",
+                    submitted_policy_fingerprint="f" * 16,
+                    submitted_authorization_envelope=AuthorizationEnvelope(),
+                )
+            )
+            with pytest.raises(ThreadStillExecutingError) as queued:
+                await saver.adelete_thread(THREAD)
+            claim = await registry.claim_next("worker_1", lease_seconds=60)
+            assert claim is not None
+            with pytest.raises(ThreadStillExecutingError) as running:
+                await saver.adelete_thread(THREAD)
+            return queued.value.status, running.value.status, await _counts(engine)
+        finally:
+            await engine.dispose()
+
+    queued_status, running_status, counts = _run(scenario)
+
+    assert queued_status == "queued"
+    assert running_status == "running"
+    # Nothing was removed on the way to being refused.
+    assert all(count > 0 for count in counts)
+
+
+def test_a_finished_tasks_thread_can_be_collected() -> None:
+    """The other half of the same rule: terminal work releases its position."""
+
+    async def scenario() -> tuple[int, int, int]:
+        engine = _engine()
+        try:
+            saver = PostgresCheckpointSaver(engine)
+            await _drive(saver)
+            registry = PostgresTaskRegistry(engine)
+            await registry.submit(
+                TaskSubmission(
+                    tenant_id="tenant_a",
+                    owner_id="user_1",
+                    thread_id=THREAD,
+                    graph_version="v1",
+                    input_ref="input_1",
+                    input_fingerprint="a" * 64,
+                    submission_dedup_key="dedup_retention",
+                    run_semantics_snapshot={"model": {"provider": "test"}},
+                    run_semantics_revision="test-v1",
+                    submitted_policy_revision="policy-v1",
+                    submitted_policy_fingerprint="f" * 16,
+                    submitted_authorization_envelope=AuthorizationEnvelope(),
+                )
+            )
+            claim = await registry.claim_next("worker_1", lease_seconds=60)
+            assert claim is not None
+            await registry.mark_succeeded(claim.lease)
+            await saver.adelete_thread(THREAD)
+            return await _counts(engine)
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0, 0)
+
+
+def test_a_thread_no_task_owns_can_be_collected() -> None:
+    """A thread with no Registry row is a stray, and strays are collectable."""
+
+    async def scenario() -> tuple[int, int, int]:
+        engine = _engine()
+        try:
+            saver = PostgresCheckpointSaver(engine)
+            await _drive(saver)
+            await saver.adelete_thread(THREAD)
+            return await _counts(engine)
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0, 0)
+
+
+def test_deleting_a_thread_that_was_never_written_is_not_an_error() -> None:
+    async def scenario() -> tuple[int, int, int]:
+        engine = _engine()
+        try:
+            saver = PostgresCheckpointSaver(engine)
+            await saver.adelete_thread("thr_never_existed")
+            return await _counts(engine)
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0, 0)

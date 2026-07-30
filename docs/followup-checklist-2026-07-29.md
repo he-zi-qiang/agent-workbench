@@ -83,10 +83,16 @@ ruff/pyright 全过。
       "retired + 无 Task 引用"，不保证"retention 到期且无未完成 outbox"。
       **完成条件**：非终态 Task 引用的 generation 不可物理删除；终态后需同时满足
       WP05 的 retention/outbox 校验才可删；有恢复测试。
-- [ ] **1.3 Checkpoint retention / `adelete_thread`**（实测：`adelete_thread`
-      在整个代码库里**不存在**，只有同步 `delete_thread` 的显式拒绝）
-      **完成条件**：三张 checkpoint 表在一个事务里按 thread 删除；保留策略；
-      孤儿 write 行（无对应 checkpoint，正常存在，见 `0010` 迁移注释）的清理规则。
+- [x] **1.3 Checkpoint retention / `adelete_thread`**（2026-07-29 完成）
+      `adelete_thread` 在**一个事务**里删三张表，并且**owning Task 非终态时拒绝**——
+      checkpoint 就是执行位置，为一个还能跑的 Task 删掉它不是保留策略，是把唯一可恢复的
+      东西销毁，而且下一个 Worker 看到的会是"这个 Task 从来没开始过"，损失是隐形的。
+      **孤儿 write 不需要单独规则**：它带着自己的 thread，随 thread 一起删，没有别的东西
+      能让它落单（这一条有测试）。
+      **7 处破坏，6 处被抓住。** 第 7 处（读 owning Task 时不加锁）不可达：终态在转换表里
+      没有出边，读到终态就不可能再变活；已按前几轮同样的方式写进注释。
+      **仍未做**：没有"按时间/容量触发"的保留策略与清理入口——只有这个可被调用的原语，
+      谁在什么时候调用它属于运维面（与 1.2 的 `collect` 同样的边界）。
 
 ---
 
@@ -150,6 +156,8 @@ ruff/pyright 全过。
 ## 动手顺序建议
 
 `0.1–0.4` → `1.1` → `1.2`／`1.3` → `2.1` → `3.1`。
+
+**2026-07-29 进度：第 0 组与第 1 组全部完成。** 下一条是 `2.1` HITL Approval。
 
 第 0 组先做的理由：它**不改行为**，只把"测试通过"变成"测试有牙"，而且它可能
 直接改写第 1、2 组的优先级——如果 fencing 有洞，那比补 reservation 紧急得多。
