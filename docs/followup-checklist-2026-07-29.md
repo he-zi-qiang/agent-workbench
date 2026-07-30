@@ -68,7 +68,19 @@ ruff/pyright 全过。
       `qdrant_startup` 校验的 alias↔collection 一致性，没有独立的 resolver 端口；
       "快照与三列不一致时 fail closed" 只覆盖了 (collection, version, generation) 三元组
       互相不匹配的情形，没覆盖快照 JSON 内部与三列不一致。
-- [ ] **1.2 WP07-08：终态释放 reservation + Task-aware safe GC**（依赖 1.1）
+- [x] **1.2 WP07-08：终态释放 reservation + Task-aware safe GC**（2026-07-29 完成）
+      新增 `IndexGenerationStore` 端口 + `PostgresIndexGenerationStore`：
+      `retire` / `release` / `collect`。
+      **顺序本身就是不变量**：只有 retired 且无引用才能删，只有**终态** Task 才能释放，
+      所以任何调用顺序都不可能把索引从还要读它的 Task 脚下抽走。
+      release 放弃的只是 **reservation**，"跑在哪个具体索引上"仍在 Task 自己的语义快照里，
+      审计不依赖 generation 行存活。
+      **8 处破坏全部被抓住**（第一轮 7 处；补的第 8 条是：`collect` 不先加锁时，
+      同时在飞的提交会让它把 0 个持有者当成"可删"，然后被外键挡住——安全但报成约束违反
+      而不是"还有 1 个 Task 持有"）。
+      **仍未做**：WP05 的 outbox/reconciliation 与 retention 到期校验没有接进 `collect`
+      （它们依赖尚不存在的 ingestion state），所以 `collect` 目前只保证
+      "retired + 无 Task 引用"，不保证"retention 到期且无未完成 outbox"。
       **完成条件**：非终态 Task 引用的 generation 不可物理删除；终态后需同时满足
       WP05 的 retention/outbox 校验才可删；有恢复测试。
 - [ ] **1.3 Checkpoint retention / `adelete_thread`**（实测：`adelete_thread`
