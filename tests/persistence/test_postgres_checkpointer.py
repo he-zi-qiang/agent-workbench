@@ -95,7 +95,7 @@ def _run(scenario: Callable[[], Awaitable[Any]]) -> Any:
         engine = _engine()
         try:
             async with engine.begin() as connection:
-                await connection.execute(text(f"TRUNCATE {TABLES}"))
+                await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))
         finally:
             await engine.dispose()
         return await scenario()

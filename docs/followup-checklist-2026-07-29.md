@@ -98,13 +98,24 @@ ruff/pyright 全过。
 
 ## 2. Task Mode 其余（文档）
 
-- [ ] **2.1 HITL Approval**：`approval` 仍是无副作用占位节点。
-      **完成条件**：ApprovalStore/API、graph interrupt、
-      `running → waiting_approval` 与 `waiting_approval → queued` 的原子转换、
-      按 `approval_id + decision_version` 幂等、cancel 与 approve 并发只有一个合法转换（barrier 测试）。
-      注意：`application/task_recovery.py` 的第 5/6 分支**已经写好在等这个**
-      （当时明确记录为"M3a 产生不出来的图"），落地后要把它们从"决策已覆盖、无真实图"
-      变成有真实图的测试。
+- [~] **2.1 HITL Approval：审批账本与决定事务已完成（2026-07-29，迁移 `0018`）**
+      本轮做的是**第二个原子边界**（`approvals` 账本 + 决定→重排队），也就是有 barrier 要求
+      的那一半。第一个边界（interrupt → `waiting_approval` + 清 lease）此前已由
+      `registry.await_approval(lease)` 落地。
+      新增：`approvals` 表（`UNIQUE(task_id, graph_node_operation_id)`、
+      pending/decided 双向 CHECK）、`task_runs.resume_kind` / `resume_approval_id`、
+      `TaskApprovalDecided` 事件、`ApprovalStore` 端口 + `PostgresApprovalStore`。
+      决定是**一个事务**：记录决定 + `waiting_approval → queued` + 写 resume 引用 + 写 durable
+      事件，四件事同生共死；`decision_version` 让同一决定重放只留一行、只重排队一次；
+      approved 与 rejected **都**重排队（拒绝是图里的一条路径，不是没有路径）。
+      **11 处破坏，4 处第一轮被抓住**，补了 1 条约束测试后 5 处；余下按性质分类并写进 adapter
+      文档：`waiting_approval` 是**成对冗余**（删两处会红，删一处不会）；给 Task 行加锁**不改变
+      任何结果**（requeue 的条件会重新求值），它存在只为固定跨表加锁顺序、避免死锁，而这一点
+      任何对结果的断言都看不见；approval 更新上的 version fence 只在两个决定真并发时可达，
+      需要方法内部的接缝才能确定性触发，因此**保留但未测**。
+      **仍未做**：graph 里真正的 interrupt 节点与 `Command(resume=...)`、Approval HTTP API 与
+      owner/tenant IDOR 测试、`NOTIFY task_ready`。`task_recovery.py` 的第 5/6 分支仍然是
+      "决策已覆盖、无真实图"。
 - [ ] **2.2 外部副作用 ledger（`tool_executions`）**：稳定 operation key、
       intent/result 两段提交、人工核对状态。
 - [ ] **2.3 真实外部搜索 Provider**：当前 Adapter 在 Provider 缺失时失败关闭（文档），
@@ -157,7 +168,8 @@ ruff/pyright 全过。
 
 `0.1–0.4` → `1.1` → `1.2`／`1.3` → `2.1` → `3.1`。
 
-**2026-07-29 进度：第 0 组与第 1 组全部完成。** 下一条是 `2.1` HITL Approval。
+**2026-07-29 进度：第 0、1 组全部完成；2.1 完成了审批账本与决定事务这一半。**
+下一条是 2.1 的剩余部分（graph interrupt 节点 + Approval API），或 `2.2` / `3.1`。
 
 第 0 组先做的理由：它**不改行为**，只把"测试通过"变成"测试有牙"，而且它可能
 直接改写第 1、2 组的优先级——如果 fencing 有洞，那比补 reservation 紧急得多。

@@ -553,6 +553,63 @@ workflow_checkpoint_writes = Table(
 )
 
 
+# What a human was asked, and what they answered.
+#
+# A decision is a fact with a version, not an event to be replayed: the same
+# decision arriving twice -- a retried request, a double-clicked button -- must
+# leave one row and requeue the Task once. That is what `decision_version`
+# carries, and why a decision is stored beside the Task rather than derived from
+# the event stream.
+
+approvals = Table(
+    "approvals",
+    metadata,
+    Column("approval_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column(
+        "task_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("task_runs.task_id"),
+        nullable=False,
+    ),
+    # Which interrupt inside the graph this answers. Unique per Task, so one
+    # node's pause cannot accumulate two competing approvals.
+    Column("graph_node_operation_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("status", String(16), nullable=False),
+    # Monotonic per approval. A decision that arrives with a version already
+    # recorded is the same decision again; a later one supersedes.
+    Column("decision_version", Integer, nullable=False, server_default="0"),
+    Column("decided_by", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("decided_at", DateTime(timezone=True), nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    CheckConstraint(
+        "status IN ('pending', 'approved', 'rejected')",
+        name="approvals_status",
+    ),
+    # A pending approval has nobody attached to it; a decided one names who and
+    # when. Left one-way, a stale decider would outlive the decision it made.
+    CheckConstraint(
+        "(status = 'pending' AND decision_version = 0 "
+        "AND decided_by IS NULL AND decided_at IS NULL) OR "
+        "(status <> 'pending' AND decision_version >= 1 "
+        "AND decided_by IS NOT NULL AND decided_at IS NOT NULL)",
+        name="approvals_decision",
+    ),
+    UniqueConstraint(
+        "task_id",
+        "graph_node_operation_id",
+        name="uq_approvals_task_id_graph_node_operation_id",
+    ),
+    Index("ix_approvals_task_id", "task_id"),
+)
+
+
 # Which concrete Qdrant index a Task may be bound to.
 #
 # The alias is not in here on purpose. An alias selects an index for *new*
@@ -686,6 +743,11 @@ task_runs = Table(
     # has to act on or account for, so "failed" can never be recorded without
     # saying what failed, and a Task parked for a migration always carries the
     # reconciliation's own sentence.
+    # Why this Task is back on the queue, when it is not simply new work. Set
+    # together with the approval that caused it, so a Worker resuming can tell
+    # a retry from a decision without inspecting the graph.
+    Column("resume_kind", String(16), nullable=True),
+    Column("resume_approval_id", String(IDENTIFIER_LENGTH), nullable=True),
     Column("status_detail", Text, nullable=True),
     Column(
         "created_at",
@@ -725,6 +787,11 @@ task_runs = Table(
         name="task_runs_resolved_index",
     ),
     CheckConstraint(
+        "(resume_kind IS NULL AND resume_approval_id IS NULL) OR "
+        "(resume_kind = 'approval' AND resume_approval_id IS NOT NULL)",
+        name="task_runs_resume_reference",
+    ),
+    CheckConstraint(
         "(resolved_qdrant_collection IS NULL "
         "AND resolved_qdrant_index_version IS NULL "
         "AND resolved_qdrant_index_generation_id IS NULL) OR "
@@ -732,6 +799,11 @@ task_runs = Table(
         "AND resolved_qdrant_index_version IS NOT NULL "
         "AND resolved_qdrant_index_generation_id IS NOT NULL)",
         name="task_runs_resolved_index",
+    ),
+    CheckConstraint(
+        "(resume_kind IS NULL AND resume_approval_id IS NULL) OR "
+        "(resume_kind = 'approval' AND resume_approval_id IS NOT NULL)",
+        name="task_runs_resume_reference",
     ),
     CheckConstraint(
         "(status IN ('waiting_migration', 'failed', 'cancelled', 'dead_letter') "

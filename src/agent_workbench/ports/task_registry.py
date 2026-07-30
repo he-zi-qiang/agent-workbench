@@ -15,7 +15,7 @@ Task produces.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Protocol, runtime_checkable
+from typing import Annotated, Literal, Protocol, runtime_checkable
 
 from pydantic import Field, StringConstraints, field_validator
 
@@ -132,6 +132,11 @@ class TaskRun(DomainModel):
     resolved_qdrant_index_version: ShortText | None = None
     resolved_qdrant_index_generation_id: str | None = None
     status: TaskStatus
+    # Why this Task is on the queue again, when it is not new work. Set with the
+    # approval that caused it, so a Worker can tell a decision from a retry
+    # without inspecting the graph.
+    resume_kind: Literal["approval"] | None = None
+    resume_approval_id: Identifier | None = None
     status_detail: TaskStatusDetail | None = None
     lease_owner: Identifier | None = None
     lease_epoch: int = Field(default=0, ge=0)

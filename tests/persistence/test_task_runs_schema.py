@@ -60,7 +60,7 @@ def _run(scenario: Callable[[AsyncEngine], Awaitable[Any]]) -> Any:
         engine = create_query_engine(dsn, application_name="agent-workbench-tests")
         try:
             async with engine.begin() as connection:
-                await connection.execute(text("TRUNCATE task_runs"))
+                await connection.execute(text("TRUNCATE task_runs CASCADE"))
             return await scenario(engine)
         finally:
             await engine.dispose()

@@ -58,6 +58,7 @@ from agent_workbench.domain.tools import (
 
 EventType = Literal[
     "TaskSubmitted",
+    "TaskApprovalDecided",
     "TaskClaimed",
     "TaskRetryScheduled",
     "TaskDeadLettered",
@@ -170,6 +171,22 @@ class TaskParkedForMigration(TaskLifecycleEvent):
     kind: Literal["TaskParkedForMigration"] = "TaskParkedForMigration"
     status: Literal["waiting_migration"] = "waiting_migration"
     reason_code: Literal["migration_required"] = "migration_required"
+
+
+class TaskApprovalDecided(DomainModel):
+    """A human decided an approval, and the Task was requeued for it.
+
+    Both outcomes are recorded and both requeue: a rejection is a path through
+    the graph, not an absence of one, so the node that resumes decides what it
+    means. ``decision_version`` is what makes replaying the same decision a
+    no-op rather than a second event.
+    """
+
+    kind: Literal["TaskApprovalDecided"] = "TaskApprovalDecided"
+    task_id: Identifier
+    approval_id: Identifier
+    decision: Literal["approved", "rejected"]
+    decision_version: int = Field(ge=1)
 
 
 class RunStarted(DomainModel):
@@ -363,6 +380,7 @@ class RunCancelled(DomainModel):
 
 EventPayload = Annotated[
     TaskSubmitted
+    | TaskApprovalDecided
     | TaskClaimed
     | TaskRetryScheduled
     | TaskDeadLettered
@@ -400,6 +418,7 @@ EventPayload = Annotated[
 # into the durable log, and cannot demote a terminal state out of it.
 EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "TaskSubmitted": "durable",
+    "TaskApprovalDecided": "durable",
     "TaskClaimed": "durable",
     "TaskRetryScheduled": "durable",
     "TaskDeadLettered": "durable",
