@@ -36,12 +36,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.persistence.event_log import PostgresEventLog
 from agent_workbench.adapters.persistence.models import approvals, task_runs
-from agent_workbench.domain.events import TaskApprovalDecided
+from agent_workbench.domain.events import TaskApprovalDecided, TaskApprovalRequested
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.task_registry import ApprovalDecision
 from agent_workbench.ports.approvals import (
     ApprovalNotDecidableError,
     ApprovalRecord,
+    ApprovalTaskNotFoundError,
 )
 from agent_workbench.ports.event_log import EventScope
 
@@ -66,6 +67,23 @@ class PostgresApprovalStore:
         owner_id: Identifier,
     ) -> ApprovalRecord:
         async with self._engine.begin() as connection:
+            # task_runs first, as everywhere else: read rather than locked,
+            # because nothing here writes it. What it supplies is the stream the
+            # event belongs on -- a Task's timeline is its thread, and that is
+            # not something to reconstruct from an id shape.
+            task = (
+                (
+                    await connection.execute(
+                        select(task_runs.c.thread_id).where(
+                            task_runs.c.task_id == task_id
+                        )
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if task is None:
+                raise ApprovalTaskNotFoundError(task_id)
             # Insert-or-nothing, then read: a node re-entered after a crash asks
             # the same question rather than opening a second approval, and the
             # loser of a race gets the winner's row instead of a duplicate key.
@@ -97,8 +115,29 @@ class PostgresApprovalStore:
                 .mappings()
                 .first()
             )
-        if row is None:  # pragma: no cover - inserted above, same transaction
-            raise RuntimeError("the requested approval vanished inside its transaction")
+            if row is None:  # pragma: no cover - inserted above, same txn
+                raise RuntimeError(
+                    "the requested approval vanished inside its transaction"
+                )
+            # In the same transaction, and keyed by the approval: the row and
+            # the event that makes it findable commit together, and a re-entered
+            # node leaves one of each. Without this the only way for a client to
+            # reach an approval would be to guess its id -- the ledger is not
+            # readable by task, and the interrupt lives in the checkpoint.
+            await self._events.append_durable_in_transaction(
+                connection,
+                EventScope(
+                    stream_id=str(task["thread_id"]),
+                    run_id=task_id,
+                    task_id=task_id,
+                ),
+                TaskApprovalRequested(
+                    task_id=task_id,
+                    approval_id=str(row["approval_id"]),
+                    graph_node_operation_id=graph_node_operation_id,
+                ),
+                event_key=f"approval_requested:{row['approval_id']}",
+            )
         return _to_record(row)
 
     async def get(self, approval_id: Identifier) -> ApprovalRecord | None:

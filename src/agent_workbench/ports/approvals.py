@@ -42,6 +42,19 @@ class ApprovalRecord(DomainModel):
     created_at: datetime
 
 
+class ApprovalTaskNotFoundError(RuntimeError):
+    """An approval was requested for a Task the ledger cannot find.
+
+    An approval belongs to a Task's timeline, so there is nowhere to record one
+    for a Task that is not there. Raised rather than tolerated: the alternative
+    is a pending approval nobody can discover and nobody can decide.
+    """
+
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"cannot open an approval for unknown task {task_id}")
+
+
 class ApprovalNotDecidableError(RuntimeError):
     """The approval or its Task is not in a state a decision may be applied to.
 
@@ -106,4 +119,5 @@ __all__ = [
     "ApprovalRecord",
     "ApprovalStatus",
     "ApprovalStore",
+    "ApprovalTaskNotFoundError",
 ]

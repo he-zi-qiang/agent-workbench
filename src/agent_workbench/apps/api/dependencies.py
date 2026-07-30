@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.persistence import (
+    PostgresApprovalStore,
     PostgresChatExpirationCoordinator,
     PostgresChatReleaseCoordinator,
     PostgresConversationStore,
@@ -41,6 +42,7 @@ from agent_workbench.adapters.persistence import (
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.vector import QdrantVectorIndex
+from agent_workbench.application.approvals import ApprovalService
 from agent_workbench.application.chat import REFUSAL, ChatService
 from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
@@ -114,6 +116,10 @@ class ApiDependencies:
     events: EventLogPort
     task_service: TaskService
     task_inputs: TaskInputService
+    # The human half of a Task. Assembled unconditionally, like the Task
+    # service: an API that can open a Task must be able to answer the
+    # approval that Task stops on, or the Task has no way forward.
+    approvals: ApprovalService
 
     @property
     def max_control_request_body_bytes(self) -> int:
@@ -287,6 +293,9 @@ def build_dependencies(
         events=events,
         task_service=task_service,
         task_inputs=task_inputs,
+        approvals=ApprovalService(
+            approvals=PostgresApprovalStore(engine, events=events)
+        ),
     )
 
 

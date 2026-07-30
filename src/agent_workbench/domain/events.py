@@ -58,6 +58,7 @@ from agent_workbench.domain.tools import (
 
 EventType = Literal[
     "TaskSubmitted",
+    "TaskApprovalRequested",
     "TaskApprovalDecided",
     "TaskClaimed",
     "TaskRetryScheduled",
@@ -171,6 +172,25 @@ class TaskParkedForMigration(TaskLifecycleEvent):
     kind: Literal["TaskParkedForMigration"] = "TaskParkedForMigration"
     status: Literal["waiting_migration"] = "waiting_migration"
     reason_code: Literal["migration_required"] = "migration_required"
+
+
+class TaskApprovalRequested(DomainModel):
+    """A graph node paused and opened an approval for a human to answer.
+
+    This is how the approval becomes findable. The id lives in the checkpoint's
+    interrupt and in the ledger, and neither is something a client may read, so
+    without this event the only way to decide an approval would be to guess its
+    id. It carries no draft, no evidence and no reason text -- what is being
+    approved is the Task, which the reader already has.
+
+    Written by the request that opened the approval, and keyed by it, so a node
+    re-entered after a crash asks the same question and leaves one event.
+    """
+
+    kind: Literal["TaskApprovalRequested"] = "TaskApprovalRequested"
+    task_id: Identifier
+    approval_id: Identifier
+    graph_node_operation_id: Identifier
 
 
 class TaskApprovalDecided(DomainModel):
@@ -380,6 +400,7 @@ class RunCancelled(DomainModel):
 
 EventPayload = Annotated[
     TaskSubmitted
+    | TaskApprovalRequested
     | TaskApprovalDecided
     | TaskClaimed
     | TaskRetryScheduled
@@ -418,6 +439,7 @@ EventPayload = Annotated[
 # into the durable log, and cannot demote a terminal state out of it.
 EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "TaskSubmitted": "durable",
+    "TaskApprovalRequested": "durable",
     "TaskApprovalDecided": "durable",
     "TaskClaimed": "durable",
     "TaskRetryScheduled": "durable",
@@ -559,6 +581,8 @@ __all__ = [
     "RunFailed",
     "RunPaused",
     "RunStarted",
+    "TaskApprovalDecided",
+    "TaskApprovalRequested",
     "TaskAwaitingApproval",
     "TaskCancelled",
     "TaskClaimed",

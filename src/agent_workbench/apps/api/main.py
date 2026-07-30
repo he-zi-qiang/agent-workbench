@@ -30,6 +30,7 @@ from agent_workbench.apps.api.dependencies import ApiDependencies, build_depende
 from agent_workbench.apps.api.identity import UnauthenticatedError
 from agent_workbench.apps.api.middleware import ControlPlaneLimit
 from agent_workbench.apps.api.routes import (
+    approvals,
     artifacts,
     chat,
     events,
@@ -42,6 +43,7 @@ from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.bootstrap import load_settings
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig, project_api
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
+from agent_workbench.ports.approvals import ApprovalNotDecidableError
 from agent_workbench.ports.conversation_store import (
     ChatTurnBusyError,
     ChatTurnConflictError,
@@ -66,6 +68,10 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     ChatTurnConflictError: 409,
     OutputTooLargeError: 413,
     TaskTransitionRejectedError: 409,
+    # The Task moved while a human was thinking -- cancelled, most often.
+    # A conflict rather than a 404: the caller was allowed to see this
+    # approval, so hiding it now would be a different lie.
+    ApprovalNotDecidableError: 409,
     InvalidTaskCursorError: 400,
     TimelineUnavailableError: 409,
 }
@@ -154,6 +160,7 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
     app.include_router(uploads.router)
     app.include_router(artifacts.router)
     app.include_router(tasks.router)
+    app.include_router(approvals.router)
     if dependencies.serves_chat:
         # Mounted only when the process can answer. A route that 500s per
         # request is a worse answer than a 404 a client detects once.
