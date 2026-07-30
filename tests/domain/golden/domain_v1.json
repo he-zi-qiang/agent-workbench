@@ -285,6 +285,7 @@
       "art_outcome_a",
       "art_outcome_b"
     ],
+    "approval_decision": "approved",
     "approval_id": "apr_0000000000000000000000000000001",
     "budget_usage": {
       "cost_micro_usd": 4200,

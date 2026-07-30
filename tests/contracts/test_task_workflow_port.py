@@ -109,11 +109,16 @@ def test_identity_is_explicit_and_resume_cannot_accept_initial_state() -> None:
         "graph_version",
         "checkpoint_fence",
     }
+    # `approval` is a wake-up naming a pending interrupt, not initial state:
+    # it carries an approval id and the version seen, and the node re-reads the
+    # decision itself. `state` remains absent, which is the property this
+    # assertion exists for.
     assert set(resume_parameters) == {
         "self",
         "thread_id",
         "graph_version",
         "checkpoint_fence",
+        "approval",
     }
     assert run_parameters["thread_id"].kind is inspect.Parameter.KEYWORD_ONLY
     assert run_parameters["graph_version"].kind is inspect.Parameter.KEYWORD_ONLY
@@ -121,6 +126,7 @@ def test_identity_is_explicit_and_resume_cannot_accept_initial_state() -> None:
     assert resume_parameters["thread_id"].kind is inspect.Parameter.KEYWORD_ONLY
     assert resume_parameters["graph_version"].kind is inspect.Parameter.KEYWORD_ONLY
     assert resume_parameters["checkpoint_fence"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert resume_parameters["approval"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_run_and_resume_echo_the_explicit_workflow_identity() -> None:

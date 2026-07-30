@@ -86,10 +86,14 @@ def build_demo_v1_handlers() -> dict[TaskNodeId, DemoNodeHandler]:
         }
 
     async def approval(state: TaskState) -> dict[str, Any]:
-        # This is not a real human interrupt.  It merely provides a legal
-        # passing-state value so the fixed v1 graph reaches export in CI.
+        # This is not a real human interrupt, and it is not a ledger read: it
+        # answers its own question so the fixed v1 graph reaches export in CI.
+        # A deployed Worker replaces this node with the interrupting one; a
+        # configuration flag that could select this one would make "approved"
+        # mean "nobody was asked".
         return _outcome_update(state, "approval") | {
             "approval_id": _stable_id("apr_demo", state.task_id, "approval"),
+            "approval_decision": "approved",
         }
 
     async def export(state: TaskState) -> dict[str, Any]:

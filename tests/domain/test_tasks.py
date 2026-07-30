@@ -182,14 +182,37 @@ def test_approval_only_follows_a_passing_review() -> None:
     with pytest.raises(ValidationError, match="requires a passing"):
         _state(
             approval_id="apr_1",
+            approval_decision="approved",
             review_result=_review(
                 decision="revise",
                 issues=("Citations are incomplete.",),
             ),
         )
 
-    approved = _state(approval_id="apr_1")
+    approved = _state(approval_id="apr_1", approval_decision="approved")
     assert approved.approval_id == "apr_1"
+
+
+@pytest.mark.parametrize(
+    "half",
+    [
+        {"approval_id": "apr_1"},
+        {"approval_decision": "approved"},
+        {"approval_decision": "rejected"},
+    ],
+)
+def test_an_approval_cannot_be_half_recorded(half: dict[str, str]) -> None:
+    """Either the gate was answered, or it was not.
+
+    An ``approval_id`` alone is a gate the graph walked past without an answer;
+    a decision alone names no approval an auditor could look up. The control
+    group is the pair below, which the same helper accepts.
+    """
+
+    with pytest.raises(ValidationError, match="travel together"):
+        _state(**half)
+
+    assert _state(approval_id="apr_1", approval_decision="rejected") is not None
 
 
 def test_budget_usage_is_the_shared_runtime_value() -> None:
@@ -209,6 +232,7 @@ def test_budget_usage_is_the_shared_runtime_value() -> None:
 def test_task_state_round_trips_through_json_without_framework_state() -> None:
     original = _state(
         approval_id="apr_1",
+        approval_decision="approved",
         budget_usage=BudgetUsage(steps=3, tool_calls=2, cost_micro_usd=17),
     )
 
@@ -226,6 +250,7 @@ def test_task_state_round_trips_through_json_without_framework_state() -> None:
         "draft_ref",
         "review_result",
         "approval_id",
+        "approval_decision",
         "agent_outcome_refs",
         "budget_usage",
         "revision_count",

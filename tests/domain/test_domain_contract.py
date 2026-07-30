@@ -227,6 +227,7 @@ SAMPLES: dict[str, VersionedModel] = {
             score=92,
         ),
         approval_id="apr_0000000000000000000000000000001",
+        approval_decision="approved",
         agent_outcome_refs=("art_outcome_a", "art_outcome_b"),
         budget_usage=USAGE,
     ),

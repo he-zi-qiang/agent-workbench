@@ -40,6 +40,7 @@ from langgraph.graph import (  # pyright: ignore[reportMissingTypeStubs]
     START,
     StateGraph,
 )
+from langgraph.types import Command  # pyright: ignore[reportMissingTypeStubs]
 
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.runs import BudgetUsage
@@ -51,6 +52,7 @@ from agent_workbench.ports.task_workflow import (
     CHECKPOINT_FENCE_GUARD_PID_KEY,
     CHECKPOINT_FENCE_TASK_ID_KEY,
     CHECKPOINT_FENCE_WORKER_ID_KEY,
+    ApprovalResume,
     CheckpointFence,
     CheckpointPosition,
     GraphVersion,
@@ -67,9 +69,10 @@ from agent_workbench.workflows.research_graph import (
     TERMINAL_NODE,
     begin_revision,
     merge_refs,
-    quality_gate_failure_reason,
+    route_approval,
     route_quality_gate,
     route_research,
+    terminal_failure_reason,
 )
 
 # The compiled graph and the builder are the only shapes this module needs
@@ -85,6 +88,11 @@ _EXHAUSTED: Final[str] = END
 
 # The configurable key that carries the graph version into checkpoint metadata.
 GRAPH_VERSION_KEY: Final[str] = "graph_version"
+
+# The key an interrupt's value carries. It is the only thing the interrupt says:
+# which approval the pause is about. The decision is read from the ledger by the
+# node itself, so it deliberately never travels in the checkpoint.
+INTERRUPT_APPROVAL_KEY: Final[str] = "approval_id"
 
 # What a checkpoint that never recorded a version is reported as. It cannot
 # collide with a real one: GraphVersion must start alphanumeric, so no valid
@@ -129,6 +137,7 @@ class GraphState(TypedDict, total=False):
     draft_ref: str | None
     review_result: Any
     approval_id: str | None
+    approval_decision: str | None
     budget_usage: Annotated[Any, _merge_budget]
     revision_count: int
     max_revisions: int
@@ -199,7 +208,13 @@ def _fault_injected_handlers(
 
 
 def _to_state(payload: Mapping[str, Any]) -> TaskState:
-    return TaskState.model_validate(dict(payload))
+    # Reserved LangGraph channels are dropped here rather than tolerated by the
+    # domain model: an interrupted invocation returns its pending interrupts in
+    # `__interrupt__`, and a TaskState that accepted that key would be a
+    # checkpoint contract with a framework detail in it.
+    return TaskState.model_validate(
+        {key: value for key, value in payload.items() if not key.startswith("__")}
+    )
 
 
 def _route_research(payload: Mapping[str, Any]) -> Sequence[str]:
@@ -211,6 +226,14 @@ def _route_quality_gate(payload: Mapping[str, Any]) -> str:
     # None is "the critic still wants changes and there is no budget left".
     # It ends the graph rather than reaching approval, so an exhausted budget
     # cannot be mistaken for a pass by a caller that ignores a return value.
+    return _EXHAUSTED if target is None else target
+
+
+def _route_approval(payload: Mapping[str, Any]) -> str:
+    target = route_approval(_to_state(payload))
+    # None is "a human said no". It ends the graph rather than reaching export,
+    # for the same reason the exhausted gate does: a rejection that still
+    # exported would make the approval a formality.
     return _EXHAUSTED if target is None else target
 
 
@@ -246,6 +269,7 @@ def build_v1_graph(
         _route_quality_gate,
         ["approval", "synthesize", _EXHAUSTED],
     )
+    graph.add_conditional_edges("approval", _route_approval, ["export", _EXHAUSTED])
     return graph
 
 
@@ -325,6 +349,7 @@ class LangGraphTaskWorkflow:
         thread_id: Identifier,
         graph_version: GraphVersion,
         checkpoint_fence: CheckpointFence | None = None,
+        approval: ApprovalResume | None = None,
     ) -> TaskWorkflowResult:
         checkpoint = await self._checkpoint(thread_id)
         if checkpoint is None:
@@ -346,9 +371,11 @@ class LangGraphTaskWorkflow:
             )
         compiled = self._graph(graph_version, thread_id)
         # No initial state: it already belongs to the checkpoint, and passing
-        # it again is how the original input gets appended twice.
+        # it again is how the original input gets appended twice. A Command is
+        # not initial state either -- it carries the wake-up for a pending
+        # interrupt and nothing else.
         payload = await compiled.ainvoke(
-            None,
+            None if approval is None else Command(resume=approval.model_dump()),
             _config(thread_id, graph_version, checkpoint_fence),
         )
         return await self._result(compiled, thread_id, graph_version, payload)
@@ -368,20 +395,16 @@ class LangGraphTaskWorkflow:
         snapshot = await self._graph(written_by, thread_id).aget_state(
             _config(thread_id, written_by)
         )
-        # No approval id yet: `approval` is a side-effect-free placeholder
-        # until WP10, so no graph in this build can interrupt. This is where
-        # the interrupt will be read from when one can.
         pending = tuple(snapshot.next)
         return CheckpointPosition(
             graph_version=written_by,
             pending_nodes=pending,
+            awaiting_approval_id=_awaiting_approval_id(snapshot),
             # A checkpoint *before* quality_gate may already contain the
             # critic's exhausting revise verdict. It is still executable,
             # though: the pending gate has not made the terminal decision.
             failure_reason=(
-                None
-                if pending
-                else quality_gate_failure_reason(_to_state(snapshot.values))
+                None if pending else terminal_failure_reason(_to_state(snapshot.values))
             ),
         )
 
@@ -406,7 +429,7 @@ class LangGraphTaskWorkflow:
         snapshot = await compiled.aget_state(_config(thread_id, graph_version))
         pending = tuple(snapshot.next)
         state = _to_state(payload)
-        failure_reason = quality_gate_failure_reason(state)
+        failure_reason = terminal_failure_reason(state)
         return TaskWorkflowResult(
             thread_id=thread_id,
             graph_version=graph_version,
@@ -421,6 +444,30 @@ class LangGraphTaskWorkflow:
             next_nodes=pending,
             failure_reason=None if pending else failure_reason,
         )
+
+
+def _awaiting_approval_id(snapshot: Any) -> str | None:
+    """The approval a paused thread is waiting on, if it is paused on one.
+
+    Read from the snapshot's interrupts rather than from ``TaskState``, because
+    a graph stopped *at* the approval node has not written any state yet -- the
+    node raised before returning. The interrupt is the only place the id exists
+    until a decision resumes it.
+
+    Anything unrecognised is reported as ``None``. A pause this process cannot
+    describe is not one it should claim is an approval: the position still has
+    pending nodes, so the Worker treats it as ordinary unfinished work rather
+    than parking a Task on an approval nobody can decide.
+    """
+
+    for pending in tuple(cast("Any", getattr(snapshot, "interrupts", ()) or ())):
+        value = cast("Any", getattr(pending, "value", None))
+        if not isinstance(value, Mapping):
+            continue
+        approval_id = cast("Mapping[str, object]", value).get(INTERRUPT_APPROVAL_KEY)
+        if isinstance(approval_id, str) and approval_id:
+            return approval_id
+    return None
 
 
 def _config(
@@ -456,6 +503,7 @@ def _config(
 __all__ = [
     "GRAPH_BUILDERS",
     "GRAPH_VERSION_KEY",
+    "INTERRUPT_APPROVAL_KEY",
     "UNRECORDED_GRAPH_VERSION",
     "GraphBuilder",
     "GraphState",

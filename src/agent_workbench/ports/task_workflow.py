@@ -70,6 +70,20 @@ class CheckpointFence(DomainModel):
         return self
 
 
+class ApprovalResume(DomainModel):
+    """The wake-up handed to a graph interrupted at an approval.
+
+    It names the approval and the version of the decision the caller saw, and
+    nothing else. The decision itself is deliberately absent: the node re-reads
+    it from the ledger, so this value is a pointer rather than an answer. A
+    resume payload that carried the verdict would make "approved" mean
+    "somebody called resume with the word approved in it".
+    """
+
+    approval_id: Identifier
+    decision_version: int = Field(ge=1)
+
+
 class TaskWorkflowResult(DomainModel):
     """One bounded invocation's framework-independent result.
 
@@ -206,6 +220,7 @@ class TaskWorkflowPort(Protocol):
         thread_id: Identifier,
         graph_version: GraphVersion,
         checkpoint_fence: CheckpointFence | None = None,
+        approval: ApprovalResume | None = None,
     ) -> TaskWorkflowResult:
         """Continue the existing checkpoint without resubmitting initial state.
 
@@ -213,6 +228,10 @@ class TaskWorkflowPort(Protocol):
         version different from the checkpoint's version raises
         ``WorkflowGraphVersionMismatchError`` and leaves the checkpoint
         untouched.
+
+        ``approval`` wakes a thread stopped at an approval interrupt. It is
+        optional because ordinary unfinished work resumes with nothing, and it
+        is a pointer rather than a verdict: see :class:`ApprovalResume`.
         """
         ...
 
@@ -230,6 +249,7 @@ __all__ = [
     "CHECKPOINT_FENCE_EPOCH_KEY",
     "CHECKPOINT_FENCE_TASK_ID_KEY",
     "CHECKPOINT_FENCE_WORKER_ID_KEY",
+    "ApprovalResume",
     "CheckpointFence",
     "CheckpointPosition",
     "GraphVersion",

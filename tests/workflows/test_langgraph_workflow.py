@@ -80,12 +80,20 @@ def _handlers() -> dict[str, Any]:
     async def critic(state: TaskState) -> dict[str, Any]:
         return {"review_result": _passing_review(state.revision_count).model_dump()}
 
+    async def approval(state: TaskState) -> dict[str, Any]:
+        # Answers its own gate. The interrupting node is the adapter's
+        # build_approval_node, tested separately; these handlers exist to
+        # exercise the edges, and a graph whose approval node returns nothing
+        # now fails at the router rather than exporting unapproved.
+        return {"approval_id": "approval_1", "approval_decision": "approved"}
+
     return {
         "understand": understand,
         "research_internal": internal,
         "research_external": external,
         "synthesize": synthesize,
         "critic": critic,
+        "approval": approval,
     }
 
 
@@ -420,12 +428,25 @@ def test_revisions_are_counted_before_each_retry_and_stop_at_the_budget() -> Non
     assert result.state.review_result.revision_number == 2
 
 
-def test_a_passing_review_reaches_approval_and_export() -> None:
+@pytest.mark.parametrize(
+    ("decision", "expected_visits", "expected_disposition"),
+    [
+        ("approved", ["approval", "export"], "completed"),
+        # The control group. Same graph, same passing review, one different
+        # decision -- and the export handler must never run.
+        ("rejected", ["approval"], "failed"),
+    ],
+)
+def test_the_approval_decision_decides_whether_the_export_runs(
+    decision: str,
+    expected_visits: list[str],
+    expected_disposition: str,
+) -> None:
     visited: list[str] = []
 
     async def approval(state: TaskState) -> dict[str, Any]:
         visited.append("approval")
-        return {"approval_id": "approval_1"}
+        return {"approval_id": "approval_1", "approval_decision": decision}
 
     async def export(state: TaskState) -> dict[str, Any]:
         visited.append("export")
@@ -439,6 +460,10 @@ def test_a_passing_review_reaches_approval_and_export() -> None:
         )
     )
 
-    assert visited == ["approval", "export"]
+    assert visited == expected_visits
     assert result.state.approval_id == "approval_1"
-    assert result.disposition == "completed"
+    assert result.state.approval_decision == decision
+    assert result.disposition == expected_disposition
+    # A rejection is a deliberate terminal failure with a reason, not an empty
+    # pending-node list a caller could read as success.
+    assert (result.failure_reason is not None) is (decision == "rejected")

@@ -26,16 +26,20 @@ from agent_workbench.workflows.research_graph import (
     STATIC_EDGES,
     TERMINAL_NODE,
     EmptyPlanError,
+    MissingApprovalError,
     MissingReviewError,
     ResearchContribution,
+    approval_failure_reason,
     begin_revision,
     declared_nodes,
     fan_in,
     merge_refs,
     next_nodes,
     quality_gate_failure_reason,
+    route_approval,
     route_quality_gate,
     route_research,
+    terminal_failure_reason,
 )
 
 
@@ -90,11 +94,11 @@ def test_entry_and_terminal_nodes_match_the_baseline_diagram() -> None:
     assert STATIC_EDGES[TERMINAL_NODE] == ()
 
 
-def test_conditional_nodes_are_absent_from_the_static_edge_table() -> None:
-    # If a conditional node also had a static edge, a caller reading the table
-    # directly would silently take an edge the router never chose.
+def test_conditional_nodes_have_no_static_successor() -> None:
+    # If a conditional node also had a static successor, a caller reading the
+    # table directly would silently take an edge the router never chose.
     for node in CONDITIONAL_NODES:
-        assert node not in STATIC_EDGES
+        assert STATIC_EDGES.get(node, ()) == ()
 
 
 def test_the_static_edges_match_the_baseline_diagram() -> None:
@@ -104,7 +108,8 @@ def test_the_static_edges_match_the_baseline_diagram() -> None:
     assert STATIC_EDGES["research_external"] == ("synthesize",)
     assert STATIC_EDGES["synthesize"] == ("critic",)
     assert STATIC_EDGES["critic"] == ("quality_gate",)
-    assert STATIC_EDGES["approval"] == ("export",)
+    # approval is conditional: see the approval-gate section below.
+    assert STATIC_EDGES["approval"] == ()
 
 
 def test_the_edge_table_cannot_be_mutated_by_a_caller() -> None:
@@ -174,6 +179,67 @@ def test_quality_gate_fails_closed_before_the_critic_has_reviewed() -> None:
     with pytest.raises(MissingReviewError) as captured:
         route_quality_gate(_planned_state())
     assert captured.value.task_id == "task_1"
+
+
+# --------------------------------------------------------------------------
+# approval: the human gate's two conditional edges
+# --------------------------------------------------------------------------
+
+
+def _decided_state(decision: str) -> TaskState:
+    return _reviewed_state("pass").model_copy(
+        update={"approval_id": "apr_1", "approval_decision": decision}
+    )
+
+
+def test_an_approved_decision_routes_to_export() -> None:
+    state = _decided_state("approved")
+
+    assert route_approval(state) == "export"
+    assert next_nodes("approval", state) == ("export",)
+
+
+def test_a_rejected_decision_routes_nowhere_rather_than_exporting() -> None:
+    # The control group is the test above: the only difference is the decision.
+    # Returning "export" here would perform the one write a human said no to.
+    rejected = _decided_state("rejected")
+
+    assert route_approval(rejected) is None
+    assert next_nodes("approval", rejected) == ()
+    assert approval_failure_reason(rejected) is not None
+
+
+def test_only_a_rejection_is_an_approval_failure() -> None:
+    assert approval_failure_reason(_decided_state("approved")) is None
+    assert approval_failure_reason(_reviewed_state("pass")) is None
+
+
+def test_the_approval_gate_fails_closed_with_no_recorded_decision() -> None:
+    with pytest.raises(MissingApprovalError) as captured:
+        route_approval(_reviewed_state("pass"))
+    assert captured.value.task_id == "task_1"
+
+
+def test_the_two_terminal_failures_cannot_describe_one_state() -> None:
+    """Their order inside ``terminal_failure_reason`` is not a precedence rule.
+
+    An exhausted budget requires a ``revise`` verdict and an approval requires a
+    ``pass`` one, so no state satisfies both. Asserted rather than read off the
+    code, because the day one of those preconditions moves, the single entry
+    point would start silently preferring one reason over the other.
+    """
+
+    exhausted = _reviewed_state("revise", revision_count=2, max_revisions=2)
+    rejected = _decided_state("rejected")
+
+    assert quality_gate_failure_reason(exhausted) is not None
+    assert approval_failure_reason(exhausted) is None
+    assert quality_gate_failure_reason(rejected) is None
+    assert approval_failure_reason(rejected) is not None
+
+    assert terminal_failure_reason(exhausted) == quality_gate_failure_reason(exhausted)
+    assert terminal_failure_reason(rejected) == approval_failure_reason(rejected)
+    assert terminal_failure_reason(_decided_state("approved")) is None
 
 
 # --------------------------------------------------------------------------

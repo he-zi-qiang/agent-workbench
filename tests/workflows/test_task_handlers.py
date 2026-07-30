@@ -220,9 +220,18 @@ def test_real_handlers_persist_text_only_artifacts_and_complete_the_graph() -> N
         registry = _Registry(_task())
         store = InMemoryArtifactStore()
         executor = _TextExecutor()
+
+        async def decided_approval(_: TaskState) -> dict[str, Any]:
+            # build_task_v1_handlers builds no approval node: the real one has
+            # to interrupt, which is the adapter's job. A graph assembled
+            # without one now fails closed at the gate, so this test supplies
+            # the answer the composition root's interrupting node would have
+            # obtained from the ledger.
+            return {"approval_id": "apr_1", "approval_decision": "approved"}
+
         handlers = build_task_v1_handlers(
             executor=executor, artifacts=store, invocations=_provider(registry)
-        )
+        ) | {"approval": decided_approval}
 
         # The critic needs the generated id, which is only known once synthesis
         # has persisted its text. Patch its scripted response at run time.

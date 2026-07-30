@@ -186,12 +186,20 @@ def _handlers() -> dict[str, Any]:
             ).model_dump()
         }
 
+    async def approval(state: TaskState) -> dict[str, Any]:
+        # Answers its own gate. The interrupting node is the adapter's
+        # build_approval_node; what these tests exercise is persistence, and a
+        # graph whose approval node returns nothing now fails closed at the
+        # router rather than exporting unapproved.
+        return {"approval_id": "apr_1", "approval_decision": "approved"}
+
     return {
         "understand": understand,
         "research_internal": internal,
         "research_external": external,
         "synthesize": synthesize,
         "critic": critic,
+        "approval": approval,
     }
 
 

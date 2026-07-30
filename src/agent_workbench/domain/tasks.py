@@ -17,6 +17,7 @@ from pydantic import Field, StringConstraints, model_validator
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.runs import BudgetUsage
 from agent_workbench.domain.schema import DomainModel, ShortText, VersionedModel
+from agent_workbench.domain.task_registry import ApprovalDecision
 
 TaskNodeId = Literal[
     "understand",
@@ -119,6 +120,12 @@ class TaskState(VersionedModel):
     draft_ref: Identifier | None = None
     review_result: ReviewResult | None = None
     approval_id: Identifier | None = None
+    # Which way the graph went at the approval gate. This is *not* a second copy
+    # of the ledger's answer: the ledger records what a human decided, and this
+    # records what this thread routed on when it resumed, read from the ledger at
+    # that moment. Routing is a pure function of state, so a decision the state
+    # does not carry is one no edge can depend on.
+    approval_decision: ApprovalDecision | None = None
     agent_outcome_refs: tuple[Identifier, ...] = Field(
         default=(),
         max_length=MAX_STATE_REFS,
@@ -148,6 +155,12 @@ class TaskState(VersionedModel):
             review is None or review.decision != "pass"
         ):
             raise ValueError("approval_id requires a passing review_result")
+        if (self.approval_id is None) != (self.approval_decision is None):
+            # Both or neither. An approval_id without a decision would be a gate
+            # the graph walked past without an answer -- which is exactly what a
+            # human approval exists to prevent -- and a decision without the
+            # approval it answers names nothing an auditor can look up.
+            raise ValueError("approval_id and approval_decision travel together")
         return self
 
     def _validate_plan(self) -> None:
