@@ -24,6 +24,7 @@ from agent_workbench.adapters.langgraph.workflow import (
     LangGraphTaskWorkflow,
     build_v1_graph,
 )
+from agent_workbench.adapters.testing import FailpointController, InjectedFaultError
 from agent_workbench.domain.tasks import ReviewResult, TaskState, TaskStep
 from agent_workbench.ports.task_workflow import (
     TaskWorkflowPort,
@@ -113,6 +114,21 @@ def test_a_run_reaches_the_terminal_node_through_the_declared_edges() -> None:
     # reducer, so LangGraph's fan-in agrees with the control flow's fan_in.
     assert result.state.evidence_refs == ("ev_external", "ev_internal")
     assert result.state.draft_ref == "draft_1"
+
+
+def test_node_failpoint_runs_after_a_handler_and_before_checkpointing() -> None:
+    async def scenario() -> None:
+        controller = FailpointController(frozenset({"after_node_before_checkpoint"}))
+        controller.arm("after_node_before_checkpoint", mode="raise")
+        workflow = _workflow(fault_injector=controller)
+
+        with pytest.raises(InjectedFaultError):
+            await workflow.run(
+                _state(), thread_id="thread_failpoint", graph_version="v1"
+            )
+        await controller.wait_until_hit("after_node_before_checkpoint")
+
+    asyncio.run(scenario())
 
 
 def test_a_first_run_refuses_a_thread_that_already_exists() -> None:
@@ -289,7 +305,7 @@ def test_only_the_registered_versions_are_buildable() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_an_exhausted_revision_budget_ends_the_graph_without_approving() -> None:
+def test_an_exhausted_revision_budget_fails_the_graph_without_approving() -> None:
     async def revising_critic(state: TaskState) -> dict[str, Any]:
         return {
             "review_result": ReviewResult(
@@ -316,10 +332,92 @@ def test_an_exhausted_revision_budget_ends_the_graph_without_approving() -> None
     )
 
     # The critic rejected the draft and there was no budget to revise. The
-    # graph must stop, not walk into approval.
+    # graph must fail, not walk into approval or report an empty queue as
+    # successful completion.
     assert result.state.approval_id is None
     assert result.state.review_result is not None
     assert result.state.review_result.decision == "revise"
+    assert result.disposition == "failed"
+    assert result.failure_reason is not None
+
+
+def test_a_pending_quality_gate_is_not_misread_as_a_terminal_failure() -> None:
+    """A crash after critic but before gate leaves work to resume."""
+
+    async def revising_critic(state: TaskState) -> dict[str, Any]:
+        return {
+            "review_result": ReviewResult(
+                decision="revise",
+                reviewed_draft_ref="draft_1",
+                revision_number=state.revision_count,
+                summary="Still thin.",
+                issues=("Evidence is thin.",),
+                score=30,
+            ).model_dump()
+        }
+
+    async def interrupted_gate(_: TaskState) -> dict[str, Any]:
+        raise RuntimeError("simulated process interruption")
+
+    async def scenario() -> Any:
+        workflow = LangGraphTaskWorkflow(
+            handlers=_handlers()
+            | {"critic": revising_critic, "quality_gate": interrupted_gate}
+        )
+        with pytest.raises(RuntimeError, match="simulated process interruption"):
+            await workflow.run(
+                _state(max_revisions=0),
+                thread_id="thread_1",
+                graph_version="v1",
+            )
+        return await workflow.inspect("thread_1")
+
+    position = asyncio.run(scenario())
+
+    assert position is not None
+    assert position.pending_nodes == ("quality_gate",)
+    assert position.failure_reason is None
+
+
+def test_revisions_are_counted_before_each_retry_and_stop_at_the_budget() -> None:
+    calls: dict[str, int] = {"synthesize": 0, "critic": 0}
+
+    async def synthesize(state: TaskState) -> dict[str, Any]:
+        calls["synthesize"] += 1
+        return {"draft_ref": f"draft_{state.revision_count}", "review_result": None}
+
+    async def revising_critic(state: TaskState) -> dict[str, Any]:
+        calls["critic"] += 1
+        return {
+            "review_result": ReviewResult(
+                decision="revise",
+                reviewed_draft_ref=f"draft_{state.revision_count}",
+                revision_number=state.revision_count,
+                summary="Needs another pass.",
+                issues=("Evidence is thin.",),
+                score=30,
+            ).model_dump()
+        }
+
+    handlers = _handlers() | {
+        "synthesize": synthesize,
+        "critic": revising_critic,
+    }
+    result = asyncio.run(
+        LangGraphTaskWorkflow(handlers=handlers).run(
+            _state(max_revisions=2),
+            thread_id="thread_1",
+            graph_version="v1",
+        )
+    )
+
+    # One initial draft plus exactly two critic-requested revisions. This
+    # guards against the old loop, where revision_count was never advanced.
+    assert calls == {"synthesize": 3, "critic": 3}
+    assert result.disposition == "failed"
+    assert result.state.revision_count == 2
+    assert result.state.review_result is not None
+    assert result.state.review_result.revision_number == 2
 
 
 def test_a_passing_review_reaches_approval_and_export() -> None:

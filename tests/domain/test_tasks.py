@@ -220,6 +220,7 @@ def test_task_state_round_trips_through_json_without_framework_state() -> None:
         "schema_version",
         "task_id",
         "objective",
+        "knowledge_base_id",
         "plan",
         "evidence_refs",
         "draft_ref",

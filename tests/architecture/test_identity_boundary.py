@@ -21,12 +21,14 @@ PACKAGE_ROOT = PROJECT_ROOT / "src" / "agent_workbench"
 
 PRINCIPAL_TYPE = "PrincipalContext"
 
-# Every module permitted to decide who is calling. Both are process entry
-# points: one resolves a real request, the other scripts a demonstration.
+# Every module permitted to decide or restore who is calling. They are process
+# boundaries: the API resolves a request, the Task Worker restores the
+# immutable registry snapshot, and the CLI scripts a demonstration.
 IDENTITY_BOUNDARY_MODULES = frozenset(
     {
         "agent_workbench.apps.api.identity",
         "agent_workbench.apps.cli.demo",
+        "agent_workbench.apps.task_worker.identity",
         # The definition itself.
         "agent_workbench.domain.policies",
     }

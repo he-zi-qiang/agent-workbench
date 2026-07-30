@@ -25,6 +25,8 @@ ArtifactKind = Literal[
     "agent_outcome",
     "report",
     "compaction_summary",
+    "task_input",
+    "evidence_bundle",
 ]
 
 FILENAME_MAX_LENGTH: Final[int] = 255

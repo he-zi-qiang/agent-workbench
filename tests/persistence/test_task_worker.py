@@ -16,6 +16,7 @@ Real PostgreSQL only.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -80,6 +81,7 @@ def _submission(**overrides: Any) -> TaskSubmission:
         "thread_id": "thr_1",
         "graph_version": "v1",
         "input_ref": "input_1",
+        "input_fingerprint": hashlib.sha256(b"input_1").hexdigest(),
         "submission_dedup_key": "dedup_1",
         "run_semantics_snapshot": {"model": {"provider": "deepseek"}},
         "run_semantics_revision": "1.2:v1.3:abc0123456789def",
@@ -197,6 +199,65 @@ def test_a_worker_takes_a_submitted_task_all_the_way_to_succeeded() -> None:
     # Two decisions, not one: running is expressed as deciding again.
     assert actions == ["start", "settle_succeeded"]
     assert count == 2
+
+
+def test_a_worker_records_an_exhausted_critic_rejection_as_failed() -> None:
+    """An empty checkpoint queue is not sufficient evidence of success.
+
+    The graph reaches ``END`` after its quality gate rejects the final allowed
+    revision.  The durable checkpoint carries that terminal meaning, and a
+    fresh reconciliation must therefore call ``mark_failed`` rather than
+    ``mark_succeeded``.
+    """
+
+    async def exhausted_state(task: TaskRun) -> TaskState:
+        state = await _load_state(task)
+        return TaskState.model_validate({**state.model_dump(), "max_revisions": 0})
+
+    async def scenario() -> tuple[Any, Any, list[str]]:
+        engine = _engine()
+        try:
+            await PostgresTaskRegistry(engine).submit(_submission())
+            handlers = _handlers()
+
+            async def revising_critic(state: TaskState) -> dict[str, Any]:
+                return {
+                    "review_result": ReviewResult(
+                        decision="revise",
+                        reviewed_draft_ref="draft_1",
+                        revision_number=state.revision_count,
+                        summary="The evidence remains insufficient.",
+                        issues=("Add evidence.",),
+                        score=30,
+                    ).model_dump()
+                }
+
+            handlers["critic"] = revising_critic
+            worker = TaskWorker(
+                registry=PostgresTaskRegistry(engine),
+                workflow=LangGraphTaskWorkflow(
+                    handlers=handlers,
+                    checkpointer=PostgresCheckpointSaver(engine),
+                    builders=BUILDERS,
+                ),
+                load_state=exhausted_state,
+                buildable_versions=VERSIONS,
+            )
+            outcome = await worker.run_once()
+        finally:
+            await engine.dispose()
+        assert outcome is not None
+        return (
+            outcome.task.status,
+            outcome.task.status_detail,
+            [decision.action for decision in outcome.decisions],
+        )
+
+    status, detail, actions = _run(scenario)
+
+    assert status == "failed"
+    assert detail is not None and "revision budget" in detail
+    assert actions == ["start", "settle_failed"]
 
 
 def test_a_worker_with_nothing_queued_does_nothing() -> None:
@@ -434,7 +495,7 @@ def test_a_cancelled_task_is_never_handed_to_a_worker_at_all() -> None:
 
             # Claim it, then cancel it, then let the Worker decide. This is the
             # ordering a cancel racing a claim produces.
-            await registry.start_next()
+            await registry.claim_next("worker_setup", lease_seconds=60)
             await registry.cancel(task.task_id, reason="the owner asked")
             async with engine.begin() as connection:
                 await connection.execute(
@@ -446,7 +507,7 @@ def test_a_cancelled_task_is_never_handed_to_a_worker_at_all() -> None:
                 )
             # Re-queued so the Worker can claim it, then cancelled again while
             # it holds the claim -- which is what run_once has to notice.
-            claimed = await registry.start_next()
+            claimed = await registry.claim_next("worker_setup", lease_seconds=60)
             assert claimed is not None
             await registry.cancel(task.task_id, reason="the owner asked")
 
@@ -485,10 +546,16 @@ def test_a_worker_that_claims_a_cancelled_task_propagates_it() -> None:
             class CancellingRegistry(PostgresTaskRegistry):
                 """Cancel between the claim and the Worker's re-read."""
 
-                async def start_next(self) -> Any:
-                    claimed = await super().start_next()
+                async def claim_next(
+                    self, worker_id: str, *, lease_seconds: int
+                ) -> Any:
+                    claimed = await super().claim_next(
+                        worker_id, lease_seconds=lease_seconds
+                    )
                     if claimed is not None:
-                        await super().cancel(claimed.task_id, reason="the owner asked")
+                        await super().cancel(
+                            claimed.task.task_id, reason="the owner asked"
+                        )
                     return claimed
 
             worker = TaskWorker(
@@ -514,6 +581,59 @@ def test_a_worker_that_claims_a_cancelled_task_propagates_it() -> None:
     assert status == "cancelled"
     # The graph never ran.
     assert calls == {}
+
+
+def test_a_long_graph_execution_is_kept_alive_by_an_independent_heartbeat() -> None:
+    """The graph may run longer than a heartbeat interval without losing lease.
+
+    This uses the real Registry and graph adapter.  Counting ``heartbeat`` at
+    the Registry boundary proves the concurrent loop ran while a node awaited,
+    rather than merely observing a final successful lifecycle transition.
+    """
+
+    async def scenario() -> tuple[str, int]:
+        engine = _engine()
+        try:
+
+            class RecordingRegistry(PostgresTaskRegistry):
+                heartbeat_count = 0
+
+                async def heartbeat(self, *args: Any, **kwargs: Any) -> TaskRun:
+                    self.heartbeat_count += 1
+                    return await super().heartbeat(*args, **kwargs)
+
+            registry = RecordingRegistry(engine)
+            await registry.submit(_submission())
+            handlers = _handlers()
+            normal_understand = handlers["understand"]
+
+            async def slow_understand(state: TaskState) -> dict[str, Any]:
+                await asyncio.sleep(1.1)
+                return await normal_understand(state)
+
+            handlers["understand"] = slow_understand
+            worker = TaskWorker(
+                registry=registry,
+                workflow=LangGraphTaskWorkflow(
+                    handlers=handlers,
+                    checkpointer=PostgresCheckpointSaver(engine),
+                    builders=BUILDERS,
+                ),
+                load_state=_load_state,
+                buildable_versions=VERSIONS,
+                lease_seconds=4,
+                heartbeat_seconds=1,
+            )
+            outcome = await worker.run_once()
+        finally:
+            await engine.dispose()
+        assert outcome is not None
+        return outcome.final_status, registry.heartbeat_count
+
+    status, heartbeat_count = _run(scenario)
+
+    assert status == "succeeded"
+    assert heartbeat_count >= 1
 
 
 def test_a_worker_gives_up_rather_than_deciding_forever() -> None:

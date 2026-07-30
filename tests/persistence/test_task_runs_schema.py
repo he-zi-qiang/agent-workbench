@@ -16,8 +16,10 @@ Real PostgreSQL only.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any, get_args
 
 import pytest
@@ -74,6 +76,7 @@ def _row(**overrides: Any) -> dict[str, Any]:
         "thread_id": "thr_1",
         "graph_version": "v1",
         "input_ref": "input_1",
+        "input_fingerprint": hashlib.sha256(b"input_1").hexdigest(),
         "submission_dedup_key": "dedup_1",
         "status": "queued",
         "status_detail": None,
@@ -82,8 +85,18 @@ def _row(**overrides: Any) -> dict[str, Any]:
         "submitted_policy_revision": "policy-1",
         "submitted_policy_fingerprint": "f" * 16,
         "submitted_authorization_envelope": {},
+        "submitted_principal_scopes": [],
     }
     base.update(overrides)
+    # A running Task is never an unowned state.  Keep raw-schema tests honest
+    # as the Registry grows the same lease invariant it relies on at runtime.
+    if base["status"] == "running":
+        base.update(
+            lease_owner="worker_schema",
+            lease_epoch=1,
+            lease_until=datetime.now(UTC) + timedelta(minutes=5),
+            heartbeat_at=datetime.now(UTC),
+        )
     return base
 
 
@@ -147,7 +160,7 @@ def test_a_status_the_domain_does_not_define_is_refused() -> None:
 # Submitting twice
 
 
-def test_one_owner_cannot_start_two_tasks_from_one_submission_key() -> None:
+def test_one_tenant_owner_cannot_start_two_tasks_from_one_submission_key() -> None:
     """The exit condition "a repeated submission key returns the same Task".
 
     Returning the same Task is the repository's job; making a second one
@@ -184,6 +197,28 @@ def test_two_owners_may_reuse_one_submission_key() -> None:
                         task_id="task_2",
                         thread_id="thr_2",
                         owner_id="user_2",
+                    ),
+                ],
+            )
+        async with engine.connect() as connection:
+            return len((await connection.execute(select(task_runs))).all())
+
+    assert _run(scenario) == 2
+
+
+def test_the_same_owner_and_key_may_recur_in_another_tenant() -> None:
+    """Owner ids are not global identities; the tenant scopes a caller."""
+
+    async def scenario(engine: AsyncEngine) -> int:
+        async with engine.begin() as connection:
+            await connection.execute(
+                insert(task_runs),
+                [
+                    _row(),
+                    _row(
+                        task_id="task_2",
+                        thread_id="thr_2",
+                        tenant_id="tenant_b",
                     ),
                 ],
             )
@@ -263,7 +298,13 @@ def test_a_transition_into_a_terminal_state_must_bring_its_reason_along() -> Non
             await connection.execute(
                 update(task_runs)
                 .where(task_runs.c.task_id == "task_1")
-                .values(status="failed", status_detail="the model call died")
+                .values(
+                    status="failed",
+                    status_detail="the model call died",
+                    lease_owner=None,
+                    lease_until=None,
+                    heartbeat_at=None,
+                )
             )
         async with engine.connect() as connection:
             return (
@@ -293,7 +334,13 @@ def test_leaving_a_terminal_state_would_have_to_drop_its_reason() -> None:
                 await connection.execute(
                     update(task_runs)
                     .where(task_runs.c.task_id == "task_1")
-                    .values(status="running")
+                    .values(
+                        status="running",
+                        lease_owner="worker_schema",
+                        lease_epoch=1,
+                        lease_until=datetime.now(UTC) + timedelta(minutes=5),
+                        heartbeat_at=datetime.now(UTC),
+                    )
                 )
 
     _run(scenario)

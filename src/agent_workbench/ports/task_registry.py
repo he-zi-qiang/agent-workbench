@@ -17,12 +17,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Protocol, runtime_checkable
 
-from pydantic import StringConstraints
+from pydantic import Field, StringConstraints, field_validator
 
+from agent_workbench.domain.artifacts import Sha256
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.domain.schema import DomainModel, JsonObject, ShortText
 from agent_workbench.domain.task_registry import TaskStatus
+from agent_workbench.domain.tools import PermissionScope
 from agent_workbench.ports.task_workflow import GraphVersion
 
 #: Why a Task stopped where it did, for a human. Bounded because it reaches
@@ -48,6 +50,10 @@ class TaskSubmission(DomainModel):
     thread_id: Identifier
     graph_version: GraphVersion
     input_ref: Identifier
+    # Content identity is separate from the generated artifact id. A retry can
+    # upload equal bytes again and receive another artifact id, yet must still
+    # resolve to the Task opened by the first submission.
+    input_fingerprint: Sha256
     submission_dedup_key: Identifier
     # What the Task means, decided once. Required rather than defaulted: a
     # submission that could omit its semantics would produce a Task whose
@@ -58,6 +64,12 @@ class TaskSubmission(DomainModel):
     submitted_policy_revision: ShortText
     submitted_policy_fingerprint: ShortText
     submitted_authorization_envelope: AuthorizationEnvelope
+    submitted_principal_scopes: tuple[PermissionScope, ...] = ()
+
+    @field_validator("submitted_principal_scopes")
+    @classmethod
+    def normalize_submitted_scopes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(sorted(set(value)))
 
 
 class TaskRun(DomainModel):
@@ -69,16 +81,48 @@ class TaskRun(DomainModel):
     thread_id: Identifier
     graph_version: GraphVersion
     input_ref: Identifier
+    input_fingerprint: Sha256
     submission_dedup_key: Identifier
     run_semantics_snapshot: JsonObject
     run_semantics_revision: ShortText
     submitted_policy_revision: ShortText
     submitted_policy_fingerprint: ShortText
     submitted_authorization_envelope: AuthorizationEnvelope
+    submitted_principal_scopes: tuple[PermissionScope, ...] = ()
     status: TaskStatus
     status_detail: TaskStatusDetail | None = None
+    lease_owner: Identifier | None = None
+    lease_epoch: int = Field(default=0, ge=0)
+    lease_until: datetime | None = None
+    heartbeat_at: datetime | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    available_at: datetime
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("submitted_principal_scopes")
+    @classmethod
+    def normalize_submitted_scopes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(sorted(set(value)))
+
+
+class ExecutionLease(DomainModel):
+    """The fenced ownership token for one active Task execution.
+
+    E1 fences Registry lifecycle writes only.  It deliberately does not fence
+    the LangGraph checkpointer yet; that requires the E2 saver work.
+    """
+
+    task_id: Identifier
+    worker_id: Identifier
+    epoch: int = Field(ge=1)
+
+
+class TaskClaim(DomainModel):
+    """A running Task and the lease required to mutate it."""
+
+    task: TaskRun
+    lease: ExecutionLease
 
 
 class TaskTransitionRejectedError(RuntimeError):
@@ -119,6 +163,16 @@ class TaskSubmissionConflictError(RuntimeError):
         )
 
 
+class StaleExecutionError(RuntimeError):
+    """A Worker no longer owns a Task's current, unexpired lease."""
+
+    def __init__(self, lease: ExecutionLease) -> None:
+        self.lease = lease
+        super().__init__(
+            f"execution lease is stale for task {lease.task_id} at epoch {lease.epoch}"
+        )
+
+
 @runtime_checkable
 class TaskRegistry(Protocol):
     """Open Tasks, hand out the next one, and record where each one stopped."""
@@ -134,20 +188,32 @@ class TaskRegistry(Protocol):
 
     async def get(self, task_id: Identifier) -> TaskRun | None: ...
 
-    async def start_next(self) -> TaskRun | None:
-        """Move the oldest queued Task to ``running`` and return it.
-
-        ``None`` when there is nothing queued. Ordering is oldest-first and
-        nothing more: priority and concurrent claiming arrive with multiple
-        Workers, and a single Worker needs neither.
-        """
+    async def claim_next(
+        self, worker_id: Identifier, *, lease_seconds: int
+    ) -> TaskClaim | None:
+        """Claim one eligible Task with a short PostgreSQL transaction."""
         ...
 
-    async def mark_succeeded(self, task_id: Identifier) -> TaskRun: ...
+    async def heartbeat(
+        self, lease: ExecutionLease, *, lease_seconds: int
+    ) -> TaskRun: ...
 
-    async def mark_failed(self, task_id: Identifier, *, reason: str) -> TaskRun: ...
+    async def reclaim_expired(
+        self,
+        *,
+        limit: int,
+        max_attempts: int,
+        retry_base_seconds: int,
+        retry_max_seconds: int,
+    ) -> tuple[TaskRun, ...]: ...
 
-    async def park_for_migration(self, task_id: Identifier, *, reason: str) -> TaskRun:
+    async def mark_succeeded(self, lease: ExecutionLease) -> TaskRun: ...
+
+    async def mark_failed(self, lease: ExecutionLease, *, reason: str) -> TaskRun: ...
+
+    async def park_for_migration(
+        self, lease: ExecutionLease, *, reason: str
+    ) -> TaskRun:
         """Record that the Task's graph cannot be run as it stands.
 
         Terminal for a Worker but not for the Task: nothing here decides what
@@ -156,7 +222,7 @@ class TaskRegistry(Protocol):
         """
         ...
 
-    async def await_approval(self, task_id: Identifier) -> TaskRun:
+    async def await_approval(self, lease: ExecutionLease) -> TaskRun:
         """Release the Task while a human decides.
 
         The Worker stops after this, so the Task must not be left in a status
@@ -164,10 +230,19 @@ class TaskRegistry(Protocol):
         """
         ...
 
+    async def release_for_retry(
+        self, lease: ExecutionLease, *, delay_seconds: int
+    ) -> TaskRun:
+        """Release a live execution lease for a later, fenced retry."""
+        ...
+
     async def cancel(self, task_id: Identifier, *, reason: str) -> TaskRun: ...
 
 
 __all__ = [
+    "ExecutionLease",
+    "StaleExecutionError",
+    "TaskClaim",
     "TaskRegistry",
     "TaskRun",
     "TaskSubmission",

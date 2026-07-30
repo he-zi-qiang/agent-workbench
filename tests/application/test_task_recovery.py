@@ -153,6 +153,20 @@ def test_a_graph_that_finished_settles_the_registry_the_crash_left_behind() -> N
     assert not decision.keeps_executing
 
 
+def test_a_graph_that_reached_a_failed_terminal_state_settles_failed() -> None:
+    decision = _reconcile(
+        position=_position(
+            pending_nodes=(),
+            failure_reason="the revision budget was exhausted",
+        )
+    )
+
+    assert decision.action == "settle_failed"
+    assert decision.resulting_status == "failed"
+    assert decision.detail == "the revision budget was exhausted"
+    assert not decision.keeps_executing
+
+
 def test_an_undecided_approval_releases_the_worker_instead_of_waiting() -> None:
     """Case 5. Nothing is executing, so nothing should be holding a lease.
 
@@ -216,15 +230,29 @@ def test_every_input_combination_reaches_exactly_one_action() -> None:
     """
 
     reached: set[ReconciliationAction] = set()
-    for status, registered, written, pending, approval, decision in itertools.product(
+    combinations = itertools.product(
         ALL_STATUSES,
         VERSIONS,
         (*VERSIONS, None),
         ((), ("critic",), ("approval",)),
         (None, "approval_1"),
+        (None, "the revision budget was exhausted"),
         ALL_DECISIONS,
-    ):
+    )
+    for (
+        status,
+        registered,
+        written,
+        pending,
+        approval,
+        failure,
+        decision,
+    ) in combinations:
         if approval is not None and not pending:
+            continue  # refused by CheckpointPosition, and asserted separately
+        if failure is not None and pending:
+            continue  # refused by CheckpointPosition, and asserted separately
+        if failure is not None and approval is not None:
             continue  # refused by CheckpointPosition, and asserted separately
         for position in (
             None,
@@ -232,6 +260,7 @@ def test_every_input_combination_reaches_exactly_one_action() -> None:
                 graph_version=written,
                 pending_nodes=pending,
                 awaiting_approval_id=approval,
+                failure_reason=failure,
             ),
         ):
             outcome = reconcile(

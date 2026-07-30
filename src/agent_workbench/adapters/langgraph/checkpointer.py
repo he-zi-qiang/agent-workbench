@@ -24,7 +24,8 @@ module's tests rather than trusting a green CI.
 from __future__ import annotations
 
 import random
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from typing import Any, Final, NoReturn, cast
 
 # langgraph ships no type stubs, so strict pyright cannot see through it.
@@ -38,15 +39,26 @@ from langgraph.checkpoint.base import (  # pyright: ignore[reportMissingTypeStub
 from langgraph.checkpoint.base import (
     CheckpointTuple as LangGraphCheckpointTuple,
 )
-from sqlalchemy import Select, and_, select, tuple_
+from sqlalchemy import Select, and_, func, select, text, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.persistence.models import (
+    task_runs,
     workflow_checkpoint_blobs,
     workflow_checkpoint_writes,
     workflow_checkpoints,
+)
+from agent_workbench.ports.fault_injector import FaultInjector
+from agent_workbench.ports.task_registry import ExecutionLease, StaleExecutionError
+from agent_workbench.ports.task_workflow import (
+    CHECKPOINT_FENCE_EPOCH_KEY,
+    CHECKPOINT_FENCE_GUARD_KEY_KEY,
+    CHECKPOINT_FENCE_GUARD_PID_KEY,
+    CHECKPOINT_FENCE_TASK_ID_KEY,
+    CHECKPOINT_FENCE_WORKER_ID_KEY,
+    CheckpointFence,
 )
 
 # The shapes this module exchanges with LangGraph, all opaque to the type
@@ -67,17 +79,69 @@ _SYNC_REFUSAL: Final[str] = (
     "every caller in this project already has one."
 )
 
+# A one-argument ``pg_advisory_lock(bigint)`` occupies the two unsigned 32-bit
+# fields below with ``objsubid = 1``. Casting the OID columns to bigint avoids
+# treating either half as a signed SQL integer when the high bit is set.
+_ADVISORY_LOCK_HELD: Final = text(
+    """
+    SELECT EXISTS (
+        SELECT 1
+        FROM pg_locks
+        WHERE locktype = 'advisory'
+          AND granted
+          AND pid = CAST(:backend_pid AS integer)
+          AND classid::bigint = :classid
+          AND objid::bigint = :objid
+          AND objsubid = 1
+          AND database = (
+              SELECT oid FROM pg_database WHERE datname = current_database()
+          )
+    )
+    """
+)
+
 
 def _refuse_sync() -> NoReturn:
     raise NotImplementedError(_SYNC_REFUSAL)
 
 
+class CheckpointFenceRequiredError(RuntimeError):
+    """A fenced saver was asked to write without a complete lease token."""
+
+
+class StaleCheckpointWriteError(StaleExecutionError):
+    """The lease or its guard session no longer authorizes a checkpoint write."""
+
+    def __init__(self, fence: CheckpointFence, *, reason: str) -> None:
+        self.reason = reason
+        super().__init__(
+            ExecutionLease(
+                task_id=fence.task_id,
+                worker_id=fence.worker_id,
+                epoch=fence.epoch,
+            )
+        )
+
+
+class CheckpointCorruptionError(RuntimeError):
+    """A checkpoint references durable bytes that are no longer present."""
+
+
 class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
     """Graph execution position, durable across process restarts."""
 
-    def __init__(self, engine: AsyncEngine, *, serde: Any | None = None) -> None:
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        *,
+        serde: Any | None = None,
+        require_fence: bool = False,
+        fault_injector: FaultInjector | None = None,
+    ) -> None:
         super().__init__(serde=serde)
         self._engine = engine
+        self._require_fence = require_fence
+        self._fault_injector = fault_injector
 
     # -- writing ------------------------------------------------------------
 
@@ -91,6 +155,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
         configurable = config["configurable"]
         thread_id = configurable["thread_id"]
         checkpoint_ns = configurable.get("checkpoint_ns", "")
+        fence = self._fence_for_write(config)
 
         remainder = dict(checkpoint)
         # Channel values live in their own table keyed by version, so they are
@@ -119,6 +184,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
         # would restore a state missing channels, and it would restore it
         # during recovery, which is the one time nobody is watching.
         async with self._engine.begin() as connection:
+            await self._assert_fence(connection, thread_id, fence)
             if blob_rows:
                 blob_insert = pg_insert(workflow_checkpoint_blobs)
                 await connection.execute(
@@ -136,6 +202,11 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
                     ),
                     blob_rows,
                 )
+            if self._fault_injector is not None:
+                # Deliberately after the first durable operation but before
+                # the checkpoint row. A raised/crashed transaction must leave
+                # neither half visible, proving the atomic boundary.
+                await self._fault_injector.hit("inside_checkpoint_put")
             checkpoint_insert = pg_insert(workflow_checkpoints)
             await connection.execute(
                 checkpoint_insert.on_conflict_do_update(
@@ -163,7 +234,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
                     }
                 ],
             )
-        return _config(thread_id, checkpoint_ns, checkpoint["id"])
+        return _config(thread_id, checkpoint_ns, checkpoint["id"], fence=fence)
 
     async def aput_writes(
         self,
@@ -173,6 +244,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
         task_path: str = "",
     ) -> None:
         configurable = config["configurable"]
+        fence = self._fence_for_write(config)
         common = {
             "thread_id": configurable["thread_id"],
             "checkpoint_ns": configurable.get("checkpoint_ns", ""),
@@ -205,6 +277,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
 
         key = ["thread_id", "checkpoint_ns", "checkpoint_id", "task_id", "idx"]
         async with self._engine.begin() as connection:
+            await self._assert_fence(connection, common["thread_id"], fence)
             if first_wins:
                 await connection.execute(
                     pg_insert(workflow_checkpoint_writes).on_conflict_do_nothing(
@@ -246,11 +319,12 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
             # time they were minted, so the greatest one is the latest step.
             query = query.order_by(workflow_checkpoints.c.checkpoint_id.desc())
 
-        async with self._engine.connect() as connection:
+        fence = _fence_from_config(config)
+        async with self._repeatable_read_connection() as connection:
             row = (await connection.execute(query.limit(1))).mappings().first()
             if row is None:
                 return None
-            assembled = await self._assemble(connection, [row])
+            assembled = await self._assemble(connection, [row], fence=fence)
         return assembled[0]
 
     async def alist(
@@ -274,16 +348,21 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
         # cost is that an unlimited listing holds a thread's history in memory
         # -- bounded by the steps that thread has run, and bounded by `limit`
         # whenever the caller supplies one.
-        async with self._engine.connect() as connection:
+        fence = _fence_from_config(config) if config is not None else None
+        async with self._repeatable_read_connection() as connection:
             rows = (await connection.execute(query)).mappings().all()
             if not rows:
                 return
-            assembled = await self._assemble(connection, list(rows))
+            assembled = await self._assemble(connection, list(rows), fence=fence)
         for item in assembled:
             yield item
 
     async def _assemble(
-        self, connection: Any, rows: list[RowMapping]
+        self,
+        connection: Any,
+        rows: list[RowMapping],
+        *,
+        fence: CheckpointFence | None = None,
     ) -> list[CheckpointTuple]:
         """Turn checkpoint rows into tuples, in three queries rather than 2n+1."""
 
@@ -311,14 +390,28 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
             thread_id = row["thread_id"]
             checkpoint_ns = row["checkpoint_ns"]
             parent = row["parent_checkpoint_id"]
-            channel_values = {
-                channel: blobs[(thread_id, checkpoint_ns, channel, str(version))]
-                for channel, version in checkpoint["channel_versions"].items()
-                if (thread_id, checkpoint_ns, channel, str(version)) in blobs
-            }
+            channel_values: dict[str, Any] = {}
+            for channel, version in checkpoint["channel_versions"].items():
+                key = (thread_id, checkpoint_ns, channel, str(version))
+                blob = blobs.get(key)
+                if blob is None:
+                    raise CheckpointCorruptionError(
+                        "checkpoint references a missing channel blob: "
+                        f"thread={thread_id} namespace={checkpoint_ns!r} "
+                        f"channel={channel} version={version}"
+                    )
+                payload_type, value = blob
+                if payload_type != EMPTY_BLOB_TYPE:
+                    channel_values[channel] = value
+            returned_fence = fence or _fence_from_metadata(row["metadata"])
             assembled.append(
                 LangGraphCheckpointTuple(
-                    config=_config(thread_id, checkpoint_ns, row["checkpoint_id"]),
+                    config=_config(
+                        thread_id,
+                        checkpoint_ns,
+                        row["checkpoint_id"],
+                        fence=returned_fence,
+                    ),
                     # The checkpoint came out of LangGraph's own serialiser, so
                     # it is already whatever shape LangGraph put in; the cast
                     # says that rather than re-asserting the TypedDict here.
@@ -327,7 +420,12 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
                     ),
                     metadata=row["metadata"],
                     parent_config=(
-                        _config(thread_id, checkpoint_ns, parent)
+                        _config(
+                            thread_id,
+                            checkpoint_ns,
+                            parent,
+                            fence=returned_fence,
+                        )
                         if parent is not None
                         else None
                     ),
@@ -340,7 +438,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
 
     async def _load_blobs(
         self, connection: Any, keys: set[tuple[str, str, str, str]]
-    ) -> dict[tuple[str, str, str, str], Any]:
+    ) -> dict[tuple[str, str, str, str], tuple[str, Any | None]]:
         if not keys:
             return {}
         rows = (
@@ -361,12 +459,83 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
                 row["checkpoint_ns"],
                 row["channel"],
                 row["version"],
-            ): self.serde.loads_typed((row["payload_type"], bytes(row["payload"])))
+            ): (
+                row["payload_type"],
+                None
+                if row["payload_type"] == EMPTY_BLOB_TYPE
+                else self.serde.loads_typed(
+                    (row["payload_type"], bytes(row["payload"]))
+                ),
+            )
             for row in rows
-            # A channel recorded as empty carries no value. It is a row so that
-            # the version is known to exist; it is not a channel value.
-            if row["payload_type"] != EMPTY_BLOB_TYPE
         }
+
+    async def _assert_fence(
+        self,
+        connection: Any,
+        thread_id: str,
+        fence: CheckpointFence | None,
+    ) -> None:
+        """Lock and validate the owning Task row before any checkpoint write."""
+
+        if fence is None:
+            return
+        row = (
+            await connection.execute(
+                select(task_runs.c.task_id)
+                .where(
+                    task_runs.c.task_id == fence.task_id,
+                    task_runs.c.thread_id == thread_id,
+                    task_runs.c.status == "running",
+                    task_runs.c.lease_owner == fence.worker_id,
+                    task_runs.c.lease_epoch == fence.epoch,
+                    task_runs.c.lease_until > func.statement_timestamp(),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise StaleCheckpointWriteError(fence, reason="lease is not live")
+        if fence.guard_backend_pid is None or fence.guard_lock_key is None:
+            if self._require_fence:
+                raise CheckpointFenceRequiredError(
+                    "PostgresCheckpointSaver requires a guard-backed checkpoint fence"
+                )
+            return
+        classid, objid = _advisory_lock_parts(fence.guard_lock_key)
+        held = bool(
+            (
+                await connection.execute(
+                    _ADVISORY_LOCK_HELD,
+                    {
+                        "backend_pid": fence.guard_backend_pid,
+                        "classid": classid,
+                        "objid": objid,
+                    },
+                )
+            ).scalar_one()
+        )
+        if not held:
+            raise StaleCheckpointWriteError(fence, reason="execution guard is lost")
+
+    def _fence_for_write(self, config: Config) -> CheckpointFence | None:
+        fence = _fence_from_config(config)
+        if self._require_fence and fence is None:
+            raise CheckpointFenceRequiredError(
+                "PostgresCheckpointSaver requires a checkpoint fence for writes"
+            )
+        return fence
+
+    @asynccontextmanager
+    async def _repeatable_read_connection(self) -> AsyncGenerator[Any]:
+        """Read a checkpoint and all blobs/writes from one consistent snapshot."""
+
+        async with self._engine.connect() as raw_connection:
+            connection = await raw_connection.execution_options(
+                isolation_level="REPEATABLE READ"
+            )
+            async with connection.begin():
+                yield connection
 
     async def _load_writes(
         self, connection: Any, keys: set[tuple[str, str, str]]
@@ -469,14 +638,70 @@ def _serialised(pair: tuple[str, bytes]) -> dict[str, Any]:
     return {"payload_type": payload_type, "payload": payload}
 
 
-def _config(thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> Config:
-    return {
-        "configurable": {
-            "thread_id": thread_id,
-            "checkpoint_ns": checkpoint_ns,
-            "checkpoint_id": checkpoint_id,
-        }
+def _config(
+    thread_id: str,
+    checkpoint_ns: str,
+    checkpoint_id: str,
+    *,
+    fence: CheckpointFence | None = None,
+) -> Config:
+    configurable: dict[str, Any] = {
+        "thread_id": thread_id,
+        "checkpoint_ns": checkpoint_ns,
+        "checkpoint_id": checkpoint_id,
     }
+    if fence is not None:
+        configurable.update(_fence_configurable(fence))
+    return {"configurable": configurable}
+
+
+def _fence_configurable(fence: CheckpointFence) -> dict[str, str | int]:
+    configurable: dict[str, str | int] = {
+        CHECKPOINT_FENCE_TASK_ID_KEY: fence.task_id,
+        CHECKPOINT_FENCE_WORKER_ID_KEY: fence.worker_id,
+        CHECKPOINT_FENCE_EPOCH_KEY: fence.epoch,
+    }
+    if fence.guard_backend_pid is not None:
+        # The model requires this companion field whenever a PID exists.
+        assert fence.guard_lock_key is not None
+        configurable.update(
+            {
+                CHECKPOINT_FENCE_GUARD_PID_KEY: fence.guard_backend_pid,
+                CHECKPOINT_FENCE_GUARD_KEY_KEY: fence.guard_lock_key,
+            }
+        )
+    return configurable
+
+
+def _fence_from_config(config: Config) -> CheckpointFence | None:
+    configurable = config.get("configurable", {})
+    fields = {
+        "task_id": configurable.get(CHECKPOINT_FENCE_TASK_ID_KEY),
+        "worker_id": configurable.get(CHECKPOINT_FENCE_WORKER_ID_KEY),
+        "epoch": configurable.get(CHECKPOINT_FENCE_EPOCH_KEY),
+        "guard_backend_pid": configurable.get(CHECKPOINT_FENCE_GUARD_PID_KEY),
+        "guard_lock_key": configurable.get(CHECKPOINT_FENCE_GUARD_KEY_KEY),
+    }
+    lease_fields = (fields["task_id"], fields["worker_id"], fields["epoch"])
+    if not any(value is not None for value in lease_fields):
+        return None
+    if not all(value is not None for value in lease_fields):
+        raise CheckpointFenceRequiredError("checkpoint fence is incomplete")
+    try:
+        return CheckpointFence.model_validate(fields)
+    except Exception as error:
+        raise CheckpointFenceRequiredError("checkpoint fence is invalid") from error
+
+
+def _fence_from_metadata(metadata: Mapping[str, Any]) -> CheckpointFence | None:
+    return _fence_from_config({"configurable": dict(metadata)})
+
+
+def _advisory_lock_parts(lock_key: int) -> tuple[int, int]:
+    """Return PostgreSQL ``pg_locks`` classid/objid halves for one bigint key."""
+
+    unsigned_key = lock_key & ((1 << 64) - 1)
+    return unsigned_key >> 32, unsigned_key & ((1 << 32) - 1)
 
 
 def _restrict(
@@ -517,4 +742,10 @@ def _restrict(
     return query
 
 
-__all__ = ["EMPTY_BLOB_TYPE", "PostgresCheckpointSaver"]
+__all__ = [
+    "EMPTY_BLOB_TYPE",
+    "CheckpointCorruptionError",
+    "CheckpointFenceRequiredError",
+    "PostgresCheckpointSaver",
+    "StaleCheckpointWriteError",
+]

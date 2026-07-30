@@ -110,6 +110,7 @@ class TaskState(VersionedModel):
 
     task_id: Identifier
     objective: TaskObjective
+    knowledge_base_id: Identifier | None = None
     plan: tuple[TaskStep, ...] = Field(default=(), max_length=MAX_PLAN_STEPS)
     evidence_refs: tuple[Identifier, ...] = Field(
         default=(),

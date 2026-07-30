@@ -17,6 +17,7 @@ never a "forbidden".
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final
@@ -113,6 +114,7 @@ class TaskService:
         *,
         input_ref: Identifier,
         submission_dedup_key: Identifier,
+        input_fingerprint: str | None = None,
     ) -> TaskRun:
         """Open a Task, or return the one this caller's key already opened.
 
@@ -131,12 +133,18 @@ class TaskService:
                 thread_id=new_id(TASK_THREAD_PREFIX),
                 graph_version=self.graph_version,
                 input_ref=input_ref,
+                input_fingerprint=(
+                    input_fingerprint
+                    if input_fingerprint is not None
+                    else _reference_fingerprint(input_ref)
+                ),
                 submission_dedup_key=submission_dedup_key,
                 run_semantics_snapshot=decided.run_semantics_snapshot,
                 run_semantics_revision=decided.run_semantics_revision,
                 submitted_policy_revision=decided.policy_revision,
                 submitted_policy_fingerprint=decided.policy_fingerprint,
                 submitted_authorization_envelope=decided.authorization_envelope,
+                submitted_principal_scopes=principal.scopes,
             )
         )
 
@@ -149,8 +157,29 @@ class TaskService:
 
         task = await self.registry.get(task_id)
         if task is None or not _belongs_to(task, principal):
-            raise NotFoundError(f"task not found: {task_id}")
+            # Do not reflect the probed id. A guessed id that exists but is
+            # owned by somebody else and an id that does not exist must have
+            # the same status *and* the same public detail.
+            raise NotFoundError("task not found")
         return task
+
+    async def cancel(
+        self,
+        principal: PrincipalContext,
+        task_id: Identifier,
+        *,
+        reason: str,
+    ) -> TaskRun:
+        """Cancel one caller-owned Task through the Registry transition gate.
+
+        Authorization happens before the transition, rather than by letting a
+        caller hand an opaque id directly to the Registry.  Otherwise a
+        cross-owner cancellation could mutate a row the caller was not allowed
+        even to learn existed.
+        """
+
+        await self.get(principal, task_id)
+        return await self.registry.cancel(task_id, reason=reason)
 
     async def timeline(
         self,
@@ -181,7 +210,7 @@ class TaskService:
         task = await self.get(principal, task_id)
         stream_id = task_stream_id(task)
         if after is not None and after.stream_id != stream_id:
-            raise NotFoundError(f"task not found: {task_id}")
+            raise NotFoundError("task not found")
 
         recorded = await self.events.read(
             stream_id,
@@ -224,6 +253,18 @@ def _belongs_to(task: TaskRun, principal: PrincipalContext) -> bool:
         task.tenant_id == principal.tenant_id
         and task.owner_id == principal.principal_id
     )
+
+
+def _reference_fingerprint(input_ref: Identifier) -> str:
+    """Give direct callers a stable fallback until they supply content bytes.
+
+    ``TaskInputService`` always passes the canonical content digest. This
+    fallback preserves idempotency for existing internal callers that only
+    have an immutable input reference; it is intentionally not used by the
+    public TaskInput path.
+    """
+
+    return hashlib.sha256(input_ref.encode("utf-8")).hexdigest()
 
 
 __all__ = [

@@ -472,7 +472,7 @@ min(
 - ValidationError、启动日志和 fingerprint 不包含 canary。
 - `config.test.toml.testing.allowed_failpoints` 必须与代码中的 canonical
   `FailpointName` 集合精确相等；不接受旧名字 alias，负向测试必须证明
-  `inside_checkpoint_put` 等历史名字失败关闭。
+  `after_fence_row_lock` 等历史名字失败关闭。
 
 `secrets.admin_token` 只有在 D0 选择本地 AdminToken Identity Adapter 后才可
 保留；`secrets.webhook_token` 只有在定义 Webhook Adapter 后才可保留。
@@ -844,6 +844,7 @@ task_runs.graph_version
 task_runs.submitted_policy_revision
 task_runs.submitted_policy_fingerprint
 task_runs.submitted_authorization_envelope
+task_runs.submitted_principal_scopes
 task_runs.resolved_qdrant_collection
 task_runs.resolved_qdrant_index_version
 task_runs.resolved_qdrant_index_generation_id
@@ -987,7 +988,7 @@ tests/support/
 | WP09-08 | ephemeral model delta coalescing |
 | WP09-09 | SSE stream owner/tenant authorization 与 IDOR 测试 |
 
-### 七个规范故障窗口
+### 当前四个规范故障窗口
 
 WP09 建立完整名称注册表和通用 barrier 机制，但测试随代码所有者分阶段启用：
 
@@ -995,16 +996,16 @@ WP09 建立完整名称注册表和通用 barrier 机制，但测试随代码所
 |---|---|---|---|
 | `after_claim_commit_before_advisory_lock` | WP08–09 | WP09 | 假 running 可被回收 |
 | `after_node_before_checkpoint` | WP08–09 | WP09 | 旧 Worker 完成 node 后仍不能落 checkpoint |
-| `after_fence_row_lock` | WP08–09 | WP09 | fence 校验与 checkpoint 写入原子 |
-| `after_final_checkpoint_before_registry_update` | WP08–09 | WP09 | reconciliation 幂等完成 |
-| `after_approval_commit_before_dispatch` | WP10 | WP10 | 任意 Worker 可继续审批后的任务 |
-| `after_artifact_write_before_ledger_commit` | WP10 | WP10 | 稳定 key 不重复产物 |
-| `after_qdrant_upsert_before_outbox_ack` | WP05 | WP05/WP09 回归 | 稳定 point ID 幂等收敛 |
+| `inside_checkpoint_put` | WP08–09 | WP09 | checkpoint 事务内写入原子 |
+| `after_graph_complete_before_registry_commit` | WP08–09 | WP09 | reconciliation 幂等完成 |
+
+审批、产物 ledger 与 Qdrant outbox 的窗口属于后续 WP；在其 Adapter 落地前，
+它们不是可配置 failpoint，未知名称必须失败关闭。
 
 ### 退出条件
 
-- WP09 所属的四个协调 failpoint 全部确定性通过，完整七点矩阵在 WP10 后
-  作为 Release gate；
+- 当前四个协调 failpoint 全部确定性通过；后续 WP 新增窗口时必须同步扩展
+  `FailpointName`、测试 profile 与负向配置测试；
 - 不使用固定 sleep 制造交错；
 - bounded timeout 只用于防卡死；
 - Listener 完全丢通知时，cursor catch-up 仍完整；
@@ -1125,7 +1126,7 @@ cancel 与 approve 在 barrier 中并发时只能有一个合法状态转换；�
 
 - 审批 + 重启 + 幂等导出 E2E 中只产生一个逻辑产物；
 - WP08 的 `ExecutionGuard/FencedWritePort` contract suite 已应用到 Ledger；
-- 七个规范 failpoint 全部确定性通过；
+- 当前已注册的四个规范 failpoint 全部确定性通过；
 - 至此才能声明 **Reliable Core** 完成。
 
 ---

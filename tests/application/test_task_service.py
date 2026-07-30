@@ -12,6 +12,7 @@ what is under test is what this layer decides, not what PostgreSQL stores.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -56,6 +57,32 @@ class _FakeRegistry:
         return self._existing
 
 
+class _IdempotentFakeRegistry(_FakeRegistry):
+    """The Registry's public idempotency contract, without a database.
+
+    PostgreSQL has its own race tests. This fake makes the application-level
+    promise visible where TaskService chooses server-owned submission fields.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._by_key: dict[tuple[str, str, str], TaskRun] = {}
+
+    async def submit(self, submission: TaskSubmission) -> TaskRun:
+        self.submissions.append(submission)
+        key = (
+            submission.tenant_id,
+            submission.owner_id,
+            submission.submission_dedup_key,
+        )
+        existing = self._by_key.get(key)
+        if existing is not None:
+            return existing
+        opened = _task(**submission.model_dump())
+        self._by_key[key] = opened
+        return opened
+
+
 def _task(**overrides: Any) -> TaskRun:
     now = datetime(2026, 7, 28, tzinfo=UTC)
     base: dict[str, Any] = {
@@ -65,6 +92,7 @@ def _task(**overrides: Any) -> TaskRun:
         "thread_id": "thr_1",
         "graph_version": GRAPH_VERSION_V1,
         "input_ref": "input_1",
+        "input_fingerprint": "a" * 64,
         "submission_dedup_key": "dedup_1",
         "run_semantics_snapshot": {"model": {"provider": "deepseek"}},
         "run_semantics_revision": "1.2:v1.3:abc0123456789def",
@@ -72,6 +100,7 @@ def _task(**overrides: Any) -> TaskRun:
         "submitted_policy_fingerprint": "f" * 16,
         "submitted_authorization_envelope": {},
         "status": "queued",
+        "available_at": now,
         "created_at": now,
         "updated_at": now,
     }
@@ -141,25 +170,55 @@ def test_identity_comes_from_the_principal_and_not_from_the_request() -> None:
     assert submitted.owner_id == OTHER_TENANT.principal_id
 
 
-def test_two_submissions_mint_two_threads() -> None:
-    """The service does not deduplicate; the Registry's unique key does.
+def test_submission_captures_a_normalized_principal_scope_ceiling() -> None:
+    registry = _FakeRegistry()
+    principal = PrincipalContext(
+        principal_id="user_1",
+        tenant_id="tenant_a",
+        scopes=("external:search", "knowledge:read", "external:search"),
+    )
+
+    asyncio.run(
+        _service(registry).submit(
+            principal, input_ref="input_1", submission_dedup_key="dedup_1"
+        )
+    )
+
+    assert registry.submissions[0].submitted_principal_scopes == (
+        "external:search",
+        "knowledge:read",
+    )
+
+
+def test_a_retry_returns_the_original_task_despite_fresh_server_fields() -> None:
+    """The service mints per-attempt values; the Registry owns idempotency.
 
     Minting one thread per call and letting the insert lose is what makes a
-    repeated key idempotent rather than an error. A service that remembered
-    threads itself would be a second, in-memory copy of that key.
+    repeated key idempotent rather than an error. A restarted deployment can
+    choose different semantics too; neither fresh server decision may turn an
+    ordinary caller retry into a conflict.
     """
 
-    registry = _FakeRegistry()
-    service = _service(registry)
+    registry = _IdempotentFakeRegistry()
+    changed_semantics = replace(
+        SEMANTICS,
+        run_semantics_revision="1.3:v1.4:0000000000000abc",
+        policy_fingerprint="0" * 16,
+    )
+    decisions = iter((SEMANTICS, changed_semantics))
+    service = TaskService(registry=registry, semantics=lambda: next(decisions))
 
-    async def scenario() -> None:
-        await service.submit(OWNER, input_ref="i", submission_dedup_key="k")
-        await service.submit(OWNER, input_ref="i", submission_dedup_key="k")
+    async def scenario() -> tuple[TaskRun, TaskRun]:
+        first = await service.submit(OWNER, input_ref="i", submission_dedup_key="k")
+        second = await service.submit(OWNER, input_ref="i", submission_dedup_key="k")
+        return first, second
 
-    asyncio.run(scenario())
+    first, second = asyncio.run(scenario())
 
     threads = {submission.thread_id for submission in registry.submissions}
     assert len(threads) == 2
+    assert first == second
+    assert second.thread_id == registry.submissions[0].thread_id
 
 
 # --------------------------------------------------------------------------

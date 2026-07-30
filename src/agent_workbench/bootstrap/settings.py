@@ -68,11 +68,8 @@ CANONICAL_FAILPOINTS = frozenset(
     {
         "after_claim_commit_before_advisory_lock",
         "after_node_before_checkpoint",
-        "after_fence_row_lock",
-        "after_final_checkpoint_before_registry_update",
-        "after_approval_commit_before_dispatch",
-        "after_artifact_write_before_ledger_commit",
-        "after_qdrant_upsert_before_outbox_ack",
+        "inside_checkpoint_put",
+        "after_graph_complete_before_registry_commit",
     }
 )
 SECRET_LIKE_ENV_KEYS = frozenset(
@@ -224,7 +221,10 @@ class DatabaseSettings(StrictModel):
 class CoordinationSettings(StrictModel):
     registry_backend: Literal["postgresql"] = "postgresql"
     claim_strategy: Literal["skip_locked"] = "skip_locked"
-    worker_concurrency: int = Field(default=2, ge=1, le=200)
+    # The registry/checkpointer have no lease epoch or fencing yet. Until
+    # those coordination semantics are assembled, one Worker is the only
+    # supported execution topology.
+    worker_concurrency: int = Field(default=1, ge=1, le=200)
     claim_batch_size: int = Field(default=1, ge=1, le=200)
     claim_poll_interval_ms: int = Field(default=1000, ge=1)
     claim_poll_jitter_ms: int = Field(default=250, ge=0)
@@ -413,6 +413,7 @@ class EmbeddingSettings(StrictModel):
     precision: Literal["float32", "float16", "bfloat16"] = "float16"
     dense_enabled: Literal[True] = True
     sparse_enabled: Literal[True] = True
+    sparse_vocabulary_size: int = Field(default=250_002, ge=1)
     dense_vector_name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]*$")
     sparse_vector_name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
@@ -506,6 +507,9 @@ class QdrantSettings(StrictModel):
     derived_index: Literal[True] = True
     payload_acl_filter_required: Literal[True] = True
     api_key_required: bool = False
+    # Creation/alias correction is an explicit local development/test action,
+    # never an inference from a missing remote collection.
+    allow_local_bootstrap: bool = False
 
     @field_validator("url")
     @classmethod
@@ -796,6 +800,10 @@ class Settings(BaseSettings):
                 )
             if urlsplit(self.qdrant.url).scheme.lower() != "https":
                 raise ValueError("remote deployment requires a Qdrant HTTPS URL")
+            if self.qdrant.allow_local_bootstrap:
+                raise ValueError(
+                    "remote deployment forbids qdrant.allow_local_bootstrap"
+                )
         elif urlsplit(self.qdrant.url).hostname not in LOCAL_QDRANT_HOSTS:
             raise ValueError(
                 "local deployment scope requires a local/Compose Qdrant host"

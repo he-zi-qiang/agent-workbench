@@ -1,0 +1,136 @@
+name: agent-workbench
+
+x-app-environment: &app-environment
+  AW_DATABASE__DSN: postgresql+asyncpg://agent@postgres:5432/agent_workbench
+  AW_DATABASE__GUARD_DSN: postgresql+asyncpg://agent@postgres:5432/agent_workbench
+  AW_DATABASE__LISTEN_DSN: postgresql+asyncpg://agent@postgres:5432/agent_workbench
+  AW_ARTIFACT_STORE__LOCAL_ROOT: /var/lib/agent-workbench/artifacts
+
+x-app-hardening: &app-hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  postgres:
+    # Keep the exact image used by the CI service test job.
+    image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_DB: agent_workbench
+      # This Compose file is a loopback-only local demo. It deliberately has
+      # no database credential to bake into source or image layers; do not use
+      # this trust configuration for a remotely reachable deployment.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent_workbench"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  qdrant:
+    # Same digest as CI: client/server compatibility is tested against it.
+    image: qdrant/qdrant@sha256:241edb9d7778327516ef218f8c74e1bd61b5ea42cd4f193cb8d0896199705636
+    volumes:
+      - qdrant_data:/qdrant/storage
+    security_opt:
+      - no-new-privileges:true
+
+  qdrant-ready:
+    build:
+      context: .
+    image: agent-workbench:local
+    command: ["python", "/app/docker/wait_for_http.py"]
+    environment:
+      WAIT_FOR_HTTP_URL: http://qdrant:6333/readyz
+      WAIT_FOR_HTTP_DEADLINE_SECONDS: "60"
+    depends_on:
+      qdrant:
+        condition: service_started
+    restart: "no"
+    <<: *app-hardening
+
+  migrate:
+    image: agent-workbench:local
+    build:
+      context: .
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    <<: *app-hardening
+
+  api:
+    image: agent-workbench:local
+    build:
+      context: .
+    command: ["sh", "/app/docker/run-api-local.sh"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant-ready:
+        condition: service_completed_successfully
+    ports:
+      # The only host-published port is loopback. The app itself remains
+      # container-loopback-only; the local proxy exists solely for Docker NAT.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - artifact_data:/var/lib/agent-workbench/artifacts
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2)\"",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    <<: *app-hardening
+
+  task-worker:
+    image: agent-workbench:local
+    profiles: ["demo"]
+    command: ["agent-task-worker", "--demo"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant-ready:
+        condition: service_completed_successfully
+    volumes:
+      - artifact_data:/var/lib/agent-workbench/artifacts
+    <<: *app-hardening
+
+  ingestion-worker:
+    image: agent-workbench:local
+    profiles: ["demo"]
+    command: ["agent-ingestion-worker", "--demo"]
+    environment:
+      <<: *app-environment
+      # This is an explicitly profiled disposable demo: it may create the
+      # local collection/alias that production startup is forbidden to alter.
+      AW_QDRANT__ALLOW_LOCAL_BOOTSTRAP: "true"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant-ready:
+        condition: service_completed_successfully
+    volumes:
+      - artifact_data:/var/lib/agent-workbench/artifacts
+    <<: *app-hardening
+
+volumes:
+  artifact_data:
+  postgres_data:
+  qdrant_data:

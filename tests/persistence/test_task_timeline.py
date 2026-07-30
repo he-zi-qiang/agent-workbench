@@ -46,6 +46,7 @@ TABLES = "task_runs, events, event_streams"
 
 OWNER = PrincipalContext(principal_id="user_1", tenant_id="tenant_a")
 OTHER_OWNER = PrincipalContext(principal_id="user_2", tenant_id="tenant_a")
+OTHER_TENANT = PrincipalContext(principal_id="user_1", tenant_id="tenant_b")
 
 
 def _dsn() -> str:
@@ -105,6 +106,49 @@ async def _record(log: Any, task: TaskRun, count: int) -> None:
     ]
     for index in range(count):
         await log.append(scope, payloads[index % len(payloads)])
+
+
+# --------------------------------------------------------------------------
+
+
+def test_service_retry_returns_the_first_task_and_its_submission_timeline() -> None:
+    """TaskService always mints a candidate thread; Registry idempotency wins."""
+
+    async def scenario(service: TaskService, _: Any) -> tuple[Any, ...]:
+        first = await service.submit(
+            OWNER, input_ref="input_1", submission_dedup_key="dedup_1"
+        )
+        retry = await service.submit(
+            OWNER, input_ref="input_1", submission_dedup_key="dedup_1"
+        )
+        timeline = await service.timeline(OWNER, first.task_id)
+        return (
+            first.task_id,
+            retry.task_id,
+            first.thread_id,
+            retry.thread_id,
+            [event.stream_id for event in timeline.events],
+        )
+
+    first_id, retry_id, first_thread, retry_thread, streams = _run(scenario)
+
+    assert (retry_id, retry_thread) == (first_id, first_thread)
+    assert streams == [first_thread]
+
+
+def test_service_deduplication_does_not_cross_tenant_boundaries() -> None:
+    async def scenario(service: TaskService, _: Any) -> tuple[str, str]:
+        tenant_a = await service.submit(
+            OWNER, input_ref="input_1", submission_dedup_key="dedup_1"
+        )
+        tenant_b = await service.submit(
+            OTHER_TENANT, input_ref="input_1", submission_dedup_key="dedup_1"
+        )
+        return tenant_a.task_id, tenant_b.task_id
+
+    tenant_a, tenant_b = _run(scenario)
+
+    assert tenant_a != tenant_b
 
 
 # --------------------------------------------------------------------------

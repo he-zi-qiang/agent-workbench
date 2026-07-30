@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -27,19 +28,48 @@ from langgraph.checkpoint.memory import (  # pyright: ignore[reportMissingTypeSt
     InMemorySaver,
 )
 from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 
-from agent_workbench.adapters.langgraph import PostgresCheckpointSaver, build_v1_graph
-from agent_workbench.adapters.persistence import create_query_engine
+from agent_workbench.adapters.langgraph import (
+    PostgresCheckpointSaver,
+    StaleCheckpointWriteError,
+    build_v1_graph,
+)
+from agent_workbench.adapters.langgraph.checkpointer import (
+    CheckpointCorruptionError,
+    CheckpointFenceRequiredError,
+    _advisory_lock_parts,
+)
+from agent_workbench.adapters.persistence import (
+    PostgresExecutionGuardFactory,
+    PostgresTaskRegistry,
+    create_query_engine,
+)
 from agent_workbench.adapters.persistence.models import (
+    task_runs,
     workflow_checkpoint_blobs,
     workflow_checkpoint_writes,
     workflow_checkpoints,
 )
+from agent_workbench.adapters.testing import FailpointController, InjectedCrash
+from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.domain.tasks import ReviewResult, TaskState, TaskStep
+from agent_workbench.ports.task_registry import StaleExecutionError, TaskSubmission
+from agent_workbench.ports.task_workflow import (
+    CHECKPOINT_FENCE_EPOCH_KEY,
+    CHECKPOINT_FENCE_GUARD_KEY_KEY,
+    CHECKPOINT_FENCE_GUARD_PID_KEY,
+    CHECKPOINT_FENCE_TASK_ID_KEY,
+    CHECKPOINT_FENCE_WORKER_ID_KEY,
+    CheckpointFence,
+)
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 
-TABLES = "workflow_checkpoints, workflow_checkpoint_blobs, workflow_checkpoint_writes"
+TABLES = (
+    "task_runs, workflow_checkpoints, workflow_checkpoint_blobs, "
+    "workflow_checkpoint_writes"
+)
 
 THREAD = "thr_saver"
 
@@ -70,6 +100,13 @@ def _run(scenario: Callable[[], Awaitable[Any]]) -> Any:
         return await scenario()
 
     return asyncio.run(execute())
+
+
+def test_bigint_advisory_keys_map_to_pg_locks_unsigned_32_bit_halves() -> None:
+    assert _advisory_lock_parts(0) == (0, 0)
+    assert _advisory_lock_parts(1) == (0, 1)
+    assert _advisory_lock_parts(-1) == (2**32 - 1, 2**32 - 1)
+    assert _advisory_lock_parts(-(2**63)) == (2**31, 0)
 
 
 # --------------------------------------------------------------------------
@@ -141,6 +178,89 @@ def _handlers(counter: dict[str, int] | None = None) -> dict[str, Any]:
 
 def _config(thread_id: str = THREAD) -> dict[str, Any]:
     return {"configurable": {"thread_id": thread_id}}
+
+
+def _checkpoint(
+    checkpoint_id: str = "1f18a895-81b4-67f2-bfff-3cd0225b7b40",
+) -> dict[str, Any]:
+    return {
+        "v": 2,
+        "id": checkpoint_id,
+        "ts": "2026-07-29T00:00:00+00:00",
+        "channel_values": {"objective": "fenced write"},
+        "channel_versions": {"objective": "00000000000000000000000000000001.0"},
+        "versions_seen": {},
+        "updated_channels": None,
+    }
+
+
+def _fenced_config(
+    fence: CheckpointFence,
+    *,
+    checkpoint_id: str | None = None,
+) -> dict[str, Any]:
+    configurable: dict[str, Any] = {
+        "thread_id": THREAD,
+        CHECKPOINT_FENCE_TASK_ID_KEY: fence.task_id,
+        CHECKPOINT_FENCE_WORKER_ID_KEY: fence.worker_id,
+        CHECKPOINT_FENCE_EPOCH_KEY: fence.epoch,
+    }
+    if fence.guard_backend_pid is not None:
+        assert fence.guard_lock_key is not None
+        configurable.update(
+            {
+                CHECKPOINT_FENCE_GUARD_PID_KEY: fence.guard_backend_pid,
+                CHECKPOINT_FENCE_GUARD_KEY_KEY: fence.guard_lock_key,
+            }
+        )
+    if checkpoint_id is not None:
+        configurable["checkpoint_id"] = checkpoint_id
+    return {"configurable": configurable}
+
+
+@asynccontextmanager
+async def _claimed_guard_fence(
+    engine: Any,
+) -> AsyncGenerator[tuple[CheckpointFence, Any], None]:
+    registry = PostgresTaskRegistry(engine)
+    await registry.submit(
+        TaskSubmission(
+            tenant_id="tenant_a",
+            owner_id="user_1",
+            thread_id=THREAD,
+            graph_version="v1",
+            input_ref="input_1",
+            input_fingerprint="a" * 64,
+            submission_dedup_key="dedup_fence",
+            run_semantics_snapshot={"model": {"provider": "test"}},
+            run_semantics_revision="test-v1",
+            submitted_policy_revision="policy-v1",
+            submitted_policy_fingerprint="f" * 16,
+            submitted_authorization_envelope=AuthorizationEnvelope(),
+        )
+    )
+    claim = await registry.claim_next("worker_current", lease_seconds=60)
+    assert claim is not None
+    factory = PostgresExecutionGuardFactory(_dsn(), healthcheck_seconds=1)
+    guard = await factory.acquire(
+        task_id=claim.lease.task_id,
+        worker_id=claim.lease.worker_id,
+        epoch=claim.lease.epoch,
+    )
+    try:
+        yield (
+            CheckpointFence(
+                task_id=claim.lease.task_id,
+                worker_id=claim.lease.worker_id,
+                epoch=claim.lease.epoch,
+                guard_backend_pid=guard.backend_pid,
+                guard_lock_key=guard.lock_key,
+            ),
+            guard,
+        )
+    finally:
+        await guard.release()
+        await factory.dispose()
 
 
 async def _drive(saver: Any, *, thread_id: str = THREAD, **kwargs: Any) -> Any:
@@ -730,6 +850,298 @@ def test_a_subgraph_namespace_is_not_read_as_the_parent_thread() -> None:
         )
 
     assert _run(scenario) == ("parent", "subgraph")
+
+
+# --------------------------------------------------------------------------
+# E2 fencing and corruption: only a live lease may advance a durable position
+
+
+def test_fenced_saver_rejects_an_old_epoch_without_writing_checkpoint_or_writes() -> (
+    None
+):
+    async def scenario() -> tuple[int, int]:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (stale, _):
+                # Model a later claim without changing Registry claim behaviour in
+                # this saver-focused test: epoch 1 is now an old Worker token.
+                current = stale.model_copy(update={"epoch": stale.epoch + 1})
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        task_runs.update()
+                        .where(task_runs.c.task_id == stale.task_id)
+                        .values(lease_epoch=current.epoch)
+                    )
+                saver = PostgresCheckpointSaver(engine, require_fence=True)
+                with pytest.raises(StaleExecutionError):
+                    await saver.aput(
+                        _fenced_config(stale),
+                        _checkpoint(),
+                        {"source": "loop", "step": 0},
+                        {"objective": "00000000000000000000000000000001.0"},
+                    )
+                with pytest.raises(StaleExecutionError):
+                    await saver.aput_writes(
+                        _fenced_config(stale, checkpoint_id="checkpoint_old"),
+                        [("objective", "must not persist")],
+                        "task_node",
+                    )
+            async with engine.connect() as connection:
+                checkpoints = len(
+                    (await connection.execute(select(workflow_checkpoints))).all()
+                )
+                writes = len(
+                    (await connection.execute(select(workflow_checkpoint_writes))).all()
+                )
+            return checkpoints, writes
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0)
+
+
+def test_fenced_saver_requires_a_fence_and_propagates_a_current_one() -> None:
+    async def scenario() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], int]:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (fence, _):
+                saver = PostgresCheckpointSaver(engine, require_fence=True)
+                with pytest.raises(CheckpointFenceRequiredError):
+                    await saver.aput(
+                        _config(),
+                        _checkpoint(),
+                        {"source": "loop", "step": 0},
+                        {"objective": "00000000000000000000000000000001.0"},
+                    )
+                first = await saver.aput(
+                    _fenced_config(fence),
+                    _checkpoint(),
+                    {"source": "loop", "step": 0},
+                    {"objective": "00000000000000000000000000000001.0"},
+                )
+                returned = await saver.aput(
+                    first,
+                    _checkpoint("1f18a895-81b4-67f2-bfff-3cd0225b7b41"),
+                    {"source": "loop", "step": 1},
+                    {"objective": "00000000000000000000000000000002.0"},
+                )
+                # LangGraph passes the saver-returned config to subsequent write
+                # calls. These fields must survive that round trip or a pending
+                # write would unexpectedly lose the lease that authorized it.
+                await saver.aput_writes(
+                    returned,
+                    [("objective", "present")],
+                    "task_node",
+                )
+                restored = await saver.aget_tuple(_config())
+                async with engine.connect() as connection:
+                    writes = len(
+                        (
+                            await connection.execute(select(workflow_checkpoint_writes))
+                        ).all()
+                    )
+                assert restored is not None
+                assert restored.parent_config is not None
+                return (
+                    returned["configurable"],
+                    restored.config["configurable"],
+                    restored.parent_config["configurable"],
+                    writes,
+                )
+        finally:
+            await engine.dispose()
+
+    returned, restored, parent, writes = _run(scenario)
+    for configurable in (returned, restored, parent):
+        assert configurable[CHECKPOINT_FENCE_TASK_ID_KEY].startswith("task_")
+        assert configurable[CHECKPOINT_FENCE_WORKER_ID_KEY] == "worker_current"
+        assert configurable[CHECKPOINT_FENCE_EPOCH_KEY] == 1
+        assert configurable[CHECKPOINT_FENCE_GUARD_PID_KEY] > 0
+        assert isinstance(configurable[CHECKPOINT_FENCE_GUARD_KEY_KEY], int)
+    assert writes == 1
+
+
+def test_guard_fence_rejects_a_terminated_backend_with_a_live_registry_lease() -> None:
+    """A lost advisory session fences writes before the lease's TTL expires."""
+
+    async def scenario() -> tuple[int, int]:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (fence, guard):
+                saver = PostgresCheckpointSaver(engine, require_fence=True)
+                async with engine.begin() as connection:
+                    terminated = bool(
+                        (
+                            await connection.execute(
+                                text(
+                                    "SELECT pg_terminate_backend(CAST(:pid AS integer))"
+                                ),
+                                {"pid": guard.backend_pid},
+                            )
+                        ).scalar_one()
+                    )
+                assert terminated
+
+                # The Registry row remains ``running`` with its unexpired
+                # lease. Only the independently pinned guard fact changed.
+                with pytest.raises(StaleCheckpointWriteError, match="stale"):
+                    await saver.aput(
+                        _fenced_config(fence),
+                        _checkpoint(),
+                        {"source": "loop", "step": 0},
+                        {"objective": "00000000000000000000000000000001.0"},
+                    )
+                with pytest.raises(StaleCheckpointWriteError, match="stale"):
+                    await saver.aput_writes(
+                        _fenced_config(fence, checkpoint_id="checkpoint_guard_lost"),
+                        [("objective", "must not persist")],
+                        "task_node",
+                    )
+                async with engine.connect() as connection:
+                    checkpoints = len(
+                        (await connection.execute(select(workflow_checkpoints))).all()
+                    )
+                    writes = len(
+                        (
+                            await connection.execute(select(workflow_checkpoint_writes))
+                        ).all()
+                    )
+                return checkpoints, writes
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0)
+
+
+def test_inside_checkpoint_put_crash_rolls_back_the_blobs_and_checkpoint_together() -> (
+    None
+):
+    async def scenario() -> tuple[int, int]:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (fence, _):
+                controller = FailpointController(frozenset({"inside_checkpoint_put"}))
+                controller.arm("inside_checkpoint_put", mode="crash")
+                saver = PostgresCheckpointSaver(
+                    engine,
+                    require_fence=True,
+                    fault_injector=controller,
+                )
+                with pytest.raises(InjectedCrash):
+                    await saver.aput(
+                        _fenced_config(fence),
+                        _checkpoint(),
+                        {"source": "loop", "step": 0},
+                        {"objective": "00000000000000000000000000000001.0"},
+                    )
+                await controller.wait_until_hit("inside_checkpoint_put")
+                async with engine.connect() as connection:
+                    blobs = len(
+                        (
+                            await connection.execute(select(workflow_checkpoint_blobs))
+                        ).all()
+                    )
+                    checkpoints = len(
+                        (await connection.execute(select(workflow_checkpoints))).all()
+                    )
+                return blobs, checkpoints
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == (0, 0)
+
+
+def test_missing_nonempty_blob_fails_closed_instead_of_dropping_a_channel() -> None:
+    async def scenario() -> None:
+        engine = _engine()
+        try:
+            saver = PostgresCheckpointSaver(engine)
+            await saver.aput(
+                _config(),
+                _checkpoint(),
+                {"source": "loop", "step": 0},
+                {"objective": "00000000000000000000000000000001.0"},
+            )
+            async with engine.begin() as connection:
+                await connection.execute(workflow_checkpoint_blobs.delete())
+            with pytest.raises(CheckpointCorruptionError, match="missing channel blob"):
+                await saver.aget_tuple(_config())
+        finally:
+            await engine.dispose()
+
+    _run(scenario)
+
+
+def test_fence_row_lock_and_checkpoint_write_share_one_transaction() -> None:
+    class _BarrierSaver(PostgresCheckpointSaver):
+        def __init__(
+            self,
+            *args: Any,
+            locked: asyncio.Event,
+            release: asyncio.Event,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self._locked = locked
+            self._release = release
+
+        async def _assert_fence(
+            self, connection: Any, thread_id: str, fence: CheckpointFence | None
+        ) -> None:
+            await super()._assert_fence(connection, thread_id, fence)
+            self._locked.set()
+            await self._release.wait()
+
+    async def scenario() -> int:
+        engine = _engine()
+        try:
+            async with _claimed_guard_fence(engine) as (fence, _):
+                locked = asyncio.Event()
+                release = asyncio.Event()
+                saver = _BarrierSaver(
+                    engine,
+                    require_fence=True,
+                    locked=locked,
+                    release=release,
+                )
+                write = asyncio.create_task(
+                    saver.aput(
+                        _fenced_config(fence),
+                        _checkpoint(),
+                        {"source": "loop", "step": 0},
+                        {"objective": "00000000000000000000000000000001.0"},
+                    )
+                )
+                await locked.wait()
+                # NOWAIT is deterministic: the fence query has already acquired
+                # its row lock, so a competing lease mutation cannot slip between
+                # validation and the checkpoint write.
+                with pytest.raises(DBAPIError):
+                    async with engine.connect() as connection, connection.begin():
+                        await connection.execute(
+                            select(task_runs.c.task_id)
+                            .where(task_runs.c.task_id == fence.task_id)
+                            .with_for_update(nowait=True)
+                        )
+                async with engine.connect() as connection:
+                    assert (
+                        len(
+                            (
+                                await connection.execute(select(workflow_checkpoints))
+                            ).all()
+                        )
+                        == 0
+                    )
+                release.set()
+                await write
+                async with engine.connect() as connection:
+                    return len(
+                        (await connection.execute(select(workflow_checkpoints))).all()
+                    )
+        finally:
+            await engine.dispose()
+
+    assert _run(scenario) == 1
 
 
 # --------------------------------------------------------------------------

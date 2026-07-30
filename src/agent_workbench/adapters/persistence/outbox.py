@@ -143,6 +143,44 @@ class PostgresOutbox:
             # nothing succeeds.
             raise StaleExecutionError("the claim on this event is no longer current")
 
+    async def heartbeat(
+        self,
+        *,
+        event_id: str,
+        claim_token: str,
+        lease_seconds: float,
+    ) -> None:
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        lease = func.now() + func.make_interval(0, 0, 0, 0, 0, 0, lease_seconds)
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                update(outbox_events)
+                .where(outbox_events.c.event_id == event_id)
+                .where(outbox_events.c.claim_token == claim_token)
+                .where(outbox_events.c.acked_at.is_(None))
+                .values(lease_until=lease)
+            )
+        if result.rowcount == 0:
+            raise StaleExecutionError("the claim on this event is no longer current")
+
+    async def release(self, *, event_id: str, claim_token: str) -> None:
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                update(outbox_events)
+                .where(outbox_events.c.event_id == event_id)
+                .where(outbox_events.c.claim_token == claim_token)
+                .where(outbox_events.c.acked_at.is_(None))
+                .values(
+                    claimed_by=None,
+                    claimed_at=None,
+                    lease_until=None,
+                    claim_token=None,
+                )
+            )
+        if result.rowcount == 0:
+            raise StaleExecutionError("the claim on this event is no longer current")
+
     async def pending_count(self) -> int:
         async with self._engine.connect() as connection:
             result = await connection.execute(

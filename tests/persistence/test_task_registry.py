@@ -16,13 +16,14 @@ Real PostgreSQL only.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 
 from agent_workbench.adapters.persistence import (
     PostgresEventLog,
@@ -36,6 +37,8 @@ from agent_workbench.domain.task_registry import (
     sources_for,
 )
 from agent_workbench.ports.task_registry import (
+    ExecutionLease,
+    StaleExecutionError,
     TaskRegistry,
     TaskSubmission,
     TaskSubmissionConflictError,
@@ -128,9 +131,261 @@ def _submission(**overrides: Any) -> TaskSubmission:
         "submitted_policy_revision": "policy-1",
         "submitted_policy_fingerprint": "f" * 16,
         "submitted_authorization_envelope": {},
+        "submitted_principal_scopes": [],
     }
     base.update(overrides)
+    base.setdefault(
+        "input_fingerprint",
+        hashlib.sha256(str(base["input_ref"]).encode("utf-8")).hexdigest(),
+    )
     return TaskSubmission.model_validate(base)
+
+
+# --------------------------------------------------------------------------
+# Lease claim, heartbeat and stale recovery (E1)
+
+
+async def _claim(registry: PostgresTaskRegistry, worker_id: str = "worker_1") -> Any:
+    claim = await registry.claim_next(worker_id, lease_seconds=60)
+    assert claim is not None
+    return claim
+
+
+def test_two_workers_claiming_concurrently_receive_one_task_only() -> None:
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, Any]:
+        await registry.submit(_submission())
+        return await asyncio.gather(
+            registry.claim_next("worker_1", lease_seconds=60),
+            registry.claim_next("worker_2", lease_seconds=60),
+        )
+
+    first, second = _run(scenario)
+
+    claims = [claim for claim in (first, second) if claim is not None]
+    assert len(claims) == 1
+    assert claims[0].task.status == "running"
+    assert claims[0].lease.epoch == 1
+
+
+def test_an_old_epoch_cannot_heartbeat_or_settle_after_reclaim() -> None:
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[int, int]:
+        task = await registry.submit(_submission())
+        first = await _claim(registry, "worker_old")
+        async with registry._engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(lease_until=func.now() - text("interval '1 second'"))
+            )
+        await registry.reclaim_expired(
+            limit=1,
+            max_attempts=3,
+            retry_base_seconds=1,
+            retry_max_seconds=1,
+        )
+        async with registry._engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(available_at=func.now() - text("interval '1 second'"))
+            )
+        second = await _claim(registry, "worker_new")
+        with pytest.raises(StaleExecutionError):
+            await registry.heartbeat(first.lease, lease_seconds=60)
+        with pytest.raises(StaleExecutionError):
+            await registry.mark_succeeded(first.lease)
+        return first.lease.epoch, second.lease.epoch
+
+    assert _run(scenario) == (1, 2)
+
+
+def test_an_expired_claim_at_its_attempt_budget_is_dead_lettered() -> None:
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[str, str | None]:
+        task = await registry.submit(_submission())
+        await _claim(registry)
+        async with registry._engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(lease_until=func.now() - text("interval '1 second'"))
+            )
+        reclaimed = await registry.reclaim_expired(
+            limit=1,
+            max_attempts=1,
+            retry_base_seconds=1,
+            retry_max_seconds=1,
+        )
+        assert len(reclaimed) == 1
+        return reclaimed[0].status, reclaimed[0].status_detail
+
+    status, detail = _run(scenario)
+
+    assert status == "dead_letter"
+    assert detail == "lease expired after 1 attempts"
+
+
+def test_reclaim_records_retry_and_dead_letter_on_the_task_timeline() -> None:
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> list[str]:
+        task = await registry.submit(_submission())
+        first = await _claim(registry)
+        async with engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(lease_until=func.now() - text("interval '1 second'"))
+            )
+        await registry.reclaim_expired(
+            limit=1,
+            max_attempts=2,
+            retry_base_seconds=1,
+            retry_max_seconds=1,
+        )
+        async with engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(available_at=func.now() - text("interval '1 second'"))
+            )
+        second = await _claim(registry, "worker_2")
+        assert second.lease.epoch == first.lease.epoch + 1
+        async with engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(lease_until=func.now() - text("interval '1 second'"))
+            )
+        await registry.reclaim_expired(
+            limit=1,
+            max_attempts=2,
+            retry_base_seconds=1,
+            retry_max_seconds=1,
+        )
+        async with engine.connect() as connection:
+            return list(
+                (
+                    await connection.execute(
+                        select(events.c.event_type)
+                        .where(events.c.stream_id == task.thread_id)
+                        .order_by(events.c.sequence)
+                    )
+                ).scalars()
+            )
+
+    assert _run_with_engine(scenario) == [
+        "TaskSubmitted",
+        "TaskClaimed",
+        "TaskRetryScheduled",
+        "TaskClaimed",
+        "TaskDeadLettered",
+    ]
+
+
+def test_cancelling_a_claim_clears_its_lease_and_rejects_late_settlement() -> None:
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, Any, Any]:
+        task = await registry.submit(_submission())
+        claim = await _claim(registry)
+        cancelled = await registry.cancel(task.task_id, reason="owner cancelled")
+        with pytest.raises(TaskTransitionRejectedError):
+            await registry.mark_succeeded(claim.lease)
+        return cancelled.status, cancelled.lease_owner, cancelled.lease_until
+
+    assert _run(scenario) == ("cancelled", None, None)
+
+
+def test_lifecycle_transitions_append_a_safe_ordered_task_timeline() -> None:
+    async def scenario(
+        engine: Any, registry: PostgresTaskRegistry
+    ) -> tuple[list[str], dict[str, Any]]:
+        task = await registry.submit(_submission())
+        first = await _claim(registry)
+        await registry.release_for_retry(first.lease, delay_seconds=0)
+        second = await _claim(registry, "worker_2")
+        await registry.mark_failed(second.lease, reason="provider body must not leak")
+        async with engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        select(events.c.event_type, events.c.payload)
+                        .where(events.c.stream_id == task.thread_id)
+                        .order_by(events.c.sequence)
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return [row["event_type"] for row in rows], rows[-1]["payload"]
+
+    kinds, failed_payload = _run_with_engine(scenario)
+
+    assert kinds == [
+        "TaskSubmitted",
+        "TaskClaimed",
+        "TaskRetryScheduled",
+        "TaskClaimed",
+        "TaskFailed",
+    ]
+    assert failed_payload["kind"] == "TaskFailed"
+    assert failed_payload["epoch"] == 2
+    assert failed_payload["attempt"] == 2
+    assert failed_payload["status"] == "failed"
+    assert failed_payload["reason_code"] == "execution_failed"
+    assert "provider body must not leak" not in str(failed_payload)
+
+
+def test_a_heartbeat_is_not_a_high_frequency_timeline_event() -> None:
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> int:
+        await registry.submit(_submission())
+        claim = await _claim(registry)
+        await registry.heartbeat(claim.lease, lease_seconds=60)
+        async with engine.connect() as connection:
+            return len((await connection.execute(select(events))).all())
+
+    # The Task opening and claim are durable facts; lease maintenance is not.
+    assert _run_with_engine(scenario) == 2
+
+
+def test_a_refused_claim_event_rolls_back_the_claim_with_it() -> None:
+    class _RefusingClaimLog(PostgresEventLog):
+        async def append_durable_in_transaction(self, *args: Any, **kwargs: Any) -> Any:
+            payload = args[2]
+            if payload.kind == "TaskClaimed":
+                raise RuntimeError("claim event injection")
+            return await super().append_durable_in_transaction(*args, **kwargs)
+
+    async def scenario(engine: Any, _: PostgresTaskRegistry) -> tuple[str, int]:
+        registry = PostgresTaskRegistry(engine, events=_RefusingClaimLog(engine))
+        task = await registry.submit(_submission())
+        with pytest.raises(RuntimeError, match="injection"):
+            await registry.claim_next("worker_1", lease_seconds=60)
+        stored = await registry.get(task.task_id)
+        assert stored is not None
+        async with engine.connect() as connection:
+            count = len((await connection.execute(select(events))).all())
+        return stored.status, count
+
+    assert _run_with_engine(scenario) == ("queued", 1)
+
+
+def test_a_live_claim_can_be_released_for_a_fenced_delayed_retry() -> None:
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[str, Any, Any, Any]:
+        await registry.submit(_submission())
+        claim = await _claim(registry)
+        released = await registry.release_for_retry(claim.lease, delay_seconds=30)
+        with pytest.raises(TaskTransitionRejectedError):
+            await registry.mark_succeeded(claim.lease)
+        return (
+            released.status,
+            released.lease_owner,
+            released.lease_until,
+            released.available_at,
+        )
+
+    status, owner, until, available_at = _run(scenario)
+
+    assert status == "queued"
+    assert owner is None
+    assert until is None
+    assert available_at is not None
 
 
 # --------------------------------------------------------------------------
@@ -151,8 +406,17 @@ def test_a_repeated_submission_key_returns_the_same_task() -> None:
 
     async def scenario(registry: PostgresTaskRegistry) -> tuple[str, str, int]:
         first = await registry.submit(_submission())
-        second = await registry.submit(_submission())
-        third = await registry.submit(_submission())
+        # All three values are server-owned decisions, and therefore change
+        # on a retry after a process restart. They cannot be used to reject a
+        # caller repeating the same request.
+        second = await registry.submit(
+            _submission(
+                thread_id="thr_retry",
+                run_semantics_revision="1.2:v1.3:0000000000000000",
+                submitted_policy_fingerprint="0" * 16,
+            )
+        )
+        third = await registry.submit(_submission(thread_id="thr_retry_2"))
         # Compared by value, not by identity: a Task now carries its
         # submitted semantics, and a dict is not hashable.
         return first.task_id, second.task_id, len({first == second, second == third})
@@ -164,13 +428,46 @@ def test_a_repeated_submission_key_returns_the_same_task() -> None:
     assert distinct == 1
 
 
-def test_a_repeated_key_with_a_different_request_is_a_conflict() -> None:
+def test_equal_input_content_retries_ignore_their_generated_artifact_ids() -> None:
+    """Only the first artifact reference becomes the Task's source of truth."""
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[str, str, str]:
+        fingerprint = "a" * 64
+        first = await registry.submit(
+            _submission(input_ref="art_first", input_fingerprint=fingerprint)
+        )
+        retry = await registry.submit(
+            _submission(
+                thread_id="thr_retry",
+                input_ref="art_retry_orphan",
+                input_fingerprint=fingerprint,
+            )
+        )
+        return first.task_id, retry.task_id, retry.input_ref
+
+    first_id, retry_id, input_ref = _run(scenario)
+
+    assert first_id == retry_id
+    assert input_ref == "art_first"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"input_ref": "input_2"},
+        {"graph_version": "v2"},
+    ],
+    ids=["input", "graph"],
+)
+def test_a_repeated_key_with_a_different_request_is_a_conflict(
+    changes: dict[str, str],
+) -> None:
     """Idempotency answers the same question again; it does not answer a new one."""
 
     async def scenario(registry: PostgresTaskRegistry) -> None:
         await registry.submit(_submission())
         with pytest.raises(TaskSubmissionConflictError) as captured:
-            await registry.submit(_submission(input_ref="input_2"))
+            await registry.submit(_submission(**changes))
         assert captured.value.submission_dedup_key == "dedup_1"
 
     _run(scenario)
@@ -185,6 +482,21 @@ def test_two_owners_may_use_the_same_submission_key() -> None:
         return len({first.task_id, second.task_id})
 
     assert _run(scenario) == 2
+
+
+def test_the_same_owner_and_key_are_independent_between_tenants() -> None:
+    """Principal identifiers are tenant-local, so deduplication must be too."""
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[str, str]:
+        first = await registry.submit(_submission())
+        second = await registry.submit(
+            _submission(tenant_id="tenant_b", thread_id="thr_tenant_b")
+        )
+        return first.task_id, second.task_id
+
+    first, second = _run(scenario)
+
+    assert first != second
 
 
 def test_a_submitted_task_starts_queued_and_carries_no_explanation() -> None:
@@ -213,6 +525,7 @@ def test_a_submission_that_loses_the_race_returns_the_winner_s_task() -> None:
             "thread_id": "thr_1",
             "graph_version": "v1",
             "input_ref": "input_1",
+            "input_fingerprint": hashlib.sha256(b"input_1").hexdigest(),
             "submission_dedup_key": "dedup_1",
             "status": "queued",
             "status_detail": None,
@@ -221,11 +534,19 @@ def test_a_submission_that_loses_the_race_returns_the_winner_s_task() -> None:
             "submitted_policy_revision": "policy-1",
             "submitted_policy_fingerprint": "f" * 16,
             "submitted_authorization_envelope": {},
+            "submitted_principal_scopes": [],
         }
         returned = await _while_uncommitted(
             engine,
             task_runs.insert().values(winner),
-            lambda: registry.submit(_submission()),
+            lambda: registry.submit(
+                _submission(
+                    thread_id="thr_loser",
+                    input_ref="input_1_retry_artifact",
+                    input_fingerprint=hashlib.sha256(b"input_1").hexdigest(),
+                    run_semantics_revision="1.2:v1.3:0000000000000000",
+                )
+            ),
         )
         async with engine.connect() as connection:
             rows = len((await connection.execute(select(task_runs))).all())
@@ -235,6 +556,58 @@ def test_a_submission_that_loses_the_race_returns_the_winner_s_task() -> None:
 
     assert task_id == "task_winner"
     assert rows == 1
+
+
+def test_a_race_loser_records_the_submission_event_on_the_winner_s_thread() -> None:
+    """A retry has a new candidate thread, but the stored Task owns its stream."""
+
+    async def scenario(
+        engine: Any, registry: PostgresTaskRegistry
+    ) -> tuple[str, str, str]:
+        winner = {
+            "task_id": "task_winner",
+            "tenant_id": "tenant_a",
+            "owner_id": "user_1",
+            "thread_id": "thr_winner",
+            "graph_version": "v1",
+            "input_ref": "input_winner",
+            "input_fingerprint": hashlib.sha256(b"input_winner").hexdigest(),
+            "submission_dedup_key": "dedup_1",
+            "status": "queued",
+            "status_detail": None,
+            "run_semantics_snapshot": {"model": {"provider": "deepseek"}},
+            "run_semantics_revision": "1.2:v1.3:abc0123456789def",
+            "submitted_policy_revision": "policy-1",
+            "submitted_policy_fingerprint": "f" * 16,
+            "submitted_authorization_envelope": {},
+            "submitted_principal_scopes": [],
+        }
+        returned = await _while_uncommitted(
+            engine,
+            task_runs.insert().values(winner),
+            lambda: registry.submit(
+                _submission(
+                    thread_id="thr_retry",
+                    input_ref="input_winner",
+                    run_semantics_revision="1.2:v1.3:0000000000000000",
+                )
+            ),
+        )
+        async with engine.connect() as connection:
+            event = (
+                (await connection.execute(select(events.c.stream_id, events.c.payload)))
+                .mappings()
+                .one()
+            )
+        return returned.thread_id, event["stream_id"], event["payload"]["input_ref"]
+
+    task_thread, event_thread, input_ref = _run_with_engine(scenario)
+
+    assert (task_thread, event_thread, input_ref) == (
+        "thr_winner",
+        "thr_winner",
+        "input_winner",
+    )
 
 
 # --------------------------------------------------------------------------
@@ -253,8 +626,11 @@ def test_the_oldest_queued_task_is_the_one_that_starts() -> None:
                     )
                 )
             )
-        started = [await registry.start_next() for _ in range(4)]
-        return [task.task_id if task else None for task in started] + [
+        claims = [
+            await registry.claim_next(f"worker_{index}", lease_seconds=60)
+            for index in range(4)
+        ]
+        return [claim.task.task_id if claim else None for claim in claims] + [
             task.task_id for task in opened
         ]
 
@@ -271,11 +647,11 @@ def test_starting_a_task_takes_it_out_of_the_queue() -> None:
 
     async def scenario(registry: PostgresTaskRegistry) -> tuple[str, Any, str]:
         task = await registry.submit(_submission())
-        started = await registry.start_next()
-        again = await registry.start_next()
+        started = await registry.claim_next("worker_1", lease_seconds=60)
+        again = await registry.claim_next("worker_2", lease_seconds=60)
         stored = await registry.get(task.task_id)
         assert stored is not None
-        return started.task_id if started else "", again, stored.status
+        return started.task.task_id if started else "", again, stored.status
 
     started_id, again, status = _run(scenario)
 
@@ -285,7 +661,9 @@ def test_starting_a_task_takes_it_out_of_the_queue() -> None:
 
 
 def test_an_empty_queue_hands_out_nothing() -> None:
-    assert _run(lambda registry: registry.start_next()) is None
+    assert (
+        _run(lambda registry: registry.claim_next("worker_1", lease_seconds=60)) is None
+    )
 
 
 def test_a_task_another_transaction_already_claimed_is_not_handed_out_again() -> None:
@@ -305,8 +683,14 @@ def test_a_task_another_transaction_already_claimed_is_not_handed_out_again() ->
             engine,
             update(task_runs)
             .where(task_runs.c.task_id == task.task_id)
-            .values(status="running"),
-            registry.start_next,
+            .values(
+                status="running",
+                lease_owner="racer",
+                lease_epoch=1,
+                lease_until=func.now() + text("interval '1 minute'"),
+                heartbeat_at=func.now(),
+            ),
+            lambda: registry.claim_next("worker_1", lease_seconds=60),
         )
 
     assert _run_with_engine(scenario) is None
@@ -331,9 +715,11 @@ def test_a_running_task_can_move_where_the_table_allows(
 ) -> None:
     async def scenario(registry: PostgresTaskRegistry) -> tuple[str, str | None]:
         await registry.submit(_submission())
-        started = await registry.start_next()
-        assert started is not None
-        moved = await getattr(registry, move)(started.task_id, **kwargs)
+        claim = await _claim(registry)
+        if move == "cancel":
+            moved = await registry.cancel(claim.task.task_id, **kwargs)
+        else:
+            moved = await getattr(registry, move)(claim.lease, **kwargs)
         return moved.status, moved.status_detail
 
     status, detail = _run(scenario)
@@ -344,13 +730,57 @@ def test_a_running_task_can_move_where_the_table_allows(
     )
 
 
+@pytest.mark.parametrize(
+    ("move", "kwargs", "event_type"),
+    [
+        ("mark_succeeded", {}, "TaskSucceeded"),
+        ("mark_failed", {"reason": "provider exception body"}, "TaskFailed"),
+        (
+            "park_for_migration",
+            {"reason": "a private graph version detail"},
+            "TaskParkedForMigration",
+        ),
+        ("await_approval", {}, "TaskAwaitingApproval"),
+        ("cancel", {"reason": "owner supplied private text"}, "TaskCancelled"),
+    ],
+)
+def test_each_settlement_writes_its_own_safe_lifecycle_event(
+    move: str, kwargs: dict[str, Any], event_type: str
+) -> None:
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> dict[str, Any]:
+        task = await registry.submit(_submission())
+        claim = await _claim(registry)
+        if move == "cancel":
+            await registry.cancel(task.task_id, **kwargs)
+        else:
+            await getattr(registry, move)(claim.lease, **kwargs)
+        async with engine.connect() as connection:
+            return (
+                await connection.execute(
+                    select(events.c.payload)
+                    .where(events.c.stream_id == task.thread_id)
+                    .order_by(events.c.sequence.desc())
+                    .limit(1)
+                )
+            ).scalar_one()
+
+    payload = _run_with_engine(scenario)
+
+    assert payload["kind"] == event_type
+    assert payload["task_id"]
+    assert "private" not in str(payload)
+    assert "exception" not in str(payload)
+
+
 def test_a_queued_task_cannot_be_settled_as_if_it_had_run() -> None:
     """``running`` is the only source of ``succeeded``, and the WHERE says so."""
 
     async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, str]:
         task = await registry.submit(_submission())
         with pytest.raises(TaskTransitionRejectedError) as captured:
-            await registry.mark_succeeded(task.task_id)
+            await registry.mark_succeeded(
+                ExecutionLease(task_id=task.task_id, worker_id="worker_1", epoch=1)
+            )
         stored = await registry.get(task.task_id)
         assert stored is not None
         return captured.value.found_status, stored.status
@@ -384,12 +814,14 @@ def test_nothing_moves_a_task_out_of_a_terminal_state(
 
     async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, str]:
         await registry.submit(_submission())
-        started = await registry.start_next()
-        assert started is not None
-        await registry.mark_succeeded(started.task_id)
+        claim = await _claim(registry)
+        await registry.mark_succeeded(claim.lease)
         with pytest.raises(TaskTransitionRejectedError) as captured:
-            await getattr(registry, move)(started.task_id, **kwargs)
-        stored = await registry.get(started.task_id)
+            if move == "cancel":
+                await registry.cancel(claim.task.task_id, **kwargs)
+            else:
+                await getattr(registry, move)(claim.lease, **kwargs)
+        stored = await registry.get(claim.task.task_id)
         assert stored is not None
         return captured.value.found_status, stored.status
 
@@ -411,11 +843,10 @@ def test_a_task_parked_for_a_migration_has_no_way_out_yet() -> None:
 
     async def scenario(registry: PostgresTaskRegistry) -> Any:
         await registry.submit(_submission())
-        started = await registry.start_next()
-        assert started is not None
-        await registry.park_for_migration(started.task_id, reason="written by v0")
+        claim = await _claim(registry)
+        await registry.park_for_migration(claim.lease, reason="written by v0")
         with pytest.raises(TaskTransitionRejectedError) as captured:
-            await registry.cancel(started.task_id, reason="give up")
+            await registry.cancel(claim.task.task_id, reason="give up")
         return captured.value.found_status
 
     assert _run(scenario) == "waiting_migration"
@@ -424,7 +855,9 @@ def test_a_task_parked_for_a_migration_has_no_way_out_yet() -> None:
 def test_a_move_on_a_task_that_does_not_exist_says_so() -> None:
     async def scenario(registry: PostgresTaskRegistry) -> Any:
         with pytest.raises(TaskTransitionRejectedError) as captured:
-            await registry.mark_succeeded("task_absent")
+            await registry.mark_succeeded(
+                ExecutionLease(task_id="task_absent", worker_id="worker_1", epoch=1)
+            )
         return captured.value.found_status
 
     assert _run(scenario) is None
@@ -446,10 +879,9 @@ def test_whether_a_move_takes_a_reason_is_settled_by_its_signature(
 
     async def scenario(registry: PostgresTaskRegistry) -> None:
         await registry.submit(_submission())
-        started = await registry.start_next()
-        assert started is not None
+        claim = await _claim(registry)
         with pytest.raises(TypeError):
-            await getattr(registry, move)(started.task_id, **kwargs)
+            await getattr(registry, move)(claim.lease, **kwargs)
 
     _run(scenario)
 
@@ -469,11 +901,10 @@ def test_an_empty_reason_is_refused_before_it_becomes_an_unreadable_row(
 
     async def scenario(registry: PostgresTaskRegistry) -> str:
         await registry.submit(_submission())
-        started = await registry.start_next()
-        assert started is not None
+        claim = await _claim(registry)
         with pytest.raises(ValidationError):
-            await registry.mark_failed(started.task_id, reason=reason)
-        stored = await registry.get(started.task_id)
+            await registry.mark_failed(claim.lease, reason=reason)
+        stored = await registry.get(claim.task.task_id)
         assert stored is not None
         return stored.status
 
@@ -533,8 +964,8 @@ def test_a_repeated_submission_does_not_open_a_second_event() -> None:
 
     async def scenario(engine: Any, registry: PostgresTaskRegistry) -> int:
         await registry.submit(_submission())
-        await registry.submit(_submission())
-        await registry.submit(_submission())
+        await registry.submit(_submission(thread_id="thr_retry"))
+        await registry.submit(_submission(thread_id="thr_retry_2"))
         async with engine.connect() as connection:
             return len((await connection.execute(select(events))).all())
 
@@ -640,9 +1071,10 @@ def test_the_submitted_semantics_survive_a_round_trip() -> None:
             reread.submitted_policy_revision,
             reread.submitted_policy_fingerprint,
             reread.submitted_authorization_envelope.max_tool_risk,
+            reread.submitted_principal_scopes,
         )
 
-    snapshot, revision, policy_revision, fingerprint, risk = _run(scenario)
+    snapshot, revision, policy_revision, fingerprint, risk, scopes = _run(scenario)
 
     assert snapshot == {"model": {"provider": "deepseek"}}
     assert revision == "1.2:v1.3:abc0123456789def"
@@ -651,35 +1083,52 @@ def test_the_submitted_semantics_survive_a_round_trip() -> None:
     # The envelope comes back as the model, not as a dict: an authorization
     # ceiling read as raw JSON is one nothing re-validates.
     assert risk == "read"
+    assert scopes == ()
 
 
-def test_a_key_reused_under_different_semantics_is_a_conflict() -> None:
-    """The same request under a different deployment is a different request.
+def test_a_retried_key_with_more_scopes_keeps_the_original_scope_ceiling() -> None:
+    """An idempotency retry cannot widen the Task it resolves to."""
 
-    Returning the first Task would run the caller's work under semantics it
-    never asked for -- which is the failure the snapshot exists to prevent,
-    arriving through the idempotency path instead of through a resume.
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, Any]:
+        first = await registry.submit(
+            _submission(submitted_principal_scopes=("knowledge:read",))
+        )
+        retry = await registry.submit(
+            _submission(
+                thread_id="thr_retry",
+                submitted_principal_scopes=("external:search", "knowledge:read"),
+            )
+        )
+        return first, retry
+
+    first, retry = _run(scenario)
+
+    assert retry.task_id == first.task_id
+    assert retry.submitted_principal_scopes == ("knowledge:read",)
+
+
+def test_a_key_reused_under_new_server_semantics_returns_the_original_task() -> None:
+    """Semantics and policy are persisted from the first accepted request.
+
+    They are deployment decisions, not caller-supplied request identity. A
+    retry must keep the original snapshot rather than fail because settings or
+    policy identity changed between attempts.
     """
 
-    async def scenario(registry: PostgresTaskRegistry) -> None:
-        await registry.submit(_submission())
-        with pytest.raises(TaskSubmissionConflictError):
-            await registry.submit(
-                _submission(run_semantics_revision="1.2:v1.3:0000000000000000")
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[Any, Any]:
+        first = await registry.submit(_submission())
+        retry = await registry.submit(
+            _submission(
+                thread_id="thr_retry",
+                run_semantics_revision="1.2:v1.3:0000000000000000",
+                submitted_policy_fingerprint="0" * 16,
             )
+        )
+        return first, retry
 
-    _run(scenario)
+    first, retry = _run(scenario)
 
-
-def test_a_key_reused_under_a_different_policy_is_a_conflict() -> None:
-    """Policy identity is part of what a submission was, not decoration."""
-
-    async def scenario(registry: PostgresTaskRegistry) -> None:
-        await registry.submit(_submission())
-        with pytest.raises(TaskSubmissionConflictError):
-            await registry.submit(_submission(submitted_policy_fingerprint="0" * 16))
-
-    _run(scenario)
+    assert retry == first
 
 
 def test_the_snapshot_a_task_carries_is_the_one_it_was_submitted_with() -> None:

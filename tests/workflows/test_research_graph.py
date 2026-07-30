@@ -33,6 +33,7 @@ from agent_workbench.workflows.research_graph import (
     fan_in,
     merge_refs,
     next_nodes,
+    quality_gate_failure_reason,
     route_quality_gate,
     route_research,
 )
@@ -156,6 +157,17 @@ def test_an_exhausted_revision_budget_routes_nowhere_rather_than_approving() -> 
 
     assert route_quality_gate(exhausted) is None
     assert next_nodes("quality_gate", exhausted) == ()
+    assert quality_gate_failure_reason(exhausted) is not None
+
+
+def test_only_an_exhausted_revise_verdict_is_a_terminal_failure() -> None:
+    assert quality_gate_failure_reason(_reviewed_state("pass")) is None
+    assert (
+        quality_gate_failure_reason(
+            _reviewed_state("revise", revision_count=0, max_revisions=1)
+        )
+        is None
+    )
 
 
 def test_quality_gate_fails_closed_before_the_critic_has_reviewed() -> None:

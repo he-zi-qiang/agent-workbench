@@ -322,6 +322,15 @@ fused_top_k <= dense_top_k + sparse_top_k
 Embedding/reranker revision、dense dimension、vector field、parser、chunker
 或 index schema 变化时，创建新的 `write_collection`，完成回填与评测后
 原子切换 `read_alias`。不要向同一 collection 混写不同版本的向量。
+
+API Chat 启动前会单独校验 `write_collection` 和当前 `read_alias` 的目标：
+两者都必须匹配 dense vector dimension、cosine distance 和命名 sparse vector。
+`read_alias` 指向不同的、但 schema 兼容的 generation 是正常的 blue/green 状态，
+不会被启动过程改回 write collection。默认
+`qdrant.allow_local_bootstrap=false`；只有显式开启的 local/test profile 才能在
+write collection 缺失时创建它，并为缺失的 read alias 首次绑定 write collection。
+remote/production 缺 collection、缺 alias 或 schema 不匹配一律启动失败，绝不静默创建
+或重写路由。
 生产环境中的 embedding 和 reranker revision 必须分别是 Hugging Face
 解析后的完整 **40 位十六进制 commit SHA**；校验格式为
 `^[0-9a-fA-F]{40}$`，持久化前统一规范化为小写。分支、tag、`main`、
@@ -365,6 +374,7 @@ task_runs.graph_version                   TEXT
 task_runs.submitted_policy_revision       TEXT
 task_runs.submitted_policy_fingerprint    TEXT
 task_runs.submitted_authorization_envelope JSONB
+task_runs.submitted_principal_scopes       JSONB
 task_runs.resolved_qdrant_collection      TEXT
 task_runs.resolved_qdrant_index_version   TEXT
 task_runs.resolved_qdrant_index_generation_id UUID
@@ -402,7 +412,7 @@ task_runs.resolved_qdrant_index_generation_id UUID
 有效授权采用 deny-overrides 的最严格交集：
 
 ```text
-submitted_authorization_envelope ∩ current_policy/current_ACL/current_tools
+submitted_authorization_envelope ∩ submitted_principal_scopes ∩ current_policy/current_ACL/current_tools
 ```
 
 allowlist 取交集、denylist 取并集、approval requirement 取 OR、安全上限取
@@ -413,6 +423,12 @@ closed / waiting_migration。
 事件与 Tool ledger 同时记录 `effective_policy_revision` 和
 `effective_policy_fingerprint`，不记录敏感规则正文。这样即使人工修改规则
 却忘记提升 revision，也会被一致性门禁发现。
+
+`submitted_principal_scopes` 是当前 local/dev Header identity resolver 在
+**提交时**解析到的权限上限，旧 Task 迁移为 `[]` 并因此保持拒绝。它用于避免
+同一 idempotency key 的重试因权限变宽而扩大既有 Task；不是生产授权系统，也不
+能感知之后的 scope 撤销。生产部署必须在每次 claim/dispatch 再与 live IdP/ACL
+resolver 的当前结论求交集，不能把该快照描述为实时权限。
 
 日志中只能输出 `public_config()`，禁止打印整个 Settings 对象。
 

@@ -26,7 +26,12 @@ from agent_workbench.domain.context import (
     SourceLocator,
 )
 from agent_workbench.domain.errors import ErrorInfo
-from agent_workbench.domain.events import EventEnvelope, RunStarted
+from agent_workbench.domain.events import EventEnvelope, TaskClaimed
+from agent_workbench.domain.evidence import (
+    EvidenceBundle,
+    EvidenceItem,
+    EvidenceRevision,
+)
 from agent_workbench.domain.messages import Message, assistant_message, user_message
 from agent_workbench.domain.policies import (
     AuthorizationEnvelope,
@@ -43,6 +48,7 @@ from agent_workbench.domain.runs import (
     TraceContext,
 )
 from agent_workbench.domain.schema import DOMAIN_SCHEMA_VERSION, VersionedModel
+from agent_workbench.domain.task_inputs import TaskInput
 from agent_workbench.domain.tasks import ReviewResult, TaskState, TaskStep
 from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec
 
@@ -147,6 +153,21 @@ SAMPLES: dict[str, VersionedModel] = {
         retrieval_trace_id="trace_1",
         token_estimate=96,
     ),
+    "EvidenceBundle": EvidenceBundle(
+        task_id="task_0000000000000000000000000000001",
+        source="internal",
+        items=(
+            EvidenceItem(
+                evidence_id="evidence_00000000000000000000000001",
+                source="internal",
+                text="Qdrant performs one dense and sparse fusion per query.",
+                citation=CITATION,
+            ),
+        ),
+        internal_authorized_revisions=(
+            EvidenceRevision(document_id="doc_1", source_revision=3),
+        ),
+    ),
     "Message": assistant_message(text="Looking that up.", tool_calls=(TOOL_CALL,)),
     "AgentRunRequest": AgentRunRequest(
         trace=TraceContext(agent_run_id="run_0000000000000000000000000000001"),
@@ -168,17 +189,17 @@ SAMPLES: dict[str, VersionedModel] = {
         usage=USAGE,
     ),
     "EventEnvelope": EventEnvelope.for_payload(
-        RunStarted(
-            run_kind="chat",
-            model_profile="main",
-            tool_names=("knowledge_search",),
-            budget=BUDGET,
+        TaskClaimed(
+            task_id="task_0000000000000000000000000000001",
+            epoch=7,
+            attempt=2,
         ),
         stream_id="stream_0000000000000000000000000000001",
         run_id="run_0000000000000000000000000000001",
         timestamp=TIMESTAMP,
         sequence=1,
         event_id="evt_0000000000000000000000000000001",
+        task_id="task_0000000000000000000000000000001",
     ),
     "TaskState": TaskState(
         task_id="task_0000000000000000000000000000001",
@@ -208,6 +229,11 @@ SAMPLES: dict[str, VersionedModel] = {
         approval_id="apr_0000000000000000000000000000001",
         agent_outcome_refs=("art_outcome_a", "art_outcome_b"),
         budget_usage=USAGE,
+    ),
+    "TaskInput": TaskInput(
+        objective="Produce a verified retrieval architecture brief.",
+        max_revisions=3,
+        knowledge_base_id="kb_main",
     ),
 }
 

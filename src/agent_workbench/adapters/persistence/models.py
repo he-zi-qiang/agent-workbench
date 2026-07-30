@@ -558,13 +558,11 @@ workflow_checkpoint_writes = Table(
 # places on purpose, and the Worker's reconciliation decides what they jointly
 # mean rather than pretending they commit together.
 #
-# What is deliberately not here yet, each because it belongs to a work package
-# that has its own reasons: the lease, epoch, attempt counter, available_at
-# backoff and recovery reason are coordination (WP08), and a single Worker
-# needs none of them; the run-semantics snapshot and submitted policy identity
-# are WP07-03; the resolved Qdrant collection, index version and generation
-# reservation are WP07-04. Each arrives in its own migration, the way the chat
-# turn's execution lease arrived after the turn itself.
+# The lease, epoch, attempt counter and ``available_at`` backoff below are E1
+# coordination data.  They fence Registry lifecycle writes but not yet
+# LangGraph checkpoint writes; the saver-level epoch predicate is E2.  The
+# run-semantics snapshot and submitted policy identity are WP07-03; resolved
+# Qdrant collection, index version and generation reservation are WP07-04.
 
 task_runs = Table(
     "task_runs",
@@ -584,6 +582,10 @@ task_runs = Table(
     # Where the submitted input is stored. Large inputs do not live in this
     # row, and a Task with no checkpoint is started from this reference.
     Column("input_ref", String(IDENTIFIER_LENGTH), nullable=False),
+    # The canonical content identity, used for idempotency instead of the
+    # generated artifact reference. A retry may leave an orphan equal-input
+    # artifact, but it must return the Task opened by the first writer.
+    Column("input_fingerprint", String(DIGEST_LENGTH), nullable=False),
     Column("submission_dedup_key", String(IDENTIFIER_LENGTH), nullable=False),
     # What this Task means, resolved at submission and never re-resolved.
     # Deterministic semantics only: the settings layer builds it, and it
@@ -598,7 +600,22 @@ task_runs = Table(
     Column("submitted_policy_revision", String(128), nullable=False),
     Column("submitted_policy_fingerprint", String(DIGEST_LENGTH), nullable=False),
     Column("submitted_authorization_envelope", JSONB, nullable=False),
+    Column("submitted_principal_scopes", JSONB, nullable=False),
     Column("status", String(32), nullable=False),
+    # A claim is deliberately separate from the Task's product status. The
+    # epoch is monotonic across claims; an old Worker can therefore never
+    # complete a Task after a reclaimed Worker has moved it forward.
+    Column("lease_owner", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("lease_epoch", BigInteger, nullable=False, server_default=text("0")),
+    Column("lease_until", DateTime(timezone=True), nullable=True),
+    Column("heartbeat_at", DateTime(timezone=True), nullable=True),
+    Column("attempt_count", Integer, nullable=False, server_default=text("0")),
+    Column(
+        "available_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
     # Why a Task stopped where it did. Required exactly for the states a human
     # has to act on or account for, so "failed" can never be recorded without
     # saying what failed, and a Task parked for a migration always carries the
@@ -617,12 +634,14 @@ task_runs = Table(
         server_default=func.now(),
     ),
     # Resubmitting the same key returns the same Task rather than starting a
-    # second one. Scoped to the owner: two owners may reuse a key without
-    # either of them learning that the other did.
+    # second one. It is scoped to the tenant *and* owner: principal ids are
+    # only meaningful inside a tenant, so omitting tenant_id would let one
+    # tenant's retry deny another tenant's submission.
     UniqueConstraint(
+        "tenant_id",
         "owner_id",
         "submission_dedup_key",
-        name="uq_task_runs_owner_id_submission_dedup_key",
+        name="uq_task_runs_tenant_id_owner_id_submission_dedup_key",
     ),
     CheckConstraint(
         "status IN "
@@ -637,6 +656,17 @@ task_runs = Table(
         "AND status_detail IS NULL)",
         name="task_runs_status_detail",
     ),
+    CheckConstraint(
+        "(status = 'running' AND lease_owner IS NOT NULL "
+        "AND lease_until IS NOT NULL AND heartbeat_at IS NOT NULL) OR "
+        "(status <> 'running' AND lease_owner IS NULL "
+        "AND lease_until IS NULL AND heartbeat_at IS NULL)",
+        name="task_runs_lease_lifecycle",
+    ),
+    CheckConstraint(
+        "lease_epoch >= 0 AND attempt_count >= 0",
+        name="task_runs_lease_counters",
+    ),
     # The pick order for a Worker looking for work: oldest queued first. The
     # partial index means that scan never walks the finished ones, which are
     # eventually most of the table.
@@ -645,6 +675,19 @@ task_runs = Table(
         "created_at",
         "task_id",
         postgresql_where=text("status = 'queued'"),
+    ),
+    Index(
+        "ix_task_runs_claim_eligible",
+        "available_at",
+        "created_at",
+        "task_id",
+        postgresql_where=text("status = 'queued'"),
+    ),
+    Index(
+        "ix_task_runs_expired_lease",
+        "lease_until",
+        "task_id",
+        postgresql_where=text("status = 'running'"),
     ),
     Index("ix_task_runs_tenant_id_task_id", "tenant_id", "task_id"),
 )

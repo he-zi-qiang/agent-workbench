@@ -356,6 +356,7 @@
         "rag.embedding.precision",
         "rag.embedding.dense_enabled",
         "rag.embedding.sparse_enabled",
+        "rag.embedding.sparse_vocabulary_size",
         "rag.embedding.dense_vector_name",
         "rag.embedding.sparse_vector_name"
       ]
@@ -398,6 +399,13 @@
         "qdrant.request_timeout_seconds",
         "qdrant.prefer_grpc",
         "qdrant.api_key_required"
+      ]
+    },
+    {
+      "owner": "bootstrap.qdrant_startup",
+      "lifecycle": "startup",
+      "fields": [
+        "qdrant.allow_local_bootstrap"
       ]
     },
     {

@@ -106,6 +106,10 @@ OIDC 不是一个决定，是一组决定：JWKS 缓存与轮换、时钟偏移�
 - `PrincipalContext` 只能在身份解析边界构造。`tests/architecture/
   test_identity_boundary.py` 强制这一点：允许构造它的模块是一份显式清单，
   新增一处就要改这份清单，也就必须有人解释为什么。
+- Task Worker 是第二个进程边界，但不是第二个身份来源：API 已经把提交者的
+  tenant、principal 与 scopes 写入不可变的 Task 提交快照；Worker 只能通过
+  `apps.task_worker.identity.restore_submitted_principal()` 恢复这些字段，不得从
+  objective、Artifact、环境变量或模型输出重新推断身份。
 - 请求体永远不得指定 owner 或 tenant。
 - 未来的 Identity Adapter 必须输出 `PrincipalContext`；令牌、请求头、cookie
   等传输层材料不得越过 `apps/` 边界。

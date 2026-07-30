@@ -1,5 +1,38 @@
 # 实施状态
 
+## 2026-07-29 当前工作分支快照（未合并）
+
+本节记录分支 **`pr-050-postgres-checkpointer` 自 `5d943af` 之后的 A–F 汇合增量**，
+不是 `main` 的发布快照。下面的历史章节保留各增量当时的基线和证据；当前结果以
+本节记录的统一门禁为准。
+
+| 修复组 | 当前状态 | 已落地事实 | 仍需验证或补全 |
+|---|---|---|---|
+| **A：Task 工作流终态语义** | **完成** | 显式成功/失败 disposition；revision 预算计数；critic 拒绝且预算耗尽时失败关闭 | 统一回归已通过 |
+| **B：Task 提交幂等与租户隔离** | **完成** | tenant-scoped 幂等键、输入 fingerprint、冲突复用已存身份；Task API 按 owner/tenant 隐藏越权资源 | 统一回归已通过 |
+| **C：单 Worker 纵向切片** | **完成** | TaskInput Artifact、Task API/CLI、独立 `agent-task-worker` 入口、poll loop 与显式 demo composition | 生产身份仍未实现，入口只适合受控环境 |
+| **D：真实 Task Agent handlers** | **主体完成并通过回归** | `plan`/`critic` 结构化处理、内部检索/evidence Artifact、TaskRunContext、取消与授权上下文装配；外部检索经过 Tool/Policy 边界 | 真实外部搜索 Provider 尚未实现；当前 Adapter 在 Provider 缺失时失败关闭 |
+| **E：可靠 Task Core** | **主体完成并通过状态测试** | PostgreSQL `SKIP LOCKED` claim、lease/heartbeat/epoch、stale reclaim、retry/dead-letter、专用 advisory guard、fenced checkpointer、生命周期事件及确定性 failpoint | HITL 与外部副作用 ledger 属于后续工作，不在本组已完成范围 |
+| **F：产品化补全** | **部分完成** | Qdrant 启动不变量、常驻摄取入口及 claim/heartbeat/fencing、Task 生命周期时间线、本机 Compose 演示拓扑 | HITL Approval、真实外部搜索、OTel/Langfuse、CrewAI 对比、UI、生产身份与生产部署仍未完成 |
+
+当前汇合工作树已于 2026-07-29 通过统一门禁：
+
+```text
+ruff format --check .                 passed（287 files）
+ruff check .                          passed
+pyright                               0 errors / 0 warnings
+agent-config-check                    development / test 均为 status=ok
+docker compose config --quiet         passed
+alembic 唯一 head                     0016_task_principal_scopes
+pytest（无外部服务）                  1054 passed / 409 skipped
+pytest（真实 PostgreSQL + Qdrant）    1452 passed / 11 skipped
+```
+
+两行 pytest 是同一套测试的两种环境，不能相加。真实状态测试使用 PostgreSQL
+`127.0.0.1:5433` 和 Qdrant `127.0.0.1:6333`；11 项跳过中 10 项需要真实 BGE
+embedding/sparse 权重，1 项是只适用于非锁定 recovery read 的契约变体。下文
+2026-07-28 的门禁数字仍只属于其注明的历史提交。
+
 ## 文档基线
 
 状态：**已纳入 Git 版本管理**。
@@ -14,7 +47,8 @@
 
 ## 当前基线与编号对应
 
-主分支基线：**`main@341cbf5`**（2026-07-28）。PR-047～PR-049 已全部合入。
+主分支基线：**`main@f5800d2`**（2026-07-28）。PR-047～PR-049 与后续 WP06
+状态订正文档已全部合入。
 
 **PR-035～PR-049 的全部增量都已经合入 `main`。** 下面各节里写的"尚未合入 `main`"
 是当时开发分支上的状态，已按实际合并结果订正；每节保留的测试证据仍是**该增量当时**

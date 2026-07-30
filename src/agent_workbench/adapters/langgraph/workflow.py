@@ -42,8 +42,16 @@ from langgraph.graph import (  # pyright: ignore[reportMissingTypeStubs]
 )
 
 from agent_workbench.domain.identifiers import Identifier
-from agent_workbench.domain.tasks import TaskNodeId, TaskState
+from agent_workbench.domain.runs import BudgetUsage
+from agent_workbench.domain.tasks import CANONICAL_V1_NODE_IDS, TaskNodeId, TaskState
+from agent_workbench.ports.fault_injector import FaultInjector
 from agent_workbench.ports.task_workflow import (
+    CHECKPOINT_FENCE_EPOCH_KEY,
+    CHECKPOINT_FENCE_GUARD_KEY_KEY,
+    CHECKPOINT_FENCE_GUARD_PID_KEY,
+    CHECKPOINT_FENCE_TASK_ID_KEY,
+    CHECKPOINT_FENCE_WORKER_ID_KEY,
+    CheckpointFence,
     CheckpointPosition,
     GraphVersion,
     TaskWorkflowResult,
@@ -57,7 +65,9 @@ from agent_workbench.workflows.research_graph import (
     RESEARCH_BRANCHES,
     STATIC_EDGES,
     TERMINAL_NODE,
+    begin_revision,
     merge_refs,
+    quality_gate_failure_reason,
     route_quality_gate,
     route_research,
 )
@@ -93,24 +103,33 @@ def _merge(
     return merge_refs(existing or (), incoming or ())
 
 
+def _merge_budget(existing: Any | None, incoming: Any | None) -> dict[str, Any]:
+    """Add node-local usage deltas without losing a parallel research branch."""
+
+    before = BudgetUsage.model_validate(existing or {})
+    delta = BudgetUsage.model_validate(incoming or {})
+    return before.merged(delta).model_dump()
+
+
 class GraphState(TypedDict, total=False):
     """``TaskState`` as LangGraph channels.
 
-    Only the two reference channels declare a reducer, because they are the
-    only ones two concurrent nodes write.  Everything else has a single writer
-    and takes last-write-wins, which is LangGraph's default.
+    The reference and usage channels declare reducers because both research
+    branches write them concurrently. Everything else has one writer and
+    takes LangGraph's default last-write-wins behaviour.
     """
 
     schema_version: int
     task_id: str
     objective: str
+    knowledge_base_id: str | None
     plan: tuple[Any, ...]
     evidence_refs: Annotated[tuple[Identifier, ...], _merge]
     agent_outcome_refs: Annotated[tuple[Identifier, ...], _merge]
     draft_ref: str | None
     review_result: Any
     approval_id: str | None
-    budget_usage: Any
+    budget_usage: Annotated[Any, _merge_budget]
     revision_count: int
     max_revisions: int
 
@@ -124,6 +143,59 @@ def _passthrough(_: TaskState) -> dict[str, Any]:
 
 async def _default_handler(state: TaskState) -> Mapping[str, Any]:
     return _passthrough(state)
+
+
+def _revision_aware_handler(handler: NodeHandler) -> NodeHandler:
+    """Apply the declared revise transition immediately before synthesis.
+
+    The quality-gate router must still see the critic's review in order to
+    choose ``synthesize``.  Therefore the counter cannot be changed at the
+    gate itself.  The next synthesis invocation is the first point at which
+    the old verdict is no longer current, so it advances the revision and
+    clears the review before the handler sees the state.
+    """
+
+    async def run(state: TaskState) -> Mapping[str, Any]:
+        if state.review_result is None or state.review_result.decision != "revise":
+            return await handler(state)
+
+        revised = begin_revision(state)
+        result = dict(await handler(revised))
+        # A handler may write a new draft, but it must not accidentally retain
+        # the verdict about the previous one or undo the bounded transition.
+        result.update(
+            revision_count=revised.revision_count,
+            review_result=None,
+        )
+        return result
+
+    return run
+
+
+def _fault_injected_handlers(
+    handlers: Mapping[TaskNodeId, NodeHandler] | None,
+    fault_injector: FaultInjector | None,
+) -> Mapping[TaskNodeId, NodeHandler] | None:
+    """Pause after a node returns and before LangGraph can checkpoint it."""
+
+    if fault_injector is None:
+        return handlers
+    supplied = dict(handlers or {})
+    wrapped: dict[TaskNodeId, NodeHandler] = {}
+    for node in CANONICAL_V1_NODE_IDS:
+        handler = supplied.get(node, _default_handler)
+
+        async def run(
+            state: TaskState,
+            *,
+            wrapped_handler: NodeHandler = handler,
+        ) -> Mapping[str, Any]:
+            result = await wrapped_handler(state)
+            await fault_injector.hit("after_node_before_checkpoint")
+            return result
+
+        wrapped[node] = run
+    return wrapped
 
 
 def _to_state(payload: Mapping[str, Any]) -> TaskState:
@@ -155,7 +227,10 @@ def build_v1_graph(
     graph = cast("Any", StateGraph(GraphState))
 
     for node in STATIC_EDGES:
-        graph.add_node(node, _wrap(supplied.get(node, _default_handler)))
+        handler = supplied.get(node, _default_handler)
+        if node == "synthesize":
+            handler = _revision_aware_handler(handler)
+        graph.add_node(node, _wrap(handler))
     for node in ("route", "quality_gate"):
         graph.add_node(node, _wrap(supplied.get(node, _default_handler)))
 
@@ -199,8 +274,9 @@ class LangGraphTaskWorkflow:
         handlers: Mapping[TaskNodeId, NodeHandler] | None = None,
         checkpointer: Any | None = None,
         builders: Mapping[GraphVersion, GraphBuilder] = GRAPH_BUILDERS,
+        fault_injector: FaultInjector | None = None,
     ) -> None:
-        self._handlers = handlers
+        self._handlers = _fault_injected_handlers(handlers, fault_injector)
         # The default is in-memory, which means "this process only". A caller
         # that wants a thread to outlive its process passes a durable saver.
         self._checkpointer = checkpointer or cast("Any", InMemorySaver())
@@ -229,6 +305,7 @@ class LangGraphTaskWorkflow:
         *,
         thread_id: Identifier,
         graph_version: GraphVersion,
+        checkpoint_fence: CheckpointFence | None = None,
     ) -> TaskWorkflowResult:
         # Asked of the checkpoint, so a thread another process started is still
         # an existing thread. This is a check and not a lock: two first runs
@@ -238,7 +315,7 @@ class LangGraphTaskWorkflow:
         compiled = self._graph(graph_version, thread_id)
         payload = await compiled.ainvoke(
             state.model_dump(),
-            _config(thread_id, graph_version),
+            _config(thread_id, graph_version, checkpoint_fence),
         )
         return await self._result(compiled, thread_id, graph_version, payload)
 
@@ -247,6 +324,7 @@ class LangGraphTaskWorkflow:
         *,
         thread_id: Identifier,
         graph_version: GraphVersion,
+        checkpoint_fence: CheckpointFence | None = None,
     ) -> TaskWorkflowResult:
         checkpoint = await self._checkpoint(thread_id)
         if checkpoint is None:
@@ -269,7 +347,10 @@ class LangGraphTaskWorkflow:
         compiled = self._graph(graph_version, thread_id)
         # No initial state: it already belongs to the checkpoint, and passing
         # it again is how the original input gets appended twice.
-        payload = await compiled.ainvoke(None, _config(thread_id, graph_version))
+        payload = await compiled.ainvoke(
+            None,
+            _config(thread_id, graph_version, checkpoint_fence),
+        )
         return await self._result(compiled, thread_id, graph_version, payload)
 
     async def inspect(self, thread_id: Identifier) -> CheckpointPosition | None:
@@ -290,9 +371,18 @@ class LangGraphTaskWorkflow:
         # No approval id yet: `approval` is a side-effect-free placeholder
         # until WP10, so no graph in this build can interrupt. This is where
         # the interrupt will be read from when one can.
+        pending = tuple(snapshot.next)
         return CheckpointPosition(
             graph_version=written_by,
-            pending_nodes=tuple(snapshot.next),
+            pending_nodes=pending,
+            # A checkpoint *before* quality_gate may already contain the
+            # critic's exhausting revise verdict. It is still executable,
+            # though: the pending gate has not made the terminal decision.
+            failure_reason=(
+                None
+                if pending
+                else quality_gate_failure_reason(_to_state(snapshot.values))
+            ),
         )
 
     async def _checkpoint(self, thread_id: Identifier) -> Any | None:
@@ -315,26 +405,52 @@ class LangGraphTaskWorkflow:
     ) -> TaskWorkflowResult:
         snapshot = await compiled.aget_state(_config(thread_id, graph_version))
         pending = tuple(snapshot.next)
+        state = _to_state(payload)
+        failure_reason = quality_gate_failure_reason(state)
         return TaskWorkflowResult(
             thread_id=thread_id,
             graph_version=graph_version,
-            disposition="interrupted" if pending else "completed",
-            state=_to_state(payload),
+            disposition=(
+                "interrupted"
+                if pending
+                else "failed"
+                if failure_reason is not None
+                else "completed"
+            ),
+            state=state,
             next_nodes=pending,
+            failure_reason=None if pending else failure_reason,
         )
 
 
-def _config(thread_id: str, graph_version: GraphVersion) -> dict[str, Any]:
+def _config(
+    thread_id: str,
+    graph_version: GraphVersion,
+    checkpoint_fence: CheckpointFence | None = None,
+) -> dict[str, Any]:
     # `graph_version` is not read by LangGraph. It is here because
     # `get_checkpoint_metadata` copies configurable scalars into every
     # checkpoint's metadata, which is what makes the version durable and
     # queryable without a table of this adapter's own.
-    return {
-        "configurable": {
-            "thread_id": thread_id,
-            GRAPH_VERSION_KEY: graph_version,
-        }
+    configurable: dict[str, Any] = {
+        "thread_id": thread_id,
+        GRAPH_VERSION_KEY: graph_version,
     }
+    if checkpoint_fence is not None:
+        # Scalar fields are intentional: LangGraph copies configurable scalars
+        # to checkpoint metadata, allowing the saver to rebuild returned
+        # config and its parent config without leaking this coordination fact
+        # into the persisted TaskState.
+        configurable.update(
+            **{
+                CHECKPOINT_FENCE_TASK_ID_KEY: checkpoint_fence.task_id,
+                CHECKPOINT_FENCE_WORKER_ID_KEY: checkpoint_fence.worker_id,
+                CHECKPOINT_FENCE_EPOCH_KEY: checkpoint_fence.epoch,
+                CHECKPOINT_FENCE_GUARD_PID_KEY: checkpoint_fence.guard_backend_pid,
+                CHECKPOINT_FENCE_GUARD_KEY_KEY: checkpoint_fence.guard_lock_key,
+            },
+        )
+    return {"configurable": configurable}
 
 
 __all__ = [

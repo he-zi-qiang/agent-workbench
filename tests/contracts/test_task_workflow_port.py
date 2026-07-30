@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.ports.task_workflow import (
+    CheckpointFence,
     CheckpointPosition,
     TaskWorkflowPort,
     TaskWorkflowResult,
@@ -39,6 +40,7 @@ class _FakeTaskWorkflow:
         *,
         thread_id: str,
         graph_version: str,
+        checkpoint_fence: CheckpointFence | None = None,
     ) -> TaskWorkflowResult:
         if thread_id in self._checkpoints:
             raise WorkflowThreadAlreadyExistsError(thread_id)
@@ -57,6 +59,7 @@ class _FakeTaskWorkflow:
         *,
         thread_id: str,
         graph_version: str,
+        checkpoint_fence: CheckpointFence | None = None,
     ) -> TaskWorkflowResult:
         checkpoint = self._checkpoints.get(thread_id)
         if checkpoint is None:
@@ -104,12 +107,20 @@ def test_identity_is_explicit_and_resume_cannot_accept_initial_state() -> None:
         "state",
         "thread_id",
         "graph_version",
+        "checkpoint_fence",
     }
-    assert set(resume_parameters) == {"self", "thread_id", "graph_version"}
+    assert set(resume_parameters) == {
+        "self",
+        "thread_id",
+        "graph_version",
+        "checkpoint_fence",
+    }
     assert run_parameters["thread_id"].kind is inspect.Parameter.KEYWORD_ONLY
     assert run_parameters["graph_version"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert run_parameters["checkpoint_fence"].kind is inspect.Parameter.KEYWORD_ONLY
     assert resume_parameters["thread_id"].kind is inspect.Parameter.KEYWORD_ONLY
     assert resume_parameters["graph_version"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert resume_parameters["checkpoint_fence"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_run_and_resume_echo_the_explicit_workflow_identity() -> None:
@@ -205,6 +216,46 @@ def test_structured_results_enforce_disposition_invariants() -> None:
             disposition="interrupted",
             state=_state(),
         )
+
+    with pytest.raises(ValidationError, match="must identify a failure reason"):
+        TaskWorkflowResult(
+            thread_id="thread_1",
+            graph_version="v1",
+            disposition="failed",
+            state=_state(),
+        )
+
+    with pytest.raises(
+        ValidationError, match="terminal workflow cannot have next_nodes"
+    ):
+        TaskWorkflowResult(
+            thread_id="thread_1",
+            graph_version="v1",
+            disposition="failed",
+            state=_state(),
+            failure_reason="the graph failed",
+            next_nodes=("critic",),
+        )
+
+
+def test_checkpoint_fence_requires_a_complete_guard_identity() -> None:
+    with pytest.raises(ValidationError, match="pid and lock key"):
+        CheckpointFence(
+            task_id="task_1",
+            worker_id="worker_1",
+            epoch=1,
+            guard_backend_pid=123,
+        )
+
+    fence = CheckpointFence(
+        task_id="task_1",
+        worker_id="worker_1",
+        epoch=1,
+        guard_backend_pid=123,
+        guard_lock_key=-(2**63),
+    )
+    assert fence.guard_backend_pid == 123
+    assert fence.guard_lock_key == -(2**63)
 
 
 def test_the_port_surface_contains_no_framework_types() -> None:

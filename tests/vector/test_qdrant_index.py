@@ -17,10 +17,11 @@ import asyncio
 import os
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import Any
 
 import pytest
-from qdrant_client import AsyncQdrantClient
+from qdrant_client import AsyncQdrantClient, models
 
 from agent_workbench.adapters.vector import QdrantVectorIndex, point_id
 from agent_workbench.domain.errors import IncompatibleSchemaError
@@ -120,6 +121,59 @@ def test_a_collection_of_the_wrong_dimension_is_refused() -> None:
 
     with pytest.raises(IncompatibleSchemaError, match="dimensional"):
         _run(scenario)
+
+
+def test_read_alias_queries_the_active_generation_not_the_write_collection() -> None:
+    """A blue/green alias must select retrieval's collection at query time."""
+
+    async def scenario() -> tuple[int, str]:
+        client = AsyncQdrantClient(url=_url())
+        write_collection = f"test_write_{uuid.uuid4().hex}"
+        active_collection = f"test_active_{uuid.uuid4().hex}"
+        alias = f"test_alias_{uuid.uuid4().hex}"
+        try:
+            write = QdrantVectorIndex(client, collection=write_collection)
+            active = QdrantVectorIndex(client, collection=active_collection)
+            await write.ensure_collection(vector_size=SIZE)
+            await active.ensure_collection(vector_size=SIZE)
+            # The write collection deliberately remains empty. The only point
+            # is in the active generation, so a successful query proves the
+            # index passed the alias rather than the write collection.
+            await active.upsert((_chunk("chk_active", NORTH),))
+            await client.update_collection_aliases(
+                [
+                    models.CreateAliasOperation(
+                        create_alias=models.CreateAlias(
+                            collection_name=active_collection,
+                            alias_name=alias,
+                        )
+                    )
+                ]
+            )
+            reader = QdrantVectorIndex(client, collection=alias)
+            hits = await reader.search(
+                vector=NORTH,
+                tenant_id=TENANT,
+                knowledge_base_id=KB,
+                authorized_principals=(OWNER,),
+                limit=10,
+            )
+            return len(hits), hits[0].chunk_id
+        finally:
+            with suppress(Exception):
+                await client.update_collection_aliases(
+                    [
+                        models.DeleteAliasOperation(
+                            delete_alias=models.DeleteAlias(alias_name=alias)
+                        )
+                    ]
+                )
+            for collection in (write_collection, active_collection):
+                with suppress(Exception):
+                    await client.delete_collection(collection)
+            await client.close()
+
+    assert asyncio.run(scenario()) == (1, "chk_active")
 
 
 # --- idempotent writes -------------------------------------------------------

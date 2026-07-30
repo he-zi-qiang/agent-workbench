@@ -18,6 +18,10 @@ from agent_workbench.adapters.persistence.conversation_store import (
 from agent_workbench.adapters.persistence.documents import PostgresDocumentStore
 from agent_workbench.adapters.persistence.engine import create_query_engine
 from agent_workbench.adapters.persistence.event_log import PostgresEventLog
+from agent_workbench.adapters.persistence.execution_guard import (
+    PostgresExecutionGuard,
+    PostgresExecutionGuardFactory,
+)
 from agent_workbench.adapters.persistence.models import metadata
 from agent_workbench.adapters.persistence.outbox import PostgresOutbox
 from agent_workbench.adapters.persistence.task_registry import PostgresTaskRegistry
@@ -28,6 +32,8 @@ __all__ = [
     "PostgresConversationStore",
     "PostgresDocumentStore",
     "PostgresEventLog",
+    "PostgresExecutionGuard",
+    "PostgresExecutionGuardFactory",
     "PostgresOutbox",
     "PostgresTaskRegistry",
     "create_query_engine",

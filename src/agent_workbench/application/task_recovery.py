@@ -46,6 +46,9 @@ ReconciliationAction = Literal[
     # The graph finished but the Registry never learned it. Read the final
     # output and settle the Task idempotently.
     "settle_succeeded",
+    # The graph reached a deliberate failed terminal state. Preserve its
+    # bounded reason rather than converting empty pending work into success.
+    "settle_failed",
     # Interrupted at an approval nobody has decided. Release the lease and the
     # lock rather than hold execution resources open across a human decision.
     "wait_for_approval",
@@ -65,6 +68,7 @@ RESULTING_STATUS: Final[Mapping[ReconciliationAction, TaskStatus | None]] = {
     "wait_for_migration": "waiting_migration",
     "start": None,
     "settle_succeeded": "succeeded",
+    "settle_failed": "failed",
     "wait_for_approval": "waiting_approval",
     "resume_with_approval": None,
     "resume": None,
@@ -163,6 +167,12 @@ def reconcile(
     # These two are mutually exclusive rather than merely ordered: the position
     # refuses to be constructed both finished and awaiting an approval, so
     # neither branch can hide the other.
+    if position.failed:
+        return Reconciliation(
+            action="settle_failed",
+            detail=position.failure_reason or "the graph failed",
+        )
+
     if position.finished:
         return Reconciliation(
             action="settle_succeeded",

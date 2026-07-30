@@ -58,6 +58,14 @@ from agent_workbench.domain.tools import (
 
 EventType = Literal[
     "TaskSubmitted",
+    "TaskClaimed",
+    "TaskRetryScheduled",
+    "TaskDeadLettered",
+    "TaskAwaitingApproval",
+    "TaskSucceeded",
+    "TaskFailed",
+    "TaskCancelled",
+    "TaskParkedForMigration",
     "RunStarted",
     "ContextBuilt",
     "ModelStarted",
@@ -104,6 +112,64 @@ class TaskSubmitted(DomainModel):
     kind: Literal["TaskSubmitted"] = "TaskSubmitted"
     graph_version: ShortText
     input_ref: Identifier
+
+
+class TaskLifecycleEvent(DomainModel):
+    """A safe, replayable Task Registry transition fact.
+
+    Free-form ``status_detail`` can originate in a model or provider exception.
+    It remains on the product row and never enters this operator-visible stream.
+    """
+
+    task_id: Identifier
+    epoch: int = Field(ge=0)
+    attempt: int = Field(ge=0)
+
+
+class TaskClaimed(TaskLifecycleEvent):
+    kind: Literal["TaskClaimed"] = "TaskClaimed"
+    status: Literal["running"] = "running"
+
+
+class TaskRetryScheduled(TaskLifecycleEvent):
+    kind: Literal["TaskRetryScheduled"] = "TaskRetryScheduled"
+    status: Literal["queued"] = "queued"
+    reason_code: Literal["lease_expired", "retry_requested"]
+    delay_seconds: int = Field(ge=0)
+
+
+class TaskDeadLettered(TaskLifecycleEvent):
+    kind: Literal["TaskDeadLettered"] = "TaskDeadLettered"
+    status: Literal["dead_letter"] = "dead_letter"
+    reason_code: Literal["lease_expired"] = "lease_expired"
+
+
+class TaskAwaitingApproval(TaskLifecycleEvent):
+    kind: Literal["TaskAwaitingApproval"] = "TaskAwaitingApproval"
+    status: Literal["waiting_approval"] = "waiting_approval"
+
+
+class TaskSucceeded(TaskLifecycleEvent):
+    kind: Literal["TaskSucceeded"] = "TaskSucceeded"
+    status: Literal["succeeded"] = "succeeded"
+
+
+class TaskFailed(TaskLifecycleEvent):
+    kind: Literal["TaskFailed"] = "TaskFailed"
+    status: Literal["failed"] = "failed"
+    reason_code: Literal["execution_failed"] = "execution_failed"
+
+
+class TaskCancelled(TaskLifecycleEvent):
+    kind: Literal["TaskCancelled"] = "TaskCancelled"
+    status: Literal["cancelled"] = "cancelled"
+    reason_code: Literal["cancel_requested"] = "cancel_requested"
+
+
+class TaskParkedForMigration(TaskLifecycleEvent):
+    kind: Literal["TaskParkedForMigration"] = "TaskParkedForMigration"
+    status: Literal["waiting_migration"] = "waiting_migration"
+    reason_code: Literal["migration_required"] = "migration_required"
 
 
 class RunStarted(DomainModel):
@@ -297,6 +363,14 @@ class RunCancelled(DomainModel):
 
 EventPayload = Annotated[
     TaskSubmitted
+    | TaskClaimed
+    | TaskRetryScheduled
+    | TaskDeadLettered
+    | TaskAwaitingApproval
+    | TaskSucceeded
+    | TaskFailed
+    | TaskCancelled
+    | TaskParkedForMigration
     | RunStarted
     | ContextBuilt
     | ModelStarted
@@ -326,6 +400,14 @@ EventPayload = Annotated[
 # into the durable log, and cannot demote a terminal state out of it.
 EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "TaskSubmitted": "durable",
+    "TaskClaimed": "durable",
+    "TaskRetryScheduled": "durable",
+    "TaskDeadLettered": "durable",
+    "TaskAwaitingApproval": "durable",
+    "TaskSucceeded": "durable",
+    "TaskFailed": "durable",
+    "TaskCancelled": "durable",
+    "TaskParkedForMigration": "durable",
     "RunStarted": "durable",
     "ContextBuilt": "durable",
     "ModelStarted": "durable",
@@ -458,6 +540,16 @@ __all__ = [
     "RunFailed",
     "RunPaused",
     "RunStarted",
+    "TaskAwaitingApproval",
+    "TaskCancelled",
+    "TaskClaimed",
+    "TaskDeadLettered",
+    "TaskFailed",
+    "TaskLifecycleEvent",
+    "TaskParkedForMigration",
+    "TaskRetryScheduled",
+    "TaskSubmitted",
+    "TaskSucceeded",
     "ToolCompleted",
     "ToolFailed",
     "ToolProgress",

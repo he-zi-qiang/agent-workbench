@@ -20,6 +20,7 @@ from agent_workbench.domain.events import (
     EventType,
     ModelDelta,
     RunCompleted,
+    TaskFailed,
     ToolProgress,
     ToolProposed,
 )
@@ -122,6 +123,21 @@ def test_chat_turn_expiry_cannot_be_repurposed(
 ) -> None:
     with pytest.raises(ValidationError):
         ChatTurnExpired.model_validate({"turn_id": "turn_1", field: value})
+
+
+def test_task_lifecycle_failure_is_a_detail_free_machine_fact() -> None:
+    payload = TaskFailed(task_id="task_1", epoch=3, attempt=2)
+    serialized = json.loads(payload.model_dump_json())
+
+    assert serialized == {
+        "kind": "TaskFailed",
+        "task_id": "task_1",
+        "epoch": 3,
+        "attempt": 2,
+        "status": "failed",
+        "reason_code": "execution_failed",
+    }
+    assert {"detail", "exception", "prompt", "secret"}.isdisjoint(serialized)
 
 
 def test_durability_follows_the_payload_not_the_caller() -> None:

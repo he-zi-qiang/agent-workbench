@@ -24,6 +24,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp
 
 from agent_workbench.application.chat import ChatExecutionError
+from agent_workbench.application.tasks import TimelineUnavailableError
 from agent_workbench.application.uploads import UploadVerificationError
 from agent_workbench.apps.api.dependencies import ApiDependencies, build_dependencies
 from agent_workbench.apps.api.identity import UnauthenticatedError
@@ -33,8 +34,10 @@ from agent_workbench.apps.api.routes import (
     chat,
     events,
     health,
+    tasks,
     uploads,
 )
+from agent_workbench.apps.api.routes.tasks import InvalidTaskCursorError
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.bootstrap import load_settings
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig, project_api
@@ -44,6 +47,10 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnConflictError,
 )
 from agent_workbench.ports.documents import KnowledgeBaseMismatchError
+from agent_workbench.ports.task_registry import (
+    TaskSubmissionConflictError,
+    TaskTransitionRejectedError,
+)
 
 API_TITLE = "Agent Workbench"
 
@@ -58,6 +65,9 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     ChatTurnBusyError: 409,
     ChatTurnConflictError: 409,
     OutputTooLargeError: 413,
+    TaskTransitionRejectedError: 409,
+    InvalidTaskCursorError: 400,
+    TimelineUnavailableError: 409,
 }
 
 
@@ -96,23 +106,39 @@ def _render_chat_execution_error(request: Request, exc: Exception) -> Response:
     )
 
 
+def _render_task_submission_conflict(request: Request, exc: Exception) -> Response:
+    """Report a duplicate-key conflict without reflecting owner metadata."""
+
+    if not isinstance(exc, TaskSubmissionConflictError):  # pragma: no cover
+        raise exc
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "task submission conflicts with the idempotency key"},
+    )
+
+
 def create_app(dependencies: ApiDependencies) -> ASGIApp:
     """Build the ASGI application around already-assembled dependencies."""
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        background_tasks = tuple(
-            asyncio.create_task(worker.run_forever(), name=name)
-            for worker, name in (
-                (dependencies.chat_reaper, "chat-turn-reaper"),
-                (
-                    dependencies.chat_pending_recovery,
-                    "chat-pending-release-recovery",
-                ),
-            )
-            if worker is not None
-        )
+        background_tasks: tuple[asyncio.Task[object], ...] = ()
         try:
+            # This is intentionally async lifespan work, rather than a sync
+            # dependency factory trying to drive an event loop. A failed check
+            # owns no serving routes and is followed by disposal below.
+            await dependencies.startup()
+            background_tasks = tuple(
+                asyncio.create_task(worker.run_forever(), name=name)
+                for worker, name in (
+                    (dependencies.chat_reaper, "chat-turn-reaper"),
+                    (
+                        dependencies.chat_pending_recovery,
+                        "chat-pending-release-recovery",
+                    ),
+                )
+                if worker is not None
+            )
             yield
         finally:
             for task in background_tasks:
@@ -127,6 +153,7 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
     app.include_router(health.router)
     app.include_router(uploads.router)
     app.include_router(artifacts.router)
+    app.include_router(tasks.router)
     if dependencies.serves_chat:
         # Mounted only when the process can answer. A route that 500s per
         # request is a worse answer than a 404 a client detects once.
@@ -137,6 +164,10 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
     for failure, status_code in ERROR_STATUS.items():
         app.add_exception_handler(failure, _render_error(status_code))
     app.add_exception_handler(ChatExecutionError, _render_chat_execution_error)
+    app.add_exception_handler(
+        TaskSubmissionConflictError,
+        _render_task_submission_conflict,
+    )
 
     # The data plane is exempt: capping a document transfer at the control
     # limit is the same as not accepting documents.

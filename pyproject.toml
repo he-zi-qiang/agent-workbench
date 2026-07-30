@@ -47,6 +47,8 @@ embedding = [
 [project.scripts]
 agent-api = "agent_workbench.apps.api.main:main"
 agent-cli = "agent_workbench.apps.cli.main:main"
+agent-ingestion-worker = "agent_workbench.apps.ingestion_worker.main:main"
+agent-task-worker = "agent_workbench.apps.task_worker.main:main"
 agent-config-check = "agent_workbench.bootstrap.config_check:main"
 
 [dependency-groups]

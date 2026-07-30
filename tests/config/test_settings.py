@@ -197,7 +197,7 @@ def test_fault_injection_requires_test_environment_and_double_gate() -> None:
     payload["testing"].update(
         failpoints_enabled=True,
         allow_fault_injection=True,
-        allowed_failpoints=["after_fence_row_lock"],
+        allowed_failpoints=["inside_checkpoint_put"],
     )
 
     with pytest.raises(ValidationError, match="fault injection"):
@@ -250,6 +250,14 @@ def test_remote_development_also_requires_authenticated_https_qdrant() -> None:
     payload["app"]["deployment_scope"] = "remote"
 
     with pytest.raises(ValidationError, match="api_key_required=true"):
+        Settings(**payload)
+
+
+def test_remote_scope_forbids_qdrant_bootstrap_even_with_https_and_a_key() -> None:
+    payload = production_payload()
+    payload["qdrant"]["allow_local_bootstrap"] = True
+
+    with pytest.raises(ValidationError, match=r"forbids qdrant.allow_local_bootstrap"):
         Settings(**payload)
 
 
@@ -416,6 +424,7 @@ def test_test_overlay_uses_only_canonical_failpoints(
         env_file=tmp_path / "missing.env",
     )
     assert settings.testing.failpoints_enabled is True
+    assert settings.qdrant.allow_local_bootstrap is True
     assert (
         set(settings.testing.allowed_failpoints) == settings_module.CANONICAL_FAILPOINTS
     )
@@ -671,11 +680,11 @@ def test_unknown_failpoint_name_is_rejected() -> None:
     payload = valid_payload()
     payload["app"]["environment"] = "test"
     payload["model"]["provider"] = "fake"
-    # Regression guard: this legacy pre-canonical spelling must stay invalid.
+    # Regression guard: this pre-E4 spelling must stay invalid.
     payload["testing"].update(
         failpoints_enabled=True,
         allow_fault_injection=True,
-        allowed_failpoints=["inside_checkpoint_put"],
+        allowed_failpoints=["after_fence_row_lock"],
     )
 
     with pytest.raises(ValidationError, match="unknown failpoint"):

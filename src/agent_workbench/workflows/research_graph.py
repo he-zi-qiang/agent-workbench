@@ -12,9 +12,10 @@ this module rather than in the adapter:
   research branch finished first, and re-merging an already merged
   contribution changes nothing.  A checkpoint written after a crash mid-fan-in
   therefore converges instead of accumulating duplicates.
-* a quality gate that has run out of revisions returns **no next node**.
-  Routing an exhausted budget to approval would approve a draft the critic
-  rejected, which turns the gate into a formality precisely when it matters.
+* a quality gate that has run out of revisions returns **no next node** and a
+  stable failure reason.  Routing an exhausted budget to approval would
+  approve a draft the critic rejected, which turns the gate into a formality
+  precisely when it matters.
 """
 
 from __future__ import annotations
@@ -110,6 +111,24 @@ def route_quality_gate(state: TaskState) -> TaskNodeId | None:
     if review.decision == "pass":
         return "approval"
     return "synthesize" if state.can_revise else None
+
+
+def quality_gate_failure_reason(state: TaskState) -> str | None:
+    """Return the terminal failure recorded by an exhausted quality gate.
+
+    ``None`` is deliberately different from the graph reaching ``END``: the
+    latter is only a framework control-flow detail.  This value is carried
+    across the workflow port and checkpoint inspection boundary so a Worker
+    can mark the product Task failed rather than inferring success from an
+    empty pending-node list.
+    """
+
+    review = state.review_result
+    if review is None or review.decision != "revise" or state.can_revise:
+        return None
+    return (
+        "the critic requested another revision after the revision budget was exhausted"
+    )
 
 
 def next_nodes(node: TaskNodeId, state: TaskState) -> tuple[TaskNodeId, ...]:
@@ -237,6 +256,7 @@ __all__ = [
     "fan_in",
     "merge_refs",
     "next_nodes",
+    "quality_gate_failure_reason",
     "route_quality_gate",
     "route_research",
 ]

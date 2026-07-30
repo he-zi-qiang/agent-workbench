@@ -18,6 +18,7 @@ import hashlib
 import os
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from agent_workbench.adapters.ingestion import (
 )
 from agent_workbench.adapters.persistence import (
     PostgresDocumentStore,
+    PostgresExecutionGuardFactory,
     PostgresOutbox,
     create_query_engine,
 )
@@ -266,3 +268,30 @@ def test_a_drained_queue_is_empty(tmp_path: Path) -> None:
         return await PostgresOutbox(harness.engine).pending_count()
 
     assert _run(scenario, tmp_path) == 0
+
+
+def test_a_held_document_guard_defers_without_acknowledging_the_event(
+    tmp_path: Path,
+) -> None:
+    """Two live ingestion processes never write one document concurrently."""
+
+    async def scenario(harness: _Harness) -> tuple[int, int, int]:
+        await harness.upload(FIRST)
+        guards = PostgresExecutionGuardFactory(_dsn(), healthcheck_seconds=0.05)
+        held = await guards.acquire(
+            task_id="document:doc_1",
+            worker_id="worker_other",
+            epoch=1,
+        )
+        guarded_worker = replace(harness.worker, guards=guards)
+        try:
+            deferred = await guarded_worker.drain()
+            pending_while_held = await PostgresOutbox(harness.engine).pending_count()
+        finally:
+            await held.release()
+
+        applied = await guarded_worker.drain()
+        await guards.dispose()
+        return deferred.deferred, pending_while_held, applied.indexed
+
+    assert _run(scenario, tmp_path) == (1, 1, 1)
