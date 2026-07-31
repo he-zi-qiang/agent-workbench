@@ -182,22 +182,31 @@ ruff/pyright 全过。
 
 ## 3. Chat / RAG 欠项（文档，按价值排序）
 
-- [ ] **3.1 Agentic Retrieval 真正接通**：`knowledge_search` 存在，但 API 的
-      Tool Registry 为空、Chat 的 `tool_names=()`。
-      **完成条件**：注册并授权 Tool、放宽步骤预算、最终 evidence gate。
+- [x] **3.1 Agentic Retrieval 真正接通**（2026-07-31，提交 `a4a9afa`）
+      三个完成条件都落地了，但**不是**靠把 `tool_names=()` 填上——那样等于把固定两步
+      存在的理由花掉（模块注释原话：advertising a retrieval tool here would quietly
+      turn this into the agentic path）。做法是**并存的第二条路径**：
+      - **seam**：`TurnExecution`。turn 的生命周期（幂等 claim、lease、deadline、断连
+        兜底、release fence）两条路径完全共用，只有"交给模型的请求 / 授权过的证据 /
+        引用"三样不同。部署在配置里选：`chat.retrieval_shape = "fixed" | "agentic"`，
+        **默认仍是 fixed**。
+      - **注册并授权 Tool**：agentic envelope 点名 `knowledge_search`，风险上限保持
+        deny-shaped 默认（检索是 read，本来就够）。**用权限写而不是用提示词写**，所以
+        被检索到的段落说服模型想要别的工具也够不着。
+      - **放宽步骤预算**：`max_agentic_steps` / `max_agentic_searches`，且在 settings
+        里做跨字段校验（`RunBudget` 要求 tool_calls ≥ steps，不校验的话进程能起来、
+        只在有人切换 shape 时才炸）。
+      - **最终 evidence gate**：难点是"答案基于什么"。固定路径知道（一次检索一组
+        revision）；agentic 的检索发生在模型循环里，而**引用是模型的说法不是记录**。
+        所以工具把每次授权到的东西记进 `RetrievalJournal`（按 run 分键），执行结束
+        取回。**按模型"看到的"而不是"引用的"设栅栏**——没点名的转述也是用过。
+        journal 在 `finally` 里取，失败的 run 也不留残留。
+      **破坏验证 10 处，第一轮只抓住 6 处**——漏的四处正是这条提交比看起来大的原因：
+      我的测试替工具做了 journal，所以工具**完全不记**或**记错 run** 都能全绿；
+      装配漏掉 journal 也没人发现；settings 那对预算没测。四条都补了，装配那条直接
+      伸进 binding 查对象同一性而不是信 shape 的名字。补后 10/10。
+      **仍未做**：两条路径的对照评测（capability vs determinism 的实测数字）。
 
-      **2026-07-31 勘定（未动代码）**：这一条不能靠"把 `tool_names=()` 填上"来做。
-      `ChatService` 的固定两步是**刻意**的，模块文档和 `_run_request` 注释都写明了：
-      "Advertising a retrieval tool here would quietly turn this into the agentic
-      path, and the two are meant to be separable so one of them can be evaluated"，
-      空 envelope 也是**deny-shaped by default**、不是忘了填。评测依赖的正是这个确定性
-      （同一问题每次检索方式相同，答案变化才能归因到模型或语料）。
-      所以正确形态是**另起一条 agentic 路径**与固定路径并存，两条产出同一个
-      `ContextPacket`；改固定路径等于把可评测性换掉。
-      按此，本条实际要做三件事：opt-in 的 agentic ChatService（自己的 envelope 授权
-      `knowledge_search`、自己的步骤预算）、最终 evidence gate（按模型**真正引用**的
-      chunk 重新校验读权限，而不只是校验检索包）、以及两条路径的对照评测。
-      第二件与 3.3 相邻但不相同：3.3 问"模型是否真的用了"，这里问"它用的那些现在还能读吗"。
 - [ ] **3.2 Hybrid Chat 装配 sparse encoder**：组件齐全，API 只装了 dense。
 - [ ] **3.3 可验证 Citation**：现在返回检索包的 citations，未验证模型是否真的用了。
 - [ ] **3.4 历史 token window / compaction**：只有状态和 compact profile，无 ContextEngine。

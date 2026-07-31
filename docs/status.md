@@ -1,5 +1,26 @@
 # 实施状态
 
+## 2026-07-31 Agentic 检索并存路径（未合并）
+
+完成 [待办清单](./followup-checklist-2026-07-29.md) 的 **3.1**。要点是它**不是**
+把固定两步改成 agentic，而是并存：`TurnExecution` seam 之下 turn 生命周期共用，
+`chat.retrieval_shape` 选形态，**默认仍是 `fixed`**。
+
+| 落地 | 事实 |
+|---|---|
+| 授权 | agentic envelope 点名 `knowledge_search`，风险上限保持 read 默认 |
+| 预算 | `max_agentic_steps` / `max_agentic_searches`，settings 跨字段校验 |
+| evidence gate | `RetrievalJournal` 按 run 记录**模型看到的**全部证据，`finally` 取回 |
+| 不变 | 固定路径仍然 registry 空 + envelope 空，有测试守着 |
+
+```text
+ruff / pyright / config-check        全过
+alembic 唯一 head                    0019_tool_executions
+pytest（真实服务）                   1622 passed / 11 skipped
+```
+
+**仍未做**：两条路径的对照评测。
+
 ## 2026-07-31 外部副作用 ledger（未合并）
 
 分支 `pr-051-tool-execution-ledger`，基线 `main@13136e7`（上一节的 HITL 增量已合入）。
