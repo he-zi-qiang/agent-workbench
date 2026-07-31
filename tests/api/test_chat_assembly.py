@@ -153,3 +153,87 @@ def test_an_unreranked_process_says_so(
     # Chat is unavailable here for the embedder's reason, and the reranker was
     # never reached -- so the note is absent rather than misattributed.
     assert dependencies.reranker_unavailable is None
+
+
+def _stub_optional_runtimes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the three optional model runtimes chat assembly loads."""
+
+    from agent_workbench.apps.api import dependencies as assembly
+    from agent_workbench.bootstrap.reranker_factory import RerankerUnavailable
+    from agent_workbench.bootstrap.sparse_factory import SparseEncodingUnavailable
+
+    class _Embedder:
+        dimension = 1024
+        identity = "stub@v1"
+
+        async def embed_documents(self, texts: tuple[str, ...]) -> tuple[Any, ...]:
+            return tuple((0.0,) for _ in texts)
+
+        async def embed_query(self, text: str) -> Any:
+            return (0.0,)
+
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(
+        assembly,
+        "build_reranker",
+        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+    )
+    monkeypatch.setattr(
+        assembly,
+        "build_sparse_encoder",
+        lambda _c: SparseEncodingUnavailable(reason="no lexical runtime here"),
+    )
+
+
+def test_the_default_deployment_assembles_the_fixed_shape_with_no_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control group for the agentic assembly below.
+
+    Both halves matter: the shape, and the fact that this one advertises
+    nothing. A registry that quietly held the search tool would leave the
+    envelope as the only thing keeping the two shapes apart.
+    """
+
+    from agent_workbench.application.chat_execution import FixedTwoStepExecution
+
+    _stub_optional_runtimes(monkeypatch)
+    dependencies = build_dependencies(project_api(_settings(tmp_path)))
+
+    assert dependencies.chat is not None
+    execution = dependencies.chat.execution
+    assert isinstance(execution, FixedTwoStepExecution)
+    assert execution.budget.max_steps == 1
+
+
+def test_the_agentic_deployment_grants_the_tool_a_budget_and_a_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All three or none.
+
+    A tool with a one-step budget is a tool the model can propose and never get
+    an answer from; a tool whose searches nothing journals is an answer that
+    cannot be fenced. A sabotage round removed the journal from this assembly
+    and every other test stayed green, which is why this one reaches into the
+    binding rather than trusting the shape's name.
+    """
+
+    from agent_workbench.application.chat_execution import AgenticExecution
+
+    _stub_optional_runtimes(monkeypatch)
+    dependencies = build_dependencies(
+        project_api(_settings(tmp_path, chat={"retrieval_shape": "agentic"}))
+    )
+
+    assert dependencies.chat is not None
+    execution = dependencies.chat.execution
+    assert isinstance(execution, AgenticExecution)
+    assert execution.tool_names == ("knowledge_search",)
+    # A loop needs room to loop.
+    assert execution.budget.max_steps > 1
+    assert execution.budget.max_tool_calls >= execution.budget.max_steps
+    # And the tool the model will actually reach writes into the journal this
+    # execution reads. Different objects here would fence nothing.
+    binding = execution.executor._gateway._registry.get("knowledge_search")
+    assert binding is not None
+    assert binding.handler.__self__.journal is execution.journal

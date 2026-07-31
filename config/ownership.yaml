@@ -90,6 +90,15 @@
       ]
     },
     {
+      "owner": "apps.api.dependencies.chat_shape",
+      "lifecycle": "startup",
+      "fields": [
+        "chat.retrieval_shape",
+        "chat.max_agentic_steps",
+        "chat.max_agentic_searches"
+      ]
+    },
+    {
       "owner": "adapters.persistence.connection_factory",
       "lifecycle": "startup",
       "fields": [

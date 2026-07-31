@@ -23,6 +23,7 @@ from agent_workbench.application.chat import (
     ChatRequest,
     ChatService,
 )
+from agent_workbench.application.chat_execution import FixedTwoStepExecution
 from agent_workbench.application.retrieval import AuthorizedContext
 from agent_workbench.domain.context import (
     Citation,
@@ -171,14 +172,17 @@ def _chat(
 ) -> ChatService:
     registry = StaticToolRegistry([])
     return ChatService(
-        retrieval=retrieval,
-        executor=ClaudeLikeAgentRuntime(
-            model=FakeModel(turns),
-            gateway=ToolGateway(
-                registry=registry,
-                policy=EnvelopePolicyEngine(registry=registry),
+        execution=FixedTwoStepExecution(
+            retrieval=retrieval,
+            executor=ClaudeLikeAgentRuntime(
+                model=FakeModel(turns),
+                gateway=ToolGateway(
+                    registry=registry,
+                    policy=EnvelopePolicyEngine(registry=registry),
+                ),
+                policy_identity="test-policy",
             ),
-            policy_identity="test-policy",
+            budget=RunBudget(max_steps=1, max_tool_calls=1),
         ),
         conversations=conversations,
         releaser=(
@@ -189,7 +193,6 @@ def _chat(
                 revisions=retrieval,
             )
         ),
-        budget=RunBudget(max_steps=1, max_tool_calls=1),
         request_timeout_seconds=30,
         orphan_grace_seconds=5,
     )
@@ -274,7 +277,7 @@ def test_a_completed_request_retry_returns_the_original_turn_without_rerunning()
             tenant_id="tenant_a",
             principal_id="user_1",
         )
-        model = service.executor._model
+        model = service.execution.executor._model
         assert isinstance(model, FakeModel)
         events = await log.read(SCOPE.stream_id)
         return (
@@ -614,7 +617,7 @@ def test_a_later_turn_replays_only_committed_conversation_history() -> None:
             ),
         )
 
-        model = service.executor._model
+        model = service.execution.executor._model
         assert isinstance(model, FakeModel)
         second = model.requests[1]
         return (
@@ -670,7 +673,7 @@ def test_a_withheld_candidate_is_never_replayed_into_the_next_turn() -> None:
             ),
         )
 
-        model = service.executor._model
+        model = service.execution.executor._model
         assert isinstance(model, FakeModel)
         return "\n".join(
             message.model_dump_json() for message in model.requests[0].messages

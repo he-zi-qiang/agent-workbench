@@ -36,6 +36,12 @@ reaper_batch_size = 100
 disconnect_poll_seconds = 1
 orphan_action = "terminal_fail"
 automatic_retry = false
+# "fixed" retrieves once and hands the model the evidence; "agentic" gives it a
+# search tool and lets it decide when to look. The default is the one that can
+# be evaluated -- see bootstrap.settings.ChatSettings for why.
+retrieval_shape = "fixed"
+max_agentic_steps = 4
+max_agentic_searches = 6
 
 [database]
 # dsn, guard_dsn and listen_dsn are secret-like deployment values and are

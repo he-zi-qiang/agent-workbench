@@ -41,9 +41,19 @@ from agent_workbench.adapters.persistence import (
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
+from agent_workbench.adapters.tools.knowledge_search import (
+    TOOL_NAME as KNOWLEDGE_SEARCH,
+)
+from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.approvals import ApprovalService
 from agent_workbench.application.chat import REFUSAL, ChatService
+from agent_workbench.application.chat_execution import (
+    AgenticExecution,
+    FixedTwoStepExecution,
+    RetrievalJournal,
+    TurnExecution,
+)
 from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
     ChatTurnReaper,
@@ -353,28 +363,64 @@ def _assemble_chat(
     # switch affect new Chat requests without changing the write target.
     vector_index = QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias)
 
+    retrieval = RetrievalService(
+        embedder=embedder,
+        index=vector_index,
+        documents=documents,
+        sparse_encoder=(
+            None if isinstance(sparse, SparseEncodingUnavailable) else sparse
+        ),
+        reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
+        rerank_timeout_seconds=config.reranker.timeout_seconds,
+    )
+    policy_identity = f"api-{config.deployment_scope}"
+
+    if config.chat.retrieval_shape == "agentic":
+        # The model decides when to search, so it needs the tool, a budget with
+        # room for a loop, and somewhere for its searches to be journalled --
+        # all three or none. A tool with a one-step budget is a tool the model
+        # can propose and never get an answer from.
+        journal = RetrievalJournal()
+        registry = StaticToolRegistry(
+            [KnowledgeSearchTool(retrieval=retrieval, journal=journal).binding()]
+        )
+        execution: TurnExecution = AgenticExecution(
+            executor=ClaudeLikeAgentRuntime(
+                model=model,
+                gateway=ToolGateway(
+                    registry=registry,
+                    policy=EnvelopePolicyEngine(registry=registry),
+                ),
+                policy_identity=policy_identity,
+            ),
+            journal=journal,
+            budget=RunBudget(
+                max_steps=config.chat.max_agentic_steps,
+                max_tool_calls=config.chat.max_agentic_searches,
+            ),
+            tool_names=(KNOWLEDGE_SEARCH,),
+        )
+    else:
+        # Empty registry *and* empty envelope. Either alone would leave the
+        # other as the only thing standing between this deployment and the
+        # agentic shape it deliberately is not.
+        execution = FixedTwoStepExecution(
+            retrieval=retrieval,
+            executor=ClaudeLikeAgentRuntime(
+                model=model,
+                gateway=ToolGateway(
+                    registry=StaticToolRegistry([]),
+                    policy=EnvelopePolicyEngine(registry=StaticToolRegistry([])),
+                ),
+                policy_identity=policy_identity,
+            ),
+            budget=RunBudget(max_steps=1, max_tool_calls=1),
+        )
+
     chat = ChatService(
-        retrieval=RetrievalService(
-            embedder=embedder,
-            index=vector_index,
-            documents=documents,
-            sparse_encoder=(
-                None if isinstance(sparse, SparseEncodingUnavailable) else sparse
-            ),
-            reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
-            rerank_timeout_seconds=config.reranker.timeout_seconds,
-        ),
-        executor=ClaudeLikeAgentRuntime(
-            model=model,
-            gateway=ToolGateway(
-                registry=StaticToolRegistry([]),
-                policy=EnvelopePolicyEngine(registry=StaticToolRegistry([])),
-            ),
-            policy_identity=f"api-{config.deployment_scope}",
-        ),
+        execution=execution,
         conversations=conversations,
         releaser=releaser,
-        budget=RunBudget(max_steps=1, max_tool_calls=1),
         request_timeout_seconds=config.request_timeout_seconds,
         orphan_grace_seconds=config.chat_recovery.orphan_grace_seconds,
     )

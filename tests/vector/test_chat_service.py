@@ -37,6 +37,7 @@ from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.chat import REFUSAL, ChatRequest, ChatService
+from agent_workbench.application.chat_execution import FixedTwoStepExecution
 from agent_workbench.application.chunking import Chunker
 from agent_workbench.application.ingestion import IngestionRequest, IngestionService
 from agent_workbench.application.retrieval import RetrievalService
@@ -117,22 +118,26 @@ class _Harness:
     ) -> ChatService:
         registry = StaticToolRegistry([])
         return ChatService(
-            retrieval=RetrievalService(
-                embedder=self.embedder, index=self.index, documents=self.documents
-            ),
-            executor=ClaudeLikeAgentRuntime(
-                model=FakeModel(
-                    [
-                        ScriptedTurn(
-                            text=answer,
-                            usage=TokenUsage(input_tokens=10, output_tokens=5),
-                        )
-                    ]
+            execution=FixedTwoStepExecution(
+                retrieval=RetrievalService(
+                    embedder=self.embedder, index=self.index, documents=self.documents
                 ),
-                gateway=ToolGateway(
-                    registry=registry, policy=EnvelopePolicyEngine(registry=registry)
+                executor=ClaudeLikeAgentRuntime(
+                    model=FakeModel(
+                        [
+                            ScriptedTurn(
+                                text=answer,
+                                usage=TokenUsage(input_tokens=10, output_tokens=5),
+                            )
+                        ]
+                    ),
+                    gateway=ToolGateway(
+                        registry=registry,
+                        policy=EnvelopePolicyEngine(registry=registry),
+                    ),
+                    policy_identity="test-policy",
                 ),
-                policy_identity="test-policy",
+                budget=RunBudget(max_steps=1, max_tool_calls=1),
             ),
             conversations=self.conversations,
             releaser=(
@@ -140,7 +145,6 @@ class _Harness:
                 if releaser is None
                 else releaser
             ),
-            budget=RunBudget(max_steps=1, max_tool_calls=1),
             request_timeout_seconds=30,
             orphan_grace_seconds=5,
         )
@@ -311,7 +315,7 @@ def test_the_evidence_reaches_the_model_labelled_by_chunk_id() -> None:
         service = harness.chat()
         request = _ask(harness, READER)
         turn = await service.ask(request, harness.sink(request))
-        model = service.executor._model
+        model = service.execution.executor._model
         assert isinstance(model, FakeModel)
         prompt = model.requests[0].messages[0].content[0].text
         return prompt, tuple(c.chunk_id for c in turn.citations)
@@ -616,11 +620,13 @@ class _RevokingChat(ChatService):
     def __init__(self, harness: _Harness) -> None:
         base = harness.chat()
         super().__init__(
-            retrieval=base.retrieval,
-            executor=_RevokingExecutor(base.executor, harness),
+            execution=FixedTwoStepExecution(
+                retrieval=base.execution.retrieval,
+                executor=_RevokingExecutor(base.execution.executor, harness),
+                budget=base.execution.budget,
+            ),
             conversations=base.conversations,
             releaser=base.releaser,
-            budget=base.budget,
             request_timeout_seconds=base.request_timeout_seconds,
             orphan_grace_seconds=base.orphan_grace_seconds,
         )
