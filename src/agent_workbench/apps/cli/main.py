@@ -25,6 +25,14 @@ from agent_workbench.apps.cli.demo import (
     execute,
 )
 from agent_workbench.apps.cli.rendering import JsonRenderer, Renderer, TextRenderer
+from agent_workbench.apps.cli.task import (
+    DEFAULT_API_URL,
+    DEFAULT_TIMEOUT_SECONDS,
+    HttpClientFactory,
+    TaskCliError,
+    render_error,
+    run_task,
+)
 from agent_workbench.domain.runs import AgentOutcome
 
 EXIT_COMPLETED = 0
@@ -102,6 +110,47 @@ def build_parser() -> argparse.ArgumentParser:
         default="text",
         help="text streams the answer and replays the timeline; json emits JSONL.",
     )
+    task = subcommands.add_parser(
+        "task",
+        help="Control durable Tasks through the HTTP API.",
+        description=(
+            "Use the API's development identity headers. In production, use "
+            "the deployment's authenticated client instead."
+        ),
+    )
+    task.add_argument("--api-url", default=DEFAULT_API_URL)
+    task.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    task.add_argument("--tenant-id", required=True, help="Value for x-tenant-id.")
+    task.add_argument("--principal-id", required=True, help="Value for x-principal-id.")
+    task_commands = task.add_subparsers(dest="task_command", required=True)
+
+    submit = task_commands.add_parser("submit", help="Submit one durable Task.")
+    submit.add_argument("--objective", required=True)
+    submit.add_argument("--max-revisions", type=int, default=2)
+    submit.add_argument("--knowledge-base-id")
+    submit.add_argument(
+        "--idempotency-key",
+        help=(
+            "Retry key sent as Idempotency-Key. If omitted, the CLI generates "
+            "one and prints it in the result."
+        ),
+    )
+    submit.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    get = task_commands.add_parser("get", help="Read one of your Tasks.")
+    get.add_argument("task_id")
+    get.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    timeline = task_commands.add_parser("timeline", help="Read a Task event page.")
+    timeline.add_argument("task_id")
+    timeline.add_argument("--cursor", help="Resume after this opaque cursor.")
+    timeline.add_argument("--limit", type=int, default=200)
+    timeline.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    cancel = task_commands.add_parser("cancel", help="Cancel one of your Tasks.")
+    cancel.add_argument("task_id")
+    cancel.add_argument("--reason", required=True)
+    cancel.add_argument("--json", action="store_true", help="Emit one JSON object.")
     return parser
 
 
@@ -125,11 +174,30 @@ def run_demo(args: argparse.Namespace, stream: TextIO) -> AgentOutcome:
     )
 
 
-def main(argv: Sequence[str] | None = None, stream: TextIO | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    stream: TextIO | None = None,
+    *,
+    http_client_factory: HttpClientFactory | None = None,
+) -> int:
     """Parse arguments, run the requested command and return its exit code."""
 
     args = build_parser().parse_args(argv)
-    outcome = run_demo(args, stream if stream is not None else sys.stdout)
+    output = stream if stream is not None else sys.stdout
+    if args.command == "task":
+        try:
+            return run_task(
+                args,
+                output,
+                **(
+                    {"http_client_factory": http_client_factory}
+                    if http_client_factory is not None
+                    else {}
+                ),
+            )
+        except TaskCliError as error:
+            return render_error(error, output, as_json=args.json)
+    outcome = run_demo(args, output)
     return EXIT_CODES[outcome.status]
 
 

@@ -57,6 +57,17 @@ from agent_workbench.domain.tools import (
 )
 
 EventType = Literal[
+    "TaskSubmitted",
+    "TaskApprovalRequested",
+    "TaskApprovalDecided",
+    "TaskClaimed",
+    "TaskRetryScheduled",
+    "TaskDeadLettered",
+    "TaskAwaitingApproval",
+    "TaskSucceeded",
+    "TaskFailed",
+    "TaskCancelled",
+    "TaskParkedForMigration",
     "RunStarted",
     "ContextBuilt",
     "ModelStarted",
@@ -85,6 +96,117 @@ Durability = Literal["durable", "transient"]
 
 ModelFinishReason = Literal["stop", "tool_use", "max_tokens", "cancelled", "error"]
 PauseReason = Literal["approval", "migration"]
+
+
+class TaskSubmitted(DomainModel):
+    """A Task was opened, and this is the request it was opened for.
+
+    Written in the same transaction as the ``task_runs`` row, so a Task can
+    never exist without the event that says why -- and the event can never
+    describe a Task that was rolled back.
+
+    It carries what the submission decided and nothing the submission merely
+    referenced: the objective lives behind ``input_ref``, because an event is
+    replayed into timelines and SSE frames where a caller-supplied body has no
+    business being repeated.
+    """
+
+    kind: Literal["TaskSubmitted"] = "TaskSubmitted"
+    graph_version: ShortText
+    input_ref: Identifier
+
+
+class TaskLifecycleEvent(DomainModel):
+    """A safe, replayable Task Registry transition fact.
+
+    Free-form ``status_detail`` can originate in a model or provider exception.
+    It remains on the product row and never enters this operator-visible stream.
+    """
+
+    task_id: Identifier
+    epoch: int = Field(ge=0)
+    attempt: int = Field(ge=0)
+
+
+class TaskClaimed(TaskLifecycleEvent):
+    kind: Literal["TaskClaimed"] = "TaskClaimed"
+    status: Literal["running"] = "running"
+
+
+class TaskRetryScheduled(TaskLifecycleEvent):
+    kind: Literal["TaskRetryScheduled"] = "TaskRetryScheduled"
+    status: Literal["queued"] = "queued"
+    reason_code: Literal["lease_expired", "retry_requested"]
+    delay_seconds: int = Field(ge=0)
+
+
+class TaskDeadLettered(TaskLifecycleEvent):
+    kind: Literal["TaskDeadLettered"] = "TaskDeadLettered"
+    status: Literal["dead_letter"] = "dead_letter"
+    reason_code: Literal["lease_expired"] = "lease_expired"
+
+
+class TaskAwaitingApproval(TaskLifecycleEvent):
+    kind: Literal["TaskAwaitingApproval"] = "TaskAwaitingApproval"
+    status: Literal["waiting_approval"] = "waiting_approval"
+
+
+class TaskSucceeded(TaskLifecycleEvent):
+    kind: Literal["TaskSucceeded"] = "TaskSucceeded"
+    status: Literal["succeeded"] = "succeeded"
+
+
+class TaskFailed(TaskLifecycleEvent):
+    kind: Literal["TaskFailed"] = "TaskFailed"
+    status: Literal["failed"] = "failed"
+    reason_code: Literal["execution_failed"] = "execution_failed"
+
+
+class TaskCancelled(TaskLifecycleEvent):
+    kind: Literal["TaskCancelled"] = "TaskCancelled"
+    status: Literal["cancelled"] = "cancelled"
+    reason_code: Literal["cancel_requested"] = "cancel_requested"
+
+
+class TaskParkedForMigration(TaskLifecycleEvent):
+    kind: Literal["TaskParkedForMigration"] = "TaskParkedForMigration"
+    status: Literal["waiting_migration"] = "waiting_migration"
+    reason_code: Literal["migration_required"] = "migration_required"
+
+
+class TaskApprovalRequested(DomainModel):
+    """A graph node paused and opened an approval for a human to answer.
+
+    This is how the approval becomes findable. The id lives in the checkpoint's
+    interrupt and in the ledger, and neither is something a client may read, so
+    without this event the only way to decide an approval would be to guess its
+    id. It carries no draft, no evidence and no reason text -- what is being
+    approved is the Task, which the reader already has.
+
+    Written by the request that opened the approval, and keyed by it, so a node
+    re-entered after a crash asks the same question and leaves one event.
+    """
+
+    kind: Literal["TaskApprovalRequested"] = "TaskApprovalRequested"
+    task_id: Identifier
+    approval_id: Identifier
+    graph_node_operation_id: Identifier
+
+
+class TaskApprovalDecided(DomainModel):
+    """A human decided an approval, and the Task was requeued for it.
+
+    Both outcomes are recorded and both requeue: a rejection is a path through
+    the graph, not an absence of one, so the node that resumes decides what it
+    means. ``decision_version`` is what makes replaying the same decision a
+    no-op rather than a second event.
+    """
+
+    kind: Literal["TaskApprovalDecided"] = "TaskApprovalDecided"
+    task_id: Identifier
+    approval_id: Identifier
+    decision: Literal["approved", "rejected"]
+    decision_version: int = Field(ge=1)
 
 
 class RunStarted(DomainModel):
@@ -277,7 +399,18 @@ class RunCancelled(DomainModel):
 
 
 EventPayload = Annotated[
-    RunStarted
+    TaskSubmitted
+    | TaskApprovalRequested
+    | TaskApprovalDecided
+    | TaskClaimed
+    | TaskRetryScheduled
+    | TaskDeadLettered
+    | TaskAwaitingApproval
+    | TaskSucceeded
+    | TaskFailed
+    | TaskCancelled
+    | TaskParkedForMigration
+    | RunStarted
     | ContextBuilt
     | ModelStarted
     | ModelDelta
@@ -305,6 +438,17 @@ EventPayload = Annotated[
 # Durability belongs to the event type. A caller cannot promote a token delta
 # into the durable log, and cannot demote a terminal state out of it.
 EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
+    "TaskSubmitted": "durable",
+    "TaskApprovalRequested": "durable",
+    "TaskApprovalDecided": "durable",
+    "TaskClaimed": "durable",
+    "TaskRetryScheduled": "durable",
+    "TaskDeadLettered": "durable",
+    "TaskAwaitingApproval": "durable",
+    "TaskSucceeded": "durable",
+    "TaskFailed": "durable",
+    "TaskCancelled": "durable",
+    "TaskParkedForMigration": "durable",
     "RunStarted": "durable",
     "ContextBuilt": "durable",
     "ModelStarted": "durable",
@@ -437,6 +581,18 @@ __all__ = [
     "RunFailed",
     "RunPaused",
     "RunStarted",
+    "TaskApprovalDecided",
+    "TaskApprovalRequested",
+    "TaskAwaitingApproval",
+    "TaskCancelled",
+    "TaskClaimed",
+    "TaskDeadLettered",
+    "TaskFailed",
+    "TaskLifecycleEvent",
+    "TaskParkedForMigration",
+    "TaskRetryScheduled",
+    "TaskSubmitted",
+    "TaskSucceeded",
     "ToolCompleted",
     "ToolFailed",
     "ToolProgress",

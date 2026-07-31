@@ -22,14 +22,16 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
+    Text,
     UniqueConstraint,
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 # Explicit naming keeps generated constraint names stable across databases, so
 # a migration can drop by name what an earlier one created by name.
@@ -437,4 +439,411 @@ events = Table(
         unique=True,
         postgresql_where=text("event_key IS NOT NULL"),
     ),
+)
+
+
+# Where a graph's execution position lives. ADR-014 chose to implement
+# LangGraph's BaseCheckpointSaver against this stack rather than install the
+# official saver, so these tables are this project's Alembic chain rather than
+# a second migration history.
+#
+# The decomposition is not a design choice: it is what the contract asks for.
+# `aput` receives `new_versions`, the channels this write actually changed, so
+# channel values belong in a table keyed by version rather than copied into
+# every checkpoint; `aput_writes` records a task's output before the step that
+# consumes it is checkpointed, so it needs a table of its own.
+#
+# Everything LangGraph serialises stays opaque here. `serde.dumps_typed` returns
+# a (type, bytes) pair and `loads_typed` takes the same pair back, so both halves
+# are stored and neither is interpreted. Widening the columns into something
+# readable would mean this project claiming to understand a format it does not
+# own, and getting it wrong precisely when a checkpoint has to be recovered.
+#
+# The names carry a `workflow_` prefix because the ecosystem's unprefixed
+# `checkpoints` is a table the official saver creates with `IF NOT EXISTS` and
+# a different column layout. Nothing here should be silently adopted by it.
+
+workflow_checkpoints = Table(
+    "workflow_checkpoints",
+    metadata,
+    # This project's Identifier, so it is bounded like every other one.
+    Column("thread_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    # The remaining identifiers are minted by LangGraph, not by us. Bounding a
+    # value another library generates buys nothing and fails a legitimate run:
+    # `checkpoint_ns` grows with subgraph nesting and has no documented limit.
+    # It is the empty string for a flat graph, which is a value, not a default.
+    Column("checkpoint_ns", Text, primary_key=True),
+    Column("checkpoint_id", Text, primary_key=True),
+    # Null exactly at the root of a thread. The chain is what `parent_config`
+    # is read from, and what a fork walks back through.
+    Column("parent_checkpoint_id", Text, nullable=True),
+    Column("payload_type", Text, nullable=False),
+    Column("payload", LargeBinary, nullable=False),
+    # The one part that is not opaque. `alist(filter=...)` queries metadata by
+    # key, which bytes cannot answer; the contract documents this as a mapping
+    # of JSON scalars, and its own `get_checkpoint_metadata` strips NUL from
+    # strings -- the single thing that would make JSONB reject the row.
+    Column("metadata", JSONB, nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # No index beyond the primary key. Reading a thread's latest checkpoint is
+    # a descending scan of the key's third column under a fixed prefix, listing
+    # a thread's history is that same prefix, and deleting a thread is its
+    # first column. A metadata filter applies within one thread, whose history
+    # is bounded by the graph's steps.
+)
+
+workflow_checkpoint_blobs = Table(
+    "workflow_checkpoint_blobs",
+    metadata,
+    Column("thread_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("checkpoint_ns", Text, primary_key=True),
+    Column("channel", Text, primary_key=True),
+    # `ChannelVersions` allows str, int or float. Text is the only type that
+    # holds all three without deciding which one LangGraph is entitled to send.
+    Column("version", Text, primary_key=True),
+    # A channel that carried no value at this version is recorded, not omitted:
+    # the type says so and the payload is empty. Leaving the row out instead
+    # would make "never written" and "written as nothing" the same absence.
+    Column("payload_type", Text, nullable=False),
+    Column("payload", LargeBinary, nullable=False),
+    # A blob is reachable only through the `channel_versions` map inside a
+    # checkpoint's opaque payload, so no SQL join can date it from the
+    # checkpoints that reference it. Without its own timestamp the only
+    # possible retention is per-thread.
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+)
+
+workflow_checkpoint_writes = Table(
+    "workflow_checkpoint_writes",
+    metadata,
+    Column("thread_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("checkpoint_ns", Text, primary_key=True),
+    Column("checkpoint_id", Text, primary_key=True),
+    Column("task_id", Text, primary_key=True),
+    # Signed on purpose. Ordinary writes take their position in the batch;
+    # WRITES_IDX_MAP gives errors, interrupts and resumes negative positions so
+    # they cannot collide with a write that merely happened to be first.
+    Column("idx", Integer, primary_key=True),
+    Column("channel", Text, nullable=False),
+    Column("task_path", Text, nullable=False),
+    Column("payload_type", Text, nullable=False),
+    Column("payload", LargeBinary, nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # Deliberately no foreign key to workflow_checkpoints. Under LangGraph's
+    # default `durability="async"` the checkpoint put is not awaited before the
+    # next step's writes are issued, so a write routinely reaches the database
+    # before the row it names -- measured across every durability mode, a
+    # failing node and a resume. A foreign key here would not enforce an
+    # invariant; it would fail ordinary runs. See tests/persistence.
+)
+
+
+# What a human was asked, and what they answered.
+#
+# A decision is a fact with a version, not an event to be replayed: the same
+# decision arriving twice -- a retried request, a double-clicked button -- must
+# leave one row and requeue the Task once. That is what `decision_version`
+# carries, and why a decision is stored beside the Task rather than derived from
+# the event stream.
+
+approvals = Table(
+    "approvals",
+    metadata,
+    Column("approval_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column(
+        "task_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("task_runs.task_id"),
+        nullable=False,
+    ),
+    # Which interrupt inside the graph this answers. Unique per Task, so one
+    # node's pause cannot accumulate two competing approvals.
+    Column("graph_node_operation_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("status", String(16), nullable=False),
+    # Monotonic per approval. A decision that arrives with a version already
+    # recorded is the same decision again; a later one supersedes.
+    Column("decision_version", Integer, nullable=False, server_default="0"),
+    Column("decided_by", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("decided_at", DateTime(timezone=True), nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    CheckConstraint(
+        "status IN ('pending', 'approved', 'rejected')",
+        name="approvals_status",
+    ),
+    # A pending approval has nobody attached to it; a decided one names who and
+    # when. Left one-way, a stale decider would outlive the decision it made.
+    CheckConstraint(
+        "(status = 'pending' AND decision_version = 0 "
+        "AND decided_by IS NULL AND decided_at IS NULL) OR "
+        "(status <> 'pending' AND decision_version >= 1 "
+        "AND decided_by IS NOT NULL AND decided_at IS NOT NULL)",
+        name="approvals_decision",
+    ),
+    UniqueConstraint(
+        "task_id",
+        "graph_node_operation_id",
+        name="uq_approvals_task_id_graph_node_operation_id",
+    ),
+    Index("ix_approvals_task_id", "task_id"),
+)
+
+
+# Which concrete Qdrant index a Task may be bound to.
+#
+# The alias is not in here on purpose. An alias selects an index for *new*
+# requests; it is not recoverable semantics, because the thing it points at can
+# move while a Task is mid-run. What a Task stores is the generation it was
+# reserved against, and the foreign key from task_runs *is* that reservation:
+# while any Task still references a generation, the row cannot be deleted, so
+# neither can the collection it names.
+#
+# This is the minimum a reservation needs. The rest of a generation's life --
+# backfill progress, index_ready, retention windows -- belongs to the ingestion
+# state the plan assigns to WP04-05, and is deliberately absent rather than
+# guessed at here.
+
+qdrant_index_generations = Table(
+    "qdrant_index_generations",
+    metadata,
+    Column("generation_id", UUID(as_uuid=False), primary_key=True),
+    Column("collection_name", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("index_version", String(64), nullable=False),
+    # Only `active` may be newly reserved. `draining` keeps existing
+    # reservations valid while refusing new ones, which is what lets an alias
+    # switch drain instead of cutting; `retired` may be deleted once nothing
+    # references it.
+    Column("status", String(16), nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    CheckConstraint(
+        "status IN ('active', 'draining', 'retired')",
+        name="qdrant_index_generations_status",
+    ),
+    # One generation per (collection, version): the pair is what a Task's
+    # snapshot records, so two rows for it would make the snapshot ambiguous.
+    UniqueConstraint(
+        "collection_name",
+        "index_version",
+        name="uq_qdrant_index_generations_collection_name_index_version",
+    ),
+    # The resolver's query: the one generation currently taking reservations.
+    Index(
+        "uq_qdrant_index_generations_active",
+        "collection_name",
+        unique=True,
+        postgresql_where=text("status = 'active'"),
+    ),
+)
+
+
+# The Task Registry: product lifecycle, as opposed to the execution position
+# the checkpoint tables above hold. The two are separate facts in separate
+# places on purpose, and the Worker's reconciliation decides what they jointly
+# mean rather than pretending they commit together.
+#
+# The lease, epoch, attempt counter and ``available_at`` backoff below are E1
+# coordination data.  They fence Registry lifecycle writes but not yet
+# LangGraph checkpoint writes; the saver-level epoch predicate is E2.  The
+# run-semantics snapshot and submitted policy identity are WP07-03; resolved
+# Qdrant collection, index version and generation reservation are WP07-04.
+
+task_runs = Table(
+    "task_runs",
+    metadata,
+    Column("task_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
+    # The workflow thread this Task's execution position lives under. Unique
+    # in both directions: a Task addresses exactly one thread, and a thread
+    # backs exactly one Task, so no reconciliation can ever be handed two
+    # Registry rows for one checkpoint.
+    Column("thread_id", String(IDENTIFIER_LENGTH), nullable=False, unique=True),
+    # What this Task was submitted to run. The checkpoint separately records
+    # what actually wrote its position; the two disagreeing is the entire
+    # migration case, so neither may be derived from the other.
+    Column("graph_version", String(64), nullable=False),
+    # Where the submitted input is stored. Large inputs do not live in this
+    # row, and a Task with no checkpoint is started from this reference.
+    Column("input_ref", String(IDENTIFIER_LENGTH), nullable=False),
+    # The canonical content identity, used for idempotency instead of the
+    # generated artifact reference. A retry may leave an orphan equal-input
+    # artifact, but it must return the Task opened by the first writer.
+    Column("input_fingerprint", String(DIGEST_LENGTH), nullable=False),
+    Column("submission_dedup_key", String(IDENTIFIER_LENGTH), nullable=False),
+    # What this Task means, resolved at submission and never re-resolved.
+    # Deterministic semantics only: the settings layer builds it, and it
+    # excludes alias, policy, DSN, secret, endpoint and coordination -- a
+    # resume restores what the Task meant, not where the deployment was.
+    Column("run_semantics_snapshot", JSONB, nullable=False),
+    Column("run_semantics_revision", String(128), nullable=False),
+    # Policy identity is stored beside the snapshot rather than inside it,
+    # because policy is re-evaluated on every claim and every dispatch. These
+    # two record which rules the caller was granted under; the effective
+    # authorization is always that envelope intersected with current policy.
+    Column("submitted_policy_revision", String(128), nullable=False),
+    Column("submitted_policy_fingerprint", String(DIGEST_LENGTH), nullable=False),
+    Column("submitted_authorization_envelope", JSONB, nullable=False),
+    Column("submitted_principal_scopes", JSONB, nullable=False),
+    # The concrete index this Task was reserved against, resolved once at
+    # submission. All three or none: a Task that uses a knowledge base carries
+    # the full triple, and one that does not carries nothing. Half of it would
+    # be a snapshot nobody can act on.
+    Column("resolved_qdrant_collection", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("resolved_qdrant_index_version", String(64), nullable=True),
+    Column(
+        "resolved_qdrant_index_generation_id",
+        UUID(as_uuid=False),
+        # The reservation itself, and not a cache of Qdrant's routing state:
+        # while this row exists the generation cannot be deleted.
+        ForeignKey("qdrant_index_generations.generation_id"),
+        nullable=True,
+    ),
+    Column("status", String(32), nullable=False),
+    # A claim is deliberately separate from the Task's product status. The
+    # epoch is monotonic across claims; an old Worker can therefore never
+    # complete a Task after a reclaimed Worker has moved it forward.
+    Column("lease_owner", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("lease_epoch", BigInteger, nullable=False, server_default=text("0")),
+    Column("lease_until", DateTime(timezone=True), nullable=True),
+    Column("heartbeat_at", DateTime(timezone=True), nullable=True),
+    Column("attempt_count", Integer, nullable=False, server_default=text("0")),
+    Column(
+        "available_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # Why a Task stopped where it did. Required exactly for the states a human
+    # has to act on or account for, so "failed" can never be recorded without
+    # saying what failed, and a Task parked for a migration always carries the
+    # reconciliation's own sentence.
+    # Why this Task is back on the queue, when it is not simply new work. Set
+    # together with the approval that caused it, so a Worker resuming can tell
+    # a retry from a decision without inspecting the graph.
+    Column("resume_kind", String(16), nullable=True),
+    Column("resume_approval_id", String(IDENTIFIER_LENGTH), nullable=True),
+    Column("status_detail", Text, nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # Resubmitting the same key returns the same Task rather than starting a
+    # second one. It is scoped to the tenant *and* owner: principal ids are
+    # only meaningful inside a tenant, so omitting tenant_id would let one
+    # tenant's retry deny another tenant's submission.
+    UniqueConstraint(
+        "tenant_id",
+        "owner_id",
+        "submission_dedup_key",
+        name="uq_task_runs_tenant_id_owner_id_submission_dedup_key",
+    ),
+    CheckConstraint(
+        "status IN "
+        "('queued', 'running', 'waiting_approval', 'waiting_migration', "
+        "'succeeded', 'failed', 'cancelled', 'dead_letter')",
+        name="task_runs_status",
+    ),
+    CheckConstraint(
+        "(resolved_qdrant_collection IS NULL "
+        "AND resolved_qdrant_index_version IS NULL "
+        "AND resolved_qdrant_index_generation_id IS NULL) OR "
+        "(resolved_qdrant_collection IS NOT NULL "
+        "AND resolved_qdrant_index_version IS NOT NULL "
+        "AND resolved_qdrant_index_generation_id IS NOT NULL)",
+        name="task_runs_resolved_index",
+    ),
+    CheckConstraint(
+        "(resume_kind IS NULL AND resume_approval_id IS NULL) OR "
+        "(resume_kind = 'approval' AND resume_approval_id IS NOT NULL)",
+        name="task_runs_resume_reference",
+    ),
+    CheckConstraint(
+        "(resolved_qdrant_collection IS NULL "
+        "AND resolved_qdrant_index_version IS NULL "
+        "AND resolved_qdrant_index_generation_id IS NULL) OR "
+        "(resolved_qdrant_collection IS NOT NULL "
+        "AND resolved_qdrant_index_version IS NOT NULL "
+        "AND resolved_qdrant_index_generation_id IS NOT NULL)",
+        name="task_runs_resolved_index",
+    ),
+    CheckConstraint(
+        "(resume_kind IS NULL AND resume_approval_id IS NULL) OR "
+        "(resume_kind = 'approval' AND resume_approval_id IS NOT NULL)",
+        name="task_runs_resume_reference",
+    ),
+    CheckConstraint(
+        "(status IN ('waiting_migration', 'failed', 'cancelled', 'dead_letter') "
+        "AND status_detail IS NOT NULL) OR "
+        "(status IN ('queued', 'running', 'waiting_approval', 'succeeded') "
+        "AND status_detail IS NULL)",
+        name="task_runs_status_detail",
+    ),
+    CheckConstraint(
+        "(status = 'running' AND lease_owner IS NOT NULL "
+        "AND lease_until IS NOT NULL AND heartbeat_at IS NOT NULL) OR "
+        "(status <> 'running' AND lease_owner IS NULL "
+        "AND lease_until IS NULL AND heartbeat_at IS NULL)",
+        name="task_runs_lease_lifecycle",
+    ),
+    CheckConstraint(
+        "lease_epoch >= 0 AND attempt_count >= 0",
+        name="task_runs_lease_counters",
+    ),
+    # The pick order for a Worker looking for work: oldest queued first. The
+    # partial index means that scan never walks the finished ones, which are
+    # eventually most of the table.
+    Index(
+        "ix_task_runs_queued",
+        "created_at",
+        "task_id",
+        postgresql_where=text("status = 'queued'"),
+    ),
+    Index(
+        "ix_task_runs_claim_eligible",
+        "available_at",
+        "created_at",
+        "task_id",
+        postgresql_where=text("status = 'queued'"),
+    ),
+    Index(
+        "ix_task_runs_expired_lease",
+        "lease_until",
+        "task_id",
+        postgresql_where=text("status = 'running'"),
+    ),
+    Index("ix_task_runs_tenant_id_task_id", "tenant_id", "task_id"),
 )

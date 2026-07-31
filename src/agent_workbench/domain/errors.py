@@ -34,6 +34,7 @@ ErrorCode = Literal[
     "stale_execution",
     "incompatible_schema",
     "provider_error",
+    "provider_unavailable",
     "internal_error",
 ]
 

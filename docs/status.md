@@ -1,5 +1,72 @@
 # 实施状态
 
+## 2026-07-30 HITL Approval 收尾（未合并）
+
+分支 `pr-050-postgres-checkpointer`，在下节 2026-07-29 快照之上再加四个提交
+（`7014046`、`33ebbbb`、`a257e45`、`25895ca`），完成
+[待办清单](./followup-checklist-2026-07-29.md) 的 **2.1 全部内容**。
+
+| 落地 | 事实 |
+|---|---|
+| Graph interrupt | `approval` 节点真正 `interrupt()`；恢复时**回查账本**，不信任 resume payload |
+| 拒绝路径 | `approval` 成为条件节点：approved → export，rejected → 终态失败（**不**导出） |
+| Worker | reconciliation 第 5/6 分支由真实 interrupt 驱动；无账本时 park 而非猜测 |
+| Approval API | `GET /v1/approvals/{id}`、`POST /v1/approvals/{id}/decisions`；跨 owner/tenant 一律 404 同正文 |
+| 发现路径 | 新增 `TaskApprovalRequested` 事件进 Task timeline（无列举端点） |
+| 唤醒 | `NOTIFY task_ready`，四处入队事务内发送，payload 只有 `task_id` |
+
+统一门禁（真实 PostgreSQL `127.0.0.1:5433` + Qdrant `127.0.0.1:6333`）：
+
+```text
+ruff format --check .                 passed（304 files）
+ruff check .                          passed
+pyright                               0 errors / 0 warnings
+alembic 唯一 head                     0018_approvals
+pytest（真实服务）                    1569 passed / 11 skipped
+pytest（无外部服务）                  1074 passed / 506 skipped
+```
+
+两行 pytest 是同一套测试的两种环境，不能相加。
+
+破坏验证四轮共 34 处，第一轮抓住 31 处；三处漏网已按性质分类并补测，最终 34/34。
+详情与分类见待办清单 2.1 条目。
+
+**仍未做**：`task_ready` 的监听端（Worker 仍轮询，属 3.5 同批工作）；
+`tool_executions` 副作用 ledger（2.2）。
+
+## 2026-07-29 当前工作分支快照（未合并）
+
+本节记录分支 **`pr-050-postgres-checkpointer` 自 `5d943af` 之后的 A–F 汇合增量**，
+不是 `main` 的发布快照。下面的历史章节保留各增量当时的基线和证据；当前结果以
+本节记录的统一门禁为准。
+
+| 修复组 | 当前状态 | 已落地事实 | 仍需验证或补全 |
+|---|---|---|---|
+| **A：Task 工作流终态语义** | **完成** | 显式成功/失败 disposition；revision 预算计数；critic 拒绝且预算耗尽时失败关闭 | 统一回归已通过 |
+| **B：Task 提交幂等与租户隔离** | **完成** | tenant-scoped 幂等键、输入 fingerprint、冲突复用已存身份；Task API 按 owner/tenant 隐藏越权资源 | 统一回归已通过 |
+| **C：单 Worker 纵向切片** | **完成** | TaskInput Artifact、Task API/CLI、独立 `agent-task-worker` 入口、poll loop 与显式 demo composition | 生产身份仍未实现，入口只适合受控环境 |
+| **D：真实 Task Agent handlers** | **主体完成并通过回归** | `plan`/`critic` 结构化处理、内部检索/evidence Artifact、TaskRunContext、取消与授权上下文装配；外部检索经过 Tool/Policy 边界 | 真实外部搜索 Provider 尚未实现；当前 Adapter 在 Provider 缺失时失败关闭 |
+| **E：可靠 Task Core** | **主体完成并通过状态测试** | PostgreSQL `SKIP LOCKED` claim、lease/heartbeat/epoch、stale reclaim、retry/dead-letter、专用 advisory guard、fenced checkpointer、生命周期事件及确定性 failpoint | HITL 与外部副作用 ledger 属于后续工作，不在本组已完成范围 |
+| **F：产品化补全** | **部分完成** | Qdrant 启动不变量、常驻摄取入口及 claim/heartbeat/fencing、Task 生命周期时间线、本机 Compose 演示拓扑 | HITL Approval、真实外部搜索、OTel/Langfuse、CrewAI 对比、UI、生产身份与生产部署仍未完成 |
+
+当前汇合工作树已于 2026-07-29 通过统一门禁：
+
+```text
+ruff format --check .                 passed（287 files）
+ruff check .                          passed
+pyright                               0 errors / 0 warnings
+agent-config-check                    development / test 均为 status=ok
+docker compose config --quiet         passed
+alembic 唯一 head                     0016_task_principal_scopes
+pytest（无外部服务）                  1054 passed / 409 skipped
+pytest（真实 PostgreSQL + Qdrant）    1452 passed / 11 skipped
+```
+
+两行 pytest 是同一套测试的两种环境，不能相加。真实状态测试使用 PostgreSQL
+`127.0.0.1:5433` 和 Qdrant `127.0.0.1:6333`；11 项跳过中 10 项需要真实 BGE
+embedding/sparse 权重，1 项是只适用于非锁定 recovery read 的契约变体。下文
+2026-07-28 的门禁数字仍只属于其注明的历史提交。
+
 ## 文档基线
 
 状态：**已纳入 Git 版本管理**。
@@ -14,7 +81,8 @@
 
 ## 当前基线与编号对应
 
-主分支基线：**`main@341cbf5`**（2026-07-28）。PR-047～PR-049 已全部合入。
+主分支基线：**`main@f5800d2`**（2026-07-28）。PR-047～PR-049 与后续 WP06
+状态订正文档已全部合入。
 
 **PR-035～PR-049 的全部增量都已经合入 `main`。** 下面各节里写的"尚未合入 `main`"
 是当时开发分支上的状态，已按实际合并结果订正；每节保留的测试证据仍是**该增量当时**
@@ -80,6 +148,856 @@ Docker 的端口映射，症状是 `role "agent" does not exist`——一个看�
 `production` profile 需要 CI 同款环境变量（固定 model ID、40 位 embedding/reranker
 revision、DeepSeek 与 Qdrant 密钥）才能通过；只用 `.env.example` 会在 Qdrant 密钥
 这一项失败关闭，这是配置契约的预期行为。
+
+## 2026-07-28 PR-058 WP07-03：Task 提交时的语义与授权身份落库
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。迁移 `0012`。
+
+`task_runs` 增加五列：`run_semantics_snapshot`、`run_semantics_revision`、
+`submitted_policy_revision`、`submitted_policy_fingerprint`、
+`submitted_authorization_envelope`。确定性快照的机制**此前已在 settings 层实现**
+（`run_semantics_snapshot()` / `task_run_semantics_revision()` / `policy_identity()`），
+本轮做的是把它**持久化**并让提交路径带上它。
+
+### 快照与 policy 身份分开存
+
+快照是**恢复时沿用**的东西；policy **每次 claim、每次 dispatch 都重新求值**。两列 policy
+身份只记录"调用方当时是在哪套规则下被授权的"，因此有效授权始终是
+"提交时的 envelope ∩ 当前规则"，而不是"当时允许什么就一直允许什么"。
+
+envelope 读回来是**模型**而不是裸 dict：一个当成 JSON 读的授权上限，是没有任何东西会再校验
+一遍的上限。
+
+### 三处"不能是可选"的地方
+
+**`TaskSubmission` 的这些字段是必填的。** 一个可以省略语义的提交会产出一个"恢复时无物可恢复"
+的 Task，而这个疏漏只会在恢复的那一刻才被发现。
+
+**列是 NOT NULL 且无默认值**，所以迁移在表里已有行时会直接失败。这是故意的：在这些列存在之前
+提交的 Task 没有"提交时语义"，回填一个占位符等于**编造**一份——而恢复时会把编造的那份当真。
+
+**`semantics` 是注入的 callable 而不是一个值**：涉及知识库的 Task 要在**每次提交**时解析
+Qdrant alias（WP07-04），不是启动时解析一次。
+
+### 幂等的判定范围跟着变宽
+
+同一个 dedup key 配**不同的语义修订或不同的 policy 指纹**，现在是
+`TaskSubmissionConflictError`。否则调用方的工作会在它从未要求过的语义下运行——正是快照要防的
+那个失败，只不过是从幂等路径而不是从恢复路径进来的。
+
+### 有牙验证
+
+4 处破坏。其中**两处是我自己写坏的空操作**（改了等价代码 / 加了个 `# noqa`），不算发现；
+如实记下来是因为"破坏了但测试没红"如果不追究，就会被当成覆盖率证明。真正的两处：
+
+| 破坏 | 结果 |
+|---|---|
+| 语义不算作"提交是什么"的一部分 | 2 条测试失败 |
+| 快照列改成 nullable | 迁移漂移测试 2 条失败（第一轮漏跑，因为它不在我选的目标文件里） |
+
+本轮门禁：
+
+```text
+ruff check / format      passed（235 files）
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0012_task_submitted_semantics
+pytest（无外部服务）              955 passed / 363 skipped
+pytest（真实 PostgreSQL + Qdrant） 1307 passed /  11 skipped
+```
+
+### 本轮明确未做
+
+- **没有任何地方从 settings 构造 `SubmittedSemantics`**：服务收一个 callable，组装点仍不存在；
+- Qdrant alias 解析与 generation reservation（WP07-04）没做，所以三个 `resolved_*` 列还没有；
+- 快照内容本身没有新增校验（"与两个 resolved 字段不一致时 fail closed"要等 WP07-04）。
+
+## 2026-07-28 PR-057 WP07 开始：Task 与它的开场事件同事务提交
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP07-02 的第一半，
+也是 WP07 的第一条退出条件：**状态和事件同事务提交**。
+
+新增一个事件类型 `TaskSubmitted`，`PostgresTaskRegistry.submit` 用**同一个连接、同一个事务**
+写入 `task_runs` 行和这条事件。二者要么一起提交，要么一起回滚——不会存在"有 Task 但没有任何
+东西说明它为什么存在"，也不会存在"事件描述了一个被回滚掉的 Task"。
+
+事件只带**提交决定了什么**，不带它引用的东西：objective 在 `input_ref` 后面。事件会被重放进
+时间线和 SSE 帧，调用方提交的正文没有理由在那里被复述一遍。
+
+日志是**默认构造**而不是可选注入：没有办法造出一个"跳过事件"的 registry，只能换一个日志。
+
+### 两处被测试逼出来的修正
+
+**冲突检查必须在 append 之前。** 同一个 dedup key 配不同请求，本来会先撞上事件的
+`event_key` 幂等校验，报成 `EventKeyConflictError`——一个关于本项目**自己记账方式**的错误，
+扔给一个只是犯了普通错误的调用方。挪到 append 前之后，它是 `TaskSubmissionConflictError`。
+
+**时间线不再有"空"这个状态。** 一个刚开出来的 Task，时间线上已经有它自己的开场事件了——
+因为二者同事务。相关测试从"没有事件"改成断言**第一条就是 `TaskSubmitted`**。
+
+### 有牙验证：6 处破坏，5 处被抓住
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 事件不带幂等 key | 1 |
+| 冲突检查挪到 append 之后 | 2 |
+| 事件写进另一条流 | 6 |
+| 干脆不写事件 | 11 |
+| `TaskSubmitted` 改成 transient | 38 |
+| **append 改成自己开事务** | **0** |
+
+最后一行是**没有修掉的**，如实记下来：`PostgresEventLog.append` 内部就是
+`begin()` + `append_durable_in_transaction`，所以从外部看，"用调用方的事务"和"自己开一个"
+在 append 那一刻**完全一样**——两者此时都还没提交。要区分只能在 `submit` 里加一个仅供测试
+存在的接缝。没有加。改为覆盖它确实成立的两条性质：**append 失败则 Task 不存在**，
+以及**重复提交不追加第二条事件**；再加一条从**第二个连接**观察、断言事务外看不到该事件。
+
+本轮门禁：
+
+```text
+ruff check / format      passed
+pyright                  0 errors / 0 warnings
+pytest（无外部服务）              955 passed / 359 skipped
+pytest（真实 PostgreSQL + Qdrant） 1303 passed /  11 skipped
+```
+
+### WP07 剩下的
+
+WP07-01（仓储与状态机）与 WP07-05/06（`events`/`event_streams`、per-stream sequence、
+cursor codec）此前已经落地。仍未做：WP07-02 的 `NOTIFY task_ready` 与输入存储、
+WP07-03 语义快照与 submitted policy identity、WP07-04/08 Qdrant generation reservation
+与 Task-aware GC、WP07-07 其余 durable 事件。
+
+## 2026-07-28 PR-056 统一事件时间线：WP06 最后一条退出条件
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-09。
+`TaskService.timeline()` 按游标切片返回一个 Task 的事件。
+
+### "统一"是指**一条流**
+
+一个 Task 的事件全部落在**它自己的 workflow thread** 这一条流上，所以
+`(stream_id, sequence)` 一个游标就等于"这个 Task 到此为止的全部"，重连的客户端也只回传
+一个值。Task 与 thread 是一对一——Registry 的唯一约束**双向**保证——这正是让单游标成立的
+前提。流 ID 的推导只写在 `task_stream_id()` **一个地方**，写入方和读取方不可能对"事件去哪了"
+产生分歧；把它改成所有 Task 共用一条流会让测试失败。
+
+### 三个不显眼但要紧的地方
+
+**授权检查在读日志之前，且用的是同一条。** 时间线如果对别人的 Task 给出不同答案，泄露的恰好
+是 Task 查询拒绝泄露的那件事——这个 id 存在。所以它先走 `get()`，两者同样是 `NotFoundError`。
+
+**外来游标是拒绝，不是忽略。** 游标是客户端提供的值；忽略它等于对一个"想接着看另一条流"的
+客户端，从头把**这个** Task 的历史端上去。
+
+**空切片不推进游标。** 返回流末尾会跳过"这次读和下次读之间到达"的事件；没投递出去，位置就
+没有移动。
+
+### 有牙验证里的又一个诚实结果
+
+7 处破坏，第一轮 6 处。漏网的是"**limit 不设上限**"——原测试传了一个超大 limit 然后断言
+"返回 3 条"，可库里本来就只有 3 条，**上限有没有生效根本看不出来**。
+
+它没有靠"多存 500 条事件"来修，而是搬到了能观察的地方：用一个**记录被要求了什么**的假日志，
+直接断言服务传给日志的 limit 是被夹住之后的值。PostgreSQL 那侧只保留"limit=0 被拒绝"。
+补完后 7 处全部被抓住。
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 先读日志再做授权 | 1 |
+| 忽略外来游标 | 1 |
+| 游标不推进 | 3 |
+| 空切片把游标推到流末尾 | 2 |
+| limit 不设上限 | **第一轮 0**，改测试后 1 |
+| 没有日志时返回空时间线 | 1 |
+| 所有 Task 共用一条流 | 1 |
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（234 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+
+pytest（无外部服务）              955 passed / 353 skipped
+pytest（真实 PostgreSQL + Qdrant） 1297 passed /  11 skipped
+```
+
+### WP06 退出条件
+
+**全部满足。** 事件时间线这一条按计划的说法"M3a 可用内存/测试 EventLog，WP07 替换为
+PostgreSQL durable EventLog，不改变接口"——本轮直接用了已经存在的 `PostgresEventLog`，
+所以那次替换已经不需要了；接口是 `EventLogPort`，两种实现同一个口子。
+
+### 本轮明确未做
+
+- **没有 HTTP/CLI 入口**：时间线只有服务方法，`event_stream.replay_source` 那套 SSE
+  与 `Last-Event-ID` 是 WP09；
+- Worker 目前**不往这条流里写**任何东西：写入的是 Agent 节点的 `EventSink`，而组装
+  Worker → 节点 → sink 的那个组装点还不存在（WP06 之后）。所以真实运行里这条流现在是空的，
+  测试用真实 `EventLogPort` 追加的是 Agent 运行会产生的同一种事件；
+- Task 生命周期本身还没有事件类型（`TaskSubmitted` 等）：`EventPayload` 是封闭联合，
+  加成员要动 schema 版本，属于 WP07-07。
+
+## 2026-07-28 PR-055 TaskService 与可切换的 FakeExecutor
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。
+补完 WP06-07 的 TaskService/查询接口，并完成 WP06-08。
+
+### TaskService：两件仓储**故意不做**的事
+
+**thread_id 与 graph_version 由它铸造，不由调用方给。** 仓储收下这两个字段是因为它们是行上的
+事实；**选**它们是决定。让调用方给 thread，重试就可能为同一个 dedup key 给出**不同**的 thread，
+唯一约束会直接拒绝——本该幂等的重试变成报错。让调用方给版本，客户端就能把自己钉在一个没人再部署
+的图上。
+
+**按 id 读是一条授权边界。** "不存在"和"不是你的"必须给出**同一个**答案——答案不同本身就是泄露，
+它确认了这个 id 存在。所以两者都是 `NotFoundError`，没有 "forbidden"。归属**两项都查**：只查
+tenant 会把一个租户的 Task 暴露给租户内每个人；只查 owner 会让跨租户的同名 id 撞进别人的 Task。
+有一条测试直接断言两种拒绝的**类型、code 与消息逐字相同**。
+
+### WP06-08：切换在节点注入，不在配置
+
+M3a 验收门槛是"**单个 Agent 节点**可切换 FakeExecutor/自研 Runtime"。本轮把
+`FakeAgentExecutor` 作为**正式代码**发布（不再只是测试替身），因为它换来的东西不是测试：整条
+Task 链路——提交、领取、跑图、checkpoint、崩溃后恢复——可以在**没有 provider、没有 key、没有
+费用**的情况下端到端跑完。
+
+**没有**去放宽 `runtime.executor`。那个单值 `Literal` 编码的是一条已冻结的不变量——
+**Tool Loop 只有一个所有者**。加一个 `"fake"` 值等于推翻它，而按项目规矩那需要先写 ADR、
+升 config schema 版本，不是顺手加个开关。有一条测试**正面钉住**这一点：
+`RuntimeSettings.model_validate({"executor": "fake"})` 必须失败。
+
+fake 只做边界真正承诺的两件事：**返回终态结果**、**观察取消**。取消返回 `cancelled` 结果而不是
+抛异常——调用方是个无论如何都要记录和路由的图节点，这正是只走happy path 的替身最容易漏掉的一条。
+其余全部是请求的函数：同一请求给同一结果（CI 不依赖模型），不同请求给**不同的 sha256**
+（常量摘要会让任何做去重的东西把两次无关的运行当成同一次），并且**记账不为零**——一次不花钱的运行
+会让所有预算检查静默通过。
+
+### 有牙验证
+
+9 处破坏，全部被抓住，0 处漏网：
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 读取时忽略 tenant / 忽略 owner | 1 / 2 |
+| "不是你的"与"不存在"给不同答案 | 1 |
+| thread_id 跨提交复用 | 1 |
+| graph_version 不来自服务的决定 | 1 |
+| fake 取消时抛异常而不是返回 | 1 |
+| 每个 fake artifact 同一个摘要 | 1 |
+| fake 运行不记账 | 1 |
+| fake 忽略脚本化的回答 | 2 |
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（233 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+
+pytest（无外部服务）              953 passed / 344 skipped
+pytest（真实 PostgreSQL + Qdrant） 1286 passed /  11 skipped
+```
+
+新增 15 条测试，**全部不需要外部服务**。
+
+### 本轮明确未做
+
+- **WP06-09 事件时间线**：Task 查询目前返回 Task 本身，不返回统一事件时间线；
+  那是 WP06 最后一条未满足的退出条件；
+- TaskService 不写入 `input_ref` 指向的东西——提交事务与输入存储是 WP07-02；
+- 没有 HTTP/CLI 入口调用它；组装点仍然不存在。
+
+## 2026-07-28 PR-054 单 Worker runner：整条链第一次跑通
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第四步。
+`TaskWorker` 把仓储、恢复判定和工作流适配器接起来。
+
+### 它自己不做任何决定
+
+领任务是仓储的条件更新，判断两个事实合起来是什么意思是 `reconcile`，跑图是适配器的。
+这里只剩把它们连起来的循环，以及**什么时候停**。
+
+**"跑图"被表达成"再判断一次"**，而不是第二套状态机。Worker 启动一张图之后再问同一个问题：
+位置变了，答案就跟着变——从 `start` 变成 `settle_succeeded` 或 `wait_for_approval`。
+在 `ainvoke` 后面直接写"然后标记成功"，就是把恢复判定又抄了一遍措辞不同的版本，而改动原版之后
+还在跑的正是那份抄件。测试直接断言一次成功运行产生的 action 序列是
+`["start", "settle_succeeded"]`——**两次判断，不是一次**。
+
+循环**有上界**（3 次）。既不结束也不等待的图，Worker 结算不了；对它无限循环比如实记下来更糟，
+所以预算用尽就进 `failed`。
+
+每轮都**重新读 Registry**，不信任领取时那一行：图跑着的时候落下来的取消，正是判定的第一个分支
+要看到的事实。
+
+### 端口多了一个 `inspect`
+
+判定需要"这个 thread 停在哪"，而**不能靠试着 resume 再读异常**。所以
+`TaskWorkflowPort` 增加 `inspect(thread_id) -> CheckpointPosition | None`，
+`CheckpointPosition` 也从 application 移到端口——端口不能反向依赖 application，而"图停在哪"
+本来就是这个边界的词汇。
+
+适配器实现里有一处**诚实的取舍**：checkpoint 的版本若未记录或本进程建不出来，就**只报版本、
+不报待执行节点**——待执行节点是 LangGraph 对那张图的计算，要拿它就得先编译那张图。文档写明
+这不含糊：这种位置在任何人读它的待执行节点之前就已经被判定 park 了。
+
+### 有牙验证：11 处破坏，第一轮 10 处
+
+漏网的那一处是**"inspect 把建不出来的 checkpoint 报成当前图的版本"**——没有测试失败，因为
+现有用例里"Registry 的版本建不出来"总是先一步挡住，从来没走到"Registry 版本没问题、
+但**checkpoint** 是另一张建不出来的图写的"。
+
+补的测试构造了这个状态：先用一个**有** v9 的 Worker 把它跑起来（checkpoint 记下 v9），
+再把 Registry 的版本改成 v1 并重新排队，然后交给一个**没有** v9 的 Worker。这时若谎报成 v1，
+一个读不出来的 checkpoint 会显得"已完成"，Task 被结算成 succeeded——补上后 11 处全部被抓住。
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 信任领取时的行，不重新读 Registry | 1 |
+| 只判断一次，什么都不结算 | 3 |
+| 判断次数无上界 | 1 |
+| 抛异常的图被留在 running | 2 |
+| 失败原因带上 provider 的异常正文 | 1 |
+| park 时不带原因 | 2 |
+| 已终态的 Task 再结算一次 | 1 |
+| `start` 与 `resume` 对调 | 4 |
+| `inspect` 报告没有 checkpoint | 6 |
+| `inspect` 报告它没读过的待执行节点 | 2 |
+| `inspect` 谎报建不出来的 checkpoint 的版本 | **第一轮 0**，补测试后 1 |
+
+### 整条链的证据
+
+第一个 Worker 死在 `critic`，Task 进 `failed`；把它的 engine、saver、workflow、registry、
+handler 闭包**全部丢弃**；重新排队后，一个**从零构建**的 Worker 领走它并跑完——
+action 序列是 `["resume", "settle_succeeded"]`（不是 `start`），第二个进程里
+`understand` 与 `research_internal` 的调用次数是 **0**。
+
+（重新排队这一步是测试手工做的：按 lease 过期自动重排是 WP08 的 reaper，这条测试关心的是
+之后发生什么，不是谁触发的。）
+
+失败原因只记**异常类型**不记异常正文：provider 的异常文本里有请求体和 prompt 片段，而这个字符串
+会进事件和 API 响应。有测试断言 `"RuntimeError" in detail` 且 `"died mid-run" not in detail`。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（229 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0011_task_runs
+
+pytest（无外部服务）              938 passed / 344 skipped
+pytest（真实 PostgreSQL + Qdrant） 1271 passed /  11 skipped
+```
+
+### 本轮明确未做
+
+- **没有轮询循环、没有 `LISTEN/NOTIFY`**：只有 `run_once()`。什么时候再调一次是调用方的事，
+  长驻循环与唤醒属于协调；
+- **没有 lease、没有 advisory lock、没有 fencing**，所以这个 Worker **只能跑一个**。多 Worker
+  是 WP08，`FencedCheckpointer` 也在那里；
+- `load_state` 是注入的 callable 而不是端口：`input_ref` 指向什么由提交事务（WP07-02）决定，
+  在这里发明一个存储就是替那次改动先做了决定；
+- TaskService 与查询接口（含统一事件时间线，WP06-09）还没有；
+- `approval_decision` 恒为 `None`——本版没有任何图能中断，审批是 WP10。
+
+## 2026-07-28 PR-053 Task Registry 仓储：状态机是数据，SQL 由它推导
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第三步。
+`TaskRegistry` 端口 + `PostgresTaskRegistry`。转换全部是**条件 UPDATE**，`WHERE` 里的
+合法来源状态**从领域的转换表推导**（`sources_for`），不在 SQL 里重写一遍——规则写两遍，
+留下来跑的总是没被改的那一遍。
+
+实施计划 §7.4 的"接口层不能直接写状态字符串"落实为：方法按**发生了什么**命名
+（`mark_succeeded` / `park_for_migration` / `await_approval` / `cancel`），没有
+`transition(to=...)` 这种把状态字符串又还给调用方的口子。
+
+`ALLOWED_TRANSITIONS` 里终态**没有任何出边**——"迟到的审批不能复活已取消的 Task"落到实处
+就是这一条。`waiting_migration` 同样没有出边：计划里没写谁执行迁移、怎么执行，凭空加一条边
+就是发明一个没人设计过的流程。这两点都有测试钉住。
+
+### 破坏验证发现的三件事，两件是真缺陷
+
+第一轮 11 处破坏只抓住 8 处。三处漏网各自的结论不同，都不是"补个断言"能了事的：
+
+**一、`start_next` 的 `status = 'queued'` 条件被删掉，没有测试失败。**
+写代码时的注释说"单 Worker 下它和子查询等价"。**实测证明这句话是错的**：让另一个事务先把该行
+改成 `running` 但不提交，再跑 claim——
+
+```text
+带 status 条件：返回 None
+去掉 status 条件：返回 task_x   ← 同一个 Task 被派发了两次
+```
+
+PostgreSQL 在行被并发更新后会**重新校验 UPDATE 的限定条件**，但**不会重跑限定条件里的
+子查询**，于是 `task_id = (SELECT ... WHERE status='queued')` 仍然匹配一个已经不是 queued
+的行。这个条件是唯一挡住重复派发的东西。注释已按实测改写，并补了对应测试。
+
+**二、`submit` 改成"先读后插"，没有测试失败。**原来的并发测试用 `asyncio.gather` 起 5 个
+提交，实测它们**确实并发**（全部开始早于任何一个结束），但在没有屏障的情况下几乎总是自然串行，
+race 根本没发生。改成**确定性**写法：另一个事务先插入冲突行且不提交，`submit` 会阻塞在唯一
+索引上，提交后它只能走"输掉"的那条分支。此时——
+
+```text
+ON CONFLICT DO NOTHING：返回赢家的 Task
+先读后插：            IntegrityError
+```
+
+（用强制屏障单独验过一次：5 个"先读后插"并发，4 个 IntegrityError。）
+
+**三、`_move` 里"该带原因/不该带原因"的检查删掉后没有测试失败——因为它根本到不了。**
+五个公开方法的**签名**已经决定了要不要 `reason`，多传或少传都是 `TypeError`。那段检查是
+死代码，删掉了。
+
+换上的是一个**真的够得着**的检查：`reason=""`。空串既满足列的 `NOT NULL`，也满足
+`status_detail` 的 CHECK，于是**写得进去、读不回来**——`TaskRun.status_detail` 要求非空。
+这是失败最糟糕的形状。现在用 `TaskRun` 同一个类型去校验，两边不可能各说各话；删掉这个检查会让
+2 条测试失败。
+
+补完之后 11 处破坏全部被抓住，0 处漏网。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（227 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0011_task_runs
+
+pytest（无外部服务）              938 passed / 334 skipped
+pytest（真实 PostgreSQL + Qdrant） 1261 passed /  11 skipped
+```
+
+### 本轮明确未做
+
+- Worker 还没有；仓储只是它要用的东西；
+- 没有 lease、没有 `SKIP LOCKED`、没有 advisory lock、没有 priority——多 Worker 是 WP08。
+  但上面那条"重复派发"的实测结论已经预先钉住了 WP08 里最容易写错的地方；
+- `waiting_migration` 与 `waiting_approval` 的出边留给各自的流程（迁移程序、WP10 审批）。
+
+## 2026-07-28 PR-052 Task Registry 的行，以及一处订正
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第二步：
+`task_runs` 的产品生命周期，schema 与约束。仓储与 Worker 还没有。
+
+### 订正：状态少了一个
+
+[PR-051](#2026-07-28-pr-051-worker-的恢复判定基线-95-的七种情形) 的
+`TaskStatus` 写了七个状态，并声称"这是基线点过名的全部"。**实施计划 §7.4 列的是八个**，
+多一个 `dead_letter`（重试预算耗尽的毒任务）。本轮补上，并归入终态——它的作用正是让毒任务
+不再被反复领取。`reconcile` 不需要改：终态分支本来就按集合判断，全枚举测试也自动覆盖到它。
+
+### 这一轮**不**加的列
+
+按实施计划 §7.2 的分工，各自留给自己的工作包：lease、epoch、attempt、`available_at`
+退避与 recovery reason 属于协调（WP08），而**单 Worker 一个都不需要**；run semantics
+快照与 submitted policy identity 是 WP07-03；resolved Qdrant collection / index version /
+generation reservation 是 WP07-04。分开落是本仓已有的做法——`0008_chat_turns` 落 Turn，
+`0009_chat_turn_lease` 才落它的执行 lease。
+
+### 两条硬约束
+
+**一个 owner 的一个 submission key 不能开出第二个 Task。** "重复 submission key 返回同一
+Task"是退出条件；*返回*同一个是仓储的事，*不可能存在第二个*是这条唯一约束的事。它按 owner
+分域：全局唯一会让一个用户选的 key 拒绝掉另一个用户的提交，而且会告诉对方这件事发生了。
+
+**`thread_id` 双向唯一。** 一个 Task 对应恰好一个 thread，一个 thread 背后恰好一个 Task，
+因此 reconciliation 永远不会拿到"一个 checkpoint 对两行 Registry"。
+
+`status_detail` 的约束是**双向**的：`waiting_migration` / `failed` / `cancelled` /
+`dead_letter` 必须带原因，其余四个状态必须不带。只做前一半的话，一段解释会活过让它失效的那次
+转换，然后被当成一个其实没问题的 Task 的当前说明来读。
+
+### 有牙验证里的一个诚实结果
+
+7 处破坏，**6 处被抓住，1 处没有**——而那 1 处是有意义的：单独删掉状态词汇表的 CHECK，
+**没有任何测试失败**。原因是 `status_detail` 那条 CHECK 把状态配对成两组，一个未知状态两组
+都不属于，于是它自己就把行挡下来了。也就是说词汇表 CHECK 在可观测行为上是**冗余**的。
+
+它仍然保留：等哪天 `status_detail` 规则被放宽，词汇表就会在**没人察觉**的情况下失去约束。
+这个结论写进了那条测试的文档，测试本身也改成同时验证"带原因"和"不带原因"两种未知状态写法，
+而不是继续声称自己在验证那条已被覆盖的 CHECK。
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 单独删掉状态词汇表 CHECK | **0（冗余，已记录）** |
+| 数据库词汇表里少 `dead_letter` | 1 |
+| 需要人处理的状态可以不带原因 | 10 |
+| 不需要人处理的状态可以留着原因 | 5 |
+| 同一 owner 可以重复提交同一 key | 1 |
+| submission key 改成全局唯一 | 1 |
+| 两个 Task 共用一个 thread | 1 |
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（224 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0011_task_runs
+
+pytest（无外部服务）              937 passed / 307 skipped
+pytest（真实 PostgreSQL + Qdrant） 1233 passed /  11 skipped
+```
+
+## 2026-07-28 PR-051 Worker 的恢复判定：基线 §9.5 的七种情形
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-07 的第一步。
+
+Task Registry 表示产品生命周期，LangGraph checkpoint 表示图执行位置；本项目不把两者
+伪装成一个分布式事务，所以"领到一个 Task"就等于要判断**这两个事实合起来是什么意思**。
+架构基线 §9.5 把这个判断列成了七种情形，本轮把它写成一个**全函数**。
+
+### 为什么是纯函数
+
+将来调用它的 Worker 要同时持有 advisory lock、lease 和 guard 连接，这七个分支里的每一个
+经由真 Worker 去够都很贵——"图停在一个后来被拒绝的审批上"这种情形，要 lease、要锁、要一张
+能 interrupt 的图，跑完还只覆盖七分之一。写成对值的判断后，全部分支微秒级可达，Worker
+那边只剩真正需要 I/O 的部分。
+
+这和本仓已有的做法一致：`workflows/research_graph.py`（纯声明）先落，
+`adapters/langgraph/workflow.py`（执行）后落。
+
+### 判定顺序不是随意的
+
+终态**先于**读 checkpoint 判断：一个已取消、但 checkpoint 里还有待执行 node 的 Task，
+不是"还没跑完的活"，是"被人停下的活"。反过来先读 checkpoint 就会把它变回 running。
+
+`waiting_migration` **必须显式挡住**，不能落到后面：它不是终态，它的 checkpoint 看起来
+完全可恢复，只读 checkpoint 会把它直接放回去跑，撤销掉别人正等着做的那个决定。
+
+版本比较有两半，都进 `waiting_migration`：**本进程根本没有这张图**（未注册），和
+**checkpoint 是另一张图写的**。第三种情况是 checkpoint **没记录**版本——它不比"版本不一致"
+更可恢复，猜"大概就是 Task 注册的那个版本"是在最贵的地方做猜测。这一条正好接上
+[PR-050（三）](#2026-07-28-pr-050三workflow-身份进-checkpoint端口层跨进程续跑)：
+版本现在写在 checkpoint metadata 里，所以这个判断**在调用 resume 之前**就能做出，
+而不是去 catch 一个异常。
+
+"图已结束"与"停在审批"两条**互斥而不只是有序**：`CheckpointPosition` 拒绝被构造成
+"没有待执行 node 却在等审批"，所以两个分支谁也藏不住谁。
+
+### 一个诚实的说明
+
+七种情形里有两种（停在审批、审批已有决定）描述的是 **M3a 还产生不出来的图**——`approval`
+在 WP10 之前是无副作用占位节点。仍然实现它们，是因为另一条路是"对一张被中断的图静默回答
+resume"，而且输入结构为了让其它分支成立本来就得携带审批信息。这一点写在模块文档里。
+
+### 有牙验证
+
+11 处破坏，全部被抓住，0 处漏网。其中最值得记的一条：把 `waiting_migration` 的显式分支
+去掉后**只有 1 条测试失败**——而那条测试是做破坏验证之前**补上**的。第一版测试里
+"totality" 那条只断言"每种输入都得到某个 action"，`waiting_migration` 落到 `resume`
+一样满足它。全枚举不等于全断言。
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 终态检查挪到读 checkpoint 之后 | 5 |
+| `waiting_migration` 落到后面 | 1 |
+| 未注册的 graph version 照跑 | 1 |
+| 没记录版本的 checkpoint 当作匹配 | 1 |
+| 版本不一致照样 resume | 1 |
+| 已结束的图去 resume 而不是结算 | 2 |
+| 忽略审批决定 | 3 |
+| 等审批时仍占住 Worker | 1 |
+| `wait_for_migration` 不再改状态 | 2 |
+| 允许"已结束且在等审批" | 1 |
+| 决定里丢掉 approval id | 1 |
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（222 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+
+pytest（无外部服务）              935 passed / 291 skipped
+pytest（真实 PostgreSQL + Qdrant） 1215 passed /  11 skipped
+```
+
+新增 19 条测试，**全部不需要外部服务**，所以两列的 `passed` 同步 +19、`skipped` 不变。
+
+### 本轮明确未做
+
+- **没有 Worker 调用它**。claim/lease/advisory lock、`task_runs` 仓储与状态机
+  （WP07-01）、TaskService 与查询接口都还没有；
+- `TaskStatus` 只定义了基线点过名的七个状态，没有 `task_runs` 表、没有列、没有仓储。
+  这里定义的是**词汇表和判定**，不是存储；
+- 判定不涉及 Qdrant generation reservation（WP07-04）与取消传播的具体事件写入。
+
+## 2026-07-28 PR-050（三）workflow 身份进 checkpoint，端口层跨进程续跑
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。WP06-06 的最后一步。
+`LangGraphTaskWorkflow` 不再持有 `_thread_versions` 字典；"这个 thread 存在吗"和
+"它是哪张图写的"两个问题都改成**问 checkpointer**。
+
+### graph version 存哪里：选了第三个位置
+
+三个候选：`task_runs.graph_version`（实施计划 §6，属 WP06-07）、adapter 自己的一张表、
+或者**checkpoint 的 metadata**。选第三个。
+
+机制是契约自带的：`get_checkpoint_metadata` 会把 `config["configurable"]` 上的标量
+拷进每一个 checkpoint 的 metadata。所以 adapter 只要在调用图时把
+`{"configurable": {"thread_id": ..., "graph_version": ...}}` 传下去，版本就自动、逐个
+checkpoint 地持久化了——不需要 adapter 自己的表，也没有第二处需要保持同步的写入。
+
+**这不是把 Task 产品状态复制过来。** `task_runs.graph_version` 记的是"这个 Task 被要求
+用哪张图跑"；这里记的是"实际写下这个执行位置的是哪张图"。ADR-014 禁止的是 checkpointer
+成为前者的第二个 writer，而后者本来就属于架构基线 §9 说的"图执行位置"。
+
+代价也记下来：PR-049 时 `workflow.py` 里写着"LangGraph 的 checkpoint 不携带 graph
+version"。**那句话现在不成立了**，因为这次让它携带了。
+
+### 没记录版本的 checkpoint 拒绝续跑
+
+不是本 adapter 写的 checkpoint（本次改动之前的行，或者绕过 adapter 直接驱动的图）
+metadata 里没有 `graph_version`。这时 `resume` **失败关闭**，报出的
+`checkpoint_graph_version` 是 `<unrecorded>`——一个 `GraphVersion` 的正则
+（必须以字母数字开头）**永远匹配不上**的字符串，所以调用方拿它和任何真实版本比较都得到
+"不同"，而这正是答案。猜"大概就是唯一注册的那个版本"是在最贵的时刻做的猜测。
+
+版本比较**发生在编译图之前**：否则一个由本进程已不再注册的版本写的 checkpoint，会被报成
+"未知版本"而不是"它由 v1 写的"。
+
+`run` 的存在性检查也改成问 checkpoint，因此**另一个进程起过的 thread 不再是空闲的**。
+它是检查不是锁：两个 first run 抢同一个 `thread_id` 由 Task lease（WP08）排除，不在这里。
+
+### 有牙验证
+
+6 处破坏，全部被抓住，0 处漏网：
+
+| 破坏 | 失败测试数 |
+|---|---|
+| 版本不放进 config，于是没有 checkpoint 记录它 | 7 |
+| 没记录版本时按调用方要的版本当作已记录 | 1 |
+| `run` 不问 thread 是否已存在 | 3 |
+| `resume` 完全不比较版本 | 4 |
+| 版本比较挪到编译图之后 | 2 |
+| `resume` 又去信任对象内存而不是 checkpoint | 6 |
+
+端口层的关键证据：第一个进程死在 `critic`，随后 adapter、saver、engine、连接池、
+handler 闭包**全部丢弃**，第二个进程只拿到 `thread_id` 和 graph version，
+`resume` 跑完全程——`understand` 与 `research_internal` 在第二次运行里调用次数为 **0**，
+返回的 `TaskWorkflowResult.state` 带着上一个进程采集的证据。
+
+另有一条测试直接对 `workflow_checkpoints.metadata` 做 JSONB 谓词查询，按 graph version
+选出 thread，并断言**没有任何 checkpoint 是未记录版本的**——这是把 metadata 存成 JSONB
+而不是不透明字节换来的东西。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（219 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0010_workflow_checkpoints
+
+pytest（无外部服务）              916 passed / 291 skipped
+pytest（真实 PostgreSQL + Qdrant） 1196 passed /  11 skipped
+```
+
+### 本轮明确未做
+
+- **仍然没有组装点构造 `PostgresCheckpointSaver`。** adapter 的默认值依旧是
+  `InMemorySaver`（含义现在是明确的："只在本进程内有效"），要跨进程的调用方自己传一个
+  持久 saver 进来。真正的装配点是 WP06-07 的 Task Worker；
+- `adelete_thread` 与 checkpoint 保留策略仍未做；
+- 两个进程同时对一个 thread 调 `run` 只被"检查"挡住，不被"锁"挡住。
+
+## 2026-07-28 PR-050（二）saver 本身：跨进程恢复第一次有了证据
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。对应 WP06-06。
+`PostgresCheckpointSaver` 实现 `BaseCheckpointSaver` 的四个异步方法，写进
+[PR-050（一）](#2026-07-28-pr-050一checkpointer-的表结构)落的三张表。
+
+### 落在哪一层
+
+文件是 `adapters/langgraph/checkpointer.py`，不是 `adapters/persistence/`。表可以住在
+persistence 里——它们只是 SQL，而且必须和其它表共用一份 metadata，Alembic 漂移测试才
+看得见它们；但 saver 本身**依赖 langgraph**，放进 persistence 就等于让持久化层依赖一个
+工作流框架。`adapters/langgraph/` 仍然是"唯一允许 import langgraph 的包"。
+
+### 三个值得记下来的决定
+
+**一次事务写完 checkpoint 和它的 blob。** blob 只写了一半的 checkpoint 会恢复出一个
+少了通道的状态，而且恰好在恢复的时候恢复出来——那是最没人盯着的时刻。
+
+**`aput_writes` 有两条冲突规则，不是一条。** 普通写入**先到为准**：一个 task 重试时，
+它先前已经落库的写入不能被替换，否则恢复出来的那一步会看到同一份工作的第二个结果。
+error / interrupt / resume / scheduled 这些**负数槽位**相反，**后到为准**：最新的那个
+才是该 task 的当前状态。实现上按 `idx` 正负拆成两批，分别
+`ON CONFLICT DO NOTHING` 与 `DO UPDATE`。
+
+**`get_next_version` 带随机后缀。** 基类默认发整数版本号。那样两个进程写同一个 thread
+会为同一通道都算出 `n+1`，把不同的字节写进**同一个 blob 主键**，一方静默覆盖另一方。
+随机后缀让它们的 key 不同；32 位零填充的计数器让 `>`——pregel 循环用它判断哪些节点
+已经见过某个通道——仍然按数值排序。
+
+同步的一半（`get_tuple` / `list` / `put` / `put_writes` / `delete_thread`）**显式拒绝**并
+说明原因，而不是继承基类那个不带消息的 `NotImplementedError`：这里的同步入口只能自己
+起事件循环，而本项目每个调用者都已经在一个循环里了。
+
+`alist` **先读完再逐个 yield**。异步生成器如果跨 yield 持有连接，调用方消费多久就占用
+多久，提前 break 还会直接泄漏一条。代价写在注释里：不带 `limit` 的列举会把一个 thread
+的历史读进内存——上界是该 thread 跑过的步数。组装用三条查询（checkpoint、blob、write
+各一条），不是 2n+1 条。
+
+### 一个被实测纠正的预期
+
+LangGraph 自己的序列化把**元组还原成列表**（`('a','b')` → `['a','b']`，嵌套的也一样）。
+`InMemorySaver` 同样如此，所以这不是本实现的问题，而是契约的格式。`TaskState` 在
+`model_validate` 时把它们收回元组，因此恢复后的运行察觉不到——测试断言的是**恢复出的
+领域状态相等**，而不是逐个字段形状相等。第一版测试按形状比较，直接失败，这条记录的是
+纠正后的理解。
+
+### 有牙验证：13 处破坏，其中 1 处暴露了测试的漏洞
+
+每次只改实现里的一件事，跑整份测试文件，还原后重新确认全绿：
+
+| 破坏 | 被抓住的测试 |
+|---|---|
+| `aget_tuple` 取最旧而不是最新 | 3 条 |
+| `aget_tuple` 忽略 namespace | 1 条 |
+| 普通写入改成覆盖 | 1 条 |
+| 特殊写入改成丢弃 | 1 条 |
+| `empty` 通道被当成值还原 | 9 条 |
+| `alist` 忽略 `before` / `filter` / `limit` / thread | 各 1 条 |
+| 版本号不带随机后缀 | 1 条 |
+| 同步一半悄悄能用 | 5 条 |
+| 从不加载 pending writes | **第一轮：0 条** |
+| 不记录 parent checkpoint | 1 条 |
+
+倒数第二行是重点：**第一轮破坏验证发现"pending writes 根本不加载"没有任何测试会失败**。
+那不是无关紧要的——`research_internal` 与 `research_external` 在同一步并行，若一个成功
+一个崩溃，幸存者的结果已经记在该步的 checkpoint 上、但这一步没有完成；恢复时**只有失败
+的那一支可以重跑**，重放幸存者会把它的预算算两遍、把它调用过的东西再调一次。补上这条
+测试后 13 处破坏全部被抓住，0 处漏网。
+
+### 跨进程恢复的证据
+
+关键的一条测试：第一次运行在 `critic` 里抛异常；然后 handler、编译后的图、saver、engine、
+连接池**全部丢弃**，只留下 `thread_id`；第二个"进程"从零重建，`ainvoke(None, config)`
+接着跑完。断言是——第二次运行里 `understand` 与 `research_internal` 的调用次数为 **0**，
+`critic` 为 1，最终状态带着**上一个进程采集的证据**。
+
+配套的对照组用 `InMemorySaver` 做同一件事，证明它**做不到**——否则"从 checkpoint 恢复"
+和"从输入把整张图重跑一遍"在断言里长得一模一样。
+
+另有一组差分测试：同一张图、同一份输入，分别跑在 `InMemorySaver` 和本 saver 上，要求
+两者的最终状态与整段 checkpoint 历史一致。参考实现比"作者自己写下的期望"更适合当 oracle。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（218 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+alembic 唯一 head        0010_workflow_checkpoints
+
+pytest（无外部服务）              913 passed / 286 skipped
+pytest（真实 PostgreSQL + Qdrant） 1188 passed /  11 skipped
+```
+
+新增 21 条测试，其中 6 条（同步拒绝、版本号）不需要数据库。
+
+### 本轮明确未做
+
+- **没有任何组装点构造它。** `LangGraphTaskWorkflow` 仍然默认 `InMemorySaver`，
+  它的 `resume` 也仍然查**进程内存**里的 thread → graph version 映射，所以
+  **端口层**的"重启后用原 `thread_id` 续跑"还没通——通的是 checkpointer 层。
+  把两者接起来要先决定 graph version 存在哪里，那是下一次变化
+  （已由上面的
+  [PR-050（三）](#2026-07-28-pr-050三workflow-身份进-checkpoint端口层跨进程续跑)完成：
+  版本进 checkpoint metadata）；
+- `adelete_thread` 未实现（基类的 `NotImplementedError` 原样保留），checkpoint 保留与
+  清理策略同样还没有；
+- 并发写同一 thread 只靠随机版本号避免 blob 主键互相覆盖，**没有**跨进程的互斥；
+  真正的互斥是 WP08 的 lease 与 guard 连接。
+
+## 2026-07-28 PR-050（一）checkpointer 的表结构
+
+状态：**在分支 `pr-050-postgres-checkpointer` 上，尚未合入 `main`**。对应 WP06-06 的第一步。
+[ADR-014](./adr/0014-own-postgres-checkpointer.md) 决定自研 saver，本轮只落**它要写进去的表**，
+saver 本身一行都还没写。
+
+### 三张表不是设计选择，是契约的形状
+
+`aput` 只收到 `new_versions`——本次真正变化的通道——所以通道值必须存在一张**按版本
+索引**的表里，而不是每个 checkpoint 复制一份；`aput_writes` 记录的是"某个 task 已经
+产出、但消费它的那一步还没 checkpoint"的中间结果，所以它需要自己的表。
+
+LangGraph 序列化出来的东西**在这里保持不透明**：`dumps_typed` 返回 `(type, bytes)`，
+`loads_typed` 收回同一个二元组，因此两半都存、都不解释。把它拆成"可读"的列，等于本
+项目声称自己理解一个并不属于它的格式，而理解错的代价恰好在恢复 checkpoint 时兑现。
+
+表名带 `workflow_` 前缀：生态里不带前缀的 `checkpoints` 正是官方 saver 用
+`CREATE TABLE IF NOT EXISTS` 建的表，列结构与这里不同，不该被它悄悄认领。
+
+### 实测：**不能**给 writes 加指向 checkpoints 的外键
+
+这是本轮唯一一个"看起来显然该做、实测证明会坏事"的决定。LangGraph 默认
+`durability="async"`，**不等 checkpoint 落库就发出下一步的 writes**。把 `aput` 人为拖慢
+50 ms 后测量：
+
+```text
+durability=async   11 次 writes 调用，11 次都在对应 checkpoint 提交之前开始
+durability=sync    11 次 writes 调用， 1 次在对应 checkpoint 提交之前开始
+```
+
+三种 durability 模式、一个抛异常的节点（ERROR write 路径）和一次 resume 都测过。
+所以外键在这里**不是约束不变量，而是让正常运行失败**。它的缺席由一条测试固定下来，
+测试的文档说明了原因，免得后来者把它当成疏漏"补上"。
+
+### 有牙验证
+
+12 处等价破坏，逐个只改数据库里的一件事，然后跑对应测试；全部失败，还原后全绿：
+
+| 破坏 | 失败测试 |
+|---|---|
+| 给 writes 加 checkpoints 外键 | 写入早于 checkpoint 的用例 |
+| blob 主键去掉 `version` | 一通道多版本共存的用例 |
+| blob 主键加宽到不再唯一 | 同通道同版本只存一次的用例 |
+| checkpoint 主键去掉 `checkpoint_ns` | 子图命名空间隔离的用例 |
+| writes 主键去掉 `idx` | 负数索引与普通写共存的用例 |
+| `idx >= 0` 约束 | 同上 |
+| `payload` 改成 text | msgpack 非 UTF-8 的用例 |
+| `metadata` 改成 bytea | 按 key 查询 metadata 的用例 |
+| 空 blob payload 被拒 | "写入了空值"与"从未写入"区分的用例 |
+| `checkpoint_id` 收窄到 16 字符 | 真实运行全量落库的用例 |
+| `task_path` 收窄到 8 字符 | 同上 |
+| `parent_checkpoint_id` 设为 NOT NULL | 同上 |
+
+最后一栏那三条来自同一个测试：它把 v1 图**真跑一遍**，把 LangGraph 实际要求存的每一行
+（11 个 checkpoint、40 个 blob、32 条 write）原样写进表里再读回来，逐字节比对。它证明的
+不是"某个手搓的行能存下"，而是"契约真正产生的东西能存下"。
+
+本轮门禁：
+
+```text
+ruff format --check .    passed（216 files）
+ruff check .             passed
+pyright                  0 errors / 0 warnings
+agent-config-check       development / test / production 均为 status=ok
+alembic 唯一 head        0010_workflow_checkpoints
+
+pytest（无外部服务）              907 passed / 271 skipped
+pytest（真实 PostgreSQL + Qdrant） 1167 passed /  11 skipped
+```
+
+新增 11 条测试全部需要真实 PostgreSQL，因此无外部服务那一列的 `passed` 不变、
+`skipped` 从 260 涨到 271。
+
+### 本轮明确未做
+
+- **saver 本身**：`BaseCheckpointSaver` 的 `aput` / `aput_writes` / `aget_tuple` /
+  `alist` 一个都没实现，`LangGraphTaskWorkflow` 仍默认 `InMemorySaver`，所以
+  **进程重启不保留执行位置这一条至今没有变化**（这一条已由上面的
+  [PR-050（二）](#2026-07-28-pr-050二saver-本身跨进程恢复第一次有了证据)在
+  checkpointer 层解决）；
+- **thread → graph version 的映射仍在进程内存里**。它没有进这三张表：按实施计划
+  §6 它属于 `task_runs.graph_version`，而 ADR-014 写明 checkpointer 不得成为 Task
+  产品状态的第二个 writer。它随 WP06-07 的 `task_runs` 落库；
+- checkpoint 的保留与清理策略。三张表都有 `created_at`（blob 只能靠它——它只能经由
+  checkpoint 不透明载荷里的 `channel_versions` 到达，SQL 无法把它 join 回来），但还
+  没有任何东西会删除它们。
 
 ## 2026-07-28 PR-049 LangGraph Adapter 与 graph version 注册表
 

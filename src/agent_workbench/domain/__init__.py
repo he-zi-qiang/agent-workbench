@@ -44,6 +44,21 @@ from agent_workbench.domain.events import (
     EventEnvelope,
     EventPayload,
     EventType,
+    TaskAwaitingApproval,
+    TaskCancelled,
+    TaskClaimed,
+    TaskDeadLettered,
+    TaskFailed,
+    TaskParkedForMigration,
+    TaskRetryScheduled,
+    TaskSubmitted,
+    TaskSucceeded,
+)
+from agent_workbench.domain.evidence import (
+    EvidenceBundle,
+    EvidenceItem,
+    EvidenceRevision,
+    ExternalSearchHit,
 )
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.messages import (
@@ -84,6 +99,7 @@ from agent_workbench.domain.schema import (
     JsonObject,
     VersionedModel,
 )
+from agent_workbench.domain.task_inputs import TaskInput
 from agent_workbench.domain.tasks import (
     CANONICAL_V1_NODE_IDS,
     ReviewDecision,
@@ -133,7 +149,11 @@ __all__ = [
     "EventEnvelope",
     "EventPayload",
     "EventType",
+    "EvidenceBundle",
+    "EvidenceItem",
+    "EvidenceRevision",
     "ExecutionContext",
+    "ExternalSearchHit",
     "Identifier",
     "IncompatibleSchemaError",
     "JsonObject",
@@ -156,9 +176,19 @@ __all__ = [
     "SourceLocator",
     "StaleExecutionError",
     "StopReason",
+    "TaskAwaitingApproval",
+    "TaskCancelled",
+    "TaskClaimed",
+    "TaskDeadLettered",
+    "TaskFailed",
+    "TaskInput",
     "TaskNodeId",
+    "TaskParkedForMigration",
+    "TaskRetryScheduled",
     "TaskState",
     "TaskStep",
+    "TaskSubmitted",
+    "TaskSucceeded",
     "TextBlock",
     "TokenUsage",
     "ToolCall",

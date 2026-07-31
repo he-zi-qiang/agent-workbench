@@ -29,15 +29,16 @@ recovery_poll_seconds = 1
 [observability]
 trace_sample_ratio = 0.0
 
+[qdrant]
+# The test profile may bootstrap an isolated disposable Qdrant instance.
+allow_local_bootstrap = true
+
 [testing]
 failpoints_enabled = true
 allow_fault_injection = true
 allowed_failpoints = [
   "after_claim_commit_before_advisory_lock",
   "after_node_before_checkpoint",
-  "after_fence_row_lock",
-  "after_final_checkpoint_before_registry_update",
-  "after_approval_commit_before_dispatch",
-  "after_artifact_write_before_ledger_commit",
-  "after_qdrant_upsert_before_outbox_ack",
+  "inside_checkpoint_put",
+  "after_graph_complete_before_registry_commit",
 ]

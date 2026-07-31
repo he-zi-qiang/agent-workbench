@@ -19,6 +19,7 @@ application registers no chat route rather than one that cannot answer.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,22 +30,27 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.persistence import (
+    PostgresApprovalStore,
     PostgresChatExpirationCoordinator,
     PostgresChatReleaseCoordinator,
     PostgresConversationStore,
     PostgresDocumentStore,
     PostgresEventLog,
+    PostgresTaskRegistry,
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.vector import QdrantVectorIndex
+from agent_workbench.application.approvals import ApprovalService
 from agent_workbench.application.chat import REFUSAL, ChatService
 from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
     ChatTurnReaper,
 )
 from agent_workbench.application.retrieval import RetrievalService
+from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
+from agent_workbench.application.tasks import SubmittedSemantics, TaskService
 from agent_workbench.application.uploads import UploadService
 from agent_workbench.apps.api.identity import HeaderPrincipalResolver
 from agent_workbench.bootstrap.embedding_factory import (
@@ -54,9 +60,14 @@ from agent_workbench.bootstrap.embedding_factory import (
 from agent_workbench.bootstrap.model_factory import build_model
 from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig
+from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
 from agent_workbench.bootstrap.reranker_factory import (
     RerankerUnavailable,
     build_reranker,
+)
+from agent_workbench.bootstrap.sparse_factory import (
+    SparseEncodingUnavailable,
+    build_sparse_encoder,
 )
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.artifact_store import ArtifactStore
@@ -92,9 +103,23 @@ class ApiDependencies:
     # written against a silently unreranked process would credit the difference
     # to the model.
     reranker_unavailable: str | None
+    # Dense Chat remains useful when the optional lexical projection is
+    # missing, but the process records the downgrade so an evaluation cannot
+    # accidentally label the run "hybrid".
+    sparse_unavailable: str | None
     http: httpx.AsyncClient | None
+    # The long-lived client and its read-alias index are process resources,
+    # not per-request construction details. Lifespan validates them before
+    # routes are served and dispose closes the same client on every exit path.
     qdrant: AsyncQdrantClient | None
+    vector_index: QdrantVectorIndex | None
     events: EventLogPort
+    task_service: TaskService
+    task_inputs: TaskInputService
+    # The human half of a Task. Assembled unconditionally, like the Task
+    # service: an API that can open a Task must be able to answer the
+    # approval that Task stops on, or the Task has no way forward.
+    approvals: ApprovalService
 
     @property
     def max_control_request_body_bytes(self) -> int:
@@ -131,6 +156,16 @@ class ApiDependencies:
         if self.qdrant is not None:
             await self.qdrant.close()
         await self.engine.dispose()
+
+    async def startup(self) -> None:
+        """Check the Qdrant read path before accepting any HTTP request."""
+
+        if self.qdrant is not None:
+            await verify_qdrant_startup(
+                self.qdrant,
+                qdrant=self.config.qdrant,
+                embedding=self.config.embedding,
+            )
 
 
 def build_dependencies(
@@ -182,7 +217,28 @@ def build_dependencies(
     conversations = PostgresConversationStore(engine)
     releaser = PostgresChatReleaseCoordinator(engine)
 
-    chat, unavailable, http, qdrant, no_reranker = (
+    events = PostgresEventLog(engine)
+    task_service = TaskService(
+        registry=PostgresTaskRegistry(engine, events=events),
+        events=events,
+        graph_version=config.task.graph_version,
+        semantics=lambda: SubmittedSemantics(
+            # The projection contains deterministic values only.  Copying the
+            # mapping makes every submission own its snapshot rather than
+            # sharing mutable request-independent configuration state.
+            run_semantics_snapshot=deepcopy(config.task.run_semantics_snapshot),
+            run_semantics_revision=config.task.run_semantics_revision,
+            policy_revision=config.task.policy_revision,
+            policy_fingerprint=config.task.policy_fingerprint,
+            authorization_envelope=config.task.default_authorization_envelope,
+        ),
+    )
+    task_inputs = TaskInputService(
+        inputs=TaskInputStore(artifacts),
+        tasks=task_service,
+    )
+
+    chat, unavailable, http, qdrant, vector_index, no_reranker, no_sparse = (
         _assemble_chat(
             config,
             documents,
@@ -190,9 +246,16 @@ def build_dependencies(
             releaser=releaser,
         )
         if with_chat
-        else (None, "chat was not requested for this process", None, None, None)
+        else (
+            None,
+            "chat was not requested for this process",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
     )
-    events = PostgresEventLog(engine)
     return ApiDependencies(
         config=config,
         engine=engine,
@@ -223,9 +286,16 @@ def build_dependencies(
         ),
         chat_unavailable=unavailable,
         reranker_unavailable=no_reranker,
+        sparse_unavailable=no_sparse,
         http=http,
         qdrant=qdrant,
+        vector_index=vector_index,
         events=events,
+        task_service=task_service,
+        task_inputs=task_inputs,
+        approvals=ApprovalService(
+            approvals=PostgresApprovalStore(engine, events=events)
+        ),
     )
 
 
@@ -240,6 +310,8 @@ def _assemble_chat(
     str | None,
     httpx.AsyncClient | None,
     AsyncQdrantClient | None,
+    QdrantVectorIndex | None,
+    str | None,
     str | None,
 ]:
     """Build the chat stack, or report the one reason it could not be built.
@@ -252,13 +324,15 @@ def _assemble_chat(
 
     embedder = build_embedder(config.embedding)
     if isinstance(embedder, EmbeddingUnavailable):
-        return None, embedder.reason, None, None, None
+        return None, embedder.reason, None, None, None, None, None
 
     # After the embedder, because a process that cannot chat has no use for a
     # reranker and loading one would be several gigabytes spent on a capability
     # that is not being served.
     reranker = build_reranker(config.reranker)
     no_reranker = reranker.reason if isinstance(reranker, RerankerUnavailable) else None
+    sparse = build_sparse_encoder(config.embedding)
+    no_sparse = sparse.reason if isinstance(sparse, SparseEncodingUnavailable) else None
 
     # Constructed before the model because the adapter takes it: httpx opens
     # no socket until the first request, so a refusal below simply ends a
@@ -275,11 +349,18 @@ def _assemble_chat(
         ),
         timeout=config.qdrant.request_timeout_seconds,
     )
+    # Read via the alias, never the ingestion collection. This makes an alias
+    # switch affect new Chat requests without changing the write target.
+    vector_index = QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias)
+
     chat = ChatService(
         retrieval=RetrievalService(
             embedder=embedder,
-            index=QdrantVectorIndex(qdrant, collection=config.qdrant.write_collection),
+            index=vector_index,
             documents=documents,
+            sparse_encoder=(
+                None if isinstance(sparse, SparseEncodingUnavailable) else sparse
+            ),
             reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
             rerank_timeout_seconds=config.reranker.timeout_seconds,
         ),
@@ -297,7 +378,7 @@ def _assemble_chat(
         request_timeout_seconds=config.request_timeout_seconds,
         orphan_grace_seconds=config.chat_recovery.orphan_grace_seconds,
     )
-    return chat, None, client, qdrant, no_reranker
+    return chat, None, client, qdrant, vector_index, no_reranker, no_sparse
 
 
 __all__ = ["ApiDependencies", "InsecureDeploymentError", "build_dependencies"]

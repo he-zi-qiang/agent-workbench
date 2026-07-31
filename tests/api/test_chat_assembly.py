@@ -105,6 +105,7 @@ def test_a_missing_reranker_does_not_cost_the_chat_capability(
 
     from agent_workbench.apps.api import dependencies as assembly
     from agent_workbench.bootstrap.reranker_factory import RerankerUnavailable
+    from agent_workbench.bootstrap.sparse_factory import SparseEncodingUnavailable
 
     class _Embedder:
         dimension = 1024
@@ -122,12 +123,18 @@ def test_a_missing_reranker_does_not_cost_the_chat_capability(
         "build_reranker",
         lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
     )
+    monkeypatch.setattr(
+        assembly,
+        "build_sparse_encoder",
+        lambda _c: SparseEncodingUnavailable(reason="no lexical runtime here"),
+    )
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
 
     assert dependencies.serves_chat is True
     assert dependencies.chat_unavailable is None
     assert dependencies.reranker_unavailable == "no reranking runtime here"
+    assert dependencies.sparse_unavailable == "no lexical runtime here"
 
 
 def test_an_unreranked_process_says_so(

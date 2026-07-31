@@ -12,9 +12,15 @@ this module rather than in the adapter:
   research branch finished first, and re-merging an already merged
   contribution changes nothing.  A checkpoint written after a crash mid-fan-in
   therefore converges instead of accumulating duplicates.
-* a quality gate that has run out of revisions returns **no next node**.
-  Routing an exhausted budget to approval would approve a draft the critic
-  rejected, which turns the gate into a formality precisely when it matters.
+* a quality gate that has run out of revisions returns **no next node** and a
+  stable failure reason.  Routing an exhausted budget to approval would
+  approve a draft the critic rejected, which turns the gate into a formality
+  precisely when it matters.
+* the approval gate routes the same way, for the same reason.  A rejection is a
+  path through the graph rather than the absence of one, and the path it takes
+  is **not** the export: a gate whose rejection still exported would be a
+  formality too.  So ``approval`` is a conditional node, and a rejected decision
+  returns no next node together with its own terminal failure reason.
 """
 
 from __future__ import annotations
@@ -35,7 +41,9 @@ TERMINAL_NODE: Final[TaskNodeId] = "export"
 
 # Nodes whose successor depends on state.  Everything else has one static
 # successor, and a node with no entry here is terminal.
-CONDITIONAL_NODES: Final[frozenset[TaskNodeId]] = frozenset({"route", "quality_gate"})
+CONDITIONAL_NODES: Final[frozenset[TaskNodeId]] = frozenset(
+    {"route", "quality_gate", "approval"}
+)
 
 # The fan-in point: both research branches converge on synthesize.
 RESEARCH_BRANCHES: Final[tuple[TaskNodeId, ...]] = (
@@ -50,7 +58,9 @@ _STATIC_EDGES: Final[dict[TaskNodeId, tuple[TaskNodeId, ...]]] = {
     "research_external": ("synthesize",),
     "synthesize": ("critic",),
     "critic": ("quality_gate",),
-    "approval": ("export",),
+    # Conditional; see route_approval.  Listed with no static successor so the
+    # edge table stays the single source of "which nodes exist".
+    "approval": (),
     "export": (),
 }
 
@@ -80,6 +90,20 @@ class MissingReviewError(RuntimeError):
     def __init__(self, task_id: str) -> None:
         self.task_id = task_id
         super().__init__(f"quality gate requires a review result: {task_id}")
+
+
+class MissingApprovalError(RuntimeError):
+    """Raised when the approval gate routes before a decision was recorded.
+
+    Failing is the only safe answer.  The two alternatives are exporting on an
+    approval nobody gave, and treating "no answer yet" as a rejection -- and a
+    graph that reached this router has already left its interrupt behind, so
+    "wait" is not a value this function can return.
+    """
+
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"approval gate requires a recorded decision: {task_id}")
 
 
 def route_research(state: TaskState) -> tuple[TaskNodeId, ...]:
@@ -112,6 +136,59 @@ def route_quality_gate(state: TaskState) -> TaskNodeId | None:
     return "synthesize" if state.can_revise else None
 
 
+def quality_gate_failure_reason(state: TaskState) -> str | None:
+    """Return the terminal failure recorded by an exhausted quality gate.
+
+    ``None`` is deliberately different from the graph reaching ``END``: the
+    latter is only a framework control-flow detail.  This value is carried
+    across the workflow port and checkpoint inspection boundary so a Worker
+    can mark the product Task failed rather than inferring success from an
+    empty pending-node list.
+    """
+
+    review = state.review_result
+    if review is None or review.decision != "revise" or state.can_revise:
+        return None
+    return (
+        "the critic requested another revision after the revision budget was exhausted"
+    )
+
+
+def route_approval(state: TaskState) -> TaskNodeId | None:
+    """Return the next node after the approval gate, or ``None`` to fail.
+
+    ``None`` is a rejection.  It is deliberately not ``export``: the export is
+    the Task's one externally visible write, and reaching it after a human said
+    no would make the approval a formality.  The caller has to decide the Task
+    failed, and cannot reach the export by ignoring a value.
+    """
+
+    if state.approval_decision is None:
+        raise MissingApprovalError(state.task_id)
+    return "export" if state.approval_decision == "approved" else None
+
+
+def approval_failure_reason(state: TaskState) -> str | None:
+    """Return the terminal failure recorded by a rejected approval."""
+
+    if state.approval_decision != "rejected":
+        return None
+    return "a human rejected the approval required before export"
+
+
+def terminal_failure_reason(state: TaskState) -> str | None:
+    """Return why this state is a *deliberate* terminal failure, if it is.
+
+    One entry point, because a caller that had to remember both gates would
+    eventually remember one.  The two are mutually exclusive by construction --
+    an exhausted budget requires the critic's verdict to be ``revise``, and an
+    approval requires it to be ``pass`` -- so their order here is not a
+    precedence rule, and a test pins that rather than trusting the reading.
+    """
+
+    return quality_gate_failure_reason(state) or approval_failure_reason(state)
+
+
 def next_nodes(node: TaskNodeId, state: TaskState) -> tuple[TaskNodeId, ...]:
     """Return every successor of ``node`` for ``state``.
 
@@ -124,6 +201,9 @@ def next_nodes(node: TaskNodeId, state: TaskState) -> tuple[TaskNodeId, ...]:
     if node == "quality_gate":
         target = route_quality_gate(state)
         return () if target is None else (target,)
+    if node == "approval":
+        approved = route_approval(state)
+        return () if approved is None else (approved,)
     return _STATIC_EDGES[node]
 
 
@@ -229,14 +309,19 @@ __all__ = [
     "STATIC_EDGES",
     "TERMINAL_NODE",
     "EmptyPlanError",
+    "MissingApprovalError",
     "MissingReviewError",
     "ResearchContribution",
+    "approval_failure_reason",
     "begin_revision",
     "declared_nodes",
     "evolve",
     "fan_in",
     "merge_refs",
     "next_nodes",
+    "quality_gate_failure_reason",
+    "route_approval",
     "route_quality_gate",
     "route_research",
+    "terminal_failure_reason",
 ]

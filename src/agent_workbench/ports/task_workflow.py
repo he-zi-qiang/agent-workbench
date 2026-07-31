@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Protocol, runtime_checkable
 
-from pydantic import StringConstraints, model_validator
+from pydantic import Field, StringConstraints, model_validator
 
 from agent_workbench.domain.identifiers import Identifier
-from agent_workbench.domain.schema import DomainModel
+from agent_workbench.domain.schema import DomainModel, ShortText
 from agent_workbench.domain.tasks import TaskNodeId, TaskState
 
 GraphVersion = Annotated[
@@ -30,7 +30,58 @@ GraphVersion = Annotated[
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
     ),
 ]
-WorkflowDisposition = Literal["completed", "interrupted"]
+WorkflowDisposition = Literal["completed", "failed", "interrupted"]
+
+# Scalar configurable names shared by the workflow adapter and durable saver.
+# They are protocol fields, not LangGraph implementation details: LangGraph
+# persists configurable scalars in metadata, which is how the fence survives a
+# saver-returned config and its parent config without entering ``TaskState``.
+CHECKPOINT_FENCE_TASK_ID_KEY = "checkpoint_fence_task_id"
+CHECKPOINT_FENCE_WORKER_ID_KEY = "checkpoint_fence_worker_id"
+CHECKPOINT_FENCE_EPOCH_KEY = "checkpoint_fence_epoch"
+CHECKPOINT_FENCE_GUARD_PID_KEY = "checkpoint_fence_guard_backend_pid"
+CHECKPOINT_FENCE_GUARD_KEY_KEY = "checkpoint_fence_guard_lock_key"
+
+
+class CheckpointFence(DomainModel):
+    """The Worker lease that authorizes one checkpoint write.
+
+    It is deliberately smaller than ``ExecutionLease`` and lives on the
+    workflow port rather than the Registry port: a checkpointer needs only the
+    durable task identity and fencing token, not any lifecycle transition API.
+    The value travels in LangGraph's opaque config, never in ``TaskState``.
+    """
+
+    task_id: Identifier
+    worker_id: Identifier
+    epoch: int = Field(ge=1)
+    # The session which holds the advisory lock and the exact signed bigint
+    # key it holds. They remain optional for unfenced, narrow saver tests, but
+    # a production ``require_fence`` saver rejects their absence.
+    guard_backend_pid: int | None = Field(default=None, ge=1)
+    guard_lock_key: int | None = Field(default=None, ge=-(2**63), le=(2**63) - 1)
+
+    @model_validator(mode="after")
+    def validate_guard_identity(self) -> CheckpointFence:
+        if (self.guard_backend_pid is None) != (self.guard_lock_key is None):
+            raise ValueError(
+                "checkpoint guard pid and lock key must be supplied together"
+            )
+        return self
+
+
+class ApprovalResume(DomainModel):
+    """The wake-up handed to a graph interrupted at an approval.
+
+    It names the approval and the version of the decision the caller saw, and
+    nothing else. The decision itself is deliberately absent: the node re-reads
+    it from the ledger, so this value is a pointer rather than an answer. A
+    resume payload that carried the verdict would make "approved" mean
+    "somebody called resume with the word approved in it".
+    """
+
+    approval_id: Identifier
+    decision_version: int = Field(ge=1)
 
 
 class TaskWorkflowResult(DomainModel):
@@ -47,16 +98,65 @@ class TaskWorkflowResult(DomainModel):
     disposition: WorkflowDisposition
     state: TaskState
     next_nodes: tuple[TaskNodeId, ...] = ()
+    failure_reason: ShortText | None = None
 
     @model_validator(mode="after")
     def validate_disposition(self) -> TaskWorkflowResult:
         if len(set(self.next_nodes)) != len(self.next_nodes):
             raise ValueError("next_nodes must be unique")
-        if self.disposition == "completed" and self.next_nodes:
-            raise ValueError("a completed workflow cannot have next_nodes")
+        if self.disposition in {"completed", "failed"} and self.next_nodes:
+            raise ValueError("a terminal workflow cannot have next_nodes")
         if self.disposition == "interrupted" and not self.next_nodes:
             raise ValueError("an interrupted workflow must identify a next node")
+        if self.disposition == "failed" and self.failure_reason is None:
+            raise ValueError("a failed workflow must identify a failure reason")
+        if self.disposition != "failed" and self.failure_reason is not None:
+            raise ValueError("only a failed workflow may identify a failure reason")
         return self
+
+
+class CheckpointPosition(DomainModel):
+    """Where a thread's graph stopped, in terms no framework object appears in.
+
+    ``graph_version`` is ``None`` for a checkpoint that never recorded which
+    graph wrote it. That is not the same as a mismatch, and it is not more
+    recoverable than one: an unlabelled position is one no process can claim to
+    understand.
+
+    ``pending_nodes`` is empty for a finished graph -- and also for a checkpoint
+    whose graph this process cannot build, because pending work is LangGraph's
+    own computation and asking for it requires compiling the graph that wrote
+    it. That case is not ambiguous in practice: a position whose version cannot
+    be built is parked before anything reads its pending nodes.
+    """
+
+    graph_version: GraphVersion | None = None
+    pending_nodes: tuple[TaskNodeId, ...] = ()
+    awaiting_approval_id: Identifier | None = None
+    failure_reason: ShortText | None = None
+
+    @model_validator(mode="after")
+    def validate_interrupt(self) -> CheckpointPosition:
+        if self.awaiting_approval_id is not None and not self.pending_nodes:
+            # A graph waiting for an approval has not finished. Allowing both
+            # at once would make "finished" and "awaiting approval" depend on
+            # which one the reader checks first.
+            raise ValueError("a position awaiting an approval must have pending nodes")
+        if self.failure_reason is not None and self.pending_nodes:
+            raise ValueError("a failed position cannot have pending nodes")
+        if self.failure_reason is not None and self.awaiting_approval_id is not None:
+            raise ValueError("a failed position cannot await an approval")
+        return self
+
+    @property
+    def finished(self) -> bool:
+        return not self.pending_nodes
+
+    @property
+    def failed(self) -> bool:
+        """Whether the graph reached its own explicit failed terminal state."""
+
+        return self.failure_reason is not None
 
 
 class WorkflowThreadAlreadyExistsError(RuntimeError):
@@ -105,6 +205,7 @@ class TaskWorkflowPort(Protocol):
         *,
         thread_id: Identifier,
         graph_version: GraphVersion,
+        checkpoint_fence: CheckpointFence | None = None,
     ) -> TaskWorkflowResult:
         """Start ``state`` once under a previously unused workflow thread.
 
@@ -118,6 +219,8 @@ class TaskWorkflowPort(Protocol):
         *,
         thread_id: Identifier,
         graph_version: GraphVersion,
+        checkpoint_fence: CheckpointFence | None = None,
+        approval: ApprovalResume | None = None,
     ) -> TaskWorkflowResult:
         """Continue the existing checkpoint without resubmitting initial state.
 
@@ -125,11 +228,30 @@ class TaskWorkflowPort(Protocol):
         version different from the checkpoint's version raises
         ``WorkflowGraphVersionMismatchError`` and leaves the checkpoint
         untouched.
+
+        ``approval`` wakes a thread stopped at an approval interrupt. It is
+        optional because ordinary unfinished work resumes with nothing, and it
+        is a pointer rather than a verdict: see :class:`ApprovalResume`.
+        """
+        ...
+
+    async def inspect(self, thread_id: Identifier) -> CheckpointPosition | None:
+        """Report where ``thread_id`` stands, without running anything.
+
+        ``None`` when the thread has no checkpoint. This is what lets a Worker
+        decide between starting, resuming and parking *before* it commits to
+        any of them, rather than by attempting one and reading the exception.
         """
         ...
 
 
 __all__ = [
+    "CHECKPOINT_FENCE_EPOCH_KEY",
+    "CHECKPOINT_FENCE_TASK_ID_KEY",
+    "CHECKPOINT_FENCE_WORKER_ID_KEY",
+    "ApprovalResume",
+    "CheckpointFence",
+    "CheckpointPosition",
     "GraphVersion",
     "TaskWorkflowPort",
     "TaskWorkflowResult",

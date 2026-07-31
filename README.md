@@ -13,10 +13,10 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-07-28，主分支基线为 **`main@341cbf5`**。PR-035～PR-049 已全部合入：
-安全发布、多轮上下文、EventLog 可演进回放、幂等 Chat Turn、原子授权发布、
-无流量恢复、固定 lease 原子过期，以及 Reranker、Task 工作流状态与 sparse
-加载守卫。已经实现并有测试证据：
+截至 2026-07-29，开发工作位于
+**`pr-050-postgres-checkpointer` 自 `5d943af` 之后的 A–F 汇合增量**；它不是 `main`
+发布快照，但最终汇合工作树已经通过统一的静态、无状态和真实
+PostgreSQL/Qdrant 门禁。当前可确认的实现包括：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -66,11 +66,21 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 - 后台 pending-release recovery 会重新执行最终 ACL/revision 栅栏并原子发布，
   不依赖原客户端用同一幂等键重试；即使 embedding/model 不可用也继续恢复；
 - 与固定检索共用 `RetrievalService` 的 `knowledge_search` Tool Adapter。
+- **A/B 已完成：**Task 工作流具有显式成功/失败终态和正确的 revision 预算语义；
+  Task 提交使用 tenant-scoped 幂等键与输入 fingerprint，API 查询按 owner/tenant
+  失败隐藏；
+- **C 已完成：**TaskInput 以 Artifact 持久化，Task API、CLI、独立
+  `agent-task-worker` 入口、poll loop 与显式 demo composition 已形成单 Worker
+  纵向切片；
+- **D/E 主体完成并通过回归：**真实 Task handlers、内部研究与 evidence Artifact、
+  PostgreSQL `SKIP LOCKED` claim、lease/heartbeat/epoch、stale reclaim、
+  retry/dead-letter、advisory execution guard、fenced checkpointer 和生命周期事件
+  已进入工作树，并通过真实 PostgreSQL/Qdrant 全量状态测试；
+- **F 部分完成：**Qdrant 启动校验、常驻摄取 Worker 的
+  claim/heartbeat/fencing、Task 生命周期时间线以及本机 Compose 演示拓扑已经实现。
 
 这些能力仍有明确边界：
 
-- `IngestionWorker` 仍是可调用组件，没有常驻进程、heartbeat、retry/dead-letter 和
-  多 Worker 外部副作用 fencing；上传后自动可检索的产品 E2E 尚未贯通。
 - 旧 Qdrant Point 已被 revision 栅栏阻止读取，但 replace/delete 物理清理尚未完成。
 - Chat 的历史 token window/compaction 和模型实际引用校验尚未实现；
   `knowledge_search` 尚未装配为可用的 Agentic Retrieval Mode。
@@ -78,18 +88,22 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
   隔离/跳过策略。
 - 三臂消融的 `hybrid-rerank` 臂尚未跑：hybrid 在当前 38 题 gold set 上已打满
   1.000，rerank delta 必然为 0；要测出它得先有更难的 gold set。
-- Task Agent node 只覆盖产物为 artifact 的四个节点；`plan`/`critic` 需要结构化
-  输出解码契约，尚未实现。
-- LangGraph adapter 目前只配内存 checkpointer，**进程重启不保留执行位置**；
-  PostgreSQL checkpointer、Task Worker 和 Task 查询接口都不存在，因此
-  **还没有任何 Task 能在产品意义上端到端运行或恢复**。
-- LlamaIndex/LangChain Adapter、Task Registry、Multi-Agent、CrewAI 对比、UI、
-  可观测性、生产身份认证和部署仍为 Planned。
+- 外部搜索目前只有 provider-neutral Port、Tool/Policy 接入和失败关闭 Adapter，
+  **没有真实搜索服务 Provider**。
+- `waiting_approval`、恢复决策和事件类型已经存在，但 Approval 的创建、决策 API、
+  授权复核及恢复闭环尚未贯通，不能表述为已完成 HITL。
+- OTel/Langfuse、CrewAI 对比、动态 Multi-Agent supervisor/workers、UI、
+  生产身份认证和生产部署仍未完成；LlamaIndex/LangChain 业务 Adapter 也尚未形成
+  可演示纵向切片。
+- 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 证明。
+- 当前汇合工作树门禁为：Ruff format/lint 通过，Pyright `0 errors`，无外部服务
+  `1054 passed / 409 skipped`，真实 PostgreSQL + Qdrant
+  `1452 passed / 11 skipped`；剩余状态测试跳过项需要本地真实 BGE 权重。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
-> 受控的本机开发，不得暴露到局域网、容器端口映射或公网。监听地址已强制为
-> loopback（默认 `127.0.0.1`，Settings 与装配层双重校验），但那是防止意外暴露的
-> 机制，不是身份认证——真实身份提供方仍未实现。
+> 受控的本机开发，不得暴露到局域网或公网。监听地址以及 Compose 端口映射均限制为
+> loopback（默认 `127.0.0.1`），但那只是防止意外暴露的机制，不是身份认证——真实
+> 身份提供方仍未实现。
 
 完整增量、测试证据、已知缺陷和未实现边界见
 [实施状态](docs/status.md)。
@@ -126,6 +140,13 @@ uv run pytest
 
 配置检查只验证结构和安全不变量，不会连接 PostgreSQL、Qdrant 或在线模型。
 测试和静态检查在依赖同步完成后可以离线运行。
+
+## 本机容器部署
+
+本机 PostgreSQL、Qdrant、迁移和 API 可通过 `docker compose up --build` 启动；API
+只映射到 `127.0.0.1:8000`。Task/Ingestion worker 仅在显式 `demo` profile 中以
+`--demo` 启动，不代表生产 worker 部署。完整命令、限制与 secret 注入方式见
+[本机 Compose 部署](docs/deployment.md)。
 
 ## 设计依据
 

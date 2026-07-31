@@ -156,32 +156,56 @@
     "schema_version": 1,
     "token_estimate": 96
   },
+  "EvidenceBundle": {
+    "internal_authorized_revisions": [
+      {
+        "document_id": "doc_1",
+        "source_revision": 3
+      }
+    ],
+    "items": [
+      {
+        "citation": {
+          "chunk_id": "chunk_1",
+          "document_id": "doc_1",
+          "document_version": "v3",
+          "locator": {
+            "char_end": null,
+            "char_start": null,
+            "page": 4,
+            "paragraph": 2
+          },
+          "quote": "one dense and sparse fusion per query"
+        },
+        "evidence_id": "evidence_00000000000000000000000001",
+        "source": "internal",
+        "text": "Qdrant performs one dense and sparse fusion per query.",
+        "title": null,
+        "url": null
+      }
+    ],
+    "schema_version": 1,
+    "source": "internal",
+    "task_id": "task_0000000000000000000000000000001"
+  },
   "EventEnvelope": {
     "durability": "durable",
     "event_id": "evt_0000000000000000000000000000001",
-    "event_type": "RunStarted",
+    "event_type": "TaskClaimed",
     "graph_node_id": null,
     "parent_event_id": null,
     "payload": {
-      "budget": {
-        "deadline": "2026-07-25T03:14:15Z",
-        "max_cost_micro_usd": 500000,
-        "max_steps": 8,
-        "max_tool_calls": 24,
-        "max_total_tokens": 120000
-      },
-      "kind": "RunStarted",
-      "model_profile": "main",
-      "run_kind": "chat",
-      "tool_names": [
-        "knowledge_search"
-      ]
+      "attempt": 2,
+      "epoch": 7,
+      "kind": "TaskClaimed",
+      "status": "running",
+      "task_id": "task_0000000000000000000000000000001"
     },
     "run_id": "run_0000000000000000000000000000001",
     "schema_version": 1,
     "sequence": 1,
     "stream_id": "stream_0000000000000000000000000000001",
-    "task_id": null,
+    "task_id": "task_0000000000000000000000000000001",
     "timestamp": "2026-07-25T03:14:15Z"
   },
   "ExecutionContext": {
@@ -261,6 +285,7 @@
       "art_outcome_a",
       "art_outcome_b"
     ],
+    "approval_decision": "approved",
     "approval_id": "apr_0000000000000000000000000000001",
     "budget_usage": {
       "cost_micro_usd": 4200,
@@ -278,6 +303,7 @@
       "art_evidence_a",
       "art_evidence_b"
     ],
+    "knowledge_base_id": null,
     "max_revisions": 2,
     "objective": "Produce a verified retrieval architecture brief.",
     "plan": [
@@ -307,6 +333,12 @@
     "revision_count": 0,
     "schema_version": 1,
     "task_id": "task_0000000000000000000000000000001"
+  },
+  "TaskInput": {
+    "knowledge_base_id": "kb_main",
+    "max_revisions": 3,
+    "objective": "Produce a verified retrieval architecture brief.",
+    "schema_version": 1
   },
   "ToolCall": {
     "arguments": {

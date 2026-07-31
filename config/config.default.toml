@@ -59,7 +59,10 @@ listener_healthcheck_seconds = 30
 [coordination]
 registry_backend = "postgresql"
 claim_strategy = "skip_locked"
-worker_concurrency = 2
+# The current Task Worker is intentionally single-process. Multi-worker
+# claiming waits for the lease/fencing work package rather than being implied
+# by a config number.
+worker_concurrency = 1
 claim_batch_size = 1
 claim_poll_interval_ms = 1000
 claim_poll_jitter_ms = 250
@@ -193,6 +196,9 @@ device = "auto"
 precision = "float16"
 dense_enabled = true
 sparse_enabled = true
+# BGE-M3 tokenizer vocabulary. A lexical head of another width is rejected
+# before it can populate a collection with plausible but meaningless weights.
+sparse_vocabulary_size = 250002
 dense_vector_name = "dense"
 sparse_vector_name = "sparse"
 
@@ -231,6 +237,10 @@ derived_index = true
 payload_acl_filter_required = true
 # Only a local deployment may be false; every remote scope requires true + HTTPS.
 api_key_required = false
+# Startup never creates or rewires an index by accident. Set true explicitly
+# only for a disposable local/test environment to create write_collection and
+# bind read_alias to it.
+allow_local_bootstrap = false
 
 [artifact_store]
 backend = "local"

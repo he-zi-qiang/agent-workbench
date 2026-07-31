@@ -11,6 +11,7 @@
 | [架构与技术选型基线](./architecture-baseline.md) | v1.3 | 锁定产品边界、分层、组件职责、可靠性协议和技术选型 |
 | [代码实施计划](./implementation-plan.md) | v1.0 | 将目标架构拆成工作包、PR、迁移、测试门禁和证据包 |
 | [配置管理契约](./configuration.md) | schema 1.2 | 定义配置来源、密钥规则、快照语义和跨域校验 |
+| [本机 Compose 部署](./deployment.md) | local demo | 定义可复现容器拓扑、端口边界与 demo worker 限制 |
 
 ## 决策记录
 
@@ -23,6 +24,8 @@
   缺陷、能力边界和建议修复顺序；
 - [2026-07-27 仓库复核报告](./repository-audit-2026-07-27.md)：记录摄取 Worker、
   `knowledge_search` 与 Chat/RAG 安全边界的最新复核；
+- [2026-07-29 当前实现完成度与缺陷报告](./repository-audit-2026-07-29.md)：
+  按“已完成、未完成、已有缺陷”重新盘点当前 Task 持久化分支，并给出后续 PR 顺序；
 - [Clean-room 与合规说明](./compliance.md)：说明来源边界和可公开表述；
 - [仓库 NOTICE](../NOTICE.md)：声明本项目不包含来源不明的私有实现。
 
@@ -35,36 +38,29 @@
 
 ## 当前事实
 
-截至 2026-07-28，主分支基线为 **`main@341cbf5`**。PR-035～PR-049 已全部合入：
-Chat 安全发布、多轮、EventLog 演进/幂等、Turn 幂等、原子授权发布、固定 lease、
-无流量恢复、原子过期，以及 Task 工作流状态、Reranker 和 sparse 加载守卫。
-已经实现并测试：
+截至 2026-07-29，最新开发事实来自
+**`pr-050-postgres-checkpointer` 自 `5d943af` 之后的 A–F 汇合增量**，不是 `main` 的
+发布快照。已有的 Runtime、Chat/Dense RAG、安全发布与恢复能力继续成立；A–F 修复
+的当前状态如下：
 
-- 框架无关的领域契约、Ports、Fake Adapter 和可复现 CLI；
-- 自研 Runtime 的串行 Tool Loop、Policy/Tool Gateway、预算与取消、并行只读
-  调度、exclusive 屏障和 Hook Bus；
-- DeepSeek OpenAI-compatible 流式协议 Adapter 与 API 装配；
-- PostgreSQL ConversationStore、文档/版本/ACL、事务 Outbox、竞争领取和摄取 Worker；
-- Local ArtifactStore，以及 Upload / Artifact / Health / Chat / SSE FastAPI 路由；
-- PostgreSQL EventLog 的 gap-free cursor、显式 envelope schema version 与生产者时间戳；
-- BGE-M3 Dense、Qdrant Dense/Hybrid、固定 2-step RAG 与检索评测；
-- BGE reranker：位于授权之后、`top_k` 之前，超时/异常窄回退到已授权顺序；
-- 缺少 `sparse_linear.pt` 时**拒绝构造** sparse 编码器，而不是静默用随机投影；
-- Task 工作流的 checkpoint-safe `TaskState` 与 `TaskWorkflowPort`；
-- 固定研究图的条件路由与确定性 fan-in reducer（框架无关，无 `langgraph` 依赖）；
-- Chat answer release gate、source revision 读取栅栏、已提交消息的顺序多轮回放、
-  幂等 Turn ledger、固定执行 lease、`running/release_pending` 后台恢复、
-  Turn 与 durable `ChatTurnExpired` 原子提交，以及 `knowledge_search` Tool Adapter；
-- answer/expiry 共用 `chat-turn:{sha256(turn_id)}:terminal`，claim 不机会式回收，
-  迟到 prepare/cleanup 不写裸过期事实；PostgreSQL 按 Turn 隔离事务和毒化候选。
+| 修复组 | 状态 | 当前事实 |
+|---|---|---|
+| A | **完成** | Task 工作流显式区分成功/失败，revision 预算与 critic 拒绝终态已订正 |
+| B | **完成** | tenant-scoped 提交幂等、输入 fingerprint、owner/tenant 查询隔离已落地 |
+| C | **完成** | TaskInput Artifact、Task API/CLI、独立 Worker 入口与单 Worker 纵向切片已落地 |
+| D | **主体完成并通过回归** | 真实 handlers、内部研究/evidence、结构化 plan/critic 与 Task 授权上下文已接入；真实外部搜索 Provider 未实现 |
+| E | **主体完成并通过状态测试** | claim、lease/heartbeat/epoch、stale reclaim、retry/dead-letter、execution guard、fenced checkpointer 与确定性 failpoint 已接入 |
+| F | **部分完成** | Qdrant 启动校验、常驻摄取入口及 fencing、生命周期时间线和本机 Compose 已落地 |
 
-当前仍未完成：可靠常驻摄取 Worker、旧 Point 物理替换、历史 token
-window/compaction、可验证 Citation、Agentic Retrieval 最终 evidence gate、
-EventLog upcaster/poison-row 隔离、LlamaIndex/LangChain 互操作、三臂消融的
-`hybrid-rerank` 臂、LangGraph Task adapter/节点/checkpointer/Worker、
-Task Registry、Multi-Agent、生产身份认证、UI 和完整部署。
+当前明确未完成：HITL Approval 端到端闭环、真实外部搜索、OTel/Langfuse、
+CrewAI 对比、动态 Multi-Agent、UI、生产身份认证和生产部署。LlamaIndex/LangChain
+业务 Adapter、Agentic Retrieval 的最终 evidence gate、旧 Qdrant Point 物理清理、
+历史 token window/compaction 与 EventLog upcaster/poison-row 隔离也仍未形成完整
+产品切片。
 
-安全边界：当前开发身份解析器信任请求头。监听地址已强制为 loopback（默认
-`127.0.0.1`，Settings 与装配层双重校验，并有真实 socket 测试），但生产身份认证
-仍未实现，因此 API 只能在受控本机环境使用。完整证据与已知问题见
-[实施状态](./status.md)。
+最终汇合工作树已经通过 Ruff format/lint、Pyright、Compose 静态校验和唯一 Alembic
+head 检查；无外部服务测试为 `1054 passed / 409 skipped`，真实 PostgreSQL + Qdrant
+测试为 `1452 passed / 11 skipped`。历史测试数字仍只属于各自注明的提交。当前开发
+身份解析器仍信任请求头，API 和 Compose 只允许在 loopback 的受控本机环境使用。完整证据与已知问题见
+[实施状态](./status.md)；A–F 修复前的问题原始快照见
+[2026-07-29 仓库审计](./repository-audit-2026-07-29.md)。

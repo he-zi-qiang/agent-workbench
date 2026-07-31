@@ -1209,12 +1209,16 @@ RAGAS 只在手动或定时离线评测中提供 LLM-judge 辅助，不能替代
 |---|---|
 | claim 已提交但 advisory lock 尚未取得 | 阻塞 `after_claim_commit_before_advisory_lock` → 终止 Worker → lease 到期后由新 Worker claim；不得留下永久假 running |
 | 旧 Worker node 完成后 lease 失效 | 阻塞 `after_node_before_checkpoint` → `expire_now` → 新 Worker claim → 释放旧 Worker，并断言 fenced reject |
-| `FencedCheckpointer` 校验/写入原子性 | 阻塞 `after_fence_row_lock` → 启动 reaper/新 claim 并断言其等待 → 释放事务后验证唯一合法 checkpoint |
-| Graph 完成但 Registry 未完成 | `after_final_checkpoint_before_registry_update` 抛出模拟进程崩溃 → 新 Worker reconciliation |
+| `FencedCheckpointer` 校验/写入原子性 | 阻塞 `inside_checkpoint_put` → 启动 reaper/新 claim 并断言其等待 → 释放事务后验证唯一合法 checkpoint |
+| Graph 完成但 Registry 未完成 | `after_graph_complete_before_registry_commit` 抛出模拟进程崩溃 → 新 Worker reconciliation |
 | 审批已提交但尚未恢复 | `after_approval_commit_before_dispatch` 终止 API/跳过通知消费 → 由轮询 Worker claim 并 resume |
 | 外部产物已写但 ledger 未完成 | `after_artifact_write_before_ledger_commit` 崩溃 → 使用稳定 operation key 重试 |
 | Qdrant upsert 已成功但 outbox 尚未确认 | `after_qdrant_upsert_before_outbox_ack` 崩溃 → reconciliation 幂等 upsert 并确认同一稳定 chunk ID |
 | Listener 断线遗漏通知 | 断开专用 LISTEN session → 提交多条 durable events → 重连后按 cursor catch-up |
+
+其中审批、ledger 与 Qdrant 的后三个名字是后续工作包的路线图，不在当前
+`FailpointName` 或 `config.test.toml` 白名单中；在对应 Adapter 落地前，配置这些
+名称必须失败关闭。
 
 `testing.allowed_failpoints` 是测试进程允许激活的规范名称白名单；具体测试
 每次只激活需要的点。未知名称必须在配置加载阶段失败，Listener 断线继续由

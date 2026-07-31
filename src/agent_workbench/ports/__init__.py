@@ -47,6 +47,12 @@ from agent_workbench.ports.event_log import (
     EventScope,
     EventSink,
 )
+from agent_workbench.ports.execution_guard import (
+    ExecutionGuard,
+    GuardFactory,
+    GuardUnavailableError,
+)
+from agent_workbench.ports.fault_injector import FailpointName, FaultInjector
 from agent_workbench.ports.model import (
     ModelEvent,
     ModelPort,
@@ -57,7 +63,9 @@ from agent_workbench.ports.model import (
     ModelUsageReported,
 )
 from agent_workbench.ports.policy import PolicyEngine
+from agent_workbench.ports.research import ExternalSearchPort
 from agent_workbench.ports.task_workflow import (
+    CheckpointFence,
     GraphVersion,
     TaskWorkflowPort,
     TaskWorkflowResult,
@@ -88,6 +96,7 @@ __all__ = [
     "ChatTurnResult",
     "ChatTurnStatus",
     "ChatTurnStore",
+    "CheckpointFence",
     "ConversationSession",
     "ConversationStore",
     "EventCursor",
@@ -95,7 +104,13 @@ __all__ = [
     "EventScope",
     "EventSink",
     "EvidenceRevisionGuard",
+    "ExecutionGuard",
+    "ExternalSearchPort",
+    "FailpointName",
+    "FaultInjector",
     "GraphVersion",
+    "GuardFactory",
+    "GuardUnavailableError",
     "IdempotencyKey",
     "ModelEvent",
     "ModelPort",

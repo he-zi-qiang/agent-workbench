@@ -442,6 +442,90 @@ def test_claimed_events_are_not_claimed_again(tmp_path: Path) -> None:
     assert _run(scenario, tmp_path) == (1, 0)
 
 
+def test_heartbeat_extends_the_current_claim_with_the_database_clock(
+    tmp_path: Path,
+) -> None:
+    async def scenario(harness: Harness) -> int:
+        await _upload(harness)
+        event = (await harness.outbox.claim(worker_id="worker_1"))[0]
+        async with harness.engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE outbox_events "
+                    "SET lease_until = now() - interval '1 second' "
+                    "WHERE event_id = :event_id"
+                ),
+                {"event_id": event.event_id},
+            )
+        await harness.outbox.heartbeat(
+            event_id=event.event_id,
+            claim_token=event.claim_token,
+            lease_seconds=60,
+        )
+        return len(await harness.outbox.claim(worker_id="worker_2"))
+
+    assert _run(scenario, tmp_path) == 0
+
+
+def test_a_stale_heartbeat_cannot_extend_a_reclaimed_event(tmp_path: Path) -> None:
+    async def scenario(harness: Harness) -> None:
+        await _upload(harness)
+        stale = (await harness.outbox.claim(worker_id="worker_1"))[0]
+        async with harness.engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE outbox_events "
+                    "SET lease_until = now() - interval '1 second' "
+                    "WHERE event_id = :event_id"
+                ),
+                {"event_id": stale.event_id},
+            )
+        current = (await harness.outbox.claim(worker_id="worker_2"))[0]
+        assert current.claim_token != stale.claim_token
+        await harness.outbox.heartbeat(
+            event_id=stale.event_id,
+            claim_token=stale.claim_token,
+            lease_seconds=60,
+        )
+
+    with pytest.raises(StaleExecutionError):
+        _run(scenario, tmp_path)
+
+
+def test_releasing_a_claim_makes_it_immediately_claimable(tmp_path: Path) -> None:
+    async def scenario(harness: Harness) -> tuple[str, str]:
+        await _upload(harness)
+        first = (await harness.outbox.claim(worker_id="worker_1"))[0]
+        await harness.outbox.release(
+            event_id=first.event_id,
+            claim_token=first.claim_token,
+        )
+        second = (await harness.outbox.claim(worker_id="worker_2"))[0]
+        return first.event_id, second.event_id
+
+    first, second = _run(scenario, tmp_path)
+    assert first == second
+
+
+def test_a_stale_token_cannot_release_a_newer_claim(tmp_path: Path) -> None:
+    async def scenario(harness: Harness) -> None:
+        await _upload(harness)
+        stale = (await harness.outbox.claim(worker_id="worker_1"))[0]
+        await harness.outbox.release(
+            event_id=stale.event_id,
+            claim_token=stale.claim_token,
+        )
+        current = (await harness.outbox.claim(worker_id="worker_2"))[0]
+        assert current.claim_token != stale.claim_token
+        await harness.outbox.release(
+            event_id=stale.event_id,
+            claim_token=stale.claim_token,
+        )
+
+    with pytest.raises(StaleExecutionError):
+        _run(scenario, tmp_path)
+
+
 def test_acknowledging_clears_the_pending_work(tmp_path: Path) -> None:
     async def scenario(harness: Harness) -> tuple[int, int]:
         await _upload(harness)

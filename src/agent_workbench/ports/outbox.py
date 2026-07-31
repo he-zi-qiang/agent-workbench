@@ -72,6 +72,27 @@ class OutboxPort(Protocol):
         """
         ...
 
+    async def heartbeat(
+        self,
+        *,
+        event_id: str,
+        claim_token: str,
+        lease_seconds: float,
+    ) -> None:
+        """Extend one current claim using the database clock.
+
+        Raises ``StaleExecutionError`` when the event has been reclaimed.
+        """
+        ...
+
+    async def release(self, *, event_id: str, claim_token: str) -> None:
+        """Yield a current claim without acknowledging the work.
+
+        Used when the per-document writer guard is already held elsewhere.
+        The token fence prevents a stale Worker from releasing a newer claim.
+        """
+        ...
+
     async def pending_count(self) -> int:
         """How many events are still unacknowledged."""
         ...
