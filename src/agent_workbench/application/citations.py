@@ -25,13 +25,19 @@ from dataclasses import dataclass
 from agent_workbench.application.ingestion import CHUNK_ID_PREFIX
 from agent_workbench.domain.context import Citation, ContextPacket
 
-#: How the prompt labels evidence, and therefore how a model refers to it:
-#: ``[chunk_id]``. The *shape* of a chunk id is part of the pattern, taken from
-#: the one place that mints them rather than copied -- ``[redacted]`` and
-#: ``[see below]`` are ordinary prose, and a scan that accepted any bracketed
-#: word would report them as invented sources and drown the signal that matters
-#: in punctuation.
-_CITED = re.compile(rf"\[({re.escape(CHUNK_ID_PREFIX)}_[0-9a-f]{{8,64}})\]")
+#: A chunk id wherever it appears, in whatever the model wrapped it in.
+#:
+#: This began as ``\[(...)\]``, matching the way the prompt labels evidence. The
+#: first live run against a real provider showed why that was wrong: asked to
+#: cite, DeepSeek wrote ``(chk_5793...)`` in parentheses, and an answer that
+#: plainly named its source came back with no sources at all. The delimiter was
+#: never the signal -- the *shape* is. A 32-hex-digit id under this prefix does
+#: not occur in prose by accident, so it is recognised bare, bracketed,
+#: parenthesised or in backticks.
+#:
+#: The shape comes from the one place that mints them rather than being copied,
+#: so a chunker that changes its id format cannot silently stop being cited.
+_CITED = re.compile(rf"\b({re.escape(CHUNK_ID_PREFIX)}_[0-9a-f]{{8,64}})\b")
 
 
 @dataclass(frozen=True, slots=True)

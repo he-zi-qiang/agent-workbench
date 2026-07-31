@@ -12,16 +12,31 @@
 # even when today's happens to have no password. They come from the environment;
 # scripts/dev.sh is the one place that knows them.
 #
-# There is no model here either. The defaults ship placeholder model ids so a
-# fresh checkout is obviously unconfigured, and `build_model` refuses to start a
-# process that could not answer. That refusal is right, so this profile does not
-# work around it: a local process either gets a real provider key through the
-# environment, or runs `--without-chat` and says so.
+# The model ids below are pinned because the defaults ship placeholders, and
+# `build_model` refuses to start a process that could not answer. The *key* is
+# still absent and still comes from the environment: a model id is the provider's
+# public catalogue name, and an API key is not.
+#
+#   AW_CONFIG_FILE=config/config.local.toml \
+#   AW_SECRETS__DEEPSEEK_API_KEY=sk-... agent-api
+#
+# Without that variable the process still refuses to start, which is the point:
+# there is no configuration in this repository that makes chat work by itself.
 
 [app]
 environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
+
+[model.main]
+# DeepSeek's catalogue name, pinned. The answering profile.
+model_id = "deepseek-chat"
+
+[model.compact]
+# History compaction. The same model here: DeepSeek has no cheaper small tier
+# worth pinning separately, and a second id nobody verified would be a config
+# value that only fails once a conversation grows long enough to compact.
+model_id = "deepseek-chat"
 
 [qdrant]
 # `docker run -p 6333:6333`, not the Compose service name.

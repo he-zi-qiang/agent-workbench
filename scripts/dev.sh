@@ -13,10 +13,14 @@
 # strings in configuration files -- one is a credential even when today's has no
 # password. Everything else comes from config/config.local.toml.
 #
-# There is no model provider here, so the API runs `--without-chat` and the Task
-# worker runs `--demo`. Both say so rather than pretending: `build_model`
-# refuses to start a process whose model it could not call, and that refusal is
-# the behaviour worth keeping.
+# Whether chat runs depends on one thing: AW_SECRETS__DEEPSEEK_API_KEY. With it,
+# the API serves chat and the Task worker runs the real model-calling graph.
+# Without it, the API runs `--without-chat` and the worker runs `--demo`, and
+# both say so rather than pretending -- `build_model` refuses to start a process
+# whose model it could not call, and that refusal is the behaviour worth keeping.
+#
+# The key is never read from a file in this repository and never written to one.
+# Export it in your shell, or source it from somewhere outside the checkout.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -71,6 +75,11 @@ migrate)
   ;;
 
 api)
+  if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "model provider configured: serving chat" >&2
+    exec "$PYTHON" -m agent_workbench.apps.api.main
+  fi
+  echo "no AW_SECRETS__DEEPSEEK_API_KEY: serving everything but chat" >&2
   exec "$PYTHON" -m agent_workbench.apps.api.main --without-chat
   ;;
 
@@ -81,6 +90,14 @@ ingest)
   ;;
 
 worker)
+  # The demo graph answers its own approval gate, so it never interrupts. Only
+  # the real handlers reach a human, which is why the walkthrough for that needs
+  # a provider.
+  if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "model provider configured: real graph" >&2
+    exec "$PYTHON" -m agent_workbench.apps.task_worker.main
+  fi
+  echo "no AW_SECRETS__DEEPSEEK_API_KEY: demo graph" >&2
   exec "$PYTHON" -m agent_workbench.apps.task_worker.main --demo
   ;;
 

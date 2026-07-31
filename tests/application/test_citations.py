@@ -63,6 +63,24 @@ def test_bracketed_prose_is_not_a_citation() -> None:
     assert cited_chunk_ids("No sources at all.") == ()
 
 
+def test_a_citation_counts_in_whatever_the_model_wrapped_it_in() -> None:
+    """Found by the first live run, not by reading the prompt.
+
+    The prompt labels evidence as ``[chunk_id]``, so the scan required brackets.
+    Asked to cite, DeepSeek used parentheses -- and an answer that plainly named
+    its source came back with none. The delimiter was never the signal.
+    """
+
+    for phrasing in (
+        f"see [{A}]",
+        f"see ({A})",
+        f"see `{A}`",
+        f"see {A}.",
+        f"Source: {A}",
+    ):
+        assert cited_chunk_ids(phrasing) == (A,), phrasing
+
+
 # --------------------------------------------------------------------------
 # What survives checking
 # --------------------------------------------------------------------------

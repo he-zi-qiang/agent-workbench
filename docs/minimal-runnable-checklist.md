@@ -27,20 +27,30 @@
 
 > 这是**唯一的外部依赖**，也是性价比最高的一步。不需要改任何代码。
 
-- [ ] **1.1 接一个模型 Provider**
+- [x] **1.1 接一个模型 Provider**（2026-07-31 实测，DeepSeek `deepseek-chat`）
       两条路都行：本地 OpenAI 兼容服务（Ollama / LM Studio，`base_url` 可配，
       DeepSeek 走 OpenAI 协议），或云端 DeepSeek key。环境变量写法见
       [running-locally.md](./running-locally.md#为什么没有-chat)。
-      **完成条件**：去掉 `--without-chat` 后 API 正常启动，`/v1/chat/sessions`
-      能回答一个问题并带回引用。
-      **未实测**——本轮没有 key，也没起本地推理服务。
+      **实测**：模型 id 钉进 `config.local.toml`（公开目录名，不是密钥），key 只走
+      环境变量。`scripts/dev.sh` 现在按 `AW_SECRETS__DEEPSEEK_API_KEY` 在不在自动
+      选模式并打印选了哪个。真实问答：
+      > 问"reciprocal rank fusion 在哪里运行"，答"inside the database rather than
+      > in the application"，引用 `chk_57934ada…`，`withheld: false`。
 
   接上之后**同时**具备（都已实现且测试全绿，只是从没真实走查过）：
 
-  - [ ] **1.2 SSE 流式**：`events` 路由与 chat 绑在同一个 `serves_chat` 开关上。
-  - [ ] **1.3 Agentic 检索**：`chat.retrieval_shape = "agentic"`，模型自己决定何时检索。
-  - [ ] **1.4 可验证引用**：只在模型点名且被展示过时才给引用。
-  - [ ] **1.5 HITL 真实走查**：见第 3 节。
+  - [x] **1.2 SSE 流式**（实测）：`RunStarted → ContextBuilt → ModelStarted →
+        ModelCompleted → RunCompleted`，事件 id 是 `(stream_id, sequence)` cursor。
+  - [~] **1.3 Agentic 检索**：**被 4.1 挡住**。模型确实自己发起了检索——事件里
+        有 3 次 `ToolProposed`/`PermissionResolved`/`ToolStarted`——但 3 次全是
+        `ToolFailed: knowledge_search exceeded its 30s timeout`，然后撞 `max_steps`。
+        `sparse_enabled` 是 `Literal[True]`（混合检索是架构不变量，不是开关），
+        所以在这台机器上绕不过去。**这条依赖 4.1，清单原来的排序是错的。**
+  - [x] **1.4 可验证引用**（实测，并因此改了一处实现）：第一次真实问答返回
+        `citations: []`，而答案里明明写着 `chk_5793…`——模型用的是**圆括号**，
+        我的扫描要求**方括号**。分隔符从来不是信号，**id 的形状**才是；已改成
+        裸写/方括号/圆括号/反引号都认，并补了一条以此为名的测试。
+  - [x] **1.5 HITL 真实走查**：见第 3 节，已完成。
 
 ---
 
@@ -59,14 +69,23 @@
 
 ## 3. HITL 的真实走查
 
-- [ ] **3.1 让图真的停一次**
+- [x] **3.1 让图真的停一次**（2026-07-31 实测，两条路径各走一次）
       本轮做的 HITL 全套——`interrupt()` 节点、`approvals` 账本、决定事务、
       `/v1/approvals` API、`NOTIFY task_ready`——**代码在、测试全绿、从没真实走查过**。
       原因：demo 图的 approval 节点**自己回答自己**（`approval_decision: "approved"`），
       不会 interrupt；真正的 interrupt 需要真实 handlers，而那需要模型（依赖 1.1）。
-      **完成条件**：提交一个 Task → 图停在 approval → `task_runs` 变
-      `waiting_approval` 且 lease 已清 → `POST /v1/approvals/{id}/decisions` →
-      另一个 Worker 接手跑完。approved 与 rejected 各走一次。
+      **实测结果**：
+
+      | 步骤 | 事实 |
+      |---|---|
+      | 图停住 | 100 秒后 `waiting_approval`，`lease_owner` 与 `lease_until` **都已清空** |
+      | 怎么找到审批 | 时间线上的 `TaskApprovalRequested` 带 `approval_id`（无列举端点） |
+      | IDOR | 同租户他人 404、跨租户 404，正文一致 |
+      | approved | 决定后 `queued` + `resume_kind=approval` + `resume_approval_id` → 20 秒内 `succeeded` |
+      | rejected | → `failed`，detail 正是 `a human rejected the approval required before export`，**export 没跑** |
+
+      时间线（截断）：`TaskSubmitted → TaskClaimed → … → TaskApprovalRequested →
+      TaskAwaitingApproval`。
 
 ---
 
@@ -78,9 +97,13 @@
       短句 10.6s vs 3.0s、整块（~800 词）12.7s vs 7.4s / 4 条。
       **但量级对不上**：hybrid 臂约 48 次编码 × 3.2s ≈ 2.5 分钟，不是 58 分钟。
       根因**未定位**，不要当成"MPS 的锅"就结案。
-      **下一步**：在 `_measure` 里把索引 / 编码 / 检索三段分别计时，直接指出那
-      二十倍在哪一段。
-      **影响面**：dense 臂不受影响，第 0 节三条链路照常。
+      **2026-07-31 定位到了一半**：单条短查询的编码耗时——
+      **dense 2.8s，sparse 28.8s**，两者并发 58s（它们互相争用，不是并行）。
+      `knowledge_search` 的工具超时是 30s，所以 **agentic 路径直接被这一条挡死**（1.3）。
+      不是设备参数的问题：显式传 `devices="cpu"` 仍要 10.8s，不传 13.0s。
+      **仍未定位**：为什么单条短文本要十几秒——这已经不是"MPS 比 CPU 慢"能解释的量级。
+      **影响面**：固定两步路径照常（它不受工具超时约束，只是每轮也要付这个时间），
+      dense 臂评测不受影响。**这条现在是 1.3 的前置，优先级要提到最前面。**
 
 ---
 
