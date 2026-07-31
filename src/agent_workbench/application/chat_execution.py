@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from agent_workbench.application.citations import verify_citations
 from agent_workbench.application.retrieval import (
     AuthorizedContext,
     RetrievalRequest,
@@ -105,7 +106,14 @@ class ProducedAnswer:
 
     outcome: AgentOutcome
     authorized_revisions: tuple[tuple[str, int], ...]
+    #: Only the citations the answer named *and* was shown. Everything the run
+    #: retrieved is in ``authorized_revisions`` and is fenced; this is the
+    #: narrower question of what the answer can point at.
     citations: tuple[Citation, ...]
+    #: Chunk ids the answer named that it was never shown. Counted rather than
+    #: returned -- a guessed identifier presented as a source would carry this
+    #: system's authority for a passage nobody retrieved.
+    fabricated_citations: tuple[str, ...] = ()
 
 
 @runtime_checkable
@@ -301,10 +309,12 @@ class FixedTwoStepExecution:
             sink,
             cancellation,
         )
+        verdict = verify_citations(outcome.output_text or "", (context.packet,))
         return ProducedAnswer(
             outcome=outcome,
             authorized_revisions=context.authorized_revisions,
-            citations=context.packet.citations,
+            citations=verdict.verified,
+            fabricated_citations=verdict.fabricated,
         )
 
 
@@ -343,10 +353,15 @@ class AgenticExecution:
             )
         finally:
             searched = self.journal.take(request.run_id)
+        verdict = verify_citations(
+            outcome.output_text or "",
+            tuple(context.packet for context in searched),
+        )
         return ProducedAnswer(
             outcome=outcome,
             authorized_revisions=merge_authorized(searched),
-            citations=merge_citations(searched),
+            citations=verdict.verified,
+            fabricated_citations=verdict.fabricated,
         )
 
 

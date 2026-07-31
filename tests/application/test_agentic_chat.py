@@ -154,7 +154,10 @@ def test_every_search_a_run_performs_is_fenced_not_only_the_last() -> None:
     produced = asyncio.run(_produce(_agentic(executor, journal), _request()))
 
     assert produced.authorized_revisions == (("doc_1", 3), ("doc_2", 1), ("doc_3", 7))
-    assert len(produced.citations) == 3
+    # The fake answer names none of them, so it earns no citations -- the fence
+    # is wider than the sources on purpose. Which ids an answer earns is tested
+    # in tests/application/test_citations.py.
+    assert produced.citations == ()
 
 
 def test_a_document_seen_at_two_revisions_is_checked_at_both() -> None:

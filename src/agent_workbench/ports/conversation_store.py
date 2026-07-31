@@ -138,10 +138,20 @@ class ChatTurnResult(VersionedModel):
                 )
         elif self.answer != self.outcome.output_text:
             raise ValueError("a committed answer must match the completed outcome")
-        elif set(revision_ids) != {citation.document_id for citation in self.citations}:
-            raise ValueError(
-                "authorized revisions must match the cited evidence documents"
-            )
+        elif not {citation.document_id for citation in self.citations} <= set(
+            revision_ids
+        ):
+            # A subset, not an equality. These were equal while citations *were*
+            # the retrieval packet -- every retrieved document was reported as a
+            # source whether or not the answer used it. Now a citation is
+            # offered only when the answer named it, so the fence is legitimately
+            # wider than the sources: a passage the model read and did not cite
+            # is still a passage whose permission must hold.
+            #
+            # The containment is the half that matters and it is unchanged. A
+            # citation outside the fenced set is a source nobody checked the
+            # asker may still read.
+            raise ValueError("every cited document must be an authorized revision")
         return self
 
 

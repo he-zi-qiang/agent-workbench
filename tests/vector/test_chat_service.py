@@ -278,32 +278,70 @@ def _run(scenario: Callable[[_Harness], Awaitable[Any]]) -> Any:
     return asyncio.run(execute())
 
 
-def _ask(harness: _Harness, principal: str) -> ChatRequest:
+def _ask(harness: _Harness, principal: str, *, key: str | None = None) -> ChatRequest:
     return ChatRequest(
         session_id=harness.session_id,
         question="when does the acquisition close",
         principal=PrincipalContext(principal_id=principal, tenant_id=TENANT),
         knowledge_base_id=KB,
-        idempotency_key=f"request-{principal}",
+        idempotency_key=f"request-{principal}" if key is None else f"request-{key}",
     )
 
 
 # --- the ordinary turn -------------------------------------------------------
 
 
-def test_a_turn_answers_with_citations() -> None:
-    async def scenario(harness: _Harness) -> tuple[str, int, bool]:
+def test_a_turn_offers_only_the_citations_its_answer_actually_named() -> None:
+    """Three answers over the same evidence, and three different source lists.
+
+    The first cites a chunk it was shown and gets it back. The second cites
+    nothing and gets nothing -- which is the behaviour change: citations used to
+    be whatever retrieval found, so an answer that ignored every passage still
+    shipped with a full set of sources beneath it. The third names an id that
+    was never retrieved, and it is dropped rather than echoed: a guessed
+    identifier returned as a source would carry this system's authority for a
+    passage nobody has.
+
+    All three are fenced identically -- the release check covers what the model
+    was *shown*, not what it chose to mention.
+    """
+
+    async def scenario(harness: _Harness) -> tuple[Any, ...]:
         await harness.publish(granted=(READER,))
         await harness.open_session(READER)
-        request = _ask(harness, READER)
-        turn = await harness.chat().ask(request, harness.sink(request))
-        return turn.answer, len(turn.citations), turn.withheld
 
-    answer, citations, withheld = _run(scenario)
+        # Learn a real chunk id the way the model does: from its own prompt.
+        probe = harness.chat()
+        first = _ask(harness, READER)
+        await probe.ask(first, harness.sink(first))
+        model = probe.execution.executor._model
+        assert isinstance(model, FakeModel)
+        prompt = model.requests[0].messages[0].content[0].text
+        chunk_id = prompt.split("[", 1)[1].split("]", 1)[0]
 
-    assert answer == ANSWER
-    assert citations > 0
-    assert withheld is False
+        async def answered(text: str, key: str) -> Any:
+            request = _ask(harness, READER, key=key)
+            return await harness.chat(answer=text).ask(request, harness.sink(request))
+
+        cited = await answered(f"{ANSWER} [{chunk_id}]", "cited")
+        silent = await answered(ANSWER, "silent")
+        invented = await answered(f"{ANSWER} [chunk_nowhere]", "invented")
+        return (
+            tuple(c.chunk_id for c in cited.citations),
+            chunk_id,
+            tuple(c.chunk_id for c in silent.citations),
+            tuple(c.chunk_id for c in invented.citations),
+            (cited.withheld, silent.withheld, invented.withheld),
+        )
+
+    cited, chunk_id, silent, invented, withheld = _run(scenario)
+
+    assert cited == (chunk_id,)
+    assert silent == ()
+    assert invented == ()
+    # None of them is withheld: an unnamed or invented citation is a claim about
+    # sources, not a permission failure.
+    assert withheld == (False, False, False)
 
 
 def test_the_evidence_reaches_the_model_labelled_by_chunk_id() -> None:
