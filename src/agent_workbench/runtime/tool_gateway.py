@@ -46,11 +46,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Final
 
 from agent_workbench.domain.errors import (
     AgentWorkbenchError,
+    ErrorCode,
     ErrorInfo,
     ToolInputInvalidError,
     UnknownToolError,
@@ -75,6 +77,12 @@ from agent_workbench.domain.tools import (
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
 from agent_workbench.ports.policy import PolicyEngine
+from agent_workbench.ports.tool_executions import (
+    ToolExecutionIntent,
+    ToolExecutionLedger,
+    ToolExecutionNotWritableError,
+    ToolOperationConflictError,
+)
 from agent_workbench.ports.tools import ToolBinding, ToolRegistry
 from agent_workbench.runtime.hook_bus import HookBus
 from agent_workbench.runtime.schema_validation import (
@@ -96,6 +104,14 @@ DEFAULT_MAX_POLICY_ROUNDS: Final[int] = 3
 # still leaves one, rather than leaving none.
 DEFAULT_POLICY_TIMEOUT_SECONDS: Final[float] = 5.0
 
+# The failures that carry no answer. For an external write these are the ones
+# where the request may have landed after the deadline passed, so they become a
+# human's problem rather than a retry's. Every other failure was reported by the
+# handler itself and is recorded as what it says it is.
+AMBIGUOUS_DISPATCH_CODES: Final[frozenset[ErrorCode]] = frozenset(
+    {"tool_timeout", "cancelled", "budget_exceeded"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PreparedCall:
@@ -115,6 +131,7 @@ class ToolGateway:
         policy: PolicyEngine,
         executor: ToolExecutor | None = None,
         hooks: HookBus | None = None,
+        ledger: ToolExecutionLedger | None = None,
         max_argument_bytes: int = DEFAULT_MAX_ARGUMENT_BYTES,
         max_policy_rounds: int = DEFAULT_MAX_POLICY_ROUNDS,
         policy_timeout_seconds: float = DEFAULT_POLICY_TIMEOUT_SECONDS,
@@ -129,8 +146,27 @@ class ToolGateway:
         for spec in registry.specs():
             assert_schema_supported(spec.input_schema, origin=f"tool {spec.name}")
 
+        # A registry holding a ledgered tool without a ledger to record it in
+        # is a deployment that would dispatch external effects nothing accounts
+        # for. Refused at assembly rather than per call: a process that cannot
+        # honour the protocol should not start, rather than start and refuse
+        # one tool at a time once somebody is depending on it.
+        if ledger is None:
+            unrecorded = sorted(
+                spec.name
+                for spec in registry.specs()
+                if (binding := registry.get(spec.name)) is not None
+                and binding.operation_key is not None
+            )
+            if unrecorded:
+                raise ValueError(
+                    "these tools record external effects but no ledger was "
+                    f"supplied: {', '.join(unrecorded)}"
+                )
+
         self._registry = registry
         self._policy = policy
+        self._ledger = ledger
         self._executor = executor if executor is not None else ToolExecutor()
         self._hooks = hooks if hooks is not None else HookBus()
         self._max_argument_bytes = max_argument_bytes
@@ -393,6 +429,31 @@ class ToolGateway:
     ) -> ToolResult:
         """Run an authorized call and record however it ended."""
 
+        if prepared.binding.operation_key is not None:
+            return await self._invoke_ledgered(
+                prepared,
+                context=context,
+                cancellation=cancellation,
+                sink=sink,
+                run_budget_seconds=run_budget_seconds,
+            )
+        return await self._dispatch(
+            prepared,
+            context=context,
+            cancellation=cancellation,
+            sink=sink,
+            run_budget_seconds=run_budget_seconds,
+        )
+
+    async def _dispatch(
+        self,
+        prepared: PreparedCall,
+        *,
+        context: ExecutionContext,
+        cancellation: CancellationToken,
+        sink: EventSink,
+        run_budget_seconds: float | None = None,
+    ) -> ToolResult:
         await sink.emit(
             ToolStarted(
                 tool_call_id=prepared.call.tool_call_id,
@@ -408,6 +469,215 @@ class ToolGateway:
         )
         await self._record(result, sink=sink)
         return result
+
+    async def _invoke_ledgered(
+        self,
+        prepared: PreparedCall,
+        *,
+        context: ExecutionContext,
+        cancellation: CancellationToken,
+        sink: EventSink,
+        run_budget_seconds: float | None,
+    ) -> ToolResult:
+        """The side-effect protocol, in the order the baseline fixes it.
+
+        Record the intent, re-check the authorization that has to hold at the
+        moment of an irreversible act, dispatch, then report. The second check
+        is not a duplicate of ``authorize``: an ACL or a tool registry may have
+        tightened while this call queued behind an exclusive barrier, and
+        tightening is required to take effect at the *next* authorization
+        boundary. This is that boundary.
+        """
+
+        call = prepared.call
+        if (
+            self._ledger is None
+            or context.task_id is None
+            or context.lease_epoch is None
+        ):
+            # A ledgered tool with nowhere to record is not a tool to run
+            # unrecorded. Refusing costs an operation; dispatching would cost an
+            # effect nothing can later account for.
+            return await self.refuse(
+                call,
+                ErrorInfo(
+                    code="policy_denied",
+                    message=(
+                        f"{call.tool_name} records external effects, and this run "
+                        "has no ledger, task or lease to record them against"
+                    ),
+                ),
+                sink=sink,
+            )
+
+        assert prepared.binding.operation_key is not None  # narrowed by the caller
+        operation_key = prepared.binding.operation_key(call, context)
+        try:
+            record = await self._ledger.record_intent(
+                ToolExecutionIntent(
+                    task_id=context.task_id,
+                    operation_key=operation_key,
+                    tool_name=call.tool_name,
+                    canonical_request_hash=argument_digest(call.arguments),
+                    lease_epoch=context.lease_epoch,
+                    agent_run_id=context.agent_run_id,
+                    tool_call_id=call.tool_call_id,
+                    policy_identity=context.policy_identity,
+                )
+            )
+        except ToolOperationConflictError:
+            return await self.refuse(
+                call,
+                ErrorInfo(
+                    code="invalid_tool_input",
+                    message=(
+                        f"operation {operation_key} was already recorded with "
+                        "different arguments"
+                    ),
+                ),
+                sink=sink,
+            )
+        except ToolExecutionNotWritableError as error:
+            return await self.refuse(
+                call,
+                ErrorInfo(
+                    code="policy_denied",
+                    message=(
+                        f"{call.tool_name} cannot record an intent: "
+                        f"{type(error).__name__}"
+                    ),
+                ),
+                sink=sink,
+            )
+
+        if not record.may_dispatch:
+            # Somebody already did this. Answering from the ledger is the whole
+            # reason it exists: the alternative is performing the effect twice
+            # and calling the second one a retry.
+            return await self.refuse(
+                call,
+                ErrorInfo(
+                    code="tool_failed",
+                    message=(
+                        f"operation {operation_key} is already {record.status}; "
+                        "it will not be performed again"
+                    ),
+                    retryable=False,
+                ),
+                sink=sink,
+            )
+
+        reauthorized = await self._decide(call, context, run_budget_seconds)
+        if isinstance(reauthorized, ErrorInfo) or reauthorized.effect == "deny":
+            denial = (
+                reauthorized
+                if isinstance(reauthorized, ErrorInfo)
+                else ErrorInfo(
+                    code="policy_denied",
+                    message=f"denied before dispatch: {reauthorized.reason_code}",
+                )
+            )
+            # Recorded as failed, not left intended: nothing was dispatched, and
+            # that *is* knowledge. Leaving it open would send a human to
+            # reconcile an effect that provably never happened.
+            await self._settle_quietly(
+                context.task_id,
+                operation_key,
+                context.lease_epoch,
+                succeeded=False,
+                detail=denial.message,
+            )
+            return await self.refuse(call, denial, sink=sink)
+
+        result = await self._dispatch(
+            prepared,
+            context=context,
+            cancellation=cancellation,
+            sink=sink,
+            run_budget_seconds=run_budget_seconds,
+        )
+        await self._report(
+            result,
+            task_id=context.task_id,
+            operation_key=operation_key,
+            lease_epoch=context.lease_epoch,
+        )
+        return result
+
+    async def _report(
+        self,
+        result: ToolResult,
+        *,
+        task_id: str,
+        operation_key: str,
+        lease_epoch: int,
+    ) -> None:
+        """Say what happened, or say that nobody knows.
+
+        The line between the two is which failures carry an answer. A handler
+        that returned an error answered; a call that timed out or was cancelled
+        did not, and for an external write "no answer" does not mean "no
+        effect" -- the request may be in flight at the moment the deadline
+        passes. Those two become a human's problem rather than a retry's.
+
+        This is a rule about the codes the executor produces, and it is only as
+        good as a handler's own error reporting: an adapter that converts its
+        own post-send timeout into an ordinary failure would be recorded as
+        knowledge it does not have. That is worth stating plainly rather than
+        hiding behind the word "failed".
+        """
+
+        if result.status != "error":
+            await self._settle_quietly(
+                task_id, operation_key, lease_epoch, succeeded=True, detail=None
+            )
+            return
+        code = result.error.code if result.error is not None else "tool_failed"
+        if code in AMBIGUOUS_DISPATCH_CODES:
+            with suppress(ToolExecutionNotWritableError):
+                await self._ledger.mark_for_reconciliation(  # type: ignore[union-attr]
+                    task_id=task_id,
+                    operation_key=operation_key,
+                    lease_epoch=lease_epoch,
+                    detail=f"no answer was received: {code}",
+                )
+            return
+        await self._settle_quietly(
+            task_id,
+            operation_key,
+            lease_epoch,
+            succeeded=False,
+            detail=result.error.message if result.error is not None else None,
+        )
+
+    async def _settle_quietly(
+        self,
+        task_id: str,
+        operation_key: str,
+        lease_epoch: int,
+        *,
+        succeeded: bool,
+        detail: str | None,
+    ) -> None:
+        """Report the outcome, and never turn a failure to report into one.
+
+        A ledger write that is refused means the lease moved underneath this
+        call. The Worker that replaced it owns the operation now, and the row it
+        will read is the truthful one -- ``intended`` -- so losing this write
+        loses nothing. Raising here would replace a recorded tool result with an
+        exception the run was not promised.
+        """
+
+        if self._ledger is None:  # pragma: no cover - guarded by the caller
+            return
+        with suppress(ToolExecutionNotWritableError):
+            await self._ledger.record_result(
+                task_id=task_id,
+                operation_key=operation_key,
+                lease_epoch=lease_epoch,
+                succeeded=succeeded,
+                detail=detail,
+            )
 
     async def refuse(
         self,
