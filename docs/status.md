@@ -1,5 +1,39 @@
 # 实施状态
 
+## 2026-07-30 HITL Approval 收尾（未合并）
+
+分支 `pr-050-postgres-checkpointer`，在下节 2026-07-29 快照之上再加四个提交
+（`7014046`、`33ebbbb`、`a257e45`、`25895ca`），完成
+[待办清单](./followup-checklist-2026-07-29.md) 的 **2.1 全部内容**。
+
+| 落地 | 事实 |
+|---|---|
+| Graph interrupt | `approval` 节点真正 `interrupt()`；恢复时**回查账本**，不信任 resume payload |
+| 拒绝路径 | `approval` 成为条件节点：approved → export，rejected → 终态失败（**不**导出） |
+| Worker | reconciliation 第 5/6 分支由真实 interrupt 驱动；无账本时 park 而非猜测 |
+| Approval API | `GET /v1/approvals/{id}`、`POST /v1/approvals/{id}/decisions`；跨 owner/tenant 一律 404 同正文 |
+| 发现路径 | 新增 `TaskApprovalRequested` 事件进 Task timeline（无列举端点） |
+| 唤醒 | `NOTIFY task_ready`，四处入队事务内发送，payload 只有 `task_id` |
+
+统一门禁（真实 PostgreSQL `127.0.0.1:5433` + Qdrant `127.0.0.1:6333`）：
+
+```text
+ruff format --check .                 passed（304 files）
+ruff check .                          passed
+pyright                               0 errors / 0 warnings
+alembic 唯一 head                     0018_approvals
+pytest（真实服务）                    1569 passed / 11 skipped
+pytest（无外部服务）                  1074 passed / 506 skipped
+```
+
+两行 pytest 是同一套测试的两种环境，不能相加。
+
+破坏验证四轮共 34 处，第一轮抓住 31 处；三处漏网已按性质分类并补测，最终 34/34。
+详情与分类见待办清单 2.1 条目。
+
+**仍未做**：`task_ready` 的监听端（Worker 仍轮询，属 3.5 同批工作）；
+`tool_executions` 副作用 ledger（2.2）。
+
 ## 2026-07-29 当前工作分支快照（未合并）
 
 本节记录分支 **`pr-050-postgres-checkpointer` 自 `5d943af` 之后的 A–F 汇合增量**，

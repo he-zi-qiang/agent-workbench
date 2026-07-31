@@ -98,6 +98,46 @@ ruff/pyright 全过。
 
 ## 2. Task Mode 其余（文档）
 
+- [x] **2.1 HITL Approval：两个原子边界与 graph interrupt 全部完成**
+      （账本与决定事务 2026-07-29；interrupt 节点、Approval API、`NOTIFY task_ready`
+      2026-07-30，四个提交 `7014046`/`33ebbbb`/`a257e45`/`25895ca`）
+
+  **2026-07-30 补完的那一半**（下面第一段是 07-29 已有的记录，保留原文）：
+
+  - **真正的 interrupt 节点**：`approval` 节点调用 `interrupt()` 停住，**从不信任
+    resume payload**——LangGraph 恢复时整个 handler 重跑，节点用**自己开出的**
+    `approval_id` 回查账本。伪造 approval_id 只能唤醒节点，读到的还是它自己那条；
+    没有决定就失败关闭。`ApprovalResume` 只带 id 与 version、**不带裁决**。
+  - **拒绝是图里的一条路径，但不是 export 那条**：`approval` 变成条件节点
+    （与 `quality_gate` 并列），approved → export，rejected → 无后继 + 自己的终态
+    失败原因。`TaskState` 因此新增 `approval_decision`（路由必须是 state 的纯函数），
+    且与 `approval_id` **成对存在**——只有 id 是"走过闸门却没拿到答案"。
+  - **Worker 打通第 5/6 分支**：inspect 报告 interrupt 上的 approval_id，Worker
+    问账本要决定，再用 `Command(resume=...)` 续跑同一 thread。没有账本的 Worker
+    **park 而不是猜**（并打 warning）。
+  - **Approval API**：`GET /v1/approvals/{id}`、`POST /v1/approvals/{id}/decisions`。
+    授权与 Task 读同一套：不存在与不属于你**同状态同正文**；`decide` **先鉴权再写**
+    （账本虽然也会拒第二次决定，但第一次已经把别人的 Task 重排队了）。
+    decided_by 取自认证身份，body 里写 `decided_by` 直接 422。
+    发现路径是 Task timeline 上新增的 `TaskApprovalRequested` 事件——**没有**列举
+    审批的端点，也不需要有。
+  - **`NOTIFY task_ready`**：submit / 决定 / release_for_retry / reclaim 四处，
+    都在各自事务内；payload 只有 `{"task_id": ...}`。dead_letter 与 claim **不**通知。
+
+  **破坏验证**：四轮共 34 处，第一轮抓住 31 处。三处漏网及其处理：
+  resume 的 `decision_version` 写错不影响任何结果（节点按设计不读 payload）——
+  改为断言它**落进了 checkpoint 的 `__resume__` 写**，那是它唯一的可观测面；
+  composition 掉了 interrupt 节点、Worker 掉了账本，都是**活性**而非安全性回归
+  （router 已经失败关闭、Worker 会 park），补了 composition 断言；
+  channel 改名没被抓住，因为测试用的是**和发送方同一个常量**——已改成订阅字面量
+  `task_ready`，另有一条测试把常量钉死。补测后 34/34。
+
+  **仍未做**（与 2.1 相邻但不属于它）：`task_ready` 的**监听端**没有写
+  （Worker 仍靠轮询；属 3.5 的同一批工作），`tool_executions` 副作用 ledger 见 2.2。
+
+  <details>
+  <summary>2026-07-29 原始记录（账本与决定事务）</summary>
+
 - [~] **2.1 HITL Approval：审批账本与决定事务已完成（2026-07-29，迁移 `0018`）**
       本轮做的是**第二个原子边界**（`approvals` 账本 + 决定→重排队），也就是有 barrier 要求
       的那一半。第一个边界（interrupt → `waiting_approval` + 清 lease）此前已由
@@ -113,9 +153,11 @@ ruff/pyright 全过。
       任何结果**（requeue 的条件会重新求值），它存在只为固定跨表加锁顺序、避免死锁，而这一点
       任何对结果的断言都看不见；approval 更新上的 version fence 只在两个决定真并发时可达，
       需要方法内部的接缝才能确定性触发，因此**保留但未测**。
-      **仍未做**：graph 里真正的 interrupt 节点与 `Command(resume=...)`、Approval HTTP API 与
+      **当时仍未做**：graph 里真正的 interrupt 节点与 `Command(resume=...)`、Approval HTTP API 与
       owner/tenant IDOR 测试、`NOTIFY task_ready`。`task_recovery.py` 的第 5/6 分支仍然是
-      "决策已覆盖、无真实图"。
+      "决策已覆盖、无真实图"。**以上四项已于 2026-07-30 全部完成，见上。**
+
+  </details>
 - [ ] **2.2 外部副作用 ledger（`tool_executions`）**：稳定 operation key、
       intent/result 两段提交、人工核对状态。
 - [ ] **2.3 真实外部搜索 Provider**：当前 Adapter 在 Provider 缺失时失败关闭（文档），
@@ -169,7 +211,11 @@ ruff/pyright 全过。
 `0.1–0.4` → `1.1` → `1.2`／`1.3` → `2.1` → `3.1`。
 
 **2026-07-29 进度：第 0、1 组全部完成；2.1 完成了审批账本与决定事务这一半。**
-下一条是 2.1 的剩余部分（graph interrupt 节点 + Approval API），或 `2.2` / `3.1`。
+
+**2026-07-30 进度：2.1 全部完成**（interrupt 节点、Worker 第 5/6 分支、Approval API
+与 IDOR 矩阵、`NOTIFY task_ready`）。门禁：ruff / pyright 全过、alembic 唯一 head
+`0018_approvals`、`1569 passed / 11 skipped`（真实 PostgreSQL + Qdrant）。
+下一条是 `2.2`（`tool_executions` 副作用 ledger）或 `3.1`（Agentic Retrieval 接通）。
 
 第 0 组先做的理由：它**不改行为**，只把"测试通过"变成"测试有牙"，而且它可能
 直接改写第 1、2 组的优先级——如果 fencing 有洞，那比补 reservation 紧急得多。
