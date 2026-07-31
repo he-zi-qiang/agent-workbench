@@ -33,6 +33,9 @@ from agent_workbench.adapters.persistence.notifications import (
 )
 from agent_workbench.adapters.persistence.outbox import PostgresOutbox
 from agent_workbench.adapters.persistence.task_registry import PostgresTaskRegistry
+from agent_workbench.adapters.persistence.tool_executions import (
+    PostgresToolExecutionLedger,
+)
 
 __all__ = [
     "TASK_READY_CHANNEL",
@@ -47,6 +50,7 @@ __all__ = [
     "PostgresIndexGenerationStore",
     "PostgresOutbox",
     "PostgresTaskRegistry",
+    "PostgresToolExecutionLedger",
     "create_query_engine",
     "metadata",
     "notify_task_ready",
