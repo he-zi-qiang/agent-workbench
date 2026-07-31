@@ -33,6 +33,7 @@ from agent_workbench.apps.cli.task import (
     render_error,
     run_task,
 )
+from agent_workbench.apps.cli.upload import run_upload
 from agent_workbench.domain.runs import AgentOutcome
 
 EXIT_COMPLETED = 0
@@ -151,6 +152,39 @@ def build_parser() -> argparse.ArgumentParser:
     cancel.add_argument("task_id")
     cancel.add_argument("--reason", required=True)
     cancel.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    upload = subcommands.add_parser(
+        "upload",
+        help="Transfer a file and complete it into a document version.",
+        description=(
+            "Declares, transfers and completes through /v1/uploads, the same "
+            "three calls any other client makes. The ingestion worker picks "
+            "the version up from the outbox and indexes it."
+        ),
+    )
+    upload.add_argument("path", help="File to upload.")
+    upload.add_argument("--api-url", default=DEFAULT_API_URL)
+    upload.add_argument(
+        "--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS
+    )
+    upload.add_argument("--tenant-id", required=True, help="Value for x-tenant-id.")
+    upload.add_argument(
+        "--principal-id", required=True, help="Value for x-principal-id."
+    )
+    upload.add_argument("--document-id", required=True)
+    upload.add_argument("--knowledge-base-id", required=True)
+    upload.add_argument(
+        "--grant",
+        action="append",
+        help=(
+            "Principal allowed to read this document. Repeatable. The owner "
+            "is not implied: an unshared document is readable by nobody else."
+        ),
+    )
+    upload.add_argument(
+        "--media-type", help="Override the type guessed from the filename."
+    )
+    upload.add_argument("--json", action="store_true", help="Emit one JSON object.")
     return parser
 
 
@@ -184,6 +218,16 @@ def main(
 
     args = build_parser().parse_args(argv)
     output = stream if stream is not None else sys.stdout
+    if args.command == "upload":
+        return run_upload(
+            args,
+            output,
+            **(
+                {"http_client_factory": http_client_factory}
+                if http_client_factory is not None
+                else {}
+            ),
+        )
     if args.command == "task":
         try:
             return run_task(

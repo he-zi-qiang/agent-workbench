@@ -206,12 +206,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="agent-api",
         description="Run the Agent Workbench HTTP control plane.",
     )
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--without-chat",
+        action="store_true",
+        help=(
+            "Serve uploads, artifacts, tasks and approvals without assembling "
+            "chat. Use when this deployment has no model provider: the chat "
+            "route is not registered at all, rather than registered and failing "
+            "every request."
+        ),
+    )
+    arguments = parser.parse_args(argv)
 
     import uvicorn
 
     config = project_api(load_settings())
-    app, _ = build_app(config)
+    # Not a degraded mode that hides a misconfiguration. `build_model` refuses to
+    # start a process whose model it could not call, and that refusal is correct
+    # -- a process that answers nothing while passing its health check turns a
+    # configuration mistake into an incident with a long path back to its cause.
+    # This flag is the other honest answer to the same situation: say up front
+    # that chat is not served here, and let uploads and Tasks run.
+    app, _ = build_app(config, with_chat=not arguments.without_chat)
     uvicorn.run(
         app,
         host=config.host,

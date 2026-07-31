@@ -1,0 +1,37 @@
+# Running on a developer machine, against services on localhost.
+#
+#   AW_CONFIG_FILE=config/config.local.toml agent-api --without-chat
+#
+# config.default.toml is loaded first; this file deep-merges over it. It exists
+# because the defaults are written for the Compose topology -- Qdrant answers to
+# the hostname `qdrant`, and nothing may create an index by accident -- and both
+# of those are wrong for a process started by hand beside `docker run`.
+#
+# The three DSNs are deliberately absent. Settings forbids them in TOML, because
+# a connection string in a committed file is a credential in a committed file
+# even when today's happens to have no password. They come from the environment;
+# scripts/dev.sh is the one place that knows them.
+#
+# There is no model here either. The defaults ship placeholder model ids so a
+# fresh checkout is obviously unconfigured, and `build_model` refuses to start a
+# process that could not answer. That refusal is right, so this profile does not
+# work around it: a local process either gets a real provider key through the
+# environment, or runs `--without-chat` and says so.
+
+[app]
+environment = "development"
+deployment_scope = "local"
+log_level = "INFO"
+
+[qdrant]
+# `docker run -p 6333:6333`, not the Compose service name.
+url = "http://localhost:6333"
+# The one setting that makes a first run possible: with no collection and no
+# alias, startup creates the write collection to the configured schema and binds
+# the read alias to it. Never inferred, and settings refuses it outside a local
+# scope -- an operator typo must not produce a fresh empty index in production.
+#
+# The *ingestion worker* is what performs it. An API started `--without-chat`
+# builds no Qdrant client at all, because it does not retrieve; start the
+# ingestion worker at least once before expecting an index to exist.
+allow_local_bootstrap = true

@@ -76,7 +76,7 @@ def run_task(
         # A submitted Task must always display the effective key. It is the
         # only value a caller needs to retry a request safely after a timeout.
         result = {**payload, "idempotency_key": idempotency_key}
-    _render(result, as_json=args.json, stream=stream)
+    render_result(result, as_json=args.json, stream=stream)
     return 0
 
 
@@ -86,7 +86,7 @@ def render_error(error: TaskCliError, stream: TextIO, *, as_json: bool) -> int:
     payload: dict[str, Any] = {"error": error.code}
     if error.status_code is not None:
         payload["status"] = error.status_code
-    _render(payload, as_json=as_json, stream=stream)
+    render_result(payload, as_json=as_json, stream=stream)
     return error.exit_code
 
 
@@ -111,10 +111,10 @@ def _request(
                 ),
             },
         )
-        return _response_json(response), key
+        return response_json(response), key
     if command == "get":
         return (
-            _response_json(client.get(f"/v1/tasks/{args.task_id}", headers=headers)),
+            response_json(client.get(f"/v1/tasks/{args.task_id}", headers=headers)),
             None,
         )
     if command == "timeline":
@@ -122,7 +122,7 @@ def _request(
         if args.cursor is not None:
             params["cursor"] = args.cursor
         return (
-            _response_json(
+            response_json(
                 client.get(
                     f"/v1/tasks/{args.task_id}/timeline",
                     headers=headers,
@@ -133,7 +133,7 @@ def _request(
         )
     if command == "cancel":
         return (
-            _response_json(
+            response_json(
                 client.post(
                     f"/v1/tasks/{args.task_id}/cancel",
                     headers=headers,
@@ -153,7 +153,7 @@ def _idempotency_key(args: Any) -> str:
     return f"cli_{uuid.uuid4().hex}"
 
 
-def _response_json(response: httpx.Response) -> dict[str, Any]:
+def response_json(response: httpx.Response) -> dict[str, Any]:
     if response.status_code >= 400:
         raise TaskCliError(
             code=_error_code(response.status_code), status_code=response.status_code
@@ -175,7 +175,7 @@ def _error_code(status_code: int) -> str:
     return "request_failed"
 
 
-def _render(payload: dict[str, Any], *, as_json: bool, stream: TextIO) -> None:
+def render_result(payload: dict[str, Any], *, as_json: bool, stream: TextIO) -> None:
     if as_json:
         stream.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
         stream.write("\n")
@@ -201,5 +201,7 @@ __all__ = [
     "TaskCliError",
     "default_http_client",
     "render_error",
+    "render_result",
+    "response_json",
     "run_task",
 ]
