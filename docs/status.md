@@ -1,5 +1,35 @@
 # 实施状态
 
+## 2026-07-31 外部副作用 ledger（未合并）
+
+分支 `pr-051-tool-execution-ledger`，基线 `main@13136e7`（上一节的 HITL 增量已合入）。
+完成 [待办清单](./followup-checklist-2026-07-29.md) 的 **2.2**，迁移 `0019`。
+
+| 落地 | 事实 |
+|---|---|
+| `tool_executions` | `UNIQUE(task_id, operation_key)`；四态 `intended/succeeded/failed/needs_reconciliation` |
+| 稳定 operation key | 业务 key，`tool_call_id` 只记录不入键；同 key 不同 canonical 参数冲突拒绝 |
+| 两段提交 | 先 intent 后 dispatch，中间**重算授权**；全部写入按 Task 活跃 lease 栅栏 |
+| 人工核对 | 判据是"有没有拿到答案"：超时/取消/预算耗尽 → 交给人，不重试也不写成失败 |
+| 装配拒绝 | 注册了带 operation key 的工具却没有 ledger 的进程**起不来** |
+
+另有一条与产品无关但影响证据可信度的修复：本机 `~/Documents` 的同步会持续生成
+`* 2.py` 副本（三天 30 个），其中一个让 `alembic heads` 报两个 head、并让 pytest 多收
+232 条重复用例。已加三层防护（`.gitignore` / `tests/conftest.py` 不收集 /
+architecture guard 直接读 `migrations/versions`）。**此前公布的门禁数字未受影响**——
+CI 在干净 checkout 上跑出的 `1074 passed / 506 skipped` 与本地一致。
+
+```text
+ruff format --check .                 passed（310 files）
+ruff check .                          passed
+pyright                               0 errors / 0 warnings
+alembic 唯一 head                     0019_tool_executions
+pytest（真实服务）                    1606 passed / 11 skipped
+```
+
+**仍未做**：`export_artifact`（WP10-07，唯一真实写节点）——协议就位，当前 build 里
+还没有任何工具带 operation key。
+
 ## 2026-07-30 HITL Approval 收尾（未合并）
 
 分支 `pr-050-postgres-checkpointer`，在下节 2026-07-29 快照之上再加四个提交

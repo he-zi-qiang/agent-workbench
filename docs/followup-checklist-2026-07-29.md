@@ -158,8 +158,23 @@ ruff/pyright 全过。
       "决策已覆盖、无真实图"。**以上四项已于 2026-07-30 全部完成，见上。**
 
   </details>
-- [ ] **2.2 外部副作用 ledger（`tool_executions`）**：稳定 operation key、
-      intent/result 两段提交、人工核对状态。
+- [x] **2.2 外部副作用 ledger（`tool_executions`）**（2026-07-31 完成，迁移 `0019`，
+      两个提交 `3512f1d`/`08c76e9`）
+      三件事各自落地并有测试：
+      - **稳定 operation key**：业务 key 而非 `tool_call_id`（重试的模型轮次会铸新 call id，
+        按它做键等于每次重试都是新操作）。`UNIQUE(task_id, operation_key)`；同 key 不同
+        canonical 参数**冲突拒绝**，不覆盖第一条记录。
+      - **intent/result 两段提交**：先记 intent 再 dispatch，中间**重算一次授权**
+        （收紧要在下一个授权边界生效，对不可逆动作那个边界就是动作前一刻）。
+        全部写入按 Task 活跃 lease 做栅栏。
+      - **人工核对状态**：`needs_reconciliation`。判据是**有没有拿到答案**——handler 返回
+        错误算知识，超时/取消/预算耗尽算无答案（外部写的"没答案"不等于"没发生"）。
+      **破坏验证**：ledger 10 处（9 抓住，1 处 `status='running'` 因 lease-lifecycle
+      CHECK 不可证伪，已写进注释）；gateway 10 处全抓住。其中发现**我自己一条测试守错了
+      对象**：直接在库里 DROP 状态词表 CHECK 测试全绿，因为那行是被 settlement 约束拒的；
+      已改为每个 case 点名它针对的约束。
+      **不在本条范围**：`export_artifact`（唯一真实写节点，属 WP10-07），所以当前
+      build 里还没有任何工具带 operation key——协议就位，路上还没有车。
 - [ ] **2.3 真实外部搜索 Provider**：当前 Adapter 在 Provider 缺失时失败关闭（文档），
       行为正确但能力缺失。
 
@@ -170,6 +185,19 @@ ruff/pyright 全过。
 - [ ] **3.1 Agentic Retrieval 真正接通**：`knowledge_search` 存在，但 API 的
       Tool Registry 为空、Chat 的 `tool_names=()`。
       **完成条件**：注册并授权 Tool、放宽步骤预算、最终 evidence gate。
+
+      **2026-07-31 勘定（未动代码）**：这一条不能靠"把 `tool_names=()` 填上"来做。
+      `ChatService` 的固定两步是**刻意**的，模块文档和 `_run_request` 注释都写明了：
+      "Advertising a retrieval tool here would quietly turn this into the agentic
+      path, and the two are meant to be separable so one of them can be evaluated"，
+      空 envelope 也是**deny-shaped by default**、不是忘了填。评测依赖的正是这个确定性
+      （同一问题每次检索方式相同，答案变化才能归因到模型或语料）。
+      所以正确形态是**另起一条 agentic 路径**与固定路径并存，两条产出同一个
+      `ContextPacket`；改固定路径等于把可评测性换掉。
+      按此，本条实际要做三件事：opt-in 的 agentic ChatService（自己的 envelope 授权
+      `knowledge_search`、自己的步骤预算）、最终 evidence gate（按模型**真正引用**的
+      chunk 重新校验读权限，而不只是校验检索包）、以及两条路径的对照评测。
+      第二件与 3.3 相邻但不相同：3.3 问"模型是否真的用了"，这里问"它用的那些现在还能读吗"。
 - [ ] **3.2 Hybrid Chat 装配 sparse encoder**：组件齐全，API 只装了 dense。
 - [ ] **3.3 可验证 Citation**：现在返回检索包的 citations，未验证模型是否真的用了。
 - [ ] **3.4 历史 token window / compaction**：只有状态和 compact profile，无 ContextEngine。
