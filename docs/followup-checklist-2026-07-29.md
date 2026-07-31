@@ -207,7 +207,15 @@ ruff/pyright 全过。
       伸进 binding 查对象同一性而不是信 shape 的名字。补后 10/10。
       **仍未做**：两条路径的对照评测（capability vs determinism 的实测数字）。
 
-- [ ] **3.2 Hybrid Chat 装配 sparse encoder**：组件齐全，API 只装了 dense。
+- [x] **3.2 Hybrid Chat 装配 sparse encoder**（2026-07-31 复核：**条目本身已过期**）
+      重读代码发现 API **早已**装配 sparse：`_assemble_chat` 调 `build_sparse_encoder`
+      并传给 `RetrievalService`，后者在有 sparse 时走 `search_hybrid`（Qdrant Query API
+      的一次 RRF）。应该是 `180785d` 那批整合带进来的，清单写于其前。
+      **但有一个真实的洞**：所有装配测试都把 sparse 打桩成**不可用**，正例从没断言过——
+      "有词法运行时却只接了 dense 臂"能通过全部现有测试，然后被当成 hybrid 去评测。
+      补了两条正例（固定路径与 agentic 路径各一，后者顺带钉住**两条路径共用同一个
+      retriever**——两个 retriever 就是两套授权检查，被忽视的那套就是会漏的那套）。
+      破坏验证 2 处全抓住。
 - [ ] **3.3 可验证 Citation**：现在返回检索包的 citations，未验证模型是否真的用了。
 - [ ] **3.4 历史 token window / compaction**：只有状态和 compact profile，无 ContextEngine。
 - [ ] **3.5 SSE 换成 LISTEN/NOTIFY 唤醒**：事实仍从表按 cursor 读，只把轮询换成唤醒。

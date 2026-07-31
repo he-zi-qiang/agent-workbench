@@ -237,3 +237,100 @@ def test_the_agentic_deployment_grants_the_tool_a_budget_and_a_journal(
     binding = execution.executor._gateway._registry.get("knowledge_search")
     assert binding is not None
     assert binding.handler.__self__.journal is execution.journal
+
+
+def test_a_process_with_a_lexical_runtime_assembles_the_hybrid_retriever(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every other assembly test stubs the sparse runtime as *absent*.
+
+    That leaves the positive case unasserted: a process that has a lexical
+    runtime and wires only the dense arm would pass all of them, and would then
+    be evaluated as "hybrid" while retrieving one way. The retriever names what
+    it is, so this asks it.
+    """
+
+    from agent_workbench.apps.api import dependencies as assembly
+    from agent_workbench.bootstrap.reranker_factory import RerankerUnavailable
+
+    class _Embedder:
+        dimension = 1024
+        identity = "stub@v1"
+
+        async def embed_documents(self, texts: tuple[str, ...]) -> tuple[Any, ...]:
+            return tuple((0.0,) for _ in texts)
+
+        async def embed_query(self, text: str) -> Any:
+            return (0.0,)
+
+    class _Sparse:
+        identity = "stub-lexical@v1"
+
+        async def encode_query(self, text: str) -> Any:  # pragma: no cover - unused
+            raise AssertionError("assembly must not encode anything")
+
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(
+        assembly,
+        "build_reranker",
+        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+    )
+
+    dependencies = build_dependencies(project_api(_settings(tmp_path)))
+
+    assert dependencies.chat is not None
+    assert dependencies.sparse_unavailable is None
+    retrieval = dependencies.chat.execution.retrieval
+    assert retrieval.sparse_encoder is not None
+    # The name is what an evaluation report prints. A dense-only process
+    # labelled "hybrid" is a benchmark that credits fusion for nothing.
+    assert retrieval.mode == "hybrid"
+
+
+def test_the_agentic_shape_gets_the_same_hybrid_retriever(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One retrieval service, both shapes.
+
+    Two retrievers would be two sets of authorization checks and two things to
+    evaluate, and the one that got less attention would be the one that leaked.
+    """
+
+    from agent_workbench.apps.api import dependencies as assembly
+    from agent_workbench.bootstrap.reranker_factory import RerankerUnavailable
+
+    class _Embedder:
+        dimension = 1024
+        identity = "stub@v1"
+
+        async def embed_documents(self, texts: tuple[str, ...]) -> tuple[Any, ...]:
+            return tuple((0.0,) for _ in texts)
+
+        async def embed_query(self, text: str) -> Any:
+            return (0.0,)
+
+    class _Sparse:
+        identity = "stub-lexical@v1"
+
+        async def encode_query(self, text: str) -> Any:  # pragma: no cover - unused
+            raise AssertionError("assembly must not encode anything")
+
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(
+        assembly,
+        "build_reranker",
+        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+    )
+
+    dependencies = build_dependencies(
+        project_api(_settings(tmp_path, chat={"retrieval_shape": "agentic"}))
+    )
+
+    assert dependencies.chat is not None
+    binding = dependencies.chat.execution.executor._gateway._registry.get(
+        "knowledge_search"
+    )
+    assert binding is not None
+    assert binding.handler.__self__.retrieval.mode == "hybrid"
