@@ -1,5 +1,26 @@
 # 实施状态
 
+## 2026-07-31 Chat 检索与引用（未合并，PR #63）
+
+分支 `pr-051-tool-execution-ledger`。本节记录 3.2 / 3.3；同分支的 2.2 与 3.1 见下两节。
+
+**3.2 复核结论：条目已过期。** API 早已装配 sparse，`RetrievalService` 有 sparse
+时走 Qdrant Query API 的一次 RRF。真实的洞是**正例从没被断言过**——所有装配测试都把
+sparse 打桩成不可用，"有词法运行时却只接 dense 臂"能全绿然后被当 hybrid 评测。已补。
+
+**3.3 引用改为可验证。** 只在模型**点名**且**被展示过**时才给出引用。没见过的 chunk id
+一律丢弃——那是模型产出的字符串，回显等于让猜出来的标识带上本系统的权威。
+连带把 `ChatTurnResult` 的 citations 与 authorized_revisions **相等**改为**包含**：
+栅栏可以更宽（读了没引用的段落权限仍须成立），引用不能落在栅栏外。
+
+```text
+ruff / pyright                       全过
+alembic 唯一 head                    0019_tool_executions
+pytest（真实服务）                   1634 passed / 11 skipped
+```
+
+**代价（如实记）**：不按 `[chunk_id]` 约定作答的模型会得到零引用。这是如实而非虚报。
+
 ## 2026-07-31 Agentic 检索并存路径（未合并）
 
 完成 [待办清单](./followup-checklist-2026-07-29.md) 的 **3.1**。要点是它**不是**
