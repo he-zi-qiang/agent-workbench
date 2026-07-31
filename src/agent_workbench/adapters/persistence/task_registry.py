@@ -34,6 +34,7 @@ from agent_workbench.adapters.persistence.models import (
     qdrant_index_generations,
     task_runs,
 )
+from agent_workbench.adapters.persistence.notifications import notify_task_ready
 from agent_workbench.domain.events import (
     EventPayload,
     TaskAwaitingApproval,
@@ -204,6 +205,11 @@ class PostgresTaskRegistry:
                     ),
                     event_key=_submission_event_key(row["task_id"]),
                 )
+                # Sent inside this transaction, so a submission that rolls back
+                # wakes nobody. A repeated key re-sends it, which is correct and
+                # harmless: the Task really is claimable, and a Worker that
+                # arrives to find it already claimed simply moves on.
+                await notify_task_ready(connection, task_id=stored.task_id)
 
         if row is None:  # pragma: no cover - inserted above, same transaction
             raise RuntimeError("the submitted task vanished inside its transaction")
@@ -431,6 +437,13 @@ class PostgresTaskRegistry:
                     await self._append_lifecycle_event(
                         connection, recovered_task, payload
                     )
+                    if not exhausted:
+                        # Only the reclaimed ones. A dead-lettered Task is not
+                        # claimable, and waking a Worker for it would be sending
+                        # it to look at something it must not pick up.
+                        await notify_task_ready(
+                            connection, task_id=recovered_task.task_id
+                        )
                     recovered.append(recovered_task)
         return tuple(recovered)
 
@@ -489,6 +502,11 @@ class PostgresTaskRegistry:
                     delay_seconds=delay_seconds,
                 ),
             )
+            # Claimable again, though possibly not yet: the wake-up says "look",
+            # and `available_at` is what decides whether the looking finds
+            # anything. A listener that treated this as "claim now" would be
+            # trusting the message instead of the row.
+            await notify_task_ready(connection, task_id=task.task_id)
         return task
 
     async def cancel(self, task_id: Identifier, *, reason: str) -> TaskRun:

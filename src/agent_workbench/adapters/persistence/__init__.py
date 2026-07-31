@@ -27,10 +27,15 @@ from agent_workbench.adapters.persistence.index_generations import (
     PostgresIndexGenerationStore,
 )
 from agent_workbench.adapters.persistence.models import metadata
+from agent_workbench.adapters.persistence.notifications import (
+    TASK_READY_CHANNEL,
+    notify_task_ready,
+)
 from agent_workbench.adapters.persistence.outbox import PostgresOutbox
 from agent_workbench.adapters.persistence.task_registry import PostgresTaskRegistry
 
 __all__ = [
+    "TASK_READY_CHANNEL",
     "PostgresApprovalStore",
     "PostgresChatExpirationCoordinator",
     "PostgresChatReleaseCoordinator",
@@ -44,4 +49,5 @@ __all__ = [
     "PostgresTaskRegistry",
     "create_query_engine",
     "metadata",
+    "notify_task_ready",
 ]

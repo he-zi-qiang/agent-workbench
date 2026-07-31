@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.persistence.event_log import PostgresEventLog
 from agent_workbench.adapters.persistence.models import approvals, task_runs
+from agent_workbench.adapters.persistence.notifications import notify_task_ready
 from agent_workbench.domain.events import TaskApprovalDecided, TaskApprovalRequested
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.task_registry import ApprovalDecision
@@ -265,6 +266,11 @@ class PostgresApprovalStore:
                 ),
                 event_key=f"approval_decided:{approval_id}:{decision_version}",
             )
+            # The fourth thing in the same transaction, and the only one that is
+            # not a fact: a wake-up for the Task this decision just requeued. A
+            # refused decision rolls back and sends nothing, so no Worker is ever
+            # sent to look at a Task a human did not release.
+            await notify_task_ready(connection, task_id=str(task["task_id"]))
         return _to_record(decided)
 
     async def _by_id(self, connection: object, approval_id: str) -> RowMapping | None:
