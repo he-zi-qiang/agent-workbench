@@ -67,6 +67,7 @@ from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
 )
+from agent_workbench.bootstrap.encoder_warmup import warm_encoders
 from agent_workbench.bootstrap.model_factory import build_model
 from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig
@@ -123,6 +124,9 @@ class ApiDependencies:
     # routes are served and dispose closes the same client on every exit path.
     qdrant: AsyncQdrantClient | None
     vector_index: QdrantVectorIndex | None
+    # Held so startup can warm them. Absent when this process serves no chat,
+    # which is also when nothing would retrieve.
+    encoders: tuple[object, ...]
     events: EventLogPort
     task_service: TaskService
     task_inputs: TaskInputService
@@ -168,7 +172,7 @@ class ApiDependencies:
         await self.engine.dispose()
 
     async def startup(self) -> None:
-        """Check the Qdrant read path before accepting any HTTP request."""
+        """Check the Qdrant read path, and warm the encoders, before serving."""
 
         if self.qdrant is not None:
             await verify_qdrant_startup(
@@ -176,6 +180,10 @@ class ApiDependencies:
                 qdrant=self.config.qdrant,
                 embedding=self.config.embedding,
             )
+        # A cold lexical head costs ~29s on its first encode and 0.06s after.
+        # Paid here, that is a slower boot; paid on the first request, it is an
+        # agentic turn failing on `knowledge_search exceeded its 30s timeout`.
+        await warm_encoders(*self.encoders)
 
 
 def build_dependencies(
@@ -248,7 +256,7 @@ def build_dependencies(
         tasks=task_service,
     )
 
-    chat, unavailable, http, qdrant, vector_index, no_reranker, no_sparse = (
+    chat, unavailable, http, qdrant, vector_index, no_reranker, no_sparse, encoders = (
         _assemble_chat(
             config,
             documents,
@@ -264,6 +272,7 @@ def build_dependencies(
             None,
             None,
             None,
+            (),
         )
     )
     return ApiDependencies(
@@ -300,6 +309,7 @@ def build_dependencies(
         http=http,
         qdrant=qdrant,
         vector_index=vector_index,
+        encoders=encoders,
         events=events,
         task_service=task_service,
         task_inputs=task_inputs,
@@ -323,6 +333,7 @@ def _assemble_chat(
     QdrantVectorIndex | None,
     str | None,
     str | None,
+    tuple[object, ...],
 ]:
     """Build the chat stack, or report the one reason it could not be built.
 
@@ -334,7 +345,7 @@ def _assemble_chat(
 
     embedder = build_embedder(config.embedding)
     if isinstance(embedder, EmbeddingUnavailable):
-        return None, embedder.reason, None, None, None, None, None
+        return None, embedder.reason, None, None, None, None, None, ()
 
     # After the embedder, because a process that cannot chat has no use for a
     # reranker and loading one would be several gigabytes spent on a capability
@@ -424,7 +435,18 @@ def _assemble_chat(
         request_timeout_seconds=config.request_timeout_seconds,
         orphan_grace_seconds=config.chat_recovery.orphan_grace_seconds,
     )
-    return chat, None, client, qdrant, vector_index, no_reranker, no_sparse
+    return (
+        chat,
+        None,
+        client,
+        qdrant,
+        vector_index,
+        no_reranker,
+        no_sparse,
+        # Both shapes share one RetrievalService, so these are the encoders
+        # every turn will actually use.
+        tuple(e for e in (retrieval.embedder, retrieval.sparse_encoder) if e),
+    )
 
 
 __all__ = ["ApiDependencies", "InsecureDeploymentError", "build_dependencies"]

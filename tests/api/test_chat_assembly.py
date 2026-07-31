@@ -8,6 +8,7 @@ machine-learning runtime to start.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tomllib
@@ -334,3 +335,80 @@ def test_the_agentic_shape_gets_the_same_hybrid_retriever(
     )
     assert binding is not None
     assert binding.handler.__self__.retrieval.mode == "hybrid"
+
+
+def test_assembly_hands_startup_the_encoders_a_turn_will_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not any encoders -- the ones retrieval actually holds.
+
+    A sabotage round emptied this tuple and every other test stayed green: the
+    process started, served, and paid a 29-second first encode on somebody's
+    request. Asserting identity rather than count is what makes that impossible.
+    """
+
+    from agent_workbench.apps.api import dependencies as assembly
+    from agent_workbench.bootstrap.reranker_factory import RerankerUnavailable
+
+    class _Embedder:
+        dimension = 1024
+        identity = "stub@v1"
+
+        async def embed_documents(self, texts: tuple[str, ...]) -> tuple[Any, ...]:
+            return tuple((0.0,) for _ in texts)
+
+        async def embed_query(self, text: str) -> Any:
+            return (0.0,)
+
+    class _Sparse:
+        identity = "stub-lexical@v1"
+
+        async def encode_query(self, text: str) -> Any:  # pragma: no cover
+            raise AssertionError("assembly must not encode anything")
+
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(
+        assembly,
+        "build_reranker",
+        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+    )
+
+    dependencies = build_dependencies(project_api(_settings(tmp_path)))
+
+    assert dependencies.chat is not None
+    retrieval = dependencies.chat.execution.retrieval
+    assert retrieval.embedder in dependencies.encoders
+    assert retrieval.sparse_encoder in dependencies.encoders
+
+
+def test_startup_warms_before_a_request_can_arrive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point of holding them.
+
+    Removing the call from `startup` changed no other test, which is how a
+    29-second first encode gets rediscovered by a user instead of a suite.
+    """
+
+    import dataclasses
+
+    from agent_workbench.apps.api import dependencies as assembly
+
+    warmed: list[tuple[object, ...]] = []
+
+    async def record(*encoders: object) -> None:
+        warmed.append(encoders)
+
+    monkeypatch.setattr(assembly, "warm_encoders", record)
+
+    sentinel = object()
+    # Built by hand rather than assembled: this asserts one behaviour of
+    # startup, and no Qdrant is needed to see it.
+    fields = {f.name: None for f in dataclasses.fields(assembly.ApiDependencies)}
+    fields["encoders"] = (sentinel,)
+    deps = assembly.ApiDependencies(**fields)  # type: ignore[arg-type]
+
+    asyncio.run(deps.startup())
+
+    assert warmed == [(sentinel,)]
