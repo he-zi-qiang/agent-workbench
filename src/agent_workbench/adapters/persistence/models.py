@@ -610,6 +610,79 @@ approvals = Table(
 )
 
 
+# What was attempted outside this database, and what came back.
+#
+# The row exists before the effect does. That ordering is the whole design: an
+# external call cannot join this transaction, so the only thing that can be made
+# durable at the right moment is the *intent*. A process that dies between the
+# dispatch and the report leaves a row saying an effect was intended and not
+# saying whether it landed -- which is a fact, and a more useful one than either
+# guess.
+#
+# `operation_key` is a stable business key and is unique per Task. A model's
+# `tool_call_id` is recorded beside it but is deliberately not part of it: a
+# retried turn mints a new call id for the same intent, so keying on it would
+# make every retry a fresh operation and every retry a second effect.
+
+tool_executions = Table(
+    "tool_executions",
+    metadata,
+    Column("execution_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column(
+        "task_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("task_runs.task_id"),
+        nullable=False,
+    ),
+    Column("operation_key", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("tool_name", String(128), nullable=False),
+    # The digest of the canonical arguments, never the arguments: this table is
+    # read by operators, and tool arguments carry user text and retrieved
+    # passages.
+    Column("canonical_request_hash", String(64), nullable=False),
+    Column("status", String(24), nullable=False),
+    # The claim that recorded the intent. Every later write to this row must
+    # match it, so a Worker that lost the Task cannot report a result for an
+    # effect the new one is now responsible for.
+    Column("lease_epoch", Integer, nullable=False),
+    Column("agent_run_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("tool_call_id", String(IDENTIFIER_LENGTH), nullable=False),
+    # Revision and canonical fingerprint together, so a rule set that kept its
+    # label while its rules changed is still distinguishable after the fact.
+    Column("policy_identity", String(256), nullable=False),
+    Column("outcome_detail", String(256), nullable=True),
+    Column(
+        "intended_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column("settled_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint(
+        "status IN ('intended', 'succeeded', 'failed', 'needs_reconciliation')",
+        name="tool_executions_status",
+    ),
+    # An unsettled operation has no settlement time and a settled one does.
+    # Without both directions, a crashed attempt could be read as an old
+    # success whose timestamp was simply never written.
+    CheckConstraint(
+        "(status = 'intended' AND settled_at IS NULL) OR "
+        "(status <> 'intended' AND settled_at IS NOT NULL)",
+        name="tool_executions_settlement",
+    ),
+    # A claim's epoch starts at 1. Zero would be a row written by nothing.
+    CheckConstraint("lease_epoch >= 1", name="tool_executions_lease_epoch"),
+    UniqueConstraint(
+        "task_id",
+        "operation_key",
+        name="uq_tool_executions_task_id_operation_key",
+    ),
+    Index("ix_tool_executions_task_id", "task_id"),
+    # How an operator finds the rows that need them.
+    Index("ix_tool_executions_status", "status"),
+)
+
+
 # Which concrete Qdrant index a Task may be bound to.
 #
 # The alias is not in here on purpose. An alias selects an index for *new*

@@ -160,6 +160,15 @@ class ChatRecoveryConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ChatConfig:
+    """Which shape answers a chat turn, and what bounds it if it may loop."""
+
+    retrieval_shape: Literal["fixed", "agentic"]
+    max_agentic_steps: int
+    max_agentic_searches: int
+
+
+@dataclass(frozen=True, slots=True)
 class TaskConfig:
     """The deployment decisions attached to a newly submitted Task.
 
@@ -260,6 +269,7 @@ class ApiRuntimeConfig:
     reranker: RerankerConfig
     retrieval: RetrievalConfig
     chat_recovery: ChatRecoveryConfig
+    chat: ChatConfig
     task: TaskConfig
 
 
@@ -466,6 +476,11 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
             answer_context_k=settings.rag.retrieval.answer_context_k,
         ),
+        chat=ChatConfig(
+            retrieval_shape=settings.chat.retrieval_shape,
+            max_agentic_steps=settings.chat.max_agentic_steps,
+            max_agentic_searches=settings.chat.max_agentic_searches,
+        ),
         chat_recovery=ChatRecoveryConfig(
             orphan_grace_seconds=settings.chat.orphan_grace_seconds,
             reaper_poll_seconds=settings.chat.reaper_poll_seconds,
@@ -480,6 +495,7 @@ __all__ = [
     "AgentRuntimeConfig",
     "ApiRuntimeConfig",
     "ArtifactStoreConfig",
+    "ChatConfig",
     "ChatRecoveryConfig",
     "DatabaseConfig",
     "EmbeddingConfig",

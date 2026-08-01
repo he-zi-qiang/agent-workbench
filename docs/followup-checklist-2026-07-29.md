@@ -158,8 +158,23 @@ ruff/pyright 全过。
       "决策已覆盖、无真实图"。**以上四项已于 2026-07-30 全部完成，见上。**
 
   </details>
-- [ ] **2.2 外部副作用 ledger（`tool_executions`）**：稳定 operation key、
-      intent/result 两段提交、人工核对状态。
+- [x] **2.2 外部副作用 ledger（`tool_executions`）**（2026-07-31 完成，迁移 `0019`，
+      两个提交 `3512f1d`/`08c76e9`）
+      三件事各自落地并有测试：
+      - **稳定 operation key**：业务 key 而非 `tool_call_id`（重试的模型轮次会铸新 call id，
+        按它做键等于每次重试都是新操作）。`UNIQUE(task_id, operation_key)`；同 key 不同
+        canonical 参数**冲突拒绝**，不覆盖第一条记录。
+      - **intent/result 两段提交**：先记 intent 再 dispatch，中间**重算一次授权**
+        （收紧要在下一个授权边界生效，对不可逆动作那个边界就是动作前一刻）。
+        全部写入按 Task 活跃 lease 做栅栏。
+      - **人工核对状态**：`needs_reconciliation`。判据是**有没有拿到答案**——handler 返回
+        错误算知识，超时/取消/预算耗尽算无答案（外部写的"没答案"不等于"没发生"）。
+      **破坏验证**：ledger 10 处（9 抓住，1 处 `status='running'` 因 lease-lifecycle
+      CHECK 不可证伪，已写进注释）；gateway 10 处全抓住。其中发现**我自己一条测试守错了
+      对象**：直接在库里 DROP 状态词表 CHECK 测试全绿，因为那行是被 settlement 约束拒的；
+      已改为每个 case 点名它针对的约束。
+      **不在本条范围**：`export_artifact`（唯一真实写节点，属 WP10-07），所以当前
+      build 里还没有任何工具带 operation key——协议就位，路上还没有车。
 - [ ] **2.3 真实外部搜索 Provider**：当前 Adapter 在 Provider 缺失时失败关闭（文档），
       行为正确但能力缺失。
 
@@ -167,11 +182,56 @@ ruff/pyright 全过。
 
 ## 3. Chat / RAG 欠项（文档，按价值排序）
 
-- [ ] **3.1 Agentic Retrieval 真正接通**：`knowledge_search` 存在，但 API 的
-      Tool Registry 为空、Chat 的 `tool_names=()`。
-      **完成条件**：注册并授权 Tool、放宽步骤预算、最终 evidence gate。
-- [ ] **3.2 Hybrid Chat 装配 sparse encoder**：组件齐全，API 只装了 dense。
-- [ ] **3.3 可验证 Citation**：现在返回检索包的 citations，未验证模型是否真的用了。
+- [x] **3.1 Agentic Retrieval 真正接通**（2026-07-31，提交 `a4a9afa`）
+      三个完成条件都落地了，但**不是**靠把 `tool_names=()` 填上——那样等于把固定两步
+      存在的理由花掉（模块注释原话：advertising a retrieval tool here would quietly
+      turn this into the agentic path）。做法是**并存的第二条路径**：
+      - **seam**：`TurnExecution`。turn 的生命周期（幂等 claim、lease、deadline、断连
+        兜底、release fence）两条路径完全共用，只有"交给模型的请求 / 授权过的证据 /
+        引用"三样不同。部署在配置里选：`chat.retrieval_shape = "fixed" | "agentic"`，
+        **默认仍是 fixed**。
+      - **注册并授权 Tool**：agentic envelope 点名 `knowledge_search`，风险上限保持
+        deny-shaped 默认（检索是 read，本来就够）。**用权限写而不是用提示词写**，所以
+        被检索到的段落说服模型想要别的工具也够不着。
+      - **放宽步骤预算**：`max_agentic_steps` / `max_agentic_searches`，且在 settings
+        里做跨字段校验（`RunBudget` 要求 tool_calls ≥ steps，不校验的话进程能起来、
+        只在有人切换 shape 时才炸）。
+      - **最终 evidence gate**：难点是"答案基于什么"。固定路径知道（一次检索一组
+        revision）；agentic 的检索发生在模型循环里，而**引用是模型的说法不是记录**。
+        所以工具把每次授权到的东西记进 `RetrievalJournal`（按 run 分键），执行结束
+        取回。**按模型"看到的"而不是"引用的"设栅栏**——没点名的转述也是用过。
+        journal 在 `finally` 里取，失败的 run 也不留残留。
+      **破坏验证 10 处，第一轮只抓住 6 处**——漏的四处正是这条提交比看起来大的原因：
+      我的测试替工具做了 journal，所以工具**完全不记**或**记错 run** 都能全绿；
+      装配漏掉 journal 也没人发现；settings 那对预算没测。四条都补了，装配那条直接
+      伸进 binding 查对象同一性而不是信 shape 的名字。补后 10/10。
+      **仍未做**：两条路径的对照评测（capability vs determinism 的实测数字）。
+
+- [x] **3.2 Hybrid Chat 装配 sparse encoder**（2026-07-31 复核：**条目本身已过期**）
+      重读代码发现 API **早已**装配 sparse：`_assemble_chat` 调 `build_sparse_encoder`
+      并传给 `RetrievalService`，后者在有 sparse 时走 `search_hybrid`（Qdrant Query API
+      的一次 RRF）。应该是 `180785d` 那批整合带进来的，清单写于其前。
+      **但有一个真实的洞**：所有装配测试都把 sparse 打桩成**不可用**，正例从没断言过——
+      "有词法运行时却只接了 dense 臂"能通过全部现有测试，然后被当成 hybrid 去评测。
+      补了两条正例（固定路径与 agentic 路径各一，后者顺带钉住**两条路径共用同一个
+      retriever**——两个 retriever 就是两套授权检查，被忽视的那套就是会漏的那套）。
+      破坏验证 2 处全抓住。
+- [x] **3.3 可验证 Citation**（2026-07-31 完成）
+      以前返回的是**检索包**的 citations，等于"找到了这些段落"被当成"答案用了这些段落"：
+      用了一段的答案下面挂七个来源，一段没用的答案下面照样挂满。现在只在模型**点名了**
+      且**被展示过**时才给出。
+      两半都重要，第二半是**边界**而不是讲究：run 从没见过的 chunk id 是模型产出的字符串，
+      原样回显等于让一个**猜出来的**标识（可能撞上这个提问者读不到的真实 chunk）带上本系统
+      的权威。验证不通过的一律**丢弃**而非降级。
+      连带**订正了一条不变量**：`ChatTurnResult` 原本要求 citations 的文档集合与
+      authorized_revisions **相等**——那正是这条要拆掉的混同。改成**包含**：栅栏可以更宽
+      （读了没引用的段落其权限仍须成立），但引用不能落在栅栏外（那是没人复核过的来源）。
+      正则**从铸造 chunk id 的那一处取形状**而不是自己抄一份，否则 `[redacted]` 这种普通
+      行文会被报成伪造来源、把真正的信号淹掉。
+      **7 处破坏，6 处第一轮抓住**；漏的第 7 处恰是我刚放宽的那条不变量剩下的那一半
+      （引用落在栅栏外可存），已补两条 contract 测试（含反向的"栅栏更宽可以"）。补后 7/7。
+      **副作用**：不按 `[chunk_id]` 约定作答的模型会得到"零引用"。这是**如实**而非虚报，
+      且在评测里可见——比原来那种稳定虚报好。
 - [ ] **3.4 历史 token window / compaction**：只有状态和 compact profile，无 ContextEngine。
 - [ ] **3.5 SSE 换成 LISTEN/NOTIFY 唤醒**：事实仍从表按 cursor 读，只把轮询换成唤醒。
 - [ ] **3.6 EventLog upcaster / 毒行隔离**：现在能拒绝未知版本，不能升级或跳过。

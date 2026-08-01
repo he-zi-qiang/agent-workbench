@@ -21,6 +21,7 @@ from agent_workbench.application.chat import (
     ChatRequest,
     ChatService,
 )
+from agent_workbench.application.chat_execution import FixedTwoStepExecution
 from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
     ChatTurnReaper,
@@ -100,14 +101,16 @@ async def _service(
     retrieval = _BlockingRetrieval()
     return (
         ChatService(
-            retrieval=retrieval,  # pyright: ignore[reportArgumentType]
-            executor=_NeverExecutor(),
+            execution=FixedTwoStepExecution(
+                retrieval=retrieval,  # pyright: ignore[reportArgumentType]
+                executor=_NeverExecutor(),
+                budget=RunBudget(max_steps=1, max_tool_calls=1),
+            ),
             conversations=conversations,
             releaser=InMemoryChatReleaseCoordinator(
                 conversations=conversations,
                 revisions=retrieval,
             ),
-            budget=RunBudget(max_steps=1, max_tool_calls=1),
             request_timeout_seconds=timeout,
             orphan_grace_seconds=5,
         ),
@@ -210,14 +213,16 @@ def test_late_generic_failure_returns_the_same_expiry_fact_as_retry() -> None:
             lambda: current.__setitem__(0, current[0] + timedelta(seconds=36))
         )
         service = ChatService(
-            retrieval=retrieval,  # pyright: ignore[reportArgumentType]
-            executor=executor,
+            execution=FixedTwoStepExecution(
+                retrieval=retrieval,  # pyright: ignore[reportArgumentType]
+                executor=executor,
+                budget=RunBudget(max_steps=1, max_tool_calls=1),
+            ),
             conversations=conversations,
             releaser=InMemoryChatReleaseCoordinator(
                 conversations=conversations,
                 revisions=retrieval,
             ),
-            budget=RunBudget(max_steps=1, max_tool_calls=1),
             request_timeout_seconds=30,
             orphan_grace_seconds=5,
         )

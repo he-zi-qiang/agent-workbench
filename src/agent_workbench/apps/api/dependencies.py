@@ -41,9 +41,19 @@ from agent_workbench.adapters.persistence import (
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
+from agent_workbench.adapters.tools.knowledge_search import (
+    TOOL_NAME as KNOWLEDGE_SEARCH,
+)
+from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.approvals import ApprovalService
 from agent_workbench.application.chat import REFUSAL, ChatService
+from agent_workbench.application.chat_execution import (
+    AgenticExecution,
+    FixedTwoStepExecution,
+    RetrievalJournal,
+    TurnExecution,
+)
 from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
     ChatTurnReaper,
@@ -57,7 +67,11 @@ from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
 )
-from agent_workbench.bootstrap.model_factory import build_model
+from agent_workbench.bootstrap.encoder_warmup import warm_encoders
+from agent_workbench.bootstrap.model_factory import (
+    ModelNotConfiguredError,
+    build_model,
+)
 from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig
 from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
@@ -113,6 +127,12 @@ class ApiDependencies:
     # routes are served and dispose closes the same client on every exit path.
     qdrant: AsyncQdrantClient | None
     vector_index: QdrantVectorIndex | None
+    # Held so startup can warm them. Absent when this process serves no chat,
+    # which is also when nothing would retrieve.
+    encoders: tuple[object, ...]
+    # Present whenever this process can retrieve, which is no longer the same
+    # question as whether it can chat.
+    retrieval: RetrievalService | None
     events: EventLogPort
     task_service: TaskService
     task_inputs: TaskInputService
@@ -132,6 +152,12 @@ class ApiDependencies:
     @property
     def serves_chat(self) -> bool:
         return self.chat is not None
+
+    @property
+    def serves_search(self) -> bool:
+        """Retrieval is servable without a model; chat is not."""
+
+        return self.retrieval is not None
 
     def sink_for(self, *, stream_id: str, run_id: str) -> ScopedEventSink:
         """The sink one run writes into.
@@ -158,7 +184,7 @@ class ApiDependencies:
         await self.engine.dispose()
 
     async def startup(self) -> None:
-        """Check the Qdrant read path before accepting any HTTP request."""
+        """Check the Qdrant read path, and warm the encoders, before serving."""
 
         if self.qdrant is not None:
             await verify_qdrant_startup(
@@ -166,6 +192,10 @@ class ApiDependencies:
                 qdrant=self.config.qdrant,
                 embedding=self.config.embedding,
             )
+        # A cold lexical head costs ~29s on its first encode and 0.06s after.
+        # Paid here, that is a slower boot; paid on the first request, it is an
+        # agentic turn failing on `knowledge_search exceeded its 30s timeout`.
+        await warm_encoders(*self.encoders)
 
 
 def build_dependencies(
@@ -238,7 +268,17 @@ def build_dependencies(
         tasks=task_service,
     )
 
-    chat, unavailable, http, qdrant, vector_index, no_reranker, no_sparse = (
+    (
+        chat,
+        unavailable,
+        http,
+        qdrant,
+        vector_index,
+        no_reranker,
+        no_sparse,
+        encoders,
+        retrieval,
+    ) = (
         _assemble_chat(
             config,
             documents,
@@ -253,6 +293,8 @@ def build_dependencies(
             None,
             None,
             None,
+            None,
+            (),
             None,
         )
     )
@@ -290,6 +332,8 @@ def build_dependencies(
         http=http,
         qdrant=qdrant,
         vector_index=vector_index,
+        encoders=encoders,
+        retrieval=retrieval,
         events=events,
         task_service=task_service,
         task_inputs=task_inputs,
@@ -313,6 +357,8 @@ def _assemble_chat(
     QdrantVectorIndex | None,
     str | None,
     str | None,
+    tuple[object, ...],
+    RetrievalService | None,
 ]:
     """Build the chat stack, or report the one reason it could not be built.
 
@@ -324,7 +370,7 @@ def _assemble_chat(
 
     embedder = build_embedder(config.embedding)
     if isinstance(embedder, EmbeddingUnavailable):
-        return None, embedder.reason, None, None, None, None, None
+        return None, embedder.reason, None, None, None, None, None, (), None
 
     # After the embedder, because a process that cannot chat has no use for a
     # reranker and loading one would be several gigabytes spent on a capability
@@ -333,12 +379,6 @@ def _assemble_chat(
     no_reranker = reranker.reason if isinstance(reranker, RerankerUnavailable) else None
     sparse = build_sparse_encoder(config.embedding)
     no_sparse = sparse.reason if isinstance(sparse, SparseEncodingUnavailable) else None
-
-    # Constructed before the model because the adapter takes it: httpx opens
-    # no socket until the first request, so a refusal below simply ends a
-    # startup that was going to end anyway.
-    client = httpx.AsyncClient(timeout=config.model.profiles["main"].timeout_seconds)
-    model = build_model(config.model, client=client)
 
     qdrant = AsyncQdrantClient(
         url=config.qdrant.url,
@@ -353,32 +393,104 @@ def _assemble_chat(
     # switch affect new Chat requests without changing the write target.
     vector_index = QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias)
 
+    retrieval = RetrievalService(
+        embedder=embedder,
+        index=vector_index,
+        documents=documents,
+        sparse_encoder=(
+            None if isinstance(sparse, SparseEncodingUnavailable) else sparse
+        ),
+        reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
+        rerank_timeout_seconds=config.reranker.timeout_seconds,
+    )
+    # The model comes last, and its absence costs only chat. Retrieval is
+    # already assembled above and does not need a provider: a deployment with no
+    # key can still index documents and search them, and saying "no chat"
+    # is a smaller and truer thing to say than "no retrieval".
+    #
+    # `build_model` still refuses rather than returning something unusable --
+    # that refusal is the behaviour worth keeping, see its module docstring.
+    # What changed is only how much it takes down with it.
+    client = httpx.AsyncClient(timeout=config.model.profiles["main"].timeout_seconds)
+    try:
+        model = build_model(config.model, client=client)
+    except ModelNotConfiguredError as unconfigured:
+        return (
+            None,
+            str(unconfigured),
+            client,
+            qdrant,
+            vector_index,
+            no_reranker,
+            no_sparse,
+            tuple(e for e in (retrieval.embedder, retrieval.sparse_encoder) if e),
+            retrieval,
+        )
+
+    policy_identity = f"api-{config.deployment_scope}"
+
+    if config.chat.retrieval_shape == "agentic":
+        # The model decides when to search, so it needs the tool, a budget with
+        # room for a loop, and somewhere for its searches to be journalled --
+        # all three or none. A tool with a one-step budget is a tool the model
+        # can propose and never get an answer from.
+        journal = RetrievalJournal()
+        registry = StaticToolRegistry(
+            [KnowledgeSearchTool(retrieval=retrieval, journal=journal).binding()]
+        )
+        execution: TurnExecution = AgenticExecution(
+            executor=ClaudeLikeAgentRuntime(
+                model=model,
+                gateway=ToolGateway(
+                    registry=registry,
+                    policy=EnvelopePolicyEngine(registry=registry),
+                ),
+                policy_identity=policy_identity,
+            ),
+            journal=journal,
+            budget=RunBudget(
+                max_steps=config.chat.max_agentic_steps,
+                max_tool_calls=config.chat.max_agentic_searches,
+            ),
+            tool_names=(KNOWLEDGE_SEARCH,),
+        )
+    else:
+        # Empty registry *and* empty envelope. Either alone would leave the
+        # other as the only thing standing between this deployment and the
+        # agentic shape it deliberately is not.
+        execution = FixedTwoStepExecution(
+            retrieval=retrieval,
+            executor=ClaudeLikeAgentRuntime(
+                model=model,
+                gateway=ToolGateway(
+                    registry=StaticToolRegistry([]),
+                    policy=EnvelopePolicyEngine(registry=StaticToolRegistry([])),
+                ),
+                policy_identity=policy_identity,
+            ),
+            budget=RunBudget(max_steps=1, max_tool_calls=1),
+        )
+
     chat = ChatService(
-        retrieval=RetrievalService(
-            embedder=embedder,
-            index=vector_index,
-            documents=documents,
-            sparse_encoder=(
-                None if isinstance(sparse, SparseEncodingUnavailable) else sparse
-            ),
-            reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
-            rerank_timeout_seconds=config.reranker.timeout_seconds,
-        ),
-        executor=ClaudeLikeAgentRuntime(
-            model=model,
-            gateway=ToolGateway(
-                registry=StaticToolRegistry([]),
-                policy=EnvelopePolicyEngine(registry=StaticToolRegistry([])),
-            ),
-            policy_identity=f"api-{config.deployment_scope}",
-        ),
+        execution=execution,
         conversations=conversations,
         releaser=releaser,
-        budget=RunBudget(max_steps=1, max_tool_calls=1),
         request_timeout_seconds=config.request_timeout_seconds,
         orphan_grace_seconds=config.chat_recovery.orphan_grace_seconds,
     )
-    return chat, None, client, qdrant, vector_index, no_reranker, no_sparse
+    return (
+        chat,
+        None,
+        client,
+        qdrant,
+        vector_index,
+        no_reranker,
+        no_sparse,
+        # Both shapes share one RetrievalService, so these are the encoders
+        # every turn will actually use.
+        tuple(e for e in (retrieval.embedder, retrieval.sparse_encoder) if e),
+        retrieval,
+    )
 
 
 __all__ = ["ApiDependencies", "InsecureDeploymentError", "build_dependencies"]

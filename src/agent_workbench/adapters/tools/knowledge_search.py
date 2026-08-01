@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 from pydantic import JsonValue
 
+from agent_workbench.application.chat_execution import RetrievalJournal
 from agent_workbench.application.retrieval import RetrievalRequest, RetrievalService
 from agent_workbench.domain.context import ContextPacket
 from agent_workbench.domain.errors import ErrorInfo
@@ -66,6 +67,11 @@ class KnowledgeSearchTool:
     """Wraps the retrieval service as a callable tool."""
 
     retrieval: RetrievalService
+    # Where each search records what it authorized, for the run's release fence
+    # to re-check afterwards. Optional because the tool is also usable outside a
+    # chat turn; a run whose evidence nothing journals is one whose answer
+    # cannot be fenced, so the agentic assembly always supplies one.
+    journal: RetrievalJournal | None = None
 
     def binding(self) -> ToolBinding:
         return ToolBinding(spec=SPEC, handler=self.handle)
@@ -90,6 +96,10 @@ class KnowledgeSearchTool:
                 top_k=min(top_k, MAX_TOP_K),
             )
         )
+        if self.journal is not None:
+            # Recorded before the result is rendered, so a passage the model is
+            # about to see is already something the fence knows to re-check.
+            self.journal.record(invocation.context.agent_run_id, context)
         return ToolResult(
             tool_call_id=invocation.call.tool_call_id,
             tool_name=TOOL_NAME,

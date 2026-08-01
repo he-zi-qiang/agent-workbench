@@ -208,3 +208,69 @@ def test_a_model_request_never_names_a_concrete_model() -> None:
     assert "model_id" not in payload
     assert "temperature" not in payload
     assert "api_key" not in payload
+
+
+def test_a_citation_outside_the_fenced_documents_is_refused() -> None:
+    """The half of the invariant that survived becoming a subset rule.
+
+    Citations used to have to *equal* the authorized revisions, because they
+    were the retrieval packet. Now an answer offers only what it named, so the
+    fence is legitimately wider -- but never narrower. A citation to a document
+    nobody re-checked is a source whose permission was never confirmed, and it
+    is the containment, not the equality, that says so.
+
+    The control group is ``TURN_RESULT`` above, which is the same shape with the
+    citation inside the fence and validates.
+    """
+
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="authorized revision"):
+        ChatTurnResult(
+            outcome=COMPLETED_OUTCOME,
+            answer="Qdrant owns fusion.",
+            authorized_revisions=(
+                AuthorizedRevision(
+                    document_id="doc_0000000000000000000000000000001",
+                    source_revision=1,
+                ),
+            ),
+            citations=(
+                Citation(
+                    chunk_id="chunk_00000000000000000000000000001",
+                    # Never fenced, and therefore never re-checked.
+                    document_id="doc_0000000000000000000000000000009",
+                    document_version="v1",
+                ),
+            ),
+        )
+
+
+def test_a_fence_wider_than_the_citations_is_allowed() -> None:
+    """The direction that had to open: a passage read and not cited."""
+
+    result = ChatTurnResult(
+        outcome=COMPLETED_OUTCOME,
+        answer="Qdrant owns fusion.",
+        authorized_revisions=(
+            AuthorizedRevision(
+                document_id="doc_0000000000000000000000000000001",
+                source_revision=1,
+            ),
+            AuthorizedRevision(
+                document_id="doc_0000000000000000000000000000002",
+                source_revision=3,
+            ),
+        ),
+        citations=(
+            Citation(
+                chunk_id="chunk_00000000000000000000000000001",
+                document_id="doc_0000000000000000000000000000001",
+                document_version="v1",
+            ),
+        ),
+    )
+
+    assert len(result.authorized_revisions) == 2
+    assert len(result.citations) == 1

@@ -35,9 +35,11 @@ from agent_workbench.apps.api.routes import (
     chat,
     events,
     health,
+    search,
     tasks,
     uploads,
 )
+from agent_workbench.apps.api.routes.search import SearchUnavailableError
 from agent_workbench.apps.api.routes.tasks import InvalidTaskCursorError
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.bootstrap import load_settings
@@ -74,6 +76,7 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     ApprovalNotDecidableError: 409,
     InvalidTaskCursorError: 400,
     TimelineUnavailableError: 409,
+    SearchUnavailableError: 409,
 }
 
 
@@ -161,6 +164,11 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
     app.include_router(artifacts.router)
     app.include_router(tasks.router)
     app.include_router(approvals.router)
+    if dependencies.serves_search:
+        # Mounted without a model. Retrieval is the half of chat that needs
+        # no provider, and a deployment that has indexed documents should be
+        # able to look at them.
+        app.include_router(search.router)
     if dependencies.serves_chat:
         # Mounted only when the process can answer. A route that 500s per
         # request is a worse answer than a 404 a client detects once.
@@ -206,12 +214,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="agent-api",
         description="Run the Agent Workbench HTTP control plane.",
     )
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--without-chat",
+        action="store_true",
+        help=(
+            "Serve uploads, artifacts, tasks and approvals without assembling "
+            "chat. Use when this deployment has no model provider: the chat "
+            "route is not registered at all, rather than registered and failing "
+            "every request."
+        ),
+    )
+    arguments = parser.parse_args(argv)
 
     import uvicorn
 
     config = project_api(load_settings())
-    app, _ = build_app(config)
+    # Not a degraded mode that hides a misconfiguration. `build_model` refuses to
+    # start a process whose model it could not call, and that refusal is correct
+    # -- a process that answers nothing while passing its health check turns a
+    # configuration mistake into an incident with a long path back to its cause.
+    # This flag is the other honest answer to the same situation: say up front
+    # that chat is not served here, and let uploads and Tasks run.
+    app, _ = build_app(config, with_chat=not arguments.without_chat)
     uvicorn.run(
         app,
         host=config.host,

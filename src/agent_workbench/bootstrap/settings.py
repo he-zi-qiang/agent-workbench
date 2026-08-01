@@ -182,6 +182,34 @@ class ChatSettings(StrictModel):
     orphan_action: Literal["terminal_fail"] = "terminal_fail"
     automatic_retry: Literal[False] = False
 
+    # Which shape answers a turn. `fixed` retrieves once and hands the model the
+    # evidence; `agentic` gives it a search tool and lets it decide. The default
+    # is the one that can be evaluated: the same question retrieves the same way
+    # every time, so a change in an answer is a change in the model or the
+    # corpus. Choosing `agentic` buys the capability and spends that property,
+    # which is a deployment decision rather than a request parameter.
+    retrieval_shape: Literal["fixed", "agentic"] = "fixed"
+    # Only read when the shape is `agentic`. Ceilings rather than targets: the
+    # model stops when it has enough, and these stop it when it does not.
+    max_agentic_steps: int = Field(default=4, ge=2, le=32)
+    max_agentic_searches: int = Field(default=6, ge=1, le=16)
+
+    @model_validator(mode="after")
+    def validate_agentic_budget(self) -> ChatSettings:
+        """Refuse a pair ``RunBudget`` would reject, at startup rather than later.
+
+        A run may spend a tool call on every step, so a search ceiling below the
+        step ceiling is a budget that cannot be built. Caught here because the
+        alternative is a process that starts, serves fixed turns, and fails only
+        once somebody switches the shape.
+        """
+
+        if self.max_agentic_searches < self.max_agentic_steps:
+            raise ValueError(
+                "chat.max_agentic_searches must be >= chat.max_agentic_steps"
+            )
+        return self
+
 
 class DatabaseSettings(StrictModel):
     # DSNs are SecretStr because passwords are commonly embedded in them.

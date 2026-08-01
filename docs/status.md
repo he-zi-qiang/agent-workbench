@@ -1,5 +1,77 @@
 # 实施状态
 
+## 2026-07-31 Chat 检索与引用（未合并，PR #63）
+
+分支 `pr-051-tool-execution-ledger`。本节记录 3.2 / 3.3；同分支的 2.2 与 3.1 见下两节。
+
+**3.2 复核结论：条目已过期。** API 早已装配 sparse，`RetrievalService` 有 sparse
+时走 Qdrant Query API 的一次 RRF。真实的洞是**正例从没被断言过**——所有装配测试都把
+sparse 打桩成不可用，"有词法运行时却只接 dense 臂"能全绿然后被当 hybrid 评测。已补。
+
+**3.3 引用改为可验证。** 只在模型**点名**且**被展示过**时才给出引用。没见过的 chunk id
+一律丢弃——那是模型产出的字符串，回显等于让猜出来的标识带上本系统的权威。
+连带把 `ChatTurnResult` 的 citations 与 authorized_revisions **相等**改为**包含**：
+栅栏可以更宽（读了没引用的段落权限仍须成立），引用不能落在栅栏外。
+
+```text
+ruff / pyright                       全过
+alembic 唯一 head                    0019_tool_executions
+pytest（真实服务）                   1634 passed / 11 skipped
+```
+
+**代价（如实记）**：不按 `[chunk_id]` 约定作答的模型会得到零引用。这是如实而非虚报。
+
+## 2026-07-31 Agentic 检索并存路径（未合并）
+
+完成 [待办清单](./followup-checklist-2026-07-29.md) 的 **3.1**。要点是它**不是**
+把固定两步改成 agentic，而是并存：`TurnExecution` seam 之下 turn 生命周期共用，
+`chat.retrieval_shape` 选形态，**默认仍是 `fixed`**。
+
+| 落地 | 事实 |
+|---|---|
+| 授权 | agentic envelope 点名 `knowledge_search`，风险上限保持 read 默认 |
+| 预算 | `max_agentic_steps` / `max_agentic_searches`，settings 跨字段校验 |
+| evidence gate | `RetrievalJournal` 按 run 记录**模型看到的**全部证据，`finally` 取回 |
+| 不变 | 固定路径仍然 registry 空 + envelope 空，有测试守着 |
+
+```text
+ruff / pyright / config-check        全过
+alembic 唯一 head                    0019_tool_executions
+pytest（真实服务）                   1622 passed / 11 skipped
+```
+
+**仍未做**：两条路径的对照评测。
+
+## 2026-07-31 外部副作用 ledger（未合并）
+
+分支 `pr-051-tool-execution-ledger`，基线 `main@13136e7`（上一节的 HITL 增量已合入）。
+完成 [待办清单](./followup-checklist-2026-07-29.md) 的 **2.2**，迁移 `0019`。
+
+| 落地 | 事实 |
+|---|---|
+| `tool_executions` | `UNIQUE(task_id, operation_key)`；四态 `intended/succeeded/failed/needs_reconciliation` |
+| 稳定 operation key | 业务 key，`tool_call_id` 只记录不入键；同 key 不同 canonical 参数冲突拒绝 |
+| 两段提交 | 先 intent 后 dispatch，中间**重算授权**；全部写入按 Task 活跃 lease 栅栏 |
+| 人工核对 | 判据是"有没有拿到答案"：超时/取消/预算耗尽 → 交给人，不重试也不写成失败 |
+| 装配拒绝 | 注册了带 operation key 的工具却没有 ledger 的进程**起不来** |
+
+另有一条与产品无关但影响证据可信度的修复：本机 `~/Documents` 的同步会持续生成
+`* 2.py` 副本（三天 30 个），其中一个让 `alembic heads` 报两个 head、并让 pytest 多收
+232 条重复用例。已加三层防护（`.gitignore` / `tests/conftest.py` 不收集 /
+architecture guard 直接读 `migrations/versions`）。**此前公布的门禁数字未受影响**——
+CI 在干净 checkout 上跑出的 `1074 passed / 506 skipped` 与本地一致。
+
+```text
+ruff format --check .                 passed（310 files）
+ruff check .                          passed
+pyright                               0 errors / 0 warnings
+alembic 唯一 head                     0019_tool_executions
+pytest（真实服务）                    1606 passed / 11 skipped
+```
+
+**仍未做**：`export_artifact`（WP10-07，唯一真实写节点）——协议就位，当前 build 里
+还没有任何工具带 operation key。
+
 ## 2026-07-30 HITL Approval 收尾（未合并）
 
 分支 `pr-050-postgres-checkpointer`，在下节 2026-07-29 快照之上再加四个提交

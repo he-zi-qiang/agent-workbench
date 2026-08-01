@@ -23,6 +23,7 @@ from sqlalchemy import text
 
 from agent_workbench.adapters.persistence import create_query_engine
 from agent_workbench.application.chat import ChatTurn
+from agent_workbench.application.chat_execution import FixedTwoStepExecution
 from agent_workbench.apps.api.dependencies import build_dependencies
 from agent_workbench.apps.api.main import create_app
 from agent_workbench.apps.api.routes.chat import CHAT_PREFIX, _watch_disconnect
@@ -218,28 +219,30 @@ async def _mounted(root: Path, engine: Any, index: Any) -> Any:
 
     registry = StaticToolRegistry([])
     return ChatService(
-        retrieval=RetrievalService(
-            embedder=DeterministicEmbedder(dimension=8),
-            index=index,
-            documents=PostgresDocumentStore(engine),
-        ),
-        executor=ClaudeLikeAgentRuntime(
-            model=FakeModel(
-                [
-                    ScriptedTurn(
-                        text="No evidence was retrieved.",
-                        usage=TokenUsage(input_tokens=8, output_tokens=4),
-                    )
-                ]
+        execution=FixedTwoStepExecution(
+            retrieval=RetrievalService(
+                embedder=DeterministicEmbedder(dimension=8),
+                index=index,
+                documents=PostgresDocumentStore(engine),
             ),
-            gateway=ToolGateway(
-                registry=registry, policy=EnvelopePolicyEngine(registry=registry)
+            executor=ClaudeLikeAgentRuntime(
+                model=FakeModel(
+                    [
+                        ScriptedTurn(
+                            text="No evidence was retrieved.",
+                            usage=TokenUsage(input_tokens=8, output_tokens=4),
+                        )
+                    ]
+                ),
+                gateway=ToolGateway(
+                    registry=registry, policy=EnvelopePolicyEngine(registry=registry)
+                ),
+                policy_identity="test-policy",
             ),
-            policy_identity="test-policy",
+            budget=RunBudget(max_steps=1, max_tool_calls=1),
         ),
         conversations=PostgresConversationStore(engine),
         releaser=PostgresChatReleaseCoordinator(engine),
-        budget=RunBudget(max_steps=1, max_tool_calls=1),
         request_timeout_seconds=30,
         orphan_grace_seconds=5,
     )

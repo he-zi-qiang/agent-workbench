@@ -14,3 +14,12 @@ htmlcov/
 .coverage
 var/
 artifacts/evidence/
+
+# Copies an editor or a syncing file system leaves beside the original:
+# "thing 2.py", "thing copy.md". One pair was committed this way by `git add
+# -A` and only removed a release later. No file in this repository is named
+# with a space, so nothing deliberate matches these.
+* [0-9].*
+* [0-9][0-9].*
+* copy.*
+* ([0-9]).*

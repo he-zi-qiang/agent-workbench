@@ -1,0 +1,52 @@
+# Running on a developer machine, against services on localhost.
+#
+#   AW_CONFIG_FILE=config/config.local.toml agent-api --without-chat
+#
+# config.default.toml is loaded first; this file deep-merges over it. It exists
+# because the defaults are written for the Compose topology -- Qdrant answers to
+# the hostname `qdrant`, and nothing may create an index by accident -- and both
+# of those are wrong for a process started by hand beside `docker run`.
+#
+# The three DSNs are deliberately absent. Settings forbids them in TOML, because
+# a connection string in a committed file is a credential in a committed file
+# even when today's happens to have no password. They come from the environment;
+# scripts/dev.sh is the one place that knows them.
+#
+# The model ids below are pinned because the defaults ship placeholders, and
+# `build_model` refuses to start a process that could not answer. The *key* is
+# still absent and still comes from the environment: a model id is the provider's
+# public catalogue name, and an API key is not.
+#
+#   AW_CONFIG_FILE=config/config.local.toml \
+#   AW_SECRETS__DEEPSEEK_API_KEY=sk-... agent-api
+#
+# Without that variable the process still refuses to start, which is the point:
+# there is no configuration in this repository that makes chat work by itself.
+
+[app]
+environment = "development"
+deployment_scope = "local"
+log_level = "INFO"
+
+[model.main]
+# DeepSeek's catalogue name, pinned. The answering profile.
+model_id = "deepseek-chat"
+
+[model.compact]
+# History compaction. The same model here: DeepSeek has no cheaper small tier
+# worth pinning separately, and a second id nobody verified would be a config
+# value that only fails once a conversation grows long enough to compact.
+model_id = "deepseek-chat"
+
+[qdrant]
+# `docker run -p 6333:6333`, not the Compose service name.
+url = "http://localhost:6333"
+# The one setting that makes a first run possible: with no collection and no
+# alias, startup creates the write collection to the configured schema and binds
+# the read alias to it. Never inferred, and settings refuses it outside a local
+# scope -- an operator typo must not produce a fresh empty index in production.
+#
+# The *ingestion worker* is what performs it. An API started `--without-chat`
+# builds no Qdrant client at all, because it does not retrieve; start the
+# ingestion worker at least once before expecting an index to exist.
+allow_local_bootstrap = true

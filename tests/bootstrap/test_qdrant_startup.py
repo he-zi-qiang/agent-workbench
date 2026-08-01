@@ -200,6 +200,7 @@ def test_lifespan_disposes_dependencies_when_qdrant_startup_fails() -> None:
         max_control_request_body_bytes = 1024
         uploads = _Uploads()
         serves_chat = False
+        serves_search = False
         chat_reaper = None
         chat_pending_recovery = None
 
