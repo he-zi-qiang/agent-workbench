@@ -31,9 +31,21 @@ To include deterministic synthetic workers, opt in explicitly:
 docker compose --profile demo up --build
 ```
 
-`task-worker` and `ingestion-worker` both receive `--demo`. The ingestion
-worker is allowed to bootstrap the disposable local Qdrant collection only in
-this profile. Neither worker command is a production deployment recipe.
+`task-worker`, `task-worker-b` and `ingestion-worker` all receive `--demo`. The
+ingestion worker is allowed to bootstrap the disposable local Qdrant collection
+only in this profile. None of these commands is a production deployment recipe.
+
+**Two Task Workers, on purpose.** Claim, lease, epoch and fencing only mean
+anything under contention: with one Worker every one of those invariants holds
+trivially, and a topology shipping one cannot show the part of this system that
+took the most work. Neither container pins a worker id — each process mints its
+own at startup, so two replicas of one image are already two distinct
+claimants, and an id set in the file is an id they could share.
+
+The API serves the browser console from the image at
+[http://127.0.0.1:8000/ui/](http://127.0.0.1:8000/ui/), same-origin with the
+routes it calls. `agent-api` refuses to start when the directory is missing, so
+a broken image fails at startup rather than in somebody's browser.
 
 ## Configuration and secrets
 

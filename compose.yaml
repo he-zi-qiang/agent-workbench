@@ -112,6 +112,31 @@ services:
       - artifact_data:/var/lib/agent-workbench/artifacts
     <<: *app-hardening
 
+  # A second Worker, and the only reason it exists is to be a second one.
+  #
+  # Claim, lease, epoch and fencing are the part of this system that only means
+  # anything under contention: with one Worker every one of those invariants
+  # holds trivially, and a topology that ships one is a topology that cannot
+  # show the thing it spent the most effort on. The concurrency tests prove it
+  # against a real database; this makes it something a reader can watch.
+  #
+  # No worker id is set. Each process mints its own at startup, so two
+  # containers from one image are already two distinct claimants -- and an id
+  # pinned here would be an id two replicas could share.
+  task-worker-b:
+    image: agent-workbench:local
+    profiles: ["demo"]
+    command: ["agent-task-worker", "--demo"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant-ready:
+        condition: service_completed_successfully
+    volumes:
+      - artifact_data:/var/lib/agent-workbench/artifacts
+    <<: *app-hardening
+
   ingestion-worker:
     image: agent-workbench:local
     profiles: ["demo"]

@@ -372,3 +372,76 @@ def test_a_sparse_encoder_returning_the_wrong_count_is_refused() -> None:
 
     with pytest.raises(ValueError, match="sparse encoder"):
         _run(scenario)
+
+
+# --------------------------------------------------------------------------
+# Pages, all the way to what a reader is handed
+# --------------------------------------------------------------------------
+
+
+def test_a_pdf_page_survives_ingestion_and_comes_back_from_the_index() -> None:
+    """The whole point of extracting pages, asserted where it can be observed.
+
+    The chunker computes a page and the parser reports one, but a page that
+    stops at ``TextChunk`` is a field nothing downstream can use: ``ordinal``
+    was the only position the index carried, and retrieval rebuilt a locator
+    from it alone. A sabotage that dropped the pages between parsing and
+    chunking passed every test in ``tests/ingestion`` for exactly that reason.
+    """
+
+    from tests.support.pdf import build_pdf
+
+    pages = (
+        "Reciprocal rank fusion runs inside the database and not in the app.",
+        "PostgreSQL is the authority on which documents a principal may read.",
+    )
+
+    async def scenario(index: QdrantVectorIndex) -> Any:
+        service = _service(
+            index,
+            # 13 tokens is one chunk per page for this fixture, measured
+            # rather than guessed: the two pages are 25 tokens together, and a
+            # window wide enough to span both would measure the boundary
+            # tie-break instead of the plumbing under test.
+            chunker=Chunker(
+                size_tokens=13, overlap_tokens=0, counter=ApproximateTokenCounter()
+            ),
+        )
+        written = await service.ingest(
+            _request(media_type="application/pdf", content=build_pdf(pages))
+        )
+        found = await index.search(
+            vector=await DeterministicEmbedder(dimension=SIZE).embed_query(pages[0]),
+            tenant_id=TENANT,
+            knowledge_base_id=KB,
+            authorized_principals=(OWNER,),
+            limit=10,
+        )
+        return written, found
+
+    written, found = _run(scenario)
+
+    assert [chunk.page for chunk in written] == [1, 2]
+    # Read back through Qdrant, which is where it would be silently dropped.
+    assert {chunk.ordinal: chunk.page for chunk in found} == {0: 1, 1: 2}
+
+
+def test_a_markdown_chunk_carries_no_page() -> None:
+    """Absent, not one. A default page would claim a location nothing found."""
+
+    async def scenario(index: QdrantVectorIndex) -> Any:
+        written = await _service(index).ingest(_request())
+        found = await index.search(
+            vector=await DeterministicEmbedder(dimension=SIZE).embed_query(PASSAGE),
+            tenant_id=TENANT,
+            knowledge_base_id=KB,
+            authorized_principals=(OWNER,),
+            limit=10,
+        )
+        return written, found
+
+    written, found = _run(scenario)
+
+    assert written
+    assert all(chunk.page is None for chunk in written)
+    assert all(chunk.page is None for chunk in found)

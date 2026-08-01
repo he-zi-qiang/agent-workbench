@@ -125,3 +125,86 @@ def test_the_counter_is_part_of_the_chunker_identity() -> None:
 
 def test_the_identity_records_the_window_too() -> None:
     assert _chunker(size=8, overlap=2).identity.endswith("-8-2")
+
+
+# --------------------------------------------------------------------------
+# Pages
+# --------------------------------------------------------------------------
+
+
+def _pages(*pages: str) -> tuple[str, tuple[int, ...]]:
+    """Assemble page text the way the PDF parser does, and its offsets."""
+
+    text = ""
+    starts: list[int] = []
+    for page in pages:
+        starts.append(len(text))
+        text += page + "\n"
+    return text.rstrip("\n"), tuple(starts)
+
+
+def test_a_chunk_reports_the_page_it_begins_on() -> None:
+    """What a PDF citation is followed by.
+
+    A character offset indexes the extraction, not the stored file, so it
+    cannot send a reader anywhere in the original. A page number can.
+    """
+
+    chunker = _chunker(size=4, overlap=0)
+    text, starts = _pages("alpha beta gamma delta", "epsilon zeta eta theta")
+
+    chunks = chunker.split(text, page_starts=starts)
+
+    assert [chunk.locator.page for chunk in chunks] == [1, 2]
+
+
+def test_pages_are_numbered_from_one() -> None:
+    """Zero-based would make the first page's citation unfollowable."""
+
+    chunker = _chunker(size=8, overlap=0)
+    text, starts = _pages("alpha beta")
+
+    assert chunker.split(text, page_starts=starts)[0].locator.page == 1
+
+
+def test_a_window_spanning_a_boundary_reports_where_it_begins() -> None:
+    """The place the passage starts is where a reader should start reading.
+
+    Reporting the last page it touches would send them past the sentence they
+    came for.
+    """
+
+    chunker = _chunker(size=4, overlap=0)
+    # Two tokens per page, so the four-token window covers both.
+    text, starts = _pages("alpha beta", "gamma delta")
+
+    chunks = chunker.split(text, page_starts=starts)
+
+    assert len(chunks) == 1
+    assert chunks[0].locator.page == 1
+
+
+def test_a_format_without_pages_reports_no_page() -> None:
+    """Not page one. A default of 1 would claim a location nothing established."""
+
+    chunker = _chunker(size=4, overlap=0)
+
+    chunks = chunker.split("alpha beta gamma delta epsilon zeta")
+
+    assert chunks
+    assert all(chunk.locator.page is None for chunk in chunks)
+
+
+def test_character_offsets_are_unchanged_by_page_tracking() -> None:
+    """The control: adding a page must not move where a chunk says it is."""
+
+    chunker = _chunker(size=4, overlap=0)
+    text, starts = _pages("alpha beta gamma delta", "epsilon zeta eta theta")
+
+    without = chunker.split(text)
+    with_pages = chunker.split(text, page_starts=starts)
+
+    assert [c.locator.char_start for c in without] == [
+        c.locator.char_start for c in with_pages
+    ]
+    assert [c.text for c in without] == [c.text for c in with_pages]

@@ -18,6 +18,7 @@ holding half the answer.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 
 from agent_workbench.domain.context import SourceLocator
@@ -48,7 +49,18 @@ class Chunker:
 
         return f"{self.counter.name}-{self.size_tokens}-{self.overlap_tokens}"
 
-    def split(self, text: str) -> tuple[TextChunk, ...]:
+    def split(
+        self, text: str, *, page_starts: tuple[int, ...] = ()
+    ) -> tuple[TextChunk, ...]:
+        """Cut ``text`` into windows, locating each one.
+
+        ``page_starts`` comes from the parser for formats that have pages. It
+        is a keyword with a default because most callers chunk text that has
+        none, and a required argument would make every one of them pass an
+        empty tuple to say "not applicable" -- which reads the same as
+        forgetting.
+        """
+
         pieces = self.counter.split(text)
         if not pieces:
             return ()
@@ -77,6 +89,7 @@ class Chunker:
                     locator=SourceLocator(
                         char_start=char_start,
                         char_end=char_start + len(body),
+                        page=_page_of(char_start, body, page_starts),
                     ),
                 )
             )
@@ -85,6 +98,27 @@ class Chunker:
                 # further windows that are all suffixes of this one.
                 break
         return tuple(chunks)
+
+
+def _page_of(char_start: int, body: str, page_starts: tuple[int, ...]) -> int | None:
+    """Which page a chunk begins on, numbered from one.
+
+    The chunk's *start* decides, even when the window runs over a boundary. A
+    citation points a reader somewhere to begin reading, and the place the
+    passage begins is that somewhere; reporting the last page it touches would
+    send them past the sentence they came for.
+
+    Leading whitespace is skipped, and that is not cosmetic. A window that
+    opens exactly on the separator ending the previous page starts one
+    character before the next page begins, so locating by the raw offset sends
+    a reader to the bottom of the page before the one they want. What decides
+    is where the chunk's text starts, not where its slice does.
+    """
+
+    if not page_starts:
+        return None
+    offset = len(body) - len(body.lstrip())
+    return bisect_right(page_starts, char_start + offset)
 
 
 __all__ = ["Chunker"]

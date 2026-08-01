@@ -242,3 +242,38 @@
 
 **这台 8 GB 机器上的操作提示**：一次只跑一个会检索的进程。要跑评测就先停掉
 API 与摄取 worker。固定两步 Chat 能用（一次检索）；agentic 不行（工具超时 30s）。
+
+
+---
+
+## 6. 演示层收尾（2026-08-01）
+
+- [x] **6.1 PDF 摄取 + 页码引用**
+      解析器此前只认 `text/plain` / `text/markdown`，而基线 M2 与 E2E 第一条的原文
+      都是「上传 PDF」。加 `pypdf`（纯 Python、BSD-3；PyMuPDF 是 AGPL，许可证门禁
+      直接拒）。三类失败**逐条拒绝而不是放行**：加密文件不试空密码、无文字层的扫描件
+      不索引成「永远检索不到但每层都报成功」的文档、栏位错乱只能如实说明不能修。
+
+      真正的价值在第二半：`SourceLocator.page` 从领域写下来那天就存在，**从来没有
+      任何地方设置过它**。对 PDF 这不是可有可无——抽出的文本不是存下的字节，字符
+      偏移指向的是抽取结果，送不了读者到原文任何位置，**只有页码可以**。页码现在
+      一路走完：解析器 → chunker → `IndexedChunk` → Qdrant payload → `ScoredChunk`
+      → 引用。破坏验证 12 处 12 中（两轮；第一轮发现页码被算出来又被丢掉）。
+
+- [x] **6.2 三条固定 E2E**（`tests/e2e/`，11 条断言全过）
+      覆盖此前是散在各文件的切片，缺的是「一个人会怎么描述这三次运行」。其中两条
+      断言的东西一周前还做不到：PDF 的页码引用（6.1），以及**导出只发生一次**——
+      旧的恢复测试用一个 list 记录 export，因为在有 export 节点之前，「导出了」只能
+      意味着「一个函数跑过」。现在数的是磁盘上的对象和 ledger 里的行。
+
+- [x] **6.3 Compose 双 Worker + 控制台**
+      claim / lease / epoch / fencing 只有在**竞争**下才有意义，单 Worker 时全部
+      平凡成立——发一个 Worker 的拓扑证明不了这个项目花力气最多的地方。两个容器都
+      不钉 worker id（各自启动时铸造，钉了就是两个副本可能共用一个）。控制台已随
+      镜像发布，`docker compose up` 起来就有页面。
+
+**仍未做**：`4.1` OTel、`4.2` Langfuse、`4.3` CrewAI 对照、`4.4` LlamaIndex
+Adapter、`4.5` RAGAS、`4.6` Task benchmark、`4.7` Anthropic Provider、
+`4.9` 生产身份、`4.10` 动态 supervisor；`5.2` `task_ready` 监听端；
+`3.4` compaction；`3.6` EventLog upcaster；`3.7` 旧 Point 物理清理。
+5.4 的对照数字仍是带着 `knowledge_search` 缺陷测出来的，未重跑。
