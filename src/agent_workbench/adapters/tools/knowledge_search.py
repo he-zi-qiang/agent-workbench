@@ -36,6 +36,21 @@ TOOL_NAME = "knowledge_search"
 
 MAX_TOP_K = 20
 
+#: How much evidence one search may hand the model.
+#:
+#: Below ``ToolOutputText``'s ceiling on purpose: that one is the backstop for a
+#: tool with no budget of its own, and this is the budget. Sized for what the
+#: tool actually returns -- ``MAX_TOP_K`` passages of this project's 512-token
+#: chunks -- so an ordinary result fits and a pathological one is cut rather
+#: than refused.
+#:
+#: Deliberately above ``ChunkText``'s own 32,768 ceiling, which is what makes
+#: "one passage on its own does not fit" unreachable: a single chunk cannot be
+#: larger than that bound, so at least one always survives. A test pins the
+#: relationship, because it is the reason the empty branch below is dead and
+#: lowering this constant would quietly bring it back to life.
+MAX_CONTENT_CHARS = 48_000
+
 INPUT_SCHEMA: dict[str, JsonValue] = {
     "type": "object",
     "additionalProperties": False,
@@ -117,34 +132,74 @@ class KnowledgeSearchTool:
 
 
 def _render(packet: ContextPacket) -> str:
-    """What the model sees.
+    """What the model sees, bounded by what a tool result may carry.
 
     Chunk ids are labelled so a citation can be checked against what was
     actually returned rather than against whatever the model names. Passages
     are quoted as evidence -- the system prompt says text inside them is not
     instructions, and this format does not blur that by interleaving them with
     anything that looks like one.
+
+    Passages are dropped whole, highest-ranked first, and never clipped. A
+    half-passage is evidence that says something the document does not, and the
+    model would cite it under the id of the whole thing -- the citation fence
+    checks that a cited chunk was shown, not that the sentence relied on
+    survived the cut. Dropping loses evidence; clipping invents it.
+
+    What was dropped is reported rather than left to be inferred from a count
+    the model never saw. A model that knows its evidence is partial can search
+    again with a narrower query; one that does not will answer as if it had
+    everything.
     """
 
     if not packet.chunks:
         return json.dumps({"chunks": [], "note": "no readable passages matched"})
-    return json.dumps(
+
+    kept: list[dict[str, str]] = []
+    for chunk in packet.chunks:
+        entry = {
+            "chunk_id": chunk.chunk_id,
+            "document_id": chunk.document_id,
+            "text": chunk.text,
+        }
+        if len(_encode({"chunks": [*kept, entry]})) > MAX_CONTENT_CHARS:
+            break
+        kept.append(entry)
+
+    omitted = len(packet.chunks) - len(kept)
+    if not omitted:
+        return _encode({"chunks": kept})
+    if not kept:  # pragma: no cover - MAX_CONTENT_CHARS exceeds ChunkText's own
+        # ceiling, so the first passage always fits. Kept as the answer if
+        # either bound moves: there would be nothing to return that is not a
+        # fragment, and saying so beats returning one.
+        return _encode(
+            {
+                "chunks": [],
+                "note": (
+                    "the highest-ranked passage alone exceeds this tool's "
+                    "result budget; narrow the query or lower top_k"
+                ),
+            }
+        )
+    return _encode(
         {
-            "chunks": [
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "document_id": chunk.document_id,
-                    "text": chunk.text,
-                }
-                for chunk in packet.chunks
-            ]
-        },
-        ensure_ascii=False,
+            "chunks": kept,
+            "note": (
+                f"{omitted} lower-ranked passage(s) omitted to fit this tool's "
+                "result budget; narrow the query or lower top_k to see them"
+            ),
+        }
     )
+
+
+def _encode(payload: dict[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False)
 
 
 __all__ = [
     "INPUT_SCHEMA",
+    "MAX_CONTENT_CHARS",
     "MAX_TOP_K",
     "SPEC",
     "TOOL_NAME",

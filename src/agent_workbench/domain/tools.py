@@ -23,8 +23,8 @@ from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import ErrorInfo, ToolPairingError
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.schema import (
-    BoundedText,
     JsonObject,
+    ToolOutputText,
     VersionedModel,
 )
 
@@ -114,7 +114,7 @@ class ToolResult(VersionedModel):
     tool_call_id: Identifier
     tool_name: ProposedToolName
     status: ToolResultStatus
-    content: BoundedText = ""
+    content: ToolOutputText = ""
     artifact: ArtifactRef | None = None
     error: ErrorInfo | None = None
     duration_ms: int | None = Field(default=None, ge=0)
