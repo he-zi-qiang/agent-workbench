@@ -19,6 +19,12 @@ dependencies = [
   # workflow adapter's tests and therefore proves nothing about it.
   "langgraph>=0.6,<0.7",
   "pydantic>=2.12,<3",
+  # A main dependency rather than an extra, on the same reasoning as langgraph:
+  # it is small, pure Python and BSD-3, so hiding it behind an extra would buy
+  # nothing except a CI that skips the parser's tests and therefore proves
+  # nothing about it. PyMuPDF is faster and AGPL, which the licence gate
+  # rejects and which this project has no business shipping.
+  "pypdf>=5,<7",
   "pydantic-settings>=2.14.2,<3",
   "python-dotenv>=1,<2",
   # Matched to the server image pinned by digest in CI. Qdrant checks major

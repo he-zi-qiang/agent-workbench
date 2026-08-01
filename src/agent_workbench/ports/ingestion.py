@@ -26,6 +26,15 @@ class ParsedDocument:
 
     text: str
     media_type: str
+    #: Where each page begins in ``text``, for formats that have pages. Empty
+    #: for the ones that do not, which is why it is a default rather than a
+    #: sentinel: "this document has no pages" and "nobody looked" would
+    #: otherwise be the same value, and the chunker would have to guess which.
+    #:
+    #: Recorded by the parser as it assembles the text rather than recovered
+    #: from it afterwards. A page separator that also occurs inside a page is
+    #: not a boundary anybody can find again.
+    page_starts: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

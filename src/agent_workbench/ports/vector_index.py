@@ -63,6 +63,12 @@ class IndexedChunk(DomainModel):
     source_revision: int = Field(ge=1)
     text: str
     ordinal: int = Field(ge=0)
+    #: The page this chunk begins on, for formats that have pages. ``None``
+    #: for the ones that do not -- not 1, which would claim a location nothing
+    #: established. A character offset indexes the extracted text rather than
+    #: the stored file, so for a PDF this is the only part of a locator that
+    #: can actually send a reader to the right place.
+    page: int | None = Field(default=None, ge=1)
     vector: tuple[float, ...]
     # Absent when the process has no sparse encoder. A point without them is
     # still dense-searchable, so a collection can hold both while sparse is
@@ -83,6 +89,12 @@ class ScoredChunk(DomainModel):
     source_revision: int = Field(ge=1)
     text: str
     ordinal: int = Field(ge=0)
+    #: The page this chunk begins on, for formats that have pages. ``None``
+    #: for the ones that do not -- not 1, which would claim a location nothing
+    #: established. A character offset indexes the extracted text rather than
+    #: the stored file, so for a PDF this is the only part of a locator that
+    #: can actually send a reader to the right place.
+    page: int | None = Field(default=None, ge=1)
     score: float
 
 

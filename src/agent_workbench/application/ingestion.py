@@ -112,7 +112,10 @@ class IngestionService:
         """Index one version, returning what was written."""
 
         parsed = self.parser.parse(request.content, media_type=request.media_type)
-        chunks = self.chunker.split(parsed.text)
+        # Pages travel with the text they were extracted from. A chunk whose
+        # locator has no page is a chunk from a format that has none, never a
+        # chunk whose page nobody passed along.
+        chunks = self.chunker.split(parsed.text, page_starts=parsed.page_starts)
         if not chunks:
             # An empty document is not a failure -- an upload can legitimately
             # be blank -- but it has nothing to retrieve, and writing a point
@@ -143,6 +146,7 @@ class IngestionService:
                 source_revision=request.source_revision,
                 text=chunk.text,
                 ordinal=chunk.ordinal,
+                page=chunk.locator.page,
                 vector=vector,
                 sparse_indices=weights.indices,
                 sparse_values=weights.values,

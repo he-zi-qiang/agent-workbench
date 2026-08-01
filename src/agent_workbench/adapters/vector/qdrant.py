@@ -133,6 +133,7 @@ class QdrantVectorIndex:
                         "source_revision": chunk.source_revision,
                         "text": chunk.text,
                         "ordinal": chunk.ordinal,
+                        "page": chunk.page,
                     },
                 )
                 for chunk in chunks
@@ -300,6 +301,23 @@ def _number(payload: dict[str, Any] | None, key: str) -> int:
     return value
 
 
+def _optional_number(payload: dict[str, Any] | None, key: str) -> int | None:
+    """Read a number that a point is allowed not to have.
+
+    Distinct from ``_number``, which refuses a point missing a field the schema
+    requires. A page is genuinely absent for every format without pages and for
+    every point written before pages were carried, so "not there" is an answer
+    rather than a corrupt row.
+    """
+
+    value = (payload or {}).get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise IncompatibleSchemaError(f"indexed point has a non-integer {key!r}")
+    return value
+
+
 def _vectors(chunk: IndexedChunk) -> dict[str, Any]:
     """Named vectors for one point, omitting sparse when there is none.
 
@@ -333,6 +351,10 @@ def _scored(point: Any) -> ScoredChunk:
         source_revision=_number(point.payload, "source_revision"),
         text=_text(point.payload, "text"),
         ordinal=_number(point.payload, "ordinal"),
+        # Absent from points written before pages were carried, and absent for
+        # every format that has none. Optional rather than defaulted, so an old
+        # point reads as "no page" instead of as page one.
+        page=_optional_number(point.payload, "page"),
         score=point.score,
     )
 

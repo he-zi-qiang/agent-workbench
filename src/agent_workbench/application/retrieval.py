@@ -327,7 +327,7 @@ def _packet(chunks: tuple[ScoredChunk, ...]) -> ContextPacket:
             document_version=chunk.document_version,
             tenant_id=chunk.tenant_id,
             text=chunk.text,
-            locator=SourceLocator(paragraph=chunk.ordinal),
+            locator=SourceLocator(paragraph=chunk.ordinal, page=chunk.page),
             score=chunk.score,
         )
         for chunk in chunks
@@ -337,7 +337,7 @@ def _packet(chunks: tuple[ScoredChunk, ...]) -> ContextPacket:
             chunk_id=chunk.chunk_id,
             document_id=chunk.document_id,
             document_version=chunk.document_version,
-            locator=SourceLocator(paragraph=chunk.ordinal),
+            locator=SourceLocator(paragraph=chunk.ordinal, page=chunk.page),
         )
         for chunk in chunks
     )
