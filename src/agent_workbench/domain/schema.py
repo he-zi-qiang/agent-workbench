@@ -37,6 +37,21 @@ JsonObject = dict[str, JsonValue]
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=256)]
 BoundedText = Annotated[str, StringConstraints(max_length=4096)]
 
+# What a tool hands the model, which is not the same ceiling as what a model
+# writes. Every other use of BoundedText is the model's own words -- a streamed
+# delta, a completed answer, a stored turn -- and 4096 characters is a generous
+# bound on those. A retrieval tool's result is input, and its natural size is
+# the evidence it was asked for: this project chunks at 512 tokens and
+# knowledge_search's own default top_k is 8, so an ordinary result is about
+# 16,000 characters. Sharing one type made that result impossible to return --
+# not truncated, refused, because the value could not be constructed at all.
+#
+# Still bounded, and deliberately not by much more than a real result needs: a
+# tool result goes into a prompt, so an unbounded one is an unbounded context
+# window. The operative limit is each tool's own budget; this is the backstop
+# that stops a tool with no budget from being unbounded.
+ToolOutputText = Annotated[str, StringConstraints(max_length=65_536)]
+
 
 class DomainModel(BaseModel):
     """Immutable value object with a closed field set."""

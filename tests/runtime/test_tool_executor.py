@@ -139,16 +139,42 @@ def test_a_handler_that_never_returns_is_stopped_by_its_own_timeout() -> None:
 
 
 def test_a_handler_returning_an_invalid_result_fails_the_call() -> None:
+    """A result the domain refuses becomes a tool error, not a crashed run.
+
+    The ceiling this crosses is ``ToolOutputText``, the backstop for a tool with
+    no budget of its own. It used to be ``BoundedText`` at 4096, which a normal
+    retrieval result also crossed -- so this property was being asserted with a
+    number that made an ordinary search fail too. The property is unchanged;
+    the size that violates it is now one no real tool produces.
+    """
+
     async def handler(invocation: ToolInvocation) -> ToolResult:
-        # Longer than the domain's inline ceiling: artifacting a large result
-        # belongs to context management, and until then it is a failure.
-        return ToolResult.succeeded(invocation.call, content="x" * 9000)
+        # Past the backstop. Artifacting a result this large belongs to context
+        # management, and until then it is a failure.
+        return ToolResult.succeeded(invocation.call, content="x" * 70_000)
 
     result = _execute(handler)
 
     assert result.status == "error"
     assert result.error is not None
     assert result.error.code == "tool_failed"
+
+
+def test_a_result_a_real_tool_produces_is_not_refused() -> None:
+    """The control group, and the regression this pairs with.
+
+    ``knowledge_search`` renders ``MAX_TOP_K`` passages of this project's
+    512-token chunks, which is about 42,000 characters. Under the old ceiling
+    the executor turned that into a tool error, and the model reported that
+    search was "failing with a validation error on every attempt".
+    """
+
+    async def handler(invocation: ToolInvocation) -> ToolResult:
+        return ToolResult.succeeded(invocation.call, content="x" * 42_000)
+
+    result = _execute(handler)
+
+    assert result.status == "ok"
 
 
 def test_an_error_result_from_the_handler_is_left_alone() -> None:
