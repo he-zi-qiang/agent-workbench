@@ -33,12 +33,47 @@ from agent_workbench.ports.task_registry import TaskRegistry, TaskRun
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError, TaskRunContext
 from agent_workbench.workflows.task_handlers import (
     StructuredOutputError,
+    TaskExportHandlers,
+    TaskExportPreconditionError,
+    TaskExportUnavailableError,
     TaskNodeInvocationProvider,
     TaskNodeRunFailedError,
     build_task_v1_handlers,
     decode_plan_output,
     decode_review_output,
 )
+
+
+class _RecordingExport:
+    """A ReportExportPort that records what the node asked it to export."""
+
+    def __init__(self, artifact_id: str = "art_report_1") -> None:
+        self.artifact_id = artifact_id
+        self.calls: list[dict[str, Any]] = []
+
+    async def export(
+        self,
+        *,
+        draft_ref: str,
+        approval_id: str,
+        execution: Any,
+        sink: Any,
+        cancellation: Any,
+    ) -> str:
+        del sink, cancellation
+        self.calls.append(
+            {
+                "draft_ref": draft_ref,
+                "approval_id": approval_id,
+                "task_id": execution.task_id,
+                "lease_epoch": execution.lease_epoch,
+            }
+        )
+        return self.artifact_id
+
+
+def _export(port: _RecordingExport) -> TaskExportHandlers:
+    return TaskExportHandlers(export=port, policy_identity="rev_1:fingerprint")
 
 
 class _Registry:
@@ -139,6 +174,18 @@ def _state(**overrides: object) -> TaskState:
     return TaskState.model_validate(values)
 
 
+def _passing_review(draft_ref: str) -> dict[str, Any]:
+    """The review an approved state must carry, since TaskState checks for it."""
+
+    return {
+        "decision": "pass",
+        "reviewed_draft_ref": draft_ref,
+        "revision_number": 0,
+        "summary": "Grounded report.",
+        "score": 91,
+    }
+
+
 def _provider(registry: _Registry) -> TaskNodeInvocationProvider:
     log = InMemoryEventLog()
 
@@ -229,8 +276,12 @@ def test_real_handlers_persist_text_only_artifacts_and_complete_the_graph() -> N
             # obtained from the ledger.
             return {"approval_id": "apr_1", "approval_decision": "approved"}
 
+        exporter = _RecordingExport()
         handlers = build_task_v1_handlers(
-            executor=executor, artifacts=store, invocations=_provider(registry)
+            executor=executor,
+            artifacts=store,
+            invocations=_provider(registry),
+            export=_export(exporter),
         ) | {"approval": decided_approval}
 
         # The critic needs the generated id, which is only known once synthesis
@@ -264,6 +315,18 @@ def test_real_handlers_persist_text_only_artifacts_and_complete_the_graph() -> N
 
         assert result.disposition == "completed"
         assert result.state.draft_ref is not None
+        # The write node ran, and what it exported reached the checkpoint. A
+        # graph that "completed" without this is one where a human approved an
+        # export that never happened.
+        assert result.state.export_ref == "art_report_1"
+        assert exporter.calls == [
+            {
+                "draft_ref": result.state.draft_ref,
+                "approval_id": "apr_1",
+                "task_id": "task_1",
+                "lease_epoch": registry.task.lease_epoch,
+            }
+        ]
         assert len(result.state.evidence_refs) == 2
         assert len(result.state.agent_outcome_refs) == 6
         assert result.state.budget_usage.steps == 6
@@ -340,5 +403,93 @@ def test_structured_or_artifact_failure_keeps_the_usage_that_was_spent() -> None
             await storage_failure["understand"](_state())
         assert artifact_error.value.state.budget_usage.steps == 1
         assert len(artifact_error.value.state.agent_outcome_refs) == 1
+
+    asyncio.run(scenario())
+
+
+# --------------------------------------------------------------------------
+# The export node
+# --------------------------------------------------------------------------
+
+
+def test_a_worker_without_an_export_capability_fails_rather_than_passes_through() -> (
+    None
+):
+    """The old behaviour was silence, and silence settled the Task as succeeded.
+
+    A graph that reached export has a human's approval behind it. Producing no
+    report and reporting success is the exact outcome the approval was for.
+    """
+
+    async def scenario() -> None:
+        handlers = build_task_v1_handlers(
+            executor=_TextExecutor(),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task())),
+        )
+
+        with pytest.raises(TaskExportUnavailableError):
+            await handlers["export"](
+                _state(
+                    draft_ref="art_draft_1",
+                    approval_id="apr_1",
+                    approval_decision="approved",
+                    review_result=_passing_review("art_draft_1"),
+                )
+            )
+
+    asyncio.run(scenario())
+
+
+def test_export_without_an_approved_draft_is_a_precondition_failure() -> None:
+    """Reaching here without one means routing let it through, not that the
+    export should invent something to export."""
+
+    async def scenario() -> None:
+        exporter = _RecordingExport()
+        handlers = build_task_v1_handlers(
+            executor=_TextExecutor(),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task())),
+            export=_export(exporter),
+        )
+
+        with pytest.raises(TaskExportPreconditionError):
+            await handlers["export"](_state())
+
+        assert exporter.calls == []
+
+    asyncio.run(scenario())
+
+
+def test_the_export_node_passes_the_live_lease_epoch_to_the_ledger() -> None:
+    """Read from the Registry on every node call, never from the checkpoint.
+
+    An epoch a resume carried forward would let a Worker that lost the Task
+    keep writing under ownership it no longer has.
+    """
+
+    async def scenario() -> None:
+        registry = _Registry(_task())
+        registry.task = registry.task.model_copy(update={"lease_epoch": 9})
+        exporter = _RecordingExport()
+        handlers = build_task_v1_handlers(
+            executor=_TextExecutor(),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(registry),
+            export=_export(exporter),
+        )
+
+        update = await handlers["export"](
+            _state(
+                draft_ref="art_draft_1",
+                approval_id="apr_1",
+                approval_decision="approved",
+                review_result=_passing_review("art_draft_1"),
+            )
+        )
+
+        assert update == {"export_ref": "art_report_1"}
+        assert exporter.calls[0]["lease_epoch"] == 9
 
     asyncio.run(scenario())

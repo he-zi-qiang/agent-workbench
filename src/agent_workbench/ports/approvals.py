@@ -21,6 +21,7 @@ from typing import Literal, Protocol, runtime_checkable
 from pydantic import Field
 
 from agent_workbench.domain.identifiers import Identifier
+from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.schema import DomainModel
 from agent_workbench.domain.task_registry import ApprovalDecision
 
@@ -96,6 +97,24 @@ class ApprovalStore(Protocol):
         ...
 
     async def get(self, approval_id: Identifier) -> ApprovalRecord | None: ...
+
+    async def list_for_owner(
+        self,
+        *,
+        tenant_id: Identifier,
+        owner_id: Identifier,
+        statuses: tuple[ApprovalStatus, ...] = (),
+        limit: int,
+        after: ListCursor | None = None,
+    ) -> tuple[ApprovalRecord, ...]:
+        """This owner's approvals, newest first, bounded and resumable.
+
+        Until this existed the only way to find a pending approval was to read
+        a Task's timeline and pull the id out of a ``TaskApprovalRequested``
+        event -- which means a person could not answer a question they were
+        never able to discover was being asked.
+        """
+        ...
 
     async def decide(
         self,

@@ -19,12 +19,31 @@ the ledger's audit trail is exactly the thing that must not be forgeable.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.identifiers import Identifier
+from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.policies import PrincipalContext
+from agent_workbench.domain.schema import DomainModel
 from agent_workbench.domain.task_registry import ApprovalDecision
-from agent_workbench.ports.approvals import ApprovalRecord, ApprovalStore
+from agent_workbench.ports.approvals import (
+    ApprovalRecord,
+    ApprovalStatus,
+    ApprovalStore,
+)
+
+#: A person's queue, not a report. Bounded here rather than at the route so a
+#: CLI cannot ask for more than an HTTP client can.
+DEFAULT_PAGE_LIMIT: Final[int] = 50
+MAX_PAGE_LIMIT: Final[int] = 200
+
+
+class ApprovalPage(DomainModel):
+    """One page of a caller's approvals, and where to continue from."""
+
+    approvals: tuple[ApprovalRecord, ...]
+    cursor: ListCursor | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +51,37 @@ class ApprovalService:
     """Read and decide the caller's own approvals."""
 
     approvals: ApprovalStore
+
+    async def list(
+        self,
+        principal: PrincipalContext,
+        *,
+        statuses: tuple[ApprovalStatus, ...] = (),
+        limit: int = DEFAULT_PAGE_LIMIT,
+        after: ListCursor | None = None,
+    ) -> ApprovalPage:
+        """This caller's own approvals, newest first.
+
+        This is the discovery path that did not exist. Before it, the only way
+        to find a pending approval was to read a Task's timeline and pull the
+        id out of an event -- so a person could not answer a question they had
+        no way to learn was being asked.
+
+        No id is probed, so there is no 404 to be careful about: a caller lists
+        as itself and another owner's queue is simply not in the result.
+        """
+
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        bounded = min(limit, MAX_PAGE_LIMIT)
+        records = await self.approvals.list_for_owner(
+            tenant_id=principal.tenant_id,
+            owner_id=principal.principal_id,
+            statuses=statuses,
+            limit=bounded,
+            after=after,
+        )
+        return ApprovalPage(approvals=records, cursor=_page_cursor(records, bounded))
 
     async def get(
         self, principal: PrincipalContext, approval_id: Identifier
@@ -85,4 +135,18 @@ def _belongs_to(record: ApprovalRecord, principal: PrincipalContext) -> bool:
     )
 
 
-__all__ = ["ApprovalService"]
+def _page_cursor(records: tuple[ApprovalRecord, ...], limit: int) -> ListCursor | None:
+    """Where to continue, or nothing when the page did not fill."""
+
+    if not records or len(records) < limit:
+        return None
+    last = records[-1]
+    return ListCursor(created_at=last.created_at, last_id=last.approval_id)
+
+
+__all__ = [
+    "DEFAULT_PAGE_LIMIT",
+    "MAX_PAGE_LIMIT",
+    "ApprovalPage",
+    "ApprovalService",
+]

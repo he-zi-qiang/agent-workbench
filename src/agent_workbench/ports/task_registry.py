@@ -21,6 +21,7 @@ from pydantic import Field, StringConstraints, field_validator
 
 from agent_workbench.domain.artifacts import Sha256
 from agent_workbench.domain.identifiers import Identifier
+from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.domain.schema import DomainModel, JsonObject, ShortText
 from agent_workbench.domain.task_registry import TaskStatus
@@ -234,6 +235,27 @@ class TaskRegistry(Protocol):
         ...
 
     async def get(self, task_id: Identifier) -> TaskRun | None: ...
+
+    async def list_for_owner(
+        self,
+        *,
+        tenant_id: Identifier,
+        owner_id: Identifier,
+        statuses: tuple[TaskStatus, ...] = (),
+        limit: int,
+        after: ListCursor | None = None,
+    ) -> tuple[TaskRun, ...]:
+        """This owner's Tasks, newest first, bounded and resumable.
+
+        Scoped by tenant *and* owner in the query rather than filtered after
+        it. A repository that returned more than the caller may see and left
+        the narrowing to a service would make every future caller of this
+        method a place the narrowing can be forgotten.
+
+        An empty ``statuses`` means every status. It is a filter, never a
+        grant: a caller cannot reach another owner's rows by naming one.
+        """
+        ...
 
     async def claim_next(
         self, worker_id: Identifier, *, lease_seconds: int

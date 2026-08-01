@@ -13,6 +13,33 @@ scripts/dev.sh ingest     # 摄取 worker，同时负责创建索引与绑定 al
 scripts/dev.sh worker     # Task worker（--demo 图）
 ```
 
+## 浏览器控制台
+
+API 加 `--web-dir ./web` 就在**同源**的 `/ui` 下挂上一个四页控制台
+（Search / Chat / Tasks / Approvals）：
+
+```bash
+PYTHONPATH=src .venv/bin/python -m agent_workbench.apps.api.main --web-dir ./web
+open http://127.0.0.1:8000/ui/
+```
+
+不给这个参数就**根本不挂**——和 `--without-chat` 是同一条原则：一个能打开、然后
+每个请求都失败的页面，比一次 404 更糟。目录不存在或没有 `index.html` 会**拒绝启动**，
+而不是等到有人用浏览器发现。
+
+三件值得知道的事：
+
+**同源不是图省事。** 浏览器身份是三个请求头。控制台单独起一个端口就要 API 回答
+preflight 并允许一份头列表，而那每一条都是"谁可以从哪里调这个 API"的决定——挂在
+同源下就没有跨源请求需要放行。
+
+**事件流用 `fetch` 读，不用 `EventSource`。** `EventSource` 的构造函数只接受
+`withCredentials`，**设不了身份头**，所以它根本没法对这个 API 认证。自己解析帧的
+副作用是好的：`Last-Event-ID` 变成显式发送的游标，正是服务端为它设计的东西。
+
+**Task 是轮询，不是流。** 事件路由按 chat session 挂载，Task 没有流可订阅，所以
+控制台按游标轮询它的时间线，Task 到终态就停。这是如实，不是没做完。
+
 后三条各占一个终端。都起来之后：
 
 ```bash
@@ -43,17 +70,44 @@ task -> LangGraph -> settled
 
 ```bash
 export PYTHONPATH=src
+alias aw=".venv/bin/python -m agent_workbench.apps.cli.main"
 IDENT="--tenant-id tenant_local --principal-id user_local"
 
 # 上传一个文档（声明 → 传输 → 完成，三次调用）
-.venv/bin/python -m agent_workbench.apps.cli.main upload ./README.md $IDENT \
+aw upload ./README.md $IDENT \
   --document-id doc_readme --knowledge-base-id kb_local --grant user_local
 
-# 提交并观察一个 Task
-.venv/bin/python -m agent_workbench.apps.cli.main task $IDENT \
-  submit --objective "总结融合是怎么做的" --json
-.venv/bin/python -m agent_workbench.apps.cli.main task $IDENT timeline <task_id>
+# 看检索到了什么——不需要模型
+aw search $IDENT --query "融合在哪里运行" --knowledge-base-id kb_local --timeout-seconds 180
+
+# 提交并观察 Task。--scope 见下面一节
+aw task $IDENT --scope artifact:export submit --objective "总结融合是怎么做的" --json
+aw task $IDENT list --status queued
+aw task $IDENT timeline <task_id>
+
+# 找到并回答等着人的审批
+aw approval $IDENT list --status pending
+aw approval $IDENT approved <approval_id>
+
+# 把导出的报告读回来
+aw artifact $IDENT get <artifact_id> --output ./report.md
 ```
+
+**身份参数写在子命令之前**（`task $IDENT list`，不是 `task list $IDENT`）——
+它们描述的是"谁在调用"，不是"要做什么"。
+
+**`--timeout-seconds` 在这台机器上要调大。** CLI 默认 30 秒，而本机一次检索要
+18–82 秒（见最后一节），默认值会得到 `transport_error`。
+
+## `--scope artifact:export`：导出为什么需要它
+
+`export_artifact` 是 v1 唯一会写东西的工具，它声明了 `artifact:export` 这个
+permission scope。策略引擎要求**两件事同时成立**：Task 提交时的 envelope 点名了这
+个工具（这是部署决定，见 [ADR-015](./adr/0015-export-authorization.md)），并且
+**调用方持有该 scope**（这是身份，来自 `x-principal-scopes` 头）。
+
+不带 `--scope artifact:export` 提交的 Task 会一路跑到 `export` 节点然后失败，原因是
+`policy_denied`。这是对的：提交这个 Task 的人没有导出权限。
 
 ## 几个会咬人的地方（都是实测撞到的）
 

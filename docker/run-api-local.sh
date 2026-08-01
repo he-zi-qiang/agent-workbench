@@ -4,7 +4,10 @@
 # to 127.0.0.1 on the host (never 0.0.0.0).
 set -eu
 
-agent-api &
+# --web-dir makes this stack a demo somebody can open rather than a set of
+# routes somebody has to know. The API refuses to start if the directory is
+# missing, so a broken image fails here rather than in a browser.
+agent-api --web-dir /app/web &
 api_pid=$!
 python /app/docker/loopback_proxy.py &
 proxy_pid=$!

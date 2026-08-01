@@ -251,8 +251,42 @@ def test_task_state_round_trips_through_json_without_framework_state() -> None:
         "review_result",
         "approval_id",
         "approval_decision",
+        "export_ref",
         "agent_outcome_refs",
         "budget_usage",
         "revision_count",
         "max_revisions",
     }
+
+
+def test_an_export_without_an_approval_cannot_be_represented() -> None:
+    """The gate is the point of the gate.
+
+    A state carrying an export nobody approved is reachable only by a graph
+    that walked past its own interrupt, and this is the cheapest place to say
+    so: the checkpoint that recorded it would not load.
+    """
+
+    with pytest.raises(ValidationError, match="requires an approved"):
+        _state(export_ref="art_report_1")
+
+
+def test_an_export_on_a_rejected_approval_cannot_be_represented() -> None:
+    with pytest.raises(ValidationError, match="requires an approved"):
+        _state(
+            approval_id="apr_1",
+            approval_decision="rejected",
+            export_ref="art_report_1",
+        )
+
+
+def test_an_approved_export_is_accepted() -> None:
+    """The control group: the same shape with the decision the gate gave."""
+
+    state = _state(
+        approval_id="apr_1",
+        approval_decision="approved",
+        export_ref="art_report_1",
+    )
+
+    assert state.export_ref == "art_report_1"

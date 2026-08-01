@@ -303,6 +303,7 @@
       "art_evidence_a",
       "art_evidence_b"
     ],
+    "export_ref": "art_report_1",
     "knowledge_base_id": null,
     "max_revisions": 2,
     "objective": "Produce a verified retrieval architecture brief.",

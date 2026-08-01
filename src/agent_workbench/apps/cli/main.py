@@ -14,9 +14,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TextIO
 
+import httpx
+
+from agent_workbench.apps.cli.commands import (
+    run_approval,
+    run_artifact,
+    run_chat,
+    run_search,
+)
 from agent_workbench.apps.cli.demo import (
     DEMO_PROMPT,
     DEMO_REPLY,
@@ -24,17 +32,27 @@ from agent_workbench.apps.cli.demo import (
     build_demo,
     execute,
 )
-from agent_workbench.apps.cli.rendering import JsonRenderer, Renderer, TextRenderer
-from agent_workbench.apps.cli.task import (
+from agent_workbench.apps.cli.http import (
     DEFAULT_API_URL,
     DEFAULT_TIMEOUT_SECONDS,
+    CliHttpError,
     HttpClientFactory,
-    TaskCliError,
     render_error,
-    run_task,
 )
+from agent_workbench.apps.cli.rendering import JsonRenderer, Renderer, TextRenderer
+from agent_workbench.apps.cli.task import run_task
 from agent_workbench.apps.cli.upload import run_upload
 from agent_workbench.domain.runs import AgentOutcome
+
+#: Every command that speaks HTTP shares one failure path: a caller-safe error
+#: category, the status code, and never a server-provided body.
+HTTP_COMMANDS: dict[str, Callable[..., int]] = {
+    "task": run_task,
+    "search": run_search,
+    "chat": run_chat,
+    "approval": run_approval,
+    "artifact": run_artifact,
+}
 
 EXIT_COMPLETED = 0
 EXIT_FAILED = 1
@@ -45,6 +63,33 @@ EXIT_CODES: dict[str, int] = {
     "failed": EXIT_FAILED,
     "cancelled": EXIT_CANCELLED,
 }
+
+
+def _add_endpoint(parser: argparse.ArgumentParser) -> None:
+    """Where to send the request, and who to send it as.
+
+    Applied to every HTTP command from one place. A command that grew its own
+    copy of these would eventually differ from the rest by one flag, and the
+    one it was missing would be ``--scope``.
+    """
+
+    parser.add_argument("--api-url", default=DEFAULT_API_URL)
+    parser.add_argument(
+        "--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS
+    )
+    parser.add_argument("--tenant-id", required=True, help="Value for x-tenant-id.")
+    parser.add_argument(
+        "--principal-id", required=True, help="Value for x-principal-id."
+    )
+    parser.add_argument(
+        "--scope",
+        action="append",
+        help=(
+            "Permission scope this caller holds. Repeatable. A tool that "
+            "declares a scope is refused without it: exporting a report needs "
+            "'artifact:export'."
+        ),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -119,11 +164,18 @@ def build_parser() -> argparse.ArgumentParser:
             "the deployment's authenticated client instead."
         ),
     )
-    task.add_argument("--api-url", default=DEFAULT_API_URL)
-    task.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS)
-    task.add_argument("--tenant-id", required=True, help="Value for x-tenant-id.")
-    task.add_argument("--principal-id", required=True, help="Value for x-principal-id.")
+    _add_endpoint(task)
     task_commands = task.add_subparsers(dest="task_command", required=True)
+
+    task_list = task_commands.add_parser("list", help="List your own Tasks.")
+    task_list.add_argument(
+        "--status",
+        action="append",
+        help="Only Tasks in this status. Repeatable; omitted means every status.",
+    )
+    task_list.add_argument("--limit", type=int, default=50)
+    task_list.add_argument("--cursor", help="Resume after this opaque cursor.")
+    task_list.add_argument("--json", action="store_true", help="Emit one JSON object.")
 
     submit = task_commands.add_parser("submit", help="Submit one durable Task.")
     submit.add_argument("--objective", required=True)
@@ -163,14 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     upload.add_argument("path", help="File to upload.")
-    upload.add_argument("--api-url", default=DEFAULT_API_URL)
-    upload.add_argument(
-        "--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS
-    )
-    upload.add_argument("--tenant-id", required=True, help="Value for x-tenant-id.")
-    upload.add_argument(
-        "--principal-id", required=True, help="Value for x-principal-id."
-    )
+    _add_endpoint(upload)
     upload.add_argument("--document-id", required=True)
     upload.add_argument("--knowledge-base-id", required=True)
     upload.add_argument(
@@ -185,6 +230,131 @@ def build_parser() -> argparse.ArgumentParser:
         "--media-type", help="Override the type guessed from the filename."
     )
     upload.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    search = subcommands.add_parser(
+        "search",
+        help="Retrieve passages without asking a model to talk about them.",
+        description=(
+            "Returns the retrieval packet a fixed chat turn would have put in "
+            "front of the model. This is the half of chat that needs no "
+            "provider, so a deployment with no model key can still show what "
+            "its corpus holds -- and a retrieval problem can be told apart "
+            "from a generation one."
+        ),
+    )
+    _add_endpoint(search)
+    search.add_argument("--query", required=True)
+    search.add_argument("--knowledge-base-id", required=True)
+    search.add_argument("--top-k", type=int, default=8)
+    search.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    chat = subcommands.add_parser(
+        "chat",
+        help="Ask a question and get an answer that names its sources.",
+        description=(
+            "Served only where the API has a model provider. Without one the "
+            "route is not registered at all, so this reports not_found rather "
+            "than a failure that looks like the model's."
+        ),
+    )
+    _add_endpoint(chat)
+    chat_commands = chat.add_subparsers(dest="chat_command", required=True)
+
+    ask = chat_commands.add_parser("ask", help="Ask one question.")
+    ask.add_argument("--question", required=True)
+    ask.add_argument("--knowledge-base-id", required=True)
+    ask.add_argument(
+        "--session-id",
+        help=(
+            "Continue this conversation. Omitted, the CLI opens one and prints "
+            "its id, so a follow-up question can be part of the same thread."
+        ),
+    )
+    ask.add_argument("--title", help="Title for a session opened by this command.")
+    ask.add_argument("--top-k", type=int, default=8)
+    ask.add_argument(
+        "--idempotency-key",
+        default=None,
+        help=(
+            "Retry key sent as Idempotency-Key. A repeated key returns the "
+            "answer the first attempt produced rather than asking again."
+        ),
+    )
+    ask.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    history = chat_commands.add_parser("history", help="Replay one session.")
+    history.add_argument("--session-id", required=True)
+    history.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    approval = subcommands.add_parser(
+        "approval",
+        help="Find, read and answer the approvals waiting on you.",
+        description=(
+            "A Task that stops for a person stays stopped until somebody "
+            "answers. Until this command existed the only way to answer was "
+            "to read the Task timeline for an id and then hand-write the HTTP "
+            "request."
+        ),
+    )
+    _add_endpoint(approval)
+    approval_commands = approval.add_subparsers(dest="approval_command", required=True)
+
+    approval_list = approval_commands.add_parser(
+        "list", help="List your own approvals."
+    )
+    approval_list.add_argument(
+        "--status",
+        choices=("pending", "approved", "rejected"),
+        help="Only approvals in this state. '--status pending' is the queue.",
+    )
+    approval_list.add_argument("--limit", type=int, default=50)
+    approval_list.add_argument("--cursor", help="Resume after this opaque cursor.")
+    approval_list.add_argument(
+        "--json", action="store_true", help="Emit one JSON object."
+    )
+
+    approval_get = approval_commands.add_parser("get", help="Read one approval.")
+    approval_get.add_argument("approval_id")
+    approval_get.add_argument(
+        "--json", action="store_true", help="Emit one JSON object."
+    )
+
+    for decision in ("approved", "rejected"):
+        decide = approval_commands.add_parser(
+            decision,
+            help=f"Record a {decision} decision and let the Task continue.",
+        )
+        decide.add_argument("approval_id")
+        decide.add_argument(
+            "--decision-version",
+            type=int,
+            default=1,
+            help=(
+                "Idempotency for the decision. The same version twice records "
+                "one answer and requeues once; a higher one supersedes."
+            ),
+        )
+        decide.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    artifact = subcommands.add_parser(
+        "artifact",
+        help="Read one artifact back.",
+        description=(
+            "The exported report, an evidence bundle or an agent outcome. "
+            "Authorized as the principal that stored it: an id is not a "
+            "capability."
+        ),
+    )
+    _add_endpoint(artifact)
+    artifact_commands = artifact.add_subparsers(dest="artifact_command", required=True)
+    artifact_get = artifact_commands.add_parser("get", help="Download one artifact.")
+    artifact_get.add_argument("artifact_id")
+    artifact_get.add_argument(
+        "--output", help="Write the bytes here instead of to standard output."
+    )
+    artifact_get.add_argument(
+        "--json", action="store_true", help="Emit one JSON object."
+    )
     return parser
 
 
@@ -228,18 +398,22 @@ def main(
                 else {}
             ),
         )
-    if args.command == "task":
+    runner = HTTP_COMMANDS.get(args.command)
+    if runner is not None:
+        overrides = (
+            {"http_client_factory": http_client_factory}
+            if http_client_factory is not None
+            else {}
+        )
         try:
-            return run_task(
-                args,
-                output,
-                **(
-                    {"http_client_factory": http_client_factory}
-                    if http_client_factory is not None
-                    else {}
-                ),
+            return runner(args, output, **overrides)
+        except httpx.HTTPError:
+            # A transport failure is not a server answer, so it gets its own
+            # category rather than being reported as a request that failed.
+            return render_error(
+                CliHttpError(code="transport_error"), output, as_json=args.json
             )
-        except TaskCliError as error:
+        except CliHttpError as error:
             return render_error(error, output, as_json=args.json)
     outcome = run_demo(args, output)
     return EXIT_CODES[outcome.status]

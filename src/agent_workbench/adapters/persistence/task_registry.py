@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Final, NoReturn, cast
 
 from pydantic import TypeAdapter
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, literal, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -48,6 +48,7 @@ from agent_workbench.domain.events import (
     TaskSucceeded,
 )
 from agent_workbench.domain.identifiers import Identifier, new_id
+from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.task_registry import TaskStatus, sources_for
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.task_registry import (
@@ -219,6 +220,44 @@ class PostgresTaskRegistry:
         async with self._engine.connect() as connection:
             row = await self._by_id(connection, task_id)
         return None if row is None else _to_run(row)
+
+    async def list_for_owner(
+        self,
+        *,
+        tenant_id: Identifier,
+        owner_id: Identifier,
+        statuses: tuple[TaskStatus, ...] = (),
+        limit: int,
+        after: ListCursor | None = None,
+    ) -> tuple[TaskRun, ...]:
+        """Newest first, keyset-paged, narrowed in the query itself."""
+
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        query = (
+            select(task_runs)
+            .where(
+                # Both, in the query. Narrowing after the fact would make every
+                # later caller of this method a place it can be left out.
+                task_runs.c.tenant_id == tenant_id,
+                task_runs.c.owner_id == owner_id,
+            )
+            .order_by(task_runs.c.created_at.desc(), task_runs.c.task_id.desc())
+            .limit(limit)
+        )
+        if statuses:
+            query = query.where(task_runs.c.status.in_(statuses))
+        if after is not None:
+            # Row-value comparison, so the tie-break is part of the same
+            # predicate rather than a second condition that can disagree with
+            # the ORDER BY it is meant to match.
+            query = query.where(
+                tuple_(task_runs.c.created_at, task_runs.c.task_id)
+                < tuple_(literal(after.created_at), literal(after.last_id))
+            )
+        async with self._engine.connect() as connection:
+            rows = (await connection.execute(query)).mappings().all()
+        return tuple(_to_run(row) for row in rows)
 
     async def claim_next(
         self, worker_id: Identifier, *, lease_seconds: int

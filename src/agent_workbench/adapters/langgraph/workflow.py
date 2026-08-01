@@ -138,6 +138,7 @@ class GraphState(TypedDict, total=False):
     review_result: Any
     approval_id: str | None
     approval_decision: str | None
+    export_ref: str | None
     budget_usage: Annotated[Any, _merge_budget]
     revision_count: int
     max_revisions: int

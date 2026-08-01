@@ -22,11 +22,34 @@ from typing import Literal
 
 from pydantic import SecretStr
 
+from agent_workbench.adapters.tools.export_artifact import (
+    TOOL_NAME as EXPORT_ARTIFACT_TOOL,
+)
 from agent_workbench.bootstrap.settings import Settings
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.domain.schema import JsonObject
 from agent_workbench.ports.task_workflow import GraphVersion
+
+#: The permission ceiling every v1 Task is submitted under.
+#:
+#: It names one tool. The fixed graph has exactly one node that writes, the
+#: envelope is stored with the Task and re-applied on every resume, and a
+#: ceiling wide enough for a tool the graph does not have is a ceiling that
+#: silently authorises the next tool somebody registers.
+#:
+#: ``approval_required_risks`` is empty rather than the deny-shaped default, and
+#: that is the substantive decision here -- see ADR-015. v1 puts the human at
+#: the *graph* boundary: the approval node interrupts, a person decides, and the
+#: ledger records it. Leaving ``write`` in this tuple would put a second gate at
+#: the *tool* boundary, which nothing in v1 can satisfy: the gateway's answer to
+#: a tool needing approval is to refuse it. The result would be an approved Task
+#: that cannot export -- a gate that only ever says no is not a gate.
+TASK_V1_AUTHORIZATION_ENVELOPE = AuthorizationEnvelope(
+    allowed_tools=(EXPORT_ARTIFACT_TOOL,),
+    max_tool_risk="write",
+    approval_required_risks=(),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,10 +195,11 @@ class ChatConfig:
 class TaskConfig:
     """The deployment decisions attached to a newly submitted Task.
 
-    The authorization envelope intentionally starts deny-shaped.  An interface
-    must later narrow it to the caller's actual grants; neither this projection
-    nor the Worker is allowed to invent an allowlist merely because it can run
-    a Task.
+    The authorization envelope names the fixed graph's own write tool and
+    nothing else.  An interface must later narrow it further to the caller's
+    actual grants; neither this projection nor the Worker is allowed to widen
+    it merely because it can run a Task, and the principal's scopes are checked
+    separately, so naming a tool here does not by itself let anyone reach it.
 
     ``run_semantics_snapshot`` is the deterministic template. A future Task
     submission factory resolves the Qdrant read alias to a concrete index
@@ -288,7 +312,7 @@ def project_task(settings: Settings) -> TaskConfig:
         run_semantics_revision=settings.task_run_semantics_revision(),
         policy_revision=settings.policy.revision,
         policy_fingerprint=settings.policy_fingerprint(),
-        default_authorization_envelope=AuthorizationEnvelope(),
+        default_authorization_envelope=TASK_V1_AUTHORIZATION_ENVELOPE,
     )
 
 

@@ -30,14 +30,17 @@ from agent_workbench.adapters.persistence import (
     PostgresEventLog,
     PostgresExecutionGuardFactory,
     PostgresTaskRegistry,
+    PostgresToolExecutionLedger,
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import (
+    ExportArtifactTool,
     ExternalSearchTool,
     StaticToolRegistry,
     UnavailableExternalSearch,
 )
+from agent_workbench.adapters.tools.task_export import GatewayReportExport
 from agent_workbench.adapters.tools.task_external_research import (
     GatewayExternalEvidence,
 )
@@ -69,6 +72,7 @@ from agent_workbench.workers.task import TaskWorker
 from agent_workbench.workflows.approval import TaskApprovalGate
 from agent_workbench.workflows.demo_handlers import build_demo_v1_handlers
 from agent_workbench.workflows.task_handlers import (
+    TaskExportHandlers,
     TaskNodeInvocationProvider,
     TaskResearchHandlers,
     build_task_v1_handlers,
@@ -175,6 +179,7 @@ def build_task_worker_dependencies(
             documents=PostgresDocumentStore(engine),
             events=events,
             registry=registry,
+            ledger=PostgresToolExecutionLedger(engine),
         )
         # The one node the handler factory cannot build: it has to interrupt,
         # and interrupting belongs to the workflow framework, so it is assembled
@@ -225,6 +230,7 @@ def _build_real_handlers(
     documents: PostgresDocumentStore,
     events: PostgresEventLog,
     registry: PostgresTaskRegistry,
+    ledger: PostgresToolExecutionLedger,
 ) -> tuple[Mapping[TaskNodeId, NodeHandler], httpx.AsyncClient, AsyncQdrantClient]:
     """Assemble Task evidence and model execution without a demo fallback."""
 
@@ -297,10 +303,14 @@ def _build_real_handlers(
             evidence=evidence,
         )
     )
-    tool_registry = StaticToolRegistry((external_tool.binding(),))
+    export_tool = ExportArtifactTool(artifacts=artifacts)
+    tool_registry = StaticToolRegistry((external_tool.binding(), export_tool.binding()))
     gateway = ToolGateway(
         registry=tool_registry,
         policy=EnvelopePolicyEngine(registry=tool_registry),
+        # Required, not optional: the gateway refuses to assemble around a
+        # ledgered tool with nowhere to record it, and export_artifact is one.
+        ledger=ledger,
     )
     policy_identity = (
         f"{config.task.policy_revision}:{config.task.policy_fingerprint[:16]}"
@@ -339,6 +349,10 @@ def _build_real_handlers(
             internal=InternalResearchService(retrieval=retrieval, evidence=evidence),
             evidence=evidence,
             external=GatewayExternalEvidence(gateway),
+            policy_identity=policy_identity,
+        ),
+        export=TaskExportHandlers(
+            export=GatewayReportExport(gateway=gateway, ledger=ledger),
             policy_identity=policy_identity,
         ),
     )

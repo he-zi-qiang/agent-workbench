@@ -8,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from agent_workbench.adapters.tools.export_artifact import SPEC as EXPORT_SPEC
+from agent_workbench.adapters.tools.export_artifact import (
+    TOOL_NAME as EXPORT_ARTIFACT_TOOL,
+)
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import (
     project_api,
@@ -52,9 +56,21 @@ def test_task_projection_contains_submission_decisions_but_no_raw_settings() -> 
     assert task.run_semantics_revision == settings.task_run_semantics_revision()
     assert task.policy_revision == settings.policy.revision
     assert task.policy_fingerprint == settings.policy_fingerprint()
-    assert task.default_authorization_envelope.allowed_tools == ()
-    assert task.default_authorization_envelope.denied_tools == ()
-    assert task.default_authorization_envelope.max_tool_risk == "read"
+    envelope = task.default_authorization_envelope
+    # One tool, named. The graph has exactly one node that writes, and a
+    # ceiling wide enough for a tool it does not have would authorise the next
+    # tool somebody registers without anyone deciding to.
+    assert envelope.allowed_tools == (EXPORT_ARTIFACT_TOOL,)
+    assert envelope.denied_tools == ()
+    assert envelope.max_tool_risk == "write"
+    assert envelope.permits(EXPORT_SPEC)
+    # The approval this write needs is the graph's, taken before the node runs;
+    # a second requirement here is one nothing in v1 can satisfy. See ADR-015.
+    assert envelope.requires_approval(EXPORT_SPEC) is False
+    # Naming one tool is not raising a ceiling for every tool at that risk.
+    assert not envelope.permits(
+        EXPORT_SPEC.model_copy(update={"name": "export_anything_else"})
+    )
 
 
 def test_single_task_worker_projection_reuses_only_its_storage_configs() -> None:

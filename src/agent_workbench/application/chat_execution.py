@@ -65,6 +65,31 @@ AGENTIC_SYSTEM_PROMPT = (
 )
 
 
+def agentic_system_prompt(knowledge_base_id: str) -> str:
+    """The agentic rules, plus the one fact the model cannot deduce.
+
+    ``knowledge_search`` requires a ``knowledge_base_id`` and takes it from the
+    model's own arguments. Nothing used to tell the model what it was, so the
+    model invented one -- ``"default"``, every time, measured -- and every
+    search returned "no readable passages matched" while reporting success,
+    because a knowledge base nobody may read and one that does not exist are
+    deliberately the same answer. The agentic path could not retrieve anything
+    in any deployment, and it looked like a model that had searched and found
+    nothing.
+
+    The identifier is not a permission. It narrows where to look; what may be
+    read is decided against PostgreSQL per candidate, exactly as it is for the
+    fixed shape. Tenant and principal stay out of the model's reach for the
+    opposite reason -- those *are* the authority, which is why the tool takes
+    them from the run and not from the call.
+    """
+
+    return (
+        f"{AGENTIC_SYSTEM_PROMPT} Search the knowledge base "
+        f"'{knowledge_base_id}'; it is the one this question is about."
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ChatRequest:
     """One question in one session, asked by one principal.
@@ -270,7 +295,7 @@ def build_agentic_request(
         stream_id=request.session_id,
         principal=request.principal,
         envelope=AuthorizationEnvelope(allowed_tools=tool_names),
-        system_prompt=AGENTIC_SYSTEM_PROMPT,
+        system_prompt=agentic_system_prompt(request.knowledge_base_id),
         messages=(*history, user_message(request.question)),
         tool_names=tool_names,
         budget=budget,
@@ -374,6 +399,7 @@ __all__ = [
     "ProducedAnswer",
     "RetrievalJournal",
     "TurnExecution",
+    "agentic_system_prompt",
     "build_agentic_request",
     "build_fixed_request",
     "merge_authorized",

@@ -29,7 +29,7 @@ sabotage round established which:
 
 from __future__ import annotations
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, literal, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -39,10 +39,12 @@ from agent_workbench.adapters.persistence.models import approvals, task_runs
 from agent_workbench.adapters.persistence.notifications import notify_task_ready
 from agent_workbench.domain.events import TaskApprovalDecided, TaskApprovalRequested
 from agent_workbench.domain.identifiers import Identifier, new_id
+from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.task_registry import ApprovalDecision
 from agent_workbench.ports.approvals import (
     ApprovalNotDecidableError,
     ApprovalRecord,
+    ApprovalStatus,
     ApprovalTaskNotFoundError,
 )
 from agent_workbench.ports.event_log import EventScope
@@ -145,6 +147,44 @@ class PostgresApprovalStore:
         async with self._engine.connect() as connection:
             row = await self._by_id(connection, approval_id)
         return None if row is None else _to_record(row)
+
+    async def list_for_owner(
+        self,
+        *,
+        tenant_id: Identifier,
+        owner_id: Identifier,
+        statuses: tuple[ApprovalStatus, ...] = (),
+        limit: int,
+        after: ListCursor | None = None,
+    ) -> tuple[ApprovalRecord, ...]:
+        """Newest first, keyset-paged, narrowed in the query itself."""
+
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        query = (
+            select(approvals)
+            .where(
+                # Both, in the query. Narrowing after the fact would make every
+                # later caller of this method a place it can be left out.
+                approvals.c.tenant_id == tenant_id,
+                approvals.c.owner_id == owner_id,
+            )
+            .order_by(approvals.c.created_at.desc(), approvals.c.approval_id.desc())
+            .limit(limit)
+        )
+        if statuses:
+            query = query.where(approvals.c.status.in_(statuses))
+        if after is not None:
+            # Row-value comparison, so the tie-break is part of the same
+            # predicate rather than a second condition that can disagree with
+            # the ORDER BY it is meant to match.
+            query = query.where(
+                tuple_(approvals.c.created_at, approvals.c.approval_id)
+                < tuple_(literal(after.created_at), literal(after.last_id))
+            )
+        async with self._engine.connect() as connection:
+            rows = (await connection.execute(query)).mappings().all()
+        return tuple(_to_record(row) for row in rows)
 
     async def decide(
         self,
