@@ -1,0 +1,580 @@
+{
+  "top_k": 3,
+  "model": "deepseek-chat",
+  "retriever": "hybrid",
+  "tool_timeout_seconds": 180,
+  "questions": 13,
+  "arms": [
+    {
+      "arm": "fixed",
+      "questions": 13,
+      "complete": 11,
+      "fact_recall": 1.0,
+      "citation_precision": 0.955,
+      "citation_recall": 0.955,
+      "clean_abstentions": "2/2",
+      "fabricated_citations": 1,
+      "by_family": {
+        "compound": {
+          "questions": 4,
+          "complete": 4,
+          "fact_recall": 1.0,
+          "citation_recall": 0.875
+        },
+        "single": {
+          "questions": 4,
+          "complete": 4,
+          "fact_recall": 1.0,
+          "citation_recall": 1.0
+        },
+        "vocabulary": {
+          "questions": 3,
+          "complete": 3,
+          "fact_recall": 1.0,
+          "citation_recall": 1.0
+        }
+      },
+      "searches_made": [],
+      "questions_detail": [
+        {
+          "id": "single-fusion",
+          "family": "single",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_abbreviations",
+            "doc_fusion"
+          ],
+          "seconds": 38.4,
+          "answer": "Based on the evidence, Qdrant's Query API performs the hybrid fusion using reciprocal rank fusion (RRF).\n\n- [chk_49d8ed1fb69fe0496416c66892957f6a]: \"Agent Workbench fuses the two exactly once, inside Qdrant's Query API, using reciprocal rank fusion.\"\n- [chk_c6786eac0635779dffcc63f4ac4969ec]: \"RRF stands for reciprocal rank fusion, the method Qdrant applies when combining dense and sparse candidate lists.\""
+        },
+        {
+          "id": "single-acl",
+          "family": "single",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_authorization"
+          ],
+          "seconds": 38.4,
+          "answer": "PostgreSQL is the authority on document permissions. (chk_7f21a2f323d99483fea410f4a3a2ec7b)"
+        },
+        {
+          "id": "single-code",
+          "family": "single",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_error-codes"
+          ],
+          "seconds": 32.0,
+          "answer": "According to the evidence, `AWB-4472` covers the size mismatch (chunk: chk_0709af2e91f8e34b14855f9c81fee306)."
+        },
+        {
+          "id": "single-chunk",
+          "family": "single",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_chunking"
+          ],
+          "seconds": 35.0,
+          "answer": "Based on the evidence, chunk overlap exists so a sentence spanning a boundary is retrievable from either side (chk_644b1431767332a3a8bc815004c4c3fd)."
+        },
+        {
+          "id": "compound-fuse-acl",
+          "family": "compound",
+          "complete": true,
+          "facts": "2/2",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_authorization",
+            "doc_fusion"
+          ],
+          "seconds": 38.9,
+          "answer": "Based on the evidence:\n\n- The fused ranking is decided by **Qdrant's Query API** using reciprocal rank fusion (chk_49d8ed1fb69fe0496416c66892957f6a).\n- The authority on who may read a document is **PostgreSQL** (chk_7f21a2f323d99483fea410f4a3a2ec7b)."
+        },
+        {
+          "id": "compound-rrf-where",
+          "family": "compound",
+          "complete": true,
+          "facts": "2/2",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_fusion"
+          ],
+          "seconds": 39.6,
+          "answer": "RRF stands for reciprocal rank fusion, and that fusion actually runs inside Qdrant's Query API.  \n[chk_c6786eac0635779dffcc63f4ac496ec9]  \n[chk_49d8ed1fb69fe0496416c66892957f6a]"
+        },
+        {
+          "id": "compound-fence-sequence",
+          "family": "compound",
+          "complete": true,
+          "facts": "2/2",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_events",
+            "doc_outbox"
+          ],
+          "seconds": 40.9,
+          "answer": "Based on the evidence provided:\n\n- An outbox claim mints a **fencing token** (chk_4e7aaf89ffd701bd3b89b09c111d2b91).\n- A durable event sequence is gap-free because the sequence is assigned **under the stream's row lock** (chk_81964063afd3269f30f1a63e9936c168)."
+        },
+        {
+          "id": "compound-budget-quota",
+          "family": "compound",
+          "complete": true,
+          "facts": "2/2",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_budgets"
+          ],
+          "seconds": 39.8,
+          "answer": "Based on the evidence:\n\n- Tool call quota is reserved **before dispatch** (chk_818798048e0a5713a5391b66a08ffa39).\n- Token ceilings are reconciled **after a model call** (chk_818798048e0a5713a5391b66a08ffa39)."
+        },
+        {
+          "id": "vocab-typo-key",
+          "family": "vocabulary",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_known-typos"
+          ],
+          "seconds": 42.2,
+          "answer": "No. The evidence says the configuration key `rag.embeding.model_id` never existed; a ticket quoting it is quoting a typo, and the real key is `rag.embedding.model_id`. (chk_66b514be6a1d574b357bd73be11f4bf7)"
+        },
+        {
+          "id": "vocab-mrr",
+          "family": "vocabulary",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_abbreviations"
+          ],
+          "seconds": 30.2,
+          "answer": "Based on the evidence, MRR means **mean reciprocal rank, a retrieval metric** (chunk `chk_c6786eac0635779dffcc63f4ac4969ec`). It does **not** mean the \"mean response rate\" that appears in the evaluation glossary of some other projects (same chunk)."
+        },
+        {
+          "id": "vocab-old-logs",
+          "family": "vocabulary",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [
+            "doc_known-typos"
+          ],
+          "seconds": 24.0,
+          "answer": "No. The evidence says the misspelling \"recieved\" is preserved in older lines, and \"a search for the corrected spelling will not find them\" (chk_66b514be6a1d574b357bd73be11f4bf7)."
+        },
+        {
+          "id": "absent-port",
+          "family": "absent",
+          "complete": false,
+          "facts": "0/0",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [],
+          "seconds": 28.1,
+          "answer": "The evidence does not contain any information about TCP ports or an admin console. I cannot answer this question based on the provided evidence."
+        },
+        {
+          "id": "absent-nodes",
+          "family": "absent",
+          "complete": false,
+          "facts": "0/0",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 1,
+          "cited": [],
+          "seconds": 27.8,
+          "answer": "The evidence does not answer this question. The provided chunks discuss outbox claims, fencing tokens, budget ceilings, tool call quotas, and document permissions\u2014none of which mention Kubernetes clusters or worker node counts."
+        }
+      ],
+      "cost": {
+        "mean_searches": 1.0,
+        "mean_model_calls": 1.0,
+        "mean_tokens": 472.273,
+        "mean_seconds": 35.023,
+        "tool_failures": 0,
+        "total_tokens": 6071
+      }
+    },
+    {
+      "arm": "agentic",
+      "questions": 13,
+      "complete": 9,
+      "fact_recall": 0.818,
+      "citation_precision": 1.0,
+      "citation_recall": 0.818,
+      "clean_abstentions": "2/2",
+      "fabricated_citations": 0,
+      "by_family": {
+        "compound": {
+          "questions": 4,
+          "complete": 4,
+          "fact_recall": 1.0,
+          "citation_recall": 1.0
+        },
+        "single": {
+          "questions": 4,
+          "complete": 2,
+          "fact_recall": 0.5,
+          "citation_recall": 0.5
+        },
+        "vocabulary": {
+          "questions": 3,
+          "complete": 3,
+          "fact_recall": 1.0,
+          "citation_recall": 1.0
+        }
+      },
+      "searches_made": [
+        {
+          "query": "hybrid fusion",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "hybrid fusion performs",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "authority on document permissions",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "document permissions authority",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "document permissions",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "refusal code AWB-4472",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "AWB-4472",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "refusal code AWB",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "chunk overlap purpose reason",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "fused ranking component",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "authority on who may read a document",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "RRF stands for what",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "RRF fusion where does it run",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "RRF reciprocal rank fusion Qdrant Query API",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "outbox claim mint",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "durable event sequence gap-free",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "tool call quota reserved",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "token ceilings reconciled",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "tool call quota reserved before dispatch",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "budget spent before work tool call quota token ceilings",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "rag.embeding.model_id configuration key",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "MRR metrics glossary meaning",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "MRR definition repository",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "ingestion logs received chunk batch",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "admin console TCP port default",
+          "knowledge_base_id": "kb_eval"
+        },
+        {
+          "query": "production Kubernetes cluster worker nodes",
+          "knowledge_base_id": "kb_eval"
+        }
+      ],
+      "questions_detail": [
+        {
+          "id": "single-fusion",
+          "family": "single",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 3,
+          "cited": [
+            "doc_fusion"
+          ],
+          "seconds": 54.3,
+          "answer": "Based on the search results, I can answer this question.\n\nAccording to the knowledge base, the hybrid fusion is performed by **Qdrant's Query API**. The document states:\n\n> \"Agent Workbench fuses the two exactly once, inside Qdrant's Query API, using reciprocal rank fusion.\"\n\nSo the hybrid fusion (fusing dense and sparse retrieval results) is performed inside **Qdrant's Query API**, using reciprocal rank fusion (RRF).\n\nCitations: chk_49d8ed1fb69fe0496416c66892957f6a"
+        },
+        {
+          "id": "single-acl",
+          "family": "single",
+          "complete": false,
+          "facts": "0/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 0,
+          "model_calls": 4,
+          "cited": [],
+          "seconds": 77.3,
+          "answer": "The knowledge search tool is failing with a validation error on every attempt, so I'm unable to retrieve any passages from the knowledge base to answer your question.\n\nI cannot answer the question \"What is the authority on document permissions?\" because the searches did not return any results \u2014 the tool failed with an unhandled ValidationError each time. I don't have access to the content of the knowledge base to provide an answer."
+        },
+        {
+          "id": "single-code",
+          "family": "single",
+          "complete": false,
+          "facts": "0/1",
+          "status": "failed",
+          "stop_reason": "max_steps",
+          "searches": 0,
+          "model_calls": 4,
+          "cited": [],
+          "seconds": 67.6,
+          "answer": ""
+        },
+        {
+          "id": "single-chunk",
+          "family": "single",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 2,
+          "cited": [
+            "doc_chunking"
+          ],
+          "seconds": 18.8,
+          "answer": "Based on the search results, I found the answer in the knowledge base.\n\nThe chunk from `doc_chunking` (chunk id `chk_644b1431767332a3a8bc815004c4c3fd`) explains:\n\n> \"Overlap exists so a sentence spanning a boundary is retrievable from either side.\"\n\nSo chunk overlap exists so that a sentence that spans a chunk boundary is retrievable from either side of that boundary."
+        },
+        {
+          "id": "compound-fuse-acl",
+          "family": "compound",
+          "complete": true,
+          "facts": "2/2",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 2,
+          "model_calls": 2,
+          "cited": [
+            "doc_authorization",
+            "doc_fusion"
+          ],
+          "seconds": 21.6,
+          "answer": "Based on the search results:\n\n- **Fused ranking**: The fused ranking is decided by **Qdrant's Query API**, which applies reciprocal rank fusion (RRF) to combine dense and sparse candidate lists. The retrieval adapter maps the fused result and never re-ranks by relative score (chk_49d8ed1fb69fe0496416c66892957f6a).\n\n- **Authority on who may read a document**: **PostgreSQL** is the authority on document permissions. The vector index stores a copy of the ACL for candidate filtering, but every candidate is re-checked against PostgreSQL before it becomes context (chk_7f21a2f323d99483fea410f4a3a2ec7"
+        },
+        {
+          "id": "compound-rrf-where",
+          "family": "compound",
+          "complete": true,
+          "facts": "2/2",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 3,
+          "cited": [
+            "doc_abbreviations",
+            "doc_fusion"
+          ],
+          "seconds": 47.4,
+          "answer": "I have the information I need from the search results. Let me answer the question.\n\nBased on the knowledge base:\n\n**RRF** stands for **reciprocal rank fusion** (per `chk_c6786eac0635779dffcc63f4ac4969ec`).\n\nThe fusion runs **inside Qdrant's Query API** \u2014 specifically, Agent Workbench fuses dense and sparse candidate lists exactly once, inside Qdrant's Query API, using reciprocal rank fusion (per `chk_49d8ed1fb69fe0496416c66892957f6a`). The retrieval adapter maps the fused result and never re-ranks by relative score, because fusing twice would invent an ordering that neither retriever produced."
+        },
+        {
+          "id": "compound-fence-sequence",
+          "family": "compound",
+          "complete": true,
+          "facts": "2/2",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 2,
+          "cited": [
+            "doc_events",
+            "doc_outbox"
+          ],
+          "seconds": 36.6,
+          "answer": "I have the information I need from the first search. Let me address both parts of the question.\n\n**What does an outbox claim mint?**\n\nFrom chunk `chk_4e7aaf89ffd701bd3b89b09c111d2b91`: \"Every claim mints a fencing token, and an acknowledgement from a worker whose lease was already reclaimed matches nothing and is refused.\"\n\n**What makes a durable event sequence gap-free?**\n\nFrom chunk `chk_81964063afd3269f30f1a63e9936c168`: \"Durable events receive a sequence assigned under their stream's row lock, which makes the sequence gap-free rather than merely unique.\"\n\nLet me provide the answer:\n\n**Outb"
+        },
+        {
+          "id": "compound-budget-quota",
+          "family": "compound",
+          "complete": true,
+          "facts": "2/2",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 4,
+          "cited": [
+            "doc_budgets"
+          ],
+          "seconds": 117.6,
+          "answer": "The search tool is failing on some queries, but I already have the relevant information from the successful search. The chunk `chk_818798048e0a5713a5391b66a08ffa39` from document `doc_budgets` directly answers this question.\n\nBased on the retrieved passage:\n\n- **Tool call quota is reserved before dispatch.** A run's budget is spent before the work, not accounted for after it. So a turn proposing more calls than remain has the excess refused rather than executed.\n- **Token ceilings are reconciled after a model call**, because what a call will cost is unknowable before making it.\n\n**Citations:**"
+        },
+        {
+          "id": "vocab-typo-key",
+          "family": "vocabulary",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 2,
+          "cited": [
+            "doc_known-typos"
+          ],
+          "seconds": 42.4,
+          "answer": "Based on the search results, I can answer this question.\n\nThe configuration key `rag.embeding.model_id` is **not** a real key. According to the knowledge base, this is a typo \u2014 the misspelling \"embeding\" (with one 'm') appears in support tickets, but the actual configuration key is `rag.embedding.model_id` (with two 'm's). The document explicitly states: \"The configuration key `rag.embeding.model_id` never existed; a ticket quoting it is quoting a typo, and the real key is `rag.embedding.model_id`.\"\n\n**Source:** chk_66b514be6a1d574b357bd73be11f4bf7"
+        },
+        {
+          "id": "vocab-mrr",
+          "family": "vocabulary",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 2,
+          "model_calls": 2,
+          "cited": [
+            "doc_abbreviations"
+          ],
+          "seconds": 27.0,
+          "answer": "Based on the search results, I found the relevant information in the metrics glossary.\n\nIn this repository, **MRR** means **mean reciprocal rank**, a retrieval metric. It is explicitly **not** the mean response rate that appears in the evaluation glossary of some other projects.\n\nThis is stated in the abbreviations document (chunk `chk_c6786eac0635779dffcc63f4ac4969ec`):\n\n> \"MRR is mean reciprocal rank, a retrieval metric, and not the mean response rate that appears in the evaluation glossary of some other projects.\"\n\nSo to summarize:\n- **What it means:** Mean reciprocal rank, a retrieval metr"
+        },
+        {
+          "id": "vocab-old-logs",
+          "family": "vocabulary",
+          "complete": true,
+          "facts": "1/1",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 2,
+          "cited": [
+            "doc_known-typos"
+          ],
+          "seconds": 34.7,
+          "answer": "Based on the search results, I can answer this question.\n\nThe knowledge base explicitly addresses this in the document about known typos (chunk `chk_66b514be6a1d574b357bd73be11f4bf7`):\n\n> \"The ingestion log has historically emitted `recieved chunk batch` -- the misspelling is preserved in older lines and a search for the corrected spelling will not find them.\"\n\nSo the answer is **no**. The older ingestion logs contain the misspelled phrase \"recieved chunk batch\" (with the misspelling \"recieved\" instead of \"received\"). Searching for the correct spelling (\"received chunk batch\") will **not** fin"
+        },
+        {
+          "id": "absent-port",
+          "family": "absent",
+          "complete": false,
+          "facts": "0/0",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 2,
+          "cited": [],
+          "seconds": 30.3,
+          "answer": "The search results do not contain any information about an admin console or its default TCP port. The retrieved passages cover topics like document permissions, outbox claims, error codes, budgets, durability guarantees, event streams, chunking, and known typos \u2014 none of which mention an admin console or its listening port.\n\nI cannot answer this question based on the knowledge base search results. The information about the admin console's default TCP port is not present in the retrieved documents."
+        },
+        {
+          "id": "absent-nodes",
+          "family": "absent",
+          "complete": false,
+          "facts": "0/0",
+          "status": "completed",
+          "stop_reason": "completed",
+          "searches": 1,
+          "model_calls": 2,
+          "cited": [],
+          "seconds": 15.1,
+          "answer": "The search results do not contain any information about a production Kubernetes cluster or the number of worker nodes it runs. The retrieved passages cover topics like outbox claims, budgets, chunking, authorization, events, typos, fusion, and durability guarantees \u2014 none of which mention Kubernetes cluster configuration or worker node counts.\n\nI cannot answer this question based on the knowledge base content."
+        }
+      ],
+      "cost": {
+        "mean_searches": 1.0,
+        "mean_model_calls": 2.727,
+        "mean_tokens": 3247.364,
+        "mean_seconds": 45.438,
+        "tool_failures": 13,
+        "total_tokens": 40184
+      }
+    }
+  ]
+}

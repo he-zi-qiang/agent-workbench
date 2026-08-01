@@ -193,8 +193,37 @@
       **lease epoch 从没进入 ExecutionContext**，ledger 没有东西可 fence；
       **gateway 成功时记 `detail=None`**，崩在结算与 checkpoint 之间就再也找不到
       产出物。授权上限的决定见 [ADR-015](./adr/0015-export-authorization.md)。
-- [ ] **5.4 两条 Chat 路径的对照评测**
-      fixed 与 agentic 都在了，没有任何东西测过第二条到底买到了什么。
+- [x] **5.4 两条 Chat 路径的对照评测**（2026-08-01 完成，见
+      [评测报告](../evals/chat/REPORT.md)）
+      跑这条测出来的头两件事都不是数字，是缺陷：
+
+      **一、agentic 路径此前从来没有检索到过任何东西。** `knowledge_search` 把
+      `knowledge_base_id` 列为 required 并从**模型的参数**里取，而系统提示、user
+      message、装配三处都没告诉过模型这个 id 是什么。实测模型每次都编了
+      `"default"`，语料在 `kb_eval`，于是每次检索都返回「no readable passages
+      matched」**而且状态是 ok**——因为「那里没有」和「对你没有」是同一个答案。它
+      看起来像搜过但没搜到的模型。**已修**（提示里点名本轮 kb，+2 条测试）；这也
+      修正了 1.3 的归因，那一轮看到的 30s 超时只是同一条断链的另一种表现。
+
+      **二、`knowledge_search` 返回不了正常大小的结果**（**未修**）。渲染进
+      `ToolResult.content`，而它是 `BoundedText(4096)`。本项目 512 token 的分块 +
+      工具自己默认的 `top_k=8` → 16,732 字符，超限不截断而是**整次调用失败**。一次
+      搜索能不能活下来取决于命中段落碰巧多长。确定性复现四档见报告。
+
+      **数字**（修完一、带着二；hybrid，无 rerank，13 题）：
+
+      | | fixed | agentic |
+      |---|---|---|
+      | 完整作答 | **11/11** | 9/11 |
+      | fact recall | **1.000** | 0.818 |
+      | citation recall | **0.955** | 0.818 |
+      | 编造引用 | 1 | **0** |
+      | 平均 token | **472** | **3,247（6.9×）** |
+
+      **agentic 没买到准确率，买到了 6.9 倍 token。** 唯一测得出的优势是 compound
+      题的 citation recall（1.000 vs 0.875）——而两条路的 fact recall 都是 1.000，
+      固定路径只是少引一篇。agentic 输掉的两题死于缺陷二，不算在形态头上。
+      样本只有 13 题，每个差值都在一两题能翻盘的范围内。
 
 ---
 

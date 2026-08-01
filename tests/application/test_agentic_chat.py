@@ -267,10 +267,44 @@ def test_the_agentic_envelope_grants_the_search_tool_and_nothing_else() -> None:
     # The ceiling stays where it was. Searching is a read, so nothing had to be
     # raised to permit it -- and a write tool still could not be reached.
     assert request.envelope.max_tool_risk == "read"
-    assert request.system_prompt == AGENTIC_SYSTEM_PROMPT
+    assert request.system_prompt.startswith(AGENTIC_SYSTEM_PROMPT)
     # No packet: there is nothing retrieved yet, and a prompt carrying evidence
     # would be the fixed shape wearing the agentic one's name.
     assert request.context is None
+
+
+def test_the_agentic_prompt_names_the_knowledge_base_to_search() -> None:
+    """The one fact the model cannot deduce and the tool will not supply.
+
+    ``knowledge_search`` requires a ``knowledge_base_id`` and reads it from the
+    model's own arguments. Nothing told the model what it was, so it invented
+    one -- a chat eval measured ``"default"`` on every search -- and each search
+    returned "no readable passages matched" while reporting success, because a
+    knowledge base that does not exist and one nobody may read are deliberately
+    the same answer. The agentic shape retrieved nothing in any deployment and
+    looked like a model that had searched and come up empty.
+    """
+
+    request = build_agentic_request(
+        _request(),
+        RunBudget(max_steps=4, max_tool_calls=6),
+        tool_names=("knowledge_search",),
+    )
+
+    assert "kb_main" in request.system_prompt
+
+
+def test_the_agentic_prompt_names_this_turns_knowledge_base_not_a_fixed_one() -> None:
+    """It follows the request, so a second knowledge base is reachable at all."""
+
+    request = build_agentic_request(
+        _request(knowledge_base_id="kb_other"),
+        RunBudget(max_steps=4, max_tool_calls=6),
+        tool_names=("knowledge_search",),
+    )
+
+    assert "kb_other" in request.system_prompt
+    assert "kb_main" not in request.system_prompt
 
 
 def test_the_fixed_envelope_still_grants_nothing() -> None:
