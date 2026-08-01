@@ -68,7 +68,10 @@ from agent_workbench.bootstrap.embedding_factory import (
     build_embedder,
 )
 from agent_workbench.bootstrap.encoder_warmup import warm_encoders
-from agent_workbench.bootstrap.model_factory import build_model
+from agent_workbench.bootstrap.model_factory import (
+    ModelNotConfiguredError,
+    build_model,
+)
 from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig
 from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
@@ -127,6 +130,9 @@ class ApiDependencies:
     # Held so startup can warm them. Absent when this process serves no chat,
     # which is also when nothing would retrieve.
     encoders: tuple[object, ...]
+    # Present whenever this process can retrieve, which is no longer the same
+    # question as whether it can chat.
+    retrieval: RetrievalService | None
     events: EventLogPort
     task_service: TaskService
     task_inputs: TaskInputService
@@ -146,6 +152,12 @@ class ApiDependencies:
     @property
     def serves_chat(self) -> bool:
         return self.chat is not None
+
+    @property
+    def serves_search(self) -> bool:
+        """Retrieval is servable without a model; chat is not."""
+
+        return self.retrieval is not None
 
     def sink_for(self, *, stream_id: str, run_id: str) -> ScopedEventSink:
         """The sink one run writes into.
@@ -256,7 +268,17 @@ def build_dependencies(
         tasks=task_service,
     )
 
-    chat, unavailable, http, qdrant, vector_index, no_reranker, no_sparse, encoders = (
+    (
+        chat,
+        unavailable,
+        http,
+        qdrant,
+        vector_index,
+        no_reranker,
+        no_sparse,
+        encoders,
+        retrieval,
+    ) = (
         _assemble_chat(
             config,
             documents,
@@ -273,6 +295,7 @@ def build_dependencies(
             None,
             None,
             (),
+            None,
         )
     )
     return ApiDependencies(
@@ -310,6 +333,7 @@ def build_dependencies(
         qdrant=qdrant,
         vector_index=vector_index,
         encoders=encoders,
+        retrieval=retrieval,
         events=events,
         task_service=task_service,
         task_inputs=task_inputs,
@@ -334,6 +358,7 @@ def _assemble_chat(
     str | None,
     str | None,
     tuple[object, ...],
+    RetrievalService | None,
 ]:
     """Build the chat stack, or report the one reason it could not be built.
 
@@ -345,7 +370,7 @@ def _assemble_chat(
 
     embedder = build_embedder(config.embedding)
     if isinstance(embedder, EmbeddingUnavailable):
-        return None, embedder.reason, None, None, None, None, None, ()
+        return None, embedder.reason, None, None, None, None, None, (), None
 
     # After the embedder, because a process that cannot chat has no use for a
     # reranker and loading one would be several gigabytes spent on a capability
@@ -354,12 +379,6 @@ def _assemble_chat(
     no_reranker = reranker.reason if isinstance(reranker, RerankerUnavailable) else None
     sparse = build_sparse_encoder(config.embedding)
     no_sparse = sparse.reason if isinstance(sparse, SparseEncodingUnavailable) else None
-
-    # Constructed before the model because the adapter takes it: httpx opens
-    # no socket until the first request, so a refusal below simply ends a
-    # startup that was going to end anyway.
-    client = httpx.AsyncClient(timeout=config.model.profiles["main"].timeout_seconds)
-    model = build_model(config.model, client=client)
 
     qdrant = AsyncQdrantClient(
         url=config.qdrant.url,
@@ -384,6 +403,30 @@ def _assemble_chat(
         reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
         rerank_timeout_seconds=config.reranker.timeout_seconds,
     )
+    # The model comes last, and its absence costs only chat. Retrieval is
+    # already assembled above and does not need a provider: a deployment with no
+    # key can still index documents and search them, and saying "no chat"
+    # is a smaller and truer thing to say than "no retrieval".
+    #
+    # `build_model` still refuses rather than returning something unusable --
+    # that refusal is the behaviour worth keeping, see its module docstring.
+    # What changed is only how much it takes down with it.
+    client = httpx.AsyncClient(timeout=config.model.profiles["main"].timeout_seconds)
+    try:
+        model = build_model(config.model, client=client)
+    except ModelNotConfiguredError as unconfigured:
+        return (
+            None,
+            str(unconfigured),
+            client,
+            qdrant,
+            vector_index,
+            no_reranker,
+            no_sparse,
+            tuple(e for e in (retrieval.embedder, retrieval.sparse_encoder) if e),
+            retrieval,
+        )
+
     policy_identity = f"api-{config.deployment_scope}"
 
     if config.chat.retrieval_shape == "agentic":
@@ -446,6 +489,7 @@ def _assemble_chat(
         # Both shapes share one RetrievalService, so these are the encoders
         # every turn will actually use.
         tuple(e for e in (retrieval.embedder, retrieval.sparse_encoder) if e),
+        retrieval,
     )
 
 

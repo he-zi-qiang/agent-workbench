@@ -3,7 +3,8 @@
 #
 #   scripts/dev.sh services     # start PostgreSQL and Qdrant
 #   scripts/dev.sh migrate      # bring the schema to head
-#   scripts/dev.sh api          # HTTP control plane, without chat
+#   scripts/dev.sh api          # HTTP control plane (add --without-chat to skip
+#                               # the embedding runtime entirely)
 #   scripts/dev.sh ingest       # ingestion worker (also bootstraps the index)
 #   scripts/dev.sh worker       # Task worker, demo graph
 #   scripts/dev.sh smoke        # drive the whole thing and print what happened
@@ -75,12 +76,20 @@ migrate)
   ;;
 
 api)
+  # No branch on the key any more. A missing provider costs chat and nothing
+  # else -- retrieval assembles without one, so /v1/search is served either way
+  # and the process reports what it could not build.
+  #
+  # `--without-chat` still exists and means something stronger: do not load the
+  # embedding runtime at all. That is for a process serving only uploads and
+  # tasks, where paying a minute of model loading would buy nothing.
   if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
-    echo "model provider configured: serving chat" >&2
-    exec "$PYTHON" -m agent_workbench.apps.api.main
+    echo "model provider configured: chat and search" >&2
+  else
+    echo "no AW_SECRETS__DEEPSEEK_API_KEY: search without chat" >&2
   fi
-  echo "no AW_SECRETS__DEEPSEEK_API_KEY: serving everything but chat" >&2
-  exec "$PYTHON" -m agent_workbench.apps.api.main --without-chat
+  shift   # drop the subcommand; anything after it is the API's own
+  exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
   ;;
 
 ingest)

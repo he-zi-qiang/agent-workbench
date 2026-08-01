@@ -15,6 +15,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from agent_workbench.apps.api.dependencies import build_dependencies
@@ -412,3 +413,72 @@ def test_startup_warms_before_a_request_can_arrive(
     asyncio.run(deps.startup())
 
     assert warmed == [(sentinel,)]
+
+
+def test_a_missing_model_costs_chat_but_not_retrieval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason `/v1/search` exists.
+
+    Retrieval used to be assembled after the model, so a deployment with no
+    provider key could index documents and then have no way to look at them --
+    the vectors were there and unreachable. A missing model is now a missing
+    model.
+    """
+
+    from agent_workbench.apps.api import dependencies as assembly
+    from agent_workbench.bootstrap.model_factory import ModelNotConfiguredError
+
+    _stub_optional_runtimes(monkeypatch)
+
+    def unconfigured(*_a: Any, **_k: Any) -> Any:
+        raise ModelNotConfiguredError("no key here")
+
+    monkeypatch.setattr(assembly, "build_model", unconfigured)
+
+    dependencies = build_dependencies(project_api(_settings(tmp_path)))
+
+    assert dependencies.chat is None
+    assert dependencies.serves_chat is False
+    assert dependencies.chat_unavailable is not None and "no key" in (
+        dependencies.chat_unavailable
+    )
+    # The half that needs no provider survives.
+    assert dependencies.serves_search is True
+    assert dependencies.retrieval is not None
+    assert dependencies.encoders  # and startup still has something to warm
+
+
+def test_a_process_without_retrieval_does_not_publish_the_search_route(
+    tmp_path: Path,
+) -> None:
+    """404, not a 409 from inside the handler.
+
+    A route that exists and always refuses is a worse answer than one that is
+    not there: a client discovers the first per request and the second once.
+    """
+
+    from agent_workbench.apps.api.main import build_app
+
+    app, dependencies = build_app(project_api(_settings(tmp_path)), with_chat=False)
+    try:
+        assert dependencies.serves_search is False
+
+        async def call() -> Any:
+            transport = httpx.ASGITransport(app=app)  # pyright: ignore[reportArgumentType]
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://api.test"
+            ) as client:
+                return await client.post(
+                    "/v1/search",
+                    headers={
+                        "x-tenant-id": "tenant_a",
+                        "x-principal-id": "user_1",
+                        "content-type": "application/json",
+                    },
+                    json={"query": "anything", "knowledge_base_id": "kb"},
+                )
+
+        assert asyncio.run(call()).status_code == 404
+    finally:
+        asyncio.run(dependencies.dispose())
