@@ -389,7 +389,7 @@ def test_a_pdf_page_survives_ingestion_and_comes_back_from_the_index() -> None:
     chunking passed every test in ``tests/ingestion`` for exactly that reason.
     """
 
-    from tests.ingestion.test_pdf_parser import _pdf
+    from tests.support.pdf import build_pdf
 
     pages = (
         "Reciprocal rank fusion runs inside the database and not in the app.",
@@ -408,7 +408,7 @@ def test_a_pdf_page_survives_ingestion_and_comes_back_from_the_index() -> None:
             ),
         )
         written = await service.ingest(
-            _request(media_type="application/pdf", content=_pdf(pages))
+            _request(media_type="application/pdf", content=build_pdf(pages))
         )
         found = await index.search(
             vector=await DeterministicEmbedder(dimension=SIZE).embed_query(pages[0]),

@@ -76,7 +76,10 @@ packages = ["src/agent_workbench"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
-pythonpath = ["src"]
+# "." so shared test helpers are importable as `tests.support.*`. Without it a
+# helper can only be reached from a module pytest has already collected, which
+# is true locally and false in a fresh process -- CI found the difference.
+pythonpath = ["src", "."]
 
 [tool.ruff]
 target-version = "py312"

@@ -24,6 +24,7 @@ from agent_workbench.adapters.ingestion.parser import (
     UnsupportedMediaTypeError,
     parse,
 )
+from tests.support.pdf import build_pdf
 
 PAGES = (
     "Reciprocal rank fusion runs inside the database.",
@@ -32,68 +33,13 @@ PAGES = (
 )
 
 
-def _pdf(pages: tuple[str, ...]) -> bytes:
-    """One Helvetica text run per page, in a valid cross-referenced file."""
-
-    streams = []
-    for text in pages:
-        escaped = text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
-        streams.append(f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode())
-
-    count = len(pages)
-    page_ids = [3 + index for index in range(count)]
-    content_ids = [3 + count + index for index in range(count)]
-    font_id = 3 + 2 * count
-
-    objects: list[tuple[int, bytes]] = [(1, b"<< /Type /Catalog /Pages 2 0 R >>")]
-    kids = " ".join(f"{identifier} 0 R" for identifier in page_ids).encode()
-    objects.append((2, b"<< /Type /Pages /Kids [" + kids + b"] /Count %d >>" % count))
-    for page_id, content_id in zip(page_ids, content_ids, strict=True):
-        objects.append(
-            (
-                page_id,
-                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-                b"/Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>"
-                % (font_id, content_id),
-            )
-        )
-    for content_id, stream in zip(content_ids, streams, strict=True):
-        objects.append(
-            (
-                content_id,
-                b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
-            )
-        )
-    objects.append((font_id, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"))
-
-    # The binary marker real producers emit right after the header, so a
-    # consumer treats the file as binary. It also makes this fixture what a
-    # PDF actually is: not valid UTF-8, which one of the tests below depends
-    # on and which a pure-ASCII fixture would quietly falsify.
-    out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
-    offsets: dict[int, int] = {}
-    for number, body in objects:
-        offsets[number] = len(out)
-        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
-    start_xref = len(out)
-    size = max(offsets) + 1
-    out += b"xref\n0 %d\n" % size + b"0000000000 65535 f \n"
-    for number in range(1, size):
-        out += b"%010d 00000 n \n" % offsets.get(number, 0)
-    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
-        size,
-        start_xref,
-    )
-    return bytes(out)
-
-
 # --------------------------------------------------------------------------
 # What it reads
 # --------------------------------------------------------------------------
 
 
 def test_a_pdf_becomes_its_pages_in_order() -> None:
-    parsed = parse(_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
+    parsed = parse(build_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
 
     assert parsed.media_type == PDF_MEDIA_TYPE
     assert parsed.text == PAGE_SEPARATOR.join(PAGES)
@@ -107,7 +53,7 @@ def test_page_starts_index_the_extracted_text() -> None:
     offsets happens to match the count of pages.
     """
 
-    parsed = parse(_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
+    parsed = parse(build_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
 
     assert len(parsed.page_starts) == len(PAGES)
     for index, start in enumerate(parsed.page_starts):
@@ -115,7 +61,7 @@ def test_page_starts_index_the_extracted_text() -> None:
 
 
 def test_the_first_page_starts_at_zero() -> None:
-    parsed = parse(_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
+    parsed = parse(build_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
 
     assert parsed.page_starts[0] == 0
 
@@ -127,15 +73,15 @@ def test_extraction_is_deterministic() -> None:
     id in the index without the document having changed.
     """
 
-    first = parse(_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
-    second = parse(_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
+    first = parse(build_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
+    second = parse(build_pdf(PAGES), media_type=PDF_MEDIA_TYPE)
 
     assert first.text == second.text
     assert first.page_starts == second.page_starts
 
 
 def test_a_single_page_pdf_still_reports_its_page() -> None:
-    parsed = parse(_pdf((PAGES[0],)), media_type=PDF_MEDIA_TYPE)
+    parsed = parse(build_pdf((PAGES[0],)), media_type=PDF_MEDIA_TYPE)
 
     assert parsed.page_starts == (0,)
 
@@ -153,7 +99,7 @@ def test_a_pdf_with_no_text_layer_is_refused() -> None:
     """
 
     with pytest.raises(UnreadableDocumentError, match="no text layer"):
-        parse(_pdf(("", "")), media_type=PDF_MEDIA_TYPE)
+        parse(build_pdf(("", "")), media_type=PDF_MEDIA_TYPE)
 
 
 def test_an_encrypted_pdf_is_refused_rather_than_opened() -> None:
@@ -167,7 +113,7 @@ def test_an_encrypted_pdf_is_refused_rather_than_opened() -> None:
     from pypdf import PdfReader, PdfWriter
 
     writer = PdfWriter()
-    for page in PdfReader(io.BytesIO(_pdf(PAGES))).pages:
+    for page in PdfReader(io.BytesIO(build_pdf(PAGES))).pages:
         writer.add_page(page)
     writer.encrypt("hunter2")
     encrypted = io.BytesIO()
@@ -194,7 +140,7 @@ def test_a_pdf_declared_as_text_is_still_refused_for_not_being_utf8() -> None:
     """The declared type is what selects the reader, and it was wrong here."""
 
     with pytest.raises(UnsupportedMediaTypeError, match="not valid UTF-8"):
-        parse(_pdf(PAGES), media_type="text/plain")
+        parse(build_pdf(PAGES), media_type="text/plain")
 
 
 def test_an_unsupported_type_names_pdf_among_what_is_supported() -> None:

@@ -65,7 +65,7 @@ from agent_workbench.domain.runs import RunBudget, TokenUsage
 from agent_workbench.ports.cancellation import CancellationSource
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
-from tests.ingestion.test_pdf_parser import _pdf
+from tests.support.pdf import build_pdf
 
 DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 QDRANT_URL_ENV_VAR = "AGENT_WORKBENCH_TEST_QDRANT_URL"
@@ -163,7 +163,7 @@ class _Harness:
     async def upload_pdf(self) -> None:
         """Through the real upload path: intent, commit, then indexing."""
 
-        body = _pdf(PAGES)
+        body = build_pdf(PAGES)
         digest = hashlib.sha256(body).hexdigest()
         upload = await self.documents.create_upload(
             upload_id=f"upl_{uuid.uuid4().hex}",
