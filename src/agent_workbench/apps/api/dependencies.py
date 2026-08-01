@@ -428,6 +428,15 @@ def _assemble_chat(
         )
 
     policy_identity = f"api-{config.deployment_scope}"
+    # Which model actually answered. Without this the runtime falls back to its
+    # own placeholder label and every ModelStarted this deployment writes says
+    # "scripted-fake" while a real provider is being billed -- an event log that
+    # disagrees with what happened, which is the one thing it may not do. The
+    # Task Worker already passes this; the API did not.
+    main_profile = config.model.profiles.get("main")
+    model_label = (
+        main_profile.model_id if main_profile is not None else config.model.provider
+    )
 
     if config.chat.retrieval_shape == "agentic":
         # The model decides when to search, so it needs the tool, a budget with
@@ -446,6 +455,7 @@ def _assemble_chat(
                     policy=EnvelopePolicyEngine(registry=registry),
                 ),
                 policy_identity=policy_identity,
+                model_label=model_label,
             ),
             journal=journal,
             budget=RunBudget(
@@ -467,6 +477,7 @@ def _assemble_chat(
                     policy=EnvelopePolicyEngine(registry=StaticToolRegistry([])),
                 ),
                 policy_identity=policy_identity,
+                model_label=model_label,
             ),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
         )

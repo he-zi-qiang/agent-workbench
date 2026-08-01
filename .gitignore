@@ -1,6 +1,16 @@
 .DS_Store
 .env
 .venv/
+
+# Secret material dropped into the working tree by hand. One key sat here
+# untracked and exactly one `git add -A` away from being published; the CI
+# secret scan would have caught it in history, which is the wrong end of the
+# problem. Provider keys belong in the environment, never in the checkout.
+.secrets/
+API key/
+api-key/
+*.key
+
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/

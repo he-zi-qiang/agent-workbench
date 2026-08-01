@@ -173,14 +173,30 @@ async function checkHealth() {
 
 /* ---------------------------------------------------------------------- chat */
 
-const sessions = new Map(); /* id -> {id, title, transcript: DocumentFragment host} */
+const sessions = new Map(); /* id -> {id, title, host} */
 let currentSession = null;
 let chatStream = null;
-let liveTurn = null; /* the turn steps are currently being appended to */
+
+/* Steps are keyed by the run they belong to, not by "whatever turn is open".
+ *
+ * The first version appended to a mutable `liveTurn` and cleared it when the
+ * request returned, which silently dropped every event that arrived after the
+ * answer -- and rendered nothing at all when a reconnect replayed a session's
+ * history. A run id is in every envelope and is the thing that actually
+ * identifies what the steps describe.
+ *
+ * The client learns a turn's run id from the response, which may arrive before
+ * or after the run's first event. Both orders happen, so events for a run
+ * nobody has claimed yet are held until one does. */
+const turnsByRun = new Map(); /* run_id -> turn */
+const orphanEvents = new Map(); /* run_id -> [[kind, payload], …] */
+let unclaimedTurn = null; /* submitted, run id not yet known */
 
 el("chat-new").addEventListener("click", () => {
   currentSession = null;
-  liveTurn = null;
+  unclaimedTurn = null;
+  turnsByRun.clear();
+  orphanEvents.clear();
   if (chatStream) chatStream.abort();
   chatStream = null;
   renderSessionRail();
@@ -212,29 +228,41 @@ el("chat-form").addEventListener("submit", async (event) => {
       startEventStream(currentSession);
     }
     const host = sessions.get(currentSession).host;
-    liveTurn = beginTurn(host, question);
-    // Answers only ever come from the response body. AnswerCommitted is the
-    // publication boundary and ModelCompleted is not, so text is never taken
-    // from the stream even though it passes through there.
-    const turn = await api(`/v1/chat/sessions/${currentSession}/messages`, {
+    unclaimedTurn = beginTurn(host, question);
+    const submitted = unclaimedTurn;
+    const answered = await api(`/v1/chat/sessions/${currentSession}/messages`, {
       method: "POST",
       // A turn without a key is a turn a timed-out client cannot retry without
       // asking the model again and paying for it twice.
       headers: { "Idempotency-Key": newKey() },
       body: { question, knowledge_base_id: el("chat-kb").value, top_k: 8 },
     });
-    finishTurn(liveTurn, turn);
+    claimRun(answered.run_id, submitted);
+    finishTurn(submitted, answered);
   } catch (error) {
-    if (liveTurn) {
-      liveTurn.steps.append(stepNode("✗", "turn failed", { tone: "bad" }));
-      liveTurn.answer.classList.remove("streaming");
+    if (unclaimedTurn) {
+      unclaimedTurn.steps.append(stepNode("✗", "turn failed", { tone: "bad" }));
+      unclaimedTurn.answer.classList.remove("streaming");
     }
     reportError(error, "chat ask");
   } finally {
-    liveTurn = null;
+    unclaimedTurn = null;
     el("chat-send").disabled = false;
   }
 });
+
+/* Bind a turn to its run, and replay anything that arrived before the binding.
+ * A caller may already have been handed the run's events. */
+function claimRun(runId, turn) {
+  if (!runId || turnsByRun.has(runId)) return;
+  turnsByRun.set(runId, turn);
+  if (unclaimedTurn === turn) unclaimedTurn = null;
+  const held = orphanEvents.get(runId);
+  if (!held) return;
+  orphanEvents.delete(runId);
+  for (const [kind, payload] of held) absorbRunEvent(runId, kind, payload);
+}
+
 
 function beginTurn(host, question) {
   const turn = document.createElement("article");
@@ -350,7 +378,7 @@ function startEventStream(sessionId) {
             buffer = buffer.slice(boundary + 2);
             if (!frame) continue;
             if (frame.id) lastEventId = frame.id;
-            absorbRunEvent(frame.event, frame.payload);
+            absorbRunEvent(frame.runId, frame.event, frame.payload);
           }
         }
       } catch (error) {
@@ -379,17 +407,32 @@ function parseFrame(raw) {
   if (!data) return null;
   try {
     const envelope = JSON.parse(data);
-    return { id, event, payload: envelope.payload || {} };
+    return { id, event, runId: envelope.run_id, payload: envelope.payload || {} };
   } catch {
-    return { id, event, payload: {} };
+    return { id, event, runId: null, payload: {} };
   }
 }
 
 /* One event, folded into the turn it belongs to. Tool events update the step
  * their proposal created rather than appending a second line, so a call reads
  * as one thing that happened and not as four. */
-function absorbRunEvent(kind, payload) {
-  if (!liveTurn) return;
+function absorbRunEvent(runId, kind, payload) {
+  let turn = turnsByRun.get(runId);
+  if (!turn) {
+    // The response has not named this run yet. An unclaimed turn takes the
+    // first run it sees; anything else is held rather than dropped, because a
+    // replay can deliver a whole run before its request ever returns.
+    if (unclaimedTurn && kind === "RunStarted") {
+      claimRun(runId, unclaimedTurn);
+      turn = turnsByRun.get(runId);
+    } else {
+      const held = orphanEvents.get(runId) || [];
+      held.push([kind, payload]);
+      orphanEvents.set(runId, held);
+      return;
+    }
+  }
+  const liveTurn = turn;
   const container = el("chat-transcript");
   const pinned = atBottom(container);
 
@@ -438,8 +481,18 @@ function absorbRunEvent(kind, payload) {
       );
     }
     if (failed && payload.message) liveTurn.steps.append(resultNode(payload.message));
+  } else if (kind === "AnswerCommitted") {
+    // The documented publication boundary: ModelCompleted records what the
+    // provider did, and a grant can still be withdrawn between the two. Answer
+    // text is only ever displayed from here.
+    finishTurn(liveTurn, {
+      answer: payload.text || "",
+      citations: payload.citations || [],
+      withheld: false,
+    });
   } else if (kind === "AnswerWithheld") {
     liveTurn.steps.append(stepNode("!", "withheld", { arg: payload.reason_code, tone: "wait" }));
+    finishTurn(liveTurn, { answer: payload.text || "", citations: [], withheld: true });
   }
 
   keepPinned(container, pinned);

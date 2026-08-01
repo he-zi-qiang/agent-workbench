@@ -482,3 +482,30 @@ def test_a_process_without_retrieval_does_not_publish_the_search_route(
         assert asyncio.run(call()).status_code == 404
     finally:
         asyncio.run(dependencies.dispose())
+
+
+@pytest.mark.parametrize("shape", ["fixed", "agentic"])
+def test_the_runtime_reports_the_model_that_actually_answered(
+    shape: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An event log may not disagree with what happened.
+
+    ``ClaudeLikeAgentRuntime`` carries a placeholder label for the scripted
+    model the walking skeleton uses, and the API assembled around it without
+    passing one -- so every ``ModelStarted`` this deployment wrote named a fake
+    while a real provider was being called and billed. Somebody reading the
+    stream to find out which model produced an answer would have been told the
+    wrong thing, which is worse than being told nothing.
+
+    Both shapes, because they build separate executors and only one of them was
+    ever going to be noticed.
+    """
+
+    _stub_optional_runtimes(monkeypatch)
+    dependencies = build_dependencies(
+        project_api(_settings(tmp_path, chat={"retrieval_shape": shape}))
+    )
+
+    assert dependencies.chat is not None
+    executor = dependencies.chat.execution.executor
+    assert executor._model_label == "deepseek-chat"  # pyright: ignore[reportPrivateUsage]
