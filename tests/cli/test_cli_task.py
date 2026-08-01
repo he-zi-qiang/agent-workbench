@@ -126,7 +126,10 @@ def test_not_found_is_stable_and_does_not_print_the_server_detail() -> None:
     code, output = _run("get", "task_1", "--json", handler=handler)
 
     assert code == EXIT_NOT_FOUND
-    assert json.loads(output) == {"error": "task_not_found", "status": 404}
+    # ``not_found`` rather than ``task_not_found``: five commands now share one
+    # error table, and a per-command prefix would mean the table had to know
+    # which command called it -- which is the coupling sharing it removed.
+    assert json.loads(output) == {"error": "not_found", "status": 404}
     assert "another user" not in output
 
 

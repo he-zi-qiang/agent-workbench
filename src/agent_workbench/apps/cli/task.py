@@ -5,52 +5,39 @@ same `/v1/tasks` contract as another client would, which keeps a convenient
 operator command from becoming a second way around Task authorization or
 idempotency.  Server error bodies are never rendered: they can contain details
 that belong in server logs, not a terminal transcript.
+
+The shared HTTP plumbing lives in :mod:`agent_workbench.apps.cli.http`, because
+search, chat, approvals and artifacts all need the same client, the same
+identity headers and the same refusal to echo a server body.  The names below
+are re-exported so this module stays the one a Task caller imports.
 """
 
 from __future__ import annotations
 
-import json
 import uuid
-from collections.abc import Callable
-from typing import Any, TextIO, cast
+from typing import Any, TextIO
 
 import httpx
 
-DEFAULT_API_URL = "http://127.0.0.1:8000"
-DEFAULT_TIMEOUT_SECONDS = 30.0
+from agent_workbench.apps.cli.http import (
+    DEFAULT_API_URL,
+    DEFAULT_TIMEOUT_SECONDS,
+    EXIT_CONFLICT,
+    EXIT_NOT_FOUND,
+    EXIT_REQUEST_FAILED,
+    EXIT_TRANSPORT_ERROR,
+    CliHttpError,
+    HttpClientFactory,
+    default_http_client,
+    identity_headers,
+    render_error,
+    render_result,
+    response_json,
+)
 
-EXIT_REQUEST_FAILED = 1
-EXIT_NOT_FOUND = 3
-EXIT_CONFLICT = 4
-EXIT_TRANSPORT_ERROR = 5
-
-
-class TaskCliError(RuntimeError):
-    """A caller-safe HTTP failure, with no server response body."""
-
-    def __init__(self, *, code: str, status_code: int | None = None) -> None:
-        self.code = code
-        self.status_code = status_code
-        super().__init__(code)
-
-    @property
-    def exit_code(self) -> int:
-        if self.status_code == 404:
-            return EXIT_NOT_FOUND
-        if self.status_code == 409:
-            return EXIT_CONFLICT
-        if self.status_code is None:
-            return EXIT_TRANSPORT_ERROR
-        return EXIT_REQUEST_FAILED
-
-
-HttpClientFactory = Callable[[str, float], httpx.Client]
-
-
-def default_http_client(base_url: str, timeout_seconds: float) -> httpx.Client:
-    """Construct the short-lived client used for exactly one CLI command."""
-
-    return httpx.Client(base_url=base_url, timeout=timeout_seconds)
+#: Kept as the Task-facing name for the shared error. The Task commands were
+#: the first HTTP client here and their exit codes are a documented contract.
+TaskCliError = CliHttpError
 
 
 def run_task(
@@ -61,10 +48,7 @@ def run_task(
 ) -> int:
     """Execute one Task command and render a script-friendly result."""
 
-    headers = {
-        "x-tenant-id": args.tenant_id,
-        "x-principal-id": args.principal_id,
-    }
+    headers = identity_headers(args)
     try:
         with http_client_factory(args.api_url, args.timeout_seconds) as client:
             payload, idempotency_key = _request(client, args, headers)
@@ -78,16 +62,6 @@ def run_task(
         result = {**payload, "idempotency_key": idempotency_key}
     render_result(result, as_json=args.json, stream=stream)
     return 0
-
-
-def render_error(error: TaskCliError, stream: TextIO, *, as_json: bool) -> int:
-    """Render only a stable local category, never a server-provided detail."""
-
-    payload: dict[str, Any] = {"error": error.code}
-    if error.status_code is not None:
-        payload["status"] = error.status_code
-    render_result(payload, as_json=as_json, stream=stream)
-    return error.exit_code
 
 
 def _request(
@@ -112,13 +86,23 @@ def _request(
             },
         )
         return response_json(response), key
+    if command == "list":
+        params: dict[str, Any] = {"limit": args.limit}
+        if args.status:
+            params["status"] = list(args.status)
+        if args.cursor is not None:
+            params["cursor"] = args.cursor
+        return (
+            response_json(client.get("/v1/tasks", headers=headers, params=params)),
+            None,
+        )
     if command == "get":
         return (
             response_json(client.get(f"/v1/tasks/{args.task_id}", headers=headers)),
             None,
         )
     if command == "timeline":
-        params: dict[str, Any] = {"limit": args.limit}
+        params = {"limit": args.limit}
         if args.cursor is not None:
             params["cursor"] = args.cursor
         return (
@@ -151,43 +135,6 @@ def _idempotency_key(args: Any) -> str:
     # A command with no caller-provided key is still a retry-safe command. The
     # generated key is rendered alongside the created Task so it can be saved.
     return f"cli_{uuid.uuid4().hex}"
-
-
-def response_json(response: httpx.Response) -> dict[str, Any]:
-    if response.status_code >= 400:
-        raise TaskCliError(
-            code=_error_code(response.status_code), status_code=response.status_code
-        )
-    try:
-        payload: object = response.json()
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise TaskCliError(code="invalid_server_response") from error
-    if not isinstance(payload, dict):
-        raise TaskCliError(code="invalid_server_response")
-    return cast(dict[str, Any], payload)
-
-
-def _error_code(status_code: int) -> str:
-    if status_code == 404:
-        return "task_not_found"
-    if status_code == 409:
-        return "request_conflict"
-    return "request_failed"
-
-
-def render_result(payload: dict[str, Any], *, as_json: bool, stream: TextIO) -> None:
-    if as_json:
-        stream.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-        stream.write("\n")
-        return
-    for key in sorted(payload):
-        value = payload[key]
-        rendered = (
-            json.dumps(value, sort_keys=True, separators=(",", ":"))
-            if isinstance(value, (dict, list))
-            else str(value)
-        )
-        stream.write(f"{key}: {rendered}\n")
 
 
 __all__ = [
