@@ -50,6 +50,7 @@ from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
+from agent_workbench.ports.export import ReportExportPort
 from agent_workbench.ports.research import (
     ExternalEvidenceSkipped,
     ExternalEvidenceToolPort,
@@ -106,6 +107,19 @@ class TaskNodeContextUnavailableError(RuntimeError):
     """The graph state names no current Task Registry row."""
 
 
+class TaskExportUnavailableError(RuntimeError):
+    """This Worker has no way to export, so it must not settle the Task.
+
+    The type name is the whole message a person will see: a failed Task records
+    the exception's class and deliberately not its text, so these are named for
+    what an operator has to fix rather than for where they were raised.
+    """
+
+
+class TaskExportPreconditionError(RuntimeError):
+    """Export was reached without the approved draft it exports."""
+
+
 class EvidenceAuthorizationChangedError(RuntimeError):
     """Internal evidence was no longer readable/current at synthesis time."""
 
@@ -141,6 +155,12 @@ class TaskNodeInvocation:
     context: TaskRunContext
     events: EventSink
     cancellation: CancellationToken
+    # Which claim this node is running under. Read fresh from the Registry with
+    # everything else here, never from the checkpoint: an epoch a resume carried
+    # forward would let a Worker that lost the Task keep writing under the
+    # ownership it used to have, which is the one thing the ledger's fence
+    # exists to refuse.
+    lease_epoch: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +189,7 @@ class TaskNodeInvocationProvider:
             context=context,
             events=self.sink_for(context),
             cancellation=self.cancellation_for(context),
+            lease_epoch=task.lease_epoch,
         )
 
 
@@ -184,6 +205,20 @@ class TaskResearchHandlers:
     internal: InternalResearchService
     evidence: EvidenceStore
     external: ExternalEvidenceToolPort
+    policy_identity: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaskExportHandlers:
+    """The write half of the graph, injected on the same terms as the read half.
+
+    Separate from :class:`TaskResearchHandlers` because it is optional in a way
+    research is not: a deployment with no ledger may run every read node, and
+    must not be able to run this one.  Absent means the export node fails the
+    Task rather than exporting unrecorded.
+    """
+
+    export: ReportExportPort
     policy_identity: str
 
 
@@ -240,11 +275,14 @@ def build_task_v1_handlers(
     artifacts: ArtifactStore,
     invocations: TaskNodeInvocationProvider,
     research: TaskResearchHandlers | None = None,
+    export: TaskExportHandlers | None = None,
 ) -> dict[TaskNodeId, TaskNodeHandler]:
     """Build every v1 model-invoking handler around one AgentExecutor.
 
-    Approval/export remain graph-control placeholders until the HITL/export
-    contracts are implemented.  All nodes that call an agent are explicit.
+    Approval stays a graph-control node: it has to interrupt, and interrupting
+    belongs to the workflow framework, so it is assembled where that framework
+    is.  Export is here because it is not graph control -- it is the one node
+    that writes.
     """
 
     persisting_executor = ArtifactPersistingExecutor(executor, artifacts=artifacts)
@@ -391,6 +429,29 @@ def build_task_v1_handlers(
             ) from error
         return _outcome_update(outcome) | {"review_result": review.model_dump()}
 
+    async def export_report(state: TaskState) -> Mapping[str, Any]:
+        if export is None:
+            # Not a passthrough. A graph that reached export has a human's
+            # approval behind it, and quietly settling that Task as succeeded
+            # with nothing exported is the failure mode this node exists to
+            # make impossible.
+            raise TaskExportUnavailableError(
+                "this Worker assembled no export capability"
+            )
+        if state.draft_ref is None or state.approval_id is None:
+            raise TaskExportPreconditionError("export requires an approved draft")
+        invocation = await invocations.resolve(state, "export")
+        artifact_id = await export.export.export(
+            draft_ref=state.draft_ref,
+            approval_id=state.approval_id,
+            execution=_tool_execution_context(
+                invocation, policy_identity=export.policy_identity
+            ),
+            sink=invocation.events,
+            cancellation=invocation.cancellation,
+        )
+        return {"export_ref": artifact_id}
+
     return {
         "understand": artifact_handler("understand"),
         "plan": plan,
@@ -398,6 +459,7 @@ def build_task_v1_handlers(
         "research_external": research_external,
         "synthesize": synthesize,
         "critic": critic,
+        "export": export_report,
     }
 
 
@@ -423,6 +485,9 @@ def _tool_execution_context(
         task_id=context.trace.task_id,
         workflow_thread_id=context.trace.workflow_thread_id,
         graph_node_id=context.trace.graph_node_id,
+        # Without this the side-effect ledger has nothing to fence against, and
+        # refuses every ledgered tool rather than recording one unfenced.
+        lease_epoch=invocation.lease_epoch,
     )
 
 
@@ -664,6 +729,9 @@ __all__ = [
     "EventSinkFactory",
     "EvidenceAuthorizationChangedError",
     "StructuredOutputError",
+    "TaskExportHandlers",
+    "TaskExportPreconditionError",
+    "TaskExportUnavailableError",
     "TaskNodeContextUnavailableError",
     "TaskNodeHandler",
     "TaskNodeInvocation",

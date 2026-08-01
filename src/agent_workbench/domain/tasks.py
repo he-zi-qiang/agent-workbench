@@ -126,6 +126,10 @@ class TaskState(VersionedModel):
     # that moment. Routing is a pure function of state, so a decision the state
     # does not carry is one no edge can depend on.
     approval_decision: ApprovalDecision | None = None
+    # The report the export node produced. A reference, like everything else
+    # here: the bytes are in the artifact store, and the ledger -- not this
+    # field -- is what makes the export happen once.
+    export_ref: Identifier | None = None
     agent_outcome_refs: tuple[Identifier, ...] = Field(
         default=(),
         max_length=MAX_STATE_REFS,
@@ -161,6 +165,12 @@ class TaskState(VersionedModel):
             # human approval exists to prevent -- and a decision without the
             # approval it answers names nothing an auditor can look up.
             raise ValueError("approval_id and approval_decision travel together")
+        if self.export_ref is not None and self.approval_decision != "approved":
+            # The gate is the point of the gate. A state carrying an export
+            # nobody approved would be reachable only by a graph that walked
+            # past its own interrupt, and this is the cheapest place to say so:
+            # the checkpoint that recorded it would not load.
+            raise ValueError("export_ref requires an approved approval_decision")
         return self
 
     def _validate_plan(self) -> None:

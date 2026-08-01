@@ -1,5 +1,6 @@
 """Tool registry and the tools that ship with the walking skeleton."""
 
+from agent_workbench.adapters.tools.export_artifact import ExportArtifactTool
 from agent_workbench.adapters.tools.external_search import (
     ExternalSearchTool,
     UnavailableExternalSearch,
@@ -15,6 +16,7 @@ from agent_workbench.adapters.tools.registry import StaticToolRegistry
 __all__ = [
     "READ_DOCUMENT_SPEC",
     "TEXT_STATISTICS_SPEC",
+    "ExportArtifactTool",
     "ExternalSearchTool",
     "StaticToolRegistry",
     "UnavailableExternalSearch",

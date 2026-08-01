@@ -31,6 +31,7 @@ import pytest
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.tools import StaticToolRegistry
+from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import ErrorInfo, OperationCancelledError
 from agent_workbench.domain.policies import (
     AuthorizationEnvelope,
@@ -88,6 +89,9 @@ class _Ledger:
     """Records the order it was asked things in."""
 
     calls: list[str] = field(default_factory=list)
+    #: What each settlement said, so a test can assert the ledger was told what
+    #: the effect produced and not merely that it succeeded.
+    details: list[str | None] = field(default_factory=list)
     record: ToolExecutionRecord | None = None
     on_intent: Exception | None = None
     on_settle: Exception | None = None
@@ -124,6 +128,7 @@ class _Ledger:
         detail: str | None = None,
     ) -> ToolExecutionRecord:
         self.calls.append(f"result:{'ok' if succeeded else 'failed'}")
+        self.details.append(detail)
         if self.on_settle is not None:
             raise self.on_settle
         return self._default("succeeded" if succeeded else "failed")
@@ -162,6 +167,7 @@ class _Handler:
 
     dispatches: list[str] = field(default_factory=list)
     outcome: str = "ok"
+    produces: ArtifactRef | None = None
 
     async def __call__(self, invocation: ToolInvocation) -> ToolResult:
         self.dispatches.append(invocation.call.tool_call_id)
@@ -174,7 +180,9 @@ class _Handler:
                 invocation.call,
                 ErrorInfo(code="tool_failed", message="the destination refused"),
             )
-        return ToolResult.succeeded(invocation.call, content="published")
+        return ToolResult.succeeded(
+            invocation.call, content="published", artifact=self.produces
+        )
 
 
 def _context(**overrides: Any) -> ExecutionContext:
@@ -513,3 +521,40 @@ def test_a_safe_tool_cannot_carry_an_operation_key() -> None:
 
     with pytest.raises(ValueError, match="safe idempotency"):
         ToolBinding(spec=read_spec, handler=_Handler(), operation_key=_operation_key)
+
+
+def test_a_successful_effect_records_what_it_produced() -> None:
+    """The row has to name the object, not just say an object was made.
+
+    A crash between this settlement and the caller's own checkpoint otherwise
+    leaves an operation that provably succeeded and nothing that can reach what
+    it produced -- and the only remaining moves are performing the effect a
+    second time or handing a person a row that says something exists somewhere.
+    """
+
+    ledger, handler = _Ledger(), _Handler()
+    handler.produces = ArtifactRef(
+        artifact_id="art_report_1",
+        tenant_id="tenant_a",
+        kind="report",
+        media_type="text/markdown",
+        size_bytes=11,
+        sha256="a" * 64,
+    )
+    gateway = _gateway(ledger, handler)
+
+    result = asyncio.run(_invoke(gateway, handler))
+
+    assert result.status == "ok"
+    assert ledger.details == ["art_report_1"]
+
+
+def test_an_effect_that_produced_nothing_records_no_detail() -> None:
+    """Only an id belongs here. A tool with no artifact has nothing to name."""
+
+    ledger, handler = _Ledger(), _Handler()
+    gateway = _gateway(ledger, handler)
+
+    asyncio.run(_invoke(gateway, handler))
+
+    assert ledger.details == [None]

@@ -629,7 +629,20 @@ class ToolGateway:
 
         if result.status != "error":
             await self._settle_quietly(
-                task_id, operation_key, lease_epoch, succeeded=True, detail=None
+                task_id,
+                operation_key,
+                lease_epoch,
+                succeeded=True,
+                # What the effect produced, when it produced something nameable.
+                # A crash between this write and the caller's own checkpoint
+                # otherwise leaves an operation that provably succeeded and no
+                # way to reach what it made -- and the only remaining options
+                # are performing the effect a second time or handing a person a
+                # row that says an object exists somewhere. An id, not a
+                # payload: this table is read by operators.
+                detail=(
+                    None if result.artifact is None else result.artifact.artifact_id
+                ),
             )
             return
         code = result.error.code if result.error is not None else "tool_failed"
