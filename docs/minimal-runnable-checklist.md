@@ -19,7 +19,12 @@
 - [x] **五条命令起全套 + 一条命令走查**（`scripts/dev.sh`、`scripts/smoke_local.py`）
 
 当前 `--without-chat` 实际服务的路由：`health`、`uploads`、`artifacts`、`tasks`、
-`approvals`。
+`approvals`、`search`（有检索栈时）。加 `--web-dir ./web` 再挂一个同源控制台。
+
+- [x] **浏览器控制台**（2026-08-01 实测）Chat / Work / Search / Approvals 四页，
+      同源挂在 `/ui`，无构建步骤、无外部依赖。Chat 与 Work 是**转录流**：节点一行
+      一个、工具失败缩进在下面、审批就地给按钮。事件流用 `fetch` 读——`EventSource`
+      设不了身份头，根本没法认证。见 [running-locally.md](./running-locally.md#浏览器控制台)。
 
 ---
 
@@ -168,9 +173,26 @@
 - [ ] **5.2 `task_ready` 的监听端**
       发送端四处都在事务内做完了；没有监听者，Worker 仍靠轮询。与 SSE 的
       LISTEN/NOTIFY 是同一批工作。
-- [ ] **5.3 `export_artifact`（WP10-07）**
-      副作用协议（`tool_executions`、两段提交、重算授权、人工核对状态）已就位，
-      但当前 build 里**没有任何工具带 operation key**——路修好了，上面还没有车。
+- [x] **5.3 `export_artifact`（WP10-07）**（2026-08-01 实测，全链路）
+      此前副作用协议就位但**没有任何工具带 operation key**——路修好了，上面没有车。
+      现在 `export` 是真的写节点，走同一条 gateway（schema → policy → 超时 → 审计
+      事件 → ledger）。operation key 是 `export:{task_id}`，draft 放进**参数**，
+      所以改过的 draft 会撞上同一个 key 被拒，而不是拿到新 key 悄悄导出第二份。
+      **实测**（真实 DeepSeek + 真实索引，提交 → 图跑完 → 人批准 → 恢复 → 导出）：
+
+      | | 结果 |
+      |---|---|
+      | Task | `succeeded` |
+      | ledger 行 | `export:task_61b9…` / `export_artifact` / `succeeded` |
+      | `outcome_detail` | `art_44a9f044…`（产物 id，恢复路径读它） |
+      | `lease_epoch` | `2`（写入被 fence 住） |
+      | 报告 | 3109 字节，头部含 task / approval / draft 三个 id，正文是模型综述 |
+
+      顺带查出并修掉的三件读代码看不出的事：**每个 Task 的 envelope 此前允许零个
+      工具**（实测 `permits() → False`，也就是 Task 里从来没有任何工具真跑过）；
+      **lease epoch 从没进入 ExecutionContext**，ledger 没有东西可 fence；
+      **gateway 成功时记 `detail=None`**，崩在结算与 checkpoint 之间就再也找不到
+      产出物。授权上限的决定见 [ADR-015](./adr/0015-export-authorization.md)。
 - [ ] **5.4 两条 Chat 路径的对照评测**
       fixed 与 agentic 都在了，没有任何东西测过第二条到底买到了什么。
 
