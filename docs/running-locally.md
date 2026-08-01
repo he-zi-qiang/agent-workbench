@@ -107,3 +107,23 @@ AGENT_WORKBENCH_TEST_QDRANT_URL=http://localhost:6333 \
 
 用真实 BGE-M3 对固定语料跑 dense 与 hybrid 两条臂，按 gold set 打分，报告写进
 `evals/rag/reports/`。
+
+## 内存下限（2026-07-31 实测）
+
+**一个会检索的进程需要约 12 GB 可用内存。** 混合检索与重排在这个架构里是不变量
+（`embedding.sparse_enabled` 与 `reranker.enabled` 都是 `Literal[True]`，配置关不
+掉），所以每个检索进程都要同时加载三个模型：dense BGE-M3、sparse BGE-M3、
+bge-reranker-v2-m3，合计约 6.7 GB 权重，加上 torch 运行时与余量。
+
+在一台 8 GB 的机器上实测：单次 `retrieve()` 从 18 秒退化到 44 秒（去掉重排），
+带重排则是 69 到 82 秒，且三次查询期间 swap 从 3.5 GB 涨到 4.9 GB。**是换页，
+不是计算。**
+
+后果，按严重性排序：
+
+- **agentic Chat 用不了**：`knowledge_search` 的工具超时是 30 秒，检索超过它。
+  固定两步 Chat 仍然可用——它一次请求只检索一次。
+- **一次只跑一个检索进程**。API、摄取 worker 和 `scripts/run_rag_eval.py` 各自
+  加载一份完整的模型集；同时跑三个会让机器一直在换页。要跑评测就先把另外两个停掉。
+
+这不是缺陷，是没有写下来的部署下限——现在写下来了。
