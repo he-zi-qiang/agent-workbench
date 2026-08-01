@@ -13,6 +13,33 @@ scripts/dev.sh ingest     # 摄取 worker，同时负责创建索引与绑定 al
 scripts/dev.sh worker     # Task worker（--demo 图）
 ```
 
+## 浏览器控制台
+
+API 加 `--web-dir ./web` 就在**同源**的 `/ui` 下挂上一个四页控制台
+（Search / Chat / Tasks / Approvals）：
+
+```bash
+PYTHONPATH=src .venv/bin/python -m agent_workbench.apps.api.main --web-dir ./web
+open http://127.0.0.1:8000/ui/
+```
+
+不给这个参数就**根本不挂**——和 `--without-chat` 是同一条原则：一个能打开、然后
+每个请求都失败的页面，比一次 404 更糟。目录不存在或没有 `index.html` 会**拒绝启动**，
+而不是等到有人用浏览器发现。
+
+三件值得知道的事：
+
+**同源不是图省事。** 浏览器身份是三个请求头。控制台单独起一个端口就要 API 回答
+preflight 并允许一份头列表，而那每一条都是"谁可以从哪里调这个 API"的决定——挂在
+同源下就没有跨源请求需要放行。
+
+**事件流用 `fetch` 读，不用 `EventSource`。** `EventSource` 的构造函数只接受
+`withCredentials`，**设不了身份头**，所以它根本没法对这个 API 认证。自己解析帧的
+副作用是好的：`Last-Event-ID` 变成显式发送的游标，正是服务端为它设计的东西。
+
+**Task 是轮询，不是流。** 事件路由按 chat session 挂载，Task 没有流可订阅，所以
+控制台按游标轮询它的时间线，Task 到终态就停。这是如实，不是没做完。
+
 后三条各占一个终端。都起来之后：
 
 ```bash

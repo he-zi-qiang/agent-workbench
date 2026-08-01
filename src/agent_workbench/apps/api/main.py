@@ -17,6 +17,7 @@ import argparse
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -43,6 +44,7 @@ from agent_workbench.apps.api.routes.approvals import InvalidApprovalCursorError
 from agent_workbench.apps.api.routes.search import SearchUnavailableError
 from agent_workbench.apps.api.routes.tasks import InvalidTaskCursorError
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
+from agent_workbench.apps.api.web import mount_console, resolve_web_directory
 from agent_workbench.bootstrap import load_settings
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig, project_api
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
@@ -128,7 +130,9 @@ def _render_task_submission_conflict(request: Request, exc: Exception) -> Respon
     )
 
 
-def create_app(dependencies: ApiDependencies) -> ASGIApp:
+def create_app(
+    dependencies: ApiDependencies, *, web_directory: Path | None = None
+) -> ASGIApp:
     """Build the ASGI application around already-assembled dependencies."""
 
     @asynccontextmanager
@@ -178,6 +182,11 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
         # Subscribing is only meaningful where there are turns to subscribe to.
         app.include_router(events.router)
 
+    if web_directory is not None:
+        # Mounted after every router, so an API path is never answered by a
+        # static file. Starlette matches in registration order.
+        mount_console(app, web_directory)
+
     for failure, status_code in ERROR_STATUS.items():
         app.add_exception_handler(failure, _render_error(status_code))
     app.add_exception_handler(ChatExecutionError, _render_chat_execution_error)
@@ -196,7 +205,10 @@ def create_app(dependencies: ApiDependencies) -> ASGIApp:
 
 
 def build_app(
-    config: ApiRuntimeConfig, *, with_chat: bool = True
+    config: ApiRuntimeConfig,
+    *,
+    with_chat: bool = True,
+    web_directory: Path | None = None,
 ) -> tuple[ASGIApp, ApiDependencies]:
     """Assemble dependencies and the application they serve.
 
@@ -206,7 +218,7 @@ def build_app(
     """
 
     dependencies = build_dependencies(config, with_chat=with_chat)
-    return create_app(dependencies), dependencies
+    return create_app(dependencies, web_directory=web_directory), dependencies
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -226,6 +238,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             "every request."
         ),
     )
+    parser.add_argument(
+        "--web-dir",
+        help=(
+            "Serve the browser console from this directory, under /ui, on the "
+            "same origin as the API. Omitted, no console is mounted at all: a "
+            "page that loads and then fails every request is worse than one "
+            "404. The directory must exist and contain index.html, checked at "
+            "startup rather than on the first request."
+        ),
+    )
     arguments = parser.parse_args(argv)
 
     import uvicorn
@@ -237,7 +259,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     # configuration mistake into an incident with a long path back to its cause.
     # This flag is the other honest answer to the same situation: say up front
     # that chat is not served here, and let uploads and Tasks run.
-    app, _ = build_app(config, with_chat=not arguments.without_chat)
+    app, _ = build_app(
+        config,
+        with_chat=not arguments.without_chat,
+        web_directory=(
+            None
+            if arguments.web_dir is None
+            else resolve_web_directory(arguments.web_dir)
+        ),
+    )
     uvicorn.run(
         app,
         host=config.host,

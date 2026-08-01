@@ -25,6 +25,9 @@ COPY --chown=app:app config ./config
 COPY --chown=app:app migrations ./migrations
 COPY --chown=app:app src ./src
 COPY --chown=app:app docker ./docker
+# The console. Dependency-free static files, so there is nothing to build --
+# they are copied, not compiled, and the image gains no toolchain.
+COPY --chown=app:app web ./web
 
 # ``--frozen`` refuses a lock/source mismatch and ``--no-editable`` ensures
 # the runtime starts from the built package, not a host-mounted checkout.
