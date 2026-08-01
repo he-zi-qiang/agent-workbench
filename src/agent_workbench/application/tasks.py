@@ -25,8 +25,10 @@ from typing import Final
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.events import EventEnvelope
 from agent_workbench.domain.identifiers import Identifier, new_id
+from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.schema import DomainModel, JsonObject
+from agent_workbench.domain.task_registry import TaskStatus
 from agent_workbench.ports.event_log import EventCursor, EventLogPort
 from agent_workbench.ports.task_registry import TaskRegistry, TaskRun, TaskSubmission
 from agent_workbench.ports.task_workflow import GraphVersion
@@ -38,6 +40,11 @@ TASK_THREAD_PREFIX: Final[str] = "thr"
 #: the server to hold a whole Task's history in memory on demand.
 DEFAULT_TIMELINE_LIMIT: Final[int] = 200
 MAX_TIMELINE_LIMIT: Final[int] = 500
+
+#: Same reasoning for a list page. The ceiling is enforced here rather than at
+#: the route so a CLI or a test cannot ask for more than an HTTP client can.
+DEFAULT_PAGE_LIMIT: Final[int] = 50
+MAX_PAGE_LIMIT: Final[int] = 200
 
 
 def task_stream_id(task: TaskRun) -> Identifier:
@@ -51,6 +58,20 @@ def task_stream_id(task: TaskRun) -> Identifier:
     """
 
     return task.thread_id
+
+
+class TaskPage(DomainModel):
+    """One page of a caller's Tasks, and where to continue from.
+
+    ``cursor`` is present only when the page filled its limit. An absent cursor
+    says "this is the end", and a page that stopped short of the limit cannot
+    have more behind it -- so returning one anyway would send every client on a
+    guaranteed-empty extra round trip, and returning one for an empty page
+    would make "no Tasks" indistinguishable from "keep going".
+    """
+
+    tasks: tuple[TaskRun, ...]
+    cursor: ListCursor | None = None
 
 
 class TaskTimeline(DomainModel):
@@ -163,6 +184,34 @@ class TaskService:
             raise NotFoundError("task not found")
         return task
 
+    async def list(
+        self,
+        principal: PrincipalContext,
+        *,
+        statuses: tuple[TaskStatus, ...] = (),
+        limit: int = DEFAULT_PAGE_LIMIT,
+        after: ListCursor | None = None,
+    ) -> TaskPage:
+        """This caller's own Tasks, newest first.
+
+        There is no id to probe here and therefore no 404 to be careful about:
+        a caller lists as itself, and a tenant or owner it is not gets an empty
+        page rather than a refusal. The narrowing happens in the Registry query,
+        not here, so this method cannot be the one place it was left out.
+        """
+
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        bounded = min(limit, MAX_PAGE_LIMIT)
+        tasks = await self.registry.list_for_owner(
+            tenant_id=principal.tenant_id,
+            owner_id=principal.principal_id,
+            statuses=statuses,
+            limit=bounded,
+            after=after,
+        )
+        return TaskPage(tasks=tasks, cursor=_page_cursor(tasks, bounded))
+
     async def cancel(
         self,
         principal: PrincipalContext,
@@ -245,6 +294,20 @@ def _cursor_after(
     return EventCursor(stream_id=stream_id, sequence=last)
 
 
+def _page_cursor(tasks: tuple[TaskRun, ...], limit: int) -> ListCursor | None:
+    """Where to continue, or nothing when the page did not fill.
+
+    A short page cannot have more behind it, so a cursor there would send every
+    client on a guaranteed-empty extra request -- and on an empty page it would
+    make "you have no Tasks" indistinguishable from "keep going".
+    """
+
+    if not tasks or len(tasks) < limit:
+        return None
+    last = tasks[-1]
+    return ListCursor(created_at=last.created_at, last_id=last.task_id)
+
+
 def _belongs_to(task: TaskRun, principal: PrincipalContext) -> bool:
     # Both, not either. A tenant match alone would expose one tenant's Tasks to
     # every principal in it, and an owner match alone would let an id collide
@@ -268,10 +331,13 @@ def _reference_fingerprint(input_ref: Identifier) -> str:
 
 
 __all__ = [
+    "DEFAULT_PAGE_LIMIT",
     "DEFAULT_TIMELINE_LIMIT",
+    "MAX_PAGE_LIMIT",
     "MAX_TIMELINE_LIMIT",
     "TASK_THREAD_PREFIX",
     "SubmittedSemantics",
+    "TaskPage",
     "TaskService",
     "TaskTimeline",
     "TimelineUnavailableError",

@@ -39,6 +39,7 @@ from agent_workbench.apps.api.routes import (
     tasks,
     uploads,
 )
+from agent_workbench.apps.api.routes.approvals import InvalidApprovalCursorError
 from agent_workbench.apps.api.routes.search import SearchUnavailableError
 from agent_workbench.apps.api.routes.tasks import InvalidTaskCursorError
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
@@ -75,6 +76,7 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     # approval, so hiding it now would be a different lie.
     ApprovalNotDecidableError: 409,
     InvalidTaskCursorError: 400,
+    InvalidApprovalCursorError: 400,
     TimelineUnavailableError: 409,
     SearchUnavailableError: 409,
 }

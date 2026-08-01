@@ -15,9 +15,14 @@ from typing import Annotated
 from fastapi import APIRouter, Header, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_workbench.application.tasks import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.events import EventEnvelope
 from agent_workbench.domain.identifiers import ID_PATTERN, Identifier
+from agent_workbench.domain.pagination import (
+    MAX_CURSOR_LENGTH as MAX_LIST_CURSOR_LENGTH,
+)
+from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.task_inputs import TaskInput
 from agent_workbench.domain.task_registry import TaskStatus
 from agent_workbench.ports.event_log import EventCursor
@@ -50,6 +55,18 @@ class TaskView(BaseModel):
     status_detail: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class TaskListResponse(BaseModel):
+    """One page of the caller's own Tasks.
+
+    ``cursor`` is absent at the end of the list. A client stops when it is
+    absent rather than when the page is short, so the two are never allowed to
+    disagree about whether there is more.
+    """
+
+    tasks: tuple[TaskView, ...]
+    cursor: str | None = None
 
 
 class TaskTimelineResponse(BaseModel):
@@ -93,6 +110,31 @@ async def submit(
         submission_dedup_key=idempotency_key,
     )
     return _view(task)
+
+
+@router.get("", response_model=TaskListResponse)
+async def list_tasks(
+    request: Request,
+    status_filter: Annotated[
+        list[TaskStatus] | None,
+        # Named ``status`` on the wire because that is what it filters, and
+        # repeated rather than comma-joined so a value never has to be escaped.
+        Query(alias="status"),
+    ] = None,
+    cursor: Annotated[str | None, Query(max_length=MAX_LIST_CURSOR_LENGTH)] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
+) -> TaskListResponse:
+    dependencies = dependencies_of(request)
+    page = await dependencies.task_service.list(
+        dependencies.principals.resolve(request),
+        statuses=tuple(status_filter or ()),
+        limit=limit,
+        after=_decode_list_cursor(cursor),
+    )
+    return TaskListResponse(
+        tasks=tuple(_view(task) for task in page.tasks),
+        cursor=None if page.cursor is None else page.cursor.encode(),
+    )
 
 
 @router.get("/{task_id}", response_model=TaskView)
@@ -141,6 +183,17 @@ async def cancel(
     return _view(task)
 
 
+def _decode_list_cursor(raw: str | None) -> ListCursor | None:
+    if raw is None:
+        return None
+    try:
+        return ListCursor.decode(raw)
+    except Exception as error:
+        # Same treatment as a timeline cursor: it is transport input, so a
+        # lower-level schema error must not become a 500 or explain itself.
+        raise InvalidTaskCursorError("invalid task list cursor") from error
+
+
 def _decode_cursor(raw: str | None) -> EventCursor | None:
     if raw is None:
         return None
@@ -165,4 +218,4 @@ def _view(task: TaskRun) -> TaskView:
     )
 
 
-__all__ = ["TASKS_PREFIX", "InvalidTaskCursorError", "router"]
+__all__ = ["TASKS_PREFIX", "InvalidTaskCursorError", "TaskListResponse", "router"]
