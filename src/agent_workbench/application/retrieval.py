@@ -21,7 +21,8 @@ delivered -- for the same reason the first check exists, one step later.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from time import monotonic
 
 from agent_workbench.domain.context import (
     Citation,
@@ -34,6 +35,13 @@ from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.embedding import EmbeddingPort
 from agent_workbench.ports.reranker import RerankerPort
 from agent_workbench.ports.sparse import SparseEncoderPort
+from agent_workbench.ports.telemetry import (
+    RETRIEVAL_AUTHORIZED,
+    RETRIEVAL_CANDIDATES,
+    RETRIEVAL_DURATION,
+    NullTelemetry,
+    Telemetry,
+)
 from agent_workbench.ports.vector_index import ScoredChunk, VectorIndexPort
 
 # Asked of the index, before authorization removes some of them. A candidate
@@ -104,6 +112,8 @@ class RetrievalService:
     reranker: RerankerPort | None = None
     rerank_timeout_seconds: float = DEFAULT_RERANK_TIMEOUT_SECONDS
     candidate_multiplier: int = DEFAULT_CANDIDATE_MULTIPLIER
+    # Records nothing unless a process supplies a collector.
+    telemetry: Telemetry = field(default_factory=NullTelemetry)
 
     @property
     def mode(self) -> str:
@@ -154,6 +164,13 @@ class RetrievalService:
         if request.top_k < 1:
             raise ValueError("top_k must be positive")
 
+        started = monotonic()
+        with self.telemetry.span("rag.retrieve", attributes={"mode": self.mode}):
+            return await self._retrieve(request, started)
+
+    async def _retrieve(
+        self, request: RetrievalRequest, started: float
+    ) -> AuthorizedContext:
         candidates = await self._candidates(request)
 
         # The whole point of this module. What came back was filtered by a copy
@@ -187,6 +204,19 @@ class RetrievalService:
         ranked, reranked = await self._rerank(request.query, authorized)
         selected = ranked[: request.top_k]
 
+        # Both counts, because the interesting number is the gap: candidates
+        # the index proposed against passages this principal may actually read.
+        self.telemetry.record(
+            RETRIEVAL_DURATION,
+            (monotonic() - started) * 1000,
+            attributes={"mode": self.mode},
+        )
+        self.telemetry.record(
+            RETRIEVAL_CANDIDATES, len(candidates), attributes={"mode": self.mode}
+        )
+        self.telemetry.record(
+            RETRIEVAL_AUTHORIZED, len(authorized), attributes={"mode": self.mode}
+        )
         return AuthorizedContext(
             packet=_packet(selected),
             authorized_revisions=tuple(

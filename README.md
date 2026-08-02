@@ -92,9 +92,18 @@ PostgreSQL/Qdrant 门禁。当前可确认的实现包括：
   **没有真实搜索服务 Provider**。
 - `waiting_approval`、恢复决策和事件类型已经存在，但 Approval 的创建、决策 API、
   授权复核及恢复闭环尚未贯通，不能表述为已完成 HITL。
-- OTel/Langfuse、CrewAI 对比、动态 Multi-Agent supervisor/workers、UI、
-  生产身份认证和生产部署仍未完成；LlamaIndex/LangChain 业务 Adapter 也尚未形成
-  可演示纵向切片。
+- **框架口径是「自研 + 有限借用」**（[ADR-016](docs/adr/0016-self-built-retrieval.md)）。
+  实际借用三处，每处只在一个位置：LangGraph 作 Task 控制平面；`langchain-core` 的
+  工具契约，让第三方工具变成普通 `ToolBinding`（**没有** executor / agent / chain）；
+  以及 Qdrant、pypdf 这类基础设施。ingestion 与 retrieval 全部自研——一次 RRF 只在
+  Qdrant 里发生、ACL 双检、分块边界进索引身份、sparse 必须来自 FlagEmbedding
+  （[ADR-013](docs/adr/0013-bge-m3-sparse-encoder.md)），这四条都是逐层拆到实现才
+  看清的，且实测 MRR 0.960。
+- **LlamaIndex、CrewAI、RAGAS 没有实现，也不打算在没有「它比自研强」的评测结果之前
+  实现。** ADR-003 曾写着 LlamaIndex 承担 ingestion/retrieval；它已被 ADR-016 取代，
+  原文保留——取代一次走错的决定比删掉它诚实。
+- OpenTelemetry 的 trace/metrics 已落地（Port + OTLP Adapter，核心层不导入 SDK）。
+  Langfuse、动态 Multi-Agent supervisor、生产身份认证与生产部署仍未完成。
 - 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 证明。
 - 当前汇合工作树门禁为：Ruff format/lint 通过，Pyright `0 errors`，无外部服务
   `1054 passed / 409 skipped`，真实 PostgreSQL + Qdrant

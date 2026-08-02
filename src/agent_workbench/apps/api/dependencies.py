@@ -83,10 +83,15 @@ from agent_workbench.bootstrap.sparse_factory import (
     SparseEncodingUnavailable,
     build_sparse_encoder,
 )
+from agent_workbench.bootstrap.telemetry_factory import (
+    AssembledTelemetry,
+    build_telemetry,
+)
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.event_log import EventLogPort, EventScope
+from agent_workbench.ports.telemetry import Telemetry
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 
 
@@ -134,6 +139,9 @@ class ApiDependencies:
     # question as whether it can chat.
     retrieval: RetrievalService | None
     events: EventLogPort
+    # Assembled once per process. Records nothing when no collector is
+    # configured, and never lets one break a request either way.
+    telemetry: AssembledTelemetry
     task_service: TaskService
     task_inputs: TaskInputService
     # The human half of a Task. Assembled unconditionally, like the Task
@@ -173,6 +181,9 @@ class ApiDependencies:
         )
 
     async def dispose(self) -> None:
+        # Flushed first: a batch span processor holds the tail of every run,
+        # and that tail is the part somebody is usually looking for.
+        await self.telemetry.dispose()
         if self.chat is not None:
             await self.chat.drain_cleanup(
                 timeout_seconds=self.config.shutdown_grace_seconds
@@ -268,6 +279,7 @@ def build_dependencies(
         tasks=task_service,
     )
 
+    telemetry = build_telemetry(config.observability)
     (
         chat,
         unavailable,
@@ -284,6 +296,7 @@ def build_dependencies(
             documents,
             conversations=conversations,
             releaser=releaser,
+            telemetry=telemetry.telemetry,
         )
         if with_chat
         else (
@@ -301,6 +314,7 @@ def build_dependencies(
     return ApiDependencies(
         config=config,
         engine=engine,
+        telemetry=telemetry,
         documents=documents,
         artifacts=artifacts,
         uploads=UploadService(documents=documents, artifacts=artifacts),
@@ -349,6 +363,7 @@ def _assemble_chat(
     *,
     conversations: PostgresConversationStore,
     releaser: PostgresChatReleaseCoordinator,
+    telemetry: Telemetry,
 ) -> tuple[
     ChatService | None,
     str | None,
@@ -397,6 +412,7 @@ def _assemble_chat(
         embedder=embedder,
         index=vector_index,
         documents=documents,
+        telemetry=telemetry,
         sparse_encoder=(
             None if isinstance(sparse, SparseEncodingUnavailable) else sparse
         ),
