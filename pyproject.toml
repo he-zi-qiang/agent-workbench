@@ -18,12 +18,24 @@ dependencies = [
   # so putting it behind an extra would buy nothing except a CI that skips the
   # workflow adapter's tests and therefore proves nothing about it.
   "langgraph>=0.6,<0.7",
+  # LangChain's tool contract, and only that. It arrives transitively through
+  # langgraph already; declaring it is the difference between "we use this" and
+  # "a resolver happens to give us this", and the interop adapter uses it
+  # directly. Nothing imports langchain proper.
+  "langchain-core>=0.3,<2",
   "pydantic>=2.12,<3",
   # A main dependency rather than an extra, on the same reasoning as langgraph:
   # it is small, pure Python and BSD-3, so hiding it behind an extra would buy
   # nothing except a CI that skips the parser's tests and therefore proves
   # nothing about it. PyMuPDF is faster and AGPL, which the licence gate
   # rejects and which this project has no business shipping.
+  # Observability, as an API plus one exporter. The core never imports these --
+  # the architecture guard forbids it -- so they reach the process through an
+  # adapter behind ``ports.telemetry``. Apache-2.0, which the licence gate
+  # already allows.
+  "opentelemetry-api>=1.27,<2",
+  "opentelemetry-sdk>=1.27,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
   "pypdf>=5,<7",
   "pydantic-settings>=2.14.2,<3",
   "python-dotenv>=1,<2",

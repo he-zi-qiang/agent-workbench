@@ -1295,7 +1295,11 @@ v1 没有进程/容器级不可信代码执行，因此只能称为“Tool 权�
 
 ### ADR-003：LlamaIndex 只承担 RAG ingestion 与 retrieval
 
-- 状态：接受。
+- 状态：**已被 [ADR-016](./adr/0016-self-built-retrieval.md) 取代**（2026-08-01）。
+  ingestion 与 retrieval 全部自研并已实测（38 题 gold set，MRR 0.960）；仓库没有
+  `llama_index` 依赖，架构守卫把它列为核心层禁止导入。原文保留在下面，因为它是
+  v1.3 成文时的边界，也是那次决定确实做过的记录——取代它比删掉它诚实。
+- 原状态：接受。
 - 原因：利用其 ingestion、index、retriever 能力，同时保留核心决策权。
 - 后果：LlamaIndex Document、Node、Retriever 必须经过 Adapter；其 QueryEngine/Agent 不生成最终回答；hybrid fusion 只由 Qdrant Query API 执行一次。
 
@@ -1427,31 +1431,21 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-截至 2026-07-28，主分支基线为 `main@341cbf5`；`knowledge_search` Adapter 与
-PR-035～PR-049 均已合入。
-工程基线、领域契约、Ports、Fake Adapter、自研 Runtime、DeepSeek 流式 Adapter 与
-API 装配、PostgreSQL Conversation/ChatTurn/EventLog、Local ArtifactStore、
-文档/版本/ACL/事务 Outbox、摄取组件、Dense/Hybrid RAG、Reranker、固定检索 Chat、
-原子 answer release、pending/expiry 后台恢复以及
-Upload / Artifact / Health / Chat / SSE API 已落地并有测试。LangGraph Workflow、
-Multi-Agent、生产身份认证和生产部署仍未实现。Task 侧已有 checkpoint-safe
-`TaskState`、`TaskWorkflowPort`、图控制流、artifact 型 Agent node 与 LangGraph
-adapter；但 checkpointer 仍是内存实现，**没有 Task Registry、Task Worker 或
-重启恢复证据**。
+截至 2026-08-01，主分支基线为 `main@aac5c4b`。下表在 2026-07-28 之后**大幅落后于
+实现**（它当时写着「没有 Task Registry、Task Worker 或重启恢复证据」），本轮按实际
+代码逐条订正。
 
-`main@341cbf5` 门禁：无外部服务为 `907 passed / 260 skipped`；配上真实
-PostgreSQL 16 与 Qdrant 后为 **`1156 passed / 11 skipped`**。两者是同一套测试的
-两种环境，不能相加。第二组是本项目第一次真正跑通那 260 项外部服务用例——它们全部
-通过，此前 lease、`SKIP LOCKED`、原子发布与迁移这些不变量一直靠跳过的测试撑着。
-剩余 11 项跳过需要真实 BGE 权重。Ruff、Pyright 与三个配置 profile 均通过，
-Alembic 唯一 head 为 `0009_chat_turn_lease`。复现方式见
-[实施状态](./status.md)的门禁复核一节。
+**框架口径（[ADR-016](./adr/0016-self-built-retrieval.md)）：自研 + 有限借用。**
+实际借用三处，每处只在一个位置：LangGraph 作 Task 控制平面；`langchain-core` 的工具
+契约，让第三方工具变成普通 `ToolBinding`（没有 executor / agent / chain）；以及
+Qdrant、pypdf 这类基础设施。ingestion 与 retrieval 全部自研，38 题 gold set 上
+MRR 0.960 / recall@1 0.947 / 61ms。LlamaIndex、CrewAI、RAGAS 没有实现，**也不打算在
+没有「它比自研强」的评测结果之前实现**——这正是 §15 最后一条要求解释的那件事。
 
-表中标为 Demonstrated 的两项都由同一条固定演示 `agent-cli demo` 覆盖：逐字节
-可复现，由 golden 文件与 CI smoke 守护。它现在证明的是“输入 → 模型 → Tool →
-ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 handler 不被调用。
-它不包含 Hook、并行读、真实模型、检索与恢复；不能把“有 contract test”写成
-“已经在线演示”。
+门禁（真实 PostgreSQL 16 + Qdrant）：`1789 passed / 11 skipped`；无外部服务
+`1234 passed / 566 skipped`。两者是同一套测试的两种环境，不能相加。剩余 11 项跳过
+需要真实 BGE 权重。Ruff、Pyright、三个配置 profile、`uv lock --check`、
+`docker compose config` 均通过，Alembic 唯一 head 为 `0019_tool_executions`。
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
@@ -1475,23 +1469,31 @@ ToolResult → 模型 → 回答”这条串行链路，以及 deny 分支下 ha
 | Upload / Artifact / Health API | ✓ | ✓ | ✓ |  |
 | tenant-scoped 数据访问（以可信 PrincipalContext 为前提） | ✓ | ✓ | ✓ |  |
 | 生产身份认证 | ✓ |  |  |  |
-| LangChain model/tool 互操作 Adapter | ✓ |  |  |  |
+| LangChain **tool** 互操作 Adapter（无 model/agent/chain） | ✓ | ✓ | ✓ |  |
 | BGE-M3 + Qdrant Dense/Hybrid RAG 与离线评测 | ✓ | ✓ | ✓ |  |
 | BGE reranker Adapter（授权后重排、窄 fail-open） | ✓ | ✓ | ✓ |  |
 | 固定检索 Chat + RAG（ACL 双检、发布门、多轮、请求幂等） | ✓ | ✓ | ✓ |  |
 | Chat 固定 lease、原子 `ChatTurnExpired`、terminal-only reaper 与 pending 发布恢复 | ✓ | ✓ | ✓ |  |
 | `knowledge_search` Tool Adapter（已实现，未装配进 ChatService） | ✓ | ✓ | ✓ |  |
-| Agentic `knowledge_search` 产品装配 | ✓ |  |  |  |
-| LlamaIndex ingestion/retrieval Adapter | ✓ |  |  |  |
+| Agentic `knowledge_search` 产品装配 | ✓ | ✓ | ✓ |  |
+| ~~LlamaIndex ingestion/retrieval Adapter~~（ADR-016 取代，不实现） | — | — | — | — |
 | Task 工作流 checkpoint-safe 状态与 `TaskWorkflowPort` | ✓ | ✓ | ✓ |  |
 | 固定研究图的条件路由与确定性 fan-in reducer | ✓ | ✓ | ✓ |  |
 | Task Agent node：产物为 artifact 的四个节点 | ✓ | ✓ | ✓ |  |
-| Task Agent node：`plan`/`critic` 结构化输出解码 | ✓ |  |  |  |
+| Task Agent node：`plan`/`critic` 结构化输出解码 | ✓ | ✓ | ✓ |  |
 | LangGraph Adapter 与 graph version 注册表（内存 checkpointer） | ✓ | ✓ | ✓ |  |
-| PostgreSQL checkpointer / Task Worker / 查询接口 | ✓ |  |  |  |
-| PostgreSQL Task coordination | ✓ |  |  |  |
-| Multi-Agent | ✓ |  |  |  |
-| UI / deployment / observability | ✓ |  |  |  |
+| PostgreSQL checkpointer / Task Worker / 查询接口 | ✓ | ✓ | ✓ | ✓ |
+| PostgreSQL Task coordination（claim/lease/fencing/recovery） | ✓ | ✓ | ✓ | ✓ |
+| Multi-Agent（固定图并行 + 上下文隔离；无动态 supervisor） | ✓ | 部分 | ✓ | ✓ |
+| 浏览器控制台（同源 `/ui`，四页转录式） | ✓ | ✓ | ✓ | ✓ |
+| 本机 Compose 部署（双 Worker，一条命令） | ✓ | ✓ | ✓ | ✓ |
+| OpenTelemetry trace/metrics（Port + OTLP Adapter） | ✓ | ✓ | ✓ |  |
+| PDF 摄取与页码可定位引用 | ✓ | ✓ | ✓ | ✓ |
+| HITL 审批：interrupt、账本、决定事务、跨进程恢复 | ✓ | ✓ | ✓ | ✓ |
+| `export_artifact` 写节点与副作用 ledger | ✓ | ✓ | ✓ | ✓ |
+| 三条固定 E2E 演示 | ✓ | ✓ | ✓ | ✓ |
+| Chat 两条路径对照评测（fixed vs agentic） | ✓ | ✓ | ✓ | ✓ |
+| Langfuse / CrewAI 对照 / RAGAS | ✓ |  |  |  |
 
 当前身份边界的事实：开发 Header Identity Resolver 信任调用方自报的
 tenant/principal，所以生产身份认证仍是 Planned。监听地址已强制为 loopback

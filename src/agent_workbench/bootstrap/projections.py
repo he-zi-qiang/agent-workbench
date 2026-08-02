@@ -192,6 +192,20 @@ class ChatConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservabilityConfig:
+    """Where this process sends what it records.
+
+    Projected like every other config: the settings type stops at this
+    boundary, so nothing past it can reinterpret an endpoint or a sample ratio.
+    """
+
+    service_name: str
+    exporter_endpoint: str
+    trace_sample_ratio: float
+    metrics_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
 class TaskConfig:
     """The deployment decisions attached to a newly submitted Task.
 
@@ -295,6 +309,18 @@ class ApiRuntimeConfig:
     chat_recovery: ChatRecoveryConfig
     chat: ChatConfig
     task: TaskConfig
+    observability: ObservabilityConfig
+
+
+def project_observability(settings: Settings) -> ObservabilityConfig:
+    """What this process records with, from the one loader every process uses."""
+
+    return ObservabilityConfig(
+        service_name=settings.observability.otel_service_name,
+        exporter_endpoint=settings.observability.otel_exporter_endpoint,
+        trace_sample_ratio=settings.observability.trace_sample_ratio,
+        metrics_enabled=settings.observability.metrics_enabled,
+    )
 
 
 def project_task(settings: Settings) -> TaskConfig:
@@ -443,6 +469,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
     """Project validated settings onto what the API process consumes."""
 
     return ApiRuntimeConfig(
+        observability=project_observability(settings),
         deployment_scope=settings.app.deployment_scope,
         log_level=settings.app.log_level,
         host=settings.api.host,

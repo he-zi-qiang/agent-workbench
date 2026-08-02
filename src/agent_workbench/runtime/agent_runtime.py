@@ -69,6 +69,18 @@ from agent_workbench.ports.model import (
     ModelToolCallProposed,
     ModelUsageReported,
 )
+from agent_workbench.ports.telemetry import (
+    MODEL_INPUT_TOKENS,
+    MODEL_OUTPUT_TOKENS,
+    RUN_COMPLETED,
+    RUN_DURATION,
+    RUN_FAILED,
+    RUN_STARTED,
+    RUN_STEPS,
+    Attributes,
+    NullTelemetry,
+    Telemetry,
+)
 from agent_workbench.runtime.budgets import (
     effective_model_deadline,
     remaining_run_seconds,
@@ -175,6 +187,7 @@ class ClaudeLikeAgentRuntime:
         max_parallel_read_tools: int = DEFAULT_MAX_PARALLEL_READS,
         clock: Callable[[], datetime] | None = None,
         model_call_ids: Callable[[], str] | None = None,
+        telemetry: Telemetry | None = None,
     ) -> None:
         self._model = model
         # Tools are reached only through the gateway: resolving, validating,
@@ -192,8 +205,55 @@ class ClaudeLikeAgentRuntime:
         self._model_call_ids = (
             model_call_ids if model_call_ids is not None else new_model_call_id
         )
+        # Defaults to recording nothing. A deployment without a collector is
+        # not a deployment that behaves differently, so this is the absence of
+        # one rather than a degraded mode.
+        self._telemetry = telemetry if telemetry is not None else NullTelemetry()
 
     async def run(
+        self,
+        request: AgentRunRequest,
+        emit: EventSink,
+        cancellation: CancellationToken,
+    ) -> AgentOutcome:
+        """Run the loop, and record what it did.
+
+        A wrapper rather than instrumentation at each ``return``: the loop has
+        several terminal paths and the one that would get missed is whichever
+        is added next. Everything here is derived from the outcome the loop
+        already produces, so recording cannot disagree with what happened.
+        """
+
+        started = self._clock()
+        attributes: Attributes = {
+            "run_kind": request.run_kind,
+            "model_profile": request.model_profile,
+        }
+        self._telemetry.count(RUN_STARTED, attributes=attributes)
+        with self._telemetry.span("agent.run", attributes=attributes):
+            outcome = await self._run(request, emit, cancellation)
+
+        elapsed = (self._clock() - started).total_seconds() * 1000
+        settled: Attributes = {
+            **attributes,
+            "status": outcome.status,
+            "stop_reason": outcome.stop_reason or "",
+        }
+        self._telemetry.record(RUN_DURATION, elapsed, attributes=settled)
+        self._telemetry.record(RUN_STEPS, outcome.usage.steps, attributes=settled)
+        self._telemetry.record(
+            MODEL_INPUT_TOKENS, outcome.usage.tokens.input_tokens, attributes=settled
+        )
+        self._telemetry.record(
+            MODEL_OUTPUT_TOKENS, outcome.usage.tokens.output_tokens, attributes=settled
+        )
+        self._telemetry.count(
+            RUN_COMPLETED if outcome.status == "completed" else RUN_FAILED,
+            attributes=settled,
+        )
+        return outcome
+
+    async def _run(
         self,
         request: AgentRunRequest,
         emit: EventSink,
