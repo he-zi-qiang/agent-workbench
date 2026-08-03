@@ -459,6 +459,116 @@ def test_a_reclaimed_worker_cannot_report_the_result_of_its_own_intent() -> None
     assert new_epoch == 2
 
 
+def test_an_intent_left_by_a_dead_worker_is_not_dispatched_again() -> None:
+    """The duplicate this table exists to prevent, along its longest path.
+
+    W1 records the intent, the export lands, and W1 dies before it can report
+    anything. The lease lapses, the reaper hands the Task to W2, and W2 reaches
+    the same operation -- with the same key and the same arguments, because the
+    key is a business key and a retry is supposed to look identical.
+
+    What W2 must not be told is "intended, go ahead". Nobody can say whether the
+    effect landed: W1 is fenced out of the ledger and cannot come back to report,
+    and the row on its own does not distinguish a dispatch that succeeded from
+    one that never happened. So it becomes a human's problem, and W2 is refused.
+
+    The control group is ``test_recording_the_same_intent_twice_claims_one
+    _operation``: the same two calls under *one* live epoch still return
+    ``intended``, so what is being caught here is the change of owner and not
+    merely a second record_intent.
+    """
+
+    async def scenario(engine: Any, registry: Any, ledger: Any) -> tuple[Any, ...]:
+        task_id, first_epoch = await _claimed(registry)
+        await ledger.record_intent(_intent(task_id, epoch=first_epoch))
+        # W1 dies here: the effect may or may not have landed, and nothing it
+        # could write would say which.
+
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE task_runs SET lease_until = now() - interval '1 minute'")
+            )
+        await registry.reclaim_expired(
+            limit=10, max_attempts=5, retry_base_seconds=1, retry_max_seconds=60
+        )
+        async with engine.begin() as connection:
+            await connection.execute(text("UPDATE task_runs SET available_at = now()"))
+        second = await registry.claim_next("worker_2", lease_seconds=60)
+        assert second is not None
+
+        taken_over = await ledger.record_intent(
+            _intent(task_id, epoch=second.lease.epoch)
+        )
+        async with engine.connect() as connection:
+            rows = len((await connection.execute(select(tool_executions))).all())
+        return (
+            taken_over.status,
+            taken_over.may_dispatch,
+            taken_over.outcome_detail,
+            taken_over.settled_at is not None,
+            # The dead attempt's own identity is what a person reconciling this
+            # has to work from, so the takeover must not overwrite it.
+            taken_over.lease_epoch,
+            rows,
+        )
+
+    status, may_dispatch, detail, has_timestamp, epoch, rows = _run(scenario)
+
+    assert status == "needs_reconciliation"
+    assert may_dispatch is False
+    assert detail is not None and "epoch 1" in detail
+    assert has_timestamp is True
+    assert epoch == 1
+    # One operation, not two. The takeover settles the row; it does not open
+    # a second one for the new Worker to dispatch under.
+    assert rows == 1
+
+
+def test_taking_over_a_dead_intent_still_refuses_a_different_request() -> None:
+    """The takeover does not launder a key into meaning something else.
+
+    Same key, different arguments, across the change of owner: the conflict is
+    still raised, and the abandoned row keeps the first attempt's request rather
+    than acquiring the second one's.
+    """
+
+    async def scenario(engine: Any, registry: Any, ledger: Any) -> tuple[Any, ...]:
+        task_id, first_epoch = await _claimed(registry)
+        await ledger.record_intent(_intent(task_id, epoch=first_epoch))
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE task_runs SET lease_until = now() - interval '1 minute'")
+            )
+        await registry.reclaim_expired(
+            limit=10, max_attempts=5, retry_base_seconds=1, retry_max_seconds=60
+        )
+        async with engine.begin() as connection:
+            await connection.execute(text("UPDATE task_runs SET available_at = now()"))
+        second = await registry.claim_next("worker_2", lease_seconds=60)
+        assert second is not None
+
+        with pytest.raises(ToolOperationConflictError):
+            await ledger.record_intent(
+                _intent(
+                    task_id,
+                    epoch=second.lease.epoch,
+                    canonical_request_hash=argument_digest(
+                        {**REQUEST, "destination": "reports/other.md"}
+                    ),
+                )
+            )
+        stored = await ledger.get(task_id=task_id, operation_key=OPERATION)
+        assert stored is not None
+        return stored.status, stored.canonical_request_hash
+
+    status, stored_hash = _run(scenario)
+
+    # Settled for a human anyway: the conflict is a fact about the new attempt,
+    # and the dead attempt's outcome is unknown whichever arguments follow it.
+    assert status == "needs_reconciliation"
+    assert stored_hash == argument_digest(REQUEST)
+
+
 def test_the_result_of_a_terminal_task_cannot_be_recorded() -> None:
     async def scenario(engine: Any, registry: Any, ledger: Any) -> Any:
         task_id, epoch = await _claimed(registry)

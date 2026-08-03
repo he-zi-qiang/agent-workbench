@@ -23,6 +23,14 @@ relaxed. The expiry condition itself is *not* redundant, and has its own test:
 a lease can lapse while the row is still ``running`` at the same epoch, and an
 effect dispatched in that window is one the next Worker dispatches again.
 
+The same fence is what makes an *old* ``intended`` row readable as the state it
+is. A row recorded under an epoch that is no longer the live one belongs to a
+Worker that cannot come back to settle it -- the ledger refuses its writes -- so
+the attempt that claims the operation next abandons it to
+``needs_reconciliation`` rather than inheriting permission to dispatch from it.
+That is the one transition this ledger performs on its own, and it is the
+conservative one: it can only ever refuse an effect.
+
 Two of the guards below are stricter than any single test can show, and this
 says which:
 
@@ -106,17 +114,79 @@ class PostgresToolExecutionLedger:
                 raise RuntimeError(
                     "the recorded intent vanished inside its transaction"
                 )
-            if row["canonical_request_hash"] != intent.canonical_request_hash:
-                # One key, two requests. Returning the stored row here would be
-                # telling the caller that an effect it never asked for has
-                # already been performed.
-                raise ToolOperationConflictError(
-                    task_id=intent.task_id,
-                    operation_key=intent.operation_key,
-                    recorded_hash=str(row["canonical_request_hash"]),
-                    attempted_hash=intent.canonical_request_hash,
-                )
+            if row["status"] == "intended" and int(row["lease_epoch"]) < (
+                intent.lease_epoch
+            ):
+                row = await self._abandon(connection, row=row, intent=intent)
+            # Raised after the transaction commits, so a conflicting request
+            # cannot roll back the abandonment above: whether the arguments
+            # match is a fact about *this* attempt, and the dead attempt's
+            # outcome is unknown either way.
+            conflicted = row["canonical_request_hash"] != intent.canonical_request_hash
+        if conflicted:
+            # One key, two requests. Returning the stored row here would be
+            # telling the caller that an effect it never asked for has already
+            # been performed.
+            raise ToolOperationConflictError(
+                task_id=intent.task_id,
+                operation_key=intent.operation_key,
+                recorded_hash=str(row["canonical_request_hash"]),
+                attempted_hash=intent.canonical_request_hash,
+            )
         return _to_record(row)
+
+    async def _abandon(
+        self,
+        connection: AsyncConnection,
+        *,
+        row: RowMapping,
+        intent: ToolExecutionIntent,
+    ) -> RowMapping:
+        """Hand a dead attempt's open intent to a human, not to the next Worker.
+
+        An ``intended`` row recorded under an epoch that is no longer the live
+        one is the unknown window with nobody left inside it: the Worker that
+        wrote it either never dispatched, or dispatched and died before it could
+        say so, and no later reader can tell those apart. Returning it as it
+        stands would make :attr:`ToolExecutionRecord.may_dispatch` true for the
+        Worker that claimed the Task next, which is how an export that already
+        landed gets exported a second time and called a retry.
+
+        So the takeover settles it as ``needs_reconciliation`` instead. That
+        costs an operation nobody may repeat automatically, which is the price
+        of the alternative being an effect nobody can withdraw.
+        """
+
+        stale_epoch = int(row["lease_epoch"])
+        detail = _DETAIL.validate_python(
+            f"lease epoch {stale_epoch} recorded this intent and never reported "
+            f"it; epoch {intent.lease_epoch} claimed the task and did not repeat "
+            "the effect"
+        )
+        abandoned = (
+            (
+                await connection.execute(
+                    update(tool_executions)
+                    .where(
+                        tool_executions.c.task_id == intent.task_id,
+                        tool_executions.c.operation_key == intent.operation_key,
+                        tool_executions.c.status == "intended",
+                        tool_executions.c.lease_epoch == stale_epoch,
+                    )
+                    .values(
+                        status="needs_reconciliation",
+                        outcome_detail=detail,
+                        settled_at=func.now(),
+                    )
+                    .returning(tool_executions)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if abandoned is None:  # pragma: no cover - read under the task row lock
+            raise RuntimeError("the abandoned intent vanished inside its transaction")
+        return abandoned
 
     async def record_result(
         self,

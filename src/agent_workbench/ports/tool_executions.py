@@ -120,6 +120,12 @@ class ToolExecutionRecord(DomainModel):
         the call site so that "the ledger already knows about this operation"
         cannot be read as permission by a caller that only looked at whether
         ``record_intent`` raised.
+
+        It answers for the caller that just recorded the intent, and that is why
+        an implementation may not return an ``intended`` row belonging to an
+        older lease: see :meth:`ToolExecutionLedger.record_intent`. Such a row
+        says an effect was attempted by somebody who is gone, and reading it as
+        permission is the duplicate this ledger exists to prevent.
         """
 
         return self.status == "intended"
@@ -189,6 +195,15 @@ class ToolExecutionLedger(Protocol):
         :attr:`ToolExecutionRecord.may_dispatch`. A row that is already settled
         comes back settled, which is how a retry after a successful dispatch
         declines to perform the effect a second time.
+
+        An ``intended`` row left by an *earlier* lease is settled here as
+        ``needs_reconciliation`` and returned in that state. It is the one
+        transition an implementation performs unasked, and the reason is that
+        nothing else can: the Worker that recorded it is fenced out of the
+        ledger, so nobody remains who could report what its dispatch did. The
+        rule is a requirement rather than an implementation's discretion --
+        without it the Worker that claims the Task next reads "an effect was
+        intended" as "no effect has happened yet" and performs it again.
 
         Raises :class:`ToolOperationConflictError` when the key is reused for a
         different canonical request, and
