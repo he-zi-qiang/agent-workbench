@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -122,6 +125,56 @@ def test_the_api_serves_the_console_from_the_image() -> None:
     assert "--web-dir /app/web" in (ROOT / "docker/run-api-local.sh").read_text(
         encoding="utf-8"
     )
+
+
+def test_the_stack_has_the_collector_its_processes_export_to() -> None:
+    """Not in the demo profile, and nothing depends on it.
+
+    The API exports whether or not anybody opted into synthetic workers, so a
+    collector behind ``--profile demo`` would leave the ordinary stack
+    unobserved. And a `depends_on` would make a collector's problem into a
+    run's problem, which is the one thing the telemetry factory refuses to do.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    assert "otel-collector" in services
+    collector = services["otel-collector"]
+    assert "profiles" not in collector or not collector["profiles"]
+    for name, service in services.items():
+        if name == "otel-collector":
+            continue
+        assert "otel-collector" not in (service.get("depends_on") or {})
+
+
+def test_the_exporter_port_is_the_one_the_collector_receives_on() -> None:
+    """The defect this collector was added with, kept from coming back.
+
+    The default endpoint was ``:4317`` while the exporter is OTLP over *HTTP*,
+    which posts to ``<endpoint>/v1/traces``. 4317 is the gRPC port, so every
+    span went to a listener that could not answer -- and telemetry fails open,
+    so the stack looked healthy while recording nothing.
+
+    Both numbers are read from the files that carry them. Asserting 4318 twice
+    here would pass just as well with the two sides pointing at different
+    ports.
+    """
+
+    configured = tomllib.loads(
+        (ROOT / "config/config.default.toml").read_text(encoding="utf-8")
+    )["observability"]["otel_exporter_endpoint"]
+    exporter_port = urlsplit(configured).port
+
+    collector = (ROOT / "docker/otel-collector.yaml").read_text(encoding="utf-8")
+    receiver_ports = {
+        int(match) for match in re.findall(r"endpoint:\s*0\.0\.0\.0:(\d+)", collector)
+    }
+
+    assert receiver_ports == {exporter_port}
+    # The exporter appends the OTLP/HTTP paths, so an endpoint that already
+    # carried one would produce `/v1/traces/v1/traces`.
+    assert not urlsplit(configured).path
 
 
 def test_the_api_and_host_proxy_use_distinct_ports() -> None:

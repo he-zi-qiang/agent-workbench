@@ -68,6 +68,7 @@ agent-cli = "agent_workbench.apps.cli.main:main"
 agent-ingestion-worker = "agent_workbench.apps.ingestion_worker.main:main"
 agent-task-worker = "agent_workbench.apps.task_worker.main:main"
 agent-config-check = "agent_workbench.bootstrap.config_check:main"
+agent-evidence = "agent_workbench.bootstrap.evidence:main"
 
 [dependency-groups]
 dev = [

@@ -1,0 +1,47 @@
+# The local demo's collector.
+#
+# It exists so that "this deployment is observable" is something a reader can
+# check rather than something the configuration asserts. The API and Workers
+# have exported OTLP since the telemetry adapter landed; there was nothing
+# listening, and because telemetry deliberately fails open, nothing said so.
+#
+# HTTP only, on 4318. The exporter is `opentelemetry-exporter-otlp-proto-http`
+# and it posts to `<endpoint>/v1/traces`, so a gRPC receiver on 4317 would
+# refuse every request -- silently, at the far end of a batch processor. The
+# receiver port and `observability.otel_exporter_endpoint` have to agree, and a
+# test reads both rather than trusting this comment.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Small and short. This is a demo somebody watches: waiting the default 8s
+  # for a batch to fill makes a finished run look untraced.
+  batch:
+    timeout: 2s
+    send_batch_size: 128
+
+exporters:
+  # A file, because the point is evidence. `agent-evidence` attaches one of
+  # these as the manifest's trace sample, and an attachment nobody can open is
+  # not evidence.
+  file/traces:
+    path: /var/lib/otel/traces.jsonl
+  file/metrics:
+    path: /var/lib/otel/metrics.jsonl
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file/traces]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file/metrics]

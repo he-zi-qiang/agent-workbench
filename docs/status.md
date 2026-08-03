@@ -1,5 +1,53 @@
 # 实施状态
 
+## 2026-08-03 证据包与它暴露出来的收集端（未合并）
+
+按基线/计划对照出的四个缺口，从投入产出最高的一个开始：计划 §11 从写下那天起
+就要求 `artifacts/evidence/<gate>/manifest.json`，而仓库从未产出过一份。替代它的
+是散文——状态文档里的测试计数、README 里的评测数字、"demo 能跑"这句话。每一条都
+是真的，每一条都不可核对：读者无法判断某个数字出自哪个 commit，三周后写它的人
+同样判断不了。
+
+**`agent-evidence`（`bootstrap/evidence.py`）分开记录两类东西。** 派生事实来自配置
+与仓库——startup config revision、run semantics 模板修订、policy 标签与规范指纹、
+graph version、模型/嵌入/重排身份、Qdrant 索引版本、commit；没有一项是手填的，
+所以没有一项能是一厢情愿。附件是别人产出的文件，按 SHA-256 与字节数记录，`verify`
+据此复核——只记一次、从不重算的哈希，只能证明它当时是对的。
+
+两条规则都是拒绝：附件不存在或为空则不写清单（记下路径让读者自己发现，正是清单
+开始断言无人产出的证据的方式）；工作树脏则不写，除非显式 `--allow-dirty` 并把
+`git_dirty` 记成真——清单要指名一个 commit，若磁盘内容与之不同，那个 commit 只是
+装饰。没有附上的东西由已附上的**反推**进 `missing`：关卡允许不完整，不允许对此
+沉默。
+
+**收集端。** 做上面这件事时发现"OTel trace 样本"根本无从取得：
+`observability.otel_enabled` 是 `Literal[True]`，适配器从落地那天起就在导出，而
+compose 里从来没有 `otel-collector` 这个服务，配置默认值指向的是一个本拓扑未定义
+的主机。端口也是错的——导出器是 OTLP over **HTTP**，POST 到 `<endpoint>/v1/traces`，
+默认却写着 `4317`（gRPC 端口）。遥测按设计 fail-open，于是这一整条链路从未工作过，
+也从未有人被告知。这正是 PR #67 想消灭的那种"开关打开了但什么也没打开"。
+
+现在 collector 在默认栈里（不是 `demo` profile：API 无论有没有人启用合成 Worker
+都在导出），没有任何服务 `depends_on` 它——collector 的问题绝不能变成运行的问题，
+这是遥测工厂本来就守的规矩。它把收到的东西写进卷，`docker compose cp` 即可取出
+成为附件。默认端口改为 `4318`，并由测试**分别读取**配置与 collector 配置来断言
+两端一致；在两处各写死 4318 的测试，在两端指向不同端口时同样会通过。
+
+```text
+ruff format / lint                   全过
+pyright                              0 errors
+pytest（真实 PostgreSQL + Qdrant）   1833 passed / 11 skipped
+真实 collector 链路                  适配器 → OTLP/HTTP:4318 → traces.jsonl 已验证
+```
+
+链路是拿本项目自己的遥测适配器打通的，不是拿 curl：`build_telemetry` 发一个 span，
+容器里的 collector 落出真正的 OTLP JSON。端口回改 4317 后新测试变红，回改前后各跑
+一次确认。
+
+**没有打勾的那一项。** 计划 §12 的"首个 evidence manifest"仍未打勾：工具存在不等于
+关卡已经通过。要打勾得跑一次真正的关卡并把测试报告、评测报告、trace 样本和演示
+附上去。
+
 ## 2026-08-03 三处围栏被自己应该拦的东西满足（已合并 main，PR #68）
 
 三个缺陷，其中两个是同一个缺陷换了件衣服：**围栏在拿它本该检查的东西当通行证**。

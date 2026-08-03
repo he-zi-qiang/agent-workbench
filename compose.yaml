@@ -43,6 +43,48 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # The other end of the OTLP exporter every process already had.
+  #
+  # `observability.otel_enabled` cannot be turned off, and the telemetry
+  # adapter has been exporting since it landed -- into a hostname this topology
+  # never defined. Telemetry fails open by design, so the stack looked healthy
+  # while recording nothing, which is the same shape of claim-without-evidence
+  # the flag itself used to be. It is not in the `demo` profile: the API exports
+  # whether or not anybody opted into synthetic workers.
+  # A fresh named volume is owned by root, and the collector image runs as
+  # 10001 with no shell to fix it from. One `chown`, in the image this stack
+  # already builds, so the collector can keep its own user.
+  otel-init:
+    image: agent-workbench:local
+    build:
+      context: .
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["chown -R 10001:10001 /var/lib/otel"]
+    volumes:
+      - otel_data:/var/lib/otel
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib@sha256:f2f01157055a9b2aab9df7118e1f1c9abf345e99b23bc7a2bc791db374a7d0f6
+    command: ["--config=/etc/otel/collector.yaml"]
+    depends_on:
+      otel-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./docker/otel-collector.yaml:/etc/otel/collector.yaml:ro
+      - otel_data:/var/lib/otel
+    # No published port. Nothing outside the stack needs to reach it, and the
+    # loopback rule is easiest to keep when there is nothing to bind. Nothing
+    # `depends_on` it either: a collector's problem must never become a run's
+    # problem, which is the rule the telemetry factory already follows.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
   qdrant-ready:
     build:
       context: .
@@ -165,5 +207,6 @@ services:
 
 volumes:
   artifact_data:
+  otel_data:
   postgres_data:
   qdrant_data:
