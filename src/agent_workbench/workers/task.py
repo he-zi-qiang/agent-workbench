@@ -21,6 +21,12 @@ The Registry claim is a time-bounded execution lease.  A separate heartbeat
 coroutine keeps it alive while the graph runs, and every lifecycle write uses
 its owner and epoch.  This protects Task rows across Workers; E2 adds the
 corresponding fence at the LangGraph checkpointer boundary.
+
+That same claim is published into the graph invocation rather than left for
+the nodes to look up.  A lease is an assertion about *this* process, and a
+node that asked the Registry for one would receive whichever Worker holds the
+Task at that moment -- so a Worker that lost it mid-graph would go on writing,
+under its successor's epoch, past every fence built to stop exactly that.
 """
 
 from __future__ import annotations
@@ -28,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
 from agent_workbench.application.task_recovery import Reconciliation, reconcile
@@ -55,6 +61,7 @@ from agent_workbench.ports.task_workflow import (
     GraphVersion,
     TaskWorkflowPort,
 )
+from agent_workbench.workflows.execution_scope import TaskExecutionScope
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +135,13 @@ class TaskWorker:
     # Test-only. ``None`` is the production no-op binding, so no controller
     # or test package crosses the normal composition boundary.
     fault_injector: FaultInjector | None = None
+    # Where this Worker publishes the claim it is executing under, for the nodes
+    # inside the graph to read. It has a default because a Worker driving
+    # handlers that never ask -- the demo graph, most workflow tests -- needs no
+    # wiring; a composition whose nodes *do* ask passes the same scope to both
+    # sides, and one that forgets fails closed at the first node rather than
+    # running it under whatever claim the Registry currently reports.
+    scope: TaskExecutionScope = field(default_factory=TaskExecutionScope)
 
     async def run_once(self) -> TaskOutcome | None:
         """Claim one Task and drive it, or return ``None`` if none is queued."""
@@ -372,30 +386,39 @@ class TaskWorker:
             if guard is not None
             else None
         )
-        if decision.action == "start":
-            await self.workflow.run(
-                await self.load_state(task),
-                thread_id=task.thread_id,
-                graph_version=task.graph_version,
-                checkpoint_fence=checkpoint_fence,
-            )
-        else:
-            await self.workflow.resume(
-                thread_id=task.thread_id,
-                graph_version=task.graph_version,
-                checkpoint_fence=checkpoint_fence,
-                # Only where the decision says an approval is what is being
-                # resumed. An ordinary resume that carried one would be handing
-                # a wake-up to a graph that is not waiting for one, and the id
-                # is gated on the action rather than merely on the record so a
-                # future action that also has an approval in hand has to say so.
-                approval=(
-                    approval.resume
-                    if approval is not None
-                    and decision.action == "resume_with_approval"
-                    else None
-                ),
-            )
+        # The claim, published for the duration of this invocation and no
+        # longer. A node inside the graph needs to know which lease it is
+        # executing on behalf of, and the Registry cannot tell it: asked during
+        # a node, the Registry answers with whoever holds the Task *now*, which
+        # for a Worker whose lease lapsed mid-graph is the Worker that replaced
+        # it. Writing under that epoch passes every fence that exists to refuse
+        # this Worker specifically.
+        with self.scope.executing(lease):
+            if decision.action == "start":
+                await self.workflow.run(
+                    await self.load_state(task),
+                    thread_id=task.thread_id,
+                    graph_version=task.graph_version,
+                    checkpoint_fence=checkpoint_fence,
+                )
+            else:
+                await self.workflow.resume(
+                    thread_id=task.thread_id,
+                    graph_version=task.graph_version,
+                    checkpoint_fence=checkpoint_fence,
+                    # Only where the decision says an approval is what is being
+                    # resumed. An ordinary resume that carried one would be
+                    # handing a wake-up to a graph that is not waiting for one,
+                    # and the id is gated on the action rather than merely on
+                    # the record so a future action that also has an approval in
+                    # hand has to say so.
+                    approval=(
+                        approval.resume
+                        if approval is not None
+                        and decision.action == "resume_with_approval"
+                        else None
+                    ),
+                )
 
     async def _heartbeat_loop(self, lease: ExecutionLease) -> None:
         while True:

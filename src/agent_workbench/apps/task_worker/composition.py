@@ -71,6 +71,7 @@ from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 from agent_workbench.workers.task import TaskWorker
 from agent_workbench.workflows.approval import TaskApprovalGate
 from agent_workbench.workflows.demo_handlers import build_demo_v1_handlers
+from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.task_handlers import (
     TaskExportHandlers,
     TaskNodeInvocationProvider,
@@ -99,6 +100,11 @@ class TaskWorkerDependencies:
     # deploy-time fact, and the difference between the interrupting approval
     # node and no approval node at all is not visible anywhere else.
     handlers: Mapping[TaskNodeId, NodeHandler]
+    # The one claim channel this process has. The Worker enters it around a
+    # graph invocation and the real handlers read it back, so a deployment can
+    # be inspected for the thing that would otherwise only be visible as two
+    # constructor arguments that happen to agree.
+    scope: TaskExecutionScope
     worker: TaskWorker
     http: httpx.AsyncClient | None = None
     qdrant: AsyncQdrantClient | None = None
@@ -151,6 +157,7 @@ def build_task_worker_dependencies(
     if handlers is None and demo:
         handlers = build_demo_v1_handlers()
 
+    scope = TaskExecutionScope()
     engine = create_query_engine(
         config.database.dsn.get_secret_value(),
         application_name=config.database.application_name,
@@ -180,6 +187,7 @@ def build_task_worker_dependencies(
             events=events,
             registry=registry,
             ledger=PostgresToolExecutionLedger(engine),
+            scope=scope,
         )
         # The one node the handler factory cannot build: it has to interrupt,
         # and interrupting belongs to the workflow framework, so it is assembled
@@ -196,6 +204,9 @@ def build_task_worker_dependencies(
     )
     worker = TaskWorker(
         registry=registry,
+        # The same object the handlers read. Two scopes would be one Worker
+        # publishing a claim nobody receives, and every node refusing.
+        scope=scope,
         guards=guards,
         approvals=approvals,
         workflow=workflow,
@@ -217,6 +228,7 @@ def build_task_worker_dependencies(
         approvals=approvals,
         guards=guards,
         handlers=handlers,
+        scope=scope,
         worker=worker,
         http=http,
         qdrant=qdrant,
@@ -231,6 +243,7 @@ def _build_real_handlers(
     events: PostgresEventLog,
     registry: PostgresTaskRegistry,
     ledger: PostgresToolExecutionLedger,
+    scope: TaskExecutionScope,
 ) -> tuple[Mapping[TaskNodeId, NodeHandler], httpx.AsyncClient, AsyncQdrantClient]:
     """Assemble Task evidence and model execution without a demo fallback."""
 
@@ -340,6 +353,7 @@ def _build_real_handlers(
         ),
         cancellation_for=lambda _: NullCancellationToken(),
         principal_for=restore_submitted_principal,
+        scope=scope,
     )
     handlers = build_task_v1_handlers(
         executor=executor,

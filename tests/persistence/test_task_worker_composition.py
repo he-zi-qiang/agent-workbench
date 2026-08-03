@@ -138,6 +138,10 @@ def test_demo_worker_composition_claims_and_completes_a_submitted_task(
             task_input=TaskInput(objective="Draft a retrieval architecture brief."),
             submission_dedup_key="dedup_1",
         )
+        # One claim channel for the process. The Worker publishes into it and
+        # the real handler set reads out of it; two objects would be a Worker
+        # announcing its lease to nobody, and every node refusing.
+        assert dependencies.worker.scope is dependencies.scope
         outcome = await dependencies.worker.run_once()
         assert outcome is not None
         assert outcome.task.task_id == submitted.task_id

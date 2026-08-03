@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -53,8 +53,9 @@ from agent_workbench.ports.research import (
     ExternalEvidenceSkipped,
     ExternalEvidenceToolPort,
 )
-from agent_workbench.ports.task_registry import TaskRegistry, TaskRun
+from agent_workbench.ports.task_registry import ExecutionLease, TaskRegistry, TaskRun
 from agent_workbench.runtime import ToolGateway
+from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.task_handlers import (
     TaskNodeHandler,
     TaskNodeInvocationProvider,
@@ -66,6 +67,22 @@ from agent_workbench.workflows.task_handlers import (
 OWNER = PrincipalContext(
     tenant_id="tenant_a", principal_id="user_1", scopes=("external:search",)
 )
+
+SCOPE = TaskExecutionScope()
+
+#: The claim a Worker would be holding while these nodes run. Handlers are
+#: entered under it because that is the only way they are ever entered.
+LEASE = ExecutionLease(task_id="task_1", worker_id="worker_1", epoch=1)
+
+
+def _run(scenario: Any) -> Any:
+    """Run one scenario the way a Worker runs a graph: inside its claim."""
+
+    async def under_claim() -> Any:
+        with SCOPE.executing(LEASE):
+            return await scenario()
+
+    return asyncio.run(under_claim())
 
 
 @dataclass
@@ -197,7 +214,10 @@ def _task() -> TaskRun:
         submitted_policy_revision="policy-v1",
         submitted_policy_fingerprint="f" * 16,
         submitted_authorization_envelope=AuthorizationEnvelope(),
-        status="queued",
+        status="running",
+        lease_owner=LEASE.worker_id,
+        lease_epoch=LEASE.epoch,
+        lease_until=now,
         available_at=now,
         created_at=now,
         updated_at=now,
@@ -220,6 +240,7 @@ def _provider(registry: _Registry) -> TaskNodeInvocationProvider:
         ),
         cancellation_for=lambda _: NullCancellationToken(),
         principal_for=lambda _: OWNER,
+        scope=SCOPE,
     )
 
 
@@ -268,7 +289,7 @@ def test_research_artifacts_feed_bounded_untrusted_evidence_into_synthesis() -> 
         assert result["draft_ref"]
         return refs, executor.requests[0], internal.confirm_calls
 
-    refs, request, confirms = asyncio.run(scenario())
+    refs, request, confirms = _run(scenario)
 
     assert len(refs) == 2
     assert request.trace.graph_node_id == "synthesize"
@@ -294,7 +315,7 @@ def test_synthesis_fails_closed_if_internal_revision_changes_after_model_run() -
         assert internal.confirm_calls == 2
         return executor
 
-    executor = asyncio.run(scenario())
+    executor = _run(scenario)
     assert len(executor.requests) == 1
 
 
@@ -336,7 +357,7 @@ def test_a_general_task_without_kb_or_external_grant_still_synthesizes_honestly(
         assert result["draft_ref"]
         return executor.requests[0]
 
-    request = asyncio.run(scenario())
+    request = _run(scenario)
 
     assert "No retrieved evidence is available" in request.messages[-1].text()
     assert "do not invent citations" in request.messages[-1].text()
