@@ -24,6 +24,7 @@ from agent_workbench.adapters.langgraph.workflow import LangGraphTaskWorkflow
 from agent_workbench.adapters.memory.artifact_store import InMemoryArtifactStore
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.domain.errors import ErrorInfo
+from agent_workbench.domain.messages import user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import (
     AgentOutcome,
@@ -31,6 +32,7 @@ from agent_workbench.domain.runs import (
     BudgetUsage,
     RunBudget,
     TokenUsage,
+    TraceContext,
 )
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.ports.cancellation import NullCancellationToken
@@ -39,6 +41,7 @@ from agent_workbench.ports.task_registry import ExecutionLease, TaskRegistry, Ta
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError, TaskRunContext
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.task_handlers import (
+    BoundedParallelExecutor,
     StructuredOutputError,
     TaskExportHandlers,
     TaskExportPreconditionError,
@@ -604,3 +607,63 @@ def test_a_node_reached_outside_any_claim_refuses_to_run() -> None:
     # Deliberately not ``_run``: this scenario is the one that runs outside a
     # claim, and wrapping it in one would test nothing.
     asyncio.run(scenario())
+
+
+def test_no_more_agent_invocations_run_at_once_than_the_deployment_allows() -> None:
+    """``max_parallel_agent_invocations`` used to describe rather than bound.
+
+    The fixed graph fans out to two researchers and LangGraph runs them
+    concurrently, so the configured number happened to match what the graph did.
+    A third branch would have raised the real parallelism and left the setting
+    reading the same, which is the difference between a ceiling and a comment.
+
+    Both directions in one test: at a limit of one the two invocations cannot
+    overlap, and at two they do -- so what is measured is the bound and not the
+    executor being serial anyway.
+    """
+
+    async def peak_overlap(limit: int) -> int:
+        overlapping = 0
+        peak = 0
+        started = asyncio.Event()
+
+        class _Overlapping:
+            async def run(
+                self, request: AgentRunRequest, emit: Any, cancellation: Any
+            ) -> AgentOutcome:
+                nonlocal overlapping, peak
+                overlapping += 1
+                peak = max(peak, overlapping)
+                started.set()
+                # Long enough for the other invocation to arrive if it may.
+                await asyncio.sleep(0.02)
+                overlapping -= 1
+                return AgentOutcome(
+                    agent_run_id=request.trace.agent_run_id,
+                    status="completed",
+                    stop_reason="completed",
+                    output_text="text-only result",
+                )
+
+        bounded = BoundedParallelExecutor(
+            cast("Any", _Overlapping()), max_parallel=limit
+        )
+        request = AgentRunRequest(
+            trace=TraceContext(agent_run_id="run_1"),
+            run_kind="task",
+            stream_id="thread_1",
+            principal=PrincipalContext(tenant_id="tenant_a", principal_id="user_1"),
+            envelope=AuthorizationEnvelope(),
+            budget=RunBudget(max_steps=2, max_tool_calls=2),
+            messages=(user_message("go"),),
+        )
+        await asyncio.gather(
+            *(
+                bounded.run(request, cast("Any", object()), NullCancellationToken())
+                for _ in range(2)
+            )
+        )
+        return peak
+
+    assert asyncio.run(peak_overlap(1)) == 1
+    assert asyncio.run(peak_overlap(2)) == 2

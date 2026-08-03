@@ -69,10 +69,12 @@ from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 from agent_workbench.workers.task import TaskWorker
+from agent_workbench.workflows.agent_profiles import assert_within_static_limit
 from agent_workbench.workflows.approval import TaskApprovalGate
 from agent_workbench.workflows.demo_handlers import build_demo_v1_handlers
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.task_handlers import (
+    BoundedParallelExecutor,
     TaskExportHandlers,
     TaskNodeInvocationProvider,
     TaskResearchHandlers,
@@ -253,11 +255,18 @@ def _build_real_handlers(
         or config.embedding is None
         or config.retrieval is None
         or config.runtime is None
+        or config.multi_agent is None
     ):
         raise RealTaskHandlersUnavailableError(
-            "real Task handlers require model, qdrant, embedding, retrieval and "
-            "runtime configuration; use project_task_worker or --demo"
+            "real Task handlers require model, qdrant, embedding, retrieval, "
+            "runtime and multi-agent configuration; use project_task_worker "
+            "or --demo"
         )
+
+    # Before anything is built. The limit describes the compiled graph's shape,
+    # so a graph that outgrew what this deployment budgeted for must stop the
+    # process rather than be discovered one expensive Task at a time.
+    assert_within_static_limit(config.multi_agent.static_agent_node_limit)
 
     main_profile = config.model.profiles.get("main")
     if main_profile is None:
@@ -328,19 +337,25 @@ def _build_real_handlers(
     policy_identity = (
         f"{config.task.policy_revision}:{config.task.policy_fingerprint[:16]}"
     )
-    executor = ClaudeLikeAgentRuntime(
-        model=model,
-        gateway=gateway,
-        policy_identity=policy_identity,
-        model_label=main_profile.model_id,
-        model_timeout_seconds=config.runtime.model_timeout_seconds,
-        max_parallel_read_tools=config.runtime.max_parallel_read_tools,
+    executor = BoundedParallelExecutor(
+        ClaudeLikeAgentRuntime(
+            model=model,
+            gateway=gateway,
+            policy_identity=policy_identity,
+            model_label=main_profile.model_id,
+            model_timeout_seconds=config.runtime.model_timeout_seconds,
+            max_parallel_read_tools=config.runtime.max_parallel_read_tools,
+        ),
+        max_parallel=config.multi_agent.max_parallel_agent_invocations,
     )
     invocations = TaskNodeInvocationProvider(
         registry=registry,
         budget=RunBudget(
             max_steps=config.runtime.max_steps,
             max_tool_calls=config.runtime.max_tool_calls,
+            # One agent's ceiling, not the Task's. Without it a single
+            # invocation could spend everything the Task was allowed.
+            max_total_tokens=config.multi_agent.max_tokens_per_agent_invocation,
         ),
         sink_for=lambda context: ScopedEventSink(
             events,

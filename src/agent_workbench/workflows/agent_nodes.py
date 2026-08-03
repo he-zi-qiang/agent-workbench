@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from agent_workbench.domain.identifiers import Identifier
-from agent_workbench.domain.messages import Message, user_message
+from agent_workbench.domain.messages import Message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import (
     AgentOutcome,
@@ -32,6 +32,12 @@ from agent_workbench.domain.tasks import TaskNodeId, TaskState
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
+from agent_workbench.workflows.agent_profiles import (
+    ProjectedContext,
+    build_agent_request,
+    profile_for,
+    render_projection,
+)
 from agent_workbench.workflows.research_graph import (
     ResearchContribution,
     evolve,
@@ -44,25 +50,6 @@ from agent_workbench.workflows.research_graph import (
 ARTIFACT_PRODUCING_NODES: Final[frozenset[TaskNodeId]] = frozenset(
     {"understand", "research_internal", "research_external", "synthesize"}
 )
-
-_SYSTEM_PROMPTS: Final[dict[TaskNodeId, str]] = {
-    "understand": (
-        "Restate the objective as the concrete question to answer. "
-        "Record what would count as an answer and what is out of scope."
-    ),
-    "research_internal": (
-        "Gather evidence for the objective from the authorized knowledge base. "
-        "Record only what the retrieved passages support."
-    ),
-    "research_external": (
-        "Gather evidence for the objective from sources outside the knowledge "
-        "base. Record only what those sources support."
-    ),
-    "synthesize": (
-        "Write the report the plan and the gathered evidence support. "
-        "Attribute every claim to the evidence it rests on."
-    ),
-}
 
 
 class AgentNodeFailedError(RuntimeError):
@@ -108,38 +95,39 @@ class TaskRunContext:
 
 
 def node_prompt(node: TaskNodeId, state: TaskState) -> Message:
-    """Project the state into the one message this node's run starts from.
+    """Project the state into the messages this node's run starts from.
 
-    A projection, not a transcript.  The node sends the objective and the plan
-    it is working against, never the accumulated output of earlier nodes:
-    those live in the artifact store, and copying them into a prompt would
-    make context grow with the graph instead of with the question.
+    A projection, not a transcript, and the profile decides which one: the
+    node sends what its agent admits and never the accumulated output of
+    earlier nodes, because those live in the artifact store and copying them
+    into a prompt makes context grow with the graph instead of with the
+    question.
+
+    Returns the first message. Kept for the callers that want just the
+    projection text; a run's full message list comes from ``build_request``,
+    which is the only thing that may add the writer's evidence block.
     """
 
-    lines = [f"Objective: {state.objective}"]
-    if state.plan:
-        lines.append("Plan:")
-        lines.extend(f"{step.sequence}. {step.objective}" for step in state.plan)
-    return user_message("\n".join(lines))
+    return render_projection(profile_for(node), state)[0]
 
 
 def build_request(
     node: TaskNodeId,
     state: TaskState,
     context: TaskRunContext,
+    offered: ProjectedContext | None = None,
 ) -> AgentRunRequest:
-    """Assemble one node's run request from the state and the Task's context."""
+    """Assemble one node's run request under its agent's declared boundary."""
 
-    return AgentRunRequest(
+    return build_agent_request(
+        profile_for(node),
+        state,
         trace=context.trace,
-        run_kind="task",
         stream_id=context.stream_id,
         principal=context.principal,
         envelope=context.envelope,
         budget=context.budget,
-        system_prompt=_SYSTEM_PROMPTS[node],
-        messages=(node_prompt(node, state),),
-        tool_names=(),
+        offered=offered,
     )
 
 

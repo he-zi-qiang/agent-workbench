@@ -1483,6 +1483,9 @@ baseline，不是取消框架集成的最终决定。LlamaIndex Adapter 与 RAGA
 | PostgreSQL checkpointer / Task Worker / 查询接口 | ✓ | ✓ | ✓ | ✓ |
 | PostgreSQL Task coordination（claim/lease/fencing/recovery） | ✓ | ✓ | ✓ | ✓ |
 | Multi-Agent（固定图并行 + 上下文隔离；无动态 supervisor） | ✓ | 部分 | ✓ | ✓ |
+| ├ Agent profile registry、准入式上下文投影、权限取交集 | ✓ | ✓ | ✓ |  |
+| ├ 静态节点数断言、并行调用上限、单次调用 token 上限 | ✓ | ✓ | ✓ |  |
+| └ 持久 attempt/budget 账本、显式部分失败、父→子取消 | ✓ |  |  |  |
 | React 浏览器控制台（Chat / Work 主模式，同源 `/ui`） | ✓ | ✓ | ✓ | ✓ |
 | 本机 Compose 部署（双 Worker，一条命令） | ✓ | ✓ | ✓ | ✓ |
 | OpenTelemetry trace/metrics（Port + OTLP Adapter） | ✓ | ✓ | ✓ |  |
