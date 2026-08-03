@@ -314,7 +314,7 @@
       ]
     },
     {
-      "owner": "application.multi_agent.supervisor",
+      "owner": "workflows.agent_profiles",
       "lifecycle": "task_snapshot",
       "fields": [
         "multi_agent.enabled",
@@ -323,8 +323,14 @@
         "multi_agent.worker_executor",
         "multi_agent.static_agent_node_limit",
         "multi_agent.max_parallel_agent_invocations",
-        "multi_agent.max_agent_invocation_attempts_per_task",
         "multi_agent.max_tokens_per_agent_invocation"
+      ]
+    },
+    {
+      "owner": "application.multi_agent.attempt_ledger",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "multi_agent.max_agent_invocation_attempts_per_task"
       ]
     },
     {

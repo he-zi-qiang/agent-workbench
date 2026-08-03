@@ -1,5 +1,60 @@
 # 实施状态
 
+## 2026-08-03 Multi-Agent 第一刀：Agent 成为声明，而不是三个模块的巧合（未合并）
+
+按基线/计划对照的第二个缺口。WP11 的现状是"部分"，但差距比这两个字大：图从写下来那天
+起就有六个调模型的节点，而每一个都自己拼请求——system prompt 来自一个模块的私有字典，
+消息来自另一个模块的私有函数，evidence 段由第三个模块在请求建好之后追加。**没有任何
+地方给这些 Agent 命名，也没有任何地方声明它们各自能读什么。** 于是"Agent 上下文互相
+隔离"是三段代码碰巧这么写的产物——这种性质会一直成立，直到有人加一个节点。
+
+**Profile 把它变成声明。** `workflows/agent_profiles.py` 里六个 profile
+（framer / planner / researcher_internal / researcher_external / writer / critic）
+各自声明身份、prompt、可用工具，以及**准许读入的输入**。给一个 profile 送它没有声明
+的输入会被拒绝而不是静默塞进 prompt，因此隔离在每次 Agent 运行都要经过的那一个点上被
+强制执行：
+
+* 两个 researcher 都不准 `evidence`——它们**产出**证据；能读到对方结果的 researcher
+  会把并行扇出变成"带额外步骤的串行"，也会让扇入 reducer 承诺互相独立的两个结果变成
+  相关的；
+* critic 准 draft，不准 evidence。能读证据的 critic 是在评审研究，而研究是 writer 的
+  输入、且已经发生过了；
+* 没有 profile 准读更早节点的产出。那些在 artifact store 里，抄进 prompt 会让上下文
+  随图增长而不是随问题增长。
+
+**权限只会收窄。** profile 的工具清单是它自己的上限，与 Task 提交时的授权信封取交集；
+`permitted_tools` 里没有任何一条路径能返回信封未授权的工具——"子 Agent 权限大于父
+Task"因此是写不出来的，而不是靠评审拦住的。v1 六个 Agent 的工具清单都是空的：外部效果
+走专用端口与节点，把工具塞进研究 Agent 的模型循环，正是 gateway、账本和审批节点存在
+的理由所要挡住的事。
+
+**三个配置字段第一次有了消费者。** `multi_agent` 的四个预算字段此前在 `src/` 里
+**零消费者**，配置描述了一个不存在的系统：
+
+| 字段 | 之前 | 现在 |
+|---|---|---|
+| `static_agent_node_limit` | 无人读取 | 装配时断言 profile 数不超过它，超了进程不启动 |
+| `max_parallel_agent_invocations` | 无人读取 | `BoundedParallelExecutor` 的信号量真正限流 |
+| `max_tokens_per_agent_invocation` | 无人读取 | 进入每次调用的 `RunBudget.max_total_tokens` |
+| `max_agent_invocation_attempts_per_task` | 无人读取 | **仍然无人读取**，见下 |
+
+第二条以前是"描述"而不是"上限"：图扇出两个 researcher，LangGraph 并发跑它们，配置里的
+数字碰巧等于图当时的行为——加第三条分支会让真实并行度上去而设置读起来一模一样。测试用
+限流 1 和限流 2 各跑一次并测峰值重叠，因此测的是上限，不是"执行器本来就串行"。
+
+```text
+ruff / pyright                       全过
+pytest（真实 PostgreSQL + Qdrant）   1845 passed / 11 skipped
+```
+
+四条新性质都做了破坏验证：删掉 evidence 准入检查、把交集换成 profile 自己的清单、去掉
+信号量，对应测试分别变红。
+
+**这一刀没做的（WP11 剩余）：**`max_agent_invocation_attempts_per_task` 要跨 retry 与
+reclaim 计数，需要持久的 per-Task 计数器而不是传进进程的一个数字——把它投影进配置只会
+让它离"看起来被执行了"更近一步，所以它留在 settings 里不投影。同样留给下一刀的还有
+partial failure 的显式表达、父 Task → 子调用的取消传播。能力表那一行仍是"部分"。
+
 ## 2026-08-03 证据包与它暴露出来的收集端（未合并）
 
 按基线/计划对照出的四个缺口，从投入产出最高的一个开始：计划 §11 从写下那天起

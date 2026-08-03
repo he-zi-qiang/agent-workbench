@@ -246,6 +246,29 @@ class AgentRuntimeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class MultiAgentConfig:
+    """The ceilings on the fixed graph's agents.
+
+    Three fields, and deliberately not the fourth.
+    ``max_agent_invocation_attempts_per_task`` counts attempts *across* retries
+    and reclaims, so it needs a durable per-Task counter rather than a number
+    passed into a process; projecting it here would put it one import away from
+    looking enforced. It stays in settings, unprojected, until the repository
+    that can honour it exists.
+    """
+
+    #: How many agent nodes the compiled graph may declare. Checked at assembly:
+    #: it describes the graph's shape, and a graph that exceeds it should stop
+    #: the process rather than surprise one Task at a time.
+    static_agent_node_limit: int
+    #: How many agent invocations this Worker runs at once.
+    max_parallel_agent_invocations: int
+    #: The token ceiling for one invocation, which is what stops a single agent
+    #: from spending a Task's whole allowance.
+    max_tokens_per_agent_invocation: int
+
+
+@dataclass(frozen=True, slots=True)
 class TaskWorkerRuntimeConfig:
     """The minimum configuration of the current single-Worker process.
 
@@ -267,6 +290,7 @@ class TaskWorkerRuntimeConfig:
     embedding: EmbeddingConfig | None = None
     retrieval: RetrievalConfig | None = None
     runtime: AgentRuntimeConfig | None = None
+    multi_agent: MultiAgentConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +425,15 @@ def project_task_worker(
             max_tool_calls=settings.runtime.max_tool_calls,
             model_timeout_seconds=float(settings.runtime.model_timeout_seconds),
             max_parallel_read_tools=settings.runtime.max_parallel_read_tools,
+        ),
+        multi_agent=MultiAgentConfig(
+            static_agent_node_limit=settings.multi_agent.static_agent_node_limit,
+            max_parallel_agent_invocations=(
+                settings.multi_agent.max_parallel_agent_invocations
+            ),
+            max_tokens_per_agent_invocation=(
+                settings.multi_agent.max_tokens_per_agent_invocation
+            ),
         ),
     )
 
@@ -555,6 +588,7 @@ __all__ = [
     "IngestionWorkerRuntimeConfig",
     "ModelConfig",
     "ModelProfileConfig",
+    "MultiAgentConfig",
     "QdrantConfig",
     "RerankerConfig",
     "RetrievalConfig",
