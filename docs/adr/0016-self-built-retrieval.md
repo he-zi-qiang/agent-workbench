@@ -1,8 +1,12 @@
-# ADR-016：自研 ingestion 与 retrieval，取代 ADR-003
+# ADR-016：自研 ingestion 与 retrieval（已被 ADR-017 取代）
 
 - 决策点：复核 ADR-003 与实际实现的差异
-- 状态：**接受**，并**取代 [ADR-003](../architecture-baseline.md#adr-003llamaindex-只承担-rag-ingestion-与-retrieval)**
+- 状态：**已被 [ADR-017](./0017-llamaindex-primary-rag.md) 取代**（2026-08-02）
 - 日期：2026-08-01
+
+> 本文保留为历史决策记录，不再代表当前技术路线。当前决定是由 LlamaIndex
+> 承担 ingestion/retrieval 框架职责，并用 RAGAS 做离线生成质量评测；现有自研路径
+> 只作为迁移期实现与对照基线，不能再写成项目最终框架口径。
 
 ## 背景：一条基线自己和自己矛盾
 
