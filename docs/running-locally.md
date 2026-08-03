@@ -15,17 +15,26 @@ scripts/dev.sh worker     # Task worker（--demo 图）
 
 ## 浏览器控制台
 
-API 加 `--web-dir ./web` 就在**同源**的 `/ui` 下挂上一个四页控制台
-（Search / Chat / Tasks / Approvals）：
+React 控制台先做锁定构建，再由 API 在**同源**的 `/ui` 下提供 Chat / Work 主界面
+以及 Knowledge / Approvals / Evaluation / System 辅助页：
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m agent_workbench.apps.api.main --web-dir ./web
+corepack enable
+corepack prepare pnpm@11.9.0 --activate
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web build
+PYTHONPATH=src .venv/bin/python -m agent_workbench.apps.api.main --web-dir ./web/dist
 open http://127.0.0.1:8000/ui/
 ```
 
+开发时也可以让 API 运行在 8000，再执行 `pnpm --dir web dev` 并打开
+`http://127.0.0.1:5173/ui/`。Vite 会同源代理浏览器看到的 `/v1` 与 `/health`；API
+仍不需要开放 CORS。
+
 不给这个参数就**根本不挂**——和 `--without-chat` 是同一条原则：一个能打开、然后
 每个请求都失败的页面，比一次 404 更糟。目录不存在或没有 `index.html` 会**拒绝启动**，
-而不是等到有人用浏览器发现。
+而不是等到有人用浏览器发现。不要把源码目录 `./web` 直接交给 `--web-dir`：Vite
+源码不是可部署静态产物，启动检查会要求只存在于生产构建根目录的 manifest 标记。
 
 三件值得知道的事：
 

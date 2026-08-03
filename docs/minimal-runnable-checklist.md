@@ -19,12 +19,15 @@
 - [x] **五条命令起全套 + 一条命令走查**（`scripts/dev.sh`、`scripts/smoke_local.py`）
 
 当前 `--without-chat` 实际服务的路由：`health`、`uploads`、`artifacts`、`tasks`、
-`approvals`、`search`（有检索栈时）。加 `--web-dir ./web` 再挂一个同源控制台。
+`approvals`、`search`（有检索栈时）。构建前端后加 `--web-dir ./web/dist` 再挂同源控制台。
 
-- [x] **浏览器控制台**（2026-08-01 实测）Chat / Work / Search / Approvals 四页，
-      同源挂在 `/ui`，无构建步骤、无外部依赖。Chat 与 Work 是**转录流**：节点一行
-      一个、工具失败缩进在下面、审批就地给按钮。事件流用 `fetch` 读——`EventSource`
-      设不了身份头，根本没法认证。见 [running-locally.md](./running-locally.md#浏览器控制台)。
+- [x] **React 浏览器控制台**（2026-08-02）以 Chat / Work 为两条一级工作流，并提供
+      Knowledge / Approvals / Evaluation / System。生产构建同源挂在 `/ui`；Chat
+      使用 fetch SSE、durable cursor、安全答案发布与本机会话入口，Work 使用增量
+      timeline、权威审批记录和严格关联的最终 artifact。前端有独立 lockfile、ESLint、
+      TypeScript、Vitest 与 production build 门禁。见
+      [前端设计基线](./frontend-design.md)和
+      [本地运行说明](./running-locally.md#浏览器控制台)。
 
 ---
 

@@ -176,7 +176,7 @@ bootstrap ───────────────→ 仅负责组装
 
 ```text
 agent-workbench/
-├── web/                           # React + TypeScript，后期加入
+├── web/                           # React + TypeScript，已实现 Chat / Work 控制台
 ├── src/agent_workbench/
 │   ├── apps/                      # 进程入口（打包进 wheel）
 │   │   ├── api/                   # FastAPI、REST、SSE
@@ -1295,11 +1295,8 @@ v1 没有进程/容器级不可信代码执行，因此只能称为“Tool 权�
 
 ### ADR-003：LlamaIndex 只承担 RAG ingestion 与 retrieval
 
-- 状态：**已被 [ADR-016](./adr/0016-self-built-retrieval.md) 取代**（2026-08-01）。
-  ingestion 与 retrieval 全部自研并已实测（38 题 gold set，MRR 0.960）；仓库没有
-  `llama_index` 依赖，架构守卫把它列为核心层禁止导入。原文保留在下面，因为它是
-  v1.3 成文时的边界，也是那次决定确实做过的记录——取代它比删掉它诚实。
-- 原状态：接受。
+- 状态：**接受**；由 [ADR-017](./adr/0017-llamaindex-primary-rag.md) 重新确认
+  （2026-08-02）。ADR-016 曾按当时实现取代本条，现已作为历史决定保留。
 - 原因：利用其 ingestion、index、retriever 能力，同时保留核心决策权。
 - 后果：LlamaIndex Document、Node、Retriever 必须经过 Adapter；其 QueryEngine/Agent 不生成最终回答；hybrid fusion 只由 Qdrant Query API 执行一次。
 
@@ -1435,12 +1432,11 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 实现**（它当时写着「没有 Task Registry、Task Worker 或重启恢复证据」），本轮按实际
 代码逐条订正。
 
-**框架口径（[ADR-016](./adr/0016-self-built-retrieval.md)）：自研 + 有限借用。**
-实际借用三处，每处只在一个位置：LangGraph 作 Task 控制平面；`langchain-core` 的工具
-契约，让第三方工具变成普通 `ToolBinding`（没有 executor / agent / chain）；以及
-Qdrant、pypdf 这类基础设施。ingestion 与 retrieval 全部自研，38 题 gold set 上
-MRR 0.960 / recall@1 0.947 / 61ms。LlamaIndex、CrewAI、RAGAS 没有实现，**也不打算在
-没有「它比自研强」的评测结果之前实现**——这正是 §15 最后一条要求解释的那件事。
+**框架口径（[ADR-017](./adr/0017-llamaindex-primary-rag.md)）：自研 Runtime +
+LangGraph + LlamaIndex + RAGAS。** 当前自研 ingestion/retrieval 已有 38 题 gold set
+证据（MRR 0.960 / recall@1 0.947 / 61ms），但它是 LlamaIndex 迁移的 reference
+baseline，不是取消框架集成的最终决定。LlamaIndex Adapter 与 RAGAS runner 在实际代码
+和测试落地前仍保持 Planned。
 
 门禁（真实 PostgreSQL 16 + Qdrant）：`1789 passed / 11 skipped`；无外部服务
 `1234 passed / 566 skipped`。两者是同一套测试的两种环境，不能相加。剩余 11 项跳过
@@ -1476,7 +1472,7 @@ MRR 0.960 / recall@1 0.947 / 61ms。LlamaIndex、CrewAI、RAGAS 没有实现，*
 | Chat 固定 lease、原子 `ChatTurnExpired`、terminal-only reaper 与 pending 发布恢复 | ✓ | ✓ | ✓ |  |
 | `knowledge_search` Tool Adapter（已实现，未装配进 ChatService） | ✓ | ✓ | ✓ |  |
 | Agentic `knowledge_search` 产品装配 | ✓ | ✓ | ✓ |  |
-| ~~LlamaIndex ingestion/retrieval Adapter~~（ADR-016 取代，不实现） | — | — | — | — |
+| LlamaIndex ingestion/retrieval Adapter（ADR-017） | ✓ |  |  |  |
 | Task 工作流 checkpoint-safe 状态与 `TaskWorkflowPort` | ✓ | ✓ | ✓ |  |
 | 固定研究图的条件路由与确定性 fan-in reducer | ✓ | ✓ | ✓ |  |
 | Task Agent node：产物为 artifact 的四个节点 | ✓ | ✓ | ✓ |  |
@@ -1485,7 +1481,7 @@ MRR 0.960 / recall@1 0.947 / 61ms。LlamaIndex、CrewAI、RAGAS 没有实现，*
 | PostgreSQL checkpointer / Task Worker / 查询接口 | ✓ | ✓ | ✓ | ✓ |
 | PostgreSQL Task coordination（claim/lease/fencing/recovery） | ✓ | ✓ | ✓ | ✓ |
 | Multi-Agent（固定图并行 + 上下文隔离；无动态 supervisor） | ✓ | 部分 | ✓ | ✓ |
-| 浏览器控制台（同源 `/ui`，四页转录式） | ✓ | ✓ | ✓ | ✓ |
+| React 浏览器控制台（Chat / Work 主模式，同源 `/ui`） | ✓ | ✓ | ✓ | ✓ |
 | 本机 Compose 部署（双 Worker，一条命令） | ✓ | ✓ | ✓ | ✓ |
 | OpenTelemetry trace/metrics（Port + OTLP Adapter） | ✓ | ✓ | ✓ |  |
 | PDF 摄取与页码可定位引用 | ✓ | ✓ | ✓ | ✓ |

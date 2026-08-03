@@ -114,9 +114,26 @@ def test_the_api_serves_the_console_from_the_image() -> None:
     startup rather than in a browser.
     """
 
-    assert "COPY --chown=app:app web ./web" in (ROOT / "Dockerfile").read_text(
-        encoding="utf-8"
-    )
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "AS web-build" in dockerfile
+    assert "pnpm install --frozen-lockfile" in dockerfile
+    assert "pnpm build" in dockerfile
+    assert "COPY --from=web-build --chown=app:app /build/web/dist ./web" in dockerfile
     assert "--web-dir /app/web" in (ROOT / "docker/run-api-local.sh").read_text(
         encoding="utf-8"
     )
+
+
+def test_the_api_and_host_proxy_use_distinct_ports() -> None:
+    """The proxy must own the published port and health checks must cross it."""
+
+    compose = _compose()
+    api = compose["services"]["api"]
+
+    assert api["environment"]["AW_API__PORT"] == "8001"
+    assert api["environment"]["LOCAL_PROXY_PORT"] == "8000"
+    assert api["environment"]["LOCAL_PROXY_UPSTREAM_PORT"] == "8001"
+    assert "127.0.0.1:8000/health/ready" in " ".join(api["healthcheck"]["test"])
+
+    proxy = (ROOT / "docker/loopback_proxy.py").read_text(encoding="utf-8")
+    assert 'LOCAL_PROXY_UPSTREAM_PORT", "8001"' in proxy

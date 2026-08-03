@@ -4,6 +4,19 @@
 # publishing outside local Compose.
 FROM ghcr.io/astral-sh/uv:0.11.31 AS uv
 
+FROM node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8 AS web-build
+
+WORKDIR /build/web
+
+RUN corepack enable \
+    && corepack prepare pnpm@11.9.0 --activate
+
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY web ./
+RUN pnpm build
+
 FROM python:3.12.13-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -25,9 +38,9 @@ COPY --chown=app:app config ./config
 COPY --chown=app:app migrations ./migrations
 COPY --chown=app:app src ./src
 COPY --chown=app:app docker ./docker
-# The console. Dependency-free static files, so there is nothing to build --
-# they are copied, not compiled, and the image gains no toolchain.
-COPY --chown=app:app web ./web
+# The browser console is compiled in a disposable Node stage. Only immutable
+# assets enter the Python runtime image; neither source nor node_modules does.
+COPY --from=web-build --chown=app:app /build/web/dist ./web
 
 # ``--frozen`` refuses a lock/source mismatch and ``--no-editable`` ensures
 # the runtime starts from the built package, not a host-mounted checkout.

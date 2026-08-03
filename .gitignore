@@ -22,6 +22,11 @@ build/
 dist/
 htmlcov/
 .coverage
+web/node_modules/
+web/dist/
+web/coverage/
+web/playwright-report/
+web/test-results/
 var/
 artifacts/evidence/
 

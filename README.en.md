@@ -11,10 +11,10 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-07-29, development is on
-`pr-050-postgres-checkpointer`, including the A-F integration increment after
-`5d943af`. It is not a `main` release snapshot, but the integrated tree has
-passed static checks and full PostgreSQL/Qdrant tests.
+As of 2026-08-02, the React increment is on `feat/react-chat-work-ui`, based on
+the completed Task/HITL/side-effect-ledger baseline at `9d05bbd`. Current
+evidence and historical increments are separated in
+[the implementation status](docs/status.md).
 
 Implemented with test evidence:
 
@@ -36,20 +36,25 @@ Implemented with test evidence:
 - a local-only Docker Compose topology for PostgreSQL, Qdrant, migrations, the
   API and explicitly opted-in synthetic workers.
 
-Current validation:
+Validation for this frontend increment:
 
 - Ruff format and lint: passed;
 - Pyright: 0 errors and 0 warnings;
-- Alembic: one head, `0016_task_principal_scopes`;
-- tests without external services: 1054 passed, 409 skipped;
-- tests with real PostgreSQL and Qdrant: 1452 passed, 11 skipped.
+- tests without external services: 1264 passed, 568 environment-gated skips;
+- frontend ESLint, strict TypeScript and production build: passed;
+- Vitest: 45 passed; Playwright desktop/mobile smoke: 2 passed.
+
+The latest full PostgreSQL/Qdrant evidence is recorded separately in
+`docs/status.md`; results from the two environments are not added together.
 
 The remaining boundaries are explicit: durable HITL approval, a real external
 search provider, physical deletion of stale Qdrant points, verifiable
 citations, context compaction, EventLog upcasters/poison-row handling,
 LlamaIndex/LangChain business adapters, the CrewAI comparison, dynamic
-multi-Agent supervision, OpenTelemetry/Langfuse, UI, production identity and
-production deployment are not complete.
+multi-Agent supervision, OpenTelemetry/Langfuse, production identity and
+production deployment are not complete. A React Chat/Work console is now
+implemented; LlamaIndex remains the selected primary RAG integration and RAGAS
+the offline evaluation baseline, but both adapters are still pending evidence.
 
 > **Security warning:** the current identity adapter trusts request headers, so
 > `agent-api` is for controlled local development only and must not be exposed to

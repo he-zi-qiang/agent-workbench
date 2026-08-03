@@ -36,6 +36,9 @@
 3. 实现任何工作包前核对配置契约与对应验收测试；
 4. 合并后只按实施状态和 evidence 证据更新 README 或简历表述。
 
+前端的产品结构、协议边界、响应式策略和验收门禁见
+[前端设计与实现基线](./frontend-design.md)。
+
 ## 当前事实
 
 截至 2026-07-29，最新开发事实来自
@@ -50,17 +53,18 @@
 | C | **完成** | TaskInput Artifact、Task API/CLI、独立 Worker 入口与单 Worker 纵向切片已落地 |
 | D | **主体完成并通过回归** | 真实 handlers、内部研究/evidence、结构化 plan/critic 与 Task 授权上下文已接入；真实外部搜索 Provider 未实现 |
 | E | **主体完成并通过状态测试** | claim、lease/heartbeat/epoch、stale reclaim、retry/dead-letter、execution guard、fenced checkpointer 与确定性 failpoint 已接入 |
-| F | **部分完成** | Qdrant 启动校验、常驻摄取入口及 fencing、生命周期时间线和本机 Compose 已落地 |
+| F | **主体完成** | Qdrant 启动校验、常驻摄取、HITL、OTel、React 控制台、生命周期时间线和本机 Compose 已落地 |
 
-当前明确未完成：HITL Approval 端到端闭环、真实外部搜索、OTel/Langfuse、
-CrewAI 对比、动态 Multi-Agent、UI、生产身份认证和生产部署。LlamaIndex/LangChain
-业务 Adapter、Agentic Retrieval 的最终 evidence gate、旧 Qdrant Point 物理清理、
-历史 token window/compaction 与 EventLog upcaster/poison-row 隔离也仍未形成完整
-产品切片。
+当前明确未完成：真实外部搜索、Langfuse、CrewAI 对比、动态 Multi-Agent、生产身份认证
+和生产部署；LlamaIndex ingestion/retrieval Adapter 与 RAGAS runner 也仍是 Planned。
+旧 Qdrant Point 物理清理、历史 token window/compaction 与 EventLog
+upcaster/poison-row 隔离仍未形成完整产品切片。
 
-最终汇合工作树已经通过 Ruff format/lint、Pyright、Compose 静态校验和唯一 Alembic
-head 检查；无外部服务测试为 `1054 passed / 409 skipped`，真实 PostgreSQL + Qdrant
-测试为 `1452 passed / 11 skipped`。历史测试数字仍只属于各自注明的提交。当前开发
+本次前端增量已经通过 Ruff format/lint、Pyright、Compose 静态校验和无外部服务
+`1264 passed / 568 skipped`；前端 45 个单元测试、2 个桌面/移动浏览器冒烟测试和
+production build 也已通过。真实
+PostgreSQL + Qdrant 的最近一次完整证据及历史测试数字见状态文档，数字不能跨环境相加。
+当前开发
 身份解析器仍信任请求头，API 和 Compose 只允许在 loopback 的受控本机环境使用。完整证据与已知问题见
 [实施状态](./status.md)；A–F 修复前的问题原始快照见
 [2026-07-29 仓库审计](./repository-audit-2026-07-29.md)。

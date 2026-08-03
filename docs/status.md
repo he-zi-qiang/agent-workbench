@@ -1,5 +1,39 @@
 # 实施状态
 
+## 2026-08-02 React Chat / Work 控制台
+
+分支 `feat/react-chat-work-ui` 已把原来的单文件静态原型替换为 React 19、TypeScript、
+Vite 和 pnpm 锁定构建。Chat 与 Work 是两条一级工作流；Knowledge、Approvals、
+Evaluation、System 只承担证据与操作辅助，不伪造后端没有提供的产品状态。
+
+前端直接复用现有 REST/SSE 契约，并守住以下发布边界：Chat 不展示
+`ModelCompleted.text`，只发布 `AnswerCommitted`、`AnswerWithheld` 或已确认完成的同步
+响应；Work 只在 `export_artifact` 调用、产物与后续 `TaskSucceeded` 严格关联后提供最终
+报告。开发 Header 身份、会话本地列表、上传完成不等于已索引等限制均在界面中明确标注。
+
+```text
+ESLint / strict TypeScript              passed
+Vitest                                  45 passed
+Playwright（desktop / mobile）           2 passed
+Vite production build                   passed
+Docker web-build（锁文件冷安装）         passed
+Compose runtime / ready / UI / asset     passed
+桌面 / 390px 移动端浏览器检查            passed，无水平溢出或 JS console error
+pytest（无外部服务）                     1264 passed / 568 skipped
+ruff / pyright                          passed / 0 errors
+```
+
+跳过项需要真实 PostgreSQL、Qdrant 或 BGE 权重；不能把这组无外部服务结果写成状态存储的
+重新验证。LlamaIndex Adapter 与 RAGAS runner 仍按下一节保持 Planned。
+
+## 2026-08-02 RAG 技术路线纠偏（ADR-017）
+
+用户确认项目仍选择 **LlamaIndex** 作为 ingestion/retrieval 主框架，并且需要
+**RAGAS** 离线评测。ADR-017 已取代 ADR-016；现有自研 RAG 代码保留为迁移期 reference
+baseline，不再代表最终框架口径。此变更只纠正文档与展示语义：LlamaIndex Adapter、
+RAGAS runner 仍未实现，能力表保持 Planned，后续必须以依赖、Adapter、contract test
+和同数据集评测作为完成证据。
+
 ## 2026-07-31 Chat 检索与引用（未合并，PR #63）
 
 分支 `pr-051-tool-execution-ledger`。本节记录 3.2 / 3.3；同分支的 2.2 与 3.1 见下两节。

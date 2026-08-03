@@ -4,7 +4,8 @@
 >
 > 日期：2026-07-22
 >
-> 状态：截至 2026-07-28，主分支基线为 `main@341cbf5`。已合入：
+> 状态（历史计划快照；当前进度以 [实施状态](./status.md) 为准）：截至 2026-07-28，
+> 主分支基线为 `main@341cbf5`。已合入：
 > 自研 Runtime、PostgreSQL/Artifact/Document/ACL/Outbox、Dense/Hybrid RAG 与评测、
 > Reranker、固定检索 Chat/SSE、多轮上下文、EventLog 版本化与幂等键、
 > `chat_turns` 请求幂等、原子发布、fixed-lease orphan recovery、

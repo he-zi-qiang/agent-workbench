@@ -74,7 +74,13 @@ services:
     build:
       context: .
     command: ["sh", "/app/docker/run-api-local.sh"]
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      # The application stays on container loopback while the proxy owns the
+      # published port. Giving them distinct ports avoids a hidden bind race.
+      AW_API__PORT: "8001"
+      LOCAL_PROXY_PORT: "8000"
+      LOCAL_PROXY_UPSTREAM_PORT: "8001"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -90,6 +96,8 @@ services:
       test:
         [
           "CMD-SHELL",
+          # Probe the same proxy path Docker NAT uses. A dead proxy must not
+          # leave a deceptively healthy container whose UI is unreachable.
           "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2)\"",
         ]
       interval: 10s

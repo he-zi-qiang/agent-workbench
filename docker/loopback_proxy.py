@@ -15,7 +15,7 @@ import os
 LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = int(os.environ.get("LOCAL_PROXY_PORT", "8000"))
 UPSTREAM_HOST = "127.0.0.1"
-UPSTREAM_PORT = int(os.environ.get("LOCAL_PROXY_UPSTREAM_PORT", "8000"))
+UPSTREAM_PORT = int(os.environ.get("LOCAL_PROXY_UPSTREAM_PORT", "8001"))
 
 
 async def _copy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
