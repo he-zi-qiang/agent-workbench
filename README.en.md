@@ -11,10 +11,11 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-07-29, development is on
-`pr-050-postgres-checkpointer`, including the A-F integration increment after
-`5d943af`. It is not a `main` release snapshot, but the integrated tree has
-passed static checks and full PostgreSQL/Qdrant tests.
+As of 2026-08-03, `main` carries the Task/HITL/side-effect-ledger baseline and
+the three fencing fixes from PR #68; the React increment is on
+`feat/react-chat-work-ui`, built on those same commits. Current evidence and
+historical increments are separated in
+[the implementation status](docs/status.md).
 
 Implemented with test evidence:
 
@@ -33,23 +34,43 @@ Implemented with test evidence:
   fenced LangGraph PostgreSQL checkpointer;
 - deterministic failpoints for claim, graph, checkpoint and final-settlement
   crash windows, plus atomic durable Task lifecycle events;
+- three fences that are no longer satisfied by the thing they check (PR #68):
+  an `intended` row from an older epoch is handed to a human rather than read
+  as permission to dispatch, graph nodes write under the immutable
+  `ExecutionLease` obtained at claim time instead of re-reading whichever epoch
+  is live, and `knowledge_search` journals the passages that were rendered to
+  the model rather than everything retrieval returned;
+- durable HITL approval through a LangGraph interrupt, an authoritative ledger,
+  a versioned decision API and cross-process resume;
+- OpenTelemetry traces and metrics behind a port, with the core importing no
+  SDK, and a LangChain `BaseTool` adapter that enters the same tool gateway;
+- a React Chat/Work console served same-origin by FastAPI, described in
+  [the frontend baseline](docs/frontend-design.md);
 - a local-only Docker Compose topology for PostgreSQL, Qdrant, migrations, the
   API and explicitly opted-in synthetic workers.
 
-Current validation:
+Validation for the current tree:
 
 - Ruff format and lint: passed;
 - Pyright: 0 errors and 0 warnings;
-- Alembic: one head, `0016_task_principal_scopes`;
-- tests without external services: 1054 passed, 409 skipped;
-- tests with real PostgreSQL and Qdrant: 1452 passed, 11 skipped.
+- tests without external services: 1264 passed, 568 environment-gated skips;
+- the same tree against real PostgreSQL and Qdrant: 1821 passed, 11 skipped
+  (the 11 need BGE weights);
+- frontend ESLint, strict TypeScript and production build: passed;
+- Vitest: 45 passed; Playwright desktop/mobile smoke: 2 passed.
 
-The remaining boundaries are explicit: durable HITL approval, a real external
-search provider, physical deletion of stale Qdrant points, verifiable
-citations, context compaction, EventLog upcasters/poison-row handling,
-LlamaIndex/LangChain business adapters, the CrewAI comparison, dynamic
-multi-Agent supervision, OpenTelemetry/Langfuse, UI, production identity and
-production deployment are not complete.
+The two environments are quoted separately and never added together.
+
+The remaining boundaries are explicit: a real external search provider,
+physical deletion of stale Qdrant points, context compaction, EventLog
+upcasters/poison-row handling, the CrewAI comparison, dynamic multi-Agent
+supervision, Langfuse, production identity and production deployment are not
+complete. LlamaIndex is the selected primary RAG integration and RAGAS the
+offline evaluation baseline
+([ADR-017](docs/adr/0017-llamaindex-primary-rag.md)), but both adapters are
+still Planned: the
+self-built ingestion/retrieval path and its 38-question evaluation are a
+runnable migration baseline, not the finished framework integration.
 
 > **Security warning:** the current identity adapter trusts request headers, so
 > `agent-api` is for controlled local development only and must not be exposed to

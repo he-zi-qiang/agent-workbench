@@ -1,5 +1,104 @@
 # 实施状态
 
+## 2026-08-03 三处围栏被自己应该拦的东西满足（已合并 main，PR #68）
+
+三个缺陷，其中两个是同一个缺陷换了件衣服：**围栏在拿它本该检查的东西当通行证**。
+三处都不是"少写了一道校验"，而是校验读到的值来自被校验方。
+
+**1. 已记录的 intent 仍在授权第二次外部副作用。** `record_intent` 找到什么行就返回
+什么行，而 `intended` 行让 `may_dispatch` 为真。于是账本存在的理由本身仍会发生：W1
+写下 intent，导出真的发出去了，W1 在报告结果前死掉；租约过期，W2 领走 Task，走到同
+一个 `operation_key`——被告知"intended，继续"。基线第 9.3 节早就写明这个窗口的正确
+状态是人工核对（`needs_reconciliation`），只是没有任何代码执行这次转换。现在
+`record_intent` 在唯一可能的时刻做它：**epoch 比当前 attempt 更旧的 `intended` 行被
+判给人，而不是判给下一个 Worker**。这是账本唯一一次未被要求就做的状态转换，方向只
+可能是拒绝副作用。规则写在 port 上而不是留给实现自选：一个跳过它的账本能满足其他
+每一条规则，同时把这个洞原样留着。
+
+**2. 被顶替的 Worker 可以借用继任者的 epoch。** 每个节点都向 Registry 问 Task 当前
+的 `lease_epoch`，然后用问到的值去写。租约在图运行途中失效的 Worker 因此读到的是顶
+替它的那个 Worker 的 epoch，而每一次带围栏的写入都拿这个值和"当前租约"比对——当然相
+等，因为它就是刚刚发下来的那个。账本存在的全部目的是拒绝被顶替的 Worker，重读则正
+是被顶替的 Worker 满足它的方式。基线第 9.2 节写的是"匹配 `lease_owner` 与**领取时
+的** `lease_epoch`"，此前只有 Registry 自己的状态转换在遵守，因为只有 Worker 手里有
+`ExecutionLease`。现在 Worker 把它发布出来：`TaskExecutionScope` 把 claim 携带到节
+点，围一次 graph invocation，返回即失效；invocation provider 读回来，并在 Registry
+不同意（owner 不对、epoch 不对、已不是 running）时拒绝执行。身份仍然每次重新解析，
+也必须如此——恢复后的图以 Task **现在**属于谁的身份运行；租约是相反性质的事实，是
+关于**本进程**的断言，是节点唯一不许自己去取的东西。拒绝发生在节点而不只在账本：被
+顶替的 Worker 若只在导出那一步被拦，它已经为一个不属于它的 Task 花掉了模型预算、写
+了 artifact，而只守最后一次写入的围栏会放过它之前的一切。
+
+**3. 引用可以指向没人给模型看过的段落。** `knowledge_search` 把搜索授权到的内容写进
+journal，发布围栏与引用围栏都读这份 journal。它记录的是**整次检索**，渲染出去的却是
+其中一个**子集**——结果预算会丢掉放不下的段落——所以自预算落地那天起，两者就不再是同
+一份清单。而这正是引用围栏唯一的前提：`verify_citations` 只在模型**点名**且**被展示
+过**时才给出引用；journal 里放着更宽的清单，一个模型产出而非读到的 chunk id 就能验
+证通过，并带着本系统的权威回到提问者面前。现在 `_render` 把文本和它由哪些段落构成一
+起返回，下游不必第二次推导预算就知道模型看见了什么；journal 两半都收窄到这份清单——
+引用收窄，是为了让没展示过的 chunk 无法通过验证；authorized revisions 收窄，是因为发
+布围栏问的是答案**建立在**什么之上，从未进入 prompt 的段落不在其中，围它反而会因为一
+份本次运行从未泄露过的文档而拒掉本来正确的答案。
+
+**一个测试在断言缺陷。** `test_the_export_node_passes_the_live_lease_epoch_to_the_ledger`
+把 Registry 行设成 epoch 9、而 Worker 持有另一个 claim，然后**要求**导出以 9 发出。
+它现在是两个测试——写入发生在 Worker 实际持有的 claim 之下，租约已经变更则拒绝——外加
+一个"在完全没有 claim 的情况下到达节点"的用例。
+
+每个新测试都做过破坏验证：逐个还原修复，确认测试变红，再恢复。账本的两个跑在真实
+PostgreSQL 上。整图 handler 测试是"claim 能穿过 LangGraph"的证据——没有 context 传播
+时，它的 export 节点会拒绝而不是导出。
+
+```text
+ruff format / lint                   全过
+pyright                              0 errors
+alembic 唯一 head                    0019_tool_executions
+pytest（真实 PostgreSQL + Qdrant）   1821 passed / 11 skipped
+```
+
+11 项跳过需要 BGE 权重（`embedding` extra）。这组数字取自 `feat/react-chat-work-ui`
+当前工作树，因此同时包含下一节的前端增量；PR #68 自身在 GitHub Actions 的三个
+job（配置/架构/lint/类型/测试、迁移与 PostgreSQL/Qdrant 存储、secret scan）上全绿后
+以 squash 合入 `main`。
+
+**对前一节记录的修正：**2026-07-31 那节写"`RetrievalJournal` 按 run 记录**模型看到
+的**全部证据"。那句话描述的是意图，不是当时的行为——直到这次修复它才为真。历史小节
+按惯例保持原样，事实以本节为准。
+
+## 2026-08-02 React Chat / Work 控制台
+
+分支 `feat/react-chat-work-ui` 已把原来的单文件静态原型替换为 React 19、TypeScript、
+Vite 和 pnpm 锁定构建。Chat 与 Work 是两条一级工作流；Knowledge、Approvals、
+Evaluation、System 只承担证据与操作辅助，不伪造后端没有提供的产品状态。
+
+前端直接复用现有 REST/SSE 契约，并守住以下发布边界：Chat 不展示
+`ModelCompleted.text`，只发布 `AnswerCommitted`、`AnswerWithheld` 或已确认完成的同步
+响应；Work 只在 `export_artifact` 调用、产物与后续 `TaskSucceeded` 严格关联后提供最终
+报告。开发 Header 身份、会话本地列表、上传完成不等于已索引等限制均在界面中明确标注。
+
+```text
+ESLint / strict TypeScript              passed
+Vitest                                  45 passed
+Playwright（desktop / mobile）           2 passed
+Vite production build                   passed
+Docker web-build（锁文件冷安装）         passed
+Compose runtime / ready / UI / asset     passed
+桌面 / 390px 移动端浏览器检查            passed，无水平溢出或 JS console error
+pytest（无外部服务）                     1264 passed / 568 skipped
+ruff / pyright                          passed / 0 errors
+```
+
+跳过项需要真实 PostgreSQL、Qdrant 或 BGE 权重；不能把这组无外部服务结果写成状态存储的
+重新验证。LlamaIndex Adapter 与 RAGAS runner 仍按下一节保持 Planned。
+
+## 2026-08-02 RAG 技术路线纠偏（ADR-017）
+
+用户确认项目仍选择 **LlamaIndex** 作为 ingestion/retrieval 主框架，并且需要
+**RAGAS** 离线评测。ADR-017 已取代 ADR-016；现有自研 RAG 代码保留为迁移期 reference
+baseline，不再代表最终框架口径。此变更只纠正文档与展示语义：LlamaIndex Adapter、
+RAGAS runner 仍未实现，能力表保持 Planned，后续必须以依赖、Adapter、contract test
+和同数据集评测作为完成证据。
+
 ## 2026-07-31 Chat 检索与引用（未合并，PR #63）
 
 分支 `pr-051-tool-execution-ledger`。本节记录 3.2 / 3.3；同分支的 2.2 与 3.1 见下两节。

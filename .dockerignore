@@ -11,10 +11,18 @@ __pycache__/
 .env.*
 !.env.example
 .secrets/
+API key/
+api-key/
+*.key
 var/
 artifacts/
 build/
 dist/
+web/node_modules/
+web/dist/
+web/coverage/
+web/playwright-report/
+web/test-results/
 htmlcov/
 .coverage
 tests/

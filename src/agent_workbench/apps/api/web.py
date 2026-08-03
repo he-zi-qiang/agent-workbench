@@ -42,6 +42,11 @@ WEB_PREFIX: Final[str] = "/ui"
 #: directory somebody pointed at by accident.
 ENTRY_FILE: Final[str] = "index.html"
 
+#: Vite copies this public file to the root of ``dist``. Requiring it keeps the
+#: API from accepting ``web/`` itself, whose entry document points at TSX
+#: source that neither StaticFiles nor a browser can compile.
+BUILD_MARKER: Final[str] = "agent-workbench-console.json"
+
 
 class WebDirectoryError(ValueError):
     """The configured console directory is not one.
@@ -60,6 +65,11 @@ def resolve_web_directory(raw: str) -> Path:
         raise WebDirectoryError(f"the web directory does not exist: {directory}")
     if not (directory / ENTRY_FILE).is_file():
         raise WebDirectoryError(f"the web directory has no {ENTRY_FILE}: {directory}")
+    if not (directory / BUILD_MARKER).is_file():
+        raise WebDirectoryError(
+            f"the web directory is not a production build; missing {BUILD_MARKER}: "
+            f"{directory}"
+        )
     return directory
 
 
@@ -96,6 +106,7 @@ async def _console_redirect() -> RedirectResponse:
 
 
 __all__ = [
+    "BUILD_MARKER",
     "ENTRY_FILE",
     "WEB_PREFIX",
     "WebDirectoryError",

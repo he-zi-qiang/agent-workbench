@@ -1,153 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f6f2" />
+    <meta
+      name="description"
+      content="Agent Workbench：Chat + RAG 与可恢复 Multi-Agent Task 的工程演示台"
+    />
     <title>Agent Workbench</title>
-    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <header class="bar">
-      <span class="brand">Agent Workbench</span>
-      <nav class="tabs" id="tabs">
-        <button data-tab="chat" class="active">Chat</button>
-        <button data-tab="work">Work</button>
-        <button data-tab="search">Search</button>
-        <button data-tab="approvals">
-          Approvals <span id="approval-badge" class="badge" hidden>0</span>
-        </button>
-      </nav>
-      <form id="identity" class="identity" autocomplete="off">
-        <input id="tenant" value="tenant_local" title="x-tenant-id" size="12" />
-        <input id="principal" value="user_local" title="x-principal-id" size="12" />
-        <input
-          id="scopes"
-          value="artifact:export"
-          title="x-principal-scopes — exporting a report needs artifact:export"
-          size="14"
-        />
-        <span id="health" class="pill pill-unknown">·</span>
-      </form>
-    </header>
-
-    <!-- Chat ---------------------------------------------------------------->
-    <main id="tab-chat" class="tab workspace">
-      <aside class="rail">
-        <div class="rail-head">
-          <span>Sessions</span>
-          <button id="chat-new" class="ghost" type="button" title="New session">＋</button>
-        </div>
-        <div id="chat-sessions" class="rail-list"></div>
-        <p class="rail-note">
-          Sessions live in this tab only. The API opens them; nothing lists
-          them, so a reload starts an empty rail.
-        </p>
-      </aside>
-
-      <section class="thread">
-        <div id="chat-transcript" class="transcript">
-          <div class="placeholder">
-            <p>Ask something grounded in an indexed knowledge base.</p>
-            <p class="dim">
-              Answers cite only passages the model was shown <em>and</em> named.
-              An empty citation list is reported as one, never filled in.
-            </p>
-          </div>
-        </div>
-        <form id="chat-form" class="composer">
-          <input id="chat-kb" class="kb" value="kb_local" title="knowledge base id" />
-          <textarea
-            id="chat-question"
-            rows="1"
-            placeholder="Ask…  (⏎ to send, ⇧⏎ for a newline)"
-          ></textarea>
-          <button type="submit" id="chat-send" title="Send">↵</button>
-        </form>
-      </section>
-    </main>
-
-    <!-- Work ---------------------------------------------------------------->
-    <main id="tab-work" class="tab workspace" hidden>
-      <aside class="rail">
-        <div class="rail-head">
-          <span>Runs</span>
-          <select id="work-status" class="ghost-select" title="Filter by status">
-            <option value="">all</option>
-            <option value="queued">queued</option>
-            <option value="running">running</option>
-            <option value="waiting_approval">waiting</option>
-            <option value="succeeded">succeeded</option>
-            <option value="failed">failed</option>
-            <option value="cancelled">cancelled</option>
-            <option value="dead_letter">dead letter</option>
-          </select>
-        </div>
-        <div id="work-list" class="rail-list"></div>
-        <button id="work-more" class="ghost wide" type="button" hidden>older</button>
-      </aside>
-
-      <section class="thread">
-        <div id="work-transcript" class="transcript">
-          <div class="placeholder">
-            <p>Give a durable task an objective.</p>
-            <p class="dim">
-              It runs in a separate worker process: understand → plan → two
-              parallel research branches → synthesize → critic → a human →
-              export. Kill the worker mid-run and another one resumes from the
-              checkpoint.
-            </p>
-          </div>
-        </div>
-        <form id="work-form" class="composer">
-          <input id="work-kb" class="kb" placeholder="kb id (optional)" title="knowledge base id" />
-          <textarea
-            id="work-objective"
-            rows="1"
-            placeholder="Objective…  (⏎ to submit)"
-          ></textarea>
-          <button type="submit" id="work-send" title="Submit">↵</button>
-        </form>
-      </section>
-    </main>
-
-    <!-- Search -------------------------------------------------------------->
-    <main id="tab-search" class="tab panel" hidden>
-      <form id="search-form" class="row">
-        <input id="search-query" placeholder="query" required />
-        <input id="search-kb" value="kb_local" title="knowledge base id" size="14" />
-        <input id="search-topk" type="number" min="1" max="50" value="5" size="3" title="top k" />
-        <button type="submit">Search</button>
-      </form>
-      <p class="dim small">
-        What the model <em>would</em> have been shown. Needs no provider, so a
-        retrieval problem is separable from a generation one. On a
-        memory-constrained machine one query can take a minute.
-      </p>
-      <div id="search-meta" class="meta"></div>
-      <div id="search-results"></div>
-    </main>
-
-    <!-- Approvals ----------------------------------------------------------->
-    <main id="tab-approvals" class="tab panel" hidden>
-      <div class="row">
-        <select id="approval-status">
-          <option value="pending">pending</option>
-          <option value="">every status</option>
-          <option value="approved">approved</option>
-          <option value="rejected">rejected</option>
-        </select>
-        <button id="approval-refresh" type="button">Refresh</button>
-        <button id="approval-more" type="button" hidden>Older</button>
-      </div>
-      <p class="dim small">
-        The same decisions appear inline in a run. This is the queue view: a
-        task that stops for a person stays stopped, and until this list existed
-        the only way to find one was to read a task's timeline for its id.
-      </p>
-      <div id="approval-list"></div>
-    </main>
-
-    <div id="toast" class="toast" hidden></div>
-    <script src="./app.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

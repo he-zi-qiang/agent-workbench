@@ -13,10 +13,9 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-07-29，开发工作位于
-**`pr-050-postgres-checkpointer` 自 `5d943af` 之后的 A–F 汇合增量**；它不是 `main`
-发布快照，但最终汇合工作树已经通过统一的静态、无状态和真实
-PostgreSQL/Qdrant 门禁。当前可确认的实现包括：
+截至 2026-08-03，`main` 已包含 Task/HITL/副作用账本收尾以及三处围栏修复（PR #68）；
+当前前端增量位于 `feat/react-chat-work-ui`，基于同一批提交。最新实现证据和历史增量
+分开记录在 [实施状态](docs/status.md)；下列能力均有代码或测试作为依据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -76,38 +75,48 @@ PostgreSQL/Qdrant 门禁。当前可确认的实现包括：
   PostgreSQL `SKIP LOCKED` claim、lease/heartbeat/epoch、stale reclaim、
   retry/dead-letter、advisory execution guard、fenced checkpointer 和生命周期事件
   已进入工作树，并通过真实 PostgreSQL/Qdrant 全量状态测试；
-- **F 部分完成：**Qdrant 启动校验、常驻摄取 Worker 的
-  claim/heartbeat/fencing、Task 生命周期时间线以及本机 Compose 演示拓扑已经实现。
+- **三处围栏不再由被检查方满足（PR #68）：**epoch 比当前 attempt 更旧的 `intended`
+  行转人工核对而不是被下一个 Worker 读成"还没做过，去做"；图节点在**领取时**拿到的
+  不可变 `ExecutionLease` 下写入，而不是每次向 Registry 问最新 epoch——重读会让失去
+  租约的 Worker 用顶替者的 epoch 通过账本围栏；`knowledge_search` 的 journal 记录
+  **渲染给模型的**段落而不是检索到的全部，否则超出结果预算被丢掉的段落也能通过引用
+  校验；
+- **F 主体完成：**Qdrant 启动校验、常驻摄取 Worker 的 claim/heartbeat/fencing、
+  HITL Approval、OpenTelemetry、React 控制台、Task 生命周期时间线以及本机 Compose
+  演示拓扑已经实现。
 
 这些能力仍有明确边界：
 
 - 旧 Qdrant Point 已被 revision 栅栏阻止读取，但 replace/delete 物理清理尚未完成。
-- Chat 的历史 token window/compaction 和模型实际引用校验尚未实现；
-  `knowledge_search` 尚未装配为可用的 Agentic Retrieval Mode。
+- Chat 的历史 token window/compaction 尚未实现。引用校验与 Agentic Retrieval
+  已经落地：`chat.retrieval_shape` 可选 `fixed`/`agentic`（**默认仍是 `fixed`**，
+  因为固定两步才可复现评测），引用只在模型点名且**被展示过**时给出。
 - EventLog 能拒绝未知 schema version，但尚未实现旧版本 upcaster、poison-row
   隔离/跳过策略。
 - 三臂消融的 `hybrid-rerank` 臂尚未跑：hybrid 在当前 38 题 gold set 上已打满
   1.000，rerank delta 必然为 0；要测出它得先有更难的 gold set。
 - 外部搜索目前只有 provider-neutral Port、Tool/Policy 接入和失败关闭 Adapter，
   **没有真实搜索服务 Provider**。
-- `waiting_approval`、恢复决策和事件类型已经存在，但 Approval 的创建、决策 API、
-  授权复核及恢复闭环尚未贯通，不能表述为已完成 HITL。
-- **框架口径是「自研 + 有限借用」**（[ADR-016](docs/adr/0016-self-built-retrieval.md)）。
-  实际借用三处，每处只在一个位置：LangGraph 作 Task 控制平面；`langchain-core` 的
-  工具契约，让第三方工具变成普通 `ToolBinding`（**没有** executor / agent / chain）；
-  以及 Qdrant、pypdf 这类基础设施。ingestion 与 retrieval 全部自研——一次 RRF 只在
-  Qdrant 里发生、ACL 双检、分块边界进索引身份、sparse 必须来自 FlagEmbedding
-  （[ADR-013](docs/adr/0013-bge-m3-sparse-encoder.md)），这四条都是逐层拆到实现才
-  看清的，且实测 MRR 0.960。
-- **LlamaIndex、CrewAI、RAGAS 没有实现，也不打算在没有「它比自研强」的评测结果之前
-  实现。** ADR-003 曾写着 LlamaIndex 承担 ingestion/retrieval；它已被 ADR-016 取代，
-  原文保留——取代一次走错的决定比删掉它诚实。
+- HITL Approval 已贯通 LangGraph interrupt、权威账本、版本化决定 API、授权复核与
+  跨进程恢复；React Work 页面只按服务端权威记录提供决定操作。
+- **框架口径已由 [ADR-017](docs/adr/0017-llamaindex-primary-rag.md) 锁定：**自研 Agent
+  Runtime、LangGraph Task 控制面、LlamaIndex ingestion/retrieval、Qdrant 单次 RRF，
+  并以 RAGAS 作为离线 LLM-judge 辅助。LlamaIndex 不接管 Tool Loop 或最终回答，
+  应用层继续负责 ACL/revision fence 与答案发布。
+- **当前实现边界：**现有自研 ingestion/retrieval 和 38 题评测仍是可运行的迁移基准；
+  LlamaIndex Adapter 与 RAGAS runner 尚未落地，因此只能标为 Planned，不能把基线选择
+  写成已经完成的框架集成。
 - OpenTelemetry 的 trace/metrics 已落地（Port + OTLP Adapter，核心层不导入 SDK）。
   Langfuse、动态 Multi-Agent supervisor、生产身份认证与生产部署仍未完成。
+- React 控制台已实现 Chat / Work 两条主流程，以及 Knowledge / Approvals /
+  Evaluation / System 辅助页；其前端协议、安全发布语义和响应式设计见
+  [前端设计基线](docs/frontend-design.md)。
 - 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 证明。
-- 当前汇合工作树门禁为：Ruff format/lint 通过，Pyright `0 errors`，无外部服务
-  `1054 passed / 409 skipped`，真实 PostgreSQL + Qdrant
-  `1452 passed / 11 skipped`；剩余状态测试跳过项需要本地真实 BGE 权重。
+- 本次前端增量门禁为：Ruff format/lint 通过、Pyright `0 errors`、无外部服务
+  `1264 passed / 568 skipped`；前端 ESLint/严格 TypeScript/production build 通过，
+  Vitest `45 passed`、Playwright 桌面/移动端 `2 passed`。同一工作树在真实
+  PostgreSQL + Qdrant 下为 `1821 passed / 11 skipped`（11 项需要 BGE 权重）；
+  两组数字来自不同环境，只能分别引用，不能相加。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
 > 受控的本机开发，不得暴露到局域网或公网。监听地址以及 Compose 端口映射均限制为
