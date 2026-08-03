@@ -1428,9 +1428,10 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-截至 2026-08-01，主分支基线为 `main@aac5c4b`。下表在 2026-07-28 之后**大幅落后于
-实现**（它当时写着「没有 Task Registry、Task Worker 或重启恢复证据」），本轮按实际
-代码逐条订正。
+截至 2026-08-03，主分支基线为 `main@a0e1b6c`，包含 OTel/LangChain 工具互操作
+（PR #67）与三处围栏修复（PR #68）。下表在 2026-07-28 之后**大幅落后于实现**
+（它当时写着「没有 Task Registry、Task Worker 或重启恢复证据」），已按实际代码逐条
+订正。
 
 **框架口径（[ADR-017](./adr/0017-llamaindex-primary-rag.md)）：自研 Runtime +
 LangGraph + LlamaIndex + RAGAS。** 当前自研 ingestion/retrieval 已有 38 题 gold set
@@ -1438,8 +1439,9 @@ LangGraph + LlamaIndex + RAGAS。** 当前自研 ingestion/retrieval 已有 38 �
 baseline，不是取消框架集成的最终决定。LlamaIndex Adapter 与 RAGAS runner 在实际代码
 和测试落地前仍保持 Planned。
 
-门禁（真实 PostgreSQL 16 + Qdrant）：`1789 passed / 11 skipped`；无外部服务
-`1234 passed / 566 skipped`。两者是同一套测试的两种环境，不能相加。剩余 11 项跳过
+门禁取自当前工作树 `feat/react-chat-work-ui`（= `main@a0e1b6c` + React 控制台）：
+真实 PostgreSQL 16 + Qdrant `1821 passed / 11 skipped`；无外部服务
+`1264 passed / 568 skipped`。两者是同一套测试的两种环境，不能相加。剩余 11 项跳过
 需要真实 BGE 权重。Ruff、Pyright、三个配置 profile、`uv lock --check`、
 `docker compose config` 均通过，Alembic 唯一 head 为 `0019_tool_executions`。
 
