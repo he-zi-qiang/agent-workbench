@@ -13,9 +13,9 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-08-02，当前前端增量位于 `feat/react-chat-work-ui`，基于已经完成
-Task/HITL/副作用账本收尾的 `9d05bbd`。最新实现证据和历史增量分开记录在
-[实施状态](docs/status.md)；下列能力均有代码或测试作为依据：
+截至 2026-08-03，`main` 已包含 Task/HITL/副作用账本收尾以及三处围栏修复（PR #68）；
+当前前端增量位于 `feat/react-chat-work-ui`，基于同一批提交。最新实现证据和历史增量
+分开记录在 [实施状态](docs/status.md)；下列能力均有代码或测试作为依据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -75,14 +75,22 @@ Task/HITL/副作用账本收尾的 `9d05bbd`。最新实现证据和历史增量
   PostgreSQL `SKIP LOCKED` claim、lease/heartbeat/epoch、stale reclaim、
   retry/dead-letter、advisory execution guard、fenced checkpointer 和生命周期事件
   已进入工作树，并通过真实 PostgreSQL/Qdrant 全量状态测试；
-- **F 部分完成：**Qdrant 启动校验、常驻摄取 Worker 的
-  claim/heartbeat/fencing、Task 生命周期时间线以及本机 Compose 演示拓扑已经实现。
+- **三处围栏不再由被检查方满足（PR #68）：**epoch 比当前 attempt 更旧的 `intended`
+  行转人工核对而不是被下一个 Worker 读成"还没做过，去做"；图节点在**领取时**拿到的
+  不可变 `ExecutionLease` 下写入，而不是每次向 Registry 问最新 epoch——重读会让失去
+  租约的 Worker 用顶替者的 epoch 通过账本围栏；`knowledge_search` 的 journal 记录
+  **渲染给模型的**段落而不是检索到的全部，否则超出结果预算被丢掉的段落也能通过引用
+  校验；
+- **F 主体完成：**Qdrant 启动校验、常驻摄取 Worker 的 claim/heartbeat/fencing、
+  HITL Approval、OpenTelemetry、React 控制台、Task 生命周期时间线以及本机 Compose
+  演示拓扑已经实现。
 
 这些能力仍有明确边界：
 
 - 旧 Qdrant Point 已被 revision 栅栏阻止读取，但 replace/delete 物理清理尚未完成。
-- Chat 的历史 token window/compaction 和模型实际引用校验尚未实现；
-  `knowledge_search` 尚未装配为可用的 Agentic Retrieval Mode。
+- Chat 的历史 token window/compaction 尚未实现。引用校验与 Agentic Retrieval
+  已经落地：`chat.retrieval_shape` 可选 `fixed`/`agentic`（**默认仍是 `fixed`**，
+  因为固定两步才可复现评测），引用只在模型点名且**被展示过**时给出。
 - EventLog 能拒绝未知 schema version，但尚未实现旧版本 upcaster、poison-row
   隔离/跳过策略。
 - 三臂消融的 `hybrid-rerank` 臂尚未跑：hybrid 在当前 38 题 gold set 上已打满
@@ -106,9 +114,9 @@ Task/HITL/副作用账本收尾的 `9d05bbd`。最新实现证据和历史增量
 - 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 证明。
 - 本次前端增量门禁为：Ruff format/lint 通过、Pyright `0 errors`、无外部服务
   `1264 passed / 568 skipped`；前端 ESLint/严格 TypeScript/production build 通过，
-  Vitest `45 passed`、Playwright 桌面/移动端 `2 passed`。真实 PostgreSQL + Qdrant
-  的最近一次完整证据保留在状态文档中，
-  不能与本轮无外部服务数字相加。
+  Vitest `45 passed`、Playwright 桌面/移动端 `2 passed`。同一工作树在真实
+  PostgreSQL + Qdrant 下为 `1821 passed / 11 skipped`（11 项需要 BGE 权重）；
+  两组数字来自不同环境，只能分别引用，不能相加。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
 > 受控的本机开发，不得暴露到局域网或公网。监听地址以及 Compose 端口映射均限制为
