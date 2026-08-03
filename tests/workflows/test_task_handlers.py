@@ -3,6 +3,12 @@
 These tests deliberately use one text-only executor.  The handlers, not a
 fake-specific shortcut, must turn that text into either strict structured state
 or an owned artifact reference.
+
+Every handler here runs inside a claim, because that is the only way a node
+runs in production: the Worker enters the lease it was given and the graph
+executes inside it.  ``_run`` is what makes the tests say that, and it is not
+ceremony -- a node resolved outside a claim refuses, which is its own test
+below.
 """
 
 from __future__ import annotations
@@ -29,19 +35,39 @@ from agent_workbench.domain.runs import (
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
-from agent_workbench.ports.task_registry import TaskRegistry, TaskRun
+from agent_workbench.ports.task_registry import ExecutionLease, TaskRegistry, TaskRun
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError, TaskRunContext
+from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.task_handlers import (
     StructuredOutputError,
     TaskExportHandlers,
     TaskExportPreconditionError,
     TaskExportUnavailableError,
+    TaskLeaseLostError,
+    TaskLeaseUnavailableError,
     TaskNodeInvocationProvider,
     TaskNodeRunFailedError,
     build_task_v1_handlers,
     decode_plan_output,
     decode_review_output,
 )
+
+SCOPE = TaskExecutionScope()
+
+#: What the Worker claimed. Every ``_task()`` row below is this claim as the
+#: Registry holds it, so a test that wants a lost lease changes the row and
+#: leaves the claim alone -- which is the direction the failure comes from.
+LEASE = ExecutionLease(task_id="task_1", worker_id="worker_1", epoch=1)
+
+
+def _run(scenario: Any) -> Any:
+    """Run one scenario the way a Worker runs a graph: inside its claim."""
+
+    async def under_claim() -> Any:
+        with SCOPE.executing(LEASE):
+            return await scenario()
+
+    return asyncio.run(under_claim())
 
 
 class _RecordingExport:
@@ -155,7 +181,10 @@ def _task(**overrides: object) -> TaskRun:
         "submitted_policy_revision": "policy-1",
         "submitted_policy_fingerprint": "f" * 16,
         "submitted_authorization_envelope": AuthorizationEnvelope(),
-        "status": "queued",
+        "status": "running",
+        "lease_owner": LEASE.worker_id,
+        "lease_epoch": LEASE.epoch,
+        "lease_until": now,
         "available_at": now,
         "created_at": now,
         "updated_at": now,
@@ -209,6 +238,7 @@ def _provider(registry: _Registry) -> TaskNodeInvocationProvider:
             tenant_id=task.tenant_id,
             principal_id=task.owner_id,
         ),
+        scope=SCOPE,
     )
 
 
@@ -263,6 +293,15 @@ def test_critic_binds_its_decision_to_the_current_draft_and_revision() -> None:
 
 
 def test_real_handlers_persist_text_only_artifacts_and_complete_the_graph() -> None:
+    """Every node, through the real compiled graph, inside one claim.
+
+    That last part is load-bearing rather than incidental. The claim reaches a
+    node through the execution context the Worker entered, and between the two
+    sits LangGraph -- which runs each node in a task of its own, several
+    suspensions deep. If it did not carry the context, the export node here
+    would refuse instead of exporting, and this is where that would show.
+    """
+
     async def scenario() -> None:
         registry = _Registry(_task())
         store = InMemoryArtifactStore()
@@ -352,7 +391,7 @@ def test_real_handlers_persist_text_only_artifacts_and_complete_the_graph() -> N
             )
         ).kind == "report"
 
-    asyncio.run(scenario())
+    _run(scenario)
 
 
 def test_each_handler_refreshes_registry_context_and_mints_a_new_run_id() -> None:
@@ -378,7 +417,7 @@ def test_each_handler_refreshes_registry_context_and_mints_a_new_run_id() -> Non
         assert second.principal.tenant_id == "tenant_b"
         assert first.trace.agent_run_id != second.trace.agent_run_id
 
-    asyncio.run(scenario())
+    _run(scenario)
 
 
 def test_structured_or_artifact_failure_keeps_the_usage_that_was_spent() -> None:
@@ -404,7 +443,7 @@ def test_structured_or_artifact_failure_keeps_the_usage_that_was_spent() -> None
         assert artifact_error.value.state.budget_usage.steps == 1
         assert len(artifact_error.value.state.agent_outcome_refs) == 1
 
-    asyncio.run(scenario())
+    _run(scenario)
 
 
 # --------------------------------------------------------------------------
@@ -438,7 +477,7 @@ def test_a_worker_without_an_export_capability_fails_rather_than_passes_through(
                 )
             )
 
-    asyncio.run(scenario())
+    _run(scenario)
 
 
 def test_export_without_an_approved_draft_is_a_precondition_failure() -> None:
@@ -459,19 +498,29 @@ def test_export_without_an_approved_draft_is_a_precondition_failure() -> None:
 
         assert exporter.calls == []
 
-    asyncio.run(scenario())
+    _run(scenario)
 
 
-def test_the_export_node_passes_the_live_lease_epoch_to_the_ledger() -> None:
-    """Read from the Registry on every node call, never from the checkpoint.
+def _approved() -> TaskState:
+    return _state(
+        draft_ref="art_draft_1",
+        approval_id="apr_1",
+        approval_decision="approved",
+        review_result=_passing_review("art_draft_1"),
+    )
 
-    An epoch a resume carried forward would let a Worker that lost the Task
-    keep writing under ownership it no longer has.
+
+def test_the_export_node_writes_under_the_claim_the_worker_holds() -> None:
+    """The epoch reaching the ledger is the Worker's, not the Registry's answer.
+
+    They agree here, which is the point of the control group: the write happens,
+    and it happens under epoch 1 because that is the claim this execution was
+    entered with. The test below changes only which of the two the Registry
+    reports.
     """
 
     async def scenario() -> None:
         registry = _Registry(_task())
-        registry.task = registry.task.model_copy(update={"lease_epoch": 9})
         exporter = _RecordingExport()
         handlers = build_task_v1_handlers(
             executor=_TextExecutor(),
@@ -480,16 +529,78 @@ def test_the_export_node_passes_the_live_lease_epoch_to_the_ledger() -> None:
             export=_export(exporter),
         )
 
-        update = await handlers["export"](
-            _state(
-                draft_ref="art_draft_1",
-                approval_id="apr_1",
-                approval_decision="approved",
-                review_result=_passing_review("art_draft_1"),
-            )
-        )
+        update = await handlers["export"](_approved())
 
         assert update == {"export_ref": "art_report_1"}
-        assert exporter.calls[0]["lease_epoch"] == 9
+        assert exporter.calls[0]["lease_epoch"] == LEASE.epoch
 
+    _run(scenario)
+
+
+def test_a_worker_that_lost_the_task_cannot_export_under_its_successor() -> None:
+    """The defect, at the node that performs the irreversible act.
+
+    W1 is inside the graph when its lease lapses and W2 claims the Task at
+    epoch 2. Asked for the epoch, the Registry answers 2 -- so a node that reads
+    it there hands the ledger the claim of the Worker that replaced it, and the
+    ledger's fence, which compares what it is given against the live claim,
+    agrees. The export is dispatched by a Worker with no authority to run at
+    all, and W2 will dispatch it again.
+
+    So the node refuses before the port is reached: what a node executes under
+    is the claim it was entered with, and the Registry is where that claim is
+    *checked*, not where it is obtained.
+    """
+
+    async def scenario() -> None:
+        registry = _Registry(_task())
+        exporter = _RecordingExport()
+        handlers = build_task_v1_handlers(
+            executor=_TextExecutor(),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(registry),
+            export=_export(exporter),
+        )
+        # The reaper ran and somebody else claimed it, mid-invocation.
+        registry.task = registry.task.model_copy(
+            update={"lease_owner": "worker_2", "lease_epoch": 2}
+        )
+
+        with pytest.raises(TaskLeaseLostError):
+            await handlers["export"](_approved())
+
+        # Nothing was exported under anybody's epoch.
+        assert exporter.calls == []
+
+    _run(scenario)
+
+
+def test_a_node_reached_outside_any_claim_refuses_to_run() -> None:
+    """No claim is not "look one up". It is no authority to spend or write.
+
+    This is what a handler set assembled with a scope nothing enters does, and
+    the reason the wiring is safe to get wrong loudly rather than quietly: the
+    failure is every node refusing, not one node running under a stranger's
+    lease.
+    """
+
+    async def scenario() -> None:
+        registry = _Registry(_task())
+        exporter = _RecordingExport()
+        handlers = build_task_v1_handlers(
+            executor=_TextExecutor(),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(registry),
+            export=_export(exporter),
+        )
+
+        with pytest.raises(TaskLeaseUnavailableError):
+            await handlers["export"](_approved())
+        with pytest.raises(TaskLeaseUnavailableError):
+            await handlers["understand"](_state())
+
+        assert exporter.calls == []
+
+    # Deliberately not ``_run``: this scenario is the one that runs outside a
+    # claim, and wrapping it in one would test nothing.
     asyncio.run(scenario())

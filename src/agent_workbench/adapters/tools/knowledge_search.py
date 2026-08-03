@@ -16,6 +16,14 @@ The knowledge base is an argument, because choosing where to look is the
 model's job and looking somewhere it may not read is refused by the same
 PostgreSQL check as everywhere else -- narrowing to a knowledge base is not
 authorization, and does not become authorization by arriving in an argument.
+
+**What is journalled is what was rendered.** A search can retrieve more than
+one tool result may carry, and the passages over the budget are dropped. The
+journal is the run's account of the evidence its answer may rest on, so it
+records the passages that reached the model and not the ones retrieval
+proposed. Recording the wider set made the citation fence accept a citation to
+a passage nobody was shown -- an id the model produced rather than read,
+returned to the asker as a source with this system's authority.
 """
 
 from __future__ import annotations
@@ -26,8 +34,12 @@ from dataclasses import dataclass
 from pydantic import JsonValue
 
 from agent_workbench.application.chat_execution import RetrievalJournal
-from agent_workbench.application.retrieval import RetrievalRequest, RetrievalService
-from agent_workbench.domain.context import ContextPacket
+from agent_workbench.application.retrieval import (
+    AuthorizedContext,
+    RetrievalRequest,
+    RetrievalService,
+)
+from agent_workbench.domain.context import ContextChunk, ContextPacket
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
@@ -111,15 +123,21 @@ class KnowledgeSearchTool:
                 top_k=min(top_k, MAX_TOP_K),
             )
         )
+        rendered = _render(context.packet)
         if self.journal is not None:
-            # Recorded before the result is rendered, so a passage the model is
-            # about to see is already something the fence knows to re-check.
-            self.journal.record(invocation.context.agent_run_id, context)
+            # What was rendered, not what was retrieved. The journal is the
+            # run's account of the evidence its answer may rest on, and a
+            # passage this result dropped to fit its budget is one the model
+            # never saw -- recording it would let a citation to it verify, and
+            # would fence a document the answer could not have been built from.
+            self.journal.record(
+                invocation.context.agent_run_id, _as_shown(context, rendered.shown)
+            )
         return ToolResult(
             tool_call_id=invocation.call.tool_call_id,
             tool_name=TOOL_NAME,
             status="ok",
-            content=_render(context.packet),
+            content=rendered.text,
         )
 
     async def refuse(self, invocation: ToolInvocation, reason: str) -> ToolResult:
@@ -131,7 +149,21 @@ class KnowledgeSearchTool:
         )
 
 
-def _render(packet: ContextPacket) -> str:
+@dataclass(frozen=True, slots=True)
+class _Rendered:
+    """One search result, and which passages it actually consists of.
+
+    The two are returned together rather than recomputed by the caller, because
+    the whole point is that they cannot disagree: ``shown`` is what ``text``
+    contains, so nothing downstream has to reason about the budget a second
+    time to know what the model saw.
+    """
+
+    text: str
+    shown: tuple[ContextChunk, ...]
+
+
+def _render(packet: ContextPacket) -> _Rendered:
     """What the model sees, bounded by what a tool result may carry.
 
     Chunk ids are labelled so a citation can be checked against what was
@@ -150,12 +182,21 @@ def _render(packet: ContextPacket) -> str:
     the model never saw. A model that knows its evidence is partial can search
     again with a narrower query; one that does not will answer as if it had
     everything.
+
+    A dropped passage leaves this function in ``shown`` as well as out of
+    ``text``. It is the only place that knows which passages survived the
+    budget, and the fence downstream is only worth anything if it is checking
+    that list rather than the one retrieval proposed.
     """
 
     if not packet.chunks:
-        return json.dumps({"chunks": [], "note": "no readable passages matched"})
+        return _Rendered(
+            text=json.dumps({"chunks": [], "note": "no readable passages matched"}),
+            shown=(),
+        )
 
     kept: list[dict[str, str]] = []
+    shown: list[ContextChunk] = []
     for chunk in packet.chunks:
         entry = {
             "chunk_id": chunk.chunk_id,
@@ -165,31 +206,82 @@ def _render(packet: ContextPacket) -> str:
         if len(_encode({"chunks": [*kept, entry]})) > MAX_CONTENT_CHARS:
             break
         kept.append(entry)
+        shown.append(chunk)
 
     omitted = len(packet.chunks) - len(kept)
     if not omitted:
-        return _encode({"chunks": kept})
+        return _Rendered(text=_encode({"chunks": kept}), shown=tuple(shown))
     if not kept:  # pragma: no cover - MAX_CONTENT_CHARS exceeds ChunkText's own
         # ceiling, so the first passage always fits. Kept as the answer if
         # either bound moves: there would be nothing to return that is not a
         # fragment, and saying so beats returning one.
-        return _encode(
+        return _Rendered(
+            text=_encode(
+                {
+                    "chunks": [],
+                    "note": (
+                        "the highest-ranked passage alone exceeds this tool's "
+                        "result budget; narrow the query or lower top_k"
+                    ),
+                }
+            ),
+            shown=(),
+        )
+    return _Rendered(
+        text=_encode(
             {
-                "chunks": [],
+                "chunks": kept,
                 "note": (
-                    "the highest-ranked passage alone exceeds this tool's "
-                    "result budget; narrow the query or lower top_k"
+                    f"{omitted} lower-ranked passage(s) omitted to fit this "
+                    "tool's result budget; narrow the query or lower top_k to "
+                    "see them"
                 ),
             }
-        )
-    return _encode(
-        {
-            "chunks": kept,
-            "note": (
-                f"{omitted} lower-ranked passage(s) omitted to fit this tool's "
-                "result budget; narrow the query or lower top_k to see them"
+        ),
+        shown=tuple(shown),
+    )
+
+
+def _as_shown(
+    context: AuthorizedContext, shown: tuple[ContextChunk, ...]
+) -> AuthorizedContext:
+    """The search, narrowed to the passages that reached the model.
+
+    Both halves of the journal entry narrow, and for the same reason. The
+    citations narrow because a cited chunk the model was never shown is a chunk
+    id it produced rather than read, and the fence's whole job is to refuse
+    those -- an id that survived only because retrieval proposed it would be
+    presented to the asker as a source with this system's authority.
+
+    The authorized revisions narrow because they are what the release fence
+    re-checks, and it asks whether the asker may still read what the answer was
+    *built from*. A passage that never entered the prompt was not built from,
+    so keeping it would refuse good answers whenever an unshown document's
+    permissions moved -- fencing something this run never exposed.
+    """
+
+    if len(shown) == len(context.packet.chunks):
+        return context
+
+    shown_ids = {chunk.chunk_id for chunk in shown}
+    shown_documents = {chunk.document_id for chunk in shown}
+    return AuthorizedContext(
+        packet=ContextPacket(
+            chunks=shown,
+            citations=tuple(
+                citation
+                for citation in context.packet.citations
+                if citation.chunk_id in shown_ids
             ),
-        }
+            retrieval_trace_id=context.packet.retrieval_trace_id,
+            token_estimate=sum(len(chunk.text) // 4 for chunk in shown),
+        ),
+        authorized_revisions=tuple(
+            (document_id, revision)
+            for document_id, revision in context.authorized_revisions
+            if document_id in shown_documents
+        ),
+        reranked=context.reranked,
     )
 
 

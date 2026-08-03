@@ -4,13 +4,20 @@ This module has no model or tool loop of its own.  Every node calls the
 injected AgentExecutor, and each invocation reconstructs its context from the
 Task Registry so a resumed graph never inherits an old process's principal or
 submitted envelope object.
+
+One thing is deliberately *not* reconstructed: the claim. Identity is read
+fresh because a resumed graph must run as whoever the Task belongs to now;
+the lease is carried in from the Worker because it is the assertion that this
+process is still the one entitled to run at all. Re-reading it turned a check
+into a lookup -- whatever the Registry answered was, by construction, what a
+fenced write was then compared against.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final, cast
 
 from pydantic import (
@@ -55,12 +62,13 @@ from agent_workbench.ports.research import (
     ExternalEvidenceSkipped,
     ExternalEvidenceToolPort,
 )
-from agent_workbench.ports.task_registry import TaskRegistry, TaskRun
+from agent_workbench.ports.task_registry import ExecutionLease, TaskRegistry, TaskRun
 from agent_workbench.workflows.agent_nodes import (
     ArtifactProducingAgentNode,
     TaskRunContext,
     build_request,
 )
+from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.research_graph import evolve, merge_refs
 
 TaskNodeHandler = Callable[[TaskState], Awaitable[Mapping[str, Any]]]
@@ -105,6 +113,25 @@ class TaskNodeRunFailedError(RuntimeError):
 
 class TaskNodeContextUnavailableError(RuntimeError):
     """The graph state names no current Task Registry row."""
+
+
+class TaskLeaseUnavailableError(RuntimeError):
+    """This node is running outside any Worker's claim on the Task.
+
+    Not a missing optional dependency. A node reached without a claim is one
+    nothing authorized, and the honest answer is to refuse rather than to look
+    up whichever Worker happens to hold the Task now.
+    """
+
+
+class TaskLeaseLostError(RuntimeError):
+    """The Task moved to another claim while this Worker was executing it.
+
+    Raised at the node rather than left to the fences downstream, because the
+    node is about to spend a model budget and write artifacts on behalf of a
+    Task this Worker no longer owns -- and because a fence that only refuses
+    the final write lets everything before it happen twice.
+    """
 
 
 class TaskExportUnavailableError(RuntimeError):
@@ -155,12 +182,17 @@ class TaskNodeInvocation:
     context: TaskRunContext
     events: EventSink
     cancellation: CancellationToken
-    # Which claim this node is running under. Read fresh from the Registry with
-    # everything else here, never from the checkpoint: an epoch a resume carried
-    # forward would let a Worker that lost the Task keep writing under the
-    # ownership it used to have, which is the one thing the ledger's fence
-    # exists to refuse.
-    lease_epoch: int = 0
+    # Which claim this node is running under. It is the lease the Worker was
+    # given when it claimed the Task, carried through the graph invocation
+    # unchanged -- never the Registry's current one, and never the checkpoint's.
+    #
+    # The Registry's current one is the trap. A Worker whose lease lapsed
+    # mid-graph reads back the epoch of the Worker that replaced it, and every
+    # fenced write it then performs passes: the ledger compares the epoch it is
+    # handed against the live claim, so a Worker writing under somebody else's
+    # epoch is indistinguishable from the somebody else. The fence that exists
+    # to stop a displaced Worker was the thing being satisfied by re-reading.
+    lease: ExecutionLease
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,12 +204,36 @@ class TaskNodeInvocationProvider:
     sink_for: EventSinkFactory
     cancellation_for: CancellationFactory
     principal_for: TaskPrincipalResolver
+    # Where the claim comes from. The Worker enters it around the invocation;
+    # this reads it back. A provider whose scope is empty resolves nothing,
+    # because a node with no claim behind it has no authority to spend a budget
+    # or write anything.
+    scope: TaskExecutionScope = field(default_factory=TaskExecutionScope)
 
     async def resolve(self, state: TaskState, node: TaskNodeId) -> TaskNodeInvocation:
+        lease = self.scope.current()
+        if lease is None or lease.task_id != state.task_id:
+            raise TaskLeaseUnavailableError(
+                f"graph node {node} is running under no claim on {state.task_id}"
+            )
         task = await self.registry.get(state.task_id)
         if task is None:
             raise TaskNodeContextUnavailableError(
                 f"task context is unavailable for graph node {node}"
+            )
+        # Everything else here is read fresh, and this is checked fresh: the
+        # principal and envelope must come from the current row, and the claim
+        # must still be the one this Worker holds. Re-reading the epoch was the
+        # defect; re-reading everything else is what stops a resumed graph from
+        # running on a dead process's identity.
+        if (
+            task.status != "running"
+            or task.lease_owner != lease.worker_id
+            or task.lease_epoch != lease.epoch
+        ):
+            raise TaskLeaseLostError(
+                f"graph node {node} holds epoch {lease.epoch} of {state.task_id}, "
+                f"which is {task.status} at epoch {task.lease_epoch}"
             )
         context = _context_for(
             task,
@@ -189,7 +245,7 @@ class TaskNodeInvocationProvider:
             context=context,
             events=self.sink_for(context),
             cancellation=self.cancellation_for(context),
-            lease_epoch=task.lease_epoch,
+            lease=lease,
         )
 
 
@@ -486,8 +542,10 @@ def _tool_execution_context(
         workflow_thread_id=context.trace.workflow_thread_id,
         graph_node_id=context.trace.graph_node_id,
         # Without this the side-effect ledger has nothing to fence against, and
-        # refuses every ledgered tool rather than recording one unfenced.
-        lease_epoch=invocation.lease_epoch,
+        # refuses every ledgered tool rather than recording one unfenced. It is
+        # the claimed epoch, so the fence compares this Worker's ownership
+        # against the Task's -- which is the comparison it was written to make.
+        lease_epoch=invocation.lease.epoch,
     )
 
 
@@ -732,6 +790,8 @@ __all__ = [
     "TaskExportHandlers",
     "TaskExportPreconditionError",
     "TaskExportUnavailableError",
+    "TaskLeaseLostError",
+    "TaskLeaseUnavailableError",
     "TaskNodeContextUnavailableError",
     "TaskNodeHandler",
     "TaskNodeInvocation",
