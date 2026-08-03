@@ -47,6 +47,54 @@ The API serves the browser console from the image at
 routes it calls. `agent-api` refuses to start when the directory is missing, so
 a broken image fails at startup rather than in somebody's browser.
 
+## Telemetry, and where a trace sample comes from
+
+`observability.otel_enabled` cannot be turned off, and every process has
+exported OTLP since the telemetry adapter landed. Until the `otel-collector`
+service existed there was nothing at the far end: the configured endpoint named
+a host this topology never defined, and — because telemetry deliberately fails
+open — the stack looked healthy while recording nothing. The port was wrong
+too. The exporter is OTLP over **HTTP**, which posts to `<endpoint>/v1/traces`,
+and the default pointed at `4317`, the gRPC port.
+
+The collector is in the default stack rather than the `demo` profile, because
+the API exports whether or not anybody opted into synthetic workers. Nothing
+`depends_on` it: a collector's problem must never become a run's problem.
+
+It writes what it receives to a volume, which is what makes a trace sample
+something you can attach rather than describe:
+
+```bash
+docker compose cp otel-collector:/var/lib/otel/traces.jsonl ./traces.jsonl
+```
+
+Traces and metrics land in separate files (`traces.jsonl`, `metrics.jsonl`) as
+OTLP JSON, one batch per line.
+
+## The evidence manifest
+
+A release gate's manifest records what a claim rests on:
+
+```bash
+uv run agent-evidence write --gate m6b \
+  --attach test_report=./reports/pytest.txt \
+  --attach otel_trace_sample=./traces.jsonl \
+  --known-limitation "11 skips need BGE weights"
+```
+
+Revisions, fingerprints and the commit are derived; every attachment is stored
+with its SHA-256, so the manifest can be re-checked rather than believed:
+
+```bash
+uv run agent-evidence verify artifacts/evidence/m6b/manifest.json
+```
+
+It refuses an attachment that does not exist or is empty, and it refuses a
+dirty working tree unless `--allow-dirty` is passed — in which case the
+manifest records itself as provisional. Whatever is not attached is listed
+under `missing`, derived from what was, so a gate cannot quietly claim a
+completeness it does not have.
+
 ## Configuration and secrets
 
 The Compose file uses an internal, passwordless PostgreSQL network only for

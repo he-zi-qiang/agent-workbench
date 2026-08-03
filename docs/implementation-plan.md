@@ -1520,15 +1520,20 @@ known limitations
 - [x] 新产品代码库目录和包名确定；
 - [x] Python 3.12 版本锁定；
 - [x] `uv` 已可用，锁文件和冻结依赖检查通过；
-- [ ] Docker 可用性留待首次 Compose 切片验证；
+- [x] Docker 可用性已由本机 Compose 切片验证（PostgreSQL、Qdrant、迁移、API、
+  双 Worker、otel-collector 均可 `docker compose up` 起来）；
 - [x] 当前配置基线复制到正式项目而不是重新手写；
 - [x] GitHub Actions CI 已建立；远程运行结果由对应 PR checks 留证；
-- [ ] PostgreSQL/Qdrant/ArtifactStore 本地端口留待 WP03–WP05 的 Compose
-  切片锁定；
+- [x] PostgreSQL/Qdrant/ArtifactStore 本地端口已在 compose.yaml 锁定（只发布
+  API 的 loopback 端口，其余服务不发布）；
 - [x] 当前离线测试不调用 Anthropic/BGE 真实依赖；
 - [x] clean-room 和合规说明进入仓库；
 - [x] `artifacts/evidence/<gate>/` 目录约定已写入计划；
-- [ ] 首个 evidence manifest 留待 D1 关卡生成；
+- [ ] 首个 evidence manifest 留待 D1 关卡生成。**生成工具已落地**
+  （`agent-evidence write` / `verify`，见[本机 Compose 部署](./deployment.md)）：
+  修订号、指纹与 commit 由配置和 git 派生，附件按 SHA-256 记录并可复核，缺失项
+  由已附加项反推写进 `missing`。剩下的是跑一次真正的关卡并把产物附上——工具存在
+  不等于关卡已经通过，这一项因此仍未打勾；
 - [x] Optional Lab 默认全部关闭。
 
 ---

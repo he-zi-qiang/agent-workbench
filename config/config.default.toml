@@ -272,7 +272,12 @@ redact_secrets = true
 [observability]
 otel_enabled = true
 otel_service_name = "agent-workbench"
-otel_exporter_endpoint = "http://otel-collector:4317"
+# 4318, not 4317. The exporter is OTLP over HTTP and posts to
+# `<endpoint>/v1/traces`; 4317 is the gRPC port, so the previous default sent
+# every span to a listener that could not answer it -- and telemetry fails open,
+# so nothing reported the loss. `docker/otel-collector.yaml` receives on this
+# same port and a test asserts the two agree.
+otel_exporter_endpoint = "http://otel-collector:4318"
 trace_sample_ratio = 1.0
 record_prompt_body = false
 record_tool_result_body = false
