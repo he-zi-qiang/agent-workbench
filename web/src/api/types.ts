@@ -29,9 +29,14 @@ export interface AskResponse {
   answer: string;
   citations: Citation[];
   withheld: boolean;
+  // False when no evidence was retrieved (ADR-018). Not inferable from an
+  // empty citation list: a grounded answer may cite nothing.
+  grounded: boolean;
   run_id: Identifier;
   turn_id: Identifier;
 }
+
+export type ChatAnswerMode = "direct" | "rag";
 
 export interface MessageView {
   role: string;
@@ -165,6 +170,39 @@ export interface DocumentVersion {
   content_sha256: string;
 }
 
+export interface KnowledgeBaseView {
+  knowledge_base_id: Identifier;
+  name: string;
+  description: string | null;
+  document_count: number;
+  ready_document_count: number;
+  processing_document_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeBaseListResponse {
+  knowledge_bases: KnowledgeBaseView[];
+}
+
+export type KnowledgeDocumentStatus = "processing" | "ready";
+
+export interface KnowledgeDocumentView {
+  document_id: Identifier;
+  filename: string | null;
+  media_type: string;
+  size_bytes: number;
+  source_revision: number;
+  last_applied_revision: number;
+  status: KnowledgeDocumentStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeDocumentListResponse {
+  documents: KnowledgeDocumentView[];
+}
+
 export interface HealthResponse {
   status: "live" | "ready" | "unready";
 }
@@ -172,7 +210,8 @@ export interface HealthResponse {
 export interface LocalChatSession {
   sessionId: Identifier;
   title: string;
-  knowledgeBaseId: Identifier;
+  answerMode: ChatAnswerMode;
+  knowledgeBaseId: Identifier | null;
   createdAt: string;
   updatedAt: string;
 }

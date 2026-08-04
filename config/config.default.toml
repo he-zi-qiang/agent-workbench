@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.2"
+config_schema_version = "1.3"
 architecture_baseline = "1.3"
 
 [api]
@@ -39,9 +39,16 @@ automatic_retry = false
 # "fixed" retrieves once and hands the model the evidence; "agentic" gives it a
 # search tool and lets it decide when to look. The default is the one that can
 # be evaluated -- see bootstrap.settings.ChatSettings for why.
+# "ungrounded" (ADR-018) answers from the model alone: no retrieval, no
+# citations, no publish fence. It is a different promise, not a weaker one, and
+# the capability table has to say so separately.
 retrieval_shape = "fixed"
 max_agentic_steps = 4
 max_agentic_searches = 6
+# Only read when retrieval_shape = "routed". A cross-encoder score, not a
+# retrieval score: RRF is a rank sum and cannot say whether a hit is relevant.
+# Uncalibrated -- measure it against your own corpus before trusting it.
+routed_relevance_threshold = 0.0
 
 [database]
 # dsn, guard_dsn and listen_dsn are secret-like deployment values and are
@@ -175,7 +182,10 @@ max_agent_invocation_attempts_per_task = 12
 max_tokens_per_agent_invocation = 16000
 
 [rag.llama_index]
-enabled = true
+# Off until the equivalence evidence ADR-017 step 3 requires actually exists.
+# The adapter is built and contract-tested; what is missing is a measurement
+# able to tell the two retrieval paths apart. See docs/status.md 2026-08-03.
+enabled = false
 role = "ingestion_and_retrieval_adapter"
 agent_executor_enabled = false
 query_engine_generates_final_answer = false

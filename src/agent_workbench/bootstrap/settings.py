@@ -142,7 +142,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.2"] = "1.2"
+    config_schema_version: Literal["1.3"] = "1.3"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -188,11 +188,32 @@ class ChatSettings(StrictModel):
     # every time, so a change in an answer is a change in the model or the
     # corpus. Choosing `agentic` buys the capability and spends that property,
     # which is a deployment decision rather than a request parameter.
-    retrieval_shape: Literal["fixed", "agentic"] = "fixed"
+    #
+    # `ungrounded` (ADR-018) is neither: it answers from the model alone, with
+    # no retrieval, no citations and no publish fence. Adding it widened a
+    # frozen single-set Literal, which is why it took an ADR and a config
+    # schema bump rather than one more value -- the same rule that refused
+    # `runtime.executor = "fake"` in PR-055. It carries its own durable event
+    # so an audit log can never mistake it for a verified answer.
+    retrieval_shape: Literal["fixed", "agentic", "ungrounded", "routed"] = "fixed"
     # Only read when the shape is `agentic`. Ceilings rather than targets: the
     # model stops when it has enough, and these stop it when it does not.
     max_agentic_steps: int = Field(default=4, ge=2, le=32)
     max_agentic_searches: int = Field(default=6, ge=1, le=16)
+    # Only read when the shape is `routed`. The cross-encoder relevance score
+    # the retrieved evidence must reach before the turn is answered *from* that
+    # evidence; below it, the turn answers from the model instead.
+    #
+    # A cross-encoder score, deliberately, and not a retrieval score. RRF is a
+    # rank sum -- the top hit of a completely unrelated question still scores
+    # near the maximum -- so a gate built on it would send every question down
+    # the grounded path. That is not hypothetical: it is what the first version
+    # of this shape did, and it made `routed` behave exactly like `fixed`.
+    #
+    # The default is a starting point, not a calibrated value. BGE reranker
+    # scores are unbounded logits and their useful cut depends on the corpus,
+    # so a deployment should measure its own before trusting this one.
+    routed_relevance_threshold: float = 0.0
 
     @model_validator(mode="after")
     def validate_agentic_budget(self) -> ChatSettings:
@@ -407,7 +428,18 @@ class MultiAgentSettings(StrictModel):
 
 
 class LlamaIndexSettings(StrictModel):
-    enabled: bool = True
+    # False until ADR-017 step 2 produces evidence, which it has not. The
+    # adapter exists, is contract-tested against both paths on real Qdrant and
+    # real PostgreSQL, and is one setting away -- but the equivalence
+    # evaluation that step 3 requires before traffic moves came back
+    # inconclusive, and inconclusive is not a reason to switch.
+    #
+    # Not inconclusive because the two paths disagreed: because the measurement
+    # cannot resolve them. Tied fused scores come back from Qdrant in an
+    # unstable order, so each retriever disagrees with *itself* on 9-10 of 38
+    # gold questions -- a noise floor wider than any difference between the
+    # two. See docs/status.md 2026-08-03.
+    enabled: bool = False
     role: Literal["ingestion_and_retrieval_adapter"] = "ingestion_and_retrieval_adapter"
     agent_executor_enabled: Literal[False] = False
     query_engine_generates_final_answer: Literal[False] = False

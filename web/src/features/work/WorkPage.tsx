@@ -14,7 +14,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   cancelTask,
@@ -29,6 +29,15 @@ import {
 } from "../../api/client";
 import type { ApprovalView, TaskStatus, TaskView } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
+import {
+  AttachmentButton,
+  AttachmentTray,
+  useKnowledgeAttachments,
+} from "../../components/AttachmentTray";
+import {
+  KnowledgeSourcePicker,
+  useKnowledgeBases,
+} from "../../components/KnowledgeSourcePicker";
 import {
   EmptyState,
   ErrorNotice,
@@ -85,6 +94,7 @@ interface ApprovalNotice {
 
 export function WorkPage() {
   const { taskId: selectedTaskId } = useParams<{ taskId: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { identity } = useIdentity();
@@ -183,14 +193,27 @@ export function WorkPage() {
 
   const [objective, setObjective] = useState("");
   const [maxRevisions, setMaxRevisions] = useState("2");
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState("");
+  const [knowledgeBaseDraftId, setKnowledgeBaseId] = useState<string | null>(
+    searchParams.get("kb"),
+  );
+  const knowledgeBases = useKnowledgeBases(identity);
+  const knowledgeBaseId =
+    knowledgeBaseDraftId !== null &&
+    knowledgeBases.data?.knowledge_bases.some(
+      (item) => item.knowledge_base_id === knowledgeBaseDraftId,
+    )
+      ? knowledgeBaseDraftId
+      : null;
+  const sourceResolving =
+    knowledgeBaseDraftId !== null && knowledgeBases.isPending;
+  const attachments = useKnowledgeAttachments(identity, knowledgeBaseId);
   const [submissionKey, setSubmissionKey] = useState(() => newIdempotencyKey("task"));
   const createMutation = useMutation({
     mutationFn: ({ idempotencyKey, ...input }: CreateTaskIntent) =>
       createTask(identity, input, idempotencyKey),
     onSuccess: (task) => {
       setObjective("");
-      setKnowledgeBaseId("");
+      attachments.clear();
       setMaxRevisions("2");
       setSubmissionKey(newIdempotencyKey("task"));
       void queryClient.invalidateQueries({
@@ -279,14 +302,15 @@ export function WorkPage() {
   const handleCreate = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedObjective = objective.trim();
-    const trimmedKnowledgeBaseId = knowledgeBaseId.trim();
     const parsedMaxRevisions = Number(maxRevisions);
     if (
       trimmedObjective === "" ||
       maxRevisions.trim() === "" ||
       !Number.isInteger(parsedMaxRevisions) ||
       parsedMaxRevisions < 0 ||
-      parsedMaxRevisions > 20
+      parsedMaxRevisions > 20 ||
+      sourceResolving ||
+      attachments.hasBlockingItems
     ) {
       return;
     }
@@ -294,10 +318,21 @@ export function WorkPage() {
       objective: trimmedObjective,
       maxRevisions: parsedMaxRevisions,
       idempotencyKey: submissionKey,
-      ...(trimmedKnowledgeBaseId === ""
-        ? {}
-        : { knowledgeBaseId: trimmedKnowledgeBaseId }),
+      ...(knowledgeBaseId === null ? {} : { knowledgeBaseId }),
     });
+  };
+
+  const changeKnowledgeBase = (nextId: string | null) => {
+    if (nextId === knowledgeBaseId) return;
+    if (
+      attachments.items.length > 0 &&
+      !window.confirm("切换资料会清空当前任务的待上传附件，是否继续？")
+    ) {
+      return;
+    }
+    attachments.clear();
+    setKnowledgeBaseId(nextId);
+    markTaskIntentEdited();
   };
 
   const selectedTask = taskQuery.data;
@@ -336,45 +371,66 @@ export function WorkPage() {
               setObjective(event.target.value);
               markTaskIntentEdited();
             }}
-            placeholder="描述任务要完成的目标"
+            placeholder="例如：整理这批资料，比较三个方案并输出一份建议报告"
             required
             rows={4}
             value={objective}
           />
-          <div className="aw-form-row">
-            <div>
-              <label htmlFor="work-max-revisions">最大修订次数</label>
-              <input
-                id="work-max-revisions"
-                disabled={createMutation.isPending}
-                max={20}
-                min={0}
-                onChange={(event) => {
-                  setMaxRevisions(event.target.value);
-                  markTaskIntentEdited();
-                }}
-                required
-                type="number"
-                value={maxRevisions}
-              />
-            </div>
-            <div>
-              <label htmlFor="work-knowledge-base">知识库 ID（可选）</label>
-              <input
-                id="work-knowledge-base"
-                disabled={createMutation.isPending}
-                onChange={(event) => {
-                  setKnowledgeBaseId(event.target.value);
-                  markTaskIntentEdited();
-                }}
-                type="text"
-                value={knowledgeBaseId}
-              />
-            </div>
+          <KnowledgeSourcePicker
+            disabled={createMutation.isPending}
+            identity={identity}
+            onChange={(knowledgeBase) =>
+              changeKnowledgeBase(knowledgeBase?.knowledge_base_id ?? null)
+            }
+            value={knowledgeBaseId}
+          />
+          <div className="aw-work-attachment-row">
+            <AttachmentButton
+              disabled={createMutation.isPending}
+              onFiles={attachments.addFiles}
+            />
+            <span>
+              添加 PDF 或 Markdown
+              {knowledgeBaseId === null ? "（选择知识库后上传）" : "（上传到所选知识库）"}
+            </span>
           </div>
+          <AttachmentTray
+            items={attachments.items}
+            onRemove={attachments.remove}
+            onRetry={attachments.retry}
+          />
+          <details className="aw-work-advanced">
+            <summary>高级设置</summary>
+            <label htmlFor="work-max-revisions">最大修订次数</label>
+            <input
+              id="work-max-revisions"
+              disabled={createMutation.isPending}
+              max={20}
+              min={0}
+              onChange={(event) => {
+                setMaxRevisions(event.target.value);
+                markTaskIntentEdited();
+              }}
+              required
+              type="number"
+              value={maxRevisions}
+            />
+          </details>
+          <p className="aw-create-task-hint">
+            {attachments.hasBlockingItems
+              ? "附件正在上传或索引，完成后才能创建任务。"
+              : knowledgeBaseId === null
+                ? "不使用知识库：Agent 将只按目标执行，不做内部资料检索。"
+                : "任务会在执行期间检索所选知识库。"}
+          </p>
           <button
             className="aw-button is-primary"
-            disabled={createMutation.isPending || objective.trim() === ""}
+            disabled={
+              createMutation.isPending ||
+              sourceResolving ||
+              objective.trim() === "" ||
+              attachments.hasBlockingItems
+            }
             type="submit"
           >
             {createMutation.isPending ? "正在创建…" : "创建任务"}
@@ -538,6 +594,9 @@ export function WorkPage() {
                     ? approvalNotice.message
                     : null
                 }
+                {...(taskInputQuery.data === undefined
+                  ? {}
+                  : { objective: taskInputQuery.data.objective })}
                 onDecide={(decision) => {
                   const approval = approvalQuery.data;
                   if (approval === undefined) return;
@@ -631,7 +690,7 @@ export function WorkPage() {
                   <h3 title={group.graphNodeId ?? undefined}>
                     {group.graphNodeId === null
                       ? "任务生命周期"
-                      : `节点 ${shortId(group.graphNodeId, 24)}`}
+                      : workflowStageTitle(group.graphNodeId)}
                   </h3>
                   <ol>
                     {group.events.map((event) => (
@@ -643,13 +702,13 @@ export function WorkPage() {
                           <strong>{eventTitle(event)}</strong>
                           <time dateTime={event.timestamp}>{formatTime(event.timestamp)}</time>
                         </div>
-                        <div className="aw-timeline-event-meta">
-                          <code>{event.event_type}</code>
-                          <span title={event.run_id}>run {shortId(event.run_id)}</span>
-                          {event.sequence === null ? null : <span>#{event.sequence}</span>}
-                        </div>
                         <details>
-                          <summary>查看原始事件</summary>
+                          <summary>工程详情</summary>
+                          <div className="aw-timeline-event-meta">
+                            <code>{event.event_type}</code>
+                            <span title={event.run_id}>run {shortId(event.run_id)}</span>
+                            {event.sequence === null ? null : <span>#{event.sequence}</span>}
+                          </div>
                           <pre>{JSON.stringify(event.payload, null, 2)}</pre>
                         </details>
                       </li>
@@ -670,6 +729,7 @@ function ApprovalSection({
   error,
   loading,
   notice,
+  objective,
   onDecide,
   pending,
   taskId,
@@ -679,6 +739,7 @@ function ApprovalSection({
   error: unknown;
   loading: boolean;
   notice: string | null;
+  objective?: string;
   onDecide: (decision: "approved" | "rejected") => void;
   pending: boolean;
   taskId: string;
@@ -689,9 +750,14 @@ function ApprovalSection({
   return (
     <section className="aw-work-section aw-approval" aria-labelledby="approval-title">
       <h2 id="approval-title">
-        <ClipboardCheck aria-hidden="true" size={17} /> 服务端审批记录
+        <ClipboardCheck aria-hidden="true" size={17} /> 是否允许生成并导出任务报告？
       </h2>
-      <p className="aw-muted">下列状态与版本来自审批 GET 响应，是决定操作的权威记录。</p>
+      <p>
+        Agent 已完成主要工作，正在等待你的确认。批准后继续生成可下载报告；拒绝后停止任务且不导出。
+      </p>
+      {objective === undefined ? null : (
+        <blockquote className="aw-approval-objective">{objective}</blockquote>
+      )}
       {loading ? <LoadingLine label="正在读取审批记录" /> : null}
       {error !== null ? (
         <ErrorNotice message={errorMessage(error, "读取审批记录失败")} />
@@ -701,14 +767,9 @@ function ApprovalSection({
       ) : null}
       {approval !== undefined && matchesTask ? (
         <>
-          <div className="aw-task-metadata">
-            <KeyValue label="状态" value={<StatusPill status={approval.status} />} />
-            <KeyValue label="决定版本" value={approval.decision_version} />
-            <KeyValue label="审批 ID" value={shortId(approval.approval_id, 22)} />
-            <KeyValue label="创建时间" value={formatDateTime(approval.created_at)} />
-            {approval.decided_at === null ? null : (
-              <KeyValue label="决定时间" value={formatDateTime(approval.decided_at)} />
-            )}
+          <div className="aw-approval-summary">
+            <StatusPill status={approval.status} />
+            <span>请求时间：{formatDateTime(approval.created_at)}</span>
           </div>
           {approval.status === "pending" && !decidable ? (
             <InfoNotice>
@@ -718,23 +779,43 @@ function ApprovalSection({
           {decidable ? (
             <div className="aw-button-row">
               <button
+                aria-label="批准"
                 className="aw-button is-primary"
                 disabled={pending}
-                onClick={() => onDecide("approved")}
+                onClick={() => {
+                  if (window.confirm("批准后将继续生成并导出报告。确认批准吗？")) {
+                    onDecide("approved");
+                  }
+                }}
                 type="button"
               >
-                批准
+                批准并继续导出
               </button>
               <button
+                aria-label="拒绝"
                 className="aw-button is-danger"
                 disabled={pending}
-                onClick={() => onDecide("rejected")}
+                onClick={() => {
+                  if (window.confirm("拒绝后任务会停止且不导出报告。确认拒绝吗？")) {
+                    onDecide("rejected");
+                  }
+                }}
                 type="button"
               >
-                拒绝
+                拒绝并停止任务
               </button>
             </div>
           ) : null}
+          <details className="aw-engineering-details">
+            <summary>工程详情</summary>
+            <div className="aw-task-metadata">
+              <KeyValue label="审批 ID" value={shortId(approval.approval_id, 22)} />
+              <KeyValue label="决定版本" value={approval.decision_version} />
+              {approval.decided_at === null ? null : (
+                <KeyValue label="决定时间" value={formatDateTime(approval.decided_at)} />
+              )}
+            </div>
+          </details>
         </>
       ) : null}
       {notice === null ? null : <InfoNotice>{notice}</InfoNotice>}
@@ -749,6 +830,17 @@ function errorMessage(error: unknown, fallback: string): string {
 
 function isTerminalStatus(status: TaskStatus | undefined): boolean {
   return status !== undefined && TERMINAL_STATUSES.has(status);
+}
+
+function workflowStageTitle(graphNodeId: string): string {
+  const normalized = graphNodeId.toLowerCase();
+  if (normalized.includes("plan")) return "规划任务";
+  if (normalized.includes("research")) return "收集资料";
+  if (normalized.includes("draft") || normalized.includes("write")) return "撰写结果";
+  if (normalized.includes("critic") || normalized.includes("review")) return "检查与修订";
+  if (normalized.includes("approval")) return "等待确认";
+  if (normalized.includes("export")) return "生成报告";
+  return "执行步骤";
 }
 
 function approvalConflictMessage(

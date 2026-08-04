@@ -1,4 +1,4 @@
-"""How a chat turn produces an answer, and the two shapes that do it.
+"""How a chat turn produces an answer, and the four shapes that do it.
 
 Everything else about a turn -- claiming it, leasing it, timing it out,
 releasing it, cleaning up after a disconnect -- is identical whichever shape
@@ -6,25 +6,33 @@ runs, and is not duplicated. What differs is exactly three things, and they are
 what this seam carries: the request handed to the model, the evidence that was
 authorized while producing the answer, and the citations offered with it.
 
-The two shapes are separable on purpose, and the reason is evaluation rather
-than tidiness. The fixed two-step retrieves once and lets the model answer from
-what it was given, so the same question retrieves the same way every time and a
-change in the answer is a change in the model or the corpus. The agentic shape
-lets the model decide when to search -- which is the capability -- and gives
-that property up. A deployment that quietly turned one into the other would keep
-the name of the measurement and lose the thing it measured.
+Four shapes: fixed, agentic, ungrounded and routed. The first two are separable
+on purpose, and the reason is evaluation rather than tidiness. The fixed
+two-step retrieves once and lets the model answer from what it was given, so the
+same question retrieves the same way every time and a change in the answer is a
+change in the model or the corpus. The agentic shape lets the model decide when
+to search -- which is the capability -- and gives that property up. A deployment
+that quietly turned one into the other would keep the name of the measurement
+and lose the thing it measured.
 
-Both end at the same fence. Whatever produced the answer, every document behind
-it is re-checked before delivery, and "behind it" means every passage the model
-was **shown**, not only the ones it cited: a model that paraphrases a revoked
-document without naming it has still used it. That is why the agentic shape
-carries a journal rather than reading citations back out of the answer.
+The other two answer a different question: what happens when there is no
+evidence. ``ungrounded`` never looks for any; ``routed`` looks, and falls back
+to answering from the model when nothing authorized came back. Both mark their
+result so the release path can record it as unverified rather than committing it
+alongside answers that were checked.
+
+The retrieval shapes end at the same fence. Whatever produced the answer, every
+document behind it is re-checked before delivery, and "behind it" means every
+passage the model was **shown**, not only the ones it cited: a model that
+paraphrases a revoked document without naming it has still used it. That is why
+the agentic shape carries a journal rather than reading citations back out of
+the answer.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from agent_workbench.application.citations import verify_citations
 from agent_workbench.application.retrieval import (
@@ -65,6 +73,53 @@ AGENTIC_SYSTEM_PROMPT = (
 )
 
 
+UNGROUNDED_SYSTEM_PROMPT = (
+    "Answer from your own knowledge. You have no retrieved evidence for this "
+    "conversation, so do not cite sources, do not use bracketed chunk ids, and "
+    "do not describe your answer as supported by documents. Say plainly when "
+    "you are unsure or when the answer depends on information you do not have."
+)
+
+AnswerMode = Literal["direct", "rag"]
+
+
+def build_ungrounded_request(
+    request: ChatRequest,
+    budget: RunBudget,
+    *,
+    history: tuple[Message, ...] = (),
+) -> AgentRunRequest:
+    """The ungrounded run: no evidence, no tools, and no citation instruction.
+
+    A separate builder rather than ``build_fixed_request`` with an empty packet,
+    and the difference is not cosmetic. That path tells a model with no evidence
+    "No evidence was retrieved for this question. Say so rather than answering
+    from memory" -- correct for a retrieval turn that came back empty, and the
+    exact opposite of this shape, which exists precisely to answer from memory.
+    Reusing it would produce a mode that refuses every question it is asked.
+
+    The system prompt inverts the other two on citations as well. Both retrieval
+    prompts instruct the model to cite chunk ids; here that instruction would
+    ask for references to a set that was never retrieved, and the model would
+    supply plausible-looking ones. ADR-018 requires this path to claim nothing
+    about evidence, and the cheapest way to keep that true is to never ask.
+
+    The envelope stays deny-shaped. No evidence is not more freedom: a model
+    that cannot retrieve must not be able to reach a tool either.
+    """
+
+    return AgentRunRequest(
+        trace=TraceContext(agent_run_id=request.run_id),
+        run_kind="chat",
+        stream_id=request.session_id,
+        principal=request.principal,
+        envelope=AuthorizationEnvelope(),
+        system_prompt=UNGROUNDED_SYSTEM_PROMPT,
+        messages=(*history, user_message(request.question)),
+        budget=budget,
+    )
+
+
 def agentic_system_prompt(knowledge_base_id: str) -> str:
     """The agentic rules, plus the one fact the model cannot deduce.
 
@@ -103,8 +158,13 @@ class ChatRequest:
     session_id: str
     question: str
     principal: PrincipalContext
-    knowledge_base_id: str
+    knowledge_base_id: str | None
     idempotency_key: str
+    # Defaults to the historical behaviour for application callers. The HTTP
+    # adapter has enough information to preserve legacy clients more usefully:
+    # an omitted wire value is inferred from whether they supplied a knowledge
+    # base. Once it reaches this seam the choice is always explicit.
+    answer_mode: AnswerMode = "rag"
     top_k: int = 8
     run_id: str = field(default_factory=lambda: new_id("run"))
     stream_id: str | None = None
@@ -130,6 +190,11 @@ class ProducedAnswer:
     """
 
     outcome: AgentOutcome
+    #: Whether this answer was built on retrieved evidence. ``False`` only for
+    #: the ungrounded path and for a routed turn that found nothing to stand
+    #: on; it travels to the stored result and decides which terminal event the
+    #: release coordinator writes.
+    grounded: bool
     authorized_revisions: tuple[tuple[str, int], ...]
     #: Only the citations the answer named *and* was shown. Everything the run
     #: retrieved is in ``authorized_revisions`` and is fenced; this is the
@@ -153,6 +218,57 @@ class TurnExecution(Protocol):
         sink: EventSink,
         cancellation: CancellationToken,
     ) -> ProducedAnswer: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerModeSelector:
+    """Choose Direct or this deployment's RAG execution for every turn.
+
+    The deployment still chooses *which* RAG shape it offers (fixed, agentic or
+    routed). The request chooses only whether this particular turn uses that
+    shape at all. Keeping those decisions separate lets one conversation mix a
+    quick model-only question with a source-backed one without making either
+    answer pretend to have the other's evidence guarantees.
+
+    Validation lives here as well as at HTTP. ``ChatService`` is an application
+    boundary used directly by workers and tests, and a malformed request must
+    not reach an execution merely because it bypassed FastAPI.
+    """
+
+    direct: TurnExecution
+    rag: TurnExecution | None
+
+    def select(self, request: ChatRequest) -> TurnExecution:
+        if request.answer_mode == "direct":
+            if request.knowledge_base_id is not None:
+                raise ValueError("direct chat must not name a knowledge base")
+            return self.direct
+
+        if request.answer_mode == "rag":
+            if request.knowledge_base_id is None:
+                raise ValueError("rag chat requires a knowledge base")
+            if self.rag is None:
+                raise ValueError("rag chat is unavailable in this deployment")
+            return self.rag
+
+        # ``AnswerMode`` prevents this for typed callers. Keep a total runtime
+        # decision for data constructed dynamically or deserialized elsewhere.
+        raise ValueError(f"unsupported chat answer mode: {request.answer_mode}")
+
+    async def produce(
+        self,
+        request: ChatRequest,
+        *,
+        history: tuple[Message, ...],
+        sink: EventSink,
+        cancellation: CancellationToken,
+    ) -> ProducedAnswer:
+        return await self.select(request).produce(
+            request,
+            history=history,
+            sink=sink,
+            cancellation=cancellation,
+        )
 
 
 class RetrievalJournal:
@@ -295,7 +411,7 @@ def build_agentic_request(
         stream_id=request.session_id,
         principal=request.principal,
         envelope=AuthorizationEnvelope(allowed_tools=tool_names),
-        system_prompt=agentic_system_prompt(request.knowledge_base_id),
+        system_prompt=agentic_system_prompt(_required_knowledge_base(request)),
         messages=(*history, user_message(request.question)),
         tool_names=tool_names,
         budget=budget,
@@ -325,7 +441,7 @@ class FixedTwoStepExecution:
                 query=request.question,
                 tenant_id=request.tenant_id,
                 principal_id=request.principal_id,
-                knowledge_base_id=request.knowledge_base_id,
+                knowledge_base_id=_required_knowledge_base(request),
                 top_k=request.top_k,
             )
         )
@@ -337,9 +453,61 @@ class FixedTwoStepExecution:
         verdict = verify_citations(outcome.output_text or "", (context.packet,))
         return ProducedAnswer(
             outcome=outcome,
+            grounded=True,
             authorized_revisions=context.authorized_revisions,
             citations=verdict.verified,
             fabricated_citations=verdict.fabricated,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UngroundedExecution:
+    """Answer from the model alone, and claim nothing about evidence (ADR-018).
+
+    The shortest of the three shapes, and the only one whose value is in what it
+    refuses to do. It never touches ``RetrievalService``, so there is no
+    ``ContextPacket`` to build a citation from and no revision to fence -- which
+    is exactly why the two fields carrying those are empty here rather than
+    computed.
+
+    ``verify_citations`` is deliberately not called. Running it would look
+    conscientious and be meaningless: the check gives an answer credit for a
+    chunk id only when the model both named it *and* was shown it, and this path
+    shows the model nothing. It could only ever return empty, and a check that
+    cannot fail is a check that misleads whoever reads it later.
+
+    ``fabricated_citations`` stays empty for a subtler reason. A model asked
+    without evidence may well write something that looks like ``[chunk_abc]``,
+    and it is tempting to count that. But "fabricated" means *this run retrieved
+    a set and the answer pointed outside it*; with no set retrieved, the word
+    would describe a different thing under the same name, and the counter is
+    read as a retrieval-quality signal.
+    """
+
+    executor: AgentExecutor
+    # No default, on the same reasoning as the retrieval shapes: a turn's
+    # ceiling is a deployment decision, and this path can loop just as
+    # expensively as the others.
+    budget: RunBudget
+
+    async def produce(
+        self,
+        request: ChatRequest,
+        *,
+        history: tuple[Message, ...],
+        sink: EventSink,
+        cancellation: CancellationToken,
+    ) -> ProducedAnswer:
+        outcome = await self.executor.run(
+            build_ungrounded_request(request, self.budget, history=history),
+            sink,
+            cancellation,
+        )
+        return ProducedAnswer(
+            outcome=outcome,
+            grounded=False,
+            authorized_revisions=(),
+            citations=(),
         )
 
 
@@ -384,24 +552,158 @@ class AgenticExecution:
         )
         return ProducedAnswer(
             outcome=outcome,
+            # True even when every search came back empty. This shape *is* a
+            # retrieval shape: the model was given the tool and the instruction
+            # to answer only from what it found, so a turn that found nothing
+            # produced a grounded refusal rather than an ungrounded answer.
+            # Routing on "did evidence arrive" belongs to RoutedExecution,
+            # where it is a decision rather than an accident of the search.
+            grounded=True,
             authorized_revisions=merge_authorized(searched),
             citations=verdict.verified,
             fabricated_citations=verdict.fabricated,
         )
 
 
+@dataclass(frozen=True, slots=True)
+class RoutedExecution:
+    """Retrieve first; answer from evidence if there is any, otherwise from the
+    model, and record which of the two happened (ADR-018).
+
+    The switch is made on **authorized evidence**, not on the question, not on
+    a classifier and not on the model's opinion. Retrieval runs exactly as it
+    does for the fixed shape, including the ACL check; if a passage this asker
+    may read came back, the turn is grounded and goes through citations and the
+    release fence unchanged. If nothing did, the turn answers from the model
+    and says so.
+
+    Choosing on the retrieval result rather than on the question is what keeps
+    this honest and cheap. A router that guessed from the wording would
+    sometimes send a knowledge question down the ungrounded path -- answering
+    from memory about documents the deployment holds, which is the failure mode
+    RAG exists to prevent -- and it would cost a model call to do it. Here the
+    grounded path is taken whenever it *can* be, and the ungrounded path is
+    only ever a fallback from an empty result.
+
+    Two things make a turn ungrounded: nothing survived authorization, or what
+    survived is not relevant enough. The second is the load-bearing one, and it
+    is why this shape needs a cross-encoder.
+
+    An earlier version routed on "did any chunk come back", which is almost
+    always yes: a vector search returns its k nearest neighbours whether or not
+    any of them relate to the question. Measured against a one-document corpus,
+    asking about quicksort still retrieved the fusion document, took the
+    grounded path, and produced the RAG refusal -- so `routed` behaved exactly
+    like `fixed`. Retrieval scores cannot fix that either: RRF is a rank sum,
+    so the top hit of an unrelated query scores near the maximum. Only a
+    query-passage model measures relevance, so only its score can gate this.
+
+    A question whose evidence exists but is not readable by this principal
+    falls back to the ungrounded answer rather than refusing, and that is
+    deliberate -- refusing would disclose that a document exists. The asker
+    gets a model answer with no citations, exactly as if the corpus had
+    nothing.
+    """
+
+    def _is_grounded(self, context: AuthorizedContext) -> bool:
+        """Whether this evidence is worth answering from.
+
+        ``top_relevance is None`` means no reranker ran -- a failed-open one,
+        or a misaligned score list. Treated as ungrounded rather than as
+        grounded, because the alternative is answering from evidence whose
+        relevance nothing established, which is the failure this gate exists
+        to prevent. Assembly refuses the shape without a reranker, so this is
+        the narrow case where one was configured and did not answer.
+        """
+
+        if not context.packet.chunks:
+            return False
+        if context.top_relevance is None:
+            return False
+        return context.top_relevance >= self.relevance_threshold
+
+    retrieval: RetrievalService
+    executor: AgentExecutor
+    budget: RunBudget
+    #: The cross-encoder score the best passage must reach to be answered from.
+    relevance_threshold: float
+
+    async def produce(
+        self,
+        request: ChatRequest,
+        *,
+        history: tuple[Message, ...],
+        sink: EventSink,
+        cancellation: CancellationToken,
+    ) -> ProducedAnswer:
+        context = await self.retrieval.retrieve(
+            RetrievalRequest(
+                query=request.question,
+                tenant_id=request.tenant_id,
+                principal_id=request.principal_id,
+                knowledge_base_id=_required_knowledge_base(request),
+                top_k=request.top_k,
+            )
+        )
+
+        if not self._is_grounded(context):
+            outcome = await self.executor.run(
+                build_ungrounded_request(request, self.budget, history=history),
+                sink,
+                cancellation,
+            )
+            return ProducedAnswer(
+                outcome=outcome,
+                grounded=False,
+                # Both empty by construction, and asserted again by
+                # ChatTurnResult: an ungrounded turn that carried revisions
+                # would send the release fence to re-check documents this
+                # answer never read.
+                authorized_revisions=(),
+                citations=(),
+            )
+
+        outcome = await self.executor.run(
+            build_fixed_request(request, context.packet, self.budget, history=history),
+            sink,
+            cancellation,
+        )
+        verdict = verify_citations(outcome.output_text or "", (context.packet,))
+        return ProducedAnswer(
+            outcome=outcome,
+            grounded=True,
+            authorized_revisions=context.authorized_revisions,
+            citations=verdict.verified,
+            fabricated_citations=verdict.fabricated,
+        )
+
+
+def _required_knowledge_base(request: ChatRequest) -> str:
+    """Narrow the optional transport field at every retrieval boundary."""
+
+    if request.knowledge_base_id is None:
+        raise ValueError("rag chat requires a knowledge base")
+    return request.knowledge_base_id
+
+
 __all__ = [
     "AGENTIC_SYSTEM_PROMPT",
     "SYSTEM_PROMPT",
+    "UNGROUNDED_SYSTEM_PROMPT",
     "AgenticExecution",
+    "AnswerMode",
+    "AnswerModeSelector",
     "ChatRequest",
     "FixedTwoStepExecution",
     "ProducedAnswer",
     "RetrievalJournal",
+    "RoutedExecution",
     "TurnExecution",
+    "UngroundedExecution",
     "agentic_system_prompt",
     "build_agentic_request",
     "build_fixed_request",
+    "build_ungrounded_request",
     "merge_authorized",
     "merge_citations",
 ]

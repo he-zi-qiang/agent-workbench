@@ -126,13 +126,33 @@ jobs:
       # Allowing "UNKNOWN" would pass every future package that states nothing,
       # which is precisely what this gate exists to catch; naming one package
       # costs a line and a reason somebody had to write down.
+      #
+      # llama-index-core (ADR-017) brought roughly fifty transitive packages,
+      # of which exactly five did not match an existing spelling. Four are new
+      # spellings of licences this policy already accepts and are listed:
+      # "ISC" is what griffe, griffecli and griffelib state, against the
+      # "ISC License (ISCL)" classifier spelling already here; "MIT-CMU" is
+      # what Pillow states, the SPDX identifier for the permissive HPND-style
+      # licence it has always shipped under. Neither adds a licence class --
+      # both are already-allowed classes under a different name, which is the
+      # case this allowlist was built to enumerate.
+      #
+      # tiktoken is named rather than spelled. Its metadata License field is
+      # not an identifier at all: it is the entire MIT licence text, newlines
+      # and copyright line included, and pip-licenses compares that whole
+      # string. There is no spelling to add short of pasting the licence into
+      # this file, and doing that would make the allowlist match one exact
+      # rendering of MIT rather than a class of licences. Same reasoning as
+      # FlagEmbedding: the package is permissive, it declares so badly, and
+      # naming it keeps the failure of every *other* badly-declaring package
+      # intact.
       - name: Enforce dependency license policy
         run: >-
           uv run --no-sync pip-licenses
           --from mixed
-          --ignore-packages agent-workbench FlagEmbedding
+          --ignore-packages agent-workbench FlagEmbedding tiktoken
           --allow-only
-          "MIT;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0;BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0;3-Clause BSD License;Apache 2.0 License;Apache License 2.0;Apache Software License; BSD License;Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT;Apache-2.0 AND CNRI-Python;Apache-2.0 AND MIT;ISC License (ISCL);MPL-2.0 AND MIT;Python Software Foundation License;MPL-2.0 AND (Apache-2.0 OR MIT);Apache-2.0 OR MIT"
+          "MIT;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0;BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0;3-Clause BSD License;Apache 2.0 License;Apache License 2.0;Apache Software License; BSD License;Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT;Apache-2.0 AND CNRI-Python;Apache-2.0 AND MIT;ISC;ISC License (ISCL);MIT-CMU;MPL-2.0 AND MIT;Python Software Foundation License;MPL-2.0 AND (Apache-2.0 OR MIT);Apache-2.0 OR MIT"
 
       # The embedding extra is deliberately absent here: the runtime and the
       # weights are several gigabytes, and every gate above runs without them.

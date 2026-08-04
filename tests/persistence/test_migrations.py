@@ -171,6 +171,142 @@ def test_event_schema_version_backfills_existing_rows_without_a_default(
     assert observed == (DOMAIN_SCHEMA_VERSION, "NO", None)
 
 
+def test_knowledge_base_entities_backfill_existing_document_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy document labels become durable, tenant-scoped knowledge bases."""
+
+    dsn = _dsn()
+    monkeypatch.setenv(MIGRATION_DSN_ENV_VAR, dsn)
+    config = _config()
+    command.upgrade(config, "head")
+    command.downgrade(config, "0019_tool_executions")
+
+    async def seed_legacy_documents() -> None:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO documents (
+                            document_id,
+                            tenant_id,
+                            owner_id,
+                            knowledge_base_id,
+                            source_revision,
+                            last_applied_revision,
+                            deleted,
+                            created_at
+                        ) VALUES
+                            (
+                                'doc_kb_backfill_first',
+                                'tenant_kb_backfill_a',
+                                'user_kb_backfill_first',
+                                'kb_legacy_shared',
+                                1,
+                                0,
+                                false,
+                                TIMESTAMPTZ '2026-01-01 12:00:00+00'
+                            ),
+                            (
+                                'doc_kb_backfill_second',
+                                'tenant_kb_backfill_a',
+                                'user_kb_backfill_second',
+                                'kb_legacy_shared',
+                                1,
+                                0,
+                                false,
+                                TIMESTAMPTZ '2026-01-02 12:00:00+00'
+                            ),
+                            (
+                                'doc_kb_backfill_other_tenant',
+                                'tenant_kb_backfill_b',
+                                'user_kb_backfill_other',
+                                'kb_legacy_shared',
+                                1,
+                                0,
+                                false,
+                                TIMESTAMPTZ '2026-01-03 12:00:00+00'
+                            )
+                        """
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    async def inspect_backfill() -> list[tuple[object, ...]]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.connect() as connection:
+                rows = (
+                    await connection.execute(
+                        text(
+                            """
+                            SELECT
+                                tenant_id,
+                                owner_id,
+                                name,
+                                description,
+                                created_at = updated_at AS timestamps_match
+                            FROM knowledge_bases
+                            WHERE tenant_id LIKE 'tenant_kb_backfill_%'
+                              AND knowledge_base_id = 'kb_legacy_shared'
+                            ORDER BY tenant_id
+                            """
+                        )
+                    )
+                ).all()
+                return [tuple(row) for row in rows]
+        finally:
+            await engine.dispose()
+
+    async def remove_fixtures() -> None:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "DELETE FROM documents "
+                        "WHERE document_id LIKE 'doc_kb_backfill_%'"
+                    )
+                )
+                await connection.execute(
+                    text(
+                        "DELETE FROM knowledge_bases "
+                        "WHERE tenant_id LIKE 'tenant_kb_backfill_%'"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    try:
+        asyncio.run(seed_legacy_documents())
+        command.upgrade(config, "head")
+        observed = asyncio.run(inspect_backfill())
+    finally:
+        # Keep the shared test database usable after a failing migration test.
+        command.upgrade(config, "head")
+        asyncio.run(remove_fixtures())
+
+    assert observed == [
+        (
+            "tenant_kb_backfill_a",
+            "user_kb_backfill_first",
+            "kb_legacy_shared",
+            None,
+            True,
+        ),
+        (
+            "tenant_kb_backfill_b",
+            "user_kb_backfill_other",
+            "kb_legacy_shared",
+            None,
+            True,
+        ),
+    ]
+
+
 def test_migrations_refuse_to_run_without_a_dsn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

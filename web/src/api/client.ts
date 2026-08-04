@@ -8,6 +8,9 @@ import type {
   DocumentVersion,
   HealthResponse,
   HistoryResponse,
+  KnowledgeBaseListResponse,
+  KnowledgeBaseView,
+  KnowledgeDocumentListResponse,
   PrincipalIdentity,
   SearchResponse,
   TaskListResponse,
@@ -114,7 +117,12 @@ export async function getChatHistory(
 export async function askChat(
   identity: PrincipalIdentity,
   sessionId: string,
-  input: { question: string; knowledgeBaseId: string; topK?: number },
+  input: {
+    question: string;
+    answerMode: "direct" | "rag";
+    knowledgeBaseId: string | null;
+    topK?: number;
+  },
   idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<AskResponse> {
@@ -123,11 +131,56 @@ export async function askChat(
     headers: { "Idempotency-Key": idempotencyKey },
     body: {
       question: input.question,
+      answer_mode: input.answerMode,
       knowledge_base_id: input.knowledgeBaseId,
       top_k: input.topK ?? 8,
     },
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+export async function listKnowledgeBases(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<KnowledgeBaseListResponse> {
+  return apiRequest(identity, "/v1/knowledge-bases", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function createKnowledgeBase(
+  identity: PrincipalIdentity,
+  input: { name: string; description?: string },
+): Promise<KnowledgeBaseView> {
+  return apiRequest(identity, "/v1/knowledge-bases", {
+    method: "POST",
+    body: {
+      name: input.name,
+      description: input.description?.trim() || null,
+    },
+  });
+}
+
+export async function getKnowledgeBase(
+  identity: PrincipalIdentity,
+  knowledgeBaseId: string,
+): Promise<KnowledgeBaseView> {
+  return apiRequest(
+    identity,
+    `/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`,
+  );
+}
+
+export async function listKnowledgeBaseDocuments(
+  identity: PrincipalIdentity,
+  knowledgeBaseId: string,
+  signal?: AbortSignal,
+): Promise<KnowledgeDocumentListResponse> {
+  return apiRequest(
+    identity,
+    `/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents`,
+    { ...(signal === undefined ? {} : { signal }) },
+  );
 }
 
 export async function listTasks(

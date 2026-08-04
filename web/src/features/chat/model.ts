@@ -1,5 +1,6 @@
 import type {
   AskResponse,
+  ChatAnswerMode,
   Citation,
   EventEnvelope,
   LocalChatSession,
@@ -30,7 +31,8 @@ export interface ChatTurnState {
   localId: string;
   sessionId: string;
   question: string;
-  knowledgeBaseId: string;
+  answerMode: ChatAnswerMode;
+  knowledgeBaseId: string | null;
   topK: number;
   idempotencyKey: string;
   submittedAt: string;
@@ -43,6 +45,11 @@ export interface ChatTurnState {
   answer?: string;
   withheldReason?: string;
   error?: string;
+  // False when this answer was produced without retrieved evidence (ADR-018).
+  // Per-turn rather than per-session on purpose: the routed shape can produce
+  // both kinds in one conversation, and a badge driven by "current mode" would
+  // relabel every earlier message the moment the mode changed.
+  grounded?: boolean;
 }
 
 export type ChatConnectionState = "idle" | "connecting" | "connected" | "retrying" | "unavailable";
@@ -62,6 +69,7 @@ export interface SafeRunEvent {
   activity: ChatActivity;
   terminal?:
     | { kind: "committed"; text: string; citations: Citation[] }
+    | { kind: "ungrounded"; text: string }
     | { kind: "withheld"; text: string; reason: string };
 }
 
@@ -80,7 +88,8 @@ export interface SubmitTurnInput {
   localId: string;
   sessionId: string;
   question: string;
-  knowledgeBaseId: string;
+  answerMode: ChatAnswerMode;
+  knowledgeBaseId: string | null;
   topK: number;
   idempotencyKey: string;
   submittedAt: string;
@@ -88,7 +97,13 @@ export interface SubmitTurnInput {
 
 export type ChatAction =
   | { type: "sessionAdded"; session: LocalChatSession }
-  | { type: "sessionUpdated"; sessionId: string; knowledgeBaseId: string; updatedAt: string }
+  | {
+      type: "sessionUpdated";
+      sessionId: string;
+      answerMode: ChatAnswerMode;
+      knowledgeBaseId: string | null;
+      updatedAt: string;
+    }
   | {
       type: "connectionChanged";
       sessionId: string;
@@ -163,6 +178,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...state.sessions,
           [action.sessionId]: {
             ...current,
+            answerMode: action.answerMode,
             knowledgeBaseId: action.knowledgeBaseId,
             updatedAt: action.updatedAt,
           },
@@ -216,11 +232,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 text: action.response.answer,
                 reason: "sources_changed",
               }
-            : {
-                kind: "committed",
-                text: action.response.answer,
-                citations: action.response.citations,
-              },
+            : action.response.grounded === false
+              ? { kind: "ungrounded", text: action.response.answer }
+              : {
+                  kind: "committed",
+                  text: action.response.answer,
+                  citations: action.response.citations,
+                },
         ),
       );
     }
@@ -389,6 +407,7 @@ function finalizeTurn(
   turn: ChatTurnState,
   terminal:
     | { kind: "committed"; text: string; citations: Citation[] }
+    | { kind: "ungrounded"; text: string }
     | { kind: "withheld"; text: string; reason: string },
 ): ChatTurnState {
   // Withholding is the fail-closed result. A duplicate HTTP response must never
@@ -405,11 +424,27 @@ function finalizeTurn(
     delete next.error;
     return next;
   }
+  if (terminal.kind === "ungrounded") {
+    // Committed, because it is a published answer -- but marked, and with no
+    // citations to offer. It never retrieved, so an empty list here is the
+    // whole truth rather than a gap.
+    const ungrounded: ChatTurnState = {
+      ...turn,
+      phase: "committed",
+      answer: terminal.text,
+      citations: [],
+      grounded: false,
+    };
+    delete ungrounded.error;
+    delete ungrounded.withheldReason;
+    return ungrounded;
+  }
   const next: ChatTurnState = {
     ...turn,
     phase: "committed",
     answer: terminal.text,
     citations: terminal.citations,
+    grounded: true,
   };
   delete next.error;
   delete next.withheldReason;
@@ -448,6 +483,18 @@ function safeEventFromFrame(sessionId: string, frame: SseFrame): SafeRunEvent | 
       timestamp: envelope.timestamp,
       activity,
       terminal: { kind: "committed", text, citations },
+    };
+  }
+  if (kind === "UngroundedAnswerCommitted") {
+    const text = stringField(envelope.payload, "text");
+    if (text === null) return null;
+    return {
+      eventId: envelope.event_id,
+      runId: envelope.run_id,
+      kind,
+      timestamp: envelope.timestamp,
+      activity,
+      terminal: { kind: "ungrounded", text },
     };
   }
   if (kind === "AnswerWithheld") {
@@ -564,6 +611,15 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
   if (kind === "AnswerCommitted") {
     return { ...base, key: "answer", label: "答案已安全发布", state: "complete" };
   }
+  if (kind === "UngroundedAnswerCommitted") {
+    // Deliberately not "已安全发布": no answer released down this path passed a
+    // source check, whether it skipped retrieval or retrieved and found nothing
+    // relevant enough. Reusing that label would be the timeline making the claim
+    // the separate event type exists to avoid. Which of the two happened is a
+    // property of the turn rather than of this event, so the answer block says
+    // it and this line stays true for both.
+    return { ...base, key: "answer", label: "答案已发布（未经证据核实）", state: "complete" };
+  }
   if (kind === "AnswerWithheld") {
     return {
       ...base,
@@ -609,6 +665,7 @@ function historyLoaded(state: ChatState, sessionId: string, messages: MessageVie
         localId,
         sessionId,
         question: message.text,
+        answerMode: session.answerMode,
         knowledgeBaseId: session.knowledgeBaseId,
         topK: 8,
         idempotencyKey: "history",

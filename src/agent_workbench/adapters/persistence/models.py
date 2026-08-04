@@ -218,6 +218,37 @@ artifacts = Table(
     Index("ix_artifacts_tenant_id_artifact_id", "tenant_id", "artifact_id"),
 )
 
+knowledge_bases = Table(
+    "knowledge_bases",
+    metadata,
+    # Knowledge-base ids are generated globally, but tenant remains part of the
+    # primary key so every lookup is structurally tenant-scoped rather than
+    # relying on UUID probability as an authorization boundary.
+    Column("knowledge_base_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("name", String(200), nullable=False),
+    Column("description", Text, nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Index(
+        "ix_knowledge_bases_tenant_id_owner_id_created_at",
+        "tenant_id",
+        "owner_id",
+        "created_at",
+    ),
+)
+
 upload_intents = Table(
     "upload_intents",
     metadata,

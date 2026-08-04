@@ -59,6 +59,7 @@ from agent_workbench.bootstrap.embedding_factory import (
 )
 from agent_workbench.bootstrap.projections import TaskWorkerRuntimeConfig
 from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
+from agent_workbench.bootstrap.retrieval_factory import build_candidate_retriever
 from agent_workbench.bootstrap.sparse_factory import (
     SparseEncodingUnavailable,
     build_sparse_encoder,
@@ -313,10 +314,13 @@ def _build_real_handlers(
         timeout=config.qdrant.request_timeout_seconds,
     )
     retrieval = RetrievalService(
-        embedder=embedder,
-        index=QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias),
+        candidate_retriever=build_candidate_retriever(
+            llama_index_enabled=config.retrieval.llama_index_enabled,
+            embedder=embedder,
+            index=QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias),
+            sparse_encoder=sparse_encoder,
+        ),
         documents=documents,
-        sparse_encoder=sparse_encoder,
     )
     evidence = EvidenceStore(artifacts)
     external_tool = ExternalSearchTool(

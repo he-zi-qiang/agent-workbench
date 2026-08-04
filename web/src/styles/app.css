@@ -164,6 +164,64 @@ a {
   display: none;
 }
 
+.aw-mobile-more-backdrop {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: grid;
+  align-items: end;
+  padding: 14px;
+  background: rgb(10 11 9 / 62%);
+  backdrop-filter: blur(4px);
+}
+
+.aw-mobile-more-sheet {
+  width: min(480px, 100%);
+  margin: 0 auto;
+  padding: 16px;
+  border: 1px solid var(--aw-border);
+  border-radius: 18px;
+  background: var(--aw-panel);
+  box-shadow: var(--aw-shadow-md);
+}
+
+.aw-mobile-more-sheet > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.aw-mobile-more-sheet h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.aw-mobile-more-list {
+  display: grid;
+  gap: 7px;
+}
+
+.aw-mobile-more-link {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  padding: 10px 12px;
+  gap: 10px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+  text-align: left;
+}
+
+.aw-mobile-more-link.active {
+  border-color: color-mix(in srgb, var(--aw-accent) 45%, var(--aw-border));
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
 .aw-button,
 .aw-icon-button {
   display: inline-flex;
@@ -1098,6 +1156,98 @@ pre {
   font-weight: 600;
 }
 
+/* Retrieval scoreboard. Wider than the two-column capability matrix above it,
+   and every score cell carries a count over the plain rate, so the columns are
+   sized for "37 / 38 题" rather than "97.4%". */
+.aw-eval-table {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+}
+
+.aw-eval-row {
+  display: grid;
+  grid-template-columns:
+    minmax(120px, 1fr) minmax(110px, 1fr)
+    repeat(2, minmax(120px, 1fr)) minmax(110px, 0.8fr);
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-eval-row:last-child {
+  border-bottom: 0;
+}
+
+.aw-eval-row > * {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--aw-border);
+  overflow-wrap: anywhere;
+}
+
+.aw-eval-row > :last-child {
+  border-right: 0;
+}
+
+.aw-eval-row.is-heading {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aw-eval-row b {
+  color: var(--aw-text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.aw-eval-row small {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-eval-method {
+  margin-top: 4px;
+  color: var(--aw-text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.aw-eval-method strong {
+  color: var(--aw-text);
+}
+
+.aw-eval-legend {
+  display: grid;
+  margin-top: 14px;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.aw-eval-legend > div {
+  padding: 10px 12px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-eval-legend strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 13px;
+}
+
+.aw-eval-legend span {
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .aw-markdown {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1117,6 +1267,529 @@ pre {
 .aw-markdown pre,
 .aw-markdown blockquote {
   margin: 0.7em 0;
+}
+
+/* Shared knowledge source and attachments -------------------------------- */
+
+.aw-source-picker {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 28px;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+  color: var(--aw-text-muted);
+}
+
+.aw-source-picker > label {
+  min-width: 0;
+}
+
+.aw-source-picker select {
+  min-height: 36px;
+  padding: 6px 28px 6px 8px;
+  font-size: 11px;
+}
+
+.aw-source-picker.is-compact {
+  width: min(360px, 100%);
+}
+
+.aw-source-picker.is-compact select {
+  min-height: 31px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.aw-source-manage {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 7px;
+}
+
+.aw-source-manage:hover {
+  background: var(--aw-panel-strong);
+  color: var(--aw-accent);
+}
+
+.aw-source-error {
+  grid-column: 1 / -1;
+  color: var(--aw-danger);
+  font-size: 10px;
+}
+
+.aw-attachment-button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--aw-text-muted);
+}
+
+.aw-attachment-control {
+  position: relative;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.aw-attachment-button:hover:not(:disabled) {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+.aw-attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 7px;
+  gap: 7px;
+}
+
+.aw-attachment {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  max-width: min(310px, 100%);
+  min-height: 43px;
+  padding: 6px 7px 6px 9px;
+  gap: 6px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel);
+  color: var(--aw-text-muted);
+}
+
+.aw-attachment.is-ready {
+  border-color: color-mix(in srgb, var(--aw-success) 28%, var(--aw-border));
+}
+
+.aw-attachment.is-failed {
+  border-color: color-mix(in srgb, var(--aw-danger) 35%, var(--aw-border));
+}
+
+.aw-attachment > span {
+  min-width: 0;
+}
+
+.aw-attachment strong,
+.aw-attachment small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-attachment strong {
+  color: var(--aw-text);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.aw-attachment small {
+  font-size: 9px;
+}
+
+.aw-attachment button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aw-text-muted);
+}
+
+.aw-attachment button:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+.aw-chat-composer-row {
+  grid-template-columns: 42px minmax(0, 1fr) 42px;
+}
+
+.aw-chat-composer-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  margin: 4px 3px 0;
+  gap: 10px;
+}
+
+.aw-chat-composer-tools > span {
+  color: var(--aw-text-muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+/* Knowledge -------------------------------------------------------------- */
+
+.aw-knowledge-page > * {
+  width: min(1180px, 100%);
+}
+
+.aw-knowledge-layout {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  min-height: 580px;
+  overflow: hidden;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-lg);
+  background: var(--aw-panel);
+  box-shadow: var(--aw-shadow-sm);
+}
+
+.aw-knowledge-list {
+  padding: 8px;
+  border-right: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+}
+
+.aw-knowledge-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 8px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 8px;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+}
+
+.aw-knowledge-row:hover,
+.aw-knowledge-row.is-active {
+  border-color: var(--aw-border);
+  background: var(--aw-panel);
+}
+
+.aw-knowledge-row.is-active {
+  box-shadow: var(--aw-shadow-sm);
+}
+
+.aw-knowledge-row > span:nth-child(2) {
+  min-width: 0;
+}
+
+.aw-knowledge-row strong,
+.aw-knowledge-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-knowledge-row strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aw-knowledge-row small {
+  color: var(--aw-text-muted);
+  font-size: 9px;
+}
+
+.aw-knowledge-row > i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--aw-warning);
+}
+
+.aw-knowledge-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+.aw-knowledge-detail {
+  min-width: 0;
+  padding: 22px;
+}
+
+.aw-knowledge-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.aw-knowledge-detail-header h2 {
+  margin: 1px 0 0;
+  font-size: 22px;
+}
+
+.aw-knowledge-detail-header p {
+  margin: 3px 0 0;
+  color: var(--aw-text-muted);
+}
+
+.aw-knowledge-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 18px 0 2px;
+  overflow: hidden;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-knowledge-summary > span {
+  padding: 10px 12px;
+  border-right: 1px solid var(--aw-border);
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-knowledge-summary > span:last-child {
+  border-right: 0;
+}
+
+.aw-knowledge-summary strong {
+  display: block;
+  color: var(--aw-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.aw-knowledge-upload,
+.aw-knowledge-documents,
+.aw-knowledge-debug {
+  margin-top: 12px;
+}
+
+.aw-knowledge-upload .aw-card-header p,
+.aw-knowledge-documents .aw-card-header p {
+  margin: 2px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-drop-zone {
+  position: relative;
+  display: grid;
+  min-height: 118px;
+  margin: 14px 0 10px;
+  place-items: center;
+  align-content: center;
+  gap: 3px;
+  border: 1px dashed var(--aw-border-strong);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  cursor: pointer;
+}
+
+.aw-drop-zone:hover {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent-soft);
+}
+
+.aw-drop-zone strong {
+  color: var(--aw-text);
+}
+
+.aw-drop-zone span {
+  font-size: 10px;
+}
+
+.aw-drop-zone input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.aw-document-list {
+  display: grid;
+  margin-top: 12px;
+}
+
+.aw-document-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  align-items: center;
+  min-height: 54px;
+  padding: 7px 3px;
+  gap: 8px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-document-row:last-child {
+  border-bottom: 0;
+}
+
+.aw-document-row > span:nth-child(2) {
+  min-width: 0;
+}
+
+.aw-document-row strong,
+.aw-document-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-document-row strong {
+  font-weight: 550;
+}
+
+.aw-document-row small,
+.aw-document-row time {
+  color: var(--aw-text-muted);
+  font-size: 9px;
+}
+
+.aw-document-status {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--aw-warning-soft);
+  color: var(--aw-warning);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.aw-document-status.is-ready {
+  background: var(--aw-success-soft);
+  color: var(--aw-success);
+}
+
+.aw-knowledge-debug > summary,
+.aw-work-advanced > summary,
+.aw-engineering-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 550;
+}
+
+/* Work source controls --------------------------------------------------- */
+
+.aw-work-attachment-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-work-advanced {
+  padding: 8px 0;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-work-advanced[open] summary {
+  margin-bottom: 8px;
+}
+
+.aw-create-task-hint {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-approval-objective {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--aw-warning);
+  border-radius: 0 8px 8px 0;
+  background: var(--aw-warning-soft);
+  color: var(--aw-text);
+}
+
+.aw-approval-summary {
+  display: flex;
+  align-items: center;
+  margin: 10px 0;
+  gap: 9px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-engineering-details {
+  margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+  .aw-knowledge-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .aw-knowledge-list {
+    display: flex;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--aw-border);
+  }
+
+  .aw-knowledge-row {
+    min-width: 220px;
+  }
+
+  .aw-knowledge-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aw-knowledge-summary > span:nth-child(2) {
+    border-right: 0;
+  }
+
+  .aw-knowledge-summary > span:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--aw-border);
+  }
+}
+
+@media (max-width: 760px) {
+  .aw-chat-composer-row {
+    grid-template-columns: 42px minmax(0, 1fr) 44px;
+  }
+
+  .aw-chat-composer-tools {
+    display: grid;
+  }
+
+  .aw-chat-composer-tools > span {
+    text-align: left;
+  }
+
+  .aw-knowledge-detail {
+    padding: 15px;
+  }
+
+  .aw-knowledge-detail-header {
+    display: block;
+  }
+
+  .aw-knowledge-detail-header .aw-page-actions {
+    margin-top: 12px;
+  }
+
+  .aw-document-row {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+  }
+
+  .aw-document-row time {
+    display: none;
+  }
 }
 
 /* Chat ------------------------------------------------------------------- */
@@ -1495,7 +2168,7 @@ pre {
 
 .aw-chat-composer-row {
   display: grid;
-  grid-template-columns: minmax(110px, 160px) minmax(0, 1fr) 42px;
+  grid-template-columns: 42px minmax(0, 1fr) 42px;
   align-items: end;
   padding: 5px;
   gap: 5px;
@@ -2167,7 +2840,7 @@ pre {
   }
 
   .aw-chat-composer-row {
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: 42px minmax(0, 1fr) 44px;
   }
 
   .aw-chat-kb-field {
@@ -2246,12 +2919,21 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .aw-evaluation-matrix {
+  .aw-evaluation-matrix,
+  .aw-eval-table {
     overflow-x: auto;
   }
 
   .aw-evaluation-row {
     min-width: 650px;
+  }
+
+  .aw-eval-row {
+    min-width: 680px;
+  }
+
+  .aw-eval-legend {
+    grid-template-columns: 1fr;
   }
 
   /* A selected Work becomes the mobile detail screen; Back returns to the

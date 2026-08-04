@@ -95,7 +95,8 @@
       "fields": [
         "chat.retrieval_shape",
         "chat.max_agentic_steps",
-        "chat.max_agentic_searches"
+        "chat.max_agentic_searches",
+        "chat.routed_relevance_threshold"
       ]
     },
     {

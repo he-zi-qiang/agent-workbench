@@ -11,6 +11,17 @@ code: a wrapper around the index performs the revoke inside ``search``, after
 the real query returns and before the service sees the result. That is exactly
 the window being defended, and it is deterministic -- the revoke has certainly
 committed by the time authorization runs, every run.
+
+Since ADR-017 this file is also the retrieval **contract suite**: every scenario
+that goes through the funnel runs once per ``CandidateRetrieverPort``
+implementation. Step 1 of that ADR's migration rules requires the external
+contracts to be unchanged by the framework -- the ACL gate, the source-revision
+fence, citations, the second check before release -- and "unchanged" stays an
+intention until the same assertions have been made against both paths. Running
+them twice is also what would catch the failure mode that matters most here: a
+retriever that returns *more* than it should. Every rejection below happens
+after retrieval, so a framework that quietly widened the candidate set would
+still pass a test that only counted what came out.
 """
 
 from __future__ import annotations
@@ -31,10 +42,12 @@ from agent_workbench.adapters.ingestion import (
     ApproximateTokenCounter,
     TextDocumentParser,
 )
+from agent_workbench.adapters.llama_index import LlamaIndexCandidateRetriever
 from agent_workbench.adapters.persistence import (
     PostgresDocumentStore,
     create_query_engine,
 )
+from agent_workbench.adapters.retrieval import ReferenceVectorIndexRetriever
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.chunking import Chunker
 from agent_workbench.application.ingestion import IngestionRequest, IngestionService
@@ -67,6 +80,29 @@ TABLES = (
     "document_versions, documents, outbox_events"
 )
 
+#: The two ``CandidateRetrieverPort`` implementations, and what each calls
+#: itself. The mode strings are part of the parametrisation rather than derived
+#: from the object, because an ablation has to be able to tell the two apart in
+#: its own output: reporting plain "hybrid" for both would make two retrievers
+#: look like two runs of one.
+RetrieverFactory = Callable[..., Any]
+
+CANDIDATE_RETRIEVERS: tuple[tuple[RetrieverFactory, str, str], ...] = (
+    (ReferenceVectorIndexRetriever, "dense", "hybrid"),
+    (LlamaIndexCandidateRetriever, "llama_index+dense", "llama_index+hybrid"),
+)
+RETRIEVER_IDS = ("reference", "llama_index")
+
+#: Applied to every scenario that goes through the funnel. Tests that assert on
+#: a tool's schema or risk level are deliberately *not* parametrised: those
+#: properties do not depend on which retriever ran, and marking them as if they
+#: did would overstate what has been covered.
+over_both_retrievers = pytest.mark.parametrize(
+    "build_retriever",
+    tuple(factory for factory, _, _ in CANDIDATE_RETRIEVERS),
+    ids=RETRIEVER_IDS,
+)
+
 
 def _dsn() -> str:
     dsn = os.environ.get(DSN_ENV_VAR)
@@ -85,9 +121,15 @@ def _url() -> str:
 class _Harness:
     """Real Qdrant, real PostgreSQL, one collection per test."""
 
-    def __init__(self, index: QdrantVectorIndex, store: PostgresDocumentStore) -> None:
+    def __init__(
+        self,
+        index: QdrantVectorIndex,
+        store: PostgresDocumentStore,
+        build_retriever: RetrieverFactory,
+    ) -> None:
         self.index = index
         self.store = store
+        self.build_retriever = build_retriever
         self.embedder = DeterministicEmbedder(dimension=SIZE)
         self.ingestion = IngestionService(
             parser=TextDocumentParser(),
@@ -102,10 +144,12 @@ class _Harness:
         self, index: Any = None, *, sparse_encoder: Any = None
     ) -> RetrievalService:
         return RetrievalService(
-            embedder=self.embedder,
-            index=index if index is not None else self.index,
+            candidate_retriever=self.build_retriever(
+                embedder=self.embedder,
+                index=index if index is not None else self.index,
+                sparse_encoder=sparse_encoder,
+            ),
             documents=self.store,
-            sparse_encoder=sparse_encoder,
         )
 
     async def publish(
@@ -173,7 +217,10 @@ class _Harness:
             )
 
 
-def _run(scenario: Callable[[_Harness], Awaitable[Any]]) -> Any:
+def _run(
+    scenario: Callable[[_Harness], Awaitable[Any]],
+    build_retriever: RetrieverFactory,
+) -> Any:
     dsn, url = _dsn(), _url()
     collection = f"test_{uuid.uuid4().hex}"
 
@@ -185,7 +232,9 @@ def _run(scenario: Callable[[_Harness], Awaitable[Any]]) -> Any:
                 await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))
             index = QdrantVectorIndex(client, collection=collection)
             await index.ensure_collection(vector_size=SIZE)
-            return await scenario(_Harness(index, PostgresDocumentStore(engine)))
+            return await scenario(
+                _Harness(index, PostgresDocumentStore(engine), build_retriever)
+            )
         finally:
             try:
                 await client.delete_collection(collection)
@@ -209,7 +258,10 @@ def _ask(principal: str) -> RetrievalRequest:
 # --- the ordinary case -------------------------------------------------------
 
 
-def test_a_granted_reader_gets_context_and_citations() -> None:
+@over_both_retrievers
+def test_a_granted_reader_gets_context_and_citations(
+    build_retriever: RetrieverFactory,
+) -> None:
     async def scenario(harness: _Harness) -> tuple[int, int, bool]:
         await harness.publish(granted=(READER,))
         context = await harness.retrieval().retrieve(_ask(READER))
@@ -220,14 +272,17 @@ def test_a_granted_reader_gets_context_and_citations() -> None:
             any("fourteenth" in chunk.text for chunk in packet.chunks),
         )
 
-    chunks, citations, found = _run(scenario)
+    chunks, citations, found = _run(scenario, build_retriever)
 
     assert chunks > 0
     assert citations == chunks
     assert found
 
 
-def test_every_chunk_has_a_citation_that_names_it() -> None:
+@over_both_retrievers
+def test_every_chunk_has_a_citation_that_names_it(
+    build_retriever: RetrieverFactory,
+) -> None:
     """A citation without its chunk references something nobody read."""
 
     async def scenario(harness: _Harness) -> tuple[list[str], list[str]]:
@@ -238,12 +293,13 @@ def test_every_chunk_has_a_citation_that_names_it() -> None:
             sorted(citation.chunk_id for citation in packet.citations),
         )
 
-    chunk_ids, citation_ids = _run(scenario)
+    chunk_ids, citation_ids = _run(scenario, build_retriever)
 
     assert chunk_ids == citation_ids
 
 
-def test_a_stranger_gets_nothing(harness_unused: None = None) -> None:
+@over_both_retrievers
+def test_a_stranger_gets_nothing(build_retriever: RetrieverFactory) -> None:
     """The index would have narrowed this away too; PostgreSQL is why it holds."""
 
     async def scenario(harness: _Harness) -> int:
@@ -251,7 +307,7 @@ def test_a_stranger_gets_nothing(harness_unused: None = None) -> None:
         context = await harness.retrieval().retrieve(_ask(STRANGER))
         return len(context.packet.chunks)
 
-    assert _run(scenario) == 0
+    assert _run(scenario, build_retriever) == 0
 
 
 # --- source revision gate ----------------------------------------------------
@@ -298,22 +354,32 @@ def _revision_candidate(revision: int, *, text: str) -> ScoredChunk:
 
 
 def _retrieve_revision_candidates(
-    candidates: tuple[ScoredChunk, ...], *, current_revision: int
+    candidates: tuple[ScoredChunk, ...],
+    *,
+    current_revision: int,
+    build_retriever: RetrieverFactory,
 ) -> AuthorizedContext:
     service = RetrievalService(
-        embedder=DeterministicEmbedder(dimension=SIZE),
-        index=cast(VectorIndexPort, _RevisionCandidates(candidates)),
+        candidate_retriever=build_retriever(
+            embedder=DeterministicEmbedder(dimension=SIZE),
+            index=cast(VectorIndexPort, _RevisionCandidates(candidates)),
+            sparse_encoder=None,
+        ),
         documents=cast(DocumentStore, _ReadableAtRevision(current_revision)),
     )
     return asyncio.run(service.retrieve(_ask(OWNER)))
 
 
-def test_a_readable_document_does_not_authorize_a_stale_revision() -> None:
+@over_both_retrievers
+def test_a_readable_document_does_not_authorize_a_stale_revision(
+    build_retriever: RetrieverFactory,
+) -> None:
     """Current access must not make removed text from an old point readable."""
 
     context = _retrieve_revision_candidates(
         (_revision_candidate(1, text="text removed in revision two"),),
         current_revision=2,
+        build_retriever=build_retriever,
     )
 
     assert context.packet.chunks == ()
@@ -321,7 +387,10 @@ def test_a_readable_document_does_not_authorize_a_stale_revision() -> None:
     assert context.authorized_revisions == ()
 
 
-def test_the_candidate_at_the_current_revision_is_retained() -> None:
+@over_both_retrievers
+def test_the_candidate_at_the_current_revision_is_retained(
+    build_retriever: RetrieverFactory,
+) -> None:
     """The gate filters stale copies without filtering the current snapshot."""
 
     context = _retrieve_revision_candidates(
@@ -330,6 +399,7 @@ def test_the_candidate_at_the_current_revision_is_retained() -> None:
             _revision_candidate(2, text="current text"),
         ),
         current_revision=2,
+        build_retriever=build_retriever,
     )
 
     assert tuple(chunk.text for chunk in context.packet.chunks) == ("current text",)
@@ -365,7 +435,10 @@ class _RevokingIndex:
         return getattr(self._inner, name)
 
 
-def test_a_revoke_after_the_query_keeps_the_chunk_out_of_the_context() -> None:
+@over_both_retrievers
+def test_a_revoke_after_the_query_keeps_the_chunk_out_of_the_context(
+    build_retriever: RetrieverFactory,
+) -> None:
     """WP04's exit condition, stated as a test.
 
     Qdrant answers with the chunk -- its stale payload still lists the reader.
@@ -383,7 +456,7 @@ def test_a_revoke_after_the_query_keeps_the_chunk_out_of_the_context() -> None:
             len(context.packet.citations),
         )
 
-    from_index, in_context, cited = _run(scenario)
+    from_index, in_context, cited = _run(scenario, build_retriever)
 
     # The index really did return it -- otherwise this test proves nothing.
     assert from_index > 0
@@ -391,7 +464,10 @@ def test_a_revoke_after_the_query_keeps_the_chunk_out_of_the_context() -> None:
     assert cited == 0
 
 
-def test_the_revoked_text_does_not_appear_anywhere_in_the_packet() -> None:
+@over_both_retrievers
+def test_the_revoked_text_does_not_appear_anywhere_in_the_packet(
+    build_retriever: RetrieverFactory,
+) -> None:
     """Asserted on the text, not the count: leaking it once is leaking it."""
 
     async def scenario(harness: _Harness) -> tuple[int, str]:
@@ -400,13 +476,16 @@ def test_the_revoked_text_does_not_appear_anywhere_in_the_packet() -> None:
         context = await harness.retrieval(index=racing).retrieve(_ask(READER))
         return len(racing.returned), repr(context.packet.model_dump())
 
-    from_index, dumped = _run(scenario)
+    from_index, dumped = _run(scenario, build_retriever)
 
     assert from_index > 0
     assert "fourteenth" not in dumped
 
 
-def test_the_owner_remains_authorized_but_does_not_receive_a_stale_revision() -> None:
+@over_both_retrievers
+def test_the_owner_remains_authorized_but_does_not_receive_a_stale_revision(
+    build_retriever: RetrieverFactory,
+) -> None:
     """A revoke does not revoke the owner, but it still advances the source."""
 
     async def scenario(harness: _Harness) -> tuple[int, int, str]:
@@ -420,7 +499,7 @@ def test_the_owner_remains_authorized_but_does_not_receive_a_stale_revision() ->
         )
         return len(racing.returned), len(context.packet.chunks), current.owner_id
 
-    from_index, in_context, owner = _run(scenario)
+    from_index, in_context, owner = _run(scenario, build_retriever)
 
     assert from_index > 0
     assert in_context == 0
@@ -430,7 +509,10 @@ def test_the_owner_remains_authorized_but_does_not_receive_a_stale_revision() ->
 # --- the second check --------------------------------------------------------
 
 
-def test_an_answer_is_refused_when_a_source_was_revoked_meanwhile() -> None:
+@over_both_retrievers
+def test_an_answer_is_refused_when_a_source_was_revoked_meanwhile(
+    build_retriever: RetrieverFactory,
+) -> None:
     """Between building a context and committing an answer there is a model call."""
 
     async def scenario(harness: _Harness) -> AuthorizedContext:
@@ -443,10 +525,12 @@ def test_an_answer_is_refused_when_a_source_was_revoked_meanwhile() -> None:
         return context
 
     with pytest.raises(SourcesChangedError):
-        _run(scenario)
+        _run(scenario, build_retriever)
 
 
+@over_both_retrievers
 def test_an_unchanged_source_confirms(  # the control for the test above
+    build_retriever: RetrieverFactory,
 ) -> None:
     """Without it, a confirm_unchanged that always raised would look correct."""
 
@@ -457,10 +541,13 @@ def test_an_unchanged_source_confirms(  # the control for the test above
         await service.confirm_unchanged(context, tenant_id=TENANT, principal_id=READER)
         return "confirmed"
 
-    assert _run(scenario) == "confirmed"
+    assert _run(scenario, build_retriever) == "confirmed"
 
 
-def test_a_regranted_document_still_fails_the_second_check() -> None:
+@over_both_retrievers
+def test_a_regranted_document_still_fails_the_second_check(
+    build_retriever: RetrieverFactory,
+) -> None:
     """Revoked and re-granted is not the same as never touched.
 
     Re-asking "may I read it" would say yes. The revision says the ACL was
@@ -483,7 +570,7 @@ def test_a_regranted_document_still_fails_the_second_check() -> None:
         await service.confirm_unchanged(context, tenant_id=TENANT, principal_id=READER)
 
     with pytest.raises(SourcesChangedError):
-        _run(scenario)
+        _run(scenario, build_retriever)
 
 
 # --- which retriever is this ------------------------------------------------
@@ -511,25 +598,59 @@ class _OneTermSparse:
         return SparseVector(indices=(99,), values=(1.0,))
 
 
-def test_the_mode_says_dense_without_a_sparse_encoder() -> None:
+@pytest.mark.parametrize(
+    ("build_retriever", "dense_mode", "hybrid_mode"),
+    CANDIDATE_RETRIEVERS,
+    ids=RETRIEVER_IDS,
+)
+def test_the_mode_says_dense_without_a_sparse_encoder(
+    build_retriever: RetrieverFactory, dense_mode: str, hybrid_mode: str
+) -> None:
     """An evaluation report must not be able to label a dense run as hybrid."""
 
     async def scenario(harness: _Harness) -> str:
         return harness.retrieval().mode
 
-    assert _run(scenario) == "dense"
+    assert _run(scenario, build_retriever) == dense_mode
 
 
-def test_the_mode_says_hybrid_with_one() -> None:
+@pytest.mark.parametrize(
+    ("build_retriever", "dense_mode", "hybrid_mode"),
+    CANDIDATE_RETRIEVERS,
+    ids=RETRIEVER_IDS,
+)
+def test_the_mode_says_hybrid_with_one(
+    build_retriever: RetrieverFactory, dense_mode: str, hybrid_mode: str
+) -> None:
     """The control: an ablation comparing the two must not compare one to itself."""
 
     async def scenario(harness: _Harness) -> str:
         return harness.retrieval(sparse_encoder=_OneTermSparse()).mode
 
-    assert _run(scenario) == "hybrid"
+    assert _run(scenario, build_retriever) == hybrid_mode
 
 
-def test_hybrid_retrieval_still_authorizes_against_postgresql() -> None:
+def test_the_two_retrievers_do_not_answer_to_the_same_name() -> None:
+    """The parametrisation above is only meaningful if the ids differ.
+
+    Without this, both rows of CANDIDATE_RETRIEVERS could name themselves
+    "hybrid", every mode assertion would still pass, and two evaluation reports
+    produced from them would be indistinguishable -- which is the exact
+    condition under which a regression in one path reads as noise in the other.
+    """
+
+    dense_modes = {dense for _, dense, _ in CANDIDATE_RETRIEVERS}
+    hybrid_modes = {hybrid for _, _, hybrid in CANDIDATE_RETRIEVERS}
+
+    assert len(dense_modes) == len(CANDIDATE_RETRIEVERS)
+    assert len(hybrid_modes) == len(CANDIDATE_RETRIEVERS)
+    assert not dense_modes & hybrid_modes
+
+
+@over_both_retrievers
+def test_hybrid_retrieval_still_authorizes_against_postgresql(
+    build_retriever: RetrieverFactory,
+) -> None:
     """Adding an arm must not add a way past the check that follows it."""
 
     async def scenario(harness: _Harness) -> int:
@@ -546,7 +667,7 @@ def test_hybrid_retrieval_still_authorizes_against_postgresql() -> None:
         )
         return len(context.packet.chunks)
 
-    assert _run(scenario) == 0
+    assert _run(scenario, build_retriever) == 0
 
 
 # --- retrieval as a tool -----------------------------------------------------
@@ -585,7 +706,8 @@ def _tool(harness: _Harness) -> Any:
     return KnowledgeSearchTool(retrieval=harness.retrieval())
 
 
-def test_the_tool_returns_readable_passages() -> None:
+@over_both_retrievers
+def test_the_tool_returns_readable_passages(build_retriever: RetrieverFactory) -> None:
     """The control: the refusals below are about who is asking."""
 
     async def scenario(harness: _Harness) -> str:
@@ -595,10 +717,13 @@ def test_the_tool_returns_readable_passages() -> None:
         )
         return result.content or ""
 
-    assert "fusion" in _run(scenario).lower()
+    assert "fusion" in _run(scenario, build_retriever).lower()
 
 
-def test_the_model_cannot_choose_whose_documents_to_search() -> None:
+@over_both_retrievers
+def test_the_model_cannot_choose_whose_documents_to_search(
+    build_retriever: RetrieverFactory,
+) -> None:
     """The security property this tool exists to keep.
 
     Arguments are the one part of a tool call untrusted text can reach: a
@@ -622,7 +747,7 @@ def test_the_model_cannot_choose_whose_documents_to_search() -> None:
         )
         return result.content or ""
 
-    body = _run(scenario)
+    body = _run(scenario, build_retriever)
 
     assert "fusion" not in body.lower()
     assert "no readable passages" in body
@@ -649,7 +774,10 @@ def test_the_tool_is_read_risk_and_parallel() -> None:
     assert SPEC.idempotency == "safe"
 
 
-def test_the_tool_labels_chunk_ids_for_citation() -> None:
+@over_both_retrievers
+def test_the_tool_labels_chunk_ids_for_citation(
+    build_retriever: RetrieverFactory,
+) -> None:
     """A citation is checkable only against what the model was actually shown."""
 
     async def scenario(harness: _Harness) -> str:
@@ -659,7 +787,7 @@ def test_the_tool_labels_chunk_ids_for_citation() -> None:
         )
         return result.content or ""
 
-    body = _run(scenario)
+    body = _run(scenario, build_retriever)
 
     assert "chunk_id" in body
     assert "chk_" in body

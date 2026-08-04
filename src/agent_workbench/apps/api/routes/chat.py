@@ -20,10 +20,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from typing import Annotated
+from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Header, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Header, HTTPException, Request, status
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_workbench.application.chat import (
     ChatRequest,
@@ -56,8 +56,46 @@ class AskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=QUESTION_MAX_LENGTH)
-    knowledge_base_id: Identifier
+    knowledge_base_id: Identifier | None = None
+    #: Explicit on new clients. The ``before`` validator preserves old clients:
+    #: they selected the RAG path by sending a knowledge base, while omitting
+    #: one now means the Direct path the old contract could not express.
+    answer_mode: Literal["direct", "rag"] = "rag"
     top_k: int = Field(default=8, ge=1, le=50)
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_legacy_answer_mode(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        raw = cast(dict[str, Any], value)
+        if "answer_mode" in raw:
+            return raw
+        normalized = dict(raw)
+        normalized["answer_mode"] = (
+            "rag" if normalized.get("knowledge_base_id") is not None else "direct"
+        )
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_answer_scope(self) -> AskRequest:
+        if self.answer_mode == "direct" and self.knowledge_base_id is not None:
+            raise ValueError("direct chat must not name a knowledge base")
+        if self.answer_mode == "rag" and self.knowledge_base_id is None:
+            raise ValueError("rag chat requires a knowledge base")
+        return self
+
+
+def _ensure_answer_mode_available(
+    shape: str, answer_mode: Literal["direct", "rag"]
+) -> None:
+    """Reject a requested capability this deployment did not assemble."""
+
+    if shape == "ungrounded" and answer_mode == "rag":
+        raise HTTPException(
+            status_code=422,
+            detail="this deployment supports direct chat only",
+        )
 
 
 class AskResponse(BaseModel):
@@ -72,6 +110,11 @@ class AskResponse(BaseModel):
     answer: str
     citations: tuple[Citation, ...]
     withheld: bool
+    #: False when this answer was produced without retrieved evidence. The
+    #: routed shape can return either within one conversation, so a client
+    #: cannot infer it from the session, and an empty citation list does not
+    #: imply it -- a grounded answer may simply have cited nothing.
+    grounded: bool
     run_id: Identifier
     turn_id: Identifier
 
@@ -128,6 +171,10 @@ async def ask(
         idempotency_key=idempotency_key,
     )
 
+    _ensure_answer_mode_available(
+        dependencies.config.chat.retrieval_shape, body.answer_mode
+    )
+
     cancellation = CancellationSource()
     chat_task = asyncio.create_task(
         _chat(request).ask(
@@ -137,6 +184,7 @@ async def ask(
                 principal=principal,
                 knowledge_base_id=body.knowledge_base_id,
                 idempotency_key=idempotency_key,
+                answer_mode=body.answer_mode,
                 top_k=body.top_k,
                 run_id=run_id,
                 stream_id=session_id,
@@ -166,6 +214,7 @@ async def ask(
         answer=turn.answer,
         citations=turn.citations,
         withheld=turn.withheld,
+        grounded=turn.grounded,
         run_id=turn.outcome.agent_run_id,
         turn_id=turn.turn_id,
     )

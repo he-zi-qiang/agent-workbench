@@ -1,160 +1,245 @@
 import {
-  BarChart3,
+  AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   CircleDashed,
+  FileSearch,
   FlaskConical,
-  Layers3,
-  ShieldAlert,
+  Target,
 } from "lucide-react";
+import {
+  GOLD_DIGEST,
+  QUESTION_COUNT,
+  REPORTS,
+  hits,
+  percent,
+  reportsShareOneGoldSet,
+} from "./reports";
+
+// Recorded in docs/status.md (2026-08-03) from running each retriever twice
+// over the same gold set. This is why the table below cannot rank the two
+// paths, so the number belongs on the page rather than only in the doc.
+const SELF_DISAGREEMENT = {
+  reference: 9,
+  llamaIndex: 10,
+  betweenPathsTopThree: 3,
+};
 
 export function EvaluationPage() {
+  const comparable = reportsShareOneGoldSet();
+
   return (
     <main className="aw-utility-page">
       <header className="aw-page-header">
         <div>
-          <span className="aw-eyebrow">Evidence, not decoration</span>
-          <h1>评测基线</h1>
-          <p>这里区分仓库已经具备的评测证据与 Resume v1 明确要完成的目标。</p>
+          <span className="aw-eyebrow">效果评测</span>
+          <h1>找资料，找得准吗？</h1>
+          <p>
+            这一页只回答一件事：给一个问题，系统能不能把正确的那份文档排在最前面。
+            下面的数字直接来自仓库里的评测报告，没有人工填写。
+          </p>
         </div>
         <div className="aw-page-note">
           <FlaskConical aria-hidden="true" size={17} />
-          <span>没有报告查询 API，就不在页面上手抄分数。</span>
+          <span>离线评测，不影响你在 Chat 里的使用</span>
         </div>
       </header>
 
-      <div className="aw-notice is-warning">
-        <ShieldAlert aria-hidden="true" size={16} />
-        <span>
-          本页不展示示例分数或历史截图。只有携带 dataset digest、index identity、模型与提示词 revision
-          的真实运行报告，才可以进入结果面板。
-        </span>
-      </div>
-
-      <div className="aw-card-grid">
-        <section className="aw-card aw-section" aria-labelledby="current-evidence-title">
-          <div className="aw-card-header">
-            <div>
-              <span className="aw-eyebrow">Current</span>
-              <h2 id="current-evidence-title">当前代码证据</h2>
-            </div>
-            <BarChart3 aria-hidden="true" size={20} />
-          </div>
-          <ul className="aw-capability-list">
-            <li>
-              <CheckCircle2 aria-hidden="true" size={16} />
-              <div>
-                <strong>确定性检索 Runner</strong>
-                <span>已经定义 Recall@1、Recall@3、MRR 和检索延迟中位数。</span>
-              </div>
-            </li>
-            <li>
-              <CheckCircle2 aria-hidden="true" size={16} />
-              <div>
-                <strong>可比性元数据</strong>
-                <span>报告记录 gold set digest、index identity 和问题数量。</span>
-              </div>
-            </li>
-            <li>
-              <CircleDashed aria-hidden="true" size={16} />
-              <div>
-                <strong>结果展示</strong>
-                <span>当前 API 没有发布评测报告，因此本页没有可验证的数值。</span>
-              </div>
-            </li>
-          </ul>
-        </section>
-
-        <section className="aw-card aw-section" aria-labelledby="target-baseline-title">
-          <div className="aw-card-header">
-            <div>
-              <span className="aw-eyebrow">Resume v1 target</span>
-              <h2 id="target-baseline-title">锁定的目标基线</h2>
-            </div>
-            <Layers3 aria-hidden="true" size={20} />
-          </div>
-          <ul className="aw-capability-list">
-            <li>
-              <CircleDashed aria-hidden="true" size={16} />
-              <div>
-                <strong>LlamaIndex：确定的 RAG 框架</strong>
-                <span>
-                  用于 ingestion connector、Node parsing 与 Retriever Adapter；不接管最终回答和 Agent Tool Loop。
-                </span>
-              </div>
-            </li>
-            <li>
-              <CircleDashed aria-hidden="true" size={16} />
-              <div>
-                <strong>RAGAS：待接入的回答质量基线</strong>
-                <span>
-                  目标指标包含 Faithfulness、Answer Relevancy、Context Precision、Context Recall 和 Factual Correctness。
-                </span>
-              </div>
-            </li>
-            <li>
-              <CircleDashed aria-hidden="true" size={16} />
-              <div>
-                <strong>统一证据</strong>
-                <span>将 RAGAS 与确定性 Recall/MRR、Citation、延迟、Token 和成本合并成同一份版本化报告。</span>
-              </div>
-            </li>
-          </ul>
-        </section>
-      </div>
-
-      <section className="aw-card aw-section" aria-labelledby="evaluation-matrix-title">
+      <section className="aw-card aw-section" aria-labelledby="method-title">
         <div className="aw-card-header">
           <div>
-            <span className="aw-eyebrow">Implementation matrix</span>
-            <h2 id="evaluation-matrix-title">实现状态</h2>
+            <span className="aw-eyebrow">怎么测的</span>
+            <h2 id="method-title">先出题，再看排名</h2>
           </div>
+          <Target aria-hidden="true" size={20} />
         </div>
-        <div className="aw-evaluation-matrix" role="table" aria-label="评测实现状态">
-          <div className="aw-evaluation-row is-heading" role="row">
-            <span role="columnheader">能力</span>
-            <span role="columnheader">当前</span>
-            <span role="columnheader">基线目标</span>
+        <p className="aw-eval-method">
+          事先准备了 <strong>{QUESTION_COUNT} 道题</strong>，每道题都标好了“正确答案应该来自哪份文档”。
+          让系统去检索，然后看正确文档有没有出现在结果里、排在第几位。
+          排得越靠前越好。
+        </p>
+        <div className="aw-eval-legend">
+          <div>
+            <strong>第一条就找对</strong>
+            <span>返回的第 1 条就是正确文档。最严格的一档。</span>
           </div>
-          <EvaluationRow
-            capability="确定性 Retrieval 指标"
-            current="已有离线 Runner；页面未接报告 API"
-            target="持续保留，作为 RAGAS 的互补证据"
-          />
-          <EvaluationRow
-            capability="LlamaIndex"
-            current="选型已确定，后端 Adapter 待接入"
-            target="负责 ingestion 与 retrieval 边界"
-          />
-          <EvaluationRow
-            capability="RAGAS"
-            current="尚未接入，不报告分数"
-            target="Resume v1 必须完成的回答质量基线"
-          />
-          <EvaluationRow
-            capability="可展示报告"
-            current="无公开查询接口"
-            target="版本化、可追溯、可重复运行"
-          />
+          <div>
+            <strong>前三条内找对</strong>
+            <span>正确文档出现在前 3 条里。实际使用中够用。</span>
+          </div>
+          <div>
+            <strong>单次检索耗时</strong>
+            <span>检索这一步花的时间，不含模型写答案的时间。</span>
+          </div>
         </div>
       </section>
-    </main>
-  );
-}
 
-function EvaluationRow({
-  capability,
-  current,
-  target,
-}: {
-  capability: string;
-  current: string;
-  target: string;
-}) {
-  return (
-    <div className="aw-evaluation-row" role="row">
-      <strong role="cell">{capability}</strong>
-      <span role="cell">{current}</span>
-      <span role="cell">{target}</span>
-    </div>
+      <section className="aw-card aw-section" aria-labelledby="scores-title">
+        <div className="aw-card-header">
+          <div>
+            <span className="aw-eyebrow">结果</span>
+            <h2 id="scores-title">四种配置在同一批题目上的表现</h2>
+          </div>
+          <FileSearch aria-hidden="true" size={20} />
+        </div>
+
+        {comparable ? null : (
+          <div className="aw-notice is-warning">
+            <AlertTriangle aria-hidden="true" size={16} />
+            <span>
+              这些报告不是在同一批题目上跑出来的，横向对比无效。请重新运行评测后再看这张表。
+            </span>
+          </div>
+        )}
+
+        <div className="aw-eval-table" role="table" aria-label="检索评测结果">
+          <div className="aw-eval-row is-heading" role="row">
+            <span role="columnheader">检索方式</span>
+            <span role="columnheader">实现路径</span>
+            <span role="columnheader">第一条就找对</span>
+            <span role="columnheader">前三条内找对</span>
+            <span role="columnheader">单次检索耗时</span>
+          </div>
+          {REPORTS.map((row) => (
+            <div className="aw-eval-row" key={row.file} role="row">
+              <strong role="cell">{row.retrievalLabel}</strong>
+              <span role="cell">{row.pathLabel}</span>
+              <span role="cell">
+                <b>
+                  {hits(row.report.scores.recall_at_1, row.report.question_count)} /{" "}
+                  {row.report.question_count} 题
+                </b>
+                <small>{percent(row.report.scores.recall_at_1)}</small>
+              </span>
+              <span role="cell">
+                <b>
+                  {hits(row.report.scores.recall_at_3, row.report.question_count)} /{" "}
+                  {row.report.question_count} 题
+                </b>
+                <small>{percent(row.report.scores.recall_at_3)}</small>
+              </span>
+              <span role="cell">
+                <b>{Math.round(row.report.scores.retrieval_latency_ms)} ms</b>
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="aw-card-grid">
+        <section className="aw-card aw-section" aria-labelledby="can-say-title">
+          <div className="aw-card-header">
+            <div>
+              <span className="aw-eyebrow">这张表能说明</span>
+              <h2 id="can-say-title">正确资料基本都在前三条</h2>
+            </div>
+            <CheckCircle2 aria-hidden="true" size={20} />
+          </div>
+          <ul className="aw-capability-list">
+            <li>
+              <CheckCircle2 aria-hidden="true" size={16} />
+              <div>
+                <strong>四种配置都做到了前三条内命中绝大多数题目</strong>
+                <span>
+                  在这 {QUESTION_COUNT} 道题上，“关键词 + 语义”比“纯语义”更稳，代价是慢一些。
+                </span>
+              </div>
+            </li>
+            <li>
+              <CheckCircle2 aria-hidden="true" size={16} />
+              <div>
+                <strong>题目和报告都在仓库里</strong>
+                <span>同一份题库（指纹 {GOLD_DIGEST}），任何人都可以重新跑一遍核对。</span>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <section className="aw-card aw-section" aria-labelledby="cannot-say-title">
+          <div className="aw-card-header">
+            <div>
+              <span className="aw-eyebrow">这张表不能说明</span>
+              <h2 id="cannot-say-title">哪条实现路径更好</h2>
+            </div>
+            <AlertTriangle aria-hidden="true" size={20} />
+          </div>
+          <p className="aw-eval-method">
+            同一条路径连着跑两遍，它自己的结果就会变：
+            <strong>
+              自研检索 {SELF_DISAGREEMENT.reference}/{QUESTION_COUNT} 题
+            </strong>
+            、
+            <strong>
+              LlamaIndex {SELF_DISAGREEMENT.llamaIndex}/{QUESTION_COUNT} 题
+            </strong>
+            前后次序不一致。原因是打分并列时没有规定谁排前面。
+          </p>
+          <div className="aw-notice is-warning">
+            <AlertTriangle aria-hidden="true" size={16} />
+            <span>
+              两条路径之间只有 {SELF_DISAGREEMENT.betweenPathsTopThree}/{QUESTION_COUNT} 题的前三名不同，
+              比它们各自的抖动还小 —— 所以表里那点差距是测量误差，不是质量差距。
+              默认流量因此没有切换。
+            </span>
+          </div>
+        </section>
+      </div>
+
+      <section className="aw-card aw-section" aria-labelledby="not-measured-title">
+        <div className="aw-card-header">
+          <div>
+            <span className="aw-eyebrow">还没有测</span>
+            <h2 id="not-measured-title">写出来的答案是否忠于资料</h2>
+          </div>
+          <CircleDashed aria-hidden="true" size={20} />
+        </div>
+        <ul className="aw-capability-list">
+          <li>
+            <CircleDashed aria-hidden="true" size={16} />
+            <div>
+              <strong>上面测的是“找资料”，不是“写答案”</strong>
+              <span>
+                找对了资料，模型仍然可能写出与资料不符的句子。这是另一件事，需要另一套评测。
+              </span>
+            </div>
+          </li>
+          <li>
+            <CircleDashed aria-hidden="true" size={16} />
+            <div>
+              <strong>RAGAS 目前只有配置，没有结果</strong>
+              <span>仓库里还没有 runner，也没有报告，所以这里不会出现回答质量分数。</span>
+            </div>
+          </li>
+        </ul>
+        <div className="aw-notice is-warning">
+          <AlertTriangle aria-hidden="true" size={16} />
+          <span>“配置里启用了”不等于“已经跑出结果”，缺的部分不用示例数字补。</span>
+        </div>
+      </section>
+
+      <details className="aw-card aw-section">
+        <summary>
+          <ChevronDown aria-hidden="true" size={14} />
+          工程详情
+        </summary>
+        <ul className="aw-capability-list">
+          {REPORTS.map((row) => (
+            <li key={row.file}>
+              <FlaskConical aria-hidden="true" size={16} />
+              <div>
+                <strong>
+                  evals/rag/reports/{row.file} · MRR {row.report.scores.mrr.toFixed(4)}
+                </strong>
+                <span>{row.report.index_identity}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+        <p className="aw-page-note">
+          MRR 是正确文档排名倒数的平均值：全排第 1 得 1.0，全排第 2 得 0.5。
+          自一致性数据来自 docs/status.md（2026-08-03）。
+        </p>
+      </details>
+    </main>
   );
 }

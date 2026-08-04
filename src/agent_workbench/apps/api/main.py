@@ -36,6 +36,7 @@ from agent_workbench.apps.api.routes import (
     chat,
     events,
     health,
+    knowledge_bases,
     search,
     tasks,
     uploads,
@@ -168,6 +169,7 @@ def create_app(
     app.include_router(health.router)
     app.include_router(uploads.router)
     app.include_router(artifacts.router)
+    app.include_router(knowledge_bases.router)
     app.include_router(tasks.router)
     app.include_router(approvals.router)
     if dependencies.serves_search:

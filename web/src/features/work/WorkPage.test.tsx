@@ -10,6 +10,7 @@ import {
   getApproval,
   getTask,
   getTaskTimeline,
+  listKnowledgeBases,
   listTasks,
   newIdempotencyKey,
 } from "../../api/client";
@@ -25,6 +26,7 @@ vi.mock("../../api/client", async () => {
     getApproval: vi.fn(),
     getTask: vi.fn(),
     getTaskTimeline: vi.fn(),
+    listKnowledgeBases: vi.fn(),
     listTasks: vi.fn(),
     newIdempotencyKey: vi.fn(),
   };
@@ -33,11 +35,13 @@ vi.mock("../../api/client", async () => {
 describe("WorkPage task submission", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(createTask).mockReset();
     vi.mocked(decideApproval).mockReset();
     vi.mocked(getApproval).mockReset();
     vi.mocked(getTask).mockReset();
     vi.mocked(getTaskTimeline).mockReset();
+    vi.mocked(listKnowledgeBases).mockReset();
     vi.mocked(listTasks).mockReset();
     vi.mocked(newIdempotencyKey).mockReset();
     let keyNumber = 0;
@@ -45,6 +49,7 @@ describe("WorkPage task submission", () => {
       () => `task:intent_${String(++keyNumber)}`,
     );
     vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
     vi.mocked(getApproval).mockResolvedValue(approval("pending", 0));
     vi.mocked(decideApproval).mockResolvedValue(approval("approved", 1));
     vi.mocked(getTask).mockResolvedValue({
@@ -100,6 +105,26 @@ describe("WorkPage task submission", () => {
     await waitFor(() =>
       expect(newIdempotencyKey).toHaveBeenCalledTimes(callsBeforeSuccess + 1),
     );
+  });
+
+  it("does not submit a stale knowledge-base link as a Task source", async () => {
+    vi.mocked(createTask).mockReset();
+    vi.mocked(createTask).mockResolvedValue({
+      task_id: "task_created",
+      status: "queued",
+      status_detail: null,
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:00:00Z",
+    });
+    const user = userEvent.setup();
+    renderWorkPage("/work?kb=kb_deleted");
+
+    await user.type(screen.getByLabelText("目标"), "整理现有信息");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const input = vi.mocked(createTask).mock.calls[0]?.[1];
+    expect(input).toEqual({ objective: "整理现有信息", maxRevisions: 2 });
   });
 
   it("does not confirm an opposite decision returned for the same version", async () => {

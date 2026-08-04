@@ -26,6 +26,9 @@ from agent_workbench.adapters.persistence.execution_guard import (
 from agent_workbench.adapters.persistence.index_generations import (
     PostgresIndexGenerationStore,
 )
+from agent_workbench.adapters.persistence.knowledge_bases import (
+    PostgresKnowledgeBaseStore,
+)
 from agent_workbench.adapters.persistence.models import metadata
 from agent_workbench.adapters.persistence.notifications import (
     TASK_READY_CHANNEL,
@@ -48,6 +51,7 @@ __all__ = [
     "PostgresExecutionGuard",
     "PostgresExecutionGuardFactory",
     "PostgresIndexGenerationStore",
+    "PostgresKnowledgeBaseStore",
     "PostgresOutbox",
     "PostgresTaskRegistry",
     "PostgresToolExecutionLedger",

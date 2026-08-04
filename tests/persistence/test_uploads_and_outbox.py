@@ -22,13 +22,16 @@ from sqlalchemy.exc import IntegrityError
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.persistence import (
     PostgresDocumentStore,
+    PostgresKnowledgeBaseStore,
     PostgresOutbox,
     create_query_engine,
 )
 from agent_workbench.adapters.persistence.models import documents, outbox_events
+from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.application.uploads import UploadService, UploadVerificationError
 from agent_workbench.domain.errors import NotFoundError, StaleExecutionError
 from agent_workbench.domain.identifiers import new_id
+from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.documents import KnowledgeBaseMismatchError
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
@@ -41,7 +44,7 @@ CONTENT = b"Qdrant performs one dense and sparse fusion per query.\n"
 DIGEST = hashlib.sha256(CONTENT).hexdigest()
 
 TABLES = (
-    "artifacts, upload_intents, document_acl, "
+    "knowledge_bases, artifacts, upload_intents, document_acl, "
     "document_versions, documents, outbox_events"
 )
 
@@ -74,8 +77,23 @@ def _run(scenario: Callable[[Harness], Awaitable[Any]], root: Path) -> Any:
                 await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))
             store = PostgresDocumentStore(engine)
             artifacts = LocalArtifactStore(root)
+            knowledge_bases = KnowledgeBaseService(PostgresKnowledgeBaseStore(engine))
+            for knowledge_base_id, owner_id in (
+                (KNOWLEDGE_BASE, OWNER),
+                ("kb_other", OWNER),
+                ("kb_neighbour", "user_neighbour"),
+            ):
+                await knowledge_bases.create(
+                    PrincipalContext(tenant_id=TENANT, principal_id=owner_id),
+                    name=knowledge_base_id,
+                    knowledge_base_id=knowledge_base_id,
+                )
             harness = Harness(
-                service=UploadService(documents=store, artifacts=artifacts),
+                service=UploadService(
+                    documents=store,
+                    artifacts=artifacts,
+                    knowledge_bases=knowledge_bases,
+                ),
                 documents=store,
                 outbox=PostgresOutbox(engine),
                 artifacts=artifacts,
@@ -643,7 +661,12 @@ def test_losing_the_creation_race_does_not_grant_a_write(tmp_path: Path) -> None
     async def scenario(harness: Harness) -> tuple[int, str, int]:
         outcomes = await asyncio.gather(
             _upload(harness, content=b"from the owner\n", owner=OWNER),
-            _upload(harness, content=b"from the neighbour\n", owner="user_neighbour"),
+            _upload(
+                harness,
+                content=b"from the neighbour\n",
+                owner="user_neighbour",
+                knowledge_base_id="kb_neighbour",
+            ),
             return_exceptions=True,
         )
         succeeded = [

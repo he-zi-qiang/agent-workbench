@@ -23,7 +23,11 @@ from sqlalchemy import text
 
 from agent_workbench.adapters.persistence import create_query_engine
 from agent_workbench.application.chat import ChatTurn
-from agent_workbench.application.chat_execution import FixedTwoStepExecution
+from agent_workbench.application.chat_execution import (
+    AnswerModeSelector,
+    FixedTwoStepExecution,
+    UngroundedExecution,
+)
 from agent_workbench.apps.api.dependencies import build_dependencies
 from agent_workbench.apps.api.main import create_app
 from agent_workbench.apps.api.routes.chat import CHAT_PREFIX, _watch_disconnect
@@ -211,35 +215,47 @@ async def _mounted(root: Path, engine: Any, index: Any) -> Any:
         PostgresDocumentStore,
     )
     from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
+    from agent_workbench.adapters.retrieval import ReferenceVectorIndexRetriever
     from agent_workbench.adapters.tools import StaticToolRegistry
     from agent_workbench.application.chat import ChatService
     from agent_workbench.application.retrieval import RetrievalService
     from agent_workbench.domain.runs import RunBudget, TokenUsage
     from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 
-    registry = StaticToolRegistry([])
+    def executor() -> ClaudeLikeAgentRuntime:
+        registry = StaticToolRegistry([])
+        return ClaudeLikeAgentRuntime(
+            model=FakeModel(
+                [
+                    ScriptedTurn(
+                        text="No evidence was retrieved.",
+                        usage=TokenUsage(input_tokens=8, output_tokens=4),
+                    )
+                ]
+            ),
+            gateway=ToolGateway(
+                registry=registry, policy=EnvelopePolicyEngine(registry=registry)
+            ),
+            policy_identity="test-policy",
+        )
+
     return ChatService(
-        execution=FixedTwoStepExecution(
-            retrieval=RetrievalService(
-                embedder=DeterministicEmbedder(dimension=8),
-                index=index,
-                documents=PostgresDocumentStore(engine),
+        execution=AnswerModeSelector(
+            direct=UngroundedExecution(
+                executor=executor(),
+                budget=RunBudget(max_steps=1, max_tool_calls=1),
             ),
-            executor=ClaudeLikeAgentRuntime(
-                model=FakeModel(
-                    [
-                        ScriptedTurn(
-                            text="No evidence was retrieved.",
-                            usage=TokenUsage(input_tokens=8, output_tokens=4),
-                        )
-                    ]
+            rag=FixedTwoStepExecution(
+                retrieval=RetrievalService(
+                    candidate_retriever=ReferenceVectorIndexRetriever(
+                        embedder=DeterministicEmbedder(dimension=8),
+                        index=index,
+                    ),
+                    documents=PostgresDocumentStore(engine),
                 ),
-                gateway=ToolGateway(
-                    registry=registry, policy=EnvelopePolicyEngine(registry=registry)
-                ),
-                policy_identity="test-policy",
+                executor=executor(),
+                budget=RunBudget(max_steps=1, max_tool_calls=1),
             ),
-            budget=RunBudget(max_steps=1, max_tool_calls=1),
         ),
         conversations=PostgresConversationStore(engine),
         releaser=PostgresChatReleaseCoordinator(engine),
@@ -320,6 +336,59 @@ def test_a_mounted_route_answers(tmp_path: Path) -> None:
     assert status_code == 200
     assert withheld is False
     assert run_id.startswith("run_")
+
+
+def test_a_mounted_route_answers_directly_without_a_knowledge_base(
+    tmp_path: Path,
+) -> None:
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, bool, list[Any]]:
+        session = await _open(client, OWNER_HEADERS)
+        response = await client.post(
+            f"{CHAT_PREFIX}/sessions/{session}/messages",
+            headers=_turn_headers(OWNER_HEADERS),
+            json={"question": "say hello", "answer_mode": "direct"},
+        )
+        payload = response.json()
+        return response.status_code, payload["grounded"], payload["citations"]
+
+    status_code, grounded, citations = _run_mounted(scenario, tmp_path)
+
+    assert status_code == 200
+    assert grounded is False
+    assert citations == []
+
+
+def test_one_http_session_can_mix_direct_and_rag_turns(tmp_path: Path) -> None:
+    async def scenario(
+        client: httpx.AsyncClient,
+    ) -> tuple[tuple[bool, bool], list[str]]:
+        session = await _open(client, OWNER_HEADERS)
+        path = f"{CHAT_PREFIX}/sessions/{session}/messages"
+        direct = await client.post(
+            path,
+            headers=_turn_headers(OWNER_HEADERS, "direct-turn"),
+            json={"question": "say hello", "answer_mode": "direct"},
+        )
+        rag = await client.post(
+            path,
+            headers=_turn_headers(OWNER_HEADERS, "rag-turn"),
+            json={
+                "question": "what closed",
+                "answer_mode": "rag",
+                "knowledge_base_id": "kb_main",
+            },
+        )
+        history = await client.get(path, headers=OWNER_HEADERS)
+        assert direct.status_code == rag.status_code == 200
+        return (
+            (direct.json()["grounded"], rag.json()["grounded"]),
+            [message["role"] for message in history.json()["messages"]],
+        )
+
+    grounded, roles = _run_mounted(scenario, tmp_path)
+
+    assert grounded == (False, True)
+    assert roles == ["user", "assistant", "user", "assistant"]
 
 
 def test_an_idempotency_key_is_required_for_each_turn(tmp_path: Path) -> None:

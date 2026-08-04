@@ -4,7 +4,11 @@ import {
   getChatHistory,
   newIdempotencyKey,
 } from "../../api/client";
-import type { LocalChatSession, PrincipalIdentity } from "../../api/types";
+import type {
+  ChatAnswerMode,
+  LocalChatSession,
+  PrincipalIdentity,
+} from "../../api/types";
 import {
   chatReducer,
   hasUnfinishedTurn,
@@ -31,7 +35,8 @@ interface ConnectionLease {
 interface StartAskInput {
   sessionId: string;
   question: string;
-  knowledgeBaseId: string;
+  answerMode: ChatAnswerMode;
+  knowledgeBaseId: string | null;
   topK?: number;
 }
 
@@ -67,10 +72,15 @@ export class ChatRuntime {
     this.persistSessions();
   }
 
-  updateSessionKnowledgeBase(sessionId: string, knowledgeBaseId: string): void {
+  updateSessionSource(
+    sessionId: string,
+    answerMode: ChatAnswerMode,
+    knowledgeBaseId: string | null,
+  ): void {
     this.dispatch({
       type: "sessionUpdated",
       sessionId,
+      answerMode,
       knowledgeBaseId,
       updatedAt: new Date().toISOString(),
     });
@@ -109,6 +119,7 @@ export class ChatRuntime {
         localId,
         sessionId: input.sessionId,
         question: input.question,
+        answerMode: input.answerMode,
         knowledgeBaseId: input.knowledgeBaseId,
         topK: input.topK ?? 8,
         idempotencyKey: newIdempotencyKey("chat"),
@@ -118,6 +129,7 @@ export class ChatRuntime {
     this.dispatch({
       type: "sessionUpdated",
       sessionId: input.sessionId,
+      answerMode: input.answerMode,
       knowledgeBaseId: input.knowledgeBaseId,
       updatedAt: submittedAt,
     });
@@ -186,6 +198,7 @@ export class ChatRuntime {
         turn.sessionId,
         {
           question: turn.question,
+          answerMode: turn.answerMode,
           knowledgeBaseId: turn.knowledgeBaseId,
           topK: turn.topK,
         },
@@ -272,6 +285,7 @@ export class ChatRuntime {
         {
           sessionId: session.sessionId,
           title: session.title,
+          answerMode: session.answerMode,
           knowledgeBaseId: session.knowledgeBaseId,
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,

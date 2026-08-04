@@ -20,7 +20,11 @@ from agent_workbench.adapters.persistence.conversation_store import (
 )
 from agent_workbench.adapters.persistence.event_log import PostgresEventLog
 from agent_workbench.adapters.persistence.models import document_acl, documents
-from agent_workbench.domain.events import AnswerCommitted, AnswerWithheld
+from agent_workbench.domain.events import (
+    AnswerCommitted,
+    AnswerWithheld,
+    UngroundedAnswerCommitted,
+)
 from agent_workbench.ports.conversation_store import (
     AuthorizedRevision,
     ChatTurnConflictError,
@@ -109,14 +113,21 @@ class PostgresChatReleaseCoordinator:
                 )
             )
             result = stored.result if withheld_result is None else withheld_result
-            payload = (
-                AnswerWithheld(text=result.answer)
-                if result.withheld
-                else AnswerCommitted(
+            # Three terminal events, chosen from facts on the stored result
+            # rather than inferred. `grounded` is read instead of "are there
+            # citations", because a retrieval turn that cited nothing and a
+            # turn that never retrieved are exactly the two states an auditor
+            # must be able to tell apart (ADR-018).
+            payload: AnswerCommitted | UngroundedAnswerCommitted | AnswerWithheld
+            if result.withheld:
+                payload = AnswerWithheld(text=result.answer)
+            elif result.grounded:
+                payload = AnswerCommitted(
                     text=result.answer,
                     citations=result.citations,
                 )
-            )
+            else:
+                payload = UngroundedAnswerCommitted(text=result.answer)
             await self._events.append_durable_in_transaction(
                 connection,
                 scope,

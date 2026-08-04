@@ -74,6 +74,7 @@ EventType = Literal[
     "ModelDelta",
     "ModelCompleted",
     "AnswerCommitted",
+    "UngroundedAnswerCommitted",
     "AnswerWithheld",
     "ChatTurnExpired",
     "ToolProposed",
@@ -264,6 +265,26 @@ class AnswerCommitted(DomainModel):
     citations: tuple[Citation, ...] = ()
 
 
+class UngroundedAnswerCommitted(DomainModel):
+    """An answer produced without evidence, and recorded as such (ADR-018).
+
+    Deliberately not an ``AnswerCommitted`` with an empty citation list. That
+    event means "this text rested on these revisions and they were re-checked
+    before release"; there is nothing here to re-check, so borrowing it would
+    make the audit log unable to distinguish a verified answer from an
+    unverified one -- and a record whose provenance a reader cannot recover is
+    worse than no record.
+
+    There is no ``citations`` field rather than an empty one. An empty tuple is
+    a list that could have been non-empty; this path has no ``ContextPacket``,
+    so nothing could ever populate it. Absent says that; empty invites somebody
+    to fill it in.
+    """
+
+    kind: Literal["UngroundedAnswerCommitted"] = "UngroundedAnswerCommitted"
+    text: BoundedText
+
+
 class AnswerWithheld(DomainModel):
     """A safe replacement for an answer that failed its publication check."""
 
@@ -416,6 +437,7 @@ EventPayload = Annotated[
     | ModelDelta
     | ModelCompleted
     | AnswerCommitted
+    | UngroundedAnswerCommitted
     | AnswerWithheld
     | ChatTurnExpired
     | ToolProposed
@@ -455,6 +477,7 @@ EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "ModelDelta": "transient",
     "ModelCompleted": "durable",
     "AnswerCommitted": "durable",
+    "UngroundedAnswerCommitted": "durable",
     "AnswerWithheld": "durable",
     "ChatTurnExpired": "durable",
     "ToolProposed": "durable",
@@ -598,4 +621,5 @@ __all__ = [
     "ToolProgress",
     "ToolProposed",
     "ToolStarted",
+    "UngroundedAnswerCommitted",
 ]

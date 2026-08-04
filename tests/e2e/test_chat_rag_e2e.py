@@ -47,6 +47,7 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
+from agent_workbench.adapters.retrieval import ReferenceVectorIndexRetriever
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.chat import ChatService
@@ -133,8 +134,10 @@ class _Harness:
         return ChatService(
             execution=FixedTwoStepExecution(
                 retrieval=RetrievalService(
-                    embedder=self.embedder,
-                    index=self.index,
+                    candidate_retriever=ReferenceVectorIndexRetriever(
+                        embedder=self.embedder,
+                        index=self.index,
+                    ),
                     documents=self.documents,
                 ),
                 executor=ClaudeLikeAgentRuntime(
@@ -201,8 +204,10 @@ class _Harness:
     async def retrieve(self, query: str, principal: str = OWNER) -> Any:
         return (
             await RetrievalService(
-                embedder=self.embedder,
-                index=self.index,
+                candidate_retriever=ReferenceVectorIndexRetriever(
+                    embedder=self.embedder,
+                    index=self.index,
+                ),
                 documents=self.documents,
             ).retrieve(
                 RetrievalRequest(

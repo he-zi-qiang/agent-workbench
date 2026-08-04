@@ -192,7 +192,7 @@ class QdrantVectorIndex:
             limit=limit,
             with_payload=True,
         )
-        return tuple(_scored(point) for point in response.points)
+        return _ranked(response.points)
 
     async def search(
         self,
@@ -225,7 +225,7 @@ class QdrantVectorIndex:
             with_payload=True,
         )
 
-        return tuple(_scored(point) for point in response.points)
+        return _ranked(response.points)
 
     @staticmethod
     def _narrowing(
@@ -332,6 +332,38 @@ def _vectors(chunk: IndexedChunk) -> dict[str, Any]:
             values=list(chunk.sparse_values),
         )
     return vectors
+
+
+def _ranked(points: Any) -> tuple[ScoredChunk, ...]:
+    """Returned points, in an order that is the same on every identical query.
+
+    Qdrant orders by score, and says nothing about points whose scores are
+    equal -- so it returns them however it happened to produce them. RRF makes
+    that common rather than exotic: it scores by rank sums over small integers,
+    so on a modest corpus several candidates land on exactly the same value.
+    Measured on the 38-question evaluation set, repeating one query returned a
+    different chunk order on 9 of 38 questions, and a different *top-3
+    document* list on 3 of 38 -- enough to move recall@1.
+
+    Two things depend on that not happening. An evaluation cannot attribute a
+    difference between two runs if a single retriever disagrees with itself
+    more than the two runs differ, which is what blocked ADR-017's equivalence
+    step. And a user asking the same question twice can otherwise get different
+    evidence and different citations, because ``RetrievalService`` cuts to
+    top_k after this: a chunk that lost a coin flip at rank 3 is simply gone.
+
+    ``chunk_id`` is the tie-break because it is derived from the chunk, so it
+    is stable across a re-index -- a tie-break on point insertion order or on
+    anything the engine chooses would only move the nondeterminism somewhere
+    harder to see. Score still dominates: this orders *within* equal scores and
+    cannot promote a lower-scored candidate over a higher one.
+    """
+
+    return tuple(sorted((_scored(point) for point in points), key=_rank_key))
+
+
+def _rank_key(chunk: ScoredChunk) -> tuple[float, str]:
+    return (-chunk.score, chunk.chunk_id)
 
 
 def _scored(point: Any) -> ScoredChunk:

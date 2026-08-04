@@ -125,7 +125,7 @@ def test_the_generic_emit_method_cannot_bypass_the_release_gate() -> None:
         release = AnswerReleaseSink(_sink(InMemoryEventLog()))
         await release.emit(AnswerCommitted(text=SECRET))
 
-    with pytest.raises(RuntimeError, match=r"commit\(\) or withhold\(\)"):
+    with pytest.raises(RuntimeError, match=r"must pass through"):
         asyncio.run(scenario())
 
 
@@ -683,3 +683,37 @@ def test_a_withheld_candidate_is_never_replayed_into_the_next_turn() -> None:
 
     assert SECRET not in replayed
     assert "no longer able to read" in replayed
+
+
+def test_an_ungrounded_answer_is_not_an_answer_with_no_citations() -> None:
+    """The two are different facts, and the log has to keep them apart.
+
+    ``commit(citations=())`` says a retrieval turn cited nothing it was shown.
+    ``commit_ungrounded()`` says nothing was retrieved at all. Collapsing them
+    would leave an auditor unable to tell a verified answer from an unverified
+    one, which is the whole reason ADR-018 gave this path its own event.
+    """
+
+    async def scenario() -> tuple[str, str]:
+        grounded = AnswerReleaseSink(_sink(InMemoryEventLog()))
+        ungrounded = AnswerReleaseSink(_sink(InMemoryEventLog()))
+        a = await grounded.commit(text=SECRET, citations=())
+        b = await ungrounded.commit_ungrounded(text=SECRET)
+        return a.payload.kind, b.payload.kind
+
+    grounded_kind, ungrounded_kind = asyncio.run(scenario())
+
+    assert grounded_kind == "AnswerCommitted"
+    assert ungrounded_kind == "UngroundedAnswerCommitted"
+
+
+def test_an_ungrounded_answer_still_releases_only_once() -> None:
+    """The single-release rule is the turn's, not any one shape's."""
+
+    async def scenario() -> None:
+        release = AnswerReleaseSink(_sink(InMemoryEventLog()))
+        await release.commit_ungrounded(text=SECRET)
+        await release.commit(text=SECRET, citations=())
+
+    with pytest.raises(RuntimeError, match="only once"):
+        asyncio.run(scenario())

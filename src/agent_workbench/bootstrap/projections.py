@@ -162,6 +162,21 @@ class RetrievalConfig:
     chunk_size_tokens: int
     chunk_overlap_tokens: int
     answer_context_k: int
+    #: Whether candidates come from the LlamaIndex retriever (ADR-017) or from
+    #: the reference path it is replacing. The only one of ``rag.llama_index``'s
+    #: five fields projected here, because it is the only one that selects
+    #: anything.
+    #:
+    #: ``role``, ``agent_executor_enabled``, ``query_engine_generates_final_answer``
+    #: and ``fusion_enabled`` stay in settings unprojected on purpose. All four
+    #: are single-valued ``Literal``s, so a process-side check on them could
+    #: only ever compare a constant against itself -- it would read like
+    #: enforcement while being unable to fail. What actually holds them is
+    #: structural: the architecture guard refuses an adapter that imports
+    #: LlamaIndex's agent or query-engine machinery at all, and the retriever's
+    #: contract test pins the index's own ordering, which is what a second
+    #: fusion would have to disturb.
+    llama_index_enabled: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,9 +201,10 @@ class ChatRecoveryConfig:
 class ChatConfig:
     """Which shape answers a chat turn, and what bounds it if it may loop."""
 
-    retrieval_shape: Literal["fixed", "agentic"]
+    retrieval_shape: Literal["fixed", "agentic", "ungrounded", "routed"]
     max_agentic_steps: int
     max_agentic_searches: int
+    routed_relevance_threshold: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -419,6 +435,7 @@ def project_task_worker(
             chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
             answer_context_k=settings.rag.retrieval.answer_context_k,
+            llama_index_enabled=settings.rag.llama_index.enabled,
         ),
         runtime=AgentRuntimeConfig(
             max_steps=settings.runtime.max_steps,
@@ -559,11 +576,13 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
             answer_context_k=settings.rag.retrieval.answer_context_k,
+            llama_index_enabled=settings.rag.llama_index.enabled,
         ),
         chat=ChatConfig(
             retrieval_shape=settings.chat.retrieval_shape,
             max_agentic_steps=settings.chat.max_agentic_steps,
             max_agentic_searches=settings.chat.max_agentic_searches,
+            routed_relevance_threshold=settings.chat.routed_relevance_threshold,
         ),
         chat_recovery=ChatRecoveryConfig(
             orphan_grace_seconds=settings.chat.orphan_grace_seconds,
