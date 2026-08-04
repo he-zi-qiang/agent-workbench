@@ -25,6 +25,10 @@ export interface ChatActivity {
   state: ChatActivityState;
   timestamp: string;
   detail?: string;
+  // The event this was summarised from, kept so a reader can open the step and
+  // see the model's own output, the proposed call and the permission verdict
+  // rather than only this one-line label.
+  envelope: EventEnvelope;
 }
 
 export interface ChatTurnState {
@@ -385,11 +389,34 @@ function failRunCorrelation(state: ChatState, localId: string): ChatState {
   });
 }
 
+/**
+ * One model call is one row: `ModelStarted` and `ModelCompleted` share an
+ * activity key, and the completion replaces the start. The prompt only ever
+ * arrives on the start, so without this the only event carrying it is thrown
+ * away the moment the call finishes -- and every finished step would open onto
+ * a missing prompt.
+ */
+function carryPrompt(
+  previous: ChatActivity | undefined,
+  next: ChatActivity,
+): ChatActivity {
+  const prompt = previous?.envelope.payload.prompt_preview;
+  if (typeof prompt !== "string" || prompt === "") return next;
+  if (typeof next.envelope.payload.prompt_preview === "string") return next;
+  return {
+    ...next,
+    envelope: {
+      ...next.envelope,
+      payload: { ...next.envelope.payload, prompt_preview: prompt },
+    },
+  };
+}
+
 function applySafeEvent(turn: ChatTurnState, event: SafeRunEvent): ChatTurnState {
   const activityIndex = turn.activities.findIndex((item) => item.key === event.activity.key);
   const activities = [...turn.activities];
   if (activityIndex < 0) activities.push(event.activity);
-  else activities[activityIndex] = event.activity;
+  else activities[activityIndex] = carryPrompt(activities[activityIndex], event.activity);
 
   let next: ChatTurnState = {
     ...turn,
@@ -522,6 +549,33 @@ function safeEventFromFrame(sessionId: string, frame: SseFrame): SafeRunEvent | 
   };
 }
 
+/**
+ * The event, minus anything the release fence owns.
+ *
+ * Chat publishes an answer only through `AnswerCommitted`, `AnswerWithheld` or
+ * the synchronous `AskResponse`. `ModelCompleted.text` and `ModelDelta.text`
+ * are the *candidate* -- what the model produced before sources were
+ * re-verified -- and a step a reader can open is still a place the reader
+ * reads. Keeping them here would let a withheld answer be read anyway, which is
+ * the one thing the fence exists to prevent, so they are dropped on the way
+ * into state rather than hidden on the way out.
+ *
+ * The prompt is not dropped: it is what the model was *given*, not what it
+ * produced. Note that with `chat.retrieval_shape = "agentic"` a later step's
+ * prompt embeds earlier assistant turns, so a deployment that turns on
+ * `runtime.record_step_inputs` *and* runs the agentic shape does surface
+ * intermediate model text here. That is the deployment's choice; the fixed and
+ * routed shapes make one model call and cannot.
+ */
+function withoutCandidateText(envelope: EventEnvelope): EventEnvelope {
+  if (envelope.event_type !== "ModelCompleted" && envelope.event_type !== "ModelDelta") {
+    return envelope;
+  }
+  const redacted = { ...envelope.payload };
+  delete redacted.text;
+  return { ...envelope, payload: redacted };
+}
+
 function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
   const payload = envelope.payload;
   const kind = envelope.event_type;
@@ -529,6 +583,7 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
     eventId: envelope.event_id,
     kind,
     timestamp: envelope.timestamp,
+    envelope: withoutCandidateText(envelope),
   };
   if (kind === "RunStarted") {
     return { ...base, key: `run:${envelope.run_id}`, label: "开始运行", state: "running" };

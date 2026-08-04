@@ -1536,6 +1536,46 @@ def test_a_submission_stores_the_concrete_index_it_reserved() -> None:
     assert _run(scenario) == ("kb_v3", "3", GENERATION)
 
 
+def test_a_submission_s_objective_label_survives_the_round_trip() -> None:
+    """The label is what a Task list shows, so it has to come back off the row."""
+
+    async def scenario(registry: PostgresTaskRegistry) -> Any:
+        opened = await registry.submit(
+            _submission(objective_preview="整理这批资料并输出一份建议报告")
+        )
+        reread = await registry.get(opened.task_id)
+        assert reread is not None
+        return reread.objective_preview
+
+    assert _run(scenario) == "整理这批资料并输出一份建议报告"
+
+
+def test_a_submission_without_a_label_opens_a_task_anyway() -> None:
+    """Resume paths submit an input reference and have no objective to label with."""
+
+    async def scenario(registry: PostgresTaskRegistry) -> Any:
+        opened = await registry.submit(_submission())
+        return opened.objective_preview
+
+    assert _run(scenario) is None
+
+
+def test_a_retry_is_not_rejected_for_disagreeing_about_the_label() -> None:
+    """The label is derived from the input, so it cannot be an identity field.
+
+    Rejecting here would turn an ordinary retry -- one whose objective merely
+    re-wrapped its whitespace -- into a submission conflict.
+    """
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[str, Any]:
+        first = await registry.submit(_submission(objective_preview="first label"))
+        again = await registry.submit(_submission(objective_preview="second label"))
+        return first.task_id, again.task_id
+
+    opened, retried = _run(scenario)
+    assert opened == retried
+
+
 def test_a_task_that_reserves_nothing_stores_nothing() -> None:
     """A Task touching no knowledge base has no index to be bound to."""
 

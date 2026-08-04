@@ -337,6 +337,7 @@ def _build_real_handlers(
         # Required, not optional: the gateway refuses to assemble around a
         # ledgered tool with nowhere to record it, and export_artifact is one.
         ledger=ledger,
+        record_step_inputs=config.runtime.record_step_inputs,
     )
     policy_identity = (
         f"{config.task.policy_revision}:{config.task.policy_fingerprint[:16]}"
@@ -349,6 +350,7 @@ def _build_real_handlers(
             model_label=main_profile.model_id,
             model_timeout_seconds=config.runtime.model_timeout_seconds,
             max_parallel_read_tools=config.runtime.max_parallel_read_tools,
+            record_step_inputs=config.runtime.record_step_inputs,
         ),
         max_parallel=config.multi_agent.max_parallel_agent_invocations,
     )

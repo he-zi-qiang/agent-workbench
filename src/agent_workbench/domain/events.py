@@ -231,6 +231,11 @@ class ModelStarted(DomainModel):
     model_call_id: Identifier
     model_profile: ModelProfileName
     model_id: ShortText
+    # What was sent to the model, when `runtime.record_step_inputs` is on
+    # (ADR-019). Empty otherwise, and empty is the default so a deployment that
+    # never opted in emits byte-identical payloads. Bounded for the reason every
+    # other free text here is: this is a database row and an SSE frame.
+    prompt_preview: BoundedText = ""
 
 
 class ModelDelta(DomainModel):
@@ -319,6 +324,10 @@ class ToolProposed(DomainModel):
     tool_name: ProposedToolName
     argument_bytes: int = Field(ge=0)
     argument_sha256: Sha256
+    # The call the model actually proposed, when `runtime.record_step_inputs`
+    # is on (ADR-019). The digest above stays the identity either way: it is
+    # taken over the whole canonical arguments, while this may be truncated.
+    argument_preview: BoundedText = ""
     risk: ToolRisk | None = None
 
 

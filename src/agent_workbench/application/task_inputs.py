@@ -22,7 +22,7 @@ from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.task_inputs import TaskInput
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.ports.artifact_store import ArtifactStore
-from agent_workbench.ports.task_registry import TaskRun
+from agent_workbench.ports.task_registry import TaskRun, objective_preview
 
 TASK_INPUT_MEDIA_TYPE = "application/json"
 TASK_INPUT_FILENAME = "task-input.json"
@@ -143,6 +143,11 @@ class TaskInputService:
             input_ref=stored.artifact_id,
             input_fingerprint=task_input.fingerprint,
             submission_dedup_key=submission_dedup_key,
+            # Taken here because this is the only layer holding both the whole
+            # objective and the submission. TaskService receives references, and
+            # asking it to open the artifact again to build a label would make
+            # every submission read back what it just wrote.
+            objective_preview=objective_preview(task_input.objective),
         )
 
 

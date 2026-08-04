@@ -136,6 +136,7 @@ class TaskService:
         input_ref: Identifier,
         submission_dedup_key: Identifier,
         input_fingerprint: str | None = None,
+        objective_preview: str | None = None,
     ) -> TaskRun:
         """Open a Task, or return the one this caller's key already opened.
 
@@ -160,6 +161,7 @@ class TaskService:
                     else _reference_fingerprint(input_ref)
                 ),
                 submission_dedup_key=submission_dedup_key,
+                objective_preview=objective_preview,
                 run_semantics_snapshot=decided.run_semantics_snapshot,
                 run_semantics_revision=decided.run_semantics_revision,
                 submitted_policy_revision=decided.policy_revision,

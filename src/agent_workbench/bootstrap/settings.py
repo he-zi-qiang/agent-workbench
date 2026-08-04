@@ -142,7 +142,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.3"] = "1.3"
+    config_schema_version: Literal["1.4"] = "1.4"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -373,6 +373,14 @@ class RuntimeSettings(StrictModel):
     context_soft_limit_ratio: float = Field(default=0.75, gt=0.0, lt=1.0)
     tool_result_artifact_threshold_bytes: int = Field(default=65_536, ge=1024)
     write_tools_default_enabled: Literal[False] = False
+    # ADR-019. Records the prompt and the proposed tool arguments on the run's
+    # own event stream, where they are readable only by the principal that owns
+    # the Task or Session. Distinct from `observability.record_prompt_body`,
+    # which stays pinned False: that one governs export to an OTel collector,
+    # which has no tenant boundary. Default off, because turning it on changes
+    # what a deployment stores about its users and that is not an upgrade's
+    # decision to make.
+    record_step_inputs: bool = False
 
     @model_validator(mode="after")
     def validate_budgets(self) -> RuntimeSettings:

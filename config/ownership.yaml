@@ -286,7 +286,8 @@
         "runtime.cancellation_poll_seconds",
         "runtime.context_soft_limit_ratio",
         "runtime.tool_result_artifact_threshold_bytes",
-        "runtime.write_tools_default_enabled"
+        "runtime.write_tools_default_enabled",
+        "runtime.record_step_inputs"
       ]
     },
     {

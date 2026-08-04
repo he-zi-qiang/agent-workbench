@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.3"
+config_schema_version = "1.4"
 architecture_baseline = "1.3"
 
 [api]
@@ -152,6 +152,12 @@ cancellation_poll_seconds = 1
 context_soft_limit_ratio = 0.75
 tool_result_artifact_threshold_bytes = 65536
 write_tools_default_enabled = false
+# ADR-019. Puts the prompt and the proposed tool arguments on the run's event
+# stream, so a step can be opened and read. Only the principal that owns the
+# Task or Session can read that stream. Not the same switch as
+# observability.record_prompt_body, which stays false and governs OTel export.
+# Off by default: it changes what this deployment stores about its users.
+record_step_inputs = false
 
 [langchain_adapter]
 enabled = true

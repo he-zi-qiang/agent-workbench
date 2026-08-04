@@ -48,6 +48,10 @@ metadata = MetaData(naming_convention=NAMING_CONVENTION)
 IDENTIFIER_LENGTH = 128
 DIGEST_LENGTH = 64
 FILENAME_LENGTH = 255
+# Mirrors ports.task_registry.OBJECTIVE_PREVIEW_LIMIT. The port bounds what may
+# be constructed; this bounds what may be stored, and a test asserts they agree
+# so a widened preview cannot start silently failing inserts.
+OBJECTIVE_PREVIEW_LENGTH = 200
 
 conversation_sessions = Table(
     "conversation_sessions",
@@ -800,6 +804,12 @@ task_runs = Table(
     # artifact, but it must return the Task opened by the first writer.
     Column("input_fingerprint", String(DIGEST_LENGTH), nullable=False),
     Column("submission_dedup_key", String(IDENTIFIER_LENGTH), nullable=False),
+    # A label so a list of Tasks reads as work rather than as identifiers. Not
+    # the objective: that stays in the input artifact, and this is a bounded
+    # copy taken once at submission. Nullable because rows written before this
+    # column existed have no label, and inventing one from the id would be
+    # worse than showing the id.
+    Column("objective_preview", String(OBJECTIVE_PREVIEW_LENGTH), nullable=True),
     # What this Task means, resolved at submission and never re-resolved.
     # Deterministic semantics only: the settings layer builds it, and it
     # excludes alias, policy, DSN, secret, endpoint and coordination -- a

@@ -47,9 +47,9 @@ import {
   StatusPill,
   formatDateTime,
   formatStatus,
-  formatTime,
   shortId,
 } from "../../components/ui";
+import { StepDisclosure } from "../../components/StepDisclosure";
 import { useTaskTimeline } from "./useTaskTimeline";
 import { workIdentityQueryKey } from "./workQueryKeys";
 import {
@@ -456,8 +456,17 @@ export function WorkPage() {
               type="button"
             >
               <span>
-                <strong title={task.task_id}>{shortId(task.task_id, 18)}</strong>
-                <small>{formatDateTime(task.created_at)}</small>
+                {/* The objective when the server recorded one, because a list
+                    of ids tells the reader nothing about which Task is which.
+                    Older Tasks have no label and still have to be openable, so
+                    they fall back to the id rather than to a blank row. */}
+                <strong title={task.objective_preview ?? task.task_id}>
+                  {task.objective_preview ?? shortId(task.task_id, 18)}
+                </strong>
+                <small>
+                  {formatDateTime(task.created_at)}
+                  {task.objective_preview === null ? "" : ` · ${shortId(task.task_id, 14)}`}
+                </small>
               </span>
               <StatusPill status={task.status} />
             </button>
@@ -504,7 +513,12 @@ export function WorkPage() {
                   <ChevronLeft aria-hidden="true" size={15} /> 任务列表
                 </button>
                 <span className="aw-eyebrow">TASK</span>
-                <h1 title={selectedTask.task_id}>{shortId(selectedTask.task_id, 28)}</h1>
+                <h1 title={selectedTask.task_id}>
+                  {selectedTask.objective_preview ?? shortId(selectedTask.task_id, 28)}
+                </h1>
+                {selectedTask.objective_preview === null ? null : (
+                  <code className="aw-task-id">{shortId(selectedTask.task_id, 28)}</code>
+                )}
               </div>
               <StatusPill status={selectedTask.status} />
             </header>
@@ -698,19 +712,11 @@ export function WorkPage() {
                         className={isKnownEventType(event.event_type) ? "" : "is-unknown"}
                         key={event.event_id}
                       >
-                        <div className="aw-timeline-event-heading">
-                          <strong>{eventTitle(event)}</strong>
-                          <time dateTime={event.timestamp}>{formatTime(event.timestamp)}</time>
-                        </div>
-                        <details>
-                          <summary>工程详情</summary>
-                          <div className="aw-timeline-event-meta">
-                            <code>{event.event_type}</code>
-                            <span title={event.run_id}>run {shortId(event.run_id)}</span>
-                            {event.sequence === null ? null : <span>#{event.sequence}</span>}
-                          </div>
-                          <pre>{JSON.stringify(event.payload, null, 2)}</pre>
-                        </details>
+                        <StepDisclosure
+                          event={event}
+                          onOpenArtifact={(id) => downloadMutation.mutate(id)}
+                          title={eventTitle(event)}
+                        />
                       </li>
                     ))}
                   </ol>

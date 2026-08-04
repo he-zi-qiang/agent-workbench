@@ -53,6 +53,11 @@ class TaskView(BaseModel):
     task_id: Identifier
     status: TaskStatus
     status_detail: str | None
+    # The caller's own submitted objective, cut to a label. Safe to return for
+    # the same reason status_detail is: list and get are already scoped to the
+    # caller's own Tasks, so this returns their text to them. Absent on Tasks
+    # submitted before the column existed.
+    objective_preview: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -213,6 +218,7 @@ def _view(task: TaskRun) -> TaskView:
         task_id=task.task_id,
         status=task.status,
         status_detail=task.status_detail,
+        objective_preview=task.objective_preview,
         created_at=task.created_at,
         updated_at=task.updated_at,
     )

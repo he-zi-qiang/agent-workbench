@@ -56,6 +56,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
     });
@@ -71,6 +72,7 @@ describe("WorkPage task submission", () => {
         task_id: "task_created",
         status: "queued",
         status_detail: null,
+        objective_preview: null,
         created_at: "2026-08-02T12:00:00Z",
         updated_at: "2026-08-02T12:00:00Z",
       });
@@ -113,6 +115,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
     });
@@ -125,6 +128,49 @@ describe("WorkPage task submission", () => {
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     const input = vi.mocked(createTask).mock.calls[0]?.[1];
     expect(input).toEqual({ objective: "整理现有信息", maxRevisions: 2 });
+  });
+
+  it("lists tasks by what they were asked to do, not by id", async () => {
+    vi.mocked(listTasks).mockResolvedValue({
+      tasks: [
+        {
+          task_id: "task_969398ecc7b14fbd9f24a50f53fbad7e",
+          status: "queued",
+          status_detail: null,
+          objective_preview: "整理这批资料，比较三个方案并输出一份建议报告",
+          created_at: "2026-08-02T12:00:00Z",
+          updated_at: "2026-08-02T12:00:00Z",
+        },
+      ],
+      cursor: null,
+    });
+
+    renderWorkPage();
+
+    expect(
+      await screen.findByText("整理这批资料，比较三个方案并输出一份建议报告"),
+    ).toBeInTheDocument();
+  });
+
+  it("still opens a task the server recorded no objective for", async () => {
+    vi.mocked(listTasks).mockResolvedValue({
+      tasks: [
+        {
+          task_id: "task_969398ecc7b14fbd9f24a50f53fbad7e",
+          status: "queued",
+          status_detail: null,
+          objective_preview: null,
+          created_at: "2026-08-02T12:00:00Z",
+          updated_at: "2026-08-02T12:00:00Z",
+        },
+      ],
+      cursor: null,
+    });
+
+    renderWorkPage();
+
+    // Falls back to the id rather than rendering an unclickable blank row.
+    expect(await screen.findByText(/task_969398ec/)).toBeInTheDocument();
   });
 
   it("does not confirm an opposite decision returned for the same version", async () => {
@@ -193,6 +239,7 @@ function task(status: "waiting_approval" | "cancelled") {
     task_id: "task_approval",
     status,
     status_detail: status === "cancelled" ? "cancelled elsewhere" : null,
+    objective_preview: null,
     created_at: "2026-08-02T12:00:00Z",
     updated_at: "2026-08-02T12:01:00Z",
   } as const;

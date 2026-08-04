@@ -20,7 +20,13 @@ from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
 from agent_workbench.adapters.policy import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry, read_document_tool
 from agent_workbench.domain.errors import ErrorInfo
-from agent_workbench.domain.events import EventEnvelope, RunFailed, ToolFailed
+from agent_workbench.domain.events import (
+    EventEnvelope,
+    ModelStarted,
+    RunFailed,
+    ToolFailed,
+    ToolProposed,
+)
 from agent_workbench.domain.messages import ToolResultBlock, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import (
@@ -30,6 +36,7 @@ from agent_workbench.domain.runs import (
     TokenUsage,
     TraceContext,
 )
+from agent_workbench.domain.schema import BOUNDED_TEXT_LIMIT
 from agent_workbench.domain.tools import ToolCall, ToolName, ToolResult, ToolSpec
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import CancellationSource
@@ -44,6 +51,7 @@ from agent_workbench.ports.model import (
 from agent_workbench.ports.model import ModelTextDelta as TextDelta
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor, ToolGateway
+from agent_workbench.runtime.agent_runtime import render_prompt
 from agent_workbench.runtime.tool_gateway import PreparedCall
 
 CLOCK = datetime(2026, 7, 25, 3, 14, 15, tzinfo=UTC)
@@ -154,6 +162,16 @@ class _Execution:
         return [envelope.event_type for envelope in self.live]
 
 
+def _payloads[PayloadT](run: _Execution, kind: type[PayloadT]) -> list[PayloadT]:
+    """Every durable payload of one type, typed rather than indexed.
+
+    ``envelope.payload`` is a union of domain models, so reading a field off it
+    needs the narrowing this does once instead of at every assertion.
+    """
+
+    return [e.payload for e in run.durable if isinstance(e.payload, kind)]
+
+
 def _request(
     *,
     budget: RunBudget | None = None,
@@ -195,6 +213,7 @@ def _execute(
     cancellation: CancellationSource | None = None,
     model_timeout_seconds: float | None = None,
     max_parallel_read_tools: int = 4,
+    record_step_inputs: bool = False,
 ) -> _Execution:
     registry = StaticToolRegistry(
         bindings if bindings is not None else [read_document_tool(CORPUS)]
@@ -213,12 +232,14 @@ def _execute(
                 registry=registry,
                 policy=EnvelopePolicyEngine(registry=registry),
                 executor=ToolExecutor(monotonic=_ticking()),
+                record_step_inputs=record_step_inputs,
             ),
             policy_identity=POLICY_IDENTITY,
             model_timeout_seconds=model_timeout_seconds,
             max_parallel_read_tools=max_parallel_read_tools,
             clock=_clock,
             model_call_ids=_ids("mc"),
+            record_step_inputs=record_step_inputs,
         )
         outcome = await runtime.run(
             request if request is not None else _request(),
@@ -273,6 +294,48 @@ def test_a_tool_round_completes_the_loop() -> None:
     assert run.outcome.output_text == "Qdrant owns fusion."
     assert run.outcome.usage.steps == 2
     assert run.outcome.usage.tool_calls == 1
+
+
+def test_a_run_records_no_prompt_or_arguments_unless_asked_to() -> None:
+    """ADR-019's default. The digest and the byte count are emitted regardless."""
+
+    run = _execute(_tool_round())
+
+    started = _payloads(run, ModelStarted)
+    proposed = _payloads(run, ToolProposed)
+    assert started and proposed
+    assert all(payload.prompt_preview == "" for payload in started)
+    assert all(payload.argument_preview == "" for payload in proposed)
+    # Without these the reader would have nothing at all, which is not the
+    # default this ADR chose.
+    assert all(payload.argument_sha256 for payload in proposed)
+    assert all(payload.argument_bytes for payload in proposed)
+
+
+def test_recording_step_inputs_puts_the_prompt_and_the_call_on_the_timeline() -> None:
+    run = _execute(_tool_round(), record_step_inputs=True)
+
+    started = _payloads(run, ModelStarted)
+    proposed = _payloads(run, ToolProposed)
+
+    assert "Who owns hybrid fusion?" in started[0].prompt_preview
+
+    # The second call has to show the tool result, because that -- not the
+    # original question -- is what the model was actually looking at when it
+    # produced the answer.
+    assert "read_document" in started[1].prompt_preview
+
+    assert "document_id" in proposed[0].argument_preview
+
+
+def test_a_recorded_prompt_is_cut_to_what_the_event_field_can_hold() -> None:
+    """An over-long prompt must truncate, not make the event unconstructable."""
+
+    huge = "x" * (BOUNDED_TEXT_LIMIT * 3)
+    rendered = render_prompt(huge, ())
+
+    assert len(rendered) == BOUNDED_TEXT_LIMIT
+    assert rendered.endswith("…")
 
 
 def test_the_durable_timeline_records_the_whole_round() -> None:

@@ -259,6 +259,9 @@ class AgentRuntimeConfig:
     max_tool_calls: int
     model_timeout_seconds: float
     max_parallel_read_tools: int
+    # ADR-019. Projected rather than read from settings inside the runtime,
+    # because the runtime is framework-neutral and does not import settings.
+    record_step_inputs: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +353,11 @@ class ApiRuntimeConfig:
     chat: ChatConfig
     task: TaskConfig
     observability: ObservabilityConfig
+    # ADR-019. The API runs the chat loop, so it needs the same switch the Task
+    # Worker gets through AgentRuntimeConfig. Flat rather than nested under
+    # `chat`, because it is one setting governing every runtime this deployment
+    # builds, and two names for it would drift.
+    record_step_inputs: bool = False
 
 
 def project_observability(settings: Settings) -> ObservabilityConfig:
@@ -442,6 +450,7 @@ def project_task_worker(
             max_tool_calls=settings.runtime.max_tool_calls,
             model_timeout_seconds=float(settings.runtime.model_timeout_seconds),
             max_parallel_read_tools=settings.runtime.max_parallel_read_tools,
+            record_step_inputs=settings.runtime.record_step_inputs,
         ),
         multi_agent=MultiAgentConfig(
             static_agent_node_limit=settings.multi_agent.static_agent_node_limit,
@@ -528,6 +537,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         shutdown_grace_seconds=settings.api.shutdown_grace_seconds,
         sse_heartbeat_seconds=settings.api.sse_heartbeat_seconds,
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
+        record_step_inputs=settings.runtime.record_step_inputs,
         database=DatabaseConfig(
             dsn=settings.database.dsn,
             application_name=settings.database.application_name,

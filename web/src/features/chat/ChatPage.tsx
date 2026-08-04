@@ -34,6 +34,7 @@ import {
   useKnowledgeBases,
 } from "../../components/KnowledgeSourcePicker";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { StepDisclosure } from "../../components/StepDisclosure";
 import {
   EmptyState,
   ErrorNotice,
@@ -508,11 +509,11 @@ function ActivityList({ activities }: { activities: ChatActivity[] }) {
           <span className={`aw-chat-activity-state is-${activity.state}`}>
             <StepState state={stepState(activity.state)} />
           </span>
-          <span>
-            <strong>{activity.label}</strong>
-            {activity.detail === undefined ? null : <small>{activity.detail}</small>}
-          </span>
-          <time dateTime={activity.timestamp}>{formatTime(activity.timestamp)}</time>
+          {/* Openable for the same reason Work's timeline is: the label says a
+              model call finished, and the thing the reader wants is what it
+              was given and what it wrote. The one-line summary comes from the
+              event itself, so `activity.detail` is not repeated here. */}
+          <StepDisclosure event={activity.envelope} title={activity.label} />
         </li>
       ))}
     </ol>

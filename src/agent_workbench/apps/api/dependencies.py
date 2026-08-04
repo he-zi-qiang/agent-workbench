@@ -491,9 +491,11 @@ def _assemble_chat(
             gateway=ToolGateway(
                 registry=empty,
                 policy=EnvelopePolicyEngine(registry=empty),
+                record_step_inputs=config.record_step_inputs,
             ),
             policy_identity=policy_identity,
             model_label=model_label,
+            record_step_inputs=config.record_step_inputs,
         )
 
     # Direct is available beside every retrieval-backed shape. It gets its own
@@ -552,9 +554,11 @@ def _assemble_chat(
                 gateway=ToolGateway(
                     registry=registry,
                     policy=EnvelopePolicyEngine(registry=registry),
+                    record_step_inputs=config.record_step_inputs,
                 ),
                 policy_identity=policy_identity,
                 model_label=model_label,
+                record_step_inputs=config.record_step_inputs,
             ),
             journal=journal,
             budget=RunBudget(
@@ -574,9 +578,11 @@ def _assemble_chat(
                 gateway=ToolGateway(
                     registry=StaticToolRegistry([]),
                     policy=EnvelopePolicyEngine(registry=StaticToolRegistry([])),
+                    record_step_inputs=config.record_step_inputs,
                 ),
                 policy_identity=policy_identity,
                 model_label=model_label,
+                record_step_inputs=config.record_step_inputs,
             ),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
         )

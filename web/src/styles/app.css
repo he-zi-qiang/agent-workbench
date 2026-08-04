@@ -2428,9 +2428,22 @@ pre {
 }
 
 .aw-work-detail-header h1 {
+  display: -webkit-box;
+  overflow: hidden;
   margin: 0;
   font-size: 15px;
   font-weight: 600;
+  -webkit-box-orient: vertical;
+  /* The objective is the heading now, and it can run to 200 characters. Two
+     lines keeps a sticky header a header. */
+  -webkit-line-clamp: 2;
+}
+
+/* Demoted to a subtitle once the objective takes the heading, but still shown:
+   it is what an operator quotes when asking about this run. */
+.aw-task-id {
+  color: var(--aw-text-muted);
+  font-size: 11px;
 }
 
 .aw-work-mobile-back {
@@ -2588,6 +2601,148 @@ pre {
   color: var(--aw-text-soft);
   font-size: 10px;
   white-space: pre-wrap;
+}
+
+/* An openable step. The whole heading is the control, so a reader does not
+   have to find a separate "details" link to see what a step did. */
+.aw-step > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.aw-step > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Never the element that shrinks. Letting the title absorb the squeeze in a
+   narrow detail pane broke it one character per line; the summary beside it
+   ellipses instead, and the row wraps before either has to. */
+.aw-step > summary > strong {
+  flex: none;
+  color: var(--aw-text);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.aw-step-caret {
+  flex: none;
+  color: var(--aw-text-muted);
+  transition: transform 120ms ease;
+}
+
+.aw-step[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+/* The one-line answer to "what happened here", so most steps need no opening. */
+.aw-step-summary {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1 1 90px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-step > summary > time {
+  margin-left: auto;
+  flex: none;
+  color: var(--aw-text-muted);
+  font-size: 9px;
+}
+
+.aw-step-body {
+  display: grid;
+  margin-top: 8px;
+  gap: 10px;
+}
+
+.aw-step-facts {
+  display: grid;
+  margin: 0;
+  gap: 6px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.aw-step-facts > div {
+  min-width: 0;
+}
+
+/* Identifiers and digests get the full row: wrapping one mid-token across a
+   narrow column makes it unreadable and unusable for copying. */
+.aw-step-facts > div.is-wide {
+  grid-column: 1 / -1;
+}
+
+.aw-step-facts dt {
+  margin-bottom: 1px;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-step-facts dd {
+  margin: 0;
+  color: var(--aw-text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.aw-step-output {
+  margin: 0;
+}
+
+.aw-step-output figcaption {
+  margin-bottom: 4px;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-step-pre {
+  max-height: 340px;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+/* Model prose wraps; JSON keeps its indentation and scrolls instead, because
+   re-wrapping a structure destroys the shape that made it worth showing. */
+.aw-step-pre.is-json {
+  white-space: pre;
+}
+
+.aw-step-artifact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-step-artifact > span {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.aw-step-artifact strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.aw-step-artifact small {
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-step-raw > summary {
+  color: var(--aw-text-muted);
+  font-size: 10px;
 }
 
 .aw-markdown pre {

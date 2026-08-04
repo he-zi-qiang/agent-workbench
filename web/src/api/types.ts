@@ -61,6 +61,10 @@ export interface TaskView {
   task_id: Identifier;
   status: TaskStatus;
   status_detail: string | null;
+  // A bounded copy of the submitted objective, for lists. Absent on Tasks
+  // submitted before the server recorded one; the full objective always comes
+  // from the input artifact.
+  objective_preview: string | null;
   created_at: string;
   updated_at: string;
 }

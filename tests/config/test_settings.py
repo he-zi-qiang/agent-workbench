@@ -786,10 +786,14 @@ def test_production_requires_a_real_provider_key() -> None:
 def test_the_configuration_schema_version_is_pinned() -> None:
     """Adding a provider changed the contract, so the schema version moved.
 
-    1.2 -> 1.3 is ADR-018: ``chat.retrieval_shape`` gained a third value. The
-    pin exists so widening a frozen Literal cannot happen quietly -- this test
-    failing *is* the mechanism, and updating it is the last step of the
+    1.2 -> 1.3 is ADR-018: ``chat.retrieval_shape`` gained a third value.
+    1.3 -> 1.4 is ADR-019: ``runtime.record_step_inputs`` lets a deployment put
+    the prompt and the proposed tool arguments on its own event stream, which
+    changes what it stores about its users.
+
+    The pin exists so widening a frozen Literal cannot happen quietly -- this
+    test failing *is* the mechanism, and updating it is the last step of the
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.3"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.4"
