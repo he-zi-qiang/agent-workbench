@@ -61,11 +61,13 @@ def _reviewed_state(
     *,
     revision_count: int = 0,
     max_revisions: int = 2,
+    wants_report: bool = True,
 ) -> TaskState:
     return _planned_state(
         draft_ref="draft_1",
         revision_count=revision_count,
         max_revisions=max_revisions,
+        wants_report=wants_report,
         review_result=ReviewResult(
             decision=decision,
             reviewed_draft_ref="draft_1",
@@ -147,6 +149,23 @@ def test_a_passing_review_routes_to_approval() -> None:
     state = _reviewed_state("pass")
     assert route_quality_gate(state) == "approval"
     assert next_nodes("quality_gate", state) == ("approval",)
+
+
+def test_a_passing_review_stops_when_no_file_was_asked_for() -> None:
+    """The control group is the test above: the only difference is wants_report.
+
+    Routing to approval here would interrupt somebody to authorize an export
+    the Task was never asked to produce.
+    """
+
+    state = _reviewed_state("pass", wants_report=False)
+
+    assert route_quality_gate(state) is None
+    assert next_nodes("quality_gate", state) == ()
+    # And it is a *success*, which is what separates this from an exhausted
+    # budget landing on the same empty successor list.
+    assert quality_gate_failure_reason(state) is None
+    assert terminal_failure_reason(state) is None
 
 
 def test_a_revise_review_routes_back_to_synthesize_while_budget_remains() -> None:

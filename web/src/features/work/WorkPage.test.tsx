@@ -127,7 +127,40 @@ describe("WorkPage task submission", () => {
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     const input = vi.mocked(createTask).mock.calls[0]?.[1];
-    expect(input).toEqual({ objective: "整理现有信息", maxRevisions: 2 });
+    // No report asked for, so none is promised: this objective mentions no file.
+    expect(input).toEqual({
+      objective: "整理现有信息",
+      maxRevisions: 2,
+      wantsReport: false,
+    });
+  });
+
+  it("asks for a report only when the objective does, and lets that be overridden", async () => {
+    vi.mocked(createTask).mockReset();
+    vi.mocked(createTask).mockResolvedValue({
+      task_id: "task_created",
+      status: "queued",
+      status_detail: null,
+      objective_preview: null,
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:00:00Z",
+    });
+    const user = userEvent.setup();
+    renderWorkPage();
+
+    const toggle = screen.getByRole("checkbox", { name: /生成报告文件/ });
+    expect(toggle).not.toBeChecked();
+
+    await user.type(screen.getByLabelText("目标"), "比较三个方案并输出一份建议报告");
+    expect(toggle).toBeChecked();
+
+    // The reader's own choice outranks the guess, and keeps outranking it.
+    await user.click(toggle);
+    expect(toggle).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createTask).mock.calls[0]?.[1].wantsReport).toBe(false);
   });
 
   it("lists tasks by what they were asked to do, not by id", async () => {
@@ -180,7 +213,7 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_approval");
 
-    await user.click(await screen.findByRole("button", { name: "拒绝" }));
+    await user.click(await screen.findByRole("button", { name: "不用了" }));
 
     expect(
       await screen.findByText(
@@ -201,15 +234,15 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_approval");
 
-    await user.click(await screen.findByRole("button", { name: "批准" }));
+    await user.click(await screen.findByRole("button", { name: "生成报告" }));
 
     expect(
       await screen.findByText(
         "任务服务端状态已是“已取消”，审批不再可决定；已刷新权威记录。",
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "批准" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "生成报告" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "不用了" })).not.toBeInTheDocument();
   });
 });
 

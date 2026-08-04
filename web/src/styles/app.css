@@ -2450,6 +2450,247 @@ pre {
   display: none;
 }
 
+/* ---- Task detail: result, decision, lifecycle, folds ------------------- */
+
+.aw-result,
+.aw-approve,
+.aw-lifecycle,
+.aw-work-fold {
+  width: min(880px, 100%);
+  margin: 0 auto 10px;
+}
+
+.aw-result {
+  padding: 16px;
+  border: 1px solid var(--aw-border);
+  border-radius: 11px;
+  background: var(--aw-panel);
+}
+
+.aw-result.is-running {
+  padding: 14px 16px;
+}
+
+.aw-result > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 12px;
+}
+
+.aw-result > header strong {
+  display: block;
+  font-size: 14px;
+}
+
+.aw-result-body {
+  max-height: 520px;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-window);
+}
+
+/* The decision. Accent-bordered because it is the only thing on a waiting
+   Task that the reader has to do something about. */
+.aw-approve {
+  display: grid;
+  padding: 14px 16px;
+  gap: 12px;
+  border: 1px solid var(--aw-accent);
+  border-radius: 11px;
+  background: var(--aw-accent-soft);
+}
+
+.aw-approve-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.aw-approve-copy strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 14px;
+}
+
+.aw-approve-copy span {
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-approve-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.aw-lifecycle,
+.aw-work-fold {
+  padding: 10px 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-lifecycle > summary,
+.aw-work-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  list-style: none;
+}
+
+.aw-lifecycle > summary::-webkit-details-marker,
+.aw-work-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-lifecycle > summary strong,
+.aw-work-fold > summary {
+  color: var(--aw-text);
+}
+
+.aw-lifecycle[open] > summary .aw-step-caret,
+.aw-work-fold[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-lifecycle-count,
+.aw-work-fold > summary span {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+/* Collapsed, the strip still has to say how far along the Task is -- that is
+   the whole reason it is allowed to collapse. */
+.aw-lifecycle-mini {
+  display: flex;
+  margin-left: auto;
+  gap: 3px;
+}
+
+.aw-lifecycle-mini i {
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--aw-border);
+}
+
+.aw-lifecycle-mini i.is-done {
+  background: var(--aw-success);
+}
+
+.aw-lifecycle-mini i.is-active,
+.aw-lifecycle-mini i.is-waiting {
+  background: var(--aw-accent);
+}
+
+.aw-lifecycle-mini i.is-failed {
+  background: var(--aw-danger);
+}
+
+.aw-lifecycle-steps {
+  margin: 12px 0 2px;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-lifecycle-steps li {
+  display: flex;
+  align-items: center;
+  padding: 5px 0;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.aw-lifecycle-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border: 1px solid var(--aw-border);
+  border-radius: 50%;
+}
+
+.aw-lifecycle-steps li.is-done .aw-lifecycle-dot {
+  border-color: var(--aw-success);
+  background: var(--aw-success);
+}
+
+.aw-lifecycle-steps li.is-failed .aw-lifecycle-dot {
+  border-color: var(--aw-danger);
+  background: var(--aw-danger);
+}
+
+/* The one that is moving. The pulse is the "step by step" cue -- it is the
+   only animated thing on the page, so it reads as progress rather than decor. */
+.aw-lifecycle-steps li.is-active .aw-lifecycle-dot,
+.aw-lifecycle-steps li.is-waiting .aw-lifecycle-dot {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent);
+  animation: aw-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-lifecycle-steps li.is-active .aw-lifecycle-dot,
+  .aw-lifecycle-steps li.is-waiting .aw-lifecycle-dot {
+    animation: none;
+  }
+}
+
+@keyframes aw-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--aw-accent-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+.aw-lifecycle-steps li.is-pending,
+.aw-lifecycle-steps li.is-skipped {
+  color: var(--aw-text-muted);
+}
+
+.aw-lifecycle-title {
+  flex: 1;
+}
+
+.aw-lifecycle-note {
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-work-fold-body {
+  margin-top: 10px;
+}
+
+.aw-task-objective-full {
+  margin: 0 0 10px;
+  color: var(--aw-text);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.aw-work-cancel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-work-cancel > label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
 .aw-work-section {
   width: min(880px, 100%);
   margin: 0 auto 12px;
@@ -3157,4 +3398,47 @@ pre {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+.aw-approve-settled {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.aw-report-toggle {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 4px;
+  gap: 9px;
+  cursor: pointer;
+}
+
+/* `.aw-create-task input` sizes text fields, and without this the checkbox
+   inherits that 35px-tall, full-width box and squeezes its own label to
+   nothing. Every dimension it sets has to be undone here. */
+.aw-report-toggle input {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  flex: none;
+  margin-top: 2px;
+  padding: 0;
+}
+
+.aw-report-toggle > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.aw-report-toggle strong {
+  display: block;
+  color: var(--aw-text);
+  font-size: 12px;
+}
+
+.aw-report-toggle small {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
 }

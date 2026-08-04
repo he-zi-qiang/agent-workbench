@@ -5,8 +5,8 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
-  Ban,
   ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   FileDown,
   ListTodo,
@@ -23,11 +23,18 @@ import {
   downloadArtifact,
   getApproval,
   getArtifactJson,
+  getArtifactText,
   getTask,
   listTasks,
   newIdempotencyKey,
 } from "../../api/client";
-import type { ApprovalView, TaskStatus, TaskView } from "../../api/types";
+import type {
+  ApprovalView,
+  ArtifactRef,
+  PrincipalIdentity,
+  TaskStatus,
+  TaskView,
+} from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
   AttachmentButton,
@@ -47,13 +54,17 @@ import {
   StatusPill,
   formatDateTime,
   formatStatus,
+  formatTime,
   shortId,
 } from "../../components/ui";
+import { MarkdownContent } from "../../components/MarkdownContent";
 import { StepDisclosure } from "../../components/StepDisclosure";
+import { deriveLifecycle, type Lifecycle } from "./lifecycle";
 import { useTaskTimeline } from "./useTaskTimeline";
 import { workIdentityQueryKey } from "./workQueryKeys";
 import {
   eventTitle,
+  findDraftText,
   findFinalReport,
   findLatestApprovalId,
   findTaskInputRef,
@@ -78,7 +89,23 @@ interface CreateTaskIntent {
   objective: string;
   maxRevisions: number;
   knowledgeBaseId?: string;
+  wantsReport: boolean;
   idempotencyKey: string;
+}
+
+/**
+ * Whether an objective asks for a file.
+ *
+ * Only ever a *default* for the toggle beside the box -- the reader sees the
+ * result and can flip it before submitting. Guessing silently would be worse
+ * than not guessing: the difference decides whether the Task stops to ask a
+ * human for permission to write something.
+ */
+const REPORT_WORDS =
+  /报告|报表|文档|文件|导出|输出一份|写一份|report|document|export/i;
+
+function mentionsReport(objective: string): boolean {
+  return REPORT_WORDS.test(objective);
 }
 
 interface ApprovalDecisionIntent {
@@ -190,9 +217,18 @@ export function WorkPage() {
     () => findFinalReport(timeline.events),
     [timeline.events],
   );
+  const lifecycle = useMemo(
+    () => deriveLifecycle(timeline.events, taskQuery.data?.status),
+    [timeline.events, taskQuery.data?.status],
+  );
+  const draftText = useMemo(() => findDraftText(timeline.events), [timeline.events]);
 
   const [objective, setObjective] = useState("");
   const [maxRevisions, setMaxRevisions] = useState("2");
+  // null means "follow the objective". Set once the reader touches the toggle,
+  // so their choice is not overwritten by the next keystroke.
+  const [reportOverride, setReportOverride] = useState<boolean | null>(null);
+  const wantsReport = reportOverride ?? mentionsReport(objective);
   const [knowledgeBaseDraftId, setKnowledgeBaseId] = useState<string | null>(
     searchParams.get("kb"),
   );
@@ -215,6 +251,7 @@ export function WorkPage() {
       setObjective("");
       attachments.clear();
       setMaxRevisions("2");
+      setReportOverride(null);
       setSubmissionKey(newIdempotencyKey("task"));
       void queryClient.invalidateQueries({
         queryKey: ["work", "tasks", ...identityKey],
@@ -317,6 +354,7 @@ export function WorkPage() {
     createMutation.mutate({
       objective: trimmedObjective,
       maxRevisions: parsedMaxRevisions,
+      wantsReport,
       idempotencyKey: submissionKey,
       ...(knowledgeBaseId === null ? {} : { knowledgeBaseId }),
     });
@@ -416,6 +454,25 @@ export function WorkPage() {
               value={maxRevisions}
             />
           </details>
+          {/* Checked from the objective, and shown rather than inferred behind
+              the reader's back: this is what decides whether the Task stops to
+              ask permission to write a file. */}
+          <label className="aw-report-toggle">
+            <input
+              checked={wantsReport}
+              disabled={createMutation.isPending}
+              onChange={(event) => setReportOverride(event.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              <strong>生成报告文件</strong>
+              <small>
+                {wantsReport
+                  ? "完成后会请你确认，再导出可下载的报告。"
+                  : "只把结果写在任务页里，不生成文件，也不需要你确认。"}
+              </small>
+            </span>
+          </label>
           <p className="aw-create-task-hint">
             {attachments.hasBlockingItems
               ? "附件正在上传或索引，完成后才能创建任务。"
@@ -523,81 +580,23 @@ export function WorkPage() {
               <StatusPill status={selectedTask.status} />
             </header>
 
-            <section className="aw-work-section" aria-labelledby="task-overview-title">
-              <h2 id="task-overview-title">任务输入</h2>
-              {taskInputQuery.isPending && taskInputRef !== null ? (
-                <LoadingLine label="正在读取任务输入 artifact" />
-              ) : null}
-              {taskInputQuery.isError ? (
-                <ErrorNotice
-                  message={errorMessage(taskInputQuery.error, "读取任务输入失败")}
-                />
-              ) : null}
-              {taskInputQuery.data !== undefined ? (
-                <div className="aw-task-objective">
-                  <p>{taskInputQuery.data.objective}</p>
-                  <div className="aw-task-input-facts">
-                    <KeyValue
-                      label="最大修订次数"
-                      value={taskInputQuery.data.max_revisions}
-                    />
-                    <KeyValue
-                      label="知识库 ID"
-                      value={taskInputQuery.data.knowledge_base_id ?? "未指定"}
-                    />
-                    <KeyValue label="输入 artifact" value={shortId(taskInputRef ?? "")} />
-                  </div>
-                </div>
-              ) : null}
-              <div className="aw-task-metadata">
-                <KeyValue label="创建时间" value={formatDateTime(selectedTask.created_at)} />
-                <KeyValue label="更新时间" value={formatDateTime(selectedTask.updated_at)} />
-                {selectedTask.status_detail !== null ? (
-                  <KeyValue label="状态详情" value={selectedTask.status_detail} />
-                ) : null}
-              </div>
-            </section>
+            {/* Result first. Whatever the Task produced is the reason the
+                reader opened this page; the machinery that produced it is
+                below, folded. */}
+            <TaskResult
+              artifact={finalReport?.artifact ?? null}
+              draftText={draftText}
+              identity={identity}
+              onDownload={(id) => downloadMutation.mutate(id)}
+              status={selectedTask.status}
+              {...(selectedTask.status_detail === null
+                ? {}
+                : { statusDetail: selectedTask.status_detail })}
+            />
 
-            {canCancel ? (
-              <section className="aw-work-section" aria-labelledby="cancel-task-title">
-                <h2 id="cancel-task-title">
-                  <Ban aria-hidden="true" size={17} /> 取消任务
-                </h2>
-                <label htmlFor="work-cancel-reason">取消原因</label>
-                <div className="aw-inline-form">
-                  <input
-                    id="work-cancel-reason"
-                    maxLength={1024}
-                    onChange={(event) =>
-                      setCancelDraft({
-                        taskId: selectedTask.task_id,
-                        reason: event.target.value,
-                      })
-                    }
-                    placeholder="说明为什么取消此任务"
-                    type="text"
-                    value={cancelReason}
-                  />
-                  <button
-                    className="aw-button is-danger"
-                    disabled={cancelMutation.isPending || cancelReason.trim() === ""}
-                    onClick={() =>
-                      cancelMutation.mutate({
-                        taskId: selectedTask.task_id,
-                        reason: cancelReason.trim(),
-                      })
-                    }
-                    type="button"
-                  >
-                    {cancelMutation.isPending ? "正在取消…" : "取消任务"}
-                  </button>
-                </div>
-                {cancelMutation.isError ? (
-                  <ErrorNotice message={errorMessage(cancelMutation.error, "取消任务失败")} />
-                ) : null}
-              </section>
-            ) : null}
-
+            {/* The decision, in place. A Task waiting on a human is the one
+                thing on this page that cannot wait, so it sits directly under
+                the result and needs no other page to act on. */}
             {approvalId !== null ? (
               <ApprovalSection
                 approval={approvalQuery.data}
@@ -608,9 +607,6 @@ export function WorkPage() {
                     ? approvalNotice.message
                     : null
                 }
-                {...(taskInputQuery.data === undefined
-                  ? {}
-                  : { objective: taskInputQuery.data.objective })}
                 onDecide={(decision) => {
                   const approval = approvalQuery.data;
                   if (approval === undefined) return;
@@ -638,91 +634,136 @@ export function WorkPage() {
               />
             ) : null}
 
-            {finalReport !== null ? (
-              <section className="aw-work-section aw-final-report" aria-labelledby="report-title">
-                <h2 id="report-title">
-                  <FileDown aria-hidden="true" size={17} /> 最终报告
-                </h2>
-                <p>
-                  此 artifact 来自精确关联的 <code>export_artifact</code> 工具调用，且其后已记录
-                  <code>TaskSucceeded</code>。
-                </p>
-                <div className="aw-task-metadata">
-                  <KeyValue
-                    label="文件"
-                    value={finalReport.artifact.filename ?? finalReport.artifact.artifact_id}
-                  />
-                  <KeyValue label="类型" value={finalReport.artifact.media_type} />
-                  <KeyValue label="大小" value={`${finalReport.artifact.size_bytes} bytes`} />
+            <LifecyclePanel
+              lifecycle={lifecycle}
+              loading={timeline.loading && timeline.events.length === 0}
+              running={!isTerminalStatus(selectedTask.status)}
+            />
+
+            <details className="aw-work-fold" open={!isTerminalStatus(selectedTask.status)}>
+              <summary>
+                <ChevronRight aria-hidden="true" className="aw-step-caret" size={14} />
+                执行记录
+                <span>{timeline.events.length} 条事件</span>
+              </summary>
+              <div className="aw-work-fold-body">
+                <div className="aw-section-heading">
+                  <span className="aw-page-note">按阶段分组，展开任意一步查看真实内容</span>
+                  <button
+                    className="aw-button is-small"
+                    disabled={timeline.loading}
+                    onClick={() => void timeline.refresh()}
+                    type="button"
+                  >
+                    刷新
+                  </button>
                 </div>
-                <button
-                  className="aw-button is-primary"
-                  disabled={
-                    downloadMutation.isPending &&
-                    downloadMutation.variables === finalReport.artifact.artifact_id
-                  }
-                  onClick={() => downloadMutation.mutate(finalReport.artifact.artifact_id)}
-                  type="button"
-                >
-                  {downloadMutation.isPending &&
-                  downloadMutation.variables === finalReport.artifact.artifact_id
-                    ? "正在下载…"
-                    : "下载报告"}
-                </button>
-                {downloadMutation.isError &&
-                downloadMutation.variables === finalReport.artifact.artifact_id ? (
+                {timeline.error !== null ? (
+                  <ErrorNotice message={errorMessage(timeline.error, "读取时间线失败")} />
+                ) : null}
+                {timelineGroups.length === 0 && !timeline.loading ? (
+                  <InfoNotice>时间线暂时没有事件。</InfoNotice>
+                ) : null}
+                {timelineGroups.map((group) => (
+                  <section className="aw-timeline-group" key={group.id}>
+                    <h3 title={group.graphNodeId ?? undefined}>
+                      {group.graphNodeId === null
+                        ? "任务生命周期"
+                        : workflowStageTitle(group.graphNodeId)}
+                    </h3>
+                    <ol>
+                      {group.events.map((event) => (
+                        <li
+                          className={isKnownEventType(event.event_type) ? "" : "is-unknown"}
+                          key={event.event_id}
+                        >
+                          <StepDisclosure
+                            event={event}
+                            onOpenArtifact={(id) => downloadMutation.mutate(id)}
+                            title={eventTitle(event)}
+                          />
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+                ))}
+              </div>
+            </details>
+
+            <details className="aw-work-fold">
+              <summary>
+                <ChevronRight aria-hidden="true" className="aw-step-caret" size={14} />
+                任务详情
+              </summary>
+              <div className="aw-work-fold-body">
+                {taskInputQuery.isPending && taskInputRef !== null ? (
+                  <LoadingLine label="正在读取任务输入" />
+                ) : null}
+                {taskInputQuery.isError ? (
                   <ErrorNotice
-                    message={errorMessage(downloadMutation.error, "下载报告失败")}
+                    message={errorMessage(taskInputQuery.error, "读取任务输入失败")}
                   />
                 ) : null}
-              </section>
-            ) : null}
-
-            <section className="aw-work-section aw-timeline" aria-labelledby="timeline-title">
-              <div className="aw-section-heading">
-                <h2 id="timeline-title">时间线</h2>
-                <button
-                  className="aw-button is-small"
-                  disabled={timeline.loading}
-                  onClick={() => void timeline.refresh()}
-                  type="button"
-                >
-                  刷新
-                </button>
-              </div>
-              {timeline.loading && timeline.events.length === 0 ? (
-                <LoadingLine label="正在加载时间线" />
-              ) : null}
-              {timeline.error !== null ? (
-                <ErrorNotice message={errorMessage(timeline.error, "读取时间线失败")} />
-              ) : null}
-              {timelineGroups.length === 0 && !timeline.loading ? (
-                <InfoNotice>时间线暂时没有事件。</InfoNotice>
-              ) : null}
-              {timelineGroups.map((group) => (
-                <section className="aw-timeline-group" key={group.id}>
-                  <h3 title={group.graphNodeId ?? undefined}>
-                    {group.graphNodeId === null
-                      ? "任务生命周期"
-                      : workflowStageTitle(group.graphNodeId)}
-                  </h3>
-                  <ol>
-                    {group.events.map((event) => (
-                      <li
-                        className={isKnownEventType(event.event_type) ? "" : "is-unknown"}
-                        key={event.event_id}
+                {taskInputQuery.data === undefined ? null : (
+                  <p className="aw-task-objective-full">{taskInputQuery.data.objective}</p>
+                )}
+                <div className="aw-task-metadata">
+                  {taskInputQuery.data === undefined ? null : (
+                    <>
+                      <KeyValue
+                        label="最大修订次数"
+                        value={taskInputQuery.data.max_revisions}
+                      />
+                      <KeyValue
+                        label="知识库"
+                        value={taskInputQuery.data.knowledge_base_id ?? "未使用"}
+                      />
+                    </>
+                  )}
+                  <KeyValue label="任务 ID" value={selectedTask.task_id} />
+                  <KeyValue label="创建时间" value={formatDateTime(selectedTask.created_at)} />
+                  <KeyValue label="更新时间" value={formatDateTime(selectedTask.updated_at)} />
+                </div>
+                {canCancel ? (
+                  <div className="aw-work-cancel">
+                    <label htmlFor="work-cancel-reason">取消这个任务</label>
+                    <div className="aw-inline-form">
+                      <input
+                        id="work-cancel-reason"
+                        maxLength={1024}
+                        onChange={(event) =>
+                          setCancelDraft({
+                            taskId: selectedTask.task_id,
+                            reason: event.target.value,
+                          })
+                        }
+                        placeholder="说明为什么取消"
+                        type="text"
+                        value={cancelReason}
+                      />
+                      <button
+                        className="aw-button is-danger"
+                        disabled={cancelMutation.isPending || cancelReason.trim() === ""}
+                        onClick={() =>
+                          cancelMutation.mutate({
+                            taskId: selectedTask.task_id,
+                            reason: cancelReason.trim(),
+                          })
+                        }
+                        type="button"
                       >
-                        <StepDisclosure
-                          event={event}
-                          onOpenArtifact={(id) => downloadMutation.mutate(id)}
-                          title={eventTitle(event)}
-                        />
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-              ))}
-            </section>
+                        {cancelMutation.isPending ? "正在取消…" : "取消任务"}
+                      </button>
+                    </div>
+                    {cancelMutation.isError ? (
+                      <ErrorNotice
+                        message={errorMessage(cancelMutation.error, "取消任务失败")}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </details>
           </>
         ) : null}
       </main>
@@ -730,12 +771,194 @@ export function WorkPage() {
   );
 }
 
+/**
+ * Where the Task is, as a strip rather than a section.
+ *
+ * While it runs this is the thing that moves, so it stays open. Once it stops
+ * moving it collapses to one line -- a finished Task's stage list is history,
+ * and history does not need to occupy the page above the result.
+ */
+function LifecyclePanel({
+  lifecycle,
+  loading,
+  running,
+}: {
+  lifecycle: Lifecycle;
+  loading: boolean;
+  running: boolean;
+}) {
+  if (loading) return <LoadingLine label="正在读取执行阶段" />;
+  const total = lifecycle.stages.filter((stage) => stage.state !== "skipped").length;
+
+  return (
+    <details className="aw-lifecycle" open={running}>
+      <summary>
+        <ChevronRight aria-hidden="true" className="aw-step-caret" size={14} />
+        <strong>{lifecycle.currentTitle ?? "执行阶段"}</strong>
+        <span className="aw-lifecycle-count">
+          {lifecycle.doneCount}/{total}
+        </span>
+        <span className="aw-lifecycle-mini" aria-hidden="true">
+          {lifecycle.stages.map((stage) => (
+            <i className={`is-${stage.state}`} key={stage.id} />
+          ))}
+        </span>
+      </summary>
+      <ol className="aw-lifecycle-steps">
+        {lifecycle.stages.map((stage) => (
+          <li className={`is-${stage.state}`} key={stage.id}>
+            <span className="aw-lifecycle-dot" aria-hidden="true" />
+            <span className="aw-lifecycle-title">{stage.title}</span>
+            <span className="aw-lifecycle-note">
+              {stage.state === "skipped"
+                ? "未执行"
+                : stage.state === "pending"
+                  ? "等待中"
+                  : stage.state === "waiting"
+                    ? "等待你确认"
+                    : stage.endedAt === null
+                      ? ""
+                      : formatTime(stage.endedAt)}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+/**
+ * What the Task produced, shown rather than described.
+ *
+ * The old version listed the artifact's media type and byte count behind a
+ * download button, which told the reader everything about the file except what
+ * it said. Text is rendered inline; anything else keeps the download, because
+ * that is what a binary is for.
+ */
+function TaskResult({
+  artifact,
+  draftText,
+  identity,
+  onDownload,
+  status,
+  statusDetail,
+}: {
+  artifact: ArtifactRef | null;
+  draftText: string | null;
+  identity: PrincipalIdentity;
+  onDownload: (artifactId: string) => void;
+  status: TaskStatus;
+  statusDetail?: string;
+}) {
+  const readable = artifact !== null && isReadableMedia(artifact.media_type);
+  const preview = useQuery({
+    queryKey: ["work", "artifact-text", artifact?.artifact_id ?? ""],
+    enabled: readable,
+    staleTime: Number.POSITIVE_INFINITY,
+    queryFn: () => {
+      if (artifact === null) throw new Error("没有可预览的产物");
+      return getArtifactText(identity, artifact.artifact_id);
+    },
+  });
+
+  if (artifact === null) {
+    if (!isTerminalStatus(status)) {
+      return (
+        <section className="aw-result is-running">
+          <LoadingLine label="任务正在执行，完成后结果会显示在这里" />
+        </section>
+      );
+    }
+    // No file, but the Task still wrote something. Showing the draft is the
+    // whole point of letting a Task finish without an export.
+    if (status === "succeeded" && draftText !== null) {
+      return (
+        <section className="aw-result" aria-label="任务结果">
+          <header>
+            <div>
+              <span className="aw-eyebrow">结果</span>
+              <strong>这次没有生成文件</strong>
+            </div>
+          </header>
+          <div className="aw-result-body">
+            <MarkdownContent text={draftText} />
+          </div>
+        </section>
+      );
+    }
+    return (
+      <section className="aw-result">
+        <div className={`aw-notice ${status === "succeeded" ? "" : "is-warning"}`}>
+          <span>
+            {status === "succeeded"
+              ? "任务已完成，没有产出内容。展开下面的执行记录可以看到每一步做了什么。"
+              : `任务${formatStatus(status)}${statusDetail === undefined ? "" : `：${statusDetail}`}`}
+          </span>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="aw-result" aria-label="任务产出">
+      <header>
+        <div>
+          <span className="aw-eyebrow">产出</span>
+          <strong>{artifact.filename ?? artifact.kind}</strong>
+        </div>
+        <button
+          className="aw-button is-ghost is-small"
+          onClick={() => onDownload(artifact.artifact_id)}
+          type="button"
+        >
+          <FileDown aria-hidden="true" size={14} />
+          下载
+        </button>
+      </header>
+      {!readable ? (
+        <p className="aw-page-note">
+          {artifact.media_type} · {artifact.size_bytes} 字节，这个类型只能下载查看。
+        </p>
+      ) : preview.isPending ? (
+        <LoadingLine label="正在读取产出内容" />
+      ) : preview.isError ? (
+        <ErrorNotice message={errorMessage(preview.error, "读取产出内容失败")} />
+      ) : (
+        <>
+          <div className="aw-result-body">
+            <MarkdownContent text={preview.data.text} />
+          </div>
+          {preview.data.truncated ? (
+            <p className="aw-page-note">内容较长，这里只显示开头；完整内容请下载。</p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Text this page can render. Anything else is a download, not a preview. */
+function isReadableMedia(mediaType: string): boolean {
+  return (
+    mediaType.startsWith("text/") ||
+    mediaType === "application/json" ||
+    mediaType.endsWith("+json")
+  );
+}
+
+/**
+ * The decision, where the Task is.
+ *
+ * No second confirmation dialog: the two buttons say what they do, they sit
+ * under the objective and the draft the reader just read, and a decision made
+ * here is recoverable by the Task's own record. A modal that repeats the
+ * button's label is a click, not a safeguard.
+ */
 function ApprovalSection({
   approval,
   error,
   loading,
   notice,
-  objective,
   onDecide,
   pending,
   taskId,
@@ -745,7 +968,6 @@ function ApprovalSection({
   error: unknown;
   loading: boolean;
   notice: string | null;
-  objective?: string;
   onDecide: (decision: "approved" | "rejected") => void;
   pending: boolean;
   taskId: string;
@@ -753,17 +975,20 @@ function ApprovalSection({
 }) {
   const matchesTask = approval?.task_id === taskId;
   const decidable = approval?.status === "pending" && taskStatus === "waiting_approval";
+
+  // Decided, and the Task moved on. The lifecycle strip already says so, and a
+  // settled approval is not something the reader has to act on.
+  if (!loading && !decidable && notice === null && error === null) return null;
+
   return (
-    <section className="aw-work-section aw-approval" aria-labelledby="approval-title">
-      <h2 id="approval-title">
-        <ClipboardCheck aria-hidden="true" size={17} /> 是否允许生成并导出任务报告？
-      </h2>
-      <p>
-        Agent 已完成主要工作，正在等待你的确认。批准后继续生成可下载报告；拒绝后停止任务且不导出。
-      </p>
-      {objective === undefined ? null : (
-        <blockquote className="aw-approval-objective">{objective}</blockquote>
-      )}
+    <section className="aw-approve" aria-labelledby="approval-title">
+      <div className="aw-approve-copy">
+        <ClipboardCheck aria-hidden="true" size={17} />
+        <div>
+          <strong id="approval-title">要生成并导出这份报告吗？</strong>
+          <span>批准后继续导出；拒绝则到此为止，不生成文件。</span>
+        </div>
+      </div>
       {loading ? <LoadingLine label="正在读取审批记录" /> : null}
       {error !== null ? (
         <ErrorNotice message={errorMessage(error, "读取审批记录失败")} />
@@ -771,60 +996,37 @@ function ApprovalSection({
       {approval !== undefined && !matchesTask ? (
         <ErrorNotice message="审批记录与当前任务不匹配，无法提交决定。" />
       ) : null}
-      {approval !== undefined && matchesTask ? (
-        <>
-          <div className="aw-approval-summary">
-            <StatusPill status={approval.status} />
-            <span>请求时间：{formatDateTime(approval.created_at)}</span>
-          </div>
-          {approval.status === "pending" && !decidable ? (
-            <InfoNotice>
-              当前任务状态为“{formatStatus(taskStatus)}”，此审批已不再可决定。
-            </InfoNotice>
-          ) : null}
-          {decidable ? (
-            <div className="aw-button-row">
-              <button
-                aria-label="批准"
-                className="aw-button is-primary"
-                disabled={pending}
-                onClick={() => {
-                  if (window.confirm("批准后将继续生成并导出报告。确认批准吗？")) {
-                    onDecide("approved");
-                  }
-                }}
-                type="button"
-              >
-                批准并继续导出
-              </button>
-              <button
-                aria-label="拒绝"
-                className="aw-button is-danger"
-                disabled={pending}
-                onClick={() => {
-                  if (window.confirm("拒绝后任务会停止且不导出报告。确认拒绝吗？")) {
-                    onDecide("rejected");
-                  }
-                }}
-                type="button"
-              >
-                拒绝并停止任务
-              </button>
-            </div>
-          ) : null}
-          <details className="aw-engineering-details">
-            <summary>工程详情</summary>
-            <div className="aw-task-metadata">
-              <KeyValue label="审批 ID" value={shortId(approval.approval_id, 22)} />
-              <KeyValue label="决定版本" value={approval.decision_version} />
-              {approval.decided_at === null ? null : (
-                <KeyValue label="决定时间" value={formatDateTime(approval.decided_at)} />
-              )}
-            </div>
-          </details>
-        </>
+      {decidable ? (
+        <div className="aw-approve-actions">
+          <button
+            className="aw-button is-ghost"
+            disabled={pending}
+            onClick={() => onDecide("rejected")}
+            type="button"
+          >
+            不用了
+          </button>
+          <button
+            className="aw-button is-primary"
+            disabled={pending}
+            onClick={() => onDecide("approved")}
+            type="button"
+          >
+            {pending ? "正在提交…" : "生成报告"}
+          </button>
+        </div>
       ) : null}
-      {notice === null ? null : <InfoNotice>{notice}</InfoNotice>}
+      {notice === null ? null : (
+        <div className="aw-approve-settled">
+          {/* The server's answer, not the button that was pressed. A decision
+              that did not stick has to be visible as state, not only as a
+              sentence the reader might skim. */}
+          {approval !== undefined && matchesTask ? (
+            <StatusPill status={approval.status} />
+          ) : null}
+          <InfoNotice>{notice}</InfoNotice>
+        </div>
+      )}
     </section>
   );
 }

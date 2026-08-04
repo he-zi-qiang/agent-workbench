@@ -204,6 +204,29 @@ export function findFinalReport(events: readonly EventEnvelope[]): FinalReportMa
   return null;
 }
 
+/**
+ * The draft the Task wrote, for a Task that produced no file.
+ *
+ * A Task that was not asked for a report still did the work, and the result has
+ * to be readable somewhere. The synthesize node's model output *is* that
+ * result -- the export node only copies it into an artifact.
+ *
+ * Unlike Chat, a Task has no release fence over this text: there is no
+ * `AnswerCommitted` boundary in the graph, and the report the export node
+ * writes is this same text. Hiding it here would hide the Task's only output.
+ */
+export function findDraftText(events: readonly EventEnvelope[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event === undefined) continue;
+    if (event.graph_node_id !== "synthesize") continue;
+    if (!isEvent(event, "ModelCompleted")) continue;
+    const text = stringField(event.payload, "text");
+    if (text !== null) return text;
+  }
+  return null;
+}
+
 export function eventTitle(event: EventEnvelope): string {
   const title = KNOWN_EVENT_TITLES[event.event_type];
   if (title === undefined) return `未识别事件：${event.event_type}`;

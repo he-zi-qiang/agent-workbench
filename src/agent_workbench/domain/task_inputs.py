@@ -29,6 +29,12 @@ class TaskInput(VersionedModel):
     # from future non-knowledge tools. When present, later graph nodes use it
     # to select the knowledge scope; it is not a client-supplied ACL.
     knowledge_base_id: Identifier | None = None
+    # Whether this Task is expected to produce a downloadable file. False means
+    # the Task still runs to completion and still writes a draft -- it just
+    # stops after the critic instead of asking a human to approve an export
+    # nobody wanted. Default False, because a Task that was not asked for a
+    # file should not interrupt somebody to authorize one.
+    wants_report: bool = False
 
     def canonical_bytes(self) -> bytes:
         """Serialize the exact bytes that identify one input request.

@@ -68,6 +68,10 @@ class TaskInputStore:
             objective=task_input.objective,
             max_revisions=task_input.max_revisions,
             knowledge_base_id=task_input.knowledge_base_id,
+            # Always passed explicitly. TaskState's own default exists for
+            # checkpoints older than the field, and a Task loading its input
+            # is never one of those.
+            wants_report=task_input.wants_report,
         )
 
     async def _load(

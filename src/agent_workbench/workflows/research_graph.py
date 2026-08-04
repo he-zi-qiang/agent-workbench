@@ -121,18 +121,27 @@ def route_research(state: TaskState) -> tuple[TaskNodeId, ...]:
 
 
 def route_quality_gate(state: TaskState) -> TaskNodeId | None:
-    """Return the next node after the quality gate, or ``None`` to fail.
+    """Return the next node after the quality gate, or ``None`` to stop here.
 
-    ``None`` means the critic still wants changes and the revision budget is
-    spent.  It is deliberately not ``approval``: the caller has to decide that
-    the Task failed, and cannot reach the approval node by ignoring a value.
+    ``None`` has two meanings, and they are told apart by
+    ``terminal_failure_reason`` rather than by this return value:
+
+    * the critic still wants changes and the revision budget is spent -- a
+      failure, and deliberately not ``approval``, because the caller has to
+      decide the Task failed rather than reach the gate by ignoring a value;
+    * the work passed and this Task was never asked for a file -- a success.
+      Routing to ``approval`` here would interrupt a human to authorize an
+      export nobody wanted, and then write one.
+
+    The draft is written either way.  ``wants_report`` decides whether it also
+    becomes a downloadable artifact, not whether the Task produced anything.
     """
 
     review = state.review_result
     if review is None:
         raise MissingReviewError(state.task_id)
     if review.decision == "pass":
-        return "approval"
+        return "approval" if state.wants_report else None
     return "synthesize" if state.can_revise else None
 
 
@@ -144,6 +153,9 @@ def quality_gate_failure_reason(state: TaskState) -> str | None:
     across the workflow port and checkpoint inspection boundary so a Worker
     can mark the product Task failed rather than inferring success from an
     empty pending-node list.
+
+    A gate that passed returns ``None`` here whether or not it routed onward,
+    which is what makes "passed, no file wanted" terminate as a success.
     """
 
     review = state.review_result

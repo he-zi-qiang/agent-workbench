@@ -45,6 +45,10 @@ class CreateTaskRequest(BaseModel):
     objective: str = Field(min_length=1, max_length=4096)
     max_revisions: int = Field(default=2, ge=0, le=20)
     knowledge_base_id: Identifier | None = None
+    # Whether this Task should end in a downloadable file. Defaulted False so a
+    # client that does not know about the field submits the cheaper shape --
+    # one that never stops to ask a human to authorize an export.
+    wants_report: bool = False
 
 
 class TaskView(BaseModel):
@@ -111,6 +115,7 @@ async def submit(
             objective=body.objective,
             max_revisions=body.max_revisions,
             knowledge_base_id=body.knowledge_base_id,
+            wants_report=body.wants_report,
         ),
         submission_dedup_key=idempotency_key,
     )

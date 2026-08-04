@@ -88,7 +88,7 @@ describe("apiRequest", () => {
         Promise.resolve(new Response(JSON.stringify(response), { status: 201 })),
       );
 
-    const input = { objective: "research", maxRevisions: 2 };
+    const input = { objective: "research", maxRevisions: 2, wantsReport: false };
     await createTask(identity, input, "task:stable-attempt");
     await createTask(identity, input, "task:stable-attempt");
 
