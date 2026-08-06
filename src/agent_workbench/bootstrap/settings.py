@@ -705,23 +705,38 @@ class ResearchSettings(StrictModel):
     """External web search (ADR-020).
 
     Off by default, and the default is load-bearing rather than cautious: it is
-    what keeps a deployment that never configured a provider from widening its
-    Task authorization envelope on upgrade. See
+    what keeps a deployment that never configured it from widening its Task
+    authorization envelope on upgrade. See
     ``projections.task_authorization_envelope``.
+
+    No API key of its own: the search runs on the model provider's side through
+    its Anthropic-compatible endpoint, under the same key the provider already
+    holds.
     """
 
     enabled: bool = False
-    provider: Literal["anthropic"] = "anthropic"
-    #: Must be a model that supports the web_search server tool.
-    model_id: str = Field(default="claude-opus-5", min_length=1)
+    provider: Literal["deepseek"] = "deepseek"
+    #: The provider's Anthropic-compatible endpoint. Separate from
+    #: `model.base_url`, which addresses the OpenAI-compatible one the runtime
+    #: uses for every other call -- the two are different paths on the same
+    #: service and only one of them speaks the Messages protocol.
+    base_url: str = Field(default="https://api.deepseek.com/anthropic", min_length=1)
+    model_id: str = Field(default="deepseek-chat", min_length=1)
     #: Searches per external_search call. The model may search more than once
-    #: for one query, and each search is billed.
+    #: for one query, and each search is work the provider bills for.
     max_uses: int = Field(default=5, ge=1, le=20)
+    timeout_seconds: int = Field(default=60, ge=1, le=600)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        # Every request to it carries the provider API key, so the same rule the
+        # model endpoint follows applies here.
+        return _validate_service_endpoint(value, field_name="research.base_url")
 
 
 class SecretsSettings(StrictModel):
     deepseek_api_key: SecretStr | None = None
-    anthropic_api_key: SecretStr | None = None
     qdrant_api_key: SecretStr | None = None
     artifact_access_key: SecretStr | None = None
     artifact_secret_key: SecretStr | None = None
@@ -886,10 +901,10 @@ class Settings(BaseSettings):
         # first search. That is the "configuration describes a system that does
         # not exist" defect this project keeps removing, so it is a startup error.
         if self.research.enabled and not self._secret_is_configured(
-            self.secrets.anthropic_api_key
+            self.secrets.deepseek_api_key
         ):
             raise ValueError(
-                "research.enabled requires a non-placeholder Anthropic API key"
+                "research.enabled requires a non-placeholder provider API key"
             )
 
         if self.app.deployment_scope == "remote":
@@ -1151,7 +1166,6 @@ SENSITIVE_KEYS = {
     "guard_dsn",
     "listen_dsn",
     "deepseek_api_key",
-    "anthropic_api_key",
     "qdrant_api_key",
     "artifact_access_key",
     "artifact_secret_key",

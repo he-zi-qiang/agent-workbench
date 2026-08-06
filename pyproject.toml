@@ -76,15 +76,6 @@ embedding = [
   # the model actually has. See ADR-013.
   "FlagEmbedding>=1.3,<2",
 ]
-# External web search (ADR-020). Optional because it serves one adapter that is
-# off by default, and because that adapter's tests drive the whole parse and
-# cross-check path through a fake client -- so an install without this extra
-# proves exactly as much as one with it. That is the difference from langgraph
-# and llama-index-core, which are main dependencies precisely because hiding
-# them would make CI skip the tests that prove they work.
-research = [
-  "anthropic>=0.69,<1",
-]
 
 [project.scripts]
 agent-api = "agent_workbench.apps.api.main:main"

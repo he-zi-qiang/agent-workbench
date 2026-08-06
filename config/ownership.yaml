@@ -491,13 +491,15 @@
       ]
     },
     {
-      "owner": "adapters.research.anthropic_web_search",
+      "owner": "adapters.research.deepseek_web_search",
       "lifecycle": "startup",
       "fields": [
         "research.enabled",
         "research.provider",
+        "research.base_url",
         "research.model_id",
-        "research.max_uses"
+        "research.max_uses",
+        "research.timeout_seconds"
       ]
     },
     {
@@ -585,7 +587,6 @@
       "lifecycle": "startup",
       "fields": [
         "secrets.deepseek_api_key",
-        "secrets.anthropic_api_key",
         "secrets.qdrant_api_key",
         "secrets.artifact_access_key",
         "secrets.artifact_secret_key",

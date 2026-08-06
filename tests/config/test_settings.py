@@ -838,9 +838,27 @@ def test_enabling_search_grants_both_halves_of_the_permission() -> None:
     assert envelope.approval_required_risks == ()
 
 
-def test_research_enabled_without_a_key_is_refused_at_startup() -> None:
+def test_research_enabled_without_a_provider_key_is_refused_at_startup() -> None:
+    """Enabled-but-unconfigured has to fail at startup, not at the first search.
+
+    Search runs on the model provider's side under its key, so there is no
+    second credential to check -- but "enabled with no key at all" still reads
+    as working web search in the config file, and that is the defect.
+    """
+
+    payload = valid_payload()
+    payload["research"] = {"enabled": True}
+    payload["secrets"] = {}
+
+    with pytest.raises(ValidationError, match="provider API key"):
+        Settings(**payload)
+
+
+def test_research_needs_no_credential_beyond_the_provider_s_own() -> None:
     payload = valid_payload()
     payload["research"] = {"enabled": True}
 
-    with pytest.raises(ValidationError, match="Anthropic API key"):
-        Settings(**payload)
+    settings = Settings(**payload)
+
+    assert settings.research.enabled
+    assert settings.research.base_url == "https://api.deepseek.com/anthropic"

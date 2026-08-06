@@ -1,9 +1,9 @@
-# ADR-020：用 Anthropic 的 web_search 服务端工具接上外部检索
+# ADR-020：用 DeepSeek 自己的 web_search 服务端工具接上外部检索
 
 - 决策点：`ExternalSearchPort` 的真实实现；Task 授权信封是否放行 `external_search`
 - 状态：**接受**
 - 日期：2026-08-06
-- 影响：config schema `1.4` → `1.5`；新增可选 extra `research`；`TASK_V1_AUTHORIZATION_ENVELOPE` 变成按配置决定
+- 影响：config schema `1.4` → `1.5`；`TASK_V1_AUTHORIZATION_ENVELOPE` 变成按配置决定
 
 ## 背景
 
@@ -25,29 +25,54 @@
 
 ## 决策
 
-### 一、provider 用 Anthropic Messages API 的 `web_search` 服务端工具
+### 一、provider 用 DeepSeek 自己的 web_search 服务端工具
 
-用户的原话是"根据 Claude Code 中的配置进行编写"。Claude Code 的 WebSearch 就是这个：
-`{"type": "web_search_20260209", "name": "web_search"}`——搜索在 Anthropic 侧执行，
-本地不需要爬虫、不需要维护索引、不需要第二个搜索厂商的合同。`_20260209` 这一版自带
-dynamic filtering（结果在进入上下文前先被代码过滤），所以**不要**再单独声明
-`code_execution`：两个执行环境会让模型犯迷糊。
+**先纠正一版走错的方向。** 第一版接的是 Anthropic 的 API，那需要第二个厂商、第二把
+key。不需要——**DeepSeek 在自己的 Anthropic 兼容端点上就提供服务端 web search**：
+
+| | 地址 | 协议 | 有没有 web search |
+|---|---|---|---|
+| 平时用的 | `https://api.deepseek.com` | OpenAI 兼容 | 无（`tools` 只有 `function`） |
+| 搜索用的 | `https://api.deepseek.com/anthropic` | Anthropic Messages | **有**，`web_search_20250305` |
+
+同一个服务的两条路径、同一把 key。请求声明工具 → DeepSeek 自己执行搜索 →
+响应里回 `web_search_tool_result` 块。这正是 Claude Code 的 WebSearch 那套机制，
+所以适配器写在 Messages 协议上，而不是写在某个搜索厂商的 REST API 上。
+
+**用 `httpx` 直接写，不引 SDK。** 请求就是一个 POST + JSON body，`httpx` 已经是主依赖，
+而且要打的是 DeepSeek 的端点——为了跟另一家的兼容端点说话去装那一家的 SDK，
+只增加依赖不增加保证。
+
+**工具版本取 `web_search_20250305`（基础版），不取 `_20260209`。** 后者带
+dynamic filtering，靠的是在 Anthropic 自家模型上跑服务端代码，没有任何依据说
+DeepSeek 实现了它。
+
+### 一之补：这一条 DeepSeek 官方文档没写
+
+DeepSeek 的 API 文档写了 Anthropic 兼容端点，但**没有**写这个端点上的托管 web search
+工具——这个能力是"被报告可用"，不是"被规定可用"。所以适配器整个是按**可读地失败**
+写的：端点不认这个工具（HTTP 4xx）就抛出带状态码的 `WebSearchUnavailableError`，
+返回里没有搜索块就产出零条证据，两种情况都不会崩、也不会编。
 
 ### 二、URL 和标题取自工具结果，摘要取自模型，两者交叉校验
 
 这是本 ADR 最需要写下来的一条。
 
-`web_search_result` 块带 `url`、`title`、`page_age` 和 `encrypted_content`——
-**`encrypted_content` 客户端解不开**。而 `ExternalSearchHit.text` 会变成
-`EvidenceItem.text`，是 Agent 后面真正读的证据，必须是有内容的文本（1..8192 字符）。
+`web_search_result` 块说明**provider 真的抓了哪些页**，但 `ExternalSearchHit.text`
+会变成 `EvidenceItem.text`——是 Agent 后面真正读的证据，必须是客户端读得到的文本
+（1..8192 字符）。
 
 所以摘要只能由模型写。风险随之而来：模型可以编一个 URL。
 
 对策是**把两个来源分开信**：
 
 - `url` / `title`：只认 `web_search_tool_result` 块里真实出现过的值；
-- `extract`：模型写的摘要，用结构化输出（`output_config.format`）保证形状；
+- `extract`：模型写的摘要；
 - 组装时，**模型返回的每一条都要用 URL 去比对搜索结果集合，对不上的直接丢掉**。
+
+摘要的形状用提示词要求 JSON，解析时**宽松地找**（容忍代码围栏和前后白话）——
+`output_config.format` 是 Anthropic 的结构化输出特性，这里打的是 DeepSeek 的端点，
+没有那条保证可以靠。
 
 于是"这个网址存在过"由工具保证，"这段话是对这个网址的概括"由模型负责——
 后者可能不准，但前者不会是幻觉。证据里也照旧标注为外部来源、按不可信数据处理
@@ -72,29 +97,27 @@ dynamic filtering（结果在进入上下文前先被代码过滤），所以**�
 不在工具边界——理由与 ADR-015 一致：v1 的网关对"需要审批的工具"只会拒绝，
 在工具边界加第二道门等于加一道只会说不的门。
 
-### 四、`anthropic` 放在可选 extra 里
+### 四、不新增依赖，也不新增 key
 
-照搬 `embedding` extra 的先例：CI 不装，缺了就 `ExternalSearchUnavailableError`
-（工具已经把它映射成 `provider_unavailable`），行为与今天完全一致。
-
-理由是这个依赖只服务一个默认关闭的适配器。和 `langgraph`、`llama-index-core`
-不同——那两个放主依赖是因为放 extra 会让 CI 跳过它们的测试、从而什么也证明不了；
-这里的适配器测试用假 client 就能跑完，装不装 SDK 都能证明同样的事。
+`httpx` 已经在主依赖里，搜索用的是模型 provider 自己的 key——所以既没有新的
+extra，也没有第二个 secret。`research.enabled` 打开却没有 provider key 时，
+settings 在**启动**就报错，而不是等到第一次搜索才失败。
 
 ## 后果
 
-- 打开需要 **Anthropic API key**（`AW_SECRETS__ANTHROPIC_API_KEY`）。项目现在只有
-  DeepSeek 的 key，模型调用仍然走 DeepSeek——这里的 Anthropic 只用于搜索。
-  两个 provider 并存是这次改动的直接代价，文档里写明。
-- 计费多一项：web search 按次计费，另加该次请求的 token。
+- 打开只需要把 `research.enabled` 设成 `true`：没有新依赖、没有新 key、没有第二个厂商。
+- 计费多一项：搜索按次计费，另加那次请求的 token。`max_uses` 是每次调用的搜索次数上限。
 - 关闭时事件负载、信封、行为逐字节不变。
+- **这条能力依赖一个 DeepSeek 未公开承诺的行为**。端点哪天不认这个工具，表现是
+  任务里出现 `provider_unavailable` 的外部检索、其余照常，不是整体故障。
 
 ## 备选方案
 
+**Anthropic 的 API。** 第一版就是这么写的，然后被否掉：它要求第二个厂商和第二把 key，
+而 DeepSeek 自己就提供同样的服务端搜索。
+
 **Brave / Tavily / Serper 这类专门的搜索 API。** 形状上更贴合 `ExternalSearchPort`
-（直接返回 url/title/snippet，不需要交叉校验，也不需要第二个模型 provider）。
-没有选它，是因为用户明确要求"根据 Claude Code 中的配置"，而 Claude Code 的
-WebSearch 就是 Anthropic 的服务端工具。端口没有为此改动——想换回这条路，
-再写一个 `ExternalSearchPort` 实现即可，其余全部复用。
+（直接返回 url/title/snippet，连交叉校验都不需要），但同样要引入新厂商和新 key。
+端口没有为任何一条路改动——真要换，再写一个 `ExternalSearchPort` 实现即可，其余全部复用。
 
 **默认打开。** 被否决：见"授权信封按配置放行"。

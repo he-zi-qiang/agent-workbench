@@ -332,9 +332,13 @@ class ResearchConfig:
     Worker never holds a provider the envelope would refuse to let it use.
     """
 
-    provider: Literal["anthropic"]
+    provider: Literal["deepseek"]
+    base_url: str
     model_id: str
     max_uses: int
+    timeout_seconds: int
+    #: The model provider's own key. Search runs on the provider's side through
+    #: its Anthropic-compatible endpoint, so there is no second credential.
     api_key: SecretStr
 
 
@@ -526,13 +530,15 @@ def _project_research(settings: Settings) -> ResearchConfig | None:
     assertion here is about the projection being total, not a second check.
     """
 
-    if not settings.research.enabled or settings.secrets.anthropic_api_key is None:
+    if not settings.research.enabled or settings.secrets.deepseek_api_key is None:
         return None
     return ResearchConfig(
         provider=settings.research.provider,
+        base_url=settings.research.base_url,
         model_id=settings.research.model_id,
         max_uses=settings.research.max_uses,
-        api_key=settings.secrets.anthropic_api_key,
+        timeout_seconds=settings.research.timeout_seconds,
+        api_key=settings.secrets.deepseek_api_key,
     )
 
 

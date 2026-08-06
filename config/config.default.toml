@@ -287,19 +287,26 @@ redact_secrets = true
 
 # External web search for Task research (ADR-020). Off by default, and the
 # default is load-bearing: with it off the Task authorization envelope keeps
-# refusing `external_search`, so a deployment that never configured a provider
-# does not widen its permission ceiling on upgrade.
+# refusing `external_search`, so a deployment that never configured it does not
+# widen its permission ceiling on upgrade.
 #
-# Turning it on needs `AW_SECRETS__ANTHROPIC_API_KEY` and the `research` extra
-# (`uv sync --extra research`). Search runs on Anthropic's side through the
-# web_search server tool -- the same mechanism Claude Code's WebSearch uses --
-# and is billed per search on top of that request's tokens. The chat/task model
-# provider is unaffected; this key is only for search.
+# No key of its own and no extra dependency: the search runs on the model
+# provider's side, through the Anthropic-compatible endpoint DeepSeek exposes
+# beside its OpenAI-compatible one, under the same API key. That endpoint is a
+# different path on the same service than `model.base_url`, which is why this
+# has its own -- only one of the two speaks the Messages protocol.
+#
+# Caveat worth knowing before enabling: DeepSeek documents the compatible
+# endpoint but not a managed web-search tool on it. The capability is reported
+# to work rather than specified, so the adapter treats a rejection as "no
+# evidence, here is the status" rather than assuming success.
 [research]
 enabled = false
-provider = "anthropic"
-model_id = "claude-opus-5"
+provider = "deepseek"
+base_url = "https://api.deepseek.com/anthropic"
+model_id = "deepseek-chat"
 max_uses = 5
+timeout_seconds = 60
 
 [observability]
 otel_enabled = true
