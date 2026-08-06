@@ -25,6 +25,9 @@ from pydantic import SecretStr
 from agent_workbench.adapters.tools.export_artifact import (
     TOOL_NAME as EXPORT_ARTIFACT_TOOL,
 )
+from agent_workbench.adapters.tools.external_search import (
+    TOOL_NAME as EXTERNAL_SEARCH_TOOL,
+)
 from agent_workbench.bootstrap.settings import Settings
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import AuthorizationEnvelope
@@ -50,6 +53,39 @@ TASK_V1_AUTHORIZATION_ENVELOPE = AuthorizationEnvelope(
     max_tool_risk="write",
     approval_required_risks=(),
 )
+
+#: The same ceiling with external search added, for deployments that configured
+#: a provider (ADR-020).
+#:
+#: Both changes are required together: ``external_search`` has to be in the
+#: allowlist *and* ``max_tool_risk`` has to reach "external", because
+#: ``risk_within`` ranks external above write. Raising only one of them produces
+#: an envelope that still denies the tool, which reads as a bug rather than as
+#: a policy.
+#:
+#: ``approval_required_risks`` stays empty for the reason above: the human gate
+#: is the graph's approval node, and a tool-boundary gate the gateway can only
+#: answer with "no" is not a gate.
+TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH = AuthorizationEnvelope(
+    allowed_tools=(EXPORT_ARTIFACT_TOOL, EXTERNAL_SEARCH_TOOL),
+    max_tool_risk="external",
+    approval_required_risks=(),
+)
+
+
+def task_authorization_envelope(*, external_search: bool) -> AuthorizationEnvelope:
+    """Pick the ceiling this deployment submits Tasks under.
+
+    Chosen from configuration rather than fixed, because the envelope is stored
+    with the Task and re-applied on every resume: a deployment that never turned
+    external search on must not have its historical Tasks widened by an upgrade.
+    """
+
+    return (
+        TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH
+        if external_search
+        else TASK_V1_AUTHORIZATION_ENVELOPE
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +324,21 @@ class MultiAgentConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ResearchConfig:
+    """What it takes to build the external-search provider (ADR-020).
+
+    Absent when the deployment did not enable it, which is the same condition
+    that keeps `external_search` out of the authorization envelope -- so a
+    Worker never holds a provider the envelope would refuse to let it use.
+    """
+
+    provider: Literal["anthropic"]
+    model_id: str
+    max_uses: int
+    api_key: SecretStr
+
+
+@dataclass(frozen=True, slots=True)
 class TaskWorkerRuntimeConfig:
     """The minimum configuration of the current single-Worker process.
 
@@ -310,6 +361,7 @@ class TaskWorkerRuntimeConfig:
     retrieval: RetrievalConfig | None = None
     runtime: AgentRuntimeConfig | None = None
     multi_agent: MultiAgentConfig | None = None
+    research: ResearchConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,7 +438,9 @@ def project_task(settings: Settings) -> TaskConfig:
         run_semantics_revision=settings.task_run_semantics_revision(),
         policy_revision=settings.policy.revision,
         policy_fingerprint=settings.policy_fingerprint(),
-        default_authorization_envelope=TASK_V1_AUTHORIZATION_ENVELOPE,
+        default_authorization_envelope=task_authorization_envelope(
+            external_search=settings.research.enabled
+        ),
     )
 
 
@@ -461,6 +515,24 @@ def project_task_worker(
                 settings.multi_agent.max_tokens_per_agent_invocation
             ),
         ),
+        research=_project_research(settings),
+    )
+
+
+def _project_research(settings: Settings) -> ResearchConfig | None:
+    """The search provider, or nothing when this deployment did not enable one.
+
+    Settings has already refused `research.enabled` without a key, so the
+    assertion here is about the projection being total, not a second check.
+    """
+
+    if not settings.research.enabled or settings.secrets.anthropic_api_key is None:
+        return None
+    return ResearchConfig(
+        provider=settings.research.provider,
+        model_id=settings.research.model_id,
+        max_uses=settings.research.max_uses,
+        api_key=settings.secrets.anthropic_api_key,
     )
 
 

@@ -34,6 +34,7 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
+from agent_workbench.adapters.research import build_anthropic_web_search
 from agent_workbench.adapters.tools import (
     ExportArtifactTool,
     ExternalSearchTool,
@@ -57,7 +58,10 @@ from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
 )
-from agent_workbench.bootstrap.projections import TaskWorkerRuntimeConfig
+from agent_workbench.bootstrap.projections import (
+    ResearchConfig,
+    TaskWorkerRuntimeConfig,
+)
 from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
 from agent_workbench.bootstrap.retrieval_factory import build_candidate_retriever
 from agent_workbench.bootstrap.sparse_factory import (
@@ -68,6 +72,7 @@ from agent_workbench.domain.runs import RunBudget
 from agent_workbench.domain.tasks import TaskNodeId
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
+from agent_workbench.ports.research import ExternalSearchPort
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 from agent_workbench.workers.task import TaskWorker
 from agent_workbench.workflows.agent_profiles import assert_within_static_limit
@@ -238,6 +243,25 @@ def build_task_worker_dependencies(
     )
 
 
+def _build_external_search(research: ResearchConfig | None) -> ExternalSearchPort:
+    """The configured search provider, or the fail-closed placeholder.
+
+    Returning ``UnavailableExternalSearch`` rather than raising is deliberate:
+    a Worker whose deployment never enabled search still has to start, and a
+    Task that reaches ``research_external`` records "no provider" as a skipped
+    step. That is also the state the authorization envelope agrees with -- with
+    search off, the tool would be denied before it ran anyway (ADR-020).
+    """
+
+    if research is None:
+        return UnavailableExternalSearch()
+    return build_anthropic_web_search(
+        api_key=research.api_key.get_secret_value(),
+        model=research.model_id,
+        max_uses=research.max_uses,
+    )
+
+
 def _build_real_handlers(
     config: TaskWorkerRuntimeConfig,
     *,
@@ -325,7 +349,7 @@ def _build_real_handlers(
     evidence = EvidenceStore(artifacts)
     external_tool = ExternalSearchTool(
         ExternalResearchService(
-            search=UnavailableExternalSearch(),
+            search=_build_external_search(config.research),
             evidence=evidence,
         )
     )

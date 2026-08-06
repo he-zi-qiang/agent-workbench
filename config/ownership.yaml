@@ -491,6 +491,16 @@
       ]
     },
     {
+      "owner": "adapters.research.anthropic_web_search",
+      "lifecycle": "startup",
+      "fields": [
+        "research.enabled",
+        "research.provider",
+        "research.model_id",
+        "research.max_uses"
+      ]
+    },
+    {
       "owner": "adapters.observability.otel",
       "lifecycle": "startup",
       "fields": [
@@ -575,6 +585,7 @@
       "lifecycle": "startup",
       "fields": [
         "secrets.deepseek_api_key",
+        "secrets.anthropic_api_key",
         "secrets.qdrant_api_key",
         "secrets.artifact_access_key",
         "secrets.artifact_secret_key",

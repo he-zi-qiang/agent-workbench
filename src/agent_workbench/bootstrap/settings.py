@@ -142,7 +142,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.4"] = "1.4"
+    config_schema_version: Literal["1.5"] = "1.5"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -701,8 +701,27 @@ class OptionalLabsSettings(StrictModel):
     advanced_compaction: bool = False
 
 
+class ResearchSettings(StrictModel):
+    """External web search (ADR-020).
+
+    Off by default, and the default is load-bearing rather than cautious: it is
+    what keeps a deployment that never configured a provider from widening its
+    Task authorization envelope on upgrade. See
+    ``projections.task_authorization_envelope``.
+    """
+
+    enabled: bool = False
+    provider: Literal["anthropic"] = "anthropic"
+    #: Must be a model that supports the web_search server tool.
+    model_id: str = Field(default="claude-opus-5", min_length=1)
+    #: Searches per external_search call. The model may search more than once
+    #: for one query, and each search is billed.
+    max_uses: int = Field(default=5, ge=1, le=20)
+
+
 class SecretsSettings(StrictModel):
     deepseek_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = None
     qdrant_api_key: SecretStr | None = None
     artifact_access_key: SecretStr | None = None
     artifact_secret_key: SecretStr | None = None
@@ -729,6 +748,7 @@ class Settings(BaseSettings):
     qdrant: QdrantSettings
     artifact_store: ArtifactStoreSettings
     policy: PolicySettings
+    research: ResearchSettings = Field(default_factory=ResearchSettings)
     observability: ObservabilitySettings
     evaluation: EvaluationSettings
     testing: TestingSettings
@@ -860,6 +880,17 @@ class Settings(BaseSettings):
             self.secrets.qdrant_api_key
         ):
             raise ValueError("Qdrant API key is required but not configured")
+
+        # Checked in every environment, not only production: enabled-without-a-key
+        # reads as working web search in the config file and fails closed at the
+        # first search. That is the "configuration describes a system that does
+        # not exist" defect this project keeps removing, so it is a startup error.
+        if self.research.enabled and not self._secret_is_configured(
+            self.secrets.anthropic_api_key
+        ):
+            raise ValueError(
+                "research.enabled requires a non-placeholder Anthropic API key"
+            )
 
         if self.app.deployment_scope == "remote":
             if not self.qdrant.api_key_required:
@@ -1120,6 +1151,7 @@ SENSITIVE_KEYS = {
     "guard_dsn",
     "listen_dsn",
     "deepseek_api_key",
+    "anthropic_api_key",
     "qdrant_api_key",
     "artifact_access_key",
     "artifact_secret_key",

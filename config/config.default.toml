@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.4"
+config_schema_version = "1.5"
 architecture_baseline = "1.3"
 
 [api]
@@ -284,6 +284,22 @@ tenant_filter_required = true
 max_tool_argument_bytes = 65536
 max_tool_result_bytes = 10485760
 redact_secrets = true
+
+# External web search for Task research (ADR-020). Off by default, and the
+# default is load-bearing: with it off the Task authorization envelope keeps
+# refusing `external_search`, so a deployment that never configured a provider
+# does not widen its permission ceiling on upgrade.
+#
+# Turning it on needs `AW_SECRETS__ANTHROPIC_API_KEY` and the `research` extra
+# (`uv sync --extra research`). Search runs on Anthropic's side through the
+# web_search server tool -- the same mechanism Claude Code's WebSearch uses --
+# and is billed per search on top of that request's tokens. The chat/task model
+# provider is unaffected; this key is only for search.
+[research]
+enabled = false
+provider = "anthropic"
+model_id = "claude-opus-5"
+max_uses = 5
 
 [observability]
 otel_enabled = true
