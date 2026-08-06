@@ -8,10 +8,15 @@ import {
 import type { PrincipalIdentity } from "../api/types";
 import { useStoredState } from "../hooks/useStoredState";
 
+// `external:search` is here because the Task graph's research step proposes
+// `external_search`, whose spec requires that scope. Without it the tool is
+// denied with `missing_permission_scope` even on a deployment that enabled web
+// search -- the authorization envelope and the principal's scopes are two
+// separate gates, and passing the first one is not passing the second.
 const DEFAULT_IDENTITY: PrincipalIdentity = {
   tenantId: "tenant_local",
   principalId: "user_local",
-  scopes: ["artifact:export"],
+  scopes: ["artifact:export", "external:search"],
 };
 
 interface IdentityContextValue {

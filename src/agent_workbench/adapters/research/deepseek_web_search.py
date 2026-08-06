@@ -53,18 +53,48 @@ ANTHROPIC_VERSION: Final[str] = "2023-06-01"
 #: enough that `limit` sources stay inside one artifact.
 MAX_EXTRACT_CHARS: Final[int] = 2000
 
-_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
+#: What `EvidenceUrl` accepts. Checked here rather than left to fail at
+#: construction: real search results carry tracking URLs well past 2KB, and a
+#: URL is the one field that must not be truncated to fit -- a cut URL is a
+#: different address, not a shorter one. A source that cannot be recorded
+#: faithfully is dropped instead.
+MAX_URL_CHARS: Final[int] = 2048
+_HTTP_URL = re.compile(r"^https?://[^\s]+$")
 
-_SYSTEM_PROMPT: Final[str] = (
+_SEARCH_SYSTEM_PROMPT: Final[str] = (
     "You are a research assistant with a web search tool. Search for the "
-    "user's query, then report what you found.\n\n"
-    "Reply with JSON only, in this exact shape and with no prose around it:\n"
-    '{"results": [{"url": "...", "title": "...", "extract": "..."}]}\n\n'
-    "Include one entry per source you actually retrieved. Use the source's "
-    "exact URL. Never invent a URL or include a page you did not retrieve. "
-    f"Keep each extract under {MAX_EXTRACT_CHARS} characters and stay close to "
-    "what the source itself says."
+    "user's query and read the results. Answer briefly; a later turn will ask "
+    "you to summarize each source."
 )
+
+_EXTRACT_SYSTEM_PROMPT: Final[str] = (
+    "You summarize sources you have already read. Reply with JSON only, no "
+    "prose and no code fence, in exactly this shape:\n"
+    '{"results": [{"source": 1, "extract": "..."}]}\n'
+    '"source" is the number of the source in the list you are given. Write one '
+    "entry per source you can actually say something about, and omit the rest "
+    "rather than guessing. Stay close to what that source itself said, and "
+    f"keep each extract under {MAX_EXTRACT_CHARS} characters."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _Source:
+    """One page the search tool reported fetching."""
+
+    url: str
+    title: str
+
+
+def _extract_request(sources: list[_Source]) -> str:
+    listing = "\n".join(
+        f"[{index}] {source.title} — {source.url}"
+        for index, source in enumerate(sources, start=1)
+    )
+    return (
+        "Here are the sources you just read, numbered. Summarize what each one "
+        "says about my question, referring to them by number.\n\n" + listing
+    )
 
 
 class WebSearchUnavailableError(RuntimeError):
@@ -94,7 +124,7 @@ class DeepSeekWebSearch:
     #: Ceiling on searches per call. The model may search several times for one
     #: query, and each search is work the provider bills for.
     max_uses: int = 5
-    max_tokens: int = 4096
+    max_tokens: int = 8192
 
     async def search(
         self,
@@ -104,6 +134,82 @@ class DeepSeekWebSearch:
         cancellation: CancellationToken,
     ) -> tuple[ExternalSearchHit, ...]:
         cancellation.raise_if_cancelled()
+        searched = await self._post(
+            system=_SEARCH_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": query}],
+            tools=[
+                {
+                    "type": WEB_SEARCH_TOOL_TYPE,
+                    "name": WEB_SEARCH_TOOL_NAME,
+                    "max_uses": self.max_uses,
+                }
+            ],
+        )
+        cancellation.raise_if_cancelled()
+
+        # A refusal is not an adapter fault and not a failed search: report no
+        # evidence and let the caller decide, exactly as an empty result would.
+        if searched.get("stop_reason") == "refusal":
+            return ()
+
+        sources = _searched_sources(searched)[:limit]
+        if not sources:
+            return ()
+
+        # Second turn, and the reason there are two. Asked to report sources in
+        # one turn, the model cites a canonical URL for the page rather than the
+        # one the tool fetched -- measured against the live endpoint, exact-URL
+        # agreement swung between 5-of-6 and 0-of-6 across runs, so matching on
+        # the URL it writes is a coin flip. Here it picks an *index* into a list
+        # this adapter built from the tool's own results, so the URL and title
+        # can only come from the search tool and the model only supplies text.
+        # The first turn's reply is echoed back, so it still has the pages it
+        # read; `max_uses` applies to that turn, so this one cannot search again.
+        extracts = await self._post(
+            system=_EXTRACT_SYSTEM_PROMPT,
+            messages=[
+                {"role": "user", "content": query},
+                {"role": "assistant", "content": searched.get("content", [])},
+                {"role": "user", "content": _extract_request(sources)},
+            ],
+            tools=[],
+        )
+        cancellation.raise_if_cancelled()
+
+        by_index = {
+            index: text
+            for index, text in _reported_extracts(extracts).items()
+            if 1 <= index <= len(sources)
+        }
+        hits: list[ExternalSearchHit] = []
+        for position, source in enumerate(sources, start=1):
+            extract = by_index.get(position, "")
+            if extract == "":
+                continue
+            hits.append(
+                ExternalSearchHit(
+                    url=source.url,
+                    title=source.title[:200] or source.url,
+                    text=extract[:MAX_EXTRACT_CHARS],
+                )
+            )
+        return tuple(hits)
+
+    async def _post(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": system,
+            "messages": messages,
+        }
+        if tools:
+            body["tools"] = tools
         response = await self.http.post(
             f"{self.base_url.rstrip('/')}{MESSAGES_PATH}",
             headers={
@@ -111,60 +217,18 @@ class DeepSeekWebSearch:
                 "anthropic-version": ANTHROPIC_VERSION,
                 "content-type": "application/json",
             },
-            json={
-                "model": self.model,
-                "max_tokens": self.max_tokens,
-                "system": _SYSTEM_PROMPT,
-                "tools": [
-                    {
-                        "type": WEB_SEARCH_TOOL_TYPE,
-                        "name": WEB_SEARCH_TOOL_NAME,
-                        "max_uses": self.max_uses,
-                    }
-                ],
-                "messages": [{"role": "user", "content": query}],
-            },
+            json=body,
         )
-        cancellation.raise_if_cancelled()
-
         status = getattr(response, "status_code", 200)
         if status >= 400:
-            # The likeliest 400 here is "this endpoint does not know that tool",
+            # The likeliest 4xx here is "this endpoint does not know that tool",
             # which is the vendor-undocumented risk this adapter is built
             # around. Say so with the status rather than raising something the
             # caller has to guess at.
             raise WebSearchUnavailableError(
                 f"the provider refused the web-search request (HTTP {status})"
             )
-
-        payload = _payload(response)
-        # A refusal is not an adapter fault and not a failed search: report no
-        # evidence and let the caller decide, exactly as an empty result would.
-        if payload.get("stop_reason") == "refusal":
-            return ()
-
-        retrieved = _searched_urls(payload)
-        hits: list[ExternalSearchHit] = []
-        seen: set[str] = set()
-        for item in _reported_results(payload):
-            url = _clean(item.get("url"))
-            extract = _clean(item.get("extract"))
-            title = _clean(item.get("title")) or url
-            # The cross-check. `retrieved` is what the search tool itself
-            # returned; anything else the model wrote down was not searched for.
-            if url not in retrieved or url in seen or extract == "":
-                continue
-            seen.add(url)
-            hits.append(
-                ExternalSearchHit(
-                    url=url,
-                    title=title[:200],
-                    text=extract[:MAX_EXTRACT_CHARS],
-                )
-            )
-            if len(hits) >= limit:
-                break
-        return tuple(hits)
+        return _payload(response)
 
 
 def _payload(response: Any) -> dict[str, Any]:
@@ -172,10 +236,16 @@ def _payload(response: Any) -> dict[str, Any]:
     return cast("dict[str, Any]", body) if isinstance(body, dict) else {}
 
 
-def _searched_urls(payload: dict[str, Any]) -> frozenset[str]:
-    """Every URL the search tool itself returned, across all of its uses."""
+def _searched_sources(payload: dict[str, Any]) -> list[_Source]:
+    """Every page the search tool reported, in the order it reported them.
 
-    urls: set[str] = set()
+    This is the only place a URL or title may come from. The model never gets
+    to supply either, which is what makes "this page was fetched" a fact rather
+    than a claim.
+    """
+
+    sources: list[_Source] = []
+    seen: set[str] = set()
     for block in _blocks(payload):
         if block.get("type") != "web_search_tool_result":
             continue
@@ -192,44 +262,62 @@ def _searched_urls(payload: dict[str, Any]) -> frozenset[str]:
             if entry.get("type") != "web_search_result":
                 continue
             url = _clean(entry.get("url"))
-            if url != "":
-                urls.add(url)
-    return frozenset(urls)
+            if url in seen or not _recordable(url):
+                continue
+            seen.add(url)
+            sources.append(_Source(url=url, title=_clean(entry.get("title"))))
+    return sources
 
 
-def _reported_results(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """The model's answer, parsed leniently.
+def _reported_extracts(payload: dict[str, Any]) -> dict[int, str]:
+    """The model's per-source text, keyed by the index it was given.
 
-    Lenient because there is no structured-output guarantee to lean on here:
-    `output_config.format` is an Anthropic feature and this endpoint is
-    DeepSeek's, so the JSON arrives inside whatever the model wrapped it in --
-    a code fence, a sentence of preamble. Finding the object beats demanding
-    that the whole block parse.
+    Salvaged entry by entry rather than parsed as one document. Two reasons,
+    both measured against the live endpoint: there is no structured-output
+    guarantee to lean on (`output_config.format` is an Anthropic feature and
+    this endpoint is DeepSeek's), so the JSON arrives wrapped in whatever the
+    model felt like; and a reply long enough to hit `max_tokens` is cut
+    mid-object, which made whole-document parsing throw away the four complete
+    extracts that arrived before the cut. Scanning for objects keeps those.
     """
 
+    decoder = json.JSONDecoder()
     for block in _blocks(payload):
         if block.get("type") != "text":
             continue
         text = _clean(block.get("text"))
-        if text == "":
-            continue
-        match = _JSON_OBJECT.search(text)
-        if match is None:
-            continue
-        try:
-            decoded: Any = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(decoded, dict):
-            continue
-        results: Any = cast("dict[str, Any]", decoded).get("results")
-        if isinstance(results, list):
-            return [
-                cast("dict[str, Any]", item)
-                for item in cast("list[Any]", results)
-                if isinstance(item, dict)
-            ]
-    return []
+        extracts: dict[int, str] = {}
+        position = 0
+        while (position := text.find("{", position)) != -1:
+            try:
+                decoded, offset = decoder.raw_decode(text, position)
+            except json.JSONDecodeError:
+                position += 1
+                continue
+            position = offset
+            _collect_extracts(decoded, extracts)
+        if extracts:
+            return extracts
+    return {}
+
+
+def _collect_extracts(decoded: Any, into: dict[int, str]) -> None:
+    """Record any ``{"source": int, "extract": str}`` this value contains."""
+
+    if isinstance(decoded, list):
+        for item in cast("list[Any]", decoded):
+            _collect_extracts(item, into)
+        return
+    if not isinstance(decoded, dict):
+        return
+    entry = cast("dict[str, Any]", decoded)
+    results = entry.get("results")
+    if isinstance(results, list):
+        _collect_extracts(results, into)
+    index = entry.get("source")
+    extract = _clean(entry.get("extract"))
+    if isinstance(index, int) and not isinstance(index, bool) and extract:
+        into.setdefault(index, extract)
 
 
 def _blocks(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -243,6 +331,12 @@ def _blocks(payload: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _recordable(url: str) -> bool:
+    """Whether this URL can be stored as evidence exactly as the tool gave it."""
+
+    return len(url) <= MAX_URL_CHARS and _HTTP_URL.match(url) is not None
+
+
 def _clean(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -250,6 +344,7 @@ def _clean(value: Any) -> str:
 __all__ = [
     "ANTHROPIC_VERSION",
     "MAX_EXTRACT_CHARS",
+    "MAX_URL_CHARS",
     "MESSAGES_PATH",
     "WEB_SEARCH_TOOL_NAME",
     "WEB_SEARCH_TOOL_TYPE",
