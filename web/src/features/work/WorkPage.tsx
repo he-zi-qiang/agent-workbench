@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
@@ -59,6 +60,7 @@ import {
 } from "../../components/ui";
 import { MarkdownContent } from "../../components/MarkdownContent";
 import { StepDisclosure } from "../../components/StepDisclosure";
+import { explainFailure } from "./failure";
 import { deriveLifecycle, type Lifecycle } from "./lifecycle";
 import { useTaskTimeline } from "./useTaskTimeline";
 import { workIdentityQueryKey } from "./workQueryKeys";
@@ -222,6 +224,22 @@ export function WorkPage() {
     [timeline.events, taskQuery.data?.status],
   );
   const draftText = useMemo(() => findDraftText(timeline.events), [timeline.events]);
+  // A transient provider blip used to mean retyping the objective. Re-submitting
+  // opens a *new* Task rather than reviving this one: the failed run already
+  // spent its budget and wrote its events, and rewriting that history would
+  // make a Task's record depend on how many times somebody retried it.
+  const retryInput = taskInputQuery.data ?? null;
+  const resubmit = (input: NonNullable<typeof taskInputQuery.data>) => {
+    createMutation.mutate({
+      objective: input.objective,
+      maxRevisions: input.max_revisions,
+      wantsReport: input.wants_report,
+      idempotencyKey: newIdempotencyKey("task"),
+      ...(input.knowledge_base_id === null
+        ? {}
+        : { knowledgeBaseId: input.knowledge_base_id }),
+    });
+  };
 
   const [objective, setObjective] = useState("");
   const [maxRevisions, setMaxRevisions] = useState("2");
@@ -588,6 +606,7 @@ export function WorkPage() {
               draftText={draftText}
               identity={identity}
               onDownload={(id) => downloadMutation.mutate(id)}
+              onRetry={retryInput === null ? undefined : () => resubmit(retryInput)}
               status={selectedTask.status}
               {...(selectedTask.status_detail === null
                 ? {}
@@ -840,6 +859,7 @@ function TaskResult({
   draftText,
   identity,
   onDownload,
+  onRetry,
   status,
   statusDetail,
 }: {
@@ -847,6 +867,7 @@ function TaskResult({
   draftText: string | null;
   identity: PrincipalIdentity;
   onDownload: (artifactId: string) => void;
+  onRetry?: (() => void) | undefined;
   status: TaskStatus;
   statusDetail?: string;
 }) {
@@ -886,15 +907,35 @@ function TaskResult({
         </section>
       );
     }
+    if (status === "succeeded") {
+      return (
+        <section className="aw-result">
+          <div className="aw-notice">
+            <span>任务已完成，没有产出内容。展开下面的执行记录可以看到每一步做了什么。</span>
+          </div>
+        </section>
+      );
+    }
+    // Failed, cancelled or dead-lettered. The server's detail is a stable
+    // sentence over a closed error vocabulary; this says what it means, and
+    // offers the retry only when the server called the cause retryable.
+    const failure = explainFailure(statusDetail ?? null);
     return (
       <section className="aw-result">
-        <div className={`aw-notice ${status === "succeeded" ? "" : "is-warning"}`}>
+        <div className="aw-notice is-warning">
+          <AlertTriangle aria-hidden="true" size={16} />
           <span>
-            {status === "succeeded"
-              ? "任务已完成，没有产出内容。展开下面的执行记录可以看到每一步做了什么。"
-              : `任务${formatStatus(status)}${statusDetail === undefined ? "" : `：${statusDetail}`}`}
+            <strong>任务{formatStatus(status)}</strong>
+            {failure === null ? null : <small>{failure.text}</small>}
           </span>
         </div>
+        {failure?.retryable === true && onRetry !== undefined ? (
+          <div className="aw-result-retry">
+            <button className="aw-button is-primary" onClick={onRetry} type="button">
+              用同样的目标再试一次
+            </button>
+          </div>
+        ) : null}
       </section>
     );
   }

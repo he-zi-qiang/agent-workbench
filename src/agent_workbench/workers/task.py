@@ -61,6 +61,7 @@ from agent_workbench.ports.task_workflow import (
     GraphVersion,
     TaskWorkflowPort,
 )
+from agent_workbench.workflows.agent_nodes import AgentNodeFailedError
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,34 @@ LoadState = Callable[[TaskRun], Awaitable[TaskState]]
 
 class _GuardLostError(RuntimeError):
     """Stop this Worker without writing after its execution guard was lost."""
+
+
+def _failure_detail(error: BaseException, action: str) -> str:
+    """Say why a Task failed, without quoting the provider.
+
+    This string reaches ``status_detail``, the event log and the API, so it may
+    not carry a provider's exception text: those hold request bodies and prompt
+    fragments. The exception *type* is safe, and used to be all this recorded --
+    which left the reader with ``AgentNodeFailedError`` and nowhere to go, while
+    the run had already classified the cause one layer down.
+
+    So an agent-node failure reports its run's ``ErrorCode`` instead. The code
+    is a closed vocabulary rather than free text, and ``retryable`` says whether
+    trying again could plausibly work -- which is the one thing a reader who saw
+    a transient provider blip actually needs to know. ``ErrorInfo.message`` is
+    still not included: it is operator-facing text with no such guarantee.
+    """
+
+    if isinstance(error, AgentNodeFailedError):
+        info = error.outcome.error
+        if info is not None:
+            retryable = "retryable" if info.retryable else "not retryable"
+            return (
+                f"the {error.node} step failed with {info.code} "
+                f"({retryable}) during {action}"
+            )
+        return f"the {error.node} step did not produce usable output during {action}"
+    return f"the graph raised {type(error).__name__} during {action}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,16 +343,13 @@ class TaskWorker:
             await asyncio.gather(execution, return_exceptions=True)
             raise
         except Exception as error:
-            # The message, not the exception: a provider's exception text
-            # carries request bodies and prompt fragments, and this string
-            # reaches events and API responses. The type is what is recorded.
             logger.warning(
                 "task %s failed during %s",
                 task.task_id,
                 decision.action,
                 exc_info=True,
             )
-            return f"the graph raised {type(error).__name__} during {decision.action}"
+            return _failure_detail(error, decision.action)
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)

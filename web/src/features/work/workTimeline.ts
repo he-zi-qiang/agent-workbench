@@ -5,6 +5,9 @@ export interface TaskInputArtifact {
   objective: string;
   max_revisions: number;
   knowledge_base_id: string | null;
+  // Absent on Tasks submitted before the field existed. Those ran under a graph
+  // that always exported, so `true` is what re-submitting one has to mean.
+  wants_report: boolean;
 }
 
 export interface TimelineState {
@@ -133,6 +136,8 @@ export function parseTaskInputArtifact(value: unknown): TaskInputArtifact | null
     objective: value.objective,
     max_revisions: value.max_revisions,
     knowledge_base_id: value.knowledge_base_id,
+    wants_report:
+      typeof value.wants_report === "boolean" ? value.wants_report : true,
   };
 }
 

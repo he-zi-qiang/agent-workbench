@@ -63,13 +63,25 @@ describe("work timeline contract selectors", () => {
         objective: "Prepare a sourced report",
         max_revisions: 2,
         knowledge_base_id: null,
+        wants_report: false,
       }),
     ).toEqual({
       schema_version: 1,
       objective: "Prepare a sourced report",
       max_revisions: 2,
       knowledge_base_id: null,
+      wants_report: false,
     });
+    // Tasks submitted before the field existed ran under a graph that always
+    // exported, so re-submitting one has to keep asking for the report.
+    expect(
+      parseTaskInputArtifact({
+        schema_version: 1,
+        objective: "Prepare a sourced report",
+        max_revisions: 2,
+        knowledge_base_id: null,
+      })?.wants_report,
+    ).toBe(true);
     expect(
       parseTaskInputArtifact({
         schema_version: 1,

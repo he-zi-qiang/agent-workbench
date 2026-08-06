@@ -3442,3 +3442,21 @@ pre {
   font-size: 11px;
   line-height: 1.6;
 }
+
+.aw-result-retry {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.aw-result .aw-notice strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 13px;
+}
+
+.aw-result .aw-notice small {
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
