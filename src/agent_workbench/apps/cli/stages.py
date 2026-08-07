@@ -69,7 +69,7 @@ class Stage:
 
     key: str
     title: str
-    events: list[EventEnvelope] = field(default_factory=list)
+    events: list[EventEnvelope] = field(default_factory=list[EventEnvelope])
 
     @property
     def failed(self) -> bool:

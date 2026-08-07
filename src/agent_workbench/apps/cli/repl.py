@@ -27,7 +27,7 @@ import queue
 import threading
 import time
 from collections.abc import Iterator, Mapping
-from typing import Any, Final, TextIO
+from typing import Any, Final, TextIO, cast
 
 import httpx
 
@@ -225,7 +225,7 @@ class Repl:
         if isinstance(answered, BaseException):
             self._fail(answered)
         elif isinstance(answered, dict):
-            self._print_answer(answered)
+            self._print_answer(cast("Mapping[str, Any]", answered))
 
     def _render_until(self, answers: queue.Queue[Any], *, task: bool) -> list[Stage]:
         """Fold arriving events into stage lines until the request returns.
@@ -439,7 +439,10 @@ class Repl:
 
     def _print_answer(self, answered: Mapping[str, Any]) -> None:
         text = str(answered.get("answer", "")).strip()
-        citations = answered.get("citations") or []
+        raw = answered.get("citations")
+        # Narrowed here rather than trusted: this is a decoded JSON body, so
+        # every field is Any until something says otherwise.
+        citations: list[Any] = cast("list[Any]", raw) if isinstance(raw, list) else []
         self._say("")
         if text:
             self._say(text)
@@ -447,11 +450,12 @@ class Repl:
             label = f"\n  引用 {len(citations)} 条："
             self._say(self._dim(label))
             for one in citations[:8]:
-                self._say(
-                    f"    · {one.get('chunk_id', '?')}"
+                chunk = (
+                    cast("Mapping[str, Any]", one).get("chunk_id", "?")
                     if isinstance(one, dict)
-                    else f"    · {one}"
+                    else one
                 )
+                self._say(f"    · {chunk}")
         elif answered.get("grounded") is False:
             self._say("\n  未经证据核实：这条回答由模型直接作答，没有引用。")
         self._say("")

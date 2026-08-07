@@ -101,7 +101,7 @@ class LiveStages:
     colour: bool = False
     _tick: int = 0
     _open_line: bool = False
-    _printed: set[str] = field(default_factory=set)
+    _printed: set[str] = field(default_factory=set[str])
 
     def active(self, title: str, note: str = "", elapsed: float = 0.0) -> None:
         """Redraw the line for the step currently running."""
