@@ -104,5 +104,11 @@ test("知识库能进入 Chat，辅助页面在移动端也可到达", async ({
   } else {
     await navigation.getByRole("link", { name: "效果评测" }).click();
   }
-  await expect(page.getByRole("heading", { name: "效果评测" })).toBeVisible();
+  // The page's heading is the question it answers; "效果评测" is the eyebrow
+  // above it and the nav label, not a heading. Asserting the heading keeps this
+  // checking that navigation landed on the right page rather than that some
+  // element somewhere repeats the link text.
+  await expect(
+    page.getByRole("heading", { name: "找资料，找得准吗？" }),
+  ).toBeVisible();
 });
