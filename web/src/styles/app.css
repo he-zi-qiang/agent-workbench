@@ -2454,10 +2454,19 @@ pre {
 
 .aw-result,
 .aw-approve,
-.aw-lifecycle,
 .aw-work-fold {
   width: min(880px, 100%);
   margin: 0 auto 10px;
+}
+
+/* Inside the two columns the gap does the spacing, and each panel fills its
+   own column -- the centring and bottom margin above are for the single-column
+   layouts elsewhere on this page. */
+.aw-work-body .aw-result,
+.aw-work-body .aw-approve,
+.aw-work-body .aw-work-fold {
+  width: 100%;
+  margin: 0;
 }
 
 .aw-result {
@@ -2482,15 +2491,6 @@ pre {
 .aw-result > header strong {
   display: block;
   font-size: 14px;
-}
-
-.aw-result-body {
-  max-height: 520px;
-  padding: 12px 14px;
-  overflow: auto;
-  border: 1px solid var(--aw-border);
-  border-radius: 9px;
-  background: var(--aw-window);
 }
 
 /* The decision. Accent-bordered because it is the only thing on a waiting
@@ -2527,7 +2527,6 @@ pre {
   gap: 8px;
 }
 
-.aw-lifecycle,
 .aw-work-fold {
   padding: 10px 14px;
   border: 1px solid var(--aw-border);
@@ -2535,7 +2534,6 @@ pre {
   background: var(--aw-panel-soft);
 }
 
-.aw-lifecycle > summary,
 .aw-work-fold > summary {
   display: flex;
   align-items: center;
@@ -2546,101 +2544,21 @@ pre {
   list-style: none;
 }
 
-.aw-lifecycle > summary::-webkit-details-marker,
 .aw-work-fold > summary::-webkit-details-marker {
   display: none;
 }
 
-.aw-lifecycle > summary strong,
 .aw-work-fold > summary {
   color: var(--aw-text);
 }
 
-.aw-lifecycle[open] > summary .aw-step-caret,
 .aw-work-fold[open] > summary .aw-step-caret {
   transform: rotate(90deg);
 }
 
-.aw-lifecycle-count,
 .aw-work-fold > summary span {
   color: var(--aw-text-muted);
   font-size: 11px;
-}
-
-/* Collapsed, the strip still has to say how far along the Task is -- that is
-   the whole reason it is allowed to collapse. */
-.aw-lifecycle-mini {
-  display: flex;
-  margin-left: auto;
-  gap: 3px;
-}
-
-.aw-lifecycle-mini i {
-  width: 16px;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--aw-border);
-}
-
-.aw-lifecycle-mini i.is-done {
-  background: var(--aw-success);
-}
-
-.aw-lifecycle-mini i.is-active,
-.aw-lifecycle-mini i.is-waiting {
-  background: var(--aw-accent);
-}
-
-.aw-lifecycle-mini i.is-failed {
-  background: var(--aw-danger);
-}
-
-.aw-lifecycle-steps {
-  margin: 12px 0 2px;
-  padding: 0;
-  list-style: none;
-}
-
-.aw-lifecycle-steps li {
-  display: flex;
-  align-items: center;
-  padding: 5px 0;
-  gap: 10px;
-  font-size: 12px;
-}
-
-.aw-lifecycle-dot {
-  width: 8px;
-  height: 8px;
-  flex: none;
-  border: 1px solid var(--aw-border);
-  border-radius: 50%;
-}
-
-.aw-lifecycle-steps li.is-done .aw-lifecycle-dot {
-  border-color: var(--aw-success);
-  background: var(--aw-success);
-}
-
-.aw-lifecycle-steps li.is-failed .aw-lifecycle-dot {
-  border-color: var(--aw-danger);
-  background: var(--aw-danger);
-}
-
-/* The one that is moving. The pulse is the "step by step" cue -- it is the
-   only animated thing on the page, so it reads as progress rather than decor. */
-.aw-lifecycle-steps li.is-active .aw-lifecycle-dot,
-.aw-lifecycle-steps li.is-waiting .aw-lifecycle-dot {
-  border-color: var(--aw-accent);
-  background: var(--aw-accent);
-  animation: aw-pulse 1.4s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .aw-lifecycle-steps li.is-active .aw-lifecycle-dot,
-  .aw-lifecycle-steps li.is-waiting .aw-lifecycle-dot {
-    animation: none;
-  }
 }
 
 @keyframes aw-pulse {
@@ -2653,18 +2571,315 @@ pre {
   }
 }
 
-.aw-lifecycle-steps li.is-pending,
-.aw-lifecycle-steps li.is-skipped {
-  color: var(--aw-text-muted);
+/* How it ran on the left, what came out on the right. The output column holds
+   prose, not just a file list, so it is sized for reading -- a 232px rail was
+   right for filenames and far too narrow for a report. */
+.aw-work-body {
+  display: grid;
+  align-items: start;
+  gap: 18px;
+  /* The reading column takes the width, because the run and the answer both
+     live in it. The rail only lists files, so it is sized for filenames. */
+  grid-template-columns: minmax(0, 1fr) clamp(200px, 24%, 260px);
 }
 
-.aw-lifecycle-title {
-  flex: 1;
+.aw-work-run,
+.aw-work-output {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.aw-lifecycle-note {
-  color: var(--aw-text-muted);
+/* The answer, continuing from the steps rather than sitting beside them.
+   Indented to the same 34px as Chat's assistant message, so the mark hangs in
+   the margin and the text lines up under the run above it. */
+.aw-answer {
+  min-width: 0;
+  padding-left: 34px;
+}
+
+.aw-answer > header {
+  position: relative;
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  margin-bottom: 4px;
+  margin-left: -34px;
+  gap: 7px;
+}
+
+.aw-answer > header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-answer > header small {
+  color: var(--aw-warning);
   font-size: 10px;
+}
+
+/* Pushed to the end of the header so it does not sit between the name and the
+   text it belongs to. */
+.aw-answer > header .aw-icon-button {
+  margin-left: auto;
+}
+
+.aw-answer-mark {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Under ~1040px the rail would squeeze the reading column. Stacked, files go
+   below the run and the answer, which is where they were produced. */
+@media (max-width: 1040px) {
+  .aw-work-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.aw-stream {
+  padding: 4px 2px;
+}
+
+.aw-stream-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One continuous line down the steps, so the sequence reads as a sequence.
+   The last step stops the line, or it would trail into whatever follows. */
+.aw-stream-steps > li {
+  position: relative;
+  padding: 0 0 2px 24px;
+}
+
+.aw-stream-steps > li::before {
+  position: absolute;
+  top: 18px;
+  bottom: -4px;
+  left: 5px;
+  width: 1px;
+  background: var(--aw-border);
+  content: "";
+}
+
+.aw-stream-steps > li:last-child::before {
+  display: none;
+}
+
+.aw-stream-dot {
+  position: absolute;
+  top: 9px;
+  left: 1px;
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--aw-border);
+  border-radius: 50%;
+  background: var(--aw-window);
+}
+
+.aw-stream-steps > li.is-done .aw-stream-dot {
+  border-color: var(--aw-success);
+  background: var(--aw-success);
+}
+
+.aw-stream-steps > li.is-failed .aw-stream-dot {
+  border-color: var(--aw-danger);
+  background: var(--aw-danger);
+}
+
+.aw-stream-steps > li.is-active .aw-stream-dot,
+.aw-stream-steps > li.is-waiting .aw-stream-dot {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent);
+  animation: aw-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-stream-steps > li.is-active .aw-stream-dot,
+  .aw-stream-steps > li.is-waiting .aw-stream-dot {
+    animation: none;
+  }
+}
+
+.aw-stream-head {
+  display: flex;
+  align-items: center;
+  padding: 5px 6px 5px 0;
+  gap: 8px;
+  border-radius: var(--aw-radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  list-style: none;
+}
+
+.aw-stream-head::-webkit-details-marker {
+  display: none;
+}
+
+.aw-stream-head.is-empty {
+  cursor: default;
+}
+
+.aw-stream-step > summary:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-stream-step[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-stream-title {
+  color: var(--aw-text);
+}
+
+.aw-stream-steps > li.is-pending .aw-stream-title,
+.aw-stream-steps > li.is-skipped .aw-stream-title {
+  color: var(--aw-text-muted);
+}
+
+.aw-stream-count {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-stream-note {
+  margin-left: auto;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-stream-steps > li.is-active .aw-stream-note {
+  color: var(--aw-accent);
+}
+
+.aw-stream-events {
+  margin: 2px 0 8px;
+  padding: 0 0 0 4px;
+  border-left: 1px solid var(--aw-border);
+  list-style: none;
+}
+
+.aw-stream-events > li {
+  padding: 1px 0 1px 8px;
+}
+
+.aw-stream-events > li.is-unknown {
+  opacity: 0.72;
+}
+
+.aw-stream-meta {
+  margin-top: 6px;
+  padding-left: 24px;
+}
+
+.aw-stream-meta > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  list-style: none;
+}
+
+.aw-stream-meta > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-stream-meta[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-stream-meta > summary span {
+  font-size: 11px;
+}
+
+.aw-artifacts {
+  padding: 12px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel-soft);
+}
+
+.aw-artifacts-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+.aw-artifacts-head em {
+  margin-left: auto;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.aw-artifacts-empty {
+  margin: 10px 0 2px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-artifacts ul {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-artifacts li + li {
+  margin-top: 4px;
+}
+
+.aw-artifacts button {
+  display: block;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--aw-radius-sm);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--aw-transition), border-color var(--aw-transition);
+}
+
+.aw-artifacts button:hover {
+  border-color: var(--aw-border);
+  background: var(--aw-panel);
+}
+
+.aw-artifacts button strong {
+  display: block;
+  overflow: hidden;
+  color: var(--aw-text);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-artifacts button small {
+  display: block;
+  margin-top: 2px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
 }
 
 .aw-work-fold-body {

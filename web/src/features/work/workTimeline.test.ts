@@ -5,8 +5,8 @@ import {
   eventTitle,
   findFinalReport,
   findLatestApprovalId,
+  collectArtifacts,
   findTaskInputRef,
-  groupTimelineEvents,
   mergeTimelineResponse,
   parseTaskInputArtifact,
 } from "./workTimeline";
@@ -36,19 +36,36 @@ describe("work timeline contract selectors", () => {
     ).toBe(afterSecond);
   });
 
-  it("groups all events by graph_node_id and leaves unknown kinds visible", () => {
+  it("names an event kind it has never heard of instead of hiding it", () => {
     const unknown = envelope("event_unknown", "FutureLedgerFact", {}, "node_research");
-    const lifecycle = envelope("event_task", "TaskSubmitted", {
-      input_ref: "artifact_input",
-    });
 
-    const groups = groupTimelineEvents([unknown, lifecycle]);
-
-    expect(groups).toHaveLength(2);
-    expect(groups[0]?.graphNodeId).toBe("node_research");
-    expect(groups[0]?.events).toEqual([unknown]);
-    expect(groups[1]?.graphNodeId).toBeNull();
     expect(eventTitle(unknown)).toBe("未识别事件：FutureLedgerFact");
+  });
+
+  it("collects each artifact once, with the stage that wrote it", () => {
+    const artifact = {
+      schema_version: 1,
+      artifact_id: "art_evidence",
+      tenant_id: "tenant_1",
+      kind: "evidence_bundle",
+      media_type: "application/json",
+      size_bytes: 4794,
+      sha256: "a".repeat(64),
+      filename: "evidence-bundle.json",
+    };
+    // The same artifact reported twice -- a retried step re-reports what it
+    // already wrote, and the rail must not list it twice.
+    const events = [
+      envelope("event_1", "ToolCompleted", { artifact }, "research_external"),
+      envelope("event_2", "ToolCompleted", { artifact }, "research_external"),
+      envelope("event_3", "TaskSucceeded", {}),
+    ];
+
+    const found = collectArtifacts(events);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]?.artifact.artifact_id).toBe("art_evidence");
+    expect(found[0]?.graphNodeId).toBe("research_external");
   });
 
   it("discovers the submitted input and validates its artifact before use", () => {

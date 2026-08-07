@@ -43,6 +43,20 @@ const TERMINAL_STATUSES = new Set<TaskStatus>([
   "dead_letter",
 ]);
 
+/**
+ * The stage a graph node belongs to, for grouping its events under it.
+ *
+ * Unknown nodes map to themselves, matching how `deriveLifecycle` gives an
+ * unlisted node its own stage: a node this table has not heard of still shows
+ * its work rather than dropping it.
+ */
+export function stageOfNode(graphNodeId: string): string {
+  for (const stage of STAGES) {
+    if (stage.nodes.includes(graphNodeId)) return stage.id;
+  }
+  return graphNodeId;
+}
+
 export type StageState =
   | "done"
   | "active"

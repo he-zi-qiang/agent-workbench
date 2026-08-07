@@ -34,23 +34,22 @@ import {
   useKnowledgeBases,
 } from "../../components/KnowledgeSourcePicker";
 import { MarkdownContent } from "../../components/MarkdownContent";
-import { StepDisclosure } from "../../components/StepDisclosure";
+import { StepStream } from "../../components/StepStream";
 import {
   EmptyState,
   ErrorNotice,
   IconButton,
   LoadingLine,
-  StepState,
   formatTime,
   shortId,
 } from "../../components/ui";
 import {
   hasUnfinishedTurn,
-  type ChatActivity,
   type ChatConnectionState,
   type ChatSessionState,
   type ChatTurnState,
 } from "./model";
+import { deriveTurnStages, isTurnMetaActivity } from "./turnStages";
 import { useChatRuntime } from "./useChatRuntime";
 
 export function ChatPage() {
@@ -450,7 +449,7 @@ function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void
             <small>{turn.answerMode === "direct" ? "自由回答" : "知识库回答"}</small>
           )}
         </header>
-        {turn.activities.length === 0 ? null : <ActivityList activities={turn.activities} />}
+        {turn.activities.length === 0 ? null : <TurnStepStream turn={turn} />}
         {turn.phase === "withheld" ? (
           <div className="aw-notice is-warning">
             <AlertTriangle aria-hidden="true" size={16} />
@@ -501,22 +500,34 @@ function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void
   );
 }
 
-function ActivityList({ activities }: { activities: ChatActivity[] }) {
+/**
+ * The turn's thinking, in the same shape Work shows a Task's.
+ *
+ * This replaces a flat list of every durable event. That list was already
+ * openable, but it read as a log rather than as work: eight lines that did not
+ * say which of them were the same phase, and no way to collapse the ones the
+ * reader was done with. Grouping into the three things a turn does gives the
+ * same detail behind three lines, and the running one opens itself.
+ */
+function TurnStepStream({ turn }: { turn: ChatTurnState }) {
+  const stages = deriveTurnStages(turn.activities, turn.phase);
+  const meta = turn.activities.filter(isTurnMetaActivity);
+  const running = turn.phase === "submitting" || turn.phase === "running";
+
   return (
-    <ol className="aw-chat-activity" aria-label="Turn durable events">
-      {activities.map((activity) => (
-        <li key={activity.key}>
-          <span className={`aw-chat-activity-state is-${activity.state}`}>
-            <StepState state={stepState(activity.state)} />
-          </span>
-          {/* Openable for the same reason Work's timeline is: the label says a
-              model call finished, and the thing the reader wants is what it
-              was given and what it wrote. The one-line summary comes from the
-              event itself, so `activity.detail` is not repeated here. */}
-          <StepDisclosure event={activity.envelope} title={activity.label} />
-        </li>
-      ))}
-    </ol>
+    <StepStream
+      ariaLabel="回答过程"
+      // The label the turn already computed. It carries what the event meant
+      // in Chat's own vocabulary -- "答案已发布（未经证据核实）" is a distinction
+      // Work's generic titles do not draw.
+      eventTitle={(event) =>
+        turn.activities.find((activity) => activity.envelope === event)?.label ??
+        event.event_type
+      }
+      meta={{ title: "运行记录", events: meta.map((activity) => activity.envelope) }}
+      running={running}
+      stages={stages}
+    />
   );
 }
 
@@ -579,13 +590,6 @@ function Citations({
       ))}
     </div>
   );
-}
-
-function stepState(state: ChatActivity["state"]): "complete" | "active" | "waiting" | "failed" {
-  if (state === "complete") return "complete";
-  if (state === "failed") return "failed";
-  if (state === "running") return "active";
-  return "waiting";
 }
 
 function localSession(session: ChatSessionState): LocalChatSession {

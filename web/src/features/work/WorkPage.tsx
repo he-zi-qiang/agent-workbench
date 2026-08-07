@@ -11,6 +11,7 @@ import {
   ClipboardCheck,
   FileDown,
   ListTodo,
+  Paperclip,
   Plus,
   RefreshCw,
 } from "lucide-react";
@@ -32,6 +33,7 @@ import {
 import type {
   ApprovalView,
   ArtifactRef,
+  EventEnvelope,
   PrincipalIdentity,
   TaskStatus,
   TaskView,
@@ -59,20 +61,22 @@ import {
   shortId,
 } from "../../components/ui";
 import { MarkdownContent } from "../../components/MarkdownContent";
-import { StepDisclosure } from "../../components/StepDisclosure";
+import { StepStream, type StreamStage } from "../../components/StepStream";
 import { explainFailure } from "./failure";
-import { deriveLifecycle, type Lifecycle } from "./lifecycle";
+import { deriveLifecycle, type Lifecycle, stageOfNode } from "./lifecycle";
 import { useTaskTimeline } from "./useTaskTimeline";
 import { workIdentityQueryKey } from "./workQueryKeys";
 import {
+  artifactLabel,
+  collectArtifacts,
   eventTitle,
   findDraftText,
   findFinalReport,
   findLatestApprovalId,
   findTaskInputRef,
-  groupTimelineEvents,
   isKnownEventType,
   parseTaskInputArtifact,
+  type TaskArtifact,
 } from "./workTimeline";
 
 const CANCELLABLE_STATUSES = new Set<TaskStatus>([
@@ -211,8 +215,25 @@ export function WorkPage() {
       query.state.data?.status === "pending" ? 3_000 : false,
   });
 
-  const timelineGroups = useMemo(
-    () => groupTimelineEvents(timeline.events),
+  // Events keyed by the lifecycle stage that owns them, so a stage in the
+  // stream can show its own work instead of pointing at a separate log.
+  const stageEvents = useMemo(() => {
+    const byStage = new Map<string, EventEnvelope[]>();
+    for (const event of timeline.events) {
+      if (event.graph_node_id === null) continue;
+      const id = stageOfNode(event.graph_node_id);
+      const existing = byStage.get(id);
+      if (existing === undefined) byStage.set(id, [event]);
+      else existing.push(event);
+    }
+    return byStage;
+  }, [timeline.events]);
+  const taskEvents = useMemo(
+    () => timeline.events.filter((event) => event.graph_node_id === null),
+    [timeline.events],
+  );
+  const artifacts = useMemo(
+    () => collectArtifacts(timeline.events),
     [timeline.events],
   );
   const finalReport = useMemo(
@@ -598,9 +619,25 @@ export function WorkPage() {
               <StatusPill status={selectedTask.status} />
             </header>
 
-            {/* Result first. Whatever the Task produced is the reason the
-                reader opened this page; the machinery that produced it is
-                below, folded. */}
+            {/* One reading column, the way Chat reads: what was asked, the
+                steps it took, then the answer directly under them. The side
+                rail holds files, which are the one output worth finding again
+                later without scrolling back through the run. */}
+            <div className="aw-work-body">
+            <div className="aw-work-run">
+
+            <TaskStepStream
+              lifecycle={lifecycle}
+              loading={timeline.loading && timeline.events.length === 0}
+              onOpenArtifact={(id) => downloadMutation.mutate(id)}
+              running={!isTerminalStatus(selectedTask.status)}
+              stageEvents={stageEvents}
+              taskEvents={taskEvents}
+            />
+            {timeline.error !== null ? (
+              <ErrorNotice message={errorMessage(timeline.error, "读取时间线失败")} />
+            ) : null}
+
             <TaskResult
               artifact={finalReport?.artifact ?? null}
               draftText={draftText}
@@ -608,14 +645,13 @@ export function WorkPage() {
               onDownload={(id) => downloadMutation.mutate(id)}
               onRetry={retryInput === null ? undefined : () => resubmit(retryInput)}
               status={selectedTask.status}
+              wantsReport={taskInputQuery.data?.wants_report ?? null}
               {...(selectedTask.status_detail === null
                 ? {}
                 : { statusDetail: selectedTask.status_detail })}
             />
 
-            {/* The decision, in place. A Task waiting on a human is the one
-                thing on this page that cannot wait, so it sits directly under
-                the result and needs no other page to act on. */}
+            {/* The decision, after the answer it is a decision about. */}
             {approvalId !== null ? (
               <ApprovalSection
                 approval={approvalQuery.data}
@@ -652,62 +688,6 @@ export function WorkPage() {
                 message={errorMessage(approvalMutation.error, "提交审批决定失败")}
               />
             ) : null}
-
-            <LifecyclePanel
-              lifecycle={lifecycle}
-              loading={timeline.loading && timeline.events.length === 0}
-              running={!isTerminalStatus(selectedTask.status)}
-            />
-
-            <details className="aw-work-fold" open={!isTerminalStatus(selectedTask.status)}>
-              <summary>
-                <ChevronRight aria-hidden="true" className="aw-step-caret" size={14} />
-                执行记录
-                <span>{timeline.events.length} 条事件</span>
-              </summary>
-              <div className="aw-work-fold-body">
-                <div className="aw-section-heading">
-                  <span className="aw-page-note">按阶段分组，展开任意一步查看真实内容</span>
-                  <button
-                    className="aw-button is-small"
-                    disabled={timeline.loading}
-                    onClick={() => void timeline.refresh()}
-                    type="button"
-                  >
-                    刷新
-                  </button>
-                </div>
-                {timeline.error !== null ? (
-                  <ErrorNotice message={errorMessage(timeline.error, "读取时间线失败")} />
-                ) : null}
-                {timelineGroups.length === 0 && !timeline.loading ? (
-                  <InfoNotice>时间线暂时没有事件。</InfoNotice>
-                ) : null}
-                {timelineGroups.map((group) => (
-                  <section className="aw-timeline-group" key={group.id}>
-                    <h3 title={group.graphNodeId ?? undefined}>
-                      {group.graphNodeId === null
-                        ? "任务生命周期"
-                        : workflowStageTitle(group.graphNodeId)}
-                    </h3>
-                    <ol>
-                      {group.events.map((event) => (
-                        <li
-                          className={isKnownEventType(event.event_type) ? "" : "is-unknown"}
-                          key={event.event_id}
-                        >
-                          <StepDisclosure
-                            event={event}
-                            onOpenArtifact={(id) => downloadMutation.mutate(id)}
-                            title={eventTitle(event)}
-                          />
-                        </li>
-                      ))}
-                    </ol>
-                  </section>
-                ))}
-              </div>
-            </details>
 
             <details className="aw-work-fold">
               <summary>
@@ -783,6 +763,15 @@ export function WorkPage() {
                 ) : null}
               </div>
             </details>
+
+            </div>
+            <div className="aw-work-output">
+              <ArtifactRail
+                artifacts={artifacts}
+                onOpen={(id) => downloadMutation.mutate(id)}
+              />
+            </div>
+            </div>
           </>
         ) : null}
       </main>
@@ -791,58 +780,116 @@ export function WorkPage() {
 }
 
 /**
- * Where the Task is, as a strip rather than a section.
+ * The Task thinking, one step at a time, under the question that started it.
  *
- * While it runs this is the thing that moves, so it stays open. Once it stops
- * moving it collapses to one line -- a finished Task's stage list is history,
- * and history does not need to occupy the page above the result.
+ * This replaces a lifecycle summary sitting above a separately folded event
+ * log. Those were the same story told twice: the summary said a stage ran and
+ * the log said what it did, and neither was readable without the other. Here a
+ * stage *is* its steps -- open one and the real content is inside it.
+ *
+ * Only the stage that is moving is open. A finished Task collapses to six
+ * lines, and expanding any of them shows the prompts, tool calls and outputs
+ * that produced it.
  */
-function LifecyclePanel({
+function TaskStepStream({
   lifecycle,
   loading,
+  onOpenArtifact,
   running,
+  stageEvents,
+  taskEvents,
 }: {
   lifecycle: Lifecycle;
   loading: boolean;
+  onOpenArtifact: (artifactId: string) => void;
   running: boolean;
+  stageEvents: Map<string, EventEnvelope[]>;
+  taskEvents: EventEnvelope[];
 }) {
-  if (loading) return <LoadingLine label="正在读取执行阶段" />;
-  const total = lifecycle.stages.filter((stage) => stage.state !== "skipped").length;
+  if (loading) return <LoadingLine label="正在读取执行过程" />;
+
+  const stages: StreamStage[] = lifecycle.stages.map((stage) => ({
+    id: stage.id,
+    title: stage.title,
+    state: stage.state,
+    note:
+      stage.state === "skipped"
+        ? "未执行"
+        : stage.state === "pending"
+          ? "等待中"
+          : stage.state === "waiting"
+            ? "等待你确认"
+            : stage.state === "active"
+              ? "进行中"
+              : stage.endedAt === null
+                ? ""
+                : formatTime(stage.endedAt),
+    events: stageEvents.get(stage.id) ?? [],
+  }));
 
   return (
-    <details className="aw-lifecycle" open={running}>
-      <summary>
-        <ChevronRight aria-hidden="true" className="aw-step-caret" size={14} />
-        <strong>{lifecycle.currentTitle ?? "执行阶段"}</strong>
-        <span className="aw-lifecycle-count">
-          {lifecycle.doneCount}/{total}
-        </span>
-        <span className="aw-lifecycle-mini" aria-hidden="true">
-          {lifecycle.stages.map((stage) => (
-            <i className={`is-${stage.state}`} key={stage.id} />
+    <StepStream
+      ariaLabel="执行过程"
+      eventTitle={eventTitle}
+      isKnownEvent={(event) => isKnownEventType(event.event_type)}
+      meta={{ title: "任务生命周期", events: taskEvents }}
+      onOpenArtifact={onOpenArtifact}
+      running={running}
+      stages={stages}
+    />
+  );
+}
+
+/**
+ * Everything the Task wrote, in a rail beside the run rather than buried in
+ * the step that produced it.
+ *
+ * An artifact is worth finding after the fact -- the evidence a claim rests on,
+ * the file that was exported -- and hunting for the step that happened to write
+ * it is not how anyone looks for a file.
+ */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${String(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function ArtifactRail({
+  artifacts,
+  onOpen,
+}: {
+  artifacts: TaskArtifact[];
+  onOpen: (artifactId: string) => void;
+}) {
+  return (
+    <aside className="aw-artifacts" aria-label="附件">
+      <div className="aw-artifacts-head">
+        <Paperclip aria-hidden="true" size={14} />
+        <span>附件</span>
+        {artifacts.length === 0 ? null : <em>{artifacts.length}</em>}
+      </div>
+      {artifacts.length === 0 ? (
+        <p className="aw-artifacts-empty">这个任务还没有产生文件。</p>
+      ) : (
+        <ul>
+          {artifacts.map(({ artifact, graphNodeId, producedAt }) => (
+            <li key={artifact.artifact_id}>
+              <button
+                onClick={() => onOpen(artifact.artifact_id)}
+                title={artifact.filename ?? artifact.artifact_id}
+                type="button"
+              >
+                <strong>{artifactLabel(artifact)}</strong>
+                <small>
+                  {graphNodeId === null ? "任务" : workflowStageTitle(graphNodeId)} ·{" "}
+                  {formatTime(producedAt)} · {formatBytes(artifact.size_bytes)}
+                </small>
+              </button>
+            </li>
           ))}
-        </span>
-      </summary>
-      <ol className="aw-lifecycle-steps">
-        {lifecycle.stages.map((stage) => (
-          <li className={`is-${stage.state}`} key={stage.id}>
-            <span className="aw-lifecycle-dot" aria-hidden="true" />
-            <span className="aw-lifecycle-title">{stage.title}</span>
-            <span className="aw-lifecycle-note">
-              {stage.state === "skipped"
-                ? "未执行"
-                : stage.state === "pending"
-                  ? "等待中"
-                  : stage.state === "waiting"
-                    ? "等待你确认"
-                    : stage.endedAt === null
-                      ? ""
-                      : formatTime(stage.endedAt)}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </details>
+        </ul>
+      )}
+    </aside>
   );
 }
 
@@ -853,6 +900,11 @@ function LifecyclePanel({
  * download button, which told the reader everything about the file except what
  * it said. Text is rendered inline; anything else keeps the download, because
  * that is what a binary is for.
+ *
+ * A file is one possible output, not the point. Most Tasks are asked a question
+ * and the answer is the whole deliverable -- the same thing Chat returns -- so
+ * an answer with no file attached is the ordinary case and is presented as one.
+ * Only a Task that *was* asked for a file has anything missing when none exists.
  */
 function TaskResult({
   artifact,
@@ -862,6 +914,7 @@ function TaskResult({
   onRetry,
   status,
   statusDetail,
+  wantsReport,
 }: {
   artifact: ArtifactRef | null;
   draftText: string | null;
@@ -870,6 +923,8 @@ function TaskResult({
   onRetry?: (() => void) | undefined;
   status: TaskStatus;
   statusDetail?: string;
+  /** `null` while the submitted input is unread, or if it cannot be read. */
+  wantsReport: boolean | null;
 }) {
   const readable = artifact !== null && isReadableMedia(artifact.media_type);
   const preview = useQuery({
@@ -890,20 +945,24 @@ function TaskResult({
         </section>
       );
     }
-    // No file, but the Task still wrote something. Showing the draft is the
-    // whole point of letting a Task finish without an export.
+    // The answer, with no file attached. For a Task that was never asked for
+    // one this is simply the result -- headlining it "这次没有生成文件" reported
+    // a normal outcome as a shortfall, and named the one thing that did not
+    // happen instead of the thing that did.
     if (status === "succeeded" && draftText !== null) {
       return (
-        <section className="aw-result" aria-label="任务结果">
+        <section className="aw-answer" aria-label="任务结果">
           <header>
-            <div>
-              <span className="aw-eyebrow">结果</span>
-              <strong>这次没有生成文件</strong>
-            </div>
+            <span className="aw-answer-mark" aria-hidden="true">A</span>
+            <strong>回答</strong>
+            {wantsReport === true ? <small>没有生成文件</small> : null}
           </header>
-          <div className="aw-result-body">
-            <MarkdownContent text={draftText} />
-          </div>
+          {wantsReport === true ? (
+            <p className="aw-page-note">
+              这个任务要求生成文件，但没有产出；下面是它写出的内容。
+            </p>
+          ) : null}
+          <MarkdownContent text={draftText} />
         </section>
       );
     }
@@ -911,7 +970,7 @@ function TaskResult({
       return (
         <section className="aw-result">
           <div className="aw-notice">
-            <span>任务已完成，没有产出内容。展开下面的执行记录可以看到每一步做了什么。</span>
+            <span>任务已完成，没有产出内容。展开上面的执行过程可以看到每一步做了什么。</span>
           </div>
         </section>
       );
@@ -940,20 +999,24 @@ function TaskResult({
     );
   }
 
+  // A Task that exported a file reads the same way: the text flows under the
+  // run like any other answer, and the file is what the header names.
   return (
-    <section className="aw-result" aria-label="任务产出">
+    <section className="aw-answer" aria-label="任务产出">
       <header>
-        <div>
-          <span className="aw-eyebrow">产出</span>
-          <strong>{artifact.filename ?? artifact.kind}</strong>
-        </div>
+        <span className="aw-answer-mark" aria-hidden="true">A</span>
+        <strong>{artifact.filename ?? artifact.kind}</strong>
+        {/* One icon, not a labelled button. The filename sits right beside it,
+            so a word saying "下载" repeats what the icon and the name already
+            say between them. */}
         <button
-          className="aw-button is-ghost is-small"
+          aria-label={`下载 ${artifact.filename ?? artifact.kind}`}
+          className="aw-icon-button"
           onClick={() => onDownload(artifact.artifact_id)}
+          title="下载"
           type="button"
         >
           <FileDown aria-hidden="true" size={14} />
-          下载
         </button>
       </header>
       {!readable ? (
@@ -966,9 +1029,7 @@ function TaskResult({
         <ErrorNotice message={errorMessage(preview.error, "读取产出内容失败")} />
       ) : (
         <>
-          <div className="aw-result-body">
-            <MarkdownContent text={preview.data.text} />
-          </div>
+          <MarkdownContent text={preview.data.text} />
           {preview.data.truncated ? (
             <p className="aw-page-note">内容较长，这里只显示开头；完整内容请下载。</p>
           ) : null}

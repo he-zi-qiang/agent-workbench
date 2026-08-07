@@ -16,12 +16,6 @@ export interface TimelineState {
   cursor: string | null;
 }
 
-export interface TimelineGroup {
-  id: string;
-  graphNodeId: string | null;
-  events: EventEnvelope[];
-}
-
 export interface FinalReportMatch {
   artifact: ArtifactRef;
   toolCallId: string;
@@ -84,24 +78,6 @@ export function mergeTimelineResponse(
     events: additions.length === 0 ? state.events : [...state.events, ...additions],
     cursor: response.cursor,
   };
-}
-
-export function groupTimelineEvents(events: readonly EventEnvelope[]): TimelineGroup[] {
-  const groups = new Map<string, TimelineGroup>();
-  for (const event of events) {
-    const id = event.graph_node_id === null ? "task:" : `node:${event.graph_node_id}`;
-    const group = groups.get(id);
-    if (group === undefined) {
-      groups.set(id, {
-        id,
-        graphNodeId: event.graph_node_id,
-        events: [event],
-      });
-    } else {
-      group.events.push(event);
-    }
-  }
-  return [...groups.values()];
 }
 
 export function findTaskInputRef(events: readonly EventEnvelope[]): string | null {
@@ -230,6 +206,54 @@ export function findDraftText(events: readonly EventEnvelope[]): string | null {
     if (text !== null) return text;
   }
   return null;
+}
+
+/** One artifact the Task produced, as the side rail lists it. */
+export interface TaskArtifact {
+  artifact: ArtifactRef;
+  /** The stage that produced it, for saying where it came from. */
+  graphNodeId: string | null;
+  producedAt: string;
+}
+
+const ARTIFACT_KIND_LABELS: Record<string, string> = {
+  evidence_bundle: "检索到的证据",
+  report: "报告文件",
+  task_input: "任务输入",
+};
+
+export function artifactLabel(artifact: ArtifactRef): string {
+  return (
+    ARTIFACT_KIND_LABELS[artifact.kind] ??
+    artifact.filename ??
+    artifact.kind
+  );
+}
+
+/**
+ * Every artifact this Task produced, oldest first.
+ *
+ * Collected from the timeline rather than from a dedicated endpoint because
+ * the timeline is already the record of what happened, and an artifact only
+ * exists here if some step is on record as having written it. Deduplicated by
+ * id: a retried step re-reports the artifact it already wrote.
+ */
+export function collectArtifacts(
+  events: readonly EventEnvelope[],
+): TaskArtifact[] {
+  const seen = new Set<string>();
+  const found: TaskArtifact[] = [];
+  for (const event of events) {
+    const artifact = parseArtifactRef(event.payload.artifact);
+    if (artifact === null || seen.has(artifact.artifact_id)) continue;
+    seen.add(artifact.artifact_id);
+    found.push({
+      artifact,
+      graphNodeId: event.graph_node_id,
+      producedAt: event.timestamp,
+    });
+  }
+  return found;
 }
 
 export function eventTitle(event: EventEnvelope): string {
