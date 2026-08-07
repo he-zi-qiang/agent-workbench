@@ -22,35 +22,28 @@
 #
 # Without that variable the process still refuses to start, which is the point:
 # there is no configuration in this repository that makes chat work by itself.
+#
+# The retrieval shape is not set here either, so starting the API by hand keeps
+# giving the `fixed` path. Choose `routed` per run:
+#
+#   AW_CHAT__RETRIEVAL_SHAPE=routed scripts/dev.sh api
 
 [app]
 environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 
-[chat]
-# Only read when the shape is `routed`, which this file does not select -- pick
-# it per run, so that starting the API by hand keeps giving the `fixed` path:
-#
-#   AW_CHAT__RETRIEVAL_SHAPE=routed AW_CONFIG_FILE=config/config.local.toml ...
-#
-# A cross-encoder logit, not a probability. bge-reranker-v2-m3 is unnormalised
-# and this adapter deliberately does not rescale it, so 0.3 sits just above the
-# even-odds point rather than being "30% relevant".
-#
-# It is a starting point that has not yet been measured on this corpus. No run
-# on this machine has produced a relevance score at all: the first one to emit
-# `RetrievalRejected` reported `top_relevance=null` on six retrieved chunks,
-# because the reranker was timing out (see the timeout below). Read the scores
-# off the rejected turns of the next real run and move this to fit them.
-routed_relevance_threshold = 0.3
-
 [rag.reranker]
-# The default is 15 and this machine's cross-encoder needs longer. That number
-# was not merely slow, it was silently wrong: `_rerank` fails open to "no
+# The threshold this feeds -- chat.routed_relevance_threshold -- is in
+# config.default.toml and not repeated here: one number in two files is one
+# number nobody updates twice.
+#
+# The default timeout is 15 and this machine's cross-encoder needs longer. That
+# number was not merely slow, it was silently wrong: `_rerank` fails open to "no
 # score", `routed` reads a missing score as "not relevant", and so *every* RAG
 # turn fell back to an ungrounded answer no matter what the corpus held. The
-# threshold above is never even compared on those turns.
+# threshold is never even compared on those turns, which is why raising this is
+# a precondition for the threshold meaning anything at all.
 #
 # 90 is headroom, not a measurement -- it is under half the 180s API request
 # timeout, which the rest of the turn still has to fit inside. Tighten it once

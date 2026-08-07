@@ -47,8 +47,18 @@ max_agentic_steps = 4
 max_agentic_searches = 6
 # Only read when retrieval_shape = "routed". A cross-encoder score, not a
 # retrieval score: RRF is a rank sum and cannot say whether a hit is relevant.
-# Uncalibrated -- measure it against your own corpus before trusting it.
-routed_relevance_threshold = 0.0
+#
+# A bge-reranker-v2-m3 logit, not a probability -- the adapter deliberately does
+# not rescale one into the other -- so 0.3 sits just above the even-odds point
+# rather than meaning "30% relevant".
+#
+# Uncalibrated -- measure it against your own corpus before trusting it. That
+# warning is not boilerplate here: 0.3 has not been measured against this
+# repository's own corpus either. The machine that last ran `routed` had a
+# reranker timing out under rag.reranker.timeout_seconds, so every turn fell
+# back with top_relevance=null and this number was never once compared. Read the
+# scores off the RetrievalRejected events of a real run before relying on it.
+routed_relevance_threshold = 0.3
 
 [database]
 # dsn, guard_dsn and listen_dsn are secret-like deployment values and are
