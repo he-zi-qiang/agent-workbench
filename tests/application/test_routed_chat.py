@@ -26,6 +26,7 @@ from agent_workbench.application.chat_execution import (
 )
 from agent_workbench.application.retrieval import AuthorizedContext
 from agent_workbench.domain.context import Citation, ContextChunk, ContextPacket
+from agent_workbench.domain.events import RetrievalRejected
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import (
     AgentOutcome,
@@ -109,8 +110,22 @@ class _Executor:
 
 
 class _Sink:
-    async def emit(self, payload: Any, **kwargs: Any) -> Any:  # pragma: no cover
-        raise AssertionError("routing must not emit events of its own")
+    """Collects what routing emits.
+
+    This used to refuse every emission ("routing must not emit events of its
+    own"), which held while the fallback was silent. It is no longer true, and
+    the reason is ADR-018's own justification for this shape: it is allowed
+    *because* the decision leaves a trace. `UngroundedAnswerCommitted` records
+    that the answer was unverified; it does not record that retrieval ran and
+    was rejected, so a turn that searched and fell back looked identical to one
+    that never searched.
+    """
+
+    def __init__(self) -> None:
+        self.emitted: list[Any] = []
+
+    async def emit(self, payload: Any, **kwargs: Any) -> Any:
+        self.emitted.append(payload)
 
 
 def _run(
@@ -118,9 +133,10 @@ def _run(
     context: AuthorizedContext,
     answer: str = "an answer",
     threshold: float = 0.0,
-) -> tuple[Any, _Retrieval, _Executor]:
+) -> tuple[Any, _Retrieval, _Executor, _Sink]:
     retrieval = _Retrieval(context)
     executor = _Executor(answer)
+    sink = _Sink()
     execution = RoutedExecution(
         retrieval=retrieval,  # pyright: ignore[reportArgumentType]
         executor=executor,  # pyright: ignore[reportArgumentType]
@@ -137,18 +153,18 @@ def _run(
                 idempotency_key="key-1",
             ),
             history=(),
-            sink=_Sink(),  # pyright: ignore[reportArgumentType]
+            sink=sink,  # pyright: ignore[reportArgumentType]
             cancellation=None,  # pyright: ignore[reportArgumentType]
         )
     )
-    return produced, retrieval, executor
+    return produced, retrieval, executor, sink
 
 
 # --- evidence found: the grounded path, unchanged ---------------------------
 
 
 def test_evidence_routes_to_the_grounded_answer() -> None:
-    produced, retrieval, executor = _run(
+    produced, retrieval, executor, _sink = _run(
         context=AuthorizedContext(
             packet=_packet(CHUNK_A),
             authorized_revisions=((f"doc_{CHUNK_A}", 1),),
@@ -166,7 +182,7 @@ def test_evidence_routes_to_the_grounded_answer() -> None:
 def test_a_grounded_route_still_verifies_citations() -> None:
     """Routing must not become a way around the citation check."""
 
-    produced, _, _ = _run(
+    produced, _, _, _sink = _run(
         context=AuthorizedContext(
             packet=_packet(CHUNK_A),
             authorized_revisions=((f"doc_{CHUNK_A}", 1),),
@@ -183,7 +199,7 @@ def test_a_grounded_route_still_verifies_citations() -> None:
 
 
 def test_no_evidence_routes_to_the_ungrounded_answer() -> None:
-    produced, retrieval, executor = _run(
+    produced, retrieval, executor, _sink = _run(
         context=AuthorizedContext(packet=ContextPacket(), authorized_revisions=())
     )
 
@@ -195,7 +211,7 @@ def test_no_evidence_routes_to_the_ungrounded_answer() -> None:
 
 
 def test_the_ungrounded_route_carries_no_evidence_claims() -> None:
-    produced, _, _ = _run(
+    produced, _, _, _sink = _run(
         context=AuthorizedContext(packet=ContextPacket(), authorized_revisions=())
     )
 
@@ -211,7 +227,7 @@ def test_the_ungrounded_route_does_not_ask_for_citations() -> None:
     answer -- which is the refusal this shape exists to replace.
     """
 
-    _, _, executor = _run(
+    _, _, executor, _sink = _run(
         context=AuthorizedContext(packet=ContextPacket(), authorized_revisions=())
     )
     prompt = executor.requests[0]
@@ -228,12 +244,73 @@ def test_an_unreadable_corpus_falls_back_rather_than_refusing() -> None:
     already imply.
     """
 
-    produced, _, executor = _run(
+    produced, _, executor, _sink = _run(
         context=AuthorizedContext(packet=ContextPacket(), authorized_revisions=())
     )
 
     assert produced.grounded is False
     assert executor.requests[0].system_prompt == UNGROUNDED_SYSTEM_PROMPT
+    # And the trace it leaves says nothing the asker could not already infer:
+    # zero surviving chunks, exactly as an empty corpus reports.
+    rejected = _only_rejection(_sink)
+    assert rejected.chunk_count == 0
+
+
+# --- the fallback leaves a trace --------------------------------------------
+
+
+def _only_rejection(sink: _Sink) -> RetrievalRejected:
+    rejections = [one for one in sink.emitted if isinstance(one, RetrievalRejected)]
+    assert len(rejections) == 1
+    return rejections[0]
+
+
+def test_the_fallback_records_that_retrieval_ran_and_was_rejected() -> None:
+    """Without this, an ungrounded turn cannot be told from one that never
+    searched -- and ADR-018 allows this shape *because* the decision is traced.
+    """
+
+    context = AuthorizedContext(
+        packet=_packet(CHUNK_A),
+        authorized_revisions=(("doc_1", 1),),
+        top_relevance=0.25,
+    )
+
+    _, _, _, sink = _run(context=context, threshold=0.5)
+    rejected = _only_rejection(sink)
+
+    assert rejected.chunk_count == 1
+    assert rejected.top_relevance == 0.25
+    # The threshold travels with the score: it is configuration, and an
+    # operator deciding whether to lower it needs both numbers together.
+    assert rejected.threshold == 0.5
+
+
+def test_a_grounded_turn_records_no_rejection() -> None:
+    context = AuthorizedContext(
+        packet=_packet(CHUNK_A),
+        authorized_revisions=(("doc_1", 1),),
+        top_relevance=0.9,
+    )
+
+    produced, _, _, sink = _run(context=context, threshold=0.5)
+
+    assert produced.grounded is True
+    assert [one for one in sink.emitted if isinstance(one, RetrievalRejected)] == []
+
+
+def test_an_unmeasured_relevance_is_recorded_as_unmeasured() -> None:
+    """`None` is a different reason from a low score, and stays distinguishable."""
+
+    context = AuthorizedContext(
+        packet=_packet(CHUNK_A),
+        authorized_revisions=(("doc_1", 1),),
+        top_relevance=None,
+    )
+
+    _, _, _, sink = _run(context=context, threshold=0.5)
+
+    assert _only_rejection(sink).top_relevance is None
 
 
 # --- what the stored result will accept -------------------------------------
@@ -323,7 +400,7 @@ def test_irrelevant_evidence_routes_to_the_ungrounded_answer() -> None:
     chunks came back and the cross-encoder scored them below the bar.
     """
 
-    produced, _, executor = _run(
+    produced, _, executor, _sink = _run(
         context=AuthorizedContext(
             packet=_packet(CHUNK_A),
             authorized_revisions=((f"doc_{CHUNK_A}", 1),),
@@ -340,7 +417,7 @@ def test_irrelevant_evidence_routes_to_the_ungrounded_answer() -> None:
 def test_relevant_evidence_above_the_threshold_stays_grounded() -> None:
     """The control. Without it a gate that rejected everything would pass."""
 
-    produced, _, executor = _run(
+    produced, _, executor, _sink = _run(
         context=AuthorizedContext(
             packet=_packet(CHUNK_A),
             authorized_revisions=((f"doc_{CHUNK_A}", 1),),
@@ -366,8 +443,8 @@ def test_the_threshold_is_the_thing_that_decides() -> None:
         top_relevance=1.0,
     )
 
-    below, _, _ = _run(context=context, threshold=0.5)
-    above, _, _ = _run(context=context, threshold=2.0)
+    below, _, _, _sink = _run(context=context, threshold=0.5)
+    above, _, _, _sink = _run(context=context, threshold=2.0)
 
     assert below.grounded is True
     assert above.grounded is False
@@ -381,7 +458,7 @@ def test_an_unmeasured_relevance_is_not_treated_as_relevant() -> None:
     the exact failure this gate exists to prevent.
     """
 
-    produced, _, executor = _run(
+    produced, _, executor, _sink = _run(
         context=AuthorizedContext(
             packet=_packet(CHUNK_A),
             authorized_revisions=((f"doc_{CHUNK_A}", 1),),

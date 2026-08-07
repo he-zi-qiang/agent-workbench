@@ -70,6 +70,7 @@ EventType = Literal[
     "TaskParkedForMigration",
     "RunStarted",
     "ContextBuilt",
+    "RetrievalRejected",
     "ModelStarted",
     "ModelDelta",
     "ModelCompleted",
@@ -290,6 +291,37 @@ class UngroundedAnswerCommitted(DomainModel):
     text: BoundedText
 
 
+class RetrievalRejected(DomainModel):
+    """Retrieval ran, and the turn chose not to answer from what came back.
+
+    The routed shape (ADR-018) decides between a grounded and an ungrounded
+    answer by retrieving and scoring, then falling back when nothing was
+    relevant enough. Without this event that decision leaves no trace at all:
+    ``ContextBuilt`` is only emitted when context reaches the model, so a turn
+    that searched for a minute and rejected the result looks identical in the
+    log to one that never searched. "Why is this answer ungrounded?" is then
+    unanswerable after the fact, which is the question the grounded/ungrounded
+    split exists to make answerable.
+
+    The scores are recorded rather than a verdict, because the threshold is
+    configuration: an operator lowering it needs to know what the scores
+    actually were on the turns that fell back.
+
+    ``chunk_count`` counts what survived authorization, which is what keeps
+    this event compatible with ADR-018's deliberate non-disclosure: a corpus
+    whose matching documents this asker may not read reports zero here, exactly
+    as an empty corpus does. Counting candidates before the ACL check would
+    tell the asker that documents they cannot read exist.
+    """
+
+    kind: Literal["RetrievalRejected"] = "RetrievalRejected"
+    chunk_count: int = Field(ge=0)
+    #: The best cross-encoder score, or ``None`` when no reranker answered --
+    #: which is itself a reason to reject, and a different one from a low score.
+    top_relevance: float | None = None
+    threshold: float
+
+
 class AnswerWithheld(DomainModel):
     """A safe replacement for an answer that failed its publication check."""
 
@@ -442,6 +474,7 @@ EventPayload = Annotated[
     | TaskParkedForMigration
     | RunStarted
     | ContextBuilt
+    | RetrievalRejected
     | ModelStarted
     | ModelDelta
     | ModelCompleted
@@ -487,6 +520,7 @@ EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "ModelCompleted": "durable",
     "AnswerCommitted": "durable",
     "UngroundedAnswerCommitted": "durable",
+    "RetrievalRejected": "durable",
     "AnswerWithheld": "durable",
     "ChatTurnExpired": "durable",
     "ToolProposed": "durable",

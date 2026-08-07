@@ -599,6 +599,25 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
       detail: `${chunks} 个片段 · ${tokens} tokens`,
     };
   }
+  if (kind === "RetrievalRejected") {
+    // The turn searched and chose not to answer from what came back. Saying
+    // only "未检索" would be false, and saying nothing leaves the reader
+    // unable to tell this from a turn that never looked.
+    const chunks = numberField(payload, "chunk_count") ?? 0;
+    const relevance = numberField(payload, "top_relevance");
+    return {
+      ...base,
+      key: envelope.event_id,
+      label: "检索结果未被采用",
+      state: "info",
+      detail:
+        chunks === 0
+          ? "没有可用的资料"
+          : relevance === null
+            ? `${chunks} 个片段 · 相关度未测出`
+            : `${chunks} 个片段 · 最高相关度 ${relevance.toFixed(2)}`,
+    };
+  }
   if (kind === "ModelStarted") {
     const modelCallId = stringField(payload, "model_call_id") ?? envelope.event_id;
     const modelId = stringField(payload, "model_id");

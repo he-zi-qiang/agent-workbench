@@ -41,6 +41,7 @@ from agent_workbench.application.retrieval import (
     RetrievalService,
 )
 from agent_workbench.domain.context import Citation, ContextPacket
+from agent_workbench.domain.events import RetrievalRejected
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.messages import Message, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
@@ -647,6 +648,19 @@ class RoutedExecution:
         )
 
         if not self._is_grounded(context):
+            # Say that retrieval ran and was not used, before answering without
+            # it. `ContextBuilt` cannot carry this: it is emitted only when
+            # context reaches the model, so without this event a turn that
+            # searched and rejected the result is indistinguishable in the log
+            # from one that never searched -- and "why was this ungrounded?"
+            # becomes unanswerable.
+            await sink.emit(
+                RetrievalRejected(
+                    chunk_count=len(context.packet.chunks),
+                    top_relevance=context.top_relevance,
+                    threshold=self.relevance_threshold,
+                )
+            )
             outcome = await self.executor.run(
                 build_ungrounded_request(request, self.budget, history=history),
                 sink,
