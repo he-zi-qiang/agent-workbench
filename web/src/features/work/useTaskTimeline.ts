@@ -7,6 +7,24 @@ import {
   type TimelineState,
 } from "./workTimeline";
 
+/**
+ * Events after which a Task produces no further ones.
+ *
+ * The timeline stops on these rather than only on the status query saying the
+ * Task is terminal, because that query can stop answering. React Query pauses
+ * `refetchInterval` while `document.hidden`; this hook's `setInterval` does
+ * not pause. Background the tab mid-Task and the status freezes at "running"
+ * while the timeline keeps polling a Task that finished minutes ago, for as
+ * long as the tab stays in the background. Stopping on what the timeline has
+ * itself fetched needs no second opinion.
+ */
+const FINAL_EVENTS = new Set([
+  "TaskSucceeded",
+  "TaskFailed",
+  "TaskCancelled",
+  "TaskDeadLettered",
+]);
+
 export interface TaskTimelineResult {
   events: EventEnvelope[];
   cursor: string | null;
@@ -50,6 +68,9 @@ export function useTaskTimeline(
     let inFlight: Promise<void> | null = null;
     let forcedAfterFlight: Promise<void> | null = null;
     let cursor: string | null = null;
+    // Scoped to this effect, so selecting another Task starts over rather than
+    // inheriting the last one's ending.
+    let finished = false;
     const fixedTaskId = taskId;
 
     if (fixedTaskId === undefined) {
@@ -72,6 +93,9 @@ export function useTaskTimeline(
             throw new Error("任务时间线返回了不匹配的任务 ID");
           }
           cursor = response.cursor;
+          if (response.events.some((event) => FINAL_EVENTS.has(event.event_type))) {
+            finished = true;
+          }
           setState((previous) => {
             const timeline =
               previous.requestKey === requestKey
@@ -105,7 +129,9 @@ export function useTaskTimeline(
     };
 
     const poll = (force = false): Promise<void> => {
-      if (!active || (!force && !pollingEnabledRef.current)) {
+      // `force` still gets through: the refresh button on a finished Task has
+      // to be able to fetch, and so does the terminal-status effect.
+      if (!active || (!force && (finished || !pollingEnabledRef.current))) {
         return Promise.resolve();
       }
       if (inFlight !== null) {

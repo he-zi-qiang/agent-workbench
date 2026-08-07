@@ -27,6 +27,7 @@ const IDENTITY: PrincipalIdentity = {
 const SESSION: LocalChatSession = {
   sessionId: "ses_1",
   title: "Local chat",
+  answerMode: "rag",
   knowledgeBaseId: "kb_main",
   createdAt: "2026-08-02T12:00:00Z",
   updatedAt: "2026-08-02T12:00:00Z",
@@ -36,6 +37,7 @@ const RELEASED_RESPONSE: AskResponse = {
   answer: "Safely released answer",
   citations: [],
   withheld: false,
+        grounded: true,
   run_id: "run_1",
   turn_id: "turn_1",
 };
@@ -69,6 +71,7 @@ describe("Chat runtime request ownership", () => {
     const localId = runtime.startAsk({
       sessionId: SESSION.sessionId,
       question: "What changed?",
+      answerMode: "rag",
       knowledgeBaseId: SESSION.knowledgeBaseId,
     });
 
@@ -94,6 +97,7 @@ describe("Chat runtime request ownership", () => {
     const localId = runtime.startAsk({
       sessionId: SESSION.sessionId,
       question: "What changed?",
+      answerMode: "rag",
       knowledgeBaseId: SESSION.knowledgeBaseId,
     });
     await runtime.waitForAsk(localId);

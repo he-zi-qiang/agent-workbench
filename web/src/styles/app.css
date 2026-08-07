@@ -164,6 +164,64 @@ a {
   display: none;
 }
 
+.aw-mobile-more-backdrop {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: grid;
+  align-items: end;
+  padding: 14px;
+  background: rgb(10 11 9 / 62%);
+  backdrop-filter: blur(4px);
+}
+
+.aw-mobile-more-sheet {
+  width: min(480px, 100%);
+  margin: 0 auto;
+  padding: 16px;
+  border: 1px solid var(--aw-border);
+  border-radius: 18px;
+  background: var(--aw-panel);
+  box-shadow: var(--aw-shadow-md);
+}
+
+.aw-mobile-more-sheet > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.aw-mobile-more-sheet h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.aw-mobile-more-list {
+  display: grid;
+  gap: 7px;
+}
+
+.aw-mobile-more-link {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  padding: 10px 12px;
+  gap: 10px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+  text-align: left;
+}
+
+.aw-mobile-more-link.active {
+  border-color: color-mix(in srgb, var(--aw-accent) 45%, var(--aw-border));
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
 .aw-button,
 .aw-icon-button {
   display: inline-flex;
@@ -1098,6 +1156,98 @@ pre {
   font-weight: 600;
 }
 
+/* Retrieval scoreboard. Wider than the two-column capability matrix above it,
+   and every score cell carries a count over the plain rate, so the columns are
+   sized for "37 / 38 题" rather than "97.4%". */
+.aw-eval-table {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+}
+
+.aw-eval-row {
+  display: grid;
+  grid-template-columns:
+    minmax(120px, 1fr) minmax(110px, 1fr)
+    repeat(2, minmax(120px, 1fr)) minmax(110px, 0.8fr);
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-eval-row:last-child {
+  border-bottom: 0;
+}
+
+.aw-eval-row > * {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--aw-border);
+  overflow-wrap: anywhere;
+}
+
+.aw-eval-row > :last-child {
+  border-right: 0;
+}
+
+.aw-eval-row.is-heading {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aw-eval-row b {
+  color: var(--aw-text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.aw-eval-row small {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-eval-method {
+  margin-top: 4px;
+  color: var(--aw-text-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.aw-eval-method strong {
+  color: var(--aw-text);
+}
+
+.aw-eval-legend {
+  display: grid;
+  margin-top: 14px;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.aw-eval-legend > div {
+  padding: 10px 12px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-eval-legend strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 13px;
+}
+
+.aw-eval-legend span {
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .aw-markdown {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1117,6 +1267,529 @@ pre {
 .aw-markdown pre,
 .aw-markdown blockquote {
   margin: 0.7em 0;
+}
+
+/* Shared knowledge source and attachments -------------------------------- */
+
+.aw-source-picker {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 28px;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+  color: var(--aw-text-muted);
+}
+
+.aw-source-picker > label {
+  min-width: 0;
+}
+
+.aw-source-picker select {
+  min-height: 36px;
+  padding: 6px 28px 6px 8px;
+  font-size: 11px;
+}
+
+.aw-source-picker.is-compact {
+  width: min(360px, 100%);
+}
+
+.aw-source-picker.is-compact select {
+  min-height: 31px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.aw-source-manage {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 7px;
+}
+
+.aw-source-manage:hover {
+  background: var(--aw-panel-strong);
+  color: var(--aw-accent);
+}
+
+.aw-source-error {
+  grid-column: 1 / -1;
+  color: var(--aw-danger);
+  font-size: 10px;
+}
+
+.aw-attachment-button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--aw-text-muted);
+}
+
+.aw-attachment-control {
+  position: relative;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.aw-attachment-button:hover:not(:disabled) {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+.aw-attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 7px;
+  gap: 7px;
+}
+
+.aw-attachment {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  max-width: min(310px, 100%);
+  min-height: 43px;
+  padding: 6px 7px 6px 9px;
+  gap: 6px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel);
+  color: var(--aw-text-muted);
+}
+
+.aw-attachment.is-ready {
+  border-color: color-mix(in srgb, var(--aw-success) 28%, var(--aw-border));
+}
+
+.aw-attachment.is-failed {
+  border-color: color-mix(in srgb, var(--aw-danger) 35%, var(--aw-border));
+}
+
+.aw-attachment > span {
+  min-width: 0;
+}
+
+.aw-attachment strong,
+.aw-attachment small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-attachment strong {
+  color: var(--aw-text);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.aw-attachment small {
+  font-size: 9px;
+}
+
+.aw-attachment button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aw-text-muted);
+}
+
+.aw-attachment button:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+.aw-chat-composer-row {
+  grid-template-columns: 42px minmax(0, 1fr) 42px;
+}
+
+.aw-chat-composer-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  margin: 4px 3px 0;
+  gap: 10px;
+}
+
+.aw-chat-composer-tools > span {
+  color: var(--aw-text-muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+/* Knowledge -------------------------------------------------------------- */
+
+.aw-knowledge-page > * {
+  width: min(1180px, 100%);
+}
+
+.aw-knowledge-layout {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  min-height: 580px;
+  overflow: hidden;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-lg);
+  background: var(--aw-panel);
+  box-shadow: var(--aw-shadow-sm);
+}
+
+.aw-knowledge-list {
+  padding: 8px;
+  border-right: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+}
+
+.aw-knowledge-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 8px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 8px;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+}
+
+.aw-knowledge-row:hover,
+.aw-knowledge-row.is-active {
+  border-color: var(--aw-border);
+  background: var(--aw-panel);
+}
+
+.aw-knowledge-row.is-active {
+  box-shadow: var(--aw-shadow-sm);
+}
+
+.aw-knowledge-row > span:nth-child(2) {
+  min-width: 0;
+}
+
+.aw-knowledge-row strong,
+.aw-knowledge-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-knowledge-row strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aw-knowledge-row small {
+  color: var(--aw-text-muted);
+  font-size: 9px;
+}
+
+.aw-knowledge-row > i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--aw-warning);
+}
+
+.aw-knowledge-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+.aw-knowledge-detail {
+  min-width: 0;
+  padding: 22px;
+}
+
+.aw-knowledge-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.aw-knowledge-detail-header h2 {
+  margin: 1px 0 0;
+  font-size: 22px;
+}
+
+.aw-knowledge-detail-header p {
+  margin: 3px 0 0;
+  color: var(--aw-text-muted);
+}
+
+.aw-knowledge-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 18px 0 2px;
+  overflow: hidden;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-knowledge-summary > span {
+  padding: 10px 12px;
+  border-right: 1px solid var(--aw-border);
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-knowledge-summary > span:last-child {
+  border-right: 0;
+}
+
+.aw-knowledge-summary strong {
+  display: block;
+  color: var(--aw-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.aw-knowledge-upload,
+.aw-knowledge-documents,
+.aw-knowledge-debug {
+  margin-top: 12px;
+}
+
+.aw-knowledge-upload .aw-card-header p,
+.aw-knowledge-documents .aw-card-header p {
+  margin: 2px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-drop-zone {
+  position: relative;
+  display: grid;
+  min-height: 118px;
+  margin: 14px 0 10px;
+  place-items: center;
+  align-content: center;
+  gap: 3px;
+  border: 1px dashed var(--aw-border-strong);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  cursor: pointer;
+}
+
+.aw-drop-zone:hover {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent-soft);
+}
+
+.aw-drop-zone strong {
+  color: var(--aw-text);
+}
+
+.aw-drop-zone span {
+  font-size: 10px;
+}
+
+.aw-drop-zone input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.aw-document-list {
+  display: grid;
+  margin-top: 12px;
+}
+
+.aw-document-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  align-items: center;
+  min-height: 54px;
+  padding: 7px 3px;
+  gap: 8px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-document-row:last-child {
+  border-bottom: 0;
+}
+
+.aw-document-row > span:nth-child(2) {
+  min-width: 0;
+}
+
+.aw-document-row strong,
+.aw-document-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-document-row strong {
+  font-weight: 550;
+}
+
+.aw-document-row small,
+.aw-document-row time {
+  color: var(--aw-text-muted);
+  font-size: 9px;
+}
+
+.aw-document-status {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--aw-warning-soft);
+  color: var(--aw-warning);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.aw-document-status.is-ready {
+  background: var(--aw-success-soft);
+  color: var(--aw-success);
+}
+
+.aw-knowledge-debug > summary,
+.aw-work-advanced > summary,
+.aw-engineering-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 550;
+}
+
+/* Work source controls --------------------------------------------------- */
+
+.aw-work-attachment-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-work-advanced {
+  padding: 8px 0;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-work-advanced[open] summary {
+  margin-bottom: 8px;
+}
+
+.aw-create-task-hint {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-approval-objective {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--aw-warning);
+  border-radius: 0 8px 8px 0;
+  background: var(--aw-warning-soft);
+  color: var(--aw-text);
+}
+
+.aw-approval-summary {
+  display: flex;
+  align-items: center;
+  margin: 10px 0;
+  gap: 9px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-engineering-details {
+  margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+  .aw-knowledge-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .aw-knowledge-list {
+    display: flex;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--aw-border);
+  }
+
+  .aw-knowledge-row {
+    min-width: 220px;
+  }
+
+  .aw-knowledge-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aw-knowledge-summary > span:nth-child(2) {
+    border-right: 0;
+  }
+
+  .aw-knowledge-summary > span:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--aw-border);
+  }
+}
+
+@media (max-width: 760px) {
+  .aw-chat-composer-row {
+    grid-template-columns: 42px minmax(0, 1fr) 44px;
+  }
+
+  .aw-chat-composer-tools {
+    display: grid;
+  }
+
+  .aw-chat-composer-tools > span {
+    text-align: left;
+  }
+
+  .aw-knowledge-detail {
+    padding: 15px;
+  }
+
+  .aw-knowledge-detail-header {
+    display: block;
+  }
+
+  .aw-knowledge-detail-header .aw-page-actions {
+    margin-top: 12px;
+  }
+
+  .aw-document-row {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+  }
+
+  .aw-document-row time {
+    display: none;
+  }
 }
 
 /* Chat ------------------------------------------------------------------- */
@@ -1495,7 +2168,7 @@ pre {
 
 .aw-chat-composer-row {
   display: grid;
-  grid-template-columns: minmax(110px, 160px) minmax(0, 1fr) 42px;
+  grid-template-columns: 42px minmax(0, 1fr) 42px;
   align-items: end;
   padding: 5px;
   gap: 5px;
@@ -1755,13 +2428,482 @@ pre {
 }
 
 .aw-work-detail-header h1 {
+  display: -webkit-box;
+  overflow: hidden;
   margin: 0;
   font-size: 15px;
   font-weight: 600;
+  -webkit-box-orient: vertical;
+  /* The objective is the heading now, and it can run to 200 characters. Two
+     lines keeps a sticky header a header. */
+  -webkit-line-clamp: 2;
+}
+
+/* Demoted to a subtitle once the objective takes the heading, but still shown:
+   it is what an operator quotes when asking about this run. */
+.aw-task-id {
+  color: var(--aw-text-muted);
+  font-size: 11px;
 }
 
 .aw-work-mobile-back {
   display: none;
+}
+
+/* ---- Task detail: result, decision, lifecycle, folds ------------------- */
+
+.aw-result,
+.aw-approve,
+.aw-work-fold {
+  width: min(880px, 100%);
+  margin: 0 auto 10px;
+}
+
+/* Inside the two columns the gap does the spacing, and each panel fills its
+   own column -- the centring and bottom margin above are for the single-column
+   layouts elsewhere on this page. */
+.aw-work-body .aw-result,
+.aw-work-body .aw-approve,
+.aw-work-body .aw-work-fold {
+  width: 100%;
+  margin: 0;
+}
+
+.aw-result {
+  padding: 16px;
+  border: 1px solid var(--aw-border);
+  border-radius: 11px;
+  background: var(--aw-panel);
+}
+
+.aw-result.is-running {
+  padding: 14px 16px;
+}
+
+.aw-result > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 12px;
+}
+
+.aw-result > header strong {
+  display: block;
+  font-size: 14px;
+}
+
+/* The decision. Accent-bordered because it is the only thing on a waiting
+   Task that the reader has to do something about. */
+.aw-approve {
+  display: grid;
+  padding: 14px 16px;
+  gap: 12px;
+  border: 1px solid var(--aw-accent);
+  border-radius: 11px;
+  background: var(--aw-accent-soft);
+}
+
+.aw-approve-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.aw-approve-copy strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 14px;
+}
+
+.aw-approve-copy span {
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-approve-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.aw-work-fold {
+  padding: 10px 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-work-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  list-style: none;
+}
+
+.aw-work-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-work-fold > summary {
+  color: var(--aw-text);
+}
+
+.aw-work-fold[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-work-fold > summary span {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+@keyframes aw-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--aw-accent-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+/* How it ran on the left, what came out on the right. The output column holds
+   prose, not just a file list, so it is sized for reading -- a 232px rail was
+   right for filenames and far too narrow for a report. */
+.aw-work-body {
+  display: grid;
+  align-items: start;
+  gap: 18px;
+  /* The reading column takes the width, because the run and the answer both
+     live in it. The rail only lists files, so it is sized for filenames. */
+  grid-template-columns: minmax(0, 1fr) clamp(200px, 24%, 260px);
+}
+
+.aw-work-run,
+.aw-work-output {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* The answer, continuing from the steps rather than sitting beside them.
+   Indented to the same 34px as Chat's assistant message, so the mark hangs in
+   the margin and the text lines up under the run above it. */
+.aw-answer {
+  min-width: 0;
+  padding-left: 34px;
+}
+
+.aw-answer > header {
+  position: relative;
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  margin-bottom: 4px;
+  margin-left: -34px;
+  gap: 7px;
+}
+
+.aw-answer > header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-answer > header small {
+  color: var(--aw-warning);
+  font-size: 10px;
+}
+
+/* Pushed to the end of the header so it does not sit between the name and the
+   text it belongs to. */
+.aw-answer > header .aw-icon-button {
+  margin-left: auto;
+}
+
+.aw-answer-mark {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Under ~1040px the rail would squeeze the reading column. Stacked, files go
+   below the run and the answer, which is where they were produced. */
+@media (max-width: 1040px) {
+  .aw-work-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.aw-stream {
+  padding: 4px 2px;
+}
+
+.aw-stream-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One continuous line down the steps, so the sequence reads as a sequence.
+   The last step stops the line, or it would trail into whatever follows. */
+.aw-stream-steps > li {
+  position: relative;
+  padding: 0 0 2px 24px;
+}
+
+.aw-stream-steps > li::before {
+  position: absolute;
+  top: 18px;
+  bottom: -4px;
+  left: 5px;
+  width: 1px;
+  background: var(--aw-border);
+  content: "";
+}
+
+.aw-stream-steps > li:last-child::before {
+  display: none;
+}
+
+.aw-stream-dot {
+  position: absolute;
+  top: 9px;
+  left: 1px;
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--aw-border);
+  border-radius: 50%;
+  background: var(--aw-window);
+}
+
+.aw-stream-steps > li.is-done .aw-stream-dot {
+  border-color: var(--aw-success);
+  background: var(--aw-success);
+}
+
+.aw-stream-steps > li.is-failed .aw-stream-dot {
+  border-color: var(--aw-danger);
+  background: var(--aw-danger);
+}
+
+.aw-stream-steps > li.is-active .aw-stream-dot,
+.aw-stream-steps > li.is-waiting .aw-stream-dot {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent);
+  animation: aw-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-stream-steps > li.is-active .aw-stream-dot,
+  .aw-stream-steps > li.is-waiting .aw-stream-dot {
+    animation: none;
+  }
+}
+
+.aw-stream-head {
+  display: flex;
+  align-items: center;
+  padding: 5px 6px 5px 0;
+  gap: 8px;
+  border-radius: var(--aw-radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  list-style: none;
+}
+
+.aw-stream-head::-webkit-details-marker {
+  display: none;
+}
+
+.aw-stream-head.is-empty {
+  cursor: default;
+}
+
+.aw-stream-step > summary:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-stream-step[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-stream-title {
+  color: var(--aw-text);
+}
+
+.aw-stream-steps > li.is-pending .aw-stream-title,
+.aw-stream-steps > li.is-skipped .aw-stream-title {
+  color: var(--aw-text-muted);
+}
+
+.aw-stream-count {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-stream-note {
+  margin-left: auto;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-stream-steps > li.is-active .aw-stream-note {
+  color: var(--aw-accent);
+}
+
+.aw-stream-events {
+  margin: 2px 0 8px;
+  padding: 0 0 0 4px;
+  border-left: 1px solid var(--aw-border);
+  list-style: none;
+}
+
+.aw-stream-events > li {
+  padding: 1px 0 1px 8px;
+}
+
+.aw-stream-events > li.is-unknown {
+  opacity: 0.72;
+}
+
+.aw-stream-meta {
+  margin-top: 6px;
+  padding-left: 24px;
+}
+
+.aw-stream-meta > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  list-style: none;
+}
+
+.aw-stream-meta > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-stream-meta[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-stream-meta > summary span {
+  font-size: 11px;
+}
+
+.aw-artifacts {
+  padding: 12px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel-soft);
+}
+
+.aw-artifacts-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+.aw-artifacts-head em {
+  margin-left: auto;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.aw-artifacts-empty {
+  margin: 10px 0 2px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-artifacts ul {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-artifacts li + li {
+  margin-top: 4px;
+}
+
+.aw-artifacts button {
+  display: block;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--aw-radius-sm);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--aw-transition), border-color var(--aw-transition);
+}
+
+.aw-artifacts button:hover {
+  border-color: var(--aw-border);
+  background: var(--aw-panel);
+}
+
+.aw-artifacts button strong {
+  display: block;
+  overflow: hidden;
+  color: var(--aw-text);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-artifacts button small {
+  display: block;
+  margin-top: 2px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-work-fold-body {
+  margin-top: 10px;
+}
+
+.aw-task-objective-full {
+  margin: 0 0 10px;
+  color: var(--aw-text);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.aw-work-cancel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-work-cancel > label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
 }
 
 .aw-work-section {
@@ -1915,6 +3057,148 @@ pre {
   color: var(--aw-text-soft);
   font-size: 10px;
   white-space: pre-wrap;
+}
+
+/* An openable step. The whole heading is the control, so a reader does not
+   have to find a separate "details" link to see what a step did. */
+.aw-step > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.aw-step > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Never the element that shrinks. Letting the title absorb the squeeze in a
+   narrow detail pane broke it one character per line; the summary beside it
+   ellipses instead, and the row wraps before either has to. */
+.aw-step > summary > strong {
+  flex: none;
+  color: var(--aw-text);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.aw-step-caret {
+  flex: none;
+  color: var(--aw-text-muted);
+  transition: transform 120ms ease;
+}
+
+.aw-step[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+/* The one-line answer to "what happened here", so most steps need no opening. */
+.aw-step-summary {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1 1 90px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-step > summary > time {
+  margin-left: auto;
+  flex: none;
+  color: var(--aw-text-muted);
+  font-size: 9px;
+}
+
+.aw-step-body {
+  display: grid;
+  margin-top: 8px;
+  gap: 10px;
+}
+
+.aw-step-facts {
+  display: grid;
+  margin: 0;
+  gap: 6px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.aw-step-facts > div {
+  min-width: 0;
+}
+
+/* Identifiers and digests get the full row: wrapping one mid-token across a
+   narrow column makes it unreadable and unusable for copying. */
+.aw-step-facts > div.is-wide {
+  grid-column: 1 / -1;
+}
+
+.aw-step-facts dt {
+  margin-bottom: 1px;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-step-facts dd {
+  margin: 0;
+  color: var(--aw-text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.aw-step-output {
+  margin: 0;
+}
+
+.aw-step-output figcaption {
+  margin-bottom: 4px;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-step-pre {
+  max-height: 340px;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+/* Model prose wraps; JSON keeps its indentation and scrolls instead, because
+   re-wrapping a structure destroys the shape that made it worth showing. */
+.aw-step-pre.is-json {
+  white-space: pre;
+}
+
+.aw-step-artifact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-step-artifact > span {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.aw-step-artifact strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.aw-step-artifact small {
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-step-raw > summary {
+  color: var(--aw-text-muted);
+  font-size: 10px;
 }
 
 .aw-markdown pre {
@@ -2167,7 +3451,7 @@ pre {
   }
 
   .aw-chat-composer-row {
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: 42px minmax(0, 1fr) 44px;
   }
 
   .aw-chat-kb-field {
@@ -2246,12 +3530,21 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .aw-evaluation-matrix {
+  .aw-evaluation-matrix,
+  .aw-eval-table {
     overflow-x: auto;
   }
 
   .aw-evaluation-row {
     min-width: 650px;
+  }
+
+  .aw-eval-row {
+    min-width: 680px;
+  }
+
+  .aw-eval-legend {
+    grid-template-columns: 1fr;
   }
 
   /* A selected Work becomes the mobile detail screen; Back returns to the
@@ -2320,4 +3613,65 @@ pre {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+.aw-approve-settled {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.aw-report-toggle {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 4px;
+  gap: 9px;
+  cursor: pointer;
+}
+
+/* `.aw-create-task input` sizes text fields, and without this the checkbox
+   inherits that 35px-tall, full-width box and squeezes its own label to
+   nothing. Every dimension it sets has to be undone here. */
+.aw-report-toggle input {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  flex: none;
+  margin-top: 2px;
+  padding: 0;
+}
+
+.aw-report-toggle > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.aw-report-toggle strong {
+  display: block;
+  color: var(--aw-text);
+  font-size: 12px;
+}
+
+.aw-report-toggle small {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.aw-result-retry {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.aw-result .aw-notice strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 13px;
+}
+
+.aw-result .aw-notice small {
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.65;
 }

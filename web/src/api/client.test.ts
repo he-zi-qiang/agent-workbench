@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiRequest, createTask, identityHeaders } from "./client";
+import { apiRequest, askChat, createTask, identityHeaders } from "./client";
 import type { PrincipalIdentity } from "./types";
 
 const identity: PrincipalIdentity = {
@@ -41,6 +41,39 @@ describe("apiRequest", () => {
     expect(new Headers(init?.headers).has("x-principal-scopes")).toBe(false);
   });
 
+  it("sends an explicit direct source without a knowledge base", async () => {
+    const response = {
+      answer: "Direct answer",
+      citations: [],
+      withheld: false,
+      grounded: false,
+      run_id: "run_1",
+      turn_id: "turn_1",
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify(response), { status: 200 }));
+
+    await askChat(
+      identity,
+      "ses_1",
+      {
+        question: "hello",
+        answerMode: "direct",
+        knowledgeBaseId: null,
+      },
+      "chat:direct",
+    );
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    if (typeof init?.body !== "string") throw new Error("request body was not JSON");
+    expect(JSON.parse(init.body)).toMatchObject({
+      answer_mode: "direct",
+      knowledge_base_id: null,
+      question: "hello",
+    });
+  });
+
   it("lets a task retry reuse the same idempotency key", async () => {
     const response = {
       task_id: "task_1",
@@ -55,7 +88,7 @@ describe("apiRequest", () => {
         Promise.resolve(new Response(JSON.stringify(response), { status: 201 })),
       );
 
-    const input = { objective: "research", maxRevisions: 2 };
+    const input = { objective: "research", maxRevisions: 2, wantsReport: false };
     await createTask(identity, input, "task:stable-attempt");
     await createTask(identity, input, "task:stable-attempt");
 

@@ -66,6 +66,7 @@ from agent_workbench.domain.events import (
     ToolStarted,
 )
 from agent_workbench.domain.policies import ExecutionContext, PolicyDecision
+from agent_workbench.domain.schema import bounded
 from agent_workbench.domain.tools import (
     ToolCall,
     ToolResult,
@@ -135,6 +136,7 @@ class ToolGateway:
         max_argument_bytes: int = DEFAULT_MAX_ARGUMENT_BYTES,
         max_policy_rounds: int = DEFAULT_MAX_POLICY_ROUNDS,
         policy_timeout_seconds: float = DEFAULT_POLICY_TIMEOUT_SECONDS,
+        record_step_inputs: bool = False,
     ) -> None:
         if max_policy_rounds < 1:
             raise ValueError("max_policy_rounds must be positive")
@@ -172,6 +174,9 @@ class ToolGateway:
         self._max_argument_bytes = max_argument_bytes
         self._max_policy_rounds = max_policy_rounds
         self._policy_timeout_seconds = policy_timeout_seconds
+        # ADR-019. Off unless a deployment opted in; the digest and byte count
+        # below are emitted either way, so nothing downstream depends on this.
+        self._record_step_inputs = record_step_inputs
 
     def advertise(self, names: Sequence[str]) -> tuple[ToolSpec, ...]:
         """Specifications for the tools a run may use.
@@ -200,6 +205,9 @@ class ToolGateway:
                 tool_name=call.tool_name,
                 argument_bytes=len(canonical.encode("utf-8")),
                 argument_sha256=argument_digest(call.arguments),
+                # The canonical form, so what the reader sees is the same string
+                # the digest was taken over rather than a re-serialization of it.
+                argument_preview=bounded(canonical) if self._record_step_inputs else "",
                 risk=self._risk_of(call),
             )
         )

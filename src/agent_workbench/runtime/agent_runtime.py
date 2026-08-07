@@ -57,6 +57,7 @@ from agent_workbench.domain.runs import (
     StopReason,
     TokenUsage,
 )
+from agent_workbench.domain.schema import BoundedText, bounded
 from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec, align_results
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
@@ -113,6 +114,34 @@ def _clip(text: str) -> str:
     if len(text) <= MAX_OUTPUT_TEXT:
         return text
     return text[: MAX_OUTPUT_TEXT - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
+
+
+def render_prompt(system_prompt: str, messages: Sequence[Message]) -> BoundedText:
+    """Flatten what is about to be sent to the model into something readable.
+
+    A transcript rather than the provider's wire format: the question this
+    answers is "what was the model looking at when it said that", and a reader
+    should not have to decode a vendor envelope to see it. Tool results are
+    included because they are the largest thing shaping a turn -- omitting them
+    would show a prompt that does not explain the answer.
+
+    Only called when ADR-019's `runtime.record_step_inputs` is on.
+    """
+
+    sections: list[str] = []
+    if system_prompt:
+        sections.append(f"[system]\n{system_prompt}")
+    for message in messages:
+        parts: list[str] = []
+        for block in message.content:
+            if block.kind == "text":
+                parts.append(block.text)
+            elif block.kind == "tool_use":
+                parts.append(f"→ 调用 {block.tool_name} #{block.tool_call_id}")
+            elif block.kind == "tool_result":
+                parts.append(f"← {block.tool_call_id} 返回\n{block.text}")
+        sections.append(f"[{message.role}]\n" + "\n".join(parts))
+    return bounded("\n\n".join(sections))
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +217,7 @@ class ClaudeLikeAgentRuntime:
         clock: Callable[[], datetime] | None = None,
         model_call_ids: Callable[[], str] | None = None,
         telemetry: Telemetry | None = None,
+        record_step_inputs: bool = False,
     ) -> None:
         self._model = model
         # Tools are reached only through the gateway: resolving, validating,
@@ -205,6 +235,10 @@ class ClaudeLikeAgentRuntime:
         self._model_call_ids = (
             model_call_ids if model_call_ids is not None else new_model_call_id
         )
+        # ADR-019. Puts the prompt on the run's own event stream when a
+        # deployment asked for it. Independent of `telemetry`, which never
+        # carries a body.
+        self._record_step_inputs = record_step_inputs
         # Defaults to recording nothing. A deployment without a collector is
         # not a deployment that behaves differently, so this is the absence of
         # one rather than a degraded mode.
@@ -419,6 +453,11 @@ class ClaudeLikeAgentRuntime:
                 model_call_id=model_call_id,
                 model_profile=request.model_profile,
                 model_id=self._model_label,
+                prompt_preview=(
+                    render_prompt(request.system_prompt, ledger.messages)
+                    if self._record_step_inputs
+                    else ""
+                ),
             )
         )
 

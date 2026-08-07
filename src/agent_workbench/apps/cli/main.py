@@ -23,6 +23,7 @@ from agent_workbench.apps.cli.commands import (
     run_approval,
     run_artifact,
     run_chat,
+    run_repl,
     run_search,
 )
 from agent_workbench.apps.cli.demo import (
@@ -50,6 +51,7 @@ HTTP_COMMANDS: dict[str, Callable[..., int]] = {
     "task": run_task,
     "search": run_search,
     "chat": run_chat,
+    "repl": run_repl,
     "approval": run_approval,
     "artifact": run_artifact,
 }
@@ -247,6 +249,30 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--knowledge-base-id", required=True)
     search.add_argument("--top-k", type=int, default=8)
     search.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    repl = subcommands.add_parser(
+        "repl",
+        help="Keep a session open and watch each turn as it runs.",
+        description=(
+            "Reads questions from stdin and prints what the run is doing while "
+            "it does it, folded to one line per stage -- the same stages the "
+            "web console shows. `/task <objective>` runs a durable Task in the "
+            "same loop, including answering its approval; `/steps` opens the "
+            "last turn and shows every event behind those lines."
+        ),
+    )
+    _add_endpoint(repl)
+    repl.add_argument(
+        "--knowledge-base-id",
+        default=None,
+        help="Answer from this corpus. Omit for free conversation; /kb switches.",
+    )
+    repl.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Write no escape sequences, even to a terminal.",
+    )
+    repl.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
 
     chat = subcommands.add_parser(
         "chat",

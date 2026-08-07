@@ -11,6 +11,7 @@ import {
 const SESSION: LocalChatSession = {
   sessionId: "ses_1",
   title: "Local chat",
+  answerMode: "rag",
   knowledgeBaseId: "kb_main",
   createdAt: "2026-08-02T12:00:00Z",
   updatedAt: "2026-08-02T12:00:00Z",
@@ -23,6 +24,7 @@ function submitted(): ChatState {
       localId: "local_1",
       sessionId: SESSION.sessionId,
       question: "What changed?",
+      answerMode: "rag",
       knowledgeBaseId: SESSION.knowledgeBaseId,
       topK: 8,
       idempotencyKey: "chat:stable-key",
@@ -78,6 +80,7 @@ describe("chat state machine", () => {
         answer: "Answer for the current question",
         citations: [],
         withheld: false,
+        grounded: true,
         run_id: "run_current",
         turn_id: "turn_current",
       },
@@ -112,6 +115,7 @@ describe("chat state machine", () => {
         answer: "Current response",
         citations: [],
         withheld: false,
+        grounded: true,
         run_id: "run_current",
         turn_id: "turn_current",
       },
@@ -162,6 +166,45 @@ describe("chat state machine", () => {
     expect(state.turns.local_1?.activities.at(-1)?.detail).toBe("7 tokens · stop");
   });
 
+  it("keeps the prompt on an openable step while still dropping the candidate", () => {
+    let state = reduceChatFrame(
+      submitted(),
+      SESSION.sessionId,
+      frame("RunStarted", 1),
+    ).state;
+    state = chatReducer(state, {
+      type: "runBound",
+      localId: "local_1",
+      runId: "run_1",
+    });
+    state = reduceChatFrame(
+      state,
+      SESSION.sessionId,
+      frame("ModelStarted", 2, {
+        model_call_id: "model_1",
+        model_profile: "main",
+        model_id: "deepseek-chat",
+        prompt_preview: "[system]\nAnswer from the evidence.\n\n[user]\nWhat changed?",
+      }),
+    ).state;
+    state = reduceChatFrame(
+      state,
+      SESSION.sessionId,
+      frame("ModelCompleted", 3, {
+        model_call_id: "model_1",
+        finish_reason: "stop",
+        usage: { input_tokens: 3, output_tokens: 4 },
+        text: "PRIVATE CANDIDATE THAT FAILED THE RELEASE FENCE",
+      }),
+    ).state;
+
+    const serialized = JSON.stringify(state);
+    // What the model was given survives, so a step can be opened and read.
+    expect(serialized).toContain("Answer from the evidence.");
+    // What the model produced does not, until the fence publishes it.
+    expect(serialized).not.toContain("PRIVATE CANDIDATE");
+  });
+
   it("holds an orphan terminal event and replays it after the HTTP run binding", () => {
     const terminal = frame("AnswerCommitted", 1, {
       text: "Checked answer",
@@ -203,6 +246,7 @@ describe("chat state machine", () => {
         answer: "Released by the HTTP publication path",
         citations: [],
         withheld: false,
+        grounded: true,
         run_id: "run_1",
         turn_id: "turn_1",
       },
@@ -227,6 +271,7 @@ describe("chat state machine", () => {
           },
         ],
         withheld: false,
+        grounded: true,
         run_id: "run_1",
         turn_id: "turn_1",
       },

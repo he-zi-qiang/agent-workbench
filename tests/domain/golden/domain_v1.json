@@ -333,13 +333,15 @@
     },
     "revision_count": 0,
     "schema_version": 1,
-    "task_id": "task_0000000000000000000000000000001"
+    "task_id": "task_0000000000000000000000000000001",
+    "wants_report": true
   },
   "TaskInput": {
     "knowledge_base_id": "kb_main",
     "max_revisions": 3,
     "objective": "Produce a verified retrieval architecture brief.",
-    "schema_version": 1
+    "schema_version": 1,
+    "wants_report": false
   },
   "ToolCall": {
     "arguments": {

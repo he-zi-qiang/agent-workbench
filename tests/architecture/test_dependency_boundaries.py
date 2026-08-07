@@ -68,6 +68,38 @@ OUTER_PROJECT_IMPORTS = frozenset(
     f"agent_workbench.{package}" for package in OUTER_BOUNDARY_PACKAGES
 )
 
+# The LlamaIndex roles ADR-017 declares off, enforced where they cannot be
+# forgotten. `rag.llama_index` carries three single-valued `Literal[False]`
+# fields saying this project does not use LlamaIndex's agent executor, does not
+# let a QueryEngine produce the final answer, and does not fuse a second time.
+# A process-side check on those fields could only compare a constant against
+# itself. This is the check that can actually fail: the machinery is absent
+# because it is never imported, anywhere in the source tree -- adapters
+# included, since the adapter layer is exactly where somebody would reach for
+# it.
+#
+# The tool loop has one owner and the answer has one author. A LlamaIndex agent
+# would be a second runtime with its own step budget, its own tool protocol and
+# no route through this project's Policy or audit pipeline; a QueryEngine or
+# response synthesizer would generate the answer inside retrieval, downstream
+# of the ACL check but upstream of the publish fence -- which is to say, text
+# reaching a reader by a path the release gate never sees.
+FORBIDDEN_LLAMA_INDEX_MODULES = frozenset(
+    {
+        "llama_index.core.agent",
+        "llama_index.core.chat_engine",
+        "llama_index.core.query_engine",
+        "llama_index.core.response_synthesizers",
+        "llama_index.core.query_pipeline",
+    }
+)
+
+# The same two roles reached by method call rather than import. `as_query_engine`
+# and `as_chat_engine` hang off the VectorStoreIndex this project *does* build,
+# so no new import is needed to summon either -- which makes the import guard
+# above insufficient on its own.
+FORBIDDEN_LLAMA_INDEX_ATTRIBUTES = frozenset({"as_query_engine", "as_chat_engine"})
+
 # Raw source loading belongs to bootstrap.  Process entry points may eventually
 # call the public bootstrap.load_settings() facade, but must not depend on these
 # implementation modules or source libraries.
@@ -317,6 +349,77 @@ def test_core_keeps_frameworks_and_concrete_sdks_at_outer_boundaries() -> None:
         "integration behind an adapter:\n"
         f"{_format_import_violations(violations)}"
     )
+
+
+def test_no_module_reaches_for_llamaindex_s_agent_or_query_engine() -> None:
+    """ADR-017's "adapter, not executor" line, made structural.
+
+    Scans the whole product tree rather than the core, deliberately. Core is
+    already forbidden from importing ``llama_index`` at all; the layer that can
+    do this is the adapter layer, which is allowed the framework and is
+    therefore the only place the mistake is available.
+    """
+
+    product_files = _product_python_files()
+    assert product_files, "product source discovery must not be vacuous"
+
+    violations = [
+        (file, reference)
+        for file in product_files
+        for reference in _import_references(file)
+        if _matches_module(reference.module, FORBIDDEN_LLAMA_INDEX_MODULES)
+    ]
+
+    assert not violations, (
+        "a module imports LlamaIndex's agent or answer-generating machinery; "
+        "ADR-017 gives the tool loop and the final answer to this project:\n"
+        f"{_format_import_violations(violations)}"
+    )
+
+
+def test_no_module_turns_the_index_into_a_query_or_chat_engine() -> None:
+    """The same two roles, reached by method call instead of by import.
+
+    Without this the guard above would be satisfied by a module that imports
+    nothing new and simply calls ``.as_query_engine()`` on the index this
+    project already builds.
+    """
+
+    violations: list[SourceReference] = []
+    for file in _product_python_files():
+        tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr in FORBIDDEN_LLAMA_INDEX_ATTRIBUTES
+            ):
+                violations.append(
+                    SourceReference(file=file, line=node.lineno, expression=node.attr)
+                )
+
+    assert not violations, (
+        "a module asks LlamaIndex to answer rather than to retrieve:\n"
+        f"{_format_source_violations(violations)}"
+    )
+
+
+def test_the_retriever_this_project_does_build_is_still_reachable() -> None:
+    """The control for both guards above.
+
+    Two rules that only ever say no are satisfied by a tree with no LlamaIndex
+    in it at all -- which is also what they would look like if the adapter were
+    deleted tomorrow. This asserts the permitted call is present, so the pair
+    describes a boundary rather than an absence.
+    """
+
+    retriever = PACKAGE_ROOT / "adapters" / "llama_index" / "retriever.py"
+    tree = ast.parse(retriever.read_text(encoding="utf-8"), filename=str(retriever))
+    attributes = {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    }
+
+    assert "as_retriever" in attributes
+    assert not attributes & FORBIDDEN_LLAMA_INDEX_ATTRIBUTES
 
 
 def test_core_does_not_reverse_depend_on_outer_project_layers() -> None:

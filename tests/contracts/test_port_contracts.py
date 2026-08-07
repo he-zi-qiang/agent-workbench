@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import json
 import pkgutil
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -31,8 +32,15 @@ from agent_workbench.ports.conversation_store import (
     StoredMessage,
 )
 from agent_workbench.ports.documents import Document, DocumentVersion, UploadIntent
+from agent_workbench.ports.knowledge_bases import (
+    KnowledgeBaseRecord,
+    KnowledgeBaseSummary,
+    KnowledgeDocument,
+)
 from agent_workbench.ports.model import ModelRequest
 from agent_workbench.ports.outbox import OutboxEvent
+
+SAMPLE_TIMESTAMP = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
 
 COMPLETED_OUTCOME = AgentOutcome(
     agent_run_id="run_0000000000000000000000000000001",
@@ -69,6 +77,36 @@ STORED_TURN = StoredChatTurn(
 )
 
 SAMPLES: dict[str, VersionedModel] = {
+    "KnowledgeBaseRecord": KnowledgeBaseRecord(
+        knowledge_base_id="kb_0000000000000000000000000000001",
+        tenant_id="tenant_demo",
+        owner_id="user_demo",
+        name="Research notes",
+        description="Papers and experiment results.",
+        created_at=SAMPLE_TIMESTAMP,
+        updated_at=SAMPLE_TIMESTAMP,
+    ),
+    "KnowledgeBaseSummary": KnowledgeBaseSummary(
+        knowledge_base_id="kb_0000000000000000000000000000001",
+        name="Research notes",
+        description="Papers and experiment results.",
+        document_count=2,
+        ready_document_count=1,
+        processing_document_count=1,
+        created_at=SAMPLE_TIMESTAMP,
+        updated_at=SAMPLE_TIMESTAMP,
+    ),
+    "KnowledgeDocument": KnowledgeDocument(
+        document_id="doc_0000000000000000000000000000001",
+        filename="research-report.pdf",
+        media_type="application/pdf",
+        size_bytes=2048,
+        source_revision=3,
+        last_applied_revision=3,
+        status="ready",
+        created_at=SAMPLE_TIMESTAMP,
+        updated_at=SAMPLE_TIMESTAMP,
+    ),
     "ChatTurnClaim": ChatTurnClaim(
         turn=STORED_TURN,
         newly_claimed=False,

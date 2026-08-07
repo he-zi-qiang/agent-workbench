@@ -25,6 +25,9 @@ from pydantic import SecretStr
 from agent_workbench.adapters.tools.export_artifact import (
     TOOL_NAME as EXPORT_ARTIFACT_TOOL,
 )
+from agent_workbench.adapters.tools.external_search import (
+    TOOL_NAME as EXTERNAL_SEARCH_TOOL,
+)
 from agent_workbench.bootstrap.settings import Settings
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import AuthorizationEnvelope
@@ -50,6 +53,39 @@ TASK_V1_AUTHORIZATION_ENVELOPE = AuthorizationEnvelope(
     max_tool_risk="write",
     approval_required_risks=(),
 )
+
+#: The same ceiling with external search added, for deployments that configured
+#: a provider (ADR-020).
+#:
+#: Both changes are required together: ``external_search`` has to be in the
+#: allowlist *and* ``max_tool_risk`` has to reach "external", because
+#: ``risk_within`` ranks external above write. Raising only one of them produces
+#: an envelope that still denies the tool, which reads as a bug rather than as
+#: a policy.
+#:
+#: ``approval_required_risks`` stays empty for the reason above: the human gate
+#: is the graph's approval node, and a tool-boundary gate the gateway can only
+#: answer with "no" is not a gate.
+TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH = AuthorizationEnvelope(
+    allowed_tools=(EXPORT_ARTIFACT_TOOL, EXTERNAL_SEARCH_TOOL),
+    max_tool_risk="external",
+    approval_required_risks=(),
+)
+
+
+def task_authorization_envelope(*, external_search: bool) -> AuthorizationEnvelope:
+    """Pick the ceiling this deployment submits Tasks under.
+
+    Chosen from configuration rather than fixed, because the envelope is stored
+    with the Task and re-applied on every resume: a deployment that never turned
+    external search on must not have its historical Tasks widened by an upgrade.
+    """
+
+    return (
+        TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH
+        if external_search
+        else TASK_V1_AUTHORIZATION_ENVELOPE
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +198,21 @@ class RetrievalConfig:
     chunk_size_tokens: int
     chunk_overlap_tokens: int
     answer_context_k: int
+    #: Whether candidates come from the LlamaIndex retriever (ADR-017) or from
+    #: the reference path it is replacing. The only one of ``rag.llama_index``'s
+    #: five fields projected here, because it is the only one that selects
+    #: anything.
+    #:
+    #: ``role``, ``agent_executor_enabled``, ``query_engine_generates_final_answer``
+    #: and ``fusion_enabled`` stay in settings unprojected on purpose. All four
+    #: are single-valued ``Literal``s, so a process-side check on them could
+    #: only ever compare a constant against itself -- it would read like
+    #: enforcement while being unable to fail. What actually holds them is
+    #: structural: the architecture guard refuses an adapter that imports
+    #: LlamaIndex's agent or query-engine machinery at all, and the retriever's
+    #: contract test pins the index's own ordering, which is what a second
+    #: fusion would have to disturb.
+    llama_index_enabled: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,9 +237,10 @@ class ChatRecoveryConfig:
 class ChatConfig:
     """Which shape answers a chat turn, and what bounds it if it may loop."""
 
-    retrieval_shape: Literal["fixed", "agentic"]
+    retrieval_shape: Literal["fixed", "agentic", "ungrounded", "routed"]
     max_agentic_steps: int
     max_agentic_searches: int
+    routed_relevance_threshold: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +295,9 @@ class AgentRuntimeConfig:
     max_tool_calls: int
     model_timeout_seconds: float
     max_parallel_read_tools: int
+    # ADR-019. Projected rather than read from settings inside the runtime,
+    # because the runtime is framework-neutral and does not import settings.
+    record_step_inputs: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +324,25 @@ class MultiAgentConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ResearchConfig:
+    """What it takes to build the external-search provider (ADR-020).
+
+    Absent when the deployment did not enable it, which is the same condition
+    that keeps `external_search` out of the authorization envelope -- so a
+    Worker never holds a provider the envelope would refuse to let it use.
+    """
+
+    provider: Literal["deepseek"]
+    base_url: str
+    model_id: str
+    max_uses: int
+    timeout_seconds: int
+    #: The model provider's own key. Search runs on the provider's side through
+    #: its Anthropic-compatible endpoint, so there is no second credential.
+    api_key: SecretStr
+
+
+@dataclass(frozen=True, slots=True)
 class TaskWorkerRuntimeConfig:
     """The minimum configuration of the current single-Worker process.
 
@@ -291,6 +365,7 @@ class TaskWorkerRuntimeConfig:
     retrieval: RetrievalConfig | None = None
     runtime: AgentRuntimeConfig | None = None
     multi_agent: MultiAgentConfig | None = None
+    research: ResearchConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,6 +409,11 @@ class ApiRuntimeConfig:
     chat: ChatConfig
     task: TaskConfig
     observability: ObservabilityConfig
+    # ADR-019. The API runs the chat loop, so it needs the same switch the Task
+    # Worker gets through AgentRuntimeConfig. Flat rather than nested under
+    # `chat`, because it is one setting governing every runtime this deployment
+    # builds, and two names for it would drift.
+    record_step_inputs: bool = False
 
 
 def project_observability(settings: Settings) -> ObservabilityConfig:
@@ -362,7 +442,9 @@ def project_task(settings: Settings) -> TaskConfig:
         run_semantics_revision=settings.task_run_semantics_revision(),
         policy_revision=settings.policy.revision,
         policy_fingerprint=settings.policy_fingerprint(),
-        default_authorization_envelope=TASK_V1_AUTHORIZATION_ENVELOPE,
+        default_authorization_envelope=task_authorization_envelope(
+            external_search=settings.research.enabled
+        ),
     )
 
 
@@ -419,12 +501,14 @@ def project_task_worker(
             chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
             answer_context_k=settings.rag.retrieval.answer_context_k,
+            llama_index_enabled=settings.rag.llama_index.enabled,
         ),
         runtime=AgentRuntimeConfig(
             max_steps=settings.runtime.max_steps,
             max_tool_calls=settings.runtime.max_tool_calls,
             model_timeout_seconds=float(settings.runtime.model_timeout_seconds),
             max_parallel_read_tools=settings.runtime.max_parallel_read_tools,
+            record_step_inputs=settings.runtime.record_step_inputs,
         ),
         multi_agent=MultiAgentConfig(
             static_agent_node_limit=settings.multi_agent.static_agent_node_limit,
@@ -435,6 +519,26 @@ def project_task_worker(
                 settings.multi_agent.max_tokens_per_agent_invocation
             ),
         ),
+        research=_project_research(settings),
+    )
+
+
+def _project_research(settings: Settings) -> ResearchConfig | None:
+    """The search provider, or nothing when this deployment did not enable one.
+
+    Settings has already refused `research.enabled` without a key, so the
+    assertion here is about the projection being total, not a second check.
+    """
+
+    if not settings.research.enabled or settings.secrets.deepseek_api_key is None:
+        return None
+    return ResearchConfig(
+        provider=settings.research.provider,
+        base_url=settings.research.base_url,
+        model_id=settings.research.model_id,
+        max_uses=settings.research.max_uses,
+        timeout_seconds=settings.research.timeout_seconds,
+        api_key=settings.secrets.deepseek_api_key,
     )
 
 
@@ -511,6 +615,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         shutdown_grace_seconds=settings.api.shutdown_grace_seconds,
         sse_heartbeat_seconds=settings.api.sse_heartbeat_seconds,
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
+        record_step_inputs=settings.runtime.record_step_inputs,
         database=DatabaseConfig(
             dsn=settings.database.dsn,
             application_name=settings.database.application_name,
@@ -559,11 +664,13 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
             answer_context_k=settings.rag.retrieval.answer_context_k,
+            llama_index_enabled=settings.rag.llama_index.enabled,
         ),
         chat=ChatConfig(
             retrieval_shape=settings.chat.retrieval_shape,
             max_agentic_steps=settings.chat.max_agentic_steps,
             max_agentic_searches=settings.chat.max_agentic_searches,
+            routed_relevance_threshold=settings.chat.routed_relevance_threshold,
         ),
         chat_recovery=ChatRecoveryConfig(
             orphan_grace_seconds=settings.chat.orphan_grace_seconds,

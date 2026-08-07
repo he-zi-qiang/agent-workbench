@@ -92,6 +92,31 @@ describe("useTaskTimeline", () => {
     await waitFor(() => expect(getTaskTimeline).toHaveBeenCalledTimes(4));
   });
 
+  it("stops on a final event even while the caller still says the task is running", async () => {
+    // The caller's `pollingEnabled` comes from a React Query that pauses
+    // itself while `document.hidden`, so a backgrounded tab leaves it stuck at
+    // "running" forever. This hook's own interval does not pause, so without
+    // stopping on what it fetched it would poll a finished Task indefinitely.
+    vi.mocked(getTaskTimeline)
+      .mockResolvedValueOnce(
+        timeline(
+          "task_bg",
+          [envelope("event_done", "TaskSucceeded", "task_bg")],
+          "cursor_done",
+        ),
+      )
+      .mockResolvedValue(timeline("task_bg", [], "cursor_done"));
+
+    render(<Probe intervalMs={10} pollingEnabled taskId="task_bg" />);
+    await waitFor(() => expect(getTaskTimeline).toHaveBeenCalledTimes(1));
+
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+
+    expect(getTaskTimeline).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "refresh timeline" }));
+    await waitFor(() => expect(getTaskTimeline).toHaveBeenCalledTimes(2));
+  });
+
   it("queues a forced refresh when the previous incremental request is active", async () => {
     let resolveFirst: ((response: TaskTimelineResponse) => void) | undefined;
     vi.mocked(getTaskTimeline)

@@ -8,11 +8,19 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from agent_workbench.adapters.tools.external_search import SPEC as EXTERNAL_SEARCH_SPEC
+from agent_workbench.adapters.tools.external_search import (
+    TOOL_NAME as EXTERNAL_SEARCH_TOOL,
+)
 from agent_workbench.bootstrap import settings as settings_module
 from agent_workbench.bootstrap.paths import (
     DEFAULT_CONFIG_FILE,
     PROJECT_ROOT,
     TEST_CONFIG_FILE,
+)
+from agent_workbench.bootstrap.projections import (
+    TASK_V1_AUTHORIZATION_ENVELOPE,
+    task_authorization_envelope,
 )
 from agent_workbench.bootstrap.settings import Settings, load_settings
 
@@ -784,6 +792,73 @@ def test_production_requires_a_real_provider_key() -> None:
 
 
 def test_the_configuration_schema_version_is_pinned() -> None:
-    """Adding a provider changed the contract, so the schema version moved."""
+    """Adding a provider changed the contract, so the schema version moved.
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.2"
+    1.2 -> 1.3 is ADR-018: ``chat.retrieval_shape`` gained a third value.
+    1.3 -> 1.4 is ADR-019: ``runtime.record_step_inputs`` lets a deployment put
+    the prompt and the proposed tool arguments on its own event stream, which
+    changes what it stores about its users.
+
+    The pin exists so widening a frozen Literal cannot happen quietly -- this
+    test failing *is* the mechanism, and updating it is the last step of the
+    decision rather than a chore around it.
+    """
+
+    assert Settings(**valid_payload()).app.config_schema_version == "1.5"
+
+
+def test_external_search_stays_outside_the_task_envelope_by_default() -> None:
+    """The default is load-bearing, not merely cautious.
+
+    The envelope is stored with each Task and re-applied on every resume, so a
+    deployment that never configured a provider must not have its historical
+    Tasks widened by an upgrade (ADR-020).
+    """
+
+    envelope = task_authorization_envelope(external_search=False)
+
+    assert envelope == TASK_V1_AUTHORIZATION_ENVELOPE
+    assert EXTERNAL_SEARCH_TOOL not in envelope.allowed_tools
+    assert not envelope.permits(EXTERNAL_SEARCH_SPEC)
+
+
+def test_enabling_search_grants_both_halves_of_the_permission() -> None:
+    """Allowlist and risk ceiling together, or the tool is still refused.
+
+    `risk_within` ranks external above write, so raising only one of the two
+    produces an envelope that denies the tool while looking like it allows it.
+    """
+
+    envelope = task_authorization_envelope(external_search=True)
+
+    assert EXTERNAL_SEARCH_TOOL in envelope.allowed_tools
+    assert envelope.max_tool_risk == "external"
+    assert envelope.permits(EXTERNAL_SEARCH_SPEC)
+    # The human gate stays at the graph's approval node, not the tool boundary.
+    assert envelope.approval_required_risks == ()
+
+
+def test_research_enabled_without_a_provider_key_is_refused_at_startup() -> None:
+    """Enabled-but-unconfigured has to fail at startup, not at the first search.
+
+    Search runs on the model provider's side under its key, so there is no
+    second credential to check -- but "enabled with no key at all" still reads
+    as working web search in the config file, and that is the defect.
+    """
+
+    payload = valid_payload()
+    payload["research"] = {"enabled": True}
+    payload["secrets"] = {}
+
+    with pytest.raises(ValidationError, match="provider API key"):
+        Settings(**payload)
+
+
+def test_research_needs_no_credential_beyond_the_provider_s_own() -> None:
+    payload = valid_payload()
+    payload["research"] = {"enabled": True}
+
+    settings = Settings(**payload)
+
+    assert settings.research.enabled
+    assert settings.research.base_url == "https://api.deepseek.com/anthropic"

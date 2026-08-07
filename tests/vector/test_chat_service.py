@@ -34,10 +34,14 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
+from agent_workbench.adapters.retrieval import ReferenceVectorIndexRetriever
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.chat import REFUSAL, ChatRequest, ChatService
-from agent_workbench.application.chat_execution import FixedTwoStepExecution
+from agent_workbench.application.chat_execution import (
+    FixedTwoStepExecution,
+    UngroundedExecution,
+)
 from agent_workbench.application.chunking import Chunker
 from agent_workbench.application.ingestion import IngestionRequest, IngestionService
 from agent_workbench.application.retrieval import RetrievalService
@@ -120,7 +124,10 @@ class _Harness:
         return ChatService(
             execution=FixedTwoStepExecution(
                 retrieval=RetrievalService(
-                    embedder=self.embedder, index=self.index, documents=self.documents
+                    candidate_retriever=ReferenceVectorIndexRetriever(
+                        embedder=self.embedder, index=self.index
+                    ),
+                    documents=self.documents,
                 ),
                 executor=ClaudeLikeAgentRuntime(
                     model=FakeModel(
@@ -716,3 +723,84 @@ class _BarrierChatRelease(PostgresChatReleaseCoordinator):
     async def _after_authorization_locked(self) -> None:
         self.authorization_locked.set()
         await self.continue_release.wait()
+
+
+# --- which terminal event the release writes (ADR-018) -----------------------
+
+
+def _released_kinds(harness: _Harness, events: Any) -> list[str]:
+    answer_kinds = {
+        "AnswerCommitted",
+        "UngroundedAnswerCommitted",
+        "AnswerWithheld",
+    }
+    return [e.payload.kind for e in events if e.payload.kind in answer_kinds]
+
+
+def test_a_grounded_turn_commits_a_grounded_answer_event() -> None:
+    """The control for the ungrounded case below.
+
+    Without it, a coordinator that wrote UngroundedAnswerCommitted for every
+    turn would satisfy that test and silently mark every verified answer in the
+    audit log as unverified.
+    """
+
+    async def scenario(harness: _Harness) -> list[str]:
+        await harness.publish(granted=(READER,))
+        await harness.open_session(READER)
+        request = _ask(harness, READER)
+        await harness.chat().ask(request, harness.sink(request))
+        events = await harness.log.read(harness.session_id, limit=1000)
+        return _released_kinds(harness, events)
+
+    assert _run(scenario) == ["AnswerCommitted"]
+
+
+def test_an_ungrounded_turn_commits_its_own_event() -> None:
+    """The distinction ADR-018 exists for, asserted where it becomes durable.
+
+    A sabotage round removed the coordinator's `grounded` branch entirely and
+    no test failed: the event choice was the one load-bearing step in the
+    ungrounded path that nothing covered. An auditor reading the log could not
+    have told a verified answer from an unverified one, which is the single
+    thing the separate event type is for.
+    """
+
+    async def scenario(harness: _Harness) -> tuple[list[str], int]:
+        await harness.publish(granted=(READER,))
+        await harness.open_session(READER)
+        request = _ask(harness, READER)
+        service = ChatService(
+            execution=UngroundedExecution(
+                executor=ClaudeLikeAgentRuntime(
+                    model=FakeModel(
+                        [
+                            ScriptedTurn(
+                                text=ANSWER,
+                                usage=TokenUsage(input_tokens=10, output_tokens=5),
+                            )
+                        ]
+                    ),
+                    gateway=ToolGateway(
+                        registry=StaticToolRegistry([]),
+                        policy=EnvelopePolicyEngine(registry=StaticToolRegistry([])),
+                    ),
+                    policy_identity="test-policy",
+                ),
+                budget=RunBudget(max_steps=1, max_tool_calls=1),
+            ),
+            conversations=harness.conversations,
+            releaser=PostgresChatReleaseCoordinator(harness.engine),
+            request_timeout_seconds=30,
+            orphan_grace_seconds=5,
+        )
+        turn = await service.ask(request, harness.sink(request))
+        events = await harness.log.read(harness.session_id, limit=1000)
+        return _released_kinds(harness, events), len(turn.citations)
+
+    kinds, citations = _run(scenario)
+
+    assert kinds == ["UngroundedAnswerCommitted"]
+    # And it offers nothing to check, which is the honest output rather than a
+    # gap: there was no packet for a citation to point into.
+    assert citations == 0

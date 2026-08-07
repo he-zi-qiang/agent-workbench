@@ -30,6 +30,7 @@ from agent_workbench.adapters.reranking import (
     MiscountingReranker,
     SlowReranker,
 )
+from agent_workbench.adapters.retrieval import ReferenceVectorIndexRetriever
 from agent_workbench.application.retrieval import (
     RetrievalRequest,
     RetrievalService,
@@ -129,9 +130,17 @@ class StubDocuments:
 
 
 def service(**overrides: object) -> RetrievalService:
+    # The reference retriever rather than the LlamaIndex one, deliberately.
+    # Everything measured in this file happens *after* candidates arrive --
+    # rerank ordering, the fail-open fallback, the cut to top_k -- so the
+    # retriever is a fixture here, not a variable. Which retriever proposed
+    # them is covered where it can actually differ: the contract suite in
+    # tests/vector/test_authorized_retrieval.py runs against both.
     defaults: dict[str, object] = {
-        "embedder": StubEmbedder(),
-        "index": StubIndex(),
+        "candidate_retriever": ReferenceVectorIndexRetriever(
+            embedder=StubEmbedder(),
+            index=StubIndex(),
+        ),
         "documents": StubDocuments(),
     }
     defaults.update(overrides)

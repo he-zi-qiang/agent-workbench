@@ -95,7 +95,8 @@
       "fields": [
         "chat.retrieval_shape",
         "chat.max_agentic_steps",
-        "chat.max_agentic_searches"
+        "chat.max_agentic_searches",
+        "chat.routed_relevance_threshold"
       ]
     },
     {
@@ -285,7 +286,8 @@
         "runtime.cancellation_poll_seconds",
         "runtime.context_soft_limit_ratio",
         "runtime.tool_result_artifact_threshold_bytes",
-        "runtime.write_tools_default_enabled"
+        "runtime.write_tools_default_enabled",
+        "runtime.record_step_inputs"
       ]
     },
     {
@@ -486,6 +488,18 @@
         "policy.max_tool_argument_bytes",
         "policy.max_tool_result_bytes",
         "policy.redact_secrets"
+      ]
+    },
+    {
+      "owner": "adapters.research.deepseek_web_search",
+      "lifecycle": "startup",
+      "fields": [
+        "research.enabled",
+        "research.provider",
+        "research.base_url",
+        "research.model_id",
+        "research.max_uses",
+        "research.timeout_seconds"
       ]
     },
     {

@@ -8,6 +8,9 @@ import type {
   DocumentVersion,
   HealthResponse,
   HistoryResponse,
+  KnowledgeBaseListResponse,
+  KnowledgeBaseView,
+  KnowledgeDocumentListResponse,
   PrincipalIdentity,
   SearchResponse,
   TaskListResponse,
@@ -114,7 +117,12 @@ export async function getChatHistory(
 export async function askChat(
   identity: PrincipalIdentity,
   sessionId: string,
-  input: { question: string; knowledgeBaseId: string; topK?: number },
+  input: {
+    question: string;
+    answerMode: "direct" | "rag";
+    knowledgeBaseId: string | null;
+    topK?: number;
+  },
   idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<AskResponse> {
@@ -123,11 +131,56 @@ export async function askChat(
     headers: { "Idempotency-Key": idempotencyKey },
     body: {
       question: input.question,
+      answer_mode: input.answerMode,
       knowledge_base_id: input.knowledgeBaseId,
       top_k: input.topK ?? 8,
     },
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+export async function listKnowledgeBases(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<KnowledgeBaseListResponse> {
+  return apiRequest(identity, "/v1/knowledge-bases", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function createKnowledgeBase(
+  identity: PrincipalIdentity,
+  input: { name: string; description?: string },
+): Promise<KnowledgeBaseView> {
+  return apiRequest(identity, "/v1/knowledge-bases", {
+    method: "POST",
+    body: {
+      name: input.name,
+      description: input.description?.trim() || null,
+    },
+  });
+}
+
+export async function getKnowledgeBase(
+  identity: PrincipalIdentity,
+  knowledgeBaseId: string,
+): Promise<KnowledgeBaseView> {
+  return apiRequest(
+    identity,
+    `/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`,
+  );
+}
+
+export async function listKnowledgeBaseDocuments(
+  identity: PrincipalIdentity,
+  knowledgeBaseId: string,
+  signal?: AbortSignal,
+): Promise<KnowledgeDocumentListResponse> {
+  return apiRequest(
+    identity,
+    `/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents`,
+    { ...(signal === undefined ? {} : { signal }) },
+  );
 }
 
 export async function listTasks(
@@ -149,7 +202,12 @@ export async function getTask(
 
 export async function createTask(
   identity: PrincipalIdentity,
-  input: { objective: string; maxRevisions: number; knowledgeBaseId?: string },
+  input: {
+    objective: string;
+    maxRevisions: number;
+    knowledgeBaseId?: string;
+    wantsReport: boolean;
+  },
   idempotencyKey = newIdempotencyKey("task"),
 ): Promise<TaskView> {
   return apiRequest(identity, "/v1/tasks", {
@@ -158,6 +216,7 @@ export async function createTask(
     body: {
       objective: input.objective,
       max_revisions: input.maxRevisions,
+      wants_report: input.wantsReport,
       ...(input.knowledgeBaseId
         ? { knowledge_base_id: input.knowledgeBaseId }
         : {}),
@@ -315,6 +374,32 @@ export async function downloadArtifact(
   anchor.download = artifactId;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * An artifact's bytes as text, for showing a result instead of making the
+ * reader download it to find out what the Task produced.
+ *
+ * Bounded on the client because this renders into the page: the artifact store
+ * has its own ceiling, but "the server allowed it" is not the same question as
+ * "a browser should paint it". Over the limit the caller shows the download
+ * instead, which is what a large binary deserved anyway.
+ */
+export const MAX_PREVIEW_BYTES = 512 * 1024;
+
+export async function getArtifactText(
+  identity: PrincipalIdentity,
+  artifactId: string,
+): Promise<{ text: string; truncated: boolean }> {
+  const response = await fetch(`/v1/artifacts/${encodeURIComponent(artifactId)}`, {
+    headers: identityHeaders(identity),
+  });
+  if (!response.ok) throw await parseError(response);
+  const blob = await response.blob();
+  if (blob.size > MAX_PREVIEW_BYTES) {
+    return { text: await blob.slice(0, MAX_PREVIEW_BYTES).text(), truncated: true };
+  }
+  return { text: await blob.text(), truncated: false };
 }
 
 export async function getArtifactJson<T>(

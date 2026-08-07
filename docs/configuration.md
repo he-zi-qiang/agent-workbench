@@ -220,10 +220,19 @@ claim_batch_size <= min(worker_concurrency, guard_connection_budget)
 - 模型增量只有一个所有者：
   `event_stream.model_delta_mode="ephemeral_sse_coalesced"`；delta 只实时
   发送，不写 `run_events`；
-- Shell Tool、写工具和可观察正文默认关闭。
+- Shell Tool、写工具和导出到 telemetry 的正文默认关闭：
+  `observability.record_prompt_body` 与 `observability.record_tool_result_body`
+  是单值 `Literal[False]`，因为 OTel span 会离开这个系统、去到一个没有租户边界的
+  collector。
 
 这比“默认值写成 false”更强：错误的环境覆盖会让进程启动失败，而不是
 悄悄改变运行语义。
+
+**`runtime.record_step_inputs` 不在这张表里，它是一个真正的开关。**
+ADR-019 把提示词和工具参数写进**运行自己的事件流**——那条流按 tenant + owner
+鉴权，只有拥有这个 Task/Session 的 principal 读得到，和 `ModelCompleted.text`
+（早就在里面）同一个口径。默认 `false`，因为打开它会改变这个部署存了用户的什么；
+打开它不会放松上面那条 telemetry 的限制，两者互不影响。
 
 ## 4. Lease 与故障注入校验
 

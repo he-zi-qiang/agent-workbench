@@ -131,6 +131,10 @@ class GraphState(TypedDict, total=False):
     task_id: str
     objective: str
     knowledge_base_id: str | None
+    # Written once at load and read by the quality gate's router. A submission
+    # value that never became a channel would default back on every hop and
+    # export a file nobody asked for.
+    wants_report: bool
     plan: tuple[Any, ...]
     evidence_refs: Annotated[tuple[Identifier, ...], _merge]
     agent_outcome_refs: Annotated[tuple[Identifier, ...], _merge]
@@ -224,9 +228,11 @@ def _route_research(payload: Mapping[str, Any]) -> Sequence[str]:
 
 def _route_quality_gate(payload: Mapping[str, Any]) -> str:
     target = route_quality_gate(_to_state(payload))
-    # None is "the critic still wants changes and there is no budget left".
-    # It ends the graph rather than reaching approval, so an exhausted budget
-    # cannot be mistaken for a pass by a caller that ignores a return value.
+    # None is either "no budget left to revise" or "passed, and no file was
+    # asked for". Both end the graph here; `terminal_failure_reason` is what
+    # tells the Worker which of the two it settles as. Ending on the first
+    # keeps an exhausted budget from being mistaken for a pass by a caller
+    # that ignores a return value.
     return _EXHAUSTED if target is None else target
 
 

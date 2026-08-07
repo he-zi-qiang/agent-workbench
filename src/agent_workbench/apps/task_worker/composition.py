@@ -34,6 +34,7 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
+from agent_workbench.adapters.research import DeepSeekWebSearch
 from agent_workbench.adapters.tools import (
     ExportArtifactTool,
     ExternalSearchTool,
@@ -57,8 +58,12 @@ from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
 )
-from agent_workbench.bootstrap.projections import TaskWorkerRuntimeConfig
+from agent_workbench.bootstrap.projections import (
+    ResearchConfig,
+    TaskWorkerRuntimeConfig,
+)
 from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
+from agent_workbench.bootstrap.retrieval_factory import build_candidate_retriever
 from agent_workbench.bootstrap.sparse_factory import (
     SparseEncodingUnavailable,
     build_sparse_encoder,
@@ -67,6 +72,7 @@ from agent_workbench.domain.runs import RunBudget
 from agent_workbench.domain.tasks import TaskNodeId
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
+from agent_workbench.ports.research import ExternalSearchPort
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 from agent_workbench.workers.task import TaskWorker
 from agent_workbench.workflows.agent_profiles import assert_within_static_limit
@@ -109,6 +115,10 @@ class TaskWorkerDependencies:
     scope: TaskExecutionScope
     worker: TaskWorker
     http: httpx.AsyncClient | None = None
+    # A second client, not a reuse of `http`: that one carries the model
+    # profile's timeout and talks to the OpenAI-compatible endpoint, while
+    # search talks to the Anthropic-compatible one and is allowed to be slower.
+    research_http: httpx.AsyncClient | None = None
     qdrant: AsyncQdrantClient | None = None
 
     async def startup(self) -> None:
@@ -131,6 +141,8 @@ class TaskWorkerDependencies:
             await self.qdrant.close()
         if self.http is not None:
             await self.http.aclose()
+        if self.research_http is not None:
+            await self.research_http.aclose()
         await self.engine.dispose()
 
 
@@ -155,6 +167,10 @@ def build_task_worker_dependencies(
     if handlers is not None and demo:
         raise ValueError("pass either real handlers or demo=True, not both")
     http: httpx.AsyncClient | None = None
+    # A second client, not a reuse of `http`: that one carries the model
+    # profile's timeout and talks to the OpenAI-compatible endpoint, while
+    # search talks to the Anthropic-compatible one and is allowed to be slower.
+    research_http: httpx.AsyncClient | None = None
     qdrant: AsyncQdrantClient | None = None
     if handlers is None and demo:
         handlers = build_demo_v1_handlers()
@@ -182,7 +198,7 @@ def build_task_worker_dependencies(
     # nothing to hold.
     approvals = PostgresApprovalStore(engine, events=events)
     if handlers is None:
-        handlers, http, qdrant = _build_real_handlers(
+        handlers, http, qdrant, research_http = _build_real_handlers(
             config,
             artifacts=artifacts,
             documents=PostgresDocumentStore(engine),
@@ -233,7 +249,38 @@ def build_task_worker_dependencies(
         scope=scope,
         worker=worker,
         http=http,
+        research_http=research_http,
         qdrant=qdrant,
+    )
+
+
+def _build_external_search(
+    research: ResearchConfig | None,
+) -> tuple[ExternalSearchPort, httpx.AsyncClient | None]:
+    """The configured search provider, or the fail-closed placeholder.
+
+    Returning ``UnavailableExternalSearch`` rather than raising is deliberate:
+    a Worker whose deployment never enabled search still has to start, and a
+    Task that reaches ``research_external`` records "no provider" rather than
+    failing. That is also the state the authorization envelope agrees with --
+    with search off the tool would be denied before it ran anyway (ADR-020).
+
+    The client comes back with it so the dependency owner can close it, the
+    same way the model's client is handled.
+    """
+
+    if research is None:
+        return UnavailableExternalSearch(), None
+    client = httpx.AsyncClient(timeout=research.timeout_seconds)
+    return (
+        DeepSeekWebSearch(
+            http=client,
+            api_key=research.api_key.get_secret_value(),
+            model=research.model_id,
+            base_url=research.base_url,
+            max_uses=research.max_uses,
+        ),
+        client,
     )
 
 
@@ -246,7 +293,12 @@ def _build_real_handlers(
     registry: PostgresTaskRegistry,
     ledger: PostgresToolExecutionLedger,
     scope: TaskExecutionScope,
-) -> tuple[Mapping[TaskNodeId, NodeHandler], httpx.AsyncClient, AsyncQdrantClient]:
+) -> tuple[
+    Mapping[TaskNodeId, NodeHandler],
+    httpx.AsyncClient,
+    AsyncQdrantClient,
+    httpx.AsyncClient | None,
+]:
     """Assemble Task evidence and model execution without a demo fallback."""
 
     if (
@@ -313,15 +365,19 @@ def _build_real_handlers(
         timeout=config.qdrant.request_timeout_seconds,
     )
     retrieval = RetrievalService(
-        embedder=embedder,
-        index=QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias),
+        candidate_retriever=build_candidate_retriever(
+            llama_index_enabled=config.retrieval.llama_index_enabled,
+            embedder=embedder,
+            index=QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias),
+            sparse_encoder=sparse_encoder,
+        ),
         documents=documents,
-        sparse_encoder=sparse_encoder,
     )
     evidence = EvidenceStore(artifacts)
+    external_search, research_http = _build_external_search(config.research)
     external_tool = ExternalSearchTool(
         ExternalResearchService(
-            search=UnavailableExternalSearch(),
+            search=external_search,
             evidence=evidence,
         )
     )
@@ -333,6 +389,7 @@ def _build_real_handlers(
         # Required, not optional: the gateway refuses to assemble around a
         # ledgered tool with nowhere to record it, and export_artifact is one.
         ledger=ledger,
+        record_step_inputs=config.runtime.record_step_inputs,
     )
     policy_identity = (
         f"{config.task.policy_revision}:{config.task.policy_fingerprint[:16]}"
@@ -345,6 +402,7 @@ def _build_real_handlers(
             model_label=main_profile.model_id,
             model_timeout_seconds=config.runtime.model_timeout_seconds,
             max_parallel_read_tools=config.runtime.max_parallel_read_tools,
+            record_step_inputs=config.runtime.record_step_inputs,
         ),
         max_parallel=config.multi_agent.max_parallel_agent_invocations,
     )
@@ -385,7 +443,7 @@ def _build_real_handlers(
             policy_identity=policy_identity,
         ),
     )
-    return handlers, http, qdrant
+    return handlers, http, qdrant, research_http
 
 
 __all__ = [

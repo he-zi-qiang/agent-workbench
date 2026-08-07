@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.2"
+config_schema_version = "1.5"
 architecture_baseline = "1.3"
 
 [api]
@@ -39,9 +39,16 @@ automatic_retry = false
 # "fixed" retrieves once and hands the model the evidence; "agentic" gives it a
 # search tool and lets it decide when to look. The default is the one that can
 # be evaluated -- see bootstrap.settings.ChatSettings for why.
+# "ungrounded" (ADR-018) answers from the model alone: no retrieval, no
+# citations, no publish fence. It is a different promise, not a weaker one, and
+# the capability table has to say so separately.
 retrieval_shape = "fixed"
 max_agentic_steps = 4
 max_agentic_searches = 6
+# Only read when retrieval_shape = "routed". A cross-encoder score, not a
+# retrieval score: RRF is a rank sum and cannot say whether a hit is relevant.
+# Uncalibrated -- measure it against your own corpus before trusting it.
+routed_relevance_threshold = 0.0
 
 [database]
 # dsn, guard_dsn and listen_dsn are secret-like deployment values and are
@@ -145,6 +152,12 @@ cancellation_poll_seconds = 1
 context_soft_limit_ratio = 0.75
 tool_result_artifact_threshold_bytes = 65536
 write_tools_default_enabled = false
+# ADR-019. Puts the prompt and the proposed tool arguments on the run's event
+# stream, so a step can be opened and read. Only the principal that owns the
+# Task or Session can read that stream. Not the same switch as
+# observability.record_prompt_body, which stays false and governs OTel export.
+# Off by default: it changes what this deployment stores about its users.
+record_step_inputs = false
 
 [langchain_adapter]
 enabled = true
@@ -175,7 +188,10 @@ max_agent_invocation_attempts_per_task = 12
 max_tokens_per_agent_invocation = 16000
 
 [rag.llama_index]
-enabled = true
+# Off until the equivalence evidence ADR-017 step 3 requires actually exists.
+# The adapter is built and contract-tested; what is missing is a measurement
+# able to tell the two retrieval paths apart. See docs/status.md 2026-08-03.
+enabled = false
 role = "ingestion_and_retrieval_adapter"
 agent_executor_enabled = false
 query_engine_generates_final_answer = false
@@ -268,6 +284,29 @@ tenant_filter_required = true
 max_tool_argument_bytes = 65536
 max_tool_result_bytes = 10485760
 redact_secrets = true
+
+# External web search for Task research (ADR-020). Off by default, and the
+# default is load-bearing: with it off the Task authorization envelope keeps
+# refusing `external_search`, so a deployment that never configured it does not
+# widen its permission ceiling on upgrade.
+#
+# No key of its own and no extra dependency: the search runs on the model
+# provider's side, through the Anthropic-compatible endpoint DeepSeek exposes
+# beside its OpenAI-compatible one, under the same API key. That endpoint is a
+# different path on the same service than `model.base_url`, which is why this
+# has its own -- only one of the two speaks the Messages protocol.
+#
+# Caveat worth knowing before enabling: DeepSeek documents the compatible
+# endpoint but not a managed web-search tool on it. The capability is reported
+# to work rather than specified, so the adapter treats a rejection as "no
+# evidence, here is the status" rather than assuming success.
+[research]
+enabled = false
+provider = "deepseek"
+base_url = "https://api.deepseek.com/anthropic"
+model_id = "deepseek-chat"
+max_uses = 5
+timeout_seconds = 60
 
 [observability]
 otel_enabled = true

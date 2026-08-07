@@ -197,15 +197,21 @@ def test_the_default_deployment_assembles_the_fixed_shape_with_no_tools(
     envelope as the only thing keeping the two shapes apart.
     """
 
-    from agent_workbench.application.chat_execution import FixedTwoStepExecution
+    from agent_workbench.application.chat_execution import (
+        AnswerModeSelector,
+        FixedTwoStepExecution,
+        UngroundedExecution,
+    )
 
     _stub_optional_runtimes(monkeypatch)
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
 
     assert dependencies.chat is not None
-    execution = dependencies.chat.execution
-    assert isinstance(execution, FixedTwoStepExecution)
-    assert execution.budget.max_steps == 1
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    assert isinstance(selector.direct, UngroundedExecution)
+    assert isinstance(selector.rag, FixedTwoStepExecution)
+    assert selector.rag.budget.max_steps == 1
 
 
 def test_the_agentic_deployment_grants_the_tool_a_budget_and_a_journal(
@@ -220,7 +226,11 @@ def test_the_agentic_deployment_grants_the_tool_a_budget_and_a_journal(
     binding rather than trusting the shape's name.
     """
 
-    from agent_workbench.application.chat_execution import AgenticExecution
+    from agent_workbench.application.chat_execution import (
+        AgenticExecution,
+        AnswerModeSelector,
+        UngroundedExecution,
+    )
 
     _stub_optional_runtimes(monkeypatch)
     dependencies = build_dependencies(
@@ -228,7 +238,10 @@ def test_the_agentic_deployment_grants_the_tool_a_budget_and_a_journal(
     )
 
     assert dependencies.chat is not None
-    execution = dependencies.chat.execution
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    assert isinstance(selector.direct, UngroundedExecution)
+    execution = selector.rag
     assert isinstance(execution, AgenticExecution)
     assert execution.tool_names == ("knowledge_search",)
     # A loop needs room to loop.
@@ -239,6 +252,58 @@ def test_the_agentic_deployment_grants_the_tool_a_budget_and_a_journal(
     binding = execution.executor._gateway._registry.get("knowledge_search")
     assert binding is not None
     assert binding.handler.__self__.journal is execution.journal
+
+
+def test_the_legacy_ungrounded_deployment_assembles_direct_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_workbench.application.chat_execution import (
+        AnswerModeSelector,
+        UngroundedExecution,
+    )
+
+    _stub_optional_runtimes(monkeypatch)
+    dependencies = build_dependencies(
+        project_api(_settings(tmp_path, chat={"retrieval_shape": "ungrounded"}))
+    )
+
+    assert dependencies.chat is not None
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    assert isinstance(selector.direct, UngroundedExecution)
+    assert selector.rag is None
+
+
+def test_the_routed_deployment_assembles_direct_beside_its_rag_router(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_workbench.application.chat_execution import (
+        AnswerModeSelector,
+        RoutedExecution,
+        UngroundedExecution,
+    )
+    from agent_workbench.apps.api import dependencies as assembly
+
+    class _Reranker:
+        identity = "stub-reranker@v1"
+
+        async def rerank(
+            self, query: str, passages: tuple[str, ...]
+        ) -> tuple[float, ...]:  # pragma: no cover - assembly only
+            del query
+            return tuple(1.0 for _ in passages)
+
+    _stub_optional_runtimes(monkeypatch)
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c: _Reranker())
+    dependencies = build_dependencies(
+        project_api(_settings(tmp_path, chat={"retrieval_shape": "routed"}))
+    )
+
+    assert dependencies.chat is not None
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    assert isinstance(selector.direct, UngroundedExecution)
+    assert isinstance(selector.rag, RoutedExecution)
 
 
 def test_a_process_with_a_lexical_runtime_assembles_the_hybrid_retriever(
@@ -283,11 +348,80 @@ def test_a_process_with_a_lexical_runtime_assembles_the_hybrid_retriever(
 
     assert dependencies.chat is not None
     assert dependencies.sparse_unavailable is None
-    retrieval = dependencies.chat.execution.retrieval
-    assert retrieval.sparse_encoder is not None
-    # The name is what an evaluation report prints. A dense-only process
-    # labelled "hybrid" is a benchmark that credits fusion for nothing.
+    from agent_workbench.application.chat_execution import AnswerModeSelector
+
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    rag = selector.rag
+    assert rag is not None
+    retrieval = rag.retrieval  # pyright: ignore[reportAttributeAccessIssue]
+    # The name is what an evaluation report prints, and since ADR-017 it prints
+    # two facts rather than one: which arms ran, and which framework proposed
+    # the candidates. A dense-only process labelled "hybrid" is a benchmark that
+    # credits fusion for nothing; a LlamaIndex run labelled like the reference
+    # path is a migration nobody can measure.
     assert retrieval.mode == "hybrid"
+
+
+def test_turning_the_framework_on_assembles_the_llamaindex_retriever(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control for the test above, and the only test of that config field.
+
+    ``rag.llama_index.enabled`` shipped as ``true`` with no reader anywhere in
+    ``src``; both settings therefore produced the same process, and the flag
+    read like a decision that had been implemented. Asserting only the default
+    case would leave it that way -- that assertion would pass just as well if
+    the factory ignored the flag and always built the reference retriever.
+
+    It defaults to off because ADR-017 step 3 moves traffic only on step 2's
+    evidence, and that evidence came back inconclusive: tied fused scores are
+    returned in an unstable order, so each retriever disagrees with itself on
+    9-10 of 38 gold questions and no comparison between them can resolve
+    anything narrower than that.
+    """
+
+    from agent_workbench.apps.api import dependencies as assembly
+    from agent_workbench.bootstrap.reranker_factory import RerankerUnavailable
+
+    class _Embedder:
+        dimension = 1024
+        identity = "stub@v1"
+
+        async def embed_documents(self, texts: tuple[str, ...]) -> tuple[Any, ...]:
+            return tuple((0.0,) for _ in texts)
+
+        async def embed_query(self, text: str) -> Any:
+            return (0.0,)
+
+    class _Sparse:
+        identity = "stub-lexical@v1"
+
+        async def encode_query(self, text: str) -> Any:  # pragma: no cover - unused
+            raise AssertionError("assembly must not encode anything")
+
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(
+        assembly,
+        "build_reranker",
+        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+    )
+
+    dependencies = build_dependencies(
+        project_api(_settings(tmp_path, rag={"llama_index": {"enabled": True}}))
+    )
+
+    assert dependencies.chat is not None
+    # Same arms, different proposer. The sparse encoder is still wired -- the
+    # flag selects a retriever, not a retrieval quality.
+    from agent_workbench.application.chat_execution import AnswerModeSelector
+
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    rag = selector.rag
+    assert rag is not None
+    assert rag.retrieval.mode == "llama_index+hybrid"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_the_agentic_shape_gets_the_same_hybrid_retriever(
@@ -331,9 +465,16 @@ def test_the_agentic_shape_gets_the_same_hybrid_retriever(
     )
 
     assert dependencies.chat is not None
-    binding = dependencies.chat.execution.executor._gateway._registry.get(
-        "knowledge_search"
+    from agent_workbench.application.chat_execution import (
+        AgenticExecution,
+        AnswerModeSelector,
     )
+
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    execution = selector.rag
+    assert isinstance(execution, AgenticExecution)
+    binding = execution.executor._gateway._registry.get("knowledge_search")
     assert binding is not None
     assert binding.handler.__self__.retrieval.mode == "hybrid"
 
@@ -341,11 +482,19 @@ def test_the_agentic_shape_gets_the_same_hybrid_retriever(
 def test_assembly_hands_startup_the_encoders_a_turn_will_use(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Not any encoders -- the ones retrieval actually holds.
+    """Not any encoders -- the ones this process actually loaded.
 
     A sabotage round emptied this tuple and every other test stayed green: the
     process started, served, and paid a 29-second first encode on somebody's
     request. Asserting identity rather than count is what makes that impossible.
+
+    Identity is now asserted against what the factories returned rather than
+    read back off the retrieval service. The encoders moved behind
+    ``CandidateRetrieverPort`` in ADR-017's step 1, and LlamaIndex's retriever
+    does not hand them back the way the reference one did -- so this pins the
+    exact objects assembly was given, which is the same claim from the other
+    side. That the sparse one reached retrieval and not just the warm list is
+    covered by the mode assertions above.
     """
 
     from agent_workbench.apps.api import dependencies as assembly
@@ -367,8 +516,10 @@ def test_assembly_hands_startup_the_encoders_a_turn_will_use(
         async def encode_query(self, text: str) -> Any:  # pragma: no cover
             raise AssertionError("assembly must not encode anything")
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
-    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    embedder = _Embedder()
+    sparse = _Sparse()
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c: embedder)
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: sparse)
     monkeypatch.setattr(
         assembly,
         "build_reranker",
@@ -378,9 +529,8 @@ def test_assembly_hands_startup_the_encoders_a_turn_will_use(
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
 
     assert dependencies.chat is not None
-    retrieval = dependencies.chat.execution.retrieval
-    assert retrieval.embedder in dependencies.encoders
-    assert retrieval.sparse_encoder in dependencies.encoders
+    assert embedder in dependencies.encoders
+    assert sparse in dependencies.encoders
 
 
 def test_startup_warms_before_a_request_can_arrive(
@@ -507,5 +657,11 @@ def test_the_runtime_reports_the_model_that_actually_answered(
     )
 
     assert dependencies.chat is not None
-    executor = dependencies.chat.execution.executor
-    assert executor._model_label == "deepseek-chat"  # pyright: ignore[reportPrivateUsage]
+    from agent_workbench.application.chat_execution import AnswerModeSelector
+
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    assert selector.direct.executor._model_label == "deepseek-chat"  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
+    rag = selector.rag
+    assert rag is not None
+    assert rag.executor._model_label == "deepseek-chat"  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]

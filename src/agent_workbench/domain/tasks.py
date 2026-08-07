@@ -119,6 +119,13 @@ class TaskState(VersionedModel):
     )
     draft_ref: Identifier | None = None
     review_result: ReviewResult | None = None
+    # Whether this Task was asked for a downloadable file, copied from its
+    # TaskInput at load. **Defaults True, unlike TaskInput's own default**, and
+    # the asymmetry is deliberate: a checkpoint written before this field
+    # existed has no value for it, and every such Task was submitted under a
+    # graph that always exported. Defaulting False here would silently change
+    # what an in-flight Task does when it resumes.
+    wants_report: bool = True
     approval_id: Identifier | None = None
     # Which way the graph went at the approval gate. This is *not* a second copy
     # of the ledger's answer: the ledger records what a human decided, and this

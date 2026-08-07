@@ -1,5 +1,6 @@
 import type {
   AskResponse,
+  ChatAnswerMode,
   Citation,
   EventEnvelope,
   LocalChatSession,
@@ -24,13 +25,18 @@ export interface ChatActivity {
   state: ChatActivityState;
   timestamp: string;
   detail?: string;
+  // The event this was summarised from, kept so a reader can open the step and
+  // see the model's own output, the proposed call and the permission verdict
+  // rather than only this one-line label.
+  envelope: EventEnvelope;
 }
 
 export interface ChatTurnState {
   localId: string;
   sessionId: string;
   question: string;
-  knowledgeBaseId: string;
+  answerMode: ChatAnswerMode;
+  knowledgeBaseId: string | null;
   topK: number;
   idempotencyKey: string;
   submittedAt: string;
@@ -43,6 +49,11 @@ export interface ChatTurnState {
   answer?: string;
   withheldReason?: string;
   error?: string;
+  // False when this answer was produced without retrieved evidence (ADR-018).
+  // Per-turn rather than per-session on purpose: the routed shape can produce
+  // both kinds in one conversation, and a badge driven by "current mode" would
+  // relabel every earlier message the moment the mode changed.
+  grounded?: boolean;
 }
 
 export type ChatConnectionState = "idle" | "connecting" | "connected" | "retrying" | "unavailable";
@@ -62,6 +73,7 @@ export interface SafeRunEvent {
   activity: ChatActivity;
   terminal?:
     | { kind: "committed"; text: string; citations: Citation[] }
+    | { kind: "ungrounded"; text: string }
     | { kind: "withheld"; text: string; reason: string };
 }
 
@@ -80,7 +92,8 @@ export interface SubmitTurnInput {
   localId: string;
   sessionId: string;
   question: string;
-  knowledgeBaseId: string;
+  answerMode: ChatAnswerMode;
+  knowledgeBaseId: string | null;
   topK: number;
   idempotencyKey: string;
   submittedAt: string;
@@ -88,7 +101,13 @@ export interface SubmitTurnInput {
 
 export type ChatAction =
   | { type: "sessionAdded"; session: LocalChatSession }
-  | { type: "sessionUpdated"; sessionId: string; knowledgeBaseId: string; updatedAt: string }
+  | {
+      type: "sessionUpdated";
+      sessionId: string;
+      answerMode: ChatAnswerMode;
+      knowledgeBaseId: string | null;
+      updatedAt: string;
+    }
   | {
       type: "connectionChanged";
       sessionId: string;
@@ -163,6 +182,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...state.sessions,
           [action.sessionId]: {
             ...current,
+            answerMode: action.answerMode,
             knowledgeBaseId: action.knowledgeBaseId,
             updatedAt: action.updatedAt,
           },
@@ -216,11 +236,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 text: action.response.answer,
                 reason: "sources_changed",
               }
-            : {
-                kind: "committed",
-                text: action.response.answer,
-                citations: action.response.citations,
-              },
+            : action.response.grounded === false
+              ? { kind: "ungrounded", text: action.response.answer }
+              : {
+                  kind: "committed",
+                  text: action.response.answer,
+                  citations: action.response.citations,
+                },
         ),
       );
     }
@@ -367,11 +389,34 @@ function failRunCorrelation(state: ChatState, localId: string): ChatState {
   });
 }
 
+/**
+ * One model call is one row: `ModelStarted` and `ModelCompleted` share an
+ * activity key, and the completion replaces the start. The prompt only ever
+ * arrives on the start, so without this the only event carrying it is thrown
+ * away the moment the call finishes -- and every finished step would open onto
+ * a missing prompt.
+ */
+function carryPrompt(
+  previous: ChatActivity | undefined,
+  next: ChatActivity,
+): ChatActivity {
+  const prompt = previous?.envelope.payload.prompt_preview;
+  if (typeof prompt !== "string" || prompt === "") return next;
+  if (typeof next.envelope.payload.prompt_preview === "string") return next;
+  return {
+    ...next,
+    envelope: {
+      ...next.envelope,
+      payload: { ...next.envelope.payload, prompt_preview: prompt },
+    },
+  };
+}
+
 function applySafeEvent(turn: ChatTurnState, event: SafeRunEvent): ChatTurnState {
   const activityIndex = turn.activities.findIndex((item) => item.key === event.activity.key);
   const activities = [...turn.activities];
   if (activityIndex < 0) activities.push(event.activity);
-  else activities[activityIndex] = event.activity;
+  else activities[activityIndex] = carryPrompt(activities[activityIndex], event.activity);
 
   let next: ChatTurnState = {
     ...turn,
@@ -389,6 +434,7 @@ function finalizeTurn(
   turn: ChatTurnState,
   terminal:
     | { kind: "committed"; text: string; citations: Citation[] }
+    | { kind: "ungrounded"; text: string }
     | { kind: "withheld"; text: string; reason: string },
 ): ChatTurnState {
   // Withholding is the fail-closed result. A duplicate HTTP response must never
@@ -405,11 +451,27 @@ function finalizeTurn(
     delete next.error;
     return next;
   }
+  if (terminal.kind === "ungrounded") {
+    // Committed, because it is a published answer -- but marked, and with no
+    // citations to offer. It never retrieved, so an empty list here is the
+    // whole truth rather than a gap.
+    const ungrounded: ChatTurnState = {
+      ...turn,
+      phase: "committed",
+      answer: terminal.text,
+      citations: [],
+      grounded: false,
+    };
+    delete ungrounded.error;
+    delete ungrounded.withheldReason;
+    return ungrounded;
+  }
   const next: ChatTurnState = {
     ...turn,
     phase: "committed",
     answer: terminal.text,
     citations: terminal.citations,
+    grounded: true,
   };
   delete next.error;
   delete next.withheldReason;
@@ -450,6 +512,18 @@ function safeEventFromFrame(sessionId: string, frame: SseFrame): SafeRunEvent | 
       terminal: { kind: "committed", text, citations },
     };
   }
+  if (kind === "UngroundedAnswerCommitted") {
+    const text = stringField(envelope.payload, "text");
+    if (text === null) return null;
+    return {
+      eventId: envelope.event_id,
+      runId: envelope.run_id,
+      kind,
+      timestamp: envelope.timestamp,
+      activity,
+      terminal: { kind: "ungrounded", text },
+    };
+  }
   if (kind === "AnswerWithheld") {
     const text = stringField(envelope.payload, "text");
     if (text === null) return null;
@@ -475,6 +549,33 @@ function safeEventFromFrame(sessionId: string, frame: SseFrame): SafeRunEvent | 
   };
 }
 
+/**
+ * The event, minus anything the release fence owns.
+ *
+ * Chat publishes an answer only through `AnswerCommitted`, `AnswerWithheld` or
+ * the synchronous `AskResponse`. `ModelCompleted.text` and `ModelDelta.text`
+ * are the *candidate* -- what the model produced before sources were
+ * re-verified -- and a step a reader can open is still a place the reader
+ * reads. Keeping them here would let a withheld answer be read anyway, which is
+ * the one thing the fence exists to prevent, so they are dropped on the way
+ * into state rather than hidden on the way out.
+ *
+ * The prompt is not dropped: it is what the model was *given*, not what it
+ * produced. Note that with `chat.retrieval_shape = "agentic"` a later step's
+ * prompt embeds earlier assistant turns, so a deployment that turns on
+ * `runtime.record_step_inputs` *and* runs the agentic shape does surface
+ * intermediate model text here. That is the deployment's choice; the fixed and
+ * routed shapes make one model call and cannot.
+ */
+function withoutCandidateText(envelope: EventEnvelope): EventEnvelope {
+  if (envelope.event_type !== "ModelCompleted" && envelope.event_type !== "ModelDelta") {
+    return envelope;
+  }
+  const redacted = { ...envelope.payload };
+  delete redacted.text;
+  return { ...envelope, payload: redacted };
+}
+
 function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
   const payload = envelope.payload;
   const kind = envelope.event_type;
@@ -482,6 +583,7 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
     eventId: envelope.event_id,
     kind,
     timestamp: envelope.timestamp,
+    envelope: withoutCandidateText(envelope),
   };
   if (kind === "RunStarted") {
     return { ...base, key: `run:${envelope.run_id}`, label: "开始运行", state: "running" };
@@ -495,6 +597,25 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
       label: "检索上下文",
       state: "complete",
       detail: `${chunks} 个片段 · ${tokens} tokens`,
+    };
+  }
+  if (kind === "RetrievalRejected") {
+    // The turn searched and chose not to answer from what came back. Saying
+    // only "未检索" would be false, and saying nothing leaves the reader
+    // unable to tell this from a turn that never looked.
+    const chunks = numberField(payload, "chunk_count") ?? 0;
+    const relevance = numberField(payload, "top_relevance");
+    return {
+      ...base,
+      key: envelope.event_id,
+      label: "检索结果未被采用",
+      state: "info",
+      detail:
+        chunks === 0
+          ? "没有可用的资料"
+          : relevance === null
+            ? `${chunks} 个片段 · 相关度未测出`
+            : `${chunks} 个片段 · 最高相关度 ${relevance.toFixed(2)}`,
     };
   }
   if (kind === "ModelStarted") {
@@ -564,6 +685,15 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
   if (kind === "AnswerCommitted") {
     return { ...base, key: "answer", label: "答案已安全发布", state: "complete" };
   }
+  if (kind === "UngroundedAnswerCommitted") {
+    // Deliberately not "已安全发布": no answer released down this path passed a
+    // source check, whether it skipped retrieval or retrieved and found nothing
+    // relevant enough. Reusing that label would be the timeline making the claim
+    // the separate event type exists to avoid. Which of the two happened is a
+    // property of the turn rather than of this event, so the answer block says
+    // it and this line stays true for both.
+    return { ...base, key: "answer", label: "答案已发布（未经证据核实）", state: "complete" };
+  }
   if (kind === "AnswerWithheld") {
     return {
       ...base,
@@ -609,6 +739,7 @@ function historyLoaded(state: ChatState, sessionId: string, messages: MessageVie
         localId,
         sessionId,
         question: message.text,
+        answerMode: session.answerMode,
         knowledgeBaseId: session.knowledgeBaseId,
         topK: 8,
         idempotencyKey: "history",

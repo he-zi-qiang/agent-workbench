@@ -23,6 +23,21 @@ dependencies = [
   # "a resolver happens to give us this", and the interop adapter uses it
   # directly. Nothing imports langchain proper.
   "langchain-core>=0.3,<2",
+  # The RAG framework ADR-017 names, and only its core. There is no lighter
+  # distribution: llama-index-core is where Document, Node, BaseEmbedding,
+  # BasePydanticVectorStore and BaseRetriever live, and those are the contracts
+  # the adapter implements. The integration packages are deliberately absent --
+  # llama-index-vector-stores-qdrant would bring a second opinion about how
+  # points are laid out in a collection this project's own ingestion writes,
+  # and about where fusion happens, which ADR-017 assigns to Qdrant alone.
+  #
+  # A main dependency rather than an extra, on the same reasoning as langgraph:
+  # behind an extra, CI would skip the adapter's tests and prove nothing about
+  # it. The cost is honest and worth stating -- it pulls roughly fifty
+  # transitive packages (nltk, tiktoken, pillow, networkx among them) into
+  # every process that installs the project, including ones that never
+  # retrieve anything.
+  "llama-index-core>=0.14.23,<0.15",
   "pydantic>=2.12,<3",
   # A main dependency rather than an extra, on the same reasoning as langgraph:
   # it is small, pure Python and BSD-3, so hiding it behind an extra would buy
@@ -100,6 +115,17 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# The terminal session is the one Python surface that speaks to a reader, and
+# it speaks the language the web console does -- including the stage names, so
+# that someone who has seen one recognises the other. RUF001 is here to catch a
+# Cyrillic `о` hiding in an identifier, not a full-width comma in a sentence
+# deliberately written in Chinese. Scoped to these two files so the rule keeps
+# doing its real job everywhere else.
+"src/agent_workbench/apps/cli/repl.py" = ["RUF001"]
+"src/agent_workbench/apps/cli/stages.py" = ["RUF001"]
+"src/agent_workbench/apps/cli/commands.py" = ["RUF001"]
 
 [tool.pyright]
 pythonVersion = "3.12"

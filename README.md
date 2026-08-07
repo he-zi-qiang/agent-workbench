@@ -103,9 +103,23 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
   Runtime、LangGraph Task 控制面、LlamaIndex ingestion/retrieval、Qdrant 单次 RRF，
   并以 RAGAS 作为离线 LLM-judge 辅助。LlamaIndex 不接管 Tool Loop 或最终回答，
   应用层继续负责 ACL/revision fence 与答案发布。
-- **当前实现边界：**现有自研 ingestion/retrieval 和 38 题评测仍是可运行的迁移基准；
-  LlamaIndex Adapter 与 RAGAS runner 尚未落地，因此只能标为 Planned，不能把基线选择
-  写成已经完成的框架集成。
+- **当前实现边界：**LlamaIndex **检索**适配器已落地（`adapters/llama_index/`）：它拥有
+  query embedding、Retriever 契约与 Document/Node 映射；Qdrant 仍是唯一融合方，授权与
+  答案发布仍在应用层。检索契约测试按 `CandidateRetrieverPort` 参数化，两条路径在真实
+  Qdrant + PostgreSQL 上跑同一套 ACL、source revision 与引用断言。
+  **但它没有成为默认**：`rag.llama_index.enabled = false`。ADR-017 要求切流量以等价评测
+  为前提，而那次评测**测不出来**——并列的融合分数返回次序不稳定，每个检索器与**自己**
+  的不一致（9-10/38 题）都宽于两条路径之间的差异。没有证据表明 LlamaIndex 更差，也没有
+  证据表明它等价；"测不出来"不是切流量的理由。
+  **ingestion 仍未迁移**——`IngestionPipeline` 没有接入，LlamaIndex 的 VectorStore
+  适配器明确拒绝写入，因为一条没有对照基准的第二写入路径正是 ADR-017 迁移规则要防的；
+  **RAGAS runner 仍未落地**。因此能力表里 LlamaIndex 与 RAGAS **整体保持 Planned**：
+  适配器存在不等于框架集成已完成。
+  迁移前的自研实现保留为明确命名的 `ReferenceVectorIndexRetriever`，是当前默认路径，
+  同时充当迁移基准。
+- **已知的可复现性缺口：**并列检索分数没有确定性次序，因此同一个问题两次提问可能得到
+  不同的上下文与不同的引用。这既让 §15 要求的"固定数据集和可展示指标"打折扣，也是上面
+  那次等价评测无法给出结论的直接原因。修法是在适配器边界给并列项定序，属于独立变更。
 - OpenTelemetry 的 trace/metrics 已落地（Port + OTLP Adapter，核心层不导入 SDK）。
   Langfuse、动态 Multi-Agent supervisor、生产身份认证与生产部署仍未完成。
 - React 控制台已实现 Chat / Work 两条主流程，以及 Knowledge / Approvals /

@@ -15,7 +15,7 @@ Task produces.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, Protocol, runtime_checkable
+from typing import Annotated, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import Field, StringConstraints, field_validator
 
@@ -35,6 +35,37 @@ TaskStatusDetail = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=1024),
 ]
+
+#: Enough of the objective to tell one Task from another in a list. The
+#: authoritative objective stays in the input artifact and is not duplicated
+#: here: this is a label, and a caller that needs the real text reads the
+#: artifact. Bounded well below the objective's own 4096 so a list page cannot
+#: become a way to pull every Task's full text in one unauthenticated-size
+#: response.
+OBJECTIVE_PREVIEW_LIMIT: Final[int] = 200
+ObjectivePreview = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=OBJECTIVE_PREVIEW_LIMIT
+    ),
+]
+
+
+def objective_preview(objective: str) -> ObjectivePreview | None:
+    """Cut an objective down to its list label.
+
+    Returns ``None`` for an objective that is empty once stripped, because a
+    preview column that stores "" would make "no preview recorded" and "the
+    objective was blank" the same value. Truncation is marked, so nobody reads
+    a cut label as the whole objective.
+    """
+
+    collapsed = " ".join(objective.split())
+    if collapsed == "":
+        return None
+    if len(collapsed) <= OBJECTIVE_PREVIEW_LIMIT:
+        return collapsed
+    return collapsed[: OBJECTIVE_PREVIEW_LIMIT - 1] + "…"
 
 
 class IndexReservation(DomainModel):
@@ -89,6 +120,13 @@ class TaskSubmission(DomainModel):
     # resolve to the Task opened by the first submission.
     input_fingerprint: Sha256
     submission_dedup_key: Identifier
+    # A label for lists, not the objective. Optional because a Task can be
+    # submitted by a caller that has only an input reference -- the CLI resume
+    # path does exactly that -- and a list row without a label is legible,
+    # while refusing the submission for lacking one is not. Deliberately
+    # excluded from _SUBMISSION_IDENTITY: it is derived from the input, so a
+    # retry that agrees on input_fingerprint cannot disagree here meaningfully.
+    objective_preview: ObjectivePreview | None = None
     # What the Task means, decided once. Required rather than defaulted: a
     # submission that could omit its semantics would produce a Task whose
     # resume has nothing to restore, and the omission would only be noticed
@@ -120,6 +158,10 @@ class TaskRun(DomainModel):
     input_ref: Identifier
     input_fingerprint: Sha256
     submission_dedup_key: Identifier
+    # Absent on Tasks submitted before this column existed, and on submissions
+    # that carried only an input reference. Readers show the id in that case
+    # rather than inventing a label.
+    objective_preview: ObjectivePreview | None = None
     run_semantics_snapshot: JsonObject
     run_semantics_revision: ShortText
     submitted_policy_revision: ShortText
@@ -309,9 +351,11 @@ class TaskRegistry(Protocol):
 
 
 __all__ = [
+    "OBJECTIVE_PREVIEW_LIMIT",
     "ExecutionLease",
     "IndexGenerationNotReservableError",
     "IndexReservation",
+    "ObjectivePreview",
     "StaleExecutionError",
     "TaskClaim",
     "TaskRegistry",
@@ -319,4 +363,5 @@ __all__ = [
     "TaskSubmission",
     "TaskSubmissionConflictError",
     "TaskTransitionRejectedError",
+    "objective_preview",
 ]

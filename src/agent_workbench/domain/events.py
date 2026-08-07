@@ -70,10 +70,12 @@ EventType = Literal[
     "TaskParkedForMigration",
     "RunStarted",
     "ContextBuilt",
+    "RetrievalRejected",
     "ModelStarted",
     "ModelDelta",
     "ModelCompleted",
     "AnswerCommitted",
+    "UngroundedAnswerCommitted",
     "AnswerWithheld",
     "ChatTurnExpired",
     "ToolProposed",
@@ -230,6 +232,11 @@ class ModelStarted(DomainModel):
     model_call_id: Identifier
     model_profile: ModelProfileName
     model_id: ShortText
+    # What was sent to the model, when `runtime.record_step_inputs` is on
+    # (ADR-019). Empty otherwise, and empty is the default so a deployment that
+    # never opted in emits byte-identical payloads. Bounded for the reason every
+    # other free text here is: this is a database row and an SSE frame.
+    prompt_preview: BoundedText = ""
 
 
 class ModelDelta(DomainModel):
@@ -262,6 +269,57 @@ class AnswerCommitted(DomainModel):
     kind: Literal["AnswerCommitted"] = "AnswerCommitted"
     text: BoundedText
     citations: tuple[Citation, ...] = ()
+
+
+class UngroundedAnswerCommitted(DomainModel):
+    """An answer produced without evidence, and recorded as such (ADR-018).
+
+    Deliberately not an ``AnswerCommitted`` with an empty citation list. That
+    event means "this text rested on these revisions and they were re-checked
+    before release"; there is nothing here to re-check, so borrowing it would
+    make the audit log unable to distinguish a verified answer from an
+    unverified one -- and a record whose provenance a reader cannot recover is
+    worse than no record.
+
+    There is no ``citations`` field rather than an empty one. An empty tuple is
+    a list that could have been non-empty; this path has no ``ContextPacket``,
+    so nothing could ever populate it. Absent says that; empty invites somebody
+    to fill it in.
+    """
+
+    kind: Literal["UngroundedAnswerCommitted"] = "UngroundedAnswerCommitted"
+    text: BoundedText
+
+
+class RetrievalRejected(DomainModel):
+    """Retrieval ran, and the turn chose not to answer from what came back.
+
+    The routed shape (ADR-018) decides between a grounded and an ungrounded
+    answer by retrieving and scoring, then falling back when nothing was
+    relevant enough. Without this event that decision leaves no trace at all:
+    ``ContextBuilt`` is only emitted when context reaches the model, so a turn
+    that searched for a minute and rejected the result looks identical in the
+    log to one that never searched. "Why is this answer ungrounded?" is then
+    unanswerable after the fact, which is the question the grounded/ungrounded
+    split exists to make answerable.
+
+    The scores are recorded rather than a verdict, because the threshold is
+    configuration: an operator lowering it needs to know what the scores
+    actually were on the turns that fell back.
+
+    ``chunk_count`` counts what survived authorization, which is what keeps
+    this event compatible with ADR-018's deliberate non-disclosure: a corpus
+    whose matching documents this asker may not read reports zero here, exactly
+    as an empty corpus does. Counting candidates before the ACL check would
+    tell the asker that documents they cannot read exist.
+    """
+
+    kind: Literal["RetrievalRejected"] = "RetrievalRejected"
+    chunk_count: int = Field(ge=0)
+    #: The best cross-encoder score, or ``None`` when no reranker answered --
+    #: which is itself a reason to reject, and a different one from a low score.
+    top_relevance: float | None = None
+    threshold: float
 
 
 class AnswerWithheld(DomainModel):
@@ -298,6 +356,10 @@ class ToolProposed(DomainModel):
     tool_name: ProposedToolName
     argument_bytes: int = Field(ge=0)
     argument_sha256: Sha256
+    # The call the model actually proposed, when `runtime.record_step_inputs`
+    # is on (ADR-019). The digest above stays the identity either way: it is
+    # taken over the whole canonical arguments, while this may be truncated.
+    argument_preview: BoundedText = ""
     risk: ToolRisk | None = None
 
 
@@ -412,10 +474,12 @@ EventPayload = Annotated[
     | TaskParkedForMigration
     | RunStarted
     | ContextBuilt
+    | RetrievalRejected
     | ModelStarted
     | ModelDelta
     | ModelCompleted
     | AnswerCommitted
+    | UngroundedAnswerCommitted
     | AnswerWithheld
     | ChatTurnExpired
     | ToolProposed
@@ -455,6 +519,8 @@ EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "ModelDelta": "transient",
     "ModelCompleted": "durable",
     "AnswerCommitted": "durable",
+    "UngroundedAnswerCommitted": "durable",
+    "RetrievalRejected": "durable",
     "AnswerWithheld": "durable",
     "ChatTurnExpired": "durable",
     "ToolProposed": "durable",
@@ -598,4 +664,5 @@ __all__ = [
     "ToolProgress",
     "ToolProposed",
     "ToolStarted",
+    "UngroundedAnswerCommitted",
 ]

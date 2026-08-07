@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from agent_workbench.adapters.memory import InMemoryArtifactStore
+from agent_workbench.adapters.persistence.models import task_runs
 from agent_workbench.application.task_inputs import (
     TASK_INPUT_MEDIA_TYPE,
     TaskInputArtifactError,
@@ -20,9 +21,11 @@ from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.task_inputs import TaskInput
 from agent_workbench.ports.task_registry import (
+    OBJECTIVE_PREVIEW_LIMIT,
     TaskRun,
     TaskSubmission,
     TaskSubmissionConflictError,
+    objective_preview,
 )
 
 OWNER = PrincipalContext(principal_id="user_1", tenant_id="tenant_a")
@@ -151,6 +154,63 @@ def test_a_stored_task_input_rehydrates_the_owned_task_state() -> None:
     assert state.objective == "Compare internal and external retrieval evidence."
     assert state.max_revisions == 3
     assert state.knowledge_base_id == "kb_main"
+
+
+def test_a_submission_labels_its_task_with_the_objective_it_was_given() -> None:
+    """Without this the Registry row is an id, and so is every list that shows it."""
+
+    registry = _RecordingRegistry()
+
+    async def scenario() -> None:
+        service = TaskInputService(
+            inputs=TaskInputStore(InMemoryArtifactStore()),
+            tasks=_task_service(registry),
+        )
+        await service.submit(
+            principal=OWNER,
+            task_input=TaskInput(objective="整理这批资料并输出一份建议报告"),
+            submission_dedup_key="dedup_1",
+        )
+
+    asyncio.run(scenario())
+
+    assert registry.submissions[0].objective_preview == "整理这批资料并输出一份建议报告"
+
+
+@pytest.mark.parametrize(
+    ("objective", "expected"),
+    [
+        ("  spaced   out\n objective ", "spaced out objective"),
+        ("x" * OBJECTIVE_PREVIEW_LIMIT, "x" * OBJECTIVE_PREVIEW_LIMIT),
+        (
+            "y" * (OBJECTIVE_PREVIEW_LIMIT + 50),
+            "y" * (OBJECTIVE_PREVIEW_LIMIT - 1) + "…",
+        ),
+    ],
+)
+def test_the_label_is_bounded_and_says_when_it_was_cut(
+    objective: str, expected: str
+) -> None:
+    preview = objective_preview(objective)
+
+    assert preview == expected
+    assert preview is not None
+    assert len(preview) <= OBJECTIVE_PREVIEW_LIMIT
+
+
+def test_an_objective_of_only_whitespace_records_no_label() -> None:
+    """Empty string and "no label" have to stay distinguishable in the column."""
+
+    assert objective_preview("   \n\t ") is None
+
+
+def test_the_stored_column_is_wide_enough_for_every_label_the_port_allows() -> None:
+    """A widened preview must not turn into a truncated insert at runtime."""
+
+    column = task_runs.c.objective_preview
+
+    assert column.type.length == OBJECTIVE_PREVIEW_LIMIT
+    assert column.nullable is True
 
 
 def test_another_owner_cannot_make_a_task_load_the_input_artifact() -> None:

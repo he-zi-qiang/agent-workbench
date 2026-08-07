@@ -20,39 +20,47 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { createChatSession } from "../../api/client";
 import type { Citation, LocalChatSession } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
+import {
+  AttachmentButton,
+  AttachmentTray,
+  useKnowledgeAttachments,
+} from "../../components/AttachmentTray";
+import {
+  KnowledgeSourcePicker,
+  useKnowledgeBases,
+} from "../../components/KnowledgeSourcePicker";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { StepStream } from "../../components/StepStream";
 import {
   EmptyState,
   ErrorNotice,
   IconButton,
   LoadingLine,
-  StepState,
   formatTime,
   shortId,
 } from "../../components/ui";
 import {
   hasUnfinishedTurn,
-  type ChatActivity,
   type ChatConnectionState,
   type ChatSessionState,
   type ChatTurnState,
 } from "./model";
+import { deriveTurnStages, isTurnMetaActivity } from "./turnStages";
 import { useChatRuntime } from "./useChatRuntime";
-
-const DEFAULT_KNOWLEDGE_BASE = "kb_local";
 
 export function ChatPage() {
   const { identity } = useIdentity();
   const { runtime, state } = useChatRuntime(identity);
   const { sessionId } = useParams<{ sessionId?: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const selected = sessionId === undefined ? undefined : state.sessions[sessionId];
   const [question, setQuestion] = useState("");
-  const [knowledgeBaseDrafts, setKnowledgeBaseDrafts] = useState<Record<string, string>>({});
+  const [sourceDrafts, setSourceDrafts] = useState<Record<string, string | null>>({});
   const [creatingSession, setCreatingSession] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const mounted = useRef(true);
@@ -75,10 +83,26 @@ export function ChatPage() {
   }, [runtime, selectedSessionId]);
 
   const knowledgeBaseDraftKey = selectedSessionId ?? "new";
+  const requestedKnowledgeBase = searchParams.get("kb");
+  const requestedKnowledgeBaseId =
+    Object.prototype.hasOwnProperty.call(sourceDrafts, knowledgeBaseDraftKey)
+      ? sourceDrafts[knowledgeBaseDraftKey] ?? null
+      : selected?.knowledgeBaseId ?? requestedKnowledgeBase;
+  const knowledgeBases = useKnowledgeBases(identity);
   const knowledgeBaseId =
-    knowledgeBaseDrafts[knowledgeBaseDraftKey] ??
-    selected?.knowledgeBaseId ??
-    DEFAULT_KNOWLEDGE_BASE;
+    requestedKnowledgeBaseId !== null &&
+    knowledgeBases.data?.knowledge_bases.some(
+      (item) => item.knowledge_base_id === requestedKnowledgeBaseId,
+    )
+      ? requestedKnowledgeBaseId
+      : null;
+  const sourceResolving =
+    requestedKnowledgeBaseId !== null && knowledgeBases.isPending;
+  const answerMode = knowledgeBaseId === null ? "direct" : "rag";
+  const selectedKnowledgeBase = knowledgeBases.data?.knowledge_bases.find(
+    (item) => item.knowledge_base_id === knowledgeBaseId,
+  );
+  const attachments = useKnowledgeAttachments(identity, knowledgeBaseId);
   const turns =
     selected === undefined
       ? []
@@ -88,13 +112,30 @@ export function ChatPage() {
         });
   const unfinished = selected === undefined ? false : hasUnfinishedTurn(state, selected.sessionId);
   const composerDisabled =
-    creatingSession || unfinished || selected?.history === "loading";
+    creatingSession ||
+    sourceResolving ||
+    unfinished ||
+    selected?.history === "loading";
+
+  const changeSource = (nextId: string | null) => {
+    if (nextId === knowledgeBaseId) return;
+    if (
+      attachments.items.length > 0 &&
+      !window.confirm("切换资料会清空当前待发送的附件，是否继续？")
+    ) {
+      return;
+    }
+    attachments.clear();
+    setSourceDrafts((current) => ({
+      ...current,
+      [knowledgeBaseDraftKey]: nextId,
+    }));
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedQuestion = question.trim();
-    const trimmedKnowledgeBase = knowledgeBaseId.trim();
-    if (!trimmedQuestion || !trimmedKnowledgeBase || composerDisabled) return;
+    if (!trimmedQuestion || composerDisabled || attachments.hasBlockingItems) return;
     setSubmitError(null);
 
     try {
@@ -108,7 +149,8 @@ export function ChatPage() {
         target = {
           sessionId: opened.session_id,
           title: trimmedQuestion,
-          knowledgeBaseId: trimmedKnowledgeBase,
+          answerMode,
+          knowledgeBaseId,
           createdAt: now,
           updatedAt: now,
           connection: "idle",
@@ -131,9 +173,11 @@ export function ChatPage() {
       runtime.startAsk({
         sessionId: target.sessionId,
         question: trimmedQuestion,
-        knowledgeBaseId: trimmedKnowledgeBase,
+        answerMode,
+        knowledgeBaseId,
       });
       setQuestion("");
+      attachments.clear();
       if (selected === undefined && mounted.current) {
         void navigate(`/chat/${encodeURIComponent(target.sessionId)}`);
       }
@@ -198,7 +242,11 @@ export function ChatPage() {
 
       <main className="aw-chat-main">
         <ChatHeader
+          answerMode={answerMode}
           session={selected}
+          {...(selectedKnowledgeBase === undefined
+            ? {}
+            : { sourceLabel: selectedKnowledgeBase.name })}
           {...(selected === undefined
             ? {}
             : { onReconnect: () => runtime.reconnectSessionStream(selected.sessionId) })}
@@ -219,8 +267,8 @@ export function ChatPage() {
           ) : selected === undefined ? (
             <EmptyState
               icon={<MessageSquare aria-hidden="true" size={26} />}
-              title="用可核验的资料开始对话"
-              description="答案只会在最终证据与权限复核通过后发布；被阻止的候选文本不会进入页面。"
+              title="今天想聊什么？"
+              description="默认直接对话；需要依据项目资料时，再从输入框下方选择一个知识库。"
             />
           ) : selected.history === "loading" && turns.length === 0 ? (
             <LoadingLine label="正在读取安全会话历史" />
@@ -234,8 +282,8 @@ export function ChatPage() {
           ) : turns.length === 0 ? (
             <EmptyState
               icon={<BookOpen aria-hidden="true" size={25} />}
-              title="这个本地会话还是空的"
-              description="输入知识库 ID 和问题；Enter 发送，Shift + Enter 换行。"
+              title="这个会话还是空的"
+              description="可以直接提问，也可以选择知识库后获得带引用的回答。Enter 发送，Shift + Enter 换行。"
             />
           ) : (
             <div className="aw-chat-turn-list">
@@ -252,45 +300,67 @@ export function ChatPage() {
 
         <form className="aw-chat-composer" onSubmit={submit}>
           {submitError === null ? null : <ErrorNotice message={submitError} />}
+          <AttachmentTray
+            items={attachments.items}
+            onRemove={attachments.remove}
+            onRetry={attachments.retry}
+          />
           <div className="aw-chat-composer-row">
-            <label className="aw-chat-kb-field">
-              <span>知识库</span>
-              <input
-                aria-label="知识库 ID"
-                disabled={composerDisabled}
-                onChange={(event) =>
-                  setKnowledgeBaseDrafts((current) => ({
-                    ...current,
-                    [knowledgeBaseDraftKey]: event.target.value,
-                  }))
-                }
-                required
-                value={knowledgeBaseId}
-              />
-            </label>
+            <AttachmentButton
+              disabled={composerDisabled}
+              onFiles={attachments.addFiles}
+            />
             <textarea
               aria-label="问题"
               disabled={composerDisabled}
               maxLength={4096}
               onChange={(event) => setQuestion(event.target.value)}
               onKeyDown={submitOnEnter}
-              placeholder={unfinished ? "请等待当前问题安全终结…" : "询问已索引的知识…"}
+              placeholder={
+                unfinished
+                  ? "请等待当前回答完成…"
+                  : answerMode === "direct"
+                    ? "输入消息…"
+                    : `询问 ${selectedKnowledgeBase?.name ?? "所选知识库"}…`
+              }
               rows={1}
               value={question}
             />
             <button
               aria-label="发送问题"
               className="aw-button is-primary aw-chat-send"
-              disabled={composerDisabled || !question.trim() || !knowledgeBaseId.trim()}
+              disabled={composerDisabled || !question.trim() || attachments.hasBlockingItems}
               type="submit"
             >
               {creatingSession ? <RefreshCw aria-hidden="true" className="aw-spin" size={17} /> : <Send aria-hidden="true" size={17} />}
             </button>
           </div>
+          <div className="aw-chat-composer-tools">
+            <KnowledgeSourcePicker
+              compact
+              disabled={composerDisabled}
+              identity={identity}
+              onChange={(knowledgeBase) =>
+                changeSource(knowledgeBase?.knowledge_base_id ?? null)
+              }
+              value={knowledgeBaseId}
+            />
+            <span>
+              {attachments.items.some(
+                (item) => item.state === "waiting_for_source",
+              )
+                ? "附件需要先选择知识库"
+                : attachments.hasBlockingItems
+                  ? "附件可检索后才能发送"
+                  : answerMode === "direct"
+                    ? "自由回答不会检索项目资料"
+                    : "回答会检索资料并标注引用"}
+            </span>
+          </div>
           <p>
             {selected === undefined
-              ? "发送时才创建服务端 Session；Session 创建本身没有幂等键。"
-              : "同一会话一次只运行一个 Turn；失败重试会复用原 Idempotency-Key。"}
+              ? "发送第一条消息时创建会话。附件会先加入所选知识库并等待索引。"
+              : "同一会话可在自由回答与知识库回答之间逐条切换。"}
           </p>
         </form>
       </main>
@@ -299,21 +369,27 @@ export function ChatPage() {
 }
 
 function ChatHeader({
+  answerMode,
   session,
+  sourceLabel,
   onReconnect,
 }: {
+  answerMode: "direct" | "rag";
   session: ChatSessionState | undefined;
+  sourceLabel?: string;
   onReconnect?: () => void;
 }) {
   return (
     <header className="aw-chat-header">
       <div>
-        <p className="aw-eyebrow">Chat + RAG</p>
+        <p className="aw-eyebrow">Chat</p>
         <h1>{session?.title ?? "新会话"}</h1>
         <p>
           {session === undefined
-            ? "先选择知识库，再发送一个有证据边界的问题。"
-            : `本地会话 · ${shortId(session.sessionId)} · ${session.knowledgeBaseId}`}
+            ? "自由对话与知识库问答共用一个输入框。"
+            : answerMode === "direct"
+              ? "当前：自由回答 · 可随时切换知识库"
+              : `当前资料：${sourceLabel ?? "知识库"}`}
         </p>
       </div>
       {session === undefined ? null : (
@@ -367,9 +443,13 @@ function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void
         <header>
           <span className="aw-chat-assistant-mark" aria-hidden="true">A</span>
           <strong>Agent Workbench</strong>
-          {turn.historical ? <small>安全历史投影</small> : <small>{turn.phase}</small>}
+          {turn.historical ? (
+            <small>历史记录</small>
+          ) : (
+            <small>{turn.answerMode === "direct" ? "自由回答" : "知识库回答"}</small>
+          )}
         </header>
-        {turn.activities.length === 0 ? null : <ActivityList activities={turn.activities} />}
+        {turn.activities.length === 0 ? null : <TurnStepStream turn={turn} />}
         {turn.phase === "withheld" ? (
           <div className="aw-notice is-warning">
             <AlertTriangle aria-hidden="true" size={16} />
@@ -385,6 +465,17 @@ function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void
         {turn.historical && turn.answer === undefined ? (
           <p className="aw-chat-no-citations">历史仅包含用户消息；服务端没有发布 assistant 消息。</p>
         ) : null}
+        {turn.historical && turn.answer !== undefined ? (
+          // The history endpoint returns role and text and nothing else, so a
+          // reloaded answer carries no citations and no grounded flag. Running
+          // the live verdict here would tell the reader "服务端没有为这段答案发布引用"
+          // about answers that did publish citations, and would quietly drop the
+          // ungrounded warning off answers that earned one.
+          <p className="aw-chat-no-citations">
+            <CircleDot aria-hidden="true" size={13} />
+            历史记录只保存对话文本，不含引用与证据标记
+          </p>
+        ) : null}
         {turn.phase === "failed" ? (
           <div className="aw-chat-turn-error">
             <ErrorNotice message={turn.error ?? "这个 Turn 未能完成"} />
@@ -396,39 +487,85 @@ function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void
             )}
           </div>
         ) : null}
-        {turn.phase === "committed" || turn.phase === "withheld" ? (
-          <Citations citations={turn.citations} withheld={turn.phase === "withheld"} />
+        {!turn.historical && (turn.phase === "committed" || turn.phase === "withheld") ? (
+          <Citations
+            answerMode={turn.answerMode}
+            citations={turn.citations}
+            withheld={turn.phase === "withheld"}
+            grounded={turn.grounded !== false}
+          />
         ) : null}
       </div>
     </article>
   );
 }
 
-function ActivityList({ activities }: { activities: ChatActivity[] }) {
+/**
+ * The turn's thinking, in the same shape Work shows a Task's.
+ *
+ * This replaces a flat list of every durable event. That list was already
+ * openable, but it read as a log rather than as work: eight lines that did not
+ * say which of them were the same phase, and no way to collapse the ones the
+ * reader was done with. Grouping into the three things a turn does gives the
+ * same detail behind three lines, and the running one opens itself.
+ */
+function TurnStepStream({ turn }: { turn: ChatTurnState }) {
+  const stages = deriveTurnStages(turn.activities, turn.phase);
+  const meta = turn.activities.filter(isTurnMetaActivity);
+  const running = turn.phase === "submitting" || turn.phase === "running";
+
   return (
-    <ol className="aw-chat-activity" aria-label="Turn durable events">
-      {activities.map((activity) => (
-        <li key={activity.key}>
-          <span className={`aw-chat-activity-state is-${activity.state}`}>
-            <StepState state={stepState(activity.state)} />
-          </span>
-          <span>
-            <strong>{activity.label}</strong>
-            {activity.detail === undefined ? null : <small>{activity.detail}</small>}
-          </span>
-          <time dateTime={activity.timestamp}>{formatTime(activity.timestamp)}</time>
-        </li>
-      ))}
-    </ol>
+    <StepStream
+      ariaLabel="回答过程"
+      // The label the turn already computed. It carries what the event meant
+      // in Chat's own vocabulary -- "答案已发布（未经证据核实）" is a distinction
+      // Work's generic titles do not draw.
+      eventTitle={(event) =>
+        turn.activities.find((activity) => activity.envelope === event)?.label ??
+        event.event_type
+      }
+      meta={{ title: "运行记录", events: meta.map((activity) => activity.envelope) }}
+      running={running}
+      stages={stages}
+    />
   );
 }
 
-function Citations({ citations, withheld }: { citations: Citation[]; withheld: boolean }) {
+function Citations({
+  answerMode,
+  citations,
+  withheld,
+  grounded,
+}: {
+  answerMode: "direct" | "rag";
+  citations: Citation[];
+  withheld: boolean;
+  grounded: boolean;
+}) {
   if (withheld) {
     return (
       <p className="aw-chat-no-citations">
         <ShieldAlert aria-hidden="true" size={14} />
         被阻止的答案不发布引用
+      </p>
+    );
+  }
+  // Checked before the empty-citation case, because the two look identical
+  // from the citation list alone and mean opposite things. "No citations
+  // published" invites the reader to wonder what went wrong; this one is the
+  // correct and complete output of a path that never retrieved.
+  if (!grounded) {
+    // Two different events land here and only one of them skipped retrieval.
+    // A turn the reader sent at a knowledge base *was* searched -- the server
+    // looked, judged nothing relevant enough to answer from, and fell back.
+    // Telling them it "did not search the knowledge base" would contradict the
+    // knowledge base they picked and the label above this answer.
+    return (
+      <p className="aw-chat-no-citations aw-chat-ungrounded">
+        <ShieldAlert aria-hidden="true" size={14} />
+        {answerMode === "rag"
+          ? "已检索所选知识库，但没有找到足够相关的内容；这条回答由模型直接作答，没有引用"
+          : "未经证据核实：本条回答由模型直接作答，未检索知识库，因此没有引用"}
       </p>
     );
   }
@@ -455,17 +592,11 @@ function Citations({ citations, withheld }: { citations: Citation[]; withheld: b
   );
 }
 
-function stepState(state: ChatActivity["state"]): "complete" | "active" | "waiting" | "failed" {
-  if (state === "complete") return "complete";
-  if (state === "failed") return "failed";
-  if (state === "running") return "active";
-  return "waiting";
-}
-
 function localSession(session: ChatSessionState): LocalChatSession {
   return {
     sessionId: session.sessionId,
     title: session.title,
+    answerMode: session.answerMode,
     knowledgeBaseId: session.knowledgeBaseId,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,

@@ -5,18 +5,15 @@ export interface TaskInputArtifact {
   objective: string;
   max_revisions: number;
   knowledge_base_id: string | null;
+  // Absent on Tasks submitted before the field existed. Those ran under a graph
+  // that always exported, so `true` is what re-submitting one has to mean.
+  wants_report: boolean;
 }
 
 export interface TimelineState {
   taskId: string;
   events: EventEnvelope[];
   cursor: string | null;
-}
-
-export interface TimelineGroup {
-  id: string;
-  graphNodeId: string | null;
-  events: EventEnvelope[];
 }
 
 export interface FinalReportMatch {
@@ -83,24 +80,6 @@ export function mergeTimelineResponse(
   };
 }
 
-export function groupTimelineEvents(events: readonly EventEnvelope[]): TimelineGroup[] {
-  const groups = new Map<string, TimelineGroup>();
-  for (const event of events) {
-    const id = event.graph_node_id === null ? "task:" : `node:${event.graph_node_id}`;
-    const group = groups.get(id);
-    if (group === undefined) {
-      groups.set(id, {
-        id,
-        graphNodeId: event.graph_node_id,
-        events: [event],
-      });
-    } else {
-      group.events.push(event);
-    }
-  }
-  return [...groups.values()];
-}
-
 export function findTaskInputRef(events: readonly EventEnvelope[]): string | null {
   for (const event of events) {
     if (!isEvent(event, "TaskSubmitted")) continue;
@@ -133,6 +112,8 @@ export function parseTaskInputArtifact(value: unknown): TaskInputArtifact | null
     objective: value.objective,
     max_revisions: value.max_revisions,
     knowledge_base_id: value.knowledge_base_id,
+    wants_report:
+      typeof value.wants_report === "boolean" ? value.wants_report : true,
   };
 }
 
@@ -202,6 +183,77 @@ export function findFinalReport(events: readonly EventEnvelope[]): FinalReportMa
     }
   }
   return null;
+}
+
+/**
+ * The draft the Task wrote, for a Task that produced no file.
+ *
+ * A Task that was not asked for a report still did the work, and the result has
+ * to be readable somewhere. The synthesize node's model output *is* that
+ * result -- the export node only copies it into an artifact.
+ *
+ * Unlike Chat, a Task has no release fence over this text: there is no
+ * `AnswerCommitted` boundary in the graph, and the report the export node
+ * writes is this same text. Hiding it here would hide the Task's only output.
+ */
+export function findDraftText(events: readonly EventEnvelope[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event === undefined) continue;
+    if (event.graph_node_id !== "synthesize") continue;
+    if (!isEvent(event, "ModelCompleted")) continue;
+    const text = stringField(event.payload, "text");
+    if (text !== null) return text;
+  }
+  return null;
+}
+
+/** One artifact the Task produced, as the side rail lists it. */
+export interface TaskArtifact {
+  artifact: ArtifactRef;
+  /** The stage that produced it, for saying where it came from. */
+  graphNodeId: string | null;
+  producedAt: string;
+}
+
+const ARTIFACT_KIND_LABELS: Record<string, string> = {
+  evidence_bundle: "检索到的证据",
+  report: "报告文件",
+  task_input: "任务输入",
+};
+
+export function artifactLabel(artifact: ArtifactRef): string {
+  return (
+    ARTIFACT_KIND_LABELS[artifact.kind] ??
+    artifact.filename ??
+    artifact.kind
+  );
+}
+
+/**
+ * Every artifact this Task produced, oldest first.
+ *
+ * Collected from the timeline rather than from a dedicated endpoint because
+ * the timeline is already the record of what happened, and an artifact only
+ * exists here if some step is on record as having written it. Deduplicated by
+ * id: a retried step re-reports the artifact it already wrote.
+ */
+export function collectArtifacts(
+  events: readonly EventEnvelope[],
+): TaskArtifact[] {
+  const seen = new Set<string>();
+  const found: TaskArtifact[] = [];
+  for (const event of events) {
+    const artifact = parseArtifactRef(event.payload.artifact);
+    if (artifact === null || seen.has(artifact.artifact_id)) continue;
+    seen.add(artifact.artifact_id);
+    found.push({
+      artifact,
+      graphNodeId: event.graph_node_id,
+      producedAt: event.timestamp,
+    });
+  }
+  return found;
 }
 
 export function eventTitle(event: EventEnvelope): string {

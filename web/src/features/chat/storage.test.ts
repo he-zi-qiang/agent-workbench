@@ -42,6 +42,7 @@ describe("identity-scoped chat storage", () => {
     const session: LocalChatSession = {
       sessionId: "ses_1",
       title: "Local only",
+      answerMode: "rag",
       knowledgeBaseId: "kb_main",
       createdAt: "2026-08-02T12:00:00Z",
       updatedAt: "2026-08-02T12:01:00Z",
@@ -50,5 +51,32 @@ describe("identity-scoped chat storage", () => {
 
     expect(loadLocalSessions(ALICE)).toEqual([session]);
     expect(loadLocalSessions(BOB)).toEqual([]);
+  });
+
+  it("migrates the old required-knowledge-base session shape", () => {
+    const key = `aw.chat.sessions.v1:${identityStorageKey(ALICE)}`;
+    window.localStorage.setItem(
+      key,
+      JSON.stringify([
+        {
+          sessionId: "ses_legacy",
+          title: "Legacy",
+          knowledgeBaseId: "kb_legacy",
+          createdAt: "2026-08-02T12:00:00Z",
+          updatedAt: "2026-08-02T12:01:00Z",
+        },
+      ]),
+    );
+
+    expect(loadLocalSessions(ALICE)).toEqual([
+      {
+        sessionId: "ses_legacy",
+        title: "Legacy",
+        answerMode: "rag",
+        knowledgeBaseId: "kb_legacy",
+        createdAt: "2026-08-02T12:00:00Z",
+        updatedAt: "2026-08-02T12:01:00Z",
+      },
+    ]);
   });
 });

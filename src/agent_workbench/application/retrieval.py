@@ -30,11 +30,10 @@ from agent_workbench.domain.context import (
     ContextPacket,
     SourceLocator,
 )
+from agent_workbench.ports.candidates import CandidateRetrieverPort
 from agent_workbench.ports.conversation_store import AuthorizedRevision
 from agent_workbench.ports.documents import DocumentStore
-from agent_workbench.ports.embedding import EmbeddingPort
 from agent_workbench.ports.reranker import RerankerPort
-from agent_workbench.ports.sparse import SparseEncoderPort
 from agent_workbench.ports.telemetry import (
     RETRIEVAL_AUTHORIZED,
     RETRIEVAL_CANDIDATES,
@@ -42,7 +41,7 @@ from agent_workbench.ports.telemetry import (
     NullTelemetry,
     Telemetry,
 )
-from agent_workbench.ports.vector_index import ScoredChunk, VectorIndexPort
+from agent_workbench.ports.vector_index import ScoredChunk
 
 # Asked of the index, before authorization removes some of them. A candidate
 # the caller may not read still costs a slot, so the funnel starts wider than
@@ -79,6 +78,21 @@ class AuthorizedContext:
 
     packet: ContextPacket
     authorized_revisions: tuple[tuple[str, int], ...]
+    #: The cross-encoder's relevance score for the best surviving candidate,
+    #: or ``None`` when no reranker ran.
+    #:
+    #: Kept because it is the only calibrated relevance signal this system
+    #: produces, and it used to be discarded: ``_rerank`` scored every passage,
+    #: sorted by those scores, and returned the candidates carrying their
+    #: *retrieval* scores. Retrieval scores cannot answer "is this relevant" --
+    #: an RRF score is a rank sum, so the top hit of an unrelated query still
+    #: scores near the maximum. Anything that needs to decide whether the
+    #: corpus actually covers a question has to read this instead.
+    #:
+    #: ``None`` is not "irrelevant". It means nothing measured relevance, and a
+    #: caller that treats absence as a low score is guessing; ADR-018's routed
+    #: shape refuses to assemble without a reranker for exactly that reason.
+    top_relevance: float | None = None
     # Whether a reranker actually produced this order. False both when none is
     # configured and when one failed open, because an ablation that cannot tell
     # those apart from a successful rerank will report a fail-open run as
@@ -94,19 +108,20 @@ class SourcesChangedError(RuntimeError):
 class RetrievalService:
     """Retrieval, authorized against PostgreSQL on the way in and out.
 
-    Hybrid when the process has a sparse encoder, dense when it does not. The
-    difference is reported rather than hidden: ``mode`` says which ran, so an
-    evaluation report cannot label a dense run as hybrid, and an ablation
-    comparing the two cannot accidentally compare one to itself.
+    Which retriever proposes the candidates is somebody else's decision -- see
+    ``CandidateRetrieverPort``. What happens to them afterwards is this class's
+    entire reason to exist, and it does not vary by retriever: authorize, then
+    rerank, then cut, then build. ADR-017 lets a framework own the first step;
+    it does not let one own any of the rest, because every step after this one
+    is a way for text to reach somebody.
+
+    The retriever's own name is reported rather than hidden: ``mode`` says which
+    one ran, so an evaluation report cannot label a dense run as hybrid, and an
+    ablation comparing two retrievers cannot accidentally compare one to itself.
     """
 
-    embedder: EmbeddingPort
-    index: VectorIndexPort
+    candidate_retriever: CandidateRetrieverPort
     documents: DocumentStore
-    # Absent when the process has no sparse runtime. Retrieval then uses the
-    # dense arm alone -- which is a different retriever, not a degraded one,
-    # and says so.
-    sparse_encoder: SparseEncoderPort | None = None
     # Absent when the process has no reranking runtime. Present, it reorders
     # what PostgreSQL already authorized -- never what the index returned.
     reranker: RerankerPort | None = None
@@ -124,38 +139,26 @@ class RetrievalService:
         is on its ``AuthorizedContext``.
         """
 
-        base = "hybrid" if self.sparse_encoder is not None else "dense"
+        base = self.candidate_retriever.mode
         return f"{base}+rerank" if self.reranker is not None else base
 
     async def _candidates(self, request: RetrievalRequest) -> tuple[ScoredChunk, ...]:
-        """Ask the index, by whichever arms this process has."""
+        """Ask the retriever for more than will be kept.
 
-        vector = await self.embedder.embed_query(request.query)
-        limit = request.top_k * self.candidate_multiplier
-        if self.sparse_encoder is None:
-            return await self.index.search(
-                vector=vector,
-                tenant_id=request.tenant_id,
-                knowledge_base_id=request.knowledge_base_id,
-                authorized_principals=(request.principal_id,),
-                limit=limit,
-            )
+        The multiplier is applied here rather than by the retriever because it
+        is a property of what happens *next* -- authorization removes some
+        candidates and reranking needs more than top_k to choose from. A
+        retriever that decided its own candidate budget would be deciding how
+        much room the authorization step has to work with, which is a decision
+        it has no way to be right about.
+        """
 
-        weights = await self.sparse_encoder.encode_query(request.query)
-        return await self.index.search_hybrid(
-            vector=vector,
-            sparse_indices=weights.indices,
-            sparse_values=weights.values,
+        return await self.candidate_retriever.candidates(
+            query=request.query,
             tenant_id=request.tenant_id,
+            principal_id=request.principal_id,
             knowledge_base_id=request.knowledge_base_id,
-            authorized_principals=(request.principal_id,),
-            limit=limit,
-            # Each arm proposes a full candidate set; RRF is what narrows them
-            # to one. Halving them here would make fusion choose between two
-            # already-truncated lists, which is a different retriever from the
-            # one being evaluated.
-            dense_limit=limit,
-            sparse_limit=limit,
+            limit=request.top_k * self.candidate_multiplier,
         )
 
     async def retrieve(self, request: RetrievalRequest) -> AuthorizedContext:
@@ -201,8 +204,17 @@ class RetrievalService:
         # read them. Later, it would be reordering a list already cut to top_k,
         # which lets it promote within the retriever's choice but never
         # overturn it, and that is not the thing being evaluated.
-        ranked, reranked = await self._rerank(request.query, authorized)
+        ranked, relevance = await self._rerank(request.query, authorized)
+        reranked = relevance is not None
         selected = ranked[: request.top_k]
+        # The best score among what survived the cut, not among everything
+        # scored: a highly relevant passage the caller will never be shown
+        # should not vouch for the context it is absent from.
+        top_relevance = (
+            max(relevance[: request.top_k], default=None)
+            if relevance is not None
+            else None
+        )
 
         # Both counts, because the interesting number is the gap: candidates
         # the index proposed against passages this principal may actually read.
@@ -226,12 +238,18 @@ class RetrievalService:
                 )
             ),
             reranked=reranked,
+            top_relevance=top_relevance,
         )
 
     async def _rerank(
         self, query: str, authorized: tuple[ScoredChunk, ...]
-    ) -> tuple[tuple[ScoredChunk, ...], bool]:
+    ) -> tuple[tuple[ScoredChunk, ...], tuple[float, ...] | None]:
         """Reorder authorized candidates, or return them untouched.
+
+        Returns the scores alongside the order, in the order returned, so a
+        caller can read relevance without recomputing it. ``None`` rather than
+        an empty tuple when no reranker ran -- empty would be indistinguishable
+        from "scored, and everything scored zero".
 
         Fail-open, deliberately and narrowly. A reranker is a quality
         improvement over an order that is already usable, so a timeout or a
@@ -243,7 +261,7 @@ class RetrievalService:
         """
 
         if self.reranker is None or not authorized:
-            return authorized, False
+            return authorized, None
 
         passages = tuple(candidate.text for candidate in authorized)
         try:
@@ -260,13 +278,13 @@ class RetrievalService:
             # BaseException, so it passes through here. A cancelled request
             # must stay cancelled rather than fail open into finishing work
             # nobody is waiting for.
-            return authorized, False
+            return authorized, None
 
         if len(scores) != len(authorized):
             # An adapter is allowed to be slow or broken; it is not allowed to
             # be misaligned, because misalignment is indistinguishable from a
             # bad ranking once the scores are attached to the wrong passages.
-            return authorized, False
+            return authorized, None
 
         order = sorted(
             range(len(authorized)),
@@ -275,7 +293,10 @@ class RetrievalService:
             # instead of shuffling it.
             key=lambda index: (-scores[index], index),
         )
-        return tuple(authorized[index] for index in order), True
+        return (
+            tuple(authorized[index] for index in order),
+            tuple(scores[index] for index in order),
+        )
 
     async def confirm_unchanged(
         self, context: AuthorizedContext, *, tenant_id: str, principal_id: str

@@ -45,6 +45,10 @@ class CreateTaskRequest(BaseModel):
     objective: str = Field(min_length=1, max_length=4096)
     max_revisions: int = Field(default=2, ge=0, le=20)
     knowledge_base_id: Identifier | None = None
+    # Whether this Task should end in a downloadable file. Defaulted False so a
+    # client that does not know about the field submits the cheaper shape --
+    # one that never stops to ask a human to authorize an export.
+    wants_report: bool = False
 
 
 class TaskView(BaseModel):
@@ -53,6 +57,11 @@ class TaskView(BaseModel):
     task_id: Identifier
     status: TaskStatus
     status_detail: str | None
+    # The caller's own submitted objective, cut to a label. Safe to return for
+    # the same reason status_detail is: list and get are already scoped to the
+    # caller's own Tasks, so this returns their text to them. Absent on Tasks
+    # submitted before the column existed.
+    objective_preview: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -106,6 +115,7 @@ async def submit(
             objective=body.objective,
             max_revisions=body.max_revisions,
             knowledge_base_id=body.knowledge_base_id,
+            wants_report=body.wants_report,
         ),
         submission_dedup_key=idempotency_key,
     )
@@ -213,6 +223,7 @@ def _view(task: TaskRun) -> TaskView:
         task_id=task.task_id,
         status=task.status,
         status_detail=task.status_detail,
+        objective_preview=task.objective_preview,
         created_at=task.created_at,
         updated_at=task.updated_at,
     )

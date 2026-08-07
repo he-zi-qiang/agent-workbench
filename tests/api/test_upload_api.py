@@ -19,7 +19,11 @@ import httpx
 import pytest
 from sqlalchemy import text
 
-from agent_workbench.adapters.persistence import create_query_engine
+from agent_workbench.adapters.persistence import (
+    PostgresKnowledgeBaseStore,
+    create_query_engine,
+)
+from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.apps.api.dependencies import (
     InsecureDeploymentError,
     build_dependencies,
@@ -28,6 +32,7 @@ from agent_workbench.apps.api.main import build_app, create_app
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
 from agent_workbench.bootstrap.settings import Settings
+from agent_workbench.domain.policies import PrincipalContext
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 
@@ -41,7 +46,7 @@ HEADERS = {"x-tenant-id": TENANT, "x-principal-id": OWNER}
 OTHER_HEADERS = {"x-tenant-id": OTHER_TENANT, "x-principal-id": "user_2"}
 
 TABLES = (
-    "artifacts, upload_intents, document_acl, "
+    "knowledge_bases, artifacts, upload_intents, document_acl, "
     "document_versions, documents, outbox_events"
 )
 
@@ -81,6 +86,11 @@ def _run(
         try:
             async with engine.begin() as connection:
                 await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))
+            await KnowledgeBaseService(PostgresKnowledgeBaseStore(engine)).create(
+                PrincipalContext(tenant_id=TENANT, principal_id=OWNER),
+                name="Main",
+                knowledge_base_id="kb_main",
+            )
         finally:
             await engine.dispose()
 

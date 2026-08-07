@@ -1,11 +1,10 @@
 """One chat turn: claim it, produce an answer, re-check the evidence, release.
 
-What produces the answer is no longer this module's business. Two shapes exist
--- fixed two-step and agentic -- and they live behind ``TurnExecution`` in
-``chat_execution``, because the difference between them is worth keeping
-visible and the rest of a turn is not worth writing twice. The fixed shape
-retrieves once and the model answers from what it was given; the agentic shape
-gives the model a search tool and lets it decide. A deployment picks one.
+What produces the answer is no longer this module's business. The deployment
+picks its RAG shape, while each request explicitly chooses Direct or RAG, and
+both decisions live behind ``TurnExecution`` in ``chat_execution``. The rest of
+a turn is not worth writing twice: claiming, recovery and release remain one
+lifecycle whichever execution answered.
 
 Everything below the seam is the same either way, and most of it is failure
 handling: an idempotent claim, a lease, a request deadline, a best-effort close
@@ -77,6 +76,14 @@ class ChatTurn:
     citations: tuple[Citation, ...]
     outcome: AgentOutcome
     withheld: bool = False
+    #: Whether this answer rested on retrieved evidence (ADR-018).
+    #:
+    #: Travels to the client because the routed shape can produce either kind
+    #: within one conversation, so a reader cannot infer it from the session.
+    #: Nor from the citation list: an answer that retrieved and cited nothing
+    #: is a different claim from one that never retrieved, and only the first
+    #: went through the release fence.
+    grounded: bool = True
 
 
 class ChatExecutionError(RuntimeError):
@@ -95,10 +102,8 @@ class ChatExecutionError(RuntimeError):
 class ChatService:
     """Claim a turn, have it answered, re-check the evidence, release it."""
 
-    # Which shape answers. The service does not know or care which it holds:
-    # that is the point of the seam, and it is what lets one deployment be
-    # evaluated for determinism and another for capability without either
-    # growing a branch in the turn lifecycle.
+    # Which execution answers. It may be one concrete shape or the per-request
+    # selector; the lifecycle deliberately does not branch on that distinction.
     execution: TurnExecution
     conversations: ChatTurnStore
     releaser: ChatReleaseCoordinator
@@ -286,6 +291,11 @@ class ChatService:
                 for document_id, source_revision in produced.authorized_revisions
             ),
             citations=produced.citations,
+            # Carried, never inferred. The release coordinator picks its
+            # terminal event from this, and reconstructing it downstream from
+            # "were there citations" would merge a retrieval turn that cited
+            # nothing with a turn that never retrieved.
+            grounded=produced.grounded,
         )
 
         prepared = await self.conversations.prepare_release(
@@ -404,6 +414,7 @@ def _public_turn(turn: StoredChatTurn) -> ChatTurn:
         raise ChatTurnConflictError("chat turn is not released")
     return ChatTurn(
         turn_id=turn.turn_id,
+        grounded=turn.result.grounded,
         answer=turn.result.answer,
         citations=turn.result.citations,
         outcome=turn.result.outcome,
@@ -416,6 +427,7 @@ def _request_hash(request: ChatRequest) -> str:
 
     canonical = json.dumps(
         {
+            "answer_mode": request.answer_mode,
             "knowledge_base_id": request.knowledge_base_id,
             "question": request.question,
             "top_k": request.top_k,

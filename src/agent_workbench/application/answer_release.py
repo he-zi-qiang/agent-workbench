@@ -24,6 +24,7 @@ from agent_workbench.domain.events import (
     EventPayload,
     ModelCompleted,
     ModelDelta,
+    UngroundedAnswerCommitted,
 )
 from agent_workbench.ports.event_log import EventKey, EventSink
 
@@ -53,8 +54,16 @@ class AnswerReleaseSink:
             payload = payload.model_copy(update={"text": ""})
         elif isinstance(payload, ModelCompleted):
             payload = payload.model_copy(update={"text": "", "output_ref": None})
-        elif isinstance(payload, (AnswerCommitted, AnswerWithheld)):
-            raise RuntimeError("answer events must pass through commit() or withhold()")
+        elif isinstance(
+            payload, (AnswerCommitted, UngroundedAnswerCommitted, AnswerWithheld)
+        ):
+            # All three, or the new one would be the single answer event a
+            # runtime could emit directly, bypassing the release rule that the
+            # other two exist to enforce.
+            raise RuntimeError(
+                "answer events must pass through commit(), commit_ungrounded() "
+                "or withhold()"
+            )
         return await self.inner.emit(
             payload,
             parent_event_id=parent_event_id,
@@ -73,6 +82,34 @@ class AnswerReleaseSink:
         self._ensure_unreleased()
         envelope = await self.inner.emit(
             AnswerCommitted(text=text, citations=citations),
+            event_key=event_key,
+        )
+        self._released = True
+        return envelope
+
+    async def commit_ungrounded(
+        self,
+        *,
+        text: str,
+        event_key: EventKey | None = None,
+    ) -> EventEnvelope:
+        """Publish an answer that never had evidence to check (ADR-018).
+
+        A separate method rather than ``commit(citations=())``, for the same
+        reason the event is separate: an empty citation tuple is what a
+        retrieval turn produces when the model cited nothing it was shown, and
+        that is a very different fact from a turn where nothing was retrieved
+        at all. One call site deciding to pass ``()`` would collapse the two
+        into a distinction no reader of the log could recover.
+
+        The same single-release rule applies. A turn publishes one terminal
+        answer whichever shape produced it, so this cannot follow a commit or a
+        withhold, and none of them can follow it.
+        """
+
+        self._ensure_unreleased()
+        envelope = await self.inner.emit(
+            UngroundedAnswerCommitted(text=text),
             event_key=event_key,
         )
         self._released = True

@@ -115,6 +115,19 @@ class ChatTurnResult(VersionedModel):
     authorized_revisions: tuple[AuthorizedRevision, ...]
     citations: tuple[Citation, ...] = ()
     withheld: bool = False
+    #: Whether this answer was built on retrieved evidence (ADR-018).
+    #:
+    #: Defaults to ``True`` because every row written before the ungrounded
+    #: shape existed came from a path that always retrieved. A default of
+    #: ``False`` would silently relabel the entire history as unverified, which
+    #: is the more damaging direction to be wrong in.
+    #:
+    #: This is what the release coordinator reads to choose between
+    #: ``AnswerCommitted`` and ``UngroundedAnswerCommitted``. Inferring it from
+    #: an empty citation list instead would conflate "retrieved and cited
+    #: nothing" with "never retrieved", and those are the two states the whole
+    #: distinction exists to keep apart.
+    grounded: bool = True
 
     @model_validator(mode="after")
     def validate_release_candidate(self) -> ChatTurnResult:
@@ -125,6 +138,19 @@ class ChatTurnResult(VersionedModel):
         )
         if revision_ids != tuple(sorted(set(revision_ids))):
             raise ValueError("authorized revisions must be unique and sorted")
+        if not self.grounded and (self.citations or self.authorized_revisions):
+            # An ungrounded turn never reached retrieval, so there is nothing
+            # for either of these to have come from. Rejecting here rather than
+            # trusting the caller matters because both fields are load bearing
+            # downstream in opposite directions: citations would present
+            # invented sources with this system's authority, and revisions
+            # would send the release fence to re-check documents this answer
+            # never read -- which can only fail, withholding an answer for a
+            # source that was never involved.
+            raise ValueError(
+                "an ungrounded result must carry no citations and no "
+                "authorized revisions"
+            )
         if self.withheld:
             if (
                 self.citations

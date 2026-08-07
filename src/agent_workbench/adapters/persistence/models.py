@@ -48,6 +48,10 @@ metadata = MetaData(naming_convention=NAMING_CONVENTION)
 IDENTIFIER_LENGTH = 128
 DIGEST_LENGTH = 64
 FILENAME_LENGTH = 255
+# Mirrors ports.task_registry.OBJECTIVE_PREVIEW_LIMIT. The port bounds what may
+# be constructed; this bounds what may be stored, and a test asserts they agree
+# so a widened preview cannot start silently failing inserts.
+OBJECTIVE_PREVIEW_LENGTH = 200
 
 conversation_sessions = Table(
     "conversation_sessions",
@@ -216,6 +220,37 @@ artifacts = Table(
         server_default=func.now(),
     ),
     Index("ix_artifacts_tenant_id_artifact_id", "tenant_id", "artifact_id"),
+)
+
+knowledge_bases = Table(
+    "knowledge_bases",
+    metadata,
+    # Knowledge-base ids are generated globally, but tenant remains part of the
+    # primary key so every lookup is structurally tenant-scoped rather than
+    # relying on UUID probability as an authorization boundary.
+    Column("knowledge_base_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("name", String(200), nullable=False),
+    Column("description", Text, nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Index(
+        "ix_knowledge_bases_tenant_id_owner_id_created_at",
+        "tenant_id",
+        "owner_id",
+        "created_at",
+    ),
 )
 
 upload_intents = Table(
@@ -769,6 +804,12 @@ task_runs = Table(
     # artifact, but it must return the Task opened by the first writer.
     Column("input_fingerprint", String(DIGEST_LENGTH), nullable=False),
     Column("submission_dedup_key", String(IDENTIFIER_LENGTH), nullable=False),
+    # A label so a list of Tasks reads as work rather than as identifiers. Not
+    # the objective: that stays in the input artifact, and this is a bounded
+    # copy taken once at submission. Nullable because rows written before this
+    # column existed have no label, and inventing one from the id would be
+    # worse than showing the id.
+    Column("objective_preview", String(OBJECTIVE_PREVIEW_LENGTH), nullable=True),
     # What this Task means, resolved at submission and never re-resolved.
     # Deterministic semantics only: the settings layer builds it, and it
     # excludes alias, policy, DSN, secret, endpoint and coordination -- a

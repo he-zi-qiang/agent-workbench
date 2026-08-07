@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import AgentWorkbenchError, ErrorCode
 from agent_workbench.domain.identifiers import new_id
@@ -48,6 +49,7 @@ class UploadService:
 
     documents: DocumentStore
     artifacts: ArtifactStore
+    knowledge_bases: KnowledgeBaseService
 
     async def create_upload(
         self,
@@ -92,6 +94,14 @@ class UploadService:
             upload_id=upload_id,
             tenant_id=tenant_id,
             principal_id=principal_id,
+        )
+        # An id grants no write authority. Unknown, another tenant's and a base
+        # owned by another principal all refuse identically, before any
+        # document row or outbox event can be written.
+        await self.knowledge_bases.require_writable(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            knowledge_base_id=knowledge_base_id,
         )
         # head() is scoped to this principal, so an artifact stored by anyone
         # else is not found rather than mismatched: the difference would

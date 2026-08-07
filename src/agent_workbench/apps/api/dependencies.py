@@ -36,6 +36,7 @@ from agent_workbench.adapters.persistence import (
     PostgresConversationStore,
     PostgresDocumentStore,
     PostgresEventLog,
+    PostgresKnowledgeBaseStore,
     PostgresTaskRegistry,
     create_query_engine,
 )
@@ -50,14 +51,18 @@ from agent_workbench.application.approvals import ApprovalService
 from agent_workbench.application.chat import REFUSAL, ChatService
 from agent_workbench.application.chat_execution import (
     AgenticExecution,
+    AnswerModeSelector,
     FixedTwoStepExecution,
     RetrievalJournal,
+    RoutedExecution,
     TurnExecution,
+    UngroundedExecution,
 )
 from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
     ChatTurnReaper,
 )
+from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
 from agent_workbench.application.tasks import SubmittedSemantics, TaskService
@@ -79,6 +84,7 @@ from agent_workbench.bootstrap.reranker_factory import (
     RerankerUnavailable,
     build_reranker,
 )
+from agent_workbench.bootstrap.retrieval_factory import build_candidate_retriever
 from agent_workbench.bootstrap.sparse_factory import (
     SparseEncodingUnavailable,
     build_sparse_encoder,
@@ -99,6 +105,10 @@ class InsecureDeploymentError(RuntimeError):
     """A deployment asked to serve remotely without a real identity provider."""
 
 
+class RerankerRequiredError(RuntimeError):
+    """A shape that decides by relevance was configured without a relevance model."""
+
+
 @dataclass(frozen=True, slots=True)
 class ApiDependencies:
     """Everything the routes need, assembled once at startup."""
@@ -108,6 +118,7 @@ class ApiDependencies:
     documents: DocumentStore
     artifacts: ArtifactStore
     uploads: UploadService
+    knowledge_bases: KnowledgeBaseService
     principals: HeaderPrincipalResolver
     # Absent when the optional embedding runtime is not installed. The reason
     # is kept beside it so startup can say so once, in words, instead of
@@ -254,6 +265,7 @@ def build_dependencies(
         max_overflow=config.database.max_overflow,
     )
     documents = PostgresDocumentStore(engine)
+    knowledge_bases = KnowledgeBaseService(PostgresKnowledgeBaseStore(engine))
     artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
     conversations = PostgresConversationStore(engine)
     releaser = PostgresChatReleaseCoordinator(engine)
@@ -317,7 +329,12 @@ def build_dependencies(
         telemetry=telemetry,
         documents=documents,
         artifacts=artifacts,
-        uploads=UploadService(documents=documents, artifacts=artifacts),
+        uploads=UploadService(
+            documents=documents,
+            artifacts=artifacts,
+            knowledge_bases=knowledge_bases,
+        ),
+        knowledge_bases=knowledge_bases,
         principals=HeaderPrincipalResolver(),
         chat=chat,
         # Recovery is intentionally independent of the embedding/model stack.
@@ -408,14 +425,23 @@ def _assemble_chat(
     # switch affect new Chat requests without changing the write target.
     vector_index = QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias)
 
+    sparse_encoder = None if isinstance(sparse, SparseEncodingUnavailable) else sparse
+    # What startup warms. Taken from what was just assembled rather than read
+    # back off the retrieval service: which encoders a retriever holds is now
+    # its own business -- LlamaIndex's does not expose them the way the
+    # reference path did -- and warming is about the runtimes this process
+    # loaded, which is a fact this scope already has.
+    encoders = tuple(e for e in (embedder, sparse_encoder) if e is not None)
+
     retrieval = RetrievalService(
-        embedder=embedder,
-        index=vector_index,
+        candidate_retriever=build_candidate_retriever(
+            llama_index_enabled=config.retrieval.llama_index_enabled,
+            embedder=embedder,
+            index=vector_index,
+            sparse_encoder=sparse_encoder,
+        ),
         documents=documents,
         telemetry=telemetry,
-        sparse_encoder=(
-            None if isinstance(sparse, SparseEncodingUnavailable) else sparse
-        ),
         reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
         rerank_timeout_seconds=config.reranker.timeout_seconds,
     )
@@ -439,7 +465,7 @@ def _assemble_chat(
             vector_index,
             no_reranker,
             no_sparse,
-            tuple(e for e in (retrieval.embedder, retrieval.sparse_encoder) if e),
+            encoders,
             retrieval,
         )
 
@@ -454,7 +480,66 @@ def _assemble_chat(
         main_profile.model_id if main_profile is not None else config.model.provider
     )
 
-    if config.chat.retrieval_shape == "agentic":
+    # Both no-tool shapes get the same deny-shaped runtime the fixed shape uses.
+    # Written out rather than shared with a helper because the registry and the
+    # policy engine are two separate reasons the model cannot reach a tool, and
+    # a helper that built them together would make it look like one.
+    def _toolless_runtime() -> ClaudeLikeAgentRuntime:
+        empty = StaticToolRegistry([])
+        return ClaudeLikeAgentRuntime(
+            model=model,
+            gateway=ToolGateway(
+                registry=empty,
+                policy=EnvelopePolicyEngine(registry=empty),
+                record_step_inputs=config.record_step_inputs,
+            ),
+            policy_identity=policy_identity,
+            model_label=model_label,
+            record_step_inputs=config.record_step_inputs,
+        )
+
+    # Direct is available beside every retrieval-backed shape. It gets its own
+    # deny-shaped runtime so a model-only turn cannot inherit the agentic
+    # registry merely because the next turn in the same session uses it.
+    direct_execution = UngroundedExecution(
+        executor=_toolless_runtime(),
+        budget=RunBudget(max_steps=1, max_tool_calls=1),
+    )
+
+    rag_execution: TurnExecution | None
+    if config.chat.retrieval_shape == "ungrounded":
+        # This legacy deployment choice remains useful as a capability ceiling:
+        # the route rejects RAG before a turn is claimed and the selector keeps
+        # the same refusal for non-HTTP callers.
+        rag_execution = None
+    elif config.chat.retrieval_shape == "routed":
+        # The retrieval service is the router's input rather than an optional
+        # extra: the switch is decided by asking, so it needs the same funnel
+        # the fixed shape uses -- same ACL check, same top_k, same index. A
+        # router given a narrower retriever would fall back to the ungrounded
+        # answer more often than the deployment's own retrieval would.
+        #
+        # And it needs the reranker, which is why this is the one shape that
+        # refuses to assemble without one. Everywhere else the reranker is an
+        # optional quality step that fails open; here its score *is* the
+        # decision. Falling open would mean answering every question from
+        # evidence nothing established the relevance of -- which is how the
+        # first version of this shape ended up behaving exactly like `fixed`.
+        if isinstance(reranker, RerankerUnavailable):
+            raise RerankerRequiredError(
+                "chat.retrieval_shape='routed' decides between grounded and "
+                "ungrounded answers using a cross-encoder relevance score, and "
+                f"no reranker could be loaded: {reranker.reason}. "
+                "Use 'fixed' to answer from retrieval unconditionally, or "
+                "'ungrounded' to answer without it."
+            )
+        rag_execution = RoutedExecution(
+            retrieval=retrieval,
+            executor=_toolless_runtime(),
+            budget=RunBudget(max_steps=1, max_tool_calls=1),
+            relevance_threshold=config.chat.routed_relevance_threshold,
+        )
+    elif config.chat.retrieval_shape == "agentic":
         # The model decides when to search, so it needs the tool, a budget with
         # room for a loop, and somewhere for its searches to be journalled --
         # all three or none. A tool with a one-step budget is a tool the model
@@ -463,15 +548,17 @@ def _assemble_chat(
         registry = StaticToolRegistry(
             [KnowledgeSearchTool(retrieval=retrieval, journal=journal).binding()]
         )
-        execution: TurnExecution = AgenticExecution(
+        rag_execution = AgenticExecution(
             executor=ClaudeLikeAgentRuntime(
                 model=model,
                 gateway=ToolGateway(
                     registry=registry,
                     policy=EnvelopePolicyEngine(registry=registry),
+                    record_step_inputs=config.record_step_inputs,
                 ),
                 policy_identity=policy_identity,
                 model_label=model_label,
+                record_step_inputs=config.record_step_inputs,
             ),
             journal=journal,
             budget=RunBudget(
@@ -484,22 +571,27 @@ def _assemble_chat(
         # Empty registry *and* empty envelope. Either alone would leave the
         # other as the only thing standing between this deployment and the
         # agentic shape it deliberately is not.
-        execution = FixedTwoStepExecution(
+        rag_execution = FixedTwoStepExecution(
             retrieval=retrieval,
             executor=ClaudeLikeAgentRuntime(
                 model=model,
                 gateway=ToolGateway(
                     registry=StaticToolRegistry([]),
                     policy=EnvelopePolicyEngine(registry=StaticToolRegistry([])),
+                    record_step_inputs=config.record_step_inputs,
                 ),
                 policy_identity=policy_identity,
                 model_label=model_label,
+                record_step_inputs=config.record_step_inputs,
             ),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
         )
 
     chat = ChatService(
-        execution=execution,
+        execution=AnswerModeSelector(
+            direct=direct_execution,
+            rag=rag_execution,
+        ),
         conversations=conversations,
         releaser=releaser,
         request_timeout_seconds=config.request_timeout_seconds,
@@ -513,9 +605,9 @@ def _assemble_chat(
         vector_index,
         no_reranker,
         no_sparse,
-        # Both shapes share one RetrievalService, so these are the encoders
-        # every turn will actually use.
-        tuple(e for e in (retrieval.embedder, retrieval.sparse_encoder) if e),
+        # Every RAG shape shares this RetrievalService. Direct turns bypass it,
+        # while startup still warms what a later RAG turn will actually use.
+        encoders,
         retrieval,
     )
 

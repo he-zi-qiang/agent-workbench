@@ -142,7 +142,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.2"] = "1.2"
+    config_schema_version: Literal["1.5"] = "1.5"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -188,11 +188,32 @@ class ChatSettings(StrictModel):
     # every time, so a change in an answer is a change in the model or the
     # corpus. Choosing `agentic` buys the capability and spends that property,
     # which is a deployment decision rather than a request parameter.
-    retrieval_shape: Literal["fixed", "agentic"] = "fixed"
+    #
+    # `ungrounded` (ADR-018) is neither: it answers from the model alone, with
+    # no retrieval, no citations and no publish fence. Adding it widened a
+    # frozen single-set Literal, which is why it took an ADR and a config
+    # schema bump rather than one more value -- the same rule that refused
+    # `runtime.executor = "fake"` in PR-055. It carries its own durable event
+    # so an audit log can never mistake it for a verified answer.
+    retrieval_shape: Literal["fixed", "agentic", "ungrounded", "routed"] = "fixed"
     # Only read when the shape is `agentic`. Ceilings rather than targets: the
     # model stops when it has enough, and these stop it when it does not.
     max_agentic_steps: int = Field(default=4, ge=2, le=32)
     max_agentic_searches: int = Field(default=6, ge=1, le=16)
+    # Only read when the shape is `routed`. The cross-encoder relevance score
+    # the retrieved evidence must reach before the turn is answered *from* that
+    # evidence; below it, the turn answers from the model instead.
+    #
+    # A cross-encoder score, deliberately, and not a retrieval score. RRF is a
+    # rank sum -- the top hit of a completely unrelated question still scores
+    # near the maximum -- so a gate built on it would send every question down
+    # the grounded path. That is not hypothetical: it is what the first version
+    # of this shape did, and it made `routed` behave exactly like `fixed`.
+    #
+    # The default is a starting point, not a calibrated value. BGE reranker
+    # scores are unbounded logits and their useful cut depends on the corpus,
+    # so a deployment should measure its own before trusting this one.
+    routed_relevance_threshold: float = 0.0
 
     @model_validator(mode="after")
     def validate_agentic_budget(self) -> ChatSettings:
@@ -352,6 +373,14 @@ class RuntimeSettings(StrictModel):
     context_soft_limit_ratio: float = Field(default=0.75, gt=0.0, lt=1.0)
     tool_result_artifact_threshold_bytes: int = Field(default=65_536, ge=1024)
     write_tools_default_enabled: Literal[False] = False
+    # ADR-019. Records the prompt and the proposed tool arguments on the run's
+    # own event stream, where they are readable only by the principal that owns
+    # the Task or Session. Distinct from `observability.record_prompt_body`,
+    # which stays pinned False: that one governs export to an OTel collector,
+    # which has no tenant boundary. Default off, because turning it on changes
+    # what a deployment stores about its users and that is not an upgrade's
+    # decision to make.
+    record_step_inputs: bool = False
 
     @model_validator(mode="after")
     def validate_budgets(self) -> RuntimeSettings:
@@ -407,7 +436,18 @@ class MultiAgentSettings(StrictModel):
 
 
 class LlamaIndexSettings(StrictModel):
-    enabled: bool = True
+    # False until ADR-017 step 2 produces evidence, which it has not. The
+    # adapter exists, is contract-tested against both paths on real Qdrant and
+    # real PostgreSQL, and is one setting away -- but the equivalence
+    # evaluation that step 3 requires before traffic moves came back
+    # inconclusive, and inconclusive is not a reason to switch.
+    #
+    # Not inconclusive because the two paths disagreed: because the measurement
+    # cannot resolve them. Tied fused scores come back from Qdrant in an
+    # unstable order, so each retriever disagrees with *itself* on 9-10 of 38
+    # gold questions -- a noise floor wider than any difference between the
+    # two. See docs/status.md 2026-08-03.
+    enabled: bool = False
     role: Literal["ingestion_and_retrieval_adapter"] = "ingestion_and_retrieval_adapter"
     agent_executor_enabled: Literal[False] = False
     query_engine_generates_final_answer: Literal[False] = False
@@ -661,6 +701,40 @@ class OptionalLabsSettings(StrictModel):
     advanced_compaction: bool = False
 
 
+class ResearchSettings(StrictModel):
+    """External web search (ADR-020).
+
+    Off by default, and the default is load-bearing rather than cautious: it is
+    what keeps a deployment that never configured it from widening its Task
+    authorization envelope on upgrade. See
+    ``projections.task_authorization_envelope``.
+
+    No API key of its own: the search runs on the model provider's side through
+    its Anthropic-compatible endpoint, under the same key the provider already
+    holds.
+    """
+
+    enabled: bool = False
+    provider: Literal["deepseek"] = "deepseek"
+    #: The provider's Anthropic-compatible endpoint. Separate from
+    #: `model.base_url`, which addresses the OpenAI-compatible one the runtime
+    #: uses for every other call -- the two are different paths on the same
+    #: service and only one of them speaks the Messages protocol.
+    base_url: str = Field(default="https://api.deepseek.com/anthropic", min_length=1)
+    model_id: str = Field(default="deepseek-chat", min_length=1)
+    #: Searches per external_search call. The model may search more than once
+    #: for one query, and each search is work the provider bills for.
+    max_uses: int = Field(default=5, ge=1, le=20)
+    timeout_seconds: int = Field(default=60, ge=1, le=600)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        # Every request to it carries the provider API key, so the same rule the
+        # model endpoint follows applies here.
+        return _validate_service_endpoint(value, field_name="research.base_url")
+
+
 class SecretsSettings(StrictModel):
     deepseek_api_key: SecretStr | None = None
     qdrant_api_key: SecretStr | None = None
@@ -689,6 +763,7 @@ class Settings(BaseSettings):
     qdrant: QdrantSettings
     artifact_store: ArtifactStoreSettings
     policy: PolicySettings
+    research: ResearchSettings = Field(default_factory=ResearchSettings)
     observability: ObservabilitySettings
     evaluation: EvaluationSettings
     testing: TestingSettings
@@ -820,6 +895,17 @@ class Settings(BaseSettings):
             self.secrets.qdrant_api_key
         ):
             raise ValueError("Qdrant API key is required but not configured")
+
+        # Checked in every environment, not only production: enabled-without-a-key
+        # reads as working web search in the config file and fails closed at the
+        # first search. That is the "configuration describes a system that does
+        # not exist" defect this project keeps removing, so it is a startup error.
+        if self.research.enabled and not self._secret_is_configured(
+            self.secrets.deepseek_api_key
+        ):
+            raise ValueError(
+                "research.enabled requires a non-placeholder provider API key"
+            )
 
         if self.app.deployment_scope == "remote":
             if not self.qdrant.api_key_required:

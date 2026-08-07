@@ -27,11 +27,16 @@ import httpx
 import pytest
 from sqlalchemy import text
 
-from agent_workbench.adapters.persistence import create_query_engine
+from agent_workbench.adapters.persistence import (
+    PostgresKnowledgeBaseStore,
+    create_query_engine,
+)
+from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.apps.api.main import build_app
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
 from agent_workbench.bootstrap.settings import Settings
+from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.artifact_store import DEFAULT_CHUNK_BYTES
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
@@ -48,7 +53,7 @@ CONTENT = b"Dense and sparse retrieval are fused once per query.\n" * 4
 HOSTILE = b"Replaced by somebody who was merely in the same tenant.\n" * 4
 
 TABLES = (
-    "artifacts, upload_intents, document_acl, "
+    "knowledge_bases, artifacts, upload_intents, document_acl, "
     "document_versions, documents, outbox_events"
 )
 
@@ -74,12 +79,27 @@ def _settings(root: Path) -> Settings:
     return Settings(**payload)
 
 
+async def _seed_knowledge_bases(engine: Any) -> None:
+    service = KnowledgeBaseService(PostgresKnowledgeBaseStore(engine))
+    for knowledge_base_id, owner_id in (
+        ("kb_main", OWNER),
+        ("kb_other", OWNER),
+        ("kb_neighbour", NEIGHBOUR),
+    ):
+        await service.create(
+            PrincipalContext(tenant_id=TENANT, principal_id=owner_id),
+            name=knowledge_base_id,
+            knowledge_base_id=knowledge_base_id,
+        )
+
+
 def _run(scenario: Callable[[httpx.AsyncClient], Awaitable[Any]], root: Path) -> Any:
     async def execute() -> Any:
         engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
         try:
             async with engine.begin() as connection:
                 await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))
+            await _seed_knowledge_bases(engine)
         finally:
             await engine.dispose()
 
@@ -204,7 +224,12 @@ def test_a_neighbour_cannot_commit_a_version_to_the_owners_document(
 
     async def scenario(client: httpx.AsyncClient) -> int:
         assert (await _upload(client, OWNER_HEADERS)).status_code == 201
-        hostile = await _upload(client, NEIGHBOUR_HEADERS, content=HOSTILE)
+        hostile = await _upload(
+            client,
+            NEIGHBOUR_HEADERS,
+            content=HOSTILE,
+            knowledge_base_id="kb_neighbour",
+        )
         return hostile.status_code
 
     assert _run(scenario, tmp_path) == 404
@@ -221,7 +246,12 @@ def test_the_refused_overwrite_leaves_the_document_untouched(tmp_path: Path) -> 
 
     async def scenario(client: httpx.AsyncClient) -> tuple[int, int, str]:
         first = await _upload(client, OWNER_HEADERS)
-        await _upload(client, NEIGHBOUR_HEADERS, content=HOSTILE)
+        await _upload(
+            client,
+            NEIGHBOUR_HEADERS,
+            content=HOSTILE,
+            knowledge_base_id="kb_neighbour",
+        )
         engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
         try:
             async with engine.connect() as connection:
@@ -258,7 +288,12 @@ def test_a_read_grant_does_not_confer_the_right_to_overwrite(tmp_path: Path) -> 
     async def scenario(client: httpx.AsyncClient) -> int:
         granted = await _upload(client, OWNER_HEADERS, granted=(NEIGHBOUR,))
         assert granted.status_code == 201, granted.text
-        hostile = await _upload(client, NEIGHBOUR_HEADERS, content=HOSTILE)
+        hostile = await _upload(
+            client,
+            NEIGHBOUR_HEADERS,
+            content=HOSTILE,
+            knowledge_base_id="kb_neighbour",
+        )
         return hostile.status_code
 
     assert _run(scenario, tmp_path) == 404
@@ -281,7 +316,11 @@ def test_a_neighbour_can_own_their_own_document(tmp_path: Path) -> None:
     async def scenario(client: httpx.AsyncClient) -> int:
         await _upload(client, OWNER_HEADERS)
         theirs = await _upload(
-            client, NEIGHBOUR_HEADERS, content=HOSTILE, document_id="doc_2"
+            client,
+            NEIGHBOUR_HEADERS,
+            content=HOSTILE,
+            document_id="doc_2",
+            knowledge_base_id="kb_neighbour",
         )
         return theirs.status_code
 
@@ -409,6 +448,7 @@ def test_the_download_leaves_the_app_in_more_than_one_piece(tmp_path: Path) -> N
         try:
             async with engine.begin() as connection:
                 await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))
+            await _seed_knowledge_bases(engine)
         finally:
             await engine.dispose()
 

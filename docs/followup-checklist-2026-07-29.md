@@ -244,7 +244,12 @@ ruff/pyright 全过。
 - [ ] 4.1 OpenTelemetry（只有配置字段，无 SDK/exporter/埋点）
 - [ ] 4.2 Langfuse Adapter（只有 optional profile 配置）
 - [ ] 4.3 CrewAI 对照实验 + 报告（只有配置约束）
-- [ ] 4.4 LlamaIndex ingestion/query Adapter（无依赖、无 Adapter、无测试）
+- [ ] 4.4 LlamaIndex ingestion/query Adapter（**检索侧 2026-08-03 完成**，ingestion 未做）
+      依赖、`adapters/llama_index/` 四个模块、按 `CandidateRetrieverPort` 参数化的契约
+      测试、同索引同 gold set 的等价评测均已落地，`rag.llama_index.enabled` 第一次有
+      消费者。**ingestion 仍未迁移**：没有 `IngestionPipeline`，VectorStore 适配器的
+      `add`/`delete` 明确拒绝——一条没有对照基准的第二写入路径正是 ADR-017 第 3 条要防
+      的。这一条要打勾，得先有 ingestion 迁移和它自己的对照证据。
 - [ ] 4.5 RAGAS judge pipeline（现在只有确定性 IR 评测）
 - [ ] 4.6 Task/Multi-Agent benchmark：配置指向的 `evals/tasks/cases.yaml` 不存在
 - [ ] 4.7 Claude/Anthropic Provider Adapter（Port 已 provider-neutral）

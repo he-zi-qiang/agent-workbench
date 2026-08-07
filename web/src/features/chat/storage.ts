@@ -24,7 +24,10 @@ export function loadLocalSessions(identity: PrincipalIdentity): LocalChatSession
   try {
     const value: unknown = JSON.parse(raw);
     if (!Array.isArray(value)) return [];
-    return value.filter(isLocalSession);
+    return value.flatMap((item) => {
+      const session = parseLocalSession(item);
+      return session === null ? [] : [session];
+    });
   } catch {
     return [];
   }
@@ -84,18 +87,37 @@ function cursorKey(identity: PrincipalIdentity, sessionId: string): string {
   return `${CURSOR_PREFIX}:${identityStorageKey(identity)}:${encodeURIComponent(sessionId)}`;
 }
 
-function isLocalSession(value: unknown): value is LocalChatSession {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+function parseLocalSession(value: unknown): LocalChatSession | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
-  return (
-    typeof item.sessionId === "string" &&
-    item.sessionId.length > 0 &&
-    typeof item.title === "string" &&
-    typeof item.knowledgeBaseId === "string" &&
-    item.knowledgeBaseId.length > 0 &&
-    typeof item.createdAt === "string" &&
-    typeof item.updatedAt === "string"
-  );
+  if (
+    typeof item.sessionId !== "string" ||
+    item.sessionId.length === 0 ||
+    typeof item.title !== "string" ||
+    typeof item.createdAt !== "string" ||
+    typeof item.updatedAt !== "string"
+  ) {
+    return null;
+  }
+  const knowledgeBaseId =
+    typeof item.knowledgeBaseId === "string" && item.knowledgeBaseId.length > 0
+      ? item.knowledgeBaseId
+      : null;
+  const answerMode =
+    item.answerMode === "direct" || item.answerMode === "rag"
+      ? item.answerMode
+      : knowledgeBaseId === null
+        ? "direct"
+        : "rag";
+  if (answerMode === "rag" && knowledgeBaseId === null) return null;
+  return {
+    sessionId: item.sessionId,
+    title: item.title,
+    answerMode,
+    knowledgeBaseId: answerMode === "direct" ? null : knowledgeBaseId,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  };
 }
 
 function readStorage(key: string): string | null {

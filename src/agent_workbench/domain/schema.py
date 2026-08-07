@@ -35,7 +35,27 @@ JsonObject = dict[str, JsonValue]
 # unbounded string is an unbounded database row, an unbounded SSE frame and an
 # unbounded prompt at the same time.
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=256)]
-BoundedText = Annotated[str, StringConstraints(max_length=4096)]
+BOUNDED_TEXT_LIMIT: Final[int] = 4096
+BoundedText = Annotated[str, StringConstraints(max_length=BOUNDED_TEXT_LIMIT)]
+
+
+def bounded(value: str) -> BoundedText:
+    """Cut ``value`` to what a ``BoundedText`` field can hold.
+
+    For text that is recorded *about* a run rather than produced by it -- a
+    prompt, a proposed tool call -- where being over the limit must not make
+    the event impossible to construct. The marker is deliberate: a reader who
+    cannot see the cut would take a truncated prompt for the whole one.
+
+    Not for the model's own output. That is bounded at its source, and silently
+    trimming an answer here would publish a different answer than the one the
+    provider returned.
+    """
+
+    if len(value) <= BOUNDED_TEXT_LIMIT:
+        return value
+    return value[: BOUNDED_TEXT_LIMIT - 1] + "…"
+
 
 # What a tool hands the model, which is not the same ceiling as what a model
 # writes. Every other use of BoundedText is the model's own words -- a streamed
@@ -86,10 +106,12 @@ class VersionedModel(DomainModel):
 
 
 __all__ = [
+    "BOUNDED_TEXT_LIMIT",
     "DOMAIN_SCHEMA_VERSION",
     "BoundedText",
     "DomainModel",
     "JsonObject",
     "ShortText",
     "VersionedModel",
+    "bounded",
 ]
