@@ -116,6 +116,17 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+# The terminal session is the one Python surface that speaks to a reader, and
+# it speaks the language the web console does -- including the stage names, so
+# that someone who has seen one recognises the other. RUF001 is here to catch a
+# Cyrillic `о` hiding in an identifier, not a full-width comma in a sentence
+# deliberately written in Chinese. Scoped to these two files so the rule keeps
+# doing its real job everywhere else.
+"src/agent_workbench/apps/cli/repl.py" = ["RUF001"]
+"src/agent_workbench/apps/cli/stages.py" = ["RUF001"]
+"src/agent_workbench/apps/cli/commands.py" = ["RUF001"]
+
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"

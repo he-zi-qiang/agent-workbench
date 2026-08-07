@@ -18,7 +18,9 @@ notice.
 
 from __future__ import annotations
 
+import sys
 import uuid
+from collections.abc import Iterator
 from typing import Any, TextIO
 
 import httpx
@@ -31,6 +33,8 @@ from agent_workbench.apps.cli.http import (
     render_result,
     response_json,
 )
+from agent_workbench.apps.cli.live import ACCENT, paint
+from agent_workbench.apps.cli.repl import Repl
 
 
 def run_search(
@@ -202,6 +206,53 @@ def _artifact_error(status_code: int) -> str:
     return "not_found" if status_code == 404 else "request_failed"
 
 
+def run_repl(
+    args: Any,
+    stream: TextIO,
+    *,
+    http_client_factory: HttpClientFactory = default_http_client,
+) -> int:
+    """Hand the terminal to an interactive session.
+
+    Reads from stdin rather than taking a question as a flag, so the loop is
+    the surface. Whether stdout is a terminal decides whether stage lines are
+    redrawn in place or written once each -- piped into a file this produces a
+    plain transcript instead of a screenful of cursor moves.
+    """
+
+    with _client(args, http_client_factory) as client:
+        repl = Repl(
+            client,
+            identity_headers(args),
+            stream,
+            interactive=stream.isatty() and sys.stdin.isatty(),
+            knowledge_base_id=args.knowledge_base_id,
+            colour=not args.no_color,
+        )
+        return repl.run(_prompted(stream, repl))
+
+
+def _prompted(stream: TextIO, repl: Repl) -> Iterator[str]:
+    """Read lines, writing a prompt before each one.
+
+    Before, not after: the prompt has to be on screen while the reader is
+    deciding what to type, and an earlier version that wrote it after each line
+    left the very first question to be typed at a bare cursor.
+    """
+
+    show = stream.isatty()
+    while True:
+        if show:
+            stream.write("\n" + paint(">", ACCENT, enabled=repl.colour) + " ")
+            stream.flush()
+        line = sys.stdin.readline()
+        if line == "":
+            if show:
+                stream.write("\n")
+            return
+        yield line
+
+
 def _client(args: Any, factory: HttpClientFactory) -> httpx.Client:
     return factory(args.api_url, args.timeout_seconds)
 
@@ -233,4 +284,4 @@ def _one_line(text: str, *, width: int = 96) -> str:
     return collapsed[: width - 1] + "…"
 
 
-__all__ = ["run_approval", "run_artifact", "run_chat", "run_search"]
+__all__ = ["run_approval", "run_artifact", "run_chat", "run_repl", "run_search"]
