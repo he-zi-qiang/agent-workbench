@@ -187,6 +187,14 @@ uv run pytest
 - [代码实施计划 v1.0](docs/implementation-plan.md)
 - [配置管理契约](docs/configuration.md)
 
+## 许可证
+
+本仓库以 [Apache License 2.0](LICENSE) 发布。使用或分发时请保留
+[NOTICE.md](NOTICE.md)——Apache-2.0 第 4(d) 条要求随附它。
+
+依赖各自的许可证不受本仓库许可证影响，判定规则见
+[docs/compliance.md](docs/compliance.md)。
+
 clean-room 边界见 [NOTICE.md](NOTICE.md) 和
 [docs/compliance.md](docs/compliance.md)。
 

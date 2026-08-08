@@ -122,6 +122,14 @@ synchronized, tests and static checks can run offline.
 - [Code implementation plan v1.0 (Chinese)](docs/implementation-plan.md)
 - [Configuration contract](docs/configuration.md)
 
+## License
+
+Released under the [Apache License 2.0](LICENSE). Keep [NOTICE.md](NOTICE.md)
+with any copy or derivative work — Apache-2.0 section 4(d) requires it.
+
+Dependencies keep their own licenses; the gate that decides which are
+acceptable is described in [docs/compliance.md](docs/compliance.md).
+
 See [NOTICE.md](NOTICE.md) and [docs/compliance.md](docs/compliance.md) for the
 clean-room boundary.
 

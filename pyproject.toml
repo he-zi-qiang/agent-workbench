@@ -7,6 +7,9 @@ name = "agent-workbench"
 version = "0.1.0"
 description = "A framework-neutral Agent runtime with Chat/RAG and Task workflows."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE.md"]
+authors = [{ name = "He Ziqiang" }]
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "alembic>=1.14,<2",
