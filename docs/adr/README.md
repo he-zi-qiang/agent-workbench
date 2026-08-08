@@ -15,3 +15,8 @@
 | [ADR-015 唯一写节点的授权上限](./0015-export-authorization.md) | WP10-07 `export_artifact` | 接受 |
 | [ADR-016 自研 ingestion 与 retrieval](./0016-self-built-retrieval.md) | 复核 ADR-003 与实现的差异 | 已被 ADR-017 取代 |
 | [ADR-017 LlamaIndex 主 RAG + RAGAS 离线评测](./0017-llamaindex-primary-rag.md) | 恢复作品集 RAG 技术路线 | 接受，重新确认 ADR-003 |
+| [ADR-018 无接地对话是显式形态](./0018-ungrounded-chat-shape.md) | Chat 交互形态；`chat.retrieval_shape` 的取值集合 | 接受 |
+| [ADR-019 提示词与工具参数记进事件流](./0019-run-step-transparency.md) | 运行步骤的可观察内容；`runtime.record_step_inputs` 的引入 | 接受 |
+| [ADR-020 DeepSeek `web_search` 接上外部检索](./0020-external-web-search.md) | `ExternalSearchPort` 的真实实现；Task 授权信封是否放行 `external_search` | 接受 |
+| [ADR-021 Chat 的联网搜索只出现在兜底分支](./0021-chat-web-search.md) | Chat 要不要联网；"要不要联网"由谁判断；用了网页的回答算不算接地 | 接受 |
+| [ADR-022 工具额度用尽是收走工具](./0022-tool-ceiling-closes-the-toolbox.md) | `max_tool_calls` 用尽时 run 应该怎么办；`max_tool_calls < max_steps` 是不是配置错误 | 接受 |
