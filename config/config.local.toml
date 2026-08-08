@@ -51,11 +51,18 @@ url = "http://localhost:6333"
 # ingestion worker at least once before expecting an index to exist.
 allow_local_bootstrap = true
 
-# Web search for Task research (ADR-020). On here because this machine has the
-# provider key; the shipped default stays off so a deployment that never
-# configured it keeps the narrower Task authorization envelope.
-[research]
-enabled = true
+# Web search (ADR-020 for Task, ADR-021 for Chat's routed fallback) is
+# deliberately NOT enabled here, even though this is the local profile.
+#
+# `research.enabled` without a provider key is a startup error by design, and
+# this file is tracked: turning it on would break the keyless path scripts/dev.sh
+# documents and supports ("no AW_SECRETS__DEEPSEEK_API_KEY: search without
+# chat"). One developer having a key is not a reason every checkout needs one.
+#
+# Turn it on for a session that has the key, from the shell that has it:
+#
+#   export AW_SECRETS__DEEPSEEK_API_KEY=sk-...
+#   export AW_RESEARCH__ENABLED=true
 
 # ADR-019. Puts each step's prompt and proposed tool arguments on the run's own
 # event stream, so opening a step in the UI shows what the model was actually
