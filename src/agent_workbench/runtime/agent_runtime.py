@@ -341,7 +341,7 @@ class ClaudeLikeAgentRuntime:
             )
 
         try:
-            specs = self._gateway.advertise(request.tool_names)
+            advertised = self._gateway.advertise(request.tool_names)
         except AgentWorkbenchError as exc:
             return await self._failed(
                 request,
@@ -359,22 +359,43 @@ class ClaudeLikeAgentRuntime:
             # Ceilings are consulted before a turn starts. A budget that only
             # triggers after the spend is not a ceiling, and an unbounded loop
             # is exactly what a model proposing tools forever would produce.
-            exhausted = request.budget.stop_reason_for(
+            #
+            # `halt_reason_for`, not `stop_reason_for`: the tool ceiling is not
+            # a reason to end a run. Every limit asked about here leaves the run
+            # with nothing further it could do; a spent tool allowance leaves it
+            # with an answer to write. `max_steps` still bounds the loop, and it
+            # is what bounds it -- one step is spent per iteration, so no run can
+            # circle here forever on a closed toolbox.
+            halted = request.budget.halt_reason_for(
                 ledger.usage,
                 now=self._clock(),
             )
-            if exhausted is not None:
+            if halted is not None:
                 return await self._failed(
                     request,
                     sink,
                     machine,
-                    exhausted,
+                    halted,
                     ErrorInfo(
                         code="budget_exceeded",
-                        message=f"the run stopped at its ceiling: {exhausted}",
+                        message=f"the run stopped at its ceiling: {halted}",
                     ),
                     ledger,
                 )
+
+            # Recomputed each turn, because what the model may reach changes
+            # within a run. Once the allowance is gone the tools come off the
+            # request entirely rather than staying on it to be refused: a model
+            # that can still see `web_search` proposes `web_search`, and then
+            # the only thing left to do with the proposal is turn it away and
+            # kill the run holding the results that proposal was meant to
+            # improve on. Measured on the chat fallback -- two successful
+            # searches, 5.5KB of results, a third proposal, and an answer that
+            # said it could not search. Taking the tool away asks the question
+            # the run is actually able to answer: "write what you have".
+            specs = (
+                () if request.budget.tool_allowance_spent(ledger.usage) else advertised
+            )
 
             machine.to("model_streaming")
             turn = await self._stream_model(

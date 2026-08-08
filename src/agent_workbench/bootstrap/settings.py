@@ -142,7 +142,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.5"] = "1.5"
+    config_schema_version: Literal["1.6"] = "1.6"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -382,11 +382,11 @@ class RuntimeSettings(StrictModel):
     # decision to make.
     record_step_inputs: bool = False
 
-    @model_validator(mode="after")
-    def validate_budgets(self) -> RuntimeSettings:
-        if self.max_tool_calls < self.max_steps:
-            raise ValueError("max_tool_calls must be >= max_steps")
-        return self
+    # No cross-field budget check. `max_tool_calls` below `max_steps` is a
+    # legitimate deployment budget under ADR-022 -- "this many tool calls, plus
+    # a turn to answer from them" -- and the runtime enforces it by taking the
+    # tools off the request once the allowance is spent rather than by ending
+    # the run. RunBudget carries the full reasoning.
 
 
 class LangChainAdapterSettings(StrictModel):

@@ -50,3 +50,66 @@ url = "http://localhost:6333"
 # builds no Qdrant client at all, because it does not retrieve; start the
 # ingestion worker at least once before expecting an index to exist.
 allow_local_bootstrap = true
+
+# Web search (ADR-020 for Task, ADR-021 for Chat's routed fallback) is
+# deliberately NOT enabled here, even though this is the local profile.
+#
+# `research.enabled` without a provider key is a startup error by design, and
+# this file is tracked: turning it on would break the keyless path scripts/dev.sh
+# documents and supports ("no AW_SECRETS__DEEPSEEK_API_KEY: search without
+# chat"). One developer having a key is not a reason every checkout needs one.
+#
+# Turn it on for a session that has the key, from the shell that has it:
+#
+#   export AW_SECRETS__DEEPSEEK_API_KEY=sk-...
+#   export AW_RESEARCH__ENABLED=true
+
+# ADR-019. Puts each step's prompt and proposed tool arguments on the run's own
+# event stream, so opening a step in the UI shows what the model was actually
+# asked -- which is the point of being able to open a step at all. On here and
+# nowhere else: this is one developer's machine reading its own runs, and the
+# default stays off because storing users' prompts is a deployment's decision.
+[runtime]
+record_step_inputs = true
+
+# This machine reranks with bge-reranker-v2-m3 on MPS, and one query over eight
+# passages does not finish in the shipped 15 seconds. That matters more here
+# than it looks: chat.retrieval_shape is `routed`, and there the reranker score
+# *is* the grounded/ungrounded decision -- a timeout fails open to "no score",
+# which routed reads as "not relevant", so every RAG turn silently fell back to
+# an ungrounded answer. Raised for local hardware only; the shipped default
+# stays 15s.
+[rag.reranker]
+timeout_seconds = 120
+
+# The SSE stream re-reads the event log on this interval; the shipped 10s is
+# sized for a browser watching a long Task, where nobody notices. The terminal
+# REPL folds each stage to a line as it happens, and at 10s a short turn is
+# over before the first poll -- the run looks like it did nothing. One second
+# on a local single-user process, where the extra reads cost nothing.
+[event_stream]
+catchup_poll_seconds = 1
+
+# Measured against kb_local with scripts/check_routed_threshold.py, not chosen.
+# The cross-encoder scores separate the two groups cleanly but not widely: the
+# weakest on-topic question scored 0.0325 and the strongest off-topic one
+# 0.00644, so the whole decision lives in a band about five times wide. 0.01
+# sits inside it.
+#
+# Not the geometric middle (0.0145), deliberately. The two errors are not worth
+# the same: a wrongly *rejected* on-topic question answers from the model's
+# memory about documents this deployment actually holds -- the failure RAG
+# exists to prevent, per RoutedExecution's own docstring -- while a wrongly
+# *accepted* off-topic one only produces a RAG refusal. So the margin is spent
+# on the dangerous side: 3.2x of headroom below the weakest on-topic score,
+# 1.6x above the strongest off-topic one.
+#
+# The shipped default stays 0.0 because this number is a property of kb_local,
+# not of the software; config.default.toml says as much. Re-measure when the
+# corpus changes -- the band was five times wide on ten questions over a
+# two-topic corpus, which is calibration, not a guarantee.
+#
+# For the record, the previous 0.3 was not a small miss: it rejected four of
+# seven on-topic questions, including one the corpus answers verbatim.
+[chat]
+routed_relevance_threshold = 0.01

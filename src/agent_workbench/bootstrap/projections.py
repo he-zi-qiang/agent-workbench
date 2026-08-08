@@ -414,6 +414,12 @@ class ApiRuntimeConfig:
     # `chat`, because it is one setting governing every runtime this deployment
     # builds, and two names for it would drift.
     record_step_inputs: bool = False
+    # ADR-021. The same provider the Task Worker researches with, reached from
+    # the API because chat's fallback may search too. `None` is the shipped
+    # default and means the chat model is offered no web tool at all -- not a
+    # tool that fails, an absence, so a deployment that configured nothing
+    # cannot spend money by accident.
+    research: ResearchConfig | None = None
 
 
 def project_observability(settings: Settings) -> ObservabilityConfig:
@@ -616,6 +622,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         sse_heartbeat_seconds=settings.api.sse_heartbeat_seconds,
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
         record_step_inputs=settings.runtime.record_step_inputs,
+        research=_project_research(settings),
         database=DatabaseConfig(
             dsn=settings.database.dsn,
             application_name=settings.database.application_name,
