@@ -112,19 +112,30 @@ class BudgetUsage(DomainModel):
 
 
 class RunBudget(DomainModel):
-    """Hard ceilings for one run."""
+    """Hard ceilings for one run.
+
+    ``max_tool_calls`` may sit *below* ``max_steps``, and that combination is a
+    budget rather than a mistake (ADR-022). It says "N tool calls, and a turn
+    left over to write the answer from them": once the allowance is gone the
+    loop stops advertising tools, so the extra steps are answering turns, not
+    steps that mysteriously cannot call anything.
+
+    An earlier cross-field validator forbade it, on the reading that a step
+    unable to call a tool was a misconfiguration. That reading came from a loop
+    which *ended* the run when tool calls ran out, and under it the two
+    ceilings could never be expressed independently: one call per turn reaches
+    both at the same turn, ``max_steps`` is reported first, and so a tool
+    ceiling below the step ceiling was unreachable by construction. Measured on
+    the chat web fallback -- the budget said "at most two searches", the run
+    spent step three proposing a third, and died holding 5.5KB of results it
+    never wrote a word from.
+    """
 
     max_steps: int = Field(ge=1, le=100)
     max_tool_calls: int = Field(ge=1, le=500)
     max_total_tokens: int | None = Field(default=None, ge=1)
     max_cost_micro_usd: int | None = Field(default=None, ge=1)
     deadline: AwareDatetime | None = None
-
-    @model_validator(mode="after")
-    def validate_budget(self) -> RunBudget:
-        if self.max_tool_calls < self.max_steps:
-            raise ValueError("max_tool_calls must be >= max_steps")
-        return self
 
     def overrun_reason_for(
         self,
@@ -164,24 +175,33 @@ class RunBudget(DomainModel):
             return "deadline"
         return None
 
-    def stop_reason_for(
+    def halt_reason_for(
         self,
         usage: BudgetUsage,
         *,
         now: datetime | None = None,
     ) -> StopReason | None:
-        """Return why the run must stop, or ``None`` to continue.
+        """Return why the run must **end**, or ``None`` to take another turn.
 
-        Evaluated before starting more work, never after: a budget that only
-        triggers once it has been overrun is not a ceiling. ``now`` is passed
-        in rather than read from the system clock so budget tests stay
-        deterministic.
+        The third of the three questions, and the one that separates a ceiling
+        on tools from a ceiling on the run. Every limit here ends the run
+        because there is no work left it could usefully do: no steps, no
+        tokens, no money, no time. ``max_tool_calls`` is deliberately absent --
+        a run that has spent its tool allowance can still write its answer from
+        what the tools already returned, and it needs a turn to do it.
+
+        Measured, on the chat shape that made this distinction necessary: a run
+        that searched twice, hit its tool ceiling and was stopped there
+        discarded 5.5KB of successful search results and answered "I have no
+        ability to search". Asking ``stop_reason_for`` here -- "may I start
+        more work?" -- makes a spent allowance indistinguishable from a spent
+        run, and throws away everything the allowance bought.
+
+        Evaluated before a turn, on the same reasoning as ``stop_reason_for``.
         """
 
         if usage.steps >= self.max_steps:
             return "max_steps"
-        if usage.tool_calls >= self.max_tool_calls:
-            return "max_tool_calls"
         if self.max_total_tokens is not None and usage.tokens.total >= (
             self.max_total_tokens
         ):
@@ -193,6 +213,45 @@ class RunBudget(DomainModel):
         if self.deadline is not None and now is not None and now >= self.deadline:
             return "deadline"
         return None
+
+    def stop_reason_for(
+        self,
+        usage: BudgetUsage,
+        *,
+        now: datetime | None = None,
+    ) -> StopReason | None:
+        """Return why the run may not start more work, or ``None`` to continue.
+
+        ``halt_reason_for`` plus the tool ceiling. That is the whole difference
+        between the two, and which one a caller wants follows from what it is
+        about to do: this one guards *dispatching a tool call*, the other
+        guards *taking another turn at all*. Reaching for this one before a
+        model turn is what stops a run one step short of the answer its own
+        tool calls paid for.
+
+        Evaluated before starting more work, never after: a budget that only
+        triggers once it has been overrun is not a ceiling. ``now`` is passed
+        in rather than read from the system clock so budget tests stay
+        deterministic.
+        """
+
+        if usage.steps >= self.max_steps:
+            return "max_steps"
+        if usage.tool_calls >= self.max_tool_calls:
+            return "max_tool_calls"
+        return self.halt_reason_for(usage, now=now)
+
+    def tool_allowance_spent(self, usage: BudgetUsage) -> bool:
+        """Whether this run may still dispatch a tool call.
+
+        Read by the runtime to decide what to *advertise*, which is a different
+        act from deciding whether to refuse a proposal. A model offered a tool
+        it can no longer call will propose it, and the proposal has to be
+        turned away -- so the honest thing is to stop offering it, and let the
+        model answer from what it has.
+        """
+
+        return usage.tool_calls >= self.max_tool_calls
 
 
 class TraceContext(DomainModel):
