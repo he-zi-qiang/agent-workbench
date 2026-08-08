@@ -41,11 +41,18 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
+from agent_workbench.adapters.research import DeepSeekWebSearch
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.tools.knowledge_search import (
     TOOL_NAME as KNOWLEDGE_SEARCH,
 )
 from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
+from agent_workbench.adapters.tools.web_search import (
+    TOOL_NAME as WEB_SEARCH_TOOL_NAME,
+)
+from agent_workbench.adapters.tools.web_search import (
+    WebSearchTool,
+)
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.approvals import ApprovalService
 from agent_workbench.application.chat import REFUSAL, ChatService
@@ -57,6 +64,7 @@ from agent_workbench.application.chat_execution import (
     RoutedExecution,
     TurnExecution,
     UngroundedExecution,
+    WebSearchJournal,
 )
 from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
@@ -78,7 +86,7 @@ from agent_workbench.bootstrap.model_factory import (
     build_model,
 )
 from agent_workbench.bootstrap.network import is_loopback_bind_address
-from agent_workbench.bootstrap.projections import ApiRuntimeConfig
+from agent_workbench.bootstrap.projections import ApiRuntimeConfig, ResearchConfig
 from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
 from agent_workbench.bootstrap.reranker_factory import (
     RerankerUnavailable,
@@ -95,9 +103,11 @@ from agent_workbench.bootstrap.telemetry_factory import (
 )
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.artifact_store import ArtifactStore
+from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.event_log import EventLogPort, EventScope
 from agent_workbench.ports.telemetry import Telemetry
+from agent_workbench.ports.tools import ToolBinding
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 
 
@@ -484,6 +494,49 @@ def _assemble_chat(
     # Written out rather than shared with a helper because the registry and the
     # policy engine are two separate reasons the model cannot reach a tool, and
     # a helper that built them together would make it look like one.
+    def _web_search_tool(
+        research: ResearchConfig | None, journal: WebSearchJournal
+    ) -> ToolBinding | None:
+        """The web tool, or nothing at all when no provider is configured.
+
+        Reuses the model's HTTP client rather than opening a second one. The
+        provider is the same service on a different path (ADR-020), the client
+        is already owned and closed by this container, and a second one would
+        be a second thing to leak.
+        """
+
+        if research is None:
+            return None
+        return WebSearchTool(
+            search=DeepSeekWebSearch(
+                http=client,
+                api_key=research.api_key.get_secret_value(),
+                model=research.model_id,
+                base_url=research.base_url,
+                max_uses=research.max_uses,
+            ),
+            # Chat has no per-run cancellation token to hand a tool here; the
+            # gateway enforces the tool's own timeout, and the request dies with
+            # the connection either way.
+            cancellation=NullCancellationToken(),
+            journal=journal,
+        ).binding()
+
+    def _tool_runtime(registry: StaticToolRegistry) -> ClaudeLikeAgentRuntime:
+        """A runtime whose model may reach exactly the tools in `registry`."""
+
+        return ClaudeLikeAgentRuntime(
+            model=model,
+            gateway=ToolGateway(
+                registry=registry,
+                policy=EnvelopePolicyEngine(registry=registry),
+                record_step_inputs=config.record_step_inputs,
+            ),
+            policy_identity=policy_identity,
+            model_label=model_label,
+            record_step_inputs=config.record_step_inputs,
+        )
+
     def _toolless_runtime() -> ClaudeLikeAgentRuntime:
         empty = StaticToolRegistry([])
         return ClaudeLikeAgentRuntime(
@@ -533,11 +586,44 @@ def _assemble_chat(
                 "Use 'fixed' to answer from retrieval unconditionally, or "
                 "'ungrounded' to answer without it."
             )
+        # The web tool, offered on the fallback branch alone (ADR-021). A
+        # question the corpus answers is still answered from the corpus with no
+        # tool in reach; only "the corpus did not cover this" reaches a model
+        # that may search. `None` research means no tool is built at all, so a
+        # deployment that configured nothing cannot spend money by accident.
+        web_journal = WebSearchJournal()
+        web_tool = _web_search_tool(config.research, web_journal)
         rag_execution = RoutedExecution(
             retrieval=retrieval,
             executor=_toolless_runtime(),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
             relevance_threshold=config.chat.routed_relevance_threshold,
+            web_executor=(
+                None
+                if web_tool is None
+                else _tool_runtime(StaticToolRegistry([web_tool]))
+            ),
+            # Exactly the prompt's contract, written as a ceiling: two
+            # searches, and a turn to answer from them.
+            #
+            # `max_tool_calls` below `max_steps` is the whole point and is
+            # legal under ADR-022. The second search spends the allowance, the
+            # runtime stops advertising `web_search`, and the third step is a
+            # model that can only write. So "twice at most" binds without ever
+            # costing the results the two searches returned.
+            #
+            # Both numbers were measured wrong before. At `max_steps=6` the
+            # model rephrased the same question five times -- 丹东今天天气,
+            # 丹东天气预报 今天, 丹东天气 今天 实时 -- ~14s each, and died
+            # having written nothing. At `3/3` it searched twice, spent step
+            # three proposing a third search, and died holding 5.5KB of
+            # results: the tool ceiling was never reached, because a ceiling
+            # that must sit at or above `max_steps` cannot bind before it.
+            web_budget=(
+                None if web_tool is None else RunBudget(max_steps=3, max_tool_calls=2)
+            ),
+            web_tool_names=() if web_tool is None else (WEB_SEARCH_TOOL_NAME,),
+            web_journal=web_journal,
         )
     elif config.chat.retrieval_shape == "agentic":
         # The model decides when to search, so it needs the tool, a budget with

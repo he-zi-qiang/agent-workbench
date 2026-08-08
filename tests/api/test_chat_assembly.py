@@ -306,6 +306,72 @@ def test_the_routed_deployment_assembles_direct_beside_its_rag_router(
     assert isinstance(selector.rag, RoutedExecution)
 
 
+def test_the_web_fallback_budget_enforces_the_prompt_it_ships_with(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "Twice at most" has to be a ceiling, because prompt text is not one.
+
+    Measured against the shipped prompt at `max_steps=6`: the model rephrased
+    the same question five times, spent ~14s of provider time on each, and the
+    run died at its ceiling having written nothing. The instruction was clear
+    and the model ignored it, which is the ordinary case, not a surprising one.
+
+    Three model turns is the arithmetic of the sentence in the prompt: search,
+    search, answer. It is asserted here rather than trusted, because the number
+    lives in assembly and the sentence lives in the application module, and
+    nothing else would notice them drifting apart.
+    """
+
+    from agent_workbench.application.chat_execution import (
+        WEB_FALLBACK_SYSTEM_PROMPT,
+        AnswerModeSelector,
+        RoutedExecution,
+    )
+    from agent_workbench.apps.api import dependencies as assembly
+
+    class _Reranker:
+        identity = "stub-reranker@v1"
+
+        async def rerank(
+            self, query: str, passages: tuple[str, ...]
+        ) -> tuple[float, ...]:  # pragma: no cover - assembly only
+            del query
+            return tuple(1.0 for _ in passages)
+
+    _stub_optional_runtimes(monkeypatch)
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c: _Reranker())
+    dependencies = build_dependencies(
+        project_api(
+            _settings(
+                tmp_path,
+                chat={"retrieval_shape": "routed"},
+                research={"enabled": True},
+            )
+        )
+    )
+
+    assert dependencies.chat is not None
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    execution = selector.rag
+    assert isinstance(execution, RoutedExecution)
+
+    # The tool is built, so the ceiling below is the one that will bind.
+    assert execution.web_tool_names == ("web_search",)
+    assert execution.web_executor is not None
+    assert execution.web_budget is not None
+    # Two searches, and the turn that answers from them. The tool ceiling sits
+    # *below* the step ceiling on purpose (ADR-022): that is what makes the
+    # third step a model with nothing left to call, rather than a model
+    # proposing a third search into a run that then dies holding the results of
+    # the first two.
+    assert execution.web_budget.max_tool_calls == 2
+    assert execution.web_budget.max_steps == 3
+    # And the sentence the ceiling is the ceiling *for*. If this stops matching,
+    # one of the two moved without the other.
+    assert "twice at most" in WEB_FALLBACK_SYSTEM_PROMPT
+
+
 def test_a_process_with_a_lexical_runtime_assembles_the_hybrid_retriever(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

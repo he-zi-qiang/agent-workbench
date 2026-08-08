@@ -20,6 +20,7 @@ transaction has its own suite against real PostgreSQL.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,6 +34,7 @@ from agent_workbench.application.chat_execution import (
     FixedTwoStepExecution,
     RetrievalJournal,
     TurnExecution,
+    WebSearchJournal,
     build_agentic_request,
     build_fixed_request,
     merge_authorized,
@@ -110,13 +112,77 @@ class _Executor:
         )
 
 
-def _agentic(executor: _Executor, journal: RetrievalJournal) -> AgenticExecution:
+def _agentic(
+    executor: _Executor,
+    journal: RetrievalJournal,
+    web_journal: WebSearchJournal | None = None,
+) -> AgenticExecution:
     return AgenticExecution(
         executor=executor,  # type: ignore[arg-type]
         journal=journal,
         budget=RunBudget(max_steps=4, max_tool_calls=6),
         tool_names=("knowledge_search",),
+        web_journal=web_journal or WebSearchJournal(),
     )
+
+
+# --- what reading the open web costs the answer -----------------------------
+
+
+def test_a_turn_that_read_the_web_does_not_claim_to_be_grounded() -> None:
+    """ "Grounded" promises the release fence re-checked the evidence. A fetched
+    page has no revision and no ACL, so there is nothing to re-check and the
+    promise must not be extended over it."""
+
+    journal = RetrievalJournal()
+    web = WebSearchJournal()
+    executor = _Executor(journal=journal, searches=(_context("doc_1", 1, "chk_1"),))
+    execution = _agentic(executor, journal, web)
+    request = _request()
+
+    async def go() -> Any:
+        web.record(request.run_id)
+        return await _produce(execution, request)
+
+    produced = asyncio.run(go())
+
+    assert produced.grounded is False
+    # And it carries none of the machinery that only means something for
+    # corpus evidence: no revisions to re-check, no chunk citations.
+    assert produced.authorized_revisions == ()
+    assert produced.citations == ()
+
+
+def test_a_turn_that_stayed_in_the_corpus_is_still_grounded() -> None:
+    """The control: same shape, same evidence, no web call."""
+
+    journal = RetrievalJournal()
+    executor = _Executor(journal=journal, searches=(_context("doc_1", 1, "chk_1"),))
+    execution = _agentic(executor, journal)
+    request = _request()
+
+    produced = asyncio.run(_produce(execution, request))
+
+    assert produced.grounded is True
+    assert produced.authorized_revisions != ()
+
+
+def test_the_web_journal_is_emptied_even_when_the_run_fails() -> None:
+    """Otherwise the next turn on this shape inherits the verdict."""
+
+    journal = RetrievalJournal()
+    web = WebSearchJournal()
+    execution = _agentic(_Executor(journal=journal, fail=True), journal, web)
+    request = _request()
+
+    async def go() -> None:
+        web.record(request.run_id)
+        await _produce(execution, request)
+
+    with contextlib.suppress(Exception):
+        asyncio.run(go())
+
+    assert web.take(request.run_id) is False
 
 
 async def _produce(execution: AgenticExecution, request: ChatRequest) -> Any:
