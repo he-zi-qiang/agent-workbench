@@ -22,7 +22,7 @@
 >
 > 架构依据：[架构与技术选型基线 v1.3](./architecture-baseline.md)
 >
-> 配置依据：[配置管理基线 schema 1.2](./configuration.md)
+> 配置依据：[配置管理基线 schema 1.6](./configuration.md)
 >
 > 目标：把“Chat + RAG、Task + Multi-Agent、自研 Claude Code 风格 Runtime”
 > 落成一个可测试、可恢复、可评测、适合校招展示的通用 Agent 项目
