@@ -148,6 +148,7 @@ def _rejection(
         f"{api_url}/v1/chat/sessions/{session_id}/events",
         tenant_id=tenant_id,
         principal_id=principal_id,
+        scopes=scopes,
         headers={"accept": "text/event-stream"},
         timeout=EVENTS_TIMEOUT_SECONDS,
     )
@@ -196,6 +197,9 @@ def _ask(
                 f"{api_url}/v1/chat/sessions/{session_id}/messages",
                 tenant_id=tenant_id,
                 principal_id=principal_id,
+                # The one request where scopes decide anything: this is the
+                # turn that runs the model loop and reaches the policy engine.
+                scopes=scopes,
                 method="POST",
                 body={
                     "question": probe.question,
