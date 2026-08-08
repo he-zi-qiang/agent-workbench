@@ -70,6 +70,14 @@ test("Chat 与 Work 外壳在桌面和移动布局中均可使用", async ({
   await expect(activeNavigation).toBeVisible();
   await expect(inactiveNavigation).toBeHidden();
 
+  if (isMobile) {
+    await page.getByRole("button", { name: "打开会话列表" }).click();
+    const sessions = page.getByRole("complementary", { name: "本地 Chat 会话" });
+    await expect(sessions).toBeVisible();
+    await sessions.getByRole("button", { name: "关闭会话列表" }).click();
+    await expect(sessions).toBeHidden();
+  }
+
   await activeNavigation.getByRole("link", { name: "Work", exact: true }).click();
 
   await expect(page).toHaveURL(/#\/work$/);

@@ -4,6 +4,7 @@ import { App } from "./app/App";
 import { Providers } from "./app/Providers";
 import "./styles/tokens.css";
 import "./styles/app.css";
+import "./styles/minimal-theme.css";
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("missing #root");

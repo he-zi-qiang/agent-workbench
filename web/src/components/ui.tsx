@@ -92,7 +92,7 @@ export function LoadingLine({ label = "正在加载" }: { label?: string }) {
   return (
     <span className="aw-loading-line" role="status">
       <LoaderCircle aria-hidden="true" className="aw-spin" size={15} />
-      {label}
+      <span className="aw-loading-label">{label}</span>
     </span>
   );
 }
