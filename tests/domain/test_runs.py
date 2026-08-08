@@ -48,9 +48,28 @@ def _request(**overrides: object) -> AgentRunRequest:
     return AgentRunRequest.model_validate(defaults | overrides)
 
 
-def test_tool_call_ceiling_cannot_sit_below_the_step_ceiling() -> None:
-    with pytest.raises(ValidationError, match="max_tool_calls must be >="):
-        _budget(max_steps=8, max_tool_calls=4)
+def test_a_tool_ceiling_below_the_step_ceiling_is_a_budget_not_an_error() -> None:
+    """ADR-022. "Four tool calls, and four more turns to answer from them."
+
+    This combination used to be rejected outright, on the reading that a step
+    unable to call a tool was a misconfiguration. Under the loop that *ended*
+    a run when its tool calls ran out, that reading was right and the two
+    ceilings could never be set independently anyway: one call per turn reaches
+    both at the same turn and `max_steps` is reported first, so a lower tool
+    ceiling was unreachable by construction.
+
+    The loop now closes the toolbox instead of ending the run, which makes the
+    spare steps answering turns. Refusing this budget would refuse the only
+    way to say "search twice, then answer" -- the sentence the chat fallback's
+    prompt has always contained and its budget could never enforce.
+    """
+
+    budget = _budget(max_steps=8, max_tool_calls=4)
+
+    assert budget.max_steps == 8
+    assert budget.max_tool_calls == 4
+    # The step ceiling still bounds the loop; nothing here is unbounded.
+    assert budget.halt_reason_for(BudgetUsage(steps=8)) == "max_steps"
 
 
 def test_a_fresh_run_is_allowed_to_start() -> None:
@@ -70,6 +89,66 @@ def test_each_ceiling_stops_the_run(usage: BudgetUsage, expected: str) -> None:
     budget = _budget(max_total_tokens=1000, max_cost_micro_usd=5000)
 
     assert budget.stop_reason_for(usage) == expected
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        (BudgetUsage(steps=4), "max_steps"),
+        (BudgetUsage(tokens=TokenUsage(input_tokens=1000)), "token_budget"),
+        (BudgetUsage(cost_micro_usd=5000), "cost_budget"),
+    ],
+)
+def test_each_ceiling_that_ends_a_run_ends_it(
+    usage: BudgetUsage, expected: str
+) -> None:
+    """`halt_reason_for` agrees with `stop_reason_for` on every shared ceiling.
+
+    Written as the same table minus one row, because the two must not drift:
+    every limit that stops more work also ends the run, except the one below.
+    """
+
+    budget = _budget(max_total_tokens=1000, max_cost_micro_usd=5000)
+
+    assert budget.halt_reason_for(usage) == expected
+
+
+def test_a_spent_tool_allowance_does_not_end_the_run() -> None:
+    """The one row that differs, and the whole reason the split exists.
+
+    A run out of tool calls can still write its answer from what the calls
+    already returned. Ending it there discards exactly the work the allowance
+    paid for -- measured on the chat web fallback as two successful searches,
+    5.5KB of results, and an answer that said it could not search.
+    """
+
+    budget = _budget(max_steps=4, max_tool_calls=8)
+    spent = BudgetUsage(steps=1, tool_calls=8)
+
+    assert budget.stop_reason_for(spent) == "max_tool_calls"
+    assert budget.halt_reason_for(spent) is None
+    assert budget.tool_allowance_spent(spent) is True
+
+
+def test_an_unspent_allowance_is_not_reported_as_spent() -> None:
+    """The control: one call short is not out of calls."""
+
+    budget = _budget(max_steps=4, max_tool_calls=8)
+
+    assert budget.tool_allowance_spent(BudgetUsage(tool_calls=7)) is False
+    assert budget.tool_allowance_spent(BudgetUsage(tool_calls=9)) is True
+
+
+def test_a_run_out_of_steps_ends_even_with_tool_calls_to_spare() -> None:
+    """The step ceiling is what bounds the loop once the toolbox is closed.
+
+    Without this, "the tool ceiling no longer ends a run" would be one edit
+    away from a run that circles forever proposing nothing.
+    """
+
+    budget = _budget(max_steps=4, max_tool_calls=8)
+
+    assert budget.halt_reason_for(BudgetUsage(steps=4, tool_calls=0)) == "max_steps"
 
 
 def test_the_deadline_needs_an_explicit_clock() -> None:

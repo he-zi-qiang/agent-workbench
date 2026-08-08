@@ -483,8 +483,21 @@ def test_a_model_that_never_stops_asking_is_stopped_by_the_step_ceiling() -> Non
     assert run.outcome.usage.steps == 3
 
 
-def test_the_tool_call_ceiling_also_stops_the_loop() -> None:
-    """Two calls per turn exhaust the tool budget before the step budget."""
+def test_the_tool_call_ceiling_stops_a_model_that_will_not_take_the_hint() -> None:
+    """The tool ceiling still binds when the model keeps proposing anyway.
+
+    The allowance running out takes the tools off the request rather than
+    ending the run, so the model gets one more turn to answer from what it
+    already fetched. This scripted model refuses that turn -- it proposes two
+    more calls with nothing advertised, which a real model does not do and this
+    fake does because it never reads `request.tools`. The proposal is turned
+    away and the run fails, which is the right end for a model that will not
+    answer.
+
+    Note `steps == 3`, one more than before this behaviour existed: the third
+    step is the answering turn being offered and declined. The tool ledger is
+    unmoved at 4, which is the part that was ever a guarantee.
+    """
 
     pair = (
         ToolCall(tool_call_id="toolu_1", tool_name="read_document"),
@@ -501,8 +514,10 @@ def test_the_tool_call_ceiling_also_stops_the_loop() -> None:
     )
 
     assert run.outcome.stop_reason == "max_tool_calls"
-    assert run.outcome.usage.steps == 2
+    assert run.outcome.usage.steps == 3
     assert run.outcome.usage.tool_calls == 4
+    # The turn it was offered came with nothing to call.
+    assert model.requests[-1].tools == ()
 
 
 def test_an_already_cancelled_run_never_calls_the_model() -> None:
@@ -1247,7 +1262,93 @@ def test_the_ledger_never_reports_more_tool_calls_than_the_ceiling() -> None:
     )
 
     assert run.outcome.usage.tool_calls == 2
-    assert run.outcome.stop_reason == "max_tool_calls"
+
+
+def test_a_run_that_spent_its_tool_allowance_answers_from_what_it_got() -> None:
+    """The tool ceiling closes the toolbox; it does not end the run.
+
+    This is the same script as the test above, and it used to die at
+    `max_tool_calls` with an empty `output_text` -- two reads dispatched, their
+    results in the transcript, and nothing written from them. The run had spent
+    its allowance and was stopped one turn short of the answer that allowance
+    was bought for.
+
+    Measured on the real thing before this changed: the chat web fallback
+    searched twice, got 5.5KB of results, proposed a third search, was refused,
+    and the turn ended up answering "I have no ability to search". Every
+    ceiling except this one leaves a run with nothing further it can do. This
+    one leaves it with an answer to write, so the loop lets it write one.
+    """
+
+    first, second, third, model = _three_reads()
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2),
+            tool_names=("read_a", "read_b", "read_c"),
+        ),
+        bindings=[first.binding, second.binding, third.binding],
+    )
+
+    assert run.outcome.status == "completed"
+    assert run.outcome.output_text == "Done."
+    # The ceiling still held: the third call never ran.
+    assert run.outcome.usage.tool_calls == 2
+    assert third.calls == []
+
+
+def test_the_answering_turn_is_offered_no_tools_at_all() -> None:
+    """Taken off the request, not left on it to be refused.
+
+    Leaving them advertised is what produced the defect: a model that can still
+    see the tool proposes the tool, and the only thing left to do with the
+    proposal is turn it away and kill the run. The mechanism is the absence.
+    """
+
+    first, second, third, model = _three_reads()
+
+    _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2),
+            tool_names=("read_a", "read_b", "read_c"),
+        ),
+        bindings=[first.binding, second.binding, third.binding],
+    )
+
+    assert len(model.requests) == 2
+    # Offered while the allowance lasted...
+    assert {spec.name for spec in model.requests[0].tools} == {
+        "read_a",
+        "read_b",
+        "read_c",
+    }
+    # ...and gone once it was spent.
+    assert model.requests[1].tools == ()
+
+
+def test_tools_stay_on_the_request_while_the_allowance_lasts() -> None:
+    """The control. Removing them a turn early is a silently crippled run.
+
+    Same script, one more call of headroom: nothing is taken away, because
+    nothing was spent. A implementation that dropped tools whenever any call
+    had been made would pass every test above and this is what would catch it.
+    """
+
+    first, second, third, model = _three_reads()
+
+    _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=4, max_tool_calls=4),
+            tool_names=("read_a", "read_b", "read_c"),
+        ),
+        bindings=[first.binding, second.binding, third.binding],
+    )
+
+    assert len(model.requests) == 2
+    assert model.requests[1].tools != ()
 
 
 def test_a_call_refused_for_budget_still_answers_its_id() -> None:
