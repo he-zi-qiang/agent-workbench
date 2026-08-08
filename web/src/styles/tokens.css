@@ -6,66 +6,38 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  --aw-canvas: #f1f0eb;
-  --aw-window: #fbfaf7;
-  --aw-sidebar: #f6f5f1;
+  /* A deliberately quiet white foundation. Claude's terracotta is reserved
+     for actions and small moments of emphasis, never for whole surfaces. */
+  --aw-canvas: #ffffff;
+  --aw-window: #ffffff;
+  --aw-sidebar: #f7f7f5;
   --aw-panel: #ffffff;
-  --aw-panel-soft: #f7f6f2;
-  --aw-panel-strong: #ebe9e2;
-  --aw-rail: #20211f;
-  --aw-rail-hover: #30312e;
-  --aw-text: #242522;
-  --aw-text-soft: #5f625d;
-  --aw-text-muted: #858880;
-  --aw-border: #deddd6;
-  --aw-border-strong: #c9c8c0;
-  --aw-accent: #d76f3d;
-  --aw-accent-hover: #c55f31;
-  --aw-accent-soft: #f8e8de;
-  --aw-success: #367c59;
-  --aw-success-soft: #e6f1ea;
-  --aw-warning: #a9671d;
-  --aw-warning-soft: #f8eedc;
-  --aw-danger: #b34d4a;
-  --aw-danger-soft: #f8e7e5;
-  --aw-info: #426c85;
-  --aw-info-soft: #e7eff3;
+  --aw-panel-soft: #f7f7f5;
+  --aw-panel-strong: #efeee9;
+  --aw-rail: #f7f7f5;
+  --aw-rail-hover: #ecebe7;
+  --aw-text: #292724;
+  --aw-text-soft: #5f5c57;
+  --aw-text-muted: #8a8781;
+  --aw-border: #e8e6e1;
+  --aw-border-strong: #d6d2cb;
+  --aw-accent: #d97757;
+  --aw-accent-hover: #c96545;
+  --aw-accent-soft: #f6ebe6;
+  --aw-success: #2f7a54;
+  --aw-success-soft: #eaf4ee;
+  --aw-warning: #9a6724;
+  --aw-warning-soft: #f8f0e2;
+  --aw-danger: #b44f4b;
+  --aw-danger-soft: #f9eaea;
+  --aw-info: #486b7a;
+  --aw-info-soft: #edf3f5;
 
-  --aw-shadow-sm: 0 1px 2px rgb(34 35 32 / 5%);
-  --aw-shadow-md: 0 14px 42px rgb(34 35 32 / 10%);
-  --aw-radius-sm: 7px;
-  --aw-radius-md: 11px;
+  --aw-shadow-sm: 0 1px 2px rgb(41 39 36 / 4%);
+  --aw-shadow-md: 0 18px 48px rgb(41 39 36 / 11%);
+  --aw-radius-sm: 8px;
+  --aw-radius-md: 12px;
   --aw-radius-lg: 16px;
-  --aw-radius-xl: 22px;
+  --aw-radius-xl: 20px;
   --aw-transition: 150ms ease;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --aw-canvas: #181916;
-    --aw-window: #20211e;
-    --aw-sidebar: #242521;
-    --aw-panel: #292a26;
-    --aw-panel-soft: #252622;
-    --aw-panel-strong: #343530;
-    --aw-rail: #11120f;
-    --aw-rail-hover: #292a26;
-    --aw-text: #edede7;
-    --aw-text-soft: #bbbcb4;
-    --aw-text-muted: #90928a;
-    --aw-border: #3b3c37;
-    --aw-border-strong: #51534c;
-    --aw-accent: #e18455;
-    --aw-accent-hover: #ec9367;
-    --aw-accent-soft: #432d21;
-    --aw-success: #79b693;
-    --aw-success-soft: #263a2f;
-    --aw-warning: #d4a25e;
-    --aw-warning-soft: #423522;
-    --aw-danger: #dc817c;
-    --aw-danger-soft: #432a29;
-    --aw-info: #82afc6;
-    --aw-info-soft: #273740;
-  }
 }

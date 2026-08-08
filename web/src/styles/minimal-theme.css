@@ -1,0 +1,754 @@
+/*
+ * Minimal presentation layer
+ * --------------------------
+ * app.css owns component behaviour and responsive structure. This layer owns
+ * the quieter visual hierarchy: white reading surfaces, a warm Claude-like
+ * accent, and borders only where they communicate an actual boundary.
+ */
+
+body {
+  background: var(--aw-window);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* Application frame ----------------------------------------------------- */
+
+.aw-app-shell {
+  grid-template-columns: 72px minmax(0, 1fr);
+  padding: 0;
+}
+
+.aw-app-content {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.aw-global-rail {
+  padding: 14px 8px 10px;
+  border-right: 1px solid var(--aw-border);
+  border-radius: 0;
+  background: var(--aw-rail);
+  color: var(--aw-text-muted);
+}
+
+.aw-logo {
+  width: 40px;
+  height: 40px;
+  margin-bottom: 14px;
+  border: 1px solid color-mix(in srgb, var(--aw-accent) 18%, var(--aw-border));
+  border-radius: 12px;
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+  box-shadow: none;
+}
+
+.aw-global-link {
+  width: 56px;
+  min-height: 52px;
+  color: var(--aw-text-muted);
+}
+
+.aw-global-link:hover,
+.aw-global-link.active {
+  background: var(--aw-rail-hover);
+  color: var(--aw-text);
+}
+
+.aw-global-link.active svg {
+  color: var(--aw-accent);
+}
+
+.aw-nav-divider {
+  border-color: var(--aw-border);
+}
+
+/* Controls -------------------------------------------------------------- */
+
+.aw-button,
+.aw-icon-button,
+.aw-primary-button,
+.aw-secondary-button,
+.aw-danger-button {
+  box-shadow: none;
+}
+
+.aw-button,
+.aw-icon-button,
+.aw-secondary-button {
+  border-color: transparent;
+  background: transparent;
+}
+
+.aw-button:hover:not(:disabled),
+.aw-icon-button:hover:not(:disabled),
+.aw-secondary-button:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--aw-panel-soft);
+}
+
+.aw-button.is-primary,
+.aw-primary-button {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent);
+  box-shadow: none;
+}
+
+input,
+textarea,
+select {
+  border-color: var(--aw-border-strong);
+  border-radius: 10px;
+  background: var(--aw-panel);
+}
+
+.aw-status-pill,
+.aw-local-badge,
+.aw-document-status {
+  border: 0;
+}
+
+/* Shared page hierarchy ------------------------------------------------- */
+
+.aw-context-sidebar,
+.aw-chat-sessions,
+.aw-work-sidebar {
+  background: var(--aw-sidebar);
+}
+
+.aw-context-header,
+.aw-feature-header,
+.aw-chat-sessions-header,
+.aw-pane-header,
+.aw-chat-header,
+.aw-work-detail-header {
+  border-bottom-color: var(--aw-border);
+  background: color-mix(in srgb, var(--aw-window) 96%, transparent);
+  box-shadow: none;
+}
+
+.aw-context-item,
+.aw-list-row,
+.aw-chat-session,
+.aw-task-list-item,
+.aw-knowledge-row {
+  border: 0;
+}
+
+.aw-context-item:hover,
+.aw-context-item.is-active,
+.aw-list-row:hover,
+.aw-chat-session:hover,
+.aw-chat-session.is-active,
+.aw-task-list-item:hover,
+.aw-task-list-item.is-active,
+.aw-knowledge-row:hover,
+.aw-knowledge-row.is-active {
+  border: 0;
+  background: var(--aw-panel-strong);
+  box-shadow: none;
+}
+
+.aw-context-item.is-active,
+.aw-chat-session.is-active,
+.aw-task-list-item.is-active,
+.aw-knowledge-row.is-active {
+  color: var(--aw-text);
+}
+
+.aw-utility-page {
+  padding: clamp(28px, 5vw, 64px) clamp(20px, 5vw, 64px) 64px;
+}
+
+.aw-utility-page > * {
+  width: min(980px, 100%);
+}
+
+.aw-knowledge-page > * {
+  width: min(1120px, 100%);
+}
+
+.aw-page-header {
+  margin-bottom: 34px;
+}
+
+.aw-page-header h1 {
+  font-size: clamp(28px, 3vw, 36px);
+  font-weight: 620;
+  letter-spacing: -0.035em;
+}
+
+.aw-page-header p {
+  margin-top: 7px;
+  line-height: 1.65;
+}
+
+.aw-eyebrow,
+.aw-context-kicker {
+  color: var(--aw-accent);
+}
+
+.aw-card-grid {
+  gap: 0 32px;
+}
+
+.aw-card,
+.aw-section {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.aw-card {
+  padding: 0;
+}
+
+.aw-section,
+.aw-card.aw-section {
+  margin-top: 0;
+  padding: 26px 0;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-page-header + .aw-card.aw-section,
+.aw-page-header + .aw-section {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.aw-page-header > .aw-page-note {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.aw-result-card {
+  border: 0;
+  background: var(--aw-panel-soft);
+}
+
+.aw-metric-grid,
+.aw-eval-legend {
+  gap: 0;
+  border-top: 1px solid var(--aw-border);
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-metric,
+.aw-eval-legend > div {
+  padding: 16px 14px;
+  border: 0;
+  border-right: 1px solid var(--aw-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.aw-metric:last-child,
+.aw-eval-legend > div:last-child {
+  border-right: 0;
+}
+
+.aw-notice {
+  border: 0;
+  border-radius: 10px;
+}
+
+/* Live process shimmer -------------------------------------------------- */
+
+/* One restrained sweep communicates “this is the step that is moving”. It
+   lives on text rather than another progress card, so the run still reads as
+   a clean sequence once every stage has settled. */
+@keyframes aw-live-text-sweep {
+  from {
+    background-position: 130% 50%;
+  }
+
+  to {
+    background-position: -130% 50%;
+  }
+}
+
+.aw-loading-label,
+.aw-stream-steps > li.is-active .aw-stream-title,
+.aw-stream-steps > li.is-active .aw-stream-note {
+  color: var(--aw-text-muted);
+  background-image: linear-gradient(
+    105deg,
+    var(--aw-text-muted) 0%,
+    var(--aw-text-muted) 35%,
+    var(--aw-accent) 47%,
+    #efaa93 52%,
+    var(--aw-text) 59%,
+    var(--aw-text-muted) 72%,
+    var(--aw-text-muted) 100%
+  );
+  background-position: 130% 50%;
+  background-size: 260% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: aw-live-text-sweep 2.35s linear infinite;
+}
+
+.aw-stream-steps > li.is-active .aw-stream-title {
+  font-weight: 600;
+}
+
+.aw-stream-steps > li.is-active .aw-stream-dot {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--aw-accent) 13%, transparent);
+}
+
+/* Chat ------------------------------------------------------------------ */
+
+.aw-chat-page {
+  grid-template-columns: 252px minmax(0, 1fr);
+}
+
+.aw-chat-sessions {
+  border-right-color: var(--aw-border);
+}
+
+.aw-chat-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.aw-chat-sessions-close,
+.aw-chat-mobile-sessions,
+.aw-chat-sessions-backdrop {
+  display: none;
+}
+
+.aw-chat-session-list {
+  padding: 10px 8px;
+  gap: 2px;
+}
+
+.aw-chat-session {
+  padding: 11px 10px;
+  border-radius: 10px;
+}
+
+.aw-chat-main {
+  background: var(--aw-window);
+}
+
+.aw-chat-header {
+  min-height: 68px;
+  padding-right: clamp(18px, 4vw, 42px);
+  padding-left: clamp(18px, 4vw, 42px);
+}
+
+.aw-chat-header h1 {
+  font-size: 16px;
+}
+
+.aw-chat-connection {
+  border: 0;
+  background: transparent;
+}
+
+.aw-chat-connection.is-connected {
+  border: 0;
+  background: transparent;
+}
+
+.aw-chat-transcript {
+  padding-top: clamp(28px, 6vh, 64px);
+}
+
+.aw-chat-turn-list {
+  width: min(760px, 100%);
+}
+
+.aw-chat-turn {
+  padding-bottom: 32px;
+}
+
+.aw-chat-user-message p {
+  padding: 11px 15px;
+  border: 0;
+  border-radius: 18px 18px 5px 18px;
+  background: #f2f1ed;
+}
+
+.aw-chat-assistant-mark {
+  border: 1px solid color-mix(in srgb, var(--aw-accent) 18%, var(--aw-border));
+  border-radius: 50%;
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+.aw-chat-assistant-message > .aw-markdown {
+  margin-top: 9px;
+  font-size: 14.5px;
+  line-height: 1.78;
+}
+
+.aw-chat-activity {
+  padding: 8px 0 4px;
+  border-top: 1px solid var(--aw-border);
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-chat-citation {
+  border: 0;
+  border-radius: 999px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-chat-composer {
+  width: min(780px, calc(100% - 32px));
+  padding-bottom: 18px;
+}
+
+.aw-chat-composer-row {
+  padding: 7px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 24px;
+  box-shadow: 0 6px 22px rgb(41 39 36 / 7%);
+}
+
+.aw-chat-composer-row:focus-within {
+  border-color: color-mix(in srgb, var(--aw-accent) 48%, var(--aw-border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--aw-accent) 9%, transparent),
+    0 8px 24px rgb(41 39 36 / 8%);
+}
+
+.aw-chat-send {
+  border-radius: 50%;
+}
+
+.aw-chat-composer-tools {
+  margin-top: 7px;
+  padding: 0 7px;
+}
+
+.aw-chat-composer > p {
+  color: color-mix(in srgb, var(--aw-text-muted) 78%, transparent);
+}
+
+.aw-empty-icon {
+  border-radius: 50%;
+  background: var(--aw-accent-soft);
+}
+
+/* Work ------------------------------------------------------------------ */
+
+.aw-work-page {
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+.aw-create-task {
+  padding: 18px 16px;
+  gap: 9px;
+}
+
+.aw-task-list {
+  padding: 9px 8px;
+}
+
+.aw-work-detail {
+  padding-right: clamp(20px, 5vw, 72px);
+  padding-left: clamp(20px, 5vw, 72px);
+}
+
+.aw-work-detail-header {
+  margin-right: calc(clamp(20px, 5vw, 72px) * -1);
+  margin-left: calc(clamp(20px, 5vw, 72px) * -1);
+  padding-right: clamp(20px, 5vw, 72px);
+  padding-left: clamp(20px, 5vw, 72px);
+}
+
+.aw-result {
+  padding: 18px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.aw-approve {
+  padding: 16px 18px;
+  border: 0;
+  border-left: 3px solid var(--aw-accent);
+  border-radius: 0 12px 12px 0;
+  background: var(--aw-accent-soft);
+}
+
+.aw-work-fold {
+  padding: 13px 0;
+  border: 0;
+  border-top: 1px solid var(--aw-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.aw-step-artifact {
+  border: 0;
+  background: var(--aw-panel-soft);
+}
+
+.aw-answer-mark {
+  border: 1px solid color-mix(in srgb, var(--aw-accent) 18%, var(--aw-border));
+}
+
+/* Knowledge ------------------------------------------------------------- */
+
+.aw-knowledge-layout {
+  grid-template-columns: 270px minmax(0, 1fr);
+  border: 0;
+  border-top: 1px solid var(--aw-border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.aw-knowledge-list {
+  padding: 12px 10px;
+  border-right-color: var(--aw-border);
+}
+
+.aw-knowledge-row {
+  padding: 11px 10px;
+}
+
+.aw-knowledge-icon {
+  border-radius: 50%;
+}
+
+.aw-knowledge-detail {
+  padding: 30px 34px;
+}
+
+.aw-knowledge-summary {
+  margin: 24px 0 8px;
+  border: 0;
+  border-top: 1px solid var(--aw-border);
+  border-bottom: 1px solid var(--aw-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.aw-knowledge-summary > span {
+  padding: 14px 12px;
+  border-color: var(--aw-border);
+}
+
+.aw-knowledge-upload,
+.aw-knowledge-documents,
+.aw-knowledge-debug {
+  margin-top: 0;
+  padding: 24px 0;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-drop-zone {
+  border: 1px dashed var(--aw-border-strong);
+  border-radius: 14px;
+  background: var(--aw-panel-soft);
+}
+
+/* Dialogs, inspectors and small screens -------------------------------- */
+
+.aw-dialog,
+.aw-mobile-more-sheet {
+  border: 0;
+  box-shadow: var(--aw-shadow-md);
+}
+
+.aw-mobile-more-link {
+  border: 0;
+  background: transparent;
+}
+
+.aw-mobile-more-link:hover,
+.aw-mobile-more-link.active {
+  background: var(--aw-panel-soft);
+}
+
+@media (max-width: 900px) {
+  .aw-knowledge-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .aw-knowledge-list {
+    display: flex;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--aw-border);
+  }
+
+  .aw-knowledge-row {
+    min-width: 220px;
+  }
+
+  .aw-knowledge-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aw-knowledge-summary > span:nth-child(2) {
+    border-right: 0;
+  }
+
+  .aw-knowledge-summary > span:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--aw-border);
+  }
+}
+
+@media (max-width: 760px) {
+  .aw-app-shell {
+    display: block;
+  }
+
+  .aw-mobile-nav {
+    background: rgb(255 255 255 / 96%);
+  }
+
+  .aw-chat-sessions {
+    display: none;
+  }
+
+  .aw-chat-sessions.is-mobile-open {
+    position: fixed;
+    z-index: 72;
+    inset: 0 auto 60px 0;
+    display: flex;
+    width: min(340px, 88vw);
+    max-height: none;
+    border-right: 1px solid var(--aw-border);
+    border-bottom: 0;
+    background: var(--aw-sidebar);
+    box-shadow: 18px 0 48px rgb(41 39 36 / 12%);
+  }
+
+  .aw-chat-sessions-backdrop {
+    position: fixed;
+    z-index: 71;
+    inset: 0 0 60px;
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: rgb(41 39 36 / 18%);
+    backdrop-filter: blur(2px);
+  }
+
+  .aw-chat-sessions-close,
+  .aw-chat-mobile-sessions {
+    display: inline-flex;
+  }
+
+  .aw-chat-session-list {
+    display: grid;
+    min-height: 0;
+    padding: 10px 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .aw-chat-session {
+    min-width: 0;
+    max-width: none;
+    background: transparent;
+  }
+
+  .aw-chat-session.is-active {
+    background: var(--aw-panel-strong);
+  }
+
+  .aw-chat-header {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    padding-right: 12px;
+    padding-left: 8px;
+  }
+
+  .aw-chat-transcript {
+    padding-top: 22px;
+  }
+
+  .aw-chat-composer {
+    width: calc(100% - 20px);
+    padding-bottom: 14px;
+  }
+
+  .aw-chat-composer-row {
+    border-radius: 20px;
+  }
+
+  .aw-work-sidebar {
+    background: var(--aw-window);
+  }
+
+  .aw-create-task {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .aw-work-detail {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .aw-work-detail-header {
+    margin-right: -16px;
+    margin-left: -16px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .aw-utility-page {
+    padding: 26px 18px 48px;
+  }
+
+  .aw-page-header {
+    margin-bottom: 26px;
+  }
+
+  .aw-card-grid {
+    gap: 0;
+  }
+
+  .aw-metric,
+  .aw-eval-legend > div {
+    border-right: 0;
+    border-bottom: 1px solid var(--aw-border);
+  }
+
+  .aw-metric:last-child,
+  .aw-eval-legend > div:last-child {
+    border-bottom: 0;
+  }
+
+  .aw-knowledge-layout {
+    border-top: 0;
+  }
+
+  .aw-knowledge-list {
+    padding: 8px 0 12px;
+    border-bottom-color: var(--aw-border);
+    background: var(--aw-window);
+  }
+
+  .aw-knowledge-row {
+    background: var(--aw-panel-soft);
+  }
+
+  .aw-knowledge-detail {
+    padding: 24px 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-loading-label,
+  .aw-stream-steps > li.is-active .aw-stream-title,
+  .aw-stream-steps > li.is-active .aw-stream-note {
+    background-image: none;
+    color: var(--aw-text);
+    -webkit-text-fill-color: currentColor;
+    animation: none;
+  }
+}

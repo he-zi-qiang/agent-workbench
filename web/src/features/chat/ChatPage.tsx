@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleDot,
   MessageSquare,
+  PanelLeft,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -11,6 +12,7 @@ import {
   ShieldAlert,
   Wifi,
   WifiOff,
+  X,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -63,6 +65,7 @@ export function ChatPage() {
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, string | null>>({});
   const [creatingSession, setCreatingSession] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const mounted = useRef(true);
   const latestSubmissionContext = useRef({ runtime, sessionId });
 
@@ -198,19 +201,45 @@ export function ChatPage() {
 
   return (
     <div className="aw-chat-page">
-      <aside className="aw-chat-sessions" aria-label="本地 Chat 会话">
+      {mobileSessionsOpen ? (
+        <button
+          aria-label="关闭会话列表"
+          className="aw-chat-sessions-backdrop"
+          onClick={() => setMobileSessionsOpen(false)}
+          type="button"
+        />
+      ) : null}
+      <aside
+        className={`aw-chat-sessions ${mobileSessionsOpen ? "is-mobile-open" : ""}`}
+        aria-label="本地 Chat 会话"
+      >
         <header className="aw-chat-sessions-header">
           <div>
             <strong>会话</strong>
-            <span className="aw-local-badge">本地列表</span>
+            <span className="aw-local-badge">本地</span>
           </div>
-          <IconButton label="新建本地会话" onClick={() => navigate("/chat")}>
-            <Plus aria-hidden="true" size={17} />
-          </IconButton>
+          <div className="aw-chat-session-actions">
+            <IconButton
+              label="新建本地会话"
+              onClick={() => {
+                setMobileSessionsOpen(false);
+                void navigate("/chat");
+              }}
+            >
+              <Plus aria-hidden="true" size={17} />
+            </IconButton>
+            <IconButton
+              className="aw-chat-sessions-close"
+              label="关闭会话列表"
+              onClick={() => setMobileSessionsOpen(false)}
+            >
+              <X aria-hidden="true" size={17} />
+            </IconButton>
+          </div>
         </header>
         <div className="aw-chat-session-list">
           {state.sessionOrder.length === 0 ? (
-            <p className="aw-chat-local-note">尚无本地会话。发送第一条问题后才会创建。</p>
+            <p className="aw-chat-local-note">发送消息后，会话会保存在当前浏览器。</p>
           ) : (
             state.sessionOrder.map((id) => {
               const session = state.sessions[id];
@@ -220,7 +249,10 @@ export function ChatPage() {
                   aria-current={session.sessionId === sessionId ? "page" : undefined}
                   className={`aw-chat-session ${session.sessionId === sessionId ? "is-active" : ""}`}
                   key={session.sessionId}
-                  onClick={() => navigate(`/chat/${encodeURIComponent(session.sessionId)}`)}
+                  onClick={() => {
+                    setMobileSessionsOpen(false);
+                    void navigate(`/chat/${encodeURIComponent(session.sessionId)}`);
+                  }}
                   type="button"
                 >
                   <span className="aw-chat-session-copy">
@@ -235,9 +267,6 @@ export function ChatPage() {
             })
           )}
         </div>
-        <p className="aw-chat-local-note">
-          这里只保存当前浏览器、当前本地身份见过的入口；服务端没有会话列举接口。
-        </p>
       </aside>
 
       <main className="aw-chat-main">
@@ -250,6 +279,7 @@ export function ChatPage() {
           {...(selected === undefined
             ? {}
             : { onReconnect: () => runtime.reconnectSessionStream(selected.sessionId) })}
+          onOpenSessions={() => setMobileSessionsOpen(true)}
         />
 
         <section className="aw-chat-transcript" aria-live="polite">
@@ -357,11 +387,6 @@ export function ChatPage() {
                     : "回答会检索资料并标注引用"}
             </span>
           </div>
-          <p>
-            {selected === undefined
-              ? "发送第一条消息时创建会话。附件会先加入所选知识库并等待索引。"
-              : "同一会话可在自由回答与知识库回答之间逐条切换。"}
-          </p>
         </form>
       </main>
     </div>
@@ -373,20 +398,29 @@ function ChatHeader({
   session,
   sourceLabel,
   onReconnect,
+  onOpenSessions,
 }: {
   answerMode: "direct" | "rag";
   session: ChatSessionState | undefined;
   sourceLabel?: string;
   onReconnect?: () => void;
+  onOpenSessions: () => void;
 }) {
   return (
     <header className="aw-chat-header">
+      <IconButton
+        className="aw-chat-mobile-sessions"
+        label="打开会话列表"
+        onClick={onOpenSessions}
+      >
+        <PanelLeft aria-hidden="true" size={18} />
+      </IconButton>
       <div>
         <p className="aw-eyebrow">Chat</p>
         <h1>{session?.title ?? "新会话"}</h1>
         <p>
           {session === undefined
-            ? "自由对话与知识库问答共用一个输入框。"
+            ? "直接对话，或选择知识库。"
             : answerMode === "direct"
               ? "当前：自由回答 · 可随时切换知识库"
               : `当前资料：${sourceLabel ?? "知识库"}`}
