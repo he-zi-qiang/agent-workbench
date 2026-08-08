@@ -111,10 +111,13 @@ def _request(
     if scopes:
         # Sent only when asked for. A principal with no scopes is the honest
         # default here, and it is also what exposed the fallback defect this
-        # flag exists to work around: with `research.enabled`, an ungrounded
-        # turn offers `web_search` without checking that the caller may use it,
-        # so the model proposes it, policy denies it, and the turn burns its
-        # step ceiling and 502s instead of just answering without evidence.
+        # flag works around: with `research.enabled`, an ungrounded turn offers
+        # `web_search` without checking that the caller may use it, so the
+        # model proposes it and policy denies it until the run hits its
+        # ceiling. That no longer costs the turn -- the fallback now degrades
+        # to the toolless answer instead of returning 502 -- but it still
+        # spends the whole ceiling before answering, and every step of it is
+        # provider time this script is otherwise waiting through.
         request.add_header("x-principal-scopes", ",".join(scopes))
     if payload is not None:
         request.add_header("content-type", "application/json")
@@ -336,7 +339,8 @@ def _report(results: list[Result]) -> int:
         print(
             f"note: {len(failed)} turn(s) returned an error *after* the gate had\n"
             "      already run and recorded its score. The scores above stand;\n"
-            "      the errors are a separate defect on the fallback path."
+            "      the errors happened downstream of them and say nothing about\n"
+            "      the threshold."
         )
 
     print(f"OK: {len(scored)} score(s) recorded.")
@@ -357,9 +361,11 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         help=(
-            "a permission scope to present, repeatable. Only needed with "
+            "a permission scope to present, repeatable. Only useful with "
             "research.enabled: pass external:search so the fallback's web tool "
-            "is permitted rather than proposed-and-denied until the run dies."
+            "is permitted rather than proposed-and-denied until the run hits "
+            "its ceiling. The turn answers either way; this only stops it "
+            "spending the whole ceiling on refusals first."
         ),
     )
     parser.add_argument("--knowledge-base-id", required=True)
