@@ -21,8 +21,10 @@ import pytest
 from agent_workbench.application.chat_execution import (
     SYSTEM_PROMPT,
     UNGROUNDED_SYSTEM_PROMPT,
+    WEB_FALLBACK_SYSTEM_PROMPT,
     ChatRequest,
     RoutedExecution,
+    UngroundedExecution,
     WebSearchJournal,
 )
 from agent_workbench.application.retrieval import AuthorizedContext
@@ -198,11 +200,21 @@ def _run(
         executor=executor,  # pyright: ignore[reportArgumentType]
         budget=RunBudget(max_steps=1, max_tool_calls=1),
         relevance_threshold=threshold,
-        web_executor=web_executor,  # pyright: ignore[reportArgumentType]
-        web_budget=None
-        if web_executor is None
-        else RunBudget(max_steps=3, max_tool_calls=3),
-        web_tool_names=() if web_executor is None else ("web_search",),
+        # ADR-023 moved the fallback out of this class and into the shape that
+        # always was one, so the wiring changed here while every assertion below
+        # did not: the same `executor` answers toollessly, the same web executor
+        # is offered the same single tool. That is the point of leaving them
+        # alone -- if routing behaviour moved, these would say so.
+        fallback=UngroundedExecution(
+            executor=executor,  # pyright: ignore[reportArgumentType]
+            budget=RunBudget(max_steps=1, max_tool_calls=1),
+            web_executor=web_executor,  # pyright: ignore[reportArgumentType]
+            web_budget=None
+            if web_executor is None
+            else RunBudget(max_steps=3, max_tool_calls=3),
+            web_tool_names=() if web_executor is None else ("web_search",),
+            web_system_prompt=WEB_FALLBACK_SYSTEM_PROMPT,
+        ),
     )
     produced = asyncio.run(
         execution.produce(
@@ -552,10 +564,15 @@ def test_a_degraded_fallback_leaves_no_web_verdict_behind() -> None:
         executor=executor,  # pyright: ignore[reportArgumentType]
         budget=RunBudget(max_steps=1, max_tool_calls=1),
         relevance_threshold=0.5,
-        web_executor=_exhausted(),  # pyright: ignore[reportArgumentType]
-        web_budget=RunBudget(max_steps=3, max_tool_calls=3),
-        web_tool_names=("web_search",),
-        web_journal=journal,
+        fallback=UngroundedExecution(
+            executor=executor,  # pyright: ignore[reportArgumentType]
+            budget=RunBudget(max_steps=1, max_tool_calls=1),
+            web_executor=_exhausted(),  # pyright: ignore[reportArgumentType]
+            web_budget=RunBudget(max_steps=3, max_tool_calls=3),
+            web_tool_names=("web_search",),
+            web_journal=journal,
+            web_system_prompt=WEB_FALLBACK_SYSTEM_PROMPT,
+        ),
     )
 
     produced = asyncio.run(

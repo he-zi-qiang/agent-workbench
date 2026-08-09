@@ -20,7 +20,7 @@ application registers no chat route rather than one that cannot answer.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import httpx
@@ -57,6 +57,8 @@ from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.approvals import ApprovalService
 from agent_workbench.application.chat import REFUSAL, ChatService
 from agent_workbench.application.chat_execution import (
+    WEB_DIRECT_SYSTEM_PROMPT,
+    WEB_FALLBACK_SYSTEM_PROMPT,
     AgenticExecution,
     AnswerModeSelector,
     FixedTwoStepExecution,
@@ -551,12 +553,54 @@ def _assemble_chat(
             record_step_inputs=config.record_step_inputs,
         )
 
-    # Direct is available beside every retrieval-backed shape. It gets its own
-    # deny-shaped runtime so a model-only turn cannot inherit the agentic
-    # registry merely because the next turn in the same session uses it.
+    # One tool, one journal, one runtime, shared by both evidence-free turns
+    # (ADR-023). Built here rather than inside the `routed` branch because the
+    # direct shape below needs the same objects: the binding writes its verdict
+    # into exactly one journal, so two journals would leave whichever execution
+    # held the one the tool does not write to reading False forever.
+    #
+    # `None` research still means no tool is built at all, so a deployment that
+    # configured nothing cannot spend money by accident.
+    web_journal = WebSearchJournal()
+    web_tool = _web_search_tool(config.research, web_journal)
+    web_runtime = (
+        None if web_tool is None else _tool_runtime(StaticToolRegistry([web_tool]))
+    )
+    # Exactly the prompt's contract, written as a ceiling: two searches, and a
+    # turn to answer from them.
+    #
+    # `max_tool_calls` below `max_steps` is the whole point and is legal under
+    # ADR-022. The second search spends the allowance, the runtime stops
+    # advertising `web_search`, and the third step is a model that can only
+    # write. So "twice at most" binds without ever costing the results the two
+    # searches returned.
+    #
+    # Both numbers were measured wrong before. At `max_steps=6` the model
+    # rephrased the same question five times -- 丹东今天天气, 丹东天气预报 今天,
+    # 丹东天气 今天 实时 -- ~14s each, and died having written nothing. At `3/3`
+    # it searched twice, spent step three proposing a third search, and died
+    # holding 5.5KB of results: the tool ceiling was never reached, because a
+    # ceiling that must sit at or above `max_steps` cannot bind before it.
+    web_budget = None if web_tool is None else RunBudget(max_steps=3, max_tool_calls=2)
+    web_tool_names = () if web_tool is None else (WEB_SEARCH_TOOL_NAME,)
+
+    # Direct is available beside every retrieval-backed shape. Its *toolless*
+    # runtime is its own, deny-shaped, so a model-only turn cannot inherit the
+    # agentic registry merely because the next turn in the same session uses it.
+    #
+    # It carries the web tool for the reason ADR-023 gives: this is the mode the
+    # console opens in, and it is evidence-free by the asker's own choice, which
+    # is the same standing the routed fallback reaches by measurement. Making
+    # only the latter web-capable meant a user asking about today's news had to
+    # first attach an unrelated knowledge base and wait for it to miss.
     direct_execution = UngroundedExecution(
         executor=_toolless_runtime(),
         budget=RunBudget(max_steps=1, max_tool_calls=1),
+        web_executor=web_runtime,
+        web_budget=web_budget,
+        web_tool_names=web_tool_names,
+        web_journal=web_journal,
+        web_system_prompt=WEB_DIRECT_SYSTEM_PROMPT,
     )
 
     rag_execution: TurnExecution | None
@@ -586,44 +630,20 @@ def _assemble_chat(
                 "Use 'fixed' to answer from retrieval unconditionally, or "
                 "'ungrounded' to answer without it."
             )
-        # The web tool, offered on the fallback branch alone (ADR-021). A
-        # question the corpus answers is still answered from the corpus with no
-        # tool in reach; only "the corpus did not cover this" reaches a model
-        # that may search. `None` research means no tool is built at all, so a
-        # deployment that configured nothing cannot spend money by accident.
-        web_journal = WebSearchJournal()
-        web_tool = _web_search_tool(config.research, web_journal)
+        # The grounded path keeps no tool in reach: a question the corpus
+        # answers is answered from the corpus, every time, which is what keeps
+        # `routed` measurable (ADR-021 §2). Only "the corpus did not cover this"
+        # reaches a model that may search -- and that branch is now the same
+        # object the console's direct mode uses, wearing the one sentence that
+        # differs (ADR-023).
         rag_execution = RoutedExecution(
             retrieval=retrieval,
             executor=_toolless_runtime(),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
             relevance_threshold=config.chat.routed_relevance_threshold,
-            web_executor=(
-                None
-                if web_tool is None
-                else _tool_runtime(StaticToolRegistry([web_tool]))
+            fallback=replace(
+                direct_execution, web_system_prompt=WEB_FALLBACK_SYSTEM_PROMPT
             ),
-            # Exactly the prompt's contract, written as a ceiling: two
-            # searches, and a turn to answer from them.
-            #
-            # `max_tool_calls` below `max_steps` is the whole point and is
-            # legal under ADR-022. The second search spends the allowance, the
-            # runtime stops advertising `web_search`, and the third step is a
-            # model that can only write. So "twice at most" binds without ever
-            # costing the results the two searches returned.
-            #
-            # Both numbers were measured wrong before. At `max_steps=6` the
-            # model rephrased the same question five times -- 丹东今天天气,
-            # 丹东天气预报 今天, 丹东天气 今天 实时 -- ~14s each, and died
-            # having written nothing. At `3/3` it searched twice, spent step
-            # three proposing a third search, and died holding 5.5KB of
-            # results: the tool ceiling was never reached, because a ceiling
-            # that must sit at or above `max_steps` cannot bind before it.
-            web_budget=(
-                None if web_tool is None else RunBudget(max_steps=3, max_tool_calls=2)
-            ),
-            web_tool_names=() if web_tool is None else (WEB_SEARCH_TOOL_NAME,),
-            web_journal=web_journal,
         )
     elif config.chat.retrieval_shape == "agentic":
         # The model decides when to search, so it needs the tool, a budget with

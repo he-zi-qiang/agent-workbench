@@ -356,20 +356,130 @@ def test_the_web_fallback_budget_enforces_the_prompt_it_ships_with(
     execution = selector.rag
     assert isinstance(execution, RoutedExecution)
 
+    # Read through `fallback` since ADR-023: the branch that may search is an
+    # `UngroundedExecution`, the same class the direct shape is. The numbers
+    # asserted are unchanged, which is the point -- the merge moved where they
+    # live, not what they are.
+    fallback = execution.fallback
     # The tool is built, so the ceiling below is the one that will bind.
-    assert execution.web_tool_names == ("web_search",)
-    assert execution.web_executor is not None
-    assert execution.web_budget is not None
+    assert fallback.web_tool_names == ("web_search",)
+    assert fallback.web_executor is not None
+    assert fallback.web_budget is not None
     # Two searches, and the turn that answers from them. The tool ceiling sits
     # *below* the step ceiling on purpose (ADR-022): that is what makes the
     # third step a model with nothing left to call, rather than a model
     # proposing a third search into a run that then dies holding the results of
     # the first two.
-    assert execution.web_budget.max_tool_calls == 2
-    assert execution.web_budget.max_steps == 3
+    assert fallback.web_budget.max_tool_calls == 2
+    assert fallback.web_budget.max_steps == 3
     # And the sentence the ceiling is the ceiling *for*. If this stops matching,
     # one of the two moved without the other.
     assert "twice at most" in WEB_FALLBACK_SYSTEM_PROMPT
+    # The routed branch keeps the corpus-miss wording. The direct shape gets the
+    # other one, and a swap here would tell a model that a knowledge base it was
+    # never given had nothing for it.
+    assert fallback.web_system_prompt == WEB_FALLBACK_SYSTEM_PROMPT
+
+
+def test_the_direct_shape_reaches_the_web_when_a_provider_is_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-023, asserted where it is actually decided.
+
+    The application-level tests prove an `UngroundedExecution` *given* a web
+    executor behaves correctly. Only assembly decides whether the console's
+    default mode is given one, and that was the whole defect: the tool existed,
+    the scope was granted, the shape was configured, and the mode the user
+    lands in still could not search because these four lines were inside the
+    `routed` branch.
+
+    The shared journal is asserted for a reason that is easy to miss. The tool
+    binding writes its verdict into exactly *one* journal. Building a second one
+    for the direct shape would leave whichever execution holds the other reading
+    `False` forever -- a turn that searched the web reported as one that did
+    not, with nothing failing anywhere.
+    """
+
+    from agent_workbench.application.chat_execution import (
+        WEB_DIRECT_SYSTEM_PROMPT,
+        AnswerModeSelector,
+        RoutedExecution,
+        UngroundedExecution,
+    )
+    from agent_workbench.apps.api import dependencies as assembly
+
+    class _Reranker:
+        identity = "stub-reranker@v1"
+
+        async def rerank(
+            self, query: str, passages: tuple[str, ...]
+        ) -> tuple[float, ...]:  # pragma: no cover - assembly only
+            del query
+            return tuple(1.0 for _ in passages)
+
+    _stub_optional_runtimes(monkeypatch)
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c: _Reranker())
+    dependencies = build_dependencies(
+        project_api(
+            _settings(
+                tmp_path,
+                chat={"retrieval_shape": "routed"},
+                research={"enabled": True},
+            )
+        )
+    )
+
+    assert dependencies.chat is not None
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    direct = selector.direct
+    assert isinstance(direct, UngroundedExecution)
+
+    assert direct.web_tool_names == ("web_search",)
+    assert direct.web_executor is not None
+    assert direct.web_budget is not None
+    # The same ceiling the routed fallback gets: the sentence they share is the
+    # same sentence, so the arithmetic enforcing it must be the same arithmetic.
+    assert direct.web_budget.max_steps == 3
+    assert direct.web_budget.max_tool_calls == 2
+    # Its own wording, not the corpus-miss one.
+    assert direct.web_system_prompt == WEB_DIRECT_SYSTEM_PROMPT
+
+    # One journal, one tool, both shapes.
+    assert isinstance(selector.rag, RoutedExecution)
+    assert selector.rag.fallback.web_journal is direct.web_journal
+    assert selector.rag.fallback.web_executor is direct.web_executor
+
+
+def test_without_a_provider_the_direct_shape_gains_no_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control for the test above (ADR-021 §4).
+
+    A deployment that configured nothing must not start calling a provider
+    because someone merged two code paths. `research` defaults to disabled in
+    `_settings`, so this is the ordinary checkout.
+    """
+
+    from agent_workbench.application.chat_execution import (
+        AnswerModeSelector,
+        UngroundedExecution,
+    )
+
+    _stub_optional_runtimes(monkeypatch)
+    dependencies = build_dependencies(
+        project_api(_settings(tmp_path, chat={"retrieval_shape": "ungrounded"}))
+    )
+
+    assert dependencies.chat is not None
+    selector = dependencies.chat.execution
+    assert isinstance(selector, AnswerModeSelector)
+    direct = selector.direct
+    assert isinstance(direct, UngroundedExecution)
+
+    assert direct.web_executor is None
+    assert direct.web_tool_names == ()
+    assert direct.web_budget is None
 
 
 def test_a_process_with_a_lexical_runtime_assembles_the_hybrid_retriever(
