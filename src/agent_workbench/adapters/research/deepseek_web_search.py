@@ -38,13 +38,18 @@ no longer be a fabrication about a page nobody read.
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
 import re
 from dataclasses import dataclass
 from typing import Any, Final, Protocol, cast
-from urllib.parse import urlsplit
+from urllib.parse import urljoin
 
+from agent_workbench.adapters.research.address_guard import (
+    AddressResolver,
+    DestinationRefusedError,
+    assert_public_destination,
+    resolve_addresses,
+)
 from agent_workbench.adapters.research.page_text import page_text
 from agent_workbench.domain.evidence import ExternalSearchHit
 from agent_workbench.ports.cancellation import CancellationToken
@@ -98,14 +103,10 @@ _FETCH_HEADERS: Final[dict[str, str]] = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
 }
 
-#: Hostnames that name the machine this runs on. Search results should never
-#: contain one; if a compromised or manipulated index ever produced one, this
-#: is the difference between fetching a page and fetching our own metadata
-#: service. Literal-address checking only -- a name that *resolves* to a private
-#: address is not caught here, and closing that needs resolution before connect.
-_LOCAL_HOSTS: Final[frozenset[str]] = frozenset(
-    {"localhost", "localhost.localdomain", "ip6-localhost", ""}
-)
+#: How many hops a redirect chain may take before this gives up. Each hop is
+#: judged separately by the address guard, so the bound is about not following a
+#: loop rather than about safety.
+MAX_REDIRECTS: Final[int] = 5
 
 _SEARCH_SYSTEM_PROMPT: Final[str] = (
     "You are a research assistant with a web search tool. Search for the "
@@ -199,6 +200,10 @@ class DeepSeekWebSearch:
     #: Pages are fetched concurrently, so this is the longest any single dead
     #: host can delay the whole search rather than a per-page cost.
     fetch_timeout_seconds: float = 15.0
+    #: How a hostname becomes the addresses the guard judges. Injectable for the
+    #: same reason ``http`` is: a test that had to reach a real DNS to prove a
+    #: refusal would fail offline for reasons unrelated to what it checks.
+    resolve_addresses: AddressResolver = resolve_addresses
 
     async def search(
         self,
@@ -290,18 +295,15 @@ class DeepSeekWebSearch:
         and none of them justify failing a search that other sources answered.
         """
 
-        if not _fetchable(source.url):
-            return source
         try:
-            response = await self.http.get(
-                source.url,
-                headers=_FETCH_HEADERS,
-                follow_redirects=True,
-                timeout=self.fetch_timeout_seconds,
-            )
+            response = await self._get_through_the_guard(source.url)
         except Exception:
+            # Includes DestinationRefusedError. A refused source lands exactly
+            # like an unreachable one -- empty text, dropped by the caller --
+            # because a search that other sources answered should not fail on
+            # the one result that pointed somewhere internal.
             return source
-        if getattr(response, "status_code", 200) >= 400:
+        if response is None or getattr(response, "status_code", 200) >= 400:
             return source
         html = _decoded(response)
         if html == "":
@@ -311,6 +313,35 @@ class DeepSeekWebSearch:
             title=source.title,
             text=page_text(html, limit=MAX_PAGE_CHARS),
         )
+
+    async def _get_through_the_guard(self, url: str) -> Any | None:
+        """GET ``url``, judging every hop of the redirect chain before it opens.
+
+        Redirects are followed here rather than by the client, and that is the
+        whole point: ``follow_redirects=True`` would have the client connect to
+        wherever a ``Location`` header pointed, which is the same SSRF with one
+        extra step. Each hop goes through the guard first.
+        """
+
+        current = url
+        for _ in range(MAX_REDIRECTS + 1):
+            await assert_public_destination(current, resolve=self.resolve_addresses)
+            response = await self.http.get(
+                current,
+                headers=_FETCH_HEADERS,
+                follow_redirects=False,
+                timeout=self.fetch_timeout_seconds,
+            )
+            status = int(getattr(response, "status_code", 200))
+            if status not in _REDIRECT_STATUSES:
+                return response
+            location = _location_of(response)
+            if not location:
+                return response
+            # Resolved against the URL that answered, so a relative Location is
+            # the same destination a browser would compute.
+            current = urljoin(current, location)
+        raise DestinationRefusedError("the redirect chain is too long")
 
     async def _post(
         self,
@@ -454,29 +485,17 @@ def _recordable(url: str) -> bool:
     return len(url) <= MAX_URL_CHARS and _HTTP_URL.match(url) is not None
 
 
-def _fetchable(url: str) -> bool:
-    """Whether this process is willing to make a request to ``url``."""
+_REDIRECT_STATUSES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
 
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return False
-    if parts.scheme not in ("http", "https"):
-        return False
-    host = (parts.hostname or "").lower()
-    if host in _LOCAL_HOSTS:
-        return False
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return True  # A name, not a literal address. Resolution is the DNS's.
-    return not (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-    )
+
+def _location_of(response: Any) -> str:
+    headers: Any = getattr(response, "headers", None)
+    if headers is None:
+        return ""
+    getter: Any = getattr(headers, "get", None)
+    if getter is None:
+        return ""
+    return str(getter("location") or "")
 
 
 def _decoded(response: Any) -> str:
