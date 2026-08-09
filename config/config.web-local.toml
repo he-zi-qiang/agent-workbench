@@ -1,0 +1,70 @@
+# Explicit local profile for the read-only web MCP demonstration (ADR-027).
+#
+# Separate from config.local.toml, and separate from config.word-local.toml, for
+# the same reason those two are separate from each other: MCP tool names are
+# frozen into every newly submitted Task envelope, so a profile that enabled
+# both would widen every Task by both. Use `scripts/dev.sh web-*` when (and only
+# when) demonstrating the web reader.
+#
+# Like config.local.toml, this file is one overlay over config.default.toml.
+# The DSNs and provider key remain environment-only and are exported by
+# scripts/dev.sh / the caller; no credential belongs here.
+#
+# One thing must already be running before this profile does anything:
+#
+#   scripts/dev.sh web-server     # 127.0.0.1:8767
+#
+# If it is not, the Worker still starts. It logs `mcp_connection_failed`,
+# registers no web tool, and `researcher_external` runs without one -- the
+# envelope still names the tools, which is exactly why the profile is widened
+# from what the Worker registered rather than from this file (ADR-025).
+
+[app]
+environment = "development"
+deployment_scope = "local"
+log_level = "INFO"
+
+[model.main]
+model_id = "deepseek-chat"
+# The ordinary baseline may force one opening tool call, which is unsafe for an
+# opt-in capability: a Task without `mcp:web` would be forced to propose a tool
+# it cannot use. Here the researcher reaches for a page when the objective calls
+# for one, and unrelated Work stays usable.
+tool_calling_required = false
+
+[model.compact]
+model_id = "deepseek-chat"
+
+[qdrant]
+url = "http://localhost:6333"
+allow_local_bootstrap = true
+
+[runtime]
+record_step_inputs = true
+
+[rag.reranker]
+timeout_seconds = 120
+
+[event_stream]
+catchup_poll_seconds = 1
+
+[chat]
+routed_relevance_threshold = 0.01
+
+[optional_labs]
+mcp_adapter = true
+
+[[mcp.servers]]
+alias = "web"
+transport = "http"
+endpoint = "http://127.0.0.1:8767/mcp"
+tools = ["fetch_page", "download_document"]
+# Both tools are GETs. Reading a page and downloading a file change nothing on
+# the other side, so a graph-node replay may make the same request again: it
+# gets whatever the URL says at that moment, which is a fresh read rather than a
+# second effect. This is the declaration ADR-025 §2.7 requires, not a hope.
+retryable_effects = true
+# Reading the outside world is research, so these go to `researcher_external`
+# and not to the writer (ADR-027 §3.3).
+audience = "research"
+timeout_seconds = 60

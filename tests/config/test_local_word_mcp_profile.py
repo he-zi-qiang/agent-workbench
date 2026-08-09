@@ -86,8 +86,13 @@ def test_dev_script_exposes_one_protocol_and_health_check_command() -> None:
     )
 
     assert result.returncode == 0
+    # One probe script for every project-owned server, told which one it is
+    # talking to. A copy per server would be a second place for the cursor loop
+    # and the health wait to be wrong.
     assert result.stdout.split() == [
-        "scripts/smoke_word_mcp.py",
+        "scripts/smoke_mcp_server.py",
+        "--label",
+        "word",
         "--endpoint",
         "http://127.0.0.1:8765/mcp",
         "--health-url",
@@ -143,7 +148,7 @@ def test_word_worker_uses_the_real_graph_and_explicit_profile_with_a_provider(
         "config/config.word-local.toml",
         "-m agent_workbench.apps.task_worker.main",
     ]
-    assert "scripts/smoke_word_mcp.py --endpoint" in result.stderr
+    assert "scripts/smoke_mcp_server.py --label word --endpoint" in result.stderr
     assert "real graph" in result.stderr
 
 
