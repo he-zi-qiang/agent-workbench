@@ -23,6 +23,7 @@ from agent_workbench.adapters.research.deepseek_web_search import (
     MAX_EXTRACT_CHARS,
     MAX_PAGE_BYTES,
     MAX_PAGE_CHARS,
+    MAX_REDIRECTS,
     MAX_URL_CHARS,
     MESSAGES_PATH,
     WEB_SEARCH_TOOL_TYPE,
@@ -46,9 +47,15 @@ class _FakeResponse:
 
 
 class _FakePage:
-    def __init__(self, text: str = PAGE_HTML, status_code: int = 200) -> None:
+    def __init__(
+        self,
+        text: str = PAGE_HTML,
+        status_code: int = 200,
+        location: str | None = None,
+    ) -> None:
         self.text = text
         self.status_code = status_code
+        self.headers = {"location": location} if location is not None else {}
 
 
 class _FakeHttp:
@@ -65,6 +72,10 @@ class _FakeHttp:
         self._default_page = default_page if default_page is not None else _FakePage()
         self.calls: list[dict[str, Any]] = []
         self.fetched: list[str] = []
+        #: What each GET was told about redirects. Recorded because it is the
+        #: one observable difference between "the adapter judged every hop" and
+        #: "the client silently went wherever Location pointed".
+        self.delegated_redirects: list[bool] = []
 
     async def post(
         self, url: str, *, headers: dict[str, str], json: dict[str, Any]
@@ -81,6 +92,7 @@ class _FakeHttp:
         timeout: float,
     ) -> Any:
         self.fetched.append(url)
+        self.delegated_redirects.append(follow_redirects)
         page = self._pages.get(url, self._default_page)
         if isinstance(page, Exception):
             raise page
@@ -110,14 +122,38 @@ def _extracted(*items: dict[str, Any], wrapper: str = "{payload}") -> dict[str, 
     return {"content": [{"type": "text", "text": wrapper.format(payload=payload)}]}
 
 
+#: What hostnames resolve to in these tests. Stated rather than looked up, so
+#: the suite proves what the guard decides instead of what this machine's DNS
+#: happens to answer -- and so it still runs with no network at all. Names that
+#: point at this machine answer honestly, which is what makes the refusal test
+#: below a test of the guard rather than of a hard-coded name list.
+PUBLIC_ADDRESS = "93.184.216.34"
+_RESOLVED: dict[str, tuple[str, ...]] = {
+    "localhost": ("127.0.0.1",),
+    "localhost.localdomain": ("127.0.0.1",),
+    "ip6-localhost": ("::1",),
+    "metadata.internal": ("169.254.169.254",),
+}
+
+
+async def _resolves_public(host: str) -> tuple[str, ...]:
+    return _RESOLVED.get(host, (PUBLIC_ADDRESS,))
+
+
 def _run(
     *responses: _FakeResponse,
     limit: int = 5,
     pages: dict[str, Any] | None = None,
     default_page: Any = None,
+    resolve: Any = _resolves_public,
 ) -> tuple[Any, _FakeHttp]:
     http = _FakeHttp(*responses, pages=pages, default_page=default_page)
-    adapter = DeepSeekWebSearch(http=http, api_key="sk-test", model="deepseek-chat")
+    adapter = DeepSeekWebSearch(
+        http=http,
+        api_key="sk-test",
+        model="deepseek-chat",
+        resolve_addresses=resolve,
+    )
     hits = asyncio.run(
         adapter.search(
             query="今天丹东天气怎么样",
@@ -458,3 +494,88 @@ def test_an_over_long_extract_is_truncated_to_the_evidence_bound() -> None:
     )
 
     assert len(hits[0].text) == MAX_EXTRACT_CHARS
+
+
+def test_a_redirect_is_followed_here_so_every_hop_goes_through_the_guard() -> None:
+    """`follow_redirects=True` would hand the destination choice to the client.
+
+    A public URL answering `302 Location: http://169.254.169.254/` is the same
+    SSRF with one extra step, and a check that only ran on the first URL would
+    never see the second. So redirects are followed in the adapter, and the
+    guard runs again on each hop.
+    """
+
+    _, http = _run(
+        _FakeResponse(_searched("https://example.com/redirect")),
+        _FakeResponse(_extracted({"source": 1, "extract": "e"})),
+        pages={
+            "https://example.com/redirect": _FakePage(
+                text="", status_code=302, location="http://169.254.169.254/latest/"
+            ),
+        },
+    )
+
+    # The first hop was requested; the second was refused before any connection.
+    assert http.fetched == ["https://example.com/redirect"]
+    # And this is the line that makes the one above mean something. On its own,
+    # "only the first URL was fetched" is equally true of an adapter that told
+    # the client to follow redirects itself -- in that case the client would
+    # have connected to the metadata address and this fake would never have
+    # been asked for the second URL, so the assertion would pass while the
+    # thing it is named after had failed.
+    assert http.delegated_redirects == [False]
+
+
+def test_a_redirect_to_a_public_address_is_followed_and_read() -> None:
+    """The control. Without it, an adapter that stopped following redirects at
+    all would satisfy the refusal above."""
+
+    _, http = _run(
+        _FakeResponse(_searched("https://example.com/redirect")),
+        _FakeResponse(_extracted({"source": 1, "extract": "e"})),
+        pages={
+            "https://example.com/redirect": _FakePage(
+                text="", status_code=302, location="https://example.com/final"
+            ),
+            "https://example.com/final": _FakePage(
+                "<html><body><p>The page that answered.</p></body></html>"
+            ),
+        },
+    )
+
+    assert http.fetched == [
+        "https://example.com/redirect",
+        "https://example.com/final",
+    ]
+    condense = json.dumps(http.calls[1]["json"], ensure_ascii=False)
+    assert "The page that answered." in condense
+
+
+def test_a_relative_redirect_resolves_against_the_url_that_answered() -> None:
+    """A browser computes the same destination; so must the guard."""
+
+    _, http = _run(
+        _FakeResponse(_searched("https://example.com/a/b")),
+        _FakeResponse(_extracted({"source": 1, "extract": "e"})),
+        pages={
+            "https://example.com/a/b": _FakePage(
+                text="", status_code=301, location="../c"
+            ),
+        },
+    )
+
+    assert http.fetched == ["https://example.com/a/b", "https://example.com/c"]
+
+
+def test_an_endless_redirect_loop_yields_no_evidence_rather_than_spinning() -> None:
+    _, http = _run(
+        _FakeResponse(_searched("https://example.com/loop")),
+        _FakeResponse(_extracted({"source": 1, "extract": "e"})),
+        pages={
+            "https://example.com/loop": _FakePage(
+                text="", status_code=302, location="https://example.com/loop"
+            ),
+        },
+    )
+
+    assert len(http.fetched) == MAX_REDIRECTS + 1
