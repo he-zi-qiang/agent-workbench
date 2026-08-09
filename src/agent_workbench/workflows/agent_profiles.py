@@ -36,7 +36,7 @@ cannot be granted more than the Task it belongs to.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Final, Literal
 
@@ -69,12 +69,24 @@ AgentProfileName = Literal[
 #: projection would make "what may this agent read" a question about whichever
 #: caller built the request last.
 ProjectionInput = Literal["objective", "plan", "draft", "evidence"]
-#: Catalogs a profile may receive at Worker assembly rather than declare here.
+
+#: Which deployment catalog a profile subscribes to (ADR-027 §3.3, ADR-029 §3.5).
 #: A tool is dynamic when whether it exists is a deployment fact -- an MCP
-#: directory that answered, a sandbox whose container runtime was found. The
-#: source is named rather than pooled so that opting a profile into one does not
-#: hand it the other.
-DynamicToolSource = Literal["mcp", "sandbox"]
+#: directory that answered, a sandbox whose container runtime was found.
+#:
+#: The values name an *audience* rather than a protocol. What makes reading a
+#: page belong to `researcher_external` and rendering a document belong to
+#: `writer` is what the tool is for, not that both arrive over MCP; `sandbox` is
+#: a third audience on the same footing, and it is a separate value precisely so
+#: that opting a profile into one does not hand it the others.
+#:
+#: Which audience an MCP server serves is declared in
+#: `[[mcp.servers]].audience`, so adding a reader or a renderer is a
+#: configuration change rather than an edit here. The vocabulary stays closed
+#: for the same reason `ProjectionInput` does: a free-form value would make
+#: "which agent may reach this tool" a question about whichever config file was
+#: written last.
+DynamicToolSource = Literal["research", "synthesis", "sandbox"]
 
 
 class AgentContextViolationError(RuntimeError):
@@ -165,9 +177,16 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
         node="research_external",
         system_prompt=(
             "Gather evidence for the objective from sources outside the "
-            "knowledge base. Record only what those sources support."
+            "knowledge base. Record only what those sources support. If a "
+            "page-reading or download tool is available and you know which "
+            "page or file answers the question, read it rather than relying "
+            "on a search result's summary."
         ),
         admits=frozenset({"objective", "plan"}),
+        # Reading the outside world is research (ADR-027 §3.3). The two
+        # researchers still cannot see each other's findings -- `admits` is
+        # unchanged -- so the fan-out stays independent.
+        dynamic_tool_sources=frozenset({"research"}),
     ),
     AgentProfile(
         name="writer",
@@ -195,10 +214,11 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
             WORKSPACE_READ_TOOL,
             WORKSPACE_WRITE_TOOL,
         ),
-        # MCP and the sandbox extend synthesis only. Planners, critics and the
-        # two independent research branches do not silently acquire a
-        # deployment tool catalog.
-        dynamic_tool_sources=frozenset({"mcp", "sandbox"}),
+        # Rendering a document is synthesis, which is the audience ADR-025 gave
+        # the writer, and running code over the working set is the sandbox's.
+        # Planners and critics still acquire nothing, and the research audience
+        # does not reach here.
+        dynamic_tool_sources=frozenset({"synthesis", "sandbox"}),
     ),
     AgentProfile(
         name="critic",
@@ -231,9 +251,7 @@ def profile_for(node: TaskNodeId) -> AgentProfile:
 
 def profile_with_dynamic_tools(
     profile: AgentProfile,
-    *,
-    mcp: Sequence[ToolName] = (),
-    sandbox: Sequence[ToolName] = (),
+    catalogs: Mapping[DynamicToolSource, Sequence[ToolName]],
 ) -> AgentProfile:
     """Apply the frozen Worker catalogs only where the profile declares them.
 
@@ -243,14 +261,13 @@ def profile_with_dynamic_tools(
     to assemble -- an MCP server that was down, a sandbox with no container
     runtime. ``ToolGateway.advertise`` raises for a requested tool the process
     does not register, so a profile widened from configuration would turn a
-    missing capability into a node that fails.
+    missing capability into a node that fails on every Task.
     """
 
     granted = tuple(
         name
-        for source, names in (("mcp", mcp), ("sandbox", sandbox))
-        if source in profile.dynamic_tool_sources
-        for name in names
+        for source in sorted(profile.dynamic_tool_sources)
+        for name in catalogs.get(source, ())
     )
     if not granted:
         return profile

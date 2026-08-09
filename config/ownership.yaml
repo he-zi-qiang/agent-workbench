@@ -511,7 +511,8 @@
         "mcp.servers.endpoint",
         "mcp.servers.tools",
         "mcp.servers.retryable_effects",
-        "mcp.servers.timeout_seconds"
+        "mcp.servers.timeout_seconds",
+        "mcp.servers.audience"
       ]
     },
     {

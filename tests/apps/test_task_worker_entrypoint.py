@@ -280,11 +280,7 @@ def test_a_real_worker_registers_every_tool_its_agents_can_ask_for(
                 name
                 for profile in V1_AGENT_PROFILES
                 for name in permitted_tools(
-                    profile_with_dynamic_tools(
-                        profile,
-                        mcp=dependencies.mcp_tool_names,
-                        sandbox=dependencies.sandbox_tool_names,
-                    ),
+                    profile_with_dynamic_tools(profile, dependencies.dynamic_tools),
                     envelope.allowed_tools,
                 )
             }
@@ -379,7 +375,7 @@ def test_a_reachable_sandbox_is_probed_once_and_registered(
     async def scenario() -> tuple[str, ...]:
         dependencies = await build_task_worker_dependencies(_sandbox_config())
         try:
-            assert dependencies.sandbox_tool_names == (SANDBOX_RUN_TOOL,)
+            assert dependencies.dynamic_tools["sandbox"] == (SANDBOX_RUN_TOOL,)
             assert SANDBOX_RUN_TOOL in dependencies.tool_names
             return tuple(seen[0].calls)
         finally:
@@ -435,12 +431,10 @@ def test_a_sandbox_that_does_not_answer_costs_the_tool_and_not_the_process(
         try:
             envelope = dependencies.config.task.default_authorization_envelope
             writer = profile_with_dynamic_tools(
-                profile_for("synthesize"),
-                mcp=dependencies.mcp_tool_names,
-                sandbox=dependencies.sandbox_tool_names,
+                profile_for("synthesize"), dependencies.dynamic_tools
             )
             return (
-                dependencies.sandbox_tool_names,
+                dependencies.dynamic_tools.get("sandbox", ()),
                 permitted_tools(writer, envelope.allowed_tools),
                 isinstance(dependencies.worker.workflow, LangGraphTaskWorkflow),
             )
@@ -482,7 +476,7 @@ def test_a_deployment_without_a_sandbox_never_probes_for_one(
     async def scenario() -> tuple[str, ...]:
         dependencies = await build_task_worker_dependencies(_projected_config())
         try:
-            return dependencies.sandbox_tool_names
+            return dependencies.dynamic_tools.get("sandbox", ())
         finally:
             await dependencies.dispose()
 
@@ -860,3 +854,151 @@ def test_serve_awaits_assembly_and_disposes_if_runner_setup_fails(
         "runner",
         "dispose",
     ]
+
+
+def test_each_server_reaches_the_agent_its_audience_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-027 §3.3, at the composition root rather than in the profile module.
+
+    Which agent a server's tools reach is a deployment declaration, so the two
+    halves are asserted together: the reader lands on `researcher_external`, the
+    renderer stays on `writer`, and neither appears in the other's catalog. One
+    half alone would be satisfied by an assembly that handed every catalog to
+    every subscriber, or by one that handed out nothing.
+    """
+
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+
+    @asynccontextmanager
+    async def connect(
+        endpoint: str, *, timeout_seconds: int
+    ) -> AsyncGenerator[_DirectoryMCPClient]:
+        del endpoint, timeout_seconds
+        yield _DirectoryMCPClient()
+
+    monkeypatch.setattr(composition, "connect_mcp_client", connect)
+    projected = _projected_config()
+    config = replace(
+        projected,
+        mcp=MCPConfig(
+            servers=(
+                MCPServerConfig(
+                    alias="web",
+                    endpoint="http://127.0.0.1:9200",
+                    retryable_effects=True,
+                    timeout_seconds=7,
+                    remote_tools=("render-document",),
+                    audience="research",
+                ),
+                MCPServerConfig(
+                    alias="office",
+                    endpoint="http://127.0.0.1:9100",
+                    retryable_effects=True,
+                    timeout_seconds=7,
+                    remote_tools=("render-document",),
+                    audience="synthesis",
+                ),
+            ),
+            artifact_threshold_bytes=4_096,
+            max_result_bytes=8_192,
+            max_artifact_bytes=projected.artifacts.max_artifact_bytes,
+        ),
+    )
+
+    async def scenario() -> tuple[tuple[str, ...], tuple[str, ...]]:
+        dependencies = await build_task_worker_dependencies(config)
+        try:
+            envelope = AuthorizationEnvelope(
+                allowed_tools=(
+                    "mcp_web_render_document",
+                    "mcp_office_render_document",
+                ),
+                max_tool_risk="external",
+                approval_required_risks=(),
+            )
+            return (
+                permitted_tools(
+                    profile_with_dynamic_tools(
+                        profile_for("research_external"), dependencies.dynamic_tools
+                    ),
+                    envelope.allowed_tools,
+                ),
+                permitted_tools(
+                    profile_with_dynamic_tools(
+                        profile_for("synthesize"), dependencies.dynamic_tools
+                    ),
+                    envelope.allowed_tools,
+                ),
+            )
+        finally:
+            await dependencies.dispose()
+
+    researcher, writer = asyncio.run(scenario())
+
+    assert researcher == ("mcp_web_render_document",)
+    assert writer == ("mcp_office_render_document",)
+
+
+def test_a_server_that_never_answered_widens_no_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The profile is widened from the registry, not from configuration.
+
+    The Task envelope is frozen at submission from configuration, so it can
+    name a tool this Worker failed to assemble. `ToolGateway.advertise` raises
+    for a requested tool the process does not register, so widening from
+    configuration would turn a server that was down into a node that fails.
+    """
+
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+
+    @asynccontextmanager
+    async def connect(
+        endpoint: str, *, timeout_seconds: int
+    ) -> AsyncGenerator[_DirectoryMCPClient]:
+        del timeout_seconds
+        raise OSError(f"{endpoint} is unavailable")
+        yield _DirectoryMCPClient()  # pragma: no cover - unreachable
+
+    monkeypatch.setattr(composition, "connect_mcp_client", connect)
+    projected = _projected_config()
+    config = replace(
+        projected,
+        mcp=MCPConfig(
+            servers=(
+                MCPServerConfig(
+                    alias="web",
+                    endpoint="http://127.0.0.1:9200",
+                    retryable_effects=True,
+                    timeout_seconds=7,
+                    remote_tools=("render-document",),
+                    audience="research",
+                ),
+            ),
+            artifact_threshold_bytes=4_096,
+            max_result_bytes=8_192,
+            max_artifact_bytes=projected.artifacts.max_artifact_bytes,
+        ),
+    )
+
+    async def scenario() -> tuple[dict[str, tuple[str, ...]], tuple[str, ...]]:
+        dependencies = await build_task_worker_dependencies(config)
+        try:
+            return (
+                dict(dependencies.dynamic_tools),
+                profile_with_dynamic_tools(
+                    profile_for("research_external"), dependencies.dynamic_tools
+                ).tool_names,
+            )
+        finally:
+            await dependencies.dispose()
+
+    catalogs, researcher_tools = asyncio.run(scenario())
+
+    assert catalogs == {}
+    assert researcher_tools == ()

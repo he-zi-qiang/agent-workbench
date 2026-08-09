@@ -26,6 +26,7 @@
 | `1.6` → `1.7` | 新增 `[mcp]`；其解析出的工具名会写进 Task 授权信封 | [ADR-025](./adr/0025-mcp-adapter.md) |
 | `1.7` → `1.8` | MCP server 新增显式工具 allowlist，使 API 提交与 Worker 启动发现能确定性取交集 | [ADR-025](./adr/0025-mcp-adapter.md) |
 | `1.8` → `1.9` | 新增 `[sandbox]`；开启它会把 `sandbox_run` 写进 Task 授权信封，并把信封风险上限抬到 `external` | [ADR-029](./adr/0029-ephemeral-sandbox.md) |
+| `1.9` → `1.10` | 新增 `[[mcp.servers]].audience`；它决定一个 server 的工具进哪个 Agent，因此这一版的配置文件能改变运行中的图里谁能调什么 | [ADR-027](./adr/0027-read-outward-write-inward.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。
@@ -521,8 +522,20 @@ timeout_seconds = 30
 | `transport` | 第一版只能是 `http` | 使用官方 SDK 的 Streamable HTTP；不派生本地进程 |
 | `endpoint` | HTTPS，或本机 loopback HTTP；禁止 userinfo/query/fragment | 只由 Task Worker 建立连接 |
 | `tools` | 非空显式 remote-name allowlist；归一化后不得碰撞 | API 据此冻结具体授权名，Worker 与启动目录取交集 |
+| `audience` | `research` 或 `synthesis`，默认 `synthesis` | 这个 server 的工具进哪个 Agent：`research` → `researcher_external`，`synthesis` → `writer` |
 | `retryable_effects` | 必填；无默认 | `true` 表示全部 allowlisted tool 在整个节点重放时都可再次调用；`false` 不进入 Task 可调用路径 |
 | `timeout_seconds` | `1..600` | 同时约束启动发现与单次工具调用 |
+
+`audience` 的默认值是**防回归**的，不是随手选的：这个字段出现之前写的每一份配置都意味着
+`synthesis`——ADR-025 把动态目录只给了 `writer/synthesize`。默认成 `research` 会在升级时把
+Word 渲染器从 writer 身上悄悄挪走。
+
+它不改变 Task 授权信封：信封里仍然列出全部已配置的名字。**信封是 Task 的上限，audience 是
+哪个 Agent 够得到它**——两者混为一谈的话，一个在 `synthesis` 期间提交的 Task 会用不了后来
+改成 `research` 的工具。
+
+profile 是按 Worker **实际注册到**的工具加宽的，不是按配置。启动时连不上的 server 什么都不
+贡献；按配置加宽会让节点去请求一个网关解析不到的工具，那是"节点必崩"而不是"少一个能力"。
 
 开启 lab 但 `servers=[]` 合法；配置 server 却不开 lab 会拒绝启动。远端临时不可达会让
 该 Worker 在本次生命周期内不带该 server 的工具，并留下结构化日志，不会把远端后来新增

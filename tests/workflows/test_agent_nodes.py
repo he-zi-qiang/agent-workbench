@@ -167,28 +167,36 @@ def test_a_request_carries_the_task_context_and_advertises_no_tools() -> None:
     assert request.tool_names == ()
 
 
-def test_only_synthesis_receives_the_intersected_mcp_catalog() -> None:
+def test_each_audience_reaches_its_own_node_and_the_envelope_still_narrows() -> None:
     context = _context()
     context = TaskRunContext(
         trace=context.trace,
         stream_id=context.stream_id,
         principal=context.principal,
         envelope=AuthorizationEnvelope(
-            allowed_tools=("mcp_office_render_document",),
+            allowed_tools=("mcp_office_render_document", "mcp_web_fetch_page"),
             max_tool_risk="external",
             approval_required_risks=(),
         ),
         budget=context.budget,
     )
-    catalog = ("mcp_office_lookup", "mcp_office_render_document")
+    catalogs = {
+        "synthesis": ("mcp_office_lookup", "mcp_office_render_document"),
+        "research": ("mcp_web_fetch_page",),
+    }
 
-    writer = build_request("synthesize", _state(), context, mcp_tool_names=catalog)
+    writer = build_request("synthesize", _state(), context, dynamic_tools=catalogs)
     researcher = build_request(
-        "research_external", _state(), context, mcp_tool_names=catalog
+        "research_external", _state(), context, dynamic_tools=catalogs
     )
+    planner = build_request("plan", _state(), context, dynamic_tools=catalogs)
 
+    # `mcp_office_lookup` is in the writer's audience and not in the envelope,
+    # so it is dropped -- the audience decides which agent may reach up, and the
+    # Task's envelope still decides how far up.
     assert writer.tool_names == ("mcp_office_render_document",)
-    assert researcher.tool_names == ()
+    assert researcher.tool_names == ("mcp_web_fetch_page",)
+    assert planner.tool_names == ()
 
 
 def test_the_prompt_projects_the_state_instead_of_replaying_a_transcript() -> None:

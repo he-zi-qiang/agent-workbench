@@ -71,7 +71,10 @@ from agent_workbench.workflows.agent_nodes import (
     TaskRunContext,
     build_request,
 )
-from agent_workbench.workflows.agent_profiles import ProjectedContext
+from agent_workbench.workflows.agent_profiles import (
+    DynamicToolSource,
+    ProjectedContext,
+)
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.research_graph import evolve, merge_refs
 from agent_workbench.workflows.workspace_scope import WorkspaceScope
@@ -355,8 +358,7 @@ def build_task_v1_handlers(
     invocations: TaskNodeInvocationProvider,
     research: TaskResearchHandlers | None = None,
     export: TaskExportHandlers | None = None,
-    mcp_tool_names: tuple[ToolName, ...] = (),
-    sandbox_tool_names: tuple[ToolName, ...] = (),
+    dynamic_tools: Mapping[DynamicToolSource, tuple[ToolName, ...]] | None = None,
     workspace_scope: WorkspaceScope | None = None,
 ) -> dict[TaskNodeId, TaskNodeHandler]:
     """Build every v1 model-invoking handler around one AgentExecutor.
@@ -374,8 +376,7 @@ def build_task_v1_handlers(
             node,
             state,
             context,
-            mcp_tool_names=mcp_tool_names,
-            sandbox_tool_names=sandbox_tool_names,
+            dynamic_tools=dynamic_tools,
         ),
     )
 
@@ -483,8 +484,7 @@ def build_task_v1_handlers(
                 task_state,
                 context,
                 bundles,
-                mcp_tool_names=mcp_tool_names,
-                sandbox_tool_names=sandbox_tool_names,
+                dynamic_tools=dynamic_tools,
             ),
         )
         report = await synthesis_node.run(
@@ -662,8 +662,7 @@ def _synthesis_request(
     context: TaskRunContext,
     bundles: tuple[EvidenceBundle, ...],
     *,
-    mcp_tool_names: tuple[ToolName, ...] = (),
-    sandbox_tool_names: tuple[ToolName, ...] = (),
+    dynamic_tools: Mapping[DynamicToolSource, tuple[ToolName, ...]] | None = None,
 ) -> AgentRunRequest:
     """The writer's run, with the evidence its profile is the only one to admit.
 
@@ -678,8 +677,7 @@ def _synthesis_request(
         state,
         context,
         ProjectedContext(evidence=bundles),
-        mcp_tool_names=mcp_tool_names,
-        sandbox_tool_names=sandbox_tool_names,
+        dynamic_tools=dynamic_tools,
     )
 
 

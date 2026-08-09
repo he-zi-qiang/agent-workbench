@@ -808,13 +808,16 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     ``sandbox_run`` in the Task envelope *and* raises that envelope's risk
     ceiling to "external", so a config file at this version can widen both
     what a Task may call and how far.
+    1.9 -> 1.10 is ADR-027: `[[mcp.servers]].audience` decides which agent a
+    server's tools reach, so a config file at this version changes which agent
+    in a running graph can call what.
 
     The pin exists so widening a frozen Literal cannot happen quietly -- this
     test failing *is* the mechanism, and updating it is the last step of the
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.9"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.10"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:

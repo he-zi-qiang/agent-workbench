@@ -15,7 +15,7 @@ need a decoding contract and are deliberately not in this module yet.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -34,6 +34,7 @@ from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
 from agent_workbench.workflows.agent_profiles import (
+    DynamicToolSource,
     ProjectedContext,
     build_agent_request,
     profile_for,
@@ -119,17 +120,12 @@ def build_request(
     context: TaskRunContext,
     offered: ProjectedContext | None = None,
     *,
-    mcp_tool_names: Sequence[ToolName] = (),
-    sandbox_tool_names: Sequence[ToolName] = (),
+    dynamic_tools: Mapping[DynamicToolSource, Sequence[ToolName]] | None = None,
 ) -> AgentRunRequest:
     """Assemble one node's run request under its agent's declared boundary."""
 
     return build_agent_request(
-        profile_with_dynamic_tools(
-            profile_for(node),
-            mcp=mcp_tool_names,
-            sandbox=sandbox_tool_names,
-        ),
+        profile_with_dynamic_tools(profile_for(node), dynamic_tools or {}),
         state,
         trace=context.trace,
         stream_id=context.stream_id,
