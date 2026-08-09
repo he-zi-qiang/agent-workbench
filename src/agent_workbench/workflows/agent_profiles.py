@@ -69,7 +69,12 @@ AgentProfileName = Literal[
 #: projection would make "what may this agent read" a question about whichever
 #: caller built the request last.
 ProjectionInput = Literal["objective", "plan", "draft", "evidence"]
-DynamicToolSource = Literal["mcp"]
+#: Catalogs a profile may receive at Worker assembly rather than declare here.
+#: A tool is dynamic when whether it exists is a deployment fact -- an MCP
+#: directory that answered, a sandbox whose container runtime was found. The
+#: source is named rather than pooled so that opting a profile into one does not
+#: hand it the other.
+DynamicToolSource = Literal["mcp", "sandbox"]
 
 
 class AgentContextViolationError(RuntimeError):
@@ -190,9 +195,10 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
             WORKSPACE_READ_TOOL,
             WORKSPACE_WRITE_TOOL,
         ),
-        # MCP extends synthesis only. Planners, critics and the two independent
-        # research branches do not silently acquire a deployment tool catalog.
-        dynamic_tool_sources=frozenset({"mcp"}),
+        # MCP and the sandbox extend synthesis only. Planners, critics and the
+        # two independent research branches do not silently acquire a
+        # deployment tool catalog.
+        dynamic_tool_sources=frozenset({"mcp", "sandbox"}),
     ),
     AgentProfile(
         name="critic",
@@ -223,17 +229,35 @@ def profile_for(node: TaskNodeId) -> AgentProfile:
     return profile
 
 
-def profile_with_mcp_tools(
-    profile: AgentProfile, tool_names: Sequence[ToolName]
+def profile_with_dynamic_tools(
+    profile: AgentProfile,
+    *,
+    mcp: Sequence[ToolName] = (),
+    sandbox: Sequence[ToolName] = (),
 ) -> AgentProfile:
-    """Apply the frozen Worker catalog only where the profile declares it."""
+    """Apply the frozen Worker catalogs only where the profile declares them.
 
-    if "mcp" not in profile.dynamic_tool_sources or not tool_names:
+    Narrowed to what the Worker *registered*, not to what the deployment
+    configured, and the difference is load-bearing. The Task envelope is frozen
+    at submission from configuration, so it can name a tool this Worker failed
+    to assemble -- an MCP server that was down, a sandbox with no container
+    runtime. ``ToolGateway.advertise`` raises for a requested tool the process
+    does not register, so a profile widened from configuration would turn a
+    missing capability into a node that fails.
+    """
+
+    granted = tuple(
+        name
+        for source, names in (("mcp", mcp), ("sandbox", sandbox))
+        if source in profile.dynamic_tool_sources
+        for name in names
+    )
+    if not granted:
         return profile
     # Dynamic tools extend the profile's static ceiling; they never replace it.
     # Keep first occurrence order so the model sees a reproducible catalog even
     # if two assembly inputs accidentally repeat a name.
-    combined = tuple(dict.fromkeys((*profile.tool_names, *tool_names)))
+    combined = tuple(dict.fromkeys((*profile.tool_names, *granted)))
     return replace(profile, tool_names=combined)
 
 
@@ -400,6 +424,6 @@ __all__ = [
     "build_agent_request",
     "permitted_tools",
     "profile_for",
-    "profile_with_mcp_tools",
+    "profile_with_dynamic_tools",
     "render_projection",
 ]

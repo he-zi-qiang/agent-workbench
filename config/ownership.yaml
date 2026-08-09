@@ -515,6 +515,16 @@
       ]
     },
     {
+      "owner": "adapters.tools.sandbox",
+      "lifecycle": "startup",
+      "fields": [
+        "sandbox.enabled",
+        "sandbox.transport",
+        "sandbox.endpoint",
+        "sandbox.timeout_seconds"
+      ]
+    },
+    {
       "owner": "adapters.observability.otel",
       "lifecycle": "startup",
       "fields": [

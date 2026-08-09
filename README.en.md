@@ -18,6 +18,9 @@ Chat web search with the tool-ceiling semantics (PR #74). ADR-018 through 022 �
 ungrounded chat shape, run-step transparency, external search, Chat's routed
 fallback going online, and what a spent tool allowance means — are all on
 `main`. WP14-01 now adds the MCP adapter and takes the config schema to `1.8`.
+WP15's first two stages have landed: the Task workspace
+([ADR-028](docs/adr/0028-task-workspace.md)) and the ephemeral sandbox
+([ADR-029](docs/adr/0029-ephemeral-sandbox.md)), which takes the schema to `1.9`.
 Current evidence and historical
 increments are separated in
 [the implementation status](docs/status.md).
@@ -53,6 +56,21 @@ Implemented with test evidence:
   explicit deployment allowlists are frozen into Task authority, Worker
   discovery narrows them again, and only `writer/synthesize` receives the
   resulting tools through the existing Runtime and Tool Gateway;
+- a Task workspace: mutable names over immutable bytes. Writing a name stores
+  new bytes and produces a new manifest, the manifest is itself an artifact, and
+  so "which version of the workspace" is one id a checkpoint can hold — a
+  replayed node sees the version pinned at its entry, not the half-finished
+  writes of the attempt that died. Only `writer/synthesize` holds the three
+  tools;
+- an optional, off-by-default ephemeral sandbox: one throwaway container per
+  call, files in and files out, with no network, a read-only root, a non-root
+  user, dropped capabilities and memory/CPU/process/wall-clock ceilings. The
+  isolation is constants rather than configuration — the absent network is the
+  premise the replay guarantees rest on, not a hardening option. The Task-side
+  `sandbox_run` reads its inputs from the workspace and writes the outputs back;
+  the sandbox process itself knows nothing of workspaces, tenants or owners. A
+  deployment with no container runtime has one fewer capability, not a Worker
+  that will not start;
 - a React Chat/Work console served same-origin by FastAPI, described in
   [the frontend baseline](docs/frontend-design.md);
 - a local-only Docker Compose topology for PostgreSQL, Qdrant, migrations, the
@@ -83,6 +101,12 @@ does not count as grounded. `research.enabled` stays **off by default**: the
 field also decides how wide the Task authorization envelope is, and that
 envelope is stored with the Task and re-applied on every resume. Its tests all
 run against a fake port — nothing exercises the real endpoint.
+
+The sandbox does not reach the network, keeps no state between calls, offers no
+GPU, and does not promise byte-identical replay — a script may call `time.time()`
+or `random`, and ADR-029 §3.4 says so rather than pretending otherwise. WP15
+stages three through five (reading outward and downloading, cost/deadline
+budgets, and the second graph `v2_general`) have not started.
 
 The remaining boundaries are explicit: physical deletion of stale Qdrant points,
 context compaction, EventLog upcasters/poison-row handling, the CrewAI

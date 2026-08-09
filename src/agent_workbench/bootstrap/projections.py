@@ -32,6 +32,7 @@ from agent_workbench.adapters.tools.external_search import (
 from agent_workbench.bootstrap.settings import Settings
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import AuthorizationEnvelope
+from agent_workbench.domain.sandbox import SANDBOX_RUN_TOOL
 from agent_workbench.domain.schema import JsonObject
 from agent_workbench.domain.tools import ToolName
 from agent_workbench.domain.workspace import (
@@ -91,16 +92,24 @@ TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH = AuthorizationEnvelope(
 
 
 def task_authorization_envelope(
-    *, external_search: bool, mcp_tools: tuple[ToolName, ...] = ()
+    *,
+    external_search: bool,
+    mcp_tools: tuple[ToolName, ...] = (),
+    sandbox: bool = False,
 ) -> AuthorizationEnvelope:
     """Pick the ceiling this deployment submits Tasks under.
 
     Chosen from configuration rather than fixed, because the envelope is stored
     with the Task and re-applied on every resume: a deployment that never turned
     external search on must not have its historical Tasks widened by an upgrade.
+
+    ``sandbox`` widens on both axes at once for the same reason ``external_search``
+    does. ``sandbox_run`` declares ``risk="external"`` (ADR-029 §3.5), and
+    ``risk_within`` ranks external above write, so an envelope that allowlisted
+    the name without raising the ceiling would still refuse the call.
     """
 
-    if not mcp_tools:
+    if not mcp_tools and not sandbox:
         return (
             TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH
             if external_search
@@ -115,6 +124,8 @@ def task_authorization_envelope(
         if external_search
         else (EXPORT_ARTIFACT_TOOL, *mcp_tools, *WORKSPACE_TOOLS)
     )
+    if sandbox:
+        tools = (*tools, SANDBOX_RUN_TOOL)
     return AuthorizationEnvelope(
         allowed_tools=tools,
         max_tool_risk="external",
@@ -428,6 +439,19 @@ class MCPConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SandboxConfig:
+    """Which sandbox process this Worker will look for at startup (ADR-029).
+
+    Absent when the deployment did not enable one, which is the same condition
+    that keeps ``sandbox_run`` out of the authorization envelope -- so a Worker
+    never probes for a sandbox the envelope would refuse to let it use.
+    """
+
+    endpoint: str
+    timeout_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
 class TaskWorkerRuntimeConfig:
     """The minimum configuration of one Worker process.
 
@@ -461,6 +485,7 @@ class TaskWorkerRuntimeConfig:
     multi_agent: MultiAgentConfig | None = None
     research: ResearchConfig | None = None
     mcp: MCPConfig | None = None
+    sandbox: SandboxConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -546,6 +571,7 @@ def project_task(settings: Settings) -> TaskConfig:
         default_authorization_envelope=task_authorization_envelope(
             external_search=settings.research.enabled,
             mcp_tools=configured_mcp_tool_names(settings),
+            sandbox=settings.sandbox.enabled,
         ),
     )
 
@@ -644,6 +670,14 @@ def project_task_worker(
                 max_artifact_bytes=settings.artifact_store.max_artifact_bytes,
             )
             if settings.mcp.servers
+            else None
+        ),
+        sandbox=(
+            SandboxConfig(
+                endpoint=settings.sandbox.endpoint,
+                timeout_seconds=settings.sandbox.timeout_seconds,
+            )
+            if settings.sandbox.enabled
             else None
         ),
     )
@@ -828,6 +862,7 @@ __all__ = [
     "QdrantConfig",
     "RerankerConfig",
     "RetrievalConfig",
+    "SandboxConfig",
     "TaskConfig",
     "TaskWorkerRuntimeConfig",
     "configured_mcp_tool_names",

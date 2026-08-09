@@ -46,6 +46,7 @@ from agent_workbench.adapters.tools import (
     StaticToolRegistry,
     UnavailableExternalSearch,
 )
+from agent_workbench.adapters.tools.sandbox import SandboxRunTool
 from agent_workbench.adapters.tools.task_export import GatewayReportExport
 from agent_workbench.adapters.tools.task_external_research import (
     GatewayExternalEvidence,
@@ -79,6 +80,7 @@ from agent_workbench.bootstrap.sparse_factory import (
     build_sparse_encoder,
 )
 from agent_workbench.domain.runs import RunBudget
+from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
 from agent_workbench.domain.tasks import TaskNodeId
 from agent_workbench.domain.tools import ToolName
 from agent_workbench.ports.cancellation import NullCancellationToken
@@ -106,6 +108,19 @@ class RealTaskHandlersUnavailableError(RuntimeError):
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _RealHandlers:
+    """What real assembly produced, past the point of returning a 7-tuple."""
+
+    handlers: Mapping[TaskNodeId, NodeHandler]
+    http: httpx.AsyncClient
+    qdrant: AsyncQdrantClient
+    research_http: httpx.AsyncClient | None
+    mcp_tool_names: tuple[ToolName, ...]
+    sandbox_tool_names: tuple[ToolName, ...]
+    tool_names: tuple[ToolName, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +153,11 @@ class TaskWorkerDependencies:
     research_http: httpx.AsyncClient | None = None
     qdrant: AsyncQdrantClient | None = None
     mcp_tool_names: tuple[ToolName, ...] = ()
+    #: Empty when this deployment configured no sandbox, and also when it
+    #: configured one whose container runtime did not answer (ADR-029 §3.6).
+    #: The writer profile is widened from this rather than from configuration,
+    #: so the two cases are the same to everything downstream.
+    sandbox_tool_names: tuple[ToolName, ...] = ()
     # Every tool this process registered, exposed for the same reason
     # `handlers` is: which tools a deployment assembled is a deploy-time fact,
     # and the difference between a registry that satisfies the agent profiles
@@ -217,22 +237,14 @@ async def build_task_worker_dependencies(
             application_name=f"{config.database.application_name}-guard",
         )
         resources.push_async_callback(guards.dispose)
-        mcp_tool_names: tuple[ToolName, ...] = ()
-        tool_names: tuple[ToolName, ...] = ()
+        assembled: _RealHandlers | None = None
         # Wired whatever the handlers are. The demo graph answers its own gate and
         # never interrupts, but a Worker that could meet an interrupt without a
         # ledger would park the Task instead of resuming it -- and the ledger costs
         # nothing to hold.
         approvals = PostgresApprovalStore(engine, events=events)
         if handlers is None:
-            (
-                handlers,
-                http,
-                qdrant,
-                research_http,
-                mcp_tool_names,
-                tool_names,
-            ) = await _build_real_handlers(
+            assembled = await _build_real_handlers(
                 config,
                 artifacts=artifacts,
                 documents=PostgresDocumentStore(engine),
@@ -242,6 +254,10 @@ async def build_task_worker_dependencies(
                 scope=scope,
                 resources=resources,
             )
+            handlers = assembled.handlers
+            http = assembled.http
+            qdrant = assembled.qdrant
+            research_http = assembled.research_http
             # The one node the handler factory cannot build: it has to interrupt,
             # and interrupting belongs to the workflow framework, so it is
             # assembled here from the framework-neutral gate.
@@ -287,8 +303,11 @@ async def build_task_worker_dependencies(
             http=http,
             research_http=research_http,
             qdrant=qdrant,
-            mcp_tool_names=mcp_tool_names,
-            tool_names=tool_names,
+            mcp_tool_names=() if assembled is None else assembled.mcp_tool_names,
+            sandbox_tool_names=(
+                () if assembled is None else assembled.sandbox_tool_names
+            ),
+            tool_names=() if assembled is None else assembled.tool_names,
         )
     except BaseException:
         await resources.aclose()
@@ -338,14 +357,7 @@ async def _build_real_handlers(
     ledger: PostgresToolExecutionLedger,
     scope: TaskExecutionScope,
     resources: AsyncExitStack,
-) -> tuple[
-    Mapping[TaskNodeId, NodeHandler],
-    httpx.AsyncClient,
-    AsyncQdrantClient,
-    httpx.AsyncClient | None,
-    tuple[ToolName, ...],
-    tuple[ToolName, ...],
-]:
+) -> _RealHandlers:
     """Assemble Task evidence and model execution without a demo fallback."""
 
     if (
@@ -449,12 +461,19 @@ async def _build_real_handlers(
         artifacts=artifacts,
         resources=resources,
     )
+    sandbox_binding = await _build_sandbox_binding(
+        config,
+        scope=workspace_scope,
+        resources=resources,
+    )
+    sandbox_bindings = () if sandbox_binding is None else (sandbox_binding,)
     tool_registry = StaticToolRegistry(
         (
             external_tool.binding(),
             export_tool.binding(),
             *workspace_bindings,
             *mcp_bindings,
+            *sandbox_bindings,
         )
     )
     gateway = ToolGateway(
@@ -517,16 +536,77 @@ async def _build_real_handlers(
             policy_identity=policy_identity,
         ),
         mcp_tool_names=tuple(binding.spec.name for binding in mcp_bindings),
+        sandbox_tool_names=tuple(binding.spec.name for binding in sandbox_bindings),
         workspace_scope=workspace_scope,
     )
-    return (
-        handlers,
-        http,
-        qdrant,
-        research_http,
-        tuple(binding.spec.name for binding in mcp_bindings),
-        tuple(spec.name for spec in tool_registry.specs()),
+    return _RealHandlers(
+        handlers=handlers,
+        http=http,
+        qdrant=qdrant,
+        research_http=research_http,
+        mcp_tool_names=tuple(binding.spec.name for binding in mcp_bindings),
+        sandbox_tool_names=tuple(binding.spec.name for binding in sandbox_bindings),
+        tool_names=tuple(spec.name for spec in tool_registry.specs()),
     )
+
+
+async def _build_sandbox_binding(
+    config: TaskWorkerRuntimeConfig,
+    *,
+    scope: WorkspaceScope,
+    resources: AsyncExitStack,
+) -> ToolBinding | None:
+    """The sandbox tool, or nothing, after one probe (ADR-029 §3.6).
+
+    The probe is a real ``run_python`` call rather than a connection or a health
+    read, and that is the point: what has to be true is that this Worker can
+    start a container and get a result back, and a socket that accepts is not
+    evidence of either. It costs one container start at Worker boot.
+
+    Every failure is fail-soft, on the same terms ADR-025 set for a server that
+    will not answer: log it, register nothing, start anyway. A deployment
+    without a container runtime is a deployment with one fewer capability, not
+    one that cannot run Tasks -- and the Task envelope is what keeps that
+    honest, since a profile is only ever widened by what was registered here.
+    """
+
+    if config.sandbox is None:
+        return None
+
+    async with AsyncExitStack() as candidate_resources:
+        try:
+            async with asyncio.timeout(config.sandbox.timeout_seconds):
+                client = await candidate_resources.enter_async_context(
+                    connect_mcp_client(
+                        config.sandbox.endpoint,
+                        timeout_seconds=config.sandbox.timeout_seconds,
+                    )
+                )
+                probe = await client.call_tool(
+                    SANDBOX_REMOTE_TOOL,
+                    {"script": "pass"},
+                )
+        except Exception as error:
+            logger.warning(
+                "sandbox_probe_failed",
+                extra={
+                    "sandbox_endpoint": config.sandbox.endpoint,
+                    "sandbox_error_type": type(error).__name__,
+                },
+            )
+            return None
+        if probe.is_error:
+            # The server answered and the runtime did not. Same outcome, and a
+            # distinct log line because the fix is a different one.
+            logger.warning(
+                "sandbox_runtime_unavailable",
+                extra={"sandbox_endpoint": config.sandbox.endpoint},
+            )
+            return None
+        owned = candidate_resources.pop_all()
+        resources.push_async_callback(owned.aclose)
+        return SandboxRunTool(scope=scope, client=client).binding()
+    return None  # pragma: no cover - AsyncExitStack does not suppress
 
 
 async def _build_mcp_bindings(

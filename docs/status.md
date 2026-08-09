@@ -1,5 +1,45 @@
 # 实施状态
 
+## 2026-08-09 WP15 阶段一收尾与阶段二（一次性沙箱）
+
+阶段一（ADR-028 任务工作区）此前停在组合根前面一步：`agent_profiles` 与授权信封都点名了
+`workspace_list/read/write`，而 `apps/task_worker/composition.py` 的注册表里没有它们。这
+不是少一个能力——`ToolGateway.advertise` 对解析不到的工具抛 `UnknownToolError`，所以当时
+一个非 demo 的 Task Worker 跑到 `synthesize` 必崩。已修复，并补上一条按 profile 推导的
+测试：每个 v1 profile 在默认信封下会请求的工具，必须都在组合根实际注册的集合里。
+
+阶段二（ADR-029）的沙箱是纯函数：一次调用一个容器，文件进、文件出，无网络、只读根、非
+root、丢弃 capability、tmpfs 可写层、内存/CPU/进程数/墙钟上限。这些是
+`apps/sandbox_mcp/executor.py` 里的常量，配置够不到——ADR-029 §3.2 的立场是断网是整条
+重放保证成立的前提。ADR 明说验收不能是"我们设了 flag"，所以隔离全部对着真容器验，每条
+配对照组：联网失败/纯计算成功、写只读根失败/写自己那层成功、死循环被杀/快脚本正常返回、
+uid 65534、看不到主机路径、两次调用之间无残留、fork 撞上 pids 上限。
+
+Task 侧是原生工具 `sandbox_run`（不是通用 MCP 绑定）：它要读写工作区与 Task 状态，那是
+Worker 的内部权限，而 ADR-026 的规矩是 MCP server 不接收路径与所有者。模型给的是工作区
+文件名，拿回的是新工作区版本；base64 不进模型上下文。
+
+`[sandbox]` 默认关闭，schema 升到 `1.9`。开启它同时做两件事：`sandbox_run` 进授权信封，
+且信封风险上限抬到 `external`。Worker 启动时探测一次，而且是真发一次 `run_python`——能连
+上的 socket 既不证明有容器运行时也不证明容器能起。探测失败则记结构化日志、不注册这个
+工具、进程照常启动（§3.6）；此时信封里仍有这个名字（它是提交时冻结的），所以 agent
+profile 是按**实际注册到的工具**加宽的，不是按配置。
+
+两个部署前提，缺了不会让 Worker 起不来：`docker pull python:3.12-slim` 与
+`agent-sandbox-mcp`。可直接用的本地 profile 是 `config/config.sandbox-local.toml`。
+
+**本轮明确未做**：阶段三（只读取用网页与下载）、阶段四（成本/时限预算、`workspace_edit`、
+`workspace_grep`）、阶段五（第二张图 `v2_general`）。沙箱内联网、跨调用状态、GPU、字节级
+确定性重放均不在范围内（ADR-029 §4）。
+
+一条被 e2e 抓住的真 bug：工具在没有输入文件时也发 `inputs: []`，而 server schema 里
+`inputs` 可选且 `minItems: 1`——一个只做计算的脚本会在跑起来之前被拒。stub client 因此改成
+按 server 的真实 schema 校验参数，接受任何东西的 stub 看不见这类错误。
+
+门禁：无外部服务全仓 `1679 passed / 597 skipped`（其中 13 条跑真容器），
+`tests/e2e` `3 passed / 11 skipped`。无 docker 或本地没拉 `python:3.12-slim` 时带修复指引
+跳过。Ruff、format、Pyright 全绿。
+
 ## 2026-08-09 项目自有 Word MCP（本地 Optional Lab）
 
 Word 生成不依赖 Codex 的 Documents skill，也不驱动桌面版 Microsoft Word。项目自有的

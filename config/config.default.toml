@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.8"
+config_schema_version = "1.9"
 architecture_baseline = "1.3"
 
 [api]
@@ -333,6 +333,15 @@ timeout_seconds = 60
 #   retryable_effects = true
 [mcp]
 servers = []
+
+# ADR-029. Off by default: the tool name and the "external" risk ceiling it
+# forces are written into each Task's authorization envelope, so a deployment
+# that never ran a sandbox must not have its historical Tasks widened by an
+# upgrade. The isolation is not configurable and is deliberately absent here.
+[sandbox]
+enabled = false
+endpoint = "http://127.0.0.1:8766/mcp"
+timeout_seconds = 180
 
 [observability]
 otel_enabled = true

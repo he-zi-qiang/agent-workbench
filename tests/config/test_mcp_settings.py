@@ -40,10 +40,10 @@ def test_a_deployment_that_never_configured_mcp_gets_no_servers() -> None:
     assert settings.optional_labs.mcp_adapter is False
 
 
-def test_config_schema_version_moved_to_1_8() -> None:
+def test_config_schema_version_moved_to_1_9() -> None:
     settings = Settings(**valid_payload())
 
-    assert settings.app.config_schema_version == "1.8"
+    assert settings.app.config_schema_version == "1.9"
 
 
 def test_retryable_server_tools_are_frozen_into_new_task_authority() -> None:

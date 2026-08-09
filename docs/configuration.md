@@ -25,6 +25,7 @@
 | `1.5` → `1.6` | `RunBudget` 去掉跨字段校验，`max_tool_calls` 与 `max_steps` 相互独立 | [ADR-022](./adr/0022-tool-ceiling-closes-the-toolbox.md) |
 | `1.6` → `1.7` | 新增 `[mcp]`；其解析出的工具名会写进 Task 授权信封 | [ADR-025](./adr/0025-mcp-adapter.md) |
 | `1.7` → `1.8` | MCP server 新增显式工具 allowlist，使 API 提交与 Worker 启动发现能确定性取交集 | [ADR-025](./adr/0025-mcp-adapter.md) |
+| `1.8` → `1.9` | 新增 `[sandbox]`；开启它会把 `sandbox_run` 写进 Task 授权信封，并把信封风险上限抬到 `external` | [ADR-029](./adr/0029-ephemeral-sandbox.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。
@@ -537,6 +538,48 @@ timeout_seconds = 30
 stdio、OAuth、热更新、MCP Tasks、Tool 级动态审批和跨 Worker 进程的全局串行。完整边界、
 命名、schema、安全重放和多 content-block 映射见
 [MCP Adapter 实施计划](./mcp-adapter-plan.md)。
+
+### 9.2 一次性沙箱
+
+`[sandbox]` 由 [ADR-029](./adr/0029-ephemeral-sandbox.md) 引入，默认关闭，开启后只进入
+Task Worker 的 `writer/synthesize` Agent：
+
+```toml
+[sandbox]
+enabled = true
+endpoint = "http://127.0.0.1:8766/mcp"
+timeout_seconds = 180
+```
+
+| 字段 | 约束 | 运行语义 |
+|---|---|---|
+| `enabled` | 默认 `false` | 关闭时 Worker 不探测，`sandbox_run` 也不进授权信封 |
+| `transport` | 只能是 `http` | 与 `[mcp]` 同一条理由：不派生本地进程 |
+| `endpoint` | 沙箱 MCP server 的地址 | 只由 Task Worker 连接 |
+| `timeout_seconds` | `1..600` | 同时约束启动探测与单次调用 |
+
+**这一段不描述隔离。** 无网络、只读根、非 root、内存/CPU/进程数/墙钟上限全部是
+`apps.sandbox_mcp.executor` 里的常量，配置够不到——ADR-029 §3.2 的立场是断网是整条
+重放保证成立的前提，不是可调的加固项。这里只说"连哪个沙箱"。
+
+开启后信封同时发生两件事：allowlist 多出 `sandbox_run`，且 `max_tool_risk` 抬到
+`external`（`sandbox_run` 声明 `risk="external"`，只加名字不抬上限的信封仍会拒绝它）。
+
+**两个部署前提**，缺了不会让 Worker 起不来：
+
+```bash
+docker pull python:3.12-slim
+agent-sandbox-mcp
+```
+
+Worker 启动时做一次探测，而且是**真发一次 `run_python`**——能连上的 socket 既不证明有
+容器运行时，也不证明容器能起来。探测失败（连不上，或连上了但运行时不可用）会记
+`sandbox_probe_failed` / `sandbox_runtime_unavailable`，**不注册这个工具，进程照常启动**
+（ADR-029 §3.6）。此时信封里仍有 `sandbox_run`——它是提交时按配置冻结的——所以 Agent
+profile 是按**实际注册到的工具**加宽的，不是按配置。两者若反过来，节点会去请求一个网关
+解析不到的工具。
+
+可直接使用的本地 profile 见 `config/config.sandbox-local.toml`。
 
 ## 10. 外部检索
 

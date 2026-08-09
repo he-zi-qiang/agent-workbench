@@ -37,7 +37,7 @@ from agent_workbench.workflows.agent_profiles import (
     ProjectedContext,
     build_agent_request,
     profile_for,
-    profile_with_mcp_tools,
+    profile_with_dynamic_tools,
     render_projection,
 )
 from agent_workbench.workflows.research_graph import (
@@ -120,11 +120,16 @@ def build_request(
     offered: ProjectedContext | None = None,
     *,
     mcp_tool_names: Sequence[ToolName] = (),
+    sandbox_tool_names: Sequence[ToolName] = (),
 ) -> AgentRunRequest:
     """Assemble one node's run request under its agent's declared boundary."""
 
     return build_agent_request(
-        profile_with_mcp_tools(profile_for(node), mcp_tool_names),
+        profile_with_dynamic_tools(
+            profile_for(node),
+            mcp=mcp_tool_names,
+            sandbox=sandbox_tool_names,
+        ),
         state,
         trace=context.trace,
         stream_id=context.stream_id,
