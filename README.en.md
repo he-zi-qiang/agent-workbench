@@ -11,13 +11,14 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-08-08, `main` carries the Task/HITL/side-effect-ledger baseline, the
+As of 2026-08-09, the current tree carries the Task/HITL/side-effect-ledger baseline, the
 three fencing fixes from PR #68, the React Chat/Work console (PR #69), the
 LlamaIndex retrieval adapter and routed-threshold evaluation (PR #72, #73), and
 Chat web search with the tool-ceiling semantics (PR #74). ADR-018 through 022 —
 ungrounded chat shape, run-step transparency, external search, Chat's routed
 fallback going online, and what a spent tool allowance means — are all on
-`main`, taking the config schema to `1.6`. Current evidence and historical
+`main`. WP14-01 now adds the MCP adapter and takes the config schema to `1.8`.
+Current evidence and historical
 increments are separated in
 [the implementation status](docs/status.md).
 
@@ -48,6 +49,10 @@ Implemented with test evidence:
   a versioned decision API and cross-process resume;
 - OpenTelemetry traces and metrics behind a port, with the core importing no
   SDK, and a LangChain `BaseTool` adapter that enters the same tool gateway;
+- an optional, off-by-default MCP adapter using the official Python SDK v2:
+  explicit deployment allowlists are frozen into Task authority, Worker
+  discovery narrows them again, and only `writer/synthesize` receives the
+  resulting tools through the existing Runtime and Tool Gateway;
 - a React Chat/Work console served same-origin by FastAPI, described in
   [the frontend baseline](docs/frontend-design.md);
 - a local-only Docker Compose topology for PostgreSQL, Qdrant, migrations, the
@@ -57,13 +62,17 @@ Validation for the current tree:
 
 - Ruff format and lint: passed;
 - Pyright: 0 errors and 0 warnings;
-- tests without external services: 1264 passed, 568 environment-gated skips;
-- the same tree against real PostgreSQL and Qdrant: 1821 passed, 11 skipped
-  (the 11 need BGE weights);
+- tests without external services: 1540 passed, 597 environment-gated skips;
+- MCP adapter plus protocol-to-Runtime E2E: 37 passed;
+- the E2E directory: 1 passed, 11 PostgreSQL-gated skips;
+- lock-file and dependency-license policy gates: passed;
 - frontend ESLint, strict TypeScript and production build: passed;
 - Vitest: 45 passed; Playwright desktop/mobile smoke: 2 passed.
 
-The two environments are quoted separately and never added together.
+PostgreSQL, Qdrant and local BGE services were not running for the current MCP
+increment. Environment-gated skips are reported rather than represented as
+stateful verification; the earlier stateful evidence remains dated in
+[the implementation status](docs/status.md).
 
 External search now has a real provider
 ([ADR-020](docs/adr/0020-external-web-search.md)): DeepSeek's server-side

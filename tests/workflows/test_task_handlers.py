@@ -423,6 +423,38 @@ def test_each_handler_refreshes_registry_context_and_mints_a_new_run_id() -> Non
     _run(scenario)
 
 
+def test_task_handlers_offer_mcp_only_to_synthesis_under_submitted_authority() -> None:
+    async def scenario() -> None:
+        tool_name = "mcp_office_render_document"
+        registry = _Registry(
+            _task(
+                submitted_authorization_envelope=AuthorizationEnvelope(
+                    allowed_tools=(tool_name,),
+                    max_tool_risk="external",
+                    approval_required_risks=(),
+                )
+            )
+        )
+        executor = _TextExecutor()
+        handlers = build_task_v1_handlers(
+            executor=executor,
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(registry),
+            mcp_tool_names=(tool_name,),
+        )
+
+        await handlers["understand"](_state())
+        await handlers["synthesize"](_state())
+
+        by_node = {
+            request.trace.graph_node_id: request.tool_names
+            for request in executor.requests
+        }
+        assert by_node == {"understand": (), "synthesize": (tool_name,)}
+
+    _run(scenario)
+
+
 def test_structured_or_artifact_failure_keeps_the_usage_that_was_spent() -> None:
     async def scenario() -> None:
         registry = _Registry(_task())

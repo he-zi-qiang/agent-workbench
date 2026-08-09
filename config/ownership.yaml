@@ -509,6 +509,7 @@
         "mcp.servers.alias",
         "mcp.servers.transport",
         "mcp.servers.endpoint",
+        "mcp.servers.tools",
         "mcp.servers.retryable_effects",
         "mcp.servers.timeout_seconds"
       ]

@@ -33,6 +33,9 @@ FORBIDDEN_CORE_IMPORTS = frozenset(
         "langchain_core",
         "langgraph",
         "llama_index",
+        # Document format SDKs belong to the project-owned Word process, never
+        # to the framework-neutral runtime or workflow contracts.
+        "docx",
         # HTTP interface frameworks
         "fastapi",
         "starlette",
@@ -46,6 +49,8 @@ FORBIDDEN_CORE_IMPORTS = frozenset(
         "huggingface_hub",
         "httpx",
         "mistralai",
+        "mcp",
+        "mcp_types",
         "openai",
         "sentence_transformers",
         "torch",

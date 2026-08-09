@@ -7,18 +7,23 @@
 #                               # the embedding runtime entirely)
 #   scripts/dev.sh ingest       # ingestion worker (also bootstraps the index)
 #   scripts/dev.sh worker       # Task worker, demo graph
+#   scripts/dev.sh word-server  # loopback Word document MCP server
+#   scripts/dev.sh word-check   # health + tools/list probe
+#   scripts/dev.sh word-api     # API with explicit Word MCP profile
+#   scripts/dev.sh word-worker  # real Worker; requires a model provider key
 #   scripts/dev.sh smoke        # drive the whole thing and print what happened
 #
 # This is the one place that knows the local environment. The three DSNs live
 # here rather than in the committed TOML because settings forbids connection
 # strings in configuration files -- one is a credential even when today's has no
-# password. Everything else comes from config/config.local.toml.
+# password. Ordinary commands use config/config.local.toml; the explicit
+# word-api/word-worker pair uses config/config.word-local.toml.
 #
 # Whether chat runs depends on one thing: AW_SECRETS__DEEPSEEK_API_KEY. With it,
 # the API serves chat and the Task worker runs the real model-calling graph.
-# Without it, the API runs `--without-chat` and the worker runs `--demo`, and
-# both say so rather than pretending -- `build_model` refuses to start a process
-# whose model it could not call, and that refusal is the behaviour worth keeping.
+# Without it, the ordinary API omits Chat and the ordinary worker runs `--demo`,
+# and both say so rather than pretending. The explicit word-worker is stricter:
+# it refuses to start, because a demo graph cannot exercise a Word MCP tool.
 #
 # The key is never read from a file in this repository and never written to one.
 # Export it in your shell, or source it from somewhere outside the checkout.
@@ -47,7 +52,7 @@ TENANT="${TENANT:-tenant_local}"
 PRINCIPAL="${PRINCIPAL:-user_local}"
 API_URL="${API_URL:-http://127.0.0.1:8000}"
 
-usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-}" in
 services)
@@ -108,6 +113,45 @@ worker)
   fi
   echo "no AW_SECRETS__DEEPSEEK_API_KEY: demo graph" >&2
   exec "$PYTHON" -m agent_workbench.apps.task_worker.main --demo
+  ;;
+
+word-server)
+  # The server owns no user path and listens on loopback only. Its tool returns
+  # document bytes through MCP; the existing adapter assigns tenant/owner and
+  # persists them in ArtifactStore inside the Task Worker process.
+  exec "$PYTHON" -m agent_workbench.apps.word_mcp.main
+  ;;
+
+word-check)
+  exec "$PYTHON" scripts/smoke_word_mcp.py \
+    --endpoint "http://127.0.0.1:8765/mcp" \
+    --health-url "http://127.0.0.1:8765/health" \
+    --expect-tool render_document
+  ;;
+
+word-api)
+  export AW_CONFIG_FILE=config/config.word-local.toml
+  if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "Word profile selected; provider key is available to real Worker processes" >&2
+  else
+    echo "Word profile, no provider key: API can submit but no real Word Worker can run" >&2
+  fi
+  shift
+  exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
+  ;;
+
+word-worker)
+  export AW_CONFIG_FILE=config/config.word-local.toml
+  if [ -z "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "word-worker requires AW_SECRETS__DEEPSEEK_API_KEY; refusing a demo graph" >&2
+    exit 2
+  fi
+  "$PYTHON" scripts/smoke_word_mcp.py \
+    --endpoint "http://127.0.0.1:8765/mcp" \
+    --health-url "http://127.0.0.1:8765/health" \
+    --expect-tool render_document >&2
+  echo "Word profile + model provider configured: real graph" >&2
+  exec "$PYTHON" -m agent_workbench.apps.task_worker.main
   ;;
 
 smoke)

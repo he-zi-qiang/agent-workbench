@@ -1,5 +1,5 @@
 import { ChevronRight, FileDown } from "lucide-react";
-import type { EventEnvelope } from "../api/types";
+import type { ArtifactRef, EventEnvelope } from "../api/types";
 import { describeEvent } from "./stepDetail";
 import { formatTime, shortId } from "./ui";
 
@@ -20,7 +20,7 @@ export function StepDisclosure({
 }: {
   event: EventEnvelope;
   title: string;
-  onOpenArtifact?: (artifactId: string) => void;
+  onOpenArtifact?: (artifact: ArtifactRef) => void;
 }) {
   const detail = describeEvent(event);
   const hasDetail =
@@ -64,7 +64,9 @@ export function StepDisclosure({
             </span>
             <button
               className="aw-button is-ghost is-small"
-              onClick={() => onOpenArtifact(detail.artifact?.artifact_id ?? "")}
+              onClick={() => {
+                if (detail.artifact !== null) onOpenArtifact(detail.artifact);
+              }}
               type="button"
             >
               打开产物

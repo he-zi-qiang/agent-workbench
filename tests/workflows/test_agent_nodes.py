@@ -167,6 +167,30 @@ def test_a_request_carries_the_task_context_and_advertises_no_tools() -> None:
     assert request.tool_names == ()
 
 
+def test_only_synthesis_receives_the_intersected_mcp_catalog() -> None:
+    context = _context()
+    context = TaskRunContext(
+        trace=context.trace,
+        stream_id=context.stream_id,
+        principal=context.principal,
+        envelope=AuthorizationEnvelope(
+            allowed_tools=("mcp_office_render_document",),
+            max_tool_risk="external",
+            approval_required_risks=(),
+        ),
+        budget=context.budget,
+    )
+    catalog = ("mcp_office_lookup", "mcp_office_render_document")
+
+    writer = build_request("synthesize", _state(), context, mcp_tool_names=catalog)
+    researcher = build_request(
+        "research_external", _state(), context, mcp_tool_names=catalog
+    )
+
+    assert writer.tool_names == ("mcp_office_render_document",)
+    assert researcher.tool_names == ()
+
+
 def test_the_prompt_projects_the_state_instead_of_replaying_a_transcript() -> None:
     state = _state(
         evidence_refs=("ev_1", "ev_2"),

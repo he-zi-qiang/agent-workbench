@@ -13,12 +13,13 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-08-08，`main` 已包含 Task/HITL/副作用账本收尾、三处围栏修复（PR #68）、
+截至 2026-08-09，当前工作树已包含 Task/HITL/副作用账本收尾、三处围栏修复（PR #68）、
 React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈值评测
-（PR #72、#73），以及 Chat 联网搜索与工具额度语义（PR #74）。ADR-018～023
+（PR #72、#73）、Chat 联网搜索与工具额度语义（PR #74），以及
+[ADR-025](docs/adr/0025-mcp-adapter.md) 的 MCP Optional Lab。ADR-018～023
 （无接地对话形态、运行步骤透明度、外部检索、Chat 兜底分支联网、工具额度语义、
-自由回答也能联网）**都已在 `main` 上**，配置 schema 相应走到 `1.6`——ADR-023
-没有再动 schema，它只合并了实现。
+自由回答也能联网）已合入主线；MCP 增量把配置 schema 从 `1.7` 升到 `1.8`，用显式
+remote-tool allowlist 保证 API 提交与 Worker 启动发现得到同一组可审计名字。
 最新实现证据和历史增量分开记录在 [实施状态](docs/status.md)；下列能力均有代码或
 测试作为依据：
 
@@ -70,6 +71,10 @@ React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈�
 - 后台 pending-release recovery 会重新执行最终 ACL/revision 栅栏并原子发布，
   不依赖原客户端用同一幂等键重试；即使 embedding/model 不可用也继续恢复；
 - 与固定检索共用 `RetrievalService` 的 `knowledge_search` Tool Adapter。
+- **MCP Adapter Optional Lab：**官方 SDK v2 的 Streamable HTTP 工具在 Task Worker
+  启动时冻结成普通 `ToolBinding`，再经过自研 Runtime、Tool Gateway、提交授权信封、
+  `mcp:<alias>` scope、安全重放边界与事件流；只有 `writer/synthesize`
+  接受动态 MCP 目录，其他 Agent 与 Chat 不会获得这些工具。默认关闭。
 - **A/B 已完成：**Task 工作流具有显式成功/失败终态和正确的 revision 预算语义；
   Task 提交使用 tenant-scoped 幂等键与输入 fingerprint，API 查询按 owner/tenant
   失败隐藏；
@@ -132,15 +137,23 @@ React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈�
   那次等价评测无法给出结论的直接原因。修法是在适配器边界给并列项定序，属于独立变更。
 - OpenTelemetry 的 trace/metrics 已落地（Port + OTLP Adapter，核心层不导入 SDK）。
   Langfuse、动态 Multi-Agent supervisor、生产身份认证与生产部署仍未完成。
+- MCP 第一版不支持 stdio、OAuth、热更新、MCP Tasks、Tool 级动态审批、transport body
+  硬上限或跨 Worker 进程的全局锁；
+  `retryable_effects=false` 的 server 不进入可调用路径。它是协议 Adapter，不是第二套
+  Agent executor，也不改变 PostgreSQL 的恢复事实源。
 - React 控制台已实现 Chat / Work 两条主流程，以及 Knowledge / Approvals /
   Evaluation / System 辅助页；其前端协议、安全发布语义和响应式设计见
   [前端设计基线](docs/frontend-design.md)。
 - 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 证明。
-- 本次前端增量门禁为：Ruff format/lint 通过、Pyright `0 errors`、无外部服务
+- 前端增量当时的门禁为：Ruff format/lint 通过、Pyright `0 errors`、无外部服务
   `1264 passed / 568 skipped`；前端 ESLint/严格 TypeScript/production build 通过，
-  Vitest `45 passed`、Playwright 桌面/移动端 `2 passed`。同一工作树在真实
+  Vitest `45 passed`、Playwright 桌面/移动端 `2 passed`。该次工作树在真实
   PostgreSQL + Qdrant 下为 `1821 passed / 11 skipped`（11 项需要 BGE 权重）；
   两组数字来自不同环境，只能分别引用，不能相加。
+- 本次 MCP 增量门禁为：MCP Adapter + 协议—Runtime E2E `37 passed`，无外部服务全仓
+  `1540 passed / 597 skipped`，E2E 目录 `1 passed / 11 skipped`；Ruff、Pyright、
+  架构/配置、锁文件与许可证门禁通过。当前 Compose 未运行，597/11 项环境跳过不能描述成
+  已运行的 PostgreSQL/Qdrant/BGE 验证。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
 > 受控的本机开发，不得暴露到局域网或公网。监听地址以及 Compose 端口映射均限制为

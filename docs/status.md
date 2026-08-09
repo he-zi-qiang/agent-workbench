@@ -1,5 +1,68 @@
 # 实施状态
 
+## 2026-08-09 项目自有 Word MCP（本地 Optional Lab）
+
+Word 生成不依赖 Codex 的 Documents skill，也不驱动桌面版 Microsoft Word。项目自有的
+loopback MCP Server 只广告 `render_document`；Task Worker 将它冻结为
+`mcp_word_render_document`，并继续经过现有 Tool Gateway、Task authorization envelope、
+`mcp:word` principal scope、统一工具事件与 tenant/owner 受限的 ArtifactStore。
+
+Word 能力使用独立的 `config.word-local.toml` 显式 opt-in。常规 `config.local.toml` 保持
+MCP 关闭，避免把 Word 工具放进每个新 Task 的权限上限；Word profile 还将开场工具调用设为
+optional，避免没有 `mcp:word` 的普通任务被强迫提议 Word。`scripts/dev.sh word-worker`
+在没有模型 Provider key 时直接拒绝启动，不用 demo graph 冒充真实闭环。
+
+本地操作与验收见[本地 Word MCP 指南](./word-mcp-local.md)，完整决策见
+[ADR-026](./adr/0026-word-docx-is-an-mcp-artifact.md)。协议健康、目录发现、配置投影和真实
+Task/Artifact 的测试证据在 Word Server 合并后记入本节；在此之前不得把单独的
+`/health + tools/list` 写成完整 Task E2E。
+
+## 2026-08-09 MCP Adapter（WP14-01，已完成）
+
+MCP 不作为第二套 Agent 框架：官方 Python SDK v2 只存在于 `adapters/mcp/`，远端工具先
+冻结成项目自己的 `ToolBinding`，再经过既有 Runtime、Tool Gateway、Task 信封、principal
+scope、安全重放边界与事件流。完整决策见 [ADR-025](./adr/0025-mcp-adapter.md)，逐项验收见
+[MCP Adapter 实施计划](./mcp-adapter-plan.md)。
+
+本轮已单独跑通一条不依赖数据库或模型供应商的协议—Runtime 集成 E2E：官方 SDK 内存 server
+完成 `server/discover` / `tools/list` / `tools/call`，显式 allowlist 解析为
+`mcp_office_render_document`，只有 writer 的
+Task 请求能看到它；调用经过 Gateway 授权后按
+`ToolProposed → PermissionResolved → ToolStarted → ToolCompleted` 落入真实事件流。
+长文本结果同时落入 tenant/owner 受限的 ArtifactStore 并由 ToolResult 引用。该测试不经过
+PostgreSQL Task Registry、claim 或 checkpoint，不能引用成完整持久化 Task E2E。
+同一轮还补齐了真实 Provider 的收敛语义：`tool_calling_required=true` 只强制开场轮；
+ToolResult 后保留工具目录并回到 auto，DeepSeek HTTP Adapter 的两轮契约测试证明第二轮可
+直接完成，而不是被迫重复调用到预算耗尽。
+
+启动增量 benchmark 由 `scripts/benchmark_mcp_startup.py` 生成，不手写统计：
+
+| 环境 | SDK | 工具数 | 预热/样本 | median | p95 | min–max |
+|---|---:|---:|---:|---:|---:|---:|
+| macOS 26.5.2 arm64，Python 3.12.13，基于 `8595b1f` 的工作树 | MCP 2.0.0 | 20 | 3 / 30 | 0.707 ms | 0.970 ms | 0.662–1.073 ms |
+
+这个数字只覆盖 SDK `server/discover`、`tools/list` 与本地 binding 构造，使用官方内存 transport，
+**不包含网络延迟**；它是本项目适配层的下界，不是生产 endpoint 的延迟承诺。
+本次命令的原始机器可读输出已保存为
+[`mcp-startup-benchmark-2026-08-09.json`](./mcp-startup-benchmark-2026-08-09.json)。
+
+当前证据：
+
+```text
+MCP Adapter + 协议—Runtime E2E          37 passed
+无外部服务全仓                         1540 passed / 597 skipped
+tests/e2e                              1 passed / 11 skipped
+architecture + config                 86 passed
+Ruff format / lint                     passed
+Pyright                                0 errors / 0 warnings
+uv lock --check                        passed
+dependency license allowlist           passed
+```
+
+597 个无服务跳过项与 11 个持久化 E2E 跳过项需要 PostgreSQL、Qdrant 或本地 BGE 权重；
+当前 Compose 未运行，本轮没有把这些描述成通过。唯一常规 warning 来自 LangGraph
+checkpoint serializer 的待弃用默认值，与 MCP 行为无关。
+
 ## 2026-08-03 LlamaIndex 检索适配器落地，但**没有**切流量（ADR-017 步骤 1 完成，步骤 2 未通过，未合并）
 
 **先说结论，因为它和这一刀原本的意图相反。** 适配器建好了、契约测试跑通了、
@@ -3368,8 +3431,9 @@ adapter 实际消费它们。此前三者在 Settings 里有定义、有校验�
 400 之类不重试：请求本来就错，再发还是错。退避按次翻倍，立刻重试 429 等于要求被更狠
 地限流；`sleep` 可注入，测试不必真等。
 
-`tool_calling_required` 只在有 tools 时才发 `tool_choice: "required"`——没有工具却
-要求必须选一个，是没人能满足的请求。
+`tool_calling_required` 当时只按“有 tools”发 `tool_choice: "required"`——没有工具却
+要求必须选一个，是没人能满足的请求。WP14 在真正给 writer 装配 MCP 后又关闭了一个旧
+缺口：required 现在只强制开场轮，ToolResult 后回到 auto，否则最终回答轮会被迫再次调用。
 
 Settings → `DeepSeekProfile` 的投影仍不存在，因为 DeepSeek 还没装配进进程
 （WP02-06/07）。本条修的是 adapter 侧的配置语义对齐。

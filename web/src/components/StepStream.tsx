@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import type { EventEnvelope } from "../api/types";
+import type { ArtifactRef, EventEnvelope } from "../api/types";
 import { StepDisclosure } from "./StepDisclosure";
 
 /**
@@ -52,7 +52,7 @@ export function StepStream({
   isKnownEvent?: (event: EventEnvelope) => boolean;
   /** Run- or task-level bookkeeping, folded away under the stages. */
   meta?: StreamMeta;
-  onOpenArtifact?: (artifactId: string) => void;
+  onOpenArtifact?: (artifact: ArtifactRef) => void;
   running: boolean;
   stages: StreamStage[];
 }) {

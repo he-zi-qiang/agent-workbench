@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import tomllib
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -12,6 +16,11 @@ from pydantic import SecretStr
 
 from agent_workbench.adapters.embedding.fake import DeterministicEmbedder
 from agent_workbench.adapters.langgraph import LangGraphTaskWorkflow
+from agent_workbench.adapters.mcp.client import (
+    RemoteCallResult,
+    RemoteToolDefinition,
+    RemoteToolPage,
+)
 from agent_workbench.adapters.models.fake import FakeModel
 from agent_workbench.apps.task_worker.composition import (
     RealTaskHandlersUnavailableError,
@@ -25,6 +34,8 @@ from agent_workbench.bootstrap.projections import (
     ArtifactStoreConfig,
     DatabaseConfig,
     EmbeddingConfig,
+    MCPConfig,
+    MCPServerConfig,
     ModelConfig,
     TaskConfig,
     TaskWorkerRuntimeConfig,
@@ -32,6 +43,7 @@ from agent_workbench.bootstrap.projections import (
 )
 from agent_workbench.bootstrap.settings import Settings
 from agent_workbench.domain.policies import AuthorizationEnvelope
+from agent_workbench.domain.schema import JsonObject
 from agent_workbench.ports.model import ModelPort
 from agent_workbench.workflows.task_handlers import build_task_v1_handlers
 
@@ -85,14 +97,57 @@ def _projected_config() -> TaskWorkerRuntimeConfig:
     return project_task_worker(Settings(**payload), worker_id="worker_production_test")
 
 
+class _DirectoryMCPClient:
+    async def list_tools_page(self, cursor: str | None) -> RemoteToolPage:
+        assert cursor is None
+        return RemoteToolPage(
+            tools=(
+                RemoteToolDefinition(
+                    name="render-document",
+                    description="Render a document.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                ),
+            )
+        )
+
+    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+        del name, arguments
+        return RemoteCallResult(content=())
+
+
+def _patch_real_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent_workbench.apps.task_worker.composition as composition
+    import agent_workbench.bootstrap.model_factory as model_factory
+
+    def dense(config: EmbeddingConfig) -> DeterministicEmbedder:
+        return DeterministicEmbedder(dimension=config.vector_size)
+
+    def no_sparse(_: EmbeddingConfig) -> composition.SparseEncodingUnavailable:
+        return composition.SparseEncodingUnavailable("dense-only test")
+
+    def fake_model(_: ModelConfig, *, client: httpx.AsyncClient) -> ModelPort:
+        del client
+        return FakeModel(())
+
+    monkeypatch.setattr(composition, "build_embedder", dense)
+    monkeypatch.setattr(composition, "build_sparse_encoder", no_sparse)
+    monkeypatch.setattr(model_factory, "build_model", fake_model)
+
+
 def test_default_worker_assembly_refuses_synthetic_handlers(tmp_path: object) -> None:
     with pytest.raises(RealTaskHandlersUnavailableError, match="--demo"):
-        build_task_worker_dependencies(_config(tmp_path))
+        asyncio.run(build_task_worker_dependencies(_config(tmp_path)))
 
 
 def test_demo_worker_assembly_uses_the_durable_adapters(tmp_path: object) -> None:
     async def scenario() -> tuple[str, str]:
-        dependencies = build_task_worker_dependencies(_config(tmp_path), demo=True)
+        dependencies = await build_task_worker_dependencies(
+            _config(tmp_path), demo=True
+        )
         try:
             return (
                 type(dependencies.registry).__name__,
@@ -102,6 +157,39 @@ def test_demo_worker_assembly_uses_the_durable_adapters(tmp_path: object) -> Non
             await dependencies.dispose()
 
     assert asyncio.run(scenario()) == ("PostgresTaskRegistry", "LangGraphTaskWorkflow")
+
+
+def test_partial_assembly_disposes_the_engine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    import agent_workbench.apps.task_worker.composition as composition
+
+    class Engine:
+        disposed = False
+
+        async def dispose(self) -> None:
+            self.disposed = True
+
+    engine = Engine()
+
+    def fail_to_build_guards(*_: object, **__: object) -> None:
+        raise RuntimeError("guard assembly failed")
+
+    def build_engine(*_: object, **__: object) -> Engine:
+        return engine
+
+    monkeypatch.setattr(composition, "create_query_engine", build_engine)
+    monkeypatch.setattr(
+        composition, "PostgresExecutionGuardFactory", fail_to_build_guards
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(RuntimeError, match="guard assembly failed"):
+            await build_task_worker_dependencies(_config(tmp_path), demo=True)
+
+    asyncio.run(scenario())
+
+    assert engine.disposed is True
 
 
 def test_real_worker_refuses_to_start_without_an_embedding_runtime(
@@ -115,7 +203,7 @@ def test_real_worker_refuses_to_start_without_an_embedding_runtime(
     monkeypatch.setattr(composition, "build_embedder", unavailable)
 
     with pytest.raises(RealTaskHandlersUnavailableError, match="embedding runtime"):
-        build_task_worker_dependencies(_projected_config())
+        asyncio.run(build_task_worker_dependencies(_projected_config()))
 
 
 def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
@@ -139,7 +227,7 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
     monkeypatch.setattr(model_factory, "build_model", fake_model)
 
     async def scenario() -> tuple[bool, bool]:
-        dependencies = build_task_worker_dependencies(_projected_config())
+        dependencies = await build_task_worker_dependencies(_projected_config())
         try:
             workflow = dependencies.worker.workflow
             assert isinstance(workflow, LangGraphTaskWorkflow)
@@ -155,6 +243,246 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
     assert (http, qdrant) == (True, True)
 
 
+def test_mcp_connection_lives_until_worker_disposal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+    lifecycle: list[str] = []
+    active = False
+
+    @asynccontextmanager
+    async def connect(
+        endpoint: str, *, timeout_seconds: int
+    ) -> AsyncGenerator[_DirectoryMCPClient]:
+        nonlocal active
+        if endpoint == "http://127.0.0.1:9000":
+            lifecycle.append("failed")
+            raise OSError("server unavailable")
+        assert endpoint == "http://127.0.0.1:9100"
+        assert timeout_seconds == 7
+        lifecycle.append("enter")
+        active = True
+        try:
+            yield _DirectoryMCPClient()
+        finally:
+            active = False
+            lifecycle.append("exit")
+
+    monkeypatch.setattr(composition, "connect_mcp_client", connect)
+    projected = _projected_config()
+    config = replace(
+        projected,
+        mcp=MCPConfig(
+            servers=(
+                MCPServerConfig(
+                    alias="offline",
+                    endpoint="http://127.0.0.1:9000",
+                    retryable_effects=True,
+                    timeout_seconds=7,
+                    remote_tools=("render-document",),
+                ),
+                MCPServerConfig(
+                    alias="office",
+                    endpoint="http://127.0.0.1:9100",
+                    retryable_effects=True,
+                    timeout_seconds=7,
+                    remote_tools=("render-document",),
+                ),
+            ),
+            artifact_threshold_bytes=4_096,
+            max_result_bytes=8_192,
+            max_artifact_bytes=projected.artifacts.max_artifact_bytes,
+        ),
+    )
+
+    async def scenario() -> tuple[str, ...]:
+        dependencies = await build_task_worker_dependencies(config)
+        try:
+            assert active is True
+            return tuple(dependencies.mcp_tool_names)
+        finally:
+            await dependencies.dispose()
+
+    assert asyncio.run(scenario()) == ("mcp_office_render_document",)
+    assert active is False
+    assert lifecycle == ["failed", "enter", "exit"]
+
+
+def test_mcp_connection_negotiation_obeys_the_server_startup_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+    lifecycle: list[str] = []
+    never = asyncio.Event()
+
+    @asynccontextmanager
+    async def connect(
+        endpoint: str, *, timeout_seconds: int
+    ) -> AsyncGenerator[_DirectoryMCPClient]:
+        if endpoint == "http://127.0.0.1:9000":
+            assert timeout_seconds == 1
+            lifecycle.append("hang-enter")
+            try:
+                await never.wait()
+            finally:
+                lifecycle.append("hang-cancelled")
+            raise AssertionError("unreachable")
+        lifecycle.append("enter")
+        try:
+            yield _DirectoryMCPClient()
+        finally:
+            lifecycle.append("exit")
+
+    monkeypatch.setattr(composition, "connect_mcp_client", connect)
+    projected = _projected_config()
+    config = replace(
+        projected,
+        mcp=MCPConfig(
+            servers=(
+                MCPServerConfig(
+                    alias="hanging",
+                    endpoint="http://127.0.0.1:9000",
+                    retryable_effects=True,
+                    timeout_seconds=1,
+                    remote_tools=("render-document",),
+                ),
+                MCPServerConfig(
+                    alias="office",
+                    endpoint="http://127.0.0.1:9100",
+                    retryable_effects=True,
+                    timeout_seconds=7,
+                    remote_tools=("render-document",),
+                ),
+            ),
+            artifact_threshold_bytes=4_096,
+            max_result_bytes=8_192,
+            max_artifact_bytes=projected.artifacts.max_artifact_bytes,
+        ),
+    )
+
+    async def scenario() -> tuple[str, ...]:
+        dependencies = await build_task_worker_dependencies(config)
+        try:
+            return tuple(dependencies.mcp_tool_names)
+        finally:
+            await dependencies.dispose()
+
+    assert asyncio.run(scenario()) == ("mcp_office_render_document",)
+    assert lifecycle == ["hang-enter", "hang-cancelled", "enter", "exit"]
+
+
+def test_mcp_connection_closes_immediately_when_discovery_admits_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+    lifecycle: list[str] = []
+
+    @asynccontextmanager
+    async def connect(
+        endpoint: str, *, timeout_seconds: int
+    ) -> AsyncGenerator[_DirectoryMCPClient]:
+        del endpoint, timeout_seconds
+        lifecycle.append("enter")
+        try:
+            yield _DirectoryMCPClient()
+        finally:
+            lifecycle.append("exit")
+
+    async def discover_nothing(**_: object) -> tuple[()]:
+        return ()
+
+    monkeypatch.setattr(composition, "connect_mcp_client", connect)
+    monkeypatch.setattr(composition, "discover_bindings", discover_nothing)
+    projected = _projected_config()
+    config = replace(
+        projected,
+        mcp=MCPConfig(
+            servers=(
+                MCPServerConfig(
+                    alias="empty",
+                    endpoint="http://127.0.0.1:9100",
+                    retryable_effects=True,
+                    timeout_seconds=7,
+                    remote_tools=("render-document",),
+                ),
+            ),
+            artifact_threshold_bytes=4_096,
+            max_result_bytes=8_192,
+            max_artifact_bytes=projected.artifacts.max_artifact_bytes,
+        ),
+    )
+
+    async def scenario() -> None:
+        dependencies = await build_task_worker_dependencies(config)
+        try:
+            assert dependencies.mcp_tool_names == ()
+            assert lifecycle == ["enter", "exit"]
+        finally:
+            await dependencies.dispose()
+
+    asyncio.run(scenario())
+
+    assert lifecycle == ["enter", "exit"]
+
+
+def test_mcp_connection_rolls_back_when_later_worker_assembly_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+    lifecycle: list[str] = []
+
+    @asynccontextmanager
+    async def connect(
+        endpoint: str, *, timeout_seconds: int
+    ) -> AsyncGenerator[_DirectoryMCPClient]:
+        del endpoint, timeout_seconds
+        lifecycle.append("enter")
+        try:
+            yield _DirectoryMCPClient()
+        finally:
+            lifecycle.append("exit")
+
+    def fail_after_mcp(*_: object, **__: object) -> None:
+        raise RuntimeError("workflow assembly failed after MCP discovery")
+
+    monkeypatch.setattr(composition, "connect_mcp_client", connect)
+    monkeypatch.setattr(composition, "build_task_v1_handlers", fail_after_mcp)
+    projected = _projected_config()
+    config = replace(
+        projected,
+        mcp=MCPConfig(
+            servers=(
+                MCPServerConfig(
+                    alias="office",
+                    endpoint="http://127.0.0.1:9100",
+                    retryable_effects=True,
+                    timeout_seconds=7,
+                    remote_tools=("render-document",),
+                ),
+            ),
+            artifact_threshold_bytes=4_096,
+            max_result_bytes=8_192,
+            max_artifact_bytes=projected.artifacts.max_artifact_bytes,
+        ),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(RuntimeError, match="after MCP discovery"):
+            await build_task_worker_dependencies(config)
+
+    asyncio.run(scenario())
+
+    assert lifecycle == ["enter", "exit"]
+
+
 def test_real_worker_assembles_the_human_gate_and_the_ledger_that_answers_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -167,27 +495,10 @@ def test_real_worker_assembles_the_human_gate_and_the_ledger_that_answers_it(
     standstill, which is worth catching here rather than in a deployment.
     """
 
-    import agent_workbench.apps.task_worker.composition as composition
-    import agent_workbench.bootstrap.model_factory as model_factory
-
-    monkeypatch.setattr(
-        composition,
-        "build_embedder",
-        lambda config: DeterministicEmbedder(dimension=config.vector_size),
-    )
-    monkeypatch.setattr(
-        composition,
-        "build_sparse_encoder",
-        lambda _: composition.SparseEncodingUnavailable("dense-only test"),
-    )
-    monkeypatch.setattr(
-        model_factory,
-        "build_model",
-        lambda _, *, client: FakeModel(()),
-    )
+    _patch_real_runtime(monkeypatch)
 
     async def scenario() -> tuple[bool, bool, bool]:
-        dependencies = build_task_worker_dependencies(_projected_config())
+        dependencies = await build_task_worker_dependencies(_projected_config())
         try:
             return (
                 "approval" in dependencies.handlers,
@@ -233,3 +544,72 @@ def test_empty_queue_poll_exits_promptly_when_stop_is_requested() -> None:
 def test_the_console_requires_explicit_demo_opt_in() -> None:
     assert build_parser().parse_args([]).demo is False
     assert build_parser().parse_args(["--demo"]).demo is True
+
+
+def test_serve_awaits_assembly_and_disposes_if_runner_setup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agent_workbench.apps.task_worker.main as task_worker_main
+
+    lifecycle: list[str] = []
+    settings = object()
+    config = SimpleNamespace(
+        task=SimpleNamespace(claim_poll_seconds=0.01),
+        worker_concurrency=1,
+    )
+
+    class Worker:
+        async def run_once(self) -> None:
+            return None
+
+    class Dependencies:
+        worker = Worker()
+
+        async def startup(self) -> None:
+            lifecycle.append("startup")
+
+        async def dispose(self) -> None:
+            lifecycle.append("dispose")
+
+    dependencies = Dependencies()
+
+    async def assemble(configured: object, *, demo: bool) -> Dependencies:
+        assert configured is config
+        assert demo is True
+        lifecycle.append("assemble")
+        await asyncio.sleep(0)
+        return dependencies
+
+    class Runner:
+        def __init__(self, **_: object) -> None:
+            lifecycle.append("runner")
+            raise RuntimeError("runner setup failed")
+
+    def load() -> object:
+        return settings
+
+    def project(_: object) -> SimpleNamespace:
+        return config
+
+    def install_signals(_: asyncio.Event) -> None:
+        lifecycle.append("signals")
+
+    monkeypatch.setattr(task_worker_main, "load_settings", load)
+    monkeypatch.setattr(task_worker_main, "project_task_worker", project)
+    monkeypatch.setattr(task_worker_main, "build_task_worker_dependencies", assemble)
+    monkeypatch.setattr(
+        task_worker_main,
+        "_install_shutdown_handlers",
+        install_signals,
+    )
+    monkeypatch.setattr(task_worker_main, "TaskWorkerRunner", Runner)
+
+    with pytest.raises(RuntimeError, match="runner setup failed"):
+        asyncio.run(task_worker_main.serve(demo=True))
+
+    assert lifecycle == [
+        "assemble",
+        "signals",
+        "runner",
+        "dispose",
+    ]

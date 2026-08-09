@@ -22,6 +22,7 @@ from typing import Literal
 
 from pydantic import SecretStr
 
+from agent_workbench.adapters.mcp.naming import SkipReason, tool_name_for
 from agent_workbench.adapters.tools.export_artifact import (
     TOOL_NAME as EXPORT_ARTIFACT_TOOL,
 )
@@ -32,6 +33,7 @@ from agent_workbench.bootstrap.settings import Settings
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.domain.schema import JsonObject
+from agent_workbench.domain.tools import ToolName
 from agent_workbench.ports.task_workflow import GraphVersion
 
 #: The permission ceiling every v1 Task is submitted under.
@@ -73,7 +75,9 @@ TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH = AuthorizationEnvelope(
 )
 
 
-def task_authorization_envelope(*, external_search: bool) -> AuthorizationEnvelope:
+def task_authorization_envelope(
+    *, external_search: bool, mcp_tools: tuple[ToolName, ...] = ()
+) -> AuthorizationEnvelope:
     """Pick the ceiling this deployment submits Tasks under.
 
     Chosen from configuration rather than fixed, because the envelope is stored
@@ -81,11 +85,52 @@ def task_authorization_envelope(*, external_search: bool) -> AuthorizationEnvelo
     external search on must not have its historical Tasks widened by an upgrade.
     """
 
-    return (
-        TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH
+    if not mcp_tools:
+        return (
+            TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH
+            if external_search
+            else TASK_V1_AUTHORIZATION_ENVELOPE
+        )
+    tools: tuple[ToolName, ...] = (
+        (EXPORT_ARTIFACT_TOOL, EXTERNAL_SEARCH_TOOL, *mcp_tools)
         if external_search
-        else TASK_V1_AUTHORIZATION_ENVELOPE
+        else (EXPORT_ARTIFACT_TOOL, *mcp_tools)
     )
+    return AuthorizationEnvelope(
+        allowed_tools=tools,
+        max_tool_risk="external",
+        approval_required_risks=(),
+    )
+
+
+def configured_mcp_tool_names(settings: Settings) -> tuple[ToolName, ...]:
+    """The concrete MCP names a new Task may capture from this deployment.
+
+    Only servers whose effects were explicitly declared retryable are eligible.
+    Settings already validated every configured remote name; the guard remains
+    here so a future alternate Settings constructor cannot turn a refusal into
+    a silently missing permission.
+    """
+
+    resolved: list[ToolName] = []
+    for server in settings.mcp.servers:
+        if not server.retryable_effects:
+            continue
+        for remote_name in server.tools:
+            local = tool_name_for(server.alias, remote_name)
+            if isinstance(local, SkipReason):  # pragma: no cover - Settings gate
+                raise ValueError(
+                    f"configured MCP tool {remote_name!r} cannot be named: "
+                    f"{local.reason}"
+                )
+            resolved.append(local)
+    collisions = sorted({name for name in resolved if resolved.count(name) > 1})
+    if collisions:
+        raise ValueError(
+            "configured MCP tools collide after local name normalization: "
+            + ", ".join(collisions)
+        )
+    return tuple(sorted(resolved))
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +388,27 @@ class ResearchConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class MCPServerConfig:
+    """One already-validated MCP endpoint and its explicit tool allowlist."""
+
+    alias: str
+    endpoint: str
+    retryable_effects: bool
+    timeout_seconds: int
+    remote_tools: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MCPConfig:
+    """The MCP limits and endpoints owned by one Task Worker process."""
+
+    servers: tuple[MCPServerConfig, ...]
+    artifact_threshold_bytes: int
+    max_result_bytes: int
+    max_artifact_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class TaskWorkerRuntimeConfig:
     """The minimum configuration of one Worker process.
 
@@ -375,6 +441,7 @@ class TaskWorkerRuntimeConfig:
     runtime: AgentRuntimeConfig | None = None
     multi_agent: MultiAgentConfig | None = None
     research: ResearchConfig | None = None
+    mcp: MCPConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,7 +525,8 @@ def project_task(settings: Settings) -> TaskConfig:
         policy_revision=settings.policy.revision,
         policy_fingerprint=settings.policy_fingerprint(),
         default_authorization_envelope=task_authorization_envelope(
-            external_search=settings.research.enabled
+            external_search=settings.research.enabled,
+            mcp_tools=configured_mcp_tool_names(settings),
         ),
     )
 
@@ -538,6 +606,27 @@ def project_task_worker(
             ),
         ),
         research=_project_research(settings),
+        mcp=(
+            MCPConfig(
+                servers=tuple(
+                    MCPServerConfig(
+                        alias=server.alias,
+                        endpoint=server.endpoint,
+                        retryable_effects=server.retryable_effects,
+                        timeout_seconds=server.timeout_seconds,
+                        remote_tools=server.tools,
+                    )
+                    for server in settings.mcp.servers
+                ),
+                artifact_threshold_bytes=(
+                    settings.runtime.tool_result_artifact_threshold_bytes
+                ),
+                max_result_bytes=settings.policy.max_tool_result_bytes,
+                max_artifact_bytes=settings.artifact_store.max_artifact_bytes,
+            )
+            if settings.mcp.servers
+            else None
+        ),
     )
 
 
@@ -712,6 +801,8 @@ __all__ = [
     "EventStreamConfig",
     "IngestionConfig",
     "IngestionWorkerRuntimeConfig",
+    "MCPConfig",
+    "MCPServerConfig",
     "ModelConfig",
     "ModelProfileConfig",
     "MultiAgentConfig",
@@ -720,6 +811,7 @@ __all__ = [
     "RetrievalConfig",
     "TaskConfig",
     "TaskWorkerRuntimeConfig",
+    "configured_mcp_tool_names",
     "project_api",
     "project_ingestion_worker",
     "project_task",

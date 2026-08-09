@@ -1272,7 +1272,9 @@ web
 只在 Resume v1 完成后单独排期：
 
 - CrewAI `BenchmarkTaskRunner`；
-- MCP Adapter；
+- ~~MCP Adapter~~：WP14-01 已按 [ADR-025](./adr/0025-mcp-adapter.md) 实现官方 SDK v2
+  Streamable HTTP、显式目录、Task 信封、writer 动态工具、结果映射、生命周期、协议 E2E
+  与 benchmark；仍是默认关闭的 Optional Lab，不改变 PostgreSQL 主链事实源；
 - Langfuse self-hosted profile；
 - Runtime mid-loop snapshot/resume；
 - Tool 级动态审批；

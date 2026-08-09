@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.7"
+config_schema_version = "1.8"
 architecture_baseline = "1.3"
 
 [api]
@@ -133,6 +133,8 @@ temperature = 0.0
 max_output_tokens = 8192
 timeout_seconds = 120
 max_retries = 2
+# Require a tool on the opening provider turn only. After its ToolResult the
+# adapter keeps tools available but returns tool_choice to auto.
 tool_calling_required = true
 prompt_cache_enabled = true
 
@@ -317,14 +319,18 @@ timeout_seconds = 60
 # tool names are written into the Task authorization envelope, so a checkout
 # that never configured this must not widen anything on upgrade.
 #
-# Each entry needs `alias`, `endpoint` and an explicit `retryable_effects`, and
-# `optional_labs.mcp_adapter` must be true or startup fails rather than quietly
-# ignoring what was written here. Example:
+# Each entry needs `alias`, `endpoint`, an explicit remote-tool allowlist and an
+# explicit `retryable_effects`. `optional_labs.mcp_adapter` must be true or
+# startup fails rather than quietly ignoring what was written here. Setting
+# `retryable_effects=true` means every allowlisted tool is safe to invoke again
+# when the whole Task graph node replays; it is stronger than HTTP retryability.
+# Example:
 #
 #   [[mcp.servers]]
 #   alias = "office"
 #   endpoint = "https://mcp.internal.example/office"
-#   retryable_effects = false
+#   tools = ["render_document", "lookup_template"]
+#   retryable_effects = true
 [mcp]
 servers = []
 

@@ -143,7 +143,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.7"] = "1.7"
+    config_schema_version: Literal["1.8"] = "1.8"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -343,6 +343,8 @@ class ModelProfileSettings(StrictModel):
     max_output_tokens: int = Field(default=8192, ge=1)
     timeout_seconds: int = Field(default=120, ge=1, le=3600)
     max_retries: int = Field(default=2, ge=0, le=10)
+    # Require one tool on the opening provider turn; after a ToolResult the
+    # adapter switches back to auto so the Agent can finish.
     tool_calling_required: bool = False
     prompt_cache_enabled: bool = True
 
@@ -744,8 +746,8 @@ class MCPServerSettings(StrictModel):
 
     #: A name we choose, not the one the server reports. It becomes a segment of
     #: every tool name derived from this server, and those names reach the event
-    #: stream, the side-effect ledger key and the Task authorization envelope --
-    #: none of which may depend on a value a third-party process can change.
+    #: stream and the Task authorization envelope -- neither may depend on a
+    #: value a third-party process can change.
     #:
     #: Bounded well under `ToolName`'s 64 characters because the derived name is
     #: `mcp_<alias>_<tool>` and the remote half needs room.
@@ -758,17 +760,63 @@ class MCPServerSettings(StrictModel):
     #: decide it. Adding it is a deliberate change here, not a config value.
     transport: Literal["http"] = "http"
     endpoint: str = Field(min_length=1)
-    #: No default, deliberately. This says whether repeating a call to this
-    #: server repeats its side effects out there, and we cannot observe the
-    #: answer from here. Both wrong guesses are bad in different ways, so the
-    #: deployment states it or the process does not start.
+    #: An explicit deployment allowlist, not whatever the server happens to
+    #: advertise today.  The API can therefore freeze concrete local names into
+    #: a Task at submission without talking to MCP, while the Worker still
+    #: intersects this list with the directory it discovered at startup.
+    tools: tuple[
+        Annotated[
+            str,
+            StringConstraints(
+                min_length=1,
+                max_length=128,
+                pattern=r"^[A-Za-z0-9_. -]+$",
+            ),
+        ],
+        ...,
+    ] = Field(min_length=1)
+    #: No default, deliberately. True says every allowlisted tool is safe to
+    #: invoke again when the whole graph node replays, even if the model emits
+    #: slightly different arguments. That is stronger than transport retry;
+    #: only the deployment can know whether the remote effects satisfy it.
     retryable_effects: bool
     timeout_seconds: int = Field(default=30, ge=1, le=600)
 
     @field_validator("endpoint")
     @classmethod
     def validate_endpoint(cls, value: str) -> str:
-        return _validate_service_endpoint(value, field_name="mcp.servers.endpoint")
+        endpoint = _validate_service_endpoint(value, field_name="mcp.servers.endpoint")
+        parsed = urlsplit(endpoint)
+        if parsed.scheme.lower() == "http" and parsed.hostname not in LOOPBACK_HOSTS:
+            raise ValueError(
+                "mcp.servers.endpoint must use HTTPS unless it is a loopback URL"
+            )
+        return endpoint
+
+    @model_validator(mode="after")
+    def validate_local_tool_names(self) -> MCPServerSettings:
+        """Refuse an allowlist that cannot name distinct local tools."""
+
+        # Local import keeps the raw settings module from becoming part of the
+        # adapter's import graph; the pure naming function depends only on the
+        # domain ToolName contract.
+        from agent_workbench.adapters.mcp.naming import SkipReason, tool_name_for
+
+        resolved: list[str] = []
+        for remote_name in self.tools:
+            local = tool_name_for(self.alias, remote_name)
+            if isinstance(local, SkipReason):
+                raise ValueError(
+                    f"mcp tool {remote_name!r} cannot be named locally: {local.reason}"
+                )
+            resolved.append(local)
+        collisions = sorted({name for name in resolved if resolved.count(name) > 1})
+        if collisions:
+            raise ValueError(
+                "mcp.servers.tools contains names that normalize to the same "
+                "local tool: " + ", ".join(collisions)
+            )
+        return self
 
 
 class MCPSettings(StrictModel):

@@ -2,6 +2,7 @@ import type {
   ApprovalListResponse,
   ApprovalStatus,
   ApprovalView,
+  ArtifactDownloadTarget,
   AskResponse,
   CreateSessionResponse,
   CreateUploadResponse,
@@ -19,6 +20,9 @@ import type {
   TaskView,
   UploadContentResponse,
 } from "./types";
+
+const WORD_DOCUMENT_MEDIA_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -361,8 +365,9 @@ export async function checkHealth(path: "/health/live" | "/health/ready") {
 
 export async function downloadArtifact(
   identity: PrincipalIdentity,
-  artifactId: string,
+  target: string | ArtifactDownloadTarget,
 ): Promise<void> {
+  const artifactId = typeof target === "string" ? target : target.artifact_id;
   const response = await fetch(`/v1/artifacts/${encodeURIComponent(artifactId)}`, {
     headers: identityHeaders(identity),
   });
@@ -371,9 +376,56 @@ export async function downloadArtifact(
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = artifactId;
+  anchor.download =
+    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
+    (typeof target === "string" ? null : safeDownloadFilename(target.filename)) ??
+    defaultArtifactFilename(response.headers.get("content-type"));
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function filenameFromContentDisposition(header: string | null): string | null {
+  if (header === null) return null;
+
+  const extended = /(?:^|;)\s*filename\*\s*=\s*UTF-8''([^;]*)/i.exec(header);
+  if (extended?.[1] !== undefined) {
+    try {
+      const decoded = safeDownloadFilename(decodeURIComponent(extended[1].trim()));
+      if (decoded !== null) return decoded;
+    } catch {
+      // A malformed extended parameter may still have a valid ASCII fallback.
+    }
+  }
+
+  const basic =
+    /(?:^|;)\s*filename\s*=\s*(?:"((?:\\.|[^"\\])*)"|([^;]*))/i.exec(header);
+  const raw = basic?.[1]?.replace(/\\(.)/g, "$1") ?? basic?.[2];
+  return safeDownloadFilename(raw);
+}
+
+function safeDownloadFilename(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const cleaned = value.trim();
+  if (
+    cleaned === "" ||
+    cleaned === "." ||
+    cleaned === ".." ||
+    cleaned.length > 255 ||
+    cleaned.includes("/") ||
+    cleaned.includes("\\") ||
+    Array.from(cleaned).some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint < 32 || codePoint === 127;
+    })
+  ) {
+    return null;
+  }
+  return cleaned;
+}
+
+function defaultArtifactFilename(contentType: string | null): string {
+  const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === WORD_DOCUMENT_MEDIA_TYPE ? "mcp-result.docx" : "artifact";
 }
 
 /**

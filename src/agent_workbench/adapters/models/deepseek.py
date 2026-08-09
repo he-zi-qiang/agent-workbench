@@ -119,6 +119,10 @@ class DeepSeekProfile:
     max_output_tokens: int | None = None
     timeout_seconds: float = 120.0
     max_retries: int = 0
+    # Require a tool on the opening model turn only. Once a tool result is the
+    # newest message, the provider must be free to synthesize a final answer or
+    # voluntarily call another tool; requiring another call would make every
+    # tool-using Agent loop consume its entire tool budget.
     tool_calling_required: bool = False
 
     def __post_init__(self) -> None:
@@ -369,9 +373,12 @@ class DeepSeekModel:
             payload["max_tokens"] = max_tokens
         if request.tools:
             payload["tools"] = _tool_definitions(request.tools)
-            if profile.tool_calling_required:
-                # Only meaningful alongside tools: sending it without any would
-                # ask the provider to require a choice from an empty set.
+            if profile.tool_calling_required and (
+                not request.messages or request.messages[-1].role != "tool"
+            ):
+                # `required` is an opening-turn policy. After a ToolResult the
+                # same tools stay advertised under the provider's default auto
+                # mode, so the model may either continue or finish.
                 payload["tool_choice"] = "required"
         return payload
 

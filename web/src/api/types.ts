@@ -115,6 +115,11 @@ export interface ArtifactRef {
   filename?: string | null;
 }
 
+export type ArtifactDownloadTarget = Pick<
+  ArtifactRef,
+  "artifact_id" | "filename"
+>;
+
 export type EventPayload = {
   kind: string;
   [key: string]: unknown;

@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiRequest, askChat, createTask, identityHeaders } from "./client";
-import type { PrincipalIdentity } from "./types";
+import {
+  apiRequest,
+  askChat,
+  createTask,
+  downloadArtifact,
+  identityHeaders,
+} from "./client";
+import type { ArtifactDownloadTarget, PrincipalIdentity } from "./types";
 
 const identity: PrincipalIdentity = {
   tenantId: "tenant_a",
@@ -8,7 +14,10 @@ const identity: PrincipalIdentity = {
   scopes: [],
 };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("identity headers", () => {
   it("omits an empty scopes header", () => {
@@ -97,5 +106,74 @@ describe("apiRequest", () => {
         "task:stable-attempt",
       );
     }
+  });
+});
+
+describe("downloadArtifact", () => {
+  it("uses the RFC 5987 response filename instead of the artifact id", async () => {
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    const createObjectURL = vi.fn(() => "blob:download");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["word bytes"]), {
+        status: 200,
+        headers: {
+          "content-disposition":
+            "attachment; filename=\"download\"; filename*=UTF-8''%E6%8A%A5%E5%91%8A.docx",
+          "content-type":
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        },
+      }),
+    );
+
+    await downloadArtifact(identity, "art_opaque_1");
+
+    expect(click).toHaveBeenCalledOnce();
+    expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe("报告.docx");
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:download");
+  });
+
+  it("falls back to the validated ArtifactRef filename when the header is absent", async () => {
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:download"),
+      revokeObjectURL: vi.fn(),
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["word bytes"]), { status: 200 }),
+    );
+    const artifact: ArtifactDownloadTarget = {
+      artifact_id: "art_opaque_2",
+      filename: "mcp-result.docx",
+    };
+
+    await downloadArtifact(identity, artifact);
+
+    expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe(
+      "mcp-result.docx",
+    );
+  });
+
+  it("never turns an artifact id into a fallback filename", async () => {
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:download"),
+      revokeObjectURL: vi.fn(),
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["bytes"]), { status: 200 }),
+    );
+
+    await downloadArtifact(identity, "art_secret_storage_key");
+
+    expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe("artifact");
   });
 });
