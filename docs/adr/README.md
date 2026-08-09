@@ -27,3 +27,5 @@
 | [ADR-027 只读取外部世界，写只写进自己的 artifact](./0027-read-outward-write-inward.md) | Task 能不能自己取页面、下载文件、生成 Office 文档；这三件事的共同边界 | 接受 |
 | [ADR-028 任务工作区是可变的名字压在不可变的字节上](./0028-task-workspace.md) | Agent 能不能在一个 Task 内积累并加工产物；可变状态与"节点整体重放"怎么共存 | 接受 |
 | [ADR-029 沙箱是纯函数，断网是它保持纯的原因](./0029-ephemeral-sandbox.md) | Agent 能不能跑代码；跑代码怎么不把前面几条 ADR 的重放保证作废 | 接受 |
+| [ADR-030 会干活的节点由成本和时限管](./0030-working-nodes-are-governed-by-cost.md) | 带工具迭代的 run 该由什么约束；`max_steps` 域上限 100 还合不合适；整文件覆写够不够 | 接受 |
+| [ADR-031 通用任务走第二张图](./0031-a-second-graph.md) | 不是"写调研报告"的任务该走什么形状；模型能不能决定自己的步骤顺序 | 接受 |
