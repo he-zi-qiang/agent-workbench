@@ -1,0 +1,303 @@
+"""The MCP surface of the sandbox process, and the knobs it deliberately lacks.
+
+The container itself is exercised in ``test_sandbox_isolation.py``. What is
+under test here is the protocol boundary: what the tool declares, what a
+refusal looks like on the wire, and the fact that nothing outside
+``executor.ISOLATION_FLAGS`` can reach the isolation.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+from dataclasses import dataclass
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from mcp import Client
+
+from agent_workbench.apps.sandbox_mcp import executor as executor_module
+from agent_workbench.apps.sandbox_mcp import main as main_module
+from agent_workbench.apps.sandbox_mcp.contract import SandboxFile, SandboxRequest
+from agent_workbench.apps.sandbox_mcp.executor import (
+    ISOLATION_FLAGS,
+    SandboxExecutionError,
+    SandboxExecutor,
+    SandboxOutcome,
+)
+from agent_workbench.apps.sandbox_mcp.server import (
+    HEALTH_PATH,
+    TOOL_NAME,
+    create_app,
+    create_server,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _StubExecutor(SandboxExecutor):
+    """Stands in for the container so the protocol can be tested in memory."""
+
+    outcome: SandboxOutcome | None = None
+    failure: SandboxExecutionError | None = None
+    available: bool = True
+
+    async def probe(self) -> bool:
+        return self.available
+
+    async def run(self, request: SandboxRequest) -> SandboxOutcome:
+        _seen.append(request)
+        if self.failure is not None:
+            raise self.failure
+        assert self.outcome is not None
+        return self.outcome
+
+
+_seen: list[SandboxRequest] = []
+
+
+def _outcome(**overrides: Any) -> SandboxOutcome:
+    fields: dict[str, Any] = {
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "",
+        "outputs": (),
+    }
+    return SandboxOutcome(**{**fields, **overrides})
+
+
+def _call(executor: SandboxExecutor, arguments: dict[str, Any]) -> Any:
+    async def scenario() -> Any:
+        async with Client(
+            create_server(executor), cache=None, raise_exceptions=True
+        ) as client:
+            return await client.call_tool(TOOL_NAME, arguments)
+
+    return asyncio.run(scenario())
+
+
+def test_the_server_declares_exactly_one_tool() -> None:
+    async def scenario() -> Any:
+        async with Client(
+            create_server(_StubExecutor(outcome=_outcome())),
+            cache=None,
+            raise_exceptions=True,
+        ) as client:
+            return await client.list_tools()
+
+    tools = asyncio.run(scenario()).tools
+    assert [tool.name for tool in tools] == [TOOL_NAME]
+
+    tool = tools[0]
+    annotations = tool.annotations
+    assert annotations is not None
+    # It executes code, so it is not read-only. It is still repeatable and
+    # closed: ADR-029 §3.4 is what lets `idempotent` and a shut world both be
+    # true here, and the network switch is what lets §3.4 hold.
+    assert annotations.read_only_hint is False
+    assert annotations.destructive_hint is False
+    assert annotations.idempotent_hint is True
+    assert annotations.open_world_hint is False
+
+
+def test_a_successful_run_returns_structured_content_and_a_summary() -> None:
+    outcome = _outcome(
+        exit_code=0,
+        stdout="total 382\n",
+        outputs=(SandboxFile(name="summary.txt", content=b"total=382\n"),),
+    )
+
+    result = _call(
+        _StubExecutor(outcome=outcome),
+        {"script": "print('total 382')"},
+    )
+
+    assert result.is_error is False
+    structured = result.structured_content
+    assert structured is not None
+    assert structured["exit_code"] == 0
+    assert structured["stdout"] == "total 382\n"
+    assert structured["outputs"] == [
+        {
+            "name": "summary.txt",
+            "content_base64": base64.b64encode(b"total=382\n").decode("ascii"),
+            "size_bytes": 10,
+        }
+    ]
+
+
+def test_the_model_facing_text_names_the_outputs_without_carrying_them() -> None:
+    """Output bytes belong in the structured channel.
+
+    A four-megabyte file base64-encoded into the model's context is the whole
+    context spent on something the caller was going to write to a workspace
+    anyway.
+    """
+
+    payload = b"x" * 4096
+    result = _call(
+        _StubExecutor(
+            outcome=_outcome(outputs=(SandboxFile(name="big.bin", content=payload),))
+        ),
+        {"script": "print(1)"},
+    )
+
+    text = "".join(
+        block.text for block in result.content if getattr(block, "text", None)
+    )
+    assert "big.bin" in text
+    assert base64.b64encode(payload).decode("ascii") not in text
+
+
+def test_a_non_zero_exit_is_a_result_and_not_a_protocol_error() -> None:
+    """A script that raised is the answer, and its traceback is the useful part."""
+
+    result = _call(
+        _StubExecutor(
+            outcome=_outcome(exit_code=1, stderr="ValueError: boom\n"),
+        ),
+        {"script": "raise ValueError('boom')"},
+    )
+
+    assert result.is_error is False
+    structured = result.structured_content
+    assert structured is not None
+    assert structured["exit_code"] == 1
+    assert "ValueError: boom" in structured["stderr"]
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["timeout", "stdout_too_large", "too_many_outputs", "sandbox_unavailable"],
+)
+def test_a_refused_run_is_an_error_result_carrying_its_code(code: str) -> None:
+    """The caller has to tell a ceiling from a broken sandbox, and only the
+    code says which."""
+
+    result = _call(
+        _StubExecutor(failure=SandboxExecutionError(code, "refused")),
+        {"script": "print(1)"},
+    )
+
+    assert result.is_error is True
+    assert code in "".join(block.text for block in result.content)
+
+
+def test_an_invalid_request_never_reaches_the_container() -> None:
+    """The control is the accepted form of the same call, one test above."""
+
+    _seen.clear()
+    result = _call(
+        _StubExecutor(outcome=_outcome()),
+        {"script": "print(1)", "inputs": [{"name": "../escape", "content_base64": ""}]},
+    )
+
+    assert result.is_error is True
+    assert _seen == []
+
+
+def test_a_refusal_does_not_echo_the_script() -> None:
+    """These strings travel into events, operator logs and the model's context."""
+
+    secret = "print('SENSITIVE-MARKER')"
+    result = _call(
+        _StubExecutor(outcome=_outcome()),
+        {"script": secret, "inputs": [{"name": "ok.txt", "content_base64": "!!!"}]},
+    )
+
+    assert result.is_error is True
+    assert "SENSITIVE-MARKER" not in "".join(block.text for block in result.content)
+
+
+def test_an_unknown_tool_is_refused() -> None:
+    async def scenario() -> Any:
+        async with Client(
+            create_server(_StubExecutor(outcome=_outcome())),
+            cache=None,
+            raise_exceptions=True,
+        ) as client:
+            return await client.call_tool("render_document", {})
+
+    result = asyncio.run(scenario())
+    assert result.is_error is True
+
+
+def test_health_reports_the_runtime_rather_than_a_flat_ok() -> None:
+    """A liveness check that says ok without a runtime is how a deployment
+    with no sandbox looks healthy until the first call (ADR-029 §3.6)."""
+
+    with TestClient(create_app(executor=_StubExecutor(available=True))) as client:  # pyright: ignore[reportArgumentType]
+        healthy = client.get(HEALTH_PATH)
+    assert healthy.status_code == 200
+    assert healthy.json()["container_runtime_available"] is True
+
+    with TestClient(create_app(executor=_StubExecutor(available=False))) as client:  # pyright: ignore[reportArgumentType]
+        degraded = client.get(HEALTH_PATH)
+    assert degraded.status_code == 503
+    assert degraded.json()["container_runtime_available"] is False
+
+
+def test_every_isolation_flag_is_passed_to_the_runtime() -> None:
+    """A regression guard, not the proof.
+
+    ``test_sandbox_isolation.py`` is where the network, the read-only root and
+    the wall clock are actually tried. This one covers the flags whose effect
+    no test can observe from inside a script -- the memory and CPU ceilings --
+    and catches a reordering that drops one on the floor.
+    """
+
+    captured: list[tuple[str, ...]] = []
+
+    async def fake_exec(*args: str, **kwargs: object) -> object:
+        captured.append(args)
+        raise OSError("not started")
+
+    async def scenario() -> None:
+        executor = SandboxExecutor()
+        with pytest.raises(SandboxExecutionError):
+            await executor.run(SandboxRequest(script="print(1)", inputs=()))
+
+    original = executor_module.asyncio.create_subprocess_exec
+    executor_module.asyncio.create_subprocess_exec = fake_exec  # type: ignore[assignment]
+    try:
+        asyncio.run(scenario())
+    finally:
+        executor_module.asyncio.create_subprocess_exec = original  # type: ignore[assignment]
+
+    assert len(captured) == 1
+    argv = captured[0]
+    for flag in ISOLATION_FLAGS:
+        assert flag in argv
+    assert "--rm" in argv
+    # No bind mount of any shape, however spelled.
+    assert not any(
+        argument.startswith(("--volume", "-v", "--mount")) for argument in argv
+    )
+
+
+def test_the_command_line_exposes_no_way_to_weaken_the_sandbox() -> None:
+    """ADR-029 §3.2: the isolation is not a configuration surface.
+
+    The runtime and the image are deployment facts, like --host and --port.
+    Anything that would relax the container is absent, and this is the test
+    that fails when somebody adds one.
+    """
+
+    parser_flags: set[str] = set()
+
+    class _Recorder:
+        def add_argument(self, *names: str, **kwargs: object) -> None:
+            parser_flags.update(name for name in names if name.startswith("--"))
+
+        def parse_args(self, argv: object) -> None:
+            raise SystemExit(0)
+
+    original = main_module.argparse.ArgumentParser
+    main_module.argparse.ArgumentParser = lambda **kwargs: _Recorder()  # type: ignore[assignment]
+    try:
+        with pytest.raises(SystemExit):
+            main_module.main([])
+    finally:
+        main_module.argparse.ArgumentParser = original  # type: ignore[assignment]
+
+    assert parser_flags == {"--host", "--port", "--container-runtime", "--image"}
