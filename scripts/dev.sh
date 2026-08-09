@@ -11,13 +11,21 @@
 #   scripts/dev.sh word-check   # health + tools/list probe
 #   scripts/dev.sh word-api     # API with explicit Word MCP profile
 #   scripts/dev.sh word-worker  # real Worker; requires a model provider key
+#   scripts/dev.sh web-server   # loopback read-only web MCP server
+#   scripts/dev.sh web-check    # health + tools/list probe
+#   scripts/dev.sh web-api      # API with explicit web MCP profile
+#   scripts/dev.sh web-worker   # real Worker; requires a model provider key
 #   scripts/dev.sh smoke        # drive the whole thing and print what happened
 #
 # This is the one place that knows the local environment. The three DSNs live
 # here rather than in the committed TOML because settings forbids connection
 # strings in configuration files -- one is a credential even when today's has no
 # password. Ordinary commands use config/config.local.toml; the explicit
-# word-api/word-worker pair uses config/config.word-local.toml.
+# word-api/word-worker pair uses config/config.word-local.toml, and the
+# web-api/web-worker pair uses config/config.web-local.toml. The two profiles
+# are separate files rather than one: each freezes its own tool names into
+# every newly submitted Task envelope, so a single combined profile would
+# widen every Task by both.
 #
 # Whether chat runs depends on one thing: AW_SECRETS__DEEPSEEK_API_KEY. With it,
 # the API serves chat and the Task worker runs the real model-calling graph.
@@ -52,7 +60,7 @@ TENANT="${TENANT:-tenant_local}"
 PRINCIPAL="${PRINCIPAL:-user_local}"
 API_URL="${API_URL:-http://127.0.0.1:8000}"
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-}" in
 services)
@@ -123,7 +131,8 @@ word-server)
   ;;
 
 word-check)
-  exec "$PYTHON" scripts/smoke_word_mcp.py \
+  exec "$PYTHON" scripts/smoke_mcp_server.py \
+    --label word \
     --endpoint "http://127.0.0.1:8765/mcp" \
     --health-url "http://127.0.0.1:8765/health" \
     --expect-tool render_document
@@ -146,11 +155,55 @@ word-worker)
     echo "word-worker requires AW_SECRETS__DEEPSEEK_API_KEY; refusing a demo graph" >&2
     exit 2
   fi
-  "$PYTHON" scripts/smoke_word_mcp.py \
+  "$PYTHON" scripts/smoke_mcp_server.py \
+    --label word \
     --endpoint "http://127.0.0.1:8765/mcp" \
     --health-url "http://127.0.0.1:8765/health" \
     --expect-tool render_document >&2
   echo "Word profile + model provider configured: real graph" >&2
+  exec "$PYTHON" -m agent_workbench.apps.task_worker.main
+  ;;
+
+web-server)
+  # It reads and never writes: two GETs, both through the resolved-address
+  # guard, and no path or ownership field in either contract. Downloaded bytes
+  # become an artifact inside the Task Worker process, not here.
+  exec "$PYTHON" -m agent_workbench.apps.web_mcp.main
+  ;;
+
+web-check)
+  exec "$PYTHON" scripts/smoke_mcp_server.py \
+    --label web \
+    --endpoint "http://127.0.0.1:8767/mcp" \
+    --health-url "http://127.0.0.1:8767/health" \
+    --expect-tool fetch_page \
+    --expect-tool download_document
+  ;;
+
+web-api)
+  export AW_CONFIG_FILE=config/config.web-local.toml
+  if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "web profile selected; provider key is available to real Worker processes" >&2
+  else
+    echo "web profile, no provider key: API can submit but no real web Worker can run" >&2
+  fi
+  shift
+  exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
+  ;;
+
+web-worker)
+  export AW_CONFIG_FILE=config/config.web-local.toml
+  if [ -z "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "web-worker requires AW_SECRETS__DEEPSEEK_API_KEY; refusing a demo graph" >&2
+    exit 2
+  fi
+  "$PYTHON" scripts/smoke_mcp_server.py \
+    --label web \
+    --endpoint "http://127.0.0.1:8767/mcp" \
+    --health-url "http://127.0.0.1:8767/health" \
+    --expect-tool fetch_page \
+    --expect-tool download_document >&2
+  echo "web profile + model provider configured: real graph" >&2
   exec "$PYTHON" -m agent_workbench.apps.task_worker.main
   ;;
 
