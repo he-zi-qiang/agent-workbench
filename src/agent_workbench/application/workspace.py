@@ -162,10 +162,28 @@ class TaskWorkspace:
         return ref.artifact_id
 
 
+@dataclass(slots=True)
+class WorkspaceSession:
+    """One node's view of the working set, and where its next version lands.
+
+    Mutable on purpose, and the only mutable thing here. The node reads
+    :attr:`version` after its agent run and puts it in the state update; a node
+    that dies first returns no update, so nothing it advanced is visible to the
+    attempt that replaces it.
+
+    It lives in this layer rather than beside the tool handlers because the
+    graph has to create one and the graph may not import an adapter.
+    """
+
+    workspace: TaskWorkspace
+    version: Identifier | None = None
+
+
 __all__ = [
     "MANIFEST_FILENAME",
     "MANIFEST_MEDIA_TYPE",
     "TaskWorkspace",
     "WorkspaceEntryNotFoundError",
     "WorkspaceListing",
+    "WorkspaceSession",
 ]

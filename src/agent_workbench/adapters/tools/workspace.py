@@ -16,19 +16,19 @@ invert it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from pydantic import JsonValue
 
 from agent_workbench.application.workspace import (
-    TaskWorkspace,
     WorkspaceEntryNotFoundError,
+    WorkspaceSession,
 )
 from agent_workbench.domain.errors import ErrorInfo
-from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.domain.workspace import WorkspaceOverflowError
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
+from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 LIST_TOOL_NAME = "workspace_list"
 READ_TOOL_NAME = "workspace_read"
@@ -53,25 +53,31 @@ _NAME_SCHEMA: dict[str, JsonValue] = {
 }
 
 
-@dataclass(slots=True)
-class WorkspaceSession:
-    """One node's view of the working set, and where its next version lands.
+class WorkspaceUnavailableError(RuntimeError):
+    """A workspace tool ran outside a node that entered a session."""
 
-    Mutable on purpose, and the only mutable thing in this module. The node
-    reads :attr:`version` after its agent run and puts it in the state update;
-    a node that dies first returns no update, so nothing it advanced here is
-    visible to the attempt that replaces it.
+
+def _session(scope: WorkspaceScope) -> WorkspaceSession:
+    """The session this node entered, or a refusal.
+
+    An unentered scope is not a reason to create one: a workspace no node
+    committed is one no checkpoint names, so everything written into it would
+    be discarded at the end of the run without anything saying so.
     """
 
-    workspace: TaskWorkspace
-    version: Identifier | None = field(default=None)
+    session = scope.current()
+    if session is None:
+        raise WorkspaceUnavailableError(
+            "no workspace session is entered for this node invocation"
+        )
+    return session
 
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceListTool:
     """What is in the working set, without reading any of it."""
 
-    session: WorkspaceSession
+    scope: WorkspaceScope
 
     def binding(self) -> ToolBinding:
         return ToolBinding(spec=self.spec(), handler=self.handle)
@@ -91,7 +97,8 @@ class WorkspaceListTool:
         )
 
     async def handle(self, invocation: ToolInvocation) -> ToolResult:
-        listing = await self.session.workspace.list(self.session.version)
+        session = _session(self.scope)
+        listing = await session.workspace.list(session.version)
         if not listing:
             return ToolResult.succeeded(
                 invocation.call, content="The workspace is empty."
@@ -107,7 +114,7 @@ class WorkspaceListTool:
 class WorkspaceReadTool:
     """One file out of the working set."""
 
-    session: WorkspaceSession
+    scope: WorkspaceScope
 
     def binding(self) -> ToolBinding:
         return ToolBinding(spec=self.spec(), handler=self.handle)
@@ -133,8 +140,9 @@ class WorkspaceReadTool:
 
     async def handle(self, invocation: ToolInvocation) -> ToolResult:
         name = str(invocation.call.arguments.get("name", ""))
+        session = _session(self.scope)
         try:
-            content = await self.session.workspace.read(self.session.version, name)
+            content = await session.workspace.read(session.version, name)
         except WorkspaceEntryNotFoundError:
             # Named rather than empty: a model that received "" would build on
             # something that was never there, and the mistake would surface much
@@ -164,7 +172,7 @@ class WorkspaceReadTool:
 class WorkspaceWriteTool:
     """Bind a name to new bytes, producing the next workspace version."""
 
-    session: WorkspaceSession
+    scope: WorkspaceScope
 
     def binding(self) -> ToolBinding:
         # No operation key. The effect lands in this project's own versioned
@@ -209,9 +217,10 @@ class WorkspaceWriteTool:
         name = str(arguments.get("name", ""))
         content = str(arguments.get("content", ""))
         media_type = str(arguments.get("media_type") or _media_type_for(name))
+        session = _session(self.scope)
         try:
-            self.session.version = await self.session.workspace.write(
-                self.session.version,
+            session.version = await session.workspace.write(
+                session.version,
                 name,
                 content.encode("utf-8"),
                 media_type=media_type,
@@ -261,6 +270,6 @@ __all__ = [
     "WRITE_TOOL_NAME",
     "WorkspaceListTool",
     "WorkspaceReadTool",
-    "WorkspaceSession",
+    "WorkspaceUnavailableError",
     "WorkspaceWriteTool",
 ]
