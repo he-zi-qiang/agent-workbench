@@ -72,9 +72,14 @@ listener_healthcheck_seconds = 30
 [coordination]
 registry_backend = "postgresql"
 claim_strategy = "skip_locked"
-# The current Task Worker is intentionally single-process. Multi-worker
-# claiming waits for the lease/fencing work package rather than being implied
-# by a config number.
+# How many Tasks *one* Worker process runs at once (ADR-024). Raising it costs
+# one guard connection and one concurrent provider call per lane, so the
+# default stays 1 and the ceiling is `database.guard_connection_budget`, which
+# Settings cross-validates.
+#
+# Multi-*process* claiming is still not claimed to work. That is the question
+# the lease epoch exists for, and nothing here tests two processes against each
+# other; this number is process-local and says nothing about that.
 worker_concurrency = 1
 claim_batch_size = 1
 claim_poll_interval_ms = 1000

@@ -14,8 +14,13 @@ something.
 
 Claims are short ``FOR UPDATE SKIP LOCKED`` transactions.  A claim grants a
 time-bounded, monotonically fenced epoch; every execution-side lifecycle write
-must match that epoch, owner, and unexpired lease.  E1 intentionally fences
-only this Registry row.  Fencing the LangGraph checkpointer is E2 work.
+must match that epoch, owner, and unexpired lease.
+
+E1 fenced only this Registry row and left the LangGraph checkpointer to E2.
+E2 landed: ``PostgresCheckpointSaver._assert_fence`` re-checks the same
+owner-epoch-expiry predicate, under ``FOR UPDATE``, before every checkpoint
+write, and the Task Worker composes it with ``require_fence=True``.  The two
+fences are what let one process run several Tasks at once (ADR-024).
 """
 
 from __future__ import annotations
@@ -760,9 +765,10 @@ def _live_lease_conditions(
 ) -> tuple[ColumnElement[bool], ...]:
     """The one fenced Registry-write predicate used by heartbeat and settle.
 
-    This is not E2 fencing: it protects only the Task row.  A stale graph may
-    still attempt a checkpoint write until the checkpointer gains the same
-    epoch predicate in the following work package.
+    It protects the Task row.  The checkpointer now asserts the same predicate
+    on its own writes (``PostgresCheckpointSaver._assert_fence``), so a stale
+    graph can no longer write checkpoints under a lease it has lost -- which
+    was the open half of this when the comment above said "E2 work".
     """
 
     return (

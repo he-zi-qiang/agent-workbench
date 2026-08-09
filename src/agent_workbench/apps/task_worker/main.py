@@ -49,6 +49,7 @@ async def serve(*, demo: bool) -> None:
     runner = TaskWorkerRunner(
         run_once=dependencies.worker.run_once,
         poll_seconds=config.task.claim_poll_seconds,
+        concurrency=config.worker_concurrency,
     )
     try:
         await dependencies.startup()

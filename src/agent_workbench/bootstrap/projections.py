@@ -344,18 +344,27 @@ class ResearchConfig:
 
 @dataclass(frozen=True, slots=True)
 class TaskWorkerRuntimeConfig:
-    """The minimum configuration of the current single-Worker process.
+    """The minimum configuration of one Worker process.
 
-    This is deliberately not a lease/fencing or multi-worker projection. Those
-    coordination mechanisms have not been assembled yet, so advertising a
-    larger worker count here would be a false capability claim.
+    ``worker_concurrency`` was pinned to ``Literal[1]`` here, on the stated
+    grounds that "those coordination mechanisms have not been assembled yet".
+    They since were, and the pin outlived the reason (ADR-024): claims are
+    ``FOR UPDATE SKIP LOCKED``, the lease carries a monotonic epoch, every
+    Registry write is fenced on owner-epoch-expiry, and the checkpointer is
+    composed with ``require_fence=True``. What the pin now describes is one
+    ``while`` loop, not a missing guarantee.
+
+    It stays a *process-local* lane count. Multi-*process* claiming is a
+    different question -- it is the one the epoch fencing exists for, and it
+    remains untested here -- so this projection says how many Tasks one process
+    may run at once and claims nothing about running two of these processes.
     """
 
     database: DatabaseConfig
     artifacts: ArtifactStoreConfig
     task: TaskConfig
     worker_id: str
-    worker_concurrency: Literal[1]
+    worker_concurrency: int
     # Demo and adapter-injection tests intentionally do not need heavy model
     # runtimes. A normal projected Worker always carries these; real assembly
     # refuses their absence rather than substituting synthetic retrieval.
@@ -457,13 +466,16 @@ def project_task(settings: Settings) -> TaskConfig:
 def project_task_worker(
     settings: Settings, *, worker_id: str | None = None
 ) -> TaskWorkerRuntimeConfig:
-    """Project one current Worker, rejecting unsupported concurrency early."""
+    """Project one Worker process and the lane count it may execute with.
 
-    if settings.coordination.worker_concurrency != 1:
-        raise ValueError(
-            "Task Worker currently supports exactly one worker; "
-            "lease/fencing-based multi-worker coordination is not assembled"
-        )
+    The ``!= 1`` refusal that used to live here is gone (ADR-024). The ceiling
+    that replaces it is not a new one: ``Settings`` already refuses
+    ``worker_concurrency > guard_connection_budget``, and that is the bound
+    that matters, because each concurrent Task pins its own guard connection.
+    Re-raising here would be a second copy of that rule, and the copy is the
+    one that keeps running after somebody edits the first.
+    """
+
     return TaskWorkerRuntimeConfig(
         database=DatabaseConfig(
             dsn=settings.database.dsn,
@@ -481,7 +493,7 @@ def project_task_worker(
         ),
         task=project_task(settings),
         worker_id=worker_id or new_id("worker"),
-        worker_concurrency=1,
+        worker_concurrency=settings.coordination.worker_concurrency,
         model=ModelConfig(
             provider=settings.model.provider,
             base_url=settings.model.base_url,

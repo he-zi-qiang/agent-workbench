@@ -270,9 +270,12 @@ class DatabaseSettings(StrictModel):
 class CoordinationSettings(StrictModel):
     registry_backend: Literal["postgresql"] = "postgresql"
     claim_strategy: Literal["skip_locked"] = "skip_locked"
-    # The registry/checkpointer have no lease epoch or fencing yet. Until
-    # those coordination semantics are assembled, one Worker is the only
-    # supported execution topology.
+    # Lanes inside one Worker process (ADR-024). The registry/checkpointer
+    # comment that used to sit here -- "no lease epoch or fencing yet" -- was
+    # true when written and is not now: claims are SKIP LOCKED, the lease
+    # carries a monotonic epoch, and both the Registry writes and the
+    # checkpointer are fenced on it. The real ceiling is the guard budget,
+    # enforced by `validate_architecture_and_environment` below.
     worker_concurrency: int = Field(default=1, ge=1, le=200)
     claim_batch_size: int = Field(default=1, ge=1, le=200)
     claim_poll_interval_ms: int = Field(default=1000, ge=1)

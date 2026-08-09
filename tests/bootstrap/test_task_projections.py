@@ -106,10 +106,39 @@ def test_ingestion_worker_projection_owns_the_write_side_of_the_index() -> None:
     assert worker.heartbeat_seconds < worker.lease_seconds
 
 
-def test_task_worker_projection_refuses_unimplemented_multi_worker_topology() -> None:
+def test_task_worker_projection_carries_the_configured_lane_count() -> None:
+    """The projection reports the lanes it was configured for (ADR-024).
+
+    This replaces a test that asserted the opposite -- ``worker_concurrency=2``
+    used to raise "exactly one worker". That refusal was written when the
+    checkpointer had no epoch predicate; it does now, so the number reaches the
+    runner instead of being rejected on the way.
+    """
+
     settings = _settings()
     payload = deepcopy(settings.model_dump(mode="python"))
-    payload["coordination"]["worker_concurrency"] = 2
+    payload["coordination"]["worker_concurrency"] = 3
 
-    with pytest.raises(ValueError, match="exactly one worker"):
-        project_task_worker(Settings(**payload))
+    worker = project_task_worker(Settings(**payload))
+
+    assert worker.worker_concurrency == 3
+
+
+def test_task_worker_lanes_may_not_outnumber_guard_connections() -> None:
+    """The ceiling that replaced the refusal, and why it is the right one.
+
+    Every concurrent Task pins its own guard connection, so lanes past the
+    guard budget are lanes that would claim work they cannot guard. Settings
+    refuses that combination outright, which is why ``project_task_worker`` no
+    longer re-checks anything: a second copy of the rule is the copy that keeps
+    running after somebody edits the first.
+    """
+
+    settings = _settings()
+    payload = deepcopy(settings.model_dump(mode="python"))
+    payload["coordination"]["worker_concurrency"] = (
+        settings.database.guard_connection_budget + 1
+    )
+
+    with pytest.raises(ValueError, match="guard_connection_budget"):
+        Settings(**payload)
