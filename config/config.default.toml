@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.6"
+config_schema_version = "1.7"
 architecture_baseline = "1.3"
 
 [api]
@@ -312,6 +312,21 @@ base_url = "https://api.deepseek.com/anthropic"
 model_id = "deepseek-chat"
 max_uses = 5
 timeout_seconds = 60
+
+# MCP servers to take tools from (ADR-025). Empty here on purpose: the resolved
+# tool names are written into the Task authorization envelope, so a checkout
+# that never configured this must not widen anything on upgrade.
+#
+# Each entry needs `alias`, `endpoint` and an explicit `retryable_effects`, and
+# `optional_labs.mcp_adapter` must be true or startup fails rather than quietly
+# ignoring what was written here. Example:
+#
+#   [[mcp.servers]]
+#   alias = "office"
+#   endpoint = "https://mcp.internal.example/office"
+#   retryable_effects = false
+[mcp]
+servers = []
 
 [observability]
 otel_enabled = true

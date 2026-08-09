@@ -13,7 +13,7 @@
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 为 `1.6`；两者是不同版本轴，架构基线不随
+当前架构基线为 `1.3`，配置 schema 为 `1.7`；两者是不同版本轴，架构基线不随
 配置 schema 走。schema 每一次抬升都对应一条 ADR：
 
 | schema | 原因 | 依据 |
@@ -23,6 +23,7 @@
 | `1.3` → `1.4` | 提示词与工具参数记进事件流，新增 `runtime.record_step_inputs` | [ADR-019](./adr/0019-run-step-transparency.md) |
 | `1.4` → `1.5` | 接上外部检索，新增 `[research]`；Task 授权信封改为按配置决定 | [ADR-020](./adr/0020-external-web-search.md) |
 | `1.5` → `1.6` | `RunBudget` 去掉跨字段校验，`max_tool_calls` 与 `max_steps` 相互独立 | [ADR-022](./adr/0022-tool-ceiling-closes-the-toolbox.md) |
+| `1.6` → `1.7` | 新增 `[mcp]`；其解析出的工具名会写进 Task 授权信封 | [ADR-025](./adr/0025-mcp-adapter.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。

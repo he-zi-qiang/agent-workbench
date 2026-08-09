@@ -503,6 +503,17 @@
       ]
     },
     {
+      "owner": "adapters.mcp.registry_source",
+      "lifecycle": "startup",
+      "fields": [
+        "mcp.servers.alias",
+        "mcp.servers.transport",
+        "mcp.servers.endpoint",
+        "mcp.servers.retryable_effects",
+        "mcp.servers.timeout_seconds"
+      ]
+    },
+    {
       "owner": "adapters.observability.otel",
       "lifecycle": "startup",
       "fields": [
