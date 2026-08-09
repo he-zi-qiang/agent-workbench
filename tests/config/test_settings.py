@@ -804,13 +804,17 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     1.7 -> 1.8 completes ADR-025's cross-process contract: each MCP server now
     carries an explicit remote-tool allowlist, so API submission and Worker
     discovery agree without granting whatever a server adds later.
+    1.8 -> 1.9 is ADR-029: the ``[sandbox]`` section arrived. Enabling it puts
+    ``sandbox_run`` in the Task envelope *and* raises that envelope's risk
+    ceiling to "external", so a config file at this version can widen both
+    what a Task may call and how far.
 
     The pin exists so widening a frozen Literal cannot happen quietly -- this
     test failing *is* the mechanism, and updating it is the last step of the
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.8"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.9"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:

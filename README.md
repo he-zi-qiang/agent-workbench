@@ -20,6 +20,8 @@ React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈�
 （无接地对话形态、运行步骤透明度、外部检索、Chat 兜底分支联网、工具额度语义、
 自由回答也能联网）已合入主线；MCP 增量把配置 schema 从 `1.7` 升到 `1.8`，用显式
 remote-tool allowlist 保证 API 提交与 Worker 启动发现得到同一组可审计名字。
+WP15 已落地前两个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的任务工作区，与
+[ADR-029](docs/adr/0029-ephemeral-sandbox.md) 的一次性沙箱（schema `1.8` → `1.9`）。
 最新实现证据和历史增量分开记录在 [实施状态](docs/status.md)；下列能力均有代码或
 测试作为依据：
 
@@ -75,6 +77,15 @@ remote-tool allowlist 保证 API 提交与 Worker 启动发现得到同一组可
   启动时冻结成普通 `ToolBinding`，再经过自研 Runtime、Tool Gateway、提交授权信封、
   `mcp:<alias>` scope、安全重放边界与事件流；只有 `writer/synthesize`
   接受动态 MCP 目录，其他 Agent 与 Chat 不会获得这些工具。默认关闭。
+- **任务工作区：**一个 Task 内可变的名字压在不可变的字节上。写一个名字产生新的
+  manifest，manifest 本身也是 artifact，所以"工作区的哪一版"是 checkpoint 能持有的一个
+  id；节点重放看到的是它入口那一版，而不是上次没跑完的写入。只有 `writer/synthesize`
+  拿到 `workspace_list/read/write`。
+- **一次性沙箱 Optional Lab：**一次调用一个容器，文件进文件出，无网络、只读根、非 root、
+  丢弃 capability、内存/CPU/进程数/墙钟上限。隔离是常量不是配置项——断网是重放保证成立
+  的前提，不是可调的加固项。Task 侧的 `sandbox_run` 从工作区读输入、把产物写回工作区，
+  沙箱进程自己不认识工作区、租户和所有者。默认关闭；无容器运行时的部署少一个能力，而不是
+  起不来。
 - **A/B 已完成：**Task 工作流具有显式成功/失败终态和正确的 revision 预算语义；
   Task 提交使用 tenant-scoped 幂等键与输入 fingerprint，API 查询按 owner/tenant
   失败隐藏；
@@ -150,6 +161,9 @@ remote-tool allowlist 保证 API 提交与 Worker 启动发现得到同一组可
   Vitest `45 passed`、Playwright 桌面/移动端 `2 passed`。该次工作树在真实
   PostgreSQL + Qdrant 下为 `1821 passed / 11 skipped`（11 项需要 BGE 权重）；
   两组数字来自不同环境，只能分别引用，不能相加。
+- 沙箱不联网、不支持跨调用状态、不做 GPU，也不保证逐字节确定性重放（脚本自己可以用
+  `time.time()`/`random`）；WP15 的阶段三到五（只读取用网页与下载、成本与时限预算、
+  第二张图 `v2_general`）尚未开始。
 - 本次 MCP 增量门禁为：MCP Adapter + 协议—Runtime E2E `37 passed`，无外部服务全仓
   `1540 passed / 597 skipped`，E2E 目录 `1 passed / 11 skipped`；Ruff、Pyright、
   架构/配置、锁文件与许可证门禁通过。当前 Compose 未运行，597/11 项环境跳过不能描述成

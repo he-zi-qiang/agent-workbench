@@ -29,7 +29,7 @@ from agent_workbench.workflows.agent_profiles import (
     build_agent_request,
     permitted_tools,
     profile_for,
-    profile_with_mcp_tools,
+    profile_with_dynamic_tools,
     render_projection,
 )
 
@@ -276,7 +276,7 @@ def test_only_the_writer_accepts_the_dynamic_mcp_catalog() -> None:
     catalog = ("mcp_office_lookup", "mcp_office_render_document")
 
     exposed = {
-        profile.node: profile_with_mcp_tools(profile, catalog).tool_names
+        profile.node: profile_with_dynamic_tools(profile, mcp=catalog).tool_names
         for profile in V1_AGENT_PROFILES
     }
 
@@ -295,9 +295,9 @@ def test_the_writer_selects_word_rendering_only_for_an_explicit_docx_request() -
 
 
 def test_dynamic_mcp_tools_still_intersect_the_submitted_envelope() -> None:
-    profile = profile_with_mcp_tools(
+    profile = profile_with_dynamic_tools(
         profile_for("synthesize"),
-        ("mcp_office_lookup", "mcp_office_render_document"),
+        mcp=("mcp_office_lookup", "mcp_office_render_document"),
     )
 
     request = build_agent_request(

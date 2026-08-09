@@ -356,6 +356,7 @@ def build_task_v1_handlers(
     research: TaskResearchHandlers | None = None,
     export: TaskExportHandlers | None = None,
     mcp_tool_names: tuple[ToolName, ...] = (),
+    sandbox_tool_names: tuple[ToolName, ...] = (),
     workspace_scope: WorkspaceScope | None = None,
 ) -> dict[TaskNodeId, TaskNodeHandler]:
     """Build every v1 model-invoking handler around one AgentExecutor.
@@ -374,6 +375,7 @@ def build_task_v1_handlers(
             state,
             context,
             mcp_tool_names=mcp_tool_names,
+            sandbox_tool_names=sandbox_tool_names,
         ),
     )
 
@@ -482,6 +484,7 @@ def build_task_v1_handlers(
                 context,
                 bundles,
                 mcp_tool_names=mcp_tool_names,
+                sandbox_tool_names=sandbox_tool_names,
             ),
         )
         report = await synthesis_node.run(
@@ -660,6 +663,7 @@ def _synthesis_request(
     bundles: tuple[EvidenceBundle, ...],
     *,
     mcp_tool_names: tuple[ToolName, ...] = (),
+    sandbox_tool_names: tuple[ToolName, ...] = (),
 ) -> AgentRunRequest:
     """The writer's run, with the evidence its profile is the only one to admit.
 
@@ -675,6 +679,7 @@ def _synthesis_request(
         context,
         ProjectedContext(evidence=bundles),
         mcp_tool_names=mcp_tool_names,
+        sandbox_tool_names=sandbox_tool_names,
     )
 
 

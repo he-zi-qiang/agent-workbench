@@ -1,0 +1,58 @@
+# Explicit local profile for the ephemeral Python sandbox (ADR-029).
+#
+# Separate from config.local.toml for the same reason config.word-local.toml is:
+# `sandbox_run` is frozen into every newly submitted Task envelope, and enabling
+# it also raises that envelope's risk ceiling to "external". Turning it on in
+# the ordinary local profile would widen every Task, not just the ones being
+# demonstrated.
+#
+# This file is one overlay over config.default.toml. DSNs and the provider key
+# remain environment-only; no credential belongs here.
+#
+# Two things must already be true before this profile does anything:
+#
+#   docker pull python:3.12-slim     # the sandbox base image, never auto-pulled
+#   agent-sandbox-mcp                # the server, on 127.0.0.1:8766
+#
+# If either is missing the Worker still starts. It logs `sandbox_probe_failed`
+# or `sandbox_runtime_unavailable`, registers no sandbox tool, and every Task
+# runs without it (ADR-029 §3.6).
+
+[app]
+environment = "development"
+deployment_scope = "local"
+log_level = "INFO"
+
+[model.main]
+model_id = "deepseek-chat"
+# The ordinary baseline may force one opening tool call, which is unsafe for an
+# opt-in capability: a Task submitted before the sandbox was enabled would be
+# forced to propose a tool its envelope does not allow.
+tool_calling_required = false
+
+[model.compact]
+model_id = "deepseek-chat"
+
+[qdrant]
+url = "http://localhost:6333"
+allow_local_bootstrap = true
+
+[runtime]
+record_step_inputs = true
+
+[rag.reranker]
+timeout_seconds = 120
+
+[event_stream]
+catchup_poll_seconds = 1
+
+[chat]
+routed_relevance_threshold = 0.01
+
+[sandbox]
+enabled = true
+endpoint = "http://127.0.0.1:8766/mcp"
+# Covers the startup probe and each call. A sandbox call is a container start
+# plus the script's own wall clock, and the server's 60-second ceiling is the
+# one that actually governs how long a script may run.
+timeout_seconds = 180

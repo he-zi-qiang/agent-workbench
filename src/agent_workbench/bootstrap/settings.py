@@ -143,7 +143,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.8"] = "1.8"
+    config_schema_version: Literal["1.9"] = "1.9"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -847,6 +847,34 @@ class MCPSettings(StrictModel):
         return value
 
 
+class SandboxSettings(StrictModel):
+    """The ephemeral Python sandbox this deployment can reach (ADR-029).
+
+    Off by default, and the default is load-bearing on exactly the reasoning
+    ``ResearchSettings.enabled`` is written down with: the tool name and the
+    risk ceiling it forces are stored in each Task's authorization envelope and
+    re-applied on every resume, so a deployment that never configured a sandbox
+    must not have its historical Tasks widened by an upgrade.
+
+    Nothing here describes the isolation. The container flags are constants in
+    ``apps.sandbox_mcp.executor`` and are deliberately unreachable from
+    configuration -- ADR-029 §3.2 is that the network switch is the premise the
+    replay guarantees rest on, not a hardening option. What this section says is
+    only *which* sandbox process to talk to.
+    """
+
+    enabled: bool = False
+    #: HTTP only, on the same reasoning as ``MCPServerSettings.transport``:
+    #: ``stdio`` would mean spawning a local subprocess, which is a different
+    #: threat model than calling a service.
+    transport: Literal["http"] = "http"
+    endpoint: str = Field(default="http://127.0.0.1:8766/mcp", min_length=1)
+    #: Covers the startup probe and each call. Generous compared with the other
+    #: sections because a sandbox call is a container start plus the script's
+    #: own wall clock, and the server's ceiling is the one that governs.
+    timeout_seconds: int = Field(default=180, ge=1, le=600)
+
+
 class SecretsSettings(StrictModel):
     deepseek_api_key: SecretStr | None = None
     qdrant_api_key: SecretStr | None = None
@@ -877,6 +905,7 @@ class Settings(BaseSettings):
     policy: PolicySettings
     research: ResearchSettings = Field(default_factory=ResearchSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
+    sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     observability: ObservabilitySettings
     evaluation: EvaluationSettings
     testing: TestingSettings

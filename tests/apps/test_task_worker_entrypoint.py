@@ -18,6 +18,7 @@ from agent_workbench.adapters.embedding.fake import DeterministicEmbedder
 from agent_workbench.adapters.langgraph import LangGraphTaskWorkflow
 from agent_workbench.adapters.mcp.client import (
     RemoteCallResult,
+    RemoteTextBlock,
     RemoteToolDefinition,
     RemoteToolPage,
 )
@@ -37,14 +38,23 @@ from agent_workbench.bootstrap.projections import (
     MCPConfig,
     MCPServerConfig,
     ModelConfig,
+    SandboxConfig,
     TaskConfig,
     TaskWorkerRuntimeConfig,
     project_task_worker,
+    task_authorization_envelope,
 )
 from agent_workbench.bootstrap.settings import Settings
 from agent_workbench.domain.policies import AuthorizationEnvelope
+from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL, SANDBOX_RUN_TOOL
 from agent_workbench.domain.schema import JsonObject
 from agent_workbench.ports.model import ModelPort
+from agent_workbench.workflows.agent_profiles import (
+    V1_AGENT_PROFILES,
+    permitted_tools,
+    profile_for,
+    profile_with_dynamic_tools,
+)
 from agent_workbench.workflows.task_handlers import build_task_v1_handlers
 
 
@@ -241,6 +251,243 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
     http, qdrant = asyncio.run(scenario())
 
     assert (http, qdrant) == (True, True)
+
+
+def test_a_real_worker_registers_every_tool_its_agents_can_ask_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gap that is invisible until a Task reaches the node that asks.
+
+    `ToolGateway.advertise` raises `UnknownToolError` for a requested tool the
+    process does not register, and what a node requests is
+    `permitted_tools(profile, envelope)` -- neither of which the composition
+    root is otherwise checked against. A profile or an envelope that names a
+    tool nobody assembled is therefore not a missing capability; it is a
+    `synthesize` node that fails on every Task, which is how the workspace
+    tools shipped.
+
+    Derived from the profiles rather than spelled out, so the next tool added
+    to one is covered without anybody remembering to come back here.
+    """
+
+    _patch_real_runtime(monkeypatch)
+
+    async def scenario() -> tuple[tuple[str, ...], tuple[str, ...]]:
+        dependencies = await build_task_worker_dependencies(_projected_config())
+        try:
+            envelope = dependencies.config.task.default_authorization_envelope
+            requested = {
+                name
+                for profile in V1_AGENT_PROFILES
+                for name in permitted_tools(
+                    profile_with_dynamic_tools(
+                        profile,
+                        mcp=dependencies.mcp_tool_names,
+                        sandbox=dependencies.sandbox_tool_names,
+                    ),
+                    envelope.allowed_tools,
+                )
+            }
+            return tuple(sorted(requested)), dependencies.tool_names
+        finally:
+            await dependencies.dispose()
+
+    requested, registered = asyncio.run(scenario())
+
+    # The control group. An assembly that registered nothing would satisfy a
+    # bare subset check if the profiles happened to request nothing either.
+    assert "workspace_write" in requested
+    assert set(requested) <= set(registered), sorted(set(requested) - set(registered))
+
+
+def _sandbox_config(**overrides: object) -> TaskWorkerRuntimeConfig:
+    projected = _projected_config()
+    return replace(
+        projected,
+        sandbox=SandboxConfig(
+            endpoint="http://127.0.0.1:8766/mcp",
+            timeout_seconds=7,
+        ),
+        task=replace(
+            projected.task,
+            default_authorization_envelope=task_authorization_envelope(
+                external_search=False, sandbox=True
+            ),
+        ),
+        **overrides,  # pyright: ignore[reportArgumentType]
+    )
+
+
+@asynccontextmanager
+async def _sandbox_client(
+    probe: RemoteCallResult | Exception,
+) -> AsyncGenerator[_ProbeSandboxClient]:
+    client = _ProbeSandboxClient(probe)
+    try:
+        yield client
+    finally:
+        client.closed = True
+
+
+class _ProbeSandboxClient:
+    def __init__(self, probe: RemoteCallResult | Exception) -> None:
+        self.probe = probe
+        self.calls: list[str] = []
+        self.closed = False
+
+    async def list_tools_page(self, cursor: str | None) -> RemoteToolPage:
+        del cursor
+        return RemoteToolPage(tools=())
+
+    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+        del arguments
+        self.calls.append(name)
+        if isinstance(self.probe, Exception):
+            raise self.probe
+        return self.probe
+
+
+def test_a_reachable_sandbox_is_probed_once_and_registered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe is a real run, not a connection (ADR-029 §3.6).
+
+    What has to be true is that this Worker can start a container and get a
+    result back. A socket that accepts is evidence of neither, so the probe
+    calls the tool.
+    """
+
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+    seen: list[_ProbeSandboxClient] = []
+
+    @asynccontextmanager
+    async def connect(
+        endpoint: str, *, timeout_seconds: int
+    ) -> AsyncGenerator[_ProbeSandboxClient]:
+        assert endpoint == "http://127.0.0.1:8766/mcp"
+        assert timeout_seconds == 7
+        async with _sandbox_client(
+            RemoteCallResult(content=(), structured_content={"exit_code": 0})
+        ) as client:
+            seen.append(client)
+            yield client
+
+    monkeypatch.setattr(composition, "connect_mcp_client", connect)
+
+    async def scenario() -> tuple[str, ...]:
+        dependencies = await build_task_worker_dependencies(_sandbox_config())
+        try:
+            assert dependencies.sandbox_tool_names == (SANDBOX_RUN_TOOL,)
+            assert SANDBOX_RUN_TOOL in dependencies.tool_names
+            return tuple(seen[0].calls)
+        finally:
+            await dependencies.dispose()
+
+    assert asyncio.run(scenario()) == (SANDBOX_REMOTE_TOOL,)
+    # Held for the Worker's lifetime, then released with everything else.
+    assert seen[0].closed is True
+
+
+@pytest.mark.parametrize(
+    "probe",
+    [
+        OSError("no sandbox process is listening"),
+        RemoteCallResult(
+            content=(RemoteTextBlock(text="sandbox_unavailable: no runtime"),),
+            is_error=True,
+        ),
+    ],
+    ids=["server_unreachable", "runtime_missing"],
+)
+def test_a_sandbox_that_does_not_answer_costs_the_tool_and_not_the_process(
+    monkeypatch: pytest.MonkeyPatch,
+    probe: RemoteCallResult | Exception,
+) -> None:
+    """ADR-029 §3.6, and both halves of it.
+
+    A deployment without a container runtime has one fewer capability, not a
+    Worker that will not start. Asserting only "the tool is absent" would pass
+    for an assembly that raised, so the process reaching a usable Worker is
+    half of what is under test here.
+
+    Both failure shapes are covered because they are genuinely different: no
+    process listening, versus a process that answered and could not run.
+    """
+
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+
+    @asynccontextmanager
+    async def connect(
+        endpoint: str, *, timeout_seconds: int
+    ) -> AsyncGenerator[_ProbeSandboxClient]:
+        del endpoint, timeout_seconds
+        async with _sandbox_client(probe) as client:
+            yield client
+
+    monkeypatch.setattr(composition, "connect_mcp_client", connect)
+
+    async def scenario() -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+        dependencies = await build_task_worker_dependencies(_sandbox_config())
+        try:
+            envelope = dependencies.config.task.default_authorization_envelope
+            writer = profile_with_dynamic_tools(
+                profile_for("synthesize"),
+                mcp=dependencies.mcp_tool_names,
+                sandbox=dependencies.sandbox_tool_names,
+            )
+            return (
+                dependencies.sandbox_tool_names,
+                permitted_tools(writer, envelope.allowed_tools),
+                isinstance(dependencies.worker.workflow, LangGraphTaskWorkflow),
+            )
+        finally:
+            await dependencies.dispose()
+
+    registered, requested, assembled = asyncio.run(scenario())
+
+    assert registered == ()
+    assert assembled is True
+    # The envelope still names it -- it was frozen from configuration, which is
+    # exactly why the profile has to be widened from the registry instead.
+    # Without this the node would ask for a tool the gateway cannot resolve.
+    assert SANDBOX_RUN_TOOL not in requested
+    assert "workspace_write" in requested
+
+
+def test_a_deployment_without_a_sandbox_never_probes_for_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The control for both tests above."""
+
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+    attempts: list[str] = []
+
+    @asynccontextmanager
+    async def connect(
+        endpoint: str, *, timeout_seconds: int
+    ) -> AsyncGenerator[_ProbeSandboxClient]:
+        del timeout_seconds
+        attempts.append(endpoint)
+        async with _sandbox_client(RemoteCallResult(content=())) as client:
+            yield client
+
+    monkeypatch.setattr(composition, "connect_mcp_client", connect)
+
+    async def scenario() -> tuple[str, ...]:
+        dependencies = await build_task_worker_dependencies(_projected_config())
+        try:
+            return dependencies.sandbox_tool_names
+        finally:
+            await dependencies.dispose()
+
+    assert asyncio.run(scenario()) == ()
+    assert attempts == []
 
 
 def test_mcp_connection_lives_until_worker_disposal(
