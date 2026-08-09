@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -35,6 +36,7 @@ from agent_workbench.application.task_research import (
     InternalResearchService,
     TaskResearchContext,
 )
+from agent_workbench.application.workspace import TaskWorkspace, WorkspaceSession
 from agent_workbench.domain.artifacts import ArtifactKind
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.evidence import EvidenceBundle
@@ -72,6 +74,7 @@ from agent_workbench.workflows.agent_nodes import (
 from agent_workbench.workflows.agent_profiles import ProjectedContext
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.research_graph import evolve, merge_refs
+from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 TaskNodeHandler = Callable[[TaskState], Awaitable[Mapping[str, Any]]]
 EventSinkFactory = Callable[[TaskRunContext], EventSink]
@@ -353,6 +356,7 @@ def build_task_v1_handlers(
     research: TaskResearchHandlers | None = None,
     export: TaskExportHandlers | None = None,
     mcp_tool_names: tuple[ToolName, ...] = (),
+    workspace_scope: WorkspaceScope | None = None,
 ) -> dict[TaskNodeId, TaskNodeHandler]:
     """Build every v1 model-invoking handler around one AgentExecutor.
 
@@ -373,17 +377,47 @@ def build_task_v1_handlers(
         ),
     )
 
+    @contextmanager
+    def _workspace_for(
+        node: TaskNodeId, state: TaskState, invocation: TaskNodeInvocation
+    ) -> Generator[WorkspaceSession | None]:
+        """Enter this node's working set, pinned to the version it read.
+
+        Only the writer has the tools, so only its node pays for a session.
+        A node that dies inside this block returns no state update, which is
+        exactly why the attempt replacing it re-reads `state.workspace_version`
+        rather than anything advanced here (ADR-028 §3.2).
+        """
+
+        if workspace_scope is None or node != "synthesize":
+            yield None
+            return
+        principal = invocation.context.principal
+        session = WorkspaceSession(
+            workspace=TaskWorkspace(
+                artifacts=artifacts,
+                tenant_id=principal.tenant_id,
+                principal_id=principal.principal_id,
+            ),
+            version=state.workspace_version,
+        )
+        with workspace_scope.using(session):
+            yield session
+
     def artifact_handler(node: TaskNodeId) -> TaskNodeHandler:
         async def run(state: TaskState) -> Mapping[str, Any]:
             invocation = await invocations.resolve(state, node)
-            report = await artifact_node.run(
-                node,
-                state,
-                invocation.context,
-                invocation.events,
-                invocation.cancellation,
-            )
+            with _workspace_for(node, state, invocation) as session:
+                report = await artifact_node.run(
+                    node,
+                    state,
+                    invocation.context,
+                    invocation.events,
+                    invocation.cancellation,
+                )
             update = _outcome_update(report.outcome)
+            if session is not None and session.version != state.workspace_version:
+                update["workspace_version"] = session.version
             if node in {"research_internal", "research_external"}:
                 if report.produced_ref is None:  # pragma: no cover
                     raise AssertionError("a completed research node has no artifact")

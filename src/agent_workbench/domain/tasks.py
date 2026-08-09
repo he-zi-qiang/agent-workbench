@@ -118,6 +118,13 @@ class TaskState(VersionedModel):
         max_length=MAX_STATE_REFS,
     )
     draft_ref: Identifier | None = None
+    # Which version of this Task's working set (ADR-028). One identifier stands
+    # for the whole set because it names a stored manifest, and it lives in the
+    # checkpoint for the property the design exists for: a node reads the
+    # version pinned at its entry, so the attempt replacing one that died
+    # mid-write sees the same inputs the first attempt saw rather than its
+    # half-finished output. `None` is where every Task starts.
+    workspace_version: Identifier | None = None
     review_result: ReviewResult | None = None
     # Whether this Task was asked for a downloadable file, copied from its
     # TaskInput at load. **Defaults True, unlike TaskInput's own default**, and

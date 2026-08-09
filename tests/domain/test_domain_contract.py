@@ -51,6 +51,7 @@ from agent_workbench.domain.schema import DOMAIN_SCHEMA_VERSION, VersionedModel
 from agent_workbench.domain.task_inputs import TaskInput
 from agent_workbench.domain.tasks import ReviewResult, TaskState, TaskStep
 from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec
+from agent_workbench.domain.workspace import WorkspaceManifest
 
 GOLDEN_FILE = Path(__file__).parent / "golden" / "domain_v1.json"
 
@@ -237,6 +238,7 @@ SAMPLES: dict[str, VersionedModel] = {
         max_revisions=3,
         knowledge_base_id="kb_main",
     ),
+    "WorkspaceManifest": WorkspaceManifest(entries={"notes.md": ARTIFACT}),
 }
 
 
