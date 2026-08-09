@@ -27,6 +27,10 @@ ArtifactKind = Literal[
     "compaction_summary",
     "task_input",
     "evidence_bundle",
+    # ADR-028. Both the bytes a workspace name points at and the manifest that
+    # binds the names; one kind rather than two because they share a lifetime
+    # and a tenant, and nothing reads them without going through the manifest.
+    "workspace",
 ]
 
 FILENAME_MAX_LENGTH: Final[int] = 255
