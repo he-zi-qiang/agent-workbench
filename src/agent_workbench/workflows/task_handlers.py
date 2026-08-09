@@ -53,6 +53,7 @@ from agent_workbench.domain.tasks import (
     TaskState,
     TaskStep,
 )
+from agent_workbench.domain.tools import ToolName
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import CancellationToken
@@ -351,6 +352,7 @@ def build_task_v1_handlers(
     invocations: TaskNodeInvocationProvider,
     research: TaskResearchHandlers | None = None,
     export: TaskExportHandlers | None = None,
+    mcp_tool_names: tuple[ToolName, ...] = (),
 ) -> dict[TaskNodeId, TaskNodeHandler]:
     """Build every v1 model-invoking handler around one AgentExecutor.
 
@@ -363,7 +365,12 @@ def build_task_v1_handlers(
     persisting_executor = ArtifactPersistingExecutor(executor, artifacts=artifacts)
     artifact_node = ArtifactProducingAgentNode(
         persisting_executor,
-        request_builder=build_request,
+        request_builder=lambda node, state, context: build_request(
+            node,
+            state,
+            context,
+            mcp_tool_names=mcp_tool_names,
+        ),
     )
 
     def artifact_handler(node: TaskNodeId) -> TaskNodeHandler:
@@ -436,7 +443,11 @@ def build_task_v1_handlers(
         synthesis_node = ArtifactProducingAgentNode(
             persisting_executor,
             request_builder=lambda node, task_state, context: _synthesis_request(
-                node, task_state, context, bundles
+                node,
+                task_state,
+                context,
+                bundles,
+                mcp_tool_names=mcp_tool_names,
             ),
         )
         report = await synthesis_node.run(
@@ -613,6 +624,8 @@ def _synthesis_request(
     state: TaskState,
     context: TaskRunContext,
     bundles: tuple[EvidenceBundle, ...],
+    *,
+    mcp_tool_names: tuple[ToolName, ...] = (),
 ) -> AgentRunRequest:
     """The writer's run, with the evidence its profile is the only one to admit.
 
@@ -622,7 +635,13 @@ def _synthesis_request(
     of who happened to call what.
     """
 
-    return build_request(node, state, context, ProjectedContext(evidence=bundles))
+    return build_request(
+        node,
+        state,
+        context,
+        ProjectedContext(evidence=bundles),
+        mcp_tool_names=mcp_tool_names,
+    )
 
 
 def decode_plan_output(text: str) -> tuple[TaskStep, ...]:

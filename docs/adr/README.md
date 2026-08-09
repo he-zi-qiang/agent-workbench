@@ -21,3 +21,6 @@
 | [ADR-021 Chat 的联网搜索只出现在兜底分支](./0021-chat-web-search.md) | Chat 要不要联网；"要不要联网"由谁判断；用了网页的回答算不算接地 | 接受 |
 | [ADR-022 工具额度用尽是收走工具](./0022-tool-ceiling-closes-the-toolbox.md) | `max_tool_calls` 用尽时 run 应该怎么办；`max_tool_calls < max_steps` 是不是配置错误 | 接受 |
 | [ADR-023 无接地作答只有一个实现](./0023-direct-chat-reaches-the-web.md) | `direct` 形态能不能联网；"无证据作答"由几份代码实现 | 接受，扩展 ADR-021 并消耗 ADR-018 的重审条件 |
+| [ADR-024 一个 Worker 进程可以同时跑多个 Task](./0024-task-worker-lanes.md) | Task 并发执行的拦路石是什么；`worker_concurrency` 还该不该被钉死在 1 | 接受 |
+| [ADR-025 MCP 工具在启动时冻结成本地绑定](./0025-mcp-adapter.md) | `optional_labs.mcp_adapter` 的真实实现；第三方 schema 不合规时是放宽校验还是丢掉工具 | 接受 |
+| [ADR-026 Word 文档是 MCP 返回的不可变 Artifact](./0026-word-docx-is-an-mcp-artifact.md) | 项目自有 Word Server 如何保留 Gateway、scope、事件和 Artifact 所有权边界 | 接受（本地 Optional Lab） |

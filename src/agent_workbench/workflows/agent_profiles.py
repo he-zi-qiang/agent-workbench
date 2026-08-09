@@ -37,7 +37,7 @@ cannot be granted more than the Task it belongs to.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final, Literal
 
 from agent_workbench.domain.evidence import EvidenceBundle
@@ -64,6 +64,7 @@ AgentProfileName = Literal[
 #: projection would make "what may this agent read" a question about whichever
 #: caller built the request last.
 ProjectionInput = Literal["objective", "plan", "draft", "evidence"]
+DynamicToolSource = Literal["mcp"]
 
 
 class AgentContextViolationError(RuntimeError):
@@ -98,6 +99,9 @@ class AgentProfile:
     #: Empty for every v1 agent: the graph reaches external effects through
     #: dedicated ports and nodes, not by handing a research agent a tool.
     tool_names: tuple[ToolName, ...] = ()
+    #: Dynamic catalogs this profile may receive during Worker assembly. The
+    #: Task's submitted envelope still narrows the resulting tool list.
+    dynamic_tool_sources: frozenset[DynamicToolSource] = frozenset()
 
     def admitted(self, offered: ProjectionInput) -> bool:
         return offered in self.admits
@@ -160,11 +164,19 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
         node="synthesize",
         system_prompt=(
             "Write the report the plan and the gathered evidence support. "
-            "Attribute every claim to the evidence it rests on."
+            "Attribute every claim to the evidence it rests on. If the user "
+            "explicitly asked for a Microsoft Word or .docx deliverable and a "
+            "document-rendering tool is available, call it once with the "
+            "finished structured document, then still return the complete "
+            "report text so the critic reviews the same content. Do not call "
+            "a document-rendering tool for an ordinary text or Markdown answer."
         ),
         # The only profile that admits evidence, because it is the only one
         # whose product is grounded in all of it at once.
         admits=frozenset({"objective", "plan", "evidence"}),
+        # MCP extends synthesis only. Planners, critics and the two independent
+        # research branches do not silently acquire a deployment tool catalog.
+        dynamic_tool_sources=frozenset({"mcp"}),
     ),
     AgentProfile(
         name="critic",
@@ -193,6 +205,20 @@ def profile_for(node: TaskNodeId) -> AgentProfile:
     if profile is None:
         raise KeyError(f"{node} is a routing node and has no agent profile")
     return profile
+
+
+def profile_with_mcp_tools(
+    profile: AgentProfile, tool_names: Sequence[ToolName]
+) -> AgentProfile:
+    """Apply the frozen Worker catalog only where the profile declares it."""
+
+    if "mcp" not in profile.dynamic_tool_sources or not tool_names:
+        return profile
+    # Dynamic tools extend the profile's static ceiling; they never replace it.
+    # Keep first occurrence order so the model sees a reproducible catalog even
+    # if two assembly inputs accidentally repeat a name.
+    combined = tuple(dict.fromkeys((*profile.tool_names, *tool_names)))
+    return replace(profile, tool_names=combined)
 
 
 def assert_within_static_limit(
@@ -351,11 +377,13 @@ __all__ = [
     "AgentProfile",
     "AgentProfileLimitError",
     "AgentProfileName",
+    "DynamicToolSource",
     "ProjectedContext",
     "ProjectionInput",
     "assert_within_static_limit",
     "build_agent_request",
     "permitted_tools",
     "profile_for",
+    "profile_with_mcp_tools",
     "render_projection",
 ]

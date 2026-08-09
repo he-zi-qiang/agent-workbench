@@ -1129,7 +1129,8 @@ secret source 初始化前 fail closed，不能只相信 requirements 或 lockfi
 ### M7：Optional Lab，不进入 v1 DoD
 
 - `CrewAIBenchmarkTaskRunner`：独立对照路径，在相同任务、模型、预算、Tool 和评测集上比较成功率、成本、延迟与能力缺口。
-- MCP Adapter：所有 MCP Tool 仍必须进入统一 Tool Gateway。
+- MCP Adapter：WP14-01 已实现；所有 MCP Tool 先冻结成普通 `ToolBinding`，仍进入统一
+  Tool Gateway。具体权限、重放与协议边界见 [ADR-025](./adr/0025-mcp-adapter.md)。
 - Langfuse self-hosted profile：只消费 OTel/LLM trace，不承载恢复事实。
 - Runtime mid-loop snapshot、Tool 级人工审批和 resume。
 - 长生命周期 Agent mailbox、动态 Agent-as-tool。

@@ -13,6 +13,25 @@ scripts/dev.sh ingest     # 摄取 worker，同时负责创建索引与绑定 al
 scripts/dev.sh worker     # Task worker（--demo 图）
 ```
 
+## 可选：Word MCP Work 模式
+
+普通五条命令仍使用 `config.local.toml`，MCP 保持关闭。要演示“writer 生成 `.docx` 并经
+Gateway/事件流进入 ArtifactStore”，使用独立的 `config.word-local.toml` 命令组，不能把
+Word 工具悄悄加给每个普通 Task：
+
+```bash
+scripts/dev.sh word-server  # 前台 loopback MCP；Ctrl-C 停止
+scripts/dev.sh word-check   # /health + MCP initialize/tools/list
+scripts/dev.sh word-api --without-chat # Task 控制面显式选择 Word profile
+scripts/dev.sh word-worker  # 真实图；没有 Provider key 会拒绝启动
+```
+
+Word Server 必须先于 Worker 启动；Worker 只在启动时冻结一次工具目录。真实 Task 的调用者
+还必须持有 `mcp:word` scope，若要执行最终报告导出再加 `artifact:export`。无模型 key 只能
+验健康与工具目录，不能把 demo Worker 描述成 Word Task 已闭环。完整启动、验收、下载和
+排错步骤见[本地 Word MCP 指南](./word-mcp-local.md)，设计边界见
+[ADR-026](./adr/0026-word-docx-is-an-mcp-artifact.md)。
+
 ## 浏览器控制台
 
 React 控制台先做锁定构建，再由 API 在**同源**的 `/ui` 下提供 Chat / Work 主界面

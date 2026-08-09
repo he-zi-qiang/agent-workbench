@@ -25,7 +25,7 @@ import warnings
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
@@ -34,6 +34,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    StringConstraints,
     field_validator,
     model_validator,
 )
@@ -142,7 +143,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.6"] = "1.6"
+    config_schema_version: Literal["1.8"] = "1.8"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -342,6 +343,8 @@ class ModelProfileSettings(StrictModel):
     max_output_tokens: int = Field(default=8192, ge=1)
     timeout_seconds: int = Field(default=120, ge=1, le=3600)
     max_retries: int = Field(default=2, ge=0, le=10)
+    # Require one tool on the opening provider turn; after a ToolResult the
+    # adapter switches back to auto so the Agent can finish.
     tool_calling_required: bool = False
     prompt_cache_enabled: bool = True
 
@@ -738,6 +741,112 @@ class ResearchSettings(StrictModel):
         return _validate_service_endpoint(value, field_name="research.base_url")
 
 
+class MCPServerSettings(StrictModel):
+    """One MCP server this deployment is willing to take tools from (ADR-025)."""
+
+    #: A name we choose, not the one the server reports. It becomes a segment of
+    #: every tool name derived from this server, and those names reach the event
+    #: stream and the Task authorization envelope -- neither may depend on a
+    #: value a third-party process can change.
+    #:
+    #: Bounded well under `ToolName`'s 64 characters because the derived name is
+    #: `mcp_<alias>_<tool>` and the remote half needs room.
+    alias: Annotated[
+        str,
+        StringConstraints(pattern=r"^[a-z][a-z0-9_]*$", max_length=24),
+    ]
+    #: HTTP only in v1. `stdio` would mean spawning a local subprocess, which is
+    #: a different threat model than calling a service, and ADR-025 did not
+    #: decide it. Adding it is a deliberate change here, not a config value.
+    transport: Literal["http"] = "http"
+    endpoint: str = Field(min_length=1)
+    #: An explicit deployment allowlist, not whatever the server happens to
+    #: advertise today.  The API can therefore freeze concrete local names into
+    #: a Task at submission without talking to MCP, while the Worker still
+    #: intersects this list with the directory it discovered at startup.
+    tools: tuple[
+        Annotated[
+            str,
+            StringConstraints(
+                min_length=1,
+                max_length=128,
+                pattern=r"^[A-Za-z0-9_. -]+$",
+            ),
+        ],
+        ...,
+    ] = Field(min_length=1)
+    #: No default, deliberately. True says every allowlisted tool is safe to
+    #: invoke again when the whole graph node replays, even if the model emits
+    #: slightly different arguments. That is stronger than transport retry;
+    #: only the deployment can know whether the remote effects satisfy it.
+    retryable_effects: bool
+    timeout_seconds: int = Field(default=30, ge=1, le=600)
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value: str) -> str:
+        endpoint = _validate_service_endpoint(value, field_name="mcp.servers.endpoint")
+        parsed = urlsplit(endpoint)
+        if parsed.scheme.lower() == "http" and parsed.hostname not in LOOPBACK_HOSTS:
+            raise ValueError(
+                "mcp.servers.endpoint must use HTTPS unless it is a loopback URL"
+            )
+        return endpoint
+
+    @model_validator(mode="after")
+    def validate_local_tool_names(self) -> MCPServerSettings:
+        """Refuse an allowlist that cannot name distinct local tools."""
+
+        # Local import keeps the raw settings module from becoming part of the
+        # adapter's import graph; the pure naming function depends only on the
+        # domain ToolName contract.
+        from agent_workbench.adapters.mcp.naming import SkipReason, tool_name_for
+
+        resolved: list[str] = []
+        for remote_name in self.tools:
+            local = tool_name_for(self.alias, remote_name)
+            if isinstance(local, SkipReason):
+                raise ValueError(
+                    f"mcp tool {remote_name!r} cannot be named locally: {local.reason}"
+                )
+            resolved.append(local)
+        collisions = sorted({name for name in resolved if resolved.count(name) > 1})
+        if collisions:
+            raise ValueError(
+                "mcp.servers.tools contains names that normalize to the same "
+                "local tool: " + ", ".join(collisions)
+            )
+        return self
+
+
+class MCPSettings(StrictModel):
+    """Which MCP servers to ask for tools at startup (ADR-025).
+
+    Empty by default, and the default is load-bearing for the same reason
+    ``ResearchSettings.enabled`` is: the resolved tool names are written into
+    the Task authorization envelope, so a deployment that never configured this
+    must not have its historical Tasks widened by an upgrade.
+    """
+
+    servers: tuple[MCPServerSettings, ...] = ()
+
+    @field_validator("servers")
+    @classmethod
+    def refuse_duplicate_aliases(
+        cls, value: tuple[MCPServerSettings, ...]
+    ) -> tuple[MCPServerSettings, ...]:
+        # Two servers under one alias would make a derived tool name ambiguous,
+        # and the ambiguity would surface as one server silently shadowing the
+        # other's tools rather than as an error.
+        seen = [server.alias for server in value]
+        duplicated = sorted({alias for alias in seen if seen.count(alias) > 1})
+        if duplicated:
+            raise ValueError(
+                "mcp.servers alias must be unique; duplicated: " + ", ".join(duplicated)
+            )
+        return value
+
+
 class SecretsSettings(StrictModel):
     deepseek_api_key: SecretStr | None = None
     qdrant_api_key: SecretStr | None = None
@@ -767,6 +876,7 @@ class Settings(BaseSettings):
     artifact_store: ArtifactStoreSettings
     policy: PolicySettings
     research: ResearchSettings = Field(default_factory=ResearchSettings)
+    mcp: MCPSettings = Field(default_factory=MCPSettings)
     observability: ObservabilitySettings
     evaluation: EvaluationSettings
     testing: TestingSettings
@@ -868,6 +978,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 "langfuse_enabled and optional_labs.langfuse_profile "
                 "must be enabled or disabled together"
+            )
+
+        # Silently ignoring a section somebody wrote is the failure this
+        # codebase keeps removing: the config file would describe tools that
+        # never get built. The pair is checked in one direction only -- the lab
+        # switch on with no servers is a deployment that has not pointed it
+        # anywhere yet, which is a legitimate state.
+        if self.mcp.servers and not self.optional_labs.mcp_adapter:
+            raise ValueError(
+                "mcp.servers requires optional_labs.mcp_adapter=true; "
+                "configured servers would otherwise be ignored"
             )
 
         if self.optional_labs.crewai_benchmark:

@@ -146,13 +146,17 @@ jobs:
       # FlagEmbedding: the package is permissive, it declares so badly, and
       # naming it keeps the failure of every *other* badly-declaring package
       # intact.
+      # cffi 2.1.1 and cryptography enter through the official MCP SDK. cffi
+      # declares MIT-0; cryptography declares Apache-2.0 OR BSD-3-Clause. All
+      # components are already permitted policy classes, but the gate compares
+      # exact metadata strings, so both new spellings are listed explicitly.
       - name: Enforce dependency license policy
         run: >-
           uv run --no-sync pip-licenses
           --from mixed
           --ignore-packages agent-workbench FlagEmbedding tiktoken
           --allow-only
-          "MIT;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0;BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0;3-Clause BSD License;Apache 2.0 License;Apache License 2.0;Apache Software License; BSD License;Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT;Apache-2.0 AND CNRI-Python;Apache-2.0 AND MIT;ISC;ISC License (ISCL);MIT-CMU;MPL-2.0 AND MIT;Python Software Foundation License;MPL-2.0 AND (Apache-2.0 OR MIT);Apache-2.0 OR MIT"
+          "MIT;MIT-0;MIT License;MIT AND PSF-2.0;BSD License;BSD-2-Clause;BSD-3-Clause;Apache-2.0;Apache Software License;Apache-2.0 OR BSD-2-Clause;Apache-2.0 OR BSD-3-Clause;MPL-2.0;Mozilla Public License 2.0 (MPL 2.0);PSF-2.0;BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0;3-Clause BSD License;Apache 2.0 License;Apache License 2.0;Apache Software License; BSD License;Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT;Apache-2.0 AND CNRI-Python;Apache-2.0 AND MIT;ISC;ISC License (ISCL);MIT-CMU;MPL-2.0 AND MIT;Python Software Foundation License;MPL-2.0 AND (Apache-2.0 OR MIT);Apache-2.0 OR MIT"
 
       # The embedding extra is deliberately absent here: the runtime and the
       # weights are several gigabytes, and every gate above runs without them.

@@ -1,0 +1,56 @@
+# Explicit local profile for the Word MCP demonstration.
+#
+# This is intentionally separate from config.local.toml. MCP tool names are
+# frozen into every newly submitted Task envelope, so enabling Word in the
+# ordinary local profile would silently widen every Work task. Use the matching
+# `scripts/dev.sh word-*` commands when (and only when) demonstrating Word.
+#
+# Like config.local.toml, this file is one overlay over config.default.toml.
+# The DSNs and provider key remain environment-only and are exported by
+# scripts/dev.sh / the caller; no credential belongs here.
+
+[app]
+environment = "development"
+deployment_scope = "local"
+log_level = "INFO"
+
+[model.main]
+model_id = "deepseek-chat"
+# The ordinary baseline may force one opening tool call. That is unsafe for an
+# opt-in capability: a Task without mcp:word would be forced to propose a tool
+# it cannot use. In this profile the writer chooses Word when the objective
+# asks for a document; unrelated Work remains usable.
+tool_calling_required = false
+
+[model.compact]
+model_id = "deepseek-chat"
+
+[qdrant]
+url = "http://localhost:6333"
+allow_local_bootstrap = true
+
+[runtime]
+record_step_inputs = true
+
+[rag.reranker]
+timeout_seconds = 120
+
+[event_stream]
+catchup_poll_seconds = 1
+
+[chat]
+routed_relevance_threshold = 0.01
+
+[optional_labs]
+mcp_adapter = true
+
+[[mcp.servers]]
+alias = "word"
+transport = "http"
+endpoint = "http://127.0.0.1:8765/mcp"
+tools = ["render_document"]
+# Rendering has no durable remote mutation and never touches a caller path. A
+# graph-node replay may render another equivalent document to reconstruct the
+# ToolResult; byte-for-byte identity is not required by this declaration.
+retryable_effects = true
+timeout_seconds = 60

@@ -29,6 +29,7 @@ from agent_workbench.apps.api.dependencies import (
     build_dependencies,
 )
 from agent_workbench.apps.api.main import build_app, create_app
+from agent_workbench.apps.api.routes.artifacts import _content_disposition
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
 from agent_workbench.bootstrap.settings import Settings
@@ -335,7 +336,7 @@ def test_another_tenant_cannot_download_the_artifact(tmp_path: Path) -> None:
 
 
 def test_the_owner_can_download_what_was_stored(tmp_path: Path) -> None:
-    async def scenario(client: httpx.AsyncClient) -> tuple[int, bytes, str]:
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, bytes, str, str]:
         _, transferred, _ = await _upload(client)
         response = await client.get(
             f"/v1/artifacts/{transferred.json()['artifact_id']}",
@@ -345,13 +346,27 @@ def test_the_owner_can_download_what_was_stored(tmp_path: Path) -> None:
             response.status_code,
             response.content,
             response.headers["x-artifact-sha256"],
+            response.headers["content-disposition"],
         )
 
-    status_code, content, digest = _run(scenario, tmp_path)
+    status_code, content, digest, content_disposition = _run(scenario, tmp_path)
 
     assert status_code == 200
     assert content == CONTENT
     assert digest == DIGEST
+    assert content_disposition == (
+        "attachment; filename=\"passage.txt\"; filename*=UTF-8''passage.txt"
+    )
+
+
+def test_download_filename_is_encoded_as_metadata_not_header_syntax() -> None:
+    header = _content_disposition('总结"; filename=attacker.docx')
+
+    assert header.startswith('attachment; filename="')
+    assert 'filename="attacker.docx"' not in header
+    assert (
+        "filename*=UTF-8''%E6%80%BB%E7%BB%93%22%3B%20filename%3Dattacker.docx" in header
+    )
 
 
 def test_liveness_does_not_touch_the_database(tmp_path: Path) -> None:

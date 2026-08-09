@@ -675,10 +675,14 @@ def test_the_runtime_cannot_tell_this_adapter_from_the_scripted_one() -> None:
         ),
     ]
     served: list[bytes] = []
+    payloads: list[dict[str, Any]] = []
 
     def responder(request: httpx.Request) -> httpx.Response:
         body = turns[len(served)]
         served.append(body)
+        payload = json.loads(request.content)
+        assert isinstance(payload, dict)
+        payloads.append(payload)
         return httpx.Response(200, content=body)
 
     registry = StaticToolRegistry(
@@ -696,7 +700,12 @@ def test_the_runtime_cannot_tell_this_adapter_from_the_scripted_one() -> None:
                     client=client,
                     api_key=API_KEY,
                     base_url=BASE_URL,
-                    profiles=PROFILES,
+                    profiles={
+                        "main": DeepSeekProfile(
+                            model_id="deepseek-chat",
+                            tool_calling_required=True,
+                        )
+                    },
                 ),
                 gateway=ToolGateway(
                     registry=registry,
@@ -731,6 +740,9 @@ def test_the_runtime_cannot_tell_this_adapter_from_the_scripted_one() -> None:
     assert outcome.usage.steps == 2
     assert outcome.usage.tool_calls == 1
     assert outcome.usage.tokens.input_tokens == 304
+    assert payloads[0]["tool_choice"] == "required"
+    assert "tools" in payloads[1]
+    assert "tool_choice" not in payloads[1]
     assert timeline == [
         "RunStarted",
         "ModelStarted",
@@ -813,6 +825,36 @@ def test_tool_calling_required_is_omitted_when_there_are_no_tools() -> None:
         profile=DeepSeekProfile(model_id="deepseek-chat", tool_calling_required=True),
     )
 
+    assert "tool_choice" not in wire.payload
+
+
+def test_a_tool_result_returns_required_mode_to_auto() -> None:
+    call = ToolCall(
+        tool_call_id="call_1",
+        tool_name="read_document",
+        arguments={"document_id": "doc_1"},
+    )
+    result = ToolResult(
+        tool_call_id="call_1",
+        tool_name="read_document",
+        status="ok",
+        content="document text",
+    )
+
+    _, wire, _ = _run_with(
+        _serve(_sse(_finish_chunk("stop"))),
+        profile=DeepSeekProfile(model_id="deepseek-chat", tool_calling_required=True),
+        request=ModelRequest(
+            messages=(
+                user_message("read it"),
+                assistant_message(tool_calls=(call,)),
+                tool_message((result,)),
+            ),
+            tools=(SEARCH_SPEC,),
+        ),
+    )
+
+    assert "tools" in wire.payload
     assert "tool_choice" not in wire.payload
 
 

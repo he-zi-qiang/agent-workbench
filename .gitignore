@@ -38,3 +38,8 @@ artifacts/evidence/
 * [0-9][0-9].*
 * copy.*
 * ([0-9]).*
+
+# Live git worktrees the desktop app creates for isolated sessions. Each holds
+# a `.git` file pointing into this repository's own .git/worktrees, so
+# committing one embeds a broken copy of the repository inside itself.
+.claude/worktrees/

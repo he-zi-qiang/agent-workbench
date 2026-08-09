@@ -8,7 +8,10 @@ and checkpointer, while artifacts remain the source of the immutable input.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +27,8 @@ from agent_workbench.adapters.langgraph import (
     build_approval_node,
 )
 from agent_workbench.adapters.langgraph.workflow import GRAPH_BUILDERS, NodeHandler
+from agent_workbench.adapters.mcp.client import connect_mcp_client
+from agent_workbench.adapters.mcp.registry_source import discover_bindings
 from agent_workbench.adapters.persistence import (
     PostgresApprovalStore,
     PostgresDocumentStore,
@@ -70,9 +75,11 @@ from agent_workbench.bootstrap.sparse_factory import (
 )
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.domain.tasks import TaskNodeId
+from agent_workbench.domain.tools import ToolName
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.research import ExternalSearchPort
+from agent_workbench.ports.tools import ToolBinding
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 from agent_workbench.workers.task import TaskWorker
 from agent_workbench.workflows.agent_profiles import assert_within_static_limit
@@ -90,6 +97,9 @@ from agent_workbench.workflows.task_handlers import (
 
 class RealTaskHandlersUnavailableError(RuntimeError):
     """Raised rather than running synthetic output in a production worker."""
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,12 +124,14 @@ class TaskWorkerDependencies:
     # constructor arguments that happen to agree.
     scope: TaskExecutionScope
     worker: TaskWorker
+    resources: AsyncExitStack
     http: httpx.AsyncClient | None = None
     # A second client, not a reuse of `http`: that one carries the model
     # profile's timeout and talks to the OpenAI-compatible endpoint, while
     # search talks to the Anthropic-compatible one and is allowed to be slower.
     research_http: httpx.AsyncClient | None = None
     qdrant: AsyncQdrantClient | None = None
+    mcp_tool_names: tuple[ToolName, ...] = ()
 
     async def startup(self) -> None:
         """Validate the live read alias before claiming durable Task work."""
@@ -134,19 +146,12 @@ class TaskWorkerDependencies:
             )
 
     async def dispose(self) -> None:
-        """Release the process-owned connection pool after its loop stops."""
+        """Release every process-owned client and pool after the loop stops."""
 
-        await self.guards.dispose()
-        if self.qdrant is not None:
-            await self.qdrant.close()
-        if self.http is not None:
-            await self.http.aclose()
-        if self.research_http is not None:
-            await self.research_http.aclose()
-        await self.engine.dispose()
+        await self.resources.aclose()
 
 
-def build_task_worker_dependencies(
+async def build_task_worker_dependencies(
     config: TaskWorkerRuntimeConfig,
     *,
     handlers: Mapping[TaskNodeId, NodeHandler] | None = None,
@@ -166,6 +171,7 @@ def build_task_worker_dependencies(
         )
     if handlers is not None and demo:
         raise ValueError("pass either real handlers or demo=True, not both")
+    resources = AsyncExitStack()
     http: httpx.AsyncClient | None = None
     # A second client, not a reuse of `http`: that one carries the model
     # profile's timeout and talks to the OpenAI-compatible endpoint, while
@@ -175,87 +181,109 @@ def build_task_worker_dependencies(
     if handlers is None and demo:
         handlers = build_demo_v1_handlers()
 
-    scope = TaskExecutionScope()
-    engine = create_query_engine(
-        config.database.dsn.get_secret_value(),
-        application_name=config.database.application_name,
-        statement_timeout_ms=config.database.statement_timeout_ms,
-        pool_size=config.database.pool_size,
-        max_overflow=config.database.max_overflow,
-    )
-    artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
-    events = PostgresEventLog(engine)
-    registry = PostgresTaskRegistry(engine, events=events)
-    guard_dsn = config.database.guard_dsn or config.database.dsn
-    guards = PostgresExecutionGuardFactory(
-        guard_dsn.get_secret_value(),
-        healthcheck_seconds=float(config.database.guard_healthcheck_seconds),
-        application_name=f"{config.database.application_name}-guard",
-    )
-    # Wired whatever the handlers are. The demo graph answers its own gate and
-    # never interrupts, but a Worker that could meet an interrupt without a
-    # ledger would park the Task instead of resuming it -- and the ledger costs
-    # nothing to hold.
-    approvals = PostgresApprovalStore(engine, events=events)
-    if handlers is None:
-        handlers, http, qdrant, research_http = _build_real_handlers(
-            config,
+    try:
+        scope = TaskExecutionScope()
+        engine = create_query_engine(
+            config.database.dsn.get_secret_value(),
+            application_name=config.database.application_name,
+            statement_timeout_ms=config.database.statement_timeout_ms,
+            pool_size=config.database.pool_size,
+            max_overflow=config.database.max_overflow,
+        )
+        # Register every process resource as soon as it exists. If model, MCP
+        # or gateway assembly fails later, the same stack unwinds the partial
+        # build; callers never need a half-constructed dependency object to
+        # clean it up.
+        resources.push_async_callback(engine.dispose)
+        artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
+        events = PostgresEventLog(engine)
+        registry = PostgresTaskRegistry(engine, events=events)
+        guard_dsn = config.database.guard_dsn or config.database.dsn
+        guards = PostgresExecutionGuardFactory(
+            guard_dsn.get_secret_value(),
+            healthcheck_seconds=float(config.database.guard_healthcheck_seconds),
+            application_name=f"{config.database.application_name}-guard",
+        )
+        resources.push_async_callback(guards.dispose)
+        mcp_tool_names: tuple[ToolName, ...] = ()
+        # Wired whatever the handlers are. The demo graph answers its own gate and
+        # never interrupts, but a Worker that could meet an interrupt without a
+        # ledger would park the Task instead of resuming it -- and the ledger costs
+        # nothing to hold.
+        approvals = PostgresApprovalStore(engine, events=events)
+        if handlers is None:
+            (
+                handlers,
+                http,
+                qdrant,
+                research_http,
+                mcp_tool_names,
+            ) = await _build_real_handlers(
+                config,
+                artifacts=artifacts,
+                documents=PostgresDocumentStore(engine),
+                events=events,
+                registry=registry,
+                ledger=PostgresToolExecutionLedger(engine),
+                scope=scope,
+                resources=resources,
+            )
+            # The one node the handler factory cannot build: it has to interrupt,
+            # and interrupting belongs to the workflow framework, so it is
+            # assembled here from the framework-neutral gate.
+            real: dict[TaskNodeId, NodeHandler] = dict(handlers)
+            real["approval"] = build_approval_node(
+                TaskApprovalGate(approvals=approvals, registry=registry)
+            )
+            handlers = real
+        inputs = TaskInputStore(artifacts)
+        workflow = LangGraphTaskWorkflow(
+            handlers=handlers,
+            checkpointer=PostgresCheckpointSaver(engine, require_fence=True),
+        )
+        worker = TaskWorker(
+            registry=registry,
+            # The same object the handlers read. Two scopes would be one Worker
+            # publishing a claim nobody receives, and every node refusing.
+            scope=scope,
+            guards=guards,
+            approvals=approvals,
+            workflow=workflow,
+            load_state=inputs.load_state,
+            buildable_versions=tuple(GRAPH_BUILDERS),
+            worker_id=config.worker_id,
+            lease_seconds=config.task.lease_seconds,
+            heartbeat_seconds=config.task.heartbeat_seconds,
+            max_attempts=config.task.max_attempts,
+            retry_base_seconds=config.task.retry_base_seconds,
+            retry_max_seconds=config.task.retry_max_seconds,
+        )
+        return TaskWorkerDependencies(
+            config=config,
+            engine=engine,
             artifacts=artifacts,
-            documents=PostgresDocumentStore(engine),
             events=events,
             registry=registry,
-            ledger=PostgresToolExecutionLedger(engine),
+            approvals=approvals,
+            guards=guards,
+            handlers=handlers,
             scope=scope,
+            worker=worker,
+            resources=resources,
+            http=http,
+            research_http=research_http,
+            qdrant=qdrant,
+            mcp_tool_names=mcp_tool_names,
         )
-        # The one node the handler factory cannot build: it has to interrupt,
-        # and interrupting belongs to the workflow framework, so it is assembled
-        # here from the framework-neutral gate.
-        real: dict[TaskNodeId, NodeHandler] = dict(handlers)
-        real["approval"] = build_approval_node(
-            TaskApprovalGate(approvals=approvals, registry=registry)
-        )
-        handlers = real
-    inputs = TaskInputStore(artifacts)
-    workflow = LangGraphTaskWorkflow(
-        handlers=handlers,
-        checkpointer=PostgresCheckpointSaver(engine, require_fence=True),
-    )
-    worker = TaskWorker(
-        registry=registry,
-        # The same object the handlers read. Two scopes would be one Worker
-        # publishing a claim nobody receives, and every node refusing.
-        scope=scope,
-        guards=guards,
-        approvals=approvals,
-        workflow=workflow,
-        load_state=inputs.load_state,
-        buildable_versions=tuple(GRAPH_BUILDERS),
-        worker_id=config.worker_id,
-        lease_seconds=config.task.lease_seconds,
-        heartbeat_seconds=config.task.heartbeat_seconds,
-        max_attempts=config.task.max_attempts,
-        retry_base_seconds=config.task.retry_base_seconds,
-        retry_max_seconds=config.task.retry_max_seconds,
-    )
-    return TaskWorkerDependencies(
-        config=config,
-        engine=engine,
-        artifacts=artifacts,
-        events=events,
-        registry=registry,
-        approvals=approvals,
-        guards=guards,
-        handlers=handlers,
-        scope=scope,
-        worker=worker,
-        http=http,
-        research_http=research_http,
-        qdrant=qdrant,
-    )
+    except BaseException:
+        await resources.aclose()
+        raise
 
 
 def _build_external_search(
     research: ResearchConfig | None,
+    *,
+    resources: AsyncExitStack,
 ) -> tuple[ExternalSearchPort, httpx.AsyncClient | None]:
     """The configured search provider, or the fail-closed placeholder.
 
@@ -272,6 +300,7 @@ def _build_external_search(
     if research is None:
         return UnavailableExternalSearch(), None
     client = httpx.AsyncClient(timeout=research.timeout_seconds)
+    resources.push_async_callback(client.aclose)
     return (
         DeepSeekWebSearch(
             http=client,
@@ -284,7 +313,7 @@ def _build_external_search(
     )
 
 
-def _build_real_handlers(
+async def _build_real_handlers(
     config: TaskWorkerRuntimeConfig,
     *,
     artifacts: LocalArtifactStore,
@@ -293,11 +322,13 @@ def _build_real_handlers(
     registry: PostgresTaskRegistry,
     ledger: PostgresToolExecutionLedger,
     scope: TaskExecutionScope,
+    resources: AsyncExitStack,
 ) -> tuple[
     Mapping[TaskNodeId, NodeHandler],
     httpx.AsyncClient,
     AsyncQdrantClient,
     httpx.AsyncClient | None,
+    tuple[ToolName, ...],
 ]:
     """Assemble Task evidence and model execution without a demo fallback."""
 
@@ -351,6 +382,7 @@ def _build_real_handlers(
     # no provider connection is opened here. The client is a process resource
     # and is returned to the dependency owner for deterministic shutdown.
     http = httpx.AsyncClient(timeout=main_profile.timeout_seconds)
+    resources.push_async_callback(http.aclose)
     from agent_workbench.bootstrap.model_factory import build_model
 
     model = build_model(config.model, client=http)
@@ -364,6 +396,7 @@ def _build_real_handlers(
         ),
         timeout=config.qdrant.request_timeout_seconds,
     )
+    resources.push_async_callback(qdrant.close)
     retrieval = RetrievalService(
         candidate_retriever=build_candidate_retriever(
             llama_index_enabled=config.retrieval.llama_index_enabled,
@@ -374,7 +407,10 @@ def _build_real_handlers(
         documents=documents,
     )
     evidence = EvidenceStore(artifacts)
-    external_search, research_http = _build_external_search(config.research)
+    external_search, research_http = _build_external_search(
+        config.research,
+        resources=resources,
+    )
     external_tool = ExternalSearchTool(
         ExternalResearchService(
             search=external_search,
@@ -382,7 +418,14 @@ def _build_real_handlers(
         )
     )
     export_tool = ExportArtifactTool(artifacts=artifacts)
-    tool_registry = StaticToolRegistry((external_tool.binding(), export_tool.binding()))
+    mcp_bindings = await _build_mcp_bindings(
+        config,
+        artifacts=artifacts,
+        resources=resources,
+    )
+    tool_registry = StaticToolRegistry(
+        (external_tool.binding(), export_tool.binding(), *mcp_bindings)
+    )
     gateway = ToolGateway(
         registry=tool_registry,
         policy=EnvelopePolicyEngine(registry=tool_registry),
@@ -442,8 +485,75 @@ def _build_real_handlers(
             export=GatewayReportExport(gateway=gateway, ledger=ledger),
             policy_identity=policy_identity,
         ),
+        mcp_tool_names=tuple(binding.spec.name for binding in mcp_bindings),
     )
-    return handlers, http, qdrant, research_http
+    return (
+        handlers,
+        http,
+        qdrant,
+        research_http,
+        tuple(binding.spec.name for binding in mcp_bindings),
+    )
+
+
+async def _build_mcp_bindings(
+    config: TaskWorkerRuntimeConfig,
+    *,
+    artifacts: LocalArtifactStore,
+    resources: AsyncExitStack,
+) -> tuple[ToolBinding, ...]:
+    if config.mcp is None:
+        return ()
+
+    bindings: list[ToolBinding] = []
+    for server in config.mcp.servers:
+        if not server.retryable_effects:
+            logger.warning(
+                "mcp_server_skipped_nonretryable",
+                extra={"mcp_server_alias": server.alias},
+            )
+            continue
+        # A candidate connection is owned locally until discovery yields at
+        # least one usable binding. Empty/failed directories close immediately
+        # instead of occupying a socket for the entire Worker lifetime.
+        async with AsyncExitStack() as candidate_resources:
+            try:
+                # The SDK's read timeout governs established requests, but its
+                # connection/discovery negotiation can otherwise outlive this
+                # server's configured startup budget. Cancellation unwinds the
+                # async context manager, including a half-open SDK Client.
+                async with asyncio.timeout(server.timeout_seconds):
+                    client = await candidate_resources.enter_async_context(
+                        connect_mcp_client(
+                            server.endpoint,
+                            timeout_seconds=server.timeout_seconds,
+                        )
+                    )
+            except Exception as error:
+                logger.warning(
+                    "mcp_connection_failed",
+                    extra={
+                        "mcp_server_alias": server.alias,
+                        "mcp_error_type": type(error).__name__,
+                    },
+                )
+                continue
+            discovered = await discover_bindings(
+                alias=server.alias,
+                allowed_remote_tools=server.remote_tools,
+                timeout_seconds=server.timeout_seconds,
+                client=client,
+                artifacts=artifacts,
+                artifact_threshold_bytes=config.mcp.artifact_threshold_bytes,
+                max_result_bytes=config.mcp.max_result_bytes,
+                max_artifact_bytes=config.mcp.max_artifact_bytes,
+            )
+            if not discovered:
+                continue
+            owned = candidate_resources.pop_all()
+            resources.push_async_callback(owned.aclose)
+            bindings.extend(discovered)
+    return tuple(bindings)
 
 
 __all__ = [

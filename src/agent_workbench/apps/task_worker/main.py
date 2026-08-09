@@ -43,15 +43,15 @@ async def serve(*, demo: bool) -> None:
     """Assemble, run, and dispose one Worker process."""
 
     config = project_task_worker(load_settings())
-    dependencies = build_task_worker_dependencies(config, demo=demo)
-    stop = asyncio.Event()
-    _install_shutdown_handlers(stop)
-    runner = TaskWorkerRunner(
-        run_once=dependencies.worker.run_once,
-        poll_seconds=config.task.claim_poll_seconds,
-        concurrency=config.worker_concurrency,
-    )
+    dependencies = await build_task_worker_dependencies(config, demo=demo)
     try:
+        stop = asyncio.Event()
+        _install_shutdown_handlers(stop)
+        runner = TaskWorkerRunner(
+            run_once=dependencies.worker.run_once,
+            poll_seconds=config.task.claim_poll_seconds,
+            concurrency=config.worker_concurrency,
+        )
         await dependencies.startup()
         await runner.run_forever(stop)
     finally:

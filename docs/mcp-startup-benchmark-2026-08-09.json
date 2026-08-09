@@ -1,0 +1,15 @@
+{
+  "benchmark": "mcp_incremental_worker_startup",
+  "max_ms": 1.073,
+  "mcp_sdk": "2.0.0",
+  "median_ms": 0.707,
+  "min_ms": 0.662,
+  "network_latency_included": false,
+  "p95_ms": 0.97,
+  "python": "3.12.13",
+  "rounds": 30,
+  "scope": "SDK server/discover + tools/list + local ToolBinding construction",
+  "tools": 20,
+  "transport": "official_sdk_in_memory",
+  "warmups": 3
+}

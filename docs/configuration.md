@@ -13,7 +13,7 @@
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 为 `1.6`；两者是不同版本轴，架构基线不随
+当前架构基线为 `1.3`，配置 schema 为 `1.8`；两者是不同版本轴，架构基线不随
 配置 schema 走。schema 每一次抬升都对应一条 ADR：
 
 | schema | 原因 | 依据 |
@@ -23,6 +23,8 @@
 | `1.3` → `1.4` | 提示词与工具参数记进事件流，新增 `runtime.record_step_inputs` | [ADR-019](./adr/0019-run-step-transparency.md) |
 | `1.4` → `1.5` | 接上外部检索，新增 `[research]`；Task 授权信封改为按配置决定 | [ADR-020](./adr/0020-external-web-search.md) |
 | `1.5` → `1.6` | `RunBudget` 去掉跨字段校验，`max_tool_calls` 与 `max_steps` 相互独立 | [ADR-022](./adr/0022-tool-ceiling-closes-the-toolbox.md) |
+| `1.6` → `1.7` | 新增 `[mcp]`；其解析出的工具名会写进 Task 授权信封 | [ADR-025](./adr/0025-mcp-adapter.md) |
+| `1.7` → `1.8` | MCP server 新增显式工具 allowlist，使 API 提交与 Worker 启动发现能确定性取交集 | [ADR-025](./adr/0025-mcp-adapter.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。
@@ -223,6 +225,9 @@ claim_batch_size <= min(worker_concurrency, guard_connection_budget)
   API key；它同时禁止 userinfo、query string 和 fragment；
 - `model.base_url` 是部署状态，不进入 Task 恢复快照——恢复一个旧 Task 不该
   连回它当初的端点，迁移端点也不该改变一个在跑的 Task 的语义；
+- `model.<profile>.tool_calling_required=true` 只要求**开场 provider turn**选择工具；
+  最新消息已经是 ToolResult 时，工具仍继续广告但 `tool_choice` 回到 auto，允许模型继续
+  调另一个工具或完成回答；
 - LangChain 只能作为 model/tool adapter，不能启用 AgentExecutor 或 Memory；
 - LlamaIndex 只能 ingestion/retrieval，不能生成最终回答或二次融合；
 - dense+sparse fusion 只由 Qdrant Query API 的 RRF 执行；
@@ -487,8 +492,51 @@ Optional Lab 为 true 就拒绝启动。
 
 - CrewAI 只能在 `environment=test` 的独立 benchmark 进程启用；
 - 动态 Agent、mailbox、runtime mid-loop resume 不进入 v1 主链路；
-- Langfuse、MCP、Redis Streams 和高级 compaction 先保持扩展点，不成为
-  Task 恢复的事实源。
+- MCP Adapter 已按 [ADR-025](./adr/0025-mcp-adapter.md) 实现为 Task Worker 的
+  Optional Lab；它的目录与调用结果都不是 Task 恢复的事实源，提交时授权信封和
+  PostgreSQL 副作用账本才是。Langfuse、Redis Streams 和高级 compaction 仍只保留
+  扩展点。
+
+### 9.1 MCP Optional Lab
+
+MCP 默认关闭，且只进入 Task Worker 的 `writer/synthesize` Agent：
+
+```toml
+[optional_labs]
+mcp_adapter = true
+
+[[mcp.servers]]
+alias = "office"
+transport = "http"
+endpoint = "https://mcp.internal.example/mcp"
+tools = ["render_document", "lookup_template"]
+retryable_effects = true
+timeout_seconds = 30
+```
+
+| 字段 | 约束 | 运行语义 |
+|---|---|---|
+| `alias` | 小写字母开头，只含小写字母/数字/下划线，最长 24 | 本地工具名前缀与 scope：`mcp:<alias>` |
+| `transport` | 第一版只能是 `http` | 使用官方 SDK 的 Streamable HTTP；不派生本地进程 |
+| `endpoint` | HTTPS，或本机 loopback HTTP；禁止 userinfo/query/fragment | 只由 Task Worker 建立连接 |
+| `tools` | 非空显式 remote-name allowlist；归一化后不得碰撞 | API 据此冻结具体授权名，Worker 与启动目录取交集 |
+| `retryable_effects` | 必填；无默认 | `true` 表示全部 allowlisted tool 在整个节点重放时都可再次调用；`false` 不进入 Task 可调用路径 |
+| `timeout_seconds` | `1..600` | 同时约束启动发现与单次工具调用 |
+
+开启 lab 但 `servers=[]` 合法；配置 server 却不开 lab 会拒绝启动。远端临时不可达会让
+该 Worker 在本次生命周期内不带该 server 的工具，并留下结构化日志，不会把远端后来新增
+的工具热插进既有注册表。调用者还必须持有对应 `mcp:<alias>` scope。
+
+结果同时受三个既有配置约束：
+
+- `runtime.tool_result_artifact_threshold_bytes`：文本何时从模型上下文转入 artifact；
+- `policy.max_tool_result_bytes`：SDK 已解析结果的语义总上限；
+- `artifact_store.max_artifact_bytes`：归一化后单一 artifact 的存储上限。
+
+结果上限在官方 SDK materialize 响应后执行，不是 HTTP body 或进程内存硬上限。本版不支持
+stdio、OAuth、热更新、MCP Tasks、Tool 级动态审批和跨 Worker 进程的全局串行。完整边界、
+命名、schema、安全重放和多 content-block 映射见
+[MCP Adapter 实施计划](./mcp-adapter-plan.md)。
 
 ## 10. 外部检索
 

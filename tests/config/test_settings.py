@@ -798,13 +798,19 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     1.3 -> 1.4 is ADR-019: ``runtime.record_step_inputs`` lets a deployment put
     the prompt and the proposed tool arguments on its own event stream, which
     changes what it stores about its users.
+    1.6 -> 1.7 is ADR-025: the ``[mcp]`` section arrived, and the tool names it
+    resolves are written into the Task authorization envelope -- so a config
+    file at this version can widen what a Task is allowed to call.
+    1.7 -> 1.8 completes ADR-025's cross-process contract: each MCP server now
+    carries an explicit remote-tool allowlist, so API submission and Worker
+    discovery agree without granting whatever a server adds later.
 
     The pin exists so widening a frozen Literal cannot happen quietly -- this
     test failing *is* the mechanism, and updating it is the last step of the
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.6"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.8"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:

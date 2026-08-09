@@ -41,6 +41,12 @@ dependencies = [
   # every process that installs the project, including ones that never
   # retrieve anything.
   "llama-index-core>=0.14.23,<0.15",
+  # MCP is an outer tool adapter only: protocol objects are translated into
+  # ToolSpec/ToolResult inside adapters/mcp and never enter the core runtime.
+  # v2 is the current stable SDK line and its Client accepts both an HTTP URL
+  # and an in-memory server, which keeps transport E2E and adapter contracts on
+  # the same implementation. The CLI extra is intentionally not installed.
+  "mcp>=2.0,<3",
   "pydantic>=2.12,<3",
   # A main dependency rather than an extra, on the same reasoning as langgraph:
   # it is small, pure Python and BSD-3, so hiding it behind an extra would buy
@@ -56,6 +62,9 @@ dependencies = [
   "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
   "pypdf>=5,<7",
   "pydantic-settings>=2.14.2,<3",
+  # The project-owned Word MCP server renders in memory. It never accepts a
+  # filesystem path and returns the OOXML package as one embedded MCP resource.
+  "python-docx>=1.2,<2",
   "python-dotenv>=1,<2",
   # Matched to the server image pinned by digest in CI. Qdrant checks major
   # and minor on connect, and a mismatch it only warns about today is a
@@ -85,6 +94,7 @@ agent-api = "agent_workbench.apps.api.main:main"
 agent-cli = "agent_workbench.apps.cli.main:main"
 agent-ingestion-worker = "agent_workbench.apps.ingestion_worker.main:main"
 agent-task-worker = "agent_workbench.apps.task_worker.main:main"
+agent-word-mcp = "agent_workbench.apps.word_mcp.main:main"
 agent-config-check = "agent_workbench.bootstrap.config_check:main"
 agent-evidence = "agent_workbench.bootstrap.evidence:main"
 

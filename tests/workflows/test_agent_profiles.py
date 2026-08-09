@@ -29,6 +29,7 @@ from agent_workbench.workflows.agent_profiles import (
     build_agent_request,
     permitted_tools,
     profile_for,
+    profile_with_mcp_tools,
     render_projection,
 )
 
@@ -253,6 +254,55 @@ def test_the_v1_agents_reach_no_tool_at_all() -> None:
 
     for profile in V1_AGENT_PROFILES:
         assert profile.tool_names == ()
+
+
+def test_only_the_writer_accepts_the_dynamic_mcp_catalog() -> None:
+    catalog = ("mcp_office_lookup", "mcp_office_render_document")
+
+    exposed = {
+        profile.node: profile_with_mcp_tools(profile, catalog).tool_names
+        for profile in V1_AGENT_PROFILES
+    }
+
+    assert exposed["synthesize"] == catalog
+    assert all(names == () for node, names in exposed.items() if node != "synthesize")
+
+
+def test_the_writer_selects_word_rendering_only_for_an_explicit_docx_request() -> None:
+    prompt = profile_for("synthesize").system_prompt
+
+    assert "explicitly asked for a Microsoft Word or .docx deliverable" in prompt
+    assert "critic reviews the same content" in prompt
+    assert "Do not call" in prompt
+    assert "ordinary text or Markdown answer" in prompt
+
+
+def test_dynamic_mcp_tools_still_intersect_the_submitted_envelope() -> None:
+    profile = profile_with_mcp_tools(
+        profile_for("synthesize"),
+        ("mcp_office_lookup", "mcp_office_render_document"),
+    )
+
+    request = build_agent_request(
+        profile,
+        _state(),
+        trace=TraceContext(
+            agent_run_id="run_1",
+            task_id="task_1",
+            workflow_thread_id="thread_1",
+            graph_node_id="synthesize",
+        ),
+        stream_id="thread_1",
+        principal=PRINCIPAL,
+        envelope=AuthorizationEnvelope(
+            allowed_tools=("mcp_office_render_document",),
+            max_tool_risk="external",
+            approval_required_risks=(),
+        ),
+        budget=BUDGET,
+    )
+
+    assert request.tool_names == ("mcp_office_render_document",)
 
 
 def test_one_invocation_carries_its_own_token_ceiling() -> None:

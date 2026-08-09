@@ -80,7 +80,7 @@ def _run(
     scenario: Callable[[TaskWorkerDependencies], Awaitable[Any]],
 ) -> Any:
     async def execute() -> Any:
-        dependencies = build_task_worker_dependencies(_config(root), demo=True)
+        dependencies = await build_task_worker_dependencies(_config(root), demo=True)
         try:
             async with dependencies.engine.begin() as connection:
                 await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))

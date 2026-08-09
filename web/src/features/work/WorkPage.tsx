@@ -372,7 +372,7 @@ export function WorkPage() {
   });
 
   const downloadMutation = useMutation({
-    mutationFn: (artifactId: string) => downloadArtifact(identity, artifactId),
+    mutationFn: (artifact: ArtifactRef) => downloadArtifact(identity, artifact),
   });
 
   const handleCreate = (event: FormEvent<HTMLFormElement>) => {
@@ -629,7 +629,7 @@ export function WorkPage() {
             <TaskStepStream
               lifecycle={lifecycle}
               loading={timeline.loading && timeline.events.length === 0}
-              onOpenArtifact={(id) => downloadMutation.mutate(id)}
+              onOpenArtifact={(artifact) => downloadMutation.mutate(artifact)}
               running={!isTerminalStatus(selectedTask.status)}
               stageEvents={stageEvents}
               taskEvents={taskEvents}
@@ -642,7 +642,7 @@ export function WorkPage() {
               artifact={finalReport?.artifact ?? null}
               draftText={draftText}
               identity={identity}
-              onDownload={(id) => downloadMutation.mutate(id)}
+              onDownload={(artifact) => downloadMutation.mutate(artifact)}
               onRetry={retryInput === null ? undefined : () => resubmit(retryInput)}
               status={selectedTask.status}
               wantsReport={taskInputQuery.data?.wants_report ?? null}
@@ -768,7 +768,7 @@ export function WorkPage() {
             <div className="aw-work-output">
               <ArtifactRail
                 artifacts={artifacts}
-                onOpen={(id) => downloadMutation.mutate(id)}
+                onOpen={(artifact) => downloadMutation.mutate(artifact)}
               />
             </div>
             </div>
@@ -801,7 +801,7 @@ function TaskStepStream({
 }: {
   lifecycle: Lifecycle;
   loading: boolean;
-  onOpenArtifact: (artifactId: string) => void;
+  onOpenArtifact: (artifact: ArtifactRef) => void;
   running: boolean;
   stageEvents: Map<string, EventEnvelope[]>;
   taskEvents: EventEnvelope[];
@@ -859,7 +859,7 @@ function ArtifactRail({
   onOpen,
 }: {
   artifacts: TaskArtifact[];
-  onOpen: (artifactId: string) => void;
+  onOpen: (artifact: ArtifactRef) => void;
 }) {
   return (
     <aside className="aw-artifacts" aria-label="附件">
@@ -875,7 +875,7 @@ function ArtifactRail({
           {artifacts.map(({ artifact, graphNodeId, producedAt }) => (
             <li key={artifact.artifact_id}>
               <button
-                onClick={() => onOpen(artifact.artifact_id)}
+                onClick={() => onOpen(artifact)}
                 title={artifact.filename ?? artifact.artifact_id}
                 type="button"
               >
@@ -919,7 +919,7 @@ function TaskResult({
   artifact: ArtifactRef | null;
   draftText: string | null;
   identity: PrincipalIdentity;
-  onDownload: (artifactId: string) => void;
+  onDownload: (artifact: ArtifactRef) => void;
   onRetry?: (() => void) | undefined;
   status: TaskStatus;
   statusDetail?: string;
@@ -1012,7 +1012,7 @@ function TaskResult({
         <button
           aria-label={`下载 ${artifact.filename ?? artifact.kind}`}
           className="aw-icon-button"
-          onClick={() => onDownload(artifact.artifact_id)}
+          onClick={() => onDownload(artifact)}
           title="下载"
           type="button"
         >
