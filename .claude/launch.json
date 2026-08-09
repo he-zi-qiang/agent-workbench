@@ -1,0 +1,30 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agent-api",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": [
+        "/Users/heziqiang/Documents/Codex/2026-07-15/new-chat/agent-workbench/.claude/run-api.sh"
+      ],
+      "port": 8000,
+      "autoPort": false,
+      "url": "http://127.0.0.1:8000"
+    },
+    {
+      "name": "agent-api-attach",
+      "port": 8000,
+      "autoPort": false,
+      "url": "http://127.0.0.1:8000"
+    },
+    {
+      "name": "agent-web",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": [
+        "/Users/heziqiang/Documents/Codex/2026-07-15/new-chat/agent-workbench/.claude/run-web.sh"
+      ],
+      "port": 5173,
+      "url": "http://127.0.0.1:5173"
+    }
+  ]
+}
