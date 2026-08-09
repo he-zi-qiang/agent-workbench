@@ -1445,6 +1445,10 @@ baseline，不是取消框架集成的最终决定。LlamaIndex Adapter 与 RAGA
 需要真实 BGE 权重。Ruff、Pyright、三个配置 profile、`uv lock --check`、
 `docker compose config` 均通过，Alembic 唯一 head 为 `0019_tool_executions`。
 
+ADR-018～022 全部落地后（2026-08-08，PR #74 已在 `main` 上）无外部服务门禁为
+`1463 passed / 606 skipped`。这一条只覆盖无外部服务这一种环境；真实
+PostgreSQL + Qdrant 的数字仍是上面那次运行的，两者不能互相替代，也不能相加。
+
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
 | 工程与配置 Bootstrap | ✓ | ✓ | ✓ |  |
@@ -1494,7 +1498,16 @@ baseline，不是取消框架集成的最终决定。LlamaIndex Adapter 与 RAGA
 | `export_artifact` 写节点与副作用 ledger | ✓ | ✓ | ✓ | ✓ |
 | 三条固定 E2E 演示 | ✓ | ✓ | ✓ | ✓ |
 | Chat 两条路径对照评测（fixed vs agentic） | ✓ | ✓ | ✓ | ✓ |
+| 外部检索 Provider（DeepSeek 服务端 `web_search`，ADR-020/021） | ✓ | ✓ | 契约 |  |
 | Langfuse / CrewAI 对照 / RAGAS | ✓ |  |  |  |
+
+外部检索一栏的 Tested 写作"契约"而不是 ✓，是因为它的测试全部打在 fake
+`ExternalSearchPort` 上：`tests/adapters/test_web_search_tool.py` 与
+`tests/application/test_routed_chat.py` 覆盖工具契约、Policy 拒绝路径和兜底分支的
+降级行为，但**没有任何一条测试打到真实 DeepSeek 端点**（仓库里出现
+`api.deepseek.com` 的两处都是配置默认值断言）。这和 BGE 权重那几项是同一种口径：
+适配器成立，真实 Provider 的行为未取证。`research.enabled` 默认 `false`，
+它同时决定 Task 授权信封的宽度。
 
 当前身份边界的事实：开发 Header Identity Resolver 信任调用方自报的
 tenant/principal，所以生产身份认证仍是 Planned。监听地址已强制为 loopback

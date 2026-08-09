@@ -11,10 +11,14 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-08-03, `main` carries the Task/HITL/side-effect-ledger baseline and
-the three fencing fixes from PR #68; the React increment is on
-`feat/react-chat-work-ui`, built on those same commits. Current evidence and
-historical increments are separated in
+As of 2026-08-08, `main` carries the Task/HITL/side-effect-ledger baseline, the
+three fencing fixes from PR #68, the React Chat/Work console (PR #69), the
+LlamaIndex retrieval adapter and routed-threshold evaluation (PR #72, #73), and
+Chat web search with the tool-ceiling semantics (PR #74). ADR-018 through 022 —
+ungrounded chat shape, run-step transparency, external search, Chat's routed
+fallback going online, and what a spent tool allowance means — are all on
+`main`, taking the config schema to `1.6`. Current evidence and historical
+increments are separated in
 [the implementation status](docs/status.md).
 
 Implemented with test evidence:
@@ -61,16 +65,27 @@ Validation for the current tree:
 
 The two environments are quoted separately and never added together.
 
-The remaining boundaries are explicit: a real external search provider,
-physical deletion of stale Qdrant points, context compaction, EventLog
-upcasters/poison-row handling, the CrewAI comparison, dynamic multi-Agent
-supervision, Langfuse, production identity and production deployment are not
-complete. LlamaIndex is the selected primary RAG integration and RAGAS the
-offline evaluation baseline
-([ADR-017](docs/adr/0017-llamaindex-primary-rag.md)), but both adapters are
-still Planned: the
-self-built ingestion/retrieval path and its 38-question evaluation are a
-runnable migration baseline, not the finished framework integration.
+External search now has a real provider
+([ADR-020](docs/adr/0020-external-web-search.md)): DeepSeek's server-side
+`web_search`, over the provider's Anthropic-compatible endpoint, introducing no
+second API key. [ADR-021](docs/adr/0021-chat-web-search.md) extends it to Chat's
+routed fallback as a tool the model may decline, and an answer that used the web
+does not count as grounded. `research.enabled` stays **off by default**: the
+field also decides how wide the Task authorization envelope is, and that
+envelope is stored with the Task and re-applied on every resume. Its tests all
+run against a fake port — nothing exercises the real endpoint.
+
+The remaining boundaries are explicit: physical deletion of stale Qdrant points,
+context compaction, EventLog upcasters/poison-row handling, the CrewAI
+comparison, dynamic multi-Agent supervision, Langfuse, production identity and
+production deployment are not complete. LlamaIndex is the selected primary RAG
+integration and RAGAS the offline evaluation baseline
+([ADR-017](docs/adr/0017-llamaindex-primary-rag.md)). The retrieval adapter is
+built and contract-tested, but `rag.llama_index.enabled` is `false` — what is
+missing is not the implementation but a measurement able to tell the two
+retrieval paths apart (ADR-017 step 3). Ingestion is not migrated and the RAGAS
+runner does not exist, so both stay Planned in the capability table: an adapter
+existing is not the finished framework integration.
 
 > **Security warning:** the current identity adapter trusts request headers, so
 > `agent-api` is for controlled local development only and must not be exposed to

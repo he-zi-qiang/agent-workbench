@@ -503,7 +503,7 @@ embedding/sparse 权重，1 项是只适用于非锁定 recovery read 的契约�
 
 - [架构与技术选型基线 v1.3](./architecture-baseline.md)；
 - [代码实施计划 v1.0](./implementation-plan.md)；
-- [配置管理契约 schema 1.2](./configuration.md)；
+- [配置管理契约 schema 1.6](./configuration.md)；
 - [2026-07-25 仓库核验报告](./repository-audit-2026-07-25.md)；
 - [2026-07-27 仓库复核报告](./repository-audit-2026-07-27.md)。
 

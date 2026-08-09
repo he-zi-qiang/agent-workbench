@@ -6,16 +6,26 @@
 - `config.test.toml`：测试环境深度合并覆盖，专门开启确定性 failpoint；
 - `config.production.toml`：无密钥的 production 合同覆盖，缺少部署注入时
   必须失败关闭；
-- `config/ownership.yaml`：237 个配置叶子字段的唯一 owner 与生命周期登记；
+- `config/ownership.yaml`：250 个配置叶子字段的唯一 owner 与生命周期登记；
 - `.env.example`：本地开发需要注入的 DSN、模型 ID 和密钥名称；
 - `src/agent_workbench/bootstrap/settings.py`：Pydantic Settings 类型、来源优先级、脱敏快照和跨域不变量；
 - `tests/config/test_settings.py`：配置契约测试；
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 为 `1.2`（`1.1` → `1.2` 的原因是模型
-Provider 从 Anthropic 换成 DeepSeek，并新增 `model.base_url`）；两者是不同
-版本轴。
+当前架构基线为 `1.3`，配置 schema 为 `1.6`；两者是不同版本轴，架构基线不随
+配置 schema 走。schema 每一次抬升都对应一条 ADR：
+
+| schema | 原因 | 依据 |
+|---|---|---|
+| `1.1` → `1.2` | 模型 Provider 从 Anthropic 换成 DeepSeek，并新增 `model.base_url` | — |
+| `1.2` → `1.3` | 无接地对话成为显式形态，新增 `chat.retrieval_shape` | [ADR-018](./adr/0018-ungrounded-chat-shape.md) |
+| `1.3` → `1.4` | 提示词与工具参数记进事件流，新增 `runtime.record_step_inputs` | [ADR-019](./adr/0019-run-step-transparency.md) |
+| `1.4` → `1.5` | 接上外部检索，新增 `[research]`；Task 授权信封改为按配置决定 | [ADR-020](./adr/0020-external-web-search.md) |
+| `1.5` → `1.6` | `RunBudget` 去掉跨字段校验，`max_tool_calls` 与 `max_steps` 相互独立 | [ADR-022](./adr/0022-tool-ceiling-closes-the-toolbox.md) |
+
+[ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
+分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。
 
 配置字段对应的代码所有者、工作包与集成测试见
 [代码实施计划 v1.0](./implementation-plan.md)。
@@ -480,7 +490,47 @@ Optional Lab 为 true 就拒绝启动。
 - Langfuse、MCP、Redis Streams 和高级 compaction 先保持扩展点，不成为
   Task 恢复的事实源。
 
-## 10. 使用与验证
+## 10. 外部检索
+
+`[research]` 由 [ADR-020](./adr/0020-external-web-search.md) 引入，
+[ADR-021](./adr/0021-chat-web-search.md) 把它从 Task 扩到 Chat：
+
+| 字段 | 默认 | 约束 |
+|---|---|---|
+| `research.enabled` | `false` | 见下，默认值是承重的 |
+| `research.provider` | `"deepseek"` | 单值 `Literal`，v1 只有这一个 Provider |
+| `research.base_url` | `https://api.deepseek.com/anthropic` | 与 `model.base_url` 走同一条 endpoint 校验：只能 HTTPS（loopback 除外），禁止 userinfo、query string 和 fragment |
+| `research.model_id` | `"deepseek-chat"` | 非空 |
+| `research.max_uses` | `5` | `1..20`，单次 `external_search` 调用内的搜索次数 |
+| `research.timeout_seconds` | `60` | `1..600` |
+
+四件需要单独记住的事：
+
+- **它没有自己的 API key。** 搜索在 Provider 侧执行，走的是同一把
+  `secrets.deepseek_api_key`。`research.base_url` 之所以和 `model.base_url`
+  分开，是因为只有 Anthropic-compatible 那条路径讲 Messages 协议，而 Runtime
+  其余调用走的是 OpenAI-compatible 的那条——同一个服务的两条路径。
+- **`enabled = false` 不只是保守，它是承重的。** Task 授权信封由
+  `projections.task_authorization_envelope` 按这个字段选出，并**随 Task 一起存
+  下、每次恢复重新施加**。一个从没开过外部检索的部署，不能因为升级就让历史
+  Task 的信封变宽。
+- **Chat 侧还要过 scope。** Chat 的 `web_search` 只出现在兜底分支，且是模型可以
+  不用的工具；调用方没有 `external:search` scope 时，policy 会逐次拒绝，run
+  照常给出无证据的回答（[ADR-022](./adr/0022-tool-ceiling-closes-the-toolbox.md)
+  之后不再 502），只是会先把工具额度耗在被拒的提议上。
+- **`enabled = true` 但没有真实 key 是启动错误，所有环境都查，不只是
+  production。** 见 `Settings` 的跨域校验：enabled-without-a-key 在配置文件里
+  读起来像"联网搜索已经能用"，却要到第一次搜索才失败关闭——这正是这个项目
+  反复清除的那类"配置描述了一个并不存在的系统"的缺陷。**因此被 Git 跟踪的
+  `config.local.toml` 不能把它打开**：那会让每一个没有 key 的 checkout 都启动
+  不了。要用就在自己那次会话的 shell 里开：
+
+  ```bash
+  export AW_SECRETS__DEEPSEEK_API_KEY=sk-...
+  export AW_RESEARCH__ENABLED=true
+  ```
+
+## 11. 使用与验证
 
 本地开发：
 

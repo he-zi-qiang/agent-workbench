@@ -13,9 +13,13 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-08-03，`main` 已包含 Task/HITL/副作用账本收尾以及三处围栏修复（PR #68）；
-当前前端增量位于 `feat/react-chat-work-ui`，基于同一批提交。最新实现证据和历史增量
-分开记录在 [实施状态](docs/status.md)；下列能力均有代码或测试作为依据：
+截至 2026-08-08，`main` 已包含 Task/HITL/副作用账本收尾、三处围栏修复（PR #68）、
+React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈值评测
+（PR #72、#73），以及 Chat 联网搜索与工具额度语义（PR #74）。ADR-018～022
+（无接地对话形态、运行步骤透明度、外部检索、Chat 兜底分支联网、工具额度语义）
+**都已在 `main` 上**，配置 schema 相应走到 `1.6`。
+最新实现证据和历史增量分开记录在 [实施状态](docs/status.md)；下列能力均有代码或
+测试作为依据：
 
 - 框架无关的 Domain、Ports、Fake Adapter 与可复现 CLI 演示；
 - 自研 `ClaudeLikeAgentRuntime`：Tool Loop、schema/Policy Gateway、预算与
@@ -95,8 +99,11 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
   隔离/跳过策略。
 - 三臂消融的 `hybrid-rerank` 臂尚未跑：hybrid 在当前 38 题 gold set 上已打满
   1.000，rerank delta 必然为 0；要测出它得先有更难的 gold set。
-- 外部搜索目前只有 provider-neutral Port、Tool/Policy 接入和失败关闭 Adapter，
-  **没有真实搜索服务 Provider**。
+- 外部搜索已接上真实 Provider（[ADR-020](docs/adr/0020-external-web-search.md)）：
+  DeepSeek 服务端 `web_search`，走 Anthropic-compatible endpoint，不引入第二把
+  API key。[ADR-021](docs/adr/0021-chat-web-search.md) 把它扩到 Chat 的兜底分支，
+  作为模型可以不用的工具，用了网页的回答不算接地。`research.enabled` **默认关闭**，
+  因为这个字段同时决定 Task 授权信封的宽度，且信封随 Task 存下、每次恢复重新施加。
 - HITL Approval 已贯通 LangGraph interrupt、权威账本、版本化决定 API、授权复核与
   跨进程恢复；React Work 页面只按服务端权威记录提供决定操作。
 - **框架口径已由 [ADR-017](docs/adr/0017-llamaindex-primary-rag.md) 锁定：**自研 Agent
