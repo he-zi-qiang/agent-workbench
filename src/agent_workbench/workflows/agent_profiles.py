@@ -47,6 +47,11 @@ from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalCont
 from agent_workbench.domain.runs import AgentRunRequest, RunBudget, TraceContext
 from agent_workbench.domain.tasks import TaskNodeId, TaskState
 from agent_workbench.domain.tools import ToolName
+from agent_workbench.domain.workspace import (
+    WORKSPACE_LIST_TOOL,
+    WORKSPACE_READ_TOOL,
+    WORKSPACE_WRITE_TOOL,
+)
 
 #: The agents of the fixed v1 graph. Named after what they do rather than after
 #: the node they sit on: two of them are the same kind of worker pointed at
@@ -174,6 +179,17 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
         # The only profile that admits evidence, because it is the only one
         # whose product is grounded in all of it at once.
         admits=frozenset({"objective", "plan", "evidence"}),
+        # The working set (ADR-028). These are the one kind of tool a profile
+        # may hold statically, because they have no external effect at all:
+        # they bind names inside this Task's own versioned artifact store, so a
+        # replay produces another version rather than a second effect somewhere
+        # nothing can take it back. The rule the empty tuples elsewhere protect
+        # is "no external effect inside a model loop", and these are outside it.
+        tool_names=(
+            WORKSPACE_LIST_TOOL,
+            WORKSPACE_READ_TOOL,
+            WORKSPACE_WRITE_TOOL,
+        ),
         # MCP extends synthesis only. Planners, critics and the two independent
         # research branches do not silently acquire a deployment tool catalog.
         dynamic_tool_sources=frozenset({"mcp"}),

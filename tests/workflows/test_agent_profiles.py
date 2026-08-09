@@ -244,16 +244,32 @@ def test_a_profile_cannot_grant_a_tool_the_task_never_authorized() -> None:
     assert request.tool_names == ("knowledge_search",)
 
 
-def test_the_v1_agents_reach_no_tool_at_all() -> None:
+#: The one static tool set a profile may hold (ADR-028). It reaches nothing
+#: outside this Task: every write binds a name inside the Task's own versioned
+#: artifact store, so a replay produces another version rather than a second
+#: effect somewhere nothing can take it back.
+WORKSPACE_TOOLS = ("workspace_list", "workspace_read", "workspace_write")
+
+
+def test_no_v1_agent_reaches_an_effect_outside_the_task() -> None:
     """Evidence gathering goes through ports and dedicated nodes.
 
-    Handing a research agent a tool would put an external effect inside a model
-    loop that the graph's own gateway, ledger and approval node exist to keep
-    outside it.
+    Handing a research agent an *outward* tool would put an external effect
+    inside a model loop that the graph's own gateway, ledger and approval node
+    exist to keep outside it. The workspace tools are the stated exception and
+    the reason is that they are not outward at all -- so this asserts the rule
+    it means rather than the emptiness that used to stand in for it.
     """
 
     for profile in V1_AGENT_PROFILES:
-        assert profile.tool_names == ()
+        assert set(profile.tool_names) <= set(WORKSPACE_TOOLS), profile.name
+
+
+def test_only_the_writer_holds_the_workspace_tools() -> None:
+    exposed = {profile.node: profile.tool_names for profile in V1_AGENT_PROFILES}
+
+    assert exposed["synthesize"] == WORKSPACE_TOOLS
+    assert all(names == () for node, names in exposed.items() if node != "synthesize")
 
 
 def test_only_the_writer_accepts_the_dynamic_mcp_catalog() -> None:
@@ -264,7 +280,8 @@ def test_only_the_writer_accepts_the_dynamic_mcp_catalog() -> None:
         for profile in V1_AGENT_PROFILES
     }
 
-    assert exposed["synthesize"] == catalog
+    # Dynamic tools extend the static ceiling rather than replacing it.
+    assert exposed["synthesize"] == (*WORKSPACE_TOOLS, *catalog)
     assert all(names == () for node, names in exposed.items() if node != "synthesize")
 
 

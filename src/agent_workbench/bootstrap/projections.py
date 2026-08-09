@@ -34,6 +34,11 @@ from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.domain.schema import JsonObject
 from agent_workbench.domain.tools import ToolName
+from agent_workbench.domain.workspace import (
+    WORKSPACE_LIST_TOOL,
+    WORKSPACE_READ_TOOL,
+    WORKSPACE_WRITE_TOOL,
+)
 from agent_workbench.ports.task_workflow import GraphVersion
 
 #: The permission ceiling every v1 Task is submitted under.
@@ -50,8 +55,18 @@ from agent_workbench.ports.task_workflow import GraphVersion
 #: the *tool* boundary, which nothing in v1 can satisfy: the gateway's answer to
 #: a tool needing approval is to refuse it. The result would be an approved Task
 #: that cannot export -- a gate that only ever says no is not a gate.
+#: The workspace tools ride in every variant (ADR-028). They are the one
+#: addition that does not widen anything outward: each binds a name inside this
+#: Task's own versioned artifact store, `max_tool_risk` already reaches "write",
+#: and a replay produces another version rather than a second outside effect.
+WORKSPACE_TOOLS: tuple[ToolName, ...] = (
+    WORKSPACE_LIST_TOOL,
+    WORKSPACE_READ_TOOL,
+    WORKSPACE_WRITE_TOOL,
+)
+
 TASK_V1_AUTHORIZATION_ENVELOPE = AuthorizationEnvelope(
-    allowed_tools=(EXPORT_ARTIFACT_TOOL,),
+    allowed_tools=(EXPORT_ARTIFACT_TOOL, *WORKSPACE_TOOLS),
     max_tool_risk="write",
     approval_required_risks=(),
 )
@@ -69,7 +84,7 @@ TASK_V1_AUTHORIZATION_ENVELOPE = AuthorizationEnvelope(
 #: is the graph's approval node, and a tool-boundary gate the gateway can only
 #: answer with "no" is not a gate.
 TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH = AuthorizationEnvelope(
-    allowed_tools=(EXPORT_ARTIFACT_TOOL, EXTERNAL_SEARCH_TOOL),
+    allowed_tools=(EXPORT_ARTIFACT_TOOL, EXTERNAL_SEARCH_TOOL, *WORKSPACE_TOOLS),
     max_tool_risk="external",
     approval_required_risks=(),
 )
@@ -91,10 +106,14 @@ def task_authorization_envelope(
             if external_search
             else TASK_V1_AUTHORIZATION_ENVELOPE
         )
+    # The workspace tools are in every variant, so this branch has to carry
+    # them too. Spelling them once here rather than deriving the tuple from the
+    # constants above keeps the two branches readable, and the test that pins
+    # both shapes is what stops them drifting apart.
     tools: tuple[ToolName, ...] = (
-        (EXPORT_ARTIFACT_TOOL, EXTERNAL_SEARCH_TOOL, *mcp_tools)
+        (EXPORT_ARTIFACT_TOOL, EXTERNAL_SEARCH_TOOL, *mcp_tools, *WORKSPACE_TOOLS)
         if external_search
-        else (EXPORT_ARTIFACT_TOOL, *mcp_tools)
+        else (EXPORT_ARTIFACT_TOOL, *mcp_tools, *WORKSPACE_TOOLS)
     )
     return AuthorizationEnvelope(
         allowed_tools=tools,

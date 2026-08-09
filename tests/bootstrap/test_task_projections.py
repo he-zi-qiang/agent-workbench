@@ -14,6 +14,7 @@ from agent_workbench.adapters.tools.export_artifact import (
 )
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import (
+    WORKSPACE_TOOLS,
     project_api,
     project_ingestion_worker,
     project_task,
@@ -60,7 +61,7 @@ def test_task_projection_contains_submission_decisions_but_no_raw_settings() -> 
     # One tool, named. The graph has exactly one node that writes, and a
     # ceiling wide enough for a tool it does not have would authorise the next
     # tool somebody registers without anyone deciding to.
-    assert envelope.allowed_tools == (EXPORT_ARTIFACT_TOOL,)
+    assert envelope.allowed_tools == (EXPORT_ARTIFACT_TOOL, *WORKSPACE_TOOLS)
     assert envelope.denied_tools == ()
     assert envelope.max_tool_risk == "write"
     assert envelope.permits(EXPORT_SPEC)

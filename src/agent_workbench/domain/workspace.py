@@ -48,6 +48,15 @@ WorkspaceName = Annotated[
 MAX_WORKSPACE_ENTRIES: Final[int] = 256
 MAX_WORKSPACE_TOTAL_BYTES: Final[int] = 64 * 1024 * 1024
 
+#: The names these tools are known by. They live in the domain rather than
+#: beside the handlers because both an agent profile and the authorization
+#: envelope have to name them, and neither may import an adapter.
+WORKSPACE_LIST_TOOL: Final[str] = "workspace_list"
+WORKSPACE_READ_TOOL: Final[str] = "workspace_read"
+WORKSPACE_WRITE_TOOL: Final[str] = "workspace_write"
+#: What a principal must hold before the write tool may be dispatched.
+WORKSPACE_WRITE_SCOPE: Final[str] = "workspace:write"
+
 
 class WorkspaceOverflowError(ValueError):
     """A write would take the workspace past a ceiling.
@@ -112,6 +121,10 @@ class WorkspaceManifest(VersionedModel):
 __all__ = [
     "MAX_WORKSPACE_ENTRIES",
     "MAX_WORKSPACE_TOTAL_BYTES",
+    "WORKSPACE_LIST_TOOL",
+    "WORKSPACE_READ_TOOL",
+    "WORKSPACE_WRITE_SCOPE",
+    "WORKSPACE_WRITE_TOOL",
     "WorkspaceManifest",
     "WorkspaceName",
     "WorkspaceOverflowError",

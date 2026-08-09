@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_workbench.bootstrap.projections import project_task
+from agent_workbench.bootstrap.projections import WORKSPACE_TOOLS, project_task
 from agent_workbench.bootstrap.settings import Settings
 from tests.config.test_settings import valid_payload
 
@@ -63,6 +63,7 @@ def test_retryable_server_tools_are_frozen_into_new_task_authority() -> None:
         "export_artifact",
         "mcp_office_lookup",
         "mcp_office_render_document",
+        *WORKSPACE_TOOLS,
     )
     assert envelope.max_tool_risk == "external"
 
@@ -71,12 +72,17 @@ def test_nonretryable_server_tools_never_enter_task_authority() -> None:
     nonretryable = Settings(**payload_with_servers(SERVER))
     retryable = Settings(**payload_with_servers({**SERVER, "retryable_effects": True}))
 
+    # The workspace tools ride in both: they are not outward, so a server the
+    # deployment refused to trust does not gain or lose anything by their
+    # presence. What this pins is that the *MCP* name is the only difference.
     assert project_task(nonretryable).default_authorization_envelope.allowed_tools == (
         "export_artifact",
+        *WORKSPACE_TOOLS,
     )
     assert project_task(retryable).default_authorization_envelope.allowed_tools == (
         "export_artifact",
         "mcp_office_render_document",
+        *WORKSPACE_TOOLS,
     )
 
 
