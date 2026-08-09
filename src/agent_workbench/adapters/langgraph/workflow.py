@@ -139,6 +139,11 @@ class GraphState(TypedDict, total=False):
     evidence_refs: Annotated[tuple[Identifier, ...], _merge]
     agent_outcome_refs: Annotated[tuple[Identifier, ...], _merge]
     draft_ref: str | None
+    # ADR-028. Last write wins, deliberately not merged: two nodes cannot both
+    # advance the working set, because each derives its new version from the one
+    # it read at entry. A merge reducer here would silently pick a winner and
+    # drop the other node's writes without anything reporting it.
+    workspace_version: str | None
     review_result: Any
     approval_id: str | None
     approval_decision: str | None

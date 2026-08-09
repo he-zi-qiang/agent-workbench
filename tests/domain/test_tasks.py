@@ -249,6 +249,7 @@ def test_task_state_round_trips_through_json_without_framework_state() -> None:
         "plan",
         "evidence_refs",
         "draft_ref",
+        "workspace_version",
         "review_result",
         "approval_id",
         "approval_decision",

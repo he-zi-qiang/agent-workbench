@@ -334,7 +334,8 @@
     "revision_count": 0,
     "schema_version": 1,
     "task_id": "task_0000000000000000000000000000001",
-    "wants_report": true
+    "wants_report": true,
+    "workspace_version": null
   },
   "TaskInput": {
     "knowledge_base_id": "kb_main",
@@ -396,18 +397,18 @@
     "timeout_seconds": 120
   },
   "WorkspaceManifest": {
-    "schema_version": 1,
     "entries": {
       "notes.md": {
-        "schema_version": 1,
         "artifact_id": "art_0000000000000000000000000000001",
-        "tenant_id": "tenant_demo",
+        "filename": "research-report.pdf",
         "kind": "report",
         "media_type": "application/pdf",
-        "size_bytes": 2048,
+        "schema_version": 1,
         "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "filename": "research-report.pdf"
+        "size_bytes": 2048,
+        "tenant_id": "tenant_demo"
       }
-    }
+    },
+    "schema_version": 1
   }
 }
