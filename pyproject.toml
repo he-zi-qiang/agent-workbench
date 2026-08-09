@@ -96,6 +96,7 @@ agent-ingestion-worker = "agent_workbench.apps.ingestion_worker.main:main"
 agent-task-worker = "agent_workbench.apps.task_worker.main:main"
 agent-word-mcp = "agent_workbench.apps.word_mcp.main:main"
 agent-sandbox-mcp = "agent_workbench.apps.sandbox_mcp.main:main"
+agent-web-mcp = "agent_workbench.apps.web_mcp.main:main"
 agent-config-check = "agent_workbench.bootstrap.config_check:main"
 agent-evidence = "agent_workbench.bootstrap.evidence:main"
 

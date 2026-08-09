@@ -42,14 +42,12 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any, Final, Protocol, cast
-from urllib.parse import urljoin
 
 from agent_workbench.adapters.research.address_guard import (
     AddressResolver,
-    DestinationRefusedError,
-    assert_public_destination,
     resolve_addresses,
 )
+from agent_workbench.adapters.research.guarded_fetch import guarded_get
 from agent_workbench.adapters.research.page_text import page_text
 from agent_workbench.domain.evidence import ExternalSearchHit
 from agent_workbench.ports.cancellation import CancellationToken
@@ -102,11 +100,6 @@ _FETCH_HEADERS: Final[dict[str, str]] = {
     # fallback decode below a rare path rather than the usual one.
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
 }
-
-#: How many hops a redirect chain may take before this gives up. Each hop is
-#: judged separately by the address guard, so the bound is about not following a
-#: loop rather than about safety.
-MAX_REDIRECTS: Final[int] = 5
 
 _SEARCH_SYSTEM_PROMPT: Final[str] = (
     "You are a research assistant with a web search tool. Search for the "
@@ -317,31 +310,19 @@ class DeepSeekWebSearch:
     async def _get_through_the_guard(self, url: str) -> Any | None:
         """GET ``url``, judging every hop of the redirect chain before it opens.
 
-        Redirects are followed here rather than by the client, and that is the
-        whole point: ``follow_redirects=True`` would have the client connect to
-        wherever a ``Location`` header pointed, which is the same SSRF with one
-        extra step. Each hop goes through the guard first.
+        Redirects are followed in the shared helper rather than by the client,
+        and that is the whole point: ``follow_redirects=True`` would have the
+        client connect to wherever a ``Location`` header pointed, which is the
+        same SSRF with one extra step.
         """
 
-        current = url
-        for _ in range(MAX_REDIRECTS + 1):
-            await assert_public_destination(current, resolve=self.resolve_addresses)
-            response = await self.http.get(
-                current,
-                headers=_FETCH_HEADERS,
-                follow_redirects=False,
-                timeout=self.fetch_timeout_seconds,
-            )
-            status = int(getattr(response, "status_code", 200))
-            if status not in _REDIRECT_STATUSES:
-                return response
-            location = _location_of(response)
-            if not location:
-                return response
-            # Resolved against the URL that answered, so a relative Location is
-            # the same destination a browser would compute.
-            current = urljoin(current, location)
-        raise DestinationRefusedError("the redirect chain is too long")
+        return await guarded_get(
+            self.http,
+            url,
+            headers=_FETCH_HEADERS,
+            timeout=self.fetch_timeout_seconds,
+            resolve=self.resolve_addresses,
+        )
 
     async def _post(
         self,
@@ -483,19 +464,6 @@ def _recordable(url: str) -> bool:
     """Whether this URL can be stored as evidence exactly as the tool gave it."""
 
     return len(url) <= MAX_URL_CHARS and _HTTP_URL.match(url) is not None
-
-
-_REDIRECT_STATUSES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
-
-
-def _location_of(response: Any) -> str:
-    headers: Any = getattr(response, "headers", None)
-    if headers is None:
-        return ""
-    getter: Any = getattr(headers, "get", None)
-    if getter is None:
-        return ""
-    return str(getter("location") or "")
 
 
 def _decoded(response: Any) -> str:

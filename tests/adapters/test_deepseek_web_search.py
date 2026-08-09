@@ -23,13 +23,13 @@ from agent_workbench.adapters.research.deepseek_web_search import (
     MAX_EXTRACT_CHARS,
     MAX_PAGE_BYTES,
     MAX_PAGE_CHARS,
-    MAX_REDIRECTS,
     MAX_URL_CHARS,
     MESSAGES_PATH,
     WEB_SEARCH_TOOL_TYPE,
     DeepSeekWebSearch,
     WebSearchUnavailableError,
 )
+from agent_workbench.adapters.research.guarded_fetch import MAX_REDIRECTS
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.research import ExternalSearchPort
 
