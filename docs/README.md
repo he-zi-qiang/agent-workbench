@@ -10,7 +10,7 @@
 |---|---:|---|
 | [架构与技术选型基线](./architecture-baseline.md) | v1.3 | 锁定产品边界、分层、组件职责、可靠性协议和技术选型 |
 | [代码实施计划](./implementation-plan.md) | v1.0 | 将目标架构拆成工作包、PR、迁移、测试门禁和证据包 |
-| [配置管理契约](./configuration.md) | schema 1.2 | 定义配置来源、密钥规则、快照语义和跨域校验 |
+| [配置管理契约](./configuration.md) | schema 1.6 | 定义配置来源、密钥规则、快照语义和跨域校验 |
 | [本机 Compose 部署](./deployment.md) | local demo | 定义可复现容器拓扑、端口边界与 demo worker 限制 |
 
 ## 决策记录
@@ -41,9 +41,13 @@
 
 ## 当前事实
 
-截至 2026-08-03，A–F 汇合增量、OTel/LangChain 工具互操作（PR #67）以及三处围栏修复
-（PR #68）都已经在 `main` 上；仍未合并的只有 `feat/react-chat-work-ui` 的 React 控制
-台与 ADR-017 文档口径。已有的 Runtime、Chat/Dense RAG、安全发布与恢复能力继续成立；
+截至 2026-08-08，A–F 汇合增量、OTel/LangChain 工具互操作（PR #67）、三处围栏修复
+（PR #68）、React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈值
+评测（PR #72、#73）以及 Chat 联网搜索与工具额度语义（PR #74）都已经在 `main` 上。
+随之落地的五条 ADR——无接地对话形态（ADR-018）、运行步骤透明度（ADR-019）、
+外部检索（ADR-020）、Chat 兜底分支联网（ADR-021）和工具额度语义（ADR-022）——
+把配置 schema 从 `1.2` 推到 `1.6`。
+已有的 Runtime、Chat/Dense RAG、安全发布与恢复能力继续成立；
 A–F 修复的当前状态如下：
 
 | 修复组 | 状态 | 当前事实 |
@@ -51,12 +55,15 @@ A–F 修复的当前状态如下：
 | A | **完成** | Task 工作流显式区分成功/失败，revision 预算与 critic 拒绝终态已订正 |
 | B | **完成** | tenant-scoped 提交幂等、输入 fingerprint、owner/tenant 查询隔离已落地 |
 | C | **完成** | TaskInput Artifact、Task API/CLI、独立 Worker 入口与单 Worker 纵向切片已落地 |
-| D | **主体完成并通过回归** | 真实 handlers、内部研究/evidence、结构化 plan/critic 与 Task 授权上下文已接入；真实外部搜索 Provider 未实现 |
+| D | **完成** | 真实 handlers、内部研究/evidence、结构化 plan/critic 与 Task 授权上下文已接入；真实外部搜索 Provider 已接入（ADR-020，DeepSeek 服务端 `web_search`），`research.enabled` 默认关闭，因为它同时决定 Task 授权信封的宽度 |
 | E | **主体完成并通过状态测试** | claim、lease/heartbeat/epoch、stale reclaim、retry/dead-letter、execution guard、fenced checkpointer 与确定性 failpoint 已接入；PR #68 后，图节点在**领取时的** lease 下写入，跨 epoch 的遗留 intent 转人工核对 |
 | F | **主体完成** | Qdrant 启动校验、常驻摄取、HITL、OTel、React 控制台、生命周期时间线和本机 Compose 已落地 |
 
-当前明确未完成：真实外部搜索、Langfuse、CrewAI 对比、动态 Multi-Agent、生产身份认证
-和生产部署；LlamaIndex ingestion/retrieval Adapter 与 RAGAS runner 也仍是 Planned。
+当前明确未完成：Langfuse、CrewAI 对比、动态 Multi-Agent、生产身份认证和生产部署；
+RAGAS runner 仍是 Planned（仓库里既没有 runner，`pyproject.toml` 里也没有这个依赖）。
+LlamaIndex retrieval Adapter 已经建成并通过契约测试，但 `rag.llama_index.enabled`
+默认为 `false`——缺的不是实现，是一份能把两条检索路径区分开的等价性度量
+（ADR-017 第 3 步）。
 旧 Qdrant Point 物理清理、历史 token window/compaction 与 EventLog
 upcaster/poison-row 隔离仍未形成完整产品切片。
 
