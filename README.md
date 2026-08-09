@@ -15,9 +15,10 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 截至 2026-08-08，`main` 已包含 Task/HITL/副作用账本收尾、三处围栏修复（PR #68）、
 React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈值评测
-（PR #72、#73），以及 Chat 联网搜索与工具额度语义（PR #74）。ADR-018～022
-（无接地对话形态、运行步骤透明度、外部检索、Chat 兜底分支联网、工具额度语义）
-**都已在 `main` 上**，配置 schema 相应走到 `1.6`。
+（PR #72、#73），以及 Chat 联网搜索与工具额度语义（PR #74）。ADR-018～023
+（无接地对话形态、运行步骤透明度、外部检索、Chat 兜底分支联网、工具额度语义、
+自由回答也能联网）**都已在 `main` 上**，配置 schema 相应走到 `1.6`——ADR-023
+没有再动 schema，它只合并了实现。
 最新实现证据和历史增量分开记录在 [实施状态](docs/status.md)；下列能力均有代码或
 测试作为依据：
 
@@ -102,7 +103,9 @@ React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈�
 - 外部搜索已接上真实 Provider（[ADR-020](docs/adr/0020-external-web-search.md)）：
   DeepSeek 服务端 `web_search`，走 Anthropic-compatible endpoint，不引入第二把
   API key。[ADR-021](docs/adr/0021-chat-web-search.md) 把它扩到 Chat 的兜底分支，
-  作为模型可以不用的工具，用了网页的回答不算接地。`research.enabled` **默认关闭**，
+  [ADR-023](docs/adr/0023-direct-chat-reaches-the-web.md) 再扩到自由回答——两条
+  路径的共同点是手里没有证据，而不是走了哪个类；`routed` 的接地分支仍然够不到它。
+  两处都是模型可以不用的工具，用了网页的回答不算接地。`research.enabled` **默认关闭**，
   因为这个字段同时决定 Task 授权信封的宽度，且信封随 Task 存下、每次恢复重新施加。
 - HITL Approval 已贯通 LangGraph interrupt、权威账本、版本化决定 API、授权复核与
   跨进程恢复；React Work 页面只按服务端权威记录提供决定操作。

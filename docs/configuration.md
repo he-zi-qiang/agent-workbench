@@ -514,9 +514,13 @@ Optional Lab 为 true 就拒绝启动。
   `projections.task_authorization_envelope` 按这个字段选出，并**随 Task 一起存
   下、每次恢复重新施加**。一个从没开过外部检索的部署，不能因为升级就让历史
   Task 的信封变宽。
-- **Chat 侧还要过 scope。** Chat 的 `web_search` 只出现在兜底分支，且是模型可以
-  不用的工具；调用方没有 `external:search` scope 时，policy 会逐次拒绝，run
-  照常给出无证据的回答（[ADR-022](./adr/0022-tool-ceiling-closes-the-toolbox.md)
+- **Chat 侧还要过 scope。** Chat 的 `web_search` 出现在两条**没有证据**的路径上，
+  且都是模型可以不用的工具：`routed` 检索后判定语料库没覆盖的兜底分支
+  （[ADR-021](./adr/0021-chat-web-search.md)），以及用户没选知识库的自由回答
+  （`answer_mode = "direct"`，[ADR-023](./adr/0023-direct-chat-reaches-the-web.md)）。
+  `routed` 的**接地**分支永远够不到它——语料库能回答的问题从语料库回答，这是
+  `routed` 可测量的前提。调用方没有 `external:search` scope 时，policy 会逐次
+  拒绝，run 照常给出无证据的回答（[ADR-022](./adr/0022-tool-ceiling-closes-the-toolbox.md)
   之后不再 502），只是会先把工具额度耗在被拒的提议上。
 - **`enabled = true` 但没有真实 key 是启动错误，所有环境都查，不只是
   production。** 见 `Settings` 的跨域校验：enabled-without-a-key 在配置文件里

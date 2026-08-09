@@ -1502,9 +1502,10 @@ PostgreSQL + Qdrant 的数字仍是上面那次运行的，两者不能互相替
 | Langfuse / CrewAI 对照 / RAGAS | ✓ |  |  |  |
 
 外部检索一栏的 Tested 写作"契约"而不是 ✓，是因为它的测试全部打在 fake
-`ExternalSearchPort` 上：`tests/adapters/test_web_search_tool.py` 与
-`tests/application/test_routed_chat.py` 覆盖工具契约、Policy 拒绝路径和兜底分支的
-降级行为，但**没有任何一条测试打到真实 DeepSeek 端点**（仓库里出现
+`ExternalSearchPort` 上：`tests/adapters/test_web_search_tool.py`、
+`tests/application/test_routed_chat.py` 与 `tests/application/test_direct_chat.py`
+覆盖工具契约、Policy 拒绝路径，以及兜底分支与自由回答两条路径的降级行为
+（ADR-023 之后它们是同一个实现），但**没有任何一条测试打到真实 DeepSeek 端点**（仓库里出现
 `api.deepseek.com` 的两处都是配置默认值断言）。这和 BGE 权重那几项是同一种口径：
 适配器成立，真实 Provider 的行为未取证。`research.enabled` 默认 `false`，
 它同时决定 Task 授权信封的宽度。
