@@ -1428,16 +1428,20 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-截至 2026-08-03，主分支基线为 `main@a0e1b6c`，包含 OTel/LangChain 工具互操作
-（PR #67）与三处围栏修复（PR #68）。下表在 2026-07-28 之后**大幅落后于实现**
+截至 2026-08-08，主分支基线为 `main@900d83f`，在 OTel/LangChain 工具互操作
+（PR #67）与三处围栏修复（PR #68）之上，还包含 React 控制台（PR #69）、
+LlamaIndex 检索 Adapter 与路由阈值评测（PR #72、#73）以及 Chat 联网搜索与工具额度
+语义（PR #74，即 ADR-021/022）。下表在 2026-07-28 之后**大幅落后于实现**
 （它当时写着「没有 Task Registry、Task Worker 或重启恢复证据」），已按实际代码逐条
 订正。
 
 **框架口径（[ADR-017](./adr/0017-llamaindex-primary-rag.md)）：自研 Runtime +
 LangGraph + LlamaIndex + RAGAS。** 当前自研 ingestion/retrieval 已有 38 题 gold set
 证据（MRR 0.960 / recall@1 0.947 / 61ms），但它是 LlamaIndex 迁移的 reference
-baseline，不是取消框架集成的最终决定。LlamaIndex Adapter 与 RAGAS runner 在实际代码
-和测试落地前仍保持 Planned。
+baseline，不是取消框架集成的最终决定。LlamaIndex **检索** Adapter 的代码和契约测试
+此后已经落地（`adapters/llama_index/`，PR #72），但表里仍记 Planned——理由换了：
+不再是"代码没写"，而是 `rag.llama_index.enabled = false`（缺 ADR-017 第 3 步要的
+等价性度量）、ingestion 未迁移、RAGAS runner 不存在。适配器存在不等于框架集成完成。
 
 门禁取自当前工作树 `feat/react-chat-work-ui`（= `main@a0e1b6c` + React 控制台）：
 真实 PostgreSQL 16 + Qdrant `1821 passed / 11 skipped`；无外部服务
