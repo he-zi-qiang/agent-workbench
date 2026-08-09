@@ -12,8 +12,9 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 import httpx
 from qdrant_client import AsyncQdrantClient
@@ -89,7 +90,10 @@ from agent_workbench.ports.research import ExternalSearchPort
 from agent_workbench.ports.tools import ToolBinding
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 from agent_workbench.workers.task import TaskWorker
-from agent_workbench.workflows.agent_profiles import assert_within_static_limit
+from agent_workbench.workflows.agent_profiles import (
+    DynamicToolSource,
+    assert_within_static_limit,
+)
 from agent_workbench.workflows.approval import TaskApprovalGate
 from agent_workbench.workflows.demo_handlers import build_demo_v1_handlers
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
@@ -119,7 +123,7 @@ class _RealHandlers:
     qdrant: AsyncQdrantClient
     research_http: httpx.AsyncClient | None
     mcp_tool_names: tuple[ToolName, ...]
-    sandbox_tool_names: tuple[ToolName, ...]
+    dynamic_tools: dict[DynamicToolSource, tuple[ToolName, ...]]
     tool_names: tuple[ToolName, ...]
 
 
@@ -153,11 +157,17 @@ class TaskWorkerDependencies:
     research_http: httpx.AsyncClient | None = None
     qdrant: AsyncQdrantClient | None = None
     mcp_tool_names: tuple[ToolName, ...] = ()
-    #: Empty when this deployment configured no sandbox, and also when it
-    #: configured one whose container runtime did not answer (ADR-029 §3.6).
-    #: The writer profile is widened from this rather than from configuration,
-    #: so the two cases are the same to everything downstream.
-    sandbox_tool_names: tuple[ToolName, ...] = ()
+    #: What each audience actually got, keyed by the value the profiles declare.
+    #: An audience is absent when this deployment configured nothing for it, and
+    #: also when it configured something that did not answer at startup -- an
+    #: MCP server that was down, a sandbox with no container runtime. The
+    #: profiles are widened from this rather than from configuration, so the two
+    #: cases are the same to everything downstream.
+    dynamic_tools: Mapping[DynamicToolSource, tuple[ToolName, ...]] = field(
+        default_factory=lambda: cast(
+            "dict[DynamicToolSource, tuple[ToolName, ...]]", {}
+        )
+    )
     # Every tool this process registered, exposed for the same reason
     # `handlers` is: which tools a deployment assembled is a deploy-time fact,
     # and the difference between a registry that satisfies the agent profiles
@@ -304,9 +314,7 @@ async def build_task_worker_dependencies(
             research_http=research_http,
             qdrant=qdrant,
             mcp_tool_names=() if assembled is None else assembled.mcp_tool_names,
-            sandbox_tool_names=(
-                () if assembled is None else assembled.sandbox_tool_names
-            ),
+            dynamic_tools={} if assembled is None else assembled.dynamic_tools,
             tool_names=() if assembled is None else assembled.tool_names,
         )
     except BaseException:
@@ -456,7 +464,7 @@ async def _build_real_handlers(
         WorkspaceReadTool(workspace_scope).binding(),
         WorkspaceWriteTool(workspace_scope).binding(),
     )
-    mcp_bindings = await _build_mcp_bindings(
+    discovered_mcp = await _build_mcp_bindings(
         config,
         artifacts=artifacts,
         resources=resources,
@@ -467,6 +475,15 @@ async def _build_real_handlers(
         resources=resources,
     )
     sandbox_bindings = () if sandbox_binding is None else (sandbox_binding,)
+    mcp_bindings = tuple(binding for binding, _ in discovered_mcp)
+    # One mapping, three audiences. The sandbox is not a special case here: it
+    # is a catalog keyed by the value the writer profile declares, exactly like
+    # the two an MCP server can serve.
+    dynamic_tools = _by_audience(discovered_mcp)
+    if sandbox_bindings:
+        dynamic_tools["sandbox"] = tuple(
+            binding.spec.name for binding in sandbox_bindings
+        )
     tool_registry = StaticToolRegistry(
         (
             external_tool.binding(),
@@ -535,8 +552,7 @@ async def _build_real_handlers(
             export=GatewayReportExport(gateway=gateway, ledger=ledger),
             policy_identity=policy_identity,
         ),
-        mcp_tool_names=tuple(binding.spec.name for binding in mcp_bindings),
-        sandbox_tool_names=tuple(binding.spec.name for binding in sandbox_bindings),
+        dynamic_tools=dynamic_tools,
         workspace_scope=workspace_scope,
     )
     return _RealHandlers(
@@ -545,7 +561,7 @@ async def _build_real_handlers(
         qdrant=qdrant,
         research_http=research_http,
         mcp_tool_names=tuple(binding.spec.name for binding in mcp_bindings),
-        sandbox_tool_names=tuple(binding.spec.name for binding in sandbox_bindings),
+        dynamic_tools=dynamic_tools,
         tool_names=tuple(spec.name for spec in tool_registry.specs()),
     )
 
@@ -609,16 +625,41 @@ async def _build_sandbox_binding(
     return None  # pragma: no cover - AsyncExitStack does not suppress
 
 
+def _by_audience(
+    discovered: tuple[tuple[ToolBinding, DynamicToolSource], ...],
+) -> dict[DynamicToolSource, tuple[ToolName, ...]]:
+    """Which names each audience actually got, from what was registered.
+
+    Built from the bindings rather than from the configuration: a server that
+    was unreachable at startup contributes nothing here, and the profile is
+    widened from this. Widening it from configuration instead would name a tool
+    the gateway cannot resolve, which is a failing node rather than a missing
+    capability.
+    """
+
+    catalogs: dict[DynamicToolSource, list[ToolName]] = {}
+    for binding, audience in discovered:
+        catalogs.setdefault(audience, []).append(binding.spec.name)
+    return {audience: tuple(names) for audience, names in catalogs.items()}
+
+
 async def _build_mcp_bindings(
     config: TaskWorkerRuntimeConfig,
     *,
     artifacts: LocalArtifactStore,
     resources: AsyncExitStack,
-) -> tuple[ToolBinding, ...]:
+) -> tuple[tuple[ToolBinding, DynamicToolSource], ...]:
+    """Every discovered binding, paired with the audience its server declared.
+
+    Paired rather than grouped here so the caller can build both the flat
+    registry and the per-audience catalog from one traversal, and so a server
+    that yielded nothing cannot silently contribute an empty audience.
+    """
+
     if config.mcp is None:
         return ()
 
-    bindings: list[ToolBinding] = []
+    bindings: list[tuple[ToolBinding, DynamicToolSource]] = []
     for server in config.mcp.servers:
         if not server.retryable_effects:
             logger.warning(
@@ -665,7 +706,7 @@ async def _build_mcp_bindings(
                 continue
             owned = candidate_resources.pop_all()
             resources.push_async_callback(owned.aclose)
-            bindings.extend(discovered)
+            bindings.extend((binding, server.audience) for binding in discovered)
     return tuple(bindings)
 
 

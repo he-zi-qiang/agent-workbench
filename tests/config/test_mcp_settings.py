@@ -40,10 +40,10 @@ def test_a_deployment_that_never_configured_mcp_gets_no_servers() -> None:
     assert settings.optional_labs.mcp_adapter is False
 
 
-def test_config_schema_version_moved_to_1_9() -> None:
+def test_config_schema_version_moved_to_1_10() -> None:
     settings = Settings(**valid_payload())
 
-    assert settings.app.config_schema_version == "1.9"
+    assert settings.app.config_schema_version == "1.10"
 
 
 def test_retryable_server_tools_are_frozen_into_new_task_authority() -> None:
@@ -237,3 +237,50 @@ def test_plain_http_is_limited_to_loopback_endpoints() -> None:
     ):
         settings = Settings(**payload_with_servers({**SERVER, "endpoint": endpoint}))
         assert settings.mcp.servers[0].endpoint == endpoint
+
+
+def test_a_server_that_states_no_audience_keeps_the_one_it_has_today() -> None:
+    """The anti-regression default (ADR-027 §3.3).
+
+    Every configuration written before this field existed meant `synthesis`:
+    ADR-025 gave the dynamic catalog to `writer/synthesize` and to nothing
+    else. A default of `research` would silently move the Word renderer off the
+    writer on upgrade.
+    """
+
+    settings = Settings(**payload_with_servers(SERVER))
+
+    assert settings.mcp.servers[0].audience == "synthesis"
+
+
+def test_both_audiences_are_accepted_and_nothing_else_is() -> None:
+    for audience in ("research", "synthesis"):
+        settings = Settings(**payload_with_servers({**SERVER, "audience": audience}))
+        assert settings.mcp.servers[0].audience == audience
+
+    # A free-form value would make "which agent may reach this tool" a question
+    # about whichever config file was written last.
+    with pytest.raises(ValidationError):
+        Settings(**payload_with_servers({**SERVER, "audience": "everyone"}))
+
+
+def test_the_audience_does_not_change_what_the_task_envelope_allows() -> None:
+    """The envelope is the Task\'s ceiling; the audience is which agent may
+    reach up to it. Conflating them would make a research tool unusable by a
+    Task submitted while it was declared for synthesis."""
+
+    research = Settings(
+        **payload_with_servers(
+            {**SERVER, "retryable_effects": True, "audience": "research"}
+        )
+    )
+    synthesis = Settings(
+        **payload_with_servers(
+            {**SERVER, "retryable_effects": True, "audience": "synthesis"}
+        )
+    )
+
+    assert (
+        project_task(research).default_authorization_envelope
+        == project_task(synthesis).default_authorization_envelope
+    )

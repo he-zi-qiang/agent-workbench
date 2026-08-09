@@ -123,7 +123,7 @@ def test_a_writer_calls_an_mcp_tool_through_the_task_runtime() -> None:
                     objective="Render the quarterly plan.",
                 ),
                 task_context,
-                mcp_tool_names=(LOCAL_NAME,),
+                dynamic_tools={"synthesis": (LOCAL_NAME,)},
             )
             assert request.tool_names == (LOCAL_NAME,)
 

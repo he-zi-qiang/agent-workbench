@@ -143,7 +143,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.9"] = "1.9"
+    config_schema_version: Literal["1.10"] = "1.10"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -781,6 +781,15 @@ class MCPServerSettings(StrictModel):
     #: only the deployment can know whether the remote effects satisfy it.
     retryable_effects: bool
     timeout_seconds: int = Field(default=30, ge=1, le=600)
+    #: Which agent this server's tools are for (ADR-027 §3.3). Declared here
+    #: rather than hard-coded beside the profiles, so adding a renderer or a
+    #: reader is a configuration change instead of an edit to `agent_profiles`.
+    #:
+    #: The default is `synthesis` because that is what every configuration
+    #: written before this field existed already meant: ADR-025 gave the
+    #: dynamic catalog to `writer/synthesize` and to nothing else, so a server
+    #: that omits this keeps exactly the audience it has today.
+    audience: Literal["research", "synthesis"] = "synthesis"
 
     @field_validator("endpoint")
     @classmethod

@@ -426,6 +426,10 @@ class MCPServerConfig:
     retryable_effects: bool
     timeout_seconds: int
     remote_tools: tuple[str, ...]
+    #: Which agent receives this server's tools (ADR-027 §3.3). The Task
+    #: envelope still lists every configured name regardless: the envelope is
+    #: the Task's ceiling, and this is which agent may reach up to it.
+    audience: Literal["research", "synthesis"] = "synthesis"
 
 
 @dataclass(frozen=True, slots=True)
@@ -660,6 +664,7 @@ def project_task_worker(
                         retryable_effects=server.retryable_effects,
                         timeout_seconds=server.timeout_seconds,
                         remote_tools=server.tools,
+                        audience=server.audience,
                     )
                     for server in settings.mcp.servers
                 ),

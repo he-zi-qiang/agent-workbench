@@ -440,7 +440,7 @@ def test_task_handlers_offer_mcp_only_to_synthesis_under_submitted_authority() -
             executor=executor,
             artifacts=InMemoryArtifactStore(),
             invocations=_provider(registry),
-            mcp_tool_names=(tool_name,),
+            dynamic_tools={"synthesis": (tool_name,)},
         )
 
         await handlers["understand"](_state())

@@ -272,17 +272,65 @@ def test_only_the_writer_holds_the_workspace_tools() -> None:
     assert all(names == () for node, names in exposed.items() if node != "synthesize")
 
 
-def test_only_the_writer_accepts_the_dynamic_mcp_catalog() -> None:
-    catalog = ("mcp_office_lookup", "mcp_office_render_document")
+def test_each_audience_reaches_exactly_the_profile_that_declared_it() -> None:
+    """Which agent gets a server's tools is the server's declaration.
+
+    Both halves are needed. The `synthesis` half is the anti-regression one:
+    it says this change did not move the Word renderer off the writer while
+    giving `researcher_external` a catalog of its own.
+    """
+
+    synthesis = ("mcp_office_render_document",)
+    research = ("mcp_web_fetch_page", "mcp_web_download_document")
 
     exposed = {
-        profile.node: profile_with_dynamic_tools(profile, mcp=catalog).tool_names
+        profile.node: profile_with_dynamic_tools(
+            profile, {"synthesis": synthesis, "research": research}
+        ).tool_names
         for profile in V1_AGENT_PROFILES
     }
 
     # Dynamic tools extend the static ceiling rather than replacing it.
-    assert exposed["synthesize"] == (*WORKSPACE_TOOLS, *catalog)
+    assert exposed["synthesize"] == (*WORKSPACE_TOOLS, *synthesis)
+    assert exposed["research_external"] == research
+    assert all(
+        names == ()
+        for node, names in exposed.items()
+        if node not in {"synthesize", "research_external"}
+    )
+
+
+def test_an_audience_nobody_configured_widens_nothing() -> None:
+    """The anti-regression control: with no MCP configured, the six profiles
+    expose exactly what they did before this field existed."""
+
+    exposed = {
+        profile.node: profile_with_dynamic_tools(profile, {}).tool_names
+        for profile in V1_AGENT_PROFILES
+    }
+
+    assert exposed["synthesize"] == WORKSPACE_TOOLS
     assert all(names == () for node, names in exposed.items() if node != "synthesize")
+
+
+def test_a_research_server_is_invisible_to_the_writer_and_the_reverse() -> None:
+    """Stated as a pair, because one direction alone proves nothing.
+
+    An implementation that handed every catalog to every subscriber satisfies
+    "the researcher can see the reader"; one that handed out nothing satisfies
+    "the writer cannot".
+    """
+
+    writer = profile_with_dynamic_tools(
+        profile_for("synthesize"), {"research": ("mcp_web_fetch_page",)}
+    )
+    researcher = profile_with_dynamic_tools(
+        profile_for("research_external"),
+        {"synthesis": ("mcp_office_render_document",)},
+    )
+
+    assert "mcp_web_fetch_page" not in writer.tool_names
+    assert "mcp_office_render_document" not in researcher.tool_names
 
 
 def test_the_writer_selects_word_rendering_only_for_an_explicit_docx_request() -> None:
@@ -297,7 +345,7 @@ def test_the_writer_selects_word_rendering_only_for_an_explicit_docx_request() -
 def test_dynamic_mcp_tools_still_intersect_the_submitted_envelope() -> None:
     profile = profile_with_dynamic_tools(
         profile_for("synthesize"),
-        mcp=("mcp_office_lookup", "mcp_office_render_document"),
+        {"synthesis": ("mcp_office_lookup", "mcp_office_render_document")},
     )
 
     request = build_agent_request(
