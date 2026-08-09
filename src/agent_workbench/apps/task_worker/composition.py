@@ -50,6 +50,11 @@ from agent_workbench.adapters.tools.task_export import GatewayReportExport
 from agent_workbench.adapters.tools.task_external_research import (
     GatewayExternalEvidence,
 )
+from agent_workbench.adapters.tools.workspace import (
+    WorkspaceListTool,
+    WorkspaceReadTool,
+    WorkspaceWriteTool,
+)
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.task_inputs import TaskInputStore
@@ -93,6 +98,7 @@ from agent_workbench.workflows.task_handlers import (
     TaskResearchHandlers,
     build_task_v1_handlers,
 )
+from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 
 class RealTaskHandlersUnavailableError(RuntimeError):
@@ -132,6 +138,12 @@ class TaskWorkerDependencies:
     research_http: httpx.AsyncClient | None = None
     qdrant: AsyncQdrantClient | None = None
     mcp_tool_names: tuple[ToolName, ...] = ()
+    # Every tool this process registered, exposed for the same reason
+    # `handlers` is: which tools a deployment assembled is a deploy-time fact,
+    # and the difference between a registry that satisfies the agent profiles
+    # and one that is missing three of them is otherwise invisible until a
+    # Task reaches the node that asks for them.
+    tool_names: tuple[ToolName, ...] = ()
 
     async def startup(self) -> None:
         """Validate the live read alias before claiming durable Task work."""
@@ -206,6 +218,7 @@ async def build_task_worker_dependencies(
         )
         resources.push_async_callback(guards.dispose)
         mcp_tool_names: tuple[ToolName, ...] = ()
+        tool_names: tuple[ToolName, ...] = ()
         # Wired whatever the handlers are. The demo graph answers its own gate and
         # never interrupts, but a Worker that could meet an interrupt without a
         # ledger would park the Task instead of resuming it -- and the ledger costs
@@ -218,6 +231,7 @@ async def build_task_worker_dependencies(
                 qdrant,
                 research_http,
                 mcp_tool_names,
+                tool_names,
             ) = await _build_real_handlers(
                 config,
                 artifacts=artifacts,
@@ -274,6 +288,7 @@ async def build_task_worker_dependencies(
             research_http=research_http,
             qdrant=qdrant,
             mcp_tool_names=mcp_tool_names,
+            tool_names=tool_names,
         )
     except BaseException:
         await resources.aclose()
@@ -328,6 +343,7 @@ async def _build_real_handlers(
     httpx.AsyncClient,
     AsyncQdrantClient,
     httpx.AsyncClient | None,
+    tuple[ToolName, ...],
     tuple[ToolName, ...],
 ]:
     """Assemble Task evidence and model execution without a demo fallback."""
@@ -418,13 +434,28 @@ async def _build_real_handlers(
         )
     )
     export_tool = ExportArtifactTool(artifacts=artifacts)
+    # The working set (ADR-028). The writer profile and the authorization
+    # envelope both name these three, and `ToolGateway.advertise` raises for a
+    # requested tool the process does not register -- so a Worker assembled
+    # without them does not lose a capability, it fails at `synthesize`.
+    workspace_scope = WorkspaceScope()
+    workspace_bindings = (
+        WorkspaceListTool(workspace_scope).binding(),
+        WorkspaceReadTool(workspace_scope).binding(),
+        WorkspaceWriteTool(workspace_scope).binding(),
+    )
     mcp_bindings = await _build_mcp_bindings(
         config,
         artifacts=artifacts,
         resources=resources,
     )
     tool_registry = StaticToolRegistry(
-        (external_tool.binding(), export_tool.binding(), *mcp_bindings)
+        (
+            external_tool.binding(),
+            export_tool.binding(),
+            *workspace_bindings,
+            *mcp_bindings,
+        )
     )
     gateway = ToolGateway(
         registry=tool_registry,
@@ -486,6 +517,7 @@ async def _build_real_handlers(
             policy_identity=policy_identity,
         ),
         mcp_tool_names=tuple(binding.spec.name for binding in mcp_bindings),
+        workspace_scope=workspace_scope,
     )
     return (
         handlers,
@@ -493,6 +525,7 @@ async def _build_real_handlers(
         qdrant,
         research_http,
         tuple(binding.spec.name for binding in mcp_bindings),
+        tuple(spec.name for spec in tool_registry.specs()),
     )
 
 

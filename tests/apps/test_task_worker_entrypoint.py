@@ -45,6 +45,11 @@ from agent_workbench.bootstrap.settings import Settings
 from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.domain.schema import JsonObject
 from agent_workbench.ports.model import ModelPort
+from agent_workbench.workflows.agent_profiles import (
+    V1_AGENT_PROFILES,
+    permitted_tools,
+    profile_with_mcp_tools,
+)
 from agent_workbench.workflows.task_handlers import build_task_v1_handlers
 
 
@@ -241,6 +246,49 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
     http, qdrant = asyncio.run(scenario())
 
     assert (http, qdrant) == (True, True)
+
+
+def test_a_real_worker_registers_every_tool_its_agents_can_ask_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gap that is invisible until a Task reaches the node that asks.
+
+    `ToolGateway.advertise` raises `UnknownToolError` for a requested tool the
+    process does not register, and what a node requests is
+    `permitted_tools(profile, envelope)` -- neither of which the composition
+    root is otherwise checked against. A profile or an envelope that names a
+    tool nobody assembled is therefore not a missing capability; it is a
+    `synthesize` node that fails on every Task, which is how the workspace
+    tools shipped.
+
+    Derived from the profiles rather than spelled out, so the next tool added
+    to one is covered without anybody remembering to come back here.
+    """
+
+    _patch_real_runtime(monkeypatch)
+
+    async def scenario() -> tuple[tuple[str, ...], tuple[str, ...]]:
+        dependencies = await build_task_worker_dependencies(_projected_config())
+        try:
+            envelope = dependencies.config.task.default_authorization_envelope
+            requested = {
+                name
+                for profile in V1_AGENT_PROFILES
+                for name in permitted_tools(
+                    profile_with_mcp_tools(profile, dependencies.mcp_tool_names),
+                    envelope.allowed_tools,
+                )
+            }
+            return tuple(sorted(requested)), dependencies.tool_names
+        finally:
+            await dependencies.dispose()
+
+    requested, registered = asyncio.run(scenario())
+
+    # The control group. An assembly that registered nothing would satisfy a
+    # bare subset check if the profiles happened to request nothing either.
+    assert "workspace_write" in requested
+    assert set(requested) <= set(registered), sorted(set(requested) - set(registered))
 
 
 def test_mcp_connection_lives_until_worker_disposal(
