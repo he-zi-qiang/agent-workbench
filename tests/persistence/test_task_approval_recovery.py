@@ -29,7 +29,7 @@ from agent_workbench.adapters.langgraph import (
     PostgresCheckpointSaver,
     build_approval_node,
 )
-from agent_workbench.adapters.langgraph.workflow import build_v1_graph
+from agent_workbench.adapters.langgraph.workflow import GRAPH_DEFINITIONS
 from agent_workbench.adapters.persistence import (
     PostgresApprovalStore,
     PostgresTaskRegistry,
@@ -54,7 +54,7 @@ TABLES = (
 )
 
 VERSIONS = ("v1",)
-BUILDERS = {"v1": build_v1_graph}
+GRAPHS = {"v1": GRAPH_DEFINITIONS["v1"]}
 
 #: Every export this test file has ever performed, across every Worker. It is a
 #: module-level list rather than a per-Worker one on purpose: the point of a
@@ -178,7 +178,7 @@ def _worker(engine: Any, *, approvals: Any | None = None) -> TaskWorker:
         workflow=LangGraphTaskWorkflow(
             handlers=_handlers(engine),
             checkpointer=PostgresCheckpointSaver(engine),
-            builders=BUILDERS,
+            graphs=GRAPHS,
         ),
         load_state=_load_state,
         buildable_versions=VERSIONS,

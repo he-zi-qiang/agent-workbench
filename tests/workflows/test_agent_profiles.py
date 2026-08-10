@@ -21,6 +21,7 @@ from agent_workbench.domain.runs import RunBudget, TraceContext
 from agent_workbench.domain.tasks import TaskState, TaskStep
 from agent_workbench.workflows.agent_profiles import (
     V1_AGENT_PROFILES,
+    V2_AGENT_PROFILES,
     AgentContextViolationError,
     AgentProfile,
     AgentProfileLimitError,
@@ -411,3 +412,163 @@ def test_a_graph_with_more_agents_than_the_deployment_permits_refuses_to_start()
 
     with pytest.raises(AgentProfileLimitError):
         assert_within_static_limit(len(V1_AGENT_PROFILES) - 1)
+
+
+# --------------------------------------------------------------------------
+# The v2 roster (ADR-031)
+# --------------------------------------------------------------------------
+
+#: The read-only subset, restated as a literal for the same reason
+#: WORKSPACE_TOOLS is above: the test is the control for the source constant.
+WORKSPACE_READ_TOOLS = (
+    "workspace_grep",
+    "workspace_list",
+    "workspace_read",
+)
+
+
+def test_every_v2_model_invoking_node_has_exactly_one_agent() -> None:
+    by_node = {profile.node: profile.name for profile in V2_AGENT_PROFILES}
+
+    assert by_node == {
+        "understand": "framer",
+        "work": "worker",
+        "review": "reviewer",
+    }
+    # The gate and the write stay agentless in v2 exactly as in v1: approval
+    # interrupts and export performs, and neither has a prompt to hold.
+    for node in ("approval", "export"):
+        with pytest.raises(KeyError):
+            profile_for(node)
+
+
+def test_the_two_graphs_share_one_framer_rather_than_two_that_agree() -> None:
+    """`understand` means the same thing in both graphs (ADR-031 §2.1), and
+    identity is what keeps that true: a second profile saying the same thing
+    in different words would be the first place the two drifted."""
+
+    assert V1_AGENT_PROFILES[0] is V2_AGENT_PROFILES[0]
+
+
+def test_the_worker_reads_the_objective_and_the_complaint_and_nothing_else() -> None:
+    worker = profile_for("work")
+
+    assert worker.admits == frozenset({"objective", "review"})
+    # Not evidence: v2 has no researchers, and what this agent reads it reads
+    # through its own tools.
+    with pytest.raises(AgentContextViolationError):
+        render_projection(worker, _state(), ProjectedContext(evidence=(_bundle(),)))
+    # Not a draft either: the worker produces the report, it does not review one.
+    with pytest.raises(AgentContextViolationError):
+        render_projection(
+            worker,
+            _state(),
+            ProjectedContext(draft_ref="draft_1", revision_number=0),
+        )
+
+
+def test_the_review_block_reaches_the_worker_only_on_a_revision_pass() -> None:
+    """The complaint is the difference between attempt one and attempt two.
+
+    Absent on the first pass because the situation is absent, not compressed;
+    present afterwards because a loop that carries nothing back is not a
+    method. And it is the *current* verdict only -- the projection reads one
+    bounded field, so the prompt is the same size on the tenth revision as on
+    the first.
+    """
+
+    worker = profile_for("work")
+
+    first_pass = render_projection(worker, _state())[0].text()
+    assert "sent this back" not in first_pass
+
+    sent_back = _state(
+        draft_ref="draft_1",
+        review_result={
+            "decision": "revise",
+            "reviewed_draft_ref": "draft_1",
+            "revision_number": 0,
+            "summary": "The script still fails on the second sheet.",
+            "issues": ("Column headers are dropped.",),
+            "score": 40,
+        },
+    )
+    revision_pass = render_projection(worker, sent_back)[0].text()
+    assert "The script still fails on the second sheet." in revision_pass
+    assert "Column headers are dropped." in revision_pass
+
+
+def test_the_worker_holds_the_working_set_and_every_read_or_render_audience() -> None:
+    worker = profile_for("work")
+
+    assert worker.tool_names == WORKSPACE_TOOLS
+    # Everything ADR-031 §2.1 means by "a full tool set": read outward, render
+    # a document, run code. All three are read-or-inward audiences.
+    assert worker.dynamic_tool_sources == frozenset(
+        {"research", "synthesis", "sandbox"}
+    )
+
+
+def test_the_worker_never_reaches_the_export_tool() -> None:
+    """ADR-027's line holds on v2 (ADR-031 §2.4): the Task's one externally
+    visible write stays behind the human gate, not inside the model loop.
+
+    Asserted at the intersection, with the envelope *granting* the tool: the
+    Task authorizes `export_artifact` because its export node needs it, and
+    the worker still cannot name it, because no profile ceiling includes it
+    and no dynamic audience carries it.
+    """
+
+    worker = profile_with_dynamic_tools(
+        profile_for("work"),
+        {
+            "research": ("mcp_web_fetch_page",),
+            "synthesis": ("mcp_office_render_document",),
+            "sandbox": ("sandbox_run_python",),
+        },
+    )
+    granted = permitted_tools(
+        worker,
+        (*WORKSPACE_TOOLS, "export_artifact", "mcp_web_fetch_page"),
+    )
+
+    assert "export_artifact" not in granted
+    assert "mcp_web_fetch_page" in granted
+
+
+def test_the_reviewer_reads_the_working_set_but_cannot_change_it() -> None:
+    """The exception that proves the v1 rule rather than bending it.
+
+    The critic is kept away from the evidence *behind* a draft because reading
+    it would mean reviewing the research. Here the working set **is** the
+    product, so a reviewer that cannot open it is reviewing a description of
+    the work instead of the work -- and one that could change it would be
+    doing the work over.
+    """
+
+    reviewer = profile_for("review")
+
+    assert reviewer.admits == frozenset({"objective", "draft"})
+    assert reviewer.tool_names == WORKSPACE_READ_TOOLS
+    assert reviewer.dynamic_tool_sources == frozenset()
+    assert "workspace_write" not in reviewer.tool_names
+    assert "workspace_edit" not in reviewer.tool_names
+
+
+def test_the_agent_ceiling_binds_each_graph_separately() -> None:
+    """Each roster is checked against the whole limit, not a share of it.
+
+    A Task runs one graph, so two graphs do not double a Task's cost -- but a
+    limit that only ever counted v1's roster would be satisfied by a v2 that
+    outgrew it, which is the drift ADR-031 §3 warns about.
+    """
+
+    assert_within_static_limit(
+        len(V2_AGENT_PROFILES), rosters=(("v2_general", V2_AGENT_PROFILES),)
+    )
+
+    with pytest.raises(AgentProfileLimitError, match="v2_general"):
+        assert_within_static_limit(
+            len(V2_AGENT_PROFILES) - 1,
+            rosters=(("v2_general", V2_AGENT_PROFILES),),
+        )

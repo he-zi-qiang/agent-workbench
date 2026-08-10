@@ -27,7 +27,7 @@ from agent_workbench.adapters.langgraph import (
     PostgresCheckpointSaver,
     build_approval_node,
 )
-from agent_workbench.adapters.langgraph.workflow import GRAPH_BUILDERS, NodeHandler
+from agent_workbench.adapters.langgraph.workflow import GRAPH_DEFINITIONS, NodeHandler
 from agent_workbench.adapters.mcp.client import connect_mcp_client
 from agent_workbench.adapters.mcp.registry_source import discover_bindings
 from agent_workbench.adapters.persistence import (
@@ -97,14 +97,14 @@ from agent_workbench.workflows.agent_profiles import (
     assert_within_static_limit,
 )
 from agent_workbench.workflows.approval import TaskApprovalGate
-from agent_workbench.workflows.demo_handlers import build_demo_v1_handlers
+from agent_workbench.workflows.demo_handlers import build_demo_handlers
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.task_handlers import (
     BoundedParallelExecutor,
     TaskExportHandlers,
     TaskNodeInvocationProvider,
     TaskResearchHandlers,
-    build_task_v1_handlers,
+    build_task_handlers,
 )
 from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
@@ -223,7 +223,7 @@ async def build_task_worker_dependencies(
     research_http: httpx.AsyncClient | None = None
     qdrant: AsyncQdrantClient | None = None
     if handlers is None and demo:
-        handlers = build_demo_v1_handlers()
+        handlers = build_demo_handlers()
 
     try:
         scope = TaskExecutionScope()
@@ -292,7 +292,7 @@ async def build_task_worker_dependencies(
             approvals=approvals,
             workflow=workflow,
             load_state=inputs.load_state,
-            buildable_versions=tuple(GRAPH_BUILDERS),
+            buildable_versions=tuple(GRAPH_DEFINITIONS),
             worker_id=config.worker_id,
             lease_seconds=config.task.lease_seconds,
             heartbeat_seconds=config.task.heartbeat_seconds,
@@ -384,9 +384,10 @@ async def _build_real_handlers(
             "or --demo"
         )
 
-    # Before anything is built. The limit describes the compiled graph's shape,
-    # so a graph that outgrew what this deployment budgeted for must stop the
-    # process rather than be discovered one expensive Task at a time.
+    # Before anything is built, and over every graph's roster rather than one.
+    # The limit describes a compiled graph's shape, so a graph that outgrew
+    # what this deployment budgeted for must stop the process rather than be
+    # discovered one expensive Task at a time.
     assert_within_static_limit(config.multi_agent.static_agent_node_limit)
 
     main_profile = config.model.profiles.get("main")
@@ -553,7 +554,11 @@ async def _build_real_handlers(
             config.multi_agent.max_seconds_per_agent_invocation
         ),
     )
-    handlers = build_task_v1_handlers(
+    # Every node either graph runs, in one mapping. The adapter compiles each
+    # graph by looking its own nodes up here, so a Worker that assembled only
+    # one graph's handlers would not fail on the other -- it would run it with
+    # pass-throughs (ADR-031 §3: the cross-cutting thing has to hold on both).
+    handlers = build_task_handlers(
         executor=executor,
         artifacts=artifacts,
         invocations=invocations,

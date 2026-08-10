@@ -44,7 +44,7 @@ from agent_workbench.adapters.langgraph import (
     PostgresCheckpointSaver,
     build_approval_node,
 )
-from agent_workbench.adapters.langgraph.workflow import build_v1_graph
+from agent_workbench.adapters.langgraph.workflow import GRAPH_DEFINITIONS
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
     PostgresApprovalStore,
@@ -75,7 +75,7 @@ TABLES = (
 )
 
 VERSIONS = ("v1",)
-BUILDERS = {"v1": build_v1_graph}
+GRAPHS = {"v1": GRAPH_DEFINITIONS["v1"]}
 
 TENANT = "tenant_a"
 OWNER = "user_1"
@@ -253,7 +253,7 @@ def _worker(
         workflow=LangGraphTaskWorkflow(
             handlers=_handlers(engine, store, draft_ref),
             checkpointer=PostgresCheckpointSaver(engine),
-            builders=BUILDERS,
+            graphs=GRAPHS,
         ),
         load_state=_state_loader(draft_ref),
         buildable_versions=VERSIONS,

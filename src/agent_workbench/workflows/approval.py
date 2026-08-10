@@ -28,10 +28,12 @@ from agent_workbench.domain.tasks import TaskState
 from agent_workbench.ports.approvals import ApprovalRecord, ApprovalStore
 from agent_workbench.ports.task_registry import TaskRegistry
 
-#: The v1 graph has exactly one interrupt, and this names it. It is stable
-#: across re-entries because it is the *operation*, not the attempt: the
-#: ledger's uniqueness constraint is on ``(task_id, this)``, which is what makes
-#: asking twice produce one approval.
+#: Either graph has exactly one interrupt -- the gate before its export -- and
+#: this names it. It is stable across re-entries because it is the *operation*,
+#: not the attempt: the ledger's uniqueness constraint is on ``(task_id,
+#: this)``, which is what makes asking twice produce one approval. One id for
+#: both graphs is deliberate: a Task runs one graph, so the pair cannot collide,
+#: and the operation really is the same question in either shape (ADR-031 §2.4).
 APPROVAL_OPERATION_ID: Final[Identifier] = "approval:export"
 
 

@@ -55,7 +55,7 @@ from agent_workbench.workflows.agent_profiles import (
     profile_for,
     profile_with_dynamic_tools,
 )
-from agent_workbench.workflows.task_handlers import build_task_v1_handlers
+from agent_workbench.workflows.task_handlers import build_task_handlers
 
 
 def _config(tmp_path: object) -> TaskWorkerRuntimeConfig:
@@ -695,7 +695,7 @@ def test_mcp_connection_rolls_back_when_later_worker_assembly_fails(
         raise RuntimeError("workflow assembly failed after MCP discovery")
 
     monkeypatch.setattr(composition, "connect_mcp_client", connect)
-    monkeypatch.setattr(composition, "build_task_v1_handlers", fail_after_mcp)
+    monkeypatch.setattr(composition, "build_task_handlers", fail_after_mcp)
     projected = _projected_config()
     config = replace(
         projected,
@@ -748,7 +748,7 @@ def test_real_worker_assembles_the_human_gate_and_the_ledger_that_answers_it(
                 # other handler does not build this one, so its presence is the
                 # composition root's doing rather than something inherited.
                 "approval"
-                not in build_task_v1_handlers(
+                not in build_task_handlers(
                     executor=FakeModel(()),  # type: ignore[arg-type]
                     artifacts=dependencies.artifacts,
                     invocations=None,  # type: ignore[arg-type]

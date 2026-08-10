@@ -28,7 +28,7 @@ from agent_workbench.adapters.langgraph import (
     LangGraphTaskWorkflow,
     PostgresCheckpointSaver,
 )
-from agent_workbench.adapters.langgraph.workflow import build_v1_graph
+from agent_workbench.adapters.langgraph.workflow import GRAPH_DEFINITIONS
 from agent_workbench.adapters.persistence import (
     PostgresTaskRegistry,
     create_query_engine,
@@ -45,7 +45,7 @@ TABLES = (
 )
 
 VERSIONS = ("v1", "v2")
-BUILDERS = {"v1": build_v1_graph, "v2": build_v1_graph}
+GRAPHS = {"v1": GRAPH_DEFINITIONS["v1"], "v2": GRAPH_DEFINITIONS["v1"]}
 
 
 def _dsn() -> str:
@@ -174,7 +174,7 @@ def _worker(engine: Any, handlers: dict[str, Any] | None = None) -> TaskWorker:
         workflow=LangGraphTaskWorkflow(
             handlers=handlers if handlers is not None else _handlers(),
             checkpointer=PostgresCheckpointSaver(engine),
-            builders=BUILDERS,
+            graphs=GRAPHS,
         ),
         load_state=_load_state,
         buildable_versions=VERSIONS,
@@ -246,7 +246,7 @@ def test_a_worker_records_an_exhausted_critic_rejection_as_failed() -> None:
                 workflow=LangGraphTaskWorkflow(
                     handlers=handlers,
                     checkpointer=PostgresCheckpointSaver(engine),
-                    builders=BUILDERS,
+                    graphs=GRAPHS,
                 ),
                 load_state=exhausted_state,
                 buildable_versions=VERSIONS,
@@ -454,7 +454,7 @@ def test_a_checkpoint_this_worker_cannot_build_is_parked_by_what_wrote_it() -> N
                 workflow=LangGraphTaskWorkflow(
                     handlers=_handlers(),
                     checkpointer=PostgresCheckpointSaver(engine),
-                    builders={**BUILDERS, "v9": build_v1_graph},
+                    graphs={**GRAPHS, "v9": GRAPH_DEFINITIONS["v1"]},
                 ),
                 load_state=_load_state,
                 buildable_versions=(*VERSIONS, "v9"),
@@ -571,7 +571,7 @@ def test_a_worker_that_claims_a_cancelled_task_propagates_it() -> None:
                 workflow=LangGraphTaskWorkflow(
                     handlers=_handlers(calls),
                     checkpointer=PostgresCheckpointSaver(engine),
-                    builders=BUILDERS,
+                    graphs=GRAPHS,
                 ),
                 load_state=_load_state,
                 buildable_versions=VERSIONS,
@@ -625,7 +625,7 @@ def test_a_long_graph_execution_is_kept_alive_by_an_independent_heartbeat() -> N
                 workflow=LangGraphTaskWorkflow(
                     handlers=handlers,
                     checkpointer=PostgresCheckpointSaver(engine),
-                    builders=BUILDERS,
+                    graphs=GRAPHS,
                 ),
                 load_state=_load_state,
                 buildable_versions=VERSIONS,
@@ -676,7 +676,7 @@ def test_a_worker_gives_up_rather_than_deciding_forever() -> None:
                 workflow=StuckWorkflow(
                     handlers=_handlers(),
                     checkpointer=PostgresCheckpointSaver(engine),
-                    builders=BUILDERS,
+                    graphs=GRAPHS,
                 ),
                 load_state=_load_state,
                 buildable_versions=VERSIONS,
