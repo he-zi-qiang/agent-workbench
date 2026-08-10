@@ -63,7 +63,23 @@ SystemPrompt = Annotated[str, StringConstraints(max_length=65_536)]
 
 
 class TokenUsage(DomainModel):
-    """Token accounting for one run, including cache traffic."""
+    """Token accounting for one run, including cache traffic.
+
+    ``input_tokens`` is the whole prompt, and ``cache_read_tokens`` is the part
+    of that prompt which was served from cache -- a subset, not a separate
+    stream of tokens. That is the providers' convention rather than this
+    project's: DeepSeek reports ``prompt_tokens`` alongside
+    ``prompt_cache_hit_tokens``, and the adapter passes both through unchanged.
+    ``cache_write_tokens`` is the exception, reported outside the prompt count,
+    and so the one cache figure that is genuinely additive.
+
+    Adapters must preserve that convention. An adapter that reported only the
+    cache *miss* as ``input_tokens`` would silently unprice its own run:
+    ``ModelPrices.cost_micro_usd`` subtracts the hit from the prompt to find
+    what to charge at the full input rate, and against an already-exclusive
+    count that subtraction clamps to zero and bills nothing for the uncached
+    prompt.
+    """
 
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
@@ -72,10 +88,27 @@ class TokenUsage(DomainModel):
 
     @property
     def total(self) -> int:
+        """Every token this run moved, counting each of them once.
+
+        Adding ``cache_read_tokens`` to ``input_tokens`` would count the cached
+        prompt twice, and prompt caching is on by default -- so the inflated
+        figure was what ``max_total_tokens`` and the ``token_budget`` stop
+        reason actually saw. On the pinned DeepSeek turn, a 142-token run
+        reported 206 and could be killed as over budget with a quarter of its
+        ceiling still unspent. Caching must change what a prompt costs, never
+        how long the run is judged to be.
+
+        Decomposed exactly as ``ModelPrices.cost_micro_usd`` decomposes the
+        same usage, including the clamp for a cache report larger than the
+        prompt it belongs to: the two answer different questions about one
+        turn, and must not disagree about what that turn contained.
+        """
+
+        uncached_input = max(0, self.input_tokens - self.cache_read_tokens)
         return (
-            self.input_tokens
-            + self.output_tokens
+            uncached_input
             + self.cache_read_tokens
+            + self.output_tokens
             + self.cache_write_tokens
         )
 

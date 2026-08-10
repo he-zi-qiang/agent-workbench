@@ -162,14 +162,86 @@ def test_the_deadline_needs_an_explicit_clock() -> None:
 
 
 def test_token_usage_counts_cache_traffic() -> None:
+    """A cache write is prompt traffic the provider reports on its own line.
+
+    Unlike a cache *read* it is not already inside ``input_tokens``, so it is
+    the one cache figure ``total`` still adds.
+    """
+
     usage = TokenUsage(
         input_tokens=100,
         output_tokens=20,
-        cache_read_tokens=300,
+        cache_read_tokens=30,
         cache_write_tokens=5,
     )
 
-    assert usage.total == 425
+    assert usage.total == 125
+
+
+def test_a_cached_prompt_is_not_counted_twice() -> None:
+    """``input_tokens`` already contains the cached part; ``total`` cannot re-add it.
+
+    The numbers are the DeepSeek contract's, pinned by
+    ``tests/contracts/test_deepseek_model.py``: ``prompt_tokens=118`` with
+    ``prompt_cache_hit_tokens=64``, and 24 tokens of answer. That prompt was
+    118 tokens long and 64 of those 118 came from cache, so the turn moved 142
+    tokens -- not 206.
+
+    The control is the same turn with the cache cold. Caching changes what a
+    prompt *costs*, never how long it *was*, so the two must agree; before this
+    fix they differed by exactly the cache hit.
+    """
+
+    cached = TokenUsage(input_tokens=118, output_tokens=24, cache_read_tokens=64)
+    uncached = TokenUsage(input_tokens=118, output_tokens=24)
+
+    assert cached.total == 142
+    assert uncached.total == 142
+
+
+def test_a_cache_report_larger_than_its_prompt_does_not_inflate_the_total() -> None:
+    """The same clamp ``ModelPrices.cost_micro_usd`` applies, for the same reason.
+
+    A provider should never report more cached tokens than prompt tokens. If
+    one does, the prompt is treated as entirely cached rather than the surplus
+    being counted as extra traffic: a total that overstates slightly is a
+    better failure than one that grows as the report gets more absurd.
+
+    Its control is the ordinary case, which the clamp must leave alone.
+    """
+
+    impossible = TokenUsage(input_tokens=100, output_tokens=20, cache_read_tokens=900)
+    ordinary = TokenUsage(input_tokens=900, output_tokens=20, cache_read_tokens=100)
+
+    assert impossible.total == 920
+    assert ordinary.total == 920
+
+
+def test_caching_does_not_bring_the_token_ceiling_forward() -> None:
+    """The defect this fixes: ``token_budget`` firing below the configured ceiling.
+
+    ``model.*.prompt_cache_enabled`` defaults to True, so the double count was
+    the normal path rather than an edge case. A 200-token ceiling with a
+    142-token run has 58 tokens left whether or not the prompt was cached; the
+    old sum read 206 and ended the run as ``token_budget``.
+
+    Controls on both sides: the uncached twin must also continue, and a run
+    that genuinely passes the ceiling must still stop -- a ``total`` that
+    halted nothing would satisfy the first two assertions just as well.
+    """
+
+    budget = _budget(max_total_tokens=200)
+    cached = BudgetUsage(
+        tokens=TokenUsage(input_tokens=118, output_tokens=24, cache_read_tokens=64)
+    )
+    uncached = BudgetUsage(tokens=TokenUsage(input_tokens=118, output_tokens=24))
+    overrun = BudgetUsage(
+        tokens=TokenUsage(input_tokens=190, output_tokens=24, cache_read_tokens=64)
+    )
+
+    assert budget.halt_reason_for(cached) is None
+    assert budget.halt_reason_for(uncached) is None
+    assert budget.halt_reason_for(overrun) == "token_budget"
 
 
 def test_child_usage_aggregates_into_the_parent() -> None:
