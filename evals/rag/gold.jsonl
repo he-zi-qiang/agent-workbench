@@ -36,3 +36,17 @@
 {"question": "does ACL mean asynchronous callback layer", "document_id": "doc_abbreviations"}
 {"question": "what does MRR stand for here", "document_id": "doc_abbreviations"}
 {"question": "is RRF the same as RFC", "document_id": "doc_abbreviations"}
+{"question": "which rotation is paged for the component that returns the AWB-44xx refusal family", "document_ids": ["doc_component-artifact-store", "doc_team-marlin"]}
+{"question": "how long is data kept in the store the Ingestion Worker writes to", "document_ids": ["doc_component-ingestion-worker", "doc_store-aw-vectors"]}
+{"question": "which team owns the component that a stuck export points at", "document_ids": ["doc_runbook-stuck-export", "doc_component-approval-ledger"]}
+{"question": "which channel receives pages for the component returning AWB-52xx", "document_ids": ["doc_component-retrieval-service", "doc_team-kestrel"]}
+{"question": "how often is the backup restored for the cluster the Approval Ledger writes to", "document_ids": ["doc_component-approval-ledger", "doc_store-aw-core"]}
+{"question": "what is the escalation delay for the team that owns the Sandbox", "document_ids": ["doc_component-sandbox", "doc_team-osprey"]}
+{"question": "which team owns the component the index rebuild procedure points at", "document_ids": ["doc_runbook-index-rebuild", "doc_component-ingestion-worker"]}
+{"question": "are there backups for the cluster the Retrieval Service reads", "document_ids": ["doc_component-retrieval-service", "doc_store-aw-vectors"]}
+{"question": "which refusal family is returned by the component blamed when every tool call is denied", "document_ids": ["doc_runbook-refused-tools", "doc_component-tool-gateway"]}
+{"question": "how long are run outputs kept in the bucket the Artifact Store uses", "document_ids": ["doc_component-artifact-store", "doc_store-aw-blobs"]}
+{"question": "which channel handles pages for the component that assigns durable sequences", "document_ids": ["doc_component-event-log", "doc_team-kestrel"]}
+{"question": "what is the acknowledgement window before escalation for the team owning the Task Worker", "document_ids": ["doc_component-task-worker", "doc_team-northwind"]}
+{"question": "which rotation covers the component that returns AWB-53xx", "document_ids": ["doc_component-ingestion-worker", "doc_team-marlin"]}
+{"question": "how long are rows kept in the cluster the Event Log writes to", "document_ids": ["doc_component-event-log", "doc_store-aw-core"]}

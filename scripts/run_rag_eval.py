@@ -28,12 +28,22 @@ Run locally with the embedding extra installed and a Qdrant reachable:
     AGENT_WORKBENCH_TEST_QDRANT_URL=http://localhost:6333 \
     uv run --extra embedding python scripts/run_rag_eval.py
 
+``--paths`` narrows which retrievers are measured; the default is all of them,
+so an unflagged run is byte-for-byte the run this script always performed.
+Narrowing exists because the two paths cost twice the wall clock, and a
+question like "does hybrid fail cross-document questions" is about retrieval
+quality rather than about the adapter -- one production path answers it. What
+narrowing *cannot* do is produce equivalence evidence: with fewer than two
+paths the ADR-017 step-2 comparison has nothing to compare, and the run says
+so out loud rather than exiting zero as though the paths had agreed.
+
 CI does not run this. It has no embedding runtime, and a report produced with
 the deterministic embedder would be a measurement of a hash function.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import sys
@@ -101,13 +111,15 @@ async def _measure(
     sparse: BgeM3SparseEncoder | None,
     client: AsyncQdrantClient,
     reranker: BgeReranker | None = None,
+    paths: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Index the corpus once, then score the gold set with each retriever.
 
-    One collection, two retrievers. Re-indexing per retriever would give each
-    its own points and make any disagreement attributable to the index instead
-    of to the path being measured -- which is the one thing this comparison
-    exists to rule out.
+    One collection, every selected retriever. Re-indexing per retriever would
+    give each its own points and make any disagreement attributable to the
+    index instead of to the path being measured -- which is the one thing this
+    comparison exists to rule out. That holds however many paths ``paths``
+    names: an empty tuple means all of them.
 
     The reranked arm asks for CANDIDATES rather than TOP_K and cuts to TOP_K
     after scoring. That is not a second variable slipped into the comparison --
@@ -160,7 +172,9 @@ async def _measure(
         limit = CANDIDATES
 
         reports: dict[str, Any] = {}
-        for path_name, build in RETRIEVERS.items():
+        selected = paths or tuple(RETRIEVERS)
+        for path_name in selected:
+            build = RETRIEVERS[path_name]
             retriever = build(embedder=embedder, index=index, sparse_encoder=sparse)
 
             async def retrieve(
@@ -209,6 +223,31 @@ async def _measure(
 
 
 async def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--paths",
+        default=",".join(RETRIEVERS),
+        help=(
+            "Comma-separated retriever paths to measure "
+            f"({', '.join(RETRIEVERS)}). Defaults to all of them. Fewer than "
+            "two disables the ADR-017 equivalence comparison, which the run "
+            "reports rather than passing silently."
+        ),
+    )
+    arguments = parser.parse_args()
+    paths = tuple(name.strip() for name in arguments.paths.split(",") if name.strip())
+    unknown = sorted(set(paths) - set(RETRIEVERS))
+    if unknown:
+        print(
+            f"unknown path(s): {', '.join(unknown)}; "
+            f"choose from {', '.join(RETRIEVERS)}",
+            file=sys.stderr,
+        )
+        return 2
+    if not paths:
+        print("--paths selected nothing to measure", file=sys.stderr)
+        return 2
+
     url = os.environ.get("AGENT_WORKBENCH_TEST_QDRANT_URL")
     if not url:
         print("AGENT_WORKBENCH_TEST_QDRANT_URL is not set")
@@ -273,9 +312,19 @@ async def main() -> int:
         *((("hybrid-rerank", sparse, reranker),) if reranker is not None else ()),
     )
     divergent = 0
+    # Said once, before any numbers appear, because the thing a narrowed run
+    # cannot produce is exactly the thing a reader skimming its output would
+    # assume it did (ADR-017 step 2). A run that quietly exited zero on one
+    # path would read as "the paths agreed".
+    if len(paths) < 2:
+        print(
+            f"NOT COMPARING PATHS: measuring only {', '.join(paths)}; "
+            "the ADR-017 equivalence check needs at least two and did not run",
+            file=sys.stderr,
+        )
     try:
         for name, encoder, cross in arms:
-            reports = await _measure(embedder, encoder, client, cross)
+            reports = await _measure(embedder, encoder, client, cross, paths=paths)
             for path_name, report in reports.items():
                 (REPORTS / f"{name}-{path_name}.json").write_text(
                     report.to_json() + "\n", encoding="utf-8"
@@ -287,12 +336,19 @@ async def main() -> int:
             # "The numbers look the same" is a claim somebody makes by eye; a
             # comparison the run itself performed is one it can be held to.
             #
+            # Guarded on the count rather than left to `quality[1:]` being
+            # empty. Both spellings "pass" on one path, and only this one says
+            # which question was never asked -- a check that cannot fail must
+            # not look like a check that passed.
+            #
             # Quality metrics only. `retrieval_latency_ms` is wall clock and
             # never repeats to the last float, so comparing the whole score
             # dict would report every run as divergent -- a check that always
             # fires is a check nobody reads. Latency between the paths is still
             # worth knowing and is printed above; it is not evidence about
             # which documents came back.
+            if len(reports) < 2:
+                continue
             quality = [
                 {
                     metric: value
@@ -303,14 +359,14 @@ async def main() -> int:
             ]
             if any(other != quality[0] for other in quality[1:]):
                 divergent += 1
-                print(f"!!! {name}: the two retrieval paths did not agree")
+                print(f"!!! {name}: the retrieval paths did not agree")
     finally:
         await client.close()
 
     if divergent:
         print(
-            f"{divergent} arm(s) diverged between the reference and LlamaIndex "
-            "paths; ADR-017 step 3 must not proceed on this evidence",
+            f"{divergent} arm(s) diverged across the measured paths; "
+            "ADR-017 step 3 must not proceed on this evidence",
             file=sys.stderr,
         )
         return 1
