@@ -74,8 +74,9 @@ A–F 修复的当前状态如下：
 当前明确未完成：Langfuse、CrewAI 对比、动态 Multi-Agent、生产身份认证和生产部署；
 RAGAS runner 仍是 Planned（仓库里既没有 runner，`pyproject.toml` 里也没有这个依赖）。
 WP15 阶段四（成本与时限、`workspace_edit`、`workspace_grep`）与阶段五（第二张图
-`v2_general`，提交时选图并冻结）代码与测试已落地；v2 尚无真实模型的端到端验收，
-证据现状见 status.md。
+`v2_general`，提交时选图并冻结，CLI 与 web 控制台均可选）代码与测试已落地；v2 的
+真实模型端到端已有首次成功（带 `workspace:write` scope 的提交，ADR-034 纠正轮次
+实战命中一次），证据与仍存的 scope 默认值问题见 status.md。
 LlamaIndex retrieval Adapter 已经建成并通过契约测试，但 `rag.llama_index.enabled`
 默认为 `false`——缺的不是实现，是一份能把两条检索路径区分开的等价性度量
 （ADR-017 第 3 步）。

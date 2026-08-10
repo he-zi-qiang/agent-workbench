@@ -1,5 +1,84 @@
 # 实施状态
 
+## 2026-08-10 graph 字段接进 CLI 与 web 控制台，附带一次到目前最深的 v2 真实验收
+
+PR #98 合并后，选 v2 只能直接调 API。这一轮把选择接进两个人用的界面，并顺手把
+"v2 尚无真实模型端到端验收"这个口子推进到了一个新的、如实记录的位置。
+
+### 接进去的方式，两边刻意不同
+
+**CLI 不替用户选，web 替用户选默认。** repl 的 `/graph research|general|default`
+是会话级设置，**不选就不发字段**——部署默认是服务端的决定，一个总是发送自己
+"以为的默认"的客户端会把这个以为冻进每个 Task。`agent-workbench task submit --graph`
+同理，省略即省略。web 表单则是两个单选钮（调研报告/通用执行）**总是发送可见选中项**，
+默认调研报告：表单上显示一个值、实际提交另一个值（服务端默认）是界面在说谎。两边
+的不同各自成立，都写了注释。
+
+**没有自动路由，界面也不猜。** web 有一条专门的测试：objective 写着"调研"两个字、
+选的是通用执行，提交的就是通用执行——措辞不决定流水线（ADR-031 §2.3）。
+
+**重试忠实于原流水线。** 失败重试从 `TaskSubmitted.graph_version` 读回选择
+（`findGraphChoice`：v1→research、v2_general→general、认不出的版本→不发字段取默认）。
+graph 刻意不在 TaskInput artifact 里——走哪条流水线是提交的属性不是输入的属性——
+所以时间线事件是唯一能忠实重试的来源；丢掉它的重试会把 Task 静默换图。
+
+**两边的进度渲染都认识 v2 的节点。** CLI 一张 superset 阶段表（只渲染收到事件的
+阶段，所以两图各自顺序正确）；web 按图声明两张阶段表，形态从时间线自己读出——
+`TaskSubmitted` 带着 graph_version，第一条事件就定了形态，排队中的 v2 任务预览的
+是自己的四个阶段，而不是 v1 承诺的检索和撰写。`review` 阶段 id 两图共用，因为
+v2 的 reviewer 和 v1 的 critic 对读者是同一步。
+
+### 本机真实验收：比以往任何一次都走得深，最后停在两个已知问题上
+
+环境：真实 DeepSeek + 本机 PG 5433/Qdrant 6333，API/Worker 重启到 main（含 #98）。
+从 web 控制台选「通用执行」提交（POST 载荷与 `TaskSubmitted` 均确证 `v2_general`，
+四阶段生命周期正确渲染），真实 Worker 领取执行：
+
+- `understand` 完成（第一次尝试超了 120s 模型时限，`provider_error` 可重试；
+  **点重试按钮验证了 findGraphChoice**——重试的 Task 再次冻结 `v2_general`）；
+- **`work` 跑了真实工具循环**：workspace_list ✓ → workspace_write 被
+  `policy_denied: missing_permission_scope` 拒绝 → 模型适应拒绝、调整、完成报告。
+  这正是 ADR-031 §2.2 说的那个节点第一次在真实模型下自己决定下一步；
+- **`review` 用了只读工具**（workspace_list、workspace_grep）核对工作区——
+  reviewer 的工具设计首次被真实模型实际使用；
+- 然后 review 的最终消息不是严格单 JSON，`decode_review_output` 判节点失败，
+  整个 Task 失败。
+
+两个拦路的都不是这轮的改动，也都有档案：`missing_permission_scope` 就是本页下面
+"一次没做成的真实验收"里记的同一件事（提交的 principal 没有 `workspace:write`）；
+reviewer 的 JSON 脆弱性与那次记录的 research_external 缺陷同类，reviewer 更易踩中
+（带工具、多轮循环后模型倾向写散文）。
+
+### 收口：ADR-034 变基进来之后，v2 第一次真实端到端成功
+
+上面那次失败之后，ADR-034（PR #99，一次纠正轮次）落进 main。本分支变基到它上面，
+Worker 重启，同一个 objective 复验两次：
+
+- **不带 scope**（对照，task_9425…）：work 在 scope 拒绝的反复解释里撞
+  `token_budget` 上限而失败——预算按 ADR-030 生效，review 未被走到；
+- **带 `x-principal-scopes: workspace:write`**（task_4313…）：**succeeded，17 秒**。
+  时间线（43 条事件）同时补上了两条悬置的证据：
+  - seq 16–19：`workspace_write` Proposed → PermissionResolved → Started →
+    Completed——**带 scope 的成功路径首次有事件流记录**（此前"仍无事件流证据"）；
+  - seq 23–38：review 第一轮带工具核对工作区（list、read），最终消息仍带叙述；
+    **seq 39–42：纠正轮次实战首次命中**——独立 run，`steps: 1, tool_calls: 0`
+    （ADR-034 §3.3 说的"够不到任何东西、只能重述"），解码成功，TaskSucceeded。
+
+当初立项修 reviewer 的那个缺陷场景（task_9a59…：工具轮之后叙述式收尾）在复验里
+**原样重演并被纠正轮次接住**——不是"没再发生"，是发生了且被设计接住，这比前者是
+更强的证据。破坏验证：拆掉 `_decoded` 的 framing 落空分支 → reviewer 那条测试
+（`test_a_narrated_verdict_…_at_both_reviewers`）恰好红，"本来就是 JSON 不买第二轮"
+的对照保持绿。
+
+**所以现状的准确说法是**：v2 从两个界面都能选中提交、被真实 Worker 领取，并且在
+带 `workspace:write` 的 principal 下**有了第一次真实模型端到端成功**。仍然真的：
+不带该 scope 的提交会在 work 的反复被拒里烧穿 token 预算而失败——本地控制台身份
+默认不带任何 scope，这是下一个要么给默认、要么在界面暴露的决定，未在本轮处理。
+
+测试：Python 1895 passed / 604 skipped（无服务），web vitest 99 passed + tsc +
+eslint 全绿。CLI 侧钉住 v2 节点的阶段归属与顺序、/graph 三态、不选不发；web 侧钉住
+findGraphChoice 映射、graphShapeOf 三来源、v2 四阶段声明、以及"措辞不决定流水线"。
+
 ## 2026-08-10 答案不是摘要：4096 那个上界切掉的是整张图的产物（ADR-035）
 
 上一条末尾"单独立项"的那个数字矛盾，查下来比记的那笔严重。**不是外部研究节点多付一轮
@@ -747,8 +826,6 @@ prefetch `CANDIDATES`；`CandidateRetrieverPort` 只有一个 `limit`，于是 p
 过同一个错。表现是 hybrid 在**两条路径上同时**从 1.000 掉到 0.969，这也正是它能被认出
 是装置缺陷而不是适配器回归的原因。改为每个臂都要 `CANDIDATES`、之后再截到 `TOP_K`，
 reference 随即复现了历史的 1.000。
-
-
 
 按基线/计划对照的第二个缺口。WP11 的现状是"部分"，但差距比这两个字大：图从写下来那天
 起就有六个调模型的节点，而每一个都自己拼请求——system prompt 来自一个模块的私有字典，

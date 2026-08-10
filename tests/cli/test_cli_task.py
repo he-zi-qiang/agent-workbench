@@ -86,6 +86,35 @@ def test_submit_sends_identity_and_idempotency_key_and_renders_json() -> None:
     }
 
 
+def test_submit_forwards_the_chosen_graph_and_omits_an_unchosen_one() -> None:
+    """The flag is a shape, and absence is the deployment's default.
+
+    The control is the exact-body assertion in the identity test above: a
+    submit without ``--graph`` sends the same bytes it sent before the flag
+    existed, so the server -- not this client's opinion of its default --
+    decides which graph an unchoosing caller gets (ADR-031 §2.3).
+    """
+
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"task_id": "task_1", "status": "queued"})
+
+    code, _ = _run(
+        "submit",
+        "--objective",
+        "clean the ledger",
+        "--graph",
+        "general",
+        "--json",
+        handler=handler,
+    )
+
+    assert code == 0
+    assert captured["body"]["graph"] == "general"
+
+
 def test_submit_generates_and_displays_an_idempotency_key() -> None:
     captured: dict[str, str] = {}
 

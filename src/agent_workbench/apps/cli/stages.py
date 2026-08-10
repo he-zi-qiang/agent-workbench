@@ -16,12 +16,21 @@ from agent_workbench.domain.events import EventEnvelope
 #: Task graph nodes, grouped the way the run reads rather than the way it
 #: compiles: `route` is bookkeeping between planning and research, and the two
 #: research nodes fan out in parallel.
+#:
+#: One table for both graphs (ADR-031), not one per graph, because this list
+#: renders nothing by itself: only stages that received events are printed, so
+#: a v1 run shows its six and a v2 run shows its four, and the interleaved
+#: order is correct for each. `work` sits where v2 reaches it -- after
+#: understanding, before review -- and the `review` stage is shared: v2's
+#: reviewer node and v1's critic/quality-gate are the same step to a reader,
+#: which is why the node ids were shared with the stage key in the first place.
 TASK_STAGES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
     ("understand", "理解目标", ("understand",)),
     ("plan", "制定计划", ("plan", "route")),
     ("research", "收集资料", ("research_internal", "research_external")),
+    ("work", "动手做事", ("work",)),
     ("synthesize", "撰写草稿", ("synthesize",)),
-    ("review", "检查与修订", ("critic", "quality_gate")),
+    ("review", "检查与修订", ("critic", "quality_gate", "review")),
     ("deliver", "确认与产出", ("approval", "export")),
 )
 

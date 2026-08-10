@@ -1,4 +1,9 @@
-import type { ArtifactRef, EventEnvelope, TaskTimelineResponse } from "../../api/types";
+import type {
+  ArtifactRef,
+  EventEnvelope,
+  TaskGraphChoice,
+  TaskTimelineResponse,
+} from "../../api/types";
 
 export interface TaskInputArtifact {
   schema_version: number;
@@ -85,6 +90,29 @@ export function findTaskInputRef(events: readonly EventEnvelope[]): string | nul
     if (!isEvent(event, "TaskSubmitted")) continue;
     const inputRef = stringField(event.payload, "input_ref");
     if (inputRef !== null) return inputRef;
+  }
+  return null;
+}
+
+/**
+ * The pipeline this Task was submitted to, as a resubmittable choice.
+ *
+ * Read from `TaskSubmitted` rather than from the input artifact, because the
+ * choice is deliberately not *in* the input: which pipeline runs a Task is a
+ * property of the submission, and the submission event is where the resolved
+ * version was recorded. `null` for a version this client cannot name -- a
+ * retry then omits the field and takes the deployment default, which is the
+ * honest move when the original's pipeline no longer has a name to ask for.
+ */
+export function findGraphChoice(
+  events: readonly EventEnvelope[],
+): TaskGraphChoice | null {
+  for (const event of events) {
+    if (!isEvent(event, "TaskSubmitted")) continue;
+    const version = stringField(event.payload, "graph_version");
+    if (version === "v1") return "research";
+    if (version === "v2_general") return "general";
+    return null;
   }
   return null;
 }
