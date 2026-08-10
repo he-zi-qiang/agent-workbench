@@ -11,6 +11,10 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 项目的自研 Agent Runtime 保持框架无关。LlamaIndex、LangGraph、LangChain
 以及后续对比框架都通过明确的 Port/Adapter 接入，不接管核心 Tool Loop。
 
+> **只有十分钟？** 读 [十分钟版本](docs/HIGHLIGHTS.md)：一条真实运行留下的事件流、
+> 一张架构图、三个技术判断，以及实测门禁与明确边界。
+> 本页往下是完整叙述，逐 PR 证据在[实施状态](docs/status.md)。
+
 ## 当前状态
 
 截至 2026-08-09，当前工作树已包含 Task/HITL/副作用账本收尾、三处围栏修复（PR #68）、
