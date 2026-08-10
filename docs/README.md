@@ -81,9 +81,12 @@ upcaster/poison-row 隔离仍未形成完整产品切片。
 `main@a4dea2b` 的实测门禁：无外部服务 `--ignore=tests/e2e` 为 `1784 passed / 597 skipped`，
 `tests/e2e` 为 `3 passed / 11 skipped`，架构与配置 `114 passed`，Ruff format/lint 通过
 （421 files），Pyright `0 errors / 0 warnings`；前端 45 个单元测试、2 个桌面/移动浏览器
-冒烟测试和 production build 已在 CI 通过。复核时 PostgreSQL、Qdrant 与本地 BGE 权重均未
-运行，597/11 项环境跳过只能报告为跳过。最近一次真实 PostgreSQL + Qdrant 全量记录仍是前端
-增量当时的 `1821 passed / 11 skipped`（11 项需要 BGE 权重），那是一棵更早的工作树；
+冒烟测试和 production build 已在 CI 通过。这一组在本机没有外部服务时跑，597/11 项环境跳过
+只能报告为跳过。**真实服务证据由 CI 每个 PR 提供**：`Migrations, PostgreSQL and
+Qdrant-backed stores` job 对着真实 PostgreSQL 16 与 Qdrant 跑 `tests/contracts
+tests/persistence tests/api tests/vector`，当前 `918 passed / 2 skipped`；它不覆盖
+`tests/e2e` 与需要模型 Provider 的路径。最近一次**本机**真实 PostgreSQL + Qdrant 全量记录
+仍是前端增量当时的 `1821 passed / 11 skipped`（11 项需要 BGE 权重），那是一棵更早的工作树；
 **不同环境、不同工作树的数字只能分别引用，不能相加**。当前开发
 身份解析器仍信任请求头，API 和 Compose 只允许在 loopback 的受控本机环境使用。完整证据与已知问题见
 [实施状态](./status.md)；A–F 修复前的问题原始快照见

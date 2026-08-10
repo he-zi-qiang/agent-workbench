@@ -124,10 +124,25 @@ ruff format --check                        passed（421 files）
 pyright                                    0 errors / 0 warnings
 ```
 
-**PostgreSQL、Qdrant 与本地 BGE 权重在本次复核时均未运行**，因此 597 与 11 项环境跳过只能
-报告为跳过，不能描述成已运行的验证。上一节记录的真实 Task 验收是该增量作者在本机带真实
-服务时执行的，与本次复核是两次不同的运行，不能合并引用。含 `tests/e2e` 的全仓为
-1787 passed / 608 skipped，与 PR #87 提交信息里的数字一致。
+**上面这一组是在本机、没有外部服务时跑的**，因此 597 与 11 项环境跳过只能报告为跳过。
+含 `tests/e2e` 的全仓为 1787 passed / 608 skipped，与 PR #87 提交信息里的数字一致。
+
+**但"没有真实服务的证据"这个说法此前一直低报了自己。** CI 有一个独立 job
+（`Migrations, PostgreSQL and Qdrant-backed stores`）在**每个 PR 上**对着真实
+PostgreSQL 16 与 Qdrant 跑 `tests/contracts tests/persistence tests/api tests/vector`，
+并先 `alembic upgrade head`。本文档此前只写"环境跳过"，读起来像这些不变量从未在 CI 里被
+执行过，而它们一直在被执行：
+
+```text
+CI service-backed job（真实 PostgreSQL + Qdrant）   918 passed / 2 skipped
+```
+
+（[run 31351527183](https://github.com/he-zi-qiang/agent-workbench/actions/runs/31351527183)，
+本文档所在 PR 的这一次运行。2 项跳过：一项是只在非锁定读路径上成立的 PostgreSQL 契约，
+一项需要 `embedding` extra 与本地 BGE 权重——CI 不装该 extra，这是它与本机全量的唯一差别。）
+
+这一组**不覆盖** `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径，所以它不能替代
+上一节那次真实 Task 验收，两者也不能相加。三组数字来自三种环境，只能分别引用。
 
 ## 2026-08-09 WP15 阶段一收尾与阶段二（一次性沙箱）
 

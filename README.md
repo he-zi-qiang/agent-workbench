@@ -195,8 +195,13 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
 - 当前门禁（`main@a4dea2b` 实测）：无外部服务 `--ignore=tests/e2e` 为
   `1784 passed / 597 skipped`，`tests/e2e` 为 `3 passed / 11 skipped`，架构与配置
   `114 passed`；Ruff format/lint 通过（421 files），Pyright `0 errors / 0 warnings`。
-  复核时 PostgreSQL、Qdrant 与本地 BGE 权重均未运行，597/11 项环境跳过只能报告为跳过，
-  不能描述成已运行的验证。
+  这一组在本机没有外部服务时跑，597/11 项环境跳过只能报告为跳过。
+- **每个 PR 都有一组真实服务证据**：CI 的 `Migrations, PostgreSQL and Qdrant-backed stores`
+  job 先 `alembic upgrade head`，再对着真实 PostgreSQL 16 与 Qdrant 跑
+  `tests/contracts tests/persistence tests/api tests/vector`，当前为
+  `918 passed / 2 skipped`（2 项跳过中 1 项需要 `embedding` extra 与本地 BGE 权重，CI 不装
+  该 extra）。它不覆盖 `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径。
+  三组数字来自三种环境，只能分别引用，不能相加。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
 > 受控的本机开发，不得暴露到局域网或公网。监听地址以及 Compose 端口映射均限制为

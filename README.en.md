@@ -119,12 +119,19 @@ Validation for the current tree, measured on `main@a4dea2b`:
 - frontend ESLint, strict TypeScript and production build: passed;
 - Vitest: 45 passed; Playwright desktop/mobile smoke: 2 passed.
 
-PostgreSQL, Qdrant and local BGE weights were not running for this check.
-Environment-gated skips are reported rather than represented as stateful
-verification; the earlier stateful evidence remains dated in
-[the implementation status](docs/status.md), which also records the real Task
-acceptance run behind ADR-032 — a separate run, on a machine with those
-services, that must not be merged with the numbers above.
+Those numbers come from a local run with no external services, so the
+environment-gated skips are reported as skips rather than as stateful
+verification.
+
+A separate CI job carries real-service evidence on **every PR**: `Migrations,
+PostgreSQL and Qdrant-backed stores` runs `alembic upgrade head` and then
+`tests/contracts tests/persistence tests/api tests/vector` against a real
+PostgreSQL 16 and Qdrant, currently **918 passed, 2 skipped** — one of those two
+needs the `embedding` extra and local BGE weights, which CI does not install. It
+does not cover `tests/e2e`, Task Worker end-to-end, or anything requiring a model
+provider, so it does not replace the real Task acceptance run behind ADR-032
+recorded in [the implementation status](docs/status.md). Three sets of numbers,
+three environments: cite them separately, never added together.
 
 External search now has a real provider
 ([ADR-020](docs/adr/0020-external-web-search.md)): DeepSeek's server-side
