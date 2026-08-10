@@ -273,3 +273,178 @@ def test_a_malformed_task_timeline_cursor_is_a_bad_request(tmp_path: Path) -> No
         return response.status_code
 
     assert _run(scenario, tmp_path) == 400
+
+
+# --------------------------------------------------------------------------
+# Submission triage (ADR-036)
+
+
+def _triage_service(respond: Any) -> Any:
+    from agent_workbench.adapters.events import ScopedEventSink
+    from agent_workbench.adapters.memory.event_log import InMemoryEventLog
+    from agent_workbench.application.task_triage import TaskTriageService
+    from agent_workbench.ports.event_log import EventScope
+    from agent_workbench.runtime.fake_executor import FakeAgentExecutor
+
+    return TaskTriageService(
+        executor=FakeAgentExecutor(respond=respond),
+        timeout_seconds=5.0,
+        sink_for=lambda stream_id: ScopedEventSink(
+            log=InMemoryEventLog(),
+            scope=EventScope(stream_id=stream_id, run_id=stream_id),
+        ),
+    )
+
+
+def _run_with_triage(
+    scenario: Callable[[httpx.AsyncClient], Awaitable[Any]],
+    root: Path,
+    *,
+    respond: Any,
+) -> Any:
+    """The PG-backed app with one substitution: a triage service that answers.
+
+    ``with_chat=False`` assembles no model, so the shipped dependency is
+    ``None`` and the route would answer ``default`` forever -- correct in
+    production, vacuous under test. The container is frozen and parked on the
+    inner FastAPI before middleware wraps it, so the substitution happens
+    with ``dataclasses.replace`` *before* ``create_app`` rather than by
+    reaching through the wrapper afterwards.
+    """
+
+    from dataclasses import replace as dataclasses_replace
+
+    from agent_workbench.apps.api.dependencies import build_dependencies
+    from agent_workbench.apps.api.main import create_app
+
+    async def execute() -> Any:
+        engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))
+        finally:
+            await engine.dispose()
+
+        dependencies = dataclasses_replace(
+            build_dependencies(project_api(_settings(root)), with_chat=False),
+            triage=_triage_service(respond),
+        )
+        app = create_app(dependencies)
+        transport = httpx.ASGITransport(app=app)  # pyright: ignore[reportArgumentType]
+        try:
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://api.test",
+            ) as client:
+                return await scenario(client)
+        finally:
+            await dependencies.dispose()
+
+    return asyncio.run(execute())
+
+
+def test_triage_without_a_service_is_default_not_an_error(tmp_path: Path) -> None:
+    """The shipped shape: no model process, endpoint still answers."""
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, dict[str, Any]]:
+        response = await client.post(
+            "/v1/tasks/triage",
+            headers=HEADERS,
+            json={"objective": "把三个 CSV 合并成一份对账表"},
+        )
+        return response.status_code, response.json()
+
+    status_code, body = _run(scenario, tmp_path)
+
+    assert status_code == 200
+    assert body["status"] == "default"
+    assert body["graph"] is None
+
+
+def test_triage_decides_and_asks(tmp_path: Path) -> None:
+    """One app, both verdicts: the objective decides which answer comes back.
+
+    The two-objective shape is the control: a service that answered the same
+    thing to everything would fail one of the halves.
+    """
+
+    def respond(request: Any) -> str:
+        prompt = str(request.messages[-1].content)
+        if "合并" in prompt:
+            return (
+                '{"graph": "general", "wants_report": false,'
+                ' "reason": "要做一件事", "question": null}'
+            )
+        return (
+            '{"graph": "unsure", "wants_report": false,'
+            ' "reason": "两可", "question": "要报告还是要执行？"}'
+        )
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, Any]:
+        decided = await client.post(
+            "/v1/tasks/triage",
+            headers=HEADERS,
+            json={"objective": "把三个 CSV 合并成一份对账表"},
+        )
+        asked = await client.post(
+            "/v1/tasks/triage",
+            headers=HEADERS,
+            json={"objective": "研究一下这批反馈"},
+        )
+        return decided.json(), asked.json()
+
+    decided, asked = _run_with_triage(scenario, tmp_path, respond=respond)
+
+    assert decided["status"] == "decided"
+    assert decided["graph"] == "general"
+    assert decided["wants_report"] is False
+    assert decided["reason"] == "要做一件事"
+    assert asked["status"] == "ask"
+    assert asked["question"] == "要报告还是要执行？"
+    assert [option["graph"] for option in asked["options"]] == ["research", "general"]
+
+
+def test_a_submission_records_intent_on_its_timeline(tmp_path: Path) -> None:
+    """The web reads provenance from TaskSubmitted; prove it arrives there.
+
+    The control is the plain submission beside it, whose event carries no
+    intent block -- so the field's presence really is the submission's doing.
+    """
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, Any]:
+        with_intent = _submission(key="task-intent")
+        with_intent["json"]["graph"] = "general"
+        with_intent["json"]["intent"] = {
+            "graph_decided_by": "model",
+            "wants_report_decided_by": "model",
+            "reason": "要做一件事",
+        }
+        opened = await client.post("/v1/tasks", **with_intent)
+        plain = await client.post("/v1/tasks", **_submission(key="task-plain"))
+
+        async def submitted_payload(task_id: str) -> dict[str, Any]:
+            timeline = await client.get(
+                f"/v1/tasks/{task_id}/timeline", headers=HEADERS
+            )
+            events_ = timeline.json()["events"]
+            payloads = [
+                event["payload"]
+                for event in events_
+                if event["payload"]["kind"] == "TaskSubmitted"
+            ]
+            assert len(payloads) == 1
+            return payloads[0]
+
+        return (
+            await submitted_payload(opened.json()["task_id"]),
+            await submitted_payload(plain.json()["task_id"]),
+        )
+
+    with_intent, plain = _run(scenario, tmp_path)
+
+    assert with_intent["intent"] == {
+        "graph_decided_by": "model",
+        "wants_report_decided_by": "model",
+        "reason": "要做一件事",
+    }
+    assert plain["intent"] is None

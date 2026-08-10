@@ -100,6 +100,14 @@
       ]
     },
     {
+      "owner": "application.task_triage",
+      "lifecycle": "startup",
+      "fields": [
+        "triage.enabled",
+        "triage.timeout_seconds"
+      ]
+    },
+    {
       "owner": "adapters.persistence.connection_factory",
       "lifecycle": "startup",
       "fields": [

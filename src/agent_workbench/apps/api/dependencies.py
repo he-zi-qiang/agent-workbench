@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.events import ScopedEventSink
+from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
     PostgresApprovalStore,
     PostgresChatExpirationCoordinator,
@@ -75,6 +76,7 @@ from agent_workbench.application.chat_recovery import (
 from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
+from agent_workbench.application.task_triage import TaskTriageService
 from agent_workbench.application.tasks import SubmittedSemantics, TaskService
 from agent_workbench.application.uploads import UploadService
 from agent_workbench.apps.api.identity import HeaderPrincipalResolver
@@ -171,6 +173,10 @@ class ApiDependencies:
     # service: an API that can open a Task must be able to answer the
     # approval that Task stops on, or the Task has no way forward.
     approvals: ApprovalService
+    # Absent when triage is disabled or no model is configured. The route
+    # answers "default" in that case, which clients treat as "submit what you
+    # always submitted" (ADR-036).
+    triage: TaskTriageService | None = None
 
     @property
     def max_control_request_body_bytes(self) -> int:
@@ -314,6 +320,7 @@ def build_dependencies(
         no_sparse,
         encoders,
         retrieval,
+        triage,
     ) = (
         _assemble_chat(
             config,
@@ -332,6 +339,7 @@ def build_dependencies(
             None,
             None,
             (),
+            None,
             None,
         )
     )
@@ -383,6 +391,7 @@ def build_dependencies(
         approvals=ApprovalService(
             approvals=PostgresApprovalStore(engine, events=events)
         ),
+        triage=triage,
     )
 
 
@@ -403,6 +412,7 @@ def _assemble_chat(
     str | None,
     tuple[object, ...],
     RetrievalService | None,
+    TaskTriageService | None,
 ]:
     """Build the chat stack, or report the one reason it could not be built.
 
@@ -414,7 +424,7 @@ def _assemble_chat(
 
     embedder = build_embedder(config.embedding)
     if isinstance(embedder, EmbeddingUnavailable):
-        return None, embedder.reason, None, None, None, None, None, (), None
+        return None, embedder.reason, None, None, None, None, None, (), None, None
 
     # After the embedder, because a process that cannot chat has no use for a
     # reranker and loading one would be several gigabytes spent on a capability
@@ -479,6 +489,9 @@ def _assemble_chat(
             no_sparse,
             encoders,
             retrieval,
+            # No model, no triage: the endpoint answers "default" and every
+            # client submits what it always has.
+            None,
         )
 
     policy_identity = f"api-{config.deployment_scope}"
@@ -711,6 +724,23 @@ def _assemble_chat(
         request_timeout_seconds=config.request_timeout_seconds,
         orphan_grace_seconds=config.chat_recovery.orphan_grace_seconds,
     )
+    # Submission-time triage (ADR-036), on the same toolless deny-shaped
+    # runtime the direct chat turn uses. Its run events go to a per-call
+    # in-memory log and die with it: a triage run precedes the Task, so there
+    # is no timeline to write to, and the verdict's durable record is the
+    # `intent` block on TaskSubmitted.
+    triage = (
+        TaskTriageService(
+            executor=_toolless_runtime(),
+            timeout_seconds=config.triage.timeout_seconds,
+            sink_for=lambda stream_id: ScopedEventSink(
+                log=InMemoryEventLog(),
+                scope=EventScope(stream_id=stream_id, run_id=stream_id),
+            ),
+        )
+        if config.triage.enabled
+        else None
+    )
     return (
         chat,
         None,
@@ -723,6 +753,7 @@ def _assemble_chat(
         # while startup still warms what a later RAG turn will actually use.
         encoders,
         retrieval,
+        triage,
     )
 
 

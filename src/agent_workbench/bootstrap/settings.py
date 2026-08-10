@@ -143,7 +143,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.11"] = "1.11"
+    config_schema_version: Literal["1.12"] = "1.12"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -231,6 +231,28 @@ class ChatSettings(StrictModel):
                 "chat.max_agentic_searches must be >= chat.max_agentic_steps"
             )
         return self
+
+
+class TriageSettings(StrictModel):
+    """Submission-time shape triage (ADR-036).
+
+    Off by default, and the default is the whole rollout story: a deployment
+    turns this on after reading its own model's accuracy report from
+    ``evals/triage``, not before. Disabled means the endpoint answers
+    ``default`` and every client submits exactly what it submitted before the
+    section existed.
+
+    Deliberately *not* in the task snapshot allowlist: triage happens before
+    a Task exists, so nothing about a running Task's semantics depends on it
+    -- the same reasoning that keeps ``graph`` a submission argument rather
+    than configuration.
+    """
+
+    enabled: bool = False
+    # Bounds the whole triage call, corrective turn included. The create form
+    # waits on this, so it is a promise to a person, and 60 seconds is already
+    # far past what anybody waits for a form.
+    timeout_seconds: float = Field(default=8.0, gt=0, le=60)
 
 
 class DatabaseSettings(StrictModel):
@@ -950,6 +972,9 @@ class Settings(BaseSettings):
     app: AppSettings
     api: ApiSettings
     chat: ChatSettings
+    # Default-constructed so every existing config file stays valid: absent
+    # section, disabled feature, byte-identical behaviour (ADR-036).
+    triage: TriageSettings = Field(default_factory=TriageSettings)
     database: DatabaseSettings
     coordination: CoordinationSettings
     event_stream: EventStreamSettings

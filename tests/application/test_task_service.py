@@ -26,6 +26,7 @@ from agent_workbench.application.tasks import (
 )
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
+from agent_workbench.domain.task_intent import TaskIntent
 from agent_workbench.ports.task_registry import TaskRun, TaskSubmission
 from agent_workbench.workflows.general_graph import GRAPH_VERSION_V2
 from agent_workbench.workflows.research_graph import GRAPH_VERSION_V1
@@ -89,11 +90,14 @@ def _stored(submission: TaskSubmission) -> dict[str, Any]:
 
     The nested reservation flattens into three columns there, so the fake does
     the same -- otherwise it would accept a submission the database cannot
-    store and hide exactly the mapping under test.
+    store and hide exactly the mapping under test. Intent is dropped for the
+    same fidelity: the adapter keeps it off the row and records it only on the
+    TaskSubmitted event (ADR-036).
     """
 
     fields = submission.model_dump()
     reservation = fields.pop("index_reservation", None)
+    fields.pop("intent", None)
     fields.update(
         {
             "resolved_qdrant_collection": (
@@ -217,10 +221,10 @@ def test_a_submission_that_chose_no_graph_is_the_deployment_default_exactly() ->
 def test_a_submission_chooses_a_shape_and_the_service_maps_it_to_a_version() -> None:
     """The caller names ``research`` or ``general``, never a version string.
 
-    The shape is the caller's to choose -- only the submitter knows whether
-    this is a report to write or a thing to do, and a model guessing from the
-    objective would be wrong at the cost of the whole pipeline. The *version*
-    stays a deployment fact, which is why the mapping lives in this layer.
+    Since ADR-036 the shape may have been proposed by triage, but what reaches
+    this layer is always an explicit shape or nothing -- never "guess for me"
+    -- so the mapping and the freeze work identically whoever chose. The
+    *version* stays a deployment fact, which is why the mapping lives here.
     """
 
     registry = _FakeRegistry()
@@ -239,6 +243,45 @@ def test_a_submission_chooses_a_shape_and_the_service_maps_it_to_a_version() -> 
 
     assert registry.submissions[0].graph_version == GRAPH_VERSION_V2
     assert registry.submissions[1].graph_version == GRAPH_VERSION_V1
+
+
+def test_intent_reaches_the_submission_and_stays_out_of_its_identity() -> None:
+    """Provenance rides the submission; a retry without it is still a retry.
+
+    The second half is the teeth: the idempotent fake keys only on the dedup
+    key, and the service must return the original Task for a retry whose
+    intent differs -- triage is not deterministic, and a retry that re-ran it
+    must not become a conflict (ADR-036 §2.3).
+    """
+
+    registry = _IdempotentFakeRegistry()
+    service = _service(registry)
+    intent = TaskIntent(
+        graph_decided_by="model", wants_report_decided_by="model", reason="像调研"
+    )
+
+    first = asyncio.run(
+        service.submit(
+            OWNER,
+            input_ref="input_1",
+            submission_dedup_key="dedup_1",
+            graph="research",
+            intent=intent,
+        )
+    )
+    retried = asyncio.run(
+        service.submit(
+            OWNER,
+            input_ref="input_1",
+            submission_dedup_key="dedup_1",
+            graph="research",
+            intent=None,
+        )
+    )
+
+    assert registry.submissions[0].intent == intent
+    assert registry.submissions[1].intent is None
+    assert retried.task_id == first.task_id
 
 
 def test_an_explicit_choice_survives_a_changed_deployment_default() -> None:

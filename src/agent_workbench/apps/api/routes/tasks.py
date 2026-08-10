@@ -10,7 +10,7 @@ unavailable.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Header, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +28,7 @@ from agent_workbench.domain.pagination import (
 )
 from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.task_inputs import TaskInput
+from agent_workbench.domain.task_intent import TaskIntent
 from agent_workbench.domain.task_registry import TaskStatus
 from agent_workbench.ports.event_log import EventCursor
 from agent_workbench.ports.task_registry import TaskRun
@@ -57,12 +58,17 @@ class CreateTaskRequest(BaseModel):
     # "general" does a thing and reviews whether it is done (ADR-031).
     #
     # Absent means the deployment's default, which is what every existing
-    # client sends and is byte-for-byte the behaviour they have today. There is
-    # deliberately no "choose for me": letting a model read the objective and
-    # pick would hand a question the submitter knows the answer to to something
-    # that can be wrong about it, at the cost of running the entire wrong
-    # pipeline (ADR-031 §2.3).
+    # client sends and is byte-for-byte the behaviour they have today. There
+    # is deliberately no "auto" value here: a model may *propose* a shape via
+    # the triage endpoint below, but what this endpoint receives is always an
+    # explicit choice or nothing, so freezing and idempotency never depend on
+    # a value a model produced (ADR-036, superseding ADR-031 §2.3's blanket
+    # refusal).
     graph: TaskGraphChoice | None = None
+    # Who decided graph and wants_report, when the client knows (ADR-036).
+    # Provenance for the timeline, never authority: the Registry stores it on
+    # the TaskSubmitted event and reads none of it back.
+    intent: TaskIntent | None = None
 
 
 class TaskView(BaseModel):
@@ -133,8 +139,88 @@ async def submit(
         ),
         submission_dedup_key=idempotency_key,
         graph=body.graph,
+        intent=body.intent,
     )
     return _view(task)
+
+
+class TriageTaskRequest(BaseModel):
+    """What triage may read: the objective and two facts about the form."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    objective: str = Field(min_length=1, max_length=4096)
+    knowledge_base_selected: bool = False
+    # Names only, and few: context for the classifier, not an upload channel.
+    attachment_names: tuple[str, ...] = Field(default=(), max_length=16)
+
+
+class TriageOption(BaseModel):
+    """One choice a client renders when triage asks."""
+
+    graph: TaskGraphChoice
+    label: str
+
+
+class TriageTaskResponse(BaseModel):
+    """One of three outcomes; only that outcome's fields are set.
+
+    ``default`` is deliberately indistinguishable across its causes -- triage
+    disabled, no model, timeout, unreadable output -- because every cause has
+    the same instruction to the client: submit exactly what you would have
+    submitted before this endpoint existed (ADR-036).
+    """
+
+    status: Literal["decided", "ask", "default"]
+    graph: TaskGraphChoice | None = None
+    wants_report: bool | None = None
+    reason: str | None = None
+    question: str | None = None
+    options: tuple[TriageOption, ...] = ()
+
+
+#: What a client shows beside each chip when triage asks. Server-supplied so
+#: a client that knows nothing about the graphs can still render the choice.
+TRIAGE_OPTIONS = (
+    TriageOption(graph="research", label="调研报告"),
+    TriageOption(graph="general", label="通用执行"),
+)
+
+
+@router.post("/triage", response_model=TriageTaskResponse)
+async def triage(body: TriageTaskRequest, request: Request) -> TriageTaskResponse:
+    """Propose a shape for this objective, ask, or say "default".
+
+    No side effects and no Task: this runs before submission, which is what
+    lets uncertainty become a question instead of a status (ADR-036 §2.1).
+    Registered on a literal path; FastAPI matches it before ``/{task_id}``
+    only because routes are matched in declaration order, so it stays above
+    the parameterized routes in this module.
+    """
+
+    dependencies = dependencies_of(request)
+    principal = dependencies.principals.resolve(request)
+    service = dependencies.triage
+    if service is None:
+        return TriageTaskResponse(status="default")
+    result = await service.triage(
+        principal,
+        objective=body.objective,
+        knowledge_base_selected=body.knowledge_base_selected,
+        attachment_names=body.attachment_names,
+    )
+    if result.status == "ask":
+        return TriageTaskResponse(
+            status="ask",
+            question=result.question,
+            options=TRIAGE_OPTIONS,
+        )
+    return TriageTaskResponse(
+        status=result.status,
+        graph=result.graph,
+        wants_report=result.wants_report,
+        reason=result.reason,
+    )
 
 
 @router.get("", response_model=TaskListResponse)

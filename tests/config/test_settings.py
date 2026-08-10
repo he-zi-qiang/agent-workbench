@@ -819,13 +819,18 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     running it with a different ceiling. The prices are additive, but they
     decide whether this deployment may enforce a cost ceiling at all, so a
     file that has them buys behaviour a file that does not cannot ask for.
+    1.11 -> 1.12 is ADR-036: the `[triage]` section arrived. Additive and
+    default-off, but a file that enables it asks the API to spend a model
+    call per create-form submission and changes what the form asks a human
+    -- behaviour a 1.11 binary cannot provide, so a file that sets it must
+    not load quietly on one.
 
     The pin exists so widening a frozen Literal cannot happen quietly -- this
     test failing *is* the mechanism, and updating it is the last step of the
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.11"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.12"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:

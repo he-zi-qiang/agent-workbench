@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.11"
+config_schema_version = "1.12"
 architecture_baseline = "1.3"
 
 [api]
@@ -49,6 +49,16 @@ max_agentic_searches = 6
 # retrieval score: RRF is a rank sum and cannot say whether a hit is relevant.
 # Uncalibrated -- measure it against your own corpus before trusting it.
 routed_relevance_threshold = 0.0
+
+[triage]
+# Submission-time shape triage (ADR-036): one structured model call proposes
+# which pipeline an objective runs and whether it wants a file, asking the
+# submitter only when the graph is genuinely ambiguous. Disabled means the
+# endpoint answers "default" and clients submit exactly what they always have.
+# Turn it on only after evals/triage reports this deployment's model accuracy.
+enabled = false
+# Bounds the whole call, corrective turn included; the create form waits on it.
+timeout_seconds = 8.0
 
 [database]
 # dsn, guard_dsn and listen_dsn are secret-like deployment values and are

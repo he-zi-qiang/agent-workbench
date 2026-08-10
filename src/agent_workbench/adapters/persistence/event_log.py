@@ -108,6 +108,7 @@ class PostgresEventLog:
         *,
         parent_event_id: str | None = None,
         event_key: EventKey | None = None,
+        first_write_wins: bool = False,
     ) -> EventEnvelope:
         """Append a durable event using the caller's open transaction.
 
@@ -116,6 +117,17 @@ class PostgresEventLog:
         release coordinator needs the narrower form so the authorization
         fence, answer event and conversation transition either all commit or
         all roll back.
+
+        ``first_write_wins`` changes what a repeated key means. The default
+        treats it as a claim -- the event under this key *is* this event --
+        and refuses a repeat that differs, which is the right contract when
+        the payload is derived from stored facts and cannot legitimately
+        vary. A caller whose payload carries fields only the first attempt
+        knew -- the Task submission's ``intent`` block, whose words a retried
+        triage would not reproduce (ADR-036) -- passes ``True`` instead: an
+        existing event is returned untouched without comparing payloads, so
+        the first submission's words stay the record and a retry cannot be
+        refused for holding different ones.
         """
 
         durability = EVENT_DURABILITY[payload.kind]
@@ -139,12 +151,13 @@ class PostgresEventLog:
                 .first()
             )
             if existing is not None:
-                _require_same_event(
-                    existing,
-                    scope=scope,
-                    payload=serialized_payload,
-                    parent_event_id=parent_event_id,
-                )
+                if not first_write_wins:
+                    _require_same_event(
+                        existing,
+                        scope=scope,
+                        payload=serialized_payload,
+                        parent_event_id=parent_event_id,
+                    )
                 return _envelope_from_row(existing)
 
         sequence = last_sequence + 1
