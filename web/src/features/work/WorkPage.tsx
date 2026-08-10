@@ -29,6 +29,7 @@ import {
   getTask,
   listTasks,
   newIdempotencyKey,
+  triageTask,
 } from "../../api/client";
 import type {
   ApprovalView,
@@ -36,8 +37,10 @@ import type {
   EventEnvelope,
   PrincipalIdentity,
   TaskGraphChoice,
+  TaskIntent,
   TaskStatus,
   TaskView,
+  TriageOption,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
@@ -76,6 +79,7 @@ import {
   findGraphChoice,
   findLatestApprovalId,
   findTaskInputRef,
+  findTaskIntent,
   isKnownEventType,
   parseTaskInputArtifact,
   type TaskArtifact,
@@ -99,24 +103,31 @@ interface CreateTaskIntent {
   knowledgeBaseId?: string;
   wantsReport: boolean;
   graph?: TaskGraphChoice;
+  intent?: TaskIntent;
   idempotencyKey: string;
 }
 
 /**
- * The two pipelines a submission may choose between (ADR-031).
+ * The explicit overrides, living in 高级设置 (ADR-036).
  *
- * A visible control rather than a guess, for the same reason the report toggle
- * is: only the submitter knows whether this is a report to research or a thing
- * to do, and choosing from the objective's wording would run the entire wrong
- * pipeline when it misread. The form always sends its visible selection -- a
- * control that displayed "调研报告" while actually submitting whatever the
- * server defaults to would show one thing and do another.
+ * The default is "auto": the form asks the server's triage to propose the
+ * shape, and only a genuinely ambiguous objective comes back as a question.
+ * The two explicit values remain for the reader who already knows -- an
+ * explicit choice skips triage entirely and outranks whatever it would have
+ * said. This replaces both the always-visible radio pair and the
+ * `REPORT_WORDS` regex: the regex guessed silently, differently from the CLI,
+ * and left no record of having guessed.
  */
-const GRAPH_OPTIONS: ReadonlyArray<{
-  value: TaskGraphChoice;
+const GRAPH_OVERRIDE_OPTIONS: ReadonlyArray<{
+  value: TaskGraphChoice | "auto";
   label: string;
   hint: string;
 }> = [
+  {
+    value: "auto",
+    label: "自动判定",
+    hint: "由模型判断走哪条流水线，判不准会先问你。",
+  },
   {
     value: "research",
     label: "调研报告",
@@ -129,19 +140,18 @@ const GRAPH_OPTIONS: ReadonlyArray<{
   },
 ];
 
-/**
- * Whether an objective asks for a file.
- *
- * Only ever a *default* for the toggle beside the box -- the reader sees the
- * result and can flip it before submitting. Guessing silently would be worse
- * than not guessing: the difference decides whether the Task stops to ask a
- * human for permission to write something.
- */
-const REPORT_WORDS =
-  /报告|报表|文档|文件|导出|输出一份|写一份|report|document|export/i;
+/** What the ask card offers when the server's options are unusable. */
+const FALLBACK_ASK_OPTIONS: readonly TriageOption[] = [
+  { graph: "research", label: "调研报告" },
+  { graph: "general", label: "通用执行" },
+];
 
-function mentionsReport(objective: string): boolean {
-  return REPORT_WORDS.test(objective);
+/** How long the form waits for a triage verdict before submitting anyway. */
+const TRIAGE_TIMEOUT_MS = 10_000;
+
+interface PendingAsk {
+  question: string;
+  options: readonly TriageOption[];
 }
 
 interface ApprovalDecisionIntent {
@@ -287,6 +297,12 @@ export function WorkPage() {
     () => findGraphChoice(timeline.events),
     [timeline.events],
   );
+  // Who decided this Task's shape, for the detail fold (ADR-036). Provenance
+  // only: nothing here feeds a submission.
+  const taskIntent = useMemo(
+    () => findTaskIntent(timeline.events),
+    [timeline.events],
+  );
   const resubmit = (input: NonNullable<typeof taskInputQuery.data>) => {
     createMutation.mutate({
       objective: input.objective,
@@ -302,11 +318,16 @@ export function WorkPage() {
 
   const [objective, setObjective] = useState("");
   const [maxRevisions, setMaxRevisions] = useState("2");
-  // null means "follow the objective". Set once the reader touches the toggle,
-  // so their choice is not overwritten by the next keystroke.
-  const [reportOverride, setReportOverride] = useState<boolean | null>(null);
-  const wantsReport = reportOverride ?? mentionsReport(objective);
-  const [graphChoice, setGraphChoice] = useState<TaskGraphChoice>("research");
+  // "auto" asks triage; an explicit value skips it and outranks it (ADR-036).
+  const [graphOverride, setGraphOverride] = useState<TaskGraphChoice | "auto">(
+    "auto",
+  );
+  const [reportOverride, setReportOverride] = useState<boolean | "auto">("auto");
+  // The question triage sent back, awaiting the reader's chip. Cleared on any
+  // edit: a question about the previous wording would be answered about the
+  // wrong objective.
+  const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
+  const [triaging, setTriaging] = useState(false);
   const [knowledgeBaseDraftId, setKnowledgeBaseId] = useState<string | null>(
     searchParams.get("kb"),
   );
@@ -329,8 +350,9 @@ export function WorkPage() {
       setObjective("");
       attachments.clear();
       setMaxRevisions("2");
-      setReportOverride(null);
-      setGraphChoice("research");
+      setReportOverride("auto");
+      setGraphOverride("auto");
+      setPendingAsk(null);
       setSubmissionKey(newIdempotencyKey("task"));
       void queryClient.invalidateQueries({
         queryKey: ["work", "tasks", ...identityKey],
@@ -340,6 +362,7 @@ export function WorkPage() {
   });
   const markTaskIntentEdited = () => {
     setSubmissionKey(newIdempotencyKey("task"));
+    setPendingAsk(null);
     createMutation.reset();
   };
 
@@ -415,8 +438,10 @@ export function WorkPage() {
     mutationFn: (artifact: ArtifactRef) => downloadArtifact(identity, artifact),
   });
 
-  const handleCreate = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const validatedIntent = (): {
+    objective: string;
+    maxRevisions: number;
+  } | null => {
     const trimmedObjective = objective.trim();
     const parsedMaxRevisions = Number(maxRevisions);
     if (
@@ -428,16 +453,121 @@ export function WorkPage() {
       sourceResolving ||
       attachments.hasBlockingItems
     ) {
-      return;
+      return null;
     }
+    return { objective: trimmedObjective, maxRevisions: parsedMaxRevisions };
+  };
+
+  // The explicit report override resolves here; "auto" follows the triage
+  // verdict when there is one and falls to false when there is not -- the
+  // approval gate a wrong `true` would force is an approve-or-fail door
+  // (ADR-036 §2.4), so absent any signal the form does not open it.
+  const resolvedReport = (verdict: boolean | null): boolean =>
+    reportOverride === "auto" ? (verdict ?? false) : reportOverride;
+
+  const submitResolved = (resolved: {
+    graph?: TaskGraphChoice;
+    wantsReport: boolean;
+    intent: TaskIntent;
+  }) => {
+    const valid = validatedIntent();
+    if (valid === null) return;
     createMutation.mutate({
-      objective: trimmedObjective,
-      maxRevisions: parsedMaxRevisions,
-      wantsReport,
-      graph: graphChoice,
+      objective: valid.objective,
+      maxRevisions: valid.maxRevisions,
+      wantsReport: resolved.wantsReport,
+      intent: resolved.intent,
       idempotencyKey: submissionKey,
       ...(knowledgeBaseId === null ? {} : { knowledgeBaseId }),
+      ...(resolved.graph === undefined ? {} : { graph: resolved.graph }),
     });
+  };
+
+  const runTriage = async (trimmedObjective: string) => {
+    setTriaging(true);
+    try {
+      const verdict = await triageTask(
+        identity,
+        {
+          objective: trimmedObjective,
+          knowledgeBaseSelected: knowledgeBaseId !== null,
+          attachmentNames: attachments.items.map((item) => item.file.name),
+        },
+        { signal: AbortSignal.timeout(TRIAGE_TIMEOUT_MS) },
+      );
+      if (verdict.status === "ask") {
+        // No Task yet, and none until the reader answers -- uncertainty is a
+        // question here, never a status (ADR-036 §2.1).
+        setPendingAsk({
+          question:
+            verdict.question ??
+            "这个任务是要一份有依据的调研报告，还是直接把事做完？",
+          options:
+            verdict.options.length > 0 ? verdict.options : FALLBACK_ASK_OPTIONS,
+        });
+        return;
+      }
+      if (verdict.status === "decided" && verdict.graph !== null) {
+        submitResolved({
+          graph: verdict.graph,
+          wantsReport: resolvedReport(verdict.wants_report),
+          intent: {
+            graph_decided_by: "model",
+            wants_report_decided_by:
+              reportOverride === "auto" ? "model" : "user",
+            reason: verdict.reason,
+          },
+        });
+        return;
+      }
+      // "default": submit what this form submitted before triage existed --
+      // no graph field, so the deployment decides.
+      submitResolved({
+        wantsReport: resolvedReport(null),
+        intent: {
+          graph_decided_by: "default",
+          wants_report_decided_by:
+            reportOverride === "auto" ? "default" : "user",
+        },
+      });
+    } finally {
+      setTriaging(false);
+    }
+  };
+
+  const answerAsk = (graph: TaskGraphChoice) => {
+    setPendingAsk(null);
+    submitResolved({
+      graph,
+      wantsReport: resolvedReport(null),
+      intent: {
+        graph_decided_by: "user",
+        wants_report_decided_by: reportOverride === "auto" ? "default" : "user",
+      },
+    });
+  };
+
+  const handleCreate = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (triaging || createMutation.isPending) return;
+    const valid = validatedIntent();
+    if (valid === null) return;
+    setPendingAsk(null);
+    if (graphOverride !== "auto") {
+      // An explicit choice skips triage entirely: the reader already answered
+      // the only question it would have asked.
+      submitResolved({
+        graph: graphOverride,
+        wantsReport: resolvedReport(null),
+        intent: {
+          graph_decided_by: "user",
+          wants_report_decided_by:
+            reportOverride === "auto" ? "default" : "user",
+        },
+      });
+      return;
+    }
+    void runTriage(valid.objective);
   };
 
   const changeKnowledgeBase = (nextId: string | null) => {
@@ -456,6 +586,7 @@ export function WorkPage() {
   const selectedTask = taskQuery.data;
   const canCancel =
     selectedTask !== undefined && CANCELLABLE_STATUSES.has(selectedTask.status);
+  const createBusy = createMutation.isPending || triaging;
 
   return (
     <div className={`aw-work-page ${selectedTaskId === undefined ? "" : "has-selection"}`}>
@@ -483,7 +614,7 @@ export function WorkPage() {
           <label htmlFor="work-objective">目标</label>
           <textarea
             id="work-objective"
-            disabled={createMutation.isPending}
+            disabled={createBusy}
             maxLength={4096}
             onChange={(event) => {
               setObjective(event.target.value);
@@ -494,34 +625,8 @@ export function WorkPage() {
             rows={4}
             value={objective}
           />
-          {/* Which pipeline runs it -- the submitter's call, never inferred
-              from the objective (ADR-031: a wrong guess runs the entire wrong
-              pipeline). Radios rather than a dropdown so both options and
-              their meanings are readable before choosing. */}
-          <fieldset className="aw-graph-choice">
-            <legend>执行方式</legend>
-            {GRAPH_OPTIONS.map((option) => (
-              <label className="aw-graph-option" key={option.value}>
-                <input
-                  checked={graphChoice === option.value}
-                  disabled={createMutation.isPending}
-                  name="work-graph"
-                  onChange={() => {
-                    setGraphChoice(option.value);
-                    markTaskIntentEdited();
-                  }}
-                  type="radio"
-                  value={option.value}
-                />
-                <span>
-                  <strong>{option.label}</strong>
-                  <small>{option.hint}</small>
-                </span>
-              </label>
-            ))}
-          </fieldset>
           <KnowledgeSourcePicker
-            disabled={createMutation.isPending}
+            disabled={createBusy}
             identity={identity}
             onChange={(knowledgeBase) =>
               changeKnowledgeBase(knowledgeBase?.knowledge_base_id ?? null)
@@ -530,7 +635,7 @@ export function WorkPage() {
           />
           <div className="aw-work-attachment-row">
             <AttachmentButton
-              disabled={createMutation.isPending}
+              disabled={createBusy}
               onFiles={attachments.addFiles}
             />
             <span>
@@ -545,10 +650,53 @@ export function WorkPage() {
           />
           <details className="aw-work-advanced">
             <summary>高级设置</summary>
+            {/* The explicit overrides (ADR-036). The default is 自动: triage
+                proposes, a genuinely ambiguous objective becomes a question,
+                and the answer is submitted explicitly. An explicit value here
+                skips triage and outranks it. */}
+            <fieldset className="aw-graph-choice">
+              <legend>执行方式</legend>
+              {GRAPH_OVERRIDE_OPTIONS.map((option) => (
+                <label className="aw-graph-option" key={option.value}>
+                  <input
+                    checked={graphOverride === option.value}
+                    disabled={createBusy}
+                    name="work-graph"
+                    onChange={() => {
+                      setGraphOverride(option.value);
+                      markTaskIntentEdited();
+                    }}
+                    type="radio"
+                    value={option.value}
+                  />
+                  <span>
+                    <strong>{option.label}</strong>
+                    <small>{option.hint}</small>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <label htmlFor="work-report-mode">报告文件</label>
+            <select
+              id="work-report-mode"
+              disabled={createBusy}
+              onChange={(event) => {
+                const value = event.target.value;
+                setReportOverride(value === "auto" ? "auto" : value === "yes");
+                markTaskIntentEdited();
+              }}
+              value={
+                reportOverride === "auto" ? "auto" : reportOverride ? "yes" : "no"
+              }
+            >
+              <option value="auto">自动判定（要文件会先请你确认导出）</option>
+              <option value="yes">一定生成文件</option>
+              <option value="no">不生成文件</option>
+            </select>
             <label htmlFor="work-max-revisions">最大修订次数</label>
             <input
               id="work-max-revisions"
-              disabled={createMutation.isPending}
+              disabled={createBusy}
               max={20}
               min={0}
               onChange={(event) => {
@@ -560,25 +708,6 @@ export function WorkPage() {
               value={maxRevisions}
             />
           </details>
-          {/* Checked from the objective, and shown rather than inferred behind
-              the reader's back: this is what decides whether the Task stops to
-              ask permission to write a file. */}
-          <label className="aw-report-toggle">
-            <input
-              checked={wantsReport}
-              disabled={createMutation.isPending}
-              onChange={(event) => setReportOverride(event.target.checked)}
-              type="checkbox"
-            />
-            <span>
-              <strong>生成报告文件</strong>
-              <small>
-                {wantsReport
-                  ? "完成后会请你确认，再导出可下载的报告。"
-                  : "只把结果写在任务页里，不生成文件，也不需要你确认。"}
-              </small>
-            </span>
-          </label>
           <p className="aw-create-task-hint">
             {attachments.hasBlockingItems
               ? "附件正在上传或索引，完成后才能创建任务。"
@@ -586,17 +715,39 @@ export function WorkPage() {
                 ? "不使用知识库：Agent 将只按目标执行，不做内部资料检索。"
                 : "任务会在执行期间检索所选知识库。"}
           </p>
+          {pendingAsk !== null ? (
+            <div className="aw-triage-ask" role="group" aria-label="选择执行方式">
+              <p>{pendingAsk.question}</p>
+              <div className="aw-triage-ask-options">
+                {pendingAsk.options.map((option) => (
+                  <button
+                    className="aw-button"
+                    disabled={createBusy}
+                    key={option.graph}
+                    onClick={() => answerAsk(option.graph)}
+                    type="button"
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <button
             className="aw-button is-primary"
             disabled={
-              createMutation.isPending ||
+              createBusy ||
               sourceResolving ||
               objective.trim() === "" ||
               attachments.hasBlockingItems
             }
             type="submit"
           >
-            {createMutation.isPending ? "正在创建…" : "创建任务"}
+            {triaging
+              ? "正在判定…"
+              : createMutation.isPending
+                ? "正在创建…"
+                : "创建任务"}
           </button>
           {createMutation.isError ? (
             <ErrorNotice message={errorMessage(createMutation.error, "创建任务失败")} />
@@ -786,6 +937,20 @@ export function WorkPage() {
                       />
                     </>
                   )}
+                  {retryGraph !== null ? (
+                    <KeyValue
+                      label="执行方式"
+                      value={retryGraph === "research" ? "调研报告" : "通用执行"}
+                    />
+                  ) : null}
+                  {taskIntent !== null ? (
+                    <KeyValue
+                      label="方式来源"
+                      value={`${decidedByLabel(taskIntent.graph_decided_by)}${
+                        taskIntent.reason ? `：${taskIntent.reason}` : ""
+                      }`}
+                    />
+                  ) : null}
                   <KeyValue label="任务 ID" value={selectedTask.task_id} />
                   <KeyValue label="创建时间" value={formatDateTime(selectedTask.created_at)} />
                   <KeyValue label="更新时间" value={formatDateTime(selectedTask.updated_at)} />
@@ -1198,6 +1363,12 @@ function ApprovalSection({
       )}
     </section>
   );
+}
+
+function decidedByLabel(decidedBy: TaskIntent["graph_decided_by"]): string {
+  if (decidedBy === "user") return "用户指定";
+  if (decidedBy === "model") return "模型判定";
+  return "部署默认";
 }
 
 function errorMessage(error: unknown, fallback: string): string {

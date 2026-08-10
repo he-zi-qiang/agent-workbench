@@ -23,8 +23,7 @@ fenced write was then compared against.
 from __future__ import annotations
 
 import asyncio
-import json
-from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -56,7 +55,7 @@ from agent_workbench.domain.evidence import (
     ExternalTitle,
 )
 from agent_workbench.domain.identifiers import new_agent_run_id, new_id
-from agent_workbench.domain.messages import Message, assistant_message, user_message
+from agent_workbench.domain.messages import Message
 from agent_workbench.domain.policies import ExecutionContext, PrincipalContext
 from agent_workbench.domain.runs import (
     AgentOutcome,
@@ -96,6 +95,16 @@ from agent_workbench.workflows.agent_profiles import (
 )
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.research_graph import evolve, merge_refs
+
+# Re-exported names: the decode boundary moved to `structured_output` when
+# ADR-036 gave it a second caller, and every existing import of the two error
+# classes from this module must keep meaning the same classes.
+from agent_workbench.workflows.structured_output import (
+    StructuredOutputError,
+    StructuredOutputFramingError,
+    json_object,
+    restatement_messages,
+)
 from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 TaskNodeHandler = Callable[[TaskState], Awaitable[Mapping[str, Any]]]
@@ -106,22 +115,6 @@ TaskPrincipalResolver = Callable[[TaskRun], PrincipalContext]
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-class StructuredOutputError(ValueError):
-    """A model response is not the exact structured value its node requires."""
-
-
-class StructuredOutputFramingError(StructuredOutputError):
-    """The message was not exactly one JSON object, whatever it contained.
-
-    Separated from its parent because this is the one failure a second turn can
-    fix, and the boundary is what keeps that turn honest (ADR-034 §3.2). A
-    message with a sentence in front of its object says nothing about whether
-    the answer is right; a message that *is* one object but names the wrong
-    draft, or an item with no locator, is a claim the model made and got wrong.
-    Asking again there would be nudging a model toward an answer that passes.
-    """
 
 
 class TaskNodeRunFailedError(RuntimeError):
@@ -629,7 +622,7 @@ def build_task_handlers(
             # The reviewers hold their working set statically, so a call site
             # that had to remember this would eventually not.
             request_for(
-                correction.context, _restatement_messages(outcome.output_text)
+                correction.context, restatement_messages(outcome.output_text)
             ).model_copy(update={"tool_names": ()}),
             correction.events,
             correction.cancellation,
@@ -1076,7 +1069,7 @@ def decode_plan_output(text: str) -> tuple[TaskStep, ...]:
     # protocol for a model response. ``validate_json`` then retains JSON-mode
     # strictness while accepting JSON arrays for the tuple fields in the domain
     # model (``validate_python(..., strict=True)`` would reject those arrays).
-    _json_object(text)
+    json_object(text)
     try:
         return _PLAN_DOCUMENT.validate_json(text, strict=True).steps
     except ValidationError as error:
@@ -1088,7 +1081,7 @@ def decode_review_output(text: str, *, state: TaskState) -> ReviewResult:
 
     if state.draft_ref is None:
         raise StructuredOutputError("critic ran before synthesis produced a draft")
-    _json_object(text)
+    json_object(text)
     try:
         review = _REVIEW_RESULT.validate_json(text, strict=True)
     except ValidationError as error:
@@ -1111,7 +1104,7 @@ def decode_external_evidence_output(
     evidence" without the next node grounding a report in silence.
     """
 
-    _json_object(text)
+    json_object(text)
     try:
         document = _EXTERNAL_EVIDENCE_DOCUMENT.validate_json(text, strict=True)
     except ValidationError as error:
@@ -1159,46 +1152,6 @@ def _merge_node_updates(
         else:
             merged[key] = value
     return merged
-
-
-def _json_object(text: str) -> dict[str, Any]:
-    """Reject fences, tails, duplicate keys and non-standard JSON constants.
-
-    Every refusal here is a framing one: the message the model sent was not
-    exactly one JSON object. Nothing in this function reads an object out of a
-    message that also contains something else -- a model can describe, quote or
-    refuse an object as easily as it can answer with one, and no parser can
-    tell those apart (ADR-034 §2).
-    """
-
-    if not text or not text.lstrip().startswith("{") or "```" in text:
-        raise StructuredOutputFramingError("structured output must be one JSON object")
-    try:
-        value = json.loads(
-            text,
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_json_constant,
-        )
-    except (TypeError, ValueError, json.JSONDecodeError) as error:
-        raise StructuredOutputFramingError(
-            "structured output is not valid JSON"
-        ) from error
-    if not isinstance(value, dict):
-        raise StructuredOutputFramingError("structured output must be a JSON object")
-    return cast("dict[str, Any]", value)
-
-
-def _unique_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise StructuredOutputError("structured output has duplicate object keys")
-        result[key] = value
-    return result
-
-
-def _reject_json_constant(value: str) -> None:
-    raise StructuredOutputError(f"invalid JSON constant: {value}")
 
 
 def _context_for(
@@ -1286,26 +1239,6 @@ def _uses_workspace(node: TaskNodeId) -> bool:
         # A routing node. It runs no agent, so it holds no tools.
         return False
     return any(name in WORKSPACE_TOOLS for name in profile.tool_names)
-
-
-def _restatement_messages(answer: str) -> tuple[Message, ...]:
-    """The corrective turn: the message that could not be read, and the ask.
-
-    The unreadable answer is replayed as what it was -- the model's own turn --
-    so the object it must send again is the one it already reached rather than
-    one this code went looking for. A run with an empty answer replays nothing,
-    because there is no turn to quote.
-    """
-
-    asked = user_message(
-        "Your last message was not exactly one JSON object, so it could not be "
-        "read. Send that JSON object again as your entire message: no "
-        "narration before or after it, no Markdown, no code fence. Restate the "
-        "answer you already reached and add nothing to it."
-    )
-    if not answer:
-        return (asked,)
-    return (assistant_message(text=answer), asked)
 
 
 def _outcome_update(*outcomes: AgentOutcome) -> dict[str, Any]:

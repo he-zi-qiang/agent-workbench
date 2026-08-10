@@ -15,6 +15,7 @@ import {
   listKnowledgeBases,
   listTasks,
   newIdempotencyKey,
+  triageTask,
 } from "../../api/client";
 import { IdentityProvider } from "../../app/IdentityContext";
 import { WorkPage } from "./WorkPage";
@@ -33,8 +34,20 @@ vi.mock("../../api/client", async () => {
     listKnowledgeBases: vi.fn(),
     listTasks: vi.fn(),
     newIdempotencyKey: vi.fn(),
+    triageTask: vi.fn(),
   };
 });
+
+/** What the endpoint answers when triage is disabled or failing: submit what
+ * you always submitted. The deployment-default shape for most tests. */
+const TRIAGE_DEFAULT = {
+  status: "default" as const,
+  graph: null,
+  wants_report: null,
+  reason: null,
+  question: null,
+  options: [],
+};
 
 describe("WorkPage task submission", () => {
   beforeEach(() => {
@@ -50,6 +63,8 @@ describe("WorkPage task submission", () => {
     vi.mocked(listKnowledgeBases).mockReset();
     vi.mocked(listTasks).mockReset();
     vi.mocked(newIdempotencyKey).mockReset();
+    vi.mocked(triageTask).mockReset();
+    vi.mocked(triageTask).mockResolvedValue(TRIAGE_DEFAULT);
     let keyNumber = 0;
     vi.mocked(newIdempotencyKey).mockImplementation(
       () => `task:intent_${String(++keyNumber)}`,
@@ -138,17 +153,98 @@ describe("WorkPage task submission", () => {
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     const input = vi.mocked(createTask).mock.calls[0]?.[1];
-    // No report asked for, so none is promised: this objective mentions no file.
-    // The pipeline is the form's visible default, sent explicitly.
+    // Triage answered "default", so the form submits exactly what it always
+    // submitted: no graph field (the deployment decides), no report, and a
+    // provenance block saying nobody decided (ADR-036).
     expect(input).toEqual({
       objective: "整理现有信息",
       maxRevisions: 2,
       wantsReport: false,
-      graph: "research",
+      intent: {
+        graph_decided_by: "default",
+        wants_report_decided_by: "default",
+      },
     });
   });
 
-  it("submits the pipeline the reader picked, not a guess from the objective", async () => {
+  it("submits a decided triage verdict with its provenance", async () => {
+    vi.mocked(createTask).mockReset();
+    vi.mocked(createTask).mockResolvedValue({
+      task_id: "task_created",
+      status: "queued",
+      status_detail: null,
+      objective_preview: null,
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:00:00Z",
+    });
+    vi.mocked(triageTask).mockResolvedValue({
+      status: "decided",
+      graph: "general",
+      wants_report: true,
+      reason: "要把一批文件合并成一份交付物",
+      question: null,
+      options: [],
+    });
+    const user = userEvent.setup();
+    renderWorkPage();
+
+    await user.type(screen.getByLabelText("目标"), "把这批 CSV 清洗合并出一份对账表");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createTask).mock.calls[0]?.[1]).toEqual({
+      objective: "把这批 CSV 清洗合并出一份对账表",
+      maxRevisions: 2,
+      wantsReport: true,
+      graph: "general",
+      intent: {
+        graph_decided_by: "model",
+        wants_report_decided_by: "model",
+        reason: "要把一批文件合并成一份交付物",
+      },
+    });
+  });
+
+  it("turns an unsure triage into a question, and the answer into an explicit choice", async () => {
+    vi.mocked(createTask).mockReset();
+    vi.mocked(createTask).mockResolvedValue({
+      task_id: "task_created",
+      status: "queued",
+      status_detail: null,
+      objective_preview: null,
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:00:00Z",
+    });
+    vi.mocked(triageTask).mockResolvedValue({
+      status: "ask",
+      graph: null,
+      wants_report: null,
+      reason: null,
+      question: "是要一份调研报告，还是直接把事做完？",
+      options: [
+        { graph: "research", label: "调研报告" },
+        { graph: "general", label: "通用执行" },
+      ],
+    });
+    const user = userEvent.setup();
+    renderWorkPage();
+
+    await user.type(screen.getByLabelText("目标"), "研究一下这批反馈");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    // No Task yet: uncertainty is a question, never a submission (ADR-036).
+    await screen.findByText("是要一份调研报告，还是直接把事做完？");
+    expect(createTask).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "通用执行" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const input = vi.mocked(createTask).mock.calls[0]?.[1];
+    expect(input?.graph).toBe("general");
+    // The chip is the reader answering, so the record says "user".
+    expect(input?.intent?.graph_decided_by).toBe("user");
+  });
+
+  it("skips triage entirely for an explicit override, which outranks any guess", async () => {
     vi.mocked(createTask).mockReset();
     vi.mocked(createTask).mockResolvedValue({
       task_id: "task_created",
@@ -161,18 +257,23 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage();
 
-    // An objective that *sounds* like research, submitted as 通用执行: the
-    // wording must not decide the pipeline (ADR-031 -- a wrong guess runs the
-    // entire wrong graph), only the visible control does.
+    // An objective that *sounds* like research, submitted as 通用执行 via the
+    // advanced override: the wording must not decide the pipeline, and an
+    // explicit choice must not even consult the model (the control group is
+    // the decided-verdict test above, where triageTask is called once).
     await user.type(screen.getByLabelText("目标"), "调研并把这批 CSV 清洗合并");
+    await user.click(screen.getByText("高级设置"));
     await user.click(screen.getByRole("radio", { name: /通用执行/ }));
     await user.click(screen.getByRole("button", { name: "创建任务" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(createTask).mock.calls[0]?.[1].graph).toBe("general");
+    expect(triageTask).not.toHaveBeenCalled();
+    const input = vi.mocked(createTask).mock.calls[0]?.[1];
+    expect(input?.graph).toBe("general");
+    expect(input?.intent?.graph_decided_by).toBe("user");
   });
 
-  it("asks for a report only when the objective does, and lets that be overridden", async () => {
+  it("an explicit report choice overrides the verdict's", async () => {
     vi.mocked(createTask).mockReset();
     vi.mocked(createTask).mockResolvedValue({
       task_id: "task_created",
@@ -182,22 +283,29 @@ describe("WorkPage task submission", () => {
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
     });
+    vi.mocked(triageTask).mockResolvedValue({
+      status: "decided",
+      graph: "research",
+      wants_report: true,
+      reason: "像调研",
+      question: null,
+      options: [],
+    });
     const user = userEvent.setup();
     renderWorkPage();
 
-    const toggle = screen.getByRole("checkbox", { name: /生成报告文件/ });
-    expect(toggle).not.toBeChecked();
-
-    await user.type(screen.getByLabelText("目标"), "比较三个方案并输出一份建议报告");
-    expect(toggle).toBeChecked();
-
-    // The reader's own choice outranks the guess, and keeps outranking it.
-    await user.click(toggle);
-    expect(toggle).not.toBeChecked();
-
+    await user.type(screen.getByLabelText("目标"), "比较三个方案");
+    await user.click(screen.getByText("高级设置"));
+    await user.selectOptions(screen.getByLabelText("报告文件"), "no");
     await user.click(screen.getByRole("button", { name: "创建任务" }));
+
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(createTask).mock.calls[0]?.[1].wantsReport).toBe(false);
+    const input = vi.mocked(createTask).mock.calls[0]?.[1];
+    // The verdict said true; the reader said no. The reader wins and the
+    // record says so.
+    expect(input?.wantsReport).toBe(false);
+    expect(input?.intent?.wants_report_decided_by).toBe("user");
+    expect(input?.intent?.graph_decided_by).toBe("model");
   });
 
   it("lists tasks by what they were asked to do, not by id", async () => {

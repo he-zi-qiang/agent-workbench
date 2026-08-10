@@ -2,6 +2,7 @@ import type {
   ArtifactRef,
   EventEnvelope,
   TaskGraphChoice,
+  TaskIntent,
   TaskTimelineResponse,
 } from "../../api/types";
 
@@ -113,6 +114,45 @@ export function findGraphChoice(
     if (version === "v1") return "research";
     if (version === "v2_general") return "general";
     return null;
+  }
+  return null;
+}
+
+const DECIDED_BY = new Set(["user", "model", "default"]);
+
+/**
+ * Who decided this Task's shape, from the submission event (ADR-036).
+ *
+ * `null` both for Tasks submitted before the field existed and for a block
+ * this client cannot read -- the display is provenance, and a malformed
+ * claim shown as fact would be worse than none.
+ */
+export function findTaskIntent(
+  events: readonly EventEnvelope[],
+): TaskIntent | null {
+  for (const event of events) {
+    if (!isEvent(event, "TaskSubmitted")) continue;
+    const payload = event.payload as Record<string, unknown>;
+    const intent = payload["intent"];
+    if (!isRecord(intent)) return null;
+    const graphDecidedBy = intent["graph_decided_by"];
+    const wantsReportDecidedBy = intent["wants_report_decided_by"];
+    const reason = intent["reason"];
+    if (
+      typeof graphDecidedBy !== "string" ||
+      !DECIDED_BY.has(graphDecidedBy) ||
+      typeof wantsReportDecidedBy !== "string" ||
+      !DECIDED_BY.has(wantsReportDecidedBy) ||
+      !(reason === null || reason === undefined || typeof reason === "string")
+    ) {
+      return null;
+    }
+    return {
+      graph_decided_by: graphDecidedBy as TaskIntent["graph_decided_by"],
+      wants_report_decided_by:
+        wantsReportDecidedBy as TaskIntent["wants_report_decided_by"],
+      reason: typeof reason === "string" ? reason : null,
+    };
   }
   return null;
 }

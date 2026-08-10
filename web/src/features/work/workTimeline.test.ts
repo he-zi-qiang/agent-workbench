@@ -8,6 +8,7 @@ import {
   findLatestApprovalId,
   collectArtifacts,
   findTaskInputRef,
+  findTaskIntent,
   mergeTimelineResponse,
   parseTaskInputArtifact,
 } from "./workTimeline";
@@ -132,6 +133,40 @@ describe("work timeline contract selectors", () => {
       ]),
     ).toBeNull();
     expect(findGraphChoice([envelope("event_1", "TaskClaimed")])).toBeNull();
+  });
+
+  it("reads shape provenance from the submission event, and refuses malformed claims", () => {
+    expect(
+      findTaskIntent([
+        envelope("event_1", "TaskSubmitted", {
+          graph_version: "v2_general",
+          intent: {
+            graph_decided_by: "model",
+            wants_report_decided_by: "default",
+            reason: "要把事做完",
+          },
+        }),
+      ]),
+    ).toEqual({
+      graph_decided_by: "model",
+      wants_report_decided_by: "default",
+      reason: "要把事做完",
+    });
+    // Tasks submitted before the field existed claim nothing.
+    expect(
+      findTaskIntent([
+        envelope("event_1", "TaskSubmitted", { graph_version: "v1" }),
+      ]),
+    ).toBeNull();
+    // A malformed block is provenance this client cannot vouch for: shown as
+    // nothing rather than as fact.
+    expect(
+      findTaskIntent([
+        envelope("event_1", "TaskSubmitted", {
+          intent: { graph_decided_by: "somebody" },
+        }),
+      ]),
+    ).toBeNull();
   });
 
   it("uses the latest approval request only to discover the authoritative record", () => {

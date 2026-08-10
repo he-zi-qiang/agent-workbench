@@ -20,6 +20,7 @@ from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import AgentWorkbenchError, ErrorCode
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.task_inputs import TaskInput
+from agent_workbench.domain.task_intent import TaskIntent
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.task_registry import TaskRun, objective_preview
@@ -141,6 +142,7 @@ class TaskInputService:
         task_input: TaskInput,
         submission_dedup_key: str,
         graph: TaskGraphChoice | None = None,
+        intent: TaskIntent | None = None,
     ) -> TaskRun:
         """Store the input, then open the Task that references it.
 
@@ -150,6 +152,11 @@ class TaskInputService:
         both places would give idempotency two answers -- the artifact's
         fingerprint and the Registry's own ``graph_version`` comparison -- for
         one question.
+
+        ``intent`` stays out of ``TaskInput`` for a harder reason: the
+        artifact's canonical bytes include defaults, so any field added there
+        changes the recomputed fingerprint of every stored input and fails
+        every existing Task's load-time check (ADR-036 §2.3).
         """
 
         stored = await self.inputs.store(principal=principal, task_input=task_input)
@@ -164,6 +171,7 @@ class TaskInputService:
             # every submission read back what it just wrote.
             objective_preview=objective_preview(task_input.objective),
             graph=graph,
+            intent=intent,
         )
 
 

@@ -351,6 +351,14 @@ class ChatConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TriageConfig:
+    """Whether this API proposes a submission's shape, and how long it may try."""
+
+    enabled: bool
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class ObservabilityConfig:
     """Where this process sends what it records.
 
@@ -565,6 +573,7 @@ class ApiRuntimeConfig:
     retrieval: RetrievalConfig
     chat_recovery: ChatRecoveryConfig
     chat: ChatConfig
+    triage: TriageConfig
     task: TaskConfig
     observability: ObservabilityConfig
     # ADR-019. The API runs the chat loop, so it needs the same switch the Task
@@ -886,6 +895,10 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             reaper_batch_size=settings.chat.reaper_batch_size,
             disconnect_poll_seconds=settings.chat.disconnect_poll_seconds,
         ),
+        triage=TriageConfig(
+            enabled=settings.triage.enabled,
+            timeout_seconds=settings.triage.timeout_seconds,
+        ),
         task=project_task(settings),
     )
 
@@ -912,6 +925,7 @@ __all__ = [
     "SandboxConfig",
     "TaskConfig",
     "TaskWorkerRuntimeConfig",
+    "TriageConfig",
     "configured_mcp_tool_names",
     "project_api",
     "project_ingestion_worker",

@@ -219,16 +219,30 @@ class TestGraphChoice:
             output,
         )
 
-    def _submitted_body(self, repl: Repl) -> dict[str, object]:
-        """Drive one `/task` to completion and return what it POSTed."""
+    def _submitted_body(
+        self,
+        repl: Repl,
+        triage: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Drive one `/task` to completion and return what it POSTed.
+
+        ``triage`` is what POST /v1/tasks/triage answers; the default is the
+        endpoint's own disabled shape, so a test that says nothing about
+        triage measures the deployment-default path.
+        """
 
         import json as jsonlib
 
         import httpx
 
         captured: dict[str, object] = {}
+        triage_calls: list[dict[str, object]] = []
+        captured["_triage_calls"] = triage_calls
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST" and request.url.path == "/v1/tasks/triage":
+                triage_calls.append(jsonlib.loads(request.content))
+                return httpx.Response(200, json=triage or {"status": "default"})
             if request.method == "POST" and request.url.path == "/v1/tasks":
                 captured.update(jsonlib.loads(request.content))
                 return httpx.Response(201, json={"task_id": "task_1"})
@@ -247,32 +261,109 @@ class TestGraphChoice:
         repl._task("整理这批文件")
         return captured
 
-    def test_an_unchosen_graph_is_not_sent_at_all(self) -> None:
+    def test_auto_with_a_default_verdict_sends_no_graph(self) -> None:
         """The deployment's default must stay the server's decision: a repl
         that always sent its own idea of the default would freeze that idea
-        into every Task it submits (ADR-031 §2.3)."""
+        into every Task it submits (ADR-031 §2.3). Auto is the mode since
+        ADR-036, and a triage that answers "default" resolves to exactly the
+        old silence -- plus a provenance block saying nobody decided."""
 
         repl, _ = self._repl(lambda _: None)
         body = self._submitted_body(repl)
 
         assert "graph" not in body
+        assert body["intent"] == {
+            "graph_decided_by": "default",
+            "wants_report_decided_by": "default",
+        }
 
-    def test_the_chosen_graph_travels_with_the_submission(self) -> None:
+    def test_auto_submits_a_decided_verdict_with_its_provenance(self) -> None:
+        repl, output = self._repl(lambda _: None)
+        body = self._submitted_body(
+            repl,
+            triage={
+                "status": "decided",
+                "graph": "general",
+                "wants_report": True,
+                "reason": "要把事做完",
+            },
+        )
+
+        assert body["graph"] == "general"
+        assert body["wants_report"] is True
+        assert body["intent"] == {
+            "graph_decided_by": "model",
+            "wants_report_decided_by": "model",
+            "reason": "要把事做完",
+        }
+        assert len(body["_triage_calls"]) == 1  # type: ignore[arg-type]
+        # The verdict is visible, not silent: one line of provenance.
+        assert "模型判定" in output.getvalue()
+
+    def test_auto_asks_and_a_piped_session_takes_the_default_out_loud(self) -> None:
+        repl, output = self._repl(lambda _: None)
+        body = self._submitted_body(
+            repl,
+            triage={"status": "ask", "question": "要报告还是要执行？"},
+        )
+
+        assert "graph" not in body
+        assert "要报告还是要执行？" in output.getvalue()
+        assert "非交互" in output.getvalue()
+
+    def test_the_chosen_graph_travels_with_the_submission_and_skips_triage(
+        self,
+    ) -> None:
+        """An explicit pin never consults the model. The control group is the
+        decided-verdict test above, whose triage endpoint is called once."""
+
         repl, _ = self._repl(lambda _: None)
         repl._command("/graph general")
+        body = self._submitted_body(repl)
 
-        assert self._submitted_body(repl)["graph"] == "general"
+        assert body["graph"] == "general"
+        assert body["intent"] == {
+            "graph_decided_by": "user",
+            "wants_report_decided_by": "default",
+        }
+        assert body["_triage_calls"] == []
 
-    def test_default_returns_to_not_sending(self) -> None:
+    def test_default_returns_to_not_sending_and_claims_nothing(self) -> None:
         repl, _ = self._repl(lambda _: None)
         repl._command("/graph general")
         repl._command("/graph default")
+        body = self._submitted_body(repl)
 
-        assert "graph" not in self._submitted_body(repl)
+        assert "graph" not in body
+        assert "intent" not in body
+        assert body["_triage_calls"] == []
+
+    def test_an_interactive_ask_takes_the_readers_answer_as_their_own(
+        self, monkeypatch: object
+    ) -> None:
+        """The chip flow, in terminal form: the answer is an explicit choice
+        recorded as the reader's, not as the model's."""
+
+        import builtins
+
+        repl, output = self._repl(lambda _: None)
+        repl.interactive = True
+        monkeypatch.setattr(builtins, "input", lambda prompt="": "2")  # type: ignore[attr-defined]
+        body = self._submitted_body(
+            repl,
+            triage={"status": "ask", "question": "要报告还是要执行？"},
+        )
+
+        assert body["graph"] == "general"
+        assert body["intent"] == {
+            "graph_decided_by": "user",
+            "wants_report_decided_by": "default",
+        }
+        assert "要报告还是要执行？" in output.getvalue()
 
     def test_an_unknown_choice_changes_nothing_and_prints_usage(self) -> None:
         repl, output = self._repl(lambda _: None)
         repl._command("/graph v2_general")
 
-        assert repl.task_graph is None
-        assert "research|general|default" in output.getvalue()
+        assert repl.task_graph == "auto"
+        assert "auto|research|general|default" in output.getvalue()
