@@ -1,5 +1,54 @@
 # 实施状态
 
+## 2026-08-10 答案不是摘要：4096 那个上界切掉的是整张图的产物（ADR-035）
+
+上一条末尾"单独立项"的那个数字矛盾，查下来比记的那笔严重。**不是外部研究节点多付一轮
+的问题，是每一份报告都被切在 4096 字符。**
+
+实测（真实 `ClaudeLikeAgentRuntime` + `ArtifactPersistingExecutor`，fake 模型）：
+
+```text
+model wrote          : 18010 chars
+outcome.output_text  : 4096 chars
+tail                 : 'ed paragraph. Grounded para… [truncated]'
+stored artifact      : 4098 bytes
+```
+
+`ArtifactPersistingExecutor` 存的就是 `output_text`，所以那个上界就是 `synthesize` 写的
+报告、`export_report` 导出的那份文件的上界——约 600 个英文词，句子从中间断开。Chat 同理：
+用户看着 `ModelDelta` 把全文流完，拿到的 `AnswerCommitted` 是截短的。**没有任何地方说过
+报告只有两页。**
+
+**做了什么。** 新增 `AnswerText`（65 536），给的是**承载答案本身**的字段：
+`AgentOutcome.output_text`、`ModelCompleted.text`、`AnswerCommitted.text`、
+`UngroundedAnswerCommitted.text`、`ChatTurnResult.answer`。`BoundedText` 保持 4096 与
+它本来的含义：**关于**一次 run 记录下来的摘要（ADR-019 引入的那两个 preview）与流式增量
+的一片。这不是新形状——`ToolOutputText` 当初就是这样分出来的。
+
+**ADR-019 没被推翻，是被收窄了。** 它立的"提示词与工具参数要有界"一字未动。它同一节里
+还写过"事件流早就在携带模型生成的正文，因为答案本来就要从这里回到提问的人手里"——所以
+问题不是答案该不该进事件，是进事件的答案按谁的上界。preview 每步一条，答案每轮一条。
+
+**仍然裁在源头。** `_clip` 留着，只换量尺。在下游裁会发布一份和供应商返回的不一样的
+答案，而 `ChatTurnResult` 那条 `answer == outcome.output_text` 的发布围栏正靠源头裁剪
+成立。
+
+**契约的数字现在被比着。** `MAX_EXTERNAL_PASSAGE_CHARS` 8000 → 2400，`LOCATOR_CHARS`
+800，`20 × (2400 + 800) = 64 000 ≤ 65 536`；提示词插值这两个常量而不再自己抄数字。缺的
+从来不是正确的数，是**没有东西在比较它们**。
+
+**破坏验证做过三次**，三个可动的零件各一次：把 `MAX_OUTPUT_TEXT` 改回 4096 → 运行时与
+chat 三条红；把 `ANSWER_TEXT_LIMIT` 改回 `BOUNDED_TEXT_LIMIT` → 四条红（含报告 artifact
+那条）；把每条上限改回 8000 → 契约那条以 `assert (20 * (8000 + 800)) <= 65536` 的形式红。
+
+**门禁**（本机，真实 PostgreSQL 5433 + Qdrant 6333）：
+
+```text
+pytest（--ignore=tests/e2e）   2495 passed / 11 skipped
+ruff check / format             passed
+pyright                         0 errors / 0 warnings
+```
+
 ## 2026-08-10 结构化节点读不出来时再问一次（ADR-034）
 
 关掉的是下面"事实二"那条缺陷：`research_external` 因为答案前面多了一句话而杀掉整个

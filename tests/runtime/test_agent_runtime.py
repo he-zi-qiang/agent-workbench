@@ -37,7 +37,7 @@ from agent_workbench.domain.runs import (
     TokenUsage,
     TraceContext,
 )
-from agent_workbench.domain.schema import BOUNDED_TEXT_LIMIT
+from agent_workbench.domain.schema import ANSWER_TEXT_LIMIT, BOUNDED_TEXT_LIMIT
 from agent_workbench.domain.tools import ToolCall, ToolName, ToolResult, ToolSpec
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import CancellationSource
@@ -677,11 +677,29 @@ def test_an_answer_cut_off_by_the_token_ceiling_is_a_failure() -> None:
     assert run.outcome.stop_reason == "token_budget"
 
 
-def test_a_long_answer_is_clipped_to_the_domain_ceiling() -> None:
-    run = _execute(FakeModel([ScriptedTurn(text="x" * 9000)]))
+def test_an_answer_longer_than_a_preview_is_not_cut_down_to_one() -> None:
+    """An answer is the product of the run, not text recorded about it.
+
+    9000 characters is an ordinary report and a short one for a bundle of
+    quoted passages. Cutting it to what an event *preview* holds published a
+    different answer than the provider returned, and did it silently enough
+    that a truncated report reached the export node looking whole (ADR-035 §1).
+    """
+
+    answer = "x" * 9000
+    run = _execute(FakeModel([ScriptedTurn(text=answer)]))
 
     assert run.outcome.status == "completed"
-    assert len(run.outcome.output_text) == 4096
+    assert run.outcome.output_text == answer
+
+
+def test_an_answer_past_its_own_ceiling_is_still_clipped_and_says_so() -> None:
+    """The control. The bound moved; it did not stop existing."""
+
+    run = _execute(FakeModel([ScriptedTurn(text="x" * (ANSWER_TEXT_LIMIT + 1000))]))
+
+    assert run.outcome.status == "completed"
+    assert len(run.outcome.output_text) == ANSWER_TEXT_LIMIT
     assert run.outcome.output_text.endswith("[truncated]")
 
 

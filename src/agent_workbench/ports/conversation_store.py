@@ -22,7 +22,7 @@ from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.messages import Message
 from agent_workbench.domain.runs import AgentOutcome
 from agent_workbench.domain.schema import (
-    BoundedText,
+    AnswerText,
     DomainModel,
     ShortText,
     VersionedModel,
@@ -111,7 +111,7 @@ class ChatTurnResult(VersionedModel):
     """The completed model outcome and the answer awaiting release."""
 
     outcome: AgentOutcome
-    answer: BoundedText
+    answer: AnswerText
     authorized_revisions: tuple[AuthorizedRevision, ...]
     citations: tuple[Citation, ...] = ()
     withheld: bool = False

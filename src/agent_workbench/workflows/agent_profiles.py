@@ -44,7 +44,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Final, Literal
 
-from agent_workbench.domain.evidence import EvidenceBundle
+from agent_workbench.domain.evidence import MAX_EVIDENCE_ITEMS, EvidenceBundle
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.messages import Message, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
@@ -153,6 +153,21 @@ _CRITIC_CONTRACT: Final[str] = (
     "The draft reference and revision must match the supplied values."
 )
 
+#: How much of one item is not its passage: the source URL, the title, and the
+#: JSON around them. A generous allowance rather than the domain's absolute
+#: maxima -- `EvidenceUrl` permits 2048 characters and no real source URL is
+#: that, so budgeting for the maximum would spend the whole answer on locators.
+LOCATOR_CHARS: Final[int] = 800
+
+#: How long a quoted passage may be. Derived rather than picked: this many
+#: characters plus a locator, times `MAX_EVIDENCE_ITEMS`, has to fit in one
+#: `AnswerText`. The figure this replaces was 8000, which made the largest
+#: permitted answer about 160 KB and the largest deliverable one 64 KB --
+#: numbers that were each plausible alone and were never compared (ADR-035).
+#: `test_the_external_contract_asks_for_no_more_than_an_answer_can_carry` is
+#: what compares them now.
+MAX_EXTERNAL_PASSAGE_CHARS: Final[int] = 2400
+
 #: The external researcher's contract. It is a JSON one for the same reason the
 #: planner's and the critic's are: what this node produces is not prose for a
 #: reader, it is an evidence bundle a later node cites from, and a bundle needs
@@ -171,8 +186,9 @@ _EXTERNAL_RESEARCH_CONTRACT: Final[str] = (
     "Your final message must be exactly one JSON object and nothing else: no "
     "narration before or after it, no Markdown, no code fence. "
     '{"items":[{"url":"https://...","title":"...","text":"..."}]}. '
-    "One item per source you actually read, at most 20 of them, each quoting "
-    "or closely paraphrasing that source in at most 8000 characters. Return "
+    f"One item per source you actually read, at most {MAX_EVIDENCE_ITEMS} of "
+    "them, each quoting or closely paraphrasing that source in at most "
+    f"{MAX_EXTERNAL_PASSAGE_CHARS} characters. Return "
     '{"items":[]} when no source could be read -- an invented source is worse '
     "than no evidence."
 )
@@ -583,6 +599,8 @@ def build_agent_request(
 
 __all__ = [
     "AGENT_ROSTERS",
+    "LOCATOR_CHARS",
+    "MAX_EXTERNAL_PASSAGE_CHARS",
     "V1_AGENT_PROFILES",
     "V2_AGENT_PROFILES",
     "WORKSPACE_READ_TOOLS",

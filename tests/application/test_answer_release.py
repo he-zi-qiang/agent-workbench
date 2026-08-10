@@ -34,6 +34,7 @@ from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.events import AnswerCommitted, ModelCompleted, ModelDelta
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import RunBudget
+from agent_workbench.domain.schema import BOUNDED_TEXT_LIMIT
 from agent_workbench.ports.conversation_store import (
     ChatTurnConflictError,
     ChatTurnResult,
@@ -259,6 +260,33 @@ def test_chat_publishes_a_success_only_after_the_release_check() -> None:
     assert [event.event_type for event in events].index("RunCompleted") < len(
         events
     ) - 1
+
+
+def test_a_long_answer_is_published_whole_rather_than_cut_to_a_preview() -> None:
+    """The asker gets the answer the provider wrote (ADR-035 §3.2).
+
+    This boundary is where the answer becomes visible, and the turn record
+    requires it to equal what the run produced -- so a ceiling here is a
+    ceiling on the answer itself, not on how much of it is displayed.
+    """
+
+    long_answer = "Paragraph about hybrid retrieval. " * 400
+
+    async def scenario() -> tuple[tuple[Any, ...], str]:
+        conversations = await _conversations()
+        service = _chat(
+            _EmptyRetrieval(), conversations, [ScriptedTurn(text=long_answer)]
+        )
+        log = InMemoryEventLog()
+        turn = await service.ask(_request(), _sink(log))
+        return await log.read(SCOPE.stream_id), turn.answer
+
+    events, answer = asyncio.run(scenario())
+
+    assert len(long_answer) > BOUNDED_TEXT_LIMIT
+    assert events[-1].event_type == "AnswerCommitted"
+    assert events[-1].payload.text == long_answer
+    assert answer == long_answer
 
 
 def test_a_completed_request_retry_returns_the_original_turn_without_rerunning() -> (
