@@ -18,10 +18,14 @@ Chat web search with the tool-ceiling semantics (PR #74). ADR-018 through 022 �
 ungrounded chat shape, run-step transparency, external search, Chat's routed
 fallback going online, and what a spent tool allowance means — are all on
 `main`. WP14-01 now adds the MCP adapter and takes the config schema to `1.8`.
-WP15's first two stages have landed: the Task workspace
-([ADR-028](docs/adr/0028-task-workspace.md)) and the ephemeral sandbox
-([ADR-029](docs/adr/0029-ephemeral-sandbox.md)), which takes the schema to `1.9`.
-Current evidence and historical
+WP15's first three stages have landed: the Task workspace
+([ADR-028](docs/adr/0028-task-workspace.md)), the ephemeral sandbox
+([ADR-029](docs/adr/0029-ephemeral-sandbox.md), schema `1.9`), and reading
+outward ([ADR-027](docs/adr/0027-read-outward-write-inward.md), schema `1.10`,
+PR #83–#86). [ADR-032](docs/adr/0032-the-external-researcher-is-an-agent.md)
+then closed the one segment of that line which was declared but never wired:
+`researcher_external` now actually runs an agent loop when it holds tools
+(PR #87). Current evidence and historical
 increments are separated in
 [the implementation status](docs/status.md).
 
@@ -71,26 +75,56 @@ Implemented with test evidence:
   the sandbox process itself knows nothing of workspaces, tenants or owners. A
   deployment with no container runtime has one fewer capability, not a Worker
   that will not start;
+- an optional, off-by-default read-outward lab: `web_mcp`'s `fetch_page` and
+  `download_document` are both GETs carrying no `operation_key`. Every fetch
+  passes an address guard that checks the **resolved** destination: only
+  globally routable addresses proceed, and everything else — multicast and
+  `169.254.169.254` included — falls in the complement of `is_global`, because a
+  denylist is a list somebody has to remember to extend and a complement is not.
+  Redirects are followed hop by hop inside the adapter rather than handing the
+  choice of destination to the HTTP client. **DNS rebinding is explicitly out of
+  scope**; closing it means changing the transport. Two tools rather than one
+  tool with a mode: a PDF run through HTML extraction yields garbage that reads
+  like a successful read;
+- which server's tools reach which Agent is declared in configuration:
+  `[[mcp.servers]].audience` names a purpose (`research` / `synthesis`) rather
+  than a protocol, so adding a reader or a renderer is a config change, not a
+  profile-code change. Audience does **not** widen the authorization envelope —
+  the envelope is the Task's ceiling, audience is which Agent can reach into it
+  — and profiles widen by the tools actually **registered**, never by config,
+  since otherwise a node would request a tool the Gateway cannot resolve;
+- an external researcher that is an Agent when it holds tools (ADR-032). The
+  change is purely additive: the original deterministic search stays, and only
+  when this Worker really registered research-audience tools does a second,
+  tool-carrying agent run happen, with both halves' evidence merged by the
+  graph's own fan-in reducer. A deployment with an empty catalogue takes no
+  extra step. Its output must be JSON evidence items rather than prose, because
+  `synthesize` reads an `EvidenceBundle`; `{"items":[]}` is a permitted answer,
+  while unparseable output fails the node — demoting "could not read" to "found
+  nothing" lets the next node write a plausible report on top of silence;
 - a React Chat/Work console served same-origin by FastAPI, described in
   [the frontend baseline](docs/frontend-design.md);
 - a local-only Docker Compose topology for PostgreSQL, Qdrant, migrations, the
   API and explicitly opted-in synthetic workers.
 
-Validation for the current tree:
+Validation for the current tree, measured on `main@a4dea2b`:
 
-- Ruff format and lint: passed;
+- Ruff format and lint: passed (421 files);
 - Pyright: 0 errors and 0 warnings;
-- tests without external services: 1540 passed, 597 environment-gated skips;
-- MCP adapter plus protocol-to-Runtime E2E: 37 passed;
-- the E2E directory: 1 passed, 11 PostgreSQL-gated skips;
+- tests without external services, ignoring `tests/e2e`: 1784 passed, 597
+  environment-gated skips;
+- the E2E directory: 3 passed, 11 PostgreSQL-gated skips;
+- architecture and configuration guards: 114 passed;
 - lock-file and dependency-license policy gates: passed;
 - frontend ESLint, strict TypeScript and production build: passed;
 - Vitest: 45 passed; Playwright desktop/mobile smoke: 2 passed.
 
-PostgreSQL, Qdrant and local BGE services were not running for the current MCP
-increment. Environment-gated skips are reported rather than represented as
-stateful verification; the earlier stateful evidence remains dated in
-[the implementation status](docs/status.md).
+PostgreSQL, Qdrant and local BGE weights were not running for this check.
+Environment-gated skips are reported rather than represented as stateful
+verification; the earlier stateful evidence remains dated in
+[the implementation status](docs/status.md), which also records the real Task
+acceptance run behind ADR-032 — a separate run, on a machine with those
+services, that must not be merged with the numbers above.
 
 External search now has a real provider
 ([ADR-020](docs/adr/0020-external-web-search.md)): DeepSeek's server-side
@@ -104,9 +138,23 @@ run against a fake port — nothing exercises the real endpoint.
 
 The sandbox does not reach the network, keeps no state between calls, offers no
 GPU, and does not promise byte-identical replay — a script may call `time.time()`
-or `random`, and ADR-029 §3.4 says so rather than pretending otherwise. WP15
-stages three through five (reading outward and downloading, cost/deadline
-budgets, and the second graph `v2_general`) have not started.
+or `random`, and ADR-029 §3.4 says so rather than pretending otherwise. Reading
+outward does no form filling, no clicking, no POST of any kind, and drives no
+desktop software; JS-rendered pages and screenshots need a browser engine and
+are explicitly out of scope per ADR-027 §3.5, so **an SPA yielding no article
+text is a known boundary rather than a bug**. WP15 stages four (cost and
+deadline as the governing budget, `workspace_edit`, `workspace_grep`) and five
+(the second graph `v2_general`) have not started. The plan is explicit that
+stage four is not optional: with the tools complete and the budget unchanged, a
+node that genuinely iterates hits the wall at twelve steps, and that symptom
+reads like a weak model.
+
+One cost boundary found by measurement: a node that reads web pages does not fit
+the default token ceiling. An article runs 20–50 KB, two reads come to roughly
+28000 tokens, and the default 16000 of
+`multi_agent.max_tokens_per_agent_invocation` stops the run mid-JSON — every tool
+succeeded and the node still failed. The default is unchanged; only
+`config/config.web-local.toml` raises it to 120000.
 
 The remaining boundaries are explicit: physical deletion of stale Qdrant points,
 context compaction, EventLog upcasters/poison-row handling, the CrewAI
