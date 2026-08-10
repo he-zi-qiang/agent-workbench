@@ -140,6 +140,32 @@ class VectorIndexPort(Protocol):
         """
         ...
 
+    async def search_sparse(
+        self,
+        *,
+        sparse_indices: tuple[int, ...],
+        sparse_values: tuple[float, ...],
+        tenant_id: str,
+        knowledge_base_id: str,
+        authorized_principals: tuple[str, ...],
+        limit: int,
+    ) -> tuple[ScoredChunk, ...]:
+        """The lexical arm alone, with nothing fused into it.
+
+        The counterpart to ``search``: same narrowing, same ordering
+        guarantee, a different vector. It exists because ``search_hybrid``
+        returns a list that has *already* been fused, and a retriever wanting
+        to fuse these candidates alongside arms from somewhere else -- an
+        entity index, a relationship index -- cannot start from that without
+        fusing twice. Handing out the raw arm is what keeps "exactly once"
+        true for a caller this port cannot see.
+
+        Implementations must return it ordered, for the reason ``search_hybrid``
+        gives at length: an arm in engine order carries ties the engine broke
+        arbitrarily, and every rank built from it inherits that.
+        """
+        ...
+
     async def search_hybrid(
         self,
         *,

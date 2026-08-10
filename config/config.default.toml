@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.12"
+config_schema_version = "1.13"
 architecture_baseline = "1.3"
 
 [api]
@@ -263,6 +263,27 @@ device = "auto"
 precision = "float16"
 timeout_seconds = 15
 failure_mode = "fail_open_with_fused_results"
+
+[rag.graph]
+# The entity and relationship arms (ADR-037). Off by default: enabling it
+# costs one model call per chunk at ingestion and produces an index that is
+# NOT reproducible -- the same corpus extracted twice does not give the same
+# graph, which is the opposite of every other index identity here.
+enabled = false
+# Joins the graph identity: a changed prompt changed what was extracted, and
+# rows written under two prompts must not nominate side by side.
+prompt_version = "v1"
+extraction_profile = "compact"
+# Per arm, before the single RRF narrows them.
+entity_arm_limit = 12
+relation_arm_limit = 12
+# Frozen. The graph nominates chunks that retrieval then authorizes by
+# document; a graph permitted to answer would put text in front of a reader
+# by a path the publish fence never sees.
+nominates_chunks_only = true
+# Query-side keyword extraction: another model call per query and another
+# thing an offline evaluation cannot reproduce. Measured first.
+query_side_extraction_enabled = false
 
 [qdrant]
 url = "http://qdrant:6333"

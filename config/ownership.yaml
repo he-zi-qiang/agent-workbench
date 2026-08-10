@@ -427,6 +427,19 @@
       ]
     },
     {
+      "owner": "application.knowledge.graph",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "rag.graph.enabled",
+        "rag.graph.prompt_version",
+        "rag.graph.extraction_profile",
+        "rag.graph.entity_arm_limit",
+        "rag.graph.relation_arm_limit",
+        "rag.graph.nominates_chunks_only",
+        "rag.graph.query_side_extraction_enabled"
+      ]
+    },
+    {
       "owner": "adapters.qdrant.client_factory",
       "lifecycle": "startup",
       "fields": [

@@ -143,7 +143,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.12"] = "1.12"
+    config_schema_version: Literal["1.13"] = "1.13"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -626,12 +626,48 @@ class RerankerSettings(StrictModel):
         return cleaned
 
 
+class GraphRetrievalSettings(StrictModel):
+    """The entity and relationship arms (ADR-037).
+
+    Off by default because turning it on costs a model call per chunk at
+    ingestion and produces an index that is *not* reproducible -- the same
+    corpus extracted twice does not give the same graph. That is the opposite
+    of every other index identity in this system, so it is a deployment's
+    decision to accept, not a default to inherit.
+    """
+
+    enabled: bool = False
+    # The extractor's prompt, versioned by hand. It joins the graph identity
+    # because a changed prompt changes what was extracted, and rows written
+    # under two prompts must not nominate side by side.
+    prompt_version: str = Field(default="v1", min_length=1, max_length=32)
+    # Which model reads each chunk. A profile name rather than a model id, for
+    # the reason AgentRunRequest gives: a request may not select an unreviewed
+    # model.
+    extraction_profile: Literal["main", "compact"] = "compact"
+    # Per arm, before fusion. Each arm proposes candidates and the single RRF
+    # narrows them, exactly as the dense and sparse arms do.
+    entity_arm_limit: int = Field(default=12, ge=1, le=200)
+    relation_arm_limit: int = Field(default=12, ge=1, le=200)
+    # What the graph is allowed to be. A frozen single value rather than a
+    # comment, because the whole ADR turns on it: entities and relationships
+    # nominate chunks that retrieval then authorizes by document, and a graph
+    # permitted to *answer* would put text in front of a reader by a path the
+    # publish fence never sees (ADR-037 §2.1).
+    nominates_chunks_only: Literal[True] = True
+    # Query-side keyword extraction, deliberately off and not a knob yet: it
+    # is another model call per query and another thing an offline evaluation
+    # cannot reproduce. Measured first, enabled second (ADR-037 §2.4).
+    query_side_extraction_enabled: Literal[False] = False
+
+
 class RagSettings(StrictModel):
     llama_index: LlamaIndexSettings
     ingestion: IngestionSettings
     embedding: EmbeddingSettings
     retrieval: RetrievalSettings
     reranker: RerankerSettings
+    graph: GraphRetrievalSettings = Field(default_factory=GraphRetrievalSettings)
 
     @model_validator(mode="after")
     def validate_index_versions(self) -> RagSettings:
