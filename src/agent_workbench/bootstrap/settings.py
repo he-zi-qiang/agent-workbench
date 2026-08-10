@@ -449,10 +449,18 @@ class LlamaIndexSettings(StrictModel):
     # inconclusive, and inconclusive is not a reason to switch.
     #
     # Not inconclusive because the two paths disagreed: because the measurement
-    # cannot resolve them. Tied fused scores come back from Qdrant in an
-    # unstable order, so each retriever disagrees with *itself* on 9-10 of 38
-    # gold questions -- a noise floor wider than any difference between the
+    # could not resolve them. Each retriever disagreed with *itself* on 9-10 of
+    # 38 gold questions -- a noise floor wider than any difference between the
     # two. See docs/status.md 2026-08-03.
+    #
+    # That noise floor is gone as of ADR-033, and the cause recorded here was
+    # not quite right: it was not that tied fused scores came back in an
+    # unstable order, it was that the fused scores were themselves unstable,
+    # being built from arm-internal ranks the engine assigned arbitrarily among
+    # ties. Fusing in the adapter over deterministically-ranked arms fixed it.
+    # This stays False regardless: the equivalence evaluation has not been
+    # re-run on the reproducible retriever, and a switch still needs evidence
+    # rather than an unblocked path to it.
     enabled: bool = False
     role: Literal["ingestion_and_retrieval_adapter"] = "ingestion_and_retrieval_adapter"
     agent_executor_enabled: Literal[False] = False

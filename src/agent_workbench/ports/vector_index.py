@@ -41,10 +41,12 @@ from agent_workbench.domain.schema import DomainModel
 # between the two is a collection whose vectors nothing can query.
 DENSE_VECTOR_NAME = "dense"
 
-# Sparse lives beside dense in the same collection, under its own name, because
-# fusing them requires one query over one set of points. Two collections would
-# mean two queries and a fusion performed here -- which the baseline forbids
-# for a reason: a second fusion invents an ordering neither retriever produced.
+# Sparse lives beside dense in the same collection, under its own name, so that
+# both arms range over one set of points and one narrowing. Two collections
+# would be two candidate sets that could drift apart -- a point present in one
+# and missing from the other is a fusion input nobody can reconstruct. This is
+# about the points, not about where the fusion runs: ADR-033 moved that into
+# the adapter and left this unchanged.
 SPARSE_VECTOR_NAME = "sparse"
 
 
@@ -151,13 +153,21 @@ class VectorIndexPort(Protocol):
         dense_limit: int,
         sparse_limit: int,
     ) -> tuple[ScoredChunk, ...]:
-        """Dense and sparse candidates, fused once, by the index.
+        """Dense and sparse candidates, fused exactly once.
 
-        One request. The two prefetches and the fusion happen inside Qdrant, so
-        this process never holds two ranked lists -- which is the only way to
-        be sure it never combines them a second time. A relative-score fusion
-        applied on top of RRF produces an ordering neither retriever produced
-        and no evaluation can attribute.
+        Once is the constraint, and it is about attribution: a second fusion --
+        a relative-score pass applied on top of RRF, or two already-truncated
+        lists recombined -- produces an ordering neither retriever produced and
+        no evaluation can explain.
+
+        Once used to be guaranteed by keeping both arms inside the engine, so
+        that this process never held two ranked lists. ADR-033 gives that up,
+        because it bought the wrong guarantee: RRF scores by rank within an
+        arm, and the engine ranks candidates it scored equally in whatever
+        order it produced them, so the fused scores were not reproducible
+        across a re-index. An implementation may now fuse the two arms itself,
+        under two conditions -- each arm is a raw retriever result that nothing
+        has fused, and the fusion runs over them one time.
         """
         ...
 

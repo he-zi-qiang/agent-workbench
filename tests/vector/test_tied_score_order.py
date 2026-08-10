@@ -70,7 +70,16 @@ def _url() -> str:
     return url
 
 
-def _chunk(name: str, vector: tuple[float, ...]) -> IndexedChunk:
+def _chunk(
+    name: str, vector: tuple[float, ...], *, weight: float = 1.0
+) -> IndexedChunk:
+    """One point. ``weight`` is what the sparse arm will score it by.
+
+    The default gives every point the same one, which is what makes the sparse
+    arm here an arm with no opinion -- the case the fusion has to handle
+    without inventing one.
+    """
+
     return IndexedChunk(
         chunk_id=f"chk_{name}",
         document_id=f"doc_{name}",
@@ -84,11 +93,18 @@ def _chunk(name: str, vector: tuple[float, ...]) -> IndexedChunk:
         ordinal=0,
         vector=vector,
         sparse_indices=(TERM,),
-        sparse_values=(1.0,),
+        sparse_values=(weight,),
     )
 
 
-def _run(scenario: Callable[[QdrantVectorIndex], Awaitable[Any]]) -> Any:
+def _default_chunks() -> tuple[IndexedChunk, ...]:
+    return (*(_chunk(name, SHARED) for name in TIED_NAMES), _chunk("zenith", NEARER))
+
+
+def _run(
+    scenario: Callable[[QdrantVectorIndex], Awaitable[Any]],
+    chunks: tuple[IndexedChunk, ...] | None = None,
+) -> Any:
     url = _url()
     collection = f"test_{uuid.uuid4().hex}"
 
@@ -97,12 +113,7 @@ def _run(scenario: Callable[[QdrantVectorIndex], Awaitable[Any]]) -> Any:
         try:
             index = QdrantVectorIndex(client, collection=collection)
             await index.ensure_collection(vector_size=SIZE)
-            await index.upsert(
-                (
-                    *(_chunk(name, SHARED) for name in TIED_NAMES),
-                    _chunk("zenith", NEARER),
-                )
-            )
+            await index.upsert(_default_chunks() if chunks is None else chunks)
             return await scenario(index)
         finally:
             try:
@@ -195,6 +206,40 @@ def test_a_repeated_hybrid_query_returns_the_same_order() -> None:
     assert len(set(runs)) == 1, f"order varied across identical queries: {set(runs)}"
 
 
+def test_a_dense_query_returns_the_same_order_after_a_re_index() -> None:
+    """The control for the hybrid case below, and the reason it is readable.
+
+    Every ``_run`` builds a fresh collection and writes the same points into
+    it, which is a re-index. If a stable answer were impossible here -- if the
+    fixture or the harness introduced the variation -- this would vary too, and
+    a red hybrid test would say nothing about hybrid.
+    """
+
+    runs = tuple(_run(_dense) for _ in range(6))
+
+    assert len(set(runs)) == 1, f"order varied across re-indexes: {set(runs)}"
+
+
+def test_a_hybrid_query_returns_the_same_order_after_a_re_index() -> None:
+    """The repetition test above cannot see this: it re-queries one collection.
+
+    Within a collection the engine reproduces its own arbitrary choice, so
+    asking eight times proves only that it is not rolling dice per call. The
+    property retrieval actually needs is that the answer survives the index
+    being rebuilt -- the same corpus, ingested again, must rank the same way.
+
+    Measured before this was fixed: six re-indexes produced six different
+    orders, and the strictly-best point (``chk_zenith``, cosine 1.0 against
+    0.9998) was not first in two of them. Its *score* moved as well, across
+    0.643, 0.667, 0.700, 0.833 and 1.000 -- which is the tell. A post-sort
+    tie-break cannot repair an order whose scores are themselves unstable.
+    """
+
+    runs = tuple(_run(_hybrid) for _ in range(6))
+
+    assert len(set(runs)) == 1, f"order varied across re-indexes: {set(runs)}"
+
+
 def test_tied_candidates_are_ordered_by_chunk_id() -> None:
     """Stable is not enough; it has to be stable on something re-indexable.
 
@@ -234,3 +279,90 @@ def test_the_hybrid_and_dense_paths_agree_on_the_tie_break() -> None:
 
     assert set(dense) == set(hybrid)
     assert sorted(dense[1:]) == sorted(hybrid[1:])
+
+
+# --- an arm that perceived no order must not contribute one (ADR-033) --------
+
+
+def test_an_arm_that_scored_everything_equally_does_not_reorder_the_fusion() -> None:
+    """Every point here carries the same sparse weight, so that arm is mute.
+
+    A mute arm adds the same amount to everybody, which leaves the dense arm
+    deciding -- so the fused order has to be the dense order. This is the
+    assertion that fails if ties are dealt consecutive ranks instead of a
+    shared one: ``chk_zenith`` sorts last by id, would take the sparse arm's
+    bottom rank, and would be demoted out of first place despite being the only
+    strictly-best candidate. That is what was measured before ADR-033.
+    """
+
+    async def scenario(index: QdrantVectorIndex) -> tuple[tuple[str, ...], ...]:
+        return (await _dense(index), await _hybrid(index))
+
+    dense, hybrid = _run(scenario)
+
+    assert hybrid == dense
+    assert hybrid[0] == "chk_zenith"
+
+
+def test_an_arm_that_can_tell_candidates_apart_still_moves_the_fusion() -> None:
+    """The control, and the one that stops the rule above from going too far.
+
+    "Ties contribute nothing" must not slide into "sparse contributes nothing".
+    Here the sparse arm has a real, strict opinion -- distinct weights, ordered
+    against the dense arm rather than with it -- and it has to change the
+    outcome. Without this, a ``search_hybrid`` that ignored its sparse
+    arguments entirely would satisfy the whole rest of this file.
+
+    ``chk_apple`` is dense-tied with four others and carries the heaviest
+    weight; the fusion must lift it above them.
+    """
+
+    weights = {"apple": 9.0, "banana": 7.0, "cherry": 5.0, "mango": 3.0, "pear": 1.0}
+    chunks = (
+        *(_chunk(name, SHARED, weight=weights[name]) for name in TIED_NAMES),
+        _chunk("zenith", NEARER, weight=0.5),
+    )
+
+    async def scenario(index: QdrantVectorIndex) -> tuple[tuple[str, ...], ...]:
+        return (await _dense(index), await _hybrid(index))
+
+    dense, hybrid = _run(scenario, chunks)
+
+    assert hybrid != dense
+    assert hybrid[0] == "chk_apple"
+    # And the arm did not simply take over: zenith wins the dense arm outright
+    # and stays ahead of the four lighter chunks.
+    assert hybrid.index("chk_zenith") < hybrid.index("chk_cherry")
+
+
+def test_the_fused_score_is_the_reciprocal_rank_sum() -> None:
+    """Pins the formula, so a later change cannot move the scale in silence.
+
+    ``1 / (2 + rank)`` per arm, zero-based, summed -- the same constant
+    Qdrant's own fusion used. Evaluation numbers are comparable across ADR-033
+    only while this holds, and a k that drifted would rescale every score
+    without failing anything else here.
+
+    With a mute sparse arm every chunk takes rank 0 in it, and the dense arm
+    gives zenith rank 0 and the five tied chunks a shared rank 1.
+    """
+
+    async def scenario(index: QdrantVectorIndex) -> dict[str, float]:
+        hits = await index.search_hybrid(
+            vector=QUERY,
+            sparse_indices=(TERM,),
+            sparse_values=(1.0,),
+            tenant_id=TENANT,
+            knowledge_base_id=KB,
+            authorized_principals=(OWNER,),
+            limit=10,
+            dense_limit=10,
+            sparse_limit=10,
+        )
+        return {hit.chunk_id: hit.score for hit in hits}
+
+    scores = _run(scenario)
+
+    assert scores["chk_zenith"] == pytest.approx(1 / 2 + 1 / 2)
+    for name in TIED_NAMES:
+        assert scores[f"chk_{name}"] == pytest.approx(1 / 3 + 1 / 2)
