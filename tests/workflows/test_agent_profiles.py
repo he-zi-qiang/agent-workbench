@@ -248,7 +248,13 @@ def test_a_profile_cannot_grant_a_tool_the_task_never_authorized() -> None:
 #: outside this Task: every write binds a name inside the Task's own versioned
 #: artifact store, so a replay produces another version rather than a second
 #: effect somewhere nothing can take it back.
-WORKSPACE_TOOLS = ("workspace_list", "workspace_read", "workspace_write")
+WORKSPACE_TOOLS = (
+    "workspace_edit",
+    "workspace_grep",
+    "workspace_list",
+    "workspace_read",
+    "workspace_write",
+)
 
 
 def test_no_v1_agent_reaches_an_effect_outside_the_task() -> None:

@@ -31,6 +31,7 @@ def _profile(model_id: str = PINNED) -> ModelProfileConfig:
         timeout_seconds=30.0,
         max_retries=1,
         tool_calling_required=True,
+        prices=None,
     )
 
 

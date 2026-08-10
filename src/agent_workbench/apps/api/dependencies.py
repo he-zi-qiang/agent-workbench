@@ -491,6 +491,10 @@ def _assemble_chat(
     model_label = (
         main_profile.model_id if main_profile is not None else config.model.provider
     )
+    # Chat runs are priced by the same profile they are labelled with. Absent
+    # when the deployment configured no prices, which leaves every chat spend
+    # at zero and every chat cost ceiling refused -- see ClaudeLikeAgentRuntime.
+    model_prices = main_profile.prices if main_profile is not None else None
 
     # Both no-tool shapes get the same deny-shaped runtime the fixed shape uses.
     # Written out rather than shared with a helper because the registry and the
@@ -537,6 +541,7 @@ def _assemble_chat(
             policy_identity=policy_identity,
             model_label=model_label,
             record_step_inputs=config.record_step_inputs,
+            prices=model_prices,
         )
 
     def _toolless_runtime() -> ClaudeLikeAgentRuntime:
@@ -551,6 +556,7 @@ def _assemble_chat(
             policy_identity=policy_identity,
             model_label=model_label,
             record_step_inputs=config.record_step_inputs,
+            prices=model_prices,
         )
 
     # One tool, one journal, one runtime, shared by both evidence-free turns
@@ -665,6 +671,7 @@ def _assemble_chat(
                 policy_identity=policy_identity,
                 model_label=model_label,
                 record_step_inputs=config.record_step_inputs,
+                prices=model_prices,
             ),
             journal=journal,
             budget=RunBudget(
@@ -689,6 +696,7 @@ def _assemble_chat(
                 policy_identity=policy_identity,
                 model_label=model_label,
                 record_step_inputs=config.record_step_inputs,
+                prices=model_prices,
             ),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
         )

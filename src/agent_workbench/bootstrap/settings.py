@@ -143,7 +143,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.10"] = "1.10"
+    config_schema_version: Literal["1.11"] = "1.11"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -337,6 +337,27 @@ class EventStreamSettings(StrictModel):
     live_delta_coalesce_ms: int = Field(default=50, ge=1, le=1000)
 
 
+class ModelPricingSettings(StrictModel):
+    """What this profile's model charges, in micro-USD per million tokens.
+
+    Optional, and absent by default. Prices are a fact about a provider's
+    contract with one deployment, and this repository does not know them --
+    shipping a guess would put a number in every operator's config that looks
+    authoritative and is not.
+
+    What absence costs is stated rather than silent: a run that asks for
+    ``max_cost_micro_usd`` against an unpriced profile is refused, on the same
+    reasoning that refused every cost ceiling before prices existed. Defaulting
+    the rates to zero instead would accept the ceiling and never fire it, which
+    is the failure this shape exists to prevent.
+    """
+
+    input_micro_usd_per_mtok: int = Field(ge=0)
+    output_micro_usd_per_mtok: int = Field(ge=0)
+    cache_read_micro_usd_per_mtok: int = Field(ge=0)
+    cache_write_micro_usd_per_mtok: int = Field(default=0, ge=0)
+
+
 class ModelProfileSettings(StrictModel):
     model_id: str = Field(min_length=1)
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
@@ -347,6 +368,7 @@ class ModelProfileSettings(StrictModel):
     # adapter switches back to auto so the Agent can finish.
     tool_calling_required: bool = False
     prompt_cache_enabled: bool = True
+    pricing: ModelPricingSettings | None = None
 
 
 class ModelSettings(StrictModel):
@@ -369,7 +391,12 @@ class ModelSettings(StrictModel):
 
 class RuntimeSettings(StrictModel):
     executor: Literal["claude_like"] = "claude_like"
-    max_steps: int = Field(default=12, ge=1, le=100)
+    # Range widened with ``RunBudget.max_steps`` (ADR-030): this is a backstop
+    # now, not the budget. The **default** stays 12 deliberately -- it is what
+    # every chat run and every v1 node has been measured on, and raising it for
+    # everybody to serve nodes that iterate would change runs nobody asked to
+    # change. A deployment that wants a working node raises it there.
+    max_steps: int = Field(default=12, ge=1, le=1000)
     max_tool_calls: int = Field(default=32, ge=1, le=500)
     max_parallel_read_tools: int = Field(default=4, ge=1, le=64)
     max_parallel_write_tools: Literal[1] = 1
@@ -427,6 +454,21 @@ class MultiAgentSettings(StrictModel):
         le=100,
     )
     max_tokens_per_agent_invocation: int = Field(default=16_000, ge=256)
+    #: The two ceilings ADR-030 makes primary for a node that does work rather
+    #: than answer once. Both default to absent, and absent is the pre-ADR-030
+    #: behaviour exactly -- steps and tokens still bound the run. Opting in is
+    #: per deployment because only a deployment knows what a node of its is
+    #: worth and how long anyone is willing to wait for it.
+    #:
+    #: The cost ceiling additionally requires prices on the model profile;
+    #: without them the runtime refuses the invocation rather than accepting a
+    #: ceiling it could never reach.
+    max_cost_micro_usd_per_agent_invocation: int | None = Field(default=None, ge=1)
+    #: Wall clock for one *attempt*, turned into a deadline when the invocation
+    #: is resolved. A replay after a crash is a new attempt and gets the full
+    #: allowance again: the alternative is a deadline stored with the Task,
+    #: which would make a node that waited out an outage unrunnable forever.
+    max_seconds_per_agent_invocation: int | None = Field(default=None, ge=1, le=86_400)
 
     @model_validator(mode="after")
     def validate_agent_budget(self) -> MultiAgentSettings:
@@ -449,10 +491,18 @@ class LlamaIndexSettings(StrictModel):
     # inconclusive, and inconclusive is not a reason to switch.
     #
     # Not inconclusive because the two paths disagreed: because the measurement
-    # cannot resolve them. Tied fused scores come back from Qdrant in an
-    # unstable order, so each retriever disagrees with *itself* on 9-10 of 38
-    # gold questions -- a noise floor wider than any difference between the
+    # could not resolve them. Each retriever disagreed with *itself* on 9-10 of
+    # 38 gold questions -- a noise floor wider than any difference between the
     # two. See docs/status.md 2026-08-03.
+    #
+    # That noise floor is gone as of ADR-033, and the cause recorded here was
+    # not quite right: it was not that tied fused scores came back in an
+    # unstable order, it was that the fused scores were themselves unstable,
+    # being built from arm-internal ranks the engine assigned arbitrarily among
+    # ties. Fusing in the adapter over deterministically-ranked arms fixed it.
+    # This stays False regardless: the equivalence evaluation has not been
+    # re-run on the reproducible retriever, and a switch still needs evidence
+    # rather than an unblocked path to it.
     enabled: bool = False
     role: Literal["ingestion_and_retrieval_adapter"] = "ingestion_and_retrieval_adapter"
     agent_executor_enabled: Literal[False] = False

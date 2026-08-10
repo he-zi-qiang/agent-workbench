@@ -62,6 +62,17 @@ dependencies = [
   "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
   "pypdf>=5,<7",
   "pydantic-settings>=2.14.2,<3",
+  # For `workspace_grep`, and specifically for its `timeout=` argument, which
+  # stdlib `re` has no equivalent of. The pattern is written by the model, so
+  # it is untrusted input: a catastrophically backtracking expression must be
+  # interruptible rather than merely noticed afterwards, and `re` cannot be
+  # interrupted at all. Measured on this engine: `(a|a)*$` against 200
+  # characters raises after the deadline instead of running for hours.
+  #
+  # It already arrives transitively (nltk, via llama-index). Declaring it is
+  # the difference between "we use this" and "a resolver happens to give us
+  # this" -- the same reason langchain-core is spelled out above.
+  "regex>=2024.11,<2027",
   # The project-owned Word MCP server renders in memory. It never accepts a
   # filesystem path and returns the OOXML package as one embedded MCP resource.
   "python-docx>=1.2,<2",

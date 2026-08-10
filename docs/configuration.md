@@ -484,10 +484,51 @@ resolver 的当前结论求交集，不能把该快照描述为实时权限。
 - `static_agent_node_limit`：启动时校验 compiled graph，实际节点数从图派生；
 - `max_parallel_agent_invocations`：同时进入自研 AgentExecutor 的上限；
 - `max_agent_invocation_attempts_per_task`：含 retry/reclaim 的持久总次数上限；
-- `max_tokens_per_agent_invocation`：单次物理 Agent invocation 的 token 上限。
+- `max_tokens_per_agent_invocation`：单次物理 Agent invocation 的 token 上限；
+- `max_cost_micro_usd_per_agent_invocation`：单次 invocation 的**成本**上限（微美元）；
+- `max_seconds_per_agent_invocation`：单次**尝试**的墙钟上限。
 
 invocation 计数必须持久化并受 fencing 保护，不能只放在可能回滚的
 checkpoint 中，否则崩溃重放可能绕过预算。
+
+### 成本与时限上限（ADR-030）
+
+后两项默认**不设**，不设时行为与 ADR-030 之前逐字节相同（仍由步数与 token 约束）。
+它们是给"会干活的节点"用的：一个反复读写、跑脚本、改了再跑的节点，第 3 步可能读 200 字节、
+第 7 步可能读 200KB，**用步数管它们等于假装两者一样贵**。
+
+两条各有一个前提，撞上了别当成 bug：
+
+- **成本上限要求模型 profile 配了价格**（`[model.main.pricing]`，见下）。没配价格却设成本
+  上限，run 会被**拒绝**并指名是哪个 profile 缺价——因为没有价格时花费恒为 0，那个上限
+  永远不会触发，接受一个不可能生效的上限比拒绝它更糟。
+- **墙钟是"一次尝试"的，不是一个 Task 的**。deadline 在每次 invocation 解析时按当时的时钟
+  盖上去，所以崩溃重放后的新尝试重新拿满额度。反过来（把 deadline 存进 Task）会让一个熬过
+  了外部故障的节点永远跑不完。
+
+`runtime.max_steps` 的域上限同时从 100 放宽到 1000，**默认值仍是 12**。它的角色变了：
+不再是"这个节点该做多少事"，而是防失控循环的兜底。默认不动，是因为 12 是每个 chat run 和
+每个 v1 节点被实测过的值，为了服务会迭代的节点而给所有人调高，会改掉没人要求改的 run。
+
+### 模型价格 `[model.main.pricing]` / `[model.compact.pricing]`
+
+可选，默认不配。仓库**不出厂任何价格数字**——价格是某个部署与供应商之间的事实，发一个猜
+出来的数字会让每份配置里都躺着一个看起来权威、其实不是的值。
+
+四项费率，单位是**微美元每百万 token**（供应商就是按百万 token 公布的，照抄最不容易抄错）：
+
+```toml
+[model.main.pricing]
+input_micro_usd_per_mtok = 270000        # $0.27 / Mtok
+output_micro_usd_per_mtok = 1100000      # $1.10 / Mtok
+cache_read_micro_usd_per_mtok = 27000    # $0.027 / Mtok
+# cache_write_micro_usd_per_mtok 默认 0：不单独计费的供应商就是 0
+```
+
+一处容易算错的地方：**`input_tokens` 里含缓存命中的部分**（供应商的口径，DeepSeek 的
+`prompt_tokens` 就是整个 prompt，`prompt_cache_hit_tokens` 是其中被缓存的那部分）。计价时
+先把缓存部分从输入里减掉再按输入价计，否则同一批 token 会被按两种费率各收一次——后果是
+**缓存过的 prompt 比没缓存的更贵**，成本上限恰好会在那些开了缓存来省钱的部署上最早触发。
 
 默认 TOML 中所有实验项均关闭。v1 production profile 只要发现任一
 Optional Lab 为 true 就拒绝启动。

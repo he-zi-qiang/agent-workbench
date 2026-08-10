@@ -263,13 +263,21 @@
         "model.main.max_retries",
         "model.main.tool_calling_required",
         "model.main.prompt_cache_enabled",
+        "model.main.pricing.input_micro_usd_per_mtok",
+        "model.main.pricing.output_micro_usd_per_mtok",
+        "model.main.pricing.cache_read_micro_usd_per_mtok",
+        "model.main.pricing.cache_write_micro_usd_per_mtok",
         "model.compact.model_id",
         "model.compact.temperature",
         "model.compact.max_output_tokens",
         "model.compact.timeout_seconds",
         "model.compact.max_retries",
         "model.compact.tool_calling_required",
-        "model.compact.prompt_cache_enabled"
+        "model.compact.prompt_cache_enabled",
+        "model.compact.pricing.input_micro_usd_per_mtok",
+        "model.compact.pricing.output_micro_usd_per_mtok",
+        "model.compact.pricing.cache_read_micro_usd_per_mtok",
+        "model.compact.pricing.cache_write_micro_usd_per_mtok"
       ]
     },
     {
@@ -325,7 +333,9 @@
         "multi_agent.worker_executor",
         "multi_agent.static_agent_node_limit",
         "multi_agent.max_parallel_agent_invocations",
-        "multi_agent.max_tokens_per_agent_invocation"
+        "multi_agent.max_tokens_per_agent_invocation",
+        "multi_agent.max_cost_micro_usd_per_agent_invocation",
+        "multi_agent.max_seconds_per_agent_invocation"
       ]
     },
     {

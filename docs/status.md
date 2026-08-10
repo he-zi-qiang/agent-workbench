@@ -72,6 +72,100 @@ sources. I'll return an empty items list.
   都死在 `research_external`，根本没走到 `synthesize`；
 - `workspace_edit` / `workspace_grep`（PR #92 / #93）：同上，**只有适配器与领域层证据**。
 
+## 2026-08-10 WP15 阶段四 PR-4.1：成本上限从"存在"变成"能用"（ADR-030 §2.1/§2.2）
+
+`RunBudget.max_cost_micro_usd` 与 `deadline` 从写下来那天起就在，但**没有任何东西把 token
+换算成钱**，所以运行时对每一个带成本上限的请求都直接拒绝。那个拒绝是对的——不能执行的上限
+不该被当成上限接受——但它留下的结果是：今天真正约束一个 run 的**只有步数**。
+
+对"回答一次"这够用。对一个会迭代的节点这个代理坏掉了：第 3 步可能读 200 字节，第 7 步可能
+读 200KB，用步数管它们等于假装两者一样贵。
+
+**做了什么。** 新增 `domain/pricing.py`（纯算术，不做 I/O、不查供应商、不发现价格）；
+`[model.*.pricing]` 四项费率，单位微美元每百万 token；运行时按每轮 token 累计花费。
+那条拒绝分支**保留**，但条件从"整个运行时没有计量器"收窄成"这个 profile 没配价格"——
+并在消息里指名是哪个 profile，让读的人去看配置而不是去看待办。
+
+**一处容易算错的地方，单独记一笔。** `input_tokens` 里**含**缓存命中的部分（供应商口径，
+`tests/contracts/test_deepseek_model.py` 钉着：`prompt_tokens=118` + `prompt_cache_hit_tokens=64`
+到达时是 `input_tokens=118, cache_read_tokens=64`）。把四个字段当成互不相交的量来计价，
+就会把缓存那批 token 按两种费率各收一次，后果是**缓存过的 prompt 比没缓存的更贵**，成本
+上限恰好会在那些开了缓存来省钱的部署上最早触发。破坏验证做过：去掉那次减法，3 条测试红，
+其中 `test_caching_a_prompt_costs_less_than_not_caching_it` 以最可读的方式失败。
+
+**`max_steps` 域上限 100 → 1000，默认值仍是 12。** 角色改为兜底而不是预算。默认不动是刻意
+的：12 是每个 chat run 和每个 v1 节点被实测过的值，为服务会迭代的节点而给所有人调高，会改掉
+没人要求改的 run。
+
+**墙钟是"一次尝试"的。** `max_seconds_per_agent_invocation` 在每次 invocation 解析时按当时
+的时钟盖成 deadline，不是在组合根里建一个固定值——固定的那个会从进程启动就开始过期，之后
+每次调用都是一出生就超时。代价是崩溃重放后的新尝试重新拿满额度；反过来（存进 Task）会让
+一个熬过了外部故障的节点永远跑不完。
+
+`config_schema_version` 1.10 → **1.11**。抬版的理由是 `max_steps` 放宽这一半：1.11 的配置
+文件可以写 `max_steps = 500`，1.10 的二进制会在校验时拒绝它——这正是这个 pin 存在要抓的
+方向。价格是纯增量，但它决定这个部署能不能用成本上限。
+
+**门禁**（本机，真实 PostgreSQL 5433 + Qdrant 6333）：
+
+```text
+pytest（--ignore=tests/e2e）   2388 passed / 11 skipped
+ruff check / format             passed
+pyright                         0 errors / 0 warnings
+```
+
+**仍未做**：`workspace_edit`（PR-4.2）、`workspace_grep`（PR-4.3）、阶段五第二张图。
+仓库**不出厂任何价格数字**，所以成本上限在任何现有 profile 上都还没被真实 Task 用过——
+这条能力今天只有单元与运行时层面的证据，没有事件流证据。
+
+## 2026-08-10 混合检索跨重建索引不可复现，融合移进适配器（ADR-033）
+
+此前把它记成"CI 里一条偶发红的 tie-break 用例"。**这个记法低估了它**：红的不是测试，
+是产品——`search_hybrid` 是有 sparse encoder 时的生产检索路径，它的结果跨重建索引不可
+复现，而且会把严格最优的候选挤出第一名。
+
+**诊断此前也是错的。** `_ranked` 按 `(-score, chunk_id)` 重排，理由写的是"Qdrant 对分数
+相等的点不作承诺"。对 dense 这是对的且有效的（实测 10 次重建索引，次序每次相同）。对
+hybrid 无效：Qdrant 的 RRF 按**臂内名次**计分（实测 `Σ 1/(2 + rank)`，rank 从 0 起，用 9
+个不同分数逐一验算吻合），一个点在两臂里都并列时，它的名次是引擎内部的任意选择，于是
+**融合分数本身就是随机的**。排序发生在分数之后，错误发生在分数之前——后排序够不着它。
+
+同一份 fixture 重建索引 10 次，实测得到 **10 个不同的次序**，`chk_zenith`（cosine 1.0
+对 0.9998，严格最优）的分数在 0.643 / 0.667 / 0.700 / 0.833 / 1.000 之间跳，并有 2 次
+不在第一位。
+
+**修法**（[ADR-033](./adr/0033-fusion-ranks-are-ours.md)）：`search_hybrid` 从"一次带两个
+prefetch 的服务端融合"换成"两次并发的单臂查询 + 适配器里的一次 RRF"。**融合次数不变，
+仍是一次**——两臂返回的都是没有被任何人融合过的原始结果，ADR-016 与端口注释禁止的"第二次
+融合"没有发生。变的只是臂内名次由谁决定：两臂各自先过 `_ranked`，于是并列点的名次来自
+`chunk_id`，重建索引后不变。`k` 保持 2 以免顺手改掉评测量纲。
+
+**并列点共享名次，而不是被发给连续名次。** 两种写法都可复现，所以这一条不是为了确定性：
+连续名次会让一个**没有分辨出高下的臂**去给次序投票。单词查询下 sparse 臂给每个命中块的
+分数都一样，发给它 0,1,2,3 就是把字母序变成融合权重——实测后果是 `chk_zenith` 被 `apple`
+挤到第二。一个臂没有意见，融合时就必须表现为没有意见。
+
+**测试**。原来那条 `test_the_hybrid_and_dense_paths_agree_on_the_tie_break` 是 1/8 概率红；
+新增的 `test_a_hybrid_query_returns_the_same_order_after_a_re_index` 是 **3/3 红**——差别
+在于旧测试在同一个 collection 内重复查询，而引擎会稳定地重现它自己的任意选择，看不见
+"重建索引后还一样吗"这个真正的性质。对照组 `..._dense_..._after_a_re_index` 当时就是绿的，
+证明红的是 hybrid 不是 fixture。三处破坏验证逐个做过：并列改连续名次 → 3 条红；
+砍掉 sparse 臂 → 对照组 `..._still_moves_the_fusion` 红；`RRF_K` 改 60 → 量纲那条红。
+
+**门禁**（本机，真实 PostgreSQL 5433 + Qdrant 6333）：
+
+```text
+pytest（--ignore=tests/e2e）   2375 passed / 11 skipped
+tie-break 用例连跑 30 轮        30 绿 0 红（改动前 8 轮里 1 红）
+ruff check / format             passed
+pyright                         0 errors / 0 warnings
+```
+
+**仍未做，且不能写成已做**：38 题 gold set 的评测**没有重跑**。MRR 0.960 / recall@1 0.947
+是服务端融合下测的，改动后必须重测。要说清楚的是那组数字本来就是一个不可复现的检索器的
+一次抽样。**`rag.llama_index.enabled` 保持 `false`**——ADR-017 第 3 步的堵点（噪声底比两条
+路径的差异还宽）确实解除了，但等价评测没跑，没有证据的开关不翻。
+
 ## 2026-08-09 两处"装齐了但没接上"的能力（PR #87）
 
 同一类缺陷，分成两个提交是因为它们可以分别 review、分别回滚。两处都是：组合根把能力
