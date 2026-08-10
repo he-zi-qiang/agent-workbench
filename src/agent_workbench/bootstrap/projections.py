@@ -37,6 +37,7 @@ from agent_workbench.domain.schema import JsonObject
 from agent_workbench.domain.tools import ToolName
 from agent_workbench.domain.workspace import (
     WORKSPACE_EDIT_TOOL,
+    WORKSPACE_GREP_TOOL,
     WORKSPACE_LIST_TOOL,
     WORKSPACE_READ_TOOL,
     WORKSPACE_WRITE_TOOL,
@@ -66,6 +67,7 @@ from agent_workbench.ports.task_workflow import GraphVersion
 #: compare the two without re-sorting one of them in their head.
 WORKSPACE_TOOLS: tuple[ToolName, ...] = (
     WORKSPACE_EDIT_TOOL,
+    WORKSPACE_GREP_TOOL,
     WORKSPACE_LIST_TOOL,
     WORKSPACE_READ_TOOL,
     WORKSPACE_WRITE_TOOL,

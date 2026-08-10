@@ -54,6 +54,7 @@ from agent_workbench.adapters.tools.task_external_research import (
 )
 from agent_workbench.adapters.tools.workspace import (
     WorkspaceEditTool,
+    WorkspaceGrepTool,
     WorkspaceListTool,
     WorkspaceReadTool,
     WorkspaceWriteTool,
@@ -465,6 +466,7 @@ async def _build_real_handlers(
         WorkspaceReadTool(workspace_scope).binding(),
         WorkspaceWriteTool(workspace_scope).binding(),
         WorkspaceEditTool(workspace_scope).binding(),
+        WorkspaceGrepTool(workspace_scope).binding(),
     )
     discovered_mcp = await _build_mcp_bindings(
         config,

@@ -16,7 +16,10 @@ invert it.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from fnmatch import fnmatch
 
 from pydantic import JsonValue
 
@@ -27,8 +30,13 @@ from agent_workbench.application.workspace import (
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.domain.workspace import (
+    GREP_TIMEOUT_SECONDS,
+    MAX_GREP_MATCHES,
     WorkspaceEditMatchError,
     WorkspaceOverflowError,
+    WorkspacePatternError,
+    WorkspaceScanTimeoutError,
+    grep_workspace,
     replace_exactly_once,
 )
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
@@ -38,6 +46,7 @@ LIST_TOOL_NAME = "workspace_list"
 READ_TOOL_NAME = "workspace_read"
 WRITE_TOOL_NAME = "workspace_write"
 EDIT_TOOL_NAME = "workspace_edit"
+GREP_TOOL_NAME = "workspace_grep"
 
 #: What a read may put into the model's context in one go. Above this the bytes
 #: are still stored -- the workspace is not lossy -- but the model is told the
@@ -374,6 +383,138 @@ class WorkspaceEditTool:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspaceGrepTool:
+    """Which files mention something, without reading them all in (ADR-030 2.4).
+
+    ``workspace_list`` gives names only. An agent working over dozens of files
+    otherwise has to read each one into context to find the one that matters,
+    and those are exactly the expensive steps the budget work was about.
+    """
+
+    scope: WorkspaceScope
+    #: Injected so a test can drive the clock. The scan's time budget is
+    #: wall-clock over the whole call, not per line.
+    monotonic: Callable[[], float] = time.monotonic
+
+    def binding(self) -> ToolBinding:
+        return ToolBinding(spec=self.spec(), handler=self.handle)
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=GREP_TOOL_NAME,
+            description=(
+                "Search the workspace for lines matching a regular expression "
+                "and return where they are. Optionally restrict it to names "
+                "matching a glob such as '*.md'. Results are capped, and the "
+                "reply says what was left unsearched."
+            ),
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["pattern"],
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024,
+                        "description": "A regular expression.",
+                    },
+                    "name_glob": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "description": (
+                            "Shell-style glob over workspace names, e.g. '*.md'."
+                        ),
+                    },
+                },
+            },
+            concurrency="parallel",
+            risk="read",
+            idempotency="safe",
+            timeout_seconds=30,
+        )
+
+    async def handle(self, invocation: ToolInvocation) -> ToolResult:
+        arguments = invocation.call.arguments
+        pattern = str(arguments.get("pattern", ""))
+        name_glob = arguments.get("name_glob")
+        session = _session(self.scope)
+
+        listing = await session.workspace.list(session.version)
+        names = [
+            item.name
+            for item in listing
+            if name_glob is None or fnmatch(item.name, str(name_glob))
+        ]
+        files = [
+            (
+                name,
+                (await session.workspace.read(session.version, name)).decode(
+                    "utf-8", errors="replace"
+                ),
+            )
+            for name in names
+        ]
+
+        try:
+            outcome = grep_workspace(files, pattern, now=self.monotonic)
+        except WorkspacePatternError as error:
+            return ToolResult.failed(
+                invocation.call,
+                ErrorInfo(
+                    code="invalid_tool_input",
+                    message=f"pattern is not a valid regular expression: {error}",
+                    retryable=False,
+                ),
+            )
+        except WorkspaceScanTimeoutError:
+            # Structured, and deliberately not retryable: the same pattern over
+            # the same workspace will time out again. Retrying is what the model
+            # does with a transient error, and it would burn the budget the
+            # timeout exists to protect.
+            return ToolResult.failed(
+                invocation.call,
+                ErrorInfo(
+                    code="tool_timeout",
+                    message=(
+                        f"searching took longer than {GREP_TIMEOUT_SECONDS} "
+                        "seconds and was stopped; try a simpler pattern"
+                    ),
+                    retryable=False,
+                ),
+            )
+
+        if not outcome.matches:
+            unscanned = (
+                ""
+                if not outcome.unscanned_files
+                else " (not all files were searched: "
+                + ", ".join(outcome.unscanned_files)
+                + ")"
+            )
+            return ToolResult.succeeded(
+                invocation.call, content=f"No matches.{unscanned}"
+            )
+
+        lines = [
+            f"{match.name}:{match.line_number}: {match.line}"
+            for match in outcome.matches
+        ]
+        if outcome.more_matches:
+            # Said out loud, because a capped list that looks complete is worse
+            # than a short one: the model would conclude it has seen every site
+            # and stop looking.
+            lines.append(
+                f"... stopped at {MAX_GREP_MATCHES} matches. Not searched: "
+                + ", ".join(outcome.unscanned_files)
+            )
+        elif outcome.unscanned_files:
+            lines.append("... not searched: " + ", ".join(outcome.unscanned_files))
+        return ToolResult.succeeded(invocation.call, content="\n".join(lines))
+
+
 #: Enough to keep a listing readable. Guessed from the name because the model
 #: usually omits it, and a wrong guess here costs a label, not the bytes.
 _SUFFIX_MEDIA_TYPES = {
@@ -395,12 +536,14 @@ def _media_type_for(name: str) -> str:
 
 __all__ = [
     "EDIT_TOOL_NAME",
+    "GREP_TOOL_NAME",
     "LIST_TOOL_NAME",
     "MAX_INLINE_READ_CHARS",
     "MAX_INLINE_WRITE_CHARS",
     "READ_TOOL_NAME",
     "WRITE_TOOL_NAME",
     "WorkspaceEditTool",
+    "WorkspaceGrepTool",
     "WorkspaceListTool",
     "WorkspaceReadTool",
     "WorkspaceUnavailableError",

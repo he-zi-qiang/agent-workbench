@@ -250,6 +250,7 @@ def test_a_profile_cannot_grant_a_tool_the_task_never_authorized() -> None:
 #: effect somewhere nothing can take it back.
 WORKSPACE_TOOLS = (
     "workspace_edit",
+    "workspace_grep",
     "workspace_list",
     "workspace_read",
     "workspace_write",

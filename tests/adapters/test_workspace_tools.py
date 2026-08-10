@@ -8,6 +8,7 @@ ships must pass the same gate a third-party one does.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 
@@ -16,6 +17,7 @@ import pytest
 from agent_workbench.adapters.memory import InMemoryArtifactStore
 from agent_workbench.adapters.tools.workspace import (
     WorkspaceEditTool,
+    WorkspaceGrepTool,
     WorkspaceListTool,
     WorkspaceReadTool,
     WorkspaceUnavailableError,
@@ -89,6 +91,7 @@ def test_every_workspace_schema_passes_the_gateway_validator() -> None:
             WorkspaceReadTool(scope),
             WorkspaceWriteTool(scope),
             WorkspaceEditTool(scope),
+            WorkspaceGrepTool(scope),
         ):
             spec = tool.binding().spec
             assert_schema_supported(spec.input_schema, origin=f"tool {spec.name}")
@@ -353,3 +356,134 @@ def test_edit_outside_a_node_session_refuses_like_the_others() -> None:
 
     with pytest.raises(WorkspaceUnavailableError):
         invoke(tool, name="doc.md", old_text="a", new_text="b")
+
+
+# --- workspace_grep: bounded, and interruptible (ADR-030 2.4) ---------------
+
+
+def test_grep_reports_the_file_line_number_and_line() -> None:
+    """A name alone would send the model back to read the whole file."""
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="a.md", content="alpha\nbeta\n")
+        invoke(WorkspaceWriteTool(scope), name="b.md", content="gamma\n")
+
+        result = invoke(WorkspaceGrepTool(scope), pattern="beta")
+
+        assert result.status == "ok"
+        assert "a.md:2: beta" in result.content
+
+
+def test_grep_finding_nothing_says_so_rather_than_failing() -> None:
+    """The control for the search above, and a distinct outcome from an error.
+
+    "No matches" is an answer; an error is a tool the model should retry
+    differently. Conflating them costs a step every time a search legitimately
+    comes up empty.
+    """
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="a.md", content="alpha\n")
+
+        result = invoke(WorkspaceGrepTool(scope), pattern="nowhere")
+
+        assert result.status == "ok"
+        assert "No matches" in result.content
+
+
+def test_a_name_glob_narrows_which_files_are_searched() -> None:
+    """And the control: without the glob, the same pattern finds both."""
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="notes.md", content="target\n")
+        invoke(WorkspaceWriteTool(scope), name="data.csv", content="target\n")
+
+        narrowed = invoke(WorkspaceGrepTool(scope), pattern="target", name_glob="*.md")
+        both = invoke(WorkspaceGrepTool(scope), pattern="target")
+
+        assert "notes.md" in narrowed.content
+        assert "data.csv" not in narrowed.content
+        assert "notes.md" in both.content
+        assert "data.csv" in both.content
+
+
+def test_a_pattern_that_does_not_compile_is_refused_as_bad_input() -> None:
+    """Named as the model's mistake, so the next attempt is a different pattern."""
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="a.md", content="alpha\n")
+
+        result = invoke(WorkspaceGrepTool(scope), pattern="(unclosed")
+
+        assert result.status == "error"
+        assert result.error is not None
+        assert result.error.code == "invalid_tool_input"
+
+
+def test_a_catastrophically_backtracking_pattern_is_interrupted() -> None:
+    """The one that matters: the pattern is untrusted input.
+
+    ``(a|a)*$`` against a long run of "a" is exponential, and stdlib ``re``
+    would run it to completion however long that takes -- there is no way to
+    interrupt it, so a Worker lane would be held indefinitely by one tool call.
+    Measured on this engine at the shipped ceiling: it raises instead.
+
+    The assertion is on wall clock as well as on the error, because an
+    implementation that merely *reported* a timeout after finishing would
+    satisfy an error-only assertion while still having hung.
+    """
+
+    with entered() as scope:
+        # Inside MAX_GREP_LINE_CHARS on purpose. The line is truncated before
+        # matching, and a subject cut short of its "b" would end in a run of
+        # "a" that the pattern matches immediately -- the fixture has to blow
+        # up on the text the engine is actually handed, not on the text on disk.
+        invoke(WorkspaceWriteTool(scope), name="a.md", content="a" * 300 + "b\n")
+
+        started = time.monotonic()
+        result = invoke(WorkspaceGrepTool(scope), pattern="(a|a)*$")
+        elapsed = time.monotonic() - started
+
+        assert result.status == "error"
+        assert result.error is not None
+        assert result.error.code == "tool_timeout"
+        assert elapsed < 30, f"the scan was not interrupted: {elapsed:.1f}s"
+
+
+def test_an_ordinary_pattern_is_not_slowed_by_the_timeout() -> None:
+    """The control for the one above.
+
+    Without it, a tool that timed out on everything -- or refused every
+    pattern -- would satisfy the interruption test.
+    """
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="a.md", content="a" * 300 + "b\n")
+
+        result = invoke(WorkspaceGrepTool(scope), pattern="a+b$")
+
+        assert result.status == "ok"
+        assert "a.md:1:" in result.content
+
+
+def test_a_long_line_is_truncated_rather_than_returned_whole() -> None:
+    """A single line must not be able to spend the context a listing saved."""
+
+    with entered() as scope:
+        invoke(
+            WorkspaceWriteTool(scope),
+            name="a.md",
+            content="needle" + "x" * 5_000 + "\n",
+        )
+
+        result = invoke(WorkspaceGrepTool(scope), pattern="needle")
+
+        assert result.status == "ok"
+        assert len(result.content) < 1_000
+
+
+def test_grep_outside_a_node_session_refuses_like_the_others() -> None:
+    tool = WorkspaceGrepTool(WorkspaceScope())
+
+    with pytest.raises(WorkspaceUnavailableError):
+        invoke(tool, pattern="anything")
