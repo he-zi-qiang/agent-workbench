@@ -49,6 +49,7 @@ from agent_workbench.domain.tasks import TaskNodeId, TaskState
 from agent_workbench.domain.tools import ToolName
 from agent_workbench.domain.workspace import (
     WORKSPACE_EDIT_TOOL,
+    WORKSPACE_GREP_TOOL,
     WORKSPACE_LIST_TOOL,
     WORKSPACE_READ_TOOL,
     WORKSPACE_WRITE_TOOL,
@@ -230,6 +231,7 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
         # is "no external effect inside a model loop", and these are outside it.
         tool_names=(
             WORKSPACE_EDIT_TOOL,
+            WORKSPACE_GREP_TOOL,
             WORKSPACE_LIST_TOOL,
             WORKSPACE_READ_TOOL,
             WORKSPACE_WRITE_TOOL,
