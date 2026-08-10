@@ -18,9 +18,9 @@ never a "forbidden".
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.events import EventEnvelope
@@ -32,9 +32,30 @@ from agent_workbench.domain.task_registry import TaskStatus
 from agent_workbench.ports.event_log import EventCursor, EventLogPort
 from agent_workbench.ports.task_registry import TaskRegistry, TaskRun, TaskSubmission
 from agent_workbench.ports.task_workflow import GraphVersion
+from agent_workbench.workflows.general_graph import GRAPH_VERSION_V2
 from agent_workbench.workflows.research_graph import GRAPH_VERSION_V1
 
 TASK_THREAD_PREFIX: Final[str] = "thr"
+
+#: What a submitter may ask for. Deliberately a shape rather than a version
+#: string (ADR-031 §2.3): the choice is real -- only the caller knows whether
+#: this is a report to write or a thing to do, and a model looking at the
+#: objective would guess wrong at the cost of the whole pipeline -- but a
+#: caller naming ``graph_version`` directly could pin itself to a version
+#: nobody deploys any more, or to one that means something else now.
+#:
+#: These names outlive the graphs behind them. Bumping v1 to v1.1 changes the
+#: mapping below and nothing a client sends.
+TaskGraphChoice = Literal["research", "general"]
+
+#: Which graph each shape runs. One place, and deliberately not derived from
+#: the adapter's builder registry: what a process can *compile* and what a
+#: submitter may *ask for* are different questions, and a deployment running a
+#: graph it does not offer at submission is a legitimate state.
+GRAPH_FOR_CHOICE: Final[Mapping[TaskGraphChoice, GraphVersion]] = {
+    "research": GRAPH_VERSION_V1,
+    "general": GRAPH_VERSION_V2,
+}
 
 #: A timeline read is a client-supplied request. Unbounded, it is a way to ask
 #: the server to hold a whole Task's history in memory on demand.
@@ -123,10 +144,11 @@ class TaskService:
     # Optional so a deployment that only submits does not have to wire one, and
     # so the M3a in-memory log and the WP07 durable one are the same swap.
     events: EventLogPort | None = None
-    # Which graph a newly submitted Task runs. A deployment decision rather
-    # than a request parameter: a caller that could name a version could pin
-    # itself to one nobody deploys any more, or to one that means something
-    # else now.
+    # Which graph a Task runs when its submitter did not choose one. A
+    # deployment decision, and still not a version a request may name: the
+    # optional ``graph`` argument below is a closed set of *shapes*, mapped
+    # here, so a caller cannot pin itself to a version nobody deploys any more
+    # or to one that means something else now.
     graph_version: GraphVersion = GRAPH_VERSION_V1
 
     async def submit(
@@ -137,6 +159,7 @@ class TaskService:
         submission_dedup_key: Identifier,
         input_fingerprint: str | None = None,
         objective_preview: str | None = None,
+        graph: TaskGraphChoice | None = None,
     ) -> TaskRun:
         """Open a Task, or return the one this caller's key already opened.
 
@@ -145,6 +168,15 @@ class TaskService:
         retry hand the Registry a *different* thread for the same key -- which
         the unique constraint would then refuse, turning an idempotent retry
         into an error.
+
+        The graph is resolved here and stored on the row, which is what freezes
+        it (ADR-031 §2.3). A Task already running does not change shape because
+        somebody redeployed with another default -- the Worker reads the row,
+        not the configuration -- and the deployment default applies only to the
+        submissions that did not choose. ``graph_version`` is one of the two
+        fields the Registry compares on an idempotent retry, so the same key
+        submitted with a different graph is a conflict rather than a silent
+        return of the first Task.
         """
 
         decided = self.semantics()
@@ -153,7 +185,9 @@ class TaskService:
                 tenant_id=principal.tenant_id,
                 owner_id=principal.principal_id,
                 thread_id=new_id(TASK_THREAD_PREFIX),
-                graph_version=self.graph_version,
+                graph_version=(
+                    self.graph_version if graph is None else GRAPH_FOR_CHOICE[graph]
+                ),
                 input_ref=input_ref,
                 input_fingerprint=(
                     input_fingerprint
@@ -335,10 +369,12 @@ def _reference_fingerprint(input_ref: Identifier) -> str:
 __all__ = [
     "DEFAULT_PAGE_LIMIT",
     "DEFAULT_TIMELINE_LIMIT",
+    "GRAPH_FOR_CHOICE",
     "MAX_PAGE_LIMIT",
     "MAX_TIMELINE_LIMIT",
     "TASK_THREAD_PREFIX",
     "SubmittedSemantics",
+    "TaskGraphChoice",
     "TaskPage",
     "TaskService",
     "TaskTimeline",

@@ -153,6 +153,68 @@ def test_equal_task_retries_return_the_first_task_despite_a_new_input_artifact(
     assert timeline.json()["events"][0]["stream_id"].startswith("thr_")
 
 
+def test_a_submission_may_choose_the_general_graph_and_the_row_freezes_it(
+    tmp_path: Path,
+) -> None:
+    """PR-5.2 on the wire: the optional field reaches the stored row.
+
+    Asserted against ``task_runs`` directly because ``graph_version`` is
+    deliberately not in the caller-facing view -- it is the Worker's routing
+    fact, and the row is where the freeze lives (ADR-031 §2.3). The absent-
+    field control submits alongside so "unchosen means v1" is checked against
+    the same database rather than remembered.
+    """
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[str, str]:
+        chosen = await client.post(
+            "/v1/tasks",
+            headers={**HEADERS, "Idempotency-Key": "task-general"},
+            json={
+                "objective": "Convert the attached ledger into a cleaned CSV.",
+                "graph": "general",
+            },
+        )
+        defaulted = await client.post("/v1/tasks", **_submission())
+        assert (chosen.status_code, defaulted.status_code) == (201, 201)
+        return chosen.json()["task_id"], defaulted.json()["task_id"]
+
+    chosen_id, defaulted_id = _run(scenario, tmp_path)
+
+    async def stored_versions() -> dict[str, str]:
+        engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
+        try:
+            async with engine.connect() as connection:
+                rows = await connection.execute(
+                    text("SELECT task_id, graph_version FROM task_runs")
+                )
+                return {row.task_id: row.graph_version for row in rows}
+        finally:
+            await engine.dispose()
+
+    versions = asyncio.run(stored_versions())
+    assert versions[chosen_id] == "v2_general"
+    assert versions[defaulted_id] == "v1"
+
+
+def test_a_graph_the_service_does_not_offer_is_a_validation_error(
+    tmp_path: Path,
+) -> None:
+    """A version string is not a shape. ``v2_general`` is what the row stores,
+    and exactly the kind of value a caller must not send: it names a deployment
+    fact, and accepting it would let a client pin itself to one."""
+
+    async def scenario(client: httpx.AsyncClient) -> httpx.Response:
+        return await client.post(
+            "/v1/tasks",
+            headers={**HEADERS, "Idempotency-Key": "task-bad-graph"},
+            json={"objective": "Do the thing.", "graph": "v2_general"},
+        )
+
+    response = _run(scenario, tmp_path)
+
+    assert response.status_code == 422
+
+
 def test_reusing_a_task_key_for_different_input_is_a_conflict(tmp_path: Path) -> None:
     async def scenario(client: httpx.AsyncClient) -> tuple[int, int, str]:
         first = await client.post("/v1/tasks", **_submission())

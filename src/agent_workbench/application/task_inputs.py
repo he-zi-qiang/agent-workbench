@@ -15,7 +15,7 @@ from typing import ClassVar
 
 from pydantic import ValidationError
 
-from agent_workbench.application.tasks import TaskService
+from agent_workbench.application.tasks import TaskGraphChoice, TaskService
 from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import AgentWorkbenchError, ErrorCode
 from agent_workbench.domain.policies import PrincipalContext
@@ -140,7 +140,18 @@ class TaskInputService:
         principal: PrincipalContext,
         task_input: TaskInput,
         submission_dedup_key: str,
+        graph: TaskGraphChoice | None = None,
     ) -> TaskRun:
+        """Store the input, then open the Task that references it.
+
+        ``graph`` passes straight through and is deliberately *not* part of
+        ``TaskInput``: the input artifact is what the Task was asked to do, and
+        which pipeline runs it is a property of the submission. Putting it in
+        both places would give idempotency two answers -- the artifact's
+        fingerprint and the Registry's own ``graph_version`` comparison -- for
+        one question.
+        """
+
         stored = await self.inputs.store(principal=principal, task_input=task_input)
         return await self.tasks.submit(
             principal,
@@ -152,6 +163,7 @@ class TaskInputService:
             # asking it to open the artifact again to build a label would make
             # every submission read back what it just wrote.
             objective_preview=objective_preview(task_input.objective),
+            graph=graph,
         )
 
 

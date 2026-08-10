@@ -27,6 +27,7 @@ from agent_workbench.application.tasks import (
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.ports.task_registry import TaskRun, TaskSubmission
+from agent_workbench.workflows.general_graph import GRAPH_VERSION_V2
 from agent_workbench.workflows.research_graph import GRAPH_VERSION_V1
 
 SEMANTICS = SubmittedSemantics(
@@ -180,6 +181,94 @@ def test_the_caller_names_neither_the_thread_nor_the_graph_version() -> None:
     assert submitted.thread_id.startswith("thr_")
     assert submitted.graph_version == GRAPH_VERSION_V1
     assert task.thread_id == submitted.thread_id
+
+
+def test_a_submission_that_chose_no_graph_is_the_deployment_default_exactly() -> None:
+    """The anti-regression half of ADR-031 §2.3: absent means today's shape.
+
+    Every existing client submits without the field, so the submission that
+    reaches the Registry must be indistinguishable from one made before the
+    choice existed -- same version, and nothing else about the row moved.
+    """
+
+    chosen = _FakeRegistry()
+    unchosen = _FakeRegistry()
+
+    asyncio.run(
+        _service(unchosen).submit(
+            OWNER, input_ref="input_1", submission_dedup_key="dedup_1"
+        )
+    )
+    asyncio.run(
+        _service(chosen).submit(
+            OWNER, input_ref="input_1", submission_dedup_key="dedup_1", graph=None
+        )
+    )
+
+    defaulted = unchosen.submissions[0]
+    explicit_none = chosen.submissions[0]
+    assert defaulted.graph_version == GRAPH_VERSION_V1
+    # thread_id is minted per submission; identical everywhere else.
+    assert defaulted.model_dump(exclude={"thread_id"}) == explicit_none.model_dump(
+        exclude={"thread_id"}
+    )
+
+
+def test_a_submission_chooses_a_shape_and_the_service_maps_it_to_a_version() -> None:
+    """The caller names ``research`` or ``general``, never a version string.
+
+    The shape is the caller's to choose -- only the submitter knows whether
+    this is a report to write or a thing to do, and a model guessing from the
+    objective would be wrong at the cost of the whole pipeline. The *version*
+    stays a deployment fact, which is why the mapping lives in this layer.
+    """
+
+    registry = _FakeRegistry()
+    service = _service(registry)
+
+    asyncio.run(
+        service.submit(
+            OWNER, input_ref="input_1", submission_dedup_key="dedup_1", graph="general"
+        )
+    )
+    asyncio.run(
+        service.submit(
+            OWNER, input_ref="input_2", submission_dedup_key="dedup_2", graph="research"
+        )
+    )
+
+    assert registry.submissions[0].graph_version == GRAPH_VERSION_V2
+    assert registry.submissions[1].graph_version == GRAPH_VERSION_V1
+
+
+def test_an_explicit_choice_survives_a_changed_deployment_default() -> None:
+    """The freeze (ADR-031 §2.3), at the layer that does the freezing.
+
+    The version reaches the Registry resolved, in the submission row itself --
+    so a Task's graph is a fact about the Task, and a deployment that later
+    defaults to v2 changes only the submissions that did not choose. The
+    Worker reads the row, never the configuration.
+    """
+
+    v2_defaulted = _FakeRegistry()
+    service = TaskService(
+        registry=v2_defaulted,  # type: ignore[arg-type]
+        semantics=lambda: SEMANTICS,
+        graph_version=GRAPH_VERSION_V2,
+    )
+
+    asyncio.run(
+        service.submit(
+            OWNER, input_ref="input_1", submission_dedup_key="dedup_1", graph="research"
+        )
+    )
+    asyncio.run(
+        service.submit(OWNER, input_ref="input_2", submission_dedup_key="dedup_2")
+    )
+
+    # The explicit choice ignored the default; the silent one took it.
+    assert v2_defaulted.submissions[0].graph_version == GRAPH_VERSION_V1
+    assert v2_defaulted.submissions[1].graph_version == GRAPH_VERSION_V2
 
 
 def test_identity_comes_from_the_principal_and_not_from_the_request() -> None:
