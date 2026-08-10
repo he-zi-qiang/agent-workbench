@@ -1,4 +1,4 @@
-"""The three workspace tools (ADR-028, stage 1 PR-1.3).
+"""The workspace tools (ADR-028 stage 1 PR-1.3; ADR-030 §2.3 for edit).
 
 Every refusal is paired with the control that must still succeed, and the
 schemas are checked against the gateway's own validator: a tool this repository
@@ -15,6 +15,7 @@ import pytest
 
 from agent_workbench.adapters.memory import InMemoryArtifactStore
 from agent_workbench.adapters.tools.workspace import (
+    WorkspaceEditTool,
     WorkspaceListTool,
     WorkspaceReadTool,
     WorkspaceUnavailableError,
@@ -87,6 +88,7 @@ def test_every_workspace_schema_passes_the_gateway_validator() -> None:
             WorkspaceListTool(scope),
             WorkspaceReadTool(scope),
             WorkspaceWriteTool(scope),
+            WorkspaceEditTool(scope),
         ):
             spec = tool.binding().spec
             assert_schema_supported(spec.input_schema, origin=f"tool {spec.name}")
@@ -197,3 +199,157 @@ def test_two_sessions_in_one_process_do_not_see_each_other() -> None:
             assert empty.content == "The workspace is empty."
 
         assert version_of(first) == first_version
+
+
+# --- workspace_edit: exactly one match, or nothing happens (ADR-030 2.3) -----
+
+
+DOC = "alpha\nbeta\ngamma\n"
+
+
+def read_back(scope: WorkspaceScope, name: str) -> str:
+    result = invoke(WorkspaceReadTool(scope), name=name)
+    assert result.status == "ok"
+    return result.content
+
+
+def test_an_edit_matching_once_replaces_only_that_passage() -> None:
+    """The control the two refusals below are measured against.
+
+    Without it, a tool that refused every edit would satisfy the whole rest of
+    this section.
+    """
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="doc.md", content=DOC)
+        before = version_of(scope)
+
+        result = invoke(
+            WorkspaceEditTool(scope), name="doc.md", old_text="beta", new_text="BETA"
+        )
+
+        assert result.status == "ok"
+        assert read_back(scope, "doc.md") == "alpha\nBETA\ngamma\n"
+        assert version_of(scope) != before
+
+
+def test_an_edit_matching_nothing_is_refused_and_changes_nothing() -> None:
+    """Zero matches means the model believes the file says something it does not.
+
+    The file assertion is the point. An error that still wrote would be worse
+    than one that did not, because the model would be told it failed while the
+    next reader saw a changed file.
+    """
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="doc.md", content=DOC)
+        before = version_of(scope)
+
+        result = invoke(
+            WorkspaceEditTool(scope), name="doc.md", old_text="delta", new_text="x"
+        )
+
+        assert result.status == "error"
+        assert read_back(scope, "doc.md") == DOC
+        assert version_of(scope) == before
+
+
+def test_an_edit_matching_twice_is_refused_and_changes_nothing() -> None:
+    """The most important one: editing "the first" would be silent corruption.
+
+    Most editors replace the first occurrence. Here that is wrong -- the model
+    did not know there were two, so "the first" is a position it never chose,
+    and nothing in the result would tell it something else moved.
+    """
+
+    with entered() as scope:
+        doubled = "repeat\nmiddle\nrepeat\n"
+        invoke(WorkspaceWriteTool(scope), name="doc.md", content=doubled)
+        before = version_of(scope)
+
+        result = invoke(
+            WorkspaceEditTool(scope), name="doc.md", old_text="repeat", new_text="once"
+        )
+
+        assert result.status == "error"
+        assert read_back(scope, "doc.md") == doubled
+        assert version_of(scope) == before
+
+
+def test_the_refusal_says_how_many_times_it_matched() -> None:
+    """A model that is told only "failed" retries the same edit.
+
+    The count is what makes the next attempt different: two means disambiguate,
+    zero means re-read.
+    """
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="doc.md", content="repeat repeat repeat")
+
+        result = invoke(
+            WorkspaceEditTool(scope), name="doc.md", old_text="repeat", new_text="x"
+        )
+
+        assert result.error is not None
+        assert "3 times" in result.error.message
+
+
+def test_editing_a_file_that_is_not_there_is_not_found_rather_than_no_match() -> None:
+    """Two different mistakes, and the model's next move differs by which.
+
+    "No such file" sends it to workspace_list; "no match" sends it to
+    workspace_read. Collapsing them into one error costs a step every time.
+    """
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="other.md", content=DOC)
+
+        result = invoke(
+            WorkspaceEditTool(scope), name="doc.md", old_text="beta", new_text="x"
+        )
+
+        assert result.status == "error"
+        assert result.error is not None
+        assert result.error.code == "not_found"
+
+
+def test_an_edit_may_delete_a_passage() -> None:
+    """Empty new_text is a replacement, not a missing argument."""
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="doc.md", content=DOC)
+
+        result = invoke(
+            WorkspaceEditTool(scope), name="doc.md", old_text="beta\n", new_text=""
+        )
+
+        assert result.status == "ok"
+        assert read_back(scope, "doc.md") == "alpha\ngamma\n"
+
+
+def test_a_later_read_of_an_edited_file_sees_the_edit() -> None:
+    """The session advanced, so the next tool call in the same node sees it.
+
+    Asserting through the read tool rather than the session version, because
+    what a node actually depends on is the next tool seeing the new bytes.
+    """
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="doc.md", content=DOC)
+        invoke(
+            WorkspaceEditTool(scope), name="doc.md", old_text="alpha", new_text="ALPHA"
+        )
+        invoke(
+            WorkspaceEditTool(scope), name="doc.md", old_text="gamma", new_text="GAMMA"
+        )
+
+        assert read_back(scope, "doc.md") == "ALPHA\nbeta\nGAMMA\n"
+
+
+def test_edit_outside_a_node_session_refuses_like_the_others() -> None:
+    """Same rule as the other three: an unentered scope is not one to create."""
+
+    tool = WorkspaceEditTool(WorkspaceScope())
+
+    with pytest.raises(WorkspaceUnavailableError):
+        invoke(tool, name="doc.md", old_text="a", new_text="b")
