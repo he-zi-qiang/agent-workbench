@@ -513,6 +513,7 @@ async def _build_real_handlers(
             model_timeout_seconds=config.runtime.model_timeout_seconds,
             max_parallel_read_tools=config.runtime.max_parallel_read_tools,
             record_step_inputs=config.runtime.record_step_inputs,
+            prices=main_profile.prices,
         ),
         max_parallel=config.multi_agent.max_parallel_agent_invocations,
     )
@@ -524,6 +525,13 @@ async def _build_real_handlers(
             # One agent's ceiling, not the Task's. Without it a single
             # invocation could spend everything the Task was allowed.
             max_total_tokens=config.multi_agent.max_tokens_per_agent_invocation,
+            # Both absent unless this deployment configured them (ADR-030).
+            # The deadline is not set here -- it is an instant, and one built
+            # at composition would be shared by every invocation for the life
+            # of the process. The provider stamps it per attempt.
+            max_cost_micro_usd=(
+                config.multi_agent.max_cost_micro_usd_per_agent_invocation
+            ),
         ),
         sink_for=lambda context: ScopedEventSink(
             events,
@@ -537,6 +545,9 @@ async def _build_real_handlers(
         cancellation_for=lambda _: NullCancellationToken(),
         principal_for=restore_submitted_principal,
         scope=scope,
+        max_seconds_per_invocation=(
+            config.multi_agent.max_seconds_per_agent_invocation
+        ),
     )
     handlers = build_task_v1_handlers(
         executor=executor,
