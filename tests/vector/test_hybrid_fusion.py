@@ -222,3 +222,129 @@ def test_a_nearer_unauthorized_point_does_not_displace_an_authorized_one() -> No
     assert "doc_stranger" not in found
     assert "doc_near" in found
     assert "doc_lexical" in found
+
+
+# --- the raw sparse arm (B1: what a >2-arm retriever has to start from) ------
+
+
+async def _sparse(index: QdrantVectorIndex, **overrides: Any) -> tuple[str, ...]:
+    hits = await index.search_sparse(
+        sparse_indices=overrides.get("indices", (RARE_TERM,)),
+        sparse_values=overrides.get("values", (1.0,)),
+        tenant_id=overrides.get("tenant", TENANT),
+        knowledge_base_id=KB,
+        authorized_principals=overrides.get("principals", (OWNER,)),
+        limit=overrides.get("limit", 10),
+    )
+    return tuple(hit.document_id for hit in hits)
+
+
+def test_the_sparse_arm_queries_the_lexical_vector_not_the_dense_one() -> None:
+    """Which vector was asked, established by what cannot come back.
+
+    doc_near is the control and carries no sparse vector at all, so it is
+    unreachable by a sparse query however the terms score. An implementation
+    that quietly answered with the dense vector -- or with a fused list --
+    returns it and fails here.
+
+    Deliberately *not* named for term overlap: Qdrant returns a point that
+    carries a sparse vector even when no query term matches it, scoring the
+    miss zero rather than dropping the point. Membership therefore says which
+    vector was queried and nothing about whether the terms met. That claim is
+    the next test's, and separating them is why a sabotage that broke the
+    terms was caught by exactly one of the two.
+    """
+
+    async def scenario(index: QdrantVectorIndex) -> tuple[str, ...]:
+        return await _sparse(index)
+
+    found = _run(scenario)
+
+    assert "doc_lexical" in found
+    assert "doc_near" not in found
+
+
+def test_a_matching_term_outscores_a_missing_one() -> None:
+    """What membership cannot say: the overlap is what produced the score.
+
+    Both queries return doc_lexical -- see above -- so only the scores
+    separate a query whose term is in the chunk from one whose term is not.
+    Measured on this fixture: weight 1.0 on the stored term scores 1.0, and a
+    term the chunk does not carry scores 0.0.
+    """
+
+    async def scenario(index: QdrantVectorIndex) -> tuple[float, float]:
+        async def score(term: int) -> float:
+            hits = await index.search_sparse(
+                sparse_indices=(term,),
+                sparse_values=(1.0,),
+                tenant_id=TENANT,
+                knowledge_base_id=KB,
+                authorized_principals=(OWNER,),
+                limit=10,
+            )
+            return next(h.score for h in hits if h.document_id == "doc_lexical")
+
+        return await score(RARE_TERM), await score(RARE_TERM + 1)
+
+    matched, missed = _run(scenario)
+
+    assert matched > missed
+    assert missed == 0.0
+
+
+def test_the_sparse_arm_is_unfused_so_its_scores_are_the_engine_s() -> None:
+    """What separates this from ``search_hybrid``: no RRF has touched it.
+
+    A fused score here is ``1/(2+rank)`` -- 0.5 at the top, and never above
+    1.0 for a chunk one arm returned. The raw arm carries the engine's own
+    sparse similarity, which for this fixture is the dot product of the term
+    weights and is greater than 1. Asserting the *shape* of the number rather
+    than its value keeps this from breaking when the fixture's weights change.
+    """
+
+    async def scenario(index: QdrantVectorIndex) -> tuple[float, ...]:
+        hits = await index.search_sparse(
+            sparse_indices=(RARE_TERM,),
+            sparse_values=(2.0,),
+            tenant_id=TENANT,
+            knowledge_base_id=KB,
+            authorized_principals=(OWNER,),
+            limit=10,
+        )
+        return tuple(hit.score for hit in hits)
+
+    scores = _run(scenario)
+
+    assert scores, "the lexical point should have been returned"
+    # 1/(RRF_K + 0) = 0.5 is the largest a single-arm fused score can be.
+    assert max(scores) > 0.5
+
+
+def test_the_sparse_arm_narrows_by_principal_like_every_other_search() -> None:
+    async def scenario(index: QdrantVectorIndex) -> tuple[str, ...]:
+        return await _sparse(index, principals=("user_stranger",))
+
+    found = _run(scenario)
+
+    assert "doc_stranger" in found
+    assert "doc_lexical" not in found
+
+
+def test_the_sparse_arm_refuses_the_same_inputs_search_refuses() -> None:
+    """Mirrored guards, asserted rather than assumed.
+
+    ``search_hybrid`` deliberately does *not* carry these -- see its
+    docstring -- so the two methods really do differ here, and a test is what
+    keeps that difference a decision rather than an oversight.
+    """
+
+    async def scenario(index: QdrantVectorIndex) -> tuple[Any, ...]:
+        with pytest.raises(ValueError, match="limit must be positive"):
+            await _sparse(index, limit=0)
+        empty = await _sparse(index, principals=())
+        return (empty,)
+
+    (empty,) = _run(scenario)
+
+    assert empty == ()
