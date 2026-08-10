@@ -1,5 +1,77 @@
 # 实施状态
 
+## 2026-08-10 一次没做成的真实验收，和它换来的两条实测事实
+
+目标是补上两条一直没有事件流证据的能力：`download_document` 落库，以及带对 scope 的
+`workspace_write`。**两条都没做成**，但失败本身是有内容的，逐条写在这里，因为把它记成
+"待验收"会掩盖其中一条真实缺陷。
+
+环境：`config.web-local.toml`、真实 DeepSeek、本机 PostgreSQL 5433 + Qdrant 6333，
+API 起在 8010（8000 被另一个进程占着，没有去动它）。
+
+### 事实一：本机在 fake-IP 代理模式下读不了外网，而闸门是对的
+
+`download_document` 与 `fetch_page` 每一次都是 `tool_failed`。在进程内复现，得到的是
+`DestinationRefusedError: 'www.w3.org' resolves to an address that is not publicly routable`。
+
+查解析：
+
+```text
+www.w3.org:  198.18.0.105(NOT-global)
+example.com: 198.18.0.86(NOT-global)
+arxiv.org:   198.18.0.106(NOT-global)
+```
+
+`198.18.0.0/15` 是 RFC 2544 的 benchmarking 段，也是 Clash/Surge 一类工具 **fake-IP
+模式**发的地址。ADR-027 的地址闸门按"默认拒绝、只放行全局可路由"来写，benchmarking 段
+正在被拒之列——**这不是 bug，是闸门在按设计工作**。
+
+结论要说准：在这台机器切回真实 DNS 解析（规则模式）之前，**web MCP 的两个工具无法在本机
+验收**。它们今天的证据仍然只有 PR #86/#87 那次（`fetch_page` 走完了全流程），
+`download_document` 落库**仍然没有事件流证据**。
+
+### 事实二（真缺陷）：外部研究节点会因为"答案前面多了一句话"而杀掉整个 Task
+
+三次提交、三个不同 objective，全部以同一处失败告终：
+
+```text
+StructuredOutputError: structured output must be one JSON object
+TaskNodeRunFailedError: task node research_external did not produce valid output
+```
+
+第三次的 `ModelCompleted.text` 是决定性的：
+
+```text
+The tool calls were denied due to permission scope. The objective explicitly states
+this is explanatory writing based on existing knowledge and does not require external
+sources. I'll return an empty items list.
+
+{"items":[]}
+```
+
+**模型给出的正是 ADR-032 要的那个答案**，只是前面带了一句说明。解码器要求整条消息是且
+只是一个 JSON 对象，于是这个正确答案被整条丢掉，节点失败，整个 Task 死掉。
+
+这与 ADR-032 立的那条规矩不是同一件事。那条规矩说的是"解析不出来就失败，不要把'读不出'
+降级成'没读到'"——它防的是**凭空造来源**。而这里模型明确写了 `{"items":[]}`，那是被
+允许的答案。后果是：**只要研究工具这一轮什么都没读到，Task 就必死**，而在 web profile
+上那是每一次。
+
+修法必须小心，不能顺手废掉 ADR-032 保的性质（一个读不出来的节点不能看起来像读到了空）。
+"抓消息里最后一个 `{...}`"会连模型**描述**的 JSON 一起收下，那正是那条规矩守的口子。
+候选：一次纠正轮次、或走 tool call 强制结构化输出。已单独立项，不在本次改动里。
+
+顺带记一笔：第二次提交失败还有我自己的一份责任——objective 里点名了工作区工具，planner
+把它们写进计划后交给了够不到这些工具的 `research_external`。**给 v1 图写 objective 时
+不要点名某个节点拿不到的工具名。**
+
+### 因此仍未做
+
+- `download_document` 落库：**无事件流证据**（本机环境受限，非代码问题）；
+- 带 `workspace:write` 的 `workspace_write` 成功路径：**仍无事件流证据**，因为三次 Task
+  都死在 `research_external`，根本没走到 `synthesize`；
+- `workspace_edit` / `workspace_grep`（PR #92 / #93）：同上，**只有适配器与领域层证据**。
+
 ## 2026-08-10 WP15 阶段四 PR-4.1：成本上限从"存在"变成"能用"（ADR-030 §2.1/§2.2）
 
 `RunBudget.max_cost_micro_usd` 与 `deadline` 从写下来那天起就在，但**没有任何东西把 token

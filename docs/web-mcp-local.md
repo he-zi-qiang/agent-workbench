@@ -139,7 +139,7 @@ scripts/dev.sh web-worker
 被读那一页的证据，最后 writer 的报告是从它写出来的。**第 3 条（`download_document`
 落库）还没有真跑过**，别把它当已验证。
 
-## 5.1 三件会让它跑不起来的事，都不是 bug
+## 5.1 四件会让它跑不起来的事，都不是 bug
 
 - **每次 agent 调用的 token 上限。** 默认 16000 装不下一个读网页的节点：一页正文
   20–50 KB，两次读就是约 28000 tokens，run 会以
@@ -149,7 +149,20 @@ scripts/dev.sh web-worker
 - **挑一个真有正文的页面。** 用搜索引擎首页当靶子会得到一屏 CSS，模型会反复重读、
   把预算耗在叙述上。`robots.txt` 这类小的纯文本页是最省事的验收靶子；
 - **writer 想写工作区要另一个 scope。** `workspace_write` 在事件流里被拒的
-  `missing_permission_scope` 说的是 principal 没有 `workspace:write`，与本 profile 无关。
+  `missing_permission_scope` 说的是 principal 没有 `workspace:write`，与本 profile 无关；
+- **代理开在 fake-IP 模式时，这一整节都跑不了。** 症状是两个工具每次都
+  `tool_failed`，在进程内复现会看到
+  `DestinationRefusedError: ... resolves to an address that is not publicly routable`。
+  查一下解析就清楚了：
+
+  ```bash
+  python3 -c "import socket; print(socket.getaddrinfo('example.com', 443)[0][4][0])"
+  ```
+
+  返回 `198.18.x.x` 就是它——那是 RFC 2544 的 benchmarking 段，Clash/Surge 一类工具在
+  fake-IP 模式下发的地址，而 ADR-027 的闸门按"默认拒绝、只放行全局可路由"写，正好把它
+  挡在外面。**闸门是对的，环境读不了外网。** 换回真实 DNS 解析（规则模式）再验收，
+  2026-08-10 实测见 [status.md](./status.md)。
 
 ## 6. 常见问题
 
