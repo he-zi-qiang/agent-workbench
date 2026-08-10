@@ -66,7 +66,14 @@ DEMO_TOOL_CALL_ID = "toolu_demo_1"
 # adapter through the events into the outcome, and a run reporting zero tokens
 # would let that path break unnoticed.
 DEMO_PREAMBLE_USAGE = TokenUsage(input_tokens=118, output_tokens=31)
-DEMO_REPLY_USAGE = TokenUsage(input_tokens=204, output_tokens=24, cache_read_tokens=960)
+# ``input_tokens`` is the whole prompt and ``cache_read_tokens`` a subset of it,
+# so the second turn is a 1164-token prompt of which 960 were served from cache
+# and 204 were new. Written as 204 it would claim a prompt smaller than its own
+# cache hit -- and the demo is the transcript people read first, so the numbers
+# in it have to be ones a provider could actually report.
+DEMO_REPLY_USAGE = TokenUsage(
+    input_tokens=1164, output_tokens=24, cache_read_tokens=960
+)
 
 DEMO_RUN_ID = "run_demo"
 DEMO_STREAM_ID = "stream_demo"
