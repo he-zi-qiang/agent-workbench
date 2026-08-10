@@ -198,10 +198,13 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   这一组在本机没有外部服务时跑，597/11 项环境跳过只能报告为跳过。
 - **每个 PR 都有一组真实服务证据**：CI 的 `Migrations, PostgreSQL and Qdrant-backed stores`
   job 先 `alembic upgrade head`，再对着真实 PostgreSQL 16 与 Qdrant 跑
-  `tests/contracts tests/persistence tests/api tests/vector`，当前为
-  `918 passed / 2 skipped`（2 项跳过中 1 项需要 `embedding` extra 与本地 BGE 权重，CI 不装
-  该 extra）。它不覆盖 `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径。
-  三组数字来自三种环境，只能分别引用，不能相加。
+  `tests/contracts tests/persistence tests/api tests/vector`，共 920 项、2 项环境跳过
+  （其中 1 项需要 `embedding` extra 与本地 BGE 权重，CI 不装该 extra）。它不覆盖
+  `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径。三组数字来自三种环境，
+  只能分别引用，不能相加。
+  这个 job **不是每次都全绿**：`test_the_hybrid_and_dense_paths_agree_on_the_tie_break`
+  会偶发失败，而它失败的原因就是下面那条"已知的可复现性缺口"——并列分数没有确定性次序。
+  如实记下来，是因为把它写成一个稳定的通过数字，既高估了这个 job，也掩盖了一条真实缺陷。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
 > 受控的本机开发，不得暴露到局域网或公网。监听地址以及 Compose 端口映射均限制为

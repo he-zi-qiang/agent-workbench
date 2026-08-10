@@ -126,12 +126,19 @@ verification.
 A separate CI job carries real-service evidence on **every PR**: `Migrations,
 PostgreSQL and Qdrant-backed stores` runs `alembic upgrade head` and then
 `tests/contracts tests/persistence tests/api tests/vector` against a real
-PostgreSQL 16 and Qdrant, currently **918 passed, 2 skipped** — one of those two
-needs the `embedding` extra and local BGE weights, which CI does not install. It
+PostgreSQL 16 and Qdrant — 920 tests with 2 environment-gated skips, one of which
+needs the `embedding` extra and local BGE weights that CI does not install. It
 does not cover `tests/e2e`, Task Worker end-to-end, or anything requiring a model
 provider, so it does not replace the real Task acceptance run behind ADR-032
 recorded in [the implementation status](docs/status.md). Three sets of numbers,
 three environments: cite them separately, never added together.
+
+That job is **not green every time**:
+`test_the_hybrid_and_dense_paths_agree_on_the_tie_break` fails intermittently,
+and it does so for exactly the reason listed below as a known reproducibility
+gap — tied retrieval scores have no deterministic order. It is recorded rather
+than quarantined, because writing this job up as a single stable pass count
+would both overstate the job and hide a real defect.
 
 External search now has a real provider
 ([ADR-020](docs/adr/0020-external-web-search.md)): DeepSeek's server-side

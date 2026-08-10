@@ -84,8 +84,9 @@ upcaster/poison-row 隔离仍未形成完整产品切片。
 冒烟测试和 production build 已在 CI 通过。这一组在本机没有外部服务时跑，597/11 项环境跳过
 只能报告为跳过。**真实服务证据由 CI 每个 PR 提供**：`Migrations, PostgreSQL and
 Qdrant-backed stores` job 对着真实 PostgreSQL 16 与 Qdrant 跑 `tests/contracts
-tests/persistence tests/api tests/vector`，当前 `918 passed / 2 skipped`；它不覆盖
-`tests/e2e` 与需要模型 Provider 的路径。最近一次**本机**真实 PostgreSQL + Qdrant 全量记录
+tests/persistence tests/api tests/vector`，共 920 项、2 项环境跳过；它不覆盖
+`tests/e2e` 与需要模型 Provider 的路径，且**会因并列分数次序不确定而偶发一条失败**
+（详见[实施状态](./status.md)）。最近一次**本机**真实 PostgreSQL + Qdrant 全量记录
 仍是前端增量当时的 `1821 passed / 11 skipped`（11 项需要 BGE 权重），那是一棵更早的工作树；
 **不同环境、不同工作树的数字只能分别引用，不能相加**。当前开发
 身份解析器仍信任请求头，API 和 Compose 只允许在 loopback 的受控本机环境使用。完整证据与已知问题见

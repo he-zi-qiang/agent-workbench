@@ -134,12 +134,21 @@ PostgreSQL 16 与 Qdrant 跑 `tests/contracts tests/persistence tests/api tests/
 执行过，而它们一直在被执行：
 
 ```text
-CI service-backed job（真实 PostgreSQL + Qdrant）   918 passed / 2 skipped
+CI service-backed job（真实 PostgreSQL + Qdrant）   920 项，其中 2 项环境跳过
 ```
 
-（[run 31351527183](https://github.com/he-zi-qiang/agent-workbench/actions/runs/31351527183)，
-本文档所在 PR 的这一次运行。2 项跳过：一项是只在非锁定读路径上成立的 PostgreSQL 契约，
-一项需要 `embedding` extra 与本地 BGE 权重——CI 不装该 extra，这是它与本机全量的唯一差别。）
+2 项跳过：一项是只在非锁定读路径上成立的 PostgreSQL 契约，一项需要 `embedding` extra 与
+本地 BGE 权重——CI 不装该 extra，这是它与本机全量的唯一差别。
+
+**这个 job 不是每次都全绿，而原因不是基础设施抖动。** 写这份文档的 PR 上，同一个 job 连跑
+两次得到 `918 passed / 2 skipped`（[run 31351527183](https://github.com/he-zi-qiang/agent-workbench/actions/runs/31351527183)）
+和 `1 failed / 917 passed / 2 skipped`（[run 31351722239](https://github.com/he-zi-qiang/agent-workbench/actions/runs/31351722239)），
+两次之间只差文档改动。失败的那条是
+`tests/vector/test_tied_score_order.py::test_the_hybrid_and_dense_paths_agree_on_the_tie_break`，
+断言 dense 与 hybrid 两条路径对并列项给出同一个次序——**它偶发失败正是本文件多处记录的
+"并列检索分数没有确定性次序"这个已知缺口的直接表现**，不是需要 quarantine 的坏测试。
+把它写成"918 passed"会让这个 job 看起来比实际稳定，也会掩盖一条真实缺陷；修法是在适配器
+边界给并列项定序（独立变更），在那之前这里如实记录它会红。
 
 这一组**不覆盖** `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径，所以它不能替代
 上一节那次真实 Task 验收，两者也不能相加。三组数字来自三种环境，只能分别引用。
