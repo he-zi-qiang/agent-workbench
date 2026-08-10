@@ -51,6 +51,20 @@ catchup_poll_seconds = 1
 [chat]
 routed_relevance_threshold = 0.01
 
+[multi_agent]
+# The default 16000 cannot hold a node that reads pages, and this is the
+# profile whose whole point is a node that reads pages. Measured, not guessed:
+# one `fetch_page` on an ordinary site came back with 20 000 then 50 000 bytes
+# of extracted text, which is roughly 28 000 tokens of model input across two
+# reads -- so the run hit `budget_exceeded: token_budget` mid-answer while the
+# tools themselves worked perfectly (ADR-032 §4).
+#
+# It stays 16000 everywhere else on purpose: it is a per-invocation *cumulative*
+# ceiling, and every other v1 node reads nothing bigger than its own projection.
+# 120000 leaves room for two or three page reads; a fourth would exceed the
+# model's own context window before it exceeded this.
+max_tokens_per_agent_invocation = 120000
+
 [optional_labs]
 mcp_adapter = true
 

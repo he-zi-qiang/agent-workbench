@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -198,7 +199,7 @@ class _External:
         )
 
 
-def _task() -> TaskRun:
+def _task(*, envelope: AuthorizationEnvelope | None = None) -> TaskRun:
     now = datetime(2026, 7, 29, tzinfo=UTC)
     return TaskRun(
         task_id="task_1",
@@ -213,7 +214,7 @@ def _task() -> TaskRun:
         run_semantics_revision="test-v1",
         submitted_policy_revision="policy-v1",
         submitted_policy_fingerprint="f" * 16,
-        submitted_authorization_envelope=AuthorizationEnvelope(),
+        submitted_authorization_envelope=envelope or AuthorizationEnvelope(),
         status="running",
         lease_owner=LEASE.worker_id,
         lease_epoch=LEASE.epoch,
@@ -361,6 +362,210 @@ def test_a_general_task_without_kb_or_external_grant_still_synthesizes_honestly(
 
     assert "No retrieved evidence is available" in request.messages[-1].text()
     assert "do not invent citations" in request.messages[-1].text()
+
+
+#: The Task ceiling a deployment with the read-outward MCP server submits under
+#: (ADR-027). Without `external_search` in it, the deterministic half of the
+#: node is denied and only the tool loop contributes -- which is exactly the
+#: local web profile's shape.
+READ_OUTWARD_ENVELOPE = AuthorizationEnvelope(
+    allowed_tools=("mcp_web_fetch_page", "external_search"),
+    max_tool_risk="external",
+    approval_required_risks=(),
+)
+
+_READ_EVIDENCE = json.dumps(
+    {
+        "items": [
+            {
+                "url": "https://example.test/q3",
+                "title": "Q3 report",
+                "text": "Revenue rose four percent.",
+            }
+        ]
+    }
+)
+
+
+@dataclass
+class _ScriptedExecutor:
+    """One reply per node, so the researcher's run and the writer's differ."""
+
+    replies: dict[str, str]
+    requests: list[AgentRunRequest] = field(default_factory=list)
+
+    async def run(
+        self,
+        request: AgentRunRequest,
+        emit: object,
+        cancellation: CancellationToken,
+    ) -> AgentOutcome:
+        del emit
+        cancellation.raise_if_cancelled()
+        self.requests.append(request)
+        return AgentOutcome(
+            agent_run_id=request.trace.agent_run_id,
+            status="completed",
+            stop_reason="completed",
+            output_text=self.replies[str(request.trace.graph_node_id)],
+            usage=BudgetUsage(steps=1),
+        )
+
+
+def _read_outward_handlers(
+    *,
+    evidence: EvidenceStore,
+    external: _External,
+    executor: _ScriptedExecutor,
+    catalog: tuple[str, ...],
+) -> dict[str, TaskNodeHandler]:
+    return cast(
+        "dict[str, TaskNodeHandler]",
+        build_task_v1_handlers(
+            executor=cast(Any, executor),
+            artifacts=evidence.artifacts,
+            invocations=_provider(_Registry(_task(envelope=READ_OUTWARD_ENVELOPE))),
+            research=TaskResearchHandlers(
+                internal=cast(InternalResearchService, _Internal(evidence)),
+                evidence=evidence,
+                external=cast(ExternalEvidenceToolPort, external),
+                policy_identity="policy-v1:test",
+            ),
+            dynamic_tools={"research": cast(Any, catalog)},
+        ),
+    )
+
+
+async def _load_external(
+    evidence: EvidenceStore, refs: tuple[str, ...]
+) -> tuple[EvidenceBundle, ...]:
+    context = TaskResearchContext(task_id="task_1", principal=OWNER)
+    return tuple(
+        [
+            await evidence.load(context=context, artifact_id=artifact_id)
+            for artifact_id in refs
+        ]
+    )
+
+
+def test_external_researcher_runs_a_tool_loop_when_the_worker_registered_one() -> None:
+    """The half of ADR-027 that was declared but never reached a model.
+
+    Both halves are asserted at once, because either alone is the bug this
+    replaces: a run whose `tool_names` advertises the reader proves the node
+    reached the model, and an external bundle carrying the URL the model
+    reported proves what it read became citable evidence rather than prose.
+    """
+
+    async def scenario() -> tuple[AgentRunRequest, tuple[EvidenceBundle, ...]]:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _ScriptedExecutor({"research_external": _READ_EVIDENCE})
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=executor,
+            catalog=("mcp_web_fetch_page",),
+        )
+        update = await handlers["research_external"](_state())
+        assert len(executor.requests) == 1
+        return executor.requests[0], await _load_external(
+            evidence, update["evidence_refs"]
+        )
+
+    request, bundles = _run(scenario)
+
+    assert request.trace.graph_node_id == "research_external"
+    assert request.tool_names == ("mcp_web_fetch_page",)
+    # Both halves contributed: the deterministic search, and the pages the
+    # model chose to read.
+    assert len(bundles) == 2
+    read = [
+        item
+        for bundle in bundles
+        for item in bundle.items
+        if item.url == "https://example.test/q3"
+    ]
+    assert len(read) == 1
+    assert read[0].title == "Q3 report"
+    assert read[0].source == "external"
+
+
+def test_external_researcher_stays_a_single_search_when_no_tool_was_registered() -> (
+    None
+):
+    """The control. An empty catalog must not buy a second model invocation."""
+
+    async def scenario() -> tuple[_ScriptedExecutor, tuple[str, ...]]:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _ScriptedExecutor({"research_external": _READ_EVIDENCE})
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=executor,
+            catalog=(),
+        )
+        update = await handlers["research_external"](_state())
+        return executor, update["evidence_refs"]
+
+    executor, refs = _run(scenario)
+
+    assert executor.requests == []
+    assert len(refs) == 1
+
+
+def test_external_researcher_that_read_nothing_contributes_no_evidence() -> None:
+    """An empty answer is a real outcome, and is still charged for."""
+
+    async def scenario() -> Any:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _ScriptedExecutor({"research_external": '{"items":[]}'})
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=executor,
+            catalog=("mcp_web_fetch_page",),
+        )
+        return await handlers["research_external"](_state())
+
+    update = _run(scenario)
+
+    assert len(update["evidence_refs"]) == 1
+    assert len(update["agent_outcome_refs"]) == 1
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # Prose: never reaches the schema at all.
+        "I read the page and it says revenue rose.",
+        # A JSON object of the right kind whose item is not evidence -- a
+        # passage with no locator is exactly what the bundle exists to refuse.
+        json.dumps({"items": [{"url": "page 3", "title": "Q3", "text": "Rose."}]}),
+    ],
+    ids=["prose", "unlocatable-item"],
+)
+def test_external_researcher_output_that_is_not_evidence_fails_the_node(
+    answer: str,
+) -> None:
+    """Neither shape may be rounded down to "no evidence" and quietly dropped."""
+
+    async def scenario() -> None:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _ScriptedExecutor({"research_external": answer})
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=executor,
+            catalog=("mcp_web_fetch_page",),
+        )
+        with pytest.raises(TaskNodeRunFailedError, match="evidence schema"):
+            await handlers["research_external"](_state())
+
+    _run(scenario)
 
 
 @dataclass

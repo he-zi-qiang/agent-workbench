@@ -106,6 +106,15 @@ scripts/dev.sh web-worker
 
 提交一个必须读某个具体页面才能回答的 Task（例如"读 <某文档 URL>，总结它的三条主要结论"）。
 
+**这个节点会跑两半**（ADR-032）：先是 ADR-020 那次确定性的 `external_search`——本 profile
+没开 `research.enabled`，所以它在 Gateway 被拒，事件流里看得见——然后才是带
+`mcp_web_fetch_page` 的那次 agent run。第一半那对 `ToolProposed external_search` /
+`PermissionResolved deny` 是预期内的，不是故障。
+
+那次 agent run 交出的不是散文而是 JSON 证据条目（`{"items":[{"url","title","text"}]}`），
+因为 `synthesize` 读的是 `EvidenceBundle`。解析不了的输出会让节点失败而不是被当成
+"没读到"。
+
 **任务成功不等于验收通过。** 至少核对这四条：
 
 | # | 要看的 | 怎么看 |
@@ -122,6 +131,25 @@ scripts/dev.sh web-worker
 第 4 条是唯一一条**不需要模型也能验**的，`tests/adapters/test_mcp_scope_refusal.py`
 已经把它自动化了：同一个 binding，principal 带 `mcp:web` 时放行、不带时被 Gateway 拒。
 前三条要真跑，因为它们要的是事件流里的事实。
+
+**已经真跑过的**（2026-08-09，task_d3dc69b3…，DeepSeek + 本机 PostgreSQL/Qdrant）：
+第 1、2 条成立——`research_external` 的 `RunStarted` 带
+`["mcp_web_download_document","mcp_web_fetch_page"]`，同一个 run 里
+`mcp_web_fetch_page` 走完了四件套，读到的正文变成一条 `source="external"`、URL 就是
+被读那一页的证据，最后 writer 的报告是从它写出来的。**第 3 条（`download_document`
+落库）还没有真跑过**，别把它当已验证。
+
+## 5.1 三件会让它跑不起来的事，都不是 bug
+
+- **每次 agent 调用的 token 上限。** 默认 16000 装不下一个读网页的节点：一页正文
+  20–50 KB，两次读就是约 28000 tokens，run 会以
+  `budget_exceeded: token_budget` 结束在半句话上，而工具其实全部成功。
+  `config/config.web-local.toml` 把 `multi_agent.max_tokens_per_agent_invocation`
+  提到 120000，只在这份 profile 里提；
+- **挑一个真有正文的页面。** 用搜索引擎首页当靶子会得到一屏 CSS，模型会反复重读、
+  把预算耗在叙述上。`robots.txt` 这类小的纯文本页是最省事的验收靶子；
+- **writer 想写工作区要另一个 scope。** `workspace_write` 在事件流里被拒的
+  `missing_permission_scope` 说的是 principal 没有 `workspace:write`，与本 profile 无关。
 
 ## 6. 常见问题
 
