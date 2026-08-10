@@ -35,6 +35,7 @@ import type {
   ArtifactRef,
   EventEnvelope,
   PrincipalIdentity,
+  TaskGraphChoice,
   TaskStatus,
   TaskView,
 } from "../../api/types";
@@ -72,6 +73,7 @@ import {
   eventTitle,
   findDraftText,
   findFinalReport,
+  findGraphChoice,
   findLatestApprovalId,
   findTaskInputRef,
   isKnownEventType,
@@ -96,8 +98,36 @@ interface CreateTaskIntent {
   maxRevisions: number;
   knowledgeBaseId?: string;
   wantsReport: boolean;
+  graph?: TaskGraphChoice;
   idempotencyKey: string;
 }
+
+/**
+ * The two pipelines a submission may choose between (ADR-031).
+ *
+ * A visible control rather than a guess, for the same reason the report toggle
+ * is: only the submitter knows whether this is a report to research or a thing
+ * to do, and choosing from the objective's wording would run the entire wrong
+ * pipeline when it misread. The form always sends its visible selection -- a
+ * control that displayed "调研报告" while actually submitting whatever the
+ * server defaults to would show one thing and do another.
+ */
+const GRAPH_OPTIONS: ReadonlyArray<{
+  value: TaskGraphChoice;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: "research",
+    label: "调研报告",
+    hint: "检索资料、撰写并评审一份有依据的报告。",
+  },
+  {
+    value: "general",
+    label: "通用执行",
+    hint: "一个带工具的执行者自定步骤把事做完，评审后交付。",
+  },
+];
 
 /**
  * Whether an objective asks for a file.
@@ -250,6 +280,13 @@ export function WorkPage() {
   // spent its budget and wrote its events, and rewriting that history would
   // make a Task's record depend on how many times somebody retried it.
   const retryInput = taskInputQuery.data ?? null;
+  // The pipeline the original ran, read from its submission event: the choice
+  // is deliberately not part of the input artifact, and a retry that dropped
+  // it would silently move the Task onto another graph.
+  const retryGraph = useMemo(
+    () => findGraphChoice(timeline.events),
+    [timeline.events],
+  );
   const resubmit = (input: NonNullable<typeof taskInputQuery.data>) => {
     createMutation.mutate({
       objective: input.objective,
@@ -259,6 +296,7 @@ export function WorkPage() {
       ...(input.knowledge_base_id === null
         ? {}
         : { knowledgeBaseId: input.knowledge_base_id }),
+      ...(retryGraph === null ? {} : { graph: retryGraph }),
     });
   };
 
@@ -268,6 +306,7 @@ export function WorkPage() {
   // so their choice is not overwritten by the next keystroke.
   const [reportOverride, setReportOverride] = useState<boolean | null>(null);
   const wantsReport = reportOverride ?? mentionsReport(objective);
+  const [graphChoice, setGraphChoice] = useState<TaskGraphChoice>("research");
   const [knowledgeBaseDraftId, setKnowledgeBaseId] = useState<string | null>(
     searchParams.get("kb"),
   );
@@ -291,6 +330,7 @@ export function WorkPage() {
       attachments.clear();
       setMaxRevisions("2");
       setReportOverride(null);
+      setGraphChoice("research");
       setSubmissionKey(newIdempotencyKey("task"));
       void queryClient.invalidateQueries({
         queryKey: ["work", "tasks", ...identityKey],
@@ -394,6 +434,7 @@ export function WorkPage() {
       objective: trimmedObjective,
       maxRevisions: parsedMaxRevisions,
       wantsReport,
+      graph: graphChoice,
       idempotencyKey: submissionKey,
       ...(knowledgeBaseId === null ? {} : { knowledgeBaseId }),
     });
@@ -453,6 +494,32 @@ export function WorkPage() {
             rows={4}
             value={objective}
           />
+          {/* Which pipeline runs it -- the submitter's call, never inferred
+              from the objective (ADR-031: a wrong guess runs the entire wrong
+              pipeline). Radios rather than a dropdown so both options and
+              their meanings are readable before choosing. */}
+          <fieldset className="aw-graph-choice">
+            <legend>执行方式</legend>
+            {GRAPH_OPTIONS.map((option) => (
+              <label className="aw-graph-option" key={option.value}>
+                <input
+                  checked={graphChoice === option.value}
+                  disabled={createMutation.isPending}
+                  name="work-graph"
+                  onChange={() => {
+                    setGraphChoice(option.value);
+                    markTaskIntentEdited();
+                  }}
+                  type="radio"
+                  value={option.value}
+                />
+                <span>
+                  <strong>{option.label}</strong>
+                  <small>{option.hint}</small>
+                </span>
+              </label>
+            ))}
+          </fieldset>
           <KnowledgeSourcePicker
             disabled={createMutation.isPending}
             identity={identity}
@@ -1148,6 +1215,7 @@ function workflowStageTitle(graphNodeId: string): string {
   if (normalized.includes("research")) return "收集资料";
   if (normalized.includes("draft") || normalized.includes("write")) return "撰写结果";
   if (normalized.includes("critic") || normalized.includes("review")) return "检查与修订";
+  if (normalized === "work") return "动手做事";
   if (normalized.includes("approval")) return "等待确认";
   if (normalized.includes("export")) return "生成报告";
   return "执行步骤";

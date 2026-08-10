@@ -57,6 +57,14 @@ export type TaskStatus =
   | "cancelled"
   | "dead_letter";
 
+/**
+ * Which pipeline a submission asks for: `research` writes a grounded report,
+ * `general` does the work and reviews it (ADR-031). A shape, deliberately not
+ * a graph version string -- the server maps it, so a client can never pin
+ * itself to a version nobody deploys.
+ */
+export type TaskGraphChoice = "research" | "general";
+
 export interface TaskView {
   task_id: Identifier;
   status: TaskStatus;

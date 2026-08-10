@@ -14,6 +14,7 @@ import type {
   KnowledgeDocumentListResponse,
   PrincipalIdentity,
   SearchResponse,
+  TaskGraphChoice,
   TaskListResponse,
   TaskStatus,
   TaskTimelineResponse,
@@ -211,6 +212,7 @@ export async function createTask(
     maxRevisions: number;
     knowledgeBaseId?: string;
     wantsReport: boolean;
+    graph?: TaskGraphChoice;
   },
   idempotencyKey = newIdempotencyKey("task"),
 ): Promise<TaskView> {
@@ -224,6 +226,9 @@ export async function createTask(
       ...(input.knowledgeBaseId
         ? { knowledge_base_id: input.knowledgeBaseId }
         : {}),
+      // Only when chosen. Absent means the deployment's default -- the exact
+      // bytes this client sent before the field existed.
+      ...(input.graph === undefined ? {} : { graph: input.graph }),
     },
   });
 }

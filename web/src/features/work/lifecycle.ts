@@ -1,18 +1,33 @@
 import type { EventEnvelope, TaskStatus } from "../../api/types";
 
 /**
- * The Task graph, as a reader follows it rather than as it is compiled.
+ * The Task graphs, as a reader follows them rather than as they are compiled.
  *
- * Graph nodes are grouped: `route` is bookkeeping between planning and
- * research, the two research nodes fan out in parallel, and the quality gate is
- * the critic's verdict rather than a separate thing that happens. Showing ten
- * nodes made the page look like ten decisions when there are six.
+ * One list per graph (ADR-031), because this page renders the *declared* list
+ * -- pending stages preview what a running Task will do, and a v2 Task
+ * previewed with v1's six stages would promise research and drafting that its
+ * graph does not contain. Which list applies is read from the timeline itself:
+ * `TaskSubmitted` records the graph version, so the very first event settles
+ * it. See {@link graphShapeOf}.
+ *
+ * Within each: graph nodes are grouped. In v1, `route` is bookkeeping between
+ * planning and research, the two research nodes fan out in parallel, and the
+ * quality gate is the critic's verdict rather than a separate thing that
+ * happens. The `review` stage id is deliberately shared across the two lists:
+ * v2's reviewer and v1's critic are the same step to a reader, which is why
+ * the server shared their vocabulary in the first place.
  *
  * Node ids that are not listed still appear -- as their own stage, at the end.
  * A graph that grew a node should show it, not hide it because this table is
  * out of date.
  */
-const STAGES: ReadonlyArray<{ id: string; title: string; nodes: readonly string[] }> = [
+interface StageSpec {
+  id: string;
+  title: string;
+  nodes: readonly string[];
+}
+
+const V1_STAGES: readonly StageSpec[] = [
   { id: "understand", title: "理解目标", nodes: ["understand"] },
   { id: "plan", title: "制定计划", nodes: ["plan", "route"] },
   {
@@ -24,6 +39,54 @@ const STAGES: ReadonlyArray<{ id: string; title: string; nodes: readonly string[
   { id: "review", title: "检查与修订", nodes: ["critic", "quality_gate"] },
   { id: "deliver", title: "确认与产出", nodes: ["approval", "export"] },
 ];
+
+const V2_STAGES: readonly StageSpec[] = [
+  { id: "understand", title: "理解目标", nodes: ["understand"] },
+  { id: "work", title: "动手做事", nodes: ["work"] },
+  { id: "review", title: "检查与修订", nodes: ["review"] },
+  { id: "deliver", title: "确认与产出", nodes: ["approval", "export"] },
+];
+
+export type GraphShape = "v1" | "v2";
+
+const STAGES_BY_SHAPE: Record<GraphShape, readonly StageSpec[]> = {
+  v1: V1_STAGES,
+  v2: V2_STAGES,
+};
+
+/** Node ids that exist in exactly one graph, for the event-shaped fallback. */
+const V2_ONLY_NODES = new Set(["work", "review"]);
+const V1_ONLY_NODES = new Set([
+  "plan",
+  "route",
+  "research_internal",
+  "research_external",
+  "synthesize",
+  "critic",
+  "quality_gate",
+]);
+
+/**
+ * Which graph wrote this timeline.
+ *
+ * `TaskSubmitted` is the authority -- it is written in the same transaction as
+ * the Task row and carries the resolved version -- so the shape is known from
+ * the first event, before any node has run. The node-id fallback covers a
+ * timeline read mid-stream from a cursor past the submission event. Defaulting
+ * to v1 keeps every pre-v2 Task rendering exactly as it did.
+ */
+export function graphShapeOf(events: readonly EventEnvelope[]): GraphShape {
+  for (const event of events) {
+    if (event.event_type === "TaskSubmitted") {
+      return event.payload["graph_version"] === "v2_general" ? "v2" : "v1";
+    }
+    if (event.graph_node_id !== null) {
+      if (V2_ONLY_NODES.has(event.graph_node_id)) return "v2";
+      if (V1_ONLY_NODES.has(event.graph_node_id)) return "v1";
+    }
+  }
+  return "v1";
+}
 
 /**
  * What makes a stage failed.
@@ -46,12 +109,15 @@ const TERMINAL_STATUSES = new Set<TaskStatus>([
 /**
  * The stage a graph node belongs to, for grouping its events under it.
  *
- * Unknown nodes map to themselves, matching how `deriveLifecycle` gives an
- * unlisted node its own stage: a node this table has not heard of still shows
- * its work rather than dropping it.
+ * One mapping across both graphs rather than one per shape, because it is
+ * consistent: the node sets are disjoint except for the three ids the graphs
+ * deliberately share, and those land in the same stage either way. Unknown
+ * nodes map to themselves, matching how `deriveLifecycle` gives an unlisted
+ * node its own stage: a node this table has not heard of still shows its work
+ * rather than dropping it.
  */
 export function stageOfNode(graphNodeId: string): string {
-  for (const stage of STAGES) {
+  for (const stage of [...V1_STAGES, ...V2_STAGES]) {
     if (stage.nodes.includes(graphNodeId)) return stage.id;
   }
   return graphNodeId;
@@ -85,9 +151,10 @@ export function deriveLifecycle(
   events: readonly EventEnvelope[],
   status: TaskStatus | undefined,
 ): Lifecycle {
-  const known = new Map(STAGES.map((stage) => [stage.id, stage] as const));
+  const declared = STAGES_BY_SHAPE[graphShapeOf(events)];
+  const known = new Map(declared.map((stage) => [stage.id, stage] as const));
   const stageOf = new Map<string, string>();
-  for (const stage of STAGES) {
+  for (const stage of declared) {
     for (const node of stage.nodes) stageOf.set(node, stage.id);
   }
 
@@ -118,7 +185,7 @@ export function deriveLifecycle(
   // Declared order first, then anything the graph produced that this table does
   // not know about, so a new node is visible rather than silently dropped.
   const ids = [
-    ...STAGES.map((stage) => stage.id),
+    ...declared.map((stage) => stage.id),
     ...order.filter((id) => !known.has(id)),
   ];
   const lastSeen = order.at(-1) ?? null;

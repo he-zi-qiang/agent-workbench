@@ -3621,6 +3621,59 @@ pre {
   gap: 10px;
 }
 
+/* The pipeline choice: two radios that read like the decision they are.
+   Styled beside the report toggle because they answer the same kind of
+   question -- what should this Task produce, and how. */
+.aw-graph-choice {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  border: none;
+}
+
+.aw-graph-choice legend {
+  padding: 0;
+  margin-bottom: 2px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-graph-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  cursor: pointer;
+}
+
+/* Same undo as the report toggle: `.aw-create-task input` sizes text fields,
+   and the radio would otherwise inherit a 35px-tall full-width box. */
+.aw-graph-option input {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  flex: none;
+  margin-top: 2px;
+  padding: 0;
+}
+
+.aw-graph-option > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.aw-graph-option strong {
+  display: block;
+  color: var(--aw-text);
+  font-size: 12px;
+}
+
+.aw-graph-option small {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 .aw-report-toggle {
   display: flex;
   align-items: flex-start;

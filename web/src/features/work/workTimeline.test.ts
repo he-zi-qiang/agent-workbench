@@ -4,6 +4,7 @@ import {
   createTimelineState,
   eventTitle,
   findFinalReport,
+  findGraphChoice,
   findLatestApprovalId,
   collectArtifacts,
   findTaskInputRef,
@@ -107,6 +108,30 @@ describe("work timeline contract selectors", () => {
         knowledge_base_id: null,
       }),
     ).toBeNull();
+  });
+
+  it("reads the pipeline a retry must ask for from the submission event", () => {
+    // The choice is deliberately not in the input artifact -- which pipeline
+    // runs a Task is a property of the submission -- so a faithful retry has
+    // to read it back from TaskSubmitted's recorded version.
+    expect(
+      findGraphChoice([
+        envelope("event_1", "TaskSubmitted", { graph_version: "v1" }),
+      ]),
+    ).toBe("research");
+    expect(
+      findGraphChoice([
+        envelope("event_1", "TaskSubmitted", { graph_version: "v2_general" }),
+      ]),
+    ).toBe("general");
+    // A version this client cannot name: the retry omits the field and takes
+    // the deployment default rather than guessing a shape.
+    expect(
+      findGraphChoice([
+        envelope("event_1", "TaskSubmitted", { graph_version: "v9_future" }),
+      ]),
+    ).toBeNull();
+    expect(findGraphChoice([envelope("event_1", "TaskClaimed")])).toBeNull();
   });
 
   it("uses the latest approval request only to discover the authoritative record", () => {

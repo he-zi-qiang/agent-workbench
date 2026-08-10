@@ -139,11 +139,37 @@ describe("WorkPage task submission", () => {
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     const input = vi.mocked(createTask).mock.calls[0]?.[1];
     // No report asked for, so none is promised: this objective mentions no file.
+    // The pipeline is the form's visible default, sent explicitly.
     expect(input).toEqual({
       objective: "整理现有信息",
       maxRevisions: 2,
       wantsReport: false,
+      graph: "research",
     });
+  });
+
+  it("submits the pipeline the reader picked, not a guess from the objective", async () => {
+    vi.mocked(createTask).mockReset();
+    vi.mocked(createTask).mockResolvedValue({
+      task_id: "task_created",
+      status: "queued",
+      status_detail: null,
+      objective_preview: null,
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:00:00Z",
+    });
+    const user = userEvent.setup();
+    renderWorkPage();
+
+    // An objective that *sounds* like research, submitted as 通用执行: the
+    // wording must not decide the pipeline (ADR-031 -- a wrong guess runs the
+    // entire wrong graph), only the visible control does.
+    await user.type(screen.getByLabelText("目标"), "调研并把这批 CSV 清洗合并");
+    await user.click(screen.getByRole("radio", { name: /通用执行/ }));
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createTask).mock.calls[0]?.[1].graph).toBe("general");
   });
 
   it("asks for a report only when the objective does, and lets that be overridden", async () => {
