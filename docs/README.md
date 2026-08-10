@@ -10,7 +10,7 @@
 |---|---:|---|
 | [架构与技术选型基线](./architecture-baseline.md) | v1.3 | 锁定产品边界、分层、组件职责、可靠性协议和技术选型 |
 | [代码实施计划](./implementation-plan.md) | v1.0 | 将目标架构拆成工作包、PR、迁移、测试门禁和证据包 |
-| [配置管理契约](./configuration.md) | schema 1.6 | 定义配置来源、密钥规则、快照语义和跨域校验 |
+| [配置管理契约](./configuration.md) | schema 1.10 | 定义配置来源、密钥规则、快照语义和跨域校验 |
 | [本机 Compose 部署](./deployment.md) | local demo | 定义可复现容器拓扑、端口边界与 demo worker 限制 |
 
 ## 决策记录
@@ -41,13 +41,21 @@
 
 ## 当前事实
 
-截至 2026-08-08，A–F 汇合增量、OTel/LangChain 工具互操作（PR #67）、三处围栏修复
-（PR #68）、React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈值
-评测（PR #72、#73）以及 Chat 联网搜索与工具额度语义（PR #74）都已经在 `main` 上。
-随之落地的五条 ADR——无接地对话形态（ADR-018）、运行步骤透明度（ADR-019）、
+截至 2026-08-09（`main@a4dea2b`，PR #87），A–F 汇合增量、OTel/LangChain 工具互操作
+（PR #67）、三处围栏修复（PR #68）、React Chat/Work 控制台（PR #69）、LlamaIndex 检索
+Adapter 与路由阈值评测（PR #72、#73）以及 Chat 联网搜索与工具额度语义（PR #74）都已经
+在 `main` 上。随之落地的五条 ADR——无接地对话形态（ADR-018）、运行步骤透明度（ADR-019）、
 外部检索（ADR-020）、Chat 兜底分支联网（ADR-021）和工具额度语义（ADR-022）——
 把配置 schema 从 `1.2` 推到 `1.6`。此后 ADR-023 把联网从兜底分支扩到自由回答，
 并把两条"无证据作答"路径合并成一个实现；它没有再动 schema。
+
+此后的四个工作包把 schema 推到 `1.10`：WP14-01 的 MCP Adapter（ADR-025，`1.7`→`1.8`）、
+WP15 阶段一的任务工作区（ADR-028）与阶段二的一次性沙箱（ADR-029，`1.8`→`1.9`）、
+阶段三的只读取用外部世界（ADR-027，`1.9`→`1.10`，PR #83–#86）。PR #87 随后修掉两处
+**同一类**缺陷：能力在组合根装齐了，真正跑的那条分支没接上——`researcher_external` 从不
+调用模型（ADR-032），`synthesize` 从不进入工作区会话，因此那三个工作区工具在生产路径上
+每一次都失败而 run 仍报告成功。两处都有真实 Task 的事件流验收，详见[实施状态](./status.md)。
+
 已有的 Runtime、Chat/Dense RAG、安全发布与恢复能力继续成立；
 A–F 修复的当前状态如下：
 
@@ -60,19 +68,27 @@ A–F 修复的当前状态如下：
 | E | **主体完成并通过状态测试** | claim、lease/heartbeat/epoch、stale reclaim、retry/dead-letter、execution guard、fenced checkpointer 与确定性 failpoint 已接入；PR #68 后，图节点在**领取时的** lease 下写入，跨 epoch 的遗留 intent 转人工核对 |
 | F | **主体完成** | Qdrant 启动校验、常驻摄取、HITL、OTel、React 控制台、生命周期时间线和本机 Compose 已落地 |
 
-当前明确未完成：Langfuse、CrewAI 对比、动态 Multi-Agent、生产身份认证和生产部署；
-RAGAS runner 仍是 Planned（仓库里既没有 runner，`pyproject.toml` 里也没有这个依赖）。
+当前明确未完成：WP15 阶段四（成本与时限成为主约束、`workspace_edit`、`workspace_grep`）
+与阶段五（第二张图 `v2_general`）；Langfuse、CrewAI 对比、动态 Multi-Agent、生产身份认证
+和生产部署；RAGAS runner 仍是 Planned（仓库里既没有 runner，`pyproject.toml` 里也没有这个
+依赖）。
 LlamaIndex retrieval Adapter 已经建成并通过契约测试，但 `rag.llama_index.enabled`
 默认为 `false`——缺的不是实现，是一份能把两条检索路径区分开的等价性度量
 （ADR-017 第 3 步）。
 旧 Qdrant Point 物理清理、历史 token window/compaction 与 EventLog
 upcaster/poison-row 隔离仍未形成完整产品切片。
 
-本次前端增量已经通过 Ruff format/lint、Pyright、Compose 静态校验和无外部服务
-`1264 passed / 568 skipped`；前端 45 个单元测试、2 个桌面/移动浏览器冒烟测试和
-production build 也已通过。同一工作树在真实 PostgreSQL + Qdrant 下为
-`1821 passed / 11 skipped`（11 项需要 BGE 权重）；两组数字来自不同环境，只能分别引用，
-不能相加。当前开发
+`main@a4dea2b` 的实测门禁：无外部服务 `--ignore=tests/e2e` 为 `1784 passed / 597 skipped`，
+`tests/e2e` 为 `3 passed / 11 skipped`，架构与配置 `114 passed`，Ruff format/lint 通过
+（421 files），Pyright `0 errors / 0 warnings`；前端 45 个单元测试、2 个桌面/移动浏览器
+冒烟测试和 production build 已在 CI 通过。这一组在本机没有外部服务时跑，597/11 项环境跳过
+只能报告为跳过。**真实服务证据由 CI 每个 PR 提供**：`Migrations, PostgreSQL and
+Qdrant-backed stores` job 对着真实 PostgreSQL 16 与 Qdrant 跑 `tests/contracts
+tests/persistence tests/api tests/vector`，共 920 项、2 项环境跳过；它不覆盖
+`tests/e2e` 与需要模型 Provider 的路径，且**会因并列分数次序不确定而偶发一条失败**
+（详见[实施状态](./status.md)）。最近一次**本机**真实 PostgreSQL + Qdrant 全量记录
+仍是前端增量当时的 `1821 passed / 11 skipped`（11 项需要 BGE 权重），那是一棵更早的工作树；
+**不同环境、不同工作树的数字只能分别引用，不能相加**。当前开发
 身份解析器仍信任请求头，API 和 Compose 只允许在 loopback 的受控本机环境使用。完整证据与已知问题见
 [实施状态](./status.md)；A–F 修复前的问题原始快照见
 [2026-07-29 仓库审计](./repository-audit-2026-07-29.md)。

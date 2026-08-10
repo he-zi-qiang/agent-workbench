@@ -1,5 +1,158 @@
 # 实施状态
 
+## 2026-08-09 两处"装齐了但没接上"的能力（PR #87）
+
+同一类缺陷，分成两个提交是因为它们可以分别 review、分别回滚。两处都是：组合根把能力
+装齐了，配置、信封、scope、Gateway 全都对，而**真正跑的那条分支没接上**。
+
+**外部研究节点从不调用模型（[ADR-032](./adr/0032-the-external-researcher-is-an-agent.md)）。**
+ADR-027 §3.3 把动态 MCP 源给了 `researcher_external`，但 `build_task_v1_handlers` 里这个
+节点在 `research is not None`（真 Worker 恒真）时直接调 `research.external.gather(...)`，
+那是一次参数写死的 `external_search`；只有 demo 分支才会用到 profile 的动态工具。于是
+`dynamic_tool_sources={"research"}` 在生产路径上是死代码。本机实测的形状是：信封里有
+`mcp_web_fetch_page`，principal 带 `mcp:web`，Worker 也 discover 到了两个远端工具，而事件流
+里 `research_external` 一条 `RunStarted` 都没有。
+
+修法是**纯加法**：保留原来那次确定性搜索，仅当这个 Worker 真注册了 research 受众的工具时，
+再跑一次带这些工具的 agent run，两半的 `evidence_refs` 用图自己的 fan-in reducer 合并。
+目录为空的部署一步不多走、一分钱不多花、事件流一个字不变。没有把 `external_search` 一起
+交给模型——它今天的确定性形态就是 evals 测的形状，为这件事改它是在没有需求的情况下动被测
+基线（ADR-032 §2）。产出必须是证据包而不是散文：`synthesize` 把 `evidence_refs` 当
+`EvidenceBundle` 读，所以 prompt 变成和 planner/critic 同形状的 JSON 契约；`{"items":[]}`
+是允许的答案，解析不了则让节点失败，因为把"读不出"降级成"没读到"，下一个节点会在沉默上
+写出一份有模有样的报告。
+
+**`synthesize` 从未进入工作区会话。** ADR-028 的工作区在生产路径上 100% 不可用：
+`synthesize` 广告了 `workspace_list / read / write`，模型也确实调，但每一次都是
+`WorkspaceUnavailableError`，而 run 报告成功。原因是进入会话的 `_workspace_for(...)` 只被
+`artifact_handler` 用了，真 Worker 的 `synthesize` 另建 `synthesis_node` 直接 `run(...)`，
+没有包在会话里，于是 `WorkspaceScope.current()` 是 None——"没有节点进入过的工作区不该被凭空
+创建"这条规则是对的，错的是没人进入。同一分支也因此从不回传 `workspace_version`，一个
+attempt 写进去的东西下一个 attempt 看不见。
+
+**为什么测试没挡住**，ADR-032 §1 单独记了一笔：
+`test_each_server_reaches_the_agent_its_audience_names` 断言的是
+`profile_with_dynamic_tools(...)` 的返回值——那证明了"目录会被交给这个 profile"，没有证明
+"图里那个节点会用这个 profile 跑起来"。一个只测装配、不测调用的断言，正是这类缺陷的藏身处。
+新测试因此都走真的执行路径：工作区那条断言的是真的 `WorkspaceWriteTool` 而不是 scope 变量，
+因为线上撞到的是工具，不是变量。
+
+**真实验收**（`task_d3dc69b3…`，DeepSeek + 本机 PostgreSQL/Qdrant，由该增量作者执行）：
+`research_external` 的 `RunStarted` 带两个工具名，同一 run 里 `mcp_web_fetch_page` 走完
+`ToolProposed → PermissionResolved → ToolStarted → ToolCompleted`，读到的正文成为一条
+`source="external"` 且 URL 就是被读那页的证据，writer 的报告从它写出来；同一个 Task 里
+`synthesize` 的 `workspace_list` 是 `ToolCompleted`。`docs/web-mcp-local.md` §5 的第 1、2 条
+自此是事件流里的事实；**第 3 条（download 落库）仍未真跑**。同一次验收里 `workspace_write`
+仍被拒，但那是 `missing_permission_scope`——提交的 principal 没有 `workspace:write`，与这两个
+提交无关。
+
+一条实测出来的成本事实：**默认 token 上限装不下会读网页的节点。** 一页正文 20–50 KB，两次读
+约 28000 tokens，而 `multi_agent.max_tokens_per_agent_invocation` 默认 16000 会让 run 停在
+半句 JSON 上（`budget_exceeded: token_budget`）——工具全部成功、节点仍然失败。默认值不动，
+只有 `config/config.web-local.toml` 提到 120000。这不是新约束，而是 ADR-030 那条约束第一次
+遇到会读东西的节点。
+
+## 2026-08-09 WP15 阶段三：只读取用外部世界（WP14-02，已完成）
+
+[ADR-027](./adr/0027-read-outward-write-inward.md) 的四个 PR 全部合入，逐项计划见
+[read-outward-plan.md](./read-outward-plan.md)。配置 schema `1.9 → 1.10`。
+
+**PR-1 SSRF 从字面地址换成解析后校验（#83）。** 计划里明说这条必须最先做且独立成 PR：
+后面两个 PR 让模型能自己命名 URL，那一刻起这个缺口从"要先污染搜索引擎索引"变成"往网页里
+写一句话"——模型的输入里有检索到的网页文本，那是不受信任的内容。新增
+`adapters/research/address_guard.py`，规则是**默认拒绝**而不是黑名单：只有全局可路由的地址
+放行，回环、链路本地、私有、唯一本地、CGNAT、benchmarking、文档、未指定、组播全部落在补集
+里。黑名单是要有人记得去扩的列表，`is_global` 是上游已经在维护的那个的补集。
+
+两处 `is_global` 单独不够，各配一条测试：**组播的 `is_global` 是 True**，`224.0.0.1` 和
+`ff02::1` 都会被"只看 is_global"的实现放行；IPv4-mapped、6to4、Teredo 里嵌的 v4 单独再判
+一次。**一个主机名按它最差的那个地址判**——这里不决定客户端会连哪个，所以一条私有答案不会
+被同组的公网答案洗白。**重定向改成在适配器里跟，逐跳过闸**：原来是 `follow_redirects=True`，
+等于把目的地的选择权交给客户端，一个公网 URL 回 `302 Location: http://169.254.169.254/`
+就是同一个 SSRF 多走一步。
+
+没关上的部分写在明处：这里解析一次、HTTP 客户端连接时还会再解析一次，所以
+**DNS rebinding 不在本次防护范围内**；关掉它要改传输层（连已校验的地址 + Host 头）。
+ADR-027 §3.2 针对的"模型被诱导去命名内网 URL"是完全覆盖的，一个主动配合攻击者的解析器不是。
+
+**PR-2 只读取用的 MCP server（#84）。** 新增 `apps/web_mcp/`，形状照抄 `apps/word_mcp/`：
+无路径、无租户、无所有者字段，不认识工作区。**两个工具而不是一个带模式的工具**——PDF 走
+HTML 抽取会变成一团乱码文本，而那读起来像一次成功的读取，所以 `fetch_page` 遇到非文本
+content-type 直接按名字拒绝并点名 `download_document`。`download_document` 的 8 MiB 上限压在
+`policy.max_tool_result_bytes` 默认的 10 MiB 之下，这样拒绝发生在这里、带着说明限额的理由，
+而不是等整个文件过完线之后在适配器边界变成一句 "result too large"。`open_world_hint` 是
+**True**——一个 URL 会答什么不是本进程能预言的，写 False 是好看而不是诚实。逐跳过闸的循环
+抽成 `adapters/research/guarded_fetch.py`，第二个调用方到场是抽它的理由。
+
+**PR-3 哪个 server 的工具进哪个 Agent 由配置声明（#85）。** `[[mcp.servers]]` 新增
+`audience`（`research` / `synthesis`）。改的是"按什么分配"而不是"多给一个 profile"：让读网页
+属于 `researcher_external` 而渲染文档属于 `writer` 的，是这个工具用来干什么，不是它走 MCP。
+沙箱在这次 rebase 里**合并进同一个形状**而不是并排放着——它就是第三种 audience，两处并行的
+形状换成一处。默认值 `synthesis` 是**防回归**：这个字段出现之前写的每一份配置都意味着
+synthesis，默认成 research 会在升级时把 Word 渲染器从 writer 身上悄悄挪走。
+**audience 不改变授权信封**——信封仍列出全部已配置的名字（信封是 Task 的上限，audience 是哪个
+Agent 够得到它），有一条测试钉住两种 audience 投影出的信封逐字节相同。**profile 按注册表
+加宽，不按配置**：启动时连不上的 server 什么都不贡献，按配置加宽会让节点去请求一个
+ToolGateway 解析不到的工具，那是"节点必崩"而不是"少一个能力"。
+
+**PR-4 本地 profile 与真实验收（#86）。** 新增 `config/config.web-local.toml`、
+[本地 Web MCP 指南](./web-mcp-local.md)、`scripts/dev.sh` 的 `web-server / web-check /
+web-api / web-worker`。探测脚本从复制改成泛化（`smoke_word_mcp.py` → `smoke_mcp_server.py`
+加 `--label`）。web 与 word 是两份 profile 文件而不是一份：每一份都把自己的工具名冻进每个
+新提交 Task 的授权信封，合成一份等于把每个 Task 同时按两者加宽。
+
+手册 §5 四条真实验收里，**第 4 条（拿掉 `mcp:web` 后同一工具在 Gateway 被拒）完全由策略引擎
+决定，因此写成了 `tests/adapters/test_mcp_scope_refusal.py`** 而不是留成一条没人会重复的手工
+步骤。它走真的 `ToolGateway` 而不是直接调策略引擎——手册说的是"Gateway 拒绝"，而 Gateway 才是
+Task 真正撞上的东西；只调引擎只能证明规则存在，证明不了有路由到它。同时断言两件事：面向模型
+的错误码只说 `policy_denied`，而**是哪个 scope 缺了留在事件流的 `PermissionResolved` 里**——
+运维诊断不了的拒绝是一张工单，而向模型报出内部 scope 名是给操纵它的人提示。
+
+**本阶段明确不做**：填表、点击、任何 POST；驱动桌面软件界面；JS 渲染页面与截图（需要浏览器
+内核，ADR-027 §3.5）——**SPA 页面取不到正文是已知边界不是 bug**；放宽 `retryable_effects`。
+
+### 2026-08-09 全仓门禁复核（`main@a4dea2b`）
+
+本节数字是在 `main@a4dea2b`（PR #87 合并后）重新实测的，不是各增量当时的门禁值：
+
+```text
+pytest（无外部服务，--ignore=tests/e2e）  1784 passed /  597 skipped
+tests/e2e                                    3 passed /   11 skipped
+tests/architecture + tests/config           114 passed
+ruff check                                 passed
+ruff format --check                        passed（421 files）
+pyright                                    0 errors / 0 warnings
+```
+
+**上面这一组是在本机、没有外部服务时跑的**，因此 597 与 11 项环境跳过只能报告为跳过。
+含 `tests/e2e` 的全仓为 1787 passed / 608 skipped，与 PR #87 提交信息里的数字一致。
+
+**但"没有真实服务的证据"这个说法此前一直低报了自己。** CI 有一个独立 job
+（`Migrations, PostgreSQL and Qdrant-backed stores`）在**每个 PR 上**对着真实
+PostgreSQL 16 与 Qdrant 跑 `tests/contracts tests/persistence tests/api tests/vector`，
+并先 `alembic upgrade head`。本文档此前只写"环境跳过"，读起来像这些不变量从未在 CI 里被
+执行过，而它们一直在被执行：
+
+```text
+CI service-backed job（真实 PostgreSQL + Qdrant）   920 项，其中 2 项环境跳过
+```
+
+2 项跳过：一项是只在非锁定读路径上成立的 PostgreSQL 契约，一项需要 `embedding` extra 与
+本地 BGE 权重——CI 不装该 extra，这是它与本机全量的唯一差别。
+
+**这个 job 不是每次都全绿，而原因不是基础设施抖动。** 写这份文档的 PR 上，同一个 job 连跑
+两次得到 `918 passed / 2 skipped`（[run 31351527183](https://github.com/he-zi-qiang/agent-workbench/actions/runs/31351527183)）
+和 `1 failed / 917 passed / 2 skipped`（[run 31351722239](https://github.com/he-zi-qiang/agent-workbench/actions/runs/31351722239)），
+两次之间只差文档改动。失败的那条是
+`tests/vector/test_tied_score_order.py::test_the_hybrid_and_dense_paths_agree_on_the_tie_break`，
+断言 dense 与 hybrid 两条路径对并列项给出同一个次序——**它偶发失败正是本文件多处记录的
+"并列检索分数没有确定性次序"这个已知缺口的直接表现**，不是需要 quarantine 的坏测试。
+把它写成"918 passed"会让这个 job 看起来比实际稳定，也会掩盖一条真实缺陷；修法是在适配器
+边界给并列项定序（独立变更），在那之前这里如实记录它会红。
+
+这一组**不覆盖** `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径，所以它不能替代
+上一节那次真实 Task 验收，两者也不能相加。三组数字来自三种环境，只能分别引用。
+
 ## 2026-08-09 WP15 阶段一收尾与阶段二（一次性沙箱）
 
 阶段一（ADR-028 任务工作区）此前停在组合根前面一步：`agent_profiles` 与授权信封都点名了
@@ -606,7 +759,7 @@ embedding/sparse 权重，1 项是只适用于非锁定 recovery read 的契约�
 
 - [架构与技术选型基线 v1.3](./architecture-baseline.md)；
 - [代码实施计划 v1.0](./implementation-plan.md)；
-- [配置管理契约 schema 1.6](./configuration.md)；
+- [配置管理契约](./configuration.md)（当前 schema `1.10`，每一次抬升在该文件里对应一条 ADR）；
 - [2026-07-25 仓库核验报告](./repository-audit-2026-07-25.md)；
 - [2026-07-27 仓库复核报告](./repository-audit-2026-07-27.md)。
 

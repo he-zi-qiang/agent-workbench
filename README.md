@@ -20,8 +20,12 @@ React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈�
 （无接地对话形态、运行步骤透明度、外部检索、Chat 兜底分支联网、工具额度语义、
 自由回答也能联网）已合入主线；MCP 增量把配置 schema 从 `1.7` 升到 `1.8`，用显式
 remote-tool allowlist 保证 API 提交与 Worker 启动发现得到同一组可审计名字。
-WP15 已落地前两个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的任务工作区，与
-[ADR-029](docs/adr/0029-ephemeral-sandbox.md) 的一次性沙箱（schema `1.8` → `1.9`）。
+WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的任务工作区、
+[ADR-029](docs/adr/0029-ephemeral-sandbox.md) 的一次性沙箱（schema `1.8` → `1.9`），与
+[ADR-027](docs/adr/0027-read-outward-write-inward.md) 的只读取用外部世界
+（schema `1.9` → `1.10`，PR #83–#86）。随后
+[ADR-032](docs/adr/0032-the-external-researcher-is-an-agent.md) 补上了这条线上最后一段
+没接通的地方：`researcher_external` 拿到工具时真的跑 agent 循环（PR #87）。
 最新实现证据和历史增量分开记录在 [实施状态](docs/status.md)；下列能力均有代码或
 测试作为依据：
 
@@ -86,6 +90,22 @@ WP15 已落地前两个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   的前提，不是可调的加固项。Task 侧的 `sandbox_run` 从工作区读输入、把产物写回工作区，
   沙箱进程自己不认识工作区、租户和所有者。默认关闭；无容器运行时的部署少一个能力，而不是
   起不来。
+- **只读取用外部世界 Optional Lab：**`web_mcp` 的 `fetch_page` 与 `download_document` 都是
+  GET、都不带 `operation_key`。取用前先过**解析后**的地址闸门：只有全局可路由的地址放行，
+  其余（含组播与 `169.254.169.254`）落在 `is_global` 的补集里——黑名单要有人记得去扩，补集
+  不用；重定向在适配器里逐跳过闸，而不是把目的地的选择权交给 HTTP 客户端。**DNS rebinding
+  明确不在防护范围内**，关掉它要改传输层。两个工具而不是一个带模式的工具：PDF 走 HTML 抽取
+  会得到一团读起来像成功的乱码。
+- **哪个 server 的工具进哪个 Agent 由配置声明：**`[[mcp.servers]].audience` 说的是用途
+  （`research` / `synthesis`）而不是协议，于是再加一个读取器或渲染器是改配置不是改 profile
+  代码。audience **不改变授权信封**——信封是 Task 的上限，audience 是哪个 Agent 够得到它；
+  profile 按**实际注册到的**工具加宽，不按配置，否则节点会去请求一个 Gateway 解析不到的工具。
+- **外部研究节点在拿到工具时是一个 Agent（ADR-032）：**改动是纯加法——保留原来那次确定性
+  搜索，仅当这个 Worker 真注册了 research 受众的工具时再跑一次带工具的 agent run，两半的
+  证据用图自己的 fan-in reducer 合并。目录为空的部署一步不多走。它交出的必须是 JSON 证据
+  条目而不是散文，因为 `synthesize` 读的是 `EvidenceBundle`；`{"items":[]}` 是允许的答案，
+  解析不了则让节点失败——把"读不出"降级成"没读到"，下一个节点会在沉默上写出一份有模有样的
+  报告。
 - **A/B 已完成：**Task 工作流具有显式成功/失败终态和正确的 revision 预算语义；
   Task 提交使用 tenant-scoped 幂等键与输入 fingerprint，API 查询按 owner/tenant
   失败隐藏；
@@ -162,12 +182,29 @@ WP15 已落地前两个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   PostgreSQL + Qdrant 下为 `1821 passed / 11 skipped`（11 项需要 BGE 权重）；
   两组数字来自不同环境，只能分别引用，不能相加。
 - 沙箱不联网、不支持跨调用状态、不做 GPU，也不保证逐字节确定性重放（脚本自己可以用
-  `time.time()`/`random`）；WP15 的阶段三到五（只读取用网页与下载、成本与时限预算、
-  第二张图 `v2_general`）尚未开始。
-- 本次 MCP 增量门禁为：MCP Adapter + 协议—Runtime E2E `37 passed`，无外部服务全仓
-  `1540 passed / 597 skipped`，E2E 目录 `1 passed / 11 skipped`；Ruff、Pyright、
-  架构/配置、锁文件与许可证门禁通过。当前 Compose 未运行，597/11 项环境跳过不能描述成
-  已运行的 PostgreSQL/Qdrant/BGE 验证。
+  `time.time()`/`random`）。只读取用不做填表、点击、任何 POST，也不驱动桌面软件界面；
+  JS 渲染的页面与截图需要浏览器内核，按 ADR-027 §3.5 明确不做——**SPA 页面取不到正文是
+  已知边界不是 bug**。WP15 的**阶段四**（成本与时限成为主约束、`workspace_edit`、
+  `workspace_grep`）与**阶段五**（第二张图 `v2_general`）尚未开始；计划文档说明阶段四不是
+  可选项：工具装齐而预算不变，一个真在迭代的节点会在 12 步上撞墙，症状很容易被误读成模型
+  不行。
+- 一条实测出来的成本边界：会读网页的节点装不进默认 token 上限。一页正文 20–50 KB，两次读
+  约 28000 tokens，而 `multi_agent.max_tokens_per_agent_invocation` 默认 16000 会让 run 停在
+  半句 JSON 上——工具全部成功、节点仍然失败。默认值不动，只有 `config/config.web-local.toml`
+  提到 120000。
+- 当前门禁（`main@a4dea2b` 实测）：无外部服务 `--ignore=tests/e2e` 为
+  `1784 passed / 597 skipped`，`tests/e2e` 为 `3 passed / 11 skipped`，架构与配置
+  `114 passed`；Ruff format/lint 通过（421 files），Pyright `0 errors / 0 warnings`。
+  这一组在本机没有外部服务时跑，597/11 项环境跳过只能报告为跳过。
+- **每个 PR 都有一组真实服务证据**：CI 的 `Migrations, PostgreSQL and Qdrant-backed stores`
+  job 先 `alembic upgrade head`，再对着真实 PostgreSQL 16 与 Qdrant 跑
+  `tests/contracts tests/persistence tests/api tests/vector`，共 920 项、2 项环境跳过
+  （其中 1 项需要 `embedding` extra 与本地 BGE 权重，CI 不装该 extra）。它不覆盖
+  `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径。三组数字来自三种环境，
+  只能分别引用，不能相加。
+  这个 job **不是每次都全绿**：`test_the_hybrid_and_dense_paths_agree_on_the_tie_break`
+  会偶发失败，而它失败的原因就是下面那条"已知的可复现性缺口"——并列分数没有确定性次序。
+  如实记下来，是因为把它写成一个稳定的通过数字，既高估了这个 job，也掩盖了一条真实缺陷。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
 > 受控的本机开发，不得暴露到局域网或公网。监听地址以及 Compose 端口映射均限制为
