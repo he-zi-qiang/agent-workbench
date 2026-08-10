@@ -56,10 +56,12 @@ from agent_workbench.domain.evidence import (
     ExternalTitle,
 )
 from agent_workbench.domain.identifiers import new_agent_run_id, new_id
+from agent_workbench.domain.messages import Message, assistant_message, user_message
 from agent_workbench.domain.policies import ExecutionContext, PrincipalContext
 from agent_workbench.domain.runs import (
     AgentOutcome,
     AgentRunRequest,
+    BudgetUsage,
     RunBudget,
     TraceContext,
 )
@@ -108,6 +110,18 @@ def _utc_now() -> datetime:
 
 class StructuredOutputError(ValueError):
     """A model response is not the exact structured value its node requires."""
+
+
+class StructuredOutputFramingError(StructuredOutputError):
+    """The message was not exactly one JSON object, whatever it contained.
+
+    Separated from its parent because this is the one failure a second turn can
+    fix, and the boundary is what keeps that turn honest (ADR-034 §3.2). A
+    message with a sentence in front of its object says nothing about whether
+    the answer is right; a message that *is* one object but names the wrong
+    draft, or an item with no locator, is a claim the model made and got wrong.
+    Asking again there would be nudging a model toward an answer that passes.
+    """
 
 
 class TaskNodeRunFailedError(RuntimeError):
@@ -557,6 +571,79 @@ def build_task_handlers(
         ),
     )
 
+    async def _decoded[T](
+        node: TaskNodeId,
+        state: TaskState,
+        invocation: TaskNodeInvocation,
+        *,
+        request_for: Callable[[TaskRunContext, tuple[Message, ...]], AgentRunRequest],
+        decode: Callable[[str], T],
+        reason: str,
+    ) -> tuple[T, dict[str, Any]]:
+        """Run one structured node, and ask once for the object alone.
+
+        The decoder is not loosened by any of this (ADR-034 §3.1): what the node
+        accepts is still exactly one JSON object and nothing else. A message
+        that was not one buys a second turn, and a second turn that is not one
+        either fails the node -- so an answer nobody could read still cannot
+        become "read nothing", which is what ADR-032 §3.3 is for.
+
+        Every structured node in either graph runs through here, which is the
+        point: `plan`, `critic`, `review` and `research_external` share one
+        strict decoder, so they share its exposure, and a fix at three of the
+        four would be waiting for whichever model narrates at the fourth.
+
+        `request_for` receives the run's own context because the corrective turn
+        resolves an invocation of its own: it is a second spend, and it must
+        appear on the event stream under its own run id and re-verify this
+        Worker's claim before making it.
+        """
+
+        outcome = await executor.run(
+            request_for(invocation.context, ()),
+            invocation.events,
+            invocation.cancellation,
+        )
+        charged = _charged_state(state, outcome)
+        _require_completed(node, outcome, charged)
+        try:
+            return decode(outcome.output_text), _outcome_update(outcome)
+        except StructuredOutputFramingError:
+            # The only failure a restatement can address: how the message was
+            # sent, not what it claimed. Fall through to the second turn.
+            pass
+        except StructuredOutputError as error:
+            # Everything else the decoder refuses is a claim the model made and
+            # got wrong, and asking again there is nudging rather than asking.
+            raise TaskNodeRunFailedError(
+                node=node, outcome=outcome, state=charged, reason=reason
+            ) from error
+
+        correction = await invocations.resolve(state, node)
+        restated = await executor.run(
+            # Stripped of tools here rather than at each call site, because it
+            # is a property of the restatement and not of the node asking for
+            # one: a turn that can reach nothing cannot come back with material
+            # the first run did not already produce, so the worst it can do is
+            # repeat an answer that was already on the record (ADR-034 §3.3).
+            # The reviewers hold their working set statically, so a call site
+            # that had to remember this would eventually not.
+            request_for(
+                correction.context, _restatement_messages(outcome.output_text)
+            ).model_copy(update={"tool_names": ()}),
+            correction.events,
+            correction.cancellation,
+        )
+        charged = _charged_state(charged, restated)
+        _require_completed(node, restated, charged)
+        try:
+            value = decode(restated.output_text)
+        except StructuredOutputError as error:
+            raise TaskNodeRunFailedError(
+                node=node, outcome=restated, state=charged, reason=reason
+            ) from error
+        return value, _outcome_update(outcome, restated)
+
     @contextmanager
     def _workspace_for(
         node: TaskNodeId, state: TaskState, invocation: TaskNodeInvocation
@@ -652,30 +739,22 @@ def build_task_handlers(
         Markdown artifact anyway.
         """
 
-        outcome = await executor.run(
-            build_request(
+        bundle, update = await _decoded(
+            "research_external",
+            state,
+            invocation,
+            request_for=lambda context, extra: build_request(
                 "research_external",
                 state,
-                invocation.context,
+                context,
+                ProjectedContext(extra_messages=extra),
                 dynamic_tools=dynamic_tools,
             ),
-            invocation.events,
-            invocation.cancellation,
+            decode=lambda text: decode_external_evidence_output(
+                text, task_id=state.task_id
+            ),
+            reason="external researcher JSON did not satisfy the evidence schema",
         )
-        charged = _charged_state(state, outcome)
-        _require_completed("research_external", outcome, charged)
-        try:
-            bundle = decode_external_evidence_output(
-                outcome.output_text, task_id=state.task_id
-            )
-        except StructuredOutputError as error:
-            raise TaskNodeRunFailedError(
-                node="research_external",
-                outcome=outcome,
-                state=charged,
-                reason="external researcher JSON did not satisfy the evidence schema",
-            ) from error
-        update = _outcome_update(outcome)
         if bundle is None:
             # Read nothing it could stand behind. That is a real outcome of a
             # research branch, not a failure: the fan-in is allowed to be empty
@@ -765,45 +844,31 @@ def build_task_handlers(
 
     async def plan(state: TaskState) -> Mapping[str, Any]:
         invocation = await invocations.resolve(state, "plan")
-        outcome = await executor.run(
-            _structured_request("plan", state, invocation.context),
-            invocation.events,
-            invocation.cancellation,
+        steps, update = await _decoded(
+            "plan",
+            state,
+            invocation,
+            request_for=lambda context, extra: _structured_request(
+                "plan", state, context, extra
+            ),
+            decode=decode_plan_output,
+            reason="planner JSON did not satisfy the plan schema",
         )
-        charged = _charged_state(state, outcome)
-        _require_completed("plan", outcome, charged)
-        try:
-            steps = decode_plan_output(outcome.output_text)
-        except StructuredOutputError as error:
-            raise TaskNodeRunFailedError(
-                node="plan",
-                outcome=outcome,
-                state=charged,
-                reason="planner JSON did not satisfy the plan schema",
-            ) from error
-        return _outcome_update(outcome) | {
-            "plan": tuple(step.model_dump() for step in steps),
-        }
+        return update | {"plan": tuple(step.model_dump() for step in steps)}
 
     async def critic(state: TaskState) -> Mapping[str, Any]:
         invocation = await invocations.resolve(state, "critic")
-        outcome = await executor.run(
-            _structured_request("critic", state, invocation.context),
-            invocation.events,
-            invocation.cancellation,
+        review, update = await _decoded(
+            "critic",
+            state,
+            invocation,
+            request_for=lambda context, extra: _structured_request(
+                "critic", state, context, extra
+            ),
+            decode=lambda text: decode_review_output(text, state=state),
+            reason="critic JSON did not satisfy the review schema",
         )
-        charged = _charged_state(state, outcome)
-        _require_completed("critic", outcome, charged)
-        try:
-            review = decode_review_output(outcome.output_text, state=state)
-        except StructuredOutputError as error:
-            raise TaskNodeRunFailedError(
-                node="critic",
-                outcome=outcome,
-                state=charged,
-                reason="critic JSON did not satisfy the review schema",
-            ) from error
-        return _outcome_update(outcome) | {"review_result": review.model_dump()}
+        return update | {"review_result": review.model_dump()}
 
     async def work(state: TaskState) -> Mapping[str, Any]:
         """v2's one working node: a full tool loop, bounded like every other.
@@ -855,24 +920,22 @@ def build_task_handlers(
         """
 
         invocation = await invocations.resolve(state, "review")
+        # The session wraps both turns. The corrective one holds no tools and so
+        # cannot enter the working set, but a node that left the session between
+        # them would be pinning a different version for each -- and the verdict
+        # this decodes is about the version the first turn read.
         with _workspace_for("review", state, invocation):
-            outcome = await executor.run(
-                _structured_request("review", state, invocation.context),
-                invocation.events,
-                invocation.cancellation,
-            )
-        charged = _charged_state(state, outcome)
-        _require_completed("review", outcome, charged)
-        try:
-            decoded = decode_review_output(outcome.output_text, state=state)
-        except StructuredOutputError as error:
-            raise TaskNodeRunFailedError(
-                node="review",
-                outcome=outcome,
-                state=charged,
+            decoded, update = await _decoded(
+                "review",
+                state,
+                invocation,
+                request_for=lambda context, extra: _structured_request(
+                    "review", state, context, extra
+                ),
+                decode=lambda text: decode_review_output(text, state=state),
                 reason="reviewer JSON did not satisfy the review schema",
-            ) from error
-        return _outcome_update(outcome) | {"review_result": decoded.model_dump()}
+            )
+        return update | {"review_result": decoded.model_dump()}
 
     async def export_report(state: TaskState) -> Mapping[str, Any]:
         if export is None:
@@ -1099,10 +1162,17 @@ def _merge_node_updates(
 
 
 def _json_object(text: str) -> dict[str, Any]:
-    """Reject fences, tails, duplicate keys and non-standard JSON constants."""
+    """Reject fences, tails, duplicate keys and non-standard JSON constants.
+
+    Every refusal here is a framing one: the message the model sent was not
+    exactly one JSON object. Nothing in this function reads an object out of a
+    message that also contains something else -- a model can describe, quote or
+    refuse an object as easily as it can answer with one, and no parser can
+    tell those apart (ADR-034 §2).
+    """
 
     if not text or not text.lstrip().startswith("{") or "```" in text:
-        raise StructuredOutputError("structured output must be one JSON object")
+        raise StructuredOutputFramingError("structured output must be one JSON object")
     try:
         value = json.loads(
             text,
@@ -1110,9 +1180,11 @@ def _json_object(text: str) -> dict[str, Any]:
             parse_constant=_reject_json_constant,
         )
     except (TypeError, ValueError, json.JSONDecodeError) as error:
-        raise StructuredOutputError("structured output is not valid JSON") from error
+        raise StructuredOutputFramingError(
+            "structured output is not valid JSON"
+        ) from error
     if not isinstance(value, dict):
-        raise StructuredOutputError("structured output must be a JSON object")
+        raise StructuredOutputFramingError("structured output must be a JSON object")
     return cast("dict[str, Any]", value)
 
 
@@ -1174,6 +1246,7 @@ def _structured_request(
     node: TaskNodeId,
     state: TaskState,
     context: TaskRunContext,
+    extra_messages: tuple[Message, ...] = (),
 ) -> AgentRunRequest:
     """The planner's and the reviewers' runs, through the same boundary as the rest.
 
@@ -1195,6 +1268,7 @@ def _structured_request(
         ProjectedContext(
             draft_ref=state.draft_ref if reviewing else None,
             revision_number=state.revision_count if reviewing else None,
+            extra_messages=extra_messages,
         ),
     )
 
@@ -1214,12 +1288,43 @@ def _uses_workspace(node: TaskNodeId) -> bool:
     return any(name in WORKSPACE_TOOLS for name in profile.tool_names)
 
 
-def _outcome_update(outcome: AgentOutcome) -> dict[str, Any]:
-    """Return this node's deltas so parallel research can be merged safely."""
+def _restatement_messages(answer: str) -> tuple[Message, ...]:
+    """The corrective turn: the message that could not be read, and the ask.
 
+    The unreadable answer is replayed as what it was -- the model's own turn --
+    so the object it must send again is the one it already reached rather than
+    one this code went looking for. A run with an empty answer replays nothing,
+    because there is no turn to quote.
+    """
+
+    asked = user_message(
+        "Your last message was not exactly one JSON object, so it could not be "
+        "read. Send that JSON object again as your entire message: no "
+        "narration before or after it, no Markdown, no code fence. Restate the "
+        "answer you already reached and add nothing to it."
+    )
+    if not answer:
+        return (asked,)
+    return (assistant_message(text=answer), asked)
+
+
+def _outcome_update(*outcomes: AgentOutcome) -> dict[str, Any]:
+    """Return this node's deltas so parallel research can be merged safely.
+
+    Several, because a structured node can spend more than one run: a
+    corrective turn is a run of its own and both were charged for. The usage
+    channel adds deltas, so a node that reported only its last run would hand
+    the graph a bill missing everything before it.
+    """
+
+    usage = BudgetUsage()
+    for outcome in outcomes:
+        usage = usage.merged(outcome.usage)
     return {
-        "agent_outcome_refs": (outcome.agent_run_id,),
-        "budget_usage": outcome.usage.model_dump(),
+        "agent_outcome_refs": merge_refs(
+            *((outcome.agent_run_id,) for outcome in outcomes)
+        ),
+        "budget_usage": usage.model_dump(),
     }
 
 
@@ -1256,6 +1361,7 @@ __all__ = [
     "EventSinkFactory",
     "EvidenceAuthorizationChangedError",
     "StructuredOutputError",
+    "StructuredOutputFramingError",
     "TaskExportHandlers",
     "TaskExportPreconditionError",
     "TaskExportUnavailableError",

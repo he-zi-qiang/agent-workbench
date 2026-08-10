@@ -31,3 +31,4 @@
 | [ADR-031 通用任务走第二张图](./0031-a-second-graph.md) | 不是"写调研报告"的任务该走什么形状；模型能不能决定自己的步骤顺序 | 接受 |
 | [ADR-032 外部研究节点在拿到工具时是一个 Agent](./0032-the-external-researcher-is-an-agent.md) | `research_external` 跑什么；ADR-027 给它的动态工具怎样才真的到得了模型 | 接受，兑现 ADR-027 §3.3 |
 | [ADR-033 融合仍然只发生一次，但那一次归我们做](./0033-fusion-ranks-are-ours.md) | 混合检索为什么跨重建索引不可复现；RRF 的臂内名次该由谁决定 | 接受，取代 ADR-016 中"融合只在 Qdrant 里"一条 |
+| [ADR-034 读不出来的时候再问一次](./0034-a-structured-node-asks-once-more.md) | 答案外面裹了一句话时结构化节点该怎么办；ADR-032 §3.3 的严格严在哪一件事上 | 接受，收窄并兑现 ADR-032 §3.3 |

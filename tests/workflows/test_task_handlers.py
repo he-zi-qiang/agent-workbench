@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -51,6 +52,7 @@ from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.task_registry import ExecutionLease, TaskRegistry, TaskRun
 from agent_workbench.ports.tools import ToolInvocation
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError, TaskRunContext
+from agent_workbench.workflows.agent_profiles import WORKSPACE_TOOLS
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.task_handlers import (
     V1_HANDLER_NODES,
@@ -319,6 +321,121 @@ def test_critic_binds_its_decision_to_the_current_draft_and_revision() -> None:
     ):
         with pytest.raises(StructuredOutputError):
             decode_review_output(invalid, state=state)
+
+
+@dataclass
+class _SequencedExecutor:
+    """Replies to a node in order, so its second run can differ from its first.
+
+    The last reply repeats rather than running out, so a node that kept asking
+    would keep getting the same answer and the request count would not stop.
+    """
+
+    replies: dict[str, list[str]]
+    requests: list[AgentRunRequest] = dataclass_field(default_factory=list)
+
+    async def run(
+        self, request: AgentRunRequest, emit: object, cancellation: object
+    ) -> AgentOutcome:
+        del emit, cancellation
+        self.requests.append(request)
+        pending = self.replies[str(request.trace.graph_node_id)]
+        return AgentOutcome(
+            agent_run_id=request.trace.agent_run_id,
+            status="completed",
+            stop_reason="completed",
+            output_text=pending.pop(0) if len(pending) > 1 else pending[0],
+            usage=BudgetUsage(steps=1),
+        )
+
+
+def test_a_narrated_plan_is_asked_for_the_object_alone() -> None:
+    """The planner shares the external researcher's decoder, and its exposure.
+
+    Nothing here is specific to reading pages: any of these nodes can be handed
+    a model that thinks out loud in front of its answer, and the correction
+    belongs where the strictness does rather than at one node (ADR-034 §3.1).
+    """
+
+    async def scenario() -> tuple[_SequencedExecutor, dict[str, Any]]:
+        narrated = f"Three steps should do it.\n\n{_text_for('plan')}"
+        executor = _SequencedExecutor({"plan": [narrated, _text_for("plan")]})
+        handlers = build_task_v1_handlers(
+            executor=cast(Any, executor),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task())),
+        )
+        return executor, dict(await handlers["plan"](_state()))
+
+    executor, update = _run(scenario)
+
+    assert update["plan"][0]["step_id"] == "step_1"
+    assert len(executor.requests) == 2
+    # Two runs, so two run ids and the cost of both.
+    assert len(update["agent_outcome_refs"]) == 2
+    assert update["budget_usage"]["steps"] == 2
+    corrective = executor.requests[1]
+    assert corrective.messages[-2].role == "assistant"
+    assert "one JSON object" in corrective.messages[-1].text()
+
+
+def test_a_plan_that_was_already_one_json_object_buys_no_second_run() -> None:
+    """The control, for the planner. No correction where none is needed."""
+
+    async def scenario() -> _SequencedExecutor:
+        executor = _SequencedExecutor({"plan": [_text_for("plan")]})
+        handlers = build_task_v1_handlers(
+            executor=cast(Any, executor),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task())),
+        )
+        await handlers["plan"](_state())
+        return executor
+
+    executor = _run(scenario)
+
+    assert len(executor.requests) == 1
+
+
+def test_a_critic_that_reviewed_the_wrong_draft_is_not_asked_again() -> None:
+    """The boundary, on the node where getting it wrong would matter most.
+
+    A review naming another draft *is* one JSON object. What it is not is the
+    value this node requires -- and a corrective turn there would be nudging a
+    model toward an answer that passes rather than asking it to say the answer
+    it already gave (ADR-034 §3.2).
+    """
+
+    async def scenario() -> tuple[_SequencedExecutor, _SequencedExecutor]:
+        state = _state(draft_ref="draft_1", revision_count=0)
+        review = _text_for("critic").replace("PLACEHOLDER", "draft_1")
+
+        wrong = _SequencedExecutor(
+            {"critic": [review.replace("draft_1", "an_older_draft")]}
+        )
+        handlers = build_task_v1_handlers(
+            executor=cast(Any, wrong),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task())),
+        )
+        with pytest.raises(TaskNodeRunFailedError, match="review schema"):
+            await handlers["critic"](state)
+
+        # The control group: the same node, the same wrong-shaped message plus
+        # narration in front of it. That one *is* corrected.
+        narrated = _SequencedExecutor({"critic": [f"Looks solid.\n\n{review}", review]})
+        corrected = build_task_v1_handlers(
+            executor=cast(Any, narrated),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task())),
+        )
+        assert (await corrected["critic"](state))["review_result"]["decision"] == "pass"
+        return wrong, narrated
+
+    wrong, narrated = _run(scenario)
+
+    assert len(wrong.requests) == 1
+    assert len(narrated.requests) == 2
 
 
 def test_real_handlers_persist_text_only_artifacts_and_complete_the_graph() -> None:
@@ -938,6 +1055,72 @@ def test_the_reviewer_refuses_to_review_before_there_is_work() -> None:
             await handlers["review"](_state())
 
     _run(scenario)
+
+
+def test_a_narrated_verdict_is_asked_for_the_object_alone_at_both_reviewers() -> None:
+    """v2's reviewer shares v1's decoder, so it shares its exposure (ADR-034 §3.4).
+
+    And it is the likelier of the two to need this: the reviewer holds the
+    read-only workspace tools, and a model that has just used tools tends to
+    say what it did before it answers -- which is exactly how the same defect
+    reached a real model at ``research_external``.
+    """
+
+    review = _text_for("critic").replace("PLACEHOLDER", "draft_1")
+    state = _state(draft_ref="draft_1", revision_count=0)
+
+    async def scenario() -> tuple[_SequencedExecutor, dict[str, Any]]:
+        executor = _SequencedExecutor(
+            {"review": [f"The working set looks complete.\n\n{review}", review]}
+        )
+        handlers = build_task_v2_handlers(
+            executor=cast(Any, executor),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(
+                _Registry(
+                    _task(
+                        graph_version="v2_general",
+                        # Without this the profile's tools are narrowed away by
+                        # the envelope and the assertion below would pass on a
+                        # reviewer that never held any.
+                        submitted_authorization_envelope=AuthorizationEnvelope(
+                            allowed_tools=WORKSPACE_TOOLS
+                        ),
+                    )
+                )
+            ),
+        )
+        return executor, dict(await handlers["review"](state))
+
+    executor, update = _run(scenario)
+
+    assert update["review_result"]["decision"] == "pass"
+    assert len(executor.requests) == 2
+    assert update["budget_usage"]["steps"] == 2
+    # The reviewer's tools come from its profile rather than a catalog, so the
+    # restatement is stripped centrally. A second look at the working set could
+    # only produce a different verdict than the one being restated.
+    assert executor.requests[0].tool_names != ()
+    assert executor.requests[1].tool_names == ()
+
+
+def test_a_verdict_that_was_already_one_json_object_buys_no_second_run() -> None:
+    """The control, at the reviewer that holds tools."""
+
+    async def scenario() -> _SequencedExecutor:
+        review = _text_for("critic").replace("PLACEHOLDER", "draft_1")
+        executor = _SequencedExecutor({"review": [review]})
+        handlers = build_task_v2_handlers(
+            executor=cast(Any, executor),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task(graph_version="v2_general"))),
+        )
+        await handlers["review"](_state(draft_ref="draft_1", revision_count=0))
+        return executor
+
+    executor = _run(scenario)
+
+    assert len(executor.requests) == 1
 
 
 def test_a_failed_work_run_keeps_the_usage_it_spent() -> None:
