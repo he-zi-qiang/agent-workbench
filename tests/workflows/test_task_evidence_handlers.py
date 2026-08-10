@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -22,6 +22,7 @@ from agent_workbench.adapters.tools import (
 from agent_workbench.adapters.tools.task_external_research import (
     GatewayExternalEvidence,
 )
+from agent_workbench.adapters.tools.workspace import WorkspaceWriteTool
 from agent_workbench.application.task_research import (
     EvidenceStore,
     ExternalResearchService,
@@ -48,6 +49,7 @@ from agent_workbench.domain.runs import (
     RunBudget,
 )
 from agent_workbench.domain.tasks import TaskState
+from agent_workbench.domain.tools import ToolCall, ToolResult
 from agent_workbench.ports.cancellation import CancellationToken, NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.research import (
@@ -55,6 +57,7 @@ from agent_workbench.ports.research import (
     ExternalEvidenceToolPort,
 )
 from agent_workbench.ports.task_registry import ExecutionLease, TaskRegistry, TaskRun
+from agent_workbench.ports.tools import ToolInvocation
 from agent_workbench.runtime import ToolGateway
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.task_handlers import (
@@ -64,6 +67,7 @@ from agent_workbench.workflows.task_handlers import (
     TaskResearchHandlers,
     build_task_v1_handlers,
 )
+from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 OWNER = PrincipalContext(
     tenant_id="tenant_a", principal_id="user_1", scopes=("external:search",)
@@ -566,6 +570,90 @@ def test_external_researcher_output_that_is_not_evidence_fails_the_node(
             await handlers["research_external"](_state())
 
     _run(scenario)
+
+
+@dataclass
+class _WritingExecutor:
+    """A writer that uses its working set, the way the real one is told to."""
+
+    scope: WorkspaceScope
+    results: list[ToolResult] = field(default_factory=list)
+
+    async def run(
+        self,
+        request: AgentRunRequest,
+        emit: object,
+        cancellation: CancellationToken,
+    ) -> AgentOutcome:
+        del emit
+        cancellation.raise_if_cancelled()
+        if request.trace.graph_node_id == "synthesize":
+            self.results.append(
+                await WorkspaceWriteTool(self.scope).handle(
+                    ToolInvocation(
+                        call=ToolCall(
+                            tool_call_id="toolu_" + "0" * 20,
+                            tool_name="workspace_write",
+                            arguments={"name": "draft.md", "content": "working"},
+                        ),
+                        context=ExecutionContext(
+                            principal=OWNER,
+                            envelope=AuthorizationEnvelope(),
+                            agent_run_id=request.trace.agent_run_id,
+                            policy_identity="policy-v1:test",
+                        ),
+                        cancellation=cancellation,
+                        timeout_seconds=30,
+                    )
+                )
+            )
+        return AgentOutcome(
+            agent_run_id=request.trace.agent_run_id,
+            status="completed",
+            stop_reason="completed",
+            output_text="A grounded synthesis.",
+            usage=BudgetUsage(steps=1),
+        )
+
+
+def test_the_writer_enters_its_working_set_on_the_branch_a_worker_takes() -> None:
+    """The tools were advertised on both branches; the session was on one.
+
+    Asserted through a real workspace tool rather than by inspecting the scope,
+    because `WorkspaceUnavailableError` is what a Task actually hit: the run
+    reported success while every write inside it failed.
+    """
+
+    async def scenario() -> tuple[ToolResult, Mapping[str, Any]]:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        scope = WorkspaceScope()
+        executor = _WritingExecutor(scope)
+        handlers = cast(
+            "dict[str, TaskNodeHandler]",
+            build_task_v1_handlers(
+                executor=cast(Any, executor),
+                artifacts=evidence.artifacts,
+                invocations=_provider(_Registry(_task())),
+                research=TaskResearchHandlers(
+                    internal=cast(InternalResearchService, _Internal(evidence)),
+                    evidence=evidence,
+                    external=cast(ExternalEvidenceToolPort, _External(evidence)),
+                    policy_identity="policy-v1:test",
+                ),
+                workspace_scope=scope,
+            ),
+        )
+        update = await handlers["synthesize"](_state())
+        return executor.results[0], update
+
+    result, update = _run(scenario)
+
+    assert result.status == "ok"
+    # The version the node read back is the one the graph must carry forward;
+    # a write nothing commits is a write the next attempt cannot see.
+    assert update["workspace_version"]
+    # And the session does not outlive the node that entered it.
+    assert update["draft_ref"]
 
 
 @dataclass

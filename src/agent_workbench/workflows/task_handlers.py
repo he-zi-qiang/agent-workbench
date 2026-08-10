@@ -584,13 +584,19 @@ def build_task_v1_handlers(
                 dynamic_tools=dynamic_tools,
             ),
         )
-        report = await synthesis_node.run(
-            "synthesize",
-            state,
-            invocation.context,
-            invocation.events,
-            invocation.cancellation,
-        )
+        # The same session the demo path enters. It is entered here too because
+        # this is the branch a real Worker takes, and the writer's tools were
+        # advertised on both: without it every `workspace_*` call the model
+        # makes fails with `WorkspaceUnavailableError` while the run reports
+        # success (ADR-028 §3.2).
+        with _workspace_for("synthesize", state, invocation) as session:
+            report = await synthesis_node.run(
+                "synthesize",
+                state,
+                invocation.context,
+                invocation.events,
+                invocation.cancellation,
+            )
         try:
             await _confirm_internal_evidence(bundles, invocation, research)
         except EvidenceAuthorizationChangedError as error:
@@ -602,10 +608,13 @@ def build_task_v1_handlers(
             ) from error
         if report.produced_ref is None:  # pragma: no cover
             raise AssertionError("a completed synthesis node has no artifact")
-        return _outcome_update(report.outcome) | {
+        update = _outcome_update(report.outcome) | {
             "draft_ref": report.produced_ref,
             "review_result": None,
         }
+        if session is not None and session.version != state.workspace_version:
+            update["workspace_version"] = session.version
+        return update
 
     async def plan(state: TaskState) -> Mapping[str, Any]:
         invocation = await invocations.resolve(state, "plan")
