@@ -20,6 +20,7 @@ import json
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from pydantic import (
@@ -90,6 +91,10 @@ TaskNodeHandler = Callable[[TaskState], Awaitable[Mapping[str, Any]]]
 EventSinkFactory = Callable[[TaskRunContext], EventSink]
 CancellationFactory = Callable[[TaskRunContext], CancellationToken]
 TaskPrincipalResolver = Callable[[TaskRun], PrincipalContext]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class StructuredOutputError(ValueError):
@@ -236,6 +241,23 @@ class TaskNodeInvocationProvider:
     # because a node with no claim behind it has no authority to spend a budget
     # or write anything.
     scope: TaskExecutionScope = field(default_factory=TaskExecutionScope)
+    # Wall clock for one attempt (ADR-030), or ``None`` to leave the budget's
+    # deadline alone. Applied here rather than baked into ``budget`` because a
+    # deadline is an instant and ``budget`` is built once at composition: a
+    # fixed one would start expiring while the process was still booting, and
+    # every invocation after it would be born already overdue.
+    max_seconds_per_invocation: int | None = None
+    clock: Callable[[], datetime] = field(default=_utc_now)
+
+    def _budget_for_this_attempt(self) -> RunBudget:
+        if self.max_seconds_per_invocation is None:
+            return self.budget
+        return self.budget.model_copy(
+            update={
+                "deadline": self.clock()
+                + timedelta(seconds=self.max_seconds_per_invocation)
+            }
+        )
 
     async def resolve(self, state: TaskState, node: TaskNodeId) -> TaskNodeInvocation:
         lease = self.scope.current()
@@ -265,7 +287,7 @@ class TaskNodeInvocationProvider:
         context = _context_for(
             task,
             node=node,
-            budget=self.budget,
+            budget=self._budget_for_this_attempt(),
             principal=self.principal_for(task),
         )
         return TaskNodeInvocation(

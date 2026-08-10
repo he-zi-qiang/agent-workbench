@@ -29,9 +29,10 @@ from agent_workbench.adapters.tools.export_artifact import (
 from agent_workbench.adapters.tools.external_search import (
     TOOL_NAME as EXTERNAL_SEARCH_TOOL,
 )
-from agent_workbench.bootstrap.settings import Settings
+from agent_workbench.bootstrap.settings import ModelPricingSettings, Settings
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import AuthorizationEnvelope
+from agent_workbench.domain.pricing import ModelPrices
 from agent_workbench.domain.sandbox import SANDBOX_RUN_TOOL
 from agent_workbench.domain.schema import JsonObject
 from agent_workbench.domain.tools import ToolName
@@ -199,6 +200,30 @@ class ModelProfileConfig:
     timeout_seconds: float
     max_retries: int
     tool_calling_required: bool
+    #: What this profile's model charges, when the deployment said. ``None``
+    #: is not "free": it is a process that cannot enforce a cost ceiling, and
+    #: the runtime refuses one rather than accepting a ceiling it will never
+    #: reach.
+    prices: ModelPrices | None
+
+
+def _project_prices(pricing: ModelPricingSettings | None) -> ModelPrices | None:
+    """Carry a configured price list across, or carry the absence of one.
+
+    Absence stays absence. Substituting zeroed rates here would turn "this
+    deployment did not say" into "this deployment says its model is free", and
+    the runtime could no longer tell the two apart -- which is exactly the
+    distinction that decides whether a cost ceiling may be accepted.
+    """
+
+    if pricing is None:
+        return None
+    return ModelPrices(
+        input_micro_usd_per_mtok=pricing.input_micro_usd_per_mtok,
+        output_micro_usd_per_mtok=pricing.output_micro_usd_per_mtok,
+        cache_read_micro_usd_per_mtok=pricing.cache_read_micro_usd_per_mtok,
+        cache_write_micro_usd_per_mtok=pricing.cache_write_micro_usd_per_mtok,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,6 +421,8 @@ class MultiAgentConfig:
     #: The token ceiling for one invocation, which is what stops a single agent
     #: from spending a Task's whole allowance.
     max_tokens_per_agent_invocation: int
+    max_cost_micro_usd_per_agent_invocation: int | None
+    max_seconds_per_agent_invocation: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -623,6 +650,7 @@ def project_task_worker(
                     timeout_seconds=float(profile.timeout_seconds),
                     max_retries=profile.max_retries,
                     tool_calling_required=profile.tool_calling_required,
+                    prices=_project_prices(profile.pricing),
                 )
                 for name, profile in (
                     ("main", settings.model.main),
@@ -652,6 +680,12 @@ def project_task_worker(
             ),
             max_tokens_per_agent_invocation=(
                 settings.multi_agent.max_tokens_per_agent_invocation
+            ),
+            max_cost_micro_usd_per_agent_invocation=(
+                settings.multi_agent.max_cost_micro_usd_per_agent_invocation
+            ),
+            max_seconds_per_agent_invocation=(
+                settings.multi_agent.max_seconds_per_agent_invocation
             ),
         ),
         research=_project_research(settings),
@@ -806,6 +840,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
                     timeout_seconds=float(profile.timeout_seconds),
                     max_retries=profile.max_retries,
                     tool_calling_required=profile.tool_calling_required,
+                    prices=_project_prices(profile.pricing),
                 )
                 for name, profile in (
                     ("main", settings.model.main),

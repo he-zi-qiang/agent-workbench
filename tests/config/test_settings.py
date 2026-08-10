@@ -811,13 +811,21 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     1.9 -> 1.10 is ADR-027: `[[mcp.servers]].audience` decides which agent a
     server's tools reach, so a config file at this version changes which agent
     in a running graph can call what.
+    1.10 -> 1.11 is ADR-030: `runtime.max_steps` widened from 100 to 1000 as
+    the step ceiling stopped being the budget, and `[model.*.pricing]`
+    arrived. The widening is the half that makes this a compatibility break in
+    the direction the pin exists to catch -- a 1.11 file may set
+    `max_steps = 500`, and a 1.10 binary rejects it at validation rather than
+    running it with a different ceiling. The prices are additive, but they
+    decide whether this deployment may enforce a cost ceiling at all, so a
+    file that has them buys behaviour a file that does not cannot ask for.
 
     The pin exists so widening a frozen Literal cannot happen quietly -- this
     test failing *is* the mechanism, and updating it is the last step of the
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.10"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.11"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:

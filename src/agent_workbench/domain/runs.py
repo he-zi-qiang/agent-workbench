@@ -131,7 +131,15 @@ class RunBudget(DomainModel):
     never wrote a word from.
     """
 
-    max_steps: int = Field(ge=1, le=100)
+    # The domain ceiling was 100, from a time when steps were how a run was
+    # budgeted. ADR-030 moves that job to cost and deadline, which grow with
+    # the work rather than with the number of turns it took, and leaves this as
+    # a backstop against a loop that will not terminate. A backstop belongs far
+    # above any real run: at 100 a node that edits a file, greps for the next
+    # site and edits again is stopped mid-task by the guard rather than by its
+    # budget, and the symptom -- "the tools all work, it just never finishes"
+    # -- reads as the model being incapable.
+    max_steps: int = Field(ge=1, le=1000)
     max_tool_calls: int = Field(ge=1, le=500)
     max_total_tokens: int | None = Field(default=None, ge=1)
     max_cost_micro_usd: int | None = Field(default=None, ge=1)
