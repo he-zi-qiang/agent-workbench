@@ -41,13 +41,14 @@ def test_the_committed_gold_set_meets_the_exit_condition() -> None:
     assert len(gold) >= 20
 
 
-def test_every_gold_question_names_a_document_that_exists() -> None:
+def test_every_gold_question_names_documents_that_exist() -> None:
     """A question pointing at nothing would score zero for the wrong reason."""
 
     corpus = {f"doc_{p.stem}" for p in Path("evals/rag/corpus").glob("*.md")}
     gold = load_gold_set(GOLD_PATH)
 
-    missing = sorted({q.document_id for q in gold.questions} - corpus)
+    named = {doc for q in gold.questions for doc in q.document_ids}
+    missing = sorted(named - corpus)
 
     assert missing == []
 
@@ -57,7 +58,18 @@ def test_the_gold_set_covers_more_than_one_document() -> None:
 
     gold = load_gold_set(GOLD_PATH)
 
-    assert len({q.document_id for q in gold.questions}) >= 5
+    assert len({doc for q in gold.questions for doc in q.document_ids}) >= 5
+
+
+def test_the_committed_gold_set_has_a_cross_document_section() -> None:
+    """The falsification baseline needs questions top-k can fail at: at
+    least a dozen whose answer spans two or more documents."""
+
+    gold = load_gold_set(GOLD_PATH)
+
+    cross = [q for q in gold.questions if len(q.document_ids) >= 2]
+
+    assert len(cross) >= 12
 
 
 # --- loading -----------------------------------------------------------------
@@ -75,6 +87,47 @@ def test_the_digest_changes_when_a_question_changes(tmp_path: Path) -> None:
 def test_a_record_missing_a_field_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="document_id"):
         load_gold_set(_write(tmp_path, {"question": "a"}))
+
+
+def test_the_cross_document_form_loads_in_order(tmp_path: Path) -> None:
+    gold = load_gold_set(
+        _write(
+            tmp_path,
+            {"question": "a", "document_ids": ["doc_a", "doc_b"]},  # type: ignore[dict-item]
+        )
+    )
+
+    assert gold.questions[0].document_ids == ("doc_a", "doc_b")
+
+
+def test_a_record_carrying_both_forms_is_refused(tmp_path: Path) -> None:
+    """Two claims about the same question would leave the scorer to pick."""
+
+    with pytest.raises(ValueError, match="exactly one"):
+        load_gold_set(
+            _write(
+                tmp_path,
+                {
+                    "question": "a",
+                    "document_id": "doc_a",
+                    "document_ids": ["doc_b"],  # type: ignore[dict-item]
+                },
+            )
+        )
+
+
+def test_an_empty_or_duplicated_document_list_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="non-empty list"):
+        load_gold_set(
+            _write(tmp_path, {"question": "a", "document_ids": []})  # type: ignore[dict-item]
+        )
+    with pytest.raises(ValueError, match="repeats"):
+        load_gold_set(
+            _write(
+                tmp_path,
+                {"question": "a", "document_ids": ["doc_a", "doc_a"]},  # type: ignore[dict-item]
+            )
+        )
 
 
 def test_an_empty_gold_set_is_refused(tmp_path: Path) -> None:

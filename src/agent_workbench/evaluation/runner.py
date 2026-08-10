@@ -23,16 +23,24 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from agent_workbench.evaluation.metrics import RETRIEVAL_METRICS, RetrievalOutcome
 
 
 @dataclass(frozen=True, slots=True)
 class GoldQuestion:
-    """One question, and the document that answers it."""
+    """One question, and the document or documents that answer it.
+
+    One entry is the classic shape. Several entries mean the answer is spread
+    across the corpus, and the question exists to measure exactly that: a
+    top-k retriever can ace every single-document question while never
+    surfacing both halves of a cross-document one (the falsification baseline
+    ADR-037's graph arm has to beat).
+    """
 
     question: str
-    document_id: str
+    document_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,20 +91,52 @@ def load_gold_set(path: Path) -> GoldSet:
         if not line.strip():
             continue
         record = json.loads(line)
-        missing = {"question", "document_id"} - set(record)
-        if missing:
-            raise ValueError(
-                f"{path}:{line_number} is missing {', '.join(sorted(missing))}"
-            )
-        questions.append(
-            GoldQuestion(question=record["question"], document_id=record["document_id"])
-        )
+        questions.append(_gold_question(record, source=f"{path}:{line_number}"))
     if not questions:
         raise ValueError(f"{path} contains no questions")
     return GoldSet(
         questions=tuple(questions),
         digest=hashlib.sha256(raw).hexdigest()[:16],
     )
+
+
+def _gold_question(record: dict[str, object], *, source: str) -> GoldQuestion:
+    """One line, in either of its two shapes, or a refusal that names the line.
+
+    ``document_id`` (a string) is the original single-document form and every
+    existing line; ``document_ids`` (a non-empty list) is the cross-document
+    form. Exactly one must be present: a line carrying both would leave the
+    scorer to pick which claim to measure against.
+    """
+
+    if "question" not in record:
+        raise ValueError(f"{source} is missing question")
+    single = record.get("document_id")
+    several = record.get("document_ids")
+    if (single is None) == (several is None):
+        raise ValueError(
+            f"{source} must carry exactly one of document_id, document_ids"
+        )
+    if single is not None:
+        if not isinstance(single, str) or not single:
+            raise ValueError(f"{source} document_id must be a non-empty string")
+        expected = (single,)
+    else:
+        if not isinstance(several, list) or not several:
+            raise ValueError(
+                f"{source} document_ids must be a non-empty list of strings"
+            )
+        names: list[str] = []
+        for item in cast("list[object]", several):
+            if not isinstance(item, str) or not item:
+                raise ValueError(
+                    f"{source} document_ids must be a non-empty list of strings"
+                )
+            names.append(item)
+        if len(set(names)) != len(names):
+            raise ValueError(f"{source} document_ids repeats a document")
+        expected = tuple(names)
+    return GoldQuestion(question=str(record["question"]), document_ids=expected)
 
 
 async def evaluate_retrieval(
@@ -121,7 +161,7 @@ async def evaluate_retrieval(
         outcomes.append(
             RetrievalOutcome(
                 question=question.question,
-                expected_document_id=question.document_id,
+                expected_document_ids=question.document_ids,
                 retrieved_document_ids=tuple(retrieved),
                 latency_ms=elapsed_ms,
             )

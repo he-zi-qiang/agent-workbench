@@ -13,10 +13,14 @@ import pytest
 from agent_workbench.evaluation import RETRIEVAL_METRICS, RetrievalOutcome
 
 
-def _outcome(*retrieved: str, expected: str = "doc_a", latency: float = 0.0):
+def _outcome(
+    *retrieved: str,
+    expected: tuple[str, ...] = ("doc_a",),
+    latency: float = 0.0,
+):
     return RetrievalOutcome(
         question="q",
-        expected_document_id=expected,
+        expected_document_ids=expected,
         retrieved_document_ids=retrieved,
         latency_ms=latency,
     )
@@ -102,3 +106,46 @@ def test_every_metric_handles_an_empty_run() -> None:
 
     for name, metric in RETRIEVAL_METRICS.items():
         assert metric([]) == 0.0, name
+
+
+# --- cross-document questions (the coverage metric's reason to exist) --------
+
+
+def test_rank_credits_the_first_relevant_document() -> None:
+    """recall/MRR keep their single-document meaning on a two-document
+    question: the first half of the answer surfacing is a hit."""
+
+    outcome = _outcome("doc_x", "doc_a", "doc_y", expected=("doc_a", "doc_b"))
+
+    assert outcome.rank == 2
+    assert outcome.coverage_rank is None
+
+
+def test_coverage_rank_is_the_depth_that_holds_the_whole_answer() -> None:
+    outcome = _outcome("doc_b", "doc_x", "doc_a", expected=("doc_a", "doc_b"))
+
+    assert outcome.rank == 1
+    assert outcome.coverage_rank == 3
+
+
+def test_coverage_equals_rank_for_a_single_document_question() -> None:
+    """The new metric degenerates to the old one where the old one applied,
+    so a gap between recall@3 and full_coverage@3 is only ever the
+    cross-document questions failing."""
+
+    outcome = _outcome("doc_x", "doc_a")
+
+    assert outcome.rank == outcome.coverage_rank == 2
+
+
+def test_full_coverage_refuses_partial_credit() -> None:
+    """The control group is recall@3 over the same outcomes: half the answer
+    earns the one and not the other."""
+
+    outcomes = [
+        _outcome("doc_a", "doc_x", "doc_y", expected=("doc_a", "doc_b")),
+        _outcome("doc_a", "doc_b", "doc_y", expected=("doc_a", "doc_b")),
+    ]
+
+    assert RETRIEVAL_METRICS["recall_at_3"](outcomes) == 1.0
+    assert RETRIEVAL_METRICS["full_coverage_at_3"](outcomes) == 0.5
