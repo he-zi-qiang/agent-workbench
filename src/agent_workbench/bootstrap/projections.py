@@ -37,6 +37,7 @@ from agent_workbench.domain.sandbox import SANDBOX_RUN_TOOL
 from agent_workbench.domain.schema import JsonObject
 from agent_workbench.domain.tools import ToolName
 from agent_workbench.domain.workspace import (
+    WORKSPACE_EDIT_TOOL,
     WORKSPACE_LIST_TOOL,
     WORKSPACE_READ_TOOL,
     WORKSPACE_WRITE_TOOL,
@@ -61,7 +62,11 @@ from agent_workbench.ports.task_workflow import GraphVersion
 #: addition that does not widen anything outward: each binds a name inside this
 #: Task's own versioned artifact store, `max_tool_risk` already reaches "write",
 #: and a replay produces another version rather than a second outside effect.
+#: Alphabetical, because ``AuthorizationEnvelope`` sorts what it is given.
+#: Keeping this in the order the envelope will end up in is what lets a reader
+#: compare the two without re-sorting one of them in their head.
 WORKSPACE_TOOLS: tuple[ToolName, ...] = (
+    WORKSPACE_EDIT_TOOL,
     WORKSPACE_LIST_TOOL,
     WORKSPACE_READ_TOOL,
     WORKSPACE_WRITE_TOOL,
