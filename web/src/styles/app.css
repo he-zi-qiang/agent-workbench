@@ -3674,6 +3674,30 @@ pre {
   line-height: 1.6;
 }
 
+/* Triage's question (ADR-036): rendered where the submit button's answer
+   would have appeared, because it is the submit flow paused mid-question --
+   not a second form. */
+.aw-triage-ask {
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.aw-triage-ask p {
+  margin: 0;
+  color: var(--aw-text);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.aw-triage-ask-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .aw-report-toggle {
   display: flex;
   align-items: flex-start;
