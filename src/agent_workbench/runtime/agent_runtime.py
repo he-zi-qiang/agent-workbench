@@ -50,6 +50,7 @@ from agent_workbench.domain.messages import (
     tool_message,
 )
 from agent_workbench.domain.policies import ExecutionContext
+from agent_workbench.domain.pricing import ModelPrices
 from agent_workbench.domain.runs import (
     AgentOutcome,
     AgentRunRequest,
@@ -218,6 +219,7 @@ class ClaudeLikeAgentRuntime:
         model_call_ids: Callable[[], str] | None = None,
         telemetry: Telemetry | None = None,
         record_step_inputs: bool = False,
+        prices: ModelPrices | None = None,
     ) -> None:
         self._model = model
         # Tools are reached only through the gateway: resolving, validating,
@@ -243,6 +245,20 @@ class ClaudeLikeAgentRuntime:
         # not a deployment that behaves differently, so this is the absence of
         # one rather than a degraded mode.
         self._telemetry = telemetry if telemetry is not None else NullTelemetry()
+        # What this profile's model charges, when the deployment said. Absent
+        # is a real state rather than "free": every spend stays zero, and a run
+        # that asked for a cost ceiling is refused instead of being given one
+        # that cannot fire.
+        self._prices = prices
+
+    def _priced(self, usage: TokenUsage) -> int:
+        """Micro-USD for one turn, or zero where this process has no prices.
+
+        Zero, not an estimate. A guessed rate would put a number on the event
+        stream that reads exactly like a measured one.
+        """
+
+        return 0 if self._prices is None else self._prices.cost_micro_usd(usage)
 
     async def run(
         self,
@@ -318,13 +334,16 @@ class ClaudeLikeAgentRuntime:
                 )
             )
 
-        if request.budget.max_cost_micro_usd is not None:
-            # Nothing produces cost_micro_usd: no pricer exists, so this
-            # ceiling would sit at zero for the whole run and never fire. A
-            # limit that cannot be enforced must not be accepted as one --
-            # the caller asked for a guarantee, and silently not providing it
-            # is worse than refusing. Delete this branch in the change that
-            # introduces a cost meter, not before.
+        if request.budget.max_cost_micro_usd is not None and self._prices is None:
+            # The ceiling is enforceable only where this process was told what
+            # its model charges. Unpriced, ``cost_micro_usd`` would stay at
+            # zero for the whole run and the ceiling would never fire -- so it
+            # is refused, on the same reasoning that refused every cost ceiling
+            # before a pricer existed: a limit that cannot be enforced must not
+            # be accepted as one. What changed is that this is now a statement
+            # about one deployment's configuration rather than about the
+            # runtime, and the message has to send the reader to the config
+            # rather than to the backlog.
             return await self._failed(
                 request,
                 sink,
@@ -333,8 +352,9 @@ class ClaudeLikeAgentRuntime:
                 ErrorInfo(
                     code="invalid_tool_input",
                     message=(
-                        "max_cost_micro_usd was requested, but this runtime has "
-                        "no cost meter and cannot enforce a cost ceiling"
+                        "max_cost_micro_usd was requested, but no prices are "
+                        f"configured for model profile {self._model_label!r}, "
+                        "so a cost ceiling cannot be enforced"
                     ),
                 ),
                 ledger,
@@ -405,7 +425,13 @@ class ClaudeLikeAgentRuntime:
                 specs,
                 cancellation,
             )
-            ledger.usage = ledger.usage.merged(BudgetUsage(steps=1, tokens=turn.usage))
+            ledger.usage = ledger.usage.merged(
+                BudgetUsage(
+                    steps=1,
+                    tokens=turn.usage,
+                    cost_micro_usd=self._priced(turn.usage),
+                )
+            )
 
             terminal = await self._terminal_for_turn(
                 request,

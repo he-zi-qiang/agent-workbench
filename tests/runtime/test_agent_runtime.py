@@ -29,6 +29,7 @@ from agent_workbench.domain.events import (
 )
 from agent_workbench.domain.messages import ToolResultBlock, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
+from agent_workbench.domain.pricing import ModelPrices
 from agent_workbench.domain.runs import (
     AgentOutcome,
     AgentRunRequest,
@@ -59,6 +60,16 @@ SCOPE = EventScope(stream_id="stream_1", run_id="run_1")
 CORPUS = {"doc_1": "Qdrant performs one dense and sparse fusion per query."}
 USAGE = TokenUsage(input_tokens=100, output_tokens=20)
 POLICY_IDENTITY = "policy-test:0000000000000000"
+
+#: DeepSeek's published rates at the time of writing, in micro-USD per million
+#: tokens. Real numbers rather than round ones, so a test that happened to pass
+#: on 1-per-million arithmetic does not read as evidence.
+PRICES = ModelPrices(
+    input_micro_usd_per_mtok=270_000,
+    output_micro_usd_per_mtok=1_100_000,
+    cache_read_micro_usd_per_mtok=27_000,
+    cache_write_micro_usd_per_mtok=0,
+)
 
 READ_CALL = ToolCall(
     tool_call_id="toolu_01A09q90qw90lq917835lq9",
@@ -214,6 +225,7 @@ def _execute(
     model_timeout_seconds: float | None = None,
     max_parallel_read_tools: int = 4,
     record_step_inputs: bool = False,
+    prices: ModelPrices | None = None,
 ) -> _Execution:
     registry = StaticToolRegistry(
         bindings if bindings is not None else [read_document_tool(CORPUS)]
@@ -240,6 +252,7 @@ def _execute(
             clock=_clock,
             model_call_ids=_ids("mc"),
             record_step_inputs=record_step_inputs,
+            prices=prices,
         )
         outcome = await runtime.run(
             request if request is not None else _request(),
@@ -1490,12 +1503,15 @@ def test_the_step_ceiling_stops_before_tools_nothing_can_read() -> None:
     assert run.outcome.stop_reason == "max_steps"
 
 
-def test_a_cost_ceiling_nothing_can_measure_is_refused() -> None:
-    """P1-5. No pricer exists, so cost_micro_usd stays zero and never fires.
+def test_a_cost_ceiling_this_process_cannot_price_is_refused() -> None:
+    """P1-5. Unpriced, cost_micro_usd stays zero and the ceiling never fires.
 
     A ceiling that cannot be enforced must not be accepted as one: the caller
     asked for a guarantee, and silently not providing it is worse than saying
-    so.
+    so. What ADR-030 changed is the scope of "cannot" -- it used to be every
+    deployment, because no pricer existed anywhere, and it is now the ones that
+    did not configure prices. The refusal has to survive that narrowing, or the
+    guarantee quietly becomes "unless you forgot to configure it".
     """
 
     recorder = _Recorder("read_a")
@@ -1512,8 +1528,136 @@ def test_a_cost_ceiling_nothing_can_measure_is_refused() -> None:
 
     assert run.outcome.status == "failed"
     assert run.outcome.error is not None
-    assert "cost meter" in run.outcome.error.message
+    # Names the profile, so the reader is sent to the config rather than left
+    # to conclude the runtime cannot do this at all.
+    assert "no prices are configured" in run.outcome.error.message
     assert run.durable_types == ["RunStarted", "RunFailed"]
+
+
+def test_the_same_ceiling_is_accepted_once_the_profile_has_prices() -> None:
+    """The control, and the whole point of the change.
+
+    Without it, a runtime that refused *every* cost ceiling -- the behaviour
+    being replaced -- would still satisfy the refusal test above.
+    """
+
+    model = FakeModel([ScriptedTurn(text="Done.", usage=USAGE)])
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=2, max_tool_calls=2, max_cost_micro_usd=10**9),
+            tool_names=(),
+        ),
+        prices=PRICES,
+    )
+
+    assert run.outcome.status == "completed"
+    assert run.outcome.error is None
+
+
+def test_a_priced_run_reports_what_it_spent() -> None:
+    """A ceiling is only a ceiling if something climbs towards it.
+
+    The assertion spells the arithmetic rather than the answer. A total copied
+    from a previous run would agree with any pricer, including one that
+    returned a constant.
+    """
+
+    model = FakeModel([ScriptedTurn(text="Done.", usage=USAGE)])
+
+    run = _execute(
+        model,
+        request=_request(budget=RunBudget(max_steps=2, max_tool_calls=2)),
+        prices=PRICES,
+    )
+
+    expected = (
+        (USAGE.input_tokens - USAGE.cache_read_tokens) * 270_000 // 1_000_000
+        + USAGE.cache_read_tokens * 27_000 // 1_000_000
+        + USAGE.output_tokens * 1_100_000 // 1_000_000
+    )
+    assert expected > 0
+    assert run.outcome.usage.cost_micro_usd == expected
+
+
+def test_an_unpriced_run_reports_no_spend_rather_than_a_guess() -> None:
+    """The control for the one above: zero is what "we were not told" looks like.
+
+    A runtime that estimated would put a number on the event stream that reads
+    exactly like a measured one.
+    """
+
+    model = FakeModel([ScriptedTurn(text="Done.", usage=USAGE)])
+
+    run = _execute(
+        model,
+        request=_request(budget=RunBudget(max_steps=2, max_tool_calls=2)),
+    )
+
+    assert run.outcome.usage.tokens.total > 0
+    assert run.outcome.usage.cost_micro_usd == 0
+
+
+def test_a_run_is_stopped_by_cost_before_it_runs_out_of_steps() -> None:
+    """The ceiling ADR-030 exists to make usable: spend, not turns.
+
+    A model that keeps asking for tools, twenty steps allowed, and a cost
+    ceiling just above one turn's spend. ``max_steps`` cannot be what ends this
+    -- which is the point, because before ADR-030 it was the only thing that
+    could.
+    """
+
+    model = FakeModel(
+        [ScriptedTurn(text="again", tool_calls=(READ_CALL,), usage=USAGE)],
+        repeat_last=True,
+    )
+    one_turn = PRICES.cost_micro_usd(USAGE)
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(
+                max_steps=20,
+                max_tool_calls=20,
+                max_cost_micro_usd=one_turn + 1,
+            )
+        ),
+        prices=PRICES,
+    )
+
+    assert run.outcome.stop_reason == "cost_budget"
+    assert run.outcome.usage.steps < 20
+
+
+def test_the_same_run_under_a_generous_cost_ceiling_is_stopped_by_steps() -> None:
+    """The control: the cost ceiling stopped it, not the pricer's existence.
+
+    Identical model, identical step ceiling, a cost ceiling far out of reach.
+    Without this, a pricer that reported an enormous number on every turn --
+    or a runtime that ended any priced run early -- would satisfy the test
+    above.
+    """
+
+    model = FakeModel(
+        [ScriptedTurn(text="again", tool_calls=(READ_CALL,), usage=USAGE)],
+        repeat_last=True,
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(
+                max_steps=20,
+                max_tool_calls=20,
+                max_cost_micro_usd=10**9,
+            )
+        ),
+        prices=PRICES,
+    )
+
+    assert run.outcome.stop_reason == "max_steps"
+    assert run.outcome.usage.steps == 20
 
 
 def test_a_run_without_a_cost_ceiling_is_unaffected() -> None:

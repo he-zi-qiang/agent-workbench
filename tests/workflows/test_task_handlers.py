@@ -14,7 +14,9 @@ below.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
@@ -218,7 +220,12 @@ def _passing_review(draft_ref: str) -> dict[str, Any]:
     }
 
 
-def _provider(registry: _Registry) -> TaskNodeInvocationProvider:
+def _provider(
+    registry: _Registry,
+    *,
+    max_seconds_per_invocation: int | None = None,
+    clock: Callable[[], datetime] | None = None,
+) -> TaskNodeInvocationProvider:
     log = InMemoryEventLog()
 
     def sink_for(context: TaskRunContext) -> ScopedEventSink:
@@ -232,7 +239,7 @@ def _provider(registry: _Registry) -> TaskNodeInvocationProvider:
             ),
         )
 
-    return TaskNodeInvocationProvider(
+    provider = TaskNodeInvocationProvider(
         registry=cast("TaskRegistry", registry),
         budget=RunBudget(max_steps=12, max_tool_calls=24),
         sink_for=sink_for,
@@ -242,7 +249,11 @@ def _provider(registry: _Registry) -> TaskNodeInvocationProvider:
             principal_id=task.owner_id,
         ),
         scope=SCOPE,
+        max_seconds_per_invocation=max_seconds_per_invocation,
     )
+    if clock is None:
+        return provider
+    return replace(provider, clock=clock)
 
 
 @pytest.mark.parametrize(
@@ -699,3 +710,85 @@ def test_no_more_agent_invocations_run_at_once_than_the_deployment_allows() -> N
 
     assert asyncio.run(peak_overlap(1)) == 1
     assert asyncio.run(peak_overlap(2)) == 2
+
+
+# --- one attempt's wall clock (ADR-030) --------------------------------------
+
+
+def test_an_invocation_carries_no_deadline_unless_one_was_configured() -> None:
+    """The control, and the pre-ADR-030 behaviour verbatim.
+
+    Absent has to stay absent. A deployment that configured no wall clock must
+    not acquire one from an upgrade -- a node that reliably takes four minutes
+    would start failing on a default nobody chose.
+    """
+
+    registry = _Registry(_task())
+
+    with SCOPE.executing(LEASE):
+        invocation = asyncio.run(_provider(registry).resolve(_state(), "plan"))
+
+    assert invocation.context.budget.deadline is None
+
+
+def test_a_configured_wall_clock_becomes_a_deadline_on_this_attempt() -> None:
+    """Stamped from the clock at resolve time, not from process start."""
+
+    registry = _Registry(_task())
+    start = datetime(2026, 8, 10, 12, 0, 0, tzinfo=UTC)
+    provider = _provider(registry, max_seconds_per_invocation=90, clock=lambda: start)
+
+    with SCOPE.executing(LEASE):
+        invocation = asyncio.run(provider.resolve(_state(), "plan"))
+
+    assert invocation.context.budget.deadline == start + timedelta(seconds=90)
+
+
+def test_each_attempt_gets_its_own_deadline_rather_than_a_shared_one() -> None:
+    """The reason this is not folded into the composition-time budget.
+
+    A deadline built once would be shared by every invocation for the life of
+    the process: the first node would get its ninety seconds, and a node
+    reached an hour later would be born already overdue. Two resolutions at
+    different times must therefore produce two different deadlines.
+
+    This is also the replay rule. A retried attempt is a new attempt and gets
+    the full allowance again -- storing the deadline with the Task instead
+    would make a node that waited out an outage permanently unrunnable.
+    """
+
+    registry = _Registry(_task())
+    times = iter(
+        [
+            datetime(2026, 8, 10, 12, 0, 0, tzinfo=UTC),
+            datetime(2026, 8, 10, 13, 0, 0, tzinfo=UTC),
+        ]
+    )
+    provider = _provider(
+        registry, max_seconds_per_invocation=90, clock=lambda: next(times)
+    )
+
+    with SCOPE.executing(LEASE):
+        first = asyncio.run(provider.resolve(_state(), "plan"))
+        second = asyncio.run(provider.resolve(_state(), "plan"))
+
+    assert first.context.budget.deadline is not None
+    assert second.context.budget.deadline is not None
+    assert second.context.budget.deadline > first.context.budget.deadline
+    # And each is its own allowance rather than one clock shared between them.
+    assert second.context.budget.deadline - first.context.budget.deadline == timedelta(
+        hours=1
+    )
+
+
+def test_stamping_a_deadline_leaves_the_rest_of_the_budget_alone() -> None:
+    """A copy, not a rebuild. The other ceilings are still the configured ones."""
+
+    registry = _Registry(_task())
+    provider = _provider(registry, max_seconds_per_invocation=30)
+
+    with SCOPE.executing(LEASE):
+        stamped = asyncio.run(provider.resolve(_state(), "plan")).context.budget
+
+    assert stamped.max_steps == 12
+    assert stamped.max_tool_calls == 24

@@ -40,10 +40,18 @@ def test_a_deployment_that_never_configured_mcp_gets_no_servers() -> None:
     assert settings.optional_labs.mcp_adapter is False
 
 
-def test_config_schema_version_moved_to_1_10() -> None:
+def test_the_mcp_section_ships_under_the_current_schema_version() -> None:
+    """Named for the section rather than for a number, after 1.10 -> 1.11.
+
+    The version moved for a reason unrelated to MCP, and a test called
+    ``..._moved_to_1_10`` then asserted something that was no longer true and
+    no longer about MCP. The reasoning behind each bump lives in one place:
+    ``test_the_configuration_schema_version_is_pinned``.
+    """
+
     settings = Settings(**valid_payload())
 
-    assert settings.app.config_schema_version == "1.10"
+    assert settings.app.config_schema_version == "1.11"
 
 
 def test_retryable_server_tools_are_frozen_into_new_task_authority() -> None:

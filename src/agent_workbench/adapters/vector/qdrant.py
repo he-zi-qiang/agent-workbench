@@ -20,6 +20,7 @@ this text is a copy that a re-index replaces.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -39,6 +40,13 @@ POINT_NAMESPACE = uuid.UUID("6f1a5f9e-0f6a-5c3e-9a4b-2f7c1d8e5b30")
 
 # Filtered on for every query, so Qdrant needs an index on each of them.
 FILTER_KEYS = ("tenant_id", "knowledge_base_id", "authorized_principals")
+
+# The constant in ``1 / (k + rank)``. Two, because that is what Qdrant's
+# server-side RRF used, and ADR-033 moves the fusion without moving the scale:
+# a different k here would change every fused score and quietly invalidate the
+# evaluation numbers this path is compared on. Ranks are zero-based, as they
+# were there -- the top of an arm contributes 1/2, not 1/3.
+RRF_K = 2
 
 
 def point_id(chunk_id: str) -> str:
@@ -155,44 +163,60 @@ class QdrantVectorIndex:
         dense_limit: int,
         sparse_limit: int,
     ) -> tuple[ScoredChunk, ...]:
-        """One request: two prefetches and an RRF fusion, all inside Qdrant."""
+        """Two single-arm queries, fused once here (ADR-033).
+
+        The fusion used to be a ``FusionQuery`` over two prefetches, which is
+        one request rather than two and would be the better shape if it could
+        be reproduced. It cannot: RRF scores by rank within each arm, and an
+        arm returns points it scored equally in whatever order it produced
+        them, so a tied point's rank -- and therefore the fused score built
+        from it -- is the engine's arbitrary choice. Ordering the fused output
+        afterwards cannot repair that, because the disagreement is already in
+        the scores. Measured: ten re-indexes of one fixture gave ten different
+        hybrid orders, and twice the strictly-best point was not first.
+
+        Fusing here is still fusing *once*. Each arm below is a raw retriever
+        result that nothing has fused, and RRF runs over the two of them one
+        time. What moves is only who decides the ranks inside an arm: passing
+        each through ``_ranked`` first makes a tied point's rank follow from
+        its ``chunk_id``, which survives a re-index.
+        """
 
         narrowing = self._narrowing(
             tenant_id=tenant_id,
             knowledge_base_id=knowledge_base_id,
             authorized_principals=authorized_principals,
         )
-        # The filter is stated on each prefetch rather than once on the fusion.
-        # Qdrant appears to push an outer filter down -- both spellings return
-        # the same points here, and a test that swaps them does not fail -- so
-        # this is not load-bearing today. It is written this way because the
-        # narrowing is per-arm in intent: each prefetch should be choosing
-        # among candidates this principal may read, and relying on a push-down
-        # to make that true would make the guarantee a property of the engine's
-        # optimiser rather than of this query.
-        response = await self._client.query_points(
-            collection_name=self._collection,
-            prefetch=[
-                models.Prefetch(
-                    query=list(vector),
-                    using=DENSE_VECTOR_NAME,
-                    filter=narrowing,
-                    limit=dense_limit,
+        # Stated on each arm rather than once around the pair. It was already
+        # written per-prefetch for this reason and the reason is unchanged:
+        # each arm should choose among candidates this principal may read, and
+        # a narrowing that held only because an optimiser pushed it down would
+        # be a property of the engine rather than of these queries.
+        dense_response, sparse_response = await asyncio.gather(
+            self._client.query_points(
+                collection_name=self._collection,
+                query=list(vector),
+                using=DENSE_VECTOR_NAME,
+                query_filter=narrowing,
+                limit=dense_limit,
+                with_payload=True,
+            ),
+            self._client.query_points(
+                collection_name=self._collection,
+                query=models.SparseVector(
+                    indices=list(sparse_indices), values=list(sparse_values)
                 ),
-                models.Prefetch(
-                    query=models.SparseVector(
-                        indices=list(sparse_indices), values=list(sparse_values)
-                    ),
-                    using=SPARSE_VECTOR_NAME,
-                    filter=narrowing,
-                    limit=sparse_limit,
-                ),
-            ],
-            query=models.FusionQuery(fusion=models.Fusion.RRF),
-            limit=limit,
-            with_payload=True,
+                using=SPARSE_VECTOR_NAME,
+                query_filter=narrowing,
+                limit=sparse_limit,
+                with_payload=True,
+            ),
         )
-        return _ranked(response.points)
+        return _fused(
+            _ranked(dense_response.points),
+            _ranked(sparse_response.points),
+            limit=limit,
+        )
 
     async def search(
         self,
@@ -357,6 +381,15 @@ def _ranked(points: Any) -> tuple[ScoredChunk, ...]:
     anything the engine chooses would only move the nondeterminism somewhere
     harder to see. Score still dominates: this orders *within* equal scores and
     cannot promote a lower-scored candidate over a higher one.
+
+    Where this is applied matters, and the paragraph above used to overstate
+    it. On a single-arm result it is the whole fix. On a *fused* one it is not
+    a fix at all: RRF builds its scores out of ranks within each arm, so a tie
+    inside an arm has already perturbed the numbers by the time they arrive,
+    and sorting them stably just reproduces one arbitrary outcome per query.
+    That is why ADR-033 has ``search_hybrid`` apply this to each arm before
+    fusing rather than to the fused result -- same function, and now upstream
+    of the thing that was actually unstable.
     """
 
     return tuple(sorted((_scored(point) for point in points), key=_rank_key))
@@ -364,6 +397,54 @@ def _ranked(points: Any) -> tuple[ScoredChunk, ...]:
 
 def _rank_key(chunk: ScoredChunk) -> tuple[float, str]:
     return (-chunk.score, chunk.chunk_id)
+
+
+def _fused(*arms: tuple[ScoredChunk, ...], limit: int) -> tuple[ScoredChunk, ...]:
+    """Reciprocal rank fusion over arms that already have a settled order.
+
+    ``1 / (RRF_K + rank)`` summed across the arms a chunk appears in, which is
+    the formula Qdrant's own fusion uses -- kept identical so that this change
+    moves where the ranks come from without also moving the scale an
+    evaluation is measured on.
+
+    The arms must arrive ranked by ``_ranked``. That is the whole point: the
+    input to this function is where reproducibility is won or lost, and a
+    caller handing over an arm in engine order would get a stable sort of
+    unstable numbers.
+
+    Chunks an arm scored equally share a rank, rather than being dealt
+    consecutive ones in ``chunk_id`` order. Both spellings are reproducible, so
+    this is not about determinism -- it is that consecutive ranks would let an
+    arm vote on an order it did not perceive. The sparse arm over a one-term
+    query scores every matching chunk identically; dealing it 0,1,2,3 turns
+    alphabetical accident into fusion weight, and measurably so, because it
+    demotes a chunk the dense arm ranked strictly first. A tie means the arm
+    has no opinion, and no opinion has to fuse as no opinion.
+    """
+
+    contributions: dict[str, float] = {}
+    seen: dict[str, ScoredChunk] = {}
+    for arm in arms:
+        rank = 0
+        for position, chunk in enumerate(arm):
+            # The arm is sorted, so equal scores form one run; the run keeps
+            # the rank of its first member, and the next distinct score takes
+            # its own position. A chunk's rank is therefore how many candidates
+            # strictly beat it in this arm.
+            if position and arm[position - 1].score != chunk.score:
+                rank = position
+            contributions[chunk.chunk_id] = contributions.get(
+                chunk.chunk_id, 0.0
+            ) + 1.0 / (RRF_K + rank)
+            # The payload is identical whichever arm returned it; only the
+            # score differs, and that is about to be replaced by the fused one.
+            seen.setdefault(chunk.chunk_id, chunk)
+
+    fused = tuple(
+        seen[chunk_id].model_copy(update={"score": score})
+        for chunk_id, score in contributions.items()
+    )
+    return tuple(sorted(fused, key=_rank_key))[:limit]
 
 
 def _scored(point: Any) -> ScoredChunk:
