@@ -1,4 +1,4 @@
-"""Deterministic, offline handlers for the fixed v1 Task graph.
+"""Deterministic, offline handlers for both Task graphs.
 
 This module is deliberately a demonstration fixture, not an Agent Runtime
 adapter.  It neither contacts a provider nor executes a tool, and the
@@ -111,6 +111,74 @@ def build_demo_v1_handlers() -> dict[TaskNodeId, DemoNodeHandler]:
     }
 
 
+def build_demo_v2_handlers() -> dict[TaskNodeId, DemoNodeHandler]:
+    """The same fixture for the v2 general graph (ADR-031).
+
+    It exists so that "does this deployment run both graphs" is answerable
+    without a model key. A demo Worker holding only v1's handlers would run a
+    submitted v2 Task through a graph of pass-throughs and report success --
+    which looks exactly like a Task that worked.
+
+    The work node deliberately writes a *different* draft reference per
+    revision, for the reason v1's synthesize does: it is what proves the
+    reviewer bound its verdict to the attempt this pass produced rather than
+    to the one before it.
+    """
+
+    async def understand(state: TaskState) -> dict[str, Any]:
+        return _outcome_update(state, "understand")
+
+    async def work(state: TaskState) -> dict[str, Any]:
+        draft_ref = _stable_id(
+            "art_demo",
+            state.task_id,
+            "work",
+            str(state.revision_count),
+        )
+        return _outcome_update(state, "work") | {
+            "draft_ref": draft_ref,
+            "review_result": None,
+        }
+
+    async def review(state: TaskState) -> dict[str, Any]:
+        if state.draft_ref is None:
+            raise ValueError("the demo reviewer requires produced work")
+        verdict = ReviewResult(
+            decision="pass",
+            reviewed_draft_ref=state.draft_ref,
+            revision_number=state.revision_count,
+            summary="Deterministic demo review: the work is accepted.",
+            score=100,
+        )
+        return _outcome_update(state, "review") | {
+            "review_result": verdict.model_dump()
+        }
+
+    async def export(state: TaskState) -> dict[str, Any]:
+        return _outcome_update(state, "export")
+
+    return {
+        "understand": understand,
+        "work": work,
+        "review": review,
+        # Same synthetic self-approval as v1's, and the same caveat: a deployed
+        # Worker replaces this node with the interrupting one.
+        "approval": build_demo_v1_handlers()["approval"],
+        "export": export,
+    }
+
+
+def build_demo_handlers() -> dict[TaskNodeId, DemoNodeHandler]:
+    """Every node either graph runs, so one demo Worker can run both.
+
+    The two mappings overlap on ``understand``, ``approval`` and ``export``,
+    and the overlapping values are equivalent rather than merely
+    interchangeable: all three come from the same generator here.
+    """
+
+    return {**build_demo_v1_handlers(), **build_demo_v2_handlers()}
+
+
 def _research_update(state: TaskState, node: str) -> dict[str, Any]:
     """Return this branch's independent contribution for LangGraph fan-in."""
 
@@ -137,4 +205,8 @@ def _stable_id(prefix: str, *parts: str) -> str:
     return f"{prefix}_{digest[:32]}"
 
 
-__all__ = ["build_demo_v1_handlers"]
+__all__ = [
+    "build_demo_handlers",
+    "build_demo_v1_handlers",
+    "build_demo_v2_handlers",
+]

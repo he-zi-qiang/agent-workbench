@@ -25,9 +25,9 @@ from agent_workbench.adapters.langgraph import (
     PostgresCheckpointSaver,
 )
 from agent_workbench.adapters.langgraph.workflow import (
+    GRAPH_DEFINITIONS,
     GRAPH_VERSION_KEY,
     UNRECORDED_GRAPH_VERSION,
-    build_v1_graph,
 )
 from agent_workbench.adapters.persistence import create_query_engine
 from agent_workbench.adapters.persistence.models import workflow_checkpoints
@@ -46,7 +46,7 @@ THREAD = "thr_recovery"
 
 # Two registered versions, so "the checkpoint was written by another graph" is
 # distinguishable from "that version is not registered here".
-BUILDERS = {"v1": build_v1_graph, "v2": build_v1_graph}
+GRAPHS = {"v1": GRAPH_DEFINITIONS["v1"], "v2": GRAPH_DEFINITIONS["v1"]}
 
 
 def _dsn() -> str:
@@ -148,7 +148,7 @@ def _workflow(engine: Any, handlers: dict[str, Any] | None = None) -> Any:
     return LangGraphTaskWorkflow(
         handlers=handlers if handlers is not None else _handlers(),
         checkpointer=PostgresCheckpointSaver(engine),
-        builders=BUILDERS,
+        graphs=GRAPHS,
     )
 
 

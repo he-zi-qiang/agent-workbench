@@ -1,4 +1,11 @@
-"""Structured, artifact-backed handlers for the fixed v1 Task graph.
+"""Structured, artifact-backed handlers for both Task graphs.
+
+One factory builds every node either graph runs, and two selectors name which
+subset each graph needs (ADR-031 §3: share the node implementations rather than
+copy them).  Three of the nodes are literally shared -- ``understand`` and
+``export`` mean the same thing in both, and both graphs' reviewing nodes decode
+the same verdict -- so a cross-cutting change lands on both graphs or on
+neither, which is the failure mode a second graph was expected to introduce.
 
 This module has no model or tool loop of its own.  Every node calls the
 injected AgentExecutor, and each invocation reconstructs its context from the
@@ -21,7 +28,7 @@ from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from pydantic import (
     BaseModel,
@@ -80,8 +87,10 @@ from agent_workbench.workflows.agent_nodes import (
     build_request,
 )
 from agent_workbench.workflows.agent_profiles import (
+    WORKSPACE_TOOLS,
     DynamicToolSource,
     ProjectedContext,
+    profile_for,
 )
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.research_graph import evolve, merge_refs
@@ -404,6 +413,27 @@ class ArtifactPersistingExecutor:
         )
 
 
+#: Which nodes each graph needs a handler for. ``approval`` is in neither: it
+#: has to interrupt, and interrupting belongs to the workflow framework, so it
+#: is assembled where that framework is. The routing nodes are absent for the
+#: opposite reason -- they decide rather than run.
+V1_HANDLER_NODES: Final[tuple[TaskNodeId, ...]] = (
+    "understand",
+    "plan",
+    "research_internal",
+    "research_external",
+    "synthesize",
+    "critic",
+    "export",
+)
+V2_HANDLER_NODES: Final[tuple[TaskNodeId, ...]] = (
+    "understand",
+    "work",
+    "review",
+    "export",
+)
+
+
 def build_task_v1_handlers(
     *,
     executor: AgentExecutor,
@@ -414,7 +444,95 @@ def build_task_v1_handlers(
     dynamic_tools: Mapping[DynamicToolSource, tuple[ToolName, ...]] | None = None,
     workspace_scope: WorkspaceScope | None = None,
 ) -> dict[TaskNodeId, TaskNodeHandler]:
-    """Build every v1 model-invoking handler around one AgentExecutor.
+    """The v1 graph's handlers, from the shared implementations.
+
+    Both public builders select from one factory rather than each holding a
+    copy, which is what ADR-031 §3 asks for: three of the two graphs' handler
+    nodes are literally the same node, and the cost the ADR names -- a
+    cross-cutting change landing on one graph and not the other -- is paid at
+    exactly the places two copies would have diverged.
+    """
+
+    return _select(
+        build_task_handlers(
+            executor=executor,
+            artifacts=artifacts,
+            invocations=invocations,
+            research=research,
+            export=export,
+            dynamic_tools=dynamic_tools,
+            workspace_scope=workspace_scope,
+        ),
+        V1_HANDLER_NODES,
+    )
+
+
+def build_task_v2_handlers(
+    *,
+    executor: AgentExecutor,
+    artifacts: ArtifactStore,
+    invocations: TaskNodeInvocationProvider,
+    research: TaskResearchHandlers | None = None,
+    export: TaskExportHandlers | None = None,
+    dynamic_tools: Mapping[DynamicToolSource, tuple[ToolName, ...]] | None = None,
+    workspace_scope: WorkspaceScope | None = None,
+) -> dict[TaskNodeId, TaskNodeHandler]:
+    """The v2 general graph's handlers, from the same implementations.
+
+    ``understand`` and ``export`` come from the same factory code v1's do --
+    and a composition that calls :func:`build_task_handlers` once hands both
+    graphs literally the same handler objects. That is the point of them
+    sharing a node id (ADR-031 §2.1): framing an objective and performing the
+    Task's one approved write do not become different operations because the
+    topology around them did.
+
+    ``research`` is accepted and unused by v2's own nodes, because v2 has no
+    research branch. It stays in the signature so one composition can build
+    both graphs' handlers from one set of dependencies.
+    """
+
+    return _select(
+        build_task_handlers(
+            executor=executor,
+            artifacts=artifacts,
+            invocations=invocations,
+            research=research,
+            export=export,
+            dynamic_tools=dynamic_tools,
+            workspace_scope=workspace_scope,
+        ),
+        V2_HANDLER_NODES,
+    )
+
+
+def _select(
+    handlers: Mapping[TaskNodeId, TaskNodeHandler], nodes: tuple[TaskNodeId, ...]
+) -> dict[TaskNodeId, TaskNodeHandler]:
+    """The named subset, refusing to quietly return a graph a node short.
+
+    A missing handler is not an absent capability: the graph adapter defaults an
+    unsupplied node to a pass-through, so a typo here would produce a Task that
+    ran its whole graph, did nothing at the node that was supposed to do the
+    work, and reported success.
+    """
+
+    missing = tuple(node for node in nodes if node not in handlers)
+    if missing:  # pragma: no cover - a constant disagreeing with the factory
+        raise AssertionError(f"the handler factory built no {', '.join(missing)}")
+    return {node: handlers[node] for node in nodes}
+
+
+def build_task_handlers(
+    *,
+    executor: AgentExecutor,
+    artifacts: ArtifactStore,
+    invocations: TaskNodeInvocationProvider,
+    research: TaskResearchHandlers | None = None,
+    export: TaskExportHandlers | None = None,
+    dynamic_tools: Mapping[DynamicToolSource, tuple[ToolName, ...]] | None = None,
+    workspace_scope: WorkspaceScope | None = None,
+) -> dict[TaskNodeId, TaskNodeHandler]:
+    """Build every model-invoking handler either graph uses, around one executor.
 
     Approval stays a graph-control node: it has to interrupt, and interrupting
     belongs to the workflow framework, so it is assembled where that framework
@@ -445,13 +563,20 @@ def build_task_v1_handlers(
     ) -> Generator[WorkspaceSession | None]:
         """Enter this node's working set, pinned to the version it read.
 
-        Only the writer has the tools, so only its node pays for a session.
+        Whether a node pays for a session is derived from whether its agent
+        holds workspace tools, rather than from a list of node names kept
+        beside the profiles. The list was the bug waiting to happen: a node
+        given the tools but not the session advertises them and then fails
+        every call with ``WorkspaceUnavailableError`` while its run reports
+        success (ADR-028 §3.2), and adding v2's two nodes is exactly the change
+        that would have forgotten one.
+
         A node that dies inside this block returns no state update, which is
-        exactly why the attempt replacing it re-reads `state.workspace_version`
-        rather than anything advanced here (ADR-028 §3.2).
+        why the attempt replacing it re-reads `state.workspace_version` rather
+        than anything advanced here.
         """
 
-        if workspace_scope is None or node != "synthesize":
+        if workspace_scope is None or not _uses_workspace(node):
             yield None
             return
         principal = invocation.context.principal
@@ -680,6 +805,75 @@ def build_task_v1_handlers(
             ) from error
         return _outcome_update(outcome) | {"review_result": review.model_dump()}
 
+    async def work(state: TaskState) -> Mapping[str, Any]:
+        """v2's one working node: a full tool loop, bounded like every other.
+
+        Structurally this is ``synthesize`` with the evidence machinery
+        removed, and that is not a coincidence -- ADR-031 §2.2's whole claim is
+        that "the model decides its own next step" is already what a node is
+        here, and that v2 only gives that loop enough tools and enough budget
+        (ADR-030) to finish something. So there is no second runtime, no
+        second budget and no second cancellation path in this function; what
+        differs from v1 is the profile it runs under and the topology around
+        it.
+
+        It writes ``draft_ref`` for the same reason ``synthesize`` does: the
+        review gate binds a verdict to an exact revision of an exact artifact,
+        and reusing that invariant is what lets one revision budget, one
+        approval gate and one export path serve both graphs.
+        """
+
+        invocation = await invocations.resolve(state, "work")
+        with _workspace_for("work", state, invocation) as session:
+            report = await artifact_node.run(
+                "work",
+                state,
+                invocation.context,
+                invocation.events,
+                invocation.cancellation,
+            )
+        if report.produced_ref is None:  # pragma: no cover
+            raise AssertionError("a completed work node has no artifact")
+        update = _outcome_update(report.outcome) | {
+            # The previous verdict goes with the draft it judged. `TaskState`
+            # requires a stored review to describe the current draft, and the
+            # revision-aware wrapper writes the counter that goes with it.
+            "draft_ref": report.produced_ref,
+            "review_result": None,
+        }
+        if session is not None and session.version != state.workspace_version:
+            update["workspace_version"] = session.version
+        return update
+
+    async def review(state: TaskState) -> Mapping[str, Any]:
+        """v2's gate, deciding against the working set rather than only a text.
+
+        The session is what makes that possible and is the reason this is not
+        just ``critic`` under another name: the reviewer holds the three
+        read-only workspace tools, and a node that advertises tools without
+        entering the session fails every call while reporting success.
+        """
+
+        invocation = await invocations.resolve(state, "review")
+        with _workspace_for("review", state, invocation):
+            outcome = await executor.run(
+                _structured_request("review", state, invocation.context),
+                invocation.events,
+                invocation.cancellation,
+            )
+        charged = _charged_state(state, outcome)
+        _require_completed("review", outcome, charged)
+        try:
+            decoded = decode_review_output(outcome.output_text, state=state)
+        except StructuredOutputError as error:
+            raise TaskNodeRunFailedError(
+                node="review",
+                outcome=outcome,
+                state=charged,
+                reason="reviewer JSON did not satisfy the review schema",
+            ) from error
+        return _outcome_update(outcome) | {"review_result": decoded.model_dump()}
+
     async def export_report(state: TaskState) -> Mapping[str, Any]:
         if export is None:
             # Not a passthrough. A graph that reached export has a human's
@@ -710,6 +904,8 @@ def build_task_v1_handlers(
         "research_external": research_external,
         "synthesize": synthesize,
         "critic": critic,
+        "work": work,
+        "review": review,
         "export": export_report,
     }
 
@@ -954,8 +1150,24 @@ def _context_for(
     )
 
 
+#: The nodes whose artifact is the thing the Task exists to produce -- the one
+#: a review binds to, an approval authorizes and the export renders. One per
+#: graph, and they are ``report`` rather than ``agent_outcome`` so that a Task's
+#: deliverable is distinguishable from the runs that led to it in a store where
+#: both are just bytes.
+_DELIVERABLE_NODES: Final[frozenset[TaskNodeId]] = frozenset({"synthesize", "work"})
+
+
 def _artifact_kind(request: AgentRunRequest) -> ArtifactKind:
-    return "report" if request.trace.graph_node_id == "synthesize" else "agent_outcome"
+    node = request.trace.graph_node_id
+    return "report" if node in _DELIVERABLE_NODES else "agent_outcome"
+
+
+#: Nodes whose run is a verdict about the current draft rather than a product.
+#: v1's ``critic`` and v2's ``review`` decode the same ``ReviewResult`` bound to
+#: the same draft and revision, which is what lets one revision budget and one
+#: approval gate serve both graphs (ADR-031 §2.1).
+_REVIEWING_NODES: Final[frozenset[TaskNodeId]] = frozenset({"critic", "review"})
 
 
 def _structured_request(
@@ -963,27 +1175,43 @@ def _structured_request(
     state: TaskState,
     context: TaskRunContext,
 ) -> AgentRunRequest:
-    """The planner's and the critic's runs, through the same boundary as the rest.
+    """The planner's and the reviewers' runs, through the same boundary as the rest.
 
     Their prompts are JSON contracts rather than instructions in prose, which is
     why they used to be assembled here instead of with the other agents. That
-    made them the two runs whose admitted context nothing declared -- and the
-    critic is exactly the agent whose isolation matters most, since a critic
-    that could read the evidence would be reviewing the research instead of the
-    writing.
+    made them the runs whose admitted context nothing declared -- and a
+    reviewing agent is exactly the one whose isolation matters most, since a
+    critic that could read the evidence would be reviewing the research instead
+    of the writing.
     """
 
-    if node == "critic" and state.draft_ref is None:
-        raise StructuredOutputError("critic requires a current draft reference")
+    reviewing = node in _REVIEWING_NODES
+    if reviewing and state.draft_ref is None:
+        raise StructuredOutputError(f"{node} requires a current draft reference")
     return build_request(
         node,
         state,
         context,
         ProjectedContext(
-            draft_ref=state.draft_ref if node == "critic" else None,
-            revision_number=state.revision_count if node == "critic" else None,
+            draft_ref=state.draft_ref if reviewing else None,
+            revision_number=state.revision_count if reviewing else None,
         ),
     )
+
+
+def _uses_workspace(node: TaskNodeId) -> bool:
+    """Whether this node's agent was declared any working-set tool.
+
+    Asked of the profile rather than of a list of node names, so the answer
+    cannot disagree with the tools the same node's request advertises.
+    """
+
+    try:
+        profile = profile_for(node)
+    except KeyError:
+        # A routing node. It runs no agent, so it holds no tools.
+        return False
+    return any(name in WORKSPACE_TOOLS for name in profile.tool_names)
 
 
 def _outcome_update(outcome: AgentOutcome) -> dict[str, Any]:
@@ -1020,6 +1248,8 @@ def _require_completed(
 
 
 __all__ = [
+    "V1_HANDLER_NODES",
+    "V2_HANDLER_NODES",
     "ArtifactPersistingExecutor",
     "BoundedParallelExecutor",
     "CancellationFactory",
@@ -1038,7 +1268,9 @@ __all__ = [
     "TaskNodeRunFailedError",
     "TaskPrincipalResolver",
     "TaskResearchHandlers",
+    "build_task_handlers",
     "build_task_v1_handlers",
+    "build_task_v2_handlers",
     "decode_plan_output",
     "decode_review_output",
 ]

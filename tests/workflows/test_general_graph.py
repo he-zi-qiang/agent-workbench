@@ -71,8 +71,22 @@ def _reviewed(
 # --- the shape ---------------------------------------------------------------
 
 
-def test_the_graph_is_four_nodes_and_starts_at_understand() -> None:
-    assert CANONICAL_V2_NODE_IDS == ("understand", "work", "review", "export")
+def test_the_graph_is_four_nodes_plus_the_shared_approval_gate() -> None:
+    """ADR-031 §2.1 counts four, and this tuple has five.
+
+    Four is the shape -- understand, work, review, export. The fifth is the
+    human gate on the export path, and it belongs in this tuple because the
+    tuple is not the shape: it is every node id a checkpoint of this graph may
+    sit on, and a v2 Task paused for a human sits on exactly that one.
+    """
+
+    assert CANONICAL_V2_NODE_IDS == (
+        "understand",
+        "work",
+        "review",
+        "approval",
+        "export",
+    )
     assert ENTRY_NODE == "understand"
     assert TERMINAL_NODE == "export"
 

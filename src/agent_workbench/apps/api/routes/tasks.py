@@ -15,7 +15,11 @@ from typing import Annotated
 from fastapi import APIRouter, Header, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_workbench.application.tasks import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT
+from agent_workbench.application.tasks import (
+    DEFAULT_PAGE_LIMIT,
+    MAX_PAGE_LIMIT,
+    TaskGraphChoice,
+)
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.events import EventEnvelope
 from agent_workbench.domain.identifiers import ID_PATTERN, Identifier
@@ -49,6 +53,16 @@ class CreateTaskRequest(BaseModel):
     # client that does not know about the field submits the cheaper shape --
     # one that never stops to ask a human to authorize an export.
     wants_report: bool = False
+    # Which pipeline this Task runs: "research" writes a grounded report,
+    # "general" does a thing and reviews whether it is done (ADR-031).
+    #
+    # Absent means the deployment's default, which is what every existing
+    # client sends and is byte-for-byte the behaviour they have today. There is
+    # deliberately no "choose for me": letting a model read the objective and
+    # pick would hand a question the submitter knows the answer to to something
+    # that can be wrong about it, at the cost of running the entire wrong
+    # pipeline (ADR-031 §2.3).
+    graph: TaskGraphChoice | None = None
 
 
 class TaskView(BaseModel):
@@ -118,6 +132,7 @@ async def submit(
             wants_report=body.wants_report,
         ),
         submission_dedup_key=idempotency_key,
+        graph=body.graph,
     )
     return _view(task)
 

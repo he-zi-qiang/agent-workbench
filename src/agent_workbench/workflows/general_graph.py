@@ -122,6 +122,28 @@ def review_failure_reason(state: TaskState) -> str | None:
     )
 
 
+def revision_update(state: TaskState) -> dict[str, object]:
+    """The state change that closes the review the work node is answering.
+
+    Deliberately a *result* rather than a new state, and that is the whole
+    difference from v1's ``begin_revision``. v1 hands the writer a state with
+    the critic's verdict already removed, so the rewrite happens without
+    knowing what was wrong with the draft -- tolerable there, because the
+    writer re-derives a document from evidence it can see in full.
+
+    v2's loop is the whole method: ``review`` sends work back *because of*
+    something, and a second attempt that cannot read the complaint is a coin
+    flip rather than a fix. So the work node runs against the state as
+    checkpointed, review and all, and this closes it afterwards -- which is
+    also the only ordering ``TaskState`` permits, since a stored review must
+    describe the current ``revision_count``.
+    """
+
+    if not state.can_revise:
+        raise ValueError("revision budget is exhausted")
+    return {"revision_count": state.revision_count + 1, "review_result": None}
+
+
 def route_approval(state: TaskState) -> TaskNodeId | None:
     """Export on approval, nowhere on rejection.
 
@@ -198,6 +220,7 @@ __all__ = [
     "declared_nodes",
     "next_nodes",
     "review_failure_reason",
+    "revision_update",
     "route_approval",
     "route_review",
     "terminal_failure_reason",

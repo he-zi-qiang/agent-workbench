@@ -49,9 +49,12 @@ from agent_workbench.workflows.research_graph import (
 
 # Nodes whose entire product is one stored artifact.  Membership is checked at
 # call time so a node that grows a structured result cannot keep using the
-# artifact-shaped path and silently drop that result.
+# artifact-shaped path and silently drop that result.  v2's ``work`` belongs
+# here on the same terms as ``synthesize``: whatever its tool loop did to the
+# working set, what it owes the graph is the one report the reviewer reads
+# (ADR-031 §2.1).
 ARTIFACT_PRODUCING_NODES: Final[frozenset[TaskNodeId]] = frozenset(
-    {"understand", "research_internal", "research_external", "synthesize"}
+    {"understand", "research_internal", "research_external", "synthesize", "work"}
 )
 
 

@@ -17,7 +17,7 @@ from langgraph.checkpoint.memory import (  # pyright: ignore[reportMissingTypeSt
 )
 
 from agent_workbench.adapters.langgraph.workflow import (
-    GRAPH_BUILDERS,
+    GRAPH_DEFINITIONS,
     GRAPH_VERSION_KEY,
     UNRECORDED_GRAPH_VERSION,
     GraphState,
@@ -305,7 +305,7 @@ def test_a_checkpoint_round_trip_preserves_the_state() -> None:
 
 
 def test_only_the_registered_versions_are_buildable() -> None:
-    assert set(GRAPH_BUILDERS) == {"v1"}
+    assert set(GRAPH_DEFINITIONS) == {"v1", "v2_general"}
 
 
 # --------------------------------------------------------------------------

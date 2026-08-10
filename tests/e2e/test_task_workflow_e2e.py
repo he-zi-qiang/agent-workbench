@@ -35,7 +35,7 @@ from agent_workbench.adapters.langgraph import (
     LangGraphTaskWorkflow,
     PostgresCheckpointSaver,
 )
-from agent_workbench.adapters.langgraph.workflow import build_v1_graph
+from agent_workbench.adapters.langgraph.workflow import GRAPH_DEFINITIONS
 from agent_workbench.adapters.persistence import (
     PostgresEventLog,
     PostgresTaskRegistry,
@@ -53,7 +53,7 @@ TABLES = (
 )
 
 VERSIONS = ("v1",)
-BUILDERS = {"v1": build_v1_graph}
+GRAPHS = {"v1": GRAPH_DEFINITIONS["v1"]}
 
 TENANT = "tenant_a"
 OWNER = "user_1"
@@ -227,7 +227,7 @@ def _worker(engine: Any) -> TaskWorker:
         workflow=LangGraphTaskWorkflow(
             handlers=_handlers(),
             checkpointer=PostgresCheckpointSaver(engine),
-            builders=BUILDERS,
+            graphs=GRAPHS,
         ),
         load_state=_load_state,
         buildable_versions=VERSIONS,

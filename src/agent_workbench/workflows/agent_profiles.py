@@ -25,7 +25,11 @@ What that buys, concretely:
   the writer's job and already happened;
 * no profile admits the accumulated output of earlier nodes. Those live in the
   artifact store; copying them into a prompt makes context grow with the graph
-  rather than with the question.
+  rather than with the question. The one thing that does travel between nodes
+  is v2's review verdict, and it is bounded and *replaced* rather than
+  accumulated: the worker sees the complaint about the attempt it is redoing
+  and no earlier one, so the prompt stays the same size on the tenth revision
+  as on the first.
 
 **Authority narrows, never widens.** A profile's tool list is a ceiling of its
 own, intersected with the Task's submitted authorization envelope. A profile
@@ -55,7 +59,7 @@ from agent_workbench.domain.workspace import (
     WORKSPACE_WRITE_TOOL,
 )
 
-#: The agents of the fixed v1 graph. Named after what they do rather than after
+#: Every agent either graph declares. Named after what they do rather than after
 #: the node they sit on: two of them are the same kind of worker pointed at
 #: different corpora, and the graph's node ids do not say that.
 AgentProfileName = Literal[
@@ -65,12 +69,17 @@ AgentProfileName = Literal[
     "researcher_external",
     "writer",
     "critic",
+    # v2 only (ADR-031). `worker` is the one agent in this project whose run is
+    # a working loop rather than an answer, and `reviewer` is the gate that
+    # decides whether the loop is done.
+    "worker",
+    "reviewer",
 ]
 
 #: What an agent can be shown. Deliberately a closed vocabulary: a free-form
 #: projection would make "what may this agent read" a question about whichever
 #: caller built the request last.
-ProjectionInput = Literal["objective", "plan", "draft", "evidence"]
+ProjectionInput = Literal["objective", "plan", "draft", "evidence", "review"]
 
 #: Which deployment catalog a profile subscribes to (ADR-027 §3.3, ADR-029 §3.5).
 #: A tool is dynamic when whether it exists is a deployment fact -- an MCP
@@ -168,19 +177,42 @@ _EXTERNAL_RESEARCH_CONTRACT: Final[str] = (
     "than no evidence."
 )
 
+#: Everything the working set exposes, and the read-only subset of it. Named
+#: here rather than spelled out at each profile so "which of these is a write"
+#: is answered in one place; a sixth workspace tool added to one profile's list
+#: and not another's is the drift this exists to make impossible.
+WORKSPACE_READ_TOOLS: Final[tuple[ToolName, ...]] = (
+    WORKSPACE_GREP_TOOL,
+    WORKSPACE_LIST_TOOL,
+    WORKSPACE_READ_TOOL,
+)
+WORKSPACE_TOOLS: Final[tuple[ToolName, ...]] = (
+    WORKSPACE_EDIT_TOOL,
+    WORKSPACE_GREP_TOOL,
+    WORKSPACE_LIST_TOOL,
+    WORKSPACE_READ_TOOL,
+    WORKSPACE_WRITE_TOOL,
+)
+
+#: The agent both graphs put on ``understand``. One object rather than two
+#: identical declarations: the node means the same thing in either graph
+#: (ADR-031 §2.1), and a second profile restating that in slightly different
+#: words would be the first place the two drifted apart.
+_FRAMER: Final[AgentProfile] = AgentProfile(
+    name="framer",
+    node="understand",
+    system_prompt=(
+        "Restate the objective as the concrete question to answer. "
+        "Record what would count as an answer and what is out of scope."
+    ),
+    admits=frozenset({"objective"}),
+)
+
 #: The v1 roster. One profile per model-invoking node, and the routing nodes
 #: (``route``, ``quality_gate``, ``approval``) deliberately have none: a
 #: supervisor here is a structured routing function, not an agent with a prompt.
 V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
-    AgentProfile(
-        name="framer",
-        node="understand",
-        system_prompt=(
-            "Restate the objective as the concrete question to answer. "
-            "Record what would count as an answer and what is out of scope."
-        ),
-        admits=frozenset({"objective"}),
-    ),
+    _FRAMER,
     AgentProfile(
         name="planner",
         node="plan",
@@ -229,13 +261,7 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
         # replay produces another version rather than a second effect somewhere
         # nothing can take it back. The rule the empty tuples elsewhere protect
         # is "no external effect inside a model loop", and these are outside it.
-        tool_names=(
-            WORKSPACE_EDIT_TOOL,
-            WORKSPACE_GREP_TOOL,
-            WORKSPACE_LIST_TOOL,
-            WORKSPACE_READ_TOOL,
-            WORKSPACE_WRITE_TOOL,
-        ),
+        tool_names=WORKSPACE_TOOLS,
         # Rendering a document is synthesis, which is the audience ADR-025 gave
         # the writer, and running code over the working set is the sandbox's.
         # Planners and critics still acquire nothing, and the research audience
@@ -252,8 +278,98 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
     ),
 )
 
+#: The one agent in this project whose job is to *do* something rather than to
+#: answer once. It says less about method than v1's prompts do, deliberately:
+#: the node exists because a fixed order was the wrong thing to impose on this
+#: kind of task (ADR-031), so prescribing one here would put it back.
+_WORK_CONTRACT: Final[str] = (
+    "Do the work the objective asks for, using the tools you have. Decide your "
+    "own next step each turn: read what is already in the working set before "
+    "changing it, make one change at a time, and check the result of a change "
+    "before building on it. If a step fails, read the failure and fix it "
+    "rather than repeating it. "
+    "Everything you produce belongs in the working set -- write files there, "
+    "and do not describe a file you did not write. "
+    "When a reviewer has sent this back, the issues it listed are the work: "
+    "address them specifically, and say what you changed for each. "
+    "Your final message is a report for the reviewer, not the deliverable: "
+    "state what you did, name the files you wrote, and state plainly anything "
+    "you could not do. A claim the working set does not support is worse than "
+    "an admitted gap."
+)
+
+#: The reviewer's contract, JSON for the same reason the critic's is: what this
+#: node produces is a decision another node routes on, not prose for a reader.
+_REVIEW_CONTRACT: Final[str] = (
+    "Decide whether the work satisfies the objective. Read the working set to "
+    "check the report against what is actually there -- a report that claims a "
+    "file the working set does not have is a revise, not a pass. "
+    "Return exactly one JSON object and no Markdown, prose, or code fence: "
+    '{"decision":"pass|revise","reviewed_draft_ref":"...",'
+    '"revision_number":0,"summary":"...","issues":[],"score":0}. '
+    "The draft reference and revision must match the supplied values. Every "
+    "issue must name something specific enough to act on: the next attempt "
+    "sees your issues and nothing else about this review."
+)
+
+#: The v2 roster (ADR-031). Three entries, one of which is v1's ``framer``
+#: object itself: ``understand`` means the same thing in both graphs, and a
+#: second profile saying so in different words would be the first place the two
+#: graphs drifted. The topology is what differs between them, and that lives in
+#: the two graph modules.
+V2_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
+    _FRAMER,
+    AgentProfile(
+        name="worker",
+        node="work",
+        system_prompt=_WORK_CONTRACT,
+        # The objective, and -- on a second pass -- what the reviewer objected
+        # to. Not `plan`: v2 has no plan node, and admitting one would describe
+        # an input no node produces. Not `evidence`: v2 has no researchers, and
+        # what this agent reads it reads through its own tools.
+        admits=frozenset({"objective", "review"}),
+        # The full working set. Same reasoning as the writer's: these bind
+        # names inside this Task's own versioned artifact store, so a replay
+        # produces another version rather than a second effect somewhere
+        # nothing can take it back.
+        tool_names=WORKSPACE_TOOLS,
+        # Read outward, render a document, run code. Everything ADR-031 §2.1
+        # means by "a full tool set" -- and deliberately not the export, which
+        # is the Task's one externally visible write and lives behind the
+        # human gate on the other side of `review` (ADR-027, ADR-031 §2.4).
+        dynamic_tool_sources=frozenset({"research", "synthesis", "sandbox"}),
+    ),
+    AgentProfile(
+        name="reviewer",
+        node="review",
+        system_prompt=_REVIEW_CONTRACT,
+        # The report and the objective it answers -- the v2 analogue of the
+        # critic seeing the draft. Not `review`: this agent writes one.
+        admits=frozenset({"objective", "draft"}),
+        # Read-only, and the exception proves the v1 rule rather than bending
+        # it. The critic is kept away from the *evidence behind* a draft
+        # because reading it would make the critic review the research; here
+        # the working set **is** the product, so a reviewer that cannot open it
+        # is reviewing a description of the work instead of the work. Nothing
+        # in this list changes anything, and no dynamic source is declared: a
+        # reviewer that could run code would be doing the work over.
+        tool_names=WORKSPACE_READ_TOOLS,
+    ),
+)
+
+#: Which roster each graph declares. The limit check walks this rather than one
+#: roster, because "how many agents does the compiled graph have" is a question
+#: per graph, and a deployment ceiling that only ever counted v1's would be
+#: satisfied by a v2 that outgrew it.
+AGENT_ROSTERS: Final[tuple[tuple[str, tuple[AgentProfile, ...]], ...]] = (
+    ("v1", V1_AGENT_PROFILES),
+    ("v2_general", V2_AGENT_PROFILES),
+)
+
 _BY_NODE: Final[dict[TaskNodeId, AgentProfile]] = {
-    profile.node: profile for profile in V1_AGENT_PROFILES
+    profile.node: profile
+    for roster in (V1_AGENT_PROFILES, V2_AGENT_PROFILES)
+    for profile in roster
 }
 
 
@@ -301,7 +417,8 @@ def profile_with_dynamic_tools(
 
 
 def assert_within_static_limit(
-    limit: int, profiles: Sequence[AgentProfile] = V1_AGENT_PROFILES
+    limit: int,
+    rosters: Sequence[tuple[str, tuple[AgentProfile, ...]]] = AGENT_ROSTERS,
 ) -> None:
     """Refuse a graph with more agents than the deployment budgeted for.
 
@@ -309,13 +426,19 @@ def assert_within_static_limit(
     this belongs at assembly: a seventh agent added without raising the ceiling
     stops the process from starting rather than being discovered as an
     unexpectedly large bill.
+
+    Every roster is checked, and each against the whole limit rather than a
+    share of it. The ceiling bounds one Task's graph, and a Task runs one
+    graph -- so summing the two would make deploying a second graph look like
+    doubling the cost of a Task that still visits one of them.
     """
 
-    if len(profiles) > limit:
-        raise AgentProfileLimitError(
-            f"the graph declares {len(profiles)} agent nodes and this "
-            f"deployment permits {limit}"
-        )
+    for version, profiles in rosters:
+        if len(profiles) > limit:
+            raise AgentProfileLimitError(
+                f"graph {version} declares {len(profiles)} agent nodes and this "
+                f"deployment permits {limit}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,6 +480,14 @@ def render_projection(
     if profile.admitted("plan") and state.plan:
         lines.append("Plan:")
         lines.extend(f"{step.sequence}. {step.objective}" for step in state.plan)
+    if profile.admitted("review") and state.review_result is not None:
+        # Why this agent is running again. Absent on the first pass, which is
+        # the state it is absent from -- not a shorter prompt for the same
+        # situation, but a different situation (ADR-031 §2.1: the loop is the
+        # method, and a loop that carries nothing back is not one).
+        review = state.review_result
+        lines.append(f"A reviewer sent this back: {review.summary}")
+        lines.extend(f"- {issue}" for issue in review.issues)
     if profile.admitted("draft"):
         if context.draft_ref is None or context.revision_number is None:
             raise AgentContextViolationError(
@@ -451,7 +582,11 @@ def build_agent_request(
 
 
 __all__ = [
+    "AGENT_ROSTERS",
     "V1_AGENT_PROFILES",
+    "V2_AGENT_PROFILES",
+    "WORKSPACE_READ_TOOLS",
+    "WORKSPACE_TOOLS",
     "AgentContextViolationError",
     "AgentProfile",
     "AgentProfileLimitError",

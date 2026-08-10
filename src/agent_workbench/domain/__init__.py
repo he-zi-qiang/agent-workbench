@@ -102,6 +102,7 @@ from agent_workbench.domain.schema import (
 from agent_workbench.domain.task_inputs import TaskInput
 from agent_workbench.domain.tasks import (
     CANONICAL_V1_NODE_IDS,
+    CANONICAL_V2_NODE_IDS,
     ReviewDecision,
     ReviewResult,
     TaskNodeId,
@@ -122,6 +123,7 @@ from agent_workbench.domain.tools import (
 
 __all__ = [
     "CANONICAL_V1_NODE_IDS",
+    "CANONICAL_V2_NODE_IDS",
     "DOMAIN_SCHEMA_VERSION",
     "DURABLE_EVENT_TYPES",
     "EVENT_DURABILITY",

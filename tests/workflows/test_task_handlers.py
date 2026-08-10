@@ -25,9 +25,17 @@ from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.langgraph.workflow import LangGraphTaskWorkflow
 from agent_workbench.adapters.memory.artifact_store import InMemoryArtifactStore
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
+from agent_workbench.adapters.tools.workspace import (
+    WorkspaceListTool,
+    WorkspaceWriteTool,
+)
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.messages import user_message
-from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
+from agent_workbench.domain.policies import (
+    AuthorizationEnvelope,
+    ExecutionContext,
+    PrincipalContext,
+)
 from agent_workbench.domain.runs import (
     AgentOutcome,
     AgentRunRequest,
@@ -37,12 +45,16 @@ from agent_workbench.domain.runs import (
     TraceContext,
 )
 from agent_workbench.domain.tasks import TaskState
+from agent_workbench.domain.tools import ToolCall, ToolResult
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.task_registry import ExecutionLease, TaskRegistry, TaskRun
+from agent_workbench.ports.tools import ToolInvocation
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError, TaskRunContext
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.task_handlers import (
+    V1_HANDLER_NODES,
+    V2_HANDLER_NODES,
     BoundedParallelExecutor,
     StructuredOutputError,
     TaskExportHandlers,
@@ -52,10 +64,13 @@ from agent_workbench.workflows.task_handlers import (
     TaskLeaseUnavailableError,
     TaskNodeInvocationProvider,
     TaskNodeRunFailedError,
+    build_task_handlers,
     build_task_v1_handlers,
+    build_task_v2_handlers,
     decode_plan_output,
     decode_review_output,
 )
+from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 SCOPE = TaskExecutionScope()
 
@@ -792,3 +807,247 @@ def test_stamping_a_deadline_leaves_the_rest_of_the_budget_alone() -> None:
 
     assert stamped.max_steps == 12
     assert stamped.max_tool_calls == 24
+
+
+# --------------------------------------------------------------------------
+# The v2 general graph's nodes, through the same factory (ADR-031)
+# --------------------------------------------------------------------------
+
+
+def test_one_factory_serves_both_graphs_and_shares_the_common_nodes() -> None:
+    """The sharing ADR-031 §3 asks for, asserted structurally.
+
+    ``build_task_handlers`` is what the composition root calls once, and both
+    graph builders index the one mapping it returns -- so at the shared node
+    ids there is one handler object, not two implementations that agree today.
+    The factory returning the union is what makes that composition possible;
+    a factory that produced only one graph's nodes would leave the other graph
+    running pass-throughs.
+    """
+
+    handlers = build_task_handlers(
+        executor=_TextExecutor(),
+        artifacts=InMemoryArtifactStore(),
+        invocations=_provider(_Registry(_task())),
+    )
+
+    assert set(handlers) == set(V1_HANDLER_NODES) | set(V2_HANDLER_NODES)
+    # The two public selectors name exactly their graph's nodes.
+    selected_v1 = build_task_v1_handlers(
+        executor=_TextExecutor(),
+        artifacts=InMemoryArtifactStore(),
+        invocations=_provider(_Registry(_task())),
+    )
+    selected_v2 = build_task_v2_handlers(
+        executor=_TextExecutor(),
+        artifacts=InMemoryArtifactStore(),
+        invocations=_provider(_Registry(_task())),
+    )
+    assert set(selected_v1) == set(V1_HANDLER_NODES)
+    assert set(selected_v2) == set(V2_HANDLER_NODES)
+
+
+def test_v2_real_handlers_run_the_whole_graph_and_bind_review_to_the_draft() -> None:
+    """Every v2 node with real handlers, through the real compiled graph.
+
+    The v2 twin of the v1 whole-graph test above, and the same claim: text in,
+    owned artifacts out, inside one claim. What is specifically v2 here is the
+    binding -- the reviewer's verdict names the exact artifact the work node
+    persisted this pass, which is only checkable once real ids exist.
+    """
+
+    async def scenario() -> None:
+        registry = _Registry(_task(graph_version="v2_general"))
+        store = InMemoryArtifactStore()
+        executor = _TextExecutor()
+
+        async def decided_approval(_: TaskState) -> dict[str, Any]:
+            return {"approval_id": "apr_1", "approval_decision": "approved"}
+
+        exporter = _RecordingExport()
+        handlers = build_task_v2_handlers(
+            executor=executor,
+            artifacts=store,
+            invocations=_provider(registry),
+            export=_export(exporter),
+        ) | {"approval": decided_approval}
+
+        original = executor.run
+
+        async def with_current_draft(
+            request: AgentRunRequest, emit: object, cancellation: object
+        ) -> AgentOutcome:
+            if request.trace.graph_node_id == "review":
+                requested = request.messages[0].text()
+                draft_id = requested.split("draft_ref=", 1)[1].split("\n", 1)[0]
+                executor.requests.append(request)
+                return AgentOutcome(
+                    agent_run_id=request.trace.agent_run_id,
+                    status="completed",
+                    stop_reason="completed",
+                    output_text=_text_for("critic").replace("PLACEHOLDER", draft_id),
+                    usage=BudgetUsage(
+                        steps=1, tokens=TokenUsage(input_tokens=3, output_tokens=5)
+                    ),
+                )
+            return await original(request, emit, cancellation)
+
+        executor.run = with_current_draft  # type: ignore[method-assign]
+        result = await LangGraphTaskWorkflow(handlers=handlers).run(
+            _state(), thread_id="thread_v2", graph_version="v2_general"
+        )
+
+        assert result.disposition == "completed"
+        assert result.state.draft_ref is not None
+        assert result.state.export_ref == "art_report_1"
+        assert exporter.calls == [
+            {
+                "draft_ref": result.state.draft_ref,
+                "approval_id": "apr_1",
+                "task_id": "task_1",
+                "lease_epoch": registry.task.lease_epoch,
+            }
+        ]
+        # No research nodes ran and none were asked for: v2 contributes no
+        # evidence, and the nodes that executed are exactly its own.
+        assert result.state.evidence_refs == ()
+        assert {request.trace.graph_node_id for request in executor.requests} == {
+            "understand",
+            "work",
+            "review",
+        }
+        # The work node's product is the Task's deliverable, stored as one.
+        stored = await store.head(
+            tenant_id="tenant_a",
+            artifact_id=result.state.draft_ref,
+            principal_id="user_1",
+        )
+        assert stored.kind == "report"
+
+    _run(scenario)
+
+
+def test_the_reviewer_refuses_to_review_before_there_is_work() -> None:
+    async def scenario() -> None:
+        handlers = build_task_v2_handlers(
+            executor=_TextExecutor(),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task(graph_version="v2_general"))),
+        )
+        with pytest.raises(StructuredOutputError):
+            await handlers["review"](_state())
+
+    _run(scenario)
+
+
+def test_a_failed_work_run_keeps_the_usage_it_spent() -> None:
+    """The v2 twin of the artifact-failure test: a charge without a product."""
+
+    async def scenario() -> None:
+        handlers = build_task_v2_handlers(
+            executor=_TextExecutor(failing_node="work"),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task(graph_version="v2_general"))),
+        )
+        with pytest.raises(AgentNodeFailedError) as failure:
+            await handlers["work"](_state())
+        assert failure.value.state.budget_usage.steps == 1
+        assert len(failure.value.state.agent_outcome_refs) == 1
+
+    _run(scenario)
+
+
+def test_v2s_two_workspace_nodes_enter_the_session_their_tools_need() -> None:
+    """The worker writes and the reviewer reads, through real workspace tools.
+
+    The gate under test is ``_uses_workspace``, which derives "who pays for a
+    session" from the profiles instead of a node-name list -- and v2's nodes
+    are exactly the change that would have left the list stale. Asserted
+    through the tools rather than the scope, because the failure being
+    prevented is a run that advertises tools, fails every call with
+    ``WorkspaceUnavailableError``, and still reports success (ADR-028 §3.2).
+    """
+
+    scope = WorkspaceScope()
+    tool_results: list[ToolResult] = []
+    principal = PrincipalContext(tenant_id="tenant_a", principal_id="user_1")
+
+    def _call(tool: Any, name: str, arguments: dict[str, Any]) -> Any:
+        return tool.handle(
+            ToolInvocation(
+                call=ToolCall(
+                    tool_call_id="toolu_" + "0" * 20,
+                    tool_name=name,
+                    arguments=arguments,
+                ),
+                context=ExecutionContext(
+                    principal=principal,
+                    envelope=AuthorizationEnvelope(),
+                    agent_run_id="run_workspace",
+                    policy_identity="policy-v1:test",
+                ),
+                cancellation=NullCancellationToken(),
+                timeout_seconds=30,
+            )
+        )
+
+    class _WorkspaceUsingExecutor(_TextExecutor):
+        async def run(
+            self, request: AgentRunRequest, emit: object, cancellation: object
+        ) -> AgentOutcome:
+            node = request.trace.graph_node_id
+            if node == "work":
+                tool_results.append(
+                    await _call(
+                        WorkspaceWriteTool(scope),
+                        "workspace_write",
+                        {"name": "result.md", "content": "cleaned"},
+                    )
+                )
+            if node == "review":
+                tool_results.append(
+                    await _call(WorkspaceListTool(scope), "workspace_list", {})
+                )
+                # The verdict must name the exact draft the prompt supplied,
+                # like any reviewing agent's.
+                prompt = request.messages[0].text()
+                draft_id = prompt.split("draft_ref=", 1)[1].split("\n", 1)[0]
+                self.requests.append(request)
+                return AgentOutcome(
+                    agent_run_id=request.trace.agent_run_id,
+                    status="completed",
+                    stop_reason="completed",
+                    output_text=_text_for("critic").replace("PLACEHOLDER", draft_id),
+                    usage=BudgetUsage(
+                        steps=1, tokens=TokenUsage(input_tokens=3, output_tokens=5)
+                    ),
+                )
+            return await super().run(request, emit, cancellation)
+
+    async def scenario() -> None:
+        handlers = build_task_v2_handlers(
+            executor=_WorkspaceUsingExecutor(),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task(graph_version="v2_general"))),
+            workspace_scope=scope,
+        )
+        work_update = await handlers["work"](_state())
+        # The version the work node committed is what the graph carries
+        # forward; a write nothing commits is one the next attempt cannot see.
+        assert work_update["workspace_version"]
+
+        reviewed = TaskState.model_validate(
+            {**_state().model_dump(), **dict(work_update)}
+        )
+        review_update = dict(await handlers["review"](reviewed))
+        # Read-only: the reviewer entered a session and advanced nothing.
+        assert "workspace_version" not in review_update
+
+    _run(scenario)
+
+    write_result, list_result = tool_results
+    assert write_result.status == "ok"
+    assert list_result.status == "ok"
+    # The reviewer's listing read the set the worker's session committed.
+    assert list_result.content is not None
+    assert "result.md" in list_result.content

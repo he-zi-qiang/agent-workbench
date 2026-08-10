@@ -62,10 +62,17 @@ CANONICAL_V1_NODE_IDS: Final[tuple[TaskNodeId, ...]] = (
 #: derived from it: the two graphs share three of four node ids and none of
 #: their shape, and a tuple computed from the other would make a change to one
 #: silently move the other.
+#:
+#: ``approval`` is in here for the same reason v1's routing nodes are: this
+#: tuple is every node id a checkpoint of this graph may sit on, and a v2 thread
+#: paused for a human sits on exactly that one. ADR-031 §2.1 counts four nodes
+#: because four is the shape; the gate on the export path is the fifth thing a
+#: recovery has to be able to name.
 CANONICAL_V2_NODE_IDS: Final[tuple[TaskNodeId, ...]] = (
     "understand",
     "work",
     "review",
+    "approval",
     "export",
 )
 
@@ -237,7 +244,12 @@ class TaskState(VersionedModel):
 
     @property
     def can_revise(self) -> bool:
-        """Whether quality_gate may route back to synthesize."""
+        """Whether a reviewing node may send the work back one more time.
+
+        One budget for both graphs: v1's ``quality_gate -> synthesize`` and
+        v2's ``review -> work`` ask the same question, and two counters would
+        be two places to change it (ADR-031 §2.1).
+        """
 
         return self.revision_count < self.max_revisions
 

@@ -1,5 +1,76 @@
 # 实施状态
 
+## 2026-08-10 阶段五收尾：v2 能被选中、能干活、横切性质在两张图上都被测过
+
+接着 PR-5.1（v2 的节点与边）做完剩下三件事：`work`/`review` 的真实处理器与 agent
+profile 并接入 LangGraph 适配器；PR-5.2 提交时选图并冻结；PR-5.3 横切性质对两张图
+都成立的结构测试。
+
+### 落地的决定，按重要性排
+
+**一个 handler 工厂供两张图选取。** `build_task_handlers` 产出两张图全部节点，
+`build_task_v1_handlers`/`build_task_v2_handlers` 各自按节点清单选取；组合根只调一次
+工厂，两张图字面上共享 `understand` 与 `export` 的同一个 handler 对象。选取器对缺失
+节点直接断言失败，因为适配器对没供 handler 的节点默认 pass-through——一个打错字的
+节点名不是报错，是一个跑完整张图、什么都没做、然后报成功的 Task。
+
+**worker 的修订顺序与 v1 相反，且只能是这个方向。** v1 在 writer 运行**前**清掉
+critic 的裁决（`begin_revision`）；v2 的 `work` 带着裁决运行、之后才关闭它
+（`revision_update`）——回去改的人读不到"哪里不行"，第二次尝试就是掷硬币而不是修复。
+这同时是 `TaskState` 唯一允许的顺序：存着的 review 必须描述当前 revision_count，
+"计数已进、旧裁决还在"的状态根本过不了校验。
+
+**reviewer 拿只读工作区工具，是对 v1 铁律的"例外证明"而不是放宽。** critic 不给看
+证据，因为那会变成评审研究；v2 的工作区**就是产物本身**，看不见工作区的 reviewer
+评的是"对工作的描述"而不是工作。写权限仍然没有：能改工作区的 reviewer 是在重做活。
+
+**图形态是提交时的"形状"选择，不是版本字符串。** `POST /v1/tasks` 可选
+`graph: "research" | "general"`，映射进 `TaskService`；直接传 `v2_general` 是 422。
+版本解析后存进 Registry 行，这就是冻结：Worker 读行、不读配置，部署改默认值只影响
+之后没选择的提交。`graph_version` 本来就在幂等身份里，同 key 换图重试是 409 而不是
+静默返回旧 Task。**没有自动路由**（ADR-031 §2.3）。
+
+**每个版本注册自己的终态措辞。** 两张图在同样两件事上停（修订预算耗尽、人拒绝导出），
+措辞各自成文。适配器按"写 checkpoint 的那个版本"读 `terminal_failure_reason`——读错
+不会抛异常，只会把 v1 的句子安在 v2 的 Task 上，所有只断言"失败了没有"的测试都发现
+不了，所以注册表按版本收拢（`GraphDefinition`）。
+
+**顺手修掉一个真缺陷：故障注入包装器只遍历 v1 节点。** 它的输出会**替换**传入的
+handler 映射，v2 的 `work`/`review` 会被静默丢成 pass-through——带故障注入的可靠性
+测试跑 v2 时，图照样跑完、什么都不做、报成功。已改为遍历两张图节点并集，测试用
+"未武装 controller 逐节点计数"钉住（抽样断言在这个缺陷下会假绿：共享的 `understand`
+仍会命中）。
+
+**`CANONICAL_V2_NODE_IDS` 是五个不是四个。** ADR-031 §2.1 数的四个是形状；这个元组是
+"v2 checkpoint 可能停在的节点全集"，停在人工审批上的线程正好是第五个。
+
+### 测试与证据
+
+- 本机无服务：1889 passed / 604 skipped；真实 PG(5433)+Qdrant(6333)：
+  **2482 passed / 11 skipped**。ruff、pyright 全绿。
+- 新增 `tests/workflows/test_cross_graph_invariants.py`：全部按图注册表参数化，
+  第三张图注册进适配器而漏掉 handler 清单/节点元组/终态措辞时，注册当天就红。
+  `reconcile` 的每个动作（start/resume/wait_for_approval/resume_with_approval/
+  settle_succeeded/settle_failed/wait_for_migration）对两个版本各跑一遍，含
+  "v1 的 Task 停在只装了 v2 的 Worker 上"这个没人会想到试的方向。
+- 真实 handler 契约：v2 全图文本 executor 走通（review 的裁决绑到 work 本轮产出的
+  artifact id）；`work`/`review` 都实际进了工作区会话（写、然后另一节点读到）；
+  失败的 work run 保留已花费预算。
+- 真实中断审批在 v2 线程上：暂停、`inspect` 报出 approval id、批准恢复到导出、
+  拒绝恢复到失败——同一个 `TaskApprovalGate` 对象服务两张图（ADR-031 §2.4）。
+- **破坏验证 5 组，每组恰好红在守它的测试上**：拆回边→4 条红；包装器改回 v1-only→
+  逐节点计数红；v2 注册 v1 措辞→3 条红；工作区门改回节点名清单→会话测试红；
+  提交忽略 graph 选择→2 条服务层测试红。
+
+### 仍然不是事实的
+
+- v2 **没有真实模型的端到端验收**：以上全部是确定性 handler 与文本 executor 的证据，
+  "一个真 DeepSeek 驱动的 work 节点把一件事做完"还没发生过（本机 fake-IP 代理仍挡着
+  读外网，见下一节）。
+- CLI repl 与 web 控制台还不会发 `graph` 字段；今天只有直接调 API 能选 v2。
+- worker 的动态工具面等于 writer 的（research/synthesis/sandbox 三个 audience），
+  没有为它单独收窄或放宽过任何 MCP 服务器声明。
+
 ## 2026-08-10 一次没做成的真实验收，和它换来的两条实测事实
 
 目标是补上两条一直没有事件流证据的能力：`download_document` 落库，以及带对 scope 的
