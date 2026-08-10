@@ -83,6 +83,14 @@ def _request(
                     if args.knowledge_base_id is not None
                     else {}
                 ),
+                # Only when chosen. An omitted flag must submit the exact bytes
+                # the CLI sent before the flag existed, so the deployment's
+                # default -- not this client's opinion of it -- decides.
+                **(
+                    {"graph": args.graph}
+                    if getattr(args, "graph", None) is not None
+                    else {}
+                ),
             },
         )
         return response_json(response), key

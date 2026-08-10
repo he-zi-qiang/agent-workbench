@@ -54,10 +54,20 @@ SUBTITLE: Final[str] = "/help 看命令 · /exit 退出"
 
 HELP: Final[str] = """  /kb <id>        选一个知识库；/kb none 回到自由回答
   /task <目标>     提交一个 Task，实时看它推进
+  /graph <形态>    之后的 Task 走哪条流水线：research 调研报告 · general 通用执行
+                  /graph default 回到部署默认
   /steps          展开上一轮的每一步（提示词、工具参数、原始事件）
   /session        显示当前会话与知识库
   /new            开一个新会话
   /help  /exit"""
+
+#: What `/graph` accepts, and what each means to a reader. The keys are the
+#: API's own vocabulary -- shapes, not graph versions -- so this table cannot
+#: drift into naming a version nobody deploys (ADR-031 §2.3).
+GRAPH_CHOICES: Final[dict[str, str]] = {
+    "research": "调研报告：双路检索、评审、导出",
+    "general": "通用执行：一个带工具的执行者自定步骤",
+}
 
 #: How often a Task's timeline is re-read. Matches the web console.
 TASK_POLL_SECONDS: Final[float] = 2.5
@@ -115,6 +125,11 @@ class Repl:
         self.colour = colour and colour_enabled(stream)
         self.session_id: str | None = None
         self.knowledge_base_id = knowledge_base_id
+        # Which pipeline `/task` submits to. ``None`` means the field is not
+        # sent at all -- the deployment's default, not this client's copy of
+        # it -- and survives `/new` deliberately: it is a preference about
+        # Tasks, not a fact about one chat session.
+        self.task_graph: str | None = None
         self.last_stages: list[Stage] = []
         self._turn = 0
         self._events: queue.Queue[EventEnvelope] = queue.Queue()
@@ -150,10 +165,24 @@ class Repl:
         elif name == "/kb":
             self.knowledge_base_id = None if rest in ("", "none", "off") else rest
             self._say(f"  知识库：{self.knowledge_base_id or '不使用 · 自由回答'}")
+        elif name == "/graph":
+            if rest == "":
+                # Bare `/graph` reads the setting rather than changing it.
+                self._say(f"  Task 流水线：{self._graph_label()}")
+                self._say("  用法：/graph research|general|default")
+            elif rest in ("default", "none", "off"):
+                self.task_graph = None
+                self._say("  Task 流水线：部署默认")
+            elif rest in GRAPH_CHOICES:
+                self.task_graph = rest
+                self._say(f"  Task 流水线：{self._graph_label()}")
+            else:
+                self._say("  用法：/graph research|general|default")
         elif name == "/session":
             self._say(
                 f"  会话：{self.session_id or '（还没开始）'}\n"
-                f"  知识库：{self.knowledge_base_id or '不使用 · 自由回答'}"
+                f"  知识库：{self.knowledge_base_id or '不使用 · 自由回答'}\n"
+                f"  Task 流水线：{self._graph_label()}"
             )
         elif name == "/new":
             self._stop.set()
@@ -341,6 +370,9 @@ class Repl:
                     "objective": objective,
                     "max_revisions": 2,
                     "wants_report": _mentions_report(objective),
+                    # Only when `/graph` chose one; absent means the deployment
+                    # decides, exactly as before the command existed.
+                    **({"graph": self.task_graph} if self.task_graph else {}),
                 },
             )
         except CliHttpError as error:
@@ -494,6 +526,11 @@ class Repl:
                     self._say(f"      {label}: {value}")
         self._say("")
 
+    def _graph_label(self) -> str:
+        if self.task_graph is None:
+            return "部署默认"
+        return f"{self.task_graph} · {GRAPH_CHOICES[self.task_graph]}"
+
     def _dim(self, text: str) -> str:
         """Secondary text: ids, counts, anything the eye should skip past."""
 
@@ -591,4 +628,4 @@ def _mentions_report(objective: str) -> bool:
     return any(word in objective for word in ("报告", "文件", "导出", "report"))
 
 
-__all__ = ["HELP", "SUBTITLE", "TITLE", "Repl", "sse_frames"]
+__all__ = ["GRAPH_CHOICES", "HELP", "SUBTITLE", "TITLE", "Repl", "sse_frames"]

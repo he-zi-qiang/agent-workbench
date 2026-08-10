@@ -16,10 +16,11 @@ from agent_workbench.apps.cli.live import (
     LiveStages,
     banner,
 )
-from agent_workbench.apps.cli.repl import sse_frames
+from agent_workbench.apps.cli.repl import Repl, sse_frames
 from agent_workbench.apps.cli.stages import (
     Stage,
     chat_stage_of,
+    order_of,
     task_stage_of,
     title_of,
 )
@@ -150,6 +151,24 @@ class TestStages:
         assert task_stage_of("research_external") == "research"
         assert task_stage_of("route") == "plan"
 
+    def test_v2_nodes_have_stages_of_their_own_rather_than_falling_through(
+        self,
+    ) -> None:
+        """One table serves both graphs: only visited stages render, so the
+        interleaved order is correct for each. The load-bearing half is
+        `review` -- v2's reviewer lands in the same stage as v1's critic
+        because they are the same step to a reader, which is why the server
+        shared the vocabulary in the first place (ADR-031 §2.1)."""
+
+        assert task_stage_of("work") == "work"
+        assert title_of("work", task=True) == "动手做事"
+        assert task_stage_of("review") == "review"
+        assert title_of("review", task=True) == "检查与修订"
+        # And work is ordered inside the run, not appended after delivery the
+        # way an unlisted node would be.
+        assert order_of("work", task=True) < order_of("review", task=True)
+        assert order_of("review", task=True) < order_of("deliver", task=True)
+
     def test_a_lifecycle_event_has_no_stage(self) -> None:
         assert task_stage_of(None) is None
 
@@ -175,3 +194,85 @@ def _event(event_type: str) -> object:
     envelope = _Envelope()
     envelope.event_type = event_type  # type: ignore[attr-defined]
     return envelope
+
+
+class TestGraphChoice:
+    """`/graph` decides what `/task` submits, and silence stays silence."""
+
+    @staticmethod
+    def _repl(handler: object) -> tuple[Repl, io.StringIO]:
+        import httpx
+
+        output = io.StringIO()
+        client = httpx.Client(
+            base_url="http://api.test",
+            transport=httpx.MockTransport(handler),  # type: ignore[arg-type]
+        )
+        return (
+            Repl(
+                client,
+                {"x-tenant-id": "tenant_a", "x-principal-id": "user_1"},
+                output,
+                interactive=False,
+                colour=False,
+            ),
+            output,
+        )
+
+    def _submitted_body(self, repl: Repl) -> dict[str, object]:
+        """Drive one `/task` to completion and return what it POSTed."""
+
+        import json as jsonlib
+
+        import httpx
+
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST" and request.url.path == "/v1/tasks":
+                captured.update(jsonlib.loads(request.content))
+                return httpx.Response(201, json={"task_id": "task_1"})
+            if request.url.path.endswith("/timeline"):
+                return httpx.Response(
+                    200, json={"task_id": "task_1", "events": [], "cursor": None}
+                )
+            # The status poll: terminal at once, so _follow_task returns
+            # without sleeping through a poll interval.
+            return httpx.Response(200, json={"task_id": "task_1", "status": "failed"})
+
+        client = httpx.Client(
+            base_url="http://api.test", transport=httpx.MockTransport(handler)
+        )
+        repl.client = client
+        repl._task("整理这批文件")
+        return captured
+
+    def test_an_unchosen_graph_is_not_sent_at_all(self) -> None:
+        """The deployment's default must stay the server's decision: a repl
+        that always sent its own idea of the default would freeze that idea
+        into every Task it submits (ADR-031 §2.3)."""
+
+        repl, _ = self._repl(lambda _: None)
+        body = self._submitted_body(repl)
+
+        assert "graph" not in body
+
+    def test_the_chosen_graph_travels_with_the_submission(self) -> None:
+        repl, _ = self._repl(lambda _: None)
+        repl._command("/graph general")
+
+        assert self._submitted_body(repl)["graph"] == "general"
+
+    def test_default_returns_to_not_sending(self) -> None:
+        repl, _ = self._repl(lambda _: None)
+        repl._command("/graph general")
+        repl._command("/graph default")
+
+        assert "graph" not in self._submitted_body(repl)
+
+    def test_an_unknown_choice_changes_nothing_and_prints_usage(self) -> None:
+        repl, output = self._repl(lambda _: None)
+        repl._command("/graph v2_general")
+
+        assert repl.task_graph is None
+        assert "research|general|default" in output.getvalue()

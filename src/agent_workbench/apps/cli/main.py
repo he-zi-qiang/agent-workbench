@@ -184,6 +184,15 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--max-revisions", type=int, default=2)
     submit.add_argument("--knowledge-base-id")
     submit.add_argument(
+        "--graph",
+        choices=("research", "general"),
+        help=(
+            "Which pipeline runs this Task: 'research' writes a grounded "
+            "report, 'general' does the work and reviews it (ADR-031). "
+            "Omitted means the deployment's default."
+        ),
+    )
+    submit.add_argument(
         "--idempotency-key",
         help=(
             "Retry key sent as Idempotency-Key. If omitted, the CLI generates "
