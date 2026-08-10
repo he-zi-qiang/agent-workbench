@@ -142,6 +142,30 @@ _CRITIC_CONTRACT: Final[str] = (
     "The draft reference and revision must match the supplied values."
 )
 
+#: The external researcher's contract. It is a JSON one for the same reason the
+#: planner's and the critic's are: what this node produces is not prose for a
+#: reader, it is an evidence bundle a later node cites from, and a bundle needs
+#: each passage bound to the source it came from (ADR-032).
+_EXTERNAL_RESEARCH_CONTRACT: Final[str] = (
+    "Gather evidence for the objective from sources outside the knowledge "
+    "base. If a page-reading or download tool is available and you know which "
+    "page or file answers the question, read it rather than relying on a "
+    "search result's summary. Record only what a tool actually returned to "
+    "you; do not record what you remember about a page you did not read. "
+    # Said outright because the objective usually asks for an answer, and a
+    # researcher that answers it writes prose instead of evidence -- which is
+    # exactly how this node failed the first time it reached a real model.
+    "You are not answering the objective here. A later agent writes the "
+    "answer and can cite nothing you do not return. "
+    "Your final message must be exactly one JSON object and nothing else: no "
+    "narration before or after it, no Markdown, no code fence. "
+    '{"items":[{"url":"https://...","title":"...","text":"..."}]}. '
+    "One item per source you actually read, at most 20 of them, each quoting "
+    "or closely paraphrasing that source in at most 8000 characters. Return "
+    '{"items":[]} when no source could be read -- an invented source is worse '
+    "than no evidence."
+)
+
 #: The v1 roster. One profile per model-invoking node, and the routing nodes
 #: (``route``, ``quality_gate``, ``approval``) deliberately have none: a
 #: supervisor here is a structured routing function, not an agent with a prompt.
@@ -175,13 +199,7 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
     AgentProfile(
         name="researcher_external",
         node="research_external",
-        system_prompt=(
-            "Gather evidence for the objective from sources outside the "
-            "knowledge base. Record only what those sources support. If a "
-            "page-reading or download tool is available and you know which "
-            "page or file answers the question, read it rather than relying "
-            "on a search result's summary."
-        ),
+        system_prompt=_EXTERNAL_RESEARCH_CONTRACT,
         admits=frozenset({"objective", "plan"}),
         # Reading the outside world is research (ADR-027 §3.3). The two
         # researchers still cannot see each other's findings -- `admits` is

@@ -39,8 +39,15 @@ from agent_workbench.application.task_research import (
 from agent_workbench.application.workspace import TaskWorkspace, WorkspaceSession
 from agent_workbench.domain.artifacts import ArtifactKind
 from agent_workbench.domain.errors import ErrorInfo
-from agent_workbench.domain.evidence import EvidenceBundle
-from agent_workbench.domain.identifiers import new_agent_run_id
+from agent_workbench.domain.evidence import (
+    MAX_EVIDENCE_ITEMS,
+    EvidenceBundle,
+    EvidenceItem,
+    EvidenceText,
+    EvidenceUrl,
+    ExternalTitle,
+)
+from agent_workbench.domain.identifiers import new_agent_run_id, new_id
 from agent_workbench.domain.policies import ExecutionContext, PrincipalContext
 from agent_workbench.domain.runs import (
     AgentOutcome,
@@ -167,8 +174,32 @@ class _PlanDocument(BaseModel):
         return self
 
 
+class _ExternalEvidenceItem(BaseModel):
+    """One source the external researcher says it actually read."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url: EvidenceUrl
+    title: ExternalTitle
+    text: EvidenceText
+
+
+class _ExternalEvidenceDocument(BaseModel):
+    """The external researcher's whole answer.
+
+    Empty is a permitted answer, and is not the same as a malformed one: a
+    branch that read nothing it could stand behind contributes no evidence,
+    while a branch whose output does not parse is a node that failed.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: tuple[_ExternalEvidenceItem, ...] = Field(max_length=MAX_EVIDENCE_ITEMS)
+
+
 _PLAN_DOCUMENT = TypeAdapter(_PlanDocument)
 _REVIEW_RESULT = TypeAdapter(ReviewResult)
+_EXTERNAL_EVIDENCE_DOCUMENT = TypeAdapter(_ExternalEvidenceDocument)
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +400,12 @@ def build_task_v1_handlers(
     that writes.
     """
 
+    # What this Worker actually registered for the research audience, which is
+    # what decides whether `research_external` has anything to run a tool loop
+    # with. Read once here rather than per Task: the catalog is frozen at
+    # assembly, and a node that re-derived it could disagree with the profile
+    # the same request was built from.
+    research_tool_catalog = tuple((dynamic_tools or {}).get("research", ()))
     persisting_executor = ArtifactPersistingExecutor(executor, artifacts=artifacts)
     artifact_node = ArtifactProducingAgentNode(
         persisting_executor,
@@ -449,6 +486,59 @@ def build_task_v1_handlers(
         invocation.cancellation.raise_if_cancelled()
         return {"evidence_refs": (reference.artifact_id,)}
 
+    async def _read_outward(
+        state: TaskState,
+        invocation: TaskNodeInvocation,
+        research: TaskResearchHandlers,
+    ) -> Mapping[str, Any]:
+        """The half of `research_external` that reads pages it chose itself.
+
+        Assembled only when this Worker registered research-audience tools,
+        which is what makes it additive: a deployment with none runs exactly
+        the search it ran before, and pays for no second model invocation
+        (ADR-032 §3.1).
+
+        The run goes through the plain executor rather than the persisting one
+        on purpose. What this node owes the graph is an evidence bundle bound
+        to the URLs it read, not the model's own prose stored as an artifact --
+        `synthesize` loads `evidence_refs` as bundles and would refuse a
+        Markdown artifact anyway.
+        """
+
+        outcome = await executor.run(
+            build_request(
+                "research_external",
+                state,
+                invocation.context,
+                dynamic_tools=dynamic_tools,
+            ),
+            invocation.events,
+            invocation.cancellation,
+        )
+        charged = _charged_state(state, outcome)
+        _require_completed("research_external", outcome, charged)
+        try:
+            bundle = decode_external_evidence_output(
+                outcome.output_text, task_id=state.task_id
+            )
+        except StructuredOutputError as error:
+            raise TaskNodeRunFailedError(
+                node="research_external",
+                outcome=outcome,
+                state=charged,
+                reason="external researcher JSON did not satisfy the evidence schema",
+            ) from error
+        update = _outcome_update(outcome)
+        if bundle is None:
+            # Read nothing it could stand behind. That is a real outcome of a
+            # research branch, not a failure: the fan-in is allowed to be empty
+            # and the run is still charged for above.
+            return update
+        reference = await research.evidence.save(
+            context=_research_context(state, invocation), bundle=bundle
+        )
+        return update | {"evidence_refs": (reference.artifact_id,)}
+
     async def research_external(state: TaskState) -> Mapping[str, Any]:
         if research is None:
             return await artifact_handler("research_external")(state)
@@ -464,12 +554,19 @@ def build_task_v1_handlers(
             sink=invocation.events,
             cancellation=invocation.cancellation,
         )
+        searched: Mapping[str, Any]
         if isinstance(reference, ExternalEvidenceSkipped):
             # Gateway already recorded the proposal and refusal. A missing
             # optional public-search provider is similarly visible there; no
             # artifact is invented merely to make the fan-in non-empty.
-            return {}
-        return {"evidence_refs": (reference.artifact_id,)}
+            searched = {}
+        else:
+            searched = {"evidence_refs": (reference.artifact_id,)}
+        if not research_tool_catalog:
+            return searched
+        return _merge_node_updates(
+            searched, await _read_outward(state, invocation, research)
+        )
 
     async def synthesize(state: TaskState) -> Mapping[str, Any]:
         if research is None:
@@ -487,13 +584,19 @@ def build_task_v1_handlers(
                 dynamic_tools=dynamic_tools,
             ),
         )
-        report = await synthesis_node.run(
-            "synthesize",
-            state,
-            invocation.context,
-            invocation.events,
-            invocation.cancellation,
-        )
+        # The same session the demo path enters. It is entered here too because
+        # this is the branch a real Worker takes, and the writer's tools were
+        # advertised on both: without it every `workspace_*` call the model
+        # makes fails with `WorkspaceUnavailableError` while the run reports
+        # success (ADR-028 §3.2).
+        with _workspace_for("synthesize", state, invocation) as session:
+            report = await synthesis_node.run(
+                "synthesize",
+                state,
+                invocation.context,
+                invocation.events,
+                invocation.cancellation,
+            )
         try:
             await _confirm_internal_evidence(bundles, invocation, research)
         except EvidenceAuthorizationChangedError as error:
@@ -505,10 +608,13 @@ def build_task_v1_handlers(
             ) from error
         if report.produced_ref is None:  # pragma: no cover
             raise AssertionError("a completed synthesis node has no artifact")
-        return _outcome_update(report.outcome) | {
+        update = _outcome_update(report.outcome) | {
             "draft_ref": report.produced_ref,
             "review_result": None,
         }
+        if session is not None and session.version != state.workspace_version:
+            update["workspace_version"] = session.version
+        return update
 
     async def plan(state: TaskState) -> Mapping[str, Any]:
         invocation = await invocations.resolve(state, "plan")
@@ -711,6 +817,67 @@ def decode_review_output(text: str, *, state: TaskState) -> ReviewResult:
     if review.revision_number != state.revision_count:
         raise StructuredOutputError("critic reviewed a different revision")
     return review
+
+
+def decode_external_evidence_output(
+    text: str, *, task_id: str
+) -> EvidenceBundle | None:
+    """Decode what the external researcher read into one bounded bundle.
+
+    ``None`` means it read nothing usable and said so, which is a permitted
+    answer. Anything that does not parse raises instead: an unparseable answer
+    from a node whose whole product is evidence cannot be rounded down to "no
+    evidence" without the next node grounding a report in silence.
+    """
+
+    _json_object(text)
+    try:
+        document = _EXTERNAL_EVIDENCE_DOCUMENT.validate_json(text, strict=True)
+    except ValidationError as error:
+        raise StructuredOutputError(
+            "external evidence output has an invalid shape"
+        ) from error
+    if not document.items:
+        return None
+    return EvidenceBundle(
+        task_id=task_id,
+        source="external",
+        items=tuple(
+            EvidenceItem(
+                # Not the URL: two passages read from the same page are two
+                # items, and the bundle requires their ids to differ.
+                evidence_id=new_id("evidence"),
+                source="external",
+                text=item.text,
+                url=item.url,
+                title=item.title,
+            )
+            for item in document.items
+        ),
+    )
+
+
+def _merge_node_updates(
+    first: Mapping[str, Any], second: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Combine two halves of one node's update without losing either's refs.
+
+    `research_external` can now contribute twice -- once from the deterministic
+    search, once from the tool loop -- and both halves name reference tuples the
+    graph's own fan-in reducer would have merged had they arrived as two
+    branches. Merging them here keeps that equivalence.
+    """
+
+    merged = dict(first)
+    for key, value in second.items():
+        if key in {"evidence_refs", "agent_outcome_refs"}:
+            merged[key] = merge_refs(
+                cast("tuple[str, ...]", merged.get(key, ())),
+                cast("tuple[str, ...]", value),
+            )
+        else:
+            merged[key] = value
+    return merged
 
 
 def _json_object(text: str) -> dict[str, Any]:
