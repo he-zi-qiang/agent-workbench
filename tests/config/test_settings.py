@@ -819,6 +819,12 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     running it with a different ceiling. The prices are additive, but they
     decide whether this deployment may enforce a cost ceiling at all, so a
     file that has them buys behaviour a file that does not cannot ask for.
+    1.12 -> 1.13 is ADR-037: the `[rag.graph]` section arrived. It sits under
+    `rag`, so it enters the Task semantics snapshot -- enabling it changes what
+    a newly submitted Task's retrieval means, and two Tasks either side of the
+    flip are not comparable. It also carries two frozen `Literal`s
+    (`nominates_chunks_only`, `query_side_extraction_enabled`) whose whole
+    purpose is that widening them cannot happen quietly.
     1.11 -> 1.12 is ADR-036: the `[triage]` section arrived. Additive and
     default-off, but a file that enables it asks the API to spend a model
     call per create-form submission and changes what the form asks a human
@@ -830,7 +836,7 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.12"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.13"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:

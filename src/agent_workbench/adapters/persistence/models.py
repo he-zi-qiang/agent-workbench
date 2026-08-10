@@ -380,7 +380,8 @@ outbox_events = Table(
     Column("claim_token", String(IDENTIFIER_LENGTH), nullable=True),
     Column("acked_at", DateTime(timezone=True), nullable=True),
     CheckConstraint(
-        "kind IN ('document_upserted', 'document_deleted', 'acl_changed')",
+        "kind IN ('document_upserted', 'document_deleted', 'acl_changed', "
+        "'graph_extraction_requested')",
         name="outbox_events_kind",
     ),
     Index(
@@ -397,6 +398,127 @@ outbox_events = Table(
 )
 
 
+# --------------------------------------------------------------------------
+# The retrieval graph (ADR-037)
+#
+# Entities merge inside one knowledge base so that two documents naming the
+# same thing become one way in. Evidence does not merge: every entity and
+# every relationship keeps per-mention rows pointing at the chunk it was read
+# from, and retrieval nominates *those chunks*. That is the whole difference
+# from a merged knowledge graph -- a node built out of two documents cannot
+# answer "may this principal read it", and the ACL re-check is by document.
+
+
+kg_entities = Table(
+    "kg_entities",
+    metadata,
+    Column("entity_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("knowledge_base_id", String(IDENTIFIER_LENGTH), nullable=False),
+    # The merge key. Normalised at write time so "Team Marlin" and "team
+    # marlin" are one way in rather than two.
+    Column("normalized_name", String(512), nullable=False),
+    Column("entity_type", String(64), nullable=False),
+    # What the reader sees, from the first mention that created the row.
+    Column("display_name", String(512), nullable=False),
+    # Extraction model + prompt version + embedder identity. An entity written
+    # under a different identity is not comparable with these and is not
+    # nominated beside them (ADR-037 §2.5).
+    Column("graph_identity", String(256), nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # Merging is per knowledge base, never per tenant: two knowledge bases are
+    # two corpora, and an entity common to both must not make one nominate the
+    # other's chunks.
+    UniqueConstraint(
+        "tenant_id",
+        "knowledge_base_id",
+        "normalized_name",
+        "entity_type",
+        "graph_identity",
+        name="uq_kg_entities_merge_key",
+    ),
+)
+
+kg_mentions = Table(
+    "kg_mentions",
+    metadata,
+    Column("mention_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column(
+        "entity_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("kg_entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("knowledge_base_id", String(IDENTIFIER_LENGTH), nullable=False),
+    # The provenance that makes authorization possible. No foreign key to
+    # documents, for the reason outbox_events gives: this row has to be
+    # deletable by the same path that forgets the document.
+    Column("document_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("document_version", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("chunk_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # One mention per (entity, chunk): a chunk naming an entity twice is still
+    # one nomination, and re-extracting the same version must not accumulate.
+    UniqueConstraint("entity_id", "chunk_id", name="uq_kg_mentions_entity_chunk"),
+    # Nomination reads by entity; forgetting a document reads by document.
+    Index("ix_kg_mentions_entity_id", "entity_id"),
+    Index("ix_kg_mentions_document", "tenant_id", "document_id"),
+)
+
+kg_relations = Table(
+    "kg_relations",
+    metadata,
+    Column("relation_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("knowledge_base_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column(
+        "subject_entity_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("kg_entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "object_entity_id",
+        String(IDENTIFIER_LENGTH),
+        ForeignKey("kg_entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # What the edge says, in the extractor's words. This is what the relation
+    # arm embeds, so it is the text a query is matched against.
+    Column("description", String(2048), nullable=False),
+    # Same provenance as a mention, and for the same reason: a relation
+    # nominates the chunk it was read from, never a chunk it was inferred over.
+    Column("document_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("document_version", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("chunk_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("graph_identity", String(256), nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    UniqueConstraint(
+        "subject_entity_id",
+        "object_entity_id",
+        "chunk_id",
+        name="uq_kg_relations_edge_chunk",
+    ),
+    Index("ix_kg_relations_document", "tenant_id", "document_id"),
+)
+
+
 __all__ = [
     "DIGEST_LENGTH",
     "FILENAME_LENGTH",
@@ -408,6 +530,9 @@ __all__ = [
     "document_acl",
     "document_versions",
     "documents",
+    "kg_entities",
+    "kg_mentions",
+    "kg_relations",
     "messages",
     "metadata",
     "outbox_events",
