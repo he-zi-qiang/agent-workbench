@@ -32,3 +32,4 @@
 | [ADR-032 外部研究节点在拿到工具时是一个 Agent](./0032-the-external-researcher-is-an-agent.md) | `research_external` 跑什么；ADR-027 给它的动态工具怎样才真的到得了模型 | 接受，兑现 ADR-027 §3.3 |
 | [ADR-033 融合仍然只发生一次，但那一次归我们做](./0033-fusion-ranks-are-ours.md) | 混合检索为什么跨重建索引不可复现；RRF 的臂内名次该由谁决定 | 接受，取代 ADR-016 中"融合只在 Qdrant 里"一条 |
 | [ADR-034 读不出来的时候再问一次](./0034-a-structured-node-asks-once-more.md) | 答案外面裹了一句话时结构化节点该怎么办；ADR-032 §3.3 的严格严在哪一件事上 | 接受，收窄并兑现 ADR-032 §3.3 |
+| [ADR-035 答案不是摘要](./0035-an-answer-is-not-a-preview.md) | 一个 run 的答案该有多大；ADR-019 那个 4096 管的是什么 | 接受，收窄 ADR-019 "有界"的适用范围 |

@@ -23,7 +23,7 @@ from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.messages import Message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
-from agent_workbench.domain.schema import BoundedText, DomainModel, VersionedModel
+from agent_workbench.domain.schema import AnswerText, DomainModel, VersionedModel
 from agent_workbench.domain.tools import ToolName
 
 RunKind = Literal["chat", "task"]
@@ -365,7 +365,7 @@ class AgentOutcome(VersionedModel):
     agent_run_id: Identifier
     status: RunStatus
     stop_reason: StopReason
-    output_text: BoundedText = ""
+    output_text: AnswerText = ""
     output_ref: ArtifactRef | None = None
     citations: tuple[Citation, ...] = ()
     usage: BudgetUsage = BudgetUsage()

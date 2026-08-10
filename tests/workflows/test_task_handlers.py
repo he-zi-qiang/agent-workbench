@@ -438,6 +438,36 @@ def test_a_critic_that_reviewed_the_wrong_draft_is_not_asked_again() -> None:
     assert len(narrated.requests) == 2
 
 
+def test_a_report_longer_than_a_preview_reaches_its_artifact_whole() -> None:
+    """The Task's product, measured through the node that stores it.
+
+    `ArtifactPersistingExecutor` writes `output_text` and nothing else, so
+    whatever ceiling that field carries is the ceiling on the report the export
+    node exports. Measured before ADR-035: an 18,010-character report became a
+    4,098-byte artifact, ending in a truncation marker nothing downstream reads.
+    """
+
+    report = "# Report\n\n" + ("Grounded paragraph. " * 900)
+
+    async def scenario() -> tuple[bytes, str]:
+        store = InMemoryArtifactStore()
+        handlers = build_task_v1_handlers(
+            executor=cast(Any, _SequencedExecutor({"synthesize": [report]})),
+            artifacts=store,
+            invocations=_provider(_Registry(_task())),
+        )
+        update = await handlers["synthesize"](_state())
+        draft_ref = str(update["draft_ref"])
+        return await store.get(
+            tenant_id="tenant_a", principal_id="user_1", artifact_id=draft_ref
+        ), draft_ref
+
+    stored, draft_ref = _run(scenario)
+
+    assert draft_ref
+    assert stored.decode("utf-8") == report
+
+
 def test_real_handlers_persist_text_only_artifacts_and_complete_the_graph() -> None:
     """Every node, through the real compiled graph, inside one claim.
 

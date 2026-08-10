@@ -13,13 +13,22 @@ grows.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from agent_workbench.domain.evidence import EvidenceBundle, EvidenceItem
+from agent_workbench.domain.evidence import (
+    MAX_EVIDENCE_ITEMS,
+    EvidenceBundle,
+    EvidenceItem,
+)
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import RunBudget, TraceContext
+from agent_workbench.domain.schema import ANSWER_TEXT_LIMIT
 from agent_workbench.domain.tasks import TaskState, TaskStep
 from agent_workbench.workflows.agent_profiles import (
+    LOCATOR_CHARS,
+    MAX_EXTERNAL_PASSAGE_CHARS,
     V1_AGENT_PROFILES,
     V2_AGENT_PROFILES,
     AgentContextViolationError,
@@ -572,3 +581,54 @@ def test_the_agent_ceiling_binds_each_graph_separately() -> None:
             len(V2_AGENT_PROFILES) - 1,
             rosters=(("v2_general", V2_AGENT_PROFILES),),
         )
+
+
+# --------------------------------------------------------------------------
+# What the external researcher is asked for, against what can carry it
+# --------------------------------------------------------------------------
+
+
+def test_the_external_contract_asks_for_no_more_than_an_answer_can_carry() -> None:
+    """Two numbers that were only ever plausible separately (ADR-035 §1).
+
+    The prompt used to invite 20 passages of 8000 characters -- about 160 KB --
+    through a field that held 4096. Nothing compared them, so the contradiction
+    was invisible until a node failed on a half-finished JSON object. This
+    builds the largest answer the contract permits and weighs it.
+    """
+
+    assert (
+        MAX_EVIDENCE_ITEMS * (MAX_EXTERNAL_PASSAGE_CHARS + LOCATOR_CHARS)
+        <= ANSWER_TEXT_LIMIT
+    )
+
+    # And the locator allowance is a real one, not a number that makes the line
+    # above pass: a full-length title and a long URL fit inside it.
+    one_item = json.dumps(
+        {
+            "url": f"https://example.test/{'segment/' * 25}",
+            "title": "T" * 512,
+            "text": "",
+        }
+    )
+    assert len(one_item) <= LOCATOR_CHARS
+
+    worst_case = json.dumps(
+        {
+            "items": [
+                {
+                    "url": f"https://example.test/{'segment/' * 25}{index}",
+                    "title": "T" * 512,
+                    "text": "x" * MAX_EXTERNAL_PASSAGE_CHARS,
+                }
+                for index in range(MAX_EVIDENCE_ITEMS)
+            ]
+        }
+    )
+    assert len(worst_case) <= ANSWER_TEXT_LIMIT
+    # And the prompt states the numbers this was weighed against, rather than
+    # its own copy of them: a contract that repeated the figures is a contract
+    # that can drift from the field carrying its answers.
+    contract = profile_for("research_external").system_prompt
+    assert str(MAX_EXTERNAL_PASSAGE_CHARS) in contract
+    assert str(MAX_EVIDENCE_ITEMS) in contract

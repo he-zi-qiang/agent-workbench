@@ -58,7 +58,7 @@ from agent_workbench.domain.runs import (
     StopReason,
     TokenUsage,
 )
-from agent_workbench.domain.schema import BoundedText, bounded
+from agent_workbench.domain.schema import ANSWER_TEXT_LIMIT, BoundedText, bounded
 from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec, align_results
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
@@ -103,7 +103,7 @@ DEFAULT_MODEL_TIMEOUT_SECONDS = 120.0
 
 # Matches the domain's BoundedText ceiling. Writing a longer answer to the
 # artifact store instead of clipping it belongs with context management.
-MAX_OUTPUT_TEXT = 4096
+MAX_OUTPUT_TEXT = ANSWER_TEXT_LIMIT
 TRUNCATION_MARKER = "… [truncated]"
 
 
@@ -112,6 +112,13 @@ def _utc_now() -> datetime:
 
 
 def _clip(text: str) -> str:
+    """Bound the answer at the answer's ceiling, not at a preview's.
+
+    Still clipped at its source rather than wherever it is stored, so every
+    consumer sees the same answer: trimming it further downstream would publish
+    something other than what the provider returned (ADR-035 §3.3).
+    """
+
     if len(text) <= MAX_OUTPUT_TEXT:
         return text
     return text[: MAX_OUTPUT_TEXT - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER

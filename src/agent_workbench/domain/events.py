@@ -44,6 +44,7 @@ from agent_workbench.domain.runs import (
     TokenUsage,
 )
 from agent_workbench.domain.schema import (
+    AnswerText,
     BoundedText,
     DomainModel,
     ShortText,
@@ -252,7 +253,12 @@ class ModelCompleted(DomainModel):
     model_call_id: Identifier
     finish_reason: ModelFinishReason
     usage: TokenUsage = TokenUsage()
-    text: BoundedText = ""
+    # The answer, not a summary of it (ADR-035 §3.1). ADR-019 chose to bound
+    # what is recorded *about* a run, and noted in passing that the event
+    # stream already carried the model's own words because that is how an
+    # answer reaches the asker. Those are the two halves: `prompt_preview`
+    # below is a preview and stays at the preview ceiling; this is the product.
+    text: AnswerText = ""
     output_ref: ArtifactRef | None = None
     tool_call_ids: tuple[Identifier, ...] = ()
 
@@ -267,7 +273,7 @@ class AnswerCommitted(DomainModel):
     """
 
     kind: Literal["AnswerCommitted"] = "AnswerCommitted"
-    text: BoundedText
+    text: AnswerText
     citations: tuple[Citation, ...] = ()
 
 
@@ -288,7 +294,7 @@ class UngroundedAnswerCommitted(DomainModel):
     """
 
     kind: Literal["UngroundedAnswerCommitted"] = "UngroundedAnswerCommitted"
-    text: BoundedText
+    text: AnswerText
 
 
 class RetrievalRejected(DomainModel):
@@ -327,6 +333,9 @@ class AnswerWithheld(DomainModel):
 
     kind: Literal["AnswerWithheld"] = "AnswerWithheld"
     reason_code: Literal["sources_changed"] = "sources_changed"
+    # Stays at the preview ceiling while the answer events moved past it, and
+    # the difference is the point: what goes here is the refusal this system
+    # wrote, never the model output it replaced.
     text: BoundedText
 
 

@@ -68,6 +68,11 @@ collector 这条路，本 ADR 不动它，`tests/adapters/test_telemetry.py` 里
 界的行、无界的帧。上界取 `BoundedText`（4096），超出的部分截断并标记——截断的提示
 词仍然说明了模型看到的开头是什么，而拒绝记录只会让这个功能在长上下文时静默消失。
 
+> **[ADR-035](./0035-an-answer-is-not-a-preview.md) 收窄了这一条的适用范围。** 这里
+> 说的是 `prompt_preview` 与 `argument_preview`——**关于**一次 run 记录下来的摘要，
+> 每一步一条。承载答案本身的字段（上一节那句"事件流早就在携带模型生成的正文"说的
+> 就是它）改用 `AnswerText`，因为它们每轮一条，而且就是提问的人要的东西。
+
 ### 为什么不复用 `tool_executions`
 
 那张表是运维视角的账本，它的"只存摘要不存参数"是对的，本 ADR 不改它。参数进的是

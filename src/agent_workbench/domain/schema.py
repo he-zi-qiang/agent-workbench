@@ -38,6 +38,23 @@ ShortText = Annotated[str, StringConstraints(min_length=1, max_length=256)]
 BOUNDED_TEXT_LIMIT: Final[int] = 4096
 BoundedText = Annotated[str, StringConstraints(max_length=BOUNDED_TEXT_LIMIT)]
 
+# What a model's completed answer may be, which is not the same ceiling as text
+# recorded *about* a run. A prompt preview and a proposed tool call are
+# summaries a reader consults; an answer is the thing that was asked for -- a
+# report the export node exports, a chat reply, a bundle of quoted passages.
+# Sharing one type made the preview's ceiling the answer's: an 18,010-character
+# report reached its artifact as 4,098 bytes, cut mid-sentence, and nothing
+# downstream could tell (ADR-035).
+#
+# Sized by what one invocation can actually produce rather than by what looks
+# tidy: `multi_agent.max_tokens_per_agent_invocation` defaults to 16,000, and
+# 16,000 output tokens is roughly 64,000 characters of English. Still bounded,
+# for the reason every string here is bounded -- this is a database row and an
+# SSE frame. What makes the larger ceiling affordable is that it is one row per
+# answer, where a preview is one per step.
+ANSWER_TEXT_LIMIT: Final[int] = 65_536
+AnswerText = Annotated[str, StringConstraints(max_length=ANSWER_TEXT_LIMIT)]
+
 
 def bounded(value: str) -> BoundedText:
     """Cut ``value`` to what a ``BoundedText`` field can hold.
@@ -58,11 +75,11 @@ def bounded(value: str) -> BoundedText:
 
 
 # What a tool hands the model, which is not the same ceiling as what a model
-# writes. Every other use of BoundedText is the model's own words -- a streamed
-# delta, a completed answer, a stored turn -- and 4096 characters is a generous
-# bound on those. A retrieval tool's result is input, and its natural size is
-# the evidence it was asked for: this project chunks at 512 tokens and
-# knowledge_search's own default top_k is 8, so an ordinary result is about
+# writes. The remaining uses of BoundedText are a streamed delta -- one slice of
+# an answer, not the whole of one -- and text recorded about a run; 4096
+# characters is a generous bound on those. A retrieval tool's result is input,
+# and its natural size is the evidence it was asked for: this project chunks at
+# 512 tokens and knowledge_search's own default top_k is 8, so a result is about
 # 16,000 characters. Sharing one type made that result impossible to return --
 # not truncated, refused, because the value could not be constructed at all.
 #
@@ -106,8 +123,10 @@ class VersionedModel(DomainModel):
 
 
 __all__ = [
+    "ANSWER_TEXT_LIMIT",
     "BOUNDED_TEXT_LIMIT",
     "DOMAIN_SCHEMA_VERSION",
+    "AnswerText",
     "BoundedText",
     "DomainModel",
     "JsonObject",
