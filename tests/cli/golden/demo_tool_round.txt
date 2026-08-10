@@ -14,4 +14,4 @@ Qdrant owns hybrid fusion: one Query API call fuses the dense and sparse hits wi
   9  ModelCompleted       stop in=204 out=24
  10  RunCompleted         completed steps=2
 
-outcome: completed (completed) steps=2 tool_calls=1 tokens=1337
+outcome: completed (completed) steps=2 tool_calls=1 tokens=1015
