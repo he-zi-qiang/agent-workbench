@@ -1,0 +1,218 @@
+{
+  "gold_digest": "0fed06916fee9988",
+  "model_id": "deepseek-chat",
+  "case_count": 24,
+  "accuracy": 0.8333,
+  "by_class": {
+    "general": {
+      "total": 10,
+      "correct": 10,
+      "accuracy": 1.0
+    },
+    "research": {
+      "total": 10,
+      "correct": 10,
+      "accuracy": 1.0
+    },
+    "unsure": {
+      "total": 4,
+      "correct": 0,
+      "accuracy": 0.0
+    }
+  },
+  "defaults": 0,
+  "cases": [
+    {
+      "objective": "调研 2025 年以来国内三家主要云厂商的 Serverless 产品定位差异，输出一份对比报告",
+      "expected": "research",
+      "observed": "research",
+      "reason": "该目标要求调研并输出对比报告，属于需要检索证据并综合成文的调研任务。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "比较 PostgreSQL 与 MySQL 在高并发写入场景下的表现，给出选型建议",
+      "expected": "research",
+      "observed": "research",
+      "reason": "该目标要求比较两种数据库在高并发写入场景下的表现并给出选型建议，属于需要证据支撑的调研类任务。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "梳理 RAG 系统中常见的引用幻觉成因，写一份带出处的综述",
+      "expected": "research",
+      "observed": "research",
+      "reason": "该目标要求梳理成因并撰写带出处的综述，属于调查与证据支撑的写作任务。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "调查团队最近三个月的线上事故记录，分析共性原因并写成报告",
+      "expected": "research",
+      "observed": "research",
+      "reason": "该目标要求调查事故记录、分析共性原因并撰写报告，属于需要检索证据并综合成文的调研任务。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "了解一下现在主流的向量数据库都怎么做混合检索的，各自的取舍是什么",
+      "expected": "research",
+      "observed": "research",
+      "reason": "该目标要求调查主流向量数据库的混合检索实现方式及取舍，属于调研类任务，需要检索证据并综合成报告。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "对比 LangGraph 与自研状态机做任务编排的优缺点，形成技术评估文档",
+      "expected": "research",
+      "observed": "research",
+      "reason": "该目标要求对比两种技术方案并形成技术评估文档，属于需要检索证据和综合分析的调研任务。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "survey the current approaches to LLM output watermarking and summarize the evidence for each",
+      "expected": "research",
+      "observed": "research",
+      "reason": "The objective asks for a survey and evidence summary, which fits the research-report pipeline.",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "帮我调研新能源车企 2026 上半年的销量与策略变化",
+      "expected": "research",
+      "observed": "research",
+      "reason": "该目标要求调研并汇总新能源车企2026年上半年的销量与策略变化，属于需要证据支撑的调研报告任务。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "把这批资料里关于合规的条款整理出来，逐条给出出处，写成一份审阅报告",
+      "expected": "research",
+      "observed": "research",
+      "reason": "该目标要求整理资料中的合规条款并逐条给出出处，属于证据支撑的调研与报告撰写任务。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "分析这三份财报的毛利率变化趋势，写一份有数据支撑的分析",
+      "expected": "research",
+      "observed": "research",
+      "reason": "该目标要求分析三份财报的毛利率变化趋势并撰写有数据支撑的分析，属于调查和证据支持的写作任务。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "把附件里的三个 CSV 合并成一份对账表，金额对不上的行单独列出",
+      "expected": "general",
+      "observed": "general",
+      "reason": "目标要求合并CSV并整理对账表，属于数据处理任务，不需要研究性报告。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "写一个 Python 脚本，把 logs 目录下所有 JSON 日志按天汇总成统计表",
+      "expected": "general",
+      "observed": "general",
+      "reason": "这是一个明确的编程任务，要求编写脚本完成日志汇总，而非调研报告。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "把这份英文合同翻译成中文，保留条款编号",
+      "expected": "general",
+      "observed": "general",
+      "reason": "这是一个翻译任务，直接执行翻译即可，不需要研究或报告。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "根据这份需求清单生成一份周报的初稿",
+      "expected": "general",
+      "observed": "general",
+      "reason": "该目标要求根据需求清单生成周报初稿，属于文档撰写任务，而非研究调查。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "把知识库里的产品 FAQ 整理成 20 条标准问答对",
+      "expected": "general",
+      "observed": "general",
+      "reason": "该任务要求整理知识库中的FAQ，但未提供知识库，属于具体操作任务，应使用通用代理处理。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "convert the attached markdown notes into a single well-structured outline",
+      "expected": "general",
+      "observed": "general",
+      "reason": "The task is to convert notes into an outline, which is a direct transformation task, not a research investigation.",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "算一下这组实验数据的均值方差，异常值剔除后重算一遍",
+      "expected": "general",
+      "observed": "general",
+      "reason": "这是一个计算任务，直接处理数据即可，不需要研究报告。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "把这段 SQL 改写成等价的但能走索引的版本，并解释改了什么",
+      "expected": "general",
+      "observed": "general",
+      "reason": "这是一个改写 SQL 并解释的任务，属于具体操作，不需要检索生成报告。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "按模板把这十条会议纪要合并成一份，重复议题去重",
+      "expected": "general",
+      "observed": "general",
+      "reason": "这是一个文档合并整理任务，需要按模板操作并去重，属于执行类任务。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "生成一份下季度的 OKR 草稿，按公司模板的格式来",
+      "expected": "general",
+      "observed": "general",
+      "reason": "该目标要求生成一份OKR草稿，属于产出文档的任务，而非研究调查。",
+      "question": null,
+      "correct": true
+    },
+    {
+      "objective": "研究一下这批用户反馈",
+      "expected": "unsure",
+      "observed": "research",
+      "reason": "该目标要求对用户反馈进行研究，属于调查分析类任务，适合生成研究报告。",
+      "question": null,
+      "correct": false
+    },
+    {
+      "objective": "处理一下竞品的情况",
+      "expected": "unsure",
+      "observed": "general",
+      "reason": "该目标表述模糊，未明确要求调研报告或具体产出，更适合由通用智能体自主判断并执行。",
+      "question": null,
+      "correct": false
+    },
+    {
+      "objective": "把市场趋势弄清楚然后弄个东西出来",
+      "expected": "unsure",
+      "observed": "research",
+      "reason": "目标要求先弄清市场趋势，再产出成果，属于调查加报告类任务。",
+      "question": null,
+      "correct": false
+    },
+    {
+      "objective": "look into the migration question",
+      "expected": "unsure",
+      "observed": "research",
+      "reason": "The objective asks to investigate a migration question, which implies gathering evidence and producing a report.",
+      "question": null,
+      "correct": false
+    }
+  ]
+}

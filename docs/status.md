@@ -36,15 +36,39 @@ web 的 `REPORT_WORDS` 正则、CLI 的另一份关键词表、API 的 `false` �
   `scripts/run_triage_eval.py`（真模型、温度 0、按类准确率 + default 计数入报告）。
   开关默认关闭的理由就是这份报告：部署先看自己模型的数字再开。
 
+### 两端接入（同分支后续两个提交）
+
+- **web**：主表单只剩目标；radio、报告开关与 `REPORT_WORDS` 删除；创建点击后
+  decided 直提、ask 渲染问题与两个 chip（点选即显式提交、记 user）、default
+  按部署默认；显式覆盖进高级设置（执行方式 自动/调研/通用 + 报告文件
+  自动/要/不要），显式值跳过 triage 且优先；任务详情从 TaskSubmitted 读回
+  执行方式与判定来源。eslint 0 / tsc 干净 / vitest 102 项 / build 通过。
+- **CLI REPL**：`/graph` 增加 `auto` 档并成为默认——提交前 triage，判定打一行
+  可见理由；ask 时交互会话终端里问一句（回车=部署默认），管道会话说明后取默认；
+  `research|general` 钉死跳过判定，`default` 完全回到旧行为（无 triage、无
+  intent）。`_mentions_report` 关键词表删除。tests/cli 74 项全过。
+  非交互 `agent-workbench task submit` 保持确定性不 triage。
+
 ### 证据
 
 - 无服务全量：1934 passed / 608 skipped；真实 PG(5433)+Qdrant(6333)：
   929 passed / 2 env skips（含新增：triage 服务 12 项、API 路由 3 项、
   注册表 intent 落事件 1 项、结构化输出提升对照 9 项）。
 - ruff format/check 与 pyright strict 全绿。
-- **尚未做**：web/CLI 两端接入（radio 与正则还在原地）；triage eval 尚未对真实
-  DeepSeek 跑出准确率报告——`triage.enabled` 因此只在 web-local 打开，
-  default 关闭状态是产品口径。
+- **triage 准确率（真实 DeepSeek，温度 0，24 题金集）**：清晰调研 10/10、
+  清晰执行 10/10、**含糊 0/4——模型从不回答 unsure，全部硬判**（三题判
+  research、一题判 general）。ask 机制本身由单测与 API 测试证明可用，但
+  deepseek-chat 在当前提示词下不触发它。这份报告
+  （`evals/triage/reports/report.json`）就是 `triage.enabled` 默认保持
+  false 的理由；含糊题要么接受硬判（有溯源、可覆盖、可重试），要么后续
+  调提示词再测。
+- **真实端到端验收**（本机 API + 在跑的 task worker + 真实 DeepSeek）：
+  web 表单输入"把这批会议纪要按议题去重合并成一份纪要"，triage 判定
+  general（理由"这是一个文档处理任务，需要合并去重，属于执行类操作。"），
+  Task 冻结 `v2_general`，`TaskSubmitted.intent` 完整记录
+  `{model, model, reason}`（task_1ebcc1dde8d3…），worker 领取并跑通 v2
+  工具循环（work 节点 32 步、review 出 revise 决定）。三条 triage 路径
+  另以 curl 验收：清晰执行/清晰调研各自判对并给出中文理由。
 
 ## 2026-08-10 graph 字段接进 CLI 与 web 控制台，附带一次到目前最深的 v2 真实验收
 

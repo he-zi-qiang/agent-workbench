@@ -54,8 +54,8 @@ SUBTITLE: Final[str] = "/help 看命令 · /exit 退出"
 
 HELP: Final[str] = """  /kb <id>        选一个知识库；/kb none 回到自由回答
   /task <目标>     提交一个 Task，实时看它推进
-  /graph <形态>    之后的 Task 走哪条流水线：research 调研报告 · general 通用执行
-                  /graph default 回到部署默认
+  /graph <形态>    之后的 Task 走哪条流水线：auto 模型判定（默认，判不准会问你）
+                  research 调研报告 · general 通用执行 · default 部署默认
   /steps          展开上一轮的每一步（提示词、工具参数、原始事件）
   /session        显示当前会话与知识库
   /new            开一个新会话
@@ -68,6 +68,16 @@ GRAPH_CHOICES: Final[dict[str, str]] = {
     "research": "调研报告：双路检索、评审、导出",
     "general": "通用执行：一个带工具的执行者自定步骤",
 }
+
+#: The `/graph` mode that asks triage before each submission (ADR-036). A
+#: mode, not a shape: it never reaches the submit payload -- what it resolves
+#: to does.
+GRAPH_AUTO: Final[str] = "auto"
+
+#: Shown when triage is unsure but sent no usable question wording.
+TRIAGE_FALLBACK_QUESTION: Final[str] = (
+    "这个任务是要一份有依据的调研报告，还是直接把事做完？"
+)
 
 #: How often a Task's timeline is re-read. Matches the web console.
 TASK_POLL_SECONDS: Final[float] = 2.5
@@ -125,11 +135,13 @@ class Repl:
         self.colour = colour and colour_enabled(stream)
         self.session_id: str | None = None
         self.knowledge_base_id = knowledge_base_id
-        # Which pipeline `/task` submits to. ``None`` means the field is not
-        # sent at all -- the deployment's default, not this client's copy of
-        # it -- and survives `/new` deliberately: it is a preference about
-        # Tasks, not a fact about one chat session.
-        self.task_graph: str | None = None
+        # Which pipeline `/task` submits to. ``GRAPH_AUTO`` (the default since
+        # ADR-036) asks triage per submission and resolves to a shape or to
+        # nothing; ``None`` means the field is not sent at all -- the
+        # deployment's default, not this client's copy of it. Survives `/new`
+        # deliberately: it is a preference about Tasks, not a fact about one
+        # chat session.
+        self.task_graph: str | None = GRAPH_AUTO
         self.last_stages: list[Stage] = []
         self._turn = 0
         self._events: queue.Queue[EventEnvelope] = queue.Queue()
@@ -169,15 +181,18 @@ class Repl:
             if rest == "":
                 # Bare `/graph` reads the setting rather than changing it.
                 self._say(f"  Task 流水线：{self._graph_label()}")
-                self._say("  用法：/graph research|general|default")
+                self._say("  用法：/graph auto|research|general|default")
             elif rest in ("default", "none", "off"):
                 self.task_graph = None
                 self._say("  Task 流水线：部署默认")
+            elif rest == GRAPH_AUTO:
+                self.task_graph = GRAPH_AUTO
+                self._say(f"  Task 流水线：{self._graph_label()}")
             elif rest in GRAPH_CHOICES:
                 self.task_graph = rest
                 self._say(f"  Task 流水线：{self._graph_label()}")
             else:
-                self._say("  用法：/graph research|general|default")
+                self._say("  用法：/graph auto|research|general|default")
         elif name == "/session":
             self._say(
                 f"  会话：{self.session_id or '（还没开始）'}\n"
@@ -361,6 +376,22 @@ class Repl:
     # -- task --------------------------------------------------------------
 
     def _task(self, objective: str) -> None:
+        # Resolve the shape before opening anything: auto asks triage (and,
+        # when triage asks back, asks the reader), an explicit `/graph` pin
+        # skips it, and `default` submits exactly what this client submitted
+        # before ADR-036 -- no graph field, no provenance claim.
+        wants_report = False
+        intent: dict[str, str] | None = None
+        if self.task_graph == GRAPH_AUTO:
+            graph, wants_report, intent = self._triage(objective)
+        elif self.task_graph is None:
+            graph = None
+        else:
+            graph = self.task_graph
+            intent = {
+                "graph_decided_by": "user",
+                "wants_report_decided_by": "default",
+            }
         try:
             created = self._json(
                 "POST",
@@ -369,10 +400,11 @@ class Repl:
                 json={
                     "objective": objective,
                     "max_revisions": 2,
-                    "wants_report": _mentions_report(objective),
-                    # Only when `/graph` chose one; absent means the deployment
+                    "wants_report": wants_report,
+                    # Only when resolved to one; absent means the deployment
                     # decides, exactly as before the command existed.
-                    **({"graph": self.task_graph} if self.task_graph else {}),
+                    **({"graph": graph} if graph else {}),
+                    **({"intent": intent} if intent else {}),
                 },
             )
         except CliHttpError as error:
@@ -381,6 +413,83 @@ class Repl:
         task_id = str(created["task_id"])
         self._say(self._dim(f"  {task_id}"))
         self.last_stages = self._follow_task(task_id)
+
+    def _triage(self, objective: str) -> tuple[str | None, bool, dict[str, str]]:
+        """One verdict, one visible line of provenance; every failure defaults.
+
+        Returns ``(graph, wants_report, intent)``. The intent block travels to
+        the submission so the timeline records who decided (ADR-036); a failed
+        or unusable verdict resolves to the deployment default, which is also
+        what an interactive reader gets by answering the question with Enter.
+        """
+
+        try:
+            verdict = self._json(
+                "POST",
+                "/v1/tasks/triage",
+                json={
+                    "objective": objective,
+                    "knowledge_base_selected": self.knowledge_base_id is not None,
+                },
+            )
+        except CliHttpError:
+            verdict = {}
+        status = verdict.get("status")
+        undecided = {
+            "graph_decided_by": "default",
+            "wants_report_decided_by": "default",
+        }
+        if status == "decided" and verdict.get("graph") in GRAPH_CHOICES:
+            graph = str(verdict["graph"])
+            reason = str(verdict.get("reason") or "").strip()
+            label = GRAPH_CHOICES[graph].partition("：")[0]
+            self._say(
+                self._dim(
+                    f"  执行方式：{label} · 模型判定{'：' + reason if reason else ''}"
+                )
+            )
+            intent = {
+                "graph_decided_by": "model",
+                "wants_report_decided_by": "model",
+            }
+            if reason:
+                intent["reason"] = reason
+            return graph, bool(verdict.get("wants_report")), intent
+        if status == "ask":
+            question = (
+                str(verdict.get("question") or "").strip() or TRIAGE_FALLBACK_QUESTION
+            )
+            if self.interactive:
+                self._say(f"  {question}")
+                answer = (
+                    input("  [1] 调研报告  [2] 通用执行  [回车=部署默认] ")
+                    .strip()
+                    .lower()
+                )
+                chosen = {
+                    "1": "research",
+                    "r": "research",
+                    "research": "research",
+                    "2": "general",
+                    "g": "general",
+                    "general": "general",
+                }.get(answer)
+                if chosen is not None:
+                    return (
+                        chosen,
+                        False,
+                        {
+                            "graph_decided_by": "user",
+                            "wants_report_decided_by": "default",
+                        },
+                    )
+                self._say(self._dim("  按部署默认执行。"))
+                return None, False, undecided
+            # Piped input has nobody to answer; say so and take the default
+            # rather than swallowing the question silently.
+            self._say(self._dim(f"  {question}（非交互，按部署默认执行）"))
+            return None, False, undecided
+        return None, False, undecided
 
     def _follow_task(self, task_id: str) -> list[Stage]:
         stages: list[Stage] = []
@@ -527,6 +636,8 @@ class Repl:
         self._say("")
 
     def _graph_label(self) -> str:
+        if self.task_graph == GRAPH_AUTO:
+            return "auto · 模型判定，判不准会先问你"
         if self.task_graph is None:
             return "部署默认"
         return f"{self.task_graph} · {GRAPH_CHOICES[self.task_graph]}"
@@ -624,8 +735,12 @@ def _clip(text: str, limit: int = 400) -> str:
     return collapsed if len(collapsed) <= limit else collapsed[:limit] + "…"
 
 
-def _mentions_report(objective: str) -> bool:
-    return any(word in objective for word in ("报告", "文件", "导出", "report"))
-
-
-__all__ = ["GRAPH_CHOICES", "HELP", "SUBTITLE", "TITLE", "Repl", "sse_frames"]
+__all__ = [
+    "GRAPH_AUTO",
+    "GRAPH_CHOICES",
+    "HELP",
+    "SUBTITLE",
+    "TITLE",
+    "Repl",
+    "sse_frames",
+]
