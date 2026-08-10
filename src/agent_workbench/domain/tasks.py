@@ -19,6 +19,10 @@ from agent_workbench.domain.runs import BudgetUsage
 from agent_workbench.domain.schema import DomainModel, ShortText, VersionedModel
 from agent_workbench.domain.task_registry import ApprovalDecision
 
+#: Every node id either graph may sit on. One union rather than one per graph,
+#: because a node id is durable checkpoint metadata and the recovery path reads
+#: it without yet knowing which graph wrote it (ADR-031). Which subset is legal
+#: is a property of a graph, and each graph declares its own tuple below.
 TaskNodeId = Literal[
     "understand",
     "plan",
@@ -30,6 +34,12 @@ TaskNodeId = Literal[
     "quality_gate",
     "approval",
     "export",
+    # v2 only. `understand` and `export` are shared with v1 deliberately: they
+    # mean the same thing in both graphs, and giving them separate names would
+    # make an operator reading a timeline decide twice whether two identically
+    # described nodes are the same step.
+    "work",
+    "review",
 ]
 
 # Node ids are durable checkpoint metadata.  Their order is the canonical v1
@@ -45,6 +55,17 @@ CANONICAL_V1_NODE_IDS: Final[tuple[TaskNodeId, ...]] = (
     "critic",
     "quality_gate",
     "approval",
+    "export",
+)
+
+#: v2's declaration order (ADR-031). Separate from the v1 tuple rather than
+#: derived from it: the two graphs share three of four node ids and none of
+#: their shape, and a tuple computed from the other would make a change to one
+#: silently move the other.
+CANONICAL_V2_NODE_IDS: Final[tuple[TaskNodeId, ...]] = (
+    "understand",
+    "work",
+    "review",
     "export",
 )
 
@@ -223,6 +244,7 @@ class TaskState(VersionedModel):
 
 __all__ = [
     "CANONICAL_V1_NODE_IDS",
+    "CANONICAL_V2_NODE_IDS",
     "MAX_PLAN_STEPS",
     "MAX_REVISIONS",
     "MAX_STATE_REFS",
