@@ -31,6 +31,7 @@ from agent_workbench.application.task_research import (
 )
 from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.context import Citation
+from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.evidence import (
     EvidenceBundle,
     EvidenceItem,
@@ -416,11 +417,70 @@ class _ScriptedExecutor:
         )
 
 
+@dataclass
+class _SequencedExecutor:
+    """Replies to a node in order, so its second run can differ from its first.
+
+    The last reply repeats rather than running out. That is what makes "only
+    one corrective turn" assertable: a handler that kept asking would keep
+    getting the same unusable answer, and the request count would not stop.
+    """
+
+    replies: dict[str, list[str]]
+    requests: list[AgentRunRequest] = field(default_factory=list)
+
+    async def run(
+        self,
+        request: AgentRunRequest,
+        emit: object,
+        cancellation: CancellationToken,
+    ) -> AgentOutcome:
+        del emit
+        cancellation.raise_if_cancelled()
+        self.requests.append(request)
+        pending = self.replies[str(request.trace.graph_node_id)]
+        return AgentOutcome(
+            agent_run_id=request.trace.agent_run_id,
+            status="completed",
+            stop_reason="completed",
+            output_text=pending.pop(0) if len(pending) > 1 else pending[0],
+            usage=BudgetUsage(steps=1),
+        )
+
+
+@dataclass
+class _TruncatedExecutor:
+    """A run that stopped at its token ceiling holding half an object."""
+
+    runs: int = 0
+
+    async def run(
+        self,
+        request: AgentRunRequest,
+        emit: object,
+        cancellation: CancellationToken,
+    ) -> AgentOutcome:
+        del emit
+        cancellation.raise_if_cancelled()
+        self.runs += 1
+        return AgentOutcome(
+            agent_run_id=request.trace.agent_run_id,
+            status="failed",
+            stop_reason="token_budget",
+            error=ErrorInfo(
+                code="budget_exceeded",
+                message="the run stopped at its ceiling: token_budget",
+            ),
+            output_text='{"items":[{"url":"https://example.test/q3","title":"Q3',
+            usage=BudgetUsage(steps=1),
+        )
+
+
 def _read_outward_handlers(
     *,
     evidence: EvidenceStore,
     external: _External,
-    executor: _ScriptedExecutor,
+    executor: _ScriptedExecutor | _SequencedExecutor,
     catalog: tuple[str, ...],
 ) -> dict[str, TaskNodeHandler]:
     return cast(
@@ -541,22 +601,28 @@ def test_external_researcher_that_read_nothing_contributes_no_evidence() -> None
 
 
 @pytest.mark.parametrize(
-    "answer",
+    ("answer", "runs"),
     [
-        # Prose: never reaches the schema at all.
-        "I read the page and it says revenue rose.",
+        # Prose: never reaches the schema at all, so the node asks once for the
+        # object alone -- and fails when the answer is prose again.
+        ("I read the page and it says revenue rose.", 2),
         # A JSON object of the right kind whose item is not evidence -- a
         # passage with no locator is exactly what the bundle exists to refuse.
-        json.dumps({"items": [{"url": "page 3", "title": "Q3", "text": "Rose."}]}),
+        # The control: this message *was* one JSON object, so there is nothing
+        # a corrective turn could correct and none is bought.
+        (
+            json.dumps({"items": [{"url": "page 3", "title": "Q3", "text": "Rose."}]}),
+            1,
+        ),
     ],
     ids=["prose", "unlocatable-item"],
 )
 def test_external_researcher_output_that_is_not_evidence_fails_the_node(
-    answer: str,
+    answer: str, runs: int
 ) -> None:
     """Neither shape may be rounded down to "no evidence" and quietly dropped."""
 
-    async def scenario() -> None:
+    async def scenario() -> _ScriptedExecutor:
         evidence = EvidenceStore(InMemoryArtifactStore())
         external = _External(evidence)
         executor = _ScriptedExecutor({"research_external": answer})
@@ -568,8 +634,165 @@ def test_external_researcher_output_that_is_not_evidence_fails_the_node(
         )
         with pytest.raises(TaskNodeRunFailedError, match="evidence schema"):
             await handlers["research_external"](_state())
+        return executor
+
+    executor = _run(scenario)
+
+    # `_ScriptedExecutor` answers the same way every time, so a node that kept
+    # asking would keep failing: the count is what bounds the correction at one.
+    assert len(executor.requests) == runs
+
+
+#: The message that killed three real Tasks on 2026-08-10 (ADR-034 §1). The
+#: answer ADR-032 asks for is in there; a sentence of reasoning is in front of
+#: it.
+_NARRATED_EMPTY = (
+    "The tool calls were denied due to permission scope. The objective "
+    "explicitly states this is explanatory writing based on existing knowledge "
+    "and does not require external sources. I'll return an empty items list."
+    '\n\n{"items":[]}'
+)
+
+#: A JSON object the model *describes* rather than answers with. Extracting the
+#: trailing object out of a message would turn a page it says it did not read
+#: into a citable source, which is the hole ADR-032 guards.
+_DESCRIBED_EVIDENCE = (
+    "I could not reach any page. Had I read the quarterly report I would have "
+    'answered {"items":[{"url":"https://example.test/q3","title":"Q3 report",'
+    '"text":"Revenue rose four percent."}]}, but I did not read it.'
+)
+
+
+def test_an_answer_wrapped_in_narration_is_asked_for_again_not_thrown_away() -> None:
+    """The 2026-08-10 defect: a correct answer with a preamble killed the Task.
+
+    `{"items":[]}` is a permitted answer (ADR-032 §3.3), so a node that threw
+    it away because a sentence preceded it was failing runs that had answered.
+    """
+
+    async def scenario() -> tuple[_SequencedExecutor, Mapping[str, Any]]:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _SequencedExecutor(
+            {"research_external": [_NARRATED_EMPTY, '{"items":[]}']}
+        )
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=executor,
+            catalog=("mcp_web_fetch_page",),
+        )
+        return executor, await handlers["research_external"](_state())
+
+    executor, update = _run(scenario)
+
+    assert len(executor.requests) == 2
+    # Both runs happened, so both are on the record and both were charged for.
+    assert len(update["agent_outcome_refs"]) == 2
+    assert update["budget_usage"]["steps"] == 2
+    # The model read nothing and said so, so only the deterministic search half
+    # contributed -- an empty answer is still an answer.
+    assert len(update["evidence_refs"]) == 1
+
+    corrective = executor.requests[1]
+    # A restatement, not a second round of research: without tools the turn
+    # cannot acquire material the first run did not already produce.
+    assert corrective.tool_names == ()
+    assert corrective.messages[-2].role == "assistant"
+    assert corrective.messages[-2].text() == _NARRATED_EMPTY
+    assert "one JSON object" in corrective.messages[-1].text()
+
+
+def test_an_answer_that_was_already_one_json_object_buys_no_second_run() -> None:
+    """The control. The corrective turn is bought only where one is needed."""
+
+    async def scenario() -> _SequencedExecutor:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _SequencedExecutor({"research_external": ['{"items":[]}']})
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=executor,
+            catalog=("mcp_web_fetch_page",),
+        )
+        await handlers["research_external"](_state())
+        return executor
+
+    executor = _run(scenario)
+
+    assert len(executor.requests) == 1
+
+
+def test_a_json_object_the_model_only_described_never_becomes_evidence() -> None:
+    """The property ADR-032 protects, against the fix that would have broken it.
+
+    Both halves say the same thing from opposite sides: whatever the corrective
+    turn answers, the source named in the *first* message is not evidence,
+    because nothing here reads an answer out of a message that was not one.
+    """
+
+    async def described(
+        second: str,
+    ) -> tuple[EvidenceStore, _SequencedExecutor, Mapping[str, Any]]:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _SequencedExecutor(
+            {"research_external": [_DESCRIBED_EVIDENCE, second]}
+        )
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=executor,
+            catalog=("mcp_web_fetch_page",),
+        )
+        return evidence, executor, await handlers["research_external"](_state())
+
+    async def scenario() -> None:
+        # Still not one object: the node fails, exactly as it does for any
+        # answer it cannot read.
+        with pytest.raises(TaskNodeRunFailedError, match="evidence schema"):
+            await described("I already told you I read nothing.")
+
+        # And when the corrective turn does answer, what is recorded is that
+        # answer -- the described source is in neither bundle.
+        evidence, executor, update = await described('{"items":[]}')
+        assert len(executor.requests) == 2
+        bundles = await _load_external(evidence, update["evidence_refs"])
+        assert all(
+            item.url != "https://example.test/q3"
+            for bundle in bundles
+            for item in bundle.items
+        )
 
     _run(scenario)
+
+
+def test_a_run_that_did_not_complete_is_not_asked_to_restate() -> None:
+    """The truncation mode ADR-032 §4 documented stays a failure.
+
+    A run that stopped at its token ceiling holds half a JSON object. Asking it
+    to restate would buy a second full run for an answer that was never
+    finished, so the incomplete run fails the node before any of this applies.
+    """
+
+    async def scenario() -> _TruncatedExecutor:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _TruncatedExecutor()
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=cast(Any, executor),
+            catalog=("mcp_web_fetch_page",),
+        )
+        with pytest.raises(TaskNodeRunFailedError, match="did not complete"):
+            await handlers["research_external"](_state())
+        return executor
+
+    executor = _run(scenario)
+
+    assert executor.runs == 1
 
 
 @dataclass
