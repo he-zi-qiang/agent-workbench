@@ -113,3 +113,10 @@ catchup_poll_seconds = 1
 # seven on-topic questions, including one the corpus answers verbatim.
 [chat]
 routed_relevance_threshold = 0.01
+
+[triage]
+# On for the same reason web-local turns it on: this machine has a real
+# provider key and is where local acceptance runs. The shipped default stays
+# off until evals/triage has an accuracy report for the deployed model
+# (ADR-036).
+enabled = true

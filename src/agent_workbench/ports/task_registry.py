@@ -24,6 +24,7 @@ from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.domain.schema import DomainModel, JsonObject, ShortText
+from agent_workbench.domain.task_intent import TaskIntent
 from agent_workbench.domain.task_registry import TaskStatus
 from agent_workbench.domain.tools import PermissionScope
 from agent_workbench.ports.task_workflow import GraphVersion
@@ -140,6 +141,12 @@ class TaskSubmission(DomainModel):
     # Absent for a Task that touches no knowledge base. Present ones are
     # resolved before the transaction opens and reserved inside it.
     index_reservation: IndexReservation | None = None
+    # Who decided this submission's shape (ADR-036). Provenance, not identity:
+    # excluded from the Registry's column mapping and from
+    # ``_SUBMISSION_IDENTITY`` -- a retry that re-ran triage and got different
+    # words must still be the same submission -- and recorded only on the
+    # ``TaskSubmitted`` event.
+    intent: TaskIntent | None = None
 
     @field_validator("submitted_principal_scopes")
     @classmethod

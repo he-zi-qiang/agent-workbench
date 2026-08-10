@@ -152,6 +152,13 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 "src/agent_workbench/apps/cli/repl.py" = ["RUF001"]
 "src/agent_workbench/apps/cli/stages.py" = ["RUF001"]
 "src/agent_workbench/apps/cli/commands.py" = ["RUF001"]
+# Triage speaks to the submitter in the submitter's language (ADR-036): its
+# fallback question is a Chinese sentence, and the tests assert those exact
+# sentences round-trip.
+"src/agent_workbench/application/task_triage.py" = ["RUF001"]
+"tests/application/test_task_triage.py" = ["RUF001"]
+"tests/api/test_task_api.py" = ["RUF001"]
+"tests/cli/test_repl.py" = ["RUF001"]
 
 [tool.pyright]
 pythonVersion = "3.12"

@@ -1,0 +1,24 @@
+{"objective": "调研 2025 年以来国内三家主要云厂商的 Serverless 产品定位差异，输出一份对比报告", "expected": "research"}
+{"objective": "比较 PostgreSQL 与 MySQL 在高并发写入场景下的表现，给出选型建议", "expected": "research"}
+{"objective": "梳理 RAG 系统中常见的引用幻觉成因，写一份带出处的综述", "expected": "research"}
+{"objective": "调查团队最近三个月的线上事故记录，分析共性原因并写成报告", "expected": "research"}
+{"objective": "了解一下现在主流的向量数据库都怎么做混合检索的，各自的取舍是什么", "expected": "research"}
+{"objective": "对比 LangGraph 与自研状态机做任务编排的优缺点，形成技术评估文档", "expected": "research"}
+{"objective": "survey the current approaches to LLM output watermarking and summarize the evidence for each", "expected": "research"}
+{"objective": "帮我调研新能源车企 2026 上半年的销量与策略变化", "expected": "research"}
+{"objective": "把这批资料里关于合规的条款整理出来，逐条给出出处，写成一份审阅报告", "expected": "research"}
+{"objective": "分析这三份财报的毛利率变化趋势，写一份有数据支撑的分析", "expected": "research"}
+{"objective": "把附件里的三个 CSV 合并成一份对账表，金额对不上的行单独列出", "expected": "general"}
+{"objective": "写一个 Python 脚本，把 logs 目录下所有 JSON 日志按天汇总成统计表", "expected": "general"}
+{"objective": "把这份英文合同翻译成中文，保留条款编号", "expected": "general"}
+{"objective": "根据这份需求清单生成一份周报的初稿", "expected": "general"}
+{"objective": "把知识库里的产品 FAQ 整理成 20 条标准问答对", "expected": "general"}
+{"objective": "convert the attached markdown notes into a single well-structured outline", "expected": "general"}
+{"objective": "算一下这组实验数据的均值方差，异常值剔除后重算一遍", "expected": "general"}
+{"objective": "把这段 SQL 改写成等价的但能走索引的版本，并解释改了什么", "expected": "general"}
+{"objective": "按模板把这十条会议纪要合并成一份，重复议题去重", "expected": "general"}
+{"objective": "生成一份下季度的 OKR 草稿，按公司模板的格式来", "expected": "general"}
+{"objective": "研究一下这批用户反馈", "expected": "unsure"}
+{"objective": "处理一下竞品的情况", "expected": "unsure"}
+{"objective": "把市场趋势弄清楚然后弄个东西出来", "expected": "unsure"}
+{"objective": "look into the migration question", "expected": "unsure"}

@@ -1,5 +1,75 @@
 # 实施状态
 
+## 2026-08-10 提交预判（triage）服务端落地：模型判形态、判不准问人、失败回落默认（ADR-036）
+
+上一条记录里"界面不猜"的立场被正面推翻，且是有据推翻：那个决定其实一直在被猜——
+web 的 `REPORT_WORDS` 正则、CLI 的另一份关键词表、API 的 `false` 默认，同一句目标
+三个入口三种行为，猜完不留痕。ADR-036 取代 ADR-031 §2.3 的"不做自动路由"，论证的
+不是"模型不会猜错"，而是猜错的前提变了：**判定发生在 Task 存在之前**（独立无副作用
+端点，判不准返回问题而不是硬猜）、**可见**（理由进 TaskSubmitted）、**可兜底**（超时/
+失败/未启用回落部署默认）、**可覆盖**（显式选择跳过判定）。冻结与幂等语义一字不改：
+提交端点永远收显式值或缺省，"auto" 不存在于提交语义里。
+
+### 落了什么
+
+- **`POST /v1/tasks/triage`**：入参 objective + 是否选了知识库 + 附件名；出参
+  `decided`（graph、wants_report、一句理由）／`ask`（仅 graph 判不准：一个问题 +
+  两个选项）／`default`（一切失败路径，客户端按原样提交）。wants_report 判不准取
+  false 不问——两张图的审批拒绝终态都是 failed，拿不准就强开审批等于逼人"批准或
+  失败"。
+- **`application/task_triage.py`**：toolless 单步结构化调用，deny 信封；解码复用
+  ADR-034 边界——`workflows/structured_output.py` 从 task_handlers **提升**了
+  `json_object` 与 `restatement_messages`（行为逐字不变，两处共用），framing 失败
+  补问一次，说错话（能解析但不合契约）直接 default 不追问。
+- **intent 溯源**：`TaskSubmission.intent`（user|model|default × 2 + reason）——
+  不进列、不进幂等身份，只进 `TaskSubmitted` 事件。发现并绕开了两个真实陷阱：
+  ①给 `TaskInput` 加任何可选字段都会让存量任务的 fingerprint 复核全体失败
+  （canonical_bytes 不排除默认值）；②事件按 key 去重时比对 payload，重试带着
+  不同 intent 会把幂等重试变成 `EventKeyConflictError`——为此
+  `append_durable_in_transaction` 增加 `first_write_wins`，提交事件首写为准，
+  不再比对一个重试本就无法复现的字段。
+- **配置**：顶层 `[triage]` 段（enabled 默认 **false**、timeout_seconds 8s），
+  default_factory 起步所以存量配置文件全部原样有效；config_schema_version
+  1.11 → 1.12；ownership.yaml 登记，**不进** task 快照 allowlist（提交前的决定，
+  与 graph 同理）。web-local 配置打开它供本机验收。
+- **`evals/triage/`**：24 条三分类金集（清晰调研/清晰执行/真含糊）+
+  `scripts/run_triage_eval.py`（真模型、温度 0、按类准确率 + default 计数入报告）。
+  开关默认关闭的理由就是这份报告：部署先看自己模型的数字再开。
+
+### 两端接入（同分支后续两个提交）
+
+- **web**：主表单只剩目标；radio、报告开关与 `REPORT_WORDS` 删除；创建点击后
+  decided 直提、ask 渲染问题与两个 chip（点选即显式提交、记 user）、default
+  按部署默认；显式覆盖进高级设置（执行方式 自动/调研/通用 + 报告文件
+  自动/要/不要），显式值跳过 triage 且优先；任务详情从 TaskSubmitted 读回
+  执行方式与判定来源。eslint 0 / tsc 干净 / vitest 102 项 / build 通过。
+- **CLI REPL**：`/graph` 增加 `auto` 档并成为默认——提交前 triage，判定打一行
+  可见理由；ask 时交互会话终端里问一句（回车=部署默认），管道会话说明后取默认；
+  `research|general` 钉死跳过判定，`default` 完全回到旧行为（无 triage、无
+  intent）。`_mentions_report` 关键词表删除。tests/cli 74 项全过。
+  非交互 `agent-workbench task submit` 保持确定性不 triage。
+
+### 证据
+
+- 无服务全量：1934 passed / 608 skipped；真实 PG(5433)+Qdrant(6333)：
+  929 passed / 2 env skips（含新增：triage 服务 12 项、API 路由 3 项、
+  注册表 intent 落事件 1 项、结构化输出提升对照 9 项）。
+- ruff format/check 与 pyright strict 全绿。
+- **triage 准确率（真实 DeepSeek，温度 0，24 题金集）**：清晰调研 10/10、
+  清晰执行 10/10、**含糊 0/4——模型从不回答 unsure，全部硬判**（三题判
+  research、一题判 general）。ask 机制本身由单测与 API 测试证明可用，但
+  deepseek-chat 在当前提示词下不触发它。这份报告
+  （`evals/triage/reports/report.json`）就是 `triage.enabled` 默认保持
+  false 的理由；含糊题要么接受硬判（有溯源、可覆盖、可重试），要么后续
+  调提示词再测。
+- **真实端到端验收**（本机 API + 在跑的 task worker + 真实 DeepSeek）：
+  web 表单输入"把这批会议纪要按议题去重合并成一份纪要"，triage 判定
+  general（理由"这是一个文档处理任务，需要合并去重，属于执行类操作。"），
+  Task 冻结 `v2_general`，`TaskSubmitted.intent` 完整记录
+  `{model, model, reason}`（task_1ebcc1dde8d3…），worker 领取并跑通 v2
+  工具循环（work 节点 32 步、review 出 revise 决定）。三条 triage 路径
+  另以 curl 验收：清晰执行/清晰调研各自判对并给出中文理由。
+
 ## 2026-08-10 graph 字段接进 CLI 与 web 控制台，附带一次到目前最深的 v2 真实验收
 
 PR #98 合并后，选 v2 只能直接调 API。这一轮把选择接进两个人用的界面，并顺手把

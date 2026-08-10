@@ -28,6 +28,7 @@ from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.schema import DomainModel, JsonObject
+from agent_workbench.domain.task_intent import TaskIntent
 from agent_workbench.domain.task_registry import TaskStatus
 from agent_workbench.ports.event_log import EventCursor, EventLogPort
 from agent_workbench.ports.task_registry import TaskRegistry, TaskRun, TaskSubmission
@@ -38,11 +39,12 @@ from agent_workbench.workflows.research_graph import GRAPH_VERSION_V1
 TASK_THREAD_PREFIX: Final[str] = "thr"
 
 #: What a submitter may ask for. Deliberately a shape rather than a version
-#: string (ADR-031 §2.3): the choice is real -- only the caller knows whether
-#: this is a report to write or a thing to do, and a model looking at the
-#: objective would guess wrong at the cost of the whole pipeline -- but a
-#: caller naming ``graph_version`` directly could pin itself to a version
-#: nobody deploys any more, or to one that means something else now.
+#: string (ADR-031 §2.3): a caller naming ``graph_version`` directly could pin
+#: itself to a version nobody deploys any more, or to one that means something
+#: else now. Since ADR-036 the shape may be *proposed* by triage before
+#: submission -- but what arrives here is always an explicit shape or nothing,
+#: never "let the server guess", so the freezing and idempotency below are
+#: untouched by who chose it.
 #:
 #: These names outlive the graphs behind them. Bumping v1 to v1.1 changes the
 #: mapping below and nothing a client sends.
@@ -160,6 +162,7 @@ class TaskService:
         input_fingerprint: str | None = None,
         objective_preview: str | None = None,
         graph: TaskGraphChoice | None = None,
+        intent: TaskIntent | None = None,
     ) -> TaskRun:
         """Open a Task, or return the one this caller's key already opened.
 
@@ -202,6 +205,7 @@ class TaskService:
                 submitted_policy_fingerprint=decided.policy_fingerprint,
                 submitted_authorization_envelope=decided.authorization_envelope,
                 submitted_principal_scopes=principal.scopes,
+                intent=intent,
             )
         )
 

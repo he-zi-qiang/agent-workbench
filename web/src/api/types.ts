@@ -65,6 +65,39 @@ export type TaskStatus =
  */
 export type TaskGraphChoice = "research" | "general";
 
+/** Who made a submission-time decision (ADR-036): an explicit human choice,
+ * an adopted triage verdict, or nobody -- the deployment default applied. */
+export type IntentDecidedBy = "user" | "model" | "default";
+
+/** Provenance the form attaches to a submission and the timeline shows back.
+ * Never authority: the server stores it on the TaskSubmitted event and reads
+ * none of it. */
+export interface TaskIntent {
+  graph_decided_by: IntentDecidedBy;
+  wants_report_decided_by: IntentDecidedBy;
+  reason?: string | null;
+}
+
+export interface TriageOption {
+  graph: TaskGraphChoice;
+  label: string;
+}
+
+/**
+ * One of three outcomes. `default` is deliberately one answer for every cause
+ * (disabled, no model, timeout, unreadable output): the instruction to this
+ * client is the same -- submit exactly what it submitted before the endpoint
+ * existed.
+ */
+export interface TriageResponse {
+  status: "decided" | "ask" | "default";
+  graph: TaskGraphChoice | null;
+  wants_report: boolean | null;
+  reason: string | null;
+  question: string | null;
+  options: TriageOption[];
+}
+
 export interface TaskView {
   task_id: Identifier;
   status: TaskStatus;

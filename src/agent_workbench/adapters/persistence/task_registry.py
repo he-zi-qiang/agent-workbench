@@ -156,7 +156,9 @@ class PostgresTaskRegistry:
                 field: value
                 for field, value in submission.model_dump(mode="json").items()
                 # The nested reservation is stored as three columns above.
-                if field != "index_reservation"
+                # Intent is provenance, not a column: it lives on the
+                # TaskSubmitted event below (ADR-036).
+                if field not in ("index_reservation", "intent")
             },
         }
         async with self._engine.begin() as connection:
@@ -192,6 +194,12 @@ class PostgresTaskRegistry:
                 # that opened it commit or roll back together, and a repeated
                 # submission that returns the first Task does not append a
                 # second event describing it.
+                #
+                # First write wins, because of the one field the identity
+                # check above deliberately ignores: `intent` is provenance the
+                # retry cannot reproduce -- a re-run triage carries different
+                # words -- so an existing event is kept as written rather than
+                # compared against a payload this retry rebuilt (ADR-036).
                 await self._events.append_durable_in_transaction(
                     connection,
                     EventScope(
@@ -208,8 +216,12 @@ class PostgresTaskRegistry:
                     TaskSubmitted(
                         graph_version=stored.graph_version,
                         input_ref=stored.input_ref,
+                        # From the submission, not the row: provenance is
+                        # recorded here or nowhere (ADR-036).
+                        intent=submission.intent,
                     ),
                     event_key=_submission_event_key(row["task_id"]),
+                    first_write_wins=True,
                 )
                 # Sent inside this transaction, so a submission that rolls back
                 # wakes nobody. A repeated key re-sends it, which is correct and

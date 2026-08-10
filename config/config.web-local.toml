@@ -42,6 +42,12 @@ allow_local_bootstrap = true
 [runtime]
 record_step_inputs = true
 
+[triage]
+# On here because this is the profile local acceptance runs against a real
+# provider. The deployment-level default stays off until evals/triage has an
+# accuracy report for the deployed model (ADR-036).
+enabled = true
+
 [rag.reranker]
 timeout_seconds = 120
 

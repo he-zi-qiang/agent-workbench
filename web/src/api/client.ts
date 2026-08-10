@@ -15,10 +15,12 @@ import type {
   PrincipalIdentity,
   SearchResponse,
   TaskGraphChoice,
+  TaskIntent,
   TaskListResponse,
   TaskStatus,
   TaskTimelineResponse,
   TaskView,
+  TriageResponse,
   UploadContentResponse,
 } from "./types";
 
@@ -213,6 +215,7 @@ export async function createTask(
     knowledgeBaseId?: string;
     wantsReport: boolean;
     graph?: TaskGraphChoice;
+    intent?: TaskIntent;
   },
   idempotencyKey = newIdempotencyKey("task"),
 ): Promise<TaskView> {
@@ -229,8 +232,51 @@ export async function createTask(
       // Only when chosen. Absent means the deployment's default -- the exact
       // bytes this client sent before the field existed.
       ...(input.graph === undefined ? {} : { graph: input.graph }),
+      // Provenance for the timeline (ADR-036); absent claims nothing.
+      ...(input.intent === undefined ? {} : { intent: input.intent }),
     },
   });
+}
+
+/**
+ * Ask the server to propose this objective's shape before submitting.
+ *
+ * A failed or timed-out call is reported as `default` rather than thrown:
+ * every failure carries the same instruction -- submit what you would have
+ * submitted anyway -- and a create form that surfaced a triage error would
+ * block the one action triage exists to smooth (ADR-036).
+ */
+export async function triageTask(
+  identity: PrincipalIdentity,
+  input: {
+    objective: string;
+    knowledgeBaseSelected: boolean;
+    attachmentNames?: string[];
+  },
+  options: { signal?: AbortSignal } = {},
+): Promise<TriageResponse> {
+  try {
+    return await apiRequest<TriageResponse>(identity, "/v1/tasks/triage", {
+      method: "POST",
+      body: {
+        objective: input.objective,
+        knowledge_base_selected: input.knowledgeBaseSelected,
+        ...(input.attachmentNames === undefined || input.attachmentNames.length === 0
+          ? {}
+          : { attachment_names: input.attachmentNames }),
+      },
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+  } catch {
+    return {
+      status: "default",
+      graph: null,
+      wants_report: null,
+      reason: null,
+      question: null,
+      options: [],
+    };
+  }
 }
 
 export async function cancelTask(

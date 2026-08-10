@@ -50,6 +50,7 @@ from agent_workbench.domain.schema import (
     ShortText,
     VersionedModel,
 )
+from agent_workbench.domain.task_intent import TaskIntent
 from agent_workbench.domain.tools import (
     PermissionScope,
     ProposedToolName,
@@ -117,6 +118,11 @@ class TaskSubmitted(DomainModel):
     kind: Literal["TaskSubmitted"] = "TaskSubmitted"
     graph_version: ShortText
     input_ref: Identifier
+    # Who decided the submission's shape, and in the triage case why -- the
+    # timeline is where "why is this Task shaped like this" is answered, and
+    # this is the earliest entry (ADR-036). Absent on events written before
+    # the field existed and on clients that never say.
+    intent: TaskIntent | None = None
 
 
 class TaskLifecycleEvent(DomainModel):

@@ -1306,6 +1306,53 @@ def test_a_repeated_submission_does_not_open_a_second_event() -> None:
     assert _run_with_engine(scenario) == 1
 
 
+def test_intent_lands_on_the_event_and_never_on_the_row() -> None:
+    """Provenance is recorded once, where the timeline reads it (ADR-036).
+
+    The retry carries *different* intent words on purpose: triage is not
+    deterministic, so a retry that re-ran it must remain an ordinary
+    idempotent retry -- same Task, no second event, and the first
+    submission's words kept. Without first-write-wins on the submission
+    event, that retry died as an EventKeyConflictError because the re-built
+    event's payload no longer matched the stored one.
+    """
+
+    intent = {
+        "graph_decided_by": "model",
+        "wants_report_decided_by": "model",
+        "reason": "像调研",
+    }
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> tuple[Any, ...]:
+        first = await registry.submit(_submission(intent=intent))
+        retried = await registry.submit(
+            _submission(
+                thread_id="thr_retry",
+                intent={
+                    "graph_decided_by": "user",
+                    "wants_report_decided_by": "user",
+                    "reason": "换了词的重试",
+                },
+            )
+        )
+        async with engine.connect() as connection:
+            payloads = [
+                row["payload"]
+                for row in (await connection.execute(select(events.c.payload)))
+                .mappings()
+                .all()
+            ]
+            columns = {column.name for column in task_runs.columns}
+        return first.task_id, retried.task_id, tuple(payloads), columns
+
+    first_id, retried_id, payloads, columns = _run_with_engine(scenario)
+
+    assert retried_id == first_id
+    assert len(payloads) == 1
+    assert payloads[0]["intent"] == intent
+    assert "intent" not in columns
+
+
 def test_a_submission_that_cannot_be_recorded_opens_no_task() -> None:
     """The other direction of the same transaction.
 
