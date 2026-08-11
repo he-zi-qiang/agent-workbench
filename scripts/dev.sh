@@ -62,17 +62,61 @@ API_URL="${API_URL:-http://127.0.0.1:8000}"
 
 usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
 
+# Whether every host port a container publishes is bound to loopback.
+#
+# `docker start` reuses the port bindings the container was *created* with, so
+# pinning the interface in `docker run` below does nothing for a container that
+# already exists -- and the ones this script created before it was pinned are
+# still on 0.0.0.0. Warned about rather than recreated: these containers hold
+# the local database in their writable layer, so `docker rm` would take a
+# developer's data with it. Saying which command to run is the caller's
+# decision to act on.
+loopback_only() {
+  local bound rest
+  # Each binding as `<host-ip>`, angle brackets included, so that the *empty*
+  # HostIp Docker records for the bare `-p PORT:PORT` form stays visible as
+  # `<>`. That empty value is the whole thing being looked for -- it means
+  # every interface -- and a check that read the IPs as bare words would skip
+  # it as blank and call the container safe.
+  bound=$(docker inspect -f \
+    '{{range $port, $binds := .HostConfig.PortBindings}}{{range $binds}}<{{.HostIp}}>{{end}}{{end}}' \
+    "$1" 2>/dev/null) || return 0
+  [ -n "$bound" ] || return 0
+  rest=${bound//<127.0.0.1>/}
+  rest=${rest//<::1>/}
+  [ -z "$rest" ]
+}
+
+warn_if_exposed() {
+  loopback_only "$1" && return 0
+  cat >&2 <<EOF
+warning: container '$1' publishes a port on a non-loopback interface.
+         It was created before this script pinned the binding, and 'docker
+         start' keeps the old one. Anyone on your network can reach it.
+         To re-create it on 127.0.0.1 (this DELETES that container's data):
+           docker rm -f $1 && scripts/dev.sh services
+EOF
+}
+
 case "${1:-}" in
 services)
   # 5433, not 5432: this machine runs its own PostgreSQL on the default port,
   # and a container published there is shadowed by it -- the symptom is a
   # confusing `role "agent" does not exist` from a server you did not start.
+  #
+  # `127.0.0.1:` on every published port, and not merely `PORT:PORT`. Docker's
+  # short form binds 0.0.0.0, so the bare form put a password-known PostgreSQL
+  # and an unauthenticated Qdrant on every interface this laptop has -- café
+  # Wi-Fi included -- while the deployment notes say the local stack is
+  # loopback-only. Compose already publishes nothing but the API this way; this
+  # script is the path that disagreed with it.
   docker start aw-postgres 2>/dev/null ||
-    docker run -d --name aw-postgres -p "${PG_PORT}:5432" \
+    docker run -d --name aw-postgres -p "127.0.0.1:${PG_PORT}:5432" \
       -e POSTGRES_USER=agent -e POSTGRES_PASSWORD=ci-only \
       -e POSTGRES_DB=agent_workbench_test postgres:16
   docker start aw-qdrant 2>/dev/null ||
-    docker run -d --name aw-qdrant -p "${QDRANT_PORT}:6333" qdrant/qdrant:v1.12.4
+    docker run -d --name aw-qdrant -p "127.0.0.1:${QDRANT_PORT}:6333" \
+      qdrant/qdrant:v1.12.4
   # Wait for the server, then make the local database if it is not there.
   for _ in $(seq 1 30); do
     docker exec aw-postgres pg_isready -U agent >/dev/null 2>&1 && break
@@ -81,7 +125,9 @@ services)
   docker exec aw-postgres psql -U agent -d postgres -tAc \
     "SELECT 1 FROM pg_database WHERE datname = '${PG_DB}'" | grep -q 1 ||
     docker exec aw-postgres createdb -U agent "${PG_DB}"
-  echo "postgres :${PG_PORT}/${PG_DB}  qdrant :${QDRANT_PORT}"
+  warn_if_exposed aw-postgres
+  warn_if_exposed aw-qdrant
+  echo "postgres 127.0.0.1:${PG_PORT}/${PG_DB}  qdrant 127.0.0.1:${QDRANT_PORT}"
   ;;
 
 migrate)

@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
+from agent_workbench.adapters.telemetry import EventLoopLagWatchdog
 from agent_workbench.application.chat import ChatExecutionError
 from agent_workbench.application.tasks import TimelineUnavailableError
 from agent_workbench.application.uploads import UploadVerificationError
@@ -151,6 +152,15 @@ def create_app(
                     (
                         dependencies.chat_pending_recovery,
                         "chat-pending-release-recovery",
+                    ),
+                    # Unconditional, unlike the two above: a process serving no
+                    # chat still embeds, parses and uploads, and those are the
+                    # calls that block the loop for everything else on it.
+                    (
+                        EventLoopLagWatchdog(
+                            telemetry=dependencies.telemetry.telemetry
+                        ),
+                        "event-loop-lag-watchdog",
                     ),
                 )
                 if worker is not None

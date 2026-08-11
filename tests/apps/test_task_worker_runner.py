@@ -134,6 +134,75 @@ def test_a_failing_lane_stops_the_others() -> None:
     assert all(isinstance(e, RuntimeError) for e in caught.value.exceptions)
 
 
+def test_a_wakeup_that_arrived_during_a_claim_is_not_cleared_by_the_wait() -> None:
+    """The ordering the whole wake-up path rests on: clear, then claim.
+
+    A notification landing while ``run_once`` is querying is the routine case,
+    not the exotic one -- it announces a commit that the running query's
+    snapshot may already be too old to see. So the flag it leaves up has to
+    survive into the wait. A lane that cleared on its way *into* the wait
+    instead would drop exactly those wake-ups and sit out the full interval on
+    a Task that is committed and claimable.
+
+    The interval here is 30 seconds and a passing run takes none of it. There
+    is no PostgreSQL in this test because none is needed: the event is the
+    contract, and where it comes from is the listener's business.
+    """
+
+    async def scenario() -> int:
+        wakeup = asyncio.Event()
+        stop = asyncio.Event()
+        calls = 0
+
+        async def run_once() -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                # What a notification for a Task this claim missed looks like
+                # from in here.
+                wakeup.set()
+            else:
+                stop.set()
+            return None
+
+        runner = TaskWorkerRunner(run_once=run_once, poll_seconds=30, wakeup=wakeup)
+        await asyncio.wait_for(runner.run_forever(stop), timeout=5)
+        return calls
+
+    assert asyncio.run(scenario()) == 2
+
+
+def test_a_wakeup_wired_lane_still_stops_when_shutdown_is_requested() -> None:
+    """The control for the test above: the wake-up is not the only way out.
+
+    Same 30 second interval, and nothing ever sets the wake-up. Racing two
+    events instead of waiting on one is where a shutdown gets forgotten, and a
+    Worker that only stopped when a Task happened to arrive would be a SIGTERM
+    that hangs for the poll interval.
+    """
+
+    async def scenario() -> int:
+        wakeup = asyncio.Event()
+        stop = asyncio.Event()
+        parked = asyncio.Event()
+        calls = 0
+
+        async def run_once() -> None:
+            nonlocal calls
+            calls += 1
+            parked.set()
+            return None
+
+        runner = TaskWorkerRunner(run_once=run_once, poll_seconds=30, wakeup=wakeup)
+        running = asyncio.create_task(runner.run_forever(stop))
+        await parked.wait()
+        stop.set()
+        await asyncio.wait_for(running, timeout=1)
+        return calls
+
+    assert asyncio.run(scenario()) == 1
+
+
 def test_a_lane_count_below_one_is_refused_at_construction() -> None:
     with pytest.raises(ValueError, match="concurrency must be at least 1"):
         TaskWorkerRunner(run_once=_never, poll_seconds=1, concurrency=0)

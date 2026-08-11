@@ -135,8 +135,15 @@ export function KnowledgePage() {
               title="选择知识库"
             />
           ) : (
+            // Keyed by the knowledge base, so switching remounts rather than
+            // re-renders. The panel holds a chosen file, an upload notice, a
+            // query and its results, and every one of those is about one
+            // knowledge base: without the key, a file picked in A uploads into
+            // B -- the mutation reads the id when it fires, not when the file
+            // was chosen -- and A's search results sit under B's heading.
             <KnowledgeBaseDetail
               identity={identity}
+              key={selected.knowledge_base_id}
               knowledgeBase={selected}
               onChanged={async () => {
                 await queryClient.invalidateQueries({

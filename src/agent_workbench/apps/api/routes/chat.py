@@ -171,8 +171,12 @@ async def ask(
         idempotency_key=idempotency_key,
     )
 
+    # The shape this process *serves*, not the one it configured. A deployment
+    # whose embedding runtime is missing serves Direct only, whatever the file
+    # says, and reading the configured value here would accept a grounded turn
+    # that the selector underneath can only fail.
     _ensure_answer_mode_available(
-        dependencies.config.chat.retrieval_shape, body.answer_mode
+        dependencies.effective_retrieval_shape, body.answer_mode
     )
 
     cancellation = CancellationSource()

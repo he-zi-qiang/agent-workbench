@@ -14,6 +14,25 @@ import {
 } from "../api/client";
 import type { PrincipalIdentity } from "../api/types";
 
+/**
+ * Files added beside a question, and what that actually does.
+ *
+ * **This is not an attachment.** There is no per-request attachment in this
+ * system: a Chat or Task request carries a `knowledge_base_id` and nothing
+ * else, so a file added here is *uploaded into the selected knowledge base*,
+ * indexed there, and stays there afterwards -- visible to anything else that
+ * later selects the same knowledge base, including other people it is shared
+ * with.
+ *
+ * The word "附件" and a paperclip promise the opposite of that: something
+ * scoped to one message and gone when the message is sent. The copy below
+ * therefore says "加入知识库" rather than "附件", and the remove control says
+ * what it can actually do, which is take the file out of *this* list. It
+ * cannot delete the uploaded document, because nothing in the system can:
+ * there is no delete on the documents route, the document store port or its
+ * Postgres adapter, and the chunks are in Qdrant besides. Removing the chip
+ * and calling it removal is the misreading this component used to invite.
+ */
 export type AttachmentState =
   | "waiting_for_source"
   | "uploading"
@@ -187,11 +206,14 @@ export function AttachmentButton({
   return (
     <span className="aw-attachment-control">
       <button
-        aria-label="添加附件"
+        aria-label="上传文件到知识库"
         className="aw-attachment-button"
         disabled={disabled}
         onClick={() => ref.current?.click()}
-        title="添加 PDF 或 Markdown（最多 5 个）"
+        // Says where the file goes, because it goes somewhere permanent. The
+        // old label ("添加附件") described a per-message attachment this system
+        // does not have.
+        title="上传 PDF 或 Markdown 到所选知识库（最多 5 个，上传后会一直保留）"
         type="button"
       >
         <Paperclip aria-hidden="true" size={17} />
@@ -220,8 +242,11 @@ export function AttachmentTray({
   onRetry: (localId: string) => void;
 }) {
   if (items.length === 0) return null;
+  const anyUploaded = items.some(
+    (item) => item.state === "indexing" || item.state === "ready",
+  );
   return (
-    <div className="aw-attachment-tray" aria-label="附件">
+    <div className="aw-attachment-tray" aria-label="要加入知识库的文件">
       {items.map((item) => (
         <div className={`aw-attachment is-${item.state}`} key={item.localId}>
           {item.state === "uploading" || item.state === "indexing" ? (
@@ -239,12 +264,29 @@ export function AttachmentTray({
             </button>
           ) : null}
           {item.state === "uploading" ? null : (
-            <button aria-label={`移除 ${item.file.name}`} onClick={() => onRemove(item.localId)} type="button">
+            <button
+              // Named for what it does. An uploaded file is in the knowledge
+              // base and stays there; this only stops listing it here, and a
+              // button labelled "移除" said otherwise.
+              aria-label={
+                item.state === "waiting_for_source" || item.state === "failed"
+                  ? `不再上传 ${item.file.name}`
+                  : `从这个列表中移除 ${item.file.name}（文件仍在知识库中）`
+              }
+              onClick={() => onRemove(item.localId)}
+              type="button"
+            >
               <X aria-hidden="true" size={14} />
             </button>
           )}
         </div>
       ))}
+      {anyUploaded ? (
+        <p className="aw-attachment-note">
+          这些文件已经上传到所选知识库并会一直保留；这里的 ×
+          只是不再列出它，不会删除已上传的文档。要管理它们，去「知识库」页面。
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -265,9 +307,11 @@ function withoutError(item: KnowledgeAttachment): KnowledgeAttachment {
 }
 
 function attachmentStateLabel(item: KnowledgeAttachment): string {
-  if (item.state === "waiting_for_source") return "请选择知识库后上传";
-  if (item.state === "uploading") return "正在上传";
-  if (item.state === "indexing") return "正在建立索引，完成后才能使用";
-  if (item.state === "ready") return "已加入知识库，可以使用";
+  if (item.state === "waiting_for_source") return "请先选择知识库，才能上传";
+  if (item.state === "uploading") return "正在上传到知识库";
+  if (item.state === "indexing") return "正在建立索引，完成后才能检索到";
+  // Says where it went and that it stays. "已加入知识库，可以使用" was true and
+  // still read like a per-message attachment.
+  if (item.state === "ready") return "已存入知识库（会一直保留）";
   return item.error ?? "上传失败";
 }

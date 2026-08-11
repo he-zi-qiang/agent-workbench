@@ -57,19 +57,34 @@ def test_the_process_assembles_without_the_embedding_runtime(
         pass
 
 
-def test_chat_is_absent_and_says_why(
+def test_a_missing_embedder_costs_retrieval_and_not_chat(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Reported once at startup, not rediscovered per request."""
+    """Reported once at startup, and scoped to the half that is actually gone.
+
+    Direct chat reaches no index, so an absent embedding runtime is not a
+    reason to withdraw it. It used to be: the whole ``/v1/chat`` router
+    disappeared, which meant the deployment least able to run a RAG stack was
+    also the one that could not answer a plain question -- the one thing it was
+    still fully equipped to do.
+
+    What must stay reported is the *grounded* half, and in the shape the route
+    reads: `effective_retrieval_shape` is what decides whether a RAG request is
+    refused with a 422 or accepted and then failed underneath.
+    """
 
     monkeypatch.setitem(sys.modules, "sentence_transformers", None)
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
 
-    assert dependencies.serves_chat is False
-    assert dependencies.chat is None
-    assert dependencies.chat_unavailable is not None
-    assert "--extra embedding" in dependencies.chat_unavailable
+    assert dependencies.serves_chat is True
+    assert dependencies.chat is not None
+    assert dependencies.chat_unavailable is None
+    assert dependencies.rag_unavailable is not None
+    assert "--extra embedding" in dependencies.rag_unavailable
+    assert dependencies.effective_retrieval_shape == "ungrounded"
+    # Nothing to retrieve from, so /v1/search is not mounted either.
+    assert dependencies.serves_search is False
     assert dependencies.chat_reaper is not None
     assert dependencies.chat_pending_recovery is not None
 
@@ -80,14 +95,23 @@ def test_nothing_is_substituted_for_the_missing_embedder(
     """The decision, stated where a future change would have to break it.
 
     A stand-in embedder would make chat answer from vectors that mean nothing,
-    which is worse than not answering.
+    which is worse than not answering. Serving Direct is not that: it answers
+    from the model alone and says so, rather than from an index that is not
+    there. So what may not exist here is *retrieval*, and the grounded
+    execution built on it.
     """
 
     monkeypatch.setitem(sys.modules, "sentence_transformers", None)
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
 
-    assert dependencies.chat is None
+    assert dependencies.retrieval is None
+    assert dependencies.vector_index is None
+    assert dependencies.encoders == ()
+    selector = dependencies.chat.execution if dependencies.chat is not None else None
+    assert selector is not None
+    assert selector.rag is None
+    assert selector.direct is not None
 
 
 def test_a_missing_reranker_does_not_cost_the_chat_capability(

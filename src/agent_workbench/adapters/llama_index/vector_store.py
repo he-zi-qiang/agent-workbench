@@ -5,16 +5,20 @@ the collection. LlamaIndex builds the query -- embedding, top_k, mode, filters
 -- and this store executes it through the port every other part of the system
 already writes and reads through. The alternative, ``llama-index-vector-stores-qdrant``
 over the same collection, would bring a second opinion about how points are
-laid out and where fusion happens; ADR-017 gives both of those to this project
-and to Qdrant respectively, so the integration is written at the layer above.
+laid out and where fusion happens; ADR-017 gives both of those to this project,
+so the integration is written at the layer above.
 
-**Fusion happens once, inside Qdrant.** A hybrid query becomes exactly one
-``search_hybrid`` call, whose two prefetches and single RRF are performed by the
-database. This adapter never holds two ranked lists, which is the only way to
-be certain it never combines them a second time. It also does not reorder what
-comes back: the order the index produced is the order the nodes are returned
-in, and a contract test pins that, because re-sorting is what a second fusion
-would look like from the outside.
+**Fusion happens once, below this adapter.** A hybrid query becomes exactly one
+``search_hybrid`` call, and that call performs the single RRF. Since ADR-033 it
+performs it *here in this process* rather than in Qdrant -- two concurrent
+single-arm queries, each ordered by ``(-score, chunk_id)``, fused once -- which
+is what makes a tied point's rank survive a re-index. Nothing about this
+adapter changes with that move, and that is the point: it never holds two
+ranked lists either way, which is the only way to be certain it never combines
+them a second time. It also does not reorder what comes back: the order the
+index produced is the order the nodes are returned in, and a contract test pins
+that, because re-sorting is what a second fusion would look like from the
+outside.
 
 **An unrecognised filter is a refusal.** Tenant, knowledge base and principal
 reach this adapter as LlamaIndex metadata filters, and they are the difference
@@ -239,8 +243,8 @@ class PortBackedVectorStore(BasePydanticVectorStore):
                 knowledge_base_id=knowledge_base_id,
                 authorized_principals=principals,
                 limit=limit,
-                # Each arm proposes a full candidate set; the single RRF inside
-                # Qdrant is what narrows them. Passing the retriever's
+                # Each arm proposes a full candidate set; the single RRF below
+                # this adapter is what narrows them. Passing the retriever's
                 # sparse_top_k/hybrid_top_k here instead would let LlamaIndex
                 # shorten one list before fusion, which changes which retriever
                 # is being measured.

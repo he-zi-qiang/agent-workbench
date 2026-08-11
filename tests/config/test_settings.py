@@ -23,6 +23,7 @@ from agent_workbench.bootstrap.projections import (
     task_authorization_envelope,
 )
 from agent_workbench.bootstrap.settings import Settings, load_settings
+from agent_workbench.evaluation.metrics import RETRIEVAL_METRICS
 
 CONFIG_FILE = DEFAULT_CONFIG_FILE
 PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
@@ -63,7 +64,7 @@ def production_payload() -> dict:
 def test_default_configuration_is_valid_and_secret_safe() -> None:
     settings = Settings(**valid_payload())
 
-    assert settings.rag.retrieval.fusion_owner == "qdrant"
+    assert settings.rag.retrieval.fusion_owner == "application"
     assert settings.workflow.control_plane == "langgraph"
     assert settings.database.guard_connection_scope == "task_pinned"
     assert settings.api.document_upload_transport == "artifact_data_plane"
@@ -114,18 +115,55 @@ def test_default_configuration_is_valid_and_secret_safe() -> None:
         "secrets",
     ):
         assert live_section not in semantics
-    assert {
-        "precision_at_k",
-        "mrr",
-        "factual_correctness",
-        "abstention_rate",
-        "citation_precision",
-        "citation_recall",
-    } <= set(settings.evaluation.rag_metrics)
+    configured = set(settings.evaluation.rag_metrics)
+    assert configured, "a vacuous metric list would satisfy the check below"
+    assert configured <= set(RETRIEVAL_METRICS)
     assert {
         "node_retry_count",
         "human_intervention_count",
     } <= set(settings.evaluation.task_metrics)
+
+
+def test_configuration_cannot_name_a_retrieval_metric_nothing_computes() -> None:
+    """The control group is the shipped list; the case is one name past it.
+
+    Without the first half this passes for the wrong reason -- a validator that
+    rejected everything would satisfy the second half on its own.
+    """
+
+    payload = valid_payload()
+    assert Settings(**deepcopy(payload)).evaluation.rag_metrics
+
+    payload["evaluation"]["rag_metrics"] = [
+        *payload["evaluation"]["rag_metrics"],
+        "faithfulness",
+    ]
+    with pytest.raises(ValidationError) as error:
+        Settings(**payload)
+
+    message = str(error.value)
+    assert "faithfulness" in message
+    # The error has to say what *is* available, or the reader's next move is to
+    # guess names until one sticks.
+    assert "mrr" in message
+
+
+def test_ragas_cannot_be_enabled_while_no_runner_exists() -> None:
+    """A flag with nothing behind it must fail, not quietly do nothing.
+
+    This is the shape the defect had: the default said `true`, no code read it,
+    and every reader who checked the configuration concluded answers were being
+    judged. Defaulting to `false` alone would leave the same trap one edit away.
+    """
+
+    payload = valid_payload()
+    assert Settings(**deepcopy(payload)).evaluation.ragas_enabled is False
+
+    payload["evaluation"]["ragas_enabled"] = True
+    with pytest.raises(ValidationError) as error:
+        Settings(**payload)
+
+    assert "ragas_enabled" in str(error.value)
 
 
 def test_evaluation_judge_defaults_closed_and_pinned_when_enabled() -> None:
@@ -830,13 +868,24 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     call per create-form submission and changes what the form asks a human
     -- behaviour a 1.11 binary cannot provide, so a file that sets it must
     not load quietly on one.
+    1.13 -> 1.14 is ADR-039: `evaluation.ragas_enabled` and
+    `evaluation.rag_metrics` may no longer name a capability the code does not
+    have -- the flag accepts only `false`, the list only keys of
+    `RETRIEVAL_METRICS`. Every entry above is a newer file asking an older
+    binary for behaviour it lacks; this one runs the other way, and it is the
+    1.13 file that stops loading. `ragas_enabled = true`, or the 19-name
+    default list that shipped at 1.13, now fails validation instead of sitting
+    there unread. No evaluation runs differently -- nothing ever read either
+    field -- so the bump buys no behaviour, only the guarantee that the file
+    has stopped promising a judge, a rerank delta and a cost meter this binary
+    has no way to produce.
 
     The pin exists so widening a frozen Literal cannot happen quietly -- this
     test failing *is* the mechanism, and updating it is the last step of the
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.13"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.14"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:
@@ -894,3 +943,36 @@ def test_research_needs_no_credential_beyond_the_provider_s_own() -> None:
 
     assert settings.research.enabled
     assert settings.research.base_url == "https://api.deepseek.com/anthropic"
+
+
+def test_the_declared_fusion_owner_is_the_one_that_actually_fuses() -> None:
+    """The config field and the code have to name the same owner.
+
+    This field exists to make architecture and configuration inseparable: it is
+    a single-valued ``Literal``, so a deployment cannot quietly move the
+    fusion. That only works while the value is true. It read ``"qdrant"`` for a
+    while after ADR-033 had already moved the RRF into this process, which is
+    the drift the field was supposed to prevent -- and it went unnoticed
+    because nothing checked the claim against the code.
+
+    So the claim is checked against the code. `fused` living in this repository
+    and the Qdrant adapter importing it is what "the application owns the
+    fusion" means operationally; a `FusionQuery` in that adapter would mean the
+    opposite, and is asserted absent for the same reason.
+    """
+
+    settings = Settings(**valid_payload())
+    assert settings.rag.retrieval.fusion_owner == "application"
+
+    from agent_workbench.adapters.vector import fusion, qdrant
+
+    assert callable(fusion.fused)
+    assert qdrant.fused is fusion.fused
+
+    source = Path(qdrant.__file__).read_text(encoding="utf-8")
+    body = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith("#")
+    )
+    # Only in prose, describing what this no longer does.
+    assert "models.FusionQuery" not in body
+    assert "prefetch=" not in body

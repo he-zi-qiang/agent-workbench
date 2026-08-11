@@ -16,7 +16,9 @@ import {
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  ApiError,
   decideApproval,
+  getApproval,
   getArtifactJson,
   getTaskTimeline,
   listApprovals,
@@ -31,9 +33,11 @@ import {
   EmptyState,
   ErrorNotice,
   IconButton,
+  InfoNotice,
   LoadingLine,
   StatusPill,
   formatDateTime,
+  formatStatus,
 } from "../../components/ui";
 import {
   findTaskInputRef,
@@ -47,6 +51,18 @@ interface DecisionIntent {
   approval: ApprovalView;
   value: ApprovalDecision;
   objective: string | null;
+}
+
+/**
+ * A decision the server settled differently from what was asked.
+ *
+ * `approval` is the record read back after the fact, or null when even that
+ * read failed -- in which case the message says only what is known, rather
+ * than implying a status nobody confirmed.
+ */
+interface SettledDecision {
+  approval: ApprovalView | null;
+  message: string;
 }
 
 const FILTERS: ReadonlyArray<{ value: ApprovalFilter; label: string }> = [
@@ -79,12 +95,48 @@ export function ApprovalsPage() {
     getNextPageParam: (lastPage) => lastPage.cursor ?? undefined,
   });
 
+  // What the server says about a decision this page could not simply apply.
+  // Held here rather than derived from the mutation because both outcomes it
+  // covers -- a refused version and an applied-but-different status -- are
+  // facts the server returned, and the page must show those instead of the
+  // button that was pressed.
+  const [settled, setSettled] = useState<SettledDecision | null>(null);
+
   const decision = useMutation({
     mutationFn: ({ approval, value }: DecisionIntent) =>
       decideApproval(identity, approval, value),
-    onSuccess: async () => {
-      setDecisionIntent(null);
+    onSuccess: async (authoritative, intent) => {
       await queryClient.invalidateQueries({ queryKey: ["approvals"] });
+      // A 2xx does not mean the decision that was sent is the decision that
+      // stuck: the same version can come back settled the other way. Work's
+      // inline gate already reported that; this page used to close the dialog
+      // and let the list imply it.
+      if (authoritative.status === intent.value) {
+        setDecisionIntent(null);
+        setSettled(null);
+        return;
+      }
+      setSettled({
+        approval: authoritative,
+        message: `本次“${formatStatus(intent.value)}”未被应用；同一决定版本的服务端权威状态为“${formatStatus(authoritative.status)}”。`,
+      });
+    },
+    onError: async (error, intent) => {
+      if (!(error instanceof ApiError) || error.status !== 409) return;
+      // The version this page held was stale -- decided elsewhere, or the Task
+      // moved past the gate. Read the authoritative record rather than leaving
+      // a rejected version on screen, and refresh the list behind the dialog.
+      const [authoritative] = await Promise.all([
+        getApproval(identity, intent.approval.approval_id).catch(() => null),
+        queryClient.invalidateQueries({ queryKey: ["approvals"] }),
+      ]);
+      setSettled({
+        approval: authoritative,
+        message:
+          authoritative !== null && authoritative.status !== "pending"
+            ? `审批服务端状态已是“${formatStatus(authoritative.status)}”，这条不再可决定；已刷新权威记录。`
+            : "服务端拒绝当前版本的决定；已刷新权威记录，请重新确认。",
+      });
     },
   });
 
@@ -168,6 +220,7 @@ export function ApprovalsPage() {
               key={approval.approval_id}
               onDecide={(value, objective) => {
                 decision.reset();
+                setSettled(null);
                 setDecisionIntent({ approval, value, objective });
               }}
             />
@@ -189,10 +242,20 @@ export function ApprovalsPage() {
       {decisionIntent !== null && (
         <DecisionDialog
           intent={decisionIntent}
-          error={decision.error}
+          // A 409 is not an error to show as one: nothing is broken, the
+          // version this page held is simply no longer the current one, and
+          // `settled` says what the server's record is instead.
+          error={
+            decision.error instanceof ApiError && decision.error.status === 409
+              ? null
+              : decision.error
+          }
           pending={decision.isPending}
+          settled={settled}
           onClose={() => {
-            if (!decision.isPending) setDecisionIntent(null);
+            if (decision.isPending) return;
+            setDecisionIntent(null);
+            setSettled(null);
           }}
           onConfirm={() => decision.mutate(decisionIntent)}
         />
@@ -307,12 +370,15 @@ function DecisionDialog({
   intent,
   error,
   pending,
+  settled,
   onClose,
   onConfirm,
 }: {
   intent: DecisionIntent;
   error: Error | null;
   pending: boolean;
+  /** Set once the server settled this differently from what was asked. */
+  settled: SettledDecision | null;
   onClose: () => void;
   onConfirm: () => void;
 }) {
@@ -337,14 +403,26 @@ function DecisionDialog({
             <X aria-hidden="true" size={17} />
           </IconButton>
         </header>
-        <div className={`aw-notice ${approves ? "" : "is-warning"}`}>
-          <span>
-            {approves
-              ? "确认后，任务会继续生成并导出最终报告。"
-              : "确认后，任务会结束，并且不会导出报告。"}
-          </span>
-        </div>
+        {settled === null && (
+          <div className={`aw-notice ${approves ? "" : "is-warning"}`}>
+            <span>
+              {approves
+                ? "确认后，任务会继续生成并导出最终报告。"
+                : "确认后，任务会结束，并且不会导出报告。"}
+            </span>
+          </div>
+        )}
         {error !== null && <ErrorNotice message={errorMessage(error)} />}
+        {settled !== null && (
+          <div className="aw-approve-settled">
+            {/* The status the server holds, not the button that was pressed.
+                A decision that did not stick has to be visible as state. */}
+            {settled.approval !== null && (
+              <StatusPill status={settled.approval.status} />
+            )}
+            <InfoNotice>{settled.message}</InfoNotice>
+          </div>
+        )}
         <footer>
           <button
             className="aw-button is-ghost"
@@ -352,20 +430,25 @@ function DecisionDialog({
             onClick={onClose}
             type="button"
           >
-            返回检查
+            {settled === null ? "返回检查" : "知道了"}
           </button>
-          <button
-            className={approves ? "aw-button is-primary" : "aw-button is-ghost"}
-            disabled={pending}
-            onClick={onConfirm}
-            type="button"
-          >
-            {pending
-              ? "正在提交…"
-              : approves
-                ? "确认允许"
-                : "确认拒绝"}
-          </button>
+          {/* Withdrawn once the server settled this: re-sending the same
+              refused version can only be refused again, and offering the
+              button suggests the decision is still this page's to make. */}
+          {settled === null && (
+            <button
+              className={approves ? "aw-button is-primary" : "aw-button is-ghost"}
+              disabled={pending}
+              onClick={onConfirm}
+              type="button"
+            >
+              {pending
+                ? "正在提交…"
+                : approves
+                  ? "确认允许"
+                  : "确认拒绝"}
+            </button>
+          )}
         </footer>
       </section>
     </div>

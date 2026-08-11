@@ -1170,6 +1170,12 @@ function ArtifactRail({
  * and the answer is the whole deliverable -- the same thing Chat returns -- so
  * an answer with no file attached is the ordinary case and is presented as one.
  * Only a Task that *was* asked for a file has anything missing when none exists.
+ *
+ * `waiting_approval` is not "still running" even though it is not terminal, and
+ * that distinction is the whole point of the gate: the draft exists, the export
+ * has not happened, and the reader is being asked to decide about the text. It
+ * used to render as a spinner, which left the approve button asking for consent
+ * to something the console would not show.
  */
 function TaskResult({
   artifact,
@@ -1220,10 +1226,24 @@ function TaskResult({
   });
 
   if (artifact === null) {
-    if (!isTerminalStatus(status)) {
+    // The text the approval gate is a gate over. Held back until the reader
+    // decided, it is exactly what they are being asked about, so this is the
+    // one non-terminal status that has something to show.
+    const awaitingDecision = status === "waiting_approval" && draftText !== null;
+    if (!isTerminalStatus(status) && !awaitingDecision) {
       return (
         <section className="aw-result is-running">
-          <LoadingLine label="任务正在执行，完成后结果会显示在这里" />
+          {/* At the gate with no draft in hand means the timeline has not
+              caught up yet -- it is still arriving, and the decision below is
+              about text this page is in the middle of reading. Saying "任务正在
+              执行" there would name the wrong thing as the reason to wait. */}
+          <LoadingLine
+            label={
+              status === "waiting_approval"
+                ? "正在读取待确认的内容"
+                : "任务正在执行，完成后结果会显示在这里"
+            }
+          />
         </section>
       );
     }
@@ -1231,17 +1251,29 @@ function TaskResult({
     // one this is simply the result -- headlining it "这次没有生成文件" reported
     // a normal outcome as a shortfall, and named the one thing that did not
     // happen instead of the thing that did.
-    if (status === "succeeded" && draftText !== null) {
+    if ((status === "succeeded" || awaitingDecision) && draftText !== null) {
+      // Only a finished Task can be missing a file it was asked for. One still
+      // at the gate has not reached the export step, so saying so here would
+      // report the gate itself as a shortfall.
+      const missingReport = wantsReport === true && !awaitingDecision;
       return (
-        <section className="aw-answer" aria-label="任务结果">
+        <section
+          className="aw-answer"
+          aria-label={awaitingDecision ? "待确认的内容" : "任务结果"}
+        >
           <header>
             <span className="aw-answer-mark" aria-hidden="true">A</span>
-            <strong>回答</strong>
-            {wantsReport === true ? <small>没有生成文件</small> : null}
+            <strong>{awaitingDecision ? "待确认的内容" : "回答"}</strong>
+            {missingReport ? <small>没有生成文件</small> : null}
           </header>
-          {wantsReport === true ? (
+          {missingReport ? (
             <p className="aw-page-note">
               这个任务要求生成文件，但没有产出；下面是它写出的内容。
+            </p>
+          ) : null}
+          {awaitingDecision ? (
+            <p className="aw-page-note">
+              下面是任务写出的内容。确认后才会导出成文件；请先看过再决定。
             </p>
           ) : null}
           <MarkdownContent text={draftText} />

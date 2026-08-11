@@ -1156,6 +1156,19 @@ pre {
   font-weight: 600;
 }
 
+/* One scoreboard per gold set. Separated rather than stacked flush, because
+   the gap is the point: rows from different question sets are not comparable,
+   and a continuous run of rows says the opposite of the caption above them. */
+.aw-eval-group + .aw-eval-group {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px dashed var(--aw-border);
+}
+
+.aw-eval-group > .aw-page-note {
+  margin-top: 14px;
+}
+
 /* Retrieval scoreboard. Wider than the two-column capability matrix above it,
    and every score cell carries a count over the plain rate, so the columns are
    sized for "37 / 38 题" rather than "97.4%". */
@@ -1351,6 +1364,16 @@ pre {
   flex-wrap: wrap;
   margin-bottom: 7px;
   gap: 7px;
+}
+
+/* The note that says an uploaded file stays in the knowledge base. Full-width
+   so it sits under the chips rather than wrapping as another chip. */
+.aw-attachment-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
 .aw-attachment {

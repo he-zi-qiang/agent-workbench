@@ -136,8 +136,32 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
 - Chat 的历史 token window/compaction 尚未实现。引用校验与 Agentic Retrieval
   已经落地：`chat.retrieval_shape` 可选 `fixed`/`agentic`（**默认仍是 `fixed`**，
   因为固定两步才可复现评测），引用只在模型点名且**被展示过**时给出。
-- EventLog 能拒绝未知 schema version，但尚未实现旧版本 upcaster、poison-row
-  隔离/跳过策略。
+- EventLog 的旧版本 upcaster 与 poison-row 隔离已落地：`EventUpcasterRegistry`
+  按 `(event_type, from_version)` 注册**单步**升级，链自己一版一版往上走并在每轮
+  重读 `event_type`（所以事件改过名也接得上）；缺一步就停在洞前、保持原来那条拒绝
+  路径。`read_isolating()` 让一条解不出来的行不再挡死整条流的回放，**且跳过是可见的**
+  ——SSE 发一个独立的 `stream.quarantined` 帧、Task timeline 返回被跳过的序号。
+  两处调用方都已切过去。仍缺的是：生产注册表 `DEFAULT_EVENT_UPCASTERS` 还是空的
+  （机制有了，还没有真实的历史版本要升），浏览器界面上也不显示"这里有一条读不出来"。
+- **`LISTEN/NOTIFY` 现在有消费端了**（此前只有发送端，代码注释自己写着"没有消费者"）：
+  Task Worker 空队列时的等待可以被一次唤醒提前打断，轮询周期**保留为下限**。
+  正确性不依赖通知到达——有一条对照组测试把通知全部丢掉，任务照样被领取。
+  断线退回纯轮询而不是卡住。SSE 回放**仍然轮询**，这一半没做。
+  实现过程中引入过一个真缺陷并已修掉：asyncpg 对优雅 `close()` 也会触发 termination
+  回调、而且晚一个 tick，于是"断线→重连"会拆掉刚建好的健康连接，每 5 秒一次、永不停止，
+  且健康检查从此再不运行。修法是在回调里比对会话身份（报告的是不是当前这条连接）。
+  回归测试把它钉住了：移掉那两行，两秒内会冒出 49 条 session。
+- **event-loop lag 看门狗**已实现并装进 API 进程：周期性量测事件循环滞后，超阈值上报
+  指标并打一条带实测数值的日志。**只做了 warn 这一半**——实施计划要求的 abort
+  （标记 unhealthy、停止 claim、取消进行中的 run）未实现；也**没有装到 Task Worker**。
+- **崩溃恢复第一次有了进程级证据**：此前所有"恢复"测试都是在同一个 pytest 进程内重建
+  engine/worker。现在有一条测试真的用 `subprocess` 起独立 Worker、等它确实进入执行中、
+  再 `SIGKILL`（不是 SIGTERM——优雅关闭证明不了任何事），然后由第二个进程接手，
+  并断言被杀的进程返回码确实是 -9。带不杀进程的对照组。
+- **首份 evidence manifest 已生成**（`agent-evidence write`，此前这个工具存在但从没被跑过）：
+  记录 commit、dirty 标记、配置 schema 版本、policy fingerprint、模型/embedding/reranker
+  身份，附测试报告及其 SHA-256，并**自己列出缺哪些证据**（评测报告、trace 样本、演示录像）。
+  一份允许不完整、但不允许对不完整保持沉默的证据包。
 - 三臂消融的 `hybrid-rerank` 臂尚未跑：hybrid 在当前 38 题 gold set 上已打满
   1.000，rerank delta 必然为 0；要测出它得先有更难的 gold set。
 - 外部搜索已接上真实 Provider（[ADR-020](docs/adr/0020-external-web-search.md)）：
@@ -150,12 +174,15 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
 - HITL Approval 已贯通 LangGraph interrupt、权威账本、版本化决定 API、授权复核与
   跨进程恢复；React Work 页面只按服务端权威记录提供决定操作。
 - **框架口径已由 [ADR-017](docs/adr/0017-llamaindex-primary-rag.md) 锁定：**自研 Agent
-  Runtime、LangGraph Task 控制面、LlamaIndex ingestion/retrieval、Qdrant 单次 RRF，
+  Runtime、LangGraph Task 控制面、LlamaIndex ingestion/retrieval、**单次 RRF**，
   并以 RAGAS 作为离线 LLM-judge 辅助。LlamaIndex 不接管 Tool Loop 或最终回答，
   应用层继续负责 ACL/revision fence 与答案发布。
+  那一次 RRF 自 [ADR-033](docs/adr/0033-fusion-ranks-are-ours.md) 起在本进程内做
+  （`adapters/vector/fusion.py`），不再由 Qdrant Query API 做：融合次数不变，
+  变的是臂内名次由 `chunk_id` 决定，因而重建索引后仍可复现。
 - **当前实现边界：**LlamaIndex **检索**适配器已落地（`adapters/llama_index/`）：它拥有
-  query embedding、Retriever 契约与 Document/Node 映射；Qdrant 仍是唯一融合方，授权与
-  答案发布仍在应用层。检索契约测试按 `CandidateRetrieverPort` 参数化，两条路径在真实
+  query embedding、Retriever 契约与 Document/Node 映射；融合仍然只有一处（本进程内的
+  `fused`），授权与答案发布仍在应用层。检索契约测试按 `CandidateRetrieverPort` 参数化，两条路径在真实
   Qdrant + PostgreSQL 上跑同一套 ACL、source revision 与引用断言。
   **但它没有成为默认**：`rag.llama_index.enabled = false`。ADR-017 要求切流量以等价评测
   为前提，而那次评测**测不出来**——并列的融合分数返回次序不稳定，每个检索器与**自己**
@@ -165,6 +192,14 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   适配器明确拒绝写入，因为一条没有对照基准的第二写入路径正是 ADR-017 迁移规则要防的；
   **RAGAS runner 仍未落地**。因此能力表里 LlamaIndex 与 RAGAS **整体保持 Planned**：
   适配器存在不等于框架集成已完成。
+  这一条的**配置侧原本在说反话**，已由 [ADR-039](docs/adr/0039-a-metric-name-is-a-promise.md)
+  修正（配置 schema `1.13` → `1.14`）：`evaluation.ragas_enabled` 的默认值曾是 `true`，
+  而仓库里没有 RAGAS 依赖、runner 或 judge 校准集，也没有任何代码读这个字段——
+  一个查配置的人会得到"答案在被判分"这个错误结论。现在它写 `true` 会**在配置加载阶段
+  失败**并说明缺什么；只把默认改成 `false` 会留下同一个陷阱，差一次编辑。
+  同一节的 `rag_metrics` 曾列出 19 个指标而代码只实现 5 个（Answer/拒答/Citation/rerank/
+  token/cost 那些名字对应的判定器根本不存在），并且**有一条测试在断言这份虚构清单必须
+  在场**。现在它只接受 `RETRIEVAL_METRICS` 注册表里真的算得出来的名字，多写一个就加载失败。
   迁移前的自研实现保留为明确命名的 `ReferenceVectorIndexRetriever`，是当前默认路径，
   同时充当迁移基准。
 - **已知的可复现性缺口：**并列检索分数没有确定性次序，因此同一个问题两次提问可能得到
@@ -206,12 +241,14 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   默认 `runtime.max_steps=12` 让它停在渲染之前，两种都是**工具全部成功、节点仍然
   失败**。默认值不动，只有 `config.web-local.toml`（120000）与
   `config.word-local.toml`（120000 + `max_steps=40`）抬高，注释里带实测依据。
-- 当前门禁（`main@0ee1700` 实测，2026-08-11）：对着真实 PostgreSQL 5433 + Qdrant 6333
-  为 **`2629 passed / 11 skipped`**（11 项需要 `embedding` extra 与本地 BGE 权重）；
-  同一工作树在本机无外部服务时是 `1996 passed / 644 skipped`。前端 Vitest
-  **`114 passed`**，tsc 严格模式与 ESLint 均通过。Ruff format/lint 通过（441 files），
-  Pyright strict `0 errors / 0 warnings`。两组数字来自不同环境，只能分别引用，
-  不能相加。
+- 当前门禁（2026-08-11 实测，工作树含未提交改动）：对着真实 PostgreSQL 5433 +
+  Qdrant 6333 为 **`2711 passed / 11 skipped`**（11 项需要 `embedding` extra 与本地
+  BGE 权重）。前端 Vitest **`135 passed`**，tsc 严格模式与 ESLint `--max-warnings 0`
+  均通过。Ruff lint 通过（483 files）。两组数字来自不同环境，只能分别引用，不能相加。
+  **Ruff format 与 Pyright 此刻各有一处红**，都在同一工作树上另一条未提交的改动里
+  （`apps/api/docx_preview.py` 的格式、`apps/task_worker/composition.py` 的两个
+  `EmbeddingUnavailable` 类型错）；HEAD 上这两个文件是干净的。写在这里而不是等它
+  变绿再写，是因为一个"当前门禁"如果只在方便的时候才报，它就不是门禁。
 - **每个 PR 都有一组真实服务证据**：CI 的 `Migrations, PostgreSQL and Qdrant-backed stores`
   job 先 `alembic upgrade head`，再对着真实 PostgreSQL 16 与 Qdrant 跑
   `tests/contracts tests/persistence tests/api tests/vector`，共 920 项、2 项环境跳过
