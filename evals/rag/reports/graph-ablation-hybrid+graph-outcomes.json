@@ -38,8 +38,8 @@
       ],
       "retrieved_document_ids": [
         "doc_fusion",
-        "doc_env-production",
-        "doc_component-task-worker"
+        "doc_component-ingestion-worker",
+        "doc_env-production"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -66,8 +66,8 @@
       ],
       "retrieved_document_ids": [
         "doc_authorization",
-        "doc_component-retrieval-service",
-        "doc_runbook-index-rebuild"
+        "doc_runbook-index-rebuild",
+        "doc_chunking"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -80,8 +80,8 @@
       ],
       "retrieved_document_ids": [
         "doc_authorization",
-        "doc_store-aw-vectors",
-        "doc_component-event-log"
+        "doc_component-event-log",
+        "doc_store-aw-vectors"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -94,8 +94,8 @@
       ],
       "retrieved_document_ids": [
         "doc_config-policy",
-        "doc_store-aw-core",
-        "doc_component-event-log"
+        "doc_component-event-log",
+        "doc_component-ingestion-worker"
       ],
       "missing_document_ids": [
         "doc_authorization"
@@ -153,7 +153,7 @@
       "retrieved_document_ids": [
         "doc_chunking",
         "doc_known-typos",
-        "doc_store-aw-core"
+        "doc_config-rag"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -223,7 +223,7 @@
       "retrieved_document_ids": [
         "doc_budgets",
         "doc_runbook-lease-expiry",
-        "doc_store-aw-core"
+        "doc_slo-task-settlement"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -251,7 +251,7 @@
       "retrieved_document_ids": [
         "doc_events",
         "doc_component-retrieval-service",
-        "doc_store-aw-core"
+        "doc_store-aw-vectors"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -306,8 +306,8 @@
       ],
       "retrieved_document_ids": [
         "doc_outbox",
-        "doc_component-event-log",
-        "doc_env-production"
+        "doc_env-production",
+        "doc_component-task-worker"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -349,7 +349,7 @@
       "retrieved_document_ids": [
         "doc_error-codes",
         "doc_component-ingestion-worker",
-        "doc_component-event-log"
+        "doc_component-artifact-store"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -362,7 +362,7 @@
       ],
       "retrieved_document_ids": [
         "doc_error-codes",
-        "doc_component-tool-gateway",
+        "doc_policy-error-codes",
         "doc_component-ingestion-worker"
       ],
       "missing_document_ids": [],
@@ -391,7 +391,7 @@
       "retrieved_document_ids": [
         "doc_quoted-guarantee",
         "doc_component-event-log",
-        "doc_component-ingestion-worker"
+        "doc_runbook-slow-context"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -432,8 +432,8 @@
       ],
       "retrieved_document_ids": [
         "doc_known-typos",
-        "doc_component-event-log",
-        "doc_config-rag"
+        "doc_config-rag",
+        "doc_component-sandbox"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -460,14 +460,12 @@
       ],
       "retrieved_document_ids": [
         "doc_config-rag",
-        "doc_component-retrieval-service",
-        "doc_component-ingestion-worker"
+        "doc_known-typos",
+        "doc_component-retrieval-service"
       ],
-      "missing_document_ids": [
-        "doc_known-typos"
-      ],
-      "rank": null,
-      "coverage_rank": null
+      "missing_document_ids": [],
+      "rank": 2,
+      "coverage_rank": 2
     },
     {
       "question": "embeding with one m",
@@ -504,8 +502,8 @@
       ],
       "retrieved_document_ids": [
         "doc_abbreviations",
-        "doc_component-approval-ledger",
-        "doc_component-tool-gateway"
+        "doc_component-retrieval-service",
+        "doc_store-aw-vectors"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -532,8 +530,8 @@
       ],
       "retrieved_document_ids": [
         "doc_abbreviations",
-        "doc_store-aw-vectors",
-        "doc_component-event-log"
+        "doc_component-event-log",
+        "doc_runbook-slow-context"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -547,8 +545,8 @@
       ],
       "retrieved_document_ids": [
         "doc_policy-error-codes",
-        "doc_component-task-worker",
-        "doc_component-event-log"
+        "doc_component-sandbox",
+        "doc_component-tool-gateway"
       ],
       "missing_document_ids": [
         "doc_component-artifact-store",
@@ -582,8 +580,8 @@
       ],
       "retrieved_document_ids": [
         "doc_component-approval-ledger",
-        "doc_store-aw-vectors",
-        "doc_component-retrieval-service"
+        "doc_component-retrieval-service",
+        "doc_component-artifact-store"
       ],
       "missing_document_ids": [
         "doc_runbook-stuck-export"
@@ -598,14 +596,14 @@
         "doc_team-kestrel"
       ],
       "retrieved_document_ids": [
-        "doc_component-approval-ledger",
-        "doc_component-tool-gateway",
-        "doc_component-retrieval-service"
+        "doc_component-retrieval-service",
+        "doc_component-ingestion-worker",
+        "doc_store-aw-blobs"
       ],
       "missing_document_ids": [
         "doc_team-kestrel"
       ],
-      "rank": 3,
+      "rank": 1,
       "coverage_rank": null
     },
     {
@@ -616,14 +614,12 @@
       ],
       "retrieved_document_ids": [
         "doc_component-approval-ledger",
-        "doc_component-event-log",
-        "doc_component-retrieval-service"
+        "doc_store-aw-core",
+        "doc_store-aw-vectors"
       ],
-      "missing_document_ids": [
-        "doc_store-aw-core"
-      ],
+      "missing_document_ids": [],
       "rank": 1,
-      "coverage_rank": null
+      "coverage_rank": 2
     },
     {
       "question": "what is the escalation delay for the team that owns the Sandbox",
@@ -634,7 +630,7 @@
       "retrieved_document_ids": [
         "doc_component-sandbox",
         "doc_team-kestrel",
-        "doc_team-marlin"
+        "doc_component-approval-ledger"
       ],
       "missing_document_ids": [
         "doc_team-osprey"
@@ -650,8 +646,8 @@
       ],
       "retrieved_document_ids": [
         "doc_runbook-index-rebuild",
-        "doc_component-task-worker",
-        "doc_store-aw-vectors"
+        "doc_store-aw-vectors",
+        "doc_component-event-log"
       ],
       "missing_document_ids": [
         "doc_component-ingestion-worker"
@@ -731,8 +727,8 @@
       ],
       "retrieved_document_ids": [
         "doc_component-task-worker",
-        "doc_component-tool-gateway",
-        "doc_policy-escalation"
+        "doc_policy-escalation",
+        "doc_team-kestrel"
       ],
       "missing_document_ids": [
         "doc_team-northwind"
@@ -748,8 +744,8 @@
       ],
       "retrieved_document_ids": [
         "doc_component-ingestion-worker",
-        "doc_component-approval-ledger",
-        "doc_component-tool-gateway"
+        "doc_component-retrieval-service",
+        "doc_runbook-index-rebuild"
       ],
       "missing_document_ids": [
         "doc_team-marlin"
@@ -765,12 +761,12 @@
       ],
       "retrieved_document_ids": [
         "doc_component-event-log",
-        "doc_component-task-worker",
-        "doc_store-aw-core"
+        "doc_store-aw-core",
+        "doc_component-retrieval-service"
       ],
       "missing_document_ids": [],
       "rank": 1,
-      "coverage_rank": 3
+      "coverage_rank": 2
     }
   ]
 }

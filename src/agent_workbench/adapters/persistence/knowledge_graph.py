@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
@@ -209,17 +209,35 @@ class PostgresKnowledgeGraphStore:
         # One statement, not two round trips. The self-join is the hop: from a
         # seed's mention to every other mention of the same entity.
         neighbours = kg_mentions.alias("neighbours")
+        # How many documents each bridging entity appears in, computed in the
+        # same statement rather than fetched per entity. This is the weight --
+        # see the scoring note below for why counting mentions was wrong.
+        spread = (
+            select(
+                kg_mentions.c.entity_id.label("entity_id"),
+                func.count(distinct(kg_mentions.c.document_id)).label("documents"),
+            )
+            .where(
+                kg_mentions.c.tenant_id == tenant_id,
+                kg_mentions.c.knowledge_base_id == knowledge_base_id,
+            )
+            .group_by(kg_mentions.c.entity_id)
+            .subquery()
+        )
         query = (
             select(
                 neighbours.c.chunk_id,
                 neighbours.c.document_id,
                 neighbours.c.document_version,
                 kg_mentions.c.entity_id,
+                spread.c.documents,
             )
             .select_from(
                 kg_mentions.join(
                     neighbours, neighbours.c.entity_id == kg_mentions.c.entity_id
-                ).join(kg_entities, kg_entities.c.entity_id == kg_mentions.c.entity_id)
+                )
+                .join(kg_entities, kg_entities.c.entity_id == kg_mentions.c.entity_id)
+                .join(spread, spread.c.entity_id == kg_mentions.c.entity_id)
             )
             .where(
                 kg_mentions.c.tenant_id == tenant_id,
@@ -238,25 +256,46 @@ class PostgresKnowledgeGraphStore:
         async with self._engine.connect() as connection:
             rows = (await connection.execute(query)).mappings().all()
 
-        # How many distinct seed entities reached each chunk. A chunk two of
-        # the seeds' entities both point at is a better bridge than one only
-        # a single entity reaches, and this is the only ordering signal an arm
-        # that embeds nothing can have.
-        reached: dict[str, set[str]] = {}
+        # Summed entity specificity, not a count of bridging entities. The
+        # count was measured and it made retrieval worse: on the 2026-08-10
+        # ablation this arm cost 4 questions of full_coverage@3, because an
+        # entity like `aw-core` appears in five documents and reaches all of
+        # them at full strength, flooding the top with everything that shares
+        # a hub. Counting rewards exactly that -- a chunk sharing three hubs
+        # outranks one sharing the single entity the question is about.
+        #
+        # 1/documents is the correction, and it is the familiar one: a bridge
+        # is informative in proportion to how few things it connects. An
+        # entity in two documents contributes 0.5, one in five contributes
+        # 0.2, so a hub has to appear four times over to outweigh one specific
+        # link. Contributions still sum, so several specific bridges beat one.
+        #
+        # Deliberately not a log: the corpora here are small enough that the
+        # difference between 2 and 5 documents matters more than the shape of
+        # the curve, and a linear reciprocal is one somebody can verify by
+        # reading a row.
+        weighted: dict[str, float] = {}
+        counted: dict[str, set[str]] = {}
         seen: dict[str, tuple[str, str]] = {}
         for row in rows:
-            reached.setdefault(row["chunk_id"], set()).add(row["entity_id"])
-            seen.setdefault(
-                row["chunk_id"], (row["document_id"], row["document_version"])
-            )
+            chunk_id = row["chunk_id"]
+            entity_id = row["entity_id"]
+            already = counted.setdefault(chunk_id, set())
+            if entity_id in already:
+                # One entity mentioned twice in a seed is still one bridge.
+                continue
+            already.add(entity_id)
+            documents = max(int(row["documents"]), 1)
+            weighted[chunk_id] = weighted.get(chunk_id, 0.0) + 1.0 / documents
+            seen.setdefault(chunk_id, (row["document_id"], row["document_version"]))
         nominations = [
             ChunkNomination(
                 chunk_id=chunk_id,
                 document_id=seen[chunk_id][0],
                 document_version=seen[chunk_id][1],
-                score=float(len(entity_ids)),
+                score=score,
             )
-            for chunk_id, entity_ids in reached.items()
+            for chunk_id, score in weighted.items()
         ]
         nominations.sort(key=lambda n: (-n.score, n.chunk_id))
         return tuple(nominations[:limit])
