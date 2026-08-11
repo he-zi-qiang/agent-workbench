@@ -1693,6 +1693,13 @@ pre {
   color: var(--aw-success);
 }
 
+/* 默认的 warning 色是「正在索引」用的，失败必须换一个颜色：等待和失败长得
+   一样，是这块界面原本的问题在样式上的残留。 */
+.aw-document-status.is-failed {
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+}
+
 .aw-knowledge-debug > summary,
 .aw-work-advanced > summary,
 .aw-engineering-details > summary {

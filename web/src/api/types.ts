@@ -248,9 +248,15 @@ export interface KnowledgeBaseView {
   knowledge_base_id: Identifier;
   name: string;
   description: string | null;
+  /**
+   * 这个身份能否往里加文档。用来决定「显示什么」，不用来决定「允许什么」——
+   * 服务端的 require_writable 照样会拒绝，隐藏入口只是别让人白传一遍文件。
+   */
+  can_write: boolean;
   document_count: number;
   ready_document_count: number;
   processing_document_count: number;
+  failed_document_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -259,7 +265,7 @@ export interface KnowledgeBaseListResponse {
   knowledge_bases: KnowledgeBaseView[];
 }
 
-export type KnowledgeDocumentStatus = "processing" | "ready";
+export type KnowledgeDocumentStatus = "processing" | "ready" | "failed";
 
 export interface KnowledgeDocumentView {
   document_id: Identifier;
@@ -269,6 +275,8 @@ export interface KnowledgeDocumentView {
   source_revision: number;
   last_applied_revision: number;
   status: KnowledgeDocumentStatus;
+  /** 摄取被拒的机器码；只在 status 是 failed 时有值。 */
+  failure_code: string | null;
   created_at: string;
   updated_at: string;
 }

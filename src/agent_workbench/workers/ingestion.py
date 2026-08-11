@@ -17,6 +17,14 @@ An event older than what the index already has is marked superseded rather than
 applied. A crash between indexing and acknowledging replays the same event, and
 replaying re-reads the same current snapshot, so the second run converges on
 what the first one wrote instead of undoing it.
+
+A refusal is recorded, not only raised. Retrying is still the right response --
+the failure may be a model that was briefly unreachable -- but a document whose
+bytes no parser here can read is retried forever, and while nothing wrote the
+refusal down the only observable difference between "not indexed yet" and
+"never will be" was how long somebody was willing to wait. The record is
+revision-scoped and the success path clears it, so the state on the row is
+always about the revision a reader is actually waiting for.
 """
 
 from __future__ import annotations
@@ -36,7 +44,7 @@ from agent_workbench.adapters.persistence.models import (
 )
 from agent_workbench.application.graph_enrichment import GraphEnrichmentService
 from agent_workbench.application.ingestion import IngestionRequest, IngestionService
-from agent_workbench.domain.errors import StaleExecutionError
+from agent_workbench.domain.errors import ErrorInfo, StaleExecutionError
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.artifact_store import ArtifactStore
@@ -283,25 +291,40 @@ class IngestionWorker:
         # and a database transaction held across them is a lock somebody else
         # is waiting on.
         tenant, kb, owner, revision, version_id, artifact_id, principals = snapshot
-        content = await self.artifacts.get(
-            tenant_id=tenant, artifact_id=artifact_id, principal_id=owner
-        )
-        stored = await self.artifacts.head(
-            tenant_id=tenant, artifact_id=artifact_id, principal_id=owner
-        )
-        await self.ingestion.ingest(
-            IngestionRequest(
-                tenant_id=tenant,
-                knowledge_base_id=kb,
-                document_id=event.document_id,
-                document_version=version_id,
-                owner_id=owner,
-                authorized_principals=principals,
-                source_revision=revision,
-                media_type=stored.media_type,
-                content=content,
+        try:
+            content = await self.artifacts.get(
+                tenant_id=tenant, artifact_id=artifact_id, principal_id=owner
             )
-        )
+            stored = await self.artifacts.head(
+                tenant_id=tenant, artifact_id=artifact_id, principal_id=owner
+            )
+            await self.ingestion.ingest(
+                IngestionRequest(
+                    tenant_id=tenant,
+                    knowledge_base_id=kb,
+                    document_id=event.document_id,
+                    document_version=version_id,
+                    owner_id=owner,
+                    authorized_principals=principals,
+                    source_revision=revision,
+                    media_type=stored.media_type,
+                    content=content,
+                )
+            )
+        except Exception as error:
+            # Only this span. Everything above it failing means PostgreSQL is
+            # unreachable, which says nothing about any one document and would
+            # attribute an outage to whichever document was next in the queue.
+            #
+            # Recorded, then re-raised unchanged: the event stays unacked and
+            # becomes claimable again after its lease, exactly as before. What
+            # changes is that the wait is now legible while it happens.
+            await self._record_refusal(
+                document_id=event.document_id,
+                revision=revision,
+                error=error,
+            )
+            raise
 
         async with self.engine.begin() as connection:
             # Recorded only after the index has it. The other order would let a
@@ -311,7 +334,16 @@ class IngestionWorker:
                 update(documents)
                 .where(documents.c.document_id == event.document_id)
                 .where(documents.c.last_applied_revision < revision)
-                .values(last_applied_revision=revision)
+                .values(
+                    last_applied_revision=revision,
+                    # Cleared by the same statement that records the success.
+                    # A refusal left behind would outlive the attempt it
+                    # described, and a retry that fixed the problem -- a model
+                    # that came back -- would leave the document searchable and
+                    # still labelled failed.
+                    failed_revision=None,
+                    failure_code=None,
+                )
             )
             if self.enrichment is not None:
                 # Same transaction as the line above, for the reason the outbox
@@ -345,6 +377,31 @@ class IngestionWorker:
                     )
                 )
         return "indexed"
+
+    async def _record_refusal(
+        self, *, document_id: str, revision: int, error: Exception
+    ) -> None:
+        """Write down that this revision could not be indexed, and why.
+
+        Conditional on the revision still being the one that exists. A re-upload
+        that landed while this attempt was running has an event of its own
+        waiting, and marking *that* revision failed would refuse content nobody
+        has read yet.
+
+        Only the code crosses over. ``ErrorInfo.from_exception`` drops a foreign
+        exception's message for the reason the error taxonomy exists, and here
+        that message would be a parser quoting the document's own bytes back at
+        every principal who can read the knowledge base.
+        """
+
+        code = ErrorInfo.from_exception(error).code
+        async with self.engine.begin() as connection:
+            await connection.execute(
+                update(documents)
+                .where(documents.c.document_id == document_id)
+                .where(documents.c.source_revision == revision)
+                .values(failed_revision=revision, failure_code=code)
+            )
 
     async def _extract_graph(self, event: OutboxEvent) -> str:
         """The second pass: read this version's chunks for entities and edges.

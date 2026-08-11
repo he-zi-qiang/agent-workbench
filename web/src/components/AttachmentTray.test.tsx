@@ -46,6 +46,7 @@ describe("knowledge attachments", () => {
                 source_revision: 1,
                 last_applied_revision: 1,
                 status: "ready" as const,
+                failure_code: null,
                 created_at: "2026-08-02T00:00:00Z",
                 updated_at: "2026-08-02T00:00:01Z",
               },
