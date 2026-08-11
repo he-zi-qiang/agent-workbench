@@ -32,6 +32,8 @@ from agent_workbench.adapters.persistence import (
 from agent_workbench.adapters.persistence.models import task_runs
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.task_registry import (
+    AgentInvocationBudgetExhaustedError,
+    AgentInvocationCeilingMissingError,
     ExecutionLease,
     StaleExecutionError,
     TaskSubmission,
@@ -67,7 +69,19 @@ def _run(scenario: Callable[[Any, PostgresTaskRegistry], Awaitable[Any]]) -> Any
     return asyncio.run(execute())
 
 
-def _submission() -> TaskSubmission:
+def _submission(ceiling: int | None = 12) -> TaskSubmission:
+    """A Task whose own snapshot says what it may spend.
+
+    ``ceiling`` is a parameter because the ceiling is read from the Task rather
+    than from the process: a test that set it in configuration would be
+    describing a deployment, and what the ceiling actually binds to is this
+    row. ``None`` produces a snapshot with no ceiling at all, which is its own
+    refusal and has its own test.
+    """
+
+    semantics: dict[str, Any] = {"model": {"provider": "deepseek"}}
+    if ceiling is not None:
+        semantics["multi_agent"] = {"max_agent_invocation_attempts_per_task": ceiling}
     return TaskSubmission.model_validate(
         {
             "tenant_id": "tenant_a",
@@ -77,7 +91,7 @@ def _submission() -> TaskSubmission:
             "input_ref": "input_budget",
             "input_fingerprint": hashlib.sha256(b"input_budget").hexdigest(),
             "submission_dedup_key": "dedup_budget",
-            "run_semantics_snapshot": {"model": {"provider": "deepseek"}},
+            "run_semantics_snapshot": semantics,
             "run_semantics_revision": "1.2:v1.3:abc0123456789def",
             "submitted_policy_revision": "policy-1",
             "submitted_policy_fingerprint": "f" * 16,
@@ -273,5 +287,157 @@ def test_an_executor_with_no_claim_in_scope_runs_and_charges_nobody() -> None:
         assert inner.runs == 1
         spent, _ = await _counts(engine, task.task_id)
         assert spent == 0
+
+    _run(scenario)
+
+
+# --------------------------------------------------------------------------
+# ADR-040 third step: the three refusals, and that they stay distinguishable
+
+
+def test_a_task_that_spent_its_whole_allowance_is_refused() -> None:
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> None:
+        task = await registry.submit(_submission(ceiling=2))
+        claim = await registry.claim_next("worker_1", lease_seconds=60)
+        assert claim is not None
+
+        assert await registry.reserve_agent_invocation(claim.lease) == 1
+        assert await registry.reserve_agent_invocation(claim.lease) == 2
+        with pytest.raises(AgentInvocationBudgetExhaustedError) as refusal:
+            await registry.reserve_agent_invocation(claim.lease)
+
+        assert refusal.value.spent == 2
+        assert refusal.value.ceiling == 2
+        # The refusal did not also spend one. A gate that charged for being
+        # refused would push the counter past its own ceiling forever.
+        spent, _ = await _counts(engine, task.task_id)
+        assert spent == 2
+
+    _run(scenario)
+
+
+def test_the_ceiling_comes_from_the_task_not_from_this_process() -> None:
+    """The control for the ceiling.
+
+    Same code, same process, two Tasks submitted with different allowances.
+    If the ceiling were read from configuration, both would refuse at the same
+    number and this test would fail while the one above still passed.
+    """
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> None:
+        await registry.submit(_submission(ceiling=1))
+        claim = await registry.claim_next("worker_1", lease_seconds=60)
+        assert claim is not None
+        await registry.reserve_agent_invocation(claim.lease)
+        with pytest.raises(AgentInvocationBudgetExhaustedError) as tight:
+            await registry.reserve_agent_invocation(claim.lease)
+
+        assert tight.value.ceiling == 1
+        # A second, more generous Task in the same process keeps going past
+        # the point the first one stopped.
+        await registry.mark_dead_lettered(claim.lease, reason="spent it all")
+        async with engine.begin() as connection:
+            await connection.execute(text("TRUNCATE task_runs CASCADE"))
+        await registry.submit(_submission(ceiling=5))
+        generous = await registry.claim_next("worker_1", lease_seconds=60)
+        assert generous is not None
+        for expected in (1, 2, 3):
+            assert await registry.reserve_agent_invocation(generous.lease) == expected
+
+    _run(scenario)
+
+
+def test_a_task_whose_snapshot_names_no_ceiling_is_a_deployment_defect() -> None:
+    """Not the Task's fault, so not the Task's death.
+
+    Dead-lettering this would turn one bad submission path into a batch of
+    Tasks nobody can revive, so it raises a different type -- and the Worker
+    turns that one into ``failed``.
+    """
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> None:
+        task = await registry.submit(_submission(ceiling=None))
+        claim = await registry.claim_next("worker_1", lease_seconds=60)
+        assert claim is not None
+
+        with pytest.raises(AgentInvocationCeilingMissingError):
+            await registry.reserve_agent_invocation(claim.lease)
+
+        spent, _ = await _counts(engine, task.task_id)
+        assert spent == 0
+
+    _run(scenario)
+
+
+def test_losing_the_claim_is_reported_before_running_out_of_budget() -> None:
+    """Order matters, and this is where it is asserted.
+
+    A Worker that has both lost its lease *and* filled the counter must hear
+    about the lease. The other way round it would dead-letter a Task that
+    belongs to somebody else -- writing a terminal status under a claim it no
+    longer holds, which is exactly what the fence exists to stop.
+    """
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> None:
+        await registry.submit(_submission(ceiling=1))
+        claim = await registry.claim_next("worker_1", lease_seconds=60)
+        assert claim is not None
+        await registry.reserve_agent_invocation(claim.lease)
+        stale = ExecutionLease(
+            task_id=claim.lease.task_id,
+            worker_id=claim.lease.worker_id,
+            epoch=claim.lease.epoch + 1,
+        )
+
+        # Budget is full *and* the epoch is wrong. Stale wins.
+        with pytest.raises(StaleExecutionError):
+            await registry.reserve_agent_invocation(stale)
+        # And with a live lease the same call reports the budget instead, so
+        # the assertion above is about precedence rather than about the epoch
+        # being the only thing this method ever notices.
+        with pytest.raises(AgentInvocationBudgetExhaustedError):
+            await registry.reserve_agent_invocation(claim.lease)
+
+    _run(scenario)
+
+
+def test_the_two_writers_of_dead_letter_do_not_sound_alike() -> None:
+    """ADR-040 §2.8's actual requirement, asserted rather than assumed.
+
+    The reaper writes ``lease expired after N attempts``. If this writer's
+    sentence were confusable with that one, an operator reading a dead-lettered
+    Task could not tell a poison Task from an outage -- and a gate nobody can
+    attribute is a gate that might as well be destroying Tasks quietly.
+    """
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> None:
+        await registry.submit(_submission(ceiling=1))
+        claim = await registry.claim_next("worker_1", lease_seconds=60)
+        assert claim is not None
+
+        retired = await registry.mark_dead_lettered(
+            claim.lease,
+            reason="agent invocation budget exhausted: spent 1 of 1 allowed",
+        )
+
+        assert retired.status == "dead_letter"
+        assert retired.status_detail is not None
+        assert "budget" in retired.status_detail
+        assert "lease expired" not in retired.status_detail
+        # The event says which writer it was, and the reaper's value is not it.
+        async with engine.begin() as connection:
+            payloads = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT payload FROM events "
+                            "WHERE payload->>'kind' = 'TaskDeadLettered'"
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert [p["reason_code"] for p in payloads] == ["invocation_budget_exhausted"]
 
     _run(scenario)

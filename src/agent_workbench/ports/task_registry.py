@@ -271,6 +271,45 @@ class TaskSubmissionConflictError(RuntimeError):
         )
 
 
+class AgentInvocationBudgetExhaustedError(RuntimeError):
+    """This Task has already paid for every agent invocation it was allowed.
+
+    Terminal, and deliberately not a retry: the next claim reads the same full
+    counter and would refuse again, so ``dead_letter`` is what this means --
+    "trying again will not help" rather than "this attempt did not work".
+
+    Separate from :class:`AgentInvocationCeilingMissingError` because the two
+    have opposite dispositions. This one is a Task that misbehaved; that one is
+    a deployment that cannot say what it allows.
+    """
+
+    def __init__(self, *, task_id: str, spent: int, ceiling: int) -> None:
+        self.task_id = task_id
+        self.spent = spent
+        self.ceiling = ceiling
+        super().__init__(
+            f"task {task_id} has spent {spent} of {ceiling} allowed agent "
+            f"invocations; refusing to start another"
+        )
+
+
+class AgentInvocationCeilingMissingError(RuntimeError):
+    """The Task's own semantics snapshot does not say what it may spend.
+
+    A defect in the deployment that submitted it, not a poison Task -- so it
+    fails rather than dead-letters. Dead-lettering it would turn one
+    configuration accident into a batch of Tasks nobody can revive.
+    """
+
+    def __init__(self, *, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(
+            f"task {task_id} carries no "
+            f"multi_agent.max_agent_invocation_attempts_per_task in its run "
+            f"semantics snapshot, so how much it may spend is unknown"
+        )
+
+
 class StaleExecutionError(RuntimeError):
     """A Worker no longer owns a Task's current, unexpired lease."""
 
@@ -361,6 +400,19 @@ class TaskRegistry(Protocol):
     async def mark_succeeded(self, lease: ExecutionLease) -> TaskRun: ...
 
     async def mark_failed(self, lease: ExecutionLease, *, reason: str) -> TaskRun: ...
+
+    async def mark_dead_lettered(
+        self, lease: ExecutionLease, *, reason: str
+    ) -> TaskRun:
+        """Retire a Task that trying again cannot help.
+
+        Separate from ``mark_failed`` because the two say different things to
+        whoever finds the Task later: ``failed`` invites another attempt,
+        ``dead_letter`` says the next one would end the same way. ``reason``
+        must be legible enough to tell this writer's decision apart from the
+        reaper's, which is the other producer of this status.
+        """
+        ...
 
     async def park_for_migration(
         self, lease: ExecutionLease, *, reason: str

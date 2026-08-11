@@ -242,6 +242,54 @@ ADR §2.8 自己要求"两个作者必须可区分"想避免的东西。所以�
 `dead_letter` 目前直接 `raise AssertionError`。所以 `mark_dead_lettered` 要么不走 `_move`，
 要么给这两个函数加一个原因参数——这是第三刀里唯一需要拿主意的地方。
 
+### 三之三、闸门开始拒绝（ADR-040 第三刀，完成）
+
+上面那两处都按查明的方案改了：`TaskDeadLettered.reason_code` 加宽成
+`Literal["lease_expired", "invocation_budget_exhausted"]` 并**去掉默认值**（`reclaim_expired`
+那处随之显式写出自己是哪一种）；`_move` 与 `_transition_event` 多带一个 `reason_code`，
+且 `dead_letter` 分支在拿不到原因时**直接 assert 失败**而不是挑一个填进去。
+
+**上限从 Task 自己的快照读，不从进程配置读。**`reserve_agent_invocation` 在**同一条**
+fenced UPDATE 里从行自己的 `run_semantics_snapshot` 取
+`multi_agent.max_agent_invocation_attempts_per_task`，`+1` 与比较都在一把行锁下发生——
+两个 Worker 因此不会各自读到同一个"最后一格"。
+
+**三种拒绝必须可区分**（ADR §2.7），零行结果的那条路多读一次行来判读：
+
+| 情形 | 抛什么 | Worker 写成 |
+|---|---|---|
+| 租约已经不是当前的 | `StaleExecutionError` | 什么都不写，交给接手的 Worker |
+| 快照里没有上限 | `AgentInvocationCeilingMissingError` | `failed` |
+| 计数已达上限 | `AgentInvocationBudgetExhaustedError` | `dead_letter` |
+
+**判读顺序是有意的，并且被单独测了**：既丢了租约又用完了额度时，报的必须是租约——
+反过来就会给一个已经属于别人的 Task 写终态，那正是围栏要挡的事。
+
+缺上限判成 `failed` 而不是 `dead_letter`：那是**这个部署的缺陷**，不是一个毒任务；
+打成 `dead_letter` 会把一次配置事故变成一批不可复活的 Task。
+
+**验证。**用例从 6 条加到 11 条。四层撤销，每层命中不同的子集：
+
+```text
+UPDATE 不再比上限              3 failed / 8 passed
+先判额度、后判租约             2 failed / 9 passed
+两个写入方发同一个 reason_code  1 failed / 10 passed
+缺上限被当成额度用尽           1 failed / 10 passed
+```
+
+其中第三层第一次没撤成功——锚点字符串在两处都匹配，脚本 assert 失败后跳过了修改，
+那次的 "11 passed" 是未撤销状态下的结果、不能算数。换唯一锚点重做才拿到上表那一行。
+**记在这里是因为它正是"绿灯可能只是探针指错了地方"的现场版本。**
+
+对照组同样是成对的：`test_the_ceiling_comes_from_the_task_not_from_this_process` 在同一个
+进程里跑两个上限不同的 Task——若上限来自配置，两个会在同一个数字上停下，那条会红而
+"用完了就拒绝"那条仍然绿。
+
+全量 `tests/`（真 PG + Qdrant，不含 e2e）**2708 passed / 11 skipped**，ruff、pyright 全绿。
+
+**至此 `max_agent_invocation_attempts_per_task` 第一次被真正执行**——从"声明了很久、
+无人读取"，到有持久计数器、可见、并且会拒绝。
+
 ### 四、52 题 gold set 重跑，ADR-017 第 2 步的证据到齐
 
 见 `evals/rag/reports/`。四份报告出自同一个进程、同一个 collection、同一份 gold set

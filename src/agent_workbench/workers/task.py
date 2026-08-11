@@ -48,6 +48,8 @@ from agent_workbench.ports.execution_guard import (
 )
 from agent_workbench.ports.fault_injector import FailpointName, FaultInjector
 from agent_workbench.ports.task_registry import (
+    AgentInvocationBudgetExhaustedError,
+    AgentInvocationCeilingMissingError,
     ExecutionLease,
     StaleExecutionError,
     TaskRegistry,
@@ -254,6 +256,34 @@ class TaskWorker:
                     # It is not this Worker's failure to write.
                     current = await self.registry.get(task.task_id)
                     return TaskOutcome(task=current or task, decisions=tuple(decisions))
+                except AgentInvocationBudgetExhaustedError as exhausted:
+                    # Dead-letter, not failure: the next claim reads the same
+                    # full counter and refuses again, so another attempt is
+                    # not a chance, it is the same answer later. The wording
+                    # has to stay distinguishable from the reaper's
+                    # "lease expired after N attempts" -- an operator who
+                    # cannot tell the two writers apart is looking at a gate
+                    # that might as well be destroying Tasks quietly.
+                    task = await self.registry.mark_dead_lettered(
+                        lease,
+                        reason=(
+                            f"agent invocation budget exhausted: spent "
+                            f"{exhausted.spent} of {exhausted.ceiling} allowed"
+                        ),
+                    )
+                    return TaskOutcome(task=task, decisions=tuple(decisions))
+                except AgentInvocationCeilingMissingError:
+                    # A deployment that cannot say what it allows. Its defect,
+                    # not this Task's, so the Task stays retryable -- fixing
+                    # the submission path must not require reviving a batch of
+                    # dead-lettered Tasks.
+                    task = await self._fail(
+                        task,
+                        lease,
+                        "this task's run semantics carry no agent invocation "
+                        "ceiling, so what it may spend is unknown",
+                    )
+                    return TaskOutcome(task=task, decisions=tuple(decisions))
                 if failure is not None:
                     task = await self._fail(task, lease, failure)
                     return TaskOutcome(task=task, decisions=tuple(decisions))
@@ -354,7 +384,16 @@ class TaskWorker:
             execution.cancel()
             await asyncio.gather(execution, return_exceptions=True)
             raise
-        except StaleExecutionError:
+        except (
+            StaleExecutionError,
+            AgentInvocationBudgetExhaustedError,
+            AgentInvocationCeilingMissingError,
+        ):
+            # ADR-040. The budget refusals travel the same way a lost fence
+            # does -- cancel the graph and let the caller pick the terminal
+            # state -- rather than becoming a failure reason here. Which status
+            # a refusal deserves is the Worker's decision, and the node that
+            # raised only knows the condition.
             execution.cancel()
             await asyncio.gather(execution, return_exceptions=True)
             raise
