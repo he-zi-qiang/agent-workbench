@@ -33,7 +33,7 @@ from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.evidence import ExternalSearchHit
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.ports.cancellation import CancellationToken
-from agent_workbench.ports.research import ExternalSearchPort
+from agent_workbench.ports.research import ExternalSearchPort, SourcesUnreadableError
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 
 TOOL_NAME: Final[str] = "web_search"
@@ -111,6 +111,36 @@ class WebSearchTool:
         try:
             hits = await self.search.search(
                 query=query, limit=limit, cancellation=self.cancellation
+            )
+        except SourcesUnreadableError as error:
+            # Search worked. The pages it found could not be opened from this
+            # process, which is a different fact from "nothing matched" and
+            # leads somewhere different: the model must not tell the reader
+            # their question has no coverage on the web when what actually
+            # happened is that this deployment could not reach any of it.
+            return ToolResult(
+                tool_call_id=invocation.call.tool_call_id,
+                tool_name=TOOL_NAME,
+                status="error",
+                error=ErrorInfo(
+                    # `provider_unavailable` rather than a code of its own:
+                    # `ErrorCode` is the domain's closed vocabulary, and one
+                    # adapter's network fault does not earn a word in it. What
+                    # the reader and the model actually act on is the message,
+                    # and the message says which of the two happened.
+                    code="provider_unavailable",
+                    message=(
+                        f"web search found {error.named} page(s) and none could "
+                        f"be read from this deployment ({error}). Tell the "
+                        "reader the sources could not be fetched -- do not say "
+                        "the search found nothing, and do not answer from "
+                        "memory as though it had."
+                    ),
+                    # A different network path reads these pages fine, which is
+                    # what `retryable` is for. The other branch leaves it False:
+                    # an absent provider is not fixed by asking again.
+                    retryable=True,
+                ),
             )
         except Exception as error:
             # A provider that is missing, refusing or unreachable is a fact the

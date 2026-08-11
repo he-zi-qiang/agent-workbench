@@ -31,6 +31,13 @@ allow_local_bootstrap = true
 
 [runtime]
 record_step_inputs = true
+# The shipped 12 is sized for a node that reads its inputs and answers. v2's
+# `work` node does the whole job in one invocation, and this profile's job has
+# a rendering round trip in it: measured here, a short report spent its steps
+# on list -> write -> render -> re-render after the reviewer's note and hit
+# `budget_exceeded: max_steps` before finishing. Raised for this profile only;
+# every other node still answers well inside 12.
+max_steps = 40
 
 [rag.reranker]
 timeout_seconds = 120
@@ -40,6 +47,25 @@ catchup_poll_seconds = 1
 
 [chat]
 routed_relevance_threshold = 0.01
+
+[workflow]
+# Off for the reason config.local.toml states at length: on one person's
+# machine the gate asks the submitter to authorise handing a file to
+# themselves. This is the profile whose whole point is producing a .docx to
+# download, so it is the profile where that formality is most in the way.
+export_requires_approval = false
+
+[multi_agent]
+# The same correction config.web-local.toml already carries, for the same
+# reason and a different node. v2's `work` node holds the whole tool set and
+# writes the document in one invocation, and the shipped 16000 is a
+# *cumulative* per-invocation ceiling: measured here, a Task asked for a short
+# report with one table hit `budget_exceeded: token_budget` while every tool
+# call had worked -- the node never got as far as rendering anything.
+#
+# It stays 16000 everywhere else on purpose -- every other node reads nothing
+# bigger than its own projection.
+max_tokens_per_agent_invocation = 120000
 
 [optional_labs]
 mcp_adapter = true

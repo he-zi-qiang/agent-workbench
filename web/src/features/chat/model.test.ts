@@ -2,9 +2,11 @@ import type { EventEnvelope, LocalChatSession } from "../../api/types";
 import type { SseFrame } from "../../api/sse";
 import { describe, expect, it } from "vitest";
 import {
+  calledToolNames,
   chatReducer,
   initialChatState,
   reduceChatFrame,
+  turnToolNames,
   type ChatState,
 } from "./model";
 
@@ -310,5 +312,202 @@ describe("chat state machine", () => {
 
     expect(result.accepted).toBe(false);
     expect(result.state).toEqual(submitted());
+  });
+});
+
+/**
+ * A tool row has to say which tool, for what, and how it went -- in one line.
+ *
+ * Measured on a real turn before this: three rows reading 工具调用 / 工具执行完成
+ * with "512 B 参数" and "1841 ms" beside them. Every fact true, and the reader
+ * still could not tell a corpus search from a web search, nor what was searched.
+ */
+describe("a tool call as one readable line", () => {
+  function bound(...frames: SseFrame[]): ChatState {
+    let state = chatReducer(submitted(), {
+      type: "runBound",
+      localId: "local_1",
+      runId: "run_1",
+    });
+    for (const item of frames) {
+      state = reduceChatFrame(state, SESSION.sessionId, item).state;
+    }
+    return state;
+  }
+
+  function activityFor(state: ChatState, key: string) {
+    return state.turns.local_1?.activities.find((item) => item.key === key);
+  }
+
+  it("shows what the call was for, not how many bytes the arguments were", () => {
+    const state = bound(
+      frame("ToolProposed", 1, {
+        tool_call_id: "call_1",
+        tool_name: "web_search",
+        argument_bytes: 512,
+        argument_preview: JSON.stringify({ query: "美元兑人民币汇率 今日" }),
+      }),
+    );
+
+    const activity = activityFor(state, "tool:call_1");
+    expect(activity?.label).toBe("web_search");
+    expect(activity?.detail).toBe("美元兑人民币汇率 今日");
+  });
+
+  it("falls back to the byte count when the deployment records no arguments", () => {
+    // The control. `record_step_inputs` is off by default, and a summary that
+    // silently went blank there would trade one uninformative line for none.
+    const state = bound(
+      frame("ToolProposed", 1, {
+        tool_call_id: "call_1",
+        tool_name: "web_search",
+        argument_bytes: 512,
+      }),
+    );
+
+    expect(activityFor(state, "tool:call_1")?.detail).toBe("512 B 参数");
+  });
+
+  it("keeps one call on one row from proposal through completion", () => {
+    // `ToolStarted` used to fall through to the generic tail, key itself on
+    // `event_id` and render a second line reading the raw event name beside a
+    // row that already said the same thing.
+    const state = bound(
+      frame("ToolProposed", 1, {
+        tool_call_id: "call_1",
+        tool_name: "web_search",
+        argument_preview: JSON.stringify({ query: "北京今天天气" }),
+      }),
+      frame("ToolStarted", 2, { tool_call_id: "call_1", tool_name: "web_search" }),
+    );
+    const toolRows = (state.turns.local_1?.activities ?? []).filter((item) =>
+      item.key.startsWith("tool:"),
+    );
+
+    expect(toolRows).toHaveLength(1);
+    // And the query survives the overwrite, since only the proposal carried it.
+    expect(toolRows[0]?.envelope.payload.argument_preview).toContain("北京今天天气");
+  });
+
+  it("keeps the tool's name on the row after it finishes", () => {
+    const state = bound(
+      frame("ToolProposed", 1, {
+        tool_call_id: "call_1",
+        tool_name: "web_search",
+        argument_preview: JSON.stringify({ query: "汇率" }),
+      }),
+      frame("ToolCompleted", 2, {
+        tool_call_id: "call_1",
+        tool_name: "web_search",
+        duration_ms: 1841,
+      }),
+    );
+
+    const activity = activityFor(state, "tool:call_1");
+    expect(activity?.label).toBe("web_search");
+    expect(activity?.detail).toBe("1841 ms");
+  });
+
+  it("keeps the tool's name on a failure that does not carry one", () => {
+    // Measured against the real server: `ToolFailed` carries `tool_call_id`
+    // and `error`, and no `tool_name`. It shares a key with the proposal, so
+    // without carry-forward a failed call rendered as a nameless
+    // "工具执行失败" and the capability row above it called `web_search`
+    // never-used -- on the very turn it had just failed in.
+    const state = bound(
+      frame("ToolProposed", 1, { tool_call_id: "call_1", tool_name: "web_search" }),
+      frame("ToolFailed", 2, {
+        tool_call_id: "call_1",
+        error: { code: "provider_unavailable", message: "refused=5" },
+      }),
+    );
+    const activities = state.turns.local_1?.activities ?? [];
+
+    expect(activityFor(state, "tool:call_1")?.label).toBe("web_search");
+    expect(calledToolNames(activities)).toEqual(["web_search"]);
+  });
+
+  it("puts a failure's message on the row, because the code is ambiguous", () => {
+    // `provider_unavailable` is the same code for "no provider configured" and
+    // "found 19 pages and could read none of them". Showing the code alone is
+    // what made a proxy misconfiguration read as a missing feature.
+    const state = bound(
+      frame("ToolFailed", 1, {
+        tool_call_id: "call_1",
+        tool_name: "web_search",
+        error: {
+          code: "provider_unavailable",
+          message:
+            "web search found 19 page(s) and none could be read from this deployment (refused=19)",
+        },
+      }),
+    );
+
+    const activity = activityFor(state, "tool:call_1");
+    expect(activity?.state).toBe("failed");
+    expect(activity?.detail).toContain("19 page(s)");
+    expect(activity?.detail).toContain("refused=19");
+  });
+});
+
+describe("the tools a turn could reach", () => {
+  it("reads the available names off RunStarted and marks the ones called", () => {
+    let state = chatReducer(submitted(), {
+      type: "runBound",
+      localId: "local_1",
+      runId: "run_1",
+    });
+    for (const item of [
+      frame("RunStarted", 1, { tool_names: ["knowledge_search", "web_search"] }),
+      frame("ToolProposed", 2, { tool_call_id: "c1", tool_name: "web_search" }),
+    ]) {
+      state = reduceChatFrame(state, SESSION.sessionId, item).state;
+    }
+    const activities = state.turns.local_1?.activities ?? [];
+
+    expect(turnToolNames(activities)).toEqual(["knowledge_search", "web_search"]);
+    // Only what ran. A capability list that marked everything as used would
+    // say nothing, and one that marked nothing would hide the turn's work.
+    expect(calledToolNames(activities)).toEqual(["web_search"]);
+  });
+
+  it("still knows the tools after RunCompleted overwrites RunStarted", () => {
+    // The two share a `run:` key so one run is one row, and the completion
+    // replaces the start -- taking `tool_names` with it. Measured in the
+    // browser before `carryForward` covered this field: the capability row
+    // rendered on a running turn and vanished the moment it finished, which is
+    // precisely when a reader goes looking for it.
+    let state = chatReducer(submitted(), {
+      type: "runBound",
+      localId: "local_1",
+      runId: "run_1",
+    });
+    for (const item of [
+      frame("RunStarted", 1, { tool_names: ["web_search"] }),
+      frame("RunCompleted", 2, { stop_reason: "completed" }),
+    ]) {
+      state = reduceChatFrame(state, SESSION.sessionId, item).state;
+    }
+    const activities = state.turns.local_1?.activities ?? [];
+
+    expect(activities.filter((item) => item.key === "run:run_1")).toHaveLength(1);
+    expect(turnToolNames(activities)).toEqual(["web_search"]);
+  });
+
+  it("reports no tools for a turn that was granted none", () => {
+    // The control: the direct and fixed shapes are toolless by construction,
+    // and the row must stay absent rather than render an empty capability list.
+    let state = chatReducer(submitted(), {
+      type: "runBound",
+      localId: "local_1",
+      runId: "run_1",
+    });
+    state = reduceChatFrame(
+      state,
+      SESSION.sessionId,
+      frame("RunStarted", 1, { tool_names: [] }),
+    ).state;
+
+    expect(turnToolNames(state.turns.local_1?.activities ?? [])).toEqual([]);
   });
 });

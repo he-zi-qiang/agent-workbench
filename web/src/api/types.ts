@@ -156,6 +156,15 @@ export interface ArtifactRef {
   filename?: string | null;
 }
 
+/** A Word document rendered as Markdown by the server, for showing inline. */
+export interface DocumentPreview {
+  text: string;
+  /** The document continues past what `text` holds. Said, never implied. */
+  truncated: boolean;
+  /** How many tables the document has, so the panel can name what it omits. */
+  table_count: number;
+}
+
 export type ArtifactDownloadTarget = Pick<
   ArtifactRef,
   "artifact_id" | "filename"

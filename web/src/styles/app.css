@@ -2151,6 +2151,34 @@ pre {
   cursor: help;
 }
 
+/* What the turn could reach, above the steps that show what it did with them.
+   Muted by default and lit only for the tools actually called, so the row reads
+   as capability first and activity second. */
+.aw-turn-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0 0 8px;
+  gap: 5px;
+  color: var(--aw-text-muted);
+}
+
+.aw-turn-tool {
+  padding: 2px 7px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  cursor: help;
+}
+
+.aw-turn-tool.is-called {
+  border-color: color-mix(in srgb, var(--aw-info) 45%, var(--aw-border));
+  color: var(--aw-info);
+}
+
 .aw-chat-no-citations {
   display: flex;
   align-items: center;
@@ -2625,8 +2653,23 @@ pre {
 
 /* Pushed to the end of the header so it does not sit between the name and the
    text it belongs to. */
-.aw-answer > header .aw-icon-button {
+.aw-answer > header .aw-icon-button,
+.aw-answer > header .aw-answer-download {
   margin-left: auto;
+}
+
+/* Neutral, unlike the header's `small` -- that one is the warning slot. */
+.aw-answer-size {
+  color: var(--aw-text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.aw-answer > header .aw-answer-download {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 5px;
 }
 
 .aw-answer-mark {

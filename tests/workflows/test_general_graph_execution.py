@@ -191,6 +191,53 @@ def test_passing_work_nobody_asked_a_file_for_completes_without_the_gate() -> No
     assert result.state.export_ref is None
 
 
+def test_an_ungated_deployment_exports_through_a_declared_edge() -> None:
+    """Against the *compiled* graph, which is the only place this could fail.
+
+    ``route_review`` gained "export" when the approval gate became optional,
+    and the edge list beside it did not. Every routing test still passed --
+    they call the router directly -- while LangGraph resolves the router's
+    answer against that list, so the first real Task submitted after the
+    change died inside the graph on `KeyError: 'export'`.
+
+    Running the graph is what closes the gap: a target the router can return
+    and no edge declares cannot survive this call.
+    """
+
+    script = _Script(["pass"])
+    result = _run(
+        LangGraphTaskWorkflow(handlers=script.handlers()),
+        _state(export_requires_approval=False),
+        "thread_ungated",
+    )
+
+    assert result.disposition == "completed"
+    assert result.state.export_ref == "art_export_1"
+    # Skipped, not auto-answered: nothing opened an approval and nothing
+    # recorded a decision nobody made.
+    assert result.state.approval_id is None
+    assert result.state.approval_decision is None
+
+
+def test_the_gated_deployment_still_stops_at_the_approval() -> None:
+    """The control for the test above, on the same compiled graph.
+
+    Without it, "the export edge exists" could be satisfied by a graph that
+    had stopped honouring the gate at all.
+    """
+
+    script = _Script(["pass"])
+    result = _run(
+        LangGraphTaskWorkflow(handlers=script.handlers()),
+        _state(export_requires_approval=True),
+        "thread_gated",
+    )
+
+    assert result.disposition == "completed"
+    assert result.state.approval_id == "apr_demo"
+    assert result.state.export_ref == "art_export_1"
+
+
 # --------------------------------------------------------------------------
 # The human interrupt, on a v2 thread
 # --------------------------------------------------------------------------

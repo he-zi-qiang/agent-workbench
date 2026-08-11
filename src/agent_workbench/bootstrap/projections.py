@@ -400,6 +400,12 @@ class TaskConfig:
     policy_revision: str
     policy_fingerprint: str
     default_authorization_envelope: AuthorizationEnvelope
+    #: Whether the graph pauses before export. Projected from
+    #: `workflow.export_requires_approval` and read once per Task at load, so
+    #: the answer is frozen into the checkpoint rather than re-read on resume.
+    #: Defaulted True so every existing construction of this projection --
+    #: including the tests that build one by hand -- keeps ADR-031's shape.
+    export_requires_approval: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -643,6 +649,7 @@ def project_task(settings: Settings) -> TaskConfig:
             mcp_tools=configured_mcp_tool_names(settings),
             sandbox=settings.sandbox.enabled,
         ),
+        export_requires_approval=settings.workflow.export_requires_approval,
     )
 
 

@@ -18,7 +18,7 @@ from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.conversation_store import AuthorizedRevision
-from agent_workbench.ports.research import ExternalSearchPort
+from agent_workbench.ports.research import ExternalSearchPort, SourcesUnreadableError
 
 EVIDENCE_MEDIA_TYPE = "application/json"
 EVIDENCE_FILENAME = "evidence-bundle.json"
@@ -199,11 +199,21 @@ class ExternalResearchService:
         if not query.strip() or len(query) > 4096:
             raise EvidenceUnavailableError("external-search query is outside its bound")
         cancellation.raise_if_cancelled()
-        hits = await self.search.search(
-            query=query,
-            limit=self.limit,
-            cancellation=cancellation,
-        )
+        try:
+            hits = await self.search.search(
+                query=query,
+                limit=self.limit,
+                cancellation=cancellation,
+            )
+        except SourcesUnreadableError as error:
+            # Both end this node without evidence, and they are still not the
+            # same failure: "no evidence" sends whoever reads the run looking
+            # for a better objective, while this one points at the network path
+            # out of this deployment. Same outcome, different thing to fix.
+            raise EvidenceUnavailableError(
+                f"external search found {error.named} page(s) and none could be "
+                f"read from this deployment ({error})"
+            ) from error
         cancellation.raise_if_cancelled()
         if not hits:
             raise EvidenceUnavailableError("external search returned no evidence")

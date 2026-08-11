@@ -26,6 +26,7 @@ import {
   getApproval,
   getArtifactJson,
   getArtifactText,
+  getDocumentPreview,
   getTask,
   listTasks,
   newIdempotencyKey,
@@ -1159,6 +1160,7 @@ function TaskResult({
   wantsReport: boolean | null;
 }) {
   const readable = artifact !== null && isReadableMedia(artifact.media_type);
+  const isDocument = artifact !== null && artifact.media_type === DOCX_MEDIA_TYPE;
   const preview = useQuery({
     queryKey: ["work", "artifact-text", artifact?.artifact_id ?? ""],
     enabled: readable,
@@ -1166,6 +1168,19 @@ function TaskResult({
     queryFn: () => {
       if (artifact === null) throw new Error("没有可预览的产物");
       return getArtifactText(identity, artifact.artifact_id);
+    },
+  });
+  // A separate query rather than a branch inside the one above: this one hits a
+  // different endpoint, returns a different shape, and is the only one that can
+  // fail because a *stored file* will not parse. Sharing a key would also share
+  // a cache entry between two unrelated payloads.
+  const document = useQuery({
+    queryKey: ["work", "artifact-document", artifact?.artifact_id ?? ""],
+    enabled: isDocument,
+    staleTime: Number.POSITIVE_INFINITY,
+    queryFn: () => {
+      if (artifact === null) throw new Error("没有可预览的产物");
+      return getDocumentPreview(identity, artifact.artifact_id);
     },
   });
 
@@ -1238,20 +1253,53 @@ function TaskResult({
       <header>
         <span className="aw-answer-mark" aria-hidden="true">A</span>
         <strong>{artifact.filename ?? artifact.kind}</strong>
-        {/* One icon, not a labelled button. The filename sits right beside it,
-            so a word saying "下载" repeats what the icon and the name already
-            say between them. */}
+        {/* Not a bare `small`: that one is the header's warning slot, coloured
+            for "没有生成文件". A file's size is neutral information. */}
+        <span className="aw-answer-size">{formatBytes(artifact.size_bytes)}</span>
+        {/* A labelled button, not the bare icon it replaced. That icon sat at
+            the end of a header row and was routinely missed -- the file is the
+            thing the reader came for, and the way to keep it has to look like
+            a way to keep it. */}
         <button
-          aria-label={`下载 ${artifact.filename ?? artifact.kind}`}
-          className="aw-icon-button"
+          className="aw-button is-ghost is-small aw-answer-download"
           onClick={() => onDownload(artifact)}
-          title="下载"
           type="button"
         >
           <FileDown aria-hidden="true" size={14} />
+          下载
         </button>
       </header>
-      {!readable ? (
+      {isDocument ? (
+        document.isPending ? (
+          <LoadingLine label="正在读取文档内容" />
+        ) : document.isError ? (
+          <>
+            <ErrorNotice
+              message={errorMessage(document.error, "无法预览这个文档")}
+            />
+            {/* The preview is the convenience; the file is the deliverable.
+                Saying so keeps a failed extraction from reading as a lost
+                document. */}
+            <p className="aw-page-note">文件本身没有问题，可以直接下载打开。</p>
+          </>
+        ) : (
+          <>
+            <MarkdownContent text={document.data.text} />
+            {document.data.truncated ? (
+              <p className="aw-page-note">
+                文档较长，这里只显示开头；完整内容请下载。
+              </p>
+            ) : null}
+            <p className="aw-page-note">
+              这是文档的文字预览，不含排版、图片与页眉页脚
+              {document.data.table_count > 0
+                ? `；共 ${document.data.table_count} 张表格`
+                : ""}
+              。需要原样查看请下载。
+            </p>
+          </>
+        )
+      ) : !readable ? (
         <p className="aw-page-note">
           {artifact.media_type} · {artifact.size_bytes} 字节，这个类型只能下载查看。
         </p>
@@ -1271,7 +1319,15 @@ function TaskResult({
   );
 }
 
-/** Text this page can render. Anything else is a download, not a preview. */
+/** What a .docx is on the wire. Long enough to be worth naming once. */
+const DOCX_MEDIA_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/**
+ * Text this page can render *by fetching it*. A .docx is deliberately not here:
+ * it is readable too, but only through the server's extraction endpoint, and
+ * folding it in would send this page's blob fetch at a zip.
+ */
 function isReadableMedia(mediaType: string): boolean {
   return (
     mediaType.startsWith("text/") ||

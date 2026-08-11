@@ -150,6 +150,36 @@ def test_passing_work_that_was_asked_for_a_file_goes_to_approval() -> None:
     assert route_review(_reviewed("pass")) == "approval"
 
 
+def test_a_deployment_that_does_not_gate_exports_goes_straight_to_export() -> None:
+    """The gate is skipped, not faked.
+
+    What export writes is a versioned artifact in this tenant's own store,
+    behind the same per-principal authorization as everything else; nothing
+    reaches anyone until a human clicks download. A deployment whose Tasks
+    produce files for the person who asked for them can say so, and this is
+    what that says.
+    """
+
+    ungated = _reviewed("pass").model_copy(update={"export_requires_approval": False})
+
+    assert route_review(ungated) == "export"
+    # No approval row was opened, so nothing downstream reads a decision that
+    # nobody made -- `route_approval` still refuses without one, which is what
+    # keeps routing past it impossible by any other path.
+    assert ungated.approval_id is None
+    assert ungated.approval_decision is None
+
+
+def test_the_gate_is_on_unless_a_deployment_turns_it_off() -> None:
+    """The control. `TaskState` defaults it True for checkpoints written before
+    the field existed, and those Tasks paused at a gate they must still find on
+    resume -- a default that flipped would export work a human was mid-review
+    of."""
+
+    assert _state().export_requires_approval is True
+    assert route_review(_reviewed("pass")) == "approval"
+
+
 def test_passing_work_nobody_asked_a_file_for_stops_without_approving() -> None:
     """``None`` here is success, not failure -- and the pair of assertions is
     what says so. Interrupting a human to authorise an export nobody wanted,

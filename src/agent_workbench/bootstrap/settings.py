@@ -456,6 +456,24 @@ class WorkflowSettings(StrictModel):
     checkpointer_backend: Literal["postgresql"] = "postgresql"
     checkpointing_enabled: Literal[True] = True
     human_interrupt_enabled: bool = True
+    #: Whether a Task's export waits for a human decision (ADR-031 §2.4).
+    #:
+    #: A plain `bool` rather than one of this file's frozen `Literal[True]`s,
+    #: and the difference is what the gate actually guards. Those pin authority
+    #: boundaries -- a tool may not write without approval, a query may not skip
+    #: its tenant filter -- and turning one off would let something reach past
+    #: the fence. This one gates a file appearing in the Task's own artifact
+    #: list. Nothing leaves the deployment when export runs: the bytes are
+    #: written to this tenant's store, still behind the same per-principal
+    #: authorization, and a human has to click download for them to go
+    #: anywhere. Approving a file into a list nobody but its owner can read is
+    #: a formality, and a formality that fires on every Task teaches people to
+    #: approve without looking, which costs more than it buys.
+    #:
+    #: Defaults True, so a deployment that says nothing keeps ADR-031's shape.
+    #: `human_interrupt_enabled` above stays independent: it declares that the
+    #: framework *can* pause, which the graph still needs for any future gate.
+    export_requires_approval: bool = True
     interrupt_boundary: Literal["graph_node"] = "graph_node"
     runtime_loop_owner: Literal["custom_runtime"] = "custom_runtime"
     graph_version: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9._-]+$")

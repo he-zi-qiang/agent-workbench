@@ -149,8 +149,19 @@ _PLAN_CONTRACT: Final[str] = (
 _CRITIC_CONTRACT: Final[str] = (
     "Return exactly one JSON object and no Markdown, prose, or code fence: "
     '{"decision":"pass|revise","reviewed_draft_ref":"...",'
-    '"revision_number":0,"summary":"...","issues":[],"score":0}. '
-    "The draft reference and revision must match the supplied values."
+    '"revision_number":0,"summary":"...",'
+    '"issues":["..."],"score":0}. '
+    "The draft reference and revision must match the supplied values. "
+    # v1's critic decodes into the same `ReviewResult` as v2's reviewer, so it
+    # has the same two ways to fail the node on a correct verdict: an issue
+    # over its length, and an empty list beside "revise". Neither was stated
+    # here either -- and the template above demonstrated the second one.
+    "The writer is shown your summary and then your issues, so put the "
+    "explanation in the summary and keep each issue to one actionable "
+    "instruction. A summary holds up to 4000 characters; each issue must be "
+    "under 500 and there may be at most 32. "
+    'A "revise" decision must list at least one issue -- an empty list is '
+    'only valid with "pass" -- and no two issues may repeat.'
 )
 
 #: How much of one item is not its passage: the source URL, the title, and the
@@ -322,10 +333,19 @@ _REVIEW_CONTRACT: Final[str] = (
     "file the working set does not have is a revise, not a pass. "
     "Return exactly one JSON object and no Markdown, prose, or code fence: "
     '{"decision":"pass|revise","reviewed_draft_ref":"...",'
-    '"revision_number":0,"summary":"...","issues":[],"score":0}. '
-    "The draft reference and revision must match the supplied values. Every "
-    "issue must name something specific enough to act on: the next attempt "
-    "sees your issues and nothing else about this review."
+    '"revision_number":0,"summary":"...",'
+    '"issues":["..."],"score":0}. '
+    "The draft reference and revision must match the supplied values. "
+    # Both fields reach the next attempt, and saying which does what is the
+    # whole fix: told that issues were the only channel, the model wrote the
+    # full explanation into one and blew past its length, which failed the
+    # node outright. See the note on `ReviewIssue`.
+    "The next attempt is shown your summary and then your issues, so put the "
+    "explanation in the summary and keep each issue to one actionable "
+    "instruction. A summary holds up to 4000 characters; each issue must be "
+    "under 500 and there may be at most 32. "
+    'A "revise" decision must list at least one issue -- an empty list is '
+    'only valid with "pass" -- and no two issues may repeat.'
 )
 
 #: The v2 roster (ADR-031). Three entries, one of which is v1's ``framer``

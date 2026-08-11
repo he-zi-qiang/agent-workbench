@@ -59,11 +59,29 @@ MAX_INLINE_READ_CHARS = 48_000
 #: bounds a model-authored string rather than the workspace itself.
 MAX_INLINE_WRITE_CHARS = 200_000
 
+#: The tool-facing half of ``WorkspaceName``, kept the same shape on purpose.
+#:
+#: It used to state only the length, so a model proposing ``季度总结.docx`` was
+#: told nothing until the write came back -- and before the manifest was fixed
+#: to validate, not even then. Declaring the pattern lets the model see the
+#: rule with the tool, and lets the schema check refuse a name at the argument
+#: boundary rather than three layers in.
+#:
+#: The description says it in words as well. A model reads the prose more
+#: reliably than the regex, and a name is one of the few arguments where
+#: guessing wrong costs a whole step.
 _NAME_SCHEMA: dict[str, JsonValue] = {
     "type": "string",
     "minLength": 1,
     "maxLength": 128,
-    "description": "A flat workspace name. No directories and no path separators.",
+    "pattern": r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$",
+    "description": (
+        "A flat workspace name. No directories and no path separators. "
+        "ASCII letters, digits, dot, underscore and hyphen only, starting "
+        "with a letter or digit -- a name with other characters, including "
+        "any non-English text, is refused. Write 'quarterly-summary.docx', "
+        "not '季度总结.docx'."
+    ),
 }
 
 

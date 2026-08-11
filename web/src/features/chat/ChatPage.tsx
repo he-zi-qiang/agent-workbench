@@ -12,6 +12,7 @@ import {
   ShieldAlert,
   Wifi,
   WifiOff,
+  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -46,7 +47,9 @@ import {
   shortId,
 } from "../../components/ui";
 import {
+  calledToolNames,
   hasUnfinishedTurn,
+  turnToolNames,
   type ChatConnectionState,
   type ChatSessionState,
   type ChatTurnState,
@@ -549,19 +552,58 @@ function TurnStepStream({ turn }: { turn: ChatTurnState }) {
   const running = turn.phase === "submitting" || turn.phase === "running";
 
   return (
-    <StepStream
-      ariaLabel="回答过程"
-      // The label the turn already computed. It carries what the event meant
-      // in Chat's own vocabulary -- "答案已发布（未经证据核实）" is a distinction
-      // Work's generic titles do not draw.
-      eventTitle={(event) =>
-        turn.activities.find((activity) => activity.envelope === event)?.label ??
-        event.event_type
-      }
-      meta={{ title: "运行记录", events: meta.map((activity) => activity.envelope) }}
-      running={running}
-      stages={stages}
-    />
+    <>
+      <TurnTools turn={turn} />
+      <StepStream
+        ariaLabel="回答过程"
+        // The label the turn already computed. It carries what the event meant
+        // in Chat's own vocabulary -- "答案已发布（未经证据核实）" is a distinction
+        // Work's generic titles do not draw.
+        eventTitle={(event) =>
+          turn.activities.find((activity) => activity.envelope === event)?.label ??
+          event.event_type
+        }
+        meta={{ title: "运行记录", events: meta.map((activity) => activity.envelope) }}
+        running={running}
+        stages={stages}
+      />
+    </>
+  );
+}
+
+/**
+ * What this turn could reach, and what it actually reached.
+ *
+ * The names were always on the wire -- `RunStarted.tool_names` carries them,
+ * and the step detail has rendered them since it was written. What was missing
+ * is that `RunStarted` is run bookkeeping, so it lives in the collapsed
+ * "运行记录" group at the bottom: the answer to "什么工具可用" sat three
+ * disclosures deep, under a heading that promises the opposite of a capability
+ * list. Reading it off the same event and putting it at the top costs nothing
+ * and is the first thing a reader asks of an agent.
+ *
+ * A turn with no tools renders nothing rather than "可用工具：无". The direct
+ * and fixed shapes are toolless by construction, and a row that says so on
+ * every message is noise that teaches the reader to stop looking.
+ */
+function TurnTools({ turn }: { turn: ChatTurnState }) {
+  const available = turnToolNames(turn.activities);
+  if (available.length === 0) return null;
+  const called = new Set(calledToolNames(turn.activities));
+
+  return (
+    <div className="aw-turn-tools" aria-label="本轮可用工具">
+      <Wrench aria-hidden="true" size={13} />
+      {available.map((name) => (
+        <span
+          className={`aw-turn-tool ${called.has(name) ? "is-called" : ""}`}
+          key={name}
+          title={called.has(name) ? `${name}（本轮已调用）` : `${name}（本轮未调用）`}
+        >
+          {name}
+        </span>
+      ))}
+    </div>
   );
 }
 

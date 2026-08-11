@@ -276,6 +276,18 @@ class WorkspaceManifest(VersionedModel):
         bytes or the slot it is giving up. Without that, a workspace that once
         held a large file could never be written to again even after the file
         was replaced -- the budget would ratchet rather than track.
+
+        **Validated, not copied.** This used to end in ``model_copy``, which
+        does not run validators, so a name ``WorkspaceName`` forbids went into
+        the manifest, serialized, and committed without complaint -- and every
+        subsequent ``load`` of that workspace raised, because reading *does*
+        validate. Measured: a work node wrote ``季度总结.docx``, the write
+        reported success, and from that moment every list, read, grep and
+        write in that Task failed, including writes of perfectly legal names.
+        The workspace was unrecoverable and the error pointed at a call that
+        had already returned.
+
+        A name is rejected here, where the caller can still act on it.
         """
 
         replaced = self.entries.get(name)
@@ -290,7 +302,13 @@ class WorkspaceManifest(VersionedModel):
                 f"workspace would exceed {MAX_WORKSPACE_TOTAL_BYTES} bytes"
             )
 
-        return self.model_copy(update={"entries": {**self.entries, name: ref}})
+        # `model_validate` rather than `model_copy`: the latter skips
+        # validators, which is exactly how an unrepresentable name reached
+        # durable state. Revalidating the whole map is bounded by
+        # MAX_WORKSPACE_ENTRIES and happens once per write.
+        return WorkspaceManifest.model_validate(
+            {"entries": {**self.entries, name: ref}}
+        )
 
 
 __all__ = [

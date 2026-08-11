@@ -25,7 +25,7 @@ from agent_workbench.domain.evidence import (
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import RunBudget, TraceContext
 from agent_workbench.domain.schema import ANSWER_TEXT_LIMIT
-from agent_workbench.domain.tasks import TaskState, TaskStep
+from agent_workbench.domain.tasks import ReviewResult, TaskState, TaskStep
 from agent_workbench.workflows.agent_profiles import (
     LOCATOR_CHARS,
     MAX_EXTERNAL_PASSAGE_CHARS,
@@ -168,6 +168,65 @@ def test_the_critic_reviews_the_draft_and_never_the_sources() -> None:
     )
     assert "draft_ref=art_draft_1" in rendered
     assert "revision_number=0" in rendered
+
+
+def test_a_reviewer_is_told_the_truth_about_where_its_words_go() -> None:
+    """The prompt used to end: "the next attempt sees your issues and nothing
+    else about this review."
+
+    That was false -- the projection appends the summary *and* the issues, and
+    the test below proves it. The falsehood had a cost: told that issues were
+    the only channel, the model wrote the whole explanation into one issue,
+    overran its length, and failed the node on a verdict that was correct.
+    """
+
+    for node in ("critic", "review"):
+        contract = profile_for(node).system_prompt
+        assert "nothing else about this review" not in contract
+        # Says which field carries what, and how big each may be.
+        assert "summary" in contract and "issues" in contract
+        assert "4000" in contract and "500" in contract
+
+
+def test_the_review_prompt_template_is_a_shape_the_schema_accepts() -> None:
+    """The template used to show `"issues":[]` beside `"decision":"pass|revise"`.
+
+    A model copying it and deciding "revise" produced an empty issue list,
+    which `ReviewResult` refuses -- so following the instructions exactly was
+    one of the ways to fail. The example now shows a populated list, and the
+    rule that makes an empty one legal is stated rather than demonstrated.
+    """
+
+    for node in ("critic", "review"):
+        contract = profile_for(node).system_prompt
+        assert '"issues":[]' not in contract
+        assert '"issues":["..."]' in contract
+        assert "at least one issue" in contract
+
+
+def test_the_review_projection_carries_both_the_summary_and_the_issues() -> None:
+    """What makes the two tests above true rather than hopeful.
+
+    If a later change made issues the only thing carried across, the prompt
+    would go back to being a lie and nothing else here would notice.
+    """
+
+    state = _state(draft_ref="art_draft_1", revision_count=0).model_copy(
+        update={
+            "review_result": ReviewResult(
+                decision="revise",
+                reviewed_draft_ref="art_draft_1",
+                revision_number=0,
+                summary="The table is missing its header row.",
+                issues=("Add a header row naming each column.",),
+                score=40,
+            )
+        }
+    )
+    rendered = _text(state, profile_for("work"), ProjectedContext())
+
+    assert "The table is missing its header row." in rendered
+    assert "Add a header row naming each column." in rendered
 
 
 def test_an_agent_that_admits_a_draft_and_is_given_none_refuses() -> None:

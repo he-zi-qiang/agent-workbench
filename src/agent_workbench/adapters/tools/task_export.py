@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic import JsonValue
+
 from agent_workbench.adapters.tools.export_artifact import (
     TOOL_NAME,
     operation_key_for,
@@ -58,7 +60,7 @@ class GatewayReportExport:
         self,
         *,
         draft_ref: Identifier,
-        approval_id: Identifier,
+        approval_id: Identifier | None,
         execution: ExecutionContext,
         sink: EventSink,
         cancellation: CancellationToken,
@@ -66,10 +68,17 @@ class GatewayReportExport:
         if execution.task_id is None:
             raise ExportRefusedError("export requires a Task execution context")
         cancellation.raise_if_cancelled()
+        # The key is omitted rather than set to null when there is no approval,
+        # so the ledger's canonical request hash is over the draft alone. A
+        # `None` in the arguments would be a third distinct request shape for
+        # the same operation.
+        arguments: dict[str, JsonValue] = {"draft_ref": draft_ref}
+        if approval_id is not None:
+            arguments["approval_id"] = approval_id
         call = ToolCall(
             tool_call_id=new_tool_call_id(),
             tool_name=TOOL_NAME,
-            arguments={"draft_ref": draft_ref, "approval_id": approval_id},
+            arguments=arguments,
         )
         await self.gateway.propose(call, sink=sink)
         prepared = await self.gateway.prepare(call, context=execution, sink=sink)
