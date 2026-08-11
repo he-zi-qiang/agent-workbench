@@ -144,6 +144,12 @@ class _RealHandlers:
     graphs: Mapping[GraphVersion, GraphDefinition] = field(
         default_factory=lambda: GRAPH_DEFINITIONS
     )
+    #: Why this Worker grounds nothing, or None when it does. Carried out of
+    #: assembly rather than left behind in a log line for the same reason
+    #: `graphs` is: the difference between a Worker that chose not to retrieve
+    #: and one that could not is a deploy-time fact, and a process serving half
+    #: of what it was configured for has to be able to say which half.
+    grounding_unavailable: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +199,13 @@ class TaskWorkerDependencies:
     # and one that is missing three of them is otherwise invisible until a
     # Task reaches the node that asks for them.
     tool_names: tuple[ToolName, ...] = ()
+    #: Why this process registered no retrieval, or None when it did. Named
+    #: after `ApiDependencies.rag_unavailable` on purpose: both processes lose
+    #: retrieval for the same reason -- no embedding runtime on this machine --
+    #: and one vocabulary means an operator who has read either one has read
+    #: the other. `None` for the demo and adapter-injection paths, which
+    #: assemble no retrieval and were never asked to.
+    grounding_unavailable: str | None = None
 
     async def startup(self) -> None:
         """Validate the live read alias before claiming durable Task work."""
@@ -304,6 +317,22 @@ async def build_task_worker_dependencies(
         # The same mapping feeds `buildable_versions` below, so what the Worker
         # advertises and what it can actually compile cannot disagree.
         graphs = GRAPH_DEFINITIONS if assembled is None else assembled.graphs
+        if config.task.graph_version not in graphs:
+            # A note, not a refusal, and deliberately not a filter either. The
+            # value is the *submission* default -- the API hands it to
+            # `TaskService`, and the API is a different process that may well
+            # be able to build what this one cannot. What makes it worth saying
+            # is that the disagreement is otherwise invisible from both sides:
+            # every submission that names no shape parks as
+            # `waiting_migration`, which looks like a queue that stopped
+            # draining rather than like a configuration to change.
+            logger.warning(
+                "task_worker_default_graph_not_buildable",
+                extra={
+                    "configured_graph_version": config.task.graph_version,
+                    "buildable_graph_versions": sorted(graphs),
+                },
+            )
         workflow = LangGraphTaskWorkflow(
             handlers=handlers,
             checkpointer=PostgresCheckpointSaver(engine, require_fence=True),
@@ -344,6 +373,9 @@ async def build_task_worker_dependencies(
             mcp_tool_names=() if assembled is None else assembled.mcp_tool_names,
             dynamic_tools={} if assembled is None else assembled.dynamic_tools,
             tool_names=() if assembled is None else assembled.tool_names,
+            grounding_unavailable=(
+                None if assembled is None else assembled.grounding_unavailable
+            ),
         )
     except BaseException:
         await resources.aclose()
@@ -409,6 +441,14 @@ async def _build_real_handlers(
     report cite it as retrieved evidence. So a Worker with no retrieval
     registers only v2, and a v1 Task that reaches it parks for migration with
     the version named -- see `graphs` on `_RealHandlers`.
+
+    What *reaches* that shape is worth naming, because it is not what the
+    paragraph above reads like. Outside hand-built configurations it is never
+    "this deployment configured no retrieval": `project_task_worker` has no way
+    to express that and fills all three sections in. It is an embedding runtime
+    that would not load -- the optional extra is not installed, or its weights
+    are not on this machine -- which is precisely the deployment that has to
+    keep running ordinary Work.
     """
 
     if config.model is None or config.runtime is None or config.multi_agent is None:
@@ -450,12 +490,37 @@ async def _build_real_handlers(
         if grounds_tasks and config.embedding is not None
         else EmbeddingUnavailable(reason="this Worker configured no retrieval")
     )
+    grounding_unavailable: str | None = None
     if grounds_tasks and isinstance(embedder, EmbeddingUnavailable):
-        # Configured for retrieval and could not load it. Still a refusal:
-        # this deployment asked for grounded Tasks, and starting anyway would
-        # silently downgrade it to the v2-only Worker below.
-        raise RealTaskHandlersUnavailableError(
-            f"Task Worker requires an embedding runtime: {embedder.reason}"
+        # This used to raise, on the grounds that a deployment which asked for
+        # grounded Tasks must not be started silently downgraded. The argument
+        # was right about the "silently"; its premise never held, because no
+        # deployment can decline. `project_task_worker` builds `qdrant`,
+        # `embedding` and `retrieval` unconditionally -- `settings.rag` and
+        # `settings.qdrant` are required sections that no configuration file
+        # can withhold -- so `grounds_tasks` is true for every projected
+        # Worker, and the refusal fired on the one case it was not written
+        # for: a machine with no embedding extra and no weights, where it
+        # stopped a Task that names no knowledge base and touches no index
+        # from running at all. That made the v2-only Worker this function's
+        # docstring describes an unreachable branch.
+        #
+        # So the downgrade happens and the "silently" is what goes. This line
+        # and `grounding_unavailable` are its two exits -- the same pair the
+        # API process was given when a missing embedder was decided to cost
+        # retrieval rather than the whole service (`ApiDependencies`).
+        #
+        # The sentence is composed here rather than forwarded whole:
+        # `build_embedder`'s missing-weights reason ends in "this process
+        # serves everything except chat", which is true of the API and
+        # misleading in a Worker, whose loss is v1 and not chat.
+        grounding_unavailable = embedder.reason
+        logger.warning(
+            "task_worker_grounding_unavailable",
+            extra={
+                "grounding_error": embedder.reason,
+                "registered_graphs": [GRAPH_VERSION_V2],
+            },
         )
     grounds_tasks = grounds_tasks and not isinstance(embedder, EmbeddingUnavailable)
 
@@ -666,6 +731,7 @@ async def _build_real_handlers(
         dynamic_tools=dynamic_tools,
         tool_names=tuple(spec.name for spec in tool_registry.specs()),
         graphs=graphs,
+        grounding_unavailable=grounding_unavailable,
     )
 
 

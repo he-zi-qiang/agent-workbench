@@ -25,6 +25,30 @@ The default API is a control-plane/local smoke stack. The embedding extra and
 model credentials are intentionally absent, so Chat can report unavailable
 rather than pretending a real RAG/model deployment exists.
 
+**A Task Worker on that stack is a v2-only Worker, and needs the matching
+submission default.** With no embedding runtime to load, real assembly opens no
+Qdrant client, registers only `v2_general`, and logs
+`task_worker_grounding_unavailable` with the reason. That is deliberate: v1's
+research nodes fall back to plain model calls when handed no research handlers,
+which would put model prose in `evidence_refs` and let the report cite it as
+retrieved evidence, so a Worker that cannot ground refuses to run v1 at all.
+
+The consequence is on the *other* process. `workflow.graph_version` is what the
+API submits with when a client names no shape, and it ships as `v1` — so
+without the embedding extra, set it to `v2_general` for the whole deployment:
+
+```toml
+[workflow]
+graph_version = "v2_general"
+```
+
+Leave it at `v1` and nothing errors. Submissions succeed, the Worker claims
+them, and each one parks as `waiting_migration` because the version it names is
+not registered here — a queue that stops draining for a reason no failure
+mentions. The Worker logs `task_worker_default_graph_not_buildable` at startup
+when it can see the disagreement, but it can only see the value it was projected
+with, not the one the API was.
+
 To include deterministic synthetic workers, opt in explicitly:
 
 ```bash

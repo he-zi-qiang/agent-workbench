@@ -527,8 +527,16 @@ class TaskWorkerRuntimeConfig:
     worker_id: str
     worker_concurrency: int
     # Demo and adapter-injection tests intentionally do not need heavy model
-    # runtimes. A normal projected Worker always carries these; real assembly
-    # refuses their absence rather than substituting synthetic retrieval.
+    # runtimes. A normal projected Worker always carries all of these -- there
+    # is no configuration that withholds the retrieval three, because
+    # `settings.rag` and `settings.qdrant` are required sections -- so `None`
+    # here means a hand-built config and nothing else.
+    #
+    # Which is why real assembly does not treat "retrieval configured" as
+    # "retrieval available": it refuses to substitute *synthetic* retrieval,
+    # but an embedding runtime that will not load on this machine downgrades
+    # the Worker to v2 rather than stopping it. Reading that refusal off these
+    # fields made it fire on every deployment without the embedding extra.
     model: ModelConfig | None = None
     qdrant: QdrantConfig | None = None
     embedding: EmbeddingConfig | None = None
