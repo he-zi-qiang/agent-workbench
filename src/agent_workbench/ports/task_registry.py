@@ -327,6 +327,28 @@ class TaskRegistry(Protocol):
         self, lease: ExecutionLease, *, lease_seconds: int
     ) -> TaskRun: ...
 
+    async def reserve_agent_invocation(self, lease: ExecutionLease) -> int:
+        """Charge this Task for one agent invocation and return the new total.
+
+        Called *before* the invocation runs, not after. A loop that crashes
+        during every invocation would never reach an after-the-fact write, so
+        the counter it is supposed to stop would never move -- and that loop is
+        precisely what the ceiling exists for. The cost is written down rather
+        than argued away: a crash between the charge and the call over-counts
+        by one, which makes the real ceiling slightly smaller than configured
+        rather than slightly larger.
+
+        The write is fenced on the same predicate every other Registry write
+        uses, so a Worker that has lost its claim raises ``StaleExecutionError``
+        instead of spending a Task it no longer owns.
+
+        Nothing in this release refuses on the returned number. It is recorded
+        and reported so the count is visible before it is ever enforced --
+        a ceiling whose first observable effect is a terminal Task is
+        indistinguishable, to whoever is on call, from a bug.
+        """
+        ...
+
     async def reclaim_expired(
         self,
         *,

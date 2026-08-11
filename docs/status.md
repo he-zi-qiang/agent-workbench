@@ -174,10 +174,48 @@ upgrade head    列回来，check 回到三项
 
 全量 `tests/`（真 PG + Qdrant，不含 e2e）**2697 passed / 11 skipped**，ruff、pyright 全绿。
 
-**剩下两刀没做**：第二刀"只计数且看得见，绝不拒绝"（端口方法、两份实现、装饰器只加一、
-API 详情响应暴露一个只读整数），第三刀"开始拒绝"（读上限、超限抛异常、Worker 写
-`dead_letter`）。中间那一刀是 ADR-040 对"一个事前完全不可见、只在用尽那一刻突然把 Task
-打成终态的闸"的正面回答，不能跳。
+### 三之二、这个计数器开始动了，但**不拒绝任何东西**（ADR-040 第二刀）
+
+`TaskRegistry.reserve_agent_invocation(lease) -> int`：一条 fenced UPDATE，
+`agent_invocation_count + 1` 由 PostgreSQL 在**同一把行锁里**算出来——不是先读后写，
+否则两个 Worker 会读到同一个旧值。走的是 `_live_lease_conditions`，不发明第二个 fencing
+token。
+
+**先扣后花**：在调用之前记账，不是之后。每次都恰好在调用中途崩溃的循环永远走不到"事后
+记账"那一步，而那个循环正是这条闸存在的理由。代价写在明处：崩在记账与调用之间会多算一次，
+所以真实上界比配置值**小**一点而不是大一点。
+
+`BudgetedAgentExecutor` 包在 `BoundedParallelExecutor` **外**：记账的那次 Registry 往返
+发生在拿并发槽**之前**，而不是握着槽等数据库。作用在 executor 而不是 node 上，理由和
+`BoundedParallelExecutor` 一样——花钱的是一次 invocation，以后加扇出不用回来改这个文件。
+
+**这一层不拒绝任何东西**，这是刻意的，也是 ADR-040 三刀里中间那刀的全部意义：一条闸如果
+第一次被人看见就是"某个 Task 突然变成终态"，那在值班的人眼里跟 bug 没有区别。所以数字先
+可见，再致命。`TaskView` 上因此多了一个只读的 `agent_invocation_count`。
+
+没有 lease 在 scope 里时**既不记账也不拒绝**：那种组合只出现在没人 claim 过 Task 的地方
+（窄测试、demo handlers），凭空造一个"付款方"比不记账更糟。
+
+**验证。**新增 `tests/persistence/test_agent_invocation_budget.py` 六条，对着真 PostgreSQL。
+三层撤销各自命中不同的用例、互不重叠：
+
+```text
+计数器不再自增        4 failed / 2 passed   （剩下 2 条正是两条"没花钱"的对照组）
+装饰器不再记账        1 failed / 5 passed
+retry 时清零计数器    1 failed / 5 passed
+```
+
+"跨 retry 不归零"那条特意**同时断言 `attempt_count`**：它本来就跨 retry 存活，所以一个
+只会往上加的计数器会看起来正确却在量错东西；用例最后让两个数字**分叉**（3 对 2），
+把"这是两个计数器"这件事放在看得见的地方说。
+
+全量 `tests/`（真 PG + Qdrant，不含 e2e）**2703 passed / 11 skipped**，ruff、pyright 全绿。
+
+**第三刀没做**：读上限、超限抛 `AgentInvocationBudgetExhaustedError`、Worker 写
+`dead_letter`（含一条与 `reclaim_expired` 可区分的 `status_detail`），以及 ADR §2.7 那
+三种拒绝的区分（失去 lease / 额度用尽 / 快照里没有这个键）。**所以
+`max_agent_invocation_attempts_per_task` 至今仍然没有被执行**——它现在有了一个会动的、
+看得见的计数器，仅此而已。
 
 ### 四、52 题 gold set 重跑，ADR-017 第 2 步的证据到齐
 

@@ -373,6 +373,60 @@ class BoundedParallelExecutor:
             return await self._executor.run(request, emit, cancellation)
 
 
+class BudgetedAgentExecutor:
+    """Charge the Task for each agent invocation before running it.
+
+    ADR-040. ``multi_agent.max_agent_invocation_attempts_per_task`` has been
+    declared since the settings module existed and has never had a reader,
+    because honouring it needs a counter that survives a retry and a reclaim --
+    and a number handed to a process is not that.
+
+    **This layer does not refuse anything.** It records, and the count is
+    readable on the Task. That is deliberate and it is the middle of ADR-040's
+    three steps: a ceiling whose first observable effect is a Task going
+    terminal is, to whoever is on call at the time, indistinguishable from a
+    bug. The number becomes visible before it ever becomes fatal.
+
+    It wraps the executor rather than the node, for the reason
+    ``BoundedParallelExecutor`` gives: what costs money is an invocation, and a
+    later fan-out gets counted without anybody revisiting this file. It wraps
+    *outside* the parallelism bound so the Registry round trip happens before a
+    concurrency slot is taken rather than while one is held.
+
+    A run with no lease in scope is not charged and not refused. That
+    combination exists only where nothing claimed the Task -- narrow tests and
+    the demo handlers -- and inventing an authority to bill would be worse than
+    not billing.
+    """
+
+    def __init__(
+        self,
+        executor: AgentExecutor,
+        *,
+        registry: TaskRegistry,
+        scope: TaskExecutionScope,
+    ) -> None:
+        self._executor = executor
+        self._registry = registry
+        self._scope = scope
+
+    async def run(
+        self,
+        request: AgentRunRequest,
+        emit: EventSink,
+        cancellation: CancellationToken,
+    ) -> AgentOutcome:
+        lease = self._scope.current()
+        if lease is not None:
+            # Before the call, not after. A loop that dies inside every
+            # invocation would never reach an after-the-fact write, and that
+            # loop is the one the ceiling exists for. StaleExecutionError
+            # propagates untouched: a Worker that lost its claim must stop,
+            # not run an invocation it can no longer be charged for.
+            await self._registry.reserve_agent_invocation(lease)
+        return await self._executor.run(request, emit, cancellation)
+
+
 class ArtifactPersistingExecutor:
     """Persist a completed text-only outcome without changing Executor's port."""
 

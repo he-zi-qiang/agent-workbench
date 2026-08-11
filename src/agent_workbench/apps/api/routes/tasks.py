@@ -84,6 +84,13 @@ class TaskView(BaseModel):
     objective_preview: str | None = None
     created_at: datetime
     updated_at: datetime
+    # How many agent invocations this Task has already paid for, across every
+    # retry and reclaim (ADR-040). Reported before it is enforced, and that
+    # order is the point: a ceiling whose first visible effect is a Task going
+    # terminal reads, to whoever is on call, like a bug rather than a budget.
+    # Zero on Tasks that predate the column, which is what the migration chose
+    # over inventing a history nobody recorded.
+    agent_invocation_count: int = 0
 
 
 class TaskListResponse(BaseModel):
@@ -368,6 +375,7 @@ def _view(task: TaskRun) -> TaskView:
         objective_preview=task.objective_preview,
         created_at=task.created_at,
         updated_at=task.updated_at,
+        agent_invocation_count=task.agent_invocation_count,
     )
 
 

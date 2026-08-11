@@ -381,6 +381,44 @@ class PostgresTaskRegistry:
                 await self._raise_stale(connection, lease, attempted="heartbeat")
         return _to_run(row)
 
+    async def reserve_agent_invocation(self, lease: ExecutionLease) -> int:
+        """Charge one agent invocation to this Task, fenced on the lease.
+
+        One statement on the normal path. ``agent_invocation_count + 1`` is
+        computed by PostgreSQL inside the same row lock the fence takes, so two
+        Workers cannot both read the same old value -- which is the whole reason
+        this is not a read-then-write in Python.
+
+        The counter is deliberately not reset by ``release_for_retry`` or by
+        ``reclaim_expired``: what it measures is what the Task has already cost,
+        and a retry is exactly the case where forgetting would let a poison Task
+        run forever.
+        """
+
+        async with self._engine.begin() as connection:
+            row = (
+                (
+                    await connection.execute(
+                        update(task_runs)
+                        .where(*_live_lease_conditions(lease))
+                        .values(
+                            agent_invocation_count=(
+                                task_runs.c.agent_invocation_count + 1
+                            ),
+                            updated_at=func.now(),
+                        )
+                        .returning(task_runs)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                await self._raise_stale(
+                    connection, lease, attempted="reserve_agent_invocation"
+                )
+        return _to_run(row).agent_invocation_count
+
     async def reclaim_expired(
         self,
         *,

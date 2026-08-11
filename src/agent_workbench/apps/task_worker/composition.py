@@ -108,6 +108,7 @@ from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.general_graph import GRAPH_VERSION_V2
 from agent_workbench.workflows.task_handlers import (
     BoundedParallelExecutor,
+    BudgetedAgentExecutor,
     TaskExportHandlers,
     TaskNodeInvocationProvider,
     TaskResearchHandlers,
@@ -669,6 +670,10 @@ async def _build_real_handlers(
         ),
         max_parallel=config.multi_agent.max_parallel_agent_invocations,
     )
+    # ADR-040. Outside the parallelism bound on purpose: the Registry round trip
+    # that charges the Task happens before a concurrency slot is taken, rather
+    # than while one is held. Records only -- nothing refuses on the count yet.
+    executor = BudgetedAgentExecutor(executor, registry=registry, scope=scope)
     invocations = TaskNodeInvocationProvider(
         registry=registry,
         budget=RunBudget(
