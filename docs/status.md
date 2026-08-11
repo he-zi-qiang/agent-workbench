@@ -217,6 +217,31 @@ retry 时清零计数器    1 failed / 5 passed
 `max_agent_invocation_attempts_per_task` 至今仍然没有被执行**——它现在有了一个会动的、
 看得见的计数器，仅此而已。
 
+**动手前先查清楚了一件 ADR 没说对的事，记在这里免得下一个人重踩。**ADR-040 §2.8 写
+"dead-letter 基础设施**已全部就位**，不需要新设计"，并逐条列了 `TaskStatus`、check 约束、
+`ALLOWED_TRANSITIONS`、`TaskDeadLettered` 事件、CLI 终态。逐条核过都对，**但漏了一条**：
+
+```python
+class TaskDeadLettered(TaskLifecycleEvent):        # domain/events.py:152
+    reason_code: Literal["lease_expired"] = "lease_expired"
+```
+
+`reason_code` 是**单值** `Literal` 且带默认值，因为它至今只有 `reclaim_expired` 一个写入方。
+额度用尽照原样写进去，会发出一条 `reason_code="lease_expired"` 的事件——那是假话，而且正是
+ADR §2.8 自己要求"两个作者必须可区分"想避免的东西。所以第三刀**必须**同时改这个事件。
+
+好消息是这条路通，而且有仓库自己的先例：同一个文件里
+`TaskRetryScheduled.reason_code` 已经是 `Literal["lease_expired", "retry_requested"]`，
+**双值且不带默认**——不带默认强迫每个写入方自己说清楚。全仓 grep 过 `reason_code`，
+没有任何读取方 switch 在它上面（只有写入方），前端也不读；旧事件继续合法，因为
+`lease_expired` 留在取值集里。所以第三刀的第一步应该是：把 `TaskDeadLettered.reason_code`
+按 `TaskRetryScheduled` 的形状加宽成双值并**去掉默认**（`reclaim_expired` 那处已经显式
+传值，去默认不破坏它）。
+
+另一处连带：`_transition_event(task, to)` 只按目标状态选事件，拿不到原因，且它对
+`dead_letter` 目前直接 `raise AssertionError`。所以 `mark_dead_lettered` 要么不走 `_move`，
+要么给这两个函数加一个原因参数——这是第三刀里唯一需要拿主意的地方。
+
 ### 四、52 题 gold set 重跑，ADR-017 第 2 步的证据到齐
 
 见 `evals/rag/reports/`。四份报告出自同一个进程、同一个 collection、同一份 gold set
