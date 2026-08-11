@@ -140,6 +140,40 @@ class VectorIndexPort(Protocol):
         """
         ...
 
+    async def fetch(
+        self,
+        *,
+        chunk_ids: tuple[str, ...],
+        tenant_id: str,
+        knowledge_base_id: str,
+        authorized_principals: tuple[str, ...],
+    ) -> tuple[ScoredChunk, ...]:
+        """The stored chunks behind these ids, narrowed like every other read.
+
+        Exists because an arm can nominate a chunk without holding it: the
+        retrieval graph stores provenance -- which chunk a claim was read from
+        -- and no payload, so a nomination is an id and nothing else (ADR-037
+        §2.7). Without this the graph arm could only re-rank chunks another
+        arm already returned, which is precisely the set it exists to look
+        beyond.
+
+        ``authorized_principals`` narrows here for the same reason it narrows
+        in ``search``: this is a read of the index, and a read that skipped the
+        narrowing because its ids came from elsewhere would be a way to reach
+        points a query cannot. It is still not the authorization -- the caller
+        re-checks every survivor against PostgreSQL -- but it must not be the
+        one read that quietly stops narrowing.
+
+        Ids that do not exist, or that this principal's copy of the ACL does
+        not cover, are absent from the result rather than raising: a nomination
+        naming a chunk that has since been re-indexed away is ordinary.
+
+        ``score`` on the returned chunks is not meaningful -- nothing was
+        ranked -- and callers replace it with whatever ordering they are
+        building.
+        """
+        ...
+
     async def search_sparse(
         self,
         *,

@@ -193,6 +193,74 @@ class PostgresKnowledgeGraphStore:
         # Entities are deliberately left standing; see the port.
         return (mentions.rowcount or 0) + (relations.rowcount or 0)
 
+    async def expand_from_seeds(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        graph_identity: str,
+        seed_chunk_ids: tuple[str, ...],
+        limit: int,
+    ) -> tuple[ChunkNomination, ...]:
+        if not seed_chunk_ids or limit < 1:
+            return ()
+
+        seeds = set(seed_chunk_ids)
+        # One statement, not two round trips. The self-join is the hop: from a
+        # seed's mention to every other mention of the same entity.
+        neighbours = kg_mentions.alias("neighbours")
+        query = (
+            select(
+                neighbours.c.chunk_id,
+                neighbours.c.document_id,
+                neighbours.c.document_version,
+                kg_mentions.c.entity_id,
+            )
+            .select_from(
+                kg_mentions.join(
+                    neighbours, neighbours.c.entity_id == kg_mentions.c.entity_id
+                ).join(kg_entities, kg_entities.c.entity_id == kg_mentions.c.entity_id)
+            )
+            .where(
+                kg_mentions.c.tenant_id == tenant_id,
+                kg_mentions.c.knowledge_base_id == knowledge_base_id,
+                kg_mentions.c.chunk_id.in_(list(seeds)),
+                neighbours.c.tenant_id == tenant_id,
+                neighbours.c.knowledge_base_id == knowledge_base_id,
+                # Excluded in the query rather than filtered afterwards: a
+                # ``limit`` applied to a list still holding the seeds would
+                # spend the arm's budget re-nominating what the other arms
+                # already returned.
+                neighbours.c.chunk_id.notin_(list(seeds)),
+                kg_entities.c.graph_identity == graph_identity,
+            )
+        )
+        async with self._engine.connect() as connection:
+            rows = (await connection.execute(query)).mappings().all()
+
+        # How many distinct seed entities reached each chunk. A chunk two of
+        # the seeds' entities both point at is a better bridge than one only
+        # a single entity reaches, and this is the only ordering signal an arm
+        # that embeds nothing can have.
+        reached: dict[str, set[str]] = {}
+        seen: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            reached.setdefault(row["chunk_id"], set()).add(row["entity_id"])
+            seen.setdefault(
+                row["chunk_id"], (row["document_id"], row["document_version"])
+            )
+        nominations = [
+            ChunkNomination(
+                chunk_id=chunk_id,
+                document_id=seen[chunk_id][0],
+                document_version=seen[chunk_id][1],
+                score=float(len(entity_ids)),
+            )
+            for chunk_id, entity_ids in reached.items()
+        ]
+        nominations.sort(key=lambda n: (-n.score, n.chunk_id))
+        return tuple(nominations[:limit])
+
     async def nominations_for_entities(
         self,
         *,
