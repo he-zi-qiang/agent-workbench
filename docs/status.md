@@ -203,6 +203,28 @@ top_k 没有被应用两次、没有在进程内二次融合、node 往返没丢
 开关该翻的决定——脚本自己的 docstring 就写着等价性是 weak claim by construction。翻开关
 会改动 Task 语义指纹与一条冻结边界，该由一份单独的 ADR 决定。
 
+### 五、evidence manifest 重新生成（gate `batch3-2026-08-11`）
+
+上一份（`gap-closure-2026-08-11`）有三处问题，这次逐条改掉：
+
+| | 上一份 | 这一份 |
+|---|---|---|
+| 锚定的 commit | `bf31815`（早已过期） | `52c4bd1`（当前 HEAD） |
+| 工作树 | `git_dirty: true`（`--allow-dirty`） | `git_dirty: false` |
+| `evaluation_report` | 在 `missing` 里 | 4 份实际报告，带 SHA-256 |
+
+`verify` 零问题。`missing` 现在只剩 `otel_trace_sample`、`demo` 与
+`task_run_semantics_revision`——前者取不到的原因没变：compose 里从来没有
+`otel-collector` 这个服务。
+
+**它仍然是本机产物、仍在 `.gitignore` 里**（`artifacts/evidence/`）。所以这条记录说的是
+"本机重新生成过、内容如上"，仓库里不会出现这份文件；要复核得在本机重跑。生成它需要
+`AW_DATABASE__*` 三个 DSN 与两个 model id 环境变量，否则配置加载阶段就失败。
+
+七条 `known_limitation` 逐条写进了 manifest，包括本批**没做完**的部分：ADR-040 三刀只
+落了第一刀、ADR-041 明确不做 watchdog、ADR-042 收窄了"唯一入口"那句话、以及那个不可比的
+延迟数字。
+
 ## 2026-08-11 缺口清单第二批：界面开始承认自己不知道什么，文档不再说假话
 
 第一批（`5363d7a`）清的是"配置说了假话、唤醒没有消费端、毒行挡死回放"。这一批是同一
