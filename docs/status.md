@@ -74,6 +74,69 @@ checkpoint、heartbeat、lifecycle——而不是新造一条停机路径。**�
 真 PostgreSQL 下 `tests/workers/` + `tests/persistence/test_task_worker*.py`
 25 passed / 0 skipped，ruff、pyright 全绿。
 
+### 二、阻塞调用有了界（ADR-042）
+
+计划 `implementation-plan.md:900` 要的是「`AdapterCallRunner` 是所有 Model/Tool/外部
+SDK 调用的**唯一入口**」。ADR-042 **收窄了这句话**，理由是边界而不是工程量：把工具
+派发改成物理穿过一个 runner 对象，等于在自研 Runtime 与它的工具之间插进第二个持有者，
+直接撞上"Tool Loop 只有一个所有者"这条冻结 `Literal`。所以 runner 是**注入给会阻塞的
+Adapter 的一个协作者**，不是所有调用的必经之路。30+ 个调用点一处不动。
+
+**真正的问题比"没有界"更具体。**`asyncio.to_thread` 用的是解释器的**默认** executor，
+而这个 executor 是**全进程共享**的——`getaddrinfo`（每一次对外连接背后那一下 DNS）
+排的是同一个队。所以一串嵌入批次不只是让嵌入变慢，它把 DNS 排到了嵌入后面，而队列
+长度没有任何人看得见。
+
+`adapters/concurrency/call_runner.py`：专用 `ThreadPoolExecutor` + **等大**
+`asyncio.Semaphore` + 排队超时。两个数相等但都不能删，这一点写死在模块 docstring 里
+（否则后人会看见"两个相等的数"删掉一个）：`max_workers` 真正限制并发，
+`Semaphore` 负责让等待**可观测且有时限**——`ThreadPoolExecutor` 的 work queue 是无界
+`SimpleQueue`，给不了超时。**排队上限只管等一个 slot，不管调用本身**，所以一次合法的
+慢调用不会被它杀掉；饱和的后果是排队 + 超时，**不是拒绝**（三条路径全是只读幂等的，
+拒绝会把一次慢检索变成一次失败检索）。
+
+搬了 5 条路径：dense/sparse/reranker 三个模型适配器（原本 `to_thread`），
+加上 `LocalArtifactStore` 的 `get` 与 `_read`（原本**根本没进任何线程池**）。
+**`put` / `put_stream` 明确不搬**——计划自己写着"不可取消的非幂等写调用不能放进普通
+线程池"，而它的 quarantine → replace 语义被取消后会在盘上留下半个文件。
+
+两个新配置字段 `coordination.blocking_call_slots`（默认 2）与
+`blocking_call_queue_timeout_seconds`（默认 30）。**放 `[coordination]` 不是因为找
+不到别的地方**：`runtime` / `multi_agent` / `rag` 三个前缀都在 `task_snapshot_allowlist`
+里，放进去会让"这台机器给阻塞调用开几个线程"变成**每个 Task 的语义**并改掉全体
+`run_semantics_revision`——与否掉 `rag.enabled` 开关是同一条推理，**不要把部署状态
+伪装成语义**。而且它们的作用是让循环保持响应、以致心跳和租约仍然诚实，**它们是存活性
+参数**。配置 schema 保持 `1.14`，ADR-042 §13.2 明说两条先例（ADR-036 抬版、ADR-038
+不抬）在这个判据下不可调和，本批跟随更窄的那条。
+
+**一处真回归是被既有测试抓住的，记下来。**`test_the_download_leaves_the_app_in_more_
+than_one_piece` 变红，body 为空。原因不是流坏了：那个用例在 `receive()` 里**立刻**投递
+`http.disconnect`，而 `StreamingResponse` 让 body 与 `receive()` 赛跑——ADR-042 把
+每块读挪上线程后，body 生成器在第一次 `yield` 之前多了一个 `await`，于是断连稳赢。
+**改的是用例不是实现**：一个已断连的客户端拿不到字节，比拿到两块写进死 socket 更对；
+用例要证的是"分多块下发"，不该顺带测调度顺序。现在它等响应真正结束再投递断连，
+并带 10 秒上限，免得把挂起伪装成通过。
+
+其余 16 处红都是同一类：测试用 lambda / 函数替身顶掉三个工厂，签名跟不上新增的
+`runner=` 关键字。属于 fixture 跟进，不是行为回归。
+
+**验证。**新增 `tests/adapters/test_blocking_call_runner.py`，四条用例是**两对**：
+界与「更宽的池确实到得了更高峰值」，超时与「愿意多等的调用仍然拿得到 slot」。
+第二对正是把"池饱和就拒绝"（ADR 否掉的）和"池排队、队列有上限"区分开的东西。
+逐层撤销实测：
+
+```text
+撤掉排队上限                    1 failed / 3 passed
+把界整个拿掉（池放宽+不再守门）  2 failed / 2 passed
+```
+
+两条对照组两次都保持绿。全量 `tests/`（真 PostgreSQL + Qdrant，不含 e2e）
+**2693 passed / 11 skipped**，ruff、pyright 全绿。
+
+**已知未闭合**：`blocking.close()` 目前只在 task worker 的 `AsyncExitStack` 里注册，
+API 与摄取 Worker 没有注册——它们是进程生命周期对象，且 `ThreadPoolExecutor` 在提交
+第一份工作前不建线程，所以没有泄漏，但"谁负责关"这件事在三个进程里不一致。
+
 ## 2026-08-11 缺口清单第二批：界面开始承认自己不知道什么，文档不再说假话
 
 第一批（`5363d7a`）清的是"配置说了假话、唤醒没有消费端、毒行挡死回放"。这一批是同一

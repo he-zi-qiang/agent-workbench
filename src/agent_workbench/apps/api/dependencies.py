@@ -28,6 +28,7 @@ from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
+from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
@@ -314,7 +315,12 @@ def build_dependencies(
     )
     documents = PostgresDocumentStore(engine)
     knowledge_bases = KnowledgeBaseService(PostgresKnowledgeBaseStore(engine))
-    artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
+    # ADR-042. One pool per process, threaded into every adapter that blocks.
+    blocking = BlockingCallRunner(
+        slots=config.blocking_calls.slots,
+        queue_timeout_seconds=config.blocking_calls.queue_timeout_seconds,
+    )
+    artifacts = LocalArtifactStore(Path(config.artifacts.local_root), runner=blocking)
     conversations = PostgresConversationStore(engine)
     releaser = PostgresChatReleaseCoordinator(engine)
 
@@ -344,6 +350,7 @@ def build_dependencies(
         _assemble_chat(
             config,
             documents,
+            blocking=blocking,
             conversations=conversations,
             releaser=releaser,
             telemetry=telemetry.telemetry,
@@ -445,6 +452,7 @@ def _assemble_chat(
     config: ApiRuntimeConfig,
     documents: PostgresDocumentStore,
     *,
+    blocking: BlockingCallRunner,
     conversations: PostgresConversationStore,
     releaser: PostgresChatReleaseCoordinator,
     telemetry: Telemetry,
@@ -466,7 +474,7 @@ def _assemble_chat(
     module already had a name for: ``retrieval_shape = "ungrounded"``.
     """
 
-    built_embedder = build_embedder(config.embedding)
+    built_embedder = build_embedder(config.embedding, runner=blocking)
     no_embedder = (
         built_embedder.reason
         if isinstance(built_embedder, EmbeddingUnavailable)
@@ -485,9 +493,15 @@ def _assemble_chat(
     # for a reranked one, so they have to mean "this deployment loaded no
     # reranker" and nothing else. Filling them in with "there was no embedder"
     # would report a downgrade at a step that was never reached.
-    reranker = None if embedder is None else build_reranker(config.reranker)
+    reranker = (
+        None if embedder is None else build_reranker(config.reranker, runner=blocking)
+    )
     no_reranker = reranker.reason if isinstance(reranker, RerankerUnavailable) else None
-    sparse = None if embedder is None else build_sparse_encoder(config.embedding)
+    sparse = (
+        None
+        if embedder is None
+        else build_sparse_encoder(config.embedding, runner=blocking)
+    )
     no_sparse = sparse.reason if isinstance(sparse, SparseEncodingUnavailable) else None
 
     qdrant: AsyncQdrantClient | None = None

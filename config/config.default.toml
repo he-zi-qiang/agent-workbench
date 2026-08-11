@@ -99,6 +99,13 @@ heartbeat_interval_seconds = 20
 lease_grace_seconds = 10
 max_missed_heartbeats = 2
 recovery_poll_seconds = 15
+# How many synchronous adapter calls (embedding, reranking, artifact reads) may
+# occupy threads at once, and how long a caller waits for one of those slots
+# before giving up. ADR-042. Two, because one torch forward already uses the
+# cores it was given and a third slot buys nothing. The timeout bounds only the
+# wait for a slot, never the call itself.
+blocking_call_slots = 2
+blocking_call_queue_timeout_seconds = 30.0
 priority_aging_seconds = 300
 max_attempts = 5
 retry_base_seconds = 2

@@ -23,6 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from agent_workbench.adapters.concurrency.call_runner import BlockingCallRunner
 from agent_workbench.adapters.reranking.bge_reranker import (
     BgeReranker,
     load_cross_encoder,
@@ -42,6 +43,10 @@ def build_reranker(
     config: RerankerConfig,
     *,
     loader: Callable[..., Any] = load_cross_encoder,
+    #: ADR-042. Threaded through rather than built here: one process has one
+    #: pool, and a factory that made its own would give each adapter a
+    #: private bound, which is three bounds and no ceiling.
+    runner: BlockingCallRunner | None = None,
 ) -> RerankerPort | RerankerUnavailable:
     """Load the configured reranker, or say what is missing.
 
@@ -62,6 +67,7 @@ def build_reranker(
             batch_size=config.batch_size,
             device=device,
             loader=loader,
+            runner=runner,
         )
     except RerankerUnavailableError as missing:
         return RerankerUnavailable(reason=str(missing))

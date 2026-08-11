@@ -463,19 +463,34 @@ def test_the_download_leaves_the_app_in_more_than_one_piece(tmp_path: Path) -> N
 
             sent: list[dict[str, Any]] = []
 
-            # One request message, then disconnect. A receive() that kept
-            # answering "http.request" spins StreamingResponse forever: it
-            # polls for the disconnect that ends the response.
-            pending = [
-                {"type": "http.request", "body": b"", "more_body": False},
-                {"type": "http.disconnect"},
-            ]
+            # One request message, then a disconnect -- but not until the
+            # response has finished. A receive() that kept answering
+            # "http.request" spins StreamingResponse forever, because it polls
+            # for the disconnect that ends the response; a receive() that
+            # disconnects *immediately* has the opposite problem, and it is not
+            # hypothetical. StreamingResponse races the body against
+            # receive(), so an eager disconnect wins whenever the body
+            # generator awaits anything before its first yield -- which it now
+            # does, since ADR-042 put the per-chunk read on a thread. That
+            # would have made this test measure scheduling order rather than
+            # how the body is delivered.
+            pending = [{"type": "http.request", "body": b"", "more_body": False}]
+            response_complete = asyncio.Event()
 
             async def receive() -> dict[str, Any]:
-                return pending.pop(0) if pending else {"type": "http.disconnect"}
+                if pending:
+                    return pending.pop(0)
+                # Bounded, so a body that never completes fails here as a
+                # timeout instead of hanging the suite.
+                await asyncio.wait_for(response_complete.wait(), timeout=10)
+                return {"type": "http.disconnect"}
 
             async def send(message: dict[str, Any]) -> None:
                 sent.append(message)
+                if message["type"] == "http.response.body" and not message.get(
+                    "more_body", False
+                ):
+                    response_complete.set()
 
             await app(
                 {

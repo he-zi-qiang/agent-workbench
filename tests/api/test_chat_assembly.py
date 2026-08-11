@@ -143,16 +143,16 @@ def test_a_missing_reranker_does_not_cost_the_chat_capability(
         async def embed_query(self, text: str) -> Any:
             return (0.0,)
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
     monkeypatch.setattr(
         assembly,
         "build_sparse_encoder",
-        lambda _c: SparseEncodingUnavailable(reason="no lexical runtime here"),
+        lambda _c, **_: SparseEncodingUnavailable(reason="no lexical runtime here"),
     )
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
@@ -198,16 +198,16 @@ def _stub_optional_runtimes(monkeypatch: pytest.MonkeyPatch) -> None:
         async def embed_query(self, text: str) -> Any:
             return (0.0,)
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
     monkeypatch.setattr(
         assembly,
         "build_sparse_encoder",
-        lambda _c: SparseEncodingUnavailable(reason="no lexical runtime here"),
+        lambda _c, **_: SparseEncodingUnavailable(reason="no lexical runtime here"),
     )
 
 
@@ -318,7 +318,7 @@ def test_the_routed_deployment_assembles_direct_beside_its_rag_router(
             return tuple(1.0 for _ in passages)
 
     _stub_optional_runtimes(monkeypatch)
-    monkeypatch.setattr(assembly, "build_reranker", lambda _c: _Reranker())
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c, **_: _Reranker())
     dependencies = build_dependencies(
         project_api(_settings(tmp_path, chat={"retrieval_shape": "routed"}))
     )
@@ -363,7 +363,7 @@ def test_the_web_fallback_budget_enforces_the_prompt_it_ships_with(
             return tuple(1.0 for _ in passages)
 
     _stub_optional_runtimes(monkeypatch)
-    monkeypatch.setattr(assembly, "build_reranker", lambda _c: _Reranker())
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c, **_: _Reranker())
     dependencies = build_dependencies(
         project_api(
             _settings(
@@ -442,7 +442,7 @@ def test_the_direct_shape_reaches_the_web_when_a_provider_is_configured(
             return tuple(1.0 for _ in passages)
 
     _stub_optional_runtimes(monkeypatch)
-    monkeypatch.setattr(assembly, "build_reranker", lambda _c: _Reranker())
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c, **_: _Reranker())
     dependencies = build_dependencies(
         project_api(
             _settings(
@@ -536,12 +536,12 @@ def test_a_process_with_a_lexical_runtime_assembles_the_hybrid_retriever(
         async def encode_query(self, text: str) -> Any:  # pragma: no cover - unused
             raise AssertionError("assembly must not encode anything")
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
-    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c, **_: _Sparse())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
@@ -600,12 +600,12 @@ def test_turning_the_framework_on_assembles_the_llamaindex_retriever(
         async def encode_query(self, text: str) -> Any:  # pragma: no cover - unused
             raise AssertionError("assembly must not encode anything")
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
-    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c, **_: _Sparse())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
 
     dependencies = build_dependencies(
@@ -652,12 +652,12 @@ def test_the_agentic_shape_gets_the_same_hybrid_retriever(
         async def encode_query(self, text: str) -> Any:  # pragma: no cover - unused
             raise AssertionError("assembly must not encode anything")
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
-    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c, **_: _Sparse())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
 
     dependencies = build_dependencies(
@@ -718,12 +718,12 @@ def test_assembly_hands_startup_the_encoders_a_turn_will_use(
 
     embedder = _Embedder()
     sparse = _Sparse()
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: embedder)
-    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: sparse)
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: embedder)
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c, **_: sparse)
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))

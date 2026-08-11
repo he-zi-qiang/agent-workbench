@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from agent_workbench.adapters.concurrency.call_runner import BlockingCallRunner
 from agent_workbench.adapters.embedding.bge import (
     BgeM3Embedder,
     EmbeddingBackendUnavailableError,
@@ -42,6 +43,10 @@ def build_embedder(
     config: EmbeddingConfig,
     *,
     loader: Callable[..., Any] = load_sentence_transformer,
+    #: ADR-042. Threaded through rather than built here: one process has one
+    #: pool, and a factory that made its own would give each adapter a
+    #: private bound, which is three bounds and no ceiling.
+    runner: BlockingCallRunner | None = None,
 ) -> EmbeddingPort | EmbeddingUnavailable:
     """Load the configured embedder, or say what is missing.
 
@@ -61,6 +66,7 @@ def build_embedder(
             batch_size=config.batch_size,
             device=device,
             loader=loader,
+            runner=runner,
         )
     except EmbeddingBackendUnavailableError as missing:
         return EmbeddingUnavailable(reason=str(missing))

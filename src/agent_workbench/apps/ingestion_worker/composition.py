@@ -10,6 +10,7 @@ from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
+from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.embedding import DeterministicEmbedder
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.ingestion import (
@@ -114,17 +115,24 @@ def build_ingestion_worker_dependencies(
     if demo and (embedder is not None or sparse_encoder is not None):
         raise ValueError("demo cannot be combined with injected encoders")
 
+    # ADR-042. One pool per process: every blocking adapter in this process
+    # draws from it, so the bound is a ceiling rather than three private ones.
+    blocking = BlockingCallRunner(
+        slots=config.blocking_calls.slots,
+        queue_timeout_seconds=config.blocking_calls.queue_timeout_seconds,
+    )
+
     if demo:
         embedder = DeterministicEmbedder(dimension=config.embedding.vector_size)
         sparse_encoder = None
     else:
         if embedder is None:
-            built_dense = build_embedder(config.embedding)
+            built_dense = build_embedder(config.embedding, runner=blocking)
             if isinstance(built_dense, EmbeddingUnavailable):
                 raise IngestionBackendUnavailableError(built_dense.reason)
             embedder = built_dense
         if sparse_encoder is None and config.embedding.sparse_enabled:
-            built_sparse = build_sparse_encoder(config.embedding)
+            built_sparse = build_sparse_encoder(config.embedding, runner=blocking)
             if isinstance(built_sparse, SparseEncodingUnavailable):
                 raise IngestionBackendUnavailableError(built_sparse.reason)
             sparse_encoder = built_sparse
@@ -145,7 +153,7 @@ def build_ingestion_worker_dependencies(
         ),
         timeout=config.qdrant.request_timeout_seconds,
     )
-    artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
+    artifacts = LocalArtifactStore(Path(config.artifacts.local_root), runner=blocking)
     guard_dsn = config.database.guard_dsn or config.database.dsn
     guards = PostgresExecutionGuardFactory(
         guard_dsn.get_secret_value(),

@@ -21,6 +21,7 @@ from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
+from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.langgraph import (
     LangGraphTaskWorkflow,
@@ -269,7 +270,16 @@ async def build_task_worker_dependencies(
         # build; callers never need a half-constructed dependency object to
         # clean it up.
         resources.push_async_callback(engine.dispose)
-        artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
+        # ADR-042. One pool per process: every blocking adapter in this process
+        # draws from it, so the bound is a ceiling rather than three private ones.
+        blocking = BlockingCallRunner(
+            slots=config.blocking_calls.slots,
+            queue_timeout_seconds=config.blocking_calls.queue_timeout_seconds,
+        )
+        resources.callback(blocking.close)
+        artifacts = LocalArtifactStore(
+            Path(config.artifacts.local_root), runner=blocking
+        )
         events = PostgresEventLog(engine)
         registry = PostgresTaskRegistry(engine, events=events)
         guard_dsn = config.database.guard_dsn or config.database.dsn
@@ -289,6 +299,7 @@ async def build_task_worker_dependencies(
             assembled = await _build_real_handlers(
                 config,
                 artifacts=artifacts,
+                blocking=blocking,
                 documents=PostgresDocumentStore(engine),
                 events=events,
                 registry=registry,
@@ -425,6 +436,7 @@ async def _build_real_handlers(
     config: TaskWorkerRuntimeConfig,
     *,
     artifacts: LocalArtifactStore,
+    blocking: BlockingCallRunner,
     documents: PostgresDocumentStore,
     events: PostgresEventLog,
     registry: PostgresTaskRegistry,
@@ -492,7 +504,7 @@ async def _build_real_handlers(
         )
 
     embedder = (
-        build_embedder(config.embedding)
+        build_embedder(config.embedding, runner=blocking)
         if grounds_tasks and config.embedding is not None
         else EmbeddingUnavailable(reason="this Worker configured no retrieval")
     )
@@ -555,7 +567,7 @@ async def _build_real_handlers(
         and config.qdrant is not None
         and config.retrieval is not None
     ):
-        built_sparse = build_sparse_encoder(config.embedding)
+        built_sparse = build_sparse_encoder(config.embedding, runner=blocking)
         sparse_encoder = (
             None
             if isinstance(built_sparse, SparseEncodingUnavailable)
