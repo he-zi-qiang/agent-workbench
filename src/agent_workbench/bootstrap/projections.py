@@ -535,6 +535,24 @@ class TaskWorkerRuntimeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class GraphExtractionConfig:
+    """What the second pass needs, and whether it runs at all (ADR-037).
+
+    ``enabled`` is what makes the model optional here. An ingestion worker has
+    never needed a model or an API key; requiring one so that a disabled
+    feature could be configured would break every deployment that does not
+    build a graph. The factory refuses only when ``enabled`` is true and the
+    key is absent -- a deployment that asks for extraction without giving it
+    credentials has asked for something that cannot happen.
+    """
+
+    enabled: bool
+    prompt_version: str
+    extraction_profile: str
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class IngestionWorkerRuntimeConfig:
     """The narrow configuration owned by the derived-index writer."""
 
@@ -543,6 +561,11 @@ class IngestionWorkerRuntimeConfig:
     qdrant: QdrantConfig
     embedding: EmbeddingConfig
     ingestion: IngestionConfig
+    graph: GraphExtractionConfig
+    # Absent unless the graph is enabled, and the projection says so rather
+    # than inventing an empty one: a process configured without a model is a
+    # real state, and refusing to assemble is the factory's job.
+    model: ModelConfig | None
     worker_id: str
     claim_limit: int
     poll_seconds: float
@@ -780,6 +803,45 @@ def project_ingestion_worker(
         ingestion=IngestionConfig(
             chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
+        ),
+        graph=GraphExtractionConfig(
+            enabled=settings.rag.graph.enabled,
+            prompt_version=settings.rag.graph.prompt_version,
+            extraction_profile=settings.rag.graph.extraction_profile,
+            # One passage, one completion. Generous because the second pass is
+            # not on anybody's request path, and bounded because it runs once
+            # per chunk and a hung call would hold a lease.
+            timeout_seconds=float(
+                (
+                    settings.model.compact
+                    if settings.rag.graph.extraction_profile == "compact"
+                    else settings.model.main
+                ).timeout_seconds
+            ),
+        ),
+        model=(
+            ModelConfig(
+                provider=settings.model.provider,
+                base_url=settings.model.base_url,
+                api_key=settings.secrets.deepseek_api_key,
+                profiles={
+                    name: ModelProfileConfig(
+                        model_id=profile.model_id,
+                        temperature=profile.temperature,
+                        max_output_tokens=profile.max_output_tokens,
+                        timeout_seconds=float(profile.timeout_seconds),
+                        max_retries=profile.max_retries,
+                        tool_calling_required=profile.tool_calling_required,
+                        prices=_project_prices(profile.pricing),
+                    )
+                    for name, profile in (
+                        ("main", settings.model.main),
+                        ("compact", settings.model.compact),
+                    )
+                },
+            )
+            if settings.rag.graph.enabled
+            else None
         ),
         worker_id=worker_id or new_id("ingester"),
         # One document can spend most of a lease in a model. Claiming a large

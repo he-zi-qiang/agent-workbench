@@ -5,27 +5,42 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.embedding import DeterministicEmbedder
+from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.ingestion import (
     ApproximateTokenCounter,
     TextDocumentParser,
 )
+from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
     PostgresExecutionGuardFactory,
     PostgresOutbox,
     create_query_engine,
 )
+from agent_workbench.adapters.persistence.knowledge_graph import (
+    PostgresKnowledgeGraphStore,
+)
+from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
+from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.chunking import Chunker
+from agent_workbench.application.graph_enrichment import GraphEnrichmentService
+from agent_workbench.application.graph_extraction import (
+    GraphExtractionService,
+    graph_identity,
+)
 from agent_workbench.application.ingestion import IngestionService
+from agent_workbench.apps.ingestion_worker.identity import restore_document_owner
 from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
 )
+from agent_workbench.bootstrap.model_factory import build_model
 from agent_workbench.bootstrap.projections import IngestionWorkerRuntimeConfig
 from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
 from agent_workbench.bootstrap.sparse_factory import (
@@ -33,7 +48,10 @@ from agent_workbench.bootstrap.sparse_factory import (
     build_sparse_encoder,
 )
 from agent_workbench.ports.embedding import EmbeddingPort
+from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.sparse import SparseEncoderPort
+from agent_workbench.runtime.agent_runtime import ClaudeLikeAgentRuntime
+from agent_workbench.runtime.tool_gateway import ToolGateway
 from agent_workbench.workers.ingestion import IngestionWorker
 
 
@@ -51,6 +69,9 @@ class IngestionWorkerDependencies:
     artifacts: LocalArtifactStore
     guards: PostgresExecutionGuardFactory
     worker: IngestionWorker
+    # Present only when the second pass is configured; owned here because the
+    # process that opened it is the one that must close it.
+    model_http: httpx.AsyncClient | None = None
 
     async def startup(self) -> None:
         """Fail closed before claiming work from the durable outbox."""
@@ -62,9 +83,11 @@ class IngestionWorkerDependencies:
         )
 
     async def dispose(self) -> None:
-        """Release both external clients on every process exit path."""
+        """Release every external client on every process exit path."""
 
         await self.qdrant.close()
+        if self.model_http is not None:
+            await self.model_http.aclose()
         await self.guards.dispose()
         await self.engine.dispose()
 
@@ -144,12 +167,26 @@ def build_ingestion_worker_dependencies(
         sparse_encoder=sparse_encoder,
         index=index,
     )
+    enrichment, http = _graph_enrichment(config, ingestion=ingestion, engine=engine)
     worker = IngestionWorker(
         engine=engine,
         outbox=PostgresOutbox(engine),
         ingestion=ingestion,
         artifacts=artifacts,
         worker_id=config.worker_id,
+        enrichment=enrichment,
+        # Paired with enrichment by the worker's own construction check, and
+        # paired here too: identity is decided at this boundary and nowhere
+        # else (ADR-012).
+        principal_for=(
+            (
+                lambda tenant_id, owner_id: restore_document_owner(
+                    tenant_id=tenant_id, owner_id=owner_id
+                )
+            )
+            if enrichment is not None
+            else None
+        ),
         guards=guards,
         lease_seconds=float(config.lease_seconds),
         heartbeat_seconds=float(config.heartbeat_seconds),
@@ -161,6 +198,7 @@ def build_ingestion_worker_dependencies(
         artifacts=artifacts,
         guards=guards,
         worker=worker,
+        model_http=http,
     )
 
 
@@ -169,3 +207,63 @@ __all__ = [
     "IngestionWorkerDependencies",
     "build_ingestion_worker_dependencies",
 ]
+
+
+def _graph_enrichment(
+    config: IngestionWorkerRuntimeConfig,
+    *,
+    ingestion: IngestionService,
+    engine: AsyncEngine,
+) -> tuple[GraphEnrichmentService | None, httpx.AsyncClient | None]:
+    """The second pass, or an honest absence (ADR-037 §2.6).
+
+    Refuses rather than degrades when the graph is switched on without the
+    means to run it. That is the opposite of the retriever's behaviour, and
+    deliberately: a missing arm at query time is a degradation nobody asked
+    for, while a worker configured to extract and unable to is a deployment
+    that will silently never build the graph it was told to build.
+    """
+
+    if not config.graph.enabled:
+        return None, None
+    if config.model is None or config.model.api_key is None:
+        raise IngestionBackendUnavailableError(
+            "rag.graph.enabled requires a model and an API key in this process"
+        )
+
+    http = httpx.AsyncClient(timeout=config.graph.timeout_seconds)
+    model = build_model(config.model, client=http)
+    empty = StaticToolRegistry([])
+    runtime = ClaudeLikeAgentRuntime(
+        model=model,
+        # Toolless by construction, not by an envelope that could widen: the
+        # extractor reads one passage and returns JSON.
+        gateway=ToolGateway(
+            registry=empty, policy=EnvelopePolicyEngine(registry=empty)
+        ),
+        policy_identity=f"ingestion-graph:{config.graph.prompt_version}",
+        model_label=config.model.profiles[config.graph.extraction_profile].model_id,
+    )
+    extraction = GraphExtractionService(
+        executor=runtime,
+        timeout_seconds=config.graph.timeout_seconds,
+        sink_for=lambda stream_id: ScopedEventSink(
+            log=InMemoryEventLog(),
+            scope=EventScope(stream_id=stream_id, run_id=stream_id),
+        ),
+    )
+    return (
+        GraphEnrichmentService(
+            ingestion=ingestion,
+            extraction=extraction,
+            store=PostgresKnowledgeGraphStore(engine),
+            graph_identity=graph_identity(
+                extraction_model=config.model.profiles[
+                    config.graph.extraction_profile
+                ].model_id,
+                prompt_version=config.graph.prompt_version,
+                embedder_identity=ingestion.embedder.identity,
+            ),
+        ),
+        http,
+    )

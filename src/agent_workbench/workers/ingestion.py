@@ -22,18 +22,23 @@ what the first one wrote instead of undoing it.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from sqlalchemy import select, update
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.persistence.models import (
     document_acl,
     document_versions,
     documents,
+    outbox_events,
 )
+from agent_workbench.application.graph_enrichment import GraphEnrichmentService
 from agent_workbench.application.ingestion import IngestionRequest, IngestionService
 from agent_workbench.domain.errors import StaleExecutionError
+from agent_workbench.domain.identifiers import new_id
+from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.execution_guard import (
     ExecutionGuard,
@@ -62,6 +67,16 @@ class IngestionWorker:
     ingestion: IngestionService
     artifacts: ArtifactStore
     worker_id: str
+    # The second pass (ADR-037). Absent means the deployment does not build a
+    # graph: no extraction request is ever enqueued, and one already queued is
+    # acknowledged rather than left to a worker that cannot run it.
+    enrichment: GraphEnrichmentService | None = None
+    # How the owner recorded for a document becomes the identity the second
+    # pass runs as. Injected rather than built here: deciding who is calling is
+    # an interface-layer job, and a worker that constructed a principal would
+    # be one component deciding it for itself (ADR-012). Absent whenever
+    # ``enrichment`` is, and required with it.
+    principal_for: Callable[[str, str], PrincipalContext] | None = None
     guards: GuardFactory | None = None
     lease_seconds: float = 90.0
     heartbeat_seconds: float = 20.0
@@ -73,6 +88,11 @@ class IngestionWorker:
             raise ValueError("heartbeat_seconds must be positive")
         if self.heartbeat_seconds >= self.lease_seconds:
             raise ValueError("heartbeat_seconds must be shorter than the lease")
+        if (self.enrichment is None) != (self.principal_for is None):
+            # Stated at construction. The alternative is a worker that queues
+            # extraction requests it can attribute to nobody, discovered one
+            # event later and only in the branch that runs them.
+            raise ValueError("enrichment and principal_for must be configured together")
 
     async def drain(self, *, limit: int = 32) -> DrainResult:
         """Handle every event currently claimable, and report what happened."""
@@ -108,7 +128,7 @@ class IngestionWorker:
             finally:
                 if guard is not None:
                     await guard.release()
-            if outcome == "indexed":
+            if outcome in ("indexed", "enriched"):
                 indexed += 1
             elif outcome == "superseded":
                 superseded += 1
@@ -193,6 +213,9 @@ class IngestionWorker:
 
     async def _apply(self, event: OutboxEvent) -> str:
         """Index the document's current state, if this event still describes it."""
+
+        if event.kind == "graph_extraction_requested":
+            return await self._extract_graph(event)
 
         async with self.engine.begin() as connection:
             # Held for the whole snapshot decision. The advisory guard above
@@ -290,7 +313,99 @@ class IngestionWorker:
                 .where(documents.c.last_applied_revision < revision)
                 .values(last_applied_revision=revision)
             )
+            if self.enrichment is not None:
+                # Same transaction as the line above, for the reason the outbox
+                # exists at all: a version recorded as indexed without its
+                # extraction request would be a graph nobody ever asks for, and
+                # a request committed without the version would ask about
+                # content the index does not hold.
+                #
+                # A separate event rather than more work here: extraction calls
+                # a model per chunk, and this path still holds the document
+                # guard. A slow or failing extractor must not be able to make
+                # indexing itself slow or failing (ADR-037 §2.6).
+                await connection.execute(
+                    insert(outbox_events).values(
+                        event_id=new_id("evt"),
+                        document_id=event.document_id,
+                        source_revision=revision,
+                        kind="graph_extraction_requested",
+                        payload={
+                            # Pinned, not re-read later. By the time the second
+                            # pass runs the document may have moved on, and
+                            # extracting a newer version under this event would
+                            # write mentions whose chunk ids point at points
+                            # this revision never produced.
+                            "document_version": version_id,
+                            "artifact_id": artifact_id,
+                            "tenant_id": tenant,
+                            "knowledge_base_id": kb,
+                            "owner_id": owner,
+                        },
+                    )
+                )
         return "indexed"
+
+    async def _extract_graph(self, event: OutboxEvent) -> str:
+        """The second pass: read this version's chunks for entities and edges.
+
+        The revision check is about cost, not correctness -- and that is worth
+        saying plainly, because the obvious reason is wrong. Re-indexing does
+        not delete the previous version's points, so a graph built for a
+        superseded version still points at chunks that exist; those rows are
+        stale, not orphaned.
+
+        What the check avoids is a model call per chunk on a version nobody
+        will retrieve first, when the version that superseded it has already
+        queued a request of its own. With a single worker it rarely fires: the
+        extraction request has a lower sequence than the indexing event that
+        would supersede it, so it is normally claimed first. It fires when two
+        workers interleave, which is exactly when spending the calls twice
+        would hurt most.
+        """
+
+        if self.enrichment is None:
+            # Configured off after the event was written. Acknowledged rather
+            # than left queued: it will not become runnable by waiting.
+            return "skipped"
+
+        payload = event.payload
+        async with self.engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    select(
+                        documents.c.last_applied_revision,
+                        documents.c.deleted,
+                    ).where(documents.c.document_id == event.document_id)
+                )
+            ).first()
+        if row is None or row.deleted:
+            return "skipped"
+        if int(row.last_applied_revision) != int(event.source_revision):
+            return "superseded"
+
+        content = await self.artifacts.get(
+            tenant_id=str(payload["tenant_id"]),
+            artifact_id=str(payload["artifact_id"]),
+            principal_id=str(payload["owner_id"]),
+        )
+        stored = await self.artifacts.head(
+            tenant_id=str(payload["tenant_id"]),
+            artifact_id=str(payload["artifact_id"]),
+            principal_id=str(payload["owner_id"]),
+        )
+        if self.principal_for is None:  # pragma: no cover - refused above
+            raise AssertionError("enrichment without principal_for")
+        await self.enrichment.enrich(
+            self.principal_for(str(payload["tenant_id"]), str(payload["owner_id"])),
+            tenant_id=str(payload["tenant_id"]),
+            knowledge_base_id=str(payload["knowledge_base_id"]),
+            document_id=event.document_id,
+            document_version=str(payload["document_version"]),
+            media_type=stored.media_type,
+            content=content,
+        )
+        return "enriched"
 
 
 __all__ = ["DrainResult", "IngestionWorker"]
