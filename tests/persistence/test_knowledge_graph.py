@@ -292,3 +292,89 @@ def test_forgetting_a_document_takes_its_evidence_and_leaves_the_entry_point() -
     remaining, _ = _run(scenario)
 
     assert [n.chunk_id for n in remaining] == ["chk_2"]
+
+
+# --- specificity weighting (the 2026-08-10 ablation's finding) ---------------
+
+
+def test_a_hub_entity_nominates_more_weakly_than_a_specific_one() -> None:
+    """Measured, not assumed: counting bridges made retrieval worse.
+
+    On the graph ablation the count-based score cost 4 questions of
+    full_coverage@3, because an entity in five documents reached all of them
+    at full strength and flooded the top with everything sharing a hub. The
+    weight is 1/documents, so a bridge is worth what it narrows down to.
+
+    Fixture: `hub` is named by four documents, `rare` by two. A chunk reached
+    only through the hub must rank below one reached through the rare entity,
+    even though both were reached exactly once.
+    """
+
+    HUB = ("hub thing", "thing", "Hub Thing")
+    RARE = ("rare thing", "thing", "Rare Thing")
+
+    async def scenario(store: PostgresKnowledgeGraphStore) -> Any:
+        # The seed names both entities.
+        await _record(
+            store, chunk_id="chk_seed", document_id="doc_seed", entities=(HUB, RARE)
+        )
+        # The hub is everywhere ...
+        for index in range(3):
+            await _record(
+                store,
+                chunk_id=f"chk_hub_{index}",
+                document_id=f"doc_hub_{index}",
+                entities=(HUB,),
+            )
+        # ... the rare entity is in one other document.
+        await _record(
+            store, chunk_id="chk_rare", document_id="doc_rare", entities=(RARE,)
+        )
+        return await store.expand_from_seeds(
+            tenant_id=TENANT,
+            knowledge_base_id=KB,
+            graph_identity=IDENTITY,
+            seed_chunk_ids=("chk_seed",),
+            limit=10,
+        )
+
+    found = _run(scenario)
+    scores = {n.chunk_id: n.score for n in found}
+
+    # The rare bridge connects two documents -> 1/2; the hub connects four -> 1/4.
+    assert scores["chk_rare"] == pytest.approx(0.5)
+    assert scores["chk_hub_0"] == pytest.approx(0.25)
+    # And the ordering follows, which is what the fusion actually reads.
+    assert found[0].chunk_id == "chk_rare"
+
+
+def test_several_specific_bridges_still_outweigh_one() -> None:
+    """The weights sum, so the arm can still prefer a chunk reached by more
+    than one narrow link -- what it must not do is prefer one reached by more
+    *hubs*."""
+
+    A = ("alpha", "thing", "Alpha")
+    B = ("beta", "thing", "Beta")
+
+    async def scenario(store: PostgresKnowledgeGraphStore) -> Any:
+        await _record(
+            store, chunk_id="chk_seed", document_id="doc_seed", entities=(A, B)
+        )
+        # Reached by both narrow entities.
+        await _record(
+            store, chunk_id="chk_both", document_id="doc_both", entities=(A, B)
+        )
+        # Reached by one.
+        await _record(store, chunk_id="chk_one", document_id="doc_one", entities=(A,))
+        return await store.expand_from_seeds(
+            tenant_id=TENANT,
+            knowledge_base_id=KB,
+            graph_identity=IDENTITY,
+            seed_chunk_ids=("chk_seed",),
+            limit=10,
+        )
+
+    found = _run(scenario)
+
+    assert found[0].chunk_id == "chk_both"
+    assert found[0].score > found[1].score

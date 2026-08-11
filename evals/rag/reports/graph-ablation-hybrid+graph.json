@@ -3,10 +3,10 @@
   "index_identity": "BAAI/bge-m3@main+approx-word-v1-512-64+BAAI/bge-m3@main-sparse via hybrid+graph",
   "question_count": 52,
   "scores": {
-    "full_coverage_at_3": 0.75,
-    "mrr": 0.9102564102564104,
-    "recall_at_1": 0.8846153846153846,
-    "recall_at_3": 0.9423076923076923,
-    "retrieval_latency_ms": 29023.02029148268
+    "full_coverage_at_3": 0.7884615384615384,
+    "mrr": 0.9326923076923077,
+    "recall_at_1": 0.9038461538461539,
+    "recall_at_3": 0.9615384615384616,
+    "retrieval_latency_ms": 31726.330916004372
   }
 }

@@ -29,6 +29,7 @@ with the deterministic embedder would measure a hash function.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -127,6 +128,48 @@ async def _documents_for(retriever: Any, question: str) -> tuple[str, ...]:
 
 
 async def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--arms",
+        default="hybrid,hybrid+graph",
+        help=(
+            "Which arms to measure. Narrow to 'hybrid+graph' when only the "
+            "graph scoring changed: the control reads the same index through "
+            "the same retriever, so re-measuring it costs half the run and "
+            "reproduces a number already on disk."
+        ),
+    )
+    parser.add_argument(
+        "--collection",
+        default=None,
+        help=(
+            "Index into this Qdrant collection and KEEP it on exit, reusing it "
+            "when it already holds the corpus. Without it every run builds a "
+            "throwaway collection, which on a small machine costs more than "
+            "the model calls do. NOTE: reuse is by point count only -- this "
+            "does not verify the index identity, so a changed chunker, "
+            "embedder or corpus needs a new name."
+        ),
+    )
+    parser.add_argument(
+        "--skip-extraction",
+        action="store_true",
+        help=(
+            "Reuse the graph rows already stored for this tenant. Only valid "
+            "when nothing about extraction changed -- the graph identity is "
+            "not re-checked here, so a changed prompt or model silently "
+            "measures the old graph. Also note that the test suite TRUNCATEs "
+            "the kg tables, so a run of tests/persistence between two "
+            "ablations wipes them: after running tests, extract again."
+        ),
+    )
+    arguments = parser.parse_args()
+    wanted = tuple(a.strip() for a in arguments.arms.split(",") if a.strip())
+    unknown = sorted(set(wanted) - {"hybrid", "hybrid+graph"})
+    if unknown:
+        print(f"unknown arm(s): {', '.join(unknown)}", file=sys.stderr)
+        return 2
+
     url = os.environ.get("AGENT_WORKBENCH_TEST_QDRANT_URL")
     dsn = os.environ.get("AGENT_WORKBENCH_TEST_DSN")
     api_key = os.environ.get("AW_SECRETS__DEEPSEEK_API_KEY")
@@ -152,7 +195,10 @@ async def main() -> int:
         embedder_identity=embedder.identity,
     )
 
-    collection = f"ablation_{uuid.uuid4().hex}"
+    collection = arguments.collection or f"ablation_{uuid.uuid4().hex}"
+    # A named collection outlives the run that built it; an unnamed one is
+    # this run's alone and is removed with it.
+    ephemeral = arguments.collection is None
     client = AsyncQdrantClient(url=url)
     engine = create_query_engine(dsn, application_name="graph-ablation")
     http = httpx.AsyncClient(timeout=60.0)
@@ -169,12 +215,32 @@ async def main() -> int:
             sparse_encoder=sparse,
         )
 
-        print("indexing the corpus ...", flush=True)
+        corpus = sorted(CORPUS.glob("*.md"))
+        stored_points = (await client.get_collection(collection)).points_count or 0
+        # Reused only when the count matches exactly. Fewer points is a run
+        # that died halfway, and indexing over it would leave the two mixed.
+        reuse_index = not ephemeral and stored_points == len(corpus)
+        if reuse_index:
+            print(
+                f"reusing {stored_points} indexed points in {collection}",
+                flush=True,
+            )
+        elif stored_points:
+            raise SystemExit(
+                f"{collection} holds {stored_points} points but the corpus has "
+                f"{len(corpus)}; use a fresh name rather than indexing over it"
+            )
+
+        if not reuse_index:
+            print("indexing the corpus ...", flush=True)
         versions: list[tuple[str, str, bytes]] = []
-        for path in sorted(CORPUS.glob("*.md")):
+        for path in corpus:
             document_id = f"doc_{path.stem}"
             version_id = f"ver_{path.stem}"
             content = path.read_bytes()
+            versions.append((document_id, version_id, content))
+            if reuse_index:
+                continue
             await ingestion.ingest(
                 IngestionRequest(
                     tenant_id=TENANT,
@@ -188,10 +254,45 @@ async def main() -> int:
                     content=content,
                 )
             )
-            versions.append((document_id, version_id, content))
-        print(f"  {len(versions)} documents indexed", flush=True)
+        print(
+            f"  {len(versions)} documents {'reused' if reuse_index else 'indexed'}",
+            flush=True,
+        )
 
         # --- the graph, over the same corpus -----------------------------
+        if arguments.skip_extraction:
+            async with engine.connect() as connection:
+                mentions = int(
+                    (
+                        await connection.execute(
+                            text(
+                                "SELECT count(*) FROM kg_mentions WHERE tenant_id = :t"
+                            ),
+                            {"t": TENANT},
+                        )
+                    ).scalar_one()
+                )
+            yield_report = {"reused_mentions": mentions}
+            print(f"  reusing {mentions} stored mentions", flush=True)
+            if mentions == 0:
+                print(
+                    "REFUSING TO MEASURE: --skip-extraction found no stored graph",
+                    file=sys.stderr,
+                )
+                return 1
+            store = PostgresKnowledgeGraphStore(engine)
+            identity = await _stored_identity(engine) or identity
+            return await _measure_arms(
+                wanted,
+                embedder=embedder,
+                sparse=sparse,
+                index=index,
+                store=store,
+                identity=identity,
+                ingestion=ingestion,
+                yield_report=yield_report,
+            )
+
         async with engine.begin() as connection:
             await connection.execute(
                 text("DELETE FROM kg_relations WHERE tenant_id = :t"),
@@ -290,50 +391,99 @@ async def main() -> int:
                 file=sys.stderr,
             )
 
-        # --- the two arms, over one index --------------------------------
-        control = ReferenceVectorIndexRetriever(
-            embedder=embedder, index=index, sparse_encoder=sparse
-        )
-        treatment = SeedExpansionRetriever(
+        return await _measure_arms(
+            wanted,
             embedder=embedder,
+            sparse=sparse,
             index=index,
-            graph=store,
-            graph_identity=identity,
-            sparse_encoder=sparse,
+            store=store,
+            identity=identity,
+            ingestion=ingestion,
+            yield_report=yield_report,
         )
-
-        gold = load_gold_set(GOLD)
-        results: dict[str, Any] = {"yield": yield_report}
-        for name, retriever in (("hybrid", control), ("hybrid+graph", treatment)):
-            print(f"measuring {name} ...", flush=True)
-
-            async def retrieve(question: str, r: Any = retriever) -> tuple[str, ...]:
-                return await _documents_for(r, question)
-
-            report = await evaluate_retrieval(
-                gold,
-                index_identity=f"{ingestion.index_identity} via {retriever.mode}",
-                retrieve=retrieve,
-            )
-            (REPORTS / f"graph-ablation-{name}.json").write_text(
-                report.to_json() + "\n", encoding="utf-8"
-            )
-            (REPORTS / f"graph-ablation-{name}-outcomes.json").write_text(
-                report.outcomes_to_json() + "\n", encoding="utf-8"
-            )
-            results[name] = report.scores
-            print(f"--- {name} ---")
-            print(report.to_json())
-
-        (REPORTS / "graph-ablation.json").write_text(
-            json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        return 0
     finally:
-        await client.delete_collection(collection)
+        if ephemeral:
+            await client.delete_collection(collection)
         await client.close()
         await engine.dispose()
         await http.aclose()
+
+
+async def _stored_identity(engine: Any) -> str | None:
+    """The identity the stored rows were written under, so a reused graph is
+    queried by what actually built it rather than by what this run computed."""
+
+    async with engine.connect() as connection:
+        row = (
+            await connection.execute(
+                text(
+                    "SELECT graph_identity FROM kg_entities WHERE tenant_id = :t "
+                    "LIMIT 1"
+                ),
+                {"t": TENANT},
+            )
+        ).first()
+    return str(row[0]) if row else None
+
+
+async def _measure_arms(
+    wanted: tuple[str, ...],
+    *,
+    embedder: Any,
+    sparse: Any,
+    index: Any,
+    store: Any,
+    identity: str,
+    ingestion: Any,
+    yield_report: dict[str, Any],
+) -> int:
+    control = ReferenceVectorIndexRetriever(
+        embedder=embedder, index=index, sparse_encoder=sparse
+    )
+    treatment = SeedExpansionRetriever(
+        embedder=embedder,
+        index=index,
+        graph=store,
+        graph_identity=identity,
+        sparse_encoder=sparse,
+    )
+    gold = load_gold_set(GOLD)
+    results: dict[str, Any] = {"yield": yield_report}
+    for name, retriever in (("hybrid", control), ("hybrid+graph", treatment)):
+        if name not in wanted:
+            continue
+        print(f"measuring {name} ...", flush=True)
+
+        async def retrieve(question: str, r: Any = retriever) -> tuple[str, ...]:
+            return await _documents_for(r, question)
+
+        report = await evaluate_retrieval(
+            gold,
+            index_identity=f"{ingestion.index_identity} via {retriever.mode}",
+            retrieve=retrieve,
+        )
+        (REPORTS / f"graph-ablation-{name}.json").write_text(
+            report.to_json() + "\n", encoding="utf-8"
+        )
+        (REPORTS / f"graph-ablation-{name}-outcomes.json").write_text(
+            report.outcomes_to_json() + "\n", encoding="utf-8"
+        )
+        results[name] = report.scores
+        print(f"--- {name} ---")
+        print(report.to_json())
+
+    # Merged rather than overwritten: a run that measured one arm must not
+    # erase the other's number, or a narrowed re-run would quietly turn a
+    # comparison into a single column.
+    summary = REPORTS / "graph-ablation.json"
+    previous: dict[str, Any] = {}
+    if summary.exists():
+        previous = json.loads(summary.read_text(encoding="utf-8"))
+    summary.write_text(
+        json.dumps({**previous, **results}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return 0
 
 
 def _scope(stream_id: str) -> Any:
