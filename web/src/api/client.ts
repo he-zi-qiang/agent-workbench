@@ -353,6 +353,50 @@ export async function searchKnowledge(
   });
 }
 
+/** Every media type the ingestion parser reads from a declaration alone. */
+const SERVER_READABLE_MEDIA_TYPES = new Set([
+  "text/plain",
+  "text/markdown",
+  "text/x-markdown",
+  "application/pdf",
+]);
+
+/** The same extensions the upload controls already accept, mapped to a type. */
+const MEDIA_TYPE_BY_EXTENSION: readonly (readonly [string, string])[] = [
+  [".md", "text/markdown"],
+  [".markdown", "text/markdown"],
+  [".pdf", "application/pdf"],
+];
+
+/**
+ * What to declare a file as when the browser's own guess is unusable.
+ *
+ * Browsers routinely hand back `""` or `application/octet-stream` for a `.md`,
+ * and neither is a type the ingestion parser reads -- so the declaration the
+ * browser produced is the one thing that makes an upload the UI advertises fail.
+ * It fails late and quietly, too: the three upload calls all succeed, and the
+ * document sits at "正在建立索引" forever because the async worker refuses it.
+ *
+ * Falling back to the extension is not this client inventing a fact about
+ * bytes. The file name is already what decides whether a file is accepted at
+ * all (`ACCEPTED_EXTENSIONS` in AttachmentTray, the `accept` attributes); only
+ * the declaration sent to the server disagreed with it. A browser type the
+ * parser can read always wins -- it is the more specific claim, and overriding
+ * `text/plain` on a `.md` would discard information rather than add it.
+ *
+ * A name that says nothing still gets `application/octet-stream`, for the same
+ * reason the CLI does (`apps/cli/upload.py`): the server decides what it can
+ * parse, and guessing past the name would be asserting something we never read.
+ */
+export function declaredMediaType(file: { name: string; type: string }): string {
+  const declared = file.type.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (SERVER_READABLE_MEDIA_TYPES.has(declared)) return declared;
+
+  const name = file.name.toLowerCase();
+  const matched = MEDIA_TYPE_BY_EXTENSION.find(([extension]) => name.endsWith(extension));
+  return matched?.[1] ?? "application/octet-stream";
+}
+
 export async function uploadDocument(
   identity: PrincipalIdentity,
   input: {
@@ -363,17 +407,21 @@ export async function uploadDocument(
   },
 ): Promise<DocumentVersion> {
   const declaredSha256 = await sha256(input.file);
+  // Computed once and threaded through the transfer: the server reads the
+  // intent's type rather than the PUT's header, but two call sites deriving it
+  // separately is how a declaration and its bytes start disagreeing.
+  const mediaType = declaredMediaType(input.file);
   const intent = await apiRequest<CreateUploadResponse>(identity, "/v1/uploads", {
     method: "POST",
     body: {
       declared_size_bytes: input.file.size,
       declared_sha256: declaredSha256,
-      media_type: input.file.type || "application/octet-stream",
+      media_type: mediaType,
       filename: input.file.name,
     },
   });
 
-  const transferred = await uploadBytes(identity, intent.content_path, input.file);
+  const transferred = await uploadBytes(identity, intent.content_path, input.file, mediaType);
   return apiRequest(identity, `/v1/uploads/${encodeURIComponent(intent.upload_id)}/complete`, {
     method: "POST",
     body: {
@@ -389,12 +437,13 @@ async function uploadBytes(
   identity: PrincipalIdentity,
   path: string,
   file: File,
+  mediaType: string,
 ): Promise<UploadContentResponse> {
   const response = await fetch(path, {
     method: "PUT",
     headers: {
       ...identityHeaders(identity),
-      "content-type": file.type || "application/octet-stream",
+      "content-type": mediaType,
     },
     body: file,
   });

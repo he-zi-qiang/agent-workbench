@@ -3,8 +3,10 @@ import {
   apiRequest,
   askChat,
   createTask,
+  declaredMediaType,
   downloadArtifact,
   identityHeaders,
+  uploadDocument,
 } from "./client";
 import type { ArtifactDownloadTarget, PrincipalIdentity } from "./types";
 
@@ -175,5 +177,112 @@ describe("downloadArtifact", () => {
     await downloadArtifact(identity, "art_secret_storage_key");
 
     expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe("artifact");
+  });
+});
+
+describe("declaredMediaType", () => {
+  // The failure this exists for: a browser that has nothing to say about a .md
+  // hands back an empty string, and the ingestion parser reads neither "" nor
+  // application/octet-stream.
+  it("names a Markdown file the browser could not identify", () => {
+    expect(declaredMediaType({ name: "notes.md", type: "" })).toBe("text/markdown");
+  });
+
+  it("names a Markdown file the browser called opaque bytes", () => {
+    expect(declaredMediaType({ name: "notes.md", type: "application/octet-stream" })).toBe(
+      "text/markdown",
+    );
+  });
+
+  it("reads the extension case-insensitively", () => {
+    expect(declaredMediaType({ name: "NOTES.MD", type: "" })).toBe("text/markdown");
+  });
+
+  it("keeps a browser type the server can already read", () => {
+    // text/plain parses; replacing it with text/markdown would be this client
+    // overriding a real observation with a guess from the name.
+    expect(declaredMediaType({ name: "notes.md", type: "text/plain" })).toBe("text/plain");
+  });
+
+  it("ignores a charset parameter when matching the allow-list", () => {
+    expect(declaredMediaType({ name: "notes.md", type: "text/plain; charset=utf-8" })).toBe(
+      "text/plain",
+    );
+  });
+
+  it("names a PDF the browser could not identify", () => {
+    expect(declaredMediaType({ name: "report.pdf", type: "" })).toBe("application/pdf");
+  });
+
+  it("keeps the browser's own PDF type", () => {
+    expect(declaredMediaType({ name: "report.pdf", type: "application/pdf" })).toBe(
+      "application/pdf",
+    );
+  });
+
+  // The control. An implementation that answered "text/markdown" whenever the
+  // browser was unhelpful would pass every case above and fail here -- and it
+  // would be exactly the guess the parser's allow-list exists to refuse.
+  it("declares nothing beyond opaque bytes when the name says nothing", () => {
+    expect(declaredMediaType({ name: "data.bin", type: "" })).toBe(
+      "application/octet-stream",
+    );
+  });
+});
+
+describe("uploadDocument", () => {
+  it("declares .md as Markdown in both the intent and the transfer", async () => {
+    // jsdom's Crypto has getRandomValues and randomUUID but no subtle, and
+    // uploadDocument hashes the file before it sends anything. The digest is
+    // stubbed rather than computed because nothing here asserts on it -- what
+    // is under test is the declaration, not the checksum.
+    vi.stubGlobal("crypto", {
+      ...globalThis.crypto,
+      subtle: { digest: () => Promise.resolve(new Uint8Array([0x01]).buffer) },
+    });
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/content")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ artifact_id: "art_1", size_bytes: 6, sha256: "abc" }),
+            { status: 201 },
+          ),
+        );
+      }
+      if (url === "/v1/uploads") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              upload_id: "upl_1",
+              content_path: "/v1/uploads/upl_1/content",
+            }),
+            { status: 201 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ version_id: "ver_1" }), { status: 201 }),
+      );
+    });
+
+    await uploadDocument(identity, {
+      // What a browser actually hands back for a Markdown file it cannot place.
+      file: new File(["# 标题"], "notes.md", { type: "" }),
+      documentId: "doc_1",
+      knowledgeBaseId: "kb_1",
+      grantedPrincipals: ["principal_a"],
+    });
+
+    const intentInit = fetchMock.mock.calls[0]?.[1];
+    if (typeof intentInit?.body !== "string") throw new Error("request body was not JSON");
+    const intentBody = JSON.parse(intentInit.body) as { media_type: string };
+    expect(intentBody.media_type).toBe("text/markdown");
+    // Both declarations come from one value on purpose: the server reads the
+    // intent's type, so a divergence here would be invisible until ingestion.
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("content-type")).toBe(
+      intentBody.media_type,
+    );
   });
 });
