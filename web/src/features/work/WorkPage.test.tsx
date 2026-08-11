@@ -453,6 +453,47 @@ describe("WorkPage task submission", () => {
     expect(vi.mocked(getArtifactText)).not.toHaveBeenCalled();
   });
 
+  it("opens a document from the rail in the reading column", async () => {
+    // The .docx a Task is asked for arrives as a tool result, not as the
+    // exported report -- so it only ever appears in the rail, and the rail
+    // only ever downloaded. The page could render the document and had no way
+    // to be asked to.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(railDocxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue({
+      text: "## 季度回顾\n\n这一段来自 Word 文档。",
+      truncated: false,
+      table_count: 1,
+    });
+    const user = userEvent.setup();
+    renderWorkPage("/work/task_run");
+
+    const rail = await screen.findByRole("complementary", { name: "附件" });
+    await user.click(within(rail).getByRole("button", { name: /季度总结\.docx/ }));
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(
+      await within(output).findByText("这一段来自 Word 文档。"),
+    ).toBeInTheDocument();
+    // Shown, and still keepable.
+    expect(
+      within(output).getByRole("button", { name: /^下载/ }),
+    ).toBeInTheDocument();
+
+    // And the reader can get back to the Task's own report.
+    await user.click(within(output).getByRole("button", { name: "返回任务结果" }));
+    expect(
+      await screen.findByText("三个方案的比较结论。"),
+    ).toBeInTheDocument();
+  });
+
   it("keeps the document downloadable when its text cannot be extracted", async () => {
     // The control. A failed extraction is a failed *convenience*; reporting it
     // as a lost document would be worse than showing nothing.
@@ -789,6 +830,37 @@ function docxTimeline() {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     filename: "季度报告.docx",
   };
+  return timeline;
+}
+
+/**
+ * The real shape a Word Task produces: the .docx arrives as a *tool result*
+ * beside the exported markdown report, so it lives only in the rail.
+ */
+function railDocxTimeline() {
+  const timeline = reportTimeline();
+  const exported = timeline.events[1];
+  if (exported === undefined) throw new Error("fixture lost its export event");
+  timeline.events.splice(1, 0, {
+    ...exported,
+    event_id: "event_docx",
+    graph_node_id: "work",
+    payload: {
+      kind: "ToolCompleted",
+      tool_call_id: "tc_word",
+      artifact: {
+        schema_version: 1,
+        artifact_id: "art_docx",
+        tenant_id: "tenant_local",
+        kind: "tool_result",
+        media_type:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size_bytes: 36741,
+        sha256: "c".repeat(64),
+        filename: "季度总结.docx",
+      },
+    },
+  });
   return timeline;
 }
 
