@@ -1,5 +1,79 @@
 # 实施状态
 
+## 2026-08-11 第三批（进行中）：停摆的 Worker 不再替自己作证
+
+第二批清的是"服务端知道、界面不说"。这一批是前两批**明确排除**的那条——
+durable Agent 预算、event-loop watchdog、阻塞 Adapter 隔离——排除理由是"架构改动，
+要先有 ADR"。所以这一批先产出了三份 ADR（[ADR-040](./adr/0040-a-task-pays-before-it-calls.md)、
+[ADR-041](./adr/0041-a-late-heartbeat-may-not-renew.md)、
+[ADR-042](./adr/0042-blocking-belongs-to-the-adapter.md)），再按 ADR 逐刀实现。
+
+**这一节还没写完**，下面只记已经落地的部分。
+
+### 一、迟到的心跳没有资格续租（ADR-041）
+
+对着代码核完 WP08-12 之后，结论和计划文档写的不一样：**坏掉的不是"缺一个
+watchdog"。**
+
+`_heartbeat_loop`（`workers/task.py`）此前是 `sleep` 完就无条件续租，
+**一个字都不检查自己迟到了多久**。而续租那条写走的 fence
+（`task_registry.py:775` 的 `_live_lease_conditions`）对时间的唯一要求是
+`lease_until > now()`。于是这条路径可达（默认 `lease_seconds=90`、
+`heartbeat_seconds=20`）：
+
+| 时刻 | 发生了什么 | `lease_until` |
+|---|---|---|
+| t=0 | `claim_next` 设租约 | 90 |
+| t=20 | 第一次心跳，续租 | 110 |
+| t=20…80 | **事件循环冻住 60 秒** | 110 |
+| t=100 | 心跳照常续租；`100 < 110`，fence 通过 | **170** |
+
+一个死了 60 秒的进程就这样保住独占权，而且期间没有任何别的 Worker 能 reclaim
+它——`reclaim_expired` 找的是已过期的行，而这一行的过期时间一直被推着走。
+`implementation-plan.md:925` 写着"Watchdog 绝不能替 Worker 续租"，
+**今天违反这条的不是 watchdog，是 heartbeat 自己。**
+
+改法是心跳在续租前自查迟到，超过 `heartbeat + abort_lag`（默认 20+20=40 秒）
+就不续租，抛 `StaleExecutionError`。它落进 `_execute` 里那条**既有的**
+`except StaleExecutionError`，复用 `_GuardLostError` 已经走通的纪律——不再写
+checkpoint、heartbeat、lifecycle——而不是新造一条停机路径。**零配置字段、
+零迁移、零线程、零新端口方法。**
+
+**处置权本来就该在心跳手里**：它是唯一那个"停摆期间还在等、循环恢复时第一个知道
+自己迟到了多久"的东西。daemon thread 能更早**检测**，但它无法在不持数据库句柄的
+前提下**阻止**那次续租，而让线程持句柄距离"线程自己替 Worker 续租"只差一次编辑。
+
+**一处实现缺陷是被测试找出来的，记在这里。**第一版把计时锚点取在协程的第一行，
+测试直接超时——因为 `time.sleep` 发生在心跳协程**第一次被调度之前**，它的首次读数
+落在停摆之后，于是正常睡、正常续租。换成真实场景就是：循环在 claim 之后、心跳
+首次运行之前冻住，这个自查完全看不见，**同一个洞没堵上**。锚点因此改成心跳任务
+**被创建**的时刻（`since=loop.time()` 在 `create_task` 处求值），第一个窗口——
+也就是紧接 `claim_next` 之后、冷模型加载与大文档解析真正落在的那一段——才算数。
+
+**刻意不做的两件事**，都写在 ADR-041 里：不 release 租约（让它自然到期，才能由
+健康 Worker 用新 epoch 接管；一个刚承认自己不可信的进程发出的 release 不该被接受），
+以及**不给 ingestion worker 装**——它循环上还有本批不挪走的合法阻塞源
+（`TextDocumentParser` 的同步 `extract_text`），装了会把一次正常的大文档摄取判成
+失去 lease。这是本批内部的顺序依赖，写进 ADR 而不是留在谁的脑子里。
+
+`abort_lag` 由装配处从 `heartbeat_seconds` 派生，**不是配置字段**：一个能被调到
+大于 `lease_seconds` 的旋钮等于让自查永不触发，而配置校验挡不住它（两个数在不同
+的 section，失败形态是"缺少一次拒绝"而不是"值不合法"）。
+
+**验证。**新增 `tests/workers/test_task_worker_heartbeat_lateness.py`，两条用例是
+一对：停摆那条用同步 `time.sleep` **真的冻住事件循环**（不是 patch 时钟——手动
+搬时钟的测试会对着测错东西的实现通过），对照那条同配置、同代码路径、只是不冻循环。
+两层修复逐层撤销实测：
+
+```text
+撤掉迟到判据            1 failed / 1 passed
+锚点改回协程第一行      1 failed / 1 passed
+```
+
+对照组两次都保持绿，这正是它存在的理由——证明红不是"总是红"。
+真 PostgreSQL 下 `tests/workers/` + `tests/persistence/test_task_worker*.py`
+25 passed / 0 skipped，ruff、pyright 全绿。
+
 ## 2026-08-11 缺口清单第二批：界面开始承认自己不知道什么，文档不再说假话
 
 第一批（`5363d7a`）清的是"配置说了假话、唤醒没有消费端、毒行挡死回放"。这一批是同一

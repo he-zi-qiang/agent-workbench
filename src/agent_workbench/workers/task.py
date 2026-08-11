@@ -148,6 +148,18 @@ class TaskWorker:
     worker_id: str = "worker_local"
     lease_seconds: int = 90
     heartbeat_seconds: int = 20
+    #: How far past its own interval a heartbeat may wake and still be believed
+    #: (ADR-041). Not a configuration field on purpose: a deployment that set it
+    #: above ``lease_seconds`` would disable the self-check silently, and no
+    #: config validator can catch that -- the two numbers live in different
+    #: sections and the failure is a missing refusal, not a bad value.
+    #:
+    #: ``None`` derives it from ``heartbeat_seconds``, which is the whole point:
+    #: the threshold is a property of the heartbeat rather than a knob, and the
+    #: previous attempt at this (``event_loop_lag.py``'s hardcoded 10.0) drifted
+    #: precisely because it was written down a second time. The production
+    #: assembly still passes it explicitly so the derivation is visible there.
+    abort_lag_seconds: int | None = None
     max_attempts: int = 5
     retry_base_seconds: int = 2
     retry_max_seconds: int = 60
@@ -312,7 +324,11 @@ class TaskWorker:
             name=f"task-graph:{task.task_id}",
         )
         heartbeat = asyncio.create_task(
-            self._heartbeat_loop(lease), name=f"task-heartbeat:{task.task_id}"
+            # ``since`` is read here, at scheduling time, and not on the
+            # coroutine's first line -- see ``_heartbeat_loop``. A stall that
+            # begins inside the graph before this task ever runs has to count.
+            self._heartbeat_loop(lease, since=asyncio.get_running_loop().time()),
+            name=f"task-heartbeat:{task.task_id}",
         )
         guard_lost = (
             asyncio.create_task(guard.lost.wait(), name=f"task-guard:{task.task_id}")
@@ -446,10 +462,80 @@ class TaskWorker:
                     ),
                 )
 
-    async def _heartbeat_loop(self, lease: ExecutionLease) -> None:
+    async def _heartbeat_loop(self, lease: ExecutionLease, *, since: float) -> None:
+        """Renew the lease, but only while this process is actually running.
+
+        ADR-041. The renewal is fenced on ``lease_until > now()``, and nothing
+        in that predicate asks how long this coroutine was gone. So a process
+        whose event loop froze for a minute wakes up, finds its lease still
+        valid -- because the freeze was shorter than ``lease_seconds`` -- and
+        pushes the expiry out another full period. It holds the claim by
+        asserting a liveness it did not have, and no other Worker can reclaim
+        the Task because ``reclaim_expired`` looks for an expiry that keeps
+        moving away from it.
+
+        The check belongs here rather than in a watchdog for a reason that is
+        about capability, not taste: this coroutine is the only thing that was
+        *waiting* through the stall and is therefore the first to know how long
+        it lasted. A thread can detect a frozen loop sooner, but it cannot stop
+        this renewal without holding a database handle of its own -- and a
+        thread holding a database handle is one edit away from renewing the
+        lease itself, which is the thing WP08-12 forbids.
+
+        Refusing is expressed as ``StaleExecutionError`` because that is what it
+        is: this Worker can no longer prove it owns the claim. It lands in the
+        handler ``_execute`` already has for a lost fence, so the run is
+        cancelled and nothing further is written -- no checkpoint, no
+        heartbeat, no lifecycle transition. The lease is deliberately *not*
+        released: letting it expire on its own is what lets a healthy Worker
+        reclaim the Task under a new epoch, and a release from a process that
+        just admitted it cannot be trusted about time is a write nobody should
+        accept.
+        """
+
+        loop = asyncio.get_running_loop()
+        # Derived once, outside the loop: it cannot change while a lease is held,
+        # and reading it per iteration would suggest it could.
+        abort_lag = (
+            self.heartbeat_seconds
+            if self.abort_lag_seconds is None
+            else self.abort_lag_seconds
+        )
+        tolerated_seconds = self.heartbeat_seconds + abort_lag
+        # The anchor is when this coroutine was *scheduled*, not when it first
+        # got to run, and the difference is a real hole rather than a detail.
+        # ``_execute`` creates this task and the graph task together; the loop
+        # can freeze inside the graph before this one has executed a single
+        # line. Anchoring on the first line to run would start the measurement
+        # after the stall it exists to catch, and the first window -- the one
+        # right after ``claim_next`` set ``lease_until`` -- is exactly where a
+        # cold model load or a large parse lands.
+        last_alive = since
         while True:
             await asyncio.sleep(self.heartbeat_seconds)
+            # ``loop.time()`` is monotonic, so a clock adjustment during the
+            # sleep can neither manufacture a stall nor hide one.
+            gone_for = loop.time() - last_alive
+            if gone_for > tolerated_seconds:
+                # The numbers go to the log rather than into the exception:
+                # ``StaleExecutionError`` carries the lease and is caught by
+                # type, and an operator asking "why did this Task get handed to
+                # someone else" needs the measurement, not a longer ``str()``.
+                logger.warning(
+                    "task %s heartbeat was gone %.1fs across a %ss sleep, past the "
+                    "%ss this worker may be absent and still claim its lease; "
+                    "refusing to renew -- something blocked the event loop",
+                    lease.task_id,
+                    gone_for,
+                    self.heartbeat_seconds,
+                    tolerated_seconds,
+                )
+                raise StaleExecutionError(lease)
             await self.registry.heartbeat(lease, lease_seconds=self.lease_seconds)
+            # Re-anchor after the renewal rather than before it. The Registry
+            # round trip is an await like any other, and time spent waiting on
+            # a database is not this process failing to run.
+            last_alive = loop.time()
 
     async def _settle(
         self, task: TaskRun, lease: ExecutionLease, decision: Reconciliation

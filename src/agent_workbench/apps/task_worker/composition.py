@@ -351,6 +351,12 @@ async def build_task_worker_dependencies(
             worker_id=config.worker_id,
             lease_seconds=config.task.lease_seconds,
             heartbeat_seconds=config.task.heartbeat_seconds,
+            # ADR-041. Derived here rather than configured: how late a heartbeat
+            # may be before this Worker stops claiming to be alive is a property
+            # of the heartbeat interval, not something a deployment should be
+            # able to tune past ``lease_seconds`` -- which would turn the
+            # self-check off without any validator noticing.
+            abort_lag_seconds=config.task.heartbeat_seconds,
             max_attempts=config.task.max_attempts,
             retry_base_seconds=config.task.retry_base_seconds,
             retry_max_seconds=config.task.retry_max_seconds,
