@@ -787,7 +787,14 @@ class EvaluationJudgeSettings(StrictModel):
 
 
 class EvaluationSettings(StrictModel):
-    ragas_enabled: bool = True
+    # A single-valued Literal rather than a `bool` that happens to default to
+    # False. There is no RAGAS runner, no RAGAS dependency and no judge
+    # calibration in this repository, so every value of this flag means the
+    # same thing at runtime -- and a plain bool lets an overlay set it back to
+    # true and produce a configuration that claims an evaluation nobody can
+    # run. Widening this type is the first line of the change that adds the
+    # runner, not a knob to turn beforehand.
+    ragas_enabled: Literal[False] = False
     ragas_offline_only: Literal[True] = True
     online_judge_in_ci: Literal[False] = False
     benchmark_isolated_process: Literal[True] = True

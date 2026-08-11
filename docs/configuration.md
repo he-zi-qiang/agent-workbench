@@ -13,7 +13,7 @@
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 为 `1.10`；两者是不同版本轴，架构基线不随
+当前架构基线为 `1.3`，配置 schema 为 `1.13`；两者是不同版本轴，架构基线不随
 配置 schema 走。schema 每一次抬升都对应一条 ADR：
 
 | schema | 原因 | 依据 |
@@ -27,6 +27,9 @@
 | `1.7` → `1.8` | MCP server 新增显式工具 allowlist，使 API 提交与 Worker 启动发现能确定性取交集 | [ADR-025](./adr/0025-mcp-adapter.md) |
 | `1.8` → `1.9` | 新增 `[sandbox]`；开启它会把 `sandbox_run` 写进 Task 授权信封，并把信封风险上限抬到 `external` | [ADR-029](./adr/0029-ephemeral-sandbox.md) |
 | `1.9` → `1.10` | 新增 `[[mcp.servers]].audience`；它决定一个 server 的工具进哪个 Agent，因此这一版的配置文件能改变运行中的图里谁能调什么 | [ADR-027](./adr/0027-read-outward-write-inward.md) |
+| `1.10` → `1.11` | `max_steps` 上限放宽；1.11 的配置文件可以写 `max_steps = 500`，1.10 的二进制会在校验时拒绝它 | [ADR-030](./adr/0030-working-nodes-are-governed-by-cost.md) |
+| `1.11` → `1.12` | 新增顶层 `[triage]`（默认关闭）；它决定一次提交走哪种形态 | [ADR-036](./adr/0036-triage-decides-the-shape.md) |
+| `1.12` → `1.13` | 新增 `rag.graph`（默认关闭，两个冻结 Literal）；开启后图谱臂参与候选提名 | [ADR-037](./adr/0037-the-graph-nominates-chunks.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。

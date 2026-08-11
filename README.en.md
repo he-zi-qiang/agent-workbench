@@ -11,6 +11,13 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
+**As of 2026-08-11 the baseline is `main@bf31815` (PR #112), configuration schema
+`1.13`.** What is *not* built is not described here: it is recorded gap by gap in
+[Known gaps](docs/known-gaps.md), each classified as refused, unwired, absent or
+misstated, with a repository location and a criterion for what "done" means. The
+paragraphs below are the incremental narrative up to PR #87 and keep their
+original date.
+
 As of 2026-08-09, the current tree carries the Task/HITL/side-effect-ledger baseline, the
 three fencing fixes from PR #68, the React Chat/Work console (PR #69), the
 LlamaIndex retrieval adapter and routed-threshold evaluation (PR #72, #73), and

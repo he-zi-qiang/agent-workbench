@@ -397,7 +397,14 @@ metrics_enabled = true
 langfuse_enabled = false
 
 [evaluation]
-ragas_enabled = true
+# false, and the type behind it admits no other value. This flag read `true`
+# from the day it was written while the repository contained no RAGAS
+# dependency, no runner, no judge calibration set and no report -- so it
+# described an intention, and every reader of the configuration was entitled
+# to read it as a capability. The runner is still Planned (docs/known-gaps.md
+# A-04); when it lands, widening `EvaluationSettings.ragas_enabled` back to a
+# real bool is part of that change.
+ragas_enabled = false
 ragas_offline_only = true
 online_judge_in_ci = false
 benchmark_isolated_process = true
