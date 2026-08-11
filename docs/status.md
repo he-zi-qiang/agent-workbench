@@ -1,5 +1,136 @@
 # 实施状态
 
+## 2026-08-11 Word 任务第一次端到端跑通，代价是修掉四个各自独立的缺陷
+
+起点是两个使用者报告的问题：Chat 搜不到东西，Word 文件只能下载不能看。查下去，
+两条线各自牵出了在它们后面的缺陷——其中两个会**静默地**让正确的行为失败。
+
+最后 `task_3ae4d5a0…` 走完了 `understand → work → review → export → succeeded`，
+控制台里点开附件栏的 `.docx`，正文与表格直接渲染出来。这是这条链路第一次通。
+
+### 一、搜索没坏，是它说了假话
+
+DeepSeek 的 `web_search` 一次返回 **19 个真实源**，`_fetch` 把 19 个全部读成空，
+最后返回 `()`，工具对模型说 "No results"，模型于是告诉使用者"搜索没有返回结果"。
+
+真实原因是这台机器的 fake-IP 代理把所有域名解析进 `198.18.0.0/15`，
+`address_guard` 按设计（ADR-027 §3.2）拒绝一切非公网可路由地址。**代码没有一处
+出错**，但"搜索一无所获"和"找到了源却一个都读不回来"被折叠成同一个空返回值，
+于是一个网络配置问题伪装成了"你的问题没人写过"。
+
+修法是让这两件事可区分：`ports/research.py` 新增 `SourcesUnreadableError`
+（放在 port 而不是 adapter，因为这是每个调用方都要做、又都做不了的区分），
+按 `refused` / `unreachable` / `http_error` / `no_text` 分类计数。Chat 与 Task
+两条路径都改了措辞。修复前后模型的原话：
+
+| | 模型说的话 |
+|---|---|
+| 修复前 | 搜索没有返回结果，因此我无法提供… |
+| 修复后 | 我尝试搜索，但**搜索结果页面无法正常获取内容** |
+
+失败详情里直接写着 `refused=5`，一眼能看出是地址闸门拒的。**根因仍在使用者那边**
+（代理要切规则模式），这里修的是可诊断性。
+
+### 二、reviewer 的结构化输出：一个正确的判断被三件事联手废掉
+
+`review` 节点反复以 `critic output has an invalid shape` 失败。那条输出**本身完全
+正确**——决定对、字段齐、issues 非空——挂在一条 **376 字符**的 issue 上，而
+`issues` 的元素类型是 `ShortText`，上限 **256**。
+
+`ShortText` 是这个领域给**标识符**用的（`model_id`、`reason_code`、`profile_name`），
+`issues` 是唯一拿它装自由散文的地方，而那散文要交给下一个 agent 当工作指令。256
+不是"一条 issue 该多长"的判断，是顺手复用。
+
+放大它的两件事都在提示词里：
+
+1. **prompt 说了假话**：它写着 "the next attempt sees your issues and nothing else
+   about this review"。投影代码同时传 `summary`（4096）和 issues。模型信了，把完整
+   解释塞进那个只有 256 字符的字段。
+2. **示例模板演示了一个非法形状**：`{"decision":"pass|revise", …, "issues":[]}`，
+   而校验器规定 `revise` 时 issues 必须非空——照抄模板填 revise 必然失败。
+
+而这类失败**不可重试**：ADR-034 只让 framing 错误走纠正轮。那条边界没有动——它的
+分界线"是不是一个 JSON 对象"是形式的、可判定的，改成按值的错法分类就软了；何况
+前三条修对之后模型不会再超限。
+
+新增 `ReviewIssue`（512，覆盖实测最长 376 有余量，仍是 `ReviewSummary` 的 1/8），
+删掉假话，模板改合法。实测：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| issue 长度（最短/中位/最长） | 65 / 181 / 376 | 66 / 104 / 104 |
+| 超 256 的比例 | 1/10 → 硬失败 | 0 |
+| summary 使用 | 几乎不用 | 190–280 字符 |
+
+中位数降 43%，且**是写作分配变了**——模型开始把解释放进 summary。不是"上限放宽了
+所以不撞"。
+
+### 三、一个中文文件名会永久毒化工作区
+
+修完 reviewer 再跑，它还在打回，说"所有工作区工具均返回验证错误"。
+`workspace_write name='季度总结.docx'` **成功了**，此后**每一个**工作区操作都失败，
+错误永远指向那个名字——包括写一个完全合法的 `quarterly_summary.md`。
+
+根因是 `WorkspaceManifest.with_entry` 结尾的 `model_copy`，它**不跑校验器**。而
+`workspace.write` 的 docstring 声称"the manifest constructor is what enforces the
+name"——那句话是错的。非法名字进了持久化 manifest，之后每次 `load` 都炸，而 `write`
+第一步就是 load，所以工作区**不可恢复**，错误还指向一个早已返回的调用。
+
+改成 `model_validate`，并给工具 schema 补上 pattern 和一句人话（"写
+`quarterly-summary.docx`，不要写 `季度总结.docx`"）。模型下一次就用了 ASCII 名字。
+
+**这是"写入端放行、读取端才炸"的典型**：既有测试测的是 `WorkspaceManifest(...)`
+构造函数，而生产代码走的是 `with_entry`，缺陷正是从这条缝里漏出去的。
+
+### 四、我自己引入的：路由能返回的目标，边表里没有
+
+让导出审批可配置（ADR-038）之后，第一个真实 Task 死在 `KeyError: 'export'`。
+`route_review` 能返回 `"export"` 了，而 `add_conditional_edges` 的目标表只列了
+`work` 和 `approval`。**所有路由单测照过**——它们直接调路由函数，而 LangGraph 是
+拿返回值去查那张表的。
+
+和第三条同源：测了一条路径，生产走另一条。所以新测试**编译并真的跑一遍图**，那是
+唯一能暴露它的地方。接着又暴露两处同源遗漏：`TaskState` 的 `export_ref` 不变量、
+export 节点自己的前置检查，两处都改成按 Task 冻结的 `export_requires_approval`
+判断（见 ADR-038 §2.4）。
+
+### 顺带：docx 可以看了，附件栏可以点开了
+
+- 服务端提取 `.docx` 文本（`GET /v1/artifacts/{id}/preview`，仅 docx，415 拒其它）。
+  放服务端是因为 docx 是 zip+XML，放浏览器意味着给每次页面加载塞一个 zip 库和 XML
+  解析器，去重新推导 API 用同一个库（`python-docx`，Word MCP 的渲染依赖）已能产出的
+  文本。走 body 的 XML 子元素而不是 `document.paragraphs` + `document.tables`，
+  否则段落与表格的相对顺序会全错。
+- Task 产出的 `.docx` 的 kind 是 `tool_result` 而非 `report`（`report` 是 export
+  节点导出的 markdown 草稿），所以它只在右侧附件栏。附件栏现在按类型分流：能显示的
+  在阅读列打开，其余下载。
+- Chat 的工具列表一直在 `RunStarted.tool_names` 里，但 `RunStarted` 与 `RunCompleted`
+  共用 activity key，**完成事件把开始事件整个覆盖**，`tool_names` 随之消失——恰好在
+  使用者会去看的时候（turn 结束后）列表是空的。`ToolFailed` 同理（它的 payload 里
+  没有 `tool_name`）。把 `carryPrompt` 泛化成 `carryForward` 并在补齐后重算标签。
+
+### 口径
+
+- `workflow.export_requires_approval` **默认 `true`**，只有 `config.local.toml` 与
+  `config.word-local.toml` 关着。改默认值要动 ADR-038 §2.1，不是改一行配置。
+- 能力表可以声称 **.docx 内联预览**（服务端提取，有测试与实测）。**不得**声称把
+  docx 渲染成排版——它是文字预览，界面上也这么写。
+- `config.word-local.toml` 补了两处预算（token 16000 → 120000、`max_steps` 12 → 40），
+  都有实测依据写在配置注释里。**这不是调参**：v2 的 `work` 节点一次调用要读工具、
+  写文档、渲染，默认值是给"读输入然后回答"的节点定的。
+- 搜索能不能真的搜到，仍取决于使用者的网络（fake-IP 代理下永远读不到页面）。这轮
+  修的是**说实话**，不是修好搜索。
+
+### 证据
+
+后端 **2629 项** passed（真 PostgreSQL 5433 + 真 Qdrant 6333，11 项因缺 embedding
+extra 跳过），前端 **114 项** passed；ruff / pyright strict / tsc / eslint 全绿。
+CI 四项全过，含对着真服务那条。
+
+每处修复都做了破坏验证。其中一次值得记：docx 的顺序测试第一次破坏**没有变红**，
+因为断言用 `index("指标")` 命中了表格单元格里的段落副本——改成按渲染出的表格行
+定位才真正有牙。**破坏验证没红，先怀疑测试而不是庆幸。**
+
 ## 2026-08-10 图谱轨收束：建成了，四轮消融说不要开
 
 ADR-037 的决定被完整实现——三张表、抽取第二遍、种子扩展臂、消融装置，都有测试和

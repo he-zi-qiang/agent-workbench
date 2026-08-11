@@ -134,15 +134,17 @@ profile"，没有断言"图里那个节点会用这个 profile 跑起来"——*
 
 | 环境 | 结果 |
 |---|---|
-| 本机，无外部服务（`--ignore=tests/e2e`） | `1784 passed / 597 skipped` |
+| 本机，无外部服务 | `1996 passed / 644 skipped` |
+| 本机，真实 PostgreSQL + Qdrant | `2629 passed / 11 skipped` |
 | CI，真实 PostgreSQL 16 + Qdrant，**每个 PR 都跑** | 920 项，2 项环境跳过 |
 | 本机，真实服务 + DeepSeek | 上面第 1 节那条完整 Task |
 
-静态门禁：Ruff format/lint 通过（421 files）、Pyright `0 errors / 0 warnings`、架构与配置守卫
-`114 passed`、锁文件与依赖许可证门禁通过。
+静态门禁：Ruff format/lint 通过（441 files）、Pyright strict `0 errors / 0 warnings`、
+前端 Vitest `114 passed` 与严格 TypeScript/ESLint 通过、锁文件与依赖许可证门禁通过。
 
-规模：Python 源码 46409 行、测试 55980 行、前端 TypeScript 11332 行；21 份数据库迁移；
-32 份 ADR（基线内 11 份 + 实施过程中 21 份）。测试行数多于源码行数是有意的——本项目的规矩是
+规模（2026-08-11，只数 git 跟踪的文件）：Python 源码 51831 行、测试 62171 行、
+前端 TypeScript 12657 行；23 份数据库迁移；38 份 ADR（基线内 11 份 + 实施过程中
+27 份，编号 0012–0038 连续）。测试行数多于源码行数是有意的——本项目的规矩是
 **测试先证明是红的再变绿，且没有对照组的测试不算数**：只断言"这个被拒绝"的测试，分不出一个正常
 工作的校验器和一个把什么都拒绝的校验器。
 
@@ -165,8 +167,11 @@ profile"，没有断言"图里那个节点会用这个 profile 跑起来"——*
   检索路径区分开的等价性度量，而那次评测**测不出来**。"测不出来"不是切流量的理由；
 - ingestion 未迁移到 LlamaIndex、RAGAS runner 未落地，因此能力表里这两项**整体保持 Planned**：
   适配器存在不等于框架集成已完成；
-- WP15 阶段五的第二张图 `v2_general` 已可提交、可运行、可恢复，但**尚无真实模型的
-  端到端验收**——它今天的证据是确定性测试与文本 executor 的契约测试；
+- WP15 阶段五的第二张图 `v2_general` 已有真实模型的端到端验收（2026-08-11，
+  `task_3ae4d5a0…`：`understand → work → review → export → succeeded`，产出可下载
+  可预览的 `.docx`）。**跑通它的代价是修掉四个各自独立的缺陷**——其中两个会静默地
+  让正确的行为失败（`with_entry` 的 `model_copy` 绕过校验、路由能返回的目标不在边
+  表里），过程与证据见 status.md 2026-08-11；
 - Langfuse、CrewAI 对比、动态 Multi-Agent supervisor、生产部署未完成；
 - 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 的证明。
 

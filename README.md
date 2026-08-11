@@ -179,6 +179,14 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
 - React 控制台已实现 Chat / Work 两条主流程，以及 Knowledge / Approvals /
   Evaluation / System 辅助页；其前端协议、安全发布语义和响应式设计见
   [前端设计基线](docs/frontend-design.md)。
+- Task 产出的 **`.docx` 可以在控制台里直接读**：服务端用 `python-docx`（Word MCP
+  的渲染依赖）把正文与表格提取成 Markdown（`GET /v1/artifacts/{id}/preview`，
+  仅 docx，其它类型 415），阅读列内联渲染，旁边是下载键。**它是文字预览而不是排版
+  渲染**——不含样式、图片与页眉页脚，界面上也这么写，并报告文档里有几张表格被略过。
+- Chat 的每一轮会列出**这一轮被授权的工具**，调用过的高亮；工具调用一行显示
+  "工具名 + 这次调的是什么"（如 `web_search · 北京今天天气`），失败显示错误消息
+  而不是错误码——`provider_unavailable` 同时是"没配 provider"和"找到 5 页一页也读
+  不了"，只显示码会把网络故障读成缺功能。
 - 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 证明。
 - 前端增量当时的门禁为：Ruff format/lint 通过、Pyright `0 errors`、无外部服务
   `1264 passed / 568 skipped`；前端 ESLint/严格 TypeScript/production build 通过，
@@ -188,18 +196,22 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
 - 沙箱不联网、不支持跨调用状态、不做 GPU，也不保证逐字节确定性重放（脚本自己可以用
   `time.time()`/`random`）。只读取用不做填表、点击、任何 POST，也不驱动桌面软件界面；
   JS 渲染的页面与截图需要浏览器内核，按 ADR-027 §3.5 明确不做——**SPA 页面取不到正文是
-  已知边界不是 bug**。WP15 的**阶段四**（成本与时限成为主约束、`workspace_edit`、
-  `workspace_grep`）与**阶段五**（第二张图 `v2_general`）尚未开始；计划文档说明阶段四不是
-  可选项：工具装齐而预算不变，一个真在迭代的节点会在 12 步上撞墙，症状很容易被误读成模型
-  不行。
-- 一条实测出来的成本边界：会读网页的节点装不进默认 token 上限。一页正文 20–50 KB，两次读
-  约 28000 tokens，而 `multi_agent.max_tokens_per_agent_invocation` 默认 16000 会让 run 停在
-  半句 JSON 上——工具全部成功、节点仍然失败。默认值不动，只有 `config/config.web-local.toml`
-  提到 120000。
-- 当前门禁（`main@a4dea2b` 实测）：无外部服务 `--ignore=tests/e2e` 为
-  `1784 passed / 597 skipped`，`tests/e2e` 为 `3 passed / 11 skipped`，架构与配置
-  `114 passed`；Ruff format/lint 通过（421 files），Pyright `0 errors / 0 warnings`。
-  这一组在本机没有外部服务时跑，597/11 项环境跳过只能报告为跳过。
+  已知边界不是 bug**。WP15 的阶段四（`workspace_edit`、`workspace_grep`，
+  [ADR-030](docs/adr/0030-working-nodes-are-governed-by-cost.md)）与阶段五
+  （第二张图 `v2_general`，[ADR-031](docs/adr/0031-a-second-graph.md)）都已落地。
+- 一条实测出来的成本边界，而且撞过两次：**会干活的节点装不进为"读输入然后回答"定的
+  默认上限**。读网页的节点一页正文 20–50 KB、两次读约 28000 tokens；v2 的 `work`
+  节点更甚——它一次调用要读工具、写工作区、再渲染文档。默认
+  `multi_agent.max_tokens_per_agent_invocation=16000` 让 run 停在半句 JSON 上，
+  默认 `runtime.max_steps=12` 让它停在渲染之前，两种都是**工具全部成功、节点仍然
+  失败**。默认值不动，只有 `config.web-local.toml`（120000）与
+  `config.word-local.toml`（120000 + `max_steps=40`）抬高，注释里带实测依据。
+- 当前门禁（`main@0ee1700` 实测，2026-08-11）：对着真实 PostgreSQL 5433 + Qdrant 6333
+  为 **`2629 passed / 11 skipped`**（11 项需要 `embedding` extra 与本地 BGE 权重）；
+  同一工作树在本机无外部服务时是 `1996 passed / 644 skipped`。前端 Vitest
+  **`114 passed`**，tsc 严格模式与 ESLint 均通过。Ruff format/lint 通过（441 files），
+  Pyright strict `0 errors / 0 warnings`。两组数字来自不同环境，只能分别引用，
+  不能相加。
 - **每个 PR 都有一组真实服务证据**：CI 的 `Migrations, PostgreSQL and Qdrant-backed stores`
   job 先 `alembic upgrade head`，再对着真实 PostgreSQL 16 与 Qdrant 跑
   `tests/contracts tests/persistence tests/api tests/vector`，共 920 项、2 项环境跳过
