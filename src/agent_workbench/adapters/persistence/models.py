@@ -474,6 +474,10 @@ kg_mentions = Table(
     # Nomination reads by entity; forgetting a document reads by document.
     Index("ix_kg_mentions_entity_id", "entity_id"),
     Index("ix_kg_mentions_document", "tenant_id", "document_id"),
+    # Seed expansion reads this way round: given the chunks the other arms
+    # already found, which entities did they name (ADR-037 §2.7). Without it
+    # the hot path scans, and the arm's whole budget is two index lookups.
+    Index("ix_kg_mentions_chunk", "tenant_id", "knowledge_base_id", "chunk_id"),
 )
 
 kg_relations = Table(

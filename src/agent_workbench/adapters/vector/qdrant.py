@@ -49,6 +49,37 @@ def point_id(chunk_id: str) -> str:
     return str(uuid.uuid5(POINT_NAMESPACE, chunk_id))
 
 
+def _narrowing_conditions(
+    *,
+    tenant_id: str,
+    knowledge_base_id: str,
+    authorized_principals: tuple[str, ...],
+) -> list[models.Condition]:
+    """The conditions every read on this index must carry.
+
+    A list rather than a ``Filter`` because ``fetch`` adds one more condition
+    beside them, and reading them back off a built filter loses what they are.
+    One definition either way: two copies are two chances for one read to
+    narrow differently from another, and a difference there is a difference in
+    who can be retrieved.
+    """
+
+    return [
+        models.FieldCondition(
+            key="tenant_id",
+            match=models.MatchValue(value=tenant_id),
+        ),
+        models.FieldCondition(
+            key="knowledge_base_id",
+            match=models.MatchValue(value=knowledge_base_id),
+        ),
+        models.FieldCondition(
+            key="authorized_principals",
+            match=models.MatchAny(any=list(authorized_principals)),
+        ),
+    ]
+
+
 class QdrantVectorIndex:
     """``VectorIndexPort`` over one Qdrant collection."""
 
@@ -247,6 +278,47 @@ class QdrantVectorIndex:
         )
         return _ranked(response.points)
 
+    async def fetch(
+        self,
+        *,
+        chunk_ids: tuple[str, ...],
+        tenant_id: str,
+        knowledge_base_id: str,
+        authorized_principals: tuple[str, ...],
+    ) -> tuple[ScoredChunk, ...]:
+        if not chunk_ids or not authorized_principals:
+            return ()
+
+        # `retrieve` takes point ids, and a point id is derived from the chunk
+        # id -- so this needs no lookup table and stays correct across a
+        # re-index. The narrowing is still applied: `retrieve` has no filter
+        # parameter, so it is a scroll rather than a fetch, which is what keeps
+        # a nominated id from reaching a point this principal's stored ACL does
+        # not cover.
+        response, _ = await self._client.scroll(
+            collection_name=self._collection,
+            scroll_filter=models.Filter(
+                must=[
+                    *_narrowing_conditions(
+                        tenant_id=tenant_id,
+                        knowledge_base_id=knowledge_base_id,
+                        authorized_principals=authorized_principals,
+                    ),
+                    models.HasIdCondition(
+                        has_id=[point_id(chunk_id) for chunk_id in chunk_ids]
+                    ),
+                ]
+            ),
+            limit=len(chunk_ids),
+            with_payload=True,
+        )
+        # `scroll` yields Records, not ScoredPoints: there was no query, so
+        # there is no score. Mapped by its own function rather than through
+        # `_scored`, which reads one -- the first version reused it and the
+        # AttributeError was swallowed by a caller's degradation path, so the
+        # arm silently contributed nothing.
+        return ranked(_stored(record) for record in response)
+
     async def search_sparse(
         self,
         *,
@@ -326,20 +398,11 @@ class QdrantVectorIndex:
         """
 
         return models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="tenant_id",
-                    match=models.MatchValue(value=tenant_id),
-                ),
-                models.FieldCondition(
-                    key="knowledge_base_id",
-                    match=models.MatchValue(value=knowledge_base_id),
-                ),
-                models.FieldCondition(
-                    key="authorized_principals",
-                    match=models.MatchAny(any=list(authorized_principals)),
-                ),
-            ]
+            must=_narrowing_conditions(
+                tenant_id=tenant_id,
+                knowledge_base_id=knowledge_base_id,
+                authorized_principals=authorized_principals,
+            )
         )
 
     async def delete_document(self, *, tenant_id: str, document_id: str) -> None:
@@ -452,6 +515,29 @@ def _scored(point: Any) -> ScoredChunk:
         # point reads as "no page" instead of as page one.
         page=_optional_number(point.payload, "page"),
         score=point.score,
+    )
+
+
+def _stored(record: Any) -> ScoredChunk:
+    """One scrolled record, which was never scored against anything.
+
+    ``score`` is zero because there was no query -- not because the chunk
+    matched badly. Callers of ``fetch`` replace it with whatever ordering they
+    are building, and the port says so; a number invented here would be one
+    somebody could mistake for a similarity.
+    """
+
+    return ScoredChunk(
+        chunk_id=_text(record.payload, "chunk_id"),
+        document_id=_text(record.payload, "document_id"),
+        document_version=_text(record.payload, "document_version"),
+        tenant_id=_text(record.payload, "tenant_id"),
+        knowledge_base_id=_text(record.payload, "knowledge_base_id"),
+        source_revision=_number(record.payload, "source_revision"),
+        text=_text(record.payload, "text"),
+        ordinal=_number(record.payload, "ordinal"),
+        page=_optional_number(record.payload, "page"),
+        score=0.0,
     )
 
 

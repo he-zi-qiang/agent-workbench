@@ -94,6 +94,33 @@ class KnowledgeGraphStore(Protocol):
         """
         ...
 
+    async def expand_from_seeds(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        graph_identity: str,
+        seed_chunk_ids: tuple[str, ...],
+        limit: int,
+    ) -> tuple[ChunkNomination, ...]:
+        """The chunks the seeds' entities also appear in, minus the seeds.
+
+        This is the arm ADR-037 §2.7 replaced §2.1 with, and the direction is
+        the whole finding: on the measured failures the bridge entity is named
+        in the document the other arms already found (7/7) and never in the
+        query (0/7), so an arm that started from the query could not reach it.
+
+        Seeds are excluded from the result. They are already in the other arms'
+        output, and returning them would hand a chunk a second rank in a
+        fusion that counts ranks -- inflating exactly the documents that needed
+        no help.
+
+        ``score`` on a nomination is how many distinct seed entities reached
+        it. Not a similarity: nothing here embeds anything. It orders the arm,
+        which is all RRF reads.
+        """
+        ...
+
     async def nominations_for_entities(
         self,
         *,
