@@ -1,5 +1,298 @@
 # 实施状态
 
+## 2026-08-11 缺口清单第二批：界面开始承认自己不知道什么，文档不再说假话
+
+第一批（`5363d7a`）清的是"配置说了假话、唤醒没有消费端、毒行挡死回放"。这一批是同一
+条线往前走一段：**服务端早就知道的事，界面上没人说。** 五处，加上最后一遍把文档里已经
+过期的数字改准。下面第一节那条（无 `embedding` extra 的 Worker）单独记在紧接着的一条
+里，不在这里重复。
+
+### 一、知识库：写权限提前说，失败别装成正在索引
+
+两件事，都是"服务端知道、使用者不知道"。
+
+**写权限。** `KnowledgeBaseSummary` 加 `can_write`，在 `_summary_query` 里用
+`owner_id == principal_id` 算出来，与 `KnowledgeBaseService.require_writable` 的
+owner-only 规则同源。前端据此**整块不渲染**上传入口，而不是渲染成禁用按钮——这个知识库
+是别人分享进来的，要消掉的体验正是"传完整份文件再吃 404"。**服务端的 `require_writable`
+一行没动**，隐藏只是提前告知；测试把两者钉成一对：同一条用例既断言只读主体拿到
+`can_write=false`，也断言它上传仍吃 404，撤掉任意一半都能让它变红。
+
+**失败状态。** 失败原因此前**根本没有持久化过**，而 `KnowledgeDocumentStatus` 只有
+`processing`/`ready` 两档、由 `last_applied_revision == source_revision` 推出，于是
+**任何摄取失败都表现为永久"正在建立索引"**。现在 `documents` 表加 `failed_revision` +
+`failure_code` 两列（迁移 `0024_document_ingestion_failure`），配
+`(failed_revision IS NULL) = (failure_code IS NULL)` 的 check 约束——半个失败不可表示。
+
+三个设计决定值得写下来：
+
+- **按 revision 划范围而不是布尔标记。**重新上传不会一出生就是失败态；成功路径用同一条
+  UPDATE 把标记清掉。
+- **存 `ErrorCode` 而不是解析器的异常文本。**那段文本会把文档自己的字节回显给每一个能读
+  这个知识库的人。
+- **状态是投影推导的**（先 ready、再 failed、否则 processing），`failed_document_count`
+  从 `processing_document_count` 里减出去——否则"3 个处理中"会在上一层继续撒同一个谎。
+  `_document_refused` 用 `IS NOT DISTINCT FROM` 而非 `=`：processing 分支要对它取反，
+  而三值逻辑下 `NOT (x = NULL)` 是 NULL，会把所有健康文档漏掉。
+
+迁移**不回填**：失败是某次摄取做出的观测，凭空回填等于给没人拒绝过的文档扣帽子。
+`downgrade -1` → `upgrade head` 双向实测都过，列数 2 → 0 → 2。
+
+**两处代价，写在明处。**（1）瞬时故障（比如 Qdrant 短暂不可达）同样会被记成 `failed`，
+等下次重试成功再清掉——这是 worker 模块 docstring 里已经写明的权衡，但意味着一次外部
+依赖抖动会让界面短暂显示"索引失败"。（2）`_record_refusal` 自己开新事务；若此时 PG 不
+可达，它抛出的异常会顶掉原始异常（原始的还在 `__context__` 里）。重试行为不受影响
+（事件照样不 ack），只影响日志里看到哪个错。
+
+### 二、Work 页承认自己拿到的是残缺时间线
+
+后端从毒行隔离落地起就在发 `skipped_sequences`（`routes/tasks.py`），**前端一直没接**。
+现在从类型一路接到界面，**只加披露，不动游标**。
+
+`TaskTimelineResponse.skipped_sequences` 定成**必填**是故意的：服务端永远发它，而必填
+让所有过期 fixture 在 `tsc -b` 当场炸出来——第一次跑 typecheck 就是靠这个把 4 个测试
+文件里的构造点一次找齐的。类型注释点明"空数组是『这一页完整』的**正面声明**，不是
+『服务端没查过』"。
+
+**没有退化成一句"有些事件丢了"。**位点和已交付事件的 `sequence` 同处一个命名空间，所以
+纯函数 `locateTimelineGaps` 把每个缺口**锚定在它确实收到的前后两条事件之间**，渲染成
+"#2：在「工具调用已开始：external_search」与「任务成功完成」之间"。运维拿位点能去翻那
+一行，读者能看出是这段运行的哪一截不完整。措辞是"这些事件仍在日志里，只是这次没能解码、
+没有交给这个页面"，不是"丢了"——**行还在，坏的是解码**。告警落在步骤流**下方**：它是关于
+上面那些步骤的陈述，读者得先看见步骤。
+
+跨页语义：`mergeSkippedSequences` 做并集去重升序。并集而不是覆盖，因为每个 response 只
+为自己那一页说话；去重是因为重叠重读会把同一位点再报一遍——**这正是后端给位点不给计数
+的理由**（重发的计数分不清是旧伤还是新伤）。另外 `locateTimelineGaps` 会**丢掉已被后来
+某次读取真正交付的位点**：重读解码成功后客户端手里已经有那条事件了，继续声称有洞是同一
+个谎反着说。
+
+**没动的东西**：cursor 照常推进（后端明写毒行也要推过去，不推就永远撞同一行）。
+
+**Chat 那一半仍然沉默**，这里如实记下来：`sessionStream.ts` 的 `acceptQuarantine` 同样
+只推游标、不给用户看。逻辑上 Work 显示了 Chat 也该显示，但那是第二块 UI 设计，没塞进来。
+
+### 三、Markdown 上传的 MIME 兜底（只改前端）
+
+真实失败路径是：浏览器对 `.md` 常常给空 `type` 或 `application/octet-stream`，上传三步
+**全部返回成功**（`routes/uploads.py` 与 `application/uploads.py` 全程不看 media_type），
+然后在**异步摄取 worker** 里被解析器拒绝，`last_applied_revision` 永不推进，文档永远停在
+"正在建立索引"。**不要写成"上传被拒"，也不要去 uploads 路由找 422。**
+
+改法是前端新增纯函数 `declaredMediaType(file)`：`file.type` 按 `;` 截断、trim、小写后
+落在允许集里就**原样用**（浏览器给了服务端读得懂的类型就不覆盖，那是更具体的观察，
+改掉是丢信息）；否则按 `.md/.markdown/.pdf` 查表；再否则才 `application/octet-stream`。
+
+**为什么不改后端。**把 `application/octet-stream` 塞进 `TEXT_MEDIA_TYPES` 等于取消允许集，
+凑巧能 UTF-8 解码的二进制会被当正文索引——那正是 `parser.py` 那段"without guessing"注释
+唯一明确禁止的改法。而 `apps/cli/upload.py` 早就在用 `mimetypes.guess_type(source.name)`：
+按扩展名读**名字**不是断言**字节**，前端与 CLI 同侧。
+
+带 charset 的用例（`text/plain; charset=utf-8`）是比计划多加的：`parser.py` 就是按 `;`
+截断再比对的，前端的匹配口径必须跟它一致，否则带 charset 的声明会被误判成"服务端读不懂"
+而被扩展名覆盖。
+
+**这只拆掉了最常见的触发器，没修好那一类。**"摄取失败表现为永久处理中"这件事本身由上面
+第一节的 `failed` 状态解决；两件事是配套的，但 MIME 这条只是让最常撞的那扇门不再关上。
+
+### 四、Playwright 用例查的是一个不存在的按钮
+
+`AttachmentTray` 的 aria-label 改成"上传文件到知识库"之后，`web/e2e/shell.spec.ts` 还在
+查"添加附件"，于是 e2e 红着落了地。**改用例而不是改回按钮名**：旧标签描述的是这套系统
+并不存在的"逐条消息附件"，新标签说的是文件去哪儿。
+
+顺带更正一条流传的说法：`pnpm --dir web check` 确实不含 e2e，但 `ci.yml` 有独立的
+`pnpm --dir web test:e2e` 步骤——**CI 并非看不见这个失败**，是这次改名带着红的 e2e 落了地。
+
+e2e 目录只有这一个文件，27 个选择器全部对照现网源码核过。重点排查了绿测覆盖不到的一类
+隐患：`toBeHidden()` 在元素**根本不存在**时也会通过，所以藏在它后面的过期选择器不会让
+测试变红。这类断言有两处，背后三个名字都还活着，且每个都在别处被正面断言过可见。
+
+另记一条本地陷阱（本次没修）：`playwright.config.ts` 的 `webServer` 命令在 corepack 环境
+下派生的 `/bin/sh` 里没有 pnpm，必然 127；本地跑 e2e 要先手工 `build` + `preview` 起 4173。
+
+### 五、把文档里已经过期的地方改准
+
+三处点名的漂移，逐条处理：
+
+1. **tied-score 不确定性**：README 把它列为"已知的可复现性缺口"，而
+   [ADR-033](./adr/0033-fusion-ranks-are-ours.md)（2026-08-10）已经修掉了，连带更正了
+   诊断——不稳的不是并列分数的**次序**，是分数**本身**。README 里"CI 那条 tie-break 会
+   偶发失败"的说法同属修复前状态，已改为"现在是确定性通过的"，并保留了这次更正本身，
+   因为一条被改过口径的结论比一条悄悄消失的结论有用。**同时守住了一个界**：噪声底没了
+   不等于评测做完了——ADR-017 第 3 步要的等价性评测**还没有在可复现的检索器上重跑**，
+   所以 `rag.llama_index.enabled` 继续 `false`，理由从"路被堵着"改成"证据还没有"。
+2. **工作树脏 + Ruff/Pyright 红**：那两处红（`docx_preview.py` 的格式、
+   `composition.py` 的两个 `EmbeddingUnavailable` 类型错）现已不存在，门禁全绿；
+   README 里那段"此刻各有一处红"连同"工作树含未提交改动"的口径一起换成了当前实测值。
+3. **旧测试数与旧迁移 head**：README、README.en.md 与本基线文档里的
+   `1821/1264/2711/2629/1996/920`、`135 passed`、`114 passed`、`45 passed`、
+   `2 passed`、`441/483 files`，以及 `architecture-baseline.md` 里的
+   `alembic head = 0019_tool_executions`，全部按下面这轮实测重写。
+
+另外三件顺手改准的：
+
+- **evidence manifest**：README 此前读起来像"仓库里有一份新证据包"。事实是它是**本机产物**，
+  `artifacts/evidence/` 被 `.gitignore` 忽略（clone 下来没有），而现存那份锚定的 commit
+  停在生成它的那一次、`git_dirty` 记的是 `true`，已经过期。**本批没有重新生成它**——那需要
+  真跑一轮评测，不在范围内。文档改的是描述，不是产物。
+- **README.en.md 说 WP15 阶段四、五"have not started"**，而中文版写着两个都已落地。这是
+  **低报**不是夸大，但两版口径必须一致，已按中文版改准；同时补上中文版有而英文版没有的
+  `config.word-local.toml`。
+- **架构状态表补了一串只有 Planned 的行**。此前它们根本不在表里，而"不在表里"和"写着未实现"
+  读起来差不多、实际差很多：一张只列做过的事的表，读者读到的是"这就是全部范围"。补进去的
+  包括知识库管理、Chat 会话服务端管理、逐条消息临时附件、Chat 历史压缩、通用 Tool 级动态
+  审批、benchmark runner、动态 supervisor / agent spawn / mailbox、Word 读取与编辑、
+  远程对象存储与远程部署、LlamaIndex ingestion 迁移。
+
+**多改了两份，说明理由**：本批点名的是四份文档，但另外两份带着**完全相同的**三处漂移，
+而且都是从 README 第一屏点进去的：
+
+- `docs/HIGHLIGHTS.md`（README 第一行推荐的"十分钟版本"，也就是最先被读到的那份）：
+  过期数字（`1996/2629/920/441 files/114 passed`）与同一句已经不成立的"CI 那个真服务
+  job 不是每次都全绿"。已改：门禁数字换成同一轮实测值，tie-break 那段改成**留痕的更正**
+  而不是删除，边界一节补上红线清单与"控制台管不了的事"，迁移数 23 → 24、ADR 数
+  38 → 39（编号 0012–0039）。**代码行数那三个值重新数过**（`git ls-files` 计，与原文
+  声明的方法一致），因为原值与当前树对不上。
+- `docs/README.md`（文档索引，README"设计依据"一节的第一条）：钉着 `main@a4dea2b`、
+  一组更早工作树的数字，以及同一句 tie-break 偶发失败。已改成同一轮实测值、去掉 commit
+  锚点、把那句话标注为**已不成立**，并把 LlamaIndex 开关的理由更新成"缺证据而不是缺路"。
+
+让这两份继续与 README 相反，等于把这次改动的目的整个抵消掉，所以一并改了。除这两份外
+没有再动别的文件；源码、测试与前端一行未碰（`git diff` 统计与接手时逐字节一致：30 个
+非文档文件、1689 insertions / 131 deletions）。
+
+### 证据
+
+门禁全部本机实测（2026-08-11，真实 PostgreSQL 5433 + Qdrant 6333，`PYTHONDONTWRITEBYTECODE=1`，
+跑前清过 `__pycache__`）：
+
+| 环境 | 结果 |
+|---|---|
+| 后端，真实 PostgreSQL + Qdrant | `2716 passed / 11 skipped`（144.92s） |
+| 后端，无外部服务 | `2040 passed / 687 skipped`（40.00s） |
+| 后端，CI 那组服务型目录 | `1009 passed / 2 skipped`（88.14s） |
+| 前端 Vitest | `155 passed`（22 个文件） |
+| 前端 Playwright | `4 passed`（chromium + mobile 各两条） |
+
+`ruff format --check .` 485 files、`ruff check src tests` 全过、Pyright
+`0 errors, 0 warnings, 0 informations`、ESLint `--max-warnings 0`、`tsc -b`、
+production build 均通过。Alembic 唯一 head `0024_document_ingestion_failure`。
+11 项跳过中 10 项要 `embedding` extra 与本地 BGE 权重、1 项是 PostgreSQL-only 契约。
+
+牙口：本批四项改动一共 25 条断言做过破坏验证，每一条都真跑出过红、还原后复跑绿。其中
+两处值得单记，因为它们是"绿测覆盖不到"的那一类：
+
+- **e2e 那条做了两次破坏，第二次更强**：不是把选择器改回旧名（那只证明字符串对不上），
+  而是改掉 `AttachmentTray` 的 `aria-label` 后重新 build——同样红，证明这条用例咬的是
+  真实 DOM。
+- **`markdown-mime` 有 3 条在"还原成旧实现"下按设计保持绿**（它们守的是"别过度猜测"而
+  不是"补足猜测"），所以另做了两次定向破坏（让扩展名压过浏览器类型、把兜底改成
+  `text/markdown`）才证明它们有牙。
+
+### 一条关于来源的说明
+
+本批的知识库改动（`can_write` 与 `failed` 状态）**在被接手时已经完整存在于工作树中**，
+是并行会话留下的——这是本项目已知的协作形态，第一批的提交信息里也记过同一件事。这一条
+里做的是逐条核实、跑通迁移双向、并对每处修复做"撤掉→确认变红→还原"的验证，不是原创
+编写。写在这里是因为**这份文档的用途之一是当作品集给人看**，工时与归属如果被据此判断，
+应当以此为准。
+
+## 2026-08-11 没有 embedding extra 的机器终于能跑 Task 了：一个只落地了一半的形态
+
+`composition.py` 里那段 docstring 从 v2 落地起就论证过一个形态：**没有检索能力时只注册
+v2，一个不指名知识库的普通 Task 照跑**。代码也写好了——图注册表会收窄、`_RealHandlers`
+的注释解释了为什么收窄注册表而不是收窄认领。**但它是一段死代码，一次都没有被走到过。**
+
+原因在投影层。`grounds_tasks` 判的是"配置里有没有检索"：
+
+```python
+grounds_tasks = (
+    config.qdrant is not None
+    and config.embedding is not None
+    and config.retrieval is not None
+)
+```
+
+而 `project_task_worker` 把这三样**无条件**填满：`_project_qdrant` 与 `_project_embedding`
+的返回类型本身就不可为空，`RetrievalConfig(...)` 连 `if` 都没有。上游更堵死——`settings.rag`
+与 `settings.qdrant` 都是**必填**段，没有 `default_factory`，**任何配置文件都写不出
+"这个部署不检索"**。所以对每一个正式部署，`grounds_tasks` 恒为真。
+
+后果比"一段死代码"严重一档：拒绝发生在 `build_embedder` **之后**，且必然命中——
+
+```python
+if grounds_tasks and isinstance(embedder, EmbeddingUnavailable):
+    raise RealTaskHandlersUnavailableError(...)   # → EXIT_CONFIGURATION_ERROR
+```
+
+而 embedding 是 optional extra、CI 不装、`docs/deployment.md` 明说默认栈"intentionally
+absent"。**于是：没装 extra ⇒ 标准 Worker 起不来 ⇒ 一个连知识库都不指名、一行都不检索的
+普通 Work 也跑不了。**
+
+### 半成品是怎么进来的
+
+`5363d7a` 的提交信息自己写了：那次并入了"同一工作树上另一个会话未提交的在制品"，清单里
+明确有**"Worker 装配的无检索形态"**。作者当时只做了两处机械修改让门禁变绿，其中一处正是
+"把 `grounds_tasks` 隐含的两个条件显式重述一遍……**行为未变**"。也就是说，这个形态是带着
+只落地一半的状态被合进来的，而缺的恰好是让它可达的那一半。
+
+### 改法：让 `grounds_tasks` 由"实际装出了什么"决定
+
+那条 raise 换成 WARNING 日志加一个 `TaskWorkerDependencies.grounding_unavailable` 字段。
+**它的论点没有被推翻**——"这个部署要求接地，悄悄降级不诚实"是对的，错的是前提，因为投影层
+让"这个部署要求接地"恒为真。所以降级照做，被拿掉的是"悄悄"：日志与那个字段是它的两个出口。
+
+**这不是新决定，是兑现一个已经被接受的决定。** 同一件事 API 侧早就做完了：
+`apps/api/dependencies.py` 里 "**A missing embedder costs retrieval, not Chat**"，配
+`ApiDependencies.rag_unavailable` 把降级说出口。`grounding_unavailable` 是刻意取的同名
+形状——两个进程为同一个原因掉同一半能力，一套词汇。
+
+### 为什么没有写 ADR
+
+项目规矩管的是**突破冻结约束**和**新增配置字段**，这次两样都没有：零 Settings 叶子、零
+`Literal` 变动、零 `ownership.yaml` 变动、`config_schema_version` 保持 `1.14`、零迁移。
+API 侧那次同形状的改动也是当缺陷修的，没有配 ADR。
+
+**考虑过并否掉了新增 `rag.enabled` 开关。** `ownership.yaml` 的 `task_snapshot_allowlist`
+含 `rag.*`，架构测试会**强制**把它登记成 `task_snapshot` 生命周期，于是"这台机器装没装
+3 GB 权重"会进入每个 Task 的 `run_semantics_snapshot`、改变全体 `run_semantics_revision`。
+那是把**部署状态**伪装成 Task 语义——同一份 `settings.py` 正是因为"where a model is
+reachable is deployment state"才主动把 `model.base_url` 从快照里 pop 掉的。而且它解决不了
+真问题：开关拨到 `true` 而权重装不上时，"raise 还是降级"原封不动地还在。
+
+### 一个连带的部署耦合，CI 抓不到
+
+`config.default.toml` 的 `workflow.graph_version` 是 `v1`，它经投影交给 **API** 的
+`TaskService`，是**提交**时不指名 shape 的默认值。所以在没有 extra 的部署上，只修装配还
+不够：绝大多数提交仍会 park 成 `waiting_migration`。这条链跨 4 个文件、跨 API 与 Worker
+两个进程，`settings.py` 又只对 `graph_version` 做字符集校验、不校验是不是已知版本，CI 抓
+不到。
+
+**没有改任何配置文件的默认值**——仓库里那几份 local profile 都是有完整检索能力的机器
+（本地跑真 BGE-M3 与重排），把它们指向 `v2_general` 是替有能力的部署做决定。改成两件事：
+`deployment.md` 与 `running-locally.md` 写死"无 extra ⇒ Worker 只跑 v2 ⇒ 必须把
+`workflow.graph_version` 设成 `v2_general`"，以及 Worker 在启动时若发现配置的默认版本自己
+装不出来，打一条 `task_worker_default_graph_not_buildable`。日志是提示不是拦截：真正用这
+个值的是 API，Worker 只是恰好也拿到了同一个投影字段。
+
+### 证据
+
+3 条测试，**三次牙口自检都真跑过**（还原 raise → 只留日志不设字段 → 放开图注册表限制，
+每次都确认对应断言变红，再还原）：
+
+- `test_a_worker_without_an_embedding_runtime_serves_v2_only`：装得起来、只挂
+  `v2_general`、没开 Qdrant 连接、`startup()` 不抛、两条 warning 都说出口了。
+- `test_real_worker_wires_model_retrieval_and_policy_gated_evidence` 加了对照断言：同一份
+  投影配置，只差 `build_embedder` 的返回值，能接地时两张图都在、`grounding_unavailable`
+  为 `None`。没有这一对，"只挂 v2"在一个悄悄不再注册 v1 的装配下也会通过。
+- `test_an_ungrounded_worker_completes_a_v2_task_that_names_no_knowledge_base`（真
+  PostgreSQL）：这条才是缺陷的用户可见后果。一个不指名知识库的 v2 Task 走完
+  `understand → work → review → export` 到 `succeeded`，`export_ref` 非空，
+  **`evidence_refs` 为空**（证明没有走 v1 那三个 `research is None` 的 fallback、没有把模型
+  自述当检索证据写进去），且同一个 Worker 上的 v1 提交 park 成 `waiting_migration` 而不是
+  拿着 fallback 跑完——docstring 里最要紧的那句，此前同样零覆盖。
+
 ## 2026-08-11 Word 任务第一次端到端跑通，代价是修掉四个各自独立的缺陷
 
 起点是两个使用者报告的问题：Chat 搜不到东西，Word 文件只能下载不能看。查下去，

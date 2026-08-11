@@ -285,9 +285,11 @@ function knowledgeBase(knowledgeBaseId: string, name: string) {
     knowledge_base_id: knowledgeBaseId,
     name,
     description: null,
+    can_write: true,
     document_count: 2,
     ready_document_count: 2,
     processing_document_count: 0,
+    failed_document_count: 0,
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-02T00:00:00Z",
   };

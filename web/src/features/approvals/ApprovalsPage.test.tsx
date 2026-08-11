@@ -186,6 +186,8 @@ const pendingApproval = {
 const taskTimeline = {
   task_id: "task_1",
   cursor: null,
+  // A complete page says so out loud; the server never omits this.
+  skipped_sequences: [],
   events: [
     {
       schema_version: 1,

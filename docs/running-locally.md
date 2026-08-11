@@ -209,3 +209,37 @@ bge-reranker-v2-m3，合计约 6.7 GB 权重，加上 torch 运行时与余量�
   加载一份完整的模型集；同时跑三个会让机器一直在换页。要跑评测就先把另外两个停掉。
 
 这不是缺陷，是没有写下来的部署下限——现在写下来了。
+
+## 不装 embedding extra 时的 Task Worker
+
+上面那 12 GB 是**会检索**的进程的下限。不打算检索的机器可以完全不装 `embedding`
+extra——`pyproject.toml` 里它是可选依赖，CI 也不装——Task Worker 仍然能起来，**但它只跑
+`v2_general`**。
+
+装配时 `build_embedder` 返回 `EmbeddingUnavailable`，于是不开 Qdrant 连接、只注册 v2，
+并打一条带原因的 WARNING：
+
+```
+task_worker_grounding_unavailable
+```
+
+只注册 v2 是有意的：v1 的两个研究节点在拿不到 research handlers 时会退成普通的模型调用，
+把模型自己写的东西塞进 `evidence_refs`，报告会当成"检索到的证据"引用它。所以装不出检索的
+Worker 干脆不注册 v1，v1 的 Task 到了这里 park 成 `waiting_migration` 等一个跑得了它的
+Worker。
+
+**必须同时改提交默认值。** `workflow.graph_version` 是 **API** 在客户端不指名 shape 时用的
+提交默认值，出厂是 `v1`：
+
+```toml
+[workflow]
+graph_version = "v2_general"
+```
+
+不改的话不会报错，只会所有不指名 shape 的提交都 park。Worker 启动时若发现自己拿到的这个
+默认值装不出来，会打一条 `task_worker_default_graph_not_buildable`——但它只看得见自己那份
+投影，看不见 API 那份，所以这条日志是提示，不是保证。
+
+仓库里几份 local profile **没有**改成 `v2_general`：这台机器装了完整的检索能力，改它等于
+替有能力的部署做决定。要试无检索形态就单开一个 overlay，或者用环境变量
+`AW_WORKFLOW__GRAPH_VERSION=v2_general`。

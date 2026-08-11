@@ -79,21 +79,26 @@ WP15 阶段四（成本与时限、`workspace_edit`、`workspace_grep`）与阶�
 实战命中一次），证据与仍存的 scope 默认值问题见 status.md。
 LlamaIndex retrieval Adapter 已经建成并通过契约测试，但 `rag.llama_index.enabled`
 默认为 `false`——缺的不是实现，是一份能把两条检索路径区分开的等价性度量
-（ADR-017 第 3 步）。
-旧 Qdrant Point 物理清理、历史 token window/compaction 与 EventLog
-upcaster/poison-row 隔离仍未形成完整产品切片。
+（ADR-017 第 3 步）。**注意这条理由已经变过一次**：度量做不出来的根因（并列项造成的
+检索不可复现）已由 ADR-033 修掉，但**那次评测还没有在可复现的检索器上重跑**，所以现在
+缺的是证据本身，不是通往证据的路。
+旧 Qdrant Point 物理清理与历史 token window/compaction 仍未形成完整产品切片；
+EventLog upcaster/poison-row 隔离已落地，但生产 upcaster 注册表仍是空的，且界面上
+只有 Work 时间线会披露被跳过的位点，Chat 那一半仍然沉默。
 
-`main@a4dea2b` 的实测门禁：无外部服务 `--ignore=tests/e2e` 为 `1784 passed / 597 skipped`，
-`tests/e2e` 为 `3 passed / 11 skipped`，架构与配置 `114 passed`，Ruff format/lint 通过
-（421 files），Pyright `0 errors / 0 warnings`；前端 45 个单元测试、2 个桌面/移动浏览器
-冒烟测试和 production build 已在 CI 通过。这一组在本机没有外部服务时跑，597/11 项环境跳过
-只能报告为跳过。**真实服务证据由 CI 每个 PR 提供**：`Migrations, PostgreSQL and
-Qdrant-backed stores` job 对着真实 PostgreSQL 16 与 Qdrant 跑 `tests/contracts
-tests/persistence tests/api tests/vector`，共 920 项、2 项环境跳过；它不覆盖
-`tests/e2e` 与需要模型 Provider 的路径，且**会因并列分数次序不确定而偶发一条失败**
-（详见[实施状态](./status.md)）。最近一次**本机**真实 PostgreSQL + Qdrant 全量记录
-仍是前端增量当时的 `1821 passed / 11 skipped`（11 项需要 BGE 权重），那是一棵更早的工作树；
-**不同环境、不同工作树的数字只能分别引用，不能相加**。当前开发
+实测门禁（2026-08-11，本机，含当日两批缺口清理）：真实 PostgreSQL + Qdrant
+`2716 passed / 11 skipped`；不起任何外部服务 `2040 passed / 687 skipped`；前端
+Vitest `155 passed`、Playwright `4 passed`。`ruff format --check .`（485 files）、
+`ruff check src tests`、Pyright `0 errors / 0 warnings / 0 informations`、ESLint
+`--max-warnings 0`、`tsc -b` 与 production build 均通过；Alembic 唯一 head 为
+`0024_document_ingestion_failure`。**真实服务证据由 CI 每个 PR 提供**：
+`Migrations, PostgreSQL and Qdrant-backed stores` job 对着真实 PostgreSQL 16 与
+Qdrant 跑 `tests/contracts tests/persistence tests/api tests/vector`；同一条命令在本机
+对真实服务跑出来是 `1009 passed / 2 skipped`。它不覆盖 `tests/e2e` 与需要模型
+Provider 的路径。此处此前写着这个 job "会因并列分数次序不确定而偶发一条失败"——
+**那条缺陷已由 ADR-033 修掉，那句话不再成立**。
+这一节不再钉具体 commit：基线一往前走，hash 就变成一句要读者自己去核的旧话。
+**不同环境的数字只能分别引用，不能相加**。当前开发
 身份解析器仍信任请求头，API 和 Compose 只允许在 loopback 的受控本机环境使用。完整证据与已知问题见
 [实施状态](./status.md)；A–F 修复前的问题原始快照见
 [2026-07-29 仓库审计](./repository-audit-2026-07-29.md)。

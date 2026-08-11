@@ -6,6 +6,7 @@ import {
   FileText,
   FileUp,
   Library,
+  Lock,
   MessageSquare,
   Plus,
   RefreshCw,
@@ -22,6 +23,7 @@ import {
 } from "../../api/client";
 import type {
   KnowledgeBaseView,
+  KnowledgeDocumentStatus,
   SearchResponse,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
@@ -195,6 +197,9 @@ function KnowledgeBaseRow({
         <strong>{knowledgeBase.name}</strong>
         <small>
           {knowledgeBase.document_count} 个文档 · {knowledgeBase.ready_document_count} 个可用
+          {knowledgeBase.failed_document_count > 0
+            ? ` · ${knowledgeBase.failed_document_count} 个失败`
+            : ""}
         </small>
       </span>
       {knowledgeBase.processing_document_count > 0 ? (
@@ -263,6 +268,9 @@ function KnowledgeBaseDetail({
   const processing = documents.data?.documents.filter(
     (document) => document.status === "processing",
   ).length;
+  const failed = documents.data?.documents.filter(
+    (document) => document.status === "failed",
+  ).length;
 
   return (
     <section className="aw-knowledge-detail">
@@ -293,48 +301,70 @@ function KnowledgeBaseDetail({
         <span><strong>{documents.data?.documents.length ?? knowledgeBase.document_count}</strong>文档</span>
         <span><strong>{ready ?? knowledgeBase.ready_document_count}</strong>可以检索</span>
         <span><strong>{processing ?? knowledgeBase.processing_document_count}</strong>处理中</span>
+        {(failed ?? knowledgeBase.failed_document_count) > 0 ? (
+          <span><strong>{failed ?? knowledgeBase.failed_document_count}</strong>索引失败</span>
+        ) : null}
         <span><strong>{formatDateTime(knowledgeBase.updated_at)}</strong>最近更新</span>
       </div>
 
-      <section className="aw-card aw-knowledge-upload" aria-labelledby="knowledge-upload-title">
-        <div className="aw-card-header">
-          <div>
-            <h3 id="knowledge-upload-title">添加文档</h3>
-            <p>支持 PDF 和 Markdown。上传后会由文档 Worker 异步解析与索引。</p>
+      {knowledgeBase.can_write ? (
+        <section className="aw-card aw-knowledge-upload" aria-labelledby="knowledge-upload-title">
+          <div className="aw-card-header">
+            <div>
+              <h3 id="knowledge-upload-title">添加文档</h3>
+              <p>支持 PDF 和 Markdown。上传后会由文档 Worker 异步解析与索引。</p>
+            </div>
+            <FileUp aria-hidden="true" size={20} />
           </div>
-          <FileUp aria-hidden="true" size={20} />
-        </div>
-        <label className="aw-drop-zone">
-          <FileUp aria-hidden="true" size={22} />
-          <strong>{file === null ? "选择一个文件" : file.name}</strong>
-          <span>{file === null ? "PDF / Markdown" : formatBytes(file.size)}</span>
-          <input
-            accept=".pdf,.md,.markdown,text/markdown,application/pdf"
-            disabled={upload.isPending}
-            onChange={(event) => {
-              setUploadNotice(null);
-              setFile(event.target.files?.[0] ?? null);
-            }}
-            type="file"
-          />
-        </label>
-        {upload.error === null ? null : <ErrorNotice message={errorMessage(upload.error)} />}
-        {uploadNotice === null ? null : (
-          <div className="aw-notice is-success" role="status">
-            <CheckCircle2 aria-hidden="true" size={16} />
-            <span>{uploadNotice}</span>
+          <label className="aw-drop-zone">
+            <FileUp aria-hidden="true" size={22} />
+            <strong>{file === null ? "选择一个文件" : file.name}</strong>
+            <span>{file === null ? "PDF / Markdown" : formatBytes(file.size)}</span>
+            <input
+              accept=".pdf,.md,.markdown,text/markdown,application/pdf"
+              disabled={upload.isPending}
+              onChange={(event) => {
+                setUploadNotice(null);
+                setFile(event.target.files?.[0] ?? null);
+              }}
+              type="file"
+            />
+          </label>
+          {upload.error === null ? null : <ErrorNotice message={errorMessage(upload.error)} />}
+          {uploadNotice === null ? null : (
+            <div className="aw-notice is-success" role="status">
+              <CheckCircle2 aria-hidden="true" size={16} />
+              <span>{uploadNotice}</span>
+            </div>
+          )}
+          <button
+            className="aw-button is-primary"
+            disabled={file === null || upload.isPending}
+            onClick={() => file !== null && upload.mutate(file)}
+            type="button"
+          >
+            {upload.isPending ? <RefreshCw aria-hidden="true" className="aw-spin" size={15} /> : <FileUp aria-hidden="true" size={15} />}
+            {upload.isPending ? "正在上传" : "上传并开始索引"}
+          </button>
+        </section>
+      ) : (
+        // 入口整块不渲染，而不是渲染成禁用状态：这个知识库是别人分享进来的，
+        // 「传完再吃 404」正是这里要消掉的体验——服务端仍然会拒绝，隐藏只是
+        // 别让人先把整份文件传上去。
+        <section className="aw-card aw-knowledge-upload" aria-labelledby="knowledge-readonly-title">
+          <div className="aw-card-header">
+            <div>
+              <h3 id="knowledge-readonly-title">只读知识库</h3>
+              <p>这个知识库是别人分享给你阅读的，只有它的创建者可以添加文档。</p>
+            </div>
+            <Lock aria-hidden="true" size={20} />
           </div>
-        )}
-        <button
-          className="aw-button is-primary"
-          disabled={file === null || upload.isPending}
-          onClick={() => file !== null && upload.mutate(file)}
-          type="button"
-        >
-          {upload.isPending ? <RefreshCw aria-hidden="true" className="aw-spin" size={15} /> : <FileUp aria-hidden="true" size={15} />}
-          {upload.isPending ? "正在上传" : "上传并开始索引"}
-        </button>
-      </section>
+          <p className="aw-muted">
+            你可以照常检索它、在 Chat 和 Work 中引用它；需要新增资料请联系创建者，
+            或者在自己的知识库里上传。
+          </p>
+        </section>
+      )}
 
       <section className="aw-card aw-knowledge-documents" aria-labelledby="document-list-title">
         <div className="aw-card-header">
@@ -368,10 +398,14 @@ function KnowledgeBaseDetail({
                 <FileText aria-hidden="true" size={17} />
                 <span>
                   <strong>{document.filename || shortId(document.document_id, 24)}</strong>
-                  <small>{document.media_type} · {formatBytes(document.size_bytes)}</small>
+                  <small>
+                    {document.status === "failed"
+                      ? failureReason(document.failure_code)
+                      : `${document.media_type} · ${formatBytes(document.size_bytes)}`}
+                  </small>
                 </span>
                 <span className={`aw-document-status is-${document.status}`}>
-                  {document.status === "ready" ? "可以检索" : "正在索引"}
+                  {DOCUMENT_STATUS_LABELS[document.status]}
                 </span>
                 <time dateTime={document.updated_at}>{formatDateTime(document.updated_at)}</time>
               </article>
@@ -481,6 +515,26 @@ function SearchResults({ result }: { result: SearchResponse | null }) {
       ))}
     </div>
   );
+}
+
+const DOCUMENT_STATUS_LABELS: Record<KnowledgeDocumentStatus, string> = {
+  ready: "可以检索",
+  processing: "正在索引",
+  failed: "索引失败",
+};
+
+// 只翻译摄取真的会产出的那几个码。给不认识的码编一个具体理由比说不知道更糟：
+// 用户会照着那句话去改文件，然后再失败一次。
+const FAILURE_REASONS: Record<string, string> = {
+  invalid_tool_input: "文件内容无法解析，请换成可读的 PDF 或 Markdown 重新上传。",
+  not_found: "找不到上传时保存的原始文件，请重新上传一次。",
+};
+
+const FAILURE_FALLBACK = "解析没有完成，系统仍会重试；持续失败请联系管理员。";
+
+function failureReason(code: string | null): string {
+  if (code === null) return FAILURE_FALLBACK;
+  return FAILURE_REASONS[code] ?? FAILURE_FALLBACK;
 }
 
 function errorMessage(error: unknown): string {

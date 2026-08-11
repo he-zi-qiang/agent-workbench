@@ -51,13 +51,19 @@ class MemoryKnowledgeBases:
             return None
         documents = self.documents_by_base.get((tenant_id, knowledge_base_id), ())
         ready = sum(document.status == "ready" for document in documents)
+        failed = sum(document.status == "failed" for document in documents)
         return KnowledgeBaseSummary(
             knowledge_base_id=record.knowledge_base_id,
             name=record.name,
             description=record.description,
+            # The same owner-only rule require_writable applies. A double that
+            # said yes to everyone would let a test about write authority pass
+            # while the projection said the opposite.
+            can_write=record.owner_id == principal_id,
             document_count=len(documents),
             ready_document_count=ready,
-            processing_document_count=len(documents) - ready,
+            processing_document_count=len(documents) - ready - failed,
+            failed_document_count=failed,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )

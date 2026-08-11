@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import tomllib
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -206,18 +207,68 @@ def test_partial_assembly_disposes_the_engine(
     assert engine.disposed is True
 
 
-def test_real_worker_refuses_to_start_without_an_embedding_runtime(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_worker_without_an_embedding_runtime_serves_v2_only(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """The deployment the old refusal locked out entirely.
+
+    This used to assert the opposite -- that assembly raised. The refusal read
+    "retrieval was configured" off the projection, which fills the three
+    retrieval sections in unconditionally, so it fired for every deployment
+    without the optional embedding extra and took ordinary v2 Work down with
+    the grounded half nobody had asked for.
+
+    Four assertions, and the last three are the reason this is not just a
+    "does it start" test: starting while silently pretending to ground Tasks
+    is the failure the refusal existed to prevent, and each one closes a way
+    back into it.
+    """
+
     import agent_workbench.apps.task_worker.composition as composition
+    import agent_workbench.bootstrap.model_factory as model_factory
 
     def unavailable(_: EmbeddingConfig) -> EmbeddingUnavailable:
         return EmbeddingUnavailable("test embedding runtime is unavailable")
 
-    monkeypatch.setattr(composition, "build_embedder", unavailable)
+    def fake_model(_: ModelConfig, *, client: httpx.AsyncClient) -> ModelPort:
+        del client
+        return FakeModel(())
 
-    with pytest.raises(RealTaskHandlersUnavailableError, match="embedding runtime"):
-        asyncio.run(build_task_worker_dependencies(_projected_config()))
+    monkeypatch.setattr(composition, "build_embedder", unavailable)
+    monkeypatch.setattr(model_factory, "build_model", fake_model)
+
+    async def scenario() -> tuple[tuple[str, ...], bool, str | None]:
+        dependencies = await build_task_worker_dependencies(_projected_config())
+        try:
+            # The startup check reads a Qdrant read alias. A v2-only Worker
+            # opened no client, so this has to be a no-op rather than a
+            # validation against a connection that does not exist.
+            await dependencies.startup()
+            return (
+                tuple(dependencies.worker.buildable_versions),
+                dependencies.qdrant is not None,
+                dependencies.grounding_unavailable,
+            )
+        finally:
+            await dependencies.dispose()
+
+    with caplog.at_level(logging.WARNING, logger=composition.logger.name):
+        versions, opened_qdrant, grounding = asyncio.run(scenario())
+
+    # v1 is not registered, so a v1 Task parks for migration instead of running
+    # research nodes that would fall back to plain model calls.
+    assert versions == ("v2_general",)
+    assert opened_qdrant is False
+    # The downgrade is said out loud. Without this the process is exactly the
+    # thing the refusal was written against.
+    assert grounding == "test embedding runtime is unavailable"
+    # And so is its one operational consequence. The shipped default submits
+    # `v1`, which this Worker cannot build, so every Task that names no shape
+    # parks -- a queue that stops draining for a reason no error mentions
+    # unless the process says it at startup.
+    messages = {record.message for record in caplog.records}
+    assert "task_worker_grounding_unavailable" in messages
+    assert "task_worker_default_graph_not_buildable" in messages
 
 
 def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
@@ -240,7 +291,7 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
     monkeypatch.setattr(composition, "build_sparse_encoder", no_sparse)
     monkeypatch.setattr(model_factory, "build_model", fake_model)
 
-    async def scenario() -> tuple[bool, bool]:
+    async def scenario() -> tuple[bool, bool, tuple[str, ...], str | None]:
         dependencies = await build_task_worker_dependencies(_projected_config())
         try:
             workflow = dependencies.worker.workflow
@@ -248,13 +299,22 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
             return (
                 dependencies.http is not None,
                 dependencies.qdrant is not None,
+                tuple(dependencies.worker.buildable_versions),
+                dependencies.grounding_unavailable,
             )
         finally:
             await dependencies.dispose()
 
-    http, qdrant = asyncio.run(scenario())
+    http, qdrant, versions, grounding = asyncio.run(scenario())
 
     assert (http, qdrant) == (True, True)
+    # The control group for `test_a_worker_without_an_embedding_runtime_serves
+    # _v2_only`: same projected configuration, differing only in what
+    # `build_embedder` returned. A Worker that can ground registers both graphs
+    # and reports no downgrade -- without this pair, "only v2" would also be
+    # satisfied by an assembly that had quietly stopped registering v1.
+    assert versions == ("v1", "v2_general")
+    assert grounding is None
 
 
 def test_a_real_worker_registers_every_tool_its_agents_can_ask_for(
