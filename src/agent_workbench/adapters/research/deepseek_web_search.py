@@ -45,12 +45,14 @@ from typing import Any, Final, Protocol, cast
 
 from agent_workbench.adapters.research.address_guard import (
     AddressResolver,
+    DestinationRefusedError,
     resolve_addresses,
 )
 from agent_workbench.adapters.research.guarded_fetch import guarded_get
 from agent_workbench.adapters.research.page_text import page_text
 from agent_workbench.domain.evidence import ExternalSearchHit
 from agent_workbench.ports.cancellation import CancellationToken
+from agent_workbench.ports.research import SourcesUnreadableError
 
 #: The basic web-search tool version. Deliberately not the `_20260209`
 #: dynamic-filtering variant: that one runs server-side code on Anthropic's
@@ -135,6 +137,32 @@ class _Source:
     url: str
     title: str
     text: str = ""
+
+
+#: Why one named page contributed no text, as a short stable code. Grouped and
+#: counted into :class:`SourcesUnreadableError`, never shown per-URL: the codes
+#: reach the model's context through a tool result, and pairing a refusal with
+#: the address that caused it is the detail ``DestinationRefusedError`` already
+#: refuses to disclose.
+_REFUSED: Final[str] = "refused"
+_UNREACHABLE: Final[str] = "unreachable"
+_HTTP_ERROR: Final[str] = "http_error"
+_NO_TEXT: Final[str] = "no_text"
+
+
+@dataclass(frozen=True, slots=True)
+class _Fetched:
+    """One source after the attempt to read it, and why it failed if it did.
+
+    ``failure`` is empty exactly when ``source.text`` is not. Keeping the reason
+    beside the source is what lets the caller tell "search found nothing" from
+    "search found nineteen pages and this process could not open one of them" --
+    two situations that produced an identical empty result before, and mean
+    opposite things to whoever has to fix them.
+    """
+
+    source: _Source
+    failure: str = ""
 
 
 def _extract_request(query: str, sources: list[_Source]) -> str:
@@ -237,15 +265,21 @@ class DeepSeekWebSearch:
         )
         cancellation.raise_if_cancelled()
         sources = [
-            source
-            for source in fetched
-            if isinstance(source, _Source) and source.text != ""
+            item.source
+            for item in fetched
+            if isinstance(item, _Fetched) and item.source.text != ""
         ]
         if not sources:
-            # Search found pages and none of them could be read. Report no
-            # evidence: the alternative is asking a model to describe pages
-            # that nobody fetched, which is exactly the failure this avoids.
-            return ()
+            # Search found pages and none of them could be read. Still no
+            # evidence -- asking a model to describe pages nobody fetched is
+            # the failure this whole adapter exists to avoid -- but raised
+            # rather than returned, because an empty *result* tells the caller
+            # the query found nothing, and the query found nineteen things.
+            reasons: dict[str, int] = {}
+            for item in fetched:
+                code = item.failure if isinstance(item, _Fetched) else _UNREACHABLE
+                reasons[code] = reasons.get(code, 0) + 1
+            raise SourcesUnreadableError(len(named), reasons)
 
         # Second turn: condense the fetched text. Sources are addressed by
         # *index* into a list this adapter built, so a URL or title can only
@@ -279,33 +313,42 @@ class DeepSeekWebSearch:
             )
         return tuple(hits)
 
-    async def _fetch(self, source: _Source) -> _Source:
-        """``source`` with the page's current text, or with none of it.
+    async def _fetch(self, source: _Source) -> _Fetched:
+        """``source`` with the page's current text, or the reason there is none.
 
-        Every failure lands the same way -- a source with empty text, which the
-        caller drops. A page that 403s a robot, a host that will not resolve, a
-        PDF where HTML was expected: none of these are faults of this adapter,
-        and none of them justify failing a search that other sources answered.
+        Every failure still lands the same way for the *caller that has other
+        sources* -- empty text, dropped -- because a search other pages answered
+        should not fail on the one result that pointed somewhere internal. What
+        changed is that the reason no longer evaporates: when every source fails,
+        the codes collected here are the only evidence of why, and without them
+        a proxy that redirects all DNS is indistinguishable from a query nobody
+        has written about.
         """
 
         try:
             response = await self._get_through_the_guard(source.url)
+        except DestinationRefusedError:
+            # This process declined to open the connection. Distinct from an
+            # unreachable host because the fix is different in kind: the
+            # destination resolved to something not publicly routable, which on
+            # a developer machine is nearly always a local proxy's fake-IP range
+            # rather than an attack.
+            return _Fetched(source, _REFUSED)
         except Exception:
-            # Includes DestinationRefusedError. A refused source lands exactly
-            # like an unreachable one -- empty text, dropped by the caller --
-            # because a search that other sources answered should not fail on
-            # the one result that pointed somewhere internal.
-            return source
-        if response is None or getattr(response, "status_code", 200) >= 400:
-            return source
+            return _Fetched(source, _UNREACHABLE)
+        if response is None:
+            return _Fetched(source, _UNREACHABLE)
+        if getattr(response, "status_code", 200) >= 400:
+            # The site answered and said no -- a robot block, a paywall, a dead
+            # link. Nothing here is wrong; that page is simply not readable.
+            return _Fetched(source, _HTTP_ERROR)
         html = _decoded(response)
         if html == "":
-            return source
-        return _Source(
-            url=source.url,
-            title=source.title,
-            text=page_text(html, limit=MAX_PAGE_CHARS),
-        )
+            return _Fetched(source, _NO_TEXT)
+        text = page_text(html, limit=MAX_PAGE_CHARS)
+        if text == "":
+            return _Fetched(source, _NO_TEXT)
+        return _Fetched(_Source(url=source.url, title=source.title, text=text))
 
     async def _get_through_the_guard(self, url: str) -> Any | None:
         """GET ``url``, judging every hop of the redirect chain before it opens.
@@ -511,5 +554,6 @@ __all__ = [
     "WEB_SEARCH_TOOL_TYPE",
     "DeepSeekWebSearch",
     "HttpClient",
+    "SourcesUnreadableError",
     "WebSearchUnavailableError",
 ]

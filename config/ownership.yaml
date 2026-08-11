@@ -324,6 +324,7 @@
         "workflow.checkpointer_backend",
         "workflow.checkpointing_enabled",
         "workflow.human_interrupt_enabled",
+        "workflow.export_requires_approval",
         "workflow.interrupt_boundary",
         "workflow.runtime_loop_owner",
         "workflow.graph_version",

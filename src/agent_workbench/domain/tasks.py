@@ -16,7 +16,7 @@ from pydantic import Field, StringConstraints, model_validator
 
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.runs import BudgetUsage
-from agent_workbench.domain.schema import DomainModel, ShortText, VersionedModel
+from agent_workbench.domain.schema import DomainModel, VersionedModel
 from agent_workbench.domain.task_registry import ApprovalDecision
 
 #: Every node id either graph may sit on. One union rather than one per graph,
@@ -84,6 +84,33 @@ ReviewSummary = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=4096),
 ]
+
+#: One thing the next attempt has to fix, in the reviewer's own words.
+#:
+#: A type of its own rather than ``ShortText``, which is what it used to be.
+#: That type is 256 characters and every other thing wearing it is an
+#: identifier -- ``graph_version``, ``model_id``, ``reason_code``,
+#: ``profile_name``. This is the one place it was carrying free prose, and
+#: prose that another agent then works from: the reviewer is told to name
+#: something "specific enough to act on", and specific instructions about a
+#: document do not fit in an identifier's budget.
+#:
+#: 512 is measured, not doubled for luck. Across the review outputs recorded on
+#: this machine the issues ran 65 / 181 / 376 characters (shortest, median,
+#: longest) -- a distribution already sitting at 71% of the old ceiling, where
+#: one ordinary sentence of context pushed it over and failed the whole node.
+#: This clears the longest observed by a third and stays an eighth of
+#: ``ReviewSummary``, so "a short actionable item" is still what the shape says.
+#:
+#: The prompts quote 500 rather than 512, and 4000 rather than 4096. That is
+#: deliberate: a model does not count characters, it aims at the number it was
+#: given, so a round target with headroom under the real ceiling fails less
+#: often than the exact boundary would. The limit enforced here is the true
+#: one; the prompt states a goal.
+ReviewIssue = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=512),
+]
 ReviewDecision = Literal["pass", "revise"]
 
 MAX_PLAN_STEPS: Final[int] = 64
@@ -117,7 +144,7 @@ class ReviewResult(DomainModel):
     reviewed_draft_ref: Identifier
     revision_number: int = Field(ge=0, le=MAX_REVISIONS)
     summary: ReviewSummary
-    issues: tuple[ShortText, ...] = Field(default=(), max_length=32)
+    issues: tuple[ReviewIssue, ...] = Field(default=(), max_length=32)
     score: int = Field(ge=0, le=100)
 
     @model_validator(mode="after")
@@ -161,6 +188,20 @@ class TaskState(VersionedModel):
     # graph that always exported. Defaulting False here would silently change
     # what an in-flight Task does when it resumes.
     wants_report: bool = True
+    # Whether this Task's export waits for a human (ADR-031 §2.4 made it always
+    # do). Copied from configuration at load, then frozen here for the same
+    # reason `wants_report` is: routing is a pure function of state, so a Task
+    # in flight keeps the gate it was submitted under even if the deployment's
+    # setting changes underneath it -- a checkpoint that consulted live config
+    # would resume onto a different graph than the one it paused in.
+    #
+    # **Defaults True**, matching both the shipped configuration and every
+    # checkpoint written before this field existed. What the gate is *for* is
+    # narrower than it looks, which is why it can be turned off at all: export
+    # writes a versioned artifact into this Task's own store, and nothing
+    # leaves the deployment until a human clicks download. The gate guards a
+    # file appearing in a list, not a side effect anyone outside can see.
+    export_requires_approval: bool = True
     approval_id: Identifier | None = None
     # Which way the graph went at the approval gate. This is *not* a second copy
     # of the ledger's answer: the ledger records what a human decided, and this
@@ -207,11 +248,23 @@ class TaskState(VersionedModel):
             # human approval exists to prevent -- and a decision without the
             # approval it answers names nothing an auditor can look up.
             raise ValueError("approval_id and approval_decision travel together")
-        if self.export_ref is not None and self.approval_decision != "approved":
-            # The gate is the point of the gate. A state carrying an export
-            # nobody approved would be reachable only by a graph that walked
-            # past its own interrupt, and this is the cheapest place to say so:
-            # the checkpoint that recorded it would not load.
+        if (
+            self.export_ref is not None
+            and self.export_requires_approval
+            and self.approval_decision != "approved"
+        ):
+            # The gate is the point of the gate -- *where there is one*. A
+            # state carrying an export nobody approved would otherwise be
+            # reachable only by a graph that walked past its own interrupt,
+            # and this is the cheapest place to say so: the checkpoint that
+            # recorded it would not load.
+            #
+            # Conditioned on the Task's own frozen `export_requires_approval`
+            # rather than dropped. A deployment that runs without the gate has
+            # no approval to point at, so demanding one would make its exports
+            # unrepresentable; a deployment that runs *with* it keeps exactly
+            # the invariant it had, on the value that was fixed when the Task
+            # was submitted rather than on live configuration.
             raise ValueError("export_ref requires an approved approval_decision")
         return self
 
@@ -261,6 +314,7 @@ __all__ = [
     "MAX_REVISIONS",
     "MAX_STATE_REFS",
     "ReviewDecision",
+    "ReviewIssue",
     "ReviewResult",
     "ReviewSummary",
     "TaskNodeId",

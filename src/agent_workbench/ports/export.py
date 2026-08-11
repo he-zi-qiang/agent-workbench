@@ -31,7 +31,15 @@ class ReportExportPort(Protocol):
         self,
         *,
         draft_ref: Identifier,
-        approval_id: Identifier,
+        #: The approval this export rests on, or ``None`` on a deployment that
+        #: does not gate exports (`workflow.export_requires_approval`).
+        #:
+        #: Optional rather than required because it is *provenance*, not
+        #: authority: nothing checks it, and its one use is a line in the
+        #: report saying who approved this. An ungated export has no such line
+        #: to write truthfully, and inventing an identifier to satisfy a
+        #: signature would put a fabricated approval into a delivered document.
+        approval_id: Identifier | None,
         execution: ExecutionContext,
         sink: EventSink,
         cancellation: CancellationToken,

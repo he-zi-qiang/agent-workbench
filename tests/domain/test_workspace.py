@@ -52,6 +52,58 @@ def test_a_name_may_not_be_a_path() -> None:
         assert manifest.names() == (accepted,)
 
 
+def test_with_entry_refuses_every_name_the_constructor_refuses() -> None:
+    """The gap the test above left, and what fell through it.
+
+    That one builds a manifest directly; nothing in production does. Every
+    write goes through ``with_entry``, which used to end in ``model_copy`` --
+    and ``model_copy`` does not run validators. So a name the constructor
+    rejects was accepted here, serialized, and committed, and the workspace
+    only failed on the *next* read.
+
+    Measured on this machine: a work node wrote ``季度总结.docx``, the tool
+    reported success, and from then on every list, read, grep and write in
+    that Task failed -- including writes of perfectly legal names, because a
+    write loads the manifest first. The Task could not recover, and the error
+    named a call that had already returned.
+    """
+
+    rejected_names = (
+        "a/b.md",
+        "../secret",
+        "/etc/passwd",
+        "a\\b",
+        "",
+        ".",
+        "季度.docx",
+    )
+    for rejected in rejected_names:
+        with pytest.raises(ValidationError):
+            WorkspaceManifest().with_entry(rejected, ref())
+
+    # Control: the same names the constructor accepts, accepted here too.
+    for accepted in ("notes.md", "draft-v2.md", "data_1.csv", "a.b.c.json"):
+        assert WorkspaceManifest().with_entry(accepted, ref()).names() == (accepted,)
+
+
+def test_a_rejected_write_leaves_the_previous_version_untouched() -> None:
+    """Refusing has to be inert, or a failed write is a corrupted workspace.
+
+    The manifest a caller already holds is the one its node keeps working
+    from, so a refusal that mutated it in passing would poison the version
+    that was fine.
+    """
+
+    before = WorkspaceManifest().with_entry("kept.md", ref())
+
+    with pytest.raises(ValidationError):
+        before.with_entry("季度总结.docx", ref())
+
+    assert before.names() == ("kept.md",)
+    # And it still round-trips, which is the property the poisoned one lost.
+    assert WorkspaceManifest.model_validate_json(before.model_dump_json()) == before
+
+
 def test_names_come_back_sorted_so_a_listing_is_reproducible() -> None:
     manifest = WorkspaceManifest(entries={"c.md": ref(), "a.md": ref(), "b.md": ref()})
 

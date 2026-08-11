@@ -120,3 +120,15 @@ routed_relevance_threshold = 0.01
 # off until evals/triage has an accuracy report for the deployed model
 # (ADR-036).
 enabled = true
+
+[workflow]
+# One person's machine, where the person who submits a Task is the same person
+# who would approve its export and the only one who can read the result. The
+# gate asks them to authorise handing a file to themselves, which is a
+# formality -- and a formality on every Task is how approving without looking
+# becomes a habit. Off here; the shipped default stays true.
+#
+# It does not widen anything: export writes into this tenant's own artifact
+# store under the same per-principal authorization as before, and the bytes
+# reach nobody until someone clicks download.
+export_requires_approval = false

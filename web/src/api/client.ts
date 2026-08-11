@@ -6,6 +6,7 @@ import type {
   AskResponse,
   CreateSessionResponse,
   CreateUploadResponse,
+  DocumentPreview,
   DocumentVersion,
   HealthResponse,
   HistoryResponse,
@@ -503,6 +504,25 @@ export async function getArtifactText(
     return { text: await blob.slice(0, MAX_PREVIEW_BYTES).text(), truncated: true };
   }
   return { text: await blob.text(), truncated: false };
+}
+
+/**
+ * A Word document as text, extracted by the server.
+ *
+ * Server-side because a .docx is a zip of XML: doing it here means shipping a
+ * zip reader and an XML parser to every page load to re-derive text the API can
+ * already produce with the same library that wrote the file.
+ */
+export async function getDocumentPreview(
+  identity: PrincipalIdentity,
+  artifactId: string,
+): Promise<DocumentPreview> {
+  const response = await fetch(
+    `/v1/artifacts/${encodeURIComponent(artifactId)}/preview`,
+    { headers: { ...identityHeaders(identity), accept: "application/json" } },
+  );
+  if (!response.ok) throw await parseError(response);
+  return (await response.json()) as DocumentPreview;
 }
 
 export async function getArtifactJson<T>(

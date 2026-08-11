@@ -278,7 +278,10 @@ async def build_task_worker_dependencies(
                 TaskApprovalGate(approvals=approvals, registry=registry)
             )
             handlers = real
-        inputs = TaskInputStore(artifacts)
+        inputs = TaskInputStore(
+            artifacts,
+            export_requires_approval=config.task.export_requires_approval,
+        )
         workflow = LangGraphTaskWorkflow(
             handlers=handlers,
             checkpointer=PostgresCheckpointSaver(engine, require_fence=True),

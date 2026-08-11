@@ -110,7 +110,7 @@ class TaskWorkspace:
         """Store ``content`` under ``name`` and return the next version.
 
         The order matters. Bytes are stored first, then the manifest is built --
-        and the manifest constructor is what enforces the name and the ceilings,
+        and building the manifest is what enforces the name and the ceilings,
         so a refused write has already stored bytes that no manifest names.
         Those are unreferenced, exactly like the ones a dead attempt leaves, and
         they are the same known cost recorded in ADR-028 §3.2: this repository

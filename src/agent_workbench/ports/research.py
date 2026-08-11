@@ -25,6 +25,38 @@ class ExternalEvidenceSkipped:
     reason: ExternalEvidenceSkipReason
 
 
+class SourcesUnreadableError(RuntimeError):
+    """Search named pages, and not one of them could be read.
+
+    Part of this port's contract rather than any one adapter's, because the
+    distinction it draws is one every caller has to make and no caller can make
+    for itself. An empty result means the query found nothing, and that is what
+    a caller tells the model -- "say the search found nothing rather than
+    answering from memory". When search actually returned pages and every fetch
+    failed, that sentence blames the query for a fault in the network path, and
+    nothing downstream can tell the two apart from an empty tuple.
+
+    Measured on a developer machine behind a fake-IP proxy: every hostname
+    resolved into 198.18.0.0/15, the address guard refused all nineteen results
+    by design, and the answer read "搜索没有返回结果" -- which sent the reader
+    looking for a better query for a problem that was in their DNS.
+
+    ``reasons`` counts failures by short code rather than listing them by URL.
+    The message reaches the model's context through a tool result, so it carries
+    what a reader needs to act -- how many pages, and how they failed -- and not
+    which address any single refusal was aimed at.
+    """
+
+    def __init__(self, named: int, reasons: dict[str, int] | None = None) -> None:
+        self.named = named
+        self.reasons = dict(reasons or {})
+        breakdown = ", ".join(
+            f"{code}={count}" for code, count in sorted(self.reasons.items())
+        )
+        detail = f" ({breakdown})" if breakdown else ""
+        super().__init__(f"search named {named} page(s) and none could be read{detail}")
+
+
 @runtime_checkable
 class ExternalSearchPort(Protocol):
     """Search public sources without receiving a model-selected identity."""
@@ -36,7 +68,12 @@ class ExternalSearchPort(Protocol):
         limit: int,
         cancellation: CancellationToken,
     ) -> tuple[ExternalSearchHit, ...]:
-        """Return bounded public results or raise an adapter-specific error."""
+        """Return bounded public results or raise an adapter-specific error.
+
+        Raises :class:`SourcesUnreadableError` when the search itself succeeded
+        and named pages that could not then be read. An empty tuple is reserved
+        for a search that genuinely matched nothing.
+        """
         ...
 
 
@@ -63,4 +100,5 @@ __all__ = [
     "ExternalEvidenceSkipped",
     "ExternalEvidenceToolPort",
     "ExternalSearchPort",
+    "SourcesUnreadableError",
 ]

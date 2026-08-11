@@ -122,7 +122,10 @@ export function describeEvent(event: EventEnvelope): StepDetail {
 
     case "ToolProposed": {
       const bytes = numberOf(payload.argument_bytes);
-      detail.summary = text(payload.tool_name);
+      // What the call was for, not its name -- the row's title is already the
+      // tool name, and repeating it spends the summary saying nothing.
+      detail.summary =
+        salientArgument(payload) ?? (bytes === null ? null : `${bytes} 字节参数`);
       detail.facts = [
         fact("工具", text(payload.tool_name)),
         fact("风险等级", label(RISK_LABELS, payload.risk)),
@@ -174,12 +177,18 @@ export function describeEvent(event: EventEnvelope): StepDetail {
 
     case "ToolFailed": {
       const error = record(payload.error);
-      detail.summary = text(error?.code);
+      const message = text(error?.message);
+      // The message, falling back to the code. One code covers several
+      // situations -- `provider_unavailable` is both "no provider configured"
+      // and "found 5 pages and could read none of them" -- so the code alone
+      // sends the reader to the wrong fix. Measured: a proxy that refused every
+      // fetch read on screen as `provider_unavailable`, indistinguishable from
+      // a deployment that never had web search at all.
+      detail.summary = message === "—" ? text(error?.code) : summarize(message);
       detail.facts = [
         fact("错误码", text(error?.code)),
         fact("可以重试", error?.retryable === true ? "是" : "否"),
       ];
-      const message = text(error?.message);
       if (message !== "—") detail.bodies.push(bodyOf("错误信息", message));
       return detail;
     }
@@ -278,6 +287,36 @@ function prettyJson(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The one argument worth putting on a collapsed line.
+ *
+ * Not a renderer for arbitrary JSON -- opening the step already shows the
+ * arguments faithfully. This answers "what was this call for" in the width of a
+ * summary, from a small set of keys that carry a call's subject across this
+ * system's tools. Nothing when none of them fit, rather than a truncated blob
+ * of braces that reads as noise.
+ */
+const SALIENT_KEYS = ["query", "url", "question", "path", "name"] as const;
+
+function salientArgument(payload: Record<string, unknown>): string | null {
+  const preview = payload.argument_preview;
+  if (typeof preview !== "string" || preview === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(preview);
+  } catch {
+    return null;
+  }
+  const fields = record(parsed);
+  if (fields === null) return null;
+  for (const key of SALIENT_KEYS) {
+    const value = fields[key];
+    if (typeof value !== "string" || value.trim() === "") continue;
+    return summarize(value);
+  }
+  return null;
 }
 
 function summarize(value: string): string | null {

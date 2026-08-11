@@ -31,7 +31,7 @@ from agent_workbench.adapters.research.deepseek_web_search import (
 )
 from agent_workbench.adapters.research.guarded_fetch import MAX_REDIRECTS
 from agent_workbench.ports.cancellation import NullCancellationToken
-from agent_workbench.ports.research import ExternalSearchPort
+from agent_workbench.ports.research import ExternalSearchPort, SourcesUnreadableError
 
 #: What a fetched page says, unless a test says otherwise.
 PAGE_HTML = "<html><body><h1>丹东天气</h1><p>今天 晴 23°/36°</p></body></html>"
@@ -140,6 +140,19 @@ async def _resolves_public(host: str) -> tuple[str, ...]:
     return _RESOLVED.get(host, (PUBLIC_ADDRESS,))
 
 
+#: A developer machine behind a fake-IP proxy, as the guard sees it: every name
+#: answers with an address in 198.18.0.0/15, which `is_global` reports false for
+#: because it is the benchmarking range. `refused.example` is the only host that
+#: gets this treatment, so a test can mix a refusal with other failure shapes.
+_FAKE_IP = "198.18.0.150"
+
+
+async def _resolves_into_a_fake_ip_range(host: str) -> tuple[str, ...]:
+    if host == "refused.example":
+        return (_FAKE_IP,)
+    return _RESOLVED.get(host, (PUBLIC_ADDRESS,))
+
+
 def _run(
     *responses: _FakeResponse,
     limit: int = 5,
@@ -162,6 +175,36 @@ def _run(
         )
     )
     return hits, http
+
+
+def _run_unreadable(
+    *responses: _FakeResponse,
+    limit: int = 5,
+    pages: dict[str, Any] | None = None,
+    default_page: Any = None,
+    resolve: Any = _resolves_public,
+) -> tuple[SourcesUnreadableError, _FakeHttp]:
+    """``_run`` for the searches where no page is readable.
+
+    Separate from ``_run`` because that one hands back the fake so a test can
+    assert on what was actually requested, and an exception on the way out
+    takes the return value with it. Fails the test if the search *succeeds*:
+    every caller is written to observe a mechanism that runs only on this path.
+    """
+
+    http = _FakeHttp(*responses, pages=pages, default_page=default_page)
+    adapter = DeepSeekWebSearch(
+        http=http, api_key="sk-test", model="deepseek-chat", resolve_addresses=resolve
+    )
+    with pytest.raises(SourcesUnreadableError) as raised:
+        asyncio.run(
+            adapter.search(
+                query="今天丹东天气怎么样",
+                limit=limit,
+                cancellation=NullCancellationToken(),
+            )
+        )
+    return raised.value, http
 
 
 def test_the_adapter_satisfies_the_external_search_port() -> None:
@@ -240,16 +283,74 @@ def test_no_page_readable_means_no_evidence_and_no_condensing_turn() -> None:
 
     With every page unreadable there is nothing to condense. Asking the model
     anyway is precisely how invented weather figures got recorded as evidence.
+
+    Raised rather than returned empty, because the two mean opposite things to
+    whoever has to fix them: an empty result says the query matched nothing,
+    and this says the query matched and the network path did not deliver.
     """
 
-    hits, http = _run(
-        _FakeResponse(_searched("https://example.com/a")),
-        _FakeResponse(_extracted({"source": 1, "extract": "Invented."})),
-        default_page=_FakePage(status_code=404),
-    )
+    with pytest.raises(SourcesUnreadableError) as raised:
+        _run(
+            _FakeResponse(_searched("https://example.com/a")),
+            _FakeResponse(_extracted({"source": 1, "extract": "Invented."})),
+            default_page=_FakePage(status_code=404),
+        )
+
+    assert raised.value.named == 1
+    assert raised.value.reasons == {"http_error": 1}
+
+
+def test_an_empty_search_is_not_reported_as_unreadable_sources() -> None:
+    """The control group for the test above.
+
+    Both paths end with no evidence, and only one of them is a network fault.
+    Without this, an adapter that raised on *every* empty outcome would pass
+    the test above while destroying the distinction it was written to create --
+    every fruitless query would be reported to the reader as a broken deployment.
+    """
+
+    hits, http = _run(_FakeResponse(_searched()))
 
     assert hits == ()
+    # No sources named, so nothing was fetched and no condensing turn was paid
+    # for -- the search simply found nothing.
+    assert http.fetched == []
     assert len(http.calls) == 1
+
+
+def test_the_failure_breakdown_distinguishes_a_refusal_from_a_dead_host() -> None:
+    """What the reasons are *for*: telling a proxy apart from a bad query.
+
+    Measured on a developer machine behind a fake-IP proxy, every hostname
+    resolved into 198.18.0.0/15 and the address guard refused all of them by
+    design. `refused=N` is the one signal that says so; without it the reader
+    sees the same "no results" a genuinely empty search produces and goes
+    looking for a better query.
+    """
+
+    with pytest.raises(SourcesUnreadableError) as raised:
+        _run(
+            _FakeResponse(
+                _searched(
+                    "https://refused.example/a",
+                    "https://timeout.example/b",
+                    "https://blocked.example/c",
+                )
+            ),
+            _FakeResponse(_extracted({"source": 1, "extract": "Invented."})),
+            pages={
+                "https://timeout.example/b": TimeoutError("connect timed out"),
+                "https://blocked.example/c": _FakePage(status_code=403),
+            },
+            resolve=_resolves_into_a_fake_ip_range,
+        )
+
+    assert raised.value.named == 3
+    assert raised.value.reasons == {"refused": 1, "unreachable": 1, "http_error": 1}
+    # The address that caused the refusal is never in the message: it reaches
+    # the model's context, and confirming which internal range was guessed
+    # right is the disclosure DestinationRefusedError already refuses to make.
+    assert "198.18" not in str(raised.value)
 
 
 def test_a_loopback_or_private_url_is_never_fetched() -> None:
@@ -290,14 +391,16 @@ def test_an_oversized_body_is_not_parsed() -> None:
         content = huge
         encoding = "utf-8"
 
-    hits, http = _run(
-        _FakeResponse(_searched("https://example.com/a")),
-        _FakeResponse(_extracted({"source": 1, "extract": "e"})),
-        pages={"https://example.com/a": _Bytes()},
-    )
+    with pytest.raises(SourcesUnreadableError) as raised:
+        _run(
+            _FakeResponse(_searched("https://example.com/a")),
+            _FakeResponse(_extracted({"source": 1, "extract": "e"})),
+            pages={"https://example.com/a": _Bytes()},
+        )
 
-    assert hits == ()
-    assert len(http.calls) == 1
+    # The body was never parsed, so the page yielded no text at all -- which is
+    # a different failure from the site refusing us, and is counted as one.
+    assert raised.value.reasons == {"no_text": 1}
 
 
 def test_a_gbk_page_that_declared_no_charset_is_still_read() -> None:
@@ -505,7 +608,7 @@ def test_a_redirect_is_followed_here_so_every_hop_goes_through_the_guard() -> No
     guard runs again on each hop.
     """
 
-    _, http = _run(
+    _, http = _run_unreadable(
         _FakeResponse(_searched("https://example.com/redirect")),
         _FakeResponse(_extracted({"source": 1, "extract": "e"})),
         pages={
@@ -568,7 +671,7 @@ def test_a_relative_redirect_resolves_against_the_url_that_answered() -> None:
 
 
 def test_an_endless_redirect_loop_yields_no_evidence_rather_than_spinning() -> None:
-    _, http = _run(
+    _, http = _run_unreadable(
         _FakeResponse(_searched("https://example.com/loop")),
         _FakeResponse(_extracted({"source": 1, "extract": "e"})),
         pages={

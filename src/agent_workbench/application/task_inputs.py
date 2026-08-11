@@ -40,6 +40,12 @@ class TaskInputStore:
     """Map an immutable ``TaskInput`` to and from an owned artifact."""
 
     artifacts: ArtifactStore
+    #: Whether a Task loaded here exports behind the human gate. A deployment
+    #: setting rather than a submitter's choice -- the asker does not get to
+    #: decide whether their own output is reviewed -- and read once at load so
+    #: the value is frozen into the checkpoint (see `TaskState`). Defaulted to
+    #: the shipped configuration so every existing construction is unchanged.
+    export_requires_approval: bool = True
 
     async def store(
         self, *, principal: PrincipalContext, task_input: TaskInput
@@ -73,6 +79,7 @@ class TaskInputStore:
             # checkpoints older than the field, and a Task loading its input
             # is never one of those.
             wants_report=task_input.wants_report,
+            export_requires_approval=self.export_requires_approval,
         )
 
     async def _load(

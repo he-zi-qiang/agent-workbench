@@ -17,14 +17,36 @@ that stops partway, which is indistinguishable from a network failure.
 
 from __future__ import annotations
 
+from typing import Final
 from urllib.parse import quote
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
+from agent_workbench.apps.api.docx_preview import extract_docx_preview
 from agent_workbench.apps.api.state import dependencies_of
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
+
+DOCX_MEDIA_TYPE: Final[str] = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+
+#: Refused above this, rather than streamed into a parser. A .docx is a zip, so
+#: the in-memory cost of reading one is its *expanded* size -- and the 100 MiB
+#: artifact ceiling is a ceiling on the compressed bytes. Preview is a
+#: convenience; the download has no such limit and is what a large document is
+#: for.
+MAX_PREVIEW_SOURCE_BYTES: Final[int] = 20 * 1024 * 1024
+
+
+class DocumentPreview(BaseModel):
+    """A rendered document as text, for showing beside the run that made it."""
+
+    text: str
+    truncated: bool
+    table_count: int
 
 
 def _content_disposition(filename: str | None) -> str:
@@ -67,6 +89,61 @@ async def download(artifact_id: str, request: Request) -> StreamingResponse:
             "content-length": str(described.size_bytes),
             "x-artifact-sha256": described.sha256,
         },
+    )
+
+
+@router.get("/{artifact_id}/preview")
+async def preview(artifact_id: str, request: Request) -> DocumentPreview:
+    """A .docx as text, for the panel beside the run.
+
+    The same authorization as the download, reached the same way: ``head``
+    first, so an id that is not this principal's is a 404 before any bytes are
+    read, and unknown/wrong-tenant/wrong-principal stay indistinguishable.
+
+    Only .docx. Text and JSON are already previewable by fetching them, so a
+    general "preview anything" endpoint would be a second path to bytes the
+    client can read directly -- one more place for the authorization to be
+    written slightly differently.
+    """
+
+    dependencies = dependencies_of(request)
+    principal = dependencies.principals.resolve(request)
+    described = await dependencies.artifacts.head(
+        tenant_id=principal.tenant_id,
+        artifact_id=artifact_id,
+        principal_id=principal.principal_id,
+    )
+    if described.media_type != DOCX_MEDIA_TYPE:
+        raise HTTPException(
+            status_code=415,
+            detail="preview is available for Word documents only",
+        )
+    if described.size_bytes > MAX_PREVIEW_SOURCE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="the document is too large to preview; download it instead",
+        )
+
+    content = await dependencies.artifacts.get(
+        tenant_id=principal.tenant_id,
+        artifact_id=artifact_id,
+        principal_id=principal.principal_id,
+    )
+    try:
+        extracted = extract_docx_preview(content)
+    except Exception as error:
+        # A stored artifact that will not parse is a fact about the file, not a
+        # fault the caller can act on beyond downloading it. Deliberately not a
+        # 500: nothing here is broken, and the download still works.
+        raise HTTPException(
+            status_code=422,
+            detail="the document could not be read as Word content",
+        ) from error
+
+    return DocumentPreview(
+        text=extracted.text,
+        truncated=extracted.truncated,
+        table_count=extracted.table_count,
     )
 
 

@@ -55,13 +55,20 @@ _IDENTIFIER_SCHEMA: Final[dict[str, JsonValue]] = {
 INPUT_SCHEMA: dict[str, JsonValue] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["draft_ref", "approval_id"],
+    "required": ["draft_ref"],
     "properties": {
         "draft_ref": _IDENTIFIER_SCHEMA,
         # Part of the request rather than context, because it is part of what
         # makes this export the one that was authorized. A second approval over
         # the same draft is a different operation, and the ledger's canonical
         # request hash is where that difference has to be visible.
+        #
+        # Optional since the gate became optional
+        # (`workflow.export_requires_approval`). Where there is no gate the
+        # distinction it draws does not exist -- there is no second approval
+        # over the same draft -- so the key is simply absent and the hash is
+        # over the draft alone. Absent, never a placeholder: a synthetic id
+        # here would be indistinguishable in the ledger from a real approval.
         "approval_id": _IDENTIFIER_SCHEMA,
     },
 }
@@ -118,7 +125,11 @@ class ExportArtifactTool:
         approval_id = arguments.get("approval_id")
         if not isinstance(draft_ref, str) or not draft_ref:
             return _invalid(invocation, "draft_ref must be a non-empty string")
-        if not isinstance(approval_id, str) or not approval_id:
+        # Absent is allowed -- an ungated deployment has no approval to name.
+        # Present-but-empty is not: that is a caller that meant to supply one.
+        if approval_id is not None and (
+            not isinstance(approval_id, str) or not approval_id
+        ):
             return _invalid(invocation, "approval_id must be a non-empty string")
         if invocation.context.task_id is None:
             return _invalid(invocation, "export_artifact is available only in a Task")
@@ -176,20 +187,31 @@ class ExportArtifactTool:
 
 
 def render_report(
-    *, task_id: str, approval_id: str, draft_ref: str, draft: bytes
+    *, task_id: str, approval_id: str | None, draft_ref: str, draft: bytes
 ) -> bytes:
     """Build the report bytes, deterministically.
 
     The draft is decoded permissively and re-encoded: it was written as UTF-8 by
     the synthesis node, and a byte that says otherwise is a corrupt draft, not a
     reason to refuse an export a human has already approved.
+
+    With no approval the header says so, rather than dropping the line. A
+    report that simply omits "Approved by" reads the same as one from before
+    this field existed; a report that says the export was not gated tells its
+    reader what the document is, which is the entire job of a provenance
+    header.
     """
 
     body = draft.decode("utf-8", errors="replace")
+    approval_line = (
+        f"- Approved by: {approval_id}\n"
+        if approval_id is not None
+        else "- Approved by: not required by this deployment\n"
+    )
     header = (
         "# Task report\n\n"
         f"- Task: {task_id}\n"
-        f"- Approved by: {approval_id}\n"
+        f"{approval_line}"
         f"- Draft: {draft_ref}\n\n"
         "---\n\n"
     )

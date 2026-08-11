@@ -10,6 +10,7 @@ import {
   getApproval,
   getArtifactJson,
   getArtifactText,
+  getDocumentPreview,
   getTask,
   getTaskTimeline,
   listKnowledgeBases,
@@ -29,6 +30,7 @@ vi.mock("../../api/client", async () => {
     getApproval: vi.fn(),
     getArtifactJson: vi.fn(),
     getArtifactText: vi.fn(),
+    getDocumentPreview: vi.fn(),
     getTask: vi.fn(),
     getTaskTimeline: vi.fn(),
     listKnowledgeBases: vi.fn(),
@@ -58,6 +60,7 @@ describe("WorkPage task submission", () => {
     vi.mocked(getApproval).mockReset();
     vi.mocked(getArtifactJson).mockReset();
     vi.mocked(getArtifactText).mockReset();
+    vi.mocked(getDocumentPreview).mockReset();
     vi.mocked(getTask).mockReset();
     vi.mocked(getTaskTimeline).mockReset();
     vi.mocked(listKnowledgeBases).mockReset();
@@ -404,11 +407,74 @@ describe("WorkPage task submission", () => {
       ),
     ).not.toBeInTheDocument();
 
-    // One control, and it is an icon: the filename beside it already says what
-    // the file is, so a "下载" label would only repeat it.
+    // One control, and it is labelled. It used to be a bare icon on the theory
+    // that the filename beside it said enough; in use it sat at the end of a
+    // header row and was routinely missed. The file is what the reader came
+    // for, so the way to keep it is spelled out.
     const downloads = screen.getAllByRole("button", { name: /^下载/ });
     expect(downloads).toHaveLength(1);
-    expect(downloads[0]).toHaveTextContent("");
+    expect(downloads[0]).toHaveTextContent("下载");
+  });
+
+  it("shows a Word document's text inline instead of saying it cannot", async () => {
+    // The regression this replaces: a .docx fell through to "这个类型只能下载
+    // 查看" -- the one artifact most Tasks are actually asked to produce was
+    // the one the console refused to show.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue({
+      text: "## 背景\n\n这一段来自文档。",
+      truncated: false,
+      table_count: 2,
+    });
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(await within(output).findByText("这一段来自文档。")).toBeInTheDocument();
+    expect(vi.mocked(getDocumentPreview)).toHaveBeenCalledWith(
+      expect.anything(),
+      "art_report",
+    );
+    // The preview never pretends to be the document. It says what it dropped,
+    // and the file stays one click away.
+    expect(within(output).getByText(/共 2 张表格/)).toBeInTheDocument();
+    expect(
+      within(output).getByRole("button", { name: /^下载/ }),
+    ).toBeInTheDocument();
+    // And it must not fall back to the blob fetch, which would send a text
+    // reader at a zip.
+    expect(vi.mocked(getArtifactText)).not.toHaveBeenCalled();
+  });
+
+  it("keeps the document downloadable when its text cannot be extracted", async () => {
+    // The control. A failed extraction is a failed *convenience*; reporting it
+    // as a lost document would be worse than showing nothing.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+    vi.mocked(getDocumentPreview).mockRejectedValue(new Error("解析失败"));
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(
+      await within(output).findByText(/文件本身没有问题/),
+    ).toBeInTheDocument();
+    expect(
+      within(output).getByRole("button", { name: /^下载/ }),
+    ).toBeInTheDocument();
   });
 
   it("presents an answer with no file as the result, not as a missing file", async () => {
@@ -708,6 +774,22 @@ function reportTimeline() {
       },
     ],
   };
+}
+
+/** `reportTimeline`, with the exported file being a Word document. */
+function docxTimeline() {
+  const timeline = reportTimeline();
+  const exported = timeline.events[1];
+  if (exported === undefined) throw new Error("fixture lost its export event");
+  const payload = exported.payload as { artifact?: Record<string, unknown> };
+  if (payload.artifact === undefined) throw new Error("fixture lost its artifact");
+  payload.artifact = {
+    ...payload.artifact,
+    media_type:
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    filename: "季度报告.docx",
+  };
+  return timeline;
 }
 
 function approvalTimeline() {

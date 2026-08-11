@@ -137,6 +137,11 @@ class GraphState(TypedDict, total=False):
     # value that never became a channel would default back on every hop and
     # export a file nobody asked for.
     wants_report: bool
+    # Written once at load, beside `wants_report`, and read by the same router.
+    # Without a channel it would default back to True on every hop, so a
+    # deployment that turned the gate off would still pause -- and the pause
+    # would be at a node whose approval nothing opened.
+    export_requires_approval: bool
     plan: tuple[Any, ...]
     evidence_refs: Annotated[tuple[Identifier, ...], _merge]
     agent_outcome_refs: Annotated[tuple[Identifier, ...], _merge]
@@ -366,8 +371,14 @@ def build_v2_graph(
             graph.add_edge(source, target)
     graph.add_edge(general_graph.TERMINAL_NODE, END)
 
+    # "export" is here because a deployment may run without the approval gate
+    # (`workflow.export_requires_approval`), and then `route_review` sends a
+    # passing review straight there. This list is what LangGraph resolves a
+    # router's answer against, so a target the router can return and this list
+    # omits is a `KeyError` at run time -- measured, on the first real Task
+    # submitted after the gate was made optional.
     graph.add_conditional_edges(
-        "review", _route_review, ["approval", "work", _EXHAUSTED]
+        "review", _route_review, ["approval", "export", "work", _EXHAUSTED]
     )
     graph.add_conditional_edges("approval", _route_v2_approval, ["export", _EXHAUSTED])
     return graph

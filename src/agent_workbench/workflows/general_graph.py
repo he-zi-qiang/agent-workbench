@@ -104,7 +104,13 @@ def route_review(state: TaskState) -> TaskNodeId | None:
     if review is None:
         raise MissingReviewError(state.task_id)
     if review.decision == "pass":
-        return "approval" if state.wants_report else None
+        if not state.wants_report:
+            return None
+        # Straight to export when the deployment does not gate it. The gate is
+        # skipped, not faked: no approval row is opened, so nothing later reads
+        # a decision nobody made. `route_approval` still refuses to export
+        # without one, which is what keeps this the only way past it.
+        return "approval" if state.export_requires_approval else "export"
     return "work" if state.can_revise else None
 
 

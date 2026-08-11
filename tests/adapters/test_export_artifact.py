@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from agent_workbench.adapters.memory.artifact_store import InMemoryArtifactStore
 from agent_workbench.adapters.tools.export_artifact import (
     MAX_DRAFT_BYTES,
@@ -187,6 +185,29 @@ def test_a_different_approval_renders_a_different_report() -> None:
     assert approved != other
 
 
+def test_an_ungated_export_says_so_rather_than_naming_an_approval() -> None:
+    """The header is provenance, so an absent approval has to read as absent.
+
+    Two wrong answers were available: invent an identifier, which puts a
+    fabricated approval into a delivered document, or drop the line, which
+    makes the report indistinguishable from one written before the field
+    existed. It says what happened instead.
+    """
+
+    rendered = render_report(
+        task_id="task_1", approval_id=None, draft_ref="art_1", draft=b"body"
+    ).decode()
+
+    assert "- Approved by: not required by this deployment" in rendered
+    assert "apr_" not in rendered
+    # And it is still a different document from an approved one, so the two
+    # cannot be confused by a reader or by the ledger.
+    approved = render_report(
+        task_id="task_1", approval_id="apr_1", draft_ref="art_1", draft=b"body"
+    )
+    assert rendered.encode() != approved
+
+
 def test_a_corrupt_draft_is_exported_rather_than_refused() -> None:
     """A person already approved this. Undecodable bytes are a broken draft.
 
@@ -279,17 +300,39 @@ def test_an_export_outside_a_task_is_invalid_input() -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("missing", ["draft_ref", "approval_id"])
-def test_a_missing_argument_is_refused_before_anything_is_written(
-    missing: str,
-) -> None:
+def test_a_missing_draft_is_refused_before_anything_is_written() -> None:
     async def scenario() -> None:
         store = InMemoryArtifactStore()
         tool = ExportArtifactTool(artifacts=store)
-        arguments = {"draft_ref": "art_1", "approval_id": "apr_1"}
-        del arguments[missing]
         call = ToolCall(
-            tool_call_id="toolu_01", tool_name=TOOL_NAME, arguments=arguments
+            tool_call_id="toolu_01",
+            tool_name=TOOL_NAME,
+            arguments={"approval_id": "apr_1"},
+        )
+
+        result = await tool.handle(_invocation(call, _context()))
+
+        assert result.status == "error"
+        assert result.error is not None
+        assert result.error.code == "invalid_tool_input"
+
+    asyncio.run(scenario())
+
+
+def test_an_empty_approval_id_is_still_refused() -> None:
+    """Absent and empty are different callers.
+
+    Absent is a deployment that does not gate exports. Empty is a caller that
+    meant to name an approval and passed nothing, which would put a blank
+    where the report says who approved this.
+    """
+
+    async def scenario() -> None:
+        tool = ExportArtifactTool(artifacts=InMemoryArtifactStore())
+        call = ToolCall(
+            tool_call_id="toolu_01",
+            tool_name=TOOL_NAME,
+            arguments={"draft_ref": "art_1", "approval_id": ""},
         )
 
         result = await tool.handle(_invocation(call, _context()))

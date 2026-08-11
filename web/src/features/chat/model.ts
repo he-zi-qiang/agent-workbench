@@ -390,33 +390,61 @@ function failRunCorrelation(state: ChatState, localId: string): ChatState {
 }
 
 /**
- * One model call is one row: `ModelStarted` and `ModelCompleted` share an
- * activity key, and the completion replaces the start. The prompt only ever
- * arrives on the start, so without this the only event carrying it is thrown
- * away the moment the call finishes -- and every finished step would open onto
- * a missing prompt.
+ * Fields that arrive on a step's *opening* event and never again.
+ *
+ * A start and its completion share an activity key so one step is one row, and
+ * the completion replaces the start. Anything the start alone carried is thrown
+ * away at that moment unless it is named here.
+ *
+ * - `prompt_preview` rides `ModelStarted`; without it every finished model step
+ *   opened onto a missing prompt.
+ * - `tool_names` rides `RunStarted`, which `RunCompleted` overwrites under the
+ *   same `run:` key. It is the only record of what the turn was permitted to
+ *   reach, so losing it meant a finished turn could not say which tools it had
+ *   -- the capability list read empty on exactly the turns anyone would look.
+ * - `tool_name` rides `ToolProposed` and `ToolStarted`. `ToolFailed` carries
+ *   only the call id and the error, so a failed call lost the name of the tool
+ *   that failed: measured in the browser, a real `web_search` failure rendered
+ *   as "工具执行失败" with nothing saying which tool, and the capability row
+ *   above it reported `web_search` as never called.
+ * - `argument_preview` rides `ToolProposed` alone -- it is what the call was
+ *   *for*, and every later event on that call would drop it.
  */
-function carryPrompt(
+const CARRIED_FORWARD = [
+  "prompt_preview",
+  "tool_names",
+  "tool_name",
+  "argument_preview",
+] as const;
+
+function carryForward(
   previous: ChatActivity | undefined,
   next: ChatActivity,
 ): ChatActivity {
-  const prompt = previous?.envelope.payload.prompt_preview;
-  if (typeof prompt !== "string" || prompt === "") return next;
-  if (typeof next.envelope.payload.prompt_preview === "string") return next;
-  return {
-    ...next,
-    envelope: {
-      ...next.envelope,
-      payload: { ...next.envelope.payload, prompt_preview: prompt },
-    },
-  };
+  if (previous === undefined) return next;
+  let payload = next.envelope.payload;
+  for (const field of CARRIED_FORWARD) {
+    const carried = previous.envelope.payload[field];
+    if (carried === undefined || carried === "") continue;
+    // The newer event wins whenever it said anything at all; this only fills
+    // a hole the replacement left.
+    if (payload[field] !== undefined) continue;
+    payload = { ...payload, [field]: carried };
+  }
+  if (payload === next.envelope.payload) return next;
+  // Recomputed, not patched in place. `label` and `detail` were derived from
+  // the event before anything was carried across, so a payload that just
+  // gained `tool_name` still carries the generic "工具执行失败" that missing
+  // field produced. `activityFromEnvelope` is pure, so deriving again from the
+  // completed payload is the whole fix.
+  return activityFromEnvelope({ ...next.envelope, payload });
 }
 
 function applySafeEvent(turn: ChatTurnState, event: SafeRunEvent): ChatTurnState {
   const activityIndex = turn.activities.findIndex((item) => item.key === event.activity.key);
   const activities = [...turn.activities];
   if (activityIndex < 0) activities.push(event.activity);
-  else activities[activityIndex] = carryPrompt(activities[activityIndex], event.activity);
+  else activities[activityIndex] = carryForward(activities[activityIndex], event.activity);
 
   let next: ChatTurnState = {
     ...turn,
@@ -648,12 +676,32 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
   }
   if (kind === "ToolProposed") {
     const callId = stringField(payload, "tool_call_id") ?? envelope.event_id;
+    const salient = salientArgument(payload);
     return {
       ...base,
       key: `tool:${callId}`,
       label: stringField(payload, "tool_name") ?? "工具调用",
       state: "running",
-      detail: `${numberField(payload, "argument_bytes") ?? 0} B 参数`,
+      // What the call was *for*, when the deployment records arguments. The
+      // byte count it replaces was technically true and never once answered
+      // the question a reader opens this line to ask -- "搜的什么？". Falls
+      // back to the size only when `record_step_inputs` is off, where the
+      // arguments genuinely are not on the event.
+      detail: salient ?? `${numberField(payload, "argument_bytes") ?? 0} B 参数`,
+    };
+  }
+  if (kind === "ToolStarted") {
+    // Same `tool:` key as the proposal it belongs to, so one call stays one
+    // row. Without a branch here it fell through to the generic tail, took
+    // `event_id` as its key and rendered a second line reading "ToolStarted"
+    // -- the raw event name, beside a row that already said the same thing.
+    const callId = stringField(payload, "tool_call_id") ?? envelope.event_id;
+    return {
+      ...base,
+      key: `tool:${callId}`,
+      label: stringField(payload, "tool_name") ?? "工具调用",
+      state: "running",
+      detail: "执行中",
     };
   }
   if (kind === "PermissionResolved") {
@@ -672,13 +720,21 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
   if (kind === "ToolCompleted" || kind === "ToolFailed") {
     const callId = stringField(payload, "tool_call_id") ?? envelope.event_id;
     const failed = kind === "ToolFailed";
+    // The tool's own name, not "工具执行完成". These rows replace the proposal
+    // they share a key with, so a finished turn showed three generic sentences
+    // where the reader wanted to see which tools ran.
+    const toolName = stringField(payload, "tool_name");
     return {
       ...base,
       key: `tool:${callId}`,
-      label: failed ? "工具执行失败" : "工具执行完成",
+      label: toolName ?? (failed ? "工具执行失败" : "工具执行完成"),
       state: failed ? "failed" : "complete",
       detail: failed
-        ? stringField(payload, "error_code") ?? "failed"
+        ? // The message, not the code. `provider_unavailable` is the same code
+          // for "no provider configured" and "found 19 pages, read none of
+          // them" -- and the second one is the whole reason a reader is
+          // looking at this line.
+          errorSummary(payload) ?? "失败"
         : `${numberField(payload, "duration_ms") ?? 0} ms`,
     };
   }
@@ -794,6 +850,83 @@ function replaceTurn(state: ChatState, turn: ChatTurnState): ChatState {
 
 function bump(state: ChatState, patch: Partial<ChatState>): ChatState {
   return { ...state, ...patch, revision: state.revision + 1 };
+}
+
+/**
+ * Everything a turn was allowed to reach, from the run's own opening event.
+ *
+ * Found by the field rather than by `kind`, because the row that holds it is
+ * whichever run event arrived last: `RunStarted` and `RunCompleted` share a key,
+ * so on a finished turn the surviving activity says `RunCompleted` and carries
+ * the names only because `carryForward` moved them across.
+ */
+export function turnToolNames(activities: readonly ChatActivity[]): string[] {
+  for (const activity of activities) {
+    const names = activity.envelope.payload.tool_names;
+    if (!Array.isArray(names)) continue;
+    return names.filter((name): name is string => typeof name === "string");
+  }
+  return [];
+}
+
+/** Which tools this turn actually called, in the order it first called them. */
+export function calledToolNames(activities: readonly ChatActivity[]): string[] {
+  const called: string[] = [];
+  for (const activity of activities) {
+    if (!activity.key.startsWith("tool:")) continue;
+    const name = stringField(activity.envelope.payload, "tool_name");
+    if (name !== null && !called.includes(name)) called.push(name);
+  }
+  return called;
+}
+
+/**
+ * The one argument worth putting on a collapsed line.
+ *
+ * Tool arguments are JSON of arbitrary shape, and the point here is not to
+ * render them -- opening the step already does that faithfully. It is to answer
+ * "what was this call for" in the width of a summary. So: a small set of keys
+ * that carry a call's subject across the tools this system has, first match
+ * wins, and nothing at all when none of them fit rather than a truncated blob
+ * of braces that reads as noise.
+ */
+const SALIENT_KEYS = ["query", "url", "question", "path", "name"] as const;
+const SALIENT_MAX = 60;
+
+function salientArgument(payload: Record<string, unknown>): string | null {
+  const preview = stringField(payload, "argument_preview");
+  if (preview === null || preview === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(preview);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return null;
+  }
+  const fields = parsed as Record<string, unknown>;
+  for (const key of SALIENT_KEYS) {
+    const value = fields[key];
+    if (typeof value !== "string" || value.trim() === "") continue;
+    const collapsed = value.replace(/\s+/g, " ").trim();
+    return collapsed.length <= SALIENT_MAX
+      ? collapsed
+      : `${collapsed.slice(0, SALIENT_MAX - 1)}…`;
+  }
+  return null;
+}
+
+/** A failed tool's message, trimmed to a line; its code when there is none. */
+function errorSummary(payload: Record<string, unknown>): string | null {
+  const error = objectField(payload, "error");
+  const message = error === null ? null : stringField(error, "message");
+  const code =
+    (error === null ? null : stringField(error, "code")) ??
+    stringField(payload, "error_code");
+  if (message === null || message === "") return code;
+  const collapsed = message.replace(/\s+/g, " ").trim();
+  return collapsed.length <= 90 ? collapsed : `${collapsed.slice(0, 89)}…`;
 }
 
 function stringField(object: Record<string, unknown>, field: string): string | null {

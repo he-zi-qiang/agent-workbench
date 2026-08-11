@@ -939,7 +939,13 @@ def build_task_handlers(
             raise TaskExportUnavailableError(
                 "this Worker assembled no export capability"
             )
-        if state.draft_ref is None or state.approval_id is None:
+        if state.draft_ref is None:
+            raise TaskExportPreconditionError("export requires a draft")
+        if state.export_requires_approval and state.approval_id is None:
+            # Only where there is a gate. Reaching export without an approval
+            # on a gated Task means the graph walked past its own interrupt;
+            # on an ungated one it is the ordinary path, and demanding an
+            # approval id here would make export unreachable for it.
             raise TaskExportPreconditionError("export requires an approved draft")
         invocation = await invocations.resolve(state, "export")
         artifact_id = await export.export.export(
