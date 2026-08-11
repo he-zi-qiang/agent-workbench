@@ -193,6 +193,17 @@ class TaskRun(DomainModel):
     lease_until: datetime | None = None
     heartbeat_at: datetime | None = None
     attempt_count: int = Field(default=0, ge=0)
+    #: How many agent invocations this Task has paid for, across every retry
+    #: and every reclaim (ADR-040). Distinct from ``attempt_count``, which
+    #: counts claims: one claim runs many agent nodes, and a Task reclaimed
+    #: after a crash keeps what it already spent.
+    #:
+    #: Present here from the migration that adds the column, not from the
+    #: change that starts enforcing it. That is not scope creep -- this model
+    #: forbids extra fields, so a column the Registry can read is a column this
+    #: model must name or every read of the table fails validation. Nothing
+    #: reads the number yet.
+    agent_invocation_count: int = Field(default=0, ge=0)
     available_at: datetime
     created_at: datetime
     updated_at: datetime

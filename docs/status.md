@@ -137,6 +137,72 @@ than_one_piece` 变红，body 为空。原因不是流坏了：那个用例在 `
 API 与摄取 Worker 没有注册——它们是进程生命周期对象，且 `ThreadPoolExecutor` 在提交
 第一份工作前不建线程，所以没有泄漏，但"谁负责关"这件事在三个进程里不一致。
 
+### 三、调用额度有了一个持久的计数器（ADR-040 第一刀，共三刀）
+
+`multi_agent.max_agent_invocation_attempts_per_task` 从有 settings 那天起就声明着，
+**至今没有第二个读者**。没投影的理由写在 `projections.py` 里：它要跨 retry 与 reclaim
+计数，需要持久的 per-Task 计数器，投影它只会让它离"看起来被执行了"更近一步。
+
+这一刀是那个计数器，**只有它**。迁移 `0025_agent_invocation_count` 给 `task_runs` 加
+`agent_invocation_count`（not null，server_default 0），并把既有的
+`task_runs_lease_counters` check **替换**成含三个计数器的版本（不是并排加第二条——
+三个都是"计数不能倒退"这同一类主张，两条约束说同一件事会漂移）。**不回填**：现存每一行
+都花掉了未知的额度，0 是唯一诚实的起点，它少算历史而不是编造历史。
+
+**不建台账表**，理由写成结论而不是偏好：`_context_for` 每次重放都现铸新的 `agent_run_id`，
+所以 `(task_id, agent_run_id)` 唯一键换不来它名字暗示的幂等，它换来的是可诊断性。
+
+**ADR §2.9 把这一刀写成"纯 schema、零行为变化"，这个前提在本仓库不成立，如实记下来。**
+`_to_run` 用行映射构造 `TaskRun`，而它是 `extra="forbid"` 的严格模型，于是"多一列"直接让
+**201 条既有测试变红**（`Extra inputs are not permitted`）。所以这一刀必须同时给
+`ports/task_registry.py` 的 `TaskRun` 加上这个字段。仍然没有任何代码**读**这个数——
+加字段是为了让表读得出来，不是为了让谁用它。
+
+**验证。**双向迁移对着真 PostgreSQL 实测（注意约束的真名带 `ck_task_runs_` 前缀，
+用裸名查会查出空来、把"没查到"误当成"没问题"）：
+
+```text
+head            列在，check = lease_epoch>=0 AND attempt_count>=0 AND agent_invocation_count>=0
+downgrade -1    列没了，check 回到两项
+upgrade head    列回来，check 回到三项
+```
+
+有牙验证用的是既有的 `test_the_migrated_schema_matches_the_model_metadata`：把列从
+`models.py` 拿掉、迁移不动，**2 failed / 3 passed**，失败信息直接点名
+`Detected removed column 'task_runs.agent_invocation_count'`。另外那 201 条红本身就是
+这一刀的第二重牙——模型不认这列时它们立刻全红。
+
+全量 `tests/`（真 PG + Qdrant，不含 e2e）**2697 passed / 11 skipped**，ruff、pyright 全绿。
+
+**剩下两刀没做**：第二刀"只计数且看得见，绝不拒绝"（端口方法、两份实现、装饰器只加一、
+API 详情响应暴露一个只读整数），第三刀"开始拒绝"（读上限、超限抛异常、Worker 写
+`dead_letter`）。中间那一刀是 ADR-040 对"一个事前完全不可见、只在用尽那一刻突然把 Task
+打成终态的闸"的正面回答，不能跳。
+
+### 四、52 题 gold set 重跑，ADR-017 第 2 步的证据到齐
+
+见 `evals/rag/reports/`。四份报告出自同一个进程、同一个 collection、同一份 gold set
+（digest `55ec24c7d2b86062`）、52 题。此前 llama_index 那两份锚定的是更早的一轮，
+与 reference 不是同一次运行，**因此根本不构成对照**。
+
+两个臂的四个排序指标**逐位相同**。不止聚合分数：`--dump-outcomes` 的逐题结果里，两条
+路径唯一的差别是 `index_identity` 这个标签本身，52 题的检索结果**逐字节相同**——这说明
+top_k 没有被应用两次、没有在进程内二次融合、node 往返没丢 page 或 revision。
+
+顺带确认了可复现性：reference 两份与 8-10 那轮相比除延迟外逐位未变，ADR-033 之前那种
+"重建索引就换一组分数"的抖动没有再出现。
+
+**延迟变化很大，写在明处**：hybrid 的 `retrieval_latency_ms` 从 171.94 跳到 38608.08。
+两条路径同向变化、排序指标一个没动；本轮是在物理内存只剩 20% 空闲、swap 几乎耗尽的机器上
+跑的，而 38.6 s/题落在这台机器历史上 hybrid 臂 7.2–27.9 s/题的量级里——反倒是 8-10 那次的
+171.94 ms 是异常值。**我没有查明它当时为什么那么快**，所以只说两轮延迟不可比，不声称
+哪一个是对的。同批的 ADR-042 已核对过不在这条路径上（`run_rag_eval.py` 直接 `.load()`
+不传 runner，`offload` 落回 `asyncio.to_thread`，与改动前逐字节相同）。
+
+**没有翻 `rag.llama_index.enabled`。**这一轮补上的是"证据还没有"里的那个证据，不是那个
+开关该翻的决定——脚本自己的 docstring 就写着等价性是 weak claim by construction。翻开关
+会改动 Task 语义指纹与一条冻结边界，该由一份单独的 ADR 决定。
+
 ## 2026-08-11 缺口清单第二批：界面开始承认自己不知道什么，文档不再说假话
 
 第一批（`5363d7a`）清的是"配置说了假话、唤醒没有消费端、毒行挡死回放"。这一批是同一
