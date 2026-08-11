@@ -251,6 +251,36 @@ ADR-019 把提示词和工具参数写进**运行自己的事件流**——那�
 （早就在里面）同一个口径。默认 `false`，因为打开它会改变这个部署存了用户的什么；
 打开它不会放松上面那条 telemetry 的限制，两者互不影响。
 
+**`workflow.export_requires_approval` 同样是一个真正的开关**（ADR-038）。默认
+`true`；关掉它，图从 `review` 直接走到 `export`。
+
+它没有放在上面那张表里，也没有放进 `[policy]`，因为它守的**不是一条授权边界**。
+export 把草稿写进这个租户自己的 artifact store，owner 是提交者本人；写完之后文件
+没有离开这个部署，读取仍然逐 principal 鉴权，要到人手上还得有人点一次下载——那是
+一次独立的、已鉴权的读。这道闸门拦住的事情是**一个文件出现在提交者自己的附件列表
+里**。`[policy]` 里那些 `Literal` 拦的是"某个 principal 能不能碰到某个东西"，两者
+不是一类；把一个能关的开关混进那张表，会让"这张表里的东西关不掉"这句话不再为真。
+
+关掉它是**跳过闸门，不是自动批准**：不开审批行、不写 `approval_id`、不写
+`approval_decision`。系统自己填一条 `TaskApprovalDecided{approved}` 会让审计记录
+说一件没发生过的事，而事后无法与真的区分。相应地，导出的报告头部写
+`- Approved by: not required by this deployment`，而不是编一个 id、也不是把这行
+删掉。
+
+值在 Task **提交时冻结**进 `TaskState` 并作为图通道传递，和 `wants_report` 同理：
+路由是状态的纯函数，一个停在闸门前的 Task 不能在恢复时走进另一张图。
+
+    [workflow]
+    export_requires_approval = false   # 单人机器；仓库默认仍是 true
+
+**关掉它意味着这条路径上不再有任何人工确认**，这一点要说清楚而不是绕过去：
+ADR-015 当初把 `approval_required_risks` 置空，理由正是「v1 的人已经站在图边界上
+了」——关掉这个开关，图边界上的人也不在了。没有变的是 `artifact:export` scope、
+授权信封对 `export_artifact` 的点名、`write` 风险上限、artifact 的租户与所有者
+边界、ledger 的一次性保证；变的是那一层人工确认。判断它可以接受的依据是 export
+不外发（写进本租户自己的 store，谁也收不到），所以**一旦 export 开始外发，这个
+判断就失效**——详见 ADR-038 §3.1 与 §4。
+
 ## 4. Lease 与故障注入校验
 
 ### 4.1 Chat 固定执行 lease

@@ -33,3 +33,6 @@
 | [ADR-033 融合仍然只发生一次，但那一次归我们做](./0033-fusion-ranks-are-ours.md) | 混合检索为什么跨重建索引不可复现；RRF 的臂内名次该由谁决定 | 接受，取代 ADR-016 中"融合只在 Qdrant 里"一条 |
 | [ADR-034 读不出来的时候再问一次](./0034-a-structured-node-asks-once-more.md) | 答案外面裹了一句话时结构化节点该怎么办；ADR-032 §3.3 的严格严在哪一件事上 | 接受，收窄并兑现 ADR-032 §3.3 |
 | [ADR-035 答案不是摘要](./0035-an-answer-is-not-a-preview.md) | 一个 run 的答案该有多大；ADR-019 那个 4096 管的是什么 | 接受，收窄 ADR-019 "有界"的适用范围 |
+| [ADR-036 提交前的预判决定形态](./0036-triage-decides-the-shape.md) | graph 与 wants_report 这两个提交时决定由谁做出 | 接受，取代 ADR-031 §2.3 |
+| [ADR-037 图谱只提名 chunk](./0037-the-graph-nominates-chunks.md) | 跨文档检索怎么做；「抽实体关系合并成一张图」要不要照搬 | 接受（已实现）；四轮消融未达标，`rag.graph.enabled` 保持关闭 |
+| [ADR-038 导出闸门守的是一份清单](./0038-the-export-gate-guards-a-list-not-a-boundary.md) | 导出必须经人工审批吗；它算不算 ADR-031 §2.4 说的那种"边界" | 接受，收窄 ADR-031 §2.4；移走 ADR-015 推理的一个前提 |

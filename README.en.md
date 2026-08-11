@@ -107,21 +107,21 @@ Implemented with test evidence:
 - a local-only Docker Compose topology for PostgreSQL, Qdrant, migrations, the
   API and explicitly opted-in synthetic workers.
 
-Validation for the current tree, measured on `main@a4dea2b`:
+Validation for the current tree, measured on `main@0ee1700` (2026-08-11):
 
-- Ruff format and lint: passed (421 files);
-- Pyright: 0 errors and 0 warnings;
-- tests without external services, ignoring `tests/e2e`: 1784 passed, 597
-  environment-gated skips;
-- the E2E directory: 3 passed, 11 PostgreSQL-gated skips;
-- architecture and configuration guards: 114 passed;
+- Ruff format and lint: passed (441 files);
+- Pyright strict: 0 errors and 0 warnings;
+- tests against a real PostgreSQL and Qdrant: 2629 passed, 11 skipped (those 11
+  need the `embedding` extra and local BGE weights);
+- the same tree with no external services: 1996 passed, 644 environment-gated
+  skips;
 - lock-file and dependency-license policy gates: passed;
 - frontend ESLint, strict TypeScript and production build: passed;
-- Vitest: 45 passed; Playwright desktop/mobile smoke: 2 passed.
+- Vitest: 114 passed.
 
-Those numbers come from a local run with no external services, so the
-environment-gated skips are reported as skips rather than as stateful
-verification.
+The two test rows come from different environments and must be quoted
+separately rather than added: with no services running, the environment-gated
+cases are reported as skips rather than as stateful verification.
 
 A separate CI job carries real-service evidence on **every PR**: `Migrations,
 PostgreSQL and Qdrant-backed stores` runs `alembic upgrade head` and then

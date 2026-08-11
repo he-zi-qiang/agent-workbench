@@ -122,7 +122,11 @@ PYTHONPATH=src .venv/bin/python -m agent_workbench.apps.cli.main task \
   timeline <task_id> --json
 ```
 
-如果 Task 停在 `waiting_approval`，按[本地运行手册](./running-locally.md)列出并批准最终导出。
+这个 profile 自 2026-08-11 起关掉了导出审批
+（`workflow.export_requires_approval = false`，ADR-038），所以 Task 不再停在
+`waiting_approval`，会一路跑到 `succeeded`。仓库默认仍是 `true`；想验审批那条路径，
+临时把它设回 `true`，再按[本地运行手册](./running-locally.md)列出并批准。
+
 验收不能只看最终状态，至少核对：
 
 1. writer 的 `RunStarted.tool_names` 含 `mcp_word_render_document`；
@@ -139,6 +143,43 @@ PYTHONPATH=src .venv/bin/python -m agent_workbench.apps.cli.main artifact \
   --principal-id user_local \
   get <artifact_id> --output ./generated-report.docx
 ```
+
+## 4.1 走 v2 通用图（HTTP 提交，工作区 + 渲染）
+
+上面那条走的是 v1：writer 直接调 `render_document`，两个 scope 够用。**v2 通用图
+是另一回事**——`work` 节点先把文档写进工作区、再让 reviewer 读工作区核对，所以它
+要多两个 scope、也吃更多预算。2026-08-11 逐个撞出来，缺一个就是另一种失败：
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/v1/tasks \
+  -H 'x-tenant-id: tenant_local' -H 'x-principal-id: user_local' \
+  -H 'x-principal-scopes: artifact:export,external:search,workspace:write,mcp:word' \
+  -H 'content-type: application/json' -H 'Idempotency-Key: task:word-demo-1' \
+  -d '{"objective":"写一份很短的季度总结：一个小标题、两段正文、一张两行的数据表格，导出为 Word 文档。",
+       "max_revisions":3,"wants_report":true,"graph":"general",
+       "intent":{"graph_decided_by":"user","wants_report_decided_by":"user"}}'
+```
+
+**四个 scope，不是两个。** 缺 `workspace:write` 或 `mcp:word` 时工具被
+`policy_denied: missing_permission_scope` 拒，而 reviewer 只会说"工作区是空的"——
+症状离原因很远，事件流里 `ToolFailed.error` 才是答案。
+
+**三个进程都要在。** `word-worker` 用 `cmd &` 起会随 shell 退出被杀，任务停在
+`queued` 而 API 看着完全正常；用 `nohup` 或独立终端。
+
+**预算已经调过了**（提交在 `config.word-local.toml` 里，注释带实测依据）：`work`
+节点一次调用要读工具、写文档、渲染，默认 `max_tokens_per_agent_invocation=16000`
+与 `runtime.max_steps=12` 都不够，分别报 `budget_exceeded: token_budget` 和
+`max_steps`。
+
+**产出的 `.docx` 不是"最终报告"。** 它的 kind 是 `tool_result`，在控制台右侧的
+附件栏；kind 为 `report` 的那个是 export 节点导出的 markdown 草稿。点附件栏里的
+`.docx` 会在阅读列内联渲染出文字与表格（服务端提取，`GET
+/v1/artifacts/{id}/preview`），旁边是下载键。
+
+**文件名只能是 ASCII。** `WorkspaceName` 的模式是
+`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`，写 `季度总结.docx` 会被工具当场拒绝
+（2026-08-11 之前它会被接受、然后永久毒化这个工作区，见 status.md）。
 
 ## 5. 常见问题
 
