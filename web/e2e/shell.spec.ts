@@ -13,9 +13,11 @@ test.beforeEach(async ({ page }) => {
             knowledge_base_id: "kb_portfolio",
             name: "校招项目资料",
             description: "架构、RAG 评测与面试材料",
+            can_write: true,
             document_count: 1,
             ready_document_count: 1,
             processing_document_count: 0,
+            failed_document_count: 0,
             created_at: "2026-08-01T00:00:00Z",
             updated_at: "2026-08-02T00:00:00Z",
           },
@@ -56,7 +58,13 @@ test("Chat 与 Work 外壳在桌面和移动布局中均可使用", async ({
   await expect(
     page.getByRole("heading", { name: "今天想聊什么？" }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "添加附件" })).toBeVisible();
+  // The name is the button's aria-label, which says where the file goes rather
+  // than what it attaches to: uploads land in a knowledge base and stay there.
+  // If this ever fails again, follow AttachmentTray's label — do not rename the
+  // button back to a per-message "attachment" this system does not have.
+  await expect(
+    page.getByRole("button", { name: "上传文件到知识库" }),
+  ).toBeVisible();
   await expect(page.getByLabel("回答资料")).toHaveValue("");
 
   const isMobile = testInfo.project.name === "mobile";
@@ -83,7 +91,9 @@ test("Chat 与 Work 外壳在桌面和移动布局中均可使用", async ({
   await expect(page).toHaveURL(/#\/work$/);
   await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "新建任务" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "添加附件" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "上传文件到知识库" }),
+  ).toBeVisible();
   await expect(page.getByLabel("回答资料")).toHaveValue("");
 });
 
