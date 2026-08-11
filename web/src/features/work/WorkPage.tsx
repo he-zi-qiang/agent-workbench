@@ -383,6 +383,23 @@ export function WorkPage() {
     },
   });
 
+  // Which file the reading column is showing, when the reader picked one from
+  // the rail, and which Task they picked it in. `null` means the Task's own
+  // final report, which is what the column shows on its own.
+  //
+  // Stored with its Task and narrowed on read, rather than cleared by an
+  // effect. The selection is only meaningful for the Task it was made in --
+  // an id carried across would either 404 or, since artifacts are per-tenant,
+  // render one Task's document under another Task's heading -- and deriving
+  // that during render is what keeps a stale value from ever being displayed,
+  // which an effect that clears it afterwards cannot promise.
+  const [opened, setOpened] = useState<{
+    taskId: string;
+    artifact: ArtifactRef;
+  } | null>(null);
+  const openedArtifact =
+    opened !== null && opened.taskId === selectedTaskId ? opened.artifact : null;
+
   const [approvalNotice, setApprovalNotice] = useState<ApprovalNotice | null>(null);
   const approvalMutation = useMutation({
     mutationFn: async ({
@@ -858,9 +875,12 @@ export function WorkPage() {
             ) : null}
 
             <TaskResult
-              artifact={finalReport?.artifact ?? null}
+              artifact={openedArtifact ?? finalReport?.artifact ?? null}
               draftText={draftText}
               identity={identity}
+              {...(openedArtifact === null
+                ? {}
+                : { onClose: () => setOpened(null) })}
               onDownload={(artifact) => downloadMutation.mutate(artifact)}
               onRetry={retryInput === null ? undefined : () => resubmit(retryInput)}
               status={selectedTask.status}
@@ -1001,7 +1021,19 @@ export function WorkPage() {
             <div className="aw-work-output">
               <ArtifactRail
                 artifacts={artifacts}
-                onOpen={(artifact) => downloadMutation.mutate(artifact)}
+                // A file this page can show opens in the reading column; the
+                // rest download, which is all a binary can do. Before this,
+                // every entry downloaded -- including the .docx a Task was
+                // asked to produce, which the page had just learned to render.
+                // The rendered document is not the "final report" (that is the
+                // exported draft), so it only ever appeared here.
+                onOpen={(artifact) => {
+                  if (!isPreviewable(artifact.media_type)) {
+                    downloadMutation.mutate(artifact);
+                  } else if (selectedTaskId !== undefined) {
+                    setOpened({ taskId: selectedTaskId, artifact });
+                  }
+                }}
               />
             </div>
             </div>
@@ -1143,6 +1175,7 @@ function TaskResult({
   artifact,
   draftText,
   identity,
+  onClose,
   onDownload,
   onRetry,
   status,
@@ -1152,6 +1185,8 @@ function TaskResult({
   artifact: ArtifactRef | null;
   draftText: string | null;
   identity: PrincipalIdentity;
+  /** Set only while showing a file the reader opened from the rail. */
+  onClose?: (() => void) | undefined;
   onDownload: (artifact: ArtifactRef) => void;
   onRetry?: (() => void) | undefined;
   status: TaskStatus;
@@ -1256,6 +1291,15 @@ function TaskResult({
         {/* Not a bare `small`: that one is the header's warning slot, coloured
             for "没有生成文件". A file's size is neutral information. */}
         <span className="aw-answer-size">{formatBytes(artifact.size_bytes)}</span>
+        {onClose === undefined ? null : (
+          <button
+            className="aw-button is-ghost is-small"
+            onClick={onClose}
+            type="button"
+          >
+            返回任务结果
+          </button>
+        )}
         {/* A labelled button, not the bare icon it replaced. That icon sat at
             the end of a header row and was routinely missed -- the file is the
             thing the reader came for, and the way to keep it has to look like
@@ -1322,6 +1366,11 @@ function TaskResult({
 /** What a .docx is on the wire. Long enough to be worth naming once. */
 const DOCX_MEDIA_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/** Whether opening this file shows it, or can only save it. */
+function isPreviewable(mediaType: string): boolean {
+  return mediaType === DOCX_MEDIA_TYPE || isReadableMedia(mediaType);
+}
 
 /**
  * Text this page can render *by fetching it*. A .docx is deliberately not here:
