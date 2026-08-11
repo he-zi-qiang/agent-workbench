@@ -1,0 +1,23 @@
+{
+  "hybrid": {
+    "full_coverage_at_3": 0.8269230769230769,
+    "mrr": 0.9198717948717949,
+    "recall_at_1": 0.8846153846153846,
+    "recall_at_3": 0.9615384615384616,
+    "retrieval_latency_ms": 27163.749958010158
+  },
+  "hybrid+graph": {
+    "full_coverage_at_3": 0.75,
+    "mrr": 0.9102564102564104,
+    "recall_at_1": 0.8846153846153846,
+    "recall_at_3": 0.9423076923076923,
+    "retrieval_latency_ms": 29023.02029148268
+  },
+  "yield": {
+    "chunks": 49,
+    "entity_writes": 138,
+    "mentions_stored": 138,
+    "relations": 78,
+    "unreadable_chunks": 0
+  }
+}

@@ -26,7 +26,17 @@ from pydantic import Field
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.schema import JsonObject, VersionedModel
 
-OutboxEventKind = Literal["document_upserted", "document_deleted", "acl_changed"]
+OutboxEventKind = Literal[
+    "document_upserted",
+    "document_deleted",
+    "acl_changed",
+    # The second pass (ADR-037 §2.6). Enqueued by the first one in the same
+    # transaction that records the version as indexed, so a graph is only ever
+    # asked for over content the index already holds -- and claimed, leased,
+    # heartbeaten and retried by the machinery the other kinds already use,
+    # rather than by a scheduler of its own.
+    "graph_extraction_requested",
+]
 
 
 class OutboxEvent(VersionedModel):

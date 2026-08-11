@@ -28,6 +28,10 @@ IDENTITY_BOUNDARY_MODULES = frozenset(
     {
         "agent_workbench.apps.api.identity",
         "agent_workbench.apps.cli.demo",
+        # The second pass is attributed to the owner PostgreSQL recorded for
+        # the document, restored here rather than inferred from the outbox
+        # payload it was woken by (ADR-037 §2.6).
+        "agent_workbench.apps.ingestion_worker.identity",
         "agent_workbench.apps.task_worker.identity",
         # The definition itself.
         "agent_workbench.domain.policies",
