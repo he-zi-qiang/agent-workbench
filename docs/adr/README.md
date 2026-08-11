@@ -37,3 +37,6 @@
 | [ADR-037 图谱只提名 chunk](./0037-the-graph-nominates-chunks.md) | 跨文档检索怎么做；「抽实体关系合并成一张图」要不要照搬 | 接受（已实现）；四轮消融未达标，`rag.graph.enabled` 保持关闭 |
 | [ADR-038 导出闸门守的是一份清单](./0038-the-export-gate-guards-a-list-not-a-boundary.md) | 导出必须经人工审批吗；它算不算 ADR-031 §2.4 说的那种"边界" | 接受，收窄 ADR-031 §2.4；移走 ADR-015 推理的一个前提 |
 | [ADR-039 配置里的一个指标名字是一句承诺](./0039-a-metric-name-is-a-promise.md) | 配置声明的评测能力和实现对不上时以哪个为准；`[evaluation]` 该不该承载路线图 | 接受，配置 schema `1.13` → `1.14`；`ragas_enabled` 写 `true` 改为加载失败，`rag_metrics` 只接受注册表里算得出来的名字 |
+| [ADR-040 调用额度先扣后花](./0040-a-task-pays-before-it-calls.md) | 一次 agent invocation attempt 的边界是什么、记账点在哪一层；跨 retry 与 reclaim 的计数器落一列还是一张表；崩溃重放算不算新花费；上限读 Task 快照还是进程配置；额度用尽是 `failed` 还是 `dead_letter` | 接受，兑现 ADR-030 §3 点名的那道未装的闸；与 ADR-022 方向相反 |
+| [ADR-041 迟到的心跳没有资格续租](./0041-a-late-heartbeat-may-not-renew.md) | 一个停摆过又回来的 Worker 凭什么还能说自己活着；watchdog 的探针、两级阈值、abort 三件事本批做哪几件；那条启动校验写在哪一层才可能真的红 | 接受，收窄 WP08-12 的 watchdog 部分（本批不做 watchdog）；更正 `event_loop_lag.py:59-63` 自陈理由里的一个事实错误 |
+| [ADR-042 阻塞是 Adapter 的属性，不是调用点的](./0042-blocking-belongs-to-the-adapter.md) | `AdapterCallRunner` 是不是「所有调用的唯一入口」；有界池的界从哪来、放哪个 section、几个字段；饱和之后是拒绝还是排队；加了配置字段要不要抬版 | 接受，收窄 `implementation-plan.md:900` 那句「唯一入口」；新增 2 个配置字段而配置 schema 保持 `1.14` |
