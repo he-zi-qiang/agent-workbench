@@ -61,16 +61,46 @@ describe("knowledge attachments", () => {
     const file = new File(["# resume"], "resume.md", { type: "text/markdown" });
 
     fireEvent.change(input, { target: { files: [file] } });
-    expect(await screen.findByText("请选择知识库后上传")).toBeInTheDocument();
+    expect(await screen.findByText("请先选择知识库，才能上传")).toBeInTheDocument();
     expect(uploadDocument).not.toHaveBeenCalled();
 
     view.rerender(<Harness knowledgeBaseId="kb_resume" />);
-    expect(await screen.findByText("已加入知识库，可以使用")).toBeInTheDocument();
+    expect(await screen.findByText("已存入知识库（会一直保留）")).toBeInTheDocument();
     await waitFor(() => expect(uploadDocument).toHaveBeenCalledTimes(1));
     expect(listKnowledgeBaseDocuments).toHaveBeenCalledWith(
       IDENTITY,
       "kb_resume",
     );
+  });
+
+  it("does not present an uploaded file as something it can take back", async () => {
+    // The misreading this component used to invite: a paperclip and a "移除"
+    // button say per-message attachment, while the file has in fact been
+    // uploaded into a shared knowledge base and cannot be deleted from
+    // anywhere in this system.
+    const view = render(<Harness knowledgeBaseId="kb_resume" />);
+    const input = view.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("attachment input missing");
+
+    fireEvent.change(input, {
+      target: {
+        files: [new File(["# resume"], "resume.md", { type: "text/markdown" })],
+      },
+    });
+
+    // Asserted from the moment the bytes have left, not only once indexing
+    // finishes: the file is in the knowledge base for good either way, and
+    // that is exactly the window in which the old copy was most misleading.
+    expect(
+      await screen.findByText(/只是不再列出它，不会删除已上传的文档/),
+    ).toBeInTheDocument();
+    // The control says what it does, rather than "移除".
+    expect(
+      screen.getByRole("button", {
+        name: "从这个列表中移除 resume.md（文件仍在知识库中）",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "移除 resume.md" })).toBeNull();
   });
 });
 

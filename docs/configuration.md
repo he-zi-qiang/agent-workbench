@@ -232,7 +232,11 @@ claim_batch_size <= min(worker_concurrency, guard_connection_budget)
   调另一个工具或完成回答；
 - LangChain 只能作为 model/tool adapter，不能启用 AgentExecutor 或 Memory；
 - LlamaIndex 只能 ingestion/retrieval，不能生成最终回答或二次融合；
-- dense+sparse fusion 只由 Qdrant Query API 的 RRF 执行；
+- dense+sparse fusion **只发生一次**，且这一次在本进程内做
+  （`rag.retrieval.fusion_owner = "application"`，见
+  [ADR-033](./adr/0033-fusion-ranks-are-ours.md)）：适配器并发发出两条单臂查询，
+  各自先定序，再对这两份原始名次算一次 RRF。取代 ADR-016 中"融合只在
+  Qdrant Query API 里发生一次"这一条——**变的是在哪里融合，不是融合几次**；
 - Qdrant 是可重建派生索引，ACL 事实仍以 PostgreSQL 为准；
 - 模型增量只有一个所有者：
   `event_stream.model_delta_mode="ephemeral_sse_coalesced"`；delta 只实时
@@ -361,8 +365,8 @@ HTTP 请求开启。并发测试需要真实 PostgreSQL、命名 barrier、
 配置固定以下候选漏斗：
 
 ```text
-Qdrant dense + sparse
-→ Qdrant RRF
+Qdrant dense 臂 + sparse 臂（两次并发的单臂查询）
+→ 本进程内一次 RRF（adapters/vector/fusion.py，ADR-033）
 → BGE reranker
 → answer context + citations
 ```
@@ -392,10 +396,23 @@ remote/production 缺 collection、缺 alias 或 schema 不匹配一律启动失
 `^[0-9a-fA-F]{40}$`，持久化前统一规范化为小写。分支、tag、`main`、
 `latest`、短 SHA 和其他可移动 revision 一律拒绝。
 
-RAG 评测配置覆盖 Retrieval、Rerank、Answer、拒答、Citation、分阶段延迟、
-token 和 cost；Task 与 Multi-Agent 指标分开配置。LLM judge 默认关闭，
-启用时必须固定 `model_id/model_revision/prompt_version/temperature` 并配置
-人工校准集。
+`evaluation.rag_metrics` 只能列出 `evaluation.metrics.RETRIEVAL_METRICS`
+真的会算的名字（`recall_at_1`、`recall_at_3`、`full_coverage_at_3`、`mrr`、
+`retrieval_latency_ms`），多写一个名字在**配置加载阶段**就失败——和
+`testing.allowed_failpoints` 同一个形状。这一条是修出来的：这份清单曾经有 19 项，
+代码实现其中 2 项，Answer/拒答/Citation/rerank/token/cost 那些名字对应的判定器
+根本不存在，而一个测试还在断言它们必须在场。Rerank、Answer、拒答、Citation、
+分阶段延迟、token 与 cost 是路线图，写在
+[实施计划](implementation-plan.md)里，不写在这份"什么在跑"的文件里。
+
+`evaluation.ragas_enabled` **必须是 `false`**，写 `true` 会让配置加载失败并说明
+原因：仓库里没有 RAGAS 依赖、runner 或 judge 校准集。它的默认值一度是 `true`，
+于是"答案有没有被判分"这个问题在配置里得到了代码兑现不了的肯定答复。等 runner
+落地，这条校验和它一起去掉。
+
+Task 与 Multi-Agent 指标分开配置，但两者的 runner 同样尚未落地。LLM judge 默认
+关闭，启用时必须固定 `model_id/model_revision/prompt_version/temperature`
+并配置人工校准集。
 
 任何 `deployment_scope=remote` 的环境都强制 Qdrant 使用 HTTPS、
 `api_key_required=true` 且密钥已经注入；只有 `local` development/test

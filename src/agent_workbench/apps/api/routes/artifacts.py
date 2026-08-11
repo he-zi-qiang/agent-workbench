@@ -24,7 +24,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from agent_workbench.apps.api.docx_preview import extract_docx_preview
+from agent_workbench.apps.api.docx_preview import (
+    DocxTooLargeError,
+    extract_docx_preview,
+)
 from agent_workbench.apps.api.state import dependencies_of
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
@@ -131,6 +134,16 @@ async def preview(artifact_id: str, request: Request) -> DocumentPreview:
     )
     try:
         extracted = extract_docx_preview(content)
+    except DocxTooLargeError as error:
+        # The same answer as the compressed-size ceiling above, because it is
+        # the same refusal reached later: this one is about what the package
+        # weighs *opened*, which the stored size does not bound. The reason is
+        # deliberately not echoed back -- it would describe the archive's
+        # internals to whoever supplied it.
+        raise HTTPException(
+            status_code=413,
+            detail="the document is too large to preview; download it instead",
+        ) from error
     except Exception as error:
         # A stored artifact that will not parse is a fact about the file, not a
         # fault the caller can act on beyond downloading it. Deliberately not a

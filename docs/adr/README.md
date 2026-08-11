@@ -36,3 +36,4 @@
 | [ADR-036 提交前的预判决定形态](./0036-triage-decides-the-shape.md) | graph 与 wants_report 这两个提交时决定由谁做出 | 接受，取代 ADR-031 §2.3 |
 | [ADR-037 图谱只提名 chunk](./0037-the-graph-nominates-chunks.md) | 跨文档检索怎么做；「抽实体关系合并成一张图」要不要照搬 | 接受（已实现）；四轮消融未达标，`rag.graph.enabled` 保持关闭 |
 | [ADR-038 导出闸门守的是一份清单](./0038-the-export-gate-guards-a-list-not-a-boundary.md) | 导出必须经人工审批吗；它算不算 ADR-031 §2.4 说的那种"边界" | 接受，收窄 ADR-031 §2.4；移走 ADR-015 推理的一个前提 |
+| [ADR-039 配置里的一个指标名字是一句承诺](./0039-a-metric-name-is-a-promise.md) | 配置声明的评测能力和实现对不上时以哪个为准；`[evaluation]` 该不该承载路线图 | 接受，配置 schema `1.13` → `1.14`；`ragas_enabled` 写 `true` 改为加载失败，`rag_metrics` 只接受注册表里算得出来的名字 |

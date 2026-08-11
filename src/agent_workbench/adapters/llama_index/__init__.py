@@ -3,9 +3,9 @@
 Three adapters and a mapping: an embedding, a vector store, a retriever, and
 the conversion between this project's chunks and LlamaIndex's nodes. Together
 they let LlamaIndex own ingestion-and-retrieval mechanics without owning any
-of the decisions around them -- the collection layout stays this project's,
-fusion stays Qdrant's, and authorization and answer release stay the
-application's.
+of the decisions around them -- the collection layout, the one fusion (this
+process's own since ADR-033), and authorization and answer release all stay
+the application's.
 
 What is absent is as deliberate as what is here. No agent executor, no query
 engine, no response synthesizer, no second fusion. Those are the roles

@@ -3,6 +3,7 @@ import type { EventEnvelope, TaskTimelineResponse } from "../../api/types";
 import {
   createTimelineState,
   eventTitle,
+  findDraftText,
   findFinalReport,
   findGraphChoice,
   findLatestApprovalId,
@@ -224,6 +225,47 @@ describe("work timeline contract selectors", () => {
       completedEventId: "event_completed",
       succeededEventId: "event_success",
     });
+  });
+
+  it("reads the draft from whichever graph's drafting node wrote it", () => {
+    const v1 = envelope(
+      "event_v1",
+      "ModelCompleted",
+      { text: "v1 的草稿" },
+      "synthesize",
+    );
+    // The v2 graph drafts in `work`, and reading only `synthesize` left a v2
+    // Task that produced no file showing "没有产出内容" while its answer sat
+    // in the timeline.
+    const v2 = envelope("event_v2", "ModelCompleted", { text: "v2 的草稿" }, "work");
+
+    expect(findDraftText([v1])).toBe("v1 的草稿");
+    expect(findDraftText([v2])).toBe("v2 的草稿");
+  });
+
+  it("skips the tool-calling turns of a drafting loop and the reviewer", () => {
+    // A timeline still arriving: the drafting loop's latest turn spent itself
+    // on a tool call and so carries no text, while the answering turn has not
+    // been polled yet. The draft the page already has is what it should show.
+    const midStream = [
+      envelope("event_answer", "ModelCompleted", { text: "最终答复" }, "work"),
+      envelope("event_tool_turn", "ModelCompleted", { text: "" }, "work"),
+      envelope("event_blank_turn", "ModelCompleted", { text: "  \n " }, "work"),
+    ];
+
+    expect(findDraftText(midStream)).toBe("最终答复");
+
+    // The reviewer's structured verdict is not the draft, and is the only
+    // `ModelCompleted` some Tasks have after the gate opens.
+    const review = envelope(
+      "event_review",
+      "ModelCompleted",
+      { text: '{"ok":true}' },
+      "review",
+    );
+
+    expect(findDraftText([...midStream, review])).toBe("最终答复");
+    expect(findDraftText([review])).toBeNull();
   });
 });
 

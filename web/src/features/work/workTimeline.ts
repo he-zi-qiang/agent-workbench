@@ -254,11 +254,31 @@ export function findFinalReport(events: readonly EventEnvelope[]): FinalReportMa
 }
 
 /**
+ * The nodes whose model output *is* the Task's draft, one per graph.
+ *
+ * `synthesize` in v1, `work` in v2 (ADR-031). Both write `draft_ref` for the
+ * same reason and are the same step to a reader, so both have to be looked at
+ * here -- reading only v1's node is what made a v2 Task with no file report
+ * "没有产出内容" while its answer sat in the timeline unread.
+ *
+ * A set rather than a shape lookup: which graph ran is already decided by
+ * `graphShapeOf`, but the node ids are disjoint, so asking "is this a drafting
+ * node" needs no such decision and cannot disagree with one.
+ */
+const DRAFT_NODES: ReadonlySet<string> = new Set(["synthesize", "work"]);
+
+/**
  * The draft the Task wrote, for a Task that produced no file.
  *
  * A Task that was not asked for a report still did the work, and the result has
- * to be readable somewhere. The synthesize node's model output *is* that
+ * to be readable somewhere. The drafting node's model output *is* that
  * result -- the export node only copies it into an artifact.
+ *
+ * The *last* text with something in it, because v2's drafting node is a tool
+ * loop: every turn emits `ModelCompleted`, and the turns that only called tools
+ * carry no text. `stringField` already drops `""`; the trim additionally drops
+ * a turn whose whole text is whitespace, which renders as an empty answer block
+ * over a draft the page is otherwise holding.
  *
  * Unlike Chat, a Task has no release fence over this text: there is no
  * `AnswerCommitted` boundary in the graph, and the report the export node
@@ -268,10 +288,12 @@ export function findDraftText(events: readonly EventEnvelope[]): string | null {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     if (event === undefined) continue;
-    if (event.graph_node_id !== "synthesize") continue;
+    if (event.graph_node_id === null || !DRAFT_NODES.has(event.graph_node_id)) {
+      continue;
+    }
     if (!isEvent(event, "ModelCompleted")) continue;
     const text = stringField(event.payload, "text");
-    if (text !== null) return text;
+    if (text !== null && text.trim() !== "") return text;
   }
   return null;
 }

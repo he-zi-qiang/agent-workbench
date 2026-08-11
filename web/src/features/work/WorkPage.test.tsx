@@ -555,6 +555,23 @@ describe("WorkPage task submission", () => {
     expect(await screen.findByText("没有生成文件")).toBeInTheDocument();
   });
 
+  it("shows the draft the approval is a decision about, before deciding", async () => {
+    vi.mocked(getTask).mockResolvedValue(task("waiting_approval"));
+    vi.mocked(getTaskTimeline).mockResolvedValue(approvalTimelineWithDraft());
+    renderWorkPage("/work/task_approval");
+
+    // The decision controls are worth nothing without the text they are about;
+    // `waiting_approval` used to render as a spinner beside a live 生成报告
+    // button.
+    const pending = await screen.findByRole("region", { name: "待确认的内容" });
+    expect(within(pending).getByText(/建议先扩产/)).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "生成报告" }),
+    ).toBeInTheDocument();
+    // The export has not run yet, so nothing is missing a file.
+    expect(screen.queryByText(/没有生成文件/)).not.toBeInTheDocument();
+  });
+
   it("does not confirm an opposite decision returned for the same version", async () => {
     vi.mocked(getTask).mockResolvedValue(task("waiting_approval"));
     vi.mocked(getTaskTimeline).mockResolvedValue(approvalTimeline());
@@ -886,6 +903,34 @@ function approvalTimeline() {
         graph_node_id: "node_review",
         parent_event_id: null,
       },
+    ],
+  };
+}
+
+/** The same gate, with the draft that reached it still in the timeline. */
+function approvalTimelineWithDraft() {
+  const base = approvalTimeline();
+  return {
+    ...base,
+    events: [
+      {
+        schema_version: 1,
+        event_id: "event_draft",
+        stream_id: "stream_approval",
+        run_id: "run_approval",
+        event_type: "ModelCompleted",
+        durability: "durable" as const,
+        timestamp: "2026-08-02T12:00:20Z",
+        payload: {
+          kind: "ModelCompleted",
+          text: "建议先扩产二号线，再谈渠道。",
+        },
+        sequence: 1,
+        task_id: "task_approval",
+        graph_node_id: "synthesize",
+        parent_event_id: null,
+      },
+      ...base.events,
     ],
   };
 }

@@ -1,5 +1,11 @@
 import { identityHeaders } from "../../api/client";
-import { parseSseChunk, type SseFrame } from "../../api/sse";
+import {
+  isQuarantineFrame,
+  parseSseChunk,
+  type SseChunkFrame,
+  type SseFrame,
+  type SseQuarantineFrame,
+} from "../../api/sse";
 import type { PrincipalIdentity } from "../../api/types";
 import type { ChatConnectionState } from "./model";
 import type { StoredChatCursor } from "./storage";
@@ -49,7 +55,7 @@ export async function streamChatSession(options: SessionStreamOptions): Promise<
       try {
         const decoder = new TextDecoder();
         let buffer = "";
-        const accept = (frame: SseFrame) => {
+        const accept = (frame: SseChunkFrame) => {
           const previous = cursor;
           cursor = acceptFrame(options, frame, cursor);
           // A 200 alone is not progress: an immediately closed or poison
@@ -103,9 +109,11 @@ export async function streamChatSession(options: SessionStreamOptions): Promise<
 
 function acceptFrame(
   options: SessionStreamOptions,
-  frame: SseFrame,
+  frame: SseChunkFrame,
   current: StoredChatCursor | null,
 ): StoredChatCursor | null {
+  if (isQuarantineFrame(frame)) return acceptQuarantine(options, frame, current);
+
   const sequence = frame.envelope.sequence;
   if (
     frame.id === null ||
@@ -124,12 +132,7 @@ function acceptFrame(
   // replay from rebuilding old steps or claiming a new pending turn.
   if (current !== null && sequence <= current.sequence) return current;
 
-  const expected = (current?.sequence ?? 0) + 1;
-  if (sequence !== expected) {
-    throw new RecoverableStreamError(
-      `事件流序号不连续（期望 ${expected}，收到 ${sequence}），正在从安全游标重连`,
-    );
-  }
+  requireNextPosition(sequence, current);
   const acceptance = options.onFrame(frame);
   if (acceptance === "rejected") {
     throw new RecoverableStreamError("事件未通过本地安全校验，正在从安全游标重连");
@@ -138,6 +141,64 @@ function acceptFrame(
   const next = { id: frame.id, sequence };
   options.onCursor(next);
   return next;
+}
+
+/**
+ * A position the server says it examined and could not deliver.
+ *
+ * Nothing reaches the reducer: there is no event, and the local history is
+ * short by exactly this one position. What does happen is the cursor moves
+ * past it, which is the frame's stated purpose -- its id *is* the skipped
+ * position, so a reconnect resumes after the unreadable row instead of
+ * arriving in front of it again on every attempt.
+ */
+function acceptQuarantine(
+  options: SessionStreamOptions,
+  frame: SseQuarantineFrame,
+  current: StoredChatCursor | null,
+): StoredChatCursor | null {
+  // The parser already proved the notice's own shape -- schema, ids, a safe
+  // sequence of at least 1. Checked here is only what a parser cannot know:
+  // that the frame carried a cursor to resume from, and that it describes this
+  // subscription rather than some other stream.
+  const { sequence } = frame.quarantined;
+  if (frame.id === null || !frame.id || frame.quarantined.stream_id !== options.sessionId) {
+    throw new RecoverableStreamError("事件流返回了不可信的持久事件，正在从安全游标重连");
+  }
+
+  // A replay from the beginning re-announces holes already passed, for the
+  // same reason it re-sends events already applied.
+  if (current !== null && sequence <= current.sequence) return current;
+
+  requireNextPosition(sequence, current);
+  const next = { id: frame.id, sequence };
+  options.onCursor(next);
+  return next;
+}
+
+/**
+ * Insist that a frame occupy the very next position, or reconnect.
+ *
+ * This check is what keeps the history from quietly getting shorter. A
+ * subscriber cannot tell a hole from an event that has not been written yet,
+ * so an unexplained jump has to be read as a lost position and re-fetched from
+ * the last cursor known to be good.
+ *
+ * A quarantine frame is not an exemption from that rule -- it satisfies it.
+ * The notice occupies `expected` itself and moves the cursor by exactly one,
+ * the same as an event does, so the only positions ever passed over are the
+ * ones the server explicitly declared as skipped. A gap nobody announced still
+ * throws here, and that is deliberate: loosening this into "skip ahead to
+ * whatever arrived" would trade the poison-row reconnect loop for silent data
+ * loss, which is the failure this check exists to make impossible.
+ */
+function requireNextPosition(sequence: number, current: StoredChatCursor | null): void {
+  const expected = (current?.sequence ?? 0) + 1;
+  if (sequence !== expected) {
+    throw new RecoverableStreamError(
+      `事件流序号不连续（期望 ${expected}，收到 ${sequence}），正在从安全游标重连`,
+    );
+  }
 }
 
 function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {

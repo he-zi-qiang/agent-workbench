@@ -8,25 +8,18 @@ import {
   Target,
 } from "lucide-react";
 import {
-  GOLD_DIGEST,
-  QUESTION_COUNT,
   REPORTS,
+  SELF_DISAGREEMENT,
   hits,
   percent,
+  reportsByGoldSet,
   reportsShareOneGoldSet,
+  selfDisagreementCoversAShownReport,
 } from "./reports";
-
-// Recorded in docs/status.md (2026-08-03) from running each retriever twice
-// over the same gold set. This is why the table below cannot rank the two
-// paths, so the number belongs on the page rather than only in the doc.
-const SELF_DISAGREEMENT = {
-  reference: 9,
-  llamaIndex: 10,
-  betweenPathsTopThree: 3,
-};
 
 export function EvaluationPage() {
   const comparable = reportsShareOneGoldSet();
+  const goldSets = reportsByGoldSet();
 
   return (
     <main className="aw-utility-page">
@@ -54,9 +47,12 @@ export function EvaluationPage() {
           <Target aria-hidden="true" size={20} />
         </div>
         <p className="aw-eval-method">
-          事先准备了 <strong>{QUESTION_COUNT} 道题</strong>，每道题都标好了“正确答案应该来自哪份文档”。
+          事先准备好一批题目，每道题都标好了“正确答案应该来自哪份文档”。
           让系统去检索，然后看正确文档有没有出现在结果里、排在第几位。
           排得越靠前越好。
+          {goldSets.length === 1
+            ? ` 当前这批共 ${goldSets[0]?.questionCount ?? 0} 道题。`
+            : " 题库改过一次，所以下面按题库分开列，每组各有自己的题量。"}
         </p>
         <div className="aw-eval-legend">
           <div>
@@ -87,43 +83,64 @@ export function EvaluationPage() {
           <div className="aw-notice is-warning">
             <AlertTriangle aria-hidden="true" size={16} />
             <span>
-              这些报告不是在同一批题目上跑出来的，横向对比无效。请重新运行评测后再看这张表。
+              这几份报告不是在同一批题目上跑出来的，所以<strong>跨组的数字不能相互比较</strong>。
+              题库换过之后只有自研检索重跑了，LlamaIndex 那条路径还停在旧题库上——
+              它看起来分数更高，是因为题目更少更旧，不是因为它更准。要横向对比，
+              得把两条路径都放到同一批题目上重跑。
             </span>
           </div>
         )}
 
-        <div className="aw-eval-table" role="table" aria-label="检索评测结果">
-          <div className="aw-eval-row is-heading" role="row">
-            <span role="columnheader">检索方式</span>
-            <span role="columnheader">实现路径</span>
-            <span role="columnheader">第一条就找对</span>
-            <span role="columnheader">前三条内找对</span>
-            <span role="columnheader">单次检索耗时</span>
-          </div>
-          {REPORTS.map((row) => (
-            <div className="aw-eval-row" key={row.file} role="row">
-              <strong role="cell">{row.retrievalLabel}</strong>
-              <span role="cell">{row.pathLabel}</span>
-              <span role="cell">
-                <b>
-                  {hits(row.report.scores.recall_at_1, row.report.question_count)} /{" "}
-                  {row.report.question_count} 题
-                </b>
-                <small>{percent(row.report.scores.recall_at_1)}</small>
-              </span>
-              <span role="cell">
-                <b>
-                  {hits(row.report.scores.recall_at_3, row.report.question_count)} /{" "}
-                  {row.report.question_count} 题
-                </b>
-                <small>{percent(row.report.scores.recall_at_3)}</small>
-              </span>
-              <span role="cell">
-                <b>{Math.round(row.report.scores.retrieval_latency_ms)} ms</b>
-              </span>
+        {goldSets.map((group) => (
+          <div className="aw-eval-group" key={group.digest}>
+            {comparable ? null : (
+              <p className="aw-page-note">
+                题库指纹 {group.digest} · 共 {group.questionCount} 道题 ·
+                只有这一组内部可以互相比较
+              </p>
+            )}
+            <div
+              className="aw-eval-table"
+              role="table"
+              aria-label={
+                comparable
+                  ? "检索评测结果"
+                  : `检索评测结果（题库 ${group.digest}）`
+              }
+            >
+              <div className="aw-eval-row is-heading" role="row">
+                <span role="columnheader">检索方式</span>
+                <span role="columnheader">实现路径</span>
+                <span role="columnheader">第一条就找对</span>
+                <span role="columnheader">前三条内找对</span>
+                <span role="columnheader">单次检索耗时</span>
+              </div>
+              {group.rows.map((row) => (
+                <div className="aw-eval-row" key={row.file} role="row">
+                  <strong role="cell">{row.retrievalLabel}</strong>
+                  <span role="cell">{row.pathLabel}</span>
+                  <span role="cell">
+                    <b>
+                      {hits(row.report.scores.recall_at_1, row.report.question_count)} /{" "}
+                      {row.report.question_count} 题
+                    </b>
+                    <small>{percent(row.report.scores.recall_at_1)}</small>
+                  </span>
+                  <span role="cell">
+                    <b>
+                      {hits(row.report.scores.recall_at_3, row.report.question_count)} /{" "}
+                      {row.report.question_count} 题
+                    </b>
+                    <small>{percent(row.report.scores.recall_at_3)}</small>
+                  </span>
+                  <span role="cell">
+                    <b>{Math.round(row.report.scores.retrieval_latency_ms)} ms</b>
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </section>
 
       <div className="aw-card-grid">
@@ -139,9 +156,10 @@ export function EvaluationPage() {
             <li>
               <CheckCircle2 aria-hidden="true" size={16} />
               <div>
-                <strong>四种配置都做到了前三条内命中绝大多数题目</strong>
+                <strong>每份报告都做到了前三条内命中绝大多数题目</strong>
                 <span>
-                  在这 {QUESTION_COUNT} 道题上，“关键词 + 语义”比“纯语义”更稳，代价是慢一些。
+                  在各自的题库里，“关键词 + 语义”都比“纯语义”更稳，代价是慢一些——
+                  这个方向在两批题目上一致，是这页最扎实的一条结论。
                 </span>
               </div>
             </li>
@@ -149,7 +167,12 @@ export function EvaluationPage() {
               <CheckCircle2 aria-hidden="true" size={16} />
               <div>
                 <strong>题目和报告都在仓库里</strong>
-                <span>同一份题库（指纹 {GOLD_DIGEST}），任何人都可以重新跑一遍核对。</span>
+                <span>
+                  {goldSets
+                    .map((group) => `${group.digest}（${group.questionCount} 题）`)
+                    .join("、")}
+                  ，任何人都可以重新跑一遍核对。
+                </span>
               </div>
             </li>
           </ul>
@@ -163,23 +186,31 @@ export function EvaluationPage() {
             </div>
             <AlertTriangle aria-hidden="true" size={20} />
           </div>
+          {/* Every figure below is divided by the gold set it was measured on
+              (38 questions, digest a26070043b0ffde1), never by whatever the
+              current reports answer. Restating a 9/38 result as 9/52 would be
+              inventing a stronger measurement than the one that was made. */}
           <p className="aw-eval-method">
+            在 {SELF_DISAGREEMENT.questionCount} 题的旧题库（指纹 {SELF_DISAGREEMENT.goldDigest}）上，
             同一条路径连着跑两遍，它自己的结果就会变：
             <strong>
-              自研检索 {SELF_DISAGREEMENT.reference}/{QUESTION_COUNT} 题
+              自研检索 {SELF_DISAGREEMENT.reference}/{SELF_DISAGREEMENT.questionCount} 题
             </strong>
             、
             <strong>
-              LlamaIndex {SELF_DISAGREEMENT.llamaIndex}/{QUESTION_COUNT} 题
+              LlamaIndex {SELF_DISAGREEMENT.llamaIndex}/{SELF_DISAGREEMENT.questionCount} 题
             </strong>
             前后次序不一致。原因是打分并列时没有规定谁排前面。
           </p>
           <div className="aw-notice is-warning">
             <AlertTriangle aria-hidden="true" size={16} />
             <span>
-              两条路径之间只有 {SELF_DISAGREEMENT.betweenPathsTopThree}/{QUESTION_COUNT} 题的前三名不同，
-              比它们各自的抖动还小 —— 所以表里那点差距是测量误差，不是质量差距。
-              默认流量因此没有切换。
+              在那批题目上，两条路径之间只有 {SELF_DISAGREEMENT.betweenPathsTopThree}/
+              {SELF_DISAGREEMENT.questionCount} 题的前三名不同，比它们各自的抖动还小 ——
+              所以那点差距是测量误差，不是质量差距。默认流量因此没有切换。
+              {selfDisagreementCoversAShownReport()
+                ? ""
+                : " 这组对照来自已经不在上表中的旧报告，仅作为背景保留。"}
             </span>
           </div>
         </section>

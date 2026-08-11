@@ -27,7 +27,11 @@ from agent_workbench.adapters.langgraph import (
     PostgresCheckpointSaver,
     build_approval_node,
 )
-from agent_workbench.adapters.langgraph.workflow import GRAPH_DEFINITIONS, NodeHandler
+from agent_workbench.adapters.langgraph.workflow import (
+    GRAPH_DEFINITIONS,
+    GraphDefinition,
+    NodeHandler,
+)
 from agent_workbench.adapters.mcp.client import connect_mcp_client
 from agent_workbench.adapters.mcp.registry_source import discover_bindings
 from agent_workbench.adapters.persistence import (
@@ -89,6 +93,7 @@ from agent_workbench.domain.tools import ToolName
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.research import ExternalSearchPort
+from agent_workbench.ports.task_workflow import GraphVersion
 from agent_workbench.ports.tools import ToolBinding
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 from agent_workbench.workers.task import TaskWorker
@@ -99,6 +104,7 @@ from agent_workbench.workflows.agent_profiles import (
 from agent_workbench.workflows.approval import TaskApprovalGate
 from agent_workbench.workflows.demo_handlers import build_demo_handlers
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
+from agent_workbench.workflows.general_graph import GRAPH_VERSION_V2
 from agent_workbench.workflows.task_handlers import (
     BoundedParallelExecutor,
     TaskExportHandlers,
@@ -122,11 +128,22 @@ class _RealHandlers:
 
     handlers: Mapping[TaskNodeId, NodeHandler]
     http: httpx.AsyncClient
-    qdrant: AsyncQdrantClient
+    #: Absent when this Worker assembled no retrieval, which is now allowed.
+    qdrant: AsyncQdrantClient | None
     research_http: httpx.AsyncClient | None
     mcp_tool_names: tuple[ToolName, ...]
     dynamic_tools: dict[DynamicToolSource, tuple[ToolName, ...]]
     tool_names: tuple[ToolName, ...]
+    #: Which graphs this Worker will run. Every graph normally; only v2 when
+    #: there is no retrieval to ground v1's research nodes with. Restricting
+    #: the registry rather than the claim is deliberate -- an unregistered
+    #: version already raises `WorkflowGraphVersionMismatchError`, so a v1 Task
+    #: that reaches such a Worker fails loudly with the version named, instead
+    #: of running research nodes that would fall back to plain model calls and
+    #: return their output as though it were retrieved evidence.
+    graphs: Mapping[GraphVersion, GraphDefinition] = field(
+        default_factory=lambda: GRAPH_DEFINITIONS
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,9 +299,15 @@ async def build_task_worker_dependencies(
             artifacts,
             export_requires_approval=config.task.export_requires_approval,
         )
+        # What this process will build. Normally every graph; only v2 when the
+        # real assembly found no retrieval to ground v1's research nodes with.
+        # The same mapping feeds `buildable_versions` below, so what the Worker
+        # advertises and what it can actually compile cannot disagree.
+        graphs = GRAPH_DEFINITIONS if assembled is None else assembled.graphs
         workflow = LangGraphTaskWorkflow(
             handlers=handlers,
             checkpointer=PostgresCheckpointSaver(engine, require_fence=True),
+            graphs=graphs,
         )
         worker = TaskWorker(
             registry=registry,
@@ -295,7 +318,7 @@ async def build_task_worker_dependencies(
             approvals=approvals,
             workflow=workflow,
             load_state=inputs.load_state,
-            buildable_versions=tuple(GRAPH_DEFINITIONS),
+            buildable_versions=tuple(graphs),
             worker_id=config.worker_id,
             lease_seconds=config.task.lease_seconds,
             heartbeat_seconds=config.task.heartbeat_seconds,
@@ -371,21 +394,33 @@ async def _build_real_handlers(
     scope: TaskExecutionScope,
     resources: AsyncExitStack,
 ) -> _RealHandlers:
-    """Assemble Task evidence and model execution without a demo fallback."""
+    """Assemble Task evidence and model execution without a demo fallback.
 
-    if (
-        config.model is None
-        or config.qdrant is None
-        or config.embedding is None
-        or config.retrieval is None
-        or config.runtime is None
-        or config.multi_agent is None
-    ):
+    Retrieval is optional here, and the three sections that configure it are
+    optional with it. v2's general graph has no research branch at all -- it
+    runs one working node with the workspace and MCP tools -- so requiring an
+    embedding runtime, a Qdrant client and a retrieval funnel to run a Task
+    that names no knowledge base was charging every deployment for a capability
+    half of them never reach.
+
+    What is *not* done is running v1 without retrieval. Its research nodes fall
+    back to plain artifact-producing model calls when handed no research
+    handlers, which would write model output into `evidence_refs` and let the
+    report cite it as retrieved evidence. So a Worker with no retrieval
+    registers only v2, and a v1 Task that reaches it parks for migration with
+    the version named -- see `graphs` on `_RealHandlers`.
+    """
+
+    if config.model is None or config.runtime is None or config.multi_agent is None:
         raise RealTaskHandlersUnavailableError(
-            "real Task handlers require model, qdrant, embedding, retrieval, "
-            "runtime and multi-agent configuration; use project_task_worker "
-            "or --demo"
+            "real Task handlers require model, runtime and multi-agent "
+            "configuration; use project_task_worker or --demo"
         )
+    grounds_tasks = (
+        config.qdrant is not None
+        and config.embedding is not None
+        and config.retrieval is not None
+    )
 
     # Before anything is built, and over every graph's roster rather than one.
     # The limit describes a compiled graph's shape, so a graph that outgrew
@@ -410,15 +445,19 @@ async def _build_real_handlers(
             "Task Worker requires secrets.deepseek_api_key for real model calls"
         )
 
-    embedder = build_embedder(config.embedding)
-    if isinstance(embedder, EmbeddingUnavailable):
+    embedder = (
+        build_embedder(config.embedding)
+        if grounds_tasks and config.embedding is not None
+        else EmbeddingUnavailable(reason="this Worker configured no retrieval")
+    )
+    if grounds_tasks and isinstance(embedder, EmbeddingUnavailable):
+        # Configured for retrieval and could not load it. Still a refusal:
+        # this deployment asked for grounded Tasks, and starting anyway would
+        # silently downgrade it to the v2-only Worker below.
         raise RealTaskHandlersUnavailableError(
             f"Task Worker requires an embedding runtime: {embedder.reason}"
         )
-    built_sparse = build_sparse_encoder(config.embedding)
-    sparse_encoder = (
-        None if isinstance(built_sparse, SparseEncodingUnavailable) else built_sparse
-    )
+    grounds_tasks = grounds_tasks and not isinstance(embedder, EmbeddingUnavailable)
 
     # build_model only validates configuration while constructing its adapter;
     # no provider connection is opened here. The client is a process resource
@@ -429,25 +468,47 @@ async def _build_real_handlers(
 
     model = build_model(config.model, client=http)
 
-    qdrant = AsyncQdrantClient(
-        url=config.qdrant.url,
-        api_key=(
-            config.qdrant.api_key.get_secret_value()
-            if config.qdrant.api_key is not None
-            else None
-        ),
-        timeout=config.qdrant.request_timeout_seconds,
-    )
-    resources.push_async_callback(qdrant.close)
-    retrieval = RetrievalService(
-        candidate_retriever=build_candidate_retriever(
-            llama_index_enabled=config.retrieval.llama_index_enabled,
-            embedder=embedder,
-            index=QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias),
-            sparse_encoder=sparse_encoder,
-        ),
-        documents=documents,
-    )
+    qdrant: AsyncQdrantClient | None = None
+    retrieval: RetrievalService | None = None
+    # The embedding conditions are already implied by `grounds_tasks`: it is only
+    # still true here because the refusal above did not fire, which took both. They
+    # are restated because `grounds_tasks` is a bool, and a bool carries no
+    # narrowing -- without them the checker sees `EmbeddingConfig | None` and
+    # `EmbeddingPort | EmbeddingUnavailable` reaching parameters that accept
+    # neither. Restating beats asserting: an `assert` would state the same fact as
+    # a runtime claim, and this one is already decided.
+    if (
+        grounds_tasks
+        and config.embedding is not None
+        and not isinstance(embedder, EmbeddingUnavailable)
+        and config.qdrant is not None
+        and config.retrieval is not None
+    ):
+        built_sparse = build_sparse_encoder(config.embedding)
+        sparse_encoder = (
+            None
+            if isinstance(built_sparse, SparseEncodingUnavailable)
+            else built_sparse
+        )
+        qdrant = AsyncQdrantClient(
+            url=config.qdrant.url,
+            api_key=(
+                config.qdrant.api_key.get_secret_value()
+                if config.qdrant.api_key is not None
+                else None
+            ),
+            timeout=config.qdrant.request_timeout_seconds,
+        )
+        resources.push_async_callback(qdrant.close)
+        retrieval = RetrievalService(
+            candidate_retriever=build_candidate_retriever(
+                llama_index_enabled=config.retrieval.llama_index_enabled,
+                embedder=embedder,
+                index=QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias),
+                sparse_encoder=sparse_encoder,
+            ),
+            documents=documents,
+        )
     evidence = EvidenceStore(artifacts)
     external_search, research_http = _build_external_search(
         config.research,
@@ -565,11 +626,17 @@ async def _build_real_handlers(
         executor=executor,
         artifacts=artifacts,
         invocations=invocations,
-        research=TaskResearchHandlers(
-            internal=InternalResearchService(retrieval=retrieval, evidence=evidence),
-            evidence=evidence,
-            external=GatewayExternalEvidence(gateway),
-            policy_identity=policy_identity,
+        research=(
+            TaskResearchHandlers(
+                internal=InternalResearchService(
+                    retrieval=retrieval, evidence=evidence
+                ),
+                evidence=evidence,
+                external=GatewayExternalEvidence(gateway),
+                policy_identity=policy_identity,
+            )
+            if retrieval is not None
+            else None
         ),
         export=TaskExportHandlers(
             export=GatewayReportExport(gateway=gateway, ledger=ledger),
@@ -577,6 +644,18 @@ async def _build_real_handlers(
         ),
         dynamic_tools=dynamic_tools,
         workspace_scope=workspace_scope,
+    )
+    # v2 only when nothing can ground v1. Not a claim-time filter and not a
+    # failure: an unregistered version parks the Task for migration, so it
+    # waits for a Worker that can run it rather than being run wrong here.
+    graphs = (
+        GRAPH_DEFINITIONS
+        if retrieval is not None
+        else {
+            version: definition
+            for version, definition in GRAPH_DEFINITIONS.items()
+            if version == GRAPH_VERSION_V2
+        }
     )
     return _RealHandlers(
         handlers=handlers,
@@ -586,6 +665,7 @@ async def _build_real_handlers(
         mcp_tool_names=tuple(binding.spec.name for binding in mcp_bindings),
         dynamic_tools=dynamic_tools,
         tool_names=tuple(spec.name for spec in tool_registry.specs()),
+        graphs=graphs,
     )
 
 

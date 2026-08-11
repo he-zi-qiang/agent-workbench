@@ -99,9 +99,44 @@ class TaskListResponse(BaseModel):
 
 
 class TaskTimelineResponse(BaseModel):
+    """One slice of a Task's events, and the positions it could not deliver.
+
+    ``skipped_sequences`` carries the stored positions this slice examined and
+    could not decode. A shorter list of events is also what the end of a stream
+    looks like, so without this a partial history and a complete one are the
+    same response -- and a replay that is quietly short is worse than one that
+    fails, because nothing makes anyone look.
+
+    Positions rather than a bare count, for three reasons a count cannot
+    supply. They are in a namespace the caller already reads: every delivered
+    event carries its own ``sequence`` and ``cursor`` is ``stream_id:sequence``
+    -- so a client can render the gap *between* the events it did receive
+    instead of printing "some events are missing" with no idea where, and an
+    operator handed a position can go find the row. Across pages, positions can
+    be reconciled with what a client has already shown; a count re-sent on an
+    overlapping re-read is indistinguishable from new damage. And the count is
+    ``len`` of this list, so choosing positions gives up nothing the count
+    offered, while choosing the count discards the positions irrecoverably.
+
+    Not both: a separate count is a second statement about the same fact, and
+    the only thing it can add later is a disagreement about whether the history
+    is complete. Size is not the reason to prefer the count either -- the list
+    cannot exceed the page's ``limit``, which this endpoint bounds.
+
+    Always present, empty when nothing was skipped. Emitting it only when
+    non-empty would make "this slice is complete" and "this server never
+    checked" the same bytes, which is the ambiguity the field exists to remove.
+    The empty list is the positive claim, so a client can only present a
+    partial timeline as whole by ignoring a field it was handed.
+
+    Nothing new is disclosed: these are positions in the caller's own stream,
+    whose readable events this same response returns with their sequences.
+    """
+
     task_id: Identifier
     events: tuple[EventEnvelope, ...]
     cursor: str | None = None
+    skipped_sequences: tuple[int, ...] = ()
 
 
 class CancelTaskRequest(BaseModel):
@@ -276,6 +311,12 @@ async def timeline(
         task_id=recorded.task_id,
         events=recorded.events,
         cursor=None if recorded.cursor is None else recorded.cursor.encode(),
+        # Passed through unchanged rather than recomputed from the events. The
+        # service saw the rows this slice could not decode; by the time they
+        # reach here they are exactly the events that are not in the tuple
+        # above, and nothing in this module can tell that from the end of the
+        # stream.
+        skipped_sequences=recorded.skipped_sequences,
     )
 
 

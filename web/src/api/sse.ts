@@ -1,13 +1,57 @@
 import type { EventEnvelope } from "./types";
 
+/**
+ * The SSE event name for a durable position the server examined and did not
+ * deliver. Dotted and lower-case, unlike every domain event type -- those are
+ * payload class names, `RunStarted` and friends -- so dispatching on `event:`
+ * can never confuse this with something a workflow emitted.
+ */
+export const QUARANTINE_EVENT = "stream.quarantined";
+
+/** A frame carrying one durable event. */
 export interface SseFrame {
   id: string | null;
   event: string;
   envelope: EventEnvelope;
 }
 
+/**
+ * What the server discloses about a position it skipped: which one, and the
+ * little the damaged row still says about itself. There is no payload, no run,
+ * and nothing to apply.
+ */
+export interface QuarantineNotice {
+  event_id: string;
+  event_type: string;
+  schema_version: number;
+  sequence: number;
+  stream_id: string;
+}
+
+/**
+ * A frame that declares a position was skipped rather than delivered.
+ *
+ * Kept as its own type instead of being widened into `SseFrame`: an envelope
+ * is the log's record of one thing that happened, and forcing this into that
+ * shape would mean inventing a payload for an event nobody could read. The
+ * reducer takes `SseFrame` and only `SseFrame`, so the type system is what
+ * stops a notice from being mistaken for history.
+ */
+export interface SseQuarantineFrame {
+  id: string | null;
+  event: typeof QUARANTINE_EVENT;
+  quarantined: QuarantineNotice;
+}
+
+/** Anything a well-formed frame on this stream can be. */
+export type SseChunkFrame = SseFrame | SseQuarantineFrame;
+
+export function isQuarantineFrame(frame: SseChunkFrame): frame is SseQuarantineFrame {
+  return "quarantined" in frame;
+}
+
 export interface ParsedChunk {
-  frames: SseFrame[];
+  frames: SseChunkFrame[];
   remainder: string;
 }
 
@@ -22,7 +66,7 @@ export function parseSseChunk(source: string, flush = false): ParsedChunk {
     (carriesCarriageReturn ? "\r" : "");
   const parts = normalized.split("\n\n");
   const remainder = flush ? "" : (parts.pop() ?? "");
-  const frames: SseFrame[] = [];
+  const frames: SseChunkFrame[] = [];
 
   for (const raw of parts) {
     const frame = parseFrame(raw);
@@ -31,7 +75,7 @@ export function parseSseChunk(source: string, flush = false): ParsedChunk {
   return { frames, remainder };
 }
 
-function parseFrame(raw: string): SseFrame | null {
+function parseFrame(raw: string): SseChunkFrame | null {
   let id: string | null = null;
   let event = "message";
   const data: string[] = [];
@@ -49,6 +93,14 @@ function parseFrame(raw: string): SseFrame | null {
   if (data.length === 0) return null;
   try {
     const candidate: unknown = JSON.parse(data.join("\n"));
+    // The announced name is what selects the shape, which is the whole reason
+    // the server spends a separate name on this instead of a field inside the
+    // envelope: a client that dispatches by event type reads the notice or
+    // drops it, and cannot silently keep the events on either side of the hole.
+    if (event === QUARANTINE_EVENT) {
+      if (!isQuarantineNotice(candidate)) return null;
+      return { id, event: QUARANTINE_EVENT, quarantined: candidate };
+    }
     if (!isEventEnvelope(candidate, event)) return null;
     return {
       id,
@@ -94,4 +146,31 @@ export function isEventEnvelope(
     return false;
   }
   return true;
+}
+
+/**
+ * Validate a notice at least as strictly as an envelope, for a sharper reason:
+ * this is the only frame that lets the stream pass over a position without an
+ * event, so a malformed one has to be discarded rather than believed. Dropping
+ * it turns the hole back into an unannounced gap, which is exactly what the
+ * continuity check is there to catch -- the safe reading, and the behaviour
+ * that existed before this frame did.
+ */
+export function isQuarantineNotice(value: unknown): value is QuarantineNotice {
+  if (typeof value !== "object" || value === null) return false;
+  const notice = value as Record<string, unknown>;
+  return (
+    notice.schema_version === 1 &&
+    typeof notice.event_id === "string" &&
+    notice.event_id.length > 0 &&
+    typeof notice.stream_id === "string" &&
+    notice.stream_id.length > 0 &&
+    // Length is not required of the type: it is copied verbatim from a row
+    // this server could not decode, so an empty one is a fact about the damage
+    // rather than a reason to distrust the position being reported.
+    typeof notice.event_type === "string" &&
+    typeof notice.sequence === "number" &&
+    Number.isSafeInteger(notice.sequence) &&
+    notice.sequence >= 1
+  );
 }

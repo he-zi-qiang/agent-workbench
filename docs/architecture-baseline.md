@@ -37,7 +37,8 @@
 | 单 Agent 如何行动 | 自研 `ClaudeLikeAgentRuntime` | Task 拓扑、RAG 索引 |
 | 长任务如何推进/恢复 | LangGraph | 同一次 Model→Tool 循环 |
 | 文档如何摄取和检索 | LlamaIndex Adapter | Chat Session、Agent 决策、Task 状态 |
-| dense+sparse 索引与融合 | Qdrant Query API | 文档/ACL 事实源 |
+| dense+sparse 索引 | Qdrant Query API | 文档/ACL 事实源、融合 |
+| 两臂融合（一次 RRF，ADR-033） | 本进程 `adapters/vector/fusion.py` | 候选提名本身 |
 | 产品状态、事件、任务协调 | PostgreSQL | 向量检索 |
 | 大文件和原始文档 | S3-compatible ArtifactStore | Task 状态和事件游标 |
 | 第三方多 Agent 对照 | CrewAI Benchmark | 生产执行或恢复语义 |
@@ -124,7 +125,8 @@ flowchart TB
     KNOW --> RET["Ingestion / Retriever / Reranker Ports"]
     RET --> LI["LlamaIndex Adapter"]
     LI --> EMB["BGE-M3 + BGE Reranker"]
-    LI --> VECTOR["Qdrant Query API\ndense + sparse + RRF"]
+    LI --> VECTOR["Qdrant Query API\ndense 臂 + sparse 臂"]
+    VECTOR --> FUSE["本进程 RRF\nadapters/vector/fusion.py（ADR-033）"]
     GRAPH --> CHECK["LangGraph Checkpointer"]
     TASK --> REG["Task Registry Port"]
     CHECK --> DB["PostgreSQL"]
@@ -540,7 +542,8 @@ stateDiagram-v2
 用户问题
   → query rewrite
   → BGE-M3 dense + sparse encode
-  → Qdrant Query API: dense top-N + sparse top-N + RRF
+  → Qdrant Query API: dense top-N + sparse top-N（两次并发的单臂查询）
+  → 本进程内一次 RRF（adapters/vector/fusion.py，ADR-033）
   → BGE-reranker-v2-m3
   → ContextPacket
   → AgentRuntime
@@ -551,7 +554,11 @@ stateDiagram-v2
 
 LlamaIndex 负责 reader/connector、Node parsing、ingestion pipeline 和 Retriever Adapter，不使用 QueryEngine/Agent 做最终回答。普通 `HuggingFaceEmbedding` 不能自动得到 BGE-M3 sparse lexical weights，因此必须实现一个常驻 `BgeM3EncoderAdapter`，同批次输出 1024 维 dense vector 与 sparse `indices/values`；文档和查询共享 tokenizer、model revision、max length 与 precision。
 
-融合所有者锁定为 **Qdrant Query API 的 RRF**：Qdrant 完成一次 dense+sparse fusion，LlamaIndex Adapter 只映射结果，不能再次 relative-score fusion。初始候选数建议 dense/sparse 各 40、rerank 后保留 6–10，但这些是评测调优参数而不是硬编码产品规则。Embedding 和 reranker 常驻加载、批处理、预热并设置并发/超时；不因模型支持 8192 tokens 就把 chunk 设为 8192。
+融合所有者锁定为 **一次 RRF**，且不得有第二次：LlamaIndex Adapter 只映射结果，不能再次 relative-score fusion。
+
+> **已由 [ADR-033](./adr/0033-fusion-ranks-are-ours.md) 修订（2026-08-10）。** 本段原文写的是「融合所有者锁定为 Qdrant Query API 的 RRF」。那一次 RRF 现在在本进程内做（`adapters/vector/fusion.py`，配置 `rag.retrieval.fusion_owner = "application"`）：适配器并发发出两条单臂查询，两臂各自先按 `(-score, chunk_id)` 定序，再对这两份**未经任何融合的**原始名次算一次 RRF。**融合次数不变，仍是一次**——ADR-016 禁止的是对已融合结果再排一次，这一条依然成立。移动它买到的是可复现：并列点的名次此后由 `chunk_id` 决定，重建索引后不变。代价是每次 hybrid 检索多一次网络往返（并发发出，墙钟接近一次）。
+
+初始候选数建议 dense/sparse 各 40、rerank 后保留 6–10，但这些是评测调优参数而不是硬编码产品规则。Embedding 和 reranker 常驻加载、批处理、预热并设置并发/超时；不因模型支持 8192 tokens 就把 chunk 设为 8192。
 
 ### 8.2 Task + Multi-Agent
 
@@ -882,7 +889,7 @@ production 使用的 BGE-M3 embedding revision 和 BGE reranker revision
 | 应用数据库 | PostgreSQL + Alembic | conversation、registry、event、approval、checkpoint、文档元数据的事实源 |
 | 任务协调 | `SKIP LOCKED` + lease/fencing + advisory lock + fenced checkpointer | 竞争 claim、task 单执行者与旧 Worker checkpoint 拒写 |
 | 实时唤醒 | PostgreSQL `LISTEN/NOTIFY` | 只作任务/事件/SSE 唤醒；持久表支持 replay |
-| 向量检索 | Qdrant Query API | 派生 dense/sparse 索引、payload filter、服务端 RRF；需独立容量评估 |
+| 向量检索 | Qdrant Query API | 派生 dense/sparse 索引、payload filter；两臂融合已移入本进程（ADR-033）。需独立容量评估 |
 | 大产物 | 本地/S3-compatible ArtifactStore | 开发与部署可替换 |
 | RAG 索引/检索 | LlamaIndex | 使用 ingestion/retrieval 能力，不接管 Agent 循环 |
 | 模型/Tool 生态 | `langchain-core` 最薄 Adapter | 一个模型与 Tool 转换的 contract test；不用 Agent/Memory/RAG 主链 |
@@ -1299,7 +1306,10 @@ v1 没有进程/容器级不可信代码执行，因此只能称为“Tool 权�
 - 状态：**接受**；由 [ADR-017](./adr/0017-llamaindex-primary-rag.md) 重新确认
   （2026-08-02）。ADR-016 曾按当时实现取代本条，现已作为历史决定保留。
 - 原因：利用其 ingestion、index、retriever 能力，同时保留核心决策权。
-- 后果：LlamaIndex Document、Node、Retriever 必须经过 Adapter；其 QueryEngine/Agent 不生成最终回答；hybrid fusion 只由 Qdrant Query API 执行一次。
+- 后果：LlamaIndex Document、Node、Retriever 必须经过 Adapter；其 QueryEngine/Agent 不生成最终回答；hybrid fusion 只执行一次。
+  「那一次由 Qdrant Query API 执行」这一句已由 [ADR-033](./adr/0033-fusion-ranks-are-ours.md)
+  取代（2026-08-10）：RRF 移入本进程，**融合次数不变，仍是一次**，变的是臂内名次由
+  `chunk_id` 而不是引擎内部布局决定。本条其余部分不变。
 
 ### ADR-004：模块化单体优先
 
