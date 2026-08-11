@@ -11,7 +11,7 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-08-09, the current tree carries the Task/HITL/side-effect-ledger baseline, the
+As of 2026-08-11, `main` carries the Task/HITL/side-effect-ledger baseline, the
 three fencing fixes from PR #68, the React Chat/Work console (PR #69), the
 LlamaIndex retrieval adapter and routed-threshold evaluation (PR #72, #73), and
 Chat web search with the tool-ceiling semantics (PR #74). ADR-018 through 022 —
@@ -25,7 +25,13 @@ outward ([ADR-027](docs/adr/0027-read-outward-write-inward.md), schema `1.10`,
 PR #83–#86). [ADR-032](docs/adr/0032-the-external-researcher-is-an-agent.md)
 then closed the one segment of that line which was declared but never wired:
 `researcher_external` now actually runs an agent loop when it holds tools
-(PR #87). Current evidence and historical
+(PR #87). Two further batches on 2026-08-11 closed places where the
+documentation and the code disagreed: the first made the configuration stop
+lying, gave `LISTEN/NOTIFY` a consumer, and stopped a poison row from blocking
+replay; the second made knowledge bases declare write permission and ingestion
+failure out loud, made the Work page admit when the timeline it received has
+holes, let a machine without the `embedding` extra run Tasks at all, and
+corrected the stale numbers on this page. Current evidence and historical
 increments are separated in
 [the implementation status](docs/status.md).
 
@@ -104,41 +110,68 @@ Implemented with test evidence:
   nothing" lets the next node write a plausible report on top of silence;
 - a React Chat/Work console served same-origin by FastAPI, described in
   [the frontend baseline](docs/frontend-design.md);
+- a knowledge base that says what it is before you act on it: `can_write` is
+  computed from the same owner-only rule the server's `require_writable`
+  enforces, so a read-only base hides the upload panel entirely rather than
+  offering a button that 404s after the whole file has gone up. Ingestion failure
+  is now recorded per revision (`failed_revision` + `failure_code`, migration
+  `0024`, with a check constraint making half a failure unrepresentable) instead
+  of being indistinguishable from "still indexing" forever. What is stored is an
+  `ErrorCode`, never the parser's exception text, which would echo the document's
+  own bytes back to everyone who can read the base. A transient failure is
+  recorded the same way and cleared by the next successful attempt, so a
+  dependency blip shows briefly as "indexing failed";
+- a Work timeline that admits when it is incomplete: the server already reported
+  the positions it could not decode, and the page now anchors each one between
+  the two events that did arrive, saying the events are still in the log rather
+  than that they were lost;
+- a Task Worker that starts without the `embedding` extra and serves `v2_general`
+  only, which the composition module had argued for since v2 landed but which was
+  unreachable dead code — the projection filled retrieval in unconditionally, so
+  the refusal fired on every deployment that lacked the extra. Such a deployment
+  must also set `workflow.graph_version` to `v2_general`, since that value is the
+  API's submission default; the requirement lives in the deployment docs and a
+  startup warning, and CI cannot catch it;
 - a local-only Docker Compose topology for PostgreSQL, Qdrant, migrations, the
   API and explicitly opted-in synthetic workers.
 
-Validation for the current tree, measured on `main@0ee1700` (2026-08-11):
+Validation measured locally on 2026-08-11, on the tree carrying every change in
+the batch described above:
 
-- Ruff format and lint: passed (441 files);
-- Pyright strict: 0 errors and 0 warnings;
-- tests against a real PostgreSQL and Qdrant: 2629 passed, 11 skipped (those 11
-  need the `embedding` extra and local BGE weights);
-- the same tree with no external services: 1996 passed, 644 environment-gated
-  skips;
-- lock-file and dependency-license policy gates: passed;
-- frontend ESLint, strict TypeScript and production build: passed;
-- Vitest: 114 passed.
+| Environment | Result |
+|---|---|
+| Backend, real PostgreSQL 5433 + Qdrant 6333 | 2716 passed / 11 skipped |
+| Backend, no external services at all | 2040 passed / 687 skipped |
+| Frontend Vitest | 155 passed (22 files) |
+| Frontend Playwright (desktop and mobile projects) | 4 passed |
 
-The two test rows come from different environments and must be quoted
-separately rather than added: with no services running, the environment-gated
-cases are reported as skips rather than as stateful verification.
+Static gates: `ruff format --check .` passed (485 files), `ruff check src tests`
+passed, Pyright strict reported 0 errors, 0 warnings, 0 informations, ESLint
+`--max-warnings 0` passed, `tsc -b` passed, and the production build passed.
+Alembic reports a single head, `0024_document_ingestion_failure`.
+
+Of the 11 backend skips, 10 need the `embedding` extra and local BGE weights and
+one is a contract that only holds on PostgreSQL; the extra 676 skips in the
+service-less row are all gated on `AGENT_WORKBENCH_TEST_DSN` or
+`AGENT_WORKBENCH_TEST_QDRANT_URL` being unset. **Four rows, four environments:
+quote them separately, never add them.**
 
 A separate CI job carries real-service evidence on **every PR**: `Migrations,
 PostgreSQL and Qdrant-backed stores` runs `alembic upgrade head` and then
 `tests/contracts tests/persistence tests/api tests/vector` against a real
-PostgreSQL 16 and Qdrant — 920 tests with 2 environment-gated skips, one of which
-needs the `embedding` extra and local BGE weights that CI does not install. It
-does not cover `tests/e2e`, Task Worker end-to-end, or anything requiring a model
-provider, so it does not replace the real Task acceptance run behind ADR-032
-recorded in [the implementation status](docs/status.md). Three sets of numbers,
-three environments: cite them separately, never added together.
+PostgreSQL 16 and Qdrant. That same command run locally against real services
+gives 1009 passed and 2 skipped, one of which needs the `embedding` extra and
+local BGE weights that CI does not install — the count is local, but the command
+and the environment gates are the ones CI uses. It does not cover `tests/e2e`,
+Task Worker end-to-end, or anything requiring a model provider, so it does not
+replace the real Task acceptance run behind ADR-032 recorded in
+[the implementation status](docs/status.md).
 
-That job is **not green every time**:
-`test_the_hybrid_and_dense_paths_agree_on_the_tie_break` fails intermittently,
-and it does so for exactly the reason listed below as a known reproducibility
-gap — tied retrieval scores have no deterministic order. It is recorded rather
-than quarantined, because writing this job up as a single stable pass count
-would both overstate the job and hide a real defect.
+An earlier version of this page said that job was **not green every time**,
+because `test_the_hybrid_and_dense_paths_agree_on_the_tie_break` failed
+intermittently on tied retrieval scores. That defect has been fixed and the
+original diagnosis was wrong; see the reproducibility note below. The test is now
+deterministic.
 
 External search now has a real provider
 ([ADR-020](docs/adr/0020-external-web-search.md)): DeepSeek's server-side
@@ -156,31 +189,75 @@ or `random`, and ADR-029 §3.4 says so rather than pretending otherwise. Reading
 outward does no form filling, no clicking, no POST of any kind, and drives no
 desktop software; JS-rendered pages and screenshots need a browser engine and
 are explicitly out of scope per ADR-027 §3.5, so **an SPA yielding no article
-text is a known boundary rather than a bug**. WP15 stages four (cost and
-deadline as the governing budget, `workspace_edit`, `workspace_grep`) and five
-(the second graph `v2_general`) have not started. The plan is explicit that
-stage four is not optional: with the tools complete and the budget unchanged, a
-node that genuinely iterates hits the wall at twelve steps, and that symptom
-reads like a weak model.
+text is a known boundary rather than a bug**. WP15 stages four
+(`workspace_edit`, `workspace_grep`, cost and deadline as the governing budget,
+[ADR-030](docs/adr/0030-working-nodes-are-governed-by-cost.md)) and five (the
+second graph `v2_general`,
+[ADR-031](docs/adr/0031-a-second-graph.md)) have both landed since an earlier
+version of this page said they had not started.
 
-One cost boundary found by measurement: a node that reads web pages does not fit
-the default token ceiling. An article runs 20–50 KB, two reads come to roughly
-28000 tokens, and the default 16000 of
-`multi_agent.max_tokens_per_agent_invocation` stops the run mid-JSON — every tool
-succeeded and the node still failed. The default is unchanged; only
-`config/config.web-local.toml` raises it to 120000.
+One cost boundary found by measurement, hit twice: a node that does work does not
+fit a ceiling set for "read the input, then answer". An article runs 20–50 KB,
+two reads come to roughly 28000 tokens, and the default 16000 of
+`multi_agent.max_tokens_per_agent_invocation` stops the run mid-JSON, while the
+default `runtime.max_steps=12` stops v2's `work` node before it renders — every
+tool succeeded and the node still failed. The defaults are unchanged; only
+`config/config.web-local.toml` (120000) and `config/config.word-local.toml`
+(120000 plus `max_steps=40`) raise them, with the measurements in the comments.
 
-The remaining boundaries are explicit: physical deletion of stale Qdrant points,
-context compaction, EventLog upcasters/poison-row handling, the CrewAI
-comparison, dynamic multi-Agent supervision, Langfuse, production identity and
-production deployment are not complete. LlamaIndex is the selected primary RAG
-integration and RAGAS the offline evaluation baseline
+**The reproducibility gap this page used to list is closed, and the original
+diagnosis was wrong.** It said tied retrieval scores had no deterministic order.
+[ADR-033](docs/adr/0033-fusion-ranks-are-ours.md) found that the unstable order
+was the symptom and the unstable *scores* were the cause: server-side RRF scores
+by within-arm rank, and a point tied in both arms gets whatever rank the engine
+happened to assign, so the fused score is arbitrary. Ten re-index rounds produced
+ten different orders, and the strictly-best point was not first in two of them.
+Sorting happens after scoring, so no amount of post-sorting could reach it. The
+fix moves that one RRF into this process and orders each arm by
+`(-score, chunk_id)` before fusing; `chunk_id` is derived from the chunk, so it
+survives a re-index. `tests/vector/test_tied_score_order.py` pins it, with a
+control asserting a higher score still outranks a smaller id.
+
+The remaining boundaries are explicit. Physical deletion of stale Qdrant points
+and Chat history compaction are not done. EventLog upcasters and poison-row
+isolation are implemented, but the production upcaster registry is still empty
+and only the Work timeline surfaces skipped positions — Chat's
+`stream.quarantined` frame still only advances the cursor and shows nothing. Not
+started at all: the CrewAI comparison, a Task/multi-Agent benchmark runner,
+dynamic multi-Agent supervision and agent spawning, a durable mailbox, general
+Tool-level dynamic approval, Langfuse, production identity, and production
+deployment. Remote object storage is the same story: `artifact_store.backend`
+accepts `s3`, but the only adapter is `LocalArtifactStore` and all three
+composition sites refuse to start and say so — fail closed, not a capability.
+
+The console has boundaries worth naming: Chat sessions live only in the browser
+(the sidebar's accessible name is literally "local Chat sessions"), with no
+server-side list, rename or delete; knowledge bases can be created and uploaded
+to, but not renamed, deleted, re-indexed or ACL-managed; a file chosen next to
+the message box goes into the selected knowledge base permanently, because
+per-message ephemeral attachments do not exist in this system; and `.docx` can be
+read as extracted text but not edited.
+
+LlamaIndex is the selected primary RAG integration and RAGAS the offline
+evaluation baseline
 ([ADR-017](docs/adr/0017-llamaindex-primary-rag.md)). The retrieval adapter is
-built and contract-tested, but `rag.llama_index.enabled` is `false` — what is
-missing is not the implementation but a measurement able to tell the two
-retrieval paths apart (ADR-017 step 3). Ingestion is not migrated and the RAGAS
-runner does not exist, so both stay Planned in the capability table: an adapter
-existing is not the finished framework integration.
+built and contract-tested, but `rag.llama_index.enabled` is `false`, and the
+reason has changed: the equivalence measurement ADR-017 step 3 requires came back
+inconclusive because each retriever disagreed with *itself* on 9–10 of 38 gold
+questions. That noise floor is gone as of ADR-033, but **the evaluation has not
+been re-run on the reproducible retriever**, so what is missing now is the
+evidence rather than the path to it. Ingestion is not migrated — the LlamaIndex
+vector-store adapter explicitly refuses writes — and the RAGAS runner does not
+exist, so both stay Planned in the capability table: an adapter existing is not
+the finished framework integration.
+
+The evidence manifest (`agent-evidence write`) has been produced for real once,
+recording the commit, a dirty flag, the config schema version, the policy
+fingerprint and model identities, attaching a test report with its SHA-256, and
+listing what it is still missing. **It is a local artefact, not part of the
+repository**: `artifacts/evidence/` is gitignored, so a fresh clone has none, and
+the one that exists is anchored to the commit that produced it and is now out of
+date. Regenerating it means really running an evaluation round.
 
 > **Security warning:** the current identity adapter trusts request headers, so
 > `agent-api` is for controlled local development only and must not be exposed to

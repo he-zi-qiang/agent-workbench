@@ -17,7 +17,7 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-08-09，当前工作树已包含 Task/HITL/副作用账本收尾、三处围栏修复（PR #68）、
+截至 2026-08-11，主线已包含 Task/HITL/副作用账本收尾、三处围栏修复（PR #68）、
 React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈值评测
 （PR #72、#73）、Chat 联网搜索与工具额度语义（PR #74），以及
 [ADR-025](docs/adr/0025-mcp-adapter.md) 的 MCP Optional Lab。ADR-018～023
@@ -30,6 +30,10 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
 （schema `1.9` → `1.10`，PR #83–#86）。随后
 [ADR-032](docs/adr/0032-the-external-researcher-is-an-agent.md) 补上了这条线上最后一段
 没接通的地方：`researcher_external` 拿到工具时真的跑 agent 循环（PR #87）。
+2026-08-11 又清了两批"文档与代码对不上"的缺口：第一批让配置不再说假话、给
+`LISTEN/NOTIFY` 接上消费端、让毒行不再挡死回放；第二批让知识库把写权限和摄取失败
+说出口、让 Work 页承认自己拿到的是残缺时间线、让没装 `embedding` extra 的机器也能跑
+Task，并把本页与状态文档里过期的数字改准。
 最新实现证据和历史增量分开记录在 [实施状态](docs/status.md)；下列能力均有代码或
 测试作为依据：
 
@@ -141,8 +145,12 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   重读 `event_type`（所以事件改过名也接得上）；缺一步就停在洞前、保持原来那条拒绝
   路径。`read_isolating()` 让一条解不出来的行不再挡死整条流的回放，**且跳过是可见的**
   ——SSE 发一个独立的 `stream.quarantined` 帧、Task timeline 返回被跳过的序号。
-  两处调用方都已切过去。仍缺的是：生产注册表 `DEFAULT_EVENT_UPCASTERS` 还是空的
-  （机制有了，还没有真实的历史版本要升），浏览器界面上也不显示"这里有一条读不出来"。
+  两处调用方都已切过去。**浏览器界面上 Work 这一半已经补上**：任务时间线把每个没能
+  交付的位点锚定在它确实收到的前后两条事件之间（"#2：在「工具调用已开始：external_search」
+  与「任务成功完成」之间"），措辞是"这些事件仍在日志里，只是这次没能解码"而不是"丢了"。
+  仍缺的是：生产注册表 `DEFAULT_EVENT_UPCASTERS` 还是空的（机制有了，还没有真实的
+  历史版本要升），**Chat 那一半仍然沉默**——`stream.quarantined` 帧只被用来推游标，
+  界面上不显示。
 - **`LISTEN/NOTIFY` 现在有消费端了**（此前只有发送端，代码注释自己写着"没有消费者"）：
   Task Worker 空队列时的等待可以被一次唤醒提前打断，轮询周期**保留为下限**。
   正确性不依赖通知到达——有一条对照组测试把通知全部丢掉，任务照样被领取。
@@ -158,10 +166,14 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   engine/worker。现在有一条测试真的用 `subprocess` 起独立 Worker、等它确实进入执行中、
   再 `SIGKILL`（不是 SIGTERM——优雅关闭证明不了任何事），然后由第二个进程接手，
   并断言被杀的进程返回码确实是 -9。带不杀进程的对照组。
-- **首份 evidence manifest 已生成**（`agent-evidence write`，此前这个工具存在但从没被跑过）：
-  记录 commit、dirty 标记、配置 schema 版本、policy fingerprint、模型/embedding/reranker
-  身份，附测试报告及其 SHA-256，并**自己列出缺哪些证据**（评测报告、trace 样本、演示录像）。
-  一份允许不完整、但不允许对不完整保持沉默的证据包。
+- **evidence manifest 已经被真正跑出来过一次**（`agent-evidence write`，此前这个工具存在
+  但从没被跑过）：记录 commit、dirty 标记、配置 schema 版本、policy fingerprint、
+  模型/embedding/reranker 身份，附测试报告及其 SHA-256，并**自己列出缺哪些证据**
+  （评测报告、trace 样本、演示录像）。一份允许不完整、但不允许对不完整保持沉默的证据包。
+  **它是本机产物，不在仓库里**：`artifacts/evidence/` 被 `.gitignore` 忽略，所以 clone
+  下来是看不到的，要自己跑一次才有。而且**现存的那一份已经过期**——它锚定的 commit 停在
+  生成它的那一次，`git_dirty` 记的是 `true`，此后的改动都不在其中。重新生成需要真跑一轮
+  评测与门禁，不属于本批范围。
 - 三臂消融的 `hybrid-rerank` 臂尚未跑：hybrid 在当前 38 题 gold set 上已打满
   1.000，rerank delta 必然为 0；要测出它得先有更难的 gold set。
 - 外部搜索已接上真实 Provider（[ADR-020](docs/adr/0020-external-web-search.md)）：
@@ -185,9 +197,9 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   `fused`），授权与答案发布仍在应用层。检索契约测试按 `CandidateRetrieverPort` 参数化，两条路径在真实
   Qdrant + PostgreSQL 上跑同一套 ACL、source revision 与引用断言。
   **但它没有成为默认**：`rag.llama_index.enabled = false`。ADR-017 要求切流量以等价评测
-  为前提，而那次评测**测不出来**——并列的融合分数返回次序不稳定，每个检索器与**自己**
-  的不一致（9-10/38 题）都宽于两条路径之间的差异。没有证据表明 LlamaIndex 更差，也没有
-  证据表明它等价；"测不出来"不是切流量的理由。
+  为前提，而那次评测**测不出来**——每个检索器与**自己**的不一致（9-10/38 题）都宽于两条
+  路径之间的差异。**造成那道噪声底的缺陷已经修掉**（见下条），但**那次评测还没有在可复现
+  的检索器上重跑**，所以这个开关继续保持 `false`：现在缺的不是通往证据的路，是证据本身。
   **ingestion 仍未迁移**——`IngestionPipeline` 没有接入，LlamaIndex 的 VectorStore
   适配器明确拒绝写入，因为一条没有对照基准的第二写入路径正是 ADR-017 迁移规则要防的；
   **RAGAS runner 仍未落地**。因此能力表里 LlamaIndex 与 RAGAS **整体保持 Planned**：
@@ -202,18 +214,49 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   在场**。现在它只接受 `RETRIEVAL_METRICS` 注册表里真的算得出来的名字，多写一个就加载失败。
   迁移前的自研实现保留为明确命名的 `ReferenceVectorIndexRetriever`，是当前默认路径，
   同时充当迁移基准。
-- **已知的可复现性缺口：**并列检索分数没有确定性次序，因此同一个问题两次提问可能得到
-  不同的上下文与不同的引用。这既让 §15 要求的"固定数据集和可展示指标"打折扣，也是上面
-  那次等价评测无法给出结论的直接原因。修法是在适配器边界给并列项定序，属于独立变更。
+- **曾经的可复现性缺口已经修掉，而且当初的诊断是错的。**本页此前写着"并列检索分数没有
+  确定性次序"，据此同一个问题两次提问可能得到不同上下文与不同引用。
+  [ADR-033](docs/adr/0033-fusion-ranks-are-ours.md) 把它查清楚了：**次序不稳是结果，
+  分数本身不稳才是原因**——服务端 RRF 按臂内名次计分，而一个点在两臂里都并列时，
+  它的名次是引擎的任意选择，于是融合分数是任意的（实测 10 次重建索引得到 10 个不同次序，
+  严格最优点有 2 次不在第一位）。排序发生在分数之后，任何后排序都够不着它。
+  修法是把那一次 RRF 移进本进程，两臂先各自按 `(-score, chunk_id)` 定序再融合；
+  `chunk_id` 由 chunk 派生，所以重建索引后不变。`tests/vector/test_tied_score_order.py`
+  钉住这一点，含"高分仍然压过小 id"的对照组。
+  **一个连带的更正**：本页此前把 CI 那条
+  `test_the_hybrid_and_dense_paths_agree_on_the_tie_break` 写成"偶发失败"，那是修复前的
+  状态；它现在是确定性通过的。
 - OpenTelemetry 的 trace/metrics 已落地（Port + OTLP Adapter，核心层不导入 SDK）。
-  Langfuse、动态 Multi-Agent supervisor、生产身份认证与生产部署仍未完成。
+  Langfuse Adapter、CrewAI 对照 benchmark、Task/Multi-Agent 的 benchmark runner、
+  动态 Multi-Agent supervisor 与 agent spawn、持久 mailbox、生产身份认证与远程部署，
+  **均未开始**。远程对象存储也一样：`artifact_store.backend` 允许写 `s3`，但仓库里只有
+  `LocalArtifactStore`，API / Task Worker / Ingestion Worker 三处装配都在启动时明说
+  "没有适配器"并拒绝启动——是 fail closed，不是能力。
 - MCP 第一版不支持 stdio、OAuth、热更新、MCP Tasks、Tool 级动态审批、transport body
   硬上限或跨 Worker 进程的全局锁；
   `retryable_effects=false` 的 server 不进入可调用路径。它是协议 Adapter，不是第二套
   Agent executor，也不改变 PostgreSQL 的恢复事实源。
 - React 控制台已实现 Chat / Work 两条主流程，以及 Knowledge / Approvals /
   Evaluation / System 辅助页；其前端协议、安全发布语义和响应式设计见
-  [前端设计基线](docs/frontend-design.md)。
+  [前端设计基线](docs/frontend-design.md)。**它管不了的东西要说清楚**：Chat 的会话列表
+  只活在浏览器里（侧栏的可访问名就叫"本地 Chat 会话"），服务端没有会话的
+  list/rename/delete；知识库只能创建与上传，**没有**重命名、删除、重建索引或 ACL 管理；
+  Word 只能读（下面那条的文字预览），不能在控制台里编辑。
+- **知识库现在会提前说自己是只读的，也不再把失败装成"正在索引"**（2026-08-11）：
+  `KnowledgeBaseSummary.can_write` 由 `owner_id == principal_id` 算出，与服务端
+  `require_writable` 的 owner-only 规则同源；只读知识库**整块不渲染上传入口**，换成一段
+  说明——服务端仍然会拒绝，隐藏只是别让人先把整份文件传上去。摄取失败此前**没有持久化
+  过**，于是任何解析失败都表现为永久"正在索引"；现在 `documents` 表按 revision 记
+  `failed_revision` + `failure_code`（迁移 `0024`，带"半个失败不可表示"的 check 约束），
+  文档状态多了 `failed` 一档，`failed_document_count` 从"处理中"里减出去。存的是
+  `ErrorCode` 而不是解析器的异常文本——那段文本会把文档自己的字节回显给每个能读这个
+  知识库的人。**边界**：瞬时故障（如 Qdrant 短暂不可达）同样会被记成 `failed`，等下次
+  重试成功再清掉，所以一次依赖抖动会让界面短暂显示"索引失败"。
+- **上传的是知识库文档，不是这一轮的临时附件**：输入框旁那个回形针的可访问名是
+  "上传文件到知识库"，因为文件去的是一个永久的地方。**这套系统没有"逐条消息的临时
+  附件"**，旧标签"添加附件"描述的是一个不存在的东西。另外前端会在浏览器不认识
+  `.md` 时按扩展名补上 `text/markdown` 再上传——此前那种文件会一路成功地传完、然后在
+  异步摄取里被解析器拒绝，界面上表现为永远"正在索引"。
 - Task 产出的 **`.docx` 可以在控制台里直接读**：服务端用 `python-docx`（Word MCP
   的渲染依赖）把正文与表格提取成 Markdown（`GET /v1/artifacts/{id}/preview`，
   仅 docx，其它类型 415），阅读列内联渲染，旁边是下载键。**它是文字预览而不是排版
@@ -223,11 +266,17 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   而不是错误码——`provider_unavailable` 同时是"没配 provider"和"找到 5 页一页也读
   不了"，只显示码会把网络故障读成缺功能。
 - 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 证明。
-- 前端增量当时的门禁为：Ruff format/lint 通过、Pyright `0 errors`、无外部服务
-  `1264 passed / 568 skipped`；前端 ESLint/严格 TypeScript/production build 通过，
-  Vitest `45 passed`、Playwright 桌面/移动端 `2 passed`。该次工作树在真实
-  PostgreSQL + Qdrant 下为 `1821 passed / 11 skipped`（11 项需要 BGE 权重）；
-  两组数字来自不同环境，只能分别引用，不能相加。
+- **没装 `embedding` extra 的机器现在也能跑 Task 了**（2026-08-11）：`composition.py` 一直
+  论证着"没有检索能力时只注册 v2，一个不指名知识库的普通 Task 照跑"，但那是一段
+  **从没被走到过的死代码**——投影层无条件把 qdrant/embedding/retrieval 填满，
+  `grounds_tasks` 对每个正式部署恒为真，于是没装 extra ⇒ Worker 直接 exit。现在那条
+  拒绝换成一条 WARNING 加一个 `grounding_unavailable` 字段（与 API 侧早已存在的
+  `rag_unavailable` 同名同形状），降级照做、被拿掉的是"悄悄"。**配套要求写在文档里而
+  不是代码里**：这种部署必须把 `workflow.graph_version` 设成 `v2_general`，否则提交仍会
+  park 成 `waiting_migration`——那个值是 **API** 用的提交默认值，Worker 只是恰好也拿到
+  同一个投影字段。仓库里的几份 local profile 一个都没改（它们都是有完整检索能力的机器），
+  所以这条搭配目前只有 [部署说明](docs/deployment.md)、[本地运行](docs/running-locally.md)
+  和一条启动 warning 守着，CI 抓不到。
 - 沙箱不联网、不支持跨调用状态、不做 GPU，也不保证逐字节确定性重放（脚本自己可以用
   `time.time()`/`random`）。只读取用不做填表、点击、任何 POST，也不驱动桌面软件界面；
   JS 渲染的页面与截图需要浏览器内核，按 ADR-027 §3.5 明确不做——**SPA 页面取不到正文是
@@ -241,23 +290,32 @@ WP15 已落地前三个阶段：[ADR-028](docs/adr/0028-task-workspace.md) 的�
   默认 `runtime.max_steps=12` 让它停在渲染之前，两种都是**工具全部成功、节点仍然
   失败**。默认值不动，只有 `config.web-local.toml`（120000）与
   `config.word-local.toml`（120000 + `max_steps=40`）抬高，注释里带实测依据。
-- 当前门禁（2026-08-11 实测，工作树含未提交改动）：对着真实 PostgreSQL 5433 +
-  Qdrant 6333 为 **`2711 passed / 11 skipped`**（11 项需要 `embedding` extra 与本地
-  BGE 权重）。前端 Vitest **`135 passed`**，tsc 严格模式与 ESLint `--max-warnings 0`
-  均通过。Ruff lint 通过（483 files）。两组数字来自不同环境，只能分别引用，不能相加。
-  **Ruff format 与 Pyright 此刻各有一处红**，都在同一工作树上另一条未提交的改动里
-  （`apps/api/docx_preview.py` 的格式、`apps/task_worker/composition.py` 的两个
-  `EmbeddingUnavailable` 类型错）；HEAD 上这两个文件是干净的。写在这里而不是等它
-  变绿再写，是因为一个"当前门禁"如果只在方便的时候才报，它就不是门禁。
+- 历史上每次增量当时的门禁数字不在本页保留——它们会一起过期，而且很难看出哪一组是
+  最新的。逐次的数字连同它们对应的改动记在 [实施状态](docs/status.md) 里，本页只留
+  下面那一组当前值。
+- 当前门禁（2026-08-11 实测，本机，含当日两批改动）：
+
+  | 环境 | 结果 |
+  |---|---|
+  | 后端，真实 PostgreSQL 5433 + Qdrant 6333 | `2716 passed / 11 skipped` |
+  | 后端，不起任何外部服务 | `2040 passed / 687 skipped` |
+  | 前端 Vitest | `155 passed`（22 个文件） |
+  | 前端 Playwright（桌面 + 移动两个 project） | `4 passed` |
+
+  静态门禁：`ruff format --check .` 通过（485 files）、`ruff check src tests` 通过、
+  Pyright `0 errors, 0 warnings, 0 informations`、ESLint `--max-warnings 0` 通过、
+  `tsc -b` 通过、production build 通过。Alembic 单一 head 为
+  `0024_document_ingestion_failure`。
+  后端那 11 项跳过里，10 项需要 `embedding` extra 与本地 BGE 权重，1 项是只在
+  PostgreSQL 上成立的契约；不起服务时多出来的 676 项跳过全部因为
+  `AGENT_WORKBENCH_TEST_DSN` / `AGENT_WORKBENCH_TEST_QDRANT_URL` 没设。
+  **四行数字来自四种环境，只能分别引用，不能相加。**
 - **每个 PR 都有一组真实服务证据**：CI 的 `Migrations, PostgreSQL and Qdrant-backed stores`
   job 先 `alembic upgrade head`，再对着真实 PostgreSQL 16 与 Qdrant 跑
-  `tests/contracts tests/persistence tests/api tests/vector`，共 920 项、2 项环境跳过
-  （其中 1 项需要 `embedding` extra 与本地 BGE 权重，CI 不装该 extra）。它不覆盖
-  `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径。三组数字来自三种环境，
-  只能分别引用，不能相加。
-  这个 job **不是每次都全绿**：`test_the_hybrid_and_dense_paths_agree_on_the_tie_break`
-  会偶发失败，而它失败的原因就是下面那条"已知的可复现性缺口"——并列分数没有确定性次序。
-  如实记下来，是因为把它写成一个稳定的通过数字，既高估了这个 job，也掩盖了一条真实缺陷。
+  `tests/contracts tests/persistence tests/api tests/vector`。同一条命令在本机对着真实
+  PostgreSQL + Qdrant 跑出来是 `1009 passed / 2 skipped`（其中 1 项需要 `embedding`
+  extra 与本地 BGE 权重，CI 不装该 extra）——这个数是本机测的，CI 跑的是同一条命令、
+  同一组环境闸门。它不覆盖 `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径。
 
 > **安全警告：** 当前 Identity Adapter 只信任请求头，因此 `agent-api` 只能用于
 > 受控的本机开发，不得暴露到局域网或公网。监听地址以及 Compose 端口映射均限制为

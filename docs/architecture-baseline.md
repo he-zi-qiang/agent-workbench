@@ -1439,30 +1439,50 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-截至 2026-08-08，主分支基线为 `main@900d83f`，在 OTel/LangChain 工具互操作
-（PR #67）与三处围栏修复（PR #68）之上，还包含 React 控制台（PR #69）、
-LlamaIndex 检索 Adapter 与路由阈值评测（PR #72、#73）以及 Chat 联网搜索与工具额度
-语义（PR #74，即 ADR-021/022）。下表在 2026-07-28 之后**大幅落后于实现**
-（它当时写着「没有 Task Registry、Task Worker 或重启恢复证据」），已按实际代码逐条
-订正。
+截至 2026-08-11，主分支基线在 OTel/LangChain 工具互操作（PR #67）与三处围栏修复
+（PR #68）之上，还包含 React 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈值
+评测（PR #72、#73）、Chat 联网搜索与工具额度语义（PR #74，即 ADR-021/022）、
+WP15 全部五个阶段（ADR-027～031），以及 2026-08-11 的两批缺口清理。下表在
+2026-07-28 之后**大幅落后于实现**（它当时写着「没有 Task Registry、Task Worker 或
+重启恢复证据」），已按实际代码逐条订正。
+
+**这一节不再钉具体 commit。**此前写的是 `main@900d83f`，而基线一旦往前走，那个 hash
+就变成一句需要读者自己去核的旧话；具体到某次改动的 commit 与 PR 号记在
+[实施状态](./status.md)，本节只保证描述的是当前代码。
 
 **框架口径（[ADR-017](./adr/0017-llamaindex-primary-rag.md)）：自研 Runtime +
 LangGraph + LlamaIndex + RAGAS。** 当前自研 ingestion/retrieval 已有 38 题 gold set
 证据（MRR 0.960 / recall@1 0.947 / 61ms），但它是 LlamaIndex 迁移的 reference
 baseline，不是取消框架集成的最终决定。LlamaIndex **检索** Adapter 的代码和契约测试
 此后已经落地（`adapters/llama_index/`，PR #72），但表里仍记 Planned——理由换了：
-不再是"代码没写"，而是 `rag.llama_index.enabled = false`（缺 ADR-017 第 3 步要的
-等价性度量）、ingestion 未迁移、RAGAS runner 不存在。适配器存在不等于框架集成完成。
+不再是"代码没写"，而是 `rag.llama_index.enabled = false`、ingestion 未迁移、
+RAGAS runner 不存在。适配器存在不等于框架集成完成。
 
-门禁取自当前工作树 `feat/react-chat-work-ui`（= `main@a0e1b6c` + React 控制台）：
-真实 PostgreSQL 16 + Qdrant `1821 passed / 11 skipped`；无外部服务
-`1264 passed / 568 skipped`。两者是同一套测试的两种环境，不能相加。剩余 11 项跳过
-需要真实 BGE 权重。Ruff、Pyright、三个配置 profile、`uv lock --check`、
-`docker compose config` 均通过，Alembic 唯一 head 为 `0019_tool_executions`。
+那个开关保持 `false` 的**理由本身又换了一次，要说准**。此前是"缺 ADR-017 第 3 步要的
+等价性度量"，而度量做不出来的根因是检索结果不可复现——每个检索器与自己的不一致
+（9-10/38 题）都宽于两条路径之间的差异。**那个根因已由
+[ADR-033](./adr/0033-fusion-ranks-are-ours.md) 修掉**（融合下沉到本进程、两臂先按
+`(-score, chunk_id)` 定序再融合，`chunk_id` 跨重建索引不变），并且顺带更正了当初的
+诊断：不稳的不是并列分数的**次序**，是分数**本身**。但**那次等价性评测还没有在可复现
+的检索器上重跑**，所以现在缺的是证据，不是通往证据的路。第 15 节要求的"固定数据集和
+可展示指标"因此不再被不可复现性打折，但也还没有拿到新的对照数字。
 
-ADR-018～022 全部落地后（2026-08-08，PR #74 已在 `main` 上）无外部服务门禁为
-`1463 passed / 606 skipped`。这一条只覆盖无外部服务这一种环境；真实
-PostgreSQL + Qdrant 的数字仍是上面那次运行的，两者不能互相替代，也不能相加。
+门禁（2026-08-11 本机实测，含当日两批改动）：
+
+| 环境 | 结果 |
+|---|---|
+| 后端，真实 PostgreSQL + Qdrant | `2716 passed / 11 skipped` |
+| 后端，无外部服务 | `2040 passed / 687 skipped` |
+| 后端，CI 那组服务型目录（`tests/contracts tests/persistence tests/api tests/vector`） | `1009 passed / 2 skipped` |
+| 前端 Vitest | `155 passed` |
+| 前端 Playwright（桌面 + 移动） | `4 passed` |
+
+`ruff format --check .`（485 files）、`ruff check src tests`、Pyright
+（`0 errors, 0 warnings, 0 informations`）、ESLint `--max-warnings 0`、`tsc -b`
+与 production build 均通过。Alembic 唯一 head 为 `0024_document_ingestion_failure`。
+11 项跳过中 10 项需要 `embedding` extra 与本地 BGE 权重、1 项是 PostgreSQL-only 契约；
+无外部服务那一行多出的 676 项跳过全部因为测试用 DSN / Qdrant URL 未设。
+**这几行来自不同环境，只能分别引用，不能相加。**
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
@@ -1514,7 +1534,20 @@ PostgreSQL + Qdrant 的数字仍是上面那次运行的，两者不能互相替
 | 三条固定 E2E 演示 | ✓ | ✓ | ✓ | ✓ |
 | Chat 两条路径对照评测（fixed vs agentic） | ✓ | ✓ | ✓ | ✓ |
 | 外部检索 Provider（DeepSeek 服务端 `web_search`，ADR-020/021） | ✓ | ✓ | 契约 |  |
+| 知识库写权限披露与摄取失败状态（`can_write` / `failed`） | ✓ | ✓ | ✓ |  |
+| Work 时间线披露解码失败的位点 | ✓ | ✓ | ✓ |  |
+| 无 `embedding` extra 的 Worker 只服务 `v2_general` | ✓ | ✓ | ✓ |  |
 | Langfuse / CrewAI 对照 / RAGAS | ✓ |  |  |  |
+| LlamaIndex ingestion 迁移（`IngestionPipeline`，写入路径） | ✓ |  |  |  |
+| Task / Multi-Agent benchmark runner | ✓ |  |  |  |
+| 通用 Tool 级动态审批（MCP 之外） | ✓ |  |  |  |
+| 动态 supervisor / agent spawn / 持久 mailbox | ✓ |  |  |  |
+| Chat 历史压缩（token window / compaction） | ✓ |  |  |  |
+| Chat 会话的服务端管理（list / rename / delete） | ✓ |  |  |  |
+| 知识库管理（重命名 / 删除 / 重建索引 / ACL 管理） | ✓ |  |  |  |
+| 逐条消息的临时附件 | ✓ |  |  |  |
+| Word 文档的读取与编辑（现有的是只读文字预览与 MCP 渲染） | ✓ |  |  |  |
+| 远程对象存储（S3）与远程部署 | ✓ |  |  |  |
 
 外部检索一栏的 Tested 写作"契约"而不是 ✓，是因为它的测试全部打在 fake
 `ExternalSearchPort` 上：`tests/adapters/test_web_search_tool.py`、
@@ -1524,6 +1557,25 @@ PostgreSQL + Qdrant 的数字仍是上面那次运行的，两者不能互相替
 `api.deepseek.com` 的两处都是配置默认值断言）。这和 BGE 权重那几项是同一种口径：
 适配器成立，真实 Provider 的行为未取证。`research.enabled` 默认 `false`，
 它同时决定 Task 授权信封的宽度。
+
+表尾那一串只有 Planned 的行是**2026-08-11 补进来的**，此前它们根本不在表里。不在表里
+和写着"未实现"看起来差不多，实际差很多：一张只列做过的事的表，读者读到的是"这就是全部
+范围"。这些能力此前只散落在 README 的边界段落里，现在在同一张表上一并可见。其中几条要
+说得更细一点：
+
+- **知识库管理**：目前只能创建与上传。重命名、删除、重建索引与 ACL 管理都没有 API，
+  控制台上也没有入口。
+- **Chat 会话的服务端管理**：会话列表只活在浏览器里（侧栏的可访问名就叫"本地 Chat 会话"），
+  服务端持有的是 `chat_turns` 与会话消息，但没有 list/rename/delete 这组管理接口。
+- **逐条消息的临时附件**：不存在。输入框旁的上传把文件放进所选知识库并永久保留，按钮的
+  可访问名因此是"上传文件到知识库"——旧标签"添加附件"描述的是一个这套系统没有的东西。
+- **Word 文档的读取与编辑**：现有的两样都不是它。一是 `GET /v1/artifacts/{id}/preview`
+  把 `.docx` 的正文与表格抽成 Markdown 供阅读（不含样式、图片与页眉页脚）；二是 Word MCP
+  的 `render_document`，那是**生成**一份新文档。读取既有 Word 文件进 Task、或在控制台里
+  编辑它，都没有。
+- **远程对象存储**：`artifact_store.backend` 允许写 `s3`，但仓库里只有 `LocalArtifactStore`；
+  API / Task Worker / Ingestion Worker 三处装配都在启动时明说"没有适配器"并拒绝启动。
+  是 fail closed，不是能力。
 
 当前身份边界的事实：开发 Header Identity Resolver 信任调用方自报的
 tenant/principal，所以生产身份认证仍是 Planned。监听地址已强制为 loopback
