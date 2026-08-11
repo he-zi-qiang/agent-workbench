@@ -225,6 +225,15 @@ async def _measure(
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--dump-outcomes",
+        action="store_true",
+        help=(
+            "Also write {arm}-{path}-outcomes.json with per-question detail, "
+            "including which expected documents were missing. The score files "
+            "are unchanged: they are compared byte for byte across changes."
+        ),
+    )
+    parser.add_argument(
         "--paths",
         default=",".join(RETRIEVERS),
         help=(
@@ -329,6 +338,10 @@ async def main() -> int:
                 (REPORTS / f"{name}-{path_name}.json").write_text(
                     report.to_json() + "\n", encoding="utf-8"
                 )
+                if arguments.dump_outcomes:
+                    (REPORTS / f"{name}-{path_name}-outcomes.json").write_text(
+                        report.outcomes_to_json() + "\n", encoding="utf-8"
+                    )
                 print(f"--- {name} / {path_name} ---")
                 print(report.to_json())
 

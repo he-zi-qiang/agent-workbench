@@ -76,6 +76,47 @@ class EvaluationReport:
             sort_keys=True,
         )
 
+    def outcomes_to_json(self) -> str:
+        """Per-question detail, in a file of its own.
+
+        Deliberately not folded into ``to_json``. Those reports are compared
+        byte for byte across changes -- that is how the ADR-033 refactor was
+        shown not to move any ranking -- and a score file that grew a payload
+        of questions would end that comparison for a reason unrelated to
+        retrieval.
+
+        What it is for: an aggregate says *how many* questions lost part of
+        their answer, and cannot say *which document* went missing. The
+        difference decides what to build. ``missing_document_ids`` is the
+        column worth reading.
+        """
+
+        return json.dumps(
+            {
+                "index_identity": self.index_identity,
+                "gold_digest": self.gold_digest,
+                "question_count": self.question_count,
+                "outcomes": [
+                    {
+                        "question": outcome.question,
+                        "expected_document_ids": list(outcome.expected_document_ids),
+                        "retrieved_document_ids": list(outcome.retrieved_document_ids),
+                        # The whole point of this file.
+                        "missing_document_ids": [
+                            document_id
+                            for document_id in outcome.expected_document_ids
+                            if document_id not in outcome.retrieved_document_ids
+                        ],
+                        "rank": outcome.rank,
+                        "coverage_rank": outcome.coverage_rank,
+                    }
+                    for outcome in self.outcomes
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
 
 def load_gold_set(path: Path) -> GoldSet:
     """Read a gold set and fingerprint it.

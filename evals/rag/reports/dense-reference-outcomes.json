@@ -1,0 +1,767 @@
+{
+  "index_identity": "BAAI/bge-m3@main+approx-word-v1-512-64 via dense",
+  "gold_digest": "55ec24c7d2b86062",
+  "question_count": 52,
+  "outcomes": [
+    {
+      "question": "how are dense and sparse results combined",
+      "expected_document_ids": [
+        "doc_fusion"
+      ],
+      "retrieved_document_ids": [
+        "doc_fusion",
+        "doc_abbreviations",
+        "doc_runbook-slow-context"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what performs the fusion",
+      "expected_document_ids": [
+        "doc_fusion"
+      ],
+      "retrieved_document_ids": [
+        "doc_fusion",
+        "doc_abbreviations",
+        "doc_config-coordination"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "why is fusing twice a problem",
+      "expected_document_ids": [
+        "doc_fusion"
+      ],
+      "retrieved_document_ids": [
+        "doc_fusion",
+        "doc_runbook-index-rebuild",
+        "doc_runbook-lease-expiry"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "does the retrieval adapter re-rank results",
+      "expected_document_ids": [
+        "doc_fusion"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-retrieval-service",
+        "doc_fusion",
+        "doc_slo-retrieval"
+      ],
+      "missing_document_ids": [],
+      "rank": 2,
+      "coverage_rank": 2
+    },
+    {
+      "question": "what decides whether a principal may read a chunk",
+      "expected_document_ids": [
+        "doc_authorization"
+      ],
+      "retrieved_document_ids": [
+        "doc_authorization",
+        "doc_chunking",
+        "doc_component-ingestion-worker"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "is the vector index the authority on permissions",
+      "expected_document_ids": [
+        "doc_authorization"
+      ],
+      "retrieved_document_ids": [
+        "doc_authorization",
+        "doc_component-approval-ledger",
+        "doc_component-retrieval-service"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what happens if a grant is revoked mid-answer",
+      "expected_document_ids": [
+        "doc_authorization"
+      ],
+      "retrieved_document_ids": [
+        "doc_config-policy",
+        "doc_runbook-index-rebuild",
+        "doc_runbook-missing-replay"
+      ],
+      "missing_document_ids": [
+        "doc_authorization"
+      ],
+      "rank": null,
+      "coverage_rank": null
+    },
+    {
+      "question": "when is a candidate re-checked",
+      "expected_document_ids": [
+        "doc_authorization"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-retrieval-service",
+        "doc_quoted-guarantee",
+        "doc_authorization"
+      ],
+      "missing_document_ids": [],
+      "rank": 3,
+      "coverage_rank": 3
+    },
+    {
+      "question": "how large is a chunk",
+      "expected_document_ids": [
+        "doc_chunking"
+      ],
+      "retrieved_document_ids": [
+        "doc_chunking",
+        "doc_authorization",
+        "doc_config-rag"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "why does the tokenizer matter for the index identity",
+      "expected_document_ids": [
+        "doc_chunking"
+      ],
+      "retrieved_document_ids": [
+        "doc_chunking",
+        "doc_authorization",
+        "doc_runbook-index-rebuild"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what is chunk overlap for",
+      "expected_document_ids": [
+        "doc_chunking"
+      ],
+      "retrieved_document_ids": [
+        "doc_chunking",
+        "doc_config-rag",
+        "doc_fusion"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what happens to a sentence spanning a boundary",
+      "expected_document_ids": [
+        "doc_chunking"
+      ],
+      "retrieved_document_ids": [
+        "doc_chunking",
+        "doc_events",
+        "doc_component-sandbox"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "when is tool call quota reserved",
+      "expected_document_ids": [
+        "doc_budgets"
+      ],
+      "retrieved_document_ids": [
+        "doc_budgets",
+        "doc_component-tool-gateway",
+        "doc_migration-0019"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "why are token ceilings checked after a call",
+      "expected_document_ids": [
+        "doc_budgets"
+      ],
+      "retrieved_document_ids": [
+        "doc_budgets",
+        "doc_policy-escalation",
+        "doc_outbox"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what happens to calls beyond the ceiling",
+      "expected_document_ids": [
+        "doc_budgets"
+      ],
+      "retrieved_document_ids": [
+        "doc_budgets",
+        "doc_policy-escalation",
+        "doc_outbox"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "is a budget accounted for after the work",
+      "expected_document_ids": [
+        "doc_budgets"
+      ],
+      "retrieved_document_ids": [
+        "doc_budgets",
+        "doc_slo-task-settlement",
+        "doc_component-task-worker"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "how does a subscriber resume a stream",
+      "expected_document_ids": [
+        "doc_events"
+      ],
+      "retrieved_document_ids": [
+        "doc_events",
+        "doc_runbook-missing-replay",
+        "doc_quoted-guarantee"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "why are sequences gap free",
+      "expected_document_ids": [
+        "doc_events"
+      ],
+      "retrieved_document_ids": [
+        "doc_events",
+        "doc_env-staging",
+        "doc_store-aw-vectors"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "are transient events stored",
+      "expected_document_ids": [
+        "doc_events"
+      ],
+      "retrieved_document_ids": [
+        "doc_events",
+        "doc_component-event-log",
+        "doc_migration-0019"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what assigns an event its position",
+      "expected_document_ids": [
+        "doc_events"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-event-log",
+        "doc_events",
+        "doc_quoted-guarantee"
+      ],
+      "missing_document_ids": [],
+      "rank": 2,
+      "coverage_rank": 2
+    },
+    {
+      "question": "what is an outbox claim",
+      "expected_document_ids": [
+        "doc_outbox"
+      ],
+      "retrieved_document_ids": [
+        "doc_outbox",
+        "doc_component-sandbox",
+        "doc_migration-0020"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what happens when a worker dies holding a claim",
+      "expected_document_ids": [
+        "doc_outbox"
+      ],
+      "retrieved_document_ids": [
+        "doc_outbox",
+        "doc_component-task-worker",
+        "doc_runbook-lease-expiry"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what is a fencing token for",
+      "expected_document_ids": [
+        "doc_outbox"
+      ],
+      "retrieved_document_ids": [
+        "doc_outbox",
+        "doc_chunking",
+        "doc_budgets"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "AWB-4471",
+      "expected_document_ids": [
+        "doc_error-codes"
+      ],
+      "retrieved_document_ids": [
+        "doc_error-codes",
+        "doc_component-task-worker",
+        "doc_component-ingestion-worker"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what does AWB-4473 mean",
+      "expected_document_ids": [
+        "doc_error-codes"
+      ],
+      "retrieved_document_ids": [
+        "doc_error-codes",
+        "doc_component-artifact-store",
+        "doc_component-task-worker"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "AWB-5150 vs AWB-5151",
+      "expected_document_ids": [
+        "doc_error-codes"
+      ],
+      "retrieved_document_ids": [
+        "doc_error-codes",
+        "doc_policy-error-codes",
+        "doc_component-retrieval-service"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "which code is returned for a digest mismatch",
+      "expected_document_ids": [
+        "doc_error-codes"
+      ],
+      "retrieved_document_ids": [
+        "doc_error-codes",
+        "doc_runbook-index-rebuild",
+        "doc_fusion"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "never be reassigned, reordered, or skipped",
+      "expected_document_ids": [
+        "doc_quoted-guarantee"
+      ],
+      "retrieved_document_ids": [
+        "doc_quoted-guarantee",
+        "doc_events",
+        "doc_component-retrieval-service"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what phrase should I search for when auditing a change",
+      "expected_document_ids": [
+        "doc_quoted-guarantee"
+      ],
+      "retrieved_document_ids": [
+        "doc_quoted-guarantee",
+        "doc_runbook-index-rebuild",
+        "doc_config-qdrant"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "the verbatim durability wording published to operators",
+      "expected_document_ids": [
+        "doc_quoted-guarantee"
+      ],
+      "retrieved_document_ids": [
+        "doc_quoted-guarantee",
+        "doc_config-coordination",
+        "doc_runbook-lease-expiry"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "Qrdant",
+      "expected_document_ids": [
+        "doc_known-typos"
+      ],
+      "retrieved_document_ids": [
+        "doc_known-typos",
+        "doc_config-qdrant",
+        "doc_abbreviations"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "recieved chunk batch",
+      "expected_document_ids": [
+        "doc_known-typos"
+      ],
+      "retrieved_document_ids": [
+        "doc_slo-ingestion",
+        "doc_known-typos",
+        "doc_component-ingestion-worker"
+      ],
+      "missing_document_ids": [],
+      "rank": 2,
+      "coverage_rank": 2
+    },
+    {
+      "question": "rag.embeding.model_id",
+      "expected_document_ids": [
+        "doc_known-typos"
+      ],
+      "retrieved_document_ids": [
+        "doc_config-rag",
+        "doc_known-typos",
+        "doc_slo-ingestion"
+      ],
+      "missing_document_ids": [],
+      "rank": 2,
+      "coverage_rank": 2
+    },
+    {
+      "question": "embeding with one m",
+      "expected_document_ids": [
+        "doc_known-typos"
+      ],
+      "retrieved_document_ids": [
+        "doc_known-typos",
+        "doc_slo-ingestion",
+        "doc_config-rag"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "RRF",
+      "expected_document_ids": [
+        "doc_abbreviations"
+      ],
+      "retrieved_document_ids": [
+        "doc_abbreviations",
+        "doc_component-retrieval-service",
+        "doc_known-typos"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "does ACL mean asynchronous callback layer",
+      "expected_document_ids": [
+        "doc_abbreviations"
+      ],
+      "retrieved_document_ids": [
+        "doc_abbreviations",
+        "doc_store-aw-vectors",
+        "doc_store-aw-core"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "what does MRR stand for here",
+      "expected_document_ids": [
+        "doc_abbreviations"
+      ],
+      "retrieved_document_ids": [
+        "doc_abbreviations",
+        "doc_known-typos",
+        "doc_team-marlin"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "is RRF the same as RFC",
+      "expected_document_ids": [
+        "doc_abbreviations"
+      ],
+      "retrieved_document_ids": [
+        "doc_abbreviations",
+        "doc_known-typos",
+        "doc_component-retrieval-service"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 1
+    },
+    {
+      "question": "which rotation is paged for the component that returns the AWB-44xx refusal family",
+      "expected_document_ids": [
+        "doc_component-artifact-store",
+        "doc_team-marlin"
+      ],
+      "retrieved_document_ids": [
+        "doc_policy-error-codes",
+        "doc_component-tool-gateway",
+        "doc_component-approval-ledger"
+      ],
+      "missing_document_ids": [
+        "doc_component-artifact-store",
+        "doc_team-marlin"
+      ],
+      "rank": null,
+      "coverage_rank": null
+    },
+    {
+      "question": "how long is data kept in the store the Ingestion Worker writes to",
+      "expected_document_ids": [
+        "doc_component-ingestion-worker",
+        "doc_store-aw-vectors"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-ingestion-worker",
+        "doc_slo-ingestion",
+        "doc_store-aw-blobs"
+      ],
+      "missing_document_ids": [
+        "doc_store-aw-vectors"
+      ],
+      "rank": 1,
+      "coverage_rank": null
+    },
+    {
+      "question": "which team owns the component that a stuck export points at",
+      "expected_document_ids": [
+        "doc_runbook-stuck-export",
+        "doc_component-approval-ledger"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-artifact-store",
+        "doc_component-event-log",
+        "doc_component-approval-ledger"
+      ],
+      "missing_document_ids": [
+        "doc_runbook-stuck-export"
+      ],
+      "rank": 3,
+      "coverage_rank": null
+    },
+    {
+      "question": "which channel receives pages for the component returning AWB-52xx",
+      "expected_document_ids": [
+        "doc_component-retrieval-service",
+        "doc_team-kestrel"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-ingestion-worker",
+        "doc_error-codes",
+        "doc_component-retrieval-service"
+      ],
+      "missing_document_ids": [
+        "doc_team-kestrel"
+      ],
+      "rank": 3,
+      "coverage_rank": null
+    },
+    {
+      "question": "how often is the backup restored for the cluster the Approval Ledger writes to",
+      "expected_document_ids": [
+        "doc_component-approval-ledger",
+        "doc_store-aw-core"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-approval-ledger",
+        "doc_store-aw-core",
+        "doc_store-aw-vectors"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 2
+    },
+    {
+      "question": "what is the escalation delay for the team that owns the Sandbox",
+      "expected_document_ids": [
+        "doc_component-sandbox",
+        "doc_team-osprey"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-sandbox",
+        "doc_policy-escalation",
+        "doc_team-osprey"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 3
+    },
+    {
+      "question": "which team owns the component the index rebuild procedure points at",
+      "expected_document_ids": [
+        "doc_runbook-index-rebuild",
+        "doc_component-ingestion-worker"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-event-log",
+        "doc_component-approval-ledger",
+        "doc_component-retrieval-service"
+      ],
+      "missing_document_ids": [
+        "doc_runbook-index-rebuild",
+        "doc_component-ingestion-worker"
+      ],
+      "rank": null,
+      "coverage_rank": null
+    },
+    {
+      "question": "are there backups for the cluster the Retrieval Service reads",
+      "expected_document_ids": [
+        "doc_component-retrieval-service",
+        "doc_store-aw-vectors"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-retrieval-service",
+        "doc_store-aw-vectors",
+        "doc_store-aw-core"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 2
+    },
+    {
+      "question": "which refusal family is returned by the component blamed when every tool call is denied",
+      "expected_document_ids": [
+        "doc_runbook-refused-tools",
+        "doc_component-tool-gateway"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-tool-gateway",
+        "doc_runbook-refused-tools",
+        "doc_policy-error-codes"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 2
+    },
+    {
+      "question": "how long are run outputs kept in the bucket the Artifact Store uses",
+      "expected_document_ids": [
+        "doc_component-artifact-store",
+        "doc_store-aw-blobs"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-artifact-store",
+        "doc_store-aw-blobs",
+        "doc_component-sandbox"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 2
+    },
+    {
+      "question": "which channel handles pages for the component that assigns durable sequences",
+      "expected_document_ids": [
+        "doc_component-event-log",
+        "doc_team-kestrel"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-event-log",
+        "doc_events",
+        "doc_quoted-guarantee"
+      ],
+      "missing_document_ids": [
+        "doc_team-kestrel"
+      ],
+      "rank": 1,
+      "coverage_rank": null
+    },
+    {
+      "question": "what is the acknowledgement window before escalation for the team owning the Task Worker",
+      "expected_document_ids": [
+        "doc_component-task-worker",
+        "doc_team-northwind"
+      ],
+      "retrieved_document_ids": [
+        "doc_policy-escalation",
+        "doc_component-task-worker",
+        "doc_team-northwind"
+      ],
+      "missing_document_ids": [],
+      "rank": 2,
+      "coverage_rank": 3
+    },
+    {
+      "question": "which rotation covers the component that returns AWB-53xx",
+      "expected_document_ids": [
+        "doc_component-ingestion-worker",
+        "doc_team-marlin"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-ingestion-worker",
+        "doc_component-retrieval-service",
+        "doc_component-task-worker"
+      ],
+      "missing_document_ids": [
+        "doc_team-marlin"
+      ],
+      "rank": 1,
+      "coverage_rank": null
+    },
+    {
+      "question": "how long are rows kept in the cluster the Event Log writes to",
+      "expected_document_ids": [
+        "doc_component-event-log",
+        "doc_store-aw-core"
+      ],
+      "retrieved_document_ids": [
+        "doc_component-event-log",
+        "doc_store-aw-core",
+        "doc_store-aw-blobs"
+      ],
+      "missing_document_ids": [],
+      "rank": 1,
+      "coverage_rank": 2
+    }
+  ]
+}
