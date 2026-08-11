@@ -28,6 +28,14 @@ const FINAL_EVENTS = new Set([
 export interface TaskTimelineResult {
   events: EventEnvelope[];
   cursor: string | null;
+  /**
+   * Positions every page so far said it examined and could not deliver.
+   *
+   * Handed out beside `events` because the two are one answer: `events` alone
+   * cannot say whether it is all of them, and a caller that shows the first
+   * without the second is showing a partial history as a whole one.
+   */
+  skippedSequences: number[];
   loading: boolean;
   error: unknown;
   refresh: () => Promise<void>;
@@ -167,6 +175,10 @@ export function useTaskTimeline(
   return {
     events: matchesRequest ? state.timeline.events : [],
     cursor: matchesRequest ? state.timeline.cursor : null,
+    // Gated on the same `matchesRequest` as the events they describe: a hole
+    // belongs to one Task's history, and carrying it across a selection would
+    // accuse the newly opened Task of damage that happened to another one.
+    skippedSequences: matchesRequest ? state.timeline.skippedSequences : [],
     loading: taskId !== undefined && (!matchesRequest || !state.loaded),
     error: matchesRequest ? state.error : null,
     refresh,

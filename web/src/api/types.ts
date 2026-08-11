@@ -194,6 +194,21 @@ export interface TaskTimelineResponse {
   task_id: Identifier;
   events: EventEnvelope[];
   cursor: string | null;
+  /**
+   * Stored positions this page examined and could not decode.
+   *
+   * Required rather than optional because the server always sends it: an empty
+   * array is its positive claim that *this page is complete*, not "the server
+   * never looked". A short `events` tuple is also what the end of a stream
+   * looks like, so dropping this field from the type is all it takes to render
+   * a partial history as a whole one -- the exact failure the field exists to
+   * prevent (`application/tasks.py`, `routes/tasks.py`).
+   *
+   * Positions, not a count, because they live in the namespace `events` and
+   * `cursor` already use: a reader can be shown *where* the hole is, and an
+   * operator handed a position can go find the row.
+   */
+  skipped_sequences: number[];
 }
 
 export interface SearchHit {

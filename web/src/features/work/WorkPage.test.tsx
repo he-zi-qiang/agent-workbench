@@ -93,6 +93,10 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       events: [],
       cursor: null,
+      // The server's claim that this page is whole. Every fixture here carries
+      // it, so a test that says nothing about damage is a test asserting the
+      // page stays quiet about it.
+      skipped_sequences: [],
     });
     vi.mocked(createTask)
       .mockRejectedValueOnce(new Error("network unavailable"))
@@ -385,6 +389,54 @@ describe("WorkPage task submission", () => {
     expect(within(rail).getByText("检索到的证据")).toBeInTheDocument();
   });
 
+  it("says the history is incomplete, and which two steps the hole fell between", async () => {
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      objective_preview: "今天丹东天气怎么样",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(damagedTimeline());
+    renderWorkPage("/work/task_run");
+
+    // The steps that did arrive are on screen, and shorter by one -- which on
+    // its own is also what the end of a stream looks like. The page has to say
+    // which of the two it is looking at.
+    const notice = await screen.findByText(/这段历史不完整/);
+    expect(notice).toHaveTextContent("1 个位置");
+
+    // And say it with the position, placed between the steps either side of
+    // it: that is what the server sends positions instead of a count for.
+    const gap = screen.getByText(
+      "#2：在「工具调用已开始：external_search」与「任务成功完成」之间",
+    );
+    // In the reading column with the run it is about, not in the file rail --
+    // a reader has to meet this while looking at the steps it qualifies.
+    expect(gap.closest(".aw-work-run")).not.toBeNull();
+  });
+
+  it("stays quiet about damage on a Task whose pages all came back whole", async () => {
+    // The control group. A page that always warns would tell every reader
+    // their history is broken, and would pass the test above unchanged.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      objective_preview: "今天丹东天气怎么样",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(runTimeline());
+    renderWorkPage("/work/task_run");
+
+    // Waited for, so this is a rendered timeline saying nothing rather than an
+    // empty page not having got there yet.
+    expect(await screen.findByText("收集资料")).toBeInTheDocument();
+    expect(screen.queryByText(/这段历史不完整/)).toBeNull();
+  });
+
   it("renders the produced report under the run, behind one download control", async () => {
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
@@ -667,6 +719,7 @@ function runTimeline() {
   return {
     task_id: "task_run",
     cursor: "cursor_run",
+    skipped_sequences: [],
     events: [
       {
         ...base,
@@ -716,6 +769,22 @@ function runTimeline() {
   };
 }
 
+/**
+ * `runTimeline` as a stream with one stored row this server could not decode.
+ *
+ * The same shape the API's own contract test pins from the other side
+ * (tests/api/test_task_timeline_skips.py): positions 1 and 3 delivered, 2
+ * named as skipped, and a cursor that still moved past it.
+ */
+function damagedTimeline() {
+  const timeline = runTimeline();
+  return {
+    ...timeline,
+    events: timeline.events.filter((event) => event.sequence !== 2),
+    skipped_sequences: [2],
+  };
+}
+
 function taskInput(wantsReport: boolean) {
   return {
     schema_version: 1,
@@ -739,6 +808,7 @@ function answerTimeline() {
   return {
     task_id: "task_run",
     cursor: "cursor_answer",
+    skipped_sequences: [],
     events: [
       {
         ...base,
@@ -787,6 +857,7 @@ function reportTimeline() {
   return {
     task_id: "task_run",
     cursor: "cursor_report",
+    skipped_sequences: [],
     events: [
       {
         ...base,
@@ -885,6 +956,7 @@ function approvalTimeline() {
   return {
     task_id: "task_approval",
     cursor: "cursor_approval",
+    skipped_sequences: [],
     events: [
       {
         schema_version: 1,

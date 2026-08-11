@@ -2642,6 +2642,39 @@ pre {
   gap: 14px;
 }
 
+/* The holes in a run's history, listed under the steps they fall between. The
+   positions are numbers a reader will compare against each other and quote
+   into a bug report, so they get the same tabular treatment as any other id
+   here rather than being folded into the sentence above them. */
+.aw-timeline-gaps strong {
+  display: block;
+  font-size: 13px;
+}
+
+.aw-timeline-gaps small {
+  display: block;
+  margin-top: 2px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.aw-timeline-gaps ul {
+  margin: 6px 0 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.aw-timeline-gaps li {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.8;
+  /* A tool name can be one long unbreakable token, and the step titles here
+     quote them. Wrapping mid-token keeps a hole readable instead of pushing
+     the notice wider than the column it sits in. */
+  overflow-wrap: anywhere;
+}
+
 /* The answer, continuing from the steps rather than sitting beside them.
    Indented to the same 34px as Chat's assistant message, so the mark hangs in
    the margin and the text lines up under the run above it. */

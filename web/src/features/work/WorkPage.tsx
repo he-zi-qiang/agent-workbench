@@ -82,8 +82,10 @@ import {
   findTaskInputRef,
   findTaskIntent,
   isKnownEventType,
+  locateTimelineGaps,
   parseTaskInputArtifact,
   type TaskArtifact,
+  type TimelineGap,
 } from "./workTimeline";
 
 const CANCELLABLE_STATUSES = new Set<TaskStatus>([
@@ -272,6 +274,16 @@ export function WorkPage() {
   const taskEvents = useMemo(
     () => timeline.events.filter((event) => event.graph_node_id === null),
     [timeline.events],
+  );
+  // The stream above shows what arrived; this is what the server said did not.
+  // An empty `skippedSequences` is its claim that the pages were complete, so
+  // silence here is not neutral -- it is the one way this page can present a
+  // partial history as a whole one, which is what the field exists to prevent
+  // (application/tasks.py). Anchored to the events either side of each hole,
+  // because that is what positions buy over a count.
+  const timelineGaps = useMemo(
+    () => locateTimelineGaps(timeline.events, timeline.skippedSequences),
+    [timeline.events, timeline.skippedSequences],
   );
   const artifacts = useMemo(
     () => collectArtifacts(timeline.events),
@@ -870,6 +882,7 @@ export function WorkPage() {
               stageEvents={stageEvents}
               taskEvents={taskEvents}
             />
+            <TimelineGapNotice gaps={timelineGaps} />
             {timeline.error !== null ? (
               <ErrorNotice message={errorMessage(timeline.error, "读取时间线失败")} />
             ) : null}
@@ -1103,6 +1116,55 @@ function TaskStepStream({
       stages={stages}
     />
   );
+}
+
+/**
+ * The part of the run this page was told it did not receive.
+ *
+ * Under the stream rather than over it, because it is a statement *about* the
+ * steps above: a reader has to have seen them to know what is missing from
+ * them. Each hole names the two steps it fell between, so the incompleteness
+ * is attached to a stretch of the run instead of floating over the whole
+ * thing -- an operator can also take the position straight to the log row.
+ *
+ * The wording says "没有交给这个页面" and not "丢了": the rows are still in the
+ * log. What failed is decoding them here, and telling a user their history was
+ * destroyed when it was not would send them looking for the wrong thing.
+ */
+function TimelineGapNotice({ gaps }: { gaps: TimelineGap[] }) {
+  if (gaps.length === 0) return null;
+
+  return (
+    <div className="aw-notice is-warning aw-timeline-gaps">
+      <AlertTriangle aria-hidden="true" size={16} />
+      {/* A div rather than the `span` the other notices wrap their text in,
+          because this one carries a list and a span may only hold phrasing. */}
+      <div>
+        <strong>
+          这段历史不完整：上面的步骤中缺了 {gaps.length} 个位置。
+        </strong>
+        <small>这些事件仍在日志里，只是这次没能解码、没有交给这个页面。</small>
+        <ul>
+          {gaps.map((gap) => (
+            <li key={gap.sequence}>{describeTimelineGap(gap)}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+/** Where one hole sits, in terms of the events the reader can actually see. */
+function describeTimelineGap(gap: TimelineGap): string {
+  const position = `#${String(gap.sequence)}`;
+  if (gap.before !== null && gap.after !== null) {
+    return `${position}：在「${eventTitle(gap.before)}」与「${eventTitle(gap.after)}」之间`;
+  }
+  if (gap.before !== null) return `${position}：在「${eventTitle(gap.before)}」之后`;
+  if (gap.after !== null) return `${position}：在「${eventTitle(gap.after)}」之前`;
+  // Nothing readable came back around it, so there is no step to hang it on.
+  // Said plainly rather than dressed up as a location this page does not have.
+  return `${position}：前后都没有读出来的事件`;
 }
 
 /**

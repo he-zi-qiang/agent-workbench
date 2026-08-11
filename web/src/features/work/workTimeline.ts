@@ -20,6 +20,23 @@ export interface TimelineState {
   taskId: string;
   events: EventEnvelope[];
   cursor: string | null;
+  /**
+   * Every position the server said it examined and could not deliver, oldest
+   * first, across all the pages this state holds.
+   *
+   * Kept beside `events` and not derived from them: a hole is invisible in the
+   * events, which is the whole reason the server names it.
+   */
+  skippedSequences: number[];
+}
+
+/** One undeliverable position, placed among the events that did arrive. */
+export interface TimelineGap {
+  sequence: number;
+  /** The held event immediately before the hole, or null when none precedes it. */
+  before: EventEnvelope | null;
+  /** The held event immediately after the hole, or null when none follows it. */
+  after: EventEnvelope | null;
 }
 
 export interface FinalReportMatch {
@@ -62,7 +79,7 @@ const KNOWN_EVENT_TITLES: Readonly<Record<string, string>> = {
 };
 
 export function createTimelineState(taskId: string): TimelineState {
-  return { taskId, events: [], cursor: null };
+  return { taskId, events: [], cursor: null, skippedSequences: [] };
 }
 
 /** Merge one oldest-first page without trusting a replay boundary to be unique. */
@@ -83,7 +100,93 @@ export function mergeTimelineResponse(
     taskId: state.taskId,
     events: additions.length === 0 ? state.events : [...state.events, ...additions],
     cursor: response.cursor,
+    skippedSequences: mergeSkippedSequences(
+      state.skippedSequences,
+      response.skipped_sequences,
+    ),
   };
+}
+
+/**
+ * The union of what every page said it could not deliver, oldest first.
+ *
+ * Union rather than replace, because each response speaks only for the page it
+ * examined: this state holds the whole history a reader is looking at, so it
+ * has to hold the whole history's holes with it. Deduplicated because an
+ * overlapping re-read reports the same position a second time -- which is the
+ * reason the server sends positions instead of a count, since a re-sent count
+ * is indistinguishable from fresh damage.
+ *
+ * Sorted ascending so a hole reads in the same order as the events it sits
+ * between, and filtered to real positions: sequences start at 1, and a client
+ * that repeated a malformed number back to the user would be inventing a hole
+ * rather than reporting one.
+ *
+ * The array's identity survives a page that adds nothing, so the callers that
+ * memoise on it are not re-run by every poll.
+ */
+function mergeSkippedSequences(
+  held: number[],
+  reported: readonly number[] | undefined,
+): number[] {
+  // `?? []` for a server old enough to predate the field. Its silence is not a
+  // claim of completeness, but it is not a claim of damage either, and turning
+  // it into one here would be its own lie.
+  const additions = (reported ?? []).filter(
+    (sequence) =>
+      Number.isInteger(sequence) && sequence >= 1 && !held.includes(sequence),
+  );
+  if (additions.length === 0) return held;
+  return [...new Set([...held, ...additions])].sort((left, right) => left - right);
+}
+
+/**
+ * Each undeliverable position, placed between the events that did arrive.
+ *
+ * This is what positions buy over a count. `sequence` on a delivered event and
+ * the numbers in `skipped_sequences` are the same namespace, so a hole can be
+ * shown where it happened -- "between these two steps" -- instead of as a bare
+ * "some events are missing" that leaves a reader unable to tell which part of
+ * the run they are looking at an incomplete account of.
+ *
+ * A position a delivered event now occupies is dropped rather than reported: a
+ * re-read that decoded the row hands the client the event it was once told it
+ * had lost, and going on claiming a hole there would be the same lie in the
+ * other direction. Events without a sequence (transient, never stored) anchor
+ * nothing, since they have no position to compare against.
+ */
+export function locateTimelineGaps(
+  events: readonly EventEnvelope[],
+  skippedSequences: readonly number[],
+): TimelineGap[] {
+  const placed: Array<{ sequence: number; event: EventEnvelope }> = [];
+  for (const event of events) {
+    const sequence = event.sequence;
+    if (sequence === null || !Number.isInteger(sequence)) continue;
+    placed.push({ sequence, event });
+  }
+  placed.sort((left, right) => left.sequence - right.sequence);
+
+  const gaps: TimelineGap[] = [];
+  for (const sequence of [...skippedSequences].sort((left, right) => left - right)) {
+    let before: EventEnvelope | null = null;
+    let after: EventEnvelope | null = null;
+    let delivered = false;
+    for (const entry of placed) {
+      if (entry.sequence === sequence) {
+        delivered = true;
+        break;
+      }
+      if (entry.sequence < sequence) before = entry.event;
+      else {
+        after = entry.event;
+        break;
+      }
+    }
+    if (delivered) continue;
+    gaps.push({ sequence, before, after });
+  }
+  return gaps;
 }
 
 export function findTaskInputRef(events: readonly EventEnvelope[]): string | null {

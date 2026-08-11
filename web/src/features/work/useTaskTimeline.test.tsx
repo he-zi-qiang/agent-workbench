@@ -58,6 +58,58 @@ describe("useTaskTimeline", () => {
     expect(getTaskTimeline).toHaveBeenNthCalledWith(3, identity, "task_2", undefined);
   });
 
+  it("accumulates the positions the server skipped and drops them at a task boundary", async () => {
+    // Position 2 came back undecodable, then a second page re-reported it and
+    // named 5 as well. Both pages still carried a cursor, which is why the
+    // hook keeps polling: the server pushes a caller past a row it cannot
+    // decode rather than wedging it there.
+    vi.mocked(getTaskTimeline)
+      .mockResolvedValueOnce(
+        timeline(
+          "task_1",
+          [envelope("event_1", "TaskSubmitted", "task_1", 1)],
+          "cursor_1",
+          [2],
+        ),
+      )
+      .mockResolvedValueOnce(
+        timeline(
+          "task_1",
+          [envelope("event_3", "TaskClaimed", "task_1", 3)],
+          "cursor_2",
+          [2, 5],
+        ),
+      )
+      .mockResolvedValue(
+        timeline(
+          "task_2",
+          [envelope("event_9", "TaskSubmitted", "task_2", 1)],
+          "cursor_3",
+          [],
+        ),
+      );
+
+    const view = render(<Probe taskId="task_1" />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("skipped")).toHaveTextContent(/^2$/),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "refresh timeline" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("skipped")).toHaveTextContent(/^2,5$/),
+    );
+
+    // A hole belongs to one Task's history. Selecting another one must not
+    // hand its reader an accusation about damage that happened elsewhere.
+    view.rerender(<Probe taskId="task_2" />);
+    expect(screen.getByTestId("skipped")).toBeEmptyDOMElement();
+    await waitFor(() =>
+      expect(screen.getByTestId("events")).toHaveTextContent("event_9"),
+    );
+    expect(screen.getByTestId("skipped")).toBeEmptyDOMElement();
+  });
+
   it("stops interval polling at a terminal snapshot but keeps manual refresh", async () => {
     vi.mocked(getTaskTimeline)
       .mockResolvedValueOnce(
@@ -175,6 +227,9 @@ function Probe({
         {timelineResult.events.map((event) => event.event_id).join(",")}
       </output>
       <output data-testid="cursor">{timelineResult.cursor}</output>
+      <output data-testid="skipped">
+        {timelineResult.skippedSequences.join(",")}
+      </output>
       <button onClick={() => void timelineResult.refresh()} type="button">
         refresh timeline
       </button>
@@ -186,11 +241,20 @@ function timeline(
   taskId: string,
   events: EventEnvelope[],
   cursor: string | null,
+  // The empty list is what a complete page carries, so it is the default here
+  // too: a fixture that omitted the field would describe a server that does
+  // not exist.
+  skipped: number[] = [],
 ): TaskTimelineResponse {
-  return { task_id: taskId, events, cursor };
+  return { task_id: taskId, events, cursor, skipped_sequences: skipped };
 }
 
-function envelope(eventId: string, kind: string, taskId = "task_1"): EventEnvelope {
+function envelope(
+  eventId: string,
+  kind: string,
+  taskId = "task_1",
+  sequence: number | null = null,
+): EventEnvelope {
   return {
     schema_version: 1,
     event_id: eventId,
@@ -200,7 +264,7 @@ function envelope(eventId: string, kind: string, taskId = "task_1"): EventEnvelo
     durability: "durable",
     timestamp: "2026-08-02T12:00:00Z",
     payload: { kind },
-    sequence: null,
+    sequence,
     task_id: taskId,
     graph_node_id: null,
     parent_event_id: null,
