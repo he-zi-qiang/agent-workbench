@@ -28,5 +28,13 @@ htmlcov/
 tests/
 docs/
 evals/
+# Except the four retrieval reports. The console imports them at build time
+# (`web/src/features/evaluation/reports.ts`) so the page cannot drift from the
+# repository -- which means excluding them does not omit them from the image,
+# it stops the image from building at all.
+!evals/rag/reports/dense-llama_index.json
+!evals/rag/reports/dense-reference.json
+!evals/rag/reports/hybrid-llama_index.json
+!evals/rag/reports/hybrid-reference.json
 *.md~
 .DS_Store

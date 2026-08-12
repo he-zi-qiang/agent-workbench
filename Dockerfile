@@ -15,6 +15,16 @@ COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY web ./
+# The evaluation page imports the retrieval reports directly, four levels up
+# from `web/src/features/evaluation/`, so they have to sit beside the web
+# source at the same relative depth the compiler resolves. Without them `tsc`
+# fails with TS2307 and the image cannot be built at all -- which is what it
+# did between the page landing and this line.
+COPY evals/rag/reports/dense-llama_index.json \
+     evals/rag/reports/dense-reference.json \
+     evals/rag/reports/hybrid-llama_index.json \
+     evals/rag/reports/hybrid-reference.json \
+     /build/evals/rag/reports/
 RUN pnpm build
 
 FROM python:3.12.13-slim-bookworm
