@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MAX_LAYOUT_BYTES,
   apiRequest,
   askChat,
   createTask,
   declaredMediaType,
   downloadArtifact,
+  getDocumentPdf,
   identityHeaders,
   uploadDocument,
 } from "./client";
@@ -178,6 +180,90 @@ describe("downloadArtifact", () => {
     await downloadArtifact(identity, "art_secret_storage_key");
 
     expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe("artifact");
+  });
+});
+
+describe("getDocumentPdf", () => {
+  it("asks as the principal, because a frame cannot", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["%PDF-1.7"]), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      }),
+    );
+
+    const layout = await getDocumentPdf(identity, "art_opaque_1");
+
+    expect(layout.available).toBe(true);
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe("/v1/artifacts/art_opaque_1/pdf");
+    // The reason this fetch exists at all: `<iframe src="/v1/...">` would issue
+    // its own request with none of these, and render a 404 in the panel.
+    expect(new Headers(init?.headers).get("x-tenant-id")).toBe("tenant_a");
+    expect(new Headers(init?.headers).get("x-principal-id")).toBe("principal_a");
+  });
+
+  it("reports a missing converter as an answer rather than as a failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "layout conversion is unavailable" }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    // Resolved, not thrown. A deployment without a converter is not broken and
+    // the document is not lost, so this must not travel the path that carries
+    // "something went wrong" -- the panel keeps its text preview and says why
+    // there is no layout.
+    await expect(getDocumentPdf(identity, "art_opaque_1")).resolves.toEqual({
+      available: false,
+      reason: "converter_unavailable",
+    });
+  });
+
+  it("declines a build whose API has no such route", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 }),
+    );
+
+    await expect(getDocumentPdf(identity, "art_opaque_1")).resolves.toEqual({
+      available: false,
+      reason: "unavailable",
+    });
+  });
+
+  it("refuses bytes that are not a PDF instead of framing them", async () => {
+    // A blob: URL inherits this page's origin, so a response body that came
+    // back as HTML would run as this page if it were framed. The type is what
+    // decides, so the type is checked before a URL exists.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["<script>alert(1)</script>"]), {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+
+    await expect(getDocumentPdf(identity, "art_opaque_1")).resolves.toEqual({
+      available: false,
+      reason: "unavailable",
+    });
+  });
+
+  it("refuses a layout larger than this page will hold", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array(MAX_LAYOUT_BYTES + 1), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      }),
+    );
+
+    // The blob lives in the query cache for the session, so this is the ceiling
+    // on what one artifact can pin there -- not a judgement about the document,
+    // which downloads at any size.
+    await expect(getDocumentPdf(identity, "art_opaque_1")).resolves.toEqual({
+      available: false,
+      reason: "too_large",
+    });
   });
 });
 

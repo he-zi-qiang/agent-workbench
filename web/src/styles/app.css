@@ -2749,11 +2749,77 @@ pre {
   font-weight: 600;
 }
 
+/* Above the preview it switches, not in the header: that row already carries
+   the filename, the size and two buttons, and a third control pushes the name
+   -- the one thing a reader looks for there -- into an ellipsis. */
+.aw-preview-views {
+  margin: 6px 0 12px;
+}
+
+/* Tall enough for a page to be a page. A PDF viewer in a short frame shows a
+   band of one page and a scrollbar, which is less than the text preview beside
+   it manages. Bounded by the viewport as well, so the frame cannot outgrow the
+   window it is being read in. */
+.aw-preview-frame {
+  overflow: hidden;
+  height: min(72vh, 760px);
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-preview-frame > iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* One row per kind of loss, the count hard right so a reader scanning the
+   column sees the quantities line up rather than hunting them inside
+   sentences. Bordered off from the text above it because it is a statement
+   about that text, not more of it. */
+.aw-preview-gaps {
+  margin: 18px 0 0;
+  padding: 4px 12px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel-soft);
+  list-style: none;
+}
+
+.aw-preview-gaps > li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 6px 0;
+  gap: 12px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-preview-gaps > li + li {
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-preview-gaps > li > strong {
+  color: var(--aw-text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 /* Under ~1040px the rail would squeeze the reading column. Stacked, files go
    below the run and the answer, which is where they were produced. */
 @media (max-width: 1040px) {
   .aw-work-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The rail moved below the reading column, so the page is now long enough
+     that a frame sized for a desktop viewport pushes everything under it off
+     the first two screens. */
+  .aw-preview-frame {
+    height: min(60vh, 520px);
   }
 }
 

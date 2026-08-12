@@ -8,6 +8,28 @@ import { afterEach } from "vitest";
 // elements from earlier tests.
 afterEach(cleanup);
 
+// jsdom implements neither half of the object-URL API, so a component that
+// turns fetched bytes into something a frame can read throws on render instead
+// of showing anything -- which would make every such test fail for a reason
+// that has nothing to do with what it is testing.
+//
+// Defined on `URL` rather than replacing the global, because a test that stubs
+// the whole object (`api/client.test.ts` does, deliberately, for one call)
+// takes `new URL()` with it, and that is not a trade a shared setup should make
+// for every file. The ids are distinct so that a test can prove the URL it was
+// handed is the one that got revoked.
+let objectUrlNumber = 0;
+Object.defineProperty(URL, "createObjectURL", {
+  writable: true,
+  configurable: true,
+  value: () => `blob:agent-workbench/${String(++objectUrlNumber)}`,
+});
+Object.defineProperty(URL, "revokeObjectURL", {
+  writable: true,
+  configurable: true,
+  value: () => undefined,
+});
+
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: (query: string) => ({
