@@ -15,17 +15,19 @@ import {
   Plus,
   RefreshCw,
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   cancelTask,
   createTask,
   decideApproval,
+  type DocumentLayoutDecline,
   downloadArtifact,
   getApproval,
   getArtifactJson,
   getArtifactText,
+  getDocumentPdf,
   getDocumentPreview,
   getTask,
   listTasks,
@@ -35,6 +37,7 @@ import {
 import type {
   ApprovalView,
   ArtifactRef,
+  DocumentPreview,
   EventEnvelope,
   PrincipalIdentity,
   TaskGraphChoice,
@@ -1345,6 +1348,65 @@ function TaskResult({
       return getDocumentPreview(identity, artifact.artifact_id);
     },
   });
+  // Which file the reader asked to see laid out, rather than a boolean saying
+  // that they did. This component stays mounted while the reading column moves
+  // from one artifact to the next, so a boolean would carry the choice across:
+  // the next document would open in a view chosen for the previous one, and
+  // fetch a conversion nobody asked for. Narrowed on read, the same way the
+  // page decides which artifact is open at all.
+  const [layoutFor, setLayoutFor] = useState<string | null>(null);
+  const wantsLayout = artifact !== null && layoutFor === artifact.artifact_id;
+  // The third query on one artifact, and it earns the same answer the second
+  // one did: a different endpoint, a different shape, and a failure that means
+  // something else again. This is the only one that can come back "this
+  // deployment has no converter", which is a fact about the server rather than
+  // about the document -- and the reason it resolves rather than throws.
+  const layout = useQuery({
+    queryKey: ["work", "artifact-layout", artifact?.artifact_id ?? ""],
+    enabled: wantsLayout,
+    staleTime: Number.POSITIVE_INFINITY,
+    queryFn: () => {
+      if (artifact === null) throw new Error("没有可预览的产物");
+      return getDocumentPdf(identity, artifact.artifact_id);
+    },
+  });
+  const layoutBlob = layout.data?.available === true ? layout.data.blob : null;
+  // The first object URL on this page that has to outlive the render that made
+  // it: a frame keeps reading its source, so the revoke `downloadArtifact` does
+  // one line after the click would blank the panel here.
+  //
+  // Tied to the frame element instead of to a render, through a ref callback
+  // and React 19's ref cleanup. The URL is created when the node appears and
+  // revoked when it goes -- unmount, a switch back to the text view, a move to
+  // another artifact -- which is the leak this has to not be: one URL per
+  // preview, held for the life of the tab. Memoized on the blob because an
+  // inline callback is a new function every render, and React would detach and
+  // re-attach it each time, revoking a source the frame is still displaying.
+  const attachLayoutFrame = useCallback(
+    (frame: HTMLIFrameElement | null) => {
+      if (frame === null || layoutBlob === null) return;
+      const url = URL.createObjectURL(layoutBlob);
+      frame.src = url;
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    },
+    [layoutBlob],
+  );
+  // A decline is not an error and is deliberately not read off one. A network
+  // failure is the only thing that reaches `isError` here, and it lands on the
+  // same fallback as every declared refusal: there is no layout, the text
+  // preview is unaffected, and the reader is told which of those is true.
+  const layoutDeclined: DocumentLayoutDecline | null =
+    layout.data?.available === false
+      ? layout.data.reason
+      : layout.isError
+        ? "unavailable"
+        : null;
+  // What the panel shows, not what was asked for. A declined layout snaps the
+  // control back to 文字 rather than leaving 版面 lit over text -- the reader
+  // would have no way to tell the view they picked from the one they got.
+  const showingLayout = wantsLayout && layoutDeclined === null;
 
   if (artifact === null) {
     // Parked, and its own thing. This Task was submitted under run semantics
@@ -1511,19 +1573,70 @@ function TaskResult({
           </>
         ) : (
           <>
-            <MarkdownContent text={document.data.text} />
-            {document.data.truncated ? (
-              <p className="aw-page-note">
-                文档较长，这里只显示开头；完整内容请下载。
-              </p>
-            ) : null}
-            <p className="aw-page-note">
-              这是文档的文字预览，不含排版、图片与页眉页脚
-              {document.data.table_count > 0
-                ? `；共 ${document.data.table_count} 张表格`
-                : ""}
-              。需要原样查看请下载。
-            </p>
+            {/* The same control the approvals filter uses. Two views of one
+                file, so the reader picks rather than scrolls past the wrong
+                one; 版面 goes flat once this deployment has said it cannot,
+                because a button that has already refused should not keep
+                offering. */}
+            <div className="aw-segmented aw-preview-views" aria-label="预览方式">
+              <button
+                aria-pressed={showingLayout}
+                className={showingLayout ? "is-active" : ""}
+                disabled={layoutDeclined !== null}
+                onClick={() => setLayoutFor(artifact.artifact_id)}
+                type="button"
+              >
+                版面
+              </button>
+              <button
+                aria-pressed={!showingLayout}
+                className={showingLayout ? "" : "is-active"}
+                onClick={() => setLayoutFor(null)}
+                type="button"
+              >
+                文字
+              </button>
+            </div>
+            {/* Above the text it is explaining, and a note rather than an
+                `ErrorNotice`: nothing here failed for the reader. The text
+                below is intact and the file downloads unchanged, so painting
+                this red would report the shape of a deployment as a fault and
+                cast doubt on a preview that is fine. */}
+            {layoutDeclined === null ? null : (
+              <p className="aw-page-note">{layoutDeclineNote(layoutDeclined)}</p>
+            )}
+            {showingLayout ? (
+              layoutBlob === null ? (
+                <LoadingLine label="正在生成版面预览" />
+              ) : (
+                <>
+                  <div className="aw-preview-frame">
+                    {/* No `sandbox`. These bytes were typed `application/pdf`
+                        by the client before the URL existed, so the frame can
+                        only be the browser's own PDF viewer -- and a sandbox
+                        strict enough to matter also stops that viewer, which
+                        shows an empty panel with nothing saying why. */}
+                    <iframe ref={attachLayoutFrame} title="版面预览" />
+                  </div>
+                  <p className="aw-page-note">
+                    这是转换出来的版面预览，和 Word 打开可能有细微差别；需要原样查看请下载。
+                  </p>
+                </>
+              )
+            ) : (
+              <>
+                <MarkdownContent text={document.data.text} />
+                {document.data.truncated ? (
+                  <p className="aw-page-note">
+                    文档较长，这里只显示开头；完整内容请下载。
+                  </p>
+                ) : null}
+                <PreviewGaps preview={document.data} />
+                <p className="aw-page-note">
+                  这是文档的文字预览，不含排版；需要原样查看请下载。
+                </p>
+              </>
+            )}
           </>
         )
       ) : !readable ? (
@@ -1544,6 +1657,73 @@ function TaskResult({
       )}
     </section>
   );
+}
+
+/**
+ * What the text preview did not bring across, counted, zeros left out.
+ *
+ * This replaces a sentence -- "不含排版、图片与页眉页脚；共 N 张表格" -- and the
+ * sentence is why it exists. Prose can hold one number; the server now reports
+ * seven, and threading them into that clause produces a paragraph nobody
+ * finishes reading. A list also survives the next count without being rewritten.
+ *
+ * Zeros are dropped rather than shown as 0. A document with no footnotes has
+ * nothing missing on that axis, and a row saying so is noise competing with the
+ * rows that mean something -- while an empty list is itself the statement that
+ * the preview is faithful. The cost is that a count the server failed to send
+ * would read as a zero and disappear, which is why the wire model requires
+ * every one of them (`api/types.ts`).
+ *
+ * Only under the text view. In 版面 the pictures and the running titles are on
+ * screen, so this list would be describing losses the reader can see did not
+ * happen.
+ */
+function PreviewGaps({ preview }: { preview: DocumentPreview }) {
+  // Ordered by how invisible the loss is. A missing picture cannot be inferred
+  // from the prose around it; a table that came through as plain rows is at
+  // least visibly a table. Quantities carry their measure word, because "5" in
+  // a column of counts says less than "5 段" does.
+  const gaps = [
+    { label: "图片没有显示", count: preview.image_count, unit: "张" },
+    { label: "脚注没有显示", count: preview.footnote_count, unit: "条" },
+    { label: "页眉没有显示", count: preview.header_count, unit: "处" },
+    { label: "页脚没有显示", count: preview.footer_count, unit: "处" },
+    { label: "表格只保留文字", count: preview.table_count, unit: "张" },
+    { label: "列表序号没有生成", count: preview.numbered_paragraph_count, unit: "段" },
+    { label: "段落样式没有保留", count: preview.flattened_paragraph_count, unit: "段" },
+  ].filter((gap) => gap.count > 0);
+  if (gaps.length === 0) return null;
+  return (
+    <ul className="aw-preview-gaps" aria-label="预览没有还原的部分">
+      {gaps.map((gap) => (
+        <li key={gap.label}>
+          <span>{gap.label}</span>
+          <strong>
+            {gap.count} {gap.unit}
+          </strong>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The one line explaining why there is no layout view.
+ *
+ * The server's own detail is not echoed, and for once that is not about leaking
+ * internals: the reader of this panel cannot act on any of it. What they can
+ * act on is which of two things is true -- this deployment cannot lay out any
+ * document, or this document is the problem -- and each sentence ends by
+ * pointing at what still works.
+ */
+function layoutDeclineNote(reason: DocumentLayoutDecline): string {
+  if (reason === "converter_unavailable") {
+    return "这套部署没有版面预览：服务器上没有可用的文档转换器。下面是文字预览，需要原样查看请下载。";
+  }
+  if (reason === "too_large") {
+    return "这份文档的版面太大，页面里不展开。下面是文字预览，需要原样查看请下载。";
+  }
+  return "这套部署给不出这份文档的版面。下面是文字预览，需要原样查看请下载。";
 }
 
 /** What a .docx is on the wire. Long enough to be worth naming once. */

@@ -607,6 +607,96 @@ export async function getDocumentPreview(
   return (await response.json()) as DocumentPreview;
 }
 
+/**
+ * What this page will hold in memory to show one page layout.
+ *
+ * The source .docx is already capped at 20 MiB by the preview route, but a
+ * converted PDF is not bounded by that: a document whose weight is text
+ * converts small, and one that is thirty full-page scans does not. The number
+ * is a page's worth of held bytes rather than a judgement about documents --
+ * the blob lives in the query cache for the session, so this is the ceiling on
+ * what one artifact can pin there.
+ */
+export const MAX_LAYOUT_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Why this deployment is not showing a layout, when it is not showing one.
+ *
+ * `converter_unavailable` is the case worth naming: converting .docx to PDF
+ * needs an external program, and a deployment without one is correctly
+ * configured for everything except this panel.
+ */
+export type DocumentLayoutDecline =
+  | "converter_unavailable"
+  | "too_large"
+  | "unavailable";
+
+/**
+ * A layout view, or the reason there is none.
+ *
+ * The absence is a value rather than a thrown error, and that is the whole
+ * design of this function. A deployment with no converter is not broken and the
+ * document is not lost -- the text preview beside this is unaffected and the
+ * file downloads unchanged -- so a decline must not travel the path that
+ * carries "something went wrong". Thrown, it would arrive at the panel as an
+ * exception indistinguishable from a real fault, and the panel would have to
+ * turn it red or guess.
+ */
+export type DocumentLayout =
+  | { available: true; blob: Blob }
+  | { available: false; reason: DocumentLayoutDecline };
+
+/**
+ * A Word document as a page layout, for readers who need to see the document
+ * rather than read it.
+ *
+ * Fetched into a blob rather than pointed at with `<iframe src="/v1/...">`,
+ * because a frame issues its own request and carries no headers this code can
+ * set -- the identity headers every other call here sends would be missing, and
+ * the frame would show a 404. That is the same constraint the event stream has
+ * (`apps/api/web.py`), reached from the other direction.
+ *
+ * The caller owns the blob URL and its lifetime: the URL has to outlive the
+ * call for the frame to keep rendering, which is why this returns the blob and
+ * not a URL -- `downloadArtifact` above can revoke immediately because a click
+ * has already consumed it, and copying that here would revoke a frame's source
+ * out from under it.
+ */
+export async function getDocumentPdf(
+  identity: PrincipalIdentity,
+  artifactId: string,
+): Promise<DocumentLayout> {
+  const response = await fetch(
+    `/v1/artifacts/${encodeURIComponent(artifactId)}/pdf`,
+    { headers: { ...identityHeaders(identity), accept: "application/pdf" } },
+  );
+  if (!response.ok) {
+    // 503 is the converter; everything else -- a build whose API has no such
+    // route at all, a document that would not convert, a refusal on size --
+    // lands on the same fallback and differs only in the sentence shown.
+    if (response.status === 503) {
+      return { available: false, reason: "converter_unavailable" };
+    }
+    return {
+      available: false,
+      reason: response.status === 413 ? "too_large" : "unavailable",
+    };
+  }
+  const declared = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+  if (declared?.toLowerCase() !== "application/pdf") {
+    // A blob: URL inherits this page's origin, so what the frame renders is
+    // decided by the blob's type. Anything that is not a PDF is refused here
+    // rather than framed and hoped about, and the type below is asserted rather
+    // than inherited from the response for the same reason.
+    return { available: false, reason: "unavailable" };
+  }
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength > MAX_LAYOUT_BYTES) {
+    return { available: false, reason: "too_large" };
+  }
+  return { available: true, blob: new Blob([bytes], { type: "application/pdf" }) };
+}
+
 export async function getArtifactJson<T>(
   identity: PrincipalIdentity,
   artifactId: string,

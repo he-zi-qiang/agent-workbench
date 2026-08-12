@@ -10,6 +10,7 @@ import {
   getApproval,
   getArtifactJson,
   getArtifactText,
+  getDocumentPdf,
   getDocumentPreview,
   getTask,
   getTaskTimeline,
@@ -18,6 +19,7 @@ import {
   newIdempotencyKey,
   triageTask,
 } from "../../api/client";
+import type { DocumentPreview } from "../../api/types";
 import { IdentityProvider } from "../../app/IdentityContext";
 import { WorkPage } from "./WorkPage";
 
@@ -30,6 +32,7 @@ vi.mock("../../api/client", async () => {
     getApproval: vi.fn(),
     getArtifactJson: vi.fn(),
     getArtifactText: vi.fn(),
+    getDocumentPdf: vi.fn(),
     getDocumentPreview: vi.fn(),
     getTask: vi.fn(),
     getTaskTimeline: vi.fn(),
@@ -60,6 +63,10 @@ describe("WorkPage task submission", () => {
     vi.mocked(getApproval).mockReset();
     vi.mocked(getArtifactJson).mockReset();
     vi.mocked(getArtifactText).mockReset();
+    // Left without a default, like `getDocumentPreview` beside it: a layout is
+    // fetched only when a test asks for one, so an unmocked call is a test
+    // discovering that the panel converted a document nobody opened.
+    vi.mocked(getDocumentPdf).mockReset();
     vi.mocked(getDocumentPreview).mockReset();
     vi.mocked(getTask).mockReset();
     vi.mocked(getTaskTimeline).mockReset();
@@ -495,11 +502,7 @@ describe("WorkPage task submission", () => {
       updated_at: "2026-08-02T12:01:00Z",
     });
     vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
-    vi.mocked(getDocumentPreview).mockResolvedValue({
-      text: "## 背景\n\n这一段来自文档。",
-      truncated: false,
-      table_count: 2,
-    });
+    vi.mocked(getDocumentPreview).mockResolvedValue(documentPreview({ table_count: 2 }));
     renderWorkPage("/work/task_run");
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -510,10 +513,16 @@ describe("WorkPage task submission", () => {
     );
     // The preview never pretends to be the document. It says what it dropped,
     // and the file stays one click away.
-    expect(within(output).getByText(/共 2 张表格/)).toBeInTheDocument();
+    const gaps = within(output).getByRole("list", { name: "预览没有还原的部分" });
+    expect(within(gaps).getByText("表格只保留文字")).toBeInTheDocument();
+    expect(within(gaps).getByText("2 张")).toBeInTheDocument();
     expect(
       within(output).getByRole("button", { name: /^下载/ }),
     ).toBeInTheDocument();
+    // Text is what a reader gets without asking. The conversion behind 版面
+    // costs a round trip and a program on the server, so it happens when the
+    // reader asks for it and not because they opened a file.
+    expect(vi.mocked(getDocumentPdf)).not.toHaveBeenCalled();
     // And it must not fall back to the blob fetch, which would send a text
     // reader at a zip.
     expect(vi.mocked(getArtifactText)).not.toHaveBeenCalled();
@@ -534,11 +543,9 @@ describe("WorkPage task submission", () => {
       updated_at: "2026-08-02T12:01:00Z",
     });
     vi.mocked(getTaskTimeline).mockResolvedValue(railDocxTimeline());
-    vi.mocked(getDocumentPreview).mockResolvedValue({
-      text: "## 季度回顾\n\n这一段来自 Word 文档。",
-      truncated: false,
-      table_count: 1,
-    });
+    vi.mocked(getDocumentPreview).mockResolvedValue(
+      documentPreview({ text: "## 季度回顾\n\n这一段来自 Word 文档。", table_count: 1 }),
+    );
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
@@ -584,6 +591,170 @@ describe("WorkPage task submission", () => {
     expect(
       within(output).getByRole("button", { name: /^下载/ }),
     ).toBeInTheDocument();
+  });
+
+  it("shows the document laid out when the reader asks for the layout", async () => {
+    // The text preview answers "what does it say". This answers the other
+    // question a rendered document raises -- what it looks like -- which used
+    // to require downloading it and opening Word.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue(documentPreview());
+    vi.mocked(getDocumentPdf).mockResolvedValue({
+      available: true,
+      blob: new Blob(["%PDF-1.7"], { type: "application/pdf" }),
+    });
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const user = userEvent.setup();
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    await within(output).findByText("这一段来自文档。");
+    await user.click(within(output).getByRole("button", { name: "版面" }));
+
+    const frame = await within(output).findByTitle("版面预览");
+    // The frame reads a blob this page holds, not the endpoint: a frame issues
+    // its own request and carries none of the identity headers, so pointing it
+    // at /v1/artifacts/... would render a 404 inside the panel.
+    const source = frame.getAttribute("src");
+    expect(source).toMatch(/^blob:/);
+    // Two views of one file, not two panels: the text is gone while the layout
+    // is up, so a reader is never scrolling past the wrong one.
+    expect(within(output).queryByText("这一段来自文档。")).not.toBeInTheDocument();
+    // And the URL is alive for as long as the frame is reading it. Revoking on
+    // the next line -- which is what the download path does, correctly, after a
+    // click has consumed it -- blanks the panel.
+    expect(revoke).not.toHaveBeenCalled();
+
+    await user.click(within(output).getByRole("button", { name: "文字" }));
+    expect(await within(output).findByText("这一段来自文档。")).toBeInTheDocument();
+    // Handed back when the frame goes. One un-revoked URL per preview is a leak
+    // the reader pays for by opening files.
+    expect(revoke).toHaveBeenCalledWith(source);
+  });
+
+  it("falls back to the text preview when the deployment cannot lay a document out", async () => {
+    // The control for the case above, and the one that decides whether this
+    // feature is safe to ship: converting .docx to PDF needs a program on the
+    // server, and a deployment without it is correctly configured for
+    // everything except this one panel.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue(documentPreview());
+    vi.mocked(getDocumentPdf).mockResolvedValue({
+      available: false,
+      reason: "converter_unavailable",
+    });
+    const user = userEvent.setup();
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    await within(output).findByText("这一段来自文档。");
+    await user.click(within(output).getByRole("button", { name: "版面" }));
+
+    expect(
+      await within(output).findByText(/服务器上没有可用的文档转换器/),
+    ).toBeInTheDocument();
+    // Nothing failed for the reader: the text is intact and the file is
+    // unchanged. An alert here would report the shape of a deployment as a
+    // fault, and would cast doubt on a preview that is fine.
+    expect(within(output).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(output).getByText("这一段来自文档。")).toBeInTheDocument();
+    expect(within(output).queryByTitle("版面预览")).not.toBeInTheDocument();
+    expect(
+      within(output).getByRole("button", { name: /^下载/ }),
+    ).toBeInTheDocument();
+    // The control that already refused stops offering, and the one showing the
+    // view the reader is actually looking at is the one lit.
+    expect(within(output).getByRole("button", { name: "版面" })).toBeDisabled();
+    expect(within(output).getByRole("button", { name: "文字" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("counts what the text preview dropped, one line per kind", async () => {
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue(
+      documentPreview({
+        image_count: 4,
+        header_count: 1,
+        flattened_paragraph_count: 3,
+      }),
+    );
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    const gaps = await within(output).findByRole("list", {
+      name: "预览没有还原的部分",
+    });
+    // A picture is the sharpest case for counting anything: the prose around a
+    // figure reads as a finished argument, so its absence is the one omission a
+    // reader cannot infer from what is on screen.
+    expect(within(gaps).getByText("图片没有显示")).toBeInTheDocument();
+    expect(within(gaps).getByText("4 张")).toBeInTheDocument();
+    expect(within(gaps).getByText("页眉没有显示")).toBeInTheDocument();
+    expect(within(gaps).getByText("段落样式没有保留")).toBeInTheDocument();
+    expect(within(gaps).getByText("3 段")).toBeInTheDocument();
+    // Zeros are not rows. A document with no footnotes is missing nothing on
+    // that axis, and a row saying so competes with the rows that mean
+    // something.
+    expect(within(gaps).queryByText("脚注没有显示")).not.toBeInTheDocument();
+    expect(within(gaps).queryByText("表格只保留文字")).not.toBeInTheDocument();
+    expect(within(gaps).queryByText(/^0 /)).not.toBeInTheDocument();
+  });
+
+  it("says nothing about losses when the preview lost nothing", async () => {
+    // The control for the counts. Without it, a list that rendered every kind
+    // unconditionally -- or an empty box with a heading over it -- would pass
+    // the test above while telling every reader of a plain document that
+    // something is missing from it.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue(documentPreview());
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(await within(output).findByText("这一段来自文档。")).toBeInTheDocument();
+    expect(
+      within(output).queryByRole("list", { name: "预览没有还原的部分" }),
+    ).not.toBeInTheDocument();
+    expect(within(output).queryByText(/没有显示/)).not.toBeInTheDocument();
+    // The one sentence that is still true of every text preview stays.
+    expect(within(output).getByText(/不含排版/)).toBeInTheDocument();
   });
 
   it("presents an answer with no file as the result, not as a missing file", async () => {
@@ -858,6 +1029,30 @@ function approval(status: "pending" | "approved", decisionVersion: number) {
     decided_at: status === "pending" ? null : "2026-08-02T12:01:00Z",
     created_at: "2026-08-02T12:00:30Z",
   } as const;
+}
+
+/**
+ * A preview of a document that lost nothing, so a test states only the loss it
+ * is about.
+ *
+ * Spelling every count out rather than spreading a partial: the wire model
+ * requires all of them, so a fixture that forgot one would not compile -- which
+ * is the whole reason they are required, and a fixture that quietly defaulted
+ * them would be the first place that promise stopped being kept.
+ */
+function documentPreview(fields: Partial<DocumentPreview> = {}): DocumentPreview {
+  return {
+    text: "## 背景\n\n这一段来自文档。",
+    truncated: false,
+    table_count: 0,
+    image_count: 0,
+    header_count: 0,
+    footer_count: 0,
+    numbered_paragraph_count: 0,
+    footnote_count: 0,
+    flattened_paragraph_count: 0,
+    ...fields,
+  };
 }
 
 function runTimeline() {

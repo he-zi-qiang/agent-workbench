@@ -38,6 +38,32 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY --from=uv /uv /uvx /bin/
 
+# The layout preview (ADR-045) converts .docx to PDF with headless LibreOffice.
+# Off by default, and the default is the decision rather than an oversight:
+# turning it on takes the image from 1.24 GB to 1.96 GB -- measured, both ways,
+# not estimated -- and adds one more several-hundred-megabyte download to every
+# build that misses the layer cache, a download that does fail (it failed once
+# on the day this landed). A build without it
+# is not a broken build: `GET /v1/artifacts/{id}/pdf` answers 503 and the
+# console falls back to the text preview, which is intact.
+#
+#     docker build --build-arg WITH_FIDELITY_PREVIEW=1 -t agent-workbench .
+#
+# ``fonts-noto-cjk`` is not optional when this is on. Without it LibreOffice
+# converts Chinese documents successfully, exits zero and writes a PDF full of
+# empty boxes -- no test goes red, and the only way to find out is for somebody
+# to look at the page. ``libreoffice-writer`` rather than ``libreoffice``
+# because this project converts Word documents and nothing else.
+ARG WITH_FIDELITY_PREVIEW=0
+RUN if [ "$WITH_FIDELITY_PREVIEW" = "1" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=3 \
+            libreoffice-writer \
+            fonts-noto-cjk \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --home-dir /app app
 

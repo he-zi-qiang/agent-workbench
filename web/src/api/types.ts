@@ -174,13 +174,56 @@ export interface ArtifactRef {
   filename?: string | null;
 }
 
-/** A Word document rendered as Markdown by the server, for showing inline. */
+/**
+ * A Word document rendered as Markdown by the server, for showing inline.
+ *
+ * The counts below are what the extraction dropped or flattened on the way to
+ * that Markdown. They are here because an omission is not guessable from the
+ * text: truncated prose stops mid-sentence and announces itself, while the
+ * paragraphs around a missing figure read as a finished argument. Server-side
+ * (`adapters/documents/docx.py`) because only the reader of the .docx can know.
+ *
+ * All required, mirroring a pydantic model with no defaults
+ * (`apps/api/routes/artifacts.py`). The alternative was optional counts, and it
+ * is the wrong one for a reason specific to this payload: the panel shows a
+ * count only when it is above zero, so an absent field and a zero render
+ * identically -- as "the document has none". Optional would make the type
+ * system content with a server that never says, which is exactly the silence
+ * these fields exist to break. The two declarations are hand-written mirrors,
+ * not generated, so they are changed in the same commit or not at all.
+ */
 export interface DocumentPreview {
   text: string;
   /** The document continues past what `text` holds. Said, never implied. */
   truncated: boolean;
-  /** How many tables the document has, so the panel can name what it omits. */
+  /**
+   * Tables the document has. The one count of what the extraction *reached*
+   * rather than of the whole file, so a truncated preview reports the tables
+   * above the cut. Left that way deliberately: it is the number already on
+   * screen, and moving it changes what the console has been claiming.
+   */
   table_count: number;
+  /** Pictures, which the text preview drops entirely. */
+  image_count: number;
+  /** Header definitions -- the running title the preview never opens. */
+  header_count: number;
+  /** Footers, separate because a document may define one end and not the other. */
+  footer_count: number;
+  /**
+   * Paragraphs Word numbers for itself. The digits are generated at layout
+   * time, so an ordered list previews as unordered lines and a procedure
+   * arrives without its order.
+   */
+  numbered_paragraph_count: number;
+  /** Footnote marks. What is lost is the sentence, not the superscript. */
+  footnote_count: number;
+  /**
+   * Paragraphs whose words came through and whose structure did not: the
+   * Markdown is derived from built-in heading styles alone, so anything else --
+   * including every style this project's own renderer applies -- is emitted as
+   * a bare line.
+   */
+  flattened_paragraph_count: number;
 }
 
 export type ArtifactDownloadTarget = Pick<

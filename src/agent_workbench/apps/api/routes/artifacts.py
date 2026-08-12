@@ -21,12 +21,16 @@ from typing import Final
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from agent_workbench.adapters.documents.docx import (
     DocxTooLargeError,
     extract_docx_preview,
+)
+from agent_workbench.adapters.documents.fidelity import (
+    LayoutUnavailableError,
+    render_docx_to_pdf,
 )
 from agent_workbench.apps.api.state import dependencies_of
 
@@ -184,6 +188,81 @@ async def preview(artifact_id: str, request: Request) -> DocumentPreview:
         numbered_paragraph_count=extracted.numbered_paragraph_count,
         footnote_count=extracted.footnote_count,
         flattened_paragraph_count=extracted.flattened_paragraph_count,
+    )
+
+
+@router.get("/{artifact_id}/pdf")
+async def preview_pdf(artifact_id: str, request: Request) -> Response:
+    """The same .docx laid out, for the reader who needs to see the document.
+
+    Everything before the conversion is the text preview's route, reached the
+    same way and refusing on the same terms -- ``head`` first so an id that is
+    not this principal's is a 404 before any bytes are read, 415 for anything
+    that is not Word, 413 on the same source ceiling. Two views of one document
+    must not be two authorizations, and the way to keep them one is to make the
+    second copy the first line for line.
+
+    The one status this route has and the text one does not is 503: a
+    deployment without LibreOffice cannot lay anything out, and that is a fact
+    about the host rather than about the document. It is separated from the
+    422 below on purpose -- the console shows the text preview instead and says
+    why, where a 422 would tell a reader their file is broken.
+    """
+
+    dependencies = dependencies_of(request)
+    principal = dependencies.principals.resolve(request)
+    described = await dependencies.artifacts.head(
+        tenant_id=principal.tenant_id,
+        artifact_id=artifact_id,
+        principal_id=principal.principal_id,
+    )
+    if described.media_type != DOCX_MEDIA_TYPE:
+        raise HTTPException(
+            status_code=415,
+            detail="a layout preview is available for Word documents only",
+        )
+    if described.size_bytes > MAX_PREVIEW_SOURCE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="the document is too large to preview; download it instead",
+        )
+
+    content = await dependencies.artifacts.get(
+        tenant_id=principal.tenant_id,
+        artifact_id=artifact_id,
+        principal_id=principal.principal_id,
+    )
+    try:
+        rendered = await render_docx_to_pdf(content)
+    except LayoutUnavailableError as error:
+        # Ordered before the handlers below because it is a RuntimeError and
+        # they would swallow it. Nothing about this deployment is broken; it
+        # simply has no converter, and the caller is told so as its own status.
+        raise HTTPException(
+            status_code=503,
+            detail="this deployment cannot lay documents out; read the text preview",
+        ) from error
+    except DocxTooLargeError as error:
+        raise HTTPException(
+            status_code=413,
+            detail="the document is too large to preview; download it instead",
+        ) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=422,
+            detail="the document could not be laid out as a page",
+        ) from error
+
+    return Response(
+        content=rendered,
+        media_type="application/pdf",
+        headers={
+            # Addressed by content: the same document always converts to the
+            # same PDF, so a cached copy can never be stale for this URL. The
+            # artifact id is likewise immutable, which is what makes the pair
+            # safe to cache privately for a long time.
+            "cache-control": "private, max-age=86400, immutable",
+        },
     )
 
 
