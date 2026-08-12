@@ -531,7 +531,22 @@ def _assemble_chat(
         # is now its own business -- LlamaIndex's does not expose them the way
         # the reference path did -- and warming is about the runtimes this
         # process loaded, which is a fact this scope already has.
-        encoders = tuple(e for e in (embedder, sparse_encoder) if e is not None)
+        #
+        # The reranker is in here for the same reason the other two are: it is
+        # on by default and its first forward pass is exactly as cold. It is
+        # bound to a name and reused below so that what startup warms is
+        # provably the object retrieval will call -- warming a second instance
+        # would spend the boot time and save the request nothing. `None` here
+        # means one thing only: the weights or the runtime behind them did not
+        # load. There is no switch to be off -- `rag.reranker.enabled` is a
+        # `Literal[True]`, so settings rejects a deployment that tries -- and
+        # warming skips `None` rather than making this a conditional.
+        loaded_reranker = (
+            None if isinstance(reranker, RerankerUnavailable) else reranker
+        )
+        encoders = tuple(
+            e for e in (embedder, sparse_encoder, loaded_reranker) if e is not None
+        )
 
         retrieval = RetrievalService(
             candidate_retriever=build_candidate_retriever(
@@ -542,7 +557,7 @@ def _assemble_chat(
             ),
             documents=documents,
             telemetry=telemetry,
-            reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
+            reranker=loaded_reranker,
             rerank_timeout_seconds=config.reranker.timeout_seconds,
         )
     # The model comes last, and its absence costs only chat. Retrieval is
