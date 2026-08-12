@@ -108,6 +108,24 @@ export interface TaskView {
   objective_preview: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * How many agent invocations this Task has already paid for, across every
+   * retry and every reclaim (ADR-040).
+   *
+   * Required rather than optional, even though the server's field carries a
+   * default: the server always serialises it, and an optional number here is
+   * one `?? 0` away from telling a reader that a Task which spent eleven
+   * invocations spent none. A budget figure that silently reads as zero when
+   * it is merely absent is worse than no figure at all.
+   *
+   * The ceiling it is spent against is deliberately *not* here, because the
+   * response does not carry one: it lives in the Task's own
+   * `run_semantics_snapshot` and only the Registry reads it. Anything this
+   * client displayed as the limit would be this deployment's current setting,
+   * not the one this Task was submitted under -- which is exactly the number
+   * ADR-040 went to the trouble of freezing per Task.
+   */
+  agent_invocation_count: number;
 }
 
 export interface TaskListResponse {

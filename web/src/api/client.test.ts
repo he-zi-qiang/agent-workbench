@@ -90,6 +90,7 @@ describe("apiRequest", () => {
       task_id: "task_1",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       created_at: "2026-08-02T00:00:00Z",
       updated_at: "2026-08-02T00:00:00Z",
     };
@@ -313,5 +314,135 @@ describe("uploadDocument", () => {
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("content-type")).toBe(
       intentBody.media_type,
     );
+  });
+
+  it("hands the caller's abort signal to the transfer, not only to the JSON calls", async () => {
+    // The transfer is the leg the caller is actually buying. The intent and
+    // `/complete` are single round trips that are over before anyone could
+    // change their mind; the PUT is the document itself, and on a real file it
+    // is where the seconds -- or minutes -- are spent. A signal threaded into
+    // the two quick calls and dropped from the PUT cancels nothing anybody
+    // could observe, and a caller's hook can be tested green against it,
+    // because the hook only ever sees the promise. So it is asserted here,
+    // against the request that leaves.
+    vi.stubGlobal("crypto", {
+      ...globalThis.crypto,
+      subtle: { digest: () => Promise.resolve(new Uint8Array([0x01]).buffer) },
+    });
+
+    const controller = new AbortController();
+    const signals: (AbortSignal | null | undefined)[] = [];
+    let transferStarted = () => {};
+    const transferring = new Promise<void>((resolve) => {
+      transferStarted = resolve;
+    });
+
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      signals.push(init?.signal);
+      if (url === "/v1/uploads") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              upload_id: "upl_1",
+              content_path: "/v1/uploads/upl_1/content",
+            }),
+            { status: 201 },
+          ),
+        );
+      }
+      if (url.endsWith("/content")) {
+        transferStarted();
+        return new Promise<Response>((_resolve, reject) => {
+          // Rejects the way `fetch` does when the request is called off.
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException(String(init.signal?.reason), "AbortError")),
+          );
+          // A transfer handed no signal would otherwise hang here and this test
+          // would report a timeout, which says nothing. Settling it lets the
+          // assertion below name the actual defect.
+          setTimeout(() => reject(new Error("the transfer was never called off")), 200);
+        });
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ version_id: "ver_1" }), { status: 201 }),
+      );
+    });
+
+    const pending = uploadDocument(
+      identity,
+      {
+        file: new File(["# 标题"], "notes.md", { type: "" }),
+        documentId: "doc_1",
+        knowledgeBaseId: "kb_1",
+        grantedPrincipals: ["principal_a"],
+      },
+      controller.signal,
+    );
+    await transferring;
+    controller.abort("不再上传这个文件");
+
+    await expect(pending).rejects.toThrow();
+    expect(signals[0]).toBe(controller.signal);
+    expect(signals[1]).toBe(controller.signal);
+    // And `/complete` never went out. That request is the one that attaches the
+    // document to a knowledge base, so an abort that beats it is the difference
+    // between a wasted upload and a file in a base the reader has left.
+    expect(signals).toHaveLength(2);
+  });
+
+  it("carries it into the request that attaches the document as well", async () => {
+    // `/complete` is issued only after the transfer returns, so an abort raised
+    // during a transfer that had already finished lands in the gap in front of
+    // it. Without the signal on this request that abort is silent and the
+    // document is attached anyway -- which is the whole failure, arrived at
+    // through a narrower door.
+    vi.stubGlobal("crypto", {
+      ...globalThis.crypto,
+      subtle: { digest: () => Promise.resolve(new Uint8Array([0x01]).buffer) },
+    });
+
+    const controller = new AbortController();
+    const signals: (AbortSignal | null | undefined)[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      signals.push(init?.signal);
+      if (url === "/v1/uploads") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              upload_id: "upl_1",
+              content_path: "/v1/uploads/upl_1/content",
+            }),
+            { status: 201 },
+          ),
+        );
+      }
+      if (url.endsWith("/content")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ artifact_id: "art_1", size_bytes: 6, sha256: "abc" }),
+            { status: 201 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ version_id: "ver_1" }), { status: 201 }),
+      );
+    });
+
+    await uploadDocument(
+      identity,
+      {
+        file: new File(["# 标题"], "notes.md", { type: "" }),
+        documentId: "doc_1",
+        knowledgeBaseId: "kb_1",
+        grantedPrincipals: ["principal_a"],
+      },
+      controller.signal,
+    );
+
+    expect(signals).toHaveLength(3);
+    expect(signals[2]).toBe(controller.signal);
   });
 });

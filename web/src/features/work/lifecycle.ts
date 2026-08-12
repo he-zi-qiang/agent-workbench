@@ -107,6 +107,26 @@ const TERMINAL_STATUSES = new Set<TaskStatus>([
 ]);
 
 /**
+ * Statuses where the run stopped *between* steps rather than inside one.
+ *
+ * `waiting_approval` is stopped on a decision; `waiting_migration` is stopped
+ * because the graph that wrote this Task's position cannot be built here, and a
+ * person has to decide what happens to it. Neither is executing, so the last
+ * stage either reached is waiting, not active -- and a stage drawn active is a
+ * stage with a spinner on it, which is this page's way of saying "watch this,
+ * it is about to change".
+ *
+ * Deliberately not folded into `TERMINAL_STATUSES`: that set also decides
+ * whether an unreached stage reads 未执行 or 等待中, and neither of these Tasks
+ * has skipped anything. A parked Task's remaining stages really are still
+ * ahead of it, on the other side of a migration.
+ */
+const WAITING_STATUSES = new Set<TaskStatus>([
+  "waiting_approval",
+  "waiting_migration",
+]);
+
+/**
  * The stage a graph node belongs to, for grouping its events under it.
  *
  * One mapping across both graphs rather than one per shape, because it is
@@ -212,7 +232,7 @@ export function deriveLifecycle(
     const state: StageState = entry.failed
       ? "failed"
       : id === lastSeen && !terminal
-        ? status === "waiting_approval"
+        ? status !== undefined && WAITING_STATUSES.has(status)
           ? "waiting"
           : "active"
         : id === lastSeen && terminal && !succeeded
