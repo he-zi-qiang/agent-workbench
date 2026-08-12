@@ -18,6 +18,15 @@ somebody who needs the document downloads it, and the download is unchanged
 bytes. What this must never do is look like more than it is, which is why the
 response says how much it dropped rather than presenting a silent excerpt as the
 whole file.
+
+"How much" is a count per kind rather than a flag, and the difference matters
+because omissions are not equally guessable. Truncated prose announces itself:
+the text stops mid-sentence. A dropped chart does not -- the paragraphs around
+it read as a complete argument, so a reader is never prompted to wonder what the
+figure showed. The counts below exist so that the panel can say the document
+holds four pictures and two footnotes the panel does not, which is the only form
+in which that fact reaches anybody: it is not in the event stream, not in the
+``ToolResult``, and not in the artifact's metadata.
 """
 
 from __future__ import annotations
@@ -118,8 +127,72 @@ def preflight_docx(content: bytes) -> None:
 #: How a heading becomes Markdown. python-docx reports built-in heading styles
 #: as "Heading 1".."Heading 9"; anything else is a paragraph, including the
 #: custom styles the project's own renderer applies for Chinese thesis format.
+#: That flattening is not silent -- ``flattened_paragraph_count`` reports how
+#: many paragraphs it happened to.
 _HEADING_PREFIX: Final[str] = "Heading "
 _MAX_HEADING_LEVEL: Final[int] = 6
+
+#: Marks a style the document defined rather than one Word ships. OOXML records
+#: this itself, on ``w:style``, which is why the judgement below reads the flag
+#: instead of matching names.
+#:
+#: An earlier version of this count matched a four-name allowlist of built-ins
+#: -- "Normal", "Body Text", "No Spacing", "Plain Text" -- and counted anything
+#: else as flattened. It was wrong on real documents in a way this project's
+#: own fixtures could not show, because every fixture here is either
+#: ``render_document``'s output or a python-docx default, and both wear
+#: "Normal". A document written in Word wears "List Paragraph" on every list
+#: item, "Body Text 2" on indented prose, "Quote" and "Caption" where those
+#: were used -- all built-in, none of them custom. A twenty-item list reported
+#: twenty flattened paragraphs *and* twenty numbered ones: two numbers, in one
+#: panel, describing the same twenty paragraphs.
+_WML_NAMESPACE: Final[str] = (
+    "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+)
+_CUSTOM_STYLE_ATTRIBUTE: Final[str] = f"{{{_WML_NAMESPACE}}}customStyle"
+_STYLE_ID_ATTRIBUTE: Final[str] = f"{{{_WML_NAMESPACE}}}styleId"
+
+#: Where the pictures are. ``document.inline_shapes`` is the obvious way to
+#: write this count and is the wrong one: its XPath matches ``wp:inline`` under
+#: a run and nothing else, so a document laid out with floating images -- which
+#: is how most people place a figure they want text to wrap around -- reports
+#: no pictures at all. A zero that means "none" and a zero that means "none of
+#: the kind I looked for" are indistinguishable on screen, which is the whole
+#: failure this count exists to prevent.
+#:
+#: VML pictures (``w:pict``, Word 2003 and some converters) are deliberately
+#: not counted: that element also carries text boxes and drawn lines, so
+#: including it would report shapes that are not images, and a count inflated
+#: by furniture is worse than a count that is honest about its two formats.
+_IMAGE_PATHS: Final[tuple[str, ...]] = (".//wp:inline", ".//wp:anchor")
+
+#: One reference per header or footer a section defines. Equivalent to asking
+#: every section's six header/footer objects whether ``is_linked_to_previous``
+#: is false, because that property *is* the absence of this element -- and
+#: reachable without the guard the property route needs, since a package
+#: assembled by a converter can arrive with no ``sectPr`` and therefore no
+#: sections to iterate.
+_HEADER_PATH: Final[str] = ".//w:headerReference"
+_FOOTER_PATH: Final[str] = ".//w:footerReference"
+
+#: Footnote marks in the body, which is where the reader loses something. The
+#: note text lives in a separate part; counting the definitions there would
+#: also count the two ``w:type`` separators Word writes into every footnotes
+#: part whether or not the author used one.
+_FOOTNOTE_PATH: Final[str] = ".//w:footnoteReference"
+
+#: Paragraphs Word numbers for itself. ``w:numId`` of 0 is excluded because
+#: OOXML spends it on the opposite meaning -- it is how a paragraph cancels the
+#: numbering its style would otherwise give it, so counting it would report a
+#: list item where the document went out of its way to say there is none.
+#:
+#: Numbering carried by a style rather than by the paragraph is invisible here:
+#: a "List Number" paragraph has no ``w:numPr`` of its own, and following it
+#: would mean walking the ``basedOn`` chain in ``styles.xml``. Under-reporting
+#: is the direction this errs in, and it is the safe one only because the
+#: alternative was over-reporting every paragraph of a document that defines
+#: such a style.
+_NUMBERED_PARAGRAPH_PATH: Final[str] = './/w:p[w:pPr/w:numPr/w:numId[@w:val!="0"]]'
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +206,84 @@ class DocxPreview:
     #: Counted rather than rendered. A reader who sees "3 张表格" knows to open
     #: the file; one who sees the surrounding prose with the tables silently
     #: absent has no way to know anything is missing.
+    #:
+    #: The one count of what the *walk reached* rather than of the document: a
+    #: truncated preview reports the tables above the cut. Every count below it
+    #: is of the whole document. The seam is left where it is because this
+    #: number is already on screen -- the console prints 共 N 张表格 from it --
+    #: and moving it is a change to what the UI claims, which nothing else here
+    #: is asking for.
     table_count: int
+    #: Pictures, counted rather than shown, and the sharpest case for counting
+    #: anything at all: prose that reads around a figure still reads as a
+    #: finished argument, so an absent image is the one omission a reader
+    #: cannot infer from what is on screen.
+    image_count: int
+    #: Header definitions this reader never opens. They live in their own parts
+    #: of the package, and folding them in would interleave a running title and
+    #: a page number with the prose -- text the document shows on every page
+    #: and means once. Counted so that "the letterhead is gone" is something
+    #: the reader is told rather than something they find in the download.
+    header_count: int
+    #: The same at the other end of the page, and a separate number because a
+    #: document may define one without the other.
+    footer_count: int
+    #: Paragraphs Word numbers for itself. The digits are not in the text --
+    #: Word generates them at layout time -- so an ordered list previews as
+    #: unordered lines, and a procedure whose steps had an order arrives
+    #: without one. Rendering the numbers instead would mean reimplementing
+    #: Word's list counter, restart rules and level inheritance included, which
+    #: is a layout engine rather than a preview.
+    numbered_paragraph_count: int
+    #: Footnote marks. What the reader loses is not the superscript but the
+    #: sentence it pointed at, which is usually the qualification on the claim
+    #: the paragraph makes.
+    footnote_count: int
+    #: Paragraphs whose words came through and whose structure did not. The
+    #: Markdown above is derived from built-in style names alone -- "Heading
+    #: 1".."Heading 9" and "Title" -- so a paragraph wearing any other named
+    #: style is emitted as a bare line, including every style this project's
+    #: own renderer applies for Chinese thesis format. That limit was recorded
+    #: in a comment next to the code that has it, where nobody reading a
+    #: preview could see it; this is the same fact, in the result.
+    #:
+    #: Body-text styles are excluded, or an ordinary document would report
+    #: every paragraph it has, and a number that tracks length says nothing
+    #: about what was lost. Paragraphs inside table cells are excluded for the
+    #: other reason: their styles go to a Markdown table by design, not by this
+    #: reader running out of vocabulary.
+    flattened_paragraph_count: int
+
+
+def _style_name(paragraph: Paragraph) -> str:
+    """The paragraph's style name, or "" when it has none.
+
+    `style.name` is `str | None` in the stubs but reaches here as `Unknown`
+    through the element this Paragraph was constructed from. Narrowed once, in
+    one place, so that both the heading arithmetic and the count of what that
+    arithmetic could not express are checked normally.
+    """
+
+    named = cast("object", paragraph.style.name if paragraph.style is not None else "")
+    return named if isinstance(named, str) else ""
+
+
+def _heading_level(style: str) -> int | None:
+    """The heading level this style asks for, or None if this reader has none.
+
+    Split out of ``_paragraph_markdown`` because "no level" is the definition
+    of a flattened paragraph, and a second implementation of that judgement --
+    a list of style names, say -- would drift from the one that renders. The
+    count then reports a loss the renderer did not have, or misses one it did.
+    """
+
+    if style.startswith(_HEADING_PREFIX):
+        suffix = style[len(_HEADING_PREFIX) :].strip()
+        if suffix.isdigit():
+            return min(int(suffix), _MAX_HEADING_LEVEL)
+    if style == "Title":
+        return 1
+    return None
 
 
 def _paragraph_markdown(paragraph: Paragraph) -> str:
@@ -142,19 +292,10 @@ def _paragraph_markdown(paragraph: Paragraph) -> str:
     text = paragraph.text.strip()
     if not text:
         return ""
-    # `style.name` is `str | None` in the stubs but reaches here as `Unknown`
-    # through the element this Paragraph was constructed from. Narrowed once,
-    # so the heading arithmetic below is checked normally.
-    named = cast("object", paragraph.style.name if paragraph.style is not None else "")
-    style = named if isinstance(named, str) else ""
-    if style.startswith(_HEADING_PREFIX):
-        suffix = style[len(_HEADING_PREFIX) :].strip()
-        if suffix.isdigit():
-            level = min(int(suffix), _MAX_HEADING_LEVEL)
-            return f"{'#' * level} {text}"
-    if style == "Title":
-        return f"# {text}"
-    return text
+    level = _heading_level(_style_name(paragraph))
+    if level is None:
+        return text
+    return f"{'#' * level} {text}"
 
 
 def _table_markdown(table: Table) -> str:
@@ -195,6 +336,97 @@ def _body_children(document: Any) -> Iterator[Any]:
     return cast("Iterator[Any]", document.element.body.iterchildren())
 
 
+def _count_in_body(document: Any, *paths: str) -> int:
+    """How many elements the body holds on these paths, over the whole document.
+
+    The second untyped boundary here, isolated for the same reason as the one
+    above: ``xpath`` on a python-docx element returns ``Any``, and the counts
+    that call this are ordinary integers afterwards.
+
+    Whole-document by construction rather than by care. Counting inside the
+    walk that builds the text would tie every number to where that walk
+    stopped, so a truncated preview would report the pictures above the cut and
+    nothing about the ones below -- and the reader would take "truncated, one
+    picture" to mean the remainder is prose.
+    """
+
+    body: Any = document.element.body
+    return sum(len(cast("list[Any]", body.xpath(path))) for path in paths)
+
+
+def _custom_style_ids(document: Any) -> frozenset[str]:
+    """The ids of styles this document defined for itself.
+
+    Read from the styles part once, because the alternative -- deciding per
+    paragraph whether a style name looks built-in -- is the guess that made the
+    earlier version of this count wrong (see ``_CUSTOM_STYLE_ATTRIBUTE``).
+    """
+
+    styles = cast("Iterator[Any]", document.styles.element.iterchildren())
+    found: set[str] = set()
+    for style in styles:
+        if not str(cast("object", style.tag)).endswith("}style"):
+            continue
+        if str(cast("object", style.get(_CUSTOM_STYLE_ATTRIBUTE))) not in {"1", "true"}:
+            continue
+        style_id = cast("object", style.get(_STYLE_ID_ATTRIBUTE))
+        if isinstance(style_id, str):
+            found.add(style_id)
+    return frozenset(found)
+
+
+def _count_flattened_paragraphs(document: Any) -> int:
+    """Paragraphs wearing a style this document defined and this preview drops.
+
+    Walks the body's own children rather than ``document.paragraphs`` so that
+    it sees exactly the paragraphs ``_paragraph_markdown`` decides on -- the
+    body's direct children, table cells excluded -- and judges them with the
+    same ``_heading_level``. Two ways of asking the same question would be two
+    things to keep in step.
+
+    **Custom styles only**, and that is a narrowing rather than a shortcut. A
+    built-in style the preview also drops -- "Quote", "Caption" -- is a real
+    loss and is not reported here, which is the cost. What it buys is a number
+    that means what it says: this document defined a style, and the preview
+    could not express it. The alternative counted every list item in every
+    document Word wrote, alongside the numbering count that had already
+    reported those same paragraphs.
+
+    An empty paragraph is not counted: nothing of it reached the text, so
+    nothing about it was flattened. Neither is one with no style at all, which
+    is a paragraph that never asked to be anything.
+    """
+
+    # Style names are resolved once per style id rather than once per
+    # paragraph. `paragraph.style` searches the styles part on every access,
+    # and that search is the whole cost of this pass: 137ms for a
+    # 663-paragraph document, against 10ms for all of the same document's
+    # text. Ingestion calls this with `max_chars=None`, so it is the whole file
+    # every time, which is where a per-paragraph lookup would be paid. Caching
+    # on the id off the paragraph's own XML is exact rather than approximate --
+    # one document resolves one id to one style.
+    custom = _custom_style_ids(document)
+    if not custom:
+        return 0
+    names: dict[str | None, str] = {}
+    flattened = 0
+    for child in _body_children(document):
+        if not str(cast("object", child.tag)).endswith("}p"):
+            continue
+        paragraph = Paragraph(child, document)
+        if not paragraph.text.strip():
+            continue
+        declared = cast("object", child.style)
+        style_id = declared if isinstance(declared, str) else None
+        if style_id is None or style_id not in custom:
+            continue
+        if style_id not in names:
+            names[style_id] = _style_name(paragraph)
+        if _heading_level(names[style_id]) is None:
+            flattened += 1
+    return flattened
+
+
 def extract_docx_preview(
     content: bytes, *, max_chars: int | None = MAX_PREVIEW_CHARS
 ) -> DocxPreview:
@@ -220,6 +452,11 @@ def extract_docx_preview(
     The preflight is here rather than at the route, so that the ceiling holds
     for every caller of this function instead of for the one path that
     remembered to ask.
+
+    The counts are taken from the whole body after that walk has stopped, not
+    accumulated during it, so a preview cut at ``max_chars`` still reports the
+    pictures below the cut. ``table_count`` is the exception and keeps counting
+    what the walk reached; see the field.
     """
 
     preflight_docx(content)
@@ -251,6 +488,12 @@ def extract_docx_preview(
         text="\n\n".join(pieces),
         truncated=truncated,
         table_count=tables,
+        image_count=_count_in_body(document, *_IMAGE_PATHS),
+        header_count=_count_in_body(document, _HEADER_PATH),
+        footer_count=_count_in_body(document, _FOOTER_PATH),
+        numbered_paragraph_count=_count_in_body(document, _NUMBERED_PARAGRAPH_PATH),
+        footnote_count=_count_in_body(document, _FOOTNOTE_PATH),
+        flattened_paragraph_count=_count_flattened_paragraphs(document),
     )
 
 

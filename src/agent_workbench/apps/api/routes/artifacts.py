@@ -45,11 +45,32 @@ MAX_PREVIEW_SOURCE_BYTES: Final[int] = 20 * 1024 * 1024
 
 
 class DocumentPreview(BaseModel):
-    """A rendered document as text, for showing beside the run that made it."""
+    """A rendered document as text, for showing beside the run that made it.
+
+    The counts are not decoration on the text: they are the only form in which
+    "this preview is missing four pictures" reaches a reader. The extraction
+    already knows (``adapters/documents/docx.py``), and until they crossed this
+    boundary the knowledge stopped at the process that had it.
+
+    Every field is required and none has a default, because a count that could
+    be absent would arrive as "no pictures" -- which is the claim the preview is
+    least entitled to make. The browser's mirror of this model is hand-written
+    (``web/src/api/types.ts``), so the two move together.
+    """
 
     text: str
     truncated: bool
+    #: Of the part the walk reached, unlike every count below it, which are of
+    #: the whole document. The seam is the extraction's (see ``DocxPreview``);
+    #: this model reports it rather than smoothing it over, because smoothing it
+    #: here would change a number the console already prints.
     table_count: int
+    image_count: int
+    header_count: int
+    footer_count: int
+    numbered_paragraph_count: int
+    footnote_count: int
+    flattened_paragraph_count: int
 
 
 def _content_disposition(filename: str | None) -> str:
@@ -157,6 +178,12 @@ async def preview(artifact_id: str, request: Request) -> DocumentPreview:
         text=extracted.text,
         truncated=extracted.truncated,
         table_count=extracted.table_count,
+        image_count=extracted.image_count,
+        header_count=extracted.header_count,
+        footer_count=extracted.footer_count,
+        numbered_paragraph_count=extracted.numbered_paragraph_count,
+        footnote_count=extracted.footnote_count,
+        flattened_paragraph_count=extracted.flattened_paragraph_count,
     )
 
 
