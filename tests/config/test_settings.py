@@ -148,24 +148,6 @@ def test_configuration_cannot_name_a_retrieval_metric_nothing_computes() -> None
     assert "mrr" in message
 
 
-def test_ragas_cannot_be_enabled_while_no_runner_exists() -> None:
-    """A flag with nothing behind it must fail, not quietly do nothing.
-
-    This is the shape the defect had: the default said `true`, no code read it,
-    and every reader who checked the configuration concluded answers were being
-    judged. Defaulting to `false` alone would leave the same trap one edit away.
-    """
-
-    payload = valid_payload()
-    assert Settings(**deepcopy(payload)).evaluation.ragas_enabled is False
-
-    payload["evaluation"]["ragas_enabled"] = True
-    with pytest.raises(ValidationError) as error:
-        Settings(**payload)
-
-    assert "ragas_enabled" in str(error.value)
-
-
 def test_evaluation_judge_defaults_closed_and_pinned_when_enabled() -> None:
     settings = Settings(**valid_payload())
     assert settings.evaluation.judge.enabled is False
@@ -186,6 +168,36 @@ def test_evaluation_judge_defaults_closed_and_pinned_when_enabled() -> None:
     pinned["evaluation"]["judge"]["model_revision"] = "judge-revision-v1"
     enabled = Settings(**pinned)
     assert enabled.evaluation.judge.enabled is True
+
+
+def test_ragas_cannot_be_enabled_while_no_runner_exists() -> None:
+    """The flag may not claim an evaluation this repository cannot run.
+
+    Three assertions, and the third is the one with teeth. Locking the value
+    only proves the annotation holds. Pairing the lock with the *absence* of
+    the dependency states the reason for it, and fails on the day somebody
+    adds RAGAS without reopening the flag -- which is exactly the moment a
+    closed flag stops being honest and starts being stale.
+    """
+
+    settings = Settings(**valid_payload())
+    assert settings.evaluation.ragas_enabled is False
+
+    enabled = valid_payload()
+    enabled["evaluation"]["ragas_enabled"] = True
+    with pytest.raises(ValidationError, match="ragas_enabled"):
+        Settings(**enabled)
+
+    with PYPROJECT_FILE.open("rb") as handle:
+        pyproject = tomllib.load(handle)
+    optional = pyproject["project"].get("optional-dependencies", {})
+    groups = pyproject.get("dependency-groups", {})
+    declared = [
+        *pyproject["project"]["dependencies"],
+        *(requirement for extra in optional.values() for requirement in extra),
+        *(requirement for group in groups.values() for requirement in group),
+    ]
+    assert not [r for r in declared if "ragas" in str(r).lower()]
 
 
 def test_evaluation_judge_temperature_is_deterministic() -> None:

@@ -13,7 +13,7 @@
 |---|---:|---|
 | [架构与技术选型基线](./architecture-baseline.md) | v1.3 | 锁定产品边界、分层、组件职责、可靠性协议和技术选型 |
 | [代码实施计划](./implementation-plan.md) | v1.0 | 将目标架构拆成工作包、PR、迁移、测试门禁和证据包 |
-| [配置管理契约](./configuration.md) | schema 1.10 | 定义配置来源、密钥规则、快照语义和跨域校验 |
+| [配置管理契约](./configuration.md) | schema 1.14 | 定义配置来源、密钥规则、快照语义和跨域校验 |
 | [本机 Compose 部署](./deployment.md) | local demo | 定义可复现容器拓扑、端口边界与 demo worker 限制 |
 
 ## 决策记录
@@ -29,6 +29,9 @@
   `knowledge_search` 与 Chat/RAG 安全边界的最新复核；
 - [2026-07-29 当前实现完成度与缺陷报告](./repository-audit-2026-07-29.md)：
   按“已完成、未完成、已有缺陷”重新盘点当前 Task 持久化分支，并给出后续 PR 顺序；
+- [已知缺口](./known-gaps.md)：按“拒绝／未接线／未实现／口径不实”四类记录**没有做**
+  的部分，每条附仓库位置、不做的理由和“做完”的判据。要判断某项能力是否存在，
+  这份和[实施状态](./status.md)一起读；
 - [Clean-room 与合规说明](./compliance.md)：说明来源边界和可公开表述；
 - [仓库 NOTICE](../NOTICE.md)：声明本项目不包含来源不明的私有实现。
 
@@ -44,6 +47,20 @@
 
 ## 当前事实
 
+**截至 2026-08-12，基线为 `main@3c8bc95`（PR #116），配置 schema `1.14`，
+Alembic 单一 head 为 `0025_agent_invocation_count`（共 25 个迁移）。**
+门禁按 CI 的四个 job 分别记，不合成一个总数——两个后端 job 的跳过集互相覆盖，
+把它们相加会数重：确定性测试 **2050 passed / 719 skipped**（不起外部服务，
+跳过的即下一行那些）；真实服务套件 **1012 passed / 2 skipped**（PostgreSQL +
+Qdrant，两条跳过分别是 PostgreSQL 专属的非锁定恢复读契约，和需要 `embedding`
+extra 与本地权重的真实 reranker 契约）；前端 **171 项** passed（22 个文件）
+外加浏览器冒烟 **4 项**；ruff / pyright strict / tsc / eslint 全绿。
+数字取自 PR #116 的 CI 运行，不是本机跑的。
+
+此后仍未做的部分，按“拒绝／未接线／未实现／口径不实”分类记在
+[已知缺口](./known-gaps.md)，每条附仓库位置与“做完”的判据；
+本节以下是**到 PR #87 为止的历史叙述**，保留其原有时点，不再随主线刷新。
+
 截至 2026-08-09（`main@a4dea2b`，PR #87），A–F 汇合增量、OTel/LangChain 工具互操作
 （PR #67）、三处围栏修复（PR #68）、React Chat/Work 控制台（PR #69）、LlamaIndex 检索
 Adapter 与路由阈值评测（PR #72、#73）以及 Chat 联网搜索与工具额度语义（PR #74）都已经
@@ -54,7 +71,13 @@ Adapter 与路由阈值评测（PR #72、#73）以及 Chat 联网搜索与工具
 
 此后的四个工作包把 schema 推到 `1.10`：WP14-01 的 MCP Adapter（ADR-025，`1.7`→`1.8`）、
 WP15 阶段一的任务工作区（ADR-028）与阶段二的一次性沙箱（ADR-029，`1.8`→`1.9`）、
-阶段三的只读取用外部世界（ADR-027，`1.9`→`1.10`，PR #83–#86）。PR #87 随后修掉两处
+阶段三的只读取用外部世界（ADR-027，`1.9`→`1.10`，PR #83–#86）。再之后三条 ADR 把它
+推到 `1.13`：工作节点受成本约束（ADR-030，`1.10`→`1.11`）、triage 决定形态
+（ADR-036，`1.11`→`1.12`）、图谱只提名 chunk（ADR-037，`1.12`→`1.13`）。
+第四次抬版方向相反：ADR-039（`1.13`→`1.14`）让 `evaluation` 一节不能再声称
+代码没有的能力，于是停止加载的是**旧文件**——写着 `ragas_enabled = true`
+或 1.13 那份 19 条默认指标名的配置现在校验失败，而不是躺在那里没人读。
+四次抬版的完整理由见[配置管理契约](./configuration.md)。PR #87 随后修掉两处
 **同一类**缺陷：能力在组合根装齐了，真正跑的那条分支没接上——`researcher_external` 从不
 调用模型（ADR-032），`synthesize` 从不进入工作区会话，因此那三个工作区工具在生产路径上
 每一次都失败而 run 仍报告成功。两处都有真实 Task 的事件流验收，详见[实施状态](./status.md)。
@@ -86,15 +109,15 @@ LlamaIndex retrieval Adapter 已经建成并通过契约测试，但 `rag.llama_
 EventLog upcaster/poison-row 隔离已落地，但生产 upcaster 注册表仍是空的，且界面上
 只有 Work 时间线会披露被跳过的位点，Chat 那一半仍然沉默。
 
-实测门禁（2026-08-11，本机，含当日两批缺口清理）：真实 PostgreSQL + Qdrant
-`2716 passed / 11 skipped`；不起任何外部服务 `2040 passed / 687 skipped`；前端
-Vitest `155 passed`、Playwright `4 passed`。`ruff format --check .`（485 files）、
+实测门禁（2026-08-12，基线 `main@3c8bc95`）：真实 PostgreSQL + Qdrant
+`2758 passed / 11 skipped`；不起任何外部服务 `2065 passed / 704 skipped`；前端
+Vitest `171 passed`（CI）、Playwright `4 passed`。`ruff format --check .`（493 files）、
 `ruff check src tests`、Pyright `0 errors / 0 warnings / 0 informations`、ESLint
 `--max-warnings 0`、`tsc -b` 与 production build 均通过；Alembic 唯一 head 为
-`0024_document_ingestion_failure`。**真实服务证据由 CI 每个 PR 提供**：
+`0025_agent_invocation_count`。**真实服务证据由 CI 每个 PR 提供**：
 `Migrations, PostgreSQL and Qdrant-backed stores` job 对着真实 PostgreSQL 16 与
 Qdrant 跑 `tests/contracts tests/persistence tests/api tests/vector`；同一条命令在本机
-对真实服务跑出来是 `1009 passed / 2 skipped`。它不覆盖 `tests/e2e` 与需要模型
+对真实服务跑出来是 `1012 passed / 2 skipped`。它不覆盖 `tests/e2e` 与需要模型
 Provider 的路径。此处此前写着这个 job "会因并列分数次序不确定而偶发一条失败"——
 **那条缺陷已由 ADR-033 修掉，那句话不再成立**。
 这一节不再钉具体 commit：基线一往前走，hash 就变成一句要读者自己去核的旧话。

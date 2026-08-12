@@ -11,7 +11,14 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-As of 2026-08-11, `main` carries the Task/HITL/side-effect-ledger baseline, the
+**As of 2026-08-12 the baseline is `main@3c8bc95` (PR #116), configuration schema
+`1.14`.** What is *not* built is not described here: it is recorded gap by gap in
+[Known gaps](docs/known-gaps.md), each classified as refused, unwired, absent or
+misstated, with a repository location and a criterion for what "done" means. The
+paragraphs below are the incremental narrative up to PR #87 and keep their
+original date.
+
+As of 2026-08-09, `main` carries the Task/HITL/side-effect-ledger baseline, the
 three fencing fixes from PR #68, the React Chat/Work console (PR #69), the
 LlamaIndex retrieval adapter and routed-threshold evaluation (PR #72, #73), and
 Chat web search with the tool-ceiling semantics (PR #74). ADR-018 through 022 —
@@ -135,23 +142,28 @@ Implemented with test evidence:
 - a local-only Docker Compose topology for PostgreSQL, Qdrant, migrations, the
   API and explicitly opted-in synthetic workers.
 
-Validation measured locally on 2026-08-11, on the tree carrying every change in
-the batch described above:
+Validation measured on 2026-08-12 against baseline `main@3c8bc95`:
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL 5433 + Qdrant 6333 | 2716 passed / 11 skipped |
-| Backend, no external services at all | 2040 passed / 687 skipped |
-| Frontend Vitest | 155 passed (22 files) |
-| Frontend Playwright (desktop and mobile projects) | 4 passed |
+| Backend, real PostgreSQL 5433 + Qdrant 6333 (local) | 2758 passed / 11 skipped |
+| Backend, no external services at all (local) | 2065 passed / 704 skipped |
+| Frontend Vitest (CI) | 171 passed (22 files) |
+| Frontend Playwright (desktop and mobile projects, CI) | 4 passed |
 
-Static gates: `ruff format --check .` passed (485 files), `ruff check src tests`
+The first two rows are local and the last two are CI, because this machine
+cannot install the `24.14.0` that `web/package.json` pins in `engines`: under
+node 22, jsdom's `Blob` has no `.stream()`, so three `downloadArtifact` cases
+throw before reaching the code under test. That is a toolchain fact rather than
+a code fact, but it does mean **only CI's frontend numbers count**.
+
+Static gates: `ruff format --check .` passed (493 files), `ruff check src tests`
 passed, Pyright strict reported 0 errors, 0 warnings, 0 informations, ESLint
 `--max-warnings 0` passed, `tsc -b` passed, and the production build passed.
-Alembic reports a single head, `0024_document_ingestion_failure`.
+Alembic reports a single head, `0025_agent_invocation_count`.
 
 Of the 11 backend skips, 10 need the `embedding` extra and local BGE weights and
-one is a contract that only holds on PostgreSQL; the extra 676 skips in the
+one is a contract that only holds on PostgreSQL; the extra 693 skips in the
 service-less row are all gated on `AGENT_WORKBENCH_TEST_DSN` or
 `AGENT_WORKBENCH_TEST_QDRANT_URL` being unset. **Four rows, four environments:
 quote them separately, never add them.**
@@ -160,7 +172,7 @@ A separate CI job carries real-service evidence on **every PR**: `Migrations,
 PostgreSQL and Qdrant-backed stores` runs `alembic upgrade head` and then
 `tests/contracts tests/persistence tests/api tests/vector` against a real
 PostgreSQL 16 and Qdrant. That same command run locally against real services
-gives 1009 passed and 2 skipped, one of which needs the `embedding` extra and
+gives 1012 passed and 2 skipped, one of which needs the `embedding` extra and
 local BGE weights that CI does not install — the count is local, but the command
 and the environment gates are the ones CI uses. It does not cover `tests/e2e`,
 Task Worker end-to-end, or anything requiring a model provider, so it does not

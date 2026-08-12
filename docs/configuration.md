@@ -6,14 +6,14 @@
 - `config.test.toml`：测试环境深度合并覆盖，专门开启确定性 failpoint；
 - `config.production.toml`：无密钥的 production 合同覆盖，缺少部署注入时
   必须失败关闭；
-- `config/ownership.yaml`：250 个配置叶子字段的唯一 owner 与生命周期登记；
+- `config/ownership.yaml`：283 个配置叶子字段的唯一 owner 与生命周期登记；
 - `.env.example`：本地开发需要注入的 DSN、模型 ID 和密钥名称；
 - `src/agent_workbench/bootstrap/settings.py`：Pydantic Settings 类型、来源优先级、脱敏快照和跨域不变量；
 - `tests/config/test_settings.py`：配置契约测试；
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 为 `1.10`；两者是不同版本轴，架构基线不随
+当前架构基线为 `1.3`，配置 schema 为 `1.14`；两者是不同版本轴，架构基线不随
 配置 schema 走。schema 每一次抬升都对应一条 ADR：
 
 | schema | 原因 | 依据 |
@@ -27,6 +27,10 @@
 | `1.7` → `1.8` | MCP server 新增显式工具 allowlist，使 API 提交与 Worker 启动发现能确定性取交集 | [ADR-025](./adr/0025-mcp-adapter.md) |
 | `1.8` → `1.9` | 新增 `[sandbox]`；开启它会把 `sandbox_run` 写进 Task 授权信封，并把信封风险上限抬到 `external` | [ADR-029](./adr/0029-ephemeral-sandbox.md) |
 | `1.9` → `1.10` | 新增 `[[mcp.servers]].audience`；它决定一个 server 的工具进哪个 Agent，因此这一版的配置文件能改变运行中的图里谁能调什么 | [ADR-027](./adr/0027-read-outward-write-inward.md) |
+| `1.10` → `1.11` | `max_steps` 上限放宽；1.11 的配置文件可以写 `max_steps = 500`，1.10 的二进制会在校验时拒绝它 | [ADR-030](./adr/0030-working-nodes-are-governed-by-cost.md) |
+| `1.11` → `1.12` | 新增顶层 `[triage]`（默认关闭）；它决定一次提交走哪种形态 | [ADR-036](./adr/0036-triage-decides-the-shape.md) |
+| `1.12` → `1.13` | 新增 `rag.graph`（默认关闭，两个冻结 Literal）；开启后图谱臂参与候选提名 | [ADR-037](./adr/0037-the-graph-nominates-chunks.md) |
+| `1.13` → `1.14` | **方向相反的一次**：`evaluation.ragas_enabled` 只接受 `false`，`evaluation.rag_metrics` 只接受 `RETRIEVAL_METRICS` 里的键。上面每一条都是新文件向旧二进制要它没有的行为，这一条反过来——停止加载的是 1.13 那份文件（`ragas_enabled = true`、或它默认那 19 条指标名）。没有任何评测因此跑得不同，因为这两个字段从来没有被读过；抬版买到的只是"配置不再承诺一个这份二进制产不出的裁判" | [ADR-039](./adr/0039-a-metric-name-is-a-promise.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。

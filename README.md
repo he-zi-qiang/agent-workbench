@@ -17,7 +17,12 @@ Agent Workbench 是一个面向校招与作品集展示的 clean-room 通用 Age
 
 ## 当前状态
 
-截至 2026-08-11，主线已包含 Task/HITL/副作用账本收尾、三处围栏修复（PR #68）、
+**截至 2026-08-12，基线为 `main@3c8bc95`（PR #116），配置 schema `1.14`。**
+没有做的部分不在这一节里找——它们按“拒绝／未接线／未实现／口径不实”四类
+逐条记在[已知缺口](docs/known-gaps.md)，每条附仓库位置和“做完”的判据。
+以下段落是到 PR #87 为止的增量叙述，保留原时点。
+
+截至 2026-08-09，主线已包含 Task/HITL/副作用账本收尾、三处围栏修复（PR #68）、
 React Chat/Work 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈值评测
 （PR #72、#73）、Chat 联网搜索与工具额度语义（PR #74），以及
 [ADR-025](docs/adr/0025-mcp-adapter.md) 的 MCP Optional Lab。ADR-018～023
@@ -293,27 +298,32 @@ Task，并把本页与状态文档里过期的数字改准。
 - 历史上每次增量当时的门禁数字不在本页保留——它们会一起过期，而且很难看出哪一组是
   最新的。逐次的数字连同它们对应的改动记在 [实施状态](docs/status.md) 里，本页只留
   下面那一组当前值。
-- 当前门禁（2026-08-11 实测，本机，含当日两批改动）：
+- 当前门禁（2026-08-12 实测，基线 `main@3c8bc95`）：
 
   | 环境 | 结果 |
   |---|---|
-  | 后端，真实 PostgreSQL 5433 + Qdrant 6333 | `2716 passed / 11 skipped` |
-  | 后端，不起任何外部服务 | `2040 passed / 687 skipped` |
-  | 前端 Vitest | `155 passed`（22 个文件） |
-  | 前端 Playwright（桌面 + 移动两个 project） | `4 passed` |
+  | 后端，真实 PostgreSQL 5433 + Qdrant 6333（本机） | `2758 passed / 11 skipped` |
+  | 后端，不起任何外部服务（本机） | `2065 passed / 704 skipped` |
+  | 前端 Vitest（CI） | `171 passed`（22 个文件） |
+  | 前端 Playwright（桌面 + 移动两个 project，CI） | `4 passed` |
 
-  静态门禁：`ruff format --check .` 通过（485 files）、`ruff check src tests` 通过、
+  前两行标本机、后两行标 CI，因为本机的 node 装不到 `web/package.json` 的
+  `engines` 要求的 `24.14.0`——在 node 22 下 jsdom 的 `Blob` 没有 `.stream()`，
+  三条 `downloadArtifact` 用例在进入被测代码之前就抛错。那是工具链的事，不是
+  代码的事，但它意味着**前端数字只有 CI 跑出来的才算数**。
+
+  静态门禁：`ruff format --check .` 通过（493 files）、`ruff check src tests` 通过、
   Pyright `0 errors, 0 warnings, 0 informations`、ESLint `--max-warnings 0` 通过、
   `tsc -b` 通过、production build 通过。Alembic 单一 head 为
-  `0024_document_ingestion_failure`。
+  `0025_agent_invocation_count`。
   后端那 11 项跳过里，10 项需要 `embedding` extra 与本地 BGE 权重，1 项是只在
-  PostgreSQL 上成立的契约；不起服务时多出来的 676 项跳过全部因为
+  PostgreSQL 上成立的契约；不起服务时多出来的 693 项跳过全部因为
   `AGENT_WORKBENCH_TEST_DSN` / `AGENT_WORKBENCH_TEST_QDRANT_URL` 没设。
   **四行数字来自四种环境，只能分别引用，不能相加。**
 - **每个 PR 都有一组真实服务证据**：CI 的 `Migrations, PostgreSQL and Qdrant-backed stores`
   job 先 `alembic upgrade head`，再对着真实 PostgreSQL 16 与 Qdrant 跑
   `tests/contracts tests/persistence tests/api tests/vector`。同一条命令在本机对着真实
-  PostgreSQL + Qdrant 跑出来是 `1009 passed / 2 skipped`（其中 1 项需要 `embedding`
+  PostgreSQL + Qdrant 跑出来是 `1012 passed / 2 skipped`（其中 1 项需要 `embedding`
   extra 与本地 BGE 权重，CI 不装该 extra）——这个数是本机测的，CI 跑的是同一条命令、
   同一组环境闸门。它不覆盖 `tests/e2e`、Task Worker 端到端与需要模型 Provider 的路径。
 

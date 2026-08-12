@@ -130,24 +130,30 @@ profile"，没有断言"图里那个节点会用这个 profile 跑起来"——*
 
 ## 4. 证据
 
-下面几行来自不同环境，**只能分别引用，不能相加**（2026-08-11 本机实测）：
+下面几行来自不同环境，**只能分别引用，不能相加**（2026-08-12 实测，基线
+`main@3c8bc95`）：
 
 | 环境 | 结果 |
 |---|---|
-| 本机，无外部服务 | `2040 passed / 687 skipped` |
-| 本机，真实 PostgreSQL + Qdrant | `2716 passed / 11 skipped` |
-| CI 那组服务型目录（`contracts/persistence/api/vector`），本机对真实服务跑 | `1009 passed / 2 skipped` |
-| 前端 Vitest / Playwright | `155 passed` / `4 passed` |
+| 本机，无外部服务 | `2065 passed / 704 skipped` |
+| 本机，真实 PostgreSQL + Qdrant | `2758 passed / 11 skipped` |
+| CI 那组服务型目录（`contracts/persistence/api/vector`），本机对真实服务跑 | `1012 passed / 2 skipped` |
+| 前端 Vitest / Playwright（CI，见下） | `171 passed` / `4 passed` |
 | 本机，真实服务 + DeepSeek | 上面第 1 节那条完整 Task |
 
-静态门禁：`ruff format --check .` 通过（485 files）、`ruff check src tests` 通过、
+前端两项标 CI 而不是本机：本机装不到 `web/package.json` 的 `engines` 钉死的
+node `24.14.0`，node 22 下 jsdom 的 `Blob` 没有 `.stream()`，三条
+`downloadArtifact` 用例在进入被测代码前就抛错。第三行则本机与 CI 都是
+`1012 passed / 2 skipped`——这是"CI 与本机跑的是同一条命令"能拿出的最直接证据。
+
+静态门禁：`ruff format --check .` 通过（493 files）、`ruff check src tests` 通过、
 Pyright strict `0 errors / 0 warnings / 0 informations`、前端 Vitest 与严格
 TypeScript/ESLint 通过、production build 通过、锁文件与依赖许可证门禁通过。
-Alembic 唯一 head 为 `0024_document_ingestion_failure`。
+Alembic 唯一 head 为 `0025_agent_invocation_count`。
 
-规模（2026-08-11，只数 git 跟踪的文件）：Python 源码 53780 行、测试 67258 行、
-前端 TypeScript 14393 行；24 份数据库迁移；39 份 ADR（基线内 11 份 + 实施过程中
-28 份，编号 0012–0039 连续）。测试行数多于源码行数是有意的——本项目的规矩是
+规模（2026-08-12，只数 git 跟踪的文件）：Python 源码 55114 行、测试 68952 行、
+前端 TypeScript 15271 行；25 份数据库迁移；44 份 ADR（基线内 11 份 + 实施过程中
+33 份，编号 0012–0044 连续）。测试行数多于源码行数是有意的——本项目的规矩是
 **测试先证明是红的再变绿，且没有对照组的测试不算数**：只断言"这个被拒绝"的测试，分不出一个正常
 工作的校验器和一个把什么都拒绝的校验器。
 
