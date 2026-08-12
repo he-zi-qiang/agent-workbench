@@ -32,6 +32,10 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
 
+from agent_workbench.adapters.concurrency.call_runner import (
+    BlockingCallRunner,
+    offload,
+)
 from agent_workbench.domain.artifacts import ArtifactKind, ArtifactRef
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.identifiers import new_artifact_id
@@ -47,11 +51,18 @@ QUARANTINE_SUFFIX = ".part"
 class LocalArtifactStore:
     """Content-addressed artifacts under one directory tree."""
 
-    __slots__ = ("_root",)
+    __slots__ = ("_root", "_runner")
 
-    def __init__(self, root: Path | str) -> None:
+    def __init__(
+        self, root: Path | str, *, runner: BlockingCallRunner | None = None
+    ) -> None:
         self._root = Path(root).resolve()
         self._root.mkdir(parents=True, exist_ok=True)
+        # ADR-042. Only the read paths use it: ``put``/``put_stream`` stay on
+        # the loop because their quarantine-then-replace sequence is not
+        # cancellation-safe, and a thread that outlives its caller could leave
+        # half a file behind.
+        self._runner = runner
 
     async def put(
         self,
@@ -154,7 +165,7 @@ class LocalArtifactStore:
         path = self._blob_path(tenant_id, artifact_id)
         if not path.is_file():
             raise NotFoundError("artifact not found")
-        return path.read_bytes()
+        return await offload(self._runner, path.read_bytes, name="artifact-store-read")
 
     async def head(
         self, *, tenant_id: str, artifact_id: str, principal_id: str
@@ -184,18 +195,29 @@ class LocalArtifactStore:
             raise NotFoundError("artifact not found")
         return self._read(path, chunk_bytes)
 
-    @staticmethod
-    async def _read(path: Path, chunk_bytes: int) -> AsyncIterator[bytes]:
-        """Blocking reads, as everywhere else in this store.
+    async def _read(self, path: Path, chunk_bytes: int) -> AsyncIterator[bytes]:
+        """Read a chunk at a time, each chunk off the loop.
 
-        Acceptable for a local development store and not what a deployment
-        should run; the bounded executor that keeps blocking adapters off the
-        event loop belongs to the coordination work package, and the object
-        store this stands in for is async to begin with.
+        This used to say the bounded executor "belongs to the coordination work
+        package" and that blocking reads were acceptable meanwhile. ADR-042
+        delivered the executor, so the reads go through it now. Per chunk
+        rather than per file on purpose: the point of streaming is that a large
+        artifact never has to be resident, and offloading the whole read would
+        give that up to save some slot acquisitions.
+
+        ``open`` itself still happens on the loop. It is a single metadata
+        operation on a local filesystem, and holding a slot across the whole
+        ``with`` block would let one slow reader occupy the pool for as long as
+        its consumer took to iterate -- which is unbounded, because the
+        consumer is the one calling ``anext``.
         """
 
         with path.open("rb") as handle:
-            while chunk := handle.read(chunk_bytes):
+            while chunk := await offload(
+                self._runner,
+                lambda: handle.read(chunk_bytes),
+                name="artifact-store-stream",
+            ):
                 yield chunk
 
     def _write_metadata(

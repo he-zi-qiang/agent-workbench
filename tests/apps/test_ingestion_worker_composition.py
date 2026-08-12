@@ -124,7 +124,7 @@ def test_production_composition_refuses_a_missing_dense_runtime(
 ) -> None:
     monkeypatch.setattr(
         "agent_workbench.apps.ingestion_worker.composition.build_embedder",
-        lambda _config: EmbeddingUnavailable(reason="install embedding extra"),
+        lambda _config, **_: EmbeddingUnavailable(reason="install embedding extra"),
     )
 
     with pytest.raises(IngestionBackendUnavailableError, match="embedding extra"):

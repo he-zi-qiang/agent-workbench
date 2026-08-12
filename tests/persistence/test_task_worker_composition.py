@@ -201,10 +201,10 @@ def _patch_ungrounded_runtime(
 
     model = _WorkerModel()
 
-    def no_embedder(_: EmbeddingConfig) -> EmbeddingUnavailable:
+    def no_embedder(_: EmbeddingConfig, **__: object) -> EmbeddingUnavailable:
         return EmbeddingUnavailable("the embedding extra is not installed")
 
-    def no_sparse(_: EmbeddingConfig) -> SparseEncodingUnavailable:
+    def no_sparse(_: EmbeddingConfig, **__: object) -> SparseEncodingUnavailable:
         return SparseEncodingUnavailable("the embedding extra is not installed")
 
     def build(_: ModelConfig, *, client: httpx.AsyncClient) -> _WorkerModel:

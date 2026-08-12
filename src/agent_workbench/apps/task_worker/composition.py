@@ -21,6 +21,7 @@ from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
+from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.langgraph import (
     LangGraphTaskWorkflow,
@@ -107,6 +108,7 @@ from agent_workbench.workflows.execution_scope import TaskExecutionScope
 from agent_workbench.workflows.general_graph import GRAPH_VERSION_V2
 from agent_workbench.workflows.task_handlers import (
     BoundedParallelExecutor,
+    BudgetedAgentExecutor,
     TaskExportHandlers,
     TaskNodeInvocationProvider,
     TaskResearchHandlers,
@@ -269,7 +271,16 @@ async def build_task_worker_dependencies(
         # build; callers never need a half-constructed dependency object to
         # clean it up.
         resources.push_async_callback(engine.dispose)
-        artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
+        # ADR-042. One pool per process: every blocking adapter in this process
+        # draws from it, so the bound is a ceiling rather than three private ones.
+        blocking = BlockingCallRunner(
+            slots=config.blocking_calls.slots,
+            queue_timeout_seconds=config.blocking_calls.queue_timeout_seconds,
+        )
+        resources.callback(blocking.close)
+        artifacts = LocalArtifactStore(
+            Path(config.artifacts.local_root), runner=blocking
+        )
         events = PostgresEventLog(engine)
         registry = PostgresTaskRegistry(engine, events=events)
         guard_dsn = config.database.guard_dsn or config.database.dsn
@@ -289,6 +300,7 @@ async def build_task_worker_dependencies(
             assembled = await _build_real_handlers(
                 config,
                 artifacts=artifacts,
+                blocking=blocking,
                 documents=PostgresDocumentStore(engine),
                 events=events,
                 registry=registry,
@@ -351,6 +363,12 @@ async def build_task_worker_dependencies(
             worker_id=config.worker_id,
             lease_seconds=config.task.lease_seconds,
             heartbeat_seconds=config.task.heartbeat_seconds,
+            # ADR-041. Derived here rather than configured: how late a heartbeat
+            # may be before this Worker stops claiming to be alive is a property
+            # of the heartbeat interval, not something a deployment should be
+            # able to tune past ``lease_seconds`` -- which would turn the
+            # self-check off without any validator noticing.
+            abort_lag_seconds=config.task.heartbeat_seconds,
             max_attempts=config.task.max_attempts,
             retry_base_seconds=config.task.retry_base_seconds,
             retry_max_seconds=config.task.retry_max_seconds,
@@ -419,6 +437,7 @@ async def _build_real_handlers(
     config: TaskWorkerRuntimeConfig,
     *,
     artifacts: LocalArtifactStore,
+    blocking: BlockingCallRunner,
     documents: PostgresDocumentStore,
     events: PostgresEventLog,
     registry: PostgresTaskRegistry,
@@ -486,7 +505,7 @@ async def _build_real_handlers(
         )
 
     embedder = (
-        build_embedder(config.embedding)
+        build_embedder(config.embedding, runner=blocking)
         if grounds_tasks and config.embedding is not None
         else EmbeddingUnavailable(reason="this Worker configured no retrieval")
     )
@@ -549,7 +568,7 @@ async def _build_real_handlers(
         and config.qdrant is not None
         and config.retrieval is not None
     ):
-        built_sparse = build_sparse_encoder(config.embedding)
+        built_sparse = build_sparse_encoder(config.embedding, runner=blocking)
         sparse_encoder = (
             None
             if isinstance(built_sparse, SparseEncodingUnavailable)
@@ -651,6 +670,10 @@ async def _build_real_handlers(
         ),
         max_parallel=config.multi_agent.max_parallel_agent_invocations,
     )
+    # ADR-040. Outside the parallelism bound on purpose: the Registry round trip
+    # that charges the Task happens before a concurrency slot is taken, rather
+    # than while one is held. Records only -- nothing refuses on the count yet.
+    executor = BudgetedAgentExecutor(executor, registry=registry, scope=scope)
     invocations = TaskNodeInvocationProvider(
         registry=registry,
         budget=RunBudget(

@@ -992,6 +992,11 @@ task_runs = Table(
     Column("lease_until", DateTime(timezone=True), nullable=True),
     Column("heartbeat_at", DateTime(timezone=True), nullable=True),
     Column("attempt_count", Integer, nullable=False, server_default=text("0")),
+    # How many agent invocations this Task has paid for, across every retry
+    # and every reclaim (ADR-040). Distinct from `attempt_count`, which
+    # counts how many times the Task was *claimed*: one claim can run many
+    # agent nodes, and a Task reclaimed after a crash keeps what it spent.
+    Column("agent_invocation_count", Integer, nullable=False, server_default=text("0")),
     Column(
         "available_at",
         DateTime(timezone=True),
@@ -1079,7 +1084,7 @@ task_runs = Table(
         name="task_runs_lease_lifecycle",
     ),
     CheckConstraint(
-        "lease_epoch >= 0 AND attempt_count >= 0",
+        "lease_epoch >= 0 AND attempt_count >= 0 AND agent_invocation_count >= 0",
         name="task_runs_lease_counters",
     ),
     # The pick order for a Worker looking for work: oldest queued first. The

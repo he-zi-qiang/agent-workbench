@@ -152,7 +152,18 @@ class TaskRetryScheduled(TaskLifecycleEvent):
 class TaskDeadLettered(TaskLifecycleEvent):
     kind: Literal["TaskDeadLettered"] = "TaskDeadLettered"
     status: Literal["dead_letter"] = "dead_letter"
-    reason_code: Literal["lease_expired"] = "lease_expired"
+    #: Which writer gave up, and why. Two values because there are now two
+    #: writers: the reaper, which finds a lease that expired once too often,
+    #: and the invocation budget (ADR-040), which finds a Task that has already
+    #: paid for everything it was allowed. Telling them apart is the whole
+    #: point -- an operator who cannot is looking at a gate that might as well
+    #: be destroying Tasks silently.
+    #:
+    #: No default, deliberately, and the same way ``TaskRetryScheduled`` has
+    #: none: a default here would let a third writer appear and be filed under
+    #: whichever reason happened to be listed first. Widening the set keeps
+    #: every stored event valid, because the old value stays in it.
+    reason_code: Literal["lease_expired", "invocation_budget_exhausted"]
 
 
 class TaskAwaitingApproval(TaskLifecycleEvent):

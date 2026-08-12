@@ -318,6 +318,24 @@ class CoordinationSettings(StrictModel):
     max_missed_heartbeats: int = Field(default=2, ge=0, le=10)
     recovery_poll_seconds: int = Field(default=15, ge=1)
 
+    #: The bound on synchronous work offloaded to threads (ADR-042). These live
+    #: in ``[coordination]`` rather than ``[runtime]`` or ``[rag]`` for two
+    #: reasons. The mechanical one: those prefixes are in the
+    #: ``task_snapshot_allowlist``, so putting them there would make "how many
+    #: threads this host gives blocking calls" part of every Task's semantics
+    #: and would change every ``run_semantics_revision`` -- a deployment state
+    #: dressed up as meaning. The real one: their job is to keep the event loop
+    #: responsive enough that heartbeats and leases stay honest, which makes
+    #: them liveness parameters, and this is where liveness lives.
+    #:
+    #: Two slots because one torch forward already saturates the cores it was
+    #: given; the second buys "a slow call does not block an unrelated request"
+    #: and a third buys nothing. The timeout bounds *waiting for a slot* only --
+    #: never the call itself -- because a pool with no queue ceiling has merely
+    #: moved the unbounded queue from the executor onto a semaphore.
+    blocking_call_slots: int = Field(default=2, ge=1, le=32)
+    blocking_call_queue_timeout_seconds: float = Field(default=30.0, ge=1)
+
     priority_aging_seconds: int = Field(default=300, ge=0)
     max_attempts: int = Field(default=5, ge=1, le=100)
     retry_base_seconds: int = Field(default=2, ge=1)

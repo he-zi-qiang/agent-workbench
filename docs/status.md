@@ -1,5 +1,429 @@
 # 实施状态
 
+## 2026-08-11 第三批（进行中）：停摆的 Worker 不再替自己作证
+
+第二批清的是"服务端知道、界面不说"。这一批是前两批**明确排除**的那条——
+durable Agent 预算、event-loop watchdog、阻塞 Adapter 隔离——排除理由是"架构改动，
+要先有 ADR"。所以这一批先产出了三份 ADR（[ADR-040](./adr/0040-a-task-pays-before-it-calls.md)、
+[ADR-041](./adr/0041-a-late-heartbeat-may-not-renew.md)、
+[ADR-042](./adr/0042-blocking-belongs-to-the-adapter.md)），再按 ADR 逐刀实现。
+
+**这一节还没写完**，下面只记已经落地的部分。
+
+### 一、迟到的心跳没有资格续租（ADR-041）
+
+对着代码核完 WP08-12 之后，结论和计划文档写的不一样：**坏掉的不是"缺一个
+watchdog"。**
+
+`_heartbeat_loop`（`workers/task.py`）此前是 `sleep` 完就无条件续租，
+**一个字都不检查自己迟到了多久**。而续租那条写走的 fence
+（`task_registry.py:775` 的 `_live_lease_conditions`）对时间的唯一要求是
+`lease_until > now()`。于是这条路径可达（默认 `lease_seconds=90`、
+`heartbeat_seconds=20`）：
+
+| 时刻 | 发生了什么 | `lease_until` |
+|---|---|---|
+| t=0 | `claim_next` 设租约 | 90 |
+| t=20 | 第一次心跳，续租 | 110 |
+| t=20…80 | **事件循环冻住 60 秒** | 110 |
+| t=100 | 心跳照常续租；`100 < 110`，fence 通过 | **170** |
+
+一个死了 60 秒的进程就这样保住独占权，而且期间没有任何别的 Worker 能 reclaim
+它——`reclaim_expired` 找的是已过期的行，而这一行的过期时间一直被推着走。
+`implementation-plan.md:925` 写着"Watchdog 绝不能替 Worker 续租"，
+**今天违反这条的不是 watchdog，是 heartbeat 自己。**
+
+改法是心跳在续租前自查迟到，超过 `heartbeat + abort_lag`（默认 20+20=40 秒）
+就不续租，抛 `StaleExecutionError`。它落进 `_execute` 里那条**既有的**
+`except StaleExecutionError`，复用 `_GuardLostError` 已经走通的纪律——不再写
+checkpoint、heartbeat、lifecycle——而不是新造一条停机路径。**零配置字段、
+零迁移、零线程、零新端口方法。**
+
+**处置权本来就该在心跳手里**：它是唯一那个"停摆期间还在等、循环恢复时第一个知道
+自己迟到了多久"的东西。daemon thread 能更早**检测**，但它无法在不持数据库句柄的
+前提下**阻止**那次续租，而让线程持句柄距离"线程自己替 Worker 续租"只差一次编辑。
+
+**一处实现缺陷是被测试找出来的，记在这里。**第一版把计时锚点取在协程的第一行，
+测试直接超时——因为 `time.sleep` 发生在心跳协程**第一次被调度之前**，它的首次读数
+落在停摆之后，于是正常睡、正常续租。换成真实场景就是：循环在 claim 之后、心跳
+首次运行之前冻住，这个自查完全看不见，**同一个洞没堵上**。锚点因此改成心跳任务
+**被创建**的时刻（`since=loop.time()` 在 `create_task` 处求值），第一个窗口——
+也就是紧接 `claim_next` 之后、冷模型加载与大文档解析真正落在的那一段——才算数。
+
+**刻意不做的两件事**，都写在 ADR-041 里：不 release 租约（让它自然到期，才能由
+健康 Worker 用新 epoch 接管；一个刚承认自己不可信的进程发出的 release 不该被接受），
+以及**不给 ingestion worker 装**——它循环上还有本批不挪走的合法阻塞源
+（`TextDocumentParser` 的同步 `extract_text`），装了会把一次正常的大文档摄取判成
+失去 lease。这是本批内部的顺序依赖，写进 ADR 而不是留在谁的脑子里。
+
+`abort_lag` 由装配处从 `heartbeat_seconds` 派生，**不是配置字段**：一个能被调到
+大于 `lease_seconds` 的旋钮等于让自查永不触发，而配置校验挡不住它（两个数在不同
+的 section，失败形态是"缺少一次拒绝"而不是"值不合法"）。
+
+**验证。**新增 `tests/workers/test_task_worker_heartbeat_lateness.py`，两条用例是
+一对：停摆那条用同步 `time.sleep` **真的冻住事件循环**（不是 patch 时钟——手动
+搬时钟的测试会对着测错东西的实现通过），对照那条同配置、同代码路径、只是不冻循环。
+两层修复逐层撤销实测：
+
+```text
+撤掉迟到判据            1 failed / 1 passed
+锚点改回协程第一行      1 failed / 1 passed
+```
+
+对照组两次都保持绿，这正是它存在的理由——证明红不是"总是红"。
+真 PostgreSQL 下 `tests/workers/` + `tests/persistence/test_task_worker*.py`
+25 passed / 0 skipped，ruff、pyright 全绿。
+
+### 二、阻塞调用有了界（ADR-042）
+
+计划 `implementation-plan.md:900` 要的是「`AdapterCallRunner` 是所有 Model/Tool/外部
+SDK 调用的**唯一入口**」。ADR-042 **收窄了这句话**，理由是边界而不是工程量：把工具
+派发改成物理穿过一个 runner 对象，等于在自研 Runtime 与它的工具之间插进第二个持有者，
+直接撞上"Tool Loop 只有一个所有者"这条冻结 `Literal`。所以 runner 是**注入给会阻塞的
+Adapter 的一个协作者**，不是所有调用的必经之路。30+ 个调用点一处不动。
+
+**真正的问题比"没有界"更具体。**`asyncio.to_thread` 用的是解释器的**默认** executor，
+而这个 executor 是**全进程共享**的——`getaddrinfo`（每一次对外连接背后那一下 DNS）
+排的是同一个队。所以一串嵌入批次不只是让嵌入变慢，它把 DNS 排到了嵌入后面，而队列
+长度没有任何人看得见。
+
+`adapters/concurrency/call_runner.py`：专用 `ThreadPoolExecutor` + **等大**
+`asyncio.Semaphore` + 排队超时。两个数相等但都不能删，这一点写死在模块 docstring 里
+（否则后人会看见"两个相等的数"删掉一个）：`max_workers` 真正限制并发，
+`Semaphore` 负责让等待**可观测且有时限**——`ThreadPoolExecutor` 的 work queue 是无界
+`SimpleQueue`，给不了超时。**排队上限只管等一个 slot，不管调用本身**，所以一次合法的
+慢调用不会被它杀掉；饱和的后果是排队 + 超时，**不是拒绝**（三条路径全是只读幂等的，
+拒绝会把一次慢检索变成一次失败检索）。
+
+搬了 5 条路径：dense/sparse/reranker 三个模型适配器（原本 `to_thread`），
+加上 `LocalArtifactStore` 的 `get` 与 `_read`（原本**根本没进任何线程池**）。
+**`put` / `put_stream` 明确不搬**——计划自己写着"不可取消的非幂等写调用不能放进普通
+线程池"，而它的 quarantine → replace 语义被取消后会在盘上留下半个文件。
+
+两个新配置字段 `coordination.blocking_call_slots`（默认 2）与
+`blocking_call_queue_timeout_seconds`（默认 30）。**放 `[coordination]` 不是因为找
+不到别的地方**：`runtime` / `multi_agent` / `rag` 三个前缀都在 `task_snapshot_allowlist`
+里，放进去会让"这台机器给阻塞调用开几个线程"变成**每个 Task 的语义**并改掉全体
+`run_semantics_revision`——与否掉 `rag.enabled` 开关是同一条推理，**不要把部署状态
+伪装成语义**。而且它们的作用是让循环保持响应、以致心跳和租约仍然诚实，**它们是存活性
+参数**。配置 schema 保持 `1.14`，ADR-042 §13.2 明说两条先例（ADR-036 抬版、ADR-038
+不抬）在这个判据下不可调和，本批跟随更窄的那条。
+
+**一处真回归是被既有测试抓住的，记下来。**`test_the_download_leaves_the_app_in_more_
+than_one_piece` 变红，body 为空。原因不是流坏了：那个用例在 `receive()` 里**立刻**投递
+`http.disconnect`，而 `StreamingResponse` 让 body 与 `receive()` 赛跑——ADR-042 把
+每块读挪上线程后，body 生成器在第一次 `yield` 之前多了一个 `await`，于是断连稳赢。
+**改的是用例不是实现**：一个已断连的客户端拿不到字节，比拿到两块写进死 socket 更对；
+用例要证的是"分多块下发"，不该顺带测调度顺序。现在它等响应真正结束再投递断连，
+并带 10 秒上限，免得把挂起伪装成通过。
+
+其余 16 处红都是同一类：测试用 lambda / 函数替身顶掉三个工厂，签名跟不上新增的
+`runner=` 关键字。属于 fixture 跟进，不是行为回归。
+
+**验证。**新增 `tests/adapters/test_blocking_call_runner.py`，四条用例是**两对**：
+界与「更宽的池确实到得了更高峰值」，超时与「愿意多等的调用仍然拿得到 slot」。
+第二对正是把"池饱和就拒绝"（ADR 否掉的）和"池排队、队列有上限"区分开的东西。
+逐层撤销实测：
+
+```text
+撤掉排队上限                    1 failed / 3 passed
+把界整个拿掉（池放宽+不再守门）  2 failed / 2 passed
+```
+
+两条对照组两次都保持绿。全量 `tests/`（真 PostgreSQL + Qdrant，不含 e2e）
+**2693 passed / 11 skipped**，ruff、pyright 全绿。
+
+**已知未闭合**：`blocking.close()` 目前只在 task worker 的 `AsyncExitStack` 里注册，
+API 与摄取 Worker 没有注册——它们是进程生命周期对象，且 `ThreadPoolExecutor` 在提交
+第一份工作前不建线程，所以没有泄漏，但"谁负责关"这件事在三个进程里不一致。
+
+### 三、调用额度有了一个持久的计数器（ADR-040 第一刀，共三刀）
+
+`multi_agent.max_agent_invocation_attempts_per_task` 从有 settings 那天起就声明着，
+**至今没有第二个读者**。没投影的理由写在 `projections.py` 里：它要跨 retry 与 reclaim
+计数，需要持久的 per-Task 计数器，投影它只会让它离"看起来被执行了"更近一步。
+
+这一刀是那个计数器，**只有它**。迁移 `0025_agent_invocation_count` 给 `task_runs` 加
+`agent_invocation_count`（not null，server_default 0），并把既有的
+`task_runs_lease_counters` check **替换**成含三个计数器的版本（不是并排加第二条——
+三个都是"计数不能倒退"这同一类主张，两条约束说同一件事会漂移）。**不回填**：现存每一行
+都花掉了未知的额度，0 是唯一诚实的起点，它少算历史而不是编造历史。
+
+**不建台账表**，理由写成结论而不是偏好：`_context_for` 每次重放都现铸新的 `agent_run_id`，
+所以 `(task_id, agent_run_id)` 唯一键换不来它名字暗示的幂等，它换来的是可诊断性。
+
+**ADR §2.9 把这一刀写成"纯 schema、零行为变化"，这个前提在本仓库不成立，如实记下来。**
+`_to_run` 用行映射构造 `TaskRun`，而它是 `extra="forbid"` 的严格模型，于是"多一列"直接让
+**201 条既有测试变红**（`Extra inputs are not permitted`）。所以这一刀必须同时给
+`ports/task_registry.py` 的 `TaskRun` 加上这个字段。仍然没有任何代码**读**这个数——
+加字段是为了让表读得出来，不是为了让谁用它。
+
+**验证。**双向迁移对着真 PostgreSQL 实测（注意约束的真名带 `ck_task_runs_` 前缀，
+用裸名查会查出空来、把"没查到"误当成"没问题"）：
+
+```text
+head            列在，check = lease_epoch>=0 AND attempt_count>=0 AND agent_invocation_count>=0
+downgrade -1    列没了，check 回到两项
+upgrade head    列回来，check 回到三项
+```
+
+有牙验证用的是既有的 `test_the_migrated_schema_matches_the_model_metadata`：把列从
+`models.py` 拿掉、迁移不动，**2 failed / 3 passed**，失败信息直接点名
+`Detected removed column 'task_runs.agent_invocation_count'`。另外那 201 条红本身就是
+这一刀的第二重牙——模型不认这列时它们立刻全红。
+
+全量 `tests/`（真 PG + Qdrant，不含 e2e）**2697 passed / 11 skipped**，ruff、pyright 全绿。
+
+### 三之二、这个计数器开始动了，但**不拒绝任何东西**（ADR-040 第二刀）
+
+`TaskRegistry.reserve_agent_invocation(lease) -> int`：一条 fenced UPDATE，
+`agent_invocation_count + 1` 由 PostgreSQL 在**同一把行锁里**算出来——不是先读后写，
+否则两个 Worker 会读到同一个旧值。走的是 `_live_lease_conditions`，不发明第二个 fencing
+token。
+
+**先扣后花**：在调用之前记账，不是之后。每次都恰好在调用中途崩溃的循环永远走不到"事后
+记账"那一步，而那个循环正是这条闸存在的理由。代价写在明处：崩在记账与调用之间会多算一次，
+所以真实上界比配置值**小**一点而不是大一点。
+
+`BudgetedAgentExecutor` 包在 `BoundedParallelExecutor` **外**：记账的那次 Registry 往返
+发生在拿并发槽**之前**，而不是握着槽等数据库。作用在 executor 而不是 node 上，理由和
+`BoundedParallelExecutor` 一样——花钱的是一次 invocation，以后加扇出不用回来改这个文件。
+
+**这一层不拒绝任何东西**，这是刻意的，也是 ADR-040 三刀里中间那刀的全部意义：一条闸如果
+第一次被人看见就是"某个 Task 突然变成终态"，那在值班的人眼里跟 bug 没有区别。所以数字先
+可见，再致命。`TaskView` 上因此多了一个只读的 `agent_invocation_count`。
+
+没有 lease 在 scope 里时**既不记账也不拒绝**：那种组合只出现在没人 claim 过 Task 的地方
+（窄测试、demo handlers），凭空造一个"付款方"比不记账更糟。
+
+**验证。**新增 `tests/persistence/test_agent_invocation_budget.py` 六条，对着真 PostgreSQL。
+三层撤销各自命中不同的用例、互不重叠：
+
+```text
+计数器不再自增        4 failed / 2 passed   （剩下 2 条正是两条"没花钱"的对照组）
+装饰器不再记账        1 failed / 5 passed
+retry 时清零计数器    1 failed / 5 passed
+```
+
+"跨 retry 不归零"那条特意**同时断言 `attempt_count`**：它本来就跨 retry 存活，所以一个
+只会往上加的计数器会看起来正确却在量错东西；用例最后让两个数字**分叉**（3 对 2），
+把"这是两个计数器"这件事放在看得见的地方说。
+
+全量 `tests/`（真 PG + Qdrant，不含 e2e）**2703 passed / 11 skipped**，ruff、pyright 全绿。
+
+**第三刀没做**：读上限、超限抛 `AgentInvocationBudgetExhaustedError`、Worker 写
+`dead_letter`（含一条与 `reclaim_expired` 可区分的 `status_detail`），以及 ADR §2.7 那
+三种拒绝的区分（失去 lease / 额度用尽 / 快照里没有这个键）。**所以
+`max_agent_invocation_attempts_per_task` 至今仍然没有被执行**——它现在有了一个会动的、
+看得见的计数器，仅此而已。
+
+**动手前先查清楚了一件 ADR 没说对的事，记在这里免得下一个人重踩。**ADR-040 §2.8 写
+"dead-letter 基础设施**已全部就位**，不需要新设计"，并逐条列了 `TaskStatus`、check 约束、
+`ALLOWED_TRANSITIONS`、`TaskDeadLettered` 事件、CLI 终态。逐条核过都对，**但漏了一条**：
+
+```python
+class TaskDeadLettered(TaskLifecycleEvent):        # domain/events.py:152
+    reason_code: Literal["lease_expired"] = "lease_expired"
+```
+
+`reason_code` 是**单值** `Literal` 且带默认值，因为它至今只有 `reclaim_expired` 一个写入方。
+额度用尽照原样写进去，会发出一条 `reason_code="lease_expired"` 的事件——那是假话，而且正是
+ADR §2.8 自己要求"两个作者必须可区分"想避免的东西。所以第三刀**必须**同时改这个事件。
+
+好消息是这条路通，而且有仓库自己的先例：同一个文件里
+`TaskRetryScheduled.reason_code` 已经是 `Literal["lease_expired", "retry_requested"]`，
+**双值且不带默认**——不带默认强迫每个写入方自己说清楚。全仓 grep 过 `reason_code`，
+没有任何读取方 switch 在它上面（只有写入方），前端也不读；旧事件继续合法，因为
+`lease_expired` 留在取值集里。所以第三刀的第一步应该是：把 `TaskDeadLettered.reason_code`
+按 `TaskRetryScheduled` 的形状加宽成双值并**去掉默认**（`reclaim_expired` 那处已经显式
+传值，去默认不破坏它）。
+
+另一处连带：`_transition_event(task, to)` 只按目标状态选事件，拿不到原因，且它对
+`dead_letter` 目前直接 `raise AssertionError`。所以 `mark_dead_lettered` 要么不走 `_move`，
+要么给这两个函数加一个原因参数——这是第三刀里唯一需要拿主意的地方。
+
+### 三之三、闸门开始拒绝（ADR-040 第三刀，完成）
+
+上面那两处都按查明的方案改了：`TaskDeadLettered.reason_code` 加宽成
+`Literal["lease_expired", "invocation_budget_exhausted"]` 并**去掉默认值**（`reclaim_expired`
+那处随之显式写出自己是哪一种）；`_move` 与 `_transition_event` 多带一个 `reason_code`，
+且 `dead_letter` 分支在拿不到原因时**直接 assert 失败**而不是挑一个填进去。
+
+**上限从 Task 自己的快照读，不从进程配置读。**`reserve_agent_invocation` 在**同一条**
+fenced UPDATE 里从行自己的 `run_semantics_snapshot` 取
+`multi_agent.max_agent_invocation_attempts_per_task`，`+1` 与比较都在一把行锁下发生——
+两个 Worker 因此不会各自读到同一个"最后一格"。
+
+**三种拒绝必须可区分**（ADR §2.7），零行结果的那条路多读一次行来判读：
+
+| 情形 | 抛什么 | Worker 写成 |
+|---|---|---|
+| 租约已经不是当前的 | `StaleExecutionError` | 什么都不写，交给接手的 Worker |
+| 快照里没有上限 | `AgentInvocationCeilingMissingError` | `failed` |
+| 计数已达上限 | `AgentInvocationBudgetExhaustedError` | `dead_letter` |
+
+**判读顺序是有意的，并且被单独测了**：既丢了租约又用完了额度时，报的必须是租约——
+反过来就会给一个已经属于别人的 Task 写终态，那正是围栏要挡的事。
+
+缺上限判成 `failed` 而不是 `dead_letter`：那是**这个部署的缺陷**，不是一个毒任务；
+打成 `dead_letter` 会把一次配置事故变成一批不可复活的 Task。
+
+**验证。**用例从 6 条加到 11 条。四层撤销，每层命中不同的子集：
+
+```text
+UPDATE 不再比上限              3 failed / 8 passed
+先判额度、后判租约             2 failed / 9 passed
+两个写入方发同一个 reason_code  1 failed / 10 passed
+缺上限被当成额度用尽           1 failed / 10 passed
+```
+
+其中第三层第一次没撤成功——锚点字符串在两处都匹配，脚本 assert 失败后跳过了修改，
+那次的 "11 passed" 是未撤销状态下的结果、不能算数。换唯一锚点重做才拿到上表那一行。
+**记在这里是因为它正是"绿灯可能只是探针指错了地方"的现场版本。**
+
+对照组同样是成对的：`test_the_ceiling_comes_from_the_task_not_from_this_process` 在同一个
+进程里跑两个上限不同的 Task——若上限来自配置，两个会在同一个数字上停下，那条会红而
+"用完了就拒绝"那条仍然绿。
+
+全量 `tests/`（真 PG + Qdrant，不含 e2e）**2708 passed / 11 skipped**，ruff、pyright 全绿。
+
+**至此 `max_agent_invocation_attempts_per_task` 第一次被真正执行**——从"声明了很久、
+无人读取"，到有持久计数器、可见、并且会拒绝。
+
+### 六、第 7 条四件新建能力的分诊（只出 ADR，不写实现）
+
+四件（RAGAS runner / 通用 Tool 审批 / Word 读+编辑 / 生产身份+S3）逐件勘察后分诊。
+结论是**只有两件现在该落笔**，而且其中一件写的是"不做"：
+
+| 排序 | 能力 | 判定 | 一句话理由 |
+|---|---|---|---|
+| 1 | Word 读+编辑 | 写 ADR | 撞**零**条冻结边界、零配置叶子、零迁移，`python-docx` 已是主依赖 |
+| 2 | 生产身份 + S3 | 写 ADR（**明确不做**） | 撞的冻结边界最多；且没有 remote 部署就没有消费者 |
+| 3 | RAGAS runner | 需用户拍板 | 规格最清楚，但"judge 用谁"只能由用户定 |
+| 4 | 通用 Tool 审批 | 推迟 | 要正面回答"是不是在反转 ADR-038"，且第一件缺的是**人做的分类清单**而非代码 |
+
+[ADR-043](./adr/0043-docx-reading-is-a-native-tool.md)：读取器是 native 工具，不是第二个
+MCP server。这一条**不是**用户的取舍——`adapters/tools/workspace.py:11-15` 已经为同一个
+问题判过一次，而且 MCP 那条路被物理条件否掉（参数只能来自模型输出，
+`MAX_MCP_REQUEST_BYTES=262144`）。写下来是因为下一个只读代码的人会先想到抄 ADR-027 §3.4
+的渲染器模板，那是事后很难改的错。
+
+[ADR-044](./adr/0044-no-remote-no-production-identity.md)：先有远端部署，才谈得上生产身份与
+远程对象存储。形式沿用 ADR-041 刚立的先例——**把"明确不做"写成一份 ADR**，而不是留白。
+
+**分诊查出一处真缺口，已独立核实：**`grep -rn "s3" tests/` **零命中**。三处
+`backend != "local"` 的拒绝装配（`dependencies.py:304`、`task_worker/composition.py:243`、
+`ingestion_worker/composition.py:110`）**一条测试都没有**，而 README、
+architecture-baseline 与 status.md 三处都把这个行为当成"这是 fail closed，不是能力"
+在引用。按本仓库纪律，**一个被文档引用、却没有覆盖触发条件的回归测试的行为，不算完成**。
+补三条拒绝 + 一条对照（`backend=local` 装得起来）是半天的活，且它让"我们明确不做"这句话
+变成有牙的，而不是三行没人验证过的代码。
+
+**十个问题留给用户拍板**，逐条写进了两份 ADR 的未决一节，agent 没有替他给答案。
+最要紧的一条是本轮的性质本身：你要的是"截止前多出一件能演示的新能力"，还是"把该关的门
+关严、把形状定死"？两份 ADR 偏后者。
+
+### 七、Word 进摄取路径（A1，用户选了"要一件能演示的能力"）
+
+用户在上面那个问题上选了 (a)。所以做的是 ADR-043 §14 明确留给用户的**入口**问题里的 A1：
+上传的 Word 能被切块、索引、检索、被答案引用。
+
+**先搬家，否则会违反 ADR-043 §5。**唯一那份 docx 解析实现原本在 `apps/api/docx_preview.py`
+——摄取 Worker 够不到它，直接在 parser 里写第二个 `Document(BytesIO(...))` 等于新开一条
+解析路径、也就新开一个绕过三道 zip 炸弹闸的洞。所以整份搬到
+`adapters/documents/docx.py`（`adapters` 是 outer boundary，Worker 与 API 都到得了），
+`tests/api/test_docx_preview.py` 跟着搬到 `tests/adapters/test_docx.py`，都用 `git mv`。
+
+**上限变成调用方的参数，而不是模块的常量。**`MAX_PREVIEW_CHARS = 40_000` 是**面板**的数
+（它自己的注释就写着 "this is one panel beside a run"）。摄取照抄会**静默索引半份文档**，
+而且每一层都报成功。所以 `extract_docx_preview(content, *, max_chars=MAX_PREVIEW_CHARS)`：
+预览路径逐字节不变，摄取传 `None`。**默认值刻意保持预览那个数**——要整篇的调用方必须自己
+说出来。
+
+**没有 page_starts，这是格式的性质不是遗漏。**docx 不存分页：页在哪断由排版的渲染器连同
+字体和纸张一起决定，两个阅读器对同一份文件合法地不一致。所以引用退回字符偏移，
+`ParsedDocument` 用"空 `page_starts`"表达这件事（它的注释已经写明空数组是正面声明）。
+
+**一处我先写错、被实测纠正的事，留痕。**我原本断言"法语 Word 的 `Titre1`、德语的
+`Überschrift 2` 不会被识别成标题，所以本地化 Word 会丢结构"，还写了测试断言它——**测试
+还通过了**。实测推翻了这个说法：OOXML 里 styleId 是本地化的，但 `w:name` 是语言中立的
+`heading 1`，python-docx 解析的是后者，所以两种都被正确识别成 `#` / `##`。之前"看起来
+丢了"，只是因为我那个最小包**没有 `word/styles.xml`**，什么样式都解析不出来。
+
+这正是本仓库反复防的那件事：**一条会通过的测试，把一个不存在的限制写进文档。**现在
+测试包带上了 styles part（真实 Word 文件总是有的），并断言实测行为：本地化标题保留，
+真正的自定义模板样式（`Report Title`）保持纯文本——后者是前者的对照组。
+
+**验证。**新增 `tests/ingestion/test_docx_parsing.py` 七条，**全部 fixture 是手工拼的
+OOXML 字节**，不经过本项目的 `render_document`——这正是 ADR-043 §8 要的新证据，因为现有
+docx 证据是自产自读的闭环（那份测试的 docstring 自己写着）。三层撤销：
+
+```text
+不再派发到 docx 读取器     6 failed / 1 passed
+摄取沿用预览的 40k 上限     1 failed / 6 passed
+空文档不再被拒             1 failed / 6 passed
+```
+
+前端三处（`SERVER_READABLE_MEDIA_TYPES`、`MEDIA_TYPE_BY_EXTENSION`、两个 `accept` 与
+`ACCEPTED_EXTENSIONS`）加 `.docx`，并补了三条 Vitest：浏览器给出的类型要保留、浏览器没给
+时按扩展名补、而 `.doc` **仍然不猜**——那是这个 build 读不了的旧二进制格式，猜一个可读类型
+只会让文档永远停在"正在建立索引"。
+
+`tests/ingestion/test_docx_parsing.py` 进了 `per-file-ignores` 的 `E501`，理由写在
+`pyproject.toml` 里：那些 OOXML 命名空间是必须逐字精确的单行 URI。
+
+全量 `tests/`（真 PG + Qdrant，不含 e2e）**2715 passed / 11 skipped**；前端 `tsc -b` 干净、
+Vitest **158 passed**；ruff、pyright 全绿。
+
+**没做的**：`.doc`（旧二进制格式）、编辑、以及让 agent 在 Task 里**主动读**一份 Word——
+那是 ADR-043 §13 的 A2/A3，仍然未决。本刀之后，Word 只是**又一种能被上传和检索的资料**。
+
+### 四、52 题 gold set 重跑，ADR-017 第 2 步的证据到齐
+
+见 `evals/rag/reports/`。四份报告出自同一个进程、同一个 collection、同一份 gold set
+（digest `55ec24c7d2b86062`）、52 题。此前 llama_index 那两份锚定的是更早的一轮，
+与 reference 不是同一次运行，**因此根本不构成对照**。
+
+两个臂的四个排序指标**逐位相同**。不止聚合分数：`--dump-outcomes` 的逐题结果里，两条
+路径唯一的差别是 `index_identity` 这个标签本身，52 题的检索结果**逐字节相同**——这说明
+top_k 没有被应用两次、没有在进程内二次融合、node 往返没丢 page 或 revision。
+
+顺带确认了可复现性：reference 两份与 8-10 那轮相比除延迟外逐位未变，ADR-033 之前那种
+"重建索引就换一组分数"的抖动没有再出现。
+
+**延迟变化很大，写在明处**：hybrid 的 `retrieval_latency_ms` 从 171.94 跳到 38608.08。
+两条路径同向变化、排序指标一个没动；本轮是在物理内存只剩 20% 空闲、swap 几乎耗尽的机器上
+跑的，而 38.6 s/题落在这台机器历史上 hybrid 臂 7.2–27.9 s/题的量级里——反倒是 8-10 那次的
+171.94 ms 是异常值。**我没有查明它当时为什么那么快**，所以只说两轮延迟不可比，不声称
+哪一个是对的。同批的 ADR-042 已核对过不在这条路径上（`run_rag_eval.py` 直接 `.load()`
+不传 runner，`offload` 落回 `asyncio.to_thread`，与改动前逐字节相同）。
+
+**没有翻 `rag.llama_index.enabled`。**这一轮补上的是"证据还没有"里的那个证据，不是那个
+开关该翻的决定——脚本自己的 docstring 就写着等价性是 weak claim by construction。翻开关
+会改动 Task 语义指纹与一条冻结边界，该由一份单独的 ADR 决定。
+
+### 五、evidence manifest 重新生成（gate `batch3-2026-08-11`）
+
+上一份（`gap-closure-2026-08-11`）有三处问题，这次逐条改掉：
+
+| | 上一份 | 这一份 |
+|---|---|---|
+| 锚定的 commit | `bf31815`（早已过期） | `52c4bd1`（当前 HEAD） |
+| 工作树 | `git_dirty: true`（`--allow-dirty`） | `git_dirty: false` |
+| `evaluation_report` | 在 `missing` 里 | 4 份实际报告，带 SHA-256 |
+
+`verify` 零问题。`missing` 现在只剩 `otel_trace_sample`、`demo` 与
+`task_run_semantics_revision`——前者取不到的原因没变：compose 里从来没有
+`otel-collector` 这个服务。
+
+**它仍然是本机产物、仍在 `.gitignore` 里**（`artifacts/evidence/`）。所以这条记录说的是
+"本机重新生成过、内容如上"，仓库里不会出现这份文件；要复核得在本机重跑。生成它需要
+`AW_DATABASE__*` 三个 DSN 与两个 model id 环境变量，否则配置加载阶段就失败。
+
+七条 `known_limitation` 逐条写进了 manifest，包括本批**没做完**的部分：ADR-040 三刀只
+落了第一刀、ADR-041 明确不做 watchdog、ADR-042 收窄了"唯一入口"那句话、以及那个不可比的
+延迟数字。
+
 ## 2026-08-11 缺口清单第二批：界面开始承认自己不知道什么，文档不再说假话
 
 第一批（`5363d7a`）清的是"配置说了假话、唤醒没有消费端、毒行挡死回放"。这一批是同一

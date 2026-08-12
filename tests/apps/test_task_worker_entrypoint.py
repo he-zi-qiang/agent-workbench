@@ -138,10 +138,12 @@ def _patch_real_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_workbench.apps.task_worker.composition as composition
     import agent_workbench.bootstrap.model_factory as model_factory
 
-    def dense(config: EmbeddingConfig) -> DeterministicEmbedder:
+    def dense(config: EmbeddingConfig, **_: object) -> DeterministicEmbedder:
         return DeterministicEmbedder(dimension=config.vector_size)
 
-    def no_sparse(_: EmbeddingConfig) -> composition.SparseEncodingUnavailable:
+    def no_sparse(
+        _: EmbeddingConfig, **__: object
+    ) -> composition.SparseEncodingUnavailable:
         return composition.SparseEncodingUnavailable("dense-only test")
 
     def fake_model(_: ModelConfig, *, client: httpx.AsyncClient) -> ModelPort:
@@ -227,7 +229,7 @@ def test_a_worker_without_an_embedding_runtime_serves_v2_only(
     import agent_workbench.apps.task_worker.composition as composition
     import agent_workbench.bootstrap.model_factory as model_factory
 
-    def unavailable(_: EmbeddingConfig) -> EmbeddingUnavailable:
+    def unavailable(_: EmbeddingConfig, **__: object) -> EmbeddingUnavailable:
         return EmbeddingUnavailable("test embedding runtime is unavailable")
 
     def fake_model(_: ModelConfig, *, client: httpx.AsyncClient) -> ModelPort:
@@ -277,10 +279,12 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
     import agent_workbench.apps.task_worker.composition as composition
     import agent_workbench.bootstrap.model_factory as model_factory
 
-    def dense(config: EmbeddingConfig) -> DeterministicEmbedder:
+    def dense(config: EmbeddingConfig, **_: object) -> DeterministicEmbedder:
         return DeterministicEmbedder(dimension=config.vector_size)
 
-    def no_sparse(_: EmbeddingConfig) -> composition.SparseEncodingUnavailable:
+    def no_sparse(
+        _: EmbeddingConfig, **__: object
+    ) -> composition.SparseEncodingUnavailable:
         return composition.SparseEncodingUnavailable("dense-only test")
 
     def fake_model(_: ModelConfig, *, client: httpx.AsyncClient) -> ModelPort:

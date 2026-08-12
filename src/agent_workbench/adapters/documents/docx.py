@@ -195,8 +195,20 @@ def _body_children(document: Any) -> Iterator[Any]:
     return cast("Iterator[Any]", document.element.body.iterchildren())
 
 
-def extract_docx_preview(content: bytes) -> DocxPreview:
+def extract_docx_preview(
+    content: bytes, *, max_chars: int | None = MAX_PREVIEW_CHARS
+) -> DocxPreview:
     """The document's text in reading order, as Markdown.
+
+    ``max_chars`` is the caller's ceiling rather than this module's, because
+    the two callers want different answers and only one of them wants a
+    preview. The panel beside a run stops at ``MAX_PREVIEW_CHARS`` -- a reader
+    who wants a 200-page report wants the file. Ingestion passes ``None``: a
+    document is about to be chunked and indexed, and stopping at forty thousand
+    characters would index a fraction of it while every layer reported success.
+    That is the failure this parameter exists to make impossible to reach by
+    accident, which is also why the default is the preview number: the caller
+    that needs the whole document has to say so.
 
     Paragraphs and tables are walked through the body's own XML children rather
     than through ``document.paragraphs`` and ``document.tables`` separately.
@@ -229,7 +241,7 @@ def extract_docx_preview(content: bytes) -> DocxPreview:
             continue
         if not piece:
             continue
-        if total + len(piece) > MAX_PREVIEW_CHARS:
+        if max_chars is not None and total + len(piece) > max_chars:
             truncated = True
             break
         pieces.append(piece)
