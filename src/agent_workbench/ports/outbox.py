@@ -85,13 +85,18 @@ class OutboxPort(Protocol):
     async def heartbeat(
         self,
         *,
-        event_id: str,
         claim_token: str,
         lease_seconds: float,
     ) -> None:
-        """Extend one current claim using the database clock.
+        """Extend every unacknowledged event of this claim, on the database clock.
 
-        Raises ``StaleExecutionError`` when the event has been reclaimed.
+        The claim is the unit, not the event: ``claim`` leases a batch under
+        one token and one expiry, so renewing a single row would leave the
+        rest of that batch expiring while its holder is still working.
+
+        Raises ``StaleExecutionError`` when nothing was left to renew -- the
+        lease ran out, the work was reclaimed, or every event under this token
+        is already acknowledged. All three mean the caller must stop writing.
         """
         ...
 

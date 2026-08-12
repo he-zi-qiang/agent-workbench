@@ -17,10 +17,16 @@ mark the *other* worker's in-flight work as done. Every claim therefore mints a
 token, and acknowledging requires the current one. A stale token matches no row
 and is refused.
 
-What is still missing is a heartbeat: a worker doing honest slow work cannot
-extend its own lease and will lose it. That belongs with the ingestion worker
-itself, and until one exists the lease should simply be set longer than the
-slowest unit of work.
+Honest slow work extends its own lease through ``heartbeat``, which renews the
+claim rather than an event in it. That distinction is the whole reason the
+method takes a token and no event id: a claim leases a batch in one statement,
+and a batch renewed one row at a time is a batch whose untouched tail expires
+on schedule while its holder is still working through the head.
+
+``DEFAULT_LEASE_SECONDS`` therefore sizes the gap a worker may go *silent*
+for, not the time a batch may take. Making it longer no longer buys safety for
+slow work -- the heartbeat does that -- and costs reclaim latency after a
+worker dies, which is the only thing it still governs.
 """
 
 from __future__ import annotations
@@ -38,8 +44,9 @@ from agent_workbench.ports.outbox import OutboxEvent, OutboxEventKind
 
 DEFAULT_CLAIM_LIMIT = 10
 
-# Long enough that ordinary work finishes inside it, since nothing can extend
-# a lease yet. Shorter is not safer here: it reclaims live work.
+# How long a worker may go silent before its claim is fair game -- not how
+# long its work may take, which the heartbeat covers. Shorter is not safer:
+# it reclaims work from holders that are merely quiet between renewals.
 DEFAULT_LEASE_SECONDS = 60.0
 
 CLAIM_TOKEN_PREFIX = "clm"
@@ -146,23 +153,63 @@ class PostgresOutbox:
     async def heartbeat(
         self,
         *,
-        event_id: str,
         claim_token: str,
         lease_seconds: float,
     ) -> None:
+        """Extend the whole claim this token minted, not one event of it.
+
+        Keyed on the token alone, and that is the fix rather than a
+        convenience. A claim leases up to ``limit`` events *in one statement*,
+        giving every row the same expiry; the worker then applies them one at
+        a time. A heartbeat that named a single event renewed only the row
+        being worked on, so the rest of the batch went on expiring against a
+        lease sized for one unit of work -- ``IngestionWorker`` claims 32 with
+        a 90-second lease, and a batch that takes longer than that has its
+        tail quietly become claimable while this worker still intends to
+        apply it. Two workers then hold the same event, which is the one
+        outcome the fence exists to prevent.
+
+        Renewing by token restores the shape the module docstring describes:
+        the claim is the unit of ownership, so it is the unit of renewal.
+        Every row moves together -- granted together, renewed together, and,
+        if this worker dies, expiring together.
+
+        Raises ``StaleExecutionError`` only when *nothing* is left to renew,
+        which is the honest reading of zero matched rows: the lease is gone,
+        or the work was reclaimed, or every event in it is already acked. All
+        three mean this worker no longer holds anything, and it is that raise
+        the ingestion worker treats as "stop writing".
+        """
+
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
         lease = func.now() + func.make_interval(0, 0, 0, 0, 0, 0, lease_seconds)
         async with self._engine.begin() as connection:
             result = await connection.execute(
                 update(outbox_events)
-                .where(outbox_events.c.event_id == event_id)
                 .where(outbox_events.c.claim_token == claim_token)
                 .where(outbox_events.c.acked_at.is_(None))
+                # The strict inverse of what ``claim`` treats as claimable,
+                # and the token fence cannot stand in for it. A token only
+                # rotates when somebody else claims, so in the window between
+                # a lease running out and another worker getting there, the
+                # stalled holder's token still matches: without this predicate
+                # it extends itself back out of the reclaim queue, and expiry
+                # stops meaning anything for exactly the worker it exists for
+                # -- one sick enough to stall past its lease but well enough
+                # to keep heartbeating. It is also the answer the ingestion
+                # worker reads as "the fence still holds" while it writes to
+                # the index, and only a raise here cancels that write, so
+                # saying yes on a dead lease is what lets two workers apply
+                # the same document at once. ``>=`` rather than ``>`` because
+                # ``claim`` reclaims on ``lease_until < now()``: the two must
+                # not disagree about the instant a lease ends, or a row could
+                # be neither claimable by anyone nor renewable by its holder.
+                .where(outbox_events.c.lease_until >= func.now())
                 .values(lease_until=lease)
             )
         if result.rowcount == 0:
-            raise StaleExecutionError("the claim on this event is no longer current")
+            raise StaleExecutionError("this claim is no longer current")
 
     async def release(self, *, event_id: str, claim_token: str) -> None:
         async with self._engine.begin() as connection:
