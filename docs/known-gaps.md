@@ -1,7 +1,8 @@
 # 已知缺口
 
-截至 **2026-08-12**，`main@e3281b4`（PR #113）；配置 schema `1.14`，Alembic
-迁移 25 个（head `0025_agent_invocation_count`）。
+截至 **2026-08-12**，配置 schema `1.14`，Alembic 迁移 25 个
+（head `0025_agent_invocation_count`）。本文档各条的代码位置核对于 `main@921dda5`。
+门禁数字不在本文档维护，见 [十分钟版本的门禁与规模一节](./HIGHLIGHTS.md#2-门禁与规模)。
 
 ## 这份文档解决什么问题
 
@@ -127,38 +128,52 @@ runner 和另一套证据。混进来会让检索回归和生成回归长得一�
 
 | 编号 | 缺口 | 分类 |
 |---|---|:---:|
-| B-01 | LISTEN/NOTIFY 只有发送端 | 未接线 |
-| B-02 | Event-loop lag watchdog | 未实现 |
+| B-01 | SSE 回放仍在轮询（Task Worker 那半已接上） | 未接线 |
+| B-02 | Watchdog 只有 warn 一半，且未装进 Task Worker | 未实现 |
 | B-03 | 七点故障矩阵只覆盖四点 | 未实现 |
-| B-04 | 无真杀 OS 进程的恢复测试 | 未实现 |
-| B-05 | 事件 schema upcaster 与坏行隔离 | 未实现 |
+| B-05 | 生产 upcaster 注册表为空，Chat 侧不披露隔离 | 未接线 |
 
-### B-01 LISTEN/NOTIFY 只有发送端，两条消费路径都在轮询
+> 编号一经退休不再复用。B-04（无真杀 OS 进程的恢复测试）已于 2026-08-11 关闭，
+> 按本文档维护规则从正文删除，落地记录在 [status.md](./status.md)：
+> [`tests/e2e/test_worker_process_crash_recovery.py`](../tests/e2e/test_worker_process_crash_recovery.py)
+> 用 `subprocess` 起独立 Worker、等它确实进入执行中再 `SIGKILL`（不是 SIGTERM——
+> 优雅关闭证明不了任何事），由第二个进程接手，并断言被杀进程的返回码确实是 `-9`；
+> 带不杀进程的对照组。
 
-**证据**：发送端在
-[notifications.py](../src/agent_workbench/adapters/persistence/notifications.py)
-（`notify_task_ready`），调用点如
-[approvals.py:313](../src/agent_workbench/adapters/persistence/approvals.py:313)。
-配置侧一整套已就位：`database.listen_dsn`、`listen_pool_mode`、
-`listener_connections_per_process`、`listen_connection_scope`、
-`listener_healthcheck_seconds`、`coordination.wakeup_backend =
-"postgres_listen_notify"`、`notify_payload_mode = "cursor_only"`。
-消费端不存在——[events.py:122](../src/agent_workbench/apps/api/routes/events.py:122)
-的 docstring 自陈："a LISTEN/NOTIFY wakeup backend, which nothing consumes yet:
-until it does, this is the honest behaviour rather than a claim about it."
+### B-01 SSE 回放仍在轮询
 
-**当前行为**：Task Worker 与 SSE 都靠轮询，延迟由轮询间隔决定。**功能正确，延迟
-不必要地高。** 通知只是唤醒，载荷是 cursor 而非事实，所以接上消费端不改变正确性
-论证——听漏了仍然由 cursor catch-up 兜住。
+**这一条已经关闭了一半。** Task Worker 的消费端**已经落地**：
+[notifications.py:86](../src/agent_workbench/adapters/persistence/notifications.py:86)
+的 `TaskReadyListener` 持有一条专用会话执行 `LISTEN task_ready`，空队列时的等待
+可以被一次唤醒提前打断，**轮询周期保留为下限**。正确性不依赖通知到达——有一条
+对照组测试把通知全部丢掉，任务照样被领取；断线退回纯轮询而不是卡住。
 
-**做完的判据**：专用 LISTEN 连接 + reconnect/catch-up（实施计划 WP09-05），并有
-一条"监听端完全丢通知，cursor catch-up 仍完整"的测试对着真 PostgreSQL 跑。
+实现过程中引入过一个真缺陷并已修掉，记在这里因为它值得被记住：asyncpg 对优雅
+`close()` 也会触发 termination 回调、而且晚一个 tick，于是"断线→重连"会拆掉刚建好
+的健康连接，每 5 秒一次、永不停止，且健康检查从此再不运行。修法是在回调里比对
+会话身份。回归测试钉住了它：移掉那两行，两秒内会冒出 49 条 session。
 
-### B-02 Event-loop lag watchdog 未实现
+**仍然缺的是 SSE 那一半**：[events.py:204](../src/agent_workbench/apps/api/routes/events.py:204)
+的 docstring 仍自陈 "a LISTEN/NOTIFY wakeup backend, which nothing consumes yet"，
+该路径继续靠轮询，延迟由轮询间隔决定。**功能正确，延迟不必要地高。**
 
-**证据**：全仓无 `watchdog` / `loop_lag` 符号。
+**做完的判据**：SSE 回放路径也由 LISTEN 唤醒，且有一条"监听端完全丢通知，cursor
+catch-up 仍完整"的测试对着真 PostgreSQL 跑。
 
-**做完的判据**：采样事件循环滞后并作为指标导出，超阈值时记录而非杀进程。
+### B-02 Watchdog 只做了 warn 一半，且没装进 Task Worker
+
+**这一条已经关闭了一半。** `EventLoopLagWatchdog` 已实现
+（[event_loop_lag.py](../src/agent_workbench/adapters/telemetry/event_loop_lag.py)，
+测试 [test_event_loop_lag.py](../tests/adapters/test_event_loop_lag.py)），并已装进
+API 进程（[apps/api/main.py:160](../src/agent_workbench/apps/api/main.py:160)）：
+周期性量测事件循环滞后，超阈值上报指标并打一条**带实测数值**的日志。
+
+**仍然缺的是两件事**：（1）实施计划要求的 **abort 半**——标记 unhealthy、停止 claim、
+取消进行中的 run——未实现，超阈值只会 warn；（2）**没有装到 Task Worker**，
+而 Task Worker 恰是长耗时同步调用最可能堵住事件循环的地方。
+
+**做完的判据**：Task Worker 进程内同样启动 watchdog；超阈值持续到约定时长后进入
+unhealthy 并停止 claim，且有一条"滞后消失后恢复 claim"的对照组测试。
 
 ### B-03 基线要求七个故障窗口，只覆盖四个
 
@@ -179,28 +194,31 @@ until it does, this is the honest behaviour rather than a claim about it."
 
 **做完的判据**：三个新窗口进 `FailpointName`、测试 profile 与负向配置测试同步扩展。
 
-### B-04 没有真正杀死 OS Worker 进程再恢复的测试
+### B-05 生产 upcaster 注册表为空，且 Chat 侧不披露被隔离的位点
 
-**证据**：现有恢复证据是在**同一个 pytest 进程内**重建 engine / worker。
-`tests/` 下没有 `Popen` + `SIGKILL` 形态的 Worker 恢复用例。
+**机制已经落地。**
+[event_log.py](../src/agent_workbench/adapters/persistence/event_log.py) 的
+`EventUpcasterRegistry` 按 `(event_type, from_version)` 注册**单步**升级，链自己
+一版一版往上走，并在每轮重读 `event_type`（所以事件改过名也接得上）；缺一步就停在
+洞前、保持原来那条拒绝路径。`read_isolating()` 让一条解不出来的行不再挡死整条流的
+回放，**且跳过是可见的**——SSE 发一个独立的 `stream.quarantined` 帧，Task timeline
+返回被跳过的序号。两处调用方都已切过去。
 
-**为什么这是缺口**：同进程重建能验证状态机，验不了进程级资产——连接池、
-advisory lock 的会话归属、lease 在连接骤断后的实际释放时机。这三样恰好是
-"Worker 被 kill -9"时最可能出问题的地方。
+**仍然缺的是两件事**：
 
-**做完的判据**：拉起真 Worker 子进程 → 在指定 failpoint 处 `SIGKILL` →
-另一个 Worker reclaim 并跑完 → 断言无重复副作用。
+1. **生产注册表还是空的**——[event_log.py:166](../src/agent_workbench/adapters/persistence/event_log.py:166)
+   的 `DEFAULT_EVENT_UPCASTERS = EventUpcasterRegistry()` 不含任何条目。机制有了，
+   还没有真实的历史版本要升。这本身不是缺陷，但它意味着**升级链从未在真实数据上
+   走过一次**。
+2. **界面上 Chat 那一半仍然沉默**——Work 的任务时间线已经把每个没能交付的位点锚定
+   在它确实收到的前后两条事件之间（"#2：在「工具调用已开始：external_search」与
+   「任务成功完成」之间"），措辞是"这些事件仍在日志里，只是这次没能解码"而不是"丢了"。
+   Chat 侧的 `stream.quarantined` 帧**只被用来推游标，界面上不显示**
+   （见 `web/src/features/chat/sessionStream.test.ts`）。
 
-### B-05 事件 schema upcaster 与坏行隔离未实现
-
-**证据**：注意区分两件事。**Chat 轮次**层面的坏行隔离**已经有了**——
-[chat_recovery.py:77](../src/agent_workbench/application/chat_recovery.py:77)
-"a bad row cannot poison later candidates"，测试见
-`tests/persistence/test_chat_expiration.py:325`。**事件日志**层面的 upcaster 与
-隔离策略没有。
-
-**做完的判据**：旧版本事件读出时按 schema 版本升级；无法解析的行进隔离区并计数，
-不阻塞后续读取。
+**做完的判据**：（1）第一条真实 upcaster 进 `DEFAULT_EVENT_UPCASTERS`，并有一条
+对着真实旧版本行的升级测试；（2）Chat 界面像 Work 时间线那样披露被隔离的位点，
+带"没能解码"而非"丢了"的措辞。
 
 ---
 
@@ -354,15 +372,31 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 
 ### E-05 文档中的数字过时 —— 口径不实
 
-**证据**：本文档合入时已修掉一半——[docs/README.md](./README.md)、
-[配置管理契约](./configuration.md) 与本文件的锚点都已推到 `main@e3281b4`
-（PR #113）、schema `1.14`、Alembic head `0025_agent_invocation_count`，
-测试计数改用 CI 实测值（PR #116 与 PR #113 两次独立运行逐位相同：确定性
-`2050 / 719`、真实服务 `1012 / 2`）。
+**这一条在 2026-08-12 的文档重写里又前进了一步，但没有消失。** 做了三件事：
 
-**仍然落后的**：[架构基线](./architecture-baseline.md) 第 17 节。该节已经不再
-钉具体 commit（它自己写明了理由：hash 一往前走就成了考古），但其中的门禁表
-仍是更早一次本机运行的数字。
+1. **门禁数字收敛成单一来源**。它们此前在 README、`docs/README.md`、
+   [HIGHLIGHTS](./HIGHLIGHTS.md) 与本文档各存一份，改一处必漏三处。现在只有
+   [十分钟版本的门禁与规模一节](./HIGHLIGHTS.md#2-门禁与规模)维护数值，其余文档一律链接过去。
+   四份复述降到一份，是把复发面积缩小，不是把机制补上。
+2. **数字重新实测**。两组后端计数在 `main@921dda5` 上重跑确认：真实
+   PostgreSQL + Qdrant `2758 / 11`，不起外部服务 `2065 / 704`，跳过构成逐条核对。
+3. **锚点的措辞改了**。hash 现在明说自己记的是"测量时那棵树"而不是"当前基线"——
+   同一个 hash，不同的承诺；后者一往前走就变成假话，前者不会。
+
+**上一版点名的落后处已经处理**：[架构基线](./architecture-baseline.md) 第 17 节
+那张门禁表已删除，改为链接 README。删而不是刷新，是因为刷新只推迟下一次过时。
+**删的时候抓到一个此前没人发现的错**：该表写"无外部服务那一行多出的 676 项跳过"，
+实测是 693（634 项 DSN 未设 + 59 项 Qdrant URL 未设）。它在那里错了不知道多久，
+而同一份数据在 README 里一直是对的——这正是"同一组数字存在两处，一定有一处先烂掉，
+而两处看起来一样可信"的实例。
+
+**同一次重写还暴露了这一类的反向形态**：本文档 B 组的四条曾**声称仓库里没有
+某项能力，而它已经落地**——B-02 写着"全仓无 `watchdog` / `loop_lag` 符号"，
+而 `EventLoopLagWatchdog` 已装进 API 进程；B-04、B-05 同类；B-01 说"两条消费路径
+都在轮询"，而 Task Worker 那条已接上。它们已按核对结果改写或退休。
+**这个方向同样是口径不实**：正向形态把缺口伪装成能力，反向形态把能力伪装成缺口，
+两者都让读者无法用文档判断代码。而反向形态更难被发现——没有人会去质疑一份
+自称"还没做"的清单。
 
 **为什么这一条不会"修完就消失"**：数字过时是持续现象，不是一次性缺陷。真正
 消除它的是 E-04 的 evidence manifest——把数字从散文变成可校验的引用，让"过时"
@@ -378,15 +412,22 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 按"单位工作量能消除多少不可核查性"排序，而不是按功能大小。
 
 1. **E-04 生成首个 evidence manifest**。工具已在，成本最低，收益是把此后所有
-   数字从散文变成可校验的引用。
-2. **E-05 刷新过时数字**。机械工作，但它决定读者是否信任其余文档。
-3. **A-03 重跑等价评测**。它同时是 A-01 能否打开的前置条件。约 30–70 分钟机器时间。
-4. **B-01 LISTEN 消费端**。边界清楚，可对真 PostgreSQL 验证，且不改变正确性论证。
-5. **C-01 调用账本**。它是 C-02 三项的共同前置。
-6. **B-04 真杀进程的恢复测试**。它验的是现有测试结构性验不到的那部分。
+   数字从散文变成可校验的引用。**它同时是 E-05 唯一的根治手段**——数字收敛成
+   单一来源只是缩小复发面积，让"过时"在 CI 里失败才是修复。
+2. **A-03 重跑等价评测**。它同时是 A-01 能否打开的前置条件。约 30–70 分钟机器时间。
+3. **B-05 第一条真实 upcaster**。升级链至今没在真实数据上走过一次，机制是否真的
+   接得上仍未被证明。
+4. **C-01 调用账本**。它是 C-02 三项的共同前置。
+5. **B-02 watchdog 的 abort 半**。warn 半已在 API 进程里跑着，剩下的是判定与停止
+   claim；同时把它装进 Task Worker。
+6. **B-01 SSE 那半消费端**。边界清楚，可对真 PostgreSQL 验证，且不改变正确性论证。
 
 其余条目（D 组大部分、C-03、C-04、B-03）需要新的 Adapter 或新的产品决策，
 不适合在证据链补齐之前动。
+
+**一条排序上的更正**：上一版把"E-05 刷新过时数字"排在第 2 位，当作一件可以做完
+的机械工作。它不是——本文档自己写着数字过时是持续现象。把它当任务排期，等于每次
+基线变动都重排一次同一件事；真正该排期的是 E-04。
 
 ---
 

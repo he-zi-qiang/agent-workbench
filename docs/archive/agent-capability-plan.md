@@ -4,11 +4,11 @@
 
 | 阶段 | 内容 | ADR | 为什么在这个位置 |
 |---|---|---|---|
-| **1** | 任务工作区 | [ADR-028](./adr/0028-task-workspace.md) | 后面每一阶段的输入输出都落在它上面 |
-| **2** | 一次性沙箱 | [ADR-029](./adr/0029-ephemeral-sandbox.md) | 输入输出需要工作区 |
-| **3** | 只读取用网页与下载 | [ADR-027](./adr/0027-read-outward-write-inward.md) | 下载的文件需要地方待 |
-| **4** | 预算、`edit`、`grep` | [ADR-030](./adr/0030-working-nodes-are-governed-by-cost.md) | 要先有工具，才知道它们不够用在哪 |
-| **5** | 第二张图 `v2_general` | [ADR-031](./adr/0031-a-second-graph.md) | 它的 `work` 节点要上面四样都在才有意义 |
+| **1** | 任务工作区 | [ADR-028](../adr/0028-task-workspace.md) | 后面每一阶段的输入输出都落在它上面 |
+| **2** | 一次性沙箱 | [ADR-029](../adr/0029-ephemeral-sandbox.md) | 输入输出需要工作区 |
+| **3** | 只读取用网页与下载 | [ADR-027](../adr/0027-read-outward-write-inward.md) | 下载的文件需要地方待 |
+| **4** | 预算、`edit`、`grep` | [ADR-030](../adr/0030-working-nodes-are-governed-by-cost.md) | 要先有工具，才知道它们不够用在哪 |
+| **5** | 第二张图 `v2_general` | [ADR-031](../adr/0031-a-second-graph.md) | 它的 `work` 节点要上面四样都在才有意义 |
 
 ADR 编号按决定的时间排，不按实施顺序。ADR-027 先写完，但它排在第三。
 

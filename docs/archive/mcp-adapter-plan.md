@@ -1,6 +1,6 @@
 # WP14-01 MCP Adapter 实施与验收计划
 
-决策依据：[ADR-025](./adr/0025-mcp-adapter.md)。本计划以代码能够闭环为准，不把“装了
+决策依据：[ADR-025](../adr/0025-mcp-adapter.md)。本计划以代码能够闭环为准，不把“装了
 SDK”“注册了 binding”误写成“Agent 已经能安全调用”。
 
 ## 0. 交付状态

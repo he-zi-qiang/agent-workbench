@@ -7,7 +7,7 @@
 - **实测**：本次会话直接跑命令或读源码确认；
 - **文档**：来自 [2026-07-29 核验报告](./repository-audit-2026-07-29.md)，**未**逐条复核。
 
-动手前先重跑一遍门禁，确认基线没变（见 [status.md](./status.md) 顶部快照）：
+动手前先重跑一遍门禁，确认基线没变（见 [status.md](../status.md) 顶部快照）：
 
 ```bash
 export AGENT_WORKBENCH_TEST_DSN="postgresql+asyncpg://agent:ci-only@127.0.0.1:5433/agent_workbench_test"

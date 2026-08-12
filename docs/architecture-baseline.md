@@ -1467,28 +1467,20 @@ RAGAS runner 不存在。适配器存在不等于框架集成完成。
 的检索器上重跑**，所以现在缺的是证据，不是通往证据的路。第 15 节要求的"固定数据集和
 可展示指标"因此不再被不可复现性打折，但也还没有拿到新的对照数字。
 
-门禁（2026-08-12 实测）：
+**门禁数字不在本节维护。** 四种环境的实测计数、跳过构成与静态门禁，只在
+[十分钟版本的门禁与规模一节](./HIGHLIGHTS.md#2-门禁与规模)保留一份。
 
-| 环境 | 结果 |
-|---|---|
-| 后端，真实 PostgreSQL + Qdrant | `2758 passed / 11 skipped` |
-| 后端，无外部服务 | `2065 passed / 704 skipped` |
-| 后端，CI 那组服务型目录（`tests/contracts tests/persistence tests/api tests/vector`） | `1012 passed / 2 skipped` |
-| 前端 Vitest（CI） | `171 passed` |
-| 前端 Playwright（桌面 + 移动，CI） | `4 passed` |
+这一节此前复述过那张表，于是它成了一个固定的过时点——[已知缺口](./known-gaps.md)
+的 E-05 专门记着它。改成链接而不是再刷新一次，是因为刷新只推迟下一次过时：
+**同一组数字存在两处，就一定会有一处先烂掉，而两处看起来一样可信。**
+这次改动本身就抓到了一例：这里原先写"无外部服务那一行多出的 676 项跳过"，
+实测是 **693**（634 项因 `AGENT_WORKBENCH_TEST_DSN` 未设、59 项因
+`AGENT_WORKBENCH_TEST_QDRANT_URL` 未设），而同一份数据在 README 里一直是对的。
 
-后端三行本机实测，前端两行取自 CI：本机装不到 `web/package.json` 的 `engines`
-钉死的 node `24.14.0`，而 node 22 下 jsdom 的 `Blob` 没有 `.stream()`，三条
-`downloadArtifact` 用例在进入被测代码前就抛错。第三行值得单独一提——它在本机
-和 CI 上都是 `1012 passed / 2 skipped`，这是"同一条命令、同一组环境闸门"这句
-话唯一能拿出来的那种证据。
-
-`ruff format --check .`（493 files）、`ruff check src tests`、Pyright
-（`0 errors, 0 warnings, 0 informations`）、ESLint `--max-warnings 0`、`tsc -b`
-与 production build 均通过。Alembic 唯一 head 为 `0025_agent_invocation_count`。
-11 项跳过中 10 项需要 `embedding` extra 与本地 BGE 权重、1 项是 PostgreSQL-only 契约；
-无外部服务那一行多出的 676 项跳过全部因为测试用 DSN / Qdrant URL 未设。
-**这几行来自不同环境，只能分别引用，不能相加。**
+只留一条本节自己要用的判断：**服务型目录那一组在本机和 CI 上逐位相同**，
+这是"同一条命令、同一组环境闸门"这句话唯一能拿出来的那种证据。前端数字则**只有
+CI 的算数**——本机装不到 `web/package.json` 的 `engines` 钉死的 node `24.14.0`。
+**不同环境的数字只能分别引用，不能相加。**
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|

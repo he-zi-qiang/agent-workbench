@@ -3,7 +3,7 @@
 目标是**能演示的完整一圈**，不是补全所有能力。每条都写了完成条件与依赖关系；
 标注 **实测** 的是本轮直接跑命令验证过的，其余是读代码得出的判断。
 
-跑起来的方法见 [running-locally.md](./running-locally.md)。
+跑起来的方法见 [running-locally.md](../running-locally.md)。
 
 ---
 
@@ -26,8 +26,8 @@
       使用 fetch SSE、durable cursor、安全答案发布与本机会话入口，Work 使用增量
       timeline、权威审批记录和严格关联的最终 artifact。前端有独立 lockfile、ESLint、
       TypeScript、Vitest 与 production build 门禁。见
-      [前端设计基线](./frontend-design.md)和
-      [本地运行说明](./running-locally.md#浏览器控制台)。
+      [前端设计基线](../frontend-design.md)和
+      [本地运行说明](../running-locally.md#浏览器控制台)。
 
 ---
 
@@ -38,7 +38,7 @@
 - [x] **1.1 接一个模型 Provider**（2026-07-31 实测，DeepSeek `deepseek-chat`）
       两条路都行：本地 OpenAI 兼容服务（Ollama / LM Studio，`base_url` 可配，
       DeepSeek 走 OpenAI 协议），或云端 DeepSeek key。环境变量写法见
-      [running-locally.md](./running-locally.md#为什么没有-chat)。
+      [running-locally.md](../running-locally.md#为什么没有-chat)。
       **实测**：模型 id 钉进 `config.local.toml`（公开目录名，不是密钥），key 只走
       环境变量。`scripts/dev.sh` 现在按 `AW_SECRETS__DEEPSEEK_API_KEY` 在不在自动
       选模式并打印选了哪个。真实问答：
@@ -195,9 +195,9 @@
       工具**（实测 `permits() → False`，也就是 Task 里从来没有任何工具真跑过）；
       **lease epoch 从没进入 ExecutionContext**，ledger 没有东西可 fence；
       **gateway 成功时记 `detail=None`**，崩在结算与 checkpoint 之间就再也找不到
-      产出物。授权上限的决定见 [ADR-015](./adr/0015-export-authorization.md)。
+      产出物。授权上限的决定见 [ADR-015](../adr/0015-export-authorization.md)。
 - [x] **5.4 两条 Chat 路径的对照评测**（2026-08-01 完成，见
-      [评测报告](../evals/chat/REPORT.md)）
+      [评测报告](../../evals/chat/REPORT.md)）
       跑这条测出来的头两件事都不是数字，是缺陷：
 
       **一、agentic 路径此前从来没有检索到过任何东西。** `knowledge_search` 把

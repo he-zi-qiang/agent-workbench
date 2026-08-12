@@ -642,7 +642,7 @@ profile 是按 Worker **实际注册到**的工具加宽的，不是按配置。
 结果上限在官方 SDK materialize 响应后执行，不是 HTTP body 或进程内存硬上限。本版不支持
 stdio、OAuth、热更新、MCP Tasks、Tool 级动态审批和跨 Worker 进程的全局串行。完整边界、
 命名、schema、安全重放和多 content-block 映射见
-[MCP Adapter 实施计划](./mcp-adapter-plan.md)。
+[MCP Adapter 实施计划](./archive/mcp-adapter-plan.md)。
 
 ### 9.2 一次性沙箱
 
