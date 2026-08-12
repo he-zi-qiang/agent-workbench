@@ -1,5 +1,27 @@
 # 实施状态
 
+这份文档记录**做成了什么**，逐次增量累积，**倒序排列**——最新的在最上面。
+每一节保留它写下时的时点与当时的门禁数字，**不随主线刷新**：一次增量的证据属于
+它自己的那棵树，倒写会让证据链失去意义。
+
+**因此本文档里的数字不是当前值。** 当前门禁只在
+[十分钟版本的门禁与规模一节](./HIGHLIGHTS.md#2-门禁与规模)维护一份。
+
+## 怎么用这份文档
+
+| 你要找 | 去哪 |
+|---|---|
+| **某项能力现在存不存在** | 先看[已知缺口](./known-gaps.md)——它按"拒绝／未接线／未实现／口径不实"给出当前判定；本文档给的是历史证据 |
+| **某项能力是怎么做成的** | 在本文档搜该能力的名字，读它那一节的"证据"与"对照组" |
+| **当前门禁数字** | [十分钟版本 §2](./HIGHLIGHTS.md#2-门禁与规模)，不在本文档 |
+| **某个决定为什么这样做** | [ADR 索引](./adr/) |
+| **更早的审计快照** | [历史归档](./archive/) |
+
+**阅读约定**：标注"未合并"的小节记录的是当时工作分支上的状态，其中一部分此后已
+合入主线；判断是否已在主线，以该能力在[已知缺口](./known-gaps.md)中的分类为准。
+
+---
+
 ## 2026-08-11 第三批（进行中）：停摆的 Worker 不再替自己作证
 
 第二批清的是"服务端知道、界面不说"。这一批是前两批**明确排除**的那条——
@@ -1653,7 +1675,7 @@ attempt 写进去的东西下一个 attempt 看不见。
 ## 2026-08-09 WP15 阶段三：只读取用外部世界（WP14-02，已完成）
 
 [ADR-027](./adr/0027-read-outward-write-inward.md) 的四个 PR 全部合入，逐项计划见
-[read-outward-plan.md](./read-outward-plan.md)。配置 schema `1.9 → 1.10`。
+[read-outward-plan.md](./archive/read-outward-plan.md)。配置 schema `1.9 → 1.10`。
 
 **PR-1 SSRF 从字面地址换成解析后校验（#83）。** 计划里明说这条必须最先做且独立成 PR：
 后面两个 PR 让模型能自己命名 URL，那一刻起这个缺口从"要先污染搜索引擎索引"变成"往网页里
@@ -1813,7 +1835,7 @@ Task/Artifact 的测试证据在 Word Server 合并后记入本节；在此之�
 MCP 不作为第二套 Agent 框架：官方 Python SDK v2 只存在于 `adapters/mcp/`，远端工具先
 冻结成项目自己的 `ToolBinding`，再经过既有 Runtime、Tool Gateway、Task 信封、principal
 scope、安全重放边界与事件流。完整决策见 [ADR-025](./adr/0025-mcp-adapter.md)，逐项验收见
-[MCP Adapter 实施计划](./mcp-adapter-plan.md)。
+[MCP Adapter 实施计划](./archive/mcp-adapter-plan.md)。
 
 本轮已单独跑通一条不依赖数据库或模型供应商的协议—Runtime 集成 E2E：官方 SDK 内存 server
 完成 `server/discover` / `tools/list` / `tools/call`，显式 allowlist 解析为
@@ -2233,7 +2255,7 @@ pytest（真实服务）                   1634 passed / 11 skipped
 
 ## 2026-07-31 Agentic 检索并存路径（未合并）
 
-完成 [待办清单](./followup-checklist-2026-07-29.md) 的 **3.1**。要点是它**不是**
+完成 [待办清单](./archive/followup-checklist-2026-07-29.md) 的 **3.1**。要点是它**不是**
 把固定两步改成 agentic，而是并存：`TurnExecution` seam 之下 turn 生命周期共用，
 `chat.retrieval_shape` 选形态，**默认仍是 `fixed`**。
 
@@ -2255,7 +2277,7 @@ pytest（真实服务）                   1622 passed / 11 skipped
 ## 2026-07-31 外部副作用 ledger（未合并）
 
 分支 `pr-051-tool-execution-ledger`，基线 `main@13136e7`（上一节的 HITL 增量已合入）。
-完成 [待办清单](./followup-checklist-2026-07-29.md) 的 **2.2**，迁移 `0019`。
+完成 [待办清单](./archive/followup-checklist-2026-07-29.md) 的 **2.2**，迁移 `0019`。
 
 | 落地 | 事实 |
 |---|---|
@@ -2286,7 +2308,7 @@ pytest（真实服务）                    1606 passed / 11 skipped
 
 分支 `pr-050-postgres-checkpointer`，在下节 2026-07-29 快照之上再加四个提交
 （`7014046`、`33ebbbb`、`a257e45`、`25895ca`），完成
-[待办清单](./followup-checklist-2026-07-29.md) 的 **2.1 全部内容**。
+[待办清单](./archive/followup-checklist-2026-07-29.md) 的 **2.1 全部内容**。
 
 | 落地 | 事实 |
 |---|---|
@@ -2356,8 +2378,8 @@ embedding/sparse 权重，1 项是只适用于非锁定 recovery read 的契约�
 - [架构与技术选型基线 v1.3](./architecture-baseline.md)；
 - [代码实施计划 v1.0](./implementation-plan.md)；
 - [配置管理契约](./configuration.md)（当前 schema `1.10`，每一次抬升在该文件里对应一条 ADR）；
-- [2026-07-25 仓库核验报告](./repository-audit-2026-07-25.md)；
-- [2026-07-27 仓库复核报告](./repository-audit-2026-07-27.md)。
+- [2026-07-25 仓库核验报告](./archive/repository-audit-2026-07-25.md)；
+- [2026-07-27 仓库复核报告](./archive/repository-audit-2026-07-27.md)。
 
 这些文档描述目标架构和增量计划，不代表其中列出的产品能力已经实现。
 
@@ -4009,7 +4031,7 @@ pytest                   711 passed / 188 skipped / 1 environment failure
 §7 是同一份记录的另一半。
 
 完整触发条件、文件位置和建议修复顺序见
-[仓库核验报告](./repository-audit-2026-07-25.md)。核验那一轮只校正文档，没有改
+[仓库核验报告](./archive/repository-audit-2026-07-25.md)。核验那一轮只校正文档，没有改
 生产逻辑；此后的修复各自一个 PR，逐条记在下面，并同步回核验报告的第 7 节。
 纪律是：**没有覆盖触发条件的回归测试，任何一条都不算关闭。**
 

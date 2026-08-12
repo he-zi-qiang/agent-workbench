@@ -1,6 +1,6 @@
 # WP14-02 只读外部世界：实施方案
 
-决策依据：[ADR-027](./adr/0027-read-outward-write-inward.md)。本文只讲怎么落地和怎么
+决策依据：[ADR-027](../adr/0027-read-outward-write-inward.md)。本文只讲怎么落地和怎么
 证明它是对的。
 
 沿用 WP14-01 的规矩：**一个 PR 只做一件事**；每个 PR 的测试先证明是**红**的再变绿；
