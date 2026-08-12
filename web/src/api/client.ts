@@ -616,6 +616,17 @@ export async function getDocumentPreview(
  * is a page's worth of held bytes rather than a judgement about documents --
  * the blob lives in the query cache for the session, so this is the ceiling on
  * what one artifact can pin there.
+ *
+ * Applied to the declared `content-length` first, and to the bytes only after.
+ * The sentence above used to be a claim the code did not keep: the one check
+ * read `byteLength`, which exists because the whole body had already been
+ * allocated -- a 200 MiB conversion was held in full and *then* refused. The
+ * header is where that promise can be kept, and trusting it is not credulity:
+ * a length that understates cannot buy more bytes, because the body is
+ * delimited by it. What the header cannot cover is a response that declares
+ * nothing -- a chunked one, or a proxy that dropped it -- and for those the
+ * check after the read is the whole of the bound. So: refused before arrival
+ * when the length is declared, and refused before it is *kept* when it is not.
  */
 export const MAX_LAYOUT_BYTES = 32 * 1024 * 1024;
 
@@ -689,6 +700,17 @@ export async function getDocumentPdf(
     // rather than framed and hoped about, and the type below is asserted rather
     // than inherited from the response for the same reason.
     return { available: false, reason: "unavailable" };
+  }
+  // An absent header parses to 0 and a malformed one to NaN, and neither is a
+  // declaration of size, so both fall through to the check after the read. Only
+  // a number the response actually stated is acted on here.
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_LAYOUT_BYTES) {
+    // Cancelled rather than abandoned: the transfer this refusal exists to
+    // avoid paying for is still in flight, and dropping the reference would
+    // leave it arriving into a body nobody reads.
+    void response.body?.cancel().catch(() => undefined);
+    return { available: false, reason: "too_large" };
   }
   const bytes = await response.arrayBuffer();
   if (bytes.byteLength > MAX_LAYOUT_BYTES) {

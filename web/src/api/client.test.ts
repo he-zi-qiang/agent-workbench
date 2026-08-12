@@ -249,7 +249,42 @@ describe("getDocumentPdf", () => {
     });
   });
 
-  it("refuses a layout larger than this page will hold", async () => {
+  it("refuses an oversized layout on the declared length, before reading it", async () => {
+    // The ceiling used to be checked against `byteLength` alone -- a number
+    // that exists because the whole body has already been allocated -- under a
+    // comment promising this page would hold no more than MAX_LAYOUT_BYTES of
+    // it. A 200 MiB conversion was held in full and then refused. The header is
+    // where that promise can be kept, and it is the one the API actually sends:
+    // the layout route returns a plain `Response`, so Starlette declares its
+    // length.
+    const read = vi.spyOn(Response.prototype, "arrayBuffer");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      // Eight bytes, declaring far more. Which is the point: what is acted on
+      // is the declaration, and a declaration that understates cannot buy more
+      // bytes -- the body is delimited by it.
+      new Response(new Uint8Array(8), {
+        status: 200,
+        headers: {
+          "content-type": "application/pdf",
+          "content-length": String(MAX_LAYOUT_BYTES + 1),
+        },
+      }),
+    );
+
+    await expect(getDocumentPdf(identity, "art_opaque_1")).resolves.toEqual({
+      available: false,
+      reason: "too_large",
+    });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("refuses a layout larger than this page will hold, declared or not", async () => {
+    // The other half, and the reason the check after the read stayed: a
+    // response that declares no length reaches the ceiling only once the bytes
+    // are in hand. `Response` adds no `content-length` of its own, so this is
+    // that case rather than the one above -- the body has to be read to find
+    // out, and what the constant bounds here is what gets *kept*.
+    const read = vi.spyOn(Response.prototype, "arrayBuffer");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(new Uint8Array(MAX_LAYOUT_BYTES + 1), {
         status: 200,
@@ -264,6 +299,7 @@ describe("getDocumentPdf", () => {
       available: false,
       reason: "too_large",
     });
+    expect(read).toHaveBeenCalledOnce();
   });
 });
 
