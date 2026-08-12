@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 
 from agent_workbench.adapters.persistence import (
     PostgresTaskRegistry,
@@ -397,6 +397,55 @@ def test_losing_the_claim_is_reported_before_running_out_of_budget() -> None:
         # being the only thing this method ever notices.
         with pytest.raises(AgentInvocationBudgetExhaustedError):
             await registry.reserve_agent_invocation(claim.lease)
+
+    _run(scenario)
+
+
+def test_a_lease_that_merely_ran_out_is_not_reported_as_an_exhausted_budget() -> None:
+    """The refusal a Worker cannot act on correctly if it is misnamed.
+
+    Expiry is the one way of losing a lease that leaves ``lease_owner`` and
+    ``lease_epoch`` still naming this Worker: nobody has taken the claim away
+    yet, the time on it simply ran out. The miss path used to re-derive the
+    fence from the status, the owner and the epoch and stop there, which every
+    other way of losing a claim happens to trip -- so this one fell through to
+    ``AgentInvocationBudgetExhaustedError``, whose meaning is "trying again
+    cannot help" and whose handling is to dead-letter the Task. What is true
+    here is ``StaleExecutionError``: "stop writing, you no longer hold this",
+    after which the reaper hands the Task to somebody who does. The ceiling is
+    left far away on purpose, so the wrong answer is not merely mislabelled --
+    it quotes a limit this Task never approached.
+    """
+
+    async def scenario(engine: Any, registry: PostgresTaskRegistry) -> None:
+        task = await registry.submit(_submission(ceiling=12))
+        claim = await registry.claim_next("worker_1", lease_seconds=60)
+        assert claim is not None
+
+        # Around the registry rather than through it, and only this column:
+        # what makes the case is that owner and epoch still match.
+        async with engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(lease_until=text("now() - interval '1 second'"))
+            )
+
+        with pytest.raises(StaleExecutionError):
+            await registry.reserve_agent_invocation(claim.lease)
+
+        spent, _ = await _counts(engine, task.task_id)
+        assert spent == 0
+        # Same lease, same Task, same process: with time back on the clock the
+        # call goes through, so the refusal above was about the expiry and not
+        # about this harness being unable to charge anything at all.
+        async with engine.begin() as connection:
+            await connection.execute(
+                update(task_runs)
+                .where(task_runs.c.task_id == task.task_id)
+                .values(lease_until=text("now() + interval '60 seconds'"))
+            )
+        assert await registry.reserve_agent_invocation(claim.lease) == 1
 
     _run(scenario)
 

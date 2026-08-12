@@ -450,13 +450,28 @@ class PostgresTaskRegistry:
         otherwise be blamed for belongs to whoever holds the Task now.
         """
 
-        current = await self._by_id(connection, lease.task_id)
-        if (
-            current is None
-            or current["status"] != "running"
-            or current["lease_owner"] != lease.worker_id
-            or current["lease_epoch"] != lease.epoch
-        ):
+        # Re-asserted with the *predicate itself* rather than with a hand-copy
+        # of its parts. The copy that used to stand here restated four of the
+        # five conditions and left out the expiry one, and expiry is the single
+        # way of losing a lease that the other four do not notice: owner and
+        # epoch still name the Worker until somebody else claims the Task. Such
+        # a Worker was told its budget was exhausted -- "trying again cannot
+        # help", which it answers by dead-lettering -- when what had happened
+        # was that it stopped being the holder. Reusing the tuple also keeps
+        # the two from drifting apart again the next time a condition is added
+        # to it. Reading the whole row through the same predicate costs no
+        # extra round trip: a live lease returns the row this method goes on to
+        # read the counter and the ceiling out of.
+        current = (
+            (
+                await connection.execute(
+                    select(task_runs).where(*_live_lease_conditions(lease))
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if current is None:
             await self._raise_stale(
                 connection, lease, attempted="reserve_agent_invocation"
             )
