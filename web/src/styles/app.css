@@ -2808,6 +2808,13 @@ pre {
   white-space: nowrap;
 }
 
+/* The cut is the one row with no number -- what is missing is the part the
+   preview never read -- so it is a sentence rather than a label sharing a line
+   with a count, and blocks out of the flex row above to wrap as prose. */
+.aw-preview-gaps > li.aw-preview-gap-cut {
+  display: block;
+}
+
 /* Under ~1040px the rail would squeeze the reading column. Stacked, files go
    below the run and the answer, which is where they were produced. */
 @media (max-width: 1040px) {

@@ -152,19 +152,66 @@ _WML_NAMESPACE: Final[str] = (
 _CUSTOM_STYLE_ATTRIBUTE: Final[str] = f"{{{_WML_NAMESPACE}}}customStyle"
 _STYLE_ID_ATTRIBUTE: Final[str] = f"{{{_WML_NAMESPACE}}}styleId"
 
-#: Where the pictures are. ``document.inline_shapes`` is the obvious way to
-#: write this count and is the wrong one: its XPath matches ``wp:inline`` under
-#: a run and nothing else, so a document laid out with floating images -- which
-#: is how most people place a figure they want text to wrap around -- reports
-#: no pictures at all. A zero that means "none" and a zero that means "none of
-#: the kind I looked for" are indistinguishable on screen, which is the whole
-#: failure this count exists to prevent.
+#: Where the pictures are: ``pic:pic``, the element carrying the ``a:blip``
+#: that names the image part. The count is of that, not of the ``wp:inline`` /
+#: ``wp:anchor`` it arrives in, and the difference is the whole point --
+#: DrawingML puts text boxes, charts, SmartArt and every drawn shape in those
+#: same two containers, so counting containers told the reader
+#: 图片没有显示 · 1 张 of documents that held no picture at all. A phantom in a
+#: list of omissions costs the rows beside it, the footnotes and the headers
+#: that really are missing, the credibility the list exists to have.
 #:
-#: VML pictures (``w:pict``, Word 2003 and some converters) are deliberately
-#: not counted: that element also carries text boxes and drawn lines, so
-#: including it would report shapes that are not images, and a count inflated
-#: by furniture is worse than a count that is honest about its two formats.
-_IMAGE_PATHS: Final[tuple[str, ...]] = (".//wp:inline", ".//wp:anchor")
+#: ``document.inline_shapes`` is the other obvious way to write this and is
+#: wrong in the opposite direction: its XPath matches ``wp:inline`` under a run
+#: and nothing else, so a figure with text wrapped around it -- how most people
+#: place one -- reports as no picture at all, and on screen a zero meaning
+#: "none" cannot be told from a zero meaning "none of the kind I looked for".
+#: Reading the picture instead of either container is what answers both at
+#: once: an anchored ``pic:pic`` counts, an anchored text box does not.
+#:
+#: VML pictures (``w:pict`` with ``v:imagedata``, from Word 2003 and some
+#: converters) are still not counted, but not for the reason this comment used
+#: to give. It said ``w:pict`` "also carries text boxes and drawn lines" --
+#: word for word what the two DrawingML containers do, so the sentence excluded
+#: one format for something both formats did, and the rule above is what
+#: actually answers it. The reasons that survive are narrower: the encodings
+#: overlap rather than partition, since ``mc:AlternateContent`` carries a VML
+#: fallback beside a DrawingML original and a union would count that picture
+#: twice unless the compatibility markup around it is read first; and ``v`` is
+#: absent from python-docx's namespace map, so a path through it would be this
+#: module's own declaration, aimed at documents nothing here has been tested
+#: against. What that costs is a package written in VML alone reporting no
+#: pictures -- under-reporting, which is the direction these counts err in when
+#: they must.
+_IMAGE_PATH: Final[str] = ".//pic:pic"
+
+#: Tables, over the whole body rather than over the part the walk reached.
+#: ``./`` rather than ``.//`` on purpose: the body's own children are exactly
+#: the set the walk visits, so for a preview that was not cut this is the same
+#: number as before, arrived at a different way.
+#:
+#: It used to stop where the text did, and ADR-045 §6 recorded that as a known
+#: inconsistency left alone because the console already prints this number and
+#: moving it changes what the UI claims. That reasoning had it backwards. The
+#: seven counts are rendered as one list of what the preview lost, six of them
+#: of the document; a seventh silently meaning "of the part that fits" is not a
+#: smaller claim but a different one, and it failed in the one direction a list
+#: of omissions must not. A table below the cut subtracted itself from the only
+#: number that would have mentioned it, so the panel showed an *empty* list --
+#: which that list uses to say the preview is faithful -- for a document that
+#: had lost a table whole. Nothing else on screen covers it: the reader is told
+#: the text stops early, and with no gap beside it the only available
+#: conclusion is that what stopped was prose.
+#:
+#: What the change costs is smaller than it sounds. The two counts differ only
+#: for a truncated preview, so the reading the console gives up is exactly the
+#: reading that was wrong.
+#:
+#: A table nested in a cell, a text box or a content control is not counted.
+#: That is a gap rather than a decision, and a symmetrical one: the walk does
+#: not reach such a table either, so its text is missing from the preview as
+#: well, and neither half tells the reader so.
+_TABLE_PATH: Final[str] = "./w:tbl"
 
 #: One reference per header or footer a section defines. Equivalent to asking
 #: every section's six header/footer objects whether ``is_linked_to_previous``
@@ -207,12 +254,10 @@ class DocxPreview:
     #: the file; one who sees the surrounding prose with the tables silently
     #: absent has no way to know anything is missing.
     #:
-    #: The one count of what the *walk reached* rather than of the document: a
-    #: truncated preview reports the tables above the cut. Every count below it
-    #: is of the whole document. The seam is left where it is because this
-    #: number is already on screen -- the console prints 共 N 张表格 from it --
-    #: and moving it is a change to what the UI claims, which nothing else here
-    #: is asking for.
+    #: Of the whole document, like every count beside it. It used to be of the
+    #: part the walk reached, which meant a table below the cut went missing
+    #: from the text and from the number that would have reported it, and the
+    #: panel called that preview faithful; see ``_TABLE_PATH``.
     table_count: int
     #: Pictures, counted rather than shown, and the sharpest case for counting
     #: anything at all: prose that reads around a figure still reads as a
@@ -453,16 +498,15 @@ def extract_docx_preview(
     for every caller of this function instead of for the one path that
     remembered to ask.
 
-    The counts are taken from the whole body after that walk has stopped, not
-    accumulated during it, so a preview cut at ``max_chars`` still reports the
-    pictures below the cut. ``table_count`` is the exception and keeps counting
-    what the walk reached; see the field.
+    Every count is taken from the whole body after that walk has stopped rather
+    than accumulated during it, so a preview cut at ``max_chars`` still reports
+    the pictures below the cut -- and now the tables, which were the one number
+    that stopped where the walk did (see ``_TABLE_PATH``).
     """
 
     preflight_docx(content)
     document = Document(io.BytesIO(content))
     pieces: list[str] = []
-    tables = 0
     total = 0
     truncated = False
 
@@ -471,7 +515,6 @@ def extract_docx_preview(
         if tag.endswith("}p"):
             piece = _paragraph_markdown(Paragraph(child, document))
         elif tag.endswith("}tbl"):
-            tables += 1
             piece = _table_markdown(Table(child, document))
         else:
             # sectPr and friends. Structure rather than content.
@@ -487,8 +530,8 @@ def extract_docx_preview(
     return DocxPreview(
         text="\n\n".join(pieces),
         truncated=truncated,
-        table_count=tables,
-        image_count=_count_in_body(document, *_IMAGE_PATHS),
+        table_count=_count_in_body(document, _TABLE_PATH),
+        image_count=_count_in_body(document, _IMAGE_PATH),
         header_count=_count_in_body(document, _HEADER_PATH),
         footer_count=_count_in_body(document, _FOOTER_PATH),
         numbered_paragraph_count=_count_in_body(document, _NUMBERED_PARAGRAPH_PATH),
