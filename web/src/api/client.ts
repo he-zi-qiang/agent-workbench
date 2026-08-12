@@ -404,6 +404,20 @@ export function declaredMediaType(file: { name: string; type: string }): string 
   return matched?.[1] ?? "application/octet-stream";
 }
 
+/**
+ * `signal` is threaded through all three legs, not just the first.
+ *
+ * The three requests are not equally cancellable and it is worth being exact
+ * about which one the caller is buying. Aborting the intent or the PUT leaves
+ * nothing attached to any knowledge base -- an unused upload id and, at worst,
+ * an orphan blob. Only `/complete` puts the document into a knowledge base, so
+ * an abort that lands before it is sent is the one that actually prevents the
+ * write; one that lands after the request left the browser cannot un-write it.
+ *
+ * That residual race is a few milliseconds wide. The window this closes is the
+ * PUT, which for a real document is seconds to minutes of upload still to go,
+ * and which every abort reaches.
+ */
 export async function uploadDocument(
   identity: PrincipalIdentity,
   input: {
@@ -412,6 +426,7 @@ export async function uploadDocument(
     knowledgeBaseId: string;
     grantedPrincipals: string[];
   },
+  signal?: AbortSignal,
 ): Promise<DocumentVersion> {
   const declaredSha256 = await sha256(input.file);
   // Computed once and threaded through the transfer: the server reads the
@@ -426,9 +441,16 @@ export async function uploadDocument(
       media_type: mediaType,
       filename: input.file.name,
     },
+    ...(signal === undefined ? {} : { signal }),
   });
 
-  const transferred = await uploadBytes(identity, intent.content_path, input.file, mediaType);
+  const transferred = await uploadBytes(
+    identity,
+    intent.content_path,
+    input.file,
+    mediaType,
+    signal,
+  );
   return apiRequest(identity, `/v1/uploads/${encodeURIComponent(intent.upload_id)}/complete`, {
     method: "POST",
     body: {
@@ -437,6 +459,7 @@ export async function uploadDocument(
       knowledge_base_id: input.knowledgeBaseId,
       granted_principals: input.grantedPrincipals,
     },
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -445,15 +468,18 @@ async function uploadBytes(
   path: string,
   file: File,
   mediaType: string,
+  signal?: AbortSignal,
 ): Promise<UploadContentResponse> {
-  const response = await fetch(path, {
+  const init: RequestInit = {
     method: "PUT",
     headers: {
       ...identityHeaders(identity),
       "content-type": mediaType,
     },
     body: file,
-  });
+  };
+  if (signal !== undefined) init.signal = signal;
+  const response = await fetch(path, init);
   if (!response.ok) throw await parseError(response);
   return (await response.json()) as UploadContentResponse;
 }

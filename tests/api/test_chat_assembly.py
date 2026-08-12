@@ -733,6 +733,35 @@ def test_assembly_hands_startup_the_encoders_a_turn_will_use(
     assert sparse in dependencies.encoders
 
 
+def test_a_loaded_reranker_is_handed_to_startup_as_well(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The third cold runtime, and the one that was left out of the warm list.
+
+    Reranking is on by default and its cross-encoder pays the same first-forward
+    toll as the two encoders beside it, but assembly only ever handed startup
+    ``(embedder, sparse)``. So a deployment warmed two of the three runtimes it
+    had just loaded and let the first reranked search discover the third.
+
+    Identity, not membership by type: startup has to warm *the same instance*
+    retrieval will call, since a second one would be a separate set of compiled
+    kernels and the boot spent on it would buy the request nothing.
+    """
+
+    from agent_workbench.adapters.reranking.fake import LexicalOverlapReranker
+    from agent_workbench.apps.api import dependencies as assembly
+
+    _stub_optional_runtimes(monkeypatch)
+    reranker = LexicalOverlapReranker()
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c, **_: reranker)
+
+    dependencies = build_dependencies(project_api(_settings(tmp_path)))
+
+    assert reranker in dependencies.encoders
+    assert dependencies.retrieval is not None
+    assert dependencies.retrieval.reranker is reranker
+
+
 def test_startup_warms_before_a_request_can_arrive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -340,7 +340,10 @@ export function ChatPage() {
           />
           <div className="aw-chat-composer-row">
             <AttachmentButton
-              disabled={composerDisabled}
+              disabled={composerDisabled || attachments.readOnlyReason !== null}
+              {...(attachments.readOnlyReason === null
+                ? {}
+                : { disabledReason: attachments.readOnlyReason })}
               onFiles={attachments.addFiles}
             />
             <textarea
@@ -379,15 +382,20 @@ export function ChatPage() {
               value={knowledgeBaseId}
             />
             <span>
-              {attachments.items.some(
-                (item) => item.state === "waiting_for_source",
-              )
-                ? "附件需要先选择知识库"
-                : attachments.hasBlockingItems
-                  ? "附件可检索后才能发送"
-                  : answerMode === "direct"
-                    ? "自由回答不会检索项目资料"
-                    : "回答会检索资料并标注引用"}
+              {/* Said in the line, not only in the button's tooltip: a
+                  disabled paperclip explains itself to a mouse and to nobody
+                  on a touch screen or a screen reader that never hovers. */}
+              {attachments.readOnlyReason !== null
+                ? attachments.readOnlyReason
+                : attachments.items.some(
+                      (item) => item.state === "waiting_for_source",
+                    )
+                  ? "附件需要先选择知识库"
+                  : attachments.hasBlockingItems
+                    ? "附件可检索后才能发送"
+                    : answerMode === "direct"
+                      ? "自由回答不会检索项目资料"
+                      : "回答会检索资料并标注引用"}
             </span>
           </div>
         </form>

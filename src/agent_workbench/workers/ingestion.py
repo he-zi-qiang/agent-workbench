@@ -211,10 +211,18 @@ class IngestionWorker:
             await asyncio.gather(*cleanup, return_exceptions=True)
 
     async def _heartbeat(self, event: OutboxEvent) -> None:
+        """Keep this event's whole claim alive for as long as it is in flight.
+
+        The token renews the batch, so the events queued behind this one are
+        held by the same beats that hold this one. That is what stops
+        ``drain``'s tail from expiring under a lease that was sized for a
+        single document: only the event being applied has a heartbeat running,
+        but the claim it renews covers all of them.
+        """
+
         while True:
             await asyncio.sleep(self.heartbeat_seconds)
             await self.outbox.heartbeat(
-                event_id=event.event_id,
                 claim_token=event.claim_token,
                 lease_seconds=self.lease_seconds,
             )

@@ -31,6 +31,11 @@ no way to interrupt arbitrary synchronous code -- so anything whose partial
 execution is observable must not use this path. ``LocalArtifactStore.put`` is
 the concrete example the plan already called out: its quarantine-then-replace
 sequence leaves half a file on disk if abandoned midway.
+
+Because the thread outlives the await, a slot is tied to the *thread* and not
+to the coroutine that asked for it: it goes back when the callable returns,
+however its caller ended. Returning it at cancellation would look like the
+tidier choice and would in fact disarm this whole module -- see ``run``.
 """
 
 from __future__ import annotations
@@ -98,6 +103,17 @@ class BlockingCallRunner:
         ``name`` is for the log line when waiting times out; it should say what
         blocked, not where it was called from -- the traceback already has the
         latter.
+
+        A cancelled caller keeps its slot until the thread it started actually
+        stops. That is deliberate and it is the only version of this class that
+        works. Releasing on cancellation reads as leak-avoidance, but the thread
+        is still occupying the executor, so the slot handed on is imaginary: the
+        next caller takes the semaphore without ever waiting on it, cannot time
+        out because it never queued, and lands in the ``ThreadPoolExecutor``'s
+        ``SimpleQueue`` instead -- unbounded, untimed, and invisible. That queue
+        is the thing this class was built to keep callers out of, so the tidier
+        release would delete the guarantee rather than protect it, and would do
+        so silently: the symptom is latency, not an error.
         """
 
         if self._closed:
@@ -119,15 +135,52 @@ class BlockingCallRunner:
                 f"no blocking-call slot for {name} within "
                 f"{self._queue_timeout_seconds:.0f}s"
             ) from timed_out
+        loop = asyncio.get_running_loop()
         try:
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(self._executor, work)
-        finally:
-            # Released even when the caller was cancelled mid-await. The thread
-            # may still be running -- that is inherent and accepted for the
-            # read-only work this runner takes -- but the *slot* must not leak,
-            # or a few cancellations would starve the pool permanently.
+            # Submitted directly rather than through ``run_in_executor`` because
+            # the slot has to follow the thread, and only the
+            # ``concurrent.futures`` future knows when that thread is finished.
+            # ``run_in_executor`` returns an asyncio wrapper around exactly this
+            # future; cancelling the wrapper says nothing about the thread
+            # underneath, so it cannot be the thing that returns the slot.
+            pending = self._executor.submit(work)
+        except RuntimeError:
+            # ``close`` landed while this caller was queued on the semaphore.
+            # Nothing was submitted, so the callback below will never run and
+            # the slot would be gone for good; hand it back here instead.
             semaphore.release()
+            raise
+        pending.add_done_callback(
+            lambda _finished: self._return_slot(loop, semaphore, name)
+        )
+        return await asyncio.wrap_future(pending, loop=loop)
+
+    def _return_slot(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        semaphore: asyncio.Semaphore,
+        name: str,
+    ) -> None:
+        """Give one slot back, from whichever thread the work ended on.
+
+        This runs on a pool thread, and ``asyncio.Semaphore`` is not
+        thread-safe, so the release has to be posted back to the loop that owns
+        it rather than performed here.
+        """
+
+        try:
+            loop.call_soon_threadsafe(semaphore.release)
+        except RuntimeError:
+            # The loop is already closed, so the process is past the point
+            # where anyone could be waiting for this slot. Swallowing is
+            # right: a raise here becomes an "exception in callback" logged
+            # out of a pool thread during teardown, which reports a shutdown
+            # ordering detail as if it were a failure.
+            logger.debug(
+                "blocking call %s finished after its event loop closed; "
+                "its slot was not returned",
+                name,
+            )
 
     def _ensure_semaphore(self) -> asyncio.Semaphore:
         if self._slots_free is None:
@@ -140,6 +193,12 @@ class BlockingCallRunner:
         Not ``cancel_futures``: the calls this runner accepts are read-only, so
         letting them end costs a moment and abandoning them costs a thread
         writing into a half-torn-down process.
+
+        Nothing is left dangling by ``wait=False``. Every submitted future still
+        reaches a done state -- running ones by finishing, and queued ones too,
+        since without ``cancel_futures`` the queue is drained rather than
+        dropped -- so every slot-returning callback still fires. The ones that
+        fire after the loop is gone are handled in ``_return_slot``.
         """
 
         if self._closed:

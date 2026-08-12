@@ -85,6 +85,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -105,6 +106,7 @@ describe("WorkPage task submission", () => {
         task_id: "task_created",
         status: "queued",
         status_detail: null,
+        agent_invocation_count: 0,
         objective_preview: null,
         created_at: "2026-08-02T12:00:00Z",
         updated_at: "2026-08-02T12:00:00Z",
@@ -148,6 +150,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -180,6 +183,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -218,6 +222,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -257,6 +262,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -286,6 +292,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -322,6 +329,7 @@ describe("WorkPage task submission", () => {
           task_id: "task_969398ecc7b14fbd9f24a50f53fbad7e",
           status: "queued",
           status_detail: null,
+          agent_invocation_count: 0,
           objective_preview: "整理这批资料，比较三个方案并输出一份建议报告",
           created_at: "2026-08-02T12:00:00Z",
           updated_at: "2026-08-02T12:00:00Z",
@@ -344,6 +352,7 @@ describe("WorkPage task submission", () => {
           task_id: "task_969398ecc7b14fbd9f24a50f53fbad7e",
           status: "queued",
           status_detail: null,
+          agent_invocation_count: 0,
           objective_preview: null,
           created_at: "2026-08-02T12:00:00Z",
           updated_at: "2026-08-02T12:00:00Z",
@@ -363,6 +372,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "今天丹东天气怎么样",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -394,6 +404,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "今天丹东天气怎么样",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -424,6 +435,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "今天丹东天气怎么样",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -442,6 +454,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "比较三个方案并输出一份建议报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -476,6 +489,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "写一份季度报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -514,6 +528,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "写一份季度报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -553,6 +568,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "写一份季度报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -575,6 +591,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "今天丹东天气怎么样",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -596,6 +613,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "输出一份建议报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -664,6 +682,140 @@ describe("WorkPage task submission", () => {
   });
 });
 
+describe("WorkPage 停住的任务与已用预算", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(getArtifactJson).mockReset();
+    vi.mocked(getTask).mockReset();
+    vi.mocked(getTaskTimeline).mockReset();
+    vi.mocked(listKnowledgeBases).mockReset();
+    vi.mocked(listTasks).mockReset();
+    vi.mocked(newIdempotencyKey).mockReset();
+    vi.mocked(triageTask).mockReset();
+    vi.mocked(newIdempotencyKey).mockReturnValue("task:intent_1");
+    vi.mocked(triageTask).mockResolvedValue(TRIAGE_DEFAULT);
+    vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
+    vi.mocked(getArtifactJson).mockResolvedValue(taskInput(false));
+    vi.mocked(getTaskTimeline).mockResolvedValue(parkedTimeline());
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("says a parked task is waiting for a migration, not running", async () => {
+    // `waiting_migration` is not terminal, so it used to fall into the same
+    // branch as queued and running: a spinner, "任务正在执行", and a poll every
+    // three seconds. The status has no outgoing transition at all -- nothing
+    // this page can do, and nothing the reader can wait for, will move it.
+    vi.mocked(getTask).mockResolvedValue(parkedTask());
+    renderWorkPage("/work/task_parked");
+
+    expect(
+      await screen.findByText("任务在等待迁移，没有在执行"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("任务正在执行，完成后结果会显示在这里")).toBeNull();
+    // The server's reason, verbatim -- it is what an operator is handed.
+    expect(
+      screen.getByText("graph version v1_research is not registered in this process"),
+    ).toBeInTheDocument();
+    // And the run itself stopped moving too: the stage it reached is waiting,
+    // not 进行中, and not 等待你确认 either -- nobody is being asked to decide.
+    const stream = screen.getByRole("region", { name: "执行过程" });
+    expect(within(stream).getByText("等待迁移")).toBeInTheDocument();
+    expect(within(stream).queryByText("进行中")).toBeNull();
+    expect(within(stream).queryByText("等待你确认")).toBeNull();
+  });
+
+  it("stops polling a parked task", async () => {
+    vi.mocked(getTask).mockResolvedValue(parkedTask());
+    renderWorkPage("/work/task_parked");
+    // Anchored on the heading rather than on the parked notice, so this test
+    // fails for its own reason: it is about the fetching, not the wording.
+    await screen.findByRole("heading", { name: "整理这批资料，比较三个方案" });
+    const polls = vi.mocked(getTask).mock.calls.length;
+
+    // Longer than the 3s status interval, so a page that still treats this as
+    // a running Task fetches at least once more inside the wait.
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+
+    expect(vi.mocked(getTask).mock.calls.length).toBe(polls);
+  });
+
+  it("shows what a task has spent on agent invocations", async () => {
+    // Reported before it is enforced, which is the whole point of ADR-040's
+    // middle step: the number has to be visible while it climbs, not first
+    // become visible as the reason a Task died.
+    vi.mocked(getTask).mockResolvedValue(parkedTask({ agent_invocation_count: 7 }));
+    renderWorkPage("/work/task_parked");
+
+    expect(await screen.findByText(/已调用智能体\s*7\s*次/)).toBeInTheDocument();
+  });
+
+  it("says nothing about invocations a task never made", async () => {
+    vi.mocked(getTask).mockResolvedValue(parkedTask());
+    renderWorkPage("/work/task_parked");
+
+    await screen.findByRole("heading", { name: "整理这批资料，比较三个方案" });
+    expect(screen.queryByText(/已调用智能体/)).toBeNull();
+  });
+});
+
+/** A Task the Registry stopped because this deployment cannot run its graph. */
+function parkedTask(overrides: { agent_invocation_count?: number } = {}) {
+  return {
+    task_id: "task_parked",
+    status: "waiting_migration" as const,
+    // `waiting_migration` is one of the statuses the domain requires a detail
+    // on, so a fixture without one would be a Task the server cannot produce.
+    status_detail: "graph version v1_research is not registered in this process",
+    objective_preview: "整理这批资料，比较三个方案",
+    agent_invocation_count: 0,
+    created_at: "2026-08-02T12:00:00Z",
+    updated_at: "2026-08-02T12:00:30Z",
+    ...overrides,
+  };
+}
+
+/** One stage entered, then nothing -- the shape a parked run leaves behind. */
+function parkedTimeline() {
+  const base = {
+    schema_version: 1,
+    stream_id: "stream_parked",
+    run_id: "run_parked",
+    durability: "durable" as const,
+    task_id: "task_parked",
+    parent_event_id: null,
+  };
+  return {
+    task_id: "task_parked",
+    cursor: "cursor_parked",
+    skipped_sequences: [],
+    events: [
+      {
+        ...base,
+        event_id: "event_submitted",
+        event_type: "TaskSubmitted",
+        timestamp: "2026-08-02T12:00:00Z",
+        payload: { kind: "TaskSubmitted", input_ref: "art_input" },
+        sequence: 1,
+        graph_node_id: null,
+      },
+      {
+        ...base,
+        event_id: "event_understood",
+        event_type: "ModelCompleted",
+        timestamp: "2026-08-02T12:00:10Z",
+        payload: { kind: "ModelCompleted", text: "先看资料。" },
+        sequence: 2,
+        graph_node_id: "understand",
+      },
+    ],
+  };
+}
+
 function renderWorkPage(initialEntry = "/work") {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -690,6 +842,7 @@ function task(status: "waiting_approval" | "cancelled") {
     task_id: "task_approval",
     status,
     status_detail: status === "cancelled" ? "cancelled elsewhere" : null,
+    agent_invocation_count: 0,
     objective_preview: null,
     created_at: "2026-08-02T12:00:00Z",
     updated_at: "2026-08-02T12:01:00Z",
