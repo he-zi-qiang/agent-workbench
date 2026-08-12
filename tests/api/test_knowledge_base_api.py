@@ -154,9 +154,11 @@ def test_create_list_and_get_use_the_same_human_facing_contract(tmp_path: Path) 
         "knowledge_base_id",
         "name",
         "description",
+        "can_write",
         "document_count",
         "ready_document_count",
         "processing_document_count",
+        "failed_document_count",
         "created_at",
         "updated_at",
     }
@@ -271,6 +273,98 @@ def test_document_projection_reports_verified_metadata_and_real_index_state(
     assert first["status"] == "processing"
     assert ready["documents"][0]["status"] == "ready"
     assert ready["documents"][0]["last_applied_revision"] == 1
+
+
+def test_a_reader_of_a_shared_base_is_told_it_is_read_only_and_still_refused(
+    tmp_path: Path,
+) -> None:
+    """The projection and the write path have to say the same thing.
+
+    They are two separate expressions of one owner-only rule -- a SQL column in
+    the summary, a Python check in ``require_writable`` -- so the pairing is
+    what the test is about. ``can_write`` false alone would be a UI that hides
+    a control the server would have accepted; a 404 alone is what this closes:
+    the reader was offered the upload, transferred the whole file, and met the
+    refusal only afterwards, with an orphaned artifact left behind.
+    """
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, Any, int]:
+        created = await _create_base(client)
+        base_id = created["knowledge_base_id"]
+        shared = await _upload(
+            client,
+            knowledge_base_id=base_id,
+            document_id="doc_shared",
+            granted_principals=(NEIGHBOUR,),
+        )
+        assert shared.status_code == 201, shared.text
+        reader_view = await client.get(
+            f"/v1/knowledge-bases/{base_id}", headers=NEIGHBOUR_HEADERS
+        )
+        owner_view = await client.get(
+            f"/v1/knowledge-bases/{base_id}", headers=OWNER_HEADERS
+        )
+        refused = await _upload(
+            client,
+            knowledge_base_id=base_id,
+            document_id="doc_from_reader",
+            headers=NEIGHBOUR_HEADERS,
+        )
+        return reader_view.json(), owner_view.json(), refused.status_code
+
+    reader_view, owner_view, refused = _run(scenario, tmp_path)
+
+    assert reader_view["can_write"] is False
+    assert owner_view["can_write"] is True
+    assert refused == 404
+
+
+def test_a_refused_document_is_reported_as_failed_rather_than_processing(
+    tmp_path: Path,
+) -> None:
+    """A refusal recorded by the worker reaches both the document and the base.
+
+    The base-level count matters as much as the document's status: leaving the
+    refused document inside ``processing_document_count`` keeps the same claim
+    -- "still working on it" -- one level up, where a reader looks first.
+    """
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, Any]:
+        created = await _create_base(client)
+        base_id = created["knowledge_base_id"]
+        completed = await _upload(
+            client, knowledge_base_id=base_id, document_id="doc_1"
+        )
+        assert completed.status_code == 201, completed.text
+        # What the ingestion worker writes when a parser refuses the bytes.
+        # Written here rather than run here: this test is about the projection,
+        # and the worker's own half is exercised against a real parser in
+        # tests/persistence/test_ingestion_worker.py.
+        engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "UPDATE documents SET failed_revision = source_revision, "
+                        "failure_code = 'invalid_tool_input' "
+                        "WHERE document_id = 'doc_1'"
+                    )
+                )
+        finally:
+            await engine.dispose()
+        documents = await client.get(
+            f"/v1/knowledge-bases/{base_id}/documents", headers=OWNER_HEADERS
+        )
+        base = await client.get(f"/v1/knowledge-bases/{base_id}", headers=OWNER_HEADERS)
+        return documents.json(), base.json()
+
+    documents, base = _run(scenario, tmp_path)
+
+    assert documents["documents"][0]["status"] == "failed"
+    assert documents["documents"][0]["failure_code"] == "invalid_tool_input"
+    assert base["failed_document_count"] == 1
+    assert base["processing_document_count"] == 0
+    assert base["ready_document_count"] == 0
 
 
 def test_upload_completion_requires_owner_write_access_to_the_target_base(

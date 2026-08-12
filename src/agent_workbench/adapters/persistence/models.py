@@ -298,12 +298,28 @@ documents = Table(
     # describing a past state rather than applied over a newer one -- a stable
     # point id stops duplicate writes, and only this stops out-of-order ones.
     Column("last_applied_revision", BigInteger, nullable=False, server_default="0"),
+    # The revision the last ingestion attempt refused, and why. Recorded
+    # because "not indexed yet" and "will never be indexed" were the same
+    # observable state: the outbox retries a poison document forever, and the
+    # only thing anybody could see was a revision that stayed behind.
+    # Revision-scoped rather than a flag, so a re-upload is not born failed.
+    Column("failed_revision", BigInteger, nullable=True),
+    # An ErrorCode, never a parser's message: that text quotes the document's
+    # own bytes, and this column is read by every principal who can read the
+    # knowledge base.
+    Column("failure_code", String(32), nullable=True),
     Column("deleted", Boolean, nullable=False, server_default=text("false")),
     Column(
         "created_at",
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    ),
+    CheckConstraint(
+        # Half a failure is not representable: a revision with no code says
+        # nothing, and a code with no revision belongs to no revision.
+        "(failed_revision IS NULL) = (failure_code IS NULL)",
+        name="documents_failure_is_whole",
     ),
     Index(
         "ix_documents_tenant_id_knowledge_base_id",
@@ -976,6 +992,11 @@ task_runs = Table(
     Column("lease_until", DateTime(timezone=True), nullable=True),
     Column("heartbeat_at", DateTime(timezone=True), nullable=True),
     Column("attempt_count", Integer, nullable=False, server_default=text("0")),
+    # How many agent invocations this Task has paid for, across every retry
+    # and every reclaim (ADR-040). Distinct from `attempt_count`, which
+    # counts how many times the Task was *claimed*: one claim can run many
+    # agent nodes, and a Task reclaimed after a crash keeps what it spent.
+    Column("agent_invocation_count", Integer, nullable=False, server_default=text("0")),
     Column(
         "available_at",
         DateTime(timezone=True),
@@ -1063,7 +1084,7 @@ task_runs = Table(
         name="task_runs_lease_lifecycle",
     ),
     CheckConstraint(
-        "lease_epoch >= 0 AND attempt_count >= 0",
+        "lease_epoch >= 0 AND attempt_count >= 0 AND agent_invocation_count >= 0",
         name="task_runs_lease_counters",
     ),
     # The pick order for a Worker looking for work: oldest queued first. The

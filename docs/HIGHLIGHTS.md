@@ -130,27 +130,37 @@ profile"，没有断言"图里那个节点会用这个 profile 跑起来"——*
 
 ## 4. 证据
 
-三组数字来自三种环境，**只能分别引用，不能相加**：
+下面几行来自不同环境，**只能分别引用，不能相加**（2026-08-12 实测，基线
+`main@3c8bc95`）：
 
 | 环境 | 结果 |
 |---|---|
-| 本机，无外部服务 | `1996 passed / 644 skipped` |
-| 本机，真实 PostgreSQL + Qdrant | `2629 passed / 11 skipped` |
-| CI，真实 PostgreSQL 16 + Qdrant，**每个 PR 都跑** | 920 项，2 项环境跳过 |
+| 本机，无外部服务 | `2065 passed / 704 skipped` |
+| 本机，真实 PostgreSQL + Qdrant | `2758 passed / 11 skipped` |
+| CI 那组服务型目录（`contracts/persistence/api/vector`），本机对真实服务跑 | `1012 passed / 2 skipped` |
+| 前端 Vitest / Playwright（CI，见下） | `171 passed` / `4 passed` |
 | 本机，真实服务 + DeepSeek | 上面第 1 节那条完整 Task |
 
-静态门禁：Ruff format/lint 通过（441 files）、Pyright strict `0 errors / 0 warnings`、
-前端 Vitest `114 passed` 与严格 TypeScript/ESLint 通过、锁文件与依赖许可证门禁通过。
+前端两项标 CI 而不是本机：本机装不到 `web/package.json` 的 `engines` 钉死的
+node `24.14.0`，node 22 下 jsdom 的 `Blob` 没有 `.stream()`，三条
+`downloadArtifact` 用例在进入被测代码前就抛错。第三行则本机与 CI 都是
+`1012 passed / 2 skipped`——这是"CI 与本机跑的是同一条命令"能拿出的最直接证据。
 
-规模（2026-08-11，只数 git 跟踪的文件）：Python 源码 51831 行、测试 62171 行、
-前端 TypeScript 12657 行；23 份数据库迁移；38 份 ADR（基线内 11 份 + 实施过程中
-27 份，编号 0012–0038 连续）。测试行数多于源码行数是有意的——本项目的规矩是
+静态门禁：`ruff format --check .` 通过（493 files）、`ruff check src tests` 通过、
+Pyright strict `0 errors / 0 warnings / 0 informations`、前端 Vitest 与严格
+TypeScript/ESLint 通过、production build 通过、锁文件与依赖许可证门禁通过。
+Alembic 唯一 head 为 `0025_agent_invocation_count`。
+
+规模（2026-08-12，只数 git 跟踪的文件）：Python 源码 55114 行、测试 68952 行、
+前端 TypeScript 15271 行；25 份数据库迁移；44 份 ADR（基线内 11 份 + 实施过程中
+33 份，编号 0012–0044 连续）。测试行数多于源码行数是有意的——本项目的规矩是
 **测试先证明是红的再变绿，且没有对照组的测试不算数**：只断言"这个被拒绝"的测试，分不出一个正常
 工作的校验器和一个把什么都拒绝的校验器。
 
-**CI 那个真服务 job 不是每次都全绿**：`test_the_hybrid_and_dense_paths_agree_on_the_tie_break`
-会偶发失败，原因是下面写着的那条已知缺口（并列分数没有确定性次序）。如实写出来，是因为把它
-记成一个稳定的通过数字，既高估了这个 job，也掩盖了一条真实缺陷。
+一条**已经更正过的**记录：这里此前写着"CI 那个真服务 job 不是每次都全绿"，因为
+`test_the_hybrid_and_dense_paths_agree_on_the_tie_break` 会偶发失败。那条缺陷已由
+ADR-033 修掉，而且当初的诊断是错的（不稳的不是并列分数的次序，是分数本身）。这条留在
+这里而不是删掉——一个被改过口径的结论比一个悄悄消失的结论有用。
 
 ---
 
@@ -161,18 +171,25 @@ profile"，没有断言"图里那个节点会用这个 profile 跑起来"——*
 
 - **生产身份认证**。当前 Identity 适配器只信任请求头，所以 API 只能在受控本机使用；监听地址
   限制在 loopback，但那是防误暴露的机制，不是身份认证；
-- **已知可复现性缺口**：并列检索分数没有确定性次序，同一个问题两次提问可能得到不同的上下文与
-  引用。它同时是上面那个 CI 偶发失败的原因；
 - LlamaIndex 检索适配器已建成并通过契约测试，但**没有成为默认**——缺的不是实现，是一份能把两条
-  检索路径区分开的等价性度量，而那次评测**测不出来**。"测不出来"不是切流量的理由；
+  检索路径区分开的等价性度量，而那次评测**测不出来**：每个检索器与自己的不一致（9-10/38 题）
+  都宽于两条路径之间的差异。**造成那道噪声底的缺陷已由 ADR-033 修掉，但评测还没有在可复现的
+  检索器上重跑**，所以现在缺的是证据，不是通往证据的路；
 - ingestion 未迁移到 LlamaIndex、RAGAS runner 未落地，因此能力表里这两项**整体保持 Planned**：
   适配器存在不等于框架集成已完成；
+- 界面上还有一半沉默：Work 的任务时间线已经会说出"这一段历史缺了哪几个位置"，**Chat 的
+  `stream.quarantined` 仍然只推游标、不显示**；
 - WP15 阶段五的第二张图 `v2_general` 已有真实模型的端到端验收（2026-08-11，
   `task_3ae4d5a0…`：`understand → work → review → export → succeeded`，产出可下载
   可预览的 `.docx`）。**跑通它的代价是修掉四个各自独立的缺陷**——其中两个会静默地
   让正确的行为失败（`with_entry` 的 `model_copy` 绕过校验、路由能返回的目标不在边
   表里），过程与证据见 status.md 2026-08-11；
-- Langfuse、CrewAI 对比、动态 Multi-Agent supervisor、生产部署未完成；
+- Langfuse、CrewAI 对比、Task/Multi-Agent benchmark runner、动态 Multi-Agent supervisor 与
+  agent spawn、持久 mailbox、通用 Tool 级动态审批、Chat 历史压缩、生产部署与远程对象存储
+  （`s3` 只有配置位，没有适配器，装配层拒绝启动）均未完成；
+- 控制台管不了的事：Chat 会话只活在浏览器里（服务端没有 list/rename/delete）；知识库只能
+  创建与上传，没有重命名、删除、重建索引或 ACL 管理；没有"逐条消息的临时附件"，输入框旁的
+  上传是把文件永久放进所选知识库；Word 只能读（文字预览）与生成，不能编辑；
 - 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 的证明。
 
 ---

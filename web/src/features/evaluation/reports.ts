@@ -57,19 +57,70 @@ export const REPORTS: readonly ReportRow[] = [
 ];
 
 /**
- * Every report answers the same gold set, so a single question count and digest
- * describe all of them. Reading them off the data keeps the page honest if a
- * future run changes the set; disagreement means the reports are no longer
- * comparable and the caller should say so rather than pick one.
+ * One gold set, and the reports that answered it.
+ *
+ * The page groups by this rather than laying all four reports in one table.
+ * They do not currently answer the same questions -- the reference path was
+ * re-run on a 52-question set and the LlamaIndex path was not -- and four rows
+ * side by side read as a ranking whatever warning sits above them. On these
+ * numbers that reading is backwards: LlamaIndex looks ~9 points better at
+ * recall@1 purely because it was scored on the older, smaller set.
  */
-export const QUESTION_COUNT = hybridReference.question_count;
-export const GOLD_DIGEST = hybridReference.gold_digest;
+export interface GoldSetGroup {
+  digest: string;
+  questionCount: number;
+  rows: readonly ReportRow[];
+}
+
+/**
+ * The reports grouped by the question set they answered, largest group first.
+ *
+ * Derived rather than declared, so a re-run that puts every path back on one
+ * gold set collapses this to a single group and the page becomes one table
+ * again with no edit here.
+ */
+export function reportsByGoldSet(): readonly GoldSetGroup[] {
+  const groups = new Map<string, ReportRow[]>();
+  for (const row of REPORTS) {
+    const existing = groups.get(row.report.gold_digest);
+    if (existing === undefined) groups.set(row.report.gold_digest, [row]);
+    else existing.push(row);
+  }
+  return [...groups.entries()]
+    .map(([digest, rows]) => ({
+      digest,
+      // Every report carrying a digest answered the set that digest names, so
+      // any row's count describes the group.
+      questionCount: rows[0]?.report.question_count ?? 0,
+      rows,
+    }))
+    .sort((left, right) => right.rows.length - left.rows.length);
+}
 
 export function reportsShareOneGoldSet(): boolean {
-  return REPORTS.every(
-    (row) =>
-      row.report.question_count === QUESTION_COUNT &&
-      row.report.gold_digest === GOLD_DIGEST,
+  return reportsByGoldSet().length === 1;
+}
+
+/**
+ * Repeat-run disagreement, recorded in docs/status.md (2026-08-03).
+ *
+ * Carried with the gold set it was measured on rather than divided by whatever
+ * the current reports happen to answer. It was 9 of *38* questions; printing it
+ * over today's 52-question reference set restated a measurement as a stronger
+ * one nobody made, and would keep doing so after every future re-run.
+ */
+export const SELF_DISAGREEMENT = {
+  goldDigest: "a26070043b0ffde1",
+  questionCount: 38,
+  reference: 9,
+  llamaIndex: 10,
+  betweenPathsTopThree: 3,
+} as const;
+
+/** Whether any report on the page still answers the set those figures describe. */
+export function selfDisagreementCoversAShownReport(): boolean {
+  return REPORTS.some(
+    (row) => row.report.gold_digest === SELF_DISAGREEMENT.goldDigest,
   );
 }
 

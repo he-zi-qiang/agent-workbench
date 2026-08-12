@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.13"
+config_schema_version = "1.14"
 architecture_baseline = "1.3"
 
 [api]
@@ -99,6 +99,13 @@ heartbeat_interval_seconds = 20
 lease_grace_seconds = 10
 max_missed_heartbeats = 2
 recovery_poll_seconds = 15
+# How many synchronous adapter calls (embedding, reranking, artifact reads) may
+# occupy threads at once, and how long a caller waits for one of those slots
+# before giving up. ADR-042. Two, because one torch forward already uses the
+# cores it was given and a third slot buys nothing. The timeout bounds only the
+# wait for a slot, never the call itself.
+blocking_call_slots = 2
+blocking_call_queue_timeout_seconds = 30.0
 priority_aging_seconds = 300
 max_attempts = 5
 retry_base_seconds = 2
@@ -120,7 +127,16 @@ replay_source = "run_events"
 notify_payload_mode = "cursor_only"
 notify_payload_limit_bytes = 7900
 listener_uses_dedicated_session = true
-task_ready_channel = "agent_task_ready"
+# Must match `notifications.TASK_READY_CHANNEL`, because the sender writes that
+# constant and reads no configuration. This said `agent_task_ready` while the
+# sender said `task_ready`, which cost nothing for as long as nobody listened --
+# and became a warning on every Worker start the moment somebody did. A default
+# that logs "your configuration is ignored" trains readers to ignore the log, so
+# the default agrees and the warning is kept for deployments that really do
+# configure a different name.
+task_ready_channel = "task_ready"
+# No listener consumes this one yet, so it names nothing. Left as-is rather than
+# guessed at: the value should be decided by whoever writes the SSE listener.
 stream_ready_channel = "agent_stream_ready"
 replay_page_size = 500
 subscriber_buffer_events = 256
@@ -249,7 +265,11 @@ dense_vector_name = "dense"
 sparse_vector_name = "sparse"
 
 [rag.retrieval]
-fusion_owner = "qdrant"
+# The RRF runs in this process, not in Qdrant's Query API (ADR-033). Still one
+# fusion: the adapter issues two single-arm queries and fuses them once, which
+# is what makes a tied point's rank follow from its chunk_id and survive a
+# re-index. Changing this needs an ADR, not an edit here.
+fusion_owner = "application"
 fusion_method = "rrf"
 dense_top_k = 40
 sparse_top_k = 40
@@ -397,39 +417,31 @@ metrics_enabled = true
 langfuse_enabled = false
 
 [evaluation]
-# false, and the type behind it admits no other value. This flag read `true`
-# from the day it was written while the repository contained no RAGAS
-# dependency, no runner, no judge calibration set and no report -- so it
-# described an intention, and every reader of the configuration was entitled
-# to read it as a capability. The runner is still Planned (docs/known-gaps.md
-# A-04); when it lands, widening `EvaluationSettings.ragas_enabled` back to a
-# real bool is part of that change.
+# There is no RAGAS dependency, runner or calibration set in this repository.
+# This read `true` while all three were absent, so the configuration answered
+# "are answers judged?" with a yes the code could not honour. Setting it back to
+# `true` is now a load-time error rather than a no-op -- a flag that silently
+# enables nothing is how the claim got made in the first place.
 ragas_enabled = false
 ragas_offline_only = true
 online_judge_in_ci = false
 benchmark_isolated_process = true
 rag_gold_set_path = "./evals/rag/gold.jsonl"
 task_benchmark_path = "./evals/tasks/cases.yaml"
+# Exactly the metrics `evaluation.metrics.RETRIEVAL_METRICS` computes, and a
+# validator rejects any other name. This list previously carried nineteen
+# entries, of which the code implemented two: the answer-level ones
+# (faithfulness, citation_*, abstention_*) need a judge that does not exist, and
+# the rerank/token/cost ones need instrumentation that does not exist either.
+# They are a roadmap, and a roadmap does not belong in the file that says what
+# runs. Every metric here answers a question about ranking; k stops at 3 because
+# the harness retrieves three.
 rag_metrics = [
-  "recall_at_k",
-  "precision_at_k",
+  "recall_at_1",
+  "recall_at_3",
+  "full_coverage_at_3",
   "mrr",
-  "ndcg_at_k",
-  "rerank_ndcg_delta",
-  "rerank_recall_at_k",
-  "rerank_latency_ms",
-  "faithfulness",
-  "factual_correctness",
-  "answer_relevance",
-  "abstention_rate",
-  "abstention_accuracy",
-  "citation_precision",
-  "citation_recall",
-  "citation_locator_accuracy",
   "retrieval_latency_ms",
-  "generation_latency_ms",
-  "token_usage",
-  "cost",
 ]
 task_metrics = [
   "completion_rate",

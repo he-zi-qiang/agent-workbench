@@ -48,6 +48,7 @@ from pydantic_settings import (
 
 from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
+from agent_workbench.evaluation.metrics import RETRIEVAL_METRICS
 
 CONTROL_ENV_VARS = {
     "AW_CONFIG_FILE",
@@ -73,6 +74,13 @@ CANONICAL_FAILPOINTS = frozenset(
         "after_graph_complete_before_registry_commit",
     }
 )
+#: The retrieval metrics a report can actually contain, taken from the registry
+#: that computes them rather than restated here. Restating would let the two
+#: drift, and the direction they drift is predictable: the configuration grows
+#: the metric somebody intends to add, the registry does not, and a gold-set
+#: report quietly ships a column nobody filled. Naming the registry makes
+#: "configured" and "computable" the same list by construction.
+IMPLEMENTED_RAG_METRICS = frozenset(RETRIEVAL_METRICS)
 SECRET_LIKE_ENV_KEYS = frozenset(
     {
         "AW_DATABASE__DSN",
@@ -143,7 +151,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.13"] = "1.13"
+    config_schema_version: Literal["1.14"] = "1.14"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -309,6 +317,24 @@ class CoordinationSettings(StrictModel):
     lease_grace_seconds: int = Field(default=10, ge=0)
     max_missed_heartbeats: int = Field(default=2, ge=0, le=10)
     recovery_poll_seconds: int = Field(default=15, ge=1)
+
+    #: The bound on synchronous work offloaded to threads (ADR-042). These live
+    #: in ``[coordination]`` rather than ``[runtime]`` or ``[rag]`` for two
+    #: reasons. The mechanical one: those prefixes are in the
+    #: ``task_snapshot_allowlist``, so putting them there would make "how many
+    #: threads this host gives blocking calls" part of every Task's semantics
+    #: and would change every ``run_semantics_revision`` -- a deployment state
+    #: dressed up as meaning. The real one: their job is to keep the event loop
+    #: responsive enough that heartbeats and leases stay honest, which makes
+    #: them liveness parameters, and this is where liveness lives.
+    #:
+    #: Two slots because one torch forward already saturates the cores it was
+    #: given; the second buys "a slow call does not block an unrelated request"
+    #: and a third buys nothing. The timeout bounds *waiting for a slot* only --
+    #: never the call itself -- because a pool with no queue ceiling has merely
+    #: moved the unbounded queue from the executor onto a semaphore.
+    blocking_call_slots: int = Field(default=2, ge=1, le=32)
+    blocking_call_queue_timeout_seconds: float = Field(default=30.0, ge=1)
 
     priority_aging_seconds: int = Field(default=300, ge=0)
     max_attempts: int = Field(default=5, ge=1, le=100)
@@ -599,7 +625,18 @@ class EmbeddingSettings(StrictModel):
 
 
 class RetrievalSettings(StrictModel):
-    fusion_owner: Literal["qdrant"] = "qdrant"
+    #: Who runs the one fusion. ``"application"`` since ADR-033: the RRF moved
+    #: into this process, and the value says so because the whole point of a
+    #: single-valued Literal here is that configuration and architecture cannot
+    #: drift apart. It read ``"qdrant"`` for a while after the code had already
+    #: moved -- which is exactly the drift this field exists to make impossible.
+    #:
+    #: Still *one* fusion, which is the invariant ADR-016 froze and ADR-033
+    #: kept: each arm reaching `fused` is a raw single-arm result that nothing
+    #: has fused. What changed is where that single pass happens, so that a
+    #: tied point's rank comes from its chunk_id rather than from the engine's
+    #: internal layout.
+    fusion_owner: Literal["application"] = "application"
     fusion_method: Literal["rrf"] = "rrf"
     dense_top_k: int = Field(default=40, ge=1, le=1000)
     sparse_top_k: int = Field(default=40, ge=1, le=1000)
@@ -787,14 +824,12 @@ class EvaluationJudgeSettings(StrictModel):
 
 
 class EvaluationSettings(StrictModel):
-    # A single-valued Literal rather than a `bool` that happens to default to
-    # False. There is no RAGAS runner, no RAGAS dependency and no judge
-    # calibration in this repository, so every value of this flag means the
-    # same thing at runtime -- and a plain bool lets an overlay set it back to
-    # true and produce a configuration that claims an evaluation nobody can
-    # run. Widening this type is the first line of the change that adds the
-    # runner, not a knob to turn beforehand.
-    ragas_enabled: Literal[False] = False
+    #: No RAGAS runner, dependency or calibration set exists in this repository.
+    #: The default was ``True`` for as long as that was so, which is the worst
+    #: shape a flag can take: a reader checking whether answers are judged found
+    #: the answer "yes" in the configuration and nothing at all in the code.
+    #: Rejected rather than merely defaulted off -- see the validator.
+    ragas_enabled: bool = False
     ragas_offline_only: Literal[True] = True
     online_judge_in_ci: Literal[False] = False
     benchmark_isolated_process: Literal[True] = True
@@ -804,6 +839,49 @@ class EvaluationSettings(StrictModel):
     task_metrics: tuple[str, ...]
     multi_agent_metrics: tuple[str, ...]
     judge: EvaluationJudgeSettings
+
+    @field_validator("ragas_enabled")
+    @classmethod
+    def reject_enabling_an_absent_runner(cls, value: bool) -> bool:
+        """Fail loudly rather than accept a flag nothing reads.
+
+        Defaulting to ``False`` would fix the default and leave the trap: the
+        next person to want answer-level scoring sets the flag, sees no error,
+        and concludes it is on. There is no code path behind it, so the only
+        honest response to ``true`` is to refuse the configuration and say what
+        is missing. When a runner lands, this validator goes away with it.
+        """
+
+        if value:
+            raise ValueError(
+                "evaluation.ragas_enabled cannot be true: this repository has "
+                "no RAGAS dependency, runner or judge calibration set, so the "
+                "flag would enable nothing. Answer-level scoring is Planned "
+                "(see docs/status.md); retrieval metrics run without it."
+            )
+        return value
+
+    @field_validator("rag_metrics")
+    @classmethod
+    def validate_rag_metrics(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Every configured metric must be one the code can compute.
+
+        The same shape as ``allowed_failpoints``: a name that no implementation
+        answers to is rejected at load rather than discovered when a report
+        comes back a column short.
+        """
+
+        unknown = sorted(set(values) - IMPLEMENTED_RAG_METRICS)
+        if unknown:
+            raise ValueError(
+                "unknown evaluation.rag_metrics: "
+                + ", ".join(unknown)
+                + ". Only metrics in evaluation.metrics.RETRIEVAL_METRICS can "
+                "be computed: " + ", ".join(sorted(IMPLEMENTED_RAG_METRICS))
+            )
+        if len(values) != len(set(values)):
+            raise ValueError("rag_metrics must not contain duplicates")
+        return values
 
 
 class TestingSettings(StrictModel):

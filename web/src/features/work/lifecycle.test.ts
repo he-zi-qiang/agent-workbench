@@ -79,6 +79,27 @@ describe("the lifecycle a reader follows", () => {
     expect(stageOfNode("synthesize")).toBe("synthesize");
     expect(stageOfNode("node_the_future_added")).toBe("node_the_future_added");
   });
+
+  it("does not draw a parked task as one that is still working", () => {
+    // A Task the Registry parked for migration is stopped between steps, the
+    // same way one stopped at an approval is. Marked "active", the stage it
+    // reached carries a spinner and the note 进行中 -- which promises the reader
+    // it is about to change, and nothing can change it but a person.
+    const events = [
+      envelope("e1", "TaskSubmitted", { graph_version: "v2_general" }),
+      envelope("e2", "RunStarted", {}, "understand"),
+    ];
+
+    const parked = deriveLifecycle(events, "waiting_migration");
+    expect(parked.stages[0]?.state).toBe("waiting");
+    // Still ahead of it, not skipped: a migration is what it is waiting for,
+    // not a decision to route past the rest of the graph.
+    expect(parked.stages[1]?.state).toBe("pending");
+
+    // Unchanged for a Task that really is executing.
+    const running = deriveLifecycle(events, "running");
+    expect(running.stages[0]?.state).toBe("active");
+  });
 });
 
 function envelope(

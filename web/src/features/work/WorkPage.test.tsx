@@ -85,6 +85,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -93,6 +94,10 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       events: [],
       cursor: null,
+      // The server's claim that this page is whole. Every fixture here carries
+      // it, so a test that says nothing about damage is a test asserting the
+      // page stays quiet about it.
+      skipped_sequences: [],
     });
     vi.mocked(createTask)
       .mockRejectedValueOnce(new Error("network unavailable"))
@@ -101,6 +106,7 @@ describe("WorkPage task submission", () => {
         task_id: "task_created",
         status: "queued",
         status_detail: null,
+        agent_invocation_count: 0,
         objective_preview: null,
         created_at: "2026-08-02T12:00:00Z",
         updated_at: "2026-08-02T12:00:00Z",
@@ -144,6 +150,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -176,6 +183,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -214,6 +222,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -253,6 +262,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -282,6 +292,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_created",
       status: "queued",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: null,
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:00:00Z",
@@ -318,6 +329,7 @@ describe("WorkPage task submission", () => {
           task_id: "task_969398ecc7b14fbd9f24a50f53fbad7e",
           status: "queued",
           status_detail: null,
+          agent_invocation_count: 0,
           objective_preview: "整理这批资料，比较三个方案并输出一份建议报告",
           created_at: "2026-08-02T12:00:00Z",
           updated_at: "2026-08-02T12:00:00Z",
@@ -340,6 +352,7 @@ describe("WorkPage task submission", () => {
           task_id: "task_969398ecc7b14fbd9f24a50f53fbad7e",
           status: "queued",
           status_detail: null,
+          agent_invocation_count: 0,
           objective_preview: null,
           created_at: "2026-08-02T12:00:00Z",
           updated_at: "2026-08-02T12:00:00Z",
@@ -359,6 +372,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "今天丹东天气怎么样",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -385,11 +399,62 @@ describe("WorkPage task submission", () => {
     expect(within(rail).getByText("检索到的证据")).toBeInTheDocument();
   });
 
+  it("says the history is incomplete, and which two steps the hole fell between", async () => {
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "今天丹东天气怎么样",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(damagedTimeline());
+    renderWorkPage("/work/task_run");
+
+    // The steps that did arrive are on screen, and shorter by one -- which on
+    // its own is also what the end of a stream looks like. The page has to say
+    // which of the two it is looking at.
+    const notice = await screen.findByText(/这段历史不完整/);
+    expect(notice).toHaveTextContent("1 个位置");
+
+    // And say it with the position, placed between the steps either side of
+    // it: that is what the server sends positions instead of a count for.
+    const gap = screen.getByText(
+      "#2：在「工具调用已开始：external_search」与「任务成功完成」之间",
+    );
+    // In the reading column with the run it is about, not in the file rail --
+    // a reader has to meet this while looking at the steps it qualifies.
+    expect(gap.closest(".aw-work-run")).not.toBeNull();
+  });
+
+  it("stays quiet about damage on a Task whose pages all came back whole", async () => {
+    // The control group. A page that always warns would tell every reader
+    // their history is broken, and would pass the test above unchanged.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "今天丹东天气怎么样",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(runTimeline());
+    renderWorkPage("/work/task_run");
+
+    // Waited for, so this is a rendered timeline saying nothing rather than an
+    // empty page not having got there yet.
+    expect(await screen.findByText("收集资料")).toBeInTheDocument();
+    expect(screen.queryByText(/这段历史不完整/)).toBeNull();
+  });
+
   it("renders the produced report under the run, behind one download control", async () => {
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "比较三个方案并输出一份建议报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -424,6 +489,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "写一份季度报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -462,6 +528,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "写一份季度报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -501,6 +568,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "写一份季度报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -523,6 +591,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "今天丹东天气怎么样",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -544,6 +613,7 @@ describe("WorkPage task submission", () => {
       task_id: "task_run",
       status: "succeeded",
       status_detail: null,
+      agent_invocation_count: 0,
       objective_preview: "输出一份建议报告",
       created_at: "2026-08-02T12:00:00Z",
       updated_at: "2026-08-02T12:01:00Z",
@@ -553,6 +623,23 @@ describe("WorkPage task submission", () => {
     renderWorkPage("/work/task_run");
 
     expect(await screen.findByText("没有生成文件")).toBeInTheDocument();
+  });
+
+  it("shows the draft the approval is a decision about, before deciding", async () => {
+    vi.mocked(getTask).mockResolvedValue(task("waiting_approval"));
+    vi.mocked(getTaskTimeline).mockResolvedValue(approvalTimelineWithDraft());
+    renderWorkPage("/work/task_approval");
+
+    // The decision controls are worth nothing without the text they are about;
+    // `waiting_approval` used to render as a spinner beside a live 生成报告
+    // button.
+    const pending = await screen.findByRole("region", { name: "待确认的内容" });
+    expect(within(pending).getByText(/建议先扩产/)).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "生成报告" }),
+    ).toBeInTheDocument();
+    // The export has not run yet, so nothing is missing a file.
+    expect(screen.queryByText(/没有生成文件/)).not.toBeInTheDocument();
   });
 
   it("does not confirm an opposite decision returned for the same version", async () => {
@@ -595,6 +682,140 @@ describe("WorkPage task submission", () => {
   });
 });
 
+describe("WorkPage 停住的任务与已用预算", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(getArtifactJson).mockReset();
+    vi.mocked(getTask).mockReset();
+    vi.mocked(getTaskTimeline).mockReset();
+    vi.mocked(listKnowledgeBases).mockReset();
+    vi.mocked(listTasks).mockReset();
+    vi.mocked(newIdempotencyKey).mockReset();
+    vi.mocked(triageTask).mockReset();
+    vi.mocked(newIdempotencyKey).mockReturnValue("task:intent_1");
+    vi.mocked(triageTask).mockResolvedValue(TRIAGE_DEFAULT);
+    vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
+    vi.mocked(getArtifactJson).mockResolvedValue(taskInput(false));
+    vi.mocked(getTaskTimeline).mockResolvedValue(parkedTimeline());
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("says a parked task is waiting for a migration, not running", async () => {
+    // `waiting_migration` is not terminal, so it used to fall into the same
+    // branch as queued and running: a spinner, "任务正在执行", and a poll every
+    // three seconds. The status has no outgoing transition at all -- nothing
+    // this page can do, and nothing the reader can wait for, will move it.
+    vi.mocked(getTask).mockResolvedValue(parkedTask());
+    renderWorkPage("/work/task_parked");
+
+    expect(
+      await screen.findByText("任务在等待迁移，没有在执行"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("任务正在执行，完成后结果会显示在这里")).toBeNull();
+    // The server's reason, verbatim -- it is what an operator is handed.
+    expect(
+      screen.getByText("graph version v1_research is not registered in this process"),
+    ).toBeInTheDocument();
+    // And the run itself stopped moving too: the stage it reached is waiting,
+    // not 进行中, and not 等待你确认 either -- nobody is being asked to decide.
+    const stream = screen.getByRole("region", { name: "执行过程" });
+    expect(within(stream).getByText("等待迁移")).toBeInTheDocument();
+    expect(within(stream).queryByText("进行中")).toBeNull();
+    expect(within(stream).queryByText("等待你确认")).toBeNull();
+  });
+
+  it("stops polling a parked task", async () => {
+    vi.mocked(getTask).mockResolvedValue(parkedTask());
+    renderWorkPage("/work/task_parked");
+    // Anchored on the heading rather than on the parked notice, so this test
+    // fails for its own reason: it is about the fetching, not the wording.
+    await screen.findByRole("heading", { name: "整理这批资料，比较三个方案" });
+    const polls = vi.mocked(getTask).mock.calls.length;
+
+    // Longer than the 3s status interval, so a page that still treats this as
+    // a running Task fetches at least once more inside the wait.
+    await new Promise((resolve) => setTimeout(resolve, 4_000));
+
+    expect(vi.mocked(getTask).mock.calls.length).toBe(polls);
+  });
+
+  it("shows what a task has spent on agent invocations", async () => {
+    // Reported before it is enforced, which is the whole point of ADR-040's
+    // middle step: the number has to be visible while it climbs, not first
+    // become visible as the reason a Task died.
+    vi.mocked(getTask).mockResolvedValue(parkedTask({ agent_invocation_count: 7 }));
+    renderWorkPage("/work/task_parked");
+
+    expect(await screen.findByText(/已调用智能体\s*7\s*次/)).toBeInTheDocument();
+  });
+
+  it("says nothing about invocations a task never made", async () => {
+    vi.mocked(getTask).mockResolvedValue(parkedTask());
+    renderWorkPage("/work/task_parked");
+
+    await screen.findByRole("heading", { name: "整理这批资料，比较三个方案" });
+    expect(screen.queryByText(/已调用智能体/)).toBeNull();
+  });
+});
+
+/** A Task the Registry stopped because this deployment cannot run its graph. */
+function parkedTask(overrides: { agent_invocation_count?: number } = {}) {
+  return {
+    task_id: "task_parked",
+    status: "waiting_migration" as const,
+    // `waiting_migration` is one of the statuses the domain requires a detail
+    // on, so a fixture without one would be a Task the server cannot produce.
+    status_detail: "graph version v1_research is not registered in this process",
+    objective_preview: "整理这批资料，比较三个方案",
+    agent_invocation_count: 0,
+    created_at: "2026-08-02T12:00:00Z",
+    updated_at: "2026-08-02T12:00:30Z",
+    ...overrides,
+  };
+}
+
+/** One stage entered, then nothing -- the shape a parked run leaves behind. */
+function parkedTimeline() {
+  const base = {
+    schema_version: 1,
+    stream_id: "stream_parked",
+    run_id: "run_parked",
+    durability: "durable" as const,
+    task_id: "task_parked",
+    parent_event_id: null,
+  };
+  return {
+    task_id: "task_parked",
+    cursor: "cursor_parked",
+    skipped_sequences: [],
+    events: [
+      {
+        ...base,
+        event_id: "event_submitted",
+        event_type: "TaskSubmitted",
+        timestamp: "2026-08-02T12:00:00Z",
+        payload: { kind: "TaskSubmitted", input_ref: "art_input" },
+        sequence: 1,
+        graph_node_id: null,
+      },
+      {
+        ...base,
+        event_id: "event_understood",
+        event_type: "ModelCompleted",
+        timestamp: "2026-08-02T12:00:10Z",
+        payload: { kind: "ModelCompleted", text: "先看资料。" },
+        sequence: 2,
+        graph_node_id: "understand",
+      },
+    ],
+  };
+}
+
 function renderWorkPage(initialEntry = "/work") {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -621,6 +842,7 @@ function task(status: "waiting_approval" | "cancelled") {
     task_id: "task_approval",
     status,
     status_detail: status === "cancelled" ? "cancelled elsewhere" : null,
+    agent_invocation_count: 0,
     objective_preview: null,
     created_at: "2026-08-02T12:00:00Z",
     updated_at: "2026-08-02T12:01:00Z",
@@ -650,6 +872,7 @@ function runTimeline() {
   return {
     task_id: "task_run",
     cursor: "cursor_run",
+    skipped_sequences: [],
     events: [
       {
         ...base,
@@ -699,6 +922,22 @@ function runTimeline() {
   };
 }
 
+/**
+ * `runTimeline` as a stream with one stored row this server could not decode.
+ *
+ * The same shape the API's own contract test pins from the other side
+ * (tests/api/test_task_timeline_skips.py): positions 1 and 3 delivered, 2
+ * named as skipped, and a cursor that still moved past it.
+ */
+function damagedTimeline() {
+  const timeline = runTimeline();
+  return {
+    ...timeline,
+    events: timeline.events.filter((event) => event.sequence !== 2),
+    skipped_sequences: [2],
+  };
+}
+
 function taskInput(wantsReport: boolean) {
   return {
     schema_version: 1,
@@ -722,6 +961,7 @@ function answerTimeline() {
   return {
     task_id: "task_run",
     cursor: "cursor_answer",
+    skipped_sequences: [],
     events: [
       {
         ...base,
@@ -770,6 +1010,7 @@ function reportTimeline() {
   return {
     task_id: "task_run",
     cursor: "cursor_report",
+    skipped_sequences: [],
     events: [
       {
         ...base,
@@ -868,6 +1109,7 @@ function approvalTimeline() {
   return {
     task_id: "task_approval",
     cursor: "cursor_approval",
+    skipped_sequences: [],
     events: [
       {
         schema_version: 1,
@@ -886,6 +1128,34 @@ function approvalTimeline() {
         graph_node_id: "node_review",
         parent_event_id: null,
       },
+    ],
+  };
+}
+
+/** The same gate, with the draft that reached it still in the timeline. */
+function approvalTimelineWithDraft() {
+  const base = approvalTimeline();
+  return {
+    ...base,
+    events: [
+      {
+        schema_version: 1,
+        event_id: "event_draft",
+        stream_id: "stream_approval",
+        run_id: "run_approval",
+        event_type: "ModelCompleted",
+        durability: "durable" as const,
+        timestamp: "2026-08-02T12:00:20Z",
+        payload: {
+          kind: "ModelCompleted",
+          text: "建议先扩产二号线，再谈渠道。",
+        },
+        sequence: 1,
+        task_id: "task_approval",
+        graph_node_id: "synthesize",
+        parent_event_id: null,
+      },
+      ...base.events,
     ],
   };
 }

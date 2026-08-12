@@ -19,6 +19,10 @@ from __future__ import annotations
 
 import asyncio
 
+from agent_workbench.adapters.reranking.fake import (
+    FailingReranker,
+    LexicalOverlapReranker,
+)
 from agent_workbench.bootstrap.encoder_warmup import WARMUP_TEXT, warm_encoders
 
 
@@ -50,7 +54,12 @@ class _Exploding:
 
 
 class _Unrelated:
-    """Something with neither method -- a reranker, say."""
+    """Something with none of the warmable query paths -- a store, say.
+
+    It used to be described here as "a reranker, say", and that description was
+    the defect in one line: a reranker really did fall through to the skip, and
+    a test said so approvingly.
+    """
 
 
 def test_every_encoder_handed_over_is_actually_touched() -> None:
@@ -78,6 +87,43 @@ def test_each_encoder_is_warmed_through_its_own_method() -> None:
     assert len(sparse.calls) == 1
 
 
+def test_the_reranker_is_warmed_too() -> None:
+    """The default-on runtime that used to pay its first forward at request time.
+
+    Warming matched two shapes, ``embed_query`` and ``encode_query``, and a
+    cross-encoder answers neither -- it scores a query against passages in one
+    pass, so its query path is ``rerank``. It therefore fell through the same
+    ``else: continue`` that skips a document store, silently, while being on by
+    default. The first ``/v1/search`` with reranking then paid a cold forward
+    that the two encoders beside it had already been spared.
+    """
+
+    reranker = LexicalOverlapReranker()
+
+    asyncio.run(warm_encoders(reranker))
+
+    assert len(reranker.calls) == 1
+
+
+def test_the_reranker_is_warmed_with_a_passage_to_actually_score() -> None:
+    """An empty passage tuple would warm nothing while looking like it did.
+
+    ``BgeReranker.rerank`` returns ``()`` before touching the model when there
+    are no passages -- a sensible shortcut for a caller whose retrieval came
+    back empty, and a silent no-op for a warm-up that took it. The whole point
+    is to run one real forward pass, so the pair has to be a pair.
+    """
+
+    reranker = LexicalOverlapReranker()
+
+    asyncio.run(warm_encoders(reranker))
+
+    ((query, passages),) = reranker.calls
+    assert query == WARMUP_TEXT
+    assert len(passages) == 1
+    assert passages[0]
+
+
 def test_a_failed_warm_up_does_not_stop_the_process() -> None:
     """It buys latency. A process that refused to start over it would trade a
     slow first request for no requests at all."""
@@ -88,6 +134,21 @@ def test_a_failed_warm_up_does_not_stop_the_process() -> None:
 
     # And the one after the failure is still warmed: a single bad encoder must
     # not cost the rest their warm-up.
+    assert sparse.calls == [WARMUP_TEXT]
+
+
+def test_a_reranker_that_cannot_be_warmed_is_also_survivable() -> None:
+    """Same rule, and it has to hold for the newest shape too.
+
+    A reranker is the heaviest thing warmed here and so the likeliest to run
+    out of memory doing it. Refusing to start over that would take down chat,
+    search and uploads to protect one request from being slow.
+    """
+
+    sparse = _Sparse()
+
+    asyncio.run(warm_encoders(FailingReranker(), sparse))
+
     assert sparse.calls == [WARMUP_TEXT]
 
 

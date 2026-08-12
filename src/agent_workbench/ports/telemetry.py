@@ -126,8 +126,21 @@ TASK_CLAIMED = "task.claimed"
 TASK_SETTLED = "task.settled"
 TASK_RESUMED = "task.resumed"
 
+# Not from §12.3, which lists what a *run* reports: these two describe the
+# process the runs happen in (WP08-12), and they are here rather than beside the
+# watchdog for the same reason as everything above -- one spelling, read by a
+# dashboard and by a test.
+#
+# The ``_ms`` suffix on the first is load-bearing, not decoration: the OTel
+# adapter picks the histogram's unit by suffix, so a rename that drops it turns
+# a milliseconds histogram into a unitless one.
+EVENT_LOOP_LAG = "runtime.event_loop.lag_ms"
+EVENT_LOOP_STALLED = "runtime.event_loop.stalled"
+
 
 __all__ = [
+    "EVENT_LOOP_LAG",
+    "EVENT_LOOP_STALLED",
     "MODEL_CALLED",
     "MODEL_INPUT_TOKENS",
     "MODEL_OUTPUT_TOKENS",

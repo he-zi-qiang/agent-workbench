@@ -108,6 +108,24 @@ export interface TaskView {
   objective_preview: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * How many agent invocations this Task has already paid for, across every
+   * retry and every reclaim (ADR-040).
+   *
+   * Required rather than optional, even though the server's field carries a
+   * default: the server always serialises it, and an optional number here is
+   * one `?? 0` away from telling a reader that a Task which spent eleven
+   * invocations spent none. A budget figure that silently reads as zero when
+   * it is merely absent is worse than no figure at all.
+   *
+   * The ceiling it is spent against is deliberately *not* here, because the
+   * response does not carry one: it lives in the Task's own
+   * `run_semantics_snapshot` and only the Registry reads it. Anything this
+   * client displayed as the limit would be this deployment's current setting,
+   * not the one this Task was submitted under -- which is exactly the number
+   * ADR-040 went to the trouble of freezing per Task.
+   */
+  agent_invocation_count: number;
 }
 
 export interface TaskListResponse {
@@ -194,6 +212,21 @@ export interface TaskTimelineResponse {
   task_id: Identifier;
   events: EventEnvelope[];
   cursor: string | null;
+  /**
+   * Stored positions this page examined and could not decode.
+   *
+   * Required rather than optional because the server always sends it: an empty
+   * array is its positive claim that *this page is complete*, not "the server
+   * never looked". A short `events` tuple is also what the end of a stream
+   * looks like, so dropping this field from the type is all it takes to render
+   * a partial history as a whole one -- the exact failure the field exists to
+   * prevent (`application/tasks.py`, `routes/tasks.py`).
+   *
+   * Positions, not a count, because they live in the namespace `events` and
+   * `cursor` already use: a reader can be shown *where* the hole is, and an
+   * operator handed a position can go find the row.
+   */
+  skipped_sequences: number[];
 }
 
 export interface SearchHit {
@@ -233,9 +266,15 @@ export interface KnowledgeBaseView {
   knowledge_base_id: Identifier;
   name: string;
   description: string | null;
+  /**
+   * 这个身份能否往里加文档。用来决定「显示什么」，不用来决定「允许什么」——
+   * 服务端的 require_writable 照样会拒绝，隐藏入口只是别让人白传一遍文件。
+   */
+  can_write: boolean;
   document_count: number;
   ready_document_count: number;
   processing_document_count: number;
+  failed_document_count: number;
   created_at: string;
   updated_at: string;
 }
@@ -244,7 +283,7 @@ export interface KnowledgeBaseListResponse {
   knowledge_bases: KnowledgeBaseView[];
 }
 
-export type KnowledgeDocumentStatus = "processing" | "ready";
+export type KnowledgeDocumentStatus = "processing" | "ready" | "failed";
 
 export interface KnowledgeDocumentView {
   document_id: Identifier;
@@ -254,6 +293,8 @@ export interface KnowledgeDocumentView {
   source_revision: number;
   last_applied_revision: number;
   status: KnowledgeDocumentStatus;
+  /** 摄取被拒的机器码；只在 status 是 failed 时有值。 */
+  failure_code: string | null;
   created_at: string;
   updated_at: string;
 }

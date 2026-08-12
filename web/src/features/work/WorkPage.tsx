@@ -82,8 +82,10 @@ import {
   findTaskInputRef,
   findTaskIntent,
   isKnownEventType,
+  locateTimelineGaps,
   parseTaskInputArtifact,
   type TaskArtifact,
+  type TimelineGap,
 } from "./workTimeline";
 
 const CANCELLABLE_STATUSES = new Set<TaskStatus>([
@@ -91,11 +93,24 @@ const CANCELLABLE_STATUSES = new Set<TaskStatus>([
   "running",
   "waiting_approval",
 ]);
-const TERMINAL_STATUSES = new Set<TaskStatus>([
+/**
+ * Statuses nothing will move on its own.
+ *
+ * The four the domain calls terminal, plus `waiting_migration` -- which it is
+ * careful *not* to call terminal, because the Task is neither finished nor
+ * abandoned. For everything this page does, though, it belongs with them:
+ * `ALLOWED_TRANSITIONS` gives `waiting_migration` no outgoing edge at all
+ * (`domain/task_registry.py`), so a Worker cannot pick it up, a retry cannot
+ * move it, and a person has to decide what happens to it. Polling one is asking
+ * a question whose answer cannot change, and the spinner over it claims work is
+ * happening that is not.
+ */
+const SETTLED_STATUSES = new Set<TaskStatus>([
   "succeeded",
   "failed",
   "cancelled",
   "dead_letter",
+  "waiting_migration",
 ]);
 
 interface CreateTaskIntent {
@@ -202,19 +217,19 @@ export function WorkPage() {
       return getTask(identity, selectedTaskId);
     },
     refetchInterval: (query) =>
-      isTerminalStatus(query.state.data?.status) ? false : 3_000,
+      isSettledStatus(query.state.data?.status) ? false : 3_000,
   });
 
   const timeline = useTaskTimeline(
     identity,
     selectedTaskId,
     2_500,
-    !isTerminalStatus(taskQuery.data?.status),
+    !isSettledStatus(taskQuery.data?.status),
   );
   const refreshTimeline = timeline.refresh;
   const selectedTaskStatus = taskQuery.data?.status;
   useEffect(() => {
-    if (isTerminalStatus(selectedTaskStatus)) void refreshTimeline();
+    if (isSettledStatus(selectedTaskStatus)) void refreshTimeline();
   }, [refreshTimeline, selectedTaskStatus]);
   const taskInputRef = useMemo(
     () => findTaskInputRef(timeline.events),
@@ -272,6 +287,16 @@ export function WorkPage() {
   const taskEvents = useMemo(
     () => timeline.events.filter((event) => event.graph_node_id === null),
     [timeline.events],
+  );
+  // The stream above shows what arrived; this is what the server said did not.
+  // An empty `skippedSequences` is its claim that the pages were complete, so
+  // silence here is not neutral -- it is the one way this page can present a
+  // partial history as a whole one, which is what the field exists to prevent
+  // (application/tasks.py). Anchored to the events either side of each hole,
+  // because that is what positions buy over a count.
+  const timelineGaps = useMemo(
+    () => locateTimelineGaps(timeline.events, timeline.skippedSequences),
+    [timeline.events, timeline.skippedSequences],
   );
   const artifacts = useMemo(
     () => collectArtifacts(timeline.events),
@@ -653,12 +678,24 @@ export function WorkPage() {
           />
           <div className="aw-work-attachment-row">
             <AttachmentButton
-              disabled={createBusy}
+              disabled={createBusy || attachments.readOnlyReason !== null}
+              {...(attachments.readOnlyReason === null
+                ? {}
+                : { disabledReason: attachments.readOnlyReason })}
               onFiles={attachments.addFiles}
             />
+            {/* The reason is in the line as well as the button's tooltip: a
+                disabled paperclip explains itself to a mouse and to nobody on
+                a touch screen or a screen reader that never hovers. */}
             <span>
-              添加 PDF 或 Markdown
-              {knowledgeBaseId === null ? "（选择知识库后上传）" : "（上传到所选知识库）"}
+              {attachments.readOnlyReason ?? (
+                <>
+                  添加 PDF 或 Markdown
+                  {knowledgeBaseId === null
+                    ? "（选择知识库后上传）"
+                    : "（上传到所选知识库）"}
+                </>
+              )}
             </span>
           </div>
           <AttachmentTray
@@ -851,6 +888,33 @@ export function WorkPage() {
                 {selectedTask.objective_preview === null ? null : (
                   <code className="aw-task-id">{shortId(selectedTask.task_id, 28)}</code>
                 )}
+                {/* What this Task has spent, where it is spent (ADR-040). In
+                    the header rather than behind 任务详情 because it is the one
+                    number that moves while the Task runs, and the point of
+                    reporting it before it is ever enforced is that somebody
+                    sees a Task climbing towards a ceiling *before* the ceiling
+                    stops it.
+
+                    Used, with no "/ 上限". The ceiling is frozen per Task in
+                    its own run_semantics_snapshot and the Task response does
+                    not carry it; the only limit this client could reach for is
+                    whatever this deployment is configured with today, which is
+                    exactly the number ADR-040 refused to bill against. A
+                    denominator that is right for most Tasks and silently wrong
+                    for the retried one is worse than no denominator.
+
+                    Hidden at zero: every research Task stays at zero, and a
+                    budget line that reads 0 on most of the page teaches readers
+                    to stop seeing it. */}
+                {selectedTask.agent_invocation_count > 0 ? (
+                  <small
+                    className="aw-task-id"
+                    title="这个任务累计消耗的智能体调用次数。重试和被重新接管都算在同一个数上；上限由提交时的运行语义决定，接口没有返回，所以这里只报已用。"
+                  >
+                    {selectedTask.objective_preview === null ? "" : " · "}
+                    已调用智能体 {selectedTask.agent_invocation_count} 次
+                  </small>
+                ) : null}
               </div>
               <StatusPill status={selectedTask.status} />
             </header>
@@ -866,10 +930,11 @@ export function WorkPage() {
               lifecycle={lifecycle}
               loading={timeline.loading && timeline.events.length === 0}
               onOpenArtifact={(artifact) => downloadMutation.mutate(artifact)}
-              running={!isTerminalStatus(selectedTask.status)}
               stageEvents={stageEvents}
+              status={selectedTask.status}
               taskEvents={taskEvents}
             />
+            <TimelineGapNotice gaps={timelineGaps} />
             {timeline.error !== null ? (
               <ErrorNotice message={errorMessage(timeline.error, "读取时间线失败")} />
             ) : null}
@@ -1060,14 +1125,19 @@ function TaskStepStream({
   lifecycle,
   loading,
   onOpenArtifact,
-  running,
+  status,
   stageEvents,
   taskEvents,
 }: {
   lifecycle: Lifecycle;
   loading: boolean;
   onOpenArtifact: (artifact: ArtifactRef) => void;
-  running: boolean;
+  // The status itself rather than a `running` boolean derived at the call site.
+  // Two things here need it and they need different answers from it: whether
+  // the stream is live, and what a stopped stage is stopped *on*. A boolean
+  // could only carry the first, which is how a parked Task ended up with a
+  // stage that said 等待你确认 about a decision nobody is being asked to make.
+  status: TaskStatus;
   stageEvents: Map<string, EventEnvelope[]>;
   taskEvents: EventEnvelope[];
 }) {
@@ -1083,7 +1153,9 @@ function TaskStepStream({
         : stage.state === "pending"
           ? "等待中"
           : stage.state === "waiting"
-            ? "等待你确认"
+            ? status === "waiting_migration"
+              ? "等待迁移"
+              : "等待你确认"
             : stage.state === "active"
               ? "进行中"
               : stage.endedAt === null
@@ -1099,10 +1171,59 @@ function TaskStepStream({
       isKnownEvent={(event) => isKnownEventType(event.event_type)}
       meta={{ title: "任务生命周期", events: taskEvents }}
       onOpenArtifact={onOpenArtifact}
-      running={running}
+      running={!isSettledStatus(status)}
       stages={stages}
     />
   );
+}
+
+/**
+ * The part of the run this page was told it did not receive.
+ *
+ * Under the stream rather than over it, because it is a statement *about* the
+ * steps above: a reader has to have seen them to know what is missing from
+ * them. Each hole names the two steps it fell between, so the incompleteness
+ * is attached to a stretch of the run instead of floating over the whole
+ * thing -- an operator can also take the position straight to the log row.
+ *
+ * The wording says "没有交给这个页面" and not "丢了": the rows are still in the
+ * log. What failed is decoding them here, and telling a user their history was
+ * destroyed when it was not would send them looking for the wrong thing.
+ */
+function TimelineGapNotice({ gaps }: { gaps: TimelineGap[] }) {
+  if (gaps.length === 0) return null;
+
+  return (
+    <div className="aw-notice is-warning aw-timeline-gaps">
+      <AlertTriangle aria-hidden="true" size={16} />
+      {/* A div rather than the `span` the other notices wrap their text in,
+          because this one carries a list and a span may only hold phrasing. */}
+      <div>
+        <strong>
+          这段历史不完整：上面的步骤中缺了 {gaps.length} 个位置。
+        </strong>
+        <small>这些事件仍在日志里，只是这次没能解码、没有交给这个页面。</small>
+        <ul>
+          {gaps.map((gap) => (
+            <li key={gap.sequence}>{describeTimelineGap(gap)}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+/** Where one hole sits, in terms of the events the reader can actually see. */
+function describeTimelineGap(gap: TimelineGap): string {
+  const position = `#${String(gap.sequence)}`;
+  if (gap.before !== null && gap.after !== null) {
+    return `${position}：在「${eventTitle(gap.before)}」与「${eventTitle(gap.after)}」之间`;
+  }
+  if (gap.before !== null) return `${position}：在「${eventTitle(gap.before)}」之后`;
+  if (gap.after !== null) return `${position}：在「${eventTitle(gap.after)}」之前`;
+  // Nothing readable came back around it, so there is no step to hang it on.
+  // Said plainly rather than dressed up as a location this page does not have.
+  return `${position}：前后都没有读出来的事件`;
 }
 
 /**
@@ -1170,6 +1291,12 @@ function ArtifactRail({
  * and the answer is the whole deliverable -- the same thing Chat returns -- so
  * an answer with no file attached is the ordinary case and is presented as one.
  * Only a Task that *was* asked for a file has anything missing when none exists.
+ *
+ * `waiting_approval` is not "still running" even though it is not terminal, and
+ * that distinction is the whole point of the gate: the draft exists, the export
+ * has not happened, and the reader is being asked to decide about the text. It
+ * used to render as a spinner, which left the approve button asking for consent
+ * to something the console would not show.
  */
 function TaskResult({
   artifact,
@@ -1220,10 +1347,54 @@ function TaskResult({
   });
 
   if (artifact === null) {
-    if (!isTerminalStatus(status)) {
+    // Parked, and its own thing. This Task was submitted under run semantics
+    // this deployment cannot build, so the Registry stopped it and wrote why
+    // (`waiting_migration` is one of the statuses that must carry a detail).
+    // It is not executing and it is not finished, and -- unlike every other
+    // non-terminal status -- nothing brings it back: the transition table gives
+    // it no outgoing edge, so neither waiting nor resubmitting this Task moves
+    // it. Reported as "任务正在执行" it was two lies at once, and the second one
+    // is the expensive one: it invited the reader to wait for an event that
+    // cannot arrive.
+    if (status === "waiting_migration") {
+      return (
+        <section className="aw-result">
+          <div className="aw-notice is-warning">
+            <AlertTriangle aria-hidden="true" size={16} />
+            <span>
+              <strong>任务在等待迁移，没有在执行</strong>
+              <small>
+                它是按这套部署跑不了的执行版本提交的，已经停在这里：等下去不会有进展，
+                重新提交同一个任务也不会，需要管理员先处理版本迁移。
+              </small>
+              {/* The server's own sentence, verbatim. It is English and it is
+                  written for whoever has to act on it -- which is not the
+                  reader of this page, but is the person they will quote it
+                  to. */}
+              {statusDetail === undefined ? null : <small>{statusDetail}</small>}
+            </span>
+          </div>
+        </section>
+      );
+    }
+    // The text the approval gate is a gate over. Held back until the reader
+    // decided, it is exactly what they are being asked about, so this is the
+    // one non-terminal status that has something to show.
+    const awaitingDecision = status === "waiting_approval" && draftText !== null;
+    if (!isSettledStatus(status) && !awaitingDecision) {
       return (
         <section className="aw-result is-running">
-          <LoadingLine label="任务正在执行，完成后结果会显示在这里" />
+          {/* At the gate with no draft in hand means the timeline has not
+              caught up yet -- it is still arriving, and the decision below is
+              about text this page is in the middle of reading. Saying "任务正在
+              执行" there would name the wrong thing as the reason to wait. */}
+          <LoadingLine
+            label={
+              status === "waiting_approval"
+                ? "正在读取待确认的内容"
+                : "任务正在执行，完成后结果会显示在这里"
+            }
+          />
         </section>
       );
     }
@@ -1231,17 +1402,29 @@ function TaskResult({
     // one this is simply the result -- headlining it "这次没有生成文件" reported
     // a normal outcome as a shortfall, and named the one thing that did not
     // happen instead of the thing that did.
-    if (status === "succeeded" && draftText !== null) {
+    if ((status === "succeeded" || awaitingDecision) && draftText !== null) {
+      // Only a finished Task can be missing a file it was asked for. One still
+      // at the gate has not reached the export step, so saying so here would
+      // report the gate itself as a shortfall.
+      const missingReport = wantsReport === true && !awaitingDecision;
       return (
-        <section className="aw-answer" aria-label="任务结果">
+        <section
+          className="aw-answer"
+          aria-label={awaitingDecision ? "待确认的内容" : "任务结果"}
+        >
           <header>
             <span className="aw-answer-mark" aria-hidden="true">A</span>
-            <strong>回答</strong>
-            {wantsReport === true ? <small>没有生成文件</small> : null}
+            <strong>{awaitingDecision ? "待确认的内容" : "回答"}</strong>
+            {missingReport ? <small>没有生成文件</small> : null}
           </header>
-          {wantsReport === true ? (
+          {missingReport ? (
             <p className="aw-page-note">
               这个任务要求生成文件，但没有产出；下面是它写出的内容。
+            </p>
+          ) : null}
+          {awaitingDecision ? (
+            <p className="aw-page-note">
+              下面是任务写出的内容。确认后才会导出成文件；请先看过再决定。
             </p>
           ) : null}
           <MarkdownContent text={draftText} />
@@ -1481,8 +1664,8 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function isTerminalStatus(status: TaskStatus | undefined): boolean {
-  return status !== undefined && TERMINAL_STATUSES.has(status);
+function isSettledStatus(status: TaskStatus | undefined): boolean {
+  return status !== undefined && SETTLED_STATUSES.has(status);
 }
 
 function workflowStageTitle(graphNodeId: string): string {

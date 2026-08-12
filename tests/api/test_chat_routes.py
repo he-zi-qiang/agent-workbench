@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import tomllib
 import uuid
 from collections.abc import Awaitable, Callable
@@ -97,8 +98,49 @@ def _run(scenario: Callable[[httpx.AsyncClient], Awaitable[Any]], root: Path) ->
     return asyncio.run(execute())
 
 
-def test_the_chat_routes_are_absent_without_an_embedder(tmp_path: Path) -> None:
-    """A 404 a client detects once beats a 500 on every request."""
+def _run_assembled(
+    scenario: Callable[[httpx.AsyncClient], Awaitable[Any]], root: Path
+) -> Any:
+    """The real assembly, with chat requested and nothing stubbed in for it.
+
+    Distinct from `_run` (which opts out of chat entirely) and from
+    `_run_mounted` (which substitutes a scripted execution and needs a live
+    Qdrant). What is under test here is what `build_dependencies` decides when
+    the embedding runtime will not import, so nothing about that decision may
+    be stubbed.
+    """
+
+    async def execute() -> Any:
+        engine = create_query_engine(_dsn(), application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(text(f"TRUNCATE {TABLES} CASCADE"))
+        finally:
+            await engine.dispose()
+
+        dependencies = build_dependencies(project_api(_settings(root)))
+        app = create_app(dependencies)
+        transport = httpx.ASGITransport(app=app)  # pyright: ignore[reportArgumentType]
+        try:
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://api.test"
+            ) as client:
+                return await scenario(client)
+        finally:
+            await dependencies.dispose()
+
+    return asyncio.run(execute())
+
+
+def test_the_chat_routes_are_absent_when_chat_was_not_requested(
+    tmp_path: Path,
+) -> None:
+    """A 404 a client detects once beats a 500 on every request.
+
+    This is the ``with_chat=False`` process -- one assembled deliberately
+    without chat. It is *not* the "no embedding runtime" case, which keeps its
+    routes; see the test below.
+    """
 
     async def scenario(client: httpx.AsyncClient) -> int:
         response = await client.post(
@@ -107,6 +149,44 @@ def test_the_chat_routes_are_absent_without_an_embedder(tmp_path: Path) -> None:
         return response.status_code
 
     assert _run(scenario, tmp_path) == 404
+
+
+def test_direct_chat_is_served_without_an_embedding_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The half that needs no index stays reachable, and the other half refuses.
+
+    Direct chat retrieves nothing, so it has no use for an embedder -- but a
+    missing embedder used to withdraw the entire ``/v1/chat`` router, and with
+    it the mode the console opens in. Two claims, and the second is what keeps
+    the first honest: opening a session must work, and a grounded ask must come
+    back 422 rather than being accepted and failing in the selector as a 500.
+    """
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
+        created = await client.post(
+            f"{CHAT_PREFIX}/sessions", headers=OWNER_HEADERS, json={}
+        )
+        if created.status_code != 201:
+            return created.status_code, 0
+        session_id = created.json()["session_id"]
+        # Refused before a turn is claimed, so no provider is reached and this
+        # test needs no model. The direct path deliberately is not asked here:
+        # answering one would call DeepSeek.
+        grounded = await client.post(
+            f"{CHAT_PREFIX}/sessions/{session_id}/messages",
+            headers=_turn_headers(OWNER_HEADERS),
+            json={
+                "question": "what do the attached documents say",
+                "answer_mode": "rag",
+                "knowledge_base_id": "kb_missing",
+            },
+        )
+        return created.status_code, grounded.status_code
+
+    assert _run_assembled(scenario, tmp_path) == (201, 422)
 
 
 def test_the_upload_routes_are_still_there(tmp_path: Path) -> None:

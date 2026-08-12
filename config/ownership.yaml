@@ -190,6 +190,14 @@
       ]
     },
     {
+      "owner": "adapters.blocking_call_runner",
+      "lifecycle": "startup",
+      "fields": [
+        "coordination.blocking_call_slots",
+        "coordination.blocking_call_queue_timeout_seconds"
+      ]
+    },
+    {
       "owner": "workers.task.retry_policy",
       "lifecycle": "live",
       "fields": [

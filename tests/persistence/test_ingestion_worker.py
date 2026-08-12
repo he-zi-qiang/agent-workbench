@@ -31,6 +31,7 @@ from agent_workbench.adapters.embedding import DeterministicEmbedder
 from agent_workbench.adapters.ingestion import (
     ApproximateTokenCounter,
     TextDocumentParser,
+    UnsupportedMediaTypeError,
 )
 from agent_workbench.adapters.persistence import (
     PostgresDocumentStore,
@@ -38,9 +39,13 @@ from agent_workbench.adapters.persistence import (
     PostgresOutbox,
     create_query_engine,
 )
+from agent_workbench.adapters.persistence.knowledge_bases import (
+    PostgresKnowledgeBaseStore,
+)
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.chunking import Chunker
 from agent_workbench.application.ingestion import IngestionService
+from agent_workbench.ports.knowledge_bases import KnowledgeDocument
 from agent_workbench.workers.ingestion import IngestionWorker
 
 DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
@@ -52,6 +57,10 @@ OWNER = "user_owner"
 SIZE = 8
 FIRST = b"Dense retrieval finds passages by meaning.\n"
 SECOND = b"Sparse retrieval finds them by term overlap instead.\n"
+# Declared text/plain by the upload path and not decodable as UTF-8, so the
+# parser refuses it -- the ordinary shape of a document this build cannot read,
+# rather than a fault injected into the worker.
+UNREADABLE = b"\xff\xfe\x00 not UTF-8 at all\n"
 
 TABLES = (
     "artifacts, upload_intents, document_acl, document_versions, documents, "
@@ -144,6 +153,30 @@ class _Harness:
                     )
                 ).scalar_one()
             )
+
+    async def projected(self) -> KnowledgeDocument:
+        """What a reader of this knowledge base is told about the document.
+
+        Read through the real projection rather than the row, because the row
+        is not what anybody sees: the whole point of recording a refusal is the
+        status the interface derives from it.
+        """
+
+        documents = await PostgresKnowledgeBaseStore(
+            self.engine
+        ).list_readable_documents(
+            tenant_id=TENANT, principal_id=OWNER, knowledge_base_id=KB
+        )
+        return documents[0]
+
+    async def recorded_refusal(self) -> tuple[int | None, str | None]:
+        async with self.engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text("SELECT failed_revision, failure_code FROM documents")
+                )
+            ).one()
+        return row.failed_revision, row.failure_code
 
 
 def _run(scenario: Callable[[_Harness], Awaitable[Any]], root: Path) -> Any:
@@ -268,6 +301,72 @@ def test_a_drained_queue_is_empty(tmp_path: Path) -> None:
         return await PostgresOutbox(harness.engine).pending_count()
 
     assert _run(scenario, tmp_path) == 0
+
+
+def test_a_document_the_parser_refuses_is_reported_as_failed(tmp_path: Path) -> None:
+    """The wait has to end somewhere, and for this document it never does.
+
+    Nothing about the retry changes: the event stays unacknowledged and comes
+    back after its lease, and it will be refused again for the same reason.
+    What changes is that the refusal is now visible while that happens --
+    before, the only two states were "indexed" and "not indexed yet", and a
+    file no parser here can read sat in the second one for ever.
+    """
+
+    async def scenario(harness: _Harness) -> tuple[str, str, Any, Any]:
+        await harness.upload(UNREADABLE)
+        before = await harness.projected()
+        with pytest.raises(UnsupportedMediaTypeError):
+            await harness.worker.drain()
+        after = await harness.projected()
+        return (
+            before.status,
+            after.status,
+            after.failure_code,
+            await harness.recorded_refusal(),
+        )
+
+    before, after, code, recorded = _run(scenario, tmp_path)
+
+    # The control: the same document, one drain earlier, is genuinely still
+    # waiting. Without this the assertion below could pass on a projection that
+    # called everything failed.
+    assert before == "processing"
+    assert after == "failed"
+    # The code, not the parser's message -- that message quotes the bytes it
+    # refused, and this field is readable by everyone the base is shared with.
+    assert code == "invalid_tool_input"
+    assert recorded == (1, "invalid_tool_input")
+
+
+def test_a_later_revision_that_indexes_leaves_no_refusal_behind(
+    tmp_path: Path,
+) -> None:
+    """A refusal describes one revision, and must not outlive it.
+
+    Re-uploading readable bytes is the ordinary answer to a rejected file. If
+    the marker survived, the document would be searchable and still labelled
+    failed, which is the original complaint with the sign flipped.
+    """
+
+    async def scenario(harness: _Harness) -> tuple[str, Any, Any]:
+        await harness.upload(UNREADABLE)
+        with pytest.raises(UnsupportedMediaTypeError):
+            await harness.worker.drain()
+        await harness.upload(FIRST)
+        await harness.worker.drain()
+        projected = await harness.projected()
+        return (
+            projected.status,
+            projected.failure_code,
+            await harness.recorded_refusal(),
+        )
+
+    status, code, recorded = _run(scenario, tmp_path)
+
+    assert status == "ready"
+    assert code is None
+    assert recorded == (None, None)
 
 
 def test_a_held_document_guard_defers_without_acknowledging_the_event(

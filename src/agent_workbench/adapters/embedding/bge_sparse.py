@@ -13,11 +13,14 @@ lives behind the same extra and imports inside its loader.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
+from agent_workbench.adapters.concurrency.call_runner import (
+    BlockingCallRunner,
+    offload,
+)
 from agent_workbench.ports.sparse import (
     SparseEncodingUnavailableError,
     SparseVector,
@@ -111,6 +114,9 @@ class BgeM3SparseEncoder:
     revision: str
     batch_size: int = 16
     _vocabulary_size: int = field(default=0)
+    #: ADR-042. ``None`` means the shared default executor; every production
+    #: composition passes the bounded runner instead.
+    runner: BlockingCallRunner | None = None
 
     @classmethod
     def load(
@@ -122,6 +128,7 @@ class BgeM3SparseEncoder:
         batch_size: int = 16,
         loader: Callable[..., LexicalEncoder] = load_bge_m3,
         vocabulary_size: Callable[[str, str], int] | None = None,
+        runner: BlockingCallRunner | None = None,
     ) -> BgeM3SparseEncoder:
         """Load the model and refuse anything whose weights are not lexical.
 
@@ -151,6 +158,7 @@ class BgeM3SparseEncoder:
             revision=revision,
             batch_size=batch_size,
             _vocabulary_size=measured,
+            runner=runner,
         )
 
     @property
@@ -184,7 +192,7 @@ class BgeM3SparseEncoder:
 
         # Compute-bound and synchronous, like the dense encoder. Awaiting it
         # inline would hold the loop for a whole batch.
-        return await asyncio.to_thread(run)
+        return await offload(self.runner, run, name="bge-m3-sparse-encode")
 
 
 def _to_vector(weights: Any) -> SparseVector:

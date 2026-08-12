@@ -17,7 +17,7 @@ print one.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import SecretStr
@@ -504,6 +504,23 @@ class SandboxConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BlockingCallRunnerConfig:
+    """The bound on synchronous adapter work, for whichever process runs it.
+
+    ADR-042. Projected rather than read from settings inside the adapters, for
+    the same reason as everything else here: an adapter that imported settings
+    would be a second place deciding what a deployment means.
+
+    Defaults match ``config.default.toml`` so every hand-built projection in
+    the tests keeps working; the shipped configuration is still the only thing
+    a deployment reads.
+    """
+
+    slots: int = 2
+    queue_timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True, slots=True)
 class TaskWorkerRuntimeConfig:
     """The minimum configuration of one Worker process.
 
@@ -527,8 +544,16 @@ class TaskWorkerRuntimeConfig:
     worker_id: str
     worker_concurrency: int
     # Demo and adapter-injection tests intentionally do not need heavy model
-    # runtimes. A normal projected Worker always carries these; real assembly
-    # refuses their absence rather than substituting synthetic retrieval.
+    # runtimes. A normal projected Worker always carries all of these -- there
+    # is no configuration that withholds the retrieval three, because
+    # `settings.rag` and `settings.qdrant` are required sections -- so `None`
+    # here means a hand-built config and nothing else.
+    #
+    # Which is why real assembly does not treat "retrieval configured" as
+    # "retrieval available": it refuses to substitute *synthetic* retrieval,
+    # but an embedding runtime that will not load on this machine downgrades
+    # the Worker to v2 rather than stopping it. Reading that refusal off these
+    # fields made it fire on every deployment without the embedding extra.
     model: ModelConfig | None = None
     qdrant: QdrantConfig | None = None
     embedding: EmbeddingConfig | None = None
@@ -538,6 +563,10 @@ class TaskWorkerRuntimeConfig:
     research: ResearchConfig | None = None
     mcp: MCPConfig | None = None
     sandbox: SandboxConfig | None = None
+    #: ADR-042. How many blocking adapter calls may hold threads at once.
+    blocking_calls: BlockingCallRunnerConfig = field(
+        default_factory=BlockingCallRunnerConfig
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -578,6 +607,10 @@ class IngestionWorkerRuntimeConfig:
     error_backoff_seconds: float
     lease_seconds: int
     heartbeat_seconds: int
+    #: ADR-042. How many blocking adapter calls may hold threads at once.
+    blocking_calls: BlockingCallRunnerConfig = field(
+        default_factory=BlockingCallRunnerConfig
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -616,6 +649,10 @@ class ApiRuntimeConfig:
     # tool that fails, an absence, so a deployment that configured nothing
     # cannot spend money by accident.
     research: ResearchConfig | None = None
+    #: ADR-042. How many blocking adapter calls may hold threads at once.
+    blocking_calls: BlockingCallRunnerConfig = field(
+        default_factory=BlockingCallRunnerConfig
+    )
 
 
 def project_observability(settings: Settings) -> ObservabilityConfig:
@@ -667,6 +704,12 @@ def project_task_worker(
     """
 
     return TaskWorkerRuntimeConfig(
+        blocking_calls=BlockingCallRunnerConfig(
+            slots=settings.coordination.blocking_call_slots,
+            queue_timeout_seconds=(
+                settings.coordination.blocking_call_queue_timeout_seconds
+            ),
+        ),
         database=DatabaseConfig(
             dsn=settings.database.dsn,
             application_name=settings.database.application_name,
@@ -793,6 +836,12 @@ def project_ingestion_worker(
     """Project the process that turns the durable outbox into a hybrid index."""
 
     return IngestionWorkerRuntimeConfig(
+        blocking_calls=BlockingCallRunnerConfig(
+            slots=settings.coordination.blocking_call_slots,
+            queue_timeout_seconds=(
+                settings.coordination.blocking_call_queue_timeout_seconds
+            ),
+        ),
         database=DatabaseConfig(
             dsn=settings.database.dsn,
             application_name=f"{settings.database.application_name}-ingestion",
@@ -890,6 +939,12 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
     """Project validated settings onto what the API process consumes."""
 
     return ApiRuntimeConfig(
+        blocking_calls=BlockingCallRunnerConfig(
+            slots=settings.coordination.blocking_call_slots,
+            queue_timeout_seconds=(
+                settings.coordination.blocking_call_queue_timeout_seconds
+            ),
+        ),
         observability=project_observability(settings),
         deployment_scope=settings.app.deployment_scope,
         log_level=settings.app.log_level,

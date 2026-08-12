@@ -463,7 +463,81 @@ def test_claimed_events_are_not_claimed_again(tmp_path: Path) -> None:
 def test_heartbeat_extends_the_current_claim_with_the_database_clock(
     tmp_path: Path,
 ) -> None:
+    """The control: honest slow work keeps its claim past the lease it got.
+
+    The lease is deliberately shorter than the wait that follows it, so the
+    assertion has something to fail on: with no extension the row is back in
+    the reclaim queue by the time the second worker looks. Nothing here sends
+    a timestamp -- the new expiry is computed from the database's clock, which
+    is the only clock two workers are guaranteed to agree on.
+    """
+
     async def scenario(harness: Harness) -> int:
+        await _upload(harness)
+        claimed = await harness.outbox.claim(worker_id="worker_1", lease_seconds=1.0)
+        event = claimed[0]
+        await harness.outbox.heartbeat(
+            claim_token=event.claim_token,
+            lease_seconds=60,
+        )
+        await asyncio.sleep(1.1)
+        return len(await harness.outbox.claim(worker_id="worker_2"))
+
+    assert _run(scenario, tmp_path) == 0
+
+
+def test_a_heartbeat_holds_the_whole_batch_and_not_just_the_event_in_hand(
+    tmp_path: Path,
+) -> None:
+    """The tail of a claim must not expire while the head is being applied.
+
+    ``claim`` leases a batch in one statement, so every row gets the same
+    expiry; ``IngestionWorker`` then applies them one at a time, heartbeating
+    only for the event in flight. When the heartbeat named that one event, the
+    rows queued behind it went on expiring against a lease sized for a single
+    document -- 32 events under 90 seconds, in the shipped defaults -- and
+    became claimable while this worker was still going to apply them. Two
+    workers holding the same event is precisely what the token fence exists to
+    prevent, so the batch has to be renewed the way it was granted.
+
+    Three documents, a lease far shorter than the wait, one heartbeat quoting
+    the *first* event's token: what is asserted is what a second worker can
+    take afterwards, because that -- not the return of the heartbeat -- is
+    where the damage would show.
+    """
+
+    async def scenario(harness: Harness) -> tuple[int, int]:
+        for index in range(3):
+            await _upload(harness, document_id=f"doc_{index}")
+        claimed = await harness.outbox.claim(worker_id="worker_1", lease_seconds=1.0)
+        await harness.outbox.heartbeat(
+            claim_token=claimed[0].claim_token,
+            lease_seconds=60,
+        )
+        await asyncio.sleep(1.1)
+        return len(claimed), len(await harness.outbox.claim(worker_id="worker_2"))
+
+    # The control is the first number: a batch of one would pass this test
+    # against the per-event heartbeat too, and prove nothing.
+    assert _run(scenario, tmp_path) == (3, 0)
+
+
+def test_a_heartbeat_cannot_revive_a_lease_that_already_expired(
+    tmp_path: Path,
+) -> None:
+    """P1-10, one step earlier than the ack case.
+
+    The window closed here is the one *before* another worker gets there. The
+    lease is over, so the event is already somebody else's to take, but no
+    second claim has minted a token yet -- which means the stalled holder's
+    token still matches and the fence alone cannot refuse it. Extending the
+    lease there quietly takes the event back out of the reclaim queue, and it
+    tells a worker that has lost its claim that it may keep writing: the
+    ingestion worker treats a heartbeat that returns as "I still hold the
+    fence" and only cancels its in-flight write when this raises.
+    """
+
+    async def scenario(harness: Harness) -> None:
         await _upload(harness)
         event = (await harness.outbox.claim(worker_id="worker_1"))[0]
         async with harness.engine.begin() as connection:
@@ -476,13 +550,37 @@ def test_heartbeat_extends_the_current_claim_with_the_database_clock(
                 {"event_id": event.event_id},
             )
         await harness.outbox.heartbeat(
-            event_id=event.event_id,
             claim_token=event.claim_token,
             lease_seconds=60,
         )
-        return len(await harness.outbox.claim(worker_id="worker_2"))
 
-    assert _run(scenario, tmp_path) == 0
+    with pytest.raises(StaleExecutionError):
+        _run(scenario, tmp_path)
+
+
+def test_a_stalled_worker_cannot_heartbeat_work_another_worker_took(
+    tmp_path: Path,
+) -> None:
+    """The same sequence as the stale ack, run against a real expiry.
+
+    No SQL surgery: the lease is short enough to run out on its own, a second
+    worker picks the event up, and the first one wakes to renew a claim that
+    is now two removes gone -- expired, and reassigned.
+    """
+
+    async def scenario(harness: Harness) -> None:
+        await _upload(harness)
+        stalled = await harness.outbox.claim(worker_id="worker_1", lease_seconds=0.05)
+        await asyncio.sleep(0.1)
+        current = (await harness.outbox.claim(worker_id="worker_2"))[0]
+        assert current.claim_token != stalled[0].claim_token
+        await harness.outbox.heartbeat(
+            claim_token=stalled[0].claim_token,
+            lease_seconds=60,
+        )
+
+    with pytest.raises(StaleExecutionError):
+        _run(scenario, tmp_path)
 
 
 def test_a_stale_heartbeat_cannot_extend_a_reclaimed_event(tmp_path: Path) -> None:
@@ -501,7 +599,6 @@ def test_a_stale_heartbeat_cannot_extend_a_reclaimed_event(tmp_path: Path) -> No
         current = (await harness.outbox.claim(worker_id="worker_2"))[0]
         assert current.claim_token != stale.claim_token
         await harness.outbox.heartbeat(
-            event_id=stale.event_id,
             claim_token=stale.claim_token,
             lease_seconds=60,
         )
@@ -893,6 +990,33 @@ def test_the_reclaiming_worker_can_acknowledge(tmp_path: Path) -> None:
         current = await harness.outbox.claim(worker_id="worker_2")
         await harness.outbox.ack(
             event_id=current[0].event_id, claim_token=current[0].claim_token
+        )
+        return await harness.outbox.pending_count()
+
+    assert _run(scenario, tmp_path) == 0
+
+
+def test_finished_work_is_acknowledged_even_past_its_own_lease(
+    tmp_path: Path,
+) -> None:
+    """Why ack is not fenced on the lease the way heartbeat is.
+
+    The two ask different questions. Heartbeat asks "may I keep going", and
+    once the lease is over the answer is no whether or not anybody has
+    reclaimed the event yet. Ack asks "may I write down that this is done",
+    and it is only reachable here because no second claim exists -- a second
+    claim would have rotated the token and the fence would refuse this. So the
+    work happened once, nobody else is holding it, and refusing the ack would
+    leave a finished unit queued for someone to redo: the duplicate processing
+    the lease exists to bound, manufactured by the lease itself.
+    """
+
+    async def scenario(harness: Harness) -> int:
+        await _upload(harness)
+        finished = await harness.outbox.claim(worker_id="worker_1", lease_seconds=0.05)
+        await asyncio.sleep(0.1)
+        await harness.outbox.ack(
+            event_id=finished[0].event_id, claim_token=finished[0].claim_token
         )
         return await harness.outbox.pending_count()
 

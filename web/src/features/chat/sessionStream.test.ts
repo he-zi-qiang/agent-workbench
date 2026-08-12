@@ -1,6 +1,7 @@
+import type { SseFrame } from "../../api/sse";
 import type { PrincipalIdentity } from "../../api/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamChatSession } from "./sessionStream";
+import { streamChatSession, type FrameAcceptance } from "./sessionStream";
 
 const IDENTITY: PrincipalIdentity = {
   tenantId: "tenant_a",
@@ -186,6 +187,248 @@ describe("Chat fetch SSE", () => {
     expect(timerSpy.mock.calls.map((call) => call[1])).toEqual([750, 1_500]);
   });
 });
+
+describe("Quarantined positions", () => {
+  it("steps over a position the server declared skipped and keeps reading", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseWithFrames([sseFrame(1, "evt_1"), quarantineFrame(2), sseFrame(3, "evt_3")]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const trace = traceOf(controller);
+
+    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+
+    expect(trace.seen).toEqual(["evt_1", "evt_3"]);
+    // The notice moved the cursor by exactly one, so a reconnect resumes after
+    // the unreadable row rather than in front of it.
+    expect(trace.cursors).toEqual([
+      { id: "cursor_1", sequence: 1 },
+      { id: "cursor_2", sequence: 2 },
+      { id: "cursor_3", sequence: 3 },
+    ]);
+    expect(trace.errors.filter((error) => error.includes("序号不连续"))).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("control: an unannounced hole still reconnects from the last safe cursor", async () => {
+    // The load-bearing control. Same shape as the case above with the notice
+    // removed: if this ever passes, the continuity check has been dismantled
+    // and a silently shortened stream would go unnoticed.
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValue(
+      responseWithFrames([sseFrame(1, "evt_1"), sseFrame(3, "evt_3")]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const trace = traceOf(controller);
+
+    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+
+    expect(trace.seen).toEqual(["evt_1"]);
+    expect(trace.cursors).toEqual([{ id: "cursor_1", sequence: 1 }]);
+    expect(trace.errors.at(-1)).toContain("期望 2，收到 3");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("control: a stream with nothing quarantined is unchanged", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseWithFrames([sseFrame(1, "evt_1"), sseFrame(2, "evt_2"), sseFrame(3, "evt_3")]),
+      ),
+    );
+    const trace = traceOf(controller);
+
+    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+
+    expect(trace.seen).toEqual(["evt_1", "evt_2", "evt_3"]);
+    expect(trace.cursors).toEqual([
+      { id: "cursor_1", sequence: 1 },
+      { id: "cursor_2", sequence: 2 },
+      { id: "cursor_3", sequence: 3 },
+    ]);
+    expect(trace.states).toEqual(["connecting", "connected", "retrying"]);
+  });
+
+  it("steps over a run of consecutive skipped positions", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseWithFrames([
+          sseFrame(1, "evt_1"),
+          quarantineFrame(2),
+          quarantineFrame(3),
+          sseFrame(4, "evt_4"),
+        ]),
+      ),
+    );
+    const trace = traceOf(controller);
+
+    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+
+    expect(trace.seen).toEqual(["evt_1", "evt_4"]);
+    expect(trace.cursors.at(-1)).toEqual({ id: "cursor_4", sequence: 4 });
+    expect(trace.errors.filter((error) => error.includes("序号不连续"))).toEqual([]);
+  });
+
+  it("advances past a page that was quarantined end to end", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const resumeFrom: Array<string | null> = [];
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => {
+      resumeFrom.push(new Headers(init.headers).get("last-event-id"));
+      if (resumeFrom.length >= 2) controller.abort();
+      return Promise.resolve(
+        responseWithFrames(
+          resumeFrom.length === 1
+            ? [quarantineFrame(1), quarantineFrame(2), quarantineFrame(3)]
+            : [],
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const trace = traceOf(controller, { abortOnRetry: false });
+
+    const stream = streamChatSession({
+      ...trace.options,
+      initialCursor: null,
+      signal: controller.signal,
+    });
+    await vi.runAllTimersAsync();
+    await stream;
+
+    expect(trace.seen).toEqual([]);
+    // Nothing was delivered, yet the second attempt resumes after the poison
+    // instead of meeting it again -- the loop this frame exists to break.
+    expect(resumeFrom).toEqual([null, "cursor_3"]);
+    expect(trace.cursors.at(-1)).toEqual({ id: "cursor_3", sequence: 3 });
+  });
+
+  it("control: a notice for a position other than the next one still reconnects", async () => {
+    // A notice is not a token that permits skipping ahead: it accounts for its
+    // own position and nothing else, so position 2 vanishing here is a hole.
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(responseWithFrames([sseFrame(1, "evt_1"), quarantineFrame(3)])),
+    );
+    const trace = traceOf(controller);
+
+    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+
+    expect(trace.cursors).toEqual([{ id: "cursor_1", sequence: 1 }]);
+    expect(trace.errors.at(-1)).toContain("期望 2，收到 3");
+  });
+
+  it("control: a notice too malformed to parse leaves the gap unexplained", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseWithFrames([
+          sseFrame(1, "evt_1"),
+          quarantineFrame(2, { sequence: "2" }),
+          sseFrame(3, "evt_3"),
+        ]),
+      ),
+    );
+    const trace = traceOf(controller);
+
+    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+
+    expect(trace.seen).toEqual(["evt_1"]);
+    expect(trace.errors.at(-1)).toContain("期望 2，收到 3");
+  });
+
+  it("does not trust a notice announcing another stream's position", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseWithFrames([sseFrame(1, "evt_1"), quarantineFrame(2, { stream_id: "ses_other" })]),
+      ),
+    );
+    const trace = traceOf(controller);
+
+    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+
+    expect(trace.cursors).toEqual([{ id: "cursor_1", sequence: 1 }]);
+    expect(trace.errors.at(-1)).toContain("不可信的持久事件");
+  });
+
+  it("ignores a replayed notice for a position the cursor already passed", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(responseWithFrames([quarantineFrame(2), sseFrame(5, "evt_5")])),
+    );
+    const trace = traceOf(controller);
+
+    await streamChatSession({
+      ...trace.options,
+      initialCursor: { id: "cursor_4", sequence: 4 },
+      signal: controller.signal,
+    });
+
+    expect(trace.seen).toEqual(["evt_5"]);
+    expect(trace.cursors).toEqual([{ id: "cursor_5", sequence: 5 }]);
+  });
+});
+
+interface StreamTrace {
+  seen: string[];
+  cursors: Array<{ id: string; sequence: number }>;
+  states: string[];
+  errors: string[];
+  options: {
+    identity: PrincipalIdentity;
+    sessionId: string;
+    onFrame: (frame: SseFrame) => FrameAcceptance;
+    onCursor: (cursor: { id: string; sequence: number }) => void;
+    onConnectionChange: (state: string, error?: string) => void;
+  };
+}
+
+function traceOf(
+  controller: AbortController,
+  { abortOnRetry = true }: { abortOnRetry?: boolean } = {},
+): StreamTrace {
+  const trace: StreamTrace = {
+    seen: [],
+    cursors: [],
+    states: [],
+    errors: [],
+    options: {
+      identity: IDENTITY,
+      sessionId: "ses_1",
+      onFrame: (frame) => {
+        trace.seen.push(frame.envelope.event_id);
+        return "accepted";
+      },
+      onCursor: (cursor) => trace.cursors.push(cursor),
+      onConnectionChange: (state, error) => {
+        trace.states.push(state);
+        if (error !== undefined) trace.errors.push(error);
+        if (abortOnRetry && state === "retrying") controller.abort();
+      },
+    },
+  };
+  return trace;
+}
+
+function quarantineFrame(sequence: number, overrides: Record<string, unknown> = {}): string {
+  const notice = {
+    event_id: `evt_${sequence}`,
+    event_type: "ModelCompleted",
+    schema_version: 1,
+    sequence,
+    stream_id: "ses_1",
+    ...overrides,
+  };
+  return `id: cursor_${sequence}\nevent: stream.quarantined\ndata: ${JSON.stringify(notice)}\n\n`;
+}
 
 function responseWithFrames(frames: string[]): Response {
   const encoder = new TextEncoder();

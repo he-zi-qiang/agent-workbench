@@ -28,6 +28,7 @@ from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
+from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
@@ -141,6 +142,12 @@ class ApiDependencies:
     chat_reaper: ChatTurnReaper | None
     chat_pending_recovery: ChatPendingReleaseRecovery | None
     chat_unavailable: str | None
+    #: Why grounded answers are unavailable while Chat itself is served, or
+    #: None when they are available. Distinct from `chat_unavailable`: a
+    #: process with no embedding runtime still answers Direct, and reporting
+    #: that as "no chat" is what withdrew the whole router from the deployment
+    #: least able to spare it.
+    rag_unavailable: str | None
     # Chat still serves without one, so this is a quality note rather than a
     # missing capability. Recorded because an unreranked process is
     # indistinguishable from a reranked one at the endpoint, and an ablation
@@ -195,6 +202,30 @@ class ApiDependencies:
         """Retrieval is servable without a model; chat is not."""
 
         return self.retrieval is not None
+
+    @property
+    def effective_retrieval_shape(self) -> str:
+        """The shape this process actually serves, not the one it configured.
+
+        These differ exactly when the grounded half could not be assembled --
+        no embedding runtime, most often -- and the difference matters at the
+        route: refusing RAG by reading the *configured* shape would accept a
+        grounded request this deployment cannot answer, and turn a 422 the
+        client can act on into a 500 from the selector underneath.
+
+        Read off the selector that will run the turn rather than off
+        ``rag_unavailable``. The two would normally agree, but only one of them
+        is the thing that decides: ``rag_unavailable`` is a sentence recorded at
+        assembly, and anything that replaces ``chat`` afterwards -- a test
+        harness substituting an execution, most obviously -- leaves the
+        sentence describing a service that is no longer there. Asking the
+        selector cannot go stale, because it *is* the answer.
+        """
+
+        execution = self.chat.execution if self.chat is not None else None
+        if isinstance(execution, AnswerModeSelector) and execution.rag is None:
+            return "ungrounded"
+        return self.config.chat.retrieval_shape
 
     def sink_for(self, *, stream_id: str, run_id: str) -> ScopedEventSink:
         """The sink one run writes into.
@@ -284,7 +315,12 @@ def build_dependencies(
     )
     documents = PostgresDocumentStore(engine)
     knowledge_bases = KnowledgeBaseService(PostgresKnowledgeBaseStore(engine))
-    artifacts = LocalArtifactStore(Path(config.artifacts.local_root))
+    # ADR-042. One pool per process, threaded into every adapter that blocks.
+    blocking = BlockingCallRunner(
+        slots=config.blocking_calls.slots,
+        queue_timeout_seconds=config.blocking_calls.queue_timeout_seconds,
+    )
+    artifacts = LocalArtifactStore(Path(config.artifacts.local_root), runner=blocking)
     conversations = PostgresConversationStore(engine)
     releaser = PostgresChatReleaseCoordinator(engine)
 
@@ -310,39 +346,31 @@ def build_dependencies(
     )
 
     telemetry = build_telemetry(config.observability)
-    (
-        chat,
-        unavailable,
-        http,
-        qdrant,
-        vector_index,
-        no_reranker,
-        no_sparse,
-        encoders,
-        retrieval,
-        triage,
-    ) = (
+    assembled = (
         _assemble_chat(
             config,
             documents,
+            blocking=blocking,
             conversations=conversations,
             releaser=releaser,
             telemetry=telemetry.telemetry,
         )
         if with_chat
-        else (
-            None,
-            "chat was not requested for this process",
-            None,
-            None,
-            None,
-            None,
-            None,
-            (),
-            None,
-            None,
+        else _AssembledChat(
+            chat_unavailable="chat was not requested for this process",
+            rag_unavailable="chat was not requested for this process",
         )
     )
+    chat = assembled.chat
+    unavailable = assembled.chat_unavailable
+    http = assembled.http
+    qdrant = assembled.qdrant
+    vector_index = assembled.vector_index
+    no_reranker = assembled.reranker_unavailable
+    no_sparse = assembled.sparse_unavailable
+    encoders = assembled.encoders
+    retrieval = assembled.retrieval
+    triage = assembled.triage
     return ApiDependencies(
         config=config,
         engine=engine,
@@ -378,6 +406,7 @@ def build_dependencies(
             batch_size=config.chat_recovery.reaper_batch_size,
         ),
         chat_unavailable=unavailable,
+        rag_unavailable=assembled.rag_unavailable,
         reranker_unavailable=no_reranker,
         sparse_unavailable=no_sparse,
         http=http,
@@ -395,78 +424,142 @@ def build_dependencies(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _AssembledChat:
+    """What one attempt at the chat stack produced, and what it could not.
+
+    Two separate absences, which used to be one. ``chat_unavailable`` means no
+    turn can be answered at all -- there is no model. ``rag_unavailable`` means
+    only the grounded half is missing, which is the ordinary state of a process
+    with no embedding runtime installed and is not a reason to withdraw Chat.
+    """
+
+    chat: ChatService | None = None
+    chat_unavailable: str | None = None
+    #: Why grounded answers are unavailable, or None when they are available.
+    rag_unavailable: str | None = None
+    http: httpx.AsyncClient | None = None
+    qdrant: AsyncQdrantClient | None = None
+    vector_index: QdrantVectorIndex | None = None
+    reranker_unavailable: str | None = None
+    sparse_unavailable: str | None = None
+    encoders: tuple[object, ...] = ()
+    retrieval: RetrievalService | None = None
+    triage: TaskTriageService | None = None
+
+
 def _assemble_chat(
     config: ApiRuntimeConfig,
     documents: PostgresDocumentStore,
     *,
+    blocking: BlockingCallRunner,
     conversations: PostgresConversationStore,
     releaser: PostgresChatReleaseCoordinator,
     telemetry: Telemetry,
-) -> tuple[
-    ChatService | None,
-    str | None,
-    httpx.AsyncClient | None,
-    AsyncQdrantClient | None,
-    QdrantVectorIndex | None,
-    str | None,
-    str | None,
-    tuple[object, ...],
-    RetrievalService | None,
-    TaskTriageService | None,
-]:
-    """Build the chat stack, or report the one reason it could not be built.
+) -> _AssembledChat:
+    """Build the chat stack, and report whichever halves could not be built.
 
     The embedder is tried first because it is the only piece whose absence is
     an expected state rather than a misconfiguration. Everything after it --
     the model, the vector index -- either works or is a refusal, and refusing
     is ``build_model``'s job, not something to soften into a degraded mode.
+
+    **A missing embedder costs retrieval, not Chat.** It used to return here,
+    which withdrew the entire ``/v1/chat`` router -- including Direct, the mode
+    the console opens in, which reaches no index, needs no embedding and is the
+    one thing such a deployment can still do. The deployment that most needs a
+    working Direct chat is exactly the one that could not load an embedding
+    runtime, and that was the deployment that had no Chat at all. What follows
+    is the same assembly with the retrieval half elided, which is a shape this
+    module already had a name for: ``retrieval_shape = "ungrounded"``.
     """
 
-    embedder = build_embedder(config.embedding)
-    if isinstance(embedder, EmbeddingUnavailable):
-        return None, embedder.reason, None, None, None, None, None, (), None, None
+    built_embedder = build_embedder(config.embedding, runner=blocking)
+    no_embedder = (
+        built_embedder.reason
+        if isinstance(built_embedder, EmbeddingUnavailable)
+        else None
+    )
+    embedder = (
+        None if isinstance(built_embedder, EmbeddingUnavailable) else built_embedder
+    )
 
-    # After the embedder, because a process that cannot chat has no use for a
-    # reranker and loading one would be several gigabytes spent on a capability
-    # that is not being served.
-    reranker = build_reranker(config.reranker)
+    # After the embedder, because a process with nothing to retrieve has no use
+    # for a reranker and loading one would be several gigabytes spent on a
+    # capability that is not being served.
+    #
+    # Both notes stay `None` when the embedder is missing, and that is not an
+    # oversight: they exist so an ablation cannot mistake an unreranked process
+    # for a reranked one, so they have to mean "this deployment loaded no
+    # reranker" and nothing else. Filling them in with "there was no embedder"
+    # would report a downgrade at a step that was never reached.
+    reranker = (
+        None if embedder is None else build_reranker(config.reranker, runner=blocking)
+    )
     no_reranker = reranker.reason if isinstance(reranker, RerankerUnavailable) else None
-    sparse = build_sparse_encoder(config.embedding)
+    sparse = (
+        None
+        if embedder is None
+        else build_sparse_encoder(config.embedding, runner=blocking)
+    )
     no_sparse = sparse.reason if isinstance(sparse, SparseEncodingUnavailable) else None
 
-    qdrant = AsyncQdrantClient(
-        url=config.qdrant.url,
-        api_key=(
-            config.qdrant.api_key.get_secret_value()
-            if config.qdrant.api_key is not None
-            else None
-        ),
-        timeout=config.qdrant.request_timeout_seconds,
-    )
-    # Read via the alias, never the ingestion collection. This makes an alias
-    # switch affect new Chat requests without changing the write target.
-    vector_index = QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias)
+    qdrant: AsyncQdrantClient | None = None
+    vector_index: QdrantVectorIndex | None = None
+    retrieval: RetrievalService | None = None
+    encoders: tuple[object, ...] = ()
+    if embedder is not None:
+        qdrant = AsyncQdrantClient(
+            url=config.qdrant.url,
+            api_key=(
+                config.qdrant.api_key.get_secret_value()
+                if config.qdrant.api_key is not None
+                else None
+            ),
+            timeout=config.qdrant.request_timeout_seconds,
+        )
+        # Read via the alias, never the ingestion collection. This makes an
+        # alias switch affect new Chat requests without changing the write
+        # target.
+        vector_index = QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias)
 
-    sparse_encoder = None if isinstance(sparse, SparseEncodingUnavailable) else sparse
-    # What startup warms. Taken from what was just assembled rather than read
-    # back off the retrieval service: which encoders a retriever holds is now
-    # its own business -- LlamaIndex's does not expose them the way the
-    # reference path did -- and warming is about the runtimes this process
-    # loaded, which is a fact this scope already has.
-    encoders = tuple(e for e in (embedder, sparse_encoder) if e is not None)
+        sparse_encoder = (
+            None if isinstance(sparse, SparseEncodingUnavailable) else sparse
+        )
+        # What startup warms. Taken from what was just assembled rather than
+        # read back off the retrieval service: which encoders a retriever holds
+        # is now its own business -- LlamaIndex's does not expose them the way
+        # the reference path did -- and warming is about the runtimes this
+        # process loaded, which is a fact this scope already has.
+        #
+        # The reranker is in here for the same reason the other two are: it is
+        # on by default and its first forward pass is exactly as cold. It is
+        # bound to a name and reused below so that what startup warms is
+        # provably the object retrieval will call -- warming a second instance
+        # would spend the boot time and save the request nothing. `None` here
+        # means one thing only: the weights or the runtime behind them did not
+        # load. There is no switch to be off -- `rag.reranker.enabled` is a
+        # `Literal[True]`, so settings rejects a deployment that tries -- and
+        # warming skips `None` rather than making this a conditional.
+        loaded_reranker = (
+            None if isinstance(reranker, RerankerUnavailable) else reranker
+        )
+        encoders = tuple(
+            e for e in (embedder, sparse_encoder, loaded_reranker) if e is not None
+        )
 
-    retrieval = RetrievalService(
-        candidate_retriever=build_candidate_retriever(
-            llama_index_enabled=config.retrieval.llama_index_enabled,
-            embedder=embedder,
-            index=vector_index,
-            sparse_encoder=sparse_encoder,
-        ),
-        documents=documents,
-        telemetry=telemetry,
-        reranker=None if isinstance(reranker, RerankerUnavailable) else reranker,
-        rerank_timeout_seconds=config.reranker.timeout_seconds,
-    )
+        retrieval = RetrievalService(
+            candidate_retriever=build_candidate_retriever(
+                llama_index_enabled=config.retrieval.llama_index_enabled,
+                embedder=embedder,
+                index=vector_index,
+                sparse_encoder=sparse_encoder,
+            ),
+            documents=documents,
+            telemetry=telemetry,
+            reranker=loaded_reranker,
+            rerank_timeout_seconds=config.reranker.timeout_seconds,
+        )
     # The model comes last, and its absence costs only chat. Retrieval is
     # already assembled above and does not need a provider: a deployment with no
     # key can still index documents and search them, and saying "no chat"
@@ -479,19 +572,20 @@ def _assemble_chat(
     try:
         model = build_model(config.model, client=client)
     except ModelNotConfiguredError as unconfigured:
-        return (
-            None,
-            str(unconfigured),
-            client,
-            qdrant,
-            vector_index,
-            no_reranker,
-            no_sparse,
-            encoders,
-            retrieval,
+        return _AssembledChat(
+            chat_unavailable=str(unconfigured),
+            # No model means no answer of either kind, so the grounded half is
+            # unavailable for this reason too rather than for its own.
+            rag_unavailable=str(unconfigured),
+            http=client,
+            qdrant=qdrant,
+            vector_index=vector_index,
+            reranker_unavailable=no_reranker,
+            sparse_unavailable=no_sparse,
+            encoders=encoders,
+            retrieval=retrieval,
             # No model, no triage: the endpoint answers "default" and every
             # client submits what it always has.
-            None,
         )
 
     policy_identity = f"api-{config.deployment_scope}"
@@ -623,11 +717,22 @@ def _assemble_chat(
     )
 
     rag_execution: TurnExecution | None
-    if config.chat.retrieval_shape == "ungrounded":
+    rag_unavailable: str | None = None
+    if retrieval is None:
+        # No embedding runtime, so no grounded half to build. Reached before the
+        # configured shape is consulted because a shape is a choice among
+        # retrieval-backed executions, and there is no retrieval to back one --
+        # this deployment is `ungrounded` in fact whatever the file says. Direct
+        # is assembled below exactly as it is everywhere else, which is the
+        # whole point: it never touched an index.
+        rag_execution = None
+        rag_unavailable = no_embedder or "no retrieval was assembled"
+    elif config.chat.retrieval_shape == "ungrounded":
         # This legacy deployment choice remains useful as a capability ceiling:
         # the route rejects RAG before a turn is claimed and the selector keeps
         # the same refusal for non-HTTP callers.
         rag_execution = None
+        rag_unavailable = "this deployment serves chat.retrieval_shape='ungrounded'"
     elif config.chat.retrieval_shape == "routed":
         # The retrieval service is the router's input rather than an optional
         # extra: the switch is decided by asking, so it needs the same funnel
@@ -741,19 +846,20 @@ def _assemble_chat(
         if config.triage.enabled
         else None
     )
-    return (
-        chat,
-        None,
-        client,
-        qdrant,
-        vector_index,
-        no_reranker,
-        no_sparse,
+    return _AssembledChat(
+        chat=chat,
+        chat_unavailable=None,
+        rag_unavailable=rag_unavailable,
+        http=client,
+        qdrant=qdrant,
+        vector_index=vector_index,
+        reranker_unavailable=no_reranker,
+        sparse_unavailable=no_sparse,
         # Every RAG shape shares this RetrievalService. Direct turns bypass it,
         # while startup still warms what a later RAG turn will actually use.
-        encoders,
-        retrieval,
-        triage,
+        encoders=encoders,
+        retrieval=retrieval,
+        triage=triage,
     )
 
 

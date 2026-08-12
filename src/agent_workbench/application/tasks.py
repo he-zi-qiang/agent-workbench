@@ -13,6 +13,13 @@ inside a tenant, so a query by id must answer the same way for "no such Task"
 and "not yours". Answering differently is itself the disclosure: the difference
 confirms the id exists. That is why this returns ``NotFoundError`` for both and
 never a "forbidden".
+
+The timeline read has one more property worth naming: a single stored row this
+process cannot decode used to make a whole Task's history unreachable. Where
+the log offers an isolating replay it is used, and the positions that were
+skipped are returned alongside the events -- an empty ``skipped_sequences`` is
+the claim that the slice is complete, so a caller that shows a timeline can
+only present a partial one as whole by ignoring a field it was handed.
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Literal, Protocol, runtime_checkable
 
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.events import EventEnvelope
@@ -98,17 +105,76 @@ class TaskPage(DomainModel):
 
 
 class TaskTimeline(DomainModel):
-    """One slice of a Task's events, and where to continue from.
+    """One slice of a Task's events, what it skipped, and where to continue.
 
-    ``cursor`` is absent only for an empty slice. It is what a client sends
-    back to resume, so it is the *last delivered* position rather than the end
-    of the stream: a slice that stopped at the limit and one that reached the
-    end resume identically.
+    ``cursor`` is absent only for a slice that examined nothing. It is what a
+    client sends back to resume, so it is the last position this slice
+    *reached* rather than the end of the stream: a slice that stopped at the
+    limit and one that reached the end resume identically. Reached, not
+    delivered -- a slice whose last row was undecodable still moves the caller
+    past it, or the next request would meet the same row and no client would
+    ever advance. A slice can therefore carry a cursor and no events at all.
+
+    ``skipped_sequences`` names the positions this slice examined and could not
+    deliver. It is a field rather than a log line because a partial history
+    presented as a whole one is the failure this path introduces: the rows are
+    still in the log, but this caller did not receive them, and the only honest
+    way to hand back a shorter tuple is to hand back what is missing with it.
     """
 
     task_id: Identifier
     events: tuple[EventEnvelope, ...]
     cursor: EventCursor | None = None
+    skipped_sequences: tuple[int, ...] = ()
+
+    @property
+    def skipped(self) -> int:
+        """How many stored positions this slice could not deliver."""
+
+        return len(self.skipped_sequences)
+
+
+class _QuarantinedEvent(Protocol):
+    """The one thing a timeline needs from a row it did not receive."""
+
+    @property
+    def sequence(self) -> int: ...
+
+
+class _ReplayPage(Protocol):
+    """One page of a replay: what arrived, what did not, how far it looked."""
+
+    @property
+    def events(self) -> tuple[EventEnvelope, ...]: ...
+    @property
+    def quarantined(self) -> tuple[_QuarantinedEvent, ...]: ...
+    @property
+    def resume_after(self) -> int | None: ...
+
+
+@runtime_checkable
+class IsolatingEventLog(Protocol):
+    """A log that can replay past a row it cannot decode, and name it.
+
+    Structural, and stated here rather than added to ``EventLogPort``, for two
+    reasons that point the same way. The capability belongs to a store that can
+    see raw rows -- a port method returning "everything except what broke"
+    would make degraded replay the contract for every implementation, including
+    ones with no way to hold a damaged row. And this layer must not import the
+    adapter that has it (``tests/architecture/test_dependency_boundaries.py``),
+    so the shape is what travels, not the class.
+
+    A log without it is not a lesser log: it keeps the strict read, which is
+    the behaviour this method had before isolation existed.
+    """
+
+    async def read_isolating(
+        self,
+        stream_id: str,
+        *,
+        after_sequence: int | None = None,
+        limit: int = 500,
+    ) -> _ReplayPage: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,9 +353,15 @@ class TaskService:
         A cursor from another stream is refused rather than ignored. Ignoring
         it would silently serve this Task's history to a client that asked to
         continue a different one, and it is a client-supplied value.
+
+        A log that can isolate an undecodable row is asked to, because the
+        alternative is that one such row makes the whole Task unreadable. What
+        it skipped comes back in ``skipped_sequences``; nothing about the
+        strict read changes for a log that cannot.
         """
 
-        if self.events is None:
+        log = self.events
+        if log is None:
             raise TimelineUnavailableError(
                 "this task service was assembled without an event log"
             )
@@ -301,10 +373,27 @@ class TaskService:
         if after is not None and after.stream_id != stream_id:
             raise NotFoundError("task not found")
 
-        recorded = await self.events.read(
+        after_sequence = None if after is None else after.sequence
+        # Capped identically on both paths. The bound is what keeps a read from
+        # being a way to ask the server to hold a whole Task in memory, and a
+        # second path that forgot it would be the way around the first.
+        bounded = min(limit, MAX_TIMELINE_LIMIT)
+
+        if isinstance(log, IsolatingEventLog):
+            page = await log.read_isolating(
+                stream_id, after_sequence=after_sequence, limit=bounded
+            )
+            return TaskTimeline(
+                task_id=task.task_id,
+                events=page.events,
+                cursor=_resume_cursor(stream_id, page.resume_after, after),
+                skipped_sequences=tuple(record.sequence for record in page.quarantined),
+            )
+
+        recorded = await log.read(
             stream_id,
-            after_sequence=None if after is None else after.sequence,
-            limit=min(limit, MAX_TIMELINE_LIMIT),
+            after_sequence=after_sequence,
+            limit=bounded,
         )
         return TaskTimeline(
             task_id=task.task_id,
@@ -315,6 +404,31 @@ class TaskService:
 
 class TimelineUnavailableError(RuntimeError):
     """The service can open and read Tasks, but was given no event log."""
+
+
+def _resume_cursor(
+    stream_id: Identifier,
+    resume_after: int | None,
+    previous: EventCursor | None,
+) -> EventCursor | None:
+    """Where an isolating slice leaves the caller.
+
+    ``resume_after`` is the highest position the page *examined*, quarantined
+    rows included. Taking the last delivered event instead would hand back a
+    cursor sitting in front of an undecodable row whenever that row is last on
+    the page, and the next request would read it again -- the client would poll
+    forever and never move.
+
+    ``None`` means the page examined nothing, and then the caller's own cursor
+    is still the truth. Passing it through as the new cursor is the trap: a
+    ``None`` written into the cursor is indistinguishable from "start at the
+    beginning", so an empty page would send the client back to the head of the
+    stream and replay the entire Task on every poll.
+    """
+
+    if resume_after is None:
+        return previous
+    return EventCursor(stream_id=stream_id, sequence=resume_after)
 
 
 def _cursor_after(
@@ -377,6 +491,7 @@ __all__ = [
     "MAX_PAGE_LIMIT",
     "MAX_TIMELINE_LIMIT",
     "TASK_THREAD_PREFIX",
+    "IsolatingEventLog",
     "SubmittedSemantics",
     "TaskGraphChoice",
     "TaskPage",

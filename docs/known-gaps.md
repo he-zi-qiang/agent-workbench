@@ -1,7 +1,7 @@
 # 已知缺口
 
-截至 **2026-08-11**，`main@bf31815`（PR #112）；配置 schema `1.13`，Alembic
-迁移 23 个（head `0023_kg_mentions_chunk_index`）。
+截至 **2026-08-12**，`main@3c8bc95`（PR #116）；配置 schema `1.14`，Alembic
+迁移 25 个（head `0025_agent_invocation_count`）。
 
 ## 这份文档解决什么问题
 
@@ -354,11 +354,18 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 
 ### E-05 文档中的数字过时 —— 口径不实
 
-**证据**：[docs/README.md](./README.md) 写着配置 schema `1.10`、
-基线 `main@a4dea2b`、PR #87；实际是 schema **1.13**
-（[config.default.toml:15](../config/config.default.toml:15)）、
-`main@bf31815`、PR #112。[架构基线](./architecture-baseline.md) 第 17 节的
-"截至 2026-08-08 / `main@900d83f`"与其中的测试计数同样落后。
+**证据**：本文档合入时已修掉一半——[docs/README.md](./README.md)、
+[配置管理契约](./configuration.md) 与本文件的锚点都已推到 `main@3c8bc95`
+（PR #116）、schema `1.14`、Alembic head `0025_agent_invocation_count`，
+测试计数改用 PR #116 的 CI 实测值。
+
+**仍然落后的**：[架构基线](./architecture-baseline.md) 第 17 节。该节已经不再
+钉具体 commit（它自己写明了理由：hash 一往前走就成了考古），但其中的门禁表
+仍是更早一次本机运行的数字。
+
+**为什么这一条不会"修完就消失"**：数字过时是持续现象，不是一次性缺陷。真正
+消除它的是 E-04 的 evidence manifest——把数字从散文变成可校验的引用，让"过时"
+在 CI 里失败，而不是靠人记得来改。在那之前，这一条每次基线变动都会复发一遍。
 
 **为什么归入口径不实而不是"文档没更新"**：这些数字是读者用来判断"我读的这份
 文档描述的是不是我手上这份代码"的锚点。锚点错了，整份文档的可信度都要打折。

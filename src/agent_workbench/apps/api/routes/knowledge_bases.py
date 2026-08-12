@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_workbench.apps.api.state import dependencies_of
+from agent_workbench.domain.errors import ErrorCode
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.ports.knowledge_bases import (
     KnowledgeBaseSummary,
@@ -29,9 +30,14 @@ class KnowledgeBaseView(BaseModel):
     knowledge_base_id: Identifier
     name: str
     description: str | None
+    # Told to the client so it can stop offering an upload that will be
+    # refused. It is not what refuses it: the upload path calls
+    # ``require_writable`` regardless of what any client believed.
+    can_write: bool
     document_count: int
     ready_document_count: int
     processing_document_count: int
+    failed_document_count: int
     created_at: datetime
     updated_at: datetime
 
@@ -48,6 +54,7 @@ class KnowledgeDocumentView(BaseModel):
     source_revision: int
     last_applied_revision: int
     status: KnowledgeDocumentStatus
+    failure_code: ErrorCode | None
     created_at: datetime
     updated_at: datetime
 
@@ -112,9 +119,11 @@ def _view(record: KnowledgeBaseSummary) -> KnowledgeBaseView:
         knowledge_base_id=record.knowledge_base_id,
         name=record.name,
         description=record.description,
+        can_write=record.can_write,
         document_count=record.document_count,
         ready_document_count=record.ready_document_count,
         processing_document_count=record.processing_document_count,
+        failed_document_count=record.failed_document_count,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -129,6 +138,7 @@ def _document_view(record: KnowledgeDocument) -> KnowledgeDocumentView:
         source_revision=record.source_revision,
         last_applied_revision=record.last_applied_revision,
         status=record.status,
+        failure_code=record.failure_code,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

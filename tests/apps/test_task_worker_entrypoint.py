@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import tomllib
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -23,6 +24,10 @@ from agent_workbench.adapters.mcp.client import (
     RemoteToolPage,
 )
 from agent_workbench.adapters.models.fake import FakeModel
+from agent_workbench.adapters.persistence.notifications import (
+    TASK_READY_CHANNEL,
+    TaskReadyListener,
+)
 from agent_workbench.apps.task_worker.composition import (
     RealTaskHandlersUnavailableError,
     build_task_worker_dependencies,
@@ -133,10 +138,12 @@ def _patch_real_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_workbench.apps.task_worker.composition as composition
     import agent_workbench.bootstrap.model_factory as model_factory
 
-    def dense(config: EmbeddingConfig) -> DeterministicEmbedder:
+    def dense(config: EmbeddingConfig, **_: object) -> DeterministicEmbedder:
         return DeterministicEmbedder(dimension=config.vector_size)
 
-    def no_sparse(_: EmbeddingConfig) -> composition.SparseEncodingUnavailable:
+    def no_sparse(
+        _: EmbeddingConfig, **__: object
+    ) -> composition.SparseEncodingUnavailable:
         return composition.SparseEncodingUnavailable("dense-only test")
 
     def fake_model(_: ModelConfig, *, client: httpx.AsyncClient) -> ModelPort:
@@ -202,18 +209,68 @@ def test_partial_assembly_disposes_the_engine(
     assert engine.disposed is True
 
 
-def test_real_worker_refuses_to_start_without_an_embedding_runtime(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_worker_without_an_embedding_runtime_serves_v2_only(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    import agent_workbench.apps.task_worker.composition as composition
+    """The deployment the old refusal locked out entirely.
 
-    def unavailable(_: EmbeddingConfig) -> EmbeddingUnavailable:
+    This used to assert the opposite -- that assembly raised. The refusal read
+    "retrieval was configured" off the projection, which fills the three
+    retrieval sections in unconditionally, so it fired for every deployment
+    without the optional embedding extra and took ordinary v2 Work down with
+    the grounded half nobody had asked for.
+
+    Four assertions, and the last three are the reason this is not just a
+    "does it start" test: starting while silently pretending to ground Tasks
+    is the failure the refusal existed to prevent, and each one closes a way
+    back into it.
+    """
+
+    import agent_workbench.apps.task_worker.composition as composition
+    import agent_workbench.bootstrap.model_factory as model_factory
+
+    def unavailable(_: EmbeddingConfig, **__: object) -> EmbeddingUnavailable:
         return EmbeddingUnavailable("test embedding runtime is unavailable")
 
-    monkeypatch.setattr(composition, "build_embedder", unavailable)
+    def fake_model(_: ModelConfig, *, client: httpx.AsyncClient) -> ModelPort:
+        del client
+        return FakeModel(())
 
-    with pytest.raises(RealTaskHandlersUnavailableError, match="embedding runtime"):
-        asyncio.run(build_task_worker_dependencies(_projected_config()))
+    monkeypatch.setattr(composition, "build_embedder", unavailable)
+    monkeypatch.setattr(model_factory, "build_model", fake_model)
+
+    async def scenario() -> tuple[tuple[str, ...], bool, str | None]:
+        dependencies = await build_task_worker_dependencies(_projected_config())
+        try:
+            # The startup check reads a Qdrant read alias. A v2-only Worker
+            # opened no client, so this has to be a no-op rather than a
+            # validation against a connection that does not exist.
+            await dependencies.startup()
+            return (
+                tuple(dependencies.worker.buildable_versions),
+                dependencies.qdrant is not None,
+                dependencies.grounding_unavailable,
+            )
+        finally:
+            await dependencies.dispose()
+
+    with caplog.at_level(logging.WARNING, logger=composition.logger.name):
+        versions, opened_qdrant, grounding = asyncio.run(scenario())
+
+    # v1 is not registered, so a v1 Task parks for migration instead of running
+    # research nodes that would fall back to plain model calls.
+    assert versions == ("v2_general",)
+    assert opened_qdrant is False
+    # The downgrade is said out loud. Without this the process is exactly the
+    # thing the refusal was written against.
+    assert grounding == "test embedding runtime is unavailable"
+    # And so is its one operational consequence. The shipped default submits
+    # `v1`, which this Worker cannot build, so every Task that names no shape
+    # parks -- a queue that stops draining for a reason no error mentions
+    # unless the process says it at startup.
+    messages = {record.message for record in caplog.records}
+    assert "task_worker_grounding_unavailable" in messages
+    assert "task_worker_default_graph_not_buildable" in messages
 
 
 def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
@@ -222,10 +279,12 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
     import agent_workbench.apps.task_worker.composition as composition
     import agent_workbench.bootstrap.model_factory as model_factory
 
-    def dense(config: EmbeddingConfig) -> DeterministicEmbedder:
+    def dense(config: EmbeddingConfig, **_: object) -> DeterministicEmbedder:
         return DeterministicEmbedder(dimension=config.vector_size)
 
-    def no_sparse(_: EmbeddingConfig) -> composition.SparseEncodingUnavailable:
+    def no_sparse(
+        _: EmbeddingConfig, **__: object
+    ) -> composition.SparseEncodingUnavailable:
         return composition.SparseEncodingUnavailable("dense-only test")
 
     def fake_model(_: ModelConfig, *, client: httpx.AsyncClient) -> ModelPort:
@@ -236,7 +295,7 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
     monkeypatch.setattr(composition, "build_sparse_encoder", no_sparse)
     monkeypatch.setattr(model_factory, "build_model", fake_model)
 
-    async def scenario() -> tuple[bool, bool]:
+    async def scenario() -> tuple[bool, bool, tuple[str, ...], str | None]:
         dependencies = await build_task_worker_dependencies(_projected_config())
         try:
             workflow = dependencies.worker.workflow
@@ -244,13 +303,22 @@ def test_real_worker_wires_model_retrieval_and_policy_gated_evidence(
             return (
                 dependencies.http is not None,
                 dependencies.qdrant is not None,
+                tuple(dependencies.worker.buildable_versions),
+                dependencies.grounding_unavailable,
             )
         finally:
             await dependencies.dispose()
 
-    http, qdrant = asyncio.run(scenario())
+    http, qdrant, versions, grounding = asyncio.run(scenario())
 
     assert (http, qdrant) == (True, True)
+    # The control group for `test_a_worker_without_an_embedding_runtime_serves
+    # _v2_only`: same projected configuration, differing only in what
+    # `build_embedder` returned. A Worker that can ground registers both graphs
+    # and reports no downgrade -- without this pair, "only v2" would also be
+    # satisfied by an assembly that had quietly stopped registering v1.
+    assert versions == ("v1", "v2_general")
+    assert grounding is None
 
 
 def test_a_real_worker_registers_every_tool_its_agents_can_ask_for(
@@ -787,13 +855,37 @@ def test_the_console_requires_explicit_demo_opt_in() -> None:
     assert build_parser().parse_args(["--demo"]).demo is True
 
 
+#: What `serve` reads off the loaded settings to build the wake-up listener.
+#: Never connected to by the `serve` tests -- `_start_task_ready_listener` is
+#: stubbed in both -- but `serve` reaches for the fields on its way there, so a
+#: bare object() stands in for nothing and hides the read.
+LISTEN_DSN = "postgresql+asyncpg://unit:test@postgres:5432/agent_workbench"
+
+#: A DSN that refuses rather than hangs, for the fail-soft test below. Port 1 is
+#: reserved and nothing binds it, so the connection is refused on the loopback
+#: without a name lookup or a timeout -- a real failure from the real listener,
+#: which is the only thing that shows this process survives one.
+UNREACHABLE_LISTEN_DSN = "postgresql+asyncpg://unit:test@127.0.0.1:1/agent_workbench"
+
+
+def _listener_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        database=SimpleNamespace(
+            listen_dsn=SecretStr(LISTEN_DSN),
+            application_name="agent-workbench-test-worker",
+            listener_healthcheck_seconds=30,
+        ),
+        event_stream=SimpleNamespace(task_ready_channel="task_ready"),
+    )
+
+
 def test_serve_awaits_assembly_and_disposes_if_runner_setup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import agent_workbench.apps.task_worker.main as task_worker_main
 
     lifecycle: list[str] = []
-    settings = object()
+    settings = _listener_settings()
     config = SimpleNamespace(
         task=SimpleNamespace(claim_poll_seconds=0.01),
         worker_concurrency=1,
@@ -835,6 +927,16 @@ def test_serve_awaits_assembly_and_disposes_if_runner_setup_fails(
     def install_signals(_: asyncio.Event) -> None:
         lifecycle.append("signals")
 
+    async def start_listener(**configured: object) -> None:
+        # Stubbed rather than exercised: the real one opens a connection, and
+        # what this test is about is the order the pieces are assembled in and
+        # what gets disposed when one of them fails. That the Worker starts
+        # anyway when this returns None is asserted against a real database in
+        # tests/persistence/test_task_ready_listener.py.
+        assert configured["listen_dsn"] == LISTEN_DSN
+        lifecycle.append("listener")
+        return None
+
     monkeypatch.setattr(task_worker_main, "load_settings", load)
     monkeypatch.setattr(task_worker_main, "project_task_worker", project)
     monkeypatch.setattr(task_worker_main, "build_task_worker_dependencies", assemble)
@@ -842,6 +944,11 @@ def test_serve_awaits_assembly_and_disposes_if_runner_setup_fails(
         task_worker_main,
         "_install_shutdown_handlers",
         install_signals,
+    )
+    monkeypatch.setattr(
+        task_worker_main,
+        "_start_task_ready_listener",
+        start_listener,
     )
     monkeypatch.setattr(task_worker_main, "TaskWorkerRunner", Runner)
 
@@ -851,9 +958,194 @@ def test_serve_awaits_assembly_and_disposes_if_runner_setup_fails(
     assert lifecycle == [
         "assemble",
         "signals",
+        "listener",
         "runner",
         "dispose",
     ]
+
+
+def test_serve_hands_the_listener_s_wakeup_to_the_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A listener nobody is waiting on is the defect, not the fix.
+
+    ``LISTEN/NOTIFY`` sat in this repository for months as a sender with no
+    consumer. A consumer that connects, subscribes, logs nothing and is wired
+    to no waiter would be the same defect one layer further in -- and it would
+    look healthy from every angle except the latency. So the wiring itself is
+    asserted here, at the only place that does it.
+
+    The teardown order is the other half: the listener owns a connection and a
+    supervising task, and both have to be gone before the process leaves.
+    """
+
+    import agent_workbench.apps.task_worker.main as task_worker_main
+
+    closed: list[str] = []
+    settings = _listener_settings()
+    config = SimpleNamespace(
+        task=SimpleNamespace(claim_poll_seconds=0.01),
+        worker_concurrency=1,
+    )
+    passed: dict[str, object] = {}
+
+    class Listener:
+        def __init__(self) -> None:
+            self.woken = asyncio.Event()
+
+        async def aclose(self) -> None:
+            closed.append("listener")
+
+    listener = Listener()
+
+    class Worker:
+        async def run_once(self) -> None:
+            return None
+
+    class Dependencies:
+        worker = Worker()
+
+        async def startup(self) -> None:
+            return None
+
+        async def dispose(self) -> None:
+            closed.append("dependencies")
+
+    class Runner:
+        def __init__(self, **kwargs: object) -> None:
+            passed.update(kwargs)
+
+        async def run_forever(self, stop: asyncio.Event) -> None:
+            return None
+
+    async def assemble(configured: object, *, demo: bool) -> Dependencies:
+        return Dependencies()
+
+    async def start_listener(**configured: object) -> Listener:
+        # The values `serve` read off the settings, on their way to a listener
+        # this test does not open. Asserted because getting them from the wrong
+        # place is the other way this wiring silently does nothing.
+        assert configured["listen_dsn"] == LISTEN_DSN
+        assert configured["application_name"] == "agent-workbench-test-worker-listener"
+        return listener
+
+    monkeypatch.setattr(task_worker_main, "load_settings", lambda: settings)
+    monkeypatch.setattr(task_worker_main, "project_task_worker", lambda _: config)
+    monkeypatch.setattr(task_worker_main, "build_task_worker_dependencies", assemble)
+    monkeypatch.setattr(
+        task_worker_main,
+        "_install_shutdown_handlers",
+        lambda _: None,
+    )
+    monkeypatch.setattr(
+        task_worker_main,
+        "_start_task_ready_listener",
+        start_listener,
+    )
+    monkeypatch.setattr(task_worker_main, "TaskWorkerRunner", Runner)
+
+    asyncio.run(task_worker_main.serve(demo=True))
+
+    assert passed["wakeup"] is listener.woken
+    assert closed == ["listener", "dependencies"]
+
+
+def test_the_worker_builds_and_starts_the_listener_it_was_configured_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one function the two tests above stub out, called for real.
+
+    Everything else in this file reaches ``_start_task_ready_listener`` only as
+    a monkeypatched name, which leaves the body itself unexecuted by the whole
+    suite -- measured: with ``return None`` as its first statement every test
+    here stays green, and every deployed Worker runs on its poll interval
+    forever. So this calls it, and asserts the two things a caller cannot see
+    afterwards: which values reached the constructor, and that the subscription
+    was actually opened rather than merely arranged for.
+
+    The listener class is a stand-in because what is under test here is the
+    wiring, not the connection; the same function against a real database is
+    ``test_the_worker_entry_point_opens_a_channel_that_really_delivers``.
+    """
+
+    import agent_workbench.apps.task_worker.main as task_worker_main
+
+    built: list[dict[str, object]] = []
+    started: list[str] = []
+
+    class Listener:
+        def __init__(self, listen_dsn: str, **configured: object) -> None:
+            built.append({"listen_dsn": listen_dsn, **configured})
+            self.woken = asyncio.Event()
+
+        async def start(self) -> None:
+            started.append("start")
+
+        async def aclose(self) -> None:
+            started.append("aclose")
+
+    monkeypatch.setattr(task_worker_main, "TaskReadyListener", Listener)
+
+    async def scenario() -> object:
+        return await task_worker_main._start_task_ready_listener(
+            listen_dsn=LISTEN_DSN,
+            application_name="agent-workbench-test-worker-listener",
+            healthcheck_seconds=17.0,
+            configured_channel=TASK_READY_CHANNEL,
+        )
+
+    listener = asyncio.run(scenario())
+
+    assert built == [
+        {
+            "listen_dsn": LISTEN_DSN,
+            "application_name": "agent-workbench-test-worker-listener",
+            "healthcheck_seconds": 17.0,
+        }
+    ]
+    # Started, and handed back. A function that built one and returned None
+    # would leave `serve` wiring the runner to nothing.
+    assert started == ["start"]
+    assert isinstance(listener, Listener)
+
+
+def test_a_listener_that_cannot_connect_leaves_the_worker_polling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR: the wake-up is an accelerator, so its absence is not a start failure.
+
+    The real :class:`TaskReadyListener` against a port nothing is listening on,
+    because a stub raising a chosen exception would be asserting this test's own
+    idea of how connecting fails. What comes back is ``None`` -- the value
+    ``serve`` turns into ``wakeup=None`` and a Worker that polls.
+
+    The close is the other half and is not decoration: the listener owns an
+    engine by the time ``start`` fails, and a composition root that returned
+    ``None`` without disposing it would leave one behind on every restart of a
+    Worker whose database is not up yet.
+    """
+
+    import agent_workbench.apps.task_worker.main as task_worker_main
+
+    closed: list[str] = []
+
+    class RecordingListener(TaskReadyListener):
+        async def aclose(self) -> None:
+            closed.append("aclose")
+            await super().aclose()
+
+    monkeypatch.setattr(task_worker_main, "TaskReadyListener", RecordingListener)
+
+    async def scenario() -> object:
+        return await task_worker_main._start_task_ready_listener(
+            listen_dsn=UNREACHABLE_LISTEN_DSN,
+            application_name="agent-workbench-test-worker-listener",
+            healthcheck_seconds=17.0,
+            configured_channel=TASK_READY_CHANNEL,
+        )
+
+    assert asyncio.run(scenario()) is None
+    assert closed == ["aclose"]
 
 
 def test_each_server_reaches_the_agent_its_audience_names(

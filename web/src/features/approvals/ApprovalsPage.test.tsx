@@ -4,7 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ApiError,
   decideApproval,
+  getApproval,
   getArtifactJson,
   getTaskTimeline,
   listApprovals,
@@ -17,6 +19,7 @@ vi.mock("../../api/client", async () => {
   return {
     ...actual,
     decideApproval: vi.fn(),
+    getApproval: vi.fn(),
     getArtifactJson: vi.fn(),
     getTaskTimeline: vi.fn(),
     listApprovals: vi.fn(),
@@ -27,6 +30,7 @@ describe("ApprovalsPage", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.mocked(listApprovals).mockReset();
+    vi.mocked(getApproval).mockReset();
     vi.mocked(getTaskTimeline).mockReset();
     vi.mocked(getArtifactJson).mockReset();
     vi.mocked(decideApproval).mockReset();
@@ -99,6 +103,57 @@ describe("ApprovalsPage", () => {
     ).toBeInTheDocument();
     expect(decideApproval).not.toHaveBeenCalled();
   });
+
+  it("reads back the authoritative record when the version is refused", async () => {
+    // Decided somewhere else -- the other console, or Work's inline gate --
+    // between this page listing it and the reader pressing the button.
+    vi.mocked(decideApproval).mockRejectedValue(
+      new ApiError(409, "approval is not decidable"),
+    );
+    vi.mocked(getApproval).mockResolvedValue({
+      ...pendingApproval,
+      status: "rejected",
+      decision_version: 1,
+      decided_at: "2026-08-03T12:04:00Z",
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "允许导出" }));
+    await user.click(screen.getByRole("button", { name: "确认允许" }));
+
+    expect(
+      await screen.findByText(
+        "审批服务端状态已是“已拒绝”，这条不再可决定；已刷新权威记录。",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("已拒绝")).toBeInTheDocument();
+    // Re-sending the refused version can only be refused again.
+    expect(
+      screen.queryByRole("button", { name: "确认允许" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not confirm an opposite decision returned for the same version", async () => {
+    vi.mocked(decideApproval).mockResolvedValue({
+      ...pendingApproval,
+      status: "rejected",
+      decision_version: 1,
+      decided_at: "2026-08-03T12:05:00Z",
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "允许导出" }));
+    await user.click(screen.getByRole("button", { name: "确认允许" }));
+
+    // A 2xx is not proof the decision that was sent is the one that stuck.
+    expect(
+      await screen.findByText(
+        "本次“已批准”未被应用；同一决定版本的服务端权威状态为“已拒绝”。",
+      ),
+    ).toBeInTheDocument();
+  });
 });
 
 function renderPage() {
@@ -131,6 +186,8 @@ const pendingApproval = {
 const taskTimeline = {
   task_id: "task_1",
   cursor: null,
+  // A complete page says so out loud; the server never omits this.
+  skipped_sequences: [],
   events: [
     {
       schema_version: 1,

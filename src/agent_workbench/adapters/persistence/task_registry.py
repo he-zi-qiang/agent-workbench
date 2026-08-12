@@ -57,6 +57,8 @@ from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.task_registry import TaskStatus, sources_for
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.task_registry import (
+    AgentInvocationBudgetExhaustedError,
+    AgentInvocationCeilingMissingError,
     ExecutionLease,
     IndexGenerationNotReservableError,
     IndexReservation,
@@ -381,6 +383,139 @@ class PostgresTaskRegistry:
                 await self._raise_stale(connection, lease, attempted="heartbeat")
         return _to_run(row)
 
+    async def reserve_agent_invocation(self, lease: ExecutionLease) -> int:
+        """Charge one agent invocation to this Task, or refuse to.
+
+        One statement on the normal path. The ceiling is read out of the row's
+        *own* ``run_semantics_snapshot`` inside the same UPDATE, so it is the
+        number the Task was submitted under rather than whatever this process
+        happens to be configured with today -- the same rule ``wants_report``
+        and ``export_requires_approval`` already follow. ``+ 1`` and the
+        comparison both happen under one row lock, so two Workers cannot each
+        read the same last remaining slot.
+
+        A zero-row result has three meanings and they are not interchangeable,
+        so the miss path reads the row back to tell them apart:
+
+        * the lease is no longer current -> ``StaleExecutionError``: stop, write
+          nothing, let whoever holds the claim now proceed;
+        * the snapshot names no ceiling -> ``AgentInvocationCeilingMissingError``:
+          this deployment cannot say what it allows, which is its defect and
+          not the Task's, so the Task fails rather than dead-letters;
+        * the count has reached the ceiling ->
+          ``AgentInvocationBudgetExhaustedError``: trying again cannot help.
+
+        The extra read costs one round trip on a path that is rare by
+        construction; the normal path stays at one.
+        """
+
+        ceiling = task_runs.c.run_semantics_snapshot[
+            ("multi_agent", "max_agent_invocation_attempts_per_task")
+        ].as_integer()
+        async with self._engine.begin() as connection:
+            row = (
+                (
+                    await connection.execute(
+                        update(task_runs)
+                        .where(
+                            *_live_lease_conditions(lease),
+                            ceiling.isnot(None),
+                            task_runs.c.agent_invocation_count < ceiling,
+                        )
+                        .values(
+                            agent_invocation_count=(
+                                task_runs.c.agent_invocation_count + 1
+                            ),
+                            updated_at=func.now(),
+                        )
+                        .returning(task_runs)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                await self._raise_budget_or_stale(connection, lease)
+        return _to_run(row).agent_invocation_count
+
+    async def _raise_budget_or_stale(
+        self, connection: AsyncConnection, lease: ExecutionLease
+    ) -> NoReturn:
+        """Say which of the three refusals this was.
+
+        Read inside the caller's transaction, so what it reports is the state
+        the UPDATE actually saw rather than one a concurrent writer produced in
+        between. The lease is re-checked *first*: a Worker that lost its claim
+        must be told that and nothing else, because the counter it would
+        otherwise be blamed for belongs to whoever holds the Task now.
+        """
+
+        # Re-asserted with the *predicate itself* rather than with a hand-copy
+        # of its parts. The copy that used to stand here restated four of the
+        # five conditions and left out the expiry one, and expiry is the single
+        # way of losing a lease that the other four do not notice: owner and
+        # epoch still name the Worker until somebody else claims the Task. Such
+        # a Worker was told its budget was exhausted -- "trying again cannot
+        # help", which it answers by dead-lettering -- when what had happened
+        # was that it stopped being the holder. Reusing the tuple also keeps
+        # the two from drifting apart again the next time a condition is added
+        # to it. Reading the whole row through the same predicate costs no
+        # extra round trip: a live lease returns the row this method goes on to
+        # read the counter and the ceiling out of.
+        current = (
+            (
+                await connection.execute(
+                    select(task_runs).where(*_live_lease_conditions(lease))
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if current is None:
+            await self._raise_stale(
+                connection, lease, attempted="reserve_agent_invocation"
+            )
+        # Cast rather than trust: a JSONB column is ``Any`` to the type
+        # checker, and this is the one place that reads a number out of it and
+        # then compares Tasks against it.
+        snapshot = cast("dict[str, object]", current["run_semantics_snapshot"] or {})
+        section = snapshot.get("multi_agent")
+        configured: object = None
+        if isinstance(section, dict):
+            configured = cast("dict[str, object]", section).get(
+                "max_agent_invocation_attempts_per_task"
+            )
+        if not isinstance(configured, int):
+            # Covers both "the key is absent" and "the snapshot holds something
+            # that is not a number there". Neither is a Task's fault, and both
+            # leave this deployment unable to say what it allows.
+            raise AgentInvocationCeilingMissingError(task_id=lease.task_id)
+        raise AgentInvocationBudgetExhaustedError(
+            task_id=lease.task_id,
+            spent=int(cast("int", current["agent_invocation_count"])),
+            ceiling=configured,
+        )
+
+    async def mark_dead_lettered(
+        self, lease: ExecutionLease, *, reason: str
+    ) -> TaskRun:
+        """Retire a Task that trying again cannot help.
+
+        Until now the only writer of ``dead_letter`` was the reaper, which
+        retires a lease that expired once too often. This is the second, and
+        the two must be tellable apart by whoever is paging through Tasks
+        asking why one stopped -- so the event carries a distinct
+        ``reason_code`` and the caller supplies a ``status_detail`` that does
+        not read like the reaper's.
+        """
+
+        return await self._move(
+            lease,
+            to="dead_letter",
+            detail=reason,
+            reason_code="invocation_budget_exhausted",
+        )
+
     async def reclaim_expired(
         self,
         *,
@@ -476,6 +611,7 @@ class PostgresTaskRegistry:
                             task_id=recovered_task.task_id,
                             epoch=recovered_task.lease_epoch,
                             attempt=recovered_task.attempt_count,
+                            reason_code="lease_expired",
                         )
                     else:
                         payload = TaskRetryScheduled(
@@ -610,7 +746,12 @@ class PostgresTaskRegistry:
         return task
 
     async def _move(
-        self, lease: ExecutionLease, *, to: TaskStatus, detail: str | None
+        self,
+        lease: ExecutionLease,
+        *,
+        to: TaskStatus,
+        detail: str | None,
+        reason_code: str | None = None,
     ) -> TaskRun:
         # Whether a status carries a reason is settled by the method
         # signatures and by the database's own constraint; what neither of
@@ -650,7 +791,7 @@ class PostgresTaskRegistry:
                 await self._raise_stale(connection, lease, attempted=to)
             task = _to_run(row)
             await self._append_lifecycle_event(
-                connection, task, _transition_event(task, to)
+                connection, task, _transition_event(task, to, reason_code)
             )
         return task
 
@@ -726,8 +867,16 @@ def _require_same_submission(stored: TaskRun, submission: TaskSubmission) -> Non
             )
 
 
-def _transition_event(task: TaskRun, to: TaskStatus) -> EventPayload:
-    """Map a Registry lifecycle target to its public, detail-free event."""
+def _transition_event(
+    task: TaskRun, to: TaskStatus, reason_code: str | None = None
+) -> EventPayload:
+    """Map a Registry lifecycle target to its public, detail-free event.
+
+    ``reason_code`` is required for exactly one target. ``dead_letter`` now has
+    two writers and the event has to say which one gave up; every other
+    transition has a single meaning, so asking them for a reason would be
+    inventing a field nobody reads.
+    """
 
     if to == "succeeded":
         return TaskSucceeded(
@@ -752,6 +901,22 @@ def _transition_event(task: TaskRun, to: TaskStatus) -> EventPayload:
             task_id=task.task_id,
             epoch=task.lease_epoch,
             attempt=task.attempt_count,
+        )
+    if to == "dead_letter":
+        if reason_code != "invocation_budget_exhausted":
+            # The reaper writes its own event on its own path; anything else
+            # arriving here without saying why would be filed under whichever
+            # reason came first, which is the confusion this field exists to
+            # prevent.
+            raise AssertionError(
+                f"dead_letter needs a reason code this transition can carry, "
+                f"got {reason_code!r}"
+            )
+        return TaskDeadLettered(
+            task_id=task.task_id,
+            epoch=task.lease_epoch,
+            attempt=task.attempt_count,
+            reason_code="invocation_budget_exhausted",
         )
     raise AssertionError(f"no lifecycle event for transition to {to}")
 

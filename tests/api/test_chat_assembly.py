@@ -57,19 +57,34 @@ def test_the_process_assembles_without_the_embedding_runtime(
         pass
 
 
-def test_chat_is_absent_and_says_why(
+def test_a_missing_embedder_costs_retrieval_and_not_chat(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Reported once at startup, not rediscovered per request."""
+    """Reported once at startup, and scoped to the half that is actually gone.
+
+    Direct chat reaches no index, so an absent embedding runtime is not a
+    reason to withdraw it. It used to be: the whole ``/v1/chat`` router
+    disappeared, which meant the deployment least able to run a RAG stack was
+    also the one that could not answer a plain question -- the one thing it was
+    still fully equipped to do.
+
+    What must stay reported is the *grounded* half, and in the shape the route
+    reads: `effective_retrieval_shape` is what decides whether a RAG request is
+    refused with a 422 or accepted and then failed underneath.
+    """
 
     monkeypatch.setitem(sys.modules, "sentence_transformers", None)
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
 
-    assert dependencies.serves_chat is False
-    assert dependencies.chat is None
-    assert dependencies.chat_unavailable is not None
-    assert "--extra embedding" in dependencies.chat_unavailable
+    assert dependencies.serves_chat is True
+    assert dependencies.chat is not None
+    assert dependencies.chat_unavailable is None
+    assert dependencies.rag_unavailable is not None
+    assert "--extra embedding" in dependencies.rag_unavailable
+    assert dependencies.effective_retrieval_shape == "ungrounded"
+    # Nothing to retrieve from, so /v1/search is not mounted either.
+    assert dependencies.serves_search is False
     assert dependencies.chat_reaper is not None
     assert dependencies.chat_pending_recovery is not None
 
@@ -80,14 +95,23 @@ def test_nothing_is_substituted_for_the_missing_embedder(
     """The decision, stated where a future change would have to break it.
 
     A stand-in embedder would make chat answer from vectors that mean nothing,
-    which is worse than not answering.
+    which is worse than not answering. Serving Direct is not that: it answers
+    from the model alone and says so, rather than from an index that is not
+    there. So what may not exist here is *retrieval*, and the grounded
+    execution built on it.
     """
 
     monkeypatch.setitem(sys.modules, "sentence_transformers", None)
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
 
-    assert dependencies.chat is None
+    assert dependencies.retrieval is None
+    assert dependencies.vector_index is None
+    assert dependencies.encoders == ()
+    selector = dependencies.chat.execution if dependencies.chat is not None else None
+    assert selector is not None
+    assert selector.rag is None
+    assert selector.direct is not None
 
 
 def test_a_missing_reranker_does_not_cost_the_chat_capability(
@@ -119,16 +143,16 @@ def test_a_missing_reranker_does_not_cost_the_chat_capability(
         async def embed_query(self, text: str) -> Any:
             return (0.0,)
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
     monkeypatch.setattr(
         assembly,
         "build_sparse_encoder",
-        lambda _c: SparseEncodingUnavailable(reason="no lexical runtime here"),
+        lambda _c, **_: SparseEncodingUnavailable(reason="no lexical runtime here"),
     )
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
@@ -174,16 +198,16 @@ def _stub_optional_runtimes(monkeypatch: pytest.MonkeyPatch) -> None:
         async def embed_query(self, text: str) -> Any:
             return (0.0,)
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
     monkeypatch.setattr(
         assembly,
         "build_sparse_encoder",
-        lambda _c: SparseEncodingUnavailable(reason="no lexical runtime here"),
+        lambda _c, **_: SparseEncodingUnavailable(reason="no lexical runtime here"),
     )
 
 
@@ -294,7 +318,7 @@ def test_the_routed_deployment_assembles_direct_beside_its_rag_router(
             return tuple(1.0 for _ in passages)
 
     _stub_optional_runtimes(monkeypatch)
-    monkeypatch.setattr(assembly, "build_reranker", lambda _c: _Reranker())
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c, **_: _Reranker())
     dependencies = build_dependencies(
         project_api(_settings(tmp_path, chat={"retrieval_shape": "routed"}))
     )
@@ -339,7 +363,7 @@ def test_the_web_fallback_budget_enforces_the_prompt_it_ships_with(
             return tuple(1.0 for _ in passages)
 
     _stub_optional_runtimes(monkeypatch)
-    monkeypatch.setattr(assembly, "build_reranker", lambda _c: _Reranker())
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c, **_: _Reranker())
     dependencies = build_dependencies(
         project_api(
             _settings(
@@ -418,7 +442,7 @@ def test_the_direct_shape_reaches_the_web_when_a_provider_is_configured(
             return tuple(1.0 for _ in passages)
 
     _stub_optional_runtimes(monkeypatch)
-    monkeypatch.setattr(assembly, "build_reranker", lambda _c: _Reranker())
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c, **_: _Reranker())
     dependencies = build_dependencies(
         project_api(
             _settings(
@@ -512,12 +536,12 @@ def test_a_process_with_a_lexical_runtime_assembles_the_hybrid_retriever(
         async def encode_query(self, text: str) -> Any:  # pragma: no cover - unused
             raise AssertionError("assembly must not encode anything")
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
-    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c, **_: _Sparse())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
@@ -576,12 +600,12 @@ def test_turning_the_framework_on_assembles_the_llamaindex_retriever(
         async def encode_query(self, text: str) -> Any:  # pragma: no cover - unused
             raise AssertionError("assembly must not encode anything")
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
-    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c, **_: _Sparse())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
 
     dependencies = build_dependencies(
@@ -628,12 +652,12 @@ def test_the_agentic_shape_gets_the_same_hybrid_retriever(
         async def encode_query(self, text: str) -> Any:  # pragma: no cover - unused
             raise AssertionError("assembly must not encode anything")
 
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: _Embedder())
-    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: _Sparse())
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: _Embedder())
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c, **_: _Sparse())
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
 
     dependencies = build_dependencies(
@@ -694,12 +718,12 @@ def test_assembly_hands_startup_the_encoders_a_turn_will_use(
 
     embedder = _Embedder()
     sparse = _Sparse()
-    monkeypatch.setattr(assembly, "build_embedder", lambda _c: embedder)
-    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c: sparse)
+    monkeypatch.setattr(assembly, "build_embedder", lambda _c, **_: embedder)
+    monkeypatch.setattr(assembly, "build_sparse_encoder", lambda _c, **_: sparse)
     monkeypatch.setattr(
         assembly,
         "build_reranker",
-        lambda _c: RerankerUnavailable(reason="no reranking runtime here"),
+        lambda _c, **_: RerankerUnavailable(reason="no reranking runtime here"),
     )
 
     dependencies = build_dependencies(project_api(_settings(tmp_path)))
@@ -707,6 +731,35 @@ def test_assembly_hands_startup_the_encoders_a_turn_will_use(
     assert dependencies.chat is not None
     assert embedder in dependencies.encoders
     assert sparse in dependencies.encoders
+
+
+def test_a_loaded_reranker_is_handed_to_startup_as_well(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The third cold runtime, and the one that was left out of the warm list.
+
+    Reranking is on by default and its cross-encoder pays the same first-forward
+    toll as the two encoders beside it, but assembly only ever handed startup
+    ``(embedder, sparse)``. So a deployment warmed two of the three runtimes it
+    had just loaded and let the first reranked search discover the third.
+
+    Identity, not membership by type: startup has to warm *the same instance*
+    retrieval will call, since a second one would be a separate set of compiled
+    kernels and the boot spent on it would buy the request nothing.
+    """
+
+    from agent_workbench.adapters.reranking.fake import LexicalOverlapReranker
+    from agent_workbench.apps.api import dependencies as assembly
+
+    _stub_optional_runtimes(monkeypatch)
+    reranker = LexicalOverlapReranker()
+    monkeypatch.setattr(assembly, "build_reranker", lambda _c, **_: reranker)
+
+    dependencies = build_dependencies(project_api(_settings(tmp_path)))
+
+    assert reranker in dependencies.encoders
+    assert dependencies.retrieval is not None
+    assert dependencies.retrieval.reranker is reranker
 
 
 def test_startup_warms_before_a_request_can_arrive(

@@ -3,12 +3,14 @@ import type { EventEnvelope, TaskTimelineResponse } from "../../api/types";
 import {
   createTimelineState,
   eventTitle,
+  findDraftText,
   findFinalReport,
   findGraphChoice,
   findLatestApprovalId,
   collectArtifacts,
   findTaskInputRef,
   findTaskIntent,
+  locateTimelineGaps,
   mergeTimelineResponse,
   parseTaskInputArtifact,
 } from "./workTimeline";
@@ -36,6 +38,84 @@ describe("work timeline contract selectors", () => {
     expect(
       mergeTimelineResponse(afterSecond, timeline("another_task", [second], "wrong")),
     ).toBe(afterSecond);
+  });
+
+  it("keeps every position the server could not deliver, across pages", () => {
+    const first = envelope("event_1", "TaskSubmitted", {}, null, 1);
+    const later = envelope("event_3", "RunStarted", {}, null, 3);
+    const initial = createTimelineState("task_1");
+
+    const afterFirst = mergeTimelineResponse(
+      initial,
+      timeline("task_1", [first], "stream_1:2", [2]),
+    );
+    // The second page re-reports position 2, the way an overlapping re-read
+    // does, and names one more. Counted instead of named, this would read as
+    // four holes in a history that has two.
+    const afterSecond = mergeTimelineResponse(
+      afterFirst,
+      timeline("task_1", [later], "stream_1:5", [5, 2]),
+    );
+
+    expect(afterFirst.skippedSequences).toEqual([2]);
+    expect(afterSecond.skippedSequences).toEqual([2, 5]);
+    // The cursor still moves past the damage. The server pushes callers past a
+    // row it could not decode on purpose -- stalling in front of it would mean
+    // nobody ever advances -- so accumulating holes must not fight that.
+    expect(afterSecond.cursor).toBe("stream_1:5");
+    // Another Task's page cannot pin its damage on this one.
+    expect(
+      mergeTimelineResponse(afterSecond, timeline("other_task", [], "x", [9])),
+    ).toBe(afterSecond);
+  });
+
+  it("carries a clean page's claim of completeness rather than inventing damage", () => {
+    // The control group. An implementation that always has something to report
+    // dies here, and so does one that lets a stray value through: the empty
+    // list is a positive claim, and repeating a malformed number back to the
+    // reader would be inventing a hole rather than reporting one.
+    const initial = createTimelineState("task_1");
+
+    const afterFirst = mergeTimelineResponse(
+      initial,
+      timeline("task_1", [envelope("event_1", "TaskSubmitted", {}, null, 1)], "s:1", []),
+    );
+    const afterSecond = mergeTimelineResponse(
+      afterFirst,
+      timeline("task_1", [envelope("event_2", "RunStarted", {}, null, 2)], "s:2", [
+        0,
+        -1,
+        1.5,
+        Number.NaN,
+      ]),
+    );
+
+    expect(afterSecond.skippedSequences).toEqual([]);
+    // And the same array throughout, so the memo the page builds over it is
+    // not re-run by every poll of a healthy Task.
+    expect(afterSecond.skippedSequences).toBe(initial.skippedSequences);
+  });
+
+  it("places each undelivered position between the events that did arrive", () => {
+    const submitted = envelope("event_1", "TaskSubmitted", {}, null, 1);
+    const started = envelope("event_3", "RunStarted", {}, null, 3);
+
+    expect(locateTimelineGaps([submitted, started], [4, 2])).toEqual([
+      { sequence: 2, before: submitted, after: started },
+      // Nothing readable came back after 4, so there is no later step to name
+      // it against -- and the gap says so instead of guessing one.
+      { sequence: 4, before: started, after: null },
+    ]);
+  });
+
+  it("stops calling a position a hole once a re-read delivered it", () => {
+    // A repeated read can decode a row an earlier pass could not. The client is
+    // holding that event now, so still calling it missing would be the same
+    // lie pointed the other way.
+    const submitted = envelope("event_1", "TaskSubmitted", {}, null, 1);
+    const recovered = envelope("event_2", "RunStarted", {}, null, 2);
+
+    expect(locateTimelineGaps([submitted, recovered], [2])).toEqual([]);
   });
 
   it("names an event kind it has never heard of instead of hiding it", () => {
@@ -225,14 +305,59 @@ describe("work timeline contract selectors", () => {
       succeededEventId: "event_success",
     });
   });
+
+  it("reads the draft from whichever graph's drafting node wrote it", () => {
+    const v1 = envelope(
+      "event_v1",
+      "ModelCompleted",
+      { text: "v1 的草稿" },
+      "synthesize",
+    );
+    // The v2 graph drafts in `work`, and reading only `synthesize` left a v2
+    // Task that produced no file showing "没有产出内容" while its answer sat
+    // in the timeline.
+    const v2 = envelope("event_v2", "ModelCompleted", { text: "v2 的草稿" }, "work");
+
+    expect(findDraftText([v1])).toBe("v1 的草稿");
+    expect(findDraftText([v2])).toBe("v2 的草稿");
+  });
+
+  it("skips the tool-calling turns of a drafting loop and the reviewer", () => {
+    // A timeline still arriving: the drafting loop's latest turn spent itself
+    // on a tool call and so carries no text, while the answering turn has not
+    // been polled yet. The draft the page already has is what it should show.
+    const midStream = [
+      envelope("event_answer", "ModelCompleted", { text: "最终答复" }, "work"),
+      envelope("event_tool_turn", "ModelCompleted", { text: "" }, "work"),
+      envelope("event_blank_turn", "ModelCompleted", { text: "  \n " }, "work"),
+    ];
+
+    expect(findDraftText(midStream)).toBe("最终答复");
+
+    // The reviewer's structured verdict is not the draft, and is the only
+    // `ModelCompleted` some Tasks have after the gate opens.
+    const review = envelope(
+      "event_review",
+      "ModelCompleted",
+      { text: '{"ok":true}' },
+      "review",
+    );
+
+    expect(findDraftText([...midStream, review])).toBe("最终答复");
+    expect(findDraftText([review])).toBeNull();
+  });
 });
 
 function timeline(
   taskId: string,
   events: EventEnvelope[],
   cursor: string | null,
+  // Defaulted to the empty list rather than omitted, because that is what the
+  // server sends for a complete page -- a fixture without it would be a server
+  // this client will never meet.
+  skipped: number[] = [],
 ): TaskTimelineResponse {
-  return { task_id: taskId, events, cursor };
+  return { task_id: taskId, events, cursor, skipped_sequences: skipped };
 }
 
 function envelope(
@@ -240,6 +365,7 @@ function envelope(
   kind: string,
   payload: Record<string, unknown> = {},
   graphNodeId: string | null = null,
+  sequence: number | null = null,
 ): EventEnvelope {
   return {
     schema_version: 1,
@@ -250,7 +376,7 @@ function envelope(
     durability: "durable",
     timestamp: "2026-08-02T12:00:00Z",
     payload: { kind, ...payload },
-    sequence: null,
+    sequence,
     task_id: "task_1",
     graph_node_id: graphNodeId,
     parent_event_id: null,

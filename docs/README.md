@@ -13,7 +13,7 @@
 |---|---:|---|
 | [架构与技术选型基线](./architecture-baseline.md) | v1.3 | 锁定产品边界、分层、组件职责、可靠性协议和技术选型 |
 | [代码实施计划](./implementation-plan.md) | v1.0 | 将目标架构拆成工作包、PR、迁移、测试门禁和证据包 |
-| [配置管理契约](./configuration.md) | schema 1.13 | 定义配置来源、密钥规则、快照语义和跨域校验 |
+| [配置管理契约](./configuration.md) | schema 1.14 | 定义配置来源、密钥规则、快照语义和跨域校验 |
 | [本机 Compose 部署](./deployment.md) | local demo | 定义可复现容器拓扑、端口边界与 demo worker 限制 |
 
 ## 决策记录
@@ -47,11 +47,15 @@
 
 ## 当前事实
 
-**截至 2026-08-11，基线为 `main@bf31815`（PR #112），配置 schema `1.13`，
-Alembic 单一 head 为 `0023_kg_mentions_chunk_index`（共 23 个迁移）。**
-门禁：后端 **2629 项** passed（真实 PostgreSQL 5433 + 真实 Qdrant 6333，
-11 项因缺 `embedding` extra 跳过），前端 **114 项** passed；
-ruff / pyright strict / tsc / eslint 全绿，CI 四个 job 全过。
+**截至 2026-08-12，基线为 `main@3c8bc95`（PR #116），配置 schema `1.14`，
+Alembic 单一 head 为 `0025_agent_invocation_count`（共 25 个迁移）。**
+门禁按 CI 的四个 job 分别记，不合成一个总数——两个后端 job 的跳过集互相覆盖，
+把它们相加会数重：确定性测试 **2050 passed / 719 skipped**（不起外部服务，
+跳过的即下一行那些）；真实服务套件 **1012 passed / 2 skipped**（PostgreSQL +
+Qdrant，两条跳过分别是 PostgreSQL 专属的非锁定恢复读契约，和需要 `embedding`
+extra 与本地权重的真实 reranker 契约）；前端 **171 项** passed（22 个文件）
+外加浏览器冒烟 **4 项**；ruff / pyright strict / tsc / eslint 全绿。
+数字取自 PR #116 的 CI 运行，不是本机跑的。
 
 此后仍未做的部分，按“拒绝／未接线／未实现／口径不实”分类记在
 [已知缺口](./known-gaps.md)，每条附仓库位置与“做完”的判据；
@@ -69,8 +73,11 @@ Adapter 与路由阈值评测（PR #72、#73）以及 Chat 联网搜索与工具
 WP15 阶段一的任务工作区（ADR-028）与阶段二的一次性沙箱（ADR-029，`1.8`→`1.9`）、
 阶段三的只读取用外部世界（ADR-027，`1.9`→`1.10`，PR #83–#86）。再之后三条 ADR 把它
 推到 `1.13`：工作节点受成本约束（ADR-030，`1.10`→`1.11`）、triage 决定形态
-（ADR-036，`1.11`→`1.12`）、图谱只提名 chunk（ADR-037，`1.12`→`1.13`），
-三次抬版的完整理由见[配置管理契约](./configuration.md)。PR #87 随后修掉两处
+（ADR-036，`1.11`→`1.12`）、图谱只提名 chunk（ADR-037，`1.12`→`1.13`）。
+第四次抬版方向相反：ADR-039（`1.13`→`1.14`）让 `evaluation` 一节不能再声称
+代码没有的能力，于是停止加载的是**旧文件**——写着 `ragas_enabled = true`
+或 1.13 那份 19 条默认指标名的配置现在校验失败，而不是躺在那里没人读。
+四次抬版的完整理由见[配置管理契约](./configuration.md)。PR #87 随后修掉两处
 **同一类**缺陷：能力在组合根装齐了，真正跑的那条分支没接上——`researcher_external` 从不
 调用模型（ADR-032），`synthesize` 从不进入工作区会话，因此那三个工作区工具在生产路径上
 每一次都失败而 run 仍报告成功。两处都有真实 Task 的事件流验收，详见[实施状态](./status.md)。
@@ -95,21 +102,26 @@ WP15 阶段四（成本与时限、`workspace_edit`、`workspace_grep`）与阶�
 实战命中一次），证据与仍存的 scope 默认值问题见 status.md。
 LlamaIndex retrieval Adapter 已经建成并通过契约测试，但 `rag.llama_index.enabled`
 默认为 `false`——缺的不是实现，是一份能把两条检索路径区分开的等价性度量
-（ADR-017 第 3 步）。
-旧 Qdrant Point 物理清理、历史 token window/compaction 与 EventLog
-upcaster/poison-row 隔离仍未形成完整产品切片。
+（ADR-017 第 3 步）。**注意这条理由已经变过一次**：度量做不出来的根因（并列项造成的
+检索不可复现）已由 ADR-033 修掉，但**那次评测还没有在可复现的检索器上重跑**，所以现在
+缺的是证据本身，不是通往证据的路。
+旧 Qdrant Point 物理清理与历史 token window/compaction 仍未形成完整产品切片；
+EventLog upcaster/poison-row 隔离已落地，但生产 upcaster 注册表仍是空的，且界面上
+只有 Work 时间线会披露被跳过的位点，Chat 那一半仍然沉默。
 
-`main@a4dea2b` 的实测门禁：无外部服务 `--ignore=tests/e2e` 为 `1784 passed / 597 skipped`，
-`tests/e2e` 为 `3 passed / 11 skipped`，架构与配置 `114 passed`，Ruff format/lint 通过
-（421 files），Pyright `0 errors / 0 warnings`；前端 45 个单元测试、2 个桌面/移动浏览器
-冒烟测试和 production build 已在 CI 通过。这一组在本机没有外部服务时跑，597/11 项环境跳过
-只能报告为跳过。**真实服务证据由 CI 每个 PR 提供**：`Migrations, PostgreSQL and
-Qdrant-backed stores` job 对着真实 PostgreSQL 16 与 Qdrant 跑 `tests/contracts
-tests/persistence tests/api tests/vector`，共 920 项、2 项环境跳过；它不覆盖
-`tests/e2e` 与需要模型 Provider 的路径，且**会因并列分数次序不确定而偶发一条失败**
-（详见[实施状态](./status.md)）。最近一次**本机**真实 PostgreSQL + Qdrant 全量记录
-仍是前端增量当时的 `1821 passed / 11 skipped`（11 项需要 BGE 权重），那是一棵更早的工作树；
-**不同环境、不同工作树的数字只能分别引用，不能相加**。当前开发
+实测门禁（2026-08-12，基线 `main@3c8bc95`）：真实 PostgreSQL + Qdrant
+`2758 passed / 11 skipped`；不起任何外部服务 `2065 passed / 704 skipped`；前端
+Vitest `171 passed`（CI）、Playwright `4 passed`。`ruff format --check .`（493 files）、
+`ruff check src tests`、Pyright `0 errors / 0 warnings / 0 informations`、ESLint
+`--max-warnings 0`、`tsc -b` 与 production build 均通过；Alembic 唯一 head 为
+`0025_agent_invocation_count`。**真实服务证据由 CI 每个 PR 提供**：
+`Migrations, PostgreSQL and Qdrant-backed stores` job 对着真实 PostgreSQL 16 与
+Qdrant 跑 `tests/contracts tests/persistence tests/api tests/vector`；同一条命令在本机
+对真实服务跑出来是 `1012 passed / 2 skipped`。它不覆盖 `tests/e2e` 与需要模型
+Provider 的路径。此处此前写着这个 job "会因并列分数次序不确定而偶发一条失败"——
+**那条缺陷已由 ADR-033 修掉，那句话不再成立**。
+这一节不再钉具体 commit：基线一往前走，hash 就变成一句要读者自己去核的旧话。
+**不同环境的数字只能分别引用，不能相加**。当前开发
 身份解析器仍信任请求头，API 和 Compose 只允许在 loopback 的受控本机环境使用。完整证据与已知问题见
 [实施状态](./status.md)；A–F 修复前的问题原始快照见
 [2026-07-29 仓库审计](./repository-audit-2026-07-29.md)。

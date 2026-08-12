@@ -353,6 +353,71 @@ export async function searchKnowledge(
   });
 }
 
+/** Every media type the ingestion parser reads from a declaration alone. */
+const SERVER_READABLE_MEDIA_TYPES = new Set([
+  "text/plain",
+  "text/markdown",
+  "text/x-markdown",
+  "application/pdf",
+  // Both spellings the ingestion parser accepts. The long one is the
+  // registered type browsers send; the short alias turns up from some
+  // uploaders, and this set has to match the server's or a file the parser
+  // can read gets its declaration overwritten by the extension table below.
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
+]);
+
+/** The same extensions the upload controls already accept, mapped to a type. */
+const MEDIA_TYPE_BY_EXTENSION: readonly (readonly [string, string])[] = [
+  [".md", "text/markdown"],
+  [".markdown", "text/markdown"],
+  [".pdf", "application/pdf"],
+  [".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+];
+
+/**
+ * What to declare a file as when the browser's own guess is unusable.
+ *
+ * Browsers routinely hand back `""` or `application/octet-stream` for a `.md`,
+ * and neither is a type the ingestion parser reads -- so the declaration the
+ * browser produced is the one thing that makes an upload the UI advertises fail.
+ * It fails late and quietly, too: the three upload calls all succeed, and the
+ * document sits at "正在建立索引" forever because the async worker refuses it.
+ *
+ * Falling back to the extension is not this client inventing a fact about
+ * bytes. The file name is already what decides whether a file is accepted at
+ * all (`ACCEPTED_EXTENSIONS` in AttachmentTray, the `accept` attributes); only
+ * the declaration sent to the server disagreed with it. A browser type the
+ * parser can read always wins -- it is the more specific claim, and overriding
+ * `text/plain` on a `.md` would discard information rather than add it.
+ *
+ * A name that says nothing still gets `application/octet-stream`, for the same
+ * reason the CLI does (`apps/cli/upload.py`): the server decides what it can
+ * parse, and guessing past the name would be asserting something we never read.
+ */
+export function declaredMediaType(file: { name: string; type: string }): string {
+  const declared = file.type.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (SERVER_READABLE_MEDIA_TYPES.has(declared)) return declared;
+
+  const name = file.name.toLowerCase();
+  const matched = MEDIA_TYPE_BY_EXTENSION.find(([extension]) => name.endsWith(extension));
+  return matched?.[1] ?? "application/octet-stream";
+}
+
+/**
+ * `signal` is threaded through all three legs, not just the first.
+ *
+ * The three requests are not equally cancellable and it is worth being exact
+ * about which one the caller is buying. Aborting the intent or the PUT leaves
+ * nothing attached to any knowledge base -- an unused upload id and, at worst,
+ * an orphan blob. Only `/complete` puts the document into a knowledge base, so
+ * an abort that lands before it is sent is the one that actually prevents the
+ * write; one that lands after the request left the browser cannot un-write it.
+ *
+ * That residual race is a few milliseconds wide. The window this closes is the
+ * PUT, which for a real document is seconds to minutes of upload still to go,
+ * and which every abort reaches.
+ */
 export async function uploadDocument(
   identity: PrincipalIdentity,
   input: {
@@ -361,19 +426,31 @@ export async function uploadDocument(
     knowledgeBaseId: string;
     grantedPrincipals: string[];
   },
+  signal?: AbortSignal,
 ): Promise<DocumentVersion> {
   const declaredSha256 = await sha256(input.file);
+  // Computed once and threaded through the transfer: the server reads the
+  // intent's type rather than the PUT's header, but two call sites deriving it
+  // separately is how a declaration and its bytes start disagreeing.
+  const mediaType = declaredMediaType(input.file);
   const intent = await apiRequest<CreateUploadResponse>(identity, "/v1/uploads", {
     method: "POST",
     body: {
       declared_size_bytes: input.file.size,
       declared_sha256: declaredSha256,
-      media_type: input.file.type || "application/octet-stream",
+      media_type: mediaType,
       filename: input.file.name,
     },
+    ...(signal === undefined ? {} : { signal }),
   });
 
-  const transferred = await uploadBytes(identity, intent.content_path, input.file);
+  const transferred = await uploadBytes(
+    identity,
+    intent.content_path,
+    input.file,
+    mediaType,
+    signal,
+  );
   return apiRequest(identity, `/v1/uploads/${encodeURIComponent(intent.upload_id)}/complete`, {
     method: "POST",
     body: {
@@ -382,6 +459,7 @@ export async function uploadDocument(
       knowledge_base_id: input.knowledgeBaseId,
       granted_principals: input.grantedPrincipals,
     },
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -389,15 +467,19 @@ async function uploadBytes(
   identity: PrincipalIdentity,
   path: string,
   file: File,
+  mediaType: string,
+  signal?: AbortSignal,
 ): Promise<UploadContentResponse> {
-  const response = await fetch(path, {
+  const init: RequestInit = {
     method: "PUT",
     headers: {
       ...identityHeaders(identity),
-      "content-type": file.type || "application/octet-stream",
+      "content-type": mediaType,
     },
     body: file,
-  });
+  };
+  if (signal !== undefined) init.signal = signal;
+  const response = await fetch(path, init);
   if (!response.ok) throw await parseError(response);
   return (await response.json()) as UploadContentResponse;
 }

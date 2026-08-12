@@ -22,11 +22,14 @@ a re-index rather than a slow contamination of the neighbourhood.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Final, Protocol, cast
 
+from agent_workbench.adapters.concurrency.call_runner import (
+    BlockingCallRunner,
+    offload,
+)
 from agent_workbench.ports.embedding import Vector
 
 # What BGE asks to be prepended to a query but not to a passage. Getting this
@@ -129,6 +132,9 @@ class BgeM3Embedder:
     revision: str
     batch_size: int = 16
     _dimension: int = field(default=0)
+    #: ADR-042. ``None`` means the shared default executor; every production
+    #: composition passes the bounded runner instead.
+    runner: BlockingCallRunner | None = None
 
     @classmethod
     def load(
@@ -140,6 +146,7 @@ class BgeM3Embedder:
         batch_size: int = 16,
         device: str | None = None,
         loader: Callable[..., SentenceEncoder] = load_sentence_transformer,
+        runner: BlockingCallRunner | None = None,
     ) -> BgeM3Embedder:
         """Load the model and refuse it if it does not match the configuration.
 
@@ -175,6 +182,7 @@ class BgeM3Embedder:
             revision=revision,
             batch_size=batch_size,
             _dimension=actual,
+            runner=runner,
         )
 
     @property
@@ -199,10 +207,14 @@ class BgeM3Embedder:
 
         ``encode`` is synchronous and compute-bound. Awaiting it inline would
         hold the event loop for the whole batch, which on a shared process
-        means every other request waits behind one document's embeddings. The
-        bounded executor that this should eventually draw from belongs to the
-        coordination work package; a default worker thread is the honest
-        interim, and it is still strictly better than blocking the loop.
+        means every other request waits behind one document's embeddings.
+
+        This used to say the bounded executor "belongs to the coordination work
+        package" and that a default worker thread was "the honest interim".
+        That interim ended with ADR-042: the runner exists, and the default
+        executor turned out to be worse than merely unbounded -- it is *shared*
+        with every other thread user in the process, ``getaddrinfo`` included,
+        so a burst of batches queued DNS behind embeddings.
         """
 
         def run() -> tuple[Vector, ...]:
@@ -215,7 +227,7 @@ class BgeM3Embedder:
             )
             return tuple(tuple(float(value) for value in row) for row in vectors)
 
-        return await asyncio.to_thread(run)
+        return await offload(self.runner, run, name="bge-m3-dense-encode")
 
 
 __all__ = [

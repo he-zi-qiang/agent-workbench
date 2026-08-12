@@ -37,7 +37,8 @@
 | 单 Agent 如何行动 | 自研 `ClaudeLikeAgentRuntime` | Task 拓扑、RAG 索引 |
 | 长任务如何推进/恢复 | LangGraph | 同一次 Model→Tool 循环 |
 | 文档如何摄取和检索 | LlamaIndex Adapter | Chat Session、Agent 决策、Task 状态 |
-| dense+sparse 索引与融合 | Qdrant Query API | 文档/ACL 事实源 |
+| dense+sparse 索引 | Qdrant Query API | 文档/ACL 事实源、融合 |
+| 两臂融合（一次 RRF，ADR-033） | 本进程 `adapters/vector/fusion.py` | 候选提名本身 |
 | 产品状态、事件、任务协调 | PostgreSQL | 向量检索 |
 | 大文件和原始文档 | S3-compatible ArtifactStore | Task 状态和事件游标 |
 | 第三方多 Agent 对照 | CrewAI Benchmark | 生产执行或恢复语义 |
@@ -124,7 +125,8 @@ flowchart TB
     KNOW --> RET["Ingestion / Retriever / Reranker Ports"]
     RET --> LI["LlamaIndex Adapter"]
     LI --> EMB["BGE-M3 + BGE Reranker"]
-    LI --> VECTOR["Qdrant Query API\ndense + sparse + RRF"]
+    LI --> VECTOR["Qdrant Query API\ndense 臂 + sparse 臂"]
+    VECTOR --> FUSE["本进程 RRF\nadapters/vector/fusion.py（ADR-033）"]
     GRAPH --> CHECK["LangGraph Checkpointer"]
     TASK --> REG["Task Registry Port"]
     CHECK --> DB["PostgreSQL"]
@@ -540,7 +542,8 @@ stateDiagram-v2
 用户问题
   → query rewrite
   → BGE-M3 dense + sparse encode
-  → Qdrant Query API: dense top-N + sparse top-N + RRF
+  → Qdrant Query API: dense top-N + sparse top-N（两次并发的单臂查询）
+  → 本进程内一次 RRF（adapters/vector/fusion.py，ADR-033）
   → BGE-reranker-v2-m3
   → ContextPacket
   → AgentRuntime
@@ -551,7 +554,11 @@ stateDiagram-v2
 
 LlamaIndex 负责 reader/connector、Node parsing、ingestion pipeline 和 Retriever Adapter，不使用 QueryEngine/Agent 做最终回答。普通 `HuggingFaceEmbedding` 不能自动得到 BGE-M3 sparse lexical weights，因此必须实现一个常驻 `BgeM3EncoderAdapter`，同批次输出 1024 维 dense vector 与 sparse `indices/values`；文档和查询共享 tokenizer、model revision、max length 与 precision。
 
-融合所有者锁定为 **Qdrant Query API 的 RRF**：Qdrant 完成一次 dense+sparse fusion，LlamaIndex Adapter 只映射结果，不能再次 relative-score fusion。初始候选数建议 dense/sparse 各 40、rerank 后保留 6–10，但这些是评测调优参数而不是硬编码产品规则。Embedding 和 reranker 常驻加载、批处理、预热并设置并发/超时；不因模型支持 8192 tokens 就把 chunk 设为 8192。
+融合所有者锁定为 **一次 RRF**，且不得有第二次：LlamaIndex Adapter 只映射结果，不能再次 relative-score fusion。
+
+> **已由 [ADR-033](./adr/0033-fusion-ranks-are-ours.md) 修订（2026-08-10）。** 本段原文写的是「融合所有者锁定为 Qdrant Query API 的 RRF」。那一次 RRF 现在在本进程内做（`adapters/vector/fusion.py`，配置 `rag.retrieval.fusion_owner = "application"`）：适配器并发发出两条单臂查询，两臂各自先按 `(-score, chunk_id)` 定序，再对这两份**未经任何融合的**原始名次算一次 RRF。**融合次数不变，仍是一次**——ADR-016 禁止的是对已融合结果再排一次，这一条依然成立。移动它买到的是可复现：并列点的名次此后由 `chunk_id` 决定，重建索引后不变。代价是每次 hybrid 检索多一次网络往返（并发发出，墙钟接近一次）。
+
+初始候选数建议 dense/sparse 各 40、rerank 后保留 6–10，但这些是评测调优参数而不是硬编码产品规则。Embedding 和 reranker 常驻加载、批处理、预热并设置并发/超时；不因模型支持 8192 tokens 就把 chunk 设为 8192。
 
 ### 8.2 Task + Multi-Agent
 
@@ -882,7 +889,7 @@ production 使用的 BGE-M3 embedding revision 和 BGE reranker revision
 | 应用数据库 | PostgreSQL + Alembic | conversation、registry、event、approval、checkpoint、文档元数据的事实源 |
 | 任务协调 | `SKIP LOCKED` + lease/fencing + advisory lock + fenced checkpointer | 竞争 claim、task 单执行者与旧 Worker checkpoint 拒写 |
 | 实时唤醒 | PostgreSQL `LISTEN/NOTIFY` | 只作任务/事件/SSE 唤醒；持久表支持 replay |
-| 向量检索 | Qdrant Query API | 派生 dense/sparse 索引、payload filter、服务端 RRF；需独立容量评估 |
+| 向量检索 | Qdrant Query API | 派生 dense/sparse 索引、payload filter；两臂融合已移入本进程（ADR-033）。需独立容量评估 |
 | 大产物 | 本地/S3-compatible ArtifactStore | 开发与部署可替换 |
 | RAG 索引/检索 | LlamaIndex | 使用 ingestion/retrieval 能力，不接管 Agent 循环 |
 | 模型/Tool 生态 | `langchain-core` 最薄 Adapter | 一个模型与 Tool 转换的 contract test；不用 Agent/Memory/RAG 主链 |
@@ -1299,7 +1306,10 @@ v1 没有进程/容器级不可信代码执行，因此只能称为“Tool 权�
 - 状态：**接受**；由 [ADR-017](./adr/0017-llamaindex-primary-rag.md) 重新确认
   （2026-08-02）。ADR-016 曾按当时实现取代本条，现已作为历史决定保留。
 - 原因：利用其 ingestion、index、retriever 能力，同时保留核心决策权。
-- 后果：LlamaIndex Document、Node、Retriever 必须经过 Adapter；其 QueryEngine/Agent 不生成最终回答；hybrid fusion 只由 Qdrant Query API 执行一次。
+- 后果：LlamaIndex Document、Node、Retriever 必须经过 Adapter；其 QueryEngine/Agent 不生成最终回答；hybrid fusion 只执行一次。
+  「那一次由 Qdrant Query API 执行」这一句已由 [ADR-033](./adr/0033-fusion-ranks-are-ours.md)
+  取代（2026-08-10）：RRF 移入本进程，**融合次数不变，仍是一次**，变的是臂内名次由
+  `chunk_id` 而不是引擎内部布局决定。本条其余部分不变。
 
 ### ADR-004：模块化单体优先
 
@@ -1429,30 +1439,56 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
-截至 2026-08-08，主分支基线为 `main@900d83f`，在 OTel/LangChain 工具互操作
-（PR #67）与三处围栏修复（PR #68）之上，还包含 React 控制台（PR #69）、
-LlamaIndex 检索 Adapter 与路由阈值评测（PR #72、#73）以及 Chat 联网搜索与工具额度
-语义（PR #74，即 ADR-021/022）。下表在 2026-07-28 之后**大幅落后于实现**
-（它当时写着「没有 Task Registry、Task Worker 或重启恢复证据」），已按实际代码逐条
-订正。
+截至 2026-08-11，主分支基线在 OTel/LangChain 工具互操作（PR #67）与三处围栏修复
+（PR #68）之上，还包含 React 控制台（PR #69）、LlamaIndex 检索 Adapter 与路由阈值
+评测（PR #72、#73）、Chat 联网搜索与工具额度语义（PR #74，即 ADR-021/022）、
+WP15 全部五个阶段（ADR-027～031），以及 2026-08-11 的两批缺口清理。下表在
+2026-07-28 之后**大幅落后于实现**（它当时写着「没有 Task Registry、Task Worker 或
+重启恢复证据」），已按实际代码逐条订正。
+
+**这一节不再钉具体 commit。**此前写的是 `main@900d83f`，而基线一旦往前走，那个 hash
+就变成一句需要读者自己去核的旧话；具体到某次改动的 commit 与 PR 号记在
+[实施状态](./status.md)，本节只保证描述的是当前代码。
 
 **框架口径（[ADR-017](./adr/0017-llamaindex-primary-rag.md)）：自研 Runtime +
 LangGraph + LlamaIndex + RAGAS。** 当前自研 ingestion/retrieval 已有 38 题 gold set
 证据（MRR 0.960 / recall@1 0.947 / 61ms），但它是 LlamaIndex 迁移的 reference
 baseline，不是取消框架集成的最终决定。LlamaIndex **检索** Adapter 的代码和契约测试
 此后已经落地（`adapters/llama_index/`，PR #72），但表里仍记 Planned——理由换了：
-不再是"代码没写"，而是 `rag.llama_index.enabled = false`（缺 ADR-017 第 3 步要的
-等价性度量）、ingestion 未迁移、RAGAS runner 不存在。适配器存在不等于框架集成完成。
+不再是"代码没写"，而是 `rag.llama_index.enabled = false`、ingestion 未迁移、
+RAGAS runner 不存在。适配器存在不等于框架集成完成。
 
-门禁取自当前工作树 `feat/react-chat-work-ui`（= `main@a0e1b6c` + React 控制台）：
-真实 PostgreSQL 16 + Qdrant `1821 passed / 11 skipped`；无外部服务
-`1264 passed / 568 skipped`。两者是同一套测试的两种环境，不能相加。剩余 11 项跳过
-需要真实 BGE 权重。Ruff、Pyright、三个配置 profile、`uv lock --check`、
-`docker compose config` 均通过，Alembic 唯一 head 为 `0019_tool_executions`。
+那个开关保持 `false` 的**理由本身又换了一次，要说准**。此前是"缺 ADR-017 第 3 步要的
+等价性度量"，而度量做不出来的根因是检索结果不可复现——每个检索器与自己的不一致
+（9-10/38 题）都宽于两条路径之间的差异。**那个根因已由
+[ADR-033](./adr/0033-fusion-ranks-are-ours.md) 修掉**（融合下沉到本进程、两臂先按
+`(-score, chunk_id)` 定序再融合，`chunk_id` 跨重建索引不变），并且顺带更正了当初的
+诊断：不稳的不是并列分数的**次序**，是分数**本身**。但**那次等价性评测还没有在可复现
+的检索器上重跑**，所以现在缺的是证据，不是通往证据的路。第 15 节要求的"固定数据集和
+可展示指标"因此不再被不可复现性打折，但也还没有拿到新的对照数字。
 
-ADR-018～022 全部落地后（2026-08-08，PR #74 已在 `main` 上）无外部服务门禁为
-`1463 passed / 606 skipped`。这一条只覆盖无外部服务这一种环境；真实
-PostgreSQL + Qdrant 的数字仍是上面那次运行的，两者不能互相替代，也不能相加。
+门禁（2026-08-12 实测，基线 `main@3c8bc95`）：
+
+| 环境 | 结果 |
+|---|---|
+| 后端，真实 PostgreSQL + Qdrant | `2758 passed / 11 skipped` |
+| 后端，无外部服务 | `2065 passed / 704 skipped` |
+| 后端，CI 那组服务型目录（`tests/contracts tests/persistence tests/api tests/vector`） | `1012 passed / 2 skipped` |
+| 前端 Vitest（CI） | `171 passed` |
+| 前端 Playwright（桌面 + 移动，CI） | `4 passed` |
+
+后端三行本机实测，前端两行取自 CI：本机装不到 `web/package.json` 的 `engines`
+钉死的 node `24.14.0`，而 node 22 下 jsdom 的 `Blob` 没有 `.stream()`，三条
+`downloadArtifact` 用例在进入被测代码前就抛错。第三行值得单独一提——它在本机
+和 CI 上都是 `1012 passed / 2 skipped`，这是"同一条命令、同一组环境闸门"这句
+话唯一能拿出来的那种证据。
+
+`ruff format --check .`（493 files）、`ruff check src tests`、Pyright
+（`0 errors, 0 warnings, 0 informations`）、ESLint `--max-warnings 0`、`tsc -b`
+与 production build 均通过。Alembic 唯一 head 为 `0025_agent_invocation_count`。
+11 项跳过中 10 项需要 `embedding` extra 与本地 BGE 权重、1 项是 PostgreSQL-only 契约；
+无外部服务那一行多出的 676 项跳过全部因为测试用 DSN / Qdrant URL 未设。
+**这几行来自不同环境，只能分别引用，不能相加。**
 
 | 能力 | Planned | Implemented | Tested | Demonstrated |
 |---|:---:|:---:|:---:|:---:|
@@ -1504,7 +1540,20 @@ PostgreSQL + Qdrant 的数字仍是上面那次运行的，两者不能互相替
 | 三条固定 E2E 演示 | ✓ | ✓ | ✓ | ✓ |
 | Chat 两条路径对照评测（fixed vs agentic） | ✓ | ✓ | ✓ | ✓ |
 | 外部检索 Provider（DeepSeek 服务端 `web_search`，ADR-020/021） | ✓ | ✓ | 契约 |  |
+| 知识库写权限披露与摄取失败状态（`can_write` / `failed`） | ✓ | ✓ | ✓ |  |
+| Work 时间线披露解码失败的位点 | ✓ | ✓ | ✓ |  |
+| 无 `embedding` extra 的 Worker 只服务 `v2_general` | ✓ | ✓ | ✓ |  |
 | Langfuse / CrewAI 对照 / RAGAS | ✓ |  |  |  |
+| LlamaIndex ingestion 迁移（`IngestionPipeline`，写入路径） | ✓ |  |  |  |
+| Task / Multi-Agent benchmark runner | ✓ |  |  |  |
+| 通用 Tool 级动态审批（MCP 之外） | ✓ |  |  |  |
+| 动态 supervisor / agent spawn / 持久 mailbox | ✓ |  |  |  |
+| Chat 历史压缩（token window / compaction） | ✓ |  |  |  |
+| Chat 会话的服务端管理（list / rename / delete） | ✓ |  |  |  |
+| 知识库管理（重命名 / 删除 / 重建索引 / ACL 管理） | ✓ |  |  |  |
+| 逐条消息的临时附件 | ✓ |  |  |  |
+| Word 文档的读取与编辑（现有的是只读文字预览与 MCP 渲染） | ✓ |  |  |  |
+| 远程对象存储（S3）与远程部署 | ✓ |  |  |  |
 
 外部检索一栏的 Tested 写作"契约"而不是 ✓，是因为它的测试全部打在 fake
 `ExternalSearchPort` 上：`tests/adapters/test_web_search_tool.py`、
@@ -1514,6 +1563,25 @@ PostgreSQL + Qdrant 的数字仍是上面那次运行的，两者不能互相替
 `api.deepseek.com` 的两处都是配置默认值断言）。这和 BGE 权重那几项是同一种口径：
 适配器成立，真实 Provider 的行为未取证。`research.enabled` 默认 `false`，
 它同时决定 Task 授权信封的宽度。
+
+表尾那一串只有 Planned 的行是**2026-08-11 补进来的**，此前它们根本不在表里。不在表里
+和写着"未实现"看起来差不多，实际差很多：一张只列做过的事的表，读者读到的是"这就是全部
+范围"。这些能力此前只散落在 README 的边界段落里，现在在同一张表上一并可见。其中几条要
+说得更细一点：
+
+- **知识库管理**：目前只能创建与上传。重命名、删除、重建索引与 ACL 管理都没有 API，
+  控制台上也没有入口。
+- **Chat 会话的服务端管理**：会话列表只活在浏览器里（侧栏的可访问名就叫"本地 Chat 会话"），
+  服务端持有的是 `chat_turns` 与会话消息，但没有 list/rename/delete 这组管理接口。
+- **逐条消息的临时附件**：不存在。输入框旁的上传把文件放进所选知识库并永久保留，按钮的
+  可访问名因此是"上传文件到知识库"——旧标签"添加附件"描述的是一个这套系统没有的东西。
+- **Word 文档的读取与编辑**：现有的两样都不是它。一是 `GET /v1/artifacts/{id}/preview`
+  把 `.docx` 的正文与表格抽成 Markdown 供阅读（不含样式、图片与页眉页脚）；二是 Word MCP
+  的 `render_document`，那是**生成**一份新文档。读取既有 Word 文件进 Task、或在控制台里
+  编辑它，都没有。
+- **远程对象存储**：`artifact_store.backend` 允许写 `s3`，但仓库里只有 `LocalArtifactStore`；
+  API / Task Worker / Ingestion Worker 三处装配都在启动时明说"没有适配器"并拒绝启动。
+  是 fail closed，不是能力。
 
 当前身份边界的事实：开发 Header Identity Resolver 信任调用方自报的
 tenant/principal，所以生产身份认证仍是 Planned。监听地址已强制为 loopback

@@ -23,6 +23,7 @@ whole file.
 from __future__ import annotations
 
 import io
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Final, cast
@@ -34,6 +35,85 @@ from docx.text.paragraph import Paragraph
 #: Bounded for the same reason every other preview here is: this is one panel
 #: beside a run, and a reader who wants a 200-page report wants the file.
 MAX_PREVIEW_CHARS: Final[int] = 40_000
+
+#: Entries in the package. A .docx has on the order of ten to thirty; a couple
+#: of hundred means an image-heavy one. Far past that is not a document, and
+#: refusing on the count costs nothing because the count is in the central
+#: directory -- no member has to be decompressed to read it.
+MAX_PREVIEW_ZIP_ENTRIES: Final[int] = 512
+
+#: What the package may weigh once opened. The caller's ceiling is on the
+#: *compressed* bytes, which is not the cost of reading one: a .docx is a zip,
+#: python-docx expands the whole package, and XML compresses roughly ten to
+#: twenty times. So a file inside a 20 MiB limit can still ask this process for
+#: a multi-hundred-megabyte allocation, which is the gap this closes.
+MAX_PREVIEW_EXPANDED_BYTES: Final[int] = 100 * 1024 * 1024
+
+#: Expanded-to-stored ratio, refused above this. Catches the small file that is
+#: nothing but expansion -- a few hundred kilobytes that unpack into tens of
+#: megabytes pass the absolute ceiling above while still being a bomb. Set well
+#: clear of ordinary documents: prose XML lands around ten to twenty, and the
+#: thesis documents this project renders measure in that range.
+MAX_PREVIEW_COMPRESSION_RATIO: Final[int] = 200
+
+
+class DocxTooLargeError(ValueError):
+    """The package would cost more to open than a preview may spend.
+
+    Separate from a parse failure because the two mean different things to a
+    caller: a document that will not parse is a fact about the file, while this
+    is a refusal to try. The route maps them to different statuses.
+    """
+
+
+def preflight_docx(content: bytes) -> None:
+    """Refuse a package whose expansion this process should not attempt.
+
+    Runs before ``Document`` sees the bytes, because by then it is too late --
+    python-docx expands the package to parse it, so a check that ran after it
+    would be reporting an allocation that already happened.
+
+    **Why the declared sizes are enough here.** ``ZipInfo.file_size`` is read
+    out of the archive's own central directory, so on its face it is a claim
+    the file makes about itself, and the obvious worry is a bomb that simply
+    understates it. It cannot: ``ZipExtFile`` stops a member at exactly
+    ``file_size`` bytes and then fails the CRC, so an understated declaration
+    yields ``BadZipFile`` rather than more bytes. python-docx reads through the
+    same ``zipfile``, so whatever bounds this bounds it. An earlier draft of
+    this function decompressed every member to measure it instead; that pass
+    could not observe anything the declaration did not already permit, and
+    charged every legitimate preview a full extra expansion for it.
+    """
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile as error:
+        # Not a size refusal: this one is a parse failure, and is raised as the
+        # kind of error the caller already handles for unreadable content.
+        raise ValueError("the file is not a readable .docx package") from error
+
+    with archive:
+        entries = archive.infolist()
+        if len(entries) > MAX_PREVIEW_ZIP_ENTRIES:
+            raise DocxTooLargeError(
+                f"the package holds {len(entries)} entries, "
+                f"more than the {MAX_PREVIEW_ZIP_ENTRIES} a preview will open"
+            )
+        expanded = sum(entry.file_size for entry in entries)
+
+    if expanded > MAX_PREVIEW_EXPANDED_BYTES:
+        raise DocxTooLargeError(
+            f"the package expands to {expanded} bytes, "
+            f"more than the {MAX_PREVIEW_EXPANDED_BYTES} a preview will hold"
+        )
+    # Against the whole stored object rather than per member, so that splitting
+    # one bomb across several entries does not evade it.
+    if content and expanded > len(content) * MAX_PREVIEW_COMPRESSION_RATIO:
+        raise DocxTooLargeError(
+            f"the package expands {expanded // len(content)}x, "
+            f"past the {MAX_PREVIEW_COMPRESSION_RATIO}x a preview will open"
+        )
+
 
 #: How a heading becomes Markdown. python-docx reports built-in heading styles
 #: as "Heading 1".."Heading 9"; anything else is a paragraph, including the
@@ -115,8 +195,20 @@ def _body_children(document: Any) -> Iterator[Any]:
     return cast("Iterator[Any]", document.element.body.iterchildren())
 
 
-def extract_docx_preview(content: bytes) -> DocxPreview:
+def extract_docx_preview(
+    content: bytes, *, max_chars: int | None = MAX_PREVIEW_CHARS
+) -> DocxPreview:
     """The document's text in reading order, as Markdown.
+
+    ``max_chars`` is the caller's ceiling rather than this module's, because
+    the two callers want different answers and only one of them wants a
+    preview. The panel beside a run stops at ``MAX_PREVIEW_CHARS`` -- a reader
+    who wants a 200-page report wants the file. Ingestion passes ``None``: a
+    document is about to be chunked and indexed, and stopping at forty thousand
+    characters would index a fraction of it while every layer reported success.
+    That is the failure this parameter exists to make impossible to reach by
+    accident, which is also why the default is the preview number: the caller
+    that needs the whole document has to say so.
 
     Paragraphs and tables are walked through the body's own XML children rather
     than through ``document.paragraphs`` and ``document.tables`` separately.
@@ -124,8 +216,13 @@ def extract_docx_preview(content: bytes) -> DocxPreview:
     one after the other puts every table after every paragraph -- so a report
     whose table sits in section 2 shows it after the conclusion, which is not
     what the document says.
+
+    The preflight is here rather than at the route, so that the ceiling holds
+    for every caller of this function instead of for the one path that
+    remembered to ask.
     """
 
+    preflight_docx(content)
     document = Document(io.BytesIO(content))
     pieces: list[str] = []
     tables = 0
@@ -144,7 +241,7 @@ def extract_docx_preview(content: bytes) -> DocxPreview:
             continue
         if not piece:
             continue
-        if total + len(piece) > MAX_PREVIEW_CHARS:
+        if max_chars is not None and total + len(piece) > max_chars:
             truncated = True
             break
         pieces.append(piece)
@@ -157,4 +254,13 @@ def extract_docx_preview(content: bytes) -> DocxPreview:
     )
 
 
-__all__ = ["MAX_PREVIEW_CHARS", "DocxPreview", "extract_docx_preview"]
+__all__ = [
+    "MAX_PREVIEW_CHARS",
+    "MAX_PREVIEW_COMPRESSION_RATIO",
+    "MAX_PREVIEW_EXPANDED_BYTES",
+    "MAX_PREVIEW_ZIP_ENTRIES",
+    "DocxPreview",
+    "DocxTooLargeError",
+    "extract_docx_preview",
+    "preflight_docx",
+]

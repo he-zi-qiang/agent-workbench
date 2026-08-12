@@ -20,11 +20,14 @@ thing a later caller helpfully compares against 0.5.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
+from agent_workbench.adapters.concurrency.call_runner import (
+    BlockingCallRunner,
+    offload,
+)
 from agent_workbench.ports.reranker import (
     RerankerContractError,
     RerankerUnavailableError,
@@ -89,6 +92,9 @@ class BgeReranker:
     model_id: str
     revision: str
     batch_size: int = 8
+    #: ADR-042. ``None`` means the shared default executor; every production
+    #: composition passes the bounded runner instead.
+    runner: BlockingCallRunner | None = None
 
     @classmethod
     def load(
@@ -99,6 +105,7 @@ class BgeReranker:
         batch_size: int = 8,
         device: str | None = None,
         loader: Callable[..., CrossEncoderModel] = load_cross_encoder,
+        runner: BlockingCallRunner | None = None,
     ) -> BgeReranker:
         """Load the model.
 
@@ -118,6 +125,7 @@ class BgeReranker:
             model_id=model_id,
             revision=revision,
             batch_size=batch_size,
+            runner=runner,
         )
 
     @property
@@ -137,7 +145,7 @@ class BgeReranker:
             )
             return tuple(float(score) for score in scores)
 
-        scores = await asyncio.to_thread(run)
+        scores = await offload(self.runner, run, name="bge-reranker-score")
         if len(scores) != len(passages):
             # Positional alignment is the entire contract. A short or long
             # result would silently pair scores with the wrong passages, which

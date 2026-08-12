@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from agent_workbench.adapters.concurrency.call_runner import BlockingCallRunner
 from agent_workbench.adapters.embedding.bge_sparse import (
     BgeM3SparseEncoder,
     load_bge_m3,
@@ -36,6 +37,10 @@ def build_sparse_encoder(
     *,
     loader: Callable[..., Any] = load_bge_m3,
     vocabulary_size: Callable[[str, str], int] | None = None,
+    #: ADR-042. Threaded through rather than built here: one process has one
+    #: pool, and a factory that made its own would give each adapter a
+    #: private bound, which is three bounds and no ceiling.
+    runner: BlockingCallRunner | None = None,
 ) -> SparseEncoderPort | SparseEncodingUnavailable:
     """Load the configured lexical encoder, or return an actionable absence."""
 
@@ -52,6 +57,7 @@ def build_sparse_encoder(
             batch_size=config.batch_size,
             loader=loader,
             vocabulary_size=vocabulary_size,
+            runner=runner,
         )
     except (SparseEncodingUnavailableError, ImportError, OSError) as missing:
         return SparseEncodingUnavailable(reason=str(missing))
