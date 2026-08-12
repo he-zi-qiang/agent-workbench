@@ -290,6 +290,39 @@ UPDATE 不再比上限              3 failed / 8 passed
 **至此 `max_agent_invocation_attempts_per_task` 第一次被真正执行**——从"声明了很久、
 无人读取"，到有持久计数器、可见、并且会拒绝。
 
+### 六、第 7 条四件新建能力的分诊（只出 ADR，不写实现）
+
+四件（RAGAS runner / 通用 Tool 审批 / Word 读+编辑 / 生产身份+S3）逐件勘察后分诊。
+结论是**只有两件现在该落笔**，而且其中一件写的是"不做"：
+
+| 排序 | 能力 | 判定 | 一句话理由 |
+|---|---|---|---|
+| 1 | Word 读+编辑 | 写 ADR | 撞**零**条冻结边界、零配置叶子、零迁移，`python-docx` 已是主依赖 |
+| 2 | 生产身份 + S3 | 写 ADR（**明确不做**） | 撞的冻结边界最多；且没有 remote 部署就没有消费者 |
+| 3 | RAGAS runner | 需用户拍板 | 规格最清楚，但"judge 用谁"只能由用户定 |
+| 4 | 通用 Tool 审批 | 推迟 | 要正面回答"是不是在反转 ADR-038"，且第一件缺的是**人做的分类清单**而非代码 |
+
+[ADR-043](./adr/0043-docx-reading-is-a-native-tool.md)：读取器是 native 工具，不是第二个
+MCP server。这一条**不是**用户的取舍——`adapters/tools/workspace.py:11-15` 已经为同一个
+问题判过一次，而且 MCP 那条路被物理条件否掉（参数只能来自模型输出，
+`MAX_MCP_REQUEST_BYTES=262144`）。写下来是因为下一个只读代码的人会先想到抄 ADR-027 §3.4
+的渲染器模板，那是事后很难改的错。
+
+[ADR-044](./adr/0044-no-remote-no-production-identity.md)：先有远端部署，才谈得上生产身份与
+远程对象存储。形式沿用 ADR-041 刚立的先例——**把"明确不做"写成一份 ADR**，而不是留白。
+
+**分诊查出一处真缺口，已独立核实：**`grep -rn "s3" tests/` **零命中**。三处
+`backend != "local"` 的拒绝装配（`dependencies.py:304`、`task_worker/composition.py:243`、
+`ingestion_worker/composition.py:110`）**一条测试都没有**，而 README、
+architecture-baseline 与 status.md 三处都把这个行为当成"这是 fail closed，不是能力"
+在引用。按本仓库纪律，**一个被文档引用、却没有覆盖触发条件的回归测试的行为，不算完成**。
+补三条拒绝 + 一条对照（`backend=local` 装得起来）是半天的活，且它让"我们明确不做"这句话
+变成有牙的，而不是三行没人验证过的代码。
+
+**十个问题留给用户拍板**，逐条写进了两份 ADR 的未决一节，agent 没有替他给答案。
+最要紧的一条是本轮的性质本身：你要的是"截止前多出一件能演示的新能力"，还是"把该关的门
+关严、把形状定死"？两份 ADR 偏后者。
+
 ### 四、52 题 gold set 重跑，ADR-017 第 2 步的证据到齐
 
 见 `evals/rag/reports/`。四份报告出自同一个进程、同一个 collection、同一份 gold set
