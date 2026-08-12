@@ -47,7 +47,7 @@
 
 ## 当前事实
 
-**截至 2026-08-12，基线为 `main@3c8bc95`（PR #116），配置 schema `1.14`，
+**截至 2026-08-12，基线为 `main@e3281b4`（PR #113），配置 schema `1.14`，
 Alembic 单一 head 为 `0025_agent_invocation_count`（共 25 个迁移）。**
 门禁按 CI 的四个 job 分别记，不合成一个总数——两个后端 job 的跳过集互相覆盖，
 把它们相加会数重：确定性测试 **2050 passed / 719 skipped**（不起外部服务，
@@ -109,7 +109,7 @@ LlamaIndex retrieval Adapter 已经建成并通过契约测试，但 `rag.llama_
 EventLog upcaster/poison-row 隔离已落地，但生产 upcaster 注册表仍是空的，且界面上
 只有 Work 时间线会披露被跳过的位点，Chat 那一半仍然沉默。
 
-实测门禁（2026-08-12，基线 `main@3c8bc95`）：真实 PostgreSQL + Qdrant
+实测门禁（2026-08-12）：真实 PostgreSQL + Qdrant
 `2758 passed / 11 skipped`；不起任何外部服务 `2065 passed / 704 skipped`；前端
 Vitest `171 passed`（CI）、Playwright `4 passed`。`ruff format --check .`（493 files）、
 `ruff check src tests`、Pyright `0 errors / 0 warnings / 0 informations`、ESLint

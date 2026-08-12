@@ -1,6 +1,6 @@
 # 已知缺口
 
-截至 **2026-08-12**，`main@3c8bc95`（PR #116）；配置 schema `1.14`，Alembic
+截至 **2026-08-12**，`main@e3281b4`（PR #113）；配置 schema `1.14`，Alembic
 迁移 25 个（head `0025_agent_invocation_count`）。
 
 ## 这份文档解决什么问题
@@ -355,9 +355,10 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 ### E-05 文档中的数字过时 —— 口径不实
 
 **证据**：本文档合入时已修掉一半——[docs/README.md](./README.md)、
-[配置管理契约](./configuration.md) 与本文件的锚点都已推到 `main@3c8bc95`
-（PR #116）、schema `1.14`、Alembic head `0025_agent_invocation_count`，
-测试计数改用 PR #116 的 CI 实测值。
+[配置管理契约](./configuration.md) 与本文件的锚点都已推到 `main@e3281b4`
+（PR #113）、schema `1.14`、Alembic head `0025_agent_invocation_count`，
+测试计数改用 CI 实测值（PR #116 与 PR #113 两次独立运行逐位相同：确定性
+`2050 / 719`、真实服务 `1012 / 2`）。
 
 **仍然落后的**：[架构基线](./architecture-baseline.md) 第 17 节。该节已经不再
 钉具体 commit（它自己写明了理由：hash 一往前走就成了考古），但其中的门禁表

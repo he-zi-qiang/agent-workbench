@@ -11,7 +11,7 @@ LangChain and later comparison adapters stay behind explicit ports.
 
 ## Current status
 
-**As of 2026-08-12 the baseline is `main@3c8bc95` (PR #116), configuration schema
+**As of 2026-08-12 the baseline is `main@e3281b4` (PR #113), configuration schema
 `1.14`.** What is *not* built is not described here: it is recorded gap by gap in
 [Known gaps](docs/known-gaps.md), each classified as refused, unwired, absent or
 misstated, with a repository location and a criterion for what "done" means. The
@@ -142,7 +142,7 @@ Implemented with test evidence:
 - a local-only Docker Compose topology for PostgreSQL, Qdrant, migrations, the
   API and explicitly opted-in synthetic workers.
 
-Validation measured on 2026-08-12 against baseline `main@3c8bc95`:
+Validation measured on 2026-08-12:
 
 | Environment | Result |
 |---|---|
