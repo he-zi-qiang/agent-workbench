@@ -64,10 +64,14 @@ class DocumentPreview(BaseModel):
 
     text: str
     truncated: bool
-    #: Of the part the walk reached, unlike every count below it, which are of
-    #: the whole document. The seam is the extraction's (see ``DocxPreview``);
-    #: this model reports it rather than smoothing it over, because smoothing it
-    #: here would change a number the console already prints.
+    #: Of the whole document, as every count below it is. It used to be of the
+    #: part the extraction's walk reached, and this model carried a note saying
+    #: so rather than smoothing it over -- which was the right thing to do with
+    #: a seam and the wrong thing to leave it as. A truncated preview whose
+    #: table sat below the cut lost it from the text and from this number at
+    #: once, and the panel renders "no non-zero counts" as the statement that
+    #: nothing is missing. The seam is closed in the extraction
+    #: (``adapters/documents/docx.py``); this field just reports it.
     table_count: int
     image_count: int
     header_count: int

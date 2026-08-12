@@ -727,10 +727,87 @@ describe("WorkPage task submission", () => {
     expect(within(gaps).queryByText("脚注没有显示")).not.toBeInTheDocument();
     expect(within(gaps).queryByText("表格只保留文字")).not.toBeInTheDocument();
     expect(within(gaps).queryByText(/^0 /)).not.toBeInTheDocument();
+    // The text is whole here, and the row about the cut is conditional on that
+    // being false. Without this the row could render for every document -- a
+    // list of real losses is exactly where an invented one would be believed.
+    expect(within(gaps).queryByText(/正文只显示到这里/)).not.toBeInTheDocument();
+  });
+
+  it("does not present a truncated preview as one that lost nothing", async () => {
+    // The counts are all zero here and all seven are truthful: this document
+    // holds no picture, no footnote, no table. What it does hold is more prose
+    // than the preview read, and none of the seven moves for that -- they are
+    // of the whole document (`adapters/documents/docx.py`), so a plain document
+    // cut in half scores zero on every axis. Rendering nothing is how this page
+    // says the preview is faithful, so nothing is the one thing it must not
+    // render here.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue(
+      documentPreview({ truncated: true }),
+    );
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    const gaps = await within(output).findByRole("list", {
+      name: "预览没有还原的部分",
+    });
+    expect(within(gaps).getByText(/正文只显示到这里/)).toBeInTheDocument();
+    // No invented rows to carry it. The cut is the one loss this document has,
+    // and it is the one row with no number, because what is missing is the part
+    // that was never read.
+    expect(within(gaps).queryByText(/^0 /)).not.toBeInTheDocument();
+    expect(within(gaps).queryByText("图片没有显示")).not.toBeInTheDocument();
+    // And nothing to read the numbers against, so the clause about them stays
+    // out of the sentence.
+    expect(within(gaps).queryByText(/整份文档/)).not.toBeInTheDocument();
+    // Once. The cut used to be a note above this list, and a fact stated in two
+    // adjacent places is how one of them drifts.
+    expect(within(output).getAllByText(/完整内容请下载/)).toHaveLength(1);
+  });
+
+  it("says which document the counts are of when the text stops early", async () => {
+    // The counts are of the whole file and the text is not, which is the one
+    // place those two can be read as the same scope: "4 张" under a preview
+    // that stops early invites "four so far", and a reader who takes that
+    // reading concludes the rest of the document is prose.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue(
+      documentPreview({ truncated: true, image_count: 4 }),
+    );
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    const gaps = await within(output).findByRole("list", {
+      name: "预览没有还原的部分",
+    });
+    expect(within(gaps).getByText(/按整份文档数的/)).toBeInTheDocument();
+    expect(within(gaps).getByText("图片没有显示")).toBeInTheDocument();
+    expect(within(gaps).getByText("4 张")).toBeInTheDocument();
   });
 
   it("says nothing about losses when the preview lost nothing", async () => {
-    // The control for the counts. Without it, a list that rendered every kind
+    // The control for the counts, and now for the cut as well: the same fixture
+    // as the truncated test above with `truncated: false`, so the only thing
+    // deciding whether this page claims faithfulness is whether it read the
+    // whole document. Without it, a list that rendered every kind
     // unconditionally -- or an empty box with a heading over it -- would pass
     // the test above while telling every reader of a plain document that
     // something is missing from it.

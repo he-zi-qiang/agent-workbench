@@ -13,7 +13,11 @@ refusing a bomb is the one thing it cannot be asked to demonstrate. The counts
 of what a preview drops need the opposite: a document with a picture, a
 footnote or a floating figure, none of which ``render_document`` can make -- it
 renders headings, prose, bullets and tables. Those are built with python-docx
-directly. The control for each of them is still a rendered document, so the
+directly, and so is the one case that needs a document *poorer* than a rendered
+one: every document this project renders carries a header, a footer and a
+custom style, so a test asking whether anything at all was reported missing
+would pass on those three whatever happened to the table it dropped. The
+control for each of them is still a rendered document, so the
 assertion that matters most -- that an ordinary Task output reports no pictures
 and no footnotes -- is made against what a Task actually produces.
 """
@@ -26,17 +30,20 @@ import re
 import struct
 import zipfile
 import zlib
+from dataclasses import fields
 
 import pytest
 from docx import Document
 from docx.document import Document as WordDocument
 from docx.oxml import parse_xml
-from docx.oxml.ns import nsdecls
+from docx.oxml.ns import nsdecls, qn
+from docx.text.run import Run
 
 from agent_workbench.adapters.documents.docx import (
     MAX_PREVIEW_CHARS,
     MAX_PREVIEW_COMPRESSION_RATIO,
     MAX_PREVIEW_EXPANDED_BYTES,
+    DocxPreview,
     DocxTooLargeError,
     extract_docx_preview,
     preflight_docx,
@@ -267,6 +274,30 @@ def test_a_rendered_document_reports_no_pictures() -> None:
     assert preview.image_count == 0
 
 
+def _floated(run: Run) -> None:
+    """Move this run's inline picture under an anchor, in place.
+
+    Built by moving a real picture rather than by writing anchor XML, because
+    what these cases have to tell apart is a picture from the element around
+    it -- a hand-written anchor would be the fixture asserting itself.
+    python-docx places only inline pictures, and this is the edit Word makes
+    when a reader turns one into a floating figure: the same `a:graphic`,
+    carrying the same `pic:pic` and its relationship to the image part, under
+    `wp:anchor` instead of `wp:inline`.
+
+    The anchor is left without the position and wrap children Word writes
+    beside the graphic. Those decide where on the page the picture lands, which
+    is layout, and nothing here reads them.
+    """
+
+    drawing = run._r.find(qn("w:drawing"))
+    inline = drawing.find(qn("wp:inline"))
+    anchor = parse_xml(f"<wp:anchor {nsdecls('wp')}/>")
+    for child in list(inline):
+        anchor.append(child)
+    drawing.replace(inline, anchor)
+
+
 def test_a_floating_picture_is_counted_although_inline_shapes_cannot_see_it() -> None:
     """Why this count is not `document.inline_shapes`.
 
@@ -277,19 +308,141 @@ def test_a_floating_picture_is_counted_although_inline_shapes_cannot_see_it() ->
     readings are asserted, so the difference is the test rather than a claim
     about it.
 
-    The anchor is injected empty, and python-docx has no API that would place a
-    real one. What is being pinned is whether the count sees the element.
+    The fixture used to be an empty `wp:anchor`, which is the same element and
+    not the same claim: it passes against a count that looks for pictures and
+    against one that looks for DrawingML containers, so it could not tell those
+    two apart -- and the containers hold text boxes and charts as readily as
+    figures. It moved to the case below, as a thing that is not a picture.
     """
 
     document = Document()
     run = document.add_paragraph("环绕排版的图。").add_run()
-    run._r.append(
-        parse_xml(f"<w:drawing {nsdecls('w', 'wp')}><wp:anchor/></w:drawing>")
-    )
+    run.add_picture(io.BytesIO(_png()))
+    _floated(run)
     content = _saved(document)
 
+    # A real picture, floating: asserted rather than assumed, because the case
+    # is about what is inside the anchor and not about the anchor.
+    body = Document(io.BytesIO(content)).element.body
+    assert len(body.xpath(".//wp:anchor")) == 1
+    assert len(body.xpath(".//pic:pic")) == 1
     assert len(Document(io.BytesIO(content)).inline_shapes) == 0
     assert extract_docx_preview(content).image_count == 1
+
+
+#: Where Word keeps a text box. A Microsoft extension rather than an ECMA-376
+#: namespace, so it is absent from python-docx's `nsmap` and declared here.
+_WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+
+#: A text box: a shape whose body happens to hold paragraphs. This is what Word
+#: writes for one, and it arrives in the same container a figure does.
+_TEXT_BOX = (
+    f'<a:graphicData uri="{_WPS}"><wps:wsp xmlns:wps="{_WPS}">'
+    '<wps:cNvSpPr txBox="1"/><wps:spPr/><wps:txbx><w:txbxContent>'
+    "<w:p><w:r><w:t>框里的字</w:t></w:r></w:p>"
+    "</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData>"
+)
+
+#: A chart. The chart itself lives in its own part, so what the body holds is
+#: the reference to it -- here without the relationship id, which nothing in
+#: this module reads and no fixture in this file could satisfy.
+_CHART = (
+    '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">'
+    "<c:chart/></a:graphicData>"
+)
+
+#: SmartArt, the same way.
+_SMART_ART = (
+    '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram">'
+    "<dgm:relIds/></a:graphicData>"
+)
+
+
+def _drawing(graphic: str, *, floating: bool) -> str:
+    """One `w:drawing` holding this graphic, anchored or inline.
+
+    Both containers are covered because a picture arrives in either one, so a
+    count narrowed to only the anchored one would still report an inline text
+    box -- which Word writes whenever the box sits in the run of text rather
+    than beside it -- as a picture.
+    """
+
+    container = "wp:anchor" if floating else "wp:inline"
+    return (
+        f"<w:drawing {nsdecls('w', 'wp', 'a', 'c', 'dgm')}>"
+        f'<{container}><wp:extent cx="914400" cy="914400"/>'
+        f'<wp:docPr id="1" name="图形 1"/>'
+        f"<a:graphic>{graphic}</a:graphic></{container}></w:drawing>"
+    )
+
+
+@pytest.mark.parametrize(
+    "drawing",
+    [
+        pytest.param(_drawing(_TEXT_BOX, floating=True), id="floating-text-box"),
+        pytest.param(_drawing(_TEXT_BOX, floating=False), id="inline-text-box"),
+        pytest.param(_drawing(_CHART, floating=True), id="chart"),
+        pytest.param(_drawing(_SMART_ART, floating=True), id="smart-art"),
+        pytest.param(
+            f"<w:drawing {nsdecls('w', 'wp')}><wp:anchor/></w:drawing>",
+            id="empty-anchor",
+        ),
+    ],
+)
+def test_a_drawing_that_holds_no_picture_is_not_counted_as_one(drawing: str) -> None:
+    """`wp:inline` and `wp:anchor` are containers, not pictures.
+
+    DrawingML puts text boxes, charts, SmartArt and every drawn shape in the
+    same two elements a figure arrives in, so a count of the containers reports
+    furniture as photographs. The module used to count exactly that, while the
+    comment beside it excluded VML because `w:pict` "also carries text boxes
+    and drawn lines" -- word for word what these two do, in a module that was
+    counting them anyway. Both halves moved: the count reads `pic:pic`, and the
+    reason given for leaving VML out is now one that survives being applied to
+    both formats.
+
+    What the reader is told is 图片没有显示 · 1 张, of a document that holds no
+    picture. That row sits in the panel's list of what the preview lost, so a
+    phantom in it costs the rows beside it -- the footnotes and the headers
+    that really are missing -- the credibility the list exists to have.
+
+    The empty anchor is the degenerate member rather than a document Word
+    writes. It is here because it is what the floating-picture test above used
+    to offer as a picture.
+    """
+
+    document = Document()
+    document.add_paragraph("图形之前的一段。")
+    run = document.add_paragraph("图形之后的一段。").add_run()
+    run._r.append(parse_xml(drawing))
+    content = _saved(document)
+
+    # A drawing, and no picture in it. Asserted so that a case which stopped
+    # being either fails rather than passes for a reason nobody chose.
+    body = Document(io.BytesIO(content)).element.body
+    assert len(body.xpath(".//w:drawing")) == 1
+    assert body.xpath(".//pic:pic") == []
+
+    assert extract_docx_preview(content).image_count == 0
+
+
+def test_only_the_picture_is_counted_when_a_text_box_sits_beside_it() -> None:
+    """The pair, so neither half can be bought by giving up the other.
+
+    A count that went back to `document.inline_shapes` to stop counting text
+    boxes says 0 here, and has lost the floating figure `wp:anchor` was added
+    for; one that keeps counting containers says 2. Only a count that asks what
+    the container holds says 1, which is what the document has.
+    """
+
+    document = Document()
+    picture = document.add_paragraph("环绕排版的图。").add_run()
+    picture.add_picture(io.BytesIO(_png()))
+    _floated(picture)
+    shape = document.add_paragraph("旁边的文本框。").add_run()
+    shape._r.append(parse_xml(_drawing(_TEXT_BOX, floating=True)))
+
+    assert extract_docx_preview(_saved(document)).image_count == 1
 
 
 def test_a_rendered_document_says_its_letterhead_did_not_come_through() -> None:
@@ -486,14 +639,22 @@ def test_the_counts_are_of_the_document_and_not_of_the_part_that_fits() -> None:
     assert preview.footnote_count == 1
 
 
-def test_the_table_count_alone_stops_where_the_text_does() -> None:
-    """The one number that is not of the whole document, pinned on purpose.
+def test_the_table_count_is_of_the_document_like_every_count_beside_it() -> None:
+    """The reversal of `test_the_table_count_alone_stops_where_the_text_does`.
 
-    `table_count` counts the tables the walk reached, and the console already
-    prints it as 共 N 张表格. Reconciling it with the counts beside it changes
-    what the UI says, which is a decision about the product rather than about
-    this module -- so it is left where it was and pinned here, so that moving
-    it later has to be deliberate rather than incidental.
+    That test pinned the opposite of this -- `cut.table_count == 0` for a
+    document holding one -- and pinned it deliberately: the number was already
+    on screen, ADR-045 §6 recorded the seam as a known inconsistency, and the
+    pin existed so that moving it later could not happen by accident. This is
+    that move, and what overturns the earlier judgement is the test below:
+    the seam is not a narrower claim about tables, it is the one path by which
+    the panel reports *nothing missing* from a preview that dropped a table
+    whole. "Do not change a number the console already shows" is an argument
+    about continuity, and it has nothing to say to a number that is wrong.
+
+    What the console gives up is narrower than it sounds. The two readings
+    agree on every preview that was not cut, so the only display this changes
+    is the truncated one -- where the old number was the wrong answer.
 
     The same bytes are read twice, at the preview's ceiling and with none, so
     the difference is the ceiling and nothing else.
@@ -511,12 +672,114 @@ def test_the_table_count_alone_stops_where_the_text_does() -> None:
 
     assert cut.truncated is True
     assert whole.truncated is False
-    # The table is below the cut, so this number is of the preview ...
-    assert cut.table_count == 0
-    assert whole.table_count == 1
-    # ... while the counts added beside it are of the document either way.
+    # The table is below the cut, so the text has it one way and not the other
+    # -- which is what makes the counts below a statement about the counts.
+    assert "| 指标 |" in whole.text
+    assert "| 指标 |" not in cut.text
+    # And it is in the count either way, like every count beside it.
+    assert cut.table_count == whole.table_count == 1
     assert cut.header_count == whole.header_count == 1
     assert cut.flattened_paragraph_count == whole.flattened_paragraph_count == 1
+
+
+def _reported_counts(preview: DocxPreview) -> dict[str, int]:
+    """Every number this preview reports, read off the result rather than listed.
+
+    Read, because which field carries "a table was dropped" is not decided
+    here -- `table_count` widened to the whole document, or a second number
+    beside it -- and a list written today would name the wrong one either way.
+    What the panel does with them is the same for all of them: `PreviewGaps`
+    takes every count, drops the zeros, and renders whatever is left.
+
+    `truncated` is left out although `bool` is an `int`, and the exclusion is
+    the point rather than a technicality. That flag is already on screen, and
+    it is what turns an empty list into a false statement rather than a
+    redundant one: a reader told 这里只显示开头 and shown nothing missing
+    concludes that what stopped was prose.
+    """
+
+    values: dict[str, object] = {
+        field.name: getattr(preview, field.name) for field in fields(preview)
+    }
+    return {
+        name: value
+        for name, value in values.items()
+        if isinstance(value, int) and not isinstance(value, bool)
+    }
+
+
+def test_a_dropped_table_is_never_reported_as_a_faithful_preview() -> None:
+    """The one state the panel must not be able to reach: something is missing
+    and nothing is listed.
+
+    `PreviewGaps` renders one row per non-zero count and returns null when all
+    of them are zero, and its own comment says that the empty list *is* the
+    statement that the preview is faithful. `table_count` is the single number
+    of what the walk reached rather than of the document, so a table below the
+    cut subtracts itself from the only count that would have mentioned it. The
+    document loses a table; the panel says nothing was lost.
+
+    Truncation being on screen does not cover this. The console's 这里只显示开头
+    says the text stops, and a reader also shown an empty gap list can only
+    conclude that what stopped was prose -- which is the inference the module's
+    own docstring gives as the reason every other count is of the whole
+    document.
+
+    Deliberately not asserted against a field name: whether the fix widens
+    `table_count` or adds a number beside it is the next decision, and what is
+    pinned here is only that the reader can see *something*. Today's answer is
+    pinned directly above, in
+    `test_the_table_count_alone_stops_where_the_text_does`; one of the two has
+    to move, and this is the one that says which way.
+    """
+
+    document = Document()
+    for _ in range(40):
+        document.add_paragraph("正" * 2_000)
+    table = document.add_table(rows=2, cols=2)
+    table.rows[0].cells[0].text = "被丢掉的表格"
+    content = _saved(document)
+
+    whole = extract_docx_preview(content, max_chars=None)
+    cut = extract_docx_preview(content)
+
+    # This document has exactly one thing it can lose, which is what makes the
+    # assertion below about the table rather than about whatever else was in
+    # the fixture. A rendered document would arrive with a header, a footer and
+    # a custom style, and pass on those three alone.
+    assert whole.table_count == 1
+    assert whole.image_count == whole.footnote_count == 0
+    assert whole.header_count == whole.footer_count == 0
+    assert whole.numbered_paragraph_count == whole.flattened_paragraph_count == 0
+
+    # At the preview's ceiling it loses it -- the table and every word in it.
+    assert cut.truncated is True
+    assert "被丢掉的表格" not in cut.text
+
+    counts = _reported_counts(cut)
+    assert any(count > 0 for count in counts.values()), (
+        f"a table is gone from the text and from every number beside it: {counts}"
+    )
+
+
+def test_a_preview_that_lost_nothing_reports_nothing_missing() -> None:
+    """The control, and the reason the assertion above asks for *some* number
+    rather than a particular one.
+
+    An empty gap list has to stay reachable. A count that is non-zero whenever
+    a preview exists would satisfy the case above and put a row under every
+    faithful preview in the console -- the same false statement pointed the
+    other way, and the rows that mean something would be read as the furniture
+    it had just made them look like.
+    """
+
+    document = Document()
+    document.add_paragraph("只有一句话。")
+
+    preview = extract_docx_preview(_saved(document))
+
+    assert preview.truncated is False
+    assert set(_reported_counts(preview).values()) == {0}
 
 
 def _zip_of(members: dict[str, bytes]) -> bytes:

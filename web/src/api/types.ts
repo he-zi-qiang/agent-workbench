@@ -194,13 +194,24 @@ export interface ArtifactRef {
  */
 export interface DocumentPreview {
   text: string;
-  /** The document continues past what `text` holds. Said, never implied. */
+  /**
+   * The document continues past what `text` holds. Said, never implied.
+   *
+   * Read together with the counts rather than on its own, and the panel now
+   * renders it as one of them (`PreviewGaps`). None of the seven moves when the
+   * text stops early -- they are of the whole document -- so a plain document
+   * cut in half scores zero on every one of them, and a list that showed only
+   * counts would render empty, which is that list's way of saying nothing is
+   * missing.
+   */
   truncated: boolean;
   /**
-   * Tables the document has. The one count of what the extraction *reached*
-   * rather than of the whole file, so a truncated preview reports the tables
-   * above the cut. Left that way deliberately: it is the number already on
-   * screen, and moving it changes what the console has been claiming.
+   * Tables the document has, of the whole file like every count beside it.
+   * It used to be of the part the extraction reached, so a truncated preview
+   * counted only the tables above the cut -- and a table below it went missing
+   * from the text and from the one number that would have mentioned it, which
+   * left `PreviewGaps` rendering an empty list for a document that had lost a
+   * table whole. The two readings agree whenever `truncated` is false.
    */
   table_count: number;
   /** Pictures, which the text preview drops entirely. */
