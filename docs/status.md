@@ -323,6 +323,61 @@ architecture-baseline 与 status.md 三处都把这个行为当成"这是 fail c
 最要紧的一条是本轮的性质本身：你要的是"截止前多出一件能演示的新能力"，还是"把该关的门
 关严、把形状定死"？两份 ADR 偏后者。
 
+### 七、Word 进摄取路径（A1，用户选了"要一件能演示的能力"）
+
+用户在上面那个问题上选了 (a)。所以做的是 ADR-043 §14 明确留给用户的**入口**问题里的 A1：
+上传的 Word 能被切块、索引、检索、被答案引用。
+
+**先搬家，否则会违反 ADR-043 §5。**唯一那份 docx 解析实现原本在 `apps/api/docx_preview.py`
+——摄取 Worker 够不到它，直接在 parser 里写第二个 `Document(BytesIO(...))` 等于新开一条
+解析路径、也就新开一个绕过三道 zip 炸弹闸的洞。所以整份搬到
+`adapters/documents/docx.py`（`adapters` 是 outer boundary，Worker 与 API 都到得了），
+`tests/api/test_docx_preview.py` 跟着搬到 `tests/adapters/test_docx.py`，都用 `git mv`。
+
+**上限变成调用方的参数，而不是模块的常量。**`MAX_PREVIEW_CHARS = 40_000` 是**面板**的数
+（它自己的注释就写着 "this is one panel beside a run"）。摄取照抄会**静默索引半份文档**，
+而且每一层都报成功。所以 `extract_docx_preview(content, *, max_chars=MAX_PREVIEW_CHARS)`：
+预览路径逐字节不变，摄取传 `None`。**默认值刻意保持预览那个数**——要整篇的调用方必须自己
+说出来。
+
+**没有 page_starts，这是格式的性质不是遗漏。**docx 不存分页：页在哪断由排版的渲染器连同
+字体和纸张一起决定，两个阅读器对同一份文件合法地不一致。所以引用退回字符偏移，
+`ParsedDocument` 用"空 `page_starts`"表达这件事（它的注释已经写明空数组是正面声明）。
+
+**一处我先写错、被实测纠正的事，留痕。**我原本断言"法语 Word 的 `Titre1`、德语的
+`Überschrift 2` 不会被识别成标题，所以本地化 Word 会丢结构"，还写了测试断言它——**测试
+还通过了**。实测推翻了这个说法：OOXML 里 styleId 是本地化的，但 `w:name` 是语言中立的
+`heading 1`，python-docx 解析的是后者，所以两种都被正确识别成 `#` / `##`。之前"看起来
+丢了"，只是因为我那个最小包**没有 `word/styles.xml`**，什么样式都解析不出来。
+
+这正是本仓库反复防的那件事：**一条会通过的测试，把一个不存在的限制写进文档。**现在
+测试包带上了 styles part（真实 Word 文件总是有的），并断言实测行为：本地化标题保留，
+真正的自定义模板样式（`Report Title`）保持纯文本——后者是前者的对照组。
+
+**验证。**新增 `tests/ingestion/test_docx_parsing.py` 七条，**全部 fixture 是手工拼的
+OOXML 字节**，不经过本项目的 `render_document`——这正是 ADR-043 §8 要的新证据，因为现有
+docx 证据是自产自读的闭环（那份测试的 docstring 自己写着）。三层撤销：
+
+```text
+不再派发到 docx 读取器     6 failed / 1 passed
+摄取沿用预览的 40k 上限     1 failed / 6 passed
+空文档不再被拒             1 failed / 6 passed
+```
+
+前端三处（`SERVER_READABLE_MEDIA_TYPES`、`MEDIA_TYPE_BY_EXTENSION`、两个 `accept` 与
+`ACCEPTED_EXTENSIONS`）加 `.docx`，并补了三条 Vitest：浏览器给出的类型要保留、浏览器没给
+时按扩展名补、而 `.doc` **仍然不猜**——那是这个 build 读不了的旧二进制格式，猜一个可读类型
+只会让文档永远停在"正在建立索引"。
+
+`tests/ingestion/test_docx_parsing.py` 进了 `per-file-ignores` 的 `E501`，理由写在
+`pyproject.toml` 里：那些 OOXML 命名空间是必须逐字精确的单行 URI。
+
+全量 `tests/`（真 PG + Qdrant，不含 e2e）**2715 passed / 11 skipped**；前端 `tsc -b` 干净、
+Vitest **158 passed**；ruff、pyright 全绿。
+
+**没做的**：`.doc`（旧二进制格式）、编辑、以及让 agent 在 Task 里**主动读**一份 Word——
+那是 ADR-043 §13 的 A2/A3，仍然未决。本刀之后，Word 只是**又一种能被上传和检索的资料**。
+
 ### 四、52 题 gold set 重跑，ADR-017 第 2 步的证据到齐
 
 见 `evals/rag/reports/`。四份报告出自同一个进程、同一个 collection、同一份 gold set

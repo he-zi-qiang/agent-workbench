@@ -159,6 +159,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 "tests/application/test_task_triage.py" = ["RUF001"]
 "tests/api/test_task_api.py" = ["RUF001"]
 "tests/cli/test_repl.py" = ["RUF001"]
+# The docx fixtures are verbatim OOXML: content-type overrides and relationship
+# types are single URIs well past the line limit, and they have to be exact --
+# the point of that file is that python-docx opens a package this project did
+# not write, so a reformatted namespace would be testing a different file.
+"tests/ingestion/test_docx_parsing.py" = ["E501"]
 
 [tool.pyright]
 pythonVersion = "3.12"

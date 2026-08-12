@@ -48,7 +48,7 @@ export interface KnowledgeAttachment {
   error?: string;
 }
 
-const ACCEPTED_EXTENSIONS = [".pdf", ".md", ".markdown"];
+const ACCEPTED_EXTENSIONS = [".pdf", ".md", ".markdown", ".docx"];
 const MAX_ATTACHMENTS = 5;
 
 export function useKnowledgeAttachments(
@@ -219,7 +219,7 @@ export function AttachmentButton({
         <Paperclip aria-hidden="true" size={17} />
       </button>
       <input
-        accept=".pdf,.md,.markdown,text/markdown,application/pdf"
+        accept=".pdf,.md,.markdown,.docx,text/markdown,application/pdf"
         className="aw-sr-only"
         disabled={disabled}
         multiple

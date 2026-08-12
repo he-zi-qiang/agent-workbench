@@ -321,7 +321,7 @@ function KnowledgeBaseDetail({
             <strong>{file === null ? "选择一个文件" : file.name}</strong>
             <span>{file === null ? "PDF / Markdown" : formatBytes(file.size)}</span>
             <input
-              accept=".pdf,.md,.markdown,text/markdown,application/pdf"
+              accept=".pdf,.md,.markdown,.docx,text/markdown,application/pdf"
               disabled={upload.isPending}
               onChange={(event) => {
                 setUploadNotice(null);

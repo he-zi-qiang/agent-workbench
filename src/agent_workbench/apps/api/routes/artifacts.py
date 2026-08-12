@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from agent_workbench.apps.api.docx_preview import (
+from agent_workbench.adapters.documents.docx import (
     DocxTooLargeError,
     extract_docx_preview,
 )

@@ -17,7 +17,7 @@ import zipfile
 
 import pytest
 
-from agent_workbench.apps.api.docx_preview import (
+from agent_workbench.adapters.documents.docx import (
     MAX_PREVIEW_CHARS,
     MAX_PREVIEW_COMPRESSION_RATIO,
     MAX_PREVIEW_EXPANDED_BYTES,

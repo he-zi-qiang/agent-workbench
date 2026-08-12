@@ -359,6 +359,12 @@ const SERVER_READABLE_MEDIA_TYPES = new Set([
   "text/markdown",
   "text/x-markdown",
   "application/pdf",
+  // Both spellings the ingestion parser accepts. The long one is the
+  // registered type browsers send; the short alias turns up from some
+  // uploaders, and this set has to match the server's or a file the parser
+  // can read gets its declaration overwritten by the extension table below.
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
 ]);
 
 /** The same extensions the upload controls already accept, mapped to a type. */
@@ -366,6 +372,7 @@ const MEDIA_TYPE_BY_EXTENSION: readonly (readonly [string, string])[] = [
   [".md", "text/markdown"],
   [".markdown", "text/markdown"],
   [".pdf", "application/pdf"],
+  [".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
 ];
 
 /**

@@ -214,6 +214,35 @@ describe("declaredMediaType", () => {
     expect(declaredMediaType({ name: "report.pdf", type: "" })).toBe("application/pdf");
   });
 
+  // A .docx is the one upload where the browser usually *does* know the type,
+  // and the long registered string is easy to get subtly wrong in a set. Both
+  // directions are checked: the browser's own declaration survives, and a
+  // browser that said nothing still gets a type the ingestion parser reads.
+  it("keeps the type a browser reports for a Word document", () => {
+    expect(
+      declaredMediaType({
+        name: "report.docx",
+        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+    ).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  });
+
+  it("names a Word document the browser could not identify", () => {
+    expect(declaredMediaType({ name: "report.docx", type: "" })).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+  });
+
+  it("leaves a .doc alone, because this build cannot read the old format", () => {
+    // The parser accepts the `application/msword` *alias* that some uploaders
+    // attach to a .docx; it cannot read an actual binary .doc. Guessing a
+    // readable type from a .doc extension would turn "we cannot read this"
+    // into a document stuck at "indexing" forever.
+    expect(declaredMediaType({ name: "report.doc", type: "" })).toBe(
+      "application/octet-stream",
+    );
+  });
+
   it("keeps the browser's own PDF type", () => {
     expect(declaredMediaType({ name: "report.pdf", type: "application/pdf" })).toBe(
       "application/pdf",
