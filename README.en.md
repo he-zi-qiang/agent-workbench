@@ -298,8 +298,8 @@ ESLint `--max-warnings 0`, `tsc -b`, production build. Config schema `1.14`;
 single Alembic head `0025_agent_invocation_count` (25 migrations).
 
 Scale: 55,114 lines of Python, 68,952 lines of tests, 15,271 lines of frontend
-TypeScript; 44 ADRs (11 in the baseline document plus 33 written during
-implementation, numbered 0012–0044 without gaps). **More test code than source
+TypeScript; 45 ADRs (11 in the baseline document plus 34 written during
+implementation, numbered 0012–0045 without gaps). **More test code than source
 code is deliberate** — the rule is that a test must first be shown red, and **a
 test without a control case does not count**.
 
@@ -315,7 +315,7 @@ test without a control case does not count**.
 | [Architecture baseline](docs/architecture-baseline.md) | Product boundaries, layering, reliability protocol |
 | [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics |
 | [Running locally](docs/running-locally.md) / [Compose deployment](docs/deployment.md) | How to run it |
-| [ADR index](docs/adr/) | 33 decision records (0012–0044) |
+| [ADR index](docs/adr/) | 34 decision records (0012–0045) |
 | [Full documentation map](docs/README.md) | Layered index and reading paths by role |
 
 Most documentation is written in Chinese; this page and

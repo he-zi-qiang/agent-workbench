@@ -246,7 +246,7 @@ MCP、沙箱、只读取用与联网搜索**均默认关闭**，各有其不能�
 | [配置管理契约](docs/configuration.md) | 配置来源、密钥规则、快照语义 |
 | [本机运行手册](docs/running-locally.md) ／ [Compose 部署](docs/deployment.md) | 怎么跑起来 |
 | [前端设计基线](docs/frontend-design.md) | 前端结构、协议边界、响应式策略 |
-| [ADR 索引](docs/adr/) | 33 份实施期决策记录（0012–0044） |
+| [ADR 索引](docs/adr/) | 34 份实施期决策记录（0012–0045） |
 | [完整文档地图](docs/README.md) | 分层索引与按角色的阅读路径 |
 
 ---
