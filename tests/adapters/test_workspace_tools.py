@@ -143,6 +143,51 @@ def test_a_path_shaped_name_is_refused_and_the_version_does_not_move() -> None:
         assert version_of(scope) != after_valid
 
 
+def test_a_declared_word_type_is_refused_because_this_tool_writes_text() -> None:
+    # The write went through and stored 600 bytes of Chinese prose under the
+    # .docx media type, which the console reads as "this is a Word document":
+    # it offered the layout preview, and the layout route answered 422. The
+    # model was believed about a format its own content cannot be in.
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="ok.md", content="x")
+        after_valid = version_of(scope)
+
+        refused = invoke(
+            WorkspaceWriteTool(scope),
+            name="summary.docx",
+            content="2024 年第四季度总结\n\n收入同比增长。",
+            media_type=(
+                "application/vnd.openxmlformats-officedocument"
+                ".wordprocessingml.document"
+            ),
+        )
+
+        assert refused.status == "error"
+        assert refused.error is not None
+        assert refused.error.code == "invalid_tool_input"
+        # Actionable, not just "no": the model has text in hand and needs to be
+        # told where it can go.
+        assert "text" in refused.error.message
+        # A refused write leaves the version where it was, so a node that then
+        # succeeds commits only what actually landed.
+        assert version_of(scope) == after_valid
+
+
+def test_a_declared_text_type_still_writes() -> None:
+    # The control for the refusal above. It has to be the same argument in the
+    # same position, or the refusal could be a write tool that stopped writing.
+    with entered() as scope:
+        result = invoke(
+            WorkspaceWriteTool(scope),
+            name="summary.md",
+            content="2024 年第四季度总结",
+            media_type="text/markdown",
+        )
+
+        assert result.status == "ok"
+        assert "text/markdown" in invoke(WorkspaceListTool(scope)).content
+
+
 def test_list_reports_names_sizes_and_types() -> None:
     with entered() as scope:
         invoke(WorkspaceWriteTool(scope), name="b.md", content="two")

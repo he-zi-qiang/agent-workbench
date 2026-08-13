@@ -216,9 +216,11 @@ class WorkspaceWriteTool:
         return ToolSpec(
             name=WRITE_TOOL_NAME,
             description=(
-                "Write a file into this task's workspace, replacing it if the "
-                "name is already taken. Names are flat: no directories, no "
-                "path separators."
+                "Write a text file into this task's workspace, replacing it if "
+                "the name is already taken. Names are flat: no directories, no "
+                "path separators. The content is written as text, so this "
+                "cannot produce Word, Excel, PowerPoint, PDF or other binary "
+                "documents, and declaring one of those media types is refused."
             ),
             input_schema={
                 "type": "object",
@@ -250,6 +252,26 @@ class WorkspaceWriteTool:
         content = str(arguments.get("content", ""))
         media_type = str(arguments.get("media_type") or _media_type_for(name))
         session = _session(self.scope)
+        if _unwritable_media_type(media_type):
+            # Before the write, with the name-validator refusals below: a write
+            # this tool cannot honour must leave the session's version where it
+            # was. Only the declared type can reach here -- the guess from the
+            # name is text either way.
+            return ToolResult.failed(
+                invocation.call,
+                ErrorInfo(
+                    code="invalid_tool_input",
+                    message=(
+                        f"{WRITE_TOOL_NAME} stores the text it is given, so it "
+                        f"cannot write a {media_type} file: that format is a "
+                        "binary package, not text. Write the content as text "
+                        "(a .md or .txt name), or, to produce a real document, "
+                        "use a document-rendering tool if this deployment "
+                        "offers one."
+                    ),
+                    retryable=False,
+                ),
+            )
         try:
             session.version = await session.workspace.write(
                 session.version,
@@ -533,6 +555,36 @@ class WorkspaceGrepTool:
         return ToolResult.succeeded(invocation.call, content="\n".join(lines))
 
 
+#: Types this tool cannot produce, whatever the model calls its content.
+#:
+#: ``content`` is a JSON string and the handler writes its UTF-8 bytes, so what
+#: lands is text. Every type here is a binary package -- a zip of parts for the
+#: Office and OpenDocument formats, an object graph with a byte-offset table for
+#: PDF -- and no string encodes one by accident. So a write naming one of these
+#: is not a file in that format; it is a text file wearing its label.
+#:
+#: The label then travels further than the mistake. The console offers the
+#: layout preview on media type alone, so a text file typed .docx lights up a
+#: 版面 button that can only answer 422, and the reader is told their document
+#: is broken when what is broken is its type. Refused at the argument, where the
+#: model can still write the text under a name that is true.
+_UNWRITABLE_MEDIA_TYPES = frozenset(
+    {
+        "application/msword",
+        "application/pdf",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.oasis.opendocument.presentation",
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "application/vnd.oasis.opendocument.text",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/zip",
+    }
+)
+
+
 #: Enough to keep a listing readable. Guessed from the name because the model
 #: usually omits it, and a wrong guess here costs a label, not the bytes.
 _SUFFIX_MEDIA_TYPES = {
@@ -550,6 +602,13 @@ def _media_type_for(name: str) -> str:
         if name.endswith(suffix):
             return media_type
     return "text/plain"
+
+
+def _unwritable_media_type(media_type: str) -> bool:
+    # Parameters and case are the wire's, not the model's: `application/pdf`
+    # and `Application/PDF; charset=utf-8` name the same format, and a check
+    # that saw two would refuse one and let the other through.
+    return media_type.split(";", 1)[0].strip().lower() in _UNWRITABLE_MEDIA_TYPES
 
 
 __all__ = [
