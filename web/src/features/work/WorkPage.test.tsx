@@ -63,9 +63,10 @@ describe("WorkPage task submission", () => {
     vi.mocked(getApproval).mockReset();
     vi.mocked(getArtifactJson).mockReset();
     vi.mocked(getArtifactText).mockReset();
-    // Left without a default, like `getDocumentPreview` beside it: a layout is
-    // fetched only when a test asks for one, so an unmocked call is a test
-    // discovering that the panel converted a document nobody opened.
+    // Left without a default, like `getDocumentPreview` beside it -- but the
+    // reason moved: a .docx now converts the moment it opens, so every docx
+    // fixture mocks this itself, and an unmocked call is a test discovering
+    // the panel converting an artifact that is not a Word document.
     vi.mocked(getDocumentPdf).mockReset();
     vi.mocked(getDocumentPreview).mockReset();
     vi.mocked(getTask).mockReset();
@@ -488,10 +489,57 @@ describe("WorkPage task submission", () => {
     expect(downloads[0]).toHaveTextContent("下载");
   });
 
-  it("shows a Word document's text inline instead of saying it cannot", async () => {
-    // The regression this replaces: a .docx fell through to "这个类型只能下载
-    // 查看" -- the one artifact most Tasks are actually asked to produce was
-    // the one the console refused to show.
+  it("opens a Word document on its layout, without being asked", async () => {
+    // What the Task was asked for is the document, so the document is what
+    // opens. The text view used to be the default and the conversion sat
+    // behind a control nothing pointed at -- a reader who asked for a Word
+    // file was met with markdown-looking prose and concluded the Task had
+    // produced plain text.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue(documentPreview());
+    vi.mocked(getDocumentPdf).mockResolvedValue({
+      available: true,
+      blob: new Blob(["%PDF-1.7"], { type: "application/pdf" }),
+    });
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    // No click before this line: the layout arrives because the file did.
+    const frame = await within(output).findByTitle("版面预览");
+    expect(frame.getAttribute("src")).toMatch(/^blob:/);
+    expect(vi.mocked(getDocumentPdf)).toHaveBeenCalledWith(
+      expect.anything(),
+      "art_report",
+    );
+    // The control tells the truth about which view is up.
+    expect(within(output).getByRole("button", { name: "版面" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // One view at a time: the laid-out page replaces the text rather than
+    // stacking on top of it.
+    expect(within(output).queryByText("这一段来自文档。")).not.toBeInTheDocument();
+    // Still not the blob fetch, which would send a text reader at a zip.
+    expect(vi.mocked(getArtifactText)).not.toHaveBeenCalled();
+    // And still keepable.
+    expect(
+      within(output).getByRole("button", { name: /^下载/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the text view one click away, honest about what it drops", async () => {
+    // The old default's guarantees do not lapse with the default: a .docx must
+    // not fall through to "这个类型只能下载查看", and its text view still
+    // counts what it dropped instead of posing as the document.
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
       status: "succeeded",
@@ -503,28 +551,25 @@ describe("WorkPage task submission", () => {
     });
     vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
     vi.mocked(getDocumentPreview).mockResolvedValue(documentPreview({ table_count: 2 }));
+    vi.mocked(getDocumentPdf).mockResolvedValue({
+      available: true,
+      blob: new Blob(["%PDF-1.7"], { type: "application/pdf" }),
+    });
+    const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
     const output = await screen.findByRole("region", { name: "任务产出" });
+    await within(output).findByTitle("版面预览");
+    await user.click(within(output).getByRole("button", { name: "文字" }));
+
     expect(await within(output).findByText("这一段来自文档。")).toBeInTheDocument();
     expect(vi.mocked(getDocumentPreview)).toHaveBeenCalledWith(
       expect.anything(),
       "art_report",
     );
-    // The preview never pretends to be the document. It says what it dropped,
-    // and the file stays one click away.
     const gaps = within(output).getByRole("list", { name: "预览没有还原的部分" });
     expect(within(gaps).getByText("表格只保留文字")).toBeInTheDocument();
     expect(within(gaps).getByText("2 张")).toBeInTheDocument();
-    expect(
-      within(output).getByRole("button", { name: /^下载/ }),
-    ).toBeInTheDocument();
-    // Text is what a reader gets without asking. The conversion behind 版面
-    // costs a round trip and a program on the server, so it happens when the
-    // reader asks for it and not because they opened a file.
-    expect(vi.mocked(getDocumentPdf)).not.toHaveBeenCalled();
-    // And it must not fall back to the blob fetch, which would send a text
-    // reader at a zip.
     expect(vi.mocked(getArtifactText)).not.toHaveBeenCalled();
   });
 
@@ -546,6 +591,10 @@ describe("WorkPage task submission", () => {
     vi.mocked(getDocumentPreview).mockResolvedValue(
       documentPreview({ text: "## 季度回顾\n\n这一段来自 Word 文档。", table_count: 1 }),
     );
+    vi.mocked(getDocumentPdf).mockResolvedValue({
+      available: true,
+      blob: new Blob(["%PDF-1.7"], { type: "application/pdf" }),
+    });
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
@@ -553,9 +602,13 @@ describe("WorkPage task submission", () => {
     await user.click(within(rail).getByRole("button", { name: /季度总结\.docx/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
-    expect(
-      await within(output).findByText("这一段来自 Word 文档。"),
-    ).toBeInTheDocument();
+    // Laid out on arrival, and it is this file's conversion -- not one carried
+    // over from whatever the column showed before.
+    expect(await within(output).findByTitle("版面预览")).toBeInTheDocument();
+    expect(vi.mocked(getDocumentPdf)).toHaveBeenCalledWith(
+      expect.anything(),
+      "art_docx",
+    );
     // Shown, and still keepable.
     expect(
       within(output).getByRole("button", { name: /^下载/ }),
@@ -582,6 +635,13 @@ describe("WorkPage task submission", () => {
     });
     vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
     vi.mocked(getDocumentPreview).mockRejectedValue(new Error("解析失败"));
+    // Answered but never rendered: a failed extraction fronts the panel before
+    // either view. The mock is here because opening a .docx now asks for the
+    // conversion regardless.
+    vi.mocked(getDocumentPdf).mockResolvedValue({
+      available: false,
+      reason: "converter_unavailable",
+    });
     renderWorkPage("/work/task_run");
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -593,10 +653,10 @@ describe("WorkPage task submission", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the document laid out when the reader asks for the layout", async () => {
-    // The text preview answers "what does it say". This answers the other
-    // question a rendered document raises -- what it looks like -- which used
-    // to require downloading it and opening Word.
+  it("lets the reader leave the layout and come back without a second conversion", async () => {
+    // The text preview answers "what does it say"; the layout answers "what
+    // does it look like" and now opens first. This pins the round trip between
+    // them, and the lifetime of the URL the frame reads.
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
       status: "succeeded",
@@ -617,9 +677,6 @@ describe("WorkPage task submission", () => {
     renderWorkPage("/work/task_run");
 
     const output = await screen.findByRole("region", { name: "任务产出" });
-    await within(output).findByText("这一段来自文档。");
-    await user.click(within(output).getByRole("button", { name: "版面" }));
-
     const frame = await within(output).findByTitle("版面预览");
     // The frame reads a blob this page holds, not the endpoint: a frame issues
     // its own request and carries none of the identity headers, so pointing it
@@ -639,13 +696,23 @@ describe("WorkPage task submission", () => {
     // Handed back when the frame goes. One un-revoked URL per preview is a leak
     // the reader pays for by opening files.
     expect(revoke).toHaveBeenCalledWith(source);
+
+    await user.click(within(output).getByRole("button", { name: "版面" }));
+    expect(await within(output).findByTitle("版面预览")).toBeInTheDocument();
+    // Served from the cache the first request filled. A converter run costs
+    // seconds on the server; toggling views must not buy another one.
+    expect(vi.mocked(getDocumentPdf)).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the text preview when the deployment cannot lay a document out", async () => {
-    // The control for the case above, and the one that decides whether this
-    // feature is safe to ship: converting .docx to PDF needs a program on the
-    // server, and a deployment without it is correctly configured for
-    // everything except this one panel.
+  it("falls back to the text preview, saying why, when the deployment cannot lay a document out", async () => {
+    // The control for the case above, and the one that decides whether the
+    // default is safe: converting .docx to PDF needs a program on the server,
+    // a deployment without one is correctly configured for everything except
+    // this panel -- and now every opened document walks into that fact rather
+    // than the readers who pressed a button. The fallback must arrive on its
+    // own and say what happened; a silent landing on text would read as "the
+    // task produced plain text", which is the misreading this page just spent
+    // a default to avoid.
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
       status: "succeeded",
@@ -661,13 +728,11 @@ describe("WorkPage task submission", () => {
       available: false,
       reason: "converter_unavailable",
     });
-    const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
     const output = await screen.findByRole("region", { name: "任务产出" });
-    await within(output).findByText("这一段来自文档。");
-    await user.click(within(output).getByRole("button", { name: "版面" }));
-
+    // No click anywhere in this test: the decline and its explanation land
+    // unprompted, because the request they answer was unprompted too.
     expect(
       await within(output).findByText(/服务器上没有可用的文档转换器/),
     ).toBeInTheDocument();
@@ -707,9 +772,8 @@ describe("WorkPage task submission", () => {
         flattened_paragraph_count: 3,
       }),
     );
-    renderWorkPage("/work/task_run");
+    const output = await openDocumentTextView();
 
-    const output = await screen.findByRole("region", { name: "任务产出" });
     const gaps = await within(output).findByRole("list", {
       name: "预览没有还原的部分",
     });
@@ -754,9 +818,8 @@ describe("WorkPage task submission", () => {
     vi.mocked(getDocumentPreview).mockResolvedValue(
       documentPreview({ truncated: true }),
     );
-    renderWorkPage("/work/task_run");
+    const output = await openDocumentTextView();
 
-    const output = await screen.findByRole("region", { name: "任务产出" });
     const gaps = await within(output).findByRole("list", {
       name: "预览没有还原的部分",
     });
@@ -792,9 +855,8 @@ describe("WorkPage task submission", () => {
     vi.mocked(getDocumentPreview).mockResolvedValue(
       documentPreview({ truncated: true, image_count: 4 }),
     );
-    renderWorkPage("/work/task_run");
+    const output = await openDocumentTextView();
 
-    const output = await screen.findByRole("region", { name: "任务产出" });
     const gaps = await within(output).findByRole("list", {
       name: "预览没有还原的部分",
     });
@@ -822,9 +884,8 @@ describe("WorkPage task submission", () => {
     });
     vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
     vi.mocked(getDocumentPreview).mockResolvedValue(documentPreview());
-    renderWorkPage("/work/task_run");
+    const output = await openDocumentTextView();
 
-    const output = await screen.findByRole("region", { name: "任务产出" });
     expect(await within(output).findByText("这一段来自文档。")).toBeInTheDocument();
     expect(
       within(output).queryByRole("list", { name: "预览没有还原的部分" }),
@@ -1083,6 +1144,28 @@ function renderWorkPage(initialEntry = "/work") {
       </IdentityProvider>
     </QueryClientProvider>,
   );
+}
+
+/**
+ * Render the Task and land its document on the text view, the way a reader
+ * reaches that view now: the layout opens first, so text is a choice.
+ *
+ * The tests built on this are about what the *text* preview says of itself --
+ * its counts, its cut, its silence -- so they make the choice rather than
+ * arrive there by a declined conversion, which would put a deployment's
+ * failure note into fixtures that are not about deployments.
+ */
+async function openDocumentTextView() {
+  vi.mocked(getDocumentPdf).mockResolvedValue({
+    available: true,
+    blob: new Blob(["%PDF-1.7"], { type: "application/pdf" }),
+  });
+  const user = userEvent.setup();
+  renderWorkPage("/work/task_run");
+  const output = await screen.findByRole("region", { name: "任务产出" });
+  await within(output).findByTitle("版面预览");
+  await user.click(within(output).getByRole("button", { name: "文字" }));
+  return output;
 }
 
 function task(status: "waiting_approval" | "cancelled") {
