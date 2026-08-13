@@ -16,6 +16,7 @@ from agent_workbench.domain.runs import AgentOutcome
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.workers.task import _failure_detail
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError
+from agent_workbench.workflows.task_handlers import TaskNodeRunFailedError
 
 STATE = TaskState(task_id="task_1", objective="Explain hybrid retrieval.")
 
@@ -129,3 +130,37 @@ def test_missing_evidence_still_names_the_action_it_died_during() -> None:
     detail = _failure_detail(EvidenceUnavailableError("no evidence"), "resume")
 
     assert "during resume" in detail
+
+
+def _run_failed_node() -> TaskNodeRunFailedError:
+    """The shape that killed a real Task once external_search stopped timing out.
+
+    The research node looped on pages that all redirected to the same place
+    until it ran out of tokens. `budget_exceeded` was recorded on the run; the
+    console showed only `TaskNodeRunFailedError`.
+    """
+
+    return TaskNodeRunFailedError(
+        node="research_external",
+        outcome=AgentOutcome(
+            agent_run_id="run_1",
+            status="failed",
+            stop_reason="token_budget",
+            error=ErrorInfo(
+                code="budget_exceeded",
+                message="the run passed its ceiling: token_budget",
+                retryable=False,
+            ),
+        ),
+        state=STATE,
+        reason="token budget exhausted",
+    )
+
+
+def test_a_structured_node_failure_reports_its_code_not_its_class() -> None:
+    detail = _failure_detail(_run_failed_node(), "start")
+
+    assert "budget_exceeded" in detail
+    assert "research_external" in detail
+    assert "not retryable" in detail
+    assert "TaskNodeRunFailedError" not in detail

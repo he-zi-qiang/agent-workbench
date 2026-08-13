@@ -66,6 +66,7 @@ from agent_workbench.ports.task_workflow import (
 )
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
+from agent_workbench.workflows.task_handlers import TaskNodeRunFailedError
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +91,17 @@ def _failure_detail(error: BaseException, action: str) -> str:
     which left the reader with ``AgentNodeFailedError`` and nowhere to go, while
     the run had already classified the cause one layer down.
 
-    So an agent-node failure reports its run's ``ErrorCode`` instead. The code
-    is a closed vocabulary rather than free text, and ``retryable`` says whether
+    So a node failure reports its run's ``ErrorCode`` instead. The code is a
+    closed vocabulary rather than free text, and ``retryable`` says whether
     trying again could plausibly work -- which is the one thing a reader who saw
     a transient provider blip actually needs to know. ``ErrorInfo.message`` is
     still not included: it is operator-facing text with no such guarantee.
+
+    Both node failures are read the same way. ``TaskNodeRunFailedError`` carries
+    the same ``AgentOutcome`` and was falling through to the type name anyway,
+    so a research node that looped until it exhausted its token budget reached
+    the console as ``TaskNodeRunFailedError`` while ``budget_exceeded`` sat one
+    layer down, unread.
 
     ``EvidenceUnavailableError`` is the one exception, and for the same reason
     the rule exists rather than despite it. Its messages are constants written
@@ -109,7 +116,7 @@ def _failure_detail(error: BaseException, action: str) -> str:
 
     if isinstance(error, EvidenceUnavailableError):
         return f"evidence was unavailable during {action}: {error}"
-    if isinstance(error, AgentNodeFailedError):
+    if isinstance(error, AgentNodeFailedError | TaskNodeRunFailedError):
         info = error.outcome.error
         if info is not None:
             retryable = "retryable" if info.retryable else "not retryable"
