@@ -112,7 +112,7 @@ export function KnowledgePage() {
               创建第一个知识库
             </button>
           }
-          description="创建知识库后上传 PDF 或 Markdown；文档完成索引后即可在 Chat 和 Work 中选择。"
+          description="创建知识库后上传 PDF、Word 或 Markdown；文档完成索引后即可在 Chat 和 Work 中选择。"
           icon={<Library aria-hidden="true" size={24} />}
           title="还没有知识库"
         />
@@ -219,6 +219,7 @@ function KnowledgeBaseDetail({
   onChanged: () => Promise<void>;
 }) {
   const [file, setFile] = useState<File | null>(null);
+  const [grantedTo, setGrantedTo] = useState("");
   const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const documents = useQuery({
     queryKey: [
@@ -241,10 +242,13 @@ function KnowledgeBaseDetail({
         file: selectedFile,
         documentId: `doc_${crypto.randomUUID().replaceAll("-", "")}`,
         knowledgeBaseId: knowledgeBase.knowledge_base_id,
-        grantedPrincipals: [],
+        grantedPrincipals: parseGrantedPrincipals(grantedTo),
       }),
     onSuccess: async () => {
       setFile(null);
+      // 授权名单跟着文件一起清掉：它是给刚传的那一份文档写的 ACL，留在框里
+      // 会让下一份文件默默继承上一份的授权对象。
+      setGrantedTo("");
       setUploadNotice("文件已经上传，正在建立索引。完成前不会用于回答。 ");
       await documents.refetch();
       await onChanged();
@@ -312,16 +316,20 @@ function KnowledgeBaseDetail({
           <div className="aw-card-header">
             <div>
               <h3 id="knowledge-upload-title">添加文档</h3>
-              <p>支持 PDF 和 Markdown。上传后会由文档 Worker 异步解析与索引。</p>
+              {/* 四种格式，和 `adapters/ingestion/parser.py` 的
+                  SUPPORTED_MEDIA_TYPES 一一对应。这行字之前只说 PDF 和
+                  Markdown，而 .docx 的解析路径、accept 属性、客户端的媒体类型表
+                  一直都是齐的——少的只是这句话，于是没有人会去试 Word 文档。 */}
+              <p>支持 PDF、Word（.docx）、Markdown 和纯文本。上传后会由文档 Worker 异步解析与索引。</p>
             </div>
             <FileUp aria-hidden="true" size={20} />
           </div>
           <label className="aw-drop-zone">
             <FileUp aria-hidden="true" size={22} />
             <strong>{file === null ? "选择一个文件" : file.name}</strong>
-            <span>{file === null ? "PDF / Markdown" : formatBytes(file.size)}</span>
+            <span>{file === null ? "PDF / Word / Markdown / 文本" : formatBytes(file.size)}</span>
             <input
-              accept=".pdf,.md,.markdown,.docx,text/markdown,application/pdf"
+              accept=".pdf,.md,.markdown,.docx,.txt,text/plain,text/markdown,application/pdf"
               disabled={upload.isPending}
               onChange={(event) => {
                 setUploadNotice(null);
@@ -330,6 +338,18 @@ function KnowledgeBaseDetail({
               type="file"
             />
           </label>
+          <label className="aw-field">
+            <span>同时授权给（可选）</span>
+            <input
+              disabled={upload.isPending}
+              onChange={(event) => setGrantedTo(event.target.value)}
+              placeholder="principal id，多个用逗号分隔"
+              value={grantedTo}
+            />
+          </label>
+          <p className="aw-muted">
+            只有这里列出的人，加上你自己，能在检索里读到这份文档；留空就只有你自己。
+          </p>
           {upload.error === null ? null : <ErrorNotice message={errorMessage(upload.error)} />}
           {uploadNotice === null ? null : (
             <div className="aw-notice is-success" role="status">
@@ -387,7 +407,7 @@ function KnowledgeBaseDetail({
         {documents.error === null ? null : <ErrorNotice message={errorMessage(documents.error)} />}
         {documents.data?.documents.length === 0 ? (
           <EmptyState
-            description="从上方上传第一份 PDF 或 Markdown。"
+            description="从上方上传第一份 PDF、Word 或 Markdown。"
             icon={<FileText aria-hidden="true" size={21} />}
             title="这个知识库还是空的"
           />
@@ -499,22 +519,37 @@ function CreateKnowledgeBaseDialog({
 
 function SearchResults({ result }: { result: SearchResponse | null }) {
   if (result === null) return null;
-  if (result.hits.length === 0) {
-    return <p className="aw-muted">本次没有返回可读的匹配片段。</p>;
-  }
   return (
-    <div className="aw-result-list">
-      {result.hits.map((hit, index) => (
-        <article className="aw-result-card" key={hit.chunk_id}>
-          <header>
-            <span className="aw-step-marker">{index + 1}</span>
-            <div><strong>{shortId(hit.document_id, 20)}</strong><span>{shortId(hit.chunk_id, 20)}</span></div>
-          </header>
-          <p>{hit.text}</p>
-        </article>
-      ))}
-    </div>
+    <>
+      {/* 只说检索栈叫什么，不说这一次做了什么。后端那个字段报的是检索栈被配置成
+          了什么样子，单次调用里重排到底跑没跑在 AuthorizedContext 上，没有出现在
+          搜索响应里——写成「本次已重排」就是替一个拿不到的事实下结论。同一批片段
+          在 dense 和 hybrid+rerank 下含义不同，所以名字本身值得摆出来。 */}
+      <p className="aw-muted">由 {result.retriever} 检索栈应答</p>
+      {result.hits.length === 0 ? (
+        <p className="aw-muted">本次没有返回可读的匹配片段。</p>
+      ) : (
+        <div className="aw-result-list">
+          {result.hits.map((hit, index) => (
+            <article className="aw-result-card" key={hit.chunk_id}>
+              <header>
+                <span className="aw-step-marker">{index + 1}</span>
+                <div><strong>{shortId(hit.document_id, 20)}</strong><span>{shortId(hit.chunk_id, 20)}</span></div>
+              </header>
+              <p>{hit.text}</p>
+            </article>
+          ))}
+        </div>
+      )}
+    </>
   );
+}
+
+// 逗号、全角逗号、空白都当分隔符，空项丢掉：服务端的 principal id 是
+// min_length=1 且有字符集约束的，一个手滑留下的尾逗号会让 /complete 吃 422，
+// 而那时文件的字节已经传完了——退回来的只是一次白传。
+function parseGrantedPrincipals(raw: string): string[] {
+  return raw.split(/[,，\s]+/).filter((principal) => principal !== "");
 }
 
 const DOCUMENT_STATUS_LABELS: Record<KnowledgeDocumentStatus, string> = {
@@ -526,7 +561,7 @@ const DOCUMENT_STATUS_LABELS: Record<KnowledgeDocumentStatus, string> = {
 // 只翻译摄取真的会产出的那几个码。给不认识的码编一个具体理由比说不知道更糟：
 // 用户会照着那句话去改文件，然后再失败一次。
 const FAILURE_REASONS: Record<string, string> = {
-  invalid_tool_input: "文件内容无法解析，请换成可读的 PDF 或 Markdown 重新上传。",
+  invalid_tool_input: "文件内容无法解析，请换成可读的 PDF、Word 或 Markdown 重新上传。",
   not_found: "找不到上传时保存的原始文件，请重新上传一次。",
 };
 
