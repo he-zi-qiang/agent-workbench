@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from fnmatch import fnmatch
+from typing import Final
 
 from pydantic import JsonValue
 
@@ -187,6 +188,10 @@ class WorkspaceReadTool:
                     retryable=False,
                 ),
             )
+        if _looks_binary(content):
+            return ToolResult.succeeded(
+                invocation.call, content=_binary_note(name, content)
+            )
         text = content.decode("utf-8", errors="replace")
         if len(text) > MAX_INLINE_READ_CHARS:
             return ToolResult.succeeded(
@@ -220,7 +225,10 @@ class WorkspaceWriteTool:
                 "the name is already taken. Names are flat: no directories, no "
                 "path separators. The content is written as text, so this "
                 "cannot produce Word, Excel, PowerPoint, PDF or other binary "
-                "documents, and declaring one of those media types is refused."
+                "documents: both declaring one of those media types and naming "
+                "the file .docx, .xlsx, .pptx or .pdf are refused. To produce a "
+                "real document, use a document-rendering tool if this "
+                "deployment offers one."
             ),
             input_schema={
                 "type": "object",
@@ -252,19 +260,28 @@ class WorkspaceWriteTool:
         content = str(arguments.get("content", ""))
         media_type = str(arguments.get("media_type") or _media_type_for(name))
         session = _session(self.scope)
-        if _unwritable_media_type(media_type):
+        # The name is checked as well as the declared type, and either one alone
+        # would miss the case that actually happened: a model asked for a Word
+        # report wrote `report.docx` with *no* media type at all, the guess fell
+        # through to `text/plain`, and the console listed a Word document whose
+        # bytes were Markdown. What a file is called is a claim about its format
+        # in every place a reader meets it -- the listing, the attachment rail,
+        # the name it downloads under -- so a name this tool cannot honour is
+        # refused for the same reason a type it cannot honour is.
+        unwritable = _unwritable_media_type(media_type) or _unwritable_name(name)
+        if unwritable:
             # Before the write, with the name-validator refusals below: a write
             # this tool cannot honour must leave the session's version where it
-            # was. Only the declared type can reach here -- the guess from the
-            # name is text either way.
+            # was.
             return ToolResult.failed(
                 invocation.call,
                 ErrorInfo(
                     code="invalid_tool_input",
                     message=(
                         f"{WRITE_TOOL_NAME} stores the text it is given, so it "
-                        f"cannot write a {media_type} file: that format is a "
-                        "binary package, not text. Write the content as text "
+                        f"cannot write a {unwritable} file: that format is a "
+                        "binary package, not text, and naming a file that way "
+                        "does not make it one. Write the content as text "
                         "(a .md or .txt name), or, to produce a real document, "
                         "use a document-rendering tool if this deployment "
                         "offers one."
@@ -373,6 +390,22 @@ class WorkspaceEditTool:
                 ErrorInfo(
                     code="not_found",
                     message=f"no workspace file named {name!r}",
+                    retryable=False,
+                ),
+            )
+
+        if _looks_binary(current):
+            # An edit here would decode the package, splice text into the
+            # mojibake and write the result back as UTF-8 -- destroying the file
+            # while reporting success.
+            return ToolResult.failed(
+                invocation.call,
+                ErrorInfo(
+                    code="invalid_tool_input",
+                    message=(
+                        f"{_binary_note(name, current)} Editing it as text "
+                        "would corrupt it; re-render it instead."
+                    ),
                     retryable=False,
                 ),
             )
@@ -488,15 +521,17 @@ class WorkspaceGrepTool:
             for item in listing
             if name_glob is None or fnmatch(item.name, str(name_glob))
         ]
-        files = [
-            (
-                name,
-                (await session.workspace.read(session.version, name)).decode(
-                    "utf-8", errors="replace"
-                ),
-            )
-            for name in names
-        ]
+        files: list[tuple[str, str]] = []
+        # Named, not silently dropped. A search that skipped the rendered
+        # document without saying so would report "no matches" about a file it
+        # never opened, and the model would conclude the content is not there.
+        binary: list[str] = []
+        for name in names:
+            content = await session.workspace.read(session.version, name)
+            if _looks_binary(content):
+                binary.append(name)
+                continue
+            files.append((name, content.decode("utf-8", errors="replace")))
 
         try:
             outcome = grep_workspace(files, pattern, now=self.monotonic)
@@ -526,6 +561,11 @@ class WorkspaceGrepTool:
                 ),
             )
 
+        skipped = (
+            ""
+            if not binary
+            else " Not text, so not searched: " + ", ".join(binary) + "."
+        )
         if not outcome.matches:
             unscanned = (
                 ""
@@ -535,7 +575,7 @@ class WorkspaceGrepTool:
                 + ")"
             )
             return ToolResult.succeeded(
-                invocation.call, content=f"No matches.{unscanned}"
+                invocation.call, content=f"No matches.{unscanned}{skipped}"
             )
 
         lines = [
@@ -552,7 +592,54 @@ class WorkspaceGrepTool:
             )
         elif outcome.unscanned_files:
             lines.append("... not searched: " + ", ".join(outcome.unscanned_files))
+        if binary:
+            lines.append(skipped.strip())
         return ToolResult.succeeded(invocation.call, content="\n".join(lines))
+
+
+#: How far into a file to look for the byte that settles it. A package puts its
+#: NULs in the header; a text file does not acquire one later.
+_BINARY_SNIFF_BYTES: Final[int] = 8192
+
+
+def _looks_binary(content: bytes) -> bool:
+    """Whether these bytes are a package rather than something to read.
+
+    A NUL byte, and deliberately nothing cleverer. Two reasons it is the right
+    test rather than a heuristic that approximates one:
+
+    * every format the workspace can now hold without being text -- the Office
+      and OpenDocument zips, PDF -- carries NULs in its first kilobyte, and no
+      UTF-8 text this system produces carries one anywhere;
+    * it is the exact byte that breaks the layer downstream. Decoding a
+      ``.docx`` with ``errors="replace"`` yields mojibake *containing*
+      ``\\u0000``, that text reaches the model prompt, the prompt is recorded in
+      a ``ModelStarted`` event, and PostgreSQL refuses it outright:
+      ``UntranslatableCharacterError: \\u0000 cannot be converted to text``.
+      The whole graph died there
+      (`task_d66f8ec0...`), on a review node that had done nothing wrong except
+      open the document the writer had just produced.
+
+    Sniffing a prefix rather than the whole file because a 64 MB working set
+    should not be scanned end to end to answer a question its header settles.
+    """
+
+    return b"\x00" in content[:_BINARY_SNIFF_BYTES]
+
+
+def _binary_note(name: str, content: bytes) -> str:
+    """What to say about a file instead of its bytes.
+
+    The size and the name, because that is what the model can act on: it tells
+    a reviewer the document exists and is not empty, which is the question the
+    review node is actually asking, without pretending the package is prose.
+    """
+
+    return (
+        f"{name} holds {len(content)} bytes of binary data, not text -- it is a "
+        "document package (Word, PDF or similar). Its contents cannot be shown "
+        "here."
+    )
 
 
 #: Types this tool cannot produce, whatever the model calls its content.
@@ -585,6 +672,31 @@ _UNWRITABLE_MEDIA_TYPES = frozenset(
 )
 
 
+#: The same list, reached from the other side: what a name claims its bytes are.
+#:
+#: A model that omits ``media_type`` is not thereby writing something this tool
+#: can produce -- it is writing the same binary package under a guess. Every
+#: suffix here maps to a type in the set above, so the two checks refuse the
+#: same formats and say the same sentence about them.
+_UNWRITABLE_SUFFIXES = {
+    ".doc": "application/msword",
+    ".docx": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ),
+    ".odp": "application/vnd.oasis.opendocument.presentation",
+    ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".pdf": "application/pdf",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ),
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".zip": "application/zip",
+}
+
+
 #: Enough to keep a listing readable. Guessed from the name because the model
 #: usually omits it, and a wrong guess here costs a label, not the bytes.
 _SUFFIX_MEDIA_TYPES = {
@@ -604,11 +716,31 @@ def _media_type_for(name: str) -> str:
     return "text/plain"
 
 
-def _unwritable_media_type(media_type: str) -> bool:
-    # Parameters and case are the wire's, not the model's: `application/pdf`
-    # and `Application/PDF; charset=utf-8` name the same format, and a check
-    # that saw two would refuse one and let the other through.
-    return media_type.split(";", 1)[0].strip().lower() in _UNWRITABLE_MEDIA_TYPES
+def _unwritable_media_type(media_type: str) -> str | None:
+    """The declared type, if this tool cannot produce that format.
+
+    Returns the type rather than a boolean so the refusal can name what it is
+    refusing. Parameters and case are the wire's, not the model's:
+    ``application/pdf`` and ``Application/PDF; charset=utf-8`` name the same
+    format, and a check that saw two would refuse one and let the other through.
+    """
+
+    normalized = media_type.split(";", 1)[0].strip().lower()
+    return normalized if normalized in _UNWRITABLE_MEDIA_TYPES else None
+
+
+def _unwritable_name(name: str) -> str | None:
+    """The format a name claims, if this tool cannot produce it.
+
+    Case-insensitive because a name is the model's to spell: ``Report.DOCX`` is
+    the same claim as ``report.docx``, and the console reads both the same way.
+    """
+
+    lowered = name.lower()
+    for suffix, media_type in _UNWRITABLE_SUFFIXES.items():
+        if lowered.endswith(suffix):
+            return media_type
+    return None
 
 
 __all__ = [
