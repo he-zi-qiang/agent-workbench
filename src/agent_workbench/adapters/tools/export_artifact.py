@@ -44,6 +44,12 @@ TOOL_NAME: Final[str] = "export_artifact"
 MAX_DRAFT_BYTES: Final[int] = 4 * 1024 * 1024
 
 EXPORT_MEDIA_TYPE: Final[str] = "text/markdown"
+#: What this tool writes, always. A Task that also *rendered* a document -- a
+#: .docx from the Word MCP, say -- has two products: that file, and this
+#: Markdown export of the draft the graph reviewed. They are different things
+#: and both are kept; which one a reader is shown first is a question for the
+#: page, not for this tool, and `findDeliverable` in the web client is where it
+#: is answered.
 EXPORT_FILENAME: Final[str] = "report.md"
 
 _IDENTIFIER_SCHEMA: Final[dict[str, JsonValue]] = {

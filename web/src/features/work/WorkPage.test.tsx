@@ -614,10 +614,53 @@ describe("WorkPage task submission", () => {
       within(output).getByRole("button", { name: /^下载/ }),
     ).toBeInTheDocument();
 
-    // And the reader can get back to the Task's own report.
-    await user.click(within(output).getByRole("button", { name: "返回任务结果" }));
+    // This .docx *is* the Task's product, so it is what the column leads with
+    // and there is nothing to return to. The report the graph also exported is
+    // still reachable from the rail; what changed is which of the two a reader
+    // is shown without asking.
     expect(
-      await screen.findByText("三个方案的比较结论。"),
+      within(output).queryByRole("button", { name: "返回任务结果" }),
+    ).not.toBeInTheDocument();
+    expect(await within(rail).findByText(/report\.md|报告文件/)).toBeInTheDocument();
+  });
+
+  it("returns to the deliverable from a rail file that is not it", async () => {
+    /**
+     * The control for suppressing that button. It is hidden only when closing
+     * would land on the very file already open; every other rail entry still
+     * has a way back, and losing that would strand a reader on the evidence
+     * bundle.
+     */
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份季度报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(railDocxTimeline());
+    vi.mocked(getDocumentPreview).mockResolvedValue(
+      documentPreview({ text: "## 季度回顾", table_count: 1 }),
+    );
+    vi.mocked(getDocumentPdf).mockResolvedValue({
+      available: true,
+      blob: new Blob(["%PDF-1.7"], { type: "application/pdf" }),
+    });
+    const user = userEvent.setup();
+    renderWorkPage("/work/task_run");
+
+    const rail = await screen.findByRole("complementary", { name: "附件" });
+    await user.click(within(rail).getByRole("button", { name: /报告文件|report\.md/ }));
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    await user.click(within(output).getByRole("button", { name: "返回任务结果" }));
+
+    expect(
+      await within(await screen.findByRole("region", { name: "任务产出" })).findByText(
+        /季度总结\.docx/,
+      ),
     ).toBeInTheDocument();
   });
 

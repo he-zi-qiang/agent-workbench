@@ -449,6 +449,53 @@ export function collectArtifacts(
   return found;
 }
 
+/**
+ * Media types that are a Task's *product* rather than its paperwork.
+ *
+ * Named as a set of what counts rather than a rule over what does not, because
+ * the interesting cases here are all positive: a deployment adds a renderer,
+ * and the file it produces should headline the page the moment it exists.
+ */
+const DOCUMENT_MEDIA_TYPES: ReadonlySet<string> = new Set([
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/pdf",
+]);
+
+/**
+ * The file this Task was actually asked for, or the exported report when there
+ * is none.
+ *
+ * A Task told to "create a Word document" produces two artifacts, and until now
+ * the page led with the wrong one. `export_artifact` always writes `report.md`
+ * -- that is the graph's own contract, the reviewed draft as a file -- so a run
+ * that had already rendered a 37 KB .docx headlined a Markdown page reading
+ * "Task report", with the document the reader asked for filed in the
+ * attachment rail behind it. The reader's own words were "还是显示报告 md".
+ *
+ * Neither artifact is wrong and neither is hidden; what was wrong was the
+ * order. So this prefers a rendered document when the run produced one and
+ * falls back to the export when it did not, which leaves every research Task --
+ * whose whole product *is* the written report -- exactly as it was.
+ *
+ * The *last* document, because a re-render after a reviewer's note supersedes
+ * the draft that prompted it, and the superseded file is still in the rail.
+ */
+export function findDeliverable(
+  events: readonly EventEnvelope[],
+): ArtifactRef | null {
+  const produced = collectArtifacts(events);
+  for (let index = produced.length - 1; index >= 0; index -= 1) {
+    const candidate = produced[index];
+    if (candidate === undefined) continue;
+    if (DOCUMENT_MEDIA_TYPES.has(candidate.artifact.media_type)) {
+      return candidate.artifact;
+    }
+  }
+  return findFinalReport(events)?.artifact ?? null;
+}
+
 export function eventTitle(event: EventEnvelope): string {
   const title = KNOWN_EVENT_TITLES[event.event_type];
   if (title === undefined) return `未识别事件：${event.event_type}`;

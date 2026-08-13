@@ -3,6 +3,7 @@ import type { EventEnvelope, TaskTimelineResponse } from "../../api/types";
 import {
   createTimelineState,
   eventTitle,
+  findDeliverable,
   findDraftText,
   findFinalReport,
   findGraphChoice,
@@ -304,6 +305,88 @@ describe("work timeline contract selectors", () => {
       completedEventId: "event_completed",
       succeededEventId: "event_success",
     });
+  });
+
+  it("leads with the document a Task rendered, and the report when it did not", () => {
+    /**
+     * A Word Task produces both files, and the page used to headline the wrong
+     * one: `export_artifact` always writes `report.md`, so a run that had
+     * rendered a .docx showed a Markdown page called "Task report" while the
+     * document sat in the attachment rail behind it.
+     *
+     * The research half is the control, and it is the one that matters: a Task
+     * whose whole product *is* the written report must be left exactly as it
+     * was, or this fix trades one wrong headline for another.
+     */
+    const report = {
+      artifact_id: "artifact_report",
+      kind: "report",
+      media_type: "text/markdown",
+      size_bytes: 128,
+      sha256: "a".repeat(64),
+      filename: "report.md",
+    };
+    const docx = {
+      artifact_id: "artifact_docx",
+      kind: "document",
+      media_type:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      size_bytes: 37_000,
+      sha256: "b".repeat(64),
+      filename: "mcp-result.docx",
+    };
+    const exportProposed = envelope("event_proposed", "ToolProposed", {
+      tool_call_id: "tool_export",
+      tool_name: "export_artifact",
+    });
+    const exportCompleted = envelope("event_completed", "ToolCompleted", {
+      tool_call_id: "tool_export",
+      artifact: report,
+    });
+    const success = envelope("event_success", "TaskSucceeded");
+
+    // Control: no document rendered, so the export is still what leads.
+    expect(findDeliverable([exportProposed, exportCompleted, success])).toEqual(
+      report,
+    );
+
+    const rendered = envelope("event_docx", "ToolCompleted", {
+      tool_call_id: "tool_render",
+      artifact: docx,
+    });
+    expect(
+      findDeliverable([rendered, exportProposed, exportCompleted, success]),
+    ).toEqual(docx);
+
+    // Evidence is not a deliverable: a research Task collects it every run, and
+    // preferring it would break the control above for every Task on the graph.
+    const evidence = envelope("event_evidence", "ToolCompleted", {
+      tool_call_id: "tool_search",
+      artifact: {
+        artifact_id: "artifact_evidence",
+        kind: "evidence_bundle",
+        media_type: "application/json",
+        size_bytes: 900,
+        sha256: "c".repeat(64),
+        filename: "evidence.json",
+      },
+    });
+    expect(
+      findDeliverable([evidence, exportProposed, exportCompleted, success]),
+    ).toEqual(report);
+
+    // A re-render after a reviewer's note supersedes the draft that prompted
+    // it; the superseded file is still in the rail.
+    const reRendered = envelope("event_docx_2", "ToolCompleted", {
+      tool_call_id: "tool_render_2",
+      artifact: { ...docx, artifact_id: "artifact_docx_2" },
+    });
+    expect(findDeliverable([rendered, reRendered, success])?.artifact_id).toBe(
+      "artifact_docx_2",
+    );
+
+    // Nothing produced at all stays null rather than inventing a headline.
+    expect(findDeliverable([success])).toBeNull();
   });
 
   it("reads the draft from whichever graph's drafting node wrote it", () => {
