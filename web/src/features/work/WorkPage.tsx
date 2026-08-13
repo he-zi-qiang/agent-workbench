@@ -1385,8 +1385,16 @@ function TaskResult({
   // decide the view for the next one. Narrowed on read, the same way the page
   // decides which artifact is open at all.
   const [textFor, setTextFor] = useState<string | null>(null);
+  // Asked before the conversion is, because a browser that will not paint a
+  // PDF makes the whole layout half moot: the server would start an external
+  // converter, hold a document in memory and send it, for a frame that shows
+  // the reader nothing. Declining here costs one property read.
+  const viewerShowsPdf = browserShowsPdfInline();
   const wantsLayout =
-    isDocument && artifact !== null && textFor !== artifact.artifact_id;
+    isDocument &&
+    artifact !== null &&
+    textFor !== artifact.artifact_id &&
+    viewerShowsPdf;
   // The third query on one artifact, and it earns the same answer the second
   // one did: a different endpoint, a different shape, and a failure that means
   // something else again. This is the only one that can come back "this
@@ -1428,8 +1436,9 @@ function TaskResult({
   // failure is the only thing that reaches `isError` here, and it lands on the
   // same fallback as every declared refusal: there is no layout, the text
   // preview is unaffected, and the reader is told which of those is true.
-  const layoutDeclined: DocumentLayoutDecline | null =
-    layout.data?.available === false
+  const layoutDeclined: PanelLayoutDecline | null = !viewerShowsPdf
+    ? "viewer_unavailable"
+    : layout.data?.available === false
       ? layout.data.reason
       : layout.isError
         ? "unavailable"
@@ -1652,8 +1661,19 @@ function TaskResult({
                         shows an empty panel with nothing saying why. */}
                     <iframe ref={attachLayoutFrame} title="版面预览" />
                   </div>
+                  {/* The second sentence is for the frame above having shown
+                      nothing. `browserShowsPdfInline` catches only browsers
+                      that admit they have no viewer; a Chromium web view
+                      reports one, paints its backdrop and raises nothing, so
+                      there is no state this component could have entered
+                      instead. What is left is to name the thing the reader is
+                      looking at -- a flat dark rectangle -- and point at the
+                      two ways out, rather than let it read as a broken
+                      document. */}
                   <p className="aw-page-note">
                     这是转换出来的版面预览，和 Word 打开可能有细微差别；需要原样查看请下载。
+                    这里若是一片空白或纯黑，是这个浏览器不显示内嵌
+                    PDF——文档没问题，点「文字」看内容，或下载后用 Word 打开。
                   </p>
                 </>
               )
@@ -1777,12 +1797,47 @@ function PreviewGaps({ preview }: { preview: DocumentPreview }) {
  * document, or this document is the problem -- and each sentence ends by
  * pointing at what still works.
  */
-function layoutDeclineNote(reason: DocumentLayoutDecline): string {
+/**
+ * Why this panel has no layout to show -- the server's reasons, plus one of
+ * its own.
+ *
+ * The server's vocabulary stays the server's: `getDocumentPdf` answers about a
+ * deployment and a document, and `viewer_unavailable` is a fact about neither.
+ * They meet here because the reader is owed one sentence rather than a taxonomy
+ * -- what they see either way is the text view and a note saying why.
+ */
+type PanelLayoutDecline = DocumentLayoutDecline | "viewer_unavailable";
+
+/**
+ * Whether this browser paints a PDF inside a frame.
+ *
+ * The layout view is the browser's own PDF viewer and nothing else -- this app
+ * ships no renderer -- so a browser without one leaves the frame showing its
+ * empty backdrop: a flat dark rectangle, no error, no event, nothing saying
+ * why. Embedded browsers are where this bites (an app's built-in web view
+ * rather than a browser window), and the reader has no reason to suspect the
+ * viewer rather than the document.
+ *
+ * `!== false` rather than `=== true` on purpose. The property is absent in
+ * browsers too old to have been asked, and the honest default there is to try:
+ * a frame that works is the good outcome, and a frame that does not is covered
+ * by the note under it -- because this check catches only browsers that *admit*
+ * it. One that reports `true` and then paints nothing is exactly what a
+ * Chromium-based web view does, and no property will say so.
+ */
+function browserShowsPdfInline(): boolean {
+  return navigator.pdfViewerEnabled !== false;
+}
+
+function layoutDeclineNote(reason: PanelLayoutDecline): string {
   if (reason === "converter_unavailable") {
     return "这套部署没有版面预览：服务器上没有可用的文档转换器。下面是文字预览，需要原样查看请下载。";
   }
   if (reason === "too_large") {
     return "这份文档的版面太大，页面里不展开。下面是文字预览，需要原样查看请下载。";
+  }
+  if (reason === "viewer_unavailable") {
+    return "这个浏览器不显示内嵌 PDF，所以这里给不出版面（文档本身没问题）。下面是文字预览，要看排版请下载后用 Word 打开，或换一个浏览器打开控制台。";
   }
   return "这套部署给不出这份文档的版面。下面是文字预览，需要原样查看请下载。";
 }
