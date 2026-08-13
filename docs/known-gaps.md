@@ -133,6 +133,7 @@ runner 和另一套证据。混进来会让检索回归和生成回归长得一�
 | B-03 | 七点故障矩阵只覆盖四点 | 未实现 |
 | B-05 | 生产 upcaster 注册表为空，Chat 侧不披露隔离 | 未接线 |
 | B-06 | 失败标着 `retryable` 却没有任何重试路径 | 未接线 |
+| B-07 | tool 参数读不出来时，说不出是被截断还是真的坏 | 未实现 |
 
 > 编号一经退休不再复用。B-04（无真杀 OS 进程的恢复测试）已于 2026-08-11 关闭，
 > 按本文档维护规则从正文删除，落地记录在 [status.md](./status.md)：
@@ -245,6 +246,33 @@ unhealthy 并停止 claim，且有一条"滞后消失后恢复 claim"的对照�
 **做完的判据**：`retryable=True` 的失败按退避重新排队，重试次数进 Task 状态并
 在界面上可见；带一条对照组证明 `retryable=False` 的失败**不**重试；并且写清楚
 重试的单位是整张图还是失败节点，以及副作用如何不被做第二遍。
+
+### B-07 tool 参数读不出来时，运行时说不出是被截断还是真的坏
+
+**证据**：[deepseek.py](../src/agent_workbench/adapters/models/deepseek.py) 的流结束处，
+`_completed_tool_calls` 排在 `finish` 已经确定**之后**。provider 报 `length` 时
+`_map_finish_reason` 把它映射成 `max_tokens` 且 `failure` 为 `None`，于是控制流照常
+往下走，用一段被截断的 JSON 去 `json.loads`，失败后报的是
+`the provider sent unparsable arguments for <tool>`。也就是说"模型话没说完"和
+"provider 送来一段坏 JSON"这两件事，在**同一句话**里收场，而它们该做的事不是一件：
+前者要调上限或让模型少写，后者要重试或换 provider。
+
+**观测**（2026-08-13，本机 console profile，真实 provider）：两条 Task 死在
+`synthesize`，都是 `provider_error: the provider sent unparsable arguments for
+mcp_word_render_document`——`task_d559ce35…`（04:40）与 `task_6b6cabe3…`（07:28）。
+后者的数据是齐的：`output_tokens` 942、`tool_calls` 0、模型正文写完了一段中文说明才
+开始发工具参数。**这一批没能判定**它究竟是不是截断：事件流不记录 provider 自报的
+finish reason，也不记录那段没解开的参数文本。同一条 objective 随后重跑两次都没复现，
+所以它是间歇的，不是每次必现。
+
+**为什么**：不是漏了，是这层的重试契约挡着。`stream` 的文档写明"只有在任何事件发出
+**之前**发生的失败才可重试"，而这里正文已经流出去了，重试会让调用方看见重复的文本。
+要么把这条契约改掉（那要先想清楚重复文本谁来吞），要么把这次失败往上交给一个知道
+怎么重跑一个节点的层——也就是 B-06 那件事。
+
+**做完的判据**：`finish` 是 `max_tokens` 而参数没解开时，报的是"模型在输出上限上把话
+说了一半"而不是"provider 送来坏参数"，并带一条对照组证明真坏的 JSON 仍然报后者；
+事件流里留下足以判定的那一位（provider 自报的 finish reason）。
 
 ---
 
