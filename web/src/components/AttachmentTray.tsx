@@ -60,7 +60,7 @@ export interface KnowledgeAttachment {
   uploaded: boolean;
 }
 
-const ACCEPTED_EXTENSIONS = [".pdf", ".md", ".markdown", ".docx"];
+const ACCEPTED_EXTENSIONS = [".pdf", ".md", ".markdown", ".docx", ".txt"];
 const MAX_ATTACHMENTS = 5;
 
 export function useKnowledgeAttachments(
@@ -368,14 +368,14 @@ export function AttachmentButton({
         title={
           blocked
             ? disabledReason
-            : "上传 PDF 或 Markdown 到所选知识库（最多 5 个，上传后会一直保留）"
+            : "上传 PDF、Word 或 Markdown 到所选知识库（最多 5 个，上传后会一直保留）"
         }
         type="button"
       >
         <Paperclip aria-hidden="true" size={17} />
       </button>
       <input
-        accept=".pdf,.md,.markdown,.docx,text/markdown,application/pdf"
+        accept=".pdf,.md,.markdown,.docx,.txt,text/plain,text/markdown,application/pdf"
         className="aw-sr-only"
         disabled={disabled}
         multiple
