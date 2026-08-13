@@ -132,6 +132,7 @@ runner 和另一套证据。混进来会让检索回归和生成回归长得一�
 | B-02 | Watchdog 只有 warn 一半，且未装进 Task Worker | 未实现 |
 | B-03 | 七点故障矩阵只覆盖四点 | 未实现 |
 | B-05 | 生产 upcaster 注册表为空，Chat 侧不披露隔离 | 未接线 |
+| B-06 | 失败标着 `retryable` 却没有任何重试路径 | 未接线 |
 
 > 编号一经退休不再复用。B-04（无真杀 OS 进程的恢复测试）已于 2026-08-11 关闭，
 > 按本文档维护规则从正文删除，落地记录在 [status.md](./status.md)：
@@ -220,6 +221,31 @@ unhealthy 并停止 claim，且有一条"滞后消失后恢复 claim"的对照�
 对着真实旧版本行的升级测试；（2）Chat 界面像 Work 时间线那样披露被隔离的位点，
 带"没能解码"而非"丢了"的措辞。
 
+### B-06 失败标着 `retryable` 却没有任何重试路径
+
+**证据**：重试机制**存在**——[task.py:165-167](../src/agent_workbench/workers/task.py:165)
+的 `max_attempts = 5`、`retry_base_seconds`、`retry_max_seconds`，但它们只喂给
+`registry.reclaim_expired(...)`，也就是**只覆盖租约过期**（Worker 崩了没续租）。
+一个**执行失败**的 Task 不会因为 `retryable=True` 被重新排队。
+
+在 Task 这条路径上，`ErrorInfo.retryable` 的唯一读取点是
+[task.py:102](../src/agent_workbench/workers/task.py:102)，而它把这个布尔量
+**拼进给人看的字符串**，没有任何控制流读它。
+
+**观测**（2026-08-13，本地 demo profile 连真实 provider）：同一条 Task 连续三次
+失败于 provider 侧的偶发网络错——`RemoteProtocolError`、`ConnectError`——三次都
+带着 `retryable: true`，三次都直接终结，没有一次重试。代理在同一时间段实测
+6/6 稳定在 0.8s，所以这不是网络不通，是抖动，而抖动正是 `retryable` 这个词
+存在的理由。
+
+**为什么**：目前没写。区分"该重试"和"重试了"需要先定清楚幂等边界——一个已经
+调过外部工具、写过工作区的 Task 重跑一遍不等价于没跑过，而 Task 的重试单位
+如果是整张图，就会把已完成节点的副作用做第二遍。
+
+**做完的判据**：`retryable=True` 的失败按退避重新排队，重试次数进 Task 状态并
+在界面上可见；带一条对照组证明 `retryable=False` 的失败**不**重试；并且写清楚
+重试的单位是整张图还是失败节点，以及副作用如何不被做第二遍。
+
 ---
 
 ## C. Multi-Agent
@@ -230,6 +256,7 @@ unhealthy 并停止 claim，且有一条"滞后消失后恢复 claim"的对照�
 | C-02 | 跨 retry 预算、partial failure、父子取消 | 未实现 |
 | C-03 | 动态 supervisor / spawn / mailbox | 未实现 |
 | C-04 | CrewAI Adapter 与对比 benchmark | 未实现 |
+| C-05 | `critic` 的合法结构化输出被判成"没有可用产出" | 未实现 |
 
 ### C-01 `max_agent_invocation_attempts_per_task` 只有配置，没有账本
 
@@ -256,6 +283,44 @@ looking enforced"。
 ### C-04 CrewAI Adapter 与对比 benchmark 未实现
 
 **证据**：`pyproject.toml` 无 `crewai` 依赖。
+
+### C-05 `critic` 的合法结构化输出被判成"没有可用产出"
+
+**证据**：[agent_nodes.py:12](../src/agent_workbench/workflows/agent_nodes.py:12)
+写明该模块只收"产出是一份存储 artifact"的节点，而 `plan` 与 `critic`
+"need structured values decoded out of model output, so they need a decoding
+contract and are deliberately not in this module yet"。缺的正是这份解码契约。
+
+**观测**（2026-08-13，v1 图，真实 provider）：一次运行走完
+`understand → plan → research_external → synthesize`，在 `critic` 终止，
+`status_detail` 为 `the critic step did not produce usable output during start`。
+而那一轮模型**没有出错也没有被截断**：
+
+| 项 | 实测值 |
+|---|---|
+| `finish_reason` | `stop`（不是 `length`） |
+| `output_tokens` | 255 |
+| 文本长度 | 500 字符 |
+| 整段 `json.loads` | **通过** |
+| 内容 | `{"decision":"revise","reviewed_draft_ref":"art_…","revision_number":0,…}` |
+
+也就是说模型交出了一份完整、可解析、字段齐全的裁决，节点仍然报"没有可用产出"。
+失败落在 `AgentNodeFailedError` 里 `outcome.error is None` 的那一支——run 正常
+完成但没有产出 artifact——这正是把一个**结构化解码节点**当成**artifact 产出节点**
+来判定的后果。
+
+**尚未查清**：是解码契约缺失本身，还是 `decision: "revise"` 在 `revision_number: 0`
+时没有可走的修订回边。两者都会以同一条消息收场，本次没有继续区分。
+
+**顺带记下**：同一次运行里 `critic` 给出的理由是草稿"未提供任何实际内容，仅包含
+任务指令的重复"——即 `synthesize` 那步的产出质量也有问题。这是另一件事，本条不
+覆盖。
+
+**做完的判据**：`plan` 与 `critic` 有一份写下来的解码契约（读什么字段、字段缺失
+怎么办、解不出时的纠正轮走几次），并有一条测试：喂一份合法裁决进去，节点必须
+把它变成状态而不是失败；配一条对照组，喂一份真正解不出的输出，确认它才是失败。
+
+---
 
 ### 一条不是缺口的说明：Redis
 
@@ -424,6 +489,13 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 
 其余条目（D 组大部分、C-03、C-04、B-03）需要新的 Adapter 或新的产品决策，
 不适合在证据链补齐之前动。
+
+**C-05 不在上面这个排序里，但它挡着一件别的事**：v1 图目前跑不到终点——
+2026-08-13 的实测里，`understand → plan → research_external → synthesize` 全部
+通过，停在 `critic`。上面这份排序问的是"哪一步最能消除不可核查性"，而 C-05 问
+的是"这条链能不能走完一次"。两者不冲突，但如果需要一次 v1 的端到端演示，它是
+唯一的拦路条目；Chat 那条链路不受影响。B-06 则决定同一条链**遇到抖动时**是不是
+必然失败——那三次真实失败全部是可重试的网络错。
 
 **一条排序上的更正**：上一版把"E-05 刷新过时数字"排在第 2 位，当作一件可以做完
 的机械工作。它不是——本文档自己写着数字过时是持续现象。把它当任务排期，等于每次
