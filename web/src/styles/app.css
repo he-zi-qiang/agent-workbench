@@ -2884,6 +2884,69 @@ pre {
   opacity: 0.72;
 }
 
+/* One folded step: the line a reader scans, opening to the events it was
+   folded from. Sized to sit level with the ungrouped rows beside it, so a
+   stage does not look like two different lists stacked together. */
+.aw-step-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+}
+
+.aw-step-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-step-group > summary:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-step-group[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-step-group-title {
+  color: var(--aw-text);
+  white-space: nowrap;
+}
+
+/* The subject is the part that runs long -- a URL, a query. It gets the
+   leftover width and is truncated there rather than wrapping the row, so a
+   stage of twenty reads stays one line per read. */
+.aw-step-group-subject {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-step-group-outcome {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-step-group.is-failed .aw-step-group-outcome,
+.aw-step-group.is-denied .aw-step-group-outcome {
+  color: var(--aw-danger);
+}
+
+.aw-step-group.is-running .aw-step-group-outcome {
+  color: var(--aw-accent);
+}
+
+/* The nested list is already inside one bordered rail; a second would step the
+   indentation twice for what is still one step's contents. */
+.aw-step-group > .aw-stream-events {
+  margin-bottom: 4px;
+  border-left-style: dashed;
+}
+
 .aw-stream-meta {
   margin-top: 6px;
   padding-left: 24px;
