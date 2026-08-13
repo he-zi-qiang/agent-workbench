@@ -3,7 +3,6 @@ import {
   isQuarantineFrame,
   parseSseChunk,
   type SseChunkFrame,
-  type SseFrame,
   type SseQuarantineFrame,
 } from "../../api/sse";
 import type { PrincipalIdentity } from "../../api/types";
@@ -17,7 +16,11 @@ interface SessionStreamOptions {
   sessionId: string;
   initialCursor: StoredChatCursor | null;
   signal: AbortSignal;
-  onFrame: (frame: SseFrame) => FrameAcceptance;
+  // Both kinds of frame, because both are things the reader is owed: the event
+  // that happened, and the position that could not be delivered. The subscriber
+  // decides what to do with each; this file's job is to hand them over in the
+  // order they arrived.
+  onFrame: (frame: SseChunkFrame) => FrameAcceptance;
   onCursor: (cursor: StoredChatCursor) => void;
   onConnectionChange: (state: ChatConnectionState, error?: string) => void;
 }
@@ -146,11 +149,13 @@ function acceptFrame(
 /**
  * A position the server says it examined and could not deliver.
  *
- * Nothing reaches the reducer: there is no event, and the local history is
- * short by exactly this one position. What does happen is the cursor moves
- * past it, which is the frame's stated purpose -- its id *is* the skipped
- * position, so a reconnect resumes after the unreadable row instead of
- * arriving in front of it again on every attempt.
+ * No event reaches the reducer -- there is nothing to apply, and the local
+ * history is short by exactly this one position. Two things happen instead. The
+ * cursor moves past it, which is the frame's stated purpose: its id *is* the
+ * skipped position, so a reconnect resumes after the unreadable row instead of
+ * arriving in front of it again on every attempt. And the position itself is
+ * handed over, because a subscriber that only advanced would keep the events on
+ * both sides of the hole and never be able to say the hole was there.
  */
 function acceptQuarantine(
   options: SessionStreamOptions,
@@ -171,6 +176,12 @@ function acceptQuarantine(
   if (current !== null && sequence <= current.sequence) return current;
 
   requireNextPosition(sequence, current);
+  // Same order as an event: the subscriber sees the frame before the cursor
+  // moves, so a refusal leaves the position unpassed rather than passed and
+  // undisclosed.
+  if (options.onFrame(frame) === "rejected") {
+    throw new RecoverableStreamError("事件未通过本地安全校验，正在从安全游标重连");
+  }
   const next = { id: frame.id, sequence };
   options.onCursor(next);
   return next;

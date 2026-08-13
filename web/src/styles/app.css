@@ -2093,6 +2093,16 @@ pre {
   cursor: help;
 }
 
+/* Where the cited chunk sits, inside the same chip as its id rather than beside
+   it: the id and the position are one fact about one citation, and two separate
+   pills would read as two sources. Quieter than the id it follows, because a
+   reader scans the chips first and asks where only after picking one. */
+.aw-chat-citation-locator {
+  margin-left: 5px;
+  color: var(--aw-text-muted);
+  font-size: 9px;
+}
+
 /* What the turn could reach, above the steps that show what it did with them.
    Muted by default and lit only for the tools actually called, so the row reads
    as capability first and activity second. */
