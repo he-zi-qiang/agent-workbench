@@ -148,9 +148,19 @@ _PLAN_CONTRACT: Final[str] = (
 
 _CRITIC_CONTRACT: Final[str] = (
     "Return exactly one JSON object and no Markdown, prose, or code fence: "
+    # The variable-length array goes last, and `score` sits in front of it,
+    # because the other order is what a long verdict truncates. `score` used to
+    # trail `"issues":[...]`; on a real provider a critic that listed several
+    # issues dropped the key that came after them, and a missing required field
+    # is not a framing error -- ADR-034 §3.2 gives it no correction round, so
+    # the node died on a verdict that was otherwise complete and correct.
+    # Nothing reads `score`, which made it a field that could only ever cost a
+    # run. Removing it is a domain change; putting it where a model stops
+    # losing it is a prompt one.
     '{"decision":"pass|revise","reviewed_draft_ref":"...",'
-    '"revision_number":0,"summary":"...",'
-    '"issues":["..."],"score":0}. '
+    '"revision_number":0,"summary":"...","score":0,'
+    '"issues":["..."]}. '
+    "Every key shown above is required, including score. "
     "The draft reference and revision must match the supplied values. "
     # v1's critic decodes into the same `ReviewResult` as v2's reviewer, so it
     # has the same two ways to fail the node on a correct verdict: an issue
@@ -332,9 +342,13 @@ _REVIEW_CONTRACT: Final[str] = (
     "check the report against what is actually there -- a report that claims a "
     "file the working set does not have is a revise, not a pass. "
     "Return exactly one JSON object and no Markdown, prose, or code fence: "
+    # Same field order as the critic's, for the reason given there: the two
+    # decode into one `ReviewResult`, so a template that loses `score` behind a
+    # long issue list kills this node the same way it killed that one.
     '{"decision":"pass|revise","reviewed_draft_ref":"...",'
-    '"revision_number":0,"summary":"...",'
-    '"issues":["..."],"score":0}. '
+    '"revision_number":0,"summary":"...","score":0,'
+    '"issues":["..."]}. '
+    "Every key shown above is required, including score. "
     "The draft reference and revision must match the supplied values. "
     # Both fields reach the next attempt, and saying which does what is the
     # whole fix: told that issues were the only channel, the model wrote the
