@@ -166,7 +166,10 @@ def test_web_worker_refuses_to_fake_the_task_path_without_a_provider() -> None:
     result = subprocess.run(
         ["bash", "scripts/dev.sh", "web-worker"],
         cwd=ROOT,
-        env={**environment, "PYTHON": "/bin/echo"},
+        # `AW_KEY_FILE=""` because the script also reads a key file outside the
+        # checkout: dropping only the variable would leave this refusal untested
+        # on a machine that keeps a key in the default place.
+        env={**environment, "PYTHON": "/bin/echo", "AW_KEY_FILE": ""},
         check=False,
         capture_output=True,
         text=True,

@@ -103,7 +103,10 @@ def test_dev_script_exposes_one_protocol_and_health_check_command() -> None:
 
 
 def test_word_worker_refuses_to_fake_the_task_path_without_a_provider() -> None:
-    environment = {**os.environ, "PYTHON": "/bin/echo"}
+    # `AW_KEY_FILE=""` alongside the unset variable: the script also reads a key
+    # file outside the checkout, so dropping only the variable would leave this
+    # refusal untested on the one machine that has a key in the default place.
+    environment = {**os.environ, "PYTHON": "/bin/echo", "AW_KEY_FILE": ""}
     environment.pop("AW_SECRETS__DEEPSEEK_API_KEY", None)
 
     result = subprocess.run(

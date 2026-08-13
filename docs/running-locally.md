@@ -46,13 +46,32 @@ scripts/dev.sh word-server   # 8765，先起
 scripts/dev.sh web-server    # 8767，先起
 scripts/dev.sh demo-check    # 一条命令探两个，缺哪个说哪个
 scripts/dev.sh demo-api      # Word + web 都在信封里
+scripts/dev.sh ingest        # 摄取 worker：不起它，上传就永远停在"正在索引"
 scripts/dev.sh demo-worker   # 两个探针都过了才起 Worker
 ```
+
+**`ingest` 不是可选的。** 上传分片全部成功之后，文档停在 `processing` 等一个消费者；没有
+消费者时，界面上"排队没人取"和"正在向量化"是同一个样子（`knowledge_bases.py` 的
+`else_="processing"` 里没有"过期"这个概念），页面只会每 2 秒空转一次。控制台演示前先传一份
+测试文件，确认它翻到"可以检索"，再往下走。
+
+**`demo-api` 没有 key 会拒绝启动**，和 `demo-worker` 一样。原因比后者更硬：没有 key 时
+`_assemble_chat` 吞掉 `ModelNotConfiguredError`，`chat.router` 与 `events.router` 根本不挂载，
+这份 profile 打开的 triage 也没了模型、于是每个 Task 静默回落到 v1 图——而这一切从浏览器上
+完全看不出来：`/ui` 打得开、六个页面都在、Chat 的空状态照常渲染。要一个明确不带 Chat 的
+API，用 `scripts/dev.sh api`。
+
+key 从哪来：先看环境变量 `AW_SECRETS__DEEPSEEK_API_KEY`，没有就读 `AW_KEY_FILE`
+（默认 `~/.config/agent-workbench/key`）。**这个路径在 checkout 之外是有意的**——`zip -r`
+和访达的"压缩"都不认 `.gitignore`，工作目录里的 key 会被一起打包带走；CI 的密钥扫描只看
+提交历史，而这把 key 从没被提交过。打包只用 `git archive`。
 
 `demo-worker` 在启动 Worker **之前**依次探两个服务器：MCP 目录只在启动时冻结一次，晚起的
 服务器不会热更新，症状是一个健康、正常、却没有那把工具的 Worker。这份 profile 同时按
 [ADR-038](./adr/0038-the-export-gate-guards-a-list-not-a-boundary.md) §2.1 关掉导出审批
-（仓库默认仍是 `true`），并带上两处实测过的预算上限。
+（仓库默认仍是 `true`），并带上两处实测过的预算上限；Chat 在这份 profile 下是
+`retrieval_shape = "routed"`，也就是说只有"语料没覆盖这个问题"那条分支才会去联网搜——这一条
+写在 config 里，不在任何启动器里，两种起法拿到的是同一个控制台。
 
 ## 浏览器控制台
 

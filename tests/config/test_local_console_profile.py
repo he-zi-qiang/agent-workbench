@@ -88,6 +88,31 @@ def test_the_writer_gets_word_and_the_researcher_gets_the_web(
     assert audiences == {"word": "synthesis", "web": "research"}
 
 
+def test_the_console_profile_names_its_own_chat_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read from the file, with every AW_ variable stripped first.
+
+    `_load_profile` deletes them, which is the assertion: `routed` has to come
+    from the profile and not from whatever the shell or a launcher exported.
+    It used to come from a wrapper, and the console's Chat therefore searched
+    the web when started one way and not the other -- with no way to tell which
+    you had short of asking it a question the corpus does not cover.
+
+    The threshold is asserted beside the shape because it is only read under it:
+    a shape that reverted to `fixed` would leave this line configuring nothing,
+    silently, exactly as it did before.
+    """
+
+    settings = _load_profile(monkeypatch, DEMO_CONFIG)
+    shipped = _load_profile(monkeypatch, DEFAULT_CONFIG)
+
+    assert settings.chat.retrieval_shape == "routed"
+    assert settings.chat.routed_relevance_threshold == pytest.approx(0.01)
+    # Still a profile's choice, not a new default for every deployment.
+    assert shipped.chat.retrieval_shape == "fixed"
+
+
 def test_the_console_profile_declines_the_export_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -145,10 +170,24 @@ def test_the_ordinary_local_profile_is_untouched_by_this_one(
 def _dev(
     command: str, environment: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
+    """Run one arm of the script with no provider key from anywhere.
+
+    `AW_KEY_FILE=""` is not decoration. The script reads a key file outside the
+    checkout when the variable is unset, so on the one machine that actually has
+    a key -- the developer's -- every refusal asserted below would quietly stop
+    being a refusal. A test that only holds on a machine without the credential
+    is not testing the arm that ships.
+    """
+
     return subprocess.run(
         ["bash", "scripts/dev.sh", command],
         cwd=ROOT,
-        env={**os.environ, "PYTHON": "/bin/echo", **(environment or {})},
+        env={
+            **os.environ,
+            "PYTHON": "/bin/echo",
+            "AW_KEY_FILE": "",
+            **(environment or {}),
+        },
         check=False,
         capture_output=True,
         text=True,
@@ -214,6 +253,50 @@ def test_demo_worker_probes_both_servers_then_starts_the_real_graph(
     assert "--label web --endpoint http://127.0.0.1:8767/mcp" in result.stderr
 
 
+def test_demo_api_refuses_a_console_whose_front_half_would_be_missing() -> None:
+    """The dangerous half of the keyless start, and why it is a refusal.
+
+    `demo-worker` already exited 2 without a key; `demo-api` printed two lines
+    to stderr and started anyway. What it started was not a smaller console:
+    `_assemble_chat` catches `ModelNotConfiguredError`, so neither `chat.router`
+    nor `events.router` is mounted, and this profile's `triage.enabled = true`
+    is left with no model, which drops every Task submitted from Work back to
+    the v1 graph.
+
+    None of that is visible from a browser -- `/ui` serves, all six pages
+    render, Chat draws the same empty state it draws on a working start -- so
+    the first evidence is a question that cannot be answered. A start that
+    removes the feature the profile exists for has to fail where it can still
+    be read.
+    """
+
+    result = _dev("demo-api", {"AW_SECRETS__DEEPSEEK_API_KEY": ""})
+
+    assert result.returncode == 2
+    assert "requires AW_SECRETS__DEEPSEEK_API_KEY" in result.stderr
+    # Refused before the process was replaced: `exec` under `PYTHON=/bin/echo`
+    # would have printed the module line.
+    assert result.stdout.strip() == ""
+    # And it names the deliberate way to get a chat-less API, which stays legal.
+    assert "--without-chat" in result.stderr
+
+
+def test_the_ordinary_api_arm_still_starts_without_a_key() -> None:
+    """The control group for the refusal above.
+
+    Only the console profile refuses. `dev.sh api` keyless is a deployment that
+    indexes and searches and says it has no chat -- true of what it serves, and
+    nothing about it claims otherwise. Without this assertion the refusal could
+    spread to the ordinary arm and no test would notice.
+    """
+
+    result = _dev("api", {"AW_SECRETS__DEEPSEEK_API_KEY": ""})
+
+    assert result.returncode == 0
+    assert "-m agent_workbench.apps.api.main" in result.stdout
+    assert "search without chat" in result.stderr
+
+
 def test_demo_api_uses_the_same_profile(tmp_path: Path) -> None:
     probe = tmp_path / "python-probe"
     probe.write_text(
@@ -224,7 +307,12 @@ def test_demo_api_uses_the_same_profile(tmp_path: Path) -> None:
     result = subprocess.run(
         ["bash", "scripts/dev.sh", "demo-api"],
         cwd=ROOT,
-        env={**os.environ, "PYTHON": str(probe)},
+        env={
+            **os.environ,
+            "PYTHON": str(probe),
+            "AW_KEY_FILE": "",
+            "AW_SECRETS__DEEPSEEK_API_KEY": "contract-only-not-a-real-key",
+        },
         check=False,
         capture_output=True,
         text=True,
@@ -233,6 +321,90 @@ def test_demo_api_uses_the_same_profile(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stdout.splitlines()[0] == "config/config.demo-local.toml"
+
+
+def test_the_key_file_outside_the_checkout_is_what_every_arm_reads(
+    tmp_path: Path,
+) -> None:
+    """One key source for the script, and it lives outside the working tree.
+
+    Before this, the only thing that read the key from disk was a launcher
+    wrapper outside `scripts/`. So the start documented in `docs/running-locally
+    .md` had no provider while the wrapper's did, and the difference showed up
+    as "Chat searched the web when I rehearsed and did not when I recorded".
+
+    Outside the checkout for a second reason: `zip -r` and Finder's "Compress"
+    honour no ignore file, and the CI secret scan reads commit history, where
+    this credential has never been. A path under `$HOME` is not reachable by
+    either mistake.
+    """
+
+    key_file = tmp_path / "key"
+    key_file.write_text("  from-outside-the-checkout\n", encoding="utf-8")
+    probe = tmp_path / "python-probe"
+    probe.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$AW_SECRETS__DEEPSEEK_API_KEY\"\n",
+        encoding="utf-8",
+    )
+    probe.chmod(0o700)
+    environment = {
+        **os.environ,
+        "PYTHON": str(probe),
+        "AW_KEY_FILE": str(key_file),
+    }
+    environment.pop("AW_SECRETS__DEEPSEEK_API_KEY", None)
+
+    result = subprocess.run(
+        ["bash", "scripts/dev.sh", "demo-api"],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0
+    # Whitespace-stripped: a key file written by a shell redirect ends in a
+    # newline, and a provider header carrying one is rejected as a bad token.
+    assert result.stdout.splitlines()[0] == "from-outside-the-checkout"
+
+
+def test_an_exported_key_still_beats_the_file(tmp_path: Path) -> None:
+    """The file is a fallback, not an override.
+
+    A shell that already exported a key is the one place the developer stated an
+    intent, and a file quietly winning over it would make "which key did that
+    run use" unanswerable from the command line -- which is the same class of
+    surprise as a wrapper being the only thing that loaded one.
+    """
+
+    key_file = tmp_path / "key"
+    key_file.write_text("from-the-file\n", encoding="utf-8")
+    probe = tmp_path / "python-probe"
+    probe.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$AW_SECRETS__DEEPSEEK_API_KEY\"\n",
+        encoding="utf-8",
+    )
+    probe.chmod(0o700)
+
+    result = subprocess.run(
+        ["bash", "scripts/dev.sh", "demo-api"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PYTHON": str(probe),
+            "AW_KEY_FILE": str(key_file),
+            "AW_SECRETS__DEEPSEEK_API_KEY": "from-the-shell",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.splitlines()[0] == "from-the-shell"
 
 
 def test_the_usage_banner_lists_every_demo_command() -> None:
