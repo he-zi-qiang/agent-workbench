@@ -16,6 +16,8 @@ import pytest
 
 from agent_workbench.adapters.memory import InMemoryArtifactStore
 from agent_workbench.adapters.tools.workspace import (
+    _UNWRITABLE_MEDIA_TYPES,
+    _UNWRITABLE_SUFFIXES,
     WorkspaceEditTool,
     WorkspaceGrepTool,
     WorkspaceListTool,
@@ -81,6 +83,34 @@ def version_of(scope: WorkspaceScope) -> str | None:
     return session.version
 
 
+#: A zip header, which is what the first bytes of a .docx are. The NUL is the
+#: byte that matters and it is where a real package puts it.
+DOCX_HEADER = b"PK\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00!\x00"
+
+
+def put_bytes(scope: WorkspaceScope, name: str, content: bytes) -> None:
+    """Bind raw bytes, the way an MCP result reaches the working set.
+
+    Not through `workspace_write`, which stores text and now refuses these
+    names outright. A rendered document arrives from a tool that stored it
+    itself, so this is the only way a binary entry exists at all.
+    """
+
+    session = scope.current()
+    assert session is not None
+    session.version = asyncio.run(
+        session.workspace.write(
+            session.version,
+            name,
+            content,
+            media_type=(
+                "application/vnd.openxmlformats-officedocument"
+                ".wordprocessingml.document"
+            ),
+        )
+    )
+
+
 def test_every_workspace_schema_passes_the_gateway_validator() -> None:
     # The subset this repository enforces is deliberately small. A tool it ships
     # that could not pass its own gate would be found at gateway assembly, i.e.
@@ -115,6 +145,87 @@ def test_read_returns_what_write_put_there() -> None:
 
         assert result.status == "ok"
         assert "hello" in result.content
+
+
+def test_reading_a_rendered_document_describes_it_instead_of_decoding_it() -> None:
+    # The bug this closes killed a whole Task, and not at this tool. Decoding a
+    # .docx with errors="replace" yields mojibake containing \u0000; that text
+    # became the model's prompt, the prompt was recorded in a `ModelStarted`
+    # event, and PostgreSQL refused the insert -- `\u0000 cannot be converted
+    # to text`. `task_d66f8ec0...` died at `review`, whose only mistake was
+    # opening the document the writer had just rendered.
+    with entered() as scope:
+        put_bytes(scope, "mcp-result.docx", DOCX_HEADER + b"\x9c\xed" * 400)
+
+        result = invoke(WorkspaceReadTool(scope), name="mcp-result.docx")
+
+        assert result.status == "ok"
+        assert "\x00" not in result.content
+        # It says the file exists and is not empty, which is the question a
+        # reviewer is actually asking of it.
+        assert "mcp-result.docx" in result.content
+        assert "814" in result.content
+
+
+def test_grep_skips_a_binary_file_and_says_which_one() -> None:
+    # Silently skipping it would answer "no matches" about a file that was
+    # never opened, and the model would conclude the content is not there.
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="notes.md", content="quarterly revenue")
+        put_bytes(scope, "mcp-result.docx", DOCX_HEADER + b"\xff\xfe" * 200)
+
+        found = invoke(WorkspaceGrepTool(scope), pattern="revenue")
+        missed = invoke(WorkspaceGrepTool(scope), pattern="nothing-matches-this")
+
+        assert found.status == "ok"
+        assert "\x00" not in found.content
+        assert "notes.md" in found.content
+        assert "mcp-result.docx" in found.content
+        # And on the empty side too, where "No matches" alone would be a lie by
+        # omission about the one file it could not read.
+        assert "mcp-result.docx" in missed.content
+
+
+def test_editing_a_binary_file_is_refused_rather_than_corrupting_it() -> None:
+    # A decode-splice-encode round trip through errors="replace" does not edit a
+    # package, it destroys it -- and would report success for doing so.
+    with entered() as scope:
+        put_bytes(scope, "mcp-result.docx", DOCX_HEADER + b"\x9c\xed" * 100)
+        after_write = version_of(scope)
+
+        refused = invoke(
+            WorkspaceEditTool(scope),
+            name="mcp-result.docx",
+            old_text="Q3",
+            new_text="Q4",
+        )
+
+        assert refused.status == "error"
+        assert refused.error is not None
+        assert "corrupt" in refused.error.message
+        assert version_of(scope) == after_write
+
+
+def test_a_text_file_holding_no_nul_is_still_read_edited_and_searched() -> None:
+    # The control for all three refusals above. They share one predicate, so a
+    # predicate that answered "binary" too eagerly would silence the whole
+    # working set at once.
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="report.md", content="Q3 revenue rose")
+
+        read = invoke(WorkspaceReadTool(scope), name="report.md")
+        found = invoke(WorkspaceGrepTool(scope), pattern="revenue")
+        edited = invoke(
+            WorkspaceEditTool(scope), name="report.md", old_text="Q3", new_text="Q4"
+        )
+
+        assert "Q3 revenue rose" in read.content
+        assert "report.md" in found.content
+        assert edited.status == "ok"
+        assert (
+            "Q4 revenue rose"
+            in invoke(WorkspaceReadTool(scope), name="report.md").content
+        )
 
 
 def test_reading_a_missing_name_is_a_failed_result_not_an_empty_one() -> None:
@@ -171,6 +282,70 @@ def test_a_declared_word_type_is_refused_because_this_tool_writes_text() -> None
         # A refused write leaves the version where it was, so a node that then
         # succeeds commits only what actually landed.
         assert version_of(scope) == after_valid
+
+
+def test_a_word_name_is_refused_even_with_no_media_type_declared() -> None:
+    # What actually reached a user, 2026-08-12: asked for a Word report on a
+    # deployment with no renderer, the model called this tool with
+    # `name="DeepSeek-report.docx"` and no `media_type` at all. The guess fell
+    # through to `text/plain`, the type check saw nothing wrong, and 3 154
+    # bytes of Markdown were stored under a Word name. Everything downstream
+    # reads the name: the listing, the attachment rail, the file it downloads
+    # as. Refusing only the declared type left the whole lie intact.
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="ok.md", content="x")
+        after_valid = version_of(scope)
+
+        refused = invoke(
+            WorkspaceWriteTool(scope),
+            name="DeepSeek-report.docx",
+            content="DeepSeek 最新模型调研报告\n\n一、引言",
+        )
+
+        assert refused.status == "error"
+        assert refused.error is not None
+        assert refused.error.code == "invalid_tool_input"
+        # It names the format it is refusing, not just "no".
+        assert "wordprocessingml" in refused.error.message
+        assert version_of(scope) == after_valid
+
+
+def test_a_word_name_is_refused_even_when_the_declared_type_is_text() -> None:
+    # The gap the two checks close between them. A model that has been told
+    # "declaring that type is refused" can comply with the letter of it --
+    # `text/plain` on a `.docx` name -- and produce the same broken file.
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="ok.md", content="x")
+        after_valid = version_of(scope)
+
+        refused = invoke(
+            WorkspaceWriteTool(scope),
+            name="summary.DOCX",
+            content="2024 年第四季度总结",
+            media_type="text/plain",
+        )
+
+        assert refused.status == "error"
+        assert version_of(scope) == after_valid
+
+
+def test_every_refused_suffix_names_a_type_the_tool_also_refuses() -> None:
+    # Two lists, one rule. A suffix mapped to a type outside the set would make
+    # the refusal message describe a format this tool is willing to write.
+    assert set(_UNWRITABLE_SUFFIXES.values()) <= _UNWRITABLE_MEDIA_TYPES
+
+
+def test_a_text_name_the_word_check_must_not_catch_still_writes() -> None:
+    # The control for both refusals above. `.docx` is a suffix, not a substring:
+    # a name that merely contains one of these words is an ordinary text file.
+    with entered() as scope:
+        result = invoke(
+            WorkspaceWriteTool(scope),
+            name="docx-outline.md",
+            content="what the document will contain",
+        )
+
+        assert result.status == "ok"
 
 
 def test_a_declared_text_type_still_writes() -> None:
