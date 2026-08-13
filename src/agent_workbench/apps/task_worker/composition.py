@@ -52,6 +52,7 @@ from agent_workbench.adapters.tools import (
     StaticToolRegistry,
     UnavailableExternalSearch,
 )
+from agent_workbench.adapters.tools.mcp_workspace import bind_results_into_workspace
 from agent_workbench.adapters.tools.sandbox import SandboxRunTool
 from agent_workbench.adapters.tools.task_export import GatewayReportExport
 from agent_workbench.adapters.tools.task_external_research import (
@@ -621,6 +622,7 @@ async def _build_real_handlers(
         config,
         artifacts=artifacts,
         resources=resources,
+        workspace_scope=workspace_scope,
     )
     sandbox_binding = await _build_sandbox_binding(
         config,
@@ -840,12 +842,18 @@ async def _build_mcp_bindings(
     *,
     artifacts: LocalArtifactStore,
     resources: AsyncExitStack,
+    workspace_scope: WorkspaceScope,
 ) -> tuple[tuple[ToolBinding, DynamicToolSource], ...]:
     """Every discovered binding, paired with the audience its server declared.
 
     Paired rather than grouped here so the caller can build both the flat
     registry and the per-audience catalog from one traversal, and so a server
     that yielded nothing cannot silently contribute an empty audience.
+
+    Every one of them is wrapped so a file it returns is bound into the working
+    set. Wrapped here rather than per server, because the reason has nothing to
+    do with which server it is: an artifact no manifest names is invisible to
+    the node that judges the work, whatever produced it.
     """
 
     if config.mcp is None:
@@ -898,7 +906,10 @@ async def _build_mcp_bindings(
                 continue
             owned = candidate_resources.pop_all()
             resources.push_async_callback(owned.aclose)
-            bindings.extend((binding, server.audience) for binding in discovered)
+            bindings.extend(
+                (bind_results_into_workspace(binding, workspace_scope), server.audience)
+                for binding in discovered
+            )
     return tuple(bindings)
 
 
