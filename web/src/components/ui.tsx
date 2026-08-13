@@ -1,11 +1,4 @@
-import {
-  AlertTriangle,
-  Check,
-  ChevronRight,
-  Circle,
-  LoaderCircle,
-  X,
-} from "lucide-react";
+import { AlertTriangle, LoaderCircle } from "lucide-react";
 import type { PropsWithChildren, ReactNode } from "react";
 import type { ApprovalStatus, TaskStatus } from "../api/types";
 
@@ -110,84 +103,12 @@ export function InfoNotice({ children }: PropsWithChildren) {
   return <div className="aw-notice">{children}</div>;
 }
 
-export function Inspector({
-  title,
-  open,
-  onClose,
-  children,
-}: PropsWithChildren<{ title: string; open: boolean; onClose: () => void }>) {
-  return (
-    <aside className={`aw-inspector ${open ? "is-open" : ""}`} aria-label={title}>
-      <header className="aw-inspector-header">
-        <strong>{title}</strong>
-        <IconButton label="关闭详情" onClick={onClose}>
-          <X aria-hidden="true" size={17} />
-        </IconButton>
-      </header>
-      <div className="aw-inspector-body">{children}</div>
-    </aside>
-  );
-}
-
-export function InspectorSection({
-  title,
-  children,
-}: PropsWithChildren<{ title: string }>) {
-  return (
-    <section className="aw-inspector-section">
-      <h3>{title}</h3>
-      {children}
-    </section>
-  );
-}
-
 export function KeyValue({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="aw-key-value">
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
-  );
-}
-
-export function StepState({
-  state,
-}: {
-  state: "complete" | "active" | "waiting" | "failed";
-}) {
-  if (state === "complete") return <Check aria-hidden="true" size={14} />;
-  if (state === "failed") return <X aria-hidden="true" size={14} />;
-  if (state === "active") return <LoaderCircle aria-hidden="true" className="aw-spin" size={14} />;
-  return <Circle aria-hidden="true" size={10} />;
-}
-
-export function DisclosureButton({
-  expanded,
-  onClick,
-  children,
-  meta,
-}: PropsWithChildren<{
-  expanded: boolean;
-  onClick: () => void;
-  meta?: ReactNode;
-}>) {
-  return (
-    <button
-      aria-expanded={expanded}
-      className="aw-disclosure"
-      onClick={onClick}
-      type="button"
-    >
-      <span>
-        <ChevronRight
-          aria-hidden="true"
-          className={expanded ? "is-expanded" : ""}
-          size={15}
-        />
-        {children}
-      </span>
-      {meta}
-    </button>
   );
 }
 
