@@ -1655,11 +1655,30 @@ def test_the_same_run_under_a_generous_cost_ceiling_is_stopped_by_steps() -> Non
     Without this, a pricer that reported an enormous number on every turn --
     or a runtime that ended any priced run early -- would satisfy the test
     above.
+
+    Each turn reads a *different* document. The turns used to be one identical
+    call repeated, which the repeat guard now stops well before step 20 -- and
+    a run stopped for repeating itself would not be a control for the cost
+    ceiling at all. Varying the argument keeps the subject and drops the
+    coincidence.
     """
 
     model = FakeModel(
-        [ScriptedTurn(text="again", tool_calls=(READ_CALL,), usage=USAGE)],
-        repeat_last=True,
+        [
+            ScriptedTurn(
+                text="again",
+                tool_calls=(
+                    READ_CALL.model_copy(
+                        update={
+                            "tool_call_id": f"toolu_step_{step}",
+                            "arguments": {"document_id": f"doc_{step}"},
+                        }
+                    ),
+                ),
+                usage=USAGE,
+            )
+            for step in range(20)
+        ]
     )
 
     run = _execute(
@@ -1951,3 +1970,122 @@ def test_a_token_ceiling_still_fails_a_run_that_passed_it() -> None:
 
     assert run.outcome.status == "failed"
     assert run.outcome.stop_reason == "token_budget"
+
+
+def _repeating(times: int) -> FakeModel:
+    """A model that asks the identical question `times` turns in a row."""
+
+    return FakeModel(
+        [
+            ScriptedTurn(
+                text="The sub-pages all redirect to the main page. Let me try again.",
+                tool_calls=(
+                    READ_CALL.model_copy(update={"tool_call_id": f"toolu_{turn}"}),
+                ),
+                usage=USAGE,
+            )
+            for turn in range(times)
+        ]
+        + [ScriptedTurn(text="Done.", usage=USAGE)]
+    )
+
+
+def test_reading_the_same_document_twice_is_still_allowed() -> None:
+    """The floor. Asking again is ordinary; only the fourth time is not."""
+
+    recorder = _Recorder("read_document", risk="read")
+
+    run = _execute(_repeating(2), bindings=[recorder.binding])
+
+    assert len(recorder.calls) == 2
+    assert run.outcome.status == "completed"
+
+
+def test_a_fourth_identical_call_is_refused_without_running() -> None:
+    """The observed loop fetched one URL eight times. The tool runs three."""
+
+    recorder = _Recorder("read_document", risk="read")
+
+    _execute(_repeating(6), bindings=[recorder.binding])
+
+    assert len(recorder.calls) == 3, "the tool must not do the same work again"
+
+
+def test_a_run_that_keeps_repeating_is_stopped_before_its_token_ceiling() -> None:
+    """What this exists for.
+
+    The research node burned a 120k token budget re-fetching one page it had
+    already read. Ending on the repeats names the cause; ending on the ceiling
+    reports only that the money ran out.
+    """
+
+    run = _execute(
+        _repeating(8),
+        request=_request(budget=RunBudget(max_steps=20, max_tool_calls=20)),
+        bindings=[_Recorder("read_document").binding],
+    )
+
+    assert run.outcome.status == "failed"
+    assert run.outcome.error is not None
+    assert "already made" in run.outcome.error.message
+    assert run.outcome.stop_reason != "token_budget"
+
+
+def test_the_same_tool_with_different_arguments_is_not_a_repeat() -> None:
+    """The control: the guard is about the question, not about the tool."""
+
+    recorder = _Recorder("read_document", risk="read")
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="next",
+                tool_calls=(
+                    READ_CALL.model_copy(
+                        update={
+                            "tool_call_id": f"toolu_{turn}",
+                            "arguments": {"document_id": f"doc_{turn}"},
+                        }
+                    ),
+                ),
+                usage=USAGE,
+            )
+            for turn in range(6)
+        ]
+        + [ScriptedTurn(text="Done.", usage=USAGE)]
+    )
+
+    run = _execute(
+        model,
+        request=_request(budget=RunBudget(max_steps=20, max_tool_calls=20)),
+        bindings=[recorder.binding],
+    )
+
+    assert len(recorder.calls) == 6
+    assert run.outcome.status == "completed"
+
+
+def test_argument_key_order_does_not_hide_a_repeat() -> None:
+    """Two spellings of one question are one question."""
+
+    recorder = _Recorder("read_document", risk="read")
+    first = {"document_id": "doc_1", "page": 2}
+    second = {"page": 2, "document_id": "doc_1"}
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="again",
+                tool_calls=(
+                    READ_CALL.model_copy(
+                        update={"tool_call_id": f"toolu_{turn}", "arguments": args}
+                    ),
+                ),
+                usage=USAGE,
+            )
+            for turn, args in enumerate((first, second, first, second, first, second))
+        ]
+        + [ScriptedTurn(text="Done.", usage=USAGE)]
+    )
+
+    _execute(model, bindings=[recorder.binding])
+
+    assert len(recorder.calls) == 3, "key order must not buy extra attempts"
