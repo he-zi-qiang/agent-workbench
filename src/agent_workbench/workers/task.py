@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from agent_workbench.application.task_recovery import Reconciliation, reconcile
+from agent_workbench.application.task_research import EvidenceUnavailableError
 from agent_workbench.domain.task_registry import ApprovalDecision
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.ports.approvals import ApprovalStore
@@ -94,8 +95,20 @@ def _failure_detail(error: BaseException, action: str) -> str:
     trying again could plausibly work -- which is the one thing a reader who saw
     a transient provider blip actually needs to know. ``ErrorInfo.message`` is
     still not included: it is operator-facing text with no such guarantee.
+
+    ``EvidenceUnavailableError`` is the one exception, and for the same reason
+    the rule exists rather than despite it. Its messages are constants written
+    in this repository -- "internal research requires a knowledge base", "the
+    search returned no evidence" -- and the one that interpolates carries a page
+    *count* and short failure codes that ``SourcesUnreadableError`` documents as
+    safe for a model's context. None of it comes from a provider. Withholding
+    them bought no privacy and cost the reader the whole message: a Task that
+    died because a tool ran out of time, because nobody attached a knowledge
+    base, and because every page 404'd all read identically.
     """
 
+    if isinstance(error, EvidenceUnavailableError):
+        return f"evidence was unavailable during {action}: {error}"
     if isinstance(error, AgentNodeFailedError):
         info = error.outcome.error
         if info is not None:

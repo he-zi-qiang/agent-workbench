@@ -97,7 +97,7 @@ from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.research import ExternalSearchPort
 from agent_workbench.ports.task_workflow import GraphVersion
 from agent_workbench.ports.tools import ToolBinding
-from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
+from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor, ToolGateway
 from agent_workbench.workers.task import TaskWorker
 from agent_workbench.workflows.agent_profiles import (
     DynamicToolSource,
@@ -655,6 +655,13 @@ async def _build_real_handlers(
         # ledgered tool with nowhere to record it, and export_artifact is one.
         ledger=ledger,
         record_step_inputs=config.runtime.record_step_inputs,
+        # Without this the deployment's own tool ceiling reaches nothing: the
+        # gateway would build a default executor that knows only what each tool
+        # declares, which is how `runtime.tool_timeout_seconds` came to be a
+        # setting no code read.
+        executor=ToolExecutor(
+            deployment_ceiling_seconds=config.runtime.tool_timeout_seconds
+        ),
     )
     policy_identity = (
         f"{config.task.policy_revision}:{config.task.policy_fingerprint[:16]}"

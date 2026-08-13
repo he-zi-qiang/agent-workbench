@@ -36,7 +36,16 @@ SPEC = ToolSpec(
     concurrency="exclusive",
     risk="external",
     idempotency="safe",
-    timeout_seconds=30,
+    # Sized from the work this tool actually does, not from the round number it
+    # used to hold. One call is three serial stages, and 30s could not fit them:
+    # measured twice against the live provider on one query, the whole path took
+    # 35.7s and 41.5s -- a search turn (15.3s, `max_uses` searches server-side),
+    # a concurrent fetch of the named pages (3.0s), and a condensing turn over
+    # their text (23.2s, the dominant cost and the one that grows with `limit`).
+    # Both runs returned evidence; both were killed at 30s with nothing to show,
+    # which is why `external_search` had never once succeeded in a deployment.
+    # The sibling `web_search` already declares 120 for the same shape of work.
+    timeout_seconds=90,
     permission_scopes=("external:search",),
 )
 

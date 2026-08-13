@@ -190,3 +190,53 @@ def test_an_error_result_from_the_handler_is_left_alone() -> None:
     assert result.error is not None
     assert result.error.code == "not_found"
     assert result.duration_ms == 4
+
+
+def test_a_ceiling_cut_blames_the_ceiling_and_not_the_run() -> None:
+    """Three bounds can cut a call, and only one of them is worth raising.
+
+    Reporting the wrong one is how `external_search` spent a day looking like a
+    slow network: the message has to name the limit the reader can act on.
+    """
+
+    async def handler(invocation: ToolInvocation) -> ToolResult:
+        await asyncio.sleep(10)
+        raise AssertionError("the timeout should have fired first")
+
+    executor = ToolExecutor(monotonic=_ticking(), deployment_ceiling_seconds=0.01)
+    binding = ToolBinding(spec=_spec(timeout_seconds=90), handler=handler)
+
+    result = asyncio.run(
+        executor.execute(
+            binding,
+            CALL,
+            context=CONTEXT,
+            cancellation=NullCancellationToken(),
+        )
+    )
+
+    assert result.error is not None
+    assert result.error.code == "tool_timeout"
+    assert "deployment" in result.error.message
+    assert "run's remaining" not in result.error.message
+
+
+def test_without_a_ceiling_a_tool_keeps_its_own_declared_timeout() -> None:
+    """The control for the test above: unset is the shipped default."""
+
+    async def handler(invocation: ToolInvocation) -> ToolResult:
+        return ToolResult.succeeded(invocation.call, content="done")
+
+    executor = ToolExecutor(monotonic=_ticking())
+    binding = ToolBinding(spec=_spec(timeout_seconds=90), handler=handler)
+
+    result = asyncio.run(
+        executor.execute(
+            binding,
+            CALL,
+            context=CONTEXT,
+            cancellation=NullCancellationToken(),
+        )
+    )
+
+    assert result.status == "ok"

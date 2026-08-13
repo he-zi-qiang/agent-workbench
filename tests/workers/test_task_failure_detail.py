@@ -10,6 +10,7 @@ safe and says nothing: a transient network blip reached the console as
 
 from __future__ import annotations
 
+from agent_workbench.application.task_research import EvidenceUnavailableError
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.runs import AgentOutcome
 from agent_workbench.domain.tasks import TaskState
@@ -97,3 +98,34 @@ def test_any_other_exception_keeps_reporting_only_its_type() -> None:
 
     assert detail == "the graph raised RuntimeError during start"
     assert "secret prompt fragment" not in detail
+
+
+def test_missing_evidence_says_which_way_it_was_missing() -> None:
+    """The three ways a Task loses its evidence must not read identically.
+
+    Each of these killed a real Task on 2026-08-13 and every one of them
+    reached the console as "the graph raised EvidenceUnavailableError during
+    start", which named the class and nothing a reader could act on.
+    """
+
+    details = [
+        _failure_detail(EvidenceUnavailableError(message), "start")
+        for message in (
+            "internal research requires a knowledge base",
+            "external search returned no evidence",
+            "external_search exceeded its 30s timeout",
+        )
+    ]
+
+    assert len(set(details)) == 3, "the three causes must not collapse into one"
+    assert "requires a knowledge base" in details[0]
+    assert "returned no evidence" in details[1]
+    assert "30s timeout" in details[2]
+    for detail in details:
+        assert "EvidenceUnavailableError" not in detail, "the class name is not a cause"
+
+
+def test_missing_evidence_still_names_the_action_it_died_during() -> None:
+    detail = _failure_detail(EvidenceUnavailableError("no evidence"), "resume")
+
+    assert "during resume" in detail
