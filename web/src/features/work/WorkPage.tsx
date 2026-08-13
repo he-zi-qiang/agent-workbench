@@ -78,8 +78,8 @@ import {
   artifactLabel,
   collectArtifacts,
   eventTitle,
+  findDeliverable,
   findDraftText,
-  findFinalReport,
   findGraphChoice,
   findLatestApprovalId,
   findTaskInputRef,
@@ -320,8 +320,13 @@ export function WorkPage() {
     () => collectArtifacts(timeline.events),
     [timeline.events],
   );
-  const finalReport = useMemo(
-    () => findFinalReport(timeline.events),
+  // What the reading column leads with: the document the Task was asked for
+  // when it rendered one, and the exported report otherwise. `findFinalReport`
+  // is still the thing being chosen *between* -- it is now consulted inside
+  // `findDeliverable` rather than here, so there is one answer to "what is this
+  // Task's output" instead of two that could disagree.
+  const deliverable = useMemo(
+    () => findDeliverable(timeline.events),
     [timeline.events],
   );
   const lifecycle = useMemo(
@@ -958,12 +963,19 @@ export function WorkPage() {
             ) : null}
 
             <TaskResult
-              artifact={openedArtifact ?? finalReport?.artifact ?? null}
+              artifact={openedArtifact ?? deliverable}
               draftText={draftText}
               identity={identity}
-              {...(openedArtifact === null
-                ? {}
-                : { onClose: () => setOpened(null) })}
+              {...(
+                // Only when closing would actually show something else.
+                // Opening the deliverable from the rail lands on what the
+                // column was already showing, and a "返回任务结果" that returns
+                // to the file you are looking at is a button that does nothing.
+                openedArtifact === null ||
+                openedArtifact.artifact_id === deliverable?.artifact_id
+                  ? {}
+                  : { onClose: () => setOpened(null) }
+              )}
               onDownload={(artifact) => downloadMutation.mutate(artifact)}
               onRetry={retryInput === null ? undefined : () => resubmit(retryInput)}
               status={selectedTask.status}
