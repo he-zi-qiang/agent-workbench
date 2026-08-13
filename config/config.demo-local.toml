@@ -72,6 +72,25 @@ timeout_seconds = 120
 catchup_poll_seconds = 1
 
 [chat]
+# The console's Chat is the routed one, and this file is what says so. It was
+# previously exported by a launcher wrapper outside `scripts/`, which made the
+# shape a property of *how you started the process* rather than of the profile:
+# the wrapper's console searched the web and the `scripts/dev.sh demo-api`
+# console documented in docs/running-locally.md did not, and nothing in either
+# start said which you had. A profile that names its own capabilities can be
+# read; a launcher that adds them cannot.
+#
+# The threshold below was already here and is only read under this shape, so
+# until now it configured a branch this file never selected.
+#
+# What this costs: `routed` is the one shape that refuses to assemble without a
+# reranker -- its cross-encoder score *is* the grounded/ungrounded decision, and
+# failing open would answer every question from evidence nothing established the
+# relevance of. A checkout without the ML extras gets `RerankerRequiredError` at
+# startup rather than a console that silently answers ungrounded. That is the
+# right trade for a profile which already requires two MCP servers to be up, and
+# it is loud, which is the part that matters.
+retrieval_shape = "routed"
 routed_relevance_threshold = 0.01
 
 [workflow]

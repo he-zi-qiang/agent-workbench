@@ -6,6 +6,14 @@
 # untracked and exactly one `git add -A` away from being published; the CI
 # secret scan would have caught it in history, which is the wrong end of the
 # problem. Provider keys belong in the environment, never in the checkout.
+#
+# These patterns are kept as a trap for the next hand-dropped file, not as the
+# defence. They are not one: `zip -r` and Finder's "Compress" read no ignore
+# file, so an ignored key in the working tree still ships inside any archive
+# made by compressing this directory -- which is how a key that was never
+# committed leaves the machine. `scripts/dev.sh` reads AW_KEY_FILE instead,
+# default ~/.config/agent-workbench/key, outside the tree entirely; package
+# with `git archive`, which can only emit tracked files.
 .secrets/
 API key/
 api-key/

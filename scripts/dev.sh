@@ -39,11 +39,21 @@
 # Whether chat runs depends on one thing: AW_SECRETS__DEEPSEEK_API_KEY. With it,
 # the API serves chat and the Task worker runs the real model-calling graph.
 # Without it, the ordinary API omits Chat and the ordinary worker runs `--demo`,
-# and both say so rather than pretending. The explicit word-worker is stricter:
-# it refuses to start, because a demo graph cannot exercise a Word MCP tool.
+# and both say so rather than pretending. The explicit ones are stricter and
+# refuse to start: word-worker and web-worker because a demo graph cannot
+# exercise an MCP tool, demo-worker for the same reason, and demo-api because a
+# keyless console loses Chat, the event stream, and triage without any of the
+# three being visible from the browser. Only the console profile refuses: plain
+# `api` still starts keyless and serves search, and `api --without-chat` goes
+# further and skips the embedding runtime as well.
 #
-# The key is never read from a file in this repository and never written to one.
-# Export it in your shell, or source it from somewhere outside the checkout.
+# The key is never read from a file inside this repository and never written to
+# one. Export it in your shell, or leave it in a file outside the checkout --
+# AW_KEY_FILE, default ~/.config/agent-workbench/key -- which every command here
+# reads when the variable is unset. A path outside the working tree is what
+# keeps `zip -r` and Finder's "Compress" from carrying a live credential into an
+# archive; neither of those honours .gitignore, and the CI secret scan reads
+# commit history, where this key has never been.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -64,6 +74,26 @@ export AW_DATABASE__DSN="$DSN"
 export AW_DATABASE__GUARD_DSN="$DSN"
 export AW_DATABASE__LISTEN_DSN="$DSN"
 export AW_ARTIFACT_STORE__LOCAL_ROOT="${AW_ARTIFACT_STORE__LOCAL_ROOT:-./var/artifacts}"
+
+# The one place a provider key is read from disk, and it reads only from outside
+# the working tree. An exported variable still wins, so nothing about an existing
+# shell changes; what this adds is that the file and the shell are the same key
+# for every command below, rather than the key existing on whichever launcher
+# happened to know about it. That asymmetry is what this replaces: a wrapper
+# elsewhere was the only thing that loaded the key, so a documented `dev.sh
+# demo-api` start silently had no provider -- which is precisely the failure the
+# demo-api refusal now names.
+#
+# `-r` and not `-f`: an unreadable key file is the same as no key here, and the
+# refusal downstream says so more usefully than a redirect error would. Setting
+# AW_KEY_FILE to the empty string means "no file at all" -- hence `-` rather than
+# `:-` in the expansion -- which is how the tests that assert a refusal keep
+# asserting it on a machine that does have a key sitting in the default place.
+AW_KEY_FILE="${AW_KEY_FILE-$HOME/.config/agent-workbench/key}"
+if [ -z "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ] && [ -r "$AW_KEY_FILE" ]; then
+  AW_SECRETS__DEEPSEEK_API_KEY="$(tr -d '[:space:]' < "$AW_KEY_FILE")"
+  export AW_SECRETS__DEEPSEEK_API_KEY
+fi
 
 TENANT="${TENANT:-tenant_local}"
 PRINCIPAL="${PRINCIPAL:-user_local}"
@@ -281,23 +311,40 @@ demo-check)
 
 demo-api)
   export AW_CONFIG_FILE=config/config.demo-local.toml
-  if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
-    # Chat's `web_search` exists only when `research` is configured
-    # (ADR-021): with no provider the tool is never built, and the model
-    # answers "我没有联网查询功能" -- which is true of that deployment and
-    # reads to a user like the feature is broken.
-    #
-    # Set here rather than in config.demo-local.toml because that file is
-    # tracked and `research.enabled` without a key is a startup error by
-    # design: turning it on in the file would break every keyless checkout.
-    # config.local.toml documents this exact escape hatch; this is the console
-    # profile applying it for itself, on the one condition that makes it safe.
-    export AW_RESEARCH__ENABLED=true
-    echo "console profile (Word + web + chat search); provider key available" >&2
-  else
-    echo "console profile, no provider key: API can submit but no real Worker can run" >&2
-    echo "  chat has no web_search on this start: research needs the provider key" >&2
+  # Refused rather than degraded, the same as `demo-worker` above it, and for a
+  # sharper reason. Without the key `_assemble_chat` catches
+  # `ModelNotConfiguredError` and returns a chat-less API: neither `chat.router`
+  # nor `events.router` is mounted, and `triage.enabled` in this profile is left
+  # with no model, so every Task submitted from Work falls back to v1. None of
+  # that is visible from the console -- `/ui` serves, all six pages render, and
+  # Chat draws its empty state exactly as it does on a working start. You find
+  # out by asking it something.
+  #
+  # That silence is the whole argument. An API which cannot answer is not a
+  # smaller console, it is a console with its front half removed, and the one
+  # place that can still say so is here, before the process replaces this shell.
+  # Only this arm refuses: a keyless deployment that indexes and searches is a
+  # real thing to want, and `dev.sh api` is how you say you want it.
+  if [ -z "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "demo-api requires AW_SECRETS__DEEPSEEK_API_KEY; refusing a console without Chat" >&2
+    echo "  no key means no chat and no events route, and every Task quietly runs v1" >&2
+    echo "  for a keyless API say so: 'dev.sh api', or 'dev.sh api --without-chat'" >&2
+    echo "  to skip the embedding runtime too" >&2
+    exit 2
   fi
+  # Chat's `web_search` exists only when `research` is configured (ADR-021):
+  # with no provider the tool is never built, and the model answers
+  # "我没有联网查询功能" -- which is true of that deployment and reads to a user
+  # like the feature is broken.
+  #
+  # Set here rather than in config.demo-local.toml because that file is tracked
+  # and `research.enabled` without a key is a startup error by design: turning
+  # it on in the file would break every keyless checkout. config.local.toml
+  # documents this exact escape hatch; this is the console profile applying it
+  # for itself, on the one condition that makes it safe -- and the refusal above
+  # is now what guarantees that condition holds.
+  export AW_RESEARCH__ENABLED=true
+  echo "console profile (Word + web + chat search); provider key available" >&2
   shift
   exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
   ;;
