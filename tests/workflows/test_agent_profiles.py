@@ -204,6 +204,45 @@ def test_the_review_prompt_template_is_a_shape_the_schema_accepts() -> None:
         assert "at least one issue" in contract
 
 
+def test_no_required_review_field_is_shown_behind_the_variable_length_array() -> None:
+    """The template used to end `"issues":["..."],"score":0}`.
+
+    A critic that listed several issues stopped before the key that came after
+    them, and `score` has no default -- so the object failed validation on a
+    missing required field, which ADR-034 §3.2 does not grant a correction
+    round. The verdict itself was correct and complete; the node died anyway,
+    on roughly one v1 Task in three.
+
+    The array is what varies in length, so the array goes last. Asserted as an
+    ordering rather than as one exact string, because the failure is positional:
+    any required key placed after `issues` is the same bug again.
+    """
+
+    for node in ("critic", "review"):
+        contract = profile_for(node).system_prompt
+        array = contract.index('"issues":["..."]')
+        for name, field in ReviewResult.model_fields.items():
+            if name == "issues" or not field.is_required():
+                continue
+            shown = contract.find(f'"{name}":')
+            assert shown != -1, f"{node} never shows required field {name}"
+            assert shown < array, f"{node} shows required field {name} after issues"
+
+
+def test_the_review_contracts_say_every_field_is_required() -> None:
+    """Position stops the model losing the key; this stops it choosing to.
+
+    `score` reads like a nicety next to a decision and a list of issues, and
+    nothing downstream reads it -- but `ReviewResult` requires it, so a model
+    that judges it optional fails the node exactly as truncation did.
+    """
+
+    for node in ("critic", "review"):
+        contract = profile_for(node).system_prompt
+        assert "required" in contract
+        assert "including score" in contract
+
+
 def test_the_review_projection_carries_both_the_summary_and_the_issues() -> None:
     """What makes the two tests above true rather than hopeful.
 
