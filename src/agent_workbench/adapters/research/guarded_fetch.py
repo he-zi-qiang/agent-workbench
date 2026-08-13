@@ -18,8 +18,10 @@ from urllib.parse import urljoin
 from agent_workbench.adapters.research.address_guard import (
     AddressResolver,
     DestinationRefusedError,
+    ProxyRouting,
     assert_public_destination,
     resolve_addresses,
+    routes_through_proxy,
 )
 
 #: How many hops a chain may take. Each hop is judged separately, so this bounds
@@ -86,6 +88,7 @@ async def _guarded_chain(
     url: str,
     *,
     resolve: AddressResolver,
+    proxied: ProxyRouting,
     max_redirects: int,
     open_hop: _OpenHop,
 ) -> AsyncGenerator[Any]:
@@ -100,7 +103,7 @@ async def _guarded_chain(
 
     current = url
     for _ in range(max_redirects + 1):
-        await assert_public_destination(current, resolve=resolve)
+        await assert_public_destination(current, resolve=resolve, proxied=proxied)
         async with open_hop(current) as response:
             status = int(getattr(response, "status_code", 200))
             location = redirect_target(response) if status in REDIRECT_STATUSES else ""
@@ -124,6 +127,7 @@ async def guarded_get(
     headers: dict[str, str],
     timeout: float,
     resolve: AddressResolver = resolve_addresses,
+    proxied: ProxyRouting = routes_through_proxy,
     max_redirects: int = MAX_REDIRECTS,
 ) -> Any:
     """GET ``url``, following redirects here rather than in the client.
@@ -148,7 +152,11 @@ async def guarded_get(
         )
 
     async with _guarded_chain(
-        url, resolve=resolve, max_redirects=max_redirects, open_hop=open_hop
+        url,
+        resolve=resolve,
+        proxied=proxied,
+        max_redirects=max_redirects,
+        open_hop=open_hop,
     ) as response:
         return response
 
@@ -160,6 +168,7 @@ def guarded_stream(
     headers: dict[str, str],
     timeout: float,
     resolve: AddressResolver = resolve_addresses,
+    proxied: ProxyRouting = routes_through_proxy,
     max_redirects: int = MAX_REDIRECTS,
 ) -> AbstractAsyncContextManager[Any]:
     """The same judged chain, with the final response's body still on the wire.
@@ -184,7 +193,11 @@ def guarded_stream(
         )
 
     return _guarded_chain(
-        url, resolve=resolve, max_redirects=max_redirects, open_hop=open_hop
+        url,
+        resolve=resolve,
+        proxied=proxied,
+        max_redirects=max_redirects,
+        open_hop=open_hop,
     )
 
 

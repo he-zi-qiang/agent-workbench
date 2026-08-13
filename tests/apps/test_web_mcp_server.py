@@ -250,8 +250,26 @@ async def _resolve(host: str) -> tuple[str, ...]:
     return _RESOLVED.get(host, (PUBLIC_ADDRESS,))
 
 
+def _this_process_resolves(url: str) -> bool:
+    """No forward proxy, so the guard resolves and judges the address.
+
+    Stated rather than inherited: behind a proxy the guard judges the *name*
+    and never asks the resolver, so the answers above would go unused and the
+    refusals below would pass on CI and fail on a machine that exports
+    ``HTTPS_PROXY`` -- the same machine these tests describe.
+    """
+
+    del url
+    return False
+
+
 def _fetcher(http: _StubHttp | None = None) -> WebFetcher:
-    return WebFetcher(http=http or _StubHttp(), timeout_seconds=5.0, resolve=_resolve)
+    return WebFetcher(
+        http=http or _StubHttp(),
+        timeout_seconds=5.0,
+        resolve=_resolve,
+        proxied=_this_process_resolves,
+    )
 
 
 def _call(fetcher: WebFetcher, name: str, arguments: dict[str, Any]) -> Any:
