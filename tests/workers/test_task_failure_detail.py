@@ -10,11 +10,13 @@ safe and says nothing: a transient network blip reached the console as
 
 from __future__ import annotations
 
+from agent_workbench.application.task_research import EvidenceUnavailableError
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.runs import AgentOutcome
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.workers.task import _failure_detail
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError
+from agent_workbench.workflows.task_handlers import TaskNodeRunFailedError
 
 STATE = TaskState(task_id="task_1", objective="Explain hybrid retrieval.")
 
@@ -97,3 +99,68 @@ def test_any_other_exception_keeps_reporting_only_its_type() -> None:
 
     assert detail == "the graph raised RuntimeError during start"
     assert "secret prompt fragment" not in detail
+
+
+def test_missing_evidence_says_which_way_it_was_missing() -> None:
+    """The three ways a Task loses its evidence must not read identically.
+
+    Each of these killed a real Task on 2026-08-13 and every one of them
+    reached the console as "the graph raised EvidenceUnavailableError during
+    start", which named the class and nothing a reader could act on.
+    """
+
+    details = [
+        _failure_detail(EvidenceUnavailableError(message), "start")
+        for message in (
+            "internal research requires a knowledge base",
+            "external search returned no evidence",
+            "external_search exceeded its 30s timeout",
+        )
+    ]
+
+    assert len(set(details)) == 3, "the three causes must not collapse into one"
+    assert "requires a knowledge base" in details[0]
+    assert "returned no evidence" in details[1]
+    assert "30s timeout" in details[2]
+    for detail in details:
+        assert "EvidenceUnavailableError" not in detail, "the class name is not a cause"
+
+
+def test_missing_evidence_still_names_the_action_it_died_during() -> None:
+    detail = _failure_detail(EvidenceUnavailableError("no evidence"), "resume")
+
+    assert "during resume" in detail
+
+
+def _run_failed_node() -> TaskNodeRunFailedError:
+    """The shape that killed a real Task once external_search stopped timing out.
+
+    The research node looped on pages that all redirected to the same place
+    until it ran out of tokens. `budget_exceeded` was recorded on the run; the
+    console showed only `TaskNodeRunFailedError`.
+    """
+
+    return TaskNodeRunFailedError(
+        node="research_external",
+        outcome=AgentOutcome(
+            agent_run_id="run_1",
+            status="failed",
+            stop_reason="token_budget",
+            error=ErrorInfo(
+                code="budget_exceeded",
+                message="the run passed its ceiling: token_budget",
+                retryable=False,
+            ),
+        ),
+        state=STATE,
+        reason="token budget exhausted",
+    )
+
+
+def test_a_structured_node_failure_reports_its_code_not_its_class() -> None:
+    detail = _failure_detail(_run_failed_node(), "start")
+
+    assert "budget_exceeded" in detail
+    assert "research_external" in detail
+    assert "not retryable" in detail
+    assert "TaskNodeRunFailedError" not in detail

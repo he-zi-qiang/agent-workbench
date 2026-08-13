@@ -419,6 +419,9 @@ class AgentRuntimeConfig:
     # ADR-019. Projected rather than read from settings inside the runtime,
     # because the runtime is framework-neutral and does not import settings.
     record_step_inputs: bool = False
+    #: Deployment-wide ceiling on one tool call, or None for "only what each
+    #: tool declares". May shorten a call, never lengthen it.
+    tool_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -761,6 +764,11 @@ def project_task_worker(
             model_timeout_seconds=float(settings.runtime.model_timeout_seconds),
             max_parallel_read_tools=settings.runtime.max_parallel_read_tools,
             record_step_inputs=settings.runtime.record_step_inputs,
+            tool_timeout_seconds=(
+                None
+                if settings.runtime.tool_timeout_seconds is None
+                else float(settings.runtime.tool_timeout_seconds)
+            ),
         ),
         multi_agent=MultiAgentConfig(
             static_agent_node_limit=settings.multi_agent.static_agent_node_limit,

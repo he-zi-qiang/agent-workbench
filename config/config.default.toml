@@ -180,7 +180,15 @@ max_tool_calls = 32
 max_parallel_read_tools = 4
 max_parallel_write_tools = 1
 model_timeout_seconds = 120
-tool_timeout_seconds = 60
+# A deployment-wide ceiling on any single tool call. Unset, and each tool is
+# bound only by the timeout it declares for itself, which is the sizing that
+# knows what the tool does: `sandbox` asks for 300 and `web_search` for 120.
+# Setting this can only shorten a call, never lengthen one, so it is not the
+# way to give a tool more time -- raise that tool's own declared timeout.
+# It read 60 until 2026-08-13 and no code consumed it, so setting it did
+# nothing; leaving it unset keeps that behaviour rather than newly cutting
+# every long tool down to a number nobody had been running against.
+# tool_timeout_seconds = 60
 cancellation_poll_seconds = 1
 context_soft_limit_ratio = 0.75
 tool_result_artifact_threshold_bytes = 65536

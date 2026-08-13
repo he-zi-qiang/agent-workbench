@@ -118,3 +118,46 @@ def test_a_tool_is_bounded_by_its_own_timeout_when_the_run_has_room() -> None:
 def test_a_tool_cannot_outlive_the_run_that_authorized_it() -> None:
     assert effective_tool_timeout(3600, run_budget_seconds=10) == 10
     assert effective_tool_timeout(30, run_budget_seconds=-2) == -2
+
+
+def test_an_unset_deployment_ceiling_leaves_the_tools_own_timeout_alone() -> None:
+    """The shipped default. `sandbox` asks for 300 and still gets 300."""
+
+    assert (
+        effective_tool_timeout(
+            300, run_budget_seconds=None, deployment_ceiling_seconds=None
+        )
+        == 300
+    )
+
+
+def test_a_deployment_ceiling_shortens_a_tool_that_asked_for_longer() -> None:
+    assert (
+        effective_tool_timeout(
+            90, run_budget_seconds=None, deployment_ceiling_seconds=60
+        )
+        == 60
+    )
+
+
+def test_a_deployment_ceiling_cannot_lengthen_a_tool() -> None:
+    """Raising the operator's ceiling is not a way to fix a short tool.
+
+    The tool's own declaration is the sizing that knows what the tool does, so
+    a ceiling above it changes nothing -- which is what makes "raise the tool's
+    timeout" the only fix for a tool killed below the work it has to do.
+    """
+
+    assert (
+        effective_tool_timeout(
+            30, run_budget_seconds=None, deployment_ceiling_seconds=600
+        )
+        == 30
+    )
+
+
+def test_the_shortest_of_the_three_bounds_wins() -> None:
+    assert (
+        effective_tool_timeout(90, run_budget_seconds=45, deployment_ceiling_seconds=60)
+        == 45
+    )

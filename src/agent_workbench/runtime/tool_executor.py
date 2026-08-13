@@ -9,9 +9,11 @@ The timeout lives here rather than in the loop above it. A serial loop has no
 other way to survive a handler that never returns: budgets bound how much a run
 may spend, not how long a single await may block.
 
-Two limits apply: the tool's own declared timeout and whatever is left of the
-run's deadline. The shorter wins, because a tool allowed an hour inside a run
-with ten seconds left would outlive the run that authorized it.
+Three limits apply: the tool's own declared timeout, whatever is left of the
+run's deadline, and the deployment's optional ceiling on any one tool call. The
+shortest wins, because a tool allowed an hour inside a run with ten seconds left
+would outlive the run that authorized it. Only the first can be raised to give a
+tool more time -- the other two may shorten a call and never lengthen it.
 
 What is deliberately missing is argument validation against the tool schema and
 the hook that may rewrite those arguments. Both belong to the tool gateway, and
@@ -36,12 +38,20 @@ from agent_workbench.runtime.budgets import effective_tool_timeout
 class ToolExecutor:
     """Executes one already-authorized call under its declared timeout."""
 
-    __slots__ = ("_monotonic",)
+    __slots__ = ("_deployment_ceiling_seconds", "_monotonic")
 
-    def __init__(self, *, monotonic: Callable[[], float] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        monotonic: Callable[[], float] | None = None,
+        deployment_ceiling_seconds: float | None = None,
+    ) -> None:
         # Injected so a demo or a golden test can produce stable durations;
         # production reads the real monotonic clock.
         self._monotonic = monotonic if monotonic is not None else perf_counter
+        # `runtime.tool_timeout_seconds`, normally unset. See
+        # `effective_tool_timeout`: it may only shorten a call, never lengthen.
+        self._deployment_ceiling_seconds = deployment_ceiling_seconds
 
     async def execute(
         self,
@@ -55,6 +65,7 @@ class ToolExecutor:
         limit = effective_tool_timeout(
             binding.spec.timeout_seconds,
             run_budget_seconds=run_budget_seconds,
+            deployment_ceiling_seconds=self._deployment_ceiling_seconds,
         )
         invocation = ToolInvocation(
             call=call,
@@ -109,11 +120,18 @@ class ToolExecutor:
         limit: float,
         binding: ToolBinding,
     ) -> ErrorInfo:
-        bound = (
-            f"its {limit:g}s timeout"
-            if limit >= binding.spec.timeout_seconds
-            else f"the run's remaining {limit:g}s"
-        )
+        # Name the bound that actually cut the call. Three can, and reporting
+        # the wrong one sends the reader to raise a number that was never the
+        # constraint.
+        if limit >= binding.spec.timeout_seconds:
+            bound = f"its {limit:g}s timeout"
+        elif (
+            self._deployment_ceiling_seconds is not None
+            and limit >= self._deployment_ceiling_seconds
+        ):
+            bound = f"this deployment's {limit:g}s tool ceiling"
+        else:
+            bound = f"the run's remaining {limit:g}s"
         return ErrorInfo(
             code="tool_timeout",
             message=f"{call.tool_name} exceeded {bound}",

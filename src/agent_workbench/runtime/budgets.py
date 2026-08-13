@@ -100,17 +100,31 @@ def effective_tool_timeout(
     spec_timeout_seconds: int,
     *,
     run_budget_seconds: float | None,
+    deployment_ceiling_seconds: float | None = None,
 ) -> float:
     """Bound one tool call by its own timeout and by the run's remaining time.
 
     An outer deadline has to constrain inner work; a tool allowed an hour
     inside a run with ten seconds left would outlive the run that authorized
     it.
+
+    ``deployment_ceiling_seconds`` is the operator's own bound on any single
+    tool call (``runtime.tool_timeout_seconds``), and is normally unset. It can
+    only ever shorten a call: a deployment may refuse to wait as long as a tool
+    asks, but may not grant one more time than the tool believes it needs, so
+    raising it is not a way to fix a tool whose declared timeout is too small.
     """
 
-    if run_budget_seconds is None:
-        return float(spec_timeout_seconds)
-    return min(float(spec_timeout_seconds), run_budget_seconds)
+    limits = [
+        float(limit)
+        for limit in (
+            spec_timeout_seconds,
+            run_budget_seconds,
+            deployment_ceiling_seconds,
+        )
+        if limit is not None
+    ]
+    return min(limits)
 
 
 __all__ = [

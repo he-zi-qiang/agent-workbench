@@ -449,7 +449,16 @@ class RuntimeSettings(StrictModel):
     max_parallel_read_tools: int = Field(default=4, ge=1, le=64)
     max_parallel_write_tools: Literal[1] = 1
     model_timeout_seconds: int = Field(default=120, ge=1, le=3600)
-    tool_timeout_seconds: int = Field(default=60, ge=1, le=3600)
+    # A deployment-wide ceiling on any single tool call, or None for "no ceiling
+    # beyond what each tool declares". Unset by default because tools size their
+    # own timeouts from the work they do, and those sizes are far apart:
+    # `sandbox` declares 300 and `web_search` 120, so any small shipped ceiling
+    # would silently cut the slowest tools off below what they need -- the exact
+    # failure this knob was wired up to make fixable. It used to read 60 and was
+    # consumed by nothing, so an operator who set it to lift a tool's timeout
+    # changed nothing at all; None preserves that behaviour as the default while
+    # making the value real when it is set.
+    tool_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
     cancellation_poll_seconds: int = Field(default=1, ge=1, le=30)
     context_soft_limit_ratio: float = Field(default=0.75, gt=0.0, lt=1.0)
     tool_result_artifact_threshold_bytes: int = Field(default=65_536, ge=1024)
