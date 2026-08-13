@@ -12,13 +12,16 @@ Two slices run, and they are the two that need no model provider:
 * a Task is submitted, claimed by the worker, run through the fixed LangGraph
   and settled, with its whole lifecycle readable from the event timeline.
 
-Chat is deliberately absent. Answering requires a provider, and a process
-without one refuses to start rather than serving a route that fails every call.
+Chat is not exercised. Whether it is *served* is a fact about the deployment
+answering, not about this script, so the closing note asks rather than asserts:
+the same run against `config.local.toml` and against the console profile ends
+with two different true sentences.
 
 Everything it reports is read back from the running system. Where it cannot
 confirm something -- an ingestion worker that is not running, a Task nobody
-claimed -- it says so and exits non-zero, because a walkthrough that printed
-"OK" for work nobody did would be worse than no walkthrough.
+claimed, a Task that settled with its tool calls refused -- it says so and exits
+non-zero, because a walkthrough that printed "OK" for work nobody did would be
+worse than no walkthrough.
 """
 
 from __future__ import annotations
@@ -52,8 +55,36 @@ Deletions are tombstoned and reconciled rather than removed in place.
 """
 
 
+#: What the browser console asks for, kept the same here on purpose -- see the
+#: list and its reasoning in `web/src/app/IdentityContext.tsx`. The envelope and
+#: the principal's scopes are two separate gates, so a tool inside the profile's
+#: envelope is still denied `missing_permission_scope` when the submitter holds
+#: no scope for it. This script sent none at all, which cost nothing against
+#: `config.local.toml` (whose envelope has no MCP tool) and everything against
+#: the console profile: one run there proposed `external_search`,
+#: `mcp_web_fetch_page`, `mcp_web_download_document` and `workspace_write` and
+#: had all seven calls denied, while still settling `succeeded` -- a walkthrough
+#: reporting a green Task whose every tool was refused.
+#:
+#: Holding a scope for a tool the deployment never registered costs nothing: the
+#: envelope is narrowed to what the Worker discovered (ADR-025), so an unused
+#: scope authorises no tool that exists. Identity here is self-declared and
+#: unvalidated by design (ADR-044 §1.1).
+CONSOLE_SCOPES: tuple[str, ...] = (
+    "artifact:export",
+    "external:search",
+    "workspace:write",
+    "mcp:web",
+    "mcp:word",
+)
+
+
 def _headers(args: argparse.Namespace) -> dict[str, str]:
-    return {"x-tenant-id": args.tenant_id, "x-principal-id": args.principal_id}
+    return {
+        "x-tenant-id": args.tenant_id,
+        "x-principal-id": args.principal_id,
+        "x-principal-scopes": ",".join(args.scopes),
+    }
 
 
 def _step(label: str) -> None:
@@ -136,6 +167,26 @@ def _await_indexing(args: argparse.Namespace, before: int | None) -> int | None:
     return before
 
 
+def _chat_is_served(client: httpx.Client) -> bool:
+    """Whether this deployment actually mounts the chat routes.
+
+    Asked rather than assumed. The closing note used to state flatly that the
+    API serves no chat route, which was true of the keyless profile this script
+    was written against and false of the console profile it is now also run
+    against -- so the walkthrough ended by describing a deployment it was not
+    talking to. Read off the served schema, which is the same surface any client
+    would see; a deployment that cannot be asked is reported as not serving it,
+    which is the conservative direction for a sentence claiming a capability.
+    """
+
+    try:
+        response = client.get("/openapi.json")
+        response.raise_for_status()
+    except httpx.HTTPError:
+        return False
+    return "/v1/chat/sessions" in response.json().get("paths", {})
+
+
 def _await_task(
     client: httpx.Client, args: argparse.Namespace, task_id: str
 ) -> dict[str, Any]:
@@ -164,6 +215,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tenant-id", default="tenant_local")
     parser.add_argument("--principal-id", default="user_local")
     parser.add_argument("--knowledge-base-id", default="kb_local")
+    parser.add_argument(
+        "--scopes",
+        default=",".join(CONSOLE_SCOPES),
+        type=lambda raw: tuple(part for part in raw.split(",") if part),
+        help="comma-separated principal scopes; defaults to what the console asks for",
+    )
     args = parser.parse_args(argv)
 
     client = httpx.Client(base_url=args.api_url, timeout=30.0)
@@ -236,13 +293,37 @@ def main(argv: list[str] | None = None) -> int:
         timeline.raise_for_status()
         kinds = [event["event_type"] for event in timeline.json()["events"]]
         _fact("timeline", " -> ".join(kinds))
+        # A settled Task is not a working one. `succeeded` is about the graph
+        # reaching its end, and a run whose every tool call was refused reaches
+        # it too -- by writing an answer out of the model's own memory. That is
+        # the one thing this walkthrough exists to not print a green line for,
+        # and it is what it printed before the scopes above were sent.
+        refused = kinds.count("ToolFailed")
+        if refused:
+            _fact("tool calls that failed", refused)
+            return _fail(
+                f"the Task settled {task.get('status')!r} with {refused} failed "
+                "tool calls",
+                "read the timeline's ToolFailed errors; `missing_permission_scope` "
+                "means --scopes is narrower than this profile's envelope",
+            )
+
+        chat_served = _chat_is_served(client)
 
     print("\n\033[32mall three slices ran\033[0m", flush=True)
-    print(
-        "  not covered here: chat and generation. This deployment has no model\n"
-        "  provider, so the API serves no chat route at all.\n",
-        flush=True,
-    )
+    if chat_served:
+        print(
+            "  not exercised here: chat and generation. This deployment does\n"
+            "  serve them -- ask it something from /ui, or POST a message to\n"
+            "  /v1/chat/sessions.\n",
+            flush=True,
+        )
+    else:
+        print(
+            "  not covered here: chat and generation. This deployment has no\n"
+            "  model provider, so the API serves no chat route at all.\n",
+            flush=True,
+        )
     return 0
 
 
