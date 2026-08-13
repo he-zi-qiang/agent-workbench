@@ -807,6 +807,61 @@ describe("WorkPage task submission", () => {
     );
   });
 
+  it("does not ask for a layout no browser of this kind can paint", async () => {
+    // A browser without a PDF viewer leaves the frame showing its own empty
+    // backdrop -- a flat dark rectangle, no error, no event. Reported as a
+    // black panel over a Word document that had rendered perfectly well, which
+    // reads as a broken deliverable rather than as a missing viewer.
+    // Defined rather than spied on: jsdom's navigator does not carry this
+    // property at all, which is also why every other test in this file runs
+    // through the "absent, so try the frame" branch -- they are the control
+    // for this one.
+    Object.defineProperty(navigator, "pdfViewerEnabled", {
+      configurable: true,
+      get: () => false,
+    });
+    try {
+      vi.mocked(getTask).mockResolvedValue({
+        task_id: "task_run",
+        status: "succeeded",
+        status_detail: null,
+        agent_invocation_count: 0,
+        objective_preview: "写一份季度报告",
+        created_at: "2026-08-02T12:00:00Z",
+        updated_at: "2026-08-02T12:01:00Z",
+      });
+      vi.mocked(getTaskTimeline).mockResolvedValue(docxTimeline());
+      vi.mocked(getDocumentPreview).mockResolvedValue(documentPreview());
+      vi.mocked(getDocumentPdf).mockResolvedValue({
+        available: true,
+        blob: new Blob(["%PDF-1.7"], { type: "application/pdf" }),
+      });
+      renderWorkPage("/work/task_run");
+
+      const output = await screen.findByRole("region", { name: "任务产出" });
+      expect(
+        await within(output).findByText(/这个浏览器不显示内嵌 PDF/),
+      ).toBeInTheDocument();
+      // The frame is the whole failure mode, so its absence is the assertion.
+      expect(within(output).queryByTitle("版面预览")).not.toBeInTheDocument();
+      // Not a fault: the document converted, the text is intact, the file
+      // downloads unchanged. Only this browser cannot show one of the views.
+      expect(within(output).queryByRole("alert")).not.toBeInTheDocument();
+      expect(within(output).getByText("这一段来自文档。")).toBeInTheDocument();
+      expect(
+        within(output).getByRole("button", { name: /^下载/ }),
+      ).toBeInTheDocument();
+      expect(
+        within(output).getByRole("button", { name: "版面" }),
+      ).toBeDisabled();
+      // And the conversion is never requested. The server would have started an
+      // external converter for a frame that shows nobody anything.
+      expect(vi.mocked(getDocumentPdf)).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(navigator, "pdfViewerEnabled");
+    }
+  });
+
   it("counts what the text preview dropped, one line per kind", async () => {
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
