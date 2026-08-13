@@ -22,10 +22,11 @@ what the model sees by finishing one tool sooner than another.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from agent_workbench.domain.errors import (
     AgentWorkbenchError,
@@ -173,6 +174,12 @@ class _RunLedger:
     messages: list[Message]
     usage: BudgetUsage = field(default_factory=BudgetUsage)
     answer: str = ""
+    #: How many times each (tool, arguments) pair has been proposed in this run.
+    #: Keyed by content rather than by ``tool_call_id``, which is fresh every
+    #: turn and so cannot see a model asking the same question twice.
+    call_counts: dict[str, int] = field(default_factory=dict[str, int])
+    #: How many calls this run has had refused for repeating themselves.
+    repeat_refusals: int = 0
 
 
 @runtime_checkable
@@ -208,6 +215,33 @@ def _repeated_call_ids(calls: Sequence[ToolCall]) -> tuple[str, ...]:
             repeated.append(call.tool_call_id)
         seen.add(call.tool_call_id)
     return tuple(repeated)
+
+
+#: How many times one (tool, arguments) pair may be *dispatched* in a run.
+#:
+#: Not 1. Asking a tool the same question twice is ordinary -- a document read
+#: again after a write, a workspace listed before and after -- and this runtime
+#: has always allowed it, both across turns and twice within one. What is not
+#: ordinary is a run that asks a fourth time: the observed loop fetched one URL
+#: eight times and another six, so the bar sits above re-reading and well below
+#: the pathology it exists to cut.
+MAX_IDENTICAL_CALLS: Final[int] = 3
+
+#: How many times a run may be told it is repeating itself before the run is
+#: stopped. A model that asks once more after being told has misread the answer;
+#: one that asks a third time is not going to stop on its own.
+MAX_REPEAT_REFUSALS: Final[int] = 2
+
+
+def _call_signature(call: ToolCall) -> str:
+    """Identify a call by what it asks, not by the id it was asked under.
+
+    Arguments are serialized with sorted keys so that two calls a model wrote
+    in a different key order are recognised as the one question they are.
+    """
+
+    arguments = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
+    return f"{call.tool_name}\x00{arguments}"
 
 
 class ClaudeLikeAgentRuntime:
@@ -796,8 +830,41 @@ class ClaudeLikeAgentRuntime:
                 )
             )
 
-        prepared: list[PreparedCall] = []
+        # A call the run has already made is refused before it is prepared, for
+        # the same reason a repeated id is: nothing downstream can tell the two
+        # apart, and running it again spends budget to re-learn what the run
+        # already knows. Measured on a research node that fetched one URL eight
+        # times because every sub-page redirected to the same place -- it read
+        # the identical text each time, emitted the identical sentence about it,
+        # and died on the token ceiling with the answer it needed already in
+        # context.
+        repeatable: list[ToolCall] = []
         for call in admitted:
+            signature = _call_signature(call)
+            seen_before = ledger.call_counts.get(signature, 0)
+            ledger.call_counts[signature] = seen_before + 1
+            if seen_before >= MAX_IDENTICAL_CALLS:
+                ledger.repeat_refusals += 1
+                results.append(
+                    await self._gateway.refuse(
+                        call,
+                        ErrorInfo(
+                            code="invalid_tool_input",
+                            message=(
+                                f"{call.tool_name} was already called with these "
+                                "arguments in this run and returned its answer "
+                                "then. Use that result, or call it with "
+                                "different arguments."
+                            ),
+                        ),
+                        sink=sink,
+                    )
+                )
+                continue
+            repeatable.append(call)
+
+        prepared: list[PreparedCall] = []
+        for call in repeatable:
             outcome = await self._gateway.prepare(
                 call,
                 context=context,
@@ -869,6 +936,28 @@ class ClaudeLikeAgentRuntime:
         # ceiling was reached must not itself consume the ceiling, or the
         # ledger would report spending more than the budget allowed.
         ledger.usage = ledger.usage.merged(BudgetUsage(tool_calls=len(admitted)))
+
+        if ledger.repeat_refusals > MAX_REPEAT_REFUSALS:
+            # The refusals above are written into the messages first, so the run
+            # ends holding the record of what it was told and how often. Ending
+            # here rather than letting the token ceiling do it turns a run that
+            # burned its whole budget re-reading one page into one that stops
+            # with its evidence, and says why.
+            return await self._failed(
+                request,
+                sink,
+                machine,
+                "error",
+                ErrorInfo(
+                    code="tool_failed",
+                    message=(
+                        "the run kept proposing calls it had already made: "
+                        f"{ledger.repeat_refusals} were refused as repeats"
+                    ),
+                ),
+                ledger,
+            )
+        return None
 
     async def _run_group(
         self,
