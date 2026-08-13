@@ -153,6 +153,20 @@ async def _resolves_into_a_fake_ip_range(host: str) -> tuple[str, ...]:
     return _RESOLVED.get(host, (PUBLIC_ADDRESS,))
 
 
+def _this_process_resolves(url: str) -> bool:
+    """No forward proxy, so the guard resolves and judges the address.
+
+    Stated rather than inherited from the environment. The guard only consults
+    a resolver when this process is the one opening the connection; behind a
+    proxy it judges the name instead and the injected answers above are never
+    asked for. A suite that left this to ``HTTPS_PROXY`` would test the address
+    rule on CI and the name rule on the developer machine that reported the bug.
+    """
+
+    del url
+    return False
+
+
 def _run(
     *responses: _FakeResponse,
     limit: int = 5,
@@ -166,6 +180,7 @@ def _run(
         api_key="sk-test",
         model="deepseek-chat",
         resolve_addresses=resolve,
+        routes_through_proxy=_this_process_resolves,
     )
     hits = asyncio.run(
         adapter.search(
@@ -194,7 +209,11 @@ def _run_unreadable(
 
     http = _FakeHttp(*responses, pages=pages, default_page=default_page)
     adapter = DeepSeekWebSearch(
-        http=http, api_key="sk-test", model="deepseek-chat", resolve_addresses=resolve
+        http=http,
+        api_key="sk-test",
+        model="deepseek-chat",
+        resolve_addresses=resolve,
+        routes_through_proxy=_this_process_resolves,
     )
     with pytest.raises(SourcesUnreadableError) as raised:
         asyncio.run(

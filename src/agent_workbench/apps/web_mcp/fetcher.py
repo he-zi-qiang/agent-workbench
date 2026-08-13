@@ -23,7 +23,9 @@ from typing import Any, Final
 from agent_workbench.adapters.research.address_guard import (
     AddressResolver,
     DestinationRefusedError,
+    ProxyRouting,
     resolve_addresses,
+    routes_through_proxy,
 )
 from agent_workbench.adapters.research.guarded_fetch import (
     GuardedStreamClient,
@@ -113,6 +115,10 @@ class WebFetcher:
     http: GuardedStreamClient
     timeout_seconds: float = 20.0
     resolve: AddressResolver = resolve_addresses
+    #: Injected beside ``resolve`` because they are one decision: behind a
+    #: forward proxy the resolver is never consulted, so a test that pins only
+    #: the answers pins nothing on a machine that exports ``HTTPS_PROXY``.
+    proxied: ProxyRouting = routes_through_proxy
 
     async def fetch_page(self, request: FetchPageRequest) -> str:
         async with self._open(request.url, _PAGE_HEADERS) as response:
@@ -157,6 +163,7 @@ class WebFetcher:
                 headers=headers,
                 timeout=self.timeout_seconds,
                 resolve=self.resolve,
+                proxied=self.proxied,
             ) as response:
                 status = int(getattr(response, "status_code", 200))
                 if status >= 400:

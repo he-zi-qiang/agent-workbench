@@ -46,7 +46,9 @@ from typing import Any, Final, Protocol, cast
 from agent_workbench.adapters.research.address_guard import (
     AddressResolver,
     DestinationRefusedError,
+    ProxyRouting,
     resolve_addresses,
+    routes_through_proxy,
 )
 from agent_workbench.adapters.research.guarded_fetch import guarded_get
 from agent_workbench.adapters.research.page_text import page_text
@@ -225,6 +227,11 @@ class DeepSeekWebSearch:
     #: same reason ``http`` is: a test that had to reach a real DNS to prove a
     #: refusal would fail offline for reasons unrelated to what it checks.
     resolve_addresses: AddressResolver = resolve_addresses
+    #: Whether the guard resolves at all, which is false behind a forward proxy.
+    #: Injected beside the resolver because the two are one decision: a test that
+    #: pins the answers but not the branch pins nothing on a machine that
+    #: exports ``HTTPS_PROXY``, since the resolver is then never asked.
+    routes_through_proxy: ProxyRouting = routes_through_proxy
 
     async def search(
         self,
@@ -365,6 +372,7 @@ class DeepSeekWebSearch:
             headers=_FETCH_HEADERS,
             timeout=self.fetch_timeout_seconds,
             resolve=self.resolve_addresses,
+            proxied=self.routes_through_proxy,
         )
 
     async def _post(
