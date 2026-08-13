@@ -768,18 +768,107 @@ def test_a_json_object_the_model_only_described_never_becomes_evidence() -> None
     _run(scenario)
 
 
-def test_a_run_that_did_not_complete_is_not_asked_to_restate() -> None:
-    """The truncation mode ADR-032 §4 documented stays a failure.
+@dataclass
+class _CancelledExecutor:
+    """A run the operator stopped, which is not a run that failed."""
 
-    A run that stopped at its token ceiling holds half a JSON object. Asking it
-    to restate would buy a second full run for an answer that was never
-    finished, so the incomplete run fails the node before any of this applies.
+    runs: int = 0
+
+    async def run(
+        self,
+        request: AgentRunRequest,
+        emit: object,
+        cancellation: CancellationToken,
+    ) -> AgentOutcome:
+        del emit, cancellation
+        self.runs += 1
+        return AgentOutcome(
+            agent_run_id=request.trace.agent_run_id,
+            status="cancelled",
+            stop_reason="cancelled",
+            usage=BudgetUsage(steps=1),
+        )
+
+
+def test_a_halted_outward_run_leaves_the_search_half_standing() -> None:
+    """ADR-032 §3.1 says this catalog is additive. It has to hold when it fails.
+
+    The run that reads pages is the run that spends: it is the one that reaches
+    a token ceiling, that a redirect loop makes repeat itself, that a dropped
+    connection lands on. While a halt here failed the node, registering research
+    tools could only ever *subtract* -- the same Task with no catalog finished,
+    and this one died holding the evidence its search half had already saved.
+    """
+
+    async def scenario() -> tuple[EvidenceStore, _TruncatedExecutor, Mapping[str, Any]]:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _TruncatedExecutor()
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=cast(Any, executor),
+            catalog=("mcp_web_fetch_page",),
+        )
+        return evidence, executor, await handlers["research_external"](_state())
+
+    evidence, executor, update = _run(scenario)
+
+    # Not asked to restate: a run that never finished has no answer to restate,
+    # and buying a second full run for one is the spend this avoids.
+    assert executor.runs == 1
+    # What the search half found is still the node's contribution.
+    assert len(update["evidence_refs"]) == 1
+    # And still charged for -- degraded, not free.
+    assert len(update["agent_outcome_refs"]) == 1
+    assert update["budget_usage"]["steps"] == 1
+
+    bundles = _run(lambda: _load_external(evidence, update["evidence_refs"]))
+    items = [item for bundle in bundles for item in bundle.items]
+    assert [item.url for item in items] == ["https://example.test/evidence"]
+    # The half-object the truncated run was holding named a page. Nothing reads
+    # an answer out of a message that was never finished (ADR-032 §3.2).
+    assert all(item.url != "https://example.test/q3" for item in items)
+
+
+def test_a_halted_run_still_fails_a_node_whose_output_is_the_node() -> None:
+    """The control. Only a node allowed to contribute nothing may degrade.
+
+    Same executor, same halt, different node: `plan` owes the graph its plan, so
+    there is no state in which it read nothing and the graph goes on. A fix that
+    had loosened the shared decoder rather than one call site would fail here.
     """
 
     async def scenario() -> _TruncatedExecutor:
         evidence = EvidenceStore(InMemoryArtifactStore())
         external = _External(evidence)
         executor = _TruncatedExecutor()
+        handlers = _read_outward_handlers(
+            evidence=evidence,
+            external=external,
+            executor=cast(Any, executor),
+            catalog=("mcp_web_fetch_page",),
+        )
+        with pytest.raises(TaskNodeRunFailedError, match="did not complete"):
+            await handlers["plan"](_state())
+        return executor
+
+    executor = _run(scenario)
+
+    assert executor.runs == 1
+
+
+def test_a_cancelled_outward_run_still_stops_the_task() -> None:
+    """The other control. Stopped is not the same as failed.
+
+    A Task the operator cancelled must not go on to write its report because
+    the node it was cancelled in is one that tolerates an empty answer.
+    """
+
+    async def scenario() -> _CancelledExecutor:
+        evidence = EvidenceStore(InMemoryArtifactStore())
+        external = _External(evidence)
+        executor = _CancelledExecutor()
         handlers = _read_outward_handlers(
             evidence=evidence,
             external=external,
