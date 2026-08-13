@@ -15,6 +15,9 @@
 #   scripts/dev.sh web-check    # health + tools/list probe
 #   scripts/dev.sh web-api      # API with explicit web MCP profile
 #   scripts/dev.sh web-worker   # real Worker; requires a model provider key
+#   scripts/dev.sh demo-check   # probe both MCP servers at once
+#   scripts/dev.sh demo-api     # API with Word *and* web: the console profile
+#   scripts/dev.sh demo-worker  # real Worker for that profile; needs both servers
 #   scripts/dev.sh smoke        # drive the whole thing and print what happened
 #
 # This is the one place that knows the local environment. The three DSNs live
@@ -22,10 +25,16 @@
 # strings in configuration files -- one is a credential even when today's has no
 # password. Ordinary commands use config/config.local.toml; the explicit
 # word-api/word-worker pair uses config/config.word-local.toml, and the
-# web-api/web-worker pair uses config/config.web-local.toml. The two profiles
+# web-api/web-worker pair uses config/config.web-local.toml. Those two profiles
 # are separate files rather than one: each freezes its own tool names into
-# every newly submitted Task envelope, so a single combined profile would
-# widen every Task by both.
+# every newly submitted Task envelope, so a combined profile widens every Task
+# by both.
+#
+# demo-api/demo-worker is that combined profile, declared openly as
+# config/config.demo-local.toml rather than smuggled into one of the narrow
+# ones. It is what the console runs: a person typing "写一份 Word 报告" into Work
+# is not choosing a profile, and on the web profile that Task has no renderer in
+# its envelope at all.
 #
 # Whether chat runs depends on one thing: AW_SECRETS__DEEPSEEK_API_KEY. With it,
 # the API serves chat and the Task worker runs the real model-calling graph.
@@ -60,7 +69,7 @@ TENANT="${TENANT:-tenant_local}"
 PRINCIPAL="${PRINCIPAL:-user_local}"
 API_URL="${API_URL:-http://127.0.0.1:8000}"
 
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Whether every host port a container publishes is bound to loopback.
 #
@@ -250,6 +259,58 @@ web-worker)
     --expect-tool fetch_page \
     --expect-tool download_document >&2
   echo "web profile + model provider configured: real graph" >&2
+  exec "$PYTHON" -m agent_workbench.apps.task_worker.main
+  ;;
+
+demo-check)
+  # Both, in one command, because the console profile is only whole with both.
+  # Sequential rather than parallel: the point is to say *which* one is missing,
+  # and `set -e` stops at the first failure with that server's own message.
+  "$PYTHON" scripts/smoke_mcp_server.py \
+    --label word \
+    --endpoint "http://127.0.0.1:8765/mcp" \
+    --health-url "http://127.0.0.1:8765/health" \
+    --expect-tool render_document
+  exec "$PYTHON" scripts/smoke_mcp_server.py \
+    --label web \
+    --endpoint "http://127.0.0.1:8767/mcp" \
+    --health-url "http://127.0.0.1:8767/health" \
+    --expect-tool fetch_page \
+    --expect-tool download_document
+  ;;
+
+demo-api)
+  export AW_CONFIG_FILE=config/config.demo-local.toml
+  if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "console profile (Word + web); provider key available to Worker processes" >&2
+  else
+    echo "console profile, no provider key: API can submit but no real Worker can run" >&2
+  fi
+  shift
+  exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
+  ;;
+
+demo-worker)
+  export AW_CONFIG_FILE=config/config.demo-local.toml
+  if [ -z "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "demo-worker requires AW_SECRETS__DEEPSEEK_API_KEY; refusing a demo graph" >&2
+    exit 2
+  fi
+  # Both servers, before the Worker rather than after: MCP discovery happens
+  # once at startup and never hot-reloads, so a server started late leaves a
+  # Worker that is up, healthy, and missing the tool the whole profile is for.
+  "$PYTHON" scripts/smoke_mcp_server.py \
+    --label word \
+    --endpoint "http://127.0.0.1:8765/mcp" \
+    --health-url "http://127.0.0.1:8765/health" \
+    --expect-tool render_document >&2
+  "$PYTHON" scripts/smoke_mcp_server.py \
+    --label web \
+    --endpoint "http://127.0.0.1:8767/mcp" \
+    --health-url "http://127.0.0.1:8767/health" \
+    --expect-tool fetch_page \
+    --expect-tool download_document >&2
+  echo "console profile + model provider configured: real graph" >&2
   exec "$PYTHON" -m agent_workbench.apps.task_worker.main
   ;;
 

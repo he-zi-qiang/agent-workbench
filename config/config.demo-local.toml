@@ -1,0 +1,121 @@
+# The profile a single-machine console runs: everything this deployment can do,
+# in one process group.
+#
+# config.web-local.toml and config.word-local.toml each demonstrate *one*
+# capability, and stay separate from each other on purpose -- MCP tool names are
+# frozen into every newly submitted Task envelope, so a profile carrying both
+# widens every Task by both. That separation is right for the two walkthroughs
+# and wrong for the console, which is one application: a person who types
+# "写一份 Word 报告" into Work is not choosing a profile, and on the web profile
+# that Task has no renderer in its envelope. What it did instead is the reason
+# this file exists -- it wrote Markdown into a file called `report.docx`, and
+# the console showed a Word document that was not one (task_9bb8446a…,
+# 2026-08-12). `workspace_write` now refuses that name; this profile is what
+# gives the model the tool it should have reached for instead.
+#
+# So this is the union, declared once and openly, rather than the union arrived
+# at by editing one of the narrow profiles. Both of those still load, still
+# carry one server each, and the tests that pin them apart still pass.
+#
+# Like the others, one overlay over config.default.toml. The DSNs and the
+# provider key remain environment-only and are exported by scripts/dev.sh; no
+# credential belongs here.
+#
+# Two servers must already be running before this profile does anything:
+#
+#   scripts/dev.sh word-server    # 127.0.0.1:8765
+#   scripts/dev.sh web-server     # 127.0.0.1:8767
+#
+# `scripts/dev.sh demo-worker` probes both before starting, because a Worker
+# that comes up without them registers no MCP tool and says so only in a log
+# line nobody is watching.
+
+[app]
+environment = "development"
+deployment_scope = "local"
+log_level = "INFO"
+
+[model.main]
+model_id = "deepseek-chat"
+# The ordinary baseline may force one opening tool call, which is unsafe here
+# for the reason both narrow profiles give: a Task without the matching scope
+# would be forced to propose a tool it cannot use. The writer reaches for Word
+# when the objective asks for a document, and unrelated Work stays usable.
+tool_calling_required = false
+
+[model.compact]
+model_id = "deepseek-chat"
+
+[qdrant]
+url = "http://localhost:6333"
+allow_local_bootstrap = true
+
+[runtime]
+record_step_inputs = true
+# From config.word-local.toml, and load-bearing for the same reason: v2's `work`
+# node does the whole job in one invocation, and a document has a rendering
+# round trip in it. Measured there, a short report spent its steps on
+# list -> write -> render -> re-render after the reviewer's note and hit
+# `budget_exceeded: max_steps` at the shipped 12.
+max_steps = 40
+
+[triage]
+# On because this is the profile local acceptance runs against a real provider.
+# The deployment-level default stays off until evals/triage has an accuracy
+# report for the deployed model (ADR-036).
+enabled = true
+
+[rag.reranker]
+timeout_seconds = 120
+
+[event_stream]
+catchup_poll_seconds = 1
+
+[chat]
+routed_relevance_threshold = 0.01
+
+[workflow]
+# Off, the same as config.local.toml and config.word-local.toml, and for the
+# reason ADR-038 §1 gives: on one person's machine this gate asks the submitter
+# to authorise handing a file to themselves, and a confirmation everybody grants
+# unconditionally teaches nothing except to click through. ADR-038 §2.1 is what
+# permits a deployment to choose this; the shipped default stays `true`, and
+# changing *that* would need its own ADR (§4).
+export_requires_approval = false
+
+[multi_agent]
+# The correction both narrow profiles carry, needed here for both of their
+# reasons at once: this node reads pages *and* writes a document in one
+# invocation, against a *cumulative* per-invocation ceiling. The shipped 16000
+# ran out mid-answer on the web profile and before rendering anything on the
+# Word one, in both cases while every tool call had worked.
+max_tokens_per_agent_invocation = 120000
+
+[optional_labs]
+mcp_adapter = true
+
+[[mcp.servers]]
+alias = "word"
+transport = "http"
+endpoint = "http://127.0.0.1:8765/mcp"
+tools = ["render_document"]
+# Rendering has no durable remote mutation and never touches a caller path. A
+# graph-node replay may render another equivalent document to reconstruct the
+# ToolResult; byte-for-byte identity is not required by this declaration.
+retryable_effects = true
+timeout_seconds = 60
+
+[[mcp.servers]]
+alias = "web"
+transport = "http"
+endpoint = "http://127.0.0.1:8767/mcp"
+tools = ["fetch_page", "download_document"]
+# Both tools are GETs. Reading a page and downloading a file change nothing on
+# the other side, so a graph-node replay may make the same request again: it
+# gets whatever the URL says at that moment, which is a fresh read rather than a
+# second effect. This is the declaration ADR-025 §2.7 requires, not a hope.
+retryable_effects = true
+# Reading the outside world is research, so these go to `researcher_external`
+# and not to the writer (ADR-027 §3.3).
+audience = "research"
+timeout_seconds = 60

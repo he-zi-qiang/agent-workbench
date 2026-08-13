@@ -32,6 +32,28 @@ Word Server 必须先于 Worker 启动；Worker 只在启动时冻结一次工�
 排错步骤见[本地 Word MCP 指南](./word-mcp-local.md)，设计边界见
 [ADR-026](./adr/0026-word-docx-is-an-mcp-artifact.md)。
 
+## 控制台要的是两样都在：`config.demo-local.toml`
+
+上面两组命令各演示**一样**能力，两个 profile 也被测试钉着保持分离。但控制台是一个应用：
+在 Work 里敲“写一份 Word 报告”的人不是在选 profile，而 web profile 下这个 Task 的信封里
+根本没有渲染器——模型于是把 Markdown 写进一个叫 `report.docx` 的文件，控制台展示出一个
+并不是 Word 的“Word 文档”（`task_9bb8446a…`，2026-08-12）。
+
+所以并集单独声明成一份 profile，而不是偷偷塞进哪一个窄的：
+
+```bash
+scripts/dev.sh word-server   # 8765，先起
+scripts/dev.sh web-server    # 8767，先起
+scripts/dev.sh demo-check    # 一条命令探两个，缺哪个说哪个
+scripts/dev.sh demo-api      # Word + web 都在信封里
+scripts/dev.sh demo-worker   # 两个探针都过了才起 Worker
+```
+
+`demo-worker` 在启动 Worker **之前**依次探两个服务器：MCP 目录只在启动时冻结一次，晚起的
+服务器不会热更新，症状是一个健康、正常、却没有那把工具的 Worker。这份 profile 同时按
+[ADR-038](./adr/0038-the-export-gate-guards-a-list-not-a-boundary.md) §2.1 关掉导出审批
+（仓库默认仍是 `true`），并带上两处实测过的预算上限。
+
 ## 浏览器控制台
 
 React 控制台先做锁定构建，再由 API 在**同源**的 `/ui` 下提供 Chat / Work 主界面
