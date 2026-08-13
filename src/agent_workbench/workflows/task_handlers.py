@@ -626,6 +626,7 @@ def build_task_handlers(
         request_for: Callable[[TaskRunContext, tuple[Message, ...]], AgentRunRequest],
         decode: Callable[[str], T],
         reason: str,
+        halted: Callable[[], T] | None = None,
     ) -> tuple[T, dict[str, Any]]:
         """Run one structured node, and ask once for the object alone.
 
@@ -644,6 +645,16 @@ def build_task_handlers(
         resolves an invocation of its own: it is a second spend, and it must
         appear on the event stream under its own run id and re-verify this
         Worker's claim before making it.
+
+        `halted` is what a node hands back when its run *ended without
+        answering* (ADR-046 §3.2) -- stopped at a ceiling, cut off by the repeat
+        guard, dropped by the provider. That is a different question, and it
+        gets a different answer: there is no claim to misread, so nothing is
+        being rounded down. A node whose output is the node fails (`plan`,
+        `critic`, `review` pass nothing here and keep failing); a node that is
+        allowed to contribute nothing may say so. Only `status == "failed"`
+        qualifies -- a cancelled run still stops the graph, because a Task the
+        operator stopped must not quietly go on to write its report.
         """
 
         outcome = await executor.run(
@@ -652,6 +663,8 @@ def build_task_handlers(
             invocation.cancellation,
         )
         charged = _charged_state(state, outcome)
+        if halted is not None and outcome.status == "failed":
+            return halted(), _outcome_update(outcome)
         _require_completed(node, outcome, charged)
         try:
             return decode(outcome.output_text), _outcome_update(outcome)
@@ -682,6 +695,10 @@ def build_task_handlers(
             correction.cancellation,
         )
         charged = _charged_state(charged, restated)
+        if halted is not None and restated.status == "failed":
+            # Both runs, because both were charged for: the first one answered
+            # in a shape nobody could read, and the second one never finished.
+            return halted(), _outcome_update(outcome, restated)
         _require_completed(node, restated, charged)
         try:
             value = decode(restated.output_text)
@@ -784,6 +801,20 @@ def build_task_handlers(
         to the URLs it read, not the model's own prose stored as an artifact --
         `synthesize` loads `evidence_refs` as bundles and would refuse a
         Markdown artifact anyway.
+
+        Additive has to hold in the failing direction too (ADR-046), which is
+        what `halted` is doing here. This half reads pages the *search* half
+        already found, and its run is the one that spends: it fills a context
+        with page text, so it is the run that reaches a ceiling, that a redirect
+        loop makes repeat itself, that a dropped connection lands on. Letting
+        any of that fail the node made the catalog subtractive -- a Task with
+        evidence in hand died at the step after it had it, and the same Task
+        with no research tools registered would have finished. Reading nothing
+        further is a state the fan-in already has a name for.
+
+        Silent it is not: the run's own `RunFailed` is on the event stream with
+        its ceiling and its error, under this node's id, which is where a Task
+        that read less than it meant to is answerable for it.
         """
 
         bundle, update = await _decoded(
@@ -801,11 +832,12 @@ def build_task_handlers(
                 text, task_id=state.task_id
             ),
             reason="external researcher JSON did not satisfy the evidence schema",
+            halted=lambda: None,
         )
         if bundle is None:
-            # Read nothing it could stand behind. That is a real outcome of a
-            # research branch, not a failure: the fan-in is allowed to be empty
-            # and the run is still charged for above.
+            # Read nothing it could stand behind, or never got to say. That is a
+            # real outcome of a research branch, not a failure: the fan-in is
+            # allowed to be empty and the run is still charged for above.
             return update
         reference = await research.evidence.save(
             context=_research_context(state, invocation), bundle=bundle
