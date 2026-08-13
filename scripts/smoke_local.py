@@ -44,12 +44,12 @@ import httpx
 WORKER_TIMEOUT_SECONDS = 300.0
 POLL_SECONDS = 2.0
 
-SAMPLE = """Qdrant performs one dense and sparse fusion per query.
+SAMPLE = """The application performs one dense and sparse fusion per query.
 
-Reciprocal rank fusion runs inside the database rather than in the application,
-so both arms propose a full candidate set and the ranking is decided once. A
-retrieval that fused in two places would be two retrievers, and the one with
-less attention would be the one that drifted.
+Qdrant returns the dense and sparse candidate arms separately. The application
+orders each arm deterministically by score and chunk identifier, then performs
+reciprocal rank fusion once. A retrieval that fused in two places would be two
+retrievers, and the one with less attention would be the one that drifted.
 
 Deletions are tombstoned and reconciled rather than removed in place.
 """
@@ -140,6 +140,35 @@ def _upload(client: httpx.Client, args: argparse.Namespace) -> dict[str, Any]:
     )
     completed.raise_for_status()
     return {"document_id": document_id, **completed.json()}
+
+
+def _ensure_knowledge_base(
+    client: httpx.Client, args: argparse.Namespace
+) -> dict[str, Any]:
+    """Create the walkthrough KB when a fresh database does not have it yet."""
+
+    response = client.get(
+        f"/v1/knowledge-bases/{args.knowledge_base_id}", headers=_headers(args)
+    )
+    if response.status_code == 200:
+        return response.json()
+    if response.status_code != 404:
+        response.raise_for_status()
+
+    created = client.post(
+        "/v1/knowledge-bases",
+        headers=_headers(args),
+        json={
+            "name": "Local walkthrough",
+            "description": "Created idempotently by scripts/smoke_local.py.",
+        },
+    )
+    created.raise_for_status()
+    record = created.json()
+    # IDs are server-owned. Carry the returned identifier through the rest of
+    # this one walkthrough instead of asking a reader to edit and rerun it.
+    args.knowledge_base_id = record["knowledge_base_id"]
+    return record
 
 
 def _qdrant_points(url: str, collection: str) -> int | None:
@@ -234,6 +263,17 @@ def main(argv: list[str] | None = None) -> int:
                 "scripts/dev.sh api",
             )
         _fact("ready", ready.status_code)
+
+        _step("knowledge base")
+        try:
+            knowledge_base = _ensure_knowledge_base(client, args)
+        except httpx.HTTPStatusError as error:
+            return _fail(
+                f"knowledge-base setup failed: {error}",
+                "create a writable knowledge base and pass its id with "
+                "--knowledge-base-id",
+            )
+        _fact("knowledge_base_id", knowledge_base["knowledge_base_id"])
 
         _step("upload -> document version")
         try:
