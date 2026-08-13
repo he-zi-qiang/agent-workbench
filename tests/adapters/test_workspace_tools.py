@@ -222,9 +222,10 @@ def test_a_text_file_holding_no_nul_is_still_read_edited_and_searched() -> None:
         assert "Q3 revenue rose" in read.content
         assert "report.md" in found.content
         assert edited.status == "ok"
-        assert "Q4 revenue rose" in invoke(
-            WorkspaceReadTool(scope), name="report.md"
-        ).content
+        assert (
+            "Q4 revenue rose"
+            in invoke(WorkspaceReadTool(scope), name="report.md").content
+        )
 
 
 def test_reading_a_missing_name_is_a_failed_result_not_an_empty_one() -> None:
