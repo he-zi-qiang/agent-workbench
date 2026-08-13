@@ -399,6 +399,16 @@ describe("WorkPage task submission", () => {
     const step = screen.getAllByText(/工具调用已开始：external_search/)[0];
     expect(step).not.toBeVisible();
     await user.click(stage);
+
+    // Opening the stage shows the *step*: one line naming what the agent did,
+    // not the five lifecycle events it emitted doing it.
+    const folded = screen.getByText("搜索网络");
+    expect(folded).toBeVisible();
+
+    // And the events are still underneath it, one click further in. The fold
+    // decides what the line says; it never decides what may be seen.
+    expect(step).not.toBeVisible();
+    await user.click(folded);
     expect(step).toBeVisible();
 
     // The file is in the rail, named for what it is, without hunting for the

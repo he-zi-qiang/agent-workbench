@@ -1,6 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import type { ArtifactRef, EventEnvelope } from "../api/types";
 import { StepDisclosure } from "./StepDisclosure";
+import { groupSteps, type StepGroup, type StepOutcome } from "./stepGroups";
 
 /**
  * A run, as the stages it went through, each openable to its real steps.
@@ -37,6 +38,18 @@ export interface StreamMeta {
   events: EventEnvelope[];
 }
 
+/**
+ * Success is the unmarked case. A step that worked says nothing on its line --
+ * the reader is scanning for the one that did not, and a column of green ticks
+ * is what makes a single failure hard to find.
+ */
+const OUTCOME_LABELS: Readonly<Record<StepOutcome, string>> = {
+  ok: "",
+  failed: "失败",
+  denied: "被拒绝",
+  running: "进行中",
+};
+
 export function StepStream({
   ariaLabel,
   eventTitle,
@@ -71,10 +84,50 @@ export function StepStream({
     </li>
   );
 
+  /**
+   * One step as the reader names it, opening to the events it was folded from.
+   *
+   * A group holding a single event is rendered exactly as it always was: there
+   * is nothing to fold, and wrapping it would put a second caret in front of a
+   * row that already has one.
+   */
+  const groupStep = (group: StepGroup) => {
+    const only = group.events.length === 1 ? group.events[0] : undefined;
+    if (only !== undefined) return step(only);
+
+    return (
+      <li key={group.key}>
+        <details className={`aw-step-group is-${group.outcome}`}>
+          <summary className="aw-step-group-head">
+            <ChevronRight
+              aria-hidden="true"
+              className="aw-step-caret"
+              size={13}
+            />
+            <span className="aw-step-group-title">{group.title}</span>
+            {group.subject === null ? null : (
+              <span className="aw-step-group-subject" title={group.subject}>
+                {group.subject}
+              </span>
+            )}
+            <span className="aw-step-group-outcome">
+              {OUTCOME_LABELS[group.outcome]}
+            </span>
+          </summary>
+          <ol className="aw-stream-events">{group.events.map(step)}</ol>
+        </details>
+      </li>
+    );
+  };
+
+  const groupsOf = (events: EventEnvelope[]) => groupSteps(events);
+
   return (
     <section className="aw-stream" aria-label={ariaLabel}>
       <ol className="aw-stream-steps">
-        {stages.map((stage) => (
+        {stages.map((stage) => {
+          const groups = groupsOf(stage.events);
+          return (
           <li className={`is-${stage.state}`} key={stage.id}>
             <span className="aw-stream-dot" aria-hidden="true" />
             {stage.events.length === 0 ? (
@@ -97,16 +150,18 @@ export function StepStream({
                     size={13}
                   />
                   <span className="aw-stream-title">{stage.title}</span>
-                  <span className="aw-stream-count">
-                    {stage.events.length} 步
-                  </span>
+                  {/* The steps a reader would count, not the events they were
+                      folded from. "60 步" for a dozen page reads described the
+                      log's bookkeeping rather than the work. */}
+                  <span className="aw-stream-count">{groups.length} 步</span>
                   <span className="aw-stream-note">{stage.note}</span>
                 </summary>
-                <ol className="aw-stream-events">{stage.events.map(step)}</ol>
+                <ol className="aw-stream-events">{groups.map(groupStep)}</ol>
               </details>
             )}
           </li>
-        ))}
+          );
+        })}
       </ol>
       {meta === undefined || meta.events.length === 0 ? null : (
         <details className="aw-stream-meta">
@@ -115,6 +170,8 @@ export function StepStream({
             {meta.title}
             <span>{meta.events.length} 条</span>
           </summary>
+          {/* Counted as events, not steps: this block is the bookkeeping, and
+              a reader who opened it came for the rows themselves. */}
           <ol className="aw-stream-events">{meta.events.map(step)}</ol>
         </details>
       )}
