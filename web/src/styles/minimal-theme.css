@@ -400,6 +400,14 @@ select {
   background: var(--aw-panel-soft);
 }
 
+/* The pill has no border here, so the space inside it is the only thing
+   separating the id from the position that follows it -- a little more of it,
+   and one step quieter, so the chip still reads as one citation. */
+.aw-chat-citation-locator {
+  margin-left: 6px;
+  color: color-mix(in srgb, var(--aw-text-muted) 78%, transparent);
+}
+
 .aw-chat-composer {
   width: min(780px, calc(100% - 32px));
   padding-bottom: 18px;

@@ -5,8 +5,14 @@ import type {
   EventEnvelope,
   LocalChatSession,
   MessageView,
+  SourceLocator,
 } from "../../api/types";
-import type { SseFrame } from "../../api/sse";
+import {
+  isQuarantineFrame,
+  type SseChunkFrame,
+  type SseFrame,
+  type SseQuarantineFrame,
+} from "../../api/sse";
 
 export type ChatTurnPhase =
   | "submitting"
@@ -85,6 +91,15 @@ export interface ChatState {
   runToTurn: Record<string, string>;
   orphanEvents: Record<string, SafeRunEvent[]>;
   seenEventIds: Record<string, true>;
+  /**
+   * Positions the server said it examined and could not deliver, per session.
+   *
+   * Kept apart from `turns` and `orphanEvents` because there is nothing to
+   * apply: no payload, no run, no step. What it buys is that the transcript can
+   * stop reading as complete -- a history that is short by three positions and
+   * says so is a different artifact from one that is merely short.
+   */
+  quarantinedSequences: Record<string, number[]>;
   revision: number;
 }
 
@@ -149,6 +164,7 @@ export function initialChatState(localSessions: LocalChatSession[] = []): ChatSt
     runToTurn: {},
     orphanEvents: {},
     seenEventIds: {},
+    quarantinedSequences: {},
     revision: 0,
   };
 }
@@ -266,11 +282,22 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   }
 }
 
+/**
+ * One frame from the session stream, of either kind it can be.
+ *
+ * The union stops at this function. A quarantine notice is answered here and
+ * never reaches `safeEventFromFrame`, so nothing downstream -- no activity, no
+ * turn, no citation -- can be built out of a row nobody could decode. Widening
+ * the parameter was the price of showing the hole at all: this reducer is the
+ * only path from the stream into anything the page renders.
+ */
 export function reduceChatFrame(
   state: ChatState,
   sessionId: string,
-  frame: SseFrame,
+  frame: SseChunkFrame,
 ): FrameReduction {
+  if (isQuarantineFrame(frame)) return reduceQuarantine(state, sessionId, frame);
+
   const safe = safeEventFromFrame(sessionId, frame);
   if (safe === null) return { state, accepted: false, duplicate: false };
 
@@ -301,6 +328,44 @@ export function reduceChatFrame(
   if (turn === undefined) return { state: next, accepted: true, duplicate: false };
   next = replaceTurn(next, applySafeEvent(turn, safe));
   return { state: next, accepted: true, duplicate: false };
+}
+
+/**
+ * Remember a position, and stop there.
+ *
+ * The stream already steps over the row so a reconnect does not meet it again;
+ * this is the other half -- the page gets to say which position went missing
+ * instead of rendering a shorter history as if it were whole.
+ */
+function reduceQuarantine(
+  state: ChatState,
+  sessionId: string,
+  frame: SseQuarantineFrame,
+): FrameReduction {
+  const { sequence, stream_id: streamId } = frame.quarantined;
+  // Re-checked rather than taken from the caller, for the same reason every
+  // other frame is re-validated in this file: the reducer is the last place
+  // that can refuse, and a notice is the one frame that accounts for a
+  // position no event will ever fill.
+  if (streamId !== sessionId || !Number.isInteger(sequence) || sequence < 1) {
+    return { state, accepted: false, duplicate: false };
+  }
+
+  const current = state.quarantinedSequences[sessionId] ?? [];
+  // A replay re-announces holes already passed, the same as it re-sends events
+  // already applied. Counting one twice would inflate the only number this
+  // notice contributes.
+  if (current.includes(sequence)) return { state, accepted: true, duplicate: true };
+  return {
+    state: bump(state, {
+      quarantinedSequences: {
+        ...state.quarantinedSequences,
+        [sessionId]: [...current, sequence].sort((left, right) => left - right),
+      },
+    }),
+    accepted: true,
+    duplicate: false,
+  };
 }
 
 export function hasUnfinishedTurn(state: ChatState, sessionId: string): boolean {
@@ -762,15 +827,33 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
   if (kind === "RunCompleted") {
     return { ...base, key: `run:${envelope.run_id}`, label: "运行完成", state: "complete" };
   }
-  if (kind === "RunFailed" || kind === "RunCancelled" || kind === "ChatTurnExpired") {
+  if (kind === "RunFailed" || kind === "ChatTurnExpired") {
+    // Neither of these carries `reason_code`. `RunFailed` carries `error`, and
+    // `ChatTurnExpired` carries `error_code` (`domain/events.py`) -- only
+    // `RunCancelled` below has `reason_code`. Sharing that branch meant reading
+    // a field these events never have, so the line fell back to the raw event
+    // name: a reader was shown "RunFailed" and not one word about why.
+    // `errorSummary` reads both shapes; the code is a category and the message
+    // is the incident, which is why the message wins when there is one.
+    const summary = errorSummary(payload);
     return {
       ...base,
       key: `run:${envelope.run_id}`,
-      label: kind,
+      label: kind === "RunFailed" ? "运行失败" : "本轮已过期",
       state: "failed",
-      ...(stringField(payload, "reason_code") === null
-        ? {}
-        : { detail: stringField(payload, "reason_code") ?? "" }),
+      // Left absent when the server sent neither message nor code, so the
+      // turn's error line falls back to this label instead of an empty string.
+      ...(summary === null || summary === "" ? {} : { detail: summary }),
+    };
+  }
+  if (kind === "RunCancelled") {
+    const reason = stringField(payload, "reason_code");
+    return {
+      ...base,
+      key: `run:${envelope.run_id}`,
+      label: "运行已取消",
+      state: "failed",
+      ...(reason === null ? {} : { detail: reason }),
     };
   }
   return { ...base, key: envelope.event_id, label: kind, state: "info" };
@@ -929,6 +1012,31 @@ function errorSummary(payload: Record<string, unknown>): string | null {
   return collapsed.length <= 90 ? collapsed : `${collapsed.slice(0, 89)}…`;
 }
 
+/**
+ * The part of a locator that can actually reach the reader.
+ *
+ * Only `page` and `paragraph` are read. `char_start` / `char_end` exist on the
+ * domain model and are computed at ingestion, but the index stores a chunk's
+ * `ordinal` and `page` and nothing else (`ports/vector_index.py`), so they can
+ * never arrive on a citation -- parsing them would add a field that renders
+ * empty forever.
+ *
+ * Values outside the ranges the server itself enforces (`page >= 1`,
+ * `paragraph >= 0`) are dropped rather than shown. 第 0 页 is not a page a
+ * reader can turn to, and a locator that points nowhere is worse than a
+ * citation that admits it has no position.
+ */
+function sourceLocator(raw: Record<string, unknown>): SourceLocator {
+  const page = numberField(raw, "page");
+  const paragraph = numberField(raw, "paragraph");
+  return {
+    ...(page === null || !Number.isInteger(page) || page < 1 ? {} : { page }),
+    ...(paragraph === null || !Number.isInteger(paragraph) || paragraph < 0
+      ? {}
+      : { paragraph }),
+  };
+}
+
 function stringField(object: Record<string, unknown>, field: string): string | null {
   const value = object[field];
   return typeof value === "string" ? value : null;
@@ -962,12 +1070,12 @@ function citationsField(value: unknown): Citation[] | null {
     const documentId = stringField(item, "document_id");
     const version = stringField(item, "document_version");
     if (chunkId === null || documentId === null || version === null) return null;
-    const locator = objectField(item, "locator") ?? {};
+    const raw = objectField(item, "locator");
     citations.push({
       chunk_id: chunkId,
       document_id: documentId,
       document_version: version,
-      locator,
+      locator: raw === null ? {} : sourceLocator(raw),
       ...(typeof item.quote === "string" || item.quote === null
         ? { quote: item.quote }
         : {}),

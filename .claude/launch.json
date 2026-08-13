@@ -24,11 +24,13 @@
         "/Users/heziqiang/Documents/Codex/2026-07-15/new-chat/agent-workbench/.claude/run-web.sh"
       ],
       "port": 5173,
+      "autoPort": false,
       "url": "http://127.0.0.1:5173"
     },
     {
       "name": "agent-web-attach",
       "port": 5173,
+      "autoPort": false,
       "url": "http://127.0.0.1:5173"
     }
   ]

@@ -234,6 +234,21 @@ export function WorkPage() {
   useEffect(() => {
     if (isSettledStatus(selectedTaskStatus)) void refreshTimeline();
   }, [refreshTimeline, selectedTaskStatus]);
+
+  // And the same handshake in the other direction, because either side can be
+  // the one that finds out first. React Query pauses `refetchInterval` while
+  // the tab is hidden and the timeline's own `setInterval` does not, so a Task
+  // that finishes while the reader is in another tab leaves a settled timeline
+  // under a header still reading 排队中 -- the page contradicting itself, until
+  // a reload. Asking once, when the timeline says the Task is over, is enough:
+  // `taskQuery` stops polling on a settled status, so this cannot loop.
+  const timelineSettled = timeline.settled;
+  const refetchTask = taskQuery.refetch;
+  useEffect(() => {
+    if (timelineSettled && !isSettledStatus(selectedTaskStatus)) {
+      void refetchTask();
+    }
+  }, [refetchTask, selectedTaskStatus, timelineSettled]);
   const taskInputRef = useMemo(
     () => findTaskInputRef(timeline.events),
     [timeline.events],
@@ -693,7 +708,7 @@ export function WorkPage() {
             <span>
               {attachments.readOnlyReason ?? (
                 <>
-                  添加 PDF 或 Markdown
+                  添加 PDF、Word 或 Markdown
                   {knowledgeBaseId === null
                     ? "（选择知识库后上传）"
                     : "（上传到所选知识库）"}
@@ -1348,14 +1363,18 @@ function TaskResult({
       return getDocumentPreview(identity, artifact.artifact_id);
     },
   });
-  // Which file the reader asked to see laid out, rather than a boolean saying
-  // that they did. This component stays mounted while the reading column moves
-  // from one artifact to the next, so a boolean would carry the choice across:
-  // the next document would open in a view chosen for the previous one, and
-  // fetch a conversion nobody asked for. Narrowed on read, the same way the
-  // page decides which artifact is open at all.
-  const [layoutFor, setLayoutFor] = useState<string | null>(null);
-  const wantsLayout = artifact !== null && layoutFor === artifact.artifact_id;
+  // Which file the reader sent back to text, rather than which one they asked
+  // to lay out. The polarity is the point: a Word document opens on 版面 now,
+  // because the document is what the Task was asked for, and opening it onto
+  // extracted text read as "the task produced plain text" -- the rendered page
+  // sat behind a control nothing pointed at. Still an artifact id rather than
+  // a boolean: this component stays mounted while the reading column moves
+  // from one artifact to the next, and a 文字 chosen for one document must not
+  // decide the view for the next one. Narrowed on read, the same way the page
+  // decides which artifact is open at all.
+  const [textFor, setTextFor] = useState<string | null>(null);
+  const wantsLayout =
+    isDocument && artifact !== null && textFor !== artifact.artifact_id;
   // The third query on one artifact, and it earns the same answer the second
   // one did: a different endpoint, a different shape, and a failure that means
   // something else again. This is the only one that can come back "this
@@ -1404,8 +1423,11 @@ function TaskResult({
         ? "unavailable"
         : null;
   // What the panel shows, not what was asked for. A declined layout snaps the
-  // control back to 文字 rather than leaving 版面 lit over text -- the reader
-  // would have no way to tell the view they picked from the one they got.
+  // control to 文字 rather than leaving 版面 lit over text -- the reader would
+  // have no way to tell the view named from the one they got. And because 版面
+  // is where a document now opens, this snap is also how a deployment without
+  // a converter degrades: onto the text view with the note below saying why,
+  // never silently.
   const showingLayout = wantsLayout && layoutDeclined === null;
 
   if (artifact === null) {
@@ -1583,7 +1605,7 @@ function TaskResult({
                 aria-pressed={showingLayout}
                 className={showingLayout ? "is-active" : ""}
                 disabled={layoutDeclined !== null}
-                onClick={() => setLayoutFor(artifact.artifact_id)}
+                onClick={() => setTextFor(null)}
                 type="button"
               >
                 版面
@@ -1591,7 +1613,7 @@ function TaskResult({
               <button
                 aria-pressed={!showingLayout}
                 className={showingLayout ? "" : "is-active"}
-                onClick={() => setLayoutFor(null)}
+                onClick={() => setTextFor(artifact.artifact_id)}
                 type="button"
               >
                 文字

@@ -1,4 +1,4 @@
-import type { SseFrame } from "../../api/sse";
+import { isQuarantineFrame, type SseChunkFrame } from "../../api/sse";
 import type { PrincipalIdentity } from "../../api/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamChatSession, type FrameAcceptance } from "./sessionStream";
@@ -63,7 +63,7 @@ describe("Chat fetch SSE", () => {
       initialCursor: { id: "cursor_4", sequence: 4 },
       signal: controller.signal,
       onFrame: (frame) => {
-        seen.push(frame.envelope.event_id);
+        if (!isQuarantineFrame(frame)) seen.push(frame.envelope.event_id);
         controller.abort();
         return "accepted";
       },
@@ -110,7 +110,7 @@ describe("Chat fetch SSE", () => {
       initialCursor: { id: "cursor_4", sequence: 4 },
       signal: controller.signal,
       onFrame: (frame) => {
-        seen.push(frame.envelope.event_id);
+        if (!isQuarantineFrame(frame)) seen.push(frame.envelope.event_id);
         return "accepted";
       },
       onCursor: (cursor) => cursors.push(cursor),
@@ -211,6 +211,49 @@ describe("Quarantined positions", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("hands the skipped position to the subscriber, not only to the cursor", async () => {
+    // `_quarantine_frame` in `routes/events.py` argues for a separate frame by
+    // naming this project's own web reducer as the client that would otherwise
+    // "drop the notification but keep the events on both sides of the hole".
+    // That was the behaviour here: the cursor moved past position 2 and nothing
+    // downstream ever learned it existed.
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseWithFrames([sseFrame(1, "evt_1"), quarantineFrame(2), sseFrame(3, "evt_3")]),
+      ),
+    );
+    const trace = traceOf(controller);
+
+    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+
+    expect(trace.disclosed).toEqual([2]);
+    // And it arrives as a position, never as an event: the two events on either
+    // side are still the only two events.
+    expect(trace.seen).toEqual(["evt_1", "evt_3"]);
+  });
+
+  it("does not pass a position the subscriber refused", async () => {
+    // Advancing over a hole the subscriber declined to record is the one
+    // outcome that loses it for good -- the row would be behind the cursor and
+    // absent from the page.
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        responseWithFrames([sseFrame(1, "evt_1"), quarantineFrame(2), sseFrame(3, "evt_3")]),
+      ),
+    );
+    const trace = traceOf(controller, { rejectQuarantine: true });
+
+    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+
+    expect(trace.disclosed).toEqual([2]);
+    expect(trace.cursors).toEqual([{ id: "cursor_1", sequence: 1 }]);
+    expect(trace.errors.at(-1)).toContain("未通过本地安全校验");
+  });
+
   it("control: an unannounced hole still reconnects from the last safe cursor", async () => {
     // The load-bearing control. Same shape as the case above with the notice
     // removed: if this ever passes, the continuity check has been dismantled
@@ -248,6 +291,9 @@ describe("Quarantined positions", () => {
       { id: "cursor_2", sequence: 2 },
       { id: "cursor_3", sequence: 3 },
     ]);
+    // Nothing to disclose, and so nothing disclosed. A page that announced a
+    // hole in a complete stream would be its own defect.
+    expect(trace.disclosed).toEqual([]);
     expect(trace.states).toEqual(["connecting", "connected", "retrying"]);
   });
 
@@ -300,6 +346,9 @@ describe("Quarantined positions", () => {
     await stream;
 
     expect(trace.seen).toEqual([]);
+    // Nothing was delivered, and all three positions were named. A page with no
+    // steps at all can still say why it has none.
+    expect(trace.disclosed).toEqual([1, 2, 3]);
     // Nothing was delivered, yet the second attempt resumes after the poison
     // instead of meeting it again -- the loop this frame exists to break.
     expect(resumeFrom).toEqual([null, "cursor_3"]);
@@ -379,13 +428,17 @@ describe("Quarantined positions", () => {
 
 interface StreamTrace {
   seen: string[];
+  // What the subscriber was told about positions rather than events. Separate
+  // from `seen` on purpose: a notice is not an event, and a trace that mixed
+  // the two could not tell a delivered step from a declared hole.
+  disclosed: number[];
   cursors: Array<{ id: string; sequence: number }>;
   states: string[];
   errors: string[];
   options: {
     identity: PrincipalIdentity;
     sessionId: string;
-    onFrame: (frame: SseFrame) => FrameAcceptance;
+    onFrame: (frame: SseChunkFrame) => FrameAcceptance;
     onCursor: (cursor: { id: string; sequence: number }) => void;
     onConnectionChange: (state: string, error?: string) => void;
   };
@@ -393,10 +446,14 @@ interface StreamTrace {
 
 function traceOf(
   controller: AbortController,
-  { abortOnRetry = true }: { abortOnRetry?: boolean } = {},
+  {
+    abortOnRetry = true,
+    rejectQuarantine = false,
+  }: { abortOnRetry?: boolean; rejectQuarantine?: boolean } = {},
 ): StreamTrace {
   const trace: StreamTrace = {
     seen: [],
+    disclosed: [],
     cursors: [],
     states: [],
     errors: [],
@@ -404,6 +461,10 @@ function traceOf(
       identity: IDENTITY,
       sessionId: "ses_1",
       onFrame: (frame) => {
+        if (isQuarantineFrame(frame)) {
+          trace.disclosed.push(frame.quarantined.sequence);
+          return rejectQuarantine ? "rejected" : "accepted";
+        }
         trace.seen.push(frame.envelope.event_id);
         return "accepted";
       },

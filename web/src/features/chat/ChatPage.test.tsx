@@ -10,7 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { createChatSession, listKnowledgeBases } from "../../api/client";
-import type { PrincipalIdentity } from "../../api/types";
+import type { Citation, PrincipalIdentity, SourceLocator } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatPage } from "./ChatPage";
@@ -216,6 +216,67 @@ describe("Chat identity boundary", () => {
   });
 });
 
+describe("What a citation tells the reader", () => {
+  it("shows the page and the fragment a cited chunk sits at", async () => {
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: stateWithCitations([
+        citation("chunk_paged", { page: 3, paragraph: 12 }),
+        citation("chunk_markdown", { paragraph: 7 }),
+        citation("chunk_bare", {}),
+      ]),
+    });
+
+    const view = renderChatRoute("/chat/ses_answered");
+
+    expect(await screen.findByText("第 3 页 · 片段 #12")).toBeInTheDocument();
+    // No page in a Markdown source, and the chip says the fragment alone
+    // rather than defaulting to 第 1 页.
+    expect(screen.getByText("片段 #7")).toBeInTheDocument();
+    // `paragraph` is the chunk's ordinal, not a paragraph number -- calling it
+    // 第 12 段 would be the interface counting something the server never did.
+    expect(screen.queryByText(/第 12 段/)).not.toBeInTheDocument();
+    // A citation with no position renders the id and stops: an empty locator
+    // is not a location, and an empty marker would read as one. The text query
+    // alone cannot see that -- an empty <small> satisfies it too -- so the
+    // element count is what holds the line. The rule carries a left margin, so
+    // an empty one opens a gap in the chip that reads as a missing value.
+    expect(screen.getAllByText(/片段 #/)).toHaveLength(2);
+    expect(view.container.querySelectorAll(".aw-chat-citation-locator")).toHaveLength(2);
+  });
+});
+
+describe("What the transcript admits it is missing", () => {
+  it("discloses the positions the stream could not decode", async () => {
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: { ...stateWithCitations([]), quarantinedSequences: { ses_answered: [2, 5] } },
+    });
+
+    renderChatRoute("/chat/ses_answered");
+
+    expect(await screen.findByText("这次连接里有 2 个位置没能交给这个页面。")).toBeInTheDocument();
+    expect(screen.getByText("#2")).toBeInTheDocument();
+    expect(screen.getByText("#5")).toBeInTheDocument();
+    // The rows are still in the log. Telling a reader their history was
+    // destroyed would send them looking for the wrong thing.
+    expect(screen.getByText(/没能解码/)).toBeInTheDocument();
+    expect(screen.queryByText(/丢了|丢失/)).not.toBeInTheDocument();
+  });
+
+  it("control: a session with nothing quarantined says nothing", async () => {
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: stateWithCitations([]),
+    });
+
+    renderChatRoute("/chat/ses_answered");
+
+    await screen.findByText("这些资料主要讲了什么？");
+    expect(screen.queryByText(/个位置/)).not.toBeInTheDocument();
+  });
+});
+
 function fakeRuntime(addLocalSession: () => void, startAsk: () => void): ChatRuntime {
   return {
     addLocalSession,
@@ -274,6 +335,52 @@ function stateWithUngroundedTurn(answerMode: "direct" | "rag") {
         historical: false,
         answer: "模型直接作答的内容。",
         grounded: false,
+      },
+    },
+    turnOrderBySession: { ses_answered: ["turn_local"] },
+  };
+}
+
+function citation(chunkId: string, locator: SourceLocator): Citation {
+  return {
+    chunk_id: chunkId,
+    document_id: "doc_handbook",
+    document_version: "rev_1",
+    locator,
+  };
+}
+
+// A committed, grounded turn: the one state that renders the citation row at
+// all, and so the only one these cases can be asked about.
+function stateWithCitations(citations: Citation[]) {
+  const base = initialChatState([
+    {
+      sessionId: "ses_answered",
+      title: "已回答的会话",
+      answerMode: "rag",
+      knowledgeBaseId: "kb_resume",
+      createdAt: "2026-08-03T00:00:00Z",
+      updatedAt: "2026-08-03T00:00:00Z",
+    },
+  ]);
+  return {
+    ...base,
+    turns: {
+      turn_local: {
+        localId: "turn_local",
+        sessionId: "ses_answered",
+        question: "这些资料主要讲了什么？",
+        answerMode: "rag" as const,
+        knowledgeBaseId: "kb_resume",
+        topK: 8,
+        idempotencyKey: "idem_local",
+        submittedAt: "2026-08-03T00:00:00Z",
+        phase: "committed" as const,
+        activities: [],
+        citations,
+        historical: false,
+        answer: "根据资料的回答。",
+        grounded: true,
       },
     },
     turnOrderBySession: { ses_answered: ["turn_local"] },

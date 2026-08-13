@@ -1,14 +1,18 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listKnowledgeBaseDocuments,
   listKnowledgeBases,
+  searchKnowledge,
+  uploadDocument,
 } from "../../api/client";
 import type {
+  DocumentVersion,
   KnowledgeBaseView,
   KnowledgeDocumentView,
+  SearchResponse,
 } from "../../api/types";
 import { IdentityProvider } from "../../app/IdentityContext";
 import { KnowledgePage } from "./KnowledgePage";
@@ -19,6 +23,8 @@ vi.mock("../../api/client", async () => {
     ...actual,
     listKnowledgeBaseDocuments: vi.fn(),
     listKnowledgeBases: vi.fn(),
+    searchKnowledge: vi.fn(),
+    uploadDocument: vi.fn(),
   };
 });
 
@@ -56,6 +62,43 @@ function document(
     updated_at: "2026-08-02T00:00:01Z",
     ...overrides,
   };
+}
+
+function documentVersion(): DocumentVersion {
+  return {
+    schema_version: 1,
+    version_id: "ver_1",
+    document_id: "doc_1",
+    source_revision: 1,
+    artifact_id: "art_1",
+    content_sha256: "0".repeat(64),
+  };
+}
+
+function searchResponse(overrides: Partial<SearchResponse> = {}): SearchResponse {
+  return {
+    hits: [
+      {
+        chunk_id: "chunk_1",
+        document_id: "doc_1",
+        document_version: "ver_1",
+        text: "索引流水线由文档 Worker 异步执行。",
+      },
+    ],
+    citations: [],
+    retriever: "hybrid+rerank",
+    ...overrides,
+  };
+}
+
+function chooseFile(container: HTMLElement) {
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+  if (input === null) throw new Error("upload input missing");
+  fireEvent.change(input, {
+    target: {
+      files: [new File(["# 简历"], "resume.md", { type: "text/markdown" })],
+    },
+  });
 }
 
 function renderPage(entry = "/knowledge") {
@@ -158,7 +201,7 @@ describe("KnowledgePage 摄取失败", () => {
     const row = await screen.findByRole("article");
     expect(within(row).getByText("索引失败")).toBeInTheDocument();
     expect(
-      within(row).getByText(/文件内容无法解析，请换成可读的 PDF 或 Markdown 重新上传。/),
+      within(row).getByText(/文件内容无法解析，请换成可读的 PDF、Word 或 Markdown 重新上传。/),
     ).toBeInTheDocument();
     expect(screen.queryByText("正在索引")).toBeNull();
   });
@@ -180,5 +223,116 @@ describe("KnowledgePage 摄取失败", () => {
     const row = await screen.findByRole("article");
     expect(within(row).getByText("正在索引")).toBeInTheDocument();
     expect(within(row).queryByText("索引失败")).toBeNull();
+  });
+});
+
+describe("KnowledgePage 上传授权", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(listKnowledgeBases).mockResolvedValue({
+      knowledge_bases: [knowledgeBase()],
+    });
+    vi.mocked(listKnowledgeBaseDocuments).mockResolvedValue({ documents: [] });
+    vi.mocked(uploadDocument).mockResolvedValue(documentVersion());
+  });
+
+  it("把填写的 principal 交给上传，逗号、全角逗号和空格都算分隔", async () => {
+    const view = renderPage();
+    expect(await screen.findByText("添加文档")).toBeInTheDocument();
+
+    const grantField = screen.getByLabelText("同时授权给（可选）");
+    fireEvent.change(grantField, {
+      target: { value: " u_alice, u_bob，u_carol u_dora, " },
+    });
+    chooseFile(view.container);
+    fireEvent.click(screen.getByRole("button", { name: /上传并开始索引/ }));
+
+    // 数组是整体比对的，所以这条同时盯着尾逗号：空项要是混进去就红了。服务端的
+    // principal id 不接受空串，带着它去 /complete 换回的是 422，而那时文件的
+    // 字节已经传完了。
+    await waitFor(() =>
+      expect(uploadDocument).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          grantedPrincipals: ["u_alice", "u_bob", "u_carol", "u_dora"],
+        }),
+      ),
+    );
+    // 名单是写给刚上传那一份文档的，留在框里下一份会默默继承。
+    await waitFor(() => expect(grantField).toHaveValue(""));
+  });
+
+  it("没填的时候送出空名单", async () => {
+    // 对照组。上一条只证明「填了会送到」；少了这条，一个把整串原样塞进去、
+    // 或者压根不看输入框的实现照样能让上一条过。
+    const view = renderPage();
+    expect(await screen.findByText("添加文档")).toBeInTheDocument();
+
+    chooseFile(view.container);
+    fireEvent.click(screen.getByRole("button", { name: /上传并开始索引/ }));
+
+    await waitFor(() =>
+      expect(uploadDocument).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ grantedPrincipals: [] }),
+      ),
+    );
+  });
+});
+
+describe("KnowledgePage 检索调试", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(listKnowledgeBases).mockResolvedValue({
+      knowledge_bases: [knowledgeBase()],
+    });
+    vi.mocked(listKnowledgeBaseDocuments).mockResolvedValue({ documents: [] });
+  });
+
+  async function runSearch() {
+    expect(await screen.findByText("添加文档")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("检索测试问题"), {
+      target: { value: "索引是怎么跑的" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /测试检索/ }));
+  }
+
+  it("写出应答的是哪条检索栈", async () => {
+    vi.mocked(searchKnowledge).mockResolvedValue(searchResponse());
+
+    renderPage();
+    await runSearch();
+
+    expect(
+      await screen.findByText("由 hybrid+rerank 检索栈应答"),
+    ).toBeInTheDocument();
+  });
+
+  it("换一条检索栈，显示的就跟着换", async () => {
+    // 对照组。只断言一次 hybrid+rerank 的话，把这几个字写死在页面上也能过；
+    // 这条要求这行字真的来自响应。
+    vi.mocked(searchKnowledge).mockResolvedValue(
+      searchResponse({ retriever: "dense" }),
+    );
+
+    renderPage();
+    await runSearch();
+
+    expect(await screen.findByText("由 dense 检索栈应答")).toBeInTheDocument();
+    expect(screen.queryByText(/rerank/)).toBeNull();
+  });
+
+  it("一条都没命中时也说明是哪条检索栈应答", async () => {
+    vi.mocked(searchKnowledge).mockResolvedValue(
+      searchResponse({ hits: [], retriever: "dense" }),
+    );
+
+    renderPage();
+    await runSearch();
+
+    expect(await screen.findByText("由 dense 检索栈应答")).toBeInTheDocument();
+    expect(screen.getByText("本次没有返回可读的匹配片段。")).toBeInTheDocument();
   });
 });

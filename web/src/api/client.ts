@@ -373,6 +373,11 @@ const MEDIA_TYPE_BY_EXTENSION: readonly (readonly [string, string])[] = [
   [".markdown", "text/markdown"],
   [".pdf", "application/pdf"],
   [".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  // `text/plain` is in the set above, so a browser that types a .txt correctly
+  // never reaches this table. The entry is for the browsers that do not -- the
+  // same ones that hand back `""` for a .md -- and it is the fourth of the four
+  // families the ingestion parser reads.
+  [".txt", "text/plain"],
 ];
 
 /**

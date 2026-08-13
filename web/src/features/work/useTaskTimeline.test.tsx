@@ -204,6 +204,55 @@ describe("useTaskTimeline", () => {
       "cursor_initial",
     );
   });
+
+  it("reports a Task its own history says is over", async () => {
+    // What the header needs in order to stop saying 排队中 over a finished
+    // timeline: React Query pauses the status query while the tab is hidden,
+    // so the timeline is the only side still finding things out, and it has to
+    // be able to say what it found.
+    vi.mocked(getTaskTimeline).mockResolvedValue(
+      timeline("task_1", [envelope("event_1", "TaskSucceeded")], "cursor_1"),
+    );
+
+    render(<Probe taskId="task_1" />);
+
+    await waitFor(() => expect(screen.getByTestId("settled")).toHaveTextContent("yes"));
+  });
+
+  it("does not call a Task settled while its history is still running", async () => {
+    // The control. A flag that were simply always true would pass the test
+    // above and make the caller refetch a status that has not changed, on every
+    // poll of every running Task.
+    vi.mocked(getTaskTimeline).mockResolvedValue(
+      timeline("task_1", [envelope("event_1", "TaskClaimed")], "cursor_1"),
+    );
+
+    render(<Probe taskId="task_1" />);
+
+    await waitFor(() => expect(screen.getByTestId("events")).toHaveTextContent("event_1"));
+    expect(screen.getByTestId("settled")).toHaveTextContent("no");
+  });
+
+  it("does not carry one Task's ending onto the next", async () => {
+    // The other control, over the sticky bit. `settled` survives a failed poll
+    // on purpose, and a version that survived a *task change* too would report
+    // every Task opened after a finished one as already over -- freezing the
+    // header of a Task that is still running.
+    vi.mocked(getTaskTimeline)
+      .mockResolvedValueOnce(
+        timeline("task_1", [envelope("event_1", "TaskSucceeded")], "cursor_1"),
+      )
+      .mockResolvedValue(
+        timeline("task_2", [envelope("event_2", "TaskClaimed", "task_2")], "cursor_2"),
+      );
+
+    const view = render(<Probe taskId="task_1" />);
+    await waitFor(() => expect(screen.getByTestId("settled")).toHaveTextContent("yes"));
+
+    view.rerender(<Probe taskId="task_2" />);
+    await waitFor(() => expect(screen.getByTestId("events")).toHaveTextContent("event_2"));
+    expect(screen.getByTestId("settled")).toHaveTextContent("no");
+  });
 });
 
 function Probe({
@@ -230,6 +279,7 @@ function Probe({
       <output data-testid="skipped">
         {timelineResult.skippedSequences.join(",")}
       </output>
+      <output data-testid="settled">{timelineResult.settled ? "yes" : "no"}</output>
       <button onClick={() => void timelineResult.refresh()} type="button">
         refresh timeline
       </button>

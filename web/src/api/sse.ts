@@ -33,9 +33,13 @@ export interface QuarantineNotice {
  *
  * Kept as its own type instead of being widened into `SseFrame`: an envelope
  * is the log's record of one thing that happened, and forcing this into that
- * shape would mean inventing a payload for an event nobody could read. The
- * reducer takes `SseFrame` and only `SseFrame`, so the type system is what
- * stops a notice from being mistaken for history.
+ * shape would mean inventing a payload for an event nobody could read.
+ *
+ * `reduceChatFrame` takes the union, so that showing the hole is possible at
+ * all; what stops a notice from being mistaken for history is its first line,
+ * which answers a quarantine frame in its own branch. Past that branch the
+ * type system still holds the line: `safeEventFromFrame`, the only thing that
+ * turns a frame into an event, takes `SseFrame` and only `SseFrame`.
  */
 export interface SseQuarantineFrame {
   id: string | null;

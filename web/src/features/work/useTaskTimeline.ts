@@ -36,6 +36,21 @@ export interface TaskTimelineResult {
    * without the second is showing a partial history as a whole one.
    */
   skippedSequences: number[];
+  /**
+   * Whether this Task's own history says it is over.
+   *
+   * Exposed because the status query cannot always be the one to say so. It
+   * pauses while `document.hidden` and this hook's `setInterval` does not, so
+   * background a tab mid-Task and the timeline arrives at a finished Task
+   * while the status stays at whatever it was when the tab went away. The
+   * header then contradicts the timeline directly underneath it -- 排队中 above
+   * a 运行已完成 -- until somebody reloads.
+   *
+   * Half of that gap was already closed here: the timeline stops polling on
+   * what it fetched rather than waiting for a second opinion. This is the other
+   * half, so the caller can go and get the status it stopped asking for.
+   */
+  settled: boolean;
   loading: boolean;
   error: unknown;
   refresh: () => Promise<void>;
@@ -45,6 +60,7 @@ interface TimelineHookState {
   requestKey: string;
   timeline: TimelineState;
   loaded: boolean;
+  settled: boolean;
   error: unknown;
 }
 
@@ -62,6 +78,7 @@ export function useTaskTimeline(
     requestKey,
     timeline: createTimelineState(taskId ?? ""),
     loaded: taskId === undefined,
+    settled: false,
     error: null,
   }));
   const refreshRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -104,15 +121,21 @@ export function useTaskTimeline(
           if (response.events.some((event) => FINAL_EVENTS.has(event.event_type))) {
             finished = true;
           }
+          const reachedEnd = finished;
           setState((previous) => {
-            const timeline =
-              previous.requestKey === requestKey
-                ? previous.timeline
-                : createTimelineState(fixedTaskId);
+            const carried = previous.requestKey === requestKey;
+            const timeline = carried
+              ? previous.timeline
+              : createTimelineState(fixedTaskId);
             return {
               requestKey,
               timeline: mergeTimelineResponse(timeline, response),
               loaded: true,
+              // Sticky within one Task, and only within one: `finished` is
+              // scoped to this effect, so selecting another Task starts from
+              // false rather than inheriting the last one's ending -- the same
+              // rule the timeline itself follows.
+              settled: reachedEnd || (carried && previous.settled),
               error: null,
             };
           });
@@ -123,15 +146,20 @@ export function useTaskTimeline(
         }
       } catch (caught) {
         if (active) {
-          setState((previous) => ({
-            requestKey,
-            timeline:
-              previous.requestKey === requestKey
+          setState((previous) => {
+            const carried = previous.requestKey === requestKey;
+            return {
+              requestKey,
+              timeline: carried
                 ? previous.timeline
                 : createTimelineState(fixedTaskId),
-            loaded: true,
-            error: caught,
-          }));
+              loaded: true,
+              // A failed poll says nothing about whether the Task ended, so it
+              // must not un-settle one already seen to have ended.
+              settled: carried && previous.settled,
+              error: caught,
+            };
+          });
         }
       }
     };
@@ -179,6 +207,7 @@ export function useTaskTimeline(
     // belongs to one Task's history, and carrying it across a selection would
     // accuse the newly opened Task of damage that happened to another one.
     skippedSequences: matchesRequest ? state.timeline.skippedSequences : [],
+    settled: matchesRequest && state.settled,
     loading: taskId !== undefined && (!matchesRequest || !state.loaded),
     error: matchesRequest ? state.error : null,
     refresh,

@@ -25,7 +25,7 @@ import {
 } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { createChatSession } from "../../api/client";
-import type { Citation, LocalChatSession } from "../../api/types";
+import type { Citation, LocalChatSession, SourceLocator } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
   AttachmentButton,
@@ -116,6 +116,8 @@ export function ChatPage() {
           const turn = state.turns[turnId];
           return turn === undefined ? [] : [turn];
         });
+  const quarantined =
+    selected === undefined ? [] : state.quarantinedSequences[selected.sessionId] ?? [];
   const unfinished = selected === undefined ? false : hasUnfinishedTurn(state, selected.sessionId);
   const composerDisabled =
     creatingSession ||
@@ -329,6 +331,9 @@ export function ChatPage() {
               ))}
             </div>
           )}
+          {/* Under the transcript, not over it: it is a statement about what a
+              reader has just scrolled through. */}
+          <SessionGapNotice sequences={quarantined} />
         </section>
 
         <form className="aw-chat-composer" onSubmit={submit}>
@@ -663,15 +668,90 @@ function Citations({
   }
   return (
     <div className="aw-chat-citations" aria-label="引用">
-      {citations.map((citation) => (
-        <span
-          className="aw-chat-citation"
-          key={`${citation.chunk_id}:${citation.document_version}`}
-          title={`${citation.document_id} · ${citation.document_version}${citation.quote ? `\n\n${citation.quote}` : ""}`}
-        >
-          [{shortId(citation.chunk_id, 16)}]
-        </span>
-      ))}
+      {citations.map((citation) => {
+        const locator = citationLocator(citation.locator);
+        return (
+          <span
+            className="aw-chat-citation"
+            key={`${citation.chunk_id}:${citation.document_version}`}
+            title={`${citation.document_id} · ${citation.document_version}${citation.quote ? `\n\n${citation.quote}` : ""}`}
+          >
+            [{shortId(citation.chunk_id, 16)}]
+            {locator === null ? null : (
+              <small className="aw-chat-citation-locator">{locator}</small>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Where a cited chunk sits, in the only two terms that survive to the client.
+ *
+ * `paragraph` is the chunk's ordinal inside its document -- `retrieval.py`
+ * fills it straight from `chunk.ordinal` -- and not a paragraph number Word or
+ * a PDF would recognise. So it reads 片段 #12 and never 第 12 段: the second
+ * would be this page inventing a unit the server never counted.
+ *
+ * `page` is absent for every format without pages, which is most of a Markdown
+ * corpus. A citation from one says the fragment alone rather than defaulting to
+ * 第 1 页, and a citation with neither position renders no marker at all --
+ * an empty locator is not a location.
+ */
+function citationLocator(locator: SourceLocator): string | null {
+  const parts: string[] = [];
+  if (locator.page !== undefined && locator.page !== null) {
+    parts.push(`第 ${locator.page} 页`);
+  }
+  if (locator.paragraph !== undefined && locator.paragraph !== null) {
+    parts.push(`片段 #${locator.paragraph}`);
+  }
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/**
+ * The positions this session's stream said it could not deliver.
+ *
+ * The same disclosure Work makes under a Task timeline, in the same words: the
+ * rows are still in the log, and what failed is decoding them here. Telling a
+ * reader their history was destroyed when it was not sends them looking for the
+ * wrong thing.
+ *
+ * Chat can say less than Work, and says less rather than dressing it up. A
+ * notice carries no run, so there is no pair of steps to hang it between the
+ * way Work anchors each hole -- the position alone is what this page honestly
+ * has.
+ */
+function SessionGapNotice({ sequences }: { sequences: readonly number[] }) {
+  if (sequences.length === 0) return null;
+
+  return (
+    // The same 820px column the turns use, so the notice lines up with the
+    // messages it is about instead of spanning the whole transcript. Reusing
+    // that width rather than declaring a second one.
+    <div className="aw-chat-turn-list">
+      <div className="aw-notice is-warning aw-timeline-gaps">
+        <AlertTriangle aria-hidden="true" size={16} />
+        <div>
+          {/* Scoped to this connection, not to the session. The cursor is
+              persisted (`storage.ts`) but these sequences are not -- a reload
+              resumes past the hole and this notice disappears while the hole
+              stays. Saying "这个会话" would make a per-connection count read as
+              a total, which is the shape of claim this notice exists to stop. */}
+          <strong>这次连接里有 {sequences.length} 个位置没能交给这个页面。</strong>
+          <small>
+            这些事件仍在日志里，只是这次没能解码、没有交给这个页面。通知本身不带 run，
+            所以这里只标出位置，说不出它落在哪一轮的哪两步之间。
+          </small>
+          <ul>
+            {sequences.map((sequence) => (
+              <li key={sequence}>#{sequence}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
     </div>
   );
 }

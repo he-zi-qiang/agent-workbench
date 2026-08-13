@@ -70,15 +70,6 @@ export function saveChatCursor(
   writeStorage(cursorKey(identity, sessionId), JSON.stringify(cursor));
 }
 
-export function clearChatCursor(identity: PrincipalIdentity, sessionId: string): void {
-  try {
-    window.localStorage.removeItem(cursorKey(identity, sessionId));
-  } catch {
-    // Storage is a resilience aid. A privacy mode that refuses it must not make
-    // the authenticated stream unusable for the lifetime of this page.
-  }
-}
-
 function sessionKey(identity: PrincipalIdentity): string {
   return `${SESSION_PREFIX}:${identityStorageKey(identity)}`;
 }
@@ -132,6 +123,7 @@ function writeStorage(key: string, value: string): void {
   try {
     window.localStorage.setItem(key, value);
   } catch {
-    // See clearChatCursor: in-memory runtime state remains fully functional.
+    // Storage is a resilience aid. A privacy mode that refuses it must not
+    // make the console unusable: in-memory runtime state stays fully functional.
   }
 }

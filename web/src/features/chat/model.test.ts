@@ -1,5 +1,5 @@
 import type { EventEnvelope, LocalChatSession } from "../../api/types";
-import type { SseFrame } from "../../api/sse";
+import type { SseFrame, SseQuarantineFrame } from "../../api/sse";
 import { describe, expect, it } from "vitest";
 import {
   calledToolNames,
@@ -56,6 +56,24 @@ function frame(
     parent_event_id: null,
   };
   return { id: `cursor_${sequence}`, event: kind, envelope };
+}
+
+function quarantine(
+  sequence: number,
+  overrides: Partial<SseQuarantineFrame["quarantined"]> = {},
+): SseQuarantineFrame {
+  return {
+    id: `cursor_${sequence}`,
+    event: "stream.quarantined",
+    quarantined: {
+      event_id: `evt_${sequence}`,
+      event_type: "ModelCompleted",
+      schema_version: 1,
+      sequence,
+      stream_id: SESSION.sessionId,
+      ...overrides,
+    },
+  };
 }
 
 describe("chat state machine", () => {
@@ -509,5 +527,186 @@ describe("the tools a turn could reach", () => {
     ).state;
 
     expect(turnToolNames(state.turns.local_1?.activities ?? [])).toEqual([]);
+  });
+});
+
+describe("where a citation says it came from", () => {
+  function citationsWith(locator: unknown) {
+    const bound = chatReducer(submitted(), {
+      type: "runBound",
+      localId: "local_1",
+      runId: "run_1",
+    });
+    const state = reduceChatFrame(
+      bound,
+      SESSION.sessionId,
+      frame("AnswerCommitted", 1, {
+        text: "答案正文",
+        citations: [
+          {
+            chunk_id: "chunk_1",
+            document_id: "doc_1",
+            document_version: "rev_1",
+            locator,
+          },
+        ],
+      }),
+    ).state;
+    return state.turns.local_1?.citations ?? [];
+  }
+
+  it("keeps the page and the chunk ordinal instead of an opaque blob", () => {
+    // Both were already on the wire and both stopped at the reducer, which
+    // stored the locator as an unread object. The chip could only ever show the
+    // chunk id, which locates a citation in the index and nowhere a reader can
+    // go.
+    const [citation] = citationsWith({
+      page: 3,
+      paragraph: 12,
+      char_start: 40,
+      char_end: 900,
+    });
+
+    expect(citation?.locator.page).toBe(3);
+    expect(citation?.locator.paragraph).toBe(12);
+    // Deliberately unread. They are computed at ingestion and the index stores
+    // only `ordinal` and `page` (`ports/vector_index.py`), so on a real
+    // citation these are never present -- a parsed field that can only render
+    // empty is a promise the data cannot keep.
+    expect(citation?.locator.char_start).toBeUndefined();
+    expect(citation?.locator.char_end).toBeUndefined();
+  });
+
+  it("leaves a pageless source pageless", () => {
+    // Markdown and txt have no pages, and the server sends null rather than 1
+    // for exactly that reason. Filling it in here would claim a location
+    // nothing established.
+    const [citation] = citationsWith({ page: null, paragraph: 0 });
+
+    expect(citation?.locator.page).toBeUndefined();
+    expect(citation?.locator.paragraph).toBe(0);
+  });
+
+  it("drops a position outside the range the server itself enforces", () => {
+    // `page >= 1` and `paragraph >= 0` are validated in `domain/context.py`, so
+    // 第 0 页 can only come from something that is not this server -- and it is
+    // not a page anyone can turn to.
+    const [citation] = citationsWith({ page: 0, paragraph: -1 });
+
+    expect(citation?.locator).toEqual({});
+  });
+});
+
+describe("how a terminal run event explains itself", () => {
+  function terminal(kind: string, payload: Record<string, unknown>) {
+    const bound = chatReducer(submitted(), {
+      type: "runBound",
+      localId: "local_1",
+      runId: "run_1",
+    });
+    return reduceChatFrame(bound, SESSION.sessionId, frame(kind, 1, payload)).state.turns
+      .local_1;
+  }
+
+  it("says why a run failed, from the field RunFailed actually carries", () => {
+    // `RunFailed` carries `error`; `reason_code` belongs to its neighbours
+    // (`domain/events.py`). Sharing their branch meant reading a field this
+    // event does not have, so the label fell through to the event type: the
+    // screen said "RunFailed" and gave no cause at all.
+    const turn = terminal("RunFailed", {
+      error: { code: "provider_unavailable", message: "模型连续三次超时，未能完成本轮" },
+      stop_reason: "error",
+    });
+
+    expect(turn?.phase).toBe("failed");
+    expect(turn?.activities.at(-1)?.label).toBe("运行失败");
+    expect(turn?.error).toBe("模型连续三次超时，未能完成本轮");
+    expect(turn?.error).not.toContain("RunFailed");
+  });
+
+  it("falls back to the code when the failure carries no message", () => {
+    const turn = terminal("RunFailed", { error: { code: "budget_exhausted", message: "" } });
+
+    expect(turn?.error).toBe("budget_exhausted");
+  });
+
+  it("falls back to the label when the failure says nothing at all", () => {
+    // The floor. Whatever the server omits, the line a user reads is a
+    // sentence -- never an empty notice and never "undefined".
+    const turn = terminal("RunFailed", { error: {} });
+
+    expect(turn?.activities.at(-1)?.detail).toBeUndefined();
+    expect(turn?.error).toBe("运行失败");
+  });
+
+  it("control: cancellation still reads its own reason_code", () => {
+    // `RunCancelled` was never broken -- it has the field the old shared branch
+    // read. This pins that the split did not take its reason away with it.
+    const turn = terminal("RunCancelled", { reason_code: "cancel_requested" });
+
+    expect(turn?.phase).toBe("failed");
+    expect(turn?.activities.at(-1)?.label).toBe("运行已取消");
+    expect(turn?.error).toBe("cancel_requested");
+  });
+
+  it("says why a turn expired, from the code ChatTurnExpired actually carries", () => {
+    // The same defect as `RunFailed`, one event over: `ChatTurnExpired` has
+    // `error_code`, not `reason_code` (`domain/events.py`), so while it shared
+    // the cancellation branch its cause was read from a field it never has and
+    // the line fell through to the bare event name.
+    const turn = terminal("ChatTurnExpired", {
+      stop_reason: "deadline",
+      error_code: "stale_execution",
+      retryable: false,
+    });
+
+    expect(turn?.phase).toBe("failed");
+    expect(turn?.activities.at(-1)?.label).toBe("本轮已过期");
+    expect(turn?.error).toBe("stale_execution");
+    expect(turn?.error).not.toContain("ChatTurnExpired");
+  });
+});
+
+describe("positions the stream could not deliver", () => {
+  it("records the position against the session without inventing an event", () => {
+    const result = reduceChatFrame(submitted(), SESSION.sessionId, quarantine(2));
+
+    expect(result.accepted).toBe(true);
+    expect(result.state.quarantinedSequences[SESSION.sessionId]).toEqual([2]);
+    // Nothing was applied, because there is nothing to apply: no step, no
+    // orphaned event, and a turn that has not moved.
+    expect(result.state.turns.local_1?.activities).toEqual([]);
+    expect(result.state.orphanEvents).toEqual({});
+    expect(result.state.turns.local_1?.phase).toBe("submitting");
+  });
+
+  it("counts a replayed notice once", () => {
+    const first = reduceChatFrame(submitted(), SESSION.sessionId, quarantine(2));
+    const second = reduceChatFrame(first.state, SESSION.sessionId, quarantine(2));
+
+    expect(second.duplicate).toBe(true);
+    expect(second.state).toBe(first.state);
+    expect(second.state.quarantinedSequences[SESSION.sessionId]).toEqual([2]);
+  });
+
+  it("lists the positions in stream order however they arrive", () => {
+    // A reconnect can replay an earlier hole after a later one, and a list a
+    // reader compares against the log should read in the log's order.
+    let state = reduceChatFrame(submitted(), SESSION.sessionId, quarantine(7)).state;
+    state = reduceChatFrame(state, SESSION.sessionId, quarantine(3)).state;
+
+    expect(state.quarantinedSequences[SESSION.sessionId]).toEqual([3, 7]);
+  });
+
+  it("refuses a notice announcing another stream's position", () => {
+    const before = submitted();
+    const result = reduceChatFrame(
+      before,
+      SESSION.sessionId,
+      quarantine(2, { stream_id: "ses_other" }),
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.state).toBe(before);
   });
 });

@@ -1,4 +1,5 @@
 import type { ArtifactRef, EventEnvelope } from "../api/types";
+import { formatDateTime } from "./ui";
 
 /**
  * What one timeline event actually says, unpacked into things a reader can
@@ -66,6 +67,7 @@ export function describeEvent(event: EventEnvelope): StepDetail {
     case "RunStarted": {
       const tools = stringArray(payload.tool_names);
       const budget = record(payload.budget);
+      const deadline = wallClock(budget?.deadline);
       detail.summary = tools.length === 0 ? "没有可用工具" : `可用工具 ${tools.length} 个`;
       detail.facts = [
         fact("运行类型", label(RUN_KIND_LABELS, payload.run_kind)),
@@ -75,6 +77,18 @@ export function describeEvent(event: EventEnvelope): StepDetail {
         fact("可用工具", tools.length === 0 ? "无" : tools.join("、")),
         fact("最多步数", numberText(budget?.max_steps)),
         fact("最多工具调用", numberText(budget?.max_tool_calls)),
+        // The other two ceilings that can stop a run (`token_budget` and
+        // `deadline` in `domain/runs.py`), which no step or tool count
+        // predicts. Both are optional and often unset -- Chat sets neither --
+        // so an absent token ceiling is said out loud, while an absent
+        // deadline drops its row rather than adding an empty one to every run.
+        fact("token 上限", ceilingText(budget, "max_total_tokens")),
+        ...(deadline === null ? [] : [fact("截止时间", deadline)]),
+        // `max_cost_micro_usd` is left out deliberately: nothing under
+        // `config/` sets it, and no model profile configures the rate table
+        // its usage counterpart would be priced from. A cost row would show an
+        // unset ceiling above a figure that is zero for reasons the reader
+        // cannot see.
       ];
       return detail;
     }
@@ -187,26 +201,44 @@ export function describeEvent(event: EventEnvelope): StepDetail {
       detail.summary = message === "—" ? text(error?.code) : summarize(message);
       detail.facts = [
         fact("错误码", text(error?.code)),
-        fact("可以重试", error?.retryable === true ? "是" : "否"),
+        // Three states, not two: an absent `retryable` means the event did not
+        // say, and folding that into 否 would answer a question the server
+        // never answered. Every other unknown in this file renders 「—」.
+        fact("可以重试", retryableText(error?.retryable)),
       ];
       if (message !== "—") detail.bodies.push(bodyOf("错误信息", message));
       return detail;
     }
 
     case "RunCompleted": {
-      const usage = record(payload.usage);
-      const tokens = record(usage?.tokens);
       detail.summary = label(
         { completed: "正常完成" },
         payload.stop_reason,
       );
       detail.facts = [
         fact("停止原因", text(payload.stop_reason)),
-        fact("步数", numberText(usage?.steps)),
-        fact("工具调用", numberText(usage?.tool_calls)),
-        fact("输入 token", numberText(tokens?.input_tokens)),
-        fact("输出 token", numberText(tokens?.output_tokens)),
+        ...usageFacts(payload),
       ];
+      return detail;
+    }
+
+    case "RunFailed": {
+      const error = record(payload.error);
+      const message = text(error?.message);
+      detail.summary = message === "—" ? text(error?.code) : summarize(message);
+      detail.facts = [
+        fact("停止原因", text(payload.stop_reason)),
+        fact("错误码", text(error?.code)),
+        // Three states, not two: an absent `retryable` means the event did not
+        // say, and folding that into 否 would answer a question the server
+        // never answered. Every other unknown in this file renders 「—」.
+        fact("可以重试", retryableText(error?.retryable)),
+        // A failed run still spent what it spent, and the same usage is on the
+        // event. Reading it only on the runs that succeeded would understate
+        // exactly the runs worth asking about.
+        ...usageFacts(payload),
+      ];
+      if (message !== "—") detail.bodies.push(bodyOf("错误信息", message));
       return detail;
     }
 
@@ -258,6 +290,77 @@ export function describeEvent(event: EventEnvelope): StepDetail {
 function promptBodies(payload: Record<string, unknown>): StepBody[] {
   const prompt = text(payload.prompt_preview);
   return prompt === "—" ? [] : [bodyOf("发给模型的提示词", prompt)];
+}
+
+/**
+ * What a finished run spent, from the `BudgetUsage` its end event carries.
+ *
+ * Shared by the end events because they carry the same record, and "how much
+ * did this run use" should not be answered differently depending on whether it
+ * finished or failed.
+ *
+ * Cost is not among these. `usage.cost_micro_usd` is priced from a rate table
+ * that none of the configs under `config/` sets up, so it stays zero -- a row
+ * that would read as "this was free" rather than "this was never priced".
+ */
+function usageFacts(payload: Record<string, unknown>): StepFact[] {
+  const usage = record(payload.usage);
+  const tokens = record(usage?.tokens);
+  const cacheRead = numberOf(tokens?.cache_read_tokens) ?? 0;
+  const cacheWrite = numberOf(tokens?.cache_write_tokens) ?? 0;
+  return [
+    fact("步数", numberText(usage?.steps)),
+    fact("工具调用", numberText(usage?.tool_calls)),
+    fact("输入 token", numberText(tokens?.input_tokens)),
+    // Worded as a part of the prompt above, because that is what it is: the
+    // cached share is already inside `input_tokens`, and a label that read like
+    // a separate stream would invite adding it twice.
+    ...(cacheRead === 0 ? [] : [fact("其中缓存命中", String(cacheRead))]),
+    fact("输出 token", numberText(tokens?.output_tokens)),
+    ...(cacheWrite === 0 ? [] : [fact("缓存写入", String(cacheWrite))]),
+    fact("总计 token", totalTokens(tokens)),
+  ];
+}
+
+/**
+ * Every token the run moved, counted the way the budget counts them.
+ *
+ * Not `input + output`: cache writes are reported outside the prompt, so the
+ * two rows above can sum to less than the run spent. This is the figure
+ * `max_total_tokens` is compared against (`TokenUsage.total`), and it is
+ * recomputed here because that property is a Python `@property` and never
+ * reaches the payload. Kept decomposed exactly as the domain decomposes it,
+ * clamp included, so the number under the ceiling is the number that gated it.
+ */
+function totalTokens(tokens: Record<string, unknown> | null): string {
+  if (tokens === null) return "—";
+  const input = numberOf(tokens.input_tokens) ?? 0;
+  const output = numberOf(tokens.output_tokens) ?? 0;
+  const cacheRead = numberOf(tokens.cache_read_tokens) ?? 0;
+  const cacheWrite = numberOf(tokens.cache_write_tokens) ?? 0;
+  const uncachedInput = Math.max(0, input - cacheRead);
+  return String(uncachedInput + cacheRead + output + cacheWrite);
+}
+
+/**
+ * An optional budget ceiling. "Unset" is a real answer here rather than a
+ * missing one -- the domain skips the check entirely when the field is null,
+ * so the run genuinely has no such ceiling -- and only a payload with no
+ * budget at all is unknown.
+ */
+function ceilingText(budget: Record<string, unknown> | null, key: string): string {
+  if (budget === null) return "—";
+  const parsed = numberOf(budget[key]);
+  return parsed === null ? "未设上限" : String(parsed);
+}
+
+/**
+ * An instant, as a clock a reader can compare against the step times beside
+ * it. Null when there is nothing to show, so callers can drop the row instead
+ * of printing a dash on the many runs that carry no deadline.
+ */
+function wallClock(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? formatDateTime(value) : null;
 }
 
 /** Tool arguments, on the same opt-in terms as the prompt. */
@@ -338,6 +441,13 @@ function label(labels: Readonly<Record<string, string>>, value: unknown): string
 
 function text(value: unknown): string {
   return typeof value === "string" && value !== "" ? value : "—";
+}
+
+/** 是 / 否 / 没说 -- the third is not the second. */
+function retryableText(value: unknown): string {
+  if (value === true) return "是";
+  if (value === false) return "否";
+  return "—";
 }
 
 function numberOf(value: unknown): number | null {
