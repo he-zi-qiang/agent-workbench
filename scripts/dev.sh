@@ -282,9 +282,21 @@ demo-check)
 demo-api)
   export AW_CONFIG_FILE=config/config.demo-local.toml
   if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
-    echo "console profile (Word + web); provider key available to Worker processes" >&2
+    # Chat's `web_search` exists only when `research` is configured
+    # (ADR-021): with no provider the tool is never built, and the model
+    # answers "我没有联网查询功能" -- which is true of that deployment and
+    # reads to a user like the feature is broken.
+    #
+    # Set here rather than in config.demo-local.toml because that file is
+    # tracked and `research.enabled` without a key is a startup error by
+    # design: turning it on in the file would break every keyless checkout.
+    # config.local.toml documents this exact escape hatch; this is the console
+    # profile applying it for itself, on the one condition that makes it safe.
+    export AW_RESEARCH__ENABLED=true
+    echo "console profile (Word + web + chat search); provider key available" >&2
   else
     echo "console profile, no provider key: API can submit but no real Worker can run" >&2
+    echo "  chat has no web_search on this start: research needs the provider key" >&2
   fi
   shift
   exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
@@ -296,6 +308,12 @@ demo-worker)
     echo "demo-worker requires AW_SECRETS__DEEPSEEK_API_KEY; refusing a demo graph" >&2
     exit 2
   fi
+  # The Worker's own reason for the same switch: with `research` unconfigured,
+  # `external_search` is left out of every Task authorization envelope frozen
+  # at submission, so the graph's research node proposes a tool its own
+  # envelope denies -- one wasted model turn per Task, ending in
+  # `outside_submitted_envelope`.
+  export AW_RESEARCH__ENABLED=true
   # Both servers, before the Worker rather than after: MCP discovery happens
   # once at startup and never hot-reloads, so a server started late leaves a
   # Worker that is up, healthy, and missing the tool the whole profile is for.
