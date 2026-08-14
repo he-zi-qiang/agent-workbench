@@ -1,8 +1,11 @@
 import { identityHeaders } from "../../api/client";
 import {
+  isDegradedFrame,
+  isLiveFrame,
   isQuarantineFrame,
   parseSseChunk,
   type SseChunkFrame,
+  type SseLiveFrame,
   type SseQuarantineFrame,
 } from "../../api/sse";
 import type { PrincipalIdentity } from "../../api/types";
@@ -23,6 +26,11 @@ interface SessionStreamOptions {
   onFrame: (frame: SseChunkFrame) => FrameAcceptance;
   onCursor: (cursor: StoredChatCursor) => void;
   onConnectionChange: (state: ChatConnectionState, error?: string) => void;
+  //: How many live events the server dropped before this reader took them.
+  //: Optional because it is not history: a subscriber that only renders the
+  //: durable record has nothing to do with it, and should not be forced to say
+  //: so with an empty function.
+  onLiveGap?: (dropped: number) => void;
 }
 
 class PermanentStreamError extends Error {}
@@ -116,6 +124,13 @@ function acceptFrame(
   current: StoredChatCursor | null,
 ): StoredChatCursor | null {
   if (isQuarantineFrame(frame)) return acceptQuarantine(options, frame, current);
+  if (isDegradedFrame(frame)) {
+    // Nothing to apply and nothing to move. The gap is in the live view only;
+    // the durable history behind it is complete and still arriving.
+    options.onLiveGap?.(frame.degraded.dropped_events);
+    return current;
+  }
+  if (isLiveFrame(frame)) return acceptLive(options, frame, current);
 
   const sequence = frame.envelope.sequence;
   if (
@@ -144,6 +159,32 @@ function acceptFrame(
   const next = { id: frame.id, sequence };
   options.onCursor(next);
   return next;
+}
+
+/**
+ * An event that is happening rather than one that was recorded.
+ *
+ * Three things this deliberately does *not* do, each of which would be correct
+ * for a durable frame and wrong here:
+ *
+ * * it does not advance the cursor. There is no position to advance to, and
+ *   writing one would point a reconnect at a place the replay cannot serve;
+ * * it does not check `frame.id`. The parser already proved it is absent, and
+ *   that absence is the frame's defining property rather than a defect;
+ * * it does not reconnect when the reducer refuses the event. A live event is
+ *   an accelerator: dropping one costs a moment of stale text, while tearing
+ *   down the connection would cost the durable replay riding on it.
+ *
+ * The one check that stays is ownership. A frame for another stream on this
+ * socket is not something to render, whatever it is.
+ */
+function acceptLive(
+  options: SessionStreamOptions,
+  frame: SseLiveFrame,
+  current: StoredChatCursor | null,
+): StoredChatCursor | null {
+  if (frame.envelope.stream_id === options.sessionId) options.onFrame(frame);
+  return current;
 }
 
 /**

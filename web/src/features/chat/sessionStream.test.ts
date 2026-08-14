@@ -1,4 +1,8 @@
-import { isQuarantineFrame, type SseChunkFrame } from "../../api/sse";
+import {
+  isDegradedFrame,
+  isQuarantineFrame,
+  type SseChunkFrame,
+} from "../../api/sse";
 import type { PrincipalIdentity } from "../../api/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamChatSession, type FrameAcceptance } from "./sessionStream";
@@ -63,7 +67,9 @@ describe("Chat fetch SSE", () => {
       initialCursor: { id: "cursor_4", sequence: 4 },
       signal: controller.signal,
       onFrame: (frame) => {
-        if (!isQuarantineFrame(frame)) seen.push(frame.envelope.event_id);
+        if (!isQuarantineFrame(frame) && !isDegradedFrame(frame)) {
+          seen.push(frame.envelope.event_id);
+        }
         controller.abort();
         return "accepted";
       },
@@ -110,7 +116,9 @@ describe("Chat fetch SSE", () => {
       initialCursor: { id: "cursor_4", sequence: 4 },
       signal: controller.signal,
       onFrame: (frame) => {
-        if (!isQuarantineFrame(frame)) seen.push(frame.envelope.event_id);
+        if (!isQuarantineFrame(frame) && !isDegradedFrame(frame)) {
+          seen.push(frame.envelope.event_id);
+        }
         return "accepted";
       },
       onCursor: (cursor) => cursors.push(cursor),
@@ -465,6 +473,7 @@ function traceOf(
           trace.disclosed.push(frame.quarantined.sequence);
           return rejectQuarantine ? "rejected" : "accepted";
         }
+        if (isDegradedFrame(frame)) return "accepted";
         trace.seen.push(frame.envelope.event_id);
         return "accepted";
       },

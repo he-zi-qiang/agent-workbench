@@ -3883,3 +3883,28 @@ pre {
   font-size: 12px;
   line-height: 1.65;
 }
+
+/* The model's text before it has been published.
+   Deliberately unlike an answer bubble: no card, a left rule and dimmed body,
+   so a reader scanning the transcript cannot mistake it for something that
+   cleared the release boundary. It is removed from the DOM when the turn
+   settles, so nothing here has to undo itself. */
+.aw-chat-live-text {
+  margin: 4px 0 2px;
+  padding-left: 12px;
+  border-left: 2px solid var(--aw-border-strong, rgba(0, 0, 0, 0.18));
+}
+
+.aw-chat-live-text p {
+  margin: 0;
+  color: var(--aw-text-muted, #5b5751);
+  white-space: pre-wrap;
+}
+
+.aw-chat-live-text small {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  margin-top: 4px;
+  color: var(--aw-text-subtle, #8a847c);
+}

@@ -53,6 +53,7 @@ import {
   type ChatConnectionState,
   type ChatSessionState,
   type ChatTurnState,
+  type LiveTextState,
 } from "./model";
 import { deriveTurnStages, isTurnMetaActivity } from "./turnStages";
 import { useChatRuntime } from "./useChatRuntime";
@@ -509,8 +510,17 @@ function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void
           </div>
         ) : null}
         {turn.answer === undefined ? null : <MarkdownContent text={turn.answer} />}
+        {turn.stream === undefined ? null : <LiveText stream={turn.stream} />}
         {!turn.historical && (turn.phase === "submitting" || turn.phase === "running") ? (
-          <LoadingLine label={turn.phase === "submitting" ? "正在提交 Turn" : "等待安全发布边界"} />
+          <LoadingLine
+            label={
+              turn.phase === "submitting"
+                ? "正在提交 Turn"
+                : turn.stream !== undefined && !turn.stream.redacted
+                  ? "正在生成，尚未发布"
+                  : "等待安全发布边界"
+            }
+          />
         ) : null}
         {turn.historical && turn.answer === undefined ? (
           <p className="aw-chat-no-citations">历史仅包含用户消息；服务端没有发布 assistant 消息。</p>
@@ -559,6 +569,34 @@ function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void
  * reader was done with. Grouping into the three things a turn does gives the
  * same detail behind three lines, and the running one opens itself.
  */
+
+/**
+ * What the model is writing, before anything has been published.
+ *
+ * Marked as provisional in the markup and in words, because it is the one
+ * thing on this page that is not a published answer: it has not crossed the
+ * release boundary, it may still be withheld, and it disappears when the turn
+ * settles rather than turning into the answer above it.
+ *
+ * `redacted` renders nothing at all. Retrieval-backed shapes stream deltas the
+ * server has deliberately emptied (ADR-052), so there is genuinely no text --
+ * and an empty bubble claiming to be live output would be a worse lie than the
+ * waiting line beneath it.
+ */
+function LiveText({ stream }: { stream: LiveTextState }) {
+  if (stream.redacted || stream.text === "") return null;
+  return (
+    <div aria-live="polite" className="aw-chat-live-text">
+      <p>{stream.text}</p>
+      <small>
+        <CircleDot aria-hidden="true" size={12} />
+        正在生成的过程文本，尚未通过发布边界
+        {stream.dropped > 0 ? `（有 ${String(stream.dropped)} 段未能送达）` : ""}
+      </small>
+    </div>
+  );
+}
+
 function TurnStepStream({ turn }: { turn: ChatTurnState }) {
   const stages = deriveTurnStages(turn.activities, turn.phase);
   const meta = turn.activities.filter(isTurnMetaActivity);
