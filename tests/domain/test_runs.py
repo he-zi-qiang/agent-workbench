@@ -352,3 +352,80 @@ def test_stale_execution_has_one_fixed_non_retryable_outcome() -> None:
     assert outcome.error.code == "stale_execution"
     assert outcome.error.message == "execution lease expired"
     assert outcome.error.retryable is False
+
+
+# --- a code run is not a Task, and the type says so ---------------------------
+
+
+def _code_request(**overrides: object) -> dict[str, object]:
+    """The smallest legal code run, as keyword arguments a test can bend."""
+
+    base: dict[str, object] = {
+        "trace": TraceContext(agent_run_id="run_1"),
+        "run_kind": "code",
+        "stream_id": "ses_1",
+        "principal": PrincipalContext(principal_id="user_1", tenant_id="tenant_a"),
+        "envelope": AuthorizationEnvelope(),
+        "budget": RunBudget(
+            max_steps=4,
+            max_tool_calls=4,
+            deadline=datetime(2026, 8, 13, tzinfo=UTC),
+        ),
+        "messages": (user_message("do the thing"),),
+    }
+    base.update(overrides)
+    return base
+
+
+def test_a_code_run_may_not_carry_a_task_position() -> None:
+    """Its events would land on a timeline the Registry never opened."""
+
+    for position in ("task_id", "workflow_thread_id"):
+        with pytest.raises(ValidationError):
+            AgentRunRequest(
+                **_code_request(
+                    trace=TraceContext(agent_run_id="run_1", **{position: "id_1"}),
+                )
+            )
+
+
+def test_a_code_run_must_carry_a_deadline() -> None:
+    """No lease, no reaper, no invocation budget -- the clock is all there is."""
+
+    with pytest.raises(ValidationError):
+        AgentRunRequest(
+            **_code_request(budget=RunBudget(max_steps=4, max_tool_calls=4))
+        )
+
+
+def test_the_two_code_rules_do_not_touch_the_other_run_kinds() -> None:
+    """The control, and it is two-sided.
+
+    Without it, a validator that refused *every* request would satisfy both
+    assertions above while breaking every Task and Chat run in the system.
+    """
+
+    task = AgentRunRequest(
+        **_code_request(
+            run_kind="task",
+            trace=TraceContext(
+                agent_run_id="run_1",
+                task_id="task_1",
+                workflow_thread_id="thread_1",
+                graph_node_id="work",
+            ),
+            budget=RunBudget(max_steps=4, max_tool_calls=4),
+        )
+    )
+    chat = AgentRunRequest(
+        **_code_request(
+            run_kind="chat",
+            budget=RunBudget(max_steps=4, max_tool_calls=4),
+        )
+    )
+    code = AgentRunRequest(**_code_request())
+
+    assert (task.run_kind, chat.run_kind, code.run_kind) == ("task", "chat", "code")
+    # A task run with no deadline is still legal: what bounds it is the lease
+    # and the invocation budget, neither of which a code run has.
+    assert task.budget.deadline is None
