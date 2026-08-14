@@ -21,12 +21,12 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.application.answer_release import AnswerReleaseSink
-from agent_workbench.apps.api.routes.events import (
+from agent_workbench.apps.api.sse import (
     HEARTBEAT,
     LAST_EVENT_ID_HEADER,
-    _frame,
-    _resume_from,
-    _stream,
+    frame_for,
+    resume_from,
+    stream_events,
 )
 from agent_workbench.domain.events import ModelCompleted, ModelDelta, RunStarted
 from agent_workbench.domain.runs import RunBudget
@@ -40,7 +40,7 @@ def _started() -> RunStarted:
 
 
 class _FakeRequest:
-    """Only the header lookup ``_resume_from`` uses."""
+    """Only the header lookup ``resume_from`` uses."""
 
     def __init__(self, raw: str | None) -> None:
         self.headers = {} if raw is None else {LAST_EVENT_ID_HEADER: raw}
@@ -50,13 +50,13 @@ class _FakeRequest:
 
 
 def test_no_cursor_starts_at_the_beginning() -> None:
-    assert _resume_from(_FakeRequest(None), "ses_1") is None  # pyright: ignore[reportArgumentType]
+    assert resume_from(_FakeRequest(None), "ses_1") is None  # pyright: ignore[reportArgumentType]
 
 
 def test_a_cursor_resumes_after_its_sequence() -> None:
     raw = EventCursor(stream_id="ses_1", sequence=7).encode()
 
-    assert _resume_from(_FakeRequest(raw), "ses_1") == 7  # pyright: ignore[reportArgumentType]
+    assert resume_from(_FakeRequest(raw), "ses_1") == 7  # pyright: ignore[reportArgumentType]
 
 
 def test_a_cursor_for_another_stream_is_ignored() -> None:
@@ -64,7 +64,7 @@ def test_a_cursor_for_another_stream_is_ignored() -> None:
 
     raw = EventCursor(stream_id="ses_other", sequence=7).encode()
 
-    assert _resume_from(_FakeRequest(raw), "ses_1") is None  # pyright: ignore[reportArgumentType]
+    assert resume_from(_FakeRequest(raw), "ses_1") is None  # pyright: ignore[reportArgumentType]
 
 
 def test_a_malformed_cursor_starts_over_rather_than_failing() -> None:
@@ -74,7 +74,7 @@ def test_a_malformed_cursor_starts_over_rather_than_failing() -> None:
     with no way to discover that clearing it would help.
     """
 
-    assert _resume_from(_FakeRequest("not-a-cursor"), "ses_1") is None  # pyright: ignore[reportArgumentType]
+    assert resume_from(_FakeRequest("not-a-cursor"), "ses_1") is None  # pyright: ignore[reportArgumentType]
 
 
 def test_uncommitted_answer_text_cannot_enter_an_sse_frame() -> None:
@@ -96,7 +96,7 @@ def test_uncommitted_answer_text_cannot_enter_an_sse_frame() -> None:
         await release.withhold(text="safe refusal")
         replayed = await log.read(scope.stream_id)
         return "".join(
-            _frame(event, scope.stream_id, event.sequence)
+            frame_for(event, scope.stream_id, event.sequence)
             for event in replayed
             if event.sequence is not None
         )
@@ -117,7 +117,7 @@ async def _collect(
     """Take the first ``frames`` frames, then stop."""
 
     out: list[str] = []
-    generator = _stream(
+    generator = stream_events(
         log,
         stream_id=stream_id,
         after_sequence=after,
@@ -265,7 +265,7 @@ def test_a_disconnected_subscriber_stops_the_stream(events_dsn: str) -> None:
         async def gone() -> bool:
             return True
 
-        generator = _stream(
+        generator = stream_events(
             log,
             stream_id=scope.stream_id,
             after_sequence=None,
