@@ -25,6 +25,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnResult,
     ConversationSession,
     PendingChatRelease,
+    SessionMode,
     StoredChatTurn,
     StoredMessage,
 )
@@ -54,12 +55,14 @@ class InMemoryConversationStore:
         tenant_id: str,
         owner_id: str,
         title: str | None = None,
+        mode: SessionMode = "chat",
     ) -> ConversationSession:
         session = ConversationSession(
             session_id=session_id,
             tenant_id=tenant_id,
             owner_id=owner_id,
             title=title,
+            mode=mode,
         )
         async with self._lock:
             if session_id in self._sessions:
@@ -89,10 +92,14 @@ class InMemoryConversationStore:
         tenant_id: str,
         principal_id: str,
         limit: int | None = None,
+        mode: SessionMode | None = None,
     ) -> tuple[StoredMessage, ...]:
         async with self._lock:
             self._require_session(
-                session_id=session_id, tenant_id=tenant_id, principal_id=principal_id
+                session_id=session_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                mode=mode,
             )
             stored = tuple(self._messages[session_id])
         return stored if limit is None else stored[:limit]
@@ -483,14 +490,19 @@ class InMemoryConversationStore:
         session_id: str,
         tenant_id: str,
         principal_id: str,
+        mode: SessionMode | None = None,
     ) -> ConversationSession:
         session = self._sessions.get(session_id)
-        # A wrong tenant, a wrong principal and a missing session answer
-        # identically: any difference would confirm somebody else's exists.
+        # A wrong tenant, a wrong principal, a wrong mode and a missing session
+        # answer identically: any difference would confirm somebody else's
+        # exists. The mode joins that list rather than raising its own error
+        # because "this id is a code session" is exactly the kind of detail a
+        # caller probing the Chat API with guessed ids would want.
         if (
             session is None
             or session.tenant_id != tenant_id
             or session.owner_id != principal_id
+            or (mode is not None and session.mode != mode)
         ):
             raise NotFoundError("conversation session not found")
         return session

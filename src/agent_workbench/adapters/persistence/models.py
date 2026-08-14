@@ -60,6 +60,22 @@ conversation_sessions = Table(
     Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("title", String(256), nullable=True),
+    # Which API may drive this session. Chat and Code share this table because
+    # they share an identity -- one principal, one tenant, one ordered history
+    # -- but they do not share a lifecycle: Chat publishes answers through
+    # ``chat_turns``, and Code writes no turn row at all. A session that could
+    # be driven by either API would be a session whose lifecycle depends on
+    # which URL last touched it.
+    #
+    # The default is 'chat' rather than absent because every row that existed
+    # before this column was a chat session, and a nullable mode would push the
+    # question "what is a session with no mode allowed to do" into every reader.
+    Column(
+        "mode",
+        String(16),
+        nullable=False,
+        server_default=text("'chat'"),
+    ),
     Column(
         "created_at",
         DateTime(timezone=True),
@@ -68,6 +84,10 @@ conversation_sessions = Table(
     ),
     # Every query carries the tenant, so the tenant leads the index.
     Index("ix_conversation_sessions_tenant_id_session_id", "tenant_id", "session_id"),
+    CheckConstraint(
+        "mode IN ('chat', 'code')",
+        name="conversation_sessions_mode",
+    ),
 )
 
 messages = Table(

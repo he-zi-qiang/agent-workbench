@@ -19,6 +19,8 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from agent_workbench.adapters.persistence import create_query_engine, metadata
 from agent_workbench.bootstrap.paths import PROJECT_ROOT
@@ -305,6 +307,113 @@ def test_knowledge_base_entities_backfill_existing_document_scopes(
             True,
         ),
     ]
+
+
+def test_sessions_that_predate_the_mode_column_become_chat_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every session written before 0026 was a chat session, so it says so.
+
+    The second half is the constraint, and it is the half that makes the
+    column a gate: a writer that skips the repository must not be able to
+    invent a third mode that every reader's ``mode=`` predicate then misses.
+    """
+
+    dsn = _dsn()
+    monkeypatch.setenv(MIGRATION_DSN_ENV_VAR, dsn)
+    config = _config()
+    command.upgrade(config, "head")
+    command.downgrade(config, "0025_agent_invocation_count")
+
+    async def seed_legacy_session() -> None:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO conversation_sessions "
+                        "(session_id, tenant_id, owner_id, title) VALUES "
+                        "('ses_before_mode', 'tenant_before_mode', "
+                        "'user_before_mode', NULL)"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    async def inspect_upgraded_session() -> tuple[str, str, bool, bool]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.connect() as connection:
+                mode = (
+                    await connection.execute(
+                        text(
+                            "SELECT mode FROM conversation_sessions "
+                            "WHERE session_id = 'ses_before_mode'"
+                        )
+                    )
+                ).scalar_one()
+                nullable = (
+                    await connection.execute(
+                        text(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_schema = current_schema() "
+                            "AND table_name = 'conversation_sessions' "
+                            "AND column_name = 'mode'"
+                        )
+                    )
+                ).scalar_one()
+                return (
+                    str(mode),
+                    str(nullable),
+                    await _mode_is_storable(connection, "code"),
+                    await _mode_is_storable(connection, "shell"),
+                )
+        finally:
+            await engine.dispose()
+
+    async def remove_fixtures() -> None:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "DELETE FROM conversation_sessions "
+                        "WHERE session_id LIKE 'ses_%_mode'"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    try:
+        asyncio.run(seed_legacy_session())
+        command.upgrade(config, "head")
+        observed = asyncio.run(inspect_upgraded_session())
+    finally:
+        command.upgrade(config, "head")
+        asyncio.run(remove_fixtures())
+
+    assert observed == ("chat", "NO", True, False)
+
+
+async def _mode_is_storable(connection: AsyncConnection, mode: str) -> bool:
+    """Whether the CHECK admits this mode, without poisoning the transaction."""
+
+    # The savepoint is what makes the rejected insert survivable: a violated
+    # CHECK aborts the whole transaction, so a second probe on the same
+    # connection would fail for a reason that has nothing to do with its mode.
+    try:
+        async with connection.begin_nested():
+            await connection.execute(
+                text(
+                    "INSERT INTO conversation_sessions "
+                    "(session_id, tenant_id, owner_id, mode) VALUES "
+                    "(:session_id, 'tenant_before_mode', 'user_before_mode', :mode)"
+                ),
+                {"session_id": f"ses_{mode}_mode", "mode": mode},
+            )
+    except IntegrityError:
+        return False
+    return True
 
 
 def test_migrations_refuse_to_run_without_a_dsn(

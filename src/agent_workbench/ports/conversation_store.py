@@ -41,6 +41,13 @@ RequestHash = Annotated[
     str,
     StringConstraints(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"),
 ]
+#: Which API a conversation session answers to.
+#:
+#: Chat and Code share a session's identity and its message history; they do
+#: not share a lifecycle. Chat publishes an answer through a turn ledger, and
+#: Code writes no turn row at all. So the mode is not a label on a session --
+#: it decides which set of operations the session even has.
+SessionMode = Literal["chat", "code"]
 ChatTurnStatus = Literal[
     "running",
     "release_pending",
@@ -89,6 +96,10 @@ class ConversationSession(VersionedModel):
     tenant_id: Identifier
     owner_id: Identifier
     title: ShortText | None = None
+    #: Defaults to chat because every session written before this field existed
+    #: was created by the Chat API. The other direction would relabel the whole
+    #: history as something no Chat request may touch.
+    mode: SessionMode = "chat"
 
 
 class StoredMessage(VersionedModel):
@@ -297,6 +308,7 @@ class ConversationStore(Protocol):
         tenant_id: str,
         owner_id: str,
         title: str | None = None,
+        mode: SessionMode = "chat",
     ) -> ConversationSession: ...
 
     async def append(
@@ -323,12 +335,18 @@ class ConversationStore(Protocol):
         tenant_id: str,
         principal_id: str,
         limit: int | None = None,
+        mode: SessionMode | None = None,
     ) -> tuple[StoredMessage, ...]:
         """Messages in sequence order, oldest first, for their owner only.
 
         A conversation is the most personal thing this system stores. Scoping
         it to a tenant says whose database it is, not whose conversation it
         is, and a session id travels through URLs and logs like any other.
+
+        ``mode`` is the same kind of scope. A caller that names one refuses a
+        session of the other mode with ``NotFoundError`` -- the identical
+        answer given to another tenant's id, because "exists, wrong mode" is a
+        fact about somebody else's session that no asker is owed.
         """
         ...
 
@@ -455,6 +473,7 @@ __all__ = [
     "IdempotencyKey",
     "PendingChatRelease",
     "RequestHash",
+    "SessionMode",
     "StoredChatTurn",
     "StoredMessage",
     "chat_turn_terminal_event_key",

@@ -44,12 +44,17 @@ async def subscribe(session_id: str, request: Request) -> StreamingResponse:
         raise NotFoundError("this process does not serve chat")
 
     # Raises NotFoundError for another principal's session, another tenant's,
-    # and one that does not exist -- the same answer to all three.
+    # a session this route does not serve, and one that does not exist -- the
+    # same answer to all four. The mode is named rather than defaulted because
+    # this router is mounted at a chat path: a code session's events are not
+    # this route's to stream, and inheriting a default would make that depend
+    # on what some other caller happened to pass.
     await chat.conversations.history(
         session_id=session_id,
         tenant_id=principal.tenant_id,
         principal_id=principal.principal_id,
         limit=1,
+        mode="chat",
     )
 
     after = resume_from(request, session_id)

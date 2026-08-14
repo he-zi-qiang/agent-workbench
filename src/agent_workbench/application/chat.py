@@ -403,10 +403,19 @@ class ChatService:
     async def history(
         self, *, session_id: str, tenant_id: str, principal_id: str
     ) -> tuple[Message, ...]:
-        """This principal's own conversation, oldest first."""
+        """This principal's own chat conversation, oldest first.
+
+        The mode is fixed here rather than taken as an argument: this service
+        is the Chat one, and a caller able to ask it for a code session's
+        history would be reading a conversation that this service's own turn
+        lifecycle never produced.
+        """
 
         stored = await self.conversations.history(
-            session_id=session_id, tenant_id=tenant_id, principal_id=principal_id
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="chat",
         )
         return tuple(record.message for record in stored)
 

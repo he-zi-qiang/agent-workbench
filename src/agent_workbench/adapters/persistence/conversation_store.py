@@ -37,6 +37,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnResult,
     ConversationSession,
     PendingChatRelease,
+    SessionMode,
     StoredChatTurn,
     StoredMessage,
 )
@@ -57,6 +58,7 @@ class PostgresConversationStore:
         tenant_id: str,
         owner_id: str,
         title: str | None = None,
+        mode: SessionMode = "chat",
     ) -> ConversationSession:
         async with self._engine.begin() as connection:
             try:
@@ -66,6 +68,7 @@ class PostgresConversationStore:
                         tenant_id=tenant_id,
                         owner_id=owner_id,
                         title=title,
+                        mode=mode,
                     )
                 )
             except IntegrityError as exc:
@@ -79,6 +82,7 @@ class PostgresConversationStore:
             tenant_id=tenant_id,
             owner_id=owner_id,
             title=title,
+            mode=mode,
         )
 
     async def append(
@@ -106,12 +110,19 @@ class PostgresConversationStore:
         tenant_id: str,
         principal_id: str,
         limit: int | None = None,
+        mode: SessionMode | None = None,
     ) -> tuple[StoredMessage, ...]:
         if limit is not None and limit < 1:
             raise ValueError("limit must be positive")
 
         async with self._engine.connect() as connection:
-            await self._require_session(connection, session_id, tenant_id, principal_id)
+            await self._require_session(
+                connection,
+                session_id,
+                tenant_id,
+                principal_id,
+                mode=mode,
+            )
             return await self._history(connection, session_id=session_id, limit=limit)
 
     async def claim_turn(
@@ -761,16 +772,25 @@ class PostgresConversationStore:
         session_id: str,
         tenant_id: str,
         principal_id: str,
+        *,
+        mode: SessionMode | None = None,
     ) -> None:
-        result = await connection.execute(
+        query = (
             select(conversation_sessions.c.session_id)
             .where(conversation_sessions.c.session_id == session_id)
             .where(conversation_sessions.c.tenant_id == tenant_id)
             .where(conversation_sessions.c.owner_id == principal_id)
         )
+        if mode is not None:
+            # A predicate in the same WHERE clause, not a check on the row that
+            # came back: the row must stay unfetchable, so that no future edit
+            # can start reporting on a session this caller may not address.
+            query = query.where(conversation_sessions.c.mode == mode)
+        result = await connection.execute(query)
         if result.first() is None:
-            # A wrong tenant, principal and missing id intentionally answer the
-            # same way; distinguishing them confirms another session exists.
+            # A wrong tenant, principal, mode and missing id intentionally
+            # answer the same way; distinguishing them confirms another session
+            # exists.
             raise NotFoundError("conversation session not found")
 
     async def _next_sequence(
