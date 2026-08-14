@@ -45,6 +45,7 @@ from agent_workbench.apps.api.routes import (
 from agent_workbench.apps.api.routes.approvals import InvalidApprovalCursorError
 from agent_workbench.apps.api.routes.search import SearchUnavailableError
 from agent_workbench.apps.api.routes.tasks import InvalidTaskCursorError
+from agent_workbench.apps.api.sse import TooManyLiveSubscribersError
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.apps.api.web import mount_console, resolve_web_directory
 from agent_workbench.bootstrap import load_settings
@@ -83,6 +84,10 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     InvalidApprovalCursorError: 400,
     TimelineUnavailableError: 409,
     SearchUnavailableError: 409,
+    # Not 503: the process is healthy and this stream is servable, there are
+    # just already as many live subscribers on it as it may have. A client that
+    # closed a tab and reopened it should retry, which is what 429 asks for.
+    TooManyLiveSubscribersError: 429,
 }
 
 

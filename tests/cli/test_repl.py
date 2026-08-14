@@ -57,6 +57,34 @@ class TestFrames:
 
         assert [cursor for cursor, _ in frames] == ["s:1", "s:1"]
 
+    def test_a_live_frame_cannot_move_the_resume_position(self) -> None:
+        """The server now sends id-less frames, and carrying forward is safe.
+
+        A transient event has no position, so its frame has no ``id`` line.
+        Under the rule above it reports the cursor that was already in effect,
+        and the pump assigns only truthy cursors -- so a live frame can only
+        ever write back the value already held. The durable frame after it
+        still advances normally.
+
+        Pinned because the alternative reading is tempting and wrong: resetting
+        the cursor per frame would make live frames yield ``None``, which is
+        equally safe here but would silently change what this function's tuple
+        means for every other caller.
+        """
+
+        frames = list(
+            sse_frames(
+                _lines(
+                    'id: s:1\ndata: {"a": 1}\n\n'
+                    'event: ModelDelta\ndata: {"a": 2}\n\n'
+                    'event: stream.degraded\ndata: {"dropped_events": 3}\n\n'
+                    'id: s:2\ndata: {"a": 3}\n\n'
+                )
+            )
+        )
+
+        assert [cursor for cursor, _ in frames] == ["s:1", "s:1", "s:1", "s:2"]
+
     def test_a_multi_line_data_field_is_rejoined(self) -> None:
         frames = list(sse_frames(_lines('data: {"a":\ndata: 1}\n\n')))
 

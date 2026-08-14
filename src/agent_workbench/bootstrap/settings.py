@@ -379,7 +379,13 @@ class EventStreamSettings(StrictModel):
     task_ready_channel: str = Field(pattern=r"^[a-z][a-z0-9_]{0,62}$")
     stream_ready_channel: str = Field(pattern=r"^[a-z][a-z0-9_]{0,62}$")
     replay_page_size: int = Field(default=500, ge=1, le=10_000)
-    subscriber_buffer_events: int = Field(default=256, ge=1)
+    # Both ceilings are bounded above, not only below. Together they decide how
+    # much a single API process may hold on behalf of subscribers who are not
+    # reading: buffer x subscribers x one event each. An open-ended `ge=1` on
+    # either turns a configuration typo into an out-of-memory kill, and neither
+    # is a number a deployment has a reason to raise past these.
+    subscriber_buffer_events: int = Field(default=256, ge=1, le=4096)
+    max_live_subscribers_per_stream: int = Field(default=4, ge=1, le=32)
     catchup_poll_seconds: int = Field(default=10, ge=1)
     model_delta_mode: Literal["ephemeral_sse_coalesced"] = "ephemeral_sse_coalesced"
     live_delta_coalesce_ms: int = Field(default=50, ge=1, le=1000)

@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
-from agent_workbench.adapters.events import ScopedEventSink
+from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
     PostgresApprovalStore,
@@ -81,6 +81,7 @@ from agent_workbench.application.task_triage import TaskTriageService
 from agent_workbench.application.tasks import SubmittedSemantics, TaskService
 from agent_workbench.application.uploads import UploadService
 from agent_workbench.apps.api.identity import HeaderPrincipalResolver
+from agent_workbench.apps.api.sse import LiveEventChannel
 from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
@@ -110,7 +111,7 @@ from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.documents import DocumentStore
-from agent_workbench.ports.event_log import EventLogPort, EventScope
+from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 from agent_workbench.ports.telemetry import Telemetry
 from agent_workbench.ports.tools import ToolBinding
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
@@ -171,6 +172,12 @@ class ApiDependencies:
     # question as whether it can chat.
     retrieval: RetrievalService | None
     events: EventLogPort
+    #: Where transient events go on their way to a subscriber. Process-local by
+    #: construction, because a transient event is never written anywhere and so
+    #: can only ever reach the process that produced it. Held here rather than
+    #: per request: a subscriber and the run it is watching are two different
+    #: requests, and they have to meet somewhere that outlives both.
+    live_events: LiveEventChannel
     # Assembled once per process. Records nothing when no collector is
     # configured, and never lets one break a request either way.
     telemetry: AssembledTelemetry
@@ -227,17 +234,34 @@ class ApiDependencies:
             return "ungrounded"
         return self.config.chat.retrieval_shape
 
-    def sink_for(self, *, stream_id: str, run_id: str) -> ScopedEventSink:
+    def sink_for(self, *, stream_id: str, run_id: str) -> EventSink:
         """The sink one run writes into.
 
         A stream per session and a run per turn: a subscriber follows the
         session and resumes from wherever it left off, while each turn stays
         identifiable inside it.
+
+        Tee-ed into the live channel, and the layering is what makes that safe
+        rather than a second way for an answer to escape. ``ChatService`` wraps
+        whatever it is given in ``AnswerReleaseSink`` (``application/chat.py``),
+        so redaction happens *outside* this sink: by the time a payload reaches
+        the observer below it has already crossed the publication fence. The
+        observer keeps only transient events, which is why the durable answer
+        events pass it untouched -- they are delivered by the replay, with the
+        position a reconnecting client can resume from.
+
+        Only this factory is tee-ed. The recovery reaper writes nothing but
+        durable terminal events, and triage runs against a per-call in-memory
+        log nobody can subscribe to; teeing either would fan out to no one at
+        the cost of a callback on a synchronous submission path.
         """
 
-        return ScopedEventSink(
-            log=self.events,
-            scope=EventScope(stream_id=stream_id, run_id=run_id),
+        return ObservingEventSink(
+            inner=ScopedEventSink(
+                log=self.events,
+                scope=EventScope(stream_id=stream_id, run_id=run_id),
+            ),
+            observer=self.live_events.observe,
         )
 
     async def dispose(self) -> None:
@@ -415,6 +439,12 @@ def build_dependencies(
         encoders=encoders,
         retrieval=retrieval,
         events=events,
+        live_events=LiveEventChannel(
+            buffer_events=config.event_stream.subscriber_buffer_events,
+            max_subscribers_per_stream=(
+                config.event_stream.max_live_subscribers_per_stream
+            ),
+        ),
         task_service=task_service,
         task_inputs=task_inputs,
         approvals=ApprovalService(

@@ -248,7 +248,6 @@
       "lifecycle": "live",
       "fields": [
         "event_stream.replay_page_size",
-        "event_stream.subscriber_buffer_events",
         "event_stream.catchup_poll_seconds"
       ]
     },
@@ -257,7 +256,9 @@
       "lifecycle": "live",
       "fields": [
         "event_stream.model_delta_mode",
-        "event_stream.live_delta_coalesce_ms"
+        "event_stream.live_delta_coalesce_ms",
+        "event_stream.subscriber_buffer_events",
+        "event_stream.max_live_subscribers_per_stream"
       ]
     },
     {

@@ -22,6 +22,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 
+from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
 from agent_workbench.adapters.persistence import create_query_engine
 from agent_workbench.application.chat import ChatTurn
 from agent_workbench.application.chat_execution import (
@@ -274,8 +275,30 @@ def test_a_run_sink_writes_into_the_sessions_stream(tmp_path: Path) -> None:
     dependencies = build_dependencies(project_api(_settings(tmp_path)), with_chat=False)
     sink = dependencies.sink_for(stream_id=session_id, run_id="run_1")
 
-    assert sink.scope.stream_id == session_id
-    assert sink.scope.run_id == "run_1"
+    assert isinstance(sink, ObservingEventSink)
+    inner = sink.inner
+    assert isinstance(inner, ScopedEventSink)
+    assert inner.scope.stream_id == session_id
+    assert inner.scope.run_id == "run_1"
+
+
+def test_the_run_sink_tees_into_this_process_s_live_channel(tmp_path: Path) -> None:
+    """The observer has to be *this* channel, over *this* log.
+
+    Asserting only that some ObservingEventSink exists would pass a wiring that
+    tees into a channel nobody subscribes to, or that writes into a second log.
+    Both are silent: the events still reach the database, and the live view is
+    simply always empty -- which is indistinguishable from a deployment whose
+    runs happen in a worker.
+    """
+
+    dependencies = build_dependencies(project_api(_settings(tmp_path)), with_chat=False)
+    sink = dependencies.sink_for(stream_id="ses_1", run_id="run_1")
+
+    assert isinstance(sink, ObservingEventSink)
+    assert sink.observer == dependencies.live_events.observe
+    assert isinstance(sink.inner, ScopedEventSink)
+    assert sink.inner.log is dependencies.events
 
 
 # --- the mounted side --------------------------------------------------------

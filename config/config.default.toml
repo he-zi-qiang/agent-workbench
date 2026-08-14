@@ -139,7 +139,13 @@ task_ready_channel = "task_ready"
 # guessed at: the value should be decided by whoever writes the SSE listener.
 stream_ready_channel = "agent_stream_ready"
 replay_page_size = 500
+# What one live subscriber may hold while it is not reading, and how many live
+# subscribers one stream may have. Transient events are never written anywhere,
+# so these two numbers are the whole bound on what the API process keeps on
+# behalf of slow readers. Four per stream is a browser tab, a reconnect that
+# has not been reaped yet, and slack.
 subscriber_buffer_events = 256
+max_live_subscribers_per_stream = 4
 catchup_poll_seconds = 10
 # Model deltas are live SSE only; durable events store structured/final content.
 model_delta_mode = "ephemeral_sse_coalesced"

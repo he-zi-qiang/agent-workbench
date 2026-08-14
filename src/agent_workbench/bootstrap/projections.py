@@ -328,6 +328,14 @@ class EventStreamConfig:
 
     replay_page_size: int
     catchup_poll_seconds: int
+    #: What one live subscriber may hold, and how many of them one stream may
+    #: have. Transient events are never stored, so these are the only two
+    #: numbers standing between a slow reader and this process's memory.
+    subscriber_buffer_events: int
+    max_live_subscribers_per_stream: int
+    #: How long a burst of token deltas is allowed to keep arriving before it
+    #: is sent as one frame.
+    live_delta_coalesce_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -999,6 +1007,11 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         event_stream=EventStreamConfig(
             replay_page_size=settings.event_stream.replay_page_size,
             catchup_poll_seconds=settings.event_stream.catchup_poll_seconds,
+            subscriber_buffer_events=settings.event_stream.subscriber_buffer_events,
+            max_live_subscribers_per_stream=(
+                settings.event_stream.max_live_subscribers_per_stream
+            ),
+            live_delta_coalesce_ms=settings.event_stream.live_delta_coalesce_ms,
         ),
         qdrant=_project_qdrant(settings),
         embedding=_project_embedding(settings),

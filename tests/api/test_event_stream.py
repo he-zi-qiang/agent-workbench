@@ -214,13 +214,20 @@ def test_the_frame_names_its_event_type(events_dsn: str) -> None:
     assert asyncio.run(scenario()) == "event: RunStarted"
 
 
-def test_a_transient_event_never_reaches_a_subscriber(events_dsn: str) -> None:
+def test_a_transient_event_is_never_replayed(events_dsn: str) -> None:
     """Established by the log, not by a filter in the stream.
 
-    ``read`` returns durable events by contract, so the stream has nothing to
+    ``read`` returns durable events by contract, so the replay has nothing to
     exclude -- the guard in it is unreachable, and removing it fails nothing.
     Said plainly here because a test named for the stream, passing either way,
     would look like coverage the stream does not have.
+
+    Renamed from "never reaches a subscriber", which stopped being true when
+    the live channel arrived: a transient event now reaches a subscriber
+    *live*, and never through a replay. The distinction is the whole contract
+    -- a reconnecting client is given back exactly the durable history -- so a
+    name that blurred it would make this test read as a guard against the
+    feature beside it. See ``tests/api/test_live_stream.py``.
     """
 
     async def scenario() -> list[str]:

@@ -53,15 +53,22 @@ async def subscribe(session_id: str, request: Request) -> StreamingResponse:
     )
 
     after = resume_from(request, session_id)
+    # Before the response, not inside the generator: a subscription that could
+    # only be refused once streaming had begun would have to be refused with a
+    # frame, and a client cannot tell that from a stream that ended.
+    live = dependencies.live_events.subscribe(session_id)
+    stream = dependencies.config.event_stream
     return StreamingResponse(
         stream_events(
             dependencies.events,
             stream_id=session_id,
             after_sequence=after,
-            poll_seconds=dependencies.config.event_stream.catchup_poll_seconds,
-            page_size=dependencies.config.event_stream.replay_page_size,
+            poll_seconds=stream.catchup_poll_seconds,
+            page_size=stream.replay_page_size,
             heartbeat_seconds=dependencies.config.sse_heartbeat_seconds,
             disconnected=request.is_disconnected,
+            live=live,
+            coalesce_seconds=stream.live_delta_coalesce_ms / 1000,
         ),
         media_type="text/event-stream",
         headers={

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -43,7 +44,8 @@ from typing import Protocol, runtime_checkable
 from fastapi import Request
 
 from agent_workbench.domain.errors import IncompatibleSchemaError
-from agent_workbench.domain.events import EventEnvelope
+from agent_workbench.domain.events import EventEnvelope, ModelDelta
+from agent_workbench.domain.schema import BOUNDED_TEXT_LIMIT
 from agent_workbench.ports.event_log import EventCursor, EventLogPort
 
 LAST_EVENT_ID_HEADER = "last-event-id"
@@ -58,6 +60,12 @@ HEARTBEAT = ": heartbeat\n\n"
 # with one now or after any event is added. A client dispatching on ``event:``
 # therefore cannot mistake this for something a workflow emitted.
 QUARANTINE_EVENT = "stream.quarantined"
+
+# The SSE event name for live events this subscriber was too slow to be given.
+# Same naming rule, and the same reason: a client that dispatches on ``event:``
+# has to be able to tell "you missed some of the live text" from any event a
+# run emitted.
+DEGRADED_EVENT = "stream.degraded"
 
 
 class _QuarantinedEvent(Protocol):
@@ -125,6 +133,165 @@ class _StrictPage:
     resume_after: int | None
 
 
+class TooManyLiveSubscribersError(RuntimeError):
+    """One stream already has as many live subscribers as it may have.
+
+    A refusal rather than a queue, and it happens before any streaming response
+    exists: the cost this bounds is paid per subscriber for the whole life of
+    the connection, so admitting one and starving it would spend the memory
+    anyway and hide the reason.
+    """
+
+
+@dataclass(slots=True)
+class LiveSubscription:
+    """One subscriber's share of the transient events on one stream.
+
+    Bounded, and the bound is the point. Transient events arrive at whatever
+    rate a provider streams tokens, and nothing downstream applies back
+    pressure -- the producer is a synchronous callback on the emit path, which
+    must not wait for a browser. An unbounded buffer therefore turns one slow
+    tab into unbounded memory inside the API process.
+
+    Overflow drops the **oldest** pending event and counts it. The newest delta
+    is the one that still describes what the run is doing; dropping it instead
+    would keep a stale prefix and leave the subscriber further behind on every
+    overflow. The count is not swallowed: it becomes a ``stream.degraded``
+    frame, because a live view missing some of its text and a live view that is
+    complete must not look the same.
+
+    It deliberately holds no event log and no cursor. Transient events never
+    reach the database and have no position, so a subscription that could reach
+    a log would be a subscription that could turn a token into a query.
+    """
+
+    _limit: int
+    _release: Callable[[LiveSubscription], None]
+    _pending: deque[EventEnvelope]
+    _dropped: int = 0
+    _arrival: asyncio.Event | None = None
+
+    @classmethod
+    def opened(
+        cls,
+        *,
+        buffer_events: int,
+        release: Callable[[LiveSubscription], None],
+    ) -> LiveSubscription:
+        return cls(_limit=buffer_events, _release=release, _pending=deque())
+
+    def offer(self, envelope: EventEnvelope) -> None:
+        """Take one live event, evicting the oldest if the buffer is full.
+
+        Synchronous on purpose: it is called from the sink every producer
+        writes through, and a producer that awaited a subscriber would let a
+        reader's pace decide a run's pace.
+        """
+
+        if len(self._pending) >= self._limit:
+            self._pending.popleft()
+            self._dropped += 1
+        self._pending.append(envelope)
+        if self._arrival is not None:
+            self._arrival.set()
+
+    async def wait(self, timeout: float) -> bool:
+        """Whether something arrived within ``timeout`` seconds."""
+
+        if self._pending:
+            return True
+        if self._arrival is None:
+            # Created here rather than in the constructor: an ``asyncio.Event``
+            # binds to the loop that first awaits it, and this object is built
+            # by a route before the streaming generator runs.
+            self._arrival = asyncio.Event()
+        self._arrival.clear()
+        try:
+            await asyncio.wait_for(self._arrival.wait(), timeout)
+        except TimeoutError:
+            return False
+        return True
+
+    def drain(self) -> tuple[tuple[EventEnvelope, ...], int]:
+        """Everything buffered, and how many were dropped to make room."""
+
+        taken = tuple(self._pending)
+        dropped = self._dropped
+        self._pending.clear()
+        self._dropped = 0
+        if self._arrival is not None:
+            self._arrival.clear()
+        return taken, dropped
+
+    def close(self) -> None:
+        self._release(self)
+
+
+class LiveEventChannel:
+    """Transient events, fanned out to whoever is watching that stream.
+
+    In-process only, and that is a statement about what this can honestly
+    offer rather than a stage of construction. A transient event is never
+    written anywhere, so the only subscribers it can reach are the ones inside
+    the process that produced it. A deployment whose runs happen in a worker
+    -- every Task -- gets no live text here, and gets it silently: the durable
+    replay beneath is unchanged and complete, so such a stream is not degraded,
+    it is simply not live. Saying otherwise would require this channel to
+    invent events it never saw.
+    """
+
+    def __init__(self, *, buffer_events: int, max_subscribers_per_stream: int) -> None:
+        self._buffer_events = buffer_events
+        self._max_per_stream = max_subscribers_per_stream
+        self._streams: dict[str, list[LiveSubscription]] = {}
+
+    def observe(self, envelope: EventEnvelope) -> None:
+        """Offer one emitted event to that stream's live subscribers.
+
+        Durable events are dropped here rather than forwarded, and the reason
+        is not deduplication: they are already delivered by the replay below,
+        with the position a reconnecting client resumes from. A durable event
+        arriving twice by two routes would arrive once with an id and once
+        without, and no client can be asked to reconcile that.
+        """
+
+        if envelope.durability != "transient":
+            return
+        for subscriber in self._streams.get(envelope.stream_id, ()):
+            subscriber.offer(envelope)
+
+    def subscribe(self, stream_id: str) -> LiveSubscription:
+        """Open one subscription, or refuse because this stream is full."""
+
+        subscribers = self._streams.setdefault(stream_id, [])
+        if len(subscribers) >= self._max_per_stream:
+            raise TooManyLiveSubscribersError(
+                f"this stream already has {self._max_per_stream} live subscribers"
+            )
+        subscription = LiveSubscription.opened(
+            buffer_events=self._buffer_events,
+            release=lambda closing: self._release(stream_id, closing),
+        )
+        subscribers.append(subscription)
+        return subscription
+
+    def _release(self, stream_id: str, subscription: LiveSubscription) -> None:
+        subscribers = self._streams.get(stream_id)
+        if subscribers is None:
+            return
+        if subscription in subscribers:
+            subscribers.remove(subscription)
+        if not subscribers:
+            # Otherwise the map grows by one empty list per session ever
+            # subscribed to, for the life of the process.
+            del self._streams[stream_id]
+
+    def subscriber_count(self, stream_id: str) -> int:
+        """How many live subscribers one stream has. For tests and metrics."""
+
+        return len(self._streams.get(stream_id, ()))
+
+
 def resume_from(request: Request, stream_id: str) -> int | None:
     """Where this subscriber left off, or ``None`` to start at the beginning.
 
@@ -157,12 +324,24 @@ async def stream_events(
     page_size: int,
     heartbeat_seconds: int,
     disconnected: Callable[[], Awaitable[bool]] | None,
+    live: LiveSubscription | None = None,
+    coalesce_seconds: float = 0.05,
 ) -> AsyncIterator[str]:
     """Replay, then keep replaying from wherever the last batch ended.
 
-    Latency here is bounded by the poll interval. The configuration also names
-    a LISTEN/NOTIFY wakeup backend, which nothing consumes yet: until it does,
-    this is the honest behaviour rather than a claim about it.
+    Durable latency is bounded by the poll interval. The configuration also
+    names a LISTEN/NOTIFY wakeup backend, which nothing consumes yet: until it
+    does, this is the honest behaviour rather than a claim about it.
+
+    ``live`` adds transient events to the same connection *without* adding a
+    second reason to query the log. They are delivered in the gap this loop
+    would otherwise spend asleep, so a burst of a thousand token deltas costs
+    the database nothing -- the alternative, waking the loop per delta, would
+    have made a fast model a source of load on PostgreSQL.
+
+    With ``live`` absent the bytes are exactly what they were before this
+    parameter existed, which is what lets a second subscriber route reuse this
+    and produce frames a client cannot distinguish from the first one's.
     """
 
     cursor = after_sequence
@@ -172,6 +351,46 @@ async def stream_events(
     # one subscription serve part of a stream strictly and part of it
     # isolating -- two different meanings for one connection's frames.
     isolating = events if isinstance(events, IsolatingEventLog) else None
+    try:
+        async for frame in _replay_forever(
+            events,
+            isolating,
+            stream_id=stream_id,
+            cursor=cursor,
+            idle=idle,
+            poll_seconds=poll_seconds,
+            page_size=page_size,
+            heartbeat_seconds=heartbeat_seconds,
+            disconnected=disconnected,
+            live=live,
+            coalesce_seconds=coalesce_seconds,
+        ):
+            yield frame
+    finally:
+        # Every way out lands here -- the client closing the tab, the generator
+        # being garbage collected, an exception on the socket. A subscription
+        # released anywhere else would leak one buffer per dropped connection,
+        # and the per-stream ceiling would then refuse the reconnect.
+        if live is not None:
+            live.close()
+
+
+async def _replay_forever(
+    events: EventLogPort,
+    isolating: IsolatingEventLog | None,
+    *,
+    stream_id: str,
+    cursor: int | None,
+    idle: float,
+    poll_seconds: int,
+    page_size: int,
+    heartbeat_seconds: int,
+    disconnected: Callable[[], Awaitable[bool]] | None,
+    live: LiveSubscription | None,
+    coalesce_seconds: float,
+) -> AsyncIterator[str]:
+    """The loop itself, so its caller can own what happens when it ends."""
+
     while True:
         if disconnected is not None and await disconnected():
             return
@@ -207,7 +426,42 @@ async def stream_events(
         if idle >= heartbeat_seconds:
             idle = 0.0
             yield HEARTBEAT
-        await asyncio.sleep(poll_seconds)
+        if live is None:
+            await asyncio.sleep(poll_seconds)
+            continue
+        # The same wait, spent watching the live buffer instead of nothing.
+        async for frame in _live_window(live, poll_seconds, coalesce_seconds):
+            yield frame
+
+
+async def _live_window(
+    live: LiveSubscription,
+    seconds: float,
+    coalesce_seconds: float,
+) -> AsyncIterator[str]:
+    """Transient frames arriving within ``seconds``, then return.
+
+    Each burst is given ``coalesce_seconds`` to finish arriving before it is
+    drained. A model streams tokens far faster than a frame per token is worth
+    sending, and the window is what turns "one frame per token" into "one frame
+    per readable chunk" without holding anything back for longer than that.
+    """
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return
+        if not await live.wait(remaining):
+            return
+        await asyncio.sleep(min(coalesce_seconds, max(0.0, deadline - loop.time())))
+        envelopes, dropped = live.drain()
+        if dropped > 0:
+            # Before the events it made room for: the gap is in front of them.
+            yield degraded_frame(dropped)
+        for frame in live_frames(envelopes):
+            yield frame
 
 
 async def _read_page(
@@ -282,6 +536,109 @@ def frame_for(envelope: EventEnvelope, stream_id: str, sequence: int) -> str:
     )
 
 
+def live_frames(envelopes: tuple[EventEnvelope, ...]) -> Iterator[str]:
+    """One burst of transient events, as the frames a subscriber should see.
+
+    Adjacent deltas of the same model call are merged, because the unit a
+    reader cares about is a chunk of text and the unit a provider emits is
+    whichever bytes arrived together. Two rules keep the merge honest:
+
+    * only *adjacent* events merge, and only within one ``model_call_id``, so
+      nothing is reordered and a tool round between two calls stays visible;
+    * a merge never truncates. ``ModelDelta.text`` is bounded, so the merge
+      flushes and starts a new frame rather than trimming -- text is what this
+      frame exists to carry, and a silently shortened one would be a lie the
+      subscriber has no way to detect.
+    """
+
+    pending: list[EventEnvelope] = []
+    merged = ""
+
+    def flush() -> Iterator[str]:
+        nonlocal pending, merged
+        if not pending:
+            return
+        last = pending[-1]
+        # The last envelope's identity, not the first: its timestamp is when
+        # the text in this frame stopped arriving, which is what a reader
+        # comparing it against the step beside it means by "when".
+        yield _transient_frame(
+            last.model_copy(
+                update={
+                    "payload": ModelDelta(
+                        model_call_id=_call_of(last),
+                        text=merged,
+                    )
+                }
+            )
+        )
+        pending = []
+        merged = ""
+
+    for envelope in envelopes:
+        payload = envelope.payload
+        if not isinstance(payload, ModelDelta):
+            # Anything else transient -- tool progress -- passes through, after
+            # whatever text preceded it, so the order a reader sees is the
+            # order things happened.
+            yield from flush()
+            yield _transient_frame(envelope)
+            continue
+        call = payload.model_call_id
+        if pending and _call_of(pending[-1]) != call:
+            yield from flush()
+        if len(merged) + len(payload.text) > BOUNDED_TEXT_LIMIT:
+            yield from flush()
+        pending.append(envelope)
+        merged += payload.text
+    yield from flush()
+
+
+def _call_of(envelope: EventEnvelope) -> str:
+    payload = envelope.payload
+    # Only ever called on envelopes this module has already narrowed.
+    assert isinstance(payload, ModelDelta)
+    return payload.model_call_id
+
+
+def _transient_frame(envelope: EventEnvelope) -> str:
+    """One live event, as a frame that cannot move the client's cursor.
+
+    There is no ``id:`` line and no parameter that could add one, and that is
+    the whole design rather than an omission. ``Last-Event-ID`` is what a
+    browser sends back to resume, and a transient event has no position to
+    resume from; an id here would set the client's cursor to a place the log
+    cannot be asked about. Per the SSE specification a frame without ``id``
+    leaves the last event id untouched, so durable resumption keeps working
+    across any number of these.
+
+    Building it through a function that takes no cursor is what makes that
+    structural. A shared builder with an optional id would put the rule in a
+    caller's argument list, where the next caller has to remember it.
+    """
+
+    return f"event: {envelope.event_type}\ndata: {envelope.model_dump_json()}\n\n"
+
+
+def degraded_frame(dropped: int) -> str:
+    """The frame that says live text was skipped, and how much.
+
+    Deliberately shaped like the quarantine notice and deliberately unlike it
+    in the one way that matters: that one names a durable position and carries
+    its cursor, this one names no position at all. What was dropped was never
+    addressable, so there is nothing for a client to go and fetch -- the only
+    honest thing to report is that the live view is no longer complete.
+
+    The durable replay underneath is unaffected: nothing that was dropped here
+    was ever going to be replayed, and everything that will be replayed is
+    still on its way. A client should say the live text has a gap, not that the
+    history does.
+    """
+
+    body = json.dumps({"dropped_events": dropped}, sort_keys=True)
+    return f"event: {DEGRADED_EVENT}\ndata: {body}\n\n"
+
+
 def _quarantine_frame(record: _QuarantinedEvent, stream_id: str) -> str:
     """The frame that says one durable position was skipped, and which.
 
@@ -330,11 +687,17 @@ def _quarantine_frame(record: _QuarantinedEvent, stream_id: str) -> str:
 
 
 __all__ = [
+    "DEGRADED_EVENT",
     "HEARTBEAT",
     "LAST_EVENT_ID_HEADER",
     "QUARANTINE_EVENT",
     "IsolatingEventLog",
+    "LiveEventChannel",
+    "LiveSubscription",
+    "TooManyLiveSubscribersError",
+    "degraded_frame",
     "frame_for",
+    "live_frames",
     "resume_from",
     "stream_events",
 ]
