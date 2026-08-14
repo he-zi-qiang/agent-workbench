@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from agent_workbench.application.answer_release import LiveTextPolicy
 from agent_workbench.application.chat import _request_hash
 from agent_workbench.application.chat_execution import (
     AnswerMode,
@@ -44,6 +45,12 @@ def _request(
 class _Execution:
     grounded: bool
     calls: list[ChatRequest] = field(default_factory=list)
+    #: Configurable so the delegation test can tell "the selector asked this
+    #: shape" from "the selector has an opinion of its own".
+    policy: LiveTextPolicy = "redacted"
+
+    def live_text_policy(self, _request: ChatRequest) -> LiveTextPolicy:
+        return self.policy
 
     async def produce(
         self,
@@ -164,3 +171,21 @@ def test_selector_satisfies_the_execution_seam() -> None:
     )
 
     assert isinstance(selector, TurnExecution)
+
+
+def test_the_selector_reports_the_chosen_shape_s_live_text_policy() -> None:
+    """The router routes; it does not hold a fence opinion of its own.
+
+    Both directions are asserted from one selector, so a implementation that
+    returned a constant would fail on whichever half it does not match.
+    """
+
+    selector = AnswerModeSelector(
+        direct=_Execution(grounded=False, policy="provisional"),
+        rag=_Execution(grounded=True, policy="redacted"),
+    )
+
+    direct = selector.live_text_policy(_request("direct", knowledge_base_id=None))
+    rag = selector.live_text_policy(_request("rag", "kb_main"))
+
+    assert (direct, rag) == ("provisional", "redacted")

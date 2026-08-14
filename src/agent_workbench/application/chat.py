@@ -258,16 +258,45 @@ class ChatService:
         turn: StoredChatTurn,
         history: tuple[Message, ...],
     ) -> ChatTurn:
+        # Asked before the run, because the wrapper it configures is what the
+        # run writes through. Asked of the execution rather than decided here:
+        # whether a turn can end in `AnswerWithheld` is a property of the shape
+        # that produces it, and this service would be guessing.
+        live_text = self.execution.live_text_policy(request)
         produced = await self.execution.produce(
             request,
             history=history,
             # Wrapped here rather than by each shape: withholding an answer is
             # the turn's business, and a shape that forgot the wrapper would
             # publish one before the fence ran.
-            sink=AnswerReleaseSink(sink),
+            sink=AnswerReleaseSink(sink, live_text=live_text),
             cancellation=cancellation,
         )
         outcome = produced.outcome
+
+        if live_text == "provisional" and produced.authorized_revisions:
+            # The shape said its answer rests on nothing that can be revoked,
+            # and then returned revisions the fence would have to re-check.
+            # Text has already been streamed under the first claim, so there is
+            # no safe way to publish under the second: fail the turn.
+            #
+            # Unreachable through the shapes in this module -- the only
+            # provisional one hardcodes an empty tuple on both of its returns
+            # -- and kept anyway, because what it guards is a *future* shape
+            # declaring itself provisional by mistake. Stated plainly rather
+            # than dressed up as coverage: the test that exercises it supplies
+            # a stub execution, and no production path reaches it.
+            await self.conversations.finish_failed(
+                session_id=request.session_id,
+                tenant_id=request.tenant_id,
+                principal_id=request.principal_id,
+                turn_id=turn.turn_id,
+                outcome=outcome,
+            )
+            raise RuntimeError(
+                "a shape that streams provisional text returned authorized "
+                "revisions, which the release fence would have to re-check"
+            )
 
         if outcome.status != "completed":
             await self.conversations.finish_failed(

@@ -745,3 +745,163 @@ def test_an_ungrounded_answer_still_releases_only_once() -> None:
 
     with pytest.raises(RuntimeError, match="only once"):
         asyncio.run(scenario())
+
+
+# --- which shapes may show their text while it is being written ---------------
+
+
+def test_a_provisional_sink_passes_deltas_through_and_still_redacts_the_answer() -> (
+    None
+):
+    """Two different things, and only one of them is loosened.
+
+    A delta is what is being written; ``ModelCompleted.text`` is the finished
+    candidate. Publishing the candidate is what the commit methods are for, so
+    it stays redacted under either policy -- otherwise a provisional shape
+    would put an answer into the durable log that nothing decided to publish.
+    """
+
+    async def scenario() -> tuple[Any, Any]:
+        log = InMemoryEventLog()
+        release = AnswerReleaseSink(_sink(log), live_text="provisional")
+        delta = await release.emit(ModelDelta(model_call_id="mc_1", text=SECRET))
+        completed = await release.emit(
+            ModelCompleted(
+                model_call_id="mc_1",
+                finish_reason="stop",
+                text=SECRET,
+            )
+        )
+        return delta.payload, completed.payload
+
+    delta, completed = asyncio.run(scenario())
+
+    assert delta.text == SECRET
+    assert completed.text == ""
+    assert completed.output_ref is None
+
+
+def test_the_default_policy_is_the_one_every_caller_had_before() -> None:
+    """A caller that does not think about it must get the strict reading."""
+
+    async def scenario() -> Any:
+        log = InMemoryEventLog()
+        release = AnswerReleaseSink(_sink(log))
+        envelope = await release.emit(ModelDelta(model_call_id="mc_1", text=SECRET))
+        return envelope.payload
+
+    assert asyncio.run(scenario()).text == ""
+
+
+def test_every_retrieval_shape_keeps_its_text_redacted() -> None:
+    """Each of the three can end in ``AnswerWithheld``, so none may stream.
+
+    Asserted per shape rather than "the ones that retrieve", because that
+    phrase is the thing a future shape gets wrong.
+    """
+
+    from agent_workbench.application.chat_execution import (
+        AgenticExecution,
+        FixedTwoStepExecution,
+        RoutedExecution,
+    )
+
+    shapes = (FixedTwoStepExecution, AgenticExecution, RoutedExecution)
+    request = object()
+
+    for shape in shapes:
+        policy = shape.live_text_policy(None, request)  # pyright: ignore[reportArgumentType]
+        assert policy == "redacted", shape.__name__
+
+
+def test_the_ungrounded_shape_may_show_its_text_as_it_writes_it() -> None:
+    """The control for the assertion above: not every shape is redacted.
+
+    Without it, a bug that returned "redacted" everywhere would look like a
+    passing fence rather than a feature that never ships.
+    """
+
+    from agent_workbench.application.chat_execution import UngroundedExecution
+
+    assert UngroundedExecution.live_text_policy(None, object()) == "provisional"  # pyright: ignore[reportArgumentType]
+
+
+def test_a_transient_event_type_nobody_decided_about_stops_the_process() -> None:
+    """The fence is a whitelist, so a new transient type cannot slip past it.
+
+    Simulated by asking the module's own rule about a widened set, rather than
+    by mutating ``EVENT_DURABILITY`` -- the check runs at import, and an import
+    that has already happened cannot be re-run inside a test.
+    """
+
+    from agent_workbench.application import answer_release
+
+    widened = frozenset(answer_release.TRANSIENT_EVENT_TYPES) | {"ModelThought"}
+
+    assert widened - answer_release._TRANSIENT_HANDLED == {"ModelThought"}
+    # The control: everything that exists today *is* decided, which is what
+    # makes the assertion above about the new type rather than about the rule
+    # being vacuous.
+    assert not answer_release.TRANSIENT_EVENT_TYPES - answer_release._TRANSIENT_HANDLED
+
+
+def test_a_shape_that_claims_provisional_and_returns_revisions_fails_the_turn() -> None:
+    """Defensive, and unreachable through the shapes in this repository.
+
+    ``UngroundedExecution`` is the only provisional one and it hardcodes an
+    empty revision tuple on both of its returns, so nothing in production can
+    put the service in this state. What the backstop guards is a *future* shape
+    that declares itself provisional by mistake: by the time its answer comes
+    back, text has already been streamed on the strength of that claim, and
+    there is no honest way to publish under the opposite one.
+
+    Exercised with a stub execution rather than a real shape, which is exactly
+    why this test proves the guard and not the production path. Said out loud
+    because the alternative -- a test that looked like a regression test for
+    something that can happen -- would misdescribe what is covered here.
+    """
+
+    class _ProvisionalLiar:
+        async def produce(self, request: ChatRequest, **_: Any) -> Any:
+            from agent_workbench.application.chat_execution import ProducedAnswer
+            from agent_workbench.domain.runs import AgentOutcome
+
+            return ProducedAnswer(
+                outcome=AgentOutcome(
+                    agent_run_id=request.run_id,
+                    status="completed",
+                    stop_reason="completed",
+                    output_text="an answer built on something revocable",
+                ),
+                grounded=True,
+                authorized_revisions=(("doc_1", 1),),
+                citations=(),
+            )
+
+        def live_text_policy(self, _request: ChatRequest) -> str:
+            return "provisional"
+
+    async def scenario() -> tuple[bool, tuple[str, ...]]:
+        conversations = await _conversations()
+        retrieval = _EmptyRetrieval()
+        service = _chat(retrieval, conversations, [ScriptedTurn(text=SECRET)])
+        service = replace(service, execution=_ProvisionalLiar())  # pyright: ignore[reportArgumentType]
+        log = InMemoryEventLog()
+        raised = False
+        try:
+            await service.ask(_request(), sink=_sink(log))
+        except RuntimeError:
+            raised = True
+        events = tuple(e.event_type for e in await log.read(SCOPE.stream_id))
+        return raised, events
+
+    raised, events = asyncio.run(scenario())
+
+    assert raised
+    # No answer of any kind was published: the turn failed rather than
+    # choosing between the two contradictory claims.
+    assert not {
+        "AnswerCommitted",
+        "UngroundedAnswerCommitted",
+        "AnswerWithheld",
+    } & set(events)
