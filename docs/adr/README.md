@@ -44,3 +44,13 @@
 | [ADR-044 先有远端部署，才谈得上生产身份与远程对象存储](./0044-no-remote-no-production-identity.md) | 生产身份与 S3 后端这一批做不做；三处 `backend != local` 的拒绝算不算完成；presigned 与既有 `ArtifactStorePort` 语义能不能共存 | 接受，**明确不做**（沿用 ADR-041 的形状）；只补三条拒绝 + 一条对照的回归测试；记录 ADR-012 已被 ADR-015 事实性推翻 |
 | [ADR-045 版面是一次转换，不是第三条 docx 解析路径](./0045-a-layout-is-a-conversion-not-a-third-parser.md) | 保真度从服务端 LibreOffice 转 PDF、前端渲染库还是只数损失来；新路径会不会变成全仓第二条 docx 解析路径；第一个非 Python 外部依赖的代价谁承担 | 接受，选服务端转换并复用 `preflight_docx` 遵守 ADR-043 §5；同批落地 ADR-043 §7 的计数；LibreOffice 做成构建期开关默认不装，配置 schema 保持 `1.14` |
 | [ADR-046 加法的那一半不许做减法](./0046-the-additive-half-may-not-subtract.md) | `research_external` 读网页那半的 run 停在上限/守卫/传输故障上时节点该不该失败；ADR-032 §3.1 的「纯加法」在失败方向上算不算数；这条豁免按节点给还是按错误给 | 接受，收窄 ADR-032 §4；`_decoded` 多一个 `halted` 参数，解码器与图形状均不变 |
+| [ADR-051 实时帧没有位置，所以它不许有 id](./0051-a-live-frame-has-no-position.md) | 进程内的 transient 事件该不该到达浏览器；它和"只有 durable 事件有游标"怎么共存；慢读者拖住实时通道时是断开还是别的 | 接受，收窄基线里"溢出即断开"一句 |
+| [ADR-052 撤不回的答案才可以边写边给人看](./0052-only-an-unwithdrawable-answer-may-be-shown-early.md) | `AnswerReleaseSink` 是否对每个 Chat 形态都抹掉 `ModelDelta.text`；判据是什么、由谁给出 | 接受，澄清基线 §5 里 answer release gate 的作用域 |
+
+
+## 号段预留 0047–0059
+
+2026-08-13 起的三批改动（过程可见性 / 脱离 Task 的 Code 模式 / 前端收敛）一次性
+分配了 0047–0059，避免三条并行的线各自认领同一个号。**已写下的**在上表里；
+未写下的号不代表已决定，只代表这批工作认领了它。落地顺序不必等于编号顺序——
+上表按编号排，`git log` 按落地排，两者不需要一致。
