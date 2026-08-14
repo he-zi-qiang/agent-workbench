@@ -43,7 +43,8 @@ from agent_workbench.application.task_research import (
     InternalResearchService,
     TaskResearchContext,
 )
-from agent_workbench.application.workspace import TaskWorkspace, WorkspaceSession
+from agent_workbench.application.workspace import Workspace, WorkspaceSession
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.artifacts import ArtifactKind
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.evidence import (
@@ -105,7 +106,6 @@ from agent_workbench.workflows.structured_output import (
     json_object,
     restatement_messages,
 )
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 TaskNodeHandler = Callable[[TaskState], Awaitable[Mapping[str, Any]]]
 EventSinkFactory = Callable[[TaskRunContext], EventSink]
@@ -732,7 +732,7 @@ def build_task_handlers(
             return
         principal = invocation.context.principal
         session = WorkspaceSession(
-            workspace=TaskWorkspace(
+            workspace=Workspace(
                 artifacts=artifacts,
                 tenant_id=principal.tenant_id,
                 principal_id=principal.principal_id,

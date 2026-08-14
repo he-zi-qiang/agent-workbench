@@ -23,7 +23,8 @@ import pytest
 from agent_workbench.adapters.mcp.client import connect_mcp_client
 from agent_workbench.adapters.memory import InMemoryArtifactStore
 from agent_workbench.adapters.tools.sandbox import SandboxRunTool
-from agent_workbench.application.workspace import TaskWorkspace, WorkspaceSession
+from agent_workbench.application.workspace import Workspace, WorkspaceSession
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.apps.sandbox_mcp.executor import (
     DEFAULT_CONTAINER_RUNTIME,
     DEFAULT_SANDBOX_IMAGE,
@@ -38,7 +39,6 @@ from agent_workbench.domain.sandbox import SANDBOX_RUN_TOOL
 from agent_workbench.domain.tools import ToolCall
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.tools import ToolInvocation
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 TENANT = "tenant_e2e"
 OWNER = "user_e2e"
@@ -66,7 +66,7 @@ def test_a_workspace_file_is_computed_over_and_the_result_comes_back() -> None:
     async def scenario() -> tuple[str, tuple[str, ...], bytes]:
         artifacts = InMemoryArtifactStore()
         session = WorkspaceSession(
-            workspace=TaskWorkspace(
+            workspace=Workspace(
                 artifacts=artifacts, tenant_id=TENANT, principal_id=OWNER
             )
         )
@@ -152,7 +152,7 @@ def test_a_script_that_reaches_for_the_network_fails_through_the_whole_path() ->
 
     async def scenario() -> tuple[str, tuple[str, ...]]:
         session = WorkspaceSession(
-            workspace=TaskWorkspace(
+            workspace=Workspace(
                 artifacts=InMemoryArtifactStore(),
                 tenant_id=TENANT,
                 principal_id=OWNER,

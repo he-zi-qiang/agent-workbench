@@ -73,6 +73,7 @@ from agent_workbench.application.task_research import (
     ExternalResearchService,
     InternalResearchService,
 )
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.apps.task_worker.identity import restore_submitted_principal
 from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
@@ -115,7 +116,6 @@ from agent_workbench.workflows.task_handlers import (
     TaskResearchHandlers,
     build_task_handlers,
 )
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 
 class RealTaskHandlersUnavailableError(RuntimeError):

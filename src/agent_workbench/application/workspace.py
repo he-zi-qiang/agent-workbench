@@ -54,8 +54,15 @@ class WorkspaceListing:
 
 
 @dataclass(frozen=True, slots=True)
-class TaskWorkspace:
-    """The working set of one Task, addressed by manifest version."""
+class Workspace:
+    """One owner's working set, addressed by manifest version.
+
+    Named for what it holds rather than for who holds it. It carries no
+    ``task_id`` and never did -- the only identity in it is the tenant and the
+    principal the artifacts belong to -- so a Code session's working set is the
+    same object as a Task's, and the thing that differs is which version
+    pointer is handed to it and who persists that pointer afterwards.
+    """
 
     artifacts: ArtifactStore
     tenant_id: str
@@ -175,14 +182,14 @@ class WorkspaceSession:
     graph has to create one and the graph may not import an adapter.
     """
 
-    workspace: TaskWorkspace
+    workspace: Workspace
     version: Identifier | None = None
 
 
 __all__ = [
     "MANIFEST_FILENAME",
     "MANIFEST_MEDIA_TYPE",
-    "TaskWorkspace",
+    "Workspace",
     "WorkspaceEntryNotFoundError",
     "WorkspaceListing",
     "WorkspaceSession",

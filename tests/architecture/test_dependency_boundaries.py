@@ -491,3 +491,56 @@ def test_business_modules_do_not_read_process_environment_directly() -> None:
         "not read or mutate process environment directly:\n"
         f"{_format_source_violations(violations)}"
     )
+
+
+def test_a_tool_binding_does_not_reach_into_the_workflow_layer() -> None:
+    """A tool belongs to whoever calls it, not to the graph that used to.
+
+    `agent_workbench.workflows` is where graphs live: node ids, edges, agent
+    profiles, the Task state machine. A tool binding that imported it would be
+    a tool only a Task could hold -- which was literally true while
+    `WorkspaceScope` sat there and three bindings imported it from there. The
+    working set is not a graph concept: a Code session has one and has no graph
+    at all, so the scope moved to `application` and this is what stops it from
+    drifting back.
+
+    `adapters/langgraph` is deliberately exempt and is not an exception to the
+    rule so much as the reason the rule can be narrow: compiling the graph
+    declarations *is* that adapter's job, and it is the only adapter whose
+    subject is the workflow layer.
+    """
+
+    tool_files = tuple(
+        file
+        for file in _product_python_files()
+        if file.is_relative_to(PACKAGE_ROOT / "adapters")
+        and not file.is_relative_to(PACKAGE_ROOT / "adapters" / "langgraph")
+    )
+    assert tool_files, "adapter source discovery must not be vacuous"
+
+    # The control: the exempt adapter really does import the layer, so a change
+    # that broke discovery or AST extraction cannot leave this test passing on
+    # an empty scan.
+    exempt = tuple(
+        reference
+        for file in _product_python_files()
+        if file.is_relative_to(PACKAGE_ROOT / "adapters" / "langgraph")
+        for reference in _import_references(file)
+        if _matches_module(reference.module, frozenset({"agent_workbench.workflows"}))
+    )
+    assert exempt, (
+        "the guard must observe the LangGraph adapter's own workflow imports; "
+        "otherwise the scan below proves nothing"
+    )
+
+    violations = [
+        (file, reference)
+        for file in tool_files
+        for reference in _import_references(file)
+        if _matches_module(reference.module, frozenset({"agent_workbench.workflows"}))
+    ]
+    assert not violations, (
+        "an adapter outside agent_workbench.adapters.langgraph imports the "
+        "workflow layer; move what it needs into application/ instead:\n"
+        f"{_format_import_violations(violations)}"
+    )

@@ -29,6 +29,7 @@ from agent_workbench.application.workspace import (
     WorkspaceEntryNotFoundError,
     WorkspaceSession,
 )
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.sandbox import (
     SANDBOX_REMOTE_TOOL,
@@ -38,7 +39,6 @@ from agent_workbench.domain.sandbox import (
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.domain.workspace import WorkspaceOverflowError
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 TOOL_NAME = SANDBOX_RUN_TOOL
 
