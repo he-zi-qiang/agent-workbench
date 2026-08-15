@@ -10,6 +10,12 @@ Keeping the wrapper in the application layer matters. The runtime is also used
 by CLI and future task nodes, where ``ModelCompleted`` remains the ordinary
 provider event; only the use case that owns the final evidence check may decide
 when an answer is safe to reveal.
+
+Two fences live here, and reading them together is the point. ``AnswerReleaseSink``
+is for a run that will publish an answer and must not do so early.
+``ProcessOnlySink`` is for a run that will never publish one at all -- it keeps
+the refusal and drops the publishing methods, so "this run has no answer" is a
+type rather than a habit.
 """
 
 from __future__ import annotations
@@ -188,4 +194,54 @@ class AnswerReleaseSink:
             raise RuntimeError("an answer release sink may publish only once")
 
 
-__all__ = ["AnswerReleaseSink", "LiveTextPolicy"]
+@dataclass(slots=True)
+class ProcessOnlySink:
+    """A run whose product is not an answer, and cannot become one.
+
+    A Code session writes files and finishes with a report. It has no evidence
+    to re-check, no turn ledger to move and nothing to publish: its steps are
+    the record, and ``ModelCompleted.text`` is that report rather than a
+    candidate awaiting release. So this forwards everything unchanged.
+
+    Everything except the three events that mean "an answer was published".
+    Those exist to be produced deliberately, by a caller that decided to, and
+    this caller has no such decision to make -- an ``AnswerCommitted`` on a
+    Code session's stream would tell every reader of that stream, and every
+    consumer downstream of it, that something crossed a fence that was never
+    there.
+
+    Written as a fence and not as a comment because the alternative was
+    measured: removing ``AnswerReleaseSink`` from a run leaves "Code emits no
+    answer events" resting entirely on nobody ever writing the line. This type
+    is also the reason a service can declare it *needs* one -- a bare
+    ``EventSink`` handed where this is required does not type-check, which is
+    the check that survives a refactor.
+    """
+
+    inner: EventSink
+
+    async def emit(
+        self,
+        payload: EventPayload,
+        *,
+        parent_event_id: str | None = None,
+        event_key: EventKey | None = None,
+    ) -> EventEnvelope:
+        if isinstance(
+            payload, (AnswerCommitted, UngroundedAnswerCommitted, AnswerWithheld)
+        ):
+            # All three, for the same reason the other fence takes all three:
+            # a missing one would be the single answer event this run could
+            # emit, which is precisely the hole being closed.
+            raise RuntimeError(
+                "a process-only run has no answer to publish: "
+                f"{type(payload).__name__} may not be emitted"
+            )
+        return await self.inner.emit(
+            payload,
+            parent_event_id=parent_event_id,
+            event_key=event_key,
+        )
+
+
+__all__ = ["AnswerReleaseSink", "LiveTextPolicy", "ProcessOnlySink"]
