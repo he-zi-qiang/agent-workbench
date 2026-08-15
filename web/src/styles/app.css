@@ -4055,18 +4055,32 @@ pre {
   justify-self: end;
 }
 
+/* The right column, holding two panes that are separate landmarks.
+
+   `1fr auto`: the working set takes what is left and the recent list takes what
+   it needs, so a long file list scrolls rather than pushing the way back to
+   another session off the bottom of the screen. */
+.aw-code-side {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+}
+
 .aw-code-workspace {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  border-left: 1px solid var(--aw-border);
-  background: var(--aw-sidebar);
 }
 
 .aw-code-workspace header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   min-height: 64px;
   padding: 9px 18px;
   border-bottom: 1px solid var(--aw-border);
@@ -4119,9 +4133,75 @@ pre {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .aw-code-workspace {
+  .aw-code-side {
     max-height: 40vh;
     border-top: 1px solid var(--aw-border);
     border-left: 0;
   }
+
+  .aw-code-workspace {
+    min-height: 0;
+    border-left: 0;
+  }
+}
+
+/* The way back to a session this browser has already opened.
+
+   It sits under the working set when a session is open and under the empty
+   state when none is, because those are the two moments the question "where
+   was I" gets asked -- and neither of them wants a third column. */
+.aw-code-recent {
+  display: grid;
+  gap: 6px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-code-recent h2 {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.aw-code-recent ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-code-recent-link {
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--aw-text-soft);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-code-recent-link:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+/* The one already open is marked rather than merely un-clickable: a list where
+   every row looks the same cannot answer "which of these am I in". */
+.aw-code-recent-link[aria-current="page"] {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+  font-weight: 600;
+}
+
+.aw-code-page.is-empty .aw-code-recent {
+  max-width: 420px;
+  margin: 0 auto;
+  border-top: 0;
 }

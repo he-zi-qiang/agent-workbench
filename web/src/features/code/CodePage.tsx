@@ -36,6 +36,11 @@ import type {
 import { useIdentity } from "../../app/IdentityContext";
 import { EmptyState, ErrorNotice, LoadingLine } from "../../components/ui";
 import { eventTitle } from "../work/workTimeline";
+import {
+  loadCodeSessions,
+  rememberCodeSession,
+  type LocalCodeSession,
+} from "./storage";
 import { useCodeStream } from "./useCodeStream";
 
 /** How often to ask what the agent is stopped on, while it is working. */
@@ -63,6 +68,7 @@ export function CodePage() {
   const [error, setError] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<PendingApprovalView[]>([]);
   const [opening, setOpening] = useState(false);
+  const [known, setKnown] = useState<LocalCodeSession[]>([]);
 
   const steps = useCodeStream(identity, sessionId, running);
 
@@ -81,6 +87,20 @@ export function CodePage() {
     },
     [identity],
   );
+
+  // Remembered on arrival rather than only on creation, so a session reached
+  // by a pasted link is one this browser can find again -- and so the ordering
+  // reflects what was actually opened, not what was made.
+  useEffect(() => {
+    setKnown(
+      sessionId === undefined
+        ? loadCodeSessions(identity)
+        : rememberCodeSession(identity, {
+            sessionId,
+            seenAt: new Date().toISOString(),
+          }),
+    );
+  }, [identity, sessionId]);
 
   useEffect(() => {
     if (sessionId === undefined) {
@@ -185,6 +205,29 @@ export function CodePage() {
     [identity, sessionId],
   );
 
+  const sessionList =
+    known.length === 0 ? null : (
+      <nav aria-label="最近的编码会话" className="aw-code-recent">
+        <h2>最近</h2>
+        <ul>
+          {known.map((held) => (
+            <li key={held.sessionId}>
+              <button
+                aria-current={held.sessionId === sessionId ? "page" : undefined}
+                className="aw-code-recent-link"
+                onClick={() => {
+                  navigate(`/code/${held.sessionId}`);
+                }}
+                type="button"
+              >
+                {held.sessionId.replace(/^ses_/, "").slice(0, 8)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    );
+
   if (sessionId === undefined) {
     return (
       <div className="aw-code-page is-empty">
@@ -205,6 +248,7 @@ export function CodePage() {
                 </button>
               }
             />
+            {sessionList}
           </section>
           {error === null ? null : <ErrorNotice message={error} />}
         </main>
@@ -314,9 +358,23 @@ export function CodePage() {
         </form>
       </main>
 
+      {/* A plain wrapper so the two panes share one grid column while staying
+          separate landmarks. The nav used to live inside the aside, where its
+          rows counted as rows of the region labelled "工作区文件" -- anything
+          reading that region, a screen reader first among them, announced
+          session ids as though they were files the turn had produced. */}
+      <div className="aw-code-side">
       <aside aria-label="工作区文件" className="aw-code-workspace">
         <header>
           <h2>工作区</h2>
+          <button
+            className="aw-button"
+            disabled={opening}
+            onClick={() => void openSession()}
+            type="button"
+          >
+            {opening ? "正在打开" : "新建"}
+          </button>
         </header>
         {files.length === 0 ? (
           <p className="aw-code-workspace-empty">还没有文件。</p>
@@ -331,6 +389,8 @@ export function CodePage() {
           </ul>
         )}
       </aside>
+        {sessionList}
+      </div>
     </div>
   );
 }

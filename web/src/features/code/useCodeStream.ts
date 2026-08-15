@@ -16,7 +16,7 @@
  * is token-by-token text, which a coding session does not display anyway.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { streamSession } from "../../api/sessionStream";
 import {
   isDegradedFrame,
@@ -37,17 +37,23 @@ export function useCodeStream(
   watching: boolean,
 ): EventEnvelope[] {
   const [events, setEvents] = useState<EventEnvelope[]>([]);
+  // The position survives the gap between turns; the list does not. Those are
+  // different questions -- "what has this subscriber already been shown" and
+  // "what is happening right now" -- and the first browser run made the cost of
+  // conflating them visible: a second turn opened showing the first turn's
+  // steps, because a watch that starts from no cursor is served the session's
+  // whole history from sequence 1.
+  const seen = useRef<StreamCursor | null>(null);
 
   useEffect(() => {
     if (sessionId === undefined || !watching) return;
     const controller = new AbortController();
-    let cursor: StreamCursor | null = null;
 
     void streamSession({
       identity,
       sessionId,
       eventsPath: CODE_EVENTS_PATH,
-      initialCursor: cursor,
+      initialCursor: seen.current,
       signal: controller.signal,
       onFrame: (frame) => {
         // "rejected" is not "I have nothing to draw for this". It tells the
@@ -76,13 +82,18 @@ export function useCodeStream(
         return "accepted";
       },
       onCursor: (next) => {
-        cursor = next;
+        seen.current = next;
       },
       onConnectionChange: () => undefined,
     });
 
     return () => {
       controller.abort();
+      // Cleared on the way out rather than on the way in. Both empty the list
+      // between turns, but clearing at the start does it one paint too late:
+      // the section mounts with the previous turn's rows and drops them a frame
+      // later, which reads as steps that ran and vanished.
+      setEvents([]);
     };
   }, [identity, sessionId, watching]);
 

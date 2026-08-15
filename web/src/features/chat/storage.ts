@@ -1,3 +1,8 @@
+import {
+  identityStorageKey,
+  readStorage,
+  writeStorage,
+} from "../../api/localStore";
 import type { StreamCursor } from "../../api/sse";
 import type { LocalChatSession, PrincipalIdentity } from "../../api/types";
 
@@ -6,15 +11,10 @@ export type StoredChatCursor = StreamCursor;
 const SESSION_PREFIX = "aw.chat.sessions.v1";
 const CURSOR_PREFIX = "aw.chat.cursor.v1";
 
-export function identityStorageKey(identity: PrincipalIdentity): string {
-  return encodeURIComponent(
-    JSON.stringify([
-      identity.tenantId,
-      identity.principalId,
-      [...identity.scopes].sort(),
-    ]),
-  );
-}
+// Re-exported rather than moved out of this file's callers: the name reads as
+// chat's own, and the second feature that needed the same key told us where
+// the implementation belongs -- not what this feature should call it.
+export { identityStorageKey };
 
 export function loadLocalSessions(identity: PrincipalIdentity): LocalChatSession[] {
   const raw = readStorage(sessionKey(identity));
@@ -107,21 +107,4 @@ function parseLocalSession(value: unknown): LocalChatSession | null {
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
   };
-}
-
-function readStorage(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStorage(key: string, value: string): void {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Storage is a resilience aid. A privacy mode that refuses it must not
-    // make the console unusable: in-memory runtime state stays fully functional.
-  }
 }

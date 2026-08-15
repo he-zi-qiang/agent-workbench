@@ -65,16 +65,63 @@ describe("useCodeStream", () => {
     // holds a request open for as long as the tab is.
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("starts a new turn's steps from empty", async () => {
+    stubStream([durable(1, "evt_1")]);
+
+    const { result, rerender } = renderHook(
+      ({ watching }) => useCodeStream(IDENTITY, SESSION, watching),
+      { initialProps: { watching: true } },
+    );
+    await waitFor(() => {
+      expect(result.current).toHaveLength(1);
+    });
+
+    // The turn ends, then another begins. Keeping the first turn's steps would
+    // show finished work as though it were happening now -- and the pane is
+    // hidden between turns, so nothing on screen would contradict it.
+    rerender({ watching: false });
+    rerender({ watching: true });
+
+    expect(result.current).toHaveLength(0);
+  });
+
+  it("resumes the second turn after the first, instead of replaying it", async () => {
+    const fetchMock = stubStream([durable(1, "evt_1")], { reusable: true });
+
+    const { result, rerender } = renderHook(
+      ({ watching }) => useCodeStream(IDENTITY, SESSION, watching),
+      { initialProps: { watching: true } },
+    );
+    await waitFor(() => {
+      expect(result.current).toHaveLength(1);
+    });
+
+    rerender({ watching: false });
+    rerender({ watching: true });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    // Without this the second turn asks for the session from the beginning and
+    // the server obliges, so the pane opens showing the first turn's steps --
+    // which is exactly what the first browser run did.
+    const headers = new Headers(
+      (fetchMock.mock.calls[1]?.[1] as RequestInit).headers,
+    );
+    expect(headers.get("last-event-id")).toBe("cursor_1");
+  });
 });
 
-function stubStream(frames: string[]) {
+function stubStream(frames: string[], options: { reusable?: boolean } = {}) {
   const encoder = new TextEncoder();
   // One body, then nothing. A second connection attempt is what a wedged
-  // stream does, and it has to be distinguishable from the first.
+  // stream does, and it has to be distinguishable from the first -- except
+  // where a test is about the second connection, which says so.
   const fetchMock = vi.fn().mockImplementation(
     () =>
       new Promise<Response>((resolve) => {
-        if (fetchMock.mock.calls.length > 1) return;
+        if (fetchMock.mock.calls.length > 1 && options.reusable !== true) return;
         resolve(
           new Response(
             new ReadableStream<Uint8Array>({

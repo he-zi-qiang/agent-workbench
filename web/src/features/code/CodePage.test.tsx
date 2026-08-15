@@ -12,6 +12,7 @@ import {
 import type { PrincipalIdentity } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { CodePage } from "./CodePage";
+import { rememberCodeSession } from "./storage";
 import { useCodeStream } from "./useCodeStream";
 
 vi.mock("../../api/client", () => ({
@@ -57,6 +58,9 @@ beforeEach(() => {
   // Call counts are what two of these tests assert on, and a mock is shared by
   // the whole file: without this, "was never called" means "was not called
   // since the last test that happened to reset it".
+  // The session list lives in this browser, so it survives a mock reset
+  // and would otherwise carry one test's sessions into the next.
+  window.localStorage.clear();
   vi.clearAllMocks();
   vi.mocked(useIdentity).mockReturnValue({
     identity: ALICE,
@@ -262,5 +266,55 @@ describe("CodePage", () => {
     expect(
       within(steps).getByText("工具调用已开始：workspace_write"),
     ).toBeInTheDocument();
+  });
+
+  it("offers a way back to a session this browser has already opened", async () => {
+    const user = userEvent.setup();
+    rememberCodeSession(ALICE, {
+      sessionId: "ses_code_older",
+      seenAt: "2026-08-14T09:00:00Z",
+    });
+
+    mounted();
+
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    // Nothing on the server lists a principal's sessions, so without this the
+    // only way back to one is a link somebody kept outside the app.
+    await user.click(within(recent).getByRole("button", { name: "code_old" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(getCodeHistory).mock.calls.at(-1)?.[1]).toBe("ses_code_older");
+    });
+  });
+
+  it("remembers the session it arrived at, and marks it as the open one", async () => {
+    mounted();
+
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    // Arrived at by URL, never created here. A list that only knew what this
+    // tab made would lose every session reached by a pasted link.
+    expect(within(recent).getByRole("button", { current: "page" })).toHaveTextContent(
+      "code_1",
+    );
+  });
+
+  it("does not announce past sessions as files this turn produced", async () => {
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "notes.md", size_bytes: 12, media_type: "text/markdown" }],
+    });
+    rememberCodeSession(ALICE, {
+      sessionId: "ses_code_older",
+      seenAt: "2026-08-14T09:00:00Z",
+    });
+
+    mounted();
+
+    const pane = await screen.findByRole("complementary", { name: "工作区文件" });
+    // The two lists sit in one column and looked fine either way. Nested, the
+    // session rows were rows of the region labelled 工作区文件 -- so anything
+    // reading that region by its label, a screen reader first among them, read
+    // out session ids as files.
+    expect(within(pane).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(pane).queryByText("code_old")).not.toBeInTheDocument();
   });
 });

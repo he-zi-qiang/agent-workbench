@@ -56,3 +56,20 @@ approval_timeout_seconds = 120
 # store has no capacity to spare, and a second concurrent turn mostly makes the
 # first one slower.
 max_concurrent_turns = 1
+
+[event_stream]
+# How soon a step shows up in the browser, and the shipped default of 10s is
+# tuned for a different question.
+#
+# A durable event reaches a subscriber only through the replay path -- the live
+# channel drops durable envelopes on purpose, because one arriving by both
+# routes would arrive once with a position and once without, and no client can
+# reconcile that. So this poll *is* the latency floor for every step a coding
+# session shows.
+#
+# At 10s a turn that finishes in five seconds displays no steps at all, which
+# is precisely the turn a first-time reader tries. Two seconds costs one extra
+# event-log query per second per open subscriber, and `max_concurrent_turns`
+# above is 1. A deployment that turns Code on inherits the 10s default and
+# should make the same trade deliberately -- F-07 in docs/known-gaps.md.
+catchup_poll_seconds = 2
