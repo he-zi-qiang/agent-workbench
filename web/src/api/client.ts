@@ -1,9 +1,11 @@
 import type {
+  ApprovalDecision,
   ApprovalListResponse,
   ApprovalStatus,
   ApprovalView,
   ArtifactDownloadTarget,
   AskResponse,
+  CodeAskResponse,
   CreateSessionResponse,
   CreateUploadResponse,
   DocumentPreview,
@@ -13,6 +15,7 @@ import type {
   KnowledgeBaseListResponse,
   KnowledgeBaseView,
   KnowledgeDocumentListResponse,
+  PendingApprovalsResponse,
   PrincipalIdentity,
   SearchResponse,
   TaskGraphChoice,
@@ -145,6 +148,66 @@ export async function askChat(
     },
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+export async function createCodeSession(
+  identity: PrincipalIdentity,
+  title?: string,
+): Promise<CreateSessionResponse> {
+  return apiRequest(identity, "/v1/code/sessions", {
+    method: "POST",
+    body: { title: title || null },
+  });
+}
+
+export async function getCodeHistory(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<HistoryResponse> {
+  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function askCode(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  instruction: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<CodeAskResponse> {
+  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: { instruction },
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function getCodeApprovals(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<PendingApprovalsResponse> {
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/approvals`,
+    { ...(signal === undefined ? {} : { signal }) },
+  );
+}
+
+export async function decideCodeApproval(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  approvalId: string,
+  decision: ApprovalDecision,
+): Promise<void> {
+  await apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
+    { method: "POST", body: { decision } },
+  );
 }
 
 export async function listKnowledgeBases(

@@ -48,7 +48,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("Chat 与 Work 外壳在桌面和移动布局中均可使用", async ({
+test("Chat、Work 与 Code 外壳在桌面和移动布局中均可使用", async ({
   page,
 }, testInfo) => {
   await page.goto("/ui/");
@@ -95,6 +95,19 @@ test("Chat 与 Work 外壳在桌面和移动布局中均可使用", async ({
     page.getByRole("button", { name: "上传文件到知识库" }),
   ).toBeVisible();
   await expect(page.getByLabel("回答资料")).toHaveValue("");
+
+  // The third primary flow, reachable from the same rail. Asserted by name and
+  // by the empty state rather than by a count: a count would pass for a rail
+  // with three of the wrong things on it.
+  await activeNavigation.getByRole("link", { name: "Code", exact: true }).click();
+
+  await expect(page).toHaveURL(/#\/code$/);
+  await expect(
+    page.getByRole("heading", { name: "还没有编码会话" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "新建编码会话" }),
+  ).toBeVisible();
 });
 
 test("知识库能进入 Chat，辅助页面在移动端也可到达", async ({

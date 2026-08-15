@@ -47,6 +47,33 @@ export interface HistoryResponse {
   messages: MessageView[];
 }
 
+// --- Code sessions -------------------------------------------------------
+//
+// A coding turn answers with a report rather than an answer: nothing here
+// crossed a publication fence, because a Code run has none. The files are the
+// product, and `workspace_version` names the set of them the turn left behind.
+
+export interface CodeAskResponse {
+  report: string;
+  workspace_version: Identifier | null;
+  run_id: Identifier;
+  status: string;
+  stop_reason: string;
+}
+
+export interface PendingApprovalView {
+  approval_id: Identifier;
+  tool_name: string;
+  argument_digest: string;
+  risk: string | null;
+}
+
+export interface PendingApprovalsResponse {
+  approvals: PendingApprovalView[];
+}
+
+export type ApprovalDecision = "approve_once" | "approve_for_session" | "deny";
+
 export type TaskStatus =
   | "queued"
   | "running"

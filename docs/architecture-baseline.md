@@ -1547,7 +1547,8 @@ CI 的算数**——本机装不到 `web/package.json` 的 `engines` 钉死的 n
 | Langfuse / CrewAI 对照 / RAGAS | ✓ |  |  |  |
 | LlamaIndex ingestion 迁移（`IngestionPipeline`，写入路径） | ✓ |  |  |  |
 | Task / Multi-Agent benchmark runner | ✓ |  |  |  |
-| 通用 Tool 级动态审批（MCP 之外） | ✓ |  |  |  |
+| 通用 Tool 级动态审批（MCP 之外） | ✓ | ✓ | ✓ |  |
+| Code 模式：编码会话、工作区指针与循环内审批（`in_api_process`） | ✓ | ✓ | ✓ |  |
 | 动态 supervisor / agent spawn / 持久 mailbox | ✓ |  |  |  |
 | Chat 历史压缩（token window / compaction） | ✓ |  |  |  |
 | Chat 会话的服务端管理（list / rename / delete） | ✓ |  |  |  |
@@ -1569,6 +1570,16 @@ CI 的算数**——本机装不到 `web/package.json` 的 `engines` 钉死的 n
 和写着"未实现"看起来差不多，实际差很多：一张只列做过的事的表，读者读到的是"这就是全部
 范围"。这些能力此前只散落在 README 的边界段落里，现在在同一张表上一并可见。其中几条要
 说得更细一点：
+
+- **Code 模式与通用工具审批**：这两行 2026-08-15 从 Planned 提到 Implemented +
+  Tested，各自的证据边界要说清楚。Code 有一条**真装配**的测试——从出厂配置加一个
+  `code.enabled = true` 启动整个应用、`POST /v1/code/sessions` 得 201——所以"接上线了"
+  是可核查的；但它**从未对真实模型跑过**，全部测试用的是 FakeModel 或桩，所以
+  `application/code_prompt.py` 里那六条纪律是否真的被遵守，仓库里没有任何证据，
+  这也是它不进 Demonstrated 的原因。审批闸门同理：闸门、registry、决定端点与它们的
+  测试都在，但**今天没有任何被授予的工具会触发它**——Code 只拿到五个工作区工具
+  （risk 是 read/write），而信封只对 `external`/`destructive` 要求审批。见
+  [known-gaps](./known-gaps.md) F 组。
 
 - **知识库管理**：目前只能创建与上传。重命名、删除、重建索引与 ACL 管理都没有 API，
   控制台上也没有入口。

@@ -1,5 +1,6 @@
 import {
   Activity,
+  Code2,
   FlaskConical,
   Library,
   MoreHorizontal,
@@ -17,6 +18,7 @@ import { useIdentity } from "./IdentityContext";
 const NAVIGATION = [
   { to: "/chat", label: "Chat", icon: MessageSquare, primary: true },
   { to: "/work", label: "Work", icon: SquareTerminal, primary: true },
+  { to: "/code", label: "Code", icon: Code2, primary: true },
   { to: "/knowledge", label: "知识库", icon: Library, primary: false },
   { to: "/approvals", label: "待我确认", icon: ShieldCheck, primary: false },
   { to: "/evaluation", label: "效果评测", icon: FlaskConical, primary: false },
