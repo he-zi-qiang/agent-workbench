@@ -500,6 +500,81 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 
 ---
 
+## F. Code 模式
+
+| 编号 | 缺口 | 分类 |
+|---|---|:---:|
+| F-01 | 一轮不可恢复：进程没了，那一轮就没了 | **拒绝** |
+| F-02 | 部署必然砍断在跑的回合 | **拒绝** |
+| F-03 | Code 没有持久幂等 | **拒绝** |
+| F-04 | 同一 principal 跨会话的工作区不隔离 | **拒绝** |
+| F-05 | 没有工具会触发审批，所以审批闸门今天走不到 | 未接线 |
+
+### F-01 一轮不可恢复 —— 拒绝
+
+**证据**：[code_session.py](../src/agent_workbench/application/code_session.py)
+模块 docstring；`code.execution_locality` 与 `code.coordination` 是单值
+`Literal`（[settings.py](../src/agent_workbench/bootstrap/settings.py)），架构测试
+`tests/architecture/test_code_premises_are_frozen.py` 钉住它们。
+
+**这是拒绝，不是遗漏。** 可恢复性需要一个能在崩溃后**释放**半成品状态的写者——租约
+加 reaper。要它就得要一整套：活跃槽、过期回收、检查点。Code 用放弃可恢复性换掉了
+整个协调面，换来的是"回答审批的人正对着那个停着的协程说话"，而那是等待唯一诚实的
+一种安排。
+
+崩溃后没有任何东西需要回收：没有租约、没有 `release_pending`、没有数据库里的活跃槽。
+工作区停在**最后一次成功写入**上（指针是每次写成功就推进的），用户把那句话再说一遍。
+
+**做完的判据**：不适用。要改，先改
+[更正文档](../var/plans/2026-08-14-code-turns-are-not-chat-turns.md) 的结论。
+
+### F-02 每次部署必然砍断在跑的回合 —— 拒绝
+
+**证据**：`code.turn_timeout_seconds` 默认 600，`api.shutdown_grace_seconds` 默认远
+小于它；`ApiDependencies.dispose()` 在关引擎之前调
+`CodeSessionService.drain_cleanup`，但只等 grace 那么久。
+
+**算术要写出来**：一轮最长 600 秒，优雅关停最多等 grace 秒，超出的部分被砍断。被砍断
+的那一轮不留任何需要回收的行（见 F-01），工作区停在最后一次成功写入上。
+
+**为什么不做交叉校验**：把 `turn_timeout ≤ shutdown_grace` 写成启动期校验，等于要求
+每次部署等待最长的一轮跑完，那是把一条运维约束伪装成配置错误。
+
+### F-03 Code 没有持久幂等 —— 拒绝
+
+**证据**：[routes/code.py](../src/agent_workbench/apps/api/routes/code.py) `ask`
+的 docstring。`Idempotency-Key` 必填，但它只用来派生稳定的 run id。
+
+Chat 的幂等住在 `chat_turns` 那本账本里，而 Code 一行都不写（这是 F-01 的同一个
+决定）。所以：打到一个正在忙的会话的重试是 409；**进程死后的重试是新的一轮**。
+
+### F-04 同一 principal 跨会话的工作区不隔离 —— 拒绝
+
+**证据**：[workspace.py](../src/agent_workbench/application/workspace.py) 的
+get/put 只带 `(tenant_id, principal_id)`；
+[artifact_store.py](../src/agent_workbench/ports/artifact_store.py) 自己写着
+"Hard to guess is not an authorization rule"。
+
+**今天不可达**：没有任何入口收 workspace version——它经由服务进入的 `ContextVar`
+到达工具，经由比较并交换到达数据库。守卫是架构测试
+`tests/architecture/test_a_workspace_version_is_never_asked_for.py`，它扫路由的输入与
+工具 schema 的 properties。
+
+### F-05 审批闸门接好了，但今天没有工具会触发它 —— 未接线
+
+**证据**：[code_session.py](../src/agent_workbench/application/code_session.py) 的
+`CODE_TOOLS` 只有五个工作区工具（risk 是 read/write），而信封的
+`approval_required_risks` 是 `("external", "destructive")`；`code.shell_enabled` 冻结
+为 `False`。
+
+**为什么仍然接**：`sandbox_run` 是 external，C4 把它给 Code 的那天，需要的是改这个
+元组和风险上限，而不是改闸门底下的机器。闸门、registry、决定端点与它们的测试都在。
+
+**做完的判据**：C4 落地后，一条端到端测试证明一次 `sandbox_run` 提议真的停下来等人，
+并在人点了之后才执行。
+
+---
+
 ## 优先级建议
 
 按"单位工作量能消除多少不可核查性"排序，而不是按功能大小。
