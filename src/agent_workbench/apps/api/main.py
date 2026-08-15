@@ -26,6 +26,14 @@ from starlette.types import ASGIApp
 
 from agent_workbench.adapters.telemetry import EventLoopLagWatchdog
 from agent_workbench.application.chat import ChatExecutionError
+from agent_workbench.application.code_approvals import (
+    ApprovalNotPendingError,
+    StandingApprovalRefusedError,
+)
+from agent_workbench.application.code_session import (
+    CodeCapacityError,
+    CodeTurnBusyError,
+)
 from agent_workbench.application.tasks import TimelineUnavailableError
 from agent_workbench.application.uploads import UploadVerificationError
 from agent_workbench.apps.api.dependencies import ApiDependencies, build_dependencies
@@ -35,6 +43,7 @@ from agent_workbench.apps.api.routes import (
     approvals,
     artifacts,
     chat,
+    code,
     events,
     health,
     knowledge_bases,
@@ -79,6 +88,16 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     # 500: nothing is broken, the caller simply wrote against a version that is
     # no longer current, and the bytes it wrote are still where it put them.
     WorkspacePointerConflictError: 409,
+    # One turn per coding session, and the process admits a bounded number of
+    # them at once. Both are refusals a client can act on -- retry, or come
+    # back later -- so neither is a 500, and neither is a queue that hides the
+    # wait behind a request that looks like it is working.
+    CodeTurnBusyError: 409,
+    CodeCapacityError: 429,
+    # The question was already answered, or the run stopped waiting for it.
+    ApprovalNotPendingError: 409,
+    # A blanket yes was asked for where only a single yes is available.
+    StandingApprovalRefusedError: 422,
     OutputTooLargeError: 413,
     TaskTransitionRejectedError: 409,
     # The Task moved while a human was thinking -- cancelled, most often.
@@ -203,6 +222,12 @@ def create_app(
         app.include_router(chat.router)
         # Subscribing is only meaningful where there are turns to subscribe to.
         app.include_router(events.router)
+    # Its own condition, not chat's. A deployment may run coding sessions while
+    # serving no chat -- they need different halves of this process -- and a
+    # router mounted on the other one's availability would be a 500 per request
+    # in exactly that case.
+    if dependencies.serves_code:
+        app.include_router(code.router)
 
     if web_directory is not None:
         # Mounted after every router, so an API path is never answered by a

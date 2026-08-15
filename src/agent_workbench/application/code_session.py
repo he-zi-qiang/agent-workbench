@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from agent_workbench.application.answer_release import ProcessOnlySink
+from agent_workbench.application.code_approvals import ApprovalScope
 from agent_workbench.application.code_prompt import CODER_SYSTEM_PROMPT
 from agent_workbench.application.session_workspace import SessionWorkspace
 from agent_workbench.application.workspace import Workspace, WorkspaceSession
@@ -117,7 +118,12 @@ class CodeSessionService:
 
     conversations: ConversationStore
     artifacts: ArtifactStore
-    executor: AgentExecutor
+    #: A runtime per turn, not one per process, and the reason is the approval
+    #: gate: a held call is answered by a request naming a session, so the gate
+    #: has to be bound to one -- and the gateway that holds the gate is built
+    #: with it. Everything else about the runtime is identical between turns;
+    #: what a turn costs to build is five schema validations.
+    executor_for: Callable[[ApprovalScope], AgentExecutor]
     scope: WorkspaceScope
     #: No default. A turn's ceiling is a deployment decision, and a silent one
     #: is how a runaway loop becomes somebody's bill.
@@ -246,8 +252,15 @@ class CodeSessionService:
         # around each tool: the tools find it through a ContextVar, and a scope
         # entered per call would hand each of them a version the last one had
         # already moved past.
+        executor = self.executor_for(
+            ApprovalScope(
+                tenant_id=principal.tenant_id,
+                session_id=request.session_id,
+                principal_id=principal.principal_id,
+            )
+        )
         with self.scope.using(workspace):
-            outcome = await self.executor.run(
+            outcome = await executor.run(
                 self._request_for(request, history=history, asked=asked),
                 sink,
                 cancellation,

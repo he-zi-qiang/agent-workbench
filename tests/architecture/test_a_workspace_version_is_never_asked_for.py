@@ -64,14 +64,45 @@ def _route_parameter_names(tree: ast.AST) -> set[str]:
     return names
 
 
-def _model_field_names(tree: ast.AST) -> set[str]:
-    """Annotated class attributes, i.e. the fields of a request body model."""
+def _body_model_names(tree: ast.AST) -> set[str]:
+    """The classes a route takes as a parameter, i.e. its request bodies."""
 
-    return {
-        node.target.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
-    }
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        arguments = node.args
+        for argument in (
+            *arguments.posonlyargs,
+            *arguments.args,
+            *arguments.kwonlyargs,
+        ):
+            if isinstance(argument.annotation, ast.Name):
+                names.add(argument.annotation.id)
+    return names
+
+
+def _body_field_names(tree: ast.AST) -> set[str]:
+    """The fields of those classes, and deliberately not of every class here.
+
+    A *response* naming a workspace version is not an input -- telling a caller
+    where their files now stand is the one thing this API should do with that
+    value. Scanning every annotated attribute in the module would forbid
+    saying it, which is a different rule and a wrong one.
+    """
+
+    bodies = _body_model_names(tree)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name not in bodies:
+            continue
+        names.update(
+            statement.target.id
+            for statement in node.body
+            if isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+        )
+    return names
 
 
 def _schema_property_names(tree: ast.AST) -> set[str]:
@@ -98,7 +129,7 @@ def test_no_route_accepts_a_workspace_version() -> None:
     offences: list[str] = []
     for module in _route_modules():
         tree = ast.parse(module.read_text(encoding="utf-8"))
-        found = (_route_parameter_names(tree) | _model_field_names(tree)) & (
+        found = (_route_parameter_names(tree) | _body_field_names(tree)) & (
             FORBIDDEN_INPUT_NAMES
         )
         offences.extend(f"{module.name} accepts {name}" for name in sorted(found))
@@ -132,3 +163,7 @@ def test_both_scans_are_looking_at_something() -> None:
 
     assert "session_id" in _route_parameter_names(chat)
     assert "name" in _schema_property_names(workspace)
+    # And the body-field extractor: `AskRequest.question` is a field of a class
+    # the chat route takes as a parameter, which is exactly the path an input
+    # named `workspace_version` would arrive by.
+    assert "question" in _body_field_names(chat)

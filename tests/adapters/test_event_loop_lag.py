@@ -396,6 +396,7 @@ class _StubDependencies:
     chat_reaper = None
     chat_pending_recovery = None
     serves_chat = False
+    serves_code = False
     serves_search = False
     max_control_request_body_bytes = 1024
 

@@ -109,7 +109,7 @@ class _Harness:
         self.service = CodeSessionService(
             conversations=self.conversations,
             artifacts=InMemoryArtifactStore(),
-            executor=runtime,
+            executor_for=lambda _scope: runtime,
             scope=self.scope,
             budget=RunBudget(max_steps=6, max_tool_calls=6),
             turn_timeout_seconds=TURN_TIMEOUT,
@@ -306,7 +306,7 @@ def test_a_session_runs_one_turn_at_a_time() -> None:
 
     harness = _Harness(_writes("notes.md", "hello", "Done."))
     held = _Held()
-    harness.service.executor = held  # pyright: ignore[reportAttributeAccessIssue]
+    harness.service.executor_for = lambda _scope: held  # pyright: ignore[reportAttributeAccessIssue]
 
     async def scenario() -> tuple[str, int]:
         session_id = await harness.opened()
@@ -335,7 +335,7 @@ def test_a_process_admits_only_as_many_turns_as_it_says() -> None:
 
     harness = _Harness(_writes("notes.md", "hello", "Done."), max_concurrent_turns=1)
     held = _Held()
-    harness.service.executor = held  # pyright: ignore[reportAttributeAccessIssue]
+    harness.service.executor_for = lambda _scope: held  # pyright: ignore[reportAttributeAccessIssue]
 
     async def scenario() -> tuple[str, int]:
         first_session = await harness.opened()
@@ -437,7 +437,7 @@ def test_the_turn_carries_a_deadline_derived_from_the_clock() -> None:
 
     harness = _Harness(_writes("notes.md", "hello", "Done."))
     recording = _Recording()
-    harness.service.executor = recording  # pyright: ignore[reportAttributeAccessIssue]
+    harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
 
     async def scenario() -> Any:
         session_id = await harness.opened()
