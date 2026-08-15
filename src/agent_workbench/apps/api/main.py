@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -71,6 +72,8 @@ from agent_workbench.ports.task_registry import (
     TaskSubmissionConflictError,
     TaskTransitionRejectedError,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 API_TITLE = "Agent Workbench"
 
@@ -228,6 +231,21 @@ def create_app(
     # in exactly that case.
     if dependencies.serves_code:
         app.include_router(code.router)
+    elif dependencies.config.code.enabled:
+        # Said out loud, because the alternative is what this was found by: a
+        # profile with `code.enabled = true`, a process that starts and reports
+        # nothing, and a 404 on every /v1/code path. From the outside that is
+        # indistinguishable from a build without the routes compiled in.
+        #
+        # The cause is almost always the model. Code has no fixed-shape
+        # fallback -- a turn is a model loop or it is nothing -- so a provider
+        # that could not be built takes the coding half with it, and that
+        # failure happens two layers below anything the word "code" appears in.
+        _LOGGER.warning(
+            "code.enabled is true but this process serves no coding sessions: "
+            "the model provider could not be assembled (check the key and the "
+            "model ids this profile pins)"
+        )
 
     if web_directory is not None:
         # Mounted after every router, so an API path is never answered by a

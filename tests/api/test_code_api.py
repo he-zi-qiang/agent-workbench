@@ -14,6 +14,7 @@ behind a tool loop that has nothing to do with them.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import tomllib
 from datetime import UTC, datetime
@@ -570,23 +571,36 @@ def test_the_status_codes_come_from_the_application_table() -> None:
 # actual application from a config file.
 
 
-def _assembled_settings(root: Path, *, code_enabled: bool) -> Settings:
+def _assembled_settings(
+    root: Path, *, code_enabled: bool, model_pinned: bool = True
+) -> Settings:
     with DEFAULT_CONFIG_FILE.open("rb") as handle:
         payload: dict[str, Any] = tomllib.load(handle)
     dsn = os.environ["AGENT_WORKBENCH_TEST_DSN"]
     payload["database"].update(dsn=dsn, guard_dsn=dsn, listen_dsn=dsn)
-    payload["model"]["main"]["model_id"] = "deepseek-chat"
-    payload["model"]["compact"]["model_id"] = "deepseek-chat"
+    # Left as the shipped `not-configured-*` placeholders when a test wants the
+    # deployment mistake rather than a working one. That is the real shape of
+    # it: an overlay that turns Code on and forgets that the ids underneath it
+    # are placeholders `build_model` refuses.
+    if model_pinned:
+        payload["model"]["main"]["model_id"] = "deepseek-chat"
+        payload["model"]["compact"]["model_id"] = "deepseek-chat"
     payload["artifact_store"]["local_root"] = str(root)
     payload["secrets"] = {"deepseek_api_key": "sk-unit-test"}
     payload["code"] = {**payload["code"], "enabled": code_enabled}
     return Settings(**payload)
 
 
-def _booted(root: Path, *, code_enabled: bool) -> tuple[bool, int, str]:
+def _booted(
+    root: Path, *, code_enabled: bool, model_pinned: bool = True
+) -> tuple[bool, int, str]:
     async def execute() -> tuple[bool, int, str]:
         dependencies = build_dependencies(
-            project_api(_assembled_settings(root, code_enabled=code_enabled))
+            project_api(
+                _assembled_settings(
+                    root, code_enabled=code_enabled, model_pinned=model_pinned
+                )
+            )
         )
         app = create_app(dependencies)
         transport = httpx.ASGITransport(app=app)  # pyright: ignore[reportArgumentType]
@@ -764,3 +778,50 @@ def test_another_principal_cannot_read_the_working_set() -> None:
         return read.status_code
 
     assert _run(world, scenario) == 404
+
+
+@pytest.mark.skipif(
+    "AGENT_WORKBENCH_TEST_DSN" not in os.environ,
+    reason="the real assembly needs a database",
+)
+def test_a_process_that_cannot_serve_code_says_so(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Asked for, not served, and not silent about it.
+
+    Written from a profile that got this wrong. `code.enabled = true` sat two
+    lines below model ids the overlay never pinned, `build_model` refused, and
+    the coding half went down with it -- while the process printed "startup
+    complete" and answered 404 on every /v1/code path. From outside, that is
+    the same thing a build without the routes looks like.
+
+    The refusal itself is right: a coding turn is a model loop or it is
+    nothing. What was wrong is that it happened two layers below anything with
+    the word "code" in it, and nobody upstream heard.
+    """
+
+    with caplog.at_level(logging.WARNING):
+        serves, status, _ = _booted(tmp_path, code_enabled=True, model_pinned=False)
+
+    assert serves is False
+    assert status == 404
+    assert any("code.enabled is true" in record.message for record in caplog.records), [
+        record.message for record in caplog.records
+    ]
+
+
+@pytest.mark.skipif(
+    "AGENT_WORKBENCH_TEST_DSN" not in os.environ,
+    reason="the real assembly needs a database",
+)
+def test_a_process_that_was_not_asked_for_code_stays_quiet(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The control. Off because nobody asked is not a problem to report."""
+
+    with caplog.at_level(logging.WARNING):
+        _booted(tmp_path, code_enabled=False, model_pinned=False)
+
+    assert not any(
+        "code.enabled is true" in record.message for record in caplog.records
+    )

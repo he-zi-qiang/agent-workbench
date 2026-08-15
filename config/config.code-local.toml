@@ -28,6 +28,22 @@
 environment = "development"
 deployment_scope = "local"
 
+# Pinned here for the same reason config.local.toml pins them: the shipped
+# defaults are placeholders, and `build_model` refuses rather than start a
+# process that could not answer.
+#
+# This file is an overlay over config.default.toml and *not* over
+# config.local.toml, so nothing above is inherited from there. Leaving these out
+# was not a smaller profile -- it was a dead one. `build_model` raised, the
+# whole model half of the process went with it, and `code.enabled = true` two
+# lines below turned into a 404 on every /v1/code path with nothing said. The
+# warning that now names that case was written from this file getting it wrong.
+[model.main]
+model_id = "deepseek-chat"
+
+[model.compact]
+model_id = "deepseek-chat"
+
 [code]
 enabled = true
 

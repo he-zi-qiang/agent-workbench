@@ -15,6 +15,7 @@
 #   scripts/dev.sh web-check    # health + tools/list probe
 #   scripts/dev.sh web-api      # API with explicit web MCP profile
 #   scripts/dev.sh web-worker   # real Worker; requires a model provider key
+#   scripts/dev.sh code-api     # API with Code sessions on; requires a key
 #   scripts/dev.sh demo-check   # probe both MCP servers at once
 #   scripts/dev.sh demo-api     # API with Word *and* web: the console profile
 #   scripts/dev.sh demo-worker  # real Worker for that profile; needs both servers
@@ -290,6 +291,30 @@ web-worker)
     --expect-tool download_document >&2
   echo "web profile + model provider configured: real graph" >&2
   exec "$PYTHON" -m agent_workbench.apps.task_worker.main
+  ;;
+
+code-api)
+  # The profile existed before this command did, which meant the only way to
+  # start it was to know the file's name and export AW_CONFIG_FILE by hand.
+  #
+  # Refuses without a key, like the three explicit workers and unlike plain
+  # `api`. The asymmetry is the point: a keyless `api` loses chat and still
+  # serves search, so it is a smaller process rather than a broken one. A Code
+  # session has no fixed-shape fallback -- a turn is a model loop or it is
+  # nothing -- so a keyless one opens sessions that can only ever fail, and it
+  # fails inside a turn, where the message reaches the browser as a turn error
+  # rather than as a process that said why it would not start.
+  export AW_CONFIG_FILE=config/config.code-local.toml
+  if [ -z "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "code-api requires AW_SECRETS__DEEPSEEK_API_KEY; a coding turn has no fallback" >&2
+    exit 2
+  fi
+  # Said here rather than left to be discovered: the session opens and reads
+  # its workspace without it, and every write is refused by policy -- which
+  # from the transcript alone looks like a model that will not use its tools.
+  echo "code profile: the console must send x-principal-scopes with workspace:write" >&2
+  shift
+  exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
   ;;
 
 demo-check)
