@@ -19,7 +19,7 @@ taken deliberately rather than a feature deferred:
 * **A turn is not recoverable.** No lease to expire, no ``release_pending`` to
   finish, nothing half-written to reclaim. If this process dies mid-turn the
   turn is gone and the workspace stands at its last successful write. The user
-  says the sentence again. Recorded in ``docs/known-gaps.md``.
+  says the sentence again. Recorded as ``docs/known-gaps.md`` F-01.
 
 * **The workspace pointer moves per write, not at the end.** A cancelled turn
   keeps the files it had finished, because those files are what the user was
@@ -329,7 +329,7 @@ class CodeSessionService:
         is no half-finished state to reclaim, so the only thing worth doing is
         giving a turn that is nearly done the chance to finish. A turn that
         needs longer than the grace period is cut off, and its workspace stands
-        at its last successful write. ``docs/known-gaps.md`` F-14 records the
+        at its last successful write. ``docs/known-gaps.md`` F-02 records the
         arithmetic.
         """
 

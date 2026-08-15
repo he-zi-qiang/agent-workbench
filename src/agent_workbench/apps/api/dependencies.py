@@ -308,7 +308,7 @@ class ApiDependencies:
         # Before the engine and the client close under it. A coding turn that
         # is nearly done gets the same grace a chat turn does; one that needs
         # longer is cut off and its workspace stands at its last successful
-        # write (known-gaps F-14).
+        # write (known-gaps F-02).
         if self.code is not None:
             await self.code.drain_cleanup(
                 timeout_seconds=self.config.shutdown_grace_seconds
