@@ -150,6 +150,7 @@ class PostgresConversationStore:
                     session_id,
                     tenant_id,
                     principal_id,
+                    mode="chat",
                 )
                 existing = await self._turn_for_key(
                     connection,
@@ -753,16 +754,23 @@ class PostgresConversationStore:
         session_id: str,
         tenant_id: str,
         principal_id: str,
+        *,
+        mode: SessionMode | None = None,
     ) -> None:
         """Authenticate and lock the session, serialising all its mutations."""
 
-        result = await connection.execute(
+        query = (
             select(conversation_sessions.c.session_id)
             .where(conversation_sessions.c.session_id == session_id)
             .where(conversation_sessions.c.tenant_id == tenant_id)
             .where(conversation_sessions.c.owner_id == principal_id)
-            .with_for_update()
         )
+        if mode is not None:
+            # Same WHERE clause, not a check on the fetched row: an ungrantable
+            # session must stay unfetchable, so no later edit can begin locking
+            # -- and thereby reporting on -- a session this caller cannot drive.
+            query = query.where(conversation_sessions.c.mode == mode)
+        result = await connection.execute(query.with_for_update())
         if result.first() is None:
             raise NotFoundError("conversation session not found")
 

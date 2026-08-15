@@ -28,8 +28,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.memory import InMemoryConversationStore, InMemoryEventLog
-from agent_workbench.application.chat import ChatService
+from agent_workbench.application.chat import ChatExecutionError, ChatService
 from agent_workbench.application.chat_execution import TurnExecution
 from agent_workbench.apps.api.main import ERROR_STATUS
 from agent_workbench.apps.api.routes import chat as chat_route
@@ -38,6 +39,7 @@ from agent_workbench.apps.api.sse import LiveEventChannel
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.ports.chat_release import ChatReleaseCoordinator
+from agent_workbench.ports.event_log import EventScope
 
 TENANT = "tenant_a"
 OWNER = "user_1"
@@ -56,14 +58,23 @@ class _StubPrincipals:
         return _StubPrincipal()
 
 
+class _ExecutionReached(AssertionError):
+    """Raised by the execution double the moment a request gets past the gate.
+
+    Reading and subscribing must never arrive here. Asking a *chat* session
+    must, which is what makes it the control: a refusal that came from a
+    mistyped URL would never reach an execution either.
+    """
+
+
 class _NeverExecutes:
-    """An execution these routes must never reach: neither one answers."""
+    """An execution neither read path may reach: neither one answers."""
 
     async def produce(self, *_: object, **__: object) -> Any:
-        raise AssertionError("history and subscribe do not produce answers")
+        raise _ExecutionReached("execution reached")
 
     def live_text_policy(self, _request: object, /) -> Any:
-        raise AssertionError("history and subscribe do not produce answers")
+        raise _ExecutionReached("execution reached")
 
 
 class _NeverReleases:
@@ -121,8 +132,16 @@ def _app(conversations: InMemoryConversationStore) -> FastAPI:
                 buffer_events=8,
                 max_subscribers_per_stream=4,
             ),
+            # Direct is available under every shape, so the ask below is
+            # refused for its session's mode or not at all.
+            effective_retrieval_shape="ungrounded",
+            sink_for=lambda *, stream_id, run_id: ScopedEventSink(
+                log=InMemoryEventLog(),
+                scope=EventScope(stream_id=stream_id, run_id=run_id),
+            ),
             config=SimpleNamespace(
                 sse_heartbeat_seconds=600,
+                chat_recovery=SimpleNamespace(disconnect_poll_seconds=60.0),
                 event_stream=SimpleNamespace(
                     catchup_poll_seconds=1,
                     replay_page_size=500,
@@ -202,6 +221,55 @@ def test_a_code_session_opens_no_event_stream(monkeypatch: pytest.MonkeyPatch) -
     # Refused before the response exists, not by a frame inside one: a client
     # cannot tell a stream that ends early from a stream with nothing in it.
     assert built == 0
+
+
+def test_a_code_session_cannot_be_driven_through_chat() -> None:
+    """The write side of the same door, and the one with a lasting cost.
+
+    Reading a code session leaks it. Asking one *drives* it: the claim takes a
+    lease that only the expiry reaper gives back, and the turn it opens ends by
+    appending an assistant message to a conversation whose own lifecycle never
+    authorised one. The execution double never being reached is the second
+    half of the claim -- a session refused only after a provider was called
+    has already been driven.
+    """
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        refused = await client.post(
+            f"{chat_route.CHAT_PREFIX}/sessions/{CODE_SESSION}/messages",
+            headers={**HEADERS, "Idempotency-Key": "gate-1"},
+            json={"question": "run the tests", "answer_mode": "direct"},
+        )
+        return refused.status_code
+
+    assert _run(scenario) == 404
+
+
+def test_the_same_ask_reaches_execution_for_a_chat_session() -> None:
+    """The control, and it is not optional here: 404 is also what a mistyped
+    path answers, so the refusal above proves nothing until the identical
+    request against a chat session is shown to get through.
+
+    The double's failure comes back as ``ChatExecutionError``, which the
+    service raises only for a turn it had already claimed -- so the type alone
+    says the gate was passed, and the type name kept inside the outcome says
+    which double did it rather than merely that something went wrong.
+    """
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        allowed = await client.post(
+            f"{chat_route.CHAT_PREFIX}/sessions/{CHAT_SESSION}/messages",
+            headers={**HEADERS, "Idempotency-Key": "gate-1"},
+            json={"question": "run the tests", "answer_mode": "direct"},
+        )
+        return allowed.status_code
+
+    with pytest.raises(ChatExecutionError) as refused:
+        _run(scenario)
+
+    outcome = refused.value.outcome
+    assert outcome.error is not None
+    assert outcome.error.message == f"unhandled {_ExecutionReached.__name__}"
 
 
 def test_a_chat_session_still_opens_one(monkeypatch: pytest.MonkeyPatch) -> None:

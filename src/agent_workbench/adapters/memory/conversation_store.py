@@ -125,6 +125,7 @@ class InMemoryConversationStore:
                 session_id=session_id,
                 tenant_id=tenant_id,
                 principal_id=principal_id,
+                mode="chat",
             )
             key = (session_id, idempotency_key)
             existing_turn_id = self._turn_ids_by_key.get(key)

@@ -27,6 +27,7 @@ from agent_workbench.ports.conversation_store import (
 )
 
 SESSION = "session_1"
+CODE_SESSION = "session_code_1"
 TENANT = "tenant_a"
 OWNER = "user_1"
 NEIGHBOUR = "user_2"
@@ -55,6 +56,16 @@ class _RowLockControl(Protocol):
 
 async def _with_session(store: ChatTurnStore) -> ChatTurnStore:
     await store.create_session(session_id=SESSION, tenant_id=TENANT, owner_id=OWNER)
+    return store
+
+
+async def _with_code_session(store: ChatTurnStore) -> ChatTurnStore:
+    await store.create_session(
+        session_id=CODE_SESSION,
+        tenant_id=TENANT,
+        owner_id=OWNER,
+        mode="code",
+    )
     return store
 
 
@@ -1162,3 +1173,89 @@ def test_claim_checks_session_ownership_before_idempotency(
 
     with pytest.raises(NotFoundError, match="conversation session not found"):
         chat_turn_conversations.run(scenario)
+
+
+# --- the write side of the same door -----------------------------------------
+#
+# Refusing a code session in ``history`` stops the Chat API from reading one.
+# This ledger is where it could still have driven one: a claim takes a lease
+# that only the expiry reaper gives back, and the turn it opens ends by
+# publishing an assistant message into a conversation whose own lifecycle never
+# authorised it. The refusal belongs at the claim rather than on every method
+# here, because every other one is addressed by a ``turn_id`` -- and no turn id
+# names a code session once no turn can be claimed for one.
+
+
+def test_a_code_session_cannot_have_a_chat_turn_claimed(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    """Answered exactly like a missing id: "exists, wrong mode" is still a leak."""
+
+    async def scenario(store: ChatTurnStore) -> None:
+        await _with_code_session(store)
+        await store.claim_turn(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            idempotency_key=KEY,
+            request_hash=REQUEST_HASH,
+            run_id=RUN,
+            user_message=user_message("current question"),
+            lease_seconds=LEASE_SECONDS,
+        )
+
+    with pytest.raises(NotFoundError, match="conversation session not found"):
+        chat_turn_conversations.run(scenario)
+
+
+def test_a_chat_session_beside_it_still_claims(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    """The control: the refusal is about the mode, not about claiming at all.
+
+    Without it, a ``claim_turn`` that had simply stopped working would satisfy
+    the test above.
+    """
+
+    async def scenario(store: ChatTurnStore) -> bool:
+        await _with_session(store)
+        await _with_code_session(store)
+        claim = await _claim(store)
+        return claim.newly_claimed
+
+    assert chat_turn_conversations.run(scenario) is True
+
+
+def test_a_refused_claim_appends_no_user_message(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    """The refusal has to precede the write, not be rolled back after it.
+
+    A claim appends the user's message before it opens the turn. An
+    implementation that read the mode afterwards would still raise, so the
+    refusal above cannot tell the two apart; the in-memory store, which has no
+    transaction to unwind, is where the difference becomes visible.
+    """
+
+    async def scenario(store: ChatTurnStore) -> int:
+        await _with_code_session(store)
+        with pytest.raises(NotFoundError):
+            await store.claim_turn(
+                session_id=CODE_SESSION,
+                tenant_id=TENANT,
+                principal_id=OWNER,
+                idempotency_key=KEY,
+                request_hash=REQUEST_HASH,
+                run_id=RUN,
+                user_message=user_message("current question"),
+                lease_seconds=LEASE_SECONDS,
+            )
+        stored = await store.history(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            mode="code",
+        )
+        return len(stored)
+
+    assert chat_turn_conversations.run(scenario) == 0

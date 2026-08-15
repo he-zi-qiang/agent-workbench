@@ -379,6 +379,15 @@ class ChatTurnStore(ConversationStore, Protocol):
         same request hash returns the original turn; a different hash raises
         ``ChatTurnConflictError``. Another active key in the same session
         raises ``ChatTurnBusyError``.
+
+        That ownership check also refuses a ``code`` session with
+        ``NotFoundError``. There is no ``mode`` argument to pass, because this
+        ledger is the Chat lifecycle itself and Code writes no row in it: a
+        caller wanting to claim a turn against a code session does not exist,
+        and a parameter would state that one might. Refusing here is what makes
+        the refusal total -- every other method of this protocol is reached
+        through a ``turn_id``, and no turn id can name a code session once none
+        can be claimed for one.
         """
         ...
 
