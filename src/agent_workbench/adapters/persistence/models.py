@@ -76,6 +76,14 @@ conversation_sessions = Table(
         nullable=False,
         server_default=text("'chat'"),
     ),
+    # The manifest id this session's working set is at. Nullable, and NULL is
+    # not "unknown": it is the session that has written nothing yet, which is
+    # where every session starts and a state every writer must be able to name.
+    #
+    # No foreign key. The value is an artifact id in a store this database does
+    # not own, and a constraint that can only be enforced somewhere else is a
+    # claim, not a constraint.
+    Column("workspace_version", String(IDENTIFIER_LENGTH), nullable=True),
     Column(
         "created_at",
         DateTime(timezone=True),

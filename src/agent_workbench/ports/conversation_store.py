@@ -69,6 +69,7 @@ class ChatTurnBusyError(RuntimeError):
 class ChatTurnLeaseExpiredError(RuntimeError):
     """A late result reached a Turn whose fixed execution lease has elapsed."""
 
+
     def __init__(self, outcome: AgentOutcome) -> None:
         if (
             outcome.status != "failed"
@@ -80,6 +81,18 @@ class ChatTurnLeaseExpiredError(RuntimeError):
             raise ValueError("lease expiry requires a stale_execution outcome")
         self.outcome = outcome
         super().__init__("chat turn execution lease expired")
+
+
+class WorkspacePointerConflictError(RuntimeError):
+    """A workspace advance was based on a version the session no longer holds.
+
+    The bytes and the manifest it wrote are already stored; what was refused is
+    the session's claim that they follow from the version it read. Losing that
+    race is the whole point of writing through: two runs on one session would
+    otherwise each publish a manifest naming only its own files, and the loser
+    would silently delete the winner's -- not by removing bytes, but by
+    replacing the only name that reaches them.
+    """
 
 
 def chat_turn_terminal_event_key(turn_id: str) -> EventKey:
@@ -100,6 +113,15 @@ class ConversationSession(VersionedModel):
     #: was created by the Chat API. The other direction would relabel the whole
     #: history as something no Chat request may touch.
     mode: SessionMode = "chat"
+    #: The manifest id this session's working set is currently at, or ``None``
+    #: for a session that has never written a file.
+    #:
+    #: A Task carries its version through graph state, so a node that dies
+    #: commits nothing and the retry re-reads the entry version. A session has
+    #: no graph to carry it: the pointer is the only thing that survives the
+    #: run, which is why it lives on the row rather than in whatever object was
+    #: executing.
+    workspace_version: Identifier | None = None
 
 
 class StoredMessage(VersionedModel):
@@ -350,6 +372,48 @@ class ConversationStore(Protocol):
         """
         ...
 
+    async def session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        """The session row itself, scoped exactly like its history.
+
+        Reading the row is how a new run learns which workspace version it
+        continues from. It is a separate method rather than a field on
+        ``history`` because a run that has not asked for any messages still
+        needs the pointer, and a pointer that cannot be read is a pointer
+        nobody can write against.
+        """
+        ...
+
+    async def advance_workspace_version(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        expected: Identifier | None,
+        next_version: Identifier,
+    ) -> None:
+        """Move the pointer, but only if it is still where the caller left it.
+
+        ``expected`` is the version the new manifest was built from, and
+        ``None`` is a legitimate value rather than a missing argument: it says
+        "this session had written nothing", which is the state every session
+        starts in and therefore a state the comparison has to be able to name.
+        An implementation whose comparison cannot express it would refuse the
+        first write of every session.
+
+        A comparison that fails raises ``WorkspacePointerConflictError`` and
+        leaves the stored version alone. Ownership is checked the same way
+        every other method checks it, and answers ``NotFoundError``.
+        """
+        ...
+
 
 @runtime_checkable
 class ChatTurnStore(ConversationStore, Protocol):
@@ -485,5 +549,6 @@ __all__ = [
     "SessionMode",
     "StoredChatTurn",
     "StoredMessage",
+    "WorkspacePointerConflictError",
     "chat_turn_terminal_event_key",
 ]

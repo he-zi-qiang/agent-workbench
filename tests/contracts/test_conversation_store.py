@@ -14,7 +14,11 @@ from harness import StoreHarness
 
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.messages import assistant_message, user_message
-from agent_workbench.ports.conversation_store import ConversationStore, StoredMessage
+from agent_workbench.ports.conversation_store import (
+    ConversationStore,
+    StoredMessage,
+    WorkspacePointerConflictError,
+)
 
 SESSION = "session_1"
 CODE_SESSION = "session_code_1"
@@ -508,3 +512,139 @@ def test_the_owner_still_reads_their_own(conversations: StoreHarness) -> None:
         )
 
     assert conversations.run(scenario) == 1
+
+
+# --- the workspace pointer ---------------------------------------------------
+#
+# A Task carries its workspace version through graph state, so a dead attempt
+# publishes nothing and its writes stay unreachable. A session has no graph:
+# this column is where the version lives between turns, and the comparison is
+# what stops two runs on one session from each publishing a manifest that names
+# only its own files.
+
+
+async def _advance(
+    store: ConversationStore,
+    *,
+    expected: str | None,
+    next_version: str,
+    session_id: str = SESSION,
+    principal_id: str = OWNER,
+    tenant_id: str = TENANT,
+) -> None:
+    await store.advance_workspace_version(
+        session_id=session_id,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        expected=expected,
+        next_version=next_version,
+    )
+
+
+async def _pointer(store: ConversationStore) -> str | None:
+    session = await store.session(
+        session_id=SESSION, tenant_id=TENANT, principal_id=OWNER
+    )
+    return session.workspace_version
+
+
+def test_a_new_session_has_written_nothing(conversations: StoreHarness) -> None:
+    """``None`` is the starting state, and it is a value rather than a gap."""
+
+    async def scenario(store: ConversationStore) -> str | None:
+        await _with_session(store)
+        return await _pointer(store)
+
+    assert conversations.run(scenario) is None
+
+
+def test_the_first_write_compares_against_nothing(
+    conversations: StoreHarness,
+) -> None:
+    """The NULL case, which is every session's first write.
+
+    Under ``=`` this comparison would be against NULL, match no row, and be
+    reported as a race the caller was not in -- so this is the test that tells
+    ``IS NOT DISTINCT FROM`` apart from equality.
+    """
+
+    async def scenario(store: ConversationStore) -> str | None:
+        await _with_session(store)
+        await _advance(store, expected=None, next_version="art_one")
+        return await _pointer(store)
+
+    assert conversations.run(scenario) == "art_one"
+
+
+def test_the_pointer_moves_from_where_the_writer_left_it(
+    conversations: StoreHarness,
+) -> None:
+    """The control for the refusal below: advancing in step keeps working."""
+
+    async def scenario(store: ConversationStore) -> str | None:
+        await _with_session(store)
+        await _advance(store, expected=None, next_version="art_one")
+        await _advance(store, expected="art_one", next_version="art_two")
+        return await _pointer(store)
+
+    assert conversations.run(scenario) == "art_two"
+
+
+def test_a_stale_version_is_refused(conversations: StoreHarness) -> None:
+    async def scenario(store: ConversationStore) -> None:
+        await _with_session(store)
+        await _advance(store, expected=None, next_version="art_one")
+        # A second run that read the session before the first one wrote.
+        await _advance(store, expected=None, next_version="art_other")
+
+    with pytest.raises(WorkspacePointerConflictError):
+        conversations.run(scenario)
+
+
+def test_a_refused_advance_leaves_the_pointer_alone(
+    conversations: StoreHarness,
+) -> None:
+    """Refusing is only half of it: the loser must not have moved anything.
+
+    An implementation that wrote first and compared afterwards would raise
+    here too, so the exception alone cannot tell the two apart.
+    """
+
+    async def scenario(store: ConversationStore) -> str | None:
+        await _with_session(store)
+        await _advance(store, expected=None, next_version="art_one")
+        with pytest.raises(WorkspacePointerConflictError):
+            await _advance(store, expected=None, next_version="art_other")
+        return await _pointer(store)
+
+    assert conversations.run(scenario) == "art_one"
+
+
+def test_another_principal_cannot_move_the_pointer(
+    conversations: StoreHarness,
+) -> None:
+    """And is told it does not exist, not that it lost a race.
+
+    A conflict would confirm the session is real and say what version it is
+    at -- the same leak the history methods refuse.
+    """
+
+    async def scenario(store: ConversationStore) -> None:
+        await _with_session(store)
+        await _advance(
+            store, expected=None, next_version="art_one", principal_id=NEIGHBOUR
+        )
+
+    with pytest.raises(NotFoundError):
+        conversations.run(scenario)
+
+
+def test_another_tenant_cannot_read_the_pointer(conversations: StoreHarness) -> None:
+    async def scenario(store: ConversationStore) -> None:
+        await _with_session(store)
+        await store.session(
+            session_id=SESSION, tenant_id=OTHER_TENANT, principal_id=OWNER
+        )
+
+    with pytest.raises(NotFoundError):
+        conversations.run(scenario)

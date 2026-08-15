@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from agent_workbench.domain.errors import NotFoundError
-from agent_workbench.domain.identifiers import new_id, new_message_id
+from agent_workbench.domain.identifiers import Identifier, new_id, new_message_id
 from agent_workbench.domain.messages import Message, assistant_message
 from agent_workbench.domain.runs import AgentOutcome, stale_execution_outcome
 from agent_workbench.ports.conversation_store import (
@@ -28,6 +28,7 @@ from agent_workbench.ports.conversation_store import (
     SessionMode,
     StoredChatTurn,
     StoredMessage,
+    WorkspacePointerConflictError,
 )
 
 
@@ -103,6 +104,48 @@ class InMemoryConversationStore:
             )
             stored = tuple(self._messages[session_id])
         return stored if limit is None else stored[:limit]
+
+    async def session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        async with self._lock:
+            return self._require_session(
+                session_id=session_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                mode=mode,
+            )
+
+    async def advance_workspace_version(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        expected: Identifier | None,
+        next_version: Identifier,
+    ) -> None:
+        async with self._lock:
+            session = self._require_session(
+                session_id=session_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            )
+            # Read and compare under the same lock the write takes. Releasing
+            # between them would make this a check followed by a write, which is
+            # the race the comparison exists to lose.
+            if session.workspace_version != expected:
+                raise WorkspacePointerConflictError(
+                    "workspace pointer moved since this version was read"
+                )
+            self._sessions[session_id] = session.model_copy(
+                update={"workspace_version": next_version}
+            )
 
     async def claim_turn(
         self,

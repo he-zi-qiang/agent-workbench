@@ -22,6 +22,7 @@ not otherwise open.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.identifiers import Identifier
@@ -169,20 +170,66 @@ class Workspace:
         return ref.artifact_id
 
 
+class WorkspaceLike(Protocol):
+    """The working set as its tools address it: a version in, a version out.
+
+    Named as a shape rather than as a class because two different things
+    satisfy it and the difference is invisible from here. A Task's working set
+    is :class:`Workspace` itself, whose returned version means only "here is
+    what you would have to hold to reach these files". A Code session's is
+    ``SessionWorkspace``, which additionally records that version on the
+    session before returning it.
+
+    That is the whole distinction, and keeping it behind one shape is what lets
+    the tool handlers stay ignorant of it: they were already written to take a
+    version and assign the one they get back.
+    """
+
+    async def load(self, version: Identifier | None) -> WorkspaceManifest: ...
+
+    async def list(
+        self, version: Identifier | None
+    ) -> tuple[WorkspaceListing, ...]: ...
+
+    async def read(self, version: Identifier | None, name: str) -> bytes: ...
+
+    async def write(
+        self,
+        version: Identifier | None,
+        name: str,
+        content: bytes,
+        *,
+        media_type: str,
+    ) -> Identifier: ...
+
+    async def write_ref(
+        self,
+        version: Identifier | None,
+        name: str,
+        ref: ArtifactRef,
+    ) -> Identifier: ...
+
+
 @dataclass(slots=True)
 class WorkspaceSession:
-    """One node's view of the working set, and where its next version lands.
+    """One run's view of the working set, and where its next version lands.
 
-    Mutable on purpose, and the only mutable thing here. The node reads
+    Mutable on purpose, and the only mutable thing here. A graph node reads
     :attr:`version` after its agent run and puts it in the state update; a node
     that dies first returns no update, so nothing it advanced is visible to the
     attempt that replaces it.
+
+    A Code session inverts that and it does so entirely inside
+    :attr:`workspace`: there is no state update to withhold, so the version is
+    recorded as each write succeeds. Which of the two is in play is not visible
+    here, and must not be -- a session that could be asked "are you the durable
+    kind?" would grow callers that answer differently for each.
 
     It lives in this layer rather than beside the tool handlers because the
     graph has to create one and the graph may not import an adapter.
     """
 
-    workspace: Workspace
+    workspace: WorkspaceLike
     version: Identifier | None = None
 
 
@@ -191,6 +238,7 @@ __all__ = [
     "MANIFEST_MEDIA_TYPE",
     "Workspace",
     "WorkspaceEntryNotFoundError",
+    "WorkspaceLike",
     "WorkspaceListing",
     "WorkspaceSession",
 ]

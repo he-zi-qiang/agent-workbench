@@ -55,6 +55,7 @@ from agent_workbench.ports.approvals import ApprovalNotDecidableError
 from agent_workbench.ports.conversation_store import (
     ChatTurnBusyError,
     ChatTurnConflictError,
+    WorkspacePointerConflictError,
 )
 from agent_workbench.ports.documents import KnowledgeBaseMismatchError
 from agent_workbench.ports.task_registry import (
@@ -74,6 +75,10 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     KnowledgeBaseMismatchError: 409,
     ChatTurnBusyError: 409,
     ChatTurnConflictError: 409,
+    # The session's working set moved under this run. A conflict rather than a
+    # 500: nothing is broken, the caller simply wrote against a version that is
+    # no longer current, and the bytes it wrote are still where it put them.
+    WorkspacePointerConflictError: 409,
     OutputTooLargeError: 413,
     TaskTransitionRejectedError: 409,
     # The Task moved while a human was thinking -- cancelled, most often.

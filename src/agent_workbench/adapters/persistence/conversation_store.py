@@ -26,7 +26,7 @@ from agent_workbench.adapters.persistence.models import (
 )
 from agent_workbench.adapters.persistence.models import messages as messages_table
 from agent_workbench.domain.errors import NotFoundError
-from agent_workbench.domain.identifiers import new_id, new_message_id
+from agent_workbench.domain.identifiers import Identifier, new_id, new_message_id
 from agent_workbench.domain.messages import Message, assistant_message
 from agent_workbench.domain.runs import AgentOutcome, stale_execution_outcome
 from agent_workbench.ports.conversation_store import (
@@ -40,6 +40,7 @@ from agent_workbench.ports.conversation_store import (
     SessionMode,
     StoredChatTurn,
     StoredMessage,
+    WorkspacePointerConflictError,
 )
 
 
@@ -124,6 +125,87 @@ class PostgresConversationStore:
                 mode=mode,
             )
             return await self._history(connection, session_id=session_id, limit=limit)
+
+    async def session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        async with self._engine.connect() as connection:
+            query = (
+                select(
+                    conversation_sessions.c.session_id,
+                    conversation_sessions.c.tenant_id,
+                    conversation_sessions.c.owner_id,
+                    conversation_sessions.c.title,
+                    conversation_sessions.c.mode,
+                    conversation_sessions.c.workspace_version,
+                )
+                .where(conversation_sessions.c.session_id == session_id)
+                .where(conversation_sessions.c.tenant_id == tenant_id)
+                .where(conversation_sessions.c.owner_id == principal_id)
+            )
+            if mode is not None:
+                query = query.where(conversation_sessions.c.mode == mode)
+            row = (await connection.execute(query)).mappings().first()
+            if row is None:
+                raise NotFoundError("conversation session not found")
+            return ConversationSession.model_validate(dict(row))
+
+    async def advance_workspace_version(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        expected: Identifier | None,
+        next_version: Identifier,
+    ) -> None:
+        async with self._engine.begin() as connection:
+            # The comparison is a predicate of the UPDATE, not a check made
+            # before one. Reading the pointer and then writing it would leave a
+            # window exactly as wide as the round trip, which is the window
+            # this method exists to close.
+            #
+            # Spelled IS NOT DISTINCT FROM rather than ``==``. The two are the
+            # same here -- SQLAlchemy renders ``== None`` as IS NULL, so
+            # equality would not break the first write of a session the way raw
+            # ``= NULL`` would. It is written out because this predicate has to
+            # keep meaning "the same version, NULL included" no matter how the
+            # value arrives: bound later, or through a construction that does
+            # not have a literal None to rewrite.
+            updated = await connection.execute(
+                update(conversation_sessions)
+                .where(conversation_sessions.c.session_id == session_id)
+                .where(conversation_sessions.c.tenant_id == tenant_id)
+                .where(conversation_sessions.c.owner_id == principal_id)
+                .where(
+                    conversation_sessions.c.workspace_version.is_not_distinct_from(
+                        expected
+                    )
+                )
+                .values(workspace_version=next_version)
+            )
+            if updated.rowcount == 1:
+                return
+
+            # Zero rows is two different facts and they get two different
+            # answers: a session this caller may not address is missing, and a
+            # session whose pointer moved is a conflict. Telling them apart
+            # needs a second look, but only on the failing path -- and it is a
+            # look at a row this caller has already proven it may read.
+            await self._require_session(
+                connection,
+                session_id,
+                tenant_id,
+                principal_id,
+            )
+            raise WorkspacePointerConflictError(
+                "workspace pointer moved since this version was read"
+            )
 
     async def claim_turn(
         self,
