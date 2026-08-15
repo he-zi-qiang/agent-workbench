@@ -74,6 +74,16 @@ export interface PendingApprovalsResponse {
 
 export type ApprovalDecision = "approve_once" | "approve_for_session" | "deny";
 
+export interface WorkspaceEntryView {
+  name: string;
+  size_bytes: number;
+  media_type: string;
+}
+
+export interface WorkspaceResponse {
+  files: WorkspaceEntryView[];
+}
+
 export type TaskStatus =
   | "queued"
   | "running"

@@ -296,3 +296,25 @@ export function isQuarantineNotice(value: unknown): value is QuarantineNotice {
     notice.sequence >= 1
   );
 }
+
+
+/**
+ * Where a subscriber is in a stream, and how its connection is doing.
+ *
+ * Both were spelled `Chat*` and lived in the chat feature, which was true
+ * while chat was the only subscriber. A second one exists now, and a name that
+ * says "chat" would have made that surface either reach into the first
+ * feature's types or declare its own -- and two declarations of one shape is
+ * how they start disagreeing.
+ */
+export interface StreamCursor {
+  id: string;
+  sequence: number;
+}
+
+export type StreamConnectionState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "retrying"
+  | "unavailable";

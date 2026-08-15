@@ -17,7 +17,7 @@ import {
   type ChatAction,
   type ChatState,
 } from "./model";
-import { streamChatSession, type FrameAcceptance } from "./sessionStream";
+import { streamSession, type FrameAcceptance } from "../../api/sessionStream";
 import {
   identityStorageKey,
   loadChatCursor,
@@ -234,7 +234,8 @@ export class ChatRuntime {
     const controller = new AbortController();
     lease.controller = controller;
     const initialCursor = loadChatCursor(this.identity, sessionId);
-    void streamChatSession({
+    void streamSession({
+      eventsPath: "/v1/chat/sessions",
       identity: this.identity,
       sessionId,
       initialCursor,

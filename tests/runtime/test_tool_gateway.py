@@ -1211,4 +1211,3 @@ def test_the_word_a_gate_invented_does_not_travel_with_the_refusal() -> None:
 
     assert result.error is not None
     assert "postgres://" not in result.error.message
-

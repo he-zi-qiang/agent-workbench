@@ -106,9 +106,7 @@ def test_a_write_against_a_version_the_session_left_behind_is_refused() -> None:
             next_version="art_from_the_other_run",
         )
         with pytest.raises(WorkspacePointerConflictError):
-            await workspace.write(
-                first, "notes.md", b"second", media_type="text/plain"
-            )
+            await workspace.write(first, "notes.md", b"second", media_type="text/plain")
         return await _pointer(conversations), first
 
     stored, first = _run(scenario)

@@ -888,9 +888,7 @@ class ClaudeLikeAgentRuntime:
                     # They still owe the model an answer, so they are refused
                     # rather than dropped.
                     results.extend(
-                        await self._refuse_cancelled(
-                            tuple(prepared[index:]), sink=sink
-                        )
+                        await self._refuse_cancelled(tuple(prepared[index:]), sink=sink)
                     )
                     break
                 outcome = await self._gateway.authorize(

@@ -115,6 +115,36 @@ class _Publishing:
         raise AssertionError("unreachable")
 
 
+class _Writing:
+    """An executor that writes a file the way a tool would: through the scope.
+
+    Seeding the artifact store directly would be shorter and would prove less.
+    What is under test is that the endpoint reads the version recorded on the
+    session row, and that row only moves because a write moved it -- so the
+    write has to be a real one, made where the tools make theirs.
+    """
+
+    def __init__(self, scope: WorkspaceScope, name: str = "notes.md") -> None:
+        self.scope = scope
+        self.name = name
+
+    async def run(self, request: Any, emit: Any, cancellation: Any) -> AgentOutcome:
+        session = self.scope.current()
+        assert session is not None, "the turn should have entered a workspace"
+        session.version = await session.workspace.write(
+            session.version,
+            self.name,
+            b"- ship it\n",
+            media_type="text/markdown",
+        )
+        return AgentOutcome(
+            agent_run_id=request.trace.agent_run_id,
+            status="completed",
+            stop_reason="completed",
+            output_text=f"Wrote {self.name}.",
+        )
+
+
 class _World:
     def __init__(
         self,
@@ -125,13 +155,17 @@ class _World:
         serves_code: bool = True,
     ) -> None:
         self.conversations = InMemoryConversationStore()
+        # Held rather than built inline: an executor that writes files has to
+        # reach the same scope the service enters, which is how a real tool
+        # finds the working set.
+        self.scope = WorkspaceScope()
         self.executor = executor if executor is not None else _Executor()
         self.approvals = CodeApprovalRegistry()
         self.service = CodeSessionService(
             conversations=self.conversations,
             artifacts=InMemoryArtifactStore(),
             executor_for=lambda _scope: self.executor,  # pyright: ignore[reportArgumentType]
-            scope=WorkspaceScope(),
+            scope=self.scope,
             budget=RunBudget(max_steps=4, max_tool_calls=4),
             turn_timeout_seconds=60,
             max_concurrent_turns=max_concurrent_turns,
@@ -210,9 +244,7 @@ def _run(world: _World, scenario: Any) -> Any:
 
 
 def _opened(client: httpx.AsyncClient) -> Any:
-    return client.post(
-        f"{code_route.CODE_PREFIX}/sessions", headers=HEADERS, json={}
-    )
+    return client.post(f"{code_route.CODE_PREFIX}/sessions", headers=HEADERS, json={})
 
 
 def test_a_session_takes_an_instruction_and_answers_with_a_report() -> None:
@@ -359,9 +391,7 @@ def test_an_approval_that_is_not_yours_does_not_exist() -> None:
     """And a second decision finds nothing pending, because the first removed it."""
 
     world = _World()
-    scope = ApprovalScope(
-        tenant_id=TENANT, session_id="ses_code_1", principal_id=OWNER
-    )
+    scope = ApprovalScope(tenant_id=TENANT, session_id="ses_code_1", principal_id=OWNER)
 
     async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
         gate = world.approvals.gate_for(scope)
@@ -413,9 +443,7 @@ def test_two_decisions_in_the_same_breath_do_not_both_land() -> None:
     """
 
     world = _World()
-    scope = ApprovalScope(
-        tenant_id=TENANT, session_id="ses_code_1", principal_id=OWNER
-    )
+    scope = ApprovalScope(tenant_id=TENANT, session_id="ses_code_1", principal_id=OWNER)
 
     async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
         gate = world.approvals.gate_for(scope)
@@ -452,9 +480,7 @@ def test_a_standing_yes_is_refused_for_an_external_tool() -> None:
     """A blanket yes to an irreversible effect is what must be asked each time."""
 
     world = _World()
-    scope = ApprovalScope(
-        tenant_id=TENANT, session_id="ses_code_1", principal_id=OWNER
-    )
+    scope = ApprovalScope(tenant_id=TENANT, session_id="ses_code_1", principal_id=OWNER)
 
     async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
         gate = world.approvals.gate_for(scope)
@@ -492,9 +518,7 @@ def test_a_standing_yes_is_refused_for_an_external_tool() -> None:
 
 def test_the_pending_list_shows_what_a_session_is_stopped_on() -> None:
     world = _World()
-    scope = ApprovalScope(
-        tenant_id=TENANT, session_id="ses_code_1", principal_id=OWNER
-    )
+    scope = ApprovalScope(tenant_id=TENANT, session_id="ses_code_1", principal_id=OWNER)
 
     async def scenario(client: httpx.AsyncClient) -> tuple[list[str], int]:
         gate = world.approvals.gate_for(scope)
@@ -655,3 +679,88 @@ def test_a_turn_cannot_publish_an_answer_through_the_route_either() -> None:
 
     assert answered is False
     assert "UngroundedAnswerCommitted" not in events
+
+
+def test_the_workspace_endpoint_lists_what_the_turn_wrote() -> None:
+    """The product of a coding session, without spending a turn to see it."""
+
+    world = _World()
+    world.executor = _Writing(world.scope)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[list[Any], list[Any]]:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        before = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace",
+            headers=HEADERS,
+        )
+        await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        after = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace",
+            headers=HEADERS,
+        )
+        return before.json()["files"], after.json()["files"]
+
+    before, after = _run(world, scenario)
+
+    # The empty read is the control. Without it "the file is listed" would also
+    # pass against an endpoint that listed every artifact this principal owns.
+    assert before == []
+    assert [(entry["name"], entry["media_type"]) for entry in after] == [
+        ("notes.md", "text/markdown")
+    ]
+    assert after[0]["size_bytes"] == len(b"- ship it\n")
+
+
+def test_a_chat_session_has_no_workspace_to_show() -> None:
+    """The same gate the rest of this router is behind, on the new endpoint."""
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        await world.conversations.create_session(
+            session_id="ses_chat_1", tenant_id=TENANT, owner_id=OWNER
+        )
+        read = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/ses_chat_1/workspace", headers=HEADERS
+        )
+        return read.status_code
+
+    assert _run(world, scenario) == 404
+
+
+def test_another_principal_cannot_read_the_working_set() -> None:
+    """Files are the product, so this is the read that would leak the work."""
+
+    owner_world = _World()
+    owner_world.executor = _Writing(owner_world.scope)
+
+    async def write_one(client: httpx.AsyncClient) -> str:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        return session_id
+
+    session_id = _run(owner_world, write_one)
+
+    world = _World(principal=NEIGHBOUR_PRINCIPAL)
+    # Both stores, so the refusal is the session gate rather than an empty
+    # store the neighbour would have found nothing in anyway.
+    world.service.conversations = owner_world.conversations
+    world.service.artifacts = owner_world.service.artifacts
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        read = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace", headers=HEADERS
+        )
+        return read.status_code
+
+    assert _run(world, scenario) == 404

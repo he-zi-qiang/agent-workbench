@@ -1,3 +1,4 @@
+import type { StreamConnectionState } from "../../api/sse";
 import type {
   AskResponse,
   ChatAnswerMode,
@@ -104,7 +105,9 @@ export interface LiveTextState {
   dropped: number;
 }
 
-export type ChatConnectionState = "idle" | "connecting" | "connected" | "retrying" | "unavailable";
+// The shape moved to `api/sse` when a second surface needed it; the name
+// stays here because the chat feature reads better in its own vocabulary.
+export type ChatConnectionState = StreamConnectionState;
 
 export interface ChatSessionState extends LocalChatSession {
   connection: ChatConnectionState;

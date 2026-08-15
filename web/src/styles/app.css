@@ -3908,3 +3908,220 @@ pre {
   margin-top: 4px;
   color: var(--aw-text-subtle, #8a847c);
 }
+
+/* --- Code：一次编码会话 --------------------------------------------------
+ *
+ * 三栏里只有两栏，因为第三个问题（正在做什么）只在一轮进行中才有答案，所以它
+ * 长在对话流里而不是自己占一栏。工作区那一栏是常驻的：它是这个流程的产物。
+ *
+ * 注意上面还有一个 `.aw-code-value`，那是等宽工具类，和这里的 Code 流程无关；
+ * 这一段复用它来排数字与摘要，正是因为它就是"把一串机器写的字排整齐"。
+ */
+
+.aw-code-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 268px;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 没有会话时没有工作区可看，那一栏也就不该占位置。 */
+.aw-code-page.is-empty {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.aw-code-main {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.aw-code-transcript {
+  min-width: 0;
+  min-height: 0;
+  padding: 24px clamp(16px, 4vw, 56px) 12px;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.aw-code-transcript > .aw-empty-state {
+  min-height: 100%;
+}
+
+.aw-code-turns {
+  display: grid;
+  width: min(820px, 100%);
+  margin: 0 auto;
+  padding: 0;
+  gap: 18px;
+  list-style: none;
+}
+
+.aw-code-said h3,
+.aw-code-report h3 {
+  margin: 0 0 4px;
+  color: var(--aw-text-soft);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.aw-code-said p,
+.aw-code-report p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-code-said {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-report {
+  padding: 12px 14px;
+  border-left: 2px solid var(--aw-border-strong);
+}
+
+/* 过程。只在一轮进行中出现，所以它是流的一部分而不是一块常驻面板。 */
+.aw-code-steps {
+  width: min(820px, 100%);
+  margin: 18px auto 0;
+  padding: 12px 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 12px;
+  background: var(--aw-panel);
+}
+
+.aw-code-steps ol {
+  display: grid;
+  margin: 8px 0 0;
+  padding: 0;
+  gap: 3px;
+  list-style: none;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+.aw-code-approvals {
+  display: grid;
+  width: min(820px, 100%);
+  margin: 0 auto;
+  padding: 0 clamp(16px, 4vw, 56px);
+  gap: 10px;
+}
+
+.aw-code-approval {
+  padding: 12px 14px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 12px;
+  background: var(--aw-panel);
+}
+
+.aw-code-approval h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
+.aw-code-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  gap: 8px;
+}
+
+.aw-code-composer {
+  display: grid;
+  width: min(900px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 8px 0 13px;
+  gap: 8px;
+}
+
+.aw-code-composer textarea {
+  min-height: 64px;
+  max-height: 200px;
+  padding: 10px 12px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 12px;
+  background: var(--aw-panel);
+  resize: none;
+}
+
+.aw-code-composer button {
+  justify-self: end;
+}
+
+.aw-code-workspace {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+}
+
+.aw-code-workspace header {
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+  padding: 9px 18px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-code-workspace h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.aw-code-workspace ul {
+  display: grid;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow-y: auto;
+  gap: 2px;
+  list-style: none;
+}
+
+.aw-code-workspace li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 8px;
+  gap: 10px;
+}
+
+.aw-code-workspace li:hover {
+  background: color-mix(in srgb, var(--aw-panel) 70%, transparent);
+}
+
+.aw-code-file-name {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.aw-code-workspace-empty {
+  margin: 0;
+  padding: 16px 18px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+/* 窄屏：工作区退到对话下面，而不是把正文挤成一条缝。 */
+@media (width <= 900px) {
+  .aw-code-page {
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aw-code-workspace {
+    max-height: 40vh;
+    border-top: 1px solid var(--aw-border);
+    border-left: 0;
+  }
+}

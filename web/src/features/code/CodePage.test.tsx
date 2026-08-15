@@ -7,10 +7,12 @@ import {
   decideCodeApproval,
   getCodeApprovals,
   getCodeHistory,
+  getCodeWorkspace,
 } from "../../api/client";
 import type { PrincipalIdentity } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { CodePage } from "./CodePage";
+import { useCodeStream } from "./useCodeStream";
 
 vi.mock("../../api/client", () => ({
   askCode: vi.fn(),
@@ -18,7 +20,15 @@ vi.mock("../../api/client", () => ({
   decideCodeApproval: vi.fn(),
   getCodeApprovals: vi.fn(() => Promise.resolve({ approvals: [] })),
   getCodeHistory: vi.fn(() => Promise.resolve({ messages: [] })),
+  getCodeWorkspace: vi.fn(() => Promise.resolve({ files: [] })),
   newIdempotencyKey: vi.fn(() => "code-1"),
+}));
+
+// The stream opens a real `fetch` against an SSE endpoint. What it delivers is
+// asserted through this seam instead, because a page test that waited on a
+// network read would be testing the transport a second time.
+vi.mock("./useCodeStream", () => ({
+  useCodeStream: vi.fn(() => []),
 }));
 
 vi.mock("../../app/IdentityContext", () => ({
@@ -56,6 +66,8 @@ beforeEach(() => {
   } as unknown as ReturnType<typeof useIdentity>);
   vi.mocked(getCodeHistory).mockResolvedValue({ messages: [] });
   vi.mocked(getCodeApprovals).mockResolvedValue({ approvals: [] });
+  vi.mocked(getCodeWorkspace).mockResolvedValue({ files: [] });
+  vi.mocked(useCodeStream).mockReturnValue([]);
 });
 
 describe("CodePage", () => {
@@ -181,5 +193,74 @@ describe("CodePage", () => {
     // The control for the poll's condition. A poll that ran regardless would
     // ask this once a second for as long as the tab is open.
     expect(vi.mocked(getCodeApprovals)).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing wrong when nothing is wrong", async () => {
+    // The control that a mocked module makes necessary. Every other test here
+    // asserts something present; a call this page makes on mount and the mock
+    // does not define would throw into the same catch that renders errors, and
+    // all of them would still pass.
+    mounted();
+    await waitFor(() => {
+      expect(vi.mocked(getCodeWorkspace)).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("lists the files the session has produced", async () => {
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [
+        { name: "notes.md", size_bytes: 2048, media_type: "text/markdown" },
+      ],
+    });
+
+    mounted();
+
+    const pane = await screen.findByRole("complementary", { name: "工作区文件" });
+    expect(within(pane).getByText("notes.md")).toBeInTheDocument();
+    expect(within(pane).getByText("2.0 KB")).toBeInTheDocument();
+  });
+
+  it("re-reads the workspace after a turn, including one that failed", async () => {
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockRejectedValue(new Error("这一轮失败了"));
+
+    mounted();
+    await waitFor(() => {
+      expect(vi.mocked(getCodeWorkspace)).toHaveBeenCalledTimes(1);
+    });
+    await user.type(screen.getByLabelText("要做的事"), "write notes.md");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    // The pointer moves per write, so a turn that failed may still have left
+    // files behind. Not re-reading is how the pane starts lying.
+    await waitFor(() => {
+      expect(vi.mocked(getCodeWorkspace)).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("shows what the agent is doing while a turn runs", async () => {
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    vi.mocked(useCodeStream).mockReturnValue([
+      {
+        event_id: "evt_1",
+        event_type: "ToolStarted",
+        sequence: 1,
+        payload: { kind: "ToolStarted", tool_name: "workspace_write" },
+      } as unknown as ReturnType<typeof useCodeStream>[number],
+    ]);
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "write notes.md");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const steps = await screen.findByRole("region", { name: "正在进行的步骤" });
+    // Titled from the shared event vocabulary, so an event type this console
+    // does not know is visible as unknown rather than dropped.
+    expect(
+      within(steps).getByText("工具调用已开始：workspace_write"),
+    ).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { identityHeaders } from "../../api/client";
+import { identityHeaders } from "./client";
 import {
   isDegradedFrame,
   isLiveFrame,
@@ -7,25 +7,33 @@ import {
   type SseChunkFrame,
   type SseLiveFrame,
   type SseQuarantineFrame,
-} from "../../api/sse";
-import type { PrincipalIdentity } from "../../api/types";
-import type { ChatConnectionState } from "./model";
-import type { StoredChatCursor } from "./storage";
+  type StreamConnectionState,
+  type StreamCursor,
+} from "./sse";
+import type { PrincipalIdentity } from "./types";
 
 export type FrameAcceptance = "accepted" | "duplicate" | "rejected";
 
 interface SessionStreamOptions {
   identity: PrincipalIdentity;
   sessionId: string;
-  initialCursor: StoredChatCursor | null;
+  /**
+   * The collection this session belongs to, e.g. `/v1/chat/sessions`.
+   *
+   * Required rather than defaulted. A default would be the chat path, and the
+   * next surface would inherit it by saying nothing -- which is the failure
+   * that reads correctly in every file involved.
+   */
+  eventsPath: string;
+  initialCursor: StreamCursor | null;
   signal: AbortSignal;
   // Both kinds of frame, because both are things the reader is owed: the event
   // that happened, and the position that could not be delivered. The subscriber
   // decides what to do with each; this file's job is to hand them over in the
   // order they arrived.
   onFrame: (frame: SseChunkFrame) => FrameAcceptance;
-  onCursor: (cursor: StoredChatCursor) => void;
-  onConnectionChange: (state: ChatConnectionState, error?: string) => void;
+  onCursor: (cursor: StreamCursor) => void;
+  onConnectionChange: (state: StreamConnectionState, error?: string) => void;
   //: How many live events the server dropped before this reader took them.
   //: Optional because it is not history: a subscriber that only renders the
   //: durable record has nothing to do with it, and should not be forced to say
@@ -36,7 +44,7 @@ interface SessionStreamOptions {
 class PermanentStreamError extends Error {}
 class RecoverableStreamError extends Error {}
 
-export async function streamChatSession(options: SessionStreamOptions): Promise<void> {
+export async function streamSession(options: SessionStreamOptions): Promise<void> {
   let cursor = options.initialCursor;
   let retryMilliseconds = 750;
   options.onConnectionChange("connecting");
@@ -50,7 +58,7 @@ export async function streamChatSession(options: SessionStreamOptions): Promise<
       if (cursor !== null) headers["last-event-id"] = cursor.id;
 
       const response = await fetch(
-        `/v1/chat/sessions/${encodeURIComponent(options.sessionId)}/events`,
+        `${options.eventsPath}/${encodeURIComponent(options.sessionId)}/events`,
         { headers, signal: options.signal },
       );
       if (!response.ok || response.body === null) {
@@ -121,8 +129,8 @@ export async function streamChatSession(options: SessionStreamOptions): Promise<
 function acceptFrame(
   options: SessionStreamOptions,
   frame: SseChunkFrame,
-  current: StoredChatCursor | null,
-): StoredChatCursor | null {
+  current: StreamCursor | null,
+): StreamCursor | null {
   if (isQuarantineFrame(frame)) return acceptQuarantine(options, frame, current);
   if (isDegradedFrame(frame)) {
     // Nothing to apply and nothing to move. The gap is in the live view only;
@@ -181,8 +189,8 @@ function acceptFrame(
 function acceptLive(
   options: SessionStreamOptions,
   frame: SseLiveFrame,
-  current: StoredChatCursor | null,
-): StoredChatCursor | null {
+  current: StreamCursor | null,
+): StreamCursor | null {
   if (frame.envelope.stream_id === options.sessionId) options.onFrame(frame);
   return current;
 }
@@ -201,8 +209,8 @@ function acceptLive(
 function acceptQuarantine(
   options: SessionStreamOptions,
   frame: SseQuarantineFrame,
-  current: StoredChatCursor | null,
-): StoredChatCursor | null {
+  current: StreamCursor | null,
+): StreamCursor | null {
   // The parser already proved the notice's own shape -- schema, ids, a safe
   // sequence of at least 1. Checked here is only what a parser cannot know:
   // that the frame carried a cursor to resume from, and that it describes this
@@ -244,7 +252,7 @@ function acceptQuarantine(
  * whatever arrived" would trade the poison-row reconnect loop for silent data
  * loss, which is the failure this check exists to make impossible.
  */
-function requireNextPosition(sequence: number, current: StoredChatCursor | null): void {
+function requireNextPosition(sequence: number, current: StreamCursor | null): void {
   const expected = (current?.sequence ?? 0) + 1;
   if (sequence !== expected) {
     throw new RecoverableStreamError(

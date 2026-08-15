@@ -340,9 +340,7 @@ def test_a_process_admits_only_as_many_turns_as_it_says() -> None:
     async def scenario() -> tuple[str, int]:
         first_session = await harness.opened()
         second_session = await harness.opened()
-        first = asyncio.ensure_future(
-            harness.ask(first_session, "one", run_id="run_1")
-        )
+        first = asyncio.ensure_future(harness.ask(first_session, "one", run_id="run_1"))
         await asyncio.sleep(0)
         try:
             with pytest.raises(CodeCapacityError):

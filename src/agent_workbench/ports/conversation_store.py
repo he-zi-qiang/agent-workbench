@@ -69,7 +69,6 @@ class ChatTurnBusyError(RuntimeError):
 class ChatTurnLeaseExpiredError(RuntimeError):
     """A late result reached a Turn whose fixed execution lease has elapsed."""
 
-
     def __init__(self, outcome: AgentOutcome) -> None:
         if (
             outcome.status != "failed"

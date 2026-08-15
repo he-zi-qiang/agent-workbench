@@ -1,19 +1,18 @@
 /**
  * A coding session, in the browser.
  *
- * The turn is synchronous: the request stays open while the agent works, and
- * the report arrives in the response. That is why this page has no event
- * stream yet -- the steps a Code turn produces are on the session's SSE
- * endpoint and are worth showing, but rendering them is `StepStream`'s job
- * inside `ConversationShell`, which chat and work do not have either. When
- * that shell lands, this page joins it; until then a page that showed half a
- * step stream would be worse than one that shows none.
+ * Three panes because a coding session answers three different questions at
+ * three different rates. The transcript grows once per turn. The working set
+ * changes with every write *inside* a turn, and it is the actual product --
+ * before it had a pane, the only way to see a file was to spend a turn asking
+ * the agent to read it back. The step list changes several times a second
+ * while a turn runs, and exists because a turn holds its request open for
+ * minutes: a spinner for all of that cannot be told apart from a hang.
  *
- * What it does have is the two things a coding session cannot be used without:
- * the conversation, and the questions the agent stops on. Approvals are polled
- * rather than pushed for the same reason as above, and the poll only runs
- * while a turn is in flight -- there is nothing to answer when nothing is
- * asking.
+ * What this page still does not have is `ConversationShell` and `StepStream`,
+ * which is where the other two flows will put their equivalents. Those arrive
+ * with A6; this page joins them then. Until it does, the steps are rendered as
+ * a plain list of what happened rather than as a half-built stage view.
  */
 
 import { Code2 } from "lucide-react";
@@ -25,15 +24,19 @@ import {
   decideCodeApproval,
   getCodeApprovals,
   getCodeHistory,
+  getCodeWorkspace,
   newIdempotencyKey,
 } from "../../api/client";
 import type {
   ApprovalDecision,
   MessageView,
   PendingApprovalView,
+  WorkspaceEntryView,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { EmptyState, ErrorNotice, LoadingLine } from "../../components/ui";
+import { eventTitle } from "../work/workTimeline";
+import { useCodeStream } from "./useCodeStream";
 
 /** How often to ask what the agent is stopped on, while it is working. */
 const APPROVAL_POLL_MS = 1000;
@@ -45,17 +48,23 @@ const DECISIONS: { decision: ApprovalDecision; label: string }[] = [
   { decision: "deny", label: "拒绝" },
 ];
 
+/** Risks whose second occurrence deserves the same question as their first. */
+const UNREPEATABLE = new Set(["external", "destructive"]);
+
 export function CodePage() {
   const { identity } = useIdentity();
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId: string }>();
 
   const [messages, setMessages] = useState<MessageView[]>([]);
+  const [files, setFiles] = useState<WorkspaceEntryView[]>([]);
   const [instruction, setInstruction] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<PendingApprovalView[]>([]);
   const [opening, setOpening] = useState(false);
+
+  const steps = useCodeStream(identity, sessionId, running);
 
   const loadHistory = useCallback(
     async (id: string, signal?: AbortSignal) => {
@@ -65,20 +74,32 @@ export function CodePage() {
     [identity],
   );
 
+  const loadWorkspace = useCallback(
+    async (id: string, signal?: AbortSignal) => {
+      const workspace = await getCodeWorkspace(identity, id, signal);
+      setFiles(workspace.files);
+    },
+    [identity],
+  );
+
   useEffect(() => {
     if (sessionId === undefined) {
       setMessages([]);
+      setFiles([]);
       return;
     }
     const controller = new AbortController();
-    loadHistory(sessionId, controller.signal).catch((cause: unknown) => {
+    Promise.all([
+      loadHistory(sessionId, controller.signal),
+      loadWorkspace(sessionId, controller.signal),
+    ]).catch((cause: unknown) => {
       if (controller.signal.aborted) return;
       setError(describe(cause));
     });
     return () => {
       controller.abort();
     };
-  }, [loadHistory, sessionId]);
+  }, [loadHistory, loadWorkspace, sessionId]);
 
   // Only while a turn is running. A poll that kept going would ask a question
   // nobody is waiting on the answer to, once a second, forever.
@@ -132,19 +153,22 @@ export function CodePage() {
     setInstruction("");
     try {
       await askCode(identity, sessionId, text, newIdempotencyKey("code"));
-      await loadHistory(sessionId);
     } catch (cause: unknown) {
       setError(describe(cause));
-      // Re-read rather than trust the optimistic append: a refused turn may
-      // have recorded the instruction anyway, and guessing which is how a
-      // transcript starts disagreeing with the server's.
-      if (sessionId !== undefined) {
-        await loadHistory(sessionId).catch(() => undefined);
-      }
     } finally {
       setRunning(false);
+      // Both, and on every path. Re-reading rather than trusting the
+      // optimistic append is what keeps this transcript from disagreeing with
+      // the server's; and a refused turn may still have written files, because
+      // the workspace pointer moves per write rather than at the end.
+      if (sessionId !== undefined) {
+        await Promise.all([
+          loadHistory(sessionId).catch(() => undefined),
+          loadWorkspace(sessionId).catch(() => undefined),
+        ]);
+      }
     }
-  }, [identity, instruction, loadHistory, running, sessionId]);
+  }, [identity, instruction, loadHistory, loadWorkspace, running, sessionId]);
 
   const decide = useCallback(
     async (approvalId: string, decision: ApprovalDecision) => {
@@ -163,21 +187,25 @@ export function CodePage() {
 
   if (sessionId === undefined) {
     return (
-      <div className="aw-code-page">
+      <div className="aw-code-page is-empty">
         <main className="aw-code-main">
-          <EmptyState
-            icon={<Code2 aria-hidden />}
-            title="还没有编码会话"
-            description="打开一个会话，然后用一句话描述你要做的事。"
-          />
-          <button
-            className="aw-button is-primary"
-            disabled={opening}
-            onClick={() => void openSession()}
-            type="button"
-          >
-            {opening ? "正在打开" : "新建编码会话"}
-          </button>
+          <section className="aw-code-transcript">
+            <EmptyState
+              icon={<Code2 aria-hidden />}
+              title="还没有编码会话"
+              description="打开一个会话，然后用一句话描述你要做的事。"
+              action={
+                <button
+                  className="aw-button is-primary"
+                  disabled={opening}
+                  onClick={() => void openSession()}
+                  type="button"
+                >
+                  {opening ? "正在打开" : "新建编码会话"}
+                </button>
+              }
+            />
+          </section>
           {error === null ? null : <ErrorNotice message={error} />}
         </main>
       </div>
@@ -195,19 +223,31 @@ export function CodePage() {
               description="描述你要做的事，比如「把 notes.md 里的待办整理成清单」。"
             />
           ) : (
-            messages.map((message, index) => (
-              <article
-                className={
-                  message.role === "user" ? "aw-code-said" : "aw-code-report"
-                }
-                key={`${message.role}-${String(index)}`}
-              >
-                <h3>{message.role === "user" ? "你" : "报告"}</h3>
-                <p>{message.text}</p>
-              </article>
-            ))
+            <ol className="aw-code-turns">
+              {messages.map((message, index) => (
+                <li
+                  className={
+                    message.role === "user" ? "aw-code-said" : "aw-code-report"
+                  }
+                  key={`${message.role}-${String(index)}`}
+                >
+                  <h3>{message.role === "user" ? "你" : "报告"}</h3>
+                  <p>{message.text}</p>
+                </li>
+              ))}
+            </ol>
           )}
-          {running ? <LoadingLine label="正在处理" /> : null}
+
+          {running ? (
+            <section aria-label="正在进行的步骤" className="aw-code-steps">
+              <LoadingLine label="正在处理" />
+              <ol>
+                {steps.map((event) => (
+                  <li key={event.event_id}>{eventTitle(event)}</li>
+                ))}
+              </ol>
+            </section>
+          ) : null}
         </section>
 
         {approvals.length === 0 ? null : (
@@ -215,15 +255,17 @@ export function CodePage() {
             {approvals.map((held) => (
               <article className="aw-code-approval" key={held.approval_id}>
                 <h3>{held.tool_name} 需要你批准</h3>
-                <p className="aw-code-approval-digest">{held.argument_digest}</p>
+                <p className="aw-code-value">{held.argument_digest}</p>
                 <div className="aw-code-approval-actions">
                   {DECISIONS.filter(
                     // A standing yes to an irreversible effect is the one that
                     // must be asked every time, and the server refuses it --
-                    // so it is not offered either.
+                    // so it is not offered either. A button whose only outcome
+                    // is a 422 teaches the reader the wrong rule.
                     ({ decision }) =>
                       decision !== "approve_for_session" ||
-                      (held.risk !== "external" && held.risk !== "destructive"),
+                      held.risk === null ||
+                      !UNREPEATABLE.has(held.risk),
                   ).map(({ decision, label }) => (
                     <button
                       className="aw-button"
@@ -249,7 +291,7 @@ export function CodePage() {
             void send();
           }}
         >
-          <label className="aw-visually-hidden" htmlFor="aw-code-instruction">
+          <label className="aw-sr-only" htmlFor="aw-code-instruction">
             要做的事
           </label>
           <textarea
@@ -271,8 +313,31 @@ export function CodePage() {
           </button>
         </form>
       </main>
+
+      <aside aria-label="工作区文件" className="aw-code-workspace">
+        <header>
+          <h2>工作区</h2>
+        </header>
+        {files.length === 0 ? (
+          <p className="aw-code-workspace-empty">还没有文件。</p>
+        ) : (
+          <ul>
+            {files.map((file) => (
+              <li key={file.name}>
+                <span className="aw-code-file-name">{file.name}</span>
+                <span className="aw-code-value">{formatSize(file.size_bytes)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
     </div>
   );
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${String(bytes)} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
 function describe(cause: unknown): string {

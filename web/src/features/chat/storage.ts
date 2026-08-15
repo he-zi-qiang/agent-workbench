@@ -1,9 +1,7 @@
+import type { StreamCursor } from "../../api/sse";
 import type { LocalChatSession, PrincipalIdentity } from "../../api/types";
 
-export interface StoredChatCursor {
-  id: string;
-  sequence: number;
-}
+export type StoredChatCursor = StreamCursor;
 
 const SESSION_PREFIX = "aw.chat.sessions.v1";
 const CURSOR_PREFIX = "aw.chat.cursor.v1";

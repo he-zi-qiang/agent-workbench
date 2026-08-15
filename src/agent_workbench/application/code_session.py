@@ -46,7 +46,11 @@ from agent_workbench.application.answer_release import ProcessOnlySink
 from agent_workbench.application.code_approvals import ApprovalScope
 from agent_workbench.application.code_prompt import CODER_SYSTEM_PROMPT
 from agent_workbench.application.session_workspace import SessionWorkspace
-from agent_workbench.application.workspace import Workspace, WorkspaceSession
+from agent_workbench.application.workspace import (
+    Workspace,
+    WorkspaceListing,
+    WorkspaceSession,
+)
 from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.messages import Message, assistant_message, user_message
@@ -170,6 +174,36 @@ class CodeSessionService:
             mode="code",
         )
         return tuple(record.message for record in stored)
+
+    async def workspace(
+        self, *, session_id: str, tenant_id: str, principal_id: str
+    ) -> tuple[WorkspaceListing, ...]:
+        """What this session's working set currently holds.
+
+        The whole product of a coding session is these files, and until this
+        existed the only way to see one was to ask the agent to read it back --
+        which spends a turn and a model call to answer a question the store
+        already knows.
+
+        Reachable by name only. The version is read from the session row, never
+        taken from the caller: a principal who could name a version could name
+        one belonging to another of their own sessions, and the artifact store
+        scopes reads to a tenant and a principal and nothing narrower. That is
+        an architecture test, not a habit -- see
+        ``tests/architecture/test_a_workspace_version_is_never_asked_for.py``.
+        """
+
+        session = await self.conversations.session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="code",
+        )
+        return await Workspace(
+            artifacts=self.artifacts,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        ).list(session.workspace_version)
 
     async def ask(
         self,

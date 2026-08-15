@@ -26,6 +26,7 @@ import type {
   TaskView,
   TriageResponse,
   UploadContentResponse,
+  WorkspaceResponse,
 } from "./types";
 
 const WORD_DOCUMENT_MEDIA_TYPE =
@@ -183,6 +184,18 @@ export async function askCode(
     body: { instruction },
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+export async function getCodeWorkspace(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceResponse> {
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/workspace`,
+    { ...(signal === undefined ? {} : { signal }) },
+  );
 }
 
 export async function getCodeApprovals(

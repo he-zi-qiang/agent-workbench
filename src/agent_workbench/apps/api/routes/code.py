@@ -175,9 +175,7 @@ async def ask(
             # One stream per session, one run per turn, and a fence that has no
             # publish methods at all: this run produces files and a report, and
             # an answer event on its stream would name a boundary it never had.
-            ProcessOnlySink(
-                dependencies.sink_for(stream_id=session_id, run_id=run_id)
-            ),
+            ProcessOnlySink(dependencies.sink_for(stream_id=session_id, run_id=run_id)),
             cancellation,
         ),
         name=f"code-turn-{run_id}",
@@ -210,6 +208,50 @@ async def history(session_id: str, request: Request) -> HistoryResponse:
     return HistoryResponse(
         messages=tuple(
             MessageView(role=message.role, text=message.text()) for message in messages
+        )
+    )
+
+
+class WorkspaceEntryView(BaseModel):
+    name: str
+    size_bytes: int
+    media_type: str
+
+
+class WorkspaceResponse(BaseModel):
+    """What the session's working set holds, by name.
+
+    No version field, and that is deliberate rather than an omission: a version
+    is meaningful only to a caller that could then ask for it, and nothing here
+    accepts one. What a reader needs is the files.
+    """
+
+    files: tuple[WorkspaceEntryView, ...]
+
+
+@router.get("/sessions/{session_id}/workspace")
+async def workspace(session_id: str, request: Request) -> WorkspaceResponse:
+    """The files this session has produced.
+
+    Its own endpoint rather than something folded into the history, because it
+    answers a different question at a different rate: the transcript grows once
+    per turn, and the working set changes with every write inside one.
+    """
+
+    principal = dependencies_of(request).principals.resolve(request)
+    entries = await _code(request).workspace(
+        session_id=session_id,
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+    )
+    return WorkspaceResponse(
+        files=tuple(
+            WorkspaceEntryView(
+                name=entry.name,
+                size_bytes=entry.size_bytes,
+                media_type=entry.media_type,
+            )
+            for entry in entries
         )
     )
 
@@ -341,5 +383,6 @@ __all__ = [
     "DecideRequest",
     "HistoryResponse",
     "PendingApprovalsResponse",
+    "WorkspaceResponse",
     "router",
 ]

@@ -299,7 +299,7 @@ def test_authorization_is_checked_again_between_the_intent_and_the_dispatch() ->
 
 
 def test_approval_required_at_the_second_boundary_is_a_refusal_too() -> None:
-    """"Allow, pending approval" is not "allow" here either.
+    """ "Allow, pending approval" is not "allow" here either.
 
     This second decision is taken one line from dispatching an external
     effect, and it only checked ``deny``: a policy that answered
@@ -328,7 +328,7 @@ def test_approval_required_at_the_second_boundary_is_a_refusal_too() -> None:
 
 
 def test_a_rewrite_at_the_second_boundary_is_a_refusal_and_not_a_dispatch() -> None:
-    """"Not with these arguments" is the one answer this branch used to read as
+    """ "Not with these arguments" is the one answer this branch used to read as
     "with these arguments".
 
     Only ``deny`` was checked, so a policy tightening into
