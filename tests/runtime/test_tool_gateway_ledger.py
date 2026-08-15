@@ -150,14 +150,33 @@ class _Ledger:
 class _Policy:
     """Allows, unless told to change its mind after the intent is recorded."""
 
-    def __init__(self, *, deny_after: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        deny_after: int | None = None,
+        require_approval_after: int | None = None,
+        rewrite_after: int | None = None,
+    ) -> None:
         self.decisions = 0
         self._deny_after = deny_after
+        self._require_approval_after = require_approval_after
+        self._rewrite_after = rewrite_after
 
     async def decide(self, call: ToolCall, context: ExecutionContext) -> PolicyDecision:
         self.decisions += 1
         if self._deny_after is not None and self.decisions > self._deny_after:
             return PolicyDecision(effect="deny", reason_code="acl_revoked")
+        if (
+            self._require_approval_after is not None
+            and self.decisions > self._require_approval_after
+        ):
+            return PolicyDecision(
+                effect="allow",
+                reason_code="now_needs_review",
+                requires_approval=True,
+            )
+        if self._rewrite_after is not None and self.decisions > self._rewrite_after:
+            return PolicyDecision.allow_modified("clamped", {"target": "other"})
         return PolicyDecision(effect="allow", reason_code="allowed")
 
 
@@ -277,6 +296,60 @@ def test_authorization_is_checked_again_between_the_intent_and_the_dispatch() ->
     assert handler.dispatches == []
     assert ledger.calls == [f"intent:{OPERATION_KEY}", "result:failed"]
     assert policy.decisions == 1
+
+
+def test_approval_required_at_the_second_boundary_is_a_refusal_too() -> None:
+    """"Allow, pending approval" is not "allow" here either.
+
+    This second decision is taken one line from dispatching an external
+    effect, and it only checked ``deny``: a policy that answered
+    ``allow`` + ``requires_approval`` was read as permission. Unreachable
+    while approval was always a refusal, and live the moment it stopped being
+    one -- on exactly the tools where approval matters most, since only a
+    ledgered binding comes through here.
+
+    Refused rather than asked again. The question was already answered at the
+    first boundary; re-opening it would let a policy that flaps put the same
+    call in front of a human twice.
+    """
+
+    ledger, handler = _Ledger(), _Handler()
+    policy = _Policy(require_approval_after=0)
+    gateway = _gateway(ledger, handler, policy=policy)
+
+    result = asyncio.run(_invoke(gateway, handler))
+
+    assert result.status == "error"
+    assert result.error is not None
+    assert "approval was required again" in result.error.message
+    assert handler.dispatches == []
+    # Settled, not left intended: nothing was dispatched, and that is knowledge.
+    assert ledger.calls == [f"intent:{OPERATION_KEY}", "result:failed"]
+
+
+def test_a_rewrite_at_the_second_boundary_is_a_refusal_and_not_a_dispatch() -> None:
+    """"Not with these arguments" is the one answer this branch used to read as
+    "with these arguments".
+
+    Only ``deny`` was checked, so a policy tightening into
+    ``allow_with_modified_input`` sent the ORIGINAL, unrewritten call to the
+    handler -- on the ledgered path, where the handler performs an external
+    effect. The rewrite is not applied instead: the ledger already recorded an
+    intent for the arguments in hand, and dispatching different ones would
+    leave that row describing a call that never happened.
+    """
+
+    ledger, handler = _Ledger(), _Handler()
+    policy = _Policy(rewrite_after=0)
+    gateway = _gateway(ledger, handler, policy=policy)
+
+    result = asyncio.run(_invoke(gateway, handler))
+
+    assert result.status == "error"
+    assert result.error is not None
+    assert "no longer permitted with these arguments" in result.error.message
+    assert handler.dispatches == []
+    assert ledger.calls == [f"intent:{OPERATION_KEY}", "result:failed"]
 
 
 def test_a_settled_operation_is_answered_from_the_ledger_not_performed_again() -> None:

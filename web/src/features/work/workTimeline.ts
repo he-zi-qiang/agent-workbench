@@ -69,6 +69,7 @@ const KNOWN_EVENT_TITLES: Readonly<Record<string, string>> = {
   ToolProposed: "工具调用已提出",
   PermissionRequested: "权限检查已请求",
   PermissionResolved: "权限检查已完成",
+  ToolApprovalDecided: "工具审批已裁定",
   ToolStarted: "工具调用已开始",
   ToolProgress: "工具调用有新进展",
   ToolCompleted: "工具调用已完成",

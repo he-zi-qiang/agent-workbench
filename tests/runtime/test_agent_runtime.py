@@ -226,6 +226,8 @@ def _execute(
     max_parallel_read_tools: int = 4,
     record_step_inputs: bool = False,
     prices: ModelPrices | None = None,
+    approvals: object | None = None,
+    approval_timeout_seconds: float = 100.0,
 ) -> _Execution:
     registry = StaticToolRegistry(
         bindings if bindings is not None else [read_document_tool(CORPUS)]
@@ -245,6 +247,8 @@ def _execute(
                 policy=EnvelopePolicyEngine(registry=registry),
                 executor=ToolExecutor(monotonic=_ticking()),
                 record_step_inputs=record_step_inputs,
+                approvals=approvals,  # pyright: ignore[reportArgumentType]
+                approval_timeout_seconds=approval_timeout_seconds,
             ),
             policy_identity=POLICY_IDENTITY,
             model_timeout_seconds=model_timeout_seconds,
@@ -1177,6 +1181,63 @@ def test_the_audit_trail_says_a_human_was_needed_not_that_it_was_denied() -> Non
         "ModelCompleted",
         "RunCompleted",
     ]
+
+
+class _StallingGate:
+    """Never answers, and cancels the run the first time it is asked.
+
+    Standing in for the operator who sees the first question appear and stops
+    the run instead of answering it -- which is deterministic, where sleeping
+    for a while and hoping would not be.
+    """
+
+    def __init__(self, cancellation: CancellationSource) -> None:
+        self._cancellation = cancellation
+        self.requests: list[str] = []
+
+    async def request(self, **kwargs: object) -> tuple[str, str]:
+        self.requests.append(str(kwargs["tool_call_id"]))
+        self._cancellation.cancel("operator stopped the run")
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+def test_cancelling_during_one_approval_does_not_queue_up_the_next() -> None:
+    """Authorization is serial, so each held call would spend the bound in turn.
+
+    Two calls, each needing a human, and a bound of a hundred seconds. The
+    second assertion is the one that matters: the gate is asked once. Without
+    a cancellation check inside the authorize loop, the run would go on to ask
+    about the second call and wait out its bound as well -- a cancelled run
+    still holding everything it holds, for as long as there are calls left.
+
+    Both ids still get exactly one result. They were shown to the model, and
+    ``align_results`` fails a run that leaves one unanswered.
+    """
+
+    cancellation = CancellationSource()
+    gate = _StallingGate(cancellation)
+    recorder = _Recorder("export_artifact", risk="write")
+    calls = (
+        ToolCall(tool_call_id="toolu_1", tool_name="export_artifact"),
+        ToolCall(tool_call_id="toolu_2", tool_name="export_artifact"),
+    )
+    model = FakeModel([ScriptedTurn(text="Exporting.", tool_calls=calls, usage=USAGE)])
+
+    run = _execute(
+        model,
+        request=_request(tool_names=("export_artifact",), max_tool_risk="write"),
+        bindings=[recorder.binding],
+        cancellation=cancellation,
+        approvals=gate,
+    )
+
+    assert gate.requests == ["toolu_1"]
+    assert recorder.calls == []
+    assert run.outcome.status == "cancelled"
+    assert run.durable_types.count("ToolProposed") == 2
+    assert run.durable_types.count("ToolFailed") == 2
+    assert run.durable_types[-1] == "RunCancelled"
 
 
 def test_the_model_is_told_the_call_awaits_approval() -> None:

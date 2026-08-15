@@ -17,12 +17,19 @@ A policy may then answer ``allow_with_modified_input``, and that rewrite is
 validated and re-submitted for a decision for the same reason. That loop is
 bounded: an engine that keeps rewriting is refused rather than run.
 
-A decision that requires human approval is not a decision to run. Until the
-approval boundary exists -- a durable request, a recorded human answer, a run
-that can pause and be resumed by whichever worker picks it up -- a call that
-needs one is refused here. Treating "allow, pending approval" as "allow" is how
-a write tool performs an irreversible effect that nobody agreed to, and no
-amount of later approval machinery can undo an effect already dispatched.
+A decision that requires human approval is not a decision to run. Treating
+"allow, pending approval" as "allow" is how a write tool performs an
+irreversible effect that nobody agreed to, and no amount of later approval
+machinery can undo an effect already dispatched.
+
+So the call is held until somebody permits it, and refused if nobody does. The
+holding needs somewhere to ask -- an approval gate, supplied only by a
+deployment where the answer can reach the coroutine that is waiting. Where none
+is supplied the call is refused exactly as it always was, and that is the
+honest answer rather than a stub: a run whose approvals are recorded in another
+process would be waiting for something that cannot arrive, holding whatever it
+holds for as long as it waited. Which of the two a deployment gets is decided
+at assembly, once, and never per call.
 
 Everything the gateway consults is bounded and fails closed. A policy engine
 that hangs used to hang the run, and one that raised sent its exception -- and
@@ -45,10 +52,10 @@ rewrite happened; recording what it produced arrives with that ledger.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, get_args
 
 from agent_workbench.domain.errors import (
     AgentWorkbenchError,
@@ -58,13 +65,19 @@ from agent_workbench.domain.errors import (
     UnknownToolError,
 )
 from agent_workbench.domain.events import (
+    APPROVAL_PREVIEW_LIMIT,
+    ApprovalDecidedBy,
+    ApprovalDecision,
     PermissionRequested,
     PermissionResolved,
+    RunPaused,
+    ToolApprovalDecided,
     ToolCompleted,
     ToolFailed,
     ToolProposed,
     ToolStarted,
 )
+from agent_workbench.domain.identifiers import new_approval_id
 from agent_workbench.domain.policies import ExecutionContext, PolicyDecision
 from agent_workbench.domain.schema import bounded
 from agent_workbench.domain.tools import (
@@ -75,7 +88,8 @@ from agent_workbench.domain.tools import (
     argument_digest,
     canonical_arguments,
 )
-from agent_workbench.ports.cancellation import CancellationToken
+from agent_workbench.ports.approval_gate import InteractiveApprovalGate
+from agent_workbench.ports.cancellation import CancellationToken, NullCancellationToken
 from agent_workbench.ports.event_log import EventSink
 from agent_workbench.ports.policy import PolicyEngine
 from agent_workbench.ports.tool_executions import (
@@ -105,6 +119,28 @@ DEFAULT_MAX_POLICY_ROUNDS: Final[int] = 3
 # still leaves one, rather than leaving none.
 DEFAULT_POLICY_TIMEOUT_SECONDS: Final[float] = 5.0
 
+# How long a call may be held waiting for a person, when nothing else bounds it
+# sooner. Minutes rather than seconds because the other side of this wait is
+# somebody reading a proposed command and deciding, and it is capped anyway by
+# whatever the run has left -- which, for the only run kind that supplies a
+# gate, is required to exist.
+DEFAULT_APPROVAL_TIMEOUT_SECONDS: Final[float] = 300.0
+
+# The two vocabularies an approval gate may answer in, as sets rather than as
+# types: the gate is deployment-supplied, so what it returns is data to be
+# checked and not an annotation to be believed.
+APPROVAL_DECISIONS: Final[frozenset[str]] = frozenset(get_args(ApprovalDecision))
+APPROVAL_DECIDERS: Final[frozenset[str]] = frozenset(get_args(ApprovalDecidedBy))
+
+# What the second authorization, taken one line from an external effect, calls
+# each answer that is not a plain allow. A rewrite is spelled out rather than
+# folded into "denied", because an operator reading it has a different thing to
+# go and look at.
+_REDECISION_REFUSALS: Final[Mapping[str, str]] = {
+    "deny": "denied",
+    "allow_with_modified_input": "no longer permitted with these arguments",
+}
+
 # The failures that carry no answer. For an external write these are the ones
 # where the request may have landed after the deadline passed, so they become a
 # human's problem rather than a retry's. Every other failure was reported by the
@@ -112,6 +148,42 @@ DEFAULT_POLICY_TIMEOUT_SECONDS: Final[float] = 5.0
 AMBIGUOUS_DISPATCH_CODES: Final[frozenset[ErrorCode]] = frozenset(
     {"tool_timeout", "cancelled", "budget_exceeded"}
 )
+
+
+#: What a preview says when it is not all of it.
+_TRUNCATED: Final[str] = "...[truncated]"
+
+
+def _approval_preview(canonical: str) -> str:
+    """The arguments as far as they fit, and a mark when they did not.
+
+    A preview cut without a sign is worse than a short one: the person
+    approving reads it as the whole request and cannot tell that the tail --
+    the redirect, the second path, the ``--force`` -- was removed by a length
+    limit rather than absent from the call.
+
+    The identity of the arguments is untouched by this. ``ToolProposed``
+    carries a digest taken over the whole of them and their true length, so a
+    reader who needs to know exactly what ran still has both.
+    """
+
+    if len(canonical) <= APPROVAL_PREVIEW_LIMIT:
+        return canonical
+    return canonical[: APPROVAL_PREVIEW_LIMIT - len(_TRUNCATED)] + _TRUNCATED
+
+
+def _discard_outcome(
+    task: asyncio.Task[tuple[ApprovalDecision, ApprovalDecidedBy]],
+) -> None:
+    """Retrieve whatever an abandoned task ended with, and drop it.
+
+    ``Task.exception()`` is what marks the failure as seen; without the call,
+    asyncio's default handler logs it -- traceback, message and all -- when
+    the task is garbage collected.
+    """
+
+    if not task.cancelled():
+        task.exception()
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,11 +209,15 @@ class ToolGateway:
         max_policy_rounds: int = DEFAULT_MAX_POLICY_ROUNDS,
         policy_timeout_seconds: float = DEFAULT_POLICY_TIMEOUT_SECONDS,
         record_step_inputs: bool = False,
+        approvals: InteractiveApprovalGate | None = None,
+        approval_timeout_seconds: float = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     ) -> None:
         if max_policy_rounds < 1:
             raise ValueError("max_policy_rounds must be positive")
         if policy_timeout_seconds <= 0:
             raise ValueError("policy_timeout_seconds must be positive")
+        if approval_timeout_seconds <= 0:
+            raise ValueError("approval_timeout_seconds must be positive")
         # Every registered schema is checked once, here. A tool whose schema
         # this validator cannot enforce stops the process now rather than
         # silently accepting anything later.
@@ -177,6 +253,12 @@ class ToolGateway:
         # ADR-019. Off unless a deployment opted in; the digest and byte count
         # below are emitted either way, so nothing downstream depends on this.
         self._record_step_inputs = record_step_inputs
+        # Optional, and its absence is a statement rather than a gap: a
+        # deployment that cannot deliver an answer to a parked coroutine must
+        # keep refusing these calls instead of waiting for one that cannot
+        # come. See ``ports/approval_gate.py``.
+        self._approvals = approvals
+        self._approval_timeout_seconds = approval_timeout_seconds
 
     def advertise(self, names: Sequence[str]) -> tuple[ToolSpec, ...]:
         """Specifications for the tools a run may use.
@@ -283,10 +365,19 @@ class ToolGateway:
         context: ExecutionContext,
         sink: EventSink,
         remaining_run_seconds: float | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> PreparedCall | ToolResult:
-        """Decide the call, re-checking any arguments the policy rewrites."""
+        """Decide the call, re-checking any arguments the policy rewrites.
 
+        ``cancellation`` is optional and defaults to a token that never fires,
+        so the two adapter callers keep working -- but a caller that omits it
+        while an approval gate is configured is asking this phase to hold a
+        run that can no longer be stopped.
+        """
+
+        stop = cancellation if cancellation is not None else NullCancellationToken()
         call = prepared.call
+        approval_reason: str | None = None
         for _ in range(self._max_policy_rounds):
             verdict = await self._decide(call, context, remaining_run_seconds)
             if isinstance(verdict, ErrorInfo):
@@ -311,16 +402,30 @@ class ToolGateway:
                 )
 
             if decision.requires_approval:
-                # Checked before either allow branch, so a rewrite cannot carry
-                # an approval requirement past this point either.
-                return await self._await_approval(
-                    prepared.binding,
-                    call,
-                    reason_code=decision.reason_code,
-                    sink=sink,
-                )
+                # Remembered here, asked below. A decision may require approval
+                # *and* rewrite the arguments, and asking at this point would
+                # put one call in front of a human and dispatch another: the
+                # rewrite happens after, and a later round can rewrite again.
+                #
+                # Sticky, because a requirement is not lifted by a subsequent
+                # round that neglects to repeat it -- that is precisely the
+                # rewrite carrying a call past its own approval requirement.
+                approval_reason = decision.reason_code
 
             if decision.effect == "allow":
+                # The arguments have stopped moving, so this is the first
+                # moment the question can be about what will actually run.
+                if approval_reason is not None:
+                    refusal = await self._await_approval(
+                        prepared.binding,
+                        call,
+                        reason_code=approval_reason,
+                        sink=sink,
+                        remaining_run_seconds=remaining_run_seconds,
+                        cancellation=stop,
+                    )
+                    if refusal is not None:
+                        return refusal
                 return PreparedCall(binding=prepared.binding, call=call)
 
             # allow_with_modified_input: the rewritten arguments are not yet
@@ -398,31 +503,227 @@ class ToolGateway:
         *,
         reason_code: str,
         sink: EventSink,
-    ) -> ToolResult:
-        """Record that a human decision is needed, and refuse until it exists.
+        remaining_run_seconds: float | None,
+        cancellation: CancellationToken,
+    ) -> ToolResult | None:
+        """Get the call permitted, or answer it. ``None`` means permitted.
 
-        The request is emitted before the refusal so the audit trail says what
-        was actually wanted: not that the call was forbidden, but that nobody
-        was there to permit it. When the approval boundary lands, this is the
-        point that pauses the run instead of answering it.
+        Two shapes, chosen by whether this deployment has anywhere to ask.
+
+        With no gate it records the request and refuses, which is what this
+        did before there was such a thing as asking. The request is emitted
+        first either way, so the audit trail says what was actually wanted:
+        not that the call was forbidden, but that nobody was there to permit
+        it.
+
+        With a gate it holds the call. The bound is the smaller of this
+        gateway's own allowance and whatever the run has left, the same
+        composition the policy engine gets, and it is raced against the run's
+        cancellation -- otherwise a cancelled run would keep waiting for a
+        human who is no longer being shown anything, for the whole bound, once
+        per call that needs one.
         """
 
+        if self._approvals is None:
+            await sink.emit(
+                PermissionRequested(
+                    tool_call_id=call.tool_call_id,
+                    required_scopes=binding.spec.permission_scopes,
+                    risk=binding.spec.risk,
+                )
+            )
+            return await self.refuse(
+                call,
+                ErrorInfo(
+                    code="approval_required",
+                    message=(
+                        f"{call.tool_name} requires human approval "
+                        f"({reason_code}), and no approval facility exists yet"
+                    ),
+                ),
+                sink=sink,
+            )
+
+        approval_id = new_approval_id()
+        canonical = canonical_arguments(call.arguments)
         await sink.emit(
             PermissionRequested(
                 tool_call_id=call.tool_call_id,
                 required_scopes=binding.spec.permission_scopes,
                 risk=binding.spec.risk,
+                approval_id=approval_id,
+                # Written because somebody is about to be asked, and the
+                # arguments are what they would be consenting to. The
+                # canonical form, so what is shown is the string the digest
+                # was taken over rather than a re-serialization of it.
+                approval_preview=_approval_preview(canonical),
             )
         )
+        await sink.emit(RunPaused(reason="approval", approval_id=approval_id))
+
+        # No ``bound <= 0`` arm, and its absence is checked rather than
+        # assumed: a run with nothing left never reaches here, because the
+        # decision that raised the approval requirement is taken under the same
+        # remaining time and ``_decide`` refuses first. Writing one anyway
+        # would be a branch no test could enter and every reader would believe.
+        bound = self._approval_timeout_seconds
+        if remaining_run_seconds is not None:
+            bound = min(bound, remaining_run_seconds)
+
+        decision, decided_by, detail = await self._ask(
+            binding,
+            call,
+            approval_id=approval_id,
+            bound=bound,
+            cancellation=cancellation,
+        )
+        if decision != "deny":
+            await sink.emit(
+                ToolApprovalDecided(
+                    tool_call_id=call.tool_call_id,
+                    approval_id=approval_id,
+                    decision=decision,
+                    decided_by=decided_by,
+                )
+            )
+            return None
+
+        return await self._decided(
+            call,
+            sink=sink,
+            approval_id=approval_id,
+            decided_by=decided_by,
+            message=f"{call.tool_name} was not permitted ({reason_code}): {detail}",
+        )
+
+    async def _ask(
+        self,
+        binding: ToolBinding,
+        call: ToolCall,
+        *,
+        approval_id: str,
+        bound: float,
+        cancellation: CancellationToken,
+    ) -> tuple[ApprovalDecision, ApprovalDecidedBy, str]:
+        """Race the gate against the run's cancellation, bounded either way.
+
+        The gate is deployment-supplied code holding an open question, so it
+        gets what the policy engine gets: a bound it cannot exceed, and no way
+        to send its own words back -- only its exception's type name. Every
+        way of not getting an answer is a refusal here. "We could not
+        establish that this was permitted" and "this was permitted" are the
+        two results that must never collapse into each other.
+        """
+
+        assert self._approvals is not None
+        answer = asyncio.ensure_future(
+            self._approvals.request(
+                approval_id=approval_id,
+                tool_call_id=call.tool_call_id,
+                tool_name=call.tool_name,
+                argument_digest=argument_digest(call.arguments),
+                risk=binding.spec.risk,
+                required_scopes=binding.spec.permission_scopes,
+                timeout_seconds=bound,
+            )
+        )
+        stopped = asyncio.ensure_future(cancellation.wait_cancelled())
+        try:
+            async with asyncio.timeout(bound):
+                await asyncio.wait(
+                    (answer, stopped), return_when=asyncio.FIRST_COMPLETED
+                )
+        except TimeoutError:
+            pass
+        finally:
+            # Read before cancelling: the cancellation below would otherwise be
+            # what decides whether the gate is recorded as having answered.
+            answered = answer.done()
+            was_cancelled = stopped.done()
+            # Both, always. The loser is parked on something that may never
+            # arrive, and one abandoned waiter per approval is a leak; for the
+            # gate it is also how it learns to take the question down.
+            if not answered:
+                answer.cancel()
+                # And somebody has to look at how it ended. A gate that fails
+                # while tearing its question down -- the cleanup this port
+                # obliges it to do -- ends with an exception nobody retrieves,
+                # and asyncio prints those in full. Scrubbing the message out
+                # of the refusal and letting the event loop log it is not
+                # scrubbing it.
+                answer.add_done_callback(_discard_outcome)
+            stopped.cancel()
+
+        if answered:
+            try:
+                decision, decided_by = answer.result()
+            except asyncio.CancelledError:
+                return "deny", "cancelled", "the run stopped while it waited"
+            except Exception as exc:
+                return (
+                    "deny",
+                    "gate_failed",
+                    f"the approval gate raised {type(exc).__name__}",
+                )
+            recognised = (
+                decision in APPROVAL_DECISIONS and decided_by in APPROVAL_DECIDERS
+            )
+            if not recognised:
+                # Guarding the shape and trusting the values would be the worse
+                # half of a guard. An unrecognised word is not a permission,
+                # and it must not become one by failing to match "deny" -- this
+                # repository already holds a second, differently-worded
+                # approval vocabulary (``domain/task_registry.ApprovalDecision``
+                # is "approved"/"rejected"), so the first gate somebody adapts
+                # from the existing approvals API answers off-contract.
+                #
+                # The value itself does not cross: it reached this process from
+                # deployment-supplied code, exactly like an exception message.
+                return (
+                    "deny",
+                    "gate_failed",
+                    "the approval gate answered outside its contract",
+                )
+            return decision, decided_by, f"the decision was {decision}"
+        if was_cancelled:
+            return "deny", "cancelled", "the run stopped while it waited"
+        return "deny", "timeout", f"nobody answered within its {bound:g}s bound"
+
+    async def _decided(
+        self,
+        call: ToolCall,
+        *,
+        sink: EventSink,
+        approval_id: str,
+        decided_by: ApprovalDecidedBy,
+        message: str,
+    ) -> ToolResult:
+        """Record the refusal, then answer the call in its terms.
+
+        The event comes first for the same reason the request did: a refusal
+        is not self-describing, and "nobody answered" is a fact about the run
+        that the ``ToolFailed`` alone cannot carry.
+
+        One error code for all of them. ``ErrorCode`` is a closed set and each
+        member is a contract with every reader of every stream; "who decided"
+        is what ``decided_by`` is for, and a code per outcome would put the
+        same distinction in two places that can disagree. A run that was
+        cancelled is the exception -- it is not a policy story at all, and
+        ``cancelled`` is already the word the rest of the runtime uses for it.
+        """
+
+        await sink.emit(
+            ToolApprovalDecided(
+                tool_call_id=call.tool_call_id,
+                approval_id=approval_id,
+                decision="deny",
+                decided_by=decided_by,
+            )
+        )
+        code: ErrorCode = "cancelled" if decided_by == "cancelled" else "policy_denied"
         return await self.refuse(
             call,
-            ErrorInfo(
-                code="approval_required",
-                message=(
-                    f"{call.tool_name} requires human approval "
-                    f"({reason_code}), and no approval facility exists yet"
-                ),
-            ),
+            ErrorInfo(code=code, message=message),
             sink=sink,
         )
 
@@ -576,15 +877,45 @@ class ToolGateway:
             )
 
         reauthorized = await self._decide(call, context, run_budget_seconds)
-        if isinstance(reauthorized, ErrorInfo) or reauthorized.effect == "deny":
+        # Only ``allow``, exactly, may dispatch. This second decision is taken
+        # one line from performing an external effect, and the two answers that
+        # used to fall through here are both "not with these arguments":
+        #
+        # ``requires_approval`` -- the policy changed under a call that was
+        # already permitted. Asking again is the wrong repair: the question was
+        # answered, and re-opening it would let a policy that flaps prompt a
+        # human twice for one call.
+        #
+        # ``allow_with_modified_input`` -- the engine is saying these arguments
+        # are not the ones it will permit, and dispatching them anyway is the
+        # one reading of that answer it cannot mean. The rewrite is not applied
+        # here either: the arguments in hand are the ones the ledger recorded
+        # an intent for, and substituting others at dispatch would make the
+        # recorded intent describe a call that never happened.
+        if isinstance(reauthorized, ErrorInfo) or reauthorized.effect != "allow":
             denial = (
                 reauthorized
                 if isinstance(reauthorized, ErrorInfo)
                 else ErrorInfo(
                     code="policy_denied",
-                    message=f"denied before dispatch: {reauthorized.reason_code}",
+                    message=(
+                        f"{_REDECISION_REFUSALS[reauthorized.effect]} before "
+                        f"dispatch: {reauthorized.reason_code}"
+                    ),
                 )
             )
+        elif reauthorized.requires_approval:
+            denial = ErrorInfo(
+                code="policy_denied",
+                message=(
+                    "approval was required again before dispatch: "
+                    f"{reauthorized.reason_code}"
+                ),
+            )
+        else:
+            denial = None
+
+        if denial is not None:
             # Recorded as failed, not left intended: nothing was dispatched, and
             # that *is* knowledge. Leaving it open would send a human to
             # reconcile an effect that provably never happened.

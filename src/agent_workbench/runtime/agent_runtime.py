@@ -879,12 +879,26 @@ class ClaudeLikeAgentRuntime:
         authorized: list[PreparedCall] = []
         if prepared:
             machine.to("authorizing")
-            for candidate in prepared:
+            for index, candidate in enumerate(prepared):
+                if cancellation.cancelled:
+                    # Authorization is serial and one of these calls may have
+                    # just spent minutes held for a human. A cancel that
+                    # arrived during that wait must not then be spent asking
+                    # about the rest of the batch, one bounded wait at a time.
+                    # They still owe the model an answer, so they are refused
+                    # rather than dropped.
+                    results.extend(
+                        await self._refuse_cancelled(
+                            tuple(prepared[index:]), sink=sink
+                        )
+                    )
+                    break
                 outcome = await self._gateway.authorize(
                     candidate,
                     context=context,
                     sink=sink,
                     remaining_run_seconds=remaining(),
+                    cancellation=cancellation,
                 )
                 if isinstance(outcome, ToolResult):
                     results.append(outcome)
