@@ -100,6 +100,35 @@
       ]
     },
     {
+      "owner": "application.code_session",
+      "lifecycle": "live",
+      "fields": [
+        "code.turn_timeout_seconds",
+        "code.approval_timeout_seconds",
+        "code.max_concurrent_turns"
+      ]
+    },
+    {
+      "owner": "bootstrap.settings.code_locality_contract",
+      "lifecycle": "startup",
+      "fields": [
+        "code.execution_locality",
+        "code.coordination",
+        "code.shell_enabled"
+      ]
+    },
+    {
+      "owner": "apps.api.dependencies.code_shape",
+      "lifecycle": "startup",
+      "fields": [
+        "code.enabled",
+        "code.max_steps",
+        "code.max_tool_calls",
+        "code.max_total_tokens",
+        "code.max_cost_micro_usd"
+      ]
+    },
+    {
       "owner": "application.task_triage",
       "lifecycle": "startup",
       "fields": [

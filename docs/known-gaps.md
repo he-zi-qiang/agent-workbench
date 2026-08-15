@@ -1,6 +1,6 @@
 # 已知缺口
 
-截至 **2026-08-15**，配置 schema `1.14`，Alembic 迁移 27 个
+截至 **2026-08-15**，配置 schema `1.15`，Alembic 迁移 27 个
 （head `0027_session_workspace_version`）。本文档各条的代码位置核对于 `main@921dda5`。
 门禁数字不在本文档维护，见 [十分钟版本的门禁与规模一节](./HIGHLIGHTS.md#2-门禁与规模)。
 

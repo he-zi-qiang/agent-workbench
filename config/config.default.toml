@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.14"
+config_schema_version = "1.15"
 architecture_baseline = "1.3"
 
 [api]
@@ -49,6 +49,32 @@ max_agentic_searches = 6
 # retrieval score: RRF is a rank sum and cannot say whether a hit is relevant.
 # Uncalibrated -- measure it against your own corpus before trusting it.
 routed_relevance_threshold = 0.0
+
+[code]
+# A coding session: one conversation, a workspace, and no coordination plane.
+# Off by default because it adds a surface rather than changing one.
+enabled = false
+# Frozen premises, not preferences. Code runs where the human answering an
+# approval can reach the coroutine that is waiting, and nowhere else; a second
+# locality would need a way to deliver that answer across processes, and there
+# is none. Widening either is an ADR, not a line in this file.
+execution_locality = "in_api_process"
+coordination = "none"
+# The wall clock for one turn, which becomes the run's deadline -- a code run
+# is required to carry one, because nothing else is watching it. The approval
+# allowance must stay below it, or one held call could consume the whole turn.
+turn_timeout_seconds = 600
+approval_timeout_seconds = 300
+# Independent ceilings (ADR-022): fewer tool calls than steps says "this many
+# tool calls, and a turn left over to write the report from them".
+max_steps = 60
+max_tool_calls = 120
+# How many turns this process runs at once, across all sessions. A turn holds a
+# model connection and a workspace for minutes.
+max_concurrent_turns = 4
+# Frozen false. A shell means granting `sandbox_run`, which needs a sandbox MCP
+# server this process does not start and a scope no principal holds.
+shell_enabled = false
 
 [triage]
 # Submission-time shape triage (ADR-036): one structured model call proposes

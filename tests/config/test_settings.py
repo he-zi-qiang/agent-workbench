@@ -892,12 +892,22 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     has stopped promising a judge, a rerank delta and a cost meter this binary
     has no way to produce.
 
+    1.14 -> 1.15 is the `[code]` section: a second conversational surface that
+    runs agent loops inside the API process. Additive and default-off, and the
+    same shape as 1.11 -> 1.12 -- a file that enables it asks this process to
+    open sessions, hold turns and wait on human approvals, none of which a 1.14
+    binary can do. It also carries three frozen `Literal`s
+    (`execution_locality`, `coordination`, `shell_enabled`) whose whole purpose
+    is that widening them cannot happen quietly. New *leaves* under an existing
+    section still do not bump -- that is ADR-038's and ADR-042's precedent, and
+    this is not that.
+
     The pin exists so widening a frozen Literal cannot happen quietly -- this
     test failing *is* the mechanism, and updating it is the last step of the
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.14"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.15"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:
@@ -988,3 +998,40 @@ def test_the_declared_fusion_owner_is_the_one_that_actually_fuses() -> None:
     # Only in prose, describing what this no longer does.
     assert "models.FusionQuery" not in body
     assert "prefetch=" not in body
+
+
+def test_a_code_turn_must_outlast_one_approval() -> None:
+    """A held call is already clamped to whatever the turn has left.
+
+    So an approval allowance at or above the turn's own is not dangerous, it is
+    a lie: the config says five minutes and the person gets however much of the
+    turn remains. Refused at startup rather than discovered by whoever was
+    waiting.
+    """
+
+    payload = valid_payload()
+    payload["code"] = {**payload["code"], "approval_timeout_seconds": 600}
+
+    with pytest.raises(ValidationError, match="turn_timeout_seconds must exceed"):
+        Settings(**payload)
+
+
+def test_the_shipped_code_defaults_construct() -> None:
+    """The control: the rule above refuses a pair, not the section."""
+
+    settings = Settings(**valid_payload())
+
+    assert settings.code.enabled is False
+    assert settings.code.turn_timeout_seconds > settings.code.approval_timeout_seconds
+
+
+def test_a_config_written_before_code_existed_still_loads() -> None:
+    """Additive means additive: an absent section is a disabled feature."""
+
+    payload = valid_payload()
+    del payload["code"]
+
+    settings = Settings(**payload)
+
+    assert settings.code.enabled is False
+    assert settings.code.execution_locality == "in_api_process"

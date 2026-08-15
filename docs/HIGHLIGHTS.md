@@ -83,7 +83,7 @@ Provider 的路径。
 
 静态门禁全绿：`ruff format --check .`（493 files）、`ruff check src tests`、
 Pyright strict `0 errors / 0 warnings / 0 informations`、ESLint `--max-warnings 0`、
-`tsc -b`、production build。配置 schema `1.14`，Alembic 单一 head
+`tsc -b`、production build。配置 schema `1.15`，Alembic 单一 head
 `0025_agent_invocation_count`（25 个迁移）。
 
 **规模**：Python 源码 55114 行、测试 68952 行、前端 TypeScript 15271 行

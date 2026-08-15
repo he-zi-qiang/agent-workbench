@@ -1,0 +1,42 @@
+# Explicit local profile for Code sessions.
+#
+# Separate from config.local.toml for the same reason config.sandbox-local.toml
+# is: turning Code on mounts a second conversational surface that runs agent
+# loops inside the API process. That changes what this process spends its own
+# capacity on, so it is a profile somebody chooses rather than a default that
+# arrives with an upgrade.
+#
+# This file is one overlay over config.default.toml. DSNs and the provider key
+# remain environment-only; no credential belongs here.
+#
+# Two things must be true before a Code session can do anything useful:
+#
+#   * A model provider key, the same one Chat needs. Code has no fixed-shape
+#     fallback -- a turn is a model loop or it is nothing.
+#   * The calling principal must hold `workspace:write`, sent by the console as
+#     `x-principal-scopes`. Without it the session still opens and can read its
+#     workspace, and every attempt to write one is refused by policy. That is
+#     the same rule every other write tool is under; it is named here because a
+#     coding agent that cannot write is a confusing thing to debug from the
+#     transcript alone.
+#
+# What this profile deliberately does NOT do: grant a shell. `shell_enabled` is
+# a frozen `false`, and `sandbox_run` needs a sandbox MCP server that this
+# process does not start.
+
+[app]
+environment = "development"
+deployment_scope = "local"
+
+[code]
+enabled = true
+
+# Shorter than the shipped defaults, because a local turn that has gone wrong
+# is better cut off in two minutes than in ten.
+turn_timeout_seconds = 240
+approval_timeout_seconds = 120
+
+# One at a time locally: a laptop running a model loop, a database and a vector
+# store has no capacity to spare, and a second concurrent turn mostly makes the
+# first one slower.
+max_concurrent_turns = 1

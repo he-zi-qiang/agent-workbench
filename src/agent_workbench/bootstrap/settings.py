@@ -151,7 +151,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.14"] = "1.14"
+    config_schema_version: Literal["1.15"] = "1.15"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -237,6 +237,82 @@ class ChatSettings(StrictModel):
         if self.max_agentic_searches < self.max_agentic_steps:
             raise ValueError(
                 "chat.max_agentic_searches must be >= chat.max_agentic_steps"
+            )
+        return self
+
+
+class CodeSettings(StrictModel):
+    """A coding session: one conversation, a workspace, and no coordination plane.
+
+    Code runs in the API process and nowhere else, and the two frozen
+    ``Literal`` fields below are that premise written where a deployment cannot
+    quietly change it. Everything Code gives up follows from them -- no lease,
+    no reaper, no resumable checkpoint -- and everything it gains does too: the
+    human who answers an approval is talking to the coroutine that is waiting,
+    which is the one arrangement where waiting for them is honest.
+
+    A turn is therefore not recoverable. If this process dies mid-turn, that
+    turn is gone and the workspace stands at its last successful write; the
+    user says the sentence again. That is a cost, deliberately taken, and it is
+    recorded in ``docs/known-gaps.md`` rather than presented as a to-do.
+    """
+
+    #: Off until a deployment says otherwise, like every capability that adds a
+    #: surface rather than changing one.
+    enabled: bool = False
+
+    #: Single-value on purpose. A second locality would need somewhere for the
+    #: answer to an approval to reach a parked coroutine in another process,
+    #: and there is no such thing here; widening this is an ADR, not a config
+    #: change. The architecture test that asserts both of these are single-value
+    #: literals exists so that widening cannot happen by accident.
+    execution_locality: Literal["in_api_process"] = "in_api_process"
+    coordination: Literal["none"] = "none"
+
+    #: The wall clock for one turn, which becomes the run's ``deadline``. A code
+    #: run is required by the domain to carry one, because nothing else is
+    #: watching it.
+    turn_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    #: How long one held call may wait for a person. Bounded again, at the
+    #: gateway, by whatever the turn has left.
+    approval_timeout_seconds: int = Field(default=300, ge=5, le=1800)
+
+    #: Ceilings for the run. Independent of each other by ADR-022: a tool
+    #: allowance below the step ceiling is a budget rather than a mistake --
+    #: it says "this many tool calls, and a turn left over to write the report
+    #: from them".
+    max_steps: int = Field(default=60, ge=2, le=1000)
+    max_tool_calls: int = Field(default=120, ge=1, le=500)
+    max_total_tokens: int | None = Field(default=None, ge=1)
+    max_cost_micro_usd: int | None = Field(default=None, ge=1)
+
+    #: How many turns this process will run at once, across all sessions. A
+    #: bound rather than a queue: a turn holds a model connection and a
+    #: workspace for minutes, and admitting an unbounded number of them is how
+    #: an API process stops answering anything else.
+    max_concurrent_turns: int = Field(default=4, ge=1, le=64)
+
+    #: Frozen false. Giving a coding agent a shell means granting
+    #: ``sandbox_run``, which needs a sandbox MCP server this process does not
+    #: start and a scope no principal currently holds. Spelled as a literal
+    #: rather than a bool so that turning it on is a code change with an ADR,
+    #: not a line in a TOML file that silently does nothing.
+    shell_enabled: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_turn_outlasts_one_approval(self) -> CodeSettings:
+        """Refuse a turn that one held call could consume entirely.
+
+        The approval wait is already clamped to whatever the turn has left, so
+        an approval allowance at or above the turn's own is not dangerous --
+        it is useless, and worse, it reads as though a person has five minutes
+        to answer when they have however much of the turn is left. A deployment
+        that wants longer approvals wants a longer turn.
+        """
+
+        if self.approval_timeout_seconds >= self.turn_timeout_seconds:
+            raise ValueError(
+                "code.turn_timeout_seconds must exceed code.approval_timeout_seconds"
             )
         return self
 
@@ -1129,6 +1205,10 @@ class Settings(BaseSettings):
     # Default-constructed so every existing config file stays valid: absent
     # section, disabled feature, byte-identical behaviour (ADR-036).
     triage: TriageSettings = Field(default_factory=TriageSettings)
+    # Same reason as triage: a config file written before Code existed stays
+    # valid, and a deployment that never asked for it gets a disabled feature
+    # rather than a startup failure.
+    code: CodeSettings = Field(default_factory=CodeSettings)
     database: DatabaseSettings
     coordination: CoordinationSettings
     event_stream: EventStreamSettings

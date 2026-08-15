@@ -367,6 +367,30 @@ class TriageConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeConfig:
+    """What the API process needs to run coding sessions.
+
+    Projected rather than passed through, like every other section: the
+    settings type stops at this boundary, so nothing downstream can widen a
+    ceiling by reaching back for the file it came from.
+
+    The two frozen premises do not appear here. ``execution_locality`` and
+    ``coordination`` are checked at startup and then have nothing left to say:
+    they describe the only arrangement this code implements, so carrying them
+    forward would invite a reader to branch on a value that cannot vary.
+    """
+
+    enabled: bool
+    turn_timeout_seconds: int
+    approval_timeout_seconds: int
+    max_steps: int
+    max_tool_calls: int
+    max_total_tokens: int | None
+    max_cost_micro_usd: int | None
+    max_concurrent_turns: int
+
+
+@dataclass(frozen=True, slots=True)
 class ObservabilityConfig:
     """Where this process sends what it records.
 
@@ -647,6 +671,7 @@ class ApiRuntimeConfig:
     chat_recovery: ChatRecoveryConfig
     chat: ChatConfig
     triage: TriageConfig
+    code: CodeConfig
     task: TaskConfig
     observability: ObservabilityConfig
     # ADR-019. The API runs the chat loop, so it needs the same switch the Task
@@ -1044,6 +1069,16 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             enabled=settings.triage.enabled,
             timeout_seconds=settings.triage.timeout_seconds,
         ),
+        code=CodeConfig(
+            enabled=settings.code.enabled,
+            turn_timeout_seconds=settings.code.turn_timeout_seconds,
+            approval_timeout_seconds=settings.code.approval_timeout_seconds,
+            max_steps=settings.code.max_steps,
+            max_tool_calls=settings.code.max_tool_calls,
+            max_total_tokens=settings.code.max_total_tokens,
+            max_cost_micro_usd=settings.code.max_cost_micro_usd,
+            max_concurrent_turns=settings.code.max_concurrent_turns,
+        ),
         task=project_task(settings),
     )
 
@@ -1054,6 +1089,7 @@ __all__ = [
     "ArtifactStoreConfig",
     "ChatConfig",
     "ChatRecoveryConfig",
+    "CodeConfig",
     "DatabaseConfig",
     "EmbeddingConfig",
     "EventStreamConfig",
