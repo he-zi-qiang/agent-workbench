@@ -240,6 +240,34 @@ async def history(session_id: str, request: Request) -> HistoryResponse:
     )
 
 
+class DeletedView(BaseModel):
+    """What a delete answers with: the id that is now gone."""
+
+    session_id: Identifier
+
+
+@router.delete("/sessions/{session_id}", status_code=200)
+async def delete_session(session_id: str, request: Request) -> DeletedView:
+    """Remove one chat conversation and everything that was only its.
+
+    200 with the id rather than 204, matching the code router: the console's
+    `apiRequest` parses every successful body as JSON, so an empty one throws
+    where `response.ok` guarantees nothing will catch it.
+
+    This is half of known gap D-02. The list is the other half and is still the
+    browser's, so a console that deletes here also has to forget its own row --
+    which is a decision about where a chat session lives, not about this route.
+    """
+
+    principal = dependencies_of(request).principals.resolve(request)
+    await _chat(request).delete(
+        session_id=session_id,
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+    )
+    return DeletedView(session_id=session_id)
+
+
 def _chat(request: Request) -> ChatService:
     """The chat service, which exists because this router was registered.
 

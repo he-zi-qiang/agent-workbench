@@ -448,3 +448,68 @@ def test_a_submission_records_intent_on_its_timeline(tmp_path: Path) -> None:
         "reason": "要做一件事",
     }
     assert plain["intent"] is None
+
+
+def test_a_running_task_refuses_deletion_and_a_cancelled_one_accepts_it(
+    tmp_path: Path,
+) -> None:
+    """Two steps, and the first one is a refusal (ADR-056 §4.3).
+
+    Deleting is deliberately not a second way to stop something: the Registry's
+    transition table says which states may be left, and a delete that also
+    cancelled would be a second copy of the lease and epoch rules. So a queued
+    Task answers 409, and cancelling is what makes it deletable.
+    """
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, ...]:
+        opened = await client.post("/v1/tasks", **_submission())
+        task_id = opened.json()["task_id"]
+        too_early = await client.delete(f"/v1/tasks/{task_id}", headers=HEADERS)
+        await client.post(
+            f"/v1/tasks/{task_id}/cancel",
+            headers=HEADERS,
+            json={"reason": "no longer needed"},
+        )
+        deleted = await client.delete(f"/v1/tasks/{task_id}", headers=HEADERS)
+        gone = await client.get(f"/v1/tasks/{task_id}", headers=HEADERS)
+        listed = await client.get("/v1/tasks", headers=HEADERS)
+        return too_early, deleted, gone, listed, task_id
+
+    too_early, deleted, gone, listed, task_id = _run(scenario, tmp_path)
+
+    assert too_early.status_code == 409
+    assert deleted.status_code == 200
+    assert deleted.json() == {"task_id": task_id}
+    # Both, because they fail differently: a row that is unreadable by id but
+    # still in the list would be a delete that only removed one index.
+    assert gone.status_code == 404
+    assert [task["task_id"] for task in listed.json()["tasks"]] == []
+
+
+def test_another_principal_cannot_delete_a_task(tmp_path: Path) -> None:
+    """Not found, not forbidden -- the same answer every other read gives.
+
+    Deleting must not be usable to discover that a Task exists, which is why
+    the service authorises with the same ``get`` cancellation uses.
+    """
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, ...]:
+        opened = await client.post("/v1/tasks", **_submission())
+        task_id = opened.json()["task_id"]
+        await client.post(
+            f"/v1/tasks/{task_id}/cancel",
+            headers=HEADERS,
+            json={"reason": "no longer needed"},
+        )
+        intruded = await client.delete(
+            f"/v1/tasks/{task_id}",
+            headers={**HEADERS, "x-principal-id": "somebody_else"},
+        )
+        still_there = await client.get(f"/v1/tasks/{task_id}", headers=HEADERS)
+        return intruded, still_there
+
+    intruded, still_there = _run(scenario, tmp_path)
+
+    assert intruded.status_code == 404
+    # The half that would catch a delete which raised after writing.
+    assert still_there.status_code == 200

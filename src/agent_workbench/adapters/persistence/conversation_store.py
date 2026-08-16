@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -23,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from agent_workbench.adapters.persistence.models import (
     chat_turns,
     conversation_sessions,
+    event_streams,
+    events,
 )
 from agent_workbench.adapters.persistence.models import messages as messages_table
 from agent_workbench.domain.errors import NotFoundError
@@ -266,6 +268,54 @@ class PostgresConversationStore:
             if row is None:
                 raise NotFoundError("conversation session not found")
             return ConversationSession.model_validate(dict(row))
+
+    async def delete_session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode | None = None,
+    ) -> None:
+        async with self._engine.begin() as connection:
+            # Authorised by the same three axes the reads use, and read first so
+            # a miss is a 404 rather than a DELETE that quietly matched nothing.
+            owned = (
+                select(conversation_sessions.c.session_id)
+                .where(conversation_sessions.c.session_id == session_id)
+                .where(conversation_sessions.c.tenant_id == tenant_id)
+                .where(conversation_sessions.c.owner_id == principal_id)
+            )
+            if mode is not None:
+                owned = owned.where(conversation_sessions.c.mode == mode)
+            if (await connection.execute(owned)).first() is None:
+                raise NotFoundError("conversation session not found")
+
+            if await self._has_active_turn(connection, session_id=session_id):
+                raise ChatTurnBusyError(
+                    "conversation has an unfinished turn and cannot be deleted"
+                )
+
+            # The event stream is deleted here rather than left to the database,
+            # because there is no foreign key to carry it: `events.stream_id` is
+            # a plain string column shared by chat sessions, code sessions and
+            # task threads (see `models.py`). `messages` and `chat_turns` do
+            # have one, with ON DELETE CASCADE, so they are not repeated here.
+            #
+            # Whole stream or none of it (ADR-056). Both statements and the row
+            # itself are in this one transaction, so no reader can observe a
+            # session whose events have already gone.
+            await connection.execute(
+                delete(events).where(events.c.stream_id == session_id)
+            )
+            await connection.execute(
+                delete(event_streams).where(event_streams.c.stream_id == session_id)
+            )
+            await connection.execute(
+                delete(conversation_sessions).where(
+                    conversation_sessions.c.session_id == session_id
+                )
+            )
 
     async def advance_workspace_version(
         self,

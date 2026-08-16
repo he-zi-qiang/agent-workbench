@@ -1792,6 +1792,64 @@ pre {
   overflow-y: auto;
 }
 
+/* 一行 = 主按钮 + 删除按钮 ------------------------------------------------
+ *
+ * 三处列表（对话、任务、编码会话）用同一套写法：外面一个 grid 行，里面一个占满
+ * 的主按钮和一个固定宽的删除按钮。
+ *
+ * 删除按钮**一直在 DOM 里**，只是平时透明。用 `visibility`/`display` 藏起来的
+ * 控件，键盘 tab 不到、触屏永远看不见 —— 而"只在鼠标悬停时出现"恰好把删除这件
+ * 事只交给了有鼠标的人。这里用透明度：它一直可聚焦，聚焦或悬停时才显形。
+ */
+.aw-chat-session-row,
+.aw-task-list-row,
+.aw-code-recent-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  gap: 2px;
+}
+
+.aw-chat-session-delete,
+.aw-task-list-delete,
+.aw-code-recent-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.aw-chat-session-row:hover .aw-chat-session-delete,
+.aw-task-list-row:hover .aw-task-list-delete,
+.aw-code-recent-row:hover .aw-code-recent-delete,
+.aw-chat-session-delete:focus-visible,
+.aw-task-list-delete:focus-visible,
+.aw-code-recent-delete:focus-visible {
+  opacity: 1;
+}
+
+.aw-chat-session-delete:hover,
+.aw-task-list-delete:hover,
+.aw-code-recent-delete:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-danger);
+}
+
+.aw-chat-session-delete:disabled,
+.aw-task-list-delete:disabled,
+.aw-code-recent-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 .aw-chat-session {
   display: flex;
   align-items: center;

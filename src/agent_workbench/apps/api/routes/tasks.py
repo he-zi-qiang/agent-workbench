@@ -152,6 +152,12 @@ class CancelTaskRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=MAX_CANCEL_REASON_LENGTH)
 
 
+class DeletedTaskView(BaseModel):
+    """What a delete answers with: the id that is now gone."""
+
+    task_id: Identifier
+
+
 router = APIRouter(prefix=TASKS_PREFIX, tags=["tasks"])
 
 
@@ -340,6 +346,28 @@ async def cancel(
         reason=body.reason,
     )
     return _view(task)
+
+
+@router.delete("/{task_id}", status_code=200)
+async def delete_task(task_id: str, request: Request) -> DeletedTaskView:
+    """Remove one settled Task from the list and from the database.
+
+    Two steps by design: a Task that has not settled answers 409, and
+    ``POST /{task_id}/cancel`` is how a caller reaches a state this accepts.
+    Deleting is not a second way to stop something -- that rule lives in the
+    Registry's transition table, and a delete that also cancelled would be a
+    second copy of the lease and epoch logic.
+
+    200 with the id, matching the two session routers: the console reads every
+    successful body as JSON.
+    """
+
+    dependencies = dependencies_of(request)
+    await dependencies.task_service.delete(
+        dependencies.principals.resolve(request),
+        task_id,
+    )
+    return DeletedTaskView(task_id=task_id)
 
 
 def _decode_list_cursor(raw: str | None) -> ListCursor | None:

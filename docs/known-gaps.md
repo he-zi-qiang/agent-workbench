@@ -362,7 +362,7 @@ contract and are deliberately not in this module yet"。缺的正是这份解码
 | 编号 | 缺口 | 分类 |
 |---|---|:---:|
 | D-01 | Chat turn-scoped 附件、Task 输入 Artifact 附件 | 未实现 |
-| D-02 | Chat Session 服务端列表 / 重命名 / 删除 | 未实现 |
+| D-02 | Chat Session 服务端列表与重命名（删除已补上） | 部分关闭 |
 | D-03 | 知识库重命名 / 删除 / 文档删除 / ACL UI | 未实现 |
 | D-04 | Word 读取与不可变编辑 | 未实现 |
 | D-05 | Langfuse、生产身份认证、S3 Artifact、远程部署 | 未实现 |
@@ -374,11 +374,24 @@ contract and are deliberately not in this module yet"。缺的正是这份解码
 两个端点。上传能力在，但"这一轮对话带这几个文件"和"这个 Task 以这份文件为输入"
 两条产品语义没有接上。
 
-### D-02 Chat Session 的服务端列表、重命名、删除与完整历史元数据
+### D-02 Chat Session 的服务端列表、重命名与完整历史元数据 —— **删除这一半已关闭**
 
-**证据**：[chat.py](../src/agent_workbench/apps/api/routes/chat.py) 的路由只有三个：
-`POST /sessions`、`POST /sessions/{session_id}/messages`、
-`GET /sessions/{session_id}/messages`。没有列表、没有改名、没有删除。
+**已关闭的部分**（ADR-056）：`DELETE /v1/chat/sessions/{id}` 存在，
+`ConversationStore.delete_session` 在内存与 PostgreSQL 两套实现上跑同一份契约
+用例，控制台侧栏每一行都有删除按钮。会话行、消息、chat_turns 与该会话的事件流
+一起消失；工作区 artifact 按 ADR-056 §5 保留为不可达。
+
+**仍然没有的**：列表与改名。[chat.py](../src/agent_workbench/apps/api/routes/chat.py)
+的路由是 `POST /sessions`、`POST /sessions/{id}/messages`、
+`GET /sessions/{id}/messages`、`DELETE /sessions/{id}` —— 没有 list，没有 PATCH。
+
+**为什么删除能先做而列表不能**：删除只需要一个 id，而列表要先回答
+`answerMode` 与 `knowledgeBaseId` 属不属于会话本身（见 F-06）。那是产品决定，
+不是接线问题；在它之前切一半列表会得到两份互相矛盾的清单。
+
+**当前的后果**：控制台的删除是两处一起做的 —— 服务端行删掉，浏览器本地那行也
+删掉。一个从别的浏览器打开过的会话，服务端已经没有了，而那个浏览器的
+localStorage 里还留着一行指向不存在会话的记录。这是 F-06 的同一笔账。
 
 ### D-03 知识库重命名、删除、文档删除与共享 / ACL 管理 UI
 

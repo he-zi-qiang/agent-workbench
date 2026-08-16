@@ -193,6 +193,27 @@ class CodeSessionService:
             mode="code",
         )
 
+    async def delete(
+        self, *, session_id: str, tenant_id: str, principal_id: str
+    ) -> None:
+        """Remove one coding session, its transcript and its event stream.
+
+        ``mode="code"`` is fixed here for the reason every other method on this
+        service fixes it: a caller that could hand this one a chat session id
+        would be deleting a conversation this service never ran.
+
+        The workspace artifacts stay, unreachable rather than removed (ADR-056
+        §5) -- the same thing that already happens to a workspace version each
+        time a write supersedes it.
+        """
+
+        await self.conversations.delete_session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="code",
+        )
+
     async def history(
         self, *, session_id: str, tenant_id: str, principal_id: str
     ) -> tuple[Message, ...]:

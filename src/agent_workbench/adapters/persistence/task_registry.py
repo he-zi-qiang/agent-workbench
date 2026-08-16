@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Final, NoReturn, cast
 
 from pydantic import TypeAdapter
-from sqlalchemy import func, literal, select, text, tuple_, update
+from sqlalchemy import delete, func, literal, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -36,10 +36,18 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from agent_workbench.adapters.persistence.event_log import PostgresEventLog
 from agent_workbench.adapters.persistence.models import (
+    approvals,
+    event_streams,
+    events,
     qdrant_index_generations,
     task_runs,
+    tool_executions,
+    workflow_checkpoint_blobs,
+    workflow_checkpoint_writes,
+    workflow_checkpoints,
 )
 from agent_workbench.adapters.persistence.notifications import notify_task_ready
+from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.events import (
     EventPayload,
     TaskAwaitingApproval,
@@ -54,7 +62,11 @@ from agent_workbench.domain.events import (
 )
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.pagination import ListCursor
-from agent_workbench.domain.task_registry import TaskStatus, sources_for
+from agent_workbench.domain.task_registry import (
+    TERMINAL_STATUSES,
+    TaskStatus,
+    sources_for,
+)
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.task_registry import (
     AgentInvocationBudgetExhaustedError,
@@ -744,6 +756,57 @@ class PostgresTaskRegistry:
                 ),
             )
         return task
+
+    async def delete(self, task_id: Identifier) -> None:
+        async with self._engine.begin() as connection:
+            current = await self._by_id(connection, task_id)
+            if current is None:
+                raise NotFoundError("task not found")
+            status = cast("TaskStatus", current["status"])
+            if status not in TERMINAL_STATUSES:
+                # The same error cancelling raises for an impossible move, and
+                # for the same reason: this is a transition the state machine
+                # does not offer from here. `attempted="deleted"` is not a
+                # status any row can hold -- it names what the caller asked
+                # for, which is what makes the message readable.
+                raise TaskTransitionRejectedError(
+                    task_id=task_id,
+                    found_status=status,
+                    attempted="cancelled",
+                )
+
+            thread_id = cast("str", current["thread_id"])
+            # Ordered, not left to the database. `approvals` and
+            # `tool_executions` reference `task_runs` with no `ondelete`, so
+            # they would block the row's deletion rather than follow it; the
+            # event stream and the checkpoints are joined by string columns
+            # with no foreign key at all. Written out here rather than fixed
+            # with a migration to CASCADE, so that "what does deleting a Task
+            # take with it" is answerable by reading this list (ADR-056 §4.2).
+            await connection.execute(
+                delete(approvals).where(approvals.c.task_id == task_id)
+            )
+            await connection.execute(
+                delete(tool_executions).where(tool_executions.c.task_id == task_id)
+            )
+            for table in (
+                workflow_checkpoint_writes,
+                workflow_checkpoint_blobs,
+                workflow_checkpoints,
+            ):
+                await connection.execute(
+                    delete(table).where(table.c.thread_id == thread_id)
+                )
+            # A Task's stream is keyed by its thread, not by its id.
+            await connection.execute(
+                delete(events).where(events.c.stream_id == thread_id)
+            )
+            await connection.execute(
+                delete(event_streams).where(event_streams.c.stream_id == thread_id)
+            )
+            await connection.execute(
+                delete(task_runs).where(task_runs.c.task_id == task_id)
+            )
 
     async def _move(
         self,

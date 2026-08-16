@@ -441,6 +441,24 @@ class TaskRegistry(Protocol):
 
     async def cancel(self, task_id: Identifier, *, reason: str) -> TaskRun: ...
 
+    async def delete(self, task_id: Identifier) -> None:
+        """Remove one settled Task and everything that was only its.
+
+        Terminal states only. A Task that is still queued, running or waiting
+        on an approval is refused with
+        :class:`TaskTransitionRejectedError` -- cancelling is how a caller
+        reaches a state this will accept, and deleting is deliberately not a
+        second way to stop something. Reusing cancellation's own path is what
+        keeps the lease and epoch rules in one place instead of two.
+
+        The whole stream or none of it (ADR-056): the Task's row, its
+        approvals, its tool executions, its checkpoints and its event stream go
+        together, in one transaction. Artifacts do not -- an input document or
+        an exported report may be referenced from elsewhere, and deciding when
+        the last reference is gone is a different question than this one.
+        """
+        ...
+
 
 __all__ = [
     "OBJECTIVE_PREVIEW_LIMIT",

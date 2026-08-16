@@ -130,6 +130,12 @@ class PendingApprovalsResponse(BaseModel):
     approvals: tuple[PendingApprovalView, ...]
 
 
+class DeletedView(BaseModel):
+    """What a delete answers with: the id that is now gone."""
+
+    session_id: Identifier
+
+
 class DecideRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -217,6 +223,30 @@ async def rename_session(
         title=session.title,
         last_activity_at=session.last_activity_at,
     )
+
+
+@router.delete("/sessions/{session_id}", status_code=200)
+async def delete_session(session_id: str, request: Request) -> DeletedView:
+    """Remove one coding session and everything that was only its.
+
+    Answers 200 with the id rather than 204. A 204 would be the more habitual
+    REST answer, and it is the one that costs a client a special case: the
+    console's `apiRequest` reads every successful response as JSON, so an empty
+    body throws a `SyntaxError` in the one place `response.ok` guarantees there
+    is nothing to catch it. Saying what was deleted is both cheaper and more
+    useful than a status code that says only "something was".
+
+    404 when it is not this principal's session, 409 when a turn is still
+    running -- both from the store, both already in the error table.
+    """
+
+    principal = dependencies_of(request).principals.resolve(request)
+    await _code(request).delete(
+        session_id=session_id,
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+    )
+    return DeletedView(session_id=session_id)
 
 
 @router.post("/sessions/{session_id}/messages")

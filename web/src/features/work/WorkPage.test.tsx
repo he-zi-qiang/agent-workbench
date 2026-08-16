@@ -7,6 +7,7 @@ import {
   ApiError,
   createTask,
   decideApproval,
+  deleteTask,
   getApproval,
   getArtifactJson,
   getArtifactText,
@@ -29,6 +30,7 @@ vi.mock("../../api/client", async () => {
     ...actual,
     createTask: vi.fn(),
     decideApproval: vi.fn(),
+    deleteTask: vi.fn(),
     getApproval: vi.fn(),
     getArtifactJson: vi.fn(),
     getArtifactText: vi.fn(),
@@ -351,6 +353,52 @@ describe("WorkPage task submission", () => {
     expect(
       await screen.findByText("整理这批资料，比较三个方案并输出一份建议报告"),
     ).toBeInTheDocument();
+  });
+
+  it("offers delete on a settled task and withholds it from a running one", async () => {
+    vi.mocked(listTasks).mockResolvedValue({
+      tasks: [
+        {
+          task_id: "task_settled",
+          status: "succeeded",
+          status_detail: null,
+          agent_invocation_count: 1,
+          objective_preview: "已经跑完的任务",
+          created_at: "2026-08-02T12:00:00Z",
+          updated_at: "2026-08-02T12:00:00Z",
+        },
+        {
+          task_id: "task_running",
+          status: "running",
+          status_detail: null,
+          agent_invocation_count: 1,
+          objective_preview: "还在跑的任务",
+          created_at: "2026-08-02T12:00:00Z",
+          updated_at: "2026-08-02T12:00:00Z",
+        },
+      ],
+      cursor: null,
+    });
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(deleteTask).mockResolvedValue({ task_id: "task_settled" });
+
+    renderWorkPage();
+
+    // The server answers 409 for anything that has not settled, so a control
+    // on a running row would be a button whose only outcome is an error.
+    expect(
+      await screen.findByRole("button", { name: "删除任务 已经跑完的任务" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "删除任务 还在跑的任务" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "删除任务 已经跑完的任务" }));
+    await waitFor(() => {
+      expect(vi.mocked(deleteTask).mock.calls[0]?.[1]).toBe("task_settled");
+    });
+    expect(confirm).toHaveBeenCalled();
   });
 
   it("still opens a task the server recorded no objective for", async () => {

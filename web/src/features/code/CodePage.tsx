@@ -23,13 +23,14 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Code2 } from "lucide-react";
+import { Code2, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   askCode,
   createCodeSession,
   decideCodeApproval,
+  deleteCodeSession,
   downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
@@ -301,6 +302,26 @@ export function CodePage() {
     [identity, queries],
   );
 
+  const remove = useCallback(
+    async (target: string) => {
+      // Confirmed because it cannot be undone and the row it removes is a
+      // whole conversation. `window.confirm` rather than a dialog component:
+      // this console has no modal of its own, and inventing one here would be
+      // a second thing to review.
+      if (!window.confirm("删除这个编码会话？它的对话和步骤都会消失。")) return;
+      try {
+        await deleteCodeSession(identity, target);
+        await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
+        // Only when the reader was looking at it. Navigating away from a
+        // session they had not opened would move them for somebody else's sake.
+        if (target === sessionId) await navigate("/code");
+      } catch (cause: unknown) {
+        setError(describe(cause));
+      }
+    },
+    [identity, navigate, queries, sessionId],
+  );
+
   const sessionList =
     known.length === 0 ? null : (
       <nav aria-label="最近的编码会话" className="aw-code-recent">
@@ -335,22 +356,37 @@ export function CodePage() {
                   />
                 </form>
               ) : (
-                <button
-                  aria-current={held.session_id === sessionId ? "page" : undefined}
-                  className="aw-code-recent-link"
-                  onClick={() => {
-                    void navigate(`/code/${held.session_id}`);
-                  }}
-                  onDoubleClick={() => {
-                    setRenaming(held.session_id);
-                  }}
-                  // Named after the first instruction, so most rows have one.
-                  // The id is the fallback for a session opened and never used.
-                  title={held.title ?? held.session_id}
-                  type="button"
-                >
-                  {held.title ?? shortId(held.session_id)}
-                </button>
+                <div className="aw-code-recent-row">
+                  <button
+                    aria-current={held.session_id === sessionId ? "page" : undefined}
+                    className="aw-code-recent-link"
+                    onClick={() => {
+                      void navigate(`/code/${held.session_id}`);
+                    }}
+                    onDoubleClick={() => {
+                      setRenaming(held.session_id);
+                    }}
+                    // Named after the first instruction, so most rows have one.
+                    // The id is the fallback for a session opened and never used.
+                    title={held.title ?? held.session_id}
+                    type="button"
+                  >
+                    {held.title ?? shortId(held.session_id)}
+                  </button>
+                  {/* Always rendered, not revealed on hover: a control that
+                      only exists under a pointer is one a keyboard cannot
+                      reach and a touch screen never shows. CSS dims it until
+                      the row is hovered or the button focused. */}
+                  <button
+                    aria-label={`删除会话 ${held.title ?? held.session_id}`}
+                    className="aw-code-recent-delete"
+                    onClick={() => void remove(held.session_id)}
+                    title="删除"
+                    type="button"
+                  >
+                    <Trash2 aria-hidden size={13} />
+                  </button>
+                </div>
               )}
             </li>
           ))}

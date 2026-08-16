@@ -161,6 +161,7 @@ export interface SubmitTurnInput {
 
 export type ChatAction =
   | { type: "sessionAdded"; session: LocalChatSession }
+  | { type: "sessionRemoved"; sessionId: string }
   | {
       type: "sessionUpdated";
       sessionId: string;
@@ -233,6 +234,29 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           existing === undefined
             ? [session.sessionId, ...state.sessionOrder]
             : state.sessionOrder,
+      });
+    }
+    case "sessionRemoved": {
+      if (state.sessions[action.sessionId] === undefined) return state;
+      // Every index keyed on the session, and the turns underneath it. Leaving
+      // `turns` behind would be invisible -- nothing renders a turn whose
+      // session is gone -- and would grow forever in the persisted state,
+      // because `persistSessions` writes what this reducer holds.
+      const doomed = new Set(state.turnOrderBySession[action.sessionId] ?? []);
+      const turns = Object.fromEntries(
+        Object.entries(state.turns).filter(([turnId]) => !doomed.has(turnId)),
+      );
+      const runToTurn = Object.fromEntries(
+        Object.entries(state.runToTurn).filter(([, turnId]) => !doomed.has(turnId)),
+      );
+      return bump(state, {
+        sessions: without(state.sessions, action.sessionId),
+        sessionOrder: state.sessionOrder.filter((id) => id !== action.sessionId),
+        turns,
+        turnOrderBySession: without(state.turnOrderBySession, action.sessionId),
+        runToTurn,
+        orphanEvents: without(state.orphanEvents, action.sessionId),
+        quarantinedSequences: without(state.quarantinedSequences, action.sessionId),
       });
     }
     case "sessionUpdated": {
@@ -1082,6 +1106,19 @@ function updateSessionHistory(
 function replaceTurn(state: ChatState, turn: ChatTurnState): ChatState {
   if (state.turns[turn.localId] === turn) return state;
   return bump(state, { turns: { ...state.turns, [turn.localId]: turn } });
+}
+
+/**
+ * The same record without one key.
+ *
+ * A named helper rather than `const { [key]: _drop, ...rest } = record`: that
+ * idiom binds a variable whose only purpose is to be discarded, which is a
+ * lint error here and reads, to anyone who has not met the trick, like a bug.
+ */
+function without<T>(record: Record<string, T>, key: string): Record<string, T> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([held]) => held !== key),
+  );
 }
 
 function bump(state: ChatState, patch: Partial<ChatState>): ChatState {

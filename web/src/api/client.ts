@@ -49,7 +49,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PUT" | "PATCH";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -103,6 +103,13 @@ export async function apiRequest<T>(
   if (options.signal !== undefined) init.signal = options.signal;
   const response = await fetch(path, init);
   if (!response.ok) throw await parseError(response);
+  // A 204 has no body, and parsing one throws `SyntaxError: Unexpected end of
+  // JSON input` from inside the success path -- where `response.ok` has already
+  // promised the caller there is nothing to catch. This repository's delete
+  // routes answer 200 with a body precisely so they never take this branch;
+  // it is here for the endpoints that already answered 204 before anybody
+  // looked (`cancelEvaluationRun` is one), and for the next one that does.
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -895,6 +902,42 @@ export async function renameCodeSession(
   return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: { title },
+  });
+}
+
+/**
+ * The three deletes.
+ *
+ * Written out rather than folded into one `deleteThing(kind, id)`: the three
+ * are different enough that a shared helper would have to take the path apart
+ * again, and each one's failure modes belong to its own call site -- a Task
+ * refuses while it is still running, a session refuses while a turn is in
+ * flight, and a chat session also has a browser-local row to forget.
+ */
+export async function deleteCodeSession(
+  identity: PrincipalIdentity,
+  sessionId: string,
+): Promise<{ session_id: string }> {
+  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function deleteChatSession(
+  identity: PrincipalIdentity,
+  sessionId: string,
+): Promise<{ session_id: string }> {
+  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function deleteTask(
+  identity: PrincipalIdentity,
+  taskId: string,
+): Promise<{ task_id: string }> {
+  return apiRequest(identity, `/v1/tasks/${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
   });
 }
 

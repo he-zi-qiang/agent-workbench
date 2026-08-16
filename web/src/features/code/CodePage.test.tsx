@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askCode,
   decideCodeApproval,
+  deleteCodeSession,
   downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
@@ -24,6 +25,7 @@ vi.mock("../../api/client", () => ({
   askCode: vi.fn(),
   createCodeSession: vi.fn(),
   decideCodeApproval: vi.fn(),
+  deleteCodeSession: vi.fn(() => Promise.resolve({ session_id: "ses_code_1" })),
   getCodeApprovals: vi.fn(() => Promise.resolve({ approvals: [] })),
   getCodeHistory: vi.fn(() => Promise.resolve({ messages: [] })),
   getCodeWorkspace: vi.fn(() => Promise.resolve({ files: [] })),
@@ -446,6 +448,37 @@ describe("CodePage", () => {
 
     await waitFor(() => {
       expect(vi.mocked(getCodeHistory).mock.calls.at(-1)?.[1]).toBe("ses_code_older");
+    });
+  });
+
+  it("deletes a session only after the reader confirms", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        {
+          session_id: "ses_code_older",
+          title: "把 notes.md 整理成清单",
+          last_activity_at: "2026-08-14T09:00:00Z",
+        },
+      ],
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    mounted();
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const remove = within(recent).getByRole("button", {
+      name: "删除会话 把 notes.md 整理成清单",
+    });
+
+    // Declined first. A delete that ran anyway would be irreversible, so the
+    // refusal is the half worth asserting before the success.
+    await user.click(remove);
+    expect(vi.mocked(deleteCodeSession)).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    await user.click(remove);
+    await waitFor(() => {
+      expect(vi.mocked(deleteCodeSession).mock.calls[0]?.[1]).toBe("ses_code_older");
     });
   });
 

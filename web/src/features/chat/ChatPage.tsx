@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Send,
   ShieldAlert,
+  Trash2,
   Wifi,
   WifiOff,
   Wrench,
@@ -18,6 +19,7 @@ import {
 import {
   type FormEvent,
   type KeyboardEvent,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -80,6 +82,23 @@ export function ChatPage() {
       mounted.current = false;
     };
   }, [runtime, sessionId]);
+
+  const removeSession = useCallback(
+    async (target: string) => {
+      if (!window.confirm("删除这个会话？它的问答记录会一起消失。")) return;
+      try {
+        await runtime.removeSession(target);
+        setMobileSessionsOpen(false);
+        if (target === sessionId) await navigate("/chat");
+      } catch (cause: unknown) {
+        // Reported where the composer's own failures are reported. A delete
+        // that the server refused has to say so: the row is still there, and
+        // silence would read as a click that did nothing.
+        setSubmitError(cause instanceof Error ? cause.message : String(cause));
+      }
+    },
+    [navigate, runtime, sessionId],
+  );
 
   const selectedSessionId = selected?.sessionId;
   useEffect(() => {
@@ -251,24 +270,35 @@ export function ChatPage() {
               const session = state.sessions[id];
               if (session === undefined) return null;
               return (
-                <button
-                  aria-current={session.sessionId === sessionId ? "page" : undefined}
-                  className={`aw-chat-session ${session.sessionId === sessionId ? "is-active" : ""}`}
-                  key={session.sessionId}
-                  onClick={() => {
-                    setMobileSessionsOpen(false);
-                    void navigate(`/chat/${encodeURIComponent(session.sessionId)}`);
-                  }}
-                  type="button"
-                >
-                  <span className="aw-chat-session-copy">
-                    <strong>{session.title}</strong>
-                    <small>
-                      本地 · {formatTime(session.updatedAt)} · {shortId(session.sessionId)}
-                    </small>
-                  </span>
-                  <ChevronRight aria-hidden="true" size={15} />
-                </button>
+                <div className="aw-chat-session-row" key={session.sessionId}>
+                  <button
+                    aria-current={session.sessionId === sessionId ? "page" : undefined}
+                    className={`aw-chat-session ${session.sessionId === sessionId ? "is-active" : ""}`}
+                    onClick={() => {
+                      setMobileSessionsOpen(false);
+                      void navigate(`/chat/${encodeURIComponent(session.sessionId)}`);
+                    }}
+                    type="button"
+                  >
+                    <span className="aw-chat-session-copy">
+                      <strong>{session.title}</strong>
+                      <small>
+                        本地 · {formatTime(session.updatedAt)} ·{" "}
+                        {shortId(session.sessionId)}
+                      </small>
+                    </span>
+                    <ChevronRight aria-hidden="true" size={15} />
+                  </button>
+                  <button
+                    aria-label={`删除会话 ${session.title}`}
+                    className="aw-chat-session-delete"
+                    onClick={() => void removeSession(session.sessionId)}
+                    title="删除"
+                    type="button"
+                  >
+                    <Trash2 aria-hidden size={13} />
+                  </button>
+                </div>
               );
             })
           )}

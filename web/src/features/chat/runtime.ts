@@ -1,6 +1,7 @@
 import {
   ApiError,
   askChat,
+  deleteChatSession,
   getChatHistory,
   newIdempotencyKey,
 } from "../../api/client";
@@ -19,6 +20,7 @@ import {
 } from "./model";
 import { streamSession, type FrameAcceptance } from "../../api/sessionStream";
 import {
+  forgetChatCursor,
   identityStorageKey,
   loadChatCursor,
   loadLocalSessions,
@@ -105,6 +107,36 @@ export class ChatRuntime {
     lease.controller?.abort();
     lease.controller = null;
     this.ensureConnection(sessionId, lease);
+  }
+
+  /**
+   * Forget one conversation here, and on the server.
+   *
+   * Three things in a deliberate order. The stream is aborted first, because a
+   * frame that lands after the reducer has dropped the session would be
+   * applied to a session that no longer exists. The server is asked next, and
+   * its refusal is allowed to stop the whole thing -- a local list that forgot
+   * a conversation the server still holds is worse than one that failed to
+   * forget, because the second says so.
+   *
+   * The `404` is the exception. A session recorded in this browser but never
+   * created on the server -- opened, never asked -- has nothing to delete, and
+   * insisting on the server's agreement would make that row undeletable.
+   */
+  async removeSession(sessionId: string): Promise<void> {
+    const lease = this.connections.get(sessionId);
+    lease?.controller?.abort();
+    this.connections.delete(sessionId);
+
+    try {
+      await deleteChatSession(this.identity, sessionId);
+    } catch (error: unknown) {
+      if (!(error instanceof ApiError) || error.status !== 404) throw error;
+    }
+
+    forgetChatCursor(this.identity, sessionId);
+    this.dispatch({ type: "sessionRemoved", sessionId });
+    this.persistSessions();
   }
 
   startAsk(input: StartAskInput): string {
