@@ -105,38 +105,45 @@ export function CodePage() {
   const messages = loadedFor === sessionId ? loadedMessages : [];
   const files = loadedFor === sessionId ? loadedFiles : [];
 
-  const loadHistory = useCallback(
-    async (id: string, signal?: AbortSignal) => {
-      const history = await getCodeHistory(identity, id, signal);
-      setMessages(history.messages);
-      setLoadedFor(id);
-    },
-    [identity],
-  );
-
-  const loadWorkspace = useCallback(
-    async (id: string, signal?: AbortSignal) => {
-      const workspace = await getCodeWorkspace(identity, id, signal);
-      setFiles(workspace.files);
-      setLoadedFor(id);
-    },
+  //: Every setState here sits inside a `.then`, and that placement is load
+  //: bearing. This used to be two `async` callbacks that awaited a fetch and
+  //: then set state, which the effect below called; React's lint rule rejects
+  //: that, because it judges the *call* -- a function that sets state, invoked
+  //: from an effect body, is the cascading render it is looking for, and an
+  //: `await` inside the callee does not change what the call site looks like.
+  //: In a promise callback it is the same work with the same timing and the
+  //: shape the rule asks for.
+  //:
+  //: The two fetches keep their own `.then` rather than sharing one after
+  //: `Promise.all`, so that a workspace that fails to load still leaves the
+  //: transcript on screen, and the other way round. The combined promise is
+  //: only how the caller learns that something went wrong.
+  const reload = useCallback(
+    (id: string, signal?: AbortSignal) =>
+      Promise.all([
+        getCodeHistory(identity, id, signal).then((history) => {
+          setMessages(history.messages);
+          setLoadedFor(id);
+        }),
+        getCodeWorkspace(identity, id, signal).then((workspace) => {
+          setFiles(workspace.files);
+          setLoadedFor(id);
+        }),
+      ]),
     [identity],
   );
 
   useEffect(() => {
     if (sessionId === undefined) return;
     const controller = new AbortController();
-    Promise.all([
-      loadHistory(sessionId, controller.signal),
-      loadWorkspace(sessionId, controller.signal),
-    ]).catch((cause: unknown) => {
+    reload(sessionId, controller.signal).catch((cause: unknown) => {
       if (controller.signal.aborted) return;
       setError(describe(cause));
     });
     return () => {
       controller.abort();
     };
-  }, [loadHistory, loadWorkspace, sessionId]);
+  }, [reload, sessionId]);
 
   // Only while a turn is running. A poll that kept going would ask a question
   // nobody is waiting on the answer to, once a second, forever.
@@ -198,23 +205,14 @@ export function CodePage() {
       // the workspace pointer moves per write rather than at the end.
       if (sessionId !== undefined) {
         await Promise.all([
-          loadHistory(sessionId).catch(() => undefined),
-          loadWorkspace(sessionId).catch(() => undefined),
+          reload(sessionId).catch(() => undefined),
           // The first instruction is what names the session, and every
           // instruction moves it to the top of the list.
           queries.invalidateQueries({ queryKey: ["code-sessions", identity] }),
         ]);
       }
     }
-  }, [
-    identity,
-    instruction,
-    loadHistory,
-    loadWorkspace,
-    queries,
-    running,
-    sessionId,
-  ]);
+  }, [identity, instruction, queries, reload, running, sessionId]);
 
   const open = useCallback(
     async (file: WorkspaceEntryView) => {
