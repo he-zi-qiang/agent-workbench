@@ -5,7 +5,7 @@
       "name": "agent-api",
       "runtimeExecutable": "/bin/bash",
       "runtimeArgs": [
-        "/Users/heziqiang/Documents/Codex/2026-07-15/new-chat/agent-workbench/.claude/run-api.sh"
+        "/Users/heziqiang/agent工作台/.claude/run-api.sh"
       ],
       "port": 8000,
       "autoPort": false,
@@ -21,7 +21,7 @@
       "name": "agent-web",
       "runtimeExecutable": "/bin/bash",
       "runtimeArgs": [
-        "/Users/heziqiang/Documents/Codex/2026-07-15/new-chat/agent-workbench/.claude/run-web.sh"
+        "/Users/heziqiang/agent工作台/.claude/run-web.sh"
       ],
       "port": 5173,
       "autoPort": false,
