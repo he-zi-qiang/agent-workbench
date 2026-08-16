@@ -276,3 +276,41 @@ function text(value: unknown): string | null {
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
 }
+
+/**
+ * What a collapsed stage did, in one line.
+ *
+ * A stage that says "16 步" reports a quantity where a reader wants a fact. It
+ * is also the only thing on screen until they click: a finished run collapses
+ * to one row per stage, so "collect evidence, 16 steps" is the entire account
+ * of sixteen actions. Naming the actions -- "搜索网络 ×3 · 读取网页 ×12" -- costs
+ * the same line and answers the question the count only measures.
+ *
+ * Ordered by count, then by first appearance, so the line is stable across
+ * polls and the biggest thing leads. Truncated at three kinds, because past
+ * that it stops being a line and starts being the list it is standing in for.
+ */
+export function summariseGroups(groups: readonly StepGroup[]): string {
+  const counts = new Map<string, number>();
+  for (const group of groups) {
+    counts.set(group.title, (counts.get(group.title) ?? 0) + 1);
+  }
+  const kinds = [...counts.entries()];
+  if (kinds.length === 0) return "";
+
+  const ranked = kinds
+    .map(([title, count], index) => ({ title, count, index }))
+    .sort((left, right) =>
+      left.count === right.count
+        ? left.index - right.index
+        : right.count - left.count,
+    );
+  const shown = ranked.slice(0, 3);
+  // `×1` says nothing a title does not, and a row of them reads like a table.
+  const parts = shown.map(({ title, count }) =>
+    count === 1 ? title : `${title} ×${String(count)}`,
+  );
+  const hidden = ranked.length - shown.length;
+  if (hidden > 0) parts.push(`等 ${String(hidden)} 项`);
+  return parts.join(" · ");
+}

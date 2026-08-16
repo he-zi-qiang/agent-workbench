@@ -402,7 +402,13 @@ describe("WorkPage task submission", () => {
 
     // Opening the stage shows the *step*: one line naming what the agent did,
     // not the five lifecycle events it emitted doing it.
-    const folded = screen.getByText("搜索网络");
+    //
+    // Two elements carry these words now: the collapsed stage's digest, which
+    // is a preview of what is inside, and the step itself. The step is the one
+    // that opens, so it is the one this test wants -- `getAllByText` and the
+    // last match rather than `getByText`, which now finds both.
+    const matches = screen.getAllByText("搜索网络");
+    const folded = matches[matches.length - 1] as HTMLElement;
     expect(folded).toBeVisible();
 
     // And the events are still underneath it, one click further in. The fold
