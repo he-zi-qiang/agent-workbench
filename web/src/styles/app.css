@@ -4205,3 +4205,75 @@ pre {
   margin: 0 auto;
   border-top: 0;
 }
+
+/* A workspace row is a button now, so it has to stop looking like one. */
+.aw-code-file-open {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-code-file-open:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-file-open[aria-current="true"] {
+  background: var(--aw-panel-soft);
+  font-weight: 600;
+}
+
+/* The file itself, under the list rather than over it: the list is how you got
+   here and stays visible, which is what makes "open another one" one click. */
+.aw-code-file-view {
+  display: grid;
+  min-height: 0;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-code-file-view header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-code-file-view h3 {
+  overflow: hidden;
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `pre-wrap`, not `pre`: a generated file has no reason to have short lines,
+   and a horizontal scrollbar inside a 268px column is a pane you cannot read.
+   The vertical bound is the pane's, so a long file scrolls here and not the page. */
+.aw-code-file-view pre {
+  overflow: auto;
+  max-height: 40vh;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--aw-panel-soft);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

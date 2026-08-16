@@ -35,7 +35,9 @@ from agent_workbench.application.code_approvals import (
     CodeApprovalRegistry,
 )
 from agent_workbench.application.code_session import CodeRequest, CodeSessionService
+from agent_workbench.application.workspace import WorkspaceEntryNotFoundError
 from agent_workbench.apps.api.disconnects import watched
+from agent_workbench.apps.api.downloads import content_disposition
 from agent_workbench.apps.api.sse import resume_from, stream_events
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.errors import NotFoundError
@@ -253,6 +255,61 @@ async def workspace(session_id: str, request: Request) -> WorkspaceResponse:
             )
             for entry in entries
         )
+    )
+
+
+@router.get("/sessions/{session_id}/workspace/{name}")
+async def workspace_file(
+    session_id: str, name: str, request: Request
+) -> StreamingResponse:
+    """One file out of the working set, by the name the session knows it under.
+
+    The bytes, unconditionally, with no ``?preview=`` or ``?disposition=``
+    beside them. A mode flag would be a second behaviour to authorize on a path
+    whose whole safety argument is that there is one; the console previews text
+    by fetching this and reading the body, which is what it already does for an
+    artifact. ``routes/artifacts.py``'s preview endpoint makes the same
+    argument from the other side -- it exists only because .docx cannot be read
+    by fetching it.
+
+    The name is a path segment rather than a query parameter because
+    ``WorkspaceName`` forbids separators: a name containing one matches no
+    route, which is the same 404 as a name the manifest does not bind.
+
+    Every store call happens before the response object exists. ``iter_chunks``
+    is deliberately not ``async def`` (see the ``ArtifactStore`` port) so that
+    its authorization runs here, while the status code can still change -- a
+    refusal discovered mid-body is a 200 that stops, which a client cannot tell
+    from a dropped connection.
+    """
+
+    principal = dependencies_of(request).principals.resolve(request)
+    try:
+        entry, chunks = await _code(request).open_workspace_file(
+            session_id=session_id,
+            tenant_id=principal.tenant_id,
+            principal_id=principal.principal_id,
+            name=name,
+        )
+    except WorkspaceEntryNotFoundError as missing:
+        # Translated rather than left to escape. It is a `KeyError`, so an
+        # unhandled one is a 500 -- and a 500 would distinguish "no such file
+        # in a session you own" from "no such session", which is exactly the
+        # distinction every other refusal on this router refuses to draw.
+        raise NotFoundError("workspace entry not found") from missing
+
+    # Straight off the manifest entry, with no `head()` first: the entry already
+    # carries what the headers need, and the entry is what the name resolved to.
+    # Describing the response from anything else would let the headers and the
+    # body disagree about which version this name was read at.
+    return StreamingResponse(
+        chunks,
+        media_type=entry.media_type,
+        headers={
+            "content-disposition": content_disposition(entry.filename or name),
+            "content-length": str(entry.size_bytes),
+            "x-artifact-sha256": entry.sha256,
+        },
     )
 
 

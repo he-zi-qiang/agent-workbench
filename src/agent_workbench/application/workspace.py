@@ -96,11 +96,30 @@ class Workspace:
             for name in manifest.names()
         )
 
-    async def read(self, version: Identifier | None, name: str) -> bytes:
+    async def locate(self, version: Identifier | None, name: str) -> ArtifactRef:
+        """What this name binds at this version, without moving any bytes.
+
+        Split out of :meth:`read` for the one caller that must not buffer: an
+        HTTP download streams, and streaming needs the reference -- its id to
+        open the stream with, and its media type, length and checksum to answer
+        with -- rather than the content. Everything the response says about the
+        file therefore comes from the manifest entry the name resolved to, so
+        the headers and the bytes cannot describe two different things.
+
+        A name is still resolved against the manifest at ``version``, which is
+        the whole reason a workspace entry has no stable public address: the
+        same name is a different artifact at a different version, and only the
+        session row knows which version this caller is at.
+        """
+
         manifest = await self.load(version)
         entry = manifest.entries.get(name)
         if entry is None:
             raise WorkspaceEntryNotFoundError(name)
+        return entry
+
+    async def read(self, version: Identifier | None, name: str) -> bytes:
+        entry = await self.locate(version, name)
         return await self.artifacts.get(
             tenant_id=self.tenant_id,
             artifact_id=entry.artifact_id,

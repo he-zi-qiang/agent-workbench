@@ -38,7 +38,7 @@ minutes-long turn is a queue nobody can reason about the length of.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -52,6 +52,7 @@ from agent_workbench.application.workspace import (
     WorkspaceSession,
 )
 from agent_workbench.application.workspace_scope import WorkspaceScope
+from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.messages import Message, assistant_message, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
@@ -204,6 +205,48 @@ class CodeSessionService:
             tenant_id=tenant_id,
             principal_id=principal_id,
         ).list(session.workspace_version)
+
+    async def open_workspace_file(
+        self, *, session_id: str, tenant_id: str, principal_id: str, name: str
+    ) -> tuple[ArtifactRef, AsyncIterator[bytes]]:
+        """One of this session's files: what it is, and a stream of its bytes.
+
+        Both together, from one store, on purpose. The caller needs the
+        reference for its headers and the stream for its body, and the first
+        shape this had returned only the reference -- leaving the route to
+        stream from `dependencies.artifacts`, a *second* handle to what must be
+        the same store. Nothing guaranteed it was: the API's test harness
+        builds exactly that world by accident, which is evidence enough that
+        production could. Two handles means headers describing a file from one
+        store and bytes arriving from another.
+
+        The artifact id never leaves this process. It is what the listing
+        deliberately withholds; a client holding one could address a version
+        this session has already moved past.
+
+        `iter_chunks` is called here rather than awaited later because it is
+        deliberately not `async def` (see the `ArtifactStore` port): its
+        authorization runs at call time, so a refusal happens while the caller
+        can still choose a status code.
+        """
+
+        session = await self.conversations.session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="code",
+        )
+        entry = await Workspace(
+            artifacts=self.artifacts,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        ).locate(session.workspace_version, name)
+        chunks = self.artifacts.iter_chunks(
+            tenant_id=tenant_id,
+            artifact_id=entry.artifact_id,
+            principal_id=principal_id,
+        )
+        return entry, chunks
 
     async def ask(
         self,

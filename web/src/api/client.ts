@@ -587,14 +587,27 @@ export async function downloadArtifact(
     headers: identityHeaders(identity),
   });
   if (!response.ok) throw await parseError(response);
-  const blob = await response.blob();
+  saveBlob(
+    await response.blob(),
+    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
+      (typeof target === "string" ? null : safeDownloadFilename(target.filename)) ??
+      defaultArtifactFilename(response.headers.get("content-type")),
+  );
+}
+
+/**
+ * Hand a blob to the browser as a file to keep.
+ *
+ * One copy of the anchor dance, because there are now two callers and the part
+ * that is easy to get subtly wrong is the same in both: the object URL has to
+ * be revoked, and forgetting it leaks the whole file for as long as the tab
+ * lives -- which for a workspace of generated documents is not a rounding error.
+ */
+function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download =
-    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
-    (typeof target === "string" ? null : safeDownloadFilename(target.filename)) ??
-    defaultArtifactFilename(response.headers.get("content-type"));
+  anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -812,3 +825,61 @@ export async function getArtifactJson<T>(
 }
 
 export { identityHeaders };
+
+/**
+ * One file out of a coding session's working set.
+ *
+ * Addressed by session and name rather than by artifact id, because that is the
+ * only address a client has: the listing withholds the id on purpose, so that
+ * nothing in a browser can name a version the session has already moved past.
+ */
+export async function downloadCodeWorkspaceFile(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  name: string,
+): Promise<void> {
+  const response = await fetchCodeWorkspaceFile(identity, sessionId, name);
+  saveBlob(
+    await response.blob(),
+    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
+      safeDownloadFilename(name) ??
+      defaultArtifactFilename(response.headers.get("content-type")),
+  );
+}
+
+/**
+ * The same file, as text to show rather than as a file to keep.
+ *
+ * Capped at the same size the artifact preview is capped at, and truncated
+ * rather than refused: a reader looking at the head of a large generated file
+ * is better served than one told the file is too big to look at.
+ */
+export async function getCodeWorkspaceFileText(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  name: string,
+): Promise<{ text: string; truncated: boolean }> {
+  const blob = await (await fetchCodeWorkspaceFile(identity, sessionId, name)).blob();
+  if (blob.size > MAX_PREVIEW_BYTES) {
+    return { text: await blob.slice(0, MAX_PREVIEW_BYTES).text(), truncated: true };
+  }
+  return { text: await blob.text(), truncated: false };
+}
+
+function fetchCodeWorkspaceFile(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  name: string,
+): Promise<Response> {
+  // Each segment encoded separately. A workspace name cannot contain a slash --
+  // the server's own type forbids it -- so encoding the whole tail as one piece
+  // would only differ for names that are already impossible, while leaving a
+  // reader unsure which rule is doing the work.
+  return fetch(
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(name)}`,
+    { headers: identityHeaders(identity) },
+  ).then(async (response) => {
+    if (!response.ok) throw await parseError(response);
+    return response;
+  });
+}

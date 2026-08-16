@@ -18,7 +18,6 @@ that stops partway, which is indistinguishable from a network failure.
 from __future__ import annotations
 
 from typing import Final
-from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -32,6 +31,7 @@ from agent_workbench.adapters.documents.fidelity import (
     LayoutUnavailableError,
     render_docx_to_pdf,
 )
+from agent_workbench.apps.api.downloads import content_disposition
 from agent_workbench.apps.api.state import dependencies_of
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
@@ -81,23 +81,6 @@ class DocumentPreview(BaseModel):
     flattened_paragraph_count: int
 
 
-def _content_disposition(filename: str | None) -> str:
-    """Encode display metadata without letting it become response syntax."""
-
-    resolved = filename or "artifact"
-    fallback = "".join(
-        character
-        if character.isascii()
-        and (character.isalnum() or character in {".", "_", "-", " "})
-        else "_"
-        for character in resolved
-    ).strip(" .")
-    if not fallback or fallback in {".", ".."}:
-        fallback = "artifact"
-    encoded = quote(resolved, safe="")
-    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
-
-
 @router.get("/{artifact_id}")
 async def download(artifact_id: str, request: Request) -> StreamingResponse:
     dependencies = dependencies_of(request)
@@ -117,7 +100,7 @@ async def download(artifact_id: str, request: Request) -> StreamingResponse:
         chunks,
         media_type=described.media_type,
         headers={
-            "content-disposition": _content_disposition(described.filename),
+            "content-disposition": content_disposition(described.filename),
             "content-length": str(described.size_bytes),
             "x-artifact-sha256": described.sha256,
         },

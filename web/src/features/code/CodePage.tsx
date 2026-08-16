@@ -22,9 +22,11 @@ import {
   askCode,
   createCodeSession,
   decideCodeApproval,
+  downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
   getCodeWorkspace,
+  getCodeWorkspaceFileText,
   newIdempotencyKey,
 } from "../../api/client";
 import type {
@@ -34,6 +36,7 @@ import type {
   WorkspaceEntryView,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
+import { isReadableMedia } from "../../components/media";
 import { EmptyState, ErrorNotice, LoadingLine } from "../../components/ui";
 import { eventTitle } from "../work/workTimeline";
 import {
@@ -68,6 +71,7 @@ export function CodePage() {
   const [error, setError] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<PendingApprovalView[]>([]);
   const [opening, setOpening] = useState(false);
+  const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [known, setKnown] = useState<LocalCodeSession[]>([]);
 
   const steps = useCodeStream(identity, sessionId, running);
@@ -103,6 +107,7 @@ export function CodePage() {
   }, [identity, sessionId]);
 
   useEffect(() => {
+    setOpened(null);
     if (sessionId === undefined) {
       setMessages([]);
       setFiles([]);
@@ -189,6 +194,38 @@ export function CodePage() {
       }
     }
   }, [identity, instruction, loadHistory, loadWorkspace, running, sessionId]);
+
+  const open = useCallback(
+    async (file: WorkspaceEntryView) => {
+      if (sessionId === undefined) return;
+      const readable = isReadableMedia(file.media_type);
+      // Shown before the fetch resolves, so a large file does not look like a
+      // click that did nothing. A type that cannot be shown skips the fetch
+      // entirely rather than downloading bytes to decide not to render them.
+      setOpened({
+        sessionId,
+        name: file.name,
+        loading: readable,
+        text: null,
+        truncated: false,
+      });
+      if (!readable) return;
+      try {
+        const body = await getCodeWorkspaceFileText(identity, sessionId, file.name);
+        setOpened((current) =>
+          // A second click while the first read was in flight wins. Without
+          // this the slower fetch would land last and show the wrong file.
+          current?.name === file.name && current.sessionId === sessionId
+            ? { ...current, loading: false, ...body }
+            : current,
+        );
+      } catch (cause: unknown) {
+        setOpened(null);
+        setError(describe(cause));
+      }
+    },
+    [identity, sessionId],
+  );
 
   const decide = useCallback(
     async (approvalId: string, decision: ApprovalDecision) => {
@@ -382,17 +419,71 @@ export function CodePage() {
           <ul>
             {files.map((file) => (
               <li key={file.name}>
-                <span className="aw-code-file-name">{file.name}</span>
-                <span className="aw-code-value">{formatSize(file.size_bytes)}</span>
+                <button
+                  aria-current={file.name === opened?.name ? "true" : undefined}
+                  className="aw-code-file-open"
+                  onClick={() => void open(file)}
+                  type="button"
+                >
+                  <span className="aw-code-file-name">{file.name}</span>
+                  <span className="aw-code-value">{formatSize(file.size_bytes)}</span>
+                </button>
               </li>
             ))}
           </ul>
+        )}
+        {opened === null ? null : (
+          <section aria-label={`文件 ${opened.name}`} className="aw-code-file-view">
+            <header>
+              <h3>{opened.name}</h3>
+              <button
+                className="aw-button"
+                onClick={() => {
+                  void downloadCodeWorkspaceFile(identity, opened.sessionId, opened.name)
+                    .catch((cause: unknown) => {
+                      setError(describe(cause));
+                    });
+                }}
+                type="button"
+              >
+                下载
+              </button>
+            </header>
+            {opened.text === null ? (
+              <p className="aw-code-value">
+                {opened.loading ? "正在读取" : "这个类型只能下载。"}
+              </p>
+            ) : (
+              <>
+                <pre>{opened.text}</pre>
+                {opened.truncated ? (
+                  <p className="aw-code-value">只显示了开头一部分，完整内容请下载。</p>
+                ) : null}
+              </>
+            )}
+          </section>
         )}
       </aside>
         {sessionList}
       </div>
     </div>
   );
+}
+
+/**
+ * The file the reader has open, and what could be shown of it.
+ *
+ * `sessionId` is carried rather than read from the URL at download time: the
+ * two are the same until the reader switches sessions with the viewer open, and
+ * then they are not -- which would download one session's name against
+ * another's working set and answer 404 for a file the reader can see.
+ */
+interface OpenedFile {
+  sessionId: string;
+  name: string;
+  loading: boolean;
+  text: string | null;
+  truncated: boolean;
 }
 
 function formatSize(bytes: number): string {

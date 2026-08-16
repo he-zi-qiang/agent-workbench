@@ -5,13 +5,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askCode,
   decideCodeApproval,
+  downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
   getCodeWorkspace,
+  getCodeWorkspaceFileText,
 } from "../../api/client";
 import type { PrincipalIdentity } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { CodePage } from "./CodePage";
+import { DOCX_MEDIA_TYPE } from "../../components/media";
 import { rememberCodeSession } from "./storage";
 import { useCodeStream } from "./useCodeStream";
 
@@ -22,6 +25,10 @@ vi.mock("../../api/client", () => ({
   getCodeApprovals: vi.fn(() => Promise.resolve({ approvals: [] })),
   getCodeHistory: vi.fn(() => Promise.resolve({ messages: [] })),
   getCodeWorkspace: vi.fn(() => Promise.resolve({ files: [] })),
+  getCodeWorkspaceFileText: vi.fn(() =>
+    Promise.resolve({ text: "", truncated: false }),
+  ),
+  downloadCodeWorkspaceFile: vi.fn(() => Promise.resolve()),
   newIdempotencyKey: vi.fn(() => "code-1"),
 }));
 
@@ -71,6 +78,11 @@ beforeEach(() => {
   vi.mocked(getCodeHistory).mockResolvedValue({ messages: [] });
   vi.mocked(getCodeApprovals).mockResolvedValue({ approvals: [] });
   vi.mocked(getCodeWorkspace).mockResolvedValue({ files: [] });
+  vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+    text: "",
+    truncated: false,
+  });
+  vi.mocked(downloadCodeWorkspaceFile).mockResolvedValue(undefined);
   vi.mocked(useCodeStream).mockReturnValue([]);
 });
 
@@ -316,5 +328,68 @@ describe("CodePage", () => {
     // out session ids as files.
     expect(within(pane).getAllByRole("listitem")).toHaveLength(1);
     expect(within(pane).queryByText("code_old")).not.toBeInTheDocument();
+  });
+
+  it("shows what a text file holds, without spending a turn to ask", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "notes.md", size_bytes: 12, media_type: "text/markdown" }],
+    });
+    vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+      text: "- ship it",
+      truncated: false,
+    });
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /notes\.md/ }));
+
+    // Before this the only way to see a file was to ask the agent to read it
+    // back -- a model call to answer a question the store already knows.
+    expect(await screen.findByText("- ship it")).toBeInTheDocument();
+    expect(vi.mocked(getCodeWorkspaceFileText).mock.calls[0]?.slice(1)).toEqual([
+      SESSION,
+      "notes.md",
+    ]);
+  });
+
+  it("offers a download for a type it cannot show, and does not fetch it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "report.docx", size_bytes: 4096, media_type: DOCX_MEDIA_TYPE }],
+    });
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /report\.docx/ }));
+
+    expect(await screen.findByText("这个类型只能下载。")).toBeInTheDocument();
+    // Not fetched at all: reading a zip as text would render mojibake, and
+    // downloading the bytes only to decide not to show them wastes the transfer.
+    expect(vi.mocked(getCodeWorkspaceFileText)).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "下载" }));
+    expect(vi.mocked(downloadCodeWorkspaceFile).mock.calls[0]?.slice(1)).toEqual([
+      SESSION,
+      "report.docx",
+    ]);
+  });
+
+  it("says a long file was cut rather than implying that is all of it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "big.txt", size_bytes: 999_999, media_type: "text/plain" }],
+    });
+    vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+      text: "head of it",
+      truncated: true,
+    });
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /big\.txt/ }));
+
+    // A truncated preview that said nothing would read as a complete file, and
+    // the reader would go looking for content that is in the file but not here.
+    expect(
+      await screen.findByText("只显示了开头一部分，完整内容请下载。"),
+    ).toBeInTheDocument();
   });
 });

@@ -28,8 +28,8 @@ from agent_workbench.apps.api.dependencies import (
     InsecureDeploymentError,
     build_dependencies,
 )
+from agent_workbench.apps.api.downloads import content_disposition
 from agent_workbench.apps.api.main import build_app, create_app
-from agent_workbench.apps.api.routes.artifacts import _content_disposition
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
 from agent_workbench.bootstrap.settings import Settings
@@ -360,7 +360,7 @@ def test_the_owner_can_download_what_was_stored(tmp_path: Path) -> None:
 
 
 def test_download_filename_is_encoded_as_metadata_not_header_syntax() -> None:
-    header = _content_disposition('总结"; filename=attacker.docx')
+    header = content_disposition('总结"; filename=attacker.docx')
 
     assert header.startswith('attachment; filename="')
     assert 'filename="attacker.docx"' not in header

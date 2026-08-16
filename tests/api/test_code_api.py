@@ -825,3 +825,157 @@ def test_a_process_that_was_not_asked_for_code_stays_quiet(
     assert not any(
         "code.enabled is true" in record.message for record in caplog.records
     )
+
+
+def test_a_workspace_file_can_be_read_back_by_name() -> None:
+    """The product of a coding session, as bytes rather than as a row."""
+
+    world = _World()
+    world.executor = _Writing(world.scope)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, bytes, str, str]:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        read = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace/notes.md",
+            headers=HEADERS,
+        )
+        return (
+            read.status_code,
+            read.content,
+            read.headers["content-type"],
+            read.headers["content-disposition"],
+        )
+
+    status, body, media_type, disposition = _run(world, scenario)
+
+    assert status == 200
+    assert body == b"- ship it\n"
+    # From the manifest entry the name resolved to, not from a second lookup:
+    # headers and body have to describe the same version of the same file.
+    assert media_type.startswith("text/markdown")
+    assert "notes.md" in disposition
+
+
+def test_a_name_the_workspace_does_not_bind_is_not_found() -> None:
+    """A `KeyError` escaping here would be a 500, and a 500 is an answer."""
+
+    world = _World()
+    world.executor = _Writing(world.scope)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        missing = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace/absent.md",
+            headers=HEADERS,
+        )
+        # The control. Without it, a route that answered 404 for everything --
+        # including the file that exists -- would pass the assertion above.
+        present = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace/notes.md",
+            headers=HEADERS,
+        )
+        return missing.status_code, present.status_code
+
+    assert _run(world, scenario) == (404, 200)
+
+
+def test_another_principal_cannot_download_the_working_set() -> None:
+    """The files are the product, so this is the read that would leak the work."""
+
+    owner_world = _World()
+    owner_world.executor = _Writing(owner_world.scope)
+
+    async def write_one(client: httpx.AsyncClient) -> str:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        return session_id
+
+    session_id = _run(owner_world, write_one)
+
+    world = _World(principal=NEIGHBOUR_PRINCIPAL)
+    # Both stores, so the refusal is the session gate rather than a neighbour
+    # who would have found nothing in an empty store anyway.
+    world.service.conversations = owner_world.conversations
+    world.service.artifacts = owner_world.service.artifacts
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        read = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace/notes.md",
+            headers=HEADERS,
+        )
+        return read.status_code
+
+    assert _run(world, scenario) == 404
+
+
+def test_a_chat_session_has_no_workspace_file_to_hand_over() -> None:
+    """The same mode gate the listing is behind, on the endpoint that moves bytes.
+
+    The chat session is given a working set that really does bind the name --
+    the very manifest a code session just produced, pointed at by the same
+    owner. Without that setup this test passes for the wrong reason: a chat
+    session's workspace is empty, so `locate` refuses on the missing name and
+    the mode is never consulted. Removing the mode gate then leaves it green,
+    which is exactly what happened the first time it was written.
+    """
+
+    world = _World()
+    world.executor = _Writing(world.scope)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
+        created = await _opened(client)
+        code_session = created.json()["session_id"]
+        await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{code_session}/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        written = await world.conversations.session(
+            session_id=code_session,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            mode="code",
+        )
+        assert written.workspace_version is not None
+
+        await world.conversations.create_session(
+            session_id="ses_chat_1", tenant_id=TENANT, owner_id=OWNER
+        )
+        await world.conversations.advance_workspace_version(
+            session_id="ses_chat_1",
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            expected=None,
+            next_version=written.workspace_version,
+        )
+
+        refused = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/ses_chat_1/workspace/notes.md",
+            headers=HEADERS,
+        )
+        # The control. The same bytes, the same owner, the same manifest -- so
+        # the only thing that can separate these two answers is the mode.
+        served = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{code_session}/workspace/notes.md",
+            headers=HEADERS,
+        )
+        return refused.status_code, served.status_code
+
+    assert _run(world, scenario) == (404, 200)
