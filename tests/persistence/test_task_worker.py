@@ -209,13 +209,14 @@ def test_a_worker_takes_a_submitted_task_all_the_way_to_succeeded() -> None:
     assert count == 2
 
 
-def test_a_worker_records_an_exhausted_critic_rejection_as_failed() -> None:
-    """An empty checkpoint queue is not sufficient evidence of success.
+def test_an_exhausted_critic_rejection_settles_succeeded_with_the_caveat() -> None:
+    """ADR-060, end to end against real PostgreSQL and a real checkpoint.
 
-    The graph reaches ``END`` after its quality gate rejects the final allowed
-    revision.  The durable checkpoint carries that terminal meaning, and a
-    fresh reconciliation must therefore call ``mark_failed`` rather than
-    ``mark_succeeded``.
+    The graph reaches ``END`` after its quality gate runs out of revisions
+    with the critic still asking for changes. That used to settle ``failed``;
+    now the durable checkpoint carries the unanswered review, and a fresh
+    reconciliation must deliver it to ``mark_succeeded(detail=...)`` -- the
+    row is where the console reads what the work shipped with.
     """
 
     async def exhausted_state(task: TaskRun) -> TaskState:
@@ -263,9 +264,11 @@ def test_a_worker_records_an_exhausted_critic_rejection_as_failed() -> None:
 
     status, detail, actions = _run(scenario)
 
-    assert status == "failed"
-    assert detail is not None and "revision budget" in detail
-    assert actions == ["start", "settle_failed"]
+    assert status == "succeeded"
+    # The caveat names the standing dispute, down to the reviewer's own issue.
+    assert detail is not None and "unresolved" in detail
+    assert "Add evidence." in detail
+    assert actions == ["start", "settle_succeeded"]
 
 
 def test_a_worker_with_nothing_queued_does_nothing() -> None:
