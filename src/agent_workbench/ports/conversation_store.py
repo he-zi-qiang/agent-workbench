@@ -469,6 +469,32 @@ class ConversationStore(Protocol):
         """
         ...
 
+    async def delete_session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode | None = None,
+    ) -> None:
+        """Remove one session and everything that belonged only to it.
+
+        The whole stream or none of it (ADR-056). Messages, turns, and the
+        session's own event stream go together; what stays is anything a
+        *second* thing also points at -- which today means the workspace
+        artifacts, unreachable afterwards rather than deleted, exactly as an
+        overwritten workspace version already is.
+
+        Raises :class:`NotFoundError` on the same three-axis miss as every read
+        here, so "not yours" and "not there" stay one answer. Raises
+        :class:`ChatTurnBusyError` when a turn is still running: that turn holds
+        a coroutine which is about to write, and deleting the session out from
+        under it would leave the write with nowhere to land. The same error the
+        second concurrent turn gets, because it is the same fact -- this session
+        is busy -- and it already answers 409.
+        """
+        ...
+
     async def advance_workspace_version(
         self,
         *,

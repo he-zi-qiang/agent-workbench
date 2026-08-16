@@ -19,8 +19,10 @@ application registers no chat route rather than one that cannot answer.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import AsyncExitStack
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,6 +34,7 @@ from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.evaluation import SubprocessEvaluationLauncher
 from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
+from agent_workbench.adapters.mcp.client import connect_mcp_client
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
     PostgresApprovalStore,
@@ -51,6 +54,7 @@ from agent_workbench.adapters.tools.knowledge_search import (
     TOOL_NAME as KNOWLEDGE_SEARCH,
 )
 from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
+from agent_workbench.adapters.tools.sandbox import SandboxRunTool
 from agent_workbench.adapters.tools.web_search import (
     TOOL_NAME as WEB_SEARCH_TOOL_NAME,
 )
@@ -87,7 +91,11 @@ from agent_workbench.application.code_approvals import (
     ApprovalScope,
     CodeApprovalRegistry,
 )
-from agent_workbench.application.code_session import CodeSessionService
+from agent_workbench.application.code_session import (
+    CODE_TOOLS,
+    CODE_TOOLS_WITH_SANDBOX,
+    CodeSessionService,
+)
 from agent_workbench.application.evaluation import EvaluationService
 from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.application.retrieval import RetrievalService
@@ -108,7 +116,11 @@ from agent_workbench.bootstrap.model_factory import (
     build_model,
 )
 from agent_workbench.bootstrap.network import is_loopback_bind_address
-from agent_workbench.bootstrap.projections import ApiRuntimeConfig, ResearchConfig
+from agent_workbench.bootstrap.projections import (
+    ApiRuntimeConfig,
+    ResearchConfig,
+    SandboxConfig,
+)
 from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
 from agent_workbench.bootstrap.reranker_factory import (
     RerankerUnavailable,
@@ -124,6 +136,7 @@ from agent_workbench.bootstrap.telemetry_factory import (
     build_telemetry,
 )
 from agent_workbench.domain.runs import RunBudget
+from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.documents import DocumentStore
@@ -135,6 +148,81 @@ from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 
 class InsecureDeploymentError(RuntimeError):
     """A deployment asked to serve remotely without a real identity provider."""
+
+
+class SandboxUnavailableError(RuntimeError):
+    """Code was configured to run code, and the sandbox did not answer."""
+
+
+@dataclass(slots=True)
+class SandboxSlot:
+    """The sandbox connection, opened after the rest of the process is built.
+
+    Mutable on purpose, and the only mutable thing in an assembly of frozen
+    dataclasses. The reason is a lifecycle mismatch rather than a preference:
+    connecting to an MCP server is asynchronous, ``build_dependencies`` is not,
+    and making it so would rewrite thirty-odd call sites to answer a question
+    only one of them asks.
+
+    **Fail-fast, unlike the Task Worker's equivalent.** ``composition.py``
+    registers nothing and starts anyway when its probe fails, because a Worker
+    runs unattended and a deployment with one fewer capability still runs
+    Tasks. This process is the opposite case: it is loopback, interactive, and
+    its coding sessions were told in configuration that they may run code. A
+    session that opens, offers the tool and fails per call is the arrangement
+    ADR-057 §3 refused -- so this raises, and the operator hears it once, at
+    boot, with the command that fixes it.
+    """
+
+    config: SandboxConfig | None
+    bindings: list[ToolBinding] = field(default_factory=list[ToolBinding])
+    _resources: AsyncExitStack | None = None
+
+    async def open(self, *, scope: WorkspaceScope) -> None:
+        """Connect, probe, and register -- or raise saying why not."""
+
+        if self.config is None:
+            return
+
+        resources = AsyncExitStack()
+        try:
+            async with asyncio.timeout(self.config.timeout_seconds):
+                client = await resources.enter_async_context(
+                    connect_mcp_client(
+                        self.config.endpoint,
+                        timeout_seconds=self.config.timeout_seconds,
+                    )
+                )
+                # A real call, not a health read. What has to be true is that
+                # this process can start a container and get a result back, and
+                # a socket that accepts is evidence of neither. One container
+                # start at boot (ADR-029 §3.6).
+                probe = await client.call_tool(SANDBOX_REMOTE_TOOL, {"script": "pass"})
+        except Exception as error:
+            await resources.aclose()
+            raise SandboxUnavailableError(
+                f"code.sandbox_enabled is on and the sandbox at "
+                f"{self.config.endpoint} did not answer "
+                f"({type(error).__name__}); start it with "
+                f"'scripts/dev.sh sandbox-server', or turn the setting off"
+            ) from error
+        if probe.is_error:
+            await resources.aclose()
+            # The server answered and the container runtime did not. A distinct
+            # message because the fix is a different one.
+            raise SandboxUnavailableError(
+                f"the sandbox at {self.config.endpoint} answered but could not "
+                f"run anything; is a container runtime available?"
+            )
+
+        self._resources = resources
+        self.bindings.append(SandboxRunTool(scope=scope, client=client).binding())
+
+    async def aclose(self) -> None:
+        if self._resources is not None:
+            await self._resources.aclose()
+            self._resources = None
+        self.bindings.clear()
 
 
 class RerankerRequiredError(RuntimeError):
@@ -215,6 +303,11 @@ class ApiDependencies:
     #: because a decision arrives on a different request from the turn waiting
     #: for it, and the two have to meet somewhere that outlives both.
     code_approvals: CodeApprovalRegistry | None = None
+    #: The sandbox connection, empty until `startup` fills it. See `SandboxSlot`
+    #: for why one mutable object exists among these frozen ones.
+    code_sandbox: SandboxSlot | None = None
+    #: The workspace `SandboxSlot.open` binds the tool to.
+    code_scope: WorkspaceScope | None = None
     #: Always present. Reading reports needs nothing this process might lack;
     #: only *starting* a run is gated, and that gate lives inside the service so
     #: that a deployment which cannot run one still answers with the command.
@@ -319,6 +412,11 @@ class ApiDependencies:
             await self.code.drain_cleanup(
                 timeout_seconds=self.config.shutdown_grace_seconds
             )
+        # After the turns have drained, because a turn still running may be
+        # inside a `sandbox_run` -- closing the client under it would turn an
+        # orderly shutdown into a tool error in somebody's transcript.
+        if self.code_sandbox is not None:
+            await self.code_sandbox.aclose()
         if self.http is not None:
             await self.http.aclose()
         if self.qdrant is not None:
@@ -328,6 +426,11 @@ class ApiDependencies:
     async def startup(self) -> None:
         """Check the Qdrant read path, and warm the encoders, before serving."""
 
+        # First, because it is the cheapest refusal and the loudest one. A
+        # deployment that asked for `sandbox_run` and cannot have it should
+        # hear so before it spends forty seconds warming encoders.
+        if self.code_sandbox is not None and self.code_scope is not None:
+            await self.code_sandbox.open(scope=self.code_scope)
         if self.qdrant is not None:
             await verify_qdrant_startup(
                 self.qdrant,
@@ -412,7 +515,17 @@ def build_dependencies(
         ),
     )
     task_inputs = TaskInputService(
-        inputs=TaskInputStore(artifacts),
+        # Passed here even though this process only ever calls `store()`. The
+        # field is read by `load_state`, so leaving it out costs nothing today
+        # and silently answers `True` -- the dataclass default, which exists for
+        # checkpoints older than the field rather than for a live deployment --
+        # the first time anything in the API loads a Task's state. The Worker
+        # already passes it; two constructions of the same store disagreeing
+        # about a deployment setting is the shape of bug worth not having.
+        inputs=TaskInputStore(
+            artifacts,
+            export_requires_approval=config.task.export_requires_approval,
+        ),
         tasks=task_service,
     )
 
@@ -436,6 +549,8 @@ def build_dependencies(
     chat = assembled.chat
     code = assembled.code
     code_approvals = assembled.code_approvals
+    code_sandbox = assembled.code_sandbox
+    code_scope = assembled.code_scope
     unavailable = assembled.chat_unavailable
     http = assembled.http
     qdrant = assembled.qdrant
@@ -503,6 +618,8 @@ def build_dependencies(
         triage=triage,
         code=code,
         code_approvals=code_approvals,
+        code_sandbox=code_sandbox,
+        code_scope=code_scope,
         # Built unconditionally. The launcher is harmless until asked to start
         # something, and `runs_enabled` is what decides whether it ever is --
         # held in the service rather than here so that a disabled deployment
@@ -546,6 +663,12 @@ class _AssembledChat:
     #: connection pools and two things for `dispose` to remember.
     code: CodeSessionService | None = None
     code_approvals: CodeApprovalRegistry | None = None
+    #: Filled by `startup`, not here. See `SandboxSlot`.
+    code_sandbox: SandboxSlot | None = None
+    #: The workspace the sandbox tool reads inputs from and writes outputs to.
+    #: Carried alongside the slot because `open` needs it and the slot is
+    #: created before anything has a workspace to give it.
+    code_scope: WorkspaceScope | None = None
 
 
 def _assemble_chat(
@@ -949,17 +1072,29 @@ def _assemble_chat(
     )
     code_scope = WorkspaceScope()
     code_approvals = CodeApprovalRegistry()
-    code_registry = StaticToolRegistry(
-        [
-            WorkspaceListTool(code_scope).binding(),
-            WorkspaceReadTool(code_scope).binding(),
-            WorkspaceWriteTool(code_scope).binding(),
-            WorkspaceEditTool(code_scope).binding(),
-            WorkspaceGrepTool(code_scope).binding(),
-        ]
-    )
+    code_workspace_bindings = [
+        WorkspaceListTool(code_scope).binding(),
+        WorkspaceReadTool(code_scope).binding(),
+        WorkspaceWriteTool(code_scope).binding(),
+        WorkspaceEditTool(code_scope).binding(),
+        WorkspaceGrepTool(code_scope).binding(),
+    ]
+    # The one thing about a coding session that cannot be decided here.
+    # Everything else this process needs is built synchronously, and the
+    # sandbox needs an MCP connection -- the API has never held one, and
+    # `build_dependencies` is called from thirty-odd synchronous call sites.
+    # So the slot is created empty and filled by `startup`, which is async and
+    # runs before the first request.
+    code_sandbox = SandboxSlot(config=config.sandbox)
 
     def _code_runtime(scope: ApprovalScope) -> ClaudeLikeAgentRuntime:
+        # Built per turn from the slot rather than once from a fixed list,
+        # which is what lets `startup` add the sandbox after this closure was
+        # created. A turn already pays for a fresh gateway; a registry over six
+        # bindings is the same order of nothing.
+        code_registry = StaticToolRegistry(
+            [*code_workspace_bindings, *code_sandbox.bindings]
+        )
         return ClaudeLikeAgentRuntime(
             model=model,
             gateway=ToolGateway(
@@ -996,6 +1131,14 @@ def _assemble_chat(
             turn_timeout_seconds=config.code.turn_timeout_seconds,
             max_concurrent_turns=config.code.max_concurrent_turns,
             clock=lambda: datetime.now(UTC),
+            # Fixed here, and safe to fix, because `startup` refuses to serve
+            # when the sandbox was configured and could not be reached. The
+            # Task Worker's fail-soft equivalent has to keep these two in step
+            # at run time; this process cannot get into the state where they
+            # disagree.
+            tool_names=(
+                CODE_TOOLS_WITH_SANDBOX if config.code.sandbox_enabled else CODE_TOOLS
+            ),
         )
         if config.code.enabled
         else None
@@ -1006,6 +1149,8 @@ def _assemble_chat(
         rag_unavailable=rag_unavailable,
         code=code,
         code_approvals=code_approvals if code is not None else None,
+        code_sandbox=code_sandbox if code is not None else None,
+        code_scope=code_scope if code is not None else None,
         http=client,
         qdrant=qdrant,
         vector_index=vector_index,

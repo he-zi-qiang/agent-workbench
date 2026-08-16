@@ -186,6 +186,12 @@ export function describeEvent(event: EventEnvelope): StepDetail {
         fact("输出大小", bytesText(payload.output_bytes)),
         ...(payload.truncated === true ? [fact("输出被截断", "是")] : []),
       ];
+      // What it actually returned, when the deployment records step inputs.
+      // Until this existed an opened step could say a tool ran for 40ms and
+      // returned 4 kilobytes and still not say what it found -- and for the
+      // five workspace tools there is no artifact either, so the size was all
+      // there was. The reader opening a step wants the answer, not a receipt.
+      detail.bodies = outputBodies(payload);
       detail.artifact = artifactRef(payload.artifact);
       return detail;
     }
@@ -368,6 +374,19 @@ function wallClock(value: unknown): string | null {
 function argumentBodies(payload: Record<string, unknown>): StepBody[] {
   const args = text(payload.argument_preview);
   return args === "—" ? [] : [bodyOf("调用参数", args)];
+}
+
+/**
+ * The tool's own answer, and nothing when the deployment did not record one.
+ *
+ * Empty rather than a placeholder for a deployment with
+ * `runtime.record_step_inputs` off: an empty preview there means "not
+ * recorded", and rendering an empty box would read as "returned nothing",
+ * which is a different and wrong fact.
+ */
+function outputBodies(payload: Record<string, unknown>): StepBody[] {
+  const output = text(payload.output_preview);
+  return output === "—" ? [] : [bodyOf("工具返回", output)];
 }
 
 function bodyOf(label: string, value: string): StepBody {

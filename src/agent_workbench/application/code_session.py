@@ -44,7 +44,10 @@ from datetime import datetime, timedelta
 
 from agent_workbench.application.answer_release import ProcessOnlySink
 from agent_workbench.application.code_approvals import ApprovalScope
-from agent_workbench.application.code_prompt import CODER_SYSTEM_PROMPT
+from agent_workbench.application.code_prompt import (
+    CODER_SYSTEM_PROMPT,
+    CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+)
 from agent_workbench.application.session_titles import title_from_instruction
 from agent_workbench.application.session_workspace import SessionWorkspace
 from agent_workbench.application.workspace import (
@@ -63,6 +66,7 @@ from agent_workbench.domain.runs import (
     RunBudget,
     TraceContext,
 )
+from agent_workbench.domain.sandbox import SANDBOX_RUN_TOOL
 from agent_workbench.domain.tools import ToolName
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.artifact_store import ArtifactStore
@@ -72,17 +76,31 @@ from agent_workbench.ports.conversation_store import (
     ConversationStore,
 )
 
-#: What a coding session is allowed to reach. Read tools plus the two writes,
-#: and nothing external: this list is also the reason no approval is currently
-#: requested, since the envelope below requires one only for external and
-#: destructive risks. The gate is wired regardless, so that granting such a
-#: tool is a change to this tuple and not to the machinery underneath it.
+#: What a coding session is allowed to reach with the sandbox off: read tools
+#: plus the two writes, and nothing external. A deployment that leaves
+#: `code.sandbox_enabled` false gets exactly this, and therefore never reaches
+#: the approval gate -- the envelope requires one only for external and
+#: destructive risks.
 CODE_TOOLS: tuple[ToolName, ...] = (
     "workspace_edit",
     "workspace_grep",
     "workspace_list",
     "workspace_read",
     "workspace_write",
+)
+
+#: The same list plus the one external tool a coding session may be granted
+#: (ADR-057). Spelled out as its own tuple rather than assembled at the call
+#: site, so "what may a coding session reach" has two answers to read rather
+#: than one answer and an append.
+#:
+#: `sandbox_run` is `external` risk, which is what makes every call stop at the
+#: approval gate. That is the intended cost of granting it, not a side effect:
+#: running code on somebody's machine is the kind of thing worth being asked
+#: about, and it is why the gate was armed before anything could trigger it.
+CODE_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
+    *CODE_TOOLS,
+    SANDBOX_RUN_TOOL,
 )
 
 
@@ -193,6 +211,27 @@ class CodeSessionService:
             mode="code",
         )
 
+    async def delete(
+        self, *, session_id: str, tenant_id: str, principal_id: str
+    ) -> None:
+        """Remove one coding session, its transcript and its event stream.
+
+        ``mode="code"`` is fixed here for the reason every other method on this
+        service fixes it: a caller that could hand this one a chat session id
+        would be deleting a conversation this service never ran.
+
+        The workspace artifacts stay, unreachable rather than removed (ADR-056
+        §5) -- the same thing that already happens to a workspace version each
+        time a write supersedes it.
+        """
+
+        await self.conversations.delete_session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="code",
+        )
+
     async def history(
         self, *, session_id: str, tenant_id: str, principal_id: str
     ) -> tuple[Message, ...]:
@@ -241,6 +280,59 @@ class CodeSessionService:
             tenant_id=tenant_id,
             principal_id=principal_id,
         ).list(session.workspace_version)
+
+    async def put_workspace_file(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        name: str,
+        content: bytes,
+        media_type: str,
+    ) -> tuple[WorkspaceListing, ...]:
+        """Put a file a *person* supplied into this session's working set.
+
+        The counterpart to `open_workspace_file`, and the half a coding session
+        was missing: an agent could produce files and read them back, and there
+        was no way to hand it one. Until this existed, giving a session a log to
+        look at meant pasting it into the instruction -- which spends context on
+        content the workspace is built to hold, and truncates anything large.
+
+        Binary types are allowed here, and deliberately so. `WorkspaceWriteTool`
+        refuses docx, xlsx, pptx and pdf, and that refusal is about what the
+        *model* may synthesise: a model emitting what it claims are docx bytes
+        is producing something no reader can trust. A person attaching a PDF is
+        the opposite situation -- the bytes are the thing they have, and the
+        session's job is to look at them.
+
+        Reuses `SessionWorkspace`, so the version pointer advances with the same
+        compare-and-set every tool write uses. An upload racing a running turn
+        loses that comparison and is refused, rather than leaving the session
+        pointing at a manifest that names only the uploaded file.
+        """
+
+        session = await self.conversations.session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="code",
+        )
+        workspace = SessionWorkspace(
+            workspace=Workspace(
+                artifacts=self.artifacts,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            ),
+            conversations=self.conversations,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        )
+        version = await workspace.write(
+            session.workspace_version, name, content, media_type=media_type
+        )
+        return await workspace.list(version)
 
     async def open_workspace_file(
         self, *, session_id: str, tenant_id: str, principal_id: str, name: str
@@ -436,11 +528,24 @@ class CodeSessionService:
             principal=request.principal,
             envelope=AuthorizationEnvelope(
                 allowed_tools=self.tool_names,
-                max_tool_risk="write",
-                # Approval is armed for the risks this envelope does not
-                # currently grant. That is not a contradiction: the gate is
-                # wired, so granting an external tool later is a change to
-                # `tool_names` and the ceiling above, not to the machinery.
+                # Derived from the tool list rather than configured beside it.
+                # The ceiling exists to admit exactly one tool -- `sandbox_run`
+                # is the only `external` thing a coding session may be given --
+                # so two separate switches would be two ways to describe one
+                # decision, and the interesting bug is the pair disagreeing: a
+                # deployment that granted the tool and left the ceiling at
+                # `write` would offer the model a tool its own envelope denies,
+                # which costs a wasted turn ending in
+                # `outside_submitted_envelope`.
+                max_tool_risk=(
+                    "external" if SANDBOX_RUN_TOOL in self.tool_names else "write"
+                ),
+                # Armed for both risks whether or not either is granted. The
+                # gate was wired long before anything could trigger it
+                # (known-gaps F-05); granting `sandbox_run` is what finally
+                # does, and it is a change to `tool_names` rather than to the
+                # machinery underneath -- which was the point of arming it
+                # early.
                 approval_required_risks=("external", "destructive"),
             ),
             budget=self.budget.model_copy(
@@ -449,7 +554,13 @@ class CodeSessionService:
                     + timedelta(seconds=self.turn_timeout_seconds)
                 }
             ),
-            system_prompt=CODER_SYSTEM_PROMPT,
+            # Selected from the same fact the envelope ceiling reads, so the
+            # model is never told it cannot do something it has been granted.
+            system_prompt=(
+                CODER_SYSTEM_PROMPT_WITH_SANDBOX
+                if SANDBOX_RUN_TOOL in self.tool_names
+                else CODER_SYSTEM_PROMPT
+            ),
             messages=(*history, asked),
             # Both, and they are not the same thing: the envelope says what
             # policy would permit, `tool_names` is what the model is offered.
@@ -474,6 +585,7 @@ class CodeSessionService:
 
 __all__ = [
     "CODE_TOOLS",
+    "CODE_TOOLS_WITH_SANDBOX",
     "CodeCapacityError",
     "CodeRequest",
     "CodeSessionService",

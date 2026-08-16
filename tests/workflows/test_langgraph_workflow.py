@@ -467,3 +467,45 @@ def test_the_approval_decision_decides_whether_the_export_runs(
     # A rejection is a deliberate terminal failure with a reason, not an empty
     # pending-node list a caller could read as success.
     assert (result.failure_reason is not None) is (decision == "rejected")
+
+
+def test_an_ungated_deployment_exports_without_opening_an_approval() -> None:
+    """Against the *compiled* v1 graph, which is the only place this can fail.
+
+    ``route_quality_gate`` gained "export" when v1 was taught to read
+    ``export_requires_approval``, and the edge list beside it is a separate
+    declaration. Every routing test passes either way -- they call the router
+    and compare its return value -- while LangGraph resolves that same value
+    against the edge list, so a target the router can answer and no edge
+    declares is `KeyError: 'export'` inside the graph. v2 shipped that exact
+    bug once (`test_general_graph_execution`); running the graph is what keeps
+    v1 from shipping it twice.
+    """
+
+    visited: list[str] = []
+
+    async def approval(state: TaskState) -> dict[str, Any]:
+        visited.append("approval")
+        return {"approval_id": "approval_1", "approval_decision": "approved"}
+
+    async def export(state: TaskState) -> dict[str, Any]:
+        visited.append("export")
+        return {}
+
+    handlers = _handlers() | {"approval": approval, "export": export}
+
+    result = asyncio.run(
+        LangGraphTaskWorkflow(handlers=handlers).run(
+            _state(export_requires_approval=False),
+            thread_id="thread_ungated",
+            graph_version="v1",
+        )
+    )
+
+    assert visited == ["export"]
+    assert result.disposition == "completed"
+    # Skipped, not auto-answered: no approval was opened, so nothing later
+    # reads a decision nobody made.
+    assert result.state.approval_id is None
+    assert result.state.approval_decision is None
+    assert result.failure_reason is None

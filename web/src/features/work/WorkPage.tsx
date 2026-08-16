@@ -14,12 +14,14 @@ import {
   Paperclip,
   Plus,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   cancelTask,
+  deleteTask,
   createTask,
   decideApproval,
   type DocumentLayoutDecline,
@@ -436,6 +438,36 @@ export function WorkPage() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (taskId: string) => deleteTask(identity, taskId),
+    onSuccess: (deleted) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["work", "tasks", ...identityKey],
+      });
+      // Only when it was the one on screen. A reader who deleted a different
+      // row from the list is still reading what they were reading.
+      if (deleted.task_id === selectedTaskId) void navigate("/work");
+    },
+  });
+
+  const removeTask = useCallback(
+    async (taskId: string) => {
+      // Irreversible, and it takes the timeline and the report record with it.
+      // The artifacts survive (ADR-056 §5) but nothing links to them any more,
+      // which is worth saying before rather than explaining afterwards.
+      if (!window.confirm("删除这个任务？它的执行记录会一起消失，产出文件不再可达。")) {
+        return;
+      }
+      try {
+        await deleteMutation.mutateAsync(taskId);
+      } catch {
+        // Reported by `deleteMutation.error` below, next to the list it
+        // failed on -- rather than thrown out of a click handler.
+      }
+    },
+    [deleteMutation],
+  );
+
   // Which file the reading column is showing, when the reader picked one from
   // the rail, and which Task they picked it in. `null` means the Task's own
   // final report, which is what the column shows on its own.
@@ -772,7 +804,13 @@ export function WorkPage() {
                 reportOverride === "auto" ? "auto" : reportOverride ? "yes" : "no"
               }
             >
-              <option value="auto">自动判定（要文件会先请你确认导出）</option>
+              {/* No longer promises a confirmation step. This deployment runs
+                  with `workflow.export_requires_approval = false`, so a Task
+                  that wants a file exports it and the file waits in 附件 --
+                  there is nothing to confirm. The old wording described the
+                  gated deployment, and after v1 was taught to honour the
+                  setting it described no deployment this repository ships. */}
+              <option value="auto">自动判定（由模型决定要不要文件）</option>
               <option value="yes">一定生成文件</option>
               <option value="no">不生成文件</option>
             </select>
@@ -843,31 +881,58 @@ export function WorkPage() {
             <ErrorNotice message={errorMessage(tasksQuery.error, "加载任务列表失败")} />
           ) : null}
           {tasks.map((task) => (
-            <button
-              aria-current={task.task_id === selectedTaskId ? "page" : undefined}
-              className={`aw-task-list-item ${
-                task.task_id === selectedTaskId ? "is-active" : ""
-              }`}
-              key={task.task_id}
-              onClick={() => void navigate(`/work/${encodeURIComponent(task.task_id)}`)}
-              type="button"
-            >
-              <span>
-                {/* The objective when the server recorded one, because a list
-                    of ids tells the reader nothing about which Task is which.
-                    Older Tasks have no label and still have to be openable, so
-                    they fall back to the id rather than to a blank row. */}
-                <strong title={task.objective_preview ?? task.task_id}>
-                  {task.objective_preview ?? shortId(task.task_id, 18)}
-                </strong>
-                <small>
-                  {formatDateTime(task.created_at)}
-                  {task.objective_preview === null ? "" : ` · ${shortId(task.task_id, 14)}`}
-                </small>
-              </span>
-              <StatusPill status={task.status} />
-            </button>
+            <div className="aw-task-list-row" key={task.task_id}>
+              <button
+                aria-current={task.task_id === selectedTaskId ? "page" : undefined}
+                className={`aw-task-list-item ${
+                  task.task_id === selectedTaskId ? "is-active" : ""
+                }`}
+                onClick={() =>
+                  void navigate(`/work/${encodeURIComponent(task.task_id)}`)
+                }
+                type="button"
+              >
+                <span>
+                  {/* The objective when the server recorded one, because a list
+                      of ids tells the reader nothing about which Task is which.
+                      Older Tasks have no label and still have to be openable, so
+                      they fall back to the id rather than to a blank row. */}
+                  <strong title={task.objective_preview ?? task.task_id}>
+                    {task.objective_preview ?? shortId(task.task_id, 18)}
+                  </strong>
+                  <small>
+                    {formatDateTime(task.created_at)}
+                    {task.objective_preview === null
+                      ? ""
+                      : ` · ${shortId(task.task_id, 14)}`}
+                  </small>
+                </span>
+                <StatusPill status={task.status} />
+              </button>
+              {/* Offered only on a settled Task, because the server refuses
+                  anything else with a 409 -- and a button whose only outcome is
+                  an error teaches the reader the wrong rule. Cancelling is how
+                  a running Task becomes deletable, and it already has its own
+                  control in the detail pane. */}
+              {isSettledStatus(task.status) ? (
+                <button
+                  aria-label={`删除任务 ${task.objective_preview ?? task.task_id}`}
+                  className="aw-task-list-delete"
+                  disabled={deleteMutation.isPending}
+                  onClick={() => void removeTask(task.task_id)}
+                  title="删除"
+                  type="button"
+                >
+                  <Trash2 aria-hidden size={13} />
+                </button>
+              ) : null}
+            </div>
           ))}
+          {deleteMutation.isError ? (
+            <ErrorNotice
+              message={errorMessage(deleteMutation.error, "删除任务失败")}
+            />
+          ) : null}
           {!tasksQuery.isPending && !tasksQuery.isError && tasks.length === 0 ? (
             <p className="aw-muted">还没有任务。</p>
           ) : null}
@@ -1570,6 +1635,22 @@ function TaskResult({
             </button>
           </div>
         ) : null}
+        {/* A Task can fail after it has already written something -- a rejected
+            export is the plain case, and every step failure downstream of
+            `synthesize` is another. The draft lives in the timeline events, not
+            in a field that the failure cleared, so it is still here; until now
+            the status branch simply never asked for it, and the reader lost
+            work that had been done. Shown under the notice rather than instead
+            of it: why it stopped is the headline, what it wrote is the salvage. */}
+        {draftText === null ? null : (
+          <section className="aw-answer" aria-label="任务停下前写出的内容">
+            <header>
+              <span className="aw-answer-mark" aria-hidden="true">A</span>
+              <strong>停下前写出的内容</strong>
+            </header>
+            <MarkdownContent text={draftText} />
+          </section>
+        )}
       </section>
     );
   }

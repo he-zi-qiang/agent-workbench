@@ -824,3 +824,117 @@ def test_renaming_your_own_session_returns_the_new_title(
         return renamed.title
 
     assert conversations.run(scenario) == "a better name"
+
+
+# --------------------------------------------------------------------------
+# Deleting a session (ADR-056)
+# --------------------------------------------------------------------------
+
+
+def test_deleting_a_session_removes_it_and_its_messages(
+    conversations: StoreHarness,
+) -> None:
+    """The row and the transcript go together, and the neighbour stays."""
+
+    async def scenario(store: ConversationStore) -> tuple[bool, int]:
+        for session_id in (SESSION, CODE_SESSION):
+            await store.create_session(
+                session_id=session_id,
+                tenant_id=TENANT,
+                owner_id=OWNER,
+                title="mine",
+                mode="chat" if session_id == SESSION else "code",
+            )
+            await store.append(
+                session_id=session_id,
+                tenant_id=TENANT,
+                principal_id=OWNER,
+                messages=(user_message("one"),),
+            )
+
+        await store.delete_session(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER, mode="chat"
+        )
+
+        try:
+            await store.session(
+                session_id=SESSION, tenant_id=TENANT, principal_id=OWNER
+            )
+            gone = False
+        except NotFoundError:
+            gone = True
+
+        # The second half is the one that would catch a delete written with
+        # too wide a `WHERE`: one session leaving must not take the other's
+        # transcript with it.
+        survivor = await store.history(
+            session_id=CODE_SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+        return gone, len(survivor)
+
+    assert conversations.run(scenario) == (True, 1)
+
+
+def test_deleting_somebody_elses_session_is_not_found(
+    conversations: StoreHarness,
+) -> None:
+    """And the row its owner reads back is still there."""
+
+    async def scenario(store: ConversationStore) -> tuple[bool, str | None]:
+        await store.create_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            title="mine",
+            mode="code",
+        )
+        try:
+            await store.delete_session(
+                session_id=CODE_SESSION,
+                tenant_id=TENANT,
+                principal_id=NEIGHBOUR,
+                mode="code",
+            )
+            refused = False
+        except NotFoundError:
+            refused = True
+        # A store that deleted and then raised would satisfy the first half.
+        owned = await store.session(
+            session_id=CODE_SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+        return refused, owned.title
+
+    assert conversations.run(scenario) == (True, "mine")
+
+
+def test_deleting_across_modes_is_not_found(conversations: StoreHarness) -> None:
+    """A code session is not reachable through the chat service's delete.
+
+    The third axis, asserted for delete the way it already is for every read
+    here: mode is part of "is this yours", not a filter applied afterwards.
+    """
+
+    async def scenario(store: ConversationStore) -> tuple[bool, str | None]:
+        await store.create_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            title="mine",
+            mode="code",
+        )
+        try:
+            await store.delete_session(
+                session_id=CODE_SESSION,
+                tenant_id=TENANT,
+                principal_id=OWNER,
+                mode="chat",
+            )
+            refused = False
+        except NotFoundError:
+            refused = True
+        owned = await store.session(
+            session_id=CODE_SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+        return refused, owned.title
+
+    assert conversations.run(scenario) == (True, "mine")

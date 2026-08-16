@@ -109,12 +109,14 @@ test("工作台的两个标签与 Code 在桌面和移动布局中均可使用",
   await activeNavigation.getByRole("link", { name: "Code", exact: true }).click();
 
   await expect(page).toHaveURL(/#\/code$/);
-  await expect(
-    page.getByRole("heading", { name: "还没有编码会话" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "新建编码会话" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "开始一段编码" })).toBeVisible();
+  // The composer, on a page with no session yet, is the assertion. This used to
+  // wait for a 「新建编码会话」 button, which was a full-screen door whose only
+  // effect was a POST the first instruction can carry itself -- so a coding
+  // tool asked for a click before it would show an input. The session is opened
+  // lazily on the first send now, and the thing worth pinning is that there is
+  // nothing to click first.
+  await expect(page.getByLabel("要做的事")).toBeVisible();
 
   // Back to the workbench, and the composer must still be inside the viewport.
   // A tab strip added above a `100dvh` grid pushes it out by exactly its own

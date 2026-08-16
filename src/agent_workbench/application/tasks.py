@@ -336,6 +336,26 @@ class TaskService:
         await self.get(principal, task_id)
         return await self.registry.cancel(task_id, reason=reason)
 
+    async def delete(
+        self,
+        principal: PrincipalContext,
+        task_id: Identifier,
+    ) -> None:
+        """Delete one caller-owned settled Task, its records and its stream.
+
+        Authorized the same way cancellation is, and for the same reason: the
+        ``get`` in front makes "not yours" and "not there" the same answer, so
+        deleting cannot be used to discover that a Task exists.
+
+        Whether the Task is settled enough to delete is the Registry's
+        judgement, not this method's -- it is the thing that holds the state
+        machine, and duplicating the rule here is how two answers to one
+        question start disagreeing.
+        """
+
+        await self.get(principal, task_id)
+        await self.registry.delete(task_id)
+
     async def timeline(
         self,
         principal: PrincipalContext,

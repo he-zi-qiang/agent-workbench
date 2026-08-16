@@ -135,13 +135,28 @@ def route_quality_gate(state: TaskState) -> TaskNodeId | None:
 
     The draft is written either way.  ``wants_report`` decides whether it also
     becomes a downloadable artifact, not whether the Task produced anything.
+
+    ``export_requires_approval`` decides which of the two remaining paths a
+    wanted report takes.  This function used to route to ``approval``
+    unconditionally, which meant v1 asked for an approval that
+    ``config.default.toml`` and every local profile had already answered
+    ``false`` -- ADR-038 taught v2's ``route_review`` to read the field and
+    ADR-048 flipped the default, but neither touched this line.  Observed as a
+    Task that stopped to ask whether the submitter approved handing a file to
+    themselves, and settled ``failed`` when they said no.
     """
 
     review = state.review_result
     if review is None:
         raise MissingReviewError(state.task_id)
     if review.decision == "pass":
-        return "approval" if state.wants_report else None
+        if not state.wants_report:
+            return None
+        # Read exactly as v2 reads it, deliberately: the gate is skipped rather
+        # than faked, so no approval row is opened and nothing downstream reads
+        # a decision nobody made. `route_approval` below still refuses to export
+        # without one, which is what keeps this the only way past it.
+        return "approval" if state.export_requires_approval else "export"
     return "synthesize" if state.can_revise else None
 
 

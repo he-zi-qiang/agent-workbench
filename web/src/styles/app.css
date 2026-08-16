@@ -1792,6 +1792,64 @@ pre {
   overflow-y: auto;
 }
 
+/* 一行 = 主按钮 + 删除按钮 ------------------------------------------------
+ *
+ * 三处列表（对话、任务、编码会话）用同一套写法：外面一个 grid 行，里面一个占满
+ * 的主按钮和一个固定宽的删除按钮。
+ *
+ * 删除按钮**一直在 DOM 里**，只是平时透明。用 `visibility`/`display` 藏起来的
+ * 控件，键盘 tab 不到、触屏永远看不见 —— 而"只在鼠标悬停时出现"恰好把删除这件
+ * 事只交给了有鼠标的人。这里用透明度：它一直可聚焦，聚焦或悬停时才显形。
+ */
+.aw-chat-session-row,
+.aw-task-list-row,
+.aw-code-recent-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  gap: 2px;
+}
+
+.aw-chat-session-delete,
+.aw-task-list-delete,
+.aw-code-recent-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.aw-chat-session-row:hover .aw-chat-session-delete,
+.aw-task-list-row:hover .aw-task-list-delete,
+.aw-code-recent-row:hover .aw-code-recent-delete,
+.aw-chat-session-delete:focus-visible,
+.aw-task-list-delete:focus-visible,
+.aw-code-recent-delete:focus-visible {
+  opacity: 1;
+}
+
+.aw-chat-session-delete:hover,
+.aw-task-list-delete:hover,
+.aw-code-recent-delete:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-danger);
+}
+
+.aw-chat-session-delete:disabled,
+.aw-task-list-delete:disabled,
+.aw-code-recent-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 .aw-chat-session {
   display: flex;
   align-items: center;
@@ -2876,7 +2934,14 @@ pre {
   list-style: none;
 }
 
+/* `min-width: 0` because this `li` is the grid item every opened step lives
+   inside, and a grid item's floor is `auto` -- the widest thing it contains,
+   which for a step is an unbroken line of JSON. Without it the two rules
+   above that cap and scroll those `pre`s are overridden from the outside:
+   the track simply grows to fit, and the reading column widens past the
+   panel instead of the payload scrolling within it. */
 .aw-stream-events > li {
+  min-width: 0;
   padding: 1px 0 1px 8px;
 }
 
@@ -3322,10 +3387,27 @@ pre {
   font-size: 10px;
 }
 
+/* `overflow` belongs with `max-height`, and leaving it out is what made an
+   opened step unreadable. A capped box whose overflow stays `visible` still
+   paints every line it was given -- the *box* stops at 340px, the text does
+   not -- and this `pre` had no background of its own, so a long model output
+   went on drawing as bare glyphs over the artifact card and the next step
+   below it. Reported as 打开后和下面的文字糊在一起. `.aw-timeline-group pre`
+   above got this right; this rule is the copy that lost the line.
+
+   `white-space` for the same reason: the global `pre` rule (see `code, pre`)
+   sets only a font, so the base here inherited the browser's `pre` and model
+   prose ran off the right edge instead of wrapping -- which the comment below
+   has claimed it does since it was written. */
 .aw-step-pre {
   max-height: 340px;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 7px;
+  background: var(--aw-panel-strong);
   font-size: 11px;
   line-height: 1.65;
+  white-space: pre-wrap;
 }
 
 /* Model prose wraps; JSON keeps its indentation and scrolls instead, because
@@ -3362,6 +3444,22 @@ pre {
 
 .aw-step-raw > summary {
   color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+/* The raw payload `pre` carries no class of its own (`StepDisclosure` renders
+   a bare `<pre>` there), so without this it takes the browser default: no
+   cap, no scroll, and `white-space: pre`. One long line of serialised JSON
+   then runs straight across the reading column and out over whatever sits to
+   its right. Capped and scrolled here rather than given a class, because the
+   element has exactly one home. */
+.aw-step-raw pre {
+  max-height: 280px;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 7px;
+  background: var(--aw-panel-strong);
+  color: var(--aw-text-soft);
   font-size: 10px;
 }
 
@@ -3918,21 +4016,30 @@ pre {
  * 这一段复用它来排数字与摘要，正是因为它就是"把一串机器写的字排整齐"。
  */
 
+/* 侧栏宽度跟 Work 的附件栏对齐（见 `.aw-work-body`），而不是一个固定的 268px。
+ *
+ * 换成 clamp 是因为这一栏的职责变了：文件正文已经搬到左边的宽阅读列里，这里
+ * 只剩文件名和最近会话，一个按窗口收缩的宽度就够。之前它要同时装下文件列表和
+ * 文件内容 —— 打开一个源文件，正文以 11px 挤在四分之一屏里，而它上面的列表被
+ * 压成一两行。 */
 .aw-code-page {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 268px;
+  grid-template-columns: minmax(0, 1fr) clamp(200px, 24%, 268px);
   height: 100%;
   min-height: 0;
 }
 
-/* 没有会话时没有工作区可看，那一栏也就不该占位置。 */
-.aw-code-page.is-empty {
-  grid-template-columns: minmax(0, 1fr);
-}
+/* `.is-empty` 这一档没有了，跟着开屏页一起。以前没有会话时整页是另一套东西，
+ * 那一栏确实无意义；现在没有会话只是「还没有文件、还没有对话」，而侧栏里的
+ * 「最近」正是这时候最该够得着的东西 —— 把它收起来，等于让人在唯一需要找旧
+ * 会话的时刻找不到入口。 */
 
+/* 只钉第一行，其余交给隐式的 auto 行。这里的子元素数量是随状态变的 ——
+ * 对话流、文件预览、待批准、错误、输入框，五个里有三个可能不在 —— 写死三行
+ * 会让第四个子元素落进一个没被描述的位置。 */
 .aw-code-main {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
 }
@@ -4091,14 +4198,20 @@ pre {
   font-size: 13px;
 }
 
+/* `flex: 1` 是这里唯一新增的一行，也是之前缺的那一行。这个 ul 声明了
+ * `overflow-y: auto` 却没有声明自己该占多高，于是在 flex 列里按内容分配空间：
+ * 它下面一旦出现别的东西，列表就被压成一两行，而滚动条从没出现过 —— 声明了
+ * 滚动却没有可滚的高度。 */
 .aw-code-workspace ul {
   display: grid;
+  flex: 1;
   min-height: 0;
   margin: 0;
   padding: 12px;
   overflow-y: auto;
   gap: 2px;
   list-style: none;
+  align-content: start;
 }
 
 .aw-code-workspace li {
@@ -4150,11 +4263,18 @@ pre {
    It sits under the working set when a session is open and under the empty
    state when none is, because those are the two moments the question "where
    was I" gets asked -- and neither of them wants a third column. */
+/* 上限 + 自己滚，因为这一块坐在 `.aw-code-side` 的 `auto` 行里，而那一行没有
+ * 上界。工作区那一行是 `minmax(0, 1fr)` —— `0` 是真的 0：会话攒到十几条，
+ * 「最近」就把工作区挤到没有高度，于是这个流程的产物从界面上消失，而消失的
+ * 原因是一份历史列表。 */
 .aw-code-recent {
   display: grid;
+  max-height: min(38vh, 300px);
   gap: 6px;
   padding: 14px 18px;
+  overflow-y: auto;
   border-top: 1px solid var(--aw-border);
+  align-content: start;
 }
 
 .aw-code-recent h2 {
@@ -4200,10 +4320,31 @@ pre {
   font-weight: 600;
 }
 
-.aw-code-page.is-empty .aw-code-recent {
-  max-width: 420px;
-  margin: 0 auto;
-  border-top: 0;
+.aw-code-workspace-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The upload control is a `label` wrapping a hidden `input[type=file]`, so it
+   has to be told to look and size like the button beside it. `display: none`
+   on the input rather than `visibility: hidden`: the label is what takes focus
+   and forwards the click, so the input never needs to be reachable itself. */
+.aw-code-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.aw-code-attach input {
+  display: none;
+}
+
+.aw-code-attach.is-busy,
+.aw-code-attach:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 /* A workspace row is a button now, so it has to stop looking like one. */
@@ -4234,12 +4375,25 @@ pre {
 
 /* The file itself, under the list rather than over it: the list is how you got
    here and stays visible, which is what makes "open another one" one click. */
+/* 现在坐在左边的宽阅读列里，不再是右侧那条窄栏的一部分。所以它有了自己的边框
+ * 与内距，宽度跟对话流对齐（见 `.aw-code-turns` 的 820px），而不是跟文件列表
+ * 对齐 —— 读代码要的是行宽，不是靠近文件名。 */
 .aw-code-file-view {
   display: grid;
+  width: min(820px, 100%);
   min-height: 0;
+  margin: 0 clamp(16px, 4vw, 56px) 12px;
   gap: 8px;
-  padding: 12px 18px;
-  border-top: 1px solid var(--aw-border);
+  padding: 12px 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-file-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .aw-code-file-view header {
@@ -4261,21 +4415,25 @@ pre {
   white-space: nowrap;
 }
 
-/* `pre-wrap`, not `pre`: a generated file has no reason to have short lines,
-   and a horizontal scrollbar inside a 268px column is a pane you cannot read.
-   The vertical bound is the pane's, so a long file scrolls here and not the page. */
+/* `pre`, not `pre-wrap`, now that this pane has the reading column's width.
+   Wrapping was the right answer inside 268px -- a horizontal scrollbar in a
+   quarter-width pane is a pane you cannot read -- and it is the wrong answer
+   here: re-flowing source code destroys the indentation that carries its
+   structure, which is the same argument `.aw-step-pre.is-json` already makes
+   two hundred lines up. A long line scrolls sideways within the box; the box
+   itself is bounded both ways, so neither direction escapes onto the page. */
 .aw-code-file-view pre {
   overflow: auto;
-  max-height: 40vh;
+  max-height: min(60vh, 620px);
   margin: 0;
-  padding: 8px;
+  padding: 10px;
   border-radius: 6px;
-  background: var(--aw-panel-soft);
+  background: var(--aw-panel-strong);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
 }
 
 /* The workbench: a tab strip over whichever flow is showing. */

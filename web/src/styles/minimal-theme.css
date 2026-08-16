@@ -504,6 +504,72 @@ select {
   border: 1px solid color-mix(in srgb, var(--aw-accent) 18%, var(--aw-border));
 }
 
+/* Code ------------------------------------------------------------------ *
+ *
+ * This section did not exist. Chat and Work each had one, so on this theme the
+ * Code page kept app.css's structural defaults and was visibly a different
+ * product from the two pages beside it -- tighter rows, harder borders, a rail
+ * that did not match the one across the workbench.
+ *
+ * It stays short on purpose. The layout is already app.css's job, and what a
+ * theme owes a page is the quieter half: reading width, where a border earns
+ * its place, and the one surface that should read as paper.
+ */
+
+.aw-code-side {
+  border-left-color: var(--aw-border);
+}
+
+/* The reading column matches Work's, because it is the same act of reading --
+   a report, then the file it produced. Work sets this on `.aw-work-detail`. */
+.aw-code-transcript {
+  padding-right: clamp(20px, 5vw, 72px);
+  padding-left: clamp(20px, 5vw, 72px);
+}
+
+.aw-code-file-view {
+  margin-right: clamp(20px, 5vw, 72px);
+  margin-left: clamp(20px, 5vw, 72px);
+  border-color: var(--aw-border);
+  background: var(--aw-panel);
+}
+
+/* A session row and a file row are the same kind of thing as a chat session
+   row -- a name you pick from a list -- so they get the same shape rather than
+   three near-identical ones. */
+.aw-code-recent-link,
+.aw-code-file-open {
+  padding: 9px 10px;
+  border-radius: 10px;
+}
+
+.aw-code-recent {
+  padding: 12px 8px;
+  border-top-color: var(--aw-border);
+}
+
+.aw-code-workspace ul {
+  padding: 10px 8px;
+  gap: 2px;
+}
+
+.aw-code-workspace header,
+.aw-code-recent h2 {
+  padding-right: 10px;
+  padding-left: 10px;
+}
+
+/* The composer is the same control Chat's is, and on this theme Chat's has no
+   hard edge against the page. */
+.aw-code-composer {
+  border-top-color: var(--aw-border);
+}
+
+.aw-code-approval {
+  border: 0;
+  background: var(--aw-panel-soft);
+}
+
 /* Knowledge ------------------------------------------------------------- */
 
 .aw-knowledge-layout {

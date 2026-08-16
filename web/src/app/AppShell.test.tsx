@@ -75,6 +75,22 @@ describe("AppShell rail", () => {
     );
   });
 
+  it("groups 工作台 and Code above the rail's dividing line", () => {
+    mounted("/chat");
+
+    // The two primary flows are one group, and the line belongs under them
+    // rather than between them. It used to be pinned to `index === 1`, which
+    // drew it above Code and separated the pair it was meant to join.
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    const wrapperOf = (name: string) =>
+      rail.getByRole("link", { name }).parentElement;
+
+    expect(wrapperOf("工作台")).not.toHaveClass("aw-nav-divider");
+    expect(wrapperOf("Code")).not.toHaveClass("aw-nav-divider");
+    // The first entry that is not a primary flow is where the group ends.
+    expect(wrapperOf("知识库")).toHaveClass("aw-nav-divider");
+  });
+
   it("offers two top-level flows, not three", () => {
     mounted("/chat");
 

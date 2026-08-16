@@ -68,6 +68,48 @@ enabled = true
 [rag.reranker]
 timeout_seconds = 120
 
+[code]
+# On, because the console treats Code as one of its two primary flows -- the
+# rail groups it with 工作台 -- and a primary flow that 404s is not a smaller
+# console, it is a broken one.
+#
+# It was reachable before this line only by exporting `AW_CODE__ENABLED` before
+# `scripts/dev.sh demo-api`, which is exactly the arrangement the [chat] note
+# below argues against: a capability that comes from how you started the
+# process rather than from the profile, and disappears on the next restart with
+# nothing saying why. Observed as `GET /v1/code/sessions -> 404` from a console
+# whose Code page rendered its empty state as though nothing were wrong.
+enabled = true
+
+# Shorter than the shipped defaults, copied from config.code-local.toml: a local
+# turn that has gone wrong is better cut off in two minutes than in ten.
+turn_timeout_seconds = 240
+approval_timeout_seconds = 120
+
+# One at a time, and here the reason is stronger than it is in code-local: this
+# profile also runs Chat's embedding and reranking runtimes in the same process.
+max_concurrent_turns = 1
+
+# Run code (ADR-057). What this grants is not a shell: `sandbox_run` is a pure
+# function -- one container per call, destroyed after, `--network=none`, files
+# in and files out, nothing kept between calls.
+#
+# Two consequences worth knowing before turning it on:
+#
+#   * The API refuses to start when this is on and the sandbox does not answer.
+#     `scripts/dev.sh demo-api` probes it first and says so with the command
+#     that fixes it, so the refusal should arrive before the process does.
+#   * `sandbox_run` is `external` risk, so **every call stops and asks you**.
+#     That is the gate `approval_required_risks` has been armed for since Code
+#     shipped, and this is the first tool that reaches it (known-gaps F-05).
+sandbox_enabled = true
+
+[sandbox]
+# Where `dev.sh sandbox-server` listens. The endpoint is here rather than in
+# `[code]` because the sandbox is a process, not a coding-session setting --
+# the Task Worker reads the same section for its own `sandbox_run`.
+enabled = true
+
 [event_stream]
 catchup_poll_seconds = 1
 
@@ -98,8 +140,17 @@ routed_relevance_threshold = 0.01
 # reason ADR-038 §1 gives: on one person's machine this gate asks the submitter
 # to authorise handing a file to themselves, and a confirmation everybody grants
 # unconditionally teaches nothing except to click through. ADR-038 §2.1 is what
-# permits a deployment to choose this; the shipped default stays `true`, and
-# changing *that* would need its own ADR (§4).
+# permits a deployment to choose this.
+#
+# The shipped default is now `false` too -- ADR-048 answered §4's request for an
+# ADR and changed it. This line is kept rather than deleted because a profile
+# that states its own answer does not change meaning when a default moves under
+# it, which is the same argument the [chat] note above makes.
+#
+# Worth knowing when reading this: until v1's `route_quality_gate` was taught to
+# read the field, setting it here bought nothing on the research graph. The v1
+# router went to `approval` unconditionally, so this profile stopped for an
+# approval it had already declined to want.
 export_requires_approval = false
 
 [multi_agent]

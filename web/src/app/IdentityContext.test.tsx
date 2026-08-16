@@ -49,6 +49,10 @@ describe("stored identity", () => {
     // Without them a Task submitted from this console reaches the tool, is
     // denied `missing_permission_scope`, and settles as 已完成 having produced
     // no document. A default that omits either is that bug again.
+    //
+    // `sandbox:run` joins them for the same reason on the Code side (ADR-057):
+    // without it a coding session is offered `sandbox_run`, proposes it, and is
+    // denied by a gate the reader has no way to see from the transcript.
     render(
       <IdentityProvider>
         <ScopeReadout />
@@ -63,6 +67,7 @@ describe("stored identity", () => {
         "workspace:write",
         "mcp:web",
         "mcp:word",
+        "sandbox:run",
       ]),
     );
   });
@@ -74,7 +79,7 @@ describe("stored identity", () => {
     // on the next reload. The stale sets had to stop being read; reading stored
     // identity did not.
     localStorage.setItem(
-      "aw.identity.v3",
+      "aw.identity.v4",
       JSON.stringify({
         tenantId: "tenant_other",
         principalId: "user_other",

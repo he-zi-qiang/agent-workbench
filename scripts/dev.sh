@@ -17,7 +17,7 @@
 #   scripts/dev.sh web-worker   # real Worker; requires a model provider key
 #   scripts/dev.sh code-api     # API with Code sessions on; requires a key
 #   scripts/dev.sh demo-check   # probe both MCP servers at once
-#   scripts/dev.sh demo-api     # API with Word *and* web: the console profile
+#   scripts/dev.sh demo-api     # API with Word *and* web *and* Code: the console
 #   scripts/dev.sh demo-worker  # real Worker for that profile; needs both servers
 #   scripts/dev.sh smoke        # drive the whole thing and print what happened
 #
@@ -304,6 +304,25 @@ web-check)
     --expect-tool download_document
   ;;
 
+sandbox-server)
+  # One container per call, created and destroyed inside the call (ADR-029).
+  # It owns no path, no tenant and no workspace: files in, files out. What it
+  # needs is a container runtime; without one it starts and every call answers
+  # an error, which is why the check below runs a real script rather than
+  # reading /health.
+  exec "$PYTHON" -m agent_workbench.apps.sandbox_mcp.main
+  ;;
+
+sandbox-check)
+  # `--expect-tool run_python` is the remote name; `sandbox_run` is what the
+  # envelope and the model call it. The two differ on purpose (ADR-029 §3.2).
+  exec "$PYTHON" scripts/smoke_mcp_server.py \
+    --label sandbox \
+    --endpoint "http://127.0.0.1:8766/mcp" \
+    --health-url "http://127.0.0.1:8766/health" \
+    --expect-tool run_python
+  ;;
+
 web-api)
   export AW_CONFIG_FILE=config/config.web-local.toml
   if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
@@ -388,6 +407,11 @@ demo-api)
   # place that can still say so is here, before the process replaces this shell.
   # Only this arm refuses: a keyless deployment that indexes and searches is a
   # real thing to want, and `dev.sh api` is how you say you want it.
+  #
+  # Code sessions come from the profile now (`[code] enabled = true` in
+  # config.demo-local.toml) rather than from an `AW_CODE__ENABLED` a caller
+  # remembered to export. The same key gates them: a coding turn is a model
+  # loop or it is nothing, so the refusal above covers Code too.
   if [ -z "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
     echo "demo-api requires AW_SECRETS__DEEPSEEK_API_KEY; refusing a console without Chat" >&2
     echo "  no key means no chat and no events route, and every Task quietly runs v1" >&2
@@ -407,7 +431,19 @@ demo-api)
   # for itself, on the one condition that makes it safe -- and the refusal above
   # is now what guarantees that condition holds.
   export AW_RESEARCH__ENABLED=true
-  echo "console profile (Word + web + chat search); provider key available" >&2
+  # Probed here, before the process replaces this shell, for the reason
+  # `demo-worker` probes its two servers: an MCP tool catalogue is frozen once
+  # at startup. The API's own refusal (ADR-057) would arrive too -- it raises
+  # rather than serving a coding session that was promised a sandbox it cannot
+  # reach -- but it arrives after the embedding runtime has spent forty
+  # seconds loading, and it cannot name the command that fixes it as plainly
+  # as this can.
+  "$PYTHON" scripts/smoke_mcp_server.py \
+    --label sandbox \
+    --endpoint "http://127.0.0.1:8766/mcp" \
+    --health-url "http://127.0.0.1:8766/health" \
+    --expect-tool run_python >&2
+  echo "console profile (Word + web + sandbox + chat search); key available" >&2
   shift
   exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
   ;;

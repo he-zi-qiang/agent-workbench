@@ -20,9 +20,10 @@
 #     coding agent that cannot write is a confusing thing to debug from the
 #     transcript alone.
 #
-# What this profile deliberately does NOT do: grant a shell. `shell_enabled` is
-# a frozen `false`, and `sandbox_run` needs a sandbox MCP server that this
-# process does not start.
+# What this profile deliberately does NOT do: run code. `sandbox_enabled` is
+# left at its `false` default here, because `sandbox_run` needs a sandbox MCP
+# server that this profile does not ask anybody to start. `config.demo-local`
+# turns it on, and `scripts/dev.sh demo-api` probes the server first (ADR-057).
 
 [app]
 environment = "development"

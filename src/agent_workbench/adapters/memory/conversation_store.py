@@ -195,6 +195,45 @@ class InMemoryConversationStore:
             self._sessions[session_id] = renamed
         return renamed
 
+    async def delete_session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode | None = None,
+    ) -> None:
+        async with self._lock:
+            self._require_session(
+                session_id=session_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                mode=mode,
+            )
+            if session_id in self._active_turn_ids:
+                raise ChatTurnBusyError(
+                    "conversation has an unfinished turn and cannot be deleted"
+                )
+            # Every index that keys on this session, not just the obvious two.
+            # The PostgreSQL side gets the same completeness from foreign keys;
+            # here it has to be written out, and a missed index is how the
+            # in-memory double starts disagreeing with the contract it shares.
+            for turn_id in [
+                turn_id
+                for turn_id, turn in self._turns.items()
+                if turn.session_id == session_id
+            ]:
+                turn = self._turns.pop(turn_id)
+                self._turn_ids_by_run_id.pop(turn.run_id, None)
+            self._turn_ids_by_key = {
+                key: turn_id
+                for key, turn_id in self._turn_ids_by_key.items()
+                if key[0] != session_id
+            }
+            self._active_turn_ids.pop(session_id, None)
+            self._messages.pop(session_id, None)
+            self._sessions.pop(session_id, None)
+
     async def advance_workspace_version(
         self,
         *,

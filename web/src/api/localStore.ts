@@ -38,3 +38,12 @@ export function writeStorage(key: string, value: string): void {
     // See above: in-memory state stays fully functional without this.
   }
 }
+
+export function removeStorage(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Same bargain as the two above. A key that could not be removed is a
+    // stale row nothing reads any more, not a failure worth surfacing.
+  }
+}

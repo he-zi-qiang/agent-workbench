@@ -162,6 +162,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # Cyrillic lookalike in an identifier, not deliberate Chinese prose.
 "src/agent_workbench/application/evaluation.py" = ["RUF001"]
 "src/agent_workbench/adapters/evaluation/subprocess_launcher.py" = ["RUF001"]
+# RUF003 rather than RUF001: the Chinese here is inside a *comment*, and it is
+# a verbatim quote of what a model actually reported before the sandbox prompt
+# existed. Paraphrasing it into ASCII punctuation would make the record of a
+# measurement no longer the thing that was measured.
+"src/agent_workbench/application/code_prompt.py" = ["RUF003"]
 "tests/application/test_task_triage.py" = ["RUF001"]
 "tests/api/test_task_api.py" = ["RUF001"]
 "tests/cli/test_repl.py" = ["RUF001"]

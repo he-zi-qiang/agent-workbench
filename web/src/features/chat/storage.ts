@@ -1,6 +1,7 @@
 import {
   identityStorageKey,
   readStorage,
+  removeStorage,
   writeStorage,
 } from "../../api/localStore";
 import type { StreamCursor } from "../../api/sse";
@@ -66,6 +67,17 @@ export function saveChatCursor(
   cursor: StoredChatCursor,
 ): void {
   writeStorage(cursorKey(identity, sessionId), JSON.stringify(cursor));
+}
+
+export function forgetChatCursor(
+  identity: PrincipalIdentity,
+  sessionId: string,
+): void {
+  // The cursor is keyed separately from the session list, so removing a
+  // session without this leaves a row that nothing will ever read and nothing
+  // will ever clean up -- and that would come back if the same id were ever
+  // reused, resuming a new conversation from a dead conversation's position.
+  removeStorage(cursorKey(identity, sessionId));
 }
 
 function sessionKey(identity: PrincipalIdentity): string {

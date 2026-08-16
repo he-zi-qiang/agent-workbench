@@ -902,12 +902,24 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     section still do not bump -- that is ADR-038's and ADR-042's precedent, and
     this is not that.
 
+    1.15 -> 1.16 runs the other way again, like 1.13 -> 1.14. `shell_enabled`
+    became `sandbox_enabled` and stopped being a frozen `Literal[False]`, so
+    the file that stops loading is the 1.15 one: settings reject unknown keys,
+    and `shell_enabled = false` is now unknown. The rename is the substance
+    rather than the tidying -- that field's comment equated "giving a coding
+    agent a shell" with granting `sandbox_run`, and ADR-029's sandbox is a pure
+    function: one container per call, `--network=none`, files in and files out,
+    nothing between calls. Its freeze was about wiring, not safety, and both
+    halves of that wiring (a server this process connects to, a scope the
+    console holds) landed with ADR-057. `execution_locality` and `coordination`
+    stay frozen.
+
     The pin exists so widening a frozen Literal cannot happen quietly -- this
     test failing *is* the mechanism, and updating it is the last step of the
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.15"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.16"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:

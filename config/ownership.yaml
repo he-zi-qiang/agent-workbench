@@ -113,8 +113,7 @@
       "lifecycle": "startup",
       "fields": [
         "code.execution_locality",
-        "code.coordination",
-        "code.shell_enabled"
+        "code.coordination"
       ]
     },
     {
@@ -122,6 +121,7 @@
       "lifecycle": "startup",
       "fields": [
         "code.enabled",
+        "code.sandbox_enabled",
         "code.max_steps",
         "code.max_tool_calls",
         "code.max_total_tokens",

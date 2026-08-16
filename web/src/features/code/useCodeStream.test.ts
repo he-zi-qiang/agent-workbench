@@ -32,7 +32,7 @@ describe("useCodeStream", () => {
   it("shows the steps a running turn emits, in the order they arrived", async () => {
     stubStream([durable(1, "evt_1"), durable(2, "evt_2")]);
 
-    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION, true));
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
 
     await waitFor(() => {
       expect(result.current.map((event) => event.event_id)).toEqual([
@@ -45,7 +45,7 @@ describe("useCodeStream", () => {
   it("keeps going after a position the server could not decode", async () => {
     const fetchMock = stubStream([quarantine(1), durable(2, "evt_2")]);
 
-    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION, true));
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
 
     // The event after the hole is the assertion. Refusing the notice would
     // leave the cursor in front of it, and every reconnect would arrive at the
@@ -56,60 +56,64 @@ describe("useCodeStream", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not open a stream for a session that is not running a turn", () => {
+  it("opens a stream for an open session before any turn runs", async () => {
     const fetchMock = stubStream([durable(1, "evt_1")]);
 
-    renderHook(() => useCodeStream(IDENTITY, SESSION, false));
+    renderHook(() => useCodeStream(IDENTITY, SESSION));
 
-    // The control for the condition above. A stream opened for an idle session
-    // holds a request open for as long as the tab is.
-    expect(fetchMock).not.toHaveBeenCalled();
+    // The inverse of what this asserted while the list was per-turn. The
+    // subscription is scoped to the session now, and it has to be: the history
+    // of turns that already finished arrives through this same replay, so a
+    // stream that waited for a turn to start could never show a finished one.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
   });
 
-  it("starts a new turn's steps from empty", async () => {
+  it("keeps a finished turn's steps instead of emptying them", async () => {
     stubStream([durable(1, "evt_1")]);
 
     const { result, rerender } = renderHook(
-      ({ watching }) => useCodeStream(IDENTITY, SESSION, watching),
-      { initialProps: { watching: true } },
+      ({ session }) => useCodeStream(IDENTITY, session),
+      { initialProps: { session: SESSION } },
     );
     await waitFor(() => {
       expect(result.current).toHaveLength(1);
     });
 
-    // The turn ends, then another begins. Keeping the first turn's steps would
-    // show finished work as though it were happening now -- and the pane is
-    // hidden between turns, so nothing on screen would contradict it.
-    rerender({ watching: false });
-    rerender({ watching: true });
+    // The regression this exists for: a re-render that is not a change of
+    // session must not disturb the list. It used to be emptied whenever the
+    // turn stopped running, which destroyed the steps of the turn whose report
+    // the reader was at that moment reading.
+    rerender({ session: SESSION });
 
-    expect(result.current).toHaveLength(0);
+    expect(result.current).toHaveLength(1);
   });
 
-  it("resumes the second turn after the first, instead of replaying it", async () => {
+  it("starts from empty and replays from the beginning on another session", async () => {
     const fetchMock = stubStream([durable(1, "evt_1")], { reusable: true });
 
     const { result, rerender } = renderHook(
-      ({ watching }) => useCodeStream(IDENTITY, SESSION, watching),
-      { initialProps: { watching: true } },
+      ({ session }) => useCodeStream(IDENTITY, session),
+      { initialProps: { session: SESSION } },
     );
     await waitFor(() => {
       expect(result.current).toHaveLength(1);
     });
 
-    rerender({ watching: false });
-    rerender({ watching: true });
+    rerender({ session: "ses_code_2" });
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    // Without this the second turn asks for the session from the beginning and
-    // the server obliges, so the pane opens showing the first turn's steps --
-    // which is exactly what the first browser run did.
+    // Both halves matter. Carrying the list over would show one session's
+    // steps under another's transcript; carrying the *cursor* over would ask
+    // the new session to resume from a position that belongs to a different
+    // stream, and skip everything before it.
     const headers = new Headers(
       (fetchMock.mock.calls[1]?.[1] as RequestInit).headers,
     );
-    expect(headers.get("last-event-id")).toBe("cursor_1");
+    expect(headers.get("last-event-id")).toBeNull();
   });
 });
 

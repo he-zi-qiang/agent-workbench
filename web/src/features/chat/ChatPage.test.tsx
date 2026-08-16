@@ -147,6 +147,39 @@ describe("Chat identity boundary", () => {
     expect(await screen.findByText("当前资料：校招资料")).toBeInTheDocument();
   });
 
+  it("asks before deleting a session, and hands the id to the runtime", async () => {
+    const removeSession = vi.fn(() => Promise.resolve());
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn(), removeSession),
+      state: initialChatState([
+        {
+          sessionId: "ses_direct",
+          title: "同一个会话",
+          answerMode: "direct",
+          knowledgeBaseId: null,
+          createdAt: "2026-08-03T00:00:00Z",
+          updatedAt: "2026-08-03T00:00:00Z",
+        },
+      ]),
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+
+    renderChatRoute("/chat/ses_direct");
+    const remove = await screen.findByRole("button", { name: "删除会话 同一个会话" });
+
+    // Declined first. Chat's list is the browser's, so a delete that ran
+    // without asking would lose a transcript nothing else holds.
+    await user.click(remove);
+    expect(removeSession).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    await user.click(remove);
+    await waitFor(() => {
+      expect(removeSession).toHaveBeenCalledWith("ses_direct");
+    });
+  });
+
   it.each([
     {
       answerMode: "direct" as const,
@@ -279,12 +312,17 @@ describe("What the transcript admits it is missing", () => {
   });
 });
 
-function fakeRuntime(addLocalSession: () => void, startAsk: () => void): ChatRuntime {
+function fakeRuntime(
+  addLocalSession: () => void,
+  startAsk: () => void,
+  removeSession: () => Promise<void> = () => Promise.resolve(),
+): ChatRuntime {
   return {
     addLocalSession,
     ensureHistory: vi.fn(),
     reconnectSessionStream: vi.fn(),
     retainSessionStream: vi.fn(() => () => undefined),
+    removeSession,
     startAsk,
   } as unknown as ChatRuntime;
 }

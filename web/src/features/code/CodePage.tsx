@@ -9,20 +9,28 @@
  * while a turn runs, and exists because a turn holds its request open for
  * minutes: a spinner for all of that cannot be told apart from a hang.
  *
- * What this page still does not have is `ConversationShell` and `StepStream`,
- * which is where the other two flows will put their equivalents. Those arrive
- * with A6; this page joins them then. Until it does, the steps are rendered as
- * a plain list of what happened rather than as a half-built stage view.
+ * This page now uses `StepStream` like the other two flows. The note that used
+ * to stand here said it would join them "with A6"; A6 did not come, and in the
+ * meantime this was the only surface whose steps could not be opened. Each turn
+ * is a stage (`turnStages`), and every step inside it discloses the same facts,
+ * arguments and tool output that Work and Chat have shown all along.
+ *
+ * The layout follows Work's, for a reason found by using this page: a wide
+ * reading column with a narrow file rail beside it. Code used to put the file
+ * *list* and the file *contents* both inside a 268px column, so opening
+ * anything squeezed the list it was opened from and rendered the contents at
+ * 11px in a quarter of the window.
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Code2 } from "lucide-react";
+import { Code2, Paperclip, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   askCode,
   createCodeSession,
   decideCodeApproval,
+  deleteCodeSession,
   downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
@@ -30,6 +38,7 @@ import {
   getCodeWorkspaceFileText,
   listCodeSessions,
   newIdempotencyKey,
+  putCodeWorkspaceFile,
   renameCodeSession,
 } from "../../api/client";
 import type {
@@ -40,14 +49,11 @@ import type {
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { isReadableMedia } from "../../components/media";
-import {
-  EmptyState,
-  ErrorNotice,
-  LoadingLine,
-  shortId,
-} from "../../components/ui";
-import { groupSteps } from "../../components/stepGroups";
+import { EmptyState, ErrorNotice, shortId } from "../../components/ui";
+import { MarkdownContent } from "../../components/MarkdownContent";
+import { StepStream } from "../../components/StepStream";
 import { eventTitle } from "../work/workTimeline";
+import { codeTurnStages } from "./turnStages";
 import { useCodeStream } from "./useCodeStream";
 
 /** How often to ask what the agent is stopped on, while it is working. */
@@ -82,6 +88,7 @@ export function CodePage() {
   const [opening, setOpening] = useState(false);
   const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const queries = useQueryClient();
 
   // A query rather than an effect, because two things invalidate it -- opening
@@ -93,7 +100,8 @@ export function CodePage() {
   });
   const known = sessions.data?.sessions ?? [];
 
-  const steps = useCodeStream(identity, sessionId, running);
+  const steps = useCodeStream(identity, sessionId);
+  const stages = codeTurnStages(steps, running);
 
   // Derived, not reset. Both of these used to be cleared from an effect when
   // their subject changed, which is a render behind: the old session's file and
@@ -185,16 +193,30 @@ export function CodePage() {
 
   const send = useCallback(async () => {
     const text = instruction.trim();
-    if (text === "" || sessionId === undefined || running) return;
+    if (text === "" || running) return;
+
+    // The session is opened here when there is not one yet, which is what
+    // removed the splash screen this page used to open with. That screen asked
+    // for a click whose only effect was a POST the first instruction can carry
+    // on its own: nobody arrives at a coding tool wanting "a session", they
+    // arrive wanting a thing done. Opening lazily means the composer is the
+    // first thing on screen and the first sentence both names the session
+    // (ADR-047) and starts the work.
+    let target = sessionId;
     setRunning(true);
     setError(null);
-    // Shown immediately, because the turn holds the connection for as long as
-    // the agent works and an input that emptied into nothing reads as a
-    // dropped message.
     setMessages((current) => [...current, { role: "user", text }]);
     setInstruction("");
     try {
-      await askCode(identity, sessionId, text, newIdempotencyKey("code"));
+      if (target === undefined) {
+        const created = await createCodeSession(identity);
+        target = created.session_id;
+        // Navigate before the turn, not after: the turn holds its request open
+        // for minutes, and a URL that only becomes shareable once the work
+        // finishes is a URL nobody can send while the work is worth watching.
+        await navigate(`/code/${target}`);
+      }
+      await askCode(identity, target, text, newIdempotencyKey("code"));
     } catch (cause: unknown) {
       setError(describe(cause));
     } finally {
@@ -203,16 +225,22 @@ export function CodePage() {
       // optimistic append is what keeps this transcript from disagreeing with
       // the server's; and a refused turn may still have written files, because
       // the workspace pointer moves per write rather than at the end.
-      if (sessionId !== undefined) {
+      //
+      // `target`, not `sessionId`: on the turn that opened the session the
+      // prop is still undefined here -- the navigation above does not write it
+      // back into this closure -- so reading it would skip the reload on
+      // exactly the turn that created everything there is to load.
+      if (target !== undefined) {
+        const settled = target;
         await Promise.all([
-          reload(sessionId).catch(() => undefined),
+          reload(settled).catch(() => undefined),
           // The first instruction is what names the session, and every
           // instruction moves it to the top of the list.
           queries.invalidateQueries({ queryKey: ["code-sessions", identity] }),
         ]);
       }
     }
-  }, [identity, instruction, queries, reload, running, sessionId]);
+  }, [identity, instruction, navigate, queries, reload, running, sessionId]);
 
   const open = useCallback(
     async (file: WorkspaceEntryView) => {
@@ -276,6 +304,58 @@ export function CodePage() {
     [identity, queries],
   );
 
+  const attach = useCallback(
+    async (chosen: FileList | null) => {
+      if (chosen === null || chosen.length === 0) return;
+      // The session has to exist before a file can go in it, and the composer
+      // is reachable before one does (opening lazily is what removed the
+      // splash screen). Rather than open one here -- which would create a
+      // session whose first act was not an instruction, leaving it unnamed in
+      // the list -- this asks for a sentence first.
+      if (sessionId === undefined) {
+        setError("先说一句要做的事，会话开起来之后就能上传文件了。");
+        return;
+      }
+      setUploading(true);
+      setError(null);
+      try {
+        // Sequential, not `Promise.all`: each write advances the workspace
+        // version with a compare-and-set against the one it read, so two
+        // uploads in flight would race and the loser would be refused.
+        for (const file of Array.from(chosen)) {
+          const listing = await putCodeWorkspaceFile(identity, sessionId, file);
+          setFiles(listing.files);
+          setLoadedFor(sessionId);
+        }
+      } catch (cause: unknown) {
+        setError(describe(cause));
+      } finally {
+        setUploading(false);
+      }
+    },
+    [identity, sessionId],
+  );
+
+  const remove = useCallback(
+    async (target: string) => {
+      // Confirmed because it cannot be undone and the row it removes is a
+      // whole conversation. `window.confirm` rather than a dialog component:
+      // this console has no modal of its own, and inventing one here would be
+      // a second thing to review.
+      if (!window.confirm("删除这个编码会话？它的对话和步骤都会消失。")) return;
+      try {
+        await deleteCodeSession(identity, target);
+        await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
+        // Only when the reader was looking at it. Navigating away from a
+        // session they had not opened would move them for somebody else's sake.
+        if (target === sessionId) await navigate("/code");
+      } catch (cause: unknown) {
+        setError(describe(cause));
+      }
+    },
+    [identity, navigate, queries, sessionId],
+  );
+
   const sessionList =
     known.length === 0 ? null : (
       <nav aria-label="最近的编码会话" className="aw-code-recent">
@@ -310,22 +390,37 @@ export function CodePage() {
                   />
                 </form>
               ) : (
-                <button
-                  aria-current={held.session_id === sessionId ? "page" : undefined}
-                  className="aw-code-recent-link"
-                  onClick={() => {
-                    void navigate(`/code/${held.session_id}`);
-                  }}
-                  onDoubleClick={() => {
-                    setRenaming(held.session_id);
-                  }}
-                  // Named after the first instruction, so most rows have one.
-                  // The id is the fallback for a session opened and never used.
-                  title={held.title ?? held.session_id}
-                  type="button"
-                >
-                  {held.title ?? shortId(held.session_id)}
-                </button>
+                <div className="aw-code-recent-row">
+                  <button
+                    aria-current={held.session_id === sessionId ? "page" : undefined}
+                    className="aw-code-recent-link"
+                    onClick={() => {
+                      void navigate(`/code/${held.session_id}`);
+                    }}
+                    onDoubleClick={() => {
+                      setRenaming(held.session_id);
+                    }}
+                    // Named after the first instruction, so most rows have one.
+                    // The id is the fallback for a session opened and never used.
+                    title={held.title ?? held.session_id}
+                    type="button"
+                  >
+                    {held.title ?? shortId(held.session_id)}
+                  </button>
+                  {/* Always rendered, not revealed on hover: a control that
+                      only exists under a pointer is one a keyboard cannot
+                      reach and a touch screen never shows. CSS dims it until
+                      the row is hovered or the button focused. */}
+                  <button
+                    aria-label={`删除会话 ${held.title ?? held.session_id}`}
+                    className="aw-code-recent-delete"
+                    onClick={() => void remove(held.session_id)}
+                    title="删除"
+                    type="button"
+                  >
+                    <Trash2 aria-hidden size={13} />
+                  </button>
+                </div>
               )}
             </li>
           ))}
@@ -333,33 +428,11 @@ export function CodePage() {
       </nav>
     );
 
-  if (sessionId === undefined) {
-    return (
-      <div className="aw-code-page is-empty">
-        <main className="aw-code-main">
-          <section className="aw-code-transcript">
-            <EmptyState
-              icon={<Code2 aria-hidden />}
-              title="还没有编码会话"
-              description="打开一个会话，然后用一句话描述你要做的事。"
-              action={
-                <button
-                  className="aw-button is-primary"
-                  disabled={opening}
-                  onClick={() => void openSession()}
-                  type="button"
-                >
-                  {opening ? "正在打开" : "新建编码会话"}
-                </button>
-              }
-            />
-            {sessionList}
-          </section>
-          {error === null ? null : <ErrorNotice message={error} />}
-        </main>
-      </div>
-    );
-  }
+  // No early return for "no session yet" any more. That branch rendered a
+  // full-screen door whose handle posted an empty session, and until somebody
+  // turned it there was no composer on the page at all -- so the first thing a
+  // coding tool asked of a reader was a click that did no work. The composer is
+  // now always mounted, and `send` opens the session when there is not one.
 
   return (
     <div className="aw-code-page">
@@ -368,7 +441,7 @@ export function CodePage() {
           {messages.length === 0 ? (
             <EmptyState
               icon={<Code2 aria-hidden />}
-              title="这个会话还是空的"
+              title={sessionId === undefined ? "开始一段编码" : "这个会话还是空的"}
               description="描述你要做的事，比如「把 notes.md 里的待办整理成清单」。"
             />
           ) : (
@@ -381,39 +454,86 @@ export function CodePage() {
                   key={`${message.role}-${String(index)}`}
                 >
                   <h3>{message.role === "user" ? "你" : "报告"}</h3>
-                  <p>{message.text}</p>
+                  {/* The report is the agent's own prose and arrives as
+                      Markdown -- lists, file names in backticks, occasionally a
+                      fenced diff. Rendered as a paragraph it was one run-on
+                      block with the syntax still in it. */}
+                  {message.role === "user" ? (
+                    <p>{message.text}</p>
+                  ) : (
+                    <MarkdownContent text={message.text} />
+                  )}
                 </li>
               ))}
             </ol>
           )}
 
-          {running ? (
-            <section aria-label="正在进行的步骤" className="aw-code-steps">
-              <LoadingLine label="正在处理" />
-              {/* One line per action, not per event.
-
-                  A turn with three tool calls emits about twenty durable events
-                  -- model started, model completed, proposed, permission
-                  resolved, started, completed, over and over -- and rendering
-                  them one to a row makes a reader reconstruct "it wrote two
-                  files" out of the log's own vocabulary. `groupSteps` already
-                  folds that for Work and Chat and argues for itself at length;
-                  this page was the one that had not adopted it. */}
-              <ol>
-                {groupSteps(steps, eventTitle).map((step) => (
-                  <li className={`is-${step.outcome}`} key={step.key}>
-                    <span className="aw-code-step-title">{step.title}</span>
-                    {step.subject === null ? null : (
-                      <span className="aw-code-value" title={step.subject}>
-                        {step.subject}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            </section>
-          ) : null}
+          {/* Not gated on `running`. The steps of a finished turn are the ones
+              a reader most often wants -- they are reading the report and
+              asking how it got there -- and this pane used to be mounted only
+              while the turn was in flight, over a list the hook emptied on the
+              way out. Both halves of that are gone: `useCodeStream` keeps the
+              session's events, and each turn is a stage that opens. */}
+          {stages.length === 0 ? null : (
+            <StepStream
+              ariaLabel="执行过程"
+              eventTitle={eventTitle}
+              running={running}
+              stages={stages}
+            />
+          )}
         </section>
+
+        {/* The file, in the wide column. It was in the 268px rail beside the
+            list it is opened from, where it squeezed that list and rendered a
+            source file at 11px in a quarter of the window -- Work has answered
+            this exact question since the day it got a preview, and answers it
+            with the reading column. */}
+        {viewing === null ? null : (
+          <section aria-label={`文件 ${viewing.name}`} className="aw-code-file-view">
+            <header>
+              <h3>{viewing.name}</h3>
+              <div className="aw-code-file-actions">
+                <button
+                  className="aw-button"
+                  onClick={() => {
+                    void downloadCodeWorkspaceFile(
+                      identity,
+                      viewing.sessionId,
+                      viewing.name,
+                    ).catch((cause: unknown) => {
+                      setError(describe(cause));
+                    });
+                  }}
+                  type="button"
+                >
+                  下载
+                </button>
+                <button
+                  className="aw-button"
+                  onClick={() => {
+                    setOpened(null);
+                  }}
+                  type="button"
+                >
+                  关闭
+                </button>
+              </div>
+            </header>
+            {viewing.text === null ? (
+              <p className="aw-code-value">
+                {viewing.loading ? "正在读取" : "这个类型只能下载。"}
+              </p>
+            ) : (
+              <>
+                <pre className="aw-code-file-body">{viewing.text}</pre>
+                {viewing.truncated ? (
+                  <p className="aw-code-value">只显示了开头一部分，完整内容请下载。</p>
+                ) : null}
+              </>
+            )}
+          </section>
+        )}
 
         {pending.length === 0 ? null : (
           <section aria-label="待批准的调用" className="aw-code-approvals">
@@ -488,14 +608,37 @@ export function CodePage() {
       <aside aria-label="工作区文件" className="aw-code-workspace">
         <header>
           <h2>工作区</h2>
-          <button
-            className="aw-button"
-            disabled={opening}
-            onClick={() => void openSession()}
-            type="button"
-          >
-            {opening ? "正在打开" : "新建"}
-          </button>
+          <div className="aw-code-workspace-actions">
+            {/* A label wrapping a hidden input, not a button that clicks one
+                through a ref: this is the one control shape a keyboard and a
+                screen reader both already understand, and it needs no ref. */}
+            <label
+              className={`aw-button aw-code-attach ${uploading ? "is-busy" : ""}`}
+            >
+              <Paperclip aria-hidden size={13} />
+              <span>{uploading ? "正在上传" : "上传"}</span>
+              <input
+                disabled={uploading || sessionId === undefined}
+                multiple
+                onChange={(event) => {
+                  void attach(event.target.files);
+                  // Cleared so choosing the same file twice fires `change`
+                  // again -- a re-upload after an edit is an ordinary thing to
+                  // want, and without this the second attempt does nothing.
+                  event.target.value = "";
+                }}
+                type="file"
+              />
+            </label>
+            <button
+              className="aw-button"
+              disabled={opening}
+              onClick={() => void openSession()}
+              type="button"
+            >
+              {opening ? "正在打开" : "新建"}
+            </button>
+          </div>
         </header>
         {files.length === 0 ? (
           <p className="aw-code-workspace-empty">还没有文件。</p>
@@ -515,37 +658,6 @@ export function CodePage() {
               </li>
             ))}
           </ul>
-        )}
-        {viewing === null ? null : (
-          <section aria-label={`文件 ${viewing.name}`} className="aw-code-file-view">
-            <header>
-              <h3>{viewing.name}</h3>
-              <button
-                className="aw-button"
-                onClick={() => {
-                  void downloadCodeWorkspaceFile(identity, viewing.sessionId, viewing.name)
-                    .catch((cause: unknown) => {
-                      setError(describe(cause));
-                    });
-                }}
-                type="button"
-              >
-                下载
-              </button>
-            </header>
-            {viewing.text === null ? (
-              <p className="aw-code-value">
-                {viewing.loading ? "正在读取" : "这个类型只能下载。"}
-              </p>
-            ) : (
-              <>
-                <pre>{viewing.text}</pre>
-                {viewing.truncated ? (
-                  <p className="aw-code-value">只显示了开头一部分，完整内容请下载。</p>
-                ) : null}
-              </>
-            )}
-          </section>
         )}
       </aside>
         {sessionList}

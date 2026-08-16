@@ -62,12 +62,19 @@ def _reviewed_state(
     revision_count: int = 0,
     max_revisions: int = 2,
     wants_report: bool = True,
+    export_requires_approval: bool = True,
 ) -> TaskState:
+    # `export_requires_approval` defaults to True here and False in the shipped
+    # configuration, on purpose: this helper's job is to make the gate the
+    # explicit subject of whichever test asks about it, and a default matching
+    # the deployment would let a test that forgot to say still pass for the
+    # wrong reason.
     return _planned_state(
         draft_ref="draft_1",
         revision_count=revision_count,
         max_revisions=max_revisions,
         wants_report=wants_report,
+        export_requires_approval=export_requires_approval,
         review_result=ReviewResult(
             decision=decision,
             reviewed_draft_ref="draft_1",
@@ -145,10 +152,28 @@ def test_route_fails_closed_without_a_plan() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_passing_review_routes_to_approval() -> None:
-    state = _reviewed_state("pass")
+def test_a_passing_review_routes_to_approval_when_the_gate_is_on() -> None:
+    state = _reviewed_state("pass", export_requires_approval=True)
     assert route_quality_gate(state) == "approval"
     assert next_nodes("quality_gate", state) == ("approval",)
+
+
+def test_a_passing_review_exports_directly_when_the_gate_is_off() -> None:
+    """The control group for the test above: only the gate differs.
+
+    v1 used to route to ``approval`` no matter what this field said, so every
+    deployment running the shipped default -- which ADR-048 made ``false`` --
+    was stopped to authorise handing a file to the person who asked for it.
+    The gate is skipped rather than auto-answered, so nothing opens an approval
+    and nothing downstream reads a decision nobody made.
+    """
+
+    state = _reviewed_state("pass", export_requires_approval=False)
+
+    assert route_quality_gate(state) == "export"
+    assert next_nodes("quality_gate", state) == ("export",)
+    assert quality_gate_failure_reason(state) is None
+    assert terminal_failure_reason(state) is None
 
 
 def test_a_passing_review_stops_when_no_file_was_asked_for() -> None:

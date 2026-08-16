@@ -48,6 +48,18 @@ const NAVIGATION = [
   },
 ] as const;
 
+/**
+ * Where the rail's one dividing line goes: before the first entry that is not
+ * a primary flow.
+ *
+ * Derived rather than written as an index. It used to be `index === 1`, which
+ * put the line above Code and so drew 工作台 and Code as two separate groups --
+ * the opposite of what they are. Deriving it from `primary` also removes the
+ * failure mode that made the hardcoded version fragile: reordering NAVIGATION
+ * moved the entries and left the line where it was.
+ */
+const FIRST_SECONDARY_INDEX = NAVIGATION.findIndex((item) => !item.primary);
+
 export function AppShell() {
   const { identity, setEditorOpen } = useIdentity();
   const location = useLocation();
@@ -75,7 +87,10 @@ export function AppShell() {
             location.pathname.startsWith(prefix),
           );
           return (
-            <div className={index === 1 ? "aw-nav-divider" : ""} key={item.to}>
+            <div
+              className={index === FIRST_SECONDARY_INDEX ? "aw-nav-divider" : ""}
+              key={item.to}
+            >
               {/* `Link`, not `NavLink`: this entry stands for a set of
                   prefixes, and `NavLink` overwrites `aria-current` with its own
                   single-path match -- which reads "not here" on /work. */}
