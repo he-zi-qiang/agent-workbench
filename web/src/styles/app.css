@@ -136,10 +136,17 @@ a {
   transition: color var(--aw-transition), background var(--aw-transition);
 }
 
-.aw-global-link:hover,
-.aw-global-link.active {
+.aw-global-link:hover {
   background: var(--aw-rail-hover);
   color: #fff;
+}
+
+/* Hover and active used to share one rule, so "the page I am on" and "the
+   icon under my mouse" looked identical. Active gets the accent-tinted
+   chip; hover stays a neutral gray that disappears when the pointer moves. */
+.aw-global-link.active {
+  background: var(--aw-accent-soft);
+  color: var(--aw-text);
 }
 
 .aw-global-link.active svg {
@@ -4456,7 +4463,10 @@ pre {
 }
 
 .aw-workbench-tab {
+  /* The transparent border reserves the active state's box, so switching
+     tabs never nudges the strip by 1px. */
   padding: 5px 16px;
+  border: 1px solid transparent;
   border-radius: 7px;
   color: var(--aw-text-soft);
   font-size: 13px;
@@ -4467,10 +4477,14 @@ pre {
   color: var(--aw-text);
 }
 
+/* A white pill on a #f7f7f5 container is a 3/255 delta -- nobody can see
+   it, and "对话 or 任务?" was answered only by font weight. The accent
+   underline plus a real border is the cue that survives any monitor. */
 .aw-workbench-tab[aria-current="page"] {
+  border-color: var(--aw-border);
   background: var(--aw-surface, #fff);
   color: var(--aw-text);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+  box-shadow: inset 0 -2px 0 var(--aw-accent), 0 1px 2px rgb(0 0 0 / 6%);
   font-weight: 600;
 }
 

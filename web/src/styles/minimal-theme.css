@@ -50,9 +50,15 @@ body {
   color: var(--aw-text-muted);
 }
 
-.aw-global-link:hover,
-.aw-global-link.active {
+.aw-global-link:hover {
   background: var(--aw-rail-hover);
+  color: var(--aw-text);
+}
+
+/* Same split as the base skin: active is an accent-tinted chip, hover a
+   neutral one, so the current page stays marked when the pointer leaves. */
+.aw-global-link.active {
+  background: var(--aw-accent-soft);
   color: var(--aw-text);
 }
 
