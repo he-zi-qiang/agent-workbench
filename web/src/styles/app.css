@@ -4320,6 +4320,33 @@ pre {
   font-weight: 600;
 }
 
+.aw-code-workspace-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The upload control is a `label` wrapping a hidden `input[type=file]`, so it
+   has to be told to look and size like the button beside it. `display: none`
+   on the input rather than `visibility: hidden`: the label is what takes focus
+   and forwards the click, so the input never needs to be reachable itself. */
+.aw-code-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.aw-code-attach input {
+  display: none;
+}
+
+.aw-code-attach.is-busy,
+.aw-code-attach:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 /* A workspace row is a button now, so it has to stop looking like one. */
 .aw-code-file-open {
   display: flex;

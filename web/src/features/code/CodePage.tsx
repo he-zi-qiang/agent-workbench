@@ -23,7 +23,7 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Code2, Trash2 } from "lucide-react";
+import { Code2, Paperclip, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
@@ -38,6 +38,7 @@ import {
   getCodeWorkspaceFileText,
   listCodeSessions,
   newIdempotencyKey,
+  putCodeWorkspaceFile,
   renameCodeSession,
 } from "../../api/client";
 import type {
@@ -87,6 +88,7 @@ export function CodePage() {
   const [opening, setOpening] = useState(false);
   const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const queries = useQueryClient();
 
   // A query rather than an effect, because two things invalidate it -- opening
@@ -300,6 +302,38 @@ export function CodePage() {
       }
     },
     [identity, queries],
+  );
+
+  const attach = useCallback(
+    async (chosen: FileList | null) => {
+      if (chosen === null || chosen.length === 0) return;
+      // The session has to exist before a file can go in it, and the composer
+      // is reachable before one does (opening lazily is what removed the
+      // splash screen). Rather than open one here -- which would create a
+      // session whose first act was not an instruction, leaving it unnamed in
+      // the list -- this asks for a sentence first.
+      if (sessionId === undefined) {
+        setError("先说一句要做的事，会话开起来之后就能上传文件了。");
+        return;
+      }
+      setUploading(true);
+      setError(null);
+      try {
+        // Sequential, not `Promise.all`: each write advances the workspace
+        // version with a compare-and-set against the one it read, so two
+        // uploads in flight would race and the loser would be refused.
+        for (const file of Array.from(chosen)) {
+          const listing = await putCodeWorkspaceFile(identity, sessionId, file);
+          setFiles(listing.files);
+          setLoadedFor(sessionId);
+        }
+      } catch (cause: unknown) {
+        setError(describe(cause));
+      } finally {
+        setUploading(false);
+      }
+    },
+    [identity, sessionId],
   );
 
   const remove = useCallback(
@@ -574,14 +608,37 @@ export function CodePage() {
       <aside aria-label="工作区文件" className="aw-code-workspace">
         <header>
           <h2>工作区</h2>
-          <button
-            className="aw-button"
-            disabled={opening}
-            onClick={() => void openSession()}
-            type="button"
-          >
-            {opening ? "正在打开" : "新建"}
-          </button>
+          <div className="aw-code-workspace-actions">
+            {/* A label wrapping a hidden input, not a button that clicks one
+                through a ref: this is the one control shape a keyboard and a
+                screen reader both already understand, and it needs no ref. */}
+            <label
+              className={`aw-button aw-code-attach ${uploading ? "is-busy" : ""}`}
+            >
+              <Paperclip aria-hidden size={13} />
+              <span>{uploading ? "正在上传" : "上传"}</span>
+              <input
+                disabled={uploading || sessionId === undefined}
+                multiple
+                onChange={(event) => {
+                  void attach(event.target.files);
+                  // Cleared so choosing the same file twice fires `change`
+                  // again -- a re-upload after an edit is an ordinary thing to
+                  // want, and without this the second attempt does nothing.
+                  event.target.value = "";
+                }}
+                type="file"
+              />
+            </label>
+            <button
+              className="aw-button"
+              disabled={opening}
+              onClick={() => void openSession()}
+              type="button"
+            >
+              {opening ? "正在打开" : "新建"}
+            </button>
+          </div>
         </header>
         {files.length === 0 ? (
           <p className="aw-code-workspace-empty">还没有文件。</p>

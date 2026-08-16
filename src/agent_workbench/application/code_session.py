@@ -281,6 +281,59 @@ class CodeSessionService:
             principal_id=principal_id,
         ).list(session.workspace_version)
 
+    async def put_workspace_file(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        name: str,
+        content: bytes,
+        media_type: str,
+    ) -> tuple[WorkspaceListing, ...]:
+        """Put a file a *person* supplied into this session's working set.
+
+        The counterpart to `open_workspace_file`, and the half a coding session
+        was missing: an agent could produce files and read them back, and there
+        was no way to hand it one. Until this existed, giving a session a log to
+        look at meant pasting it into the instruction -- which spends context on
+        content the workspace is built to hold, and truncates anything large.
+
+        Binary types are allowed here, and deliberately so. `WorkspaceWriteTool`
+        refuses docx, xlsx, pptx and pdf, and that refusal is about what the
+        *model* may synthesise: a model emitting what it claims are docx bytes
+        is producing something no reader can trust. A person attaching a PDF is
+        the opposite situation -- the bytes are the thing they have, and the
+        session's job is to look at them.
+
+        Reuses `SessionWorkspace`, so the version pointer advances with the same
+        compare-and-set every tool write uses. An upload racing a running turn
+        loses that comparison and is refused, rather than leaving the session
+        pointing at a manifest that names only the uploaded file.
+        """
+
+        session = await self.conversations.session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="code",
+        )
+        workspace = SessionWorkspace(
+            workspace=Workspace(
+                artifacts=self.artifacts,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            ),
+            conversations=self.conversations,
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        )
+        version = await workspace.write(
+            session.workspace_version, name, content, media_type=media_type
+        )
+        return await workspace.list(version)
+
     async def open_workspace_file(
         self, *, session_id: str, tenant_id: str, principal_id: str, name: str
     ) -> tuple[ArtifactRef, AsyncIterator[bytes]]:

@@ -923,6 +923,38 @@ export async function deleteCodeSession(
   });
 }
 
+/**
+ * Put one file into a coding session's workspace.
+ *
+ * A raw-body PUT, not a multipart form, because that is the seam this API puts
+ * document bytes through -- `apiRequest` is the control plane and serialises
+ * JSON, so this builds its own request rather than widening that one to carry
+ * a Blob it would have to special-case.
+ */
+export async function putCodeWorkspaceFile(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  file: File,
+): Promise<WorkspaceResponse> {
+  const response = await fetch(
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(file.name)}`,
+    {
+      method: "PUT",
+      headers: {
+        accept: "application/json",
+        ...identityHeaders(identity),
+        // The browser's own guess, and `application/octet-stream` when it has
+        // none. Sending the empty string would make the server read a header
+        // that is present and meaningless.
+        "content-type": file.type === "" ? "application/octet-stream" : file.type,
+      },
+      body: file,
+    },
+  );
+  if (!response.ok) throw await parseError(response);
+  return (await response.json()) as WorkspaceResponse;
+}
+
 export async function deleteChatSession(
   identity: PrincipalIdentity,
   sessionId: string,

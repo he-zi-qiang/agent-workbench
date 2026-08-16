@@ -374,6 +374,19 @@ contract and are deliberately not in this module yet"。缺的正是这份解码
 两个端点。上传能力在，但"这一轮对话带这几个文件"和"这个 Task 以这份文件为输入"
 两条产品语义没有接上。
 
+**Code 那一条已经有了，而且走的是另一条路**（ADR-057 那次改动顺带）：
+`PUT /v1/code/sessions/{id}/workspace/{name}` 把一份人给的文件直接写进会话工作区，
+复用 `SessionWorkspace` 的写入与 compare-and-set 指针推进。它**没有**复用
+`/v1/uploads` 三步流程，因为那条流程的终点被 `CompleteUploadRequest` 钉死在知识库
+上；而一个编码会话要的不是"进知识库"，是"进这个工作区"。
+
+允许二进制，这一点与 `WorkspaceWriteTool` 拒绝 docx/xlsx/pptx/pdf 不矛盾：那条
+拒绝管的是**模型**能合成什么（模型吐出它声称是 docx 的字节，没有读者该信），
+而人附一个 PDF 时，字节就是他手里的东西。
+
+已验证（2026-08-16 本地）：传入一个 24 字节的 `rows.csv`，随后一句「读一下，第二列
+加起来是多少」，回合读回文件并答 21。
+
 ### D-02 Chat Session 的服务端列表、重命名与完整历史元数据 —— **删除这一半已关闭**
 
 **已关闭的部分**（ADR-056）：`DELETE /v1/chat/sessions/{id}` 存在，

@@ -13,6 +13,7 @@ import {
   getCodeWorkspace,
   getCodeWorkspaceFileText,
   listCodeSessions,
+  putCodeWorkspaceFile,
   renameCodeSession,
 } from "../../api/client";
 import type { PrincipalIdentity } from "../../api/types";
@@ -34,6 +35,7 @@ vi.mock("../../api/client", () => ({
   ),
   downloadCodeWorkspaceFile: vi.fn(() => Promise.resolve()),
   listCodeSessions: vi.fn(() => Promise.resolve({ sessions: [] })),
+  putCodeWorkspaceFile: vi.fn(() => Promise.resolve({ files: [] })),
   renameCodeSession: vi.fn(() =>
     Promise.resolve({ session_id: "ses_code_1", title: "x", last_activity_at: null }),
   ),
@@ -449,6 +451,27 @@ describe("CodePage", () => {
     await waitFor(() => {
       expect(vi.mocked(getCodeHistory).mock.calls.at(-1)?.[1]).toBe("ses_code_older");
     });
+  });
+
+  it("puts an attached file into the workspace and shows it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(putCodeWorkspaceFile).mockResolvedValue({
+      files: [{ name: "notes.txt", size_bytes: 11, media_type: "text/plain" }],
+    });
+
+    mounted();
+    const pane = await screen.findByRole("complementary", { name: "工作区文件" });
+    const file = new File(["hello world"], "notes.txt", { type: "text/plain" });
+
+    await user.upload(within(pane).getByLabelText(/上传/), file);
+
+    await waitFor(() => {
+      expect(vi.mocked(putCodeWorkspaceFile).mock.calls[0]?.[2]).toBe(file);
+    });
+    // The listing the write answered with, not a refetch: the endpoint returns
+    // it precisely so the pane does not have to ask again for something it was
+    // just told.
+    expect(await within(pane).findByText("notes.txt")).toBeInTheDocument();
   });
 
   it("deletes a session only after the reader confirms", async () => {

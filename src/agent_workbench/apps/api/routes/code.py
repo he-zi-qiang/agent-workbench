@@ -348,6 +348,53 @@ class WorkspaceResponse(BaseModel):
     files: tuple[WorkspaceEntryView, ...]
 
 
+@router.put("/sessions/{session_id}/workspace/{name}")
+async def put_workspace_file(
+    session_id: str, name: str, request: Request
+) -> WorkspaceResponse:
+    """Put a file a person supplied into this session's working set.
+
+    A raw-body PUT, matching `PUT /v1/uploads/{id}/content` rather than the
+    JSON routes around it. That is this repository's line between the control
+    plane and the data plane (`app.document_upload_transport`), and an
+    attachment is data: a multipart form here would put document bytes through
+    the JSON body limit and give the control plane a second content type to
+    know about.
+
+    The media type comes from the request's own `content-type`, defaulting to
+    `application/octet-stream` -- the same thing the browser sends for a file
+    it cannot classify, and an honest answer rather than a guess from the
+    extension.
+
+    Answers with the whole listing rather than the one entry, because the
+    caller's next question is always "what is in there now" and a write has
+    just changed it.
+    """
+
+    principal = dependencies_of(request).principals.resolve(request)
+    body = await request.body()
+    files = await _code(request).put_workspace_file(
+        session_id=session_id,
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+        name=name,
+        content=body,
+        media_type=(
+            request.headers.get("content-type") or "application/octet-stream"
+        ).split(";")[0],
+    )
+    return WorkspaceResponse(
+        files=tuple(
+            WorkspaceEntryView(
+                name=entry.name,
+                size_bytes=entry.size_bytes,
+                media_type=entry.media_type,
+            )
+            for entry in files
+        )
+    )
+
+
 @router.get("/sessions/{session_id}/workspace")
 async def workspace(session_id: str, request: Request) -> WorkspaceResponse:
     """The files this session has produced.
