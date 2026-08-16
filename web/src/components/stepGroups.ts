@@ -91,7 +91,16 @@ interface Building {
   modelText: string | null;
 }
 
-export function groupSteps(events: readonly EventEnvelope[]): StepGroup[] {
+/**
+ * @param titleFor  What to call an event this module has no verb for. Passed in
+ * rather than imported because the vocabulary lives in a feature and this is a
+ * component: a caller that has words supplies them, and one that does not gets
+ * the event type, which is what this always did.
+ */
+export function groupSteps(
+  events: readonly EventEnvelope[],
+  titleFor?: (event: EventEnvelope) => string,
+): StepGroup[] {
   const order: string[] = [];
   const groups = new Map<string, Building>();
   // Where a text-less model turn should be filed once its tool calls are known.
@@ -177,7 +186,7 @@ export function groupSteps(events: readonly EventEnvelope[]): StepGroup[] {
       const group = groups.get(key) as Building;
       return {
         key,
-        title: titleOf(group),
+        title: titleOf(group, titleFor),
         subject: group.subject,
         outcome: group.outcome,
         events: group.events,
@@ -185,13 +194,20 @@ export function groupSteps(events: readonly EventEnvelope[]): StepGroup[] {
     });
 }
 
-function titleOf(group: Building): string {
+function titleOf(
+  group: Building,
+  titleFor?: (event: EventEnvelope) => string,
+): string {
   if (group.toolName !== null) {
     return TOOL_VERBS[group.toolName] ?? group.toolName;
   }
   if (group.modelText !== null) return "模型作答";
   const first = group.events[0];
-  return first === undefined ? "步骤" : first.event_type;
+  if (first === undefined) return "步骤";
+  // The raw type is the last resort, not the first. A pane that showed
+  // `RunStarted` beside 写入工作区 is half translated, which reads as a bug in
+  // the half that is not.
+  return titleFor?.(first) ?? first.event_type;
 }
 
 /**

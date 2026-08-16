@@ -69,6 +69,44 @@ QDRANT_PORT="${QDRANT_PORT:-6333}"
 PG_DB="${PG_DB:-agent_workbench_local}"
 DSN="postgresql+asyncpg://agent:ci-only@127.0.0.1:${PG_PORT}/${PG_DB}"
 
+# Proxy, and why both halves are set together.
+#
+# The web-search guard decides whether to resolve a hostname or to judge it by
+# name, and it decides from `urllib.request.getproxies()` -- the same call httpx
+# makes. On macOS that function falls back to System Configuration **only when
+# no proxy variable is set at all**. So exporting NO_PROXY on its own, which is
+# what every command here needs (Qdrant and the API itself are on loopback and
+# must not go through a proxy), silently switches the lookup off: the guard then
+# resolves, a fake-IP proxy hands back 198.18.0.0/15, and every web search is
+# refused with `refused=N` and no clue why. Measured: five of five pages refused
+# on a weather question, and the answer read "搜索结果暂时无法获取".
+#
+# So: if the shell has no proxy set and the system does, carry the system one
+# forward explicitly. An exported variable still wins, so anyone with their own
+# setup is untouched. `scutil` rather than `networksetup` because it answers for
+# whichever service is active, and its absence is not an error -- a machine with
+# no proxy simply gets nothing here.
+if [ -z "${HTTPS_PROXY:-}${https_proxy:-}" ] && command -v scutil >/dev/null 2>&1; then
+  _system_proxy="$(
+    scutil --proxy 2>/dev/null | awk '
+      /HTTPSEnable/ { enabled = $3 }
+      /HTTPSProxy/  { host = $3 }
+      /HTTPSPort/   { port = $3 }
+      END { if (enabled == 1 && host != "") print "http://" host ":" port }
+    '
+  )"
+  if [ -n "$_system_proxy" ]; then
+    export HTTPS_PROXY="$_system_proxy"
+    export HTTP_PROXY="$_system_proxy"
+    echo "carrying the system proxy forward: $_system_proxy" >&2
+  fi
+  unset _system_proxy
+fi
+# Loopback never goes through it. Set after the block above on purpose: setting
+# it first is what suppresses the lookup that block depends on.
+export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,::1}"
+export no_proxy="$NO_PROXY"
+
 export PYTHONPATH=src
 export AW_CONFIG_FILE=config/config.local.toml
 export AW_DATABASE__DSN="$DSN"

@@ -47,14 +47,30 @@ class SourcesUnreadableError(RuntimeError):
     which address any single refusal was aimed at.
     """
 
-    def __init__(self, named: int, reasons: dict[str, int] | None = None) -> None:
+    def __init__(
+        self,
+        named: int,
+        reasons: dict[str, int] | None = None,
+        *,
+        hint: str | None = None,
+    ) -> None:
         self.named = named
         self.reasons = dict(reasons or {})
+        self.hint = hint
         breakdown = ", ".join(
             f"{code}={count}" for code, count in sorted(self.reasons.items())
         )
         detail = f" ({breakdown})" if breakdown else ""
-        super().__init__(f"search named {named} page(s) and none could be read{detail}")
+        # The hint is the operator's half of the message. The counts above tell
+        # a model what happened; a code that only ever appears when a machine is
+        # configured a particular way should also tell the person reading the
+        # log what to change -- which is the half that was missing when the
+        # docstring above was written from a debugging session rather than from
+        # the output.
+        suffix = f" {hint}" if hint else ""
+        super().__init__(
+            f"search named {named} page(s) and none could be read{detail}.{suffix}"
+        )
 
 
 @runtime_checkable

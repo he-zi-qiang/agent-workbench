@@ -46,6 +46,7 @@ import {
   LoadingLine,
   shortId,
 } from "../../components/ui";
+import { groupSteps } from "../../components/stepGroups";
 import { eventTitle } from "../work/workTimeline";
 import { useCodeStream } from "./useCodeStream";
 
@@ -377,9 +378,25 @@ export function CodePage() {
           {running ? (
             <section aria-label="正在进行的步骤" className="aw-code-steps">
               <LoadingLine label="正在处理" />
+              {/* One line per action, not per event.
+
+                  A turn with three tool calls emits about twenty durable events
+                  -- model started, model completed, proposed, permission
+                  resolved, started, completed, over and over -- and rendering
+                  them one to a row makes a reader reconstruct "it wrote two
+                  files" out of the log's own vocabulary. `groupSteps` already
+                  folds that for Work and Chat and argues for itself at length;
+                  this page was the one that had not adopted it. */}
               <ol>
-                {steps.map((event) => (
-                  <li key={event.event_id}>{eventTitle(event)}</li>
+                {groupSteps(steps, eventTitle).map((step) => (
+                  <li className={`is-${step.outcome}`} key={step.key}>
+                    <span className="aw-code-step-title">{step.title}</span>
+                    {step.subject === null ? null : (
+                      <span className="aw-code-value" title={step.subject}>
+                        {step.subject}
+                      </span>
+                    )}
+                  </li>
                 ))}
               </ol>
             </section>

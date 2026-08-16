@@ -268,28 +268,83 @@ describe("CodePage", () => {
     });
   });
 
-  it("shows what the agent is doing while a turn runs", async () => {
+  it("shows one line per action, not one per protocol event", async () => {
     const user = userEvent.setup();
     vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
-    vi.mocked(useCodeStream).mockReturnValue([
-      {
-        event_id: "evt_1",
-        event_type: "ToolStarted",
-        sequence: 1,
-        payload: { kind: "ToolStarted", tool_name: "workspace_write" },
-      } as unknown as ReturnType<typeof useCodeStream>[number],
-    ]);
+    // One tool call, as the server actually emits it: five events for the call
+    // plus the model turn that proposed it.
+    vi.mocked(useCodeStream).mockReturnValue(
+      [
+        {
+          event_id: "evt_m1",
+          event_type: "ModelStarted",
+          sequence: 1,
+          payload: { kind: "ModelStarted", model_call_id: "mc_1" },
+        },
+        {
+          event_id: "evt_m2",
+          event_type: "ModelCompleted",
+          sequence: 2,
+          payload: {
+            kind: "ModelCompleted",
+            model_call_id: "mc_1",
+            text: "",
+            tool_call_ids: ["call_1"],
+          },
+        },
+        {
+          event_id: "evt_1",
+          event_type: "ToolProposed",
+          sequence: 3,
+          payload: {
+            kind: "ToolProposed",
+            tool_call_id: "call_1",
+            tool_name: "workspace_write",
+            argument_preview: JSON.stringify({ name: "notes.md" }),
+          },
+        },
+        {
+          event_id: "evt_2",
+          event_type: "PermissionResolved",
+          sequence: 4,
+          payload: {
+            kind: "PermissionResolved",
+            tool_call_id: "call_1",
+            effect: "allow",
+          },
+        },
+        {
+          event_id: "evt_3",
+          event_type: "ToolStarted",
+          sequence: 5,
+          payload: {
+            kind: "ToolStarted",
+            tool_call_id: "call_1",
+            tool_name: "workspace_write",
+          },
+        },
+        {
+          event_id: "evt_4",
+          event_type: "ToolCompleted",
+          sequence: 6,
+          payload: { kind: "ToolCompleted", tool_call_id: "call_1" },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>,
+    );
 
     mounted();
     await user.type(screen.getByLabelText("要做的事"), "write notes.md");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
     const steps = await screen.findByRole("region", { name: "正在进行的步骤" });
-    // Titled from the shared event vocabulary, so an event type this console
-    // does not know is visible as unknown rather than dropped.
-    expect(
-      within(steps).getByText("工具调用已开始：workspace_write"),
-    ).toBeInTheDocument();
+    // Six events, one action. Rendered one row per event this read "模型调用已
+    // 开始 / 模型调用已完成 / 工具调用已提出 / 权限检查已完成 / 工具调用已开始 /
+    // 工具调用已完成" -- the log's vocabulary, leaving a reader to work out that
+    // a file was written.
+    expect(within(steps).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(steps).getByText("写入工作区")).toBeInTheDocument();
+    // And what it was aimed at, which is the half that says *which* file.
+    expect(within(steps).getByText("notes.md")).toBeInTheDocument();
   });
 
   it("lists sessions by the name their first instruction gave them", async () => {

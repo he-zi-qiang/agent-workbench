@@ -4383,3 +4383,31 @@ pre {
   color: var(--aw-text-soft);
   font-size: 13px;
 }
+
+/* A step is one action: what it was, and what it was aimed at. */
+.aw-code-steps li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.aw-code-step-title {
+  flex: none;
+}
+
+/* The subject -- a filename, a query -- gives way before the verb does. */
+.aw-code-steps li .aw-code-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Only the two outcomes worth interrupting a reader for. A finished step is
+   the normal case and says so by saying nothing. */
+.aw-code-steps li.is-failed .aw-code-step-title {
+  color: var(--aw-danger, #b3261e);
+}
+
+.aw-code-steps li.is-denied .aw-code-step-title {
+  color: var(--aw-warning, #8a5300);
+}

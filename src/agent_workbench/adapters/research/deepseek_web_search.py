@@ -286,7 +286,9 @@ class DeepSeekWebSearch:
             for item in fetched:
                 code = item.failure if isinstance(item, _Fetched) else _UNREACHABLE
                 reasons[code] = reasons.get(code, 0) + 1
-            raise SourcesUnreadableError(len(named), reasons)
+            raise SourcesUnreadableError(
+                len(named), reasons, hint=_diagnose(reasons, len(named))
+            )
 
         # Second turn: condense the fetched text. Sources are addressed by
         # *index* into a list this adapter built, so a URL or title can only
@@ -548,6 +550,33 @@ def _decoded(response: Any) -> str:
 
 def _clean(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _diagnose(reasons: dict[str, int], named: int) -> str | None:
+    """The one sentence that turns this failure into a fix, when it applies.
+
+    Only for the shape that is otherwise indistinguishable from a bad query:
+    *every* page refused, and this process routing nothing through a proxy. On
+    a developer machine that combination has one cause -- a fake-IP proxy whose
+    resolver hands out 198.18.0.0/15, which the address guard refuses exactly as
+    designed -- and the counts alone send the reader looking for a better query.
+
+    Deliberately narrow. A mixed bag of refusals and HTTP errors is a normal
+    web; a refusal *with* a proxy configured is the guard's name check doing its
+    job. Guessing at either would put a wrong explanation where a reader is
+    least able to check it.
+    """
+
+    if reasons.get(_REFUSED, 0) != named or named == 0:
+        return None
+    if routes_through_proxy("https://example.invalid/"):
+        return None
+    return (
+        "Every address was refused and this process sees no proxy: check whether "
+        "a local fake-IP proxy is resolving names into 198.18.0.0/15. Setting "
+        "HTTPS_PROXY alongside NO_PROXY makes the guard check names instead -- "
+        "NO_PROXY on its own suppresses the system-proxy lookup."
+    )
 
 
 __all__ = [
