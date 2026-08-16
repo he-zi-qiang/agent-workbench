@@ -15,7 +15,7 @@ import {
 } from "../../components/ui";
 
 export function SystemPage() {
-  const { identity, setEditorOpen } = useIdentity();
+  const { setEditorOpen } = useIdentity();
   const health = useQuery({
     queryKey: ["system-health"],
     queryFn: async () => {

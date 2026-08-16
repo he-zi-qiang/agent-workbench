@@ -112,12 +112,12 @@ export function EvaluationPage() {
           <div className="aw-eval-run" aria-live="polite">
             <p>
               <strong>{describeSuite(live.suite)}</strong>
+              {" "}
               {live.status === "running"
-                ? `　正在跑，已经 ${elapsed(live.started_at)}。一次完整消融通常
-                   30–70 分钟，这台机器同时只跑得动一件重活。`
+                ? `正在跑，已经 ${elapsed(live.started_at)}。一次完整消融通常 30–70 分钟，这台机器同时只跑得动一件重活。`
                 : live.status === "succeeded"
-                  ? "　已经跑完，下面的报告是新的。"
-                  : `　失败了（退出码 ${String(live.exit_code ?? "未知")}）。`}
+                  ? "已经跑完，下面的报告是新的。"
+                  : `失败了（退出码 ${String(live.exit_code ?? "未知")}）。`}
             </p>
             {live.recent_output.length === 0 ? null : (
               <pre>{live.recent_output.slice(-12).join("\n")}</pre>

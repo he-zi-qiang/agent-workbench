@@ -17,6 +17,8 @@ import asyncio
 import logging
 import os
 import tomllib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,6 +59,46 @@ from agent_workbench.domain.events import UngroundedAnswerCommitted
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import AgentOutcome, RunBudget
 from agent_workbench.ports.event_log import EventScope
+
+#: The module whose warning these two tests are about.
+_API_LOGGER = "agent_workbench.apps.api.main"
+
+
+@contextmanager
+def _warnings_from(name: str) -> Iterator[list[str]]:
+    """Every warning that logger emits, whatever the rest of the run did to it.
+
+    Not `caplog`. `test_migrations` in `tests/persistence` builds an Alembic
+    `Config`, and `fileConfig(disable_existing_loggers=True)` takes pytest's
+    capturing handler off the root logger *and disables every logger that
+    already exists* -- for the rest of the process. A `caplog` assertion here
+    therefore passes when this file runs alone and is vacuous in the run CI
+    does, which is exactly how this test reached CI green locally and red there.
+    `test_task_ready_listener.py` documents the same trap and solves it by
+    asserting something that cannot be switched off; this does the same, by
+    holding its own handler and undoing the disable for the duration.
+    """
+
+    logger = logging.getLogger(name)
+    captured: list[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    handler = _Collect(level=logging.WARNING)
+    disabled = logger.disabled
+    level = logger.level
+    logger.disabled = False
+    logger.setLevel(logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        yield captured
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(level)
+        logger.disabled = disabled
+
 
 TENANT = "tenant_a"
 OWNER = "user_1"
@@ -784,9 +826,7 @@ def test_another_principal_cannot_read_the_working_set() -> None:
     "AGENT_WORKBENCH_TEST_DSN" not in os.environ,
     reason="the real assembly needs a database",
 )
-def test_a_process_that_cannot_serve_code_says_so(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_a_process_that_cannot_serve_code_says_so(tmp_path: Path) -> None:
     """Asked for, not served, and not silent about it.
 
     Written from a profile that got this wrong. `code.enabled = true` sat two
@@ -800,31 +840,25 @@ def test_a_process_that_cannot_serve_code_says_so(
     the word "code" in it, and nobody upstream heard.
     """
 
-    with caplog.at_level(logging.WARNING):
+    with _warnings_from(_API_LOGGER) as warnings:
         serves, status, _ = _booted(tmp_path, code_enabled=True, model_pinned=False)
 
     assert serves is False
     assert status == 404
-    assert any("code.enabled is true" in record.message for record in caplog.records), [
-        record.message for record in caplog.records
-    ]
+    assert any("code.enabled is true" in line for line in warnings), warnings
 
 
 @pytest.mark.skipif(
     "AGENT_WORKBENCH_TEST_DSN" not in os.environ,
     reason="the real assembly needs a database",
 )
-def test_a_process_that_was_not_asked_for_code_stays_quiet(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_a_process_that_was_not_asked_for_code_stays_quiet(tmp_path: Path) -> None:
     """The control. Off because nobody asked is not a problem to report."""
 
-    with caplog.at_level(logging.WARNING):
+    with _warnings_from(_API_LOGGER) as warnings:
         _booted(tmp_path, code_enabled=False, model_pinned=False)
 
-    assert not any(
-        "code.enabled is true" in record.message for record in caplog.records
-    )
+    assert not any("code.enabled is true" in line for line in warnings), warnings
 
 
 def test_a_workspace_file_can_be_read_back_by_name() -> None:

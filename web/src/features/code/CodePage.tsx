@@ -90,6 +90,14 @@ export function CodePage() {
 
   const steps = useCodeStream(identity, sessionId, running);
 
+  // Derived, not reset. Both of these used to be cleared from an effect when
+  // their subject changed, which is a render behind: the old session's file and
+  // the finished turn's approvals were on screen for a frame first. The file
+  // already carries the session it belongs to, and the approvals are only
+  // meaningful while a turn runs, so both questions are answerable here.
+  const viewing = opened?.sessionId === sessionId ? opened : null;
+  const pending = running ? approvals : [];
+
   const loadHistory = useCallback(
     async (id: string, signal?: AbortSignal) => {
       const history = await getCodeHistory(identity, id, signal);
@@ -107,7 +115,6 @@ export function CodePage() {
   );
 
   useEffect(() => {
-    setOpened(null);
     if (sessionId === undefined) {
       setMessages([]);
       setFiles([]);
@@ -130,10 +137,7 @@ export function CodePage() {
   // nobody is waiting on the answer to, once a second, forever.
   const pollingSession = running ? sessionId : undefined;
   useEffect(() => {
-    if (pollingSession === undefined) {
-      setApprovals([]);
-      return;
-    }
+    if (pollingSession === undefined) return;
     const controller = new AbortController();
     const tick = () => {
       getCodeApprovals(identity, pollingSession, controller.signal)
@@ -159,7 +163,7 @@ export function CodePage() {
     try {
       const created = await createCodeSession(identity);
       await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
-      navigate(`/code/${created.session_id}`);
+      await navigate(`/code/${created.session_id}`);
     } catch (cause: unknown) {
       setError(describe(cause));
     } finally {
@@ -281,7 +285,12 @@ export function CodePage() {
                   onSubmit={(event) => {
                     event.preventDefault();
                     const field = new FormData(event.currentTarget).get("title");
-                    void rename(held.session_id, String(field ?? ""));
+                    // A FormData entry is a string *or a File*, and `String(File)`
+                    // is "[object File]" -- a name nobody typed.
+                    void rename(
+                      held.session_id,
+                      typeof field === "string" ? field : "",
+                    );
                   }}
                 >
                   <label className="aw-sr-only" htmlFor="aw-code-rename">
@@ -302,7 +311,7 @@ export function CodePage() {
                   aria-current={held.session_id === sessionId ? "page" : undefined}
                   className="aw-code-recent-link"
                   onClick={() => {
-                    navigate(`/code/${held.session_id}`);
+                    void navigate(`/code/${held.session_id}`);
                   }}
                   onDoubleClick={() => {
                     setRenaming(held.session_id);
@@ -403,9 +412,9 @@ export function CodePage() {
           ) : null}
         </section>
 
-        {approvals.length === 0 ? null : (
+        {pending.length === 0 ? null : (
           <section aria-label="待批准的调用" className="aw-code-approvals">
-            {approvals.map((held) => (
+            {pending.map((held) => (
               <article className="aw-code-approval" key={held.approval_id}>
                 <h3>{held.tool_name} 需要你批准</h3>
                 <p className="aw-code-value">{held.argument_digest}</p>
@@ -492,7 +501,7 @@ export function CodePage() {
             {files.map((file) => (
               <li key={file.name}>
                 <button
-                  aria-current={file.name === opened?.name ? "true" : undefined}
+                  aria-current={file.name === viewing?.name ? "true" : undefined}
                   className="aw-code-file-open"
                   onClick={() => void open(file)}
                   type="button"
@@ -504,14 +513,14 @@ export function CodePage() {
             ))}
           </ul>
         )}
-        {opened === null ? null : (
-          <section aria-label={`文件 ${opened.name}`} className="aw-code-file-view">
+        {viewing === null ? null : (
+          <section aria-label={`文件 ${viewing.name}`} className="aw-code-file-view">
             <header>
-              <h3>{opened.name}</h3>
+              <h3>{viewing.name}</h3>
               <button
                 className="aw-button"
                 onClick={() => {
-                  void downloadCodeWorkspaceFile(identity, opened.sessionId, opened.name)
+                  void downloadCodeWorkspaceFile(identity, viewing.sessionId, viewing.name)
                     .catch((cause: unknown) => {
                       setError(describe(cause));
                     });
@@ -521,14 +530,14 @@ export function CodePage() {
                 下载
               </button>
             </header>
-            {opened.text === null ? (
+            {viewing.text === null ? (
               <p className="aw-code-value">
-                {opened.loading ? "正在读取" : "这个类型只能下载。"}
+                {viewing.loading ? "正在读取" : "这个类型只能下载。"}
               </p>
             ) : (
               <>
-                <pre>{opened.text}</pre>
-                {opened.truncated ? (
+                <pre>{viewing.text}</pre>
+                {viewing.truncated ? (
                   <p className="aw-code-value">只显示了开头一部分，完整内容请下载。</p>
                 ) : null}
               </>

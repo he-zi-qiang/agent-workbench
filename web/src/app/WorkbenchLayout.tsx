@@ -19,26 +19,27 @@
  * that keeping the two pages closed was the point of avoiding.
  */
 
-import { useEffect, useRef } from "react";
+import { useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { WorkbenchTabs } from "../components/WorkbenchTabs";
 
 export function WorkbenchLayout() {
   const { pathname } = useLocation();
-  const lastChat = useRef("/chat");
-  const lastWork = useRef("/work");
 
-  useEffect(() => {
-    if (pathname.startsWith("/chat")) lastChat.current = pathname;
-    else if (pathname.startsWith("/work")) lastWork.current = pathname;
-  }, [pathname]);
+  // State adjusted during render, not a ref written from an effect. Two things
+  // were wrong with the ref: reading one while rendering is not sound under
+  // concurrent rendering, and the effect ran *after* the first paint -- so a
+  // deep link's first frame showed a tab pointing at bare `/chat`, and a reader
+  // who clicked quickly went somewhere they had not been. Adjusting state here
+  // is the pattern React documents for exactly this, and it re-renders before
+  // anything is painted.
+  const [lastChat, setLastChat] = useState("/chat");
+  const [lastWork, setLastWork] = useState("/work");
+  if (pathname.startsWith("/chat") && pathname !== lastChat) setLastChat(pathname);
+  if (pathname.startsWith("/work") && pathname !== lastWork) setLastWork(pathname);
 
-  // Read during render rather than from the effect's copy: on the very first
-  // render of a deep link the effect has not run yet, and a tab that pointed at
-  // bare `/chat` for one frame would send a reader who clicked quickly to the
-  // wrong place.
-  const chatTo = pathname.startsWith("/chat") ? pathname : lastChat.current;
-  const workTo = pathname.startsWith("/work") ? pathname : lastWork.current;
+  const chatTo = pathname.startsWith("/chat") ? pathname : lastChat;
+  const workTo = pathname.startsWith("/work") ? pathname : lastWork;
 
   return (
     <div className="aw-workbench">

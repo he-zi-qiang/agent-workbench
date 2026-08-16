@@ -1,6 +1,5 @@
 import type {
   ApprovalDecision,
-  ApprovalStatus,
   ApprovalView,
   ArtifactDownloadTarget,
   AskResponse,
