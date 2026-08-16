@@ -68,8 +68,13 @@ export function CodePage() {
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId: string }>();
 
-  const [messages, setMessages] = useState<MessageView[]>([]);
-  const [files, setFiles] = useState<WorkspaceEntryView[]>([]);
+  const [loadedMessages, setMessages] = useState<MessageView[]>([]);
+  const [loadedFiles, setFiles] = useState<WorkspaceEntryView[]>([]);
+  //: Which session the two above were loaded for. Without it the page had to
+  //: empty them from an effect when the session changed, which is a render too
+  //: late -- the previous session's transcript was on screen for a frame, and
+  //: for the whole of the next session's fetch.
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,11 +102,14 @@ export function CodePage() {
   // meaningful while a turn runs, so both questions are answerable here.
   const viewing = opened?.sessionId === sessionId ? opened : null;
   const pending = running ? approvals : [];
+  const messages = loadedFor === sessionId ? loadedMessages : [];
+  const files = loadedFor === sessionId ? loadedFiles : [];
 
   const loadHistory = useCallback(
     async (id: string, signal?: AbortSignal) => {
       const history = await getCodeHistory(identity, id, signal);
       setMessages(history.messages);
+      setLoadedFor(id);
     },
     [identity],
   );
@@ -110,16 +118,13 @@ export function CodePage() {
     async (id: string, signal?: AbortSignal) => {
       const workspace = await getCodeWorkspace(identity, id, signal);
       setFiles(workspace.files);
+      setLoadedFor(id);
     },
     [identity],
   );
 
   useEffect(() => {
-    if (sessionId === undefined) {
-      setMessages([]);
-      setFiles([]);
-      return;
-    }
+    if (sessionId === undefined) return;
     const controller = new AbortController();
     Promise.all([
       loadHistory(sessionId, controller.signal),
