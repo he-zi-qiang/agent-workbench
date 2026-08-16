@@ -55,7 +55,9 @@ Knowledge、Approvals、Evaluation、System 是证据与操作辅助页，不与
 - HTTP 与 SSE 可任意先后到达；run orphan buffer、event id 去重和幂等终态归并必须同时
   成立。
 - 离开页面不能取消 Ask HTTP，因为服务端把客户端断开解释为取消真实工作。
-- 后端没有 Session list/title projection；侧栏必须标“本地列表”。
+- **Chat** 后端仍没有 Session list/title projection，侧栏必须标“本地列表”。Code
+  已经不是这样了（ADR-047）：它的列表来自 `GET /v1/code/sessions`，名字来自第一句
+  指令。两者的差别是真的，不要把这句话当成整个控制台的事实。
 
 ### Work
 

@@ -63,14 +63,35 @@ class PostgresConversationStore:
     ) -> ConversationSession:
         async with self._engine.begin() as connection:
             try:
-                await connection.execute(
-                    insert(conversation_sessions).values(
-                        session_id=session_id,
-                        tenant_id=tenant_id,
-                        owner_id=owner_id,
-                        title=title,
-                        mode=mode,
+                # `returning` rather than rebuilding the model from the
+                # arguments: `last_activity_at` is filled by the column default,
+                # so a hand-built object would come back without it while the
+                # in-memory store's came back with it -- two adapters answering
+                # differently on the field the session list orders by.
+                row = (
+                    (
+                        await connection.execute(
+                            insert(conversation_sessions)
+                            .values(
+                                session_id=session_id,
+                                tenant_id=tenant_id,
+                                owner_id=owner_id,
+                                title=title,
+                                mode=mode,
+                            )
+                            .returning(
+                                conversation_sessions.c.session_id,
+                                conversation_sessions.c.tenant_id,
+                                conversation_sessions.c.owner_id,
+                                conversation_sessions.c.title,
+                                conversation_sessions.c.mode,
+                                conversation_sessions.c.workspace_version,
+                                conversation_sessions.c.last_activity_at,
+                            )
+                        )
                     )
+                    .mappings()
+                    .one()
                 )
             except IntegrityError as exc:
                 # A reused id is a caller mistake, not a race to retry: the
@@ -78,13 +99,7 @@ class PostgresConversationStore:
                 # conversation.
                 raise ValueError(f"session {session_id} already exists") from exc
 
-        return ConversationSession(
-            session_id=session_id,
-            tenant_id=tenant_id,
-            owner_id=owner_id,
-            title=title,
-            mode=mode,
-        )
+        return ConversationSession.model_validate(dict(row))
 
     async def append(
         self,
@@ -143,6 +158,7 @@ class PostgresConversationStore:
                     conversation_sessions.c.title,
                     conversation_sessions.c.mode,
                     conversation_sessions.c.workspace_version,
+                    conversation_sessions.c.last_activity_at,
                 )
                 .where(conversation_sessions.c.session_id == session_id)
                 .where(conversation_sessions.c.tenant_id == tenant_id)
@@ -151,6 +167,102 @@ class PostgresConversationStore:
             if mode is not None:
                 query = query.where(conversation_sessions.c.mode == mode)
             row = (await connection.execute(query)).mappings().first()
+            if row is None:
+                raise NotFoundError("conversation session not found")
+            return ConversationSession.model_validate(dict(row))
+
+    async def list_sessions(
+        self,
+        *,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode,
+        limit: int = 50,
+    ) -> tuple[ConversationSession, ...]:
+        async with self._engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    select(
+                        conversation_sessions.c.session_id,
+                        conversation_sessions.c.tenant_id,
+                        conversation_sessions.c.owner_id,
+                        conversation_sessions.c.title,
+                        conversation_sessions.c.mode,
+                        conversation_sessions.c.workspace_version,
+                        conversation_sessions.c.last_activity_at,
+                    )
+                    .where(conversation_sessions.c.tenant_id == tenant_id)
+                    .where(conversation_sessions.c.owner_id == principal_id)
+                    .where(conversation_sessions.c.mode == mode)
+                    # `session_id` breaks ties so the order is total. Without it
+                    # two sessions stamped in the same instant come back in
+                    # whichever order the plan produced, which makes a test that
+                    # asserts an order flaky rather than wrong.
+                    .order_by(
+                        conversation_sessions.c.last_activity_at.desc(),
+                        conversation_sessions.c.session_id.desc(),
+                    )
+                    .limit(limit)
+                )
+            ).mappings()
+        return tuple(ConversationSession.model_validate(dict(row)) for row in rows)
+
+    async def set_title_if_unset(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> None:
+        async with self._engine.begin() as connection:
+            statement = (
+                update(conversation_sessions)
+                .where(conversation_sessions.c.session_id == session_id)
+                .where(conversation_sessions.c.tenant_id == tenant_id)
+                .where(conversation_sessions.c.owner_id == principal_id)
+                # The arbiter. A read-then-write would race a concurrent first
+                # turn and would re-apply on a retry; this makes
+                # first-instruction-wins true rather than likely.
+                .where(conversation_sessions.c.title.is_(None))
+                .values(title=title)
+            )
+            if mode is not None:
+                statement = statement.where(conversation_sessions.c.mode == mode)
+            # Zero rows is the expected case from the second turn onwards, and
+            # is deliberately not an error: see the port's docstring.
+            await connection.execute(statement)
+
+    async def rename_session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        async with self._engine.begin() as connection:
+            statement = (
+                update(conversation_sessions)
+                .where(conversation_sessions.c.session_id == session_id)
+                .where(conversation_sessions.c.tenant_id == tenant_id)
+                .where(conversation_sessions.c.owner_id == principal_id)
+                .values(title=title)
+                .returning(
+                    conversation_sessions.c.session_id,
+                    conversation_sessions.c.tenant_id,
+                    conversation_sessions.c.owner_id,
+                    conversation_sessions.c.title,
+                    conversation_sessions.c.mode,
+                    conversation_sessions.c.workspace_version,
+                    conversation_sessions.c.last_activity_at,
+                )
+            )
+            if mode is not None:
+                statement = statement.where(conversation_sessions.c.mode == mode)
+            row = (await connection.execute(statement)).mappings().first()
             if row is None:
                 raise NotFoundError("conversation session not found")
             return ConversationSession.model_validate(dict(row))
@@ -643,6 +755,19 @@ class PostgresConversationStore:
                 }
                 for record in stored
             ],
+        )
+        # Inside the caller's transaction, which already holds this session's
+        # row lock on every path that reaches here (`_locked_session`). One more
+        # UPDATE, no additional lock.
+        #
+        # Here rather than in `append`, because this is the seam every message
+        # write passes through -- `append`, `claim_turn`, `mark_released` -- so
+        # the list reorders on somebody actually saying something rather than on
+        # which public method a route happened to call.
+        await connection.execute(
+            update(conversation_sessions)
+            .where(conversation_sessions.c.session_id == session_id)
+            .values(last_activity_at=func.now())
         )
         return stored
 

@@ -45,6 +45,7 @@ from datetime import datetime, timedelta
 from agent_workbench.application.answer_release import ProcessOnlySink
 from agent_workbench.application.code_approvals import ApprovalScope
 from agent_workbench.application.code_prompt import CODER_SYSTEM_PROMPT
+from agent_workbench.application.session_titles import title_from_instruction
 from agent_workbench.application.session_workspace import SessionWorkspace
 from agent_workbench.application.workspace import (
     Workspace,
@@ -66,7 +67,10 @@ from agent_workbench.domain.tools import ToolName
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import CancellationToken
-from agent_workbench.ports.conversation_store import ConversationStore
+from agent_workbench.ports.conversation_store import (
+    ConversationSession,
+    ConversationStore,
+)
 
 #: What a coding session is allowed to reach. Read tools plus the two writes,
 #: and nothing external: this list is also the reason no approval is currently
@@ -156,6 +160,38 @@ class CodeSessionService:
             mode="code",
         )
         return session_id
+
+    async def sessions(
+        self, *, tenant_id: str, principal_id: str, limit: int = 50
+    ) -> tuple[ConversationSession, ...]:
+        """This principal's coding sessions, most recently spoken in first.
+
+        Server-side rather than in the browser, which is where this list used
+        to live. A list kept only in `localStorage` answers "what did I do on
+        this machine, in this browser, since I last cleared it" -- and the
+        sessions it forgets are still there, still owned, and no longer
+        reachable, because a session id is the only way in.
+        """
+
+        return await self.conversations.list_sessions(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="code",
+            limit=limit,
+        )
+
+    async def rename(
+        self, *, session_id: str, tenant_id: str, principal_id: str, title: str
+    ) -> ConversationSession:
+        """Replace the name a session was given by its first instruction."""
+
+        return await self.conversations.rename_session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            title=title,
+            mode="code",
+        )
 
     async def history(
         self, *, session_id: str, tenant_id: str, principal_id: str
@@ -309,6 +345,27 @@ class CodeSessionService:
             principal_id=principal.principal_id,
             messages=(asked,),
         )
+
+        # Named here rather than at creation, because a coding session is opened
+        # before any instruction exists -- the console's "new session" button
+        # has nothing to name it with. A client could rename it after the first
+        # turn returned, but a closed tab or a dropped connection would lose
+        # exactly the session that then cannot be found again, which is the
+        # failure this exists to remove.
+        #
+        # The read above only decides whether to bother; the store's
+        # `WHERE title IS NULL` is the arbiter, so a retry writes nothing and a
+        # name somebody typed is never overwritten.
+        if session.title is None:
+            derived = title_from_instruction(request.instruction)
+            if derived is not None:
+                await self.conversations.set_title_if_unset(
+                    session_id=request.session_id,
+                    tenant_id=principal.tenant_id,
+                    principal_id=principal.principal_id,
+                    title=derived,
+                    mode="code",
+                )
 
         workspace = WorkspaceSession(
             workspace=SessionWorkspace(

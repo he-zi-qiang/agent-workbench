@@ -121,6 +121,13 @@ class ConversationSession(VersionedModel):
     #: run, which is why it lives on the row rather than in whatever object was
     #: executing.
     workspace_version: Identifier | None = None
+    #: When something was last said in this session, not when it was made.
+    #:
+    #: Optional on the model rather than required, because two of the three
+    #: things that construct a `ConversationSession` are refusals and lookups
+    #: that have no reason to carry it. Where it does matter -- the list -- the
+    #: store fills it, and the column behind it is NOT NULL.
+    last_activity_at: AwareDatetime | None = None
 
 
 class StoredMessage(VersionedModel):
@@ -386,6 +393,79 @@ class ConversationStore(Protocol):
         ``history`` because a run that has not asked for any messages still
         needs the pointer, and a pointer that cannot be read is a pointer
         nobody can write against.
+        """
+        ...
+
+    async def list_sessions(
+        self,
+        *,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode,
+        limit: int = 50,
+    ) -> tuple[ConversationSession, ...]:
+        """This principal's sessions of one kind, most recently spoken in first.
+
+        ``mode`` is required and has no default. Every other read here treats
+        the mode as a door -- see :meth:`history` -- and a list is the one place
+        where "everything I own" would walk straight through it, handing a Chat
+        client a Code session's title because both are rows in one table.
+
+        Ordered by activity rather than by creation: a list sorted by creation
+        puts a session untouched for a month above the one you were in five
+        minutes ago, which is backwards for a list whose whole job is getting
+        you back to where you were.
+
+        Bounded by ``limit`` rather than paged. This is one person's recent
+        sessions; a keyset cursor over a list bounded by human memory is
+        machinery with no reader.
+        """
+        ...
+
+    async def set_title_if_unset(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> None:
+        """Name a session, but only if nothing has named it yet.
+
+        Its own method rather than a flag on :meth:`rename_session`, because the
+        two mean opposite things: this one cannot destroy anything a person
+        typed, and renaming exists in order to. A boolean parameter would put
+        both meanings behind one call site, where the wrong argument silently
+        overwrites a name somebody chose.
+
+        The condition is in the statement, not in the caller. A read-then-write
+        would race a concurrent first turn and would also re-apply on a retry;
+        ``WHERE title IS NULL`` makes first-instruction-wins true rather than
+        likely.
+
+        Updating no rows is **not** an error. It means either that a title is
+        already there -- the expected case from the second turn onwards -- or
+        that the session is not this principal's, which the caller has already
+        established by reading it.
+        """
+        ...
+
+    async def rename_session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        """Give a session the name a person chose, replacing whatever was there.
+
+        The only overwrite. Raises :class:`NotFoundError` when the session is
+        not this principal's, in this tenant, in this mode -- the same
+        three-axis refusal, and the same single answer, as every other read
+        here.
         """
         ...
 

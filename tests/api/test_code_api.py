@@ -979,3 +979,127 @@ def test_a_chat_session_has_no_workspace_file_to_hand_over() -> None:
         return refused.status_code, served.status_code
 
     assert _run(world, scenario) == (404, 200)
+
+
+def test_the_first_instruction_names_the_session() -> None:
+    """A session is opened before there is anything to call it."""
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[str | None, str | None]:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        before = created.json()["title"]
+        await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers=HEADERS,
+            json={"instruction": "把 notes.md 里的待办整理成清单"},
+        )
+        listed = await client.get(f"{code_route.CODE_PREFIX}/sessions", headers=HEADERS)
+        return before, listed.json()["sessions"][0]["title"]
+
+    before, after = _run(world, scenario)
+
+    assert before is None
+    assert after == "把 notes.md 里的待办整理成清单"
+
+
+def test_a_second_instruction_does_not_rename_the_session() -> None:
+    """First one wins. A name that drifted with every turn would not be a name."""
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> str | None:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        for turn, instruction in enumerate(("第一句", "第二句")):
+            await client.post(
+                f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+                # A header is ASCII, so the key is derived from the position
+                # rather than from the instruction it carries.
+                headers={**HEADERS, "Idempotency-Key": f"code-turn-{turn}"},
+                json={"instruction": instruction},
+            )
+        listed = await client.get(f"{code_route.CODE_PREFIX}/sessions", headers=HEADERS)
+        return listed.json()["sessions"][0]["title"]
+
+    assert _run(world, scenario) == "第一句"
+
+
+def test_a_renamed_session_keeps_the_name_the_person_gave_it() -> None:
+    """The one overwrite, and it survives the turns that follow it."""
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[str | None, str | None]:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers=HEADERS,
+            json={"instruction": "第一句"},
+        )
+        renamed = await client.patch(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}",
+            headers=HEADERS,
+            json={"title": "重构工作区"},
+        )
+        await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers={**HEADERS, "Idempotency-Key": "code-after-rename"},
+            json={"instruction": "第三句"},
+        )
+        listed = await client.get(f"{code_route.CODE_PREFIX}/sessions", headers=HEADERS)
+        return renamed.json()["title"], listed.json()["sessions"][0]["title"]
+
+    assert _run(world, scenario) == ("重构工作区", "重构工作区")
+
+
+def test_the_session_list_does_not_show_another_principal_s_sessions() -> None:
+    owner_world = _World()
+
+    async def open_one(client: httpx.AsyncClient) -> str:
+        created = await _opened(client)
+        return str(created.json()["session_id"])
+
+    session_id = _run(owner_world, open_one)
+
+    world = _World(principal=NEIGHBOUR_PRINCIPAL)
+    world.service.conversations = owner_world.conversations
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[list[str], int]:
+        listed = await client.get(f"{code_route.CODE_PREFIX}/sessions", headers=HEADERS)
+        named = await client.patch(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}",
+            headers=HEADERS,
+            json={"title": "mine now"},
+        )
+        return (
+            [row["session_id"] for row in listed.json()["sessions"]],
+            named.status_code,
+        )
+
+    assert _run(world, scenario) == ([], 404)
+
+
+def test_a_chat_session_cannot_be_renamed_through_the_code_api() -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, list[str]]:
+        await world.conversations.create_session(
+            session_id="ses_chat_1", tenant_id=TENANT, owner_id=OWNER
+        )
+        refused = await client.patch(
+            f"{code_route.CODE_PREFIX}/sessions/ses_chat_1",
+            headers=HEADERS,
+            json={"title": "reached through the wrong door"},
+        )
+        # And it is not in the list either, which is the same gate read the
+        # other way round: one table, two APIs, and the mode is the door.
+        listed = await client.get(f"{code_route.CODE_PREFIX}/sessions", headers=HEADERS)
+        return (
+            refused.status_code,
+            [row["session_id"] for row in listed.json()["sessions"]],
+        )
+
+    assert _run(world, scenario) == (404, [])

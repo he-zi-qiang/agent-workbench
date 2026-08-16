@@ -6,6 +6,8 @@ import type {
   ArtifactDownloadTarget,
   AskResponse,
   CodeAskResponse,
+  CodeSessionListResponse,
+  CodeSessionView,
   CreateSessionResponse,
   CreateUploadResponse,
   DocumentPreview,
@@ -45,7 +47,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PUT";
+  method?: "GET" | "POST" | "PUT" | "PATCH";
   body?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -881,5 +883,25 @@ function fetchCodeWorkspaceFile(
   ).then(async (response) => {
     if (!response.ok) throw await parseError(response);
     return response;
+  });
+}
+
+export async function listCodeSessions(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<CodeSessionListResponse> {
+  return apiRequest(identity, "/v1/code/sessions", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function renameCodeSession(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  title: string,
+): Promise<CodeSessionView> {
+  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    body: { title },
   });
 }

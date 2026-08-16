@@ -64,6 +64,10 @@ class InMemoryConversationStore:
             owner_id=owner_id,
             title=title,
             mode=mode,
+            # Stamped at creation, not left null, so a session opened but never
+            # spoken in still has a place in the ordering rather than sorting
+            # as though it were the oldest thing here.
+            last_activity_at=self._clock(),
         )
         async with self._lock:
             if session_id in self._sessions:
@@ -120,6 +124,76 @@ class InMemoryConversationStore:
                 principal_id=principal_id,
                 mode=mode,
             )
+
+    async def list_sessions(
+        self,
+        *,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode,
+        limit: int = 50,
+    ) -> tuple[ConversationSession, ...]:
+        async with self._lock:
+            owned = [
+                session
+                for session in self._sessions.values()
+                if session.tenant_id == tenant_id
+                and session.owner_id == principal_id
+                and session.mode == mode
+            ]
+        # `session_id` breaks ties so the order is total. Without it two
+        # sessions stamped in the same instant could come back either way
+        # round, and a test that asserted an order would be flaky rather than
+        # wrong -- which is worse.
+        owned.sort(
+            key=lambda session: (session.last_activity_at, session.session_id),
+            reverse=True,
+        )
+        return tuple(owned[:limit])
+
+    async def set_title_if_unset(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> None:
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            # Not `_require_session`: a caller with no title to set has nothing
+            # to be told. Silence covers both "already named" and "not yours",
+            # and the only caller established the second one statement earlier.
+            if (
+                session is None
+                or session.tenant_id != tenant_id
+                or session.owner_id != principal_id
+                or (mode is not None and session.mode != mode)
+                or session.title is not None
+            ):
+                return
+            self._sessions[session_id] = session.model_copy(update={"title": title})
+
+    async def rename_session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        async with self._lock:
+            session = self._require_session(
+                session_id=session_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                mode=mode,
+            )
+            renamed = session.model_copy(update={"title": title})
+            self._sessions[session_id] = renamed
+        return renamed
 
     async def advance_workspace_version(
         self,
@@ -504,7 +578,24 @@ class InMemoryConversationStore:
             for offset, message in enumerate(messages)
         )
         stored.extend(appended)
+        # Here rather than in `append`, because this is the seam every message
+        # write passes through -- `append`, `claim_turn`, `mark_released`. Put
+        # in the public method instead, the list would reorder on "which route
+        # happened to be called" rather than on somebody actually saying
+        # something.
+        self._touch(session_id)
         return appended
+
+    def _touch(self, session_id: str) -> None:
+        session = self._sessions.get(session_id)
+        if session is None:
+            return
+        # `model_copy`, not assignment: `ConversationSession` is frozen. A
+        # mutation would raise here and pass in PostgreSQL, which is the shape
+        # of bug the two-backend contract suite exists to catch.
+        self._sessions[session_id] = session.model_copy(
+            update={"last_activity_at": self._clock()}
+        )
 
     def _history_before(self, turn: StoredChatTurn) -> tuple[StoredMessage, ...]:
         stored = self._messages[turn.session_id]

@@ -1,6 +1,6 @@
 # 已知缺口
 
-截至 **2026-08-15**，配置 schema `1.15`，Alembic 迁移 27 个
+截至 **2026-08-15**，配置 schema `1.15`，Alembic 迁移 28 个
 （head `0027_session_workspace_version`）。本文档各条的代码位置核对于 `main@921dda5`。
 门禁数字不在本文档维护，见 [十分钟版本的门禁与规模一节](./HIGHLIGHTS.md#2-门禁与规模)。
 
@@ -509,7 +509,7 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 | F-03 | Code 没有持久幂等 | **拒绝** |
 | F-04 | 同一 principal 跨会话的工作区不隔离 | **拒绝** |
 | F-05 | 没有工具会触发审批，所以审批闸门今天走不到 | 未接线 |
-| F-06 | 会话列表只活在浏览器里：清了 storage 就找不回会话 | 已知代价 |
+| F-06 | Chat 的侧栏仍是本地列表（Code 那半已关闭） | 部分关闭 |
 | F-07 | 步骤最快也要等一个轮询周期才出现（默认 10s） | 已知代价 |
 
 ### F-01 一轮不可恢复 —— 拒绝
@@ -575,22 +575,25 @@ get/put 只带 `(tenant_id, principal_id)`；
 **做完的判据**：C4 落地后，一条端到端测试证明一次 `sandbox_run` 提议真的停下来等人，
 并在人点了之后才执行。
 
-### F-06 会话列表只活在浏览器里 —— 已知代价
+### F-06 Chat 的侧栏仍是本地列表 —— 部分关闭
 
-**证据**：[storage.ts](../web/src/features/code/storage.ts) 把会话 id 存进
-localStorage，键按 principal 分。`ConversationStore` 没有任何"列出某个 principal
-的会话"的方法——Chat 也没有，也用同一个办法补。
+**Code 那一半已经关闭**（[ADR-047](./adr/0047-a-session-is-named-by-its-first-sentence.md)）：
+`ConversationStore.list_sessions(tenant_id, principal_id, mode)` 存在，第一条指令
+给会话命名，`PATCH /v1/code/sessions/{id}` 可以改名，`GET /v1/code/sessions` 返回
+这份列表。清掉浏览器存储、换一台机器，列表都还在。
+`web/src/features/code/storage.ts` 随之删除。
 
-**代价，说清楚**：清掉浏览器存储之后，那些会话仍然存在、仍然属于你、但再也走不到。
-丢的是链接，不是工作：会话行和工作区版本都在库里，拿着 id 就还能打开。两个人共用
-一个浏览器时不会串（键里带 principal），换一台机器则看不到（这是同一件事的另一面）。
+**Chat 那一半没关**：`web/src/features/chat/storage.ts` 仍然在 localStorage 里存
+`LocalChatSession`，而那条记录带着 `answerMode` 和 `knowledgeBaseId`——服务端不建模
+这两样。
 
-**为什么现在不修**：加一个列会话的查询要先回答"一个会话叫什么"，而今天没有任何
-地方记标题。补一个"最近打开的 id"的服务端表，等于把浏览器这份东西原样搬到服务器，
-还多一张表要维护。真正的修法是会话有名字——那是产品决定，不是这一批的范围。
+**为什么不顺手做掉**：那是合并问题不是接线问题。切一半会得到两份互相矛盾的列表
+（服务端有标题没有 answerMode，本地有 answerMode 但可能少了在别处开的会话），而
+两份列表里总有一份是旧的。先要决定「answer mode 和知识库选择属不属于会话本身」，
+那是产品决定。
 
-**做完的判据**：`ConversationStore` 有 `list_sessions(tenant_id, principal_id,
-mode)`，会话有可显示的标题，且换一台机器能看到同一份列表。
+**做完的判据**：Chat 的侧栏也来自 `list_sessions`，且 `answerMode` /
+`knowledgeBaseId` 要么进了会话行、要么明确定为「每次打开重选」。
 
 ### F-07 步骤的延迟下限是一个轮询周期 —— 已知代价
 

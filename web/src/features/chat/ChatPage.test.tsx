@@ -75,7 +75,9 @@ afterEach(() => cleanup());
 
 describe("Chat identity boundary", () => {
   it("does not start an Ask in the old identity after Session creation resolves", async () => {
-    let resolveCreate: ((response: { session_id: string }) => void) | undefined;
+    let resolveCreate:
+      | ((response: { session_id: string; title: string | null }) => void)
+      | undefined;
     vi.mocked(createChatSession).mockReturnValue(
       new Promise((resolve) => {
         resolveCreate = resolve;
@@ -105,7 +107,7 @@ describe("Chat identity boundary", () => {
     const finishCreate = resolveCreate;
     if (finishCreate === undefined) throw new Error("Session create mock did not start");
     act(() => {
-      finishCreate({ session_id: "ses_created_as_alice" });
+      finishCreate({ session_id: "ses_created_as_alice", title: null });
     });
     await waitFor(() =>
       expect(aliceAddLocalSession).toHaveBeenCalledTimes(1),
@@ -196,7 +198,7 @@ describe("Chat identity boundary", () => {
 
   it("falls back to a direct Ask when a linked knowledge base no longer exists", async () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
-    vi.mocked(createChatSession).mockResolvedValue({ session_id: "ses_direct" });
+    vi.mocked(createChatSession).mockResolvedValue({ session_id: "ses_direct", title: null });
     const user = userEvent.setup();
 
     renderChatRoute("/chat?kb=kb_deleted");

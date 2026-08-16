@@ -25,9 +25,9 @@ import asyncio
 import hashlib
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Request, status
+from fastapi import APIRouter, Header, Query, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from agent_workbench.application.answer_release import ProcessOnlySink
 from agent_workbench.application.code_approvals import (
@@ -59,6 +59,33 @@ class CreateSessionRequest(BaseModel):
 
 class CreateSessionResponse(BaseModel):
     session_id: Identifier
+    #: Whatever the caller named it, echoed back. Usually null: a coding
+    #: session is opened before there is an instruction to name it after, and
+    #: the name arrives with the first turn.
+    title: str | None = None
+
+
+class SessionView(BaseModel):
+    """One coding session, as a list row.
+
+    No message count and no workspace size. Both would mean a query per row on
+    a list rendered before anybody has chosen a session, to decorate a link
+    that opening answers exactly.
+    """
+
+    session_id: Identifier
+    title: str | None
+    last_activity_at: AwareDatetime | None
+
+
+class SessionListResponse(BaseModel):
+    sessions: tuple[SessionView, ...]
+
+
+class RenameSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=TITLE_MAX_LENGTH)
 
 
 class AskRequest(BaseModel):
@@ -129,7 +156,67 @@ async def create_session(
         principal_id=principal.principal_id,
         title=body.title,
     )
-    return CreateSessionResponse(session_id=session_id)
+    return CreateSessionResponse(session_id=session_id, title=body.title)
+
+
+@router.get("/sessions")
+async def list_sessions(
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> SessionListResponse:
+    """This principal's coding sessions, most recently spoken in first.
+
+    A limit and no cursor, deliberately. `/v1/tasks` pages because a tenant
+    accumulates tasks without bound; this is one person's recent coding
+    sessions, and a keyset cursor over a list bounded by human memory is
+    machinery with no reader.
+
+    The title is a truncated copy of what its owner typed, so this list carries
+    the conversation's confidentiality: it is scoped by tenant, by principal
+    and by mode, exactly as the history is.
+    """
+
+    principal = dependencies_of(request).principals.resolve(request)
+    sessions = await _code(request).sessions(
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+        limit=limit,
+    )
+    return SessionListResponse(
+        sessions=tuple(
+            SessionView(
+                session_id=session.session_id,
+                title=session.title,
+                last_activity_at=session.last_activity_at,
+            )
+            for session in sessions
+        )
+    )
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_session(
+    session_id: str, body: RenameSessionRequest, request: Request
+) -> SessionView:
+    """Replace the name the first instruction gave this session.
+
+    PATCH rather than PUT: a session is not being replaced, and a PUT would
+    invite a body that carried the whole row -- including the workspace version,
+    which nothing outside this process may name.
+    """
+
+    principal = dependencies_of(request).principals.resolve(request)
+    session = await _code(request).rename(
+        session_id=session_id,
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+        title=body.title,
+    )
+    return SessionView(
+        session_id=session.session_id,
+        title=session.title,
+        last_activity_at=session.last_activity_at,
+    )
 
 
 @router.post("/sessions/{session_id}/messages")

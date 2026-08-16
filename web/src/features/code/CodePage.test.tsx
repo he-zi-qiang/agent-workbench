@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -10,12 +11,13 @@ import {
   getCodeHistory,
   getCodeWorkspace,
   getCodeWorkspaceFileText,
+  listCodeSessions,
+  renameCodeSession,
 } from "../../api/client";
 import type { PrincipalIdentity } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { CodePage } from "./CodePage";
 import { DOCX_MEDIA_TYPE } from "../../components/media";
-import { rememberCodeSession } from "./storage";
 import { useCodeStream } from "./useCodeStream";
 
 vi.mock("../../api/client", () => ({
@@ -29,6 +31,10 @@ vi.mock("../../api/client", () => ({
     Promise.resolve({ text: "", truncated: false }),
   ),
   downloadCodeWorkspaceFile: vi.fn(() => Promise.resolve()),
+  listCodeSessions: vi.fn(() => Promise.resolve({ sessions: [] })),
+  renameCodeSession: vi.fn(() =>
+    Promise.resolve({ session_id: "ses_code_1", title: "x", last_activity_at: null }),
+  ),
   newIdempotencyKey: vi.fn(() => "code-1"),
 }));
 
@@ -52,12 +58,20 @@ const ALICE: PrincipalIdentity = {
 const SESSION = "ses_code_1";
 
 function mounted() {
+  // A client per render, with retries off: a shared one would carry one test's
+  // session list into the next, and a retry would turn "the list failed" into
+  // a test that hangs rather than one that fails.
+  const queries = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
-    <MemoryRouter initialEntries={[`/code/${SESSION}`]}>
-      <Routes>
-        <Route element={<CodePage />} path="/code/:sessionId" />
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={queries}>
+      <MemoryRouter initialEntries={[`/code/${SESSION}`]}>
+        <Routes>
+          <Route element={<CodePage />} path="/code/:sessionId" />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -65,9 +79,6 @@ beforeEach(() => {
   // Call counts are what two of these tests assert on, and a mock is shared by
   // the whole file: without this, "was never called" means "was not called
   // since the last test that happened to reset it".
-  // The session list lives in this browser, so it survives a mock reset
-  // and would otherwise carry one test's sessions into the next.
-  window.localStorage.clear();
   vi.clearAllMocks();
   vi.mocked(useIdentity).mockReturnValue({
     identity: ALICE,
@@ -83,6 +94,7 @@ beforeEach(() => {
     truncated: false,
   });
   vi.mocked(downloadCodeWorkspaceFile).mockResolvedValue(undefined);
+  vi.mocked(listCodeSessions).mockResolvedValue({ sessions: [] });
   vi.mocked(useCodeStream).mockReturnValue([]);
 });
 
@@ -280,43 +292,95 @@ describe("CodePage", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers a way back to a session this browser has already opened", async () => {
+  it("lists sessions by the name their first instruction gave them", async () => {
     const user = userEvent.setup();
-    rememberCodeSession(ALICE, {
-      sessionId: "ses_code_older",
-      seenAt: "2026-08-14T09:00:00Z",
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        {
+          session_id: "ses_code_older",
+          title: "把 notes.md 整理成清单",
+          last_activity_at: "2026-08-14T09:00:00Z",
+        },
+        { session_id: SESSION, title: null, last_activity_at: null },
+      ],
     });
 
     mounted();
 
     const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
-    // Nothing on the server lists a principal's sessions, so without this the
-    // only way back to one is a link somebody kept outside the app.
-    await user.click(within(recent).getByRole("button", { name: "code_old" }));
+    // From the server, so it survives a cleared browser and a different
+    // machine. The row with no title is one opened and never spoken in.
+    await user.click(
+      within(recent).getByRole("button", { name: "把 notes.md 整理成清单" }),
+    );
 
     await waitFor(() => {
       expect(vi.mocked(getCodeHistory).mock.calls.at(-1)?.[1]).toBe("ses_code_older");
     });
   });
 
-  it("remembers the session it arrived at, and marks it as the open one", async () => {
+  it("marks the session being viewed, even when it has no name yet", async () => {
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [{ session_id: SESSION, title: null, last_activity_at: null }],
+    });
+
     mounted();
 
     const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
-    // Arrived at by URL, never created here. A list that only knew what this
-    // tab made would lose every session reached by a pasted link.
-    expect(within(recent).getByRole("button", { current: "page" })).toHaveTextContent(
-      "code_1",
-    );
+    expect(within(recent).getByRole("button", { current: "page" })).toBeInTheDocument();
+  });
+
+  it("renames a session to what a person called it", async () => {
+    const user = userEvent.setup();
+    // The server's answer changes after the rename, so the sidebar can only
+    // show the new name by asking again.
+    vi.mocked(listCodeSessions)
+      .mockResolvedValueOnce({
+        sessions: [
+          { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        ],
+      })
+      .mockResolvedValue({
+        sessions: [
+          { session_id: SESSION, title: "重构工作区", last_activity_at: null },
+        ],
+      });
+
+    mounted();
+
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.dblClick(within(recent).getByRole("button", { name: "第一句指令" }));
+    const field = within(recent).getByLabelText("会话名字");
+    await user.clear(field);
+    await user.type(field, "重构工作区{Enter}");
+
+    // The first instruction is a decent name and a chosen one is better; this
+    // is the only path that overwrites what the instruction set.
+    await waitFor(() => {
+      expect(vi.mocked(renameCodeSession).mock.calls[0]?.slice(1)).toEqual([
+        SESSION,
+        "重构工作区",
+      ]);
+    });
+    // And the sidebar shows it. A rename that did not refetch would leave the
+    // old name sitting there until something unrelated happened to refresh.
+    expect(
+      await within(recent).findByRole("button", { name: "重构工作区" }),
+    ).toBeInTheDocument();
   });
 
   it("does not announce past sessions as files this turn produced", async () => {
     vi.mocked(getCodeWorkspace).mockResolvedValue({
       files: [{ name: "notes.md", size_bytes: 12, media_type: "text/markdown" }],
     });
-    rememberCodeSession(ALICE, {
-      sessionId: "ses_code_older",
-      seenAt: "2026-08-14T09:00:00Z",
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        {
+          session_id: "ses_code_older",
+          title: "上一个会话",
+          last_activity_at: "2026-08-14T09:00:00Z",
+        },
+      ],
     });
 
     mounted();
@@ -327,7 +391,7 @@ describe("CodePage", () => {
     // reading that region by its label, a screen reader first among them, read
     // out session ids as files.
     expect(within(pane).getAllByRole("listitem")).toHaveLength(1);
-    expect(within(pane).queryByText("code_old")).not.toBeInTheDocument();
+    expect(within(pane).queryByText("上一个会话")).not.toBeInTheDocument();
   });
 
   it("shows what a text file holds, without spending a turn to ask", async () => {

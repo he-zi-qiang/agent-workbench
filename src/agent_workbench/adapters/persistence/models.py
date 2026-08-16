@@ -90,8 +90,29 @@ conversation_sessions = Table(
         nullable=False,
         server_default=func.now(),
     ),
+    # When somebody last said something here. Separate from ``created_at``
+    # because a list ordered by creation puts a session untouched for a month
+    # above the one you were in five minutes ago -- the wrong way round for a
+    # list whose only job is getting you back to where you were.
+    #
+    # NOT NULL with a default rather than nullable: a nullable column would need
+    # COALESCE in the ordering, and a COALESCE'd expression cannot use the index
+    # below.
+    Column(
+        "last_activity_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
     # Every query carries the tenant, so the tenant leads the index.
     Index("ix_conversation_sessions_tenant_id_session_id", "tenant_id", "session_id"),
+    # The list query's exact shape: one owner's sessions, newest activity first.
+    Index(
+        "ix_conversation_sessions_tenant_owner_activity",
+        "tenant_id",
+        "owner_id",
+        text("last_activity_at DESC"),
+    ),
     CheckConstraint(
         "mode IN ('chat', 'code')",
         name="conversation_sessions_mode",

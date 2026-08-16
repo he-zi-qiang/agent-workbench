@@ -15,6 +15,7 @@
  * a plain list of what happened rather than as a half-built stage view.
  */
 
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Code2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -27,7 +28,9 @@ import {
   getCodeHistory,
   getCodeWorkspace,
   getCodeWorkspaceFileText,
+  listCodeSessions,
   newIdempotencyKey,
+  renameCodeSession,
 } from "../../api/client";
 import type {
   ApprovalDecision,
@@ -37,13 +40,13 @@ import type {
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { isReadableMedia } from "../../components/media";
-import { EmptyState, ErrorNotice, LoadingLine } from "../../components/ui";
-import { eventTitle } from "../work/workTimeline";
 import {
-  loadCodeSessions,
-  rememberCodeSession,
-  type LocalCodeSession,
-} from "./storage";
+  EmptyState,
+  ErrorNotice,
+  LoadingLine,
+  shortId,
+} from "../../components/ui";
+import { eventTitle } from "../work/workTimeline";
 import { useCodeStream } from "./useCodeStream";
 
 /** How often to ask what the agent is stopped on, while it is working. */
@@ -72,7 +75,17 @@ export function CodePage() {
   const [approvals, setApprovals] = useState<PendingApprovalView[]>([]);
   const [opening, setOpening] = useState(false);
   const [opened, setOpened] = useState<OpenedFile | null>(null);
-  const [known, setKnown] = useState<LocalCodeSession[]>([]);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const queries = useQueryClient();
+
+  // A query rather than an effect, because two things invalidate it -- opening
+  // a session and renaming one -- and both happen somewhere other than where
+  // the list is rendered.
+  const sessions = useQuery({
+    queryKey: ["code-sessions", identity],
+    queryFn: () => listCodeSessions(identity),
+  });
+  const known = sessions.data?.sessions ?? [];
 
   const steps = useCodeStream(identity, sessionId, running);
 
@@ -91,20 +104,6 @@ export function CodePage() {
     },
     [identity],
   );
-
-  // Remembered on arrival rather than only on creation, so a session reached
-  // by a pasted link is one this browser can find again -- and so the ordering
-  // reflects what was actually opened, not what was made.
-  useEffect(() => {
-    setKnown(
-      sessionId === undefined
-        ? loadCodeSessions(identity)
-        : rememberCodeSession(identity, {
-            sessionId,
-            seenAt: new Date().toISOString(),
-          }),
-    );
-  }, [identity, sessionId]);
 
   useEffect(() => {
     setOpened(null);
@@ -158,13 +157,14 @@ export function CodePage() {
     setError(null);
     try {
       const created = await createCodeSession(identity);
+      await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
       navigate(`/code/${created.session_id}`);
     } catch (cause: unknown) {
       setError(describe(cause));
     } finally {
       setOpening(false);
     }
-  }, [identity, navigate]);
+  }, [identity, navigate, queries]);
 
   const send = useCallback(async () => {
     const text = instruction.trim();
@@ -190,10 +190,21 @@ export function CodePage() {
         await Promise.all([
           loadHistory(sessionId).catch(() => undefined),
           loadWorkspace(sessionId).catch(() => undefined),
+          // The first instruction is what names the session, and every
+          // instruction moves it to the top of the list.
+          queries.invalidateQueries({ queryKey: ["code-sessions", identity] }),
         ]);
       }
     }
-  }, [identity, instruction, loadHistory, loadWorkspace, running, sessionId]);
+  }, [
+    identity,
+    instruction,
+    loadHistory,
+    loadWorkspace,
+    queries,
+    running,
+    sessionId,
+  ]);
 
   const open = useCallback(
     async (file: WorkspaceEntryView) => {
@@ -242,23 +253,67 @@ export function CodePage() {
     [identity, sessionId],
   );
 
+  const rename = useCallback(
+    async (target: string, title: string) => {
+      const trimmed = title.trim();
+      setRenaming(null);
+      if (trimmed === "") return;
+      try {
+        await renameCodeSession(identity, target, trimmed);
+        await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
+      } catch (cause: unknown) {
+        setError(describe(cause));
+      }
+    },
+    [identity, queries],
+  );
+
   const sessionList =
     known.length === 0 ? null : (
       <nav aria-label="最近的编码会话" className="aw-code-recent">
         <h2>最近</h2>
         <ul>
           {known.map((held) => (
-            <li key={held.sessionId}>
-              <button
-                aria-current={held.sessionId === sessionId ? "page" : undefined}
-                className="aw-code-recent-link"
-                onClick={() => {
-                  navigate(`/code/${held.sessionId}`);
-                }}
-                type="button"
-              >
-                {held.sessionId.replace(/^ses_/, "").slice(0, 8)}
-              </button>
+            <li key={held.session_id}>
+              {renaming === held.session_id ? (
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const field = new FormData(event.currentTarget).get("title");
+                    void rename(held.session_id, String(field ?? ""));
+                  }}
+                >
+                  <label className="aw-sr-only" htmlFor="aw-code-rename">
+                    会话名字
+                  </label>
+                  <input
+                    autoFocus
+                    defaultValue={held.title ?? ""}
+                    id="aw-code-rename"
+                    name="title"
+                    onBlur={() => {
+                      setRenaming(null);
+                    }}
+                  />
+                </form>
+              ) : (
+                <button
+                  aria-current={held.session_id === sessionId ? "page" : undefined}
+                  className="aw-code-recent-link"
+                  onClick={() => {
+                    navigate(`/code/${held.session_id}`);
+                  }}
+                  onDoubleClick={() => {
+                    setRenaming(held.session_id);
+                  }}
+                  // Named after the first instruction, so most rows have one.
+                  // The id is the fallback for a session opened and never used.
+                  title={held.title ?? held.session_id}
+                  type="button"
+                >
+                  {held.title ?? shortId(held.session_id)}
+                </button>
+              )}
             </li>
           ))}
         </ul>

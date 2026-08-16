@@ -23,6 +23,25 @@ export interface Citation {
 
 export interface CreateSessionResponse {
   session_id: Identifier;
+  title: string | null;
+}
+
+/**
+ * One coding session, as the server lists it.
+ *
+ * The list used to live in `localStorage`, which answered a narrower question
+ * than it looked like it answered: "what did I open in this browser since I
+ * last cleared it". The sessions it forgot were still there and still owned --
+ * only the link was gone.
+ */
+export interface CodeSessionView {
+  session_id: Identifier;
+  title: string | null;
+  last_activity_at: string | null;
+}
+
+export interface CodeSessionListResponse {
+  sessions: CodeSessionView[];
 }
 
 export interface AskResponse {
