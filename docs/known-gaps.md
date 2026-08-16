@@ -611,6 +611,12 @@ Worker 里），所以还需要给它接一条连接的生命周期 —— 见 A
 **尚未有的**：一条自动化的端到端测试。这条路径需要真实容器运行时，而 CI 的 `quality`
 job 离线运行，所以它只能是本地证据（见 E-03）。
 
+**后续（2026-08-16，[ADR-058](./adr/0058-the-sandbox-gate-moves-from-the-human-to-the-envelope.md)）**：
+门本身的处置变了。上面实测的每次停下来等人，暴露的是这道门买不到同意（卡片上
+只有摘要，ADR-054）却买得到延迟（两次 120s 批准耗光 240s 回合）。现在
+`code.sandbox_requires_approval` 默认 `false`——`external` 放行、`destructive`
+继续上膛，要旧行为的部署一行配置拿回去。闸门机器仍然一个字没改。
+
 ### F-06 Chat 的侧栏仍是本地列表 —— 部分关闭
 
 **Code 那一半已经关闭**（[ADR-047](./adr/0047-a-session-is-named-by-its-first-sentence.md)）：

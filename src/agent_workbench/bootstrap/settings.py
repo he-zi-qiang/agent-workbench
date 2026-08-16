@@ -310,6 +310,20 @@ class CodeSettings(StrictModel):
     #: this changes what a turn may call, not where it runs.
     sandbox_enabled: bool = False
 
+    #: Whether each ``sandbox_run`` call stops and asks a human (ADR-058).
+    #:
+    #: Default ``False``, which is a reversal of what shipped, argued from two
+    #: facts. ADR-054 already established that the approval card shows a tool
+    #: name and an argument digest -- a hash cannot be consented to, so the
+    #: gate never bought informed consent, only latency. And the Task path has
+    #: run the same ``external``-risk ``sandbox_run`` with
+    #: ``approval_required_risks=()`` since ADR-015: the platform's own
+    #: position is that a per-call human gate is not what makes the sandbox
+    #: safe -- the container is (one per call, ``--network=none``, destroyed
+    #: after). ``destructive`` risk stays armed regardless; this flag governs
+    #: only the ``external`` tier that ``sandbox_run`` sits in.
+    sandbox_requires_approval: bool = False
+
     @model_validator(mode="after")
     def validate_turn_outlasts_one_approval(self) -> CodeSettings:
         """Refuse a turn that one held call could consume entirely.

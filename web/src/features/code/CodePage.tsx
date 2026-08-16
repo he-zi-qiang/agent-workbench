@@ -211,7 +211,14 @@ export function CodePage() {
         // finishes is a URL nobody can send while the work is worth watching.
         await navigate(`/code/${target}`);
       }
-      await askCode(identity, target, text, newIdempotencyKey("code"));
+      const answer = await askCode(identity, target, text, newIdempotencyKey("code"));
+      // A turn that dies on its budget appends no assistant message at all
+      // (the server declines to invent one), so without this the transcript
+      // shows the instruction and then silence -- which reads as "it cannot
+      // do anything any more", not as "that turn ran out".
+      if (answer.status !== "completed") {
+        setFault({ scope: target, text: stopNote(answer.stop_reason) });
+      }
     } catch (cause: unknown) {
       // `target`: the turn that opened the session reports where it now shows.
       setFault({ scope: target ?? null, text: describe(cause) });
@@ -766,6 +773,30 @@ interface OpenedFile {
   loading: boolean;
   text: string | null;
   truncated: boolean;
+}
+
+/**
+ * One sentence for a turn that stopped without a report.
+ *
+ * The vocabulary is the runtime's `StopReason`; what every branch has to say
+ * is the same two things -- the work so far is safe (writes land per write,
+ * not at the end), and the way forward is to just keep talking. A stopped
+ * turn used to render as nothing at all, which read as a broken session.
+ */
+function stopNote(reason: string): string {
+  if (reason === "deadline") {
+    return "这一轮到时间停下了。已完成的改动都在工作区里，直接说下一步就能继续。";
+  }
+  if (reason === "max_steps" || reason === "max_tool_calls") {
+    return "这一轮把步数用完了。已完成的改动都在工作区里，直接说下一步就能继续。";
+  }
+  if (reason === "token_budget" || reason === "cost_budget") {
+    return "这一轮把预算用完了。已完成的改动都在工作区里，直接说下一步就能继续。";
+  }
+  if (reason === "cancelled") {
+    return "这一轮被取消了。已完成的改动都在工作区里。";
+  }
+  return `这一轮没有跑完（${reason}）。已完成的改动都在工作区里，直接说下一步就能继续。`;
 }
 
 function formatSize(bytes: number): string {

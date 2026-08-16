@@ -48,9 +48,11 @@ model_id = "deepseek-chat"
 [code]
 enabled = true
 
-# Shorter than the shipped defaults, because a local turn that has gone wrong
-# is better cut off in two minutes than in ten.
-turn_timeout_seconds = 240
+# Shorter than the shipped default, because a local turn that has gone wrong
+# is better cut off in minutes than in ten. 360 rather than 240 since ADR-058:
+# a session that runs code ungated actually iterates -- write, run, read, fix,
+# run again -- and 240 was sized for turns that mostly waited on approvals.
+turn_timeout_seconds = 360
 approval_timeout_seconds = 120
 
 # One at a time locally: a laptop running a model loop, a database and a vector

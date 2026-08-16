@@ -1139,6 +1139,7 @@ def _assemble_chat(
             tool_names=(
                 CODE_TOOLS_WITH_SANDBOX if config.code.sandbox_enabled else CODE_TOOLS
             ),
+            sandbox_requires_approval=config.code.sandbox_requires_approval,
         )
         if config.code.enabled
         else None

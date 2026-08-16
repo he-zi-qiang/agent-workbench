@@ -207,6 +207,29 @@ describe("CodePage", () => {
     ]);
   });
 
+  it("says why a turn stopped when it produced no report", async () => {
+    // A deadline-failed turn appends no assistant message at all -- the
+    // server declines to invent one -- so without a notice the transcript
+    // shows the instruction and then silence, which reads as a broken
+    // session rather than a spent turn.
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "",
+      workspace_version: "art_1",
+      run_id: "run_1",
+      status: "failed",
+      stop_reason: "deadline",
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "run the tests");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/这一轮到时间停下了/)).toBeInTheDocument();
+    });
+  });
+
   it("says what went wrong instead of losing the turn", async () => {
     const user = userEvent.setup();
     vi.mocked(askCode).mockRejectedValue(new Error("这个会话已经在跑一轮了"));

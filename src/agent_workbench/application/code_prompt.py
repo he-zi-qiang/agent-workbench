@@ -104,6 +104,16 @@ _CAN_RUN = """\
    depends on running the code, run it: a claim about behaviour you could have
    checked and did not is the same error as inventing one."""
 
+_WITH_SANDBOX_UNGATED = """\
+There is no shell and no network, and no path outside the workspace: a name is
+a name, not a path, and nothing you write escapes this session.
+
+You can run Python. `sandbox_run` executes a script in a throwaway container
+with no network: the workspace entries you name go in, the files it writes come
+back, and nothing survives the call. Calls run immediately, without waiting for
+anyone. Use it to check your own work -- write, run, read the output, fix, run
+again -- rather than to reason about what the code would do."""
+
 #: The same prompt for a deployment that granted ``sandbox_run`` (ADR-057).
 #:
 #: Derived rather than written twice, and derived by *named* substitution
@@ -122,5 +132,21 @@ CODER_SYSTEM_PROMPT_WITH_SANDBOX: Final[str] = _rewrite(
     _CAN_RUN,
 )
 
+#: And for a deployment that freed the gate (ADR-058). The gated text ends
+#: "expect to wait, and do not spend one on something you could have read" --
+#: accurate under the gate, and under no gate it is an instruction to avoid
+#: the tool the deployment just freed. Same lesson as the paragraph above,
+#: from the other direction: the prompt must describe the world the turn is
+#: actually in, or the model behaves correctly for the wrong one.
+CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED: Final[str] = _rewrite(
+    _rewrite(CODER_SYSTEM_PROMPT, _NO_EXECUTION, _WITH_SANDBOX_UNGATED),
+    _CANNOT_RUN,
+    _CAN_RUN,
+)
 
-__all__ = ["CODER_SYSTEM_PROMPT", "CODER_SYSTEM_PROMPT_WITH_SANDBOX"]
+
+__all__ = [
+    "CODER_SYSTEM_PROMPT",
+    "CODER_SYSTEM_PROMPT_WITH_SANDBOX",
+    "CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED",
+]

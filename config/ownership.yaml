@@ -122,6 +122,7 @@
       "fields": [
         "code.enabled",
         "code.sandbox_enabled",
+        "code.sandbox_requires_approval",
         "code.max_steps",
         "code.max_tool_calls",
         "code.max_total_tokens",

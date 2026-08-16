@@ -47,6 +47,7 @@ from agent_workbench.application.code_approvals import ApprovalScope
 from agent_workbench.application.code_prompt import (
     CODER_SYSTEM_PROMPT,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+    CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
 )
 from agent_workbench.application.session_titles import title_from_instruction
 from agent_workbench.application.session_workspace import SessionWorkspace
@@ -159,6 +160,10 @@ class CodeSessionService:
     max_concurrent_turns: int
     clock: Callable[[], datetime]
     tool_names: tuple[ToolName, ...] = CODE_TOOLS
+    #: Whether each ``sandbox_run`` call stops for a human (ADR-058). Defaults
+    #: to the settings default rather than contradicting it; the assembly in
+    #: `apps/api/dependencies.py` always passes the configured value.
+    sandbox_requires_approval: bool = False
     _running: set[str] = field(default_factory=set[str], init=False)
     _turns: int = field(default=0, init=False)
 
@@ -540,13 +545,18 @@ class CodeSessionService:
                 max_tool_risk=(
                     "external" if SANDBOX_RUN_TOOL in self.tool_names else "write"
                 ),
-                # Armed for both risks whether or not either is granted. The
-                # gate was wired long before anything could trigger it
-                # (known-gaps F-05); granting `sandbox_run` is what finally
-                # does, and it is a change to `tool_names` rather than to the
-                # machinery underneath -- which was the point of arming it
-                # early.
-                approval_required_risks=("external", "destructive"),
+                # `destructive` is armed unconditionally -- nothing grants such
+                # a tool today, and the day something does, the gate must
+                # already be there. Whether `external` joins it is ADR-058's
+                # question: the gate F-05 armed early turned out to buy latency
+                # rather than consent (the card shows a digest, ADR-054), and
+                # the Task path has always run the same `sandbox_run` ungated,
+                # so the deployment now says which arrangement it wants.
+                approval_required_risks=(
+                    ("external", "destructive")
+                    if self.sandbox_requires_approval
+                    else ("destructive",)
+                ),
             ),
             budget=self.budget.model_copy(
                 update={
@@ -554,10 +564,17 @@ class CodeSessionService:
                     + timedelta(seconds=self.turn_timeout_seconds)
                 }
             ),
-            # Selected from the same fact the envelope ceiling reads, so the
-            # model is never told it cannot do something it has been granted.
+            # Selected from the same facts the envelope reads, so the model is
+            # never told it cannot do something it has been granted -- nor that
+            # it will wait for a human who is not going to be asked (ADR-058:
+            # the gated text says "expect to wait, do not spend one", which is
+            # an instruction to avoid the tool this deployment just freed).
             system_prompt=(
-                CODER_SYSTEM_PROMPT_WITH_SANDBOX
+                (
+                    CODER_SYSTEM_PROMPT_WITH_SANDBOX
+                    if self.sandbox_requires_approval
+                    else CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED
+                )
                 if SANDBOX_RUN_TOOL in self.tool_names
                 else CODER_SYSTEM_PROMPT
             ),
