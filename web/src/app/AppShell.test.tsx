@@ -41,3 +41,50 @@ describe("AppShell mobile navigation", () => {
     expect(screen.queryByRole("dialog", { name: "更多页面" })).not.toBeInTheDocument();
   });
 });
+
+describe("AppShell rail", () => {
+  function mounted(at: string) {
+    return render(
+      <IdentityProvider>
+        <MemoryRouter initialEntries={[at]}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route element={<p>Chat page</p>} path="/chat" />
+              <Route element={<p>Work page</p>} path="/work" />
+              <Route element={<p>Code page</p>} path="/code" />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </IdentityProvider>,
+    );
+  }
+
+  it("marks 工作台 as current on the task half too", () => {
+    mounted("/work");
+
+    // One rail entry stands for two routes now. Its `to` is `/chat`, so the
+    // default link matching leaves it dark the moment somebody opens the 任务
+    // tab -- a rail that disagrees with the page it is showing.
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    expect(rail.getByRole("link", { name: "工作台" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(rail.getByRole("link", { name: "Code" })).not.toHaveAttribute(
+      "aria-current",
+    );
+  });
+
+  it("offers two top-level flows, not three", () => {
+    mounted("/chat");
+
+    // The control for the item above: with 工作台 covering two routes, a rail
+    // that still listed Chat and Work separately would satisfy the current
+    // marking and contradict the tab strip.
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    expect(rail.queryByRole("link", { name: "Chat" })).not.toBeInTheDocument();
+    expect(rail.queryByRole("link", { name: "Work" })).not.toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "工作台" })).toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "Code" })).toBeInTheDocument();
+  });
+});

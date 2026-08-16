@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { HashRouter } from "react-router-dom";
 import { LoadingLine } from "../components/ui";
 import { AppShell } from "./AppShell";
+import { WorkbenchLayout } from "./WorkbenchLayout";
 
 const ChatPage = lazy(() =>
   import("../features/chat/ChatPage").then(({ ChatPage }) => ({ default: ChatPage })),
@@ -42,10 +43,14 @@ export function App() {
         <Routes>
           <Route element={<AppShell />}>
             <Route index element={<Navigate replace to="/chat" />} />
-            <Route path="chat" element={<ChatPage />} />
-            <Route path="chat/:sessionId" element={<ChatPage />} />
-            <Route path="work" element={<WorkPage />} />
-            <Route path="work/:taskId" element={<WorkPage />} />
+            {/* Pathless: it adds a tab strip and no URL segment, so every
+                path below is exactly what it was before. */}
+            <Route element={<WorkbenchLayout />}>
+              <Route path="chat" element={<ChatPage />} />
+              <Route path="chat/:sessionId" element={<ChatPage />} />
+              <Route path="work" element={<WorkPage />} />
+              <Route path="work/:taskId" element={<WorkPage />} />
+            </Route>
             <Route path="code" element={<CodePage />} />
             <Route path="code/:sessionId" element={<CodePage />} />
             <Route path="knowledge" element={<KnowledgePage />} />

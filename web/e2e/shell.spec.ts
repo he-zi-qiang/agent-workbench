@@ -48,7 +48,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("Chat、Work 与 Code 外壳在桌面和移动布局中均可使用", async ({
+test("工作台的两个标签与 Code 在桌面和移动布局中均可使用", async ({
   page,
 }, testInfo) => {
   await page.goto("/ui/");
@@ -86,9 +86,16 @@ test("Chat、Work 与 Code 外壳在桌面和移动布局中均可使用", async
     await expect(sessions).toBeHidden();
   }
 
-  await activeNavigation.getByRole("link", { name: "Work", exact: true }).click();
+  // The 任务 half is a tab inside the workbench now, not a rail entry. The rail
+  // still marks 工作台 as current on it, which is the thing that ships broken if
+  // nobody looks: the entry's href is /chat and the page is /work.
+  const tabs = page.getByRole("navigation", { name: "工作台" });
+  await tabs.getByRole("link", { name: "任务" }).click();
 
   await expect(page).toHaveURL(/#\/work$/);
+  await expect(
+    activeNavigation.getByRole("link", { name: "工作台" }),
+  ).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "新建任务" })).toBeVisible();
   await expect(
@@ -96,9 +103,9 @@ test("Chat、Work 与 Code 外壳在桌面和移动布局中均可使用", async
   ).toBeVisible();
   await expect(page.getByLabel("回答资料")).toHaveValue("");
 
-  // The third primary flow, reachable from the same rail. Asserted by name and
-  // by the empty state rather than by a count: a count would pass for a rail
-  // with three of the wrong things on it.
+  // The other primary flow, and the one that is still its own rail entry.
+  // Asserted by name and by the empty state rather than by a count: a count
+  // would pass for a rail with two of the wrong things on it.
   await activeNavigation.getByRole("link", { name: "Code", exact: true }).click();
 
   await expect(page).toHaveURL(/#\/code$/);
@@ -108,6 +115,13 @@ test("Chat、Work 与 Code 外壳在桌面和移动布局中均可使用", async
   await expect(
     page.getByRole("button", { name: "新建编码会话" }),
   ).toBeVisible();
+
+  // Back to the workbench, and the composer must still be inside the viewport.
+  // A tab strip added above a `100dvh` grid pushes it out by exactly its own
+  // height, and `toBeVisible()` reports an element that has been pushed off the
+  // bottom as visible -- so this is the assertion that catches a botched row.
+  await activeNavigation.getByRole("link", { name: "工作台" }).click();
+  await expect(page.getByLabel("问题", { exact: true })).toBeInViewport();
 });
 
 test("知识库能进入 Chat，辅助页面在移动端也可到达", async ({
@@ -129,7 +143,6 @@ test("知识库能进入 Chat，辅助页面在移动端也可到达", async ({
   if (isMobile) {
     await navigation.getByRole("button", { name: "更多" }).click();
     const more = page.getByRole("dialog", { name: "更多页面" });
-    await expect(more.getByRole("link", { name: "待我确认" })).toBeVisible();
     await expect(more.getByRole("link", { name: "运行状态" })).toBeVisible();
     await more.getByRole("link", { name: "效果评测" }).click();
   } else {

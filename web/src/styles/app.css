@@ -4277,3 +4277,47 @@ pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* The workbench: a tab strip over whichever flow is showing. */
+.aw-workbench {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.aw-workbench-tabs {
+  display: inline-flex;
+  gap: 2px;
+  align-self: start;
+  margin: 12px 0 0 18px;
+  padding: 3px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-workbench-tab {
+  padding: 5px 16px;
+  border-radius: 7px;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.aw-workbench-tab:hover {
+  color: var(--aw-text);
+}
+
+.aw-workbench-tab[aria-current="page"] {
+  background: var(--aw-surface, #fff);
+  color: var(--aw-text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+  font-weight: 600;
+}
+
+@media (width <= 900px) {
+  .aw-workbench-tabs {
+    margin: 8px 0 0 12px;
+  }
+}
