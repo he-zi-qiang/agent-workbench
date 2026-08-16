@@ -772,7 +772,13 @@ export function WorkPage() {
                 reportOverride === "auto" ? "auto" : reportOverride ? "yes" : "no"
               }
             >
-              <option value="auto">自动判定（要文件会先请你确认导出）</option>
+              {/* No longer promises a confirmation step. This deployment runs
+                  with `workflow.export_requires_approval = false`, so a Task
+                  that wants a file exports it and the file waits in 附件 --
+                  there is nothing to confirm. The old wording described the
+                  gated deployment, and after v1 was taught to honour the
+                  setting it described no deployment this repository ships. */}
+              <option value="auto">自动判定（由模型决定要不要文件）</option>
               <option value="yes">一定生成文件</option>
               <option value="no">不生成文件</option>
             </select>
