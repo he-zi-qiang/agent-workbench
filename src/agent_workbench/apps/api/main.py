@@ -45,6 +45,7 @@ from agent_workbench.apps.api.routes import (
     artifacts,
     chat,
     code,
+    evaluation,
     events,
     health,
     knowledge_bases,
@@ -68,6 +69,10 @@ from agent_workbench.ports.conversation_store import (
     WorkspacePointerConflictError,
 )
 from agent_workbench.ports.documents import KnowledgeBaseMismatchError
+from agent_workbench.ports.evaluation_runs import (
+    EvaluationBusyError,
+    EvaluationDisabledError,
+)
 from agent_workbench.ports.task_registry import (
     TaskSubmissionConflictError,
     TaskTransitionRejectedError,
@@ -101,6 +106,13 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     ApprovalNotPendingError: 409,
     # A blanket yes was asked for where only a single yes is available.
     StandingApprovalRefusedError: 422,
+    # One evaluation at a time, and this machine fits one. A conflict rather
+    # than a queue: a caller told to come back can decide whether to.
+    EvaluationBusyError: 409,
+    # The deployment does not start runs. 503 rather than 403 -- nothing about
+    # the caller is wrong, this process simply cannot, and the body says what
+    # to type instead.
+    EvaluationDisabledError: 503,
     OutputTooLargeError: 413,
     TaskTransitionRejectedError: 409,
     # The Task moved while a human was thinking -- cancelled, most often.
@@ -229,6 +241,10 @@ def create_app(
     # serving no chat -- they need different halves of this process -- and a
     # router mounted on the other one's availability would be a 500 per request
     # in exactly that case.
+    # Unconditional, unlike the code router: reading reports needs nothing a
+    # deployment might lack, and only starting a run is gated -- inside the
+    # service, which answers with the command instead of a 404.
+    app.include_router(evaluation.router)
     if dependencies.serves_code:
         app.include_router(code.router)
     elif dependencies.config.code.enabled:

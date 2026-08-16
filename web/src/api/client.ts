@@ -11,6 +11,10 @@ import type {
   CreateUploadResponse,
   DocumentPreview,
   DocumentVersion,
+  EvaluationCurrentRunResponse,
+  EvaluationReportsResponse,
+  EvaluationRunView,
+  EvaluationSuite,
   HealthResponse,
   HistoryResponse,
   KnowledgeBaseListResponse,
@@ -892,5 +896,41 @@ export async function renameCodeSession(
   return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: { title },
+  });
+}
+
+export async function getEvaluationReports(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<EvaluationReportsResponse> {
+  return apiRequest(identity, "/v1/evaluation/reports", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function getEvaluationRun(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<EvaluationCurrentRunResponse> {
+  return apiRequest(identity, "/v1/evaluation/runs/current", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function startEvaluationRun(
+  identity: PrincipalIdentity,
+  suite: EvaluationSuite,
+): Promise<EvaluationRunView> {
+  return apiRequest(identity, "/v1/evaluation/runs", {
+    method: "POST",
+    body: { suite },
+  });
+}
+
+export async function cancelEvaluationRun(
+  identity: PrincipalIdentity,
+): Promise<void> {
+  await apiRequest(identity, "/v1/evaluation/runs/current/cancel", {
+    method: "POST",
   });
 }

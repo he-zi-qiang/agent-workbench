@@ -927,6 +927,29 @@ class EvaluationSettings(StrictModel):
     #: shape a flag can take: a reader checking whether answers are judged found
     #: the answer "yes" in the configuration and nothing at all in the code.
     #: Rejected rather than merely defaulted off -- see the validator.
+    #: Whether the console may *start* a run. Off unless a deployment says
+    #: otherwise: a run needs the `embedding` extra and a reachable Qdrant, and
+    #: neither is implied by being able to serve the API. A button that answers
+    #: 500 is worse than no button, and the honest fallback is the exact command
+    #: the runner's own docstring gives.
+    #:
+    #: Reading reports is deliberately *not* behind this. A deployment that
+    #: cannot run one can still show the numbers that were committed, and hiding
+    #: those too would hide the only evidence it has.
+    runs_enabled: bool = False
+    #: Frozen at one, and this is a measurement rather than a preference: a full
+    #: RAG ablation loads BGE-M3 and takes 30-70 minutes on the machine this
+    #: repository is developed on, where a second concurrent arm is an OOM kill
+    #: rather than a slower run. Raising it needs the ADR that says which
+    #: machine it was raised for.
+    max_concurrent_runs: Literal[1] = 1
+    #: A ceiling, not an expectation. The longest measured run is about 70
+    #: minutes; this leaves room and still bounds a runner that has wedged.
+    run_timeout_seconds: int = Field(default=5400, ge=60, le=86_400)
+    #: Where the runners write, and where the console reads. A root rather than
+    #: three paths: the per-suite subdirectories are the runners' own layout,
+    #: and naming each here would be this file's opinion about their filenames.
+    reports_root: str = Field(default="./evals", min_length=1)
     ragas_enabled: bool = False
     ragas_offline_only: Literal[True] = True
     online_judge_in_ci: Literal[False] = False

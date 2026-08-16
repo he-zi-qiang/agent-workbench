@@ -73,3 +73,10 @@ max_concurrent_turns = 1
 # above is 1. A deployment that turns Code on inherits the 10s default and
 # should make the same trade deliberately -- F-07 in docs/known-gaps.md.
 catchup_poll_seconds = 2
+
+[evaluation]
+# On for the local profile: the scripts are here and this is the machine they
+# were measured on. `max_concurrent_runs` is a frozen 1 in the settings, and
+# F-09 records what it does *not* bound -- nothing stops an evaluation and a
+# Code turn from wanting the same 8 GB at once.
+runs_enabled = true

@@ -687,6 +687,22 @@
         "secrets.langfuse_secret_key",
         "secrets.otel_exporter_headers"
       ]
+    },
+    {
+      "owner": "application.evaluation",
+      "lifecycle": "live",
+      "fields": [
+        "evaluation.runs_enabled",
+        "evaluation.run_timeout_seconds",
+        "evaluation.reports_root"
+      ]
+    },
+    {
+      "owner": "bootstrap.settings.evaluation_concurrency_contract",
+      "lifecycle": "startup",
+      "fields": [
+        "evaluation.max_concurrent_runs"
+      ]
     }
   ]
 }

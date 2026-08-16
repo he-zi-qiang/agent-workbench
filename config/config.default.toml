@@ -467,6 +467,17 @@ langfuse_enabled = false
 # "are answers judged?" with a yes the code could not honour. Setting it back to
 # `true` is now a load-time error rather than a no-op -- a flag that silently
 # enables nothing is how the claim got made in the first place.
+# Whether the console may start a run. Off by default: a run needs the
+# `embedding` extra installed and a reachable Qdrant, and neither is implied by
+# being able to serve the API. Reading the committed reports is not gated and
+# never depends on this.
+#
+# A full ablation is 30-70 minutes and cannot share a machine with much else,
+# which is why `max_concurrent_runs` is a frozen 1 in the settings rather than a
+# line here.
+runs_enabled = false
+run_timeout_seconds = 5400
+reports_root = "./evals"
 ragas_enabled = false
 ragas_offline_only = true
 online_judge_in_ci = false

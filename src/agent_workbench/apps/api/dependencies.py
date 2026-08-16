@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
+from agent_workbench.adapters.evaluation import SubprocessEvaluationLauncher
 from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
@@ -87,6 +88,7 @@ from agent_workbench.application.code_approvals import (
     CodeApprovalRegistry,
 )
 from agent_workbench.application.code_session import CodeSessionService
+from agent_workbench.application.evaluation import EvaluationService
 from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
@@ -213,6 +215,10 @@ class ApiDependencies:
     #: because a decision arrives on a different request from the turn waiting
     #: for it, and the two have to meet somewhere that outlives both.
     code_approvals: CodeApprovalRegistry | None = None
+    #: Always present. Reading reports needs nothing this process might lack;
+    #: only *starting* a run is gated, and that gate lives inside the service so
+    #: that a deployment which cannot run one still answers with the command.
+    evaluation: EvaluationService | None = None
 
     @property
     def max_control_request_body_bytes(self) -> int:
@@ -497,6 +503,18 @@ def build_dependencies(
         triage=triage,
         code=code,
         code_approvals=code_approvals,
+        # Built unconditionally. The launcher is harmless until asked to start
+        # something, and `runs_enabled` is what decides whether it ever is --
+        # held in the service rather than here so that a disabled deployment
+        # answers with the command instead of a missing route.
+        evaluation=EvaluationService(
+            launcher=SubprocessEvaluationLauncher(
+                project_root=Path.cwd(),
+                timeout_seconds=config.evaluation.run_timeout_seconds,
+            ),
+            reports_root=Path(config.evaluation.reports_root),
+            runs_enabled=config.evaluation.runs_enabled,
+        ),
     )
 
 

@@ -4321,3 +4321,65 @@ pre {
     margin: 8px 0 0 12px;
   }
 }
+
+/* Starting an evaluation, and watching the one that is running. */
+.aw-eval-suites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.aw-eval-suites .aw-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 14px;
+  text-align: left;
+}
+
+.aw-eval-run {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-eval-run p {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* Both of these hold a runner's own output or a shell command, so they wrap
+   rather than scroll sideways: a command a reader has to scroll to finish
+   reading is a command they will copy incompletely. */
+.aw-eval-run pre,
+.aw-eval-manual pre {
+  overflow: auto;
+  max-height: 30vh;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--aw-surface, #fff);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-eval-manual {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.aw-eval-manual p {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+}

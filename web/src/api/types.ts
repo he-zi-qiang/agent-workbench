@@ -437,3 +437,39 @@ export interface LocalTaskMetadata {
   knowledgeBaseId?: Identifier;
   createdAt: string;
 }
+
+export type EvaluationSuite = "rag" | "chat" | "triage";
+
+/**
+ * One report file, exactly as its runner wrote it.
+ *
+ * `payload` is deliberately open. The three suites measure different things,
+ * and a shared shape here would be this file deciding which parts of a
+ * measurement matter -- the same claim ADR-039 refuses to let a metric name
+ * make. A surface that renders one checks for what it needs.
+ */
+export interface EvaluationReportView {
+  suite: EvaluationSuite;
+  name: string;
+  payload: Record<string, unknown>;
+}
+
+export interface EvaluationReportsResponse {
+  reports: EvaluationReportView[];
+  runs_enabled: boolean;
+  how_to_run: Record<string, string>;
+}
+
+export interface EvaluationRunView {
+  suite: EvaluationSuite;
+  status: "running" | "succeeded" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  recent_output: string[];
+}
+
+export interface EvaluationCurrentRunResponse {
+  /** `null` means this API process has not started one -- not that none exist. */
+  run: EvaluationRunView | null;
+}

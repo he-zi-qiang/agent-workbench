@@ -367,6 +367,20 @@ class TriageConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class EvaluationRunsConfig:
+    """What the API process needs to start an evaluation, if it may.
+
+    Only the run half. The metric names, gold-set paths and judge settings in
+    `EvaluationSettings` belong to the offline runners, and a process that never
+    computes a metric has no business carrying the list of them.
+    """
+
+    runs_enabled: bool
+    reports_root: str
+    run_timeout_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
 class CodeConfig:
     """What the API process needs to run coding sessions.
 
@@ -672,6 +686,7 @@ class ApiRuntimeConfig:
     chat: ChatConfig
     triage: TriageConfig
     code: CodeConfig
+    evaluation: EvaluationRunsConfig
     task: TaskConfig
     observability: ObservabilityConfig
     # ADR-019. The API runs the chat loop, so it needs the same switch the Task
@@ -1078,6 +1093,11 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             max_total_tokens=settings.code.max_total_tokens,
             max_cost_micro_usd=settings.code.max_cost_micro_usd,
             max_concurrent_turns=settings.code.max_concurrent_turns,
+        ),
+        evaluation=EvaluationRunsConfig(
+            runs_enabled=settings.evaluation.runs_enabled,
+            reports_root=settings.evaluation.reports_root,
+            run_timeout_seconds=settings.evaluation.run_timeout_seconds,
         ),
         task=project_task(settings),
     )
