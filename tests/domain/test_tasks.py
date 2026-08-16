@@ -233,15 +233,30 @@ def test_the_other_review_constraints_did_not_move() -> None:
     assert _review(decision="pass", issues=()).issues == ()
 
 
-def test_approval_only_follows_a_passing_review() -> None:
-    with pytest.raises(ValidationError, match="requires a passing"):
+def test_an_approval_requires_a_review_but_not_a_passing_one() -> None:
+    """ADR-060: the gate may be asked about a draft the reviewer still disputes.
+
+    An exhausted reviewer's verdict stands recorded and the draft goes to the
+    gate with it, so the human decides about the work *as reviewed*. What
+    stays unrepresentable is a gate with no review at all -- an approval
+    about a draft nobody examined.
+    """
+
+    disputed = _state(
+        approval_id="apr_1",
+        approval_decision="approved",
+        review_result=_review(
+            decision="revise",
+            issues=("Citations are incomplete.",),
+        ),
+    )
+    assert disputed.approval_id == "apr_1"
+
+    with pytest.raises(ValidationError, match="requires a review"):
         _state(
             approval_id="apr_1",
             approval_decision="approved",
-            review_result=_review(
-                decision="revise",
-                issues=("Citations are incomplete.",),
-            ),
+            review_result=None,
         )
 
     approved = _state(approval_id="apr_1", approval_decision="approved")

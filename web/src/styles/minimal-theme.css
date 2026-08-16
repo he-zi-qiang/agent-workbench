@@ -50,9 +50,15 @@ body {
   color: var(--aw-text-muted);
 }
 
-.aw-global-link:hover,
-.aw-global-link.active {
+.aw-global-link:hover {
   background: var(--aw-rail-hover);
+  color: var(--aw-text);
+}
+
+/* Same split as the base skin: active is an accent-tinted chip, hover a
+   neutral one, so the current page stays marked when the pointer leaves. */
+.aw-global-link.active {
+  background: var(--aw-accent-soft);
   color: var(--aw-text);
 }
 
@@ -516,7 +522,7 @@ select {
  * its place, and the one surface that should read as paper.
  */
 
-.aw-code-side {
+.aw-code-workspace {
   border-left-color: var(--aw-border);
 }
 
@@ -528,8 +534,6 @@ select {
 }
 
 .aw-code-file-view {
-  margin-right: clamp(20px, 5vw, 72px);
-  margin-left: clamp(20px, 5vw, 72px);
   border-color: var(--aw-border);
   background: var(--aw-panel);
 }

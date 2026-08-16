@@ -151,7 +151,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.16"] = "1.16"
+    config_schema_version: Literal["1.17"] = "1.17"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -309,6 +309,20 @@ class CodeSettings(StrictModel):
     #: default. ``execution_locality`` and ``coordination`` above stay frozen;
     #: this changes what a turn may call, not where it runs.
     sandbox_enabled: bool = False
+
+    #: Whether each ``sandbox_run`` call stops and asks a human (ADR-058).
+    #:
+    #: Default ``False``, which is a reversal of what shipped, argued from two
+    #: facts. ADR-054 already established that the approval card shows a tool
+    #: name and an argument digest -- a hash cannot be consented to, so the
+    #: gate never bought informed consent, only latency. And the Task path has
+    #: run the same ``external``-risk ``sandbox_run`` with
+    #: ``approval_required_risks=()`` since ADR-015: the platform's own
+    #: position is that a per-call human gate is not what makes the sandbox
+    #: safe -- the container is (one per call, ``--network=none``, destroyed
+    #: after). ``destructive`` risk stays armed regardless; this flag governs
+    #: only the ``external`` tier that ``sandbox_run`` sits in.
+    sandbox_requires_approval: bool = False
 
     @model_validator(mode="after")
     def validate_turn_outlasts_one_approval(self) -> CodeSettings:
@@ -612,8 +626,13 @@ class WorkflowSettings(StrictModel):
     interrupt_boundary: Literal["graph_node"] = "graph_node"
     runtime_loop_owner: Literal["custom_runtime"] = "custom_runtime"
     graph_version: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9._-]+$")
-    node_retry_max_attempts: int = Field(default=2, ge=0, le=20)
-    node_timeout_seconds: int = Field(default=600, ge=1, le=86_400)
+    # `node_retry_max_attempts` and `node_timeout_seconds` are gone (schema
+    # 1.16 -> 1.17, ADR-059). Both were validated here and consumed nowhere --
+    # the LangGraph adapter has no RetryPolicy and no per-node clock -- so a
+    # reader who saw the config believed nodes retried, and they did not.
+    # Retry now lives one level up, on the Task (`coordination.max_attempts`
+    # governs both lease reclaims and retryable execution failures), where one
+    # knob answers one question.
 
 
 class MultiAgentSettings(StrictModel):

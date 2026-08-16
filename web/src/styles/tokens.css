@@ -12,6 +12,12 @@
   --aw-window: #ffffff;
   --aw-sidebar: #f7f7f5;
   --aw-panel: #ffffff;
+
+  /* The raised-chip surface. Referenced by the workbench tabs since they
+     shipped, but never defined until now -- the var() fallback quietly
+     resolved to #fff on a #f7f7f5 container, which is why the active tab
+     was indistinguishable from its neighbours. */
+  --aw-surface: #ffffff;
   --aw-panel-soft: #f7f7f5;
   --aw-panel-strong: #efeee9;
   --aw-rail: #f7f7f5;

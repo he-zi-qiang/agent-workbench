@@ -238,10 +238,13 @@ class TaskState(VersionedModel):
                 raise ValueError("review_result must refer to the current draft_ref")
             if review.revision_number != self.revision_count:
                 raise ValueError("review revision_number must equal revision_count")
-        if self.approval_id is not None and (
-            review is None or review.decision != "pass"
-        ):
-            raise ValueError("approval_id requires a passing review_result")
+        if self.approval_id is not None and review is None:
+            # A review, not a *passing* review, since ADR-060: an exhausted
+            # reviewer's verdict stands recorded and the draft goes to the gate
+            # with it, so the human decides about the work as reviewed. What
+            # stays unrepresentable is a gate with no review at all -- an
+            # approval about a draft nobody examined.
+            raise ValueError("approval_id requires a review_result")
         if (self.approval_id is None) != (self.approval_decision is None):
             # Both or neither. An approval_id without a decision would be a gate
             # the graph walked past without an answer -- which is exactly what a
@@ -305,6 +308,22 @@ class TaskState(VersionedModel):
         """
 
         return self.revision_count < self.max_revisions
+
+    @property
+    def unresolved_review(self) -> ReviewResult | None:
+        """The review this Task ships with unanswered, if there is one.
+
+        Non-``None`` exactly when the reviewer asked for changes and the
+        revision budget cannot pay for them (ADR-060): the verdict stands
+        recorded, the work proceeds, and whoever reads the result is owed the
+        list of what the reviewer still wanted. One property rather than the
+        same three-clause test in both graphs and the adapter.
+        """
+
+        review = self.review_result
+        if review is None or review.decision != "revise" or self.can_revise:
+            return None
+        return review
 
 
 __all__ = [

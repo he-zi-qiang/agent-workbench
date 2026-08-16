@@ -450,6 +450,44 @@ def test_the_turn_carries_a_deadline_derived_from_the_clock() -> None:
     assert request.tool_names == request.envelope.allowed_tools
 
 
+def test_the_gate_arms_what_the_deployment_chose() -> None:
+    """ADR-058: `external` pauses only when the deployment kept the gate.
+
+    `destructive` stays armed in both arrangements -- nothing grants such a
+    tool today, and the day something does, the gate must already be there.
+    The prompt moves with the envelope, because a model told to "expect to
+    wait" avoids the tool the deployment just freed.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+    )
+    from agent_workbench.application.code_session import CODE_TOOLS_WITH_SANDBOX
+
+    def observed(requires_approval: bool) -> Any:
+        harness = _Harness(_writes("notes.md", "hello", "Done."))
+        recording = _Recording()
+        harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.tool_names = CODE_TOOLS_WITH_SANDBOX  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.sandbox_requires_approval = requires_approval  # pyright: ignore[reportAttributeAccessIssue]
+
+        async def scenario() -> Any:
+            session_id = await harness.opened()
+            await harness.ask(session_id, "run it")
+            return recording.requests[0]
+
+        return _run(scenario)
+
+    ungated = observed(requires_approval=False)
+    assert ungated.envelope.approval_required_risks == ("destructive",)
+    assert ungated.system_prompt == CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED
+
+    gated = observed(requires_approval=True)
+    assert gated.envelope.approval_required_risks == ("external", "destructive")
+    assert gated.system_prompt == CODER_SYSTEM_PROMPT_WITH_SANDBOX
+
+
 def test_cancelling_a_turn_keeps_the_files_it_had_already_written() -> None:
     """The inversion of the Task rule, and the reason the pointer writes through.
 

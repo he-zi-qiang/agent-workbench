@@ -12,9 +12,31 @@
 export const DOCX_MEDIA_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
+/**
+ * Which viewer a media type gets, in one word.
+ *
+ * This replaces a pair of booleans (`readable`, `isDocument`) whose falses
+ * multiplied: every surface that showed a file re-derived "so what do I do
+ * with an image?" from their negation, and the answer each had reached was
+ * "download it, silently" -- which is how clicking a produced .png saved a
+ * file instead of showing a picture. One closed vocabulary, one place to add
+ * the next kind.
+ */
+export type PreviewKind = "text" | "docx" | "image" | "pdf" | "none";
+
+export function previewKind(mediaType: string): PreviewKind {
+  if (isReadableMedia(mediaType)) return "text";
+  if (mediaType === DOCX_MEDIA_TYPE) return "docx";
+  // Through `<img>`, which is why every image/* subtype is safe to admit:
+  // an image element rasterises -- an SVG's scripts never run there.
+  if (mediaType.startsWith("image/")) return "image";
+  if (mediaType === "application/pdf") return "pdf";
+  return "none";
+}
+
 /** Whether opening this file shows it, or can only save it. */
 export function isPreviewable(mediaType: string): boolean {
-  return mediaType === DOCX_MEDIA_TYPE || isReadableMedia(mediaType);
+  return previewKind(mediaType) !== "none";
 }
 
 /**
@@ -28,4 +50,25 @@ export function isReadableMedia(mediaType: string): boolean {
     mediaType === "application/json" ||
     mediaType.endsWith("+json")
   );
+}
+
+/**
+ * Whether this browser paints a PDF inside a frame.
+ *
+ * The layout view is the browser's own PDF viewer and nothing else -- this app
+ * ships no renderer -- so a browser without one leaves the frame showing its
+ * empty backdrop: a flat dark rectangle, no error, no event, nothing saying
+ * why. Embedded browsers are where this bites (an app's built-in web view
+ * rather than a browser window), and the reader has no reason to suspect the
+ * viewer rather than the document.
+ *
+ * `!== false` rather than `=== true` on purpose. The property is absent in
+ * browsers too old to have been asked, and the honest default there is to try:
+ * a frame that works is the good outcome, and a frame that does not is covered
+ * by the note under it -- because this check catches only browsers that *admit*
+ * it. One that reports `true` and then paints nothing is exactly what a
+ * Chromium-based web view does, and no property will say so.
+ */
+export function browserShowsPdfInline(): boolean {
+  return navigator.pdfViewerEnabled !== false;
 }

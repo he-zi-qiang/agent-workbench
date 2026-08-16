@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askCode,
+  createCodeSession,
   decideCodeApproval,
   deleteCodeSession,
   downloadCodeWorkspaceFile,
@@ -61,7 +62,7 @@ const ALICE: PrincipalIdentity = {
 
 const SESSION = "ses_code_1";
 
-function mounted() {
+function mounted(entry: string = `/code/${SESSION}`) {
   // A client per render, with retries off: a shared one would carry one test's
   // session list into the next, and a retry would turn "the list failed" into
   // a test that hangs rather than one that fails.
@@ -70,9 +71,12 @@ function mounted() {
   });
   return render(
     <QueryClientProvider client={queries}>
-      <MemoryRouter initialEntries={[`/code/${SESSION}`]}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
-          <Route element={<CodePage />} path="/code/:sessionId" />
+          {/* The same optional-param route App.tsx mounts, so the first send's
+              /code → /code/:id navigation stays inside one component instance
+              here too. */}
+          <Route element={<CodePage />} path="/code/:sessionId?" />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -201,6 +205,29 @@ describe("CodePage", () => {
       "apr_write",
       "deny",
     ]);
+  });
+
+  it("says why a turn stopped when it produced no report", async () => {
+    // A deadline-failed turn appends no assistant message at all -- the
+    // server declines to invent one -- so without a notice the transcript
+    // shows the instruction and then silence, which reads as a broken
+    // session rather than a spent turn.
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "",
+      workspace_version: "art_1",
+      run_id: "run_1",
+      status: "failed",
+      stop_reason: "deadline",
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "run the tests");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/这一轮到时间停下了/)).toBeInTheDocument();
+    });
   });
 
   it("says what went wrong instead of losing the turn", async () => {
@@ -453,25 +480,97 @@ describe("CodePage", () => {
     });
   });
 
-  it("puts an attached file into the workspace and shows it", async () => {
+  it("uploads from beside the composer, and the workspace pane appears with it", async () => {
     const user = userEvent.setup();
     vi.mocked(putCodeWorkspaceFile).mockResolvedValue({
       files: [{ name: "notes.txt", size_bytes: 11, media_type: "text/plain" }],
     });
 
     mounted();
-    const pane = await screen.findByRole("complementary", { name: "工作区文件" });
-    const file = new File(["hello world"], "notes.txt", { type: "text/plain" });
+    // Before anything is uploaded this session has no files, so there is no
+    // workspace pane at all -- the conversation keeps the whole width.
+    await waitFor(() => {
+      expect(vi.mocked(getCodeWorkspace)).toHaveBeenCalled();
+    });
+    expect(
+      screen.queryByRole("complementary", { name: "工作区文件" }),
+    ).not.toBeInTheDocument();
 
-    await user.upload(within(pane).getByLabelText(/上传/), file);
+    // The control sits with the composer: attaching a file is part of asking,
+    // not a property of the file pane it used to live in.
+    const file = new File(["hello world"], "notes.txt", { type: "text/plain" });
+    await user.upload(screen.getByLabelText(/上传/), file);
 
     await waitFor(() => {
       expect(vi.mocked(putCodeWorkspaceFile).mock.calls[0]?.[2]).toBe(file);
     });
     // The listing the write answered with, not a refetch: the endpoint returns
     // it precisely so the pane does not have to ask again for something it was
-    // just told.
+    // just told. And the pane exists now that there is a product to show.
+    const pane = await screen.findByRole("complementary", { name: "工作区文件" });
     expect(await within(pane).findByText("notes.txt")).toBeInTheDocument();
+  });
+
+  it("opens on a centered start when there is no session", async () => {
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        {
+          session_id: SESSION,
+          title: "把 notes.md 整理成清单",
+          last_activity_at: null,
+        },
+      ],
+    });
+
+    mounted("/code");
+
+    expect(
+      await screen.findByRole("heading", { name: "开始一段编码" }),
+    ).toBeInTheDocument();
+    // The recent list is unfolded here -- "where was I" is the likeliest
+    // question a person with no session open is asking.
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
+    expect(
+      within(recent).getByRole("button", { name: "把 notes.md 整理成清单" }),
+    ).toBeInTheDocument();
+    // No panes about a session that does not exist.
+    expect(
+      screen.queryByRole("complementary", { name: "工作区文件" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "编码会话" }),
+    ).not.toBeInTheDocument();
+    // Upload waits for the first sentence; the session it would go into does
+    // not exist yet.
+    expect(screen.getByLabelText(/上传/)).toBeDisabled();
+  });
+
+  it("opens the session on the first sentence and runs the turn in it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(createCodeSession).mockResolvedValue({
+      session_id: SESSION,
+      title: null,
+    });
+    vi.mocked(askCode).mockResolvedValue({
+      report: "Done.",
+      workspace_version: "art_1",
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted("/code");
+    await user.type(screen.getByLabelText("要做的事"), "write notes.md");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    // The first sentence carries the POST the old splash screen demanded a
+    // separate click for, and the turn runs against the session it opened.
+    await waitFor(() => {
+      expect(vi.mocked(askCode).mock.calls[0]?.[1]).toBe(SESSION);
+    });
+    expect(vi.mocked(createCodeSession)).toHaveBeenCalledTimes(1);
   });
 
   it("deletes a session only after the reader confirms", async () => {

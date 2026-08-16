@@ -134,6 +134,12 @@ class CheckpointPosition(DomainModel):
     pending_nodes: tuple[TaskNodeId, ...] = ()
     awaiting_approval_id: Identifier | None = None
     failure_reason: ShortText | None = None
+    #: What a *successful* finish nonetheless owes the reader (ADR-060): the
+    #: review this Task shipped with unanswered. Distinct from
+    #: ``failure_reason`` by design -- a caveat qualifies a success, and a
+    #: reader who has to parse one field to learn which of the two happened
+    #: will eventually mis-read it.
+    caveat: ShortText | None = None
 
     @model_validator(mode="after")
     def validate_interrupt(self) -> CheckpointPosition:
@@ -146,6 +152,13 @@ class CheckpointPosition(DomainModel):
             raise ValueError("a failed position cannot have pending nodes")
         if self.failure_reason is not None and self.awaiting_approval_id is not None:
             raise ValueError("a failed position cannot await an approval")
+        if self.caveat is not None and (
+            self.pending_nodes or self.failure_reason is not None
+        ):
+            # A caveat annotates a finished success and nothing else: on a
+            # running position it is premature, and on a failed one it would
+            # compete with the failure for the same reader.
+            raise ValueError("a caveat belongs to a finished, unfailed position")
         return self
 
     @property

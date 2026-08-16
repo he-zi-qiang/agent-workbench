@@ -52,12 +52,10 @@ allow_local_bootstrap = true
 
 [runtime]
 record_step_inputs = true
-# From config.word-local.toml, and load-bearing for the same reason: v2's `work`
-# node does the whole job in one invocation, and a document has a rendering
-# round trip in it. Measured there, a short report spent its steps on
-# list -> write -> render -> re-render after the reviewer's note and hit
-# `budget_exceeded: max_steps` at the shipped 12.
-max_steps = 40
+# `max_steps = 40` used to be repeated here (measured on the Word profile:
+# a short report hit `budget_exceeded: max_steps` at the then-shipped 12).
+# The shipped default now carries that measured value, so restating it would
+# be the drift this file warns against elsewhere.
 
 [triage]
 # On because this is the profile local acceptance runs against a real provider.
@@ -81,9 +79,13 @@ timeout_seconds = 120
 # whose Code page rendered its empty state as though nothing were wrong.
 enabled = true
 
-# Shorter than the shipped defaults, copied from config.code-local.toml: a local
-# turn that has gone wrong is better cut off in two minutes than in ten.
-turn_timeout_seconds = 240
+# Shorter than the shipped default, kept in step with config.code-local.toml: a
+# local turn that has gone wrong is better cut off in minutes than in ten. 360
+# rather than the 240 that shipped with the approval gate, because an ungated
+# session actually iterates -- write, run, read, fix, run again -- and 240 was
+# sized for turns that spent most of themselves waiting for a human (two 120s
+# approvals consumed the whole turn; known-gaps had that measured).
+turn_timeout_seconds = 360
 approval_timeout_seconds = 120
 
 # One at a time, and here the reason is stronger than it is in code-local: this
@@ -99,9 +101,10 @@ max_concurrent_turns = 1
 #   * The API refuses to start when this is on and the sandbox does not answer.
 #     `scripts/dev.sh demo-api` probes it first and says so with the command
 #     that fixes it, so the refusal should arrive before the process does.
-#   * `sandbox_run` is `external` risk, so **every call stops and asks you**.
-#     That is the gate `approval_required_risks` has been armed for since Code
-#     shipped, and this is the first tool that reaches it (known-gaps F-05).
+#   * Calls run without a per-call approval (ADR-058): the default
+#     `code.sandbox_requires_approval = false` applies here. The container is
+#     the safety story; a deployment that wants the old per-call gate sets
+#     that key to true.
 sandbox_enabled = true
 
 [sandbox]
@@ -153,13 +156,9 @@ routed_relevance_threshold = 0.01
 # approval it had already declined to want.
 export_requires_approval = false
 
-[multi_agent]
-# The correction both narrow profiles carry, needed here for both of their
-# reasons at once: this node reads pages *and* writes a document in one
-# invocation, against a *cumulative* per-invocation ceiling. The shipped 16000
-# ran out mid-answer on the web profile and before rendering anything on the
-# Word one, in both cases while every tool call had worked.
-max_tokens_per_agent_invocation = 120000
+# `[multi_agent] max_tokens_per_agent_invocation = 120000` used to be repeated
+# here (measured failing at the then-shipped 16000 on both narrow profiles).
+# The shipped default now carries the measured value; see config.default.toml.
 
 [optional_labs]
 mcp_adapter = true

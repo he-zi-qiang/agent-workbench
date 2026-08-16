@@ -814,6 +814,27 @@ export async function getDocumentPdf(
   return { available: true, blob: new Blob([bytes], { type: "application/pdf" }) };
 }
 
+/**
+ * An artifact's bytes as a blob, for a viewer on this page rather than a file
+ * in the Downloads folder.
+ *
+ * Fetched here instead of pointing an `<img>`/`<iframe>` at the route for the
+ * same reason `getDocumentPdf` fetches: an embedded element issues its own
+ * request and carries none of the identity headers, so it would render a 404.
+ * The caller owns the object URL and its lifetime -- this returns the blob,
+ * not a URL, because a frame keeps reading its source after the call returns.
+ */
+export async function getArtifactBlob(
+  identity: PrincipalIdentity,
+  artifactId: string,
+): Promise<Blob> {
+  const response = await fetch(`/v1/artifacts/${encodeURIComponent(artifactId)}`, {
+    headers: identityHeaders(identity),
+  });
+  if (!response.ok) throw await parseError(response);
+  return response.blob();
+}
+
 export async function getArtifactJson<T>(
   identity: PrincipalIdentity,
   artifactId: string,
@@ -865,6 +886,19 @@ export async function getCodeWorkspaceFileText(
     return { text: await blob.slice(0, MAX_PREVIEW_BYTES).text(), truncated: true };
   }
   return { text: await blob.text(), truncated: false };
+}
+
+/**
+ * The same file, as a blob for an in-page viewer (an image, a PDF frame).
+ * The identity-header reasoning of `getArtifactBlob` applies unchanged; the
+ * address stays session + name because that is the only address a client has.
+ */
+export async function getCodeWorkspaceFileBlob(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  name: string,
+): Promise<Blob> {
+  return (await fetchCodeWorkspaceFile(identity, sessionId, name)).blob();
 }
 
 function fetchCodeWorkspaceFile(

@@ -8,7 +8,9 @@ import {
   createTask,
   decideApproval,
   deleteTask,
+  downloadArtifact,
   getApproval,
+  getArtifactBlob,
   getArtifactJson,
   getArtifactText,
   getDocumentPdf,
@@ -31,7 +33,9 @@ vi.mock("../../api/client", async () => {
     createTask: vi.fn(),
     decideApproval: vi.fn(),
     deleteTask: vi.fn(),
+    downloadArtifact: vi.fn(),
     getApproval: vi.fn(),
+    getArtifactBlob: vi.fn(),
     getArtifactJson: vi.fn(),
     getArtifactText: vi.fn(),
     getDocumentPdf: vi.fn(),
@@ -62,7 +66,9 @@ describe("WorkPage task submission", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(createTask).mockReset();
     vi.mocked(decideApproval).mockReset();
+    vi.mocked(downloadArtifact).mockReset();
     vi.mocked(getApproval).mockReset();
+    vi.mocked(getArtifactBlob).mockReset();
     vi.mocked(getArtifactJson).mockReset();
     vi.mocked(getArtifactText).mockReset();
     // Left without a default, like `getDocumentPreview` beside it -- but the
@@ -726,6 +732,113 @@ describe("WorkPage task submission", () => {
         /季度总结\.docx/,
       ),
     ).toBeInTheDocument();
+  });
+
+  it("says when a success shipped with the reviewer still unsatisfied", async () => {
+    // ADR-060: an exhausted reviewer annotates rather than vetoes, and the
+    // annotation lands on the Task row as `status_detail`. Hiding it would
+    // present a disputed draft as a clean pass.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail:
+        "the reviewer still saw 1 unresolved issue(s) after 2 revision(s): thin",
+      agent_invocation_count: 0,
+      objective_preview: "比较三个方案并输出一份建议报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(reportTimeline());
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(
+      within(output).getByText("评审仍有未解决的意见，产物按现状导出"),
+    ).toBeInTheDocument();
+    expect(
+      within(output).getByText(/1 unresolved issue/),
+    ).toBeInTheDocument();
+    // The product itself is still the headline, not the caveat.
+    expect(within(output).getByText("report.md")).toBeInTheDocument();
+  });
+
+  it("opens a picture from the rail as a picture, not a download", async () => {
+    // A produced .png used to download on click with no feedback and show
+    // nothing -- the rail pre-judged "not previewable" and its list was stale
+    // the moment the column learned a new kind. Now the click opens, the
+    // column shows the picture, and the one download button stays the only
+    // way bytes leave the page.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "画一张销售趋势图",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(
+      railFileTimeline({
+        artifact_id: "art_plot",
+        media_type: "image/png",
+        filename: "图表.png",
+        size_bytes: 4096,
+      }),
+    );
+    vi.mocked(getArtifactBlob).mockResolvedValue(
+      new Blob(["png-bytes"], { type: "image/png" }),
+    );
+    const user = userEvent.setup();
+    renderWorkPage("/work/task_run");
+
+    const rail = await screen.findByRole("complementary", { name: "附件" });
+    await user.click(within(rail).getByRole("button", { name: /图表\.png/ }));
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    const image = await within(output).findByRole("img", { name: "图表.png" });
+    expect(image.getAttribute("src")).toMatch(/^blob:/);
+    expect(vi.mocked(getArtifactBlob)).toHaveBeenCalledWith(
+      expect.anything(),
+      "art_plot",
+    );
+    expect(vi.mocked(downloadArtifact)).not.toHaveBeenCalled();
+    // Still exactly one labelled download control on the page.
+    expect(screen.getAllByRole("button", { name: /^下载/ })).toHaveLength(1);
+  });
+
+  it("opens an unshowable type in the reading column instead of silently downloading", async () => {
+    // The honest leaf: no viewer exists for a zip, and the column says so.
+    // What must not happen is the old behaviour -- bytes saved to disk as the
+    // response to a click that asked to look.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "打包结果数据",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(
+      railFileTimeline({
+        artifact_id: "art_zip",
+        media_type: "application/zip",
+        filename: "数据包.zip",
+        size_bytes: 10240,
+      }),
+    );
+    const user = userEvent.setup();
+    renderWorkPage("/work/task_run");
+
+    const rail = await screen.findByRole("complementary", { name: "附件" });
+    await user.click(within(rail).getByRole("button", { name: /数据包\.zip/ }));
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(
+      await within(output).findByText(/这个类型只能下载查看/),
+    ).toBeInTheDocument();
+    expect(vi.mocked(downloadArtifact)).not.toHaveBeenCalled();
+    expect(vi.mocked(getArtifactBlob)).not.toHaveBeenCalled();
   });
 
   it("keeps the document downloadable when its text cannot be extracted", async () => {
@@ -1616,6 +1729,38 @@ function railDocxTimeline() {
         size_bytes: 36741,
         sha256: "c".repeat(64),
         filename: "季度总结.docx",
+      },
+    },
+  });
+  return timeline;
+}
+
+/**
+ * `railDocxTimeline`'s shape with an arbitrary tool-result file -- the
+ * fixture for the kinds whose rail click used to download silently.
+ */
+function railFileTimeline(artifact: {
+  artifact_id: string;
+  media_type: string;
+  filename: string;
+  size_bytes: number;
+}) {
+  const timeline = reportTimeline();
+  const exported = timeline.events[1];
+  if (exported === undefined) throw new Error("fixture lost its export event");
+  timeline.events.splice(1, 0, {
+    ...exported,
+    event_id: "event_rail_file",
+    graph_node_id: "work",
+    payload: {
+      kind: "ToolCompleted",
+      tool_call_id: "tc_file",
+      artifact: {
+        schema_version: 1,
+        tenant_id: "tenant_local",
+        kind: "tool_result",
+        sha256: "d".repeat(64),
+        ...artifact,
       },
     },
   });

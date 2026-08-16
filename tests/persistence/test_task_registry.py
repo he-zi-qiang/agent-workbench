@@ -1064,6 +1064,28 @@ def test_a_running_task_can_move_where_the_table_allows(
     )
 
 
+def test_a_success_can_carry_its_caveat_on_the_row() -> None:
+    """ADR-060: `mark_succeeded` records the review the graph shipped without.
+
+    Optional and usually absent -- the parametrized case above pins that an
+    ordinary success stays detail-free -- but a settlement that was handed a
+    caveat must not drop it, because this row is where the console reads it.
+    """
+
+    caveat = "the reviewer still saw 1 unresolved issue(s) after 2 revision(s): thin"
+
+    async def scenario(registry: PostgresTaskRegistry) -> tuple[str, str | None]:
+        await registry.submit(_submission())
+        claim = await _claim(registry)
+        moved = await registry.mark_succeeded(claim.lease, detail=caveat)
+        return moved.status, moved.status_detail
+
+    status, detail = _run(scenario)
+
+    assert status == "succeeded"
+    assert detail == caveat
+
+
 @pytest.mark.parametrize(
     ("move", "kwargs", "event_type"),
     [

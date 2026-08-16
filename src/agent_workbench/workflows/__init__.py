@@ -19,7 +19,6 @@ from agent_workbench.workflows.research_graph import (
     begin_revision,
     fan_in,
     merge_refs,
-    quality_gate_failure_reason,
     route_quality_gate,
     route_research,
 )
@@ -35,7 +34,6 @@ __all__ = [
     "begin_revision",
     "fan_in",
     "merge_refs",
-    "quality_gate_failure_reason",
     "route_quality_gate",
     "route_research",
 ]

@@ -12,15 +12,16 @@ this module rather than in the adapter:
   research branch finished first, and re-merging an already merged
   contribution changes nothing.  A checkpoint written after a crash mid-fan-in
   therefore converges instead of accumulating duplicates.
-* a quality gate that has run out of revisions returns **no next node** and a
-  stable failure reason.  Routing an exhausted budget to approval would
-  approve a draft the critic rejected, which turns the gate into a formality
-  precisely when it matters.
-* the approval gate routes the same way, for the same reason.  A rejection is a
-  path through the graph rather than the absence of one, and the path it takes
-  is **not** the export: a gate whose rejection still exported would be a
-  formality too.  So ``approval`` is a conditional node, and a rejected decision
-  returns no next node together with its own terminal failure reason.
+* a quality gate that has run out of revisions routes **onward, not to
+  failure** (ADR-060): the reviewer's verdict stands recorded in the state and
+  travels with the draft as ``unresolved_review``, so the reader gets an
+  annotated product instead of nothing.  The gate is not a formality for it --
+  what reaches approval is the draft *as reviewed*, verdict attached.
+* the approval gate still fails a rejection.  A rejection is a path through
+  the graph rather than the absence of one, and the path it takes is **not**
+  the export: a gate whose rejection still exported would be a formality.  So
+  ``approval`` is a conditional node, and a rejected decision returns no next
+  node together with its own terminal failure reason.
 """
 
 from __future__ import annotations
@@ -123,15 +124,10 @@ def route_research(state: TaskState) -> tuple[TaskNodeId, ...]:
 def route_quality_gate(state: TaskState) -> TaskNodeId | None:
     """Return the next node after the quality gate, or ``None`` to stop here.
 
-    ``None`` has two meanings, and they are told apart by
-    ``terminal_failure_reason`` rather than by this return value:
-
-    * the critic still wants changes and the revision budget is spent -- a
-      failure, and deliberately not ``approval``, because the caller has to
-      decide the Task failed rather than reach the gate by ignoring a value;
-    * the work passed and this Task was never asked for a file -- a success.
-      Routing to ``approval`` here would interrupt a human to authorize an
-      export nobody wanted, and then write one.
+    ``None`` means one thing now: the Task was never asked for a file, so the
+    graph is done -- a success whether the critic passed the draft or ran out
+    of revisions disputing it (ADR-060).  Routing to ``approval`` there would
+    interrupt a human to authorize an export nobody wanted, and then write one.
 
     The draft is written either way.  ``wants_report`` decides whether it also
     becomes a downloadable artifact, not whether the Task produced anything.
@@ -157,28 +153,16 @@ def route_quality_gate(state: TaskState) -> TaskNodeId | None:
         # a decision nobody made. `route_approval` below still refuses to export
         # without one, which is what keeps this the only way past it.
         return "approval" if state.export_requires_approval else "export"
-    return "synthesize" if state.can_revise else None
-
-
-def quality_gate_failure_reason(state: TaskState) -> str | None:
-    """Return the terminal failure recorded by an exhausted quality gate.
-
-    ``None`` is deliberately different from the graph reaching ``END``: the
-    latter is only a framework control-flow detail.  This value is carried
-    across the workflow port and checkpoint inspection boundary so a Worker
-    can mark the product Task failed rather than inferring success from an
-    empty pending-node list.
-
-    A gate that passed returns ``None`` here whether or not it routed onward,
-    which is what makes "passed, no file wanted" terminate as a success.
-    """
-
-    review = state.review_result
-    if review is None or review.decision != "revise" or state.can_revise:
+    if state.can_revise:
+        return "synthesize"
+    # Out of revisions. This used to be the graph's one self-inflicted failure
+    # -- two rejections and the reader got nothing at all, work included.
+    # ADR-060: an exhausted reviewer annotates rather than vetoes, so the
+    # draft proceeds exactly as a pass would, with the verdict standing in
+    # `state.unresolved_review` for the gate, the caveat and the reader.
+    if not state.wants_report:
         return None
-    return (
-        "the critic requested another revision after the revision budget was exhausted"
-    )
+    return "approval" if state.export_requires_approval else "export"
 
 
 def route_approval(state: TaskState) -> TaskNodeId | None:
@@ -206,14 +190,13 @@ def approval_failure_reason(state: TaskState) -> str | None:
 def terminal_failure_reason(state: TaskState) -> str | None:
     """Return why this state is a *deliberate* terminal failure, if it is.
 
-    One entry point, because a caller that had to remember both gates would
-    eventually remember one.  The two are mutually exclusive by construction --
-    an exhausted budget requires the critic's verdict to be ``revise``, and an
-    approval requires it to be ``pass`` -- so their order here is not a
-    precedence rule, and a test pins that rather than trusting the reading.
+    Since ADR-060 the quality gate no longer produces one -- an exhausted
+    reviewer annotates rather than vetoes -- so the rejected approval is the
+    only deliberate failure this graph has left. The entry point stays, so the
+    caller keeps asking one question even as the answers change underneath.
     """
 
-    return quality_gate_failure_reason(state) or approval_failure_reason(state)
+    return approval_failure_reason(state)
 
 
 def next_nodes(node: TaskNodeId, state: TaskState) -> tuple[TaskNodeId, ...]:
@@ -346,7 +329,6 @@ __all__ = [
     "fan_in",
     "merge_refs",
     "next_nodes",
-    "quality_gate_failure_reason",
     "route_approval",
     "route_quality_gate",
     "route_research",

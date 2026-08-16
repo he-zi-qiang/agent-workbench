@@ -1119,10 +1119,14 @@ task_runs = Table(
         name="task_runs_resume_reference",
     ),
     CheckConstraint(
+        # `succeeded` is the one status where the detail is *optional*
+        # (ADR-060): a caveated success records the review it shipped without,
+        # and an ordinary one records nothing. Migration 0029 relaxed this.
         "(status IN ('waiting_migration', 'failed', 'cancelled', 'dead_letter') "
         "AND status_detail IS NOT NULL) OR "
-        "(status IN ('queued', 'running', 'waiting_approval', 'succeeded') "
-        "AND status_detail IS NULL)",
+        "(status IN ('queued', 'running', 'waiting_approval') "
+        "AND status_detail IS NULL) OR "
+        "(status = 'succeeded')",
         name="task_runs_status_detail",
     ),
     CheckConstraint(

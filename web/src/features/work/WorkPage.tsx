@@ -27,6 +27,7 @@ import {
   type DocumentLayoutDecline,
   downloadArtifact,
   getApproval,
+  getArtifactBlob,
   getArtifactJson,
   getArtifactText,
   getDocumentPdf,
@@ -50,10 +51,11 @@ import type {
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
-  DOCX_MEDIA_TYPE,
+  browserShowsPdfInline,
   isPreviewable,
-  isReadableMedia,
+  previewKind,
 } from "../../components/media";
+import { BlobPreview } from "../../components/BlobPreview";
 import {
   AttachmentButton,
   AttachmentTray,
@@ -1022,7 +1024,16 @@ export function WorkPage() {
             <TaskStepStream
               lifecycle={lifecycle}
               loading={timeline.loading && timeline.events.length === 0}
-              onOpenArtifact={(artifact) => downloadMutation.mutate(artifact)}
+              // Previewable files open in the reading column, same as a rail
+              // click; only the kinds no viewer exists for still download.
+              // "打开产物" that saved a file it could have shown was the bug.
+              onOpenArtifact={(artifact) => {
+                if (isPreviewable(artifact.media_type) && selectedTaskId !== undefined) {
+                  setOpened({ taskId: selectedTaskId, artifact });
+                } else {
+                  downloadMutation.mutate(artifact);
+                }
+              }}
               stageEvents={stageEvents}
               status={selectedTask.status}
               taskEvents={taskEvents}
@@ -1186,16 +1197,15 @@ export function WorkPage() {
             <div className="aw-work-output">
               <ArtifactRail
                 artifacts={artifacts}
-                // A file this page can show opens in the reading column; the
-                // rest download, which is all a binary can do. Before this,
-                // every entry downloaded -- including the .docx a Task was
-                // asked to produce, which the page had just learned to render.
-                // The rendered document is not the "final report" (that is the
-                // exported draft), so it only ever appeared here.
+                // Every entry opens in the reading column, whatever its type.
+                // The gate that used to be here sent "not previewable" to a
+                // silent download -- clicking a produced .png saved a file with
+                // no feedback and showed nothing -- and its list of what *is*
+                // previewable went stale the moment the column learned a new
+                // kind. The column already answers per type, including "this
+                // one you can only download", so the rail stopped pre-judging.
                 onOpen={(artifact) => {
-                  if (!isPreviewable(artifact.media_type)) {
-                    downloadMutation.mutate(artifact);
-                  } else if (selectedTaskId !== undefined) {
+                  if (selectedTaskId !== undefined) {
                     setOpened({ taskId: selectedTaskId, artifact });
                   }
                 }}
@@ -1421,8 +1431,12 @@ function TaskResult({
   /** `null` while the submitted input is unread, or if it cannot be read. */
   wantsReport: boolean | null;
 }) {
-  const readable = artifact !== null && isReadableMedia(artifact.media_type);
-  const isDocument = artifact !== null && artifact.media_type === DOCX_MEDIA_TYPE;
+  // One vocabulary for "what does this file get" (`components/media.ts`),
+  // instead of the pair of booleans whose negation used to mean "download,
+  // silently" for everything that was neither text nor a document.
+  const kind = artifact === null ? "none" : previewKind(artifact.media_type);
+  const readable = kind === "text";
+  const isDocument = kind === "docx";
   const preview = useQuery({
     queryKey: ["work", "artifact-text", artifact?.artifact_id ?? ""],
     enabled: readable,
@@ -1587,6 +1601,16 @@ function TaskResult({
           className="aw-answer"
           aria-label={awaitingDecision ? "待确认的内容" : "任务结果"}
         >
+          {/* Same caveat the exported branch shows (ADR-060): a success whose
+              reviewer was still unsatisfied says so, file or no file. */}
+          {status === "succeeded" && statusDetail !== undefined ? (
+            <InfoNotice>
+              <span>
+                <strong>评审仍有未解决的意见</strong>
+                <small>{statusDetail}</small>
+              </span>
+            </InfoNotice>
+          ) : null}
           <header>
             <span className="aw-answer-mark" aria-hidden="true">A</span>
             <strong>{awaitingDecision ? "待确认的内容" : "回答"}</strong>
@@ -1657,8 +1681,23 @@ function TaskResult({
 
   // A Task that exported a file reads the same way: the text flows under the
   // run like any other answer, and the file is what the header names.
+  //
+  // A succeeded Task's `status_detail` is the review caveat and nothing else
+  // (ADR-060): the reviewer ran out of revisions still wanting changes, the
+  // work shipped anyway, and hiding that would present a disputed draft as a
+  // clean pass. The sentence is the server's own record, shown verbatim.
+  const reviewCaveat =
+    status === "succeeded" && statusDetail !== undefined ? statusDetail : null;
   return (
     <section className="aw-answer" aria-label="任务产出">
+      {reviewCaveat === null ? null : (
+        <InfoNotice>
+          <span>
+            <strong>评审仍有未解决的意见，产物按现状导出</strong>
+            <small>{reviewCaveat}</small>
+          </span>
+        </InfoNotice>
+      )}
       <header>
         <span className="aw-answer-mark" aria-hidden="true">A</span>
         <strong>{artifact.filename ?? artifact.kind}</strong>
@@ -1778,6 +1817,14 @@ function TaskResult({
             )}
           </>
         )
+      ) : kind === "image" || kind === "pdf" ? (
+        <BlobPreview
+          kind={kind}
+          load={() => getArtifactBlob(identity, artifact.artifact_id)}
+          name={artifact.filename ?? artifact.kind}
+          queryKey={["work", "artifact-blob", artifact.artifact_id]}
+          sizeBytes={artifact.size_bytes}
+        />
       ) : !readable ? (
         <p className="aw-page-note">
           {artifact.media_type} · {artifact.size_bytes} 字节，这个类型只能下载查看。
@@ -1893,27 +1940,6 @@ function PreviewGaps({ preview }: { preview: DocumentPreview }) {
  * -- what they see either way is the text view and a note saying why.
  */
 type PanelLayoutDecline = DocumentLayoutDecline | "viewer_unavailable";
-
-/**
- * Whether this browser paints a PDF inside a frame.
- *
- * The layout view is the browser's own PDF viewer and nothing else -- this app
- * ships no renderer -- so a browser without one leaves the frame showing its
- * empty backdrop: a flat dark rectangle, no error, no event, nothing saying
- * why. Embedded browsers are where this bites (an app's built-in web view
- * rather than a browser window), and the reader has no reason to suspect the
- * viewer rather than the document.
- *
- * `!== false` rather than `=== true` on purpose. The property is absent in
- * browsers too old to have been asked, and the honest default there is to try:
- * a frame that works is the good outcome, and a frame that does not is covered
- * by the note under it -- because this check catches only browsers that *admit*
- * it. One that reports `true` and then paints nothing is exactly what a
- * Chromium-based web view does, and no property will say so.
- */
-function browserShowsPdfInline(): boolean {
-  return navigator.pdfViewerEnabled !== false;
-}
 
 function layoutDeclineNote(reason: PanelLayoutDecline): string {
   if (reason === "converter_unavailable") {

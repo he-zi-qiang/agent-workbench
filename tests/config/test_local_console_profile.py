@@ -159,10 +159,17 @@ def test_the_console_profile_raises_both_budgets_a_document_run_needs(
     demo = _load_profile(monkeypatch, DEMO_CONFIG)
     shipped = _load_profile(monkeypatch, DEFAULT_CONFIG)
 
-    assert demo.runtime.max_steps > shipped.runtime.max_steps
+    # The measured ceilings moved into the shipped default (ADR-059's cleanup:
+    # a default every working profile had to raise was a trap, not a default),
+    # so the console no longer overrides -- what this now pins is that the
+    # shipped numbers ARE the measured ones, and that the console inherits
+    # rather than silently diverging again.
+    assert shipped.runtime.max_steps == 40
+    assert shipped.multi_agent.max_tokens_per_agent_invocation == 120_000
+    assert demo.runtime.max_steps == shipped.runtime.max_steps
     assert (
         demo.multi_agent.max_tokens_per_agent_invocation
-        > shipped.multi_agent.max_tokens_per_agent_invocation
+        == shipped.multi_agent.max_tokens_per_agent_invocation
     )
 
 

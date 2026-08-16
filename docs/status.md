@@ -22,6 +22,65 @@
 
 ---
 
+## 2026-08-16（未合并，分支 `console-seven-improvements`）：控制台七条
+
+又一轮使用反馈，七条，归并为五个工作流、六个提交、三份 ADR（0058–0060）。
+**门禁（本节时点）**：后端确定性 `pytest` 2377 passed / 739 skipped；`ruff`、
+`pyright` 0 errors；前端 `lint` + `tsc` + `vitest` 285 passed（连续五轮全绿）+
+`vite build`；服务型四套件 1145 passed / 2 skipped——其中 9 条 `tests/vector`
+在与 `demo-api` 启动（Qdrant 别名引导）并发时失败，隔离复跑 117 passed /
+1 skipped 全绿，属环境争用而非回归。
+
+### 导航终于分得清（W3）
+
+激活 tab 的底色引用的 `--aw-surface` **从未被定义**——fallback 的 #fff 落在
+#f7f7f5 容器上差 3/255，等于只剩字重在区分「对话/任务」；左侧栏 hover 与
+active 又共享同一条规则。补 token、给激活 tab 边框加 accent 下划线、rail 的
+active 改 accent 底色 chip。**证据**：浏览器实测计算样式
+`box-shadow: rgb(217,119,87) 0 -2px 0 inset`、rail active 底色
+`rgb(246,235,230)`。纯 CSS，零测试变动。
+
+### 点开就能看，下载只有一颗按钮（W2）
+
+rail 里点一个 .png 曾是静默下载。`previewKind`（text/docx/image/pdf/none）
+成为唯一判定面（`media.ts`，补了缺失的矩阵测试），rail 与步骤里的「打开产物」
+一律进阅读列，图片走 `<img>`、PDF 走内嵌帧（blob 取数，identity 头的原因同
+版面预览），无查看器的类型老实说「只能下载」。「恰好一颗下载按钮」的既有
+契约测试继续钉死。Code 工作区 .docx 版面缺口记为 known-gaps F-11。
+
+### Code 页第三次重画（W1）
+
+无会话＝居中开始页（输入框＋最近会话）；有会话＝左会话右产物，右栏只在
+工作区真有东西时渲染（`clamp(320px, 40%, 560px)`），选中文件就地预览。上传
+从最右栏头部搬到输入框旁。路由并成 `code/:sessionId?` 单条：第一句话的
+/code → /code/:id 导航曾经重挂载组件、把 `running` 丢掉。错误提示挂会话
+作用域——一个会话的 `artifact not found` 不再悬在下一个健康会话头上（浏览器
+实测：坏会话显示自己的错，切走即清）。`CodePage.test.tsx` 17→20 条。
+
+### 沙箱之门从人移到信封（W4，[ADR-058](./adr/0058-the-sandbox-gate-moves-from-the-human-to-the-envelope.md)）
+
+新键 `code.sandbox_requires_approval` 默认 `false`：`external` 放行、
+`destructive` 永远上膛，审批机器一个字未动。提示词跟着门走，本地 profile
+回合墙钟 240→360，控制台在 `status != completed` 时按 `stop_reason` 给一句
+「改动都在工作区里，直接说下一步」。**实机证据**（demo profile，改动后）：
+一轮「新建 collatz.py 并用 sandbox_run 验证」的回合折叠摘要为
+**「模型作答 ×6 · 运行代码 ×4」，批准卡 0 张**；报告如实记录了前两次运行
+失败（模块路径、`__pycache__`）、第三次修复后成功、并用独立实现对照验证——
+写-跑-改-再跑，正是旧门下两次 120s 等待就会耗光整个回合的那种循环。
+known-gaps F-05 加后续注记。
+
+### 可重试的失败放回队列；用尽预算的评审做批注（W5，[ADR-059](./adr/0059-a-retryable-failure-is-released-not-settled.md) / [ADR-060](./adr/0060-an-exhausted-reviewer-annotates-not-vetoes.md)）
+
+B-06 关闭：`ErrorInfo.retryable` 从展示字符串变成控制流，经既有的
+`release_for_retry` 按 reclaim 的退避公式重排队，上界共用
+`coordination.max_attempts`；分类保守，图内主动失败零重试（五条新 worker
+测试钉边界）。评审两轮耗尽不再判失败：两图按 pass 同路线路由，未解决意见走
+`unresolved_review` → `CheckpointPosition.caveat` → `mark_succeeded(detail=)`
+三段接力到行上，控制台渲染「评审仍有未解决的意见，产物按现状导出」。
+顺手删掉两个零消费者的 `workflow.node_*` 键（schema 1.16→1.17），把两处实测
+过的预算写回默认（`max_steps` 40、`max_tokens_per_agent_invocation` 120000）。
+C-05 排查：解码契约与正反测试已在，仅差真实 provider 复跑，条目保持开放。
+
 ## 2026-08-16（未合并，分支 `worktree-console-ten-fixes`）：控制台十条
 
 一次使用反馈提了十条。调研后它们不是十个 UI 需求，而是四类性质不同的东西，所以

@@ -400,6 +400,10 @@ class CodeConfig:
     #: tool list the envelope is built from, which is a branch downstream has
     #: to take rather than a constant it can assume.
     sandbox_enabled: bool
+    #: Whether each ``sandbox_run`` call waits for a human (ADR-058). Carried
+    #: because it decides the envelope's armed risks and which prompt variant
+    #: a turn is given -- both downstream branches.
+    sandbox_requires_approval: bool
     turn_timeout_seconds: int
     approval_timeout_seconds: int
     max_steps: int
@@ -1102,6 +1106,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             # on without the other gets the tool-less arrangement rather than a
             # process that starts and then cannot honour what it offered.
             sandbox_enabled=settings.code.sandbox_enabled and settings.sandbox.enabled,
+            sandbox_requires_approval=settings.code.sandbox_requires_approval,
             turn_timeout_seconds=settings.code.turn_timeout_seconds,
             approval_timeout_seconds=settings.code.approval_timeout_seconds,
             max_steps=settings.code.max_steps,

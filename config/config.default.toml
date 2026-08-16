@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.16"
+config_schema_version = "1.17"
 architecture_baseline = "1.3"
 
 [api]
@@ -214,7 +214,14 @@ prompt_cache_enabled = true
 
 [runtime]
 executor = "claude_like"
-max_steps = 12
+# 40, not the 12 that shipped: config.demo-local.toml measured the 12 failing
+# on ordinary work -- a short report spent its steps on list -> write ->
+# render -> re-render after the reviewer's note and hit `budget_exceeded:
+# max_steps` -- and every profile that actually ran Tasks had to override it.
+# A default that every real deployment must raise is a trap, not a default;
+# the hard stop against runaway loops is still here, just sized to the
+# measured shape of one node's work.
+max_steps = 40
 max_tool_calls = 32
 max_parallel_read_tools = 4
 max_parallel_write_tools = 1
@@ -265,8 +272,6 @@ export_requires_approval = false
 interrupt_boundary = "graph_node"
 runtime_loop_owner = "custom_runtime"
 graph_version = "v1"
-node_retry_max_attempts = 2
-node_timeout_seconds = 600
 
 [multi_agent]
 enabled = true
@@ -277,7 +282,13 @@ worker_executor = "custom_runtime"
 static_agent_node_limit = 6
 max_parallel_agent_invocations = 3
 max_agent_invocation_attempts_per_task = 12
-max_tokens_per_agent_invocation = 16000
+# 120000, not the 16000 that shipped: config.demo-local.toml measured 16000
+# running out mid-answer on the web profile and before rendering anything on
+# the Word one, every tool call having worked. Same reasoning as
+# `runtime.max_steps` above -- a ceiling every working deployment overrides
+# upward is mis-sized, and the protection (a hard per-invocation stop) does
+# not depend on the number being uncomfortable.
+max_tokens_per_agent_invocation = 120000
 
 [rag.llama_index]
 # Off until the equivalence evidence ADR-017 step 3 requires actually exists.

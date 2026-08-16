@@ -35,7 +35,6 @@ from agent_workbench.workflows.research_graph import (
     fan_in,
     merge_refs,
     next_nodes,
-    quality_gate_failure_reason,
     route_approval,
     route_quality_gate,
     route_research,
@@ -172,7 +171,6 @@ def test_a_passing_review_exports_directly_when_the_gate_is_off() -> None:
 
     assert route_quality_gate(state) == "export"
     assert next_nodes("quality_gate", state) == ("export",)
-    assert quality_gate_failure_reason(state) is None
     assert terminal_failure_reason(state) is None
 
 
@@ -187,9 +185,6 @@ def test_a_passing_review_stops_when_no_file_was_asked_for() -> None:
 
     assert route_quality_gate(state) is None
     assert next_nodes("quality_gate", state) == ()
-    # And it is a *success*, which is what separates this from an exhausted
-    # budget landing on the same empty successor list.
-    assert quality_gate_failure_reason(state) is None
     assert terminal_failure_reason(state) is None
 
 
@@ -199,22 +194,37 @@ def test_a_revise_review_routes_back_to_synthesize_while_budget_remains() -> Non
     assert next_nodes("quality_gate", state) == ("synthesize",)
 
 
-def test_an_exhausted_revision_budget_routes_nowhere_rather_than_approving() -> None:
+def test_an_exhausted_revision_budget_routes_onward_with_the_verdict_standing() -> None:
     # The control group is the test above: the only difference is the budget.
-    # Returning "approval" here would approve a draft the critic rejected.
+    # ADR-060: two rejections used to fail the Task and the reader got nothing
+    # at all, work included. The draft now proceeds exactly as a pass would,
+    # and the dispute travels with it rather than vanishing.
     exhausted = _reviewed_state("revise", revision_count=2, max_revisions=2)
 
-    assert route_quality_gate(exhausted) is None
-    assert next_nodes("quality_gate", exhausted) == ()
-    assert quality_gate_failure_reason(exhausted) is not None
+    assert route_quality_gate(exhausted) == "approval"
+    assert next_nodes("quality_gate", exhausted) == ("approval",)
+    assert terminal_failure_reason(exhausted) is None
+    assert exhausted.unresolved_review is not None
+
+    ungated = _reviewed_state(
+        "revise", revision_count=2, max_revisions=2, export_requires_approval=False
+    )
+    assert route_quality_gate(ungated) == "export"
+
+    unwanted = _reviewed_state(
+        "revise", revision_count=2, max_revisions=2, wants_report=False
+    )
+    assert route_quality_gate(unwanted) is None
+    assert terminal_failure_reason(unwanted) is None
 
 
-def test_only_an_exhausted_revise_verdict_is_a_terminal_failure() -> None:
-    assert quality_gate_failure_reason(_reviewed_state("pass")) is None
+def test_a_survivable_revise_verdict_is_not_an_unresolved_review() -> None:
+    # The property the caveat reads must not fire while the loop can still
+    # answer the reviewer -- that would annotate a dispute the next revision
+    # exists to resolve.
+    assert _reviewed_state("pass").unresolved_review is None
     assert (
-        quality_gate_failure_reason(
-            _reviewed_state("revise", revision_count=0, max_revisions=1)
-        )
+        _reviewed_state("revise", revision_count=0, max_revisions=1).unresolved_review
         is None
     )
 
@@ -264,24 +274,19 @@ def test_the_approval_gate_fails_closed_with_no_recorded_decision() -> None:
     assert captured.value.task_id == "task_1"
 
 
-def test_the_two_terminal_failures_cannot_describe_one_state() -> None:
-    """Their order inside ``terminal_failure_reason`` is not a precedence rule.
+def test_the_rejected_approval_is_the_only_deliberate_failure_left() -> None:
+    """ADR-060 retired the quality gate's failure; the human gate keeps its own.
 
-    An exhausted budget requires a ``revise`` verdict and an approval requires a
-    ``pass`` one, so no state satisfies both. Asserted rather than read off the
-    code, because the day one of those preconditions moves, the single entry
-    point would start silently preferring one reason over the other.
+    An exhausted budget is a caveat on a success now, so the one state that
+    still fails deliberately is a recorded rejection -- and a state that is
+    both exhausted and rejected fails, because a human said no to the work.
     """
 
     exhausted = _reviewed_state("revise", revision_count=2, max_revisions=2)
     rejected = _decided_state("rejected")
 
-    assert quality_gate_failure_reason(exhausted) is not None
-    assert approval_failure_reason(exhausted) is None
-    assert quality_gate_failure_reason(rejected) is None
+    assert terminal_failure_reason(exhausted) is None
     assert approval_failure_reason(rejected) is not None
-
-    assert terminal_failure_reason(exhausted) == quality_gate_failure_reason(exhausted)
     assert terminal_failure_reason(rejected) == approval_failure_reason(rejected)
     assert terminal_failure_reason(_decided_state("approved")) is None
 
@@ -323,7 +328,9 @@ def test_the_revise_loop_terminates_at_the_configured_bound() -> None:
         )
 
     assert taken == 2
-    assert route_quality_gate(state) is None
+    # Terminates into the gate, not into a failure (ADR-060): the loop is
+    # bounded either way, and what the bound now buys is an annotated draft.
+    assert route_quality_gate(state) == "approval"
 
 
 # --------------------------------------------------------------------------

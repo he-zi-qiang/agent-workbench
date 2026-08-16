@@ -132,7 +132,7 @@ runner 和另一套证据。混进来会让检索回归和生成回归长得一�
 | B-02 | Watchdog 只有 warn 一半，且未装进 Task Worker | 未实现 |
 | B-03 | 七点故障矩阵只覆盖四点 | 未实现 |
 | B-05 | 生产 upcaster 注册表为空，Chat 侧不披露隔离 | 未接线 |
-| B-06 | 失败标着 `retryable` 却没有任何重试路径 | 未接线 |
+| B-06 | 失败标着 `retryable` 却没有任何重试路径 | **已关闭** |
 | B-07 | tool 参数读不出来时，说不出是被截断还是真的坏 | 未实现 |
 
 > 编号一经退休不再复用。B-04（无真杀 OS 进程的恢复测试）已于 2026-08-11 关闭，
@@ -222,7 +222,7 @@ unhealthy 并停止 claim，且有一条"滞后消失后恢复 claim"的对照�
 对着真实旧版本行的升级测试；（2）Chat 界面像 Work 时间线那样披露被隔离的位点，
 带"没能解码"而非"丢了"的措辞。
 
-### B-06 失败标着 `retryable` 却没有任何重试路径
+### B-06 失败标着 `retryable` 却没有任何重试路径 —— **已关闭**（[ADR-059](./adr/0059-a-retryable-failure-is-released-not-settled.md)）
 
 **证据**：重试机制**存在**——[task.py:165-167](../src/agent_workbench/workers/task.py:165)
 的 `max_attempts = 5`、`retry_base_seconds`、`retry_max_seconds`，但它们只喂给
@@ -246,6 +246,15 @@ unhealthy 并停止 claim，且有一条"滞后消失后恢复 claim"的对照�
 **做完的判据**：`retryable=True` 的失败按退避重新排队，重试次数进 Task 状态并
 在界面上可见；带一条对照组证明 `retryable=False` 的失败**不**重试；并且写清楚
 重试的单位是整张图还是失败节点，以及副作用如何不被做第二遍。
+
+**关闭记录（2026-08-16，ADR-059）**：判据逐条兑现——运行分类为可重试的执行
+失败经 `release_for_retry` 按 reclaim 的退避公式重新排队，上界是既有的
+`coordination.max_attempts`（attempt_count 与租约重试共用同一个计数，界面上
+「已调用智能体 N 次」照常累计）；对照组在
+`tests/workers/test_task_worker_retry.py`：`retryable=False`、未分类异常、图内
+主动失败三类都不重试。重试单位是整张图的一次重新认领——reconcile 从
+checkpoint 的位置续跑，已完成节点不重做，幂等性由既有的 epoch 栅栏与幂等台账
+承担，没有加新机制。
 
 ### B-07 tool 参数读不出来时，运行时说不出是被截断还是真的坏
 
@@ -347,6 +356,14 @@ contract and are deliberately not in this module yet"。缺的正是这份解码
 **做完的判据**：`plan` 与 `critic` 有一份写下来的解码契约（读什么字段、字段缺失
 怎么办、解不出时的纠正轮走几次），并有一条测试：喂一份合法裁决进去，节点必须
 把它变成状态而不是失败；配一条对照组，喂一份真正解不出的输出，确认它才是失败。
+
+**后续（2026-08-16 排查）**：判据的代码半已经在了——`task_handlers.py` 的
+`critic` 走 `_decoded`（ADR-034 的一轮纠正 + `decode_review_output`），
+`tests/workflows/test_task_handlers.py` 正反两条都有（合法裁决 → 状态、
+解不出 → 失败）。当年观测里的另一个候选原因（`revise` 在 v1 里没有可走的
+回边）已由 [ADR-060](./adr/0060-an-exhausted-reviewer-annotates-not-vetoes.md)
+一并移除：耗尽也有去处了。**还差的只是一次对真实 provider 的复跑**，确认
+2026-08-13 那个形态不再复现——在那之前本条不标关闭。
 
 ---
 
@@ -611,6 +628,12 @@ Worker 里），所以还需要给它接一条连接的生命周期 —— 见 A
 **尚未有的**：一条自动化的端到端测试。这条路径需要真实容器运行时，而 CI 的 `quality`
 job 离线运行，所以它只能是本地证据（见 E-03）。
 
+**后续（2026-08-16，[ADR-058](./adr/0058-the-sandbox-gate-moves-from-the-human-to-the-envelope.md)）**：
+门本身的处置变了。上面实测的每次停下来等人，暴露的是这道门买不到同意（卡片上
+只有摘要，ADR-054）却买得到延迟（两次 120s 批准耗光 240s 回合）。现在
+`code.sandbox_requires_approval` 默认 `false`——`external` 放行、`destructive`
+继续上膛，要旧行为的部署一行配置拿回去。闸门机器仍然一个字没改。
+
 ### F-06 Chat 的侧栏仍是本地列表 —— 部分关闭
 
 **Code 那一半已经关闭**（[ADR-047](./adr/0047-a-session-is-named-by-its-first-sentence.md)）：
@@ -710,6 +733,22 @@ ADR-049 §2 里：只在它守着的东西比它本身更贵时才引入。今�
 
 **做完的判据**：一次从界面发起的运行不再修改被 git 跟踪的文件——要么写到别处，
 要么每次运行有自己的目录，且页面明确说它显示的是哪一次。
+
+### F-11 Code 工作区的 .docx 没有版面预览 —— 已知代价
+
+**现状**：Work 页的 .docx 能看版面（`/v1/artifacts/{id}/pdf` 转换）和文字
+（`/preview` 抽取），Code 工作区的 .docx 只能下载。图片、PDF、文本在两边都能
+点开直接看（统一走 `previewKind`，见 `web/src/components/media.ts`）。
+
+**为什么**：那两个转换端点按 artifact id 寻址，而 Code 的工作区列表故意不给
+id（见 `client.ts` 里的注释：不让浏览器叫得出一个已被会话翻过去的版本）。给
+Code 加 .docx 版面就要开一条按 session + name 寻址的第二条转换路，而
+[ADR-0045](./adr/0045-a-layout-is-a-conversion-not-a-third-parser.md) 刻意把
+转换收在 artifact 寻址一条路上。第二条路是边界变更，该有自己的 ADR，等真有人
+需要再开。
+
+**做完的判据**：Code 工作区里点开一个 .docx 能看到版面或文字，且新端点有 ADR
+记录它为什么可以存在。
 
 ---
 

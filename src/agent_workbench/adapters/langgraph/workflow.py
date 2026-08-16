@@ -544,26 +544,30 @@ class LangGraphTaskWorkflow:
             _config(thread_id, written_by)
         )
         pending = tuple(snapshot.next)
+        state = _to_state(snapshot.values)
+        # Asked of the graph that *wrote* this checkpoint, not of whichever
+        # one this call happens to be about. Both graphs stop on the same
+        # two facts and word them differently, so a fixed reader here would
+        # not fail -- it would put v1's sentence on a v2 Task, and no test
+        # that only checks "did it fail" would notice.
+        #
+        # A checkpoint *before* the gate may already contain the exhausting
+        # revise verdict. It is still executable, though: the pending gate
+        # has not made the terminal decision.
+        failure = (
+            None if pending else self._graphs[written_by].terminal_failure_reason(state)
+        )
         return CheckpointPosition(
             graph_version=written_by,
             pending_nodes=pending,
             awaiting_approval_id=_awaiting_approval_id(snapshot),
-            # Asked of the graph that *wrote* this checkpoint, not of whichever
-            # one this call happens to be about. Both graphs stop on the same
-            # two facts and word them differently, so a fixed reader here would
-            # not fail -- it would put v1's sentence on a v2 Task, and no test
-            # that only checks "did it fail" would notice.
-            #
-            # A checkpoint *before* the gate may already contain the exhausting
-            # revise verdict. It is still executable, though: the pending gate
-            # has not made the terminal decision.
-            failure_reason=(
-                None
-                if pending
-                else self._graphs[written_by].terminal_failure_reason(
-                    _to_state(snapshot.values)
-                )
-            ),
+            failure_reason=failure,
+            # One wording for both graphs, because unlike the failure above it
+            # reads a shared domain fact (`unresolved_review`, ADR-060) rather
+            # than a graph's own gate. Suppressed on a failed position: a
+            # rejected approval may coexist with the exhausted verdict, and the
+            # position type refuses to carry both stories at once.
+            caveat=(None if pending or failure is not None else _finish_caveat(state)),
         )
 
     async def _checkpoint(self, thread_id: Identifier) -> Any | None:
@@ -604,6 +608,25 @@ class LangGraphTaskWorkflow:
             next_nodes=pending,
             failure_reason=None if pending else failure_reason,
         )
+
+
+def _finish_caveat(state: TaskState) -> str | None:
+    """The sentence a successful finish carries about its unanswered review.
+
+    Bounded to the position field's 256 rather than trusting 32 issues to be
+    short: the full verdict lives in the checkpoint's ``review_result``, so a
+    cut here loses nothing an auditor cannot recover -- what this sentence owes
+    the reader is that the dispute *exists*, not its every clause (ADR-060).
+    """
+
+    review = state.unresolved_review
+    if review is None:
+        return None
+    sentence = (
+        f"the reviewer still saw {len(review.issues)} unresolved issue(s) "
+        f"after {state.max_revisions} revision(s): " + "; ".join(review.issues)
+    )
+    return sentence if len(sentence) <= 256 else sentence[:253] + "..."
 
 
 def _awaiting_approval_id(snapshot: Any) -> str | None:

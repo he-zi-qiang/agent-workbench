@@ -158,7 +158,9 @@ def test_the_second_attempt_reads_the_complaint_it_is_answering() -> None:
     assert revision_pass == (0, "revise")
 
 
-def test_an_exhausted_budget_fails_with_v2s_own_wording() -> None:
+def test_an_exhausted_budget_exports_with_the_verdict_standing() -> None:
+    """ADR-060: the spent budget annotates the work instead of discarding it."""
+
     script = _Script(["revise"])
     result = _run(
         LangGraphTaskWorkflow(handlers=script.handlers()),
@@ -166,15 +168,15 @@ def test_an_exhausted_budget_fails_with_v2s_own_wording() -> None:
         "thread_spent",
     )
 
-    assert result.disposition == "failed"
-    assert result.failure_reason == (
-        "review still requires changes after 1 revisions of the work node"
-    )
-    # The budget bounded the loop: first pass, one revision, no third attempt.
+    assert result.disposition == "completed"
+    assert result.failure_reason is None
+    # The budget still bounded the loop: first pass, one revision, no third
+    # attempt -- what changed is where the loop lands, not how often it runs.
     assert script.work_saw == [(0, None), (0, "revise")]
-    # And nothing was approved or exported on the way out.
-    assert result.state.approval_id is None
-    assert result.state.export_ref is None
+    # And the work shipped through the gate with the dispute standing, for
+    # the caveat to report.
+    assert result.state.export_ref is not None
+    assert result.state.unresolved_review is not None
 
 
 def test_passing_work_nobody_asked_a_file_for_completes_without_the_gate() -> None:

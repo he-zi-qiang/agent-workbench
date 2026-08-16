@@ -262,12 +262,15 @@ def test_a_state_that_needs_a_human_cannot_be_recorded_without_a_reason(
     _run(scenario)
 
 
-@pytest.mark.parametrize("status", sorted(set(ALL_STATUSES) - EXPLAINED_STATUSES))
+@pytest.mark.parametrize(
+    "status", sorted(set(ALL_STATUSES) - EXPLAINED_STATUSES - {"succeeded"})
+)
 def test_a_state_nobody_has_to_act_on_carries_no_reason(status: str) -> None:
     """The constraint runs both ways: a reason on a running Task is stale text.
 
     Left writable, it would survive the transition that made it wrong and be
-    read as the current explanation of a Task that is fine.
+    read as the current explanation of a Task that is fine. ``succeeded`` left
+    this parametrization with ADR-060 -- it has its own rule below.
     """
 
     async def scenario(engine: AsyncEngine) -> None:
@@ -277,6 +280,34 @@ def test_a_state_nobody_has_to_act_on_carries_no_reason(status: str) -> None:
                     insert(task_runs),
                     [_row(status=status, status_detail="stale explanation")],
                 )
+
+    _run(scenario)
+
+
+def test_a_success_may_carry_a_caveat_and_may_carry_nothing() -> None:
+    """ADR-060: `succeeded` is the one status whose detail is *optional*.
+
+    Optional cuts both ways and both halves matter: a success that shipped
+    with an unanswered review records it (migration 0029 is what allows the
+    row), and an ordinary success is not forced to invent a sentence for a
+    field that exists to carry a confession.
+    """
+
+    async def scenario(engine: AsyncEngine) -> None:
+        async with engine.begin() as connection:
+            await connection.execute(
+                insert(task_runs),
+                [
+                    _row(status="succeeded", status_detail=None),
+                    _row(
+                        task_id="task_2",
+                        thread_id="thr_2",
+                        submission_dedup_key="dedup_2",
+                        status="succeeded",
+                        status_detail="the reviewer still saw 1 unresolved issue(s)",
+                    ),
+                ],
+            )
 
     _run(scenario)
 

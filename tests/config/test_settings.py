@@ -919,7 +919,7 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.16"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.17"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:
