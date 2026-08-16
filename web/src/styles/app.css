@@ -3958,21 +3958,30 @@ pre {
  * 这一段复用它来排数字与摘要，正是因为它就是"把一串机器写的字排整齐"。
  */
 
+/* 侧栏宽度跟 Work 的附件栏对齐（见 `.aw-work-body`），而不是一个固定的 268px。
+ *
+ * 换成 clamp 是因为这一栏的职责变了：文件正文已经搬到左边的宽阅读列里，这里
+ * 只剩文件名和最近会话，一个按窗口收缩的宽度就够。之前它要同时装下文件列表和
+ * 文件内容 —— 打开一个源文件，正文以 11px 挤在四分之一屏里，而它上面的列表被
+ * 压成一两行。 */
 .aw-code-page {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 268px;
+  grid-template-columns: minmax(0, 1fr) clamp(200px, 24%, 268px);
   height: 100%;
   min-height: 0;
 }
 
-/* 没有会话时没有工作区可看，那一栏也就不该占位置。 */
-.aw-code-page.is-empty {
-  grid-template-columns: minmax(0, 1fr);
-}
+/* `.is-empty` 这一档没有了，跟着开屏页一起。以前没有会话时整页是另一套东西，
+ * 那一栏确实无意义；现在没有会话只是「还没有文件、还没有对话」，而侧栏里的
+ * 「最近」正是这时候最该够得着的东西 —— 把它收起来，等于让人在唯一需要找旧
+ * 会话的时刻找不到入口。 */
 
+/* 只钉第一行，其余交给隐式的 auto 行。这里的子元素数量是随状态变的 ——
+ * 对话流、文件预览、待批准、错误、输入框，五个里有三个可能不在 —— 写死三行
+ * 会让第四个子元素落进一个没被描述的位置。 */
 .aw-code-main {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
 }
@@ -4131,14 +4140,20 @@ pre {
   font-size: 13px;
 }
 
+/* `flex: 1` 是这里唯一新增的一行，也是之前缺的那一行。这个 ul 声明了
+ * `overflow-y: auto` 却没有声明自己该占多高，于是在 flex 列里按内容分配空间：
+ * 它下面一旦出现别的东西，列表就被压成一两行，而滚动条从没出现过 —— 声明了
+ * 滚动却没有可滚的高度。 */
 .aw-code-workspace ul {
   display: grid;
+  flex: 1;
   min-height: 0;
   margin: 0;
   padding: 12px;
   overflow-y: auto;
   gap: 2px;
   list-style: none;
+  align-content: start;
 }
 
 .aw-code-workspace li {
@@ -4190,11 +4205,18 @@ pre {
    It sits under the working set when a session is open and under the empty
    state when none is, because those are the two moments the question "where
    was I" gets asked -- and neither of them wants a third column. */
+/* 上限 + 自己滚，因为这一块坐在 `.aw-code-side` 的 `auto` 行里，而那一行没有
+ * 上界。工作区那一行是 `minmax(0, 1fr)` —— `0` 是真的 0：会话攒到十几条，
+ * 「最近」就把工作区挤到没有高度，于是这个流程的产物从界面上消失，而消失的
+ * 原因是一份历史列表。 */
 .aw-code-recent {
   display: grid;
+  max-height: min(38vh, 300px);
   gap: 6px;
   padding: 14px 18px;
+  overflow-y: auto;
   border-top: 1px solid var(--aw-border);
+  align-content: start;
 }
 
 .aw-code-recent h2 {
@@ -4240,12 +4262,6 @@ pre {
   font-weight: 600;
 }
 
-.aw-code-page.is-empty .aw-code-recent {
-  max-width: 420px;
-  margin: 0 auto;
-  border-top: 0;
-}
-
 /* A workspace row is a button now, so it has to stop looking like one. */
 .aw-code-file-open {
   display: flex;
@@ -4274,12 +4290,25 @@ pre {
 
 /* The file itself, under the list rather than over it: the list is how you got
    here and stays visible, which is what makes "open another one" one click. */
+/* 现在坐在左边的宽阅读列里，不再是右侧那条窄栏的一部分。所以它有了自己的边框
+ * 与内距，宽度跟对话流对齐（见 `.aw-code-turns` 的 820px），而不是跟文件列表
+ * 对齐 —— 读代码要的是行宽，不是靠近文件名。 */
 .aw-code-file-view {
   display: grid;
+  width: min(820px, 100%);
   min-height: 0;
+  margin: 0 clamp(16px, 4vw, 56px) 12px;
   gap: 8px;
-  padding: 12px 18px;
-  border-top: 1px solid var(--aw-border);
+  padding: 12px 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-file-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .aw-code-file-view header {
@@ -4301,21 +4330,25 @@ pre {
   white-space: nowrap;
 }
 
-/* `pre-wrap`, not `pre`: a generated file has no reason to have short lines,
-   and a horizontal scrollbar inside a 268px column is a pane you cannot read.
-   The vertical bound is the pane's, so a long file scrolls here and not the page. */
+/* `pre`, not `pre-wrap`, now that this pane has the reading column's width.
+   Wrapping was the right answer inside 268px -- a horizontal scrollbar in a
+   quarter-width pane is a pane you cannot read -- and it is the wrong answer
+   here: re-flowing source code destroys the indentation that carries its
+   structure, which is the same argument `.aw-step-pre.is-json` already makes
+   two hundred lines up. A long line scrolls sideways within the box; the box
+   itself is bounded both ways, so neither direction escapes onto the page. */
 .aw-code-file-view pre {
   overflow: auto;
-  max-height: 40vh;
+  max-height: min(60vh, 620px);
   margin: 0;
-  padding: 8px;
+  padding: 10px;
   border-radius: 6px;
-  background: var(--aw-panel-soft);
+  background: var(--aw-panel-strong);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
 }
 
 /* The workbench: a tab strip over whichever flow is showing. */

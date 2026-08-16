@@ -502,10 +502,32 @@ class ToolProgress(DomainModel):
 
 
 class ToolCompleted(DomainModel):
+    """A call returned. ``output_preview`` is what it returned, when recorded.
+
+    The symmetric half of ``ToolProposed.argument_preview``, added because
+    without it a step could be opened and still not answer the question a
+    reader opens it for. ``output_bytes`` says a tool returned 4 kilobytes; it
+    cannot say the grep found nothing, or that the file read back was the one
+    the next step then edited. For a workspace tool there is no artifact
+    either -- ``artifact`` is ``None`` for all five -- so the size was the only
+    thing a console could show, and "读取工作区 · 4.1 KB" is a receipt rather
+    than a transcript.
+
+    Under the same ``runtime.record_step_inputs`` gate as the argument half,
+    and for the same reason: both reproduce content that a deployment may not
+    want in its event log. A deployment that declines to record what a tool was
+    asked has not agreed to record what it answered.
+    """
+
     kind: Literal["ToolCompleted"] = "ToolCompleted"
     tool_call_id: Identifier
     duration_ms: int = Field(ge=0)
     output_bytes: int = Field(ge=0)
+    #: Bounded like every other preview in this module. `output_bytes` above
+    #: stays the truth about size, and `truncated` about the tool's own
+    #: clipping; this may be shortened again on its way here, which is why the
+    #: two are separate fields rather than one.
+    output_preview: BoundedText = ""
     artifact: ArtifactRef | None = None
     truncated: bool = False
 

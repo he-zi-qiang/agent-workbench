@@ -1074,6 +1074,16 @@ class ToolGateway:
                 tool_call_id=result.tool_call_id,
                 duration_ms=result.duration_ms or 0,
                 output_bytes=len(result.content.encode("utf-8")),
+                # Behind the same flag as `argument_preview` in `propose`
+                # above, deliberately the same one: a deployment that declined
+                # to record what a tool was asked has not agreed to record what
+                # it answered. `bounded` may shorten again on top of whatever
+                # the tool already clipped, which is why `output_bytes` and
+                # `truncated` both stay -- they describe the tool's output, and
+                # this describes what was kept of it.
+                output_preview=(
+                    bounded(result.content) if self._record_step_inputs else ""
+                ),
                 artifact=result.artifact,
             )
         )

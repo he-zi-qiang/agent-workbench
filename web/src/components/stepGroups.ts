@@ -69,6 +69,10 @@ const TOOL_VERBS: Readonly<Record<string, string>> = {
   mcp_web_download_document: "下载文件",
   mcp_word_render_document: "生成 Word 文档",
   workspace_write: "写入工作区",
+  // The one Code tool that was missing, and the one it uses most: an edit is
+  // what every follow-up instruction produces. Without a phrase here the row
+  // read `workspace_edit`, in a list where its four siblings were in Chinese.
+  workspace_edit: "修改工作区文件",
   workspace_read: "读取工作区",
   workspace_list: "查看工作区",
   workspace_grep: "搜索工作区",
