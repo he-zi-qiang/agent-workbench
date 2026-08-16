@@ -100,6 +100,35 @@
       ]
     },
     {
+      "owner": "application.code_session",
+      "lifecycle": "live",
+      "fields": [
+        "code.turn_timeout_seconds",
+        "code.approval_timeout_seconds",
+        "code.max_concurrent_turns"
+      ]
+    },
+    {
+      "owner": "bootstrap.settings.code_locality_contract",
+      "lifecycle": "startup",
+      "fields": [
+        "code.execution_locality",
+        "code.coordination",
+        "code.shell_enabled"
+      ]
+    },
+    {
+      "owner": "apps.api.dependencies.code_shape",
+      "lifecycle": "startup",
+      "fields": [
+        "code.enabled",
+        "code.max_steps",
+        "code.max_tool_calls",
+        "code.max_total_tokens",
+        "code.max_cost_micro_usd"
+      ]
+    },
+    {
       "owner": "application.task_triage",
       "lifecycle": "startup",
       "fields": [
@@ -248,7 +277,6 @@
       "lifecycle": "live",
       "fields": [
         "event_stream.replay_page_size",
-        "event_stream.subscriber_buffer_events",
         "event_stream.catchup_poll_seconds"
       ]
     },
@@ -257,7 +285,9 @@
       "lifecycle": "live",
       "fields": [
         "event_stream.model_delta_mode",
-        "event_stream.live_delta_coalesce_ms"
+        "event_stream.live_delta_coalesce_ms",
+        "event_stream.subscriber_buffer_events",
+        "event_stream.max_live_subscribers_per_stream"
       ]
     },
     {
@@ -656,6 +686,22 @@
         "secrets.langfuse_public_key",
         "secrets.langfuse_secret_key",
         "secrets.otel_exporter_headers"
+      ]
+    },
+    {
+      "owner": "application.evaluation",
+      "lifecycle": "live",
+      "fields": [
+        "evaluation.runs_enabled",
+        "evaluation.run_timeout_seconds",
+        "evaluation.reports_root"
+      ]
+    },
+    {
+      "owner": "bootstrap.settings.evaluation_concurrency_contract",
+      "lifecycle": "startup",
+      "fields": [
+        "evaluation.max_concurrent_runs"
       ]
     }
   ]

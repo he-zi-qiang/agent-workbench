@@ -29,6 +29,7 @@ from agent_workbench.application.task_research import (
     InternalResearchService,
     TaskResearchContext,
 )
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.context import Citation
 from agent_workbench.domain.errors import ErrorInfo
@@ -68,7 +69,6 @@ from agent_workbench.workflows.task_handlers import (
     TaskResearchHandlers,
     build_task_v1_handlers,
 )
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 OWNER = PrincipalContext(
     tenant_id="tenant_a", principal_id="user_1", scopes=("external:search",)

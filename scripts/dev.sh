@@ -15,6 +15,7 @@
 #   scripts/dev.sh web-check    # health + tools/list probe
 #   scripts/dev.sh web-api      # API with explicit web MCP profile
 #   scripts/dev.sh web-worker   # real Worker; requires a model provider key
+#   scripts/dev.sh code-api     # API with Code sessions on; requires a key
 #   scripts/dev.sh demo-check   # probe both MCP servers at once
 #   scripts/dev.sh demo-api     # API with Word *and* web: the console profile
 #   scripts/dev.sh demo-worker  # real Worker for that profile; needs both servers
@@ -67,6 +68,44 @@ QDRANT_PORT="${QDRANT_PORT:-6333}"
 # was in a temporary directory somebody already deleted.
 PG_DB="${PG_DB:-agent_workbench_local}"
 DSN="postgresql+asyncpg://agent:ci-only@127.0.0.1:${PG_PORT}/${PG_DB}"
+
+# Proxy, and why both halves are set together.
+#
+# The web-search guard decides whether to resolve a hostname or to judge it by
+# name, and it decides from `urllib.request.getproxies()` -- the same call httpx
+# makes. On macOS that function falls back to System Configuration **only when
+# no proxy variable is set at all**. So exporting NO_PROXY on its own, which is
+# what every command here needs (Qdrant and the API itself are on loopback and
+# must not go through a proxy), silently switches the lookup off: the guard then
+# resolves, a fake-IP proxy hands back 198.18.0.0/15, and every web search is
+# refused with `refused=N` and no clue why. Measured: five of five pages refused
+# on a weather question, and the answer read "搜索结果暂时无法获取".
+#
+# So: if the shell has no proxy set and the system does, carry the system one
+# forward explicitly. An exported variable still wins, so anyone with their own
+# setup is untouched. `scutil` rather than `networksetup` because it answers for
+# whichever service is active, and its absence is not an error -- a machine with
+# no proxy simply gets nothing here.
+if [ -z "${HTTPS_PROXY:-}${https_proxy:-}" ] && command -v scutil >/dev/null 2>&1; then
+  _system_proxy="$(
+    scutil --proxy 2>/dev/null | awk '
+      /HTTPSEnable/ { enabled = $3 }
+      /HTTPSProxy/  { host = $3 }
+      /HTTPSPort/   { port = $3 }
+      END { if (enabled == 1 && host != "") print "http://" host ":" port }
+    '
+  )"
+  if [ -n "$_system_proxy" ]; then
+    export HTTPS_PROXY="$_system_proxy"
+    export HTTP_PROXY="$_system_proxy"
+    echo "carrying the system proxy forward: $_system_proxy" >&2
+  fi
+  unset _system_proxy
+fi
+# Loopback never goes through it. Set after the block above on purpose: setting
+# it first is what suppresses the lookup that block depends on.
+export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,::1}"
+export no_proxy="$NO_PROXY"
 
 export PYTHONPATH=src
 export AW_CONFIG_FILE=config/config.local.toml
@@ -290,6 +329,30 @@ web-worker)
     --expect-tool download_document >&2
   echo "web profile + model provider configured: real graph" >&2
   exec "$PYTHON" -m agent_workbench.apps.task_worker.main
+  ;;
+
+code-api)
+  # The profile existed before this command did, which meant the only way to
+  # start it was to know the file's name and export AW_CONFIG_FILE by hand.
+  #
+  # Refuses without a key, like the three explicit workers and unlike plain
+  # `api`. The asymmetry is the point: a keyless `api` loses chat and still
+  # serves search, so it is a smaller process rather than a broken one. A Code
+  # session has no fixed-shape fallback -- a turn is a model loop or it is
+  # nothing -- so a keyless one opens sessions that can only ever fail, and it
+  # fails inside a turn, where the message reaches the browser as a turn error
+  # rather than as a process that said why it would not start.
+  export AW_CONFIG_FILE=config/config.code-local.toml
+  if [ -z "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    echo "code-api requires AW_SECRETS__DEEPSEEK_API_KEY; a coding turn has no fallback" >&2
+    exit 2
+  fi
+  # Said here rather than left to be discovered: the session opens and reads
+  # its workspace without it, and every write is refused by policy -- which
+  # from the transcript alone looks like a model that will not use its tools.
+  echo "code profile: the console must send x-principal-scopes with workspace:write" >&2
+  shift
+  exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
   ;;
 
 demo-check)

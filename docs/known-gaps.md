@@ -1,7 +1,7 @@
 # 已知缺口
 
-截至 **2026-08-12**，配置 schema `1.14`，Alembic 迁移 25 个
-（head `0025_agent_invocation_count`）。本文档各条的代码位置核对于 `main@921dda5`。
+截至 **2026-08-15**，配置 schema `1.15`，Alembic 迁移 28 个
+（head `0027_session_workspace_version`）。本文档各条的代码位置核对于 `main@921dda5`。
 门禁数字不在本文档维护，见 [十分钟版本的门禁与规模一节](./HIGHLIGHTS.md#2-门禁与规模)。
 
 ## 这份文档解决什么问题
@@ -497,6 +497,186 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 
 **为什么归入口径不实而不是"文档没更新"**：这些数字是读者用来判断"我读的这份
 文档描述的是不是我手上这份代码"的锚点。锚点错了，整份文档的可信度都要打折。
+
+---
+
+## F. Code 模式
+
+| 编号 | 缺口 | 分类 |
+|---|---|:---:|
+| F-01 | 一轮不可恢复：进程没了，那一轮就没了 | **拒绝** |
+| F-02 | 部署必然砍断在跑的回合 | **拒绝** |
+| F-03 | Code 没有持久幂等 | **拒绝** |
+| F-04 | 同一 principal 跨会话的工作区不隔离 | **拒绝** |
+| F-05 | 没有工具会触发审批，所以审批闸门今天走不到 | 未接线 |
+| F-06 | Chat 的侧栏仍是本地列表（Code 那半已关闭） | 部分关闭 |
+| F-07 | 步骤最快也要等一个轮询周期才出现（默认 10s） | 已知代价 |
+| F-08 | 重新开启导出闸门的部署没有跨任务收件箱 | 已知代价 |
+| F-09 | 评测和 Code 抢同一块内存，没有跨子系统准入控制 | 已知代价 |
+| F-10 | 从界面发起一次评测会覆盖已提交的报告文件 | 已知代价 |
+
+### F-01 一轮不可恢复 —— 拒绝
+
+**证据**：[code_session.py](../src/agent_workbench/application/code_session.py)
+模块 docstring；`code.execution_locality` 与 `code.coordination` 是单值
+`Literal`（[settings.py](../src/agent_workbench/bootstrap/settings.py)），架构测试
+`tests/architecture/test_code_premises_are_frozen.py` 钉住它们。
+
+**这是拒绝，不是遗漏。** 可恢复性需要一个能在崩溃后**释放**半成品状态的写者——租约
+加 reaper。要它就得要一整套：活跃槽、过期回收、检查点。Code 用放弃可恢复性换掉了
+整个协调面，换来的是"回答审批的人正对着那个停着的协程说话"，而那是等待唯一诚实的
+一种安排。
+
+崩溃后没有任何东西需要回收：没有租约、没有 `release_pending`、没有数据库里的活跃槽。
+工作区停在**最后一次成功写入**上（指针是每次写成功就推进的），用户把那句话再说一遍。
+
+**做完的判据**：不适用。要改，先改
+[更正文档](../var/plans/2026-08-14-code-turns-are-not-chat-turns.md) 的结论。
+
+### F-02 每次部署必然砍断在跑的回合 —— 拒绝
+
+**证据**：`code.turn_timeout_seconds` 默认 600，`api.shutdown_grace_seconds` 默认远
+小于它；`ApiDependencies.dispose()` 在关引擎之前调
+`CodeSessionService.drain_cleanup`，但只等 grace 那么久。
+
+**算术要写出来**：一轮最长 600 秒，优雅关停最多等 grace 秒，超出的部分被砍断。被砍断
+的那一轮不留任何需要回收的行（见 F-01），工作区停在最后一次成功写入上。
+
+**为什么不做交叉校验**：把 `turn_timeout ≤ shutdown_grace` 写成启动期校验，等于要求
+每次部署等待最长的一轮跑完，那是把一条运维约束伪装成配置错误。
+
+### F-03 Code 没有持久幂等 —— 拒绝
+
+**证据**：[routes/code.py](../src/agent_workbench/apps/api/routes/code.py) `ask`
+的 docstring。`Idempotency-Key` 必填，但它只用来派生稳定的 run id。
+
+Chat 的幂等住在 `chat_turns` 那本账本里，而 Code 一行都不写（这是 F-01 的同一个
+决定）。所以：打到一个正在忙的会话的重试是 409；**进程死后的重试是新的一轮**。
+
+### F-04 同一 principal 跨会话的工作区不隔离 —— 拒绝
+
+**证据**：[workspace.py](../src/agent_workbench/application/workspace.py) 的
+get/put 只带 `(tenant_id, principal_id)`；
+[artifact_store.py](../src/agent_workbench/ports/artifact_store.py) 自己写着
+"Hard to guess is not an authorization rule"。
+
+**今天不可达**：没有任何入口收 workspace version——它经由服务进入的 `ContextVar`
+到达工具，经由比较并交换到达数据库。守卫是架构测试
+`tests/architecture/test_a_workspace_version_is_never_asked_for.py`，它扫路由的输入与
+工具 schema 的 properties。
+
+### F-05 审批闸门接好了，但今天没有工具会触发它 —— 未接线
+
+**证据**：[code_session.py](../src/agent_workbench/application/code_session.py) 的
+`CODE_TOOLS` 只有五个工作区工具（risk 是 read/write），而信封的
+`approval_required_risks` 是 `("external", "destructive")`；`code.shell_enabled` 冻结
+为 `False`。
+
+**为什么仍然接**：`sandbox_run` 是 external，C4 把它给 Code 的那天，需要的是改这个
+元组和风险上限，而不是改闸门底下的机器。闸门、registry、决定端点与它们的测试都在。
+
+**做完的判据**：C4 落地后，一条端到端测试证明一次 `sandbox_run` 提议真的停下来等人，
+并在人点了之后才执行。
+
+### F-06 Chat 的侧栏仍是本地列表 —— 部分关闭
+
+**Code 那一半已经关闭**（[ADR-047](./adr/0047-a-session-is-named-by-its-first-sentence.md)）：
+`ConversationStore.list_sessions(tenant_id, principal_id, mode)` 存在，第一条指令
+给会话命名，`PATCH /v1/code/sessions/{id}` 可以改名，`GET /v1/code/sessions` 返回
+这份列表。清掉浏览器存储、换一台机器，列表都还在。
+`web/src/features/code/storage.ts` 随之删除。
+
+**Chat 那一半没关**：`web/src/features/chat/storage.ts` 仍然在 localStorage 里存
+`LocalChatSession`，而那条记录带着 `answerMode` 和 `knowledgeBaseId`——服务端不建模
+这两样。
+
+**为什么不顺手做掉**：那是合并问题不是接线问题。切一半会得到两份互相矛盾的列表
+（服务端有标题没有 answerMode，本地有 answerMode 但可能少了在别处开的会话），而
+两份列表里总有一份是旧的。先要决定「answer mode 和知识库选择属不属于会话本身」，
+那是产品决定。
+
+**做完的判据**：Chat 的侧栏也来自 `list_sessions`，且 `answerMode` /
+`knowledgeBaseId` 要么进了会话行、要么明确定为「每次打开重选」。
+
+### F-07 步骤的延迟下限是一个轮询周期 —— 已知代价
+
+**证据**：[sse.py](../src/agent_workbench/apps/api/sse.py) 的 `observe` 明确丢弃
+`durability != "transient"` 的信封——持久事件**只**从重放路径出去，因为同一条事件
+若两条路都走，会一次带位置、一次不带，客户端无法调和。于是持久事件到达订阅者的时间
+下限就是 `event_stream.catchup_poll_seconds`，出厂默认 10。
+
+**实测**：2026-08-15 在本机用真模型跑，一轮 5.4 秒的编码回合，浏览器里步骤面板
+从头到尾是空的——不是没接上（`GET /events` 返回 200，live 的 ModelDelta 帧收到了），
+是那一轮结束时第一次轮询还没到。同一个端点用 curl 订阅、跨过一个轮询周期就能拿到
+RunStarted 及其后全部。
+
+**为什么不是缺陷**：面板存在的理由是"一轮要跑几分钟，一个转圈和卡死分不开"。几分钟的
+回合在 10 秒粒度下有十几次更新，那个问题是答得上的。5 秒的回合本来也不需要步骤反馈。
+
+**已做的**：`config.code-local.toml` 把它降到 2 秒，代价是每个在线订阅者每秒多一次
+事件日志查询，而该 profile 的 `max_concurrent_turns` 是 1。
+
+**留着的口子**：任何打开 Code 的部署继承的仍是 10 秒默认值，得自己做这个权衡。
+真正的修法是持久事件也能即时推送且仍带位置——那要动 `LiveEventChannel` 的契约，
+需要先写 ADR。
+
+### F-08 重新开启导出闸门的部署没有跨任务收件箱 —— 已知代价
+
+**证据**：[ADR-048](./adr/0048-the-export-gate-is-off-by-default.md) 把
+`workflow.export_requires_approval` 的仓库默认改成 `false` 并删掉了控制台的
+「待我确认」页。`GET /v1/approvals` 仍然在服务、仍然有测试
+（`tests/api/test_approval_api.py`），审批仍然可以在 Work 的任务详情里回答
+（`WorkPage.tsx` 的 `ApprovalSection`）。
+
+**代价**：一个把这个开关改回 `true` 的部署，得逐个 Task 去看谁在等，或者直接用
+HTTP。没有一个「所有待我处理的事」的地方。
+
+**为什么可以接受**：今天只有一种确认——允许生成并导出任务报告——而它天然长在
+那个 Task 上。一个只有一种条目的收件箱，是一份和任务列表一一对应的列表。
+
+**做完的判据**：出现第二种需要人回答的东西时（比如 Code 的 `sandbox_run`，见
+F-05），收件箱重新长出来，而且那时它该是「所有待我处理的事」而不是「所有审批」
+——Code 的审批走的是另一套注册表，两者的并集才是那个页面该显示的东西。
+
+### F-09 评测和 Code 抢同一块内存 —— 已知代价
+
+**证据**：[ADR-049](./adr/0049-an-evaluation-is-a-process-not-a-task.md) 让控制台
+可以发起评测，`evaluation.max_concurrent_runs` 是冻结的 1。但那个 1 只约束评测：
+一个正在跑的 RAG 消融（加载 BGE-M3）和一个正在跑的 Code 回合（模型循环 + 工作区）
+之间**没有任何准入控制**，两者都会去拿同一台机器的内存。
+
+**实测背景**：开发这个仓库的机器是 8 GB。一整轮消融 30–70 分钟，期间干别的重活
+会双双被杀。
+
+**为什么不修**：跨子系统的准入控制意味着一个进程级的信号量，横跨 Code、评测和
+（将来的）任何重活。那是一套协调机制，而这个仓库对协调机制的态度写在 F-01 和
+ADR-049 §2 里：只在它守着的东西比它本身更贵时才引入。今天它守的是"别在跑评测的
+时候点发送"，那句话一个人就能记住。
+
+**做完的判据**：出现第三种重活，或者部署到一台多人同时用的机器上——那时"记住别
+同时点"不再是一个人能保证的事，信号量才开始比它的代价便宜。
+
+### F-10 从界面发起一次评测会覆盖已提交的报告 —— 已知代价
+
+**证据**：runner 直接往 `evals/*/reports/*.json` 写，那些文件是提交进仓库的证据，
+`docs/` 里多处引用它们的数字。[ADR-049](./adr/0049-an-evaluation-is-a-process-not-a-task.md)
+让控制台可以发起运行，于是点一下按钮就会改写它们。
+
+**实测**：2026-08-16 验证「发起」这个功能时跑了一次 triage，
+`evals/triage/reports/report.json` 的 accuracy 从 0.8333 变成 0.875——`unsure` 那 4 例
+里多对了 1 个，同一个 gold digest、同一个模型、同样 24 个用例。那是运行间噪声，
+不是改进。**那次改动没有提交**：让仓库记录的数字取决于「谁最后点过按钮」是错的。
+
+**为什么现在不修**：三种修法各有代价。写到 `reports_root` 之外要改每个 runner 的
+输出路径，而 runner 的输出路径也是它 docstring 里那条手动命令的一部分；写成带时间戳
+的新文件要决定页面显示哪一份，而"最新"和"被引用过"经常不是同一份；只读挂载会让
+手动运行也失败。都不是一行能改完的。
+
+**眼下的做法**：跑完之后 `git diff evals/` 看一眼，是想留的就提交，是副产物就
+`git checkout --` 掉。这句话写在这里，就是为了下一个人不用重新发现它。
+
+**做完的判据**：一次从界面发起的运行不再修改被 git 跟踪的文件——要么写到别处，
+要么每次运行有自己的目录，且页面明确说它显示的是哪一次。
 
 ---
 

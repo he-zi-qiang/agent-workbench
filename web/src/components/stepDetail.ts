@@ -44,6 +44,7 @@ const RISK_LABELS: Readonly<Record<string, string>> = {
 const RUN_KIND_LABELS: Readonly<Record<string, string>> = {
   chat: "对话回答",
   task: "任务执行",
+  code: "编码会话",
 };
 
 const FINISH_LABELS: Readonly<Record<string, string>> = {

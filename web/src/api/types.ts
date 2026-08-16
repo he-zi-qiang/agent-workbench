@@ -23,6 +23,25 @@ export interface Citation {
 
 export interface CreateSessionResponse {
   session_id: Identifier;
+  title: string | null;
+}
+
+/**
+ * One coding session, as the server lists it.
+ *
+ * The list used to live in `localStorage`, which answered a narrower question
+ * than it looked like it answered: "what did I open in this browser since I
+ * last cleared it". The sessions it forgot were still there and still owned --
+ * only the link was gone.
+ */
+export interface CodeSessionView {
+  session_id: Identifier;
+  title: string | null;
+  last_activity_at: string | null;
+}
+
+export interface CodeSessionListResponse {
+  sessions: CodeSessionView[];
 }
 
 export interface AskResponse {
@@ -45,6 +64,43 @@ export interface MessageView {
 
 export interface HistoryResponse {
   messages: MessageView[];
+}
+
+// --- Code sessions -------------------------------------------------------
+//
+// A coding turn answers with a report rather than an answer: nothing here
+// crossed a publication fence, because a Code run has none. The files are the
+// product, and `workspace_version` names the set of them the turn left behind.
+
+export interface CodeAskResponse {
+  report: string;
+  workspace_version: Identifier | null;
+  run_id: Identifier;
+  status: string;
+  stop_reason: string;
+}
+
+export interface PendingApprovalView {
+  approval_id: Identifier;
+  tool_name: string;
+  argument_digest: string;
+  risk: string | null;
+}
+
+export interface PendingApprovalsResponse {
+  approvals: PendingApprovalView[];
+}
+
+export type ApprovalDecision = "approve_once" | "approve_for_session" | "deny";
+
+export interface WorkspaceEntryView {
+  name: string;
+  size_bytes: number;
+  media_type: string;
+}
+
+export interface WorkspaceResponse {
+  files: WorkspaceEntryView[];
 }
 
 export type TaskStatus =
@@ -144,10 +200,15 @@ export interface ApprovalView {
   created_at: string;
 }
 
-export interface ApprovalListResponse {
-  approvals: ApprovalView[];
-  cursor: string | null;
-}
+/**
+ * `GET /v1/approvals` has no client any more.
+ *
+ * The endpoint is still served and still tested -- ADR-048 removed the console's
+ * cross-task inbox, not the ability to answer -- but the answer now happens in
+ * the Task that is waiting, and `getApproval` / `decideApproval` are what that
+ * needs. A typed wrapper for a list nothing renders would be a wrapper that
+ * drifts from the endpoint without anybody noticing.
+ */
 
 export interface TokenUsage {
   input_tokens?: number;
@@ -375,4 +436,40 @@ export interface LocalTaskMetadata {
   objective: string;
   knowledgeBaseId?: Identifier;
   createdAt: string;
+}
+
+export type EvaluationSuite = "rag" | "chat" | "triage";
+
+/**
+ * One report file, exactly as its runner wrote it.
+ *
+ * `payload` is deliberately open. The three suites measure different things,
+ * and a shared shape here would be this file deciding which parts of a
+ * measurement matter -- the same claim ADR-039 refuses to let a metric name
+ * make. A surface that renders one checks for what it needs.
+ */
+export interface EvaluationReportView {
+  suite: EvaluationSuite;
+  name: string;
+  payload: Record<string, unknown>;
+}
+
+export interface EvaluationReportsResponse {
+  reports: EvaluationReportView[];
+  runs_enabled: boolean;
+  how_to_run: Record<string, string>;
+}
+
+export interface EvaluationRunView {
+  suite: EvaluationSuite;
+  status: "running" | "succeeded" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  recent_output: string[];
+}
+
+export interface EvaluationCurrentRunResponse {
+  /** `null` means this API process has not started one -- not that none exist. */
+  run: EvaluationRunView | null;
 }

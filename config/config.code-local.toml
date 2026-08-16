@@ -1,0 +1,100 @@
+# Explicit local profile for Code sessions.
+#
+# Separate from config.local.toml for the same reason config.sandbox-local.toml
+# is: turning Code on mounts a second conversational surface that runs agent
+# loops inside the API process. That changes what this process spends its own
+# capacity on, so it is a profile somebody chooses rather than a default that
+# arrives with an upgrade.
+#
+# This file is one overlay over config.default.toml. DSNs and the provider key
+# remain environment-only; no credential belongs here.
+#
+# Two things must be true before a Code session can do anything useful:
+#
+#   * A model provider key, the same one Chat needs. Code has no fixed-shape
+#     fallback -- a turn is a model loop or it is nothing.
+#   * The calling principal must hold `workspace:write`, sent by the console as
+#     `x-principal-scopes`. Without it the session still opens and can read its
+#     workspace, and every attempt to write one is refused by policy. That is
+#     the same rule every other write tool is under; it is named here because a
+#     coding agent that cannot write is a confusing thing to debug from the
+#     transcript alone.
+#
+# What this profile deliberately does NOT do: grant a shell. `shell_enabled` is
+# a frozen `false`, and `sandbox_run` needs a sandbox MCP server that this
+# process does not start.
+
+[app]
+environment = "development"
+deployment_scope = "local"
+
+# Pinned here for the same reason config.local.toml pins them: the shipped
+# defaults are placeholders, and `build_model` refuses rather than start a
+# process that could not answer.
+#
+# This file is an overlay over config.default.toml and *not* over
+# config.local.toml, so nothing above is inherited from there. Leaving these out
+# was not a smaller profile -- it was a dead one. `build_model` raised, the
+# whole model half of the process went with it, and `code.enabled = true` two
+# lines below turned into a 404 on every /v1/code path with nothing said. The
+# warning that now names that case was written from this file getting it wrong.
+[model.main]
+model_id = "deepseek-chat"
+
+[model.compact]
+model_id = "deepseek-chat"
+
+[code]
+enabled = true
+
+# Shorter than the shipped defaults, because a local turn that has gone wrong
+# is better cut off in two minutes than in ten.
+turn_timeout_seconds = 240
+approval_timeout_seconds = 120
+
+# One at a time locally: a laptop running a model loop, a database and a vector
+# store has no capacity to spare, and a second concurrent turn mostly makes the
+# first one slower.
+max_concurrent_turns = 1
+
+[event_stream]
+# How soon a step shows up in the browser, and the shipped default of 10s is
+# tuned for a different question.
+#
+# A durable event reaches a subscriber only through the replay path -- the live
+# channel drops durable envelopes on purpose, because one arriving by both
+# routes would arrive once with a position and once without, and no client can
+# reconcile that. So this poll *is* the latency floor for every step a coding
+# session shows.
+#
+# At 10s a turn that finishes in five seconds displays no steps at all, which
+# is precisely the turn a first-time reader tries. Two seconds costs one extra
+# event-log query per second per open subscriber, and `max_concurrent_turns`
+# above is 1. A deployment that turns Code on inherits the 10s default and
+# should make the same trade deliberately -- F-07 in docs/known-gaps.md.
+catchup_poll_seconds = 2
+
+[evaluation]
+# On for the local profile: the scripts are here and this is the machine they
+# were measured on. `max_concurrent_runs` is a frozen 1 in the settings, and
+# F-09 records what it does *not* bound -- nothing stops an evaluation and a
+# Code turn from wanting the same 8 GB at once.
+runs_enabled = true
+
+[research]
+# Web search, on. Without it the console's 自由回答 mode has no tool at all and
+# a question like「北京今天天气怎么样」gets "我无法提供实时天气信息" -- which reads
+# as a product limit and is actually an unset flag. The search runs on the model
+# provider's side under the key this profile already needs, so turning it on
+# costs no second credential.
+#
+# It also needs the calling principal to hold `external:search`, which the
+# console's default identity does.
+enabled = true
+
+# ADR-019. Puts each step's prompt and proposed tool arguments on the run's own
+# event stream, the way every other local profile does. Without it
+# `argument_preview` is empty, and the step list shows three rows of
+# 「写入工作区」with no way to tell which file each one wrote.
+[runtime]
+record_step_inputs = true

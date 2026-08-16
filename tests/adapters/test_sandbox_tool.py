@@ -29,7 +29,8 @@ from agent_workbench.adapters.tools.sandbox import (
     SandboxRunTool,
     SandboxUnavailableError,
 )
-from agent_workbench.application.workspace import TaskWorkspace, WorkspaceSession
+from agent_workbench.application.workspace import Workspace, WorkspaceSession
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.apps.sandbox_mcp.contract import RUN_PYTHON_INPUT_SCHEMA
 from agent_workbench.domain.policies import (
     AuthorizationEnvelope,
@@ -49,7 +50,6 @@ from agent_workbench.runtime.schema_validation import (
     assert_schema_supported,
     validate_arguments,
 )
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 TENANT = "tenant_local"
 OWNER = "user_local"
@@ -108,7 +108,7 @@ def entered(*files: tuple[str, bytes]) -> Generator[WorkspaceScope]:
 
     scope = WorkspaceScope()
     session = WorkspaceSession(
-        workspace=TaskWorkspace(
+        workspace=Workspace(
             artifacts=InMemoryArtifactStore(),
             tenant_id=TENANT,
             principal_id=OWNER,

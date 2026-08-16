@@ -28,9 +28,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agent_workbench.application.chat import (
     ChatRequest,
     ChatService,
-    ChatTurn,
     new_session_id,
 )
+from agent_workbench.apps.api.disconnects import watched
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.context import Citation
 from agent_workbench.domain.identifiers import Identifier
@@ -200,20 +200,14 @@ async def ask(
         ),
         name=f"chat-request-{run_id}",
     )
-    disconnect_watcher = asyncio.create_task(
-        _watch_disconnect(
-            request,
-            cancellation,
-            target=chat_task,
-            poll_seconds=dependencies.config.chat_recovery.disconnect_poll_seconds,
-        ),
+    async with watched(
+        request,
+        cancellation,
+        target=chat_task,
+        poll_seconds=dependencies.config.chat_recovery.disconnect_poll_seconds,
         name=f"chat-disconnect-{run_id}",
-    )
-    try:
+    ):
         turn = await chat_task
-    finally:
-        disconnect_watcher.cancel()
-        await asyncio.gather(disconnect_watcher, return_exceptions=True)
     return AskResponse(
         answer=turn.answer,
         citations=turn.citations,
@@ -272,24 +266,6 @@ def _stable_run_id(
         (tenant_id, principal_id, session_id, idempotency_key)
     ).encode()
     return f"run_{hashlib.sha256(material).hexdigest()}"
-
-
-async def _watch_disconnect(
-    request: Request,
-    cancellation: CancellationSource,
-    *,
-    target: asyncio.Task[ChatTurn],
-    poll_seconds: float,
-) -> None:
-    """Cancel actual work as well as setting the cooperative runtime signal."""
-
-    while not cancellation.cancelled:
-        if await request.is_disconnected():
-            cancellation.cancel("client_disconnected")
-            if not target.done():
-                target.cancel()
-            return
-        await asyncio.sleep(poll_seconds)
 
 
 __all__ = [

@@ -156,6 +156,12 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # fallback question is a Chinese sentence, and the tests assert those exact
 # sentences round-trip.
 "src/agent_workbench/application/task_triage.py" = ["RUF001"]
+# Both of these put a sentence in front of a reader: the refusal that tells a
+# deployment which command to run instead, and the line a killed run leaves in
+# its own output tail. Same reason as above -- the rule is here to catch a
+# Cyrillic lookalike in an identifier, not deliberate Chinese prose.
+"src/agent_workbench/application/evaluation.py" = ["RUF001"]
+"src/agent_workbench/adapters/evaluation/subprocess_launcher.py" = ["RUF001"]
 "tests/application/test_task_triage.py" = ["RUF001"]
 "tests/api/test_task_api.py" = ["RUF001"]
 "tests/cli/test_repl.py" = ["RUF001"]

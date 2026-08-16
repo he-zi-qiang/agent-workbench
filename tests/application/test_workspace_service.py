@@ -13,7 +13,7 @@ import pytest
 
 from agent_workbench.adapters.memory import InMemoryArtifactStore
 from agent_workbench.application.workspace import (
-    TaskWorkspace,
+    Workspace,
     WorkspaceEntryNotFoundError,
 )
 from agent_workbench.domain.workspace import (
@@ -25,8 +25,8 @@ TENANT = "tenant_local"
 OWNER = "user_local"
 
 
-def workspace() -> TaskWorkspace:
-    return TaskWorkspace(
+def workspace() -> Workspace:
+    return Workspace(
         artifacts=InMemoryArtifactStore(),
         tenant_id=TENANT,
         principal_id=OWNER,

@@ -7,19 +7,79 @@ import {
   FlaskConical,
   Target,
 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import {
-  REPORTS,
+  cancelEvaluationRun,
+  getEvaluationReports,
+  getEvaluationRun,
+  startEvaluationRun,
+} from "../../api/client";
+import type { EvaluationSuite } from "../../api/types";
+import { useIdentity } from "../../app/IdentityContext";
+import { EmptyState, ErrorNotice, LoadingLine } from "../../components/ui";
+import {
   SELF_DISAGREEMENT,
   hits,
   percent,
   reportsByGoldSet,
   reportsShareOneGoldSet,
+  retrievalReports,
   selfDisagreementCoversAShownReport,
 } from "./reports";
 
+/** How often to ask, while something is running. Nothing to ask otherwise. */
+const RUN_POLL_MS = 5000;
+
+const SUITES: { suite: EvaluationSuite; label: string; note: string }[] = [
+  { suite: "triage", label: "任务分流", note: "最快，不重建索引" },
+  { suite: "chat", label: "回答质量", note: "需要模型" },
+  { suite: "rag", label: "检索消融", note: "最贵：重建索引，30–70 分钟" },
+];
+
 export function EvaluationPage() {
-  const comparable = reportsShareOneGoldSet();
-  const goldSets = reportsByGoldSet();
+  const { identity } = useIdentity();
+  const queries = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+
+  const reports = useQuery({
+    queryKey: ["evaluation-reports", identity],
+    queryFn: () => getEvaluationReports(identity),
+  });
+  const run = useQuery({
+    queryKey: ["evaluation-run", identity],
+    queryFn: () => getEvaluationRun(identity),
+    // Only while something is live. A poll that kept going would ask a
+    // question nobody is waiting on the answer to, forever.
+    refetchInterval: (query) =>
+      query.state.data?.run?.status === "running" ? RUN_POLL_MS : false,
+  });
+
+  const rows = retrievalReports(reports.data?.reports ?? []);
+  const comparable = reportsShareOneGoldSet(rows);
+  const goldSets = reportsByGoldSet(rows);
+  const live = run.data?.run ?? null;
+  const running = live?.status === "running";
+
+  const begin = async (suite: EvaluationSuite) => {
+    setError(null);
+    try {
+      await startEvaluationRun(identity, suite);
+      await queries.invalidateQueries({ queryKey: ["evaluation-run", identity] });
+    } catch (cause: unknown) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const stop = async () => {
+    try {
+      await cancelEvaluationRun(identity);
+      await queries.invalidateQueries({ queryKey: ["evaluation-run", identity] });
+      await queries.invalidateQueries({ queryKey: ["evaluation-reports", identity] });
+    } catch (cause: unknown) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
 
   return (
     <main className="aw-utility-page">
@@ -37,6 +97,73 @@ export function EvaluationPage() {
           <span>离线评测，不影响你在 Chat 里的使用</span>
         </div>
       </header>
+
+      <section aria-labelledby="run-title" className="aw-card aw-section">
+        <div className="aw-card-header">
+          <div>
+            <span className="aw-eyebrow">跑一次</span>
+            <h2 id="run-title">在这台机器上重新测</h2>
+          </div>
+        </div>
+        {reports.isLoading ? <LoadingLine label="正在读取报告" /> : null}
+        {error === null ? null : <ErrorNotice message={error} />}
+
+        {live === null ? null : (
+          <div className="aw-eval-run" aria-live="polite">
+            <p>
+              <strong>{describeSuite(live.suite)}</strong>
+              {" "}
+              {live.status === "running"
+                ? `正在跑，已经 ${elapsed(live.started_at)}。一次完整消融通常 30–70 分钟，这台机器同时只跑得动一件重活。`
+                : live.status === "succeeded"
+                  ? "已经跑完，下面的报告是新的。"
+                  : `失败了（退出码 ${String(live.exit_code ?? "未知")}）。`}
+            </p>
+            {live.recent_output.length === 0 ? null : (
+              <pre>{live.recent_output.slice(-12).join("\n")}</pre>
+            )}
+            {running ? (
+              <button className="aw-button" onClick={() => void stop()} type="button">
+                停止
+              </button>
+            ) : null}
+          </div>
+        )}
+
+        {reports.data?.runs_enabled === true ? (
+          <div className="aw-eval-suites">
+            {SUITES.map(({ suite, label, note }) => (
+              <button
+                className="aw-button"
+                disabled={running}
+                key={suite}
+                onClick={() => void begin(suite)}
+                type="button"
+              >
+                {label}
+                <span className="aw-code-value">{note}</span>
+              </button>
+            ))}
+          </div>
+        ) : reports.isLoading ? null : (
+          <div className="aw-eval-manual">
+            {/* Not a disabled button. This deployment cannot start a run --
+                the runners need an embedding runtime it may not have -- and a
+                greyed-out control would say "later" where the truth is
+                "elsewhere". The command is what a reader can act on. */}
+            <p>这个部署不从界面发起评测。在仓库根目录手动运行：</p>
+            <pre>{Object.values(reports.data?.how_to_run ?? {}).join("\n")}</pre>
+          </div>
+        )}
+
+        {rows.length === 0 && !reports.isLoading ? (
+          <EmptyState
+            icon={<FlaskConical aria-hidden />}
+            title="这台机器还没有跑过评测"
+            description="报告目录里还没有可读的检索报告。跑一次，或者把报告放回 evals/ 下。"
+          />
+        ) : null}
+      </section>
 
       <section className="aw-card aw-section" aria-labelledby="method-title">
         <div className="aw-card-header">
@@ -74,7 +201,16 @@ export function EvaluationPage() {
         <div className="aw-card-header">
           <div>
             <span className="aw-eyebrow">结果</span>
-            <h2 id="scores-title">四种配置在同一批题目上的表现</h2>
+            {/* Counted, not written. It said "四种配置" while the page
+                imported exactly four reports at build time; it reads the
+                directory now, and that directory holds nine. A fixed number in
+                a heading over a variable table is a number that goes wrong
+                without anything failing. */}
+            <h2 id="scores-title">
+              {comparable
+                ? `${String(rows.length)} 份报告，同一批题目`
+                : `${String(rows.length)} 份报告，分属 ${String(goldSets.length)} 批题目`}
+            </h2>
           </div>
           <FileSearch aria-hidden="true" size={20} />
         </div>
@@ -208,7 +344,7 @@ export function EvaluationPage() {
               在那批题目上，两条路径之间只有 {SELF_DISAGREEMENT.betweenPathsTopThree}/
               {SELF_DISAGREEMENT.questionCount} 题的前三名不同，比它们各自的抖动还小 ——
               所以那点差距是测量误差，不是质量差距。默认流量因此没有切换。
-              {selfDisagreementCoversAShownReport()
+              {selfDisagreementCoversAShownReport(rows)
                 ? ""
                 : " 这组对照来自已经不在上表中的旧报告，仅作为背景保留。"}
             </span>
@@ -254,7 +390,7 @@ export function EvaluationPage() {
           工程详情
         </summary>
         <ul className="aw-capability-list">
-          {REPORTS.map((row) => (
+          {rows.map((row) => (
             <li key={row.file}>
               <FlaskConical aria-hidden="true" size={16} />
               <div>
@@ -273,4 +409,15 @@ export function EvaluationPage() {
       </details>
     </main>
   );
+}
+
+function describeSuite(suite: EvaluationSuite): string {
+  return SUITES.find((entry) => entry.suite === suite)?.label ?? suite;
+}
+
+/** How long a run has been going, in the coarsest unit that is still useful. */
+function elapsed(startedAt: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - Date.parse(startedAt)) / 1000));
+  if (seconds < 90) return `${String(seconds)} 秒`;
+  return `${String(Math.round(seconds / 60))} 分钟`;
 }

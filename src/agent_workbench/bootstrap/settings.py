@@ -151,7 +151,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.14"] = "1.14"
+    config_schema_version: Literal["1.15"] = "1.15"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -237,6 +237,82 @@ class ChatSettings(StrictModel):
         if self.max_agentic_searches < self.max_agentic_steps:
             raise ValueError(
                 "chat.max_agentic_searches must be >= chat.max_agentic_steps"
+            )
+        return self
+
+
+class CodeSettings(StrictModel):
+    """A coding session: one conversation, a workspace, and no coordination plane.
+
+    Code runs in the API process and nowhere else, and the two frozen
+    ``Literal`` fields below are that premise written where a deployment cannot
+    quietly change it. Everything Code gives up follows from them -- no lease,
+    no reaper, no resumable checkpoint -- and everything it gains does too: the
+    human who answers an approval is talking to the coroutine that is waiting,
+    which is the one arrangement where waiting for them is honest.
+
+    A turn is therefore not recoverable. If this process dies mid-turn, that
+    turn is gone and the workspace stands at its last successful write; the
+    user says the sentence again. That is a cost, deliberately taken, and it is
+    recorded in ``docs/known-gaps.md`` rather than presented as a to-do.
+    """
+
+    #: Off until a deployment says otherwise, like every capability that adds a
+    #: surface rather than changing one.
+    enabled: bool = False
+
+    #: Single-value on purpose. A second locality would need somewhere for the
+    #: answer to an approval to reach a parked coroutine in another process,
+    #: and there is no such thing here; widening this is an ADR, not a config
+    #: change. The architecture test that asserts both of these are single-value
+    #: literals exists so that widening cannot happen by accident.
+    execution_locality: Literal["in_api_process"] = "in_api_process"
+    coordination: Literal["none"] = "none"
+
+    #: The wall clock for one turn, which becomes the run's ``deadline``. A code
+    #: run is required by the domain to carry one, because nothing else is
+    #: watching it.
+    turn_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    #: How long one held call may wait for a person. Bounded again, at the
+    #: gateway, by whatever the turn has left.
+    approval_timeout_seconds: int = Field(default=300, ge=5, le=1800)
+
+    #: Ceilings for the run. Independent of each other by ADR-022: a tool
+    #: allowance below the step ceiling is a budget rather than a mistake --
+    #: it says "this many tool calls, and a turn left over to write the report
+    #: from them".
+    max_steps: int = Field(default=60, ge=2, le=1000)
+    max_tool_calls: int = Field(default=120, ge=1, le=500)
+    max_total_tokens: int | None = Field(default=None, ge=1)
+    max_cost_micro_usd: int | None = Field(default=None, ge=1)
+
+    #: How many turns this process will run at once, across all sessions. A
+    #: bound rather than a queue: a turn holds a model connection and a
+    #: workspace for minutes, and admitting an unbounded number of them is how
+    #: an API process stops answering anything else.
+    max_concurrent_turns: int = Field(default=4, ge=1, le=64)
+
+    #: Frozen false. Giving a coding agent a shell means granting
+    #: ``sandbox_run``, which needs a sandbox MCP server this process does not
+    #: start and a scope no principal currently holds. Spelled as a literal
+    #: rather than a bool so that turning it on is a code change with an ADR,
+    #: not a line in a TOML file that silently does nothing.
+    shell_enabled: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_turn_outlasts_one_approval(self) -> CodeSettings:
+        """Refuse a turn that one held call could consume entirely.
+
+        The approval wait is already clamped to whatever the turn has left, so
+        an approval allowance at or above the turn's own is not dangerous --
+        it is useless, and worse, it reads as though a person has five minutes
+        to answer when they have however much of the turn is left. A deployment
+        that wants longer approvals wants a longer turn.
+        """
+
+        if self.approval_timeout_seconds >= self.turn_timeout_seconds:
+            raise ValueError(
+                "code.turn_timeout_seconds must exceed code.approval_timeout_seconds"
             )
         return self
 
@@ -379,7 +455,13 @@ class EventStreamSettings(StrictModel):
     task_ready_channel: str = Field(pattern=r"^[a-z][a-z0-9_]{0,62}$")
     stream_ready_channel: str = Field(pattern=r"^[a-z][a-z0-9_]{0,62}$")
     replay_page_size: int = Field(default=500, ge=1, le=10_000)
-    subscriber_buffer_events: int = Field(default=256, ge=1)
+    # Both ceilings are bounded above, not only below. Together they decide how
+    # much a single API process may hold on behalf of subscribers who are not
+    # reading: buffer x subscribers x one event each. An open-ended `ge=1` on
+    # either turns a configuration typo into an out-of-memory kill, and neither
+    # is a number a deployment has a reason to raise past these.
+    subscriber_buffer_events: int = Field(default=256, ge=1, le=4096)
+    max_live_subscribers_per_stream: int = Field(default=4, ge=1, le=32)
     catchup_poll_seconds: int = Field(default=10, ge=1)
     model_delta_mode: Literal["ephemeral_sse_coalesced"] = "ephemeral_sse_coalesced"
     live_delta_coalesce_ms: int = Field(default=50, ge=1, le=1000)
@@ -505,10 +587,17 @@ class WorkflowSettings(StrictModel):
     #: a formality, and a formality that fires on every Task teaches people to
     #: approve without looking, which costs more than it buys.
     #:
-    #: Defaults True, so a deployment that says nothing keeps ADR-031's shape.
+    #: Defaults **False** since ADR-048, which is a change of default and not a
+    #: change of mechanism: the field, the graph's two routes, the approval API
+    #: and the events are all exactly as ADR-038 left them, and a deployment
+    #: that wants the gate sets this true and answers in the Task's own detail
+    #: view. What moved is the answer given on behalf of a deployment that says
+    #: nothing -- and this repository is a single-machine one, where the gate
+    #: asks "do you approve handing this file to yourself".
+    #:
     #: `human_interrupt_enabled` above stays independent: it declares that the
     #: framework *can* pause, which the graph still needs for any future gate.
-    export_requires_approval: bool = True
+    export_requires_approval: bool = False
     interrupt_boundary: Literal["graph_node"] = "graph_node"
     runtime_loop_owner: Literal["custom_runtime"] = "custom_runtime"
     graph_version: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9._-]+$")
@@ -838,6 +927,29 @@ class EvaluationSettings(StrictModel):
     #: shape a flag can take: a reader checking whether answers are judged found
     #: the answer "yes" in the configuration and nothing at all in the code.
     #: Rejected rather than merely defaulted off -- see the validator.
+    #: Whether the console may *start* a run. Off unless a deployment says
+    #: otherwise: a run needs the `embedding` extra and a reachable Qdrant, and
+    #: neither is implied by being able to serve the API. A button that answers
+    #: 500 is worse than no button, and the honest fallback is the exact command
+    #: the runner's own docstring gives.
+    #:
+    #: Reading reports is deliberately *not* behind this. A deployment that
+    #: cannot run one can still show the numbers that were committed, and hiding
+    #: those too would hide the only evidence it has.
+    runs_enabled: bool = False
+    #: Frozen at one, and this is a measurement rather than a preference: a full
+    #: RAG ablation loads BGE-M3 and takes 30-70 minutes on the machine this
+    #: repository is developed on, where a second concurrent arm is an OOM kill
+    #: rather than a slower run. Raising it needs the ADR that says which
+    #: machine it was raised for.
+    max_concurrent_runs: Literal[1] = 1
+    #: A ceiling, not an expectation. The longest measured run is about 70
+    #: minutes; this leaves room and still bounds a runner that has wedged.
+    run_timeout_seconds: int = Field(default=5400, ge=60, le=86_400)
+    #: Where the runners write, and where the console reads. A root rather than
+    #: three paths: the per-suite subdirectories are the runners' own layout,
+    #: and naming each here would be this file's opinion about their filenames.
+    reports_root: str = Field(default="./evals", min_length=1)
     ragas_enabled: bool = False
     ragas_offline_only: Literal[True] = True
     online_judge_in_ci: Literal[False] = False
@@ -1123,6 +1235,10 @@ class Settings(BaseSettings):
     # Default-constructed so every existing config file stays valid: absent
     # section, disabled feature, byte-identical behaviour (ADR-036).
     triage: TriageSettings = Field(default_factory=TriageSettings)
+    # Same reason as triage: a config file written before Code existed stays
+    # valid, and a deployment that never asked for it gets a disabled feature
+    # rather than a startup failure.
+    code: CodeSettings = Field(default_factory=CodeSettings)
     database: DatabaseSettings
     coordination: CoordinationSettings
     event_stream: EventStreamSettings

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import time
 from collections.abc import Callable
 from itertools import count
 from typing import NoReturn
@@ -14,7 +16,12 @@ from agent_workbench.adapters.memory import InMemoryEventLog
 from agent_workbench.adapters.policy import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.domain.errors import ErrorInfo, UnknownToolError
-from agent_workbench.domain.events import EventEnvelope
+from agent_workbench.domain.events import (
+    EventEnvelope,
+    PermissionRequested,
+    ToolApprovalDecided,
+    ToolProposed,
+)
 from agent_workbench.domain.policies import (
     AuthorizationEnvelope,
     ExecutionContext,
@@ -22,8 +29,16 @@ from agent_workbench.domain.policies import (
     PrincipalContext,
 )
 from agent_workbench.domain.schema import JsonObject
-from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec
-from agent_workbench.ports.cancellation import NullCancellationToken
+from agent_workbench.domain.tools import (
+    ToolCall,
+    ToolResult,
+    ToolSpec,
+    argument_digest,
+)
+from agent_workbench.ports.cancellation import (
+    CancellationSource,
+    NullCancellationToken,
+)
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.hooks import HookOutcome
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
@@ -159,7 +174,10 @@ class _Harness:
 
 def _execute(harness: _Harness, call: ToolCall) -> tuple[ToolResult, list[str]]:
     async def scenario() -> tuple[ToolResult, list[str]]:
-        result = await harness.run(call)
+        # Bounded so that a gateway which stopped bounding its own waits fails
+        # here instead of parking the suite. A test that can only hang cannot
+        # be told apart from a machine that is stuck.
+        result = await asyncio.wait_for(harness.run(call), timeout=30.0)
         return result, [event.event_type for event in await harness.events()]
 
     return asyncio.run(scenario())
@@ -645,3 +663,551 @@ def test_a_policy_that_answers_in_time_is_unaffected() -> None:
 
     assert result.error is None
     assert len(harness.tool.calls) == 1
+
+
+# --- holding a call for a human ----------------------------------------------
+#
+# Without a gate the gateway refuses, and the two tests above the policy-bound
+# section pin that unchanged: they are the control for everything here, and the
+# behaviour every deployment that supplies no gate keeps. With a gate the call
+# is held, and what has to be true is that no way of failing to get an answer
+# can be mistaken for getting one.
+
+
+class _Gate:
+    """An approval gate that answers from a script, or never answers."""
+
+    def __init__(
+        self,
+        answer: tuple[str, str] | None = ("approve_once", "human"),
+        *,
+        raises: Exception | None = None,
+    ) -> None:
+        self._answer = answer
+        self._raises = raises
+        self.requests: list[dict[str, object]] = []
+
+    async def request(self, **kwargs: object) -> tuple[str, str]:
+        self.requests.append(kwargs)
+        if self._raises is not None:
+            raise self._raises
+        if self._answer is None:
+            # Parked, the way a question nobody has looked at yet is parked.
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+        return self._answer
+
+
+def _needs_approval(reason: str = "write_needs_review") -> _ScriptedPolicy:
+    return _ScriptedPolicy(PolicyDecision.allow(reason, requires_approval=True))
+
+
+def _payload[Payload](events: list[EventEnvelope], kind: type[Payload]) -> Payload:
+    """The one payload of this kind, narrowed so its fields can be read."""
+
+    for envelope in events:
+        if isinstance(envelope.payload, kind):
+            return envelope.payload
+    raise AssertionError(f"no {kind.__name__} in {[e.event_type for e in events]}")
+
+
+def events_of(harness: _Harness) -> list[EventEnvelope]:
+    """The stored envelopes, for the assertions that need a payload."""
+
+    async def read() -> list[EventEnvelope]:
+        return await harness.events()
+
+    return asyncio.run(read())
+
+
+def test_an_approved_call_runs_with_the_arguments_the_model_proposed() -> None:
+    """The whole point: the handler is reached, and reached unchanged.
+
+    The sequence is asserted whole rather than by containment. Where the two
+    new events land is the claim -- the request and the pause precede the
+    decision, and all three precede the first byte of work.
+    """
+
+    gate = _Gate(("approve_once", "human"))
+    harness = _Harness(policy=_needs_approval(), approvals=gate)
+
+    result, events = _execute(harness, _call(query="fusion", top_k=3))
+
+    assert result.status == "ok"
+    assert events == [
+        "ToolProposed",
+        "PermissionResolved",
+        "PermissionRequested",
+        "RunPaused",
+        "ToolApprovalDecided",
+        "ToolStarted",
+        "ToolCompleted",
+    ]
+    assert len(harness.tool.calls) == 1
+    assert harness.tool.calls[0].arguments == {"query": "fusion", "top_k": 3}
+
+
+def test_the_gate_is_asked_about_this_call_and_not_about_the_tool() -> None:
+    """``approve_for_session`` is unsafe to implement without the digest.
+
+    The policy engine decides approval from the tool's declared risk and never
+    reads the arguments, so a gate that could only see a tool name would have
+    to let one approved call stand for every later one.
+    """
+
+    gate = _Gate()
+    harness = _Harness(policy=_needs_approval(), approvals=gate)
+
+    _execute(harness, _call(query="fusion"))
+
+    (asked,) = gate.requests
+    assert asked["tool_name"] == "search"
+    assert asked["tool_call_id"] == "toolu_1"
+    assert asked["argument_digest"] == argument_digest({"query": "fusion"})
+    assert asked["approval_id"]
+
+
+def test_a_standing_rule_still_says_so_on_the_record() -> None:
+    """A rule answering on a human's behalf is not the human answering."""
+
+    gate = _Gate(("approve_for_session", "session_rule"))
+    harness = _Harness(policy=_needs_approval(), approvals=gate)
+
+    result, events = _execute(harness, _call(query="fusion"))
+
+    decided = _payload(events_of(harness), ToolApprovalDecided)
+
+    assert result.status == "ok"
+    assert len(harness.tool.calls) == 1
+    assert events[-3:] == ["ToolApprovalDecided", "ToolStarted", "ToolCompleted"]
+    assert decided.decision == "approve_for_session"
+    assert decided.decided_by == "session_rule"
+
+
+def test_a_denied_call_is_answered_not_raised() -> None:
+    """One ToolResult per id is the invariant a refusal must not break."""
+
+    gate = _Gate(("deny", "human"))
+    harness = _Harness(policy=_needs_approval(), approvals=gate)
+
+    result, events = _execute(harness, _call(query="fusion"))
+
+    assert result.status == "error"
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+    assert result.tool_call_id == "toolu_1"
+    assert len(harness.tool.calls) == 0
+    assert events[-2:] == ["ToolApprovalDecided", "ToolFailed"]
+    decided = _payload(events_of(harness), ToolApprovalDecided)
+    assert decided.decided_by == "human"
+
+
+def test_nobody_answering_is_recorded_as_nobody_answering() -> None:
+    """Distinct from a denial, and the refusal alone cannot carry that."""
+
+    gate = _Gate(None)
+    harness = _Harness(
+        policy=_needs_approval(),
+        approvals=gate,
+        approval_timeout_seconds=0.05,
+    )
+
+    result, _ = _execute(harness, _call(query="fusion"))
+    decided = _payload(events_of(harness), ToolApprovalDecided)
+
+    assert result.status == "error"
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+    assert len(harness.tool.calls) == 0
+    assert decided.decided_by == "timeout"
+
+
+def test_a_gate_that_raises_is_a_refusal_that_says_which_gate_broke() -> None:
+    """Not a timeout: an operator told "timeout" goes looking for a slow human."""
+
+    gate = _Gate(raises=RuntimeError("postgres://user:pw@host/db is unreachable"))
+    harness = _Harness(policy=_needs_approval(), approvals=gate)
+
+    result, _ = _execute(harness, _call(query="fusion"))
+    decided = _payload(events_of(harness), ToolApprovalDecided)
+
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+    assert decided.decided_by == "gate_failed"
+    # Only the type name crosses, the same as for a policy engine that raises.
+    assert "RuntimeError" in result.error.message
+    assert "postgres://" not in result.error.message
+
+
+def test_the_run_deadline_shortens_the_wait_that_is_actually_taken() -> None:
+    """Two assertions, and the first is the one with something to lose.
+
+    Telling the gate the run's number while enforcing the gateway's own
+    hundred seconds would satisfy a test that only inspected the argument --
+    and would be exactly the inversion that leaves a run held long past its
+    deadline. So the wait is timed. The second assertion is the argument,
+    because a gate that shows a countdown or answers ``timeout`` itself is
+    working from it, and the two must not disagree in public.
+    """
+
+    gate = _Gate(None)
+    harness = _Harness(
+        policy=_needs_approval(),
+        approvals=gate,
+        approval_timeout_seconds=100.0,
+    )
+
+    result, elapsed = asyncio.run(_authorized_with(harness, remaining_run_seconds=0.05))
+
+    assert elapsed < 5.0
+    assert gate.requests[0]["timeout_seconds"] == 0.05
+    assert result.error is not None
+
+
+def test_a_run_with_no_time_left_is_refused_before_anybody_is_asked() -> None:
+    """Nobody is asked about a run that is already over.
+
+    The guard that fires is the policy engine's, not the approval wait's --
+    the decision that raises an approval requirement is taken under the same
+    remaining time, so a run with none never reaches the asking. Asserting
+    *which* refusal came back is what keeps this from certifying a bound that
+    is never reached.
+    """
+
+    gate = _Gate()
+    harness = _Harness(policy=_needs_approval(), approvals=gate)
+
+    result, _ = asyncio.run(_authorized_with(harness, remaining_run_seconds=-1.0))
+
+    assert result.error is not None
+    assert result.error.message == (
+        "the run had no time left to reach a policy decision"
+    )
+    assert gate.requests == []
+
+
+async def _authorized_with(
+    harness: _Harness,
+    *,
+    remaining_run_seconds: float,
+) -> tuple[ToolResult, float]:
+    """Authorize one call with a run deadline, and time it.
+
+    ``_Harness.run`` passes no deadline, and the outer ``wait_for`` is what
+    turns "the bound was lost" into a failure. Without it a gateway that
+    stopped bounding the wait would park this test on a gate that never
+    answers, and a suite that hangs cannot be told apart from a wedged machine.
+    """
+
+    call = _call(query="fusion")
+    await harness.gateway.propose(call, sink=harness.sink)
+    prepared = await harness.gateway.prepare(call, context=CONTEXT, sink=harness.sink)
+    assert isinstance(prepared, PreparedCall)
+    started = time.monotonic()
+    outcome = await asyncio.wait_for(
+        harness.gateway.authorize(
+            prepared,
+            context=CONTEXT,
+            sink=harness.sink,
+            remaining_run_seconds=remaining_run_seconds,
+        ),
+        timeout=30.0,
+    )
+    elapsed = time.monotonic() - started
+    assert isinstance(outcome, ToolResult)
+    return outcome, elapsed
+
+
+def test_cancelling_the_run_ends_the_wait_instead_of_outlasting_it() -> None:
+    """The reason cancellation had to become something you can await.
+
+    The bound here is a hundred seconds and the assertion is that the call is
+    answered in well under one. Polling cannot produce that: the check would
+    sit after a wait that has not ended.
+    """
+
+    gate = _Gate(None)
+    harness = _Harness(
+        policy=_needs_approval(),
+        approvals=gate,
+        approval_timeout_seconds=100.0,
+    )
+    cancellation = CancellationSource()
+
+    async def scenario() -> ToolResult:
+        call = _call(query="fusion")
+        await harness.gateway.propose(call, sink=harness.sink)
+        prepared = await harness.gateway.prepare(
+            call, context=CONTEXT, sink=harness.sink
+        )
+        assert isinstance(prepared, PreparedCall)
+
+        async def stop() -> None:
+            await asyncio.sleep(0.05)
+            cancellation.cancel("operator stopped the run")
+
+        stopper = asyncio.ensure_future(stop())
+        outcome = await asyncio.wait_for(
+            harness.gateway.authorize(
+                prepared,
+                context=CONTEXT,
+                sink=harness.sink,
+                cancellation=cancellation,
+            ),
+            timeout=5.0,
+        )
+        await stopper
+        assert isinstance(outcome, ToolResult)
+        return outcome
+
+    result = asyncio.run(scenario())
+    decided = _payload(events_of(harness), ToolApprovalDecided)
+
+    assert result.error is not None
+    assert result.error.code == "cancelled"
+    assert decided.decided_by == "cancelled"
+    assert len(harness.tool.calls) == 0
+
+
+def test_a_call_held_for_a_human_shows_them_what_they_are_permitting() -> None:
+    """ADR-019's switch governs a record kept for later; this is a question now.
+
+    The control is the second assertion. Filling this preview must not become
+    a way of turning ``record_step_inputs`` on by the back door -- if it were,
+    every prompt and every retrieved document would follow the arguments onto
+    the stream.
+    """
+
+    harness = _Harness(
+        policy=_needs_approval(),
+        approvals=_Gate(),
+        record_step_inputs=False,
+    )
+
+    _execute(harness, _call(query="rm -rf /tmp/x"))
+    stored = events_of(harness)
+
+    assert "rm -rf /tmp/x" in _payload(stored, PermissionRequested).approval_preview
+    assert _payload(stored, ToolProposed).argument_preview == ""
+
+
+def test_a_deployment_with_no_gate_shows_nothing_because_it_asks_nobody() -> None:
+    """The control for the preview: it is written to be read, not to be kept."""
+
+    harness = _Harness(policy=_needs_approval())
+
+    _execute(harness, _call(query="rm -rf /tmp/x"))
+    requested = _payload(events_of(harness), PermissionRequested)
+
+    assert requested.approval_preview == ""
+    assert requested.approval_id is None
+
+
+def test_the_human_is_asked_about_the_arguments_that_will_actually_run() -> None:
+    """A rewrite lands after the requirement is raised, so asking early asks
+    about a call that is not the one dispatched.
+
+    The policy clamps ``top_k`` from 9 to 5 *and* requires approval on the same
+    decision. Every assertion here is about 5: the digest the gate was handed,
+    the preview a person would have read, and the arguments the handler
+    received. Asking on the pre-rewrite call would satisfy none of them, and
+    would have shown somebody a nine.
+    """
+
+    gate = _Gate()
+    policy = _ScriptedPolicy(
+        PolicyDecision.allow_modified(
+            "clamped",
+            {"query": "fusion", "top_k": 5},
+            requires_approval=True,
+        )
+    )
+    harness = _Harness(policy=policy, approvals=gate)
+
+    _execute(harness, _call(query="fusion", top_k=9))
+    requested = _payload(events_of(harness), PermissionRequested)
+
+    (asked,) = gate.requests
+    assert asked["argument_digest"] == argument_digest({"query": "fusion", "top_k": 5})
+    assert '"top_k":5' in requested.approval_preview.replace(" ", "")
+    assert harness.tool.calls[0].arguments == {"query": "fusion", "top_k": 5}
+
+
+def test_one_call_asks_one_question_however_many_rounds_it_takes() -> None:
+    """Two rounds both requiring approval are still one thing to consent to."""
+
+    gate = _Gate()
+    policy = _ScriptedPolicy(
+        PolicyDecision.allow_modified(
+            "clamped",
+            {"query": "fusion", "top_k": 5},
+            requires_approval=True,
+        ),
+        PolicyDecision.allow_modified(
+            "clamped_again",
+            {"query": "fusion", "top_k": 4},
+            requires_approval=True,
+        ),
+    )
+    harness = _Harness(policy=policy, approvals=gate)
+
+    _execute(harness, _call(query="fusion", top_k=9))
+
+    assert len(gate.requests) == 1
+    assert harness.tool.calls[0].arguments == {"query": "fusion", "top_k": 4}
+
+
+def test_a_requirement_raised_once_is_not_dropped_by_a_later_round() -> None:
+    """The control for the two tests above: asking late must not become
+    asking never.
+
+    Round one requires approval and rewrites; round two is a plain allow that
+    says nothing about approval. Silence is not a withdrawal -- and forgetting
+    it here is exactly the rewrite carrying a call past its own requirement.
+    """
+
+    gate = _Gate(("deny", "human"))
+    policy = _ScriptedPolicy(
+        PolicyDecision.allow_modified(
+            "clamped",
+            {"query": "fusion", "top_k": 5},
+            requires_approval=True,
+        ),
+        PolicyDecision.allow("nothing_to_declare"),
+    )
+    harness = _Harness(policy=policy, approvals=gate)
+
+    result, _ = _execute(harness, _call(query="fusion", top_k=9))
+
+    assert len(gate.requests) == 1
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+    assert harness.tool.calls == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [("approved", "human"), ("rejected", "human"), ("approve_once", "operator")],
+    ids=["unknown-decision", "the-other-vocabulary", "unknown-decider"],
+)
+def test_a_gate_answering_off_contract_refuses_rather_than_permits(
+    answer: tuple[str, str],
+) -> None:
+    """Guarding the shape and trusting the words is the worse half of a guard.
+
+    This repository already holds a second approval vocabulary --
+    ``domain/task_registry.ApprovalDecision`` is ``"approved"``/``"rejected"``
+    -- so the first gate somebody adapts from the existing approvals API
+    answers in words this one does not know. ``"rejected"`` is the dangerous
+    one: it is not ``"deny"``, so anything keying only on that string reads a
+    human's refusal as permission.
+
+    The failure must be a terminal ``ToolResult``. Feeding an unvalidated word
+    into a Literal-typed event raises out of ``authorize`` instead, and the
+    runtime has no handler there: the whole run unwinds with a traceback and
+    the call never gets the answer every id is owed.
+    """
+
+    gate = _Gate(answer)
+    harness = _Harness(policy=_needs_approval(), approvals=gate)
+
+    result, _ = _execute(harness, _call(query="fusion"))
+    decided = _payload(events_of(harness), ToolApprovalDecided)
+
+    assert result.status == "error"
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+    assert decided.decided_by == "gate_failed"
+    assert harness.tool.calls == []
+
+
+def test_a_preview_that_had_to_be_cut_says_so() -> None:
+    """A cut with no sign reads as the whole request.
+
+    The tail of a long command is where the redirect and the second path live,
+    and a person who cannot tell that it was removed by a length limit reads
+    the preview as the entire call. The control is the short case: an argument
+    that fits must not be decorated, or every preview looks truncated and the
+    mark stops meaning anything.
+    """
+
+    long_harness = _Harness(policy=_needs_approval(), approvals=_Gate())
+    short_harness = _Harness(policy=_needs_approval(), approvals=_Gate())
+
+    _execute(long_harness, _call(query="x" * 4000))
+    _execute(short_harness, _call(query="fusion"))
+
+    cut = _payload(events_of(long_harness), PermissionRequested).approval_preview
+    whole = _payload(events_of(short_harness), PermissionRequested).approval_preview
+
+    assert cut.endswith("...[truncated]")
+    assert len(cut) == 2048
+    assert whole == '{"query":"fusion"}'
+
+
+class _FailsWhileBeingTornDown:
+    """Honours cancellation by cleaning up, and fails at the cleanup.
+
+    Exactly the shape ``InteractiveApprovalGate`` obliges implementations to
+    have -- drop the pending question when cancelled -- with the drop itself
+    going wrong, which is what a lost connection looks like.
+    """
+
+    async def request(self, **kwargs: object) -> tuple[str, str]:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError(
+                "postgres://user:pw@host/db failed to deregister"
+            ) from None
+        raise AssertionError("unreachable")
+
+
+def test_an_abandoned_gate_task_does_not_get_its_message_logged_for_it() -> None:
+    """Scrubbing the message out of the refusal and letting asyncio print it is
+    not scrubbing it.
+
+    A task nobody retrieves the exception from is reported by the event loop's
+    default handler, in full. The gateway's rule is that only a gate's
+    exception *type name* crosses this boundary, and the loop does not know
+    that rule.
+    """
+
+    unhandled: list[object] = []
+    harness = _Harness(
+        policy=_needs_approval(),
+        approvals=_FailsWhileBeingTornDown(),
+        approval_timeout_seconds=0.05,
+    )
+
+    async def scenario() -> ToolResult:
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, context: unhandled.append(context)
+        )
+        result = await asyncio.wait_for(harness.run(_call(query="fusion")), timeout=30)
+        # Let the abandoned task finish and be collected: the loop reports an
+        # unretrieved exception at collection, not at cancellation.
+        await asyncio.sleep(0.05)
+        gc.collect()
+        await asyncio.sleep(0)
+        return result
+
+    result = asyncio.run(scenario())
+
+    assert result.error is not None
+    assert result.error.code == "policy_denied"
+    assert unhandled == []
+
+
+def test_the_word_a_gate_invented_does_not_travel_with_the_refusal() -> None:
+    """It reached this process from deployment-supplied code, like a message."""
+
+    harness = _Harness(
+        policy=_needs_approval(),
+        approvals=_Gate(("approved-by-postgres://user:pw@host/db", "human")),
+    )
+
+    result, _ = _execute(harness, _call(query="fusion"))
+
+    assert result.error is not None
+    assert "postgres://" not in result.error.message

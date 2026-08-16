@@ -28,6 +28,7 @@ from agent_workbench.application.workspace import (
     WorkspaceEntryNotFoundError,
     WorkspaceSession,
 )
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.domain.workspace import (
@@ -41,7 +42,6 @@ from agent_workbench.domain.workspace import (
     replace_exactly_once,
 )
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 LIST_TOOL_NAME = "workspace_list"
 READ_TOOL_NAME = "workspace_read"

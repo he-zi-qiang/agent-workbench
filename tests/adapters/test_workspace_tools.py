@@ -25,7 +25,8 @@ from agent_workbench.adapters.tools.workspace import (
     WorkspaceUnavailableError,
     WorkspaceWriteTool,
 )
-from agent_workbench.application.workspace import TaskWorkspace, WorkspaceSession
+from agent_workbench.application.workspace import Workspace, WorkspaceSession
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.policies import (
     AuthorizationEnvelope,
     ExecutionContext,
@@ -35,7 +36,6 @@ from agent_workbench.domain.tools import ToolCall
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.tools import ToolInvocation
 from agent_workbench.runtime.schema_validation import assert_schema_supported
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 TENANT = "tenant_local"
 OWNER = "user_local"
@@ -47,7 +47,7 @@ def entered() -> Generator[WorkspaceScope]:
 
     scope = WorkspaceScope()
     session = WorkspaceSession(
-        workspace=TaskWorkspace(
+        workspace=Workspace(
             artifacts=InMemoryArtifactStore(),
             tenant_id=TENANT,
             principal_id=OWNER,

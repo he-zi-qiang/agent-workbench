@@ -36,10 +36,10 @@ import re
 from dataclasses import dataclass
 from typing import Final
 
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.tools import ToolResult
 from agent_workbench.domain.workspace import WorkspaceOverflowError
 from agent_workbench.ports.tools import ToolBinding, ToolHandler, ToolInvocation
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 #: The flat-name rule, the same one ``_NAME_SCHEMA`` states to the model. A
 #: server is free to call its file anything at all, including nothing, so the

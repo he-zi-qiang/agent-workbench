@@ -26,7 +26,11 @@ from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalCont
 from agent_workbench.domain.schema import AnswerText, DomainModel, VersionedModel
 from agent_workbench.domain.tools import ToolName
 
-RunKind = Literal["chat", "task"]
+#: What a run belongs to. Three values, and the third is not a third kind of
+#: Task: a ``code`` run has no workflow thread, no graph node and no Task id at
+#: all, which is what the request validator below makes unstateable rather than
+#: merely conventional.
+RunKind = Literal["chat", "task", "code"]
 ModelProfileName = Literal["main", "compact"]
 RunStatus = Literal["completed", "failed", "cancelled"]
 
@@ -351,6 +355,47 @@ class AgentRunRequest(VersionedModel):
             raise ValueError("a run starts from a user message or from tool results")
         if len(set(self.tool_names)) != len(self.tool_names):
             raise ValueError("tool_names must not repeat a tool")
+        return self
+
+    @model_validator(mode="after")
+    def validate_code_runs_stand_alone(self) -> AgentRunRequest:
+        """A ``code`` run carries no Task position and always carries a clock.
+
+        Two halves of one decision, and neither is enforceable anywhere else.
+
+        **No Task position.** Code deliberately runs outside the Task control
+        plane -- no claim, no lease, no epoch, no checkpoint. A request that
+        named a ``task_id`` would be one whose events land on a Task timeline
+        the Registry has never heard of, and whose recovery story is a
+        checkpoint nobody writes. Refusing the field is how "outside" stays a
+        property of the type rather than of every caller remembering.
+
+        **A deadline is required.** Everything that stops a Task from running
+        forever lives in the Registry: the lease, the reaper, the invocation
+        budget. A code run has none of them, so the wall clock is the only
+        ceiling that survives a model that keeps proposing tools -- and
+        ``RunBudget.deadline`` defaults to ``None``, which means "no deadline"
+        rather than "not decided yet". Requiring it here is what stops that
+        default from silently becoming the policy for the one run kind that
+        cannot afford it.
+        """
+
+        if self.run_kind != "code":
+            return self
+        if (
+            self.trace.task_id is not None
+            or self.trace.workflow_thread_id is not None
+            or self.trace.graph_node_id is not None
+        ):
+            raise ValueError(
+                "a code run has no Task position: it runs outside the Task "
+                "control plane and nothing would honour those ids"
+            )
+        if self.budget.deadline is None:
+            raise ValueError(
+                "a code run must carry a deadline: no lease, reaper or "
+                "invocation budget is watching it"
+            )
         return self
 
 

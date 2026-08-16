@@ -433,6 +433,11 @@ PostgreSQL `event_streams/events` 是当前唯一持久事件事实源，`EventL
 
 1. 最终 ACL/evidence 复核前，`ModelDelta.text`、`ModelCompleted.text` 和
    `output_ref` 不得进入公开 EventLog 或 live subscriber；
+   这一条的作用域就是本节开头那句"对使用检索证据的 Chat"——无接地形态
+   （ADR-018）没有可撤回的 revision，复核的是空集合、只可能 commit，
+   因此它的 `ModelDelta.text` 可以实时流出，而 `ModelCompleted.text` 与
+   `output_ref` **在任何形态下都照旧抹除**。判据与实现见
+   [ADR-052](./adr/0052-only-an-unwithdrawable-answer-may-be-shown-early.md)；
 2. 模型结束后先把候选与精确的 `(document_id, source_revision)` 集合写为内部
    `release_pending`，此状态不能出现在会话历史；
 3. 最终发布事务按稳定顺序锁定 conversation/Turn、所有引用 document row 和 event
@@ -749,7 +754,11 @@ COMMIT
 3. 收到通知后再次按 cursor 查询，而不是直接信任 payload。
 4. 断线后重新 `LISTEN` 并补拉；空闲期也周期性 catch-up。
 
-SSE 将 `stream_id:sequence` 编码为事件 ID，接受 `Last-Event-ID` 后补发缺失的 durable 事件。Transient token delta 可以实时发送但不保证逐 token replay；重连从最近 durable chunk 或完整消息继续。每个慢客户端使用有限内存缓冲；溢出时断开，让客户端依靠 cursor 重连。`LISTEN` 使用专用 session 连接，不能经过 transaction-pooling 模式复用。
+SSE 将 `stream_id:sequence` 编码为事件 ID，接受 `Last-Event-ID` 后补发缺失的 durable 事件。Transient token delta 可以实时发送但不保证逐 token replay；重连从最近 durable chunk 或完整消息继续。每个慢客户端使用有限内存缓冲。**溢出时不断开**：断开会连带毁掉那条连接上完全健康的
+durable 回放，而被丢掉的东西本来就不可回放。实现改为丢弃最旧的待发 transient 事件并
+发一条 `stream.degraded` 通告，让客户端知道实时视图有缺口而历史没有；
+每流的订阅数另有上限，到顶时在流开始之前返 429。见
+[ADR-051](./adr/0051-a-live-frame-has-no-position.md) §3.3–3.4。`LISTEN` 使用专用 session 连接，不能经过 transaction-pooling 模式复用。
 
 取消也遵循同一原则：`cancel_requested_at/status` 是 PostgreSQL 中的事实，`NOTIFY` 只缩短 Worker 感知延迟。
 
@@ -1538,7 +1547,8 @@ CI 的算数**——本机装不到 `web/package.json` 的 `engines` 钉死的 n
 | Langfuse / CrewAI 对照 / RAGAS | ✓ |  |  |  |
 | LlamaIndex ingestion 迁移（`IngestionPipeline`，写入路径） | ✓ |  |  |  |
 | Task / Multi-Agent benchmark runner | ✓ |  |  |  |
-| 通用 Tool 级动态审批（MCP 之外） | ✓ |  |  |  |
+| 通用 Tool 级动态审批（MCP 之外） | ✓ | ✓ | ✓ |  |
+| Code 模式：编码会话、工作区指针与循环内审批（`in_api_process`） | ✓ | ✓ | ✓ |  |
 | 动态 supervisor / agent spawn / 持久 mailbox | ✓ |  |  |  |
 | Chat 历史压缩（token window / compaction） | ✓ |  |  |  |
 | Chat 会话的服务端管理（list / rename / delete） | ✓ |  |  |  |
@@ -1560,6 +1570,16 @@ CI 的算数**——本机装不到 `web/package.json` 的 `engines` 钉死的 n
 和写着"未实现"看起来差不多，实际差很多：一张只列做过的事的表，读者读到的是"这就是全部
 范围"。这些能力此前只散落在 README 的边界段落里，现在在同一张表上一并可见。其中几条要
 说得更细一点：
+
+- **Code 模式与通用工具审批**：这两行 2026-08-15 从 Planned 提到 Implemented +
+  Tested，各自的证据边界要说清楚。Code 有一条**真装配**的测试——从出厂配置加一个
+  `code.enabled = true` 启动整个应用、`POST /v1/code/sessions` 得 201——所以"接上线了"
+  是可核查的；但它**从未对真实模型跑过**，全部测试用的是 FakeModel 或桩，所以
+  `application/code_prompt.py` 里那六条纪律是否真的被遵守，仓库里没有任何证据，
+  这也是它不进 Demonstrated 的原因。审批闸门同理：闸门、registry、决定端点与它们的
+  测试都在，但**今天没有任何被授予的工具会触发它**——Code 只拿到五个工作区工具
+  （risk 是 read/write），而信封只对 `external`/`destructive` 要求审批。见
+  [known-gaps](./known-gaps.md) F 组。
 
 - **知识库管理**：目前只能创建与上传。重命名、删除、重建索引与 ACL 管理都没有 API，
   控制台上也没有入口。

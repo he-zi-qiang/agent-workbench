@@ -1,3 +1,4 @@
+import type { StreamConnectionState } from "../../api/sse";
 import type {
   AskResponse,
   ChatAnswerMode,
@@ -8,9 +9,12 @@ import type {
   SourceLocator,
 } from "../../api/types";
 import {
+  isDegradedFrame,
+  isLiveFrame,
   isQuarantineFrame,
   type SseChunkFrame,
   type SseFrame,
+  type SseLiveFrame,
   type SseQuarantineFrame,
 } from "../../api/sse";
 
@@ -22,6 +26,19 @@ export type ChatTurnPhase =
   | "failed";
 
 export type ChatActivityState = "running" | "complete" | "waiting" | "failed" | "info";
+
+/**
+ * Phases after which a turn produces nothing further.
+ *
+ * Named here rather than spelled out at each use because live text depends on
+ * it twice, in opposite directions: a settled turn must not absorb a late
+ * delta, and reaching one of these is what discards the text streamed so far.
+ */
+const TERMINAL_TURN_PHASES: ReadonlySet<ChatTurnPhase> = new Set([
+  "committed",
+  "withheld",
+  "failed",
+]);
 
 export interface ChatActivity {
   key: string;
@@ -60,9 +77,37 @@ export interface ChatTurnState {
   // both kinds in one conversation, and a badge driven by "current mode" would
   // relabel every earlier message the moment the mode changed.
   grounded?: boolean;
+  /**
+   * What the model is writing right now, before anything has been published.
+   *
+   * Never an answer, and kept in a field of its own so it cannot become one by
+   * accident: `answer` is written from `AnswerCommitted` and its two siblings
+   * and from nothing else. This is the process, and it is discarded the moment
+   * a turn reaches a terminal phase -- including a withheld one, where the text
+   * streamed so far is precisely what must not be left on screen.
+   */
+  stream?: LiveTextState;
 }
 
-export type ChatConnectionState = "idle" | "connecting" | "connected" | "retrying" | "unavailable";
+/**
+ * The live text of one model call, and whether there is any to show.
+ *
+ * `redacted` is a real state rather than an empty string: retrieval-backed
+ * shapes stream deltas whose text the server has deliberately blanked
+ * (ADR-052), so "the model is writing and you may not see it yet" and "the
+ * model has not started" arrive as the same events and must not render the
+ * same. `dropped` counts what the server told us it could not deliver.
+ */
+export interface LiveTextState {
+  modelCallId: string;
+  text: string;
+  redacted: boolean;
+  dropped: number;
+}
+
+// The shape moved to `api/sse` when a second surface needed it; the name
+// stays here because the chat feature reads better in its own vocabulary.
+export type ChatConnectionState = StreamConnectionState;
 
 export interface ChatSessionState extends LocalChatSession {
   connection: ChatConnectionState;
@@ -297,6 +342,8 @@ export function reduceChatFrame(
   frame: SseChunkFrame,
 ): FrameReduction {
   if (isQuarantineFrame(frame)) return reduceQuarantine(state, sessionId, frame);
+  if (isDegradedFrame(frame)) return reduceLiveGap(state, frame.degraded.dropped_events);
+  if (isLiveFrame(frame)) return reduceLiveFrame(state, sessionId, frame);
 
   const safe = safeEventFromFrame(sessionId, frame);
   if (safe === null) return { state, accepted: false, duplicate: false };
@@ -328,6 +375,103 @@ export function reduceChatFrame(
   if (turn === undefined) return { state: next, accepted: true, duplicate: false };
   next = replaceTurn(next, applySafeEvent(turn, safe));
   return { state: next, accepted: true, duplicate: false };
+}
+
+
+/**
+ * Text the model is producing, folded onto the turn it belongs to.
+ *
+ * Three rules, and each of them is the answer to a way this could go wrong.
+ *
+ * **It never enters `seenEventIds`.** That table is keyed by event id and is
+ * never pruned, so feeding it a per-token event would grow it without bound
+ * over one long answer. Transient events have nothing to deduplicate anyway:
+ * they arrive once, live, and are never replayed.
+ *
+ * **It does not wait for `ModelStarted`.** That event is durable, so it arrives
+ * through the replay -- up to a poll interval *after* the deltas it introduces,
+ * ten seconds by default. A rule that dropped deltas until their model call was
+ * known would therefore drop most of them, and would look correct in any test
+ * that fed the reducer events in logical order.
+ *
+ * **A new model call replaces the text rather than appending to it.** Two calls
+ * in one turn mean a tool round happened in between; running them together
+ * would show the reader one paragraph that was never written.
+ */
+function reduceLiveFrame(
+  state: ChatState,
+  sessionId: string,
+  frame: SseLiveFrame,
+): FrameReduction {
+  const envelope = frame.envelope;
+  if (envelope.stream_id !== sessionId) {
+    return { state, accepted: false, duplicate: false };
+  }
+  if (envelope.event_type !== "ModelDelta") {
+    // Live, and not something this view renders. Accepted so the stream does
+    // not treat it as a rejection, and dropped so an unknown transient type
+    // cannot reach a turn by being mistaken for text.
+    return { state, accepted: true, duplicate: false };
+  }
+  const payload = envelope.payload;
+  const modelCallId = typeof payload.model_call_id === "string" ? payload.model_call_id : "";
+  const text = typeof payload.text === "string" ? payload.text : "";
+  if (modelCallId === "") return { state, accepted: false, duplicate: false };
+
+  const localId = state.runToTurn[envelope.run_id];
+  if (localId === undefined) return { state, accepted: true, duplicate: false };
+  const turn = state.turns[localId];
+  if (turn === undefined) return { state, accepted: true, duplicate: false };
+  // A settled turn keeps whatever it settled on. A late delta arriving after
+  // the answer was published would otherwise reopen a finished bubble.
+  if (TERMINAL_TURN_PHASES.has(turn.phase)) {
+    return { state, accepted: true, duplicate: false };
+  }
+
+  const previous = turn.stream;
+  const carried = previous !== undefined && previous.modelCallId === modelCallId;
+  const stream: LiveTextState = {
+    modelCallId,
+    text: (carried ? previous.text : "") + text,
+    // Blank text from the server is a statement, not an absence: the shape
+    // streamed a delta and the fence removed its contents (ADR-052). It stays
+    // redacted until some delta of this call actually carries text.
+    redacted: (carried ? previous.redacted : true) && text === "",
+    dropped: carried ? previous.dropped : 0,
+  };
+  return {
+    state: replaceTurn(bump(state, {}), { ...turn, stream }),
+    accepted: true,
+    duplicate: false,
+  };
+}
+
+/**
+ * The server could not hand this reader everything it produced.
+ *
+ * Recorded on whichever turn is currently streaming, because that is the text
+ * the gap is in. Nothing else changes: the durable history behind it is whole,
+ * and saying otherwise would make a live-view hiccup look like a damaged
+ * record.
+ */
+function reduceLiveGap(state: ChatState, dropped: number): FrameReduction {
+  if (!Number.isInteger(dropped) || dropped < 1) {
+    return { state, accepted: false, duplicate: false };
+  }
+  const streaming = Object.values(state.turns).find(
+    (turn) => turn.stream !== undefined && !TERMINAL_TURN_PHASES.has(turn.phase),
+  );
+  if (streaming?.stream === undefined) {
+    return { state, accepted: true, duplicate: false };
+  }
+  return {
+    state: replaceTurn(bump(state, {}), {
+      ...streaming,
+      stream: { ...streaming.stream, dropped: streaming.stream.dropped + dropped },
+    }),
+    accepted: true,
+    duplicate: false,
+  };
 }
 
 /**
@@ -519,6 +663,15 @@ function applySafeEvent(turn: ChatTurnState, event: SafeRunEvent): ChatTurnState
   if (event.terminal !== undefined) next = finalizeTurn(next, event.terminal);
   else if (["RunFailed", "RunCancelled", "ChatTurnExpired"].includes(event.kind)) {
     next = { ...next, phase: "failed", error: event.activity.detail ?? event.activity.label };
+  }
+  if (TERMINAL_TURN_PHASES.has(next.phase) && next.stream !== undefined) {
+    // The process is over, so the process text goes. This is load-bearing on
+    // the withheld path in particular: what was streamed there is exactly the
+    // candidate the fence refused, and leaving it under a refusal notice would
+    // publish it by other means.
+    const settled = { ...next };
+    delete settled.stream;
+    next = settled;
   }
   return next;
 }

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -29,7 +30,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
-from agent_workbench.adapters.events import ScopedEventSink
+from agent_workbench.adapters.evaluation import SubprocessEvaluationLauncher
+from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
     PostgresApprovalStore,
@@ -55,6 +57,13 @@ from agent_workbench.adapters.tools.web_search import (
 from agent_workbench.adapters.tools.web_search import (
     WebSearchTool,
 )
+from agent_workbench.adapters.tools.workspace import (
+    WorkspaceEditTool,
+    WorkspaceGrepTool,
+    WorkspaceListTool,
+    WorkspaceReadTool,
+    WorkspaceWriteTool,
+)
 from agent_workbench.adapters.vector import QdrantVectorIndex
 from agent_workbench.application.approvals import ApprovalService
 from agent_workbench.application.chat import REFUSAL, ChatService
@@ -74,13 +83,21 @@ from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
     ChatTurnReaper,
 )
+from agent_workbench.application.code_approvals import (
+    ApprovalScope,
+    CodeApprovalRegistry,
+)
+from agent_workbench.application.code_session import CodeSessionService
+from agent_workbench.application.evaluation import EvaluationService
 from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
 from agent_workbench.application.task_triage import TaskTriageService
 from agent_workbench.application.tasks import SubmittedSemantics, TaskService
 from agent_workbench.application.uploads import UploadService
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.apps.api.identity import HeaderPrincipalResolver
+from agent_workbench.apps.api.sse import LiveEventChannel
 from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
@@ -110,7 +127,7 @@ from agent_workbench.domain.runs import RunBudget
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.documents import DocumentStore
-from agent_workbench.ports.event_log import EventLogPort, EventScope
+from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 from agent_workbench.ports.telemetry import Telemetry
 from agent_workbench.ports.tools import ToolBinding
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
@@ -171,6 +188,12 @@ class ApiDependencies:
     # question as whether it can chat.
     retrieval: RetrievalService | None
     events: EventLogPort
+    #: Where transient events go on their way to a subscriber. Process-local by
+    #: construction, because a transient event is never written anywhere and so
+    #: can only ever reach the process that produced it. Held here rather than
+    #: per request: a subscriber and the run it is watching are two different
+    #: requests, and they have to meet somewhere that outlives both.
+    live_events: LiveEventChannel
     # Assembled once per process. Records nothing when no collector is
     # configured, and never lets one break a request either way.
     telemetry: AssembledTelemetry
@@ -184,6 +207,18 @@ class ApiDependencies:
     # answers "default" in that case, which clients treat as "submit what you
     # always submitted" (ADR-036).
     triage: TaskTriageService | None = None
+    #: Absent unless `code.enabled` and this process could build a model.
+    #: Present means this deployment runs coding turns *here*, which is the
+    #: only arrangement in which a held tool call can be answered at all.
+    code: CodeSessionService | None = None
+    #: The questions currently on somebody's screen. Held beside the service
+    #: because a decision arrives on a different request from the turn waiting
+    #: for it, and the two have to meet somewhere that outlives both.
+    code_approvals: CodeApprovalRegistry | None = None
+    #: Always present. Reading reports needs nothing this process might lack;
+    #: only *starting* a run is gated, and that gate lives inside the service so
+    #: that a deployment which cannot run one still answers with the command.
+    evaluation: EvaluationService | None = None
 
     @property
     def max_control_request_body_bytes(self) -> int:
@@ -196,6 +231,17 @@ class ApiDependencies:
     @property
     def serves_chat(self) -> bool:
         return self.chat is not None
+
+    @property
+    def serves_code(self) -> bool:
+        """Both, because either alone is a route that cannot answer.
+
+        The service without the registry would hold turns nobody could
+        release; the registry without the service would be a decision endpoint
+        for questions nothing asks.
+        """
+
+        return self.code is not None and self.code_approvals is not None
 
     @property
     def serves_search(self) -> bool:
@@ -227,17 +273,34 @@ class ApiDependencies:
             return "ungrounded"
         return self.config.chat.retrieval_shape
 
-    def sink_for(self, *, stream_id: str, run_id: str) -> ScopedEventSink:
+    def sink_for(self, *, stream_id: str, run_id: str) -> EventSink:
         """The sink one run writes into.
 
         A stream per session and a run per turn: a subscriber follows the
         session and resumes from wherever it left off, while each turn stays
         identifiable inside it.
+
+        Tee-ed into the live channel, and the layering is what makes that safe
+        rather than a second way for an answer to escape. ``ChatService`` wraps
+        whatever it is given in ``AnswerReleaseSink`` (``application/chat.py``),
+        so redaction happens *outside* this sink: by the time a payload reaches
+        the observer below it has already crossed the publication fence. The
+        observer keeps only transient events, which is why the durable answer
+        events pass it untouched -- they are delivered by the replay, with the
+        position a reconnecting client can resume from.
+
+        Only this factory is tee-ed. The recovery reaper writes nothing but
+        durable terminal events, and triage runs against a per-call in-memory
+        log nobody can subscribe to; teeing either would fan out to no one at
+        the cost of a callback on a synchronous submission path.
         """
 
-        return ScopedEventSink(
-            log=self.events,
-            scope=EventScope(stream_id=stream_id, run_id=run_id),
+        return ObservingEventSink(
+            inner=ScopedEventSink(
+                log=self.events,
+                scope=EventScope(stream_id=stream_id, run_id=run_id),
+            ),
+            observer=self.live_events.observe,
         )
 
     async def dispose(self) -> None:
@@ -246,6 +309,14 @@ class ApiDependencies:
         await self.telemetry.dispose()
         if self.chat is not None:
             await self.chat.drain_cleanup(
+                timeout_seconds=self.config.shutdown_grace_seconds
+            )
+        # Before the engine and the client close under it. A coding turn that
+        # is nearly done gets the same grace a chat turn does; one that needs
+        # longer is cut off and its workspace stands at its last successful
+        # write (known-gaps F-02).
+        if self.code is not None:
+            await self.code.drain_cleanup(
                 timeout_seconds=self.config.shutdown_grace_seconds
             )
         if self.http is not None:
@@ -350,6 +421,7 @@ def build_dependencies(
         _assemble_chat(
             config,
             documents,
+            artifacts=artifacts,
             blocking=blocking,
             conversations=conversations,
             releaser=releaser,
@@ -362,6 +434,8 @@ def build_dependencies(
         )
     )
     chat = assembled.chat
+    code = assembled.code
+    code_approvals = assembled.code_approvals
     unavailable = assembled.chat_unavailable
     http = assembled.http
     qdrant = assembled.qdrant
@@ -415,12 +489,32 @@ def build_dependencies(
         encoders=encoders,
         retrieval=retrieval,
         events=events,
+        live_events=LiveEventChannel(
+            buffer_events=config.event_stream.subscriber_buffer_events,
+            max_subscribers_per_stream=(
+                config.event_stream.max_live_subscribers_per_stream
+            ),
+        ),
         task_service=task_service,
         task_inputs=task_inputs,
         approvals=ApprovalService(
             approvals=PostgresApprovalStore(engine, events=events)
         ),
         triage=triage,
+        code=code,
+        code_approvals=code_approvals,
+        # Built unconditionally. The launcher is harmless until asked to start
+        # something, and `runs_enabled` is what decides whether it ever is --
+        # held in the service rather than here so that a disabled deployment
+        # answers with the command instead of a missing route.
+        evaluation=EvaluationService(
+            launcher=SubprocessEvaluationLauncher(
+                project_root=Path.cwd(),
+                timeout_seconds=config.evaluation.run_timeout_seconds,
+            ),
+            reports_root=Path(config.evaluation.reports_root),
+            runs_enabled=config.evaluation.runs_enabled,
+        ),
     )
 
 
@@ -446,12 +540,19 @@ class _AssembledChat:
     encoders: tuple[object, ...] = ()
     retrieval: RetrievalService | None = None
     triage: TaskTriageService | None = None
+    #: Built here rather than beside the Task stack because Code needs exactly
+    #: what Chat's model half needs -- a provider and the client it speaks
+    #: over -- and building a second of either would give this process two
+    #: connection pools and two things for `dispose` to remember.
+    code: CodeSessionService | None = None
+    code_approvals: CodeApprovalRegistry | None = None
 
 
 def _assemble_chat(
     config: ApiRuntimeConfig,
     documents: PostgresDocumentStore,
     *,
+    artifacts: ArtifactStore,
     blocking: BlockingCallRunner,
     conversations: PostgresConversationStore,
     releaser: PostgresChatReleaseCoordinator,
@@ -846,10 +947,65 @@ def _assemble_chat(
         if config.triage.enabled
         else None
     )
+    code_scope = WorkspaceScope()
+    code_approvals = CodeApprovalRegistry()
+    code_registry = StaticToolRegistry(
+        [
+            WorkspaceListTool(code_scope).binding(),
+            WorkspaceReadTool(code_scope).binding(),
+            WorkspaceWriteTool(code_scope).binding(),
+            WorkspaceEditTool(code_scope).binding(),
+            WorkspaceGrepTool(code_scope).binding(),
+        ]
+    )
+
+    def _code_runtime(scope: ApprovalScope) -> ClaudeLikeAgentRuntime:
+        return ClaudeLikeAgentRuntime(
+            model=model,
+            gateway=ToolGateway(
+                registry=code_registry,
+                policy=EnvelopePolicyEngine(registry=code_registry),
+                record_step_inputs=config.record_step_inputs,
+                # The gate Code exists to be able to supply: this run happens
+                # in the process the answering request reaches. No ledger is
+                # passed, which is also a check -- a registry holding a tool
+                # that records external effects would refuse to assemble here.
+                approvals=code_approvals.gate_for(scope),
+                approval_timeout_seconds=config.code.approval_timeout_seconds,
+            ),
+            # Its own identity, so a tool execution can be attributed to a
+            # coding session rather than to "the API".
+            policy_identity=f"{policy_identity}-code",
+            model_label=model_label,
+            record_step_inputs=config.record_step_inputs,
+            prices=model_prices,
+        )
+
+    code = (
+        CodeSessionService(
+            conversations=conversations,
+            artifacts=artifacts,
+            executor_for=_code_runtime,
+            scope=code_scope,
+            budget=RunBudget(
+                max_steps=config.code.max_steps,
+                max_tool_calls=config.code.max_tool_calls,
+                max_total_tokens=config.code.max_total_tokens,
+                max_cost_micro_usd=config.code.max_cost_micro_usd,
+            ),
+            turn_timeout_seconds=config.code.turn_timeout_seconds,
+            max_concurrent_turns=config.code.max_concurrent_turns,
+            clock=lambda: datetime.now(UTC),
+        )
+        if config.code.enabled
+        else None
+    )
     return _AssembledChat(
         chat=chat,
         chat_unavailable=None,
         rag_unavailable=rag_unavailable,
+        code=code,
+        code_approvals=code_approvals if code is not None else None,
         http=client,
         qdrant=qdrant,
         vector_index=vector_index,

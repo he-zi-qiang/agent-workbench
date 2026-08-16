@@ -22,6 +22,7 @@ import httpx
 import pytest
 from sqlalchemy import text
 
+from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
 from agent_workbench.adapters.persistence import create_query_engine
 from agent_workbench.application.chat import ChatTurn
 from agent_workbench.application.chat_execution import (
@@ -30,8 +31,9 @@ from agent_workbench.application.chat_execution import (
     UngroundedExecution,
 )
 from agent_workbench.apps.api.dependencies import build_dependencies
+from agent_workbench.apps.api.disconnects import watch_disconnect, watched
 from agent_workbench.apps.api.main import create_app
-from agent_workbench.apps.api.routes.chat import CHAT_PREFIX, _watch_disconnect
+from agent_workbench.apps.api.routes.chat import CHAT_PREFIX
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
 from agent_workbench.bootstrap.settings import Settings
@@ -219,7 +221,14 @@ def test_health_is_unaffected(tmp_path: Path) -> None:
 
 
 def test_http_disconnect_cancels_the_actual_chat_task() -> None:
-    """A cooperative token alone cannot interrupt retrieval or a blocked adapter."""
+    """A cooperative token alone cannot interrupt retrieval or a blocked adapter.
+
+    The bound around the join is the assertion's other half. The work here is
+    parked on an event nobody sets, so a watcher that stopped cancelling it
+    would leave this test waiting forever -- and a test that can only hang
+    cannot be told apart from a machine that is stuck. With the bound, losing
+    the cancel is a failure that names itself.
+    """
 
     class _DisconnectedRequest:
         async def is_disconnected(self) -> bool:
@@ -232,16 +241,57 @@ def test_http_disconnect_cancels_the_actual_chat_task() -> None:
 
         target = asyncio.create_task(blocked_chat())
         cancellation = CancellationSource()
-        await _watch_disconnect(
+        await watch_disconnect(
             _DisconnectedRequest(),  # pyright: ignore[reportArgumentType]
             cancellation,
             target=target,
             poll_seconds=0.001,
         )
-        await asyncio.gather(target, return_exceptions=True)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(target, return_exceptions=True), timeout=5.0
+            )
+        except TimeoutError:
+            target.cancel()
+            raise AssertionError("the watcher left the work running") from None
         return cancellation.cancelled, cancellation.reason, target.cancelled()
 
     assert asyncio.run(scenario()) == (True, "client_disconnected", True)
+
+
+def test_a_watcher_does_not_outlive_the_work_it_was_watching() -> None:
+    """The half of the pattern a second route would most easily forget.
+
+    A watcher whose work has finished is parked on a sleep nothing will
+    interrupt, and it holds the request object -- so one leaked watcher per
+    request holds whatever that request holds. Sharing the context manager is
+    how the next surface gets this without having to know it.
+    """
+
+    class _ConnectedRequest:
+        async def is_disconnected(self) -> bool:
+            return False
+
+    async def scenario() -> tuple[int, bool]:
+        before = len(asyncio.all_tasks())
+
+        async def work() -> str:
+            return "done"
+
+        target = asyncio.create_task(work())
+        async with watched(
+            _ConnectedRequest(),  # pyright: ignore[reportArgumentType]
+            CancellationSource(),
+            target=target,
+            poll_seconds=3600.0,
+            name="test-disconnect",
+        ):
+            answer = await target
+        # Yield once so the cancelled watcher is actually retired.
+        await asyncio.sleep(0)
+        return len(asyncio.all_tasks()) - before, answer == "done"
+
+    assert asyncio.run(scenario()) == (0, True)
 
 
 def test_the_reason_chat_is_absent_is_recorded(tmp_path: Path) -> None:
@@ -274,8 +324,30 @@ def test_a_run_sink_writes_into_the_sessions_stream(tmp_path: Path) -> None:
     dependencies = build_dependencies(project_api(_settings(tmp_path)), with_chat=False)
     sink = dependencies.sink_for(stream_id=session_id, run_id="run_1")
 
-    assert sink.scope.stream_id == session_id
-    assert sink.scope.run_id == "run_1"
+    assert isinstance(sink, ObservingEventSink)
+    inner = sink.inner
+    assert isinstance(inner, ScopedEventSink)
+    assert inner.scope.stream_id == session_id
+    assert inner.scope.run_id == "run_1"
+
+
+def test_the_run_sink_tees_into_this_process_s_live_channel(tmp_path: Path) -> None:
+    """The observer has to be *this* channel, over *this* log.
+
+    Asserting only that some ObservingEventSink exists would pass a wiring that
+    tees into a channel nobody subscribes to, or that writes into a second log.
+    Both are silent: the events still reach the database, and the live view is
+    simply always empty -- which is indistinguishable from a deployment whose
+    runs happen in a worker.
+    """
+
+    dependencies = build_dependencies(project_api(_settings(tmp_path)), with_chat=False)
+    sink = dependencies.sink_for(stream_id="ses_1", run_id="run_1")
+
+    assert isinstance(sink, ObservingEventSink)
+    assert sink.observer == dependencies.live_events.observe
+    assert isinstance(sink.inner, ScopedEventSink)
+    assert sink.inner.log is dependencies.events
 
 
 # --- the mounted side --------------------------------------------------------

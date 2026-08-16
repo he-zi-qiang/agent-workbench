@@ -22,6 +22,7 @@ not otherwise open.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.identifiers import Identifier
@@ -54,8 +55,15 @@ class WorkspaceListing:
 
 
 @dataclass(frozen=True, slots=True)
-class TaskWorkspace:
-    """The working set of one Task, addressed by manifest version."""
+class Workspace:
+    """One owner's working set, addressed by manifest version.
+
+    Named for what it holds rather than for who holds it. It carries no
+    ``task_id`` and never did -- the only identity in it is the tenant and the
+    principal the artifacts belong to -- so a Code session's working set is the
+    same object as a Task's, and the thing that differs is which version
+    pointer is handed to it and who persists that pointer afterwards.
+    """
 
     artifacts: ArtifactStore
     tenant_id: str
@@ -88,11 +96,30 @@ class TaskWorkspace:
             for name in manifest.names()
         )
 
-    async def read(self, version: Identifier | None, name: str) -> bytes:
+    async def locate(self, version: Identifier | None, name: str) -> ArtifactRef:
+        """What this name binds at this version, without moving any bytes.
+
+        Split out of :meth:`read` for the one caller that must not buffer: an
+        HTTP download streams, and streaming needs the reference -- its id to
+        open the stream with, and its media type, length and checksum to answer
+        with -- rather than the content. Everything the response says about the
+        file therefore comes from the manifest entry the name resolved to, so
+        the headers and the bytes cannot describe two different things.
+
+        A name is still resolved against the manifest at ``version``, which is
+        the whole reason a workspace entry has no stable public address: the
+        same name is a different artifact at a different version, and only the
+        session row knows which version this caller is at.
+        """
+
         manifest = await self.load(version)
         entry = manifest.entries.get(name)
         if entry is None:
             raise WorkspaceEntryNotFoundError(name)
+        return entry
+
+    async def read(self, version: Identifier | None, name: str) -> bytes:
+        entry = await self.locate(version, name)
         return await self.artifacts.get(
             tenant_id=self.tenant_id,
             artifact_id=entry.artifact_id,
@@ -162,28 +189,75 @@ class TaskWorkspace:
         return ref.artifact_id
 
 
+class WorkspaceLike(Protocol):
+    """The working set as its tools address it: a version in, a version out.
+
+    Named as a shape rather than as a class because two different things
+    satisfy it and the difference is invisible from here. A Task's working set
+    is :class:`Workspace` itself, whose returned version means only "here is
+    what you would have to hold to reach these files". A Code session's is
+    ``SessionWorkspace``, which additionally records that version on the
+    session before returning it.
+
+    That is the whole distinction, and keeping it behind one shape is what lets
+    the tool handlers stay ignorant of it: they were already written to take a
+    version and assign the one they get back.
+    """
+
+    async def load(self, version: Identifier | None) -> WorkspaceManifest: ...
+
+    async def list(
+        self, version: Identifier | None
+    ) -> tuple[WorkspaceListing, ...]: ...
+
+    async def read(self, version: Identifier | None, name: str) -> bytes: ...
+
+    async def write(
+        self,
+        version: Identifier | None,
+        name: str,
+        content: bytes,
+        *,
+        media_type: str,
+    ) -> Identifier: ...
+
+    async def write_ref(
+        self,
+        version: Identifier | None,
+        name: str,
+        ref: ArtifactRef,
+    ) -> Identifier: ...
+
+
 @dataclass(slots=True)
 class WorkspaceSession:
-    """One node's view of the working set, and where its next version lands.
+    """One run's view of the working set, and where its next version lands.
 
-    Mutable on purpose, and the only mutable thing here. The node reads
+    Mutable on purpose, and the only mutable thing here. A graph node reads
     :attr:`version` after its agent run and puts it in the state update; a node
     that dies first returns no update, so nothing it advanced is visible to the
     attempt that replaces it.
+
+    A Code session inverts that and it does so entirely inside
+    :attr:`workspace`: there is no state update to withhold, so the version is
+    recorded as each write succeeds. Which of the two is in play is not visible
+    here, and must not be -- a session that could be asked "are you the durable
+    kind?" would grow callers that answer differently for each.
 
     It lives in this layer rather than beside the tool handlers because the
     graph has to create one and the graph may not import an adapter.
     """
 
-    workspace: TaskWorkspace
+    workspace: WorkspaceLike
     version: Identifier | None = None
 
 
 __all__ = [
     "MANIFEST_FILENAME",
     "MANIFEST_MEDIA_TYPE",
-    "TaskWorkspace",
+    "Workspace",
     "WorkspaceEntryNotFoundError",
+    "WorkspaceLike",
     "WorkspaceListing",
     "WorkspaceSession",
 ]

@@ -30,6 +30,7 @@ from agent_workbench.adapters.tools.workspace import (
     WorkspaceListTool,
     WorkspaceWriteTool,
 )
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.messages import user_message
 from agent_workbench.domain.policies import (
@@ -72,7 +73,6 @@ from agent_workbench.workflows.task_handlers import (
     decode_plan_output,
     decode_review_output,
 )
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 SCOPE = TaskExecutionScope()
 

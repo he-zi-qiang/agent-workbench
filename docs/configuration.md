@@ -13,7 +13,7 @@
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 为 `1.14`；两者是不同版本轴，架构基线不随
+当前架构基线为 `1.3`，配置 schema 为 `1.15`；两者是不同版本轴，架构基线不随
 配置 schema 走。schema 每一次抬升都对应一条 ADR：
 
 | schema | 原因 | 依据 |
@@ -31,6 +31,7 @@
 | `1.11` → `1.12` | 新增顶层 `[triage]`（默认关闭）；它决定一次提交走哪种形态 | [ADR-036](./adr/0036-triage-decides-the-shape.md) |
 | `1.12` → `1.13` | 新增 `rag.graph`（默认关闭，两个冻结 Literal）；开启后图谱臂参与候选提名 | [ADR-037](./adr/0037-the-graph-nominates-chunks.md) |
 | `1.13` → `1.14` | **方向相反的一次**：`evaluation.ragas_enabled` 只接受 `false`，`evaluation.rag_metrics` 只接受 `RETRIEVAL_METRICS` 里的键。上面每一条都是新文件向旧二进制要它没有的行为，这一条反过来——停止加载的是 1.13 那份文件（`ragas_enabled = true`、或它默认那 19 条指标名）。没有任何评测因此跑得不同，因为这两个字段从来没有被读过；抬版买到的只是"配置不再承诺一个这份二进制产不出的裁判" | [ADR-039](./adr/0039-a-metric-name-is-a-promise.md) |
+| `1.14` → `1.15` | `[code]` 段到了：一个跑在 API 进程里的编码会话面。加性、默认关，形状与 `1.11 → 1.12` 相同——一份打开它的配置是在要求这个进程开会话、持有回合、停下来等人批准，而 1.14 的二进制一件都做不到。它另带三个冻结 `Literal`（`execution_locality`、`coordination`、`shell_enabled`），存在的意义就是"放宽它们"不能悄悄发生。既有段下**新增带默认值的叶子**仍然不抬版，那是 ADR-038 与 ADR-042 的先例，与本条不是一回事 | ADR-036 的先例 |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。

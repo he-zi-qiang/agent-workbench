@@ -1,26 +1,51 @@
 import {
   Activity,
+  Code2,
   FlaskConical,
   Library,
   MoreHorizontal,
   MessageSquare,
   Settings2,
-  ShieldCheck,
-  SquareTerminal,
   X,
 } from "lucide-react";
 import { useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { EnvironmentDialog } from "./EnvironmentDialog";
 import { useIdentity } from "./IdentityContext";
 
 const NAVIGATION = [
-  { to: "/chat", label: "Chat", icon: MessageSquare, primary: true },
-  { to: "/work", label: "Work", icon: SquareTerminal, primary: true },
-  { to: "/knowledge", label: "知识库", icon: Library, primary: false },
-  { to: "/approvals", label: "待我确认", icon: ShieldCheck, primary: false },
-  { to: "/evaluation", label: "效果评测", icon: FlaskConical, primary: false },
-  { to: "/system", label: "运行状态", icon: Activity, primary: false },
+  // One entry for two routes. `covers` is what marks it current on `/work`
+  // too -- a `NavLink to="/chat"` is not, and a rail item that goes dark the
+  // moment you open the 任务 tab is a rail that disagrees with the page.
+  {
+    to: "/chat",
+    label: "工作台",
+    icon: MessageSquare,
+    primary: true,
+    covers: ["/chat", "/work"],
+  },
+  { to: "/code", label: "Code", icon: Code2, primary: true, covers: ["/code"] },
+  {
+    to: "/knowledge",
+    label: "知识库",
+    icon: Library,
+    primary: false,
+    covers: ["/knowledge"],
+  },
+  {
+    to: "/evaluation",
+    label: "效果评测",
+    icon: FlaskConical,
+    primary: false,
+    covers: ["/evaluation"],
+  },
+  {
+    to: "/system",
+    label: "运行状态",
+    icon: Activity,
+    primary: false,
+    covers: ["/system"],
+  },
 ] as const;
 
 export function AppShell() {
@@ -28,7 +53,7 @@ export function AppShell() {
   const location = useLocation();
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const secondaryNavigation = NAVIGATION.filter(
-    (item) => item.to === "/approvals" || item.to === "/evaluation" || item.to === "/system",
+    (item) => item.to === "/evaluation" || item.to === "/system",
   );
   const secondaryActive = secondaryNavigation.some((item) =>
     location.pathname.startsWith(item.to),
@@ -46,12 +71,23 @@ export function AppShell() {
         </NavLink>
         {NAVIGATION.map((item, index) => {
           const Icon = item.icon;
+          const current = item.covers.some((prefix) =>
+            location.pathname.startsWith(prefix),
+          );
           return (
-            <div className={index === 2 ? "aw-nav-divider" : ""} key={item.to}>
-              <NavLink className="aw-global-link" title={item.label} to={item.to}>
+            <div className={index === 1 ? "aw-nav-divider" : ""} key={item.to}>
+              {/* `Link`, not `NavLink`: this entry stands for a set of
+                  prefixes, and `NavLink` overwrites `aria-current` with its own
+                  single-path match -- which reads "not here" on /work. */}
+              <Link
+                aria-current={current ? "page" : undefined}
+                className={`aw-global-link ${current ? "active" : ""}`}
+                title={item.label}
+                to={item.to}
+              >
                 <Icon aria-hidden="true" size={18} />
                 <span>{item.label}</span>
-              </NavLink>
+              </Link>
             </div>
           );
         })}
@@ -75,11 +111,19 @@ export function AppShell() {
         {NAVIGATION.filter((item) => item.primary || item.to === "/knowledge").map(
           (item) => {
             const Icon = item.icon;
+            const current = item.covers.some((prefix) =>
+              location.pathname.startsWith(prefix),
+            );
             return (
-              <NavLink className="aw-mobile-link" key={item.to} to={item.to}>
+              <Link
+                aria-current={current ? "page" : undefined}
+                className={`aw-mobile-link ${current ? "active" : ""}`}
+                key={item.to}
+                to={item.to}
+              >
                 <Icon aria-hidden="true" size={19} />
                 <span>{item.label}</span>
-              </NavLink>
+              </Link>
             );
           },
         )}

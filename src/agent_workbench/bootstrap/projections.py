@@ -328,6 +328,14 @@ class EventStreamConfig:
 
     replay_page_size: int
     catchup_poll_seconds: int
+    #: What one live subscriber may hold, and how many of them one stream may
+    #: have. Transient events are never stored, so these are the only two
+    #: numbers standing between a slow reader and this process's memory.
+    subscriber_buffer_events: int
+    max_live_subscribers_per_stream: int
+    #: How long a burst of token deltas is allowed to keep arriving before it
+    #: is sent as one frame.
+    live_delta_coalesce_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,6 +364,44 @@ class TriageConfig:
 
     enabled: bool
     timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationRunsConfig:
+    """What the API process needs to start an evaluation, if it may.
+
+    Only the run half. The metric names, gold-set paths and judge settings in
+    `EvaluationSettings` belong to the offline runners, and a process that never
+    computes a metric has no business carrying the list of them.
+    """
+
+    runs_enabled: bool
+    reports_root: str
+    run_timeout_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class CodeConfig:
+    """What the API process needs to run coding sessions.
+
+    Projected rather than passed through, like every other section: the
+    settings type stops at this boundary, so nothing downstream can widen a
+    ceiling by reaching back for the file it came from.
+
+    The two frozen premises do not appear here. ``execution_locality`` and
+    ``coordination`` are checked at startup and then have nothing left to say:
+    they describe the only arrangement this code implements, so carrying them
+    forward would invite a reader to branch on a value that cannot vary.
+    """
+
+    enabled: bool
+    turn_timeout_seconds: int
+    approval_timeout_seconds: int
+    max_steps: int
+    max_tool_calls: int
+    max_total_tokens: int | None
+    max_cost_micro_usd: int | None
+    max_concurrent_turns: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,6 +685,8 @@ class ApiRuntimeConfig:
     chat_recovery: ChatRecoveryConfig
     chat: ChatConfig
     triage: TriageConfig
+    code: CodeConfig
+    evaluation: EvaluationRunsConfig
     task: TaskConfig
     observability: ObservabilityConfig
     # ADR-019. The API runs the chat loop, so it needs the same switch the Task
@@ -999,6 +1047,11 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         event_stream=EventStreamConfig(
             replay_page_size=settings.event_stream.replay_page_size,
             catchup_poll_seconds=settings.event_stream.catchup_poll_seconds,
+            subscriber_buffer_events=settings.event_stream.subscriber_buffer_events,
+            max_live_subscribers_per_stream=(
+                settings.event_stream.max_live_subscribers_per_stream
+            ),
+            live_delta_coalesce_ms=settings.event_stream.live_delta_coalesce_ms,
         ),
         qdrant=_project_qdrant(settings),
         embedding=_project_embedding(settings),
@@ -1031,6 +1084,21 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             enabled=settings.triage.enabled,
             timeout_seconds=settings.triage.timeout_seconds,
         ),
+        code=CodeConfig(
+            enabled=settings.code.enabled,
+            turn_timeout_seconds=settings.code.turn_timeout_seconds,
+            approval_timeout_seconds=settings.code.approval_timeout_seconds,
+            max_steps=settings.code.max_steps,
+            max_tool_calls=settings.code.max_tool_calls,
+            max_total_tokens=settings.code.max_total_tokens,
+            max_cost_micro_usd=settings.code.max_cost_micro_usd,
+            max_concurrent_turns=settings.code.max_concurrent_turns,
+        ),
+        evaluation=EvaluationRunsConfig(
+            runs_enabled=settings.evaluation.runs_enabled,
+            reports_root=settings.evaluation.reports_root,
+            run_timeout_seconds=settings.evaluation.run_timeout_seconds,
+        ),
         task=project_task(settings),
     )
 
@@ -1041,6 +1109,7 @@ __all__ = [
     "ArtifactStoreConfig",
     "ChatConfig",
     "ChatRecoveryConfig",
+    "CodeConfig",
     "DatabaseConfig",
     "EmbeddingConfig",
     "EventStreamConfig",

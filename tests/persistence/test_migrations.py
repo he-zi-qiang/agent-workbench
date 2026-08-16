@@ -19,8 +19,13 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import Connection, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from agent_workbench.adapters.persistence import create_query_engine, metadata
+from agent_workbench.adapters.persistence.conversation_store import (
+    PostgresConversationStore,
+)
 from agent_workbench.bootstrap.paths import PROJECT_ROOT
 from agent_workbench.domain.schema import DOMAIN_SCHEMA_VERSION
 
@@ -305,6 +310,213 @@ def test_knowledge_base_entities_backfill_existing_document_scopes(
             True,
         ),
     ]
+
+
+def test_sessions_that_predate_the_mode_column_become_chat_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every session written before 0026 was a chat session, so it says so.
+
+    The second half is the constraint, and it is the half that makes the
+    column a gate: a writer that skips the repository must not be able to
+    invent a third mode that every reader's ``mode=`` predicate then misses.
+    """
+
+    dsn = _dsn()
+    monkeypatch.setenv(MIGRATION_DSN_ENV_VAR, dsn)
+    config = _config()
+    command.upgrade(config, "head")
+    command.downgrade(config, "0025_agent_invocation_count")
+
+    async def seed_legacy_session() -> None:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO conversation_sessions "
+                        "(session_id, tenant_id, owner_id, title) VALUES "
+                        "('ses_before_mode', 'tenant_before_mode', "
+                        "'user_before_mode', NULL)"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    async def inspect_upgraded_session() -> tuple[str, str, bool, bool]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.connect() as connection:
+                mode = (
+                    await connection.execute(
+                        text(
+                            "SELECT mode FROM conversation_sessions "
+                            "WHERE session_id = 'ses_before_mode'"
+                        )
+                    )
+                ).scalar_one()
+                nullable = (
+                    await connection.execute(
+                        text(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_schema = current_schema() "
+                            "AND table_name = 'conversation_sessions' "
+                            "AND column_name = 'mode'"
+                        )
+                    )
+                ).scalar_one()
+                return (
+                    str(mode),
+                    str(nullable),
+                    await _mode_is_storable(connection, "code"),
+                    await _mode_is_storable(connection, "shell"),
+                )
+        finally:
+            await engine.dispose()
+
+    async def remove_fixtures() -> None:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "DELETE FROM conversation_sessions "
+                        "WHERE session_id LIKE 'ses_%_mode'"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    try:
+        asyncio.run(seed_legacy_session())
+        command.upgrade(config, "head")
+        observed = asyncio.run(inspect_upgraded_session())
+    finally:
+        command.upgrade(config, "head")
+        asyncio.run(remove_fixtures())
+
+    assert observed == ("chat", "NO", True, False)
+
+
+async def _mode_is_storable(connection: AsyncConnection, mode: str) -> bool:
+    """Whether the CHECK admits this mode, without poisoning the transaction."""
+
+    # The savepoint is what makes the rejected insert survivable: a violated
+    # CHECK aborts the whole transaction, so a second probe on the same
+    # connection would fail for a reason that has nothing to do with its mode.
+    try:
+        async with connection.begin_nested():
+            await connection.execute(
+                text(
+                    "INSERT INTO conversation_sessions "
+                    "(session_id, tenant_id, owner_id, mode) VALUES "
+                    "(:session_id, 'tenant_before_mode', 'user_before_mode', :mode)"
+                ),
+                {"session_id": f"ses_{mode}_mode", "mode": mode},
+            )
+    except IntegrityError:
+        return False
+    return True
+
+
+def test_a_session_that_predates_the_pointer_is_at_no_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NULL, and the compare-and-set can still move it from there.
+
+    The second half is what needs the database. "No version yet" is the state
+    every session's first write compares against, and for a row that predates
+    the column it is a state the migration created rather than the store. A
+    schema whose default made that row unaddressable -- or a comparison that
+    could not name it -- would leave every session that existed before this
+    migration unable to write its first file, and nothing in the store's own
+    tests would notice, because they create every session they use.
+    """
+
+    dsn = _dsn()
+    monkeypatch.setenv(MIGRATION_DSN_ENV_VAR, dsn)
+    config = _config()
+    command.upgrade(config, "head")
+    command.downgrade(config, "0026_session_mode")
+
+    async def seed_legacy_session() -> None:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO conversation_sessions "
+                        "(session_id, tenant_id, owner_id, mode) VALUES "
+                        "('ses_before_pointer', 'tenant_before_pointer', "
+                        "'user_before_pointer', 'chat')"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    async def inspect_upgraded_session() -> tuple[str | None, str, str | None]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.connect() as connection:
+                before = (
+                    await connection.execute(
+                        text(
+                            "SELECT workspace_version FROM conversation_sessions "
+                            "WHERE session_id = 'ses_before_pointer'"
+                        )
+                    )
+                ).scalar_one()
+                nullable = (
+                    await connection.execute(
+                        text(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_schema = current_schema() "
+                            "AND table_name = 'conversation_sessions' "
+                            "AND column_name = 'workspace_version'"
+                        )
+                    )
+                ).scalar_one()
+
+            # The real store, against the row the migration produced.
+            store = PostgresConversationStore(engine)
+            await store.advance_workspace_version(
+                session_id="ses_before_pointer",
+                tenant_id="tenant_before_pointer",
+                principal_id="user_before_pointer",
+                expected=None,
+                next_version="art_first_write",
+            )
+            session = await store.session(
+                session_id="ses_before_pointer",
+                tenant_id="tenant_before_pointer",
+                principal_id="user_before_pointer",
+            )
+            return (before, str(nullable), session.workspace_version)
+        finally:
+            await engine.dispose()
+
+    async def remove_fixtures() -> None:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "DELETE FROM conversation_sessions "
+                        "WHERE session_id = 'ses_before_pointer'"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    try:
+        asyncio.run(seed_legacy_session())
+        command.upgrade(config, "head")
+        observed = asyncio.run(inspect_upgraded_session())
+    finally:
+        command.upgrade(config, "head")
+        asyncio.run(remove_fixtures())
+
+    assert observed == (None, "YES", "art_first_write")
 
 
 def test_migrations_refuse_to_run_without_a_dsn(

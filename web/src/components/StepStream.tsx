@@ -1,7 +1,12 @@
 import { ChevronRight } from "lucide-react";
 import type { ArtifactRef, EventEnvelope } from "../api/types";
 import { StepDisclosure } from "./StepDisclosure";
-import { groupSteps, type StepGroup, type StepOutcome } from "./stepGroups";
+import {
+  groupSteps,
+  summariseGroups,
+  type StepGroup,
+  type StepOutcome,
+} from "./stepGroups";
 
 /**
  * A run, as the stages it went through, each openable to its real steps.
@@ -120,7 +125,9 @@ export function StepStream({
     );
   };
 
-  const groupsOf = (events: EventEnvelope[]) => groupSteps(events);
+  // The same vocabulary the rows use, so a digest cannot read half-translated:
+  // without this a stage summarised as "RunStarted · 模型作答 · RunCompleted".
+  const groupsOf = (events: EventEnvelope[]) => groupSteps(events, eventTitle);
 
   return (
     <section className="aw-stream" aria-label={ariaLabel}>
@@ -150,10 +157,13 @@ export function StepStream({
                     size={13}
                   />
                   <span className="aw-stream-title">{stage.title}</span>
-                  {/* The steps a reader would count, not the events they were
-                      folded from. "60 步" for a dozen page reads described the
-                      log's bookkeeping rather than the work. */}
-                  <span className="aw-stream-count">{groups.length} 步</span>
+                  {/* What it did, not how much of it. A collapsed stage is the
+                      only thing on screen until somebody clicks, and "16 步"
+                      spends that line on a quantity -- the count is still there
+                      inside the digest, as the ×N on each kind. */}
+                  <span className="aw-stream-count" title={`${groups.length} 步`}>
+                    {summariseGroups(groups)}
+                  </span>
                   <span className="aw-stream-note">{stage.note}</span>
                 </summary>
                 <ol className="aw-stream-events">{groups.map(groupStep)}</ol>

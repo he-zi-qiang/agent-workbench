@@ -22,7 +22,8 @@ from contextlib import contextmanager
 from agent_workbench.adapters.memory import InMemoryArtifactStore
 from agent_workbench.adapters.tools.mcp_workspace import bind_results_into_workspace
 from agent_workbench.adapters.tools.workspace import WorkspaceListTool
-from agent_workbench.application.workspace import TaskWorkspace, WorkspaceSession
+from agent_workbench.application.workspace import Workspace, WorkspaceSession
+from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.policies import (
     AuthorizationEnvelope,
     ExecutionContext,
@@ -31,7 +32,6 @@ from agent_workbench.domain.policies import (
 from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
-from agent_workbench.workflows.workspace_scope import WorkspaceScope
 
 TENANT = "tenant_local"
 OWNER = "user_local"
@@ -58,9 +58,7 @@ def entered() -> Generator[tuple[WorkspaceScope, InMemoryArtifactStore]]:
     artifacts = InMemoryArtifactStore()
     scope = WorkspaceScope()
     session = WorkspaceSession(
-        workspace=TaskWorkspace(
-            artifacts=artifacts, tenant_id=TENANT, principal_id=OWNER
-        )
+        workspace=Workspace(artifacts=artifacts, tenant_id=TENANT, principal_id=OWNER)
     )
     with scope.using(session):
         yield scope, artifacts

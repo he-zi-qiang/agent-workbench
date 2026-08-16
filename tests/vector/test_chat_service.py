@@ -45,7 +45,7 @@ from agent_workbench.application.chat_execution import (
 from agent_workbench.application.chunking import Chunker
 from agent_workbench.application.ingestion import IngestionRequest, IngestionService
 from agent_workbench.application.retrieval import RetrievalService
-from agent_workbench.apps.api.routes.events import _frame
+from agent_workbench.apps.api.sse import frame_for
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import RunBudget, TokenUsage
@@ -453,7 +453,7 @@ def test_the_withheld_answer_does_not_enter_the_event_log_or_sse() -> None:
         await service.ask(request, sink)
         events = await harness.log.read(sink.scope.stream_id)
         frames = "".join(
-            _frame(event, sink.scope.stream_id, event.sequence)
+            frame_for(event, sink.scope.stream_id, event.sequence)
             for event in events
             if event.sequence is not None
         )

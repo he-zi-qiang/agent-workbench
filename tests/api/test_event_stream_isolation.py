@@ -36,12 +36,12 @@ from agent_workbench.adapters.persistence import (
     create_query_engine,
 )
 from agent_workbench.adapters.persistence.models import events as events_table
-from agent_workbench.apps.api.routes.events import (
+from agent_workbench.apps.api.sse import (
     HEARTBEAT,
     QUARANTINE_EVENT,
     IsolatingEventLog,
-    _frame,
-    _stream,
+    frame_for,
+    stream_events,
 )
 from agent_workbench.domain.events import RunCompleted, RunStarted, ToolStarted
 from agent_workbench.domain.runs import RunBudget
@@ -139,7 +139,7 @@ async def _collect(
     """
 
     out: list[str] = []
-    generator = _stream(
+    generator = stream_events(
         log,
         stream_id=stream_id,
         after_sequence=after,
@@ -257,7 +257,7 @@ def test_a_clean_stream_is_byte_identical_to_the_strict_replay() -> None:
         frames = await _collect(log, scope.stream_id, frames=3)
         strict = await log.read(scope.stream_id)
         expected = "".join(
-            _frame(envelope, scope.stream_id, envelope.sequence)
+            frame_for(envelope, scope.stream_id, envelope.sequence)
             for envelope in strict
             if envelope.sequence is not None
         )

@@ -26,7 +26,7 @@ from agent_workbench.adapters.persistence.models import (
 )
 from agent_workbench.adapters.persistence.models import messages as messages_table
 from agent_workbench.domain.errors import NotFoundError
-from agent_workbench.domain.identifiers import new_id, new_message_id
+from agent_workbench.domain.identifiers import Identifier, new_id, new_message_id
 from agent_workbench.domain.messages import Message, assistant_message
 from agent_workbench.domain.runs import AgentOutcome, stale_execution_outcome
 from agent_workbench.ports.conversation_store import (
@@ -37,8 +37,10 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnResult,
     ConversationSession,
     PendingChatRelease,
+    SessionMode,
     StoredChatTurn,
     StoredMessage,
+    WorkspacePointerConflictError,
 )
 
 
@@ -57,16 +59,39 @@ class PostgresConversationStore:
         tenant_id: str,
         owner_id: str,
         title: str | None = None,
+        mode: SessionMode = "chat",
     ) -> ConversationSession:
         async with self._engine.begin() as connection:
             try:
-                await connection.execute(
-                    insert(conversation_sessions).values(
-                        session_id=session_id,
-                        tenant_id=tenant_id,
-                        owner_id=owner_id,
-                        title=title,
+                # `returning` rather than rebuilding the model from the
+                # arguments: `last_activity_at` is filled by the column default,
+                # so a hand-built object would come back without it while the
+                # in-memory store's came back with it -- two adapters answering
+                # differently on the field the session list orders by.
+                row = (
+                    (
+                        await connection.execute(
+                            insert(conversation_sessions)
+                            .values(
+                                session_id=session_id,
+                                tenant_id=tenant_id,
+                                owner_id=owner_id,
+                                title=title,
+                                mode=mode,
+                            )
+                            .returning(
+                                conversation_sessions.c.session_id,
+                                conversation_sessions.c.tenant_id,
+                                conversation_sessions.c.owner_id,
+                                conversation_sessions.c.title,
+                                conversation_sessions.c.mode,
+                                conversation_sessions.c.workspace_version,
+                                conversation_sessions.c.last_activity_at,
+                            )
+                        )
                     )
+                    .mappings()
+                    .one()
                 )
             except IntegrityError as exc:
                 # A reused id is a caller mistake, not a race to retry: the
@@ -74,12 +99,7 @@ class PostgresConversationStore:
                 # conversation.
                 raise ValueError(f"session {session_id} already exists") from exc
 
-        return ConversationSession(
-            session_id=session_id,
-            tenant_id=tenant_id,
-            owner_id=owner_id,
-            title=title,
-        )
+        return ConversationSession.model_validate(dict(row))
 
     async def append(
         self,
@@ -106,13 +126,198 @@ class PostgresConversationStore:
         tenant_id: str,
         principal_id: str,
         limit: int | None = None,
+        mode: SessionMode | None = None,
     ) -> tuple[StoredMessage, ...]:
         if limit is not None and limit < 1:
             raise ValueError("limit must be positive")
 
         async with self._engine.connect() as connection:
-            await self._require_session(connection, session_id, tenant_id, principal_id)
+            await self._require_session(
+                connection,
+                session_id,
+                tenant_id,
+                principal_id,
+                mode=mode,
+            )
             return await self._history(connection, session_id=session_id, limit=limit)
+
+    async def session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        async with self._engine.connect() as connection:
+            query = (
+                select(
+                    conversation_sessions.c.session_id,
+                    conversation_sessions.c.tenant_id,
+                    conversation_sessions.c.owner_id,
+                    conversation_sessions.c.title,
+                    conversation_sessions.c.mode,
+                    conversation_sessions.c.workspace_version,
+                    conversation_sessions.c.last_activity_at,
+                )
+                .where(conversation_sessions.c.session_id == session_id)
+                .where(conversation_sessions.c.tenant_id == tenant_id)
+                .where(conversation_sessions.c.owner_id == principal_id)
+            )
+            if mode is not None:
+                query = query.where(conversation_sessions.c.mode == mode)
+            row = (await connection.execute(query)).mappings().first()
+            if row is None:
+                raise NotFoundError("conversation session not found")
+            return ConversationSession.model_validate(dict(row))
+
+    async def list_sessions(
+        self,
+        *,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode,
+        limit: int = 50,
+    ) -> tuple[ConversationSession, ...]:
+        async with self._engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    select(
+                        conversation_sessions.c.session_id,
+                        conversation_sessions.c.tenant_id,
+                        conversation_sessions.c.owner_id,
+                        conversation_sessions.c.title,
+                        conversation_sessions.c.mode,
+                        conversation_sessions.c.workspace_version,
+                        conversation_sessions.c.last_activity_at,
+                    )
+                    .where(conversation_sessions.c.tenant_id == tenant_id)
+                    .where(conversation_sessions.c.owner_id == principal_id)
+                    .where(conversation_sessions.c.mode == mode)
+                    # `session_id` breaks ties so the order is total. Without it
+                    # two sessions stamped in the same instant come back in
+                    # whichever order the plan produced, which makes a test that
+                    # asserts an order flaky rather than wrong.
+                    .order_by(
+                        conversation_sessions.c.last_activity_at.desc(),
+                        conversation_sessions.c.session_id.desc(),
+                    )
+                    .limit(limit)
+                )
+            ).mappings()
+        return tuple(ConversationSession.model_validate(dict(row)) for row in rows)
+
+    async def set_title_if_unset(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> None:
+        async with self._engine.begin() as connection:
+            statement = (
+                update(conversation_sessions)
+                .where(conversation_sessions.c.session_id == session_id)
+                .where(conversation_sessions.c.tenant_id == tenant_id)
+                .where(conversation_sessions.c.owner_id == principal_id)
+                # The arbiter. A read-then-write would race a concurrent first
+                # turn and would re-apply on a retry; this makes
+                # first-instruction-wins true rather than likely.
+                .where(conversation_sessions.c.title.is_(None))
+                .values(title=title)
+            )
+            if mode is not None:
+                statement = statement.where(conversation_sessions.c.mode == mode)
+            # Zero rows is the expected case from the second turn onwards, and
+            # is deliberately not an error: see the port's docstring.
+            await connection.execute(statement)
+
+    async def rename_session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        async with self._engine.begin() as connection:
+            statement = (
+                update(conversation_sessions)
+                .where(conversation_sessions.c.session_id == session_id)
+                .where(conversation_sessions.c.tenant_id == tenant_id)
+                .where(conversation_sessions.c.owner_id == principal_id)
+                .values(title=title)
+                .returning(
+                    conversation_sessions.c.session_id,
+                    conversation_sessions.c.tenant_id,
+                    conversation_sessions.c.owner_id,
+                    conversation_sessions.c.title,
+                    conversation_sessions.c.mode,
+                    conversation_sessions.c.workspace_version,
+                    conversation_sessions.c.last_activity_at,
+                )
+            )
+            if mode is not None:
+                statement = statement.where(conversation_sessions.c.mode == mode)
+            row = (await connection.execute(statement)).mappings().first()
+            if row is None:
+                raise NotFoundError("conversation session not found")
+            return ConversationSession.model_validate(dict(row))
+
+    async def advance_workspace_version(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        expected: Identifier | None,
+        next_version: Identifier,
+    ) -> None:
+        async with self._engine.begin() as connection:
+            # The comparison is a predicate of the UPDATE, not a check made
+            # before one. Reading the pointer and then writing it would leave a
+            # window exactly as wide as the round trip, which is the window
+            # this method exists to close.
+            #
+            # Spelled IS NOT DISTINCT FROM rather than ``==``. The two are the
+            # same here -- SQLAlchemy renders ``== None`` as IS NULL, so
+            # equality would not break the first write of a session the way raw
+            # ``= NULL`` would. It is written out because this predicate has to
+            # keep meaning "the same version, NULL included" no matter how the
+            # value arrives: bound later, or through a construction that does
+            # not have a literal None to rewrite.
+            updated = await connection.execute(
+                update(conversation_sessions)
+                .where(conversation_sessions.c.session_id == session_id)
+                .where(conversation_sessions.c.tenant_id == tenant_id)
+                .where(conversation_sessions.c.owner_id == principal_id)
+                .where(
+                    conversation_sessions.c.workspace_version.is_not_distinct_from(
+                        expected
+                    )
+                )
+                .values(workspace_version=next_version)
+            )
+            if updated.rowcount == 1:
+                return
+
+            # Zero rows is two different facts and they get two different
+            # answers: a session this caller may not address is missing, and a
+            # session whose pointer moved is a conflict. Telling them apart
+            # needs a second look, but only on the failing path -- and it is a
+            # look at a row this caller has already proven it may read.
+            await self._require_session(
+                connection,
+                session_id,
+                tenant_id,
+                principal_id,
+            )
+            raise WorkspacePointerConflictError(
+                "workspace pointer moved since this version was read"
+            )
 
     async def claim_turn(
         self,
@@ -139,6 +344,7 @@ class PostgresConversationStore:
                     session_id,
                     tenant_id,
                     principal_id,
+                    mode="chat",
                 )
                 existing = await self._turn_for_key(
                     connection,
@@ -550,6 +756,19 @@ class PostgresConversationStore:
                 for record in stored
             ],
         )
+        # Inside the caller's transaction, which already holds this session's
+        # row lock on every path that reaches here (`_locked_session`). One more
+        # UPDATE, no additional lock.
+        #
+        # Here rather than in `append`, because this is the seam every message
+        # write passes through -- `append`, `claim_turn`, `mark_released` -- so
+        # the list reorders on somebody actually saying something rather than on
+        # which public method a route happened to call.
+        await connection.execute(
+            update(conversation_sessions)
+            .where(conversation_sessions.c.session_id == session_id)
+            .values(last_activity_at=func.now())
+        )
         return stored
 
     async def _history(
@@ -742,16 +961,23 @@ class PostgresConversationStore:
         session_id: str,
         tenant_id: str,
         principal_id: str,
+        *,
+        mode: SessionMode | None = None,
     ) -> None:
         """Authenticate and lock the session, serialising all its mutations."""
 
-        result = await connection.execute(
+        query = (
             select(conversation_sessions.c.session_id)
             .where(conversation_sessions.c.session_id == session_id)
             .where(conversation_sessions.c.tenant_id == tenant_id)
             .where(conversation_sessions.c.owner_id == principal_id)
-            .with_for_update()
         )
+        if mode is not None:
+            # Same WHERE clause, not a check on the fetched row: an ungrantable
+            # session must stay unfetchable, so no later edit can begin locking
+            # -- and thereby reporting on -- a session this caller cannot drive.
+            query = query.where(conversation_sessions.c.mode == mode)
+        result = await connection.execute(query.with_for_update())
         if result.first() is None:
             raise NotFoundError("conversation session not found")
 
@@ -761,16 +987,25 @@ class PostgresConversationStore:
         session_id: str,
         tenant_id: str,
         principal_id: str,
+        *,
+        mode: SessionMode | None = None,
     ) -> None:
-        result = await connection.execute(
+        query = (
             select(conversation_sessions.c.session_id)
             .where(conversation_sessions.c.session_id == session_id)
             .where(conversation_sessions.c.tenant_id == tenant_id)
             .where(conversation_sessions.c.owner_id == principal_id)
         )
+        if mode is not None:
+            # A predicate in the same WHERE clause, not a check on the row that
+            # came back: the row must stay unfetchable, so that no future edit
+            # can start reporting on a session this caller may not address.
+            query = query.where(conversation_sessions.c.mode == mode)
+        result = await connection.execute(query)
         if result.first() is None:
-            # A wrong tenant, principal and missing id intentionally answer the
-            # same way; distinguishing them confirms another session exists.
+            # A wrong tenant, principal, mode and missing id intentionally
+            # answer the same way; distinguishing them confirms another session
+            # exists.
             raise NotFoundError("conversation session not found")
 
     async def _next_sequence(

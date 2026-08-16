@@ -3,6 +3,7 @@ import type { ParsedChunk, SseFrame } from "./sse";
 import {
   QUARANTINE_EVENT,
   isEventEnvelope,
+  isDegradedFrame,
   isQuarantineFrame,
   isQuarantineNotice,
   parseSseChunk,
@@ -116,7 +117,11 @@ describe("quarantine frames", () => {
         `id: session_1:3\nevent: AnswerCommitted\ndata: ${JSON.stringify(after)}\n\n`,
     );
 
-    expect(parsed.frames.map((frame) => (isQuarantineFrame(frame) ? "skipped" : frame.envelope.event_id))).toEqual([
+    expect(
+      parsed.frames.map((frame) =>
+        isQuarantineFrame(frame) || isDegradedFrame(frame) ? "skipped" : frame.envelope.event_id,
+      ),
+    ).toEqual([
       "evt_1",
       "skipped",
       "evt_3",
@@ -160,9 +165,12 @@ describe("isQuarantineNotice", () => {
 /** The chunk's first frame, insisting it carried an envelope. */
 function eventFrame(parsed: ParsedChunk): SseFrame {
   const frame = parsed.frames[0];
-  if (frame === undefined || isQuarantineFrame(frame)) {
+  if (frame === undefined || isQuarantineFrame(frame) || isDegradedFrame(frame)) {
     throw new Error("expected an event frame");
   }
+  // Durable is what this helper is for; a live frame has no id and belongs to
+  // the transient assertions, which narrow it themselves.
+  if (frame.id === null) throw new Error("expected a durable event frame");
   return frame;
 }
 

@@ -1,18 +1,25 @@
 import type {
-  ApprovalListResponse,
-  ApprovalStatus,
+  ApprovalDecision,
   ApprovalView,
   ArtifactDownloadTarget,
   AskResponse,
+  CodeAskResponse,
+  CodeSessionListResponse,
+  CodeSessionView,
   CreateSessionResponse,
   CreateUploadResponse,
   DocumentPreview,
   DocumentVersion,
+  EvaluationCurrentRunResponse,
+  EvaluationReportsResponse,
+  EvaluationRunView,
+  EvaluationSuite,
   HealthResponse,
   HistoryResponse,
   KnowledgeBaseListResponse,
   KnowledgeBaseView,
   KnowledgeDocumentListResponse,
+  PendingApprovalsResponse,
   PrincipalIdentity,
   SearchResponse,
   TaskGraphChoice,
@@ -23,6 +30,7 @@ import type {
   TaskView,
   TriageResponse,
   UploadContentResponse,
+  WorkspaceResponse,
 } from "./types";
 
 const WORD_DOCUMENT_MEDIA_TYPE =
@@ -41,7 +49,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PUT";
+  method?: "GET" | "POST" | "PUT" | "PATCH";
   body?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -145,6 +153,78 @@ export async function askChat(
     },
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+export async function createCodeSession(
+  identity: PrincipalIdentity,
+  title?: string,
+): Promise<CreateSessionResponse> {
+  return apiRequest(identity, "/v1/code/sessions", {
+    method: "POST",
+    body: { title: title || null },
+  });
+}
+
+export async function getCodeHistory(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<HistoryResponse> {
+  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function askCode(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  instruction: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<CodeAskResponse> {
+  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: { instruction },
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function getCodeWorkspace(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceResponse> {
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/workspace`,
+    { ...(signal === undefined ? {} : { signal }) },
+  );
+}
+
+export async function getCodeApprovals(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<PendingApprovalsResponse> {
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/approvals`,
+    { ...(signal === undefined ? {} : { signal }) },
+  );
+}
+
+export async function decideCodeApproval(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  approvalId: string,
+  decision: ApprovalDecision,
+): Promise<void> {
+  await apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
+    { method: "POST", body: { decision } },
+  );
 }
 
 export async function listKnowledgeBases(
@@ -302,16 +382,6 @@ export async function getTaskTimeline(
     identity,
     `/v1/tasks/${encodeURIComponent(taskId)}/timeline?${params.toString()}`,
   );
-}
-
-export async function listApprovals(
-  identity: PrincipalIdentity,
-  options: { statuses?: ApprovalStatus[]; cursor?: string; limit?: number } = {},
-): Promise<ApprovalListResponse> {
-  const params = new URLSearchParams({ limit: String(options.limit ?? 25) });
-  options.statuses?.forEach((status) => params.append("status", status));
-  if (options.cursor) params.set("cursor", options.cursor);
-  return apiRequest(identity, `/v1/approvals?${params.toString()}`);
 }
 
 export async function getApproval(
@@ -511,14 +581,27 @@ export async function downloadArtifact(
     headers: identityHeaders(identity),
   });
   if (!response.ok) throw await parseError(response);
-  const blob = await response.blob();
+  saveBlob(
+    await response.blob(),
+    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
+      (typeof target === "string" ? null : safeDownloadFilename(target.filename)) ??
+      defaultArtifactFilename(response.headers.get("content-type")),
+  );
+}
+
+/**
+ * Hand a blob to the browser as a file to keep.
+ *
+ * One copy of the anchor dance, because there are now two callers and the part
+ * that is easy to get subtly wrong is the same in both: the object URL has to
+ * be revoked, and forgetting it leaks the whole file for as long as the tab
+ * lives -- which for a workspace of generated documents is not a rounding error.
+ */
+function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download =
-    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
-    (typeof target === "string" ? null : safeDownloadFilename(target.filename)) ??
-    defaultArtifactFilename(response.headers.get("content-type"));
+  anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -736,3 +819,117 @@ export async function getArtifactJson<T>(
 }
 
 export { identityHeaders };
+
+/**
+ * One file out of a coding session's working set.
+ *
+ * Addressed by session and name rather than by artifact id, because that is the
+ * only address a client has: the listing withholds the id on purpose, so that
+ * nothing in a browser can name a version the session has already moved past.
+ */
+export async function downloadCodeWorkspaceFile(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  name: string,
+): Promise<void> {
+  const response = await fetchCodeWorkspaceFile(identity, sessionId, name);
+  saveBlob(
+    await response.blob(),
+    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
+      safeDownloadFilename(name) ??
+      defaultArtifactFilename(response.headers.get("content-type")),
+  );
+}
+
+/**
+ * The same file, as text to show rather than as a file to keep.
+ *
+ * Capped at the same size the artifact preview is capped at, and truncated
+ * rather than refused: a reader looking at the head of a large generated file
+ * is better served than one told the file is too big to look at.
+ */
+export async function getCodeWorkspaceFileText(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  name: string,
+): Promise<{ text: string; truncated: boolean }> {
+  const blob = await (await fetchCodeWorkspaceFile(identity, sessionId, name)).blob();
+  if (blob.size > MAX_PREVIEW_BYTES) {
+    return { text: await blob.slice(0, MAX_PREVIEW_BYTES).text(), truncated: true };
+  }
+  return { text: await blob.text(), truncated: false };
+}
+
+function fetchCodeWorkspaceFile(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  name: string,
+): Promise<Response> {
+  // Each segment encoded separately. A workspace name cannot contain a slash --
+  // the server's own type forbids it -- so encoding the whole tail as one piece
+  // would only differ for names that are already impossible, while leaving a
+  // reader unsure which rule is doing the work.
+  return fetch(
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(name)}`,
+    { headers: identityHeaders(identity) },
+  ).then(async (response) => {
+    if (!response.ok) throw await parseError(response);
+    return response;
+  });
+}
+
+export async function listCodeSessions(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<CodeSessionListResponse> {
+  return apiRequest(identity, "/v1/code/sessions", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function renameCodeSession(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  title: string,
+): Promise<CodeSessionView> {
+  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    body: { title },
+  });
+}
+
+export async function getEvaluationReports(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<EvaluationReportsResponse> {
+  return apiRequest(identity, "/v1/evaluation/reports", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function getEvaluationRun(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<EvaluationCurrentRunResponse> {
+  return apiRequest(identity, "/v1/evaluation/runs/current", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function startEvaluationRun(
+  identity: PrincipalIdentity,
+  suite: EvaluationSuite,
+): Promise<EvaluationRunView> {
+  return apiRequest(identity, "/v1/evaluation/runs", {
+    method: "POST",
+    body: { suite },
+  });
+}
+
+export async function cancelEvaluationRun(
+  identity: PrincipalIdentity,
+): Promise<void> {
+  await apiRequest(identity, "/v1/evaluation/runs/current/cancel", {
+    method: "POST",
+  });
+}

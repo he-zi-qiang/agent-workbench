@@ -2,7 +2,7 @@ import { askChat, getChatHistory } from "../../api/client";
 import type { AskResponse, LocalChatSession, PrincipalIdentity } from "../../api/types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatRuntime } from "./runtime";
-import { streamChatSession } from "./sessionStream";
+import { streamSession } from "../../api/sessionStream";
 
 vi.mock("../../api/client", () => ({
   ApiError: class MockApiError extends Error {
@@ -14,8 +14,8 @@ vi.mock("../../api/client", () => ({
   newIdempotencyKey: vi.fn(() => "chat:generated-key"),
 }));
 
-vi.mock("./sessionStream", () => ({
-  streamChatSession: vi.fn(),
+vi.mock("../../api/sessionStream", () => ({
+  streamSession: vi.fn(),
 }));
 
 const IDENTITY: PrincipalIdentity = {
@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
   vi.mocked(getChatHistory).mockResolvedValue({ messages: [] });
-  vi.mocked(streamChatSession).mockResolvedValue();
+  vi.mocked(streamSession).mockResolvedValue();
 });
 
 describe("Chat runtime request ownership", () => {
@@ -59,7 +59,7 @@ describe("Chat runtime request ownership", () => {
     );
 
     let streamSignal: AbortSignal | undefined;
-    vi.mocked(streamChatSession).mockImplementation((options) => {
+    vi.mocked(streamSession).mockImplementation((options) => {
       streamSignal = options.signal;
       return new Promise<void>((resolve) => {
         options.signal.addEventListener("abort", () => resolve(), { once: true });

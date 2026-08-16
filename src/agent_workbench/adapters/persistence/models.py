@@ -60,14 +60,63 @@ conversation_sessions = Table(
     Column("tenant_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
     Column("title", String(256), nullable=True),
+    # Which API may drive this session. Chat and Code share this table because
+    # they share an identity -- one principal, one tenant, one ordered history
+    # -- but they do not share a lifecycle: Chat publishes answers through
+    # ``chat_turns``, and Code writes no turn row at all. A session that could
+    # be driven by either API would be a session whose lifecycle depends on
+    # which URL last touched it.
+    #
+    # The default is 'chat' rather than absent because every row that existed
+    # before this column was a chat session, and a nullable mode would push the
+    # question "what is a session with no mode allowed to do" into every reader.
+    Column(
+        "mode",
+        String(16),
+        nullable=False,
+        server_default=text("'chat'"),
+    ),
+    # The manifest id this session's working set is at. Nullable, and NULL is
+    # not "unknown": it is the session that has written nothing yet, which is
+    # where every session starts and a state every writer must be able to name.
+    #
+    # No foreign key. The value is an artifact id in a store this database does
+    # not own, and a constraint that can only be enforced somewhere else is a
+    # claim, not a constraint.
+    Column("workspace_version", String(IDENTIFIER_LENGTH), nullable=True),
     Column(
         "created_at",
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
     ),
+    # When somebody last said something here. Separate from ``created_at``
+    # because a list ordered by creation puts a session untouched for a month
+    # above the one you were in five minutes ago -- the wrong way round for a
+    # list whose only job is getting you back to where you were.
+    #
+    # NOT NULL with a default rather than nullable: a nullable column would need
+    # COALESCE in the ordering, and a COALESCE'd expression cannot use the index
+    # below.
+    Column(
+        "last_activity_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
     # Every query carries the tenant, so the tenant leads the index.
     Index("ix_conversation_sessions_tenant_id_session_id", "tenant_id", "session_id"),
+    # The list query's exact shape: one owner's sessions, newest activity first.
+    Index(
+        "ix_conversation_sessions_tenant_owner_activity",
+        "tenant_id",
+        "owner_id",
+        text("last_activity_at DESC"),
+    ),
+    CheckConstraint(
+        "mode IN ('chat', 'code')",
+        name="conversation_sessions_mode",
+    ),
 )
 
 messages = Table(

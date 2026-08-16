@@ -6,39 +6,55 @@
 工作台的克制与连续性，信息上保留工程项目最有价值的部分：真实运行状态、协议边界、
 恢复语义、权限事实与“尚未实现”的能力。
 
-全局只有两条一级工作流：
+全局只有两个一级入口：
 
-- **Chat**：多轮对话、知识库问答、durable SSE 执行记录与安全引用；
-- **Work**：长任务提交、LangGraph 时间线、HITL 审批、取消与最终产物。
+- **工作台**：一页两标签。**对话**是多轮问答、知识库检索、durable SSE 执行记录与安全
+  引用；**任务**是长任务提交、LangGraph 时间线、HITL 审批、取消与最终产物。两者的
+  URL 没有变（`/chat/:sessionId`、`/work/:taskId`），合并的是外壳不是组件——标签条是
+  一个无路径 layout 路由，两个页面的内部一行未动。
+- **Code**：编码会话、工作区文件与实时步骤。
 
-Knowledge、Approvals、Evaluation、System 是证据与操作辅助页，不与两条主流程争夺视觉
-层级。
+Knowledge、Evaluation、System 是证据与操作辅助页，不与主流程争夺视觉层级。
+Approvals 那一页已随 ADR-048 移除：导出审批仍然可以回答，位置是等待中的那个 Task
+的详情，而不是一份跨任务的收件箱。
 
 ## 2. 信息架构
 
 ```text
 全局窄导航
-├── Chat
-│   ├── 本机会话入口（服务端暂无线索引 API）
-│   ├── 对话正文
-│   ├── durable execution activity
-│   └── Citation / withheld 发布边界
-├── Work
-│   ├── Task 列表与提交
-│   ├── TaskInput artifact
-│   ├── 节点时间线与未知事件
-│   ├── Approval 权威记录
-│   └── 严格关联的 export_artifact 报告
+├── 工作台（标签：对话 ｜ 任务）
+│   ├── 对话
+│   │   ├── 本机会话入口（Chat 侧服务端仍无列表 API，见 §3）
+│   │   ├── 对话正文
+│   │   ├── durable execution activity
+│   │   └── Citation / withheld 发布边界
+│   └── 任务
+│       ├── Task 列表与提交
+│       ├── TaskInput artifact
+│       ├── 节点时间线与未知事件
+│       ├── Approval 权威记录（就在等待的那个 Task 里）
+│       └── 严格关联的 export_artifact 报告
+├── Code
+│   ├── 服务端会话列表，名字来自第一句指令（ADR-047）
+│   ├── 工作区文件：点开看正文，或下载
+│   └── 本轮步骤（持久事件，延迟下限是一个轮询周期）
 ├── Knowledge
 │   ├── declare → raw PUT → complete
 │   └── /v1/search 检索检查
-├── Approvals
 ├── Evaluation
 └── System / 本地身份
 ```
 
+标签条是链接加 `aria-current`，不是 ARIA tabs：它切的是路由，中键、复制链接、
+浏览器前进后退和读屏软件的链接列表都必须成立。`.aw-segmented` 保持原样不动——
+那是同一个视图内容上的单选组（状态筛选、预览模式），是控件不是导航。
+
 桌面端采用窄全局 rail + 业务上下文栏 + 主内容的结构；移动端改为底部一级导航，Chat
 会话横向滚动，Work 将提交表单与任务列表压缩为上半区，详情保留独立滚动。
+
+切换标签会卸载另一半，因此 Chat 的 SSE 连接会断开——和今天任何一次导航一样。想把
+`useChatRuntime` 提到 layout 里"修"这件事的人请先读 `WorkbenchLayout.tsx` 的注释：
+那会让 layout 拥有 chat 状态，把这次刻意避开的组件合并重新造出来。
 
 ## 3. 不能伪造的前端语义
 
@@ -55,7 +71,9 @@ Knowledge、Approvals、Evaluation、System 是证据与操作辅助页，不与
 - HTTP 与 SSE 可任意先后到达；run orphan buffer、event id 去重和幂等终态归并必须同时
   成立。
 - 离开页面不能取消 Ask HTTP，因为服务端把客户端断开解释为取消真实工作。
-- 后端没有 Session list/title projection；侧栏必须标“本地列表”。
+- **Chat** 后端仍没有 Session list/title projection，侧栏必须标“本地列表”。Code
+  已经不是这样了（ADR-047）：它的列表来自 `GET /v1/code/sessions`，名字来自第一句
+  指令。两者的差别是真的，不要把这句话当成整个控制台的事实。
 
 ### Work
 
@@ -95,8 +113,8 @@ web/src/
 ├── features/
 │   ├── chat/        # 独立状态机、runtime、cursor store、session stream
 │   ├── work/        # timeline reducer/hook 与 Task 页面
+│   ├── code/        # 会话、工作区文件查看器、步骤流
 │   ├── knowledge/
-│   ├── approvals/
 │   ├── evaluation/
 │   └── system/
 └── styles/          # token 与响应式样式

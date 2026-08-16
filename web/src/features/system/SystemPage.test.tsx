@@ -40,7 +40,14 @@ describe("SystemPage", () => {
     expect(
       screen.getByText(/数据库已就绪不代表模型、Qdrant、Task Worker/),
     ).toHaveTextContent("现有公开接口无法验证这些状态");
-    expect(container.querySelector("details")).not.toHaveAttribute("open");
+    // The fold is gone. It held two sections that both restated something
+    // already on the page -- the identity block duplicates the dialog the
+    // button below opens, and "why are some states unknown" restated the
+    // warning directly above it in three bullets.
+    expect(container.querySelector("details")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "编辑本地身份" }),
+    ).toBeInTheDocument();
   });
 });
 

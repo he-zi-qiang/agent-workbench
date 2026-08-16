@@ -12,7 +12,7 @@ environment = "development"
 deployment_scope = "local"
 log_level = "INFO"
 debug = false
-config_schema_version = "1.14"
+config_schema_version = "1.15"
 architecture_baseline = "1.3"
 
 [api]
@@ -49,6 +49,32 @@ max_agentic_searches = 6
 # retrieval score: RRF is a rank sum and cannot say whether a hit is relevant.
 # Uncalibrated -- measure it against your own corpus before trusting it.
 routed_relevance_threshold = 0.0
+
+[code]
+# A coding session: one conversation, a workspace, and no coordination plane.
+# Off by default because it adds a surface rather than changing one.
+enabled = false
+# Frozen premises, not preferences. Code runs where the human answering an
+# approval can reach the coroutine that is waiting, and nowhere else; a second
+# locality would need a way to deliver that answer across processes, and there
+# is none. Widening either is an ADR, not a line in this file.
+execution_locality = "in_api_process"
+coordination = "none"
+# The wall clock for one turn, which becomes the run's deadline -- a code run
+# is required to carry one, because nothing else is watching it. The approval
+# allowance must stay below it, or one held call could consume the whole turn.
+turn_timeout_seconds = 600
+approval_timeout_seconds = 300
+# Independent ceilings (ADR-022): fewer tool calls than steps says "this many
+# tool calls, and a turn left over to write the report from them".
+max_steps = 60
+max_tool_calls = 120
+# How many turns this process runs at once, across all sessions. A turn holds a
+# model connection and a workspace for minutes.
+max_concurrent_turns = 4
+# Frozen false. A shell means granting `sandbox_run`, which needs a sandbox MCP
+# server this process does not start and a scope no principal holds.
+shell_enabled = false
 
 [triage]
 # Submission-time shape triage (ADR-036): one structured model call proposes
@@ -139,7 +165,13 @@ task_ready_channel = "task_ready"
 # guessed at: the value should be decided by whoever writes the SSE listener.
 stream_ready_channel = "agent_stream_ready"
 replay_page_size = 500
+# What one live subscriber may hold while it is not reading, and how many live
+# subscribers one stream may have. Transient events are never written anywhere,
+# so these two numbers are the whole bound on what the API process keeps on
+# behalf of slow readers. Four per stream is a browser tab, a reconnect that
+# has not been reaped yet, and slack.
 subscriber_buffer_events = 256
+max_live_subscribers_per_stream = 4
 catchup_poll_seconds = 10
 # Model deltas are live SSE only; durable events store structured/final content.
 model_delta_mode = "ephemeral_sse_coalesced"
@@ -211,13 +243,18 @@ control_plane = "langgraph"
 checkpointer_backend = "postgresql"
 checkpointing_enabled = true
 human_interrupt_enabled = true
-# Whether a Task's export waits for a human (ADR-031 §2.4). True here keeps the
-# shipped shape; a deployment whose Tasks produce files their own submitter
-# then downloads can set it false, and the graph routes review -> export with
-# no approval row opened. What export writes is a versioned artifact in this
-# tenant's own store, behind the same per-principal authorization as everything
-# else -- nothing reaches anyone until a human clicks download.
-export_requires_approval = true
+# Whether a Task's export waits for a human (ADR-031 §2.4, ADR-038, ADR-048).
+# False here since ADR-048: the graph routes review -> export with no approval
+# row opened, no approval_id written and no "approved" decision fabricated, and
+# the report header says "not required by this deployment".
+#
+# What export writes is a versioned artifact in this tenant's own store, behind
+# the same per-principal authorization as everything else -- nothing reaches
+# anyone until a human clicks download, and that download is its own authorized
+# read. A multi-person deployment that wants somebody other than the author to
+# look first sets this true; the decision is then answered inside the Task that
+# is waiting, which is where it has always been answerable.
+export_requires_approval = false
 interrupt_boundary = "graph_node"
 runtime_loop_owner = "custom_runtime"
 graph_version = "v1"
@@ -430,6 +467,17 @@ langfuse_enabled = false
 # "are answers judged?" with a yes the code could not honour. Setting it back to
 # `true` is now a load-time error rather than a no-op -- a flag that silently
 # enables nothing is how the claim got made in the first place.
+# Whether the console may start a run. Off by default: a run needs the
+# `embedding` extra installed and a reachable Qdrant, and neither is implied by
+# being able to serve the API. Reading the committed reports is not gated and
+# never depends on this.
+#
+# A full ablation is 30-70 minutes and cannot share a machine with much else,
+# which is why `max_concurrent_runs` is a frozen 1 in the settings rather than a
+# line here.
+runs_enabled = false
+run_timeout_seconds = 5400
+reports_root = "./evals"
 ragas_enabled = false
 ragas_offline_only = true
 online_judge_in_ci = false

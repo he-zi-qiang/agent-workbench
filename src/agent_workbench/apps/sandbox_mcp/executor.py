@@ -9,8 +9,9 @@ is explicit that the network switch is the premise rather than a hardening
 extra.
 
 The same reasoning covers the rest of :data:`ISOLATION_FLAGS` -- read-only root,
-tmpfs writable layer, non-root user, no capabilities, no privilege escalation,
-no host mounts, and ceilings on memory, CPU, processes and wall clock.
+a non-executable tmpfs writable layer, non-root user, no capabilities, no
+privilege escalation, no host mounts, and ceilings on memory, CPU, processes
+and wall clock.
 
 Nothing is mounted from the host. The payload goes in on stdin and the envelope
 comes back on stdout, which is also why :mod:`._bootstrap` is delivered as
@@ -80,7 +81,21 @@ ISOLATION_FLAGS: Final[tuple[str, ...]] = (
     # The premise. Without it nothing below matters and ADR-029 does not hold.
     "--network=none",
     "--read-only",
-    f"--tmpfs=/sandbox:rw,nosuid,nodev,mode=1777,size={TMPFS_SIZE}",
+    # `noexec` alongside the other two. **Measured: this is a no-op on Docker**,
+    # which applies noexec to every `--tmpfs` by default -- reading
+    # /proc/mounts inside the container shows it with or without this word. It
+    # is written anyway for the reason the whole tuple is a constant rather
+    # than configuration: what this module states is the guarantee, and a
+    # guarantee that is really a runtime's default is one that changes when
+    # somebody swaps the runtime. The assertion that matters is in
+    # `tests/apps/test_sandbox_isolation.py`, which runs the attempt.
+    #
+    # It costs nothing: the model's script is handed to an interpreter as an
+    # argument (`_bootstrap` runs `[sys.executable, "-I", script_path]`), so
+    # nothing in this directory is ever executed as a program. What noexec
+    # removes is the step after that -- a script that writes a binary into its
+    # own writable layer, marks it executable and runs it directly.
+    f"--tmpfs=/sandbox:rw,nosuid,nodev,noexec,mode=1777,size={TMPFS_SIZE}",
     # 65534 is `nobody` in every base image this could plausibly run on, and
     # the tmpfs above is world-writable, so the script needs no account of its
     # own to have somewhere to work.

@@ -1,7 +1,11 @@
-import { isQuarantineFrame, type SseChunkFrame } from "../../api/sse";
-import type { PrincipalIdentity } from "../../api/types";
+import {
+  isDegradedFrame,
+  isQuarantineFrame,
+  type SseChunkFrame,
+} from "./sse";
+import type { PrincipalIdentity } from "./types";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamChatSession, type FrameAcceptance } from "./sessionStream";
+import { streamSession, type FrameAcceptance } from "./sessionStream";
 
 const IDENTITY: PrincipalIdentity = {
   tenantId: "tenant_a",
@@ -24,7 +28,8 @@ describe("Chat fetch SSE", () => {
     vi.stubGlobal("fetch", fetchMock);
     const cursors: Array<{ id: string; sequence: number }> = [];
 
-    await streamChatSession({
+    await streamSession({
+      eventsPath: "/v1/chat/sessions",
       identity: IDENTITY,
       sessionId: "ses_1",
       initialCursor: { id: "cursor_4", sequence: 4 },
@@ -57,13 +62,16 @@ describe("Chat fetch SSE", () => {
     const seen: string[] = [];
     const cursors: Array<{ id: string; sequence: number }> = [];
 
-    await streamChatSession({
+    await streamSession({
+      eventsPath: "/v1/chat/sessions",
       identity: IDENTITY,
       sessionId: "ses_1",
       initialCursor: { id: "cursor_4", sequence: 4 },
       signal: controller.signal,
       onFrame: (frame) => {
-        if (!isQuarantineFrame(frame)) seen.push(frame.envelope.event_id);
+        if (!isQuarantineFrame(frame) && !isDegradedFrame(frame)) {
+          seen.push(frame.envelope.event_id);
+        }
         controller.abort();
         return "accepted";
       },
@@ -80,7 +88,8 @@ describe("Chat fetch SSE", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(responseWithFrames([sseFrame(1, "evt_1")])));
     const cursors: Array<{ id: string; sequence: number }> = [];
 
-    await streamChatSession({
+    await streamSession({
+      eventsPath: "/v1/chat/sessions",
       identity: IDENTITY,
       sessionId: "ses_1",
       initialCursor: null,
@@ -104,13 +113,16 @@ describe("Chat fetch SSE", () => {
     const cursors: Array<{ id: string; sequence: number }> = [];
     const connections: Array<{ state: string; error?: string }> = [];
 
-    await streamChatSession({
+    await streamSession({
+      eventsPath: "/v1/chat/sessions",
       identity: IDENTITY,
       sessionId: "ses_1",
       initialCursor: { id: "cursor_4", sequence: 4 },
       signal: controller.signal,
       onFrame: (frame) => {
-        if (!isQuarantineFrame(frame)) seen.push(frame.envelope.event_id);
+        if (!isQuarantineFrame(frame) && !isDegradedFrame(frame)) {
+          seen.push(frame.envelope.event_id);
+        }
         return "accepted";
       },
       onCursor: (cursor) => cursors.push(cursor),
@@ -146,7 +158,8 @@ describe("Chat fetch SSE", () => {
       ),
     );
 
-    await streamChatSession({
+    await streamSession({
+      eventsPath: "/v1/chat/sessions",
       identity: IDENTITY,
       sessionId: "ses_1",
       initialCursor: { id: "cursor_4", sequence: 4 },
@@ -172,7 +185,8 @@ describe("Chat fetch SSE", () => {
         .mockResolvedValueOnce(new Response(null, { status: 404 })),
     );
 
-    const stream = streamChatSession({
+    const stream = streamSession({
+      eventsPath: "/v1/chat/sessions",
       identity: IDENTITY,
       sessionId: "ses_1",
       initialCursor: null,
@@ -197,7 +211,8 @@ describe("Quarantined positions", () => {
     vi.stubGlobal("fetch", fetchMock);
     const trace = traceOf(controller);
 
-    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+    await streamSession({
+      eventsPath: "/v1/chat/sessions", ...trace.options, initialCursor: null, signal: controller.signal });
 
     expect(trace.seen).toEqual(["evt_1", "evt_3"]);
     // The notice moved the cursor by exactly one, so a reconnect resumes after
@@ -226,7 +241,8 @@ describe("Quarantined positions", () => {
     );
     const trace = traceOf(controller);
 
-    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+    await streamSession({
+      eventsPath: "/v1/chat/sessions", ...trace.options, initialCursor: null, signal: controller.signal });
 
     expect(trace.disclosed).toEqual([2]);
     // And it arrives as a position, never as an event: the two events on either
@@ -247,7 +263,8 @@ describe("Quarantined positions", () => {
     );
     const trace = traceOf(controller, { rejectQuarantine: true });
 
-    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+    await streamSession({
+      eventsPath: "/v1/chat/sessions", ...trace.options, initialCursor: null, signal: controller.signal });
 
     expect(trace.disclosed).toEqual([2]);
     expect(trace.cursors).toEqual([{ id: "cursor_1", sequence: 1 }]);
@@ -265,7 +282,8 @@ describe("Quarantined positions", () => {
     vi.stubGlobal("fetch", fetchMock);
     const trace = traceOf(controller);
 
-    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+    await streamSession({
+      eventsPath: "/v1/chat/sessions", ...trace.options, initialCursor: null, signal: controller.signal });
 
     expect(trace.seen).toEqual(["evt_1"]);
     expect(trace.cursors).toEqual([{ id: "cursor_1", sequence: 1 }]);
@@ -283,7 +301,8 @@ describe("Quarantined positions", () => {
     );
     const trace = traceOf(controller);
 
-    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+    await streamSession({
+      eventsPath: "/v1/chat/sessions", ...trace.options, initialCursor: null, signal: controller.signal });
 
     expect(trace.seen).toEqual(["evt_1", "evt_2", "evt_3"]);
     expect(trace.cursors).toEqual([
@@ -312,7 +331,8 @@ describe("Quarantined positions", () => {
     );
     const trace = traceOf(controller);
 
-    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+    await streamSession({
+      eventsPath: "/v1/chat/sessions", ...trace.options, initialCursor: null, signal: controller.signal });
 
     expect(trace.seen).toEqual(["evt_1", "evt_4"]);
     expect(trace.cursors.at(-1)).toEqual({ id: "cursor_4", sequence: 4 });
@@ -337,7 +357,8 @@ describe("Quarantined positions", () => {
     vi.stubGlobal("fetch", fetchMock);
     const trace = traceOf(controller, { abortOnRetry: false });
 
-    const stream = streamChatSession({
+    const stream = streamSession({
+      eventsPath: "/v1/chat/sessions",
       ...trace.options,
       initialCursor: null,
       signal: controller.signal,
@@ -365,7 +386,8 @@ describe("Quarantined positions", () => {
     );
     const trace = traceOf(controller);
 
-    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+    await streamSession({
+      eventsPath: "/v1/chat/sessions", ...trace.options, initialCursor: null, signal: controller.signal });
 
     expect(trace.cursors).toEqual([{ id: "cursor_1", sequence: 1 }]);
     expect(trace.errors.at(-1)).toContain("期望 2，收到 3");
@@ -385,7 +407,8 @@ describe("Quarantined positions", () => {
     );
     const trace = traceOf(controller);
 
-    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+    await streamSession({
+      eventsPath: "/v1/chat/sessions", ...trace.options, initialCursor: null, signal: controller.signal });
 
     expect(trace.seen).toEqual(["evt_1"]);
     expect(trace.errors.at(-1)).toContain("期望 2，收到 3");
@@ -401,7 +424,8 @@ describe("Quarantined positions", () => {
     );
     const trace = traceOf(controller);
 
-    await streamChatSession({ ...trace.options, initialCursor: null, signal: controller.signal });
+    await streamSession({
+      eventsPath: "/v1/chat/sessions", ...trace.options, initialCursor: null, signal: controller.signal });
 
     expect(trace.cursors).toEqual([{ id: "cursor_1", sequence: 1 }]);
     expect(trace.errors.at(-1)).toContain("不可信的持久事件");
@@ -415,7 +439,8 @@ describe("Quarantined positions", () => {
     );
     const trace = traceOf(controller);
 
-    await streamChatSession({
+    await streamSession({
+      eventsPath: "/v1/chat/sessions",
       ...trace.options,
       initialCursor: { id: "cursor_4", sequence: 4 },
       signal: controller.signal,
@@ -465,6 +490,7 @@ function traceOf(
           trace.disclosed.push(frame.quarantined.sequence);
           return rejectQuarantine ? "rejected" : "accepted";
         }
+        if (isDegradedFrame(frame)) return "accepted";
         trace.seen.push(frame.envelope.event_id);
         return "accepted";
       },

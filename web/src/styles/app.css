@@ -3883,3 +3883,531 @@ pre {
   font-size: 12px;
   line-height: 1.65;
 }
+
+/* The model's text before it has been published.
+   Deliberately unlike an answer bubble: no card, a left rule and dimmed body,
+   so a reader scanning the transcript cannot mistake it for something that
+   cleared the release boundary. It is removed from the DOM when the turn
+   settles, so nothing here has to undo itself. */
+.aw-chat-live-text {
+  margin: 4px 0 2px;
+  padding-left: 12px;
+  border-left: 2px solid var(--aw-border-strong, rgba(0, 0, 0, 0.18));
+}
+
+.aw-chat-live-text p {
+  margin: 0;
+  color: var(--aw-text-muted, #5b5751);
+  white-space: pre-wrap;
+}
+
+.aw-chat-live-text small {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  margin-top: 4px;
+  color: var(--aw-text-subtle, #8a847c);
+}
+
+/* --- Code：一次编码会话 --------------------------------------------------
+ *
+ * 三栏里只有两栏，因为第三个问题（正在做什么）只在一轮进行中才有答案，所以它
+ * 长在对话流里而不是自己占一栏。工作区那一栏是常驻的：它是这个流程的产物。
+ *
+ * 注意上面还有一个 `.aw-code-value`，那是等宽工具类，和这里的 Code 流程无关；
+ * 这一段复用它来排数字与摘要，正是因为它就是"把一串机器写的字排整齐"。
+ */
+
+.aw-code-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 268px;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 没有会话时没有工作区可看，那一栏也就不该占位置。 */
+.aw-code-page.is-empty {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.aw-code-main {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.aw-code-transcript {
+  min-width: 0;
+  min-height: 0;
+  padding: 24px clamp(16px, 4vw, 56px) 12px;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.aw-code-transcript > .aw-empty-state {
+  min-height: 100%;
+}
+
+.aw-code-turns {
+  display: grid;
+  width: min(820px, 100%);
+  margin: 0 auto;
+  padding: 0;
+  gap: 18px;
+  list-style: none;
+}
+
+.aw-code-said h3,
+.aw-code-report h3 {
+  margin: 0 0 4px;
+  color: var(--aw-text-soft);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.aw-code-said p,
+.aw-code-report p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-code-said {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-report {
+  padding: 12px 14px;
+  border-left: 2px solid var(--aw-border-strong);
+}
+
+/* 过程。只在一轮进行中出现，所以它是流的一部分而不是一块常驻面板。 */
+.aw-code-steps {
+  width: min(820px, 100%);
+  margin: 18px auto 0;
+  padding: 12px 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 12px;
+  background: var(--aw-panel);
+}
+
+.aw-code-steps ol {
+  display: grid;
+  margin: 8px 0 0;
+  padding: 0;
+  gap: 3px;
+  list-style: none;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+.aw-code-approvals {
+  display: grid;
+  width: min(820px, 100%);
+  margin: 0 auto;
+  padding: 0 clamp(16px, 4vw, 56px);
+  gap: 10px;
+}
+
+.aw-code-approval {
+  padding: 12px 14px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 12px;
+  background: var(--aw-panel);
+}
+
+.aw-code-approval h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
+.aw-code-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  gap: 8px;
+}
+
+.aw-code-composer {
+  display: grid;
+  width: min(900px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 8px 0 13px;
+  gap: 8px;
+}
+
+.aw-code-composer textarea {
+  min-height: 64px;
+  max-height: 200px;
+  padding: 10px 12px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 12px;
+  background: var(--aw-panel);
+  resize: none;
+}
+
+.aw-code-composer button {
+  justify-self: end;
+}
+
+/* The right column, holding two panes that are separate landmarks.
+
+   `1fr auto`: the working set takes what is left and the recent list takes what
+   it needs, so a long file list scrolls rather than pushing the way back to
+   another session off the bottom of the screen. */
+.aw-code-side {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+}
+
+.aw-code-workspace {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.aw-code-workspace header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 64px;
+  padding: 9px 18px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-code-workspace h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.aw-code-workspace ul {
+  display: grid;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow-y: auto;
+  gap: 2px;
+  list-style: none;
+}
+
+.aw-code-workspace li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 8px;
+  gap: 10px;
+}
+
+.aw-code-workspace li:hover {
+  background: color-mix(in srgb, var(--aw-panel) 70%, transparent);
+}
+
+.aw-code-file-name {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.aw-code-workspace-empty {
+  margin: 0;
+  padding: 16px 18px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+/* 窄屏：工作区退到对话下面，而不是把正文挤成一条缝。 */
+@media (width <= 900px) {
+  .aw-code-page {
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aw-code-side {
+    max-height: 40vh;
+    border-top: 1px solid var(--aw-border);
+    border-left: 0;
+  }
+
+  .aw-code-workspace {
+    min-height: 0;
+    border-left: 0;
+  }
+}
+
+/* The way back to a session this browser has already opened.
+
+   It sits under the working set when a session is open and under the empty
+   state when none is, because those are the two moments the question "where
+   was I" gets asked -- and neither of them wants a third column. */
+.aw-code-recent {
+  display: grid;
+  gap: 6px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-code-recent h2 {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.aw-code-recent ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-code-recent-link {
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--aw-text-soft);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-code-recent-link:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+/* The one already open is marked rather than merely un-clickable: a list where
+   every row looks the same cannot answer "which of these am I in". */
+.aw-code-recent-link[aria-current="page"] {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+  font-weight: 600;
+}
+
+.aw-code-page.is-empty .aw-code-recent {
+  max-width: 420px;
+  margin: 0 auto;
+  border-top: 0;
+}
+
+/* A workspace row is a button now, so it has to stop looking like one. */
+.aw-code-file-open {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-code-file-open:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-file-open[aria-current="true"] {
+  background: var(--aw-panel-soft);
+  font-weight: 600;
+}
+
+/* The file itself, under the list rather than over it: the list is how you got
+   here and stays visible, which is what makes "open another one" one click. */
+.aw-code-file-view {
+  display: grid;
+  min-height: 0;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-code-file-view header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+
+.aw-code-file-view h3 {
+  overflow: hidden;
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `pre-wrap`, not `pre`: a generated file has no reason to have short lines,
+   and a horizontal scrollbar inside a 268px column is a pane you cannot read.
+   The vertical bound is the pane's, so a long file scrolls here and not the page. */
+.aw-code-file-view pre {
+  overflow: auto;
+  max-height: 40vh;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--aw-panel-soft);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The workbench: a tab strip over whichever flow is showing. */
+.aw-workbench {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.aw-workbench-tabs {
+  display: inline-flex;
+  gap: 2px;
+  align-self: start;
+  margin: 12px 0 0 18px;
+  padding: 3px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-workbench-tab {
+  padding: 5px 16px;
+  border-radius: 7px;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.aw-workbench-tab:hover {
+  color: var(--aw-text);
+}
+
+.aw-workbench-tab[aria-current="page"] {
+  background: var(--aw-surface, #fff);
+  color: var(--aw-text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+  font-weight: 600;
+}
+
+@media (width <= 900px) {
+  .aw-workbench-tabs {
+    margin: 8px 0 0 12px;
+  }
+}
+
+/* Starting an evaluation, and watching the one that is running. */
+.aw-eval-suites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.aw-eval-suites .aw-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 14px;
+  text-align: left;
+}
+
+.aw-eval-run {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-eval-run p {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* Both of these hold a runner's own output or a shell command, so they wrap
+   rather than scroll sideways: a command a reader has to scroll to finish
+   reading is a command they will copy incompletely. */
+.aw-eval-run pre,
+.aw-eval-manual pre {
+  overflow: auto;
+  max-height: 30vh;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--aw-surface, #fff);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.aw-eval-manual {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.aw-eval-manual p {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+}
+
+/* A step is one action: what it was, and what it was aimed at. */
+.aw-code-steps li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.aw-code-step-title {
+  flex: none;
+}
+
+/* The subject -- a filename, a query -- gives way before the verb does. */
+.aw-code-steps li .aw-code-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Only the two outcomes worth interrupting a reader for. A finished step is
+   the normal case and says so by saying nothing. */
+.aw-code-steps li.is-failed .aw-code-step-title {
+  color: var(--aw-danger, #b3261e);
+}
+
+.aw-code-steps li.is-denied .aw-code-step-title {
+  color: var(--aw-warning, #8a5300);
+}

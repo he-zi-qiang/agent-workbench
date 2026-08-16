@@ -200,9 +200,13 @@ def test_lifespan_disposes_dependencies_when_qdrant_startup_fails() -> None:
         max_control_request_body_bytes = 1024
         uploads = _Uploads()
         serves_chat = False
+        serves_code = False
         serves_search = False
         chat_reaper = None
         chat_pending_recovery = None
+        # Read when nothing serves code, to tell "nobody asked" from "asked for
+        # and could not be built" -- the second of which the process warns about.
+        config = SimpleNamespace(code=SimpleNamespace(enabled=False))
 
         def __init__(self) -> None:
             self.disposed = False

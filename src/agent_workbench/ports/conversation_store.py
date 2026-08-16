@@ -41,6 +41,13 @@ RequestHash = Annotated[
     str,
     StringConstraints(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"),
 ]
+#: Which API a conversation session answers to.
+#:
+#: Chat and Code share a session's identity and its message history; they do
+#: not share a lifecycle. Chat publishes an answer through a turn ledger, and
+#: Code writes no turn row at all. So the mode is not a label on a session --
+#: it decides which set of operations the session even has.
+SessionMode = Literal["chat", "code"]
 ChatTurnStatus = Literal[
     "running",
     "release_pending",
@@ -75,6 +82,18 @@ class ChatTurnLeaseExpiredError(RuntimeError):
         super().__init__("chat turn execution lease expired")
 
 
+class WorkspacePointerConflictError(RuntimeError):
+    """A workspace advance was based on a version the session no longer holds.
+
+    The bytes and the manifest it wrote are already stored; what was refused is
+    the session's claim that they follow from the version it read. Losing that
+    race is the whole point of writing through: two runs on one session would
+    otherwise each publish a manifest naming only its own files, and the loser
+    would silently delete the winner's -- not by removing bytes, but by
+    replacing the only name that reaches them.
+    """
+
+
 def chat_turn_terminal_event_key(turn_id: str) -> EventKey:
     """Return the bounded idempotency key shared by all Chat terminal events."""
 
@@ -89,6 +108,26 @@ class ConversationSession(VersionedModel):
     tenant_id: Identifier
     owner_id: Identifier
     title: ShortText | None = None
+    #: Defaults to chat because every session written before this field existed
+    #: was created by the Chat API. The other direction would relabel the whole
+    #: history as something no Chat request may touch.
+    mode: SessionMode = "chat"
+    #: The manifest id this session's working set is currently at, or ``None``
+    #: for a session that has never written a file.
+    #:
+    #: A Task carries its version through graph state, so a node that dies
+    #: commits nothing and the retry re-reads the entry version. A session has
+    #: no graph to carry it: the pointer is the only thing that survives the
+    #: run, which is why it lives on the row rather than in whatever object was
+    #: executing.
+    workspace_version: Identifier | None = None
+    #: When something was last said in this session, not when it was made.
+    #:
+    #: Optional on the model rather than required, because two of the three
+    #: things that construct a `ConversationSession` are refusals and lookups
+    #: that have no reason to carry it. Where it does matter -- the list -- the
+    #: store fills it, and the column behind it is NOT NULL.
+    last_activity_at: AwareDatetime | None = None
 
 
 class StoredMessage(VersionedModel):
@@ -297,6 +336,7 @@ class ConversationStore(Protocol):
         tenant_id: str,
         owner_id: str,
         title: str | None = None,
+        mode: SessionMode = "chat",
     ) -> ConversationSession: ...
 
     async def append(
@@ -323,12 +363,133 @@ class ConversationStore(Protocol):
         tenant_id: str,
         principal_id: str,
         limit: int | None = None,
+        mode: SessionMode | None = None,
     ) -> tuple[StoredMessage, ...]:
         """Messages in sequence order, oldest first, for their owner only.
 
         A conversation is the most personal thing this system stores. Scoping
         it to a tenant says whose database it is, not whose conversation it
         is, and a session id travels through URLs and logs like any other.
+
+        ``mode`` is the same kind of scope. A caller that names one refuses a
+        session of the other mode with ``NotFoundError`` -- the identical
+        answer given to another tenant's id, because "exists, wrong mode" is a
+        fact about somebody else's session that no asker is owed.
+        """
+        ...
+
+    async def session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        """The session row itself, scoped exactly like its history.
+
+        Reading the row is how a new run learns which workspace version it
+        continues from. It is a separate method rather than a field on
+        ``history`` because a run that has not asked for any messages still
+        needs the pointer, and a pointer that cannot be read is a pointer
+        nobody can write against.
+        """
+        ...
+
+    async def list_sessions(
+        self,
+        *,
+        tenant_id: str,
+        principal_id: str,
+        mode: SessionMode,
+        limit: int = 50,
+    ) -> tuple[ConversationSession, ...]:
+        """This principal's sessions of one kind, most recently spoken in first.
+
+        ``mode`` is required and has no default. Every other read here treats
+        the mode as a door -- see :meth:`history` -- and a list is the one place
+        where "everything I own" would walk straight through it, handing a Chat
+        client a Code session's title because both are rows in one table.
+
+        Ordered by activity rather than by creation: a list sorted by creation
+        puts a session untouched for a month above the one you were in five
+        minutes ago, which is backwards for a list whose whole job is getting
+        you back to where you were.
+
+        Bounded by ``limit`` rather than paged. This is one person's recent
+        sessions; a keyset cursor over a list bounded by human memory is
+        machinery with no reader.
+        """
+        ...
+
+    async def set_title_if_unset(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> None:
+        """Name a session, but only if nothing has named it yet.
+
+        Its own method rather than a flag on :meth:`rename_session`, because the
+        two mean opposite things: this one cannot destroy anything a person
+        typed, and renaming exists in order to. A boolean parameter would put
+        both meanings behind one call site, where the wrong argument silently
+        overwrites a name somebody chose.
+
+        The condition is in the statement, not in the caller. A read-then-write
+        would race a concurrent first turn and would also re-apply on a retry;
+        ``WHERE title IS NULL`` makes first-instruction-wins true rather than
+        likely.
+
+        Updating no rows is **not** an error. It means either that a title is
+        already there -- the expected case from the second turn onwards -- or
+        that the session is not this principal's, which the caller has already
+        established by reading it.
+        """
+        ...
+
+    async def rename_session(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        title: str,
+        mode: SessionMode | None = None,
+    ) -> ConversationSession:
+        """Give a session the name a person chose, replacing whatever was there.
+
+        The only overwrite. Raises :class:`NotFoundError` when the session is
+        not this principal's, in this tenant, in this mode -- the same
+        three-axis refusal, and the same single answer, as every other read
+        here.
+        """
+        ...
+
+    async def advance_workspace_version(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        expected: Identifier | None,
+        next_version: Identifier,
+    ) -> None:
+        """Move the pointer, but only if it is still where the caller left it.
+
+        ``expected`` is the version the new manifest was built from, and
+        ``None`` is a legitimate value rather than a missing argument: it says
+        "this session had written nothing", which is the state every session
+        starts in and therefore a state the comparison has to be able to name.
+        An implementation whose comparison cannot express it would refuse the
+        first write of every session.
+
+        A comparison that fails raises ``WorkspacePointerConflictError`` and
+        leaves the stored version alone. Ownership is checked the same way
+        every other method checks it, and answers ``NotFoundError``.
         """
         ...
 
@@ -361,6 +522,15 @@ class ChatTurnStore(ConversationStore, Protocol):
         same request hash returns the original turn; a different hash raises
         ``ChatTurnConflictError``. Another active key in the same session
         raises ``ChatTurnBusyError``.
+
+        That ownership check also refuses a ``code`` session with
+        ``NotFoundError``. There is no ``mode`` argument to pass, because this
+        ledger is the Chat lifecycle itself and Code writes no row in it: a
+        caller wanting to claim a turn against a code session does not exist,
+        and a parameter would state that one might. Refusing here is what makes
+        the refusal total -- every other method of this protocol is reached
+        through a ``turn_id``, and no turn id can name a code session once none
+        can be claimed for one.
         """
         ...
 
@@ -455,7 +625,9 @@ __all__ = [
     "IdempotencyKey",
     "PendingChatRelease",
     "RequestHash",
+    "SessionMode",
     "StoredChatTurn",
     "StoredMessage",
+    "WorkspacePointerConflictError",
     "chat_turn_terminal_event_key",
 ]

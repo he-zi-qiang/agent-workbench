@@ -14,9 +14,14 @@ from harness import StoreHarness
 
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.messages import assistant_message, user_message
-from agent_workbench.ports.conversation_store import ConversationStore, StoredMessage
+from agent_workbench.ports.conversation_store import (
+    ConversationStore,
+    StoredMessage,
+    WorkspacePointerConflictError,
+)
 
 SESSION = "session_1"
+CODE_SESSION = "session_code_1"
 TENANT = "tenant_a"
 OTHER_TENANT = "tenant_b"
 OWNER = "user_1"
@@ -301,6 +306,194 @@ def test_the_refusal_matches_a_missing_session_exactly(
     assert conversations.run(scenario) == ["conversation session not found"] * 3
 
 
+# --- one session, one mode ---------------------------------------------------
+#
+# Chat and Code share this table because they share an identity: one principal,
+# one tenant, one ordered history. They do not share a lifecycle -- Chat
+# publishes an answer through a turn ledger and Code writes no turn row at all
+# -- so a session id that let either API drive either kind of session would be
+# a session whose lifecycle depends on which URL last touched it.
+
+
+def test_a_code_session_is_not_a_chat_session(conversations: StoreHarness) -> None:
+    async def scenario(store: ConversationStore) -> None:
+        await store.create_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            mode="code",
+        )
+        await store.history(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            mode="chat",
+        )
+
+    with pytest.raises(NotFoundError):
+        conversations.run(scenario)
+
+
+def test_a_chat_session_is_not_a_code_session(conversations: StoreHarness) -> None:
+    """The gate swings both ways, or it is a rule about one API's manners."""
+
+    async def scenario(store: ConversationStore) -> None:
+        await _with_session(store)
+        await store.history(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            mode="code",
+        )
+
+    with pytest.raises(NotFoundError):
+        conversations.run(scenario)
+
+
+def test_each_mode_still_reads_its_own(conversations: StoreHarness) -> None:
+    """The control: the refusal is about the mode, not about reading at all.
+
+    Without this, a ``history`` that refused every caller who named a mode
+    would pass both tests above.
+    """
+
+    async def scenario(store: ConversationStore) -> tuple[list[str], list[str]]:
+        await _with_session(store)
+        await store.create_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            mode="code",
+        )
+        await store.append(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            messages=(user_message("a question"),),
+        )
+        await store.append(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            messages=(user_message("edit the file"),),
+        )
+        chat = await store.history(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            mode="chat",
+        )
+        code = await store.history(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            mode="code",
+        )
+        return (
+            [stored.message.text() for stored in chat],
+            [stored.message.text() for stored in code],
+        )
+
+    assert conversations.run(scenario) == (["a question"], ["edit the file"])
+
+
+def test_a_session_defaults_to_chat(conversations: StoreHarness) -> None:
+    """Every session written before the column existed was a chat session."""
+
+    async def scenario(store: ConversationStore) -> tuple[str, int]:
+        created = (
+            await store.create_session(
+                session_id=SESSION, tenant_id=TENANT, owner_id=OWNER
+            )
+        ).mode
+        stored = await store.history(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            mode="chat",
+        )
+        return created, len(stored)
+
+    assert conversations.run(scenario) == ("chat", 0)
+
+
+def test_the_wrong_mode_answers_exactly_like_a_missing_session(
+    conversations: StoreHarness,
+) -> None:
+    """ "That id exists, it is just not yours to drive" is still a disclosure.
+
+    A distinguishable refusal turns the Chat API into an oracle for which of a
+    caller's guessed session ids are real.
+    """
+
+    async def scenario(store: ConversationStore) -> tuple[str, str]:
+        await store.create_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            mode="code",
+        )
+        wrong_mode = ""
+        missing = ""
+        try:
+            await store.history(
+                session_id=CODE_SESSION,
+                tenant_id=TENANT,
+                principal_id=OWNER,
+                mode="chat",
+            )
+        except NotFoundError as refusal:
+            wrong_mode = str(refusal)
+        try:
+            await store.history(
+                session_id="ses_00000000000000000000000000000",
+                tenant_id=TENANT,
+                principal_id=OWNER,
+                mode="chat",
+            )
+        except NotFoundError as refusal:
+            missing = str(refusal)
+        return wrong_mode, missing
+
+    wrong_mode, missing = conversations.run(scenario)
+
+    assert wrong_mode == missing == "conversation session not found"
+
+
+def test_a_caller_that_names_no_mode_reads_either(
+    conversations: StoreHarness,
+) -> None:
+    """The mode is a caller's declaration, not an ambient filter.
+
+    Nothing in the store decides which mode a reader belongs to, so a reader
+    that names none -- the release recovery scans, the expiration reaper's
+    lookups -- keeps seeing exactly what it saw before this column existed.
+    """
+
+    async def scenario(store: ConversationStore) -> int:
+        await store.create_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            mode="code",
+        )
+        await store.append(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            messages=(user_message("edit the file"),),
+        )
+        return len(
+            await store.history(
+                session_id=CODE_SESSION,
+                tenant_id=TENANT,
+                principal_id=OWNER,
+            )
+        )
+
+    assert conversations.run(scenario) == 1
+
+
 def test_the_owner_still_reads_their_own(conversations: StoreHarness) -> None:
     """The control: the refusal is about who is asking, not about reading."""
 
@@ -319,3 +512,315 @@ def test_the_owner_still_reads_their_own(conversations: StoreHarness) -> None:
         )
 
     assert conversations.run(scenario) == 1
+
+
+# --- the workspace pointer ---------------------------------------------------
+#
+# A Task carries its workspace version through graph state, so a dead attempt
+# publishes nothing and its writes stay unreachable. A session has no graph:
+# this column is where the version lives between turns, and the comparison is
+# what stops two runs on one session from each publishing a manifest that names
+# only its own files.
+
+
+async def _advance(
+    store: ConversationStore,
+    *,
+    expected: str | None,
+    next_version: str,
+    session_id: str = SESSION,
+    principal_id: str = OWNER,
+    tenant_id: str = TENANT,
+) -> None:
+    await store.advance_workspace_version(
+        session_id=session_id,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        expected=expected,
+        next_version=next_version,
+    )
+
+
+async def _pointer(store: ConversationStore) -> str | None:
+    session = await store.session(
+        session_id=SESSION, tenant_id=TENANT, principal_id=OWNER
+    )
+    return session.workspace_version
+
+
+def test_a_new_session_has_written_nothing(conversations: StoreHarness) -> None:
+    """``None`` is the starting state, and it is a value rather than a gap."""
+
+    async def scenario(store: ConversationStore) -> str | None:
+        await _with_session(store)
+        return await _pointer(store)
+
+    assert conversations.run(scenario) is None
+
+
+def test_the_first_write_compares_against_nothing(
+    conversations: StoreHarness,
+) -> None:
+    """The NULL case, which is every session's first write.
+
+    Under ``=`` this comparison would be against NULL, match no row, and be
+    reported as a race the caller was not in -- so this is the test that tells
+    ``IS NOT DISTINCT FROM`` apart from equality.
+    """
+
+    async def scenario(store: ConversationStore) -> str | None:
+        await _with_session(store)
+        await _advance(store, expected=None, next_version="art_one")
+        return await _pointer(store)
+
+    assert conversations.run(scenario) == "art_one"
+
+
+def test_the_pointer_moves_from_where_the_writer_left_it(
+    conversations: StoreHarness,
+) -> None:
+    """The control for the refusal below: advancing in step keeps working."""
+
+    async def scenario(store: ConversationStore) -> str | None:
+        await _with_session(store)
+        await _advance(store, expected=None, next_version="art_one")
+        await _advance(store, expected="art_one", next_version="art_two")
+        return await _pointer(store)
+
+    assert conversations.run(scenario) == "art_two"
+
+
+def test_a_stale_version_is_refused(conversations: StoreHarness) -> None:
+    async def scenario(store: ConversationStore) -> None:
+        await _with_session(store)
+        await _advance(store, expected=None, next_version="art_one")
+        # A second run that read the session before the first one wrote.
+        await _advance(store, expected=None, next_version="art_other")
+
+    with pytest.raises(WorkspacePointerConflictError):
+        conversations.run(scenario)
+
+
+def test_a_refused_advance_leaves_the_pointer_alone(
+    conversations: StoreHarness,
+) -> None:
+    """Refusing is only half of it: the loser must not have moved anything.
+
+    An implementation that wrote first and compared afterwards would raise
+    here too, so the exception alone cannot tell the two apart.
+    """
+
+    async def scenario(store: ConversationStore) -> str | None:
+        await _with_session(store)
+        await _advance(store, expected=None, next_version="art_one")
+        with pytest.raises(WorkspacePointerConflictError):
+            await _advance(store, expected=None, next_version="art_other")
+        return await _pointer(store)
+
+    assert conversations.run(scenario) == "art_one"
+
+
+def test_another_principal_cannot_move_the_pointer(
+    conversations: StoreHarness,
+) -> None:
+    """And is told it does not exist, not that it lost a race.
+
+    A conflict would confirm the session is real and say what version it is
+    at -- the same leak the history methods refuse.
+    """
+
+    async def scenario(store: ConversationStore) -> None:
+        await _with_session(store)
+        await _advance(
+            store, expected=None, next_version="art_one", principal_id=NEIGHBOUR
+        )
+
+    with pytest.raises(NotFoundError):
+        conversations.run(scenario)
+
+
+def test_another_tenant_cannot_read_the_pointer(conversations: StoreHarness) -> None:
+    async def scenario(store: ConversationStore) -> None:
+        await _with_session(store)
+        await store.session(
+            session_id=SESSION, tenant_id=OTHER_TENANT, principal_id=OWNER
+        )
+
+    with pytest.raises(NotFoundError):
+        conversations.run(scenario)
+
+
+# --- naming and listing -------------------------------------------------
+#
+# Both stores, because the two answer differently in exactly the places that
+# matter here: a frozen model that one adapter has to copy and the other
+# rewrites with SQL, and an ordering one computes in Python and the other in an
+# index.
+
+
+def test_a_principal_sees_only_their_own_sessions(conversations: StoreHarness) -> None:
+    async def scenario(store: ConversationStore) -> list[str]:
+        await store.create_session(
+            session_id="ses_mine", tenant_id=TENANT, owner_id=OWNER, mode="code"
+        )
+        await store.create_session(
+            session_id="ses_theirs", tenant_id=TENANT, owner_id=NEIGHBOUR, mode="code"
+        )
+        listed = await store.list_sessions(
+            tenant_id=TENANT, principal_id=OWNER, mode="code"
+        )
+        return [session.session_id for session in listed]
+
+    assert conversations.run(scenario) == ["ses_mine"]
+
+
+def test_a_session_list_is_scoped_to_one_mode(conversations: StoreHarness) -> None:
+    """Both directions. One alone would pass for a store that returns nothing."""
+
+    async def scenario(store: ConversationStore) -> tuple[list[str], list[str]]:
+        await store.create_session(
+            session_id="ses_chat", tenant_id=TENANT, owner_id=OWNER, mode="chat"
+        )
+        await store.create_session(
+            session_id="ses_code", tenant_id=TENANT, owner_id=OWNER, mode="code"
+        )
+        code = await store.list_sessions(
+            tenant_id=TENANT, principal_id=OWNER, mode="code"
+        )
+        chat = await store.list_sessions(
+            tenant_id=TENANT, principal_id=OWNER, mode="chat"
+        )
+        return (
+            [session.session_id for session in code],
+            [session.session_id for session in chat],
+        )
+
+    assert conversations.run(scenario) == (["ses_code"], ["ses_chat"])
+
+
+def test_the_most_recently_spoken_in_session_comes_first(
+    conversations: StoreHarness,
+) -> None:
+    """The ordering is activity, not creation -- and activity means messages.
+
+    This is the test that pins the touch into `_append_messages` rather than
+    into `append`: the older session is spoken in *after* the newer one was
+    created, so a store ordering by creation puts them the other way round.
+    """
+
+    async def scenario(store: ConversationStore) -> list[str]:
+        await store.create_session(
+            session_id="ses_older", tenant_id=TENANT, owner_id=OWNER, mode="code"
+        )
+        await store.create_session(
+            session_id="ses_newer", tenant_id=TENANT, owner_id=OWNER, mode="code"
+        )
+        await store.append(
+            session_id="ses_older",
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            messages=(user_message("still here"),),
+        )
+        listed = await store.list_sessions(
+            tenant_id=TENANT, principal_id=OWNER, mode="code"
+        )
+        return [session.session_id for session in listed]
+
+    assert conversations.run(scenario) == ["ses_older", "ses_newer"]
+
+
+def test_a_title_is_only_taken_when_there_is_none(
+    conversations: StoreHarness,
+) -> None:
+    async def scenario(store: ConversationStore) -> tuple[str | None, str | None]:
+        await store.create_session(
+            session_id=CODE_SESSION, tenant_id=TENANT, owner_id=OWNER, mode="code"
+        )
+        await store.set_title_if_unset(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            title="first instruction",
+        )
+        await store.set_title_if_unset(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            title="second instruction",
+        )
+        after_two = await store.session(
+            session_id=CODE_SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+        # And the one call that is allowed to overwrite still does.
+        await store.rename_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            title="what a person called it",
+        )
+        renamed = await store.session(
+            session_id=CODE_SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+        return after_two.title, renamed.title
+
+    assert conversations.run(scenario) == (
+        "first instruction",
+        "what a person called it",
+    )
+
+
+def test_renaming_somebody_elses_session_is_not_found(
+    conversations: StoreHarness,
+) -> None:
+    """And the row its owner reads back is unchanged."""
+
+    async def scenario(store: ConversationStore) -> tuple[bool, str | None]:
+        await store.create_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            title="mine",
+            mode="code",
+        )
+        try:
+            await store.rename_session(
+                session_id=CODE_SESSION,
+                tenant_id=TENANT,
+                principal_id=NEIGHBOUR,
+                title="theirs now",
+            )
+            refused = False
+        except NotFoundError:
+            refused = True
+        # The second half is what makes this more than a status assertion: a
+        # store that wrote and then raised would satisfy the first half alone.
+        owned = await store.session(
+            session_id=CODE_SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+        return refused, owned.title
+
+    assert conversations.run(scenario) == (True, "mine")
+
+
+def test_renaming_your_own_session_returns_the_new_title(
+    conversations: StoreHarness,
+) -> None:
+    """The control for the refusal above."""
+
+    async def scenario(store: ConversationStore) -> str | None:
+        await store.create_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            title="mine",
+            mode="code",
+        )
+        renamed = await store.rename_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            title="a better name",
+        )
+        return renamed.title
+
+    assert conversations.run(scenario) == "a better name"

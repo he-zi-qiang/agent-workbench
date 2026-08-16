@@ -27,7 +27,13 @@ from collections.abc import Mapping
 from datetime import UTC
 from typing import Annotated, Final, Literal
 
-from pydantic import AwareDatetime, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from agent_workbench.domain.artifacts import ArtifactRef, Sha256
 from agent_workbench.domain.context import Citation
@@ -83,6 +89,7 @@ EventType = Literal[
     "ToolProposed",
     "PermissionRequested",
     "PermissionResolved",
+    "ToolApprovalDecided",
     "ToolStarted",
     "ToolProgress",
     "ToolCompleted",
@@ -100,6 +107,37 @@ Durability = Literal["durable", "transient"]
 
 ModelFinishReason = Literal["stop", "tool_use", "max_tokens", "cancelled", "error"]
 PauseReason = Literal["approval", "migration"]
+#: What a human may answer when a call is held for approval.
+#:
+#: ``approve_for_session`` is a standing answer, and a standing answer is only
+#: safe if it is about *this* call rather than about the tool: the policy
+#: engine decides approval from the tool's declared risk alone and never reads
+#: the arguments, so "approve this tool from now on" would let one harmless
+#: invocation stand in for every later one.
+ApprovalDecision = Literal["approve_once", "approve_for_session", "deny"]
+#: What produced the decision, which is not the same question as what the
+#: decision was. Every value below refuses except the first two, and collapsing
+#: them would make four different stories about a held call read as one: a
+#: person said no; a rule said no on their behalf; nobody was there; the run
+#: stopped waiting; the place we ask broke. Only the first is a decision to
+#: refuse -- the rest are refusals for want of one, and an operator who cannot
+#: tell them apart is looking for a slow human every time.
+ApprovalDecidedBy = Literal[
+    "human",
+    "session_rule",
+    "timeout",
+    "cancelled",
+    "gate_failed",
+]
+#: The proposed arguments as shown to whoever is being asked to allow them.
+#:
+#: Its own ceiling rather than ``BoundedText``: this is the one preview written
+#: without ``runtime.record_step_inputs``, so what bounds it is the only thing
+#: bounding what an unconditional field puts on the stream. Smaller than
+#: ``BoundedText`` on purpose -- it is read by a person deciding now, not by an
+#: operator reconstructing a run later.
+APPROVAL_PREVIEW_LIMIT: Final[int] = 2048
+ApprovalPreview = Annotated[str, StringConstraints(max_length=APPROVAL_PREVIEW_LIMIT)]
 
 
 class TaskSubmitted(DomainModel):
@@ -390,11 +428,54 @@ class ToolProposed(DomainModel):
 
 
 class PermissionRequested(DomainModel):
+    """A call is held because a human has to allow it.
+
+    ``approval_preview`` is the single exception to this module's rule that
+    payloads describe rather than reproduce, and it is deliberately narrow.
+    Everywhere else the arguments appear as a size and a digest because the
+    reader is an operator reconstructing what happened; here the reader is a
+    person being asked to permit something that has not happened yet, and for
+    a tool that runs a script the arguments are not a detail of the request,
+    they are the request. A digest cannot be consented to.
+
+    So it is written whenever there is someone to ask, and not written when
+    there is not: a deployment with no approval facility refuses these calls
+    and gains nothing from having recorded them. That, rather than
+    ``runtime.record_step_inputs``, is the gate -- the flag governs a record
+    kept for later, and this is a question asked now. Opening the flag instead
+    would also open ``ModelStarted.prompt_preview``, which is a different
+    decision about a different body of text (ADR-019).
+    """
+
     kind: Literal["PermissionRequested"] = "PermissionRequested"
     tool_call_id: Identifier
     required_scopes: tuple[PermissionScope, ...] = ()
     risk: ToolRisk | None = None
     approval_id: Identifier | None = None
+    # The tool's name is not repeated here: ToolProposed is durable, carries it
+    # ungated, and is emitted for this same tool_call_id before anything can
+    # ask for approval.
+    approval_preview: ApprovalPreview = ""
+
+
+class ToolApprovalDecided(DomainModel):
+    """How a held call was answered, and by whom.
+
+    Separate from ``PermissionResolved``, which says what the policy engine
+    decided. This says what happened to the question the policy engine's
+    decision raised, and the two can disagree: a call the policy allowed can
+    still end here as ``deny``.
+
+    Emitted for every outcome including ``timeout``, because "nobody answered"
+    is a fact about the run that a reader cannot otherwise recover -- the
+    refusal alone looks exactly like a policy denial.
+    """
+
+    kind: Literal["ToolApprovalDecided"] = "ToolApprovalDecided"
+    tool_call_id: Identifier
+    approval_id: Identifier
+    decision: ApprovalDecision
+    decided_by: ApprovalDecidedBy
 
 
 class PermissionResolved(DomainModel):
@@ -511,6 +592,7 @@ EventPayload = Annotated[
     | ToolProposed
     | PermissionRequested
     | PermissionResolved
+    | ToolApprovalDecided
     | ToolStarted
     | ToolProgress
     | ToolCompleted
@@ -552,6 +634,7 @@ EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "ToolProposed": "durable",
     "PermissionRequested": "durable",
     "PermissionResolved": "durable",
+    "ToolApprovalDecided": "durable",
     "ToolStarted": "durable",
     "ToolProgress": "transient",
     "ToolCompleted": "durable",
@@ -685,6 +768,7 @@ __all__ = [
     "TaskRetryScheduled",
     "TaskSubmitted",
     "TaskSucceeded",
+    "ToolApprovalDecided",
     "ToolCompleted",
     "ToolFailed",
     "ToolProgress",

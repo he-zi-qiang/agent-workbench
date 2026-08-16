@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,6 +27,14 @@ from starlette.types import ASGIApp
 
 from agent_workbench.adapters.telemetry import EventLoopLagWatchdog
 from agent_workbench.application.chat import ChatExecutionError
+from agent_workbench.application.code_approvals import (
+    ApprovalNotPendingError,
+    StandingApprovalRefusedError,
+)
+from agent_workbench.application.code_session import (
+    CodeCapacityError,
+    CodeTurnBusyError,
+)
 from agent_workbench.application.tasks import TimelineUnavailableError
 from agent_workbench.application.uploads import UploadVerificationError
 from agent_workbench.apps.api.dependencies import ApiDependencies, build_dependencies
@@ -35,6 +44,8 @@ from agent_workbench.apps.api.routes import (
     approvals,
     artifacts,
     chat,
+    code,
+    evaluation,
     events,
     health,
     knowledge_bases,
@@ -45,6 +56,7 @@ from agent_workbench.apps.api.routes import (
 from agent_workbench.apps.api.routes.approvals import InvalidApprovalCursorError
 from agent_workbench.apps.api.routes.search import SearchUnavailableError
 from agent_workbench.apps.api.routes.tasks import InvalidTaskCursorError
+from agent_workbench.apps.api.sse import TooManyLiveSubscribersError
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.apps.api.web import mount_console, resolve_web_directory
 from agent_workbench.bootstrap import load_settings
@@ -54,12 +66,19 @@ from agent_workbench.ports.approvals import ApprovalNotDecidableError
 from agent_workbench.ports.conversation_store import (
     ChatTurnBusyError,
     ChatTurnConflictError,
+    WorkspacePointerConflictError,
 )
 from agent_workbench.ports.documents import KnowledgeBaseMismatchError
+from agent_workbench.ports.evaluation_runs import (
+    EvaluationBusyError,
+    EvaluationDisabledError,
+)
 from agent_workbench.ports.task_registry import (
     TaskSubmissionConflictError,
     TaskTransitionRejectedError,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 API_TITLE = "Agent Workbench"
 
@@ -73,6 +92,27 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     KnowledgeBaseMismatchError: 409,
     ChatTurnBusyError: 409,
     ChatTurnConflictError: 409,
+    # The session's working set moved under this run. A conflict rather than a
+    # 500: nothing is broken, the caller simply wrote against a version that is
+    # no longer current, and the bytes it wrote are still where it put them.
+    WorkspacePointerConflictError: 409,
+    # One turn per coding session, and the process admits a bounded number of
+    # them at once. Both are refusals a client can act on -- retry, or come
+    # back later -- so neither is a 500, and neither is a queue that hides the
+    # wait behind a request that looks like it is working.
+    CodeTurnBusyError: 409,
+    CodeCapacityError: 429,
+    # The question was already answered, or the run stopped waiting for it.
+    ApprovalNotPendingError: 409,
+    # A blanket yes was asked for where only a single yes is available.
+    StandingApprovalRefusedError: 422,
+    # One evaluation at a time, and this machine fits one. A conflict rather
+    # than a queue: a caller told to come back can decide whether to.
+    EvaluationBusyError: 409,
+    # The deployment does not start runs. 503 rather than 403 -- nothing about
+    # the caller is wrong, this process simply cannot, and the body says what
+    # to type instead.
+    EvaluationDisabledError: 503,
     OutputTooLargeError: 413,
     TaskTransitionRejectedError: 409,
     # The Task moved while a human was thinking -- cancelled, most often.
@@ -83,6 +123,10 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     InvalidApprovalCursorError: 400,
     TimelineUnavailableError: 409,
     SearchUnavailableError: 409,
+    # Not 503: the process is healthy and this stream is servable, there are
+    # just already as many live subscribers on it as it may have. A client that
+    # closed a tab and reopened it should retry, which is what 429 asks for.
+    TooManyLiveSubscribersError: 429,
 }
 
 
@@ -193,6 +237,31 @@ def create_app(
         app.include_router(chat.router)
         # Subscribing is only meaningful where there are turns to subscribe to.
         app.include_router(events.router)
+    # Its own condition, not chat's. A deployment may run coding sessions while
+    # serving no chat -- they need different halves of this process -- and a
+    # router mounted on the other one's availability would be a 500 per request
+    # in exactly that case.
+    # Unconditional, unlike the code router: reading reports needs nothing a
+    # deployment might lack, and only starting a run is gated -- inside the
+    # service, which answers with the command instead of a 404.
+    app.include_router(evaluation.router)
+    if dependencies.serves_code:
+        app.include_router(code.router)
+    elif dependencies.config.code.enabled:
+        # Said out loud, because the alternative is what this was found by: a
+        # profile with `code.enabled = true`, a process that starts and reports
+        # nothing, and a 404 on every /v1/code path. From the outside that is
+        # indistinguishable from a build without the routes compiled in.
+        #
+        # The cause is almost always the model. Code has no fixed-shape
+        # fallback -- a turn is a model loop or it is nothing -- so a provider
+        # that could not be built takes the coding half with it, and that
+        # failure happens two layers below anything the word "code" appears in.
+        _LOGGER.warning(
+            "code.enabled is true but this process serves no coding sessions: "
+            "the model provider could not be assembled (check the key and the "
+            "model ids this profile pins)"
+        )
 
     if web_directory is not None:
         # Mounted after every router, so an API path is never answered by a

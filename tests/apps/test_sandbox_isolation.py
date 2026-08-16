@@ -258,3 +258,45 @@ def test_the_probe_finds_the_runtime_and_reports_a_missing_one() -> None:
         asyncio.run(SandboxExecutor(runtime="no-such-container-runtime").probe())
         is False
     )
+
+
+def test_the_writable_layer_cannot_be_used_to_run_a_program() -> None:
+    """A script may write anything; it may not turn what it wrote into a program.
+
+    The pair is the point, and it is why this is a real container test rather
+    than a check that somebody typed `noexec`. The attempt does the whole
+    sequence -- write a file, mark it executable, exec it -- and must fail at
+    the last step. The control runs byte-identical content through the
+    interpreter, which is how the sandbox itself runs the model's script, and
+    must succeed: a mount that broke both would look like isolation while
+    actually having disabled the sandbox.
+
+    **This test does not prove the flag.** Docker applies `noexec` to every
+    `--tmpfs` by default, so removing the word from `ISOLATION_FLAGS` leaves
+    this passing -- measured, by reading /proc/mounts inside the container both
+    ways. What it proves is the *property*, which is what ADR-029 §4 asks for
+    and what nothing verified before: a runtime that stopped defaulting this
+    way, or an image with its own mount, fails here.
+    """
+
+    outcome = _run(
+        "import os, subprocess, stat\n"
+        "p = 'prog.sh'\n"
+        "open(p, 'w').write('#!/bin/sh\\necho ran\\n')\n"
+        "os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)\n"
+        "try:\n"
+        "    subprocess.run(['./' + p], check=True)\n"
+        "    print('EXECUTED')\n"
+        "except PermissionError:\n"
+        "    print('REFUSED')\n"
+        "except OSError as error:\n"
+        "    print('REFUSED', type(error).__name__)\n"
+        "print('VIA-INTERPRETER',"
+        " subprocess.run(['/bin/sh', p], capture_output=True, text=True)"
+        ".stdout.strip())\n"
+    )
+
+    assert outcome.exit_code == 0
+    assert "REFUSED" in outcome.stdout
+    assert "EXECUTED" not in outcome.stdout
+    assert "VIA-INTERPRETER ran" in outcome.stdout

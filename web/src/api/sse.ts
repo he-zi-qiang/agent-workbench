@@ -8,6 +8,14 @@ import type { EventEnvelope } from "./types";
  */
 export const QUARANTINE_EVENT = "stream.quarantined";
 
+/**
+ * The SSE event name for live events the server had to drop before this reader
+ * took them. Same naming rule as above, and the same reason: a client that
+ * dispatches on `event:` has to be able to tell "you missed some live text"
+ * from anything a run emitted.
+ */
+export const DEGRADED_EVENT = "stream.degraded";
+
 /** A frame carrying one durable event. */
 export interface SseFrame {
   id: string | null;
@@ -47,11 +55,69 @@ export interface SseQuarantineFrame {
   quarantined: QuarantineNotice;
 }
 
+/**
+ * A frame carrying one live event: something happening now, with no position.
+ *
+ * Its own type rather than an `SseFrame` with a null id, and for the same
+ * reason the quarantine notice has its own: the two are handled by different
+ * code with different rules, and the type system is what stops one from being
+ * fed to the other. `safeEventFromFrame` -- the only thing that turns a frame
+ * into durable history -- takes `SseFrame` and only `SseFrame`, so a live event
+ * cannot reach the replay cursor even by accident.
+ *
+ * `id` is `null` by construction, not by convention. A transient event has no
+ * sequence to resume from, so the server sends no `id:` line; per the SSE
+ * specification that leaves `Last-Event-ID` untouched, which is what lets these
+ * share a connection with the replay without disturbing it.
+ */
+export interface SseLiveFrame {
+  id: null;
+  event: string;
+  envelope: EventEnvelope;
+}
+
+/** What the server says about live events it could not hand to this reader. */
+export interface DegradedNotice {
+  dropped_events: number;
+}
+
+/**
+ * A frame that declares the live view has a gap -- and that the history does not.
+ *
+ * Deliberately carries no id. The quarantine notice carries one because it
+ * names a durable position a reconnect must resume *after*; nothing dropped
+ * here was ever addressable, so there is no position to move to and nothing
+ * for a client to go and fetch. The only honest report is that the live text is
+ * no longer complete.
+ */
+export interface SseDegradedFrame {
+  id: null;
+  event: typeof DEGRADED_EVENT;
+  degraded: DegradedNotice;
+}
+
 /** Anything a well-formed frame on this stream can be. */
-export type SseChunkFrame = SseFrame | SseQuarantineFrame;
+export type SseChunkFrame =
+  | SseFrame
+  | SseQuarantineFrame
+  | SseLiveFrame
+  | SseDegradedFrame;
 
 export function isQuarantineFrame(frame: SseChunkFrame): frame is SseQuarantineFrame {
   return "quarantined" in frame;
+}
+
+export function isDegradedFrame(frame: SseChunkFrame): frame is SseDegradedFrame {
+  return "degraded" in frame;
+}
+
+/**
+ * Whether this frame describes something happening rather than something
+ * recorded. Decided on the id, because that is the property the whole
+ * arrangement rests on: no id means no position means nothing to resume from.
+ */
+export function isLiveFrame(frame: SseChunkFrame): frame is SseLiveFrame {
+  return "envelope" in frame && frame.id === null;
 }
 
 export interface ParsedChunk {
@@ -105,6 +171,24 @@ function parseFrame(raw: string): SseChunkFrame | null {
       if (!isQuarantineNotice(candidate)) return null;
       return { id, event: QUARANTINE_EVENT, quarantined: candidate };
     }
+    if (event === DEGRADED_EVENT) {
+      // An id here would be the server claiming a position for something that
+      // never had one, so a notice carrying one is malformed rather than
+      // generous. Dropping it is the safe reading: the live view then looks
+      // complete when it is not, which is visible, rather than the cursor
+      // moving to a place replay cannot serve, which is not.
+      if (id !== null || !isDegradedNotice(candidate)) return null;
+      return { id: null, event: DEGRADED_EVENT, degraded: candidate };
+    }
+    // The id is what selects durable from live, and the check below is what
+    // makes that selection a two-way equivalence rather than a convention: a
+    // frame with an id must be durable and carry a position, and one without
+    // must be transient and carry none. Either half alone would let a
+    // malformed frame be read as the other kind.
+    if (id === null) {
+      if (!isEnvelopeShape(candidate, event, "transient")) return null;
+      return { id: null, event, envelope: candidate };
+    }
     if (!isEventEnvelope(candidate, event)) return null;
     return {
       id,
@@ -125,6 +209,23 @@ export function isEventEnvelope(
   value: unknown,
   announcedEvent?: string,
 ): value is EventEnvelope {
+  return isEnvelopeShape(value, announcedEvent, "durable");
+}
+
+/**
+ * One envelope check for both kinds, differing only where they genuinely
+ * differ: durability, and whether a position is present or absent.
+ *
+ * Shared rather than written twice, because the two lists have to stay
+ * identical in every other respect and "somebody added a field to one of them"
+ * is exactly how a transient frame would end up held to a weaker standard than
+ * a durable one -- on the side that never passes through the log.
+ */
+function isEnvelopeShape(
+  value: unknown,
+  announcedEvent: string | undefined,
+  durability: "durable" | "transient",
+): value is EventEnvelope {
   if (typeof value !== "object" || value === null) return false;
   const envelope = value as Record<string, unknown>;
   const payload = envelope.payload;
@@ -142,14 +243,31 @@ export function isEventEnvelope(
     typeof kind !== "string" ||
     envelope.event_type !== kind ||
     (announcedEvent !== undefined && announcedEvent !== envelope.event_type) ||
-    envelope.durability !== "durable" ||
-    typeof envelope.sequence !== "number" ||
-    !Number.isSafeInteger(envelope.sequence) ||
-    envelope.sequence < 1
+    envelope.durability !== durability
   ) {
     return false;
   }
-  return true;
+  if (durability === "transient") {
+    // Null, not merely absent: the server writes the field, and an envelope
+    // that omitted it would be one this client cannot recognise as either kind.
+    return envelope.sequence === null;
+  }
+  return (
+    typeof envelope.sequence === "number" &&
+    Number.isSafeInteger(envelope.sequence) &&
+    envelope.sequence >= 1
+  );
+}
+
+/** The one field a degraded notice carries, checked before it is believed. */
+export function isDegradedNotice(value: unknown): value is DegradedNotice {
+  if (typeof value !== "object" || value === null) return false;
+  const notice = value as Record<string, unknown>;
+  return (
+    typeof notice.dropped_events === "number" &&
+    Number.isSafeInteger(notice.dropped_events) &&
+    notice.dropped_events >= 1
+  );
 }
 
 /**
@@ -178,3 +296,25 @@ export function isQuarantineNotice(value: unknown): value is QuarantineNotice {
     notice.sequence >= 1
   );
 }
+
+
+/**
+ * Where a subscriber is in a stream, and how its connection is doing.
+ *
+ * Both were spelled `Chat*` and lived in the chat feature, which was true
+ * while chat was the only subscriber. A second one exists now, and a name that
+ * says "chat" would have made that surface either reach into the first
+ * feature's types or declare its own -- and two declarations of one shape is
+ * how they start disagreeing.
+ */
+export interface StreamCursor {
+  id: string;
+  sequence: number;
+}
+
+export type StreamConnectionState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "retrying"
+  | "unavailable";

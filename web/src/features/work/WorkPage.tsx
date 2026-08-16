@@ -48,6 +48,11 @@ import type {
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
+  DOCX_MEDIA_TYPE,
+  isPreviewable,
+  isReadableMedia,
+} from "../../components/media";
+import {
   AttachmentButton,
   AttachmentTray,
   useKnowledgeAttachments,
@@ -1840,28 +1845,6 @@ function layoutDeclineNote(reason: PanelLayoutDecline): string {
     return "这个浏览器不显示内嵌 PDF，所以这里给不出版面（文档本身没问题）。下面是文字预览，要看排版请下载后用 Word 打开，或换一个浏览器打开控制台。";
   }
   return "这套部署给不出这份文档的版面。下面是文字预览，需要原样查看请下载。";
-}
-
-/** What a .docx is on the wire. Long enough to be worth naming once. */
-const DOCX_MEDIA_TYPE =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
-/** Whether opening this file shows it, or can only save it. */
-function isPreviewable(mediaType: string): boolean {
-  return mediaType === DOCX_MEDIA_TYPE || isReadableMedia(mediaType);
-}
-
-/**
- * Text this page can render *by fetching it*. A .docx is deliberately not here:
- * it is readable too, but only through the server's extraction endpoint, and
- * folding it in would send this page's blob fetch at a zip.
- */
-function isReadableMedia(mediaType: string): boolean {
-  return (
-    mediaType.startsWith("text/") ||
-    mediaType === "application/json" ||
-    mediaType.endsWith("+json")
-  );
 }
 
 /**

@@ -34,6 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, runtime_checkable
 
+from agent_workbench.application.answer_release import LiveTextPolicy
 from agent_workbench.application.citations import verify_citations
 from agent_workbench.application.retrieval import (
     AuthorizedContext,
@@ -309,6 +310,27 @@ class TurnExecution(Protocol):
         cancellation: CancellationToken,
     ) -> ProducedAnswer: ...
 
+    def live_text_policy(self, request: ChatRequest, /) -> LiveTextPolicy:
+        """Whether this shape's text may be shown while it is being written.
+
+        Positional-only, so an implementation that ignores the request may say
+        so in its parameter name. Nothing calls this by keyword, and forcing
+        every shape to spell ``request`` for a value it does not read would
+        turn an unused argument into a lie the linter cannot see.
+
+        Asked of the shape rather than decided by the caller, because the
+        answer follows from something only the shape knows: whether the turn
+        can end in ``AnswerWithheld``. A shape that retrieves can -- a grant
+        may be withdrawn between the model finishing and the answer shipping --
+        and one that never retrieves cannot, because there is nothing whose
+        withdrawal could invalidate what was already streamed.
+
+        Required rather than defaulted. A new shape that forgot to answer would
+        otherwise inherit whichever reading the base class happened to pick,
+        and one of the two readings is a leak.
+        """
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class AnswerModeSelector:
@@ -359,6 +381,16 @@ class AnswerModeSelector:
             sink=sink,
             cancellation=cancellation,
         )
+
+    def live_text_policy(self, request: ChatRequest) -> LiveTextPolicy:
+        """The chosen shape's policy, from the same choice that will run.
+
+        Not a policy of its own: this object routes, and a router that decided
+        the fence would be a second opinion able to disagree with the shape
+        actually producing the text.
+        """
+
+        return self.select(request).live_text_policy(request)
 
 
 class RetrievalJournal:
@@ -549,6 +581,17 @@ class FixedTwoStepExecution:
             fabricated_citations=verdict.fabricated,
         )
 
+    def live_text_policy(self, _request: ChatRequest) -> LiveTextPolicy:
+        """Redacted: this shape retrieves, so its answer can be withheld.
+
+        ``authorized_revisions`` is non-empty on the path that answers, which
+        is exactly the state in which a revoked grant turns a finished answer
+        into ``AnswerWithheld``. Text streamed before that decision would be
+        text the fence then refuses to publish.
+        """
+
+        return "redacted"
+
 
 class WebSearchJournal:
     """Which runs read the web, kept only while those runs are live.
@@ -731,6 +774,24 @@ class UngroundedExecution:
             citations=(),
         )
 
+    def live_text_policy(self, _request: ChatRequest) -> LiveTextPolicy:
+        """Provisional: there is no evidence here whose withdrawal could bite.
+
+        Both returns above hardcode ``authorized_revisions=()`` -- this shape
+        never touches ``RetrievalService`` (ADR-018) -- so the release fence
+        re-checks an empty set and can only commit. There is no reachable state
+        in which text already streamed becomes text that must not have been
+        shown, which is the only thing ``redacted`` protects against.
+
+        Reading a web page does not change this and is why the reasoning is
+        stated in terms of revisions rather than of "did it look anything up".
+        A fetched page has no revision, no ACL and nothing to re-check (ADR-021
+        §3); it cannot be revoked between here and publication because nothing
+        here was ever granted.
+        """
+
+        return "provisional"
+
 
 @dataclass(frozen=True, slots=True)
 class AgenticExecution:
@@ -795,6 +856,17 @@ class AgenticExecution:
             citations=() if read_the_web else verdict.verified,
             fabricated_citations=() if read_the_web else verdict.fabricated,
         )
+
+    def live_text_policy(self, _request: ChatRequest) -> LiveTextPolicy:
+        """Redacted: this shape retrieves, so its answer can be withheld.
+
+        ``authorized_revisions`` is non-empty on the path that answers, which
+        is exactly the state in which a revoked grant turns a finished answer
+        into ``AnswerWithheld``. Text streamed before that decision would be
+        text the fence then refuses to publish.
+        """
+
+        return "redacted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -929,6 +1001,17 @@ class RoutedExecution:
             citations=verdict.verified,
             fabricated_citations=verdict.fabricated,
         )
+
+    def live_text_policy(self, _request: ChatRequest) -> LiveTextPolicy:
+        """Redacted: this shape retrieves, so its answer can be withheld.
+
+        ``authorized_revisions`` is non-empty on the path that answers, which
+        is exactly the state in which a revoked grant turns a finished answer
+        into ``AnswerWithheld``. Text streamed before that decision would be
+        text the fence then refuses to publish.
+        """
+
+        return "redacted"
 
 
 def _required_knowledge_base(request: ChatRequest) -> str:
