@@ -4027,39 +4027,72 @@ pre {
 
 /* --- Code：一次编码会话 --------------------------------------------------
  *
- * 三栏里只有两栏，因为第三个问题（正在做什么）只在一轮进行中才有答案，所以它
- * 长在对话流里而不是自己占一栏。工作区那一栏是常驻的：它是这个流程的产物。
+ * 两种形态。没有会话：整页是一个居中的开始区（输入框 + 最近会话），因为其他
+ * 每一块面板描述的都是一个还不存在的会话。有会话：左列是对话（转录、每轮的
+ * 步骤、输入框），右列是产物（文件列表 + 选中文件的预览）——右列只在工作区
+ * 真有东西时出现，空会话把整个宽度留给对话。
  *
  * 注意上面还有一个 `.aw-code-value`，那是等宽工具类，和这里的 Code 流程无关；
  * 这一段复用它来排数字与摘要，正是因为它就是"把一串机器写的字排整齐"。
  */
 
-/* 侧栏宽度跟 Work 的附件栏对齐（见 `.aw-work-body`），而不是一个固定的 268px。
- *
- * 换成 clamp 是因为这一栏的职责变了：文件正文已经搬到左边的宽阅读列里，这里
- * 只剩文件名和最近会话，一个按窗口收缩的宽度就够。之前它要同时装下文件列表和
- * 文件内容 —— 打开一个源文件，正文以 11px 挤在四分之一屏里，而它上面的列表被
- * 压成一两行。 */
+/* 右列比旧的 268px 侧栏宽得多，因为预览搬了进来：文件正文要行宽，不是文件名
+ * 的行宽。40% 封顶在 560px，对话列永远拿大头。 */
 .aw-code-page {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(200px, 24%, 268px);
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 40%, 560px);
   height: 100%;
   min-height: 0;
 }
 
-/* `.is-empty` 这一档没有了，跟着开屏页一起。以前没有会话时整页是另一套东西，
- * 那一栏确实无意义；现在没有会话只是「还没有文件、还没有对话」，而侧栏里的
- * 「最近」正是这时候最该够得着的东西 —— 把它收起来，等于让人在唯一需要找旧
- * 会话的时刻找不到入口。 */
+/* 没东西可展示时右列整个不渲染（组件里判定），这里只需要让剩下的一列占满。 */
+.aw-code-page.is-solo {
+  grid-template-columns: minmax(0, 1fr);
+}
 
-/* 只钉第一行，其余交给隐式的 auto 行。这里的子元素数量是随状态变的 ——
- * 对话流、文件预览、待批准、错误、输入框，五个里有三个可能不在 —— 写死三行
- * 会让第四个子元素落进一个没被描述的位置。 */
+/* 钉头两行（会话折叠条、对话流），其余交给隐式的 auto 行。子元素数量随状态
+ * 变 —— 待批准、错误、输入框，三个里有两个可能不在 —— 写死行数会让下一个
+ * 子元素落进一个没被描述的位置。 */
 .aw-code-main {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
+}
+
+/* 会话入口折叠在对话列顶部：开着的会话里"换一个会话"是偶发动作，常驻列表
+ * 抢的是转录的高度。开始页则把同一个列表摊开着放。 */
+.aw-code-sessions-fold {
+  padding: 6px clamp(16px, 4vw, 56px);
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-code-sessions-fold summary {
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.aw-code-sessions-fold summary:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+.aw-code-sessions-fold-body {
+  display: grid;
+  gap: 8px;
+  padding: 8px 0 6px;
+  justify-items: start;
+}
+
+.aw-code-sessions-fold .aw-code-recent {
+  width: 100%;
+  max-height: min(40vh, 360px);
+  padding: 0;
+  border-top: 0;
 }
 
 .aw-code-transcript {
@@ -4111,26 +4144,6 @@ pre {
   border-left: 2px solid var(--aw-border-strong);
 }
 
-/* 过程。只在一轮进行中出现，所以它是流的一部分而不是一块常驻面板。 */
-.aw-code-steps {
-  width: min(820px, 100%);
-  margin: 18px auto 0;
-  padding: 12px 14px;
-  border: 1px solid var(--aw-border);
-  border-radius: 12px;
-  background: var(--aw-panel);
-}
-
-.aw-code-steps ol {
-  display: grid;
-  margin: 8px 0 0;
-  padding: 0;
-  gap: 3px;
-  list-style: none;
-  color: var(--aw-text-soft);
-  font-size: 12px;
-}
-
 .aw-code-approvals {
   display: grid;
   width: min(820px, 100%);
@@ -4166,6 +4179,15 @@ pre {
   gap: 8px;
 }
 
+/* 附件、输入、发送在一行：上传是提问的一部分，所以控件坐在提问发生的地方。
+ * 之前它在最右侧栏的头部，和它服务的动作隔着整个屏幕。 */
+.aw-code-composer-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
 .aw-code-composer textarea {
   min-height: 64px;
   max-height: 200px;
@@ -4176,29 +4198,16 @@ pre {
   resize: none;
 }
 
-.aw-code-composer button {
-  justify-self: end;
-}
-
-/* The right column, holding two panes that are separate landmarks.
-
-   `1fr auto`: the working set takes what is left and the recent list takes what
-   it needs, so a long file list scrolls rather than pushing the way back to
-   another session off the bottom of the screen. */
-.aw-code-side {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--aw-border);
-  background: var(--aw-sidebar);
-}
-
+/* The right column: the working set's files, then the opened one's preview.
+   `flex` so the preview takes what the list does not need; the list caps
+   itself only while a preview is open (see the `:has` below). */
 .aw-code-workspace {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  border-left: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
 }
 
 .aw-code-workspace header {
@@ -4206,9 +4215,7 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 64px;
-  padding: 9px 18px;
-  border-bottom: 1px solid var(--aw-border);
+  padding: 12px 18px 6px;
 }
 
 .aw-code-workspace h2 {
@@ -4216,20 +4223,24 @@ pre {
   font-size: 13px;
 }
 
-/* `flex: 1` 是这里唯一新增的一行，也是之前缺的那一行。这个 ul 声明了
- * `overflow-y: auto` 却没有声明自己该占多高，于是在 flex 列里按内容分配空间：
- * 它下面一旦出现别的东西，列表就被压成一两行，而滚动条从没出现过 —— 声明了
- * 滚动却没有可滚的高度。 */
+/* 列表和预览分这一列的高度：没开预览时列表拿全部，开了就把大头让给预览、
+ * 自己封顶在三分之一屏内滚动。`:has` 已经是这份样式表的既有依赖（见
+ * `.aw-code-attach:has(input:disabled)`），所以这里用它不是新的兼容性决定。 */
 .aw-code-workspace ul {
   display: grid;
   flex: 1;
   min-height: 0;
   margin: 0;
-  padding: 12px;
+  padding: 6px 12px 12px;
   overflow-y: auto;
   gap: 2px;
   list-style: none;
   align-content: start;
+}
+
+.aw-code-workspace:has(.aw-code-file-view) ul {
+  flex: 0 1 auto;
+  max-height: min(30vh, 280px);
 }
 
 .aw-code-workspace li {
@@ -4264,27 +4275,18 @@ pre {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .aw-code-side {
-    max-height: 40vh;
-    border-top: 1px solid var(--aw-border);
-    border-left: 0;
-  }
-
   .aw-code-workspace {
+    max-height: 45vh;
     min-height: 0;
+    border-top: 1px solid var(--aw-border);
     border-left: 0;
   }
 }
 
-/* The way back to a session this browser has already opened.
-
-   It sits under the working set when a session is open and under the empty
-   state when none is, because those are the two moments the question "where
-   was I" gets asked -- and neither of them wants a third column. */
-/* 上限 + 自己滚，因为这一块坐在 `.aw-code-side` 的 `auto` 行里，而那一行没有
- * 上界。工作区那一行是 `minmax(0, 1fr)` —— `0` 是真的 0：会话攒到十几条，
- * 「最近」就把工作区挤到没有高度，于是这个流程的产物从界面上消失，而消失的
- * 原因是一份历史列表。 */
+/* The way back to a session this browser has already opened. Unfolded on the
+   start page, folded behind `.aw-code-sessions-fold` while a session is open;
+   capped and self-scrolling in both, so a long history stays a list rather
+   than becoming the page. */
 .aw-code-recent {
   display: grid;
   max-height: min(38vh, 300px);
@@ -4338,21 +4340,25 @@ pre {
   font-weight: 600;
 }
 
-.aw-code-workspace-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 /* The upload control is a `label` wrapping a hidden `input[type=file]`, so it
-   has to be told to look and size like the button beside it. `display: none`
+   has to be told to look like the icon button it sits next to. `display: none`
    on the input rather than `visibility: hidden`: the label is what takes focus
    and forwards the click, so the input never needs to be reachable itself. */
 .aw-code-attach {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--aw-border);
+  border-radius: 11px;
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
   cursor: pointer;
+}
+
+.aw-code-attach:hover {
+  color: var(--aw-text);
 }
 
 .aw-code-attach input {
@@ -4391,21 +4397,20 @@ pre {
   font-weight: 600;
 }
 
-/* The file itself, under the list rather than over it: the list is how you got
-   here and stays visible, which is what makes "open another one" one click. */
-/* 现在坐在左边的宽阅读列里，不再是右侧那条窄栏的一部分。所以它有了自己的边框
- * 与内距，宽度跟对话流对齐（见 `.aw-code-turns` 的 820px），而不是跟文件列表
- * 对齐 —— 读代码要的是行宽，不是靠近文件名。 */
+/* The file itself, under the list it was opened from: the list stays visible,
+   which is what makes "open another one" one click. It takes the rest of the
+   column's height and scrolls inside itself. */
 .aw-code-file-view {
-  display: grid;
-  width: min(820px, 100%);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-height: 0;
-  margin: 0 clamp(16px, 4vw, 56px) 12px;
+  margin: 0;
   gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--aw-border);
-  border-radius: 10px;
-  background: var(--aw-panel-soft);
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--aw-border);
+  background: var(--aw-panel);
+  overflow-y: auto;
 }
 
 .aw-code-file-actions {
@@ -4433,16 +4438,14 @@ pre {
   white-space: nowrap;
 }
 
-/* `pre`, not `pre-wrap`, now that this pane has the reading column's width.
-   Wrapping was the right answer inside 268px -- a horizontal scrollbar in a
-   quarter-width pane is a pane you cannot read -- and it is the wrong answer
-   here: re-flowing source code destroys the indentation that carries its
-   structure, which is the same argument `.aw-step-pre.is-json` already makes
-   two hundred lines up. A long line scrolls sideways within the box; the box
-   itself is bounded both ways, so neither direction escapes onto the page. */
+/* `pre`, not `pre-wrap`: re-flowing source code destroys the indentation that
+   carries its structure, the same argument `.aw-step-pre.is-json` already
+   makes further up. A long line scrolls sideways within the box; the box is
+   bounded both ways by the column, so neither direction escapes the panel. */
 .aw-code-file-view pre {
+  flex: 1;
   overflow: auto;
-  max-height: min(60vh, 620px);
+  min-height: 0;
   margin: 0;
   padding: 10px;
   border-radius: 6px;
@@ -4452,6 +4455,64 @@ pre {
   line-height: 1.6;
   white-space: pre;
   tab-size: 2;
+}
+
+/* --- Code：开始页 --------------------------------------------------------
+ *
+ * 没有会话时的整页形态：一个居中的开始区。竖直方向压在上三分之一附近而不是
+ * 正中 —— 视线落点和 Chat 的空态一致，列表长起来也不会把标题推出屏幕。 */
+.aw-code-start {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  padding: clamp(24px, 9vh, 88px) 24px 24px;
+  overflow-y: auto;
+  justify-items: center;
+  align-content: start;
+}
+
+.aw-code-start-inner {
+  display: grid;
+  width: min(680px, 100%);
+  gap: 16px;
+}
+
+.aw-code-start-head {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  text-align: center;
+  color: var(--aw-text-soft);
+}
+
+.aw-code-start-head svg {
+  width: 28px;
+  height: 28px;
+  color: var(--aw-accent);
+}
+
+.aw-code-start-head h1 {
+  margin: 0;
+  color: var(--aw-text);
+  font-size: 20px;
+}
+
+.aw-code-start-head p {
+  margin: 0;
+  max-width: 46ch;
+  font-size: 13px;
+}
+
+/* 开始页的输入框占满开始区的宽度；最近会话直接摊开在它下面。 */
+.aw-code-start .aw-code-composer {
+  width: 100%;
+  padding: 0;
+}
+
+.aw-code-start .aw-code-recent {
+  max-height: none;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--aw-border);
 }
 
 /* The workbench: a tab strip over whichever flow is showing. */

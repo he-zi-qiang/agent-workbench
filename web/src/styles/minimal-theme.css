@@ -522,7 +522,7 @@ select {
  * its place, and the one surface that should read as paper.
  */
 
-.aw-code-side {
+.aw-code-workspace {
   border-left-color: var(--aw-border);
 }
 
@@ -534,8 +534,6 @@ select {
 }
 
 .aw-code-file-view {
-  margin-right: clamp(20px, 5vw, 72px);
-  margin-left: clamp(20px, 5vw, 72px);
   border-color: var(--aw-border);
   background: var(--aw-panel);
 }

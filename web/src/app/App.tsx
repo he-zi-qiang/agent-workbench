@@ -51,8 +51,12 @@ export function App() {
               <Route path="work" element={<WorkPage />} />
               <Route path="work/:taskId" element={<WorkPage />} />
             </Route>
-            <Route path="code" element={<CodePage />} />
-            <Route path="code/:sessionId" element={<CodePage />} />
+            {/* One route with an optional param, not two sibling routes: the
+                first send navigates /code → /code/:id mid-turn, and two Route
+                entries remount the page across that boundary -- dropping the
+                `running` flag exactly while the first turn runs, so the
+                composer re-enabled against an open request. */}
+            <Route path="code/:sessionId?" element={<CodePage />} />
             <Route path="knowledge" element={<KnowledgePage />} />
             <Route path="evaluation" element={<EvaluationPage />} />
             <Route path="system" element={<SystemPage />} />
