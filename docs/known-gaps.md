@@ -711,6 +711,22 @@ ADR-049 §2 里：只在它守着的东西比它本身更贵时才引入。今�
 **做完的判据**：一次从界面发起的运行不再修改被 git 跟踪的文件——要么写到别处，
 要么每次运行有自己的目录，且页面明确说它显示的是哪一次。
 
+### F-11 Code 工作区的 .docx 没有版面预览 —— 已知代价
+
+**现状**：Work 页的 .docx 能看版面（`/v1/artifacts/{id}/pdf` 转换）和文字
+（`/preview` 抽取），Code 工作区的 .docx 只能下载。图片、PDF、文本在两边都能
+点开直接看（统一走 `previewKind`，见 `web/src/components/media.ts`）。
+
+**为什么**：那两个转换端点按 artifact id 寻址，而 Code 的工作区列表故意不给
+id（见 `client.ts` 里的注释：不让浏览器叫得出一个已被会话翻过去的版本）。给
+Code 加 .docx 版面就要开一条按 session + name 寻址的第二条转换路，而
+[ADR-0045](./adr/0045-a-layout-is-a-conversion-not-a-third-parser.md) 刻意把
+转换收在 artifact 寻址一条路上。第二条路是边界变更，该有自己的 ADR，等真有人
+需要再开。
+
+**做完的判据**：Code 工作区里点开一个 .docx 能看到版面或文字，且新端点有 ADR
+记录它为什么可以存在。
+
 ---
 
 ## 优先级建议

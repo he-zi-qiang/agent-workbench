@@ -2762,6 +2762,17 @@ pre {
   border: 0;
 }
 
+/* A generated picture at its own size when it fits, scaled down when it does
+   not -- never scaled up, which turns a small plot into fog. */
+.aw-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: min(72vh, 760px);
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel-soft);
+}
+
 /* One row per kind of loss, the count hard right so a reader scanning the
    column sees the quantities line up rather than hunting them inside
    sentences. Bordered off from the text above it because it is a statement
