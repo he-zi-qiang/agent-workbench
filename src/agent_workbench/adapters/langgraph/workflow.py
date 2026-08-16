@@ -333,10 +333,16 @@ def build_v1_graph(
     graph.add_conditional_edges(
         "route", _route_research, list(research_graph.RESEARCH_BRANCHES)
     )
+    # "export" for the reason spelled out over v2's `review` edges below, and
+    # this list is the half that was missed when v1 learned to read
+    # `export_requires_approval`. The bug the v2 comment records is not
+    # hypothetical here either: routing unit tests call the router directly and
+    # see a correct answer, while LangGraph resolves that same answer against
+    # this list and raises `KeyError: 'export'` on the first real Task.
     graph.add_conditional_edges(
         "quality_gate",
         _route_quality_gate,
-        ["approval", "synthesize", _EXHAUSTED],
+        ["approval", "export", "synthesize", _EXHAUSTED],
     )
     graph.add_conditional_edges("approval", _route_approval, ["export", _EXHAUSTED])
     return graph

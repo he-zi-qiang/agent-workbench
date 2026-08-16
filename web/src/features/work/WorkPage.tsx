@@ -1570,6 +1570,22 @@ function TaskResult({
             </button>
           </div>
         ) : null}
+        {/* A Task can fail after it has already written something -- a rejected
+            export is the plain case, and every step failure downstream of
+            `synthesize` is another. The draft lives in the timeline events, not
+            in a field that the failure cleared, so it is still here; until now
+            the status branch simply never asked for it, and the reader lost
+            work that had been done. Shown under the notice rather than instead
+            of it: why it stopped is the headline, what it wrote is the salvage. */}
+        {draftText === null ? null : (
+          <section className="aw-answer" aria-label="任务停下前写出的内容">
+            <header>
+              <span className="aw-answer-mark" aria-hidden="true">A</span>
+              <strong>停下前写出的内容</strong>
+            </header>
+            <MarkdownContent text={draftText} />
+          </section>
+        )}
       </section>
     );
   }

@@ -318,6 +318,98 @@ def test_an_injector_free_worker_still_runs_every_node_of_every_graph(
     assert result.state.approval_decision == "approved"
 
 
+# --- the export gate answers the same question on either graph ---------------
+
+
+def _recording_handlers(version: str, visited: list[str]) -> dict[str, Any]:
+    """The graph's own demo handlers, each noting that it ran.
+
+    Which nodes ran is the whole question here, and the demo handlers record
+    only an opaque outcome ref -- so the node identity has to come from the
+    wrapper rather than from the resulting state.
+    """
+
+    def record(node: str, handler: Any) -> Any:
+        async def run(state: TaskState) -> Any:
+            visited.append(node)
+            return await handler(state)
+
+        return run
+
+    return {
+        node: record(node, handler)
+        for node, handler in DEMO_HANDLERS[version]().items()
+    }
+
+
+@pytest.mark.parametrize("version", VERSIONS)
+def test_every_graph_skips_the_approval_when_the_deployment_ungates_export(
+    version: str,
+) -> None:
+    """`workflow.export_requires_approval` is one setting, so it must mean one thing.
+
+    This is the invariant that was missing, and its absence is what let the two
+    graphs disagree for as long as they did: ADR-038 taught v2's ``route_review``
+    to read the field, ADR-048 flipped the shipped default to ``false``, and
+    v1's ``route_quality_gate`` went on routing to ``approval`` unconditionally
+    the whole time. Every v1 test passed, because none of them named the field.
+
+    Asserted against the compiled graph rather than the routers, so a graph that
+    can answer "export" without declaring the edge fails here too.
+    """
+
+    visited: list[str] = []
+
+    async def scenario() -> Any:
+        return await LangGraphTaskWorkflow(
+            handlers=_recording_handlers(version, visited)
+        ).run(
+            _state(wants_report=True, export_requires_approval=False),
+            thread_id=f"thread_ungated_{version}",
+            graph_version=version,
+        )
+
+    result = asyncio.run(scenario())
+
+    assert result.disposition == "completed"
+    assert "export" in visited
+    assert "approval" not in visited
+    # Skipped, not auto-approved. The distinction is the point: an approval row
+    # nobody answered would leave a decision downstream code could read as
+    # consent, and the audit trail would record one that never happened.
+    assert result.state.approval_id is None
+    assert result.state.approval_decision is None
+
+
+@pytest.mark.parametrize("version", VERSIONS)
+def test_every_graph_still_stops_at_the_approval_when_the_gate_is_on(
+    version: str,
+) -> None:
+    """The control for the test above, on the same compiled graphs.
+
+    Without it, "both graphs export without an approval" could be satisfied by
+    two graphs that had stopped honouring the gate at all -- which is the
+    opposite failure and just as silent.
+    """
+
+    visited: list[str] = []
+
+    async def scenario() -> Any:
+        return await LangGraphTaskWorkflow(
+            handlers=_recording_handlers(version, visited)
+        ).run(
+            _state(wants_report=True, export_requires_approval=True),
+            thread_id=f"thread_gated_{version}",
+            graph_version=version,
+        )
+
+    result = asyncio.run(scenario())
+
+    assert result.disposition == "completed"
+    assert visited.index("approval") < visited.index("export")
+    assert result.state.approval_decision == "approved"
+
+
 # --- recovery decides identically over either graph's checkpoints ------------
 
 

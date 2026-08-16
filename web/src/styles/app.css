@@ -2876,7 +2876,14 @@ pre {
   list-style: none;
 }
 
+/* `min-width: 0` because this `li` is the grid item every opened step lives
+   inside, and a grid item's floor is `auto` -- the widest thing it contains,
+   which for a step is an unbroken line of JSON. Without it the two rules
+   above that cap and scroll those `pre`s are overridden from the outside:
+   the track simply grows to fit, and the reading column widens past the
+   panel instead of the payload scrolling within it. */
 .aw-stream-events > li {
+  min-width: 0;
   padding: 1px 0 1px 8px;
 }
 
@@ -3322,10 +3329,27 @@ pre {
   font-size: 10px;
 }
 
+/* `overflow` belongs with `max-height`, and leaving it out is what made an
+   opened step unreadable. A capped box whose overflow stays `visible` still
+   paints every line it was given -- the *box* stops at 340px, the text does
+   not -- and this `pre` had no background of its own, so a long model output
+   went on drawing as bare glyphs over the artifact card and the next step
+   below it. Reported as 打开后和下面的文字糊在一起. `.aw-timeline-group pre`
+   above got this right; this rule is the copy that lost the line.
+
+   `white-space` for the same reason: the global `pre` rule (see `code, pre`)
+   sets only a font, so the base here inherited the browser's `pre` and model
+   prose ran off the right edge instead of wrapping -- which the comment below
+   has claimed it does since it was written. */
 .aw-step-pre {
   max-height: 340px;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 7px;
+  background: var(--aw-panel-strong);
   font-size: 11px;
   line-height: 1.65;
+  white-space: pre-wrap;
 }
 
 /* Model prose wraps; JSON keeps its indentation and scrolls instead, because
@@ -3362,6 +3386,22 @@ pre {
 
 .aw-step-raw > summary {
   color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+/* The raw payload `pre` carries no class of its own (`StepDisclosure` renders
+   a bare `<pre>` there), so without this it takes the browser default: no
+   cap, no scroll, and `white-space: pre`. One long line of serialised JSON
+   then runs straight across the reading column and out over whatever sits to
+   its right. Capped and scrolled here rather than given a class, because the
+   element has exactly one home. */
+.aw-step-raw pre {
+  max-height: 280px;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 7px;
+  background: var(--aw-panel-strong);
+  color: var(--aw-text-soft);
   font-size: 10px;
 }
 

@@ -17,7 +17,7 @@
 #   scripts/dev.sh web-worker   # real Worker; requires a model provider key
 #   scripts/dev.sh code-api     # API with Code sessions on; requires a key
 #   scripts/dev.sh demo-check   # probe both MCP servers at once
-#   scripts/dev.sh demo-api     # API with Word *and* web: the console profile
+#   scripts/dev.sh demo-api     # API with Word *and* web *and* Code: the console
 #   scripts/dev.sh demo-worker  # real Worker for that profile; needs both servers
 #   scripts/dev.sh smoke        # drive the whole thing and print what happened
 #
@@ -388,6 +388,11 @@ demo-api)
   # place that can still say so is here, before the process replaces this shell.
   # Only this arm refuses: a keyless deployment that indexes and searches is a
   # real thing to want, and `dev.sh api` is how you say you want it.
+  #
+  # Code sessions come from the profile now (`[code] enabled = true` in
+  # config.demo-local.toml) rather than from an `AW_CODE__ENABLED` a caller
+  # remembered to export. The same key gates them: a coding turn is a model
+  # loop or it is nothing, so the refusal above covers Code too.
   if [ -z "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
     echo "demo-api requires AW_SECRETS__DEEPSEEK_API_KEY; refusing a console without Chat" >&2
     echo "  no key means no chat and no events route, and every Task quietly runs v1" >&2

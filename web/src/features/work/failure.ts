@@ -45,6 +45,30 @@ const STEP_FAILURE =
 /** `the <step> step did not produce usable output during <action>` */
 const STEP_EMPTY = /^the (\w+) step did not produce usable output during/;
 
+/**
+ * Whole-sentence details, which the two regexes above cannot match because
+ * they are not step-shaped. Both graphs write their own wording for the same
+ * two endings, so both spellings are listed rather than folded into one
+ * pattern -- a router's sentence is not a format, and matching it loosely is
+ * how the wrong ending gets the wrong explanation.
+ *
+ * The rejection entries stay after the export gate was made to honour
+ * `export_requires_approval` in v1 too: a deployment that turns the gate back
+ * on still reaches them, and every Task that already failed this way keeps its
+ * history readable.
+ */
+const WHOLE_DETAIL_LABELS: Readonly<Record<string, string>> = {
+  "a human rejected the approval required before export":
+    "你拒绝了这次导出，任务在生成文件前停下了。",
+  "export was rejected by a reviewer":
+    "审阅者拒绝了这次导出，任务在生成文件前停下了。",
+  "the critic requested another revision after the revision budget was exhausted":
+    "检查环节仍要求修改，但这次任务的修改次数已经用完了。",
+};
+
+/** `review still requires changes after <n> revisions of the work node` */
+const REVIEW_EXHAUSTED = /^review still requires changes after (\d+) revisions/;
+
 export interface FailureExplanation {
   text: string;
   /** True when the server classified the cause as worth another attempt. */
@@ -53,6 +77,17 @@ export interface FailureExplanation {
 
 export function explainFailure(detail: string | null): FailureExplanation | null {
   if (detail === null || detail.trim() === "") return null;
+
+  const whole = WHOLE_DETAIL_LABELS[detail.trim()];
+  if (whole !== undefined) return { text: whole, retryable: false };
+
+  const reviewExhausted = REVIEW_EXHAUSTED.exec(detail);
+  if (reviewExhausted !== null) {
+    return {
+      text: `审阅环节仍要求修改，但这次任务的 ${reviewExhausted[1]} 次修改机会已经用完了。`,
+      retryable: false,
+    };
+  }
 
   const failed = STEP_FAILURE.exec(detail);
   if (failed !== null) {

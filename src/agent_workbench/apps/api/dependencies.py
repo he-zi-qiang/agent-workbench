@@ -412,7 +412,17 @@ def build_dependencies(
         ),
     )
     task_inputs = TaskInputService(
-        inputs=TaskInputStore(artifacts),
+        # Passed here even though this process only ever calls `store()`. The
+        # field is read by `load_state`, so leaving it out costs nothing today
+        # and silently answers `True` -- the dataclass default, which exists for
+        # checkpoints older than the field rather than for a live deployment --
+        # the first time anything in the API loads a Task's state. The Worker
+        # already passes it; two constructions of the same store disagreeing
+        # about a deployment setting is the shape of bug worth not having.
+        inputs=TaskInputStore(
+            artifacts,
+            export_requires_approval=config.task.export_requires_approval,
+        ),
         tasks=task_service,
     )
 
