@@ -9,9 +9,9 @@ had no renderer in that envelope at all. What the model did instead is pinned in
 `report.docx`.
 
 So the assertions here are about the union being *complete*: both servers, both
-budget corrections, and the export gate a single-machine deployment is allowed
-to decline (ADR-038 §2.1). A profile missing any one of them fails in a way that
-looks like the model misbehaving.
+budget corrections, and the export gate this repository now declines by default
+(ADR-038 §2.1 made it a choice; ADR-048 answered it). A profile missing any one
+of them fails in a way that looks like the model misbehaving.
 """
 
 from __future__ import annotations
@@ -23,7 +23,11 @@ from pathlib import Path
 import pytest
 
 from agent_workbench.bootstrap.projections import project_task, project_task_worker
-from agent_workbench.bootstrap.settings import Settings, load_settings
+from agent_workbench.bootstrap.settings import (
+    Settings,
+    WorkflowSettings,
+    load_settings,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEMO_CONFIG = ROOT / "config/config.demo-local.toml"
@@ -113,21 +117,32 @@ def test_the_console_profile_names_its_own_chat_shape(
     assert shipped.chat.retrieval_shape == "fixed"
 
 
-def test_the_console_profile_declines_the_export_gate(
+def test_a_deployment_that_says_nothing_does_not_gate_export(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Declined here, still shipped on by default.
+    """The default ADR-048 chose, and the profiles that still say it themselves.
 
-    ADR-038 §2.1 lets a deployment choose; §4 says making `false` the repository
-    default needs its own ADR. Both halves are asserted, because a change that
-    moved the default would satisfy the first assertion silently.
+    ADR-038 §2.1 made this a deployment's choice and §4 required a new ADR to
+    move the repository default; ADR-048 is that ADR. This assertion is what
+    makes its decision checkable -- a later change that quietly restored the
+    gate would have to edit this line and say why.
+
+    The console profile is asserted too, and it is not redundant: a profile that
+    states its own posture keeps stating it after the default agrees, so that it
+    does not silently depend on a default that has now moved once.
     """
 
     demo = _load_profile(monkeypatch, DEMO_CONFIG)
     shipped = _load_profile(monkeypatch, DEFAULT_CONFIG)
 
+    assert shipped.workflow.export_requires_approval is False
     assert demo.workflow.export_requires_approval is False
-    assert shipped.workflow.export_requires_approval is True
+    # And the field's own default, which the shipped config never consults
+    # because it states the value explicitly. Left unasserted, flipping the
+    # Python default back is a change no test notices -- and the reader who
+    # opens `settings.py` to find out what ships would be told the opposite of
+    # what does. Constructed rather than loaded: the point is the default.
+    assert WorkflowSettings.model_fields["export_requires_approval"].default is False
 
 
 def test_the_console_profile_raises_both_budgets_a_document_run_needs(

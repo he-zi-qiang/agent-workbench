@@ -587,10 +587,17 @@ class WorkflowSettings(StrictModel):
     #: a formality, and a formality that fires on every Task teaches people to
     #: approve without looking, which costs more than it buys.
     #:
-    #: Defaults True, so a deployment that says nothing keeps ADR-031's shape.
+    #: Defaults **False** since ADR-048, which is a change of default and not a
+    #: change of mechanism: the field, the graph's two routes, the approval API
+    #: and the events are all exactly as ADR-038 left them, and a deployment
+    #: that wants the gate sets this true and answers in the Task's own detail
+    #: view. What moved is the answer given on behalf of a deployment that says
+    #: nothing -- and this repository is a single-machine one, where the gate
+    #: asks "do you approve handing this file to yourself".
+    #:
     #: `human_interrupt_enabled` above stays independent: it declares that the
     #: framework *can* pause, which the graph still needs for any future gate.
-    export_requires_approval: bool = True
+    export_requires_approval: bool = False
     interrupt_boundary: Literal["graph_node"] = "graph_node"
     runtime_loop_owner: Literal["custom_runtime"] = "custom_runtime"
     graph_version: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9._-]+$")

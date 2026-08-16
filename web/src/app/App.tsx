@@ -18,11 +18,6 @@ const KnowledgePage = lazy(() =>
     default: KnowledgePage,
   })),
 );
-const ApprovalsPage = lazy(() =>
-  import("../features/approvals/ApprovalsPage").then(({ ApprovalsPage }) => ({
-    default: ApprovalsPage,
-  })),
-);
 const EvaluationPage = lazy(() =>
   import("../features/evaluation/EvaluationPage").then(({ EvaluationPage }) => ({
     default: EvaluationPage,
@@ -54,7 +49,6 @@ export function App() {
             <Route path="code" element={<CodePage />} />
             <Route path="code/:sessionId" element={<CodePage />} />
             <Route path="knowledge" element={<KnowledgePage />} />
-            <Route path="approvals" element={<ApprovalsPage />} />
             <Route path="evaluation" element={<EvaluationPage />} />
             <Route path="system" element={<SystemPage />} />
             <Route path="*" element={<Navigate replace to="/chat" />} />

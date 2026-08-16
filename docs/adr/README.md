@@ -45,6 +45,7 @@
 | [ADR-045 版面是一次转换，不是第三条 docx 解析路径](./0045-a-layout-is-a-conversion-not-a-third-parser.md) | 保真度从服务端 LibreOffice 转 PDF、前端渲染库还是只数损失来；新路径会不会变成全仓第二条 docx 解析路径；第一个非 Python 外部依赖的代价谁承担 | 接受，选服务端转换并复用 `preflight_docx` 遵守 ADR-043 §5；同批落地 ADR-043 §7 的计数；LibreOffice 做成构建期开关默认不装，配置 schema 保持 `1.14` |
 | [ADR-046 加法的那一半不许做减法](./0046-the-additive-half-may-not-subtract.md) | `research_external` 读网页那半的 run 停在上限/守卫/传输故障上时节点该不该失败；ADR-032 §3.1 的「纯加法」在失败方向上算不算数；这条豁免按节点给还是按错误给 | 接受，收窄 ADR-032 §4；`_decoded` 多一个 `halted` 参数，解码器与图形状均不变 |
 | [ADR-047 会话的名字来自第一句话，而且只来自第一句](./0047-a-session-is-named-by-its-first-sentence.md) | 编码会话的名字由哪一层产生；「第一句指令」和「人工改名」谁能覆盖谁；这份列表放浏览器还是服务端 | 接受；关闭 F-06 的 Code 那一半 |
+| [ADR-048 导出闸门默认关闭，控制台不再有跨任务收件箱](./0048-the-export-gate-is-off-by-default.md) | ADR-038 §4 要求的那份 ADR：把 `export_requires_approval` 的仓库默认改成 `false`；「待我确认」这一页要不要留 | 接受；应答 ADR-038 §4 的第二个重来条件 |
 | [ADR-051 实时帧没有位置，所以它不许有 id](./0051-a-live-frame-has-no-position.md) | 进程内的 transient 事件该不该到达浏览器；它和"只有 durable 事件有游标"怎么共存；慢读者拖住实时通道时是断开还是别的 | 接受，收窄基线里"溢出即断开"一句 |
 | [ADR-052 撤不回的答案才可以边写边给人看](./0052-only-an-unwithdrawable-answer-may-be-shown-early.md) | `AnswerReleaseSink` 是否对每个 Chat 形态都抹掉 `ModelDelta.text`；判据是什么、由谁给出 | 接受，澄清基线 §5 里 answer release gate 的作用域 |
 | [ADR-054 摘要没法被同意](./0054-a-digest-cannot-be-consented-to.md) | 停在审批上的调用，参数正文要不要进事件流；靠 `record_step_inputs` 还是别的判据 | 接受，对「事件只描述不复现」开一个有范围的例外 |

@@ -1,6 +1,5 @@
 import type {
   ApprovalDecision,
-  ApprovalListResponse,
   ApprovalStatus,
   ApprovalView,
   ArtifactDownloadTarget,
@@ -380,16 +379,6 @@ export async function getTaskTimeline(
     identity,
     `/v1/tasks/${encodeURIComponent(taskId)}/timeline?${params.toString()}`,
   );
-}
-
-export async function listApprovals(
-  identity: PrincipalIdentity,
-  options: { statuses?: ApprovalStatus[]; cursor?: string; limit?: number } = {},
-): Promise<ApprovalListResponse> {
-  const params = new URLSearchParams({ limit: String(options.limit ?? 25) });
-  options.statuses?.forEach((status) => params.append("status", status));
-  if (options.cursor) params.set("cursor", options.cursor);
-  return apiRequest(identity, `/v1/approvals?${params.toString()}`);
 }
 
 export async function getApproval(

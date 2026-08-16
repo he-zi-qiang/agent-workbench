@@ -200,10 +200,15 @@ export interface ApprovalView {
   created_at: string;
 }
 
-export interface ApprovalListResponse {
-  approvals: ApprovalView[];
-  cursor: string | null;
-}
+/**
+ * `GET /v1/approvals` has no client any more.
+ *
+ * The endpoint is still served and still tested -- ADR-048 removed the console's
+ * cross-task inbox, not the ability to answer -- but the answer now happens in
+ * the Task that is waiting, and `getApproval` / `decideApproval` are what that
+ * needs. A typed wrapper for a list nothing renders would be a wrapper that
+ * drifts from the endpoint without anybody noticing.
+ */
 
 export interface TokenUsage {
   input_tokens?: number;

@@ -6,7 +6,6 @@ import {
   MoreHorizontal,
   MessageSquare,
   Settings2,
-  ShieldCheck,
   SquareTerminal,
   X,
 } from "lucide-react";
@@ -20,7 +19,6 @@ const NAVIGATION = [
   { to: "/work", label: "Work", icon: SquareTerminal, primary: true },
   { to: "/code", label: "Code", icon: Code2, primary: true },
   { to: "/knowledge", label: "知识库", icon: Library, primary: false },
-  { to: "/approvals", label: "待我确认", icon: ShieldCheck, primary: false },
   { to: "/evaluation", label: "效果评测", icon: FlaskConical, primary: false },
   { to: "/system", label: "运行状态", icon: Activity, primary: false },
 ] as const;
@@ -30,7 +28,7 @@ export function AppShell() {
   const location = useLocation();
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const secondaryNavigation = NAVIGATION.filter(
-    (item) => item.to === "/approvals" || item.to === "/evaluation" || item.to === "/system",
+    (item) => item.to === "/evaluation" || item.to === "/system",
   );
   const secondaryActive = secondaryNavigation.some((item) =>
     location.pathname.startsWith(item.to),

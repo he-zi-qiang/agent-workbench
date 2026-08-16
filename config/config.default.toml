@@ -243,13 +243,18 @@ control_plane = "langgraph"
 checkpointer_backend = "postgresql"
 checkpointing_enabled = true
 human_interrupt_enabled = true
-# Whether a Task's export waits for a human (ADR-031 §2.4). True here keeps the
-# shipped shape; a deployment whose Tasks produce files their own submitter
-# then downloads can set it false, and the graph routes review -> export with
-# no approval row opened. What export writes is a versioned artifact in this
-# tenant's own store, behind the same per-principal authorization as everything
-# else -- nothing reaches anyone until a human clicks download.
-export_requires_approval = true
+# Whether a Task's export waits for a human (ADR-031 §2.4, ADR-038, ADR-048).
+# False here since ADR-048: the graph routes review -> export with no approval
+# row opened, no approval_id written and no "approved" decision fabricated, and
+# the report header says "not required by this deployment".
+#
+# What export writes is a versioned artifact in this tenant's own store, behind
+# the same per-principal authorization as everything else -- nothing reaches
+# anyone until a human clicks download, and that download is its own authorized
+# read. A multi-person deployment that wants somebody other than the author to
+# look first sets this true; the decision is then answered inside the Task that
+# is waiting, which is where it has always been answerable.
+export_requires_approval = false
 interrupt_boundary = "graph_node"
 runtime_loop_owner = "custom_runtime"
 graph_version = "v1"

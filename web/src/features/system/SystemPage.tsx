@@ -1,12 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
-  ChevronDown,
   CircleHelp,
   Database,
-  KeyRound,
   RefreshCw,
-  Settings2,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { checkHealth } from "../../api/client";
@@ -101,81 +98,22 @@ export function SystemPage() {
         </p>
       )}
 
-      <details className="aw-card aw-section">
-        <summary>
-          <ChevronDown aria-hidden="true" size={14} />
-          查看工程信息
-        </summary>
-        <div className="aw-card-grid">
-          <section aria-labelledby="identity-title">
-            <div className="aw-card-header">
-              <div>
-                <span className="aw-eyebrow">开发身份</span>
-                <h2 id="identity-title">当前请求身份</h2>
-              </div>
-              <Settings2 aria-hidden="true" size={20} />
-            </div>
-            <dl className="aw-definition-list">
-              <div>
-                <dt>Tenant</dt>
-                <dd><code>{identity.tenantId}</code></dd>
-              </div>
-              <div>
-                <dt>Principal</dt>
-                <dd><code>{identity.principalId}</code></dd>
-              </div>
-              <div>
-                <dt>Scopes</dt>
-                <dd>{identity.scopes.length > 0 ? identity.scopes.join(", ") : "无"}</dd>
-              </div>
-            </dl>
-            <div className="aw-notice is-warning">
-              <KeyRound aria-hidden="true" size={16} />
-              <span>Header 身份只用于本机演示，不是生产登录系统。</span>
-            </div>
-            <button
-              className="aw-button is-ghost"
-              onClick={() => setEditorOpen(true)}
-              type="button"
-            >
-              编辑本地身份
-            </button>
-          </section>
+      {/* One button, not a fold.
 
-          <section aria-labelledby="boundary-title">
-            <div className="aw-card-header">
-              <div>
-                <span className="aw-eyebrow">公开能力边界</span>
-                <h2 id="boundary-title">为什么有些状态是未知？</h2>
-              </div>
-              <CircleHelp aria-hidden="true" size={20} />
-            </div>
-            <ul className="aw-capability-list">
-              <li>
-                <Activity aria-hidden="true" size={16} />
-                <div>
-                  <strong>Live 不是完整健康检查</strong>
-                  <span>它只证明 API 进程还可以响应。</span>
-                </div>
-              </li>
-              <li>
-                <Database aria-hidden="true" size={16} />
-                <div>
-                  <strong>Ready 当前只检查数据库</strong>
-                  <span>它没有查询模型、向量库或后台 Worker。</span>
-                </div>
-              </li>
-              <li>
-                <CircleHelp aria-hidden="true" size={16} />
-                <div>
-                  <strong>没有 capabilities 与 heartbeat API</strong>
-                  <span>因此本页不会猜测 Chat、Search 或 Worker 是否已经装配。</span>
-                </div>
-              </li>
-            </ul>
-          </section>
-        </div>
-      </details>
+          What was here was a `<details>` holding two sections, and both were
+          duplicates: the identity block restates `EnvironmentDialog`, which the
+          button below opens, and "why are some states unknown" restated in three
+          bullets the warning directly above it. A page whose live content is two
+          booleans should not be mostly prose about the two booleans. */}
+      <button
+        className="aw-button is-ghost"
+        onClick={() => {
+          setEditorOpen(true);
+        }}
+        type="button"
+      >
+        编辑本地身份
+      </button>
     </main>
   );
 }
