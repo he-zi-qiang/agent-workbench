@@ -95,9 +95,9 @@ def route_review(state: TaskState) -> TaskNodeId | None:
     two budgets would be two places to change it, with the second one found by
     a Task that never terminated.
 
-    ``None`` carries the same two meanings it does in v1, told apart by
-    ``terminal_failure_reason``: the reviewer still wants changes and the
-    budget is spent, or the work passed and nobody asked for a file.
+    ``None`` means what it means in v1 since ADR-060: nobody asked for a
+    file, so the graph is done -- whether the reviewer passed the draft or
+    ran out of revisions disputing it.
     """
 
     review = state.review_result
@@ -111,21 +111,14 @@ def route_review(state: TaskState) -> TaskNodeId | None:
         # a decision nobody made. `route_approval` still refuses to export
         # without one, which is what keeps this the only way past it.
         return "approval" if state.export_requires_approval else "export"
-    return "work" if state.can_revise else None
-
-
-def review_failure_reason(state: TaskState) -> str | None:
-    """The terminal failure recorded by a review that ran out of revisions."""
-
-    review = state.review_result
-    if review is None:
-        raise MissingReviewError(state.task_id)
-    if review.decision == "pass" or state.can_revise:
+    if state.can_revise:
+        return "work"
+    # Out of revisions. Same routing as a pass, same reason as v1's quality
+    # gate (ADR-060): an exhausted reviewer annotates rather than vetoes, and
+    # the verdict travels with the draft as `state.unresolved_review`.
+    if not state.wants_report:
         return None
-    return (
-        f"review still requires changes after {state.max_revisions} "
-        "revisions of the work node"
-    )
+    return "approval" if state.export_requires_approval else "export"
 
 
 def revision_update(state: TaskState) -> dict[str, object]:
@@ -176,14 +169,14 @@ def approval_failure_reason(state: TaskState) -> str | None:
 def terminal_failure_reason(state: TaskState) -> str | None:
     """Why this state stops without exporting, or ``None`` if it succeeded.
 
-    One entry point, so a caller cannot ask the review gate and forget that
-    approval also stops the graph.
+    Since ADR-060 the review gate no longer stops the graph -- an exhausted
+    reviewer annotates rather than vetoes -- so the rejected approval is the
+    only deliberate failure left. The entry point stays, so the caller keeps
+    asking one question even as the answers change underneath.
     """
 
     if state.approval_decision is not None:
         return approval_failure_reason(state)
-    if state.review_result is not None:
-        return review_failure_reason(state)
     return None
 
 
@@ -225,7 +218,6 @@ __all__ = [
     "approval_failure_reason",
     "declared_nodes",
     "next_nodes",
-    "review_failure_reason",
     "revision_update",
     "route_approval",
     "route_review",

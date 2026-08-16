@@ -734,6 +734,34 @@ describe("WorkPage task submission", () => {
     ).toBeInTheDocument();
   });
 
+  it("says when a success shipped with the reviewer still unsatisfied", async () => {
+    // ADR-060: an exhausted reviewer annotates rather than vetoes, and the
+    // annotation lands on the Task row as `status_detail`. Hiding it would
+    // present a disputed draft as a clean pass.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail:
+        "the reviewer still saw 1 unresolved issue(s) after 2 revision(s): thin",
+      agent_invocation_count: 0,
+      objective_preview: "比较三个方案并输出一份建议报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(reportTimeline());
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(
+      within(output).getByText("评审仍有未解决的意见，产物按现状导出"),
+    ).toBeInTheDocument();
+    expect(
+      within(output).getByText(/1 unresolved issue/),
+    ).toBeInTheDocument();
+    // The product itself is still the headline, not the caveat.
+    expect(within(output).getByText("report.md")).toBeInTheDocument();
+  });
+
   it("opens a picture from the rail as a picture, not a download", async () => {
     // A produced .png used to download on click with no feedback and show
     // nothing -- the rail pre-judged "not previewable" and its list was stale

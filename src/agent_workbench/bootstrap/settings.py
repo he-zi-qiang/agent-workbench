@@ -151,7 +151,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.16"] = "1.16"
+    config_schema_version: Literal["1.17"] = "1.17"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -626,8 +626,13 @@ class WorkflowSettings(StrictModel):
     interrupt_boundary: Literal["graph_node"] = "graph_node"
     runtime_loop_owner: Literal["custom_runtime"] = "custom_runtime"
     graph_version: str = Field(min_length=1, pattern=r"^[a-zA-Z0-9._-]+$")
-    node_retry_max_attempts: int = Field(default=2, ge=0, le=20)
-    node_timeout_seconds: int = Field(default=600, ge=1, le=86_400)
+    # `node_retry_max_attempts` and `node_timeout_seconds` are gone (schema
+    # 1.16 -> 1.17, ADR-059). Both were validated here and consumed nowhere --
+    # the LangGraph adapter has no RetryPolicy and no per-node clock -- so a
+    # reader who saw the config believed nodes retried, and they did not.
+    # Retry now lives one level up, on the Task (`coordination.max_attempts`
+    # governs both lease reclaims and retryable execution failures), where one
+    # knob answers one question.
 
 
 class MultiAgentSettings(StrictModel):

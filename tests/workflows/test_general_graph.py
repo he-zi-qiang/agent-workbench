@@ -29,7 +29,6 @@ from agent_workbench.workflows.general_graph import (
     approval_failure_reason,
     declared_nodes,
     next_nodes,
-    review_failure_reason,
     route_approval,
     route_review,
     terminal_failure_reason,
@@ -126,21 +125,25 @@ def test_a_review_that_wants_changes_sends_the_work_back() -> None:
 def test_the_back_edge_stops_when_the_shared_revision_budget_is_spent() -> None:
     """Not a budget of its own (ADR-031). Two budgets would be two places to
     change the same question, and the second one is found by a Task that never
-    terminated."""
+    terminated.
+
+    Stopping is no longer failing (ADR-060): the spent budget routes onward
+    exactly as a pass would, and the reviewer's standing verdict travels as
+    ``unresolved_review`` instead of vanishing into a terminal failure.
+    """
 
     spent = _reviewed("revise", revision_count=2, max_revisions=2)
 
-    assert route_review(spent) is None
-    assert next_nodes("review", spent) == ()
-    assert review_failure_reason(spent) == (
-        "review still requires changes after 2 revisions of the work node"
-    )
+    assert route_review(spent) == "approval"
+    assert next_nodes("review", spent) == ("approval",)
+    assert terminal_failure_reason(spent) is None
+    assert spent.unresolved_review is not None
 
 
-def test_a_revision_still_in_budget_reports_no_failure() -> None:
-    """The control for the reason above: a live loop is not a failed one."""
+def test_a_revision_still_in_budget_carries_no_unresolved_review() -> None:
+    """The control for the caveat above: a live loop is not an annotated one."""
 
-    assert review_failure_reason(_reviewed("revise", revision_count=1)) is None
+    assert _reviewed("revise", revision_count=1).unresolved_review is None
 
 
 # --- the two ways it stops ---------------------------------------------------

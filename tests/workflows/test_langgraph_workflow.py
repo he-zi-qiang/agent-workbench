@@ -313,7 +313,17 @@ def test_only_the_registered_versions_are_buildable() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_an_exhausted_revision_budget_fails_the_graph_without_approving() -> None:
+def test_an_exhausted_revision_budget_reaches_the_gate_with_the_verdict_standing() -> (
+    None
+):
+    """ADR-060: the spent budget annotates the work instead of discarding it.
+
+    This graph used to fail here -- two rejections and the reader got nothing,
+    work included. Now the draft proceeds exactly as a pass would, the gate
+    decides about it *as reviewed*, and the standing dispute is readable off
+    the final state for the caveat to report.
+    """
+
     async def revising_critic(state: TaskState) -> dict[str, Any]:
         return {
             "review_result": ReviewResult(
@@ -326,27 +336,35 @@ def test_an_exhausted_revision_budget_fails_the_graph_without_approving() -> Non
             ).model_dump()
         }
 
-    async def approval(state: TaskState) -> dict[str, Any]:
-        return {"approval_id": "approval_1"}
+    async def export(state: TaskState) -> dict[str, Any]:
+        return {"export_ref": "art_export_1"}
 
-    handlers = _handlers() | {"critic": revising_critic, "approval": approval}
+    handlers = _handlers() | {"critic": revising_critic, "export": export}
+    workflow = LangGraphTaskWorkflow(handlers=handlers)
 
     result = asyncio.run(
-        LangGraphTaskWorkflow(handlers=handlers).run(
+        workflow.run(
             _state(max_revisions=0),
             thread_id="thread_1",
             graph_version="v1",
         )
     )
 
-    # The critic rejected the draft and there was no budget to revise. The
-    # graph must fail, not walk into approval or report an empty queue as
-    # successful completion.
-    assert result.state.approval_id is None
+    assert result.disposition == "completed"
+    assert result.failure_reason is None
+    # The verdict was not faked into a pass on the way through.
     assert result.state.review_result is not None
     assert result.state.review_result.decision == "revise"
-    assert result.disposition == "failed"
-    assert result.failure_reason is not None
+    assert result.state.unresolved_review is not None
+    assert result.state.export_ref is not None
+
+    # And the finished position confesses it, which is how the settlement
+    # learns what to write on the Task row.
+    position = asyncio.run(workflow.inspect("thread_1"))
+    assert position is not None
+    assert position.failure_reason is None
+    assert position.caveat is not None
+    assert "Evidence is thin." in position.caveat
 
 
 def test_a_pending_quality_gate_is_not_misread_as_a_terminal_failure() -> None:
@@ -407,9 +425,13 @@ def test_revisions_are_counted_before_each_retry_and_stop_at_the_budget() -> Non
             ).model_dump()
         }
 
+    async def export(state: TaskState) -> dict[str, Any]:
+        return {"export_ref": "art_export_1"}
+
     handlers = _handlers() | {
         "synthesize": synthesize,
         "critic": revising_critic,
+        "export": export,
     }
     result = asyncio.run(
         LangGraphTaskWorkflow(handlers=handlers).run(
@@ -421,11 +443,14 @@ def test_revisions_are_counted_before_each_retry_and_stop_at_the_budget() -> Non
 
     # One initial draft plus exactly two critic-requested revisions. This
     # guards against the old loop, where revision_count was never advanced.
+    # The bound holds under ADR-060 too -- what changed is where the loop
+    # lands (the gate, verdict standing), not how many times it may run.
     assert calls == {"synthesize": 3, "critic": 3}
-    assert result.disposition == "failed"
+    assert result.disposition == "completed"
     assert result.state.revision_count == 2
     assert result.state.review_result is not None
     assert result.state.review_result.revision_number == 2
+    assert result.state.unresolved_review is not None
 
 
 @pytest.mark.parametrize(

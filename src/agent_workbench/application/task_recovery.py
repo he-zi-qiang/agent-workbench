@@ -94,6 +94,10 @@ class Reconciliation:
     action: ReconciliationAction
     detail: str
     approval_id: Identifier | None = None
+    #: What a ``settle_succeeded`` should record on the Task row (ADR-060):
+    #: the review the graph finished without answering. ``None`` for every
+    #: other action and for the successes that have nothing to confess.
+    caveat: str | None = None
 
     @property
     def resulting_status(self) -> TaskStatus | None:
@@ -177,6 +181,7 @@ def reconcile(
         return Reconciliation(
             action="settle_succeeded",
             detail="the graph finished before the registry learned of it",
+            caveat=position.caveat,
         )
 
     if position.awaiting_approval_id is not None:

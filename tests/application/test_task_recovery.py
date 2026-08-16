@@ -151,6 +151,23 @@ def test_a_graph_that_finished_settles_the_registry_the_crash_left_behind() -> N
     assert decision.action == "settle_succeeded"
     assert decision.resulting_status == "succeeded"
     assert not decision.keeps_executing
+    # And an ordinary finish confesses nothing.
+    assert decision.caveat is None
+
+
+def test_a_finish_with_an_unanswered_review_carries_the_caveat_through() -> None:
+    """ADR-060: the position's caveat rides the settlement to the Task row.
+
+    The reconciliation is the only path from checkpoint to registry, so a
+    caveat it dropped here would be recorded nowhere -- the Task would read as
+    a clean pass over a draft its reviewer still disputed.
+    """
+
+    caveat = "the reviewer still saw 1 unresolved issue(s) after 2 revision(s): thin"
+    decision = _reconcile(position=_position(pending_nodes=(), caveat=caveat))
+
+    assert decision.action == "settle_succeeded"
+    assert decision.caveat == caveat
 
 
 def test_a_graph_that_reached_a_failed_terminal_state_settles_failed() -> None:

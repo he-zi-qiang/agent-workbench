@@ -651,8 +651,10 @@ class PostgresTaskRegistry:
                     recovered.append(recovered_task)
         return tuple(recovered)
 
-    async def mark_succeeded(self, lease: ExecutionLease) -> TaskRun:
-        return await self._move(lease, to="succeeded", detail=None)
+    async def mark_succeeded(
+        self, lease: ExecutionLease, *, detail: str | None = None
+    ) -> TaskRun:
+        return await self._move(lease, to="succeeded", detail=detail)
 
     async def mark_failed(self, lease: ExecutionLease, *, reason: str) -> TaskRun:
         return await self._move(lease, to="failed", detail=reason)

@@ -366,9 +366,7 @@
         "workflow.export_requires_approval",
         "workflow.interrupt_boundary",
         "workflow.runtime_loop_owner",
-        "workflow.graph_version",
-        "workflow.node_retry_max_attempts",
-        "workflow.node_timeout_seconds"
+        "workflow.graph_version"
       ]
     },
     {

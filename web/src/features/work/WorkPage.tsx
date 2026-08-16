@@ -1601,6 +1601,16 @@ function TaskResult({
           className="aw-answer"
           aria-label={awaitingDecision ? "待确认的内容" : "任务结果"}
         >
+          {/* Same caveat the exported branch shows (ADR-060): a success whose
+              reviewer was still unsatisfied says so, file or no file. */}
+          {status === "succeeded" && statusDetail !== undefined ? (
+            <InfoNotice>
+              <span>
+                <strong>评审仍有未解决的意见</strong>
+                <small>{statusDetail}</small>
+              </span>
+            </InfoNotice>
+          ) : null}
           <header>
             <span className="aw-answer-mark" aria-hidden="true">A</span>
             <strong>{awaitingDecision ? "待确认的内容" : "回答"}</strong>
@@ -1671,8 +1681,23 @@ function TaskResult({
 
   // A Task that exported a file reads the same way: the text flows under the
   // run like any other answer, and the file is what the header names.
+  //
+  // A succeeded Task's `status_detail` is the review caveat and nothing else
+  // (ADR-060): the reviewer ran out of revisions still wanting changes, the
+  // work shipped anyway, and hiding that would present a disputed draft as a
+  // clean pass. The sentence is the server's own record, shown verbatim.
+  const reviewCaveat =
+    status === "succeeded" && statusDetail !== undefined ? statusDetail : null;
   return (
     <section className="aw-answer" aria-label="任务产出">
+      {reviewCaveat === null ? null : (
+        <InfoNotice>
+          <span>
+            <strong>评审仍有未解决的意见，产物按现状导出</strong>
+            <small>{reviewCaveat}</small>
+          </span>
+        </InfoNotice>
+      )}
       <header>
         <span className="aw-answer-mark" aria-hidden="true">A</span>
         <strong>{artifact.filename ?? artifact.kind}</strong>

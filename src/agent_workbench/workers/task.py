@@ -128,6 +128,39 @@ def _failure_detail(error: BaseException, action: str) -> str:
     return f"the graph raised {type(error).__name__} during {action}"
 
 
+def _is_retryable(error: BaseException) -> bool:
+    """Whether another attempt could plausibly end differently (ADR-059).
+
+    Deliberately narrower than "the exception looks transient": only a node
+    failure whose own run classified its error as retryable qualifies. That
+    classification already exists one layer down (``ErrorInfo.retryable``) and
+    is where transport blips land -- the measured case in known-gaps B-06 was
+    ``RemoteProtocolError``/``ConnectError`` arriving here as ``provider_error
+    (retryable)`` and settling terminal anyway. Everything else -- evidence
+    errors, missing ``ErrorInfo``, exceptions the graph itself raised -- stays
+    non-retryable, because a deterministic failure retried ``max_attempts``
+    times is the same answer at five times the price.
+    """
+
+    if isinstance(error, AgentNodeFailedError | TaskNodeRunFailedError):
+        info = error.outcome.error
+        return info is not None and info.retryable
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecutionFailure:
+    """Why the graph invocation failed, and whether an attempt could differ.
+
+    The pair travels together because the caller needs both to pick a
+    transition: the reason is what ``mark_failed`` records, and ``retryable``
+    is what decides whether ``mark_failed`` runs at all.
+    """
+
+    reason: str
+    retryable: bool
+
+
 @dataclass(frozen=True, slots=True)
 class _DecidedApproval:
     """An approval a human has answered, and the two things that answer decides.
@@ -305,7 +338,23 @@ class TaskWorker:
                     )
                     return TaskOutcome(task=task, decisions=tuple(decisions))
                 if failure is not None:
-                    task = await self._fail(task, lease, failure)
+                    # A retryable failure is released, not settled (ADR-059).
+                    # Only the exception path reaches here: a graph that wrote
+                    # a `position.failed` checkpoint -- a reviewer out of
+                    # revisions, a node that declined -- settles through
+                    # `reconcile` above and is never offered a retry, which is
+                    # the boundary between "the provider hiccuped" and "the
+                    # graph decided".
+                    if failure.retryable and task.attempt_count < self.max_attempts:
+                        task = await self._release_for_retry(task, lease)
+                    else:
+                        reason = (
+                            f"{failure.reason}; gave up after attempt "
+                            f"{task.attempt_count} of {self.max_attempts}"
+                            if failure.retryable
+                            else failure.reason
+                        )
+                        task = await self._fail(task, lease, reason)
                     return TaskOutcome(task=task, decisions=tuple(decisions))
                 await self._hit_failpoint("after_graph_complete_before_registry_commit")
 
@@ -366,8 +415,8 @@ class TaskWorker:
         decision: Reconciliation,
         guard: ExecutionGuard | None,
         approval: _DecidedApproval | None = None,
-    ) -> str | None:
-        """Run or resume the graph. Returns a reason when it failed."""
+    ) -> _ExecutionFailure | None:
+        """Run or resume the graph. Returns the failure when it failed."""
 
         execution = asyncio.create_task(
             self._invoke_graph(task, lease, decision, guard, approval),
@@ -424,7 +473,10 @@ class TaskWorker:
                 decision.action,
                 exc_info=True,
             )
-            return _failure_detail(error, decision.action)
+            return _ExecutionFailure(
+                reason=_failure_detail(error, decision.action),
+                retryable=_is_retryable(error),
+            )
         finally:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
@@ -464,6 +516,28 @@ class TaskWorker:
             current = await self.registry.get(task.task_id)
             requeued = current or task
         return TaskOutcome(task=requeued, decisions=())
+
+    async def _release_for_retry(self, task: TaskRun, lease: ExecutionLease) -> TaskRun:
+        """Give a retryably-failed Task back to the queue, with backoff.
+
+        The delay formula is ``reclaim_expired``'s, on purpose: lease expiry
+        and execution failure are the two producers of "try this again later",
+        and two formulas would drift. ``attempt_count`` was incremented at
+        claim, so the first release waits ``retry_base`` and the rest double
+        toward ``retry_max``. A stale or rejected release means cancellation or
+        reclaim won while this Worker was deciding -- same answer as
+        ``_guard_unavailable_outcome``: the current row is the fact.
+        """
+
+        delay = min(
+            self.retry_max_seconds,
+            self.retry_base_seconds * 2 ** max(0, task.attempt_count - 1),
+        )
+        try:
+            return await self.registry.release_for_retry(lease, delay_seconds=delay)
+        except (StaleExecutionError, TaskTransitionRejectedError):
+            current = await self.registry.get(task.task_id)
+            return current if current is not None else task
 
     async def _invoke_graph(
         self,
@@ -604,8 +678,11 @@ class TaskWorker:
             # fact somebody else established, conditionally, and failing.
             return task
         if decision.action == "settle_succeeded":
+            # The caveat rides along (ADR-060): a success that shipped with an
+            # unanswered review says so on the row, where the console reads it.
             return await self._settle_or_current(
-                task, lambda: self.registry.mark_succeeded(lease)
+                task,
+                lambda: self.registry.mark_succeeded(lease, detail=decision.caveat),
             )
         if decision.action == "settle_failed":
             return await self._settle_or_current(

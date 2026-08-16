@@ -52,12 +52,10 @@ allow_local_bootstrap = true
 
 [runtime]
 record_step_inputs = true
-# From config.word-local.toml, and load-bearing for the same reason: v2's `work`
-# node does the whole job in one invocation, and a document has a rendering
-# round trip in it. Measured there, a short report spent its steps on
-# list -> write -> render -> re-render after the reviewer's note and hit
-# `budget_exceeded: max_steps` at the shipped 12.
-max_steps = 40
+# `max_steps = 40` used to be repeated here (measured on the Word profile:
+# a short report hit `budget_exceeded: max_steps` at the then-shipped 12).
+# The shipped default now carries that measured value, so restating it would
+# be the drift this file warns against elsewhere.
 
 [triage]
 # On because this is the profile local acceptance runs against a real provider.
@@ -158,13 +156,9 @@ routed_relevance_threshold = 0.01
 # approval it had already declined to want.
 export_requires_approval = false
 
-[multi_agent]
-# The correction both narrow profiles carry, needed here for both of their
-# reasons at once: this node reads pages *and* writes a document in one
-# invocation, against a *cumulative* per-invocation ceiling. The shipped 16000
-# ran out mid-answer on the web profile and before rendering anything on the
-# Word one, in both cases while every tool call had worked.
-max_tokens_per_agent_invocation = 120000
+# `[multi_agent] max_tokens_per_agent_invocation = 120000` used to be repeated
+# here (measured failing at the then-shipped 16000 on both narrow profiles).
+# The shipped default now carries the measured value; see config.default.toml.
 
 [optional_labs]
 mcp_adapter = true

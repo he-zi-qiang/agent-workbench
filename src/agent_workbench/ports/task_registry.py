@@ -397,7 +397,17 @@ class TaskRegistry(Protocol):
         retry_max_seconds: int,
     ) -> tuple[TaskRun, ...]: ...
 
-    async def mark_succeeded(self, lease: ExecutionLease) -> TaskRun: ...
+    async def mark_succeeded(
+        self, lease: ExecutionLease, *, detail: str | None = None
+    ) -> TaskRun:
+        """Settle a Task as succeeded, optionally with a caveat on the row.
+
+        ``detail`` is not a second failure channel: it exists for the success
+        that owes its reader a qualification -- ADR-060's "the reviewer still
+        saw unresolved issues" -- and stays ``None`` for every success with
+        nothing to confess.
+        """
+        ...
 
     async def mark_failed(self, lease: ExecutionLease, *, reason: str) -> TaskRun: ...
 

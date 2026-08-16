@@ -51,7 +51,7 @@ def test_the_mcp_section_ships_under_the_current_schema_version() -> None:
 
     settings = Settings(**valid_payload())
 
-    assert settings.app.config_schema_version == "1.16"
+    assert settings.app.config_schema_version == "1.17"
 
 
 def test_retryable_server_tools_are_frozen_into_new_task_authority() -> None:

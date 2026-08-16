@@ -175,8 +175,14 @@ def test_each_graph_reports_its_own_terminal_failure_reason(version: str) -> Non
     )
 
 
-def test_the_two_graphs_word_an_exhausted_budget_differently() -> None:
-    """The control for the test above: swapping them would be observable."""
+def test_both_graphs_treat_an_exhausted_budget_as_a_caveat_not_a_failure() -> None:
+    """The shared half of ADR-060, pinned across both graphs at once.
+
+    An exhausted reviewer annotates rather than vetoes, in the same words on
+    either graph: the caveat reads the shared domain fact
+    (``unresolved_review``), not a per-graph gate, so this is one invariant
+    rather than two wordings -- the opposite of what this test used to pin.
+    """
 
     exhausted = _state(
         draft_ref="draft_1",
@@ -191,14 +197,12 @@ def test_the_two_graphs_word_an_exhausted_budget_differently() -> None:
             "score": 20,
         },
     )
-    v1_reason = research_graph.terminal_failure_reason(exhausted)
-    v2_reason = general_graph.terminal_failure_reason(exhausted)
 
-    assert v1_reason is not None
-    assert v2_reason is not None
-    assert v1_reason != v2_reason
-    assert "critic" in v1_reason
-    assert "work node" in v2_reason
+    assert research_graph.terminal_failure_reason(exhausted) is None
+    assert general_graph.terminal_failure_reason(exhausted) is None
+    assert exhausted.unresolved_review is not None
+    assert research_graph.route_quality_gate(exhausted) == "approval"
+    assert general_graph.route_review(exhausted) == "approval"
 
 
 # --- the graphs stay apart ---------------------------------------------------
