@@ -395,6 +395,11 @@ class CodeConfig:
     """
 
     enabled: bool
+    #: Whether this session may call ``sandbox_run`` (ADR-057). Unlike the two
+    #: frozen premises above, this one *does* appear here: it decides which
+    #: tool list the envelope is built from, which is a branch downstream has
+    #: to take rather than a constant it can assume.
+    sandbox_enabled: bool
     turn_timeout_seconds: int
     approval_timeout_seconds: int
     max_steps: int
@@ -700,6 +705,11 @@ class ApiRuntimeConfig:
     # tool that fails, an absence, so a deployment that configured nothing
     # cannot spend money by accident.
     research: ResearchConfig | None = None
+    #: Where this process looks for the sandbox, when a coding session may call
+    #: it (ADR-057). `None` whenever `code.sandbox_enabled` is false, so the two
+    #: cannot describe different intentions -- this is the address, that is the
+    #: decision, and a deployment only ever sets both or neither.
+    sandbox: SandboxConfig | None = None
     #: ADR-042. How many blocking adapter calls may hold threads at once.
     blocking_calls: BlockingCallRunnerConfig = field(
         default_factory=BlockingCallRunnerConfig
@@ -1086,6 +1096,12 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         ),
         code=CodeConfig(
             enabled=settings.code.enabled,
+            # Both, because either alone is a half-configured deployment: the
+            # code section asks for the tool and the sandbox section says where
+            # the server is. Requiring both here means a profile that turns one
+            # on without the other gets the tool-less arrangement rather than a
+            # process that starts and then cannot honour what it offered.
+            sandbox_enabled=settings.code.sandbox_enabled and settings.sandbox.enabled,
             turn_timeout_seconds=settings.code.turn_timeout_seconds,
             approval_timeout_seconds=settings.code.approval_timeout_seconds,
             max_steps=settings.code.max_steps,
@@ -1093,6 +1109,18 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             max_total_tokens=settings.code.max_total_tokens,
             max_cost_micro_usd=settings.code.max_cost_micro_usd,
             max_concurrent_turns=settings.code.max_concurrent_turns,
+        ),
+        sandbox=(
+            SandboxConfig(
+                endpoint=settings.sandbox.endpoint,
+                timeout_seconds=settings.sandbox.timeout_seconds,
+            )
+            # Gated on the code section too, so this field is present exactly
+            # when something in this process would use it. A sandbox address
+            # carried by a process whose coding sessions cannot call it is an
+            # invitation to connect for no reason.
+            if settings.code.sandbox_enabled and settings.sandbox.enabled
+            else None
         ),
         evaluation=EvaluationRunsConfig(
             runs_enabled=settings.evaluation.runs_enabled,

@@ -32,6 +32,7 @@
 | `1.12` → `1.13` | 新增 `rag.graph`（默认关闭，两个冻结 Literal）；开启后图谱臂参与候选提名 | [ADR-037](./adr/0037-the-graph-nominates-chunks.md) |
 | `1.13` → `1.14` | **方向相反的一次**：`evaluation.ragas_enabled` 只接受 `false`，`evaluation.rag_metrics` 只接受 `RETRIEVAL_METRICS` 里的键。上面每一条都是新文件向旧二进制要它没有的行为，这一条反过来——停止加载的是 1.13 那份文件（`ragas_enabled = true`、或它默认那 19 条指标名）。没有任何评测因此跑得不同，因为这两个字段从来没有被读过；抬版买到的只是"配置不再承诺一个这份二进制产不出的裁判" | [ADR-039](./adr/0039-a-metric-name-is-a-promise.md) |
 | `1.14` → `1.15` | `[code]` 段到了：一个跑在 API 进程里的编码会话面。加性、默认关，形状与 `1.11 → 1.12` 相同——一份打开它的配置是在要求这个进程开会话、持有回合、停下来等人批准，而 1.14 的二进制一件都做不到。它另带三个冻结 `Literal`（`execution_locality`、`coordination`、`shell_enabled`），存在的意义就是"放宽它们"不能悄悄发生。既有段下**新增带默认值的叶子**仍然不抬版，那是 ADR-038 与 ADR-042 的先例，与本条不是一回事 | ADR-036 的先例 |
+| `1.15` → `1.16` | **又一次方向相反的**：`code.shell_enabled` 改名为 `code.sandbox_enabled` 并从冻结 `Literal[False]` 解冻成 `bool`。停止加载的是 1.15 那份文件——设置拒绝未知的 `AW_*` 与未知键，所以写着 `shell_enabled` 的配置在 1.16 下不再加载。改名不是措辞问题：那个字段的注释把「给一个 shell」和「授予 `sandbox_run`」当成同一件事，而 ADR-029 的沙箱是一次调用建一个断网容器、文件进文件出、调用之间无状态的纯函数。解冻的理由是原冻结理由（"设了也拿不到东西"）已被接线消除。`execution_locality` 与 `coordination` **继续冻结** | [ADR-057](./adr/0057-a-pure-function-is-not-a-shell.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。

@@ -304,6 +304,25 @@ web-check)
     --expect-tool download_document
   ;;
 
+sandbox-server)
+  # One container per call, created and destroyed inside the call (ADR-029).
+  # It owns no path, no tenant and no workspace: files in, files out. What it
+  # needs is a container runtime; without one it starts and every call answers
+  # an error, which is why the check below runs a real script rather than
+  # reading /health.
+  exec "$PYTHON" -m agent_workbench.apps.sandbox_mcp.main
+  ;;
+
+sandbox-check)
+  # `--expect-tool run_python` is the remote name; `sandbox_run` is what the
+  # envelope and the model call it. The two differ on purpose (ADR-029 §3.2).
+  exec "$PYTHON" scripts/smoke_mcp_server.py \
+    --label sandbox \
+    --endpoint "http://127.0.0.1:8766/mcp" \
+    --health-url "http://127.0.0.1:8766/health" \
+    --expect-tool run_python
+  ;;
+
 web-api)
   export AW_CONFIG_FILE=config/config.web-local.toml
   if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
@@ -412,7 +431,19 @@ demo-api)
   # for itself, on the one condition that makes it safe -- and the refusal above
   # is now what guarantees that condition holds.
   export AW_RESEARCH__ENABLED=true
-  echo "console profile (Word + web + chat search); provider key available" >&2
+  # Probed here, before the process replaces this shell, for the reason
+  # `demo-worker` probes its two servers: an MCP tool catalogue is frozen once
+  # at startup. The API's own refusal (ADR-057) would arrive too -- it raises
+  # rather than serving a coding session that was promised a sandbox it cannot
+  # reach -- but it arrives after the embedding runtime has spent forty
+  # seconds loading, and it cannot name the command that fixes it as plainly
+  # as this can.
+  "$PYTHON" scripts/smoke_mcp_server.py \
+    --label sandbox \
+    --endpoint "http://127.0.0.1:8766/mcp" \
+    --health-url "http://127.0.0.1:8766/health" \
+    --expect-tool run_python >&2
+  echo "console profile (Word + web + sandbox + chat search); key available" >&2
   shift
   exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
   ;;

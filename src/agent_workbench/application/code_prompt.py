@@ -63,4 +63,64 @@ Six disciplines, in order of how often they matter.
 """
 
 
-__all__ = ["CODER_SYSTEM_PROMPT"]
+def _rewrite(prompt: str, old: str, new: str) -> str:
+    """``str.replace``, except that a missed anchor is an error.
+
+    A plain ``replace`` whose anchor has drifted returns the original string,
+    so editing the base prompt would silently leave the sandbox variant still
+    telling the model there is no way to run anything. This is the only
+    coupling between the two texts, and it should fail at import rather than in
+    somebody's transcript.
+    """
+
+    if old not in prompt:
+        raise ValueError(f"prompt anchor not found: {old[:48]!r}...")
+    return prompt.replace(old, new)
+
+
+_NO_EXECUTION = """\
+There is no shell, no network and no path outside it: a name
+is a name, not a path, and nothing you write escapes this session."""
+
+_WITH_SANDBOX = """\
+There is no shell and no network, and no path outside the workspace: a name is
+a name, not a path, and nothing you write escapes this session.
+
+You can run Python. `sandbox_run` executes a script in a throwaway container
+with no network: the workspace entries you name go in, the files it writes come
+back, and nothing survives the call. Use it to check your own work rather than
+to reason about what the code would do. It is an external effect, so every call
+stops and asks a human -- expect to wait, and do not spend one on something you
+could have read."""
+
+_CANNOT_RUN = """\
+4. Do not guess at what you cannot see. If a task depends on a file that is not
+   in the workspace, on running the code, or on a library you cannot inspect,
+   say which of those it is."""
+
+_CAN_RUN = """\
+4. Do not guess at what you cannot see. If a task depends on a file that is not
+   in the workspace, or on a library you cannot inspect, say which it is. If it
+   depends on running the code, run it: a claim about behaviour you could have
+   checked and did not is the same error as inventing one."""
+
+#: The same prompt for a deployment that granted ``sandbox_run`` (ADR-057).
+#:
+#: Derived rather than written twice, and derived by *named* substitution
+#: rather than by interpolation, because what differs is not a value but two
+#: claims. The base prompt says there is no way to run anything and that
+#: implying otherwise is the worst thing this agent can produce; handing a
+#: sandbox to a model told that is instructing it to distrust a tool it holds.
+#:
+#: Measured before this existed: a turn wrote a correct `fib.py` and reported
+#: 「本环境没有 shell，我无法实际执行该 Python 文件，以上输出是根据代码逻辑
+#: 推断的」-- true of the deployment it had been described as being in, and
+#: false of the one it was actually in.
+CODER_SYSTEM_PROMPT_WITH_SANDBOX: Final[str] = _rewrite(
+    _rewrite(CODER_SYSTEM_PROMPT, _NO_EXECUTION, _WITH_SANDBOX),
+    _CANNOT_RUN,
+    _CAN_RUN,
+)
+
+
+__all__ = ["CODER_SYSTEM_PROMPT", "CODER_SYSTEM_PROMPT_WITH_SANDBOX"]

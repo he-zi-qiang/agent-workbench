@@ -48,6 +48,10 @@ const DEFAULT_IDENTITY: PrincipalIdentity = {
     "workspace:write",
     "mcp:web",
     "mcp:word",
+    // `sandbox_run` (ADR-057). Costs nothing where the deployment did not
+    // grant the tool -- the envelope is widened from what the process managed
+    // to register, so an unused scope authorises nothing that exists.
+    "sandbox:run",
   ],
 };
 
@@ -69,12 +73,12 @@ export function IdentityProvider({ children }: PropsWithChildren) {
   // instead would quietly restore a scope someone deleted on purpose in the
   // identity editor, which is the opposite of what that editor is for.
   //
-  // `v1` predates `external:search`; `v2` predates the workspace and MCP scopes
-  // above. Both are left unread rather than migrated: an identity is five short
-  // strings, and re-deriving it costs a reader less than a merge rule that can
-  // resurrect a scope they removed.
+  // `v1` predates `external:search`; `v2` predates the workspace and MCP
+  // scopes above; `v3` predates `sandbox:run`. All left unread rather than
+  // migrated: an identity is six short strings, and re-deriving it costs a
+  // reader less than a merge rule that can resurrect a scope they removed.
   const [identity, setIdentity] = useStoredState(
-    "aw.identity.v3",
+    "aw.identity.v4",
     DEFAULT_IDENTITY,
   );
   const [editorOpen, setEditorOpen] = useState(false);

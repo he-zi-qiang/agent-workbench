@@ -151,7 +151,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.15"] = "1.15"
+    config_schema_version: Literal["1.16"] = "1.16"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -292,12 +292,23 @@ class CodeSettings(StrictModel):
     #: an API process stops answering anything else.
     max_concurrent_turns: int = Field(default=4, ge=1, le=64)
 
-    #: Frozen false. Giving a coding agent a shell means granting
-    #: ``sandbox_run``, which needs a sandbox MCP server this process does not
-    #: start and a scope no principal currently holds. Spelled as a literal
-    #: rather than a bool so that turning it on is a code change with an ADR,
-    #: not a line in a TOML file that silently does nothing.
-    shell_enabled: Literal[False] = False
+    #: Whether this session may call ``sandbox_run`` (ADR-057).
+    #:
+    #: Named for what it grants. It was ``shell_enabled``, frozen
+    #: ``Literal[False]``, under a comment equating a shell with
+    #: ``sandbox_run`` -- and those are not the same grant. ADR-029's sandbox
+    #: is a pure function: one container per call, destroyed after,
+    #: ``--network=none``, files in and files out, no state between calls and
+    #: no knowledge of the workspace, the tenant or the owner. A shell is none
+    #: of that.
+    #:
+    #: The freeze is gone because its stated reason was about wiring, not
+    #: safety: a boolean would have let a deployment set it and get nothing,
+    #: since no process started the server and no principal held the scope.
+    #: Both are wired now, so the honest control is a boolean that is off by
+    #: default. ``execution_locality`` and ``coordination`` above stay frozen;
+    #: this changes what a turn may call, not where it runs.
+    sandbox_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_turn_outlasts_one_approval(self) -> CodeSettings:

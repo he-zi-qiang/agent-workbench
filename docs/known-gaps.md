@@ -521,7 +521,7 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 | F-02 | 部署必然砍断在跑的回合 | **拒绝** |
 | F-03 | Code 没有持久幂等 | **拒绝** |
 | F-04 | 同一 principal 跨会话的工作区不隔离 | **拒绝** |
-| F-05 | 没有工具会触发审批，所以审批闸门今天走不到 | 未接线 |
+| F-05 | ~~没有工具会触发审批~~ `sandbox_run` 接上了，闸门在用 | **已关闭** |
 | F-06 | Chat 的侧栏仍是本地列表（Code 那半已关闭） | 部分关闭 |
 | F-07 | 步骤最快也要等一个轮询周期才出现（默认 10s） | 已知代价 |
 | F-08 | 重新开启导出闸门的部署没有跨任务收件箱 | 已知代价 |
@@ -578,18 +578,25 @@ get/put 只带 `(tenant_id, principal_id)`；
 `tests/architecture/test_a_workspace_version_is_never_asked_for.py`，它扫路由的输入与
 工具 schema 的 properties。
 
-### F-05 审批闸门接好了，但今天没有工具会触发它 —— 未接线
+### F-05 审批闸门第一次被真实工具触发 —— **已关闭**（[ADR-057](./adr/0057-a-pure-function-is-not-a-shell.md)）
 
-**证据**：[code_session.py](../src/agent_workbench/application/code_session.py) 的
-`CODE_TOOLS` 只有五个工作区工具（risk 是 read/write），而信封的
-`approval_required_risks` 是 `("external", "destructive")`；`code.shell_enabled` 冻结
-为 `False`。
+这一条原来写的是「闸门接好了，但今天没有工具会触发它」，理由是 `CODE_TOOLS` 只有五个
+工作区工具（risk 是 read/write），而信封的 `approval_required_risks` 是
+`("external", "destructive")`；`code.shell_enabled` 冻结为 `False`。
 
-**为什么仍然接**：`sandbox_run` 是 external，C4 把它给 Code 的那天，需要的是改这个
-元组和风险上限，而不是改闸门底下的机器。闸门、registry、决定端点与它们的测试都在。
+**当时的预判是对的**：那条说「C4 把 `sandbox_run` 给 Code 的那天，需要的是改这个元组
+和风险上限，而不是改闸门底下的机器」。闸门、registry、决定端点与它们的测试确实一个字
+没改。**预判漏掉的一件事**：API 进程从来没有持有过任何 MCP client（MCP 至今只在 Task
+Worker 里），所以还需要给它接一条连接的生命周期 —— 见 ADR-057 §3 与
+`apps/api/dependencies.py` 的 `SandboxSlot`。
 
-**做完的判据**：C4 落地后，一条端到端测试证明一次 `sandbox_run` 提议真的停下来等人，
-并在人点了之后才执行。
+**做完的判据（已满足）**：2026-08-16 本地实跑，一次「写 primes.py 并运行它」的回合在
+`sandbox_run` 上停下来等人，答 `approve_once` 之后才执行，报告里是真实的
+`[2, 3, 5, ..., 47]`；对照组答 `deny` 时工具返回 `policy_denied`、没有执行任何代码，
+回合继续并明说「这次我没有实际运行它」。
+
+**尚未有的**：一条自动化的端到端测试。这条路径需要真实容器运行时，而 CI 的 `quality`
+job 离线运行，所以它只能是本地证据（见 E-03）。
 
 ### F-06 Chat 的侧栏仍是本地列表 —— 部分关闭
 
