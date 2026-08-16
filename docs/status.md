@@ -22,6 +22,71 @@
 
 ---
 
+## 2026-08-16（未合并，分支 `worktree-console-ten-fixes`）：控制台十条
+
+一次使用反馈提了十条。调研后它们不是十个 UI 需求，而是四类性质不同的东西，所以
+分四次提交。**门禁（本节时点）**：后端 `pytest` 2370 passed / 738 skipped；
+服务型套件 `tests/contracts tests/api` 660 passed / 1 skipped；`ruff`、
+`pyright` 0 errors；前端 `lint` + `tsc` + `vitest` 265 passed + `vite build`。
+
+### 两个 bug，都在运行中的系统上实证过
+
+**v1 图不读它自己的导出闸门。** `export_requires_approval` 在 settings 默认值、
+`config.default.toml` 与四个 local profile 里处处是 `false`，也确实进了
+`TaskState` —— 但 `research_graph.route_quality_gate` 只看 `wants_report`。
+ADR-038 教会了 v2 读它，ADR-048 翻了默认值，两次都没碰 v1 这一行。
+**证据**：改动前 `task_4aace42f…` 停在审批上，答否之后终态 `failed`；改动后
+`task_d1bc8218…` 的节点路径是 `understand → plan → research_external →
+synthesize → critic → export`（无 `approval`），审批账本里该任务名下 **0 行**，
+`.docx` 与 `report.md` 都可直接下载。**对照组**：跨图不变量测试断言两张图对该
+字段读法一致，并各有一条「闸门开启时仍然停下」的控制组。
+
+**展开的步骤压住下方文字。** `.aw-step-pre` 有 `max-height` 没有 `overflow`。
+**证据**：浏览器实测该任务时间线上 57 个 `pre` 里 16 个真的溢出
+（`scrollHeight 1290px` vs `clientHeight 340px`），修复后 `overflow-y: auto`；
+119 个原始 JSON 块全展开时页面无横向滚动。
+
+### Code 模式欠着的那一半
+
+`CodePage.tsx` 文件头写着「`StepStream` 等 A6 到了再接」，A6 没来。步骤改为按
+`run_id` 分回合、可逐条展开；`useCodeStream` 的订阅从「按回合」改成「按会话」，
+不再在回合结束时清空。`ToolCompleted` 新增 `output_preview`（[ADR-055](./adr/0055-a-receipt-is-not-a-transcript.md)）——
+在此之前工具出参**根本不在事件里**，界面无法自救。
+**证据**：一次真实回合展开后有 16 个步骤，「工具返回」两条分别是
+`Wrote 247 characters to fib.py.` 与读回的完整源码；预览面板宽 820px 落在主列
+（此前挤在 268px 窄栏），文件列表保持 536px 未被压扁。
+
+### 三处会话删除（[ADR-056](./adr/0056-a-stream-may-vanish-but-never-thin.md)）
+
+后端 41 条路由里原本一条 DELETE 都没有。ADR 把事件日志的「只增不删」明确成
+**流内**不变量，并规定删除以整条流为单位。**证据**：契约测试三条新用例在内存与
+PostgreSQL 两套实现上跑同一份；Task 侧「未终态 409 / 取消后 200 / 跨 principal
+404」走真库。**对照组**：删一条会话不得动到另一条的记录。
+
+### Code 可以运行代码（[ADR-057](./adr/0057-a-pure-function-is-not-a-shell.md)）
+
+`shell_enabled` 改名 `sandbox_enabled` 并解冻。名字是这次最误导的东西：那个字段
+的注释把「给一个 shell」与「授予 `sandbox_run`」当成同一件事，而 ADR-029 的沙箱
+是纯函数。冻结的理由（「设了也拿不到东西」）已被接线消除。
+**代码注释预判对了一半**：闸门、registry、决定端点确实一字未改；漏掉的是 API
+进程从来没有持有过任何 MCP client，所以新增 `SandboxSlot`。
+**证据**：一次回合停在 `sandbox_run` 上等人 —— known-gaps F-05 那道闸门第一次被
+真实工具触发 —— 批准后执行，报告里是真输出
+`[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47]`。
+**对照组**：答 `deny` 时 `policy_denied`、没有执行任何代码，回合继续并明说
+「这次我没有实际运行它」。
+**口径**：这条路径 **CI 覆盖不到**（`quality` job 离线运行且无容器运行时），
+以上为**本地证据**。
+
+### 附件上传
+
+`PUT /v1/code/sessions/{id}/workspace/{name}`，裸 body 而非 multipart（控制面与
+数据面的分界），复用 `SessionWorkspace` 的 compare-and-set。
+**证据**：传入 24 字节的 `rows.csv` 后，一句「第二列加起来是多少」得到 21 ——
+一个没人看得见的文件不算附件，后半句才是判据。
+
+---
+
 ## 2026-08-11 第三批（进行中）：停摆的 Worker 不再替自己作证
 
 第二批清的是"服务端知道、界面不说"。这一批是前两批**明确排除**的那条——
