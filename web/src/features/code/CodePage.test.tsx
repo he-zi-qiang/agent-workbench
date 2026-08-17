@@ -815,6 +815,125 @@ describe("CodePage", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows a produced code file's contents in the conversation, unasked", async () => {
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [
+        { name: "collatz.py", size_bytes: 554, media_type: "text/plain" },
+      ],
+    });
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [
+        { role: "user", text: "新建 collatz.py" },
+        { role: "assistant", text: "写好了。" },
+      ],
+    });
+    vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+      text: "def collatz_steps(n):\n    return 0",
+      truncated: false,
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      thinking: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolProposed",
+          sequence: 1,
+          payload: {
+            kind: "ToolProposed",
+            tool_call_id: "call_1",
+            tool_name: "workspace_write",
+          },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolCompleted",
+          sequence: 2,
+          payload: {
+            kind: "ToolCompleted",
+            tool_call_id: "call_1",
+            workspace_writes: ["collatz.py"],
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+
+    // The regression this pins: inline preview was gated to image and html on
+    // a cost argument about iframes, which text never incurred -- so on a
+    // *coding* console the one artifact that matters most, the code, was the
+    // one thing the conversation showed only the name of. No click here: a
+    // small produced file opens on its own.
+    const turns = await screen.findByRole("region", { name: "编码会话" });
+    expect(
+      await within(turns).findByText(/def collatz_steps/),
+    ).toBeInTheDocument();
+  });
+
+  it("does not fetch a large produced file nobody asked to see", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      // Past AUTO_PREVIEW_MAX_BYTES: far more than the inline box could show,
+      // so an unrequested transfer would be spent on bytes nobody reads.
+      files: [{ name: "dump.txt", size_bytes: 900_000, media_type: "text/plain" }],
+    });
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [{ role: "user", text: "导出全部" }],
+    });
+    vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+      text: "head of it",
+      truncated: true,
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      thinking: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolProposed",
+          sequence: 1,
+          payload: {
+            kind: "ToolProposed",
+            tool_call_id: "call_1",
+            tool_name: "workspace_write",
+          },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolCompleted",
+          sequence: 2,
+          payload: {
+            kind: "ToolCompleted",
+            tool_call_id: "call_1",
+            workspace_writes: ["dump.txt"],
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+
+    const turns = await screen.findByRole("region", { name: "编码会话" });
+    expect(within(turns).getByText("dump.txt")).toBeInTheDocument();
+    expect(vi.mocked(getCodeWorkspaceFileText)).not.toHaveBeenCalled();
+
+    // The ceiling is on the *unrequested* fetch only. Asking still works, and
+    // still shows the head with the cut named -- declining that would take
+    // away a view that works.
+    await user.click(within(turns).getByText("就地预览"));
+    expect(await within(turns).findByText("head of it")).toBeInTheDocument();
+    expect(
+      within(turns).getByText("只显示了开头一部分，完整内容请下载。"),
+    ).toBeInTheDocument();
+  });
+
   it("keeps sessions and files in separate landmarks", async () => {
     const user = userEvent.setup();
     vi.mocked(getCodeWorkspace).mockResolvedValue({

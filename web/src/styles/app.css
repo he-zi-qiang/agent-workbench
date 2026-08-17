@@ -4623,15 +4623,34 @@ pre {
   overflow: auto;
 }
 
-.aw-code-file-view pre {
+/* 文件正文，两处共用：右栏的预览面，和对话里卡片的就地预览。
+ *
+ * 以前这条规则写成 `.aw-code-file-view pre`，也就是只在面板语境里生效。文本
+ * 预览搬进卡片之后，同一个 <pre> 在对话里就是**没有任何样式**的——默认等宽、
+ * 不换行，右边被容器直接裁掉，一行 docstring 看不到结尾。选择器跟着元素走，
+ * 而不是跟着它当时碰巧待的那个盒子走。
+ *
+ * `pre-wrap` 而不是横向滚动：横向滚动条在一个 360px 高的卡片里很难用，而且
+ * 裁掉的那半行是读者最可能需要的（行尾常是参数和注释）。换行会让深缩进的续行
+ * 看起来怪一点，但没有任何东西是看不到的——这两者里，藏起来的那个更坏。 */
+.aw-code-file-body {
   margin: 0;
   padding: 12px;
   overflow: auto;
   border-radius: 10px;
   background: var(--aw-panel);
+  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px;
+  line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* 卡片里的那份少一层内边距和底色：它已经坐在一张卡片上，再套一个面板色会变成
+ * 盒中盒。 */
+.aw-code-output-inline-body .aw-code-file-body {
+  padding: 0;
+  background: transparent;
 }
 
 /* 全量目录。标题写全量口径而不是「其他文件」：卡片覆盖不到四类文件——上传进来

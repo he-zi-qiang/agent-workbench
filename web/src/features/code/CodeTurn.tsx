@@ -44,6 +44,18 @@ import { formatSize } from "../../components/ui";
 import { FilePreview } from "./FilePreview";
 import type { CodeTurnBlock, ProducedFile } from "./turnBlocks";
 
+/**
+ * How large a produced file may be and still be previewed *without being asked*.
+ *
+ * The click has no ceiling -- `TextPreview` will show the head of a 5 MB file
+ * and say it was cut, which is a view worth having. This bounds the other
+ * case: a preview the reader did not ask for, whose fetch they did not choose
+ * to spend. 64 KB is about 1,500 lines of source, already many times what the
+ * 360px inline box shows, so anything past it was being transferred for bytes
+ * nobody was going to read.
+ */
+const AUTO_PREVIEW_MAX_BYTES = 64 * 1024;
+
 /** Success is the unmarked case: a reader scans for the one that did not. */
 const OUTCOME_LABELS: Readonly<Record<StepGroup["outcome"], string>> = {
   ok: "",
@@ -78,13 +90,12 @@ export function CodeTurn({
   // disclosure the reader was reading.
   const [actionsOpen, setActionsOpen] = useState(block.live);
 
-  // At most one auto-opened inline preview per turn, and only while it is
-  // live: the last runnable thing this turn produced. N cards each mounting a
-  // frame is a real cost, and the moment worth spending it on is the one where
-  // a page the agent just wrote starts running in front of you.
-  const autoPreview = block.live
-    ? lastRunnable(block.produced, files)
-    : null;
+  // One auto-opened inline preview per turn: the last previewable thing it
+  // produced. Not gated on `live` any more, and the gate was a mistake -- a
+  // reader scrolling back to a turn is asking what it made, and answering with
+  // a filename they have to click is answering a different question. One per
+  // turn is what keeps a five-file turn from becoming five stacked frames.
+  const autoPreview = lastPreviewable(block.produced, files);
 
   return (
     <li className="aw-code-turn">
@@ -229,11 +240,22 @@ function FileCard({
         <span className="aw-code-output-meta">{metaOf(file, entry)}</span>
       </button>
 
-      {/* Mounted only when open, so a turn with six cards is not six frames
-          and six fetches. `HtmlPreview`/`BlobPreview` keep their own size
-          ceilings, which is what stops a large page from being transferred to
-          be refused. */}
-      {entry !== undefined && (kind === "image" || kind === "html") ? (
+      {/* Text is in this list, and leaving it out was the bug this fixes: a
+          coding session's product is usually a `.py` or a `.ts`, and a card
+          that showed only its name meant the code the agent had just written
+          was the one thing not in the conversation. It is also the cheapest
+          kind here -- a `<pre>`, against an iframe or a decoded blob -- so the
+          cost argument that justified the image/html gate never applied to it.
+
+          PDF and .docx stay out. Both are paged documents whose viewer wants
+          the height the panel gives it; in a 360px box they are a postage
+          stamp, and the card's click already routes there.
+
+          Mounted only when open, so a turn with six cards is not six fetches.
+          Each preview component keeps its own size ceiling, judged from the
+          listing's byte count before any transfer. */}
+      {entry !== undefined &&
+      (kind === "text" || kind === "image" || kind === "html") ? (
         <details
           className="aw-code-output-inline"
           onToggle={(event) => {
@@ -251,9 +273,6 @@ function FileCard({
                   name: file.name,
                   mediaType: entry.media_type,
                   sizeBytes: entry.size_bytes,
-                  loading: false,
-                  text: null,
-                  truncated: false,
                 }}
               />
             </div>
@@ -301,8 +320,14 @@ function metaOf(
   return parts.join(" · ");
 }
 
-/** The last file this turn produced that a frame can actually run or paint. */
-function lastRunnable(
+/**
+ * The last file this turn produced that can be shown in the conversation.
+ *
+ * "Last" rather than "first": a turn that writes a file and then rewrites it
+ * ends on the version it meant, and a turn that writes a script and then a
+ * report ends on the thing it was building toward.
+ */
+function lastPreviewable(
   produced: ProducedFile[],
   files: WorkspaceEntryView[],
 ): string | null {
@@ -310,8 +335,11 @@ function lastRunnable(
   for (const file of produced) {
     const entry = files.find((held) => held.name === file.name);
     if (entry === undefined) continue;
+    if (entry.size_bytes > AUTO_PREVIEW_MAX_BYTES) continue;
     const kind = previewKind(entry.media_type);
-    if (kind === "html" || kind === "image") found = file.name;
+    if (kind === "text" || kind === "html" || kind === "image") {
+      found = file.name;
+    }
   }
   return found;
 }
