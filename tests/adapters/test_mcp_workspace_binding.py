@@ -136,6 +136,46 @@ def test_the_model_is_told_the_name_it_can_read_the_file_by() -> None:
         assert "mcp-result.docx" in result.content
 
 
+def test_the_name_survives_a_deployment_that_records_no_previews() -> None:
+    # The sentence above is for the model. This is for everything that is not a
+    # model (ADR-063): `content` reaches a console only through
+    # `output_preview`, which sits behind `runtime.record_step_inputs` -- off by
+    # default -- so a console that read the sentence would learn the name in
+    # development and nothing at all in the deployments this binding was built
+    # for. The structured field is published unconditionally.
+    #
+    # This binding is the case that argues hardest for the field: the incident
+    # in this module's docstring is a Word Task whose entire product was the
+    # rendered .docx, failed by a review that said "the workspace is empty"
+    # because the manifest never learned its name.
+    with entered() as (scope, artifacts):
+        bound = bind_results_into_workspace(_rendering(artifacts), scope)
+
+        result = asyncio.run(bound.handler(_invocation(_call())))
+
+        assert result.workspace_writes == ("mcp-result.docx",)
+
+
+def test_a_result_with_no_file_claims_no_write() -> None:
+    # The control for the assertion above. `workspace_writes` is set on the
+    # success branch only, so a result that never reached the write path
+    # reports nothing by construction rather than by remembering to clear it --
+    # the same shape the two workspace tools use. Without this, a wrapper that
+    # tagged every result would make a console draw a card for a grep.
+    with entered() as (scope, _artifacts):
+
+        async def handle(invocation: ToolInvocation) -> ToolResult:
+            return ToolResult.succeeded(invocation.call, content="just text")
+
+        bound = bind_results_into_workspace(
+            ToolBinding(spec=SPEC, handler=handle), scope
+        )
+
+        result = asyncio.run(bound.handler(_invocation(_call())))
+
+        assert result.workspace_writes == ()
+
+
 def test_the_bytes_are_not_stored_a_second_time() -> None:
     # `write_ref`, not a copy: the artifact is already under this Task's tenant
     # and owner. Duplicating a 37 KB package per render is the thing the

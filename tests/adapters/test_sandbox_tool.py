@@ -225,6 +225,62 @@ def test_outputs_become_workspace_versions() -> None:
         assert read(scope, "summary.txt") == b"total=382\n"
 
 
+def test_a_run_names_every_file_that_landed_and_only_those() -> None:
+    """ADR-063, and the reason the field is a tuple rather than one name.
+
+    One script can produce several files at once, so the sandbox is the tool
+    that decided the shape. The order is the order they were written, which is
+    also the order the summary sentence lists them in -- two renderings of one
+    fact rather than two facts.
+    """
+
+    client = _StubSandboxClient(
+        outputs=(("summary.txt", b"total=382\n"), ("plot.svg", b"<svg/>")),
+    )
+    with entered() as scope:
+        result = invoke(SandboxRunTool(scope=scope, client=client), script="pass")
+
+        assert result.workspace_writes == ("summary.txt", "plot.svg")
+
+
+def test_a_run_that_only_computed_names_no_files() -> None:
+    """The control: the field follows the writes, not the call."""
+
+    client = _StubSandboxClient(stdout="4\n")
+    with entered() as scope:
+        result = invoke(
+            SandboxRunTool(scope=scope, client=client), script="print(2 + 2)"
+        )
+
+        assert result.status == "ok"
+        assert result.workspace_writes == ()
+
+
+def test_a_partly_refused_run_reports_its_landed_files_only_in_the_message() -> None:
+    """The honest limit of ADR-063, pinned so it is not mistaken for a bug.
+
+    ``good.txt`` really is in the workspace. But this call answers with
+    ``ToolResult.failed``, which the gateway records as ``ToolFailed`` -- an
+    event with no ``workspace_writes`` field at all. So on this path the names
+    of what landed survive only inside the error message, exactly as they did
+    before this change. Extending the structured field to failures means
+    extending ``ToolFailed`` too, and that is a second decision, not a detail
+    of this one.
+    """
+
+    client = _StubSandboxClient(
+        outputs=(("good.txt", b"kept"), ("../escape", b"refused")),
+    )
+    with entered() as scope:
+        result = invoke(SandboxRunTool(scope=scope, client=client), script="pass")
+
+        assert result.status == "error"
+        assert result.workspace_writes == ()
+        assert names_in(scope) == ("good.txt",)
+        assert result.error is not None
+        assert "good.txt" in result.error.message
+
+
 def test_an_svg_output_is_typed_as_the_image_it_is() -> None:
     # Typed application/octet-stream (the fallback) an .svg was download-only
     # in the console. The guess costs a label, and this is the one suffix

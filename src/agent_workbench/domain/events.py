@@ -63,6 +63,7 @@ from agent_workbench.domain.tools import (
     ToolName,
     ToolRisk,
 )
+from agent_workbench.domain.workspace import WorkspaceName
 
 EventType = Literal[
     "TaskSubmitted",
@@ -541,12 +542,28 @@ class ToolCompleted(DomainModel):
     and for the same reason: both reproduce content that a deployment may not
     want in its event log. A deployment that declines to record what a tool was
     asked has not agreed to record what it answered.
+
+    ``workspace_writes`` sits **outside** that gate, next to ``tool_name`` and
+    ``output_bytes`` rather than next to ``output_preview`` (ADR-063). The gate
+    is about content, and a name is not content: the same principal can already
+    read the whole workspace listing, so putting the name here discloses
+    nothing that withholding it would protect. Under the gate the field would
+    disappear in exactly the deployments that turned previews down -- which is
+    to say the feature would exist only where it was least needed, and a
+    console reading it would have to fall back to parsing prose anyway. The
+    remaining routes to this fact are worse in kind, not merely in convenience:
+    ``ToolProposed.argument_preview`` is bounded at 4096 characters and drops
+    the name first for the largest writes, and ``output_preview`` is an
+    untested English sentence.
     """
 
     kind: Literal["ToolCompleted"] = "ToolCompleted"
     tool_call_id: Identifier
     duration_ms: int = Field(ge=0)
     output_bytes: int = Field(ge=0)
+    #: Which workspace names this call bound to new bytes. Not a preview and
+    #: not gated; see the note above.
+    workspace_writes: tuple[WorkspaceName, ...] = ()
     #: Bounded like every other preview in this module. `output_bytes` above
     #: stays the truth about size, and `truncated` about the tool's own
     #: clipping; this may be shortened again on its way here, which is why the

@@ -1085,6 +1085,17 @@ class ToolGateway:
                     bounded(result.content) if self._record_step_inputs else ""
                 ),
                 artifact=result.artifact,
+                # Deliberately *not* behind the flag one line above, and the
+                # asymmetry is the decision (ADR-063). That flag governs
+                # content -- text a deployment may have declined to copy into
+                # its event log. A filename is a structured fact about what the
+                # call did, in the same standing as `tool_name` and
+                # `output_bytes`: the principal who made the call can already
+                # list the workspace, so recording the name reveals nothing the
+                # flag was written to withhold. Gating it would delete the
+                # field precisely where previews are off, i.e. everywhere it is
+                # the only machine-readable answer left.
+                workspace_writes=result.workspace_writes,
             )
         )
 

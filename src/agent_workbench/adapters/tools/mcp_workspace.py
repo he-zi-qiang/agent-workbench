@@ -87,12 +87,30 @@ class _WorkspaceBound:
         # Said out loud, because the model's next move depends on it: the file
         # is now something `workspace_list` shows and `workspace_read` opens,
         # and the reviewer will be looking for exactly that.
+        #
+        # And said twice, in two registers, because the two readers are not the
+        # same reader. The sentence is for the model. `workspace_writes` is for
+        # everything that is not a model (ADR-063): it survives
+        # `record_step_inputs=False`, where the sentence does not, because the
+        # sentence reaches a console only by way of `output_preview`.
+        #
+        # This binding is the case that argues hardest for the field. The
+        # docstring at the top of this module records why it exists at all -- a
+        # Word Task whose entire product was a rendered .docx failed review
+        # with "The workspace is empty", because the manifest never learned a
+        # name for it. Leaving that one file type reachable only through a
+        # sentence would have rebuilt the same hole one layer up.
         return result.model_copy(
             update={
                 "content": _appended(
                     result.content,
                     f"It is in the workspace as {name}.",
-                )
+                ),
+                # One name, not `(*result.workspace_writes, name)`: an MCP tool
+                # runs out of process and cannot touch this workspace, so
+                # anything already in that tuple did not come from a write and
+                # would be a claim this binding cannot support.
+                "workspace_writes": (name,),
             }
         )
 

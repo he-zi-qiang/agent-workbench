@@ -373,7 +373,8 @@
     "schema_version": 1,
     "status": "ok",
     "tool_call_id": "toolu_01demo",
-    "tool_name": "knowledge_search"
+    "tool_name": "knowledge_search",
+    "workspace_writes": []
   },
   "ToolSpec": {
     "concurrency": "exclusive",
