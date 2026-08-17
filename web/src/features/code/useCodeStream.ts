@@ -80,12 +80,35 @@ interface Thought {
   session: string;
   callId: string;
   text: string;
+  /** The answer text of that same call, streamed beside its reasoning. */
+  answer: string;
 }
 
 export interface CodeStream {
   steps: EventEnvelope[];
   /** Empty when nothing is being reasoned about right now. */
   thinking: string;
+  /**
+   * The report, as it is being written, token by token.
+   *
+   * The turn's final model call streams its answer the same way the earlier
+   * ones stream their reasoning -- `ModelDelta` is transient, coalesced at
+   * `live_delta_coalesce_ms`, and `ProcessOnlySink` forwards it unchanged
+   * (it fences only the three answer-*publication* events, which a Code
+   * session never emits).
+   *
+   * This used to be dropped on the floor. The cost of dropping it was the
+   * longest dead stretch of a turn: the model spends ten to twenty seconds
+   * writing a report, and the console showed nothing moving for all of it,
+   * then pasted the finished text in at once. Watching prose arrive is not a
+   * decoration -- it is the difference between a session that is working and a
+   * session that has hung, and it is the thing this console was most obviously
+   * missing next to the tools it is modelled on.
+   *
+   * Cleared per model call, like the thought: only the answering call ever
+   * produces one, so in practice it fills once per turn.
+   */
+  answer: string;
   /**
    * Which model call the live thought belongs to. Empty when `thinking` is.
    *
@@ -113,6 +136,7 @@ export function useCodeStream(
     session: "",
     callId: "",
     text: "",
+    answer: "",
   });
   // The position belongs to the session too. It used to survive between turns
   // on purpose, so a new watch would not be re-served the previous turn's
@@ -161,6 +185,23 @@ export function useCodeStream(
         // effect.
         if (isLiveFrame(frame)) {
           const payload = frame.envelope.payload;
+          if (payload.kind === "ModelDelta") {
+            const callId = stringField(payload, "model_call_id");
+            const text = stringField(payload, "text");
+            if (callId !== null && text !== null && text !== "") {
+              setThought((current) =>
+                current.session === sessionId && current.callId === callId
+                  ? { ...current, answer: current.answer + text }
+                  : // A new call: its reasoning has not arrived through this
+                    // arm, so the thought starts empty and the answer starts
+                    // here. In practice the answering call reasons first, so
+                    // this branch is the turn's first delta only when the model
+                    // answered without thinking at all.
+                    { session: sessionId, callId, text: "", answer: text },
+              );
+            }
+            return "rejected";
+          }
           if (payload.kind === "ModelThinkingDelta") {
             const callId = stringField(payload, "model_call_id");
             const text = stringField(payload, "text");
@@ -171,7 +212,7 @@ export function useCodeStream(
               setThought((current) =>
                 current.session === sessionId && current.callId === callId
                   ? { ...current, text: current.text + text }
-                  : { session: sessionId, callId, text },
+                  : { session: sessionId, callId, text, answer: "" },
               );
             }
           }
@@ -181,6 +222,24 @@ export function useCodeStream(
         // excerpt is in the step arriving right now. Clearing here rather than
         // when the turn ends is what keeps a finished thought from sitting
         // under the next tool round.
+        // A run that ended clears whatever was being thought, and this arm is
+        // not redundant with the `ModelCompleted` one below it: a cancelled
+        // turn emits no `ModelCompleted` at all
+        // (`agent_runtime.py`: `if turn.finish is not None and turn.finish !=
+        // "cancelled"`). Without this the last thought of a cancelled call is
+        // never cleared, and it leaks into the next instruction's block --
+        // invisible today, and a clock that never stops once one is added.
+        if (
+          frame.envelope.event_type === "RunCompleted" ||
+          frame.envelope.event_type === "RunFailed" ||
+          frame.envelope.event_type === "RunCancelled"
+        ) {
+          setThought((current) =>
+            current.session === sessionId
+              ? { ...current, callId: "", text: "" }
+              : current,
+          );
+        }
         if (frame.envelope.event_type === "ModelCompleted") {
           const finished = stringField(frame.envelope.payload, "model_call_id");
           setThought((current) =>
@@ -190,7 +249,14 @@ export function useCodeStream(
             current.session === sessionId &&
             current.callId !== "" &&
             current.callId === finished
-              ? { session: sessionId, callId: "", text: "" }
+              ? // The answer is deliberately NOT cleared here. Its durable
+                // replacement is the assistant message, which arrives with the
+                // transcript reload after `askCode` resolves -- later than this
+                // event and later than `RunCompleted`. Clearing on either would
+                // blank the report the reader just watched being written, for
+                // as long as the reload takes. The renderer prefers the durable
+                // text the moment it exists; until then this is the only copy.
+                { ...current, callId: "", text: "" }
               : current,
           );
         }
@@ -231,6 +297,7 @@ export function useCodeStream(
     steps: held.session === sessionId ? held.events : [],
     thinking: thought.session === sessionId ? thought.text : "",
     thinkingCallId: thought.session === sessionId ? thought.callId : "",
+    answer: thought.session === sessionId ? thought.answer : "",
   };
 }
 

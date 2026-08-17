@@ -85,6 +85,7 @@ export function CodeTurn({
   block,
   files,
   identity,
+  liveAnswer,
   liveThinking,
   liveThinkingCallId,
   onOpen,
@@ -95,6 +96,8 @@ export function CodeTurn({
   /** The current listing, for sizes, media types, and whether a name still exists. */
   files: WorkspaceEntryView[];
   identity: PrincipalIdentity;
+  /** The report as it is being written. Non-empty only on the live block. */
+  liveAnswer: string;
   /** Non-empty only on the live block, and only while a call is reasoning. */
   liveThinking: string;
   /** Which model call that live text belongs to, so it lands on its own step. */
@@ -110,14 +113,6 @@ export function CodeTurn({
   // becoming five stacked frames.
   const autoPreview = lastPreviewable(block.produced, files);
 
-  // The live thought's fallback. `ModelStarted` is durable and arrives before
-  // the first delta, so a step to land on normally exists; a truncated stream
-  // that lost it must not make the text the reader is watching disappear.
-  const liveOrphan =
-    block.live &&
-    liveThinking !== "" &&
-    !block.steps.some((step) => step.modelCallId === liveThinkingCallId);
-
   return (
     <li className="aw-code-turn">
       <div className="aw-code-said">
@@ -125,7 +120,7 @@ export function CodeTurn({
         <p>{block.instruction}</p>
       </div>
 
-      {block.steps.length === 0 && !liveOrphan ? null : (
+      {block.steps.length === 0 ? null : (
         <ol aria-label="这一轮做了什么" className="aw-code-steps">
           {block.steps.map((step) => (
             <TurnStepRow
@@ -140,11 +135,6 @@ export function CodeTurn({
               step={step}
             />
           ))}
-          {liveOrphan ? (
-            <li className="aw-code-step is-live">
-              <Thought live text={liveThinking} />
-            </li>
-          ) : null}
         </ol>
       )}
 
@@ -165,13 +155,23 @@ export function CodeTurn({
         </ul>
       )}
 
-      {block.report === null ? null : (
+      {/* The durable report wins the moment it exists; until then the live
+          stream is the only copy, and it is what the reader watches arrive.
+          Writing a report is the longest stretch of a turn -- ten to twenty
+          seconds -- and before this the console showed nothing moving for all
+          of it and then pasted the finished text in whole.
+
+          Plain text while streaming, Markdown once settled: half a fenced
+          block renders as garbage, and the report reliably contains fences. */}
+      {block.report !== null ? (
         <div className="aw-code-report">
           <h3>报告</h3>
-          {/* The agent's own prose, and it arrives as Markdown -- lists, file
-              names in backticks, occasionally a fenced diff. Rendered as a
-              paragraph it was one run-on block with the syntax still in it. */}
           <MarkdownContent text={block.report} />
+        </div>
+      ) : liveAnswer === "" ? null : (
+        <div className="aw-code-report is-streaming">
+          <h3>报告</h3>
+          <p>{liveAnswer}</p>
         </div>
       )}
 

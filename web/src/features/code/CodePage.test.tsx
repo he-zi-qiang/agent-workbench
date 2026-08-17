@@ -50,7 +50,7 @@ vi.mock("../../api/client", () => ({
 // asserted through this seam instead, because a page test that waited on a
 // network read would be testing the transport a second time.
 vi.mock("./useCodeStream", () => ({
-  useCodeStream: vi.fn(() => ({ steps: [], thinking: "", thinkingCallId: "" })),
+  useCodeStream: vi.fn(() => ({ steps: [], thinking: "", thinkingCallId: "", answer: "" })),
 }));
 
 vi.mock("../../app/IdentityContext", () => ({
@@ -124,7 +124,7 @@ beforeEach(() => {
   });
   vi.mocked(downloadCodeWorkspaceFile).mockResolvedValue(undefined);
   vi.mocked(listCodeSessions).mockResolvedValue({ sessions: [] });
-  vi.mocked(useCodeStream).mockReturnValue({ steps: [], thinking: "", thinkingCallId: "" });
+  vi.mocked(useCodeStream).mockReturnValue({ steps: [], thinking: "", thinkingCallId: "", answer: "" });
 });
 
 describe("CodePage", () => {
@@ -133,10 +133,17 @@ describe("CodePage", () => {
     // Never resolves: the block is for a turn in flight, so the turn has to
     // still be in flight when the reasoning arrives.
     vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    // A call id alongside the text, because that pair is what the hook
+    // actually produces: it records a thought only when the delta carries both
+    // a `model_call_id` and a non-empty slice, so text with no id is
+    // unreachable. The id is what the thought's step is synthesised from --
+    // the transient delta beats its own durable `ModelStarted` by up to a whole
+    // catch-up poll, so there is nothing else yet to hang it on.
     vi.mocked(useCodeStream).mockReturnValue({
       steps: [],
       thinking: "先看 notes.md 里有什么。",
-      thinkingCallId: "",
+      thinkingCallId: "mc_1",
+      answer: "",
     });
 
     mounted();
@@ -150,6 +157,63 @@ describe("CodePage", () => {
     expect(live.closest("li.aw-code-step")?.className).toContain("is-live");
   });
 
+  it("writes the report out as it arrives, not all at once at the end", async () => {
+    const user = userEvent.setup();
+    // Never resolves: the report is being written *now*, so the request has to
+    // still be open when it is asserted.
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    vi.mocked(useCodeStream).mockReturnValue({
+      steps: [],
+      thinking: "",
+      thinkingCallId: "mc_1",
+      answer: "已完成。新建了 clock.html，",
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "写个时钟");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    // The regression this pins: `ModelDelta` reaches the browser -- it is
+    // transient, and `ProcessOnlySink` fences only the three answer-publication
+    // events -- and the hook used to drop it. Writing a report is the longest
+    // stretch of a turn, and the console showed nothing moving for all of it.
+    const streaming = await screen.findByText("已完成。新建了 clock.html，");
+    expect(streaming.closest(".aw-code-report")?.className).toContain(
+      "is-streaming",
+    );
+  });
+
+  it("lets the server's report replace the streamed one without a gap", async () => {
+    // The durable assistant message arrives on the transcript reload, which is
+    // later than both `ModelCompleted` and `RunCompleted`. If the stream were
+    // cleared on either, the report the reader just watched being written would
+    // blank for as long as the reload takes.
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [
+        { role: "user", text: "写个时钟" },
+        { role: "assistant", text: "已完成。新建了 clock.html。" },
+      ],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      steps: [],
+      thinking: "",
+      thinkingCallId: "",
+      // Still held by the hook, deliberately.
+      answer: "已完成。新建了 clock.html，",
+    });
+
+    mounted();
+
+    // Once the durable text exists it wins, and it is the only copy on screen.
+    const report = await screen.findByText("已完成。新建了 clock.html。");
+    expect(report.closest(".aw-code-report")?.className).not.toContain(
+      "is-streaming",
+    );
+    expect(
+      screen.queryByText("已完成。新建了 clock.html，"),
+    ).not.toBeInTheDocument();
+  });
+
   it("says nothing about thinking when no turn is running", () => {
     // The hook keeps its last value across a render; the block is gated on the
     // turn so a finished turn does not leave "正在思考…" over a written report.
@@ -157,6 +221,7 @@ describe("CodePage", () => {
       steps: [],
       thinking: "leftover reasoning",
       thinkingCallId: "",
+      answer: "",
     });
 
     mounted();
@@ -373,6 +438,7 @@ describe("CodePage", () => {
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
       thinkingCallId: "",
+      answer: "",
       steps: [
         {
           event_id: "evt_m1",
@@ -488,6 +554,7 @@ describe("CodePage", () => {
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
       thinkingCallId: "",
+      answer: "",
       steps: [
         {
           event_id: "evt_1",
@@ -563,6 +630,7 @@ describe("CodePage", () => {
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
       thinkingCallId: "",
+      answer: "",
       steps: [
         {
           event_id: "evt_1",
@@ -838,6 +906,7 @@ describe("CodePage", () => {
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
       thinkingCallId: "",
+      answer: "",
       steps: [
         {
           event_id: "evt_1",
@@ -896,6 +965,7 @@ describe("CodePage", () => {
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
       thinkingCallId: "",
+      answer: "",
       steps: [
         {
           event_id: "evt_1",
@@ -982,6 +1052,7 @@ describe("CodePage", () => {
       // The second call, the one still streaming. It has a ModelStarted and no
       // ModelCompleted, so it is the anchor the live text lands on.
       thinkingCallId: "mc_2",
+      answer: "",
       steps: [
         {
           event_id: "evt_1",
@@ -1075,6 +1146,7 @@ describe("CodePage", () => {
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
       thinkingCallId: "",
+      answer: "",
       steps: [
         {
           event_id: "evt_1",
@@ -1133,6 +1205,7 @@ describe("CodePage", () => {
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
       thinkingCallId: "",
+      answer: "",
       steps: [
         {
           event_id: "evt_1",

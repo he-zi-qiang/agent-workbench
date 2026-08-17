@@ -68,6 +68,7 @@ describe("buildTurnBlocks", () => {
       events: [...wrote("run_b", "b.md"), ...wrote("run_c", "c.md")],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks.map((block) => block.instruction)).toEqual(["一", "二", "三"]);
@@ -91,6 +92,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks).toHaveLength(1);
@@ -111,6 +113,7 @@ describe("buildTurnBlocks", () => {
       events: [...wrote("run_a", "a.md"), ...wrote("run_b", "b.md")],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks.map((block) => block.report)).toEqual([null, "报告二"]);
@@ -127,6 +130,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: true,
       pendingInstruction: "二",
+      liveCallId: "",
     });
 
     expect(blocks).toHaveLength(2);
@@ -147,6 +151,7 @@ describe("buildTurnBlocks", () => {
       events: wrote("run_a", "a.md"),
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks[0]?.live).toBe(false);
@@ -176,6 +181,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks[0]?.produced).toEqual([]);
@@ -196,6 +202,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     const first = blocks[0]?.produced[0];
@@ -240,6 +247,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks[0]?.produced.map((file) => file.name)).toEqual(["old.md"]);
@@ -270,6 +278,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks[0]?.produced.map((file) => [file.name, file.action])).toEqual([
@@ -296,6 +305,7 @@ describe("buildTurnBlocks", () => {
       events,
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     // One action offered, not six protocol rows.
@@ -338,6 +348,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(
@@ -368,6 +379,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks[0]?.steps).toHaveLength(1);
@@ -391,6 +403,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks[0]?.steps).toHaveLength(1);
@@ -409,6 +422,7 @@ describe("buildTurnBlocks", () => {
       events: [event("run_a", "ModelStarted", { model_call_id: "mc_1" })],
       running: true,
       pendingInstruction: "写个时钟",
+      liveCallId: "mc_1",
     });
 
     expect(blocks).toHaveLength(1);
@@ -429,6 +443,7 @@ describe("buildTurnBlocks", () => {
       events: [event("run_a", "ModelStarted", { model_call_id: "mc_1" })],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks[0]?.steps).toEqual([]);
@@ -452,6 +467,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     const carrying = blocks[0]?.steps.filter((step) => step.thinking !== "");
@@ -470,6 +486,7 @@ describe("buildTurnBlocks", () => {
       ],
       running: false,
       pendingInstruction: null,
+      liveCallId: "",
     });
 
     expect(blocks[0]?.steps).toEqual([]);
