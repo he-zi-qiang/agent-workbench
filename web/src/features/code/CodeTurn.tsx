@@ -1,28 +1,45 @@
 /**
- * One turn of a coding session, as the six things that happened under it.
+ * One turn of a coding session, as the transcript of what happened under it.
  *
- * In order, and the order is the argument: the instruction, the thought in
- * flight, what it did, **what it produced**, the report, and -- folded away --
- * what it thought along the way. A reader scrolling back to a report they do
- * not believe finds the evidence directly beneath the sentence that prompted
- * it, rather than in a stage tree keyed by a run id they never saw.
+ * In order, and the order is the whole argument: the instruction, then a
+ * timeline of steps -- **each thought sitting directly above the action it
+ * caused** -- then the files it produced, the report, and the raw events folded
+ * away. Nothing between the reader and "what did it do, and why" is behind a
+ * disclosure.
  *
- * ## The reasoning is rendered once, and that is structural
+ * ## Why the thought is on the step and not in a list of its own
  *
- * `useCodeStream` clears the live thought the moment the `ModelCompleted` for
- * that `model_call_id` arrives (`useCodeStream.ts`), and `buildTurnBlocks`
- * fills `reasonings` **only** from `ModelCompleted` events. A model call is
- * therefore in exactly one of the two sets at any instant, and no timing
- * accident can put it in both. Before this, the same excerpt could be on
- * screen three times at once: streaming at the top of the page, formatted as a
- * `思考过程` body inside its step, and again verbatim inside that step's raw
- * JSON payload dump. Measured on a four-call turn: four steps, each carrying
- * the same text twice, under a live block carrying a fifth copy.
+ * The previous shape collected every excerpt of a turn into one 想过什么
+ * disclosure at the foot of the block. Both that list and the action list were
+ * built from the same ordered array of events, and nothing put them back
+ * together -- so a reader got a column of paragraphs that could not answer the
+ * one question reasoning exists to answer: *why did it run that command*. It
+ * also cost two clicks to see a single command.
  *
- * The raw events are still reachable -- one disclosure per turn instead of one
- * per event. The claim `StepDisclosure` defends (a curated line is not
- * authority, the reader must be able to check it) is unchanged; only the
- * granularity moved, from every event to every turn.
+ * The ordering was never missing. `groupSteps` already files a tool-calling
+ * model turn **ahead of** the first call it named, so the `ModelCompleted`
+ * carrying `thinking_preview` is already in the right group, in the right
+ * position (`stepGroups.ts`, pinned by `stepGroups.test.ts`). `buildTurnBlocks`
+ * simply stopped throwing that away.
+ *
+ * This is the shape Codex renders in its scrollback -- reasoning dim and
+ * italic, immediately above the action it produced -- and the shape a Claude
+ * Code transcript stores, where records alternate thinking, tool_use, tool_use,
+ * thinking. It is a coding session's natural reading order, not a borrowed one.
+ *
+ * ## The reasoning is still rendered exactly once
+ *
+ * That invariant did not go away; its implementation changed from "two disjoint
+ * sets" to "a promotion in place". `useCodeStream` clears the live thought the
+ * moment that call's `ModelCompleted` arrives, and the step for that same
+ * `model_call_id` renders the durable excerpt in the very position the live
+ * text occupied -- same React key, so the element is not remounted and a
+ * disclosure the reader had opened stays open. What used to be an erase
+ * followed by an append somewhere else is now one row that settles.
+ *
+ * Before any of this, one call's excerpt could be on screen three times at
+ * once: streaming at the top of the page, formatted inside its step, and
+ * verbatim again in that step's raw JSON dump.
  *
  * ## Why a produced file is a card here and not only a row over there
  *
@@ -39,10 +56,10 @@ import { useState } from "react";
 import type { PrincipalIdentity, WorkspaceEntryView } from "../../api/types";
 import { MarkdownContent } from "../../components/MarkdownContent";
 import { mediaLabel, previewKind } from "../../components/media";
-import { summariseGroups, type StepGroup } from "../../components/stepGroups";
+import type { StepGroup } from "../../components/stepGroups";
 import { formatSize } from "../../components/ui";
 import { FilePreview } from "./FilePreview";
-import type { CodeTurnBlock, ProducedFile } from "./turnBlocks";
+import type { CodeTurnBlock, ProducedFile, TurnStep } from "./turnBlocks";
 
 /**
  * How large a produced file may be and still be previewed *without being asked*.
@@ -69,6 +86,7 @@ export function CodeTurn({
   files,
   identity,
   liveThinking,
+  liveThinkingCallId,
   onOpen,
   openedName,
   sessionId,
@@ -79,23 +97,26 @@ export function CodeTurn({
   identity: PrincipalIdentity;
   /** Non-empty only on the live block, and only while a call is reasoning. */
   liveThinking: string;
+  /** Which model call that live text belongs to, so it lands on its own step. */
+  liveThinkingCallId: string;
   onOpen: (name: string) => void;
   openedName: string | null;
   sessionId: string;
 }) {
-  // Initialised from `live` and never synced back to it. A reader who opened
-  // this while the turn ran keeps it open when the answer lands; the previous
-  // shape passed `open={running && …}` straight into the element, which is a
-  // controlled prop -- so arriving at the finish line slammed shut the very
-  // disclosure the reader was reading.
-  const [actionsOpen, setActionsOpen] = useState(block.live);
-
   // One auto-opened inline preview per turn: the last previewable thing it
-  // produced. Not gated on `live` any more, and the gate was a mistake -- a
-  // reader scrolling back to a turn is asking what it made, and answering with
-  // a filename they have to click is answering a different question. One per
-  // turn is what keeps a five-file turn from becoming five stacked frames.
+  // produced. Not gated on `live` -- a reader scrolling back to a turn is
+  // asking what it made, and answering with a filename they have to click is
+  // answering a different question. One per turn keeps a five-file turn from
+  // becoming five stacked frames.
   const autoPreview = lastPreviewable(block.produced, files);
+
+  // The live thought's fallback. `ModelStarted` is durable and arrives before
+  // the first delta, so a step to land on normally exists; a truncated stream
+  // that lost it must not make the text the reader is watching disappear.
+  const liveOrphan =
+    block.live &&
+    liveThinking !== "" &&
+    !block.steps.some((step) => step.modelCallId === liveThinkingCallId);
 
   return (
     <li className="aw-code-turn">
@@ -104,46 +125,27 @@ export function CodeTurn({
         <p>{block.instruction}</p>
       </div>
 
-      {/* Above everything the turn has settled, because it is the only thing
-          happening *now*. Plain text rather than Markdown, the way chat renders
-          its live text: half a fenced block mid-stream renders as garbage. */}
-      {block.live && liveThinking !== "" ? (
-        <details className="aw-code-thinking" open>
-          <summary>正在思考…</summary>
-          <p>{liveThinking}</p>
-        </details>
-      ) : null}
-
-      {block.groups.length === 0 ? null : (
-        <details
-          className="aw-code-actions"
-          onToggle={(event) => {
-            setActionsOpen(event.currentTarget.open);
-          }}
-          open={actionsOpen}
-        >
-          <summary>
-            <span className="aw-code-actions-label">做了什么</span>
-            <span className="aw-code-actions-digest">
-              {summariseGroups(block.groups)}
-            </span>
-          </summary>
-          <ol className="aw-code-action-list">
-            {block.groups.map((group) => (
-              <li className={`aw-code-action is-${group.outcome}`} key={group.key}>
-                <span className="aw-code-action-title">{group.title}</span>
-                {group.subject === null ? null : (
-                  <span className="aw-code-action-subject" title={group.subject}>
-                    {group.subject}
-                  </span>
-                )}
-                <span className="aw-code-action-outcome">
-                  {OUTCOME_LABELS[group.outcome]}
-                </span>
-              </li>
-            ))}
-          </ol>
-        </details>
+      {block.steps.length === 0 && !liveOrphan ? null : (
+        <ol aria-label="这一轮做了什么" className="aw-code-steps">
+          {block.steps.map((step) => (
+            <TurnStepRow
+              // Keyed by the model call, not the group. The same call is
+              // `model:mc_2` while it is open and `tool:call_x` once its
+              // ModelCompleted merges it into the call it named -- keying by
+              // the group would remount at exactly that moment and reset the
+              // disclosure the reader is mid-sentence in.
+              key={step.modelCallId ?? step.key}
+              live={step.modelCallId !== "" && step.modelCallId === liveThinkingCallId}
+              liveThinking={liveThinking}
+              step={step}
+            />
+          ))}
+          {liveOrphan ? (
+            <li className="aw-code-step is-live">
+              <Thought live text={liveThinking} />
+            </li>
+          ) : null}
+        </ol>
       )}
 
       {block.produced.length === 0 ? null : (
@@ -173,32 +175,127 @@ export function CodeTurn({
         </div>
       )}
 
-      {block.reasonings.length === 0 ? null : (
-        <details className="aw-code-trace">
-          {/* "想过什么" and not "思考过程": the granularity differs -- this is a
-              whole turn, that was one model call -- and reusing the word would
-              suggest they are the same object. */}
-          <summary>想过什么</summary>
-          <ol className="aw-code-trace-list">
-            {block.reasonings.map((entry) => (
-              <li key={entry.callId}>
-                {/* One item per model call, never concatenated: a turn is
-                    think → call a tool → think again, and joining them reads
-                    as one continuous argument that was never made. */}
-                <p>{entry.text}</p>
-              </li>
-            ))}
-          </ol>
-          {block.events.length === 0 ? null : (
-            <details className="aw-code-raw">
-              <summary>原始事件（{block.events.length}）</summary>
-              <pre>{JSON.stringify(block.events, null, 2)}</pre>
-            </details>
-          )}
+      {block.events.length === 0 ? null : (
+        <details className="aw-code-raw">
+          <summary>原始事件（{block.events.length}）</summary>
+          <pre>{JSON.stringify(block.events, null, 2)}</pre>
         </details>
+      )}
+
+    </li>
+  );
+}
+
+/** How long a folded thought's first line may be before it stops being a line. */
+const THOUGHT_HEAD_MAX = 120;
+
+/**
+ * One step: what it thought, then what it did.
+ *
+ * The thought is above the action inside one `<li>`, which is the entire
+ * change. A step with no thought is just its action row; a step with no action
+ * is either the answering turn (the report follows it) or a call still in
+ * flight (the live text lands here).
+ */
+function TurnStepRow({
+  live,
+  liveThinking,
+  step,
+}: {
+  live: boolean;
+  liveThinking: string;
+  step: TurnStep;
+}) {
+  // While a call is streaming, the durable excerpt does not exist yet -- the
+  // live text is the only text there is. When `ModelCompleted` lands, the two
+  // swap without the row moving.
+  const text = live && liveThinking !== "" ? liveThinking : step.thinking;
+
+  return (
+    <li className={`aw-code-step${live ? " is-live" : ""}`}>
+      {text === "" ? null : <Thought live={live} text={text} />}
+      {step.group === null ? null : (
+        <div className={`aw-code-action is-${step.group.outcome}`}>
+          <span className="aw-code-action-title">{step.group.title}</span>
+          {step.group.subject === null ? null : (
+            <span className="aw-code-action-subject" title={step.group.subject}>
+              {step.group.subject}
+            </span>
+          )}
+          <span className="aw-code-action-outcome">
+            {OUTCOME_LABELS[step.group.outcome]}
+          </span>
+        </div>
       )}
     </li>
   );
+}
+
+/**
+ * A thought, folded to its first sentence.
+ *
+ * Head as the summary and the rest as the body, rather than truncation with an
+ * ellipsis: truncating throws away the half a reader came for, folding only
+ * puts it behind one click. The unit is one thought, not a whole turn's worth
+ * -- opening the reasoning behind one command should not unroll five others.
+ *
+ * A thought short enough to have no body is a plain `<p>`, not a `<details>`
+ * with nothing in it: a caret that opens onto emptiness is worse than no caret.
+ */
+function Thought({ live, text }: { live: boolean; text: string }) {
+  const { head, body } = splitThought(text);
+  // Initialised from `live` and never synced back. A thought the reader opened
+  // while it streamed stays open when the turn settles -- the same reason
+  // `FileCard`'s `inlineOpen` is state and not a controlled prop.
+  const [open, setOpen] = useState(live);
+  const className = live
+    ? "aw-code-step-thought is-live"
+    : "aw-code-step-thought";
+
+  if (body === "") return <p className={className}>{head}</p>;
+  return (
+    <details
+      className={className}
+      onToggle={(event) => {
+        setOpen(event.currentTarget.open);
+      }}
+      open={open}
+    >
+      <summary>{head}</summary>
+      <p className="aw-code-step-thought-body">{body}</p>
+    </details>
+  );
+}
+
+/**
+ * Split a thought into the line that stands for it and the rest.
+ *
+ * A newline first, because a model writing reasoning uses its own line breaks
+ * and the first line is the heading it wrote for itself. Then a Chinese
+ * sentence mark. An ASCII full stop only when whitespace follows it -- bare
+ * `.` would cut `notes.md` and `0.5` in half.
+ */
+function splitThought(text: string): { head: string; body: string } {
+  const trimmed = text.trim();
+  const window = trimmed.slice(0, THOUGHT_HEAD_MAX);
+  let end = window.indexOf("\n");
+  if (end === -1) {
+    for (const mark of ["。", "！", "？"]) {
+      const at = window.indexOf(mark);
+      if (at !== -1 && (end === -1 || at < end)) end = at;
+    }
+    if (end !== -1) end += 1;
+  }
+  if (end === -1) {
+    const match = /\.\s/.exec(window);
+    if (match !== null) end = match.index + 1;
+  }
+  // No ellipsis when it is cut hard: the disclosure triangle already says
+  // there is more underneath.
+  if (end === -1) {
+    end = trimmed.length <= THOUGHT_HEAD_MAX ? trimmed.length : THOUGHT_HEAD_MAX;
+  }
+  return { head: trimmed.slice(0, end).trim(), body: trimmed.slice(end).trim() };
 }
 
 function FileCard({

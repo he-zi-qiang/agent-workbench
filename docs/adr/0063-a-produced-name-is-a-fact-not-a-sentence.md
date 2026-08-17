@@ -3,6 +3,9 @@
 - 决策点：一次工具调用往工作区写了哪个文件，控制台从哪里知道；这条信息算
   「运行时正文」（受 `runtime.record_step_inputs` 门控）还是算结构化事实
   （无条件发布，与 `tool_name`、`output_bytes` 同级）
+- 后续：**§5 已由 [ADR-064](./0064-a-thought-belongs-to-the-action-it-caused.md) 取代**
+  ——该节的前提（摘录是模型对整轮的推理）与我们自己的事件不符：每个
+  `model_call_id` 一条，且带着它决定的 `tool_call_ids`。其余各节不受影响
 - 状态：**接受**。一次工具调用写进工作区的文件名是**结构化事实**，直接发布在
   `ToolResult.workspace_writes` 与 `ToolCompleted.workspace_writes` 上，
   **不进** `runtime.record_step_inputs` 门
@@ -121,7 +124,14 @@ docstring 里记着它存在的原因：一个 Word Task 的全部产物就是�
 `tests/adapters/test_sandbox_tool.py` 里有一条测试把这个限制钉住，免得后来的人
 把它当 bug 修一半。
 
-## 5. 随附的控制台改动收窄了 ADR-061 的一条规则
+## 5. 随附的控制台改动收窄了 ADR-061 的一条规则（**已被 ADR-064 取代**）
+
+> **本节已作废。** [ADR-064](./0064-a-thought-belongs-to-the-action-it-caused.md)
+> 取代了它，因为下面这段论证的前提是错的：摘录**不是**模型对整轮的推理，
+> `agent_runtime` 每个 `model_call_id` 发一条，并在同一条事件上带着它决定的
+> `tool_call_ids`。所以「一段跨步骤的文字」这个顾虑描述的是一份我们没有的数据，
+> 而按它做出的折叠块，恰好把每段推理和它促成的那次调用之间的位置关系抹掉了。
+> 保留原文以记录当时的推理与它错在哪里。
 
 ADR-061 已经决定了**哪些界面显示摘录**（它明确记下 Chat 不渲染思考），但没有
 规定在一个显示它的界面**内部**该摆在哪。随附的控制台改动把后者收窄一格：**Code 的思考摘录只出现在按轮次的折叠块里，不再进步骤树。**理由

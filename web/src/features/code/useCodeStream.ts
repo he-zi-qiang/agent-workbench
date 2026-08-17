@@ -86,6 +86,16 @@ export interface CodeStream {
   steps: EventEnvelope[];
   /** Empty when nothing is being reasoned about right now. */
   thinking: string;
+  /**
+   * Which model call the live thought belongs to. Empty when `thinking` is.
+   *
+   * Exposed so the renderer can put the live text on the step it is *going to*
+   * settle into, rather than at the top of the page. It also makes the
+   * one-render-only invariant checkable at the render layer instead of only
+   * inside this reducer: a call whose id is here has no `ModelCompleted` yet,
+   * so it cannot also be supplying a durable excerpt.
+   */
+  thinkingCallId: string;
 }
 
 export function useCodeStream(
@@ -220,6 +230,7 @@ export function useCodeStream(
   return {
     steps: held.session === sessionId ? held.events : [],
     thinking: thought.session === sessionId ? thought.text : "",
+    thinkingCallId: thought.session === sessionId ? thought.callId : "",
   };
 }
 

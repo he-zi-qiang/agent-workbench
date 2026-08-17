@@ -50,7 +50,7 @@ vi.mock("../../api/client", () => ({
 // asserted through this seam instead, because a page test that waited on a
 // network read would be testing the transport a second time.
 vi.mock("./useCodeStream", () => ({
-  useCodeStream: vi.fn(() => ({ steps: [], thinking: "" })),
+  useCodeStream: vi.fn(() => ({ steps: [], thinking: "", thinkingCallId: "" })),
 }));
 
 vi.mock("../../app/IdentityContext", () => ({
@@ -124,7 +124,7 @@ beforeEach(() => {
   });
   vi.mocked(downloadCodeWorkspaceFile).mockResolvedValue(undefined);
   vi.mocked(listCodeSessions).mockResolvedValue({ sessions: [] });
-  vi.mocked(useCodeStream).mockReturnValue({ steps: [], thinking: "" });
+  vi.mocked(useCodeStream).mockReturnValue({ steps: [], thinking: "", thinkingCallId: "" });
 });
 
 describe("CodePage", () => {
@@ -136,16 +136,18 @@ describe("CodePage", () => {
     vi.mocked(useCodeStream).mockReturnValue({
       steps: [],
       thinking: "先看 notes.md 里有什么。",
+      thinkingCallId: "",
     });
 
     mounted();
     await user.type(screen.getByLabelText("要做的事"), "整理待办");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("正在思考…")).toBeInTheDocument();
-    });
-    expect(screen.getByText("先看 notes.md 里有什么。")).toBeInTheDocument();
+    // No `正在思考…` heading any more: the thought is the row, sitting where
+    // the action it is about to cause will appear. A label saying that thinking
+    // is happening, above a block of thinking, was saying it twice.
+    const live = await screen.findByText("先看 notes.md 里有什么。");
+    expect(live.closest("li.aw-code-step")?.className).toContain("is-live");
   });
 
   it("says nothing about thinking when no turn is running", () => {
@@ -154,11 +156,11 @@ describe("CodePage", () => {
     vi.mocked(useCodeStream).mockReturnValue({
       steps: [],
       thinking: "leftover reasoning",
+      thinkingCallId: "",
     });
 
     mounted();
 
-    expect(screen.queryByText("正在思考…")).not.toBeInTheDocument();
     expect(screen.queryByText("leftover reasoning")).not.toBeInTheDocument();
   });
 
@@ -370,6 +372,7 @@ describe("CodePage", () => {
     // plus the model turn that proposed it.
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
+      thinkingCallId: "",
       steps: [
         {
           event_id: "evt_m1",
@@ -460,11 +463,11 @@ describe("CodePage", () => {
     // already the heading of this block, and numbering it again named the same
     // thing twice.
     expect(within(turns).queryByText(/^第 \d+ 轮$/)).not.toBeInTheDocument();
-    // Twice, and both are wanted -- but they are on different layers, which is
-    // what makes it not a repetition: the digest is what a *collapsed* 做了什么
-    // says, and the row is what opening it shows. A closed fold that said only
-    // "做了什么" would make the reader open every turn to find the interesting one.
-    expect(within(turns).getAllByText("写入工作区")).toHaveLength(2);
+    // And the action is visible without opening anything.
+    expect(within(turns).getByText("写入工作区")).toBeVisible();
+    // Once now, not twice. The digest existed to tell a reader what was inside
+    // a closed fold; there is no fold, so the row speaks for itself.
+    expect(within(turns).getAllByText("写入工作区")).toHaveLength(1);
     // The file it produced is a card in the conversation, not a row in a pane
     // on the far side of the screen.
     const card = within(turns).getByRole("button", { name: /notes\.md/ });
@@ -484,6 +487,7 @@ describe("CodePage", () => {
     });
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
+      thinkingCallId: "",
       steps: [
         {
           event_id: "evt_1",
@@ -558,6 +562,7 @@ describe("CodePage", () => {
       });
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
+      thinkingCallId: "",
       steps: [
         {
           event_id: "evt_1",
@@ -598,14 +603,13 @@ describe("CodePage", () => {
     await waitFor(() => {
       expect(vi.mocked(getCodeHistory)).toHaveBeenCalledTimes(2);
     });
+    // The steps of the turn whose report is on screen are still readable --
+    // and now without a click, which is the half that changed. This pane used
+    // to be mounted only while the request was in flight, over a list the hook
+    // emptied on the way out.
     const turns = screen.getByRole("region", { name: "编码会话" });
-    expect(within(turns).getByText("做了什么")).toBeInTheDocument();
-    // The digest on the collapsed fold, so a settled turn says what it did
-    // without being opened, and the action row inside it for when it is.
-    expect(turns.querySelector(".aw-code-actions-digest")?.textContent).toBe(
-      "写入工作区",
-    );
     expect(turns.querySelectorAll(".aw-code-action")).toHaveLength(1);
+    expect(within(turns).getByText("写入工作区")).toBeVisible();
   });
 
   it("lists sessions by the name their first instruction gave them", async () => {
@@ -833,6 +837,7 @@ describe("CodePage", () => {
     });
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
+      thinkingCallId: "",
       steps: [
         {
           event_id: "evt_1",
@@ -890,6 +895,7 @@ describe("CodePage", () => {
     });
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
+      thinkingCallId: "",
       steps: [
         {
           event_id: "evt_1",
@@ -973,6 +979,9 @@ describe("CodePage", () => {
       // call's ModelCompleted arrives, which is the other half of the
       // invariant asserted below.
       thinking: "现在该把文件读回来核对一遍",
+      // The second call, the one still streaming. It has a ModelStarted and no
+      // ModelCompleted, so it is the anchor the live text lands on.
+      thinkingCallId: "mc_2",
       steps: [
         {
           event_id: "evt_1",
@@ -988,6 +997,26 @@ describe("CodePage", () => {
             thinking_preview: "先建一个空的 clock.html",
           },
         },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolProposed",
+          sequence: 2,
+          payload: {
+            kind: "ToolProposed",
+            tool_call_id: "call_1",
+            tool_name: "workspace_write",
+          },
+        },
+        {
+          event_id: "evt_3",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ModelStarted",
+          sequence: 3,
+          payload: { kind: "ModelStarted", model_call_id: "mc_2" },
+        },
       ] as unknown as ReturnType<typeof useCodeStream>["steps"],
     });
 
@@ -1001,24 +1030,152 @@ describe("CodePage", () => {
     // the page, formatted as a 思考过程 body inside its step, and verbatim
     // again inside that step's raw JSON payload dump.
     //
-    // Once each, and never the same call twice, because the two sets are
-    // disjoint by construction: the live text belongs to a call with no
-    // ModelCompleted, and `reasonings` is built only from ModelCompleted.
+    // Once each, and never the same call twice. The invariant is unchanged;
+    // what changed is how it holds. It used to be two disjoint sets rendered in
+    // two places; it is now one row per call that settles in place -- a call
+    // with a live thought has no ModelCompleted yet, so it cannot also be
+    // supplying a durable excerpt.
     expect(within(turns).getAllByText("先建一个空的 clock.html")).toHaveLength(1);
     expect(
       within(turns).getAllByText("现在该把文件读回来核对一遍"),
     ).toHaveLength(1);
-    // And they are in different places, doing different jobs: the finished one
-    // is filed under the turn's record, the live one is the reason to believe
-    // the session is still working.
-    const trace = within(turns).getByText("想过什么").closest("details");
-    expect(trace).not.toBeNull();
+    // Neither disclosure exists any more: a reader sees the commands and the
+    // reasoning without clicking anything.
+    expect(within(turns).queryByText("想过什么")).not.toBeInTheDocument();
+    expect(within(turns).queryByText("做了什么")).not.toBeInTheDocument();
+    // The settled thought sits on the action it caused -- one `<li>`, thought
+    // above command. This is the whole point of the change.
+    const settled = within(turns)
+      .getByText("先建一个空的 clock.html")
+      .closest("li.aw-code-step");
+    expect(settled).not.toBeNull();
     expect(
-      within(trace as HTMLElement).getByText("先建一个空的 clock.html"),
+      within(settled as HTMLElement).getByText("写入工作区"),
     ).toBeInTheDocument();
+    // The live one is on its own step, marked, with no action under it yet.
+    const streaming = within(turns)
+      .getByText("现在该把文件读回来核对一遍")
+      .closest("li.aw-code-step");
+    expect(streaming?.className).toContain("is-live");
     expect(
-      within(trace as HTMLElement).queryByText("现在该把文件读回来核对一遍"),
+      within(streaming as HTMLElement).queryByText("写入工作区"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows what a finished turn did without a click", async () => {
+    // The direct regression test for the complaint that started this work: a
+    // settled turn used to render two closed disclosures, so a reader saw no
+    // command and no reasoning until they clicked twice.
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [
+        { role: "user", text: "写个时钟" },
+        { role: "assistant", text: "写好了。" },
+      ],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      thinking: "",
+      thinkingCallId: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ModelCompleted",
+          sequence: 1,
+          payload: {
+            kind: "ModelCompleted",
+            model_call_id: "mc_1",
+            text: "",
+            tool_call_ids: ["call_1"],
+            thinking_preview: "先建一个空的 clock.html",
+          },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolProposed",
+          sequence: 2,
+          payload: {
+            kind: "ToolProposed",
+            tool_call_id: "call_1",
+            tool_name: "workspace_write",
+          },
+        },
+        {
+          event_id: "evt_3",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:01Z",
+          event_type: "RunCompleted",
+          sequence: 3,
+          payload: { kind: "RunCompleted" },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+
+    const turns = await screen.findByRole("region", { name: "编码会话" });
+    // No interaction at all before these two.
+    expect(within(turns).getByText("写入工作区")).toBeInTheDocument();
+    expect(
+      within(turns).getByText("先建一个空的 clock.html"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a long thought's conclusion one click away rather than cutting it", async () => {
+    const user = userEvent.setup();
+    const head = "先看看工作区里有什么。";
+    const rest = "然后决定是新建还是改已有的那个文件，再把结果读回来核对。";
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [{ role: "user", text: "写个时钟" }],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      thinking: "",
+      thinkingCallId: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ModelCompleted",
+          sequence: 1,
+          payload: {
+            kind: "ModelCompleted",
+            model_call_id: "mc_1",
+            text: "",
+            tool_call_ids: ["call_1"],
+            thinking_preview: `${head}${rest}`,
+          },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolProposed",
+          sequence: 2,
+          payload: {
+            kind: "ToolProposed",
+            tool_call_id: "call_1",
+            tool_name: "workspace_list",
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+
+    const turns = await screen.findByRole("region", { name: "编码会话" });
+    // Folded to its first sentence, not truncated: truncation throws away the
+    // half the reader came for, folding puts it behind one click.
+    const summary = within(turns).getByText(head);
+    expect(summary.tagName.toLowerCase()).toBe("summary");
+    const fold = summary.closest("details");
+    expect((fold as HTMLDetailsElement).open).toBe(false);
+
+    await user.click(summary);
+    expect((fold as HTMLDetailsElement).open).toBe(true);
+    expect(within(turns).getByText(rest)).toBeInTheDocument();
   });
 
   it("shows what a text file holds, without spending a turn to ask", async () => {

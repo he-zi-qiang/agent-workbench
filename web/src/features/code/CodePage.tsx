@@ -131,7 +131,7 @@ export function CodePage() {
   });
   const known = sessions.data?.sessions ?? [];
 
-  const { steps, thinking } = useCodeStream(identity, sessionId);
+  const { steps, thinking, thinkingCallId } = useCodeStream(identity, sessionId);
 
   // Derived, not reset. Both of these used to be cleared from an effect when
   // their subject changed, which is a render behind: the old session's file and
@@ -599,6 +599,7 @@ export function CodePage() {
                   identity={identity}
                   key={block.key}
                   liveThinking={block.live ? thinking : ""}
+                  liveThinkingCallId={block.live ? thinkingCallId : ""}
                   onOpen={openByName}
                   openedName={viewing?.name ?? null}
                   sessionId={sessionId}

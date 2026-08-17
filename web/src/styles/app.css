@@ -4264,65 +4264,6 @@ pre {
   border-left: 2px solid var(--aw-border-strong);
 }
 
-/* 正在进行的那一份思考。小、淡，因为它不是报告——它是「这东西还活着」的凭据。
- * 模型用它自己的换行写推理，重排成一堵墙会丢掉论证的形状。 */
-.aw-code-thinking {
-  padding: 8px 12px;
-  border: 1px solid var(--aw-border);
-  border-radius: 9px;
-  background: var(--aw-panel-soft);
-  color: var(--aw-text-muted);
-  font-size: 12px;
-}
-
-.aw-code-thinking > summary {
-  color: var(--aw-text-muted);
-  cursor: pointer;
-}
-
-.aw-code-thinking > p {
-  margin: 8px 0 0;
-  line-height: 1.6;
-  white-space: pre-wrap;
-}
-
-/* 做了什么：折叠时是一行摘要，展开是每次工具调用一行。不是 Task 的阶段树——
- * 没有节点轨、没有第三层折叠，因为编码会话没有图。 */
-.aw-code-actions > summary {
-  display: flex;
-  align-items: baseline;
-  padding: 5px 8px;
-  gap: 8px;
-  border-radius: 8px;
-  color: var(--aw-text-soft);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.aw-code-actions > summary:hover {
-  background: var(--aw-panel-soft);
-}
-
-.aw-code-actions-label {
-  flex: none;
-  font-weight: 600;
-}
-
-.aw-code-actions-digest {
-  overflow: hidden;
-  color: var(--aw-text-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-code-action-list {
-  display: grid;
-  margin: 4px 0 0;
-  padding: 0 0 0 8px;
-  gap: 1px;
-  list-style: none;
-}
-
 .aw-code-action {
   display: flex;
   align-items: baseline;
@@ -4470,38 +4411,69 @@ pre {
   font-size: 11px;
 }
 
-/* --- 想过什么 --- */
+/* --- 一轮的时间线 --- */
 
-.aw-code-trace > summary,
-.aw-code-raw > summary {
-  padding: 4px 8px;
-  border-radius: 7px;
-  color: var(--aw-text-soft);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.aw-code-trace > summary:hover,
-.aw-code-raw > summary:hover {
-  background: var(--aw-panel-soft);
-}
-
-.aw-code-trace-list {
+/* 一步一行，推理在它促成的动作正上方。这不是折叠块：转录的默认状态是「看得见」，
+ * 折叠的单位是单段推理的正文，不是整轮的记录。
+ *
+ * 之前这里是两个默认关闭的 <details>——「做了什么」和「想过什么」——读者不点两次
+ * 看不到一条命令、一句推理。而且它们把同一批有序事件拆成了两个列表，推理和它引出
+ * 的那次调用之间的位置关系就此消失。 */
+.aw-code-steps {
   display: grid;
-  margin: 6px 0 0;
+  margin: 0;
   padding: 0 0 0 8px;
-  gap: 10px;
+  gap: 6px;
   list-style: none;
 }
 
-.aw-code-trace-list p {
-  margin: 0;
-  padding: 8px 12px;
-  border-left: 2px solid var(--aw-border);
+.aw-code-step {
+  display: grid;
+  gap: 2px;
+}
+
+/* 淡、斜、比动作行小一号：它从属于下面那一行，不与它争。取自 Codex 的
+ * `dim().italic()`——那是四份参考实现里唯一从源码验证过的渲染。 */
+.aw-code-step-thought {
   color: var(--aw-text-muted);
   font-size: 12px;
+  font-style: italic;
   line-height: 1.6;
+}
+
+.aw-code-step-thought > summary,
+p.aw-code-step-thought {
+  margin: 0;
+  padding: 3px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+/* 短到没有正文的那一段不是 <details>，是不可点的 <p>：一个点开之后是空的三角，
+ * 比没有三角更糟。 */
+p.aw-code-step-thought {
+  cursor: default;
+}
+
+.aw-code-step-thought > summary:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-step-thought-body {
+  margin: 2px 0 0;
+  padding: 6px 12px;
+  border-left: 2px solid var(--aw-border);
   white-space: pre-wrap;
+}
+
+/* 正在想的那一段。唯一的额外标记是颜色略提——它不换位置、不换字号，因为下一帧
+ * 它就是同一个位置上的定稿行。 */
+.aw-code-step.is-live > .aw-code-step-thought {
+  color: var(--aw-text-soft);
+}
+
+.aw-code-step.is-live .aw-code-step-thought-body {
+  border-left-color: var(--aw-border-strong);
 }
 
 .aw-code-raw {
