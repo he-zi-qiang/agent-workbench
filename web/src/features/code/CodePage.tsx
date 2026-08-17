@@ -131,7 +131,10 @@ export function CodePage() {
   });
   const known = sessions.data?.sessions ?? [];
 
-  const { steps, thinking, thinkingCallId } = useCodeStream(identity, sessionId);
+  const { steps, thinking, thinkingCallId, answer } = useCodeStream(
+    identity,
+    sessionId,
+  );
 
   // Derived, not reset. Both of these used to be cleared from an effect when
   // their subject changed, which is a render behind: the old session's file and
@@ -157,6 +160,7 @@ export function CodePage() {
     events: steps,
     running,
     pendingInstruction: running ? pending : null,
+    liveCallId: thinkingCallId,
   });
 
   //: Every setState here sits inside a `.then`, and that placement is load
@@ -600,6 +604,7 @@ export function CodePage() {
                   key={block.key}
                   liveThinking={block.live ? thinking : ""}
                   liveThinkingCallId={block.live ? thinkingCallId : ""}
+                  liveAnswer={block.live ? answer : ""}
                   onOpen={openByName}
                   openedName={viewing?.name ?? null}
                   sessionId={sessionId}

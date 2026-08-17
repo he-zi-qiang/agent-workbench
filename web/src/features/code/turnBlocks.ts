@@ -139,8 +139,15 @@ export function buildTurnBlocks(input: {
   /** Whether a turn's request is open. Nothing is live when it is not. */
   running: boolean;
   pendingInstruction: string | null;
+  /**
+   * The model call currently in flight, if any.
+   *
+   * Only the id, never the text. The text changes at token rate; putting it in
+   * this function's inputs would rebuild every block on every frame.
+   */
+  liveCallId: string;
 }): TurnBlocks {
-  const { messages, events, running, pendingInstruction } = input;
+  const { messages, events, running, pendingInstruction, liveCallId } = input;
 
   // Insertion-ordered, so runs come out in the order the server emitted them.
   const byRun = new Map<string, EventEnvelope[]>();
@@ -217,6 +224,7 @@ export function buildTurnBlocks(input: {
         report,
         events: run?.events ?? [],
         live: false,
+        liveCallId,
       }),
     );
   }
@@ -235,6 +243,7 @@ export function buildTurnBlocks(input: {
         report: null,
         events: live?.events ?? [],
         live: true,
+        liveCallId,
       }),
     );
   }
@@ -243,15 +252,17 @@ export function buildTurnBlocks(input: {
   return { blocks, orphanRuns };
 }
 
-function blockOf(base: {
-  key: string;
-  index: number;
-  runId: string | null;
-  instruction: string;
-  report: string | null;
-  events: EventEnvelope[];
-  live: boolean;
-}): CodeTurnBlock {
+function blockOf(
+  base: {
+    key: string;
+    index: number;
+    runId: string | null;
+    instruction: string;
+    report: string | null;
+    events: EventEnvelope[];
+    live: boolean;
+  } & { liveCallId: string },
+): CodeTurnBlock {
   // No `titleFor`: that argument is how Work injects its lifecycle dictionary,
   // and `TaskDeadLettered` is not a phrase that belongs over a coding step.
   // Without it `groupSteps` falls back to the raw event type, which only ever
@@ -354,7 +365,35 @@ function blockOf(base: {
     });
   }
 
-  return { ...base, groups, steps, produced: producedIn(groups) };
+  // The step a live thought lands on, when its `ModelStarted` has not arrived
+  // yet. It is synthesised *here* rather than rendered as an extra `<li>` after
+  // the mapped list, and that is not a tidiness preference -- it is the fix for
+  // a real remount.
+  //
+  // React reconciles a mapped array by key *within that array*. An element that
+  // moves from a trailing conditional slot into the array is, to React, a
+  // different child position: it unmounts and rebuilds. Measured on one
+  // session, 5 of 53 thoughts lived their whole life in that slot, and every
+  // `ModelStarted` arrival -- which the transient delta beats by up to a whole
+  // catch-up poll -- tore the row down, reset the disclosure the reader had
+  // opened, and jittered the layout twice.
+  //
+  // One array, one key space, no remount.
+  const { liveCallId: inFlight, ...rest } = base;
+  if (
+    rest.live &&
+    inFlight !== "" &&
+    !steps.some((step) => step.modelCallId === inFlight)
+  ) {
+    steps.push({
+      key: `model:${inFlight}`,
+      modelCallId: inFlight,
+      thinking: "",
+      group: null,
+    });
+  }
+
+  return { ...rest, groups, steps, produced: producedIn(groups) };
 }
 
 /** The files one turn's successful tool calls put into the workspace. */

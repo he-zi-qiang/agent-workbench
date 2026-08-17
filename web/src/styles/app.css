@@ -4264,6 +4264,20 @@ pre {
   border-left: 2px solid var(--aw-border-strong);
 }
 
+/* 正在被写出来的那一份。左边那道线换成强调色，是它与定稿之间唯一的差别——
+ * 位置、字号、行距全不变，因为下一帧同一个位置就是定稿。任何会让文字跳位的
+ * 区分（缩进、背景、字号）都会在报告写完的那一刻抖一下。 */
+.aw-code-report.is-streaming {
+  border-left-color: var(--aw-accent);
+}
+
+/* 流式期间是纯文本：半个围栏代码块交给 Markdown 渲染器就是一团乱码，而报告
+ * 里几乎总有围栏。定稿后才过 Markdown。 */
+.aw-code-report.is-streaming > p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .aw-code-action {
   display: flex;
   align-items: baseline;
