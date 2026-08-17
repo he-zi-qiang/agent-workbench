@@ -44,7 +44,11 @@ from typing import Protocol, runtime_checkable
 from fastapi import Request
 
 from agent_workbench.domain.errors import IncompatibleSchemaError
-from agent_workbench.domain.events import EventEnvelope, ModelDelta
+from agent_workbench.domain.events import (
+    EventEnvelope,
+    ModelDelta,
+    ModelThinkingDelta,
+)
 from agent_workbench.domain.schema import BOUNDED_TEXT_LIMIT
 from agent_workbench.ports.event_log import EventCursor, EventLogPort
 
@@ -541,11 +545,15 @@ def live_frames(envelopes: tuple[EventEnvelope, ...]) -> Iterator[str]:
 
     Adjacent deltas of the same model call are merged, because the unit a
     reader cares about is a chunk of text and the unit a provider emits is
-    whichever bytes arrived together. Two rules keep the merge honest:
+    whichever bytes arrived together. Three rules keep the merge honest:
 
     * only *adjacent* events merge, and only within one ``model_call_id``, so
       nothing is reordered and a tool round between two calls stays visible;
-    * a merge never truncates. ``ModelDelta.text`` is bounded, so the merge
+    * only events of one kind merge. ``ModelThinkingDelta`` coalesces exactly
+      like ``ModelDelta`` -- it streams at the same token rate -- but the two
+      never merge into each other: a frame carries either reasoning or answer
+      text, never a concatenation a client would have to un-mix;
+    * a merge never truncates. The delta text is bounded, so the merge
       flushes and starts a new frame rather than trimming -- text is what this
       frame exists to carry, and a silently shortened one would be a lie the
       subscriber has no way to detect.
@@ -561,15 +569,12 @@ def live_frames(envelopes: tuple[EventEnvelope, ...]) -> Iterator[str]:
         last = pending[-1]
         # The last envelope's identity, not the first: its timestamp is when
         # the text in this frame stopped arriving, which is what a reader
-        # comparing it against the step beside it means by "when".
+        # comparing it against the step beside it means by "when". The
+        # payload's own copy keeps its kind, so a thinking burst flushes as a
+        # thinking frame.
         yield _transient_frame(
             last.model_copy(
-                update={
-                    "payload": ModelDelta(
-                        model_call_id=_call_of(last),
-                        text=merged,
-                    )
-                }
+                update={"payload": _delta_of(last).model_copy(update={"text": merged})}
             )
         )
         pending = []
@@ -577,16 +582,20 @@ def live_frames(envelopes: tuple[EventEnvelope, ...]) -> Iterator[str]:
 
     for envelope in envelopes:
         payload = envelope.payload
-        if not isinstance(payload, ModelDelta):
+        if not isinstance(payload, (ModelDelta, ModelThinkingDelta)):
             # Anything else transient -- tool progress -- passes through, after
             # whatever text preceded it, so the order a reader sees is the
             # order things happened.
             yield from flush()
             yield _transient_frame(envelope)
             continue
-        call = payload.model_call_id
-        if pending and _call_of(pending[-1]) != call:
-            yield from flush()
+        if pending:
+            previous = _delta_of(pending[-1])
+            if (
+                type(previous) is not type(payload)
+                or previous.model_call_id != payload.model_call_id
+            ):
+                yield from flush()
         if len(merged) + len(payload.text) > BOUNDED_TEXT_LIMIT:
             yield from flush()
         pending.append(envelope)
@@ -594,11 +603,11 @@ def live_frames(envelopes: tuple[EventEnvelope, ...]) -> Iterator[str]:
     yield from flush()
 
 
-def _call_of(envelope: EventEnvelope) -> str:
+def _delta_of(envelope: EventEnvelope) -> ModelDelta | ModelThinkingDelta:
     payload = envelope.payload
     # Only ever called on envelopes this module has already narrowed.
-    assert isinstance(payload, ModelDelta)
-    return payload.model_call_id
+    assert isinstance(payload, (ModelDelta, ModelThinkingDelta))
+    return payload
 
 
 def _transient_frame(envelope: EventEnvelope) -> str:

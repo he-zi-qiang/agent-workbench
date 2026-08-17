@@ -31,7 +31,12 @@ from agent_workbench.domain.context import (
     ContextPacket,
 )
 from agent_workbench.domain.errors import ErrorInfo
-from agent_workbench.domain.events import AnswerCommitted, ModelCompleted, ModelDelta
+from agent_workbench.domain.events import (
+    AnswerCommitted,
+    ModelCompleted,
+    ModelDelta,
+    ModelThinkingDelta,
+)
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.domain.schema import BOUNDED_TEXT_LIMIT
@@ -779,6 +784,71 @@ def test_a_provisional_sink_passes_deltas_through_and_still_redacts_the_answer()
     assert delta.text == SECRET
     assert completed.text == ""
     assert completed.output_ref is None
+
+
+def test_reasoning_is_fenced_exactly_like_the_answer_it_precedes() -> None:
+    """Thinking is not a third channel out (ADR-061).
+
+    The model reasons *about* the evidence it was shown, so a redacted shape
+    -- one that may still end in ``AnswerWithheld`` -- must not stream the
+    reasoning either: it can quote the very passages the withheld answer was
+    refused for. The durable excerpt on ``ModelCompleted`` is blanked with the
+    candidate text for the same reason.
+    """
+
+    async def scenario() -> tuple[Any, Any, str]:
+        log = InMemoryEventLog()
+        release = AnswerReleaseSink(_sink(log))
+        thinking = await release.emit(
+            ModelThinkingDelta(model_call_id="mc_1", text=SECRET)
+        )
+        completed = await release.emit(
+            ModelCompleted(
+                model_call_id="mc_1",
+                finish_reason="stop",
+                text="",
+                thinking_preview=SECRET,
+            )
+        )
+        replayed = await log.read(SCOPE.stream_id)
+        return (
+            thinking.payload,
+            completed.payload,
+            "\n".join(event.model_dump_json() for event in replayed),
+        )
+
+    thinking, completed, serialized = asyncio.run(scenario())
+
+    assert thinking.text == ""
+    assert completed.thinking_preview == ""
+    assert SECRET not in serialized
+
+
+def test_a_provisional_shape_may_show_its_reasoning() -> None:
+    # The control for the test above, and the same loosening a delta gets:
+    # nothing was retrieved, so no grant can be withdrawn between the model
+    # finishing and the answer shipping.
+    async def scenario() -> tuple[Any, Any]:
+        log = InMemoryEventLog()
+        release = AnswerReleaseSink(_sink(log), live_text="provisional")
+        thinking = await release.emit(
+            ModelThinkingDelta(model_call_id="mc_1", text=SECRET)
+        )
+        completed = await release.emit(
+            ModelCompleted(
+                model_call_id="mc_1",
+                finish_reason="stop",
+                thinking_preview=SECRET,
+            )
+        )
+        return thinking.payload, completed.payload
+
+    thinking, completed = asyncio.run(scenario())
+
+    assert thinking.text == SECRET
+    # Still blanked: the durable record of a candidate is what the commit
+    # methods release, and that rule does not bend for the process text.
+    assert completed.thinking_preview == ""
 
 
 def test_the_default_policy_is_the_one_every_caller_had_before() -> None:

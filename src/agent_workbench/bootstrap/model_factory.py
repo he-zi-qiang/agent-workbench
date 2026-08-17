@@ -74,6 +74,8 @@ def build_model(config: ModelConfig, *, client: httpx.AsyncClient) -> ModelPort:
                 timeout_seconds=profile.timeout_seconds,
                 max_retries=profile.max_retries,
                 tool_calling_required=profile.tool_calling_required,
+                thinking=profile.thinking,
+                reasoning_effort=profile.reasoning_effort,
             )
             for name, profile in config.profiles.items()
         },

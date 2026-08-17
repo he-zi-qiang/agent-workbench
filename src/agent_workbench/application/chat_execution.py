@@ -153,6 +153,10 @@ def build_ungrounded_request(
         system_prompt=UNGROUNDED_SYSTEM_PROMPT,
         messages=(*history, user_message(request.question)),
         budget=budget,
+        # Every chat shape pins this off (ADR-061): the turn displays no
+        # reasoning, so a profile whose default is to think would spend --
+        # and stream toward the fence -- thinking nobody can see.
+        thinking=False,
     )
 
 
@@ -208,6 +212,8 @@ def build_web_fallback_request(
         system_prompt=system_prompt,
         messages=(*history, user_message(request.question)),
         budget=budget,
+        # Pinned off for every chat shape (ADR-061).
+        thinking=False,
     )
 
 
@@ -499,6 +505,8 @@ def build_fixed_request(
         tool_names=(),
         budget=budget,
         context=packet,
+        # Pinned off for every chat shape (ADR-061).
+        thinking=False,
     )
 
 
@@ -537,6 +545,8 @@ def build_agentic_request(
         messages=(*history, user_message(request.question)),
         tool_names=tool_names,
         budget=budget,
+        # Pinned off for every chat shape (ADR-061).
+        thinking=False,
     )
 
 

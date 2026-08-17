@@ -375,6 +375,59 @@ def test_the_durable_timeline_records_the_whole_round() -> None:
     assert "ContextCompacted" not in run.durable_types
 
 
+def test_reasoning_streams_live_and_is_excerpted_into_the_durable_record() -> None:
+    """The two halves of ADR-061's double track.
+
+    The chain streams as transient deltas, and what survives in the log is a
+    bounded excerpt on the event that closes the call -- which is the only
+    thing a Task timeline, having no live channel at all, can ever show.
+    """
+
+    run = _execute(
+        FakeModel([ScriptedTurn(reasoning="Fusion lives in Qdrant.", text="Qdrant.")])
+    )
+    completed = next(
+        envelope.payload
+        for envelope in run.durable
+        if envelope.event_type == "ModelCompleted"
+    )
+
+    assert "ModelThinkingDelta" in run.live_types
+    assert "ModelThinkingDelta" not in run.durable_types
+    assert completed.thinking_preview == "Fusion lives in Qdrant."
+    assert completed.text == "Qdrant."
+
+
+def test_reasoning_never_re_enters_the_conversation_the_next_turn_is_built_from() -> (
+    None
+):
+    """The provider requires it withheld, and the ledger is where it would leak.
+
+    A second turn exists here precisely so the first turn's reasoning has
+    somewhere to leak *into*: the assistant message the runtime writes back.
+    """
+
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                reasoning="I should read the corpus first.",
+                text="Let me look.",
+                tool_calls=(READ_CALL,),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Qdrant owns fusion.", usage=USAGE),
+        ]
+    )
+    run = _execute(model)
+    replayed = run.model
+    assert isinstance(replayed, FakeModel)
+    second = replayed.requests[1]
+    serialized = "\n".join(message.model_dump_json() for message in second.messages)
+
+    assert run.outcome.status == "completed"
+    assert "I should read the corpus first." not in serialized
+
+
 def test_the_tool_result_reaches_the_next_model_request() -> None:
     run = _execute(_tool_round())
     model = run.model

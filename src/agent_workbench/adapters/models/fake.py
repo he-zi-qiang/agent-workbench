@@ -24,6 +24,7 @@ from agent_workbench.ports.model import (
     ModelRequest,
     ModelStreamCompleted,
     ModelTextDelta,
+    ModelThinkingDelta,
     ModelToolCallProposed,
     ModelUsageReported,
 )
@@ -36,6 +37,10 @@ class ScriptedTurn:
     """One model reply, spelled out in advance."""
 
     text: str = ""
+    # Streamed before the text, the way a thinking provider interleaves the
+    # two phases. Empty means the scripted call did not think -- the shape
+    # every pre-existing script keeps without editing.
+    reasoning: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
     usage: TokenUsage = field(default_factory=TokenUsage)
     finish_reason: ModelFinishReason | None = None
@@ -94,6 +99,11 @@ class FakeModel:
                 ),
             )
             return
+
+        for offset in range(0, len(turn.reasoning), self._delta_size):
+            yield ModelThinkingDelta(
+                text=turn.reasoning[offset : offset + self._delta_size]
+            )
 
         for offset in range(0, len(turn.text), self._delta_size):
             yield ModelTextDelta(text=turn.text[offset : offset + self._delta_size])

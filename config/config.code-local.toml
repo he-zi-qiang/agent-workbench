@@ -40,7 +40,13 @@ deployment_scope = "local"
 # lines below turned into a 404 on every /v1/code path with nothing said. The
 # warning that now names that case was written from this file getting it wrong.
 [model.main]
-model_id = "deepseek-chat"
+# The concrete v4 id, not the alias: this profile declares a thinking stance,
+# and the stance was probed against this model (ADR-061).
+model_id = "deepseek-v4-flash"
+# Code turns stream their reasoning into the console's 思考 block. `low`
+# keeps the write-run-fix loop responsive; depth is a knob, not a promise.
+thinking = "enabled"
+reasoning_effort = "low"
 
 [model.compact]
 model_id = "deepseek-chat"

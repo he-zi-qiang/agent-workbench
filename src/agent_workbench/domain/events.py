@@ -81,6 +81,7 @@ EventType = Literal[
     "RetrievalRejected",
     "ModelStarted",
     "ModelDelta",
+    "ModelThinkingDelta",
     "ModelCompleted",
     "AnswerCommitted",
     "UngroundedAnswerCommitted",
@@ -303,6 +304,22 @@ class ModelDelta(DomainModel):
     text: BoundedText
 
 
+class ModelThinkingDelta(DomainModel):
+    """A coalesced slice of streamed reasoning. Never persisted.
+
+    A sibling of ``ModelDelta`` rather than a field on it, because the two
+    texts diverge at the publication fence: a delta of answer text is redacted
+    whenever the answer itself could still be withheld, and reasoning follows
+    the same rule for the same cause -- the model reasons *about* the evidence
+    it was shown, so its thinking can quote exactly what a withheld answer
+    must not have shown (ADR-061).
+    """
+
+    kind: Literal["ModelThinkingDelta"] = "ModelThinkingDelta"
+    model_call_id: Identifier
+    text: BoundedText
+
+
 class ModelCompleted(DomainModel):
     kind: Literal["ModelCompleted"] = "ModelCompleted"
     model_call_id: Identifier
@@ -314,6 +331,13 @@ class ModelCompleted(DomainModel):
     # answer reaches the asker. Those are the two halves: `prompt_preview`
     # below is a preview and stays at the preview ceiling; this is the product.
     text: AnswerText = ""
+    # How the model got there, at the preview ceiling rather than the
+    # answer's. Deliberately not the whole chain: the full text streamed live
+    # as ``ModelThinkingDelta`` and was never owed the durable log ("describe,
+    # don't copy") -- this excerpt is what a reader arriving after the fact,
+    # or a Task timeline that has no live channel at all, gets to see of the
+    # process (ADR-061). Empty when the call did not think.
+    thinking_preview: BoundedText = ""
     output_ref: ArtifactRef | None = None
     tool_call_ids: tuple[Identifier, ...] = ()
 
@@ -606,6 +630,7 @@ EventPayload = Annotated[
     | RetrievalRejected
     | ModelStarted
     | ModelDelta
+    | ModelThinkingDelta
     | ModelCompleted
     | AnswerCommitted
     | UngroundedAnswerCommitted
@@ -647,6 +672,9 @@ EVENT_DURABILITY: Final[Mapping[EventType, Durability]] = {
     "ContextBuilt": "durable",
     "ModelStarted": "durable",
     "ModelDelta": "transient",
+    # Transient for the same reason ModelDelta is: reasoning streams at token
+    # rate, and the durable trace of it is ModelCompleted.thinking_preview.
+    "ModelThinkingDelta": "transient",
     "ModelCompleted": "durable",
     "AnswerCommitted": "durable",
     "UngroundedAnswerCommitted": "durable",
@@ -770,6 +798,7 @@ __all__ = [
     "ModelDelta",
     "ModelFinishReason",
     "ModelStarted",
+    "ModelThinkingDelta",
     "PauseReason",
     "PermissionRequested",
     "PermissionResolved",

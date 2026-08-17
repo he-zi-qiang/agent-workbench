@@ -49,7 +49,14 @@ def test_every_event_type_declares_a_durability() -> None:
 def test_only_streamed_chatter_is_transient() -> None:
     """Everything else must survive a reconnect via the durable log."""
 
-    assert sorted(TRANSIENT_EVENT_TYPES) == ["ModelDelta", "ToolProgress"]
+    # Both model deltas are here for one reason: they stream at token rate and
+    # their durable trace is the event that closes the call (ModelCompleted,
+    # carrying `text` and `thinking_preview`).
+    assert sorted(TRANSIENT_EVENT_TYPES) == [
+        "ModelDelta",
+        "ModelThinkingDelta",
+        "ToolProgress",
+    ]
     assert "ModelCompleted" in DURABLE_EVENT_TYPES
     assert "AnswerCommitted" in DURABLE_EVENT_TYPES
     assert "AnswerWithheld" in DURABLE_EVENT_TYPES

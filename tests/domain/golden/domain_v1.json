@@ -84,6 +84,7 @@
     "schema_version": 1,
     "stream_id": "stream_0000000000000000000000000000001",
     "system_prompt": "Answer only from the provided context.",
+    "thinking": null,
     "tool_names": [
       "knowledge_search"
     ],

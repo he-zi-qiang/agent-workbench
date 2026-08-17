@@ -32,6 +32,7 @@ from agent_workbench.domain.events import (
     EventPayload,
     ModelCompleted,
     ModelDelta,
+    ModelThinkingDelta,
     UngroundedAnswerCommitted,
 )
 from agent_workbench.ports.event_log import EventKey, EventSink
@@ -64,7 +65,14 @@ LiveTextPolicy = Literal["redacted", "provisional"]
 #: ``ToolProgress`` passes through: its ``message`` is written by a tool
 #: handler describing its own work, never by the model, so it is not answer
 #: text and nothing about it changes when an answer is withheld.
-_TRANSIENT_HANDLED: Final[frozenset[str]] = frozenset({"ModelDelta", "ToolProgress"})
+#:
+#: ``ModelThinkingDelta`` follows ``ModelDelta``, not ``ToolProgress``: the
+#: model reasons *about* the evidence it was shown, so its thinking can quote
+#: exactly what a withheld answer must not have shown. Same author, same
+#: fence (ADR-061).
+_TRANSIENT_HANDLED: Final[frozenset[str]] = frozenset(
+    {"ModelDelta", "ModelThinkingDelta", "ToolProgress"}
+)
 
 _undecided = TRANSIENT_EVENT_TYPES - _TRANSIENT_HANDLED
 if _undecided:  # pragma: no cover - a failure here stops the process at import
@@ -107,11 +115,15 @@ class AnswerReleaseSink:
         that nothing had decided to publish.
         """
 
-        if isinstance(payload, ModelDelta):
+        if isinstance(payload, (ModelDelta, ModelThinkingDelta)):
+            # One policy for both texts: the reasoning is written by the same
+            # author about the same evidence as the answer it precedes.
             if self.live_text == "redacted":
                 payload = payload.model_copy(update={"text": ""})
         elif isinstance(payload, ModelCompleted):
-            payload = payload.model_copy(update={"text": "", "output_ref": None})
+            payload = payload.model_copy(
+                update={"text": "", "thinking_preview": "", "output_ref": None}
+            )
         elif isinstance(
             payload, (AnswerCommitted, UngroundedAnswerCommitted, AnswerWithheld)
         ):

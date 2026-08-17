@@ -123,6 +123,10 @@ class TextRenderer:
         elif isinstance(payload, ModelDelta):
             self.stream.write(payload.text)
             self._streamed = True
+        # ModelThinkingDelta is deliberately not streamed here: this renderer
+        # writes to a stream that may be piped, where reasoning interleaved
+        # with the answer is corruption rather than transparency. The durable
+        # excerpt still arrives in the timeline via ModelCompleted (ADR-061).
 
     def finish(
         self,

@@ -523,6 +523,16 @@ class ModelProfileSettings(StrictModel):
     # adapter switches back to auto so the Agent can finish.
     tool_calling_required: bool = False
     prompt_cache_enabled: bool = True
+    # Whether this profile's model reasons before answering (ADR-061).
+    # `unsupported` (the default) sends no thinking parameter at all -- the
+    # only honest value for a model or gateway nobody has probed, where an
+    # unknown key may be a 400. `disabled`/`enabled` send it explicitly both
+    # ways, because the provider's current models default thinking *on*: a
+    # profile switched to one without a declared stance would silently pay
+    # for reasoning nobody configured.
+    thinking: Literal["unsupported", "disabled", "enabled"] = "unsupported"
+    # Only consulted when thinking is enabled; the provider's own default.
+    reasoning_effort: Literal["low", "high", "max"] = "high"
     pricing: ModelPricingSettings | None = None
 
 
