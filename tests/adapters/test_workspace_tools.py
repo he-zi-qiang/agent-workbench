@@ -363,6 +363,17 @@ def test_a_declared_text_type_still_writes() -> None:
         assert "text/markdown" in invoke(WorkspaceListTool(scope)).content
 
 
+def test_an_svg_name_is_typed_as_the_image_it_is() -> None:
+    # Typed text/plain (the fallback) an .svg never reached the console's
+    # `<img>` viewer, so a drawn diagram opened as its own markup. The guess
+    # costs a label, and this is the one suffix where the wrong label hides
+    # the picture.
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="chart.svg", content="<svg/>")
+
+        assert "image/svg+xml" in invoke(WorkspaceListTool(scope)).content
+
+
 def test_list_reports_names_sizes_and_types() -> None:
     with entered() as scope:
         invoke(WorkspaceWriteTool(scope), name="b.md", content="two")

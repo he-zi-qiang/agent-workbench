@@ -33,6 +33,8 @@ def _model(*, api_key: str | None) -> ModelConfig:
         timeout_seconds=45.0,
         max_retries=1,
         tool_calling_required=False,
+        thinking="unsupported",
+        reasoning_effort="high",
         prices=None,
     )
     return ModelConfig(

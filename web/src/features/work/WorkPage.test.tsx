@@ -806,6 +806,48 @@ describe("WorkPage task submission", () => {
     expect(screen.getAllByRole("button", { name: /^下载/ })).toHaveLength(1);
   });
 
+  it("runs an html artifact in a sandboxed frame rather than digesting it as markdown", async () => {
+    // text/html used to fall into the readable branch, where MarkdownContent
+    // sanitised the page to its remains: no rendering, no source, nothing.
+    // The html kind routes it into HtmlPreview's opaque-origin frame instead;
+    // the sandbox value itself is pinned in that component's tests.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "做一个交互式图表页面",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(
+      railFileTimeline({
+        artifact_id: "art_page",
+        media_type: "text/html",
+        filename: "chart.html",
+        size_bytes: 256,
+      }),
+    );
+    vi.mocked(getArtifactText).mockResolvedValue({
+      text: "<html><body><h1>图</h1></body></html>",
+      truncated: false,
+    });
+    const user = userEvent.setup();
+    renderWorkPage("/work/task_run");
+
+    const rail = await screen.findByRole("complementary", { name: "附件" });
+    await user.click(within(rail).getByRole("button", { name: /chart\.html/ }));
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    const frame = await within(output).findByTitle("chart.html 预览");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(
+      within(output).getByRole("button", { name: "源码" }),
+    ).toBeInTheDocument();
+    // Still exactly one labelled download control on the page.
+    expect(screen.getAllByRole("button", { name: /^下载/ })).toHaveLength(1);
+  });
+
   it("opens an unshowable type in the reading column instead of silently downloading", async () => {
     // The honest leaf: no viewer exists for a zip, and the column says so.
     // What must not happen is the old behaviour -- bytes saved to disk as the
@@ -1190,6 +1232,38 @@ describe("WorkPage task submission", () => {
     await waitFor(() =>
       expect(screen.queryByText(/没有生成文件/)).not.toBeInTheDocument(),
     );
+  });
+
+  it("shows what a node was thinking, inside the step that thought it", async () => {
+    // A Task worker has no live channel to stream reasoning through -- the
+    // live fan-out is in-process and the worker is another process -- so the
+    // excerpt on ModelCompleted is the only thinking a Task can ever show
+    // (ADR-061). It arrives with the step, under the node that produced it.
+    const user = userEvent.setup();
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "今天丹东天气怎么样",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(answerTimeline());
+    vi.mocked(getArtifactJson).mockResolvedValue(taskInput(false));
+    renderWorkPage("/work/task_run");
+
+    // Two clicks in, the same as any other step body: the stage folds the
+    // node, the step folds its detail.
+    const stage = await screen.findByText("撰写草稿");
+    await user.click(stage);
+    const step = screen.getAllByText("模型调用已完成")[0] as HTMLElement;
+    await user.click(step);
+
+    expect(await screen.findByText("思考过程")).toBeInTheDocument();
+    expect(
+      screen.getByText("先确认日期，再读取气象数据。"),
+    ).toBeInTheDocument();
   });
 
   it("says a file is missing only when the task asked for one", async () => {
@@ -1610,6 +1684,7 @@ function answerTimeline() {
         payload: {
           kind: "ModelCompleted",
           text: "今天丹东天气为晴，23°C 至 36°C。",
+          thinking_preview: "先确认日期，再读取气象数据。",
         },
         sequence: 2,
         graph_node_id: "synthesize",

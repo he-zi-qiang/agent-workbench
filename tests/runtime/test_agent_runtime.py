@@ -190,6 +190,7 @@ def _request(
     allowed_tools: Sequence[ToolName] | None = None,
     max_tool_risk: str = "read",
     approval_required_risks: Sequence[str] = ("write", "external", "destructive"),
+    thinking: bool | None = None,
 ) -> AgentRunRequest:
     permitted = tuple(tool_names) if allowed_tools is None else tuple(allowed_tools)
     return AgentRunRequest.model_validate(
@@ -212,6 +213,7 @@ def _request(
             else RunBudget(max_steps=6, max_tool_calls=12),
             "messages": (user_message("Who owns hybrid fusion?"),),
             "tool_names": tuple(tool_names),
+            "thinking": thinking,
         }
     )
 
@@ -373,6 +375,89 @@ def test_the_durable_timeline_records_the_whole_round() -> None:
     assert "ModelDelta" in run.live_types
     assert "ModelDelta" not in run.durable_types
     assert "ContextCompacted" not in run.durable_types
+
+
+def test_reasoning_streams_live_and_is_excerpted_into_the_durable_record() -> None:
+    """The two halves of ADR-061's double track.
+
+    The chain streams as transient deltas, and what survives in the log is a
+    bounded excerpt on the event that closes the call -- which is the only
+    thing a Task timeline, having no live channel at all, can ever show.
+    """
+
+    run = _execute(
+        FakeModel([ScriptedTurn(reasoning="Fusion lives in Qdrant.", text="Qdrant.")])
+    )
+    completed = next(
+        envelope.payload
+        for envelope in run.durable
+        if envelope.event_type == "ModelCompleted"
+    )
+
+    assert "ModelThinkingDelta" in run.live_types
+    assert "ModelThinkingDelta" not in run.durable_types
+    assert completed.thinking_preview == "Fusion lives in Qdrant."
+    assert completed.text == "Qdrant."
+
+
+def test_the_runs_thinking_switch_reaches_the_model_request() -> None:
+    """The one line joining the two ends of ADR-061's switch.
+
+    Chat pins ``AgentRunRequest.thinking=False`` and the adapter reads
+    ``ModelRequest.thinking``; between them is a single assignment, and
+    without this test deleting it type-checks, passes everything else, and
+    silently buys reasoning for every chat turn on a thinking profile.
+    """
+
+    off = _execute(
+        FakeModel([ScriptedTurn(reasoning="should not appear", text="Q.")]),
+        request=_request(thinking=False),
+    )
+    model = off.model
+    assert isinstance(model, FakeModel)
+
+    assert model.requests[0].thinking is False
+    # And the double honours it, so the assertion above is not the only thing
+    # standing between a chat turn and a reasoning stream.
+    assert "ModelThinkingDelta" not in off.live_types
+
+    on = _execute(
+        FakeModel([ScriptedTurn(reasoning="visible", text="Q.")]),
+        request=_request(thinking=True),
+    )
+    assert isinstance(on.model, FakeModel)
+    assert on.model.requests[0].thinking is True
+    assert "ModelThinkingDelta" in on.live_types
+
+
+def test_reasoning_never_re_enters_the_conversation_the_next_turn_is_built_from() -> (
+    None
+):
+    """The provider requires it withheld, and the ledger is where it would leak.
+
+    A second turn exists here precisely so the first turn's reasoning has
+    somewhere to leak *into*: the assistant message the runtime writes back.
+    """
+
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                reasoning="I should read the corpus first.",
+                text="Let me look.",
+                tool_calls=(READ_CALL,),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Qdrant owns fusion.", usage=USAGE),
+        ]
+    )
+    run = _execute(model)
+    replayed = run.model
+    assert isinstance(replayed, FakeModel)
+    second = replayed.requests[1]
+    serialized = "\n".join(message.model_dump_json() for message in second.messages)
+
+    assert run.outcome.status == "completed"
+    assert "I should read the corpus first." not in serialized
 
 
 def test_the_tool_result_reaches_the_next_model_request() -> None:

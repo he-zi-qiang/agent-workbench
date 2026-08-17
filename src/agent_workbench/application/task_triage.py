@@ -221,6 +221,13 @@ class TaskTriageService:
             system_prompt=_TRIAGE_CONTRACT,
             messages=messages,
             budget=_TRIAGE_BUDGET,
+            # Off, and this is the shape that needs it most (ADR-061). Nothing
+            # displays a classifier's reasoning, the caller holds a ten-second
+            # client deadline, and the output budget is sized for one small
+            # JSON object -- reasoning would spend that budget and that clock
+            # on text no reader will ever see, and a truncated verdict falls
+            # back to the default silently.
+            thinking=False,
         )
 
 

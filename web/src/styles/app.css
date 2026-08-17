@@ -2762,6 +2762,13 @@ pre {
   border: 0;
 }
 
+/* The sandboxed HTML frame. White rather than the panel tint: a page that
+   sets no background of its own expects paper, and the tint would read as
+   the page's own colour choice. */
+.aw-html-frame {
+  background: #fff;
+}
+
 /* A generated picture at its own size when it fits, scaled down when it does
    not -- never scaled up, which turns a small plot into fog. */
 .aw-preview-image {
@@ -4093,6 +4100,32 @@ pre {
   max-height: min(40vh, 360px);
   padding: 0;
   border-top: 0;
+}
+
+/* The thought in flight. Dimmed and small, because it is not the report --
+   it is the reason to believe the session is still working. Sits above the
+   steps and disappears when the model call that had it finishes. */
+.aw-code-thinking {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-code-thinking > summary {
+  cursor: pointer;
+  color: var(--aw-text-muted);
+}
+
+.aw-code-thinking > p {
+  margin: 8px 0 0;
+  /* The model writes its reasoning with its own line breaks, and a wall of
+     re-flowed prose loses the shape of the argument. */
+  white-space: pre-wrap;
+  line-height: 1.6;
 }
 
 .aw-code-transcript {

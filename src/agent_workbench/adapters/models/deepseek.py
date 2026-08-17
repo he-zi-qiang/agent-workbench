@@ -2,7 +2,7 @@
 
 This is the first adapter that talks to something outside the process, and its
 whole job is to make that fact invisible upstream. What leaves this module is
-the same four ``ModelEvent`` kinds the scripted model produces, so the runtime
+the same five ``ModelEvent`` kinds the scripted model produces, so the runtime
 cannot tell the difference and a contract test can assert that it cannot.
 
 Three rules shape the translation.
@@ -34,7 +34,7 @@ from collections.abc import (
     Sequence,
 )
 from dataclasses import dataclass
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, cast
 
 import httpx
 from pydantic import ValidationError
@@ -55,9 +55,23 @@ from agent_workbench.ports.model import (
     ModelRequest,
     ModelStreamCompleted,
     ModelTextDelta,
+    ModelThinkingDelta,
     ModelToolCallProposed,
     ModelUsageReported,
 )
+
+#: What a profile says about thinking. ``unsupported`` sends no ``thinking``
+#: key at all -- the safe reading for a model id or compatible gateway this
+#: adapter has not been told about, where an unknown key may be a 400.
+#: ``disabled``/``enabled`` send it explicitly both ways, because the default
+#: depends on which name a profile calls the model by: measured 2026-08-17,
+#: ``deepseek-v4-flash`` reasons with no parameter at all while the
+#: ``deepseek-chat`` alias -- resolving to that same model -- does not
+#: (ADR-061 §1). A profile that moved to the concrete id and stayed silent
+#: would be paying for reasoning nobody asked for.
+ThinkingMode = Literal["unsupported", "disabled", "enabled"]
+
+ReasoningEffort = Literal["low", "high", "max"]
 
 CHAT_COMPLETIONS_PATH: Final[str] = "/chat/completions"
 DONE_SENTINEL: Final[str] = "[DONE]"
@@ -124,6 +138,13 @@ class DeepSeekProfile:
     # voluntarily call another tool; requiring another call would make every
     # tool-using Agent loop consume its entire tool budget.
     tool_calling_required: bool = False
+    # Probed 2026-08-16 against the live API (ADR-061): v4 models accept
+    # `thinking` with tools in the same request and reason before calling
+    # them; the `deepseek-chat` alias resolves server-side to v4 and does not
+    # think unless asked. `unsupported` keeps this adapter byte-identical for
+    # deployments pointing it at a gateway that predates the parameter.
+    thinking: ThinkingMode = "unsupported"
+    reasoning_effort: ReasoningEffort = "high"
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
@@ -371,6 +392,22 @@ class DeepSeekModel:
         max_tokens = request.max_output_tokens or profile.max_output_tokens
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if profile.thinking != "unsupported":
+            # Explicit both ways, never omitted: the v4 models default
+            # thinking *on*, so silence here would buy reasoning nobody
+            # configured. The request's override wins over the profile's
+            # default; against an `unsupported` profile it is ignored,
+            # because there is no parameter to send.
+            enabled = (
+                request.thinking
+                if request.thinking is not None
+                else profile.thinking == "enabled"
+            )
+            payload["thinking"] = (
+                {"type": "enabled", "reasoning_effort": profile.reasoning_effort}
+                if enabled
+                else {"type": "disabled"}
+            )
         if request.tools:
             payload["tools"] = _tool_definitions(request.tools)
             if profile.tool_calling_required and (
@@ -482,17 +519,30 @@ def _first_choice(chunk: dict[str, Any]) -> dict[str, Any] | None:
     return _as_object(choices[0])
 
 
-def _text_events(chunk: dict[str, Any]) -> list[ModelTextDelta]:
+def _text_events(chunk: dict[str, Any]) -> list[ModelTextDelta | ModelThinkingDelta]:
+    """Both texts a delta can carry, in the order the provider wrote them.
+
+    ``reasoning_content`` first: the wire interleaves the two only at the
+    boundary where thinking ends and the answer begins, and that one frame
+    carries the tail of the reasoning beside the head of the answer. During
+    either phase the other key is ``null``, which the isinstance checks skip
+    -- the same way they always skipped absent content.
+    """
+
     choice = _first_choice(chunk)
     if choice is None:
         return []
     delta = _as_object(choice.get("delta"))
     if delta is None:
         return []
+    events: list[ModelTextDelta | ModelThinkingDelta] = []
+    reasoning = delta.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        events.append(ModelThinkingDelta(text=reasoning))
     content = delta.get("content")
-    if not isinstance(content, str) or not content:
-        return []
-    return [ModelTextDelta(text=content)]
+    if isinstance(content, str) and content:
+        events.append(ModelTextDelta(text=content))
+    return events
 
 
 def _absorb_tool_fragments(
@@ -625,4 +675,6 @@ __all__ = [
     "CHAT_COMPLETIONS_PATH",
     "DeepSeekModel",
     "DeepSeekProfile",
+    "ReasoningEffort",
+    "ThinkingMode",
 ]

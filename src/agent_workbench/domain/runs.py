@@ -340,6 +340,11 @@ class AgentRunRequest(VersionedModel):
     messages: tuple[Message, ...]
     tool_names: tuple[ToolName, ...] = ()
     context: ContextPacket | None = None
+    # Whether this run's model calls should think before answering. ``None``
+    # defers to the profile's configured default; chat shapes pin ``False``
+    # because their turns display no reasoning and a fenced answer must not
+    # pay for -- or stream -- thinking nobody will see (ADR-061).
+    thinking: bool | None = None
 
     @model_validator(mode="after")
     def validate_messages(self) -> AgentRunRequest:

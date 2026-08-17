@@ -31,6 +31,7 @@ from agent_workbench.domain.events import (
     EventEnvelope,
     ModelDelta,
     ModelStarted,
+    ModelThinkingDelta,
     RunStarted,
     ToolProgress,
 )
@@ -49,6 +50,15 @@ def _started() -> RunStarted:
 def _delta(text: str, call: str = "mc_1") -> EventEnvelope:
     return EventEnvelope.for_payload(
         ModelDelta(model_call_id=call, text=text),
+        stream_id=STREAM,
+        run_id="run_1",
+        timestamp=datetime.now(UTC),
+    )
+
+
+def _thinking(text: str, call: str = "mc_1") -> EventEnvelope:
+    return EventEnvelope.for_payload(
+        ModelThinkingDelta(model_call_id=call, text=text),
         stream_id=STREAM,
         run_id="run_1",
         timestamp=datetime.now(UTC),
@@ -258,6 +268,32 @@ def test_deltas_of_different_calls_do_not_merge() -> None:
     assert len(frames) == 2
     assert '"model_call_id":"mc_1"' in frames[0]
     assert '"model_call_id":"mc_2"' in frames[1]
+
+
+def test_adjacent_thinking_deltas_coalesce_the_same_way() -> None:
+    frames = list(live_frames((_thinking("thin"), _thinking("king"))))
+
+    assert len(frames) == 1
+    assert frames[0].startswith("event: ModelThinkingDelta\n")
+    assert '"text":"thinking"' in frames[0]
+
+
+def test_reasoning_and_answer_text_never_merge_into_one_frame() -> None:
+    """Two kinds in one frame would be a concatenation nobody can un-mix.
+
+    They arrive adjacent on every thinking turn -- the provider closes the
+    reasoning and opens the answer -- so "same model call, adjacent" is true
+    here and is deliberately not sufficient.
+    """
+
+    frames = list(live_frames((_thinking("because"), _delta("Qdrant."))))
+
+    assert [frame.split("\n")[0] for frame in frames] == [
+        "event: ModelThinkingDelta",
+        "event: ModelDelta",
+    ]
+    assert '"text":"because"' in frames[0]
+    assert '"text":"Qdrant."' in frames[1]
 
 
 def test_a_non_delta_transient_event_passes_through_in_order() -> None:

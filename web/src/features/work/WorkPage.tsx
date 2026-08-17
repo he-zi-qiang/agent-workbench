@@ -56,6 +56,7 @@ import {
   previewKind,
 } from "../../components/media";
 import { BlobPreview } from "../../components/BlobPreview";
+import { HtmlPreview } from "../../components/HtmlPreview";
 import {
   AttachmentButton,
   AttachmentTray,
@@ -1823,6 +1824,16 @@ function TaskResult({
           load={() => getArtifactBlob(identity, artifact.artifact_id)}
           name={artifact.filename ?? artifact.kind}
           queryKey={["work", "artifact-blob", artifact.artifact_id]}
+          sizeBytes={artifact.size_bytes}
+        />
+      ) : kind === "html" ? (
+        // Rendered live in HtmlPreview's sandbox frame, not fed to the
+        // Markdown path below -- which used to happen and answered a page
+        // with its own sanitised remains: no source, no rendering, nothing.
+        <HtmlPreview
+          load={() => getArtifactText(identity, artifact.artifact_id)}
+          name={artifact.filename ?? artifact.kind}
+          queryKey={["work", "artifact-html", artifact.artifact_id]}
           sizeBytes={artifact.size_bytes}
         />
       ) : !readable ? (

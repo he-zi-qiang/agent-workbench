@@ -36,12 +36,22 @@ deployment_scope = "local"
 log_level = "INFO"
 
 [model.main]
-model_id = "deepseek-chat"
+# Pinned to the concrete v4 id rather than the `deepseek-chat` alias the other
+# profiles keep: this profile declares a thinking stance, and a stance should
+# name the model it was probed against -- the alias's target moves server-side
+# (it already resolves to v4-flash today, verified 2026-08-16, ADR-061).
+model_id = "deepseek-v4-flash"
 # The ordinary baseline may force one opening tool call, which is unsafe here
 # for the reason both narrow profiles give: a Task without the matching scope
 # would be forced to propose a tool it cannot use. The writer reaches for Word
 # when the objective asks for a document, and unrelated Work stays usable.
 tool_calling_required = false
+# Task nodes and Code turns think and show it (ADR-061); chat shapes pin
+# thinking off per request. `low` rather than the provider default `high`
+# because this profile runs every demo node -- reasoning depth is bought at
+# response latency, and the console's job here is to be watchable.
+thinking = "enabled"
+reasoning_effort = "low"
 
 [model.compact]
 model_id = "deepseek-chat"

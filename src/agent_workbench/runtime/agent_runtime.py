@@ -44,6 +44,13 @@ from agent_workbench.domain.events import (
     RunFailed,
     RunStarted,
 )
+from agent_workbench.domain.events import (
+    # Aliased because the domain event shares its name with the port event it
+    # is translated from, and this module is the one place both cross: the
+    # port kind is what the adapter streamed, the domain kind is what the
+    # sink fans out.
+    ModelThinkingDelta as DomainModelThinkingDelta,
+)
 from agent_workbench.domain.identifiers import new_model_call_id
 from agent_workbench.domain.messages import (
     Message,
@@ -69,6 +76,7 @@ from agent_workbench.ports.model import (
     ModelPort,
     ModelRequest,
     ModelTextDelta,
+    ModelThinkingDelta,
     ModelToolCallProposed,
     ModelUsageReported,
 )
@@ -165,6 +173,11 @@ class _ModelTurn:
     # Set when the turn failed for a reason the loop must report as something
     # other than a plain error, such as running out of run deadline.
     stop_reason: StopReason | None = None
+    # The reasoning that preceded the text, already clipped to the preview
+    # ceiling. Never joins `text`: thinking must not re-enter the ledger the
+    # next request is built from (ADR-061) -- its only durable home is
+    # `ModelCompleted.thinking_preview`.
+    thinking: str = ""
 
 
 @dataclass(slots=True)
@@ -555,6 +568,7 @@ class ClaudeLikeAgentRuntime:
                 system_prompt=request.system_prompt,
                 messages=tuple(ledger.messages),
                 tools=specs,
+                thinking=request.thinking,
             )
         )
         try:
@@ -588,6 +602,7 @@ class ClaudeLikeAgentRuntime:
                     finish_reason=turn.finish,
                     usage=turn.usage,
                     text=turn.text,
+                    thinking_preview=turn.thinking,
                     tool_call_ids=tuple(call.tool_call_id for call in turn.calls),
                 )
             )
@@ -603,6 +618,7 @@ class ClaudeLikeAgentRuntime:
         """Drain one model stream, stopping early if the run was cancelled."""
 
         text_parts: list[str] = []
+        thinking_parts: list[str] = []
         calls: list[ToolCall] = []
         tokens = TokenUsage()
         finish: ModelFinishReason | None = None
@@ -618,6 +634,17 @@ class ClaudeLikeAgentRuntime:
                     text_parts.append(event.text)
                     await sink.emit(
                         ModelDelta(model_call_id=model_call_id, text=event.text)
+                    )
+                elif isinstance(event, ModelThinkingDelta):
+                    # An explicit arm, never the else below: the else consumes
+                    # events as stream completion, and a reasoning slice read
+                    # as "the stream ended" would truncate every thinking
+                    # turn at its first thought.
+                    thinking_parts.append(event.text)
+                    await sink.emit(
+                        DomainModelThinkingDelta(
+                            model_call_id=model_call_id, text=event.text
+                        )
                     )
                 elif isinstance(event, ModelToolCallProposed):
                     calls.append(event.call)
@@ -639,7 +666,15 @@ class ClaudeLikeAgentRuntime:
             await _aclose(stream)
 
         return _ModelTurn(
-            _clip("".join(text_parts)), tuple(calls), tokens, finish, error
+            _clip("".join(text_parts)),
+            tuple(calls),
+            tokens,
+            finish,
+            error,
+            # At the preview ceiling, not the answer's: the full chain already
+            # streamed as transient deltas, and the durable record describes
+            # rather than copies (ADR-061).
+            thinking=bounded("".join(thinking_parts)),
         )
 
     async def _terminal_for_turn(

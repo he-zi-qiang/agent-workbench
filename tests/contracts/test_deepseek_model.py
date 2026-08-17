@@ -2,7 +2,7 @@
 
 No network: a mock transport serves the exact bytes the provider would, so the
 suite stays offline and every wire-format edge case is reproducible. What these
-tests assert is that nothing provider-shaped escapes -- the same four
+tests assert is that nothing provider-shaped escapes -- the same five
 ``ModelEvent`` kinds leave this adapter as leave the scripted model.
 """
 
@@ -43,6 +43,7 @@ from agent_workbench.ports.model import (
     ModelRequest,
     ModelStreamCompleted,
     ModelTextDelta,
+    ModelThinkingDelta,
     ModelToolCallProposed,
     ModelUsageReported,
 )
@@ -79,6 +80,15 @@ def _sse(*chunks: dict[str, Any], done: bool = True) -> bytes:
 
 def _text_chunk(text: str) -> dict[str, Any]:
     return {"choices": [{"index": 0, "delta": {"content": text}}]}
+
+
+def _thinking_chunk(text: str) -> dict[str, Any]:
+    # The shape the live API sends while reasoning: the other key is present
+    # and null, which is exactly the case the parser has to skip rather than
+    # turn into an empty delta.
+    return {
+        "choices": [{"index": 0, "delta": {"content": None, "reasoning_content": text}}]
+    }
 
 
 def _finish_chunk(reason: str = "stop") -> dict[str, Any]:
@@ -221,6 +231,138 @@ def test_a_text_answer_streams_as_deltas_and_completes() -> None:
     assert usage.usage.cache_read_tokens == 64
     assert completion.finish_reason == "stop"
     assert completion.error is None
+
+
+def test_reasoning_streams_as_its_own_kind_ahead_of_the_answer() -> None:
+    """The two texts stay separable all the way up (ADR-061).
+
+    Probed against the live API on 2026-08-16: thinking arrives as
+    ``delta.reasoning_content`` with ``content`` null, then the phases swap.
+    Folding it into ``ModelTextDelta`` would put the model's private working
+    into the answer the asker reads.
+    """
+
+    events, _ = _run(
+        _serve(
+            _sse(
+                _thinking_chunk("The user asks "),
+                _thinking_chunk("who owns fusion."),
+                _text_chunk("Qdrant does."),
+                _finish_chunk("stop"),
+            )
+        ),
+        ModelRequest(messages=(user_message("Who owns fusion?"),), thinking=True),
+    )
+
+    kinds = [
+        event.kind
+        for event in events
+        if isinstance(event, (ModelTextDelta, ModelThinkingDelta))
+    ]
+    thinking = [e.text for e in events if isinstance(e, ModelThinkingDelta)]
+    answer = [e.text for e in events if isinstance(e, ModelTextDelta)]
+
+    assert kinds == ["thinking_delta", "thinking_delta", "text_delta"]
+    assert thinking == ["The user asks ", "who owns fusion."]
+    assert answer == ["Qdrant does."]
+
+
+def test_one_frame_carrying_both_texts_keeps_them_in_wire_order() -> None:
+    # The boundary frame: the provider closes the reasoning and opens the
+    # answer in a single delta. Reasoning first, because that is the order it
+    # was written in -- reversing them would show an answer preceding the
+    # thought it came from.
+    events, _ = _run(
+        _serve(
+            _sse(
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "reasoning_content": "…so:",
+                                "content": "Qdrant.",
+                            },
+                        }
+                    ]
+                },
+                _finish_chunk("stop"),
+            )
+        )
+    )
+
+    streamed = [
+        (event.kind, event.text)
+        for event in events
+        if isinstance(event, (ModelTextDelta, ModelThinkingDelta))
+    ]
+
+    assert streamed == [("thinking_delta", "…so:"), ("text_delta", "Qdrant.")]
+
+
+def test_a_profile_that_never_declared_thinking_sends_no_such_parameter() -> None:
+    # The default stance, and the reason it is a three-valued Literal rather
+    # than a bool: a gateway that predates the parameter may 400 on an unknown
+    # key, so "nobody said" has to mean "send nothing" -- not "send disabled".
+    _, wire = _run(_serve(_sse(_text_chunk("hi"), _finish_chunk("stop"))))
+
+    assert "thinking" not in wire.payload
+
+
+def test_a_thinking_profile_states_its_stance_in_both_directions() -> None:
+    # Explicit both ways, because the provider's current models default
+    # thinking *on*: silence would buy reasoning nobody configured.
+    profiles: Mapping[ModelProfileName, DeepSeekProfile] = {
+        "main": DeepSeekProfile(
+            model_id="deepseek-v4-flash", thinking="enabled", reasoning_effort="low"
+        ),
+        "compact": DeepSeekProfile(model_id="deepseek-v4-flash", thinking="disabled"),
+    }
+
+    _, enabled = _run(
+        _serve(_sse(_text_chunk("hi"), _finish_chunk("stop"))),
+        ModelRequest(messages=(user_message("hi"),)),
+        profiles=profiles,
+    )
+    _, disabled = _run(
+        _serve(_sse(_text_chunk("hi"), _finish_chunk("stop"))),
+        ModelRequest(messages=(user_message("hi"),), model_profile="compact"),
+        profiles=profiles,
+    )
+
+    assert enabled.payload["thinking"] == {
+        "type": "enabled",
+        "reasoning_effort": "low",
+    }
+    assert disabled.payload["thinking"] == {"type": "disabled"}
+
+
+def test_a_request_may_turn_thinking_off_for_one_call() -> None:
+    # What every chat shape does (ADR-061): the profile thinks by default,
+    # this turn displays no reasoning, so it declines to buy any.
+    profiles: Mapping[ModelProfileName, DeepSeekProfile] = {
+        "main": DeepSeekProfile(model_id="deepseek-v4-flash", thinking="enabled"),
+        "compact": DeepSeekProfile(model_id="deepseek-v4-flash", thinking="enabled"),
+    }
+
+    _, wire = _run(
+        _serve(_sse(_text_chunk("hi"), _finish_chunk("stop"))),
+        ModelRequest(messages=(user_message("hi"),), thinking=False),
+        profiles=profiles,
+    )
+
+    assert wire.payload["thinking"] == {"type": "disabled"}
+
+
+def test_an_override_cannot_conjure_a_parameter_the_profile_disclaimed() -> None:
+    # The control for the test above. `unsupported` is a statement about the
+    # endpoint, not a default a caller may talk it out of.
+    _, wire = _run(
+        _serve(_sse(_text_chunk("hi"), _finish_chunk("stop"))),
+        ModelRequest(messages=(user_message("hi"),), thinking=True),
+    )
+
+    assert "thinking" not in wire.payload
 
 
 def test_a_tool_call_split_across_chunks_arrives_whole() -> None:

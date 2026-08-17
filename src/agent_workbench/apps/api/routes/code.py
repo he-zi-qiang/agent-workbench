@@ -473,6 +473,9 @@ async def workspace_file(
             "content-disposition": content_disposition(entry.filename or name),
             "content-length": str(entry.size_bytes),
             "x-artifact-sha256": entry.sha256,
+            # Same as the artifact download: the manifest's media type is the
+            # answer, and sniffing would let a browser promote the label.
+            "x-content-type-options": "nosniff",
         },
     )
 

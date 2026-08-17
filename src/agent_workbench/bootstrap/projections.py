@@ -207,6 +207,11 @@ class ModelProfileConfig:
     timeout_seconds: float
     max_retries: int
     tool_calling_required: bool
+    #: The profile's thinking stance (ADR-061), carried verbatim from
+    #: settings: `unsupported` sends no parameter, the other two send it
+    #: explicitly both ways.
+    thinking: Literal["unsupported", "disabled", "enabled"]
+    reasoning_effort: Literal["low", "high", "max"]
     #: What this profile's model charges, when the deployment said. ``None``
     #: is not "free": it is a process that cannot enforce a cost ceiling, and
     #: the runtime refuses one rather than accepting a ceiling it will never
@@ -804,6 +809,8 @@ def project_task_worker(
                     timeout_seconds=float(profile.timeout_seconds),
                     max_retries=profile.max_retries,
                     tool_calling_required=profile.tool_calling_required,
+                    thinking=profile.thinking,
+                    reasoning_effort=profile.reasoning_effort,
                     prices=_project_prices(profile.pricing),
                 )
                 for name, profile in (
@@ -958,6 +965,8 @@ def project_ingestion_worker(
                         timeout_seconds=float(profile.timeout_seconds),
                         max_retries=profile.max_retries,
                         tool_calling_required=profile.tool_calling_required,
+                        thinking=profile.thinking,
+                        reasoning_effort=profile.reasoning_effort,
                         prices=_project_prices(profile.pricing),
                     )
                     for name, profile in (
@@ -1050,6 +1059,8 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
                     timeout_seconds=float(profile.timeout_seconds),
                     max_retries=profile.max_retries,
                     tool_calling_required=profile.tool_calling_required,
+                    thinking=profile.thinking,
+                    reasoning_effort=profile.reasoning_effort,
                     prices=_project_prices(profile.pricing),
                 )
                 for name, profile in (

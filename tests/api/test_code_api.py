@@ -867,7 +867,7 @@ def test_a_workspace_file_can_be_read_back_by_name() -> None:
     world = _World()
     world.executor = _Writing(world.scope)
 
-    async def scenario(client: httpx.AsyncClient) -> tuple[int, bytes, str, str]:
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, bytes, str, str, str]:
         created = await _opened(client)
         session_id = created.json()["session_id"]
         await client.post(
@@ -884,9 +884,10 @@ def test_a_workspace_file_can_be_read_back_by_name() -> None:
             read.content,
             read.headers["content-type"],
             read.headers["content-disposition"],
+            read.headers["x-content-type-options"],
         )
 
-    status, body, media_type, disposition = _run(world, scenario)
+    status, body, media_type, disposition, sniffing = _run(world, scenario)
 
     assert status == 200
     assert body == b"- ship it\n"
@@ -894,6 +895,9 @@ def test_a_workspace_file_can_be_read_back_by_name() -> None:
     # headers and body have to describe the same version of the same file.
     assert media_type.startswith("text/markdown")
     assert "notes.md" in disposition
+    # The manifest's media type is the whole answer; sniffing would let a
+    # browser promote the label.
+    assert sniffing == "nosniff"
 
 
 def test_a_name_the_workspace_does_not_bind_is_not_found() -> None:

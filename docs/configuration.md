@@ -564,6 +564,30 @@ checkpoint 中，否则崩溃重放可能绕过预算。
 不再是"这个节点该做多少事"，而是防失控循环的兜底。默认不动，是因为 12 是每个 chat run 和
 每个 v1 节点被实测过的值，为了服务会迭代的节点而给所有人调高，会改掉没人要求改的 run。
 
+### 思考 `model.<profile>.thinking` / `reasoning_effort`（ADR-061）
+
+两项都有默认值，**不抬 schema 版本**（带默认值的新叶子，先例见 §2）。
+
+`thinking` 是三值而不是布尔：
+
+| 值 | 发出去的请求 | 什么时候用 |
+|---|---|---|
+| `unsupported`（默认） | **不发 `thinking` 键** | 没被探测过的模型 id 或兼容网关——未知键可能直接 400 |
+| `disabled` | `{"type": "disabled"}` | 探测过、但这个 profile 不要思考 |
+| `enabled` | `{"type": "enabled", "reasoning_effort": …}` | 要思考，且界面会显示它 |
+
+**`disabled` 与 `unsupported` 不是一回事**，这是三值的全部理由：不发参数时的
+默认行为**跟着模型名走**。实测（2026-08-17，ADR-061 §1）：`deepseek-v4-flash`
+不带参数会思考（`reasoning_tokens=80`），而解析到同一个模型的别名
+`deepseek-chat` 不会。所以一个从别名切到具体 id 却什么都不声明的 profile 会
+静默付钱，而"没人说过"必须落在"什么都不发"——那正是别名路径的现状行为。
+
+`reasoning_effort`（`low` / `high` / `max`，默认 `high`）只在 `enabled` 时生效。
+
+代码侧还有一个正交的开关：`AgentRunRequest.thinking`（`bool | None`）。
+`None` 用 profile 的默认，`True`/`False` 覆盖单次调用——Chat 的四个形态都钉
+`False`，因为它们不渲染思考。对 `unsupported` 的 profile，覆盖被忽略。
+
 ### 模型价格 `[model.main.pricing]` / `[model.compact.pricing]`
 
 可选，默认不配。仓库**不出厂任何价格数字**——价格是某个部署与供应商之间的事实，发一个猜

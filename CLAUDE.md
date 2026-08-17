@@ -101,7 +101,7 @@ Two graphs, chosen and frozen at submission: the fixed research graph (`understa
 
 ### Configuration is a contract, not a bag of values
 
-Single schema (currently `1.14`), cross-domain validation at startup: a capability the config claims but the code does not have **fails at config load**. `docs/configuration.md` §3 lists the invariants written as single-valued `Literal`s in `bootstrap/settings.py` — PostgreSQL as the fact source, `FOR UPDATE SKIP LOCKED`, fusion owned by the application, the self-built runtime as the only tool loop, telemetry body recording off, and more. **Changing one of those requires an ADR first**, not an environment override.
+Single schema (currently `1.17`), cross-domain validation at startup: a capability the config claims but the code does not have **fails at config load**. `docs/configuration.md` §3 lists the invariants written as single-valued `Literal`s in `bootstrap/settings.py` — PostgreSQL as the fact source, `FOR UPDATE SKIP LOCKED`, fusion owned by the application, the self-built runtime as the only tool loop, telemetry body recording off, and more. **Changing one of those requires an ADR first**, not an environment override.
 
 ### Where things live
 
@@ -113,7 +113,7 @@ Single schema (currently `1.14`), cross-domain validation at startup: a capabili
 
 ## Working conventions
 
-- **One ADR per boundary change.** `docs/adr/` (0012–0054) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
+- **One ADR per boundary change.** `docs/adr/` (0012–0062) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
 - **Capability claims only move up the ladder `Planned → Implemented → Tested → Demonstrated`, and never without linkable test or demo evidence.** `docs/status.md` is the per-PR evidence log, `docs/known-gaps.md` the honest list of what is not done. Do not describe a Planned item as working.
 - **Comments explain the decision, not the code.** This codebase's comments are unusually long and carry measured numbers, rejected alternatives, and the incident that motivated a line. Match that register when touching commented code; a bare restatement of the syntax is a regression here.
 - `ruff` per-file-ignores exist for files that deliberately contain Chinese prose (RUF001) and verbatim OOXML fixtures (E501). Prefer adding a scoped ignore with a reason over rewording user-facing Chinese.

@@ -37,6 +37,8 @@ from agent_workbench.application.chat_execution import (
     WebSearchJournal,
     build_agentic_request,
     build_fixed_request,
+    build_ungrounded_request,
+    build_web_fallback_request,
     merge_authorized,
     merge_citations,
 )
@@ -385,6 +387,29 @@ def test_the_fixed_envelope_still_grants_nothing() -> None:
     assert request.envelope.allowed_tools == ()
     assert request.tool_names == ()
     assert request.system_prompt == SYSTEM_PROMPT
+
+
+def test_every_chat_shape_declines_to_buy_thinking_it_cannot_show() -> None:
+    """All four builders pin it off, per shape rather than "the chat ones".
+
+    A chat turn renders no reasoning anywhere, so a profile whose default is
+    to think would spend tokens on a chain that ends at the publication fence
+    -- and the redacted shapes would blank it there anyway (ADR-061). Asserted
+    builder by builder, because "the chat path" is exactly the phrase a fifth
+    shape gets wrong.
+    """
+
+    budget = RunBudget(max_steps=4, max_tool_calls=6)
+    built = (
+        build_fixed_request(_request(), ContextPacket(), budget),
+        build_agentic_request(_request(), budget, tool_names=("knowledge_search",)),
+        build_ungrounded_request(_request(), budget, history=()),
+        build_web_fallback_request(
+            _request(), budget, history=(), tool_names=("web_search",)
+        ),
+    )
+
+    assert [request.thinking for request in built] == [False, False, False, False]
 
 
 def test_an_agentic_run_with_no_tool_is_refused_rather_than_run() -> None:

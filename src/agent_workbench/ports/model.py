@@ -41,6 +41,13 @@ class ModelRequest(VersionedModel):
     messages: tuple[Message, ...]
     tools: tuple[ToolSpec, ...] = ()
     max_output_tokens: int | None = Field(default=None, ge=1)
+    # Whether this call wants the model to think before answering. ``None``
+    # defers to the profile's configured default; True/False override it for
+    # one call. Orthogonal to the profile the same way visibility is
+    # orthogonal to depth: the profile says what the model *can* do, the
+    # request says what this turn wants. A profile that declared thinking
+    # unsupported ignores the override -- there is no parameter to send.
+    thinking: bool | None = None
 
     def tool_names(self) -> tuple[str, ...]:
         return tuple(spec.name for spec in self.tools)
@@ -50,6 +57,20 @@ class ModelTextDelta(DomainModel):
     """Incremental assistant text."""
 
     kind: Literal["text_delta"] = "text_delta"
+    text: BoundedText
+
+
+class ModelThinkingDelta(DomainModel):
+    """Incremental reasoning, distinct from the answer being written.
+
+    A separate kind rather than a flag on ``ModelTextDelta`` because the two
+    texts have different fates everywhere downstream: thinking never re-enters
+    the conversation ledger (providers require it withheld from the next
+    request), never becomes the answer, and is shown -- when it is shown --
+    as process rather than product.
+    """
+
+    kind: Literal["thinking_delta"] = "thinking_delta"
     text: BoundedText
 
 
@@ -82,7 +103,11 @@ class ModelStreamCompleted(DomainModel):
 
 
 ModelEvent = Annotated[
-    ModelTextDelta | ModelToolCallProposed | ModelUsageReported | ModelStreamCompleted,
+    ModelTextDelta
+    | ModelThinkingDelta
+    | ModelToolCallProposed
+    | ModelUsageReported
+    | ModelStreamCompleted,
     Field(discriminator="kind"),
 ]
 
@@ -116,6 +141,7 @@ __all__ = [
     "ModelRequest",
     "ModelStreamCompleted",
     "ModelTextDelta",
+    "ModelThinkingDelta",
     "ModelToolCallProposed",
     "ModelUsageReported",
 ]

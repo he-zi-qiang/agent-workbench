@@ -22,6 +22,10 @@ describe("previewKind", () => {
     // SVG's scripts never run there.
     ["image/svg+xml", "image"],
     ["application/pdf", "pdf"],
+    // Before the readable check, which would otherwise claim them as text:
+    // a page renders in the sandbox frame, with its source behind a toggle.
+    ["text/html", "html"],
+    ["application/xhtml+xml", "html"],
     ["application/zip", "none"],
     ["application/octet-stream", "none"],
     // Excel is real and unhandled: no viewer exists for it, so it must say so
@@ -40,6 +44,7 @@ describe("previewKind", () => {
       DOCX_MEDIA_TYPE,
       "image/png",
       "application/pdf",
+      "text/html",
       "application/zip",
     ]) {
       expect(isPreviewable(mediaType)).toBe(previewKind(mediaType) !== "none");

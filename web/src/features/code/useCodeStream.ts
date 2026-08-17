@@ -24,10 +24,18 @@
  * order as the approval poll this page already ran, and buying back the ability
  * to read a finished turn is worth one request a second against a loopback API.
  *
- * Durable events only, deliberately. Live frames carry no position, so a
- * reconnect cannot resume from one; a subscriber that mixed them would show a
- * different list depending on when it connected. What is lost by ignoring them
- * is token-by-token text, which a coding session does not display anyway.
+ * **The step list is durable events only**, deliberately. Live frames carry no
+ * position, so a reconnect cannot resume from one; a list that mixed them
+ * would differ depending on when the reader connected.
+ *
+ * Reasoning is the one live thing this hook does keep, and it is kept *beside*
+ * the list rather than in it (ADR-061). The argument above is about the record
+ * of what a turn did, and a thought in flight is not that record: it is the
+ * answer to "is it working or is it stuck", it is replaced by the next thought
+ * rather than accumulated, and when the model call that produced it finishes,
+ * its durable excerpt lands in the step list where the record belongs. A
+ * reconnect therefore loses nothing a reader can point at -- the block empties
+ * and the step it belonged to says what it said.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -59,10 +67,31 @@ interface Held {
   events: EventEnvelope[];
 }
 
+/**
+ * The thought in flight: one model call's reasoning, and whose it is.
+ *
+ * Keyed by the model call rather than accumulated across the turn, because a
+ * turn is several calls with a tool round between them, and yesterday's
+ * reasoning under today's spinner reads as the model being stuck on something
+ * it has already moved past. The finished ones are not lost -- each lands as
+ * `thinking_preview` on its own `ModelCompleted` step.
+ */
+interface Thought {
+  session: string;
+  callId: string;
+  text: string;
+}
+
+export interface CodeStream {
+  steps: EventEnvelope[];
+  /** Empty when nothing is being reasoned about right now. */
+  thinking: string;
+}
+
 export function useCodeStream(
   identity: PrincipalIdentity,
   sessionId: string | undefined,
-): EventEnvelope[] {
+): CodeStream {
   // Carried with its session rather than emptied when the session changes,
   // which is the same shape `CodePage` uses for the transcript and the file
   // list, and for the same two reasons. Clearing from an effect is a render
@@ -70,6 +99,11 @@ export function useCodeStream(
   // the whole of the next session's first fetch -- and it is a `setState` in
   // an effect body, which the lint rule rejects for exactly that reason.
   const [held, setHeld] = useState<Held>({ session: "", events: [] });
+  const [thought, setThought] = useState<Thought>({
+    session: "",
+    callId: "",
+    text: "",
+  });
   // The position belongs to the session too. It used to survive between turns
   // on purpose, so a new watch would not be re-served the previous turn's
   // steps; that was right while the list was per-turn and is wrong now that it
@@ -110,10 +144,46 @@ export function useCodeStream(
         // keeps the unreachable case from being the one that wedges the stream.
         if (isDegradedFrame(frame)) return "accepted";
         // A live event has no position, so it cannot be resumed from; a
-        // subscriber that mixed them would show a different list depending on
-        // when it connected. The transport ignores what is returned for one of
-        // these, so this says what is true rather than what has an effect.
-        if (isLiveFrame(frame)) return "rejected";
+        // subscriber that put one in the step list would show a different list
+        // depending on when it connected. Reasoning is kept anyway, beside the
+        // list -- see the module note. The transport ignores what is returned
+        // for a live frame, so this says what is true rather than what has an
+        // effect.
+        if (isLiveFrame(frame)) {
+          const payload = frame.envelope.payload;
+          if (payload.kind === "ModelThinkingDelta") {
+            const callId = stringField(payload, "model_call_id");
+            const text = stringField(payload, "text");
+            // Both, or it is not a delta this can place: a slice with no call
+            // to attribute it to would append under whichever thought happened
+            // to be showing.
+            if (callId !== null && text !== null && text !== "") {
+              setThought((current) =>
+                current.session === sessionId && current.callId === callId
+                  ? { ...current, text: current.text + text }
+                  : { session: sessionId, callId, text },
+              );
+            }
+          }
+          return "rejected";
+        }
+        // The thought ends when the call that was having it does, and its
+        // excerpt is in the step arriving right now. Clearing here rather than
+        // when the turn ends is what keeps a finished thought from sitting
+        // under the next tool round.
+        if (frame.envelope.event_type === "ModelCompleted") {
+          const finished = stringField(frame.envelope.payload, "model_call_id");
+          setThought((current) =>
+            // The session too, not only the call: ids are unique per process
+            // and not across them, so a completion arriving on one session's
+            // stream must not clear a thought being had on another's.
+            current.session === sessionId &&
+            current.callId !== "" &&
+            current.callId === finished
+              ? { session: sessionId, callId: "", text: "" }
+              : current,
+          );
+        }
         setHeld((current) =>
           // A frame that arrives for the session this list already holds
           // appends; one for a different session replaces. The second case is
@@ -145,6 +215,18 @@ export function useCodeStream(
   }, [identity, sessionId]);
 
   // Derived, so a session with nothing yet reads as empty rather than as the
-  // previous session's steps.
-  return held.session === sessionId ? held.events : [];
+  // previous session's steps -- and the same for its reasoning, which would
+  // otherwise show one session's thought over another's transcript.
+  return {
+    steps: held.session === sessionId ? held.events : [],
+    thinking: thought.session === sessionId ? thought.text : "",
+  };
+}
+
+function stringField(
+  payload: Record<string, unknown>,
+  field: string,
+): string | null {
+  const value = payload[field];
+  return typeof value === "string" ? value : null;
 }

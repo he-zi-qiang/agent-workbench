@@ -158,6 +158,42 @@ describe("describeEvent：结束事件的 token 用量", () => {
   });
 });
 
+describe("describeEvent：ModelCompleted 的思考过程", () => {
+  function completed(payload: Record<string, unknown>): EventEnvelope {
+    return event("ModelCompleted", {
+      model_call_id: "mc_1",
+      finish_reason: "stop",
+      usage: { input_tokens: 10, output_tokens: 5 },
+      ...payload,
+    });
+  }
+
+  it("把摘录做成正文块，排在提示词与答案之间", () => {
+    const detail = describeEvent(
+      completed({ text: "答案", thinking_preview: "先看资料再回答。" }),
+    );
+    const labels = detail.bodies.map((body) => body.label);
+
+    expect(labels).toEqual(["思考过程", "模型输出"]);
+    expect(detail.bodies[0]?.text).toBe("先看资料再回答。");
+  });
+
+  it("没思考的调用不多出一个块", () => {
+    // `text()` 对缺失字段返回的是「—」而不是空串，所以判空写错方向时，
+    // 每一条 ModelCompleted 都会多出一个内容为「—」的块——三个界面同时中招。
+    const detail = describeEvent(completed({ text: "答案" }));
+
+    expect(detail.bodies.map((body) => body.label)).toEqual(["模型输出"]);
+  });
+
+  it("被围栏抹空的候选也不多出一个块", () => {
+    // 检索型 Chat 的形态：文本与摘录都被服务端置空，事件仍然到达。
+    const detail = describeEvent(completed({ text: "", thinking_preview: "" }));
+
+    expect(detail.bodies).toHaveLength(0);
+  });
+});
+
 describe("StepDisclosure", () => {
   it("预算落在事实区，不再只躺在原始事件 JSON 里", () => {
     const { container } = render(

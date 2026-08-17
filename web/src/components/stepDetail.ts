@@ -128,6 +128,13 @@ export function describeEvent(event: EventEnvelope): StepDetail {
       // carries it forward onto this event, since one model call is one row
       // there and the completion replaces the start.
       detail.bodies = promptBodies(payload);
+      // Between the prompt and the answer, which is where it happened. This is
+      // the excerpt (ADR-061), not the whole chain -- the chain streamed live
+      // and was never owed the log. Empty for a call that did not think, and
+      // blanked by the publication fence on any shape whose answer could still
+      // be withheld.
+      const reasoning = text(payload.thinking_preview);
+      if (reasoning !== "—") detail.bodies.push(bodyOf("思考过程", reasoning));
       // The model's own words. Absent when the turn only proposed tool calls,
       // and absent in Chat, where an unpublished candidate never reaches state.
       if (output !== "—") detail.bodies.push(bodyOf("模型输出", output));

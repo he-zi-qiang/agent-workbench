@@ -35,7 +35,7 @@ describe("useCodeStream", () => {
     const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
 
     await waitFor(() => {
-      expect(result.current.map((event) => event.event_id)).toEqual([
+      expect(result.current.steps.map((event) => event.event_id)).toEqual([
         "evt_1",
         "evt_2",
       ]);
@@ -51,7 +51,7 @@ describe("useCodeStream", () => {
     // leave the cursor in front of it, and every reconnect would arrive at the
     // same undecodable position -- so nothing past it would ever be shown.
     await waitFor(() => {
-      expect(result.current.map((event) => event.event_id)).toEqual(["evt_2"]);
+      expect(result.current.steps.map((event) => event.event_id)).toEqual(["evt_2"]);
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -78,7 +78,7 @@ describe("useCodeStream", () => {
       { initialProps: { session: SESSION } },
     );
     await waitFor(() => {
-      expect(result.current).toHaveLength(1);
+      expect(result.current.steps).toHaveLength(1);
     });
 
     // The regression this exists for: a re-render that is not a change of
@@ -87,7 +87,7 @@ describe("useCodeStream", () => {
     // the reader was at that moment reading.
     rerender({ session: SESSION });
 
-    expect(result.current).toHaveLength(1);
+    expect(result.current.steps).toHaveLength(1);
   });
 
   it("starts from empty and replays from the beginning on another session", async () => {
@@ -98,7 +98,7 @@ describe("useCodeStream", () => {
       { initialProps: { session: SESSION } },
     );
     await waitFor(() => {
-      expect(result.current).toHaveLength(1);
+      expect(result.current.steps).toHaveLength(1);
     });
 
     rerender({ session: "ses_code_2" });
@@ -114,6 +114,78 @@ describe("useCodeStream", () => {
       (fetchMock.mock.calls[1]?.[1] as RequestInit).headers,
     );
     expect(headers.get("last-event-id")).toBeNull();
+  });
+});
+
+describe("useCodeStream reasoning", () => {
+  it("accumulates one model call's reasoning as it streams", async () => {
+    stubStream([thinking("Read "), thinking("the file.")]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    await waitFor(() => {
+      expect(result.current.thinking).toBe("Read the file.");
+    });
+    // Beside the steps, never in them: a live frame has no position, so a
+    // reconnect could not resume from one.
+    expect(result.current.steps).toHaveLength(0);
+  });
+
+  it("replaces the thought when a new model call starts one", async () => {
+    // A turn is several calls with a tool round between them. Appending across
+    // them would show reasoning the model has already acted on.
+    stubStream([thinking("first", "mc_1"), thinking("second", "mc_2")]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    await waitFor(() => {
+      expect(result.current.thinking).toBe("second");
+    });
+  });
+
+  it("clears the thought when the call that had it completes", async () => {
+    // The excerpt is in the step that just arrived, so leaving the live block
+    // up would show the same reasoning twice -- once as "thinking now".
+    stubStream([thinking("weighing options"), completed(1)]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    await waitFor(() => {
+      expect(result.current.steps).toHaveLength(1);
+    });
+    expect(result.current.thinking).toBe("");
+  });
+
+  it("never shows one session's thought over another session's transcript", async () => {
+    // The reason the return value is derived rather than cleared: a thought in
+    // flight when the reader switches sessions would otherwise sit above the
+    // new session's transcript, describing work it has nothing to do with.
+    stubStream([thinking("thinking about session one")], { reusable: true });
+
+    const { result, rerender } = renderHook(
+      ({ session }) => useCodeStream(IDENTITY, session),
+      { initialProps: { session: SESSION } },
+    );
+    await waitFor(() => {
+      expect(result.current.thinking).toBe("thinking about session one");
+    });
+
+    rerender({ session: "ses_code_2" });
+
+    expect(result.current.thinking).toBe("");
+  });
+
+  it("keeps a thought that belongs to a call which has not finished", async () => {
+    // The control for the test above: a completion for another call must not
+    // clear the reasoning of the one still running.
+    stubStream([thinking("still going", "mc_2"), completed(1, "mc_1")]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    await waitFor(() => {
+      expect(result.current.steps).toHaveLength(1);
+    });
+    expect(result.current.thinking).toBe("still going");
   });
 });
 
@@ -164,6 +236,49 @@ function durable(sequence: number, eventId: string): string {
     parent_event_id: null,
   };
   return `id: cursor_${String(sequence)}\nevent: ToolStarted\ndata: ${JSON.stringify(envelope)}\n\n`;
+}
+
+function thinking(text: string, call = "mc_1"): string {
+  const envelope = {
+    schema_version: 1,
+    event_id: `evt_live_${call}_${text}`,
+    stream_id: SESSION,
+    run_id: "run_1",
+    event_type: "ModelThinkingDelta",
+    durability: "transient",
+    timestamp: "2026-08-14T12:00:00Z",
+    payload: { kind: "ModelThinkingDelta", model_call_id: call, text },
+    sequence: null,
+    task_id: null,
+    graph_node_id: null,
+    parent_event_id: null,
+  };
+  // No `id:` line: a live frame has no position (ADR-051).
+  return `event: ModelThinkingDelta\ndata: ${JSON.stringify(envelope)}\n\n`;
+}
+
+function completed(sequence: number, call = "mc_1"): string {
+  const envelope = {
+    schema_version: 1,
+    event_id: `evt_done_${String(sequence)}`,
+    stream_id: SESSION,
+    run_id: "run_1",
+    event_type: "ModelCompleted",
+    durability: "durable",
+    timestamp: "2026-08-14T12:00:00Z",
+    payload: {
+      kind: "ModelCompleted",
+      model_call_id: call,
+      finish_reason: "stop",
+      text: "done",
+      thinking_preview: "the excerpt",
+    },
+    sequence,
+    task_id: null,
+    graph_node_id: null,
+    parent_event_id: null,
+  };
+  return `id: cursor_${String(sequence)}\nevent: ModelCompleted\ndata: ${JSON.stringify(envelope)}\n\n`;
 }
 
 function quarantine(sequence: number): string {

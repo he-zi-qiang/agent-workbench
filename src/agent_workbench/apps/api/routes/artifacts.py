@@ -103,6 +103,10 @@ async def download(artifact_id: str, request: Request) -> StreamingResponse:
             "content-disposition": content_disposition(described.filename),
             "content-length": str(described.size_bytes),
             "x-artifact-sha256": described.sha256,
+            # The stored media type is the whole answer. These bytes came from
+            # a tool or an upload, so a browser second-guessing the label is a
+            # browser promoting text/plain to something executable.
+            "x-content-type-options": "nosniff",
         },
     )
 

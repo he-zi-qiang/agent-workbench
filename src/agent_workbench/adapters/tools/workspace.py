@@ -706,6 +706,9 @@ _SUFFIX_MEDIA_TYPES = {
     ".csv": "text/csv",
     ".py": "text/x-python",
     ".html": "text/html",
+    # Text on the wire, image in the console: an .svg typed text/plain never
+    # reached the `<img>` viewer, so a drawn diagram opened as its own markup.
+    ".svg": "image/svg+xml",
 }
 
 
