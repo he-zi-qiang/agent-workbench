@@ -1234,6 +1234,38 @@ describe("WorkPage task submission", () => {
     );
   });
 
+  it("shows what a node was thinking, inside the step that thought it", async () => {
+    // A Task worker has no live channel to stream reasoning through -- the
+    // live fan-out is in-process and the worker is another process -- so the
+    // excerpt on ModelCompleted is the only thinking a Task can ever show
+    // (ADR-061). It arrives with the step, under the node that produced it.
+    const user = userEvent.setup();
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "今天丹东天气怎么样",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(answerTimeline());
+    vi.mocked(getArtifactJson).mockResolvedValue(taskInput(false));
+    renderWorkPage("/work/task_run");
+
+    // Two clicks in, the same as any other step body: the stage folds the
+    // node, the step folds its detail.
+    const stage = await screen.findByText("撰写草稿");
+    await user.click(stage);
+    const step = screen.getAllByText("模型调用已完成")[0] as HTMLElement;
+    await user.click(step);
+
+    expect(await screen.findByText("思考过程")).toBeInTheDocument();
+    expect(
+      screen.getByText("先确认日期，再读取气象数据。"),
+    ).toBeInTheDocument();
+  });
+
   it("says a file is missing only when the task asked for one", async () => {
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
@@ -1652,6 +1684,7 @@ function answerTimeline() {
         payload: {
           kind: "ModelCompleted",
           text: "今天丹东天气为晴，23°C 至 36°C。",
+          thinking_preview: "先确认日期，再读取气象数据。",
         },
         sequence: 2,
         graph_node_id: "synthesize",

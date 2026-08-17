@@ -112,7 +112,7 @@ export function CodePage() {
   });
   const known = sessions.data?.sessions ?? [];
 
-  const steps = useCodeStream(identity, sessionId);
+  const { steps, thinking } = useCodeStream(identity, sessionId);
   const stages = codeTurnStages(steps, running);
 
   // Derived, not reset. Both of these used to be cleared from an effect when
@@ -588,6 +588,20 @@ export function CodePage() {
               while the turn was in flight, over a list the hook emptied on the
               way out. Both halves of that are gone: `useCodeStream` keeps the
               session's events, and each turn is a stage that opens. */}
+          {/* Above the steps, because it is the only thing here that is
+              happening *now*: the steps are what has already been done. Open
+              while it streams and gone when the model call that had the
+              thought finishes -- at which point its excerpt is a line in the
+              steps below (ADR-061). Plain text rather than Markdown, the way
+              chat renders its live text: half a fenced block mid-stream
+              renders as garbage. */}
+          {running && thinking !== "" ? (
+            <details className="aw-code-thinking" open>
+              <summary>正在思考…</summary>
+              <p>{thinking}</p>
+            </details>
+          ) : null}
+
           {stages.length === 0 ? null : (
             <StepStream
               ariaLabel="执行过程"

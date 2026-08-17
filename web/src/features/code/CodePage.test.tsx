@@ -50,7 +50,7 @@ vi.mock("../../api/client", () => ({
 // asserted through this seam instead, because a page test that waited on a
 // network read would be testing the transport a second time.
 vi.mock("./useCodeStream", () => ({
-  useCodeStream: vi.fn(() => []),
+  useCodeStream: vi.fn(() => ({ steps: [], thinking: "" })),
 }));
 
 vi.mock("../../app/IdentityContext", () => ({
@@ -106,10 +106,44 @@ beforeEach(() => {
   });
   vi.mocked(downloadCodeWorkspaceFile).mockResolvedValue(undefined);
   vi.mocked(listCodeSessions).mockResolvedValue({ sessions: [] });
-  vi.mocked(useCodeStream).mockReturnValue([]);
+  vi.mocked(useCodeStream).mockReturnValue({ steps: [], thinking: "" });
 });
 
 describe("CodePage", () => {
+  it("shows what the model is thinking while the turn is still running", async () => {
+    const user = userEvent.setup();
+    // Never resolves: the block is for a turn in flight, so the turn has to
+    // still be in flight when the reasoning arrives.
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    vi.mocked(useCodeStream).mockReturnValue({
+      steps: [],
+      thinking: "先看 notes.md 里有什么。",
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "整理待办");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("正在思考…")).toBeInTheDocument();
+    });
+    expect(screen.getByText("先看 notes.md 里有什么。")).toBeInTheDocument();
+  });
+
+  it("says nothing about thinking when no turn is running", () => {
+    // The hook keeps its last value across a render; the block is gated on the
+    // turn so a finished turn does not leave "正在思考…" over a written report.
+    vi.mocked(useCodeStream).mockReturnValue({
+      steps: [],
+      thinking: "leftover reasoning",
+    });
+
+    mounted();
+
+    expect(screen.queryByText("正在思考…")).not.toBeInTheDocument();
+    expect(screen.queryByText("leftover reasoning")).not.toBeInTheDocument();
+  });
+
   it("shows the report a turn came back with", async () => {
     const user = userEvent.setup();
     vi.mocked(askCode).mockResolvedValue({
@@ -307,8 +341,9 @@ describe("CodePage", () => {
     vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
     // One tool call, as the server actually emits it: five events for the call
     // plus the model turn that proposed it.
-    vi.mocked(useCodeStream).mockReturnValue(
-      [
+    vi.mocked(useCodeStream).mockReturnValue({
+      thinking: "",
+      steps: [
         {
           event_id: "evt_m1",
           run_id: "run_1",
@@ -375,8 +410,8 @@ describe("CodePage", () => {
           sequence: 6,
           payload: { kind: "ToolCompleted", tool_call_id: "call_1" },
         },
-      ] as unknown as ReturnType<typeof useCodeStream>,
-    );
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
 
     mounted();
     await user.type(screen.getByLabelText("要做的事"), "write notes.md");
@@ -418,8 +453,9 @@ describe("CodePage", () => {
       status: "completed",
       stop_reason: "completed",
     });
-    vi.mocked(useCodeStream).mockReturnValue(
-      [
+    vi.mocked(useCodeStream).mockReturnValue({
+      thinking: "",
+      steps: [
         {
           event_id: "evt_1",
           run_id: "run_1",
@@ -432,8 +468,8 @@ describe("CodePage", () => {
             tool_name: "workspace_write",
           },
         },
-      ] as unknown as ReturnType<typeof useCodeStream>,
-    );
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
 
     mounted();
     await user.type(screen.getByLabelText("要做的事"), "write notes.md");
