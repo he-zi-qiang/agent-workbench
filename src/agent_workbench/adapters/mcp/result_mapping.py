@@ -15,6 +15,8 @@ from agent_workbench.adapters.mcp.client import (
     RemoteBinaryBlock,
     RemoteCallResult,
     RemoteTextBlock,
+    client_fault_types,
+    is_client_fault,
 )
 from agent_workbench.domain.artifacts import MediaType
 from agent_workbench.domain.errors import ErrorInfo
@@ -54,9 +56,45 @@ class MCPToolHandler:
 
     async def __call__(self, invocation: ToolInvocation) -> ToolResult:
         invocation.cancellation.raise_if_cancelled()
-        async with self.server_lock:
-            remote = await self.client.call_tool(
-                self.remote_name, invocation.call.arguments
+        try:
+            async with self.server_lock:
+                remote = await self.client.call_tool(
+                    self.remote_name, invocation.call.arguments
+                )
+        except BaseException as exc:
+            # ``except BaseException`` because the executor's own catch is
+            # ``except Exception`` and the measured failure is not one: a
+            # server process dying mid-call surfaces as a BaseExceptionGroup
+            # whose CancelledError leaf comes from the SDK transport's broken
+            # cancel-scope cleanup, not from anyone cancelling this run (see
+            # ``is_client_fault``; 2026-08-16 it killed the Worker and left
+            # the running Task unreclaimed forever).  Genuine cancellation is
+            # re-raised: first by the classifier for pure-cancellation shapes,
+            # then by the token check for a run cancelled while the call was
+            # in flight -- cancellation outranks a converged failure.
+            if not is_client_fault(exc):
+                raise
+            invocation.cancellation.raise_if_cancelled()
+            # retryable=True is a measured claim, not hope: config only admits
+            # servers whose allowlisted tools are safe to invoke again (see the
+            # idempotency note in registry_source), and on 2026-08-17 the task
+            # stranded by this failure (task_9273bf) was reclaimed and re-run
+            # to success once the server was back.  One deliberate blur: a
+            # tool-timeout cancellation entangled with cleanup shrapnel lands
+            # here as tool_failed rather than tool_timeout -- both retryable,
+            # and the distinction is not recoverable from the group.
+            names = client_fault_types(exc)
+            shown = ", ".join(names[:5]) + ("…" if len(names) > 5 else "")
+            return ToolResult.failed(
+                invocation.call,
+                ErrorInfo(
+                    code="tool_failed",
+                    message=(
+                        f"the MCP transport failed ({shown}); "
+                        "the server may be down or restarting"
+                    ),
+                    retryable=True,
+                ),
             )
         invocation.cancellation.raise_if_cancelled()
         return await map_remote_result(

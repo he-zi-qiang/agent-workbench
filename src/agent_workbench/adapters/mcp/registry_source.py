@@ -8,7 +8,11 @@ from collections import Counter
 
 from pydantic import TypeAdapter, ValidationError
 
-from agent_workbench.adapters.mcp.client import MCPClientPort, RemoteToolDefinition
+from agent_workbench.adapters.mcp.client import (
+    MCPClientPort,
+    RemoteToolDefinition,
+    is_client_fault,
+)
 from agent_workbench.adapters.mcp.naming import SkipReason, tool_name_for
 from agent_workbench.adapters.mcp.result_mapping import MCPToolHandler
 from agent_workbench.adapters.mcp.schema_gate import admit
@@ -55,7 +59,14 @@ async def discover_bindings(
 
     try:
         remote_tools = await _list_all_tools(client, timeout_seconds=timeout_seconds)
-    except Exception as error:
+    except BaseException as error:
+        # A server dying mid-discovery produces the same BaseExceptionGroup
+        # shape as dying mid-call (see ``is_client_fault``); ``except
+        # Exception`` would let it kill the process during startup.  Degrading
+        # to zero bindings is already this function's contract for a broken
+        # snapshot; genuine cancellation still propagates.
+        if not is_client_fault(error):
+            raise
         logger.warning(
             "mcp_discovery_failed",
             extra={

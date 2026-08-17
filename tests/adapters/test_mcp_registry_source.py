@@ -387,3 +387,36 @@ def test_bindings_from_different_servers_do_not_share_a_lock() -> None:
     asyncio.run(scenario())
 
     assert activity.maximum_active == 2
+
+
+def test_a_server_dying_during_discovery_degrades_to_zero_bindings() -> None:
+    # The 2026-08-16 mid-call shape (see test_mcp_result_mapping) applies to
+    # discovery too: the CancelledError leaf makes the composite a
+    # BaseExceptionGroup, which the previous `except Exception` degradation
+    # path could not catch -- it would have killed the process at startup.
+    class _DyingClient(_DirectoryClient):
+        async def list_tools_page(self, cursor: str | None) -> RemoteToolPage:
+            raise BaseExceptionGroup(
+                "unhandled errors in a TaskGroup",
+                [
+                    ConnectionError("All connection attempts failed"),
+                    RuntimeError(
+                        "Attempted to exit cancel scope in a different task "
+                        "than it was entered in"
+                    ),
+                    asyncio.CancelledError(),
+                ],
+            )
+
+    bindings = asyncio.run(_discover(_DyingClient(pages={}), allowed=("echo",)))
+
+    assert bindings == ()
+
+
+def test_cancellation_during_discovery_still_propagates() -> None:
+    class _CancelledClient(_DirectoryClient):
+        async def list_tools_page(self, cursor: str | None) -> RemoteToolPage:
+            raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_discover(_CancelledClient(pages={}), allowed=("echo",)))

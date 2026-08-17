@@ -134,6 +134,7 @@ runner 和另一套证据。混进来会让检索回归和生成回归长得一�
 | B-05 | 生产 upcaster 注册表为空，Chat 侧不披露隔离 | 未接线 |
 | B-06 | 失败标着 `retryable` 却没有任何重试路径 | **已关闭** |
 | B-07 | tool 参数读不出来时，说不出是被截断还是真的坏 | 未实现 |
+| B-08 | 一个 MCP 服务器死掉，曾杀死整个 Worker（触发**本次已修**）；回收仍系于 Worker 存活 | 未实现 |
 
 > 编号一经退休不再复用。B-04（无真杀 OS 进程的恢复测试）已于 2026-08-11 关闭，
 > 按本文档维护规则从正文删除，落地记录在 [status.md](./status.md)：
@@ -282,6 +283,55 @@ finish reason，也不记录那段没解开的参数文本。同一条 objective
 **做完的判据**：`finish` 是 `max_tokens` 而参数没解开时，报的是"模型在输出上限上把话
 说了一半"而不是"provider 送来坏参数"，并带一条对照组证明真坏的 JSON 仍然报后者；
 事件流里留下足以判定的那一位（provider 自报的 finish reason）。
+
+### B-08 一个 MCP 服务器死掉，曾杀死整个 Worker —— 触发已修，暴露仍在
+
+**观测**（2026-08-16 晚，demo profile，本机实测；`var/` 下当时的 demo-worker 日志
+已滚动，关键片段按现场记录重建）：word/web/sandbox 三个 MCP 服务器
+（8765/8766/8767）之一进程死亡后，节点内的 MCP 调用抛 httpcore
+`ConnectError: All connection attempts failed`；mcp 库 streamable HTTP 传输的
+清理路径随即抛 `RuntimeError: Attempted to exit cancel scope in a different
+task than it was entered in`（anyio cancel scope 跨任务退出缺陷），两者连同
+scope 自己的 `CancelledError` 合成一个 `BaseExceptionGroup` 冒出。要点在最后
+那片叶子：带 `CancelledError` 的组**不是** `Exception`，所以
+[tool_executor.py:92](../src/agent_workbench/runtime/tool_executor.py:92) 那句
+"handler 故障是这次调用的结果，不是 run 的异常"的 `except Exception` 接不住它，
+Worker 进程整个死亡。
+
+**后果链，也是这条真正的痛处**：正在执行的 Task 心跳停止 → 租约过期 → 但
+`reclaim_expired` 的唯一调用点在 Task Worker 自己的主循环里
+（[task.py:245](../src/agent_workbench/workers/task.py:245)），单 Worker 部署下
+没有任何存活进程做回收 → 任务在界面上永远显示 running（实测挂着"运行 7 小时"）。
+B-04 关闭时证明的是"杀一个 Worker，另一个接手"；这次是**灭队**，那条证据帮不上。
+
+**触发一侧，本次已修**：收敛点放在 adapters/mcp 的调用边界——
+[client.py:144](../src/agent_workbench/adapters/mcp/client.py:144) 的
+`is_client_fault` 判定 SDK 边界故障是否可吸收（纯取消与
+KeyboardInterrupt/SystemExit 照常上抛），
+[result_mapping.py:64](../src/agent_workbench/adapters/mcp/result_mapping.py:64)
+把可吸收故障收敛为该节点的 `tool_failed`（`retryable=True`；取消优先于收敛），
+[registry_source.py:62](../src/agent_workbench/adapters/mcp/registry_source.py:62)
+对发现阶段同型处理（退化为零绑定而不是杀进程）。测试把实测异常形态原样钉住：
+[test_mcp_result_mapping.py:471](../tests/adapters/test_mcp_result_mapping.py:471)
+先断言"这个组不是 Exception"（前提本身入试），再断言收敛结果、纯取消上抛、
+进程信号不吸收、取消优先；发现阶段两条在
+[test_mcp_registry_source.py:392](../tests/adapters/test_mcp_registry_source.py:392)。
+
+`retryable=True` 是测得的，不是许愿：ADR-059 的 `release_for_retry` 读的正是
+节点 ErrorInfo 的这一位；配置只放行"整节点重放也安全"的幂等工具（见
+registry_source 的 idempotency 注释）；且 2026-08-17 凌晨实测，被这次崩溃搁浅的
+task_9273bf 在服务器恢复后回收重跑成功。**一处诚实的边界**：那次成功是跨进程
+回收（Worker 重启后认领）；同一进程内对重启后服务器的重试未实测——SDK 的
+streamable HTTP session 可能已过期，工具目录也是进程启动时冻结的。
+
+**仍开着的暴露（所以这条不整体关闭）**：回收系于 Worker 舰队存活这个结构没变。
+本次移除的是"MCP 传输异常"这一个已测得的灭队触发；任何别的把最后一个 Worker
+干掉的路径（OOM、下一个未知的异常形态）都会复现同样的"永远 running"。与 B-02
+（watchdog 未装进 Task Worker）同根：缺的是 Worker 之外的看门者。
+
+**做完的判据**：存在一条不依赖 Task Worker 存活的到期处置路径（API 进程定时器
+或独立 sweeper，标记或回收均可），并有一条"杀掉全部 Worker → 租约过期 → 任务
+状态可见地离开 running"的测试。
 
 ---
 
