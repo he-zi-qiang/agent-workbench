@@ -273,16 +273,36 @@ function blockOf(base: {
   //
   // Three conditions hold this together, and each fails visibly rather than
   // silently, which is why they are worth naming:
-  //   (a) a tool-calling turn comes back with empty text -- DeepSeek sends
-  //       `content: ''`, measured -- so `groupSteps` treats it as the cause of
-  //       the next line rather than a step of its own. A provider that also
-  //       said something on a tool turn would keep its own `model:` group: the
-  //       thought still renders in the right place, just on a row with no
-  //       action under it.
+  //   (a) a tool-calling turn *usually* comes back with empty text, so
+  //       `groupSteps` folds it into the call it named. Measured on a real
+  //       session, DeepSeek narrates on some turns and not others -- three of
+  //       four calls in one run kept their own `model:` group. Relying on that
+  //       fold alone left the thought and its command on two sibling rows, so
+  //       the join below is done here too, from `tool_call_ids`. Pairing must
+  //       not depend on whether the model felt like saying something.
   //   (b) the merge is a *prepend*, which is the only thing that makes the
   //       thought read as preceding the action.
   //   (c) a turn naming two calls is filed on the first, so one model call is
   //       never drawn as two thoughts.
+  // Which tool call each thought named, taken from the event that carries
+  // both. Filled on the model group and read on the tool group it points at,
+  // which works in one pass because `ModelCompleted` always precedes the
+  // `ToolProposed` of the call it proposed.
+  const thoughtFor = new Map<string, { callId: string; text: string }>();
+  for (const group of all) {
+    if (!group.key.startsWith("model:")) continue;
+    const completed = group.events.find(
+      (event) => event.event_type === "ModelCompleted",
+    );
+    const thinking = str(completed?.payload.thinking_preview);
+    const named = firstId(completed?.payload.tool_call_ids);
+    if (thinking === null || named === null) continue;
+    thoughtFor.set(`tool:${named}`, {
+      callId: str(completed?.payload.model_call_id) ?? named,
+      text: thinking,
+    });
+  }
+
   const steps: TurnStep[] = [];
   for (const group of all) {
     // `solo:` is run bookkeeping -- RunStarted, RunCompleted. Never a step.
@@ -293,19 +313,44 @@ function blockOf(base: {
     const started = group.events.find(
       (event) => event.event_type === "ModelStarted",
     );
-    const modelCallId =
-      str(completed?.payload.model_call_id) ??
-      str(started?.payload.model_call_id);
-    const thinking = str(completed?.payload.thinking_preview) ?? "";
     const isTool = group.key.startsWith("tool:");
-    // A model group that is neither still open nor carrying a thought has
-    // nothing to draw. Keeping it would put an empty row in the timeline.
-    if (!isTool && thinking === "" && completed !== undefined) continue;
+
+    if (isTool) {
+      // Either the model turn was folded in here by `groupSteps` (the
+      // no-narration path), or it stayed a group of its own and we join it by
+      // the id it named. Both end with the thought on the action it caused.
+      const claimed = thoughtFor.get(group.key);
+      const modelCallId =
+        str(completed?.payload.model_call_id) ??
+        str(started?.payload.model_call_id) ??
+        claimed?.callId ??
+        null;
+      steps.push({
+        key: group.key,
+        modelCallId,
+        thinking: str(completed?.payload.thinking_preview) ?? claimed?.text ?? "",
+        group,
+      });
+      continue;
+    }
+
+    // A model group. If its thought was claimed by the call it named, it is
+    // already rendered there and must not appear again.
+    const named = firstId(completed?.payload.tool_call_ids);
+    if (named !== null && thoughtFor.has(`tool:${named}`)) continue;
+
+    const thinking = str(completed?.payload.thinking_preview) ?? "";
+    // No thought and nothing to wait for: an empty row saying nothing. The one
+    // exception is the anchor a live thought is about to land on, and only a
+    // live block has one of those.
+    if (thinking === "" && !(base.live && completed === undefined)) continue;
     steps.push({
       key: group.key,
-      modelCallId,
+      modelCallId:
+        str(completed?.payload.model_call_id) ??
+        str(started?.payload.model_call_id),
       thinking,
-      group: isTool ? group : null,
+      group: null,
     });
   }
 
@@ -422,6 +467,16 @@ function annotateWriters(blocks: CodeTurnBlock[]): void {
       lastWriter.set(file.name, block.index);
     }
   }
+}
+
+/** The first tool call id a model turn named, if it named any. */
+function firstId(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  for (const entry of value) {
+    const id = str(entry);
+    if (id !== null) return id;
+  }
+  return null;
 }
 
 function str(value: unknown): string | null {

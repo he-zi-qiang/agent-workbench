@@ -348,6 +348,34 @@ describe("buildTurnBlocks", () => {
     ]);
   });
 
+  it("pairs the thought with its call even when the model narrated", () => {
+    // Measured on a real session: DeepSeek says something *and* calls a tool on
+    // some turns and not others -- three of four calls in one run. `groupSteps`
+    // only folds the silent ones, so relying on that alone put the thought and
+    // the command it explains on two sibling rows for the talkative ones.
+    // The join is done here from `tool_call_ids` instead, so pairing does not
+    // depend on whether the model felt like narrating.
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events: [
+        event("run_a", "ModelCompleted", {
+          model_call_id: "mc_1",
+          text: "The workspace is empty, writing the file now.",
+          tool_call_ids: ["call_a.md"],
+          thinking_preview: "工作区是空的，直接建文件",
+        }),
+        ...wrote("run_a", "a.md", "call_a.md"),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks[0]?.steps).toHaveLength(1);
+    expect(blocks[0]?.steps[0]?.thinking).toBe("工作区是空的，直接建文件");
+    expect(blocks[0]?.steps[0]?.group?.title).toBe("写入工作区");
+    expect(blocks[0]?.steps[0]?.modelCallId).toBe("mc_1");
+  });
+
   it("keeps the answering turn's thought where the report follows it", () => {
     // The turn that said something rather than calling something. It has no
     // action, and filtering the timeline to `tool:` groups would drop its
@@ -389,6 +417,21 @@ describe("buildTurnBlocks", () => {
     expect(blocks[0]?.steps[0]?.modelCallId).toBe("mc_1");
     expect(blocks[0]?.steps[0]?.thinking).toBe("");
     expect(blocks[0]?.steps[0]?.group).toBeNull();
+  });
+
+  it("leaves no empty row for a call that will never come back", () => {
+    // A settled block with a ModelStarted and no ModelCompleted: the page was
+    // reloaded mid-turn, or the process holding the run died. The anchor has
+    // nothing left to receive, and measured on a real session it rendered a
+    // zero-height `<li>` that still took the step list's gap.
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events: [event("run_a", "ModelStarted", { model_call_id: "mc_1" })],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks[0]?.steps).toEqual([]);
   });
 
   it("never files one model call as two steps", () => {
