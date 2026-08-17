@@ -48,6 +48,31 @@ describe("withPreviewCsp", () => {
     );
   });
 
+  it("does not mistake a <header> for the document head", () => {
+    // `<head[^>]*>` matches `<header>` too, and a generated fragment opening
+    // with one is ordinary. Planted after it, the meta sits in the implicit
+    // body -- where a browser discards the policy outright, so the whole page
+    // would run ahead of a CSP that never applied.
+    const page = withPreviewCsp("<header>标题</header><p>x</p>");
+
+    expect(page.startsWith("<meta http-equiv")).toBe(true);
+    expect(page).not.toMatch(/<header><meta/);
+  });
+
+  it("does not mistake a <htmlish> element for the root either", () => {
+    // The same class of bug one branch down.
+    const page = withPreviewCsp("<htmlwidget>x</htmlwidget>");
+
+    expect(page.startsWith("<meta http-equiv")).toBe(true);
+  });
+
+  it("still finds a head that carries attributes", () => {
+    // The control for both: narrowing the pattern must not lose the real one.
+    const page = withPreviewCsp('<html><head profile="x"><title>t</title></head></html>');
+
+    expect(page).toMatch(/<head profile="x"><meta http-equiv/);
+  });
+
   it("names every closed channel", () => {
     // The policy is the security statement; a test spelling it out is what
     // makes loosening it a visible decision rather than a drive-by edit.

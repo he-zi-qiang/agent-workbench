@@ -37,12 +37,16 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_
  * documents -- the parser hoists a leading `<meta>` into the head it creates.
  */
 export function withPreviewCsp(html: string): string {
-  const head = /<head[^>]*>/i.exec(html);
+  // `<head(\s…)?>` and not `<head[^>]*>`: the loose form also matches
+  // `<header>`, and a page that opens with one -- an ordinary shape for a
+  // generated fragment -- would take the head branch and have the meta
+  // planted inside the implicit body, where a browser discards it outright.
+  const head = /<head(\s[^>]*)?>/i.exec(html);
   if (head !== null) {
     const at = head.index + head[0].length;
     return html.slice(0, at) + CSP_META + html.slice(at);
   }
-  const root = /<html[^>]*>/i.exec(html);
+  const root = /<html(\s[^>]*)?>/i.exec(html);
   if (root !== null) {
     const at = root.index + root[0].length;
     return html.slice(0, at) + CSP_META + html.slice(at);
@@ -61,22 +65,26 @@ export function withPreviewCsp(html: string): string {
  * The page an agent builds -- a chart, a demo, a small tool -- only answers
  * "did it work?" by rendering, so this frame renders it, scripts included.
  * What makes that admissible is the `sandbox` attribute below, and one
- * omission in it carries the whole design: **no `allow-same-origin`.** With
- * the flag absent the document gets an opaque origin -- no parent DOM, no
- * cookies, no storage, and any call at the platform's API fails for want of
- * the identity headers only the console can add. A test pins the attribute
- * value, the way `BlobPreview` pins that its PDF frame has none.
+ * omission in it carries **the whole design, alone**: **no
+ * `allow-same-origin`.** With the flag absent the document gets an opaque
+ * origin -- no parent DOM, no cookies, no storage, and any call at the
+ * platform's API fails for want of the identity headers only the console can
+ * add. A test pins the attribute value, and `BlobPreview` has the mirror test
+ * pinning that its PDF frame has none.
  *
- * `srcdoc` rather than a blob URL on purpose: a blob inherits this page's
- * origin (`client.ts` documents that trap over `getArtifactBlob`), and while
- * the sandbox flag would still force the document opaque, the safety of the
- * frame should not hang on one attribute keeping a URL in check. The srcdoc
- * document never had an origin to inherit.
+ * **There is no second line.** An `about:srcdoc` document inherits its
+ * parent's origin exactly as a `blob:` URL does; the choice between them buys
+ * convenience (one string, no object-URL lifetime) and buys *nothing*
+ * security-wise. Adding `allow-same-origin` here, or dropping `sandbox`,
+ * hands an agent-written page this console's own origin: `parent.document`,
+ * the stored identity, and every `/v1/*` route under the reader's
+ * credentials. Nothing else in this file would stop it.
  *
- * Residual risk, stated rather than hidden: a page that starts running markup
- * before the injected meta CSP can still reach the public internet (the
- * desktop apps this design borrows from close that with a network layer a
- * browser SPA does not have). Platform data stays out of reach either way.
+ * Residual risk, stated rather than hidden: the injected meta CSP is defence
+ * in depth and not a network boundary. Markup that runs before it escapes it,
+ * and a page can navigate *itself* out (`location.href = …`), which no CSP
+ * directive here forbids. Platform data stays out of reach either way; the
+ * public internet is best-effort (known-gaps F-12).
  *
  * The 源码 view is part of this component rather than the caller's text path
  * because both views are one fetch: the same string either goes into the
@@ -174,8 +182,14 @@ export function HtmlPreview({
               title={`${name} 预览`}
             />
           </div>
+          {/* What is promised here is exactly what is guaranteed. The earlier
+              wording also claimed the page could not reach the internet,
+              which is best-effort rather than true (known-gaps F-12) -- and a
+              reader who opens an unknown page on the strength of an
+              overstated promise is the person that gap costs. */}
           <p className="aw-page-note">
-            页面在隔离的沙箱里运行：拿不到你的登录态，也访问不了平台数据和外部网络。
+            页面在隔离的沙箱里运行：拿不到你的登录态，也读不到平台数据。
+            它仍可能自行访问外部网络，来源不明的页面请谨慎打开。
           </p>
         </>
       ) : (

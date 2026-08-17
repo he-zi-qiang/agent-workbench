@@ -174,7 +174,12 @@ export function useCodeStream(
         if (frame.envelope.event_type === "ModelCompleted") {
           const finished = stringField(frame.envelope.payload, "model_call_id");
           setThought((current) =>
-            current.callId !== "" && current.callId === finished
+            // The session too, not only the call: ids are unique per process
+            // and not across them, so a completion arriving on one session's
+            // stream must not clear a thought being had on another's.
+            current.session === sessionId &&
+            current.callId !== "" &&
+            current.callId === finished
               ? { session: sessionId, callId: "", text: "" }
               : current,
           );

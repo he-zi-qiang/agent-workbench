@@ -156,6 +156,25 @@ describe("useCodeStream reasoning", () => {
     expect(result.current.thinking).toBe("");
   });
 
+  it("never shows one session's thought over another session's transcript", async () => {
+    // The reason the return value is derived rather than cleared: a thought in
+    // flight when the reader switches sessions would otherwise sit above the
+    // new session's transcript, describing work it has nothing to do with.
+    stubStream([thinking("thinking about session one")], { reusable: true });
+
+    const { result, rerender } = renderHook(
+      ({ session }) => useCodeStream(IDENTITY, session),
+      { initialProps: { session: SESSION } },
+    );
+    await waitFor(() => {
+      expect(result.current.thinking).toBe("thinking about session one");
+    });
+
+    rerender({ session: "ses_code_2" });
+
+    expect(result.current.thinking).toBe("");
+  });
+
   it("keeps a thought that belongs to a call which has not finished", async () => {
     // The control for the test above: a completion for another call must not
     // clear the reasoning of the one still running.

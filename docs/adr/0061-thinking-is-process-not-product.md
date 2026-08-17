@@ -25,18 +25,28 @@
 
 ## 1. 探测：先量，再定
 
-三条事实，2026-08-16 对 `api.deepseek.com` 实测（本地证据，CI 离线不覆盖）：
+四条事实，2026-08-16/17 对 `api.deepseek.com` 实测（本地证据，CI 离线不覆盖）：
 
 1. **思考与工具调用兼容**。`deepseek-v4-flash` + `thinking:{type:"enabled"}` +
    `tools` 同一请求被接受：模型先流 `reasoning_content`（逐词），推理完毕后
    在同一条流里发出 `tool_calls` 分片，`finish_reason: "tool_calls"`，
    `usage.completion_tokens_details.reasoning_tokens = 15`。**计划里"若互斥则
    思考只开在无工具轮"的备用分支不需要了。**
-2. **`deepseek-chat` 别名解析到 v4**（响应 `model` 字段自陈
-   `deepseek-v4-flash`），接受 `thinking` 参数，**不带该参数时不思考**
-   （响应无 `reasoning_content`）。
+2. **不带 `thinking` 参数时，具体 id 与别名的默认行为不同**——这是三值设计
+   的实测依据，同一个提问各发一次：
+
+   | `model` | 响应自陈 | `reasoning_content` | `reasoning_tokens` |
+   |---|---|---|---|
+   | `deepseek-v4-flash` | `deepseek-v4-flash` | **有**（231 字符） | **80** |
+   | `deepseek-chat` | `deepseek-v4-flash` | 无 | 无 |
+
+   别名解析到同一个模型，却带着一套「不思考」的默认。所以「切到具体 v4 id
+   却不声明立场」会静默买推理，而「继续用别名」不会。
 3. **wire 形状**：思考阶段 `delta.content` 为 `null`、`delta.reasoning_content`
    为文本；边界帧一条 delta 同时带两者。
+4. 本 ADR 初稿把第 2 条写成了「别名不思考 ⇒ v4 不思考」，又在 §5 断言
+   「v4 默认思考开着」，两处互斥。上表是补测后的口径：**两句话都对，主语
+   不同**。记在这里而不是改掉，因为读者会按这段去配新 profile。
 
 第 3 条决定了解析器的形状：`_text_events` 返回**两种**事件的列表，
 reasoning 在前——那是它被写出的顺序，倒过来会让答案出现在产生它的思考之前。
@@ -96,13 +106,25 @@ DeepSeek 要求 `reasoning_content` 不得回传下一轮。本仓的做法比"�
   `True`/`False` 覆盖它；对 `unsupported` 的 profile，覆盖被忽略——没有参数
   可发就是没有。
 
-**显式发送两个方向**是有代价换来的：v4 系列默认思考**开着**。一个切到 v4 却
-没声明立场的 profile 会静默地为没人要的推理付钱。所以 `disabled` 也要发。
+**显式发送两个方向**是有代价换来的，理由就是 §1 第 2 条那张表：具体的
+`deepseek-v4-flash` 不带参数时**默认思考**。一个从别名切到具体 id 却没声明
+立场的 profile，会静默地为没人要的推理付钱——所以 `disabled` 也要发。
+反过来，仍指向 `deepseek-chat` 的 profile（本仓的 `[model.compact]` 与所有
+非 demo 环境）留在 `unsupported` 是安全的：那条路径本来就不思考。
 
-Chat 四个形态（fixed / agentic / ungrounded / web fallback）一律钉 `False`：
-Chat 界面不渲染思考（用户决策），围栏对 redacted 形态又会抹掉它——买一段
-既看不见又要被抹掉的推理，是纯粹的浪费。测试逐个构造器断言，因为"chat 那条路"
-正是第五个形态会写错的那句话。
+Chat 的**五个** `run_kind="chat"` 构造器一律钉 `False`：
+`chat_execution` 的四个（fixed / agentic / ungrounded / web fallback），
+加上 `task_triage` 的分类器——它最需要这一条，因为调用方压着十秒客户端
+超时、输出预算只够一个小 JSON，推理会同时吃掉这两样，而截断的裁决会静默
+落回默认值。Chat 界面不渲染思考（用户决策），围栏对 redacted 形态又会抹掉
+它——买一段既看不见又要被抹掉的推理，是纯粹的浪费。
+
+测试逐个构造器断言，并且**中间那一跳也钉住了**：
+`AgentRunRequest.thinking → ModelRequest.thinking` 只有一行赋值，删掉它
+类型检查照过、其余测试照绿，而后果正是本节要防的事
+（`test_the_runs_thinking_switch_reaches_the_model_request`）。同一条测试
+顺带要求 `FakeModel` 遵守这个开关——一个在这件事上与真适配器答案不同的
+替身，没法用来测试问它的调用方。
 
 ## 6. 被拒绝的方案
 

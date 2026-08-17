@@ -63,9 +63,12 @@ from agent_workbench.ports.model import (
 #: What a profile says about thinking. ``unsupported`` sends no ``thinking``
 #: key at all -- the safe reading for a model id or compatible gateway this
 #: adapter has not been told about, where an unknown key may be a 400.
-#: ``disabled``/``enabled`` send it explicitly both ways, because the current
-#: v4 models default thinking *on*: a profile that switched to one and stayed
-#: silent would be paying for reasoning nobody asked for.
+#: ``disabled``/``enabled`` send it explicitly both ways, because the default
+#: depends on which name a profile calls the model by: measured 2026-08-17,
+#: ``deepseek-v4-flash`` reasons with no parameter at all while the
+#: ``deepseek-chat`` alias -- resolving to that same model -- does not
+#: (ADR-061 §1). A profile that moved to the concrete id and stayed silent
+#: would be paying for reasoning nobody asked for.
 ThinkingMode = Literal["unsupported", "disabled", "enabled"]
 
 ReasoningEffort = Literal["low", "high", "max"]

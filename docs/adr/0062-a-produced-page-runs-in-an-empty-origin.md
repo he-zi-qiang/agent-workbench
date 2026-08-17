@@ -30,21 +30,29 @@ Agent 会产出 HTML——sandbox 跑出的图表页、Code 会话写的演示�
 安全论证悬在一个**缺席**上：`sandbox` 值里没有 `allow-same-origin`，文档因此
 拿到 opaque origin——没有父页 DOM，没有 cookie 和 storage，对平台 API 的
 fetch 因带不上三个身份头（ADR-044）而全部 401。脚本随便跑，跑在一个什么都
-没有的世界里。测试把属性值钉死，正如 `BlobPreview` 钉死它的 PDF 帧**没有**
-sandbox——两个方向相反的钉子，钉的是同一件事：这个属性是被决定的，不是
-顺手写的。
+没有的世界里。测试把属性值钉死，`BlobPreview` 有一条方向相反的对照测试钉死
+它的 PDF 帧**没有** sandbox（`BlobPreview.test.tsx`）——两个钉子钉的是同一
+件事：这个属性是被决定的，不是顺手写的。
 
-选 `srcdoc` 而不是 blob URL：blob 继承创建页的 origin（`client.ts` 在
-`getArtifactBlob` 上方注释过这个坑）。sandbox 旗标固然会把它强制成 opaque，
-但边界不应该悬在"一个属性管住一个 URL"上——srcdoc 文档从头就没有 origin
-可继承。
+**这条论证没有第二层，写清楚这一点比听起来稳妥更重要。** `about:srcdoc`
+文档与 `blob:` URL 一样**继承父文档的 origin**；选 `srcdoc` 换来的是便利
+（一个字符串，不用管 object URL 的生命周期），安全上什么都没多买。给这个
+iframe 加上 `allow-same-origin`、或者整个去掉 `sandbox`，Agent 写的页面就
+立刻拿到控制台自己的 origin：`parent.document`、存着的身份、以及读者凭据
+下的每一条 `/v1/*`。这个文件里没有任何别的东西会拦住它。
+
+（本 ADR 的初稿在这里写错过：它声称 srcdoc「从头就没有 origin 可继承」，
+并据此说边界不悬在那个属性上。评审指出这与 HTML 规范不符——记在这里，
+因为将来读这段的人正是可能为了让某个图表库跑起来而去动那个属性的人。）
 
 注入的 meta CSP（`default-src 'none'; connect-src 'none'; form-action 'none';
-base-uri 'none'`，内联脚本样式与 data:/blob: 资产放行）是纵深不是边界：
-meta CSP 从解析点生效，恶意文档把脚本放在注入点之前可以先行外联公网。
-如实记录这个残余：**平台数据不可达是硬保证（opaque origin + 无凭据），
-出网封锁是尽力而为**。Claude 桌面端用会话级 webRequest 拦截补上这一层；
-浏览器 SPA 没有等价物，能补上它的方案被拒绝了（见 §3）。
+base-uri 'none'`，内联脚本样式与 data:/blob: 资产放行）是纵深不是边界，
+两个口子都要说明白：meta CSP 从解析点生效，恶意文档把脚本放在注入点之前
+可以先行外联；而且**页面自导航**（`location.href = …`）不受任何一条 CSP
+指令约束。如实记录这个残余：**平台数据不可达是硬保证（opaque origin +
+无凭据），出网封锁是尽力而为**。Claude 桌面端用会话级 webRequest 拦截补上
+这一层；浏览器 SPA 没有等价物，能补上它的方案被拒绝了（见 §3）。
+控制台里给读者看的那句话按这个口径写，不多说一个字。
 
 「渲染 / 源码」切换住在组件里，因为两个视图共享同一次 fetch；截断的正文
 **拒绝渲染**（半个页面跑半份脚本，画出的东西从未存在过），只给源码并注明

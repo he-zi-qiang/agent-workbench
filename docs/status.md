@@ -22,6 +22,78 @@
 
 ---
 
+## 2026-08-17（未合并，分支 `preview-sandbox-and-thinking`）：产物能跑，过程能看
+
+一份对 Claude Code 实现的调研，参考移植两件事：产物预览的分层沙箱、思考过程
+的协议地位。三个提交、两份 ADR（0061–0062）。**门禁（本节时点）**：后端确定性
+`pytest` 2394 passed / 739 skipped；`ruff`、`pyright` 0 errors；前端 `lint` +
+`tsc` + `vitest` 316 passed + `vite build`；服务型四套件 1162 passed / 2
+skipped。配置六个本地 profile 逐个过 `agent-config-check`。
+
+### HTML 产物在空 origin 里运行（[ADR-062](./adr/0062-a-produced-page-runs-in-an-empty-origin.md)）
+
+`text/html` 此前落在 `previewKind` 的 text 臂：Code 页显示 `<pre>` 源码，
+Work 页更糟——`MarkdownContent` + `rehype-sanitize` 把标签消化殆尽，页面与
+源码两头落空。新的 html 臂交给 `HtmlPreview`：`<iframe srcdoc
+sandbox="allow-scripts">`，**没有 `allow-same-origin`**，文档因此是 opaque
+origin，拿不到父页 DOM、cookie 与身份头。注入 meta CSP 作纵深，「渲染 /
+源码」一键切换，截断的正文拒绝渲染。
+
+**边界只有这一层，ADR 里写死了这句话**：初稿曾论证「srcdoc 从头没有 origin
+可继承，所以边界不悬在那个属性上」——这与 HTML 规范不符（`about:srcdoc`
+与 `blob:` 一样继承父 origin），评审揪出后订正并留痕，因为将来读那段的人
+正是可能为了让某个库跑起来去动那个属性的人。`BlobPreview.test.tsx` 补了方向
+相反的对照测试（PDF 帧**必须没有** sandbox），此前 ADR 声称它存在而它不存在。
+
+`withPreviewCsp` 的 `<head[^>]*>` 正则会匹配 `<header>`——一个以 `<header>`
+开头的片段页会把 meta 插进隐式 body，浏览器整条丢弃，纵深静默归零。收窄为
+`<head(\s[^>]*)?>` 并补三条测试（`<header>`、`<htmlwidget>`、带属性的真
+head）。两张后缀猜型表补 `.svg`（此前 workspace 猜 text/plain、sandbox 猜
+octet-stream，画出来的图连 image 臂都进不去），两条下载路由补 nosniff。
+
+**实机证据**（demo profile）：一次 Code 会话产出 `chart.html`，工作区列为
+`media_type: text/html`，下载响应带 `x-content-type-options: nosniff`；用
+组件同一份实现对真实产物做注入，CSP 落在 `<head>` 内、`<body>` 之前。
+出网封锁是尽力而为，登记为 known-gaps F-12，控制台文案按这个口径写——
+初版文案说「访问不了外部网络」，比缺口册承认的强，已改。
+
+### 思考是过程，不是产物（[ADR-061](./adr/0061-thinking-is-process-not-product.md)）
+
+`ModelThinkingDelta` 与 `ModelDelta` 平行进 port 事件联合与领域事件表，登记
+**transient**；durable 的那一半是 `ModelCompleted.thinking_preview`（preview
+级上限）。Code 会话逐字流式显示「正在思考…」，Task 靠摘录——worker 是独立
+进程、live 扇出在进程内，摘录是 Task 唯一能显示的思考，这是架构事实。
+
+**围栏对思考与答案同政策**：模型推理的对象正是它被给到的证据，不设防就是
+`AnswerWithheld` 之外的第四条文本逃逸通道（ADR-052 判据延伸）。思考永不回填
+对话账本——domain 三种 content block 不为它开第四种。
+
+**探测取证**（本地，CI 离线不覆盖）：v4 思考与工具调用同请求兼容，先推理再
+发 `tool_calls`；**不带参数时默认行为跟着模型名走**——`deepseek-v4-flash`
+会思考（`reasoning_tokens=80`），解析到同一模型的别名 `deepseek-chat` 不会。
+ADR 初稿把这两句混成互斥的一对，补测后以表格订正。这条正是 `unsupported /
+disabled / enabled` 三值设计的依据。
+
+五个 `run_kind="chat"` 构造器一律钉 `thinking=False`——评审发现 ADR 把覆盖
+面写成了穷尽而 `task_triage` 的分类器漏了：它压着十秒客户端超时、输出预算
+只够一个小 JSON，推理会同时吃掉这两样。中间那一跳
+（`AgentRunRequest.thinking → ModelRequest.thinking`，单行赋值）也补了钉子，
+删掉它此前类型检查照过、全量测试照绿；同一条测试要求 `FakeModel` 遵守这个
+开关，因为在这件事上与真适配器答案不同的替身没法用来测调用方。
+
+**实机证据**：一次真实 Code 回合的 SSE 流里 3 条 `ModelThinkingDelta` live
+帧（**均无 `id:` 行**，符合 ADR-051），两条 `ModelCompleted` 各自带上自己的
+`thinking_preview`（"Let me look at the workspace first…"／"The workspace is
+empty. I need to write chart.html…"）。
+
+### 评审发现与处置
+
+改动完成后跑了一轮多维评审（五个维度并行找、每条发现三个怀疑者独立证伪）。
+16 条发现里，上文已记 7 条被采纳修复（正则、文案、ADR 事实错误两处、缺失的
+第五个构造器、缺失的对照测试、穿线钉子）。另补：`useCodeStream` 清空思考的
+分支原本只比对 `model_call_id` 不比对会话，跨会话可能误清；`stepDetail` 的
+「思考过程」块补了两条负例（没思考的调用、被围栏抹空的候选都不得多出块）。
+
 ## 2026-08-16（未合并，分支 `console-seven-improvements`）：控制台七条
 
 又一轮使用反馈，七条，归并为五个工作流、六个提交、三份 ADR（0058–0060）。

@@ -100,10 +100,15 @@ class FakeModel:
             )
             return
 
-        for offset in range(0, len(turn.reasoning), self._delta_size):
-            yield ModelThinkingDelta(
-                text=turn.reasoning[offset : offset + self._delta_size]
-            )
+        # Scripted reasoning is still subject to the request's switch, because
+        # a double that answers a question differently from the adapter it
+        # stands in for cannot be used to test the callers who ask it. A run
+        # that turned thinking off gets none, whatever the script says.
+        if request.thinking is not False:
+            for offset in range(0, len(turn.reasoning), self._delta_size):
+                yield ModelThinkingDelta(
+                    text=turn.reasoning[offset : offset + self._delta_size]
+                )
 
         for offset in range(0, len(turn.text), self._delta_size):
             yield ModelTextDelta(text=turn.text[offset : offset + self._delta_size])

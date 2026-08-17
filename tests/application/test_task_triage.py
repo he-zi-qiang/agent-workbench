@@ -65,6 +65,25 @@ def test_a_clear_verdict_is_decided() -> None:
     assert len(executor.requests) == 1
 
 
+def test_the_classifier_declines_to_think() -> None:
+    """The fifth ``run_kind="chat"`` builder, pinned like the other four.
+
+    Nothing shows a classifier's reasoning, the caller holds a ten-second
+    deadline over this call, and the output budget is sized for one small JSON
+    object -- reasoning would spend both on text no reader sees, and a
+    truncated verdict falls back to the default silently (ADR-061).
+    """
+
+    executor = FakeAgentExecutor(
+        respond=lambda request: _verdict(
+            graph="general", wants_report=False, reason="要做一件事", question=None
+        )
+    )
+    asyncio.run(_triage(_service(executor)))
+
+    assert executor.requests[0].thinking is False
+
+
 def test_an_unsure_graph_becomes_a_question_not_a_guess() -> None:
     executor = FakeAgentExecutor(
         respond=lambda request: _verdict(
