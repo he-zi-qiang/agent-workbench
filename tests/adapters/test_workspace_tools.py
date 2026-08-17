@@ -137,6 +137,76 @@ def test_a_write_advances_the_session_version_so_the_node_can_commit_it() -> Non
         assert version_of(scope) is not None
 
 
+def test_a_write_names_the_file_it_produced_as_a_field_not_a_sentence() -> None:
+    """ADR-063: the fact travels structured, so no consumer has to parse prose.
+
+    ``content`` says the same thing in English, and that sentence is what a
+    console had to regex before this. It is not pinned by any test, so it was
+    free to be reworded at any time -- which is the definition of not being a
+    contract.
+    """
+
+    with entered() as scope:
+        result = invoke(WorkspaceWriteTool(scope), name="report.md", content="hello")
+
+        assert result.workspace_writes == ("report.md",)
+
+
+def test_an_edit_names_the_file_it_rebound() -> None:
+    """An edit replaces the bytes a name points at, so it produced that file
+    just as much as a write did."""
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="report.md", content="alpha beta")
+
+        result = invoke(
+            WorkspaceEditTool(scope),
+            name="report.md",
+            old_text="alpha",
+            new_text="gamma",
+        )
+
+        assert result.workspace_writes == ("report.md",)
+
+
+def test_a_refused_write_names_nothing_because_nothing_was_written() -> None:
+    """The failure direction, for both tools.
+
+    A field that reported the *attempted* name would put a file in the console
+    that does not exist in the workspace, and no later listing would remove it.
+    Empty here is a consequence of returning before the version advances, not
+    of remembering to clear anything.
+    """
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="report.md", content="alpha")
+
+        refused_write = invoke(WorkspaceWriteTool(scope), name="../escape", content="x")
+        refused_edit = invoke(
+            WorkspaceEditTool(scope),
+            name="report.md",
+            old_text="not in the file",
+            new_text="x",
+        )
+
+        assert refused_write.status == "error"
+        assert refused_write.workspace_writes == ()
+        assert refused_edit.status == "error"
+        assert refused_edit.workspace_writes == ()
+
+
+def test_a_read_reports_no_writes_because_it_performed_none() -> None:
+    """The control: the field means "this call wrote these", not "these exist"."""
+
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="report.md", content="hello")
+
+        result = invoke(WorkspaceReadTool(scope), name="report.md")
+
+        assert result.status == "ok"
+        assert result.workspace_writes == ()
+
+
 def test_read_returns_what_write_put_there() -> None:
     with entered() as scope:
         invoke(WorkspaceWriteTool(scope), name="notes.md", content="hello")

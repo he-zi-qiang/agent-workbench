@@ -1,0 +1,340 @@
+import { describe, expect, it } from "vitest";
+import type { EventEnvelope, MessageView } from "../../api/types";
+import { buildTurnBlocks } from "./turnBlocks";
+
+/**
+ * The pairing between instructions and runs is the one place in this feature
+ * that can be *silently wrong* -- a card attributed to the turn above the one
+ * that made it looks exactly like a card that is right. `turnStages.ts`, which
+ * this replaced, had no tests at all; these exist mostly for the failure modes
+ * that produce a plausible answer rather than an error.
+ */
+
+let nextEvent = 0;
+
+function event(
+  runId: string,
+  type: string,
+  payload: Record<string, unknown> = {},
+): EventEnvelope {
+  nextEvent += 1;
+  return {
+    schema_version: 1,
+    event_id: `evt_${String(nextEvent)}`,
+    stream_id: "stream_1",
+    run_id: runId,
+    event_type: type,
+    durability: "durable",
+    timestamp: "2026-08-14T12:00:00Z",
+    payload: { kind: type, ...payload },
+    sequence: nextEvent,
+    task_id: null,
+    graph_node_id: null,
+    parent_event_id: null,
+  };
+}
+
+/** One successful workspace_write, as the server actually emits it. */
+function wrote(runId: string, name: string, callId = `call_${name}`) {
+  return [
+    event(runId, "ToolProposed", {
+      tool_call_id: callId,
+      tool_name: "workspace_write",
+      argument_preview: JSON.stringify({ content: "…", name }),
+    }),
+    event(runId, "ToolCompleted", {
+      tool_call_id: callId,
+      workspace_writes: [name],
+    }),
+  ];
+}
+
+function said(...texts: string[]): MessageView[] {
+  return texts.map((text, index) =>
+    index % 2 === 0
+      ? { role: "user", text }
+      : { role: "assistant", text },
+  );
+}
+
+describe("buildTurnBlocks", () => {
+  it("pairs instructions with runs from the tail, not the head", () => {
+    // Three instructions, but the stream only kept the last two runs --
+    // `KEPT_EVENTS` is 2000 and a long session loses its oldest. Anchoring at
+    // the head would shift every block by one and put run_b's files under the
+    // second instruction.
+    const { blocks, orphanRuns } = buildTurnBlocks({
+      messages: said("一", "报告一", "二", "报告二", "三", "报告三"),
+      events: [...wrote("run_b", "b.md"), ...wrote("run_c", "c.md")],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks.map((block) => block.instruction)).toEqual(["一", "二", "三"]);
+    expect(blocks.map((block) => block.runId)).toEqual([null, "run_b", "run_c"]);
+    expect(blocks[0]?.produced).toEqual([]);
+    expect(blocks[1]?.produced.map((file) => file.name)).toEqual(["b.md"]);
+    expect(blocks[2]?.produced.map((file) => file.name)).toEqual(["c.md"]);
+    expect(orphanRuns).toBe(0);
+  });
+
+  it("drops the oldest runs rather than mis-attributing them", () => {
+    // Another tab ran a turn in this same session, so the stream holds more
+    // runs than this transcript has instructions. A card on the wrong turn is
+    // a lie; a card that is missing is a gap the page can admit to, and the
+    // panel's heading says so.
+    const { blocks, orphanRuns } = buildTurnBlocks({
+      messages: said("只有这一句"),
+      events: [
+        ...wrote("run_other", "theirs.md"),
+        ...wrote("run_mine", "mine.md"),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.runId).toBe("run_mine");
+    expect(blocks[0]?.produced.map((file) => file.name)).toEqual(["mine.md"]);
+    expect(orphanRuns).toBe(1);
+  });
+
+  it("pairs a turn that came back without a report", () => {
+    // A turn that runs out of budget appends no assistant message at all, so
+    // `messages[2k]` is off by one for every turn after it.
+    const { blocks } = buildTurnBlocks({
+      messages: [
+        { role: "user", text: "一" },
+        { role: "user", text: "二" },
+        { role: "assistant", text: "报告二" },
+      ],
+      events: [...wrote("run_a", "a.md"), ...wrote("run_b", "b.md")],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks.map((block) => block.report)).toEqual([null, "报告二"]);
+    expect(blocks.map((block) => block.runId)).toEqual(["run_a", "run_b"]);
+  });
+
+  it("gives the run with no terminal record to the pending block", () => {
+    const { blocks } = buildTurnBlocks({
+      messages: said("一", "报告一"),
+      events: [
+        ...wrote("run_a", "a.md"),
+        event("run_a", "RunCompleted"),
+        ...wrote("run_b", "b.md"),
+      ],
+      running: true,
+      pendingInstruction: "二",
+    });
+
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]?.live).toBe(false);
+    expect(blocks[0]?.runId).toBe("run_a");
+    // The live turn's card is already there, with no report and no terminal
+    // run event: "生成的文件应该在对话生成中" is a claim about timing.
+    expect(blocks[1]?.live).toBe(true);
+    expect(blocks[1]?.runId).toBe("run_b");
+    expect(blocks[1]?.produced.map((file) => file.name)).toEqual(["b.md"]);
+  });
+
+  it("calls nothing live once the request is closed", () => {
+    // A run with no terminal record that nothing is waiting on did not end --
+    // the process holding it died. Drawing it as active would spin forever.
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events: wrote("run_a", "a.md"),
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks[0]?.live).toBe(false);
+    expect(blocks[0]?.runId).toBe("run_a");
+  });
+
+  it("does not card a write that was denied or failed", () => {
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events: [
+        event("run_a", "ToolProposed", {
+          tool_call_id: "call_1",
+          tool_name: "workspace_write",
+          argument_preview: JSON.stringify({ name: "denied.md" }),
+        }),
+        event("run_a", "PermissionResolved", {
+          tool_call_id: "call_1",
+          effect: "deny",
+        }),
+        event("run_a", "ToolFailed", { tool_call_id: "call_1" }),
+        event("run_a", "ToolProposed", {
+          tool_call_id: "call_2",
+          tool_name: "workspace_write",
+          argument_preview: JSON.stringify({ name: "failed.md" }),
+        }),
+        event("run_a", "ToolFailed", { tool_call_id: "call_2" }),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks[0]?.produced).toEqual([]);
+    // The attempts are still in the action list, marked -- the card is about
+    // what exists, the row is about what happened.
+    expect(blocks[0]?.groups.map((group) => group.outcome)).toEqual([
+      "denied",
+      "failed",
+    ]);
+  });
+
+  it("says which later turn rewrote a file, and never claims a file is new", () => {
+    const { blocks } = buildTurnBlocks({
+      messages: said("一", "报告一", "二", "报告二"),
+      events: [
+        ...wrote("run_a", "notes.md", "call_a"),
+        ...wrote("run_b", "notes.md", "call_b"),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    const first = blocks[0]?.produced[0];
+    const second = blocks[1]?.produced[0];
+    // Turn 1 wrote it first *as far as this stream saw*, so it does not claim
+    // to have created it -- the workspace has a history older than the window.
+    expect(first?.overwrote).toBe(false);
+    expect(first?.supersededByTurn).toBe(2);
+    // Turn 2 overwrote something this stream watched being written, which is
+    // the only case where "覆盖" is a fact rather than a guess.
+    expect(second?.overwrote).toBe(true);
+    expect(second?.supersededByTurn).toBeNull();
+  });
+
+  it("falls back to the argument preview, and stays quiet when neither has a name", () => {
+    const { blocks } = buildTurnBlocks({
+      messages: said("一", "报告一", "二", "报告二", "三", "报告三"),
+      events: [
+        // Pre-ADR-063: no workspace_writes, name still inside the 4KB preview.
+        event("run_a", "ToolProposed", {
+          tool_call_id: "call_1",
+          tool_name: "workspace_write",
+          argument_preview: JSON.stringify({ content: "x", name: "old.md" }),
+        }),
+        event("run_a", "ToolCompleted", { tool_call_id: "call_1" }),
+        // The case ADR-063 exists for: a body over BOUNDED_TEXT_LIMIT, so the
+        // canonical JSON is cut before `name` (it sorts after `content`) and
+        // arrives unparseable. No card, and no crash.
+        event("run_b", "ToolProposed", {
+          tool_call_id: "call_2",
+          tool_name: "workspace_write",
+          argument_preview: '{"content": "aaaaaaaaaaaaaaaaaaaa',
+        }),
+        event("run_b", "ToolCompleted", { tool_call_id: "call_2" }),
+        // A tool with no name field at all is not mined for one.
+        event("run_c", "ToolProposed", {
+          tool_call_id: "call_3",
+          tool_name: "workspace_grep",
+          argument_preview: JSON.stringify({ query: "name" }),
+        }),
+        event("run_c", "ToolCompleted", { tool_call_id: "call_3" }),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks[0]?.produced.map((file) => file.name)).toEqual(["old.md"]);
+    expect(blocks[1]?.produced).toEqual([]);
+    expect(blocks[2]?.produced).toEqual([]);
+  });
+
+  it("names the verb after what the call did, not after what the file is", () => {
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events: [
+        event("run_a", "ToolProposed", {
+          tool_call_id: "call_1",
+          tool_name: "workspace_edit",
+        }),
+        event("run_a", "ToolCompleted", {
+          tool_call_id: "call_1",
+          workspace_writes: ["edited.md"],
+        }),
+        event("run_a", "ToolProposed", {
+          tool_call_id: "call_2",
+          tool_name: "sandbox_run",
+        }),
+        event("run_a", "ToolCompleted", {
+          tool_call_id: "call_2",
+          workspace_writes: ["out.csv"],
+        }),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks[0]?.produced.map((file) => [file.name, file.action])).toEqual([
+      ["edited.md", "edit"],
+      ["out.csv", "run"],
+    ]);
+  });
+
+  it("keeps run and model bookkeeping out of the action list but not out of the record", () => {
+    const events = [
+      event("run_a", "RunStarted"),
+      event("run_a", "ModelStarted", { model_call_id: "mc_1" }),
+      event("run_a", "ModelCompleted", {
+        model_call_id: "mc_1",
+        text: "",
+        tool_call_ids: ["call_notes.md"],
+        thinking_preview: "先写文件",
+      }),
+      ...wrote("run_a", "notes.md"),
+      event("run_a", "RunCompleted"),
+    ];
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events,
+      running: false,
+      pendingInstruction: null,
+    });
+
+    // One action offered, not six protocol rows.
+    expect(blocks[0]?.groups).toHaveLength(1);
+    expect(blocks[0]?.groups[0]?.title).toBe("写入工作区");
+    // Every event is still reachable under 原始事件 -- curation is not
+    // authority, and the reader must be able to check the line.
+    expect(blocks[0]?.events).toHaveLength(events.length);
+    // The excerpt comes only from ModelCompleted, which is what makes it
+    // impossible for a call to be both live and filed at the same instant.
+    expect(blocks[0]?.reasonings).toEqual([
+      { callId: "mc_1", text: "先写文件" },
+    ]);
+  });
+
+  it("files one entry per model call rather than one joined argument", () => {
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events: [
+        event("run_a", "ModelCompleted", {
+          model_call_id: "mc_1",
+          thinking_preview: "先建文件",
+        }),
+        event("run_a", "ModelCompleted", {
+          model_call_id: "mc_2",
+          thinking_preview: "再读回来核对",
+        }),
+        // A call that did not think contributes nothing rather than a blank.
+        event("run_a", "ModelCompleted", { model_call_id: "mc_3" }),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    // A turn is think → call a tool → think again. Joined into one paragraph
+    // it reads as a continuous argument that was never made.
+    expect(blocks[0]?.reasonings.map((entry) => entry.text)).toEqual([
+      "先建文件",
+      "再读回来核对",
+    ]);
+  });
+});

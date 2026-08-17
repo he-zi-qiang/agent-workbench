@@ -311,6 +311,12 @@ class WorkspaceWriteTool:
         return ToolResult.succeeded(
             invocation.call,
             content=f"Wrote {len(content)} characters to {name}.",
+            # The same name the sentence above says, said in a form a consumer
+            # can read without a parser (ADR-063). Every refusal above returns
+            # before `session.version` advances, so a failed write has no name
+            # to report and reports none -- the field is empty by construction
+            # rather than by remembering to clear it.
+            workspace_writes=(name,),
         )
 
 
@@ -453,6 +459,12 @@ class WorkspaceEditTool:
                 f"Replaced one passage in {name}. "
                 f"The file is now {len(edited)} characters."
             ),
+            # An edit binds the name to new bytes exactly as a write does, so a
+            # reader that only watched writes would show a stale file as the
+            # produced one (ADR-063). Reached only after the store accepted the
+            # new version; every refusal above -- binary, no match, overflow --
+            # returns first and leaves the session's version untouched.
+            workspace_writes=(name,),
         )
 
 

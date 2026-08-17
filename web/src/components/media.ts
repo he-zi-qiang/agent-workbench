@@ -65,6 +65,32 @@ export function isReadableMedia(mediaType: string): boolean {
 }
 
 /**
+ * What kind of file this is, in the words a card can show.
+ *
+ * Coarser than `previewKind` and for a different reader. `previewKind` answers
+ * "which viewer", so `text/markdown` and `application/json` are both `text`;
+ * a person looking at a list of produced files wants to know which of them is
+ * the report and which is the data, and those two are not the same thing.
+ *
+ * Falls back to the media type itself rather than to a generic "文件". A type
+ * nobody has named yet is a gap in this table, and printing `application/zip`
+ * says that honestly while telling the reader more than the generic word does.
+ */
+export function mediaLabel(mediaType: string): string {
+  const base = mediaType.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (base === "text/markdown" || base === "text/x-markdown") return "Markdown";
+  if (base === "text/html" || base === "application/xhtml+xml") return "HTML";
+  if (base === "text/csv") return "CSV";
+  if (base === "text/plain") return "纯文本";
+  if (base === "application/json" || base.endsWith("+json")) return "JSON";
+  if (base === "application/pdf") return "PDF";
+  if (base === DOCX_MEDIA_TYPE) return "Word";
+  if (base.startsWith("image/")) return "图片";
+  if (base.startsWith("text/")) return "纯文本";
+  return mediaType;
+}
+
+/**
  * Whether this browser paints a PDF inside a frame.
  *
  * The layout view is the browser's own PDF viewer and nothing else -- this app

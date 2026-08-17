@@ -4034,98 +4034,178 @@ pre {
 
 /* --- Code：一次编码会话 --------------------------------------------------
  *
- * 两种形态。没有会话：整页是一个居中的开始区（输入框 + 最近会话），因为其他
- * 每一块面板描述的都是一个还不存在的会话。有会话：左列是对话（转录、每轮的
- * 步骤、输入框），右列是产物（文件列表 + 选中文件的预览）——右列只在工作区
- * 真有东西时出现，空会话把整个宽度留给对话。
+ * 三区：左边是会话（常驻，窄屏收成抽屉），中间是对话，右边是预览。
  *
- * 注意上面还有一个 `.aw-code-value`，那是等宽工具类，和这里的 Code 流程无关；
- * 这一段复用它来排数字与摘要，正是因为它就是"把一串机器写的字排整齐"。
+ * 右列的挂载条件是这次改动里最大的一笔宽度收益。它以前挂在「工作区里有文件」
+ * 上，于是第一轮之后就无条件吃掉 clamp(320px, 40%, 560px)——1280px 的窗口里
+ * 对话只剩 768px，而读者根本没说过想看任何东西。现在挂在「你点了一个东西」上。
+ *
+ * 会话列表以前是转录顶部一个 <details>，并且在开始页还有第二份摊开的拷贝。
+ * 两份渲染同一个东西就会有两份行为，所以合并成左边这一份。
+ *
+ * 注意本文件上方还有一个 `.aw-code-value`，那是等宽工具类，和这里的 Code 流程
+ * 无关；这一段复用它来排数字与摘要，正是因为它就是「把一串机器写的字排整齐」。
  */
 
-/* 右列比旧的 268px 侧栏宽得多，因为预览搬了进来：文件正文要行宽，不是文件名
- * 的行宽。40% 封顶在 560px，对话列永远拿大头。 */
 .aw-code-page {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(320px, 40%, 560px);
   height: 100%;
   min-height: 0;
+  grid-template-columns: 244px minmax(0, 1fr);
 }
 
-/* 没东西可展示时右列整个不渲染（组件里判定），这里只需要让剩下的一列占满。 */
-.aw-code-page.is-solo {
+.aw-code-page.has-preview {
+  grid-template-columns: 244px minmax(0, 1fr) clamp(320px, 34%, 560px);
+}
+
+/* 折叠成「对话 | 展示」两栏。 */
+.aw-code-page.is-rail-hidden {
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* 钉头两行（会话折叠条、对话流），其余交给隐式的 auto 行。子元素数量随状态
- * 变 —— 待批准、错误、输入框，三个里有两个可能不在 —— 写死行数会让下一个
- * 子元素落进一个没被描述的位置。 */
-.aw-code-main {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-width: 0;
-  min-height: 0;
+.aw-code-page.is-rail-hidden.has-preview {
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 34%, 560px);
 }
 
-/* 会话入口折叠在对话列顶部：开着的会话里"换一个会话"是偶发动作，常驻列表
- * 抢的是转录的高度。开始页则把同一个列表摊开着放。 */
-.aw-code-sessions-fold {
-  padding: 6px clamp(16px, 4vw, 56px);
+.aw-code-page.is-rail-hidden > .aw-code-sessions {
+  display: none;
+}
+
+/* --- 左：会话 --- */
+
+.aw-code-sessions {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+}
+
+.aw-code-sessions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  gap: 8px;
   border-bottom: 1px solid var(--aw-border);
 }
 
-.aw-code-sessions-fold summary {
-  width: fit-content;
-  padding: 4px 8px;
-  border-radius: 7px;
+.aw-code-sessions-header strong {
+  font-size: 13px;
+}
+
+.aw-code-sessions-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.aw-code-session-list {
+  display: grid;
+  min-height: 0;
+  padding: 10px 8px;
+  overflow-y: auto;
+  align-content: start;
+}
+
+.aw-code-session-list ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 2px;
+  list-style: none;
+}
+
+.aw-code-sessions-empty {
+  margin: 0;
+  padding: 4px 10px;
   color: var(--aw-text-soft);
   font-size: 12px;
-  cursor: pointer;
-}
-
-.aw-code-sessions-fold summary:hover {
-  background: var(--aw-panel-soft);
-  color: var(--aw-text);
-}
-
-.aw-code-sessions-fold-body {
-  display: grid;
-  gap: 8px;
-  padding: 8px 0 6px;
-  justify-items: start;
-}
-
-.aw-code-sessions-fold .aw-code-recent {
-  width: 100%;
-  max-height: min(40vh, 360px);
-  padding: 0;
-  border-top: 0;
-}
-
-/* The thought in flight. Dimmed and small, because it is not the report --
-   it is the reason to believe the session is still working. Sits above the
-   steps and disappears when the model call that had it finishes. */
-.aw-code-thinking {
-  margin: 12px 0;
-  padding: 8px 12px;
-  border: 1px solid var(--aw-border);
-  border-radius: 9px;
-  background: var(--aw-panel-soft);
-  color: var(--aw-text-muted);
-  font-size: 12px;
-}
-
-.aw-code-thinking > summary {
-  cursor: pointer;
-  color: var(--aw-text-muted);
-}
-
-.aw-code-thinking > p {
-  margin: 8px 0 0;
-  /* The model writes its reasoning with its own line breaks, and a wall of
-     re-flowed prose loses the shape of the argument. */
-  white-space: pre-wrap;
   line-height: 1.6;
+}
+
+/* 一行，多的用省略号。会话是用第一句指令命名的（ADR-047），而指令是一整句话
+ * —— 折叠在转录顶上时列表很矮、换行无所谓，常驻成一条窄栏之后，一句 40 字的
+ * 指令会把一行撑成七行，三个会话就吃掉整屏。完整标题在 title 里，悬停可见。 */
+.aw-code-recent-link {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aw-code-recent-link:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-recent-link[aria-current="page"] {
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+  font-weight: 600;
+}
+
+.aw-code-session-list input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 9px;
+  background: var(--aw-panel);
+  font: inherit;
+}
+
+/* --- 中：对话 --- */
+
+/* 钉住 header 与转录两行，其余交给隐式的 auto 行。子元素数量随状态变——待批准、
+ * 错误、输入框，三个里有两个可能不在——写死行数会让下一个子元素落进一个没被
+ * 描述的位置。 */
+.aw-code-main {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  /* 列必须显式写成 minmax(0, 1fr)。只写 rows 的话这里是一条隐式的 `auto` 轨道，
+   * 它按内容的 max-content 定尺——于是 header 里那个用会话标题当 h1 的元素
+   * （标题就是第一句指令，可以很长）把整条轨道撑到 1013px，塞进 776px 的列里，
+   * 转录右边就被裁掉一截。h1 自己的 nowrap + ellipsis 在这种情况下不生效：
+   * 它被给到的宽度本来就够，超出的是轨道。 */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.aw-code-header {
+  display: flex;
+  align-items: center;
+  min-height: 60px;
+  padding: 10px clamp(16px, 4vw, 42px);
+  gap: 10px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-code-header-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.aw-code-header h1 {
+  overflow: hidden;
+  margin: 0;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-code-workspace-entry {
+  flex: none;
 }
 
 .aw-code-transcript {
@@ -4145,8 +4225,15 @@ pre {
   width: min(820px, 100%);
   margin: 0 auto;
   padding: 0;
-  gap: 18px;
+  gap: 28px;
   list-style: none;
+}
+
+/* 一轮是一叠：指令 → 思考 → 做了什么 → 产出 → 报告 → 想过什么。间距比轮内的
+ * 各块之间大，让「一轮到哪儿为止」不用靠读就能看出来。 */
+.aw-code-turn {
+  display: grid;
+  gap: 10px;
 }
 
 .aw-code-said h3,
@@ -4162,8 +4249,8 @@ pre {
 .aw-code-said p,
 .aw-code-report p {
   margin: 0;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .aw-code-said {
@@ -4177,7 +4264,268 @@ pre {
   border-left: 2px solid var(--aw-border-strong);
 }
 
+/* 正在进行的那一份思考。小、淡，因为它不是报告——它是「这东西还活着」的凭据。
+ * 模型用它自己的换行写推理，重排成一堵墙会丢掉论证的形状。 */
+.aw-code-thinking {
+  padding: 8px 12px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-code-thinking > summary {
+  color: var(--aw-text-muted);
+  cursor: pointer;
+}
+
+.aw-code-thinking > p {
+  margin: 8px 0 0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+/* 做了什么：折叠时是一行摘要，展开是每次工具调用一行。不是 Task 的阶段树——
+ * 没有节点轨、没有第三层折叠，因为编码会话没有图。 */
+.aw-code-actions > summary {
+  display: flex;
+  align-items: baseline;
+  padding: 5px 8px;
+  gap: 8px;
+  border-radius: 8px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.aw-code-actions > summary:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-actions-label {
+  flex: none;
+  font-weight: 600;
+}
+
+.aw-code-actions-digest {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-code-action-list {
+  display: grid;
+  margin: 4px 0 0;
+  padding: 0 0 0 8px;
+  gap: 1px;
+  list-style: none;
+}
+
+.aw-code-action {
+  display: flex;
+  align-items: baseline;
+  padding: 4px 8px;
+  gap: 8px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.aw-code-action-title {
+  flex: none;
+}
+
+/* 主语——文件名、查询——先于动词让位。 */
+.aw-code-action-subject {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-code-action-outcome {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+}
+
+/* 只标两种值得打断读者的结局。跑完的步骤是常态，靠不说话来说它是常态。 */
+.aw-code-action.is-failed .aw-code-action-title,
+.aw-code-action.is-failed .aw-code-action-outcome {
+  color: var(--aw-danger, #b3261e);
+}
+
+.aw-code-action.is-denied .aw-code-action-title,
+.aw-code-action.is-denied .aw-code-action-outcome {
+  color: var(--aw-warning, #8a5300);
+}
+
+/* --- 对话里的产出 --- */
+
+.aw-code-outputs {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.aw-code-output {
+  border: 1px solid var(--aw-border);
+  border-radius: 11px;
+  background: var(--aw-panel);
+  overflow: hidden;
+}
+
+.aw-code-output-open {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  padding: 10px 12px;
+  gap: 9px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-code-output-open:hover:not(:disabled) {
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-output-open:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.aw-code-output-open[aria-current="true"] {
+  box-shadow: inset 2px 0 0 var(--aw-accent);
+}
+
+.aw-code-output-open svg {
+  flex: none;
+  color: var(--aw-text-soft);
+}
+
+.aw-code-output-name {
+  flex: none;
+  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* 元信息在文件名之后、右对齐，窄了先截它——名字是读者要认的，措辞是附注。 */
+.aw-code-output-meta {
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--aw-text-soft);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-code-output-inline > summary {
+  padding: 6px 12px;
+  border-top: 1px solid var(--aw-border);
+  color: var(--aw-text-soft);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.aw-code-output-inline > summary:hover {
+  background: var(--aw-panel-soft);
+}
+
+/* 封顶，因为它在对话流里：一个整屏高的 iframe 会把它下面的报告推出视野，而
+ * 报告才是这一轮的结论。要看大的就点开右边那一列。 */
+.aw-code-output-inline-body {
+  max-height: 360px;
+  padding: 10px 12px;
+  overflow: auto;
+  border-top: 1px solid var(--aw-border);
+}
+
+/* 预览组件自己的高度是按"独占一列"定的（`.aw-preview-frame` 是
+ * min(72vh, 760px)）。在对话里它是一张卡片的一部分，用那个高度的结果是：容器
+ * 滚动条把画面从中间切断——实测一个 18vw 字号的时钟，看到的是数字的上半截。
+ * 与其让容器裁剪，不如让框自己变矮，这样内容是完整的、只是小。
+ * 组件不知道自己被放在哪里，所以这条语境覆盖只能写在这边。 */
+.aw-code-output-inline-body .aw-preview-frame {
+  height: min(30vh, 260px);
+}
+
+.aw-code-output-inline-body .aw-preview-image {
+  max-height: min(30vh, 260px);
+}
+
+/* 沙箱说明在卡片里要更轻：它在右栏是一段独立的注意事项，在这里是一行脚注。 */
+.aw-code-output-inline-body .aw-page-note {
+  margin-bottom: 0;
+  font-size: 11px;
+}
+
+/* --- 想过什么 --- */
+
+.aw-code-trace > summary,
+.aw-code-raw > summary {
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.aw-code-trace > summary:hover,
+.aw-code-raw > summary:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-trace-list {
+  display: grid;
+  margin: 6px 0 0;
+  padding: 0 0 0 8px;
+  gap: 10px;
+  list-style: none;
+}
+
+.aw-code-trace-list p {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--aw-border);
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.aw-code-raw {
+  margin-top: 8px;
+  padding-left: 8px;
+}
+
+.aw-code-raw pre {
+  max-height: 320px;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 9px;
+  background: var(--aw-panel-soft);
+  font-size: 11px;
+}
+
+/* --- 待批准 --- */
+
+/* 贴着输入框，即使读者滚上去看历史：审批是打断，它要的是「眼睛现在就在它
+ * 上面」，而转录会滚走。 */
 .aw-code-approvals {
+  position: sticky;
+  bottom: 0;
   display: grid;
   width: min(820px, 100%);
   margin: 0 auto;
@@ -4204,6 +4552,8 @@ pre {
   gap: 8px;
 }
 
+/* --- 输入框 --- */
+
 .aw-code-composer {
   display: grid;
   width: min(900px, calc(100% - 32px));
@@ -4216,9 +4566,9 @@ pre {
  * 之前它在最右侧栏的头部，和它服务的动作隔着整个屏幕。 */
 .aw-code-composer-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 8px;
   align-items: end;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
 .aw-code-composer textarea {
@@ -4231,10 +4581,9 @@ pre {
   resize: none;
 }
 
-/* The right column: the working set's files, then the opened one's preview.
-   `flex` so the preview takes what the list does not need; the list caps
-   itself only while a preview is open (see the `:has` below). */
-.aw-code-workspace {
+/* --- 右：预览 --- */
+
+.aw-code-preview {
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -4243,50 +4592,100 @@ pre {
   background: var(--aw-sidebar);
 }
 
-.aw-code-workspace header {
+.aw-code-preview-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 12px 14px;
   gap: 8px;
-  padding: 12px 18px 6px;
+  border-bottom: 1px solid var(--aw-border);
 }
 
-.aw-code-workspace h2 {
+.aw-code-preview-header h2 {
+  overflow: hidden;
   margin: 0;
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
-/* 列表和预览分这一列的高度：没开预览时列表拿全部，开了就把大头让给预览、
- * 自己封顶在三分之一屏内滚动。`:has` 已经是这份样式表的既有依赖（见
- * `.aw-code-attach:has(input:disabled)`），所以这里用它不是新的兼容性决定。 */
-.aw-code-workspace ul {
-  display: grid;
-  flex: 1;
+.aw-code-preview-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
+.aw-code-file-view {
+  display: flex;
   min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  padding: 12px 14px;
+  overflow: auto;
+}
+
+.aw-code-file-view pre {
   margin: 0;
-  padding: 6px 12px 12px;
+  padding: 12px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--aw-panel);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 全量目录。标题写全量口径而不是「其他文件」：卡片覆盖不到四类文件——上传进来
+ * 的、事件窗口之外的、ADR-063 之前名字被截掉的、以及尾部对齐丢掉的那些轮的
+ * 产出——说「其他」会暗示卡片已经覆盖了其余。 */
+.aw-code-directory {
+  flex: none;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-code-directory > summary {
+  padding: 10px 14px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.aw-code-directory > summary:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-directory ul {
+  display: grid;
+  max-height: min(40vh, 340px);
+  margin: 0;
+  padding: 6px 8px 12px;
   overflow-y: auto;
   gap: 2px;
   list-style: none;
   align-content: start;
 }
 
-.aw-code-workspace:has(.aw-code-file-view) ul {
-  flex: 0 1 auto;
-  max-height: min(30vh, 280px);
-}
-
-.aw-code-workspace li {
+.aw-code-file-open {
   display: flex;
+  width: 100%;
   align-items: baseline;
   justify-content: space-between;
   padding: 6px 8px;
-  border-radius: 8px;
   gap: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.aw-code-workspace li:hover {
+.aw-code-file-open:hover {
   background: color-mix(in srgb, var(--aw-panel) 70%, transparent);
+}
+
+.aw-code-file-open[aria-current="true"] {
+  background: var(--aw-panel-strong);
 }
 
 .aw-code-file-name {
@@ -4296,94 +4695,20 @@ pre {
 
 .aw-code-workspace-empty {
   margin: 0;
-  padding: 16px 18px;
+  padding: 8px 14px 14px;
   color: var(--aw-text-soft);
   font-size: 12px;
 }
 
-/* 窄屏：工作区退到对话下面，而不是把正文挤成一条缝。 */
-@media (width <= 900px) {
-  .aw-code-page {
-    grid-template-rows: minmax(0, 1fr) auto;
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* --- 附件按钮 --- */
 
-  .aw-code-workspace {
-    max-height: 45vh;
-    min-height: 0;
-    border-top: 1px solid var(--aw-border);
-    border-left: 0;
-  }
-}
-
-/* The way back to a session this browser has already opened. Unfolded on the
-   start page, folded behind `.aw-code-sessions-fold` while a session is open;
-   capped and self-scrolling in both, so a long history stays a list rather
-   than becoming the page. */
-.aw-code-recent {
-  display: grid;
-  max-height: min(38vh, 300px);
-  gap: 6px;
-  padding: 14px 18px;
-  overflow-y: auto;
-  border-top: 1px solid var(--aw-border);
-  align-content: start;
-}
-
-.aw-code-recent h2 {
-  margin: 0;
-  color: var(--aw-text-soft);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.aw-code-recent ul {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.aw-code-recent-link {
-  width: 100%;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--aw-text-soft);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.aw-code-recent-link:hover {
-  background: var(--aw-panel-soft);
-  color: var(--aw-text);
-}
-
-/* The one already open is marked rather than merely un-clickable: a list where
-   every row looks the same cannot answer "which of these am I in". */
-.aw-code-recent-link[aria-current="page"] {
-  background: var(--aw-panel-soft);
-  color: var(--aw-text);
-  font-weight: 600;
-}
-
-/* The upload control is a `label` wrapping a hidden `input[type=file]`, so it
-   has to be told to look like the icon button it sits next to. `display: none`
-   on the input rather than `visibility: hidden`: the label is what takes focus
-   and forwards the click, so the input never needs to be reachable itself. */
 .aw-code-attach {
   display: inline-flex;
+  width: 38px;
+  height: 38px;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--aw-border);
+  border: 1px solid var(--aw-border-strong);
   border-radius: 11px;
   background: var(--aw-panel);
   color: var(--aw-text-soft);
@@ -4400,114 +4725,25 @@ pre {
 
 .aw-code-attach.is-busy,
 .aw-code-attach:has(input:disabled) {
-  cursor: not-allowed;
+  cursor: default;
   opacity: 0.55;
 }
 
-/* A workspace row is a button now, so it has to stop looking like one. */
-.aw-code-file-open {
-  display: flex;
-  width: 100%;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
+/* --- 开始页 --- */
 
-.aw-code-file-open:hover {
-  background: var(--aw-panel-soft);
-}
-
-.aw-code-file-open[aria-current="true"] {
-  background: var(--aw-panel-soft);
-  font-weight: 600;
-}
-
-/* The file itself, under the list it was opened from: the list stays visible,
-   which is what makes "open another one" one click. It takes the rest of the
-   column's height and scrolls inside itself. */
-.aw-code-file-view {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-  margin: 0;
-  gap: 8px;
-  padding: 10px 12px 12px;
-  border-top: 1px solid var(--aw-border);
-  background: var(--aw-panel);
-  overflow-y: auto;
-}
-
-.aw-code-file-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.aw-code-file-view header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-}
-
-.aw-code-file-view h3 {
-  overflow: hidden;
-  margin: 0;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* `pre`, not `pre-wrap`: re-flowing source code destroys the indentation that
-   carries its structure, the same argument `.aw-step-pre.is-json` already
-   makes further up. A long line scrolls sideways within the box; the box is
-   bounded both ways by the column, so neither direction escapes the panel. */
-.aw-code-file-view pre {
-  flex: 1;
-  overflow: auto;
-  min-height: 0;
-  margin: 0;
-  padding: 10px;
-  border-radius: 6px;
-  background: var(--aw-panel-strong);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre;
-  tab-size: 2;
-}
-
-/* --- Code：开始页 --------------------------------------------------------
- *
- * 没有会话时的整页形态：一个居中的开始区。竖直方向压在上三分之一附近而不是
- * 正中 —— 视线落点和 Chat 的空态一致，列表长起来也不会把标题推出屏幕。 */
 .aw-code-start {
   display: grid;
-  height: 100%;
   min-height: 0;
-  padding: clamp(24px, 9vh, 88px) 24px 24px;
+  padding: 24px clamp(16px, 4vw, 56px);
   overflow-y: auto;
+  align-content: center;
   justify-items: center;
-  align-content: start;
 }
 
 .aw-code-start-inner {
   display: grid;
-  width: min(680px, 100%);
-  gap: 16px;
+  width: min(720px, 100%);
+  gap: 14px;
 }
 
 .aw-code-start-head {
@@ -4515,37 +4751,117 @@ pre {
   gap: 8px;
   justify-items: center;
   text-align: center;
-  color: var(--aw-text-soft);
 }
 
 .aw-code-start-head svg {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   color: var(--aw-accent);
 }
 
 .aw-code-start-head h1 {
   margin: 0;
-  color: var(--aw-text);
-  font-size: 20px;
+  font-size: 22px;
 }
 
 .aw-code-start-head p {
-  margin: 0;
   max-width: 46ch;
+  margin: 0;
+  color: var(--aw-text-soft);
   font-size: 13px;
+  line-height: 1.7;
 }
 
-/* 开始页的输入框占满开始区的宽度；最近会话直接摊开在它下面。 */
 .aw-code-start .aw-code-composer {
   width: 100%;
   padding: 0;
 }
 
-.aw-code-start .aw-code-recent {
-  max-height: none;
-  padding: 8px 0 0;
-  border-top: 1px solid var(--aw-border);
+/* --- 窄屏 --- */
+
+/* ≤900px：预览不占列，改成右侧浮层。60px 是 .aw-mobile-nav 的高度。 */
+@media (width <= 900px) {
+  .aw-code-page,
+  .aw-code-page.has-preview {
+    grid-template-columns: 244px minmax(0, 1fr);
+  }
+
+  .aw-code-preview {
+    position: fixed;
+    z-index: 72;
+    inset: 0 0 60px auto;
+    width: min(560px, 94vw);
+    box-shadow: -18px 0 48px rgb(41 39 36 / 12%);
+  }
+
+  .aw-code-preview-backdrop {
+    position: fixed;
+    z-index: 71;
+    inset: 0 0 60px;
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: rgb(41 39 36 / 18%);
+    backdrop-filter: blur(2px);
+  }
+}
+
+/* ≤760px：左栏也变抽屉，逐条对齐 Chat 的那一套。两个开关会打架，所以窄屏
+ * 只留抽屉那一个。 */
+@media (width <= 760px) {
+  .aw-code-page,
+  .aw-code-page.has-preview,
+  .aw-code-page.is-rail-hidden {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aw-code-sessions {
+    display: none;
+  }
+
+  .aw-code-sessions.is-mobile-open {
+    position: fixed;
+    z-index: 72;
+    inset: 0 auto 60px 0;
+    display: flex;
+    width: min(340px, 88vw);
+    box-shadow: 18px 0 48px rgb(41 39 36 / 12%);
+  }
+
+  .aw-code-sessions-backdrop {
+    position: fixed;
+    z-index: 71;
+    inset: 0 0 60px;
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: rgb(41 39 36 / 18%);
+    backdrop-filter: blur(2px);
+  }
+
+  .aw-code-sessions-close,
+  .aw-code-mobile-sessions {
+    display: inline-flex;
+  }
+
+  .aw-code-rail-toggle {
+    display: none;
+  }
+
+  .aw-code-header {
+    padding-right: 12px;
+    padding-left: 8px;
+  }
+}
+
+/* 桌面端默认：这四个只在窄屏出现。 */
+.aw-code-sessions-close,
+.aw-code-mobile-sessions,
+.aw-code-sessions-backdrop,
+.aw-code-preview-backdrop {
+  display: none;
 }
 
 /* The workbench: a tab strip over whichever flow is showing. */
@@ -4659,32 +4975,4 @@ pre {
   margin: 0;
   color: var(--aw-text-soft);
   font-size: 13px;
-}
-
-/* A step is one action: what it was, and what it was aimed at. */
-.aw-code-steps li {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.aw-code-step-title {
-  flex: none;
-}
-
-/* The subject -- a filename, a query -- gives way before the verb does. */
-.aw-code-steps li .aw-code-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Only the two outcomes worth interrupting a reader for. A finished step is
-   the normal case and says so by saying nothing. */
-.aw-code-steps li.is-failed .aw-code-step-title {
-  color: var(--aw-danger, #b3261e);
-}
-
-.aw-code-steps li.is-denied .aw-code-step-title {
-  color: var(--aw-warning, #8a5300);
 }

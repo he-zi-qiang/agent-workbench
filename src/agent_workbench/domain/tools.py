@@ -27,6 +27,7 @@ from agent_workbench.domain.schema import (
     ToolOutputText,
     VersionedModel,
 )
+from agent_workbench.domain.workspace import WorkspaceName
 
 ToolRisk = Literal["read", "write", "external", "destructive"]
 ToolConcurrency = Literal["parallel", "exclusive"]
@@ -109,6 +110,15 @@ class ToolResult(VersionedModel):
     ``content`` is what the model sees. When output exceeds the inline ceiling
     it is written to the artifact store and ``content`` holds a short summary,
     so a large result cannot silently consume the context budget.
+
+    ``workspace_writes`` is a structured fact rather than a sentence about one
+    (ADR-063). Before it, the only machine-readable route to "which file did
+    this step produce" was to parse the prose in ``content`` -- three English
+    sentences in ``adapters/tools/workspace.py`` and ``sandbox.py`` that no
+    test pins -- or to parse ``ToolProposed.argument_preview``, which is
+    bounded at 4096 characters and so truncates the name away precisely when
+    the written body is large. Naming the names is cheaper than either, and it
+    is the tool that knows them.
     """
 
     tool_call_id: Identifier
@@ -116,6 +126,20 @@ class ToolResult(VersionedModel):
     status: ToolResultStatus
     content: ToolOutputText = ""
     artifact: ArtifactRef | None = None
+    #: Write order, deliberately unsorted -- the opposite of
+    #: ``WorkspaceManifest.names()`` one module over, and opposite for the
+    #: reason that makes them different questions. A manifest is a *set* of
+    #: files, so it sorts: two runs that wrote the same files in a different
+    #: order must not read as two different workspaces. This is a *sequence of
+    #: writes by one call*. A sandbox script that produced `plot.svg` and then
+    #: `data.csv` did them in that order, and sorting would report the reverse
+    #: -- attributing to the script an order it never performed.
+    #:
+    #: Empty for every tool that writes nothing, which is most of them, and
+    #: empty on every failure by construction rather than by memory: each write
+    #: tool returns before ``session.version`` advances, so there is no name to
+    #: forget to clear.
+    workspace_writes: tuple[WorkspaceName, ...] = ()
     error: ErrorInfo | None = None
     duration_ms: int | None = Field(default=None, ge=0)
 
@@ -134,6 +158,7 @@ class ToolResult(VersionedModel):
         *,
         content: str = "",
         artifact: ArtifactRef | None = None,
+        workspace_writes: tuple[WorkspaceName, ...] = (),
         duration_ms: int | None = None,
     ) -> ToolResult:
         return cls(
@@ -142,6 +167,7 @@ class ToolResult(VersionedModel):
             status="ok",
             content=content,
             artifact=artifact,
+            workspace_writes=workspace_writes,
             duration_ms=duration_ms,
         )
 

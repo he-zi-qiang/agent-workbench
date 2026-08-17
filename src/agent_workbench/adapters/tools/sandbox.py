@@ -206,6 +206,12 @@ class SandboxRunTool:
         return ToolResult.succeeded(
             invocation.call,
             content=_summary(body, written),
+            # `written` is appended to only after the store accepted a version,
+            # so it names the files that actually landed and never the ones the
+            # script claimed (ADR-063). One script can produce several files,
+            # which is why this is the tool that made the field a tuple rather
+            # than a single name.
+            workspace_writes=tuple(written),
         )
 
 

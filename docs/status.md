@@ -22,6 +22,113 @@
 
 ---
 
+## 2026-08-17（未合并，分支 `code-console-redesign`）：Code 是对话，不是任务时间线
+
+Code 控制台的三处返工，与它们要求的一条契约。一份 ADR（0063）。
+
+**门禁**：后端确定性 `pytest` 2412 passed / 739 skipped；`ruff format` +
+`ruff check` + `pyright` 0 errors；`agent-config-check --profile development`
+`status: ok`（需要 `AW_DATABASE__*` 三个 DSN 在环境里，`scripts/dev.sh` 负责
+导出——裸壳跑它在改动前后同样报 `Field required`，与本次无关），配置 schema
+仍是 `1.17`。前端 `eslint --max-warnings 0` + `tsc -b` + `vitest`
+**329 passed** + `vite build`。服务型四套件本次未跑：无迁移、无库结构变更——
+但 `events.payload` 是 JSONB，落库 payload 的**形状**变了，所以「不触及持久化」
+是错的说法，此处更正。
+
+**实机证据**：`scripts/dev.sh demo-api` + `demo-worker` 起真栈，Code 会话
+`写一个 bars.html…` 一轮跑通；事件流里 `workspace_write` 的 `ToolCompleted`
+带 `workspace_writes: ["bars.html"]`，同轮的 `workspace_list`、`workspace_read`
+与只做校验的 `sandbox_run` 都是 `[]`。产出卡片就地把该页跑在 ADR-062 的沙箱框里。
+
+### `ToolCompleted.workspace_writes` 不进 `record_step_inputs` 门（[ADR-063](./adr/0063-a-produced-name-is-a-fact-not-a-sentence.md)）
+
+`ToolResult` 与 `ToolCompleted` 各新增 `workspace_writes: tuple[WorkspaceName,
+...] = ()`，由 `workspace_write`、`workspace_edit`、`sandbox_run` 填写，
+`ToolGateway._record` 在 `record_step_inputs` 门**外**赋值。**带默认值的领域
+叶子字段，不抬 `DOMAIN_SCHEMA_VERSION`**——先例是 ADR-035 §4，不是 ADR-042/061
+（那两份记的是 `config_schema_version`，评审指出后已在 ADR 内更正）。抬版本会让
+每条历史 payload 立刻读不出来，所以它在这里根本不是兼容杠杆。零迁移；两个方向
+不对称：新码读旧行安全，**旧码读新行会被 quarantine**（`extra="forbid"`），
+滚动升级先升读的一侧。
+
+**为什么不进那道门**：门管的是**内容**——参数体、提示词、工具回答的正文，都是
+部署可能不愿意留副本的东西。文件名不复制内容，发起调用的 principal 本来就能列
+出整个工作区，重复一个他此刻查得到的名字不构成新披露。而进了门，字段就会在
+**唯一需要它的部署里消失**：preview 关着的部署，正是老路（解析 preview）已经
+失效的那个。与 ADR-054 的界线也划清了——那是「无条件复制正文」的例外，本条
+根本没有复制正文。
+
+**老路为什么不是契约**：`ToolProposed.argument_preview` 是
+`json.dumps(sort_keys=True)`，`workspace_write` 的键序是
+`content < media_type < name`，`BoundedText` 上限 4096——**正文一过 4KB，名字
+正好被截掉**，失效条件精确挑中最值得展示的大产物。另一条路是三处英文散文
+（workspace.py 两处、sandbox.py 一处、mcp_workspace.py 一处），没有任何测试钉住
+措辞。**第四处是评审揪出来的**：`mcp_workspace.py` 把 MCP 产物绑进工作集时同样
+只留一句话，而那个模块的 docstring 里记着它诞生的原因——一个 Word Task 的全部
+产物就是那份 `.docx`，评审却以「工作区是空的」判它失败。这个仓库唯一为「名字没
+被记下来」赔进去过一整个 Task 的文件类型，正是它。已补字段与两条测试。
+
+**永久看门测试**：`test_a_produced_filename_survives_a_deployment_that_records_no_previews`
+——`record_step_inputs=False` 时字段照样有值，且同一条测试钉住
+`output_preview` 与 `argument_preview` **都是空的**。没有第二条断言，将来把字段
+挪进门里再把门打开，这条测试会为了错误的理由变绿。
+
+**两份 golden 重新生成**（脚本重跑生产者，不手改 JSON）：
+`tests/cli/golden/demo_tool_round.jsonl` 与
+`tests/domain/golden/domain_v1.json` 各只多一行 `"workspace_writes": []`，
+`git diff` 上没有别的东西移动；三个 `.txt` golden 逐字节未变（文本渲染不打印
+完整 payload）。**规格没预告 domain golden 也会红**——它同样存着 `ToolResult`
+的全量序列化，是第二处需要重新生成的地方。
+
+**留下的边界**：部分失败的 `sandbox_run` 返回 `ToolResult.failed`，网关据此发
+`ToolFailed`，那个事件没有这个字段——落盘的文件名只在错误消息里。覆盖失败方向
+要一起改 `ToolFailed`，是第二个决定。已由
+`test_a_partly_refused_run_reports_its_landed_files_only_in_the_message` 钉住，
+免得后来的人当 bug 修一半。产出卡片预览的是那个名字**此刻**的字节，登记为
+known-gaps F-13：修它要一条按轮次寻址的读取路，而
+`tests/architecture/test_a_workspace_version_is_never_asked_for.py` 正是为了
+关着那个入口而存在。
+
+### Code 控制台：一列对话，产出在对话里（随附前端）
+
+三条返工，各自的护栏测试写在括号里。
+
+**思考不再重复。** 改前一次模型调用的推理最多同屏三份：顶部流式块、步骤里的
+「思考过程」区块、以及同一步骤原始 JSON 里的 `thinking_preview`——逐字相同，
+实测一轮四次调用即四组。改后靠**构造**互斥而非靠时序：`useCodeStream` 在
+`ModelCompleted` 到达时清空直播文本，`buildTurnBlocks` 的摘录**只**从
+`ModelCompleted` 取，同一 `model_call_id` 不可能同时在两个集合里
+（`shows the reasoning of one model call exactly once`）。
+
+**不再复用 Task 的形状。** Code 停止调用 `StepStream` / `stepDetail` /
+`workTimeline`，`turnStages.ts` 删除。共享组件**一个字符未改**——Work 与 Chat
+的不回归是结构性的，不是"小心别改坏"。换成一轮一块：指令 → 思考 → 做了什么 →
+产出 → 报告 → 想过什么。原始事件从"每事件一折"收敛成"每轮一折"，可达性未减
+（`keeps run and model bookkeeping out of the action list but not out of the record`）。
+
+**布局三区。** 左为常驻会话栏（重命名、删除确认、移动端抽屉均保留），中为对话，
+右为**按需挂载**的预览面——旧条件是 `files.length > 0`，于是第一轮之后右列无条件
+吃掉 `clamp(320px, 40%, 560px)`，1280px 窗口里对话只剩 768px
+（`keeps the whole width until the reader asks to look at something`）。
+
+**产出在对话里，且在跑完之前就在**（`shows a produced file as a card before the
+turn has finished`）。归属规则是纯函数，11 条测试在 `turnBlocks.test.ts`：一级来源
+是 ADR-063 的结构化字段，二级回落到 `argument_preview` 的 `name`（覆盖 ADR-063
+之前 <4KB 的旧写入），**两者都没有就不出卡，不猜**。指令与 run 按**尾部**对齐——
+`MessageView` 不带 `run_id`，而事件流有 `KEPT_EVENTS = 2000` 的窗口，头部对齐会
+让每一块整体错位。`m > n`（另一个标签页在同会话跑过轮）时丢掉最旧的几个 run 而
+不是错配，丢了几轮在右栏标题里说出来。
+
+**顺带修掉的**：首轮提交后读者自己那句指令会消失一帧——乐观追加的消息被
+`loadedFor` 守卫在导航时丢弃，转录显示「这个会话还是空的」。指令改挂独立的
+`pending`，与服务端转录在同一次 React 批更新里交接；失败路径**不清** `pending`，
+因为服务端在 run 之前就 append 了它，清掉会让屏幕上唯一的记录凭空消失
+（`shows the report a turn came back with` 邻近用例覆盖）。
+
+**已知代价**：产出卡片预览的是那个文件名**此刻**的字节，不是那一轮当时的字节
+（known-gaps F-13）。卡片在点击**之前**就说出来——「第 N 轮又改过，预览的是最新
+内容」——而不是点开之后让读者自己发现。
+
 ## 2026-08-17（未合并，分支 `preview-sandbox-and-thinking`）：产物能跑，过程能看
 
 一份对 Claude Code 实现的调研，参考移植两件事：产物预览的分层沙箱、思考过程

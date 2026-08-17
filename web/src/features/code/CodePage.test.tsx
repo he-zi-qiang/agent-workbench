@@ -86,6 +86,24 @@ function mounted(entry: string = `/code/${SESSION}`) {
   );
 }
 
+/**
+ * Open the right column on the full listing.
+ *
+ * A file is reached in two clicks now rather than one, and that is the trade
+ * this layout makes on purpose: the column no longer mounts itself the moment
+ * a session has any file at all, so the conversation keeps the width until
+ * somebody asks for it. Produced files skip this entirely -- they are cards in
+ * the turn that made them.
+ */
+async function openWorkspace(
+  user: ReturnType<typeof userEvent.setup>,
+  count: number,
+) {
+  await user.click(
+    await screen.findByRole("button", { name: `工作区 ${String(count)}` }),
+  );
+}
+
 beforeEach(() => {
   // Call counts are what two of these tests assert on, and a mock is shared by
   // the whole file: without this, "was never called" means "was not called
@@ -304,7 +322,8 @@ describe("CodePage", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("lists the files the session has produced", async () => {
+  it("keeps the whole width until the reader asks to look at something", async () => {
+    const user = userEvent.setup();
     vi.mocked(getCodeWorkspace).mockResolvedValue({
       files: [
         { name: "notes.md", size_bytes: 2048, media_type: "text/markdown" },
@@ -313,7 +332,15 @@ describe("CodePage", () => {
 
     mounted();
 
-    const pane = await screen.findByRole("complementary", { name: "工作区文件" });
+    // Having files is no longer what mounts the right column. It used to be,
+    // and the cost was permanent: from the first turn onward the column took
+    // up to 560px whether or not anybody had asked to see anything.
+    const entry = await screen.findByRole("button", { name: "工作区 1" });
+    expect(screen.queryByRole("complementary", { name: "预览" })).not.toBeInTheDocument();
+
+    await user.click(entry);
+
+    const pane = await screen.findByRole("complementary", { name: "预览" });
     expect(within(pane).getByText("notes.md")).toBeInTheDocument();
     expect(within(pane).getByText("2.0 KB")).toBeInTheDocument();
   });
@@ -417,31 +444,94 @@ describe("CodePage", () => {
     await user.type(screen.getByLabelText("要做的事"), "write notes.md");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
-    const steps = await screen.findByRole("region", { name: "执行过程" });
+    const turns = await screen.findByRole("region", { name: "编码会话" });
     // Six events, one action, inside one turn. Rendered one row per event this
     // read "模型调用已开始 / 模型调用已完成 / 工具调用已提出 / 权限检查已完成 /
     // 工具调用已开始 / 工具调用已完成" -- the log's vocabulary, leaving a reader
     // to work out that a file was written.
     //
-    // Counted as the turn's own direct rows. `getAllByRole("listitem")` sees
-    // every level at once -- the turn, the action, and the six folded events
-    // that stay in the DOM inside a closed `details` -- so it answers "how deep
-    // is the tree" rather than the question here, which is how many actions the
-    // reader is offered.
-    const actions = steps.querySelectorAll(
-      ".aw-stream-step > .aw-stream-events > li",
-    );
-    expect(actions).toHaveLength(1);
-    expect(within(steps).getByText("第 1 轮")).toBeInTheDocument();
-    // Twice, and both are wanted: the collapsed turn carries a digest of what
-    // it did, and the row inside it is the action itself. A closed turn that
-    // said only "第 1 轮" would make the reader open every one to find the
-    // interesting one.
-    expect(within(steps).getAllByText("写入工作区")).toHaveLength(2);
-    // And what it was aimed at, which is the half that says *which* file. Also
-    // more than once: on the folded action row, and again inside it on the
-    // proposal that names the argument.
-    expect(within(steps).getAllByText("notes.md").length).toBeGreaterThan(0);
+    // Counted as the action rows themselves. `getAllByRole("listitem")` sees
+    // every level at once -- the turn, the action, the produced-file card --
+    // so it answers "how deep is the tree" rather than the question here,
+    // which is how many actions the reader is offered.
+    expect(turns.querySelectorAll(".aw-code-action")).toHaveLength(1);
+    // No `第 N 轮` anywhere: that was a pseudo-stage invented so Work's
+    // component had something to draw a node dot beside. The instruction is
+    // already the heading of this block, and numbering it again named the same
+    // thing twice.
+    expect(within(turns).queryByText(/^第 \d+ 轮$/)).not.toBeInTheDocument();
+    // Twice, and both are wanted -- but they are on different layers, which is
+    // what makes it not a repetition: the digest is what a *collapsed* 做了什么
+    // says, and the row is what opening it shows. A closed fold that said only
+    // "做了什么" would make the reader open every turn to find the interesting one.
+    expect(within(turns).getAllByText("写入工作区")).toHaveLength(2);
+    // The file it produced is a card in the conversation, not a row in a pane
+    // on the far side of the screen.
+    const card = within(turns).getByRole("button", { name: /notes\.md/ });
+    expect(card).toBeInTheDocument();
+  });
+
+  it("shows a produced file as a card before the turn has finished", async () => {
+    const user = userEvent.setup();
+    // Never resolves: the claim is about *when* the card appears, and the turn
+    // must still be in flight when it is asserted. There is no RunCompleted in
+    // the stream below either -- nothing has told the page this turn is over.
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [
+        { name: "clock.html", size_bytes: 1174, media_type: "text/html" },
+      ],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      thinking: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolProposed",
+          sequence: 1,
+          payload: {
+            kind: "ToolProposed",
+            tool_call_id: "call_1",
+            tool_name: "workspace_write",
+          },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolCompleted",
+          sequence: 2,
+          payload: {
+            kind: "ToolCompleted",
+            tool_call_id: "call_1",
+            // The structured fact, published outside the observability gate
+            // (ADR-063). The argument preview is deliberately absent here:
+            // a 1174-byte page would carry its name, but a large one would
+            // have it truncated away, and the card must not depend on size.
+            workspace_writes: ["clock.html"],
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "写一个时钟页面");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    // "生成的文件应该在对话生成中" is a claim about timing as much as place.
+    // A card that only appeared once the report landed would be a file list
+    // with better placement, not a record of what the instruction was making.
+    const turns = await screen.findByRole("region", { name: "编码会话" });
+    const outputs = await within(turns).findByRole("list", {
+      name: "这一轮产出的文件",
+    });
+    expect(within(outputs).getByText("clock.html")).toBeInTheDocument();
+    // And it says what the call did without claiming what the file is: this
+    // stream never saw an earlier write, but the workspace has a history older
+    // than the event window, so "新建" would be a guess.
+    expect(within(outputs).getByText(/写入 · 1\.1 KB · HTML/)).toBeInTheDocument();
   });
 
   it("keeps a finished turn's steps on screen", async () => {
@@ -453,6 +543,19 @@ describe("CodePage", () => {
       status: "completed",
       stop_reason: "completed",
     });
+    // The server appends the user message before the run starts, so a settled
+    // turn always reads back with its instruction. The block that holds the
+    // steps hangs off that instruction, which is why this mock has to have it:
+    // a run with no instruction to pair with is deliberately dropped rather
+    // than guessed onto a neighbouring turn.
+    vi.mocked(getCodeHistory)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValue({
+        messages: [
+          { role: "user", text: "write notes.md" },
+          { role: "assistant", text: "Wrote notes.md." },
+        ],
+      });
     vi.mocked(useCodeStream).mockReturnValue({
       thinking: "",
       steps: [
@@ -467,6 +570,14 @@ describe("CodePage", () => {
             tool_call_id: "call_1",
             tool_name: "workspace_write",
           },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:01Z",
+          event_type: "RunCompleted",
+          sequence: 2,
+          payload: { kind: "RunCompleted" },
         },
       ] as unknown as ReturnType<typeof useCodeStream>["steps"],
     });
@@ -487,9 +598,14 @@ describe("CodePage", () => {
     await waitFor(() => {
       expect(vi.mocked(getCodeHistory)).toHaveBeenCalledTimes(2);
     });
-    const steps = screen.getByRole("region", { name: "执行过程" });
-    expect(within(steps).getByText("第 1 轮")).toBeInTheDocument();
-    expect(within(steps).getByText("写入工作区")).toBeInTheDocument();
+    const turns = screen.getByRole("region", { name: "编码会话" });
+    expect(within(turns).getByText("做了什么")).toBeInTheDocument();
+    // The digest on the collapsed fold, so a settled turn says what it did
+    // without being opened, and the action row inside it for when it is.
+    expect(turns.querySelector(".aw-code-actions-digest")?.textContent).toBe(
+      "写入工作区",
+    );
+    expect(turns.querySelectorAll(".aw-code-action")).toHaveLength(1);
   });
 
   it("lists sessions by the name their first instruction gave them", async () => {
@@ -532,7 +648,7 @@ describe("CodePage", () => {
       expect(vi.mocked(getCodeWorkspace)).toHaveBeenCalled();
     });
     expect(
-      screen.queryByRole("complementary", { name: "工作区文件" }),
+      screen.queryByRole("button", { name: /^工作区 / }),
     ).not.toBeInTheDocument();
 
     // The control sits with the composer: attaching a file is part of asking,
@@ -545,9 +661,15 @@ describe("CodePage", () => {
     });
     // The listing the write answered with, not a refetch: the endpoint returns
     // it precisely so the pane does not have to ask again for something it was
-    // just told. And the pane exists now that there is a product to show.
-    const pane = await screen.findByRole("complementary", { name: "工作区文件" });
+    // just told.
+    //
+    // An uploaded file is exactly the case the produced-file cards cannot
+    // cover -- no tool call wrote it, so no event names it -- which is why the
+    // panel's fold is titled with the full count rather than "其他文件".
+    await user.click(await screen.findByRole("button", { name: "工作区 1" }));
+    const pane = await screen.findByRole("complementary", { name: "预览" });
     expect(await within(pane).findByText("notes.txt")).toBeInTheDocument();
+    expect(within(pane).getByText(/工作区全部文件（1）/)).toBeInTheDocument();
   });
 
   it("opens on a centered start when there is no session", async () => {
@@ -576,7 +698,7 @@ describe("CodePage", () => {
     ).toBeInTheDocument();
     // No panes about a session that does not exist.
     expect(
-      screen.queryByRole("complementary", { name: "工作区文件" }),
+      screen.queryByRole("complementary", { name: "预览" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("region", { name: "编码会话" }),
@@ -693,7 +815,8 @@ describe("CodePage", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not announce past sessions as files this turn produced", async () => {
+  it("keeps sessions and files in separate landmarks", async () => {
+    const user = userEvent.setup();
     vi.mocked(getCodeWorkspace).mockResolvedValue({
       files: [{ name: "notes.md", size_bytes: 12, media_type: "text/markdown" }],
     });
@@ -709,13 +832,74 @@ describe("CodePage", () => {
 
     mounted();
 
-    const pane = await screen.findByRole("complementary", { name: "工作区文件" });
-    // The two lists sit in one column and looked fine either way. Nested, the
-    // session rows were rows of the region labelled 工作区文件 -- so anything
-    // reading that region by its label, a screen reader first among them, read
-    // out session ids as files.
-    expect(within(pane).getAllByRole("listitem")).toHaveLength(1);
+    // The two lists used to sit in one column, and nested that way the session
+    // rows were rows of the region labelled 工作区文件 -- so anything reading
+    // that region by its label, a screen reader first among them, read out
+    // session ids as files. They are now two landmarks on opposite sides.
+    const rail = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    expect(within(rail).getByText("上一个会话")).toBeInTheDocument();
+    expect(within(rail).queryByText("notes.md")).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole("button", { name: "工作区 1" }));
+    const pane = await screen.findByRole("complementary", { name: "预览" });
+    expect(within(pane).getByText("notes.md")).toBeInTheDocument();
     expect(within(pane).queryByText("上一个会话")).not.toBeInTheDocument();
+  });
+
+  it("shows the reasoning of one model call exactly once", async () => {
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    vi.mocked(useCodeStream).mockReturnValue({
+      // The call still reasoning. `useCodeStream` clears this the moment that
+      // call's ModelCompleted arrives, which is the other half of the
+      // invariant asserted below.
+      thinking: "现在该把文件读回来核对一遍",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ModelCompleted",
+          sequence: 1,
+          payload: {
+            kind: "ModelCompleted",
+            model_call_id: "mc_1",
+            text: "",
+            tool_call_ids: ["call_1"],
+            thinking_preview: "先建一个空的 clock.html",
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "写一个时钟页面");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const turns = await screen.findByRole("region", { name: "编码会话" });
+    // The guard for the complaint that started this. Before it, one call's
+    // excerpt could be on screen three times at once: streaming at the top of
+    // the page, formatted as a 思考过程 body inside its step, and verbatim
+    // again inside that step's raw JSON payload dump.
+    //
+    // Once each, and never the same call twice, because the two sets are
+    // disjoint by construction: the live text belongs to a call with no
+    // ModelCompleted, and `reasonings` is built only from ModelCompleted.
+    expect(within(turns).getAllByText("先建一个空的 clock.html")).toHaveLength(1);
+    expect(
+      within(turns).getAllByText("现在该把文件读回来核对一遍"),
+    ).toHaveLength(1);
+    // And they are in different places, doing different jobs: the finished one
+    // is filed under the turn's record, the live one is the reason to believe
+    // the session is still working.
+    const trace = within(turns).getByText("想过什么").closest("details");
+    expect(trace).not.toBeNull();
+    expect(
+      within(trace as HTMLElement).getByText("先建一个空的 clock.html"),
+    ).toBeInTheDocument();
+    expect(
+      within(trace as HTMLElement).queryByText("现在该把文件读回来核对一遍"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows what a text file holds, without spending a turn to ask", async () => {
@@ -729,6 +913,7 @@ describe("CodePage", () => {
     });
 
     mounted();
+    await openWorkspace(user, 1);
     await user.click(await screen.findByRole("button", { name: /notes\.md/ }));
 
     // Before this the only way to see a file was to ask the agent to read it
@@ -747,6 +932,7 @@ describe("CodePage", () => {
     });
 
     mounted();
+    await openWorkspace(user, 1);
     await user.click(await screen.findByRole("button", { name: /report\.docx/ }));
 
     expect(await screen.findByText("这个类型只能下载。")).toBeInTheDocument();
@@ -772,6 +958,7 @@ describe("CodePage", () => {
     });
 
     mounted();
+    await openWorkspace(user, 1);
     await user.click(await screen.findByRole("button", { name: /demo\.html/ }));
 
     // Rendered, not read: the page an agent builds only answers "did it
@@ -794,6 +981,7 @@ describe("CodePage", () => {
     });
 
     mounted();
+    await openWorkspace(user, 1);
     await user.click(await screen.findByRole("button", { name: /big\.txt/ }));
 
     // A truncated preview that said nothing would read as a complete file, and

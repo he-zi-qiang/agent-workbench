@@ -20,6 +20,7 @@ from agent_workbench.domain.events import (
     EventEnvelope,
     PermissionRequested,
     ToolApprovalDecided,
+    ToolCompleted,
     ToolProposed,
 )
 from agent_workbench.domain.policies import (
@@ -78,8 +79,14 @@ def _ticking(step: float = 0.004) -> Callable[[], float]:
 class _Search:
     """A recording tool with a schema worth validating."""
 
-    def __init__(self, *, schema: JsonObject | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        schema: JsonObject | None = None,
+        workspace_writes: tuple[str, ...] = (),
+    ) -> None:
         self.calls: list[ToolCall] = []
+        self._workspace_writes = workspace_writes
         spec = ToolSpec(
             name="search",
             description="Search the local corpus.",
@@ -93,7 +100,11 @@ class _Search:
 
     async def _handler(self, invocation: ToolInvocation) -> ToolResult:
         self.calls.append(invocation.call)
-        return ToolResult.succeeded(invocation.call, content="1 hit")
+        return ToolResult.succeeded(
+            invocation.call,
+            content="1 hit",
+            workspace_writes=self._workspace_writes,
+        )
 
 
 class _ScriptedPolicy:
@@ -989,6 +1000,45 @@ def test_a_call_held_for_a_human_shows_them_what_they_are_permitting() -> None:
 
     assert "rm -rf /tmp/x" in _payload(stored, PermissionRequested).approval_preview
     assert _payload(stored, ToolProposed).argument_preview == ""
+
+
+def test_a_produced_filename_survives_a_deployment_that_records_no_previews() -> None:
+    """ADR-063's whole reason to exist, and the only place it can be guarded.
+
+    ``record_step_inputs`` is off here, so ``output_preview`` is empty and the
+    proposal's ``argument_preview`` is empty with it -- which is exactly the
+    deployment where the old way of recovering a produced name (parse the
+    preview) recovers nothing. The name still has to be on the event, because a
+    name is not content: the same principal can already list the whole
+    workspace, so publishing it discloses nothing the preview gate was written
+    to withhold.
+
+    The second and third assertions are the control. If this test ever passes
+    because somebody moved ``workspace_writes`` under the gate and turned the
+    gate on, it is measuring nothing.
+    """
+
+    harness = _Harness(
+        tool=_Search(workspace_writes=("report.md",)),
+        record_step_inputs=False,
+    )
+
+    _execute(harness, _call(query="fusion"))
+    stored = events_of(harness)
+
+    assert _payload(stored, ToolCompleted).workspace_writes == ("report.md",)
+    assert _payload(stored, ToolCompleted).output_preview == ""
+    assert _payload(stored, ToolProposed).argument_preview == ""
+
+
+def test_a_call_that_wrote_nothing_says_so_rather_than_guessing() -> None:
+    """The control for the field: it reports writes, it does not infer them."""
+
+    harness = _Harness(record_step_inputs=True)
+
+    _execute(harness, _call(query="fusion"))
+
+    assert _payload(events_of(harness), ToolCompleted).workspace_writes == ()
 
 
 def test_a_deployment_with_no_gate_shows_nothing_because_it_asks_nobody() -> None:

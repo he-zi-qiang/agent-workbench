@@ -112,6 +112,17 @@ export function KeyValue({ label, value }: { label: string; value: ReactNode }) 
   );
 }
 
+/**
+ * A file size, for a line that also has a name on it.
+ *
+ * One decimal above a kilobyte and none below: "1.0 KB" beside "写入" reads as
+ * a size, "1024 B" reads as a number the reader has to convert.
+ */
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${String(bytes)} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
 export function shortId(value: string, length = 12): string {
   if (value.length <= length) return value;
   return `${value.slice(0, Math.max(4, length - 5))}…${value.slice(-4)}`;

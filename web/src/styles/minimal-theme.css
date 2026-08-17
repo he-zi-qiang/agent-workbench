@@ -119,6 +119,7 @@ select {
 
 .aw-context-sidebar,
 .aw-chat-sessions,
+.aw-code-sessions,
 .aw-work-sidebar {
   background: var(--aw-sidebar);
 }
@@ -126,8 +127,11 @@ select {
 .aw-context-header,
 .aw-feature-header,
 .aw-chat-sessions-header,
+.aw-code-sessions-header,
+.aw-code-preview-header,
 .aw-pane-header,
 .aw-chat-header,
+.aw-code-header,
 .aw-work-detail-header {
   border-bottom-color: var(--aw-border);
   background: color-mix(in srgb, var(--aw-window) 96%, transparent);
@@ -310,6 +314,16 @@ select {
 
 .aw-chat-page {
   grid-template-columns: 252px minmax(0, 1fr);
+}
+
+/* The same rail as Chat's, and deliberately the same number: two consoles
+   whose left columns differ by 8px read as a rendering bug, not a design. */
+.aw-code-page {
+  grid-template-columns: 252px minmax(0, 1fr);
+}
+
+.aw-code-page.has-preview {
+  grid-template-columns: 252px minmax(0, 1fr) clamp(320px, 34%, 560px);
 }
 
 .aw-chat-sessions {
@@ -522,7 +536,7 @@ select {
  * its place, and the one surface that should read as paper.
  */
 
-.aw-code-workspace {
+.aw-code-preview {
   border-left-color: var(--aw-border);
 }
 
@@ -547,20 +561,24 @@ select {
   border-radius: 10px;
 }
 
-.aw-code-recent {
-  padding: 12px 8px;
-  border-top-color: var(--aw-border);
-}
-
-.aw-code-workspace ul {
+.aw-code-session-list,
+.aw-code-directory ul {
   padding: 10px 8px;
   gap: 2px;
 }
 
-.aw-code-workspace header,
-.aw-code-recent h2 {
-  padding-right: 10px;
-  padding-left: 10px;
+/* A produced file is the one card in this page that should read as an object
+   rather than as a row: it is the thing the turn made. Softer than app.css's
+   default border, because on this theme a hard rectangle inside the reading
+   column reads as a warning. */
+.aw-code-output {
+  border-color: var(--aw-border);
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-output-inline-body,
+.aw-code-output-inline > summary {
+  border-top-color: var(--aw-border);
 }
 
 /* The composer is the same control Chat's is, and on this theme Chat's has no
@@ -685,7 +703,8 @@ select {
     background: rgb(255 255 255 / 96%);
   }
 
-  .aw-chat-sessions {
+  .aw-chat-sessions,
+  .aw-code-sessions {
     display: none;
   }
 
@@ -715,7 +734,9 @@ select {
   }
 
   .aw-chat-sessions-close,
-  .aw-chat-mobile-sessions {
+  .aw-chat-mobile-sessions,
+  .aw-code-sessions-close,
+  .aw-code-mobile-sessions {
     display: inline-flex;
   }
 
