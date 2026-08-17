@@ -66,7 +66,12 @@ from agent_workbench.domain.runs import (
     StopReason,
     TokenUsage,
 )
-from agent_workbench.domain.schema import ANSWER_TEXT_LIMIT, BoundedText, bounded
+from agent_workbench.domain.schema import (
+    ANSWER_TEXT_LIMIT,
+    BoundedText,
+    bounded,
+    bounded_thinking,
+)
 from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec, align_results
 from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.event_log import EventSink
@@ -173,10 +178,13 @@ class _ModelTurn:
     # Set when the turn failed for a reason the loop must report as something
     # other than a plain error, such as running out of run deadline.
     stop_reason: StopReason | None = None
-    # The reasoning that preceded the text, already clipped to the preview
-    # ceiling. Never joins `text`: thinking must not re-enter the ledger the
-    # next request is built from (ADR-061) -- its only durable home is
-    # `ModelCompleted.thinking_preview`.
+    # The reasoning that preceded the text, already clipped to the thinking
+    # ceiling. Never joins `text`, and never re-enters the ledger the next
+    # request is built from -- but that is a decision of ours rather than a
+    # requirement of the provider's, which is what the note here used to imply.
+    # DeepSeek accepts the next round with the reasoning, without it, and with a
+    # truncated copy of it (measured 2026-08-17; ADR-064). Its only durable home
+    # is `ModelCompleted.thinking_preview`.
     thinking: str = ""
 
 
@@ -671,10 +679,13 @@ class ClaudeLikeAgentRuntime:
             tokens,
             finish,
             error,
-            # At the preview ceiling, not the answer's: the full chain already
-            # streamed as transient deltas, and the durable record describes
-            # rather than copies (ADR-061).
-            thinking=bounded("".join(thinking_parts)),
+            # On the thinking ceiling and cut from the middle, not the end: the
+            # full chain already streamed as transient deltas and the durable
+            # record describes rather than copies (ADR-061), but what it keeps
+            # has to include the conclusion. `bounded()` would keep the opening
+            # and drop the sentence that says what the model decided to do
+            # (ADR-064).
+            thinking=bounded_thinking("".join(thinking_parts)),
         )
 
     async def _terminal_for_turn(

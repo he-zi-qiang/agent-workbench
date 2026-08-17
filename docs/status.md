@@ -22,6 +22,82 @@
 
 ---
 
+## 2026-08-17（未合并，分支 `code-thinking-interleaved`）：一段思考属于它促成的那次动作
+
+Code 的思考渲染与留痕，对照 Claude Code 与 Codex 的实现做的一次返工。一份 ADR
+（0064，取代 ADR-063 §5、细化 ADR-061 §2、更正 ADR-061 §4 的前提）。
+
+**门禁**：后端 `pytest` 2421 passed / 739 skipped；`ruff format` + `ruff check` +
+`pyright` 0 errors。前端 `eslint --max-warnings 0` + `tsc -b` + `vitest`
+**341 passed** + `vite build`。服务型四套件未跑：无迁移、无库结构变更（
+`thinking_preview` 的上限放宽会让落库 JSONB 的**值**变长，形状不变）。
+
+### 调研：参考实现里哪一半可移植（[ADR-064](./adr/0064-a-thought-belongs-to-the-action-it-caused.md)）
+
+一手证据两路。Claude Code：本机 `~/.claude/projects/*.jsonl` 的真实会话，一条
+记录一个 content block，形状计数 381 `tool_use` / 171 `thinking` / 109 `text`，
+无一条混排，磁盘顺序是 `thinking → tool_use → tool_use → thinking → …`。Codex：
+开源实现，推理在 scrollback 里 `dim().italic()`、就地渲染在它促成的动作上方——
+这是四份材料里**唯一从源码验证过**的渲染列，UI 以它为准。
+
+**用户看得见的那一半全部可移植**（每步一思、就地交错、实时与回放同路、无推理时
+不留占位）；**不可移植的那一半全部落在管道里**（Anthropic 的 `signature`、
+OpenAI 的 `encrypted_content`、`redacted_thinking`——DeepSeek 的 Chat Completions
+wire 没有这些原语）。被 provider 强制的范围，恰好在用户抱怨开始的地方结束。
+
+### 顺序信息一直都在，是浏览器把它扔了
+
+实测一次真实会话的事件流（27 条，`sequence` 单调）：`ModelStarted →
+ModelCompleted(思考, 提出调用) → ToolProposed → ToolCompleted → …`，与 Claude
+Code transcript 同形。更关键的是 `stepGroups.ts` **早就**把无正文的模型轮前置
+合并进它命名的第一个工具组——携带 `thinking_preview` 的那条事件在已发布的代码里
+就已经在正确的组、正确的位置。`turnBlocks.ts` 却另建了一份扁平的 `reasonings`，
+两份列表来自同一个有序数组而再没接回去。**交错是纯前端改动，零后端新数据。**
+
+改后一轮的 DOM 顺序：指令 → 步骤时间线（每步：思考在它促成的动作正上方）→
+产出卡 → 报告 → 原始事件。**没有任何抽屉挡在读者与「做了什么、为什么」之间**；
+此前两个默认关闭的 `<details>` 意味着不点两次看不到一条命令。折叠单位从「一轮
+的全部推理」缩到「一段推理的正文」，折叠行是它的第一句。
+
+实时→定稿是**原地晋升**：`useCodeStream` 清空实时文本那一行**一字未改**（它与
+三条测试一起钉住互斥不变量），改的是另一半——那段文字消失是因为同一位置出现了
+它的定稿行。React key 用 `modelCallId` 而非组 key，否则同一次调用从 `model:mc_2`
+变成 `tool:call_x` 会重挂载、把读者正在读的折叠摔上。
+
+### 留痕：改的不是 4096，是裁切方向
+
+真正的缺陷是 `bounded()` **从头部保留**——推理是「看到什么，所以要做什么」，从前
+面切等于稳定地扔掉结论。新增 `THINKING_TEXT_LIMIT = 16_384` 与
+`bounded_thinking()`（头 3/4 给交代、尾 1/4 给结论、中段命名）。**不抬**
+`BOUNDED_TEXT_LIMIT`：它被 `argument_preview` 等共用，而 ADR-063 §1 的论证正
+建立在它是 4096 之上。尺寸取自实测：`low` 档一次调用 1503 字符（未触顶），
+`high` 档 5067。
+
+**兼容方向不对称**：新读旧安全，**旧读新会被隔离**（`extra="forbid"`），滚动
+升级先升读侧。
+
+### 两处记录在案的断言，实测为假
+
+`ports/model.py` 的 docstring 与 ADR-061 §4 都称 provider 要求 `reasoning_content`
+不得回传下一轮。**2026-08-17 对 `api.deepseek.com` 实测**（`deepseek-v4-flash`，
+思考开启 + 声明工具）：第二轮不带 200、带 200、带**被截断**的也 200，无任何校验。
+两个方向都被接受，**不回传是本仓的选择**。§4 的决定保留，理由更换为「收益未测、
+按 input token 计费、截断回灌不可检测」。第三条实测还带出一条更硬的约束：若将来
+要灌，只能**逐字或者不灌**。本机本地证据，CI 离线不覆盖。
+
+`apps/cli/rendering.py` 的注释称留痕「仍然通过 ModelCompleted 到达时间线」——
+`summarize_payload` 只打印 `finish_reason` 与两个 token 数，一个字都不显示。改为
+打印**长度**（`think=1503c`），并把注释改成它现在做的事。
+
+### 顺带补上的零覆盖
+
+`groupSteps` 此前**没有任何测试**（`stepGroups.test.ts` 只测 `summariseGroups`），
+而整个设计压在它的前置合并上。补四条钉住：前置合并、多调用归第一个、不可达调用
+保留自己的行、答话轮自成一步。
+
+**实机**：真栈跑通 `sparkline.html` 一轮，直播中 12 步恰好 1 步 `is-live`；settle
+后 `is-live` 归 0，四个步骤各自带着思考与它促成的动作。
+
 ## 2026-08-17（未合并，分支 `code-console-redesign`）：Code 是对话，不是任务时间线
 
 Code 控制台的三处返工，与它们要求的一条契约。一份 ADR（0063）。

@@ -54,6 +54,7 @@ from agent_workbench.domain.schema import (
     BoundedText,
     DomainModel,
     ShortText,
+    ThinkingText,
     VersionedModel,
 )
 from agent_workbench.domain.task_intent import TaskIntent
@@ -332,13 +333,26 @@ class ModelCompleted(DomainModel):
     # answer reaches the asker. Those are the two halves: `prompt_preview`
     # below is a preview and stays at the preview ceiling; this is the product.
     text: AnswerText = ""
-    # How the model got there, at the preview ceiling rather than the
-    # answer's. Deliberately not the whole chain: the full text streamed live
-    # as ``ModelThinkingDelta`` and was never owed the durable log ("describe,
-    # don't copy") -- this excerpt is what a reader arriving after the fact,
-    # or a Task timeline that has no live channel at all, gets to see of the
-    # process (ADR-061). Empty when the call did not think.
-    thinking_preview: BoundedText = ""
+    # How the model got there. Still an excerpt rather than the whole chain:
+    # the full text streamed live as ``ModelThinkingDelta`` and was never owed
+    # the durable log ("describe, don't copy") -- this is what a reader arriving
+    # after the fact, or a Task timeline with no live channel at all, gets to
+    # see of the process (ADR-061). Empty when the call did not think.
+    #
+    # On its own ceiling, not the preview one, and cut from the middle rather
+    # than the end (ADR-064). Two separate corrections to the same field:
+    #
+    #   * A preview is a summary a reader consults and an account of reasoning
+    #     is not, so `BOUNDED_TEXT_LIMIT` was the wrong bound to share -- and it
+    #     could not simply be raised, because `argument_preview` and
+    #     `output_preview` share it and ADR-063 argues from its being 4096.
+    #   * `bounded()` keeps the head. For reasoning that reliably discards the
+    #     conclusion, which is the half a reader came for; `bounded_thinking()`
+    #     keeps both ends and names the gap.
+    #
+    # One row per model call is what makes 16,384 affordable here, and also why
+    # it is not the answer ceiling, which is one row per run.
+    thinking_preview: ThinkingText = ""
     output_ref: ArtifactRef | None = None
     tool_call_ids: tuple[Identifier, ...] = ()
 

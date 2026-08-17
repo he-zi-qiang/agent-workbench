@@ -2,6 +2,9 @@
 
 - 决策点：模型的思维链要不要成为协议一等公民；它是 transient 还是 durable；
   它受不受答案的发布围栏管辖；它进不进下一轮的上下文；哪些界面显示它
+- 后续：§2 的留痕上限与裁切方向由 [ADR-064](./0064-a-thought-belongs-to-the-action-it-caused.md)
+  细化；§4 的**前提**由 ADR-064 更正（决定保留，理由更换）——实测 DeepSeek 两个
+  方向都接受回传。§3、§5、§6 不受影响
 - 状态：**接受**。`ModelThinkingDelta` 与 `ModelDelta` 平行地进 port 事件联合
   与领域事件表，登记为 **transient**；durable 的那一半是
   `ModelCompleted.thinking_preview`（BoundedText 上限的摘录）；发布围栏对

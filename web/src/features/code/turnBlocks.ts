@@ -76,6 +76,24 @@ export interface ProducedFile {
   toolCallId: string;
 }
 
+/**
+ * One step of a turn: what the model thought, and what that thought caused.
+ *
+ * `group` is null in two ordinary cases, neither of them an error -- the turn
+ * that produced text rather than a call (the report follows it), and the call
+ * that has not come back yet, which is the anchor the live thought lands on.
+ */
+export interface TurnStep {
+  /** Stable across polls: `groupSteps`'s key, never a position. */
+  key: string;
+  /** Which model call did the thinking. Null for a tool group with no model events. */
+  modelCallId: string | null;
+  /** The durable excerpt. Empty when the call did not think, or has not returned. */
+  thinking: string;
+  /** What it did. Null for an answering turn and for a call still in flight. */
+  group: StepGroup | null;
+}
+
 export interface CodeTurnBlock {
   key: string;
   /** 1-based, counted over the transcript's user messages. */
@@ -83,9 +101,10 @@ export interface CodeTurnBlock {
   runId: string | null;
   instruction: string;
   report: string | null;
-  /** Tool calls only. The model's own turns stay in `events`. */
+  /** Tool calls only, for the produced-file cards. */
   groups: StepGroup[];
-  reasonings: { callId: string; text: string }[];
+  /** What happened, in order: each thought beside the action it caused. */
+  steps: TurnStep[];
   produced: ProducedFile[];
   /** Every event of this run, in order, for the raw disclosure. */
   events: EventEnvelope[];
@@ -236,24 +255,61 @@ function blockOf(base: {
   // No `titleFor`: that argument is how Work injects its lifecycle dictionary,
   // and `TaskDeadLettered` is not a phrase that belongs over a coding step.
   // Without it `groupSteps` falls back to the raw event type, which only ever
-  // shows on a `solo:` group -- and those are filtered out below.
-  const groups = groupSteps(base.events).filter((group) =>
-    group.key.startsWith("tool:"),
-  );
+  // shows on a `solo:` group -- and those are dropped below.
+  const all = groupSteps(base.events);
+  const groups = all.filter((group) => group.key.startsWith("tool:"));
 
-  // Only from `ModelCompleted`, and this is the whole no-double-render
-  // invariant: `useCodeStream` clears the live thought when the
-  // `ModelCompleted` for that `model_call_id` arrives, so a call is in exactly
-  // one of the two sets and never in both.
-  const reasonings = base.events
-    .filter((event) => event.event_type === "ModelCompleted")
-    .map((event) => ({
-      callId: str(event.payload.model_call_id) ?? event.event_id,
-      text: str(event.payload.thinking_preview) ?? "",
-    }))
-    .filter((entry) => entry.text !== "");
+  // The timeline, in the order the server emitted it. Nothing here sorts,
+  // joins or infers: `groupSteps` has already filed each tool-calling model
+  // turn *ahead of* the first call it named (`stepGroups.ts`, pinned by
+  // `stepGroups.test.ts`), so a thought is already sitting on the step it
+  // caused. All this does is stop throwing that away.
+  //
+  // The previous shape built a second, flat list of every `ModelCompleted`'s
+  // excerpt and rendered it in one disclosure at the foot of the turn. Both
+  // lists came from the same ordered array, and nothing put them back
+  // together -- so the reader got a column of paragraphs that could not answer
+  // the one question they exist for: *why did it run that command*.
+  //
+  // Three conditions hold this together, and each fails visibly rather than
+  // silently, which is why they are worth naming:
+  //   (a) a tool-calling turn comes back with empty text -- DeepSeek sends
+  //       `content: ''`, measured -- so `groupSteps` treats it as the cause of
+  //       the next line rather than a step of its own. A provider that also
+  //       said something on a tool turn would keep its own `model:` group: the
+  //       thought still renders in the right place, just on a row with no
+  //       action under it.
+  //   (b) the merge is a *prepend*, which is the only thing that makes the
+  //       thought read as preceding the action.
+  //   (c) a turn naming two calls is filed on the first, so one model call is
+  //       never drawn as two thoughts.
+  const steps: TurnStep[] = [];
+  for (const group of all) {
+    // `solo:` is run bookkeeping -- RunStarted, RunCompleted. Never a step.
+    if (group.key.startsWith("solo:")) continue;
+    const completed = group.events.find(
+      (event) => event.event_type === "ModelCompleted",
+    );
+    const started = group.events.find(
+      (event) => event.event_type === "ModelStarted",
+    );
+    const modelCallId =
+      str(completed?.payload.model_call_id) ??
+      str(started?.payload.model_call_id);
+    const thinking = str(completed?.payload.thinking_preview) ?? "";
+    const isTool = group.key.startsWith("tool:");
+    // A model group that is neither still open nor carrying a thought has
+    // nothing to draw. Keeping it would put an empty row in the timeline.
+    if (!isTool && thinking === "" && completed !== undefined) continue;
+    steps.push({
+      key: group.key,
+      modelCallId,
+      thinking,
+      group: isTool ? group : null,
+    });
+  }
 
-  return { ...base, groups, reasonings, produced: producedIn(groups) };
+  return { ...base, groups, steps, produced: producedIn(groups) };
 }
 
 /** The files one turn's successful tool calls put into the workspace. */

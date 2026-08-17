@@ -65,9 +65,21 @@ class ModelThinkingDelta(DomainModel):
 
     A separate kind rather than a flag on ``ModelTextDelta`` because the two
     texts have different fates everywhere downstream: thinking never re-enters
-    the conversation ledger (providers require it withheld from the next
-    request), never becomes the answer, and is shown -- when it is shown --
-    as process rather than product.
+    the conversation ledger, never becomes the answer, and is shown -- when it
+    is shown -- as process rather than product.
+
+    The parenthesis that used to sit on that first fate said "providers require
+    it withheld from the next request". That is not true of the provider this
+    repository actually calls. Probed against ``api.deepseek.com`` on
+    2026-08-17 with ``deepseek-v4-flash``, thinking enabled and tools declared:
+    the second round returns 200 with the assistant message carrying
+    ``reasoning_content``, without it, and with a deliberately truncated copy of
+    it. Nothing refuses, and nothing reports that the copy was altered.
+
+    So withholding is **this repository's choice**, not a protocol constraint --
+    the reasons are in ADR-064: the benefit is unmeasured, every replayed token
+    is charged to our own input budget, and a chain we clipped for the event log
+    would go back as a record of reasoning the model never had.
     """
 
     kind: Literal["thinking_delta"] = "thinking_delta"

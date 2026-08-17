@@ -125,8 +125,13 @@ class TextRenderer:
             self._streamed = True
         # ModelThinkingDelta is deliberately not streamed here: this renderer
         # writes to a stream that may be piped, where reasoning interleaved
-        # with the answer is corruption rather than transparency. The durable
-        # excerpt still arrives in the timeline via ModelCompleted (ADR-061).
+        # with the answer is corruption rather than transparency. The timeline
+        # reports how long the chain was, not what it said -- a fixed-width row
+        # cannot hold a chain, and "thought for 1,503 characters" and "did not
+        # think at all" are two things a reader wants told apart (ADR-064).
+        #
+        # This note used to say the excerpt "still arrives in the timeline",
+        # which was true of the event and false of anything printed.
 
     def finish(
         self,
@@ -167,10 +172,15 @@ def summarize_payload(payload: EventPayload) -> str:
     if isinstance(payload, ModelStarted):
         return f"{payload.model_call_id} model={payload.model_id}"
     if isinstance(payload, ModelCompleted):
-        return (
+        row = (
             f"{payload.finish_reason} in={payload.usage.input_tokens} "
             f"out={payload.usage.output_tokens}"
         )
+        # Length, never the text. Appended only when there was one, so a
+        # deployment with thinking off keeps exactly the row it has today.
+        if payload.thinking_preview:
+            row += f" think={len(payload.thinking_preview)}c"
+        return row
     if isinstance(payload, ToolProposed):
         return (
             f"{payload.tool_name} risk={payload.risk or 'unknown'} "

@@ -304,37 +304,131 @@ describe("buildTurnBlocks", () => {
     // Every event is still reachable under 原始事件 -- curation is not
     // authority, and the reader must be able to check the line.
     expect(blocks[0]?.events).toHaveLength(events.length);
-    // The excerpt comes only from ModelCompleted, which is what makes it
-    // impossible for a call to be both live and filed at the same instant.
-    expect(blocks[0]?.reasonings).toEqual([
-      { callId: "mc_1", text: "先写文件" },
-    ]);
+    // And the thought is ON that action, not in a list of its own. This is the
+    // whole of what `groupSteps` already knew and this module used to discard.
+    expect(blocks[0]?.steps).toHaveLength(1);
+    expect(blocks[0]?.steps[0]?.key).toBe("tool:call_notes.md");
+    expect(blocks[0]?.steps[0]?.modelCallId).toBe("mc_1");
+    expect(blocks[0]?.steps[0]?.thinking).toBe("先写文件");
+    expect(blocks[0]?.steps[0]?.group?.title).toBe("写入工作区");
   });
 
-  it("files one entry per model call rather than one joined argument", () => {
+  it("puts each model call's thought on the step it caused", () => {
+    // A turn is think → call a tool → think again → call another. The old
+    // shape proved only that the two thoughts were not joined into one
+    // paragraph; what it could not prove -- and what the reader actually needs
+    // -- is that each one sits on the command it explains.
     const { blocks } = buildTurnBlocks({
       messages: said("一"),
       events: [
         event("run_a", "ModelCompleted", {
           model_call_id: "mc_1",
+          text: "",
+          tool_call_ids: ["call_a.md"],
           thinking_preview: "先建文件",
         }),
+        ...wrote("run_a", "a.md", "call_a.md"),
         event("run_a", "ModelCompleted", {
           model_call_id: "mc_2",
+          text: "",
+          tool_call_ids: ["call_b.md"],
           thinking_preview: "再读回来核对",
         }),
-        // A call that did not think contributes nothing rather than a blank.
-        event("run_a", "ModelCompleted", { model_call_id: "mc_3" }),
+        ...wrote("run_a", "b.md", "call_b.md"),
       ],
       running: false,
       pendingInstruction: null,
     });
 
-    // A turn is think → call a tool → think again. Joined into one paragraph
-    // it reads as a continuous argument that was never made.
-    expect(blocks[0]?.reasonings.map((entry) => entry.text)).toEqual([
-      "先建文件",
-      "再读回来核对",
+    expect(
+      blocks[0]?.steps.map((step) => [step.thinking, step.group?.title ?? null]),
+    ).toEqual([
+      ["先建文件", "写入工作区"],
+      ["再读回来核对", "写入工作区"],
     ]);
+  });
+
+  it("keeps the answering turn's thought where the report follows it", () => {
+    // The turn that said something rather than calling something. It has no
+    // action, and filtering the timeline to `tool:` groups would drop its
+    // reasoning entirely -- which is exactly the last thought of every turn.
+    const { blocks } = buildTurnBlocks({
+      messages: said("一", "报告"),
+      events: [
+        event("run_a", "ModelCompleted", {
+          model_call_id: "mc_1",
+          text: "写好了。",
+          thinking_preview: "交代一下做了什么",
+        }),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks[0]?.steps).toHaveLength(1);
+    expect(blocks[0]?.steps[0]?.thinking).toBe("交代一下做了什么");
+    expect(blocks[0]?.steps[0]?.group).toBeNull();
+  });
+
+  it("leaves an anchor for the call that has not come back", () => {
+    // `ModelStarted` is durable and arrives before the first thinking delta.
+    // The step it creates is where the live text lands, so that the thought a
+    // reader is watching is already in the position it will settle into.
+    // The live run's events belong to the pending block, so the instruction
+    // has to be in flight for there to be a block holding them at all.
+    const { blocks } = buildTurnBlocks({
+      messages: [],
+      events: [event("run_a", "ModelStarted", { model_call_id: "mc_1" })],
+      running: true,
+      pendingInstruction: "写个时钟",
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.live).toBe(true);
+    expect(blocks[0]?.steps).toHaveLength(1);
+    expect(blocks[0]?.steps[0]?.modelCallId).toBe("mc_1");
+    expect(blocks[0]?.steps[0]?.thinking).toBe("");
+    expect(blocks[0]?.steps[0]?.group).toBeNull();
+  });
+
+  it("never files one model call as two steps", () => {
+    // A turn naming two calls produces two action rows either way; the thought
+    // goes on the earlier one. Rendering it on both would show the same
+    // reasoning twice, which is the defect this whole area exists to prevent.
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events: [
+        event("run_a", "ModelCompleted", {
+          model_call_id: "mc_1",
+          text: "",
+          tool_call_ids: ["call_a.md", "call_b.md"],
+          thinking_preview: "两件事一起做",
+        }),
+        ...wrote("run_a", "a.md", "call_a.md"),
+        ...wrote("run_a", "b.md", "call_b.md"),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    const carrying = blocks[0]?.steps.filter((step) => step.thinking !== "");
+    expect(carrying).toHaveLength(1);
+    expect(carrying?.[0]?.key).toBe("tool:call_a.md");
+  });
+
+  it("drops a model turn that neither thought nor was left hanging", () => {
+    // No thought, already returned, produced text handled elsewhere: there is
+    // nothing to draw, and an empty row in the timeline reads as a step that
+    // did something unnameable.
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events: [
+        event("run_a", "ModelCompleted", { model_call_id: "mc_1", text: "hi" }),
+      ],
+      running: false,
+      pendingInstruction: null,
+    });
+
+    expect(blocks[0]?.steps).toEqual([]);
   });
 });

@@ -37,7 +37,11 @@ from agent_workbench.domain.runs import (
     TokenUsage,
     TraceContext,
 )
-from agent_workbench.domain.schema import ANSWER_TEXT_LIMIT, BOUNDED_TEXT_LIMIT
+from agent_workbench.domain.schema import (
+    ANSWER_TEXT_LIMIT,
+    BOUNDED_TEXT_LIMIT,
+    THINKING_TEXT_LIMIT,
+)
 from agent_workbench.domain.tools import ToolCall, ToolName, ToolResult, ToolSpec
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import CancellationSource
@@ -398,6 +402,33 @@ def test_reasoning_streams_live_and_is_excerpted_into_the_durable_record() -> No
     assert "ModelThinkingDelta" not in run.durable_types
     assert completed.thinking_preview == "Fusion lives in Qdrant."
     assert completed.text == "Qdrant."
+
+
+def test_a_long_chain_keeps_its_conclusion_in_the_durable_record() -> None:
+    """The excerpt is cut from the middle, not the end (ADR-064).
+
+    The runtime used to clip this with ``bounded()``, which keeps the opening.
+    For reasoning that is the wrong half: a chain runs "here is what I saw,
+    therefore here is what I will do", so keeping the front reliably discards
+    the decision -- and the decision is exactly what a reader scrolling back to
+    an unexpected tool call is looking for.
+    """
+
+    opening = "先读一遍工作区 看看有什么"
+    conclusion = "所以下一步: 改 config.py 第 12 行"
+    chain = opening + "中" * (THINKING_TEXT_LIMIT * 2) + conclusion
+
+    run = _execute(FakeModel([ScriptedTurn(reasoning=chain, text="done")]))
+    completed = next(
+        envelope.payload
+        for envelope in run.durable
+        if envelope.event_type == "ModelCompleted"
+    )
+
+    assert len(completed.thinking_preview) <= THINKING_TEXT_LIMIT
+    assert completed.thinking_preview.startswith(opening)
+    assert completed.thinking_preview.endswith(conclusion)
+    assert "中段省略" in completed.thinking_preview
 
 
 def test_the_runs_thinking_switch_reaches_the_model_request() -> None:
