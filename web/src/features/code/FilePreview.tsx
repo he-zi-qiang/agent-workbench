@@ -8,12 +8,17 @@
  * before it is refused -- and the drift would show as the same file rendering
  * differently depending on where it was clicked.
  *
- * Text arrives already fetched through `viewing`; images and PDFs fetch on
- * render through `BlobPreview`, which owns the size cap and the object-URL
- * lifetime; HTML fetches inside `HtmlPreview`, which owns both the sandbox
- * frame and the 源码 toggle. A .docx lands on the download-only sentence on
- * purpose: the conversion endpoints are artifact-addressed and a workspace
- * file has no artifact id a client may hold (known-gaps F-11).
+ * **Every kind fetches for itself.** Text used to be the exception: the page
+ * read it when the file was opened and passed the string in, which is why the
+ * inline card -- where nothing had prefetched anything -- could show an image
+ * and an HTML page and not a `.py`. On a coding console that is the wrong file
+ * to leave out. Now `TextPreview` owns that fetch the way `BlobPreview` owns
+ * the blob one and `HtmlPreview` its own, all three keyed so that previewing a
+ * file inline and then opening it in the panel transfers it once.
+ *
+ * A .docx lands on the download-only sentence on purpose: the conversion
+ * endpoints are artifact-addressed and a workspace file has no artifact id a
+ * client may hold (known-gaps F-11).
  */
 
 import {
@@ -23,10 +28,11 @@ import {
 import type { PrincipalIdentity } from "../../api/types";
 import { BlobPreview } from "../../components/BlobPreview";
 import { HtmlPreview } from "../../components/HtmlPreview";
+import { TextPreview } from "../../components/TextPreview";
 import { previewKind } from "../../components/media";
 
 /**
- * The file a reader has open, and what could be shown of it.
+ * The file a reader has open.
  *
  * `sessionId` is carried rather than read from the URL at download time: the
  * two are the same until the reader switches sessions with the viewer open,
@@ -38,9 +44,6 @@ export interface OpenedFile {
   name: string;
   mediaType: string;
   sizeBytes: number;
-  loading: boolean;
-  text: string | null;
-  truncated: boolean;
 }
 
 export function FilePreview({
@@ -66,8 +69,7 @@ export function FilePreview({
   }
   if (kind === "html") {
     // Runs in HtmlPreview's sandbox frame, with the source behind its 源码
-    // toggle -- so the caller does not prefetch it as text the way it does for
-    // the text kind; the component owns its one fetch for both views.
+    // toggle -- one fetch serving both views.
     return (
       <HtmlPreview
         load={() =>
@@ -79,19 +81,18 @@ export function FilePreview({
       />
     );
   }
-  if (viewing.text === null) {
+  if (kind === "text") {
     return (
-      <p className="aw-code-value">
-        {viewing.loading ? "正在读取" : "这个类型只能下载。"}
-      </p>
+      <TextPreview
+        load={() =>
+          getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name)
+        }
+        queryKey={["code-file-text", viewing.sessionId, viewing.name]}
+      />
     );
   }
-  return (
-    <>
-      <pre className="aw-code-file-body">{viewing.text}</pre>
-      {viewing.truncated ? (
-        <p className="aw-code-value">只显示了开头一部分，完整内容请下载。</p>
-      ) : null}
-    </>
-  );
+  // Reached by `docx` and `none`. Not fetched at all: reading a zip as text
+  // renders mojibake, and transferring bytes only to decide not to show them
+  // spends the transfer for nothing.
+  return <p className="aw-code-value">这个类型只能下载。</p>;
 }

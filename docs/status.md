@@ -31,7 +31,7 @@ Code 控制台的三处返工，与它们要求的一条契约。一份 ADR（00
 `status: ok`（需要 `AW_DATABASE__*` 三个 DSN 在环境里，`scripts/dev.sh` 负责
 导出——裸壳跑它在改动前后同样报 `Field required`，与本次无关），配置 schema
 仍是 `1.17`。前端 `eslint --max-warnings 0` + `tsc -b` + `vitest`
-**329 passed** + `vite build`。服务型四套件本次未跑：无迁移、无库结构变更——
+**331 passed** + `vite build`。服务型四套件本次未跑：无迁移、无库结构变更——
 但 `events.payload` 是 JSONB，落库 payload 的**形状**变了，所以「不触及持久化」
 是错的说法，此处更正。
 
@@ -124,6 +124,20 @@ turn has finished`）。归属规则是纯函数，11 条测试在 `turnBlocks.t
 `pending`，与服务端转录在同一次 React 批更新里交接；失败路径**不清** `pending`，
 因为服务端在 run 之前就 append 了它，清掉会让屏幕上唯一的记录凭空消失
 （`shows the report a turn came back with` 邻近用例覆盖）。
+
+**代码也在对话里（补修）**。卡片首版把就地预览限死在 `image` 与 `html`，理由是
+iframe 有成本——但代码文件走的是 `text`，于是在一个**编码**控制台上，最该被看见的
+产物成了唯一只显示文件名的那个。成本理由对 `<pre>` 也不成立。三处连带：
+`FilePreview` 的 text 分支原本读调用方**预取**好的字符串（只有右栏做了预取），
+补 `TextPreview` 自取后，`open()` 里维护 `loading`/`text`/`truncated` 与竞态防护的
+那一整段随之删掉；从 `HtmlPreview` 抄来的尺寸闸门**不适用于文本**——那个闸门的理由
+是半份文档渲染会跑一半脚本、画出一个从未存在过的页面，文本显示开头并说明截断才是
+诚实做法，所以闸门只保留在**自动展开**上（`AUTO_PREVIEW_MAX_BYTES = 64 KB`：点击
+无上限，但一次没被请求的预览不该拖 900 KB）；`.aw-code-file-body` 此前在 app.css
+里没有任何规则，只靠 `.aw-code-file-view pre` 被面板语境顺带样式化，搬进卡片就成了
+裸 `<pre>`、右边被容器裁掉。护栏两条：
+`shows a produced code file's contents in the conversation, unasked` 与
+`does not fetch a large produced file nobody asked to see`。
 
 **已知代价**：产出卡片预览的是那个文件名**此刻**的字节，不是那一轮当时的字节
 （known-gaps F-13）。卡片在点击**之前**就说出来——「第 N 轮又改过，预览的是最新

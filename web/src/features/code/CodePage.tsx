@@ -50,7 +50,6 @@ import {
   getCodeApprovals,
   getCodeHistory,
   getCodeWorkspace,
-  getCodeWorkspaceFileText,
   listCodeSessions,
   newIdempotencyKey,
   putCodeWorkspaceFile,
@@ -63,7 +62,6 @@ import type {
   WorkspaceEntryView,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
-import { previewKind } from "../../components/media";
 import { EmptyState, ErrorNotice, IconButton } from "../../components/ui";
 import { CodeSessionRail } from "./CodeSessionRail";
 import { CodeTurn } from "./CodeTurn";
@@ -291,42 +289,25 @@ export function CodePage() {
     }
   }, [identity, instruction, navigate, queries, reload, running, sessionId]);
 
+  // Naming what to show, and nothing else. Every kind fetches inside its own
+  // preview component now, which is what deleted the rest of this callback:
+  // it used to prefetch text here, hold `loading`/`text`/`truncated` on the
+  // opened file, and merge a late response back in while guarding against a
+  // second click landing first. All of that was one kind's special case, and
+  // it is the reason a produced `.py` could not be previewed inside the
+  // conversation -- there was nowhere in a card to run the prefetch.
   const open = useCallback(
-    async (file: WorkspaceEntryView) => {
+    (file: WorkspaceEntryView) => {
       if (sessionId === undefined) return;
-      const kind = previewKind(file.media_type);
       setPanelOpen(true);
-      // Shown before any fetch resolves, so a large file does not look like a
-      // click that did nothing. Only text is fetched here: images and PDFs
-      // fetch on render (`BlobPreview` caches by session and name), HTML
-      // fetches inside `HtmlPreview`, and a type with no viewer skips the
-      // transfer entirely rather than downloading bytes to decide not to
-      // render them.
       setOpened({
         sessionId,
         name: file.name,
         mediaType: file.media_type,
         sizeBytes: file.size_bytes,
-        loading: kind === "text",
-        text: null,
-        truncated: false,
       });
-      if (kind !== "text") return;
-      try {
-        const body = await getCodeWorkspaceFileText(identity, sessionId, file.name);
-        setOpened((current) =>
-          // A second click while the first read was in flight wins. Without
-          // this the slower fetch would land last and show the wrong file.
-          current?.name === file.name && current.sessionId === sessionId
-            ? { ...current, loading: false, ...body }
-            : current,
-        );
-      } catch (cause: unknown) {
-        setOpened(null);
-        setFault({ scope: sessionId, text: describe(cause) });
-      }
     },
-    [identity, sessionId],
+    [sessionId],
   );
 
   // What a card in the conversation clicks. A card knows the name a tool
@@ -336,7 +317,7 @@ export function CodePage() {
   const openByName = useCallback(
     (name: string) => {
       const held = files.find((file) => file.name === name);
-      if (held !== undefined) void open(held);
+      if (held !== undefined) open(held);
     },
     [files, open],
   );
@@ -694,7 +675,7 @@ export function CodePage() {
                 setFault({ scope: viewing.sessionId, text: describe(cause) });
               });
             }}
-            onOpen={(file) => void open(file)}
+            onOpen={open}
             orphanRuns={orphanRuns}
             setDirectoryOpen={setDirectoryOpen}
             viewing={viewing}
