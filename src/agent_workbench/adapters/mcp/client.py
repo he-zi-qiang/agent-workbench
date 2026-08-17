@@ -7,11 +7,12 @@ adapter boundary and makes malformed remote payloads independently testable.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from mcp import Client, types
 
@@ -140,6 +141,73 @@ def _content_block(block: types.ContentBlock) -> RemoteContentBlock:
     )
 
 
+def is_client_fault(exc: BaseException) -> bool:
+    """Whether *exc* is an SDK-boundary fault the caller may absorb.
+
+    The SDK's Streamable HTTP transport runs inside anyio task groups, and a
+    server process dying mid-call does not surface as one tidy exception.
+    Measured on 2026-08-16 (demo profile, Task Worker): the connect failure
+    (httpcore ``ConnectError``) arrived *together with* the transport's broken
+    cleanup -- ``RuntimeError: Attempted to exit cancel scope in a different
+    task than it was entered in`` -- and the scope's own ``CancelledError``,
+    composed into a ``BaseExceptionGroup``.  A group holding a
+    ``CancelledError`` leaf is not an ``Exception``, so the tool executor's
+    handler-fault catch (``except Exception``) let it pass, and it killed the
+    whole Worker process.  With the only Worker gone, the running Task's lease
+    expired with no surviving process to run ``reclaim_expired`` -- the task
+    showed ``running`` indefinitely.
+
+    Absorbable, then: every plain ``Exception`` raised by the SDK call, and
+    any group whose leaves mix exceptions with cancel-scope ``CancelledError``
+    shrapnel.  Not absorbable: a bare ``CancelledError`` or a group of nothing
+    else -- that is cooperative cancellation (run cancel, tool timeout) and
+    must keep propagating -- and anything carrying ``KeyboardInterrupt`` or
+    ``SystemExit``, which belong to the process, not to one tool call.
+    """
+
+    return _leaves_absorbable(exc) and not _pure_cancellation(exc)
+
+
+def client_fault_types(exc: BaseException) -> tuple[str, ...]:
+    """Sorted, deduplicated leaf type names of an absorbed fault.
+
+    Only the type names cross the boundary -- same rule as
+    ``ErrorInfo.from_exception``: third-party exception text is untrusted
+    content of unknown provenance and must not reach events or the model.
+    """
+
+    leaves = _group_leaves(exc)
+    if leaves is not None:
+        names: set[str] = set()
+        for leaf in leaves:
+            names.update(client_fault_types(leaf))
+        return tuple(sorted(names))
+    return (type(exc).__name__,)
+
+
+def _group_leaves(exc: BaseException) -> tuple[BaseException, ...] | None:
+    # isinstance can only narrow to BaseExceptionGroup[Unknown]; the cast
+    # re-parameterizes it once so the recursive walkers above stay fully
+    # typed under strict pyright.
+    if isinstance(exc, BaseExceptionGroup):
+        return cast("BaseExceptionGroup[BaseException]", exc).exceptions
+    return None
+
+
+def _leaves_absorbable(exc: BaseException) -> bool:
+    leaves = _group_leaves(exc)
+    if leaves is not None:
+        return all(_leaves_absorbable(leaf) for leaf in leaves)
+    return isinstance(exc, Exception | asyncio.CancelledError)
+
+
+def _pure_cancellation(exc: BaseException) -> bool:
+    leaves = _group_leaves(exc)
+    if leaves is not None:
+        return all(_pure_cancellation(leaf) for leaf in leaves)
+    return isinstance(exc, asyncio.CancelledError)
+
+
 @asynccontextmanager
 async def connect_mcp_client(
     endpoint: str, *, timeout_seconds: int
@@ -168,5 +236,7 @@ __all__ = [
     "RemoteTextBlock",
     "RemoteToolDefinition",
     "RemoteToolPage",
+    "client_fault_types",
     "connect_mcp_client",
+    "is_client_fault",
 ]

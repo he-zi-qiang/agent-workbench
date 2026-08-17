@@ -14,17 +14,26 @@ from agent_workbench.adapters.mcp.client import (
     RemoteCallResult,
     RemoteResourceLink,
     RemoteTextBlock,
+    RemoteToolPage,
 )
-from agent_workbench.adapters.mcp.result_mapping import map_remote_result
+from agent_workbench.adapters.mcp.result_mapping import (
+    MCPToolHandler,
+    map_remote_result,
+)
 from agent_workbench.adapters.memory import InMemoryArtifactStore
-from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.errors import NotFoundError, OperationCancelledError
 from agent_workbench.domain.policies import (
     AuthorizationEnvelope,
     ExecutionContext,
     PrincipalContext,
 )
-from agent_workbench.domain.tools import ToolCall
-from agent_workbench.ports.cancellation import NullCancellationToken
+from agent_workbench.domain.schema import JsonObject
+from agent_workbench.domain.tools import ToolCall, ToolResult
+from agent_workbench.ports.cancellation import (
+    CancellationSource,
+    CancellationToken,
+    NullCancellationToken,
+)
 from agent_workbench.ports.tools import ToolInvocation
 
 TENANT = "tenant_real"
@@ -34,6 +43,7 @@ OWNER = "owner_real"
 def _invocation(
     *,
     arguments: dict[str, object] | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> ToolInvocation:
     call = ToolCall(
         tool_call_id="toolu_mapping_1",
@@ -58,7 +68,9 @@ def _invocation(
             task_id="task_mapping_1",
             lease_epoch=4,
         ),
-        cancellation=NullCancellationToken(),
+        cancellation=(
+            cancellation if cancellation is not None else NullCancellationToken()
+        ),
         timeout_seconds=10,
     )
 
@@ -400,3 +412,135 @@ def test_non_json_structured_content_fails_without_exposing_repr() -> None:
     assert result.error is not None
     assert result.error.code == "tool_failed"
     assert "SECRET_REPR" not in result.error.message
+
+
+# --- A server process dying mid-call stays this node's failure --------------
+
+
+def _dead_server_group() -> BaseExceptionGroup[BaseException]:
+    """The exception shape measured on 2026-08-16 when a demo MCP server died.
+
+    The connect failure (httpcore ``ConnectError`` in production, a stand-in
+    here -- the classifier never reads types beyond Exception/CancelledError)
+    surfaced inside the SDK transport's anyio task group, whose cleanup added
+    ``RuntimeError: Attempted to exit cancel scope in a different task than it
+    was entered in`` plus the scope's own ``CancelledError``.  That last leaf
+    is the point: it keeps the composite a ``BaseExceptionGroup`` rather than
+    an ``ExceptionGroup``, which is exactly why ``except Exception`` in the
+    tool executor could not catch it and the Worker process died.
+    """
+
+    return BaseExceptionGroup(
+        "unhandled errors in a TaskGroup",
+        [
+            ConnectionError("All connection attempts failed"),
+            RuntimeError(
+                "Attempted to exit cancel scope in a different task than "
+                "it was entered in"
+            ),
+            asyncio.CancelledError(),
+        ],
+    )
+
+
+class _DeadServerClient:
+    """Every call fails the way a dead server process fails."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    async def list_tools_page(self, cursor: str | None) -> RemoteToolPage:
+        raise self.error
+
+    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+        raise self.error
+
+
+def _handler(client: _DeadServerClient, lock: asyncio.Lock) -> MCPToolHandler:
+    return MCPToolHandler(
+        client=client,
+        remote_name="render",
+        artifacts=InMemoryArtifactStore(),
+        artifact_threshold_bytes=65_536,
+        max_result_bytes=1_048_576,
+        max_artifact_bytes=1_048_576,
+        server_lock=lock,
+    )
+
+
+def test_a_server_dying_mid_call_becomes_this_nodes_retryable_failure() -> None:
+    group = _dead_server_group()
+    # The incident's premise, pinned so a future CPython cannot silently
+    # invalidate this test: the composite is not an Exception.
+    assert not isinstance(group, Exception)
+
+    async def scenario() -> ToolResult:
+        return await _handler(_DeadServerClient(group), asyncio.Lock())(_invocation())
+
+    result = asyncio.run(scenario())
+
+    assert result.status == "error"
+    assert result.error is not None
+    assert result.error.code == "tool_failed"
+    assert result.error.retryable is True
+    # Leaf type names may cross the boundary; third-party exception text no.
+    assert "ConnectionError" in result.error.message
+    assert "RuntimeError" in result.error.message
+    assert "All connection attempts failed" not in result.error.message
+
+
+def test_a_plain_transport_exception_is_absorbed_as_retryable() -> None:
+    async def scenario() -> ToolResult:
+        client = _DeadServerClient(ConnectionError("refused"))
+        return await _handler(client, asyncio.Lock())(_invocation())
+
+    result = asyncio.run(scenario())
+
+    assert result.status == "error"
+    assert result.error is not None
+    assert result.error.code == "tool_failed"
+    assert result.error.retryable is True
+
+
+def test_pure_cancellation_still_propagates_through_the_call_boundary() -> None:
+    async def cancelled_bare() -> None:
+        await _handler(_DeadServerClient(asyncio.CancelledError()), asyncio.Lock())(
+            _invocation()
+        )
+
+    async def cancelled_group() -> None:
+        error = BaseExceptionGroup("cancelled", [asyncio.CancelledError()])
+        await _handler(_DeadServerClient(error), asyncio.Lock())(_invocation())
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(cancelled_bare())
+    with pytest.raises(BaseExceptionGroup):
+        asyncio.run(cancelled_group())
+
+
+def test_a_group_carrying_a_process_signal_is_not_absorbed() -> None:
+    error = BaseExceptionGroup(
+        "shutdown", [ConnectionError("refused"), KeyboardInterrupt()]
+    )
+
+    async def scenario() -> None:
+        await _handler(_DeadServerClient(error), asyncio.Lock())(_invocation())
+
+    with pytest.raises(BaseExceptionGroup):
+        asyncio.run(scenario())
+
+
+def test_a_run_cancelled_while_the_server_died_reports_cancellation() -> None:
+    source = CancellationSource()
+
+    class _CancelledMidCall(_DeadServerClient):
+        async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+            source.cancel("user_cancelled")
+            raise self.error
+
+    async def scenario() -> None:
+        client = _CancelledMidCall(_dead_server_group())
+        await _handler(client, asyncio.Lock())(_invocation(cancellation=source))
+
+    with pytest.raises(OperationCancelledError):
+        asyncio.run(scenario())
