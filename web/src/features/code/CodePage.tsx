@@ -1,32 +1,45 @@
 /**
  * A coding session, in the browser.
  *
- * Two shapes, decided by whether there is a session. Without one the page is a
- * centered start: a composer and the list of recent sessions -- the two things
- * a person arriving here can act on -- and nothing else, because every other
- * pane describes a session that does not exist yet. The first sentence opens
- * the session (ADR-047) and the page becomes the working shape.
+ * Three regions while a session is open. **Left** is the session list, always
+ * there. **Middle** is the conversation, and a conversation here means one
+ * block per instruction holding everything that instruction caused -- what it
+ * did, the files it produced, the report, what it thought. **Right** is a
+ * preview surface that mounts when you click something and unmounts when you
+ * close it; it is not a file browser, and the full listing lives folded at its
+ * foot.
  *
- * The working shape is two columns with one question each. The left column is
- * the conversation: what was asked, the steps each turn took (`StepStream`,
- * one stage per turn), the report it came back with, and the composer to say
- * the next thing. The right column is the product: the working set's files,
- * with the opened one previewed *in that column* -- text, images and PDFs
- * in-page, the rest honestly download-only. It renders only when there is
- * something to show (a file in the workspace, or one already open); an empty
- * session keeps the whole width for the conversation.
+ * What this replaced, and why each piece went:
  *
- * Upload lives beside the composer, because attaching a file is part of asking
- * -- it sat in the far pane's header before, visually unrelated to the act it
- * serves. The recent-sessions list keeps its markup (rename by double-click,
- * delete behind confirm) and folds behind a disclosure at the top of the
- * conversation column while a session is open; the start page shows it
- * unfolded, where "where was I" is the likeliest question.
+ * * The session list was a `<details>` fold at the top of the transcript, and
+ *   a second unfolded copy on the start page. One list, one place.
+ * * The step stream was `StepStream` -- Work's component, over stages built by
+ *   `codeTurnStages`. Work has a graph and its reader asks which node a run is
+ *   on. A coding session has no graph. Borrowing the component brought a node
+ *   rail, a `第 N 轮` pseudo-stage and three nested disclosures between the
+ *   reader and a filename, and it brought `workTimeline`'s vocabulary with it
+ *   -- `TaskDeadLettered` is not a phrase that belongs over a coding step.
+ * * The reasoning excerpt rendered inside each of those steps *and* streamed
+ *   live above them *and* appeared again inside each step's raw JSON dump.
+ *   Now: live in the running block, excerpt in that block's 想过什么 fold, and
+ *   `buildTurnBlocks` takes the excerpt only from `ModelCompleted` -- so the
+ *   two sets are disjoint by construction, not by timing (ADR-061, narrowed by
+ *   ADR-063).
+ * * The right column mounted on `files.length > 0`, taking up to 560px from
+ *   the first turn onward whether or not anyone wanted to look at anything.
+ *
+ * Kept deliberately: upload sits beside the composer, because attaching a file
+ * is part of asking, and it spent a while in the far pane's header where it
+ * was visually unrelated to the act it serves. And the derived-not-reset
+ * discipline below (`loadedFor`, `fault.scope`, `viewing.sessionId`) -- every
+ * one of those exists because clearing state from an effect is a render late,
+ * and the previous session's transcript, error or open file was on screen for
+ * that frame and for the whole of the next session's fetch.
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Code2, Paperclip, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Code2, PanelLeft, Paperclip } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   askCode,
@@ -37,7 +50,6 @@ import {
   getCodeApprovals,
   getCodeHistory,
   getCodeWorkspace,
-  getCodeWorkspaceFileBlob,
   getCodeWorkspaceFileText,
   listCodeSessions,
   newIdempotencyKey,
@@ -48,18 +60,16 @@ import type {
   ApprovalDecision,
   MessageView,
   PendingApprovalView,
-  PrincipalIdentity,
   WorkspaceEntryView,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
-import { BlobPreview } from "../../components/BlobPreview";
-import { HtmlPreview } from "../../components/HtmlPreview";
 import { previewKind } from "../../components/media";
-import { EmptyState, ErrorNotice, shortId } from "../../components/ui";
-import { MarkdownContent } from "../../components/MarkdownContent";
-import { StepStream } from "../../components/StepStream";
-import { eventTitle } from "../work/workTimeline";
-import { codeTurnStages } from "./turnStages";
+import { EmptyState, ErrorNotice, IconButton } from "../../components/ui";
+import { CodeSessionRail } from "./CodeSessionRail";
+import { CodeTurn } from "./CodeTurn";
+import type { OpenedFile } from "./FilePreview";
+import { PreviewPanel } from "./PreviewPanel";
+import { buildTurnBlocks } from "./turnBlocks";
 import { useCodeStream } from "./useCodeStream";
 
 /** How often to ask what the agent is stopped on, while it is working. */
@@ -89,10 +99,17 @@ export function CodePage() {
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
   const [running, setRunning] = useState(false);
+  //: The instruction whose request is still open, held here rather than
+  //: appended to `loadedMessages`. Appending optimistically and then re-reading
+  //: the server's transcript is how the same sentence ends up on screen twice;
+  //: worse, on the turn that *opens* a session the optimistic copy was dropped
+  //: by the `loadedFor` guard the moment the route changed, so the reader's own
+  //: instruction vanished and the pane said "这个会话还是空的" under it.
+  const [pending, setPending] = useState<string | null>(null);
   //: Scoped to the session it happened in, and derived rather than cleared:
   //: an error from one session lingering over the next -- "artifact not
   //: found" hanging above a healthy workspace -- is the same one-render-late
-  //: bug the `loadedFor` trick below exists for, solved the same way.
+  //: bug the `loadedFor` trick above exists for, solved the same way.
   const [fault, setFault] = useState<{ scope: string | null; text: string } | null>(
     null,
   );
@@ -101,6 +118,10 @@ export function CodePage() {
   const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
+  const [railHidden, setRailHidden] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [directoryOpen, setDirectoryOpen] = useState(false);
   const queries = useQueryClient();
 
   // A query rather than an effect, because two things invalidate it -- opening
@@ -113,7 +134,6 @@ export function CodePage() {
   const known = sessions.data?.sessions ?? [];
 
   const { steps, thinking } = useCodeStream(identity, sessionId);
-  const stages = codeTurnStages(steps, running);
 
   // Derived, not reset. Both of these used to be cleared from an effect when
   // their subject changed, which is a render behind: the old session's file and
@@ -121,9 +141,25 @@ export function CodePage() {
   // already carries the session it belongs to, and the approvals are only
   // meaningful while a turn runs, so both questions are answerable here.
   const viewing = opened?.sessionId === sessionId ? opened : null;
-  const pending = running ? approvals : [];
+  const pendingApprovals = running ? approvals : [];
   const messages = loadedFor === sessionId ? loadedMessages : [];
-  const files = loadedFor === sessionId ? loadedFiles : [];
+  // Memoised, unlike the three above, only because `openByName` closes over it:
+  // the `[]` branch is a fresh array every render, which would give that
+  // callback a new identity on every frame the event stream delivers.
+  const files = useMemo(
+    () => (loadedFor === sessionId ? loadedFiles : []),
+    [loadedFiles, loadedFor, sessionId],
+  );
+
+  // Which run is live is derived inside `buildTurnBlocks`, from the run
+  // bookkeeping in the events themselves rather than from anything this
+  // component remembers about the moment it pressed send.
+  const { blocks, orphanRuns } = buildTurnBlocks({
+    messages,
+    events: steps,
+    running,
+    pendingInstruction: running ? pending : null,
+  });
 
   //: Every setState here sits inside a `.then`, and that placement is load
   //: bearing. This used to be two `async` callbacks that awaited a fetch and
@@ -142,7 +178,11 @@ export function CodePage() {
     (id: string, signal?: AbortSignal) =>
       Promise.all([
         getCodeHistory(identity, id, signal).then((history) => {
+          // These three land in one React batch, which is the point: the
+          // server's copy of the instruction appears in the same commit that
+          // drops the pending one, so the sentence never flickers as two.
           setMessages(history.messages);
+          setPending(null);
           setLoadedFor(id);
         }),
         getCodeWorkspace(identity, id, signal).then((workspace) => {
@@ -173,8 +213,8 @@ export function CodePage() {
     const controller = new AbortController();
     const tick = () => {
       getCodeApprovals(identity, pollingSession, controller.signal)
-        .then((pending) => {
-          setApprovals(pending.approvals);
+        .then((held) => {
+          setApprovals(held.approvals);
         })
         .catch(() => {
           // A failed poll is not a failed turn. The turn's own request is what
@@ -201,7 +241,7 @@ export function CodePage() {
     let target = sessionId;
     setRunning(true);
     setFault(null);
-    setMessages((current) => [...current, { role: "user", text }]);
+    setPending(text);
     setInstruction("");
     try {
       if (target === undefined) {
@@ -237,6 +277,11 @@ export function CodePage() {
       if (target !== undefined) {
         const settled = target;
         await Promise.all([
+          // `pending` is deliberately *not* cleared on the failure path: the
+          // server appends the user message before the run starts, so a failed
+          // reload leaves this block as the only record on screen of the
+          // sentence the reader typed. Losing it would be worse than showing
+          // it twice, and the success path already prevents the twice.
           reload(settled).catch(() => undefined),
           // The first instruction is what names the session, and every
           // instruction moves it to the top of the list.
@@ -250,11 +295,13 @@ export function CodePage() {
     async (file: WorkspaceEntryView) => {
       if (sessionId === undefined) return;
       const kind = previewKind(file.media_type);
+      setPanelOpen(true);
       // Shown before any fetch resolves, so a large file does not look like a
       // click that did nothing. Only text is fetched here: images and PDFs
-      // fetch on render (`BlobPreview` caches by session and name), and a type
-      // with no viewer skips the transfer entirely rather than downloading
-      // bytes to decide not to render them.
+      // fetch on render (`BlobPreview` caches by session and name), HTML
+      // fetches inside `HtmlPreview`, and a type with no viewer skips the
+      // transfer entirely rather than downloading bytes to decide not to
+      // render them.
       setOpened({
         sessionId,
         name: file.name,
@@ -280,6 +327,18 @@ export function CodePage() {
       }
     },
     [identity, sessionId],
+  );
+
+  // What a card in the conversation clicks. A card knows the name a tool
+  // wrote; the size and media type come from the current listing, which is why
+  // a name no longer in the workspace has no entry to open -- the card renders
+  // that case disabled rather than routing to a 404.
+  const openByName = useCallback(
+    (name: string) => {
+      const held = files.find((file) => file.name === name);
+      if (held !== undefined) void open(held);
+    },
+    [files, open],
   );
 
   const decide = useCallback(
@@ -367,77 +426,39 @@ export function CodePage() {
     [identity, navigate, queries, sessionId],
   );
 
-  const sessionList =
-    known.length === 0 ? null : (
-      <nav aria-label="最近的编码会话" className="aw-code-recent">
-        <h2>最近</h2>
-        <ul>
-          {known.map((held) => (
-            <li key={held.session_id}>
-              {renaming === held.session_id ? (
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    const field = new FormData(event.currentTarget).get("title");
-                    // A FormData entry is a string *or a File*, and `String(File)`
-                    // is "[object File]" -- a name nobody typed.
-                    void rename(
-                      held.session_id,
-                      typeof field === "string" ? field : "",
-                    );
-                  }}
-                >
-                  <label className="aw-sr-only" htmlFor="aw-code-rename">
-                    会话名字
-                  </label>
-                  <input
-                    autoFocus
-                    defaultValue={held.title ?? ""}
-                    id="aw-code-rename"
-                    name="title"
-                    onBlur={() => {
-                      setRenaming(null);
-                    }}
-                  />
-                </form>
-              ) : (
-                <div className="aw-code-recent-row">
-                  <button
-                    aria-current={held.session_id === sessionId ? "page" : undefined}
-                    className="aw-code-recent-link"
-                    onClick={() => {
-                      void navigate(`/code/${held.session_id}`);
-                    }}
-                    onDoubleClick={() => {
-                      setRenaming(held.session_id);
-                    }}
-                    // Named after the first instruction, so most rows have one.
-                    // The id is the fallback for a session opened and never used.
-                    title={held.title ?? held.session_id}
-                    type="button"
-                  >
-                    {held.title ?? shortId(held.session_id)}
-                  </button>
-                  {/* Always rendered, not revealed on hover: a control that
-                      only exists under a pointer is one a keyboard cannot
-                      reach and a touch screen never shows. CSS dims it until
-                      the row is hovered or the button focused. */}
-                  <button
-                    aria-label={`删除会话 ${held.title ?? held.session_id}`}
-                    className="aw-code-recent-delete"
-                    onClick={() => void remove(held.session_id)}
-                    title="删除"
-                    type="button"
-                  >
-                    <Trash2 aria-hidden size={13} />
-                  </button>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      </nav>
-    );
+  const rail = (
+    <CodeSessionRail
+      known={known}
+      mobileOpen={mobileSessionsOpen}
+      onCloseMobile={() => {
+        setMobileSessionsOpen(false);
+      }}
+      onDelete={(target) => void remove(target)}
+      onNew={() => {
+        setMobileSessionsOpen(false);
+        void navigate("/code");
+      }}
+      onOpen={(target) => {
+        setMobileSessionsOpen(false);
+        void navigate(`/code/${target}`);
+      }}
+      onRename={(target, title) => void rename(target, title)}
+      renaming={renaming}
+      sessionId={sessionId}
+      setRenaming={setRenaming}
+    />
+  );
+
+  const backdrop = mobileSessionsOpen ? (
+    <button
+      aria-label="关闭会话列表"
+      className="aw-code-sessions-backdrop"
+      onClick={() => {
+        setMobileSessionsOpen(false);
+      }}
+      type="button"
+    />
+  ) : null;
 
   // One composer for both shapes of the page: attaching a file is part of
   // asking, so the control sits where the asking happens. The label wraps a
@@ -501,58 +522,88 @@ export function CodePage() {
     </form>
   );
 
-  // The start shape: no session means no transcript, no workspace and no
-  // approvals, so none of those panes is mounted. What remains is what a
-  // person can act on -- say the first sentence, or go back to a session.
+  // The start shape. The rail is mounted here too -- it is the same list in
+  // the same place, so arriving with no session and arriving with one are the
+  // same page with different middles, rather than two layouts a reader has to
+  // re-learn. What is gone from the middle is the second copy of the list.
   if (sessionId === undefined) {
     return (
-      <div className="aw-code-start">
-        <div className="aw-code-start-inner">
-          <header className="aw-code-start-head">
-            <Code2 aria-hidden />
-            <h1>开始一段编码</h1>
-            <p>
-              描述你要做的事，比如「把 notes.md 里的待办整理成清单」。
-              第一句话会开出一个会话，并成为它的名字；之后就可以在输入框旁上传文件。
-            </p>
-          </header>
-          {error === null ? null : <ErrorNotice message={error} />}
-          {composer}
-          {sessionList}
-        </div>
+      <div className={`aw-code-page${railHidden ? " is-rail-hidden" : ""}`}>
+        {backdrop}
+        {rail}
+        <main className="aw-code-main">
+          <div className="aw-code-start">
+            <div className="aw-code-start-inner">
+              <header className="aw-code-start-head">
+                <Code2 aria-hidden />
+                <h1>开始一段编码</h1>
+                <p>
+                  描述你要做的事，比如「把 notes.md 里的待办整理成清单」。
+                  第一句话会开出一个会话，并成为它的名字；之后就可以在输入框旁上传文件。
+                </p>
+              </header>
+              {error === null ? null : <ErrorNotice message={error} />}
+              {composer}
+            </div>
+          </div>
+        </main>
       </div>
     );
   }
 
-  // The working shape. The right column exists only while it has something to
-  // say -- a workspace with files, or a file already open. An empty session
-  // showing an empty "工作区" pane beside an empty transcript was two panes of
-  // nothing; the conversation keeps the width until there is a product.
-  const showSide = files.length > 0 || viewing !== null;
+  const title = known.find((held) => held.session_id === sessionId)?.title;
 
   return (
-    <div className={`aw-code-page${showSide ? "" : " is-solo"}`}>
+    <div
+      className={`aw-code-page${railHidden ? " is-rail-hidden" : ""}${
+        panelOpen ? " has-preview" : ""
+      }`}
+    >
+      {backdrop}
+      {rail}
+
       <main className="aw-code-main">
-        <details className="aw-code-sessions-fold">
-          <summary>会话</summary>
-          <div className="aw-code-sessions-fold-body">
-            {/* "新建" goes to the start page rather than POSTing an empty
-                session: the first sentence is what names a session (ADR-047),
-                and a session created by a bare click sits unnamed in the list
-                forever. */}
+        <header className="aw-code-header">
+          <IconButton
+            className="aw-code-mobile-sessions"
+            label="打开会话列表"
+            onClick={() => {
+              setMobileSessionsOpen(true);
+            }}
+          >
+            <PanelLeft aria-hidden size={18} />
+          </IconButton>
+          <IconButton
+            className="aw-code-rail-toggle"
+            label={railHidden ? "显示会话栏" : "隐藏会话栏"}
+            onClick={() => {
+              setRailHidden((held) => !held);
+            }}
+          >
+            <PanelLeft aria-hidden size={18} />
+          </IconButton>
+          <div className="aw-code-header-copy">
+            <p className="aw-eyebrow">Code</p>
+            <h1>{title ?? "新会话"}</h1>
+          </div>
+          {/* The way to the whole working set, including everything no card
+              could account for. Absent entirely when there is nothing in it. */}
+          {files.length === 0 ? null : (
             <button
-              className="aw-button"
-              onClick={() => void navigate("/code")}
+              className="aw-button aw-code-workspace-entry"
+              onClick={() => {
+                setPanelOpen(true);
+                setDirectoryOpen(true);
+              }}
               type="button"
             >
-              新建会话
+              工作区 {files.length}
             </button>
-            {sessionList}
-          </div>
-        </details>
+          )}
+        </header>
 
         <section aria-label="编码会话" aria-live="polite" className="aw-code-transcript">
-          {messages.length === 0 ? (
+          {blocks.length === 0 ? (
             <EmptyState
               icon={<Code2 aria-hidden />}
               title="这个会话还是空的"
@@ -560,70 +611,28 @@ export function CodePage() {
             />
           ) : (
             <ol className="aw-code-turns">
-              {messages.map((message, index) => (
-                <li
-                  className={
-                    message.role === "user" ? "aw-code-said" : "aw-code-report"
-                  }
-                  key={`${message.role}-${String(index)}`}
-                >
-                  <h3>{message.role === "user" ? "你" : "报告"}</h3>
-                  {/* The report is the agent's own prose and arrives as
-                      Markdown -- lists, file names in backticks, occasionally a
-                      fenced diff. Rendered as a paragraph it was one run-on
-                      block with the syntax still in it. */}
-                  {message.role === "user" ? (
-                    <p>{message.text}</p>
-                  ) : (
-                    <MarkdownContent text={message.text} />
-                  )}
-                </li>
+              {blocks.map((block) => (
+                <CodeTurn
+                  block={block}
+                  files={files}
+                  identity={identity}
+                  key={block.key}
+                  liveThinking={block.live ? thinking : ""}
+                  onOpen={openByName}
+                  openedName={viewing?.name ?? null}
+                  sessionId={sessionId}
+                />
               ))}
             </ol>
           )}
-
-          {/* Not gated on `running`. The steps of a finished turn are the ones
-              a reader most often wants -- they are reading the report and
-              asking how it got there -- and this pane used to be mounted only
-              while the turn was in flight, over a list the hook emptied on the
-              way out. Both halves of that are gone: `useCodeStream` keeps the
-              session's events, and each turn is a stage that opens. */}
-          {/* Above the steps, because it is the only thing here that is
-              happening *now*: the steps are what has already been done. Open
-              while it streams and gone when the model call that had the
-              thought finishes -- at which point its excerpt is a line in the
-              steps below (ADR-061). Plain text rather than Markdown, the way
-              chat renders its live text: half a fenced block mid-stream
-              renders as garbage. */}
-          {running && thinking !== "" ? (
-            <details className="aw-code-thinking" open>
-              <summary>正在思考…</summary>
-              <p>{thinking}</p>
-            </details>
-          ) : null}
-
-          {stages.length === 0 ? null : (
-            <StepStream
-              ariaLabel="执行过程"
-              eventTitle={eventTitle}
-              // A step that names a produced file selects it in the artifact
-              // column, where the preview is -- the same click Work routes to
-              // its reading column.
-              onOpenArtifact={(artifact) => {
-                const produced = files.find(
-                  (held) => held.name === artifact.filename,
-                );
-                if (produced !== undefined) void open(produced);
-              }}
-              running={running}
-              stages={stages}
-            />
-          )}
         </section>
 
-        {pending.length === 0 ? null : (
+        {/* Stays at page level rather than moving into the turn block, and
+            sticks to the composer: an approval is an interruption, and what it
+            needs is the reader's eyes on it now. A turn block scrolls. */}
+        {pendingApprovals.length === 0 ? null : (
           <section aria-label="待批准的调用" className="aw-code-approvals">
-            {pending.map((held) => (
+            {pendingApprovals.map((held) => (
               <article className="aw-code-approval" key={held.approval_id}>
                 <h3>{held.tool_name} 需要你批准</h3>
                 <p className="aw-code-value">{held.argument_digest}</p>
@@ -658,151 +667,42 @@ export function CodePage() {
         {composer}
       </main>
 
-      {showSide ? (
-        <aside aria-label="工作区文件" className="aw-code-workspace">
-          <header>
-            <h2>工作区</h2>
-          </header>
-          {files.length === 0 ? (
-            <p className="aw-code-workspace-empty">还没有文件。</p>
-          ) : (
-            <ul>
-              {files.map((file) => (
-                <li key={file.name}>
-                  <button
-                    aria-current={file.name === viewing?.name ? "true" : undefined}
-                    className="aw-code-file-open"
-                    onClick={() => void open(file)}
-                    type="button"
-                  >
-                    <span className="aw-code-file-name">{file.name}</span>
-                    <span className="aw-code-value">{formatSize(file.size_bytes)}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {viewing === null ? null : (
-            <section aria-label={`文件 ${viewing.name}`} className="aw-code-file-view">
-              <header>
-                <h3>{viewing.name}</h3>
-                <div className="aw-code-file-actions">
-                  <button
-                    className="aw-button"
-                    onClick={() => {
-                      void downloadCodeWorkspaceFile(
-                        identity,
-                        viewing.sessionId,
-                        viewing.name,
-                      ).catch((cause: unknown) => {
-                        setFault({
-                          scope: viewing.sessionId,
-                          text: describe(cause),
-                        });
-                      });
-                    }}
-                    type="button"
-                  >
-                    下载
-                  </button>
-                  <button
-                    className="aw-button"
-                    onClick={() => {
-                      setOpened(null);
-                    }}
-                    type="button"
-                  >
-                    关闭
-                  </button>
-                </div>
-              </header>
-              <FilePreview identity={identity} viewing={viewing} />
-            </section>
-          )}
-        </aside>
+      {panelOpen ? (
+        <>
+          <button
+            aria-label="关闭预览"
+            className="aw-code-preview-backdrop"
+            onClick={() => {
+              setPanelOpen(false);
+            }}
+            type="button"
+          />
+          <PreviewPanel
+            directoryOpen={directoryOpen}
+            files={files}
+            identity={identity}
+            onClose={() => {
+              setPanelOpen(false);
+            }}
+            onDownload={() => {
+              if (viewing === null) return;
+              void downloadCodeWorkspaceFile(
+                identity,
+                viewing.sessionId,
+                viewing.name,
+              ).catch((cause: unknown) => {
+                setFault({ scope: viewing.sessionId, text: describe(cause) });
+              });
+            }}
+            onOpen={(file) => void open(file)}
+            orphanRuns={orphanRuns}
+            setDirectoryOpen={setDirectoryOpen}
+            viewing={viewing}
+          />
+        </>
       ) : null}
     </div>
   );
-}
-
-/**
- * The opened file's body, by what its type allows.
- *
- * Text was fetched when the file was opened and arrives through `viewing`;
- * images and PDFs fetch on render through `BlobPreview`, which owns the size
- * cap and the object-URL lifetime. A .docx lands on the download-only sentence
- * on purpose: the conversion endpoints are artifact-addressed and a workspace
- * file has no artifact id a client may hold (known-gaps F-11).
- */
-function FilePreview({
-  identity,
-  viewing,
-}: {
-  identity: PrincipalIdentity;
-  viewing: OpenedFile;
-}) {
-  const kind = previewKind(viewing.mediaType);
-  if (kind === "image" || kind === "pdf") {
-    return (
-      <BlobPreview
-        kind={kind}
-        load={() =>
-          getCodeWorkspaceFileBlob(identity, viewing.sessionId, viewing.name)
-        }
-        name={viewing.name}
-        queryKey={["code-file-blob", viewing.sessionId, viewing.name]}
-        sizeBytes={viewing.sizeBytes}
-      />
-    );
-  }
-  if (kind === "html") {
-    // Runs in HtmlPreview's sandbox frame, with the source behind its 源码
-    // toggle -- so `open()` does not prefetch it as text the way it does for
-    // the text kind; the component owns its one fetch for both views.
-    return (
-      <HtmlPreview
-        load={() =>
-          getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name)
-        }
-        name={viewing.name}
-        queryKey={["code-file-html", viewing.sessionId, viewing.name]}
-        sizeBytes={viewing.sizeBytes}
-      />
-    );
-  }
-  if (viewing.text === null) {
-    return (
-      <p className="aw-code-value">
-        {viewing.loading ? "正在读取" : "这个类型只能下载。"}
-      </p>
-    );
-  }
-  return (
-    <>
-      <pre className="aw-code-file-body">{viewing.text}</pre>
-      {viewing.truncated ? (
-        <p className="aw-code-value">只显示了开头一部分，完整内容请下载。</p>
-      ) : null}
-    </>
-  );
-}
-
-/**
- * The file the reader has open, and what could be shown of it.
- *
- * `sessionId` is carried rather than read from the URL at download time: the
- * two are the same until the reader switches sessions with the viewer open, and
- * then they are not -- which would download one session's name against
- * another's working set and answer 404 for a file the reader can see.
- */
-interface OpenedFile {
-  sessionId: string;
-  name: string;
-  mediaType: string;
-  sizeBytes: number;
-  loading: boolean;
-  text: string | null;
-  truncated: boolean;
 }
 
 /**
@@ -827,11 +727,6 @@ function stopNote(reason: string): string {
     return "这一轮被取消了。已完成的改动都在工作区里。";
   }
   return `这一轮没有跑完（${reason}）。已完成的改动都在工作区里，直接说下一步就能继续。`;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${String(bytes)} B`;
-  return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
 function describe(cause: unknown): string {
