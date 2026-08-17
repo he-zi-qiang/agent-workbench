@@ -53,6 +53,7 @@ import type {
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { BlobPreview } from "../../components/BlobPreview";
+import { HtmlPreview } from "../../components/HtmlPreview";
 import { previewKind } from "../../components/media";
 import { EmptyState, ErrorNotice, shortId } from "../../components/ui";
 import { MarkdownContent } from "../../components/MarkdownContent";
@@ -736,6 +737,21 @@ function FilePreview({
         }
         name={viewing.name}
         queryKey={["code-file-blob", viewing.sessionId, viewing.name]}
+        sizeBytes={viewing.sizeBytes}
+      />
+    );
+  }
+  if (kind === "html") {
+    // Runs in HtmlPreview's sandbox frame, with the source behind its 源码
+    // toggle -- so `open()` does not prefetch it as text the way it does for
+    // the text kind; the component owns its one fetch for both views.
+    return (
+      <HtmlPreview
+        load={() =>
+          getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name)
+        }
+        name={viewing.name}
+        queryKey={["code-file-html", viewing.sessionId, viewing.name]}
         sizeBytes={viewing.sizeBytes}
       />
     );

@@ -279,6 +279,10 @@ _SUFFIX_MEDIA_TYPES = {
     ".html": "text/html",
     ".png": "image/png",
     ".pdf": "application/pdf",
+    # Typed octet-stream an .svg was download-only in the console; typed as
+    # the image it is, the `<img>` viewer shows it (rasterised -- scripts in
+    # it never run there).
+    ".svg": "image/svg+xml",
 }
 
 

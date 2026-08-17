@@ -336,7 +336,7 @@ def test_another_tenant_cannot_download_the_artifact(tmp_path: Path) -> None:
 
 
 def test_the_owner_can_download_what_was_stored(tmp_path: Path) -> None:
-    async def scenario(client: httpx.AsyncClient) -> tuple[int, bytes, str, str]:
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, bytes, str, str, str]:
         _, transferred, _ = await _upload(client)
         response = await client.get(
             f"/v1/artifacts/{transferred.json()['artifact_id']}",
@@ -347,9 +347,12 @@ def test_the_owner_can_download_what_was_stored(tmp_path: Path) -> None:
             response.content,
             response.headers["x-artifact-sha256"],
             response.headers["content-disposition"],
+            response.headers["x-content-type-options"],
         )
 
-    status_code, content, digest, content_disposition = _run(scenario, tmp_path)
+    status_code, content, digest, content_disposition, sniffing = _run(
+        scenario, tmp_path
+    )
 
     assert status_code == 200
     assert content == CONTENT
@@ -357,6 +360,9 @@ def test_the_owner_can_download_what_was_stored(tmp_path: Path) -> None:
     assert content_disposition == (
         "attachment; filename=\"passage.txt\"; filename*=UTF-8''passage.txt"
     )
+    # The stored media type is the whole answer; a browser second-guessing it
+    # is a browser promoting text/plain to something executable.
+    assert sniffing == "nosniff"
 
 
 def test_download_filename_is_encoded_as_metadata_not_header_syntax() -> None:

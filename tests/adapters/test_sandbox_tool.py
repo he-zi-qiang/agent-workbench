@@ -225,6 +225,23 @@ def test_outputs_become_workspace_versions() -> None:
         assert read(scope, "summary.txt") == b"total=382\n"
 
 
+def test_an_svg_output_is_typed_as_the_image_it_is() -> None:
+    # Typed application/octet-stream (the fallback) an .svg was download-only
+    # in the console. The guess costs a label, and this is the one suffix
+    # where the wrong label hides the picture -- the `<img>` viewer shows it
+    # rasterised, scripts and all inert.
+    client = _StubSandboxClient(stdout="", outputs=(("plot.svg", b"<svg/>"),))
+    with entered() as scope:
+        result = invoke(SandboxRunTool(scope=scope, client=client), script="pass")
+
+        assert result.status == "ok"
+        session = scope.current()
+        assert session is not None
+        listing = asyncio.run(session.workspace.list(session.version))
+        types = {item.name: item.media_type for item in listing}
+        assert types["plot.svg"] == "image/svg+xml"
+
+
 def test_a_script_with_no_inputs_omits_the_field_rather_than_sending_it_empty() -> None:
     """`inputs` is optional on the server and declares `minItems: 1`.
 

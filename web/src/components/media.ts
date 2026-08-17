@@ -22,13 +22,25 @@ export const DOCX_MEDIA_TYPE =
  * file instead of showing a picture. One closed vocabulary, one place to add
  * the next kind.
  */
-export type PreviewKind = "text" | "docx" | "image" | "pdf" | "none";
+export type PreviewKind = "text" | "docx" | "image" | "pdf" | "html" | "none";
 
 export function previewKind(mediaType: string): PreviewKind {
+  // Before the readable check, which would otherwise swallow it: `text/html`
+  // is readable, but showing an agent-built page as its own source (or worse,
+  // feeding it to a Markdown renderer that sanitises it to nothing, which is
+  // what the Work page used to do) answers a different question than the one
+  // the click asked. The viewer runs it in an opaque-origin sandbox frame --
+  // see `HtmlPreview` for why that is safe to admit.
+  if (mediaType === "text/html" || mediaType === "application/xhtml+xml") {
+    return "html";
+  }
   if (isReadableMedia(mediaType)) return "text";
   if (mediaType === DOCX_MEDIA_TYPE) return "docx";
   // Through `<img>`, which is why every image/* subtype is safe to admit:
-  // an image element rasterises -- an SVG's scripts never run there.
+  // an image element rasterises -- an SVG's scripts never run there. That is
+  // also why SVG stays here rather than joining `html`: rasterised it is
+  // already visible, and the rare scripted SVG is not worth a second
+  // executable surface.
   if (mediaType.startsWith("image/")) return "image";
   if (mediaType === "application/pdf") return "pdf";
   return "none";

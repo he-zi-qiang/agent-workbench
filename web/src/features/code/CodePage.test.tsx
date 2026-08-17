@@ -24,6 +24,9 @@ import { DOCX_MEDIA_TYPE } from "../../components/media";
 import { useCodeStream } from "./useCodeStream";
 
 vi.mock("../../api/client", () => ({
+  // A real constant, not a mock: HtmlPreview reads it to size-gate before
+  // fetching, and a factory that omits it fails on first render.
+  MAX_PREVIEW_BYTES: 512 * 1024,
   askCode: vi.fn(),
   createCodeSession: vi.fn(),
   decideCodeApproval: vi.fn(),
@@ -720,6 +723,28 @@ describe("CodePage", () => {
       SESSION,
       "report.docx",
     ]);
+  });
+
+  it("runs an html file in a sandboxed frame instead of showing its source", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "demo.html", size_bytes: 64, media_type: "text/html" }],
+    });
+    vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+      text: "<html><body><h1>demo</h1></body></html>",
+      truncated: false,
+    });
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /demo\.html/ }));
+
+    // Rendered, not read: the page an agent builds only answers "did it
+    // work?" by running. The sandbox value is pinned in HtmlPreview's own
+    // tests; here the claim is that the workspace routes html into it.
+    const frame = await screen.findByTitle("demo.html 预览");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    // The source stays one toggle away rather than being the default view.
+    expect(screen.getByRole("button", { name: "源码" })).toBeInTheDocument();
   });
 
   it("says a long file was cut rather than implying that is all of it", async () => {

@@ -2762,6 +2762,13 @@ pre {
   border: 0;
 }
 
+/* The sandboxed HTML frame. White rather than the panel tint: a page that
+   sets no background of its own expects paper, and the tint would read as
+   the page's own colour choice. */
+.aw-html-frame {
+  background: #fff;
+}
+
 /* A generated picture at its own size when it fits, scaled down when it does
    not -- never scaled up, which turns a small plot into fog. */
 .aw-preview-image {
