@@ -70,7 +70,7 @@ import { CodeTurn } from "./CodeTurn";
 import type { OpenedFile } from "./FilePreview";
 import { PreviewPanel } from "./PreviewPanel";
 import { buildTurnBlocks } from "./turnBlocks";
-import { useCodeStream } from "./useCodeStream";
+import { useCodeStream, type ToolProgressView } from "./useCodeStream";
 
 /** How often to ask what the agent is stopped on, while it is working. */
 const APPROVAL_POLL_MS = 1000;
@@ -143,7 +143,19 @@ export function CodePage() {
   });
   const known = sessions.data?.sessions ?? [];
 
-  const { steps, thinking, thinkingCallId, answer } = useCodeStream(
+/**
+ * The map a settled turn gets, defined here rather than imported.
+ *
+ * `useCodeStream` exports an identical one, and taking it from there is what
+ * this line used to do -- but `CodePage.test.tsx` mocks that module wholesale,
+ * which makes every named export it does not list `undefined`. The type
+ * checker cannot see that, so the failure surfaced as `.get()` on undefined
+ * inside a render, eight tests deep. A constant a mock cannot reach is worth
+ * more than a constant that is shared.
+ */
+const NO_TOOL_PROGRESS: ReadonlyMap<string, ToolProgressView> = new Map();
+
+  const { steps, thinking, thinkingCallId, answer, progress } = useCodeStream(
     identity,
     sessionId,
   );
@@ -699,6 +711,12 @@ export function CodePage() {
                   onWrote={refreshWorkspace}
                   openedName={viewing?.name ?? null}
                   sessionId={sessionId}
+                  // Gated on `live` like the thought and the report above it.
+                  // Progress is keyed by tool call, so an ungated map would be
+                  // correct too -- but a finished turn holding a live channel
+                  // is a shape that only stays harmless while the keys happen
+                  // not to collide, and the other three already say `live`.
+                  toolProgress={block.live ? progress : NO_TOOL_PROGRESS}
                 />
               ))}
             </ol>

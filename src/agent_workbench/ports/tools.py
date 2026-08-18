@@ -25,6 +25,36 @@ from agent_workbench.ports.cancellation import CancellationToken
 OperationKeyFor = Callable[[ToolCall, ExecutionContext], str]
 
 
+@runtime_checkable
+class ToolProgressReporter(Protocol):
+    """How a handler says what it is doing while it is still doing it.
+
+    Deliberately not the ``EventSink`` the gateway holds. A handler is adapter
+    code -- an MCP client, a subprocess wrapper -- and handing it the sink
+    would hand it the whole event vocabulary: it could emit ``AnswerCommitted``
+    on the run that invoked it. What a handler is owed is one verb, already
+    bound to the call it is answering, so that "which tool call is this
+    progress about" is not a field a handler can get wrong (ADR-068).
+
+    Calling it is best-effort and must never be the reason a tool fails. The
+    implementation swallows its own delivery errors and ignores reports that
+    arrive after the handler returned, so a handler may report without
+    guarding, and does not have to know whether anybody is listening.
+    """
+
+    async def __call__(self, message: str, *, percent: int | None = None) -> None: ...
+
+
+async def discard_progress(message: str, *, percent: int | None = None) -> None:
+    """The reporter a handler gets when nothing is observing it.
+
+    Present so ``ToolInvocation.progress`` is never ``None``: an optional
+    channel makes every reporting handler write ``if self.progress is not
+    None`` around the one line that reports, and the branch that gets skipped
+    in every test is the branch that breaks.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class ToolInvocation:
     """Everything one handler call receives.
@@ -37,6 +67,10 @@ class ToolInvocation:
     context: ExecutionContext
     cancellation: CancellationToken
     timeout_seconds: int
+    #: Where this call reports what it is doing. Defaults to the sink-less
+    #: reporter so every existing construction -- and every test that builds an
+    #: invocation by hand -- keeps working while reporting nowhere.
+    progress: ToolProgressReporter = discard_progress
 
 
 @runtime_checkable
@@ -102,5 +136,7 @@ __all__ = [
     "ToolBinding",
     "ToolHandler",
     "ToolInvocation",
+    "ToolProgressReporter",
     "ToolRegistry",
+    "discard_progress",
 ]

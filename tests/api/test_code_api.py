@@ -1196,7 +1196,18 @@ class _FakeSandboxServer:
     async def list_tools_page(self, cursor: str | None) -> Any:  # pragma: no cover
         raise AssertionError("the runner never lists tools")
 
-    async def call_tool(self, name: str, arguments: Any) -> Any:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: Any,
+        *,
+        on_progress: Any = None,
+    ) -> Any:
+        # Accepted and ignored. The console's 运行 button holds its own HTTP
+        # response open and has nowhere to report progress to, so this is the
+        # caller `WorkspaceSandbox.run` documents as passing no sink -- but the
+        # keyword still has to exist, because the port declares it (ADR-069).
+        del on_progress
         self.calls.append(cast(dict[str, Any], arguments))
         if self.is_error:
             return SimpleNamespace(

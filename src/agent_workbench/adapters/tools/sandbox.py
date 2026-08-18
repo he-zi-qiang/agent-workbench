@@ -25,7 +25,7 @@ from typing import Any, cast
 
 from pydantic import JsonValue
 
-from agent_workbench.adapters.mcp.client import MCPClientPort
+from agent_workbench.adapters.mcp.client import MCPClientPort, ProgressSink
 from agent_workbench.adapters.tools.media_guess import media_type_for
 from agent_workbench.application.workspace import (
     WorkspaceEntryNotFoundError,
@@ -41,7 +41,12 @@ from agent_workbench.domain.sandbox import (
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.domain.workspace import WorkspaceOverflowError
 from agent_workbench.ports.cancellation import CancellationToken
-from agent_workbench.ports.tools import ToolBinding, ToolInvocation
+from agent_workbench.ports.tools import (
+    ToolBinding,
+    ToolInvocation,
+    ToolProgressReporter,
+    discard_progress,
+)
 
 TOOL_NAME = SANDBOX_RUN_TOOL
 
@@ -137,9 +142,24 @@ class WorkspaceSandbox:
         script: str,
         inputs: Sequence[str],
         cancellation: CancellationToken,
+        progress: ToolProgressReporter = discard_progress,
     ) -> SandboxOutcome:
-        """Run ``script`` with ``inputs`` beside it, keeping what it writes."""
+        """Run ``script`` with ``inputs`` beside it, keeping what it writes.
 
+        ``progress`` names the three phases as they are entered (ADR-068). It
+        defaults to the discarding reporter because this method has two callers
+        and only one of them has somewhere to report: the tool handler is
+        invoked by the executor and carries a channel, while the console's 运行
+        button is an HTTP request holding its own response open. Reporting into
+        nothing is what the caller without a channel is entitled to do.
+
+        The phases are named rather than counted, and there is no ``percent``.
+        Which of the three is running is a fact; "the script is 40% done" is
+        not one this process can know -- the script is a container the sandbox
+        server owns, and it reports nothing until it exits.
+        """
+
+        await progress(f"staging {len(inputs)} input file(s)" if inputs else "staging")
         try:
             payload = [
                 {
@@ -163,7 +183,29 @@ class WorkspaceSandbox:
         # only computes would be refused before it ran.
         if payload:
             arguments["inputs"] = cast(JsonValue, payload)
-        remote = await self.client.call_tool(SANDBOX_REMOTE_TOOL, arguments)
+        # The one that matters. Everything either side of this line is bounded
+        # by a workspace read or a workspace write; this await is a container
+        # starting, running arbitrary Python and stopping, and it is the whole
+        # of the 300 seconds `sandbox_run` declares.
+        #
+        # It is no longer silent. `on_progress` receives the script's own
+        # output line by line as it is printed (ADR-069), so what a reader
+        # watches is the script talking rather than a clock ticking beside a
+        # phase name. The phase is still reported first, because a script that
+        # prints nothing for a minute is a real and common case and the row
+        # must say something before its first line arrives.
+        await progress("executing in the sandbox")
+        remote = await self.client.call_tool(
+            SANDBOX_REMOTE_TOOL,
+            arguments,
+            # `None` when nobody is listening, and that is not a micro
+            # optimisation: passing a callback is what makes the SDK send a
+            # progress token, which is what makes the server frame and transmit
+            # a notification per slice. A caller with nowhere to report to --
+            # the console's 运行 button, which holds its own HTTP response open
+            # -- would otherwise pay the whole cost of a stream it discards.
+            on_progress=None if progress is discard_progress else _forwarding(progress),
+        )
         if remote.is_error:
             raise SandboxRefusedError(
                 "tool_failed",
@@ -190,6 +232,8 @@ class WorkspaceSandbox:
             )
 
         written: list[str] = []
+        if outputs:
+            await progress(f"saving {len(outputs)} output file(s)")
         for name, content in outputs:
             cancellation.raise_if_cancelled()
             try:
@@ -286,6 +330,10 @@ class SandboxRunTool:
                     str(name) for name in cast(list[Any], arguments.get("inputs") or [])
                 ],
                 cancellation=invocation.cancellation,
+                # The channel the executor bound to this call. Passed rather
+                # than rebuilt, so the phases below land on the same
+                # `tool_call_id` as this call's ToolStarted and ToolCompleted.
+                progress=invocation.progress,
             )
         except SandboxRefusedError as refusal:
             return _failed(invocation, refusal.code, str(refusal))
@@ -300,6 +348,41 @@ class SandboxRunTool:
             # than a single name.
             workspace_writes=outcome.written,
         )
+
+
+def _forwarding(report: ToolProgressReporter) -> ProgressSink:
+    """Turn the MCP progress triple back into one line of tool progress.
+
+    The `progress` count and the `total` are dropped, deliberately. Both are
+    real -- the count is characters streamed so far -- but neither is a
+    completion fraction: the sandbox does not know how much a script will
+    print, so `total` is always `None` and a percentage computed from the pair
+    would be an invention. `ToolProgress.percent` therefore stays empty, which
+    is the same decision ADR-068 §2.3 made for the heartbeat.
+
+    A notification with no message carries nothing to show and is dropped
+    rather than turned into an empty line.
+    """
+
+    # Parameter names matter here and are not free to improve: the SDK calls
+    # this with keywords, so `progress` has to be called `progress` even though
+    # the reporter it forwards to is the more interesting thing in scope --
+    # which is why that one is bound as `report`.
+    async def forward(
+        progress: float, total: float | None, message: str | None
+    ) -> None:
+        del progress, total
+        if message is None:
+            return
+        # Trailing whitespace stripped, leading whitespace kept. `print` ends
+        # every line with a newline that would otherwise ride into a
+        # single-line row; indentation at the *front* of a line is the script
+        # saying something about its own output and is left alone.
+        text = message.rstrip()
+        if text:
+            await report(text)
+
+    return forward
 
 
 def _session(scope: WorkspaceScope) -> WorkspaceSession:

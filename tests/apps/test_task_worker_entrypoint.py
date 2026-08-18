@@ -18,6 +18,7 @@ from pydantic import SecretStr
 from agent_workbench.adapters.embedding.fake import DeterministicEmbedder
 from agent_workbench.adapters.langgraph import LangGraphTaskWorkflow
 from agent_workbench.adapters.mcp.client import (
+    ProgressSink,
     RemoteCallResult,
     RemoteTextBlock,
     RemoteToolDefinition,
@@ -129,7 +130,13 @@ class _DirectoryMCPClient:
             )
         )
 
-    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: JsonObject,
+        *,
+        on_progress: ProgressSink | None = None,
+    ) -> RemoteCallResult:
         del name, arguments
         return RemoteCallResult(content=())
 
@@ -403,7 +410,13 @@ class _ProbeSandboxClient:
         del cursor
         return RemoteToolPage(tools=())
 
-    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: JsonObject,
+        *,
+        on_progress: ProgressSink | None = None,
+    ) -> RemoteCallResult:
         del arguments
         self.calls.append(name)
         if isinstance(self.probe, Exception):

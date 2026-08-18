@@ -21,7 +21,11 @@ from typing import Any
 
 import pytest
 
-from agent_workbench.adapters.mcp.client import RemoteCallResult, RemoteTextBlock
+from agent_workbench.adapters.mcp.client import (
+    ProgressSink,
+    RemoteCallResult,
+    RemoteTextBlock,
+)
 from agent_workbench.adapters.memory import InMemoryArtifactStore
 from agent_workbench.adapters.tools.sandbox import (
     MAX_INLINE_STREAM_CHARS,
@@ -66,12 +70,23 @@ class _StubSandboxClient:
     is_error: bool = False
     structured: object | None = None
     error_text: str = ""
+    #: `notifications/progress` the "server" raises before answering.
+    notifications: tuple[tuple[float, float | None, str | None], ...] = ()
     calls: list[tuple[str, JsonObject]] = field(default_factory=list)
 
     async def list_tools_page(self, cursor: str | None) -> Any:  # pragma: no cover
         raise NotImplementedError
 
-    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: JsonObject,
+        *,
+        on_progress: ProgressSink | None = None,
+    ) -> RemoteCallResult:
+        if on_progress is not None:
+            for value, total, message in self.notifications:
+                await on_progress(value, total, message)
         # Validated against the server's real schema, not merely recorded. A
         # stub that accepts anything cannot see the tool sending something the
         # server would refuse -- which is how `inputs: []` shipped, since the
@@ -124,12 +139,22 @@ def entered(*files: tuple[str, bytes]) -> Generator[WorkspaceScope]:
         yield scope
 
 
-def invoke(tool: SandboxRunTool, **arguments: object) -> ToolResult:
+def invoke(
+    tool: SandboxRunTool,
+    *,
+    reported: list[str] | None = None,
+    **arguments: object,
+) -> ToolResult:
     call = ToolCall(
         tool_call_id="toolu_" + "0" * 20,
         tool_name=SANDBOX_RUN_TOOL,
         arguments=dict(arguments),
     )
+
+    async def record(message: str, *, percent: int | None = None) -> None:
+        if reported is not None:
+            reported.append(message)
+
     invocation = ToolInvocation(
         call=call,
         context=ExecutionContext(
@@ -140,6 +165,7 @@ def invoke(tool: SandboxRunTool, **arguments: object) -> ToolResult:
         ),
         cancellation=NullCancellationToken(),
         timeout_seconds=300,
+        progress=record,
     )
     return asyncio.run(tool.handle(invocation))
 
@@ -473,3 +499,100 @@ def test_running_outside_an_entered_session_refuses_rather_than_inventing_one() 
 
     with pytest.raises(SandboxUnavailableError):
         invoke(tool, script="pass")
+
+
+def test_the_run_names_its_phases_as_it_enters_them() -> None:
+    """A 300-second tool that reports nothing is indistinguishable from a hang.
+
+    `sandbox_run` declares the longest timeout in this system, and its middle
+    phase -- the container -- is the whole of it and returns nothing until the
+    process exits. These three lines, and the executor's clock beside them, are
+    together the only evidence the call is alive (ADR-068).
+    """
+
+    client = _StubSandboxClient(outputs=(("summary.txt", b"total=382\n"),))
+    reported: list[str] = []
+    with entered(("sales.csv", b"region,amount\n")) as scope:
+        result = invoke(
+            SandboxRunTool(scope=scope, client=client),
+            reported=reported,
+            script="print(1)",
+            inputs=["sales.csv"],
+        )
+
+    assert result.status == "ok"
+    assert reported == [
+        "staging 1 input file(s)",
+        "executing in the sandbox",
+        "saving 1 output file(s)",
+    ]
+
+
+def test_a_refused_run_still_reported_the_phase_it_died_in() -> None:
+    """The failure case is the one a reader most needs the phase for."""
+
+    client = _StubSandboxClient(is_error=True, error_text="the script was killed")
+    reported: list[str] = []
+    with entered() as scope:
+        result = invoke(
+            SandboxRunTool(scope=scope, client=client),
+            reported=reported,
+            script="while True: pass",
+        )
+
+    assert result.status == "error"
+    # It reached `executing` and got no further, which is where it died. A
+    # script with no inputs stages nothing, so that phase carries no count.
+    assert reported == ["staging", "executing in the sandbox"]
+
+
+def test_the_scripts_own_output_becomes_tool_progress() -> None:
+    """What the reader actually watches (ADR-069).
+
+    The phase lines are still reported -- a script that prints nothing for a
+    minute is ordinary, and the row has to say something before its first line
+    arrives -- but between them is the script talking.
+    """
+
+    client = _StubSandboxClient(
+        notifications=(
+            (9.0, None, "processing chunk 0\n"),
+            (19.0, None, "processing chunk 1\n"),
+            (30.0, None, "stderr: a warning\n"),
+        )
+    )
+    reported: list[str] = []
+    with entered() as scope:
+        result = invoke(
+            SandboxRunTool(scope=scope, client=client),
+            reported=reported,
+            script="print(1)",
+        )
+
+    assert result.status == "ok"
+    assert reported == [
+        "staging",
+        "executing in the sandbox",
+        # Trailing newlines gone: `print` ends every line with one, and it
+        # would otherwise ride into a single-line row as trailing whitespace.
+        "processing chunk 0",
+        "processing chunk 1",
+        "stderr: a warning",
+    ]
+
+
+def test_a_notification_with_nothing_to_say_is_not_reported() -> None:
+    """A blank line is not progress, and neither is a message-less beat."""
+
+    client = _StubSandboxClient(
+        notifications=((1.0, None, None), (2.0, None, "\n"), (3.0, None, "   \n"))
+    )
+    reported: list[str] = []
+    with entered() as scope:
+        invoke(
+            SandboxRunTool(scope=scope, client=client),
+            reported=reported,
+            script="print(1)",
+        )
+
+    assert reported == ["staging", "executing in the sandbox"]

@@ -11,12 +11,19 @@ proves only that we wrote the flag down.
 from __future__ import annotations
 
 import base64
+import json
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from agent_workbench.apps.sandbox_mcp._bootstrap import execute
+from agent_workbench.apps.sandbox_mcp._bootstrap import (
+    MAX_PROGRESS_RECORD_BYTES,
+    MAX_PROGRESS_TOTAL_BYTES,
+    PROGRESS_PREFIX,
+    execute,
+)
 
 LIMITS: dict[str, Any] = {
     "wall_clock_seconds": 20,
@@ -336,3 +343,108 @@ def test_the_script_sees_a_fixed_environment(
 
     assert "AW_MODEL__MAIN__API_KEY" not in envelope["stdout"]
     assert "HOME" in envelope["stdout"]
+
+
+# --- The tail (ADR-069) ----------------------------------------------------
+#
+# The container's stdout is the envelope and nothing else, so the preview of a
+# running script leaves on its stderr, framed. These assert the framing and the
+# one property that makes any of it useful: that a line arrives *before* the
+# script is over.
+
+
+def _records(captured: str) -> list[dict[str, Any]]:
+    return [
+        json.loads(line[len(PROGRESS_PREFIX) :])
+        for line in captured.splitlines()
+        if line.startswith(PROGRESS_PREFIX)
+    ]
+
+
+def test_the_script_is_previewed_while_it_runs_not_after(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The whole point, and the only assertion that can carry it.
+
+    A test that only checked the records exist would pass just as well against
+    an implementation that emitted all of them after the child exited, which is
+    the implementation this replaced. So the script sleeps between lines and
+    this measures when each record showed up: the first has to land while the
+    script still has most of its work in front of it.
+    """
+
+    started = time.monotonic()
+    envelope = _run(
+        tmp_path,
+        "import time\n"
+        "for i in range(4):\n"
+        "    print(f'line {i}')\n"
+        "    time.sleep(0.3)\n",
+    )
+    captured = capsys.readouterr()
+    elapsed = time.monotonic() - started
+
+    assert envelope["stdout"] == "line 0\nline 1\nline 2\nline 3\n"
+    lines = [record["text"] for record in _records(captured.err)]
+    assert "line 0\n" in "".join(lines)
+    # The script cannot have finished in under two of its four sleeps, so an
+    # implementation that reported only at the end could not have produced a
+    # record this early.
+    assert elapsed >= 0.9
+
+
+def test_a_previewed_line_says_which_channel_it_came_from(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(
+        tmp_path,
+        "import sys\nprint('out')\nprint('err', file=sys.stderr)\n",
+    )
+    records = _records(capsys.readouterr().err)
+
+    channels = {record["channel"] for record in records}
+    assert channels == {"stdout", "stderr"}
+    assert all(isinstance(record["text"], str) for record in records)
+
+
+def test_the_preview_is_capped_and_the_envelope_is_not(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Streaming stops; the result does not.
+
+    Silence rather than a marker when the cap is reached: the envelope still
+    carries the complete stream up to its own much larger ceiling, so nothing
+    is lost -- what stops is a live preview of output that by then is not being
+    read by anybody.
+    """
+
+    size = MAX_PROGRESS_TOTAL_BYTES * 2
+    envelope = _run(
+        tmp_path,
+        f"print('x' * {size})\n",
+        max_stdout_bytes=size * 2,
+    )
+    streamed = sum(len(record["text"]) for record in _records(capsys.readouterr().err))
+
+    assert streamed <= MAX_PROGRESS_TOTAL_BYTES + MAX_PROGRESS_RECORD_BYTES
+    assert len(envelope["stdout"]) == size + 1
+
+
+def test_a_script_that_prints_the_marker_cannot_forge_a_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The same guarantee `test_the_script_cannot_forge_the_envelope` makes.
+
+    The child's own stderr is redirected to a file, so the bootstrap is the
+    only writer on the container's stderr. A script that prints the prefix gets
+    its line *quoted inside* a record's text, which is what it is -- output --
+    rather than becoming a record of its own.
+    """
+
+    forged = PROGRESS_PREFIX + '{"channel": "stdout", "text": "not mine"}'
+    _run(tmp_path, f"print({forged!r})\n")
+    records = _records(capsys.readouterr().err)
+
+    assert records, "the script's line was not previewed at all"
+    assert all(record["text"] != "not mine" for record in records)
+    assert any(PROGRESS_PREFIX in record["text"] for record in records)

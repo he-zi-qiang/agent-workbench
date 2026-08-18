@@ -187,6 +187,133 @@ describe("useCodeStream reasoning", () => {
     });
     expect(result.current.thinking).toBe("still going");
   });
+  it("shows what a running tool call is doing, keyed by the call", async () => {
+    stubStream([
+      progress("call_a", { message: "executing in the sandbox", elapsed_ms: 0 }),
+      progress("call_b", { message: "staging 2 input file(s)", elapsed_ms: 0 }),
+    ]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    // Two at once, because the runtime runs read tools in parallel. A single
+    // slot would show whichever reported last under both rows.
+    await waitFor(() => {
+      expect(result.current.progress.get("call_a")?.lines).toEqual([
+        "executing in the sandbox",
+      ]);
+    });
+    expect(result.current.progress.get("call_b")?.lines).toEqual([
+      "staging 2 input file(s)",
+    ]);
+  });
+
+  it("lets a heartbeat move the clock without blanking the phase", async () => {
+    stubStream([
+      progress("call_a", { message: "executing in the sandbox" }),
+      progress("call_a", { elapsed_ms: 5000 }),
+      progress("call_a", { elapsed_ms: 10_000 }),
+    ]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    // A beat carries a clock and no message, because nothing new has happened.
+    // Letting it clear the block would empty the card every few seconds.
+    await waitFor(() => {
+      expect(result.current.progress.get("call_a")?.elapsedMs).toBe(10_000);
+    });
+    expect(result.current.progress.get("call_a")?.lines).toEqual([
+      "executing in the sandbox",
+    ]);
+  });
+
+  it("grows the block as the script prints, keeping only the tail", async () => {
+    stubStream([
+      progress("call_a", { message: "executing in the sandbox" }),
+      // One record, four lines: the container's tail reads a chunk of bytes
+      // rather than a line, so several prints inside one poll interval arrive
+      // together (ADR-069).
+      progress("call_a", { message: "chunk 0\nchunk 1\n\nchunk 2\n" }),
+      ...Array.from({ length: 7 }, (_, index) =>
+        progress("call_a", { message: `chunk ${String(index + 3)}` }),
+      ),
+    ]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    await waitFor(() => {
+      expect(result.current.progress.get("call_a")?.lines).toContain("chunk 9");
+    });
+    const lines = result.current.progress.get("call_a")?.lines ?? [];
+    // A window, not a transcript: the complete streams are in the tool result.
+    expect(lines).toHaveLength(8);
+    expect(lines[lines.length - 1]).toBe("chunk 9");
+    // The phase has scrolled off, and the blank line inside the multi-line
+    // record never took a slot.
+    expect(lines).not.toContain("executing in the sandbox");
+    expect(lines).not.toContain("");
+  });
+
+  it("drops a call's progress the moment that call returns", async () => {
+    stubStream([
+      progress("call_a", { message: "executing in the sandbox", elapsed_ms: 5000 }),
+      toolDone(1, "call_a"),
+    ]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    // Otherwise "executing in the sandbox · 已运行 5 秒" stays frozen under a
+    // step whose outcome is already drawn -- the console asserting motion that
+    // has stopped.
+    await waitFor(() => {
+      expect(result.current.steps).toHaveLength(1);
+    });
+    expect(result.current.progress.has("call_a")).toBe(false);
+  });
+
+  it("drops it for a call that failed, too", async () => {
+    stubStream([
+      progress("call_a", { message: "executing in the sandbox" }),
+      toolDone(1, "call_a", "ToolFailed"),
+    ]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    await waitFor(() => {
+      expect(result.current.steps).toHaveLength(1);
+    });
+    expect(result.current.progress.has("call_a")).toBe(false);
+  });
+
+  it("clears every running call when the run itself ends", async () => {
+    stubStream([
+      progress("call_a", { message: "executing in the sandbox" }),
+      terminal(1, "RunCancelled"),
+    ]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    // A tool killed by the run's cancellation gets neither ToolCompleted nor
+    // ToolFailed, so the per-call rule above never fires for it. Without this
+    // its line would outlive the run that produced it.
+    await waitFor(() => {
+      expect(result.current.steps).toHaveLength(1);
+    });
+    expect(result.current.progress.size).toBe(0);
+  });
+
+  it("keeps the live progress out of the step list", async () => {
+    stubStream([durable(1, "evt_1"), progress("call_a", { elapsed_ms: 5000 })]);
+
+    const { result } = renderHook(() => useCodeStream(IDENTITY, SESSION));
+
+    // Same rule as the deltas: a frame with no position cannot be resumed
+    // from, so a list containing one would differ depending on when the reader
+    // connected.
+    await waitFor(() => {
+      expect(result.current.progress.get("call_a")?.elapsedMs).toBe(5000);
+    });
+    expect(result.current.steps.map((event) => event.event_id)).toEqual(["evt_1"]);
+  });
 });
 
 function stubStream(frames: string[], options: { reusable?: boolean } = {}) {
@@ -279,6 +406,75 @@ function completed(sequence: number, call = "mc_1"): string {
     parent_event_id: null,
   };
   return `id: cursor_${String(sequence)}\nevent: ModelCompleted\ndata: ${JSON.stringify(envelope)}\n\n`;
+}
+
+function progress(
+  toolCall: string,
+  fields: { message?: string; elapsed_ms?: number; percent?: number },
+): string {
+  const envelope = {
+    schema_version: 1,
+    event_id: `evt_progress_${toolCall}_${JSON.stringify(fields)}`,
+    stream_id: SESSION,
+    run_id: "run_1",
+    event_type: "ToolProgress",
+    durability: "transient",
+    timestamp: "2026-08-14T12:00:00Z",
+    payload: {
+      kind: "ToolProgress",
+      tool_call_id: toolCall,
+      message: fields.message ?? null,
+      percent: fields.percent ?? null,
+      elapsed_ms: fields.elapsed_ms ?? null,
+    },
+    sequence: null,
+    task_id: null,
+    graph_node_id: null,
+    parent_event_id: null,
+  };
+  // No `id:` line: like every other transient frame, it has no position.
+  return `event: ToolProgress\ndata: ${JSON.stringify(envelope)}\n\n`;
+}
+
+function toolDone(sequence: number, toolCall: string, type = "ToolCompleted"): string {
+  const envelope = {
+    schema_version: 1,
+    event_id: `evt_tool_${String(sequence)}`,
+    stream_id: SESSION,
+    run_id: "run_1",
+    event_type: type,
+    durability: "durable",
+    timestamp: "2026-08-14T12:00:00Z",
+    payload: {
+      kind: type,
+      tool_call_id: toolCall,
+      tool_name: "sandbox_run",
+      status: "ok",
+    },
+    sequence,
+    task_id: null,
+    graph_node_id: null,
+    parent_event_id: null,
+  };
+  return `id: cursor_${String(sequence)}\nevent: ${type}\ndata: ${JSON.stringify(envelope)}\n\n`;
+}
+
+function terminal(sequence: number, type: string): string {
+  const envelope = {
+    schema_version: 1,
+    event_id: `evt_run_${String(sequence)}`,
+    stream_id: SESSION,
+    run_id: "run_1",
+    event_type: type,
+    durability: "durable",
+    timestamp: "2026-08-14T12:00:00Z",
+    payload: { kind: type, reason_code: "cancel_requested" },
+    sequence,
+    task_id: null,
+    graph_node_id: null,
+    parent_event_id: null,
+  };
+  return `id: cursor_${String(sequence)}\nevent: ${type}\ndata: ${JSON.stringify(envelope)}\n\n`;
 }
 
 function quarantine(sequence: number): string {

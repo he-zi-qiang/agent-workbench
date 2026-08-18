@@ -84,10 +84,81 @@ interface Thought {
   answer: string;
 }
 
+/** The tool calls currently in flight, and which session they belong to. */
+interface RunningCalls {
+  session: string;
+  calls: ReadonlyMap<string, ToolProgressView>;
+}
+
+/**
+ * An empty map, one instance.
+ *
+ * A fresh `new Map()` on every frame that clears progress would hand the page
+ * a new identity each time and defeat memoisation on every settled turn.
+ */
+const EMPTY_TOOL_PROGRESS: ReadonlyMap<string, ToolProgressView> = new Map();
+
+/**
+ * What one tool call is doing, while it is still doing it.
+ *
+ * The tool half of `Thought`, and kept for the same reason and in the same
+ * place: beside the step list rather than in it, because it is transient and
+ * carries no position (see the module note). It answers the same question for
+ * the stretch a *tool* is running that reasoning answers for the stretch the
+ * model is writing -- and that stretch is the longer one. `sandbox_run`
+ * declares a 300-second timeout, and until this existed all 300 of them looked
+ * the same as a Worker that had died (ADR-068).
+ */
+export interface ToolProgressView {
+  /**
+   * The tail of everything this call has said, oldest first.
+   *
+   * A list rather than one line, because with ADR-069 the sandbox streams the
+   * script's own output through this channel: what a reader wants is the block
+   * that keeps growing under the command, which is one line only for the
+   * handful of milliseconds before the second line arrives.
+   *
+   * Phases and script output share it deliberately. They arrive interleaved
+   * and in order -- `executing in the sandbox`, then whatever the script
+   * printed, then `saving 2 output file(s)` -- and that order is a truthful
+   * account of the call. Splitting them into two fields would mean choosing
+   * which of the two to show first, and every choice would be wrong for some
+   * call.
+   *
+   * Grows across heartbeats rather than being replaced by them: a beat carries
+   * a clock and no message, because nothing new has happened. Letting it clear
+   * the block would empty the card every few seconds.
+   */
+  lines: readonly string[];
+  /** How long the call has been running, as the executor measured it. */
+  elapsedMs: number | null;
+  /** 0-100 when the handler claimed one. Null for a clock, which cannot. */
+  percent: number | null;
+}
+
+/**
+ * How many lines of one call's output the block keeps.
+ *
+ * A window, not a transcript. The complete streams are in the tool result and
+ * reach the reader through the step's own disclosure -- this is the part that
+ * answers "is it still moving", and eight lines is more than enough to see
+ * that while staying a block a reader can take in without scrolling.
+ */
+const KEPT_PROGRESS_LINES = 8;
+
 export interface CodeStream {
   steps: EventEnvelope[];
   /** Empty when nothing is being reasoned about right now. */
   thinking: string;
+  /**
+   * Live progress, keyed by `tool_call_id`. Absent once the call has returned.
+   *
+   * A map rather than a single value, unlike `thinking`: the runtime runs read
+   * tools in parallel (`runtime.max_parallel_read_tools` defaults to 4), so
+   * more than one call can be in flight, and a single slot would show whichever
+   * of them reported most recently under all of their rows.
+   */
+  progress: ReadonlyMap<string, ToolProgressView>;
   /**
    * The report, as it is being written, token by token.
    *
@@ -137,6 +208,12 @@ export function useCodeStream(
     callId: "",
     text: "",
     answer: "",
+  });
+  // Carried with its session for the same reason `held` is, and emptied by the
+  // same rule: a frame for a different session replaces rather than appends.
+  const [running, setRunning] = useState<RunningCalls>({
+    session: "",
+    calls: new Map(),
   });
   // The position belongs to the session too. It used to survive between turns
   // on purpose, so a new watch would not be re-served the previous turn's
@@ -202,6 +279,35 @@ export function useCodeStream(
             }
             return "rejected";
           }
+          if (payload.kind === "ToolProgress") {
+            const toolCallId = stringField(payload, "tool_call_id");
+            if (toolCallId !== null) {
+              const message = stringField(payload, "message");
+              const elapsedMs = numberField(payload, "elapsed_ms");
+              const percent = numberField(payload, "percent");
+              setRunning((current) => {
+                const held =
+                  current.session === sessionId ? current.calls : EMPTY_TOOL_PROGRESS;
+                const previous = held.get(toolCallId);
+                const next = new Map(held);
+                next.set(toolCallId, {
+                  // A beat says only "still running, and this long"; what the
+                  // call has said so far has not changed, so the block is
+                  // carried forward rather than rebuilt.
+                  lines:
+                    message === null
+                      ? (previous?.lines ?? [])
+                      : [...(previous?.lines ?? []), ...splitLines(message)].slice(
+                          -KEPT_PROGRESS_LINES,
+                        ),
+                  elapsedMs: elapsedMs ?? previous?.elapsedMs ?? null,
+                  percent: percent ?? previous?.percent ?? null,
+                });
+                return { session: sessionId, calls: next };
+              });
+            }
+            return "rejected";
+          }
           if (payload.kind === "ModelThinkingDelta") {
             const callId = stringField(payload, "model_call_id");
             const text = stringField(payload, "text");
@@ -237,6 +343,40 @@ export function useCodeStream(
           setThought((current) =>
             current.session === sessionId
               ? { ...current, callId: "", text: "" }
+              : current,
+          );
+        }
+        // A call that has returned is no longer in flight, and its durable row
+        // now says how it went. Leaving the live line under it would leave
+        // "executing in the sandbox · 已运行 12 秒" frozen beneath a step
+        // marked 失败 -- the console asserting motion that has stopped.
+        //
+        // Both terminal events, and the run-level ones below: a tool killed by
+        // the run's cancellation gets neither `ToolCompleted` nor `ToolFailed`,
+        // which is the same asymmetry the thought above has to handle.
+        if (
+          frame.envelope.event_type === "ToolCompleted" ||
+          frame.envelope.event_type === "ToolFailed"
+        ) {
+          const finished = stringField(frame.envelope.payload, "tool_call_id");
+          if (finished !== null) {
+            setRunning((current) => {
+              if (current.session !== sessionId || !current.calls.has(finished))
+                return current;
+              const next = new Map(current.calls);
+              next.delete(finished);
+              return { session: sessionId, calls: next };
+            });
+          }
+        }
+        if (
+          frame.envelope.event_type === "RunCompleted" ||
+          frame.envelope.event_type === "RunFailed" ||
+          frame.envelope.event_type === "RunCancelled"
+        ) {
+          setRunning((current) =>
+            current.session === sessionId && current.calls.size > 0
+              ? { session: sessionId, calls: EMPTY_TOOL_PROGRESS }
               : current,
           );
         }
@@ -298,7 +438,27 @@ export function useCodeStream(
     thinking: thought.session === sessionId ? thought.text : "",
     thinkingCallId: thought.session === sessionId ? thought.callId : "",
     answer: thought.session === sessionId ? thought.answer : "",
+    progress: running.session === sessionId ? running.calls : EMPTY_TOOL_PROGRESS,
   };
+}
+
+/**
+ * One progress message as the lines it contains.
+ *
+ * A single message can carry several, because the container's tail reads a
+ * chunk of bytes rather than a line: four `print` calls inside one poll
+ * interval arrive as one record with three newlines in it. Splitting here is
+ * what keeps the block a list of lines rather than a list of chunks.
+ *
+ * Blank lines are dropped. A script that prints an empty line is saying
+ * something about its own formatting, not about its progress, and a window
+ * eight lines deep should not spend them on nothing.
+ */
+function splitLines(message: string): string[] {
+  return message
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line !== "");
 }
 
 function stringField(
@@ -307,4 +467,19 @@ function stringField(
 ): string | null {
   const value = payload[field];
   return typeof value === "string" ? value : null;
+}
+
+/**
+ * A finite number, or null.
+ *
+ * `Number.isFinite` rather than `typeof value === "number"`: JSON carries no
+ * NaN, but a payload this reducer did not author reaches it through the same
+ * `Record<string, unknown>` as everything else, and `NaN` formats as "NaN 秒".
+ */
+function numberField(
+  payload: Record<string, unknown>,
+  field: string,
+): number | null {
+  const value = payload[field];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

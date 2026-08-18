@@ -65,12 +65,38 @@ class RemoteCallResult:
 
 
 @runtime_checkable
+class ProgressSink(Protocol):
+    """What a caller is told while a remote tool is still running.
+
+    The MCP `notifications/progress` triple, narrowed to what this project
+    needs: ``progress`` is a value the server promises will increase, ``total``
+    is the end when the server knows it and ``None`` when it does not, and
+    ``message`` is the line to show. A server that never notifies simply never
+    calls it (ADR-069).
+
+    A Protocol rather than a `Callable[...]` alias, and the parameter *names*
+    are the reason: the SDK calls its progress callback with keywords, so a
+    positional alias type-checks here and fails at the call site.
+    """
+
+    async def __call__(
+        self, progress: float, total: float | None, message: str | None
+    ) -> None: ...
+
+
+@runtime_checkable
 class MCPClientPort(Protocol):
     """The two MCP operations this adapter needs after connection."""
 
     async def list_tools_page(self, cursor: str | None) -> RemoteToolPage: ...
 
-    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult: ...
+    async def call_tool(
+        self,
+        name: str,
+        arguments: JsonObject,
+        *,
+        on_progress: ProgressSink | None = None,
+    ) -> RemoteCallResult: ...
 
 
 @dataclass(slots=True)
@@ -84,8 +110,20 @@ class _SDKMCPClient:
             next_cursor=page.next_cursor,
         )
 
-    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
-        result = await self.client.call_tool(name, arguments)
+    async def call_tool(
+        self,
+        name: str,
+        arguments: JsonObject,
+        *,
+        on_progress: ProgressSink | None = None,
+    ) -> RemoteCallResult:
+        # Passing the callback is also what makes the client *send* a progress
+        # token: without one the SDK omits `_meta.progressToken`, and a server
+        # that would have notified has nothing to notify against. So this
+        # argument does not merely receive progress, it asks for it.
+        result = await self.client.call_tool(
+            name, arguments, progress_callback=on_progress
+        )
         return RemoteCallResult(
             content=tuple(_content_block(block) for block in result.content),
             structured_content=result.structured_content,
@@ -229,6 +267,7 @@ async def connect_mcp_client(
 
 __all__ = [
     "MCPClientPort",
+    "ProgressSink",
     "RemoteBinaryBlock",
     "RemoteCallResult",
     "RemoteContentBlock",

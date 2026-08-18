@@ -775,6 +775,12 @@ class ToolGateway:
             context=context,
             cancellation=cancellation,
             run_budget_seconds=run_budget_seconds,
+            # The same sink that just emitted `ToolStarted` and is about to
+            # emit `ToolCompleted`, so a call's progress lands between its own
+            # two bookends rather than on some other stream. It is passed here
+            # rather than held by the executor because the executor is built
+            # once per process and a sink belongs to one run (ADR-068).
+            sink=sink,
         )
         await self._record(result, sink=sink)
         return result
