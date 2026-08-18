@@ -108,6 +108,11 @@ Approvals 那一页已随 ADR-048 移除：导出审批仍然可以回答，位�
 - 状态颜色只表达 success/warning/danger/info，不把颜色作为唯一信息；
 - 支持系统 dark mode、键盘焦点、44px 移动端触控目标与 reduced-motion。
 
+`docs/design/` 存着尚未落地的视觉稿。本节写的是 `web/` 里已经存在的东西，那边写的是
+有人提议、代码还没跟上的东西——两者冲突以本节为准。当前存档：
+`agent-workbench-refactor-2026-08-18.dc.html`，提议新增「计算机控制」一屏与一条青色的
+「证据 / 边界」语义色（会让状态色从四档变五档，需要先定）。
+
 ## 5. 工程结构
 
 ```text
