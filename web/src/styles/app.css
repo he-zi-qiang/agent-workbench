@@ -2779,6 +2779,39 @@ pre {
   transform-origin: top left;
 }
 
+/* --- 全屏 --------------------------------------------------------------
+ *
+ * 全屏的是 stage 而不是 iframe，这条是安全决定不是布局决定（ADR-071）：
+ * iframe 独占整块屏幕，意味着一个 agent 写的页面拿到了没有任何外部语境的
+ * 一整屏——没有控制台、没有浏览器边框、没有一句话说明它是什么。此时它画一个
+ * 像模像样的登录框，屏幕上不存在任何能反驳它的东西。stage 把那句提示一起带
+ * 进全屏，页面拿到的是剩下的部分。
+ */
+.aw-preview-stage[data-fullscreen="yes"] {
+  display: flex;
+  flex-direction: column;
+  background: var(--aw-canvas);
+}
+
+/* 提示在全屏里收成一条：它必须在，但它不是内容。 */
+.aw-preview-stage[data-fullscreen="yes"] .aw-page-note {
+  flex: none;
+  margin: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--aw-border);
+  background: var(--aw-panel-soft);
+}
+
+/* 剩下的全给页面。高度不再读 token——全屏时"屏幕有多高"就是答案。 */
+.aw-preview-stage[data-fullscreen="yes"] .aw-preview-frame {
+  flex: 1 1 auto;
+  height: auto;
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+}
+
 /* 缩放控件和「渲染 / 源码」并排，但靠右：那一组是在选看什么，这一组是在选
    怎么看，两个问题不该长得像一个。 */
 .aw-preview-controls {
@@ -2787,6 +2820,10 @@ pre {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.aw-preview-fullscreen {
+  flex: none;
 }
 
 /* A generated picture at its own size when it fits, scaled down when it does

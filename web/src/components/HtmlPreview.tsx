@@ -98,10 +98,10 @@ const FALLBACK_LOGICAL_WIDTH = 1024;
  * the honest answer, and the reason the caller falls back to unscaled
  * rendering rather than dividing by zero.
  */
-function useBoxSize(node: HTMLDivElement | null): {
-  width: number;
-  height: number;
-} | null {
+function useBoxSize(
+  node: HTMLDivElement | null,
+  revision: number,
+): { width: number; height: number } | null {
   const [size, setSize] = useState<{ width: number; height: number } | null>(
     null,
   );
@@ -130,8 +130,39 @@ function useBoxSize(node: HTMLDivElement | null): {
     return () => {
       observer.disconnect();
     };
-  }, [node]);
+    // `revision` is not read in the body, and that is the point: it is bumped
+    // when the box changes size for a reason no observation of *this node*
+    // reports promptly -- entering or leaving fullscreen -- and re-running the
+    // effect takes the synchronous measurement again.
+  }, [node, revision]);
   return size;
+}
+
+
+/**
+ * Whether ``element`` is the document's fullscreen element right now.
+ *
+ * Tracked from the `fullscreenchange` event rather than from the click that
+ * asked, because the browser is the authority and it can disagree: a request
+ * can be refused outright (no user gesture, a policy), and the reader can
+ * leave with Escape without touching any control this component drew. State
+ * set optimistically on click would then say 退出全屏 over a window that is
+ * not fullscreen.
+ */
+function useIsFullscreen(element: HTMLElement | null): boolean {
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    if (element === null) return;
+    const sync = () => {
+      setFull(document.fullscreenElement === element);
+    };
+    sync();
+    document.addEventListener("fullscreenchange", sync);
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+    };
+  }, [element]);
+  return full;
 }
 
 /**
@@ -189,7 +220,12 @@ export function HtmlPreview({
   // reader who wants to *use* it -- click, type, play -- switches to 实际大小.
   const [fit, setFit] = useState(true);
   const [boxNode, setBoxNode] = useState<HTMLDivElement | null>(null);
-  const box = useBoxSize(boxNode);
+  const [stageNode, setStageNode] = useState<HTMLDivElement | null>(null);
+  const fullscreen = useIsFullscreen(stageNode);
+  // Entering fullscreen changes the box's size without changing the node, and
+  // the observer's delivery is not something to depend on for a transition the
+  // reader is watching. Bumped here, consumed by the effect.
+  const box = useBoxSize(boxNode, fullscreen ? 1 : 0);
   // Judged from the listing's own count, before any transfer, the same way
   // BlobPreview declines: a refusal that costs nothing. The cap is the text
   // preview's, because that is what both views hold in memory.
@@ -303,9 +339,43 @@ export function HtmlPreview({
           </button>
         </div>
       ) : null}
+      {rendering && stageNode !== null ? (
+        <button
+          className="aw-button aw-preview-fullscreen"
+          onClick={() => {
+            if (fullscreen) {
+              void document.exitFullscreen().catch(() => undefined);
+              return;
+            }
+            // The **stage**, never the iframe. Fullscreening the frame itself
+            // would hand an agent-written page the whole screen with nothing
+            // around it -- no console, no browser chrome, and no sentence
+            // saying what it is. A page painting a convincing sign-in box at
+            // that point has no contradicting context anywhere on the display.
+            // The stage keeps the caution bar on screen, and the page gets the
+            // rest (ADR-071).
+            //
+            // Rejected rather than thrown: a request without a user gesture,
+            // or one a policy refuses, is the browser declining -- the preview
+            // stays where it is, which is the correct outcome and not an error
+            // worth showing.
+            void stageNode.requestFullscreen().catch(() => undefined);
+          }}
+          type="button"
+        >
+          {fullscreen ? "退出全屏" : "全屏"}
+        </button>
+      ) : null}
       </div>
       {rendering ? (
-        <>
+        /* The fullscreen element, and the reason it is a wrapper rather than
+           the frame: everything inside it survives the transition. The caution
+           below is inside deliberately -- see the button's comment. */
+        <div
+          className="aw-preview-stage"
+          data-fullscreen={fullscreen ? "yes" : "no"}
+          ref={setStageNode}
+        >
           {/* Above the frame, not below it. What is promised here is exactly
               what is guaranteed -- the earlier wording also claimed the page
               could not reach the internet, which is best-effort rather than
@@ -349,7 +419,7 @@ export function HtmlPreview({
               title={`${name} 预览`}
             />
           </div>
-        </>
+        </div>
       ) : (
         <>
           <pre className="aw-code-file-body">{text}</pre>
