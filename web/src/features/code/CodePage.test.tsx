@@ -67,7 +67,7 @@ vi.mock("../../api/client", async () => ({
 // asserted through this seam instead, because a page test that waited on a
 // network read would be testing the transport a second time.
 vi.mock("./useCodeStream", () => ({
-  useCodeStream: vi.fn(() => ({ steps: [], thinking: "", thinkingCallId: "", answer: "" })),
+  useCodeStream: vi.fn(() => ({ steps: [], thinking: "", thinkingCallId: "", answer: "", progress: new Map() })),
 }));
 
 vi.mock("../../app/IdentityContext", () => ({
@@ -141,7 +141,8 @@ beforeEach(() => {
   });
   vi.mocked(downloadCodeWorkspaceFile).mockResolvedValue(undefined);
   vi.mocked(listCodeSessions).mockResolvedValue({ sessions: [] });
-  vi.mocked(useCodeStream).mockReturnValue({ steps: [], thinking: "", thinkingCallId: "", answer: "" });
+  vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(), steps: [], thinking: "", thinkingCallId: "", answer: "" });
 });
 
 describe("CodePage", () => {
@@ -157,6 +158,7 @@ describe("CodePage", () => {
     // the transient delta beats its own durable `ModelStarted` by up to a whole
     // catch-up poll, so there is nothing else yet to hang it on.
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       steps: [],
       thinking: "先看 notes.md 里有什么。",
       thinkingCallId: "mc_1",
@@ -180,6 +182,7 @@ describe("CodePage", () => {
     // still be open when it is asserted.
     vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       steps: [],
       thinking: "",
       thinkingCallId: "mc_1",
@@ -200,6 +203,113 @@ describe("CodePage", () => {
     );
   });
 
+  it("shows the script's own output as it is printed, and for how long", async () => {
+    const user = userEvent.setup();
+    // Never resolves: the call is running *now*, which is the only state this
+    // block is ever drawn in.
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map([
+        [
+          "call_1",
+          {
+            lines: [
+              "executing in the sandbox",
+              "processing chunk 0",
+              "processing chunk 1",
+              "stderr: warning: nothing to do",
+            ],
+            elapsedMs: 72_000,
+            percent: null,
+          },
+        ],
+      ]),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolStarted",
+          sequence: 1,
+          payload: {
+            kind: "ToolStarted",
+            tool_call_id: "call_1",
+            tool_name: "sandbox_run",
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "跑一下");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    // The gap this closes: `sandbox_run` declares a 300-second timeout, and
+    // between ToolStarted and ToolCompleted the console used to show the
+    // tool's name and nothing else -- a script that had hung looked exactly
+    // like one that was working (ADR-068). What is on screen now is the script
+    // talking (ADR-069).
+    expect(await screen.findByText("processing chunk 1")).toBeVisible();
+    expect(screen.getByText("executing in the sandbox")).toBeVisible();
+    // stderr is marked rather than merged: a traceback and ordinary output
+    // read very differently and the reader has to be able to tell.
+    expect(screen.getByText("stderr: warning: nothing to do")).toBeVisible();
+    // Minutes and seconds, from `elapsed_ms` -- the clock is a number on the
+    // wire and the words are this console's, so a CLI reading the same event
+    // is not stuck with a Chinese sentence.
+    expect(screen.getByText("已运行 1 分 12 秒")).toBeVisible();
+  });
+
+  it("does not leave a moving line under a step that has stopped", async () => {
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    // A map that still holds the call -- the belt to the hook's braces. The
+    // hook drops an entry when the call returns; this asserts the renderer
+    // would not draw it even if one survived, because the step's own outcome
+    // is what gates it.
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map([
+        ["call_1", { lines: ["processing chunk 0"], elapsedMs: 72_000, percent: null }],
+      ]),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolStarted",
+          sequence: 1,
+          payload: {
+            kind: "ToolStarted",
+            tool_call_id: "call_1",
+            tool_name: "sandbox_run",
+          },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:01Z",
+          event_type: "ToolCompleted",
+          sequence: 2,
+          payload: { kind: "ToolCompleted", tool_call_id: "call_1" },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "跑一下");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await screen.findByRole("region", { name: "编码会话" });
+    expect(screen.queryByText("processing chunk 0")).toBeNull();
+    expect(screen.queryByText("已运行 1 分 12 秒")).toBeNull();
+  });
+
   it("lets the server's report replace the streamed one without a gap", async () => {
     // The durable assistant message arrives on the transcript reload, which is
     // later than both `ModelCompleted` and `RunCompleted`. If the stream were
@@ -212,6 +322,7 @@ describe("CodePage", () => {
       ],
     });
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       steps: [],
       thinking: "",
       thinkingCallId: "",
@@ -235,6 +346,7 @@ describe("CodePage", () => {
     // The hook keeps its last value across a render; the block is gated on the
     // turn so a finished turn does not leave "正在思考…" over a written report.
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       steps: [],
       thinking: "leftover reasoning",
       thinkingCallId: "",
@@ -453,6 +565,7 @@ describe("CodePage", () => {
     // One tool call, as the server actually emits it: five events for the call
     // plus the model turn that proposed it.
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       thinking: "",
       thinkingCallId: "",
       answer: "",
@@ -569,6 +682,7 @@ describe("CodePage", () => {
       ],
     });
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       thinking: "",
       thinkingCallId: "",
       answer: "",
@@ -645,6 +759,7 @@ describe("CodePage", () => {
         ],
       });
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       thinking: "",
       thinkingCallId: "",
       answer: "",
@@ -838,6 +953,7 @@ describe("CodePage", () => {
     // for the entire turn: no instruction, no steps, no thinking, no report.
     vi.mocked(getCodeHistory).mockResolvedValue({ messages: [] });
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       steps: [],
       thinking: "先看看工作区里有什么",
       thinkingCallId: "mc_1",
@@ -1011,6 +1127,7 @@ describe("CodePage", () => {
       truncated: false,
     });
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       thinking: "",
       thinkingCallId: "",
       answer: "",
@@ -1070,6 +1187,7 @@ describe("CodePage", () => {
       truncated: true,
     });
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       thinking: "",
       thinkingCallId: "",
       answer: "",
@@ -1152,6 +1270,7 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       // The call still reasoning. `useCodeStream` clears this the moment that
       // call's ModelCompleted arrives, which is the other half of the
       // invariant asserted below.
@@ -1251,6 +1370,7 @@ describe("CodePage", () => {
       ],
     });
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       thinking: "",
       thinkingCallId: "",
       answer: "",
@@ -1310,6 +1430,7 @@ describe("CodePage", () => {
       messages: [{ role: "user", text: "写个时钟" }],
     });
     vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
       thinking: "",
       thinkingCallId: "",
       answer: "",

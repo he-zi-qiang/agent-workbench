@@ -27,12 +27,14 @@ import json
 import logging
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, cast
 
 from pydantic import TypeAdapter, ValidationError
 
+from agent_workbench.apps.sandbox_mcp._bootstrap import PROGRESS_PREFIX
 from agent_workbench.apps.sandbox_mcp.contract import (
     SandboxFile,
     SandboxRequest,
@@ -41,6 +43,17 @@ from agent_workbench.apps.sandbox_mcp.contract import (
 from agent_workbench.domain.schema import JsonObject
 
 logger = logging.getLogger(__name__)
+
+#: How a caller receives the script's output while the script is still running:
+#: ``(channel, text)``, where ``channel`` is ``"stdout"`` or ``"stderr"``.
+OutputSink = Callable[[str, str], Awaitable[None]]
+
+_PROGRESS_PREFIX_BYTES: Final[bytes] = PROGRESS_PREFIX.encode("utf-8")
+
+#: When a partial line is given up on and filed as diagnostic text. Two orders
+#: of magnitude above the largest record `_bootstrap` will emit, so this path
+#: is only ever reached by something that is genuinely not a record.
+_PENDING_FLUSH_BYTES: Final[int] = 256 * 1024
 
 #: A stock image, named rather than built. The sandbox needs an interpreter and
 #: nothing else; a project-built image would add this repository's own code to
@@ -196,8 +209,26 @@ class SandboxExecutor:
             await process.wait()
             return False
 
-    async def run(self, request: SandboxRequest) -> SandboxOutcome:
-        """Execute one request, or raise :class:`SandboxExecutionError`."""
+    async def run(
+        self,
+        request: SandboxRequest,
+        *,
+        on_output: OutputSink | None = None,
+    ) -> SandboxOutcome:
+        """Execute one request, or raise :class:`SandboxExecutionError`.
+
+        ``on_output`` receives ``(channel, text)`` for each slice of the
+        script's own stdout or stderr as it is produced, where ``channel`` is
+        ``"stdout"`` or ``"stderr"`` (ADR-069). It is a preview and never the
+        result: the envelope this returns carries the complete streams, and a
+        caller that ignores this argument sees exactly what it saw before.
+
+        Delivery is best-effort in one specific way worth naming -- a sink that
+        raises is dropped and the run continues. The container is already
+        running by then, and taking a live script down because nobody could be
+        told about its output would be the observation destroying the thing
+        observed.
+        """
 
         container = f"agent-workbench-sandbox-{uuid.uuid4().hex}"
         payload = json.dumps(
@@ -246,7 +277,7 @@ class SandboxExecutor:
         deadline = self.wall_clock_seconds + CONTAINER_GRACE_SECONDS
         try:
             stdout, stdout_total, stderr, _ = await asyncio.wait_for(
-                self._pump(process, payload),
+                self._pump(process, payload, on_output),
                 timeout=deadline,
             )
         except TimeoutError:
@@ -281,6 +312,7 @@ class SandboxExecutor:
         self,
         process: asyncio.subprocess.Process,
         payload: bytes,
+        on_output: OutputSink | None = None,
     ) -> tuple[bytes, int, bytes, int]:
         """Feed stdin and drain both pipes concurrently.
 
@@ -308,7 +340,10 @@ class SandboxExecutor:
         _, out, err = await asyncio.gather(
             write(),
             _read_capped(process.stdout, MAX_ENVELOPE_BYTES),
-            _read_capped(process.stderr, MAX_STDERR_BYTES),
+            # stderr, not stdout, is where the progress records are: the
+            # container's stdout is the envelope and nothing else, which is
+            # what stops a script from forging a result (`_bootstrap`).
+            _read_records(process.stderr, MAX_STDERR_BYTES, on_output),
         )
         await process.wait()
         return out[0], out[1], err[0], err[1]
@@ -330,6 +365,106 @@ class SandboxExecutor:
         except TimeoutError:
             process.kill()
             await process.wait()
+
+
+async def _read_records(
+    stream: asyncio.StreamReader,
+    cap: int,
+    on_output: OutputSink | None,
+) -> tuple[bytes, int]:
+    """Drain stderr, dispatching progress records and keeping the rest.
+
+    Same contract as :func:`_read_capped` for what it returns -- the kept bytes
+    and the true total -- so the caller's diagnostics are unchanged. What it
+    adds is that a line carrying `_bootstrap.PROGRESS_PREFIX` is handed to
+    ``on_output`` and **not** kept: a record is this transport's framing, not
+    something the script wrote, and leaving it in would put the framing into
+    the operator log that `_first_line` reads.
+
+    Lines are assembled here rather than with `readline()` because that method
+    raises once a line passes the reader's internal limit, and stderr can carry
+    a runtime's multi-kilobyte diagnostic on one line. Records are bounded far
+    below `_PENDING_FLUSH_BYTES`, so a record never reaches that path.
+    """
+
+    chunks: list[bytes] = []
+    kept = 0
+    total = 0
+    pending: bytes = b""
+
+    def keep(data: bytes) -> None:
+        nonlocal kept, total
+        total += len(data)
+        if kept < cap:
+            take = data[: cap - kept]
+            chunks.append(take)
+            kept += len(take)
+
+    async def take_line(line: bytes) -> None:
+        record = _progress_record(line)
+        if record is None:
+            keep(line)
+            return
+        if on_output is None:
+            return
+        channel, text = record
+        try:
+            await on_output(channel, text)
+        except Exception:
+            # A sink that raises is dropped. See `run`: the container is
+            # already executing, and a failed preview must not end it.
+            logger.debug("sandbox progress sink raised", exc_info=True)
+
+    while True:
+        chunk = await stream.read(65_536)
+        if not chunk:
+            break
+        pending += chunk
+        while True:
+            # Sliced rather than unpacked from `split`/`partition`. Both of
+            # those reassign `pending` from a call on `pending` itself, which
+            # makes the inference circular and leaves the name partially typed;
+            # a slice of bytes is bytes with nothing to infer.
+            break_at = pending.find(b"\n")
+            if break_at < 0:
+                break
+            await take_line(pending[: break_at + 1])
+            pending = pending[break_at + 1 :]
+        if len(pending) >= _PENDING_FLUSH_BYTES:
+            # A single line longer than any record can be. It is diagnostic
+            # text, so it is kept rather than held for a newline that may
+            # never arrive.
+            keep(pending)
+            pending = b""
+    if pending:
+        await take_line(pending)
+    return b"".join(chunks), total
+
+
+def _progress_record(line: bytes) -> tuple[str, str] | None:
+    """The ``(channel, text)`` a record carries, or ``None`` if it is not one.
+
+    Every failure to read a well-formed record returns ``None``, which files
+    the line as ordinary stderr. That is the safe direction: a malformed record
+    shown to an operator as a strange log line is recoverable, where a
+    malformed record dispatched as script output would put this transport's
+    own framing in front of a reader as though the script had printed it.
+    """
+
+    if not line.startswith(_PROGRESS_PREFIX_BYTES):
+        return None
+    try:
+        body = json.loads(line[len(_PROGRESS_PREFIX_BYTES) :])
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    record = cast(dict[str, Any], body)
+    channel = record.get("channel")
+    text = record.get("text")
+    if channel not in ("stdout", "stderr") or not isinstance(text, str):
+        return None
+    return channel, text
 
 
 async def _read_capped(stream: asyncio.StreamReader, cap: int) -> tuple[bytes, int]:

@@ -4318,6 +4318,52 @@ pre {
   color: var(--aw-warning, #8a5300);
 }
 
+/* --- 还在跑的那一步（ADR-068 / ADR-069） --- */
+
+/* 缩进到动作行的文字下面，而不是另起一行顶格：它说的是上面那一步的事，
+ * 顶格会读成一条新步骤。 */
+.aw-code-action-progress {
+  margin: 0 0 2px;
+  padding: 0 8px 0 16px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+/* 脚本自己正在打印的那几行。等宽、不折行、横向可滚——一行输出被折成两行之后，
+ * 读者会把它读成两行输出。 */
+.aw-code-action-progress-lines {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 2px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--aw-surface-sunken, rgb(0 0 0 / 4%));
+  gap: 1px;
+  overflow-x: auto;
+  list-style: none;
+  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.aw-code-action-progress-meta {
+  display: flex;
+  margin: 0;
+  gap: 10px;
+}
+
+/* 时钟靠右、等宽数字：每 5 秒跳一次，位数变化时整行不该跟着抖。 */
+.aw-code-action-progress-clock {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-code-action-progress-percent {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- 对话里的产出 --- */
 
 .aw-code-outputs {

@@ -30,6 +30,12 @@ from agent_workbench.apps.sandbox_mcp.executor import (
 SERVER_NAME: Final[str] = "agent-workbench-sandbox"
 SERVER_VERSION: Final[str] = "1.0.0"
 TOOL_NAME: Final[str] = "run_python"
+
+#: How a streamed line says it came from the script's stderr rather than its
+#: stdout (ADR-069). Read back by `adapters/tools/sandbox.py`; deliberately a
+#: readable prefix, so a generic MCP client showing progress messages verbatim
+#: still shows something a person can act on.
+STDERR_PREFIX: Final[str] = "stderr: "
 MCP_PATH: Final[str] = "/mcp"
 HEALTH_PATH: Final[str] = "/health"
 
@@ -88,7 +94,6 @@ def create_server(executor: SandboxExecutor | None = None) -> Server[LifespanSta
         context: ServerRequestContext[LifespanState],
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
-        del context
         if params.name != TOOL_NAME:
             return _error_result("unknown tool")
         try:
@@ -96,8 +101,36 @@ def create_server(executor: SandboxExecutor | None = None) -> Server[LifespanSta
         except SandboxInputError as error:
             return _error_result(f"invalid sandbox request: {error}")
 
+        streamed = 0
+
+        async def on_output(channel: str, text: str) -> None:
+            """Forward one slice of the script's output as `notifications/progress`.
+
+            `report_progress` is a no-op when the caller did not send a
+            progress token, so a client that never asked pays for a counter
+            increment and nothing else.
+
+            `progress` counts characters streamed rather than a fraction of the
+            work: the protocol requires the value to increase, and this process
+            genuinely does not know how far along the script is -- it is a
+            container running arbitrary code that reports nothing until it
+            exits. `total` stays `None` for the same reason, which is the
+            protocol's own way of saying the end is unknown.
+
+            The channel is carried as a human-readable prefix rather than a
+            structured field, because a progress notification has no structured
+            field to carry it. A plain line keeps this useful to any MCP client
+            that renders progress messages, which a JSON blob in `message`
+            would not.
+            """
+
+            nonlocal streamed
+            streamed += len(text)
+            body = text if channel == "stdout" else f"{STDERR_PREFIX}{text}"
+            await context.session.report_progress(float(streamed), None, body)
+
         try:
-            outcome = await sandbox.run(request)
+            outcome = await sandbox.run(request, on_output=on_output)
         except SandboxExecutionError as error:
             # A refused run is an error result, not a raised exception: the
             # caller has to be able to tell a ceiling from a broken sandbox,
@@ -156,7 +189,19 @@ def create_app(
 
     return create_server(sandbox).streamable_http_app(
         streamable_http_path=MCP_PATH,
-        json_response=True,
+        # SSE, not a single JSON body, and this is the line that makes the
+        # streaming above real rather than theoretical. Under
+        # `json_response=True` the server answers one call with one JSON
+        # document, and a `notifications/progress` raised while the tool is
+        # still running has nowhere to go -- measured: the client's progress
+        # callback fires zero times, with no error anywhere to say so
+        # (ADR-069 §3).
+        #
+        # The cost is that a response is now a stream, so an intermediary that
+        # buffers whole responses defeats the point. This server is bound to
+        # loopback and reached by one process, which is the deployment where
+        # that is not a risk.
+        json_response=False,
         stateless_http=True,
         max_request_body_size=MAX_MCP_REQUEST_BYTES,
         host=host,

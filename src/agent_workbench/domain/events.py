@@ -532,12 +532,49 @@ class ToolStarted(DomainModel):
 
 
 class ToolProgress(DomainModel):
-    """Handler-reported progress. Streamed only, never persisted."""
+    """Handler-reported progress. Streamed only, never persisted.
+
+    The tool half of what ``ModelDelta`` does for the model: the answer to "is
+    it working or is it stuck" for the stretch a step is *running*, which for
+    ``sandbox_run`` is up to its declared 300 seconds. Until a producer existed
+    that stretch showed a name and nothing else, and a tool that had hung
+    looked exactly like a tool that was working (ADR-068).
+
+    ``message`` is optional, and that is the difference between the two things
+    that report here. A handler that has reached a new phase has something to
+    say; the executor's clock does not -- it exists precisely because nothing
+    new has happened, and a heartbeat forced to invent a sentence would be
+    inventing one every few seconds. So a beat carries ``elapsed_ms`` alone.
+
+    ``elapsed_ms`` is a number rather than the prose "已运行 12 秒" for the same
+    reason the rest of this module describes rather than reproduces: the clock
+    is read by a Chinese web console, an English CLI and a tracing backend, and
+    only the first of those wants that sentence. Whoever displays it owns the
+    words.
+    """
 
     kind: Literal["ToolProgress"] = "ToolProgress"
     tool_call_id: Identifier
-    message: ShortText
+    message: ShortText | None = None
     percent: int | None = Field(default=None, ge=0, le=100)
+    #: Monotonic time since the handler was entered, as the executor measured
+    #: it. Not derivable from the envelope's timestamp: that is when the event
+    #: was created, and the reader would have to subtract it from a
+    #: ``ToolStarted`` it may never have received -- a live subscriber that
+    #: connected mid-call has the beats and not the start.
+    elapsed_ms: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _says_something(self) -> ToolProgress:
+        # An event that reports no message, no percentage and no clock is a
+        # frame the console must render as an empty row or silently drop, and
+        # "silently drop" is how a progress channel becomes a channel nobody
+        # can tell is broken. Refused at construction instead.
+        if self.message is None and self.percent is None and self.elapsed_ms is None:
+            raise ValueError(
+                "ToolProgress must carry at least one of message, percent or elapsed_ms"
+            )
+        return self
 
 
 class ToolCompleted(DomainModel):

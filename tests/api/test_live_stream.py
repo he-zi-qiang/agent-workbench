@@ -313,6 +313,40 @@ def test_a_non_delta_transient_event_passes_through_in_order() -> None:
     ]
 
 
+def test_a_heartbeat_reaches_the_subscriber_with_its_clock() -> None:
+    """The shape the console reads to draw 已运行 N 秒 (ADR-068).
+
+    A beat carries `elapsed_ms` and no message, which is the one `ToolProgress`
+    shape that did not exist when the pass-through branch above was written.
+    Two things are asserted about it: it is not merged into a neighbouring
+    delta -- `live_frames` merges only `ModelDelta` and `ModelThinkingDelta`,
+    and a beat swallowed by one would take the clock off screen -- and its
+    `null` message survives the round trip rather than becoming `""`, which is
+    what the reducer distinguishes "nothing new to say" by.
+    """
+
+    beat = EventEnvelope.for_payload(
+        ToolProgress(tool_call_id="tc_1", elapsed_ms=12_000),
+        stream_id=STREAM,
+        run_id="run_1",
+        timestamp=datetime.now(UTC),
+    )
+
+    frames = list(live_frames((_delta("before"), beat, _delta("after"))))
+
+    assert [f.split("\n")[0] for f in frames] == [
+        "event: ModelDelta",
+        "event: ToolProgress",
+        "event: ModelDelta",
+    ]
+    assert '"elapsed_ms":12000' in frames[1]
+    assert '"message":null' in frames[1]
+    # And no cursor: a transient frame has no position to resume from, so an
+    # `id:` line here would move the client's cursor to a place the log cannot
+    # be asked about.
+    assert not frames[1].startswith("id:")
+
+
 def test_a_merge_too_large_for_one_frame_is_split_rather_than_trimmed() -> None:
     """``ModelDelta.text`` is bounded, and text is what the frame is for.
 

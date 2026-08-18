@@ -10,6 +10,7 @@ from typing import Literal
 import pytest
 
 from agent_workbench.adapters.mcp.client import (
+    ProgressSink,
     RemoteCallResult,
     RemoteTextBlock,
     RemoteToolDefinition,
@@ -68,7 +69,13 @@ class _DirectoryClient:
         self.list_calls.append(cursor)
         return self.pages[cursor]
 
-    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: JsonObject,
+        *,
+        on_progress: ProgressSink | None = None,
+    ) -> RemoteCallResult:
         self.tool_calls.append((name, arguments))
         return self.result
 
@@ -321,7 +328,13 @@ def test_all_bindings_from_one_server_share_the_execution_lock() -> None:
         active: int = 0
         maximum_active: int = 0
 
-        async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+        async def call_tool(
+            self,
+            name: str,
+            arguments: JsonObject,
+            *,
+            on_progress: ProgressSink | None = None,
+        ) -> RemoteCallResult:
             self.active += 1
             self.maximum_active = max(self.maximum_active, self.active)
             await asyncio.sleep(0)
@@ -354,7 +367,13 @@ def test_bindings_from_different_servers_do_not_share_a_lock() -> None:
     class _OverlapClient(_DirectoryClient):
         activity: _SharedActivity = field(default_factory=_SharedActivity)
 
-        async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+        async def call_tool(
+            self,
+            name: str,
+            arguments: JsonObject,
+            *,
+            on_progress: ProgressSink | None = None,
+        ) -> RemoteCallResult:
             self.activity.active += 1
             self.activity.maximum_active = max(
                 self.activity.maximum_active, self.activity.active

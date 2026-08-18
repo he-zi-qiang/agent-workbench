@@ -22,12 +22,15 @@ from agent_workbench.apps.sandbox_mcp import main as main_module
 from agent_workbench.apps.sandbox_mcp.contract import SandboxFile, SandboxRequest
 from agent_workbench.apps.sandbox_mcp.executor import (
     ISOLATION_FLAGS,
+    OutputSink,
     SandboxExecutionError,
     SandboxExecutor,
     SandboxOutcome,
 )
 from agent_workbench.apps.sandbox_mcp.server import (
     HEALTH_PATH,
+    MCP_PATH,
+    STDERR_PREFIX,
     TOOL_NAME,
     create_app,
     create_server,
@@ -41,14 +44,24 @@ class _StubExecutor(SandboxExecutor):
     outcome: SandboxOutcome | None = None
     failure: SandboxExecutionError | None = None
     available: bool = True
+    #: What the "script" prints while it "runs", as `(channel, text)`.
+    streams: tuple[tuple[str, str], ...] = ()
 
     async def probe(self) -> bool:
         return self.available
 
-    async def run(self, request: SandboxRequest) -> SandboxOutcome:
+    async def run(
+        self,
+        request: SandboxRequest,
+        *,
+        on_output: OutputSink | None = None,
+    ) -> SandboxOutcome:
         _seen.append(request)
         if self.failure is not None:
             raise self.failure
+        if on_output is not None:
+            for channel, text in self.streams:
+                await on_output(channel, text)
         assert self.outcome is not None
         return self.outcome
 
@@ -301,3 +314,93 @@ def test_the_command_line_exposes_no_way_to_weaken_the_sandbox() -> None:
         main_module.argparse.ArgumentParser = original  # type: ignore[assignment]
 
     assert parser_flags == {"--host", "--port", "--container-runtime", "--image"}
+
+
+# --- The preview crossing the protocol (ADR-069) ---------------------------
+
+
+def test_the_scripts_output_reaches_the_caller_as_progress() -> None:
+    """`notifications/progress`, one per slice the executor reports.
+
+    The value carried in `progress` counts characters streamed rather than a
+    fraction of the work, and `total` stays `None`: this server cannot know how
+    much a script will print, and the protocol's way of saying so is to leave
+    the end unstated rather than to invent one.
+    """
+
+    seen: list[tuple[float, float | None, str | None]] = []
+
+    async def on_progress(
+        progress: float, total: float | None, message: str | None
+    ) -> None:
+        seen.append((progress, total, message))
+
+    async def scenario() -> Any:
+        executor = _StubExecutor(
+            outcome=_outcome(),
+            streams=(("stdout", "line one\n"), ("stderr", "a warning\n")),
+        )
+        async with Client(
+            create_server(executor), cache=None, raise_exceptions=True
+        ) as client:
+            return await client.call_tool(
+                TOOL_NAME, {"script": "print(1)"}, progress_callback=on_progress
+            )
+
+    asyncio.run(scenario())
+
+    assert [message for _, _, message in seen] == [
+        "line one\n",
+        f"{STDERR_PREFIX}a warning\n",
+    ]
+    # Monotonic, which the protocol requires of the field.
+    assert [progress for progress, _, _ in seen] == [9.0, 19.0]
+    assert all(total is None for _, total, _ in seen)
+
+
+def test_a_caller_that_did_not_ask_for_progress_still_gets_its_result() -> None:
+    """`report_progress` is a no-op without a progress token.
+
+    Worth pinning rather than assuming: the server reports unconditionally, so
+    if that were *not* a no-op every call from a client with no callback would
+    fail on a notification it never asked for.
+    """
+
+    result = _call(
+        _StubExecutor(
+            outcome=_outcome(),
+            streams=(("stdout", "line one\n"),),
+        ),
+        {"script": "print(1)"},
+    )
+
+    assert result.is_error is False
+    assert result.structured_content is not None
+
+
+def test_the_transport_answers_with_a_stream_not_one_json_body() -> None:
+    """The line that makes the streaming above real rather than theoretical.
+
+    Under `json_response=True` a call is answered by a single JSON document and
+    a notification raised while the tool is still running has nowhere to go --
+    measured: the client's progress callback fires zero times, with no error
+    anywhere to say so. This asserts the app is built the other way, because
+    nothing else in this file would notice if it were flipped back.
+    """
+
+    app = create_app(host="testserver", executor=_StubExecutor(outcome=_outcome()))
+    with TestClient(app) as client:  # pyright: ignore[reportArgumentType]
+        response = client.post(
+            MCP_PATH,
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+                "MCP-Protocol-Version": "2025-06-18",
+            },
+        )
+
+    assert response.status_code == 200
+    # The observable difference, and the whole assertion: a stream can carry a
+    # notification raised mid-call, and a single JSON document cannot.
+    assert response.headers["content-type"].startswith("text/event-stream")

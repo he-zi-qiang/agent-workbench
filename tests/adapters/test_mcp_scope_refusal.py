@@ -17,6 +17,7 @@ import asyncio
 
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.mcp.client import (
+    ProgressSink,
     RemoteCallResult,
     RemoteToolDefinition,
     RemoteToolPage,
@@ -59,7 +60,13 @@ class _WebDirectory:
             )
         )
 
-    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: JsonObject,
+        *,
+        on_progress: ProgressSink | None = None,
+    ) -> RemoteCallResult:
         del name, arguments
         return RemoteCallResult(content=())
 

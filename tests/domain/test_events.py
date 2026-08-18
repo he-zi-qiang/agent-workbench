@@ -242,3 +242,34 @@ def test_task_events_can_carry_their_graph_node() -> None:
 
     assert envelope.task_id == "task_1"
     assert envelope.graph_node_id == "node_export"
+
+
+def test_progress_must_report_something() -> None:
+    """An empty beat is a frame a console can only draw as a blank row.
+
+    The three fields are each optional because the two things that report here
+    carry different ones -- a handler names a phase, the executor's clock
+    carries only a number -- but *none* of them is the case neither producer
+    can mean, and letting it construct would put the burden of noticing on
+    whichever renderer happened to receive it.
+    """
+
+    with pytest.raises(ValidationError):
+        ToolProgress(tool_call_id="toolu_1")
+
+
+def test_a_beat_carries_a_clock_and_no_words() -> None:
+    beat = ToolProgress(tool_call_id="toolu_1", elapsed_ms=12_000)
+
+    assert beat.message is None
+    # Not derivable from the envelope timestamp: a live subscriber that
+    # connected mid-call has this beat and never saw the ToolStarted it would
+    # have had to subtract.
+    assert beat.elapsed_ms == 12_000
+
+
+def test_progress_is_transient_like_the_deltas_it_sits_beside() -> None:
+    """Persisting it would be one row every five seconds, per running tool."""
+
+    assert EVENT_DURABILITY["ToolProgress"] == "transient"
+    assert "ToolProgress" in TRANSIENT_EVENT_TYPES

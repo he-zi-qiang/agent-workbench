@@ -56,6 +56,7 @@ import type { PrincipalIdentity, WorkspaceEntryView } from "../../api/types";
 import { MarkdownContent } from "../../components/MarkdownContent";
 import { previewKind } from "../../components/media";
 import type { StepGroup } from "../../components/stepGroups";
+import type { ToolProgressView } from "./useCodeStream";
 import { FileCard } from "./FileCard";
 import { FilePreview } from "./FilePreview";
 import type { CodeTurnBlock, ProducedFile, TurnStep } from "./turnBlocks";
@@ -88,6 +89,7 @@ export function CodeTurn({
   liveThinking,
   liveThinkingCallId,
   onOpen,
+  toolProgress,
   onWrote,
   openedName,
   sessionId,
@@ -107,6 +109,8 @@ export function CodeTurn({
   onWrote: (names: string[]) => void;
   openedName: string | null;
   sessionId: string;
+  /** Live tool progress by `tool_call_id`. Empty except on the live block. */
+  toolProgress: ReadonlyMap<string, ToolProgressView>;
 }) {
   // One auto-opened inline preview per turn: the last previewable thing it
   // produced. Not gated on `live` -- a reader scrolling back to a turn is
@@ -135,6 +139,7 @@ export function CodeTurn({
               live={step.modelCallId !== "" && step.modelCallId === liveThinkingCallId}
               liveThinking={liveThinking}
               step={step}
+              toolProgress={toolProgress}
             />
           ))}
         </ol>
@@ -220,15 +225,25 @@ function TurnStepRow({
   live,
   liveThinking,
   step,
+  toolProgress,
 }: {
   live: boolean;
   liveThinking: string;
   step: TurnStep;
+  toolProgress: ReadonlyMap<string, ToolProgressView>;
 }) {
   // While a call is streaming, the durable excerpt does not exist yet -- the
   // live text is the only text there is. When `ModelCompleted` lands, the two
   // swap without the row moving.
   const text = live && liveThinking !== "" ? liveThinking : step.thinking;
+  // Only for a step that has not come back. The map is keyed by call and is
+  // emptied when one returns, so this is almost always already undefined --
+  // the `running` check is what makes it *never* possible for a settled row to
+  // carry a moving line, rather than merely unlikely.
+  const progress =
+    step.group !== null && step.group.outcome === "running"
+      ? toolProgress.get(toolCallIdOf(step.group))
+      : undefined;
 
   return (
     <li className={`aw-code-step${live ? " is-live" : ""}`}>
@@ -246,8 +261,84 @@ function TurnStepRow({
           </span>
         </div>
       )}
+      {progress === undefined ? null : <Progress progress={progress} />}
     </li>
   );
+}
+
+/**
+ * What a still-running call is doing, and for how long.
+ *
+ * `aria-live="polite"`, because this is the row a reader is watching to decide
+ * whether to keep waiting, and a reader using a screen reader is the one who
+ * cannot glance at it. `polite` rather than `assertive`: it updates every few
+ * seconds, and interrupting a reader that often to say "still running" would
+ * make the console unusable for exactly the people the attribute is for.
+ */
+function Progress({ progress }: { progress: ToolProgressView }) {
+  return (
+    <div className="aw-code-action-progress">
+      {progress.lines.length === 0 ? null : (
+        // `aria-live` on the block rather than on each line, so a screen
+        // reader announces what was added instead of re-reading the window
+        // every time it scrolls.
+        <ol aria-live="polite" className="aw-code-action-progress-lines">
+          {progress.lines.map((line, index) => (
+            // Indexed keys, which is right here for the reason they are
+            // usually wrong: this is a fixed-length window over an append-only
+            // stream, so position *is* the identity -- and the same line of
+            // output can legitimately repeat, which makes the text itself no
+            // key at all. No eslint suppression: the rule that would object is
+            // not configured in this project, and a disable comment naming a
+            // rule that does not exist is itself an error here.
+            <li key={index}>{line}</li>
+          ))}
+        </ol>
+      )}
+      <p className="aw-code-action-progress-meta">
+        {progress.elapsedMs === null ? null : (
+          <span className="aw-code-action-progress-clock">
+            已运行 {formatElapsed(progress.elapsedMs)}
+          </span>
+        )}
+        {progress.percent === null ? null : (
+          <span className="aw-code-action-progress-percent">
+            {progress.percent}%
+          </span>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The call a tool group is about.
+ *
+ * Read out of the events rather than parsed off `group.key`. The key's
+ * `tool:` prefix is `groupSteps`'s private business, and a reader of this file
+ * would have no way to know that slicing four characters off a string is
+ * load-bearing.
+ */
+function toolCallIdOf(group: StepGroup): string {
+  for (const event of group.events) {
+    const held = (event.payload as Record<string, unknown>).tool_call_id;
+    if (typeof held === "string") return held;
+  }
+  return "";
+}
+
+/**
+ * Milliseconds as a reader says them.
+ *
+ * Whole seconds under a minute, then minutes and seconds. No tenths: the beat
+ * that produces this arrives every few seconds, so a tenths digit would be
+ * precision the number does not have -- and a figure that reads as exact while
+ * being five seconds stale is worse than a coarser one that is honest.
+ */
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 }
 
 /**

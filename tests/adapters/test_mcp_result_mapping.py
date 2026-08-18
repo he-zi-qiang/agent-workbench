@@ -10,6 +10,7 @@ import zipfile
 import pytest
 
 from agent_workbench.adapters.mcp.client import (
+    ProgressSink,
     RemoteBinaryBlock,
     RemoteCallResult,
     RemoteResourceLink,
@@ -452,7 +453,13 @@ class _DeadServerClient:
     async def list_tools_page(self, cursor: str | None) -> RemoteToolPage:
         raise self.error
 
-    async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: JsonObject,
+        *,
+        on_progress: ProgressSink | None = None,
+    ) -> RemoteCallResult:
         raise self.error
 
 
@@ -534,7 +541,13 @@ def test_a_run_cancelled_while_the_server_died_reports_cancellation() -> None:
     source = CancellationSource()
 
     class _CancelledMidCall(_DeadServerClient):
-        async def call_tool(self, name: str, arguments: JsonObject) -> RemoteCallResult:
+        async def call_tool(
+            self,
+            name: str,
+            arguments: JsonObject,
+            *,
+            on_progress: ProgressSink | None = None,
+        ) -> RemoteCallResult:
             source.cancel("user_cancelled")
             raise self.error
 
