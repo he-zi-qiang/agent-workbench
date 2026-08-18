@@ -201,3 +201,57 @@ describe("HtmlPreview 显示比例", () => {
     expect(container.querySelector("iframe")?.getAttribute("style")).toBeNull();
   });
 });
+
+describe("HtmlPreview 全屏", () => {
+  it("puts the caution inside the element that goes fullscreen", async () => {
+    // The whole safety argument, as a containment check (ADR-071). Fullscreen
+    // is requested on the stage; if the caution were a sibling of the stage
+    // rather than a child, going fullscreen would leave an agent-written page
+    // owning the entire display with nothing on screen saying what it is --
+    // and a page that paints a convincing sign-in box at that point has no
+    // contradicting context anywhere for the reader to check it against.
+    const { container } = renderPreview();
+    await screen.findByRole("button", { name: "全屏" });
+
+    const stage = container.querySelector(".aw-preview-stage");
+    const note = container.querySelector(".aw-page-note");
+    const frame = container.querySelector(".aw-preview-frame");
+
+    expect(stage).not.toBeNull();
+    expect(note).not.toBeNull();
+    expect(stage?.contains(note as Node)).toBe(true);
+    expect(stage?.contains(frame as Node)).toBe(true);
+  });
+
+  it("asks the stage to go fullscreen, never the frame itself", async () => {
+    const asked: string[] = [];
+    Object.defineProperty(Element.prototype, "requestFullscreen", {
+      writable: true,
+      configurable: true,
+      value: function (this: Element) {
+        asked.push(this.className);
+        return Promise.resolve();
+      },
+    });
+
+    renderPreview();
+    fireEvent.click(await screen.findByRole("button", { name: "全屏" }));
+
+    expect(asked).toHaveLength(1);
+    // The stage, and specifically not `aw-preview-frame` / the iframe.
+    expect(asked[0]).toContain("aw-preview-stage");
+    expect(asked[0]).not.toContain("aw-preview-frame");
+  });
+
+  it("offers no fullscreen control over the source view", async () => {
+    renderPreview();
+    await screen.findByRole("button", { name: "全屏" });
+
+    fireEvent.click(screen.getByRole("button", { name: "源码" }));
+
+    // A `<pre>` filling the screen is a scrollbar, not a feature -- and the
+    // caution is not rendered on that branch, so a fullscreen source view
+    // would be the one shape this component must not produce.
+    expect(screen.queryByRole("button", { name: "全屏" })).toBeNull();
+  });
+});
