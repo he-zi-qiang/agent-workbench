@@ -121,6 +121,20 @@ export interface TurnBlocks {
    * rather than shifting every card onto the wrong turn.
    */
   orphanRuns: number;
+  /**
+   * Which runs those were, oldest first.
+   *
+   * The count says *that* the page is missing something; the ids say *which*,
+   * and that is what a caller needs to do anything about it. `CodePage`
+   * re-reads the transcript once per id it has not already tried -- a run with
+   * no instruction is usually not another tab at all, it is this tab having
+   * fetched the transcript a moment before the server appended the sentence.
+   *
+   * Per id rather than on the count, because the count is not a fresh signal:
+   * a genuinely orphaned run keeps it above zero forever, and a reload keyed
+   * on that would re-fetch on every render for the life of the session.
+   */
+  orphanRunIds: string[];
 }
 
 /**
@@ -227,6 +241,9 @@ export function buildTurnBlocks(input: {
   // gap the page can admit to.
   const paired = Math.min(slots, m);
   const orphanRuns = Math.max(0, m - slots);
+  // The dropped ones are the *oldest*, because the pairing above is
+  // tail-aligned: the newest `slots` runs take the instructions.
+  const orphanRunIds = settled.slice(0, orphanRuns).map((run) => run.runId);
 
   const blocks: CodeTurnBlock[] = [];
   for (const [position, messageIndex] of asked.entries()) {
@@ -276,7 +293,7 @@ export function buildTurnBlocks(input: {
   }
 
   annotateWriters(blocks);
-  return { blocks, orphanRuns };
+  return { blocks, orphanRuns, orphanRunIds };
 }
 
 function blockOf(
