@@ -16,6 +16,7 @@ import {
   listCodeSessions,
   putCodeWorkspaceFile,
   renameCodeSession,
+  runCodeWorkspaceFile,
 } from "../../api/client";
 import type { PrincipalIdentity } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
@@ -43,6 +44,7 @@ vi.mock("../../api/client", () => ({
   renameCodeSession: vi.fn(() =>
     Promise.resolve({ session_id: "ses_code_1", title: "x", last_activity_at: null }),
   ),
+  runCodeWorkspaceFile: vi.fn(),
   newIdempotencyKey: vi.fn(() => "code-1"),
 }));
 
@@ -806,6 +808,96 @@ describe("CodePage", () => {
     expect(vi.mocked(createCodeSession)).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the sentence on screen for the whole of the turn that opened the session", async () => {
+    const user = userEvent.setup();
+    vi.mocked(createCodeSession).mockResolvedValue({
+      session_id: SESSION,
+      title: null,
+    });
+    // Held open, the way a real coding turn is: minutes, not a microtask.
+    vi.mocked(askCode).mockReturnValue(new Promise(() => undefined));
+    // What the route change re-reads. The server appends the user message only
+    // when the turn starts, so this reload -- fired by the navigation, before
+    // `askCode` is even sent -- sees nothing. It used to clear the pending
+    // sentence anyway, and the pane then said 这个会话还是空的 under a spinner
+    // for the entire turn: no instruction, no steps, no thinking, no report.
+    vi.mocked(getCodeHistory).mockResolvedValue({ messages: [] });
+    vi.mocked(useCodeStream).mockReturnValue({
+      steps: [],
+      thinking: "先看看工作区里有什么",
+      thinkingCallId: "mc_1",
+      answer: "",
+    });
+
+    mounted("/code");
+    await user.type(screen.getByLabelText("要做的事"), "写一个 sq.py");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const transcript = await screen.findByRole("region", { name: "编码会话" });
+    expect(await within(transcript).findByText("写一个 sq.py")).toBeInTheDocument();
+    // And the block is the live one, so the thought in flight has somewhere to
+    // land. This is the whole point of keeping the sentence: a block is what a
+    // turn's steps, reasoning and report are drawn inside.
+    expect(
+      within(transcript).getByText("先看看工作区里有什么"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("这个会话还是空的"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("drops the pending copy once the server's transcript carries it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(createCodeSession).mockResolvedValue({
+      session_id: SESSION,
+      title: null,
+    });
+    vi.mocked(askCode).mockReturnValue(new Promise(() => undefined));
+    // The other side of the race: this reload lands after the turn appended
+    // the instruction. Two copies of one sentence is what the pending block
+    // exists to avoid, so the server's copy has to be the one that survives.
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [{ role: "user", text: "写一个 sq.py" }],
+    });
+
+    mounted("/code");
+    await user.type(screen.getByLabelText("要做的事"), "写一个 sq.py");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const transcript = await screen.findByRole("region", { name: "编码会话" });
+    await waitFor(() => {
+      expect(within(transcript).getAllByText("写一个 sq.py")).toHaveLength(1);
+    });
+  });
+
+  it("puts a new session in the list before the turn it opened comes back", async () => {
+    const user = userEvent.setup();
+    vi.mocked(createCodeSession).mockResolvedValue({
+      session_id: SESSION,
+      title: null,
+    });
+    vi.mocked(askCode).mockReturnValue(new Promise(() => undefined));
+
+    mounted("/code");
+    await user.type(
+      screen.getByLabelText("要做的事"),
+      "写一个 sq.py\n再加上注释",
+    );
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    // Named from the first line of the instruction, the way the server names
+    // it (ADR-047). The invalidation at the end of the turn replaces this with
+    // the server's own copy; what this buys is the minutes in between, during
+    // which the session being watched used to be the one session missing from
+    // the list beside it.
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
+    expect(
+      await within(recent).findByRole("button", { name: "写一个 sq.py" }),
+    ).toBeInTheDocument();
+  });
+
   it("deletes a session only after the reader confirms", async () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
@@ -1272,6 +1364,52 @@ describe("CodePage", () => {
       SESSION,
       "notes.md",
     ]);
+  });
+
+  it("runs a .py from the panel, and never shows one file's output under another's name", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [
+        { name: "maker.py", size_bytes: 60, media_type: "text/x-python" },
+        { name: "broken.py", size_bytes: 40, media_type: "text/x-python" },
+      ],
+    });
+    vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+      text: "print('hi')",
+      truncated: false,
+    });
+    vi.mocked(runCodeWorkspaceFile).mockResolvedValue({
+      exit_code: 0,
+      stdout: "wrote report.txt\n",
+      stderr: "",
+      written: ["report.txt"],
+      workspace_version: "art_2",
+      omitted_inputs: [],
+    });
+
+    mounted();
+    await openWorkspace(user, 2);
+    await user.click(await screen.findByRole("button", { name: /maker\.py/ }));
+    await user.click(await screen.findByRole("button", { name: "运行结果" }));
+
+    expect(await screen.findByText("运行结束，退出码 0")).toBeInTheDocument();
+    expect(vi.mocked(runCodeWorkspaceFile).mock.calls[0]?.slice(1)).toEqual([
+      SESSION,
+      "maker.py",
+    ]);
+    // Files a run produced land in the listing the page owns, so the count in
+    // the header and the directory below it stop being one short.
+    await waitFor(() => {
+      expect(vi.mocked(getCodeWorkspace).mock.calls.length).toBeGreaterThan(1);
+    });
+
+    // The panel keeps one tree position and swaps the file under it, so the
+    // viewer is reused unless it is keyed -- and a `useMutation`'s result
+    // outlives a prop change. Observed on a real session before the key:
+    // `maker.py`'s stdout, under the heading `broken.py`.
+    await user.click(await screen.findByRole("button", { name: /broken\.py/ }));
+    expect(screen.queryByText("运行结束，退出码 0")).not.toBeInTheDocument();
+    expect(vi.mocked(runCodeWorkspaceFile)).toHaveBeenCalledTimes(1);
   });
 
   it("offers a download for a type it cannot show, and does not fetch it", async () => {

@@ -57,6 +57,7 @@ import {
 } from "../../api/client";
 import type {
   ApprovalDecision,
+  CodeSessionListResponse,
   MessageView,
   PendingApprovalView,
   WorkspaceEntryView,
@@ -103,7 +104,17 @@ export function CodePage() {
   //: worse, on the turn that *opens* a session the optimistic copy was dropped
   //: by the `loadedFor` guard the moment the route changed, so the reader's own
   //: instruction vanished and the pane said "这个会话还是空的" under it.
-  const [pending, setPending] = useState<string | null>(null);
+  //:
+  //: It carries the session it was typed into, and that is not decoration. The
+  //: turn that opens a session navigates while its request is still open, so a
+  //: reader who switches to another session mid-turn used to find their
+  //: sentence sitting at the foot of *that* transcript, under a spinner
+  //: belonging to a run it has nothing to do with. `sessionId: null` is the one
+  //: instant before the session exists, and the start page draws no blocks.
+  const [pending, setPending] = useState<{
+    sessionId: string | null;
+    text: string;
+  } | null>(null);
   //: Scoped to the session it happened in, and derived rather than cleared:
   //: an error from one session lingering over the next -- "artifact not
   //: found" hanging above a healthy workspace -- is the same one-render-late
@@ -144,6 +155,12 @@ export function CodePage() {
   const viewing = opened?.sessionId === sessionId ? opened : null;
   const pendingApprovals = running ? approvals : [];
   const messages = loadedFor === sessionId ? loadedMessages : [];
+  // The sentence to draw a block for, or null because the server's transcript
+  // already carries it -- or because it was typed into a different session.
+  const pendingInstruction =
+    running && pending !== null && (pending.sessionId ?? sessionId) === sessionId
+      ? pending.text
+      : null;
   // Memoised, unlike the three above, only because `openByName` closes over it:
   // the `[]` branch is a fresh array every render, which would give that
   // callback a new identity on every frame the event stream delivers.
@@ -159,7 +176,7 @@ export function CodePage() {
     messages,
     events: steps,
     running,
-    pendingInstruction: running ? pending : null,
+    pendingInstruction,
     liveCallId: thinkingCallId,
   });
 
@@ -180,12 +197,33 @@ export function CodePage() {
     (id: string, signal?: AbortSignal) =>
       Promise.all([
         getCodeHistory(identity, id, signal).then((history) => {
-          // These three land in one React batch, which is the point: the
-          // server's copy of the instruction appears in the same commit that
-          // drops the pending one, so the sentence never flickers as two.
+          // These land in one React batch, which is the point: the server's
+          // copy of the instruction appears in the same commit that drops the
+          // pending one, so the sentence never flickers as two.
           setMessages(history.messages);
-          setPending(null);
           setLoadedFor(id);
+          // Dropped only when the transcript being installed *has* the
+          // sentence, and reading that off the data rather than off which call
+          // site asked for the reload is the whole fix.
+          //
+          // The unconditional `setPending(null)` that used to be here was
+          // right for the reload at the end of a turn and catastrophic for the
+          // one the route change fires: opening a session navigates *before*
+          // the turn is sent, so the effect below re-read a transcript the
+          // server had not written the instruction into yet, cleared the
+          // pending copy, and left `buildTurnBlocks` with no block at all.
+          // Measured on a real 7-second turn: the pane said 这个会话还是空的
+          // for all of it -- no instruction, no steps, no thinking, no report
+          // -- and then the finished turn appeared whole. Every session's
+          // first turn looked like the console had frozen and then pasted.
+          setPending((held) =>
+            held !== null &&
+            history.messages.some(
+              (message) => message.role === "user" && message.text === held.text,
+            )
+              ? null
+              : held,
+          );
         }),
         getCodeWorkspace(identity, id, signal).then((workspace) => {
           setFiles(workspace.files);
@@ -243,12 +281,43 @@ export function CodePage() {
     let target = sessionId;
     setRunning(true);
     setFault(null);
-    setPending(text);
+    setPending({ sessionId: sessionId ?? null, text });
     setInstruction("");
     try {
       if (target === undefined) {
         const created = await createCodeSession(identity);
-        target = created.session_id;
+        // A `const` beside the `let`, because the callback below closes over it
+        // and a reassignable binding is `string | undefined` in there however
+        // obviously it was just assigned.
+        const opened = created.session_id;
+        target = opened;
+        setPending({ sessionId: opened, text });
+        // Into the list now, not when the turn comes back. The invalidation in
+        // `finally` is the only thing that used to put a new session in the
+        // rail, and a coding turn holds its request open for minutes -- so for
+        // all of them the session the reader was watching was the one session
+        // not in the list beside it, and leaving the page was the only way to
+        // make it appear.
+        //
+        // The name is this client's own reading of the instruction, and it is
+        // provisional in the honest sense: the server derives the same name
+        // from the same sentence by the same rule (`session_titles.py`, ADR-047)
+        // and its copy replaces this one at the invalidation below. Prepended
+        // rather than inserted by date, because the list is ordered by last
+        // spoken in and this session was just spoken in.
+        queries.setQueryData<CodeSessionListResponse>(
+          ["code-sessions", identity],
+          (held) => ({
+            sessions: [
+              {
+                session_id: opened,
+                title: provisionalTitle(text),
+                last_activity_at: null,
+              },
+              ...(held?.sessions ?? []),
+            ],
+          }),
+        );
         // Navigate before the turn, not after: the turn holds its request open
         // for minutes, and a URL that only becomes shareable once the work
         // finishes is a URL nobody can send while the work is worth watching.
@@ -292,6 +361,26 @@ export function CodePage() {
       }
     }
   }, [identity, instruction, navigate, queries, reload, running, sessionId]);
+
+  // What a run started from a preview changes out here. Only the listing: the
+  // per-file bodies are react-query caches and `FilePreview` invalidates the
+  // ones it knows went stale, but the working set lives in this component's
+  // state -- read once per turn -- and a file a script wrote is a name that
+  // was not in it. Without this, running a `.py` that produces `out.csv` leaves
+  // the card for it unclickable and the 工作区 count one short until the next
+  // instruction.
+  const refreshWorkspace = useCallback(() => {
+    if (sessionId === undefined) return;
+    const target = sessionId;
+    getCodeWorkspace(identity, target)
+      .then((workspace) => {
+        setFiles(workspace.files);
+        setLoadedFor(target);
+      })
+      .catch((cause: unknown) => {
+        setFault({ scope: target, text: describe(cause) });
+      });
+  }, [identity, sessionId]);
 
   // Naming what to show, and nothing else. Every kind fetches inside its own
   // preview component now, which is what deleted the rest of this callback:
@@ -606,6 +695,7 @@ export function CodePage() {
                   liveThinkingCallId={block.live ? thinkingCallId : ""}
                   liveAnswer={block.live ? answer : ""}
                   onOpen={openByName}
+                  onWrote={refreshWorkspace}
                   openedName={viewing?.name ?? null}
                   sessionId={sessionId}
                 />
@@ -682,6 +772,7 @@ export function CodePage() {
               });
             }}
             onOpen={open}
+            onWrote={refreshWorkspace}
             orphanRuns={orphanRuns}
             setDirectoryOpen={setDirectoryOpen}
             viewing={viewing}
@@ -714,6 +805,37 @@ function stopNote(reason: string): string {
     return "这一轮被取消了。已完成的改动都在工作区里。";
   }
   return `这一轮没有跑完（${reason}）。已完成的改动都在工作区里，直接说下一步就能继续。`;
+}
+
+/** How much of an instruction fits in a sidebar row. `DEFAULT_TITLE_LIMIT`. */
+const TITLE_LIMIT = 120;
+
+/**
+ * The name a session is about to be given, so its row can be drawn now.
+ *
+ * A deliberate restatement of `application/session_titles.py`, not a second
+ * source of truth: the server is the one that names a session (ADR-047), and
+ * the name it derives lands in this list at the invalidation that ends the
+ * turn. What this buys is the minutes in between, during which the row would
+ * otherwise have to read as a bare `ses_2565…` -- an id is not a name, and a
+ * reader watching a turn should not have to recognise their own work by one.
+ *
+ * The three rules are the ones over there, for the reasons written over there:
+ * the first non-empty line (a multi-line instruction opens with the request and
+ * continues with the details), interior whitespace collapsed (formatting inside
+ * a one-line label is noise), and a single ellipsis rather than a hard cut.
+ */
+function provisionalTitle(text: string): string | null {
+  for (const line of text.split("\n")) {
+    const collapsed = line.split(/\s+/).filter(Boolean).join(" ");
+    if (collapsed === "") continue;
+    // Counted in code points, not UTF-16 units: `length` would cut a title of
+    // emoji at half the characters it allows a title of Chinese.
+    const runes = [...collapsed];
+    if (runes.length <= TITLE_LIMIT) return collapsed;
+    return runes.slice(0, TITLE_LIMIT).join("").trimEnd() + "…";
+  }
+  return null;
 }
 
 function describe(cause: unknown): string {

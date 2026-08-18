@@ -89,6 +89,7 @@ export function CodeTurn({
   liveThinking,
   liveThinkingCallId,
   onOpen,
+  onWrote,
   openedName,
   sessionId,
 }: {
@@ -103,6 +104,8 @@ export function CodeTurn({
   /** Which model call that live text belongs to, so it lands on its own step. */
   liveThinkingCallId: string;
   onOpen: (name: string) => void;
+  /** A run started from a card in here can write files. */
+  onWrote: (names: string[]) => void;
   openedName: string | null;
   sessionId: string;
 }) {
@@ -148,6 +151,7 @@ export function CodeTurn({
               identity={identity}
               key={file.toolCallId + file.name}
               onOpen={onOpen}
+              onWrote={onWrote}
               opened={file.name === openedName}
               sessionId={sessionId}
             />
@@ -304,6 +308,7 @@ function FileCard({
   file,
   identity,
   onOpen,
+  onWrote,
   opened,
   sessionId,
 }: {
@@ -313,6 +318,7 @@ function FileCard({
   file: ProducedFile;
   identity: PrincipalIdentity;
   onOpen: (name: string) => void;
+  onWrote: (names: string[]) => void;
   opened: boolean;
   sessionId: string;
 }) {
@@ -365,6 +371,7 @@ function FileCard({
             <div className="aw-code-output-inline-body">
               <FilePreview
                 identity={identity}
+                onWrote={onWrote}
                 viewing={{
                   sessionId,
                   name: file.name,

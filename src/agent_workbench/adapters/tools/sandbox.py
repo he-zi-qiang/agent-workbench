@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -38,6 +39,7 @@ from agent_workbench.domain.sandbox import (
 )
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.domain.workspace import WorkspaceOverflowError
+from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 
 TOOL_NAME = SANDBOX_RUN_TOOL
@@ -46,6 +48,13 @@ TOOL_NAME = SANDBOX_RUN_TOOL
 #: input ceiling; a request past it would be refused there anyway, and being
 #: refused here means it is refused before any bytes are read.
 MAX_INPUT_NAMES = 32
+
+#: How many bytes those files may come to. The server's own
+#: ``MAX_TOTAL_INPUT_BYTES``, restated here for the same reason as the count
+#: above -- and used by the caller that chooses the file list rather than
+#: receiving it: the model names its inputs and wears the refusal, while the
+#: console feeds a whole working set in and has to decide what fits.
+MAX_INPUT_BYTES = 16 * 1024 * 1024
 
 #: What one call's stdout or stderr may put into the model's context. The
 #: sandbox itself allows far more, and the excess is not lost -- the byte count
@@ -67,6 +76,142 @@ _NAME_SCHEMA: dict[str, JsonValue] = {
 
 class SandboxUnavailableError(RuntimeError):
     """A sandbox tool ran outside a node that entered a workspace session."""
+
+
+class SandboxRefusedError(RuntimeError):
+    """One run that did not happen, or happened and could not be kept.
+
+    Carries the code the tool result would have carried, because the two
+    callers of :class:`WorkspaceSandbox` need it in two different shapes: a
+    ``ToolResult.failed`` for the model, an HTTP status for a person. Raising
+    rather than returning a union keeps the success path of both callers free
+    of branching on a discriminant.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxOutcome:
+    """What one sandboxed run did, before anybody decides how to say it.
+
+    ``written`` names the files the workspace *accepted*, never the ones the
+    script claimed to produce (ADR-063): it is appended to only after a version
+    commits, so a partial save reports exactly the part that landed.
+
+    The streams are the server's, unbounded here on purpose. The sandbox
+    already refuses a run whose stdout or stderr passed its own ceiling, so
+    what arrives is bounded; each caller then applies the bound that suits it
+    -- the model's context is not the same budget as a browser's viewport, and
+    a single ceiling here would be the wrong one for one of them.
+    """
+
+    exit_code: int
+    stdout: str
+    stderr: str
+    written: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceSandbox:
+    """Workspace in, script, workspace out -- the part with no caller in it.
+
+    Split out of :class:`SandboxRunTool` when the console grew a 运行 button
+    (ADR-065). The two callers differ only in who asked and how the answer is
+    phrased: a model naming files through a tool schema, and a person clicking
+    on a ``.py`` they can see. What must not differ is what happens in between
+    -- which names are read, that outputs are bound to workspace versions one
+    at a time under compare-and-set, and that a partial save says so. A second
+    copy of that would be a second set of rules for the same working set.
+    """
+
+    client: MCPClientPort
+
+    async def run(
+        self,
+        session: WorkspaceSession,
+        *,
+        script: str,
+        inputs: Sequence[str],
+        cancellation: CancellationToken,
+    ) -> SandboxOutcome:
+        """Run ``script`` with ``inputs`` beside it, keeping what it writes."""
+
+        try:
+            payload = [
+                {
+                    "name": name,
+                    "content_base64": base64.b64encode(
+                        await session.workspace.read(session.version, name)
+                    ).decode("ascii"),
+                }
+                for name in inputs
+            ]
+        except WorkspaceEntryNotFoundError as error:
+            # Named rather than skipped. A script handed one fewer file than it
+            # asked for fails somewhere inside itself, and the traceback that
+            # comes back says nothing about the real cause.
+            raise SandboxRefusedError("not_found", str(error)) from error
+
+        cancellation.raise_if_cancelled()
+        arguments: dict[str, JsonValue] = {"script": script}
+        # Omitted rather than sent empty. `inputs` is optional on the server and
+        # declares `minItems: 1`, so `[]` is a schema violation -- a script that
+        # only computes would be refused before it ran.
+        if payload:
+            arguments["inputs"] = cast(JsonValue, payload)
+        remote = await self.client.call_tool(SANDBOX_REMOTE_TOOL, arguments)
+        if remote.is_error:
+            raise SandboxRefusedError(
+                "tool_failed",
+                _remote_message(remote.content) or "the sandbox refused the run",
+            )
+
+        body = remote.structured_content
+        if not isinstance(body, dict):
+            raise SandboxRefusedError(
+                "tool_failed", "the sandbox returned no structured result"
+            )
+        result = cast(dict[str, Any], body)
+
+        try:
+            outputs = _outputs(result)
+        except (KeyError, TypeError, ValueError, binascii.Error) as error:
+            raise SandboxRefusedError(
+                "tool_failed", "the sandbox returned a malformed result"
+            ) from error
+        if len(outputs) > MAX_OUTPUT_FILES:
+            raise SandboxRefusedError(
+                "output_too_large",
+                f"the script produced more than {MAX_OUTPUT_FILES} files",
+            )
+
+        written: list[str] = []
+        for name, content in outputs:
+            cancellation.raise_if_cancelled()
+            try:
+                session.version = await session.workspace.write(
+                    session.version, name, content, media_type=_media_type_for(name)
+                )
+            except (ValueError, WorkspaceOverflowError) as error:
+                # Partial by construction: the versions already committed are
+                # real and stay. Saying which ones landed is the difference
+                # between a caller that can retry the rest and one that cannot.
+                raise SandboxRefusedError(
+                    "invalid_tool_input",
+                    f"saved {', '.join(written) or 'nothing'} before {name} "
+                    f"was refused: {error}",
+                ) from error
+            written.append(name)
+
+        return SandboxOutcome(
+            exit_code=int(cast(int, result.get("exit_code", 0))),
+            stdout=str(result.get("stdout") or ""),
+            stderr=str(result.get("stderr") or ""),
+            written=tuple(written),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,89 +274,27 @@ class SandboxRunTool:
 
     async def handle(self, invocation: ToolInvocation) -> ToolResult:
         arguments = invocation.call.arguments
-        script = str(arguments.get("script", ""))
-        names = [str(name) for name in cast(list[Any], arguments.get("inputs") or [])]
-        session = _session(self.scope)
-
         try:
-            inputs = [
-                {
-                    "name": name,
-                    "content_base64": base64.b64encode(
-                        await session.workspace.read(session.version, name)
-                    ).decode("ascii"),
-                }
-                for name in names
-            ]
-        except WorkspaceEntryNotFoundError as error:
-            # Named rather than skipped. A script handed one fewer file than it
-            # asked for fails somewhere inside itself, and the traceback that
-            # comes back says nothing about the real cause.
-            return _failed(invocation, "not_found", str(error))
-
-        invocation.cancellation.raise_if_cancelled()
-        arguments_out: dict[str, JsonValue] = {"script": script}
-        # Omitted rather than sent empty. `inputs` is optional on the server and
-        # declares `minItems: 1`, so `[]` is a schema violation -- a script that
-        # only computes would be refused before it ran.
-        if inputs:
-            arguments_out["inputs"] = cast(JsonValue, inputs)
-        remote = await self.client.call_tool(SANDBOX_REMOTE_TOOL, arguments_out)
-        if remote.is_error:
-            return _failed(
-                invocation,
-                "tool_failed",
-                _remote_message(remote.content) or "the sandbox refused the run",
+            outcome = await WorkspaceSandbox(client=self.client).run(
+                _session(self.scope),
+                script=str(arguments.get("script", "")),
+                inputs=[
+                    str(name) for name in cast(list[Any], arguments.get("inputs") or [])
+                ],
+                cancellation=invocation.cancellation,
             )
-
-        payload = remote.structured_content
-        if not isinstance(payload, dict):
-            return _failed(
-                invocation, "tool_failed", "the sandbox returned no structured result"
-            )
-        body = cast(dict[str, Any], payload)
-
-        try:
-            outputs = _outputs(body)
-        except (KeyError, TypeError, ValueError, binascii.Error):
-            return _failed(
-                invocation, "tool_failed", "the sandbox returned a malformed result"
-            )
-        if len(outputs) > MAX_OUTPUT_FILES:
-            return _failed(
-                invocation,
-                "output_too_large",
-                f"the script produced more than {MAX_OUTPUT_FILES} files",
-            )
-
-        written: list[str] = []
-        for name, content in outputs:
-            invocation.cancellation.raise_if_cancelled()
-            try:
-                session.version = await session.workspace.write(
-                    session.version, name, content, media_type=_media_type_for(name)
-                )
-            except (ValueError, WorkspaceOverflowError) as error:
-                # Partial by construction: the versions already committed are
-                # real and stay. Saying which ones landed is the difference
-                # between a caller that can retry the rest and one that cannot.
-                return _failed(
-                    invocation,
-                    "invalid_tool_input",
-                    f"saved {', '.join(written) or 'nothing'} before {name} "
-                    f"was refused: {error}",
-                )
-            written.append(name)
+        except SandboxRefusedError as refusal:
+            return _failed(invocation, refusal.code, str(refusal))
 
         return ToolResult.succeeded(
             invocation.call,
-            content=_summary(body, written),
+            content=_summary(outcome),
             # `written` is appended to only after the store accepted a version,
             # so it names the files that actually landed and never the ones the
             # script claimed (ADR-063). One script can produce several files,
             # which is why this is the tool that made the field a tuple rather
             # than a single name.
-            workspace_writes=tuple(written),
+            workspace_writes=outcome.written,
         )
 
 
@@ -236,15 +319,14 @@ def _outputs(body: dict[str, Any]) -> list[tuple[str, bytes]]:
     ]
 
 
-def _summary(body: dict[str, Any], written: list[str]) -> str:
-    exit_code = body.get("exit_code")
-    lines = [f"exit_code: {exit_code}"]
-    for channel in ("stdout", "stderr"):
-        text = str(body.get(channel) or "")
+def _summary(outcome: SandboxOutcome) -> str:
+    lines = [f"exit_code: {outcome.exit_code}"]
+    for channel, text in (("stdout", outcome.stdout), ("stderr", outcome.stderr)):
         if text:
             lines.append(f"{channel}:\n{_bounded(text)}")
     lines.append(
-        "saved to the workspace: " + (", ".join(written) if written else "nothing")
+        "saved to the workspace: "
+        + (", ".join(outcome.written) if outcome.written else "nothing")
     )
     return "\n".join(lines)
 
@@ -308,9 +390,13 @@ def _failed(invocation: ToolInvocation, code: str, message: str) -> ToolResult:
 
 __all__ = [
     "MAX_INLINE_STREAM_CHARS",
+    "MAX_INPUT_BYTES",
     "MAX_INPUT_NAMES",
     "MAX_OUTPUT_FILES",
     "TOOL_NAME",
+    "SandboxOutcome",
+    "SandboxRefusedError",
     "SandboxRunTool",
     "SandboxUnavailableError",
+    "WorkspaceSandbox",
 ]

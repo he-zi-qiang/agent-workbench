@@ -52,6 +52,37 @@ export function isPreviewable(mediaType: string): boolean {
 }
 
 /**
+ * What a `.py` is called on the wire, and why the name is asked as well.
+ *
+ * `WorkspaceWriteTool` and the sandbox's own output labeller both type a `.py`
+ * as `text/x-python`, so a file this project produced always carries it. A
+ * file a *person* attached carries whatever their browser guessed -- usually
+ * `text/plain`, sometimes `application/octet-stream` -- and an uploaded script
+ * is exactly as runnable as a written one. The suffix is therefore a second
+ * answer to the same question, not a fallback for a broken case.
+ */
+const PYTHON_MEDIA_TYPES = new Set(["text/x-python", "text/x-python-script"]);
+
+/**
+ * Whether this file is one a coding session can *run* (ADR-065).
+ *
+ * Deliberately **not** a sixth `PreviewKind`. A kind answers "which viewer",
+ * and every surface that shows a stored file reads that vocabulary -- Work's
+ * artifact panel included, where a `.py` is a document to read and there is no
+ * working set to run it in. Widening the shared enum would have made every one
+ * of those surfaces answer a question only one of them can. A `.py` stays
+ * `text` everywhere, and this is the extra thing the Code viewer asks on top.
+ *
+ * The server checks the same two things again on its own terms
+ * (`routes/code.py`), because a client-side gate is a UI affordance and never
+ * an authorization.
+ */
+export function isRunnablePython(mediaType: string, name: string): boolean {
+  return PYTHON_MEDIA_TYPES.has(mediaType.split(";")[0]?.trim() ?? "")
+    || name.endsWith(".py");
+}
+
+/**
  * Text a page can render *by fetching it*. A .docx is deliberately not here:
  * it is readable too, but only through the server's extraction endpoint, and
  * folding it in would send a plain blob fetch at a zip.

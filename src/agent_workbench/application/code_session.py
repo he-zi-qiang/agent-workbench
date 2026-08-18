@@ -113,6 +113,39 @@ class CodeCapacityError(RuntimeError):
     """This process is already running as many turns as it admits."""
 
 
+class CodeRunUnavailableError(RuntimeError):
+    """Somebody asked to run a file and this deployment cannot run code.
+
+    Not a 404 and not a 403: the file is there, the caller may see it, and
+    nothing about the request is wrong -- ``code.sandbox_enabled`` is off, or
+    the sandbox this process was told to use did not answer at boot. A 503 with
+    that sentence in it is the only answer that names the fix.
+    """
+
+
+class CodeRunRefusedError(RuntimeError):
+    """The sandbox or the working set refused one run that was asked for.
+
+    Distinct from a script that ran and failed, which is not an error here at
+    all: that is an exit code and a traceback, and it is the thing the reader
+    clicked to see. This is the container that could not start, the result that
+    did not parse, the output that would not fit -- states nothing about the
+    request can fix, carrying the refusing side's own words.
+    """
+
+
+class CodeRunNotPermittedError(RuntimeError):
+    """The caller does not hold the scope that running code needs.
+
+    The same ``sandbox:run`` the tool declares, checked here because this path
+    has no Policy Gateway in front of it -- there is no envelope, no step and
+    no tool call, so the one gate the agent's route through this capability
+    passes is a gate this route has to be. A console that asks for the scope
+    and a deployment that grants it are two decisions, and this is where they
+    have to meet.
+    """
+
+
 def new_code_session_id() -> str:
     return new_id("ses")
 
@@ -339,6 +372,73 @@ class CodeSessionService:
         )
         return await workspace.list(version)
 
+    async def workspace_session(
+        self, *, session_id: str, tenant_id: str, principal_id: str
+    ) -> WorkspaceSession:
+        """This session's working set, opened for writing, for one caller.
+
+        The same object a turn runs inside, handed out so that something other
+        than a turn can advance the working set -- today that is the console's
+        运行 button (ADR-065), which runs one file the reader is looking at.
+
+        Authorization is the first call and there is no second one: the store
+        refuses another tenant, another principal and a chat session id
+        identically, and where the files are is only learned after it has not
+        refused. What comes back is a *writer* -- ``SessionWorkspace`` records
+        each version on the session row as it commits -- so a caller that runs
+        code with it leaves the same trail a tool call would, and a caller that
+        crashes half way leaves the files it had finished. That is the same
+        per-write pointer every other Code write moves; see
+        ``application/session_workspace.py`` for why it is not deferred to the
+        end.
+        """
+
+        session = await self.conversations.session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="code",
+        )
+        return self._workspace_at(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            version=session.workspace_version,
+        )
+
+    def _workspace_at(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        version: Identifier | None,
+    ) -> WorkspaceSession:
+        """The writer, from a version somebody has already been authorized for.
+
+        Deliberately not `async` and deliberately taking the version rather
+        than reading it: the read is the authorization, and a constructor that
+        performed its own would be a second gate behind the first -- whichever
+        fires first hides the other, and the covered one is then whichever
+        happens to be written first (the same argument ``_run`` makes about the
+        history read it does not repeat the mode on).
+        """
+
+        return WorkspaceSession(
+            workspace=SessionWorkspace(
+                workspace=Workspace(
+                    artifacts=self.artifacts,
+                    tenant_id=tenant_id,
+                    principal_id=principal_id,
+                ),
+                conversations=self.conversations,
+                session_id=session_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            ),
+            version=version,
+        )
+
     async def open_workspace_file(
         self, *, session_id: str, tenant_id: str, principal_id: str, name: str
     ) -> tuple[ArtifactRef, AsyncIterator[bytes]]:
@@ -464,18 +564,10 @@ class CodeSessionService:
                     mode="code",
                 )
 
-        workspace = WorkspaceSession(
-            workspace=SessionWorkspace(
-                workspace=Workspace(
-                    artifacts=self.artifacts,
-                    tenant_id=principal.tenant_id,
-                    principal_id=principal.principal_id,
-                ),
-                conversations=self.conversations,
-                session_id=request.session_id,
-                tenant_id=principal.tenant_id,
-                principal_id=principal.principal_id,
-            ),
+        workspace = self._workspace_at(
+            session_id=request.session_id,
+            tenant_id=principal.tenant_id,
+            principal_id=principal.principal_id,
             version=session.workspace_version,
         )
 
@@ -605,6 +697,9 @@ __all__ = [
     "CODE_TOOLS_WITH_SANDBOX",
     "CodeCapacityError",
     "CodeRequest",
+    "CodeRunNotPermittedError",
+    "CodeRunRefusedError",
+    "CodeRunUnavailableError",
     "CodeSessionService",
     "CodeTurn",
     "CodeTurnBusyError",

@@ -54,7 +54,7 @@ from agent_workbench.adapters.tools.knowledge_search import (
     TOOL_NAME as KNOWLEDGE_SEARCH,
 )
 from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
-from agent_workbench.adapters.tools.sandbox import SandboxRunTool
+from agent_workbench.adapters.tools.sandbox import SandboxRunTool, WorkspaceSandbox
 from agent_workbench.adapters.tools.web_search import (
     TOOL_NAME as WEB_SEARCH_TOOL_NAME,
 )
@@ -176,6 +176,12 @@ class SandboxSlot:
 
     config: SandboxConfig | None
     bindings: list[ToolBinding] = field(default_factory=list[ToolBinding])
+    #: The same connection the tool holds, reachable without a tool invocation.
+    #: A person clicking 运行 on a `.py` is not a model proposing a call
+    #: (ADR-065), and there is nothing for a `ToolInvocation` to be built out
+    #: of -- no envelope, no step, no run. Empty exactly when `bindings` is,
+    #: because both are filled by the one `open` below and cleared together.
+    runner: WorkspaceSandbox | None = None
     _resources: AsyncExitStack | None = None
 
     async def open(self, *, scope: WorkspaceScope) -> None:
@@ -216,12 +222,14 @@ class SandboxSlot:
             )
 
         self._resources = resources
+        self.runner = WorkspaceSandbox(client=client)
         self.bindings.append(SandboxRunTool(scope=scope, client=client).binding())
 
     async def aclose(self) -> None:
         if self._resources is not None:
             await self._resources.aclose()
             self._resources = None
+        self.runner = None
         self.bindings.clear()
 
 

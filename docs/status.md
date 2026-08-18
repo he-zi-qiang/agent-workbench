@@ -22,6 +22,82 @@
 
 ---
 
+## 2026-08-17（未合并）：整轮空白的第一回合，与看得见却跑不了的 .py
+
+Code 模式的三条现场反馈，两条是同一个 bug 的两个症状，一条是新能力。一份 ADR
+（0065）。
+
+**门禁**：后端 `agent-config-check` ok（schema `1.17`）；`ruff format --check` +
+`ruff check` + `pyright` 0 errors；`pytest` **2433 passed / 739 skipped**；
+服务型四套件 `tests/contracts tests/persistence tests/api tests/vector`
+**1173 passed / 2 skipped**（PostgreSQL 5433 + Qdrant 6333）。前端
+`eslint --max-warnings 0` + `tsc -b` + `vitest` **368 passed** + `vite build`。
+
+### 现场复现：一个 7 秒的回合，界面在其中 6.8 秒里是空的
+
+用浏览器驱动本机 console（Vite 5173 → API 8000，`config.demo-local.toml`），
+每 200ms 采一次 DOM。**新会话的第一回合**：`t=0…5800ms` 转录区文本长度恒为 43
+（"这个会话还是空的"），steps 0，thoughts 0，report 0；`t=6838ms` 一次性跳到
+432 / steps 2 / report 202。这正是反馈里那句"没有一条一条出，是一整条出现"。
+同一个会话的**第二回合**采样是连续的（len 472→522→934，thought 3→415），
+所以问题从一开始就只在**开新会话的那一轮**——也就是"添加新对话"之后。
+
+事件流本身一直是好的：直连 SSE 抓的同一类回合，`ModelThinkingDelta` 每 50–70ms
+一条，durable step 落后不到 1s（`catchup_poll_seconds = 1`）。**后端在流，浏览器
+在扔。**
+
+### 一处 `setPending(null)` 同时造成了两条反馈
+
+`send()` 开会话时先 `navigate`，路由一变，`CodePage` 的 reload effect 立刻重读
+transcript——而服务端要到 `askCode` 真正开跑才 append 用户消息，所以这次读回来
+是空的，`reload` 里那句无条件的 `setPending(null)` 把读者刚打的那句话抹掉了。
+`buildTurnBlocks` 于是既没有 pending 也没有 message，一个 block 都不建；
+live run 的 step 和思考没有容器可落。修法两条，都改成从数据判断而不是从调用点
+判断：transcript 里**确实**已经有这句话时才清 pending；以及 `buildTurnBlocks`
+新增"没有 pending 但有 live run 时，最后一个 block 认领它"（settled 配对槽位
+相应减一，否则每张卡都会往前滑一轮——`turnBlocks.test.ts` 两条新用例钉住）。
+
+会话列表是同一段代码的另一个症状：`invalidateQueries` 只在 `finally` 里，而
+一个编码回合要跑几分钟，于是"正在看的那个会话"恰好是"列表里没有的那个"。
+改为建完就乐观插入，名字按服务端同一条规则（ADR-047 / `session_titles.py`）
+从第一行指令取，回合结束的 invalidate 用服务端的那份覆盖。
+
+**修后同一采样**：`t=790ms` 列表首行已是新会话且名字正确，转录区已有指令；
+`t=2790` steps 1 / thought 151；`t=5790` steps 3；`t=9790` report 开始出现。
+
+### 新能力：工作区里的 .py 可以直接跑（[ADR-065](./adr/0065-a-file-a-person-can-see-is-a-file-they-can-run.md)）
+
+反馈原话是"只能运行 html 文件，py 代码不能运行"。实测确认这不是 Agent 的能力
+问题——同一台机器上让 Agent 写 `hello.py` 并运行，`sandbox_run` 正常出结果——
+而是控制台的：ADR-062 给了 HTML 一个"渲染"面，`.py` 只有源码。
+
+新增 `POST /v1/code/sessions/{id}/workspace/{name}/run`，请求体为空，脚本由服务端
+拼成 `runpy.run_path`；`SandboxRunTool` 里"工作区进、工作区出"的一半拆成
+`WorkspaceSandbox` 与 tool 共用。前端 `.py` 走新的 `PythonPreview`（源码 /
+运行结果两格，**跑是点出来的**，不像 HTML 帧那样挂载即运行）。
+
+**真容器实测（sandbox MCP 8766，Docker）**，两次都是假 client 复现不出来的：
+
+| 入口脚本 | 结果 |
+|---|---|
+| `runpy.run_path(name)` | `import helper` → `ModuleNotFoundError`（`run_path` 不动 `sys.path`，`python -I` 蕴含 `-P`） |
+| ＋`sys.path.insert(0, "")` | import 过了，整次运行仍被拒：`output_unsupported: '__pycache__' is a directory` |
+| ＋`sys.dont_write_bytecode = True` | `exit_code 0`，stdout `1 1…5 25`，`out.csv` 回到工作区 |
+
+失败脚本的 traceback 指的是读者点的那个名字和行号（`File "sq.py", line 3`，
+带 `^^^` 定位），这正是不把文件正文直送当 script 的理由。
+
+**界面实跑还抓出一条自己的 bug**：预览面板只有一个树位置，`viewing` 在它下面
+换，React 复用同一个组件实例——而 `useMutation` 的结果不随 prop 变化清空。实测
+点 `maker.py` → 运行 → 点 `broken.py`，标题是 `broken.py`、正文是 `maker.py` 的
+输出。修法是给 `PythonPreview` 按 session + name 加 key，`CodePage.test.tsx` 一条
+新用例钉住。**这个组件能做的最误导的事，就是把一个文件的输出挂在另一个名字下。**
+
+**未做的**：这条路径没有自动化端到端测试（要真容器，CI 的 `quality` job 离线跑，
+同 E-03）；测试里站在沙箱位置的是返回真实 envelope 形状的假 `MCPClientPort`，
+覆盖项目侧那一半（读输入、入口脚本三行、输出绑版本、503/403/422/409 四种拒绝、
+非零退出码是 200）。
+
 ## 2026-08-17（未合并，分支 `code-thinking-interleaved`）：一段思考属于它促成的那次动作
 
 Code 的思考渲染与留痕，对照 Claude Code 与 Codex 的实现做的一次返工。一份 ADR

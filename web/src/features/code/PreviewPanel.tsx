@@ -35,6 +35,7 @@ export function PreviewPanel({
   onClose,
   onDownload,
   onOpen,
+  onWrote,
   orphanRuns,
   setDirectoryOpen,
   viewing,
@@ -45,6 +46,8 @@ export function PreviewPanel({
   onClose: () => void;
   onDownload: () => void;
   onOpen: (file: WorkspaceEntryView) => void;
+  /** A run in here can write files; the page owns the listing they land in. */
+  onWrote: (names: string[]) => void;
   /** Runs the pairing could not attribute; surfaced rather than swallowed. */
   orphanRuns: number;
   setDirectoryOpen: (open: boolean) => void;
@@ -71,7 +74,7 @@ export function PreviewPanel({
           aria-label={`文件 ${viewing.name}`}
           className="aw-code-file-view"
         >
-          <FilePreview identity={identity} viewing={viewing} />
+          <FilePreview identity={identity} onWrote={onWrote} viewing={viewing} />
         </section>
       )}
 

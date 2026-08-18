@@ -143,6 +143,80 @@ describe("buildTurnBlocks", () => {
     expect(blocks[1]?.produced.map((file) => file.name)).toEqual(["b.md"]);
   });
 
+  it("gives the live run to the last instruction once the server has it", () => {
+    // The other half of the same race, and the one that used to have no
+    // answer. The server appends the user message *before* the run starts, so
+    // a transcript re-read that lands after that append carries the sentence
+    // and the page has nothing pending left to hand a block to. Measured on a
+    // real session: the instruction showed and its steps, its thinking and its
+    // report did not, for the whole of the turn.
+    const { blocks, orphanRuns } = buildTurnBlocks({
+      messages: said("一", "报告一", "二"),
+      events: [
+        ...wrote("run_a", "a.md"),
+        event("run_a", "RunCompleted"),
+        ...wrote("run_b", "b.md"),
+      ],
+      running: true,
+      pendingInstruction: null,
+      liveCallId: "",
+    });
+
+    expect(blocks).toHaveLength(2);
+    // The settled run must not slide forward onto the live instruction: with
+    // one fewer slot to pair against, run_a still belongs to 一.
+    expect(blocks[0]?.live).toBe(false);
+    expect(blocks[0]?.runId).toBe("run_a");
+    expect(blocks[0]?.produced.map((file) => file.name)).toEqual(["a.md"]);
+    expect(blocks[1]?.live).toBe(true);
+    expect(blocks[1]?.runId).toBe("run_b");
+    expect(blocks[1]?.produced.map((file) => file.name)).toEqual(["b.md"]);
+    expect(orphanRuns).toBe(0);
+  });
+
+  it("counts orphans against the slots the settled runs actually have", () => {
+    // One instruction, which the live run has claimed, and a settled run from
+    // another tab. Nothing is left for it to pair with, and saying so is what
+    // keeps its files off the turn a reader is watching.
+    const { blocks, orphanRuns } = buildTurnBlocks({
+      messages: said("只有这一句"),
+      events: [
+        ...wrote("run_other", "theirs.md"),
+        event("run_other", "RunCompleted"),
+        ...wrote("run_mine", "mine.md"),
+      ],
+      running: true,
+      pendingInstruction: null,
+      liveCallId: "",
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.runId).toBe("run_mine");
+    expect(blocks[0]?.produced.map((file) => file.name)).toEqual(["mine.md"]);
+    expect(orphanRuns).toBe(1);
+  });
+
+  it("never reports more orphans than there are runs", () => {
+    // One frame of switching sessions mid-turn: `running` is still true and
+    // the new session's transcript has not arrived, so there is a live run and
+    // no instruction to give it to. Unfloored, the settled slots would be -1
+    // and the panel would print an orphan count higher than the run count.
+    const { blocks, orphanRuns } = buildTurnBlocks({
+      messages: [],
+      events: [
+        ...wrote("run_a", "a.md"),
+        event("run_a", "RunCompleted"),
+        ...wrote("run_b", "b.md"),
+      ],
+      running: true,
+      pendingInstruction: null,
+      liveCallId: "",
+    });
+
+    expect(blocks).toEqual([]);
+    expect(orphanRuns).toBe(1);
+  });
+
   it("calls nothing live once the request is closed", () => {
     // A run with no terminal record that nothing is waiting on did not end --
     // the process holding it died. Drawing it as active would spin forever.

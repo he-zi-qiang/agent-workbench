@@ -4639,6 +4639,53 @@ p.aw-code-step-thought {
   background: transparent;
 }
 
+/* 跑一遍这个 .py（ADR-065）。「再运行一次」不在分段控件的两格之内：那两格是
+ * 「看哪一半」，这个是「做一件事」，混在一起会让切回源码看起来也会启动容器。 */
+.aw-code-run-again {
+  margin-left: 8px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--aw-border);
+  border-radius: 7px;
+  background: var(--aw-panel);
+  color: var(--aw-text);
+  font-size: 12px;
+}
+
+.aw-code-run-again:disabled {
+  color: var(--aw-text-muted);
+  cursor: progress;
+}
+
+.aw-code-run {
+  display: grid;
+  gap: 8px;
+}
+
+/* 重跑时旧结果留在原地、整体压暗：清空会把读者正在读的那份拿走，而读者按下
+ * 「再运行一次」通常正是为了对照上一次。 */
+.aw-code-run.is-running {
+  opacity: 0.6;
+}
+
+.aw-code-run-exit {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+.aw-code-run-label {
+  margin: 4px 0 0;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+/* stderr 只描边不变色：它常常装着 traceback，也常常只是一行 warning，把整块
+ * 涂红会让后者读起来像出事了。 */
+.aw-code-file-body.is-stderr {
+  border-left: 2px solid color-mix(in srgb, var(--aw-danger) 55%, var(--aw-border));
+}
+
 /* 全量目录。标题写全量口径而不是「其他文件」：卡片覆盖不到四类文件——上传进来
  * 的、事件窗口之外的、ADR-063 之前名字被截掉的、以及尾部对齐丢掉的那些轮的
  * 产出——说「其他」会暗示卡片已经覆盖了其余。 */

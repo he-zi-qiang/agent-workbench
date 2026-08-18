@@ -14,6 +14,7 @@ behind a tool loop that has nothing to do with them.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import tomllib
@@ -34,6 +35,7 @@ from agent_workbench.adapters.memory import (
     InMemoryConversationStore,
     InMemoryEventLog,
 )
+from agent_workbench.adapters.tools.sandbox import WorkspaceSandbox
 from agent_workbench.application.code_approvals import (
     ApprovalNotPendingError,
     ApprovalScope,
@@ -42,6 +44,9 @@ from agent_workbench.application.code_approvals import (
 )
 from agent_workbench.application.code_session import (
     CodeCapacityError,
+    CodeRunNotPermittedError,
+    CodeRunRefusedError,
+    CodeRunUnavailableError,
     CodeSessionService,
     CodeTurnBusyError,
 )
@@ -54,7 +59,7 @@ from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.bootstrap import Settings
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
-from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.errors import NotFoundError, ToolInputInvalidError
 from agent_workbench.domain.events import UngroundedAnswerCommitted
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import AgentOutcome, RunBudget
@@ -196,6 +201,7 @@ class _World:
         max_concurrent_turns: int = 4,
         principal: object | None = None,
         serves_code: bool = True,
+        sandbox: object | None = None,
     ) -> None:
         self.conversations = InMemoryConversationStore()
         # Held rather than built inline: an executor that writes files has to
@@ -227,6 +233,11 @@ class _World:
                 ),
                 code=self.service if serves_code else None,
                 code_approvals=self.approvals if serves_code else None,
+                # `None` unless a test asks for one, which is the shape a
+                # deployment with `code.sandbox_enabled` off actually has.
+                code_sandbox=(
+                    None if sandbox is None else SimpleNamespace(runner=sandbox)
+                ),
                 events=self.log,
                 live_events=LiveEventChannel(
                     buffer_events=8, max_subscribers_per_stream=4
@@ -249,8 +260,12 @@ class _World:
         # keep asserting a status the application stopped answering with.
         for failure in (
             NotFoundError,
+            ToolInputInvalidError,
             CodeTurnBusyError,
             CodeCapacityError,
+            CodeRunNotPermittedError,
+            CodeRunRefusedError,
+            CodeRunUnavailableError,
             ApprovalNotPendingError,
             StandingApprovalRefusedError,
         ):
@@ -1141,3 +1156,319 @@ def test_a_chat_session_cannot_be_renamed_through_the_code_api() -> None:
         )
 
     assert _run(world, scenario) == (404, [])
+
+
+# --- Running one file out of the working set (ADR-065) ------------------------
+#
+# The sandbox itself is a container this suite must not start, so what stands in
+# for it is an `MCPClientPort` returning the envelope the real server returns.
+# That keeps the *whole* project-side path under test -- reading inputs out of
+# the workspace, the entry script, binding outputs back to versions -- which is
+# the half that can be wrong here. `tests/mcp` covers the server's own contract.
+
+
+PRINCIPAL_WITH_SANDBOX = PrincipalContext(
+    principal_id=OWNER, tenant_id=TENANT, scopes=("workspace:write", "sandbox:run")
+)
+
+
+class _FakeSandboxServer:
+    """One canned ``run_python`` result, and a record of what it was asked."""
+
+    def __init__(
+        self,
+        *,
+        exit_code: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+        outputs: tuple[tuple[str, bytes], ...] = (),
+        is_error: bool = False,
+        message: str = "",
+    ) -> None:
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+        self.outputs = outputs
+        self.is_error = is_error
+        self.message = message
+        self.calls: list[dict[str, Any]] = []
+
+    async def list_tools_page(self, cursor: str | None) -> Any:  # pragma: no cover
+        raise AssertionError("the runner never lists tools")
+
+    async def call_tool(self, name: str, arguments: Any) -> Any:
+        self.calls.append(cast(dict[str, Any], arguments))
+        if self.is_error:
+            return SimpleNamespace(
+                content=(SimpleNamespace(text=self.message),),
+                structured_content=None,
+                is_error=True,
+            )
+        return SimpleNamespace(
+            content=(),
+            structured_content={
+                "exit_code": self.exit_code,
+                "stdout": self.stdout,
+                "stderr": self.stderr,
+                "outputs": [
+                    {
+                        "name": output_name,
+                        "content_base64": base64.b64encode(body).decode("ascii"),
+                    }
+                    for output_name, body in self.outputs
+                ],
+            },
+            is_error=False,
+        )
+
+
+def _ran(world: _World, session_id: str, name: str) -> str:
+    return f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace/{name}/run"
+
+
+def _world_that_wrote(
+    server: _FakeSandboxServer | None,
+    *,
+    name: str = "sq.py",
+    principal: object | None = None,
+) -> tuple[_World, Any]:
+    """A world holding one file a turn produced, and its sandbox if it has one."""
+
+    world = _World(
+        executor=None,
+        principal=principal if principal is not None else PRINCIPAL_WITH_SANDBOX,
+        sandbox=None if server is None else WorkspaceSandbox(client=server),  # pyright: ignore[reportArgumentType]
+    )
+    writer = _Writing(world.scope, name=name)
+    world.executor = writer
+    world.service.executor_for = lambda _scope: writer  # pyright: ignore[reportArgumentType]
+    return world, writer
+
+
+async def _session_with_file(client: httpx.AsyncClient) -> str:
+    created = await _opened(client)
+    session_id = cast(str, created.json()["session_id"])
+    await client.post(
+        f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+        headers=HEADERS,
+        json={"instruction": "write it"},
+    )
+    return session_id
+
+
+def test_running_a_file_returns_what_the_sandbox_said() -> None:
+    """The whole point: a `.py` the reader can see, run, without a model turn."""
+
+    server = _FakeSandboxServer(exit_code=0, stdout="1\n4\n9\n")
+    world, _ = _world_that_wrote(server)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, Any]:
+        session_id = await _session_with_file(client)
+        answered = await client.post(_ran(world, session_id, "sq.py"), headers=HEADERS)
+        return answered.status_code, answered.json()
+
+    status, body = _run(world, scenario)
+
+    assert status == 200
+    assert body["exit_code"] == 0
+    assert body["stdout"] == "1\n4\n9\n"
+    assert body["written"] == []
+    assert body["omitted_inputs"] == []
+    # `runpy`, not the file's own source pasted in as the script: the sandbox
+    # writes whatever it is given to `/sandbox/script.py`, so a pasted body
+    # raises from a filename the reader has never seen.
+    script = cast(str, server.calls[0]["script"])
+    assert "runpy.run_path('sq.py'" in script
+    # The two lines that look like boilerplate and are not. Both were measured
+    # against a real container, and a fake client cannot fail the way either
+    # one failed -- so what is left to pin is that they are still being sent.
+    # `sys.path`: `run_path` does not touch it and `python -I` implies `-P`, so
+    # without this an `import helper` beside the file raises ModuleNotFoundError.
+    # `dont_write_bytecode`: that import then writes `__pycache__/`, and the
+    # sandbox refuses a directory in its flat output -- the run is lost at
+    # collection time, after the script already succeeded.
+    assert 'sys.path.insert(0, "")' in script
+    assert "sys.dont_write_bytecode = True" in script
+    # And the file itself went in, because that is what `run_path` opens.
+    assert [entry["name"] for entry in server.calls[0]["inputs"]] == ["sq.py"]
+
+
+def test_a_file_the_script_wrote_lands_in_the_working_set() -> None:
+    """Files out, the same way a tool call's are -- one version per write."""
+
+    server = _FakeSandboxServer(stdout="done\n", outputs=(("out.csv", b"a,b\n1,2\n"),))
+    world, _ = _world_that_wrote(server)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, list[str]]:
+        session_id = await _session_with_file(client)
+        answered = await client.post(_ran(world, session_id, "sq.py"), headers=HEADERS)
+        listed = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace", headers=HEADERS
+        )
+        return answered.json(), [row["name"] for row in listed.json()["files"]]
+
+    body, names = _run(world, scenario)
+
+    assert body["written"] == ["out.csv"]
+    # Read off the session the run advanced, so a caller can refresh without a
+    # second question -- and the listing agrees, which is the part that proves
+    # the pointer moved on the session row rather than only in memory.
+    assert body["workspace_version"] is not None
+    assert sorted(names) == ["out.csv", "sq.py"]
+
+
+def test_a_deployment_without_a_sandbox_says_so_rather_than_404() -> None:
+    """503 and the setting to turn on. A 404 would read as "no such file"."""
+
+    world, _ = _world_that_wrote(None)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, str]:
+        session_id = await _session_with_file(client)
+        refused = await client.post(_ran(world, session_id, "sq.py"), headers=HEADERS)
+        return refused.status_code, cast(str, refused.json()["detail"])
+
+    status, detail = _run(world, scenario)
+
+    assert status == 503
+    assert "sandbox_enabled" in detail
+
+
+def test_running_a_file_needs_the_same_scope_the_tool_needs() -> None:
+    """No Policy Gateway on this path, so the route is the gate."""
+
+    server = _FakeSandboxServer()
+    world, _ = _world_that_wrote(server, principal=PRINCIPAL)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
+        session_id = await _session_with_file(client)
+        refused = await client.post(_ran(world, session_id, "sq.py"), headers=HEADERS)
+        return refused.status_code, len(server.calls)
+
+    assert _run(world, scenario) == (403, 0)
+
+
+def test_a_name_that_is_not_python_is_refused_before_the_container() -> None:
+    """Otherwise a `.md` reaches the sandbox and comes back a SyntaxError."""
+
+    server = _FakeSandboxServer()
+    world, _ = _world_that_wrote(server, name="notes.md")
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
+        session_id = await _session_with_file(client)
+        refused = await client.post(
+            _ran(world, session_id, "notes.md"), headers=HEADERS
+        )
+        return refused.status_code, len(server.calls)
+
+    assert _run(world, scenario) == (422, 0)
+
+
+def test_a_python_file_is_recognised_by_its_type_when_the_name_is_silent() -> None:
+    """An upload keeps whatever its browser guessed; the console strips the
+    same parameter before offering a 运行 button, and a server that did not
+    would refuse the file its client had just offered one for."""
+
+    server = _FakeSandboxServer(stdout="ok\n")
+    world, _ = _world_that_wrote(server, name="notes.md")
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        session_id = await _session_with_file(client)
+        await client.put(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace/script",
+            headers={**HEADERS, "content-type": "text/x-python; charset=utf-8"},
+            content=b"print('hi')\n",
+        )
+        answered = await client.post(_ran(world, session_id, "script"), headers=HEADERS)
+        return answered.status_code
+
+    assert _run(world, scenario) == 200
+
+
+def test_a_name_the_workspace_does_not_bind_cannot_be_run() -> None:
+    server = _FakeSandboxServer()
+    world, _ = _world_that_wrote(server)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
+        session_id = await _session_with_file(client)
+        refused = await client.post(
+            _ran(world, session_id, "absent.py"), headers=HEADERS
+        )
+        return refused.status_code, len(server.calls)
+
+    assert _run(world, scenario) == (404, 0)
+
+
+def test_a_sandbox_that_refused_is_a_conflict_carrying_its_own_words() -> None:
+    """Not a 500. Nothing here is broken; the other side declined."""
+
+    server = _FakeSandboxServer(is_error=True, message="no container runtime")
+    world, _ = _world_that_wrote(server)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, str]:
+        session_id = await _session_with_file(client)
+        refused = await client.post(_ran(world, session_id, "sq.py"), headers=HEADERS)
+        return refused.status_code, cast(str, refused.json()["detail"])
+
+    status, detail = _run(world, scenario)
+
+    assert status == 409
+    assert "no container runtime" in detail
+
+
+def test_a_script_that_failed_is_a_200_carrying_its_traceback() -> None:
+    """The reader clicked to find out. A non-zero exit is the answer, not an error."""
+
+    server = _FakeSandboxServer(
+        exit_code=1, stderr='Traceback...\nNameError: name "x" is not defined\n'
+    )
+    world, _ = _world_that_wrote(server)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, Any]:
+        session_id = await _session_with_file(client)
+        answered = await client.post(_ran(world, session_id, "sq.py"), headers=HEADERS)
+        return answered.status_code, answered.json()
+
+    status, body = _run(world, scenario)
+
+    assert status == 200
+    assert body["exit_code"] == 1
+    assert "NameError" in body["stderr"]
+
+
+def test_a_chat_session_has_nothing_to_run() -> None:
+    server = _FakeSandboxServer()
+    world, _ = _world_that_wrote(server)
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        await world.conversations.create_session(
+            session_id="ses_chat_1", tenant_id=TENANT, owner_id=OWNER
+        )
+        refused = await client.post(_ran(world, "ses_chat_1", "sq.py"), headers=HEADERS)
+        return refused.status_code
+
+    assert _run(world, scenario) == 404
+
+
+def test_the_whole_working_set_goes_in_beside_the_file() -> None:
+    """A script that reads `data.csv` next to itself is the ordinary case."""
+
+    server = _FakeSandboxServer(stdout="ok\n")
+    world, writer = _world_that_wrote(server)
+
+    async def scenario(client: httpx.AsyncClient) -> list[str]:
+        session_id = await _session_with_file(client)
+        await client.put(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace/data.csv",
+            headers={**HEADERS, "content-type": "text/csv"},
+            content=b"a,b\n1,2\n",
+        )
+        await client.post(_ran(world, session_id, "sq.py"), headers=HEADERS)
+        return [entry["name"] for entry in server.calls[0]["inputs"]]
+
+    names = _run(world, scenario)
+
+    # The file first, so a working set at the ceiling still runs the thing that
+    # was clicked.
+    assert names[0] == "sq.py"
+    assert sorted(names) == ["data.csv", "sq.py"]
+    assert writer.name == "sq.py"

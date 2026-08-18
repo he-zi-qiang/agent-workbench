@@ -21,15 +21,18 @@
  * client may hold (known-gaps F-11).
  */
 
+import { useQueryClient } from "@tanstack/react-query";
 import {
   getCodeWorkspaceFileBlob,
   getCodeWorkspaceFileText,
+  runCodeWorkspaceFile,
 } from "../../api/client";
 import type { PrincipalIdentity } from "../../api/types";
 import { BlobPreview } from "../../components/BlobPreview";
 import { HtmlPreview } from "../../components/HtmlPreview";
+import { PythonPreview } from "../../components/PythonPreview";
 import { TextPreview } from "../../components/TextPreview";
-import { previewKind } from "../../components/media";
+import { isRunnablePython, previewKind } from "../../components/media";
 
 /**
  * The file a reader has open.
@@ -48,12 +51,71 @@ export interface OpenedFile {
 
 export function FilePreview({
   identity,
+  onWrote,
   viewing,
 }: {
   identity: PrincipalIdentity;
+  /**
+   * Told when a run put files into the working set, so the page can re-read a
+   * listing that is now out of date. Optional because only the Python viewer
+   * can cause it, and a caller that never shows one has nothing to hear.
+   */
+  onWrote?: (names: string[]) => void;
   viewing: OpenedFile;
 }) {
+  const queries = useQueryClient();
   const kind = previewKind(viewing.mediaType);
+  // Before the text branch that would otherwise swallow it, and asked as a
+  // second question rather than as a sixth `PreviewKind`: a `.py` is text
+  // everywhere else in this console, and running one is a thing only a session
+  // with a working set behind it can offer (`media.ts`, ADR-065).
+  if (kind === "text" && isRunnablePython(viewing.mediaType, viewing.name)) {
+    const text = (
+      <TextPreview
+        load={() =>
+          getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name)
+        }
+        queryKey={["code-file-text", viewing.sessionId, viewing.name]}
+      />
+    );
+    return (
+      <PythonPreview
+        // Keyed, and this is not decoration. The panel keeps one tree position
+        // and swaps `viewing` under it, so React reuses the component instance
+        // -- and a `useMutation`'s result outlives a prop change. Observed:
+        // clicking `maker.py`, running it, then clicking `broken.py` showed
+        // 运行结束，退出码 0 and `maker.py`'s stdout under the heading
+        // `broken.py`. There is no more misleading thing this viewer could
+        // do than attribute one file's output to another.
+        key={`${viewing.sessionId}/${viewing.name}`}
+        name={viewing.name}
+        onRan={(result) => {
+          // A run can write files, and the two things that go stale are the
+          // ones the reader is looking straight at: the listing that says what
+          // the workspace holds, and any preview body cached under a name the
+          // script rewrote. Every preview caches with `staleTime: Infinity`,
+          // so without this a rewritten file shows its previous bytes forever.
+          if (result.written.length === 0) return;
+          onWrote?.(result.written);
+          for (const written of result.written) {
+            for (const prefix of [
+              "code-file-text",
+              "code-file-html",
+              "code-file-blob",
+            ]) {
+              void queries.invalidateQueries({
+                queryKey: [prefix, viewing.sessionId, written],
+              });
+            }
+          }
+        }}
+        run={() =>
+          runCodeWorkspaceFile(identity, viewing.sessionId, viewing.name)
+        }
+        source={text}
+      />
+    );
+  }
   if (kind === "image" || kind === "pdf") {
     return (
       <BlobPreview

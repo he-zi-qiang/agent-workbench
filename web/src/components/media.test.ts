@@ -3,6 +3,7 @@ import {
   DOCX_MEDIA_TYPE,
   isPreviewable,
   isReadableMedia,
+  isRunnablePython,
   previewKind,
 } from "./media";
 
@@ -55,5 +56,33 @@ describe("previewKind", () => {
     // A .docx is readable only through the extraction endpoint; admitting it
     // here would send a plain blob fetch at a zip.
     expect(isReadableMedia(DOCX_MEDIA_TYPE)).toBe(false);
+  });
+});
+
+// Not a `PreviewKind` on purpose, and the first test here is what that costs
+// and buys: a `.py` stays `text` for every surface that shows a stored file --
+// Work's artifact panel has no working set to run one in -- and the Code
+// viewer asks this second question on top (ADR-065).
+describe("isRunnablePython", () => {
+  it("leaves a .py as text for every surface that only shows files", () => {
+    expect(previewKind("text/x-python")).toBe("text");
+  });
+
+  it.each([
+    ["text/x-python", "sq.py", true],
+    ["text/x-python-script", "sq.py", true],
+    // What a person's browser guessed when they attached one. An uploaded
+    // script is exactly as runnable as a written one.
+    ["text/plain", "sq.py", true],
+    ["application/octet-stream", "sq.py", true],
+    // Typed by this project's own writer, whatever the name says.
+    ["text/x-python; charset=utf-8", "script", true],
+    ["text/markdown", "notes.md", false],
+    ["text/html", "page.html", false],
+    // Not a suffix match anywhere in the name: `.py` has to end it.
+    ["text/plain", "py.notes", false],
+    ["text/plain", "spy.txt", false],
+  ])("%s / %s → %s", (mediaType, name, expected) => {
+    expect(isRunnablePython(mediaType, name)).toBe(expected);
   });
 });

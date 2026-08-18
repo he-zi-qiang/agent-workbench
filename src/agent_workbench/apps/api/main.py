@@ -33,6 +33,9 @@ from agent_workbench.application.code_approvals import (
 )
 from agent_workbench.application.code_session import (
     CodeCapacityError,
+    CodeRunNotPermittedError,
+    CodeRunRefusedError,
+    CodeRunUnavailableError,
     CodeTurnBusyError,
 )
 from agent_workbench.application.tasks import TimelineUnavailableError
@@ -61,7 +64,11 @@ from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.apps.api.web import mount_console, resolve_web_directory
 from agent_workbench.bootstrap import load_settings
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig, project_api
-from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
+from agent_workbench.domain.errors import (
+    NotFoundError,
+    OutputTooLargeError,
+    ToolInputInvalidError,
+)
 from agent_workbench.ports.approvals import ApprovalNotDecidableError
 from agent_workbench.ports.conversation_store import (
     ChatTurnBusyError,
@@ -102,6 +109,18 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     # wait behind a request that looks like it is working.
     CodeTurnBusyError: 409,
     CodeCapacityError: 429,
+    # Running a file the reader is looking at (ADR-065). 503 for the same
+    # reason `EvaluationDisabledError` is one: nothing about the caller is
+    # wrong, this process simply cannot, and the body says what to turn on.
+    # 403 for the scope, because that one *is* about the caller.
+    CodeRunUnavailableError: 503,
+    CodeRunNotPermittedError: 403,
+    CodeRunRefusedError: 409,
+    # A request that named something this endpoint has nothing to do
+    # with -- a `.md` handed to the runner. The runtime catches this
+    # class on the tool path, so mapping it here reaches only the
+    # routes that raise it themselves.
+    ToolInputInvalidError: 422,
     # The question was already answered, or the run stopped waiting for it.
     ApprovalNotPendingError: 409,
     # A blanket yes was asked for where only a single yes is available.

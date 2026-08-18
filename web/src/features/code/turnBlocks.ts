@@ -200,17 +200,44 @@ export function buildTurnBlocks(input: {
 
   const n = asked.length;
   const m = settled.length;
-  // `m > n` is the other-tab case. Pair only the newest `n` and drop the rest:
-  // a card on the wrong turn is a lie, a card that is missing is a gap the
-  // page can admit to.
-  const paired = Math.min(n, m);
-  const orphanRuns = Math.max(0, m - n);
+
+  // Whether the live run belongs to the last message in the transcript rather
+  // than to a pending sentence. Both cases are ordinary and which one holds is
+  // a race the page does not control: the server appends the user message
+  // *before* the run starts, so a transcript re-read that lands after that
+  // append already carries the instruction and the page has nothing pending
+  // left to draw. Without this the live run had no block to live in -- the
+  // sentence showed, and its steps, its thinking and its report did not, until
+  // the turn ended and the settled pairing finally found it.
+  const adoptsLiveRun = pendingInstruction === null && live !== undefined;
+
+  // How many of the transcript's instructions the *settled* runs pair against.
+  // One fewer when the last one has already claimed the live run, or the newest
+  // settled run would be handed to the turn before it and every card in the
+  // session would slide one block back.
+  //
+  // Floored at zero for the one frame where a live run exists and the
+  // transcript has not arrived: switching sessions mid-turn leaves `running`
+  // true while the new session's history is still being fetched. `n - 1` would
+  // be -1 there, and `orphanRuns` would come out one *higher* than the number
+  // of runs -- a count on screen that cannot be true.
+  const slots = adoptsLiveRun ? Math.max(0, n - 1) : n;
+  // `m > slots` is the other-tab case. Pair only the newest `slots` and drop
+  // the rest: a card on the wrong turn is a lie, a card that is missing is a
+  // gap the page can admit to.
+  const paired = Math.min(slots, m);
+  const orphanRuns = Math.max(0, m - slots);
 
   const blocks: CodeTurnBlock[] = [];
   for (const [position, messageIndex] of asked.entries()) {
+    const claimsLive = adoptsLiveRun && position === n - 1;
     // Tail-aligned: the last instruction gets the last run.
-    const fromEnd = n - 1 - position;
-    const run = fromEnd < paired ? settled[m - 1 - fromEnd] : undefined;
+    const fromEnd = slots - 1 - position;
+    const run = claimsLive
+      ? live
+      : fromEnd >= 0 && fromEnd < paired
+        ? settled[m - 1 - fromEnd]
+        : undefined;
     const instruction = messages[messageIndex]?.text ?? "";
     const next = messages[messageIndex + 1];
     const report =
@@ -223,7 +250,7 @@ export function buildTurnBlocks(input: {
         instruction,
         report,
         events: run?.events ?? [],
-        live: false,
+        live: claimsLive,
         liveCallId,
       }),
     );

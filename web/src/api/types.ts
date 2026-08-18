@@ -103,6 +103,24 @@ export interface WorkspaceResponse {
   files: WorkspaceEntryView[];
 }
 
+/**
+ * What one click on 运行 produced (ADR-065).
+ *
+ * `stdout` and `stderr` stay apart because the two streams were written
+ * independently and no interleaving after the fact would be a transcript --
+ * it would be a guess presented as one. `omitted_inputs` is the honest half:
+ * a working set larger than one sandbox call may carry does not lose files
+ * silently, it says which ones stayed behind.
+ */
+export interface RunFileResponse {
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  written: string[];
+  workspace_version: Identifier | null;
+  omitted_inputs: string[];
+}
+
 export type TaskStatus =
   | "queued"
   | "running"

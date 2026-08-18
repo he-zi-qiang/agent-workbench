@@ -30,6 +30,7 @@ import type {
   TaskView,
   TriageResponse,
   UploadContentResponse,
+  RunFileResponse,
   WorkspaceResponse,
 } from "./types";
 
@@ -965,6 +966,31 @@ export async function deleteCodeSession(
  * JSON, so this builds its own request rather than widening that one to carry
  * a Blob it would have to special-case.
  */
+/**
+ * Run one Python file out of a coding session's working set (ADR-065).
+ *
+ * A POST because it is not safe and not idempotent: it starts a container and
+ * whatever the script writes lands in the workspace. No body -- the reader
+ * supplies no script, only which of their own files runs, and that is in the
+ * path already.
+ *
+ * No `Idempotency-Key` either, unlike a turn. A key buys a stable run id so a
+ * retry is refused as busy rather than becoming a second turn; there is no
+ * turn here to be second, and re-running a file is an ordinary thing to want
+ * twice.
+ */
+export async function runCodeWorkspaceFile(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  name: string,
+): Promise<RunFileResponse> {
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(name)}/run`,
+    { method: "POST" },
+  );
+}
+
 export async function putCodeWorkspaceFile(
   identity: PrincipalIdentity,
   sessionId: string,
