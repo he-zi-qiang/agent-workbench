@@ -24,6 +24,11 @@ const EvaluationPage = lazy(() =>
     default: EvaluationPage,
   })),
 );
+const ComputerPage = lazy(() =>
+  import("../features/computer/ComputerPage").then(({ ComputerPage }) => ({
+    default: ComputerPage,
+  })),
+);
 const SystemPage = lazy(() =>
   import("../features/system/SystemPage").then(({ SystemPage }) => ({
     default: SystemPage,
@@ -59,6 +64,7 @@ export function App() {
             <Route path="code/:sessionId?" element={<CodePage />} />
             <Route path="knowledge" element={<KnowledgePage />} />
             <Route path="evaluation" element={<EvaluationPage />} />
+            <Route path="computer" element={<ComputerPage />} />
             <Route path="system" element={<SystemPage />} />
             <Route path="*" element={<Navigate replace to="/chat" />} />
           </Route>

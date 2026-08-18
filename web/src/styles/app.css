@@ -103,7 +103,7 @@ a {
   overflow-y: auto;
   border-radius: var(--aw-radius-xl) 0 0 var(--aw-radius-xl);
   background: var(--aw-rail);
-  color: #d9d9d3;
+  color: var(--aw-rail-text);
 }
 
 .aw-logo {
@@ -131,32 +131,32 @@ a {
   border: 0;
   border-radius: 11px;
   background: transparent;
-  color: #aeb0aa;
+  color: var(--aw-rail-text);
   font-size: 10px;
   transition: color var(--aw-transition), background var(--aw-transition);
 }
 
 .aw-global-link:hover {
   background: var(--aw-rail-hover);
-  color: #fff;
+  color: var(--aw-rail-text-active);
 }
 
 /* Hover and active used to share one rule, so "the page I am on" and "the
    icon under my mouse" looked identical. Active gets the accent-tinted
    chip; hover stays a neutral gray that disappears when the pointer moves. */
 .aw-global-link.active {
-  background: var(--aw-accent-soft);
-  color: var(--aw-text);
+  background: var(--aw-rail-active);
+  color: var(--aw-rail-text-active);
 }
 
 .aw-global-link.active svg {
-  color: #f1a47e;
+  color: var(--aw-rail-icon-active);
 }
 
 .aw-nav-divider {
   margin-top: 9px;
   padding-top: 9px;
-  border-top: 1px solid rgb(255 255 255 / 10%);
+  border-top: 1px solid var(--aw-rail-divider);
 }
 
 .aw-rail-spacer {
@@ -2147,12 +2147,15 @@ pre {
   gap: 6px;
 }
 
+/* 引用是这一档语义的原型：它不说这句话对不对，只说它的依据在哪。所以底色也
+   换成证据色的淡底——此前只有文字是这个色，芯片本身与旁边任何一个中性标签
+   同底，于是"有依据"这件事全靠 10px 的字色去说。 */
 .aw-chat-citation {
   padding: 3px 7px;
-  border: 1px solid var(--aw-border);
+  border: 1px solid var(--aw-evidence-border);
   border-radius: 6px;
-  background: var(--aw-panel-soft);
-  color: var(--aw-info);
+  background: var(--aw-evidence-soft);
+  color: var(--aw-evidence);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 10px;
   cursor: help;
@@ -2192,8 +2195,8 @@ pre {
 }
 
 .aw-turn-tool.is-called {
-  border-color: color-mix(in srgb, var(--aw-info) 45%, var(--aw-border));
-  color: var(--aw-info);
+  border-color: color-mix(in srgb, var(--aw-evidence) 45%, var(--aw-border));
+  color: var(--aw-evidence);
 }
 
 .aw-chat-no-citations {
@@ -3038,6 +3041,10 @@ pre {
 .aw-step-group > summary {
   display: flex;
   align-items: center;
+  /* Wraps so the gate track can take a full second line without the first one
+     being rebuilt as a grid: the title/subject/outcome row keeps the exact
+     layout it had, and the beads land under it. */
+  flex-wrap: wrap;
   gap: 8px;
   padding: 1px 0;
   cursor: pointer;
@@ -3086,6 +3093,62 @@ pre {
 
 .aw-step-group.is-running .aw-step-group-outcome {
   color: var(--aw-accent);
+}
+
+/* --- 工具授权四件套 -----------------------------------------------------
+ *
+ * 提议 → 授权 → 开始 → 完成，画在折叠行上。缩进对齐标题而不是插入符：这一行
+ * 说的是上面那一行的事，不是它的下一级。 */
+.aw-step-gate {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-left: 21px;
+}
+
+.aw-step-bead {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px 1px 6px;
+  border-radius: 999px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-step-bead-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+/* 走到了的那颗只比未到的深一点，不上绿色——理由见 StepStream 的 GateBeads。 */
+.aw-step-bead.is-done {
+  color: var(--aw-text-soft);
+}
+
+/* 没走到的是空心的：一个实心点会读成「这一步发生了，只是颜色淡」。 */
+.aw-step-bead.is-pending {
+  background: transparent;
+  color: var(--aw-text-muted);
+  box-shadow: inset 0 0 0 1px var(--aw-border);
+}
+
+.aw-step-bead.is-pending .aw-step-bead-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px currentcolor;
+}
+
+.aw-step-bead.is-denied,
+.aw-step-bead.is-failed {
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+  font-weight: 500;
 }
 
 /* The nested list is already inside one bordered rail; a second would step the
@@ -5254,4 +5317,266 @@ button.aw-chat-citation:hover:not(:disabled) {
   line-height: 1.6;
   color: var(--aw-text-muted);
   white-space: pre-wrap;
+}
+
+/* --- 计算机控制 ---------------------------------------------------------
+ *
+ * 这一页没有实时数据，全部是规则，所以版式按"读一段论证"排，不按"扫一眼仪表盘"
+ * 排：单栏、限宽、每条规则自带它成立的理由。
+ *
+ * 段间距在这里给，而不是加到 `.aw-utility-page > *` 上：那条规则是三个页面共用
+ * 的，只管宽度，各页的纵向节奏由各自的组件自己带——给它加 gap 会同时改掉运行
+ * 状态与效果评测的排版。 */
+.aw-computer-page > section,
+.aw-computer-page > .aw-computer-pair {
+  margin-top: 28px;
+}
+.aw-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.aw-section-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.aw-section-head span {
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-gate-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-gate-check {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 12px;
+  padding: 13px 15px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel);
+}
+
+/* 第 3 道是支点，所以它是这一列里唯一一张带颜色的卡。四张都强调等于四张都不
+   强调，而这一页的整个论证就是"顺序"，它需要一个视觉上的重心。 */
+.aw-gate-check.is-pivot {
+  border-color: color-mix(in srgb, var(--aw-accent) 30%, var(--aw-border));
+  background: var(--aw-accent-soft);
+}
+
+.aw-gate-number {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aw-gate-check.is-pivot .aw-gate-number {
+  background: var(--aw-accent);
+  color: #fff;
+}
+
+.aw-gate-check strong {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 9px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.aw-gate-pivot {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--aw-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aw-gate-check p {
+  margin: 5px 0 0;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.aw-gate-note {
+  margin: 10px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.aw-tier-table {
+  overflow: hidden;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel);
+}
+
+.aw-tier-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 14px;
+  padding: 13px 16px;
+}
+
+.aw-tier-row + .aw-tier-row {
+  border-top: 1px solid var(--aw-panel-soft);
+}
+
+.aw-tier-row strong {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.aw-tier-row p {
+  margin: 4px 0 0;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.aw-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.aw-tier-badge.is-evidence {
+  border-color: var(--aw-evidence-border);
+  background: var(--aw-evidence-soft);
+  color: var(--aw-evidence);
+}
+
+.aw-tier-badge.is-warning {
+  border-color: var(--aw-warning-border);
+  background: var(--aw-warning-soft);
+  color: var(--aw-warning);
+}
+
+.aw-tier-badge.is-success {
+  border-color: var(--aw-success-border);
+  background: var(--aw-success-soft);
+  color: var(--aw-success);
+}
+
+.aw-refusal {
+  overflow: hidden;
+  border: 1px solid var(--aw-danger-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel);
+}
+
+.aw-refusal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--aw-danger-border);
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+  font-size: 13.5px;
+}
+
+.aw-refusal-head code {
+  margin-left: auto;
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+}
+
+/* 拒绝文案原样呈现：它是模型真正读到的字符串，不是它的说明。 */
+.aw-refusal pre {
+  margin: 15px 16px 0;
+  overflow-x: auto;
+  padding: 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-sm);
+  background: var(--aw-panel-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.aw-refusal p {
+  margin: 11px 16px 15px;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.aw-computer-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.aw-fact-card {
+  padding: 15px 16px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel);
+  color: var(--aw-evidence);
+}
+
+.aw-fact-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--aw-text);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.aw-fact-card p {
+  margin: 6px 0 0;
+  color: var(--aw-text-soft);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.aw-fact-card .aw-fact-note {
+  color: var(--aw-text-muted);
+}
+
+@media (width <= 860px) {
+  .aw-computer-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 一张说明边界的卡片：可读不可写。用证据色而不是警告色——它没有出错，也不需要
+   谁去处理，它只是在陈述这份资料对你成立到哪里为止。 */
+.aw-card.is-evidence {
+  border-color: var(--aw-evidence-border);
+  background: var(--aw-evidence-soft);
+}
+
+.aw-card.is-evidence .aw-card-header h3,
+.aw-card.is-evidence .aw-card-header svg {
+  color: var(--aw-evidence);
 }

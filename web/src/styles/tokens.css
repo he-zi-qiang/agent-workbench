@@ -6,11 +6,17 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  /* A deliberately quiet white foundation. Claude's terracotta is reserved
-     for actions and small moments of emphasis, never for whole surfaces. */
-  --aw-canvas: #ffffff;
-  --aw-window: #ffffff;
-  --aw-sidebar: #f7f7f5;
+  /* --- 底色 -------------------------------------------------------------
+   *
+   * 画布是暖中性的 #f2f0eb，卡片才是白的。此前两者都是 #ffffff，于是"一张卡片"
+   * 这件事只能靠边框说——边框是 1px，而卡片与背景的关系是整个版面的骨架，用
+   * 一条 1px 的线去承载它，在任何缩放或截图压缩之后都是第一个消失的东西。
+   *
+   * 暖中性而不是灰：橙色动作色 #d97757 落在中性灰上会显脏（灰的蓝味与橙互补，
+   * 相邻时互相拉低饱和），落在同色温的暖底上才是它被选中的样子。 */
+  --aw-canvas: #f2f0eb;
+  --aw-window: #f2f0eb;
+  --aw-sidebar: #f7f5f1;
   --aw-panel: #ffffff;
 
   /* The raised-chip surface. Referenced by the workbench tabs since they
@@ -18,29 +24,64 @@
      resolved to #fff on a #f7f7f5 container, which is why the active tab
      was indistinguishable from its neighbours. */
   --aw-surface: #ffffff;
-  --aw-panel-soft: #f7f7f5;
-  --aw-panel-strong: #efeee9;
-  --aw-rail: #f7f7f5;
-  --aw-rail-hover: #ecebe7;
-  --aw-text: #292724;
-  --aw-text-soft: #5f5c57;
-  --aw-text-muted: #8a8781;
-  --aw-border: #e8e6e1;
-  --aw-border-strong: #d6d2cb;
+  --aw-panel-soft: #f2f0eb;
+  --aw-panel-strong: #eceae4;
+
+  /* --- 窄导航 -----------------------------------------------------------
+   *
+   * rail 是深色的，而且是这个界面里唯一的深色面。它不参与阅读——上面没有一句
+   * 需要读完的话——所以它可以承担对比度的重量，把"你在哪一层"这件事一眼说清。
+   * 此前 rail 是 #f7f7f5，与 #ffffff 的画布差 3 个色阶，导航与正文因此是同一
+   * 张纸上的两块区域，而不是框与被框住的东西。
+   *
+   * active 用 #2e2925（比 rail 亮一档）而不是橙色填充：橙色是动作色，导航项
+   * 不是动作，它是位置。位置用亮度说，动作用色相说——图标的 #e08a66 是唯一
+   * 的例外，它只有 19px，够指出"就是这一项"，不够被误读成一个按钮。 */
+  --aw-rail: #1b1917;
+  --aw-rail-hover: #262320;
+  --aw-rail-active: #2e2925;
+  --aw-rail-text: #9a938a;
+  --aw-rail-text-active: #f3e7e0;
+  --aw-rail-icon-active: #e08a66;
+  --aw-rail-divider: #302c28;
+
+  --aw-text: #1b1917;
+  --aw-text-soft: #6b665f;
+  --aw-text-muted: #8b857c;
+  --aw-border: #eceae4;
+  --aw-border-strong: #d8d3cb;
   --aw-accent: #d97757;
   --aw-accent-hover: #c96545;
-  --aw-accent-soft: #f6ebe6;
+  --aw-accent-soft: #fbf0ea;
   --aw-success: #2f7a54;
-  --aw-success-soft: #eaf4ee;
+  --aw-success-soft: #edf5f0;
+  --aw-success-border: #cfe3d7;
   --aw-warning: #9a6724;
-  --aw-warning-soft: #f8f0e2;
+  --aw-warning-soft: #faf2e4;
+  --aw-warning-border: #e6dcc6;
   --aw-danger: #b44f4b;
-  --aw-danger-soft: #f9eaea;
-  --aw-info: #486b7a;
-  --aw-info-soft: #edf3f5;
+  --aw-danger-soft: #fbeceb;
+  --aw-danger-border: #eed6d4;
 
-  --aw-shadow-sm: 0 1px 2px rgb(41 39 36 / 4%);
-  --aw-shadow-md: 0 18px 48px rgb(41 39 36 / 11%);
+  /* --- 证据 / 边界 ------------------------------------------------------
+   *
+   * 这一档承载引用、授权与发布边界：一句话的依据在哪、一个动作被谁允许。
+   *
+   * 它是 --aw-info 改的名，不是新加的第五档。原来那档叫 info，而 info 是个
+   * 没有断言的名字——任何拿不准归到哪的东西都会被塞进来，久了它就只是"蓝色的
+   * 那个"。改名之后它有了一条可以被违反的规则：不表达好坏，只表达依据与授权。
+   * 表达好坏的是 success / warning / danger，那三档没动。
+   *
+   * 色相几乎没变（#486b7a → #3f6472，同一支青灰），所以这是一次重命名而不是
+   * 重新配色；--aw-info 保留为别名，让还没迁移的规则继续成立。 */
+  --aw-evidence: #3f6472;
+  --aw-evidence-soft: #eef3f5;
+  --aw-evidence-border: #dbe4e7;
+  --aw-info: var(--aw-evidence);
+  --aw-info-soft: var(--aw-evidence-soft);
+
+  --aw-shadow-sm: 0 1px 2px rgb(27 25 23 / 5%);
+  --aw-shadow-md: 0 18px 48px rgb(27 25 23 / 11%);
   --aw-radius-sm: 8px;
   --aw-radius-md: 12px;
   --aw-radius-lg: 16px;

@@ -3,7 +3,7 @@ import type { EventEnvelope } from "../api/types";
 import { groupSteps, summariseGroups, type StepGroup } from "./stepGroups";
 
 function group(title: string, key: string): StepGroup {
-  return { key, title, subject: null, outcome: "ok", events: [] };
+  return { key, title, subject: null, outcome: "ok", gate: null, events: [] };
 }
 
 function groups(...titles: string[]): StepGroup[] {
@@ -40,6 +40,124 @@ function event(
     parent_event_id: null,
   };
 }
+
+describe("groupSteps 的授权四件套", () => {
+  const states = (
+    gate: ReturnType<typeof groupSteps>[number]["gate"] | undefined,
+  ) => gate?.map((step) => [step.label, step.state]);
+
+  it("四颗珠子只由到达的事件点亮", () => {
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_1",
+        tool_name: "knowledge_search",
+      }),
+      event("PermissionResolved", { tool_call_id: "call_1", effect: "allow" }),
+      event("ToolStarted", { tool_call_id: "call_1", tool_name: "knowledge_search" }),
+      event("ToolCompleted", { tool_call_id: "call_1" }),
+    ]);
+
+    expect(states(result[0]?.gate)).toEqual([
+      ["提议", "done"],
+      ["授权", "done"],
+      ["开始", "done"],
+      ["完成", "done"],
+    ]);
+  });
+
+  it("被策略拒绝的调用停在第二颗，后两颗仍是未到", () => {
+    // 设计稿画的就是这一条：被拒之后没有 ToolStarted，也就没有「开始」。
+    // 把后两颗画成灰色的「done」会让读者以为它跑过了但没成功。
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_1",
+        tool_name: "mcp_web_fetch_page",
+      }),
+      event("PermissionResolved", {
+        tool_call_id: "call_1",
+        effect: "deny",
+        reason_code: "external_fetch_blocked",
+      }),
+    ]);
+
+    expect(states(result[0]?.gate)).toEqual([
+      ["提议", "done"],
+      ["被拒", "denied"],
+      ["开始", "pending"],
+      ["完成", "pending"],
+    ]);
+  });
+
+  it("人否掉策略已经放行的调用，第二颗照样是被拒", () => {
+    // PermissionResolved 说 allow，ToolApprovalDecided 说 deny——两者可以不
+    // 一致，而读者要看到的是最终拦下它的那一个。
+    const result = groupSteps([
+      event("ToolProposed", { tool_call_id: "call_1", tool_name: "sandbox_run" }),
+      event("PermissionResolved", { tool_call_id: "call_1", effect: "allow" }),
+      event("ToolApprovalDecided", {
+        tool_call_id: "call_1",
+        approval_id: "apr_1",
+        decision: "deny",
+        decided_by: "human",
+      }),
+    ]);
+
+    expect(states(result[0]?.gate)?.[1]).toEqual(["被拒", "denied"]);
+  });
+
+  it("改写参数的第二轮 allow 不能抹掉第一轮的 deny", () => {
+    // 策略网关会为每一轮改写各发一条 PermissionResolved。若按最后一条覆盖，
+    // 一次改写就能把调用带过它自己的拒绝。
+    const result = groupSteps([
+      event("ToolProposed", { tool_call_id: "call_1", tool_name: "sandbox_run" }),
+      event("PermissionResolved", { tool_call_id: "call_1", effect: "deny" }),
+      event("PermissionResolved", { tool_call_id: "call_1", effect: "allow" }),
+    ]);
+
+    expect(states(result[0]?.gate)?.[1]).toEqual(["被拒", "denied"]);
+  });
+
+  it("没有裁决就停住的调用，第二颗留在未到", () => {
+    // 审批超时：没人回答。这既不是允许也不是拒绝，画成任何一个都是替
+    // 那个没出现的人做决定。
+    const result = groupSteps([
+      event("ToolProposed", { tool_call_id: "call_1", tool_name: "sandbox_run" }),
+      event("PermissionRequested", { tool_call_id: "call_1", approval_id: "apr_1" }),
+    ]);
+
+    expect(states(result[0]?.gate)).toEqual([
+      ["提议", "done"],
+      ["授权", "pending"],
+      ["开始", "pending"],
+      ["完成", "pending"],
+    ]);
+  });
+
+  it("跑起来之后失败的调用，最后一颗是失败而不是未到", () => {
+    const result = groupSteps([
+      event("ToolProposed", { tool_call_id: "call_1", tool_name: "sandbox_run" }),
+      event("PermissionResolved", { tool_call_id: "call_1", effect: "allow" }),
+      event("ToolStarted", { tool_call_id: "call_1", tool_name: "sandbox_run" }),
+      event("ToolFailed", { tool_call_id: "call_1", error: { code: "timeout" } }),
+    ]);
+
+    expect(states(result[0]?.gate)).toEqual([
+      ["提议", "done"],
+      ["授权", "done"],
+      ["开始", "done"],
+      ["完成", "failed"],
+    ]);
+  });
+
+  it("模型作答没有要过的门，因此没有珠串", () => {
+    const result = groupSteps([
+      event("ModelStarted", { model_call_id: "mc_1" }),
+      event("ModelCompleted", { model_call_id: "mc_1", text: "写完了" }),
+    ]);
+
+    expect(result[0]?.gate).toBeNull();
+  });
+});
 
 describe("groupSteps", () => {
   it("files a text-less model turn ahead of the call it named", () => {

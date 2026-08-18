@@ -371,7 +371,7 @@ function KnowledgeBaseDetail({
         // 入口整块不渲染，而不是渲染成禁用状态：这个知识库是别人分享进来的，
         // 「传完再吃 404」正是这里要消掉的体验——服务端仍然会拒绝，隐藏只是
         // 别让人先把整份文件传上去。
-        <section className="aw-card aw-knowledge-upload" aria-labelledby="knowledge-readonly-title">
+        <section className="aw-card is-evidence aw-knowledge-upload" aria-labelledby="knowledge-readonly-title">
           <div className="aw-card-header">
             <div>
               <h3 id="knowledge-readonly-title">只读知识库</h3>

@@ -1,0 +1,1518 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: #e9e6e0; color: #1b1917; font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", ui-sans-serif, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: #b8552f; text-decoration: none; }
+  a:hover { color: #d97757; }
+  ::selection { background: #fbf0ea; }
+  @keyframes rb-pulse { 0%,100% { box-shadow: 0 0 0 0 rgb(217 119 87 / 35%); } 50% { box-shadow: 0 0 0 5px rgb(217 119 87 / 0%); } }
+  @keyframes rb-slide-in { from { transform: translateX(18px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+</style>
+</helmet>
+
+<div style="padding: 28px; display: flex; flex-direction: column; gap: 18px; width: 1496px;">
+  <div style="display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;">
+    <strong style="font-family: 'Space Grotesk', sans-serif; font-size: 17px; font-weight: 600; letter-spacing: -0.01em;">重构方向 · Agent Workbench</strong>
+    <span style="font-size: 13px; color: #6b665f;">保留暖中性画布与橙色动作色，补上真正的深色 rail；新增一条「证据 / 边界」青色语义，专门承载引用、授权与发布边界。1440 × 900。</span>
+  </div>
+
+  <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+    <sc-for list="{{ screens }}" as="s" hint-placeholder-count="6">
+      <button type="button" onClick="{{ s.pick }}" style="{{ s.style }}" style-hover="border-color:#c9c4bb">{{ s.label }}</button>
+    </sc-for>
+  </div>
+
+  <div style="width: 1440px; height: 900px; display: grid; grid-template-columns: 76px minmax(0, 1fr); background: #1b1917; border-radius: 6px; overflow: hidden; box-shadow: 0 30px 70px rgb(27 25 23 / 20%);">
+
+    <nav aria-label="主导航" style="display: flex; flex-direction: column; align-items: center; padding: 14px 8px 12px; gap: 2px; background: #1b1917;">
+      <span style="display: grid; place-items: center; width: 36px; height: 36px; margin-bottom: 14px; border-radius: 10px; background: #d97757; color: #fff; font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 700; letter-spacing: -0.04em;">A</span>
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="5">
+        <div style="{{ item.wrapStyle }}">
+          <a href="#" onClick="{{ item.pick }}" style="{{ item.style }}">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="{{ item.iconStyle }}"><path d="{{ item.icon }}"></path></svg>
+            <span style="font-size: 11px; letter-spacing: 0.01em;">{{ item.label }}</span>
+          </a>
+        </div>
+      </sc-for>
+      <div style="flex: 1;"></div>
+      <button type="button" title="本地身份：acme / p_liu（3 个 scope）" style="display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid #332f2b; border-radius: 12px; background: #221f1c; color: #cfc9c0; font-family: 'Space Grotesk', sans-serif; font-size: 12px; font-weight: 600; cursor: pointer;">刘</button>
+    </nav>
+
+    <section style="min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #fbfaf8; overflow: hidden;">
+
+      <header style="display: flex; align-items: center; justify-content: space-between; height: 56px; padding: 0 20px 0 22px; gap: 16px; border-bottom: 1px solid #e6e3dd; background: #fff;">
+        <div style="display: flex; align-items: center; gap: 18px; min-width: 0;">
+          <h1 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap;">{{ pageTitle }}</h1>
+          <sc-if value="{{ isWorkbench }}" hint-placeholder-val="{{ true }}">
+            <div style="display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 10px; background: #f2f0eb;">
+              <a href="#" onClick="{{ pickChat }}" style="{{ chatTabStyle }}">对话</a>
+              <a href="#" onClick="{{ pickWork }}" style="{{ workTabStyle }}">任务</a>
+            </div>
+          </sc-if>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border: 1px solid #dbe4e7; border-radius: 999px; background: #eef3f5; color: #3f6472; font-size: 12px;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: #3f6472;"></span>
+            acme / p_liu · 3 scope
+          </span>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border: 1px solid #e2ded7; border-radius: 9px; background: #fff; color: #3c3833; font: inherit; font-size: 13px; cursor: pointer;" style-hover="background:#f6f4f0">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M20 7h-9M14 17H5M17 14v6M7 4v6"></path><circle cx="17" cy="10.5" r="2.5"></circle><circle cx="7" cy="13.5" r="2.5"></circle></svg>
+            环境
+          </button>
+        </div>
+      </header>
+
+      <div style="min-width: 0; min-height: 0; flex: 1; overflow: hidden;">
+
+        <sc-if value="{{ isChat }}" hint-placeholder-val="{{ true }}">
+          <div style="display: grid; grid-template-columns: 264px minmax(0, 1fr); height: 100%; min-height: 0;">
+            <aside style="display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid #e6e3dd; background: #f7f5f1;">
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 10px;">
+                <div>
+                  <p style="margin: 0; color: #8b857c; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;">会话</p>
+                  <p style="margin: 3px 0 0; color: #8b857c; font-size: 12px;">存在这台浏览器里 · 服务端暂无列表</p>
+                </div>
+              </div>
+              <button type="button" style="display: flex; align-items: center; justify-content: center; gap: 7px; height: 38px; margin: 0 12px 12px; border: 1px solid #e2ded7; border-radius: 10px; background: #fff; color: #1b1917; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;" style-hover="border-color:#c9c4bb">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+                新会话
+              </button>
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 2px; min-height: 0; padding: 0 8px 12px; overflow-y: auto;">
+                <sc-for list="{{ sessions }}" as="row" hint-placeholder-count="4">
+                  <div style="{{ row.style }}">
+                    <button type="button" style="display: block; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;">
+                      <strong style="display: block; overflow: hidden; font-size: 13.5px; font-weight: 500; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap;">{{ row.title }}</strong>
+                      <small style="display: flex; align-items: center; gap: 6px; margin-top: 4px; color: #8b857c; font-size: 12px;">
+                        <span>{{ row.time }}</span>
+                        <span style="{{ row.tagStyle }}">{{ row.tag }}</span>
+                      </small>
+                    </button>
+                    <button type="button" aria-label="删除这个会话" title="删除这个会话（问答记录会一起消失）" style="display: grid; place-items: center; width: 28px; height: 28px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #a39d94; cursor: pointer; opacity: 0.62;" style-hover="background:#f4f2ee;color:#b44f4b;opacity:1">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"></path></svg>
+                    </button>
+                  </div>
+                </sc-for>
+              </div>
+            </aside>
+
+            <main style="display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; background: #fbfaf8;">
+              <header style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 40px; border-bottom: 1px solid #eceae4; background: #fbfaf8;">
+                <div style="min-width: 0;">
+                  <h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">撤权之后旧答案还能被读到吗</h2>
+                  <div style="display: flex; align-items: center; gap: 8px; margin-top: 5px;">
+                    <span style="display: inline-flex; align-items: center; gap: 6px; color: #3f6472; font-size: 12px;">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M16 6H3M16 12H3M12 18H3M20 6v12"></path></svg>
+                      平台架构基线
+                    </span>
+                    <span style="color: #cfc9c0;">·</span>
+                    <span style="color: #8b857c; font-size: 12px;">回答会检索资料并标注引用</span>
+                  </div>
+                </div>
+                <span style="display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border: 1px solid #cfe3d7; border-radius: 999px; background: #edf5f0; color: #2f7a54; font-size: 12px; white-space: nowrap;">
+                  <span style="width: 6px; height: 6px; border-radius: 50%; background: #2f7a54;"></span>
+                  事件流已连接 · 游标 #1284
+                </span>
+              </header>
+
+              <section aria-live="polite" style="min-width: 0; min-height: 0; padding: 28px 40px 20px; overflow-y: auto;">
+                <div style="width: 780px; max-width: 100%; margin: 0 auto; display: grid; gap: 34px;">
+
+                  <article style="display: grid; gap: 16px;">
+                    <div style="justify-self: end; max-width: 560px; padding: 13px 16px; border-radius: 16px 16px 5px 16px; background: #f1efe9; color: #1b1917; font-size: 14.5px; line-height: 1.65;">撤权之后，之前已经发布的答案还能被读到吗？引用里的 revision 是哪一版？</div>
+
+                    <div style="display: grid; gap: 14px;">
+                      <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: #1b1917; color: #fff; font-family: 'Space Grotesk', sans-serif; font-size: 12px; font-weight: 600;">A</span>
+                        <strong style="font-size: 13px; font-weight: 600;">Agent</strong>
+                        <span style="color: #8b857c; font-size: 12px;">知识库回答 · 14:32 · 4.8 s</span>
+                      </div>
+
+                      <details style="border: 1px solid #eceae4; border-radius: 12px; background: #fff;">
+                        <summary style="display: flex; align-items: center; gap: 10px; padding: 11px 14px; cursor: pointer; list-style: none; font-size: 13px;">
+                          <span style="display: inline-flex; align-items: center; gap: 6px; color: #8b857c; font-size: 12px;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="m9 18 6-6-6-6"></path></svg>
+                            过程
+                          </span>
+                          <span style="display: flex; align-items: center; gap: 6px;">
+                            <sc-for list="{{ chatBeads }}" as="b" hint-placeholder-count="3">
+                              <span style="{{ b.style }}">{{ b.label }}</span>
+                            </sc-for>
+                          </span>
+                          <span style="margin-left: auto; color: #8b857c; font-size: 12px;">3 个阶段 · 6 条事件</span>
+                        </summary>
+                        <div style="padding: 2px 14px 14px;">
+                          <sc-for list="{{ chatSteps }}" as="st" hint-placeholder-count="3">
+                            <div style="display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 9px 0; border-top: 1px solid #f2f0eb;">
+                              <span style="{{ st.dotStyle }}"></span>
+                              <span style="min-width: 0;">
+                                <strong style="display: block; font-size: 13px; font-weight: 500;">{{ st.title }}</strong>
+                                <small style="display: block; margin-top: 2px; color: #8b857c; font-size: 12px; line-height: 1.55;">{{ st.detail }}</small>
+                              </span>
+                              <span style="color: #8b857c; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; white-space: nowrap;">{{ st.time }}</span>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </details>
+
+                      <div style="font-size: 15px; line-height: 1.75; color: #262320;">
+                        <p style="margin: 0 0 0.85em;">不能。撤权之后正文仍然留在 <code style="padding: 0.1em 0.34em; border-radius: 4px; background: #f2f0eb; font-family: 'IBM Plex Mono', monospace; font-size: 0.88em;">chat_turns</code> 里，但答案在返回之前会再复核一次授权与 source revision；复核不通过的那一轮只发布安全替代文本，不含候选答案。</p>
+                        <p style="margin: 0;">引用给出的是检索发生时那一版：每条带 chunk、document 与 document_version，撤权与改版由文档行锁线性化，因此不会出现"引用指向一个你已经读不到的版本"。</p>
+                      </div>
+
+                      <div style="border: 1px solid #dbe4e7; border-radius: 14px; background: #fff; overflow: hidden;">
+                        <div style="display: flex; align-items: center; gap: 10px; padding: 11px 14px; background: #eef3f5; border-bottom: 1px solid #dbe4e7;">
+                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#3f6472" stroke-width="1.75" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>
+                          <strong style="color: #2f5561; font-size: 13px; font-weight: 600;">发布边界已通过</strong>
+                          <span style="color: #3f6472; font-size: 12px;">AnswerCommitted · 授权与 revision 复核在发布前完成 · 3 条引用</span>
+                          <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: #edf5f0; color: #2f7a54; font-size: 11.5px; font-weight: 600;">已接地</span>
+                        </div>
+                        <sc-if value="{{ evidenceCompact }}" hint-placeholder-val="{{ false }}">
+                          <div style="display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px;">
+                            <sc-for list="{{ citations }}" as="c" hint-placeholder-count="3">
+                              <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid #dbe4e7; border-radius: 7px; background: #f8fafb; color: #3f6472; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">{{ c.doc }} · {{ c.version }}</span>
+                            </sc-for>
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{ evidenceDetail }}" hint-placeholder-val="{{ true }}">
+                        <sc-for list="{{ citations }}" as="c" hint-placeholder-count="3">
+                          <div style="display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 12px; padding: 12px 14px; border-bottom: 1px solid #f2f0eb;">
+                            <span style="display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: #eef3f5; color: #3f6472; font-family: 'Space Grotesk', sans-serif; font-size: 11px; font-weight: 600;">{{ c.n }}</span>
+                            <span style="min-width: 0;">
+                              <span style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+                                <strong style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 500;">{{ c.doc }}</strong>
+                                <span style="padding: 2px 7px; border-radius: 999px; background: #f2f0eb; color: #6b665f; font-family: 'IBM Plex Mono', monospace; font-size: 11px;">{{ c.version }}</span>
+                                <span style="color: #8b857c; font-size: 12px;">{{ c.locator }}</span>
+                              </span>
+                              <span style="display: block; margin-top: 5px; color: #4a4640; font-size: 13px; line-height: 1.6;">{{ c.quote }}</span>
+                            </span>
+                          </div>
+                        </sc-for>
+                        </sc-if>
+                        <div style="display: flex; align-items: center; gap: 8px; padding: 9px 14px; color: #8b857c; font-size: 12px;">
+                          <span style="padding: 1px 7px; border: 1px solid #dbe4e7; border-radius: 999px; color: #3f6472; font-size: 11px;">需新接口</span>
+                          文档标题需要一个按 document_id 取名的读接口；当前只有 id 与 version 可信。
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article style="display: grid; gap: 14px;">
+                    <div style="justify-self: end; max-width: 560px; padding: 13px 16px; border-radius: 16px 16px 5px 16px; background: #f1efe9; font-size: 14.5px; line-height: 1.65;">那 2027 年的合规新规你知道吗？</div>
+                    <div style="display: grid; gap: 12px;">
+                      <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: #1b1917; color: #fff; font-family: 'Space Grotesk', sans-serif; font-size: 12px; font-weight: 600;">A</span>
+                        <strong style="font-size: 13px; font-weight: 600;">Agent</strong>
+                        <span style="color: #8b857c; font-size: 12px;">知识库回答 · 14:36</span>
+                      </div>
+                      <div style="font-size: 15px; line-height: 1.75; color: #262320;">语料里没有这条规定，我答不上来。已检索所选知识库的 8 个候选，最高相关度低于阈值。</div>
+                      <div style="display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px; border: 1px solid #e6dcc6; border-radius: 12px; background: #faf2e4;">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9a6724" stroke-width="1.75" stroke-linecap="round" style="flex: none; margin-top: 2px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M12 8v4M12 16h.01"></path></svg>
+                        <span style="color: #7d5620; font-size: 13px; line-height: 1.6;"><strong style="font-weight: 600;">未接地，因此没有引用。</strong>已检索所选知识库，没有找到足够相关的内容，这条回答由模型直接作答。</span>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+              </section>
+
+              <form style="padding: 0 40px 22px;">
+                <div style="width: 780px; max-width: 100%; margin: 0 auto;">
+                  <div style="display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px; align-items: end; padding: 6px; gap: 6px; border: 1px solid #ddd8d0; border-radius: 16px; background: #fff; box-shadow: 0 10px 30px rgb(27 25 23 / 6%);">
+                    <span style="display: grid; width: 40px; height: 40px; place-items: center; border-radius: 10px; color: #8b857c; cursor: pointer;">
+                      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                    </span>
+                    <textarea rows="1" placeholder="向「平台架构基线」提问，Enter 发送，Shift + Enter 换行" style="min-height: 40px; width: 100%; padding: 10px 4px; border: 0; outline: none; background: transparent; color: #1b1917; font: inherit; font-size: 14.5px; resize: none;"></textarea>
+                    <button type="button" aria-label="发送" style="display: grid; width: 40px; height: 40px; place-items: center; border: 0; border-radius: 11px; background: #d97757; color: #fff; cursor: pointer;">
+                      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="m22 2-7 20-4-9-9-4Z"></path><path d="M22 2 11 13"></path></svg>
+                    </button>
+                  </div>
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 9px; padding: 0 4px;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <button type="button" style="display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border: 1px solid #dbe4e7; border-radius: 999px; background: #eef3f5; color: #3f6472; font: inherit; font-size: 12px; cursor: pointer;">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M16 6H3M16 12H3M12 18H3M20 6v12"></path></svg>
+                        平台架构基线
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg>
+                      </button>
+                      <span style="color: #8b857c; font-size: 12px;">带引用作答</span>
+                    </div>
+                    <span style="color: #a39d94; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">0 / 4096</span>
+                  </div>
+                </div>
+              </form>
+            </main>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isWork }}" hint-placeholder-val="{{ true }}">
+          <div style="display: grid; grid-template-columns: 300px minmax(0, 1fr); height: 100%; min-height: 0;">
+            <aside style="display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid #e6e3dd; background: #f7f5f1;">
+              <div style="padding: 16px 16px 12px;">
+                <p style="margin: 0; color: #8b857c; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;">任务</p>
+                <button type="button" style="display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; height: 38px; margin-top: 10px; border: 0; border-radius: 10px; background: #d97757; color: #fff; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+                  提交新任务
+                </button>
+                <div style="display: flex; align-items: center; gap: 2px; margin-top: 12px; padding: 3px; border-radius: 9px; background: #eeece7;">
+                  <sc-for list="{{ taskFilters }}" as="f" hint-placeholder-count="3">
+                    <span style="{{ f.style }}">{{ f.label }}</span>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 3px; min-height: 0; padding: 0 8px 12px; overflow-y: auto;">
+                <sc-for list="{{ tasks }}" as="t" hint-placeholder-count="4">
+                  <div style="{{ t.style }}">
+                    <button type="button" style="display: block; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;">
+                      <span style="display: flex; align-items: center; gap: 8px;">
+                        <span style="{{ t.dotStyle }}"></span>
+                        <span style="{{ t.statusStyle }}">{{ t.status }}</span>
+                        <span style="margin-left: auto; color: #8b857c; font-size: 11.5px;">{{ t.graph }}</span>
+                      </span>
+                      <strong style="margin-top: 7px; font-size: 13.5px; font-weight: 500; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">{{ t.title }}</strong>
+                      <small style="display: block; margin-top: 5px; color: #8b857c; font-size: 12px;">{{ t.meta }}</small>
+                    </button>
+                    <button type="button" aria-label="删除这个任务" title="删除这个任务（执行记录会一起消失，产出文件不再可达）" style="{{ t.deleteStyle }}" style-hover="background:#f4f2ee;color:#b44f4b;opacity:1">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"></path></svg>
+                    </button>
+                  </div>
+                </sc-for>
+              </div>
+            </aside>
+
+            <main style="min-width: 0; min-height: 0; overflow-y: auto; background: #fbfaf8;">
+              <header style="position: sticky; top: 0; z-index: 3; padding: 18px 40px 14px; border-bottom: 1px solid #eceae4; background: #fbfaf8;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;">
+                  <div style="min-width: 0;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span style="display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 999px; background: #edf5f0; color: #2f7a54; font-size: 12px; font-weight: 600;">
+                        <span style="width: 6px; height: 6px; border-radius: 50%; background: #2f7a54;"></span>
+                        已完成
+                      </span>
+                      <span style="color: #6b665f; font-size: 12px;">调研报告</span>
+                      <span style="color: #a39d94; font-family: 'IBM Plex Mono', monospace; font-size: 12px;">task_9f21…c4a7</span>
+                      <span style="color: #8b857c; font-size: 12px;">· 用时 10 分 42 秒 · 已调用智能体 7 次</span>
+                    </div>
+                    <h2 style="margin: 9px 0 0; max-width: 760px; font-size: 19px; font-weight: 600; line-height: 1.45; letter-spacing: -0.01em;">对比两版检索形态在 38 题金标集上的命中率，产出一份带引用的报告</h2>
+                  </div>
+                  <div style="display: flex; gap: 8px; flex: none;">
+                    <button type="button" style="display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border: 1px solid #e2ded7; border-radius: 9px; background: #fff; color: #3c3833; font: inherit; font-size: 13px; cursor: pointer;" style-hover="border-color:#c9c4bb">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 3v12M7 11l5 5 5-5M5 21h14"></path></svg>
+                      下载产物
+                    </button>
+                    <button type="button" aria-label="删除这个任务" title="删除这个任务（执行记录会一起消失，产出文件不再可达）" style="display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #e2ded7; border-radius: 9px; background: #fff; color: #8b857c; cursor: pointer;" style-hover="border-color:#e6c9c7;color:#b44f4b">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"></path></svg>
+                    </button>
+                  </div>
+                </div>
+              </header>
+
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr) 296px; gap: 22px; padding: 20px 40px 44px; align-items: start;">
+
+                <div style="display: grid; gap: 18px; min-width: 0;">
+
+                  <section style="border: 1px solid #eceae4; border-radius: 14px; background: #fff; overflow: hidden;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid #f2f0eb;">
+                      <div style="display: flex; align-items: center; gap: 10px;">
+                        <strong style="font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600;">执行时间线</strong>
+                        <span style="color: #8b857c; font-size: 12px;">固定研究图 · 6 段 · 27 条事件</span>
+                      </div>
+                      <span style="display: inline-flex; align-items: center; gap: 6px; color: #8b857c; font-size: 12px;">
+                        <span style="width: 6px; height: 6px; border-radius: 50%; background: #2f7a54;"></span>已完成
+                        <span style="width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: #d97757;"></span>进行中 / 等待
+                        <span style="width: 6px; height: 6px; margin-left: 6px; border: 1px solid #cfc9c0; border-radius: 50%; background: #fff;"></span>等待中 / 未执行
+                      </span>
+                    </div>
+
+                    <div style="padding: 6px 18px 14px;">
+                      <sc-for list="{{ stages }}" as="s" hint-placeholder-count="7">
+                        <div style="display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px;">
+                          <div style="position: relative; display: flex; justify-content: center; padding-top: 16px;">
+                            <span style="{{ s.railStyle }}"></span>
+                            <span style="{{ s.dotStyle }}"></span>
+                          </div>
+                          <div style="padding: 12px 0 12px;">
+                            <div style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;">
+                              <strong style="{{ s.titleStyle }}">{{ s.title }}</strong>
+                              <code style="color: #a39d94; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">{{ s.node }}</code>
+                              <span style="color: #a39d94; font-size: 12px;">{{ s.count }}</span>
+                              <span style="margin-left: auto; display: inline-flex; align-items: baseline; gap: 10px;">
+                                <span style="color: #a39d94; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; white-space: nowrap;">{{ s.duration }}</span>
+                                <span style="{{ s.noteStyle }}">{{ s.note }}</span>
+                              </span>
+                            </div>
+                            <p style="{{ s.detailStyle }}">{{ s.detail }}</p>
+                            <sc-if value="{{ s.hasTrace }}" hint-placeholder-val="{{ false }}">
+                              <div style="display: grid; gap: 8px; margin-top: 10px; padding: 12px 14px; border: 1px solid #f2f0eb; border-radius: 11px; background: #faf9f6;">
+                                <sc-for list="{{ s.trace }}" as="tr" hint-placeholder-count="2">
+                                  <div style="display: grid; gap: 7px;">
+                                    <div style="display: flex; align-items: center; gap: 9px;">
+                                      <code style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 500;">{{ tr.tool }}</code>
+                                      <span style="color: #6b665f; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ tr.subject }}</span>
+                                      <span style="{{ tr.outcomeStyle }}">{{ tr.outcome }}</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0;">
+                                      <sc-for list="{{ tr.beads }}" as="bd" hint-placeholder-count="4">
+                                        <span style="{{ bd.wrapStyle }}"><span style="{{ bd.dotStyle }}"></span><span style="{{ bd.labelStyle }}">{{ bd.label }}</span></span>
+                                      </sc-for>
+                                    </div>
+                                  </div>
+                                </sc-for>
+                              </div>
+                            </sc-if>
+                          </div>
+                        </div>
+                      </sc-for>
+
+                      <div style="display: flex; align-items: flex-start; gap: 10px; margin: 10px 0 0 38px; padding: 11px 13px; border: 1px solid #e6dcc6; border-radius: 11px; background: #faf2e4;">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9a6724" stroke-width="1.75" stroke-linecap="round" style="flex: none; margin-top: 2px;"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>
+                        <div>
+                          <strong style="display: block; color: #7d5620; font-size: 13px; font-weight: 600;">这段历史缺了 1 个位置：#1147，落在「内部检索」与「综合与自评」之间。</strong>
+                          <small style="display: block; margin-top: 3px; color: #8b7a5c; font-size: 12px; line-height: 1.6;">事件仍在日志里，只是这次没能解码、没有交给这个页面。位置可以直接拿去查日志行。</small>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section aria-label="任务产出" style="padding-left: 34px;">
+                    <header style="display: flex; align-items: center; gap: 10px; margin-left: -34px; margin-bottom: 10px;">
+                      <span aria-hidden="true" style="display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 50%; background: #fbf0ea; color: #b8552f; font-family: 'Space Grotesk', sans-serif; font-size: 11px; font-weight: 600;">A</span>
+                      <strong style="min-width: 0; overflow: hidden; font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap;">retrieval-ablation.docx</strong>
+                      <span style="flex: none; color: #8b857c; font-size: 12px;">46.2 KB</span>
+                      <button type="button" style="margin-left: auto; display: inline-flex; align-items: center; gap: 6px; flex: none; height: 30px; padding: 0 11px; border: 1px solid #e2ded7; border-radius: 8px; background: #fff; color: #3c3833; font: inherit; font-size: 12.5px; cursor: pointer;" style-hover="border-color:#c9c4bb">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 3v12M7 11l5 5 5-5M5 21h14"></path></svg>
+                        下载
+                      </button>
+                    </header>
+                    <div style="display: inline-flex; align-items: center; gap: 2px; margin-bottom: 14px; padding: 3px; border-radius: 9px; background: #f2f0eb;">
+                      <span style="display: inline-flex; align-items: center; height: 26px; padding: 0 12px; border-radius: 7px; background: #fff; color: #1b1917; font-size: 12.5px; font-weight: 500; box-shadow: 0 1px 2px rgb(27 25 23 / 8%);">版面</span>
+                      <span style="display: inline-flex; align-items: center; height: 26px; padding: 0 12px; border-radius: 7px; color: #6b665f; font-size: 12.5px;">文字</span>
+                    </div>
+                    <div style="font-size: 14.5px; line-height: 1.75; color: #262320;">
+                      <p style="margin: 0 0 0.8em;">固定两步检索在 38 题金标集上 top-1 命中 31 题（81.6%），agentic 形态 33 题（86.8%）；但后者 p95 延迟为前者的 2.4 倍，且检索形态随问题变化，评测不可复现。</p>
+                      <p style="margin: 0;">建议默认保持 <code style="padding: 0.1em 0.34em; border-radius: 4px; background: #f2f0eb; font-family: 'IBM Plex Mono', monospace; font-size: 0.88em;">fixed</code>，把 rerank 作为独立开关评估——它带来同样的命中提升，代价只有 0.6 s。</p>
+                    </div>
+                  </section>
+
+                  <details style="padding: 12px 16px; border: 1px solid #eceae4; border-radius: 13px; background: #faf9f6;">
+                    <summary style="display: flex; align-items: center; gap: 9px; cursor: pointer; list-style: none; font-size: 13px; font-weight: 500;">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b857c" stroke-width="1.75" stroke-linecap="round"><path d="m9 18 6-6-6-6"></path></svg>
+                      任务详情
+                      <span style="color: #8b857c; font-size: 12px; font-weight: 400;">目标全文、提交时冻结的选择、取消</span>
+                    </summary>
+                    <div style="margin-top: 12px; display: grid; gap: 14px;">
+                      <p style="margin: 0; font-size: 13.5px; line-height: 1.75; color: #262320;">对比两版检索形态在 38 题金标集上的命中率，产出一份带引用的报告</p>
+                      <div style="display: grid; padding: 11px 13px; border-radius: 10px; background: #fff; border: 1px solid #f2f0eb;">
+                        <sc-for list="{{ facts }}" as="f" hint-placeholder-count="5">
+                          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 0;">
+                            <span style="color: #8b857c; font-size: 12.5px;">{{ f.k }}</span>
+                            <strong style="color: #262320; font-size: 12.5px; font-weight: 500; text-align: right;">{{ f.v }}</strong>
+                          </div>
+                        </sc-for>
+                      </div>
+                      <p style="margin: 0; padding-top: 12px; border-top: 1px solid #eceae4; color: #8b857c; font-size: 12.5px; line-height: 1.65;">已完成的任务没有取消入口——服务端只接受 <code style="font-family: 'IBM Plex Mono', monospace; font-size: 0.92em;">queued</code> / <code style="font-family: 'IBM Plex Mono', monospace; font-size: 0.92em;">running</code> 的取消，其它状态一律 409。运行中的任务在这里会出现一个必填原因的取消框。</p>
+                    </div>
+                  </details>
+                </div>
+
+                <div style="display: grid; gap: 14px;">
+                  <section style="border: 1px solid #eceae4; border-radius: 14px; background: #fff; overflow: hidden;">
+                    <div style="display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #f2f0eb;">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b857c" stroke-width="1.75" stroke-linecap="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                      <strong style="font-size: 13px; font-weight: 600;">附件</strong>
+                      <span style="margin-left: auto; color: #a39d94; font-size: 12px;">3</span>
+                    </div>
+                    <sc-for list="{{ artifacts }}" as="a" hint-placeholder-count="3">
+                      <button type="button" style="{{ a.style }}" style-hover="background:#faf9f6">
+                        <strong style="display: block; min-width: 0; overflow: hidden; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap;">{{ a.name }}</strong>
+                        <small style="display: block; margin-top: 4px; color: #8b857c; font-size: 12px;">{{ a.meta }}</small>
+                      </button>
+                    </sc-for>
+                    <p style="margin: 0; padding: 10px 14px; border-top: 1px solid #f2f0eb; color: #8b857c; font-size: 12px; line-height: 1.6;">点开在左边这一列里看：文字直接渲染，Word 有「版面 / 文字」两种视图，其它类型只提供下载。</p>
+                  </section>
+
+                  <section style="padding: 14px; border: 1px solid #dbe4e7; border-radius: 14px; background: #eef3f5;">
+                    <strong style="display: block; color: #2f5561; font-size: 13px; font-weight: 600;">这套部署的闸门是关的</strong>
+                    <p style="margin: 7px 0 0; color: #3f6472; font-size: 12.5px; line-height: 1.65;"><code style="font-family: 'IBM Plex Mono', monospace; font-size: 0.92em;">workflow.export_requires_approval = false</code>，所以详情页没有审批区：任务不会停在 approval，文件直接进附件。闸门本身没有拆——配置打开后，「确认与产出」会停住并在这里出现决定卡片。</p>
+                    <p style="margin: 9px 0 0; padding-top: 9px; border-top: 1px solid #d7e3e7; color: #3f6472; font-size: 12.5px; line-height: 1.65;">另外：后端不返回进度百分比，这里只画已观察到的事件与节点；耗时是事件时间戳之差，不是服务端上报的指标。</p>
+                  </section>
+                </div>
+              </div>
+            </main>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isCode }}" hint-placeholder-val="{{ true }}">
+          <div style="position: relative; display: grid; grid-template-columns: 264px minmax(0, 1fr); height: 100%; min-height: 0;">
+            <aside style="display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid #e6e3dd; background: #f7f5f1;">
+              <div style="padding: 16px 16px 10px;">
+                <p style="margin: 0; color: #8b857c; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;">编码会话</p>
+                <p style="margin: 3px 0 0; color: #8b857c; font-size: 12px;">服务端列表 · 名字来自第一句指令 · 双击改名</p>
+              </div>
+              <button type="button" style="display: flex; align-items: center; justify-content: center; gap: 7px; height: 38px; margin: 2px 12px 12px; border: 1px solid #e2ded7; border-radius: 10px; background: #fff; color: #1b1917; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+                新会话
+              </button>
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 2px; min-height: 0; padding: 0 8px 12px; overflow-y: auto;">
+                <sc-for list="{{ codeSessions }}" as="c" hint-placeholder-count="3">
+                  <div style="{{ c.style }}">
+                    <button type="button" style="display: block; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;">
+                      <strong style="display: block; overflow: hidden; font-size: 13.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap;">{{ c.title }}</strong>
+                      <small style="display: block; margin-top: 4px; color: #8b857c; font-size: 12px;">{{ c.meta }}</small>
+                    </button>
+                    <button type="button" aria-label="删除这个会话" title="删除这个会话（工作区文件会一起消失）" style="display: grid; place-items: center; width: 28px; height: 28px; flex: none; border: 0; border-radius: 8px; background: transparent; color: #a39d94; cursor: pointer; opacity: 0.62;" style-hover="background:#f4f2ee;color:#b44f4b;opacity:1">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"></path></svg>
+                    </button>
+                  </div>
+                </sc-for>
+              </div>
+            </aside>
+
+            <main style="display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0;">
+              <header style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 40px; border-bottom: 1px solid #eceae4;">
+                <div style="min-width: 0;">
+                  <h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">把 notes.md 里的待办整理成清单</h2>
+                  <p style="margin: 5px 0 0; color: #8b857c; font-size: 12px;">ses_2565…f1a0 · 3 轮 · 工作区 4 个文件</p>
+                </div>
+                <button type="button" onClick="{{ openDrawer }}" style="display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 13px; border: 1px solid #e2ded7; border-radius: 9px; background: #fff; color: #3c3833; font: inherit; font-size: 13px; cursor: pointer;" style-hover="border-color:#c9c4bb">
+                  工作区 <span style="padding: 1px 7px; border-radius: 999px; background: #f2f0eb; font-family: 'IBM Plex Mono', monospace; font-size: 11px;">4</span>
+                </button>
+              </header>
+
+              <section style="min-width: 0; min-height: 0; padding: 26px 40px 14px; overflow-y: auto;">
+                <ol style="display: grid; width: 780px; max-width: 100%; margin: 0 auto; padding: 0; gap: 30px; list-style: none;">
+                  <li style="display: grid; gap: 12px;">
+                    <div style="justify-self: end; max-width: 560px; padding: 13px 16px; border-radius: 16px 16px 5px 16px; background: #f1efe9; font-size: 14.5px; line-height: 1.65;">把 notes.md 里的待办整理成清单，按优先级排序，写回一个新文件。</div>
+                    <div style="display: grid; gap: 2px; padding: 4px 0;">
+                      <sc-for list="{{ codeActions }}" as="a" hint-placeholder-count="4">
+                        <div style="display: flex; align-items: center; gap: 10px; padding: 6px 2px; font-size: 13px;">
+                          <span style="{{ a.dotStyle }}"></span>
+                          <span style="flex: none; color: #1b1917;">{{ a.title }}</span>
+                          <code style="overflow: hidden; color: #6b665f; font-family: 'IBM Plex Mono', monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap;">{{ a.subject }}</code>
+                          <span style="{{ a.outcomeStyle }}">{{ a.outcome }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div style="border: 1px solid #eceae4; border-radius: 12px; background: #fff;">
+                      <button type="button" onClick="{{ openDrawer }}" style="display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; border: 0; border-radius: 12px; background: transparent; color: #1b1917; font: inherit; text-align: left; cursor: pointer;" style-hover="background:#faf9f6">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8b857c" stroke-width="1.75" stroke-linecap="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"></path><path d="M14 2v6h6"></path></svg>
+                        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px;">todo-sorted.md</span>
+                        <span style="padding: 1px 7px; border-radius: 999px; background: #edf5f0; color: #2f7a54; font-size: 11px; font-weight: 500;">新建</span>
+                        <span style="margin-left: auto; color: #8b857c; font-size: 12px;">1.4 KB · 点开预览</span>
+                      </button>
+                    </div>
+                    <div style="padding: 2px 0 0 14px; border-left: 2px solid #d97757;">
+                      <p style="margin: 0 0 6px; color: #8b857c; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;">报告</p>
+                      <p style="margin: 0; font-size: 14.5px; line-height: 1.75; color: #262320;">已把 notes.md 里的 14 条待办按 P0/P1/P2 分组写入 todo-sorted.md，原文件没有改动。P0 有 3 条，都与撤权复核相关。</p>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px; color: #8b857c; font-size: 12px;">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="m9 18 6-6-6-6"></path></svg>
+                      想过什么 · 2 段
+                    </div>
+                  </li>
+
+                  <li style="display: grid; gap: 12px;">
+                    <div style="justify-self: end; max-width: 560px; padding: 13px 16px; border-radius: 16px 16px 5px 16px; background: #f1efe9; font-size: 14.5px; line-height: 1.65;">再把 P0 那三条拆成可执行的步骤。</div>
+                    <div style="display: grid; gap: 2px; padding: 4px 0;">
+                      <sc-for list="{{ codeActions2 }}" as="a" hint-placeholder-count="3">
+                        <div>
+                          <div style="display: flex; align-items: center; gap: 10px; padding: 6px 2px; font-size: 13px;">
+                            <span style="{{ a.dotStyle }}"></span>
+                            <span style="flex: none; color: #1b1917;">{{ a.title }}</span>
+                            <code style="overflow: hidden; color: #6b665f; font-family: 'IBM Plex Mono', monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap;">{{ a.subject }}</code>
+                            <span style="{{ a.outcomeStyle }}">{{ a.outcome }}</span>
+                          </div>
+                          <sc-if value="{{ a.hasProgress }}" hint-placeholder-val="{{ false }}">
+                            <div style="display: flex; align-items: center; gap: 8px; margin: 0 0 4px 16px; padding: 5px 10px; border-left: 2px solid #efd9ce; color: #8b857c; font-size: 12px;">
+                              <span style="color: #6b665f;">{{ a.progress }}</span>
+                              <span style="font-family: 'IBM Plex Mono', monospace;">{{ a.elapsed }}</span>
+                              <span style="margin-left: auto; color: #a39d94;">不画百分比：已耗时不是完成度</span>
+                            </div>
+                          </sc-if>
+                        </div>
+                      </sc-for>
+                      <p style="margin: 6px 0 0; color: #8b857c; font-size: 12px; line-height: 1.65;">默认运行态不向人要授权：调用直接执行，策略网关拒绝的那一次留在这里显示为「被策略拒绝」，不弹确认。进度行贴在步骤旁边而不进步骤列表——它是 live 帧，没有位置。</p>
+                    </div>
+                  </li>
+                </ol>
+              </section>
+
+              <form style="padding: 0 40px 22px;">
+                <div style="width: 780px; max-width: 100%; margin: 0 auto; display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: end; padding: 6px; gap: 6px; border: 1px solid #ddd8d0; border-radius: 16px; background: #fff; box-shadow: 0 10px 30px rgb(27 25 23 / 6%);">
+                  <span style="display: grid; width: 40px; height: 40px; place-items: center; border-radius: 10px; color: #8b857c;">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                  </span>
+                  <textarea rows="2" placeholder="描述你要做的事" style="min-height: 48px; width: 100%; padding: 10px 4px; border: 0; outline: none; background: transparent; color: #1b1917; font: inherit; font-size: 14.5px; resize: none;"></textarea>
+                  <button type="button" style="height: 40px; padding: 0 18px; border: 0; border-radius: 11px; background: #d97757; color: #fff; font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer;">发送</button>
+                </div>
+              </form>
+            </main>
+
+            <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+            <button type="button" aria-label="关闭预览" onClick="{{ closeDrawer }}" style="position: absolute; inset: 0; z-index: 4; border: 0; background: rgb(27 25 23 / 12%); cursor: pointer;"></button>
+            <aside aria-label="预览" style="position: absolute; z-index: 5; top: 0; right: 0; bottom: 0; width: 420px; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid #ddd8d0; background: #f7f5f1; box-shadow: -18px 0 40px rgb(27 25 23 / 10%); animation: rb-slide-in 180ms ease-out;">
+              <header style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 16px; border-bottom: 1px solid #e6e3dd;">
+                <h2 style="margin: 0; min-width: 0; overflow: hidden; font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap;">todo-sorted.md</h2>
+                <div style="display: flex; flex: none; gap: 6px;">
+                  <button type="button" style="height: 30px; padding: 0 11px; border: 1px solid #e2ded7; border-radius: 8px; background: #fff; color: #3c3833; font: inherit; font-size: 12.5px; cursor: pointer;">下载</button>
+                  <button type="button" onClick="{{ closeDrawer }}" style="height: 30px; padding: 0 11px; border: 1px solid #e2ded7; border-radius: 8px; background: #fff; color: #3c3833; font: inherit; font-size: 12.5px; cursor: pointer;">关闭</button>
+                </div>
+              </header>
+
+              <section aria-label="文件 todo-sorted.md" style="min-height: 0; flex: 1; padding: 16px; overflow-y: auto;">
+                <pre style="margin: 0; padding: 14px; border: 1px solid #e6e3dd; border-radius: 11px; background: #fff; color: #262320; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.75; white-space: pre-wrap;"># 待办（按优先级）
+
+## P0
+- 撤权后复核路径补一条集成测试
+- 摄取失败码补齐 parser_timeout
+- 发布边界的 revision 栅栏加日志
+
+## P1
+- Chat 侧栏加服务端列表接口
+- 时间线缺口位置可跳日志行</pre>
+              </section>
+
+              <details open style="border-top: 1px solid #e6e3dd; background: #fff;">
+                <summary style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; cursor: pointer; list-style: none; font-size: 12.5px; font-weight: 500;">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8b857c" stroke-width="1.75" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg>
+                  工作区全部文件（4）
+                  <span style="margin-left: auto; color: #8b857c; font-size: 12px; font-weight: 400;">上传的、旧轮次的都在这里</span>
+                </summary>
+                <ul style="margin: 0; padding: 0 8px 12px; list-style: none; display: grid; gap: 2px;">
+                  <sc-for list="{{ workspaceFiles }}" as="w" hint-placeholder-count="4">
+                    <li>
+                      <button type="button" style="{{ w.style }}" style-hover="background:#f7f5f1">
+                        <span style="min-width: 0; overflow: hidden; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap;">{{ w.name }}</span>
+                        <span style="margin-left: auto; flex: none; color: #8b857c; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">{{ w.size }}</span>
+                      </button>
+                    </li>
+                  </sc-for>
+                </ul>
+              </details>
+            </aside>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isKnowledge }}" hint-placeholder-val="{{ true }}">
+          <div style="display: grid; grid-template-columns: 276px minmax(0, 1fr); height: 100%; min-height: 0;">
+            <aside style="display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid #e6e3dd; background: #f7f5f1;">
+              <div style="padding: 16px 16px 10px;">
+                <p style="margin: 0; color: #8b857c; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;">知识库</p>
+              </div>
+              <button type="button" style="display: flex; align-items: center; justify-content: center; gap: 7px; height: 38px; margin: 2px 12px 12px; border: 0; border-radius: 10px; background: #d97757; color: #fff; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+                新建知识库
+              </button>
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 2px; min-height: 0; padding: 0 8px 12px; overflow-y: auto;">
+                <sc-for list="{{ knowledgeBases }}" as="kb" hint-placeholder-count="3">
+                  <button type="button" style="{{ kb.style }}">
+                    <span style="display: flex; align-items: center; gap: 8px;">
+                      <strong style="min-width: 0; overflow: hidden; font-size: 13.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap;">{{ kb.name }}</strong>
+                      <span style="{{ kb.tagStyle }}">{{ kb.tag }}</span>
+                    </span>
+                    <small style="display: block; margin-top: 5px; color: #8b857c; font-size: 12px;">{{ kb.meta }}</small>
+                  </button>
+                </sc-for>
+              </div>
+            </aside>
+
+            <main style="min-width: 0; min-height: 0; overflow-y: auto;">
+              <header style="display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px 36px 16px; border-bottom: 1px solid #eceae4;">
+                <div>
+                  <h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 19px; font-weight: 600; letter-spacing: -0.01em;">平台架构基线</h2>
+                  <p style="margin: 6px 0 0; color: #6b665f; font-size: 13.5px;">ADR、架构基线与已知缺口 · kb_7c21…40af</p>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                  <a href="#" style="display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border: 1px solid #e2ded7; border-radius: 9px; background: #fff; color: #3c3833; font-size: 13px;">在对话里用</a>
+                  <a href="#" style="display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border: 1px solid #e2ded7; border-radius: 9px; background: #fff; color: #3c3833; font-size: 13px;">在任务里用</a>
+                </div>
+              </header>
+
+              <div style="padding: 20px 36px 40px; display: grid; gap: 18px;">
+                <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;">
+                  <sc-for list="{{ kbStats }}" as="s" hint-placeholder-count="4">
+                    <div style="{{ s.style }}">
+                      <strong style="display: block; font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 600; letter-spacing: -0.02em;">{{ s.value }}</strong>
+                      <span style="display: block; margin-top: 3px; font-size: 12.5px;">{{ s.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <section style="border: 1px solid #eceae4; border-radius: 14px; background: #fff; overflow: hidden;">
+                  <div style="display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid #f2f0eb;">
+                    <div style="display: flex; align-items: baseline; gap: 10px;">
+                      <strong style="font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600;">文档</strong>
+                      <span style="color: #8b857c; font-size: 12px;">按 revision 管理；上传完成不等于已索引</span>
+                    </div>
+                    <button type="button" style="display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border: 1px solid #e2ded7; border-radius: 9px; background: #fff; color: #3c3833; font: inherit; font-size: 13px; cursor: pointer;">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M4 14v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6M12 3v12M8 7l4-4 4 4"></path></svg>
+                      上传
+                    </button>
+                  </div>
+                  <div style="display: grid; grid-template-columns: minmax(0, 1fr) 92px 132px 120px; gap: 12px; padding: 9px 18px; border-bottom: 1px solid #f2f0eb; background: #faf9f6; color: #8b857c; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em;">
+                    <span>文件</span><span>版本</span><span>状态</span><span style="text-align: right;">更新时间</span>
+                  </div>
+                  <sc-for list="{{ documents }}" as="d" hint-placeholder-count="4">
+                    <div style="display: grid; grid-template-columns: minmax(0, 1fr) 92px 132px 120px; align-items: center; gap: 12px; padding: 13px 18px; border-bottom: 1px solid #f2f0eb;">
+                      <span style="display: flex; align-items: center; gap: 9px; min-width: 0;">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a39d94" stroke-width="1.75" stroke-linecap="round" style="flex: none;"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"></path><path d="M14 2v6h6"></path></svg>
+                        <span style="min-width: 0;">
+                          <strong style="display: block; overflow: hidden; font-size: 13.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap;">{{ d.name }}</strong>
+                          <small style="display: block; margin-top: 2px; color: #8b857c; font-size: 12px;">{{ d.note }}</small>
+                        </span>
+                      </span>
+                      <code style="color: #6b665f; font-family: 'IBM Plex Mono', monospace; font-size: 12px;">{{ d.version }}</code>
+                      <span><span style="{{ d.statusStyle }}">{{ d.status }}</span></span>
+                      <time style="color: #8b857c; font-family: 'IBM Plex Mono', monospace; font-size: 12px; text-align: right;">{{ d.time }}</time>
+                    </div>
+                  </sc-for>
+                </section>
+
+                <section style="display: grid; gap: 12px; padding: 16px 18px; border: 1px solid #dbe4e7; border-radius: 14px; background: #eef3f5;">
+                  <div style="display: flex; align-items: baseline; gap: 10px;">
+                    <strong style="color: #2f5561; font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600;">检索检查</strong>
+                    <span style="color: #3f6472; font-size: 12.5px;">直接打 /v1/search，看这个身份能拿到什么</span>
+                  </div>
+                  <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px;">
+                    <input placeholder="输入一个问题" style="height: 38px; padding: 0 12px; border: 1px solid #cddce0; border-radius: 9px; background: #fff; color: #1b1917; font: inherit; font-size: 13.5px; outline: none;">
+                    <button type="button" style="height: 38px; padding: 0 16px; border: 0; border-radius: 9px; background: #3f6472; color: #fff; font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer;">检索</button>
+                  </div>
+                  <p style="margin: 0; color: #3f6472; font-size: 12.5px; line-height: 1.65;">空结果不区分「没有匹配」「还没索引完」和「你无权读」——三者合并是为了不让检索变成权限枚举工具。</p>
+                </section>
+              </div>
+            </main>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isEvaluation }}" hint-placeholder-val="{{ true }}">
+          <main style="height: 100%; overflow-y: auto;">
+            <div style="width: 1000px; max-width: 100%; margin: 0 auto; padding: 32px 40px 48px; display: grid; gap: 20px;">
+              <header>
+                <h2 style="margin: 0; max-width: 620px; font-family: 'Space Grotesk', sans-serif; font-size: 26px; font-weight: 600; line-height: 1.3; letter-spacing: -0.02em;">找资料，找得准吗？</h2>
+                <p style="margin: 10px 0 0; max-width: 680px; color: #6b665f; font-size: 14px; line-height: 1.7;">这一页只回答一件事：给一个问题，系统能不能把正确的那份文档排在最前面。数字直接来自仓库里的评测报告，没有人工填写。</p>
+              </header>
+
+              <section style="border: 1px solid #eceae4; border-radius: 14px; background: #fff; overflow: hidden;">
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid #f2f0eb;">
+                  <div style="display: flex; align-items: baseline; gap: 10px;">
+                    <strong style="font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600;">检索消融</strong>
+                    <span style="color: #8b857c; font-size: 12px;">38 题金标集 · 2026-08-09 · 同一份问题集，四种配置</span>
+                  </div>
+                  <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: #eef3f5; color: #3f6472; font-size: 11.5px;">离线评测</span>
+                </div>
+                <div style="display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(4, minmax(0, 1fr)); gap: 12px; padding: 10px 18px; border-bottom: 1px solid #f2f0eb; background: #faf9f6; color: #8b857c; font-size: 11.5px; font-weight: 600;">
+                  <span>配置</span><span>top-1 命中</span><span>top-5 命中</span><span>拒答正确</span><span style="text-align: right;">p95 延迟</span>
+                </div>
+                <sc-for list="{{ evalRows }}" as="r" hint-placeholder-count="4">
+                  <div style="{{ r.rowStyle }}">
+                    <span style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                      <strong style="font-size: 13.5px; font-weight: 500;">{{ r.name }}</strong>
+                      <span style="{{ r.tagStyle }}">{{ r.tag }}</span>
+                    </span>
+                    <span><strong style="display: block; font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600;">{{ r.t1 }}</strong><small style="color: #8b857c; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">{{ r.t1n }}</small></span>
+                    <span><strong style="display: block; font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600;">{{ r.t5 }}</strong><small style="color: #8b857c; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">{{ r.t5n }}</small></span>
+                    <span><strong style="display: block; font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600;">{{ r.abstain }}</strong><small style="color: #8b857c; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">{{ r.abstainN }}</small></span>
+                    <span style="text-align: right;"><strong style="font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 600;">{{ r.p95 }}</strong></span>
+                  </div>
+                </sc-for>
+              </section>
+
+              <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;">
+                <sc-for list="{{ legend }}" as="l" hint-placeholder-count="3">
+                  <div style="padding: 14px 16px; border: 1px solid #eceae4; border-radius: 12px; background: #fff;">
+                    <strong style="display: block; font-size: 13.5px; font-weight: 600;">{{ l.term }}</strong>
+                    <span style="display: block; margin-top: 5px; color: #6b665f; font-size: 12.5px; line-height: 1.65;">{{ l.gloss }}</span>
+                  </div>
+                </sc-for>
+              </div>
+
+              <section style="display: grid; gap: 12px; padding: 16px 18px; border: 1px solid #eceae4; border-radius: 14px; background: #fff;">
+                <div style="display: flex; align-items: baseline; gap: 10px;">
+                  <strong style="font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600;">在这台机器上重新测</strong>
+                  <span style="color: #8b857c; font-size: 12px;">三套，代价差很多</span>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;">
+                  <sc-for list="{{ suites }}" as="s" hint-placeholder-count="3">
+                    <button type="button" style="display: grid; gap: 4px; padding: 12px 14px; border: 1px solid #e2ded7; border-radius: 11px; background: #fff; color: #1b1917; font: inherit; text-align: left; cursor: pointer;" style-hover="border-color:#c9c4bb">
+                      <strong style="font-size: 13.5px; font-weight: 500;">{{ s.label }}</strong>
+                      <span style="color: #8b857c; font-size: 12px;">{{ s.note }}</span>
+                    </button>
+                  </sc-for>
+                </div>
+                <p style="margin: 0; color: #8b857c; font-size: 12.5px; line-height: 1.65;">这个部署起不了评测（需要 embedding runtime）。命令是可以照抄的那一行：<code style="padding: 2px 6px; border-radius: 5px; background: #f2f0eb; font-family: 'IBM Plex Mono', monospace; font-size: 12px;">uv run scripts/run_rag_eval.py</code></p>
+              </section>
+
+              <section style="padding: 16px 18px; border: 1px solid #dbe4e7; border-radius: 14px; background: #eef3f5;">
+                <strong style="display: block; color: #2f5561; font-size: 13.5px; font-weight: 600;">RAGAS 与 LlamaIndex 仍是 Planned</strong>
+                <p style="margin: 6px 0 0; color: #3f6472; font-size: 12.5px; line-height: 1.7;">这页不展示假的集成状态，也不手抄分数。没跑过的东西这里就是空的。</p>
+              </section>
+            </div>
+          </main>
+        </sc-if>
+
+        <sc-if value="{{ isComputer }}" hint-placeholder-val="{{ true }}">
+          <main style="height: 100%; overflow-y: auto;">
+            <div style="width: 1000px; max-width: 100%; margin: 0 auto; padding: 32px 40px 48px; display: grid; gap: 20px;">
+              <header>
+                <h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 26px; font-weight: 600; letter-spacing: -0.02em;">计算机控制</h2>
+                <p style="margin: 10px 0 0; max-width: 700px; color: #6b665f; font-size: 14px; line-height: 1.7;">其它工具的作用域是这个进程自己的工作区、数据库、沙箱容器。这一个的作用域是运行 Worker 的那台机器本身。</p>
+              </header>
+
+              <section style="display: flex; align-items: center; gap: 12px; padding: 13px 16px; border: 1px solid #dbe4e7; border-radius: 13px; background: #eef3f5;">
+                <span style="display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 9px; background: #fff; color: #3f6472;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="4" y="4" width="16" height="12" rx="1.5"></rect><path d="M9 20h6"></path></svg>
+                </span>
+                <div style="min-width: 0;">
+                  <strong style="display: block; color: #2f5561; font-size: 13.5px; font-weight: 600;">当前最前面：Notes</strong>
+                  <span style="color: #3f6472; font-size: 12.5px;">com.apple.Notes · tier full · 每个动作发生前都会重读这一行</span>
+                </div>
+                <span style="margin-left: auto; flex: none; padding: 3px 10px; border-radius: 999px; background: #fff; color: #3f6472; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">loopback only</span>
+              </section>
+
+              <section>
+                <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px;">
+                  <strong style="font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600;">门禁四道检查</strong>
+                  <span style="color: #8b857c; font-size: 12px;">顺序就是论证</span>
+                </div>
+                <div style="display: grid; gap: 10px;">
+                  <sc-for list="{{ gateChecks }}" as="c" hint-placeholder-count="4">
+                    <div style="{{ c.cardStyle }}">
+                      <span style="{{ c.numStyle }}">{{ c.n }}</span>
+                      <div style="min-width: 0;">
+                        <div style="display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;">
+                          <strong style="font-size: 13.5px; font-weight: 600;">{{ c.title }}</strong>
+                          <sc-if value="{{ c.pivotBadge }}" hint-placeholder-val="{{ false }}">
+                            <span style="padding: 1px 8px; border-radius: 999px; background: #d97757; color: #fff; font-size: 11px; font-weight: 600;">支点</span>
+                          </sc-if>
+                        </div>
+                        <p style="margin: 4px 0 0; color: #6b665f; font-size: 13px; line-height: 1.65;">{{ c.detail }}</p>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </section>
+
+              <section style="border: 1px solid #eceae4; border-radius: 14px; background: #fff; overflow: hidden;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 18px; border-bottom: 1px solid #f2f0eb;">
+                  <div style="display: flex; align-items: baseline; gap: 10px;">
+                    <strong style="font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600;">这次会话批准的应用</strong>
+                    <span style="color: #8b857c; font-size: 12px;">tier 从应用本身推出，不接受申请</span>
+                  </div>
+                  <span style="flex: none; padding: 3px 9px; border-radius: 999px; background: #f2f0eb; color: #6b665f; font-size: 11.5px;">重启即清空</span>
+                </div>
+                <sc-for list="{{ grantedApps }}" as="a" hint-placeholder-count="4">
+                  <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid #f2f0eb;">
+                    <span style="min-width: 0;">
+                      <strong style="display: block; font-size: 13.5px; font-weight: 500;">{{ a.name }}</strong>
+                      <small style="display: flex; align-items: center; gap: 8px; margin-top: 3px; color: #8b857c; font-size: 12px;">
+                        <code style="font-family: 'IBM Plex Mono', monospace;">{{ a.bundle }}</code>
+                        <span>{{ a.note }}</span>
+                      </small>
+                    </span>
+                    <span style="{{ a.tierStyle }}">{{ a.tier }}</span>
+                  </div>
+                </sc-for>
+                <p style="margin: 0; padding: 11px 18px; color: #8b857c; font-size: 12px; line-height: 1.65;">判定先查 bundle id（精确、不完整），再查名字子串（完整、可伪造），两个都要——只认 bundle id 的话，这个项目没听说过的新浏览器反而会落到 full。</p>
+              </section>
+
+              <section style="border: 1px solid #eed6d4; border-radius: 14px; background: #fff; overflow: hidden;">
+                <div style="display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid #f6e7e5; background: #fbeceb;">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#b44f4b" stroke-width="1.75" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M15 9l-6 6M9 9l6 6"></path></svg>
+                  <strong style="color: #96403d; font-size: 13.5px; font-weight: 600;">被拒绝的一次：向 Terminal 打字</strong>
+                  <span style="margin-left: auto; color: #b44f4b; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">tier click · type</span>
+                </div>
+                <div style="padding: 15px 16px;">
+                  <p style="margin: 0 0 11px; color: #6b665f; font-size: 13px; line-height: 1.65;">不是因为终端危险，是因为跑命令的正门已经存在。拒绝文案有三段，第三段才是关键——没有它，前两段读起来像建议。</p>
+                  <pre style="margin: 0; padding: 14px; border: 1px solid #f2f0eb; border-radius: 11px; background: #faf9f6; color: #262320; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap;">"Terminal" is granted at tier "click", so type is not available for it.
+Keystrokes would go to this application's command line. For shell commands,
+use the sandbox tool, which runs them with a policy gate and an audit trail.
+Do not attempt to work around this restriction -- never use AppleScript,
+System Events, shell commands, or any other method to send input to this
+application.</pre>
+                </div>
+              </section>
+
+              <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+                <section style="padding: 15px 16px; border: 1px solid #eceae4; border-radius: 13px; background: #fff;">
+                  <strong style="display: block; font-size: 13.5px; font-weight: 600;">截图预算</strong>
+                  <p style="margin: 6px 0 11px; color: #6b665f; font-size: 12.5px; line-height: 1.65;">两个上限都要，在宽屏上先咬的是 token 那个：1568×1568 在边长之内，却是 token 上限的两倍。</p>
+                  <div style="display: grid; gap: 0;">
+                    <div style="display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid #f2f0eb;">
+                      <span style="color: #8b857c; font-size: 12.5px;">屏幕（点）</span>
+                      <code style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px;">1470 × 956</code>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid #f2f0eb;">
+                      <span style="color: #8b857c; font-size: 12.5px;">送出</span>
+                      <code style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px;">1375 × 894</code>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid #f2f0eb;">
+                      <span style="color: #8b857c; font-size: 12.5px;">token</span>
+                      <strong style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 500;">1568 / 1568</strong>
+                    </div>
+                  </div>
+                </section>
+                <section style="padding: 15px 16px; border: 1px solid #dbe4e7; border-radius: 13px; background: #eef3f5;">
+                  <strong style="display: block; color: #2f5561; font-size: 13.5px; font-weight: 600;">坐标说的是点，不是像素</strong>
+                  <p style="margin: 6px 0 0; color: #3f6472; font-size: 12.5px; line-height: 1.7;">retina 面板报 1470×956 点、实际 2940×1912 像素，截图又缩过一次。换算错了点击会落在两倍或一半的位置，而且是静默的——点空了也还是一次点击。适配器在边界上换算一次，上面所有代码只说点。</p>
+                </section>
+              </div>
+
+              <section style="padding: 14px 16px; border: 1px solid #e6dcc6; border-radius: 13px; background: #faf2e4;">
+                <strong style="display: block; color: #7d5620; font-size: 13.5px; font-weight: 600;">打字之后还要再查一次</strong>
+                <p style="margin: 6px 0 0; color: #7d5620; font-size: 12.5px; line-height: 1.7;">按键跟着键盘焦点走。一个窗口在字符串打到一半时抢到前台，剩下的字符跟着它走——于是同一串字落进两个应用，其中只有一个被批准过。所以适配器报告送达了多少个字符，门禁用这个数字拒绝，而不是用一句 denied：只被告知 denied 的模型会重打整串，于是前半段到两次。</p>
+              </section>
+            </div>
+          </main>
+        </sc-if>
+
+        <sc-if value="{{ isSystem }}" hint-placeholder-val="{{ true }}">
+          <main style="height: 100%; overflow-y: auto;">
+            <div style="width: 1000px; max-width: 100%; margin: 0 auto; padding: 32px 40px 48px; display: grid; gap: 20px;">
+              <header style="display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;">
+                <div>
+                  <h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-size: 26px; font-weight: 600; letter-spacing: -0.02em;">运行状态</h2>
+                  <p style="margin: 10px 0 0; max-width: 620px; color: #6b665f; font-size: 14px; line-height: 1.7;">只回答公开接口能确认的事。确认不了的组件写「状态未知」，不推断。</p>
+                </div>
+                <button type="button" style="display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border: 1px solid #e2ded7; border-radius: 9px; background: #fff; color: #3c3833; font: inherit; font-size: 13px; cursor: pointer;">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"></path><path d="M21 3v5h-5"></path></svg>
+                  重新检查
+                </button>
+              </header>
+
+              <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;">
+                <sc-for list="{{ metrics }}" as="m" hint-placeholder-count="3">
+                  <div style="{{ m.cardStyle }}">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span style="{{ m.dotStyle }}"></span>
+                      <span style="color: #6b665f; font-size: 12.5px;">{{ m.label }}</span>
+                    </div>
+                    <strong style="display: block; margin-top: 10px; font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600; letter-spacing: -0.01em;">{{ m.value }}</strong>
+                    <small style="display: block; margin-top: 8px; color: #8b857c; font-size: 12.5px; line-height: 1.6;">{{ m.detail }}</small>
+                    <code style="display: block; margin-top: 8px; color: #a39d94; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">{{ m.source }}</code>
+                  </div>
+                </sc-for>
+              </div>
+
+              <section style="display: flex; align-items: flex-start; gap: 11px; padding: 14px 16px; border: 1px solid #e6dcc6; border-radius: 13px; background: #faf2e4;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9a6724" stroke-width="1.75" stroke-linecap="round" style="flex: none; margin-top: 2px;"><circle cx="12" cy="12" r="10"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4M12 17h.01"></path></svg>
+                <span style="color: #7d5620; font-size: 13px; line-height: 1.7;"><strong style="font-weight: 600;">「数据库已就绪」不代表其它组件正常。</strong>模型、Qdrant、Task Worker 与文档 Worker 都没有可查的健康接口；这里不替它们表态。</span>
+              </section>
+
+              <section style="display: grid; gap: 12px; padding: 16px 18px; border: 1px solid #eceae4; border-radius: 14px; background: #fff;">
+                <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+                  <strong style="font-family: 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 600;">本地身份</strong>
+                  <span style="color: #8b857c; font-size: 12px;">随每个请求作为 Header 发送</span>
+                </div>
+                <div style="display: grid; gap: 0;">
+                  <sc-for list="{{ identityFacts }}" as="f" hint-placeholder-count="3">
+                    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid #f2f0eb;">
+                      <span style="color: #8b857c; font-size: 12.5px;">{{ f.k }}</span>
+                      <code style="color: #262320; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; text-align: right;">{{ f.v }}</code>
+                    </div>
+                  </sc-for>
+                </div>
+                <div>
+                  <button type="button" style="height: 34px; padding: 0 13px; border: 1px solid #e2ded7; border-radius: 9px; background: #fff; color: #3c3833; font: inherit; font-size: 13px; cursor: pointer;">编辑本地身份</button>
+                </div>
+              </section>
+
+              <p style="margin: 0; color: #8b857c; font-size: 12.5px;">最近检查 08-17 14:31 · 每 15 秒自动更新</p>
+            </div>
+          </main>
+        </sc-if>
+
+      </div>
+    </section>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1496,&quot;height&quot;:1010},&quot;evidenceDetail&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;证据与边界&quot;,&quot;label&quot;:&quot;引用展开为证据行&quot;},&quot;traceDetail&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;证据与边界&quot;,&quot;label&quot;:&quot;时间线展开工具授权四件套&quot;}}">
+const NAV = [
+  { id: "chat", label: "工作台", icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", primary: true, covers: ["chat", "work"] },
+  { id: "code", label: "Code", icon: "m18 16 4-4-4-4M6 8l-4 4 4 4m8.5-13-5 18", primary: true, covers: ["code"] },
+  { id: "knowledge", label: "知识库", icon: "M16 6H3M16 12H3M12 18H3M20 6v12", primary: false, covers: ["knowledge"] },
+  { id: "evaluation", label: "评测", icon: "M10 2v7.5a4 4 0 0 1-.6 2.1L4 20h16l-5.4-8.4A4 4 0 0 1 14 9.5V2M8.5 2h7M7 16h10", primary: false, covers: ["evaluation"] },
+  { id: "computer", label: "计算机", icon: "M3 4h18v12H3zM8 20h8M12 16v4", primary: false, covers: ["computer"] },
+  { id: "system", label: "状态", icon: "M22 12h-4l-3 9L9 3l-3 9H2", primary: false, covers: ["system"] },
+];
+
+const SCREENS = [
+  { id: "chat", label: "工作台 · 对话" },
+  { id: "work", label: "工作台 · 任务" },
+  { id: "code", label: "Code" },
+  { id: "knowledge", label: "知识库" },
+  { id: "evaluation", label: "评测" },
+  { id: "computer", label: "计算机控制" },
+  { id: "system", label: "运行状态" },
+];
+
+const TITLES = {
+  chat: "工作台",
+  work: "工作台",
+  code: "Code",
+  knowledge: "知识库",
+  evaluation: "效果评测",
+  computer: "计算机控制",
+  system: "运行状态",
+};
+
+const BEAD_TONES = {
+  done: ["#2f7a54", "#edf5f0"],
+  denied: ["#b44f4b", "#fbeceb"],
+  active: ["#d97757", "#fbf0ea"],
+  pending: ["#c9c4bb", "#f2f0eb"],
+};
+
+class Component extends DCLogic {
+  state = { screen: "chat", drawer: false };
+
+  pick = (id) => (event) => {
+    if (event && event.preventDefault) event.preventDefault();
+    this.setState({ screen: id });
+  };
+
+  chip(active) {
+    return (
+      "display:inline-flex;align-items:center;height:28px;padding:0 14px;border-radius:8px;font-size:13px;font-weight:500;text-decoration:none;" +
+      (active ? "background:#fff;color:#1b1917;box-shadow:0 1px 2px rgb(27 25 23 / 8%);" : "background:transparent;color:#6b665f;")
+    );
+  }
+
+  trace(tool, subject, outcome, tone, beadStates) {
+    const labels = ["提议", "授权", "开始", "完成"];
+    return {
+      tool,
+      subject,
+      outcome,
+      outcomeStyle:
+        "margin-left:auto;flex:none;font-size:12px;font-weight:500;color:" +
+        (tone === "danger" ? "#b44f4b" : tone === "warn" ? "#9a6724" : "#2f7a54"),
+      beads: labels.map((label, i) => {
+        const st = beadStates[i];
+        const [fg, bg] = BEAD_TONES[st] || BEAD_TONES.pending;
+        return {
+          label: st === "denied" && i === 1 ? "被拒" : label,
+          wrapStyle:
+            "display:inline-flex;align-items:center;gap:5px;padding:2px 9px 2px 7px;border-radius:999px;background:" +
+            bg +
+            ";margin-right:6px;",
+          dotStyle: "width:6px;height:6px;border-radius:50%;background:" + fg + ";",
+          labelStyle: "color:" + fg + ";font-size:11px;font-weight:500;",
+        };
+      }),
+    };
+  }
+
+  renderVals() {
+    const screen = this.state.screen;
+    const evidenceDetail = this.props.evidenceDetail ?? true;
+    const traceDetail = this.props.traceDetail ?? true;
+    const railBase =
+      "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;width:60px;padding:9px 0;border-radius:12px;text-decoration:none;";
+
+    const stages = [
+      { title: "理解目标", node: "understand", note: "10:04", duration: "6 s", count: "2 条", detail: "把目标拆成 3 个子问题，冻结了图与预算。", state: "done" },
+      { title: "制定计划", node: "plan · route", note: "10:05", duration: "20 s", count: "4 条", detail: "四步计划：取两版评测报告、对齐金标集、算差值、写结论；route 判定为内部检索。", state: "done" },
+      {
+        title: "收集资料",
+        node: "research_internal · research_external",
+        note: "10:09",
+        duration: "3 分 41 秒",
+        count: "12 条",
+        detail: "只跑了内部检索，命中 9 个片段；一次外部读取被策略拒绝，这不影响本阶段的成败。",
+        state: "done",
+        hasTrace: true,
+      },
+      { title: "撰写草稿", node: "synthesize", note: "10:11", duration: "1 分 48 秒", count: "3 条", detail: "按计划写出四节草稿，引用挂在结论所依赖的片段上。", state: "done" },
+      { title: "检查与修订", node: "critic · quality_gate", note: "10:14", duration: "3 分 24 秒", count: "6 条", detail: "第 1 轮 critic 指出缺少延迟数据，补检索后第 2 轮通过；门禁放行。", state: "done" },
+      { title: "确认与产出", node: "approval · export", note: "10:15", duration: "18 s", count: "4 条", detail: "这套部署的 workflow.export_requires_approval = false，approval 没有停住，export 直接把 .docx 写进 ArtifactStore。闸门代码仍在：配置打开时，图会停在这一段等人。", state: "done" },
+    ];
+
+    return {
+      screens: SCREENS.map((s) => ({
+        ...s,
+        pick: this.pick(s.id),
+        style:
+          "min-height:34px;padding:6px 13px;border:1px solid " +
+          (screen === s.id ? "#1b1917" : "#d8d3cb") +
+          ";border-radius:9px;background:" +
+          (screen === s.id ? "#1b1917" : "#fff") +
+          ";color:" +
+          (screen === s.id ? "#fff" : "#1b1917") +
+          ";font:inherit;font-size:12.5px;font-weight:500;cursor:pointer;",
+      })),
+      nav: NAV.map((item, index) => {
+        const active = item.covers.includes(screen);
+        return {
+          label: item.label,
+          icon: item.icon,
+          pick: this.pick(item.id),
+          wrapStyle:
+            index === NAV.findIndex((n) => !n.primary)
+              ? "width:100%;display:flex;justify-content:center;margin-top:10px;padding-top:10px;border-top:1px solid #302c28;"
+              : "width:100%;display:flex;justify-content:center;",
+          style:
+            railBase +
+            (active
+              ? "background:#2e2925;color:#f3e7e0;"
+              : "background:transparent;color:#9a938a;"),
+          iconStyle: active ? "color:#e08a66" : "color:currentColor",
+        };
+      }),
+      pageTitle: TITLES[screen],
+      isWorkbench: screen === "chat" || screen === "work",
+      isChat: screen === "chat",
+      isWork: screen === "work",
+      isCode: screen === "code",
+      isKnowledge: screen === "knowledge",
+      isEvaluation: screen === "evaluation",
+      isComputer: screen === "computer",
+      isSystem: screen === "system",
+      // ADR-070：tier 从应用本身推出，不接受申请。浏览器与钱包永远只到 read，
+      // 终端与 IDE 钉在 click——因为跑命令的正门（沙箱）已经存在。
+      grantedApps: [
+        { name: "Notes", bundle: "com.apple.Notes", tier: "full", note: "无限制" },
+        { name: "Terminal", bundle: "com.apple.Terminal", tier: "click", note: "可见 + 左键单击、滚动；打字被拒" },
+        { name: "Visual Studio Code", bundle: "com.microsoft.VSCode", tier: "click", note: "可见 + 左键单击、滚动" },
+        { name: "Google Chrome", bundle: "com.google.Chrome", tier: "read", note: "只能出现在截图里" },
+      ].map((a) => {
+        const tone =
+          a.tier === "full"
+            ? ["#2f7a54", "#edf5f0", "#cfe3d7"]
+            : a.tier === "click"
+              ? ["#9a6724", "#faf2e4", "#e6dcc6"]
+              : ["#3f6472", "#eef3f5", "#dbe4e7"];
+        return {
+          ...a,
+          tierStyle:
+            "display:inline-flex;align-items:center;flex:none;padding:2px 9px;border:1px solid " +
+            tone[2] +
+            ";border-radius:999px;background:" +
+            tone[1] +
+            ";color:" +
+            tone[0] +
+            ";font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:500;",
+        };
+      }),
+      gateChecks: [
+        { n: "1", title: "这个应用被批准过吗？", detail: "会话级 allowlist——人一次性批准一整张名单。进程重启即清空。" },
+        { n: "2", title: "这个动作被这个 tier 允许吗？", detail: "tier 从应用本身推出：先查 bundle id，再按长度从长到短查名字子串。" },
+        { n: "3", title: "它现在还在最前面吗？", detail: "每个动作发生前重读当前前台应用，从不缓存。这一道是整个设计的支点。", pivot: true },
+        { n: "4", title: "之后它还在最前面吗？", detail: "只有打字需要——只有打字会被打断到一半，剩下的字符跟着新窗口走。" },
+      ].map((c) => ({
+        ...c,
+        cardStyle:
+          "display:grid;grid-template-columns:24px minmax(0,1fr);gap:11px;padding:13px 15px;border:1px solid " +
+          (c.pivot ? "#efd9ce" : "#eceae4") +
+          ";border-radius:12px;background:" +
+          (c.pivot ? "#fdf6f2" : "#fff") +
+          ";",
+        numStyle:
+          "display:grid;place-items:center;width:24px;height:24px;border-radius:7px;font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:600;background:" +
+          (c.pivot ? "#d97757" : "#f2f0eb") +
+          ";color:" +
+          (c.pivot ? "#fff" : "#6b665f") +
+          ";",
+        pivotBadge: c.pivot === true,
+      })),
+      pickChat: this.pick("chat"),
+      pickWork: this.pick("work"),
+      chatTabStyle: this.chip(screen === "chat"),
+      workTabStyle: this.chip(screen === "work"),
+
+      sessions: [
+        { title: "撤权之后旧答案还能被读到吗", time: "14:32", tag: "带引用", tone: "evidence", active: true },
+        { title: "两张图分别在什么时候用", time: "昨天", tag: "带引用", tone: "evidence", active: false },
+        { title: "摄取失败会怎么显示", time: "昨天", tag: "未接地", tone: "warn", active: false },
+        { title: "帮我写一段取消语义的说明", time: "08-15", tag: "自由回答", tone: "plain", active: false },
+      ].map((row) => ({
+        ...row,
+        style:
+          "display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px;width:100%;padding:11px 8px 11px 12px;border:1px solid " +
+          (row.active ? "#e2ded7" : "transparent") +
+          ";border-radius:11px;background:" +
+          (row.active ? "#fff" : "transparent") +
+          ";color:#1b1917;" +
+          (row.active ? "box-shadow:0 1px 2px rgb(27 25 23 / 5%);" : ""),
+        tagStyle:
+          "padding:1px 7px;border-radius:999px;font-size:11px;" +
+          (row.tone === "evidence"
+            ? "background:#eef3f5;color:#3f6472;"
+            : row.tone === "warn"
+              ? "background:#faf2e4;color:#9a6724;"
+              : "background:#f2f0eb;color:#8b857c;"),
+      })),
+      chatBeads: [
+        { label: "检索资料", tone: "done" },
+        { label: "生成回答", tone: "done" },
+        { label: "核对与发布", tone: "done" },
+      ].map((b) => ({
+        label: b.label,
+        style:
+          "display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;background:#edf5f0;color:#2f7a54;font-size:11.5px;font-weight:500;",
+      })),
+      evidenceDetail: evidenceDetail,
+      evidenceCompact: !evidenceDetail,
+      chatSteps: [
+        {
+          title: "检索资料",
+          detail: "ContextBuilt · knowledge_search「撤权 复核 revision」→ 8 个候选，ACL 过滤后 5 个，rerank 取前 3。",
+          time: "14:32:04",
+          state: "done",
+        },
+        {
+          title: "生成回答",
+          detail: "ModelStarted → ModelCompleted。这一步的文本不是答案，只是候选。",
+          time: "14:32:07",
+          state: "done",
+        },
+        {
+          title: "核对与发布",
+          detail: "AnswerCommitted。发布前再核对一次授权与 source revision：3 条引用的 revision 未变，授权仍成立。",
+          time: "14:32:09",
+          state: "done",
+        },
+      ].map((st) => ({
+        ...st,
+        dotStyle:
+          "width:9px;height:9px;margin-top:5px;margin-left:4px;border-radius:50%;background:#2f7a54;",
+      })),
+      citations: [
+        {
+          n: "1",
+          doc: "doc_arch_baseline",
+          version: "rev 4",
+          locator: "第 3 页 · 片段 #12",
+          quote: "答案发布前再复核一次 source revision 与授权；撤权与答案发布由文档行锁线性化。",
+        },
+        {
+          n: "2",
+          doc: "doc_adr_052",
+          version: "rev 1",
+          locator: "片段 #47",
+          quote: "reranker 跑在授权之后，因此不可能引入提问者无权读的段落。",
+        },
+        {
+          n: "3",
+          doc: "doc_known_gaps",
+          version: "rev 7",
+          locator: "第 11 页 · 片段 #4",
+          quote: "撤权后的历史正文仍然留在 chat_turns，读取路径由发布边界而不是存储决定。",
+        },
+      ],
+
+      taskFilters: [
+        { label: "全部", active: true },
+        { label: "在跑", active: false },
+        { label: "失败", active: false },
+      ].map((f) => ({
+        label: f.label,
+        style:
+          "flex:1;text-align:center;padding:5px 0;border-radius:7px;font-size:12.5px;" +
+          (f.active ? "background:#fff;color:#1b1917;font-weight:500;box-shadow:0 1px 2px rgb(27 25 23 / 7%);" : "color:#6b665f;"),
+      })),
+      tasks: [
+        { title: "对比两版检索形态在 38 题金标集上的命中率，产出一份带引用的报告", meta: "08-17 10:04 · task_9f21…c4a7", status: "已完成", graph: "调研报告", tone: "success", active: true },
+        { title: "整理 ADR-048 之后的审批位置变化", meta: "08-16 19:22 · task_5b7e…1d90", status: "已完成", graph: "调研报告", tone: "success", active: false },
+        { title: "把 notes.md 的待办整理成清单", meta: "08-16 11:07 · task_c410…88a2", status: "已完成", graph: "通用执行", tone: "success", active: false },
+        { title: "抓取三份外部文档并汇总", meta: "08-15 09:41 · task_77aa…2e5c", status: "失败", graph: "通用执行", tone: "danger", active: false },
+      ].map((t) => {
+        const tone =
+          t.tone === "success"
+            ? ["#2f7a54", "#edf5f0"]
+            : t.tone === "warn"
+              ? ["#9a6724", "#faf2e4"]
+              : t.tone === "danger"
+                ? ["#b44f4b", "#fbeceb"]
+                : ["#3f6472", "#eef3f5"];
+        return {
+          ...t,
+          style:
+            "display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:4px;width:100%;padding:12px 8px 12px 12px;border:1px solid " +
+            (t.active ? "#e2ded7" : "transparent") +
+            ";border-radius:12px;background:" +
+            (t.active ? "#fff" : "transparent") +
+            ";color:#1b1917;" +
+            (t.active ? "box-shadow:0 1px 2px rgb(27 25 23 / 5%);" : ""),
+          // 只有终态任务能删：服务端对其它状态一律 409，一个只会报错的按钮
+          // 是在教读者一条错的规则。运行中的任务先取消，取消控件在详情里。
+          deleteStyle:
+            t.status === "已完成" || t.status === "失败"
+              ? "display:grid;place-items:center;width:28px;height:28px;flex:none;border:0;border-radius:8px;background:transparent;color:#a39d94;cursor:pointer;opacity:0.62;"
+              : "display:none;",
+          dotStyle: "width:7px;height:7px;border-radius:50%;background:" + tone[0] + ";",
+          statusStyle: "color:" + tone[0] + ";font-size:12px;font-weight:600;",
+        };
+      }),
+      stages: stages.map((s, i) => {
+        const live = s.state === "active" || s.state === "waiting";
+        const color = s.state === "done" ? "#2f7a54" : live ? "#d97757" : "#cfc9c0";
+        return {
+          ...s,
+          hasTrace: s.hasTrace === true && traceDetail,
+          railStyle:
+            "position:absolute;top:" +
+            (i === 0 ? "24px" : "0") +
+            ";bottom:" +
+            (i === stages.length - 1 ? "calc(100% - 24px)" : "0") +
+            ";left:50%;width:1px;margin-left:-0.5px;background:#eceae4;",
+          dotStyle:
+            "position:relative;z-index:1;width:11px;height:11px;border-radius:50%;background:" +
+            (s.state === "pending" ? "#fff" : color) +
+            ";border:1px solid " +
+            color +
+            ";" +
+            (live ? "animation:rb-pulse 1.8s ease-in-out infinite;" : ""),
+          noteStyle:
+            "flex:none;font-size:12px;font-weight:500;color:" +
+            (live ? "#b8552f" : "#8b857c") +
+            ";white-space:nowrap;",
+          titleStyle:
+            "font-size:14.5px;font-weight:600;color:" +
+            (s.state === "pending" ? "#a39d94" : "#1b1917") +
+            ";",
+          detailStyle:
+            "margin:5px 0 0;font-size:13px;line-height:1.65;color:" +
+            (s.state === "pending" ? "#a39d94" : "#6b665f") +
+            ";",
+          trace: [
+            this.trace("knowledge_search", "「fixed vs agentic 命中率」", "9 个片段", "ok", ["done", "done", "done", "done"]),
+            this.trace("mcp_web_fetch_page", "arxiv.org/abs/2401.…", "被策略拒绝", "danger", ["done", "denied", "pending", "pending"]),
+          ],
+        };
+      }),
+      artifacts: [
+        { name: "retrieval-ablation.docx", tag: "待导出", tone: "warn", meta: "综合与自评 · 10:14 · 46.2 KB" },
+        { name: "retrieval_notes.md", tag: "工作区", tone: "plain", meta: "内部检索 · 10:09 · 8.4 KB" },
+        { name: "task_input.json", tag: "输入", tone: "evidence", meta: "任务 · 10:04 · 412 B" },
+      ].map((a, i, all) => ({
+        ...a,
+        style:
+          "display:block;width:100%;padding:11px 14px;border:0;" +
+          (i === all.length - 1 ? "" : "border-bottom:1px solid #f2f0eb;") +
+          "background:transparent;color:#1b1917;font:inherit;text-align:left;cursor:pointer;",
+        tagStyle:
+          "flex:none;padding:1px 7px;border-radius:999px;font-size:11px;" +
+          (a.tone === "warn"
+            ? "background:#faf2e4;color:#9a6724;"
+            : a.tone === "evidence"
+              ? "background:#eef3f5;color:#3f6472;"
+              : "background:#f2f0eb;color:#8b857c;"),
+      })),
+      codeSessions: [
+        { title: "把 notes.md 里的待办整理成清单", meta: "3 轮 · 4 个文件 · 14:02", active: true },
+        { title: "给 loopback_proxy.py 加超时参数并写测试", meta: "6 轮 · 9 个文件 · 昨天", active: false },
+        { title: "统计 evals/ 下三份报告的差异", meta: "2 轮 · 3 个文件 · 08-15", active: false },
+      ].map((c) => ({
+        ...c,
+        style:
+          "display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px;width:100%;padding:11px 6px 11px 12px;border:1px solid " +
+          (c.active ? "#e2ded7" : "transparent") +
+          ";border-radius:11px;background:" +
+          (c.active ? "#fff" : "transparent") +
+          ";color:#1b1917;" +
+          (c.active ? "box-shadow:0 1px 2px rgb(27 25 23 / 5%);" : ""),
+      })),
+      drawerOpen: this.state.drawer === true,
+      openDrawer: (event) => {
+        if (event && event.preventDefault) event.preventDefault();
+        this.setState({ drawer: true });
+      },
+      closeDrawer: (event) => {
+        if (event && event.preventDefault) event.preventDefault();
+        this.setState({ drawer: false });
+      },
+      codeActions2: [
+        { title: "读取", subject: "todo-sorted.md", outcome: "1.4 KB", tone: "ok" },
+        {
+          title: "沙箱执行",
+          subject: "python - <<'PY' …（无网络、只读根）",
+          outcome: "进行中",
+          tone: "running",
+          // ADR-068：跑着的工具欠读者一个活着的信号。阶段由 handler 报，
+          // 时钟由 executor 报；两者都在这一行里，而且不画百分比——
+          // 已耗时除以声明超时长得像完成度，但它不是。
+          progress: "executing in the sandbox",
+          elapsed: "已运行 12 秒",
+        },
+        { title: "外部读取", subject: "arxiv.org/abs/2401.…", outcome: "被策略拒绝", tone: "bad" },
+      ].map((a) => ({
+        ...a,
+        hasProgress: a.tone === "running",
+        dotStyle:
+          "width:6px;height:6px;flex:none;border-radius:50%;background:" +
+          (a.tone === "ok" ? "#2f7a54" : a.tone === "running" ? "#d97757" : "#b44f4b") +
+          ";" +
+          (a.tone === "running" ? "animation:rb-pulse 1.8s ease-in-out infinite;" : ""),
+        outcomeStyle:
+          "margin-left:auto;flex:none;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:" +
+          (a.tone === "ok" ? "#8b857c" : a.tone === "running" ? "#b8552f" : "#b44f4b") +
+          ";",
+      })),
+      workspaceFiles: [
+        { name: "todo-sorted.md", size: "1.4 KB", active: true },
+        { name: "notes.md", size: "1.9 KB", active: false },
+        { name: "uploads/会议纪要.docx", size: "31.2 KB", active: false },
+        { name: "scratch/draft.txt", size: "412 B", active: false },
+      ].map((w) => ({
+        ...w,
+        style:
+          "display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border:0;border-radius:9px;background:" +
+          (w.active ? "#f2f0eb" : "transparent") +
+          ";color:#1b1917;font:inherit;text-align:left;cursor:pointer;" +
+          (w.active ? "box-shadow:inset 2px 0 0 #d97757;" : ""),
+      })),
+      codeActions: [
+        { title: "读取", subject: "notes.md", outcome: "1.9 KB", tone: "ok" },
+        { title: "检索", subject: "TODO|待办", outcome: "14 处", tone: "ok" },
+        { title: "写入", subject: "todo-sorted.md", outcome: "1.4 KB", tone: "ok" },
+        { title: "读取", subject: "todo-sorted.md", outcome: "已复核", tone: "ok" },
+      ].map((a) => ({
+        ...a,
+        dotStyle:
+          "width:6px;height:6px;flex:none;border-radius:50%;background:" +
+          (a.tone === "ok" ? "#2f7a54" : "#b44f4b") +
+          ";",
+        outcomeStyle:
+          "margin-left:auto;flex:none;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8b857c;",
+      })),
+      knowledgeBases: [
+        { name: "平台架构基线", meta: "18 个文档 · 16 可检索 · 1 索引中", tag: "可写", tone: "plain", active: true },
+        { name: "对外发布材料", meta: "6 个文档 · 全部可检索", tag: "可写", tone: "plain", active: false },
+        { name: "合规条款", meta: "9 个文档 · 全部可检索", tag: "只读", tone: "evidence", active: false },
+      ].map((kb) => ({
+        ...kb,
+        style:
+          "display:block;width:100%;padding:11px 12px;border:1px solid " +
+          (kb.active ? "#e2ded7" : "transparent") +
+          ";border-radius:11px;background:" +
+          (kb.active ? "#fff" : "transparent") +
+          ";color:#1b1917;font:inherit;text-align:left;cursor:pointer;" +
+          (kb.active ? "box-shadow:0 1px 2px rgb(27 25 23 / 5%);" : ""),
+        tagStyle:
+          "flex:none;padding:1px 7px;border-radius:999px;font-size:11px;" +
+          (kb.tone === "evidence"
+            ? "background:#eef3f5;color:#3f6472;"
+            : "background:#f2f0eb;color:#8b857c;"),
+      })),
+      kbStats: [
+        { value: "18", label: "文档", tone: "plain" },
+        { value: "16", label: "可以检索", tone: "success" },
+        { value: "1", label: "正在索引", tone: "warn" },
+        { value: "1", label: "索引失败", tone: "danger" },
+      ].map((s) => {
+        const tone =
+          s.tone === "success"
+            ? ["#2f7a54", "#edf5f0", "#cfe3d7"]
+            : s.tone === "warn"
+              ? ["#9a6724", "#faf2e4", "#e6dcc6"]
+              : s.tone === "danger"
+                ? ["#b44f4b", "#fbeceb", "#eed6d4"]
+                : ["#1b1917", "#fff", "#eceae4"];
+        return {
+          ...s,
+          style:
+            "padding:14px 16px;border:1px solid " +
+            tone[2] +
+            ";border-radius:12px;background:" +
+            tone[1] +
+            ";color:" +
+            tone[0] +
+            ";",
+        };
+      }),
+      documents: [
+        { name: "architecture-baseline.md", note: "markdown · 授权给 3 个 principal", version: "rev 4", status: "可以检索", tone: "success", time: "08-17 09:52" },
+        { name: "ADR-052 发布边界.pdf", note: "pdf · 24 页", version: "rev 1", status: "可以检索", tone: "success", time: "08-16 21:10" },
+        { name: "known-gaps.md", note: "markdown · 摄取 Worker 已领取", version: "rev 7", status: "正在索引", tone: "warn", time: "08-17 14:28" },
+        { name: "合规问答.docx", note: "docx · failure_code = parser_timeout", version: "rev 2", status: "索引失败", tone: "danger", time: "08-15 17:03" },
+      ].map((d) => ({
+        ...d,
+        statusStyle:
+          "display:inline-flex;align-items:center;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:500;" +
+          (d.tone === "success"
+            ? "background:#edf5f0;color:#2f7a54;"
+            : d.tone === "warn"
+              ? "background:#faf2e4;color:#9a6724;"
+              : "background:#fbeceb;color:#b44f4b;"),
+      })),
+      evalRows: [
+        { name: "fixed", tag: "默认", tone: "evidence", t1: "81.6%", t1n: "31 / 38", t5: "94.7%", t5n: "36 / 38", abstain: "100%", abstainN: "6 / 6", p95: "1.8 s" },
+        { name: "fixed + rerank", tag: "最佳性价比", tone: "success", t1: "86.8%", t1n: "33 / 38", t5: "97.4%", t5n: "37 / 38", abstain: "100%", abstainN: "6 / 6", p95: "2.4 s" },
+        { name: "agentic", tag: "不可复现", tone: "warn", t1: "86.8%", t1n: "33 / 38", t5: "97.4%", t5n: "37 / 38", abstain: "83.3%", abstainN: "5 / 6", p95: "4.3 s" },
+        { name: "无 rerank 基线", tag: "", tone: "plain", t1: "71.1%", t1n: "27 / 38", t5: "89.5%", t5n: "34 / 38", abstain: "100%", abstainN: "6 / 6", p95: "1.6 s" },
+      ].map((r, i, all) => ({
+        ...r,
+        rowStyle:
+          "display:grid;grid-template-columns:minmax(0,1.4fr) repeat(4, minmax(0,1fr));align-items:center;gap:12px;padding:14px 18px;" +
+          (i === all.length - 1 ? "" : "border-bottom:1px solid #f2f0eb;") +
+          (r.tone === "success" ? "background:#fcfdfc;" : ""),
+        tagStyle:
+          r.tag === ""
+            ? "display:none"
+            : "flex:none;padding:1px 7px;border-radius:999px;font-size:11px;" +
+              (r.tone === "success"
+                ? "background:#edf5f0;color:#2f7a54;"
+                : r.tone === "warn"
+                  ? "background:#faf2e4;color:#9a6724;"
+                  : "background:#eef3f5;color:#3f6472;"),
+      })),
+      legend: [
+        { term: "top-1 命中", gloss: "正确文档排在第一位的题数占比。分母是 38 题，不是抽样。" },
+        { term: "拒答正确", gloss: "语料里本来没有答案时，系统说了「答不上来」而不是编一个。" },
+        { term: "p95 延迟", gloss: "同一台机器上重复跑的第 95 百分位耗时，不是平均值。" },
+      ],
+      suites: [
+        { label: "任务分流", note: "最快，不重建索引" },
+        { label: "回答质量", note: "需要模型" },
+        { label: "检索消融", note: "最贵：重建索引，30–70 分钟" },
+      ],
+      metrics: [
+        { label: "API 服务", value: "可响应", detail: "只说明 API 进程能够回应请求。", source: "GET /health/live", tone: "ok" },
+        { label: "数据库", value: "已就绪", detail: "当前后端只在这里检查 PostgreSQL。", source: "GET /health/ready", tone: "ok" },
+        { label: "任务与文档 Worker", value: "状态未知", detail: "没有 heartbeat 或状态查询接口，因此这里不猜。", source: "—", tone: "unknown" },
+      ].map((m) => ({
+        ...m,
+        cardStyle:
+          "padding:16px;border:1px solid " +
+          (m.tone === "ok" ? "#eceae4" : "#e6e3dd") +
+          ";border-radius:13px;background:" +
+          (m.tone === "ok" ? "#fff" : "#f7f5f1") +
+          ";",
+        dotStyle:
+          "width:7px;height:7px;border-radius:50%;" +
+          (m.tone === "ok"
+            ? "background:#2f7a54;box-shadow:0 0 0 3px #edf5f0;"
+            : "background:#a39d94;"),
+      })),
+      identityFacts: [
+        { k: "tenant", v: "acme" },
+        { k: "principal", v: "p_liu" },
+        { k: "scopes", v: "chat.read · task.write · kb.read" },
+      ],
+      facts: [
+        { k: "执行方式", v: "调研报告（固定研究图）" },
+        { k: "方式来源", v: "模型判定：目标要求对比与引用" },
+        { k: "知识库", v: "平台架构基线" },
+        { k: "最大修订次数", v: "2" },
+        { k: "创建 / 更新", v: "08-17 10:04 / 10:14" },
+      ],
+    };
+  }
+}
+
+</script>
+</body>
+</html>

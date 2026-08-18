@@ -4,6 +4,7 @@ import { StepDisclosure } from "./StepDisclosure";
 import {
   groupSteps,
   summariseGroups,
+  type GateStep,
   type StepGroup,
   type StepOutcome,
 } from "./stepGroups";
@@ -54,6 +55,35 @@ const OUTCOME_LABELS: Readonly<Record<StepOutcome, string>> = {
   denied: "被拒绝",
   running: "进行中",
 };
+
+/**
+ * A tool call's authorization sequence, on the collapsed line.
+ *
+ * On the line rather than inside the disclosure because the whole claim is
+ * that the *order* is the argument: proposed, authorized, started, finished,
+ * and a call that stopped shows which of the four it stopped at. Folded away,
+ * it would only be found by a reader who already suspected something.
+ *
+ * Deliberately quieter than the design sketch, which paints a completed bead
+ * green. Four green pills per row, on a stage that read twelve pages, is the
+ * column of ticks `OUTCOME_LABELS` exists to avoid -- it makes the one denied
+ * call harder to find, not easier. So a bead that went through is neutral and
+ * only 被拒 / 失败 carry colour: this is a progress track, not a status column.
+ */
+function GateBeads({ steps }: { steps: GateStep[] | null }) {
+  if (steps === null) return null;
+
+  return (
+    <span className="aw-step-gate">
+      {steps.map((step) => (
+        <span className={`aw-step-bead is-${step.state}`} key={step.key}>
+          <span aria-hidden="true" className="aw-step-bead-dot" />
+          {step.label}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 export function StepStream({
   ariaLabel,
@@ -118,6 +148,7 @@ export function StepStream({
             <span className="aw-step-group-outcome">
               {OUTCOME_LABELS[group.outcome]}
             </span>
+            <GateBeads steps={group.gate} />
           </summary>
           <ol className="aw-stream-events">{group.events.map(step)}</ol>
         </details>
