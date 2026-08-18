@@ -426,6 +426,72 @@ export function artifactLabel(artifact: ArtifactRef): string {
 }
 
 /**
+ * One stage's files that live in the Task's working set rather than the
+ * artifact store.
+ */
+export interface WorkspaceWriteGroup {
+  /** The stage that wrote them; null for an event with no node recorded. */
+  graphNodeId: string | null;
+  /** Names, first-write order, deduplicated within this group. */
+  names: string[];
+}
+
+/**
+ * The files a Task's tools wrote into its working set, by the stage that wrote
+ * them.
+ *
+ * These are **not** artifacts and this rail cannot open them, which is the
+ * whole reason the function exists as something separate rather than as more
+ * rows in `collectArtifacts`. An artifact has an id the client may hold and a
+ * route that serves it; a working-set file is addressed by name inside a
+ * session, and the only routes that read one are mounted under
+ * `/v1/code/sessions` behind a `mode="code"` check. Listing them here as if
+ * they were openable would be a promise this page cannot keep.
+ *
+ * Why list them at all: `ToolCompleted.workspace_writes` has carried these
+ * names unconditionally since ADR-063 -- outside the `record_step_inputs` gate,
+ * precisely so they survive a default deployment -- and the Work page read none
+ * of it. A Task that rendered three files into its working set showed a reader
+ * nothing at all: not the names, not a count, not a sentence. Saying "these
+ * exist and cannot be opened here" is strictly more than silence, and it costs
+ * no new endpoint (known-gaps F-14).
+ *
+ * Grouped by stage rather than flattened because the stage is the only context
+ * available -- there is no size, no media type, and no time beyond the event's
+ * own -- and "which step made this" is the question a name alone leaves open.
+ *
+ * Deduplicated within a group and **not** across groups: one stage writing the
+ * same name twice did one thing worth reporting once, while two stages writing
+ * it are two facts, and collapsing them would hide that the second overwrote
+ * the first.
+ */
+export function collectWorkspaceWrites(
+  events: readonly EventEnvelope[],
+): WorkspaceWriteGroup[] {
+  const groups = new Map<string, WorkspaceWriteGroup>();
+  for (const event of events) {
+    if (!isEvent(event, "ToolCompleted")) continue;
+    const written = event.payload.workspace_writes;
+    if (!Array.isArray(written)) continue;
+    // Keyed on the node so a stage that ran twice keeps one group. `\u0000` is
+    // not a legal node id, so it cannot collide with a real one.
+    const key = event.graph_node_id ?? "\u0000";
+    let group = groups.get(key);
+    if (group === undefined) {
+      group = { graphNodeId: event.graph_node_id, names: [] };
+      groups.set(key, group);
+    }
+    for (const name of written) {
+      // Guarded rather than cast: this is a JSON payload off the wire, and a
+      // non-string here would render as `[object Object]` in a file list.
+      if (typeof name !== "string" || name === "") continue;
+      if (!group.names.includes(name)) group.names.push(name);
+    }
+  }
+  return [...groups.values()].filter((group) => group.names.length > 0);
+}
+
+/**
  * Every artifact this Task produced, oldest first.
  *
  * Collected from the timeline rather than from a dedicated endpoint because

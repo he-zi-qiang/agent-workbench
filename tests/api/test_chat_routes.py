@@ -191,6 +191,40 @@ def test_direct_chat_is_served_without_an_embedding_runtime(
     assert _run_assembled(scenario, tmp_path) == (201, 422)
 
 
+def test_reading_a_cited_passage_says_503_without_an_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deployment with no vector index cannot resolve a citation, and says so.
+
+    Not 404. The citation may be entirely real and the caller may read its
+    document; what is missing is this process's ability to fetch the chunk.
+    Answering "not found" would send a reader looking for a mistake in their own
+    transcript, which is the same argument ``CodeRunUnavailableError`` makes one
+    line above it in the status table.
+
+    Checked before authorization deliberately: a process assembled without an
+    index has nothing to authorize against, and reaching a refusal that depends
+    on the corpus would mean the route had already tried to read one.
+    """
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
+        created = await client.post(
+            f"{CHAT_PREFIX}/sessions", headers=OWNER_HEADERS, json={}
+        )
+        if created.status_code != 201:
+            return created.status_code, 0
+        session_id = created.json()["session_id"]
+        passage = await client.get(
+            f"{CHAT_PREFIX}/sessions/{session_id}/turns/turn_x/citations/chunk_x",
+            headers=OWNER_HEADERS,
+        )
+        return created.status_code, passage.status_code
+
+    assert _run_assembled(scenario, tmp_path) == (201, 503)
+
+
 def test_the_upload_routes_are_still_there(tmp_path: Path) -> None:
     """The control: chat being absent must not take the rest of the API with it.
 

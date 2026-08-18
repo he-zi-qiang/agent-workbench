@@ -15,6 +15,7 @@ import type {
   EvaluationRunView,
   EvaluationSuite,
   HealthResponse,
+  CitedPassageView,
   HistoryResponse,
   KnowledgeBaseListResponse,
   KnowledgeBaseView,
@@ -136,6 +137,25 @@ export async function getChatHistory(
   return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+/**
+ * The passage behind one citation of one answer.
+ *
+ * Addressed through the turn rather than by chunk id alone, and that is the
+ * server's shape rather than this client's preference: a bare chunk id cannot
+ * be turned into the knowledge base the index read needs.
+ */
+export async function getCitedPassage(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  turnId: string,
+  chunkId: string,
+): Promise<CitedPassageView> {
+  return apiRequest(
+    identity,
+    `/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/citations/${encodeURIComponent(chunkId)}`,
+  );
 }
 
 export async function askChat(

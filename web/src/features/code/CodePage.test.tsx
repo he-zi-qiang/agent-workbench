@@ -1476,12 +1476,48 @@ describe("CodePage", () => {
     expect(screen.getByText(/没说明它写对了/)).toBeInTheDocument();
   });
 
-  it("names a run's output without drawing dead buttons when the listing lags", async () => {
+  it("draws a run's output from the run's own listing, not the page's", async () => {
     const user = userEvent.setup();
-    // The listing never learns about the file -- the honest stand-in for the
-    // render between a run returning and the re-read landing. All-or-nothing:
-    // a card here would open nothing and report 已不在工作区 about a file
-    // written a second ago.
+    // The page's listing never learns about the file. Before the response
+    // carried one, that was the ordinary state for one render after every run
+    // -- the names had arrived and the entries had not -- and the produced
+    // files degraded to a line of grey text until a refetch landed. The run
+    // now answers with the working set it left behind, so the card is drawable
+    // immediately (known-gaps F-15).
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "plot.py", size_bytes: 200, media_type: "text/x-python" }],
+    });
+    vi.mocked(runCodeWorkspaceFile).mockResolvedValue({
+      exit_code: 0,
+      stdout: "",
+      stderr: "",
+      written: ["plot.png"],
+      workspace_version: "art_2",
+      omitted_inputs: [],
+      files: [
+        { name: "plot.py", size_bytes: 200, media_type: "text/x-python" },
+        { name: "plot.png", size_bytes: 9000, media_type: "image/png" },
+      ],
+    });
+
+    mounted();
+    await openWorkspace(user, 1);
+    await user.click(await screen.findByRole("button", { name: /plot\.py/ }));
+    await user.click(await screen.findByRole("button", { name: "运行结果" }));
+
+    const produced = await screen.findByRole("list", {
+      name: "这次运行写出的文件",
+    });
+    expect(
+      within(produced).getByRole("button", { name: /plot\.png/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("names a run's output without drawing dead buttons when nothing lists it", async () => {
+    const user = userEvent.setup();
+    // A server older than the `files` field, and a page listing that has not
+    // caught up. All-or-nothing: a card here would open nothing and report
+    // 已不在工作区 about a file written a second ago.
     vi.mocked(getCodeWorkspace).mockResolvedValue({
       files: [{ name: "plot.py", size_bytes: 200, media_type: "text/x-python" }],
     });

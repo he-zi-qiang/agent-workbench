@@ -568,6 +568,85 @@ def test_one_run_id_cannot_back_turns_in_two_conversations(
         chat_turn_conversations.run(scenario)
 
 
+def test_a_turn_is_readable_by_id_by_the_principal_who_owns_its_session(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    """The first read on this ledger, and the one ADR-067 is built on.
+
+    Every other method here writes or scans for a coordinator, so a turn's own
+    record was reachable only by the coroutine executing it. Serving the passage
+    behind a citation needs it, to answer a question that must not be taken from
+    the requester: did this answer actually cite this chunk.
+    """
+
+    async def scenario(store: ChatTurnStore) -> tuple[StoredChatTurn, StoredChatTurn]:
+        await _with_session(store)
+        claim = await _claim(store)
+        prepared = await store.prepare_release(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            result=_completed(),
+        )
+        read = await store.turn(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+        )
+        return prepared, read
+
+    prepared, read = chat_turn_conversations.run(scenario)
+
+    # Whatever state it is in, verbatim -- interpreting the status is the
+    # caller's job, and a read that filtered by it would need its own opinion
+    # about which states have citations worth serving.
+    assert read == prepared
+    assert read.result is not None
+
+
+def test_a_turn_read_refuses_every_wrong_asker_the_same_way(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    """A wrong tenant, a wrong principal, a wrong session and a missing turn.
+
+    All four are one ``NotFoundError``. Any difference between them would
+    confirm that somebody else's turn exists, which is the whole reason the
+    other methods on this protocol refuse the way they do -- and a read is the
+    one shaped like a probe.
+    """
+
+    async def scenario(store: ChatTurnStore) -> list[str]:
+        await _with_session(store)
+        claim = await _claim(store)
+        turn_id = claim.turn.turn_id
+        refusals: list[str] = []
+        for kwargs in (
+            {"tenant_id": "tenant_b"},
+            {"principal_id": NEIGHBOUR},
+            {"session_id": "session_2"},
+            {"turn_id": "turn_absent"},
+        ):
+            try:
+                await store.turn(
+                    **{
+                        "session_id": SESSION,
+                        "tenant_id": TENANT,
+                        "principal_id": OWNER,
+                        "turn_id": turn_id,
+                        **kwargs,
+                    }
+                )
+            except NotFoundError as refusal:
+                refusals.append(type(refusal).__name__)
+            else:  # pragma: no cover - a pass here is the failure
+                refusals.append("returned")
+        return refusals
+
+    assert chat_turn_conversations.run(scenario) == ["NotFoundError"] * 4
+
+
 def test_prepare_release_hides_the_assistant_and_is_idempotent(
     chat_turn_conversations: StoreHarness,
 ) -> None:

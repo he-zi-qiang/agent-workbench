@@ -9,7 +9,11 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { createChatSession, listKnowledgeBases } from "../../api/client";
+import {
+  createChatSession,
+  getCitedPassage,
+  listKnowledgeBases,
+} from "../../api/client";
 import type { Citation, PrincipalIdentity, SourceLocator } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,6 +24,7 @@ import { useChatRuntime } from "./useChatRuntime";
 
 vi.mock("../../api/client", () => ({
   createChatSession: vi.fn(),
+  getCitedPassage: vi.fn(),
   listKnowledgeBases: vi.fn(() => Promise.resolve({ knowledge_bases: [] })),
 }));
 
@@ -281,6 +286,61 @@ describe("What a citation tells the reader", () => {
   });
 });
 
+describe("Opening the passage behind a citation", () => {
+  it("fetches it through the turn, and shows the stored text", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCitedPassage).mockResolvedValue({
+      chunk_id: "chunk_first",
+      document_id: "doc_handbook",
+      document_version: "rev_1",
+      text: "手册第三页说的那句话。",
+      ordinal: 7,
+      page: 3,
+    });
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: stateWithCitations([citation("chunk_first", { page: 3 })]),
+    });
+
+    renderChatRoute("/chat/ses_answered");
+    // Nothing is fetched until asked: the chip is a marker in running text,
+    // and a page of them would otherwise be a page of reads.
+    expect(vi.mocked(getCitedPassage)).not.toHaveBeenCalled();
+
+    await user.click(await screen.findByRole("button", { name: /chunk_first/ }));
+
+    expect(await screen.findByText("手册第三页说的那句话。")).toBeInTheDocument();
+    // Addressed through the turn, which is what supplies the document and
+    // therefore the knowledge base the index read needs.
+    expect(vi.mocked(getCitedPassage).mock.calls[0]?.slice(1)).toEqual([
+      "ses_answered",
+      "turn_answered",
+      "chunk_first",
+    ]);
+  });
+
+  it("says the passage cannot be read, not that the citation is broken", async () => {
+    const user = userEvent.setup();
+    // The commonest cause of a refusal here is a grant somebody revoked, and
+    // reading a citation is a fresh authorization rather than a replay of the
+    // one that published the answer. Reporting it as a fault would send the
+    // reader looking for a bug in the transcript.
+    vi.mocked(getCitedPassage).mockRejectedValue(new Error("404"));
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: stateWithCitations([citation("chunk_first", {})]),
+    });
+
+    renderChatRoute("/chat/ses_answered");
+    await user.click(
+      await screen.findByRole("button", { name: /chunk_first/i }),
+    );
+
+    expect(await screen.findByText(/读不到这段原文了/)).toBeInTheDocument();
+    expect(screen.queryByText(/引用坏了/)).not.toBeInTheDocument();
+  });
+});
+
 describe("Taking an answer somewhere else", () => {
   it("carries the full chunk id, which the page only ever shows shortened", async () => {
     const long = `chunk_${"a".repeat(40)}`;
@@ -490,6 +550,9 @@ function stateWithCitations(citations: Citation[]) {
         activities: [],
         citations,
         historical: false,
+        // Bound, because opening a citation is addressed through the turn --
+        // a state without one renders inert chips, which is its own case.
+        turnId: "turn_answered",
         answer: "根据资料的回答。",
         grounded: true,
       },

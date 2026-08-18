@@ -9,6 +9,7 @@ import {
   findGraphChoice,
   findLatestApprovalId,
   collectArtifacts,
+  collectWorkspaceWrites,
   findTaskInputRef,
   findTaskIntent,
   locateTimelineGaps,
@@ -535,6 +536,55 @@ describe("work timeline contract selectors", () => {
     expect(collectArtifacts([draft]).map((one) => one.artifact.artifact_id)).toEqual([
       "artifact_draft",
     ]);
+  });
+
+  it("names the working-set files a Task wrote, grouped by the stage", () => {
+    // ADR-063 has published these unconditionally since it landed -- outside
+    // the `record_step_inputs` gate, so a default deployment carries them --
+    // and this page read none of it. A Task that rendered three files into its
+    // working set showed the reader nothing: no names, no count, no sentence.
+    const wrote = (id: string, node: string, names: string[]) =>
+      envelope(id, "ToolCompleted", { workspace_writes: names }, node);
+
+    const groups = collectWorkspaceWrites([
+      wrote("e1", "work", ["draft.md", "helper.py"]),
+      // Same stage running twice keeps one group, and a name it wrote twice is
+      // one fact reported once.
+      wrote("e2", "work", ["draft.md", "chart.png"]),
+      wrote("e3", "export", ["report.md"]),
+    ]);
+
+    expect(groups).toEqual([
+      { graphNodeId: "work", names: ["draft.md", "helper.py", "chart.png"] },
+      { graphNodeId: "export", names: ["report.md"] },
+    ]);
+  });
+
+  it("keeps one name in two stages as two facts", () => {
+    // Not deduplicated across groups: two stages writing the same name means
+    // the second overwrote the first, and collapsing them hides that.
+    const groups = collectWorkspaceWrites([
+      envelope("e1", "ToolCompleted", { workspace_writes: ["report.md"] }, "work"),
+      envelope("e2", "ToolCompleted", { workspace_writes: ["report.md"] }, "export"),
+    ]);
+
+    expect(groups.map((group) => group.graphNodeId)).toEqual(["work", "export"]);
+    expect(groups.every((group) => group.names.includes("report.md"))).toBe(true);
+  });
+
+  it("ignores a payload that is not a list of names", () => {
+    // Off-the-wire JSON. A non-string here would render as `[object Object]`
+    // in a file list, and an absent field is the ordinary case for every event
+    // that is not a tool completion.
+    expect(
+      collectWorkspaceWrites([
+        envelope("e1", "ToolCompleted", {}, "work"),
+        envelope("e2", "ToolCompleted", { workspace_writes: "report.md" }, "work"),
+        envelope("e3", "ToolCompleted", { workspace_writes: [1, "", null] }, "work"),
+        // A failed call carries no such field at all (ADR-063 §4).
+        envelope("e4", "ToolFailed", { workspace_writes: ["ghost.md"] }, "work"),
+      ]),
+    ).toEqual([]);
   });
 
   it("reads the draft from whichever graph's drafting node wrote it", () => {

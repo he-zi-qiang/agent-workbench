@@ -87,6 +87,7 @@ from agent_workbench.application.chat_recovery import (
     ChatPendingReleaseRecovery,
     ChatTurnReaper,
 )
+from agent_workbench.application.citation_source import CitationSourceReader
 from agent_workbench.application.code_approvals import (
     ApprovalScope,
     CodeApprovalRegistry,
@@ -283,6 +284,13 @@ class ApiDependencies:
     # Present whenever this process can retrieve, which is no longer the same
     # question as whether it can chat.
     retrieval: RetrievalService | None
+    #: Reads the passage behind a citation (ADR-067). Present exactly when this
+    #: process holds a vector index, which is the one dependency the other two
+    #: (the turn ledger, the document store) do not imply -- an API assembled
+    #: `--without-chat` still owns both and still serves a transcript whose
+    #: citations it cannot resolve. Absent then, and the route says 503 rather
+    #: than pretending the citation is missing.
+    citation_source: CitationSourceReader | None
     events: EventLogPort
     #: Where transient events go on their way to a subscriber. Process-local by
     #: construction, because a transient event is never written anywhere and so
@@ -611,6 +619,20 @@ def build_dependencies(
         vector_index=vector_index,
         encoders=encoders,
         retrieval=retrieval,
+        # Assembled here rather than inside the chat branch: reading a citation
+        # is not part of answering, and it must work in a process that serves a
+        # transcript without serving new turns. What it does need is an index,
+        # so a deployment without one gets None and the route says 503 instead
+        # of reporting a real citation as missing.
+        citation_source=(
+            None
+            if vector_index is None
+            else CitationSourceReader(
+                conversations=conversations,
+                documents=documents,
+                index=vector_index,
+            )
+        ),
         events=events,
         live_events=LiveEventChannel(
             buffer_events=config.event_stream.subscriber_buffer_events,

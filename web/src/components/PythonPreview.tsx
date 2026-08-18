@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { ApiError } from "../api/client";
-import type { RunFileResponse } from "../api/types";
+import type { RunFileResponse, WorkspaceEntryView } from "../api/types";
 import { ErrorNotice, LoadingLine } from "./ui";
 
 /**
@@ -49,7 +49,10 @@ export function PythonPreview({
    * uses it to say "the listing has not caught up, do not draw buttons that
    * cannot be clicked" -- and the plain sentence is rendered instead.
    */
-  renderWritten?: (names: readonly string[]) => ReactNode;
+  renderWritten?: (
+    names: readonly string[],
+    listing: readonly WorkspaceEntryView[] | undefined,
+  ) => ReactNode;
   run: () => Promise<RunFileResponse>;
   /** The source view, which is what this shows until somebody runs it. */
   source: React.ReactNode;
@@ -254,7 +257,10 @@ function RunOutput({
   error: unknown;
   name: string;
   pending: boolean;
-  renderWritten?: (names: readonly string[]) => ReactNode;
+  renderWritten?: (
+    names: readonly string[],
+    listing: readonly WorkspaceEntryView[] | undefined,
+  ) => ReactNode;
   result: RunFileResponse | undefined;
 }) {
   // While a run is in flight the previous one stays on screen underneath, so
@@ -344,7 +350,7 @@ function RunOutput({
           that does nothing. The names are still stated. */}
       {result.written.length === 0
         ? null
-        : (renderWritten?.(result.written) ?? (
+        : (renderWritten?.(result.written, result.files) ?? (
             <p className="aw-page-note">写回工作区：{result.written.join("、")}</p>
           ))}
       {/* Under the files, and only when there are files. It is the sentence the

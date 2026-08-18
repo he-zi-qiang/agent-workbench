@@ -470,6 +470,41 @@ class PostgresConversationStore:
             # claimed in another session between our check and insert.
             raise ChatTurnConflictError("chat turn claim conflict") from exc
 
+    async def turn(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        turn_id: str,
+    ) -> StoredChatTurn:
+        """One stored turn, by id, for the principal whose session it is."""
+
+        # `connect`, not `begin`, and the non-locking helpers on both reads.
+        # Every other method on this class takes `FOR UPDATE` because it is
+        # about to write; this one never writes, and locking a session row
+        # would make a reader opening a citation serialise against the turn
+        # currently executing in that same session -- which is the one moment
+        # somebody is most likely to be reading it.
+        async with self._engine.connect() as connection:
+            await self._require_session(
+                connection, session_id, tenant_id, principal_id, mode="chat"
+            )
+            row = (
+                (
+                    await connection.execute(
+                        select(chat_turns)
+                        .where(chat_turns.c.session_id == session_id)
+                        .where(chat_turns.c.turn_id == turn_id)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                raise NotFoundError("chat turn not found")
+            return self._turn_from_row(row)
+
     async def prepare_release(
         self,
         *,

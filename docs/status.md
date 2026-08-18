@@ -22,6 +22,92 @@
 
 ---
 
+## 2026-08-18（未合并，第二批）：引用可以点开，工作集的文件说得出名字
+
+ADR-066 结尾列的四项，按顺序全部做完。一份新 ADR（0067），一条新缺口（F-16），
+一条缺口部分关闭（F-14），一条关闭（F-15）。
+
+**门禁，在一棵只含本次提交的独立 worktree 上跑的**：后端 `ruff check` +
+`pyright` **0 errors**；`pytest` **2467 passed / 742 skipped**；`tests/api` 对着真
+PostgreSQL **279 passed / 11 skipped**。前端 `eslint --max-warnings 0` + `tsc -b` +
+`vitest` **440 passed**。
+
+**为什么特意隔离跑，这一条值得留在案**：写这一批的时候，工作树里同时有**另一个
+会话**关于 `ToolProgress` 的改动。那棵混合树的数字是 2483 / 448——与上面差 16 与 8，
+差值正好是那份工作自己的测试，这也是本次逐文件拆分没有拆错的反证。混合树上跑出来的
+数字不属于任何一次提交，所以它们没有被记在这里。
+
+`ChatTurnStore.turn` 的契约套件对着真 PostgreSQL 跑过——两个实现跑同一套场景，
+那正是这套契约测试存在的理由。
+
+**一次未复现的失败，如实记下**：`tests/contracts tests/api` 合跑的第一次，
+`test_a_process_that_cannot_serve_code_says_so` 与
+`test_a_process_that_was_not_asked_for_code_stays_quiet` 挂了；两条各自单跑通过，
+`tests/api` 整套单跑 279 全过。最可能的原因是当时另一个会话在同一个 `_test` 库上
+跑测试——那套 harness 在场景之间 truncate，并发跑会把表从正在跑的测试底下抹掉
+（这也是 F-09「没有跨子系统准入控制」的一个新面孔：那条记的是内存，这里是测试库）。
+写在这里而不是当作噪声抹掉，因为下一个在这台机器上并发跑套件的人会再撞一次。
+
+### F-14 部分关闭：名字列出来了，仍然打不开
+
+`collectWorkspaceWrites`（`workTimeline.ts`）从 `ToolCompleted.workspace_writes`
+收名字、按 `graph_node_id` 归组，侧栏作为第二组列出——**刻意不是按钮**，并明说
+控制台打不开它们。ADR-063 让这些名字无条件发布，而 Work 一侧一行都没读过：
+一个把三个文件写进工作集的 Task，读者看到的是彻底的沉默。
+
+同一个 stage 写两次的名字算一条，两个 stage 各写一次算两条——后者覆盖了前者，
+合并会把这件事藏掉。空产物时那句「这个任务还没有产生文件」相应收窄成「没有产生
+可以下载的产物」：工作集里躺着三个文件时，原来那句话是假的。
+
+### 阅读列表头改用 artifactLabel
+
+一个文件曾经在一屏里穿两个名字：侧栏叫「报告文件」，四英寸外的表头叫 `report.md`。
+表头改为以类别领衔、文件名降为副标题（等于类别时不重复渲染）。
+`WorkPage.test.tsx` 那条钉住的断言原来断言的东西改完之后仍然通过，但它钉的已经不是
+它以为的位置了，所以补了一条 `getByRole("strong")` 把「谁是标题」钉死。
+**这是一次有意的契约变更。**
+
+### ADR-0067：引用点得开了
+
+新增 `GET /v1/chat/sessions/{id}/turns/{turn_id}/citations/{chunk_id}`。
+`Citation.quote` 在全仓生产代码里从未被赋值，所以在此之前「读者能看到原文」是一件
+看起来做过、实际没有的事。
+
+**鉴权全部重做，不重放**：读轮次确认它引过这个 chunk → `readable_versions` 现在还
+能不能读（并由此拿到 `knowledge_base_id`）→ 索引读按 tenant/kb/principal 收窄 →
+revision 必须相等。**一条昨天的引用今天可以正确地 404**，这是要保住的行为——
+否则每个发布过的答案都会变成一条比授权活得更久的永久读取通道。
+
+路由挂在轮次下而不是 `GET /v1/chunks/{id}`：一个裸 chunk id 换不出
+`VectorIndexPort.fetch` 必需的 `knowledge_base_id`，那个值活在请求里，不在
+`ConversationSession` 上，也不在 `chat_turns` 表里。形状跟着数据走。
+
+`ChatTurnStore` 因此有了协议上**第一个读方法**。PostgreSQL 那份用 `connect()` 而
+不是 `begin()`：其他每个方法拿 `FOR UPDATE` 是因为接下来要写，而锁住会话行会让一个
+打开引用的读者与该会话里正在执行的轮次串行——那恰好是最可能有人在读的时刻。
+
+### F-15 关闭：ADR-066 判它倒挂，那条判断只对了一半
+
+ADR-066 §7 评估的是**一种**修法——把 `written` 改成结构化条目——那确实倒挂：
+`SandboxOutcome.written` 是工具与路由共用的一半，动它要连着改 `ToolResult` 的领域
+类型。复核时发现还有一种更便宜的：**让响应把跑完之后的整个工作区一起带回来**。
+`RunFileResponse` 加一个带默认值的 `files`，路由对它已经持有的 session 多做一次
+`list`。不碰 `written`、不碰 `SandboxOutcome`、不碰任何领域类型，旧客户端忽略它
+就是原来的行为。
+
+而且「整个工作区」比「written 那几个的条目」更对，理由是 `PUT /workspace/{name}`
+早就写下的那条：调用方的下一个问题永远是「现在里面有什么」。测试钉的是最强的形式：
+**页面 listing 永不刷新，卡片照样画得出来**。
+
+### 新缺口 F-16
+
+刷新之后历史里的答案不带引用标记：`GET /messages` 返回 `StoredMessage`，引用在
+`chat_turns.result` 的 JSONB 列里，两者之间没有路。做它要 `ChatTurnStore` 第二个读
+方法 + 两个适配器 + 两套契约测试，而且它改变一次历史读取披露的内容——是一个该被
+论证一次的决定，不是顺手加的字段。
+
+---
+
 ## 2026-08-18（未合并）：展示不是验收
 
 三个界面的产物预览重设计的第一批。一份 ADR（0066），两条新缺口（F-14 / F-15）。

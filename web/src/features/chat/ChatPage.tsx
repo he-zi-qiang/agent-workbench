@@ -17,6 +17,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -27,8 +28,13 @@ import {
   useState,
 } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { createChatSession } from "../../api/client";
-import type { Citation, LocalChatSession, SourceLocator } from "../../api/types";
+import { createChatSession, getCitedPassage } from "../../api/client";
+import type {
+  Citation,
+  LocalChatSession,
+  PrincipalIdentity,
+  SourceLocator,
+} from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
   AttachmentButton,
@@ -356,6 +362,7 @@ export function ChatPage() {
             <div className="aw-chat-turn-list">
               {turns.map((turn) => (
                 <ChatTurn
+                  identity={identity}
                   key={turn.localId}
                   turn={turn}
                   {...(turn.historical ? {} : { onRetry: () => runtime.retryAsk(turn.localId) })}
@@ -514,7 +521,16 @@ function ConnectionBadge({
   );
 }
 
-function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void }) {
+function ChatTurn({
+  identity,
+  onRetry,
+  turn,
+}: {
+  /** Carried only so a citation can be opened; nothing else here fetches. */
+  identity: PrincipalIdentity;
+  onRetry?: () => void;
+  turn: ChatTurnState;
+}) {
   return (
     <article className="aw-chat-turn">
       <div className="aw-chat-user-message">
@@ -583,6 +599,9 @@ function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void
             <Citations
               answerMode={turn.answerMode}
               citations={turn.citations}
+              identity={identity}
+              sessionId={turn.sessionId}
+              {...(turn.turnId === undefined ? {} : { turnId: turn.turnId })}
               withheld={turn.phase === "withheld"}
               grounded={turn.grounded !== false}
             />
@@ -764,11 +783,23 @@ function CopyAnswer({
 function Citations({
   answerMode,
   citations,
+  identity,
+  sessionId,
+  turnId,
   withheld,
   grounded,
 }: {
   answerMode: "direct" | "rag";
   citations: Citation[];
+  identity: PrincipalIdentity;
+  sessionId: string;
+  /**
+   * Absent for a turn this page never bound one to -- a reload, or a claim
+   * that failed before the response came back. The chips still render; they
+   * simply do not open, because the passage route is addressed through the
+   * turn and there is nothing honest to send.
+   */
+  turnId?: string;
   withheld: boolean;
   grounded: boolean;
 }) {
@@ -809,39 +840,100 @@ function Citations({
   }
   return (
     <div className="aw-chat-citations" aria-label="引用">
-      {citations.map((citation) => {
-        const locator = citationLocator(citation.locator);
-        return (
-          <span
-            className="aw-chat-citation"
-            key={`${citation.chunk_id}:${citation.document_version}`}
-            // The `quote` half of this title is gone. `Citation.quote` is
-            // optional on the wire and *nothing in this repository ever sets
-            // it* -- `application/retrieval.py` builds the four other fields
-            // and stops -- so the conditional rendered an empty string on every
-            // citation this console has ever shown. Its only real effect was to
-            // make "读者能看到原文" look like a thing that had been built.
-            // Reading a cited passage needs a read path that does not exist
-            // yet; until it does, this says so by not pretending.
-            // The full chunk id joins it. `shortId` cuts the middle out, so
-            // the identifier a reader would have to quote to ask "where did
-            // this come from" existed nowhere on the page -- not in the text,
-            // not here, not in any attribute. Hovering now answers it, and the
-            // 复制 control below puts every one of them somewhere pasteable.
-            //
-            // Not a visually-hidden span holding the full id: that reads the
-            // whole 64 characters aloud to a screen reader in the middle of a
-            // sentence, which trades one reader's problem for another's.
-            title={`${citation.chunk_id}\n${citation.document_id} · ${citation.document_version}`}
-          >
-            [{shortId(citation.chunk_id, 16)}]
-            {locator === null ? null : (
-              <small className="aw-chat-citation-locator">{locator}</small>
-            )}
-          </span>
-        );
-      })}
+      {citations.map((citation) => (
+        <CitationChip
+          citation={citation}
+          identity={identity}
+          key={`${citation.chunk_id}:${citation.document_version}`}
+          sessionId={sessionId}
+          {...(turnId === undefined ? {} : { turnId })}
+        />
+      ))}
     </div>
+  );
+}
+
+/**
+ * One citation, and the passage behind it when the reader asks for it.
+ *
+ * The chip used to be an inert `<span>`: the only thing a reader could do with
+ * the evidence for a claim was read a 16-character id with its middle cut out.
+ * Checking an answer meant opening the knowledge base and searching by hand,
+ * which is exactly as much work as having no citations at all.
+ *
+ * **Opening one is a fresh read, and it can correctly fail.** The server
+ * re-decides authorization from scratch (ADR-067), so a citation still on
+ * screen may answer 404 because the grant was revoked or the document was
+ * re-ingested since the answer was published. That is the right behaviour and
+ * the wording has to carry it: 读不到 rather than 出错了. A stored citation is a
+ * record of what was answered, never a standing permit to read it again.
+ *
+ * Fetched on demand and cached forever after. `staleTime: Infinity` because a
+ * passage that came back is the passage as of the check that let it through;
+ * re-polling it would spend reads to eventually contradict what the reader is
+ * looking at, with no action available to them either way.
+ */
+function CitationChip({
+  citation,
+  identity,
+  sessionId,
+  turnId,
+}: {
+  citation: Citation;
+  identity: PrincipalIdentity;
+  sessionId: string;
+  turnId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const locator = citationLocator(citation.locator);
+  const passage = useQuery({
+    queryKey: ["chat", "citation", sessionId, turnId ?? "", citation.chunk_id],
+    enabled: open && turnId !== undefined,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+    queryFn: () => {
+      if (turnId === undefined) throw new Error("这一轮没有可用的 turn id");
+      return getCitedPassage(identity, sessionId, turnId, citation.chunk_id);
+    },
+  });
+
+  return (
+    <span className="aw-chat-citation-holder">
+      <button
+        aria-expanded={open}
+        className="aw-chat-citation"
+        // A turn this page never bound an id to cannot address the route, so
+        // the chip stays inert rather than offering a click that 404s for a
+        // reason that has nothing to do with the reader's permissions.
+        disabled={turnId === undefined}
+        onClick={() => {
+          setOpen((was) => !was);
+        }}
+        title={`${citation.chunk_id}\n${citation.document_id} · ${citation.document_version}`}
+        type="button"
+      >
+        [{shortId(citation.chunk_id, 16)}]
+        {locator === null ? null : (
+          <small className="aw-chat-citation-locator">{locator}</small>
+        )}
+      </button>
+      {!open ? null : (
+        <div className="aw-chat-citation-passage">
+          {passage.isPending ? (
+            <LoadingLine label="正在读取被引用的原文" />
+          ) : passage.isError ? (
+            // Never "引用坏了". The commonest cause is that this reader may no
+            // longer read the document, which is a decision somebody made
+            // rather than a fault in the transcript.
+            <p className="aw-page-note">
+              读不到这段原文了：可能是这份文档的权限变了，或者它已经被重新导入过。
+            </p>
+          ) : (
+            <p>{passage.data.text}</p>
+          )}
+        </div>
+      )}
+    </span>
   );
 }
 

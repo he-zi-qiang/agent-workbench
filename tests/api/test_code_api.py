@@ -1310,6 +1310,17 @@ def test_a_file_the_script_wrote_lands_in_the_working_set() -> None:
     body, names = _run(world, scenario)
 
     assert body["written"] == ["out.csv"]
+    # The working set as it stands after the run, in the same response. Without
+    # it a console that wants to *show* `out.csv` has only its name, and has to
+    # re-read the listing on a request that races the response it is reacting
+    # to -- which for one render left every produced file as a line of text
+    # (known-gaps F-15). The whole set rather than just the written names, for
+    # the reason the PUT route already gives: the caller's next question is
+    # always "what is in there now".
+    assert {entry["name"] for entry in body["files"]} == {"sq.py", "out.csv"}
+    produced = next(entry for entry in body["files"] if entry["name"] == "out.csv")
+    assert produced["media_type"] == "text/csv"
+    assert produced["size_bytes"] == len(b"a,b\n1,2\n")
     # Read off the session the run advanced, so a caller can refresh without a
     # second question -- and the listing agrees, which is the part that proves
     # the pointer moved on the session row rather than only in memory.

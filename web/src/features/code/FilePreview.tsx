@@ -134,9 +134,14 @@ export function FilePreview({
             }
           }
         }}
-        renderWritten={(names) =>
+        renderWritten={(names, listing) =>
           producedCards({
-            files,
+            // The run's own listing first, the page's as the fallback. They
+            // answer the same question, but the run's arrived *with* the names
+            // -- so the card is drawable on the first render, where the page's
+            // is still one refresh behind (known-gaps F-15). The fallback is
+            // not dead code: a server older than the field sends no listing.
+            files: listing ?? files,
             identity,
             names,
             onOpen,

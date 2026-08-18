@@ -30,6 +30,9 @@ from agent_workbench.application.chat import (
     ChatService,
     new_session_id,
 )
+from agent_workbench.application.citation_source import (
+    CitationSourceUnavailableError,
+)
 from agent_workbench.apps.api.disconnects import watched
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.context import Citation
@@ -237,6 +240,85 @@ async def history(session_id: str, request: Request) -> HistoryResponse:
             )
             for message in messages
         )
+    )
+
+
+class CitedPassageView(BaseModel):
+    """The stored text behind one citation, and where it sits.
+
+    Deliberately not the whole document, and deliberately not a range the caller
+    picks: what this serves is exactly the chunk the answer named. A route that
+    took an offset or a length would be a document reader wearing a citation's
+    clothes, and the argument that lets this exist -- the asker is reading back
+    the evidence for an answer they already have -- would not cover it.
+    """
+
+    chunk_id: Identifier
+    document_id: Identifier
+    document_version: Identifier
+    text: str
+    ordinal: int
+    #: Absent for every format without pages. Never defaulted to 1.
+    page: int | None
+
+
+@router.get("/sessions/{session_id}/turns/{turn_id}/citations/{chunk_id}")
+async def cited_passage(
+    session_id: str, turn_id: str, chunk_id: str, request: Request
+) -> CitedPassageView:
+    """The passage behind one citation of one answer.
+
+    **Reading a citation is a new read, never a replay of a stored conclusion.**
+    The turn's result records which chunk was cited; it is not evidence that the
+    asker may still read it. So this re-decides authorization from scratch --
+    PostgreSQL says whether the document is readable now, and the index read is
+    narrowed on tenant, knowledge base and principal exactly as a search is --
+    and a citation from yesterday can correctly answer 404 today. That is the
+    behaviour to keep: the alternative is a permanent read channel minted by
+    every answer, outliving the grant that justified it.
+
+    Mounted under the turn rather than as ``GET /v1/chunks/{chunk_id}``, and not
+    for tidiness. A bare chunk id cannot be turned into the
+    ``knowledge_base_id`` that ``VectorIndexPort.fetch`` requires: it lives in
+    the ask request, not on ``ConversationSession`` and not in ``chat_turns``,
+    and PostgreSQL holds no chunks table to look one up in. The turn is what
+    supplies the ``document_id``, and the document is what supplies the
+    knowledge base. The shape follows the data.
+
+    Two refusals, both 404 and both with their own sentence. "No such citation"
+    covers a chunk this turn never named, a turn in another session, and a
+    session belonging to somebody else -- one answer, so that none of them
+    confirms the others exist. "Readable no longer" covers a revoked grant, a
+    revision the index has not caught up to, and a point that has left the
+    index. Distinguishing the second group is not a leak: the caller is holding
+    the citation already, in a turn they own, so the sentence tells them nothing
+    the answer did not.
+    """
+
+    dependencies = dependencies_of(request)
+    principal = dependencies.principals.resolve(request)
+    reader = dependencies.citation_source
+    if reader is None:
+        # A deployment with no vector index answers honestly rather than 404:
+        # the citation may be perfectly real, and "not found" would send the
+        # reader looking for a mistake in their own data.
+        raise CitationSourceUnavailableError(
+            "this deployment has no vector index to read cited passages from"
+        )
+    passage = await reader.passage(
+        session_id=session_id,
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+        turn_id=turn_id,
+        chunk_id=chunk_id,
+    )
+    return CitedPassageView(
+        chunk_id=passage.chunk_id,
+        document_id=passage.document_id,
+        document_version=passage.document_version,
+        text=passage.text,
+        ordinal=passage.ordinal,
+        page=passage.page,
     )
 
 
