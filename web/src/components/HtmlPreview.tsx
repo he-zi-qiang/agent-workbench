@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MAX_PREVIEW_BYTES } from "../api/client";
 import { ErrorNotice, LoadingLine } from "./ui";
 
@@ -59,6 +59,81 @@ export function withPreviewCsp(html: string): string {
   return CSP_META + html;
 }
 
+
+/**
+ * How wide the page believes it is, in 适应宽度 mode.
+ *
+ * Read from the stylesheet rather than hard-coded here, so the number sits
+ * beside the two preview heights it has to stay consistent with.
+ */
+function logicalWidth(): number {
+  if (typeof window === "undefined") return FALLBACK_LOGICAL_WIDTH;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(
+    "--aw-preview-logical-width",
+  );
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : FALLBACK_LOGICAL_WIDTH;
+}
+
+/** Used when the stylesheet has not loaded, and under jsdom. */
+const FALLBACK_LOGICAL_WIDTH = 1024;
+
+/**
+ * The box's measured size, or null before it has one.
+ *
+ * `ResizeObserver` rather than a one-shot read on mount: the box is inside a
+ * column whose width changes when the preview panel opens, and a scale
+ * computed once would leave the page half off the frame from then on.
+ *
+ * Takes the **node**, not a ref object, and that is the fix for a bug this
+ * shipped with for one build. The frame only exists once the fetch resolves --
+ * before that the component returns a loading line -- so an effect keyed on a
+ * stable ref object runs once, on mount, finds `ref.current === null`, and
+ * never runs again when the div finally appears. Nothing observed anything,
+ * `size` stayed null, and 适应宽度 silently rendered at 100%. A callback ref
+ * puts the node in state, so the effect re-runs at exactly the moment there is
+ * something to measure.
+ *
+ * jsdom has no layout and every rect is 0, so this returns null there. That is
+ * the honest answer, and the reason the caller falls back to unscaled
+ * rendering rather than dividing by zero.
+ */
+function useBoxSize(node: HTMLDivElement | null): {
+  width: number;
+  height: number;
+} | null {
+  const [size, setSize] = useState<{ width: number; height: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (node === null) return;
+    // Both, and both positive. A frame mid-transition reports one of them as
+    // zero, and a scale of zero paints nothing at all -- which looks exactly
+    // like a page that failed to load.
+    const measure = () => {
+      const { width, height } = node.getBoundingClientRect();
+      setSize(width > 0 && height > 0 ? { width, height } : null);
+    };
+    // Measured once, synchronously, *before* observing -- and that is not
+    // belt-and-braces. `ResizeObserver` notifications are delivered as part of
+    // the rendering steps, so a document that is not being rendered never gets
+    // the initial callback: measured in a hidden pane, an observer on a node
+    // with a real 794x468 rect stayed silent indefinitely, and 适应宽度 sat
+    // there quietly behaving as 实际大小. Reading the rect does not depend on
+    // any of that.
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    // The observer is for what happens *after*: the preview panel opening,
+    // the window resizing, the card expanding.
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, [node]);
+  return size;
+}
+
 /**
  * An HTML artifact, run instead of read.
  *
@@ -108,6 +183,13 @@ export function HtmlPreview({
   sizeBytes: number;
 }) {
   const [showSource, setShowSource] = useState(false);
+  // 适应宽度 by default, and that is the whole point of the mode existing: a
+  // preview's job is to show the page as it was laid out, and a page authored
+  // for a desktop viewport reflowed into a 400px column is not that page. The
+  // reader who wants to *use* it -- click, type, play -- switches to 实际大小.
+  const [fit, setFit] = useState(true);
+  const [boxNode, setBoxNode] = useState<HTMLDivElement | null>(null);
+  const box = useBoxSize(boxNode);
   // Judged from the listing's own count, before any transfer, the same way
   // BlobPreview declines: a refusal that costs nothing. The cap is the text
   // preview's, because that is what both views hold in memory.
@@ -144,11 +226,36 @@ export function HtmlPreview({
   // the honest view is the source with the cut named.
   const canRender = !truncated;
   const rendering = canRender && !showSource;
+  // Null means "render at 100%", which is both the 实际大小 choice and the
+  // honest answer whenever the box has no measured size yet -- on the first
+  // paint, and under jsdom, where every rect is zero. Falling back to unscaled
+  // is what keeps a missing measurement from becoming a blank frame.
+  //
+  // The arithmetic, once: the iframe is laid out `LOGICAL` CSS pixels wide and
+  // `height / factor` tall, then multiplied by `factor = boxWidth / LOGICAL`.
+  // Rendered, that is exactly `boxWidth × boxHeight` -- the frame is filled,
+  // not letterboxed -- while the document inside believes it has a
+  // `LOGICAL`-wide viewport. That belief is the entire feature: `92vw` and
+  // `@media (min-width: 560px)` resolve against a desktop width instead of
+  // against whatever narrow column this preview happens to sit in.
+  const scaled =
+    fit && box !== null
+      ? (() => {
+          const logical = logicalWidth();
+          const factor = box.width / logical;
+          return {
+            width: logical,
+            height: box.height / factor,
+            factor,
+          };
+        })()
+      : null;
 
   return (
     <>
       {/* The same control the docx panel uses for 版面/文字: two views of one
           file, picked rather than scrolled past. */}
+      <div className="aw-preview-controls">
       <div className="aw-segmented aw-preview-views" aria-label="预览方式">
         <button
           aria-pressed={rendering}
@@ -173,6 +280,31 @@ export function HtmlPreview({
         </button>
       </div>
       {rendering ? (
+        <div className="aw-segmented aw-preview-zoom" aria-label="显示比例">
+          <button
+            aria-pressed={fit}
+            className={fit ? "is-active" : ""}
+            onClick={() => {
+              setFit(true);
+            }}
+            type="button"
+          >
+            适应宽度
+          </button>
+          <button
+            aria-pressed={!fit}
+            className={fit ? "" : "is-active"}
+            onClick={() => {
+              setFit(false);
+            }}
+            type="button"
+          >
+            实际大小
+          </button>
+        </div>
+      ) : null}
+      </div>
+      {rendering ? (
         <>
           {/* Above the frame, not below it. What is promised here is exactly
               what is guaranteed -- the earlier wording also claimed the page
@@ -192,11 +324,28 @@ export function HtmlPreview({
             页面在隔离的沙箱里运行：拿不到你的登录态，也读不到平台数据。
             它仍可能自行访问外部网络，来源不明的页面请谨慎打开。
           </p>
-          <div className="aw-preview-frame aw-html-frame">
+          <div
+            className="aw-preview-frame aw-html-frame"
+            data-scale={scaled === null ? "actual" : "fit"}
+            ref={setBoxNode}
+          >
             <iframe
               referrerPolicy="no-referrer"
               sandbox="allow-scripts"
               srcDoc={withPreviewCsp(text)}
+              // In 适应宽度 the frame is laid out at a logical desktop width and
+              // scaled down to the box, so the page sees the viewport it was
+              // written for. In 实际大小 nothing is set and the iframe fills the
+              // box at 100%, which is what it always did.
+              style={
+                scaled === null
+                  ? undefined
+                  : {
+                      width: `${String(scaled.width)}px`,
+                      height: `${String(scaled.height)}px`,
+                      transform: `scale(${String(scaled.factor)})`,
+                    }
+              }
               title={`${name} 预览`}
             />
           </div>

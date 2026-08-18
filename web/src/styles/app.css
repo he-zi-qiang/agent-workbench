@@ -2748,8 +2748,9 @@ pre {
    it manages. Bounded by the viewport as well, so the frame cannot outgrow the
    window it is being read in. */
 .aw-preview-frame {
+  position: relative;
   overflow: hidden;
-  height: min(72vh, 760px);
+  height: var(--aw-preview-height);
   border: 1px solid var(--aw-border);
   border-radius: 9px;
   background: var(--aw-panel-soft);
@@ -2769,12 +2770,31 @@ pre {
   background: #fff;
 }
 
+/* 适应宽度：iframe 按 --aw-preview-logical-width 排版，再整体缩小到容器宽度。
+ *
+ * 宽高都由 React 算好写进 style，因为缩放系数要用容器的真实像素宽度，而 CSS
+ * 里没有「长度除以长度得到无量纲数」的写法。这里只负责定原点——必须是左上角，
+ * 用默认的 center 会让缩小后的画面往左上飘出框外一半。 */
+.aw-preview-frame[data-scale="fit"] > iframe {
+  transform-origin: top left;
+}
+
+/* 缩放控件和「渲染 / 源码」并排，但靠右：那一组是在选看什么，这一组是在选
+   怎么看，两个问题不该长得像一个。 */
+.aw-preview-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 /* A generated picture at its own size when it fits, scaled down when it does
    not -- never scaled up, which turns a small plot into fog. */
 .aw-preview-image {
   display: block;
   max-width: 100%;
-  max-height: min(72vh, 760px);
+  max-height: var(--aw-preview-height);
   border: 1px solid var(--aw-border);
   border-radius: 9px;
   background: var(--aw-panel-soft);
@@ -2830,8 +2850,9 @@ pre {
   /* The rail moved below the reading column, so the page is now long enough
      that a frame sized for a desktop viewport pushes everything under it off
      the first two screens. */
-  .aw-preview-frame {
-    height: min(60vh, 520px);
+  :root {
+    --aw-preview-height: min(60vh, 520px);
+    --aw-preview-height-inline: min(46vh, 420px);
   }
 }
 
@@ -4452,17 +4473,20 @@ pre {
   border-top: 1px solid var(--aw-border);
 }
 
-/* 预览组件自己的高度是按"独占一列"定的（`.aw-preview-frame` 是
- * min(72vh, 760px)）。在对话里它是一张卡片的一部分，用那个高度的结果是：容器
- * 滚动条把画面从中间切断——实测一个 18vw 字号的时钟，看到的是数字的上半截。
- * 与其让容器裁剪，不如让框自己变矮，这样内容是完整的、只是小。
- * 组件不知道自己被放在哪里，所以这条语境覆盖只能写在这边。 */
+/* 预览组件自己的高度是按"独占一列"定的。在对话里它是一张卡片的一部分，用那个
+ * 高度的结果是：容器滚动条把画面从中间切断——实测一个 18vw 字号的时钟，看到的
+ * 是数字的上半截。所以这里矮一档。组件不知道自己被放在哪里，所以这条语境覆盖
+ * 只能写在这边。
+ *
+ * 矮一档不等于矮到没用。这里曾经是 min(30vh, 260px)，而 260px 装不下任何一个
+ * 整页产物：贪吃蛇的画布是 min(92vw, 480px)，480 的正方形进 258 的框，看到的
+ * 是压扁的一条加两侧黑边。现在读 token，和右栏那份共一个来源。 */
 .aw-code-output-inline-body .aw-preview-frame {
-  height: min(30vh, 260px);
+  height: var(--aw-preview-height-inline);
 }
 
 .aw-code-output-inline-body .aw-preview-image {
-  max-height: min(30vh, 260px);
+  max-height: var(--aw-preview-height-inline);
 }
 
 /* 沙箱说明在卡片里要更轻：它在右栏是一段独立的注意事项，在这里是一行脚注。 */
