@@ -100,6 +100,17 @@ embedding = [
   "FlagEmbedding>=1.3,<2",
 ]
 
+# Computer use: the adapter that actually touches a screen. macOS only, and
+# optional for that reason -- `pyobjc-framework-Quartz` does not install on
+# Linux, where CI runs, and the layer above it (tier gate, screenshot budget,
+# focus check) is platform-independent and covered without it. A deployment
+# that wants the screen tools installs this and gets `agent-computer-mcp`;
+# without it the adapter raises at startup rather than silently doing nothing.
+computer-use = [
+  "pyobjc-framework-Quartz>=10,<13; sys_platform == 'darwin'",
+  "pyobjc-framework-Cocoa>=10,<13; sys_platform == 'darwin'",
+]
+
 [project.scripts]
 agent-api = "agent_workbench.apps.api.main:main"
 agent-cli = "agent_workbench.apps.cli.main:main"
@@ -108,6 +119,7 @@ agent-task-worker = "agent_workbench.apps.task_worker.main:main"
 agent-word-mcp = "agent_workbench.apps.word_mcp.main:main"
 agent-sandbox-mcp = "agent_workbench.apps.sandbox_mcp.main:main"
 agent-web-mcp = "agent_workbench.apps.web_mcp.main:main"
+agent-computer-mcp = "agent_workbench.apps.computer_mcp.main:main"
 agent-config-check = "agent_workbench.bootstrap.config_check:main"
 agent-evidence = "agent_workbench.bootstrap.evidence:main"
 

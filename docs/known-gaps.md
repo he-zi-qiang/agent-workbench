@@ -614,6 +614,8 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 | F-15 | ~~运行产出卡片对 listing 时序有可见的不一致~~ | **已关闭** |
 | F-16 | 刷新之后，历史里的答案不带引用标记 | 已知代价 |
 | F-17 | 工具进度的预览有损：单条 2 KB、整次 64 KB，到顶静默停止 | 已知代价 |
+| F-18 | computer use 的截图不排除未批准的窗口，且抓屏是遮盖不是合成器过滤 | **未实现** |
+| F-19 | computer use 的批准是进程级的，不是 MCP 会话级的 | 已知代价 |
 
 ### F-01 一轮不可恢复 —— 拒绝
 
@@ -976,6 +978,49 @@ ADR-069 把脚本自己 `print` 的东西接到了控制台上，但那是一份
 
 **真要修的话**：静默停止那一处最值得先修——加一条「预览到此为止，完整输出见结果」
 的记录，代价是一个常量和一行。另外两处是设计上的窗口，不是缺陷。
+
+### F-18 computer use 的截图不排除未批准的窗口 —— **未实现**
+
+**证据**：[gate.py](../src/agent_workbench/apps/computer_mcp/gate.py)
+（`ScreenGate._to_exclude` 恒返回空）、
+[darwin.py](../src/agent_workbench/adapters/screen/darwin.py)
+（`capabilities()` 返回 `exclude_mask`）
+
+ADR-070 的门禁在**输入**侧是完整的：没批准的应用点不了、打不了字。**输出侧不是。**
+一次 `screenshot` 抓的是整块屏幕，未批准应用的窗口如果在上面，它就在图里。
+
+两处独立的欠缺：
+
+1. `_to_exclude()` 恒返回空元组。按 bundle id 排除需要「当前有哪些应用在跑」这份
+   清单，而 `ScreenPort` 没有暴露它——**故意没有**：给模型一个枚举所有运行中应用的
+   能力，比它被拒绝的那个能力有意思得多。要补的是一条更窄的路：从 grant 列表反推
+   「不在名单里的窗口」，而不是先列举一切。
+2. 就算列表有了，本机适配器给的也只是 `exclude_mask`——抓完整帧再把矩形涂黑。
+   ScreenCaptureKit 的 `SCContentFilter` 能在**合成器层**把窗口挡在帧外（像素从来
+   不存在），pyobjc 对它的覆盖不完整，本批没做。两者是不同的承诺，`capabilities()`
+   把它们分开命名就是为了让调用方能区分，而不是让它们看起来一样。
+
+门禁里那条「平台排不掉就拒绝截图」的分支已经接好了（`test_a_platform_that_cannot_
+exclude_is_refused_rather_than_trusted`），今天走不到——因为要排除的列表是空的。
+
+**为什么算未实现而不是已知代价**：这是 ADR-070 自己的模型没有兑现的一半。输入侧
+说「没批准就碰不到」，输出侧现在是「没批准也看得到」。
+
+### F-19 computer use 的批准是进程级的 —— 已知代价
+
+**证据**：[server.py](../src/agent_workbench/apps/computer_mcp/server.py)
+（`create_server` 里 `gate` 被闭包捕获，一个进程一份）
+
+`request_access` 批准的名单挂在 `ScreenGate` 上，而 `ScreenGate` 是
+`create_server()` 建的——**一个服务端进程一份，不是一个 MCP 会话一份**。两个客户端
+连同一个 `agent-computer-mcp`，第二个直接继承第一个批过的名单。
+
+**为什么算已知代价**：这台服务端绑在回环上、由这台机器上的一个人使用，而屏幕本来
+就只有一块——「两个互不信任的会话共用一块屏幕」这个场景在本部署形态下不存在。进程
+重启即清空，所以它至少不会跨重启留下授权。
+
+**真要修**：把 grant 挂到 MCP 会话上（`stateless_http=False` 已经开着，会话是存在
+的），代价是 `create_server` 要从「一个 gate」变成「按会话取 gate」。
 
 ## 优先级建议
 

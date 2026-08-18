@@ -1,0 +1,76 @@
+# Explicit local profile for computer use (ADR-070).
+#
+# Separate from every other local profile, and more deliberately so than the
+# rest. `config.sandbox-local.toml` is separate because enabling `sandbox_run`
+# raises every new Task's risk ceiling; this one is separate because the tools
+# it registers can **move the cursor and press keys on the machine the Worker
+# is running on**. That is not a capability to fold into a profile somebody
+# selects for another reason.
+#
+# This file is one overlay over config.default.toml. DSNs and the provider key
+# remain environment-only; no credential belongs here.
+#
+# Three things must already be true before this profile does anything:
+#
+#   uv sync --extra computer-use      # pyobjc; macOS only, not installed by default
+#   agent-computer-mcp                # the server, on 127.0.0.1:8768
+#   System Settings > Privacy & Security > Screen Recording, and
+#   > Accessibility, both granted to whatever runs that server
+#
+# If any of them is missing the server exits at startup with a message naming
+# the one that is missing, and the Worker registers no screen tool at all --
+# rather than registering tools that post events nothing receives, which is
+# what macOS does to a process without the Accessibility grant: `CGEventPost`
+# returns success having done nothing.
+#
+# What this profile does NOT do is decide which applications may be touched.
+# That is a per-session decision the person makes through `request_access`, and
+# it starts empty every time the server restarts.
+
+[app]
+environment = "development"
+deployment_scope = "local"
+log_level = "INFO"
+
+[model.main]
+model_id = "deepseek-chat"
+# Same reason as config.web-local.toml: forcing an opening tool call is unsafe
+# for an opt-in capability, and a Task without the screen scope would be made
+# to propose a tool it cannot use.
+tool_calling_required = false
+
+[model.compact]
+model_id = "deepseek-chat"
+
+[qdrant]
+url = "http://localhost:6333"
+allow_local_bootstrap = true
+
+[runtime]
+record_step_inputs = true
+
+[event_stream]
+catchup_poll_seconds = 1
+
+[optional_labs]
+mcp_adapter = true
+
+[[mcp.servers]]
+alias = "computer"
+transport = "http"
+endpoint = "http://127.0.0.1:8768/mcp"
+tools = ["request_access", "screenshot", "left_click", "type", "key", "scroll"]
+# `false`, and this is the one declaration in this file that is not a
+# convenience. ADR-025 §2.7 asks whether a graph-node replay may repeat these
+# calls. It may not: a click is not a GET. Replaying `left_click` presses the
+# button a second time, and the second press lands on whatever is under the
+# cursor *now*, which is not what was there when the first one was authorized.
+retryable_effects = false
+# `synthesis`, not `research`. Reading the outside world is research and
+# goes to `researcher_external`; driving an application is doing the work,
+# and the work is the writer's (ADR-027 §3.3).
+audience = "synthesis"
+# A screenshot is a full-screen grab, a scale and a JPEG encode -- tens of
+# milliseconds. The ceiling is here for a machine under load, not for the
+# ordinary case.
+timeout_seconds = 30
