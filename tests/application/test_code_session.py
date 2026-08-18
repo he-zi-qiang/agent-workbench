@@ -542,3 +542,49 @@ def test_cancelling_a_turn_keeps_the_files_it_had_already_written() -> None:
 
     assert status == "cancelled"
     assert version
+
+
+def test_a_sandbox_prompt_says_there_is_no_terminal() -> None:
+    """Ten sessions named 编写贪吃蛇 produced ten curses games, none of which ran.
+
+    The prompt told the model there was no shell and no network, and stopped
+    there. So "写个终端版贪吃蛇" got exactly what it asks for everywhere else --
+    `curses` -- and the container answered `setupterm: could not find terminal`
+    every time. The missing sentence was never about the sandbox being wrong;
+    it was that the sandbox never said what it *was*.
+
+    Pinned on both gated and ungated, because a deployment that runs the
+    sandbox without an approval gate has the same container and the same
+    absent tty.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+    )
+
+    for prompt in (
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+    ):
+        # The three ways it fails, named so the model can recognise its own
+        # plan before it spends a call finding out.
+        assert "no terminal" in prompt
+        assert "curses" in prompt
+        assert "input()" in prompt
+        # And the way out, which is the half that makes this actionable: the
+        # console renders a self-contained page in a sandboxed frame, so an
+        # interactive thing has somewhere real to run.
+        assert ".html" in prompt
+
+
+def test_the_no_terminal_paragraph_is_absent_without_the_sandbox() -> None:
+    """A deployment with no `sandbox_run` has no container to describe.
+
+    Telling a model that a container it cannot reach has no tty is prompt
+    budget spent on a fact it can never act on.
+    """
+
+    from agent_workbench.application.code_prompt import CODER_SYSTEM_PROMPT
+
+    assert "no terminal" not in CODER_SYSTEM_PROMPT
