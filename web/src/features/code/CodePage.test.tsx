@@ -263,6 +263,54 @@ describe("CodePage", () => {
     expect(screen.getByText("已运行 1 分 12 秒")).toBeVisible();
   });
 
+  it("re-reads the transcript for a run it cannot place", async () => {
+    // The gap this closes, measured before it was closed: a turn posted to
+    // this session from anywhere other than this tab's own request -- a reload
+    // a second after sending, a second tab, a script -- arrived on the event
+    // stream with no instruction to hang off. `buildTurnBlocks` refuses to
+    // guess which turn owns it and drops it, so the pane said 这个会话还是空的
+    // for the whole run while its steps streamed past underneath.
+    //
+    // The transcript is the fix: the server appends the user message *before*
+    // the run starts, so the sentence is already on the server when the first
+    // `RunStarted` reaches the browser. This tab just never asked again.
+    vi.mocked(getCodeHistory)
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValue({ messages: [{ role: "user", text: "跑一下" }] });
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_elsewhere",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "RunStarted",
+          sequence: 1,
+          payload: { kind: "RunStarted" },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_elsewhere",
+          timestamp: "2026-08-14T12:00:01Z",
+          event_type: "RunCompleted",
+          sequence: 2,
+          payload: { kind: "RunCompleted" },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+
+    // The instruction only exists in the *second* transcript, so seeing it at
+    // all proves the page asked a second time on its own -- nothing in this
+    // test sends anything, and `askCode` is never called.
+    expect(await screen.findByText("跑一下")).toBeVisible();
+    expect(vi.mocked(askCode)).not.toHaveBeenCalled();
+  });
+
   it("shows a running call's progress on a turn this tab did not start", async () => {
     // The regression that shipped: progress was gated on `block.live`, which
     // `buildTurnBlocks` sets from whether *this tab's* ask request is open. A

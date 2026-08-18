@@ -39,7 +39,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Code2, PanelLeft, Paperclip } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   askCode,
@@ -74,6 +74,16 @@ import { useCodeStream } from "./useCodeStream";
 
 /** How often to ask what the agent is stopped on, while it is working. */
 const APPROVAL_POLL_MS = 1000;
+
+/**
+ * How long a run with no instruction is given to explain itself.
+ *
+ * Long enough that the reload `askCode` already triggered wins the race in the
+ * ordinary case -- that one is a loopback fetch, tens of milliseconds -- and
+ * short enough that a reader watching a turn started somewhere else is not
+ * staring at 这个会话还是空的 while steps stream past underneath.
+ */
+const ORPHAN_RELOAD_DELAY_MS = 600;
 
 /** The three answers, and the one that is not always offered. */
 const DECISIONS: { decision: ApprovalDecision; label: string }[] = [
@@ -173,7 +183,7 @@ export function CodePage() {
   // Which run is live is derived inside `buildTurnBlocks`, from the run
   // bookkeeping in the events themselves rather than from anything this
   // component remembers about the moment it pressed send.
-  const { blocks, orphanRuns } = buildTurnBlocks({
+  const { blocks, orphanRuns, orphanRunIds } = buildTurnBlocks({
     messages,
     events: steps,
     running,
@@ -245,6 +255,74 @@ export function CodePage() {
       controller.abort();
     };
   }, [reload, sessionId]);
+
+  //: A run the transcript cannot place is usually a transcript this page read
+  //: a moment too early, not another tab.
+  //:
+  //: The transcript is fetched when the session changes and again when *this
+  //: tab's* turn returns, and nothing else. So a run that started any other
+  //: way -- the reader reloaded the page a second after sending, a second tab,
+  //: anything posting to the same session -- arrives on the event stream with
+  //: no instruction to hang off. `buildTurnBlocks` refuses to guess which turn
+  //: it belongs to and drops it, which is right, and the pane then says
+  //: 这个会话还是空的 while the steps stream past underneath. Measured that way:
+  //: a turn posted outside this tab rendered nothing at all, start to finish.
+  //:
+  //: Re-reading the transcript is the whole fix -- the server appends the user
+  //: message *before* the run starts, so the sentence is already there.
+  //:
+  //: Keyed on the run id and not on `orphanRuns`, because the count is not a
+  //: fresh signal: a genuinely unpairable run holds it above zero forever, and
+  //: a reload keyed on that would fetch on every render until the session
+  //: closed. Each id is tried exactly once; if the reload does not produce an
+  //: instruction for it, the page keeps the honest gap it already showed.
+  const attempted = useRef<{ session: string; ids: Set<string> }>({
+    session: "",
+    ids: new Set(),
+  });
+  const orphanKey = orphanRunIds.join(",");
+  useEffect(() => {
+    if (sessionId === undefined || orphanKey === "") return;
+    // Not before this session's transcript has landed once. Opening a session
+    // with history replays every past run onto the stream while the first
+    // fetch is still in flight, so for that window there are no instructions
+    // and *every* run looks orphaned -- and re-reading then would add a second
+    // fetch to every session open, to learn what the first one was already on
+    // its way to say. After it has landed, an unpairable run is news.
+    if (loadedFor !== sessionId) return;
+    // Carried with its session, like everything else on this page: ids are
+    // unique per run, but a set that outlived the session it was filled for
+    // would grow for as long as the tab stayed open.
+    if (attempted.current.session !== sessionId) {
+      attempted.current = { session: sessionId, ids: new Set() };
+    }
+    const fresh = orphanKey
+      .split(",")
+      .filter((id) => !attempted.current.ids.has(id));
+    if (fresh.length === 0) return;
+    const controller = new AbortController();
+    // Waited out rather than fired at once, because the ordinary path has this
+    // same shape for a moment. When *this tab's* turn returns, `running` drops
+    // and the run joins the settled list while the reload that `askCode`
+    // triggered is still in flight -- so for a few hundred milliseconds the
+    // page holds a run its transcript cannot place, and re-reading then would
+    // add a second fetch after every turn to learn what the first one was
+    // already about to say. If that reload lands, the orphan disappears, this
+    // effect is torn down and the timer never fires. What survives the wait is
+    // a run nothing else is going to explain.
+    const timer = window.setTimeout(() => {
+      for (const id of fresh) attempted.current.ids.add(id);
+      reload(sessionId, controller.signal).catch(() => {
+        // A failed re-read is not a failed turn, and the id is spent either
+        // way: retrying on the next render is the loop this is shaped to
+        // avoid.
+      });
+    }, ORPHAN_RELOAD_DELAY_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [loadedFor, orphanKey, reload, sessionId]);
 
   // Only while a turn is running. A poll that kept going would ask a question
   // nobody is waiting on the answer to, once a second, forever.
