@@ -91,7 +91,17 @@ with no network: the workspace entries you name go in, the files it writes come
 back, and nothing survives the call. Use it to check your own work rather than
 to reason about what the code would do. It is an external effect, so every call
 stops and asks a human -- expect to wait, and do not spend one on something you
-could have read."""
+could have read.
+
+The container has no terminal and nobody at a keyboard: stdin is closed, `TERM`
+is unset, and a loop that never returns is killed at the wall clock. So a
+program that draws with `curses`, opens a `pygame` window or waits on `input()`
+cannot run here -- it fails on `setupterm: could not find terminal`, or on a
+timeout, every time. When the thing being asked for is interactive or animated
+-- a game, a visualization, anything with a frame loop -- write it as one
+self-contained `.html` file with the script and styles inline. The console
+renders that in a sandboxed frame where a person can actually use it, which a
+terminal program in this container can never be."""
 
 _CANNOT_RUN = """\
 4. Do not guess at what you cannot see. If a task depends on a file that is not
@@ -112,7 +122,17 @@ You can run Python. `sandbox_run` executes a script in a throwaway container
 with no network: the workspace entries you name go in, the files it writes come
 back, and nothing survives the call. Calls run immediately, without waiting for
 anyone. Use it to check your own work -- write, run, read the output, fix, run
-again -- rather than to reason about what the code would do."""
+again -- rather than to reason about what the code would do.
+
+The container has no terminal and nobody at a keyboard: stdin is closed, `TERM`
+is unset, and a loop that never returns is killed at the wall clock. So a
+program that draws with `curses`, opens a `pygame` window or waits on `input()`
+cannot run here -- it fails on `setupterm: could not find terminal`, or on a
+timeout, every time. When the thing being asked for is interactive or animated
+-- a game, a visualization, anything with a frame loop -- write it as one
+self-contained `.html` file with the script and styles inline. The console
+renders that in a sandboxed frame where a person can actually use it, which a
+terminal program in this container can never be."""
 
 #: The same prompt for a deployment that granted ``sandbox_run`` (ADR-057).
 #:
