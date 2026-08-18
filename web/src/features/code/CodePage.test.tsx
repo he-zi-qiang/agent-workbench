@@ -263,6 +263,52 @@ describe("CodePage", () => {
     expect(screen.getByText("已运行 1 分 12 秒")).toBeVisible();
   });
 
+  it("shows a running call's progress on a turn this tab did not start", async () => {
+    // The regression that shipped: progress was gated on `block.live`, which
+    // `buildTurnBlocks` sets from whether *this tab's* ask request is open. A
+    // reader who reloaded part way through a run, or opened a second tab, got
+    // every step marked 进行中 with nothing under it -- while `ToolProgress`
+    // frames arrived on the stream the whole time. That reader is precisely
+    // the one asking "is this stuck?".
+    //
+    // `askCode` is never called here, so nothing this tab started is open and
+    // `block.live` is false for every block. The steps still arrive, because
+    // the event subscription is scoped to the session rather than to the turn.
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [{ role: "user", text: "跑一下" }],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map([
+        [
+          "call_1",
+          { lines: ["step 3", "step 4"], elapsedMs: 9000, percent: null },
+        ],
+      ]),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolStarted",
+          sequence: 1,
+          payload: {
+            kind: "ToolStarted",
+            tool_call_id: "call_1",
+            tool_name: "sandbox_run",
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+
+    expect(await screen.findByText("step 4")).toBeVisible();
+    expect(screen.getByText("已运行 9 秒")).toBeVisible();
+  });
+
   it("does not leave a moving line under a step that has stopped", async () => {
     const user = userEvent.setup();
     vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
