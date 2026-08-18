@@ -70,7 +70,7 @@ import { CodeTurn } from "./CodeTurn";
 import type { OpenedFile } from "./FilePreview";
 import { PreviewPanel } from "./PreviewPanel";
 import { buildTurnBlocks } from "./turnBlocks";
-import { useCodeStream, type ToolProgressView } from "./useCodeStream";
+import { useCodeStream } from "./useCodeStream";
 
 /** How often to ask what the agent is stopped on, while it is working. */
 const APPROVAL_POLL_MS = 1000;
@@ -142,18 +142,6 @@ export function CodePage() {
     queryFn: () => listCodeSessions(identity),
   });
   const known = sessions.data?.sessions ?? [];
-
-/**
- * The map a settled turn gets, defined here rather than imported.
- *
- * `useCodeStream` exports an identical one, and taking it from there is what
- * this line used to do -- but `CodePage.test.tsx` mocks that module wholesale,
- * which makes every named export it does not list `undefined`. The type
- * checker cannot see that, so the failure surfaced as `.get()` on undefined
- * inside a render, eight tests deep. A constant a mock cannot reach is worth
- * more than a constant that is shared.
- */
-const NO_TOOL_PROGRESS: ReadonlyMap<string, ToolProgressView> = new Map();
 
   const { steps, thinking, thinkingCallId, answer, progress } = useCodeStream(
     identity,
@@ -711,12 +699,28 @@ const NO_TOOL_PROGRESS: ReadonlyMap<string, ToolProgressView> = new Map();
                   onWrote={refreshWorkspace}
                   openedName={viewing?.name ?? null}
                   sessionId={sessionId}
-                  // Gated on `live` like the thought and the report above it.
-                  // Progress is keyed by tool call, so an ungated map would be
-                  // correct too -- but a finished turn holding a live channel
-                  // is a shape that only stays harmless while the keys happen
-                  // not to collide, and the other three already say `live`.
-                  toolProgress={block.live ? progress : NO_TOOL_PROGRESS}
+                  // NOT gated on `live`, unlike the three above it, and the
+                  // difference is what `live` actually means: `buildTurnBlocks`
+                  // sets it from `running`, which is whether *this tab's own*
+                  // ask request is still open. That is the right gate for the
+                  // thought and the report -- both belong to a model call this
+                  // tab started. It is the wrong one here.
+                  //
+                  // Measured, not reasoned about: a run driven from anywhere
+                  // other than this tab's open request -- a reload part way
+                  // through, a second tab, a turn posted by something else --
+                  // left every step showing 进行中 with nothing under it, while
+                  // `ToolProgress` frames arrived on the stream the whole time.
+                  // The reader most likely to ask "is this stuck?" is the one
+                  // who just reloaded, and they were the one guaranteed to get
+                  // no answer.
+                  //
+                  // Ungating is safe because a *narrower* gate already exists
+                  // one level down: `TurnStepRow` draws this only for a step
+                  // whose outcome is `running`, and the hook drops a call from
+                  // the map the moment it returns. Both are per tool call,
+                  // which is the thing progress is actually about.
+                  toolProgress={progress}
                 />
               ))}
             </ol>
