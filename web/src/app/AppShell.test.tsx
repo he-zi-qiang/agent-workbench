@@ -32,6 +32,10 @@ describe("AppShell mobile navigation", () => {
     // assertion would call that deleted.
     expect(screen.queryByRole("link", { name: "待我确认" })).not.toBeInTheDocument();
     expect(more.getByRole("link", { name: "运行状态" })).toBeInTheDocument();
+    // The page this filter was derived for. It used to name /evaluation and
+    // /system literally, so 计算机 reached the desktop rail and no mobile
+    // surface at all -- the exact shape the comment above describes.
+    expect(more.getByRole("link", { name: "计算机" })).toBeInTheDocument();
     expect(
       more.getByRole("button", { name: "本地环境与身份" }),
     ).toBeInTheDocument();

@@ -3,6 +3,7 @@ import {
   Code2,
   FlaskConical,
   Library,
+  MonitorSmartphone,
   MoreHorizontal,
   MessageSquare,
   Settings2,
@@ -40,6 +41,13 @@ const NAVIGATION = [
     covers: ["/evaluation"],
   },
   {
+    to: "/computer",
+    label: "计算机",
+    icon: MonitorSmartphone,
+    primary: false,
+    covers: ["/computer"],
+  },
+  {
     to: "/system",
     label: "运行状态",
     icon: Activity,
@@ -64,8 +72,11 @@ export function AppShell() {
   const { identity, setEditorOpen } = useIdentity();
   const location = useLocation();
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  // Everything that is not a primary flow and not already on the mobile bar.
+  // Derived rather than an explicit pair of paths: the hardcoded version left
+  // a newly added secondary page reachable on desktop and nowhere on mobile.
   const secondaryNavigation = NAVIGATION.filter(
-    (item) => item.to === "/evaluation" || item.to === "/system",
+    (item) => !item.primary && item.to !== "/knowledge",
   );
   const secondaryActive = secondaryNavigation.some((item) =>
     location.pathname.startsWith(item.to),

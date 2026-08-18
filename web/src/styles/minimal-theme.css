@@ -25,49 +25,57 @@ body {
   box-shadow: none;
 }
 
+/* 这一层曾经把 rail 刷成浅色：`background: var(--aw-rail)` 当时解析出 #f7f7f5，
+   文字用 --aw-text-muted，于是导航和正文是同一张纸上的两块区域。app.css 那边
+   一直是按深色写的（文字 #d9d9d3、白色 10% 的分隔线），两层叠起来的结果是基础
+   皮肤的意图被后加载的这层覆盖掉了。
+   现在两层都读同一组 --aw-rail-* token，深浅只由 tokens.css 一处决定。 */
 .aw-global-rail {
   padding: 14px 8px 10px;
-  border-right: 1px solid var(--aw-border);
+  border-right: 0;
   border-radius: 0;
   background: var(--aw-rail);
-  color: var(--aw-text-muted);
+  color: var(--aw-rail-text);
 }
 
+/* 实心橙方块，不是描边的浅色块：--aw-accent-soft 是 #fbf0ea，在深色 rail 上
+   会变成一整块近白的方形，比它下面任何一个导航项都抢眼——而它只是个标识。 */
 .aw-logo {
   width: 40px;
   height: 40px;
   margin-bottom: 14px;
-  border: 1px solid color-mix(in srgb, var(--aw-accent) 18%, var(--aw-border));
+  border: 0;
   border-radius: 12px;
-  background: var(--aw-accent-soft);
-  color: var(--aw-accent);
+  background: var(--aw-accent);
+  color: #fff;
   box-shadow: none;
 }
 
 .aw-global-link {
   width: 56px;
   min-height: 52px;
-  color: var(--aw-text-muted);
+  color: var(--aw-rail-text);
 }
 
 .aw-global-link:hover {
   background: var(--aw-rail-hover);
-  color: var(--aw-text);
+  color: var(--aw-rail-text-active);
 }
 
-/* Same split as the base skin: active is an accent-tinted chip, hover a
-   neutral one, so the current page stays marked when the pointer leaves. */
+/* Same split as the base skin: active is a chip one step lighter than the
+   rail, hover a darker one, so the current page stays marked when the
+   pointer leaves. */
 .aw-global-link.active {
-  background: var(--aw-accent-soft);
-  color: var(--aw-text);
+  background: var(--aw-rail-active);
+  color: var(--aw-rail-text-active);
 }
 
 .aw-global-link.active svg {
-  color: var(--aw-accent);
+  color: var(--aw-rail-icon-active);
 }
 
 .aw-nav-divider {
-  border-color: var(--aw-border);
+  border-color: var(--aw-rail-divider);
 }
 
 /* Controls -------------------------------------------------------------- */

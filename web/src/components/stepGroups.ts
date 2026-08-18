@@ -39,6 +39,39 @@ import type { EventEnvelope } from "../api/types";
 /** How a step ended, as the collapsed line reports it. */
 export type StepOutcome = "ok" | "failed" | "denied" | "running";
 
+/**
+ * The four things that have to happen to a tool call, in the order they have
+ * to happen in.
+ *
+ * The names are the reader's, not the log's: 提议 is `ToolProposed`, 授权 is
+ * whatever the policy gateway and any human approver decided, 开始 is
+ * `ToolStarted`, 完成 is `ToolCompleted` or `ToolFailed`. Four rather than the
+ * five events, because `PermissionRequested` and `PermissionResolved` are one
+ * question and its answer -- a reader watching a call get held does not need
+ * two beads to be told it is being decided.
+ */
+export type GateStepKey = "proposed" | "authorized" | "started" | "finished";
+
+/**
+ * Where one of those four stands.
+ *
+ * `pending` is the honest default and the reason this is derived per-bead
+ * rather than as a single "how far did it get" index: a call refused by a hook
+ * before it ever reached the policy gateway emits no `PermissionResolved` at
+ * all, and an index would have to guess whether that means "not yet" or
+ * "skipped". Each bead lights only on an event that actually arrived, so the
+ * gap in that call's row is a fact about the run rather than a rendering
+ * choice.
+ */
+export type GateStepState = "pending" | "done" | "denied" | "failed";
+
+export interface GateStep {
+  key: GateStepKey;
+  /** 被拒 replaces 授权 when that is where the call stopped. */
+  label: string;
+  state: GateStepState;
+}
+
 export interface StepGroup {
   /** Stable across polls: derived from the ids in the events, never positional. */
   key: string;
@@ -49,6 +82,13 @@ export interface StepGroup {
    */
   subject: string | null;
   outcome: StepOutcome;
+  /**
+   * The authorization sequence, for a tool call; null for anything else.
+   *
+   * Null and not an empty array: a model turn has no gate to pass, and an
+   * empty array would render as "four stages, none reached".
+   */
+  gate: GateStep[] | null;
   /** Every event that folded into this step, in the order it arrived. */
   events: EventEnvelope[];
 }
@@ -93,6 +133,20 @@ interface Building {
   subject: string | null;
   outcome: StepOutcome;
   modelText: string | null;
+  /** Null until an event proves otherwise; see `GateStepState`. */
+  gate: GateFacts | null;
+}
+
+/** What the events said about the gate, before it is phrased for a reader. */
+interface GateFacts {
+  proposed: boolean;
+  /** allow / allow_with_modified_input from the policy engine. */
+  allowed: boolean;
+  /** A policy deny, or a human answering the question the policy raised. */
+  denied: boolean;
+  started: boolean;
+  completed: boolean;
+  failed: boolean;
 }
 
 /**
@@ -122,6 +176,7 @@ export function groupSteps(
       subject: null,
       outcome: "running",
       modelText: null,
+      gate: null,
     };
     groups.set(key, made);
     order.push(key);
@@ -141,6 +196,7 @@ export function groupSteps(
         group.subject = subjectOf(payload);
       }
       group.outcome = outcomeAfter(group.outcome, event, payload);
+      group.gate = gateAfter(group.gate, event, payload);
       continue;
     }
 
@@ -193,6 +249,7 @@ export function groupSteps(
         title: titleOf(group, titleFor),
         subject: group.subject,
         outcome: group.outcome,
+        gate: group.gate === null ? null : phraseGate(group.gate),
         events: group.events,
       };
     });
@@ -239,6 +296,86 @@ function outcomeAfter(
     default:
       return held;
   }
+}
+
+/**
+ * The gate facts, refined by each event of a tool call.
+ *
+ * Only `PermissionResolved` and `ToolApprovalDecided` can answer the middle
+ * bead, and they can disagree: the policy engine allows a call and the human it
+ * then asked says no. A denial from either is sticky for the same reason it is
+ * sticky in `outcomeAfter` -- the refusal that follows describes the
+ * consequence, and a reader needs the cause.
+ *
+ * `PermissionResolved` can also arrive more than once: the gateway loops while
+ * a policy hook rewrites the arguments, emitting one per round. Accumulating
+ * rather than overwriting is what makes that harmless -- a later allow cannot
+ * un-say an earlier deny, which is the shape of a rewrite carrying a call past
+ * its own refusal.
+ */
+function gateAfter(
+  held: GateFacts | null,
+  event: EventEnvelope,
+  payload: Record<string, unknown>,
+): GateFacts {
+  const facts: GateFacts = held ?? {
+    proposed: false,
+    allowed: false,
+    denied: false,
+    started: false,
+    completed: false,
+    failed: false,
+  };
+  switch (event.event_type) {
+    case "ToolProposed":
+      return { ...facts, proposed: true };
+    case "PermissionResolved": {
+      const effect = text(payload.effect);
+      if (effect === "deny") return { ...facts, denied: true };
+      return { ...facts, allowed: true };
+    }
+    case "ToolApprovalDecided":
+      // `deny` is the only decision that stops the call. A timeout is recorded
+      // here too, as a decision nobody made -- it leaves the bead pending,
+      // which is what "nobody answered" looks like.
+      return text(payload.decision) === "deny"
+        ? { ...facts, denied: true }
+        : { ...facts, allowed: true };
+    case "ToolStarted":
+      return { ...facts, started: true };
+    case "ToolCompleted":
+      return { ...facts, completed: true };
+    case "ToolFailed":
+      return { ...facts, failed: true };
+    default:
+      return facts;
+  }
+}
+
+/** The four beads, in order, as a reader reads them. */
+function phraseGate(facts: GateFacts): GateStep[] {
+  return [
+    {
+      key: "proposed",
+      label: "提议",
+      state: facts.proposed ? "done" : "pending",
+    },
+    {
+      key: "authorized",
+      label: facts.denied ? "被拒" : "授权",
+      state: facts.denied ? "denied" : facts.allowed ? "done" : "pending",
+    },
+    {
+      key: "started",
+      label: "开始",
+      state: facts.started ? "done" : "pending",
+    },
+    {
+      key: "finished",
+      label: "完成",
+      state: facts.failed ? "failed" : facts.completed ? "done" : "pending",
+    },
+  ];
 }
 
 function subjectOf(payload: Record<string, unknown>): string | null {

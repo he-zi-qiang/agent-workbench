@@ -45,7 +45,9 @@ pnpm --dir web test -- src/app/AppShell.test.tsx   # one file
 pnpm --dir web test:e2e       # Playwright, needs `playwright install chromium`
 ```
 
-Node **24.x** is required (`engines` pins 24.14.0). 26.x breaks ~58 tests via its built-in `localStorage`; 22.x red-herrings a few others. A working copy can live at `var/toolchain/node`; `.claude/run-web.sh` puts it on PATH.
+Node **24.x** is what `engines` pins (24.14.0), and CI uses it. A working copy can live at `var/toolchain/node`; `.claude/run-web.sh` puts it on PATH.
+
+**26.x needs one flag, not a different Node.** It defines `localStorage` as a global getter that evaluates to `undefined` unless `--localstorage-file` is passed, and jsdom installs its own only when that global is *absent* — so 62 tests fail on `localStorage.clear()`. Export `NODE_OPTIONS=--no-experimental-webstorage` and the suite is 458/458. 22.x red-herrings a few others.
 
 ### Running it locally
 
@@ -108,12 +110,12 @@ Single schema (currently `1.17`), cross-domain validation at startup: a capabili
 - `apps/` — `agent-api`, `agent-cli`, `agent-task-worker`, `agent-ingestion-worker`, plus three project-owned MCP servers (`word`, `web`, `sandbox`). Entry points are in `pyproject.toml` `[project.scripts]`.
 - `adapters/` — one directory per outer concern (`persistence`, `vector`, `langgraph`, `llama_index`, `mcp`, `models`, `embedding`, `reranking`, `telemetry`, `tools`, `memory` for the in-memory doubles).
 - `tests/contracts/` — one contract, every implementation: in-memory and PostgreSQL stores are parameterized through the *same* suite, so a divergence is a failure rather than a production surprise.
-- `web/src/features/` — `chat`, `code`, `work`, `knowledge`, `evaluation`, `system`.
+- `web/src/features/` — `chat`, `code`, `work`, `knowledge`, `evaluation`, `computer`, `system`. `computer` is the one page that reads no endpoint: the screen gate lives in the computer MCP server process and `apps/api` has no route to it, so the page states the rules (ADR-070) and says plainly that live session grants are not readable from here.
 - `evals/` — `chat`, `rag`, `triage` gold sets; runners in `scripts/run_*_eval.py`. A full RAG ablation takes 30–70 minutes; low CPU during it is MPS working, not a hang.
 
 ## Working conventions
 
-- **One ADR per boundary change.** `docs/adr/` (0012–0062) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
+- **One ADR per boundary change.** `docs/adr/` (0012–0070) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
 - **Capability claims only move up the ladder `Planned → Implemented → Tested → Demonstrated`, and never without linkable test or demo evidence.** `docs/status.md` is the per-PR evidence log, `docs/known-gaps.md` the honest list of what is not done. Do not describe a Planned item as working.
 - **Comments explain the decision, not the code.** This codebase's comments are unusually long and carry measured numbers, rejected alternatives, and the incident that motivated a line. Match that register when touching commented code; a bare restatement of the syntax is a regression here.
 - `ruff` per-file-ignores exist for files that deliberately contain Chinese prose (RUF001) and verbatim OOXML fixtures (E501). Prefer adding a scoped ignore with a reason over rewording user-facing Chinese.
