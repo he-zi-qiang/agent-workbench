@@ -148,3 +148,56 @@ describe("HtmlPreview", () => {
     expect(screen.queryByRole("button", { name: "下载" })).not.toBeInTheDocument();
   });
 });
+
+describe("HtmlPreview 显示比例", () => {
+  it("offers the two scales only while it is rendering", async () => {
+    renderPreview();
+    expect(await screen.findByRole("button", { name: "适应宽度" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "实际大小" })).toBeVisible();
+
+    // The source view is text: a scale control over a `<pre>` would be a
+    // control that does nothing, offered next to one that does.
+    fireEvent.click(screen.getByRole("button", { name: "源码" }));
+    expect(screen.queryByRole("button", { name: "适应宽度" })).toBeNull();
+  });
+
+  it("starts on 适应宽度, because a preview shows the page as laid out", async () => {
+    renderPreview();
+    const fit = await screen.findByRole("button", { name: "适应宽度" });
+
+    expect(fit).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "实际大小" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("switches to 实际大小 and marks the frame as unscaled", async () => {
+    const { container } = renderPreview();
+    await screen.findByRole("button", { name: "实际大小" });
+
+    fireEvent.click(screen.getByRole("button", { name: "实际大小" }));
+
+    expect(screen.getByRole("button", { name: "实际大小" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      container.querySelector(".aw-preview-frame")?.getAttribute("data-scale"),
+    ).toBe("actual");
+  });
+
+  it("renders unscaled when the box has no measured size", async () => {
+    // jsdom has no layout, so every rect is zero and `useBoxSize` stays null.
+    // The fallback matters beyond tests: it is also the first paint in a real
+    // browser, before the observer has fired. Dividing by a zero width would
+    // give a scale of zero, and a frame scaled to nothing is indistinguishable
+    // from a page that failed to load.
+    const { container } = renderPreview();
+    await screen.findByRole("button", { name: "适应宽度" });
+
+    const frame = container.querySelector(".aw-preview-frame");
+    expect(frame?.getAttribute("data-scale")).toBe("actual");
+    expect(container.querySelector("iframe")?.getAttribute("style")).toBeNull();
+  });
+});

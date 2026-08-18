@@ -43,3 +43,18 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: () => false,
   }),
 });
+
+// jsdom has no layout and no `ResizeObserver`, so a component that measures a
+// box to scale something into it would throw on mount. Defined as a no-op that
+// never fires: with no observation, `useBoxSize` keeps returning null, and the
+// preview falls back to rendering at 100% -- which is exactly the behaviour a
+// test without layout should see, and the one asserted in HtmlPreview.test.tsx.
+Object.defineProperty(window, "ResizeObserver", {
+  writable: true,
+  configurable: true,
+  value: class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+});
