@@ -22,6 +22,150 @@
 
 ---
 
+## 2026-08-18（未合并，第四批）：权限是关于一个窗口的
+
+给这个项目加 computer use。一份 ADR（0070），两条新缺口（F-18 / F-19）。
+**这是新增一种能力，不是补一个缺口**——此前这个仓库一行相关代码都没有。
+
+**门禁**：后端 `ruff format --check` + `ruff check` + `pyright` **0 errors**；
+`pytest`——**装了 `computer-use` extra 时 2545 passed / 742 skipped**，**CI 那条不装
+extra 的路径上 2538 passed / 743 skipped**，差的 7 条正是需要真 pyobjc 的那个文件
+（本批共新增 45 条）。前端未改动。
+`agent-config-check --config config/config.computer-local.toml` **status: ok**。
+
+**依赖与 CI**：pyobjc 放在新的 `computer-use` extra，macOS-only。已复核 CI 用的那条
+`uv sync --frozen --group dev --no-editable` **不装它**：装完之后 `Quartz` 不可导入，
+`test_computer_darwin.py` 整个文件 skip，其余 38 条照常跑。和 `embedding` extra 同样
+的处理，也意味着同一件事——**碰真屏幕的那 7 条测试 CI 不覆盖**，本机跑过。
+
+### 作用域比这个仓库里任何别的工具都重
+
+其它工具的作用域是这个进程自己的工作区、数据库、沙箱容器。这一个的作用域是**运行
+Worker 的那台机器本身**。所以它是独立 profile（`config.computer-local.toml`）、独立
+进程（`agent-computer-mcp`，回环 8768）、默认不装的 extra，三道都是刻意的。
+
+### 四道检查，第三道是支点
+
+```
+1. 这个应用被批准过吗？        会话级 allowlist
+2. 这个动作被这个 tier 允许吗？ domain/computer.tier_for
+3. 它现在还在最前面吗？        动作发生前重读，从不缓存   ← 支点
+4. 之后它还在最前面吗？        只有打字需要
+```
+
+「批准一次然后照做」的门禁授权的是**当时那个屏幕**；按键真的落下去时屏幕是**现在
+这个样子**，中间隔着一次 Command-Tab。测试
+`test_the_tier_is_re_read_against_whatever_is_frontmost_now` 钉的就是它：Notes 和
+Terminal 都在 allowlist 里，只看 allowlist 的门禁会放行那次对 Terminal 的键入。
+**这一道最容易省掉，省掉之后无法后补**——上层一旦假定「许可是一次性算出来的」，
+改成每次重算就是把每个调用点都改一遍。
+
+### tier 判定：两张表都要，长的先匹配
+
+先 bundle id（精确、不完整），再名字子串（完整、可伪造）。只认 bundle id 的话上周
+发布的浏览器落到 `full`——**这个项目没听说过的浏览器反而成了唯一会被输入密码的那些**。
+子串按长度从长到短匹配，否则 "Chrome Remote Desktop" 会被 "chrome" 判成浏览器。
+
+终端和 IDE 钉在 `click`（可点不可打字），理由不是终端危险，是**跑命令的正门已经存在**：
+`sandbox_run` 走一次性容器 + 策略网关 + 审批闸门 + 事件流。拒绝文案三段，第三段
+（不许绕过，不许用 AppleScript / System Events / shell）才是关键——没有它前两段读起来
+像建议，而它禁掉的每一条路这台机器上都真的有。
+
+### 打字之后再查一次，而且要报数字
+
+按键跟着键盘焦点走：窗口在字符串打到一半时抢到前台，剩下的字跟着它走，同一串字落进
+两个应用而只有一个被批准过。适配器报告**送达了多少个字符**，门禁用这个数字拒绝而不是
+一句 denied——只被告知 denied 的模型会重打整串，于是前半段到两次。
+
+### 可测的那部分与碰屏幕的那部分
+
+tier 表、截图预算、拒绝文案全在 `domain/computer.py`，纯函数，23 条测试，不需要屏幕。
+假实现能做一件真屏幕没法配合的事：**在两次调用之间改变前台应用**——焦点复查这条规则
+之所以测得了全靠它。碰屏幕的只有 `adapters/screen/darwin.py`，全仓库唯一一个带 pyright
+抑制的文件（六条逐条列出而不是切 basic：pyobjc 无类型信息，严格模式在这一个文件里报
+186 个 unknown，而严格模式**还能说的**——未定义的名字、不可达分支——仍然要红）。
+
+### 截图预算：两个上限，先咬的不是长边那个
+
+`px_per_token=28`、`max_edge_px=1568`、`max_tokens=1568`。只夹长边的实现会按自己的
+规矩每次都「正确」然后送出 3136 token 的图——1568×1568 在边长上限之内，是 token 上限
+的两倍。二分搜索而非解析解：取整到整像素让闭式解在边界上是错的。
+
+**实测**（本机真适配器，无需 TCC 的那部分）：显示器 1470×956 点、scale 2.0，预算算出
+**1375×894 = 正好 1568 token**；`frontmost()` 读到 `com.anthropic.claudefordesktop`，
+判为 `other` → tier `full`。
+
+需要 Screen Recording 授权的那一半没跑通，而它的失败路径正是设计要的：构造函数预检
+`CGPreflightScreenCaptureAccess()` 并抛出一句指名去哪授权的错误，而不是返回一张只有
+壁纸、每个窗口都不见了的图——那是 macOS 对没有授权的进程的实际行为。
+
+### 没做的：输出侧的门禁
+
+输入侧完整（没批准的应用点不了、打不了字），**输出侧不是**：一次 `screenshot` 抓整块
+屏幕，未批准应用的窗口在上面就在图里。两处独立欠缺写在 F-18——这是 ADR-070 自己的
+模型没有兑现的一半，所以记成「未实现」而不是「已知代价」。F-19 是批准的作用域是进程
+而不是 MCP 会话。
+
+---
+
+## 2026-08-18（已合并 `cac963f`，第三批）：跑着的工具欠读者一个活着的信号
+
+工具执行期的进度信道，从生产端一直接到脚本内部。两份 ADR（0068 / 0069），一条新
+缺口（F-17）。
+
+**这一节是补写的。** 它原本随 `cac963f` 一起写好，而那次 `git add` 之前
+`docs/status.md` 被同一 checkout 里另一条并行的工作覆盖了一次，于是提交里只有 ADR
+与缺口、没有这一节。代码、测试、两份 ADR 都完好。
+
+**门禁**（当时）：后端 `ruff format --check` + `ruff check` + `pyright`
+**0 errors**；`pytest` **2500 passed / 742 skipped**（本批 +33）。前端
+`eslint --max-warnings 0` + `tsc -b` + `vitest` **449 passed**（本批 +9）+ build ok。
+
+### 起点：与 Claude 桌面端的实测拆解逐条对照
+
+模型那半边对得上：`ModelDelta` / `ModelThinkingDelta` 都是 transient、都按
+`live_delta_coalesce_ms` 合并、合并键 `(kind, model_call_id)`、换 kind 换调用或遇到
+任何非 delta 消息都立刻冲刷——和桌面端 16 ms 合并器的三元组键与 flush-on-non-delta
+是同一套规则。**工具那半边整段是空的。**
+
+### 一条已经铺到底、只差发送端的管道（ADR-068）
+
+`ToolProgress` 此前已经定义好、判为 transient、被发布围栏白名单显式放行、被 SSE
+合并器透传、在前端有中文标签——**全仓库 `grep 'ToolProgress('` 只命中类型定义那一
+行**，因为 `ToolInvocation` 不带 sink，handler 手上没有任何能发事件的东西。
+
+补上两个来源：handler 报阶段，executor 每 5 秒报一次已耗时。后者对**每一个**工具都
+成立，`workspace_grep`、`web_search`、`export_artifact` 一行没改就都有了时钟；第一拍
+等满一个间隔，所以毫秒级返回的调用一条都不发。handler 拿到的是绑好 `tool_call_id`
+的单动词 reporter 而不是 `EventSink`——给 adapter 代码一个 sink 就是给它整套事件
+词表，它可以在调用它的那个 run 上发 `AnswerCommitted`。
+
+### 脚本自己能说话（ADR-069）
+
+三层各有一个坑，而且中间那个是静默的：
+
+| 层 | 真正挡住的东西 |
+| --- | --- |
+| 容器 | 脚本输出走文件，容器 stdout 只有信封（这是「印不出假结果」的全部依据）→ 预览改走容器 stderr，子进程够不着那条流 |
+| 容器 | Python 对文件是**块缓冲**的 → 没有 `-u`，每秒一行的脚本在退出前写零字节，尾随逻辑完全正确且完全读不到东西 |
+| 传输 | `json_response=True` 下，工具还在跑时抬起的通知**没有地方可去**——不报错不警告，客户端回调 **0 次** → 改成 SSE，同一测试下 **3 次** |
+
+我上一批把这条缺口记成「MCP 客户端只做请求/响应」，**这句话只对了一半**：SDK 的
+`Client.call_tool` 本来就带 `progress_callback`，改对客户端也不会有任何变化，除非
+同时改传输。
+
+**实测**（真 Docker 容器 + 全链路 HTTP）：5×`sleep(0.6)` 的脚本，六行预览在
+t+0.57 / 1.07 / 1.58 / 2.34 / 2.84 / 3.35 秒到达，调用 t+3.60 秒返回——最后一行比
+结果早 0.25 秒，信封完整，`out.txt` 照常落进工作区。
+
+### 前端与没做的那部分
+
+`message` 变成 `lines`：阶段与脚本输出共用一个 8 行窗口，交错按序（拆成两个字段就得
+决定哪个在上面，而任何一种决定对某些调用都是错的）。预览有损写在 F-17：单条 2 KB、
+整次 64 KB，到顶**静默停止**；信封不受影响。
+
+---
+
 ## 2026-08-18（未合并，第二批）：引用可以点开，工作集的文件说得出名字
 
 ADR-066 结尾列的四项，按顺序全部做完。一份新 ADR（0067），一条新缺口（F-16），
