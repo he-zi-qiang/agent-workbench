@@ -16,9 +16,11 @@
  * the blob one and `HtmlPreview` its own, all three keyed so that previewing a
  * file inline and then opening it in the panel transfers it once.
  *
- * A .docx lands on the download-only sentence on purpose: the conversion
- * endpoints are artifact-addressed and a workspace file has no artifact id a
- * client may hold (known-gaps F-11).
+ * A .docx lands on a sentence of its own rather than on the generic
+ * download-only one: the conversion endpoints are artifact-addressed and a
+ * workspace file has no artifact id a client may hold (known-gaps F-11), so
+ * the viewer exists and is merely out of reach here -- which is a different
+ * thing to tell a reader than "nothing can show this".
  */
 
 import { useQueryClient } from "@tanstack/react-query";
@@ -27,12 +29,13 @@ import {
   getCodeWorkspaceFileText,
   runCodeWorkspaceFile,
 } from "../../api/client";
-import type { PrincipalIdentity } from "../../api/types";
+import type { PrincipalIdentity, WorkspaceEntryView } from "../../api/types";
 import { BlobPreview } from "../../components/BlobPreview";
 import { HtmlPreview } from "../../components/HtmlPreview";
 import { PythonPreview } from "../../components/PythonPreview";
 import { TextPreview } from "../../components/TextPreview";
 import { isRunnablePython, previewKind } from "../../components/media";
+import { FileCard } from "./FileCard";
 
 /**
  * The file a reader has open.
@@ -49,12 +52,34 @@ export interface OpenedFile {
   sizeBytes: number;
 }
 
+/**
+ * How large a file a run just wrote may be and still paint itself unasked.
+ *
+ * Smaller than a turn card's 64 KB, and for a different reason: this one only
+ * ever admits images, and an image is decoded whole before anything appears.
+ * 4 MB is far above any chart a script draws (a matplotlib PNG is tens of KB)
+ * and far below the point where decoding it stalls the panel the reader is
+ * reading. Past it the card is still there, still one click, still says its
+ * size -- what it stops is spending a multi-megabyte decode nobody asked for.
+ */
+const AUTO_PREVIEW_WRITTEN_MAX_BYTES = 4 * 1024 * 1024;
+
 export function FilePreview({
+  files,
   identity,
+  onOpen,
   onWrote,
   viewing,
 }: {
+  /**
+   * The current listing, so a run's output can be shown as cards rather than
+   * as a line of names. Optional: only the Python viewer needs it, and a
+   * caller that never shows one has nothing to supply.
+   */
+  files?: readonly WorkspaceEntryView[];
   identity: PrincipalIdentity;
+  /** Routes a produced file into the panel. Same optionality as `files`. */
+  onOpen?: (name: string) => void;
   /**
    * Told when a run put files into the working set, so the page can re-read a
    * listing that is now out of date. Optional because only the Python viewer
@@ -109,6 +134,16 @@ export function FilePreview({
             }
           }
         }}
+        renderWritten={(names) =>
+          producedCards({
+            files,
+            identity,
+            names,
+            onOpen,
+            onWrote,
+            sessionId: viewing.sessionId,
+          })
+        }
         run={() =>
           runCodeWorkspaceFile(identity, viewing.sessionId, viewing.name)
         }
@@ -156,5 +191,106 @@ export function FilePreview({
   // Reached by `docx` and `none`. Not fetched at all: reading a zip as text
   // renders mojibake, and transferring bytes only to decide not to show them
   // spends the transfer for nothing.
-  return <p className="aw-code-value">这个类型只能下载。</p>;
+  //
+  // Two sentences, not one, and the split is the point. "这个类型只能下载。"
+  // covered a .docx and a .zip identically, and they are not the same
+  // situation: this console *has* a layout viewer for a Word document, it just
+  // cannot address a workspace file with it (known-gaps F-11), so a reader who
+  // walks away from a .docx believing no viewer exists has been told something
+  // false. A .zip has no viewer anywhere and saying so is the whole answer.
+  return (
+    <p className="aw-code-value">
+      {kind === "docx"
+        ? "Word 的版面预览目前只在任务产出里有——那两个转换端点按 artifact id 寻址，而工作区文件没有 id 可以交给浏览器。这里可以下载后用 Word 打开。"
+        : "这个控制台没有能显示它的查看器，下载后用别的程序打开。"}
+    </p>
+  );
+}
+
+/**
+ * The files one run wrote, as the cards a turn would have shown for them.
+ *
+ * Returns `null` -- and the caller falls back to naming them in a sentence --
+ * whenever the listing cannot account for every name. The run's response and
+ * the workspace listing arrive on two independent paths (`onRan` asks the page
+ * to re-read the listing; the response is already here), so for one render
+ * after a run the names exist and the entries do not. A card built then would
+ * be a button that opens nothing and a size that reads "已不在工作区" about a
+ * file written one second ago. All-or-nothing rather than per-file, because a
+ * list where two names are cards and one is not reads as the third having
+ * failed.
+ */
+function producedCards({
+  files,
+  identity,
+  names,
+  onOpen,
+  onWrote,
+  sessionId,
+}: {
+  files: readonly WorkspaceEntryView[] | undefined;
+  identity: PrincipalIdentity;
+  names: readonly string[];
+  onOpen: ((name: string) => void) | undefined;
+  onWrote: ((names: string[]) => void) | undefined;
+  sessionId: string;
+}): React.ReactNode {
+  if (files === undefined || onOpen === undefined) return null;
+  const resolved = names.map((name) => ({
+    name,
+    entry: files.find((held) => held.name === name),
+  }));
+  if (resolved.some((one) => one.entry === undefined)) return null;
+
+  return (
+    <ul aria-label="这次运行写出的文件" className="aw-code-outputs">
+      {resolved.map(({ entry, name }) => (
+        <FileCard
+          // The loop gate (see `FileCard`'s own note): a `.py` a script just
+          // wrote gets no 运行 button inside the output of the run that wrote
+          // it. It is still one click away in the panel.
+          abilities={{ canRun: false, canConvert: false }}
+          // `free` opens itself, which is the entire reader-facing win here:
+          // the chart a script drew is on screen without a click. `reader` and
+          // the rest stay folded, same ceiling logic as a turn's cards.
+          autoPreview={
+            entry !== undefined &&
+            previewKind(entry.media_type) === "image" &&
+            entry.size_bytes <= AUTO_PREVIEW_WRITTEN_MAX_BYTES
+          }
+          entry={entry}
+          file={{
+            name,
+            // What the call did, in the vocabulary the card already speaks.
+            // A reader-started run is still "运行时写出" -- the verb describes
+            // the write, and this write happened during a run.
+            action: "run",
+            // Neither claim is supportable here: this response says which
+            // names landed, not whether they existed before or whether a later
+            // turn will rewrite them.
+            overwrote: false,
+            supersededByTurn: null,
+            toolCallId: `run:${sessionId}`,
+          }}
+          key={name}
+          onOpen={onOpen}
+          opened={false}
+          renderPreview={() => (
+            <FilePreview
+              // Deliberately without `files`/`onOpen`: a nested viewer must not
+              // grow cards of its own. One level is a preview; two is a tree.
+              identity={identity}
+              {...(onWrote === undefined ? {} : { onWrote })}
+              viewing={{
+                sessionId,
+                name,
+                mediaType: entry?.media_type ?? "application/octet-stream",
+                sizeBytes: entry?.size_bytes ?? 0,
+              }}
+            />
+          )}
+        />
+      ))}
+    </ul>
+  );
 }

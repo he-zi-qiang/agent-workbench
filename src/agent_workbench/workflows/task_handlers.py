@@ -448,12 +448,22 @@ class ArtifactPersistingExecutor:
         ):
             return outcome
         try:
+            kind = _artifact_kind(request)
             reference = await self._artifacts.put(
                 tenant_id=request.principal.tenant_id,
                 owner_id=request.principal.principal_id,
-                kind=_artifact_kind(request),
+                kind=kind,
                 media_type="text/markdown",
                 content=outcome.output_text.encode("utf-8"),
+                # Named, because `content_disposition` falls back to the bare
+                # word "artifact" for a ref that carries no filename
+                # (`apps/api/downloads.py`) -- so this Markdown reached the
+                # reader's disk as a file called `artifact`, with no suffix and
+                # nothing saying what it was. The name is derived from the kind
+                # rather than from the objective: it is a filename, it has to
+                # survive a filesystem, and the objective is free text in any
+                # language a user types.
+                filename=f"{kind}.md",
             )
         except Exception as error:
             return AgentOutcome(

@@ -63,6 +63,7 @@ import type {
   WorkspaceEntryView,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
+import { effectiveMediaType } from "../../components/media";
 import { EmptyState, ErrorNotice, IconButton } from "../../components/ui";
 import { CodeSessionRail } from "./CodeSessionRail";
 import { CodeTurn } from "./CodeTurn";
@@ -226,7 +227,7 @@ export function CodePage() {
           );
         }),
         getCodeWorkspace(identity, id, signal).then((workspace) => {
-          setFiles(workspace.files);
+          setFiles(displayable(workspace.files));
           setLoadedFor(id);
         }),
       ]),
@@ -374,7 +375,7 @@ export function CodePage() {
     const target = sessionId;
     getCodeWorkspace(identity, target)
       .then((workspace) => {
-        setFiles(workspace.files);
+        setFiles(displayable(workspace.files));
         setLoadedFor(target);
       })
       .catch((cause: unknown) => {
@@ -468,7 +469,7 @@ export function CodePage() {
         // uploads in flight would race and the loser would be refused.
         for (const file of Array.from(chosen)) {
           const listing = await putCodeWorkspaceFile(identity, sessionId, file);
-          setFiles(listing.files);
+          setFiles(displayable(listing.files));
           setLoadedFor(sessionId);
         }
       } catch (cause: unknown) {
@@ -781,6 +782,28 @@ export function CodePage() {
       ) : null}
     </div>
   );
+}
+
+/**
+ * The listing as this page will show it, with unknowable types read off names.
+ *
+ * Applied at the one place a listing enters the page rather than at each of the
+ * four that read one (cards, the panel, the directory fold, the auto-preview
+ * choice). Those four must agree about what a file *is* -- a `notes.md` that
+ * previews as text in the panel and offers only 下载 on its card is the same
+ * class of split this console spent ADR-066 removing -- and agreement is
+ * cheapest when there is one answer rather than four call sites remembering to
+ * ask the same question.
+ *
+ * Display only. Downloads read the server's own headers, and every
+ * authorization is decided server-side against the stored type; nothing here
+ * reaches either.
+ */
+function displayable(files: WorkspaceEntryView[]): WorkspaceEntryView[] {
+  return files.map((file) => {
+    const media_type = effectiveMediaType(file.media_type, file.name);
+    return media_type === file.media_type ? file : { ...file, media_type };
+  });
 }
 
 /**

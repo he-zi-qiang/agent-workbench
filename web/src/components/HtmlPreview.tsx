@@ -174,6 +174,24 @@ export function HtmlPreview({
       </div>
       {rendering ? (
         <>
+          {/* Above the frame, not below it. What is promised here is exactly
+              what is guaranteed -- the earlier wording also claimed the page
+              could not reach the internet, which is best-effort rather than
+              true (known-gaps F-12) -- and a reader who opens an unknown page
+              on the strength of an overstated promise is the person that gap
+              costs.
+
+              The position is the second half of the same argument, and it is
+              an ADR-066 change rather than a cosmetic one. An HTML artifact is
+              `free`: showing it *is* checking it, so this frame paints itself
+              without being asked, and a caution printed underneath arrives
+              after the thing it is a caution about has already run. Whatever
+              this note is worth, it is worth it before the load, and 24
+              characters of text costs nothing to read on the way past. */}
+          <p className="aw-page-note">
+            页面在隔离的沙箱里运行：拿不到你的登录态，也读不到平台数据。
+            它仍可能自行访问外部网络，来源不明的页面请谨慎打开。
+          </p>
           <div className="aw-preview-frame aw-html-frame">
             <iframe
               referrerPolicy="no-referrer"
@@ -182,15 +200,6 @@ export function HtmlPreview({
               title={`${name} 预览`}
             />
           </div>
-          {/* What is promised here is exactly what is guaranteed. The earlier
-              wording also claimed the page could not reach the internet,
-              which is best-effort rather than true (known-gaps F-12) -- and a
-              reader who opens an unknown page on the strength of an
-              overstated promise is the person that gap costs. */}
-          <p className="aw-page-note">
-            页面在隔离的沙箱里运行：拿不到你的登录态，也读不到平台数据。
-            它仍可能自行访问外部网络，来源不明的页面请谨慎打开。
-          </p>
         </>
       ) : (
         <>

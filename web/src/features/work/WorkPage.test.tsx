@@ -559,6 +559,31 @@ describe("WorkPage task submission", () => {
     expect(downloads[0]).toHaveTextContent("下载");
   });
 
+  it("says a run failed even when it managed to produce a file", async () => {
+    // A Task can fail *after* writing something -- `render_document` succeeded
+    // and the export was refused is the plain case. The artifact branch used to
+    // render the file, the download control, and nothing about the outcome: a
+    // finished-looking document under a heading naming it 任务产出, with the
+    // failure visible only as a pill several hundred pixels up the page.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "failed",
+      status_detail: "tool_denied",
+      agent_invocation_count: 0,
+      objective_preview: "写一份报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(reportTimeline());
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    // Both facts, in this order: why it stopped is the headline, what it wrote
+    // is still there underneath.
+    expect(within(output).getByText(/^任务/)).toBeInTheDocument();
+    expect(within(output).getByText("report.md")).toBeInTheDocument();
+  });
+
   it("opens a Word document on its layout, without being asked", async () => {
     // What the Task was asked for is the document, so the document is what
     // opens. The text view used to be the default and the conversion sat

@@ -4680,6 +4680,27 @@ p.aw-code-step-thought {
   font-size: 12px;
 }
 
+/* 「这不是你的错，是容器没有终端」。放在 traceback 上方、用提示色而不是错误色：
+ * 它要说的恰恰是「下面那段红字不代表代码坏了」，自己再红一遍就把这句话抵消了。 */
+.aw-code-run-blocked {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--aw-warning) 25%, var(--aw-border));
+  border-radius: 8px;
+  background: var(--aw-warning-soft);
+  color: var(--aw-text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.aw-code-run-blocked code {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--aw-panel);
+  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
 /* stderr 只描边不变色：它常常装着 traceback，也常常只是一行 warning，把整块
  * 涂红会让后者读起来像出事了。 */
 .aw-code-file-body.is-stderr {
@@ -5027,4 +5048,20 @@ p.aw-code-step-thought {
   margin: 0;
   color: var(--aw-text-soft);
   font-size: 13px;
+}
+
+/* The copy control under an answer's citations.
+   Ghost-weight and small: it is a convenience beside the evidence, not a
+   second action competing with the composer. The status word sits beside it
+   rather than replacing the label, so the button does not change width and
+   shift the citations under the reader's cursor. */
+.aw-chat-copy {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.aw-chat-copy small {
+  color: var(--aw-text-muted);
 }

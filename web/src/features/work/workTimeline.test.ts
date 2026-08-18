@@ -389,6 +389,154 @@ describe("work timeline contract selectors", () => {
     expect(findDeliverable([success])).toBeNull();
   });
 
+  it("does not headline a document the Task merely fetched", () => {
+    // A research Task pulls a PDF off the web through the web MCP server. It is
+    // a real artifact and a real DOCUMENT_MEDIA_TYPE, and it arrives late -- so
+    // under "last document wins" it took the headline, under the name the MCP
+    // result mapping gives an unnamed payload. It is somebody else's document.
+    const report = {
+      artifact_id: "artifact_report",
+      kind: "report",
+      media_type: "text/markdown",
+      size_bytes: 128,
+      sha256: "a".repeat(64),
+      filename: "report.md",
+    };
+    const exportProposed = envelope("event_proposed", "ToolProposed", {
+      tool_call_id: "tool_export",
+      tool_name: "export_artifact",
+    });
+    const exportCompleted = envelope(
+      "event_export",
+      "ToolCompleted",
+      { tool_call_id: "tool_export", artifact: report },
+      "export",
+    );
+    const success = envelope("event_success", "TaskSucceeded");
+    const fetched = envelope(
+      "event_fetch",
+      "ToolCompleted",
+      {
+        tool_call_id: "tool_web",
+        artifact: {
+          artifact_id: "artifact_fetched",
+          kind: "tool_result",
+          media_type: "application/pdf",
+          size_bytes: 900_000,
+          sha256: "d".repeat(64),
+          filename: "mcp-result.bin",
+        },
+      },
+      "research_external",
+    );
+
+    expect(
+      findDeliverable([exportProposed, exportCompleted, success, fetched]),
+    ).toEqual(report);
+
+    // The same bytes produced by a stage that *makes* things still headline.
+    // The rule is about provenance, never about the media type.
+    const rendered = { ...fetched, graph_node_id: "work", event_id: "event_work" };
+    expect(
+      findDeliverable([exportProposed, exportCompleted, success, rendered])
+        ?.artifact_id,
+    ).toBe("artifact_fetched");
+  });
+
+  it("does not headline a document nothing on this page can show", () => {
+    // .xlsx is in DOCUMENT_MEDIA_TYPES because a deployment may one day render
+    // it. None does today, so promoting it spent the most prominent place on
+    // the page to say 这个类型只能下载查看 -- while the report that *can* be
+    // read sat behind it.
+    const report = {
+      artifact_id: "artifact_report",
+      kind: "report",
+      media_type: "text/markdown",
+      size_bytes: 128,
+      sha256: "a".repeat(64),
+      filename: "report.md",
+    };
+    const sheet = envelope(
+      "event_sheet",
+      "ToolCompleted",
+      {
+        tool_call_id: "tool_sheet",
+        artifact: {
+          artifact_id: "artifact_sheet",
+          kind: "document",
+          media_type:
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          size_bytes: 4096,
+          sha256: "e".repeat(64),
+          filename: "table.xlsx",
+        },
+      },
+      "work",
+    );
+    const exportProposed = envelope("event_proposed", "ToolProposed", {
+      tool_call_id: "tool_export",
+      tool_name: "export_artifact",
+    });
+    const exportCompleted = envelope(
+      "event_export",
+      "ToolCompleted",
+      { tool_call_id: "tool_export", artifact: report },
+      "export",
+    );
+    const success = envelope("event_success", "TaskSucceeded");
+
+    expect(
+      findDeliverable([exportProposed, exportCompleted, success, sheet]),
+    ).toEqual(report);
+  });
+
+  it("lets a produced page headline, because running it is the only way to accept it", () => {
+    const page = envelope(
+      "event_page",
+      "ToolCompleted",
+      {
+        tool_call_id: "tool_page",
+        artifact: {
+          artifact_id: "artifact_page",
+          kind: "document",
+          media_type: "text/html",
+          size_bytes: 9000,
+          sha256: "f".repeat(64),
+          filename: "dashboard.html",
+        },
+      },
+      "work",
+    );
+
+    expect(findDeliverable([page])?.artifact_id).toBe("artifact_page");
+  });
+
+  it("counts a model call's own output as something the Task produced", () => {
+    // `payload.output_ref` is the other door into the artifact store, and the
+    // rail only ever watched `payload.artifact` -- so a draft a synthesize or
+    // work node wrote was reachable only three disclosures deep in the step
+    // detail, while the rail claimed to list what the Task produced.
+    const draft = envelope(
+      "event_model",
+      "ModelCompleted",
+      {
+        output_ref: {
+          artifact_id: "artifact_draft",
+          kind: "draft",
+          media_type: "text/markdown",
+          size_bytes: 2048,
+          sha256: "9".repeat(64),
+          filename: "draft.md",
+        },
+      },
+      "synthesize",
+    );
+
+    expect(collectArtifacts([draft]).map((one) => one.artifact.artifact_id)).toEqual([
+      "artifact_draft",
+    ]);
+  });
+
   it("reads the draft from whichever graph's drafting node wrote it", () => {
     const v1 = envelope(
       "event_v1",

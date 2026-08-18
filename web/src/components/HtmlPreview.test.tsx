@@ -89,6 +89,20 @@ describe("withPreviewCsp", () => {
 });
 
 describe("HtmlPreview", () => {
+  it("puts the caution above the frame, not under it", async () => {
+    renderPreview();
+
+    const frame = await screen.findByTitle("report.html 预览");
+    const note = screen.getByText(/来源不明的页面请谨慎打开/);
+    // An HTML artifact paints itself without being asked -- showing it *is*
+    // checking it -- so a caution rendered underneath arrives after the thing
+    // it cautions about has already loaded. DOCUMENT_POSITION_FOLLOWING means
+    // the frame comes after the note.
+    expect(
+      note.compareDocumentPosition(frame) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("runs the page in a frame whose sandbox has no allow-same-origin", async () => {
     renderPreview();
     const frame = await screen.findByTitle("report.html 预览");

@@ -24,6 +24,7 @@ from typing import Final
 
 from pydantic import JsonValue
 
+from agent_workbench.adapters.tools.media_guess import media_type_for
 from agent_workbench.application.workspace import (
     WorkspaceEntryNotFoundError,
     WorkspaceSession,
@@ -258,7 +259,9 @@ class WorkspaceWriteTool:
         arguments = invocation.call.arguments
         name = str(arguments.get("name", ""))
         content = str(arguments.get("content", ""))
-        media_type = str(arguments.get("media_type") or _media_type_for(name))
+        media_type = str(
+            arguments.get("media_type") or media_type_for(name, content.encode("utf-8"))
+        )
         session = _session(self.scope)
         # The name is checked as well as the declared type, and either one alone
         # would miss the case that actually happened: a model asked for a Word
@@ -437,12 +440,38 @@ class WorkspaceEditTool:
                 ),
             )
 
+        # The type the file already had, not a fresh guess from its name. An
+        # edit changes bytes; it does not change what kind of file this is, and
+        # re-deriving the type here quietly overruled whatever the write that
+        # created it declared. Concretely: `workspace_write` naming `page.htm`
+        # and declaring `text/html` produced an HTML file, and one `workspace_edit`
+        # later -- a two-character correction -- the same name was `text/plain`,
+        # because `.htm` was in no suffix table. The console stopped rendering
+        # it, and nothing in the session said why.
+        #
+        # Read off the listing rather than through `locate`, which would mean
+        # widening the `WorkspaceLike` protocol this adapter is typed against --
+        # a port change, for a label. `list` is already on it.
+        #
+        # Falls back to the guess when the name is not in the listing, which
+        # after a successful `read` of the same name means the manifest moved
+        # underneath this call. Degrading to the old behaviour there beats
+        # adding a refusal path for something that costs a label.
+        declared = next(
+            (
+                held.media_type
+                for held in await session.workspace.list(session.version)
+                if held.name == name
+            ),
+            media_type_for(name, edited.encode("utf-8")),
+        )
+
         try:
             session.version = await session.workspace.write(
                 session.version,
                 name,
                 edited.encode("utf-8"),
-                media_type=_media_type_for(name),
+                media_type=declared,
             )
         except (ValueError, WorkspaceOverflowError) as error:
             return ToolResult.failed(
@@ -707,28 +736,6 @@ _UNWRITABLE_SUFFIXES = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".zip": "application/zip",
 }
-
-
-#: Enough to keep a listing readable. Guessed from the name because the model
-#: usually omits it, and a wrong guess here costs a label, not the bytes.
-_SUFFIX_MEDIA_TYPES = {
-    ".md": "text/markdown",
-    ".txt": "text/plain",
-    ".json": "application/json",
-    ".csv": "text/csv",
-    ".py": "text/x-python",
-    ".html": "text/html",
-    # Text on the wire, image in the console: an .svg typed text/plain never
-    # reached the `<img>` viewer, so a drawn diagram opened as its own markup.
-    ".svg": "image/svg+xml",
-}
-
-
-def _media_type_for(name: str) -> str:
-    for suffix, media_type in _SUFFIX_MEDIA_TYPES.items():
-        if name.endswith(suffix):
-            return media_type
-    return "text/plain"
 
 
 def _unwritable_media_type(media_type: str) -> str | None:
