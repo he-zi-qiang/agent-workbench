@@ -27,6 +27,9 @@ from starlette.types import ASGIApp
 
 from agent_workbench.adapters.telemetry import EventLoopLagWatchdog
 from agent_workbench.application.chat import ChatExecutionError
+from agent_workbench.application.citation_source import (
+    CitationSourceUnavailableError,
+)
 from agent_workbench.application.code_approvals import (
     ApprovalNotPendingError,
     StandingApprovalRefusedError,
@@ -114,6 +117,11 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     # wrong, this process simply cannot, and the body says what to turn on.
     # 403 for the scope, because that one *is* about the caller.
     CodeRunUnavailableError: 503,
+    # Reading the passage behind a citation (ADR-067), for the same reason as
+    # the line above: the citation is real and the caller may read it, this
+    # process simply has no vector index to read it from. A 404 would send them
+    # looking for a mistake in their own data.
+    CitationSourceUnavailableError: 503,
     CodeRunNotPermittedError: 403,
     CodeRunRefusedError: 409,
     # A request that named something this endpoint has nothing to do

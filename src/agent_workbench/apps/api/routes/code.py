@@ -531,6 +531,26 @@ class RunFileResponse(BaseModel):
     written: tuple[str, ...]
     workspace_version: Identifier | None
     omitted_inputs: tuple[str, ...]
+    #: The working set as it stands after this run, the same shape
+    #: ``GET /workspace`` answers with.
+    #:
+    #: Added because ``written`` alone is a list of names, and a console that
+    #: wants to *show* what a run produced needs the type and the size of each
+    #: one -- which it could only get by re-reading the listing, on a request
+    #: that races the response it is reacting to. For one render after every
+    #: run the names existed and the entries did not, so the produced files
+    #: degraded to a line of text (known-gaps F-15).
+    #:
+    #: The whole listing rather than entries for ``written``, and the reason is
+    #: the one ``PUT /workspace/{name}`` already gives one screen up: the
+    #: caller's next question is always "what is in there now", a run has just
+    #: changed it, and a second round trip to ask is a round trip this route
+    #: already has the answer to. It also covers the case a per-file list
+    #: cannot -- a script that *deleted* nothing but rewrote a file it did not
+    #: report, which shows up as a size change here and nowhere else.
+    #:
+    #: Additive: a client that ignores it behaves exactly as before.
+    files: tuple[WorkspaceEntryView, ...] = ()
 
 
 #: Run a file the way a person means it: `python thing.py`, in a directory that
@@ -674,6 +694,19 @@ async def run_workspace_file(
         # moved per write, so this is the same value and one fewer round trip.
         workspace_version=session.version,
         omitted_inputs=omitted,
+        # Re-listed, unlike the version above, because the *contents* did
+        # change: this is the point of the field. One `list` against the
+        # version this run advanced to, which is the same call the listing
+        # route makes and is what makes the produced files drawable on the
+        # first render rather than the second.
+        files=tuple(
+            WorkspaceEntryView(
+                name=entry.name,
+                size_bytes=entry.size_bytes,
+                media_type=entry.media_type,
+            )
+            for entry in await session.workspace.list(session.version)
+        ),
     )
 
 

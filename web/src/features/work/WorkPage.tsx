@@ -86,6 +86,7 @@ import { workIdentityQueryKey } from "./workQueryKeys";
 import {
   artifactLabel,
   collectArtifacts,
+  collectWorkspaceWrites,
   eventTitle,
   findDeliverable,
   findDraftText,
@@ -97,6 +98,7 @@ import {
   locateTimelineGaps,
   parseTaskInputArtifact,
   type TaskArtifact,
+  type WorkspaceWriteGroup,
   type TimelineGap,
 } from "./workTimeline";
 
@@ -324,6 +326,14 @@ export function WorkPage() {
   const timelineGaps = useMemo(
     () => locateTimelineGaps(timeline.events, timeline.skippedSequences),
     [timeline.events, timeline.skippedSequences],
+  );
+  // Same events, a different question, so a second memo rather than one pass
+  // returning both: the rail's two groups have nothing in common except the
+  // sidebar they sit in, and merging them would put "is this openable" back
+  // inside a single list.
+  const workspaceWrites = useMemo(
+    () => collectWorkspaceWrites(timeline.events),
+    [timeline.events],
   );
   const artifacts = useMemo(
     () => collectArtifacts(timeline.events),
@@ -1212,6 +1222,7 @@ export function WorkPage() {
                     setOpened({ taskId: selectedTaskId, artifact });
                   }
                 }}
+                workspaceWrites={workspaceWrites}
               />
             </div>
             </div>
@@ -1356,9 +1367,12 @@ function formatBytes(bytes: number): string {
 function ArtifactRail({
   artifacts,
   onOpen,
+  workspaceWrites,
 }: {
   artifacts: TaskArtifact[];
   onOpen: (artifact: ArtifactRef) => void;
+  /** Files in the Task's working set: named here, openable nowhere (F-14). */
+  workspaceWrites: WorkspaceWriteGroup[];
 }) {
   return (
     <aside className="aw-artifacts" aria-label="附件">
@@ -1368,7 +1382,14 @@ function ArtifactRail({
         {artifacts.length === 0 ? null : <em>{artifacts.length}</em>}
       </div>
       {artifacts.length === 0 ? (
-        <p className="aw-artifacts-empty">这个任务还没有产生文件。</p>
+        // Narrowed, because it is no longer the only thing this rail knows
+        // about. "这个任务还没有产生文件" would be false on a Task whose stages
+        // wrote three of them into the working set, listed directly below.
+        <p className="aw-artifacts-empty">
+          {workspaceWrites.length === 0
+            ? "这个任务还没有产生文件。"
+            : "这个任务没有产生可以下载的产物。"}
+        </p>
       ) : (
         <ul>
           {artifacts.map(({ artifact, graphNodeId, producedAt }) => (
@@ -1387,6 +1408,44 @@ function ArtifactRail({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* The second group, and it is deliberately not buttons. These names come
+          from `ToolCompleted.workspace_writes`, which ADR-063 publishes
+          unconditionally -- outside the `record_step_inputs` gate, so they
+          survive a default deployment -- and which this page read none of until
+          now: a Task that rendered three files into its working set showed the
+          reader nothing, not even a count.
+
+          They cannot be opened from here and the heading says so rather than
+          leaving the reader to discover it by clicking. A working-set file is
+          addressed by name inside a session, and the only routes that read one
+          are mounted under `/v1/code/sessions` behind a `mode="code"` check;
+          giving Task its own would be a second authorization surface and a
+          second addressing scheme, which is a boundary change with its own ADR
+          (known-gaps F-14). Naming them is what can be done without one, and it
+          is strictly more than the silence it replaces. */}
+      {workspaceWrites.length === 0 ? null : (
+        <div className="aw-artifacts-workspace">
+          <h3>任务工作集里的文件</h3>
+          <p className="aw-artifacts-note">
+            这些文件在任务自己的工作集里，不是可下载的产物，控制台打不开它们。
+          </p>
+          {workspaceWrites.map((group) => (
+            <div key={group.graphNodeId ?? "任务"}>
+              <h4>
+                {group.graphNodeId === null
+                  ? "任务"
+                  : workflowStageTitle(group.graphNodeId)}
+              </h4>
+              <ul className="aw-artifacts-names">
+                {group.names.map((name) => (
+                  <li key={name}>{name}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
       )}
     </aside>
   );
@@ -1704,7 +1763,24 @@ function TaskResult({
       )}
       <header>
         <span className="aw-answer-mark" aria-hidden="true">A</span>
-        <strong>{artifact.filename ?? artifact.kind}</strong>
+        {/* What it *is*, then what it is called. The header used to lead with
+            the raw filename, so one file wore two names in one screen: the rail
+            called it 报告文件 (`artifactLabel`, from the artifact kind) and the
+            heading four inches away called it `report.md`. A reader scanning
+            back for "the report" had no reason to connect them.
+
+            The filename does not disappear -- it is what downloads, and a
+            reader who wants to name the file to somebody else needs it -- but
+            it is the subtitle, because the kind is what answers "which of the
+            things this Task made is this". Where the kind is unknown,
+            `artifactLabel` already falls back to the filename, and the subtitle
+            is dropped rather than printed twice. */}
+        <strong>{artifactLabel(artifact)}</strong>
+        {artifact.filename === null ||
+        artifact.filename === undefined ||
+        artifact.filename === artifactLabel(artifact) ? null : (
+          <span className="aw-answer-filename">{artifact.filename}</span>
+        )}
         {/* Not a bare `small`: that one is the header's warning slot, coloured
             for "没有生成文件". A file's size is neutral information. */}
         <span className="aw-answer-size">{formatBytes(artifact.size_bytes)}</span>

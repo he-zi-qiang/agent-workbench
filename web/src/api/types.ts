@@ -57,6 +57,23 @@ export interface AskResponse {
 
 export type ChatAnswerMode = "direct" | "rag";
 
+/**
+ * The stored text behind one citation (ADR-067).
+ *
+ * Served by a route that re-decides authorization from scratch, so a citation
+ * the console is still displaying can correctly answer 404: the grant may have
+ * been revoked, or the document re-ingested, since the answer was published.
+ */
+export interface CitedPassageView {
+  chunk_id: Identifier;
+  document_id: Identifier;
+  document_version: Identifier;
+  text: string;
+  ordinal: number;
+  /** Absent for every format without pages, and never defaulted to 1. */
+  page: number | null;
+}
+
 export interface MessageView {
   role: string;
   text: string;
@@ -119,6 +136,18 @@ export interface RunFileResponse {
   written: string[];
   workspace_version: Identifier | null;
   omitted_inputs: string[];
+  /**
+   * The working set as it stands after this run.
+   *
+   * Carried so a produced file can be *shown* on the first render: `written`
+   * is names, and a card needs the type and the size too. Re-reading the
+   * listing to get them races the very response this is reacting to, which for
+   * one render left every produced file as a line of text (known-gaps F-15).
+   *
+   * Optional on the wire: a server older than this field simply omits it, and
+   * the caller falls back to the listing it already holds.
+   */
+  files?: WorkspaceEntryView[];
 }
 
 export type TaskStatus =

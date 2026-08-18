@@ -541,6 +541,12 @@ describe("WorkPage task submission", () => {
     renderWorkPage("/work/task_run");
 
     const output = await screen.findByRole("region", { name: "任务产出" });
+    // The kind leads, the filename follows it. One file used to wear two names
+    // in one screen -- the rail called it 报告文件 and this heading four inches
+    // away called it `report.md` -- and a reader scanning back for "the report"
+    // had no reason to connect them. Both are still here; which one is the
+    // heading is the part that changed.
+    expect(within(output).getByRole("strong").textContent).toBe("报告文件");
     expect(within(output).getByText("report.md")).toBeInTheDocument();
     // Under the steps, in the reading column -- not in the file rail.
     expect(output.closest(".aw-work-run")).not.toBeNull();
@@ -557,6 +563,59 @@ describe("WorkPage task submission", () => {
     const downloads = screen.getAllByRole("button", { name: /^下载/ });
     expect(downloads).toHaveLength(1);
     expect(downloads[0]).toHaveTextContent("下载");
+  });
+
+  it("names the working-set files, and does not offer them as buttons", async () => {
+    // The silence this replaces: `ToolCompleted.workspace_writes` has carried
+    // these names unconditionally since ADR-063, and the Work page read none of
+    // it -- a Task that rendered files into its working set showed the reader
+    // nothing at all. They still cannot be opened from here (F-14), so the rail
+    // says so instead of growing a control that would 404.
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    const timeline = reportTimeline();
+    vi.mocked(getTaskTimeline).mockResolvedValue({
+      ...timeline,
+      events: [
+        ...timeline.events,
+        {
+          schema_version: 1,
+          stream_id: "stream_run",
+          run_id: "run_run",
+          durability: "durable" as const,
+          task_id: "task_run",
+          parent_event_id: null,
+          graph_node_id: "work",
+          event_id: "event_ws",
+          event_type: "ToolCompleted",
+          timestamp: "2026-08-02T12:00:30Z",
+          payload: {
+            kind: "ToolCompleted",
+            tool_call_id: "tc_ws",
+            workspace_writes: ["draft.md", "chart.png"],
+          },
+          sequence: 9,
+        },
+      ],
+    });
+    renderWorkPage("/work/task_run");
+
+    const rail = await screen.findByRole("complementary", { name: "附件" });
+    expect(within(rail).getByText("draft.md")).toBeInTheDocument();
+    expect(within(rail).getByText("chart.png")).toBeInTheDocument();
+    // Names, not controls. An affordance here would invite exactly the click
+    // the heading above it has just said is unavailable.
+    expect(
+      within(rail).queryByRole("button", { name: /draft\.md/ }),
+    ).not.toBeInTheDocument();
+    expect(within(rail).getByText(/控制台打不开它们/)).toBeInTheDocument();
   });
 
   it("says a run failed even when it managed to produce a file", async () => {

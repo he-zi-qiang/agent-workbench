@@ -560,6 +560,40 @@ class ChatTurnStore(ConversationStore, Protocol):
         """
         ...
 
+    async def turn(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        turn_id: str,
+    ) -> StoredChatTurn:
+        """One stored turn, by id, for the principal whose session it is.
+
+        The first read on this protocol. Every other method here writes, or
+        scans for a coordinator; a turn's own record could be reached only by
+        the coroutine that was executing it, which is why the console could
+        show which chunks an answer cited and nothing else about them.
+
+        Exists for one caller: the route that serves the passage behind a
+        citation (ADR-067). That route needs the turn to answer a question it
+        must not take from the requester -- *did this answer actually cite this
+        chunk* -- and the answer has to come from the ledger rather than from
+        the request, or the endpoint would read any chunk id a caller cared to
+        name.
+
+        Refuses like every other method: a wrong tenant, a wrong principal, a
+        turn in another session and a turn that does not exist all raise
+        ``NotFoundError``, because any difference between them would confirm
+        that somebody else's turn exists.
+
+        Returns the turn in whatever state it is in. A caller wanting only
+        published citations must check ``status`` itself -- a running turn has
+        no result, and a withheld one has a scrubbed one, and neither is this
+        method's business to interpret.
+        """
+        ...
+
     async def prepare_release(
         self,
         *,

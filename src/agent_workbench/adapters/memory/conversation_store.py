@@ -333,6 +333,29 @@ class InMemoryConversationStore:
                 newly_claimed=True,
             )
 
+    async def turn(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        principal_id: str,
+        turn_id: str,
+    ) -> StoredChatTurn:
+        """One stored turn, by id, for the principal whose session it is."""
+
+        async with self._lock:
+            # Session ownership first, then the turn. Both refusals are the
+            # same `NotFoundError`, so the order is not observable -- it is the
+            # order every other method here uses, and keeping it means the two
+            # cannot drift into disagreeing about what a wrong principal sees.
+            self._require_session(
+                session_id=session_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                mode="chat",
+            )
+            return self._require_turn(turn_id=turn_id, session_id=session_id)
+
     async def prepare_release(
         self,
         *,
