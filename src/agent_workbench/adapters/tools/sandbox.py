@@ -26,6 +26,7 @@ from typing import Any, cast
 from pydantic import JsonValue
 
 from agent_workbench.adapters.mcp.client import MCPClientPort
+from agent_workbench.adapters.tools.media_guess import media_type_for
 from agent_workbench.application.workspace import (
     WorkspaceEntryNotFoundError,
     WorkspaceSession,
@@ -193,7 +194,10 @@ class WorkspaceSandbox:
             cancellation.raise_if_cancelled()
             try:
                 session.version = await session.workspace.write(
-                    session.version, name, content, media_type=_media_type_for(name)
+                    session.version,
+                    name,
+                    content,
+                    media_type=media_type_for(name, content),
                 )
             except (ValueError, WorkspaceOverflowError) as error:
                 # Partial by construction: the versions already committed are
@@ -354,31 +358,6 @@ def _remote_message(content: object) -> str:
         str(getattr(block, "text", "")) for block in cast(list[Any], content)
     ]  # fmt: skip
     return " ".join(part for part in parts if part)[:500]
-
-
-#: Enough to keep a listing readable, guessed from the name. A wrong guess here
-#: costs a label, not the bytes.
-_SUFFIX_MEDIA_TYPES = {
-    ".md": "text/markdown",
-    ".txt": "text/plain",
-    ".json": "application/json",
-    ".csv": "text/csv",
-    ".py": "text/x-python",
-    ".html": "text/html",
-    ".png": "image/png",
-    ".pdf": "application/pdf",
-    # Typed octet-stream an .svg was download-only in the console; typed as
-    # the image it is, the `<img>` viewer shows it (rasterised -- scripts in
-    # it never run there).
-    ".svg": "image/svg+xml",
-}
-
-
-def _media_type_for(name: str) -> str:
-    for suffix, media_type in _SUFFIX_MEDIA_TYPES.items():
-        if name.endswith(suffix):
-            return media_type
-    return "application/octet-stream"
 
 
 def _failed(invocation: ToolInvocation, code: str, message: str) -> ToolResult:

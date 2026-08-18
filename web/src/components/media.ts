@@ -52,6 +52,72 @@ export function isPreviewable(mediaType: string): boolean {
 }
 
 /**
+ * What a name says about its bytes, when the stored type says nothing.
+ *
+ * Only ever consulted for `application/octet-stream` and the empty string --
+ * the two values that mean "nobody knew", not the ones that mean something.
+ * A stored `text/plain` stays `text/plain` even for a name ending `.png`,
+ * because a writer that said `text/plain` was making a claim and this table is
+ * not entitled to overrule it.
+ *
+ * The case this exists for: a person attaches `notes.md` to a coding session.
+ * `PUT /v1/code/sessions/{id}/workspace/{name}` types an upload from the
+ * request's own `content-type` and defaults to `application/octet-stream`
+ * (`routes/code.py`), and a browser sends an empty `file.type` for any suffix
+ * it does not recognise -- `.md` among them. So the reader's own note landed
+ * in the console as an unviewable blob, and the only thing on offer for it was
+ * 下载.
+ *
+ * Deliberately **not** fixed by teaching that route to guess from the suffix.
+ * Its docstring argues the opposite position on purpose -- an upload is typed
+ * by what the client said, and "honestly unknown" beats "confidently guessed"
+ * for a value that is written into a manifest and cannot be revised. This is
+ * the same information applied where it is cheap and reversible: a display
+ * decision, in the browser, that no authorization reads. `isRunnablePython`
+ * already draws that line for the same reason.
+ */
+const NAME_MEDIA_TYPES: ReadonlyArray<readonly [string, string]> = [
+  [".md", "text/markdown"],
+  [".markdown", "text/markdown"],
+  [".txt", "text/plain"],
+  [".log", "text/plain"],
+  [".csv", "text/csv"],
+  [".json", "application/json"],
+  [".jsonl", "application/json"],
+  [".ndjson", "application/json"],
+  [".html", "text/html"],
+  [".htm", "text/html"],
+  [".py", "text/x-python"],
+  [".js", "text/plain"],
+  [".ts", "text/plain"],
+  [".tsx", "text/plain"],
+  [".css", "text/plain"],
+  [".toml", "text/plain"],
+  [".yaml", "text/plain"],
+  [".yml", "text/plain"],
+  [".xml", "text/plain"],
+  [".sh", "text/plain"],
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".gif", "image/gif"],
+  [".webp", "image/webp"],
+  [".svg", "image/svg+xml"],
+  [".pdf", "application/pdf"],
+];
+
+/** The media type a surface should display this file as. */
+export function effectiveMediaType(mediaType: string, name: string): string {
+  const base = mediaType.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (base !== "" && base !== "application/octet-stream") return mediaType;
+  const lowered = name.toLowerCase();
+  for (const [suffix, guessed] of NAME_MEDIA_TYPES) {
+    if (lowered.endsWith(suffix)) return guessed;
+  }
+  return mediaType;
+}
+
+/**
  * What a `.py` is called on the wire, and why the name is asked as well.
  *
  * `WorkspaceWriteTool` and the sandbox's own output labeller both type a `.py`
@@ -80,6 +146,105 @@ const PYTHON_MEDIA_TYPES = new Set(["text/x-python", "text/x-python-script"]);
 export function isRunnablePython(mediaType: string, name: string): boolean {
   return PYTHON_MEDIA_TYPES.has(mediaType.split(";")[0]?.trim() ?? "")
     || name.endsWith(".py");
+}
+
+/**
+ * What a surface can do beyond painting bytes, as three answers it knows about
+ * itself.
+ *
+ * An object rather than the surface's *name* (`"code" | "work" | "chat"`), and
+ * that is the whole reason `checkCost` is allowed to exist next to
+ * `previewKind` at all. ADR-065 §4 refused a sixth `PreviewKind` because the
+ * enum is read by surfaces that cannot answer "can this run?" -- widening it
+ * would have made every one of them answer a question only one of them can.
+ * A union of surface names re-creates exactly that coupling one module over:
+ * the shared layer would once again know how many surfaces exist and what they
+ * are called, and adding a fourth would mean editing this file. Three booleans
+ * do not.
+ *
+ * `showsPdfInline` is optional and defaults to true, matching
+ * `browserShowsPdfInline`'s deliberate optimism (see its own note): the
+ * property is absent in browsers too old to have been asked, and the honest
+ * default there is to try.
+ */
+export interface SurfaceAbilities {
+  /** Whether a script can be run here -- a working set stands behind it. */
+  canRun: boolean;
+  /** Whether a document can be converted to a layout here. */
+  canConvert: boolean;
+  /** Whether this browser paints a PDF inside a frame. */
+  showsPdfInline?: boolean;
+}
+
+/**
+ * What it costs the reader to find out whether a produced file is any good.
+ *
+ * The second half of a pair whose halves used to be one word. `previewKind`
+ * answers "which element displays these bytes"; four places had quietly grown
+ * a private answer to the *other* question -- whether the reader can tell the
+ * file is right -- and each of them was a boolean whose false meant something
+ * different: `isRunnablePython` (a .py is checked by running it),
+ * `HtmlPreview`'s 渲染/源码 (a page is checked by painting it), Work's
+ * `textFor` (a .docx is checked by converting it), `browserShowsPdfInline` (a
+ * PDF cannot be checked at all in a viewer that will not paint one). Four
+ * booleans, no shared vocabulary, and no surface able to say the one sentence
+ * that mattered: *nothing here can check this file.*
+ *
+ * The evidence that these are two questions and not one is a measured
+ * failure: a script exits 0, prints 已生成, and the chart it wrote has hollow
+ * boxes where every Chinese label should be, because matplotlib's default font
+ * has no CJK glyphs. Exit code, stdout and stderr all say success. `previewKind`
+ * says `image`. Only *looking at the picture* says otherwise -- and until this
+ * existed, nothing in the console distinguished "shown" from "checked".
+ *
+ * The five values are a cost, not a quality: they say how much the reader must
+ * spend, never whether the file passed. Nothing in this console records that a
+ * file was checked -- see ADR-066 §6 for why a stored 已验收 would be a claim
+ * this system cannot back.
+ *
+ * Pure, and pure on purpose. The other place "cannot be checked here" is
+ * discovered is *after* a run, from CPython's own strings in a traceback
+ * (`containerLimitNote`), and that one deliberately does not fold in here:
+ * a function of (media type, abilities) cannot know what a container said, and
+ * a value that had to be re-derived at each call site is precisely the disease
+ * `previewKind`'s own docstring records.
+ */
+export type CheckCost =
+  /** One paint or one decode is the answer. Showing it *is* checking it. */
+  | "free"
+  /** Every byte is already on screen; whether they are right is a person's
+      job. Text, and a PDF a browser will paint. */
+  | "reader"
+  /** One more action checks it, and this surface offers that action. */
+  | "one-action"
+  /** One more action checks it, but not here. The reader should be told
+      where, rather than handed the sentence reserved for "no viewer". */
+  | "elsewhere"
+  /** This console has no action that would check it. Said out loud. */
+  | "unchecked";
+
+export function checkCost(
+  mediaType: string,
+  name: string,
+  abilities: SurfaceAbilities,
+): CheckCost {
+  const kind = previewKind(mediaType);
+  if (kind === "image" || kind === "html") return "free";
+  // A frame that paints is the whole document, scrollable -- the same standing
+  // as text, and not `free`: page one of a forty-page report is not a check.
+  // A browser that will not paint one shows a flat empty rectangle with no
+  // error and no event, which is worse than saying so.
+  if (kind === "pdf") {
+    return abilities.showsPdfInline !== false ? "reader" : "unchecked";
+  }
+  if (kind === "docx") return abilities.canConvert ? "one-action" : "elsewhere";
+  // Before the text arm that would otherwise swallow it, in the same order
+  // `FilePreview` asks the two questions -- a .py is `text` everywhere.
+  if (kind === "text" && isRunnablePython(mediaType, name)) {
+    return abilities.canRun ? "one-action" : "elsewhere";
+  }
+  if (kind === "text") return "reader";
+  return "unchecked";
 }
 
 /**

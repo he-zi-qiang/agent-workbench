@@ -281,6 +281,77 @@ describe("What a citation tells the reader", () => {
   });
 });
 
+describe("Taking an answer somewhere else", () => {
+  it("carries the full chunk id, which the page only ever shows shortened", async () => {
+    const long = `chunk_${"a".repeat(40)}`;
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: stateWithCitations([citation(long, { paragraph: 2 })]),
+    });
+
+    const view = renderChatRoute("/chat/ses_answered");
+    await screen.findByText(/片段 #2/);
+
+    const chip = view.container.querySelector(".aw-chat-citation");
+    // `shortId` cuts the middle out, so the identifier a reader would have to
+    // quote to ask "where did this come from" was nowhere on the page.
+    expect(chip?.textContent).not.toContain(long);
+    expect(chip?.getAttribute("title")).toContain(long);
+    // And the half that never existed is gone: `Citation.quote` is optional on
+    // the wire and nothing in this repository ever sets it, so the conditional
+    // that appended it rendered an empty string on every citation ever shown.
+    // Its only effect was to make "读者能看到原文" look built.
+    expect(chip?.getAttribute("title")).not.toContain("undefined");
+  });
+
+  it("puts the answer and every id in full onto the clipboard", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn<(text: string) => Promise<void>>(() =>
+      Promise.resolve(),
+    );
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: stateWithCitations([citation("chunk_first", { page: 3 })]),
+    });
+
+    renderChatRoute("/chat/ses_answered");
+    await user.click(
+      await screen.findByRole("button", { name: /复制答案与引用/ }),
+    );
+
+    const written = writeText.mock.calls[0]?.[0] ?? "";
+    expect(written).toContain("chunk_first");
+    expect(written).toContain("doc_handbook");
+    expect(await screen.findByText("已复制")).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it("reports a clipboard the browser refused rather than looking like it worked", async () => {
+    const user = userEvent.setup();
+    // A copy button that does nothing and says nothing is worse than none: the
+    // reader walks away believing they have the text.
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: { writeText: vi.fn(() => Promise.reject(new Error("denied"))) },
+    });
+
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: stateWithCitations([citation("chunk_first", {})]),
+    });
+
+    renderChatRoute("/chat/ses_answered");
+    await user.click(
+      await screen.findByRole("button", { name: /复制答案与引用/ }),
+    );
+
+    expect(await screen.findByText(/复制失败/)).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("What the transcript admits it is missing", () => {
   it("discloses the positions the stream could not decode", async () => {
     vi.mocked(useChatRuntime).mockReturnValue({

@@ -3,6 +3,7 @@ import {
   BookOpen,
   ChevronRight,
   CircleDot,
+  Copy,
   MessageSquare,
   PanelLeft,
   Plus,
@@ -578,12 +579,23 @@ function ChatTurn({ turn, onRetry }: { turn: ChatTurnState; onRetry?: () => void
           </div>
         ) : null}
         {!turn.historical && (turn.phase === "committed" || turn.phase === "withheld") ? (
-          <Citations
-            answerMode={turn.answerMode}
-            citations={turn.citations}
-            withheld={turn.phase === "withheld"}
-            grounded={turn.grounded !== false}
-          />
+          <>
+            <Citations
+              answerMode={turn.answerMode}
+              citations={turn.citations}
+              withheld={turn.phase === "withheld"}
+              grounded={turn.grounded !== false}
+            />
+            {/* Only for an answer that was actually published with evidence. A
+                withheld turn has nothing to hand on, and an ungrounded one has
+                no citations to carry -- offering the control there would let a
+                reader paste "答案 + 引用" that was only ever an answer. */}
+            {turn.phase === "committed" &&
+            turn.answer !== undefined &&
+            turn.citations.length > 0 ? (
+              <CopyAnswer answer={turn.answer} citations={turn.citations} />
+            ) : null}
+          </>
         ) : null}
       </div>
     </article>
@@ -688,6 +700,67 @@ function TurnTools({ turn }: { turn: ChatTurnState }) {
   );
 }
 
+/**
+ * The answer and its evidence, in one paste.
+ *
+ * The smallest honest thing this page could gain. Chat has no artifact
+ * container and is deliberately not getting one -- an answer is not a produced
+ * file, and giving Chat a third artifact mechanism (storage, addressing,
+ * lifetime, collection) to solve "I want to send this to a colleague" would be
+ * paying for a warehouse to move one box. Nothing here is stored, nothing is
+ * addressed, and no download control appears (every surface in this console
+ * carries exactly one labelled 下载, and the count is pinned by tests).
+ *
+ * What it fixes is small and real: the ids are shortened on screen
+ * (`shortId` cuts the middle out), so a reader who selected the citation row
+ * and pasted it got `[chunk_01…8f]` -- an identifier nobody can look anything
+ * up with. Every id goes out in full here.
+ *
+ * The clipboard write can be refused (an insecure origin, a denied permission)
+ * and the refusal is reported rather than swallowed: a copy button that does
+ * nothing and says nothing is worse than no copy button, because the reader
+ * walks away believing they have the text.
+ */
+function CopyAnswer({
+  answer,
+  citations,
+}: {
+  answer: string;
+  citations: Citation[];
+}) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  return (
+    <div className="aw-chat-copy">
+      <button
+        className="aw-button is-ghost"
+        onClick={() => {
+          const lines = citations.map((citation) => {
+            const locator = citationLocator(citation.locator);
+            return `- ${citation.chunk_id} · ${citation.document_id} · ${citation.document_version}${locator === null ? "" : ` · ${locator}`}`;
+          });
+          void navigator.clipboard
+            .writeText(`${answer}\n\n## 引用\n\n${lines.join("\n")}\n`)
+            .then(() => {
+              setState("copied");
+            })
+            .catch(() => {
+              setState("failed");
+            });
+        }}
+        type="button"
+      >
+        <Copy aria-hidden="true" size={14} />
+        复制答案与引用
+      </button>
+      {state === "idle" ? null : (
+        <small aria-live="polite">
+          {state === "copied" ? "已复制" : "复制失败，浏览器拒绝了剪贴板写入"}
+        </small>
+      )}
+    </div>
+  );
+}
+
 function Citations({
   answerMode,
   citations,
@@ -742,7 +815,24 @@ function Citations({
           <span
             className="aw-chat-citation"
             key={`${citation.chunk_id}:${citation.document_version}`}
-            title={`${citation.document_id} · ${citation.document_version}${citation.quote ? `\n\n${citation.quote}` : ""}`}
+            // The `quote` half of this title is gone. `Citation.quote` is
+            // optional on the wire and *nothing in this repository ever sets
+            // it* -- `application/retrieval.py` builds the four other fields
+            // and stops -- so the conditional rendered an empty string on every
+            // citation this console has ever shown. Its only real effect was to
+            // make "读者能看到原文" look like a thing that had been built.
+            // Reading a cited passage needs a read path that does not exist
+            // yet; until it does, this says so by not pretending.
+            // The full chunk id joins it. `shortId` cuts the middle out, so
+            // the identifier a reader would have to quote to ask "where did
+            // this come from" existed nowhere on the page -- not in the text,
+            // not here, not in any attribute. Hovering now answers it, and the
+            // 复制 control below puts every one of them somewhere pasteable.
+            //
+            // Not a visually-hidden span holding the full id: that reads the
+            // whole 64 characters aloud to a screen reader in the middle of a
+            // sentence, which trades one reader's problem for another's.
+            title={`${citation.chunk_id}\n${citation.document_id} · ${citation.document_version}`}
           >
             [{shortId(citation.chunk_id, 16)}]
             {locator === null ? null : (

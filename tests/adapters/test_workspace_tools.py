@@ -537,6 +537,42 @@ def test_an_edit_matching_once_replaces_only_that_passage() -> None:
         assert version_of(scope) != before
 
 
+def test_an_edit_keeps_the_media_type_the_write_declared() -> None:
+    """An edit changes bytes. It does not change what kind of file this is.
+
+    The edit path used to re-derive the type from the name, which quietly
+    overruled whatever the write that created the file had declared. Concretely:
+    ``workspace_write`` naming ``page.htm`` and declaring ``text/html`` produced
+    an HTML file, and one two-character edit later the same name was
+    ``text/plain`` -- because ``.htm`` was in no suffix table. The console
+    stopped rendering it in its sandbox frame, and nothing in the session said
+    why.
+
+    ``.htm`` is now in the table, so the assertion is written against a name
+    that is still outside it: the property under test is "the declaration
+    survives an edit", not "this particular suffix is known".
+    """
+
+    with entered() as scope:
+        invoke(
+            WorkspaceWriteTool(scope),
+            name="page.unknownext",
+            content="<p>alpha</p>",
+            media_type="text/html",
+        )
+
+        invoke(
+            WorkspaceEditTool(scope),
+            name="page.unknownext",
+            old_text="alpha",
+            new_text="beta",
+        )
+
+        listing = invoke(WorkspaceListTool(scope))
+        assert "text/html" in listing.content
+        assert "text/plain" not in listing.content
+
+
 def test_an_edit_matching_nothing_is_refused_and_changes_nothing() -> None:
     """Zero matches means the model believes the file says something it does not.
 

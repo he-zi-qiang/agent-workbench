@@ -51,13 +51,12 @@
  * question a reader has while watching.
  */
 
-import { FileCode2, FileText, Image as ImageIcon } from "lucide-react";
 import { useState } from "react";
 import type { PrincipalIdentity, WorkspaceEntryView } from "../../api/types";
 import { MarkdownContent } from "../../components/MarkdownContent";
-import { mediaLabel, previewKind } from "../../components/media";
+import { previewKind } from "../../components/media";
 import type { StepGroup } from "../../components/stepGroups";
-import { formatSize } from "../../components/ui";
+import { FileCard } from "./FileCard";
 import { FilePreview } from "./FilePreview";
 import type { CodeTurnBlock, ProducedFile, TurnStep } from "./turnBlocks";
 
@@ -143,19 +142,35 @@ export function CodeTurn({
 
       {block.produced.length === 0 ? null : (
         <ul aria-label="这一轮产出的文件" className="aw-code-outputs">
-          {block.produced.map((file) => (
-            <FileCard
-              autoPreview={file.name === autoPreview}
-              entry={files.find((held) => held.name === file.name)}
-              file={file}
-              identity={identity}
-              key={file.toolCallId + file.name}
-              onOpen={onOpen}
-              onWrote={onWrote}
-              opened={file.name === openedName}
-              sessionId={sessionId}
-            />
-          ))}
+          {block.produced.map((file) => {
+            const entry = files.find((held) => held.name === file.name);
+            return (
+              <FileCard
+                autoPreview={file.name === autoPreview}
+                entry={entry}
+                file={file}
+                key={file.toolCallId + file.name}
+                onOpen={onOpen}
+                opened={file.name === openedName}
+                renderPreview={() =>
+                  entry === undefined ? null : (
+                    <FilePreview
+                      files={files}
+                      identity={identity}
+                      onOpen={onOpen}
+                      onWrote={onWrote}
+                      viewing={{
+                        sessionId,
+                        name: file.name,
+                        mediaType: entry.media_type,
+                        sizeBytes: entry.size_bytes,
+                      }}
+                    />
+                  )
+                }
+              />
+            );
+          })}
         </ul>
       )}
 
@@ -302,134 +317,22 @@ function splitThought(text: string): { head: string; body: string } {
   return { head: trimmed.slice(0, end).trim(), body: trimmed.slice(end).trim() };
 }
 
-function FileCard({
-  autoPreview,
-  entry,
-  file,
-  identity,
-  onOpen,
-  onWrote,
-  opened,
-  sessionId,
-}: {
-  autoPreview: boolean;
-  /** Undefined when the name is no longer in the workspace listing. */
-  entry: WorkspaceEntryView | undefined;
-  file: ProducedFile;
-  identity: PrincipalIdentity;
-  onOpen: (name: string) => void;
-  onWrote: (names: string[]) => void;
-  opened: boolean;
-  sessionId: string;
-}) {
-  const [inlineOpen, setInlineOpen] = useState(autoPreview);
-  const kind = entry === undefined ? "none" : previewKind(entry.media_type);
-  const Icon =
-    kind === "html" ? FileCode2 : kind === "image" ? ImageIcon : FileText;
-
-  return (
-    <li className="aw-code-output">
-      <button
-        aria-current={opened ? "true" : undefined}
-        className="aw-code-output-open"
-        disabled={entry === undefined}
-        onClick={() => {
-          onOpen(file.name);
-        }}
-        type="button"
-      >
-        <Icon aria-hidden size={16} />
-        <span className="aw-code-output-name">{file.name}</span>
-        <span className="aw-code-output-meta">{metaOf(file, entry)}</span>
-      </button>
-
-      {/* Text is in this list, and leaving it out was the bug this fixes: a
-          coding session's product is usually a `.py` or a `.ts`, and a card
-          that showed only its name meant the code the agent had just written
-          was the one thing not in the conversation. It is also the cheapest
-          kind here -- a `<pre>`, against an iframe or a decoded blob -- so the
-          cost argument that justified the image/html gate never applied to it.
-
-          PDF and .docx stay out. Both are paged documents whose viewer wants
-          the height the panel gives it; in a 360px box they are a postage
-          stamp, and the card's click already routes there.
-
-          Mounted only when open, so a turn with six cards is not six fetches.
-          Each preview component keeps its own size ceiling, judged from the
-          listing's byte count before any transfer. */}
-      {entry !== undefined &&
-      (kind === "text" || kind === "image" || kind === "html") ? (
-        <details
-          className="aw-code-output-inline"
-          onToggle={(event) => {
-            setInlineOpen(event.currentTarget.open);
-          }}
-          open={inlineOpen}
-        >
-          <summary>就地预览</summary>
-          {inlineOpen ? (
-            <div className="aw-code-output-inline-body">
-              <FilePreview
-                identity={identity}
-                onWrote={onWrote}
-                viewing={{
-                  sessionId,
-                  name: file.name,
-                  mediaType: entry.media_type,
-                  sizeBytes: entry.size_bytes,
-                }}
-              />
-            </div>
-          ) : null}
-        </details>
-      ) : null}
-    </li>
-  );
-}
-
-/**
- * The card's second line: what this call did, and what the reader gets if they
- * click.
- *
- * The verb states what the *call* did and never what the file *is*. "新建" is
- * not on offer: the event window has a beginning, and a file written before it
- * cannot be told apart from one that never existed. "覆盖" appears only when
- * this stream actually watched the earlier write.
- *
- * The last clause is the honest part. A workspace route serves the *current*
- * bytes of a name -- there is no way to ask for the version a turn produced,
- * and `tests/architecture/test_a_workspace_version_is_never_asked_for.py` is
- * the reason there never will be. So a card on turn 1 whose file turn 3
- * rewrote says so before the click rather than showing turn 3's bytes under
- * turn 1's heading and letting the reader draw the wrong conclusion
- * (known-gaps F-13).
- */
-function metaOf(
-  file: ProducedFile,
-  entry: WorkspaceEntryView | undefined,
-): string {
-  const verb =
-    file.action === "edit"
-      ? "修改"
-      : file.action === "run"
-        ? "运行时写出"
-        : file.overwrote
-          ? "覆盖"
-          : "写入";
-  if (entry === undefined) return `${verb} · 已不在工作区`;
-  const parts = [verb, formatSize(entry.size_bytes), mediaLabel(entry.media_type)];
-  if (file.supersededByTurn !== null) {
-    parts.push(`第 ${String(file.supersededByTurn)} 轮又改过，预览的是最新内容`);
-  }
-  return parts.join(" · ");
-}
-
 /**
  * The last file this turn produced that can be shown in the conversation.
  *
  * "Last" rather than "first": a turn that writes a file and then rewrites it
  * ends on the version it meant, and a turn that writes a script and then a
  * report ends on the thing it was building toward.
+ *
+ * **Judged by `previewKind` and size, deliberately not by `checkCost`.** The
+ * fold answers "is showing this cheap", which is a question about the viewer
+ * and the transfer; the cost vocabulary answers "does showing it settle
+ * anything", which is a different question and must not silently close a fold.
+ * Routing this through cost was tried on paper and is wrong twice over: a
+ * `.py` is `one-action`, so the console would stop auto-showing the source of
+ * the file a coding session most often produces -- undoing "代码也是产出，它该
+ * 在对话里" one release after it landed -- and dropping the ceiling for `free`
+ * would auto-fetch an 8 MB page because painting it is notionally cheap.
  */
 function lastPreviewable(
   produced: ProducedFile[],

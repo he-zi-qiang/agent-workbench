@@ -52,7 +52,6 @@ import type {
 import { useIdentity } from "../../app/IdentityContext";
 import {
   browserShowsPdfInline,
-  isPreviewable,
   previewKind,
 } from "../../components/media";
 import { BlobPreview } from "../../components/BlobPreview";
@@ -1028,12 +1027,15 @@ export function WorkPage() {
               // Previewable files open in the reading column, same as a rail
               // click; only the kinds no viewer exists for still download.
               // "打开产物" that saved a file it could have shown was the bug.
+              // No gate. The rail dropped its own version of this check and
+              // wrote down why ("栏位不再预判"): sending an unpreviewable file
+              // straight to a download was zero feedback for a click, and the
+              // reading column already says what it cannot show. The step
+              // stream kept the old behaviour, so the same .zip answered a
+              // sentence in one place and a silent save in the other.
               onOpenArtifact={(artifact) => {
-                if (isPreviewable(artifact.media_type) && selectedTaskId !== undefined) {
-                  setOpened({ taskId: selectedTaskId, artifact });
-                } else {
-                  downloadMutation.mutate(artifact);
-                }
+                if (selectedTaskId === undefined) return;
+                setOpened({ taskId: selectedTaskId, artifact });
               }}
               stageEvents={stageEvents}
               status={selectedTask.status}
@@ -1640,26 +1642,14 @@ function TaskResult({
         </section>
       );
     }
-    // Failed, cancelled or dead-lettered. The server's detail is a stable
-    // sentence over a closed error vocabulary; this says what it means, and
-    // offers the retry only when the server called the cause retryable.
-    const failure = explainFailure(statusDetail ?? null);
+    // Failed, cancelled or dead-lettered.
     return (
       <section className="aw-result">
-        <div className="aw-notice is-warning">
-          <AlertTriangle aria-hidden="true" size={16} />
-          <span>
-            <strong>任务{formatStatus(status)}</strong>
-            {failure === null ? null : <small>{failure.text}</small>}
-          </span>
-        </div>
-        {failure?.retryable === true && onRetry !== undefined ? (
-          <div className="aw-result-retry">
-            <button className="aw-button is-primary" onClick={onRetry} type="button">
-              用同样的目标再试一次
-            </button>
-          </div>
-        ) : null}
+        <RunFailure
+          onRetry={onRetry}
+          status={status}
+          {...(statusDetail === undefined ? {} : { statusDetail })}
+        />
         {/* A Task can fail after it has already written something -- a rejected
             export is the plain case, and every step failure downstream of
             `synthesize` is another. The draft lives in the timeline events, not
@@ -1691,6 +1681,19 @@ function TaskResult({
     status === "succeeded" && statusDetail !== undefined ? statusDetail : null;
   return (
     <section className="aw-answer" aria-label="任务产出">
+      {/* Above the file, and this branch did not have it at all. A Task can
+          fail *after* rendering something -- a `render_document` that succeeded
+          and an export that was refused is the plain case -- and then this
+          branch drew the .docx layout, the download control and nothing else.
+          The reader saw a finished-looking document under a heading that named
+          it the deliverable, with the failure reported only by a pill in the
+          page header. Which run stopped, and why, is not a decoration on the
+          artifact view; it is the first thing about it that is true. */}
+      <RunFailure
+        onRetry={onRetry}
+        status={status}
+        {...(statusDetail === undefined ? {} : { statusDetail })}
+      />
       {reviewCaveat === null ? null : (
         <InfoNotice>
           <span>
@@ -1846,7 +1849,24 @@ function TaskResult({
         <ErrorNotice message={errorMessage(preview.error, "读取产出内容失败")} />
       ) : (
         <>
-          <MarkdownContent text={preview.data.text} />
+          {/* Markdown only for Markdown. Every `text` artifact used to go
+              through the renderer, and a Task that produced a `.py` had it
+              formatted as prose: indentation collapsed, `# 注释` promoted to a
+              heading, `*args` eaten as emphasis. The code was still downloadable
+              and the page was still calling it the deliverable, which is the
+              worst combination -- the reader is looking straight at the thing
+              and what they are looking at is wrong.
+
+              A `<pre>` for everything else, matching what the Code console
+              shows for the same bytes. That a Task cannot *run* its .py is a
+              recorded trade (ADR-065 §4: no working set here); rendering it as
+              a document was never a trade, just a default nobody had split. */}
+          {previewKind(artifact.media_type) === "text" &&
+          isMarkdown(artifact.media_type) ? (
+            <MarkdownContent text={preview.data.text} />
+          ) : (
+            <pre className="aw-code-file-body">{preview.data.text}</pre>
+          )}
           {preview.data.truncated ? (
             <p className="aw-page-note">内容较长，这里只显示开头；完整内容请下载。</p>
           ) : null}
@@ -1854,6 +1874,67 @@ function TaskResult({
       )}
     </section>
   );
+}
+
+/**
+ * Why this run stopped, when it stopped badly -- and the retry, when the server
+ * said the cause was retryable.
+ *
+ * Lifted out of the no-artifact branch because it belongs to the *run*, and the
+ * run's outcome does not depend on whether a file came out of it. Rendered in
+ * one branch only, it produced the page's most confident wrong impression: a
+ * Word Task whose render succeeded and whose export was refused showed the
+ * document, laid out, under 任务产出, with the failure visible only as a status
+ * pill several hundred pixels up.
+ *
+ * `null` for every status that is not a bad ending, so both call sites can
+ * render it unconditionally and neither has to re-derive when it applies.
+ */
+function RunFailure({
+  onRetry,
+  status,
+  statusDetail,
+}: {
+  onRetry?: (() => void) | undefined;
+  status: TaskStatus;
+  statusDetail?: string;
+}) {
+  if (!isSettledStatus(status) || status === "succeeded") return null;
+  // The server's detail is a stable sentence over a closed error vocabulary;
+  // this says what it means, and offers the retry only when the server called
+  // the cause retryable.
+  const failure = explainFailure(statusDetail ?? null);
+  return (
+    <>
+      <div className="aw-notice is-warning">
+        <AlertTriangle aria-hidden="true" size={16} />
+        <span>
+          <strong>任务{formatStatus(status)}</strong>
+          {failure === null ? null : <small>{failure.text}</small>}
+        </span>
+      </div>
+      {failure?.retryable === true && onRetry !== undefined ? (
+        <div className="aw-result-retry">
+          <button className="aw-button is-primary" onClick={onRetry} type="button">
+            用同样的目标再试一次
+          </button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Whether these bytes were written to be read as Markdown.
+ *
+ * Asked by name rather than by `previewKind`, because the kind deliberately
+ * answers a coarser question: `text/markdown` and `text/x-python` are both
+ * `text` and get the same fetch, and that is right -- what differs is only how
+ * the string is painted once it arrives.
+ */
+function isMarkdown(mediaType: string): boolean {
+  const base = mediaType.split(";")[0]?.trim().toLowerCase() ?? "";
+  return base === "text/markdown" || base === "text/x-markdown";
 }
 
 /**

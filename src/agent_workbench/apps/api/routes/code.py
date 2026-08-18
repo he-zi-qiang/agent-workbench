@@ -398,9 +398,19 @@ async def put_workspace_file(
         principal_id=principal.principal_id,
         name=name,
         content=body,
-        media_type=(
-            request.headers.get("content-type") or "application/octet-stream"
-        ).split(";")[0],
+        # Stripped and lower-cased, not only split. `MediaType` is
+        # `^[a-z]+/...` (`domain/artifacts.py`), so a client sending the header
+        # in the case RFC 9110 explicitly allows -- `Content-Type: TEXT/PLAIN`,
+        # or anything with a space before the parameter -- failed
+        # `ArtifactRef`'s validation, and `ValidationError` is not in
+        # `main.py`'s status table: the upload answered 500. Both other places
+        # in this repository that compare a media type already normalise
+        # (`routes/code.py`'s run gate, `adapters/tools/workspace.py`); this was
+        # the one that did not.
+        media_type=(request.headers.get("content-type") or "application/octet-stream")
+        .split(";")[0]
+        .strip()
+        .lower(),
     )
     return WorkspaceResponse(
         files=tuple(

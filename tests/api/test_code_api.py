@@ -1384,6 +1384,44 @@ def test_a_python_file_is_recognised_by_its_type_when_the_name_is_silent() -> No
     assert _run(world, scenario) == 200
 
 
+def test_an_upload_whose_header_is_upper_case_is_stored_not_rejected() -> None:
+    """RFC 9110 says media types are case-insensitive; this route did not.
+
+    ``MediaType`` is ``^[a-z]+/...`` (``domain/artifacts.py``), so a client
+    sending ``Content-Type: TEXT/PLAIN`` -- entirely legal, and what some HTTP
+    clients emit -- made ``ArtifactRef`` raise ``ValidationError``. That
+    exception is not in ``main.py``'s status table, so the upload answered
+    **500**: a server fault reported for a correct request.
+
+    The surrounding whitespace matters for the same reason: ``text/plain ;
+    charset=utf-8`` is also legal, and splitting on ``;`` alone leaves a
+    trailing space inside the value.
+    """
+
+    server = _FakeSandboxServer(stdout="ok\n")
+    world, _ = _world_that_wrote(server, name="notes.md")
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, str]:
+        session_id = await _session_with_file(client)
+        stored = await client.put(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/workspace/upper.md",
+            headers={**HEADERS, "content-type": "TEXT/PLAIN ; charset=utf-8"},
+            content=b"hello\n",
+        )
+        listed = [
+            entry
+            for entry in stored.json().get("files", [])
+            if entry["name"] == "upper.md"
+        ]
+        return stored.status_code, listed[0]["media_type"] if listed else ""
+
+    status, media_type = _run(world, scenario)
+    assert status == 200
+    # Normalised, not merely accepted: what is stored is what every later
+    # decision reads, and the console routes a viewer off this exact string.
+    assert media_type == "text/plain"
+
+
 def test_a_name_the_workspace_does_not_bind_cannot_be_run() -> None:
     server = _FakeSandboxServer()
     world, _ = _world_that_wrote(server)

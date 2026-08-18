@@ -74,7 +74,20 @@ export function PreviewPanel({
           aria-label={`文件 ${viewing.name}`}
           className="aw-code-file-view"
         >
-          <FilePreview identity={identity} onWrote={onWrote} viewing={viewing} />
+          <FilePreview
+            files={files}
+            identity={identity}
+            // Converted here rather than asking the page for a second
+            // callback: this panel already holds the listing a name has to be
+            // resolved against, and a name that is not in it is a name this
+            // panel could not have drawn a card for.
+            onOpen={(name) => {
+              const entry = files.find((held) => held.name === name);
+              if (entry !== undefined) onOpen(entry);
+            }}
+            onWrote={onWrote}
+            viewing={viewing}
+          />
         </section>
       )}
 

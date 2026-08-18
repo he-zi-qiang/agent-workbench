@@ -12,21 +12,33 @@ import {
   getCodeApprovals,
   getCodeHistory,
   getCodeWorkspace,
+  getCodeWorkspaceFileBlob,
   getCodeWorkspaceFileText,
   listCodeSessions,
   putCodeWorkspaceFile,
   renameCodeSession,
   runCodeWorkspaceFile,
 } from "../../api/client";
+import type * as ApiClient from "../../api/client";
 import type { PrincipalIdentity } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { CodePage } from "./CodePage";
 import { DOCX_MEDIA_TYPE } from "../../components/media";
 import { useCodeStream } from "./useCodeStream";
 
-vi.mock("../../api/client", () => ({
-  // A real constant, not a mock: HtmlPreview reads it to size-gate before
-  // fetching, and a factory that omits it fails on first render.
+vi.mock("../../api/client", async () => ({
+  // Two real exports among the mocks, for the same reason: a component under
+  // test reads them as values rather than calling them, so a factory that
+  // omits them breaks on render or on the first failed run.
+  //
+  // `ApiError` has to be the real class because `remedyFor` asks
+  // `cause instanceof ApiError` to decide which sentence a refused run gets.
+  // Left out, that check throws on `instanceof undefined` -- and only on the
+  // failure path, so the file would stay green until somebody wrote the first
+  // test of a run that did not happen.
+  ApiError: (await vi.importActual<typeof ApiClient>("../../api/client"))
+    .ApiError,
+  // Read by HtmlPreview to size-gate before fetching.
   MAX_PREVIEW_BYTES: 512 * 1024,
   askCode: vi.fn(),
   createCodeSession: vi.fn(),
@@ -37,6 +49,9 @@ vi.mock("../../api/client", () => ({
   getCodeWorkspace: vi.fn(() => Promise.resolve({ files: [] })),
   getCodeWorkspaceFileText: vi.fn(() =>
     Promise.resolve({ text: "", truncated: false }),
+  ),
+  getCodeWorkspaceFileBlob: vi.fn(() =>
+    Promise.resolve(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" })),
   ),
   downloadCodeWorkspaceFile: vi.fn(() => Promise.resolve()),
   listCodeSessions: vi.fn(() => Promise.resolve({ sessions: [] })),
@@ -1392,7 +1407,7 @@ describe("CodePage", () => {
     await user.click(await screen.findByRole("button", { name: /maker\.py/ }));
     await user.click(await screen.findByRole("button", { name: "运行结果" }));
 
-    expect(await screen.findByText("运行结束，退出码 0")).toBeInTheDocument();
+    expect(await screen.findByText(/运行结束，退出码 0/)).toBeInTheDocument();
     expect(vi.mocked(runCodeWorkspaceFile).mock.calls[0]?.slice(1)).toEqual([
       SESSION,
       "maker.py",
@@ -1408,8 +1423,86 @@ describe("CodePage", () => {
     // outlives a prop change. Observed on a real session before the key:
     // `maker.py`'s stdout, under the heading `broken.py`.
     await user.click(await screen.findByRole("button", { name: /broken\.py/ }));
-    expect(screen.queryByText("运行结束，退出码 0")).not.toBeInTheDocument();
+    expect(screen.queryByText(/运行结束，退出码 0/)).not.toBeInTheDocument();
     expect(vi.mocked(runCodeWorkspaceFile)).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the picture a run drew, without a second click", async () => {
+    const user = userEvent.setup();
+    // The scenario ADR-066 was written for: a script that draws a chart. Before
+    // this, the run answered "写回工作区：plot.png" in grey text and the picture
+    // was two clicks away -- open the folded 工作区全部文件 list, find the name.
+    // Two clicks to see the output of the click you just made.
+    vi.mocked(getCodeWorkspace)
+      .mockResolvedValueOnce({
+        files: [{ name: "plot.py", size_bytes: 200, media_type: "text/x-python" }],
+      })
+      .mockResolvedValue({
+        files: [
+          { name: "plot.py", size_bytes: 200, media_type: "text/x-python" },
+          { name: "plot.png", size_bytes: 9000, media_type: "image/png" },
+        ],
+      });
+    vi.mocked(runCodeWorkspaceFile).mockResolvedValue({
+      exit_code: 0,
+      stdout: "已生成 plot.png\n",
+      stderr: "",
+      written: ["plot.png"],
+      workspace_version: "art_2",
+      omitted_inputs: [],
+    });
+
+    mounted();
+    await openWorkspace(user, 1);
+    await user.click(await screen.findByRole("button", { name: /plot\.py/ }));
+    await user.click(await screen.findByRole("button", { name: "运行结果" }));
+
+    // Scoped to the run's own list. The name is also in the workspace
+    // directory below, and an unscoped query would pass on that one -- which
+    // is precisely the two-click route this test exists to say is no longer
+    // the only one.
+    const produced = await screen.findByRole("list", {
+      name: "这次运行写出的文件",
+    });
+    expect(
+      within(produced).getByRole("button", { name: /plot\.png/ }),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(vi.mocked(getCodeWorkspaceFileBlob)).toHaveBeenCalled();
+    });
+
+    // And the panel refuses to call a zero exit code a success. stdout says
+    // 已生成; only the picture says whether the labels rendered.
+    expect(screen.getByText(/没说明它写对了/)).toBeInTheDocument();
+  });
+
+  it("names a run's output without drawing dead buttons when the listing lags", async () => {
+    const user = userEvent.setup();
+    // The listing never learns about the file -- the honest stand-in for the
+    // render between a run returning and the re-read landing. All-or-nothing:
+    // a card here would open nothing and report 已不在工作区 about a file
+    // written a second ago.
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "plot.py", size_bytes: 200, media_type: "text/x-python" }],
+    });
+    vi.mocked(runCodeWorkspaceFile).mockResolvedValue({
+      exit_code: 0,
+      stdout: "",
+      stderr: "",
+      written: ["plot.png"],
+      workspace_version: "art_2",
+      omitted_inputs: [],
+    });
+
+    mounted();
+    await openWorkspace(user, 1);
+    await user.click(await screen.findByRole("button", { name: /plot\.py/ }));
+    await user.click(await screen.findByRole("button", { name: "运行结果" }));
+
+    expect(await screen.findByText(/写回工作区：plot.png/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /plot\.png/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("offers a download for a type it cannot show, and does not fetch it", async () => {
@@ -1422,7 +1515,12 @@ describe("CodePage", () => {
     await openWorkspace(user, 1);
     await user.click(await screen.findByRole("button", { name: /report\.docx/ }));
 
-    expect(await screen.findByText("这个类型只能下载。")).toBeInTheDocument();
+    // A .docx is told where its viewer *is*, not that none exists: the layout
+    // endpoints address an artifact id and a workspace file has none (F-11).
+    // The generic sentence is reserved for types nothing here can show.
+    expect(
+      await screen.findByText(/Word 的版面预览目前只在任务产出里有/),
+    ).toBeInTheDocument();
     // Not fetched at all: reading a zip as text would render mojibake, and
     // downloading the bytes only to decide not to show them wastes the transfer.
     expect(vi.mocked(getCodeWorkspaceFileText)).not.toHaveBeenCalled();

@@ -5,6 +5,7 @@ import type {
   TaskIntent,
   TaskTimelineResponse,
 } from "../../api/types";
+import { checkCost } from "../../components/media";
 
 export interface TaskInputArtifact {
   schema_version: number;
@@ -438,14 +439,24 @@ export function collectArtifacts(
   const seen = new Set<string>();
   const found: TaskArtifact[] = [];
   for (const event of events) {
-    const artifact = parseArtifactRef(event.payload.artifact);
-    if (artifact === null || seen.has(artifact.artifact_id)) continue;
-    seen.add(artifact.artifact_id);
-    found.push({
-      artifact,
-      graphNodeId: event.graph_node_id,
-      producedAt: event.timestamp,
-    });
+    // Two fields, because a Task puts files into the store through two doors
+    // and the rail only ever watched one. `payload.artifact` is a tool's
+    // result; `payload.output_ref` is a model call's own output -- which is
+    // where the draft a `synthesize` or `work` node wrote lives. The step
+    // detail pane has read `output_ref` all along (`stepDetail.ts`), so the
+    // file was reachable, just three disclosures down: the rail claimed to
+    // answer "what did this Task produce" while quietly meaning "what did its
+    // tools produce".
+    for (const field of [event.payload.artifact, event.payload.output_ref]) {
+      const artifact = parseArtifactRef(field);
+      if (artifact === null || seen.has(artifact.artifact_id)) continue;
+      seen.add(artifact.artifact_id);
+      found.push({
+        artifact,
+        graphNodeId: event.graph_node_id,
+        producedAt: event.timestamp,
+      });
+    }
   }
   return found;
 }
@@ -456,12 +467,54 @@ export function collectArtifacts(
  * Named as a set of what counts rather than a rule over what does not, because
  * the interesting cases here are all positive: a deployment adds a renderer,
  * and the file it produces should headline the page the moment it exists.
+ *
+ * `text/html` joined when ADR-062 taught this console to run a produced page in
+ * an opaque-origin frame. A page is the clearest case this set describes -- the
+ * only way to accept one is to run it -- and it is now the artifact whose
+ * headline position costs the reader least of all.
+ *
+ * The spreadsheet and presentation types stay listed but no longer headline on
+ * their own: `findDeliverable` also asks whether this page can show the file,
+ * and nothing here can show those two. They were promoted for a renderer this
+ * deployment does not have, and a headline that opens on 这个类型只能下载查看
+ * spends the most prominent place on the page saying nothing.
  */
 const DOCUMENT_MEDIA_TYPES: ReadonlySet<string> = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/pdf",
+  "text/html",
+]);
+
+/**
+ * What the Task surface can do with a file: convert a document, never run a
+ * script. The counterpart of `CODE_ABILITIES` -- two surfaces, two rows.
+ */
+export const WORK_ABILITIES = { canRun: false, canConvert: true } as const;
+
+/**
+ * Stages whose artifacts are material the Task *fetched*, not work it produced.
+ *
+ * A blacklist rather than a whitelist of producing stages, and the difference is
+ * a bug this page already shipped once. `v2_general` renders its document in
+ * `work`, not in `export`, so "only export and render count" would drop a Word
+ * Task's .docx off the headline and put `report.md` back -- which is exactly
+ * what `findDeliverable` exists to have fixed.
+ *
+ * What it catches: a research Task that pulls a PDF off the web through the web
+ * MCP server. That file is a real artifact, it is a `DOCUMENT_MEDIA_TYPE`, and
+ * it arrives late, so it wins the "last document" rule and headlines the page
+ * under a name like `mcp-result.bin`. It is somebody else's document.
+ *
+ * Not fixed by giving fetched results their own `ArtifactKind`: every MCP tool
+ * shares one `put(kind="tool_result")`, so the word server's rendered .docx and
+ * the web server's downloaded PDF go through the same line, and separating them
+ * there would take the Word Task's headline with it.
+ */
+const FETCHING_NODES: ReadonlySet<string> = new Set([
+  "research_internal",
+  "research_external",
 ]);
 
 /**
@@ -490,9 +543,27 @@ export function findDeliverable(
   for (let index = produced.length - 1; index >= 0; index -= 1) {
     const candidate = produced[index];
     if (candidate === undefined) continue;
-    if (DOCUMENT_MEDIA_TYPES.has(candidate.artifact.media_type)) {
-      return candidate.artifact;
+    if (!DOCUMENT_MEDIA_TYPES.has(candidate.artifact.media_type)) continue;
+    // Where it came from. A document a research stage pulled off the web is
+    // evidence, not the answer -- and it stays in the rail, one click away.
+    if (
+      candidate.graphNodeId !== null &&
+      FETCHING_NODES.has(candidate.graphNodeId)
+    ) {
+      continue;
     }
+    // Whether this page can show it at all. The headline is where a "只能下载"
+    // costs most, because it is what the reader sees before anything else.
+    if (
+      checkCost(
+        candidate.artifact.media_type,
+        candidate.artifact.filename ?? "",
+        WORK_ABILITIES,
+      ) === "unchecked"
+    ) {
+      continue;
+    }
+    return candidate.artifact;
   }
   return findFinalReport(events)?.artifact ?? null;
 }

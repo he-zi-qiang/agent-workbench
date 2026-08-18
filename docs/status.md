@@ -22,6 +22,97 @@
 
 ---
 
+## 2026-08-18（未合并）：展示不是验收
+
+三个界面的产物预览重设计的第一批。一份 ADR（0066），两条新缺口（F-14 / F-15）。
+
+**门禁**：后端 `ruff format --check` + `ruff check` + `pyright` **0 errors**；
+`pytest` **2456 passed / 739 skipped**（改动前 2433，本批 +23）；服务型四套件
+`tests/contracts tests/persistence tests/api tests/vector` **1174 passed / 2 skipped**
+（PostgreSQL 5433 + Qdrant 6333，609s；上一批 1173，多出来的一条就是本批新增的
+大小写上传测试。两条 skip 与上一批同因：一条是 PostgreSQL 专属的契约变体，一条
+需要 `embedding` extra 与本地权重）。前端 `eslint --max-warnings 0` + `tsc -b` +
+`vitest` **433 passed**（改动前 378，本批 +55）+ `vite build` ok。
+
+**`agent-config-check` 本批没有绿过，而它在干净树上同样不绿**：
+`--profile development` 报 `database.listen_dsn Field required`，且这个 checkout
+里根本没有 `config/config.development.toml`（只有 default/test/production 与五个
+`*-local`）。用 `git stash` 在干净树上复跑确认过是既有状态，与本批改动无关；
+写在这里是因为 CLAUDE.md 把它列在门禁命令里，而它在这台机器上跑不通。
+
+**工具链**：node 24.8.0（`var/toolchain/node`，`.claude/run-web.sh` 挂 PATH）。
+系统默认的 node 是 26.7.0，按 CLAUDE.md 用不了。
+
+### 一个退出码 0、stdout 说成功、图里全是空心方框的脚本
+
+这是整份 ADR-066 的起点，也是"展示"与"验收"是两个问题的全部证据：一次 matplotlib
+运行退出码 0、stdout 打印「已生成」、stderr 为空、`previewKind` 判为 `image`——
+而它画出来的图里每一个中文标注都是空心方框（默认字体没有 CJK 字形）。所有文本
+信号都说成功，只有看那张图才说得出别的。
+
+### 实测核到的两个真 bug（不是设计推演）
+
+**一、一个文件能不能被看见，取决于是谁写的它。** 后端两张互不相识的后缀猜型表：
+`adapters/tools/workspace.py` 七条兜 `text/plain`，`adapters/tools/sandbox.py`
+九条兜 `application/octet-stream`，**两张都没有** `.jpg/.jpeg/.gif/.webp`。所以
+`savefig("chart.png")` 在控制台里能看见，`savefig("chart.jpg")` 只能下载——同一张
+图，同一个脚本，差别只有后缀。合并进 `adapters/tools/media_guess.py`，兜底改成
+**字节的函数而不是调用方的函数**（前 8 KiB 无 NUL 且能 UTF-8 解码 → text/plain）。
+
+**二、`Content-Type: TEXT/PLAIN` 的上传是一个 500。** `MediaType` 的模式是
+`^[a-z]+/…`（`domain/artifacts.py`），而 `routes/code.py` 只 `split(";")[0]`
+不 strip 不 lower，`ValidationError` 又不在 `main.py` 的状态码表里。RFC 9110 明说
+媒体类型大小写不敏感。补 `.strip().lower()`，测试钉住落库已规范化。
+
+**三、一次编辑会改掉文件的类型。** `workspace_edit` 重新按名字猜 media type，
+所以 `workspace_write` 声明 `text/html` 写下的 `page.htm`，一次两字符的编辑之后
+变成 `text/plain`，控制台不再渲染它，而会话里没有任何东西说了为什么。改成沿用
+listing 里已声明的类型（用 `list` 而不是 `locate`，避免为一个标签加宽端口协议）。
+
+**四、Task 的 Markdown 产物落盘叫 `artifact`。** `task_handlers.py` 的 `put`
+不传 `filename`，`content_disposition` 兜底成裸词 `artifact`，读者存下来的是一个
+没有扩展名的文件。
+
+### 读者侧最大的一次减负：两次点击 → 零次
+
+改动前，读者点「运行」跑一个画图脚本，产出只是一句灰色的「写回工作区：plot.png」，
+要看那张图得展开面板底部折叠的「工作区全部文件」再按名字找——**点一下运行，再点
+两下才看得到这一下的产出**。现在运行结果下面就是与轮次同构的产出卡片，图片是
+`free`（展示即验收），卡片自己展开。
+
+两道闸门都有测试：listing 没跟上时**全组**退回纯文本（不画死按钮），运行产出里的
+`.py` 不再长出第二个运行按钮（一次点击必须等于一个容器）。
+
+### 对照组：这次刻意**没**改的
+
+- **折叠仍由 `previewKind` + 字节上限判定，不由 `checkCost`。** 综合设计稿建议改用
+  代价判定并称"行为等价"，实测不是：`.py` 是 `one-action`，改了会让控制台不再自动
+  展示编码会话最常产出的那类文件的源码——把「代码也是产出，它该在对话里」在一个
+  版本之后撤销掉；而 `free` 若因此不受上限约束，一个 8 MB 的页面会被自动拉取。
+  理由写进 `CodeTurn.lastPreviewable` 的 docstring 与 ADR-066 §2.5。
+- **上传路由不加后缀兜底**（推翻在案立场），改由界面侧 `effectiveMediaType` 对
+  `application/octet-stream` 按名字二次追问——只填沉默，不推翻任何写入方的声明。
+- **没有任何「已验收」状态被记录**（ADR-066 §2.8）。
+
+### 顺带拆掉的一个雷
+
+`CodePage.test.tsx` 的 `vi.mock("../../api/client")` 是个显式工厂，没有导出
+`ApiError`。本批让 `PythonPreview` 依赖 `cause instanceof ApiError` 来分三种拒绝，
+而 `instanceof undefined` 只在**失败路径**上抛——文件会一直绿到有人写第一个
+"运行没发生"的测试。改成从 `importActual` 取真类，并补上缺失的
+`getCodeWorkspaceFileBlob`。
+
+### 本批未做，各自有账
+
+- Work 侧列出 `ToolCompleted.workspace_writes`（新缺口 **F-14**）
+- 阅读列表头改用 `artifactLabel`（会动一条钉住的断言，属有意契约变更）
+- Chat 的引用原文读取端点——单位收益最高的一项，但需要新端点 + `ChatTurnStore`
+  一个按 id 的读方法 + 两套契约测试 + 一次带真库的本地跑，归 ADR-0067
+- `.xlsx` / `.pptx` 仍无查看器，只是从「顶到头条然后说只能下载」退回侧栏；
+  `DOCUMENT_MEDIA_TYPES` 那句「为部署新增渲染器预留」的注释因此作废
+
+---
+
 ## 2026-08-17（未合并）：整轮空白的第一回合，与看得见却跑不了的 .py
 
 Code 模式的三条现场反馈，两条是同一个 bug 的两个症状，一条是新能力。一份 ADR
