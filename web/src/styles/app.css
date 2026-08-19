@@ -5866,3 +5866,22 @@ p.aw-code-step-thought {
   font-size: 11.5px;
   font-weight: 500;
 }
+
+/* 阶段行上的节点名与耗时。
+ *
+ * 节点名用等宽，因为它是日志里的标识符，不是一个词；耗时用表格数字，否则
+ * 「6 s」和「3 分 41 秒」会让右侧的时间列左右跳。两者都比标题轻一档：读者先
+ * 找的是「这一段是干什么的」，节点名和耗时是他确认之后才会去看的东西。 */
+.aw-stream-nodes {
+  flex: none;
+  color: var(--aw-text-muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10.5px;
+}
+
+.aw-stream-duration {
+  flex: none;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}

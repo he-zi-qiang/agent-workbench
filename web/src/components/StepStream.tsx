@@ -36,6 +36,16 @@ export interface StreamStage {
   state: StreamStageState;
   /** Right-aligned text: a time once finished, a status while not. */
   note: string;
+  /**
+   * The graph nodes behind the title, when the caller has a graph.
+   *
+   * Absent for Chat, which has none -- its stages are derived from what the
+   * events mean, so there is no node id to print and a made-up one would be
+   * worse than the blank.
+   */
+  nodes?: string;
+  /** How long the stage took, once it is over. */
+  duration?: string;
   events: EventEnvelope[];
 }
 
@@ -188,6 +198,12 @@ export function StepStream({
                     size={13}
                   />
                   <span className="aw-stream-title">{stage.title}</span>
+                  {/* 图里的节点名。标题是读者的话，这是日志的话——手里拿着一条
+                      trace、一份 ADR 或某个事件的 graph_node_id 的人，没有别的
+                      地方能把「收集资料」和 research_internal 对上。 */}
+                  {stage.nodes === undefined ? null : (
+                    <code className="aw-stream-nodes">{stage.nodes}</code>
+                  )}
                   {/* What it did, not how much of it. A collapsed stage is the
                       only thing on screen until somebody clicks, and "16 步"
                       spends that line on a quantity -- the count is still there
@@ -195,6 +211,9 @@ export function StepStream({
                   <span className="aw-stream-count" title={`${groups.length} 步`}>
                     {summariseGroups(groups)}
                   </span>
+                  {stage.duration === undefined ? null : (
+                    <span className="aw-stream-duration">{stage.duration}</span>
+                  )}
                   <span className="aw-stream-note">{stage.note}</span>
                 </summary>
                 <ol className="aw-stream-events">{groups.map(groupStep)}</ol>

@@ -1315,6 +1315,10 @@ function TaskStepStream({
     id: stage.id,
     title: stage.title,
     state: stage.state,
+    // 一段可能对应两个节点（plan · route、approval · export），所以是连起来的
+    // 一串而不是一个。表里没有的节点不画：那种情况下标题本身就是节点 id。
+    ...(stage.nodes.length === 0 ? {} : { nodes: stage.nodes.join(" · ") }),
+    ...(stageDuration(stage) === null ? {} : { duration: stageDuration(stage) as string }),
     note:
       stage.state === "skipped"
         ? "未执行"
@@ -2291,6 +2295,30 @@ const TASK_FILTERS = [
 ] as const;
 
 type TaskFilterId = (typeof TASK_FILTERS)[number]["id"];
+
+/**
+ * How long a stage took, once both ends are known.
+ *
+ * Null while it is still running: a duration measured against "now" would tick
+ * on every poll and read as a finished number that keeps changing. The stage's
+ * own note already says 进行中 in that case.
+ */
+function stageDuration(stage: {
+  startedAt: string | null;
+  endedAt: string | null;
+}): string | null {
+  if (stage.startedAt === null || stage.endedAt === null) return null;
+  const ms = Date.parse(stage.endedAt) - Date.parse(stage.startedAt);
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  if (ms < 1000) return `${String(ms)} ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${String(seconds)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0
+    ? `${String(minutes)} 分`
+    : `${String(minutes)} 分 ${String(rest)} 秒`;
+}
 
 function isSettledStatus(status: TaskStatus | undefined): boolean {
   return status !== undefined && SETTLED_STATUSES.has(status);
