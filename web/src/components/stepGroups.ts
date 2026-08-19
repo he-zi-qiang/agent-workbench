@@ -123,6 +123,16 @@ const TOOL_VERBS: Readonly<Record<string, string>> = {
 /** The keys that carry a call's subject, in the order they are preferred. */
 const SUBJECT_KEYS = ["query", "url", "name", "path", "question"] as const;
 
+/**
+ * The keys whose value is a *list* of subjects; the first one names the call.
+ *
+ * `sandbox_run` takes `{"inputs": ["snake.html"], "script": "…"}` -- the file
+ * it runs against is the only part a reader wants, and it is never a string,
+ * so the loop above walks straight past it and the row renders as a bare
+ * 运行代码 with nothing to say what it ran on.
+ */
+const SUBJECT_LIST_KEYS = ["inputs", "paths", "names"] as const;
+
 const MAX_SUBJECT_CHARS = 56;
 
 interface Building {
@@ -194,6 +204,20 @@ export function groupSteps(
       if (toolName !== null && group.toolName === null) {
         group.toolName = toolName;
         group.subject = subjectOf(payload);
+      }
+      // A write says what it wrote only after it has written it.
+      //
+      // `ToolProposed.argument_preview` is truncated, and `workspace_write`
+      // sends `{"content": "<!DOCTYPE html>…"}` with the whole file first --
+      // so the `path` key is past the cut in every real call, and the row read
+      // 写入工作区 with no filename on it. `ToolCompleted.workspace_writes`
+      // carries the name, and carries it as fact rather than as intent.
+      //
+      // Only fills a hole; an argument-derived subject is never overwritten,
+      // because that one is what the call *asked* for and stays true even if
+      // the write later failed.
+      if (group.subject === null) {
+        group.subject = subjectFromResult(payload);
       }
       group.outcome = outcomeAfter(group.outcome, event, payload);
       group.gate = gateAfter(group.gate, event, payload);
@@ -392,15 +416,46 @@ function subjectOf(payload: Record<string, unknown>): string | null {
   }
   const fields = parsed as Record<string, unknown>;
   for (const key of SUBJECT_KEYS) {
+    const fitted = fit(fields[key]);
+    if (fitted !== null) return fitted;
+  }
+  for (const key of SUBJECT_LIST_KEYS) {
     const value = fields[key];
-    if (typeof value !== "string") continue;
-    const collapsed = value.replace(/\s+/g, " ").trim();
-    if (collapsed === "") continue;
-    return collapsed.length <= MAX_SUBJECT_CHARS
-      ? collapsed
-      : `${collapsed.slice(0, MAX_SUBJECT_CHARS - 1)}…`;
+    if (!Array.isArray(value)) continue;
+    // First entry only. A call over three files is still one row, and three
+    // names in a 56-character slot is a row nobody finishes reading.
+    for (const entry of value) {
+      const fitted = fit(entry);
+      if (fitted !== null) return fitted;
+    }
   }
   return null;
+}
+
+/**
+ * The subject a completed call proves, for the calls whose arguments hid it.
+ *
+ * Reads `workspace_writes`, which `ToolCompleted` carries as the list of names
+ * the call actually wrote. See the caller for why the arguments cannot answer.
+ */
+function subjectFromResult(payload: Record<string, unknown>): string | null {
+  const writes = payload.workspace_writes;
+  if (!Array.isArray(writes)) return null;
+  for (const entry of writes) {
+    const fitted = fit(entry);
+    if (fitted !== null) return fitted;
+  }
+  return null;
+}
+
+/** One subject, whitespace collapsed and capped, or null if it is not one. */
+function fit(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (collapsed === "") return null;
+  return collapsed.length <= MAX_SUBJECT_CHARS
+    ? collapsed
+    : `${collapsed.slice(0, MAX_SUBJECT_CHARS - 1)}…`;
 }
 
 function firstToolCallId(value: unknown): string | null {

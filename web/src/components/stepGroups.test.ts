@@ -290,3 +290,79 @@ describe("summariseGroups", () => {
     expect(summariseGroups([])).toBe("");
   });
 });
+
+describe("一行步骤说得出它对哪个文件动的手", () => {
+  // 稿子上的步骤行是三段：动词 · 对象 · 结果。实际渲染出来长期只有动词——
+  // 「写入工作区」后面什么都没有，读的人没法知道它写了哪个文件。原因不在
+  // 渲染层，CodeTurn 一直画着 subject；是 subject 解析不出来。两条真实事件
+  // 各踩了一个不同的坑，所以两条都钉在这里。
+
+  it("写入的文件名来自结果，因为参数预览里放不下", () => {
+    // 真实载荷：workspace_write 把整个文件内容当第一个字段发出去，
+    // argument_preview 截断在一百多字符处，于是 path 永远在切口之外。
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_1",
+        tool_name: "workspace_write",
+        argument_preview: '{"content":"<!DOCTYPE html>\\n<html lang=\\"zh-CN\\">',
+      }),
+      event("ToolCompleted", {
+        tool_call_id: "call_1",
+        workspace_writes: ["snake.html"],
+      }),
+    ]);
+
+    expect(result[0]?.title).toBe("写入工作区");
+    expect(result[0]?.subject).toBe("snake.html");
+  });
+
+  it("运行代码的对象来自 inputs 数组，不是字符串字段", () => {
+    // sandbox_run 的参数是 {"inputs": ["snake.html"], "script": "…"}，
+    // 而 SUBJECT_KEYS 只认字符串值，数组会被整个走过去。
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_2",
+        tool_name: "sandbox_run",
+        argument_preview: '{"inputs":["snake.html"],"script":"import re"}',
+      }),
+      event("ToolCompleted", { tool_call_id: "call_2" }),
+    ]);
+
+    expect(result[0]?.title).toBe("运行代码");
+    expect(result[0]?.subject).toBe("snake.html");
+  });
+
+  it("参数里说得出对象时，结果不覆盖它", () => {
+    // 参数说的是这次调用**要**对谁动手，即使后来写到了别处，那句话依然是
+    // 这一步的意图；结果只在参数说不出话时补位。
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_3",
+        tool_name: "workspace_read",
+        argument_preview: '{"path":"notes.md"}',
+      }),
+      event("ToolCompleted", {
+        tool_call_id: "call_3",
+        workspace_writes: ["something-else.md"],
+      }),
+    ]);
+
+    expect(result[0]?.subject).toBe("notes.md");
+  });
+
+  it("真的没有对象就还是没有，不编一个出来", () => {
+    // workspace_list 的参数就是 {}。空着是对的——比填一个「工作区」强，
+    // 那个词不增加任何信息，只是让一行看起来填满了。
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_4",
+        tool_name: "workspace_list",
+        argument_preview: "{}",
+      }),
+      event("ToolCompleted", { tool_call_id: "call_4", workspace_writes: [] }),
+    ]);
+
+    expect(result[0]?.title).toBe("查看工作区");
+    expect(result[0]?.subject).toBeNull();
+  });
+});
