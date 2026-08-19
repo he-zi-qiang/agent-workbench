@@ -77,6 +77,13 @@
   --aw-evidence: #3f6472;
   --aw-evidence-soft: #eef3f5;
   --aw-evidence-border: #dbe4e7;
+
+  /* 引文底，比 --aw-evidence-soft 再淡一档。
+   *
+   * 两个面，不是一个：引用卡的表头用 soft，被引的原文用这一档。原文块嵌在那张
+   * 卡里，两者同色的话卡就是一块平的青，而这里要说的恰恰是「这一段和外面那些
+   * 不是一回事」——它是从别处读来的。 */
+  --aw-evidence-quote: #f6f9fa;
   --aw-info: var(--aw-evidence);
   --aw-info-soft: var(--aw-evidence-soft);
 

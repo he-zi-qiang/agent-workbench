@@ -924,15 +924,34 @@ function Citations({
           {...(turnId === undefined ? {} : { turnId })}
         />
       ))}
-      {/* The design sketch shows a document *title* on each row. There is no
-          route that turns a document_id into one, and inventing a readable
-          name from the id would be this page asserting something no endpoint
-          established -- so the row shows the id, and this line says why that
-          is what it shows. */}
-      <p className="aw-chat-citation-gap">
-        <span>需新接口</span>
-        文档标题需要一个按 document_id 取名的读接口；当前只有 id 与 version 可信。
-      </p>
+      {/* Two notes, and they answer different questions.
+
+          The first is the one a reader arrives with once the rows start
+          refusing: why is the text not simply *here*, next to the claim it
+          supports. Saying it under the rows rather than in an ADR nobody on
+          this page has open is what makes a later 读不到 read as the design
+          working rather than the console breaking.
+
+          The second is the sketch's document *title*. There is no route that
+          turns a document_id into one, and inventing a readable name from the
+          id would be this page asserting something no endpoint established --
+          so the row shows the id, and this line says why that is what it
+          shows. It also carries the other reason a row can be inert, because
+          a disabled chip with no explanation is indistinguishable from a
+          broken one. */}
+      <div className="aw-chat-citation-gap">
+        <p>
+          <span>一次一条</span>
+          原文不随答案一起发布：每次点开是一条 (会话 · 轮次 · chunk)
+          三段寻址的新读取，授权与 revision
+          当场重做一遍——所以一条昨天的引用今天可以正确地读不到。
+        </p>
+        <p>
+          <span>需新接口</span>
+          文档标题需要一个按 document_id 取名的读接口；当前只有 id 与 version
+          可信。刷新之后的历史轮次没有 turn id，引用不可点。
+        </p>
+      </div>
     </div>
   );
 }
@@ -984,9 +1003,30 @@ function CitationRow({
     },
   });
 
+  // Three states, and the row has to be able to draw all three: read, not yet
+  // read, and could not be read. The middle one is the one that was missing --
+  // an unopened row looked exactly like a row whose passage happened to be
+  // empty, so the click that is the whole point of ADR-067 was undiscoverable.
+  // A row that cannot address the route offers no hint at all: 点开取原文 on a
+  // chip that will not open is worse than the silence it replaced.
+  const failed = open && passage.isError;
+  const hint =
+    turnId === undefined
+      ? null
+      : !open
+        ? "点开取原文"
+        : passage.isSuccess
+          ? "刚刚重新读了一次"
+          : null;
+
   return (
     <div className="aw-chat-citation-row">
-      <span aria-hidden="true" className="aw-chat-citation-ordinal">
+      {/* Muted once the read refused, so the failure is visible while scanning
+          the column of ordinals rather than only in the sentence beside it. */}
+      <span
+        aria-hidden="true"
+        className={failed ? "aw-chat-citation-ordinal is-unread" : "aw-chat-citation-ordinal"}
+      >
         {ordinal}
       </span>
       <div className="aw-chat-citation-body">
@@ -1010,6 +1050,9 @@ function CitationRow({
           {locator === null ? null : (
             <small className="aw-chat-citation-locator">{locator}</small>
           )}
+          {hint === null ? null : (
+            <span className="aw-chat-citation-hint">{hint}</span>
+          )}
         </button>
         {/* The sketch prints the quote on the row. `Citation.quote` is never
             assigned anywhere in this repository, so the only text that exists
@@ -1018,21 +1061,26 @@ function CitationRow({
             would spend one read per citation to sometimes produce a column of
             "读不到", so the row carries what is already true and the text
             stays one click away. */}
-        {!open ? null : (
-          <div className="aw-chat-citation-passage">
-            {passage.isPending ? (
-              <LoadingLine label="正在读取被引用的原文" />
-            ) : passage.isError ? (
-              // Never "引用坏了". The commonest cause is that this reader may no
-              // longer read the document, which is a decision somebody made
-              // rather than a fault in the transcript.
-              <p className="aw-page-note">
-                读不到这段原文了：可能是这份文档的权限变了，或者它已经被重新导入过。
-              </p>
-            ) : (
-              <p>{passage.data.text}</p>
-            )}
-          </div>
+        {!open ? null : passage.isPending ? (
+          <LoadingLine label="正在读取被引用的原文" />
+        ) : passage.isError ? (
+          // Never "引用坏了", and never a cause. Three things end here -- the
+          // grant was withdrawn, the document was re-ingested, the point is no
+          // longer in the index -- and naming which one either leaks somebody
+          // else's authorization state or sends this reader looking through
+          // their own data for a mistake that is not there. So the sentence
+          // says what happened and then says, out loud, that it is not
+          // distinguishing; the alternative is a reader who assumes it did.
+          <p className="aw-chat-citation-unread">
+            读不到这段原文了。可能是权限被收回、这一版已经改过，或者这个点不在索引里——这一次没有区分，因为区分它们要么泄漏别人的东西，要么把你支去自己的数据里找一个不存在的错。
+          </p>
+        ) : (
+          // A blockquote, not a paragraph: this is somebody else's words
+          // carried into this answer, and the evidence rule is the one that
+          // marks the boundary between what the model wrote and what it read.
+          <blockquote className="aw-chat-citation-passage">
+            {passage.data.text}
+          </blockquote>
         )}
       </div>
     </div>
