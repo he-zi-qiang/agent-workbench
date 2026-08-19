@@ -181,18 +181,40 @@ export function EvaluationPage() {
             ? ` 当前这批共 ${goldSets[0]?.questionCount ?? 0} 道题。`
             : " 题库改过一次，所以下面按题库分开列，每组各有自己的题量。"}
         </p>
+        {/* 每条都补上了统计量与分母：读者拿这几个数去比较两种检索形态，而
+            「55 ms」和「38608 ms」只有在同一把尺子下才可比。
+            设计稿在这里还画了一列「拒答正确」和一个叫 p95 的耗时，两个都没有
+            照搬——这个仓库没有拒答指标（见下面的「还没有测」），而
+            `retrieval_latency_ms` 是中位数，metrics.py 上写着「Median, not
+            mean」。把它标成 p95 是给读者一把标错刻度的尺子。 */}
         <div className="aw-eval-legend">
           <div>
             <strong>第一条就找对</strong>
-            <span>返回的第 1 条就是正确文档。最严格的一档。</span>
+            <span>
+              返回的第 1 条就是正确文档，最严格的一档。分母是这一组题库的全部
+              题目，不是抽样。
+            </span>
           </div>
           <div>
             <strong>前三条内找对</strong>
-            <span>正确文档出现在前 3 条里。实际使用中够用。</span>
+            <span>
+              正确文档出现在前 3 条里。检索本身只取前三条，所以这是这套评测能
+              问的最宽的一档。
+            </span>
           </div>
           <div>
             <strong>单次检索耗时</strong>
-            <span>检索这一步花的时间，不含模型写答案的时间。</span>
+            <span>
+              一道题检索一次的耗时中位数，不含模型写答案的时间。是中位数不是
+              平均值——一道慢题就能把均值拉走。
+            </span>
+          </div>
+          <div>
+            <strong>题库指纹</strong>
+            <span>
+              题库内容的摘要。指纹不同的两份报告问的不是同一批题，页面也不会把
+              它们排进同一张表。
+            </span>
           </div>
         </div>
       </section>
@@ -375,6 +397,17 @@ export function EvaluationPage() {
             <div>
               <strong>RAGAS 目前只有配置，没有结果</strong>
               <span>仓库里还没有 runner，也没有报告，所以这里不会出现回答质量分数。</span>
+            </div>
+          </li>
+          <li>
+            <CircleDashed aria-hidden="true" size={16} />
+            <div>
+              <strong>「答不上来的时候有没有编」也没有测</strong>
+              <span>
+                语料里本来没有答案时，系统应当说答不上来而不是编一个。
+                `RETRIEVAL_METRICS` 里没有这一项，所以这里没有它的分数——
+                它是一个还没有做的评测，不是一个碰巧为空的列。
+              </span>
             </div>
           </li>
         </ul>

@@ -1154,11 +1154,13 @@ pre {
   color: var(--aw-text);
 }
 
+/* auto-fit 而不是写死 3 列：术语表加了「题库指纹」之后是 4 条，写死的列数会
+   把第 4 条单独甩到第二行、并且让它宽得像个小标题。 */
 .aw-eval-legend {
   display: grid;
   margin-top: 14px;
   gap: 10px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }
 
 .aw-eval-legend > div {
@@ -5739,3 +5741,4 @@ p.aw-code-step-thought {
 .aw-link-button:hover {
   color: var(--aw-accent-hover);
 }
+
