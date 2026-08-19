@@ -3037,32 +3037,81 @@ pre {
   display: none;
 }
 
+/* 空心点是「还没跑」，实心点是「跑过了」，所以边框就是这一档的全部信息载体。
+   它此前用 --aw-border（#eceae4）画在同色系的画布上，两者只差三个色阶——一个
+   等待中的阶段因此几乎看不出有点，而下面那条图例正要指着它说话。 */
 .aw-stream-dot {
   position: absolute;
   top: 9px;
   left: 1px;
   width: 9px;
   height: 9px;
-  border: 1px solid var(--aw-border);
+  border: 1px solid var(--aw-border-strong);
   border-radius: 50%;
   background: var(--aw-window);
 }
 
-.aw-stream-steps > li.is-done .aw-stream-dot {
+/* 状态色挂在 `.aw-stream-state` 这一层，而不是挂在「时间线里的 li」上：下面
+   那条图例用的是同一个 `.aw-stream-dot` 元素、同一批 `is-*` 类名，于是钥匙
+   和它开的锁不可能各改各的。脉动仍然只属于时间线——脉动的意思是「盯着它，
+   它要变了」，而一把钥匙不会变。 */
+.aw-stream-state.is-done .aw-stream-dot {
   border-color: var(--aw-success);
   background: var(--aw-success);
 }
 
-.aw-stream-steps > li.is-failed .aw-stream-dot {
+.aw-stream-state.is-failed .aw-stream-dot {
   border-color: var(--aw-danger);
   background: var(--aw-danger);
 }
 
-.aw-stream-steps > li.is-active .aw-stream-dot,
-.aw-stream-steps > li.is-waiting .aw-stream-dot {
+.aw-stream-state.is-active .aw-stream-dot,
+.aw-stream-state.is-waiting .aw-stream-dot {
   border-color: var(--aw-accent);
   background: var(--aw-accent);
+}
+
+.aw-stream-steps > li.is-active .aw-stream-dot,
+.aw-stream-steps > li.is-waiting .aw-stream-dot {
   animation: aw-pulse 1.4s ease-in-out infinite;
+}
+
+/* 被图路过的那一段，画成虚线。
+ *
+ * 它此前和 pending 用同一颗空心点，于是一个终态任务上没跑过的阶段看起来像
+ * 「还没轮到它」——读者会等一件永远不会发生的事。两者的区别不是程度而是
+ * 方向：pending 的阶段在前面，skipped 的阶段已经在后面了。虚线是这个界面里
+ * 唯一没被用掉的边框语汇，而且它不需要再要一档颜色。 */
+.aw-stream-state.is-skipped .aw-stream-dot {
+  border-style: dashed;
+  border-color: var(--aw-border-strong);
+  background: var(--aw-sidebar);
+}
+
+/* 这一列点各是什么意思。每行右端已经写了自己的状态，所以这里回答的不是
+   「这一行怎么了」，而是「整列扫下来哪些跑过」——后者要读六遍注解才能答，
+   而它本该是一眼的事。缩进对齐到点所在的那一列。 */
+.aw-stream-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0 0 10px;
+  padding-left: 1px;
+  gap: 12px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-stream-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.aw-stream-legend .aw-stream-dot {
+  position: static;
+  width: 7px;
+  height: 7px;
 }
 
 @media (prefers-reduced-motion: reduce) {
