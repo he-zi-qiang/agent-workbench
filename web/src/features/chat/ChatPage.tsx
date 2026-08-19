@@ -712,6 +712,27 @@ function TurnStepStream({ turn }: { turn: ChatTurnState }) {
   return (
     <>
       <TurnTools turn={turn} />
+      {/* 三个阶段折成一行「过程」。
+       *
+       * 已经答完的一轮，读者要的是答案；过程是他起疑时才展开的东西——摊开三行
+       * 阶段会把答案推下去。折叠行上并排列出三个阶段名，所以"它做了哪三件事"
+       * 不用展开就看得到，哪一件出了问题也带着自己的颜色。
+       *
+       * 跑着的时候强制展开：StepStream 会把正在跑的那一段自己打开，外面再套一
+       * 层收起来的壳，等于把实时进度藏了。 */}
+      <details className="aw-turn-process" open={running}>
+        <summary>
+          <ChevronRight aria-hidden="true" className="aw-step-caret" size={13} />
+          <span className="aw-turn-process-label">过程</span>
+          {stages.map((stage) => (
+            <span className={`aw-turn-phase is-${stage.state}`} key={stage.id}>
+              {stage.title}
+            </span>
+          ))}
+          <span className="aw-turn-process-count">
+            {stages.length} 个阶段 · {turn.activities.length} 条事件
+          </span>
+        </summary>
       <StepStream
         ariaLabel="回答过程"
         // The label the turn already computed. It carries what the event meant
@@ -725,6 +746,7 @@ function TurnStepStream({ turn }: { turn: ChatTurnState }) {
         running={running}
         stages={stages}
       />
+      </details>
     </>
   );
 }

@@ -158,6 +158,16 @@ export interface LifecycleStage {
   eventCount: number;
   startedAt: string | null;
   endedAt: string | null;
+  /**
+   * The graph nodes this stage stands for, in the graph's own vocabulary.
+   *
+   * Exposed because the titles are a reader's words and the node ids are the
+   * log's: an operator holding a trace, an ADR or a `graph_node_id` from an
+   * event has no way to line "收集资料" up with `research_internal` unless the
+   * page says so. Empty for a node this table has never heard of -- there the
+   * title *is* the node id, and printing it twice says nothing.
+   */
+  nodes: readonly string[];
 }
 
 export interface Lifecycle {
@@ -227,6 +237,7 @@ export function deriveLifecycle(
         eventCount: 0,
         startedAt: null,
         endedAt: null,
+        nodes: known.get(id)?.nodes ?? [],
       };
     }
     const state: StageState = entry.failed
@@ -242,6 +253,7 @@ export function deriveLifecycle(
       id,
       title,
       state,
+      nodes: known.get(id)?.nodes ?? [],
       eventCount: entry.count,
       startedAt: entry.first,
       endedAt: entry.last,

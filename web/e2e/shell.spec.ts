@@ -97,7 +97,12 @@ test("工作台的两个标签与 Code 在桌面和移动布局中均可使用",
     activeNavigation.getByRole("link", { name: "工作台" }),
   ).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "新建任务" })).toBeVisible();
+  // 提交入口现在是按钮不是标题：表单收在它后面，没有选中任务时默认展开——所以
+  // 下面那两条对表单控件的断言仍然成立。断言按钮而不是只断言表单，是因为表单
+  // 一旦默认收起，只看控件的测试会连"入口还在不在"都答不出来。
+  await expect(
+    page.getByRole("button", { name: "提交新任务" }),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "上传文件到知识库" }),
   ).toBeVisible();

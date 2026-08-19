@@ -204,6 +204,8 @@ export function WorkPage() {
   const identityKey = workIdentityQueryKey(identity);
 
   const [taskFilter, setTaskFilter] = useState<TaskFilterId>("all");
+  // 见下面 aw-create-task-toggle 那段注释：没有选中任务时这一页只有提交可做。
+  const [formOpen, setFormOpen] = useState(selectedTaskId === undefined);
   const filterStatuses = TASK_FILTERS.find(
     (entry) => entry.id === taskFilter,
   )?.statuses;
@@ -736,10 +738,30 @@ export function WorkPage() {
           </button>
         </header>
 
-        <form className="aw-create-task" onSubmit={handleCreate}>
-          <h2>
-            <Plus aria-hidden="true" size={16} /> 新建任务
-          </h2>
+        {/* 表单收在按钮后面。
+         *
+         * 它此前整个摊在侧栏里，于是任务列表被推到第一屏之外——而打开这一页最
+         * 常见的目的是看某个任务跑得怎么样，不是提交新的。
+         *
+         * 默认展开的条件是"还没有选中任何任务"：那种情况下这一页除了提交没有别
+         * 的可做，收起来就是给主流程平白加一次点击。选中了任务再进来，表单让位
+         * 给列表。 */}
+        <button
+          aria-controls="aw-create-task-form"
+          aria-expanded={formOpen}
+          className="aw-create-task-toggle"
+          onClick={() => setFormOpen((was) => !was)}
+          type="button"
+        >
+          <Plus aria-hidden="true" size={16} />
+          提交新任务
+        </button>
+
+        <form
+          className={`aw-create-task ${formOpen ? "" : "is-collapsed"}`}
+          id="aw-create-task-form"
+          onSubmit={handleCreate}
+        >
           <label htmlFor="work-objective">目标</label>
           <textarea
             id="work-objective"
@@ -1315,6 +1337,10 @@ function TaskStepStream({
     id: stage.id,
     title: stage.title,
     state: stage.state,
+    // 一段可能对应两个节点（plan · route、approval · export），所以是连起来的
+    // 一串而不是一个。表里没有的节点不画：那种情况下标题本身就是节点 id。
+    ...(stage.nodes.length === 0 ? {} : { nodes: stage.nodes.join(" · ") }),
+    ...(stageDuration(stage) === null ? {} : { duration: stageDuration(stage) as string }),
     note:
       stage.state === "skipped"
         ? "未执行"
@@ -2291,6 +2317,30 @@ const TASK_FILTERS = [
 ] as const;
 
 type TaskFilterId = (typeof TASK_FILTERS)[number]["id"];
+
+/**
+ * How long a stage took, once both ends are known.
+ *
+ * Null while it is still running: a duration measured against "now" would tick
+ * on every poll and read as a finished number that keeps changing. The stage's
+ * own note already says 进行中 in that case.
+ */
+function stageDuration(stage: {
+  startedAt: string | null;
+  endedAt: string | null;
+}): string | null {
+  if (stage.startedAt === null || stage.endedAt === null) return null;
+  const ms = Date.parse(stage.endedAt) - Date.parse(stage.startedAt);
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  if (ms < 1000) return `${String(ms)} ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${String(seconds)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0
+    ? `${String(minutes)} 分`
+    : `${String(minutes)} 分 ${String(rest)} 秒`;
+}
 
 function isSettledStatus(status: TaskStatus | undefined): boolean {
   return status !== undefined && SETTLED_STATUSES.has(status);

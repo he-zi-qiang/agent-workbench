@@ -1564,9 +1564,10 @@ pre {
   margin-top: 12px;
 }
 
+/* 多了一列版本，所以是五列不是四列。 */
 .aw-document-row {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto auto;
   align-items: center;
   min-height: 54px;
   padding: 7px 3px;
@@ -5152,7 +5153,6 @@ p.aw-code-step-thought {
  * 只留抽屉那一个。 */
 @media (width <= 760px) {
   .aw-code-page,
-  .aw-code-page.has-preview,
   .aw-code-page.is-rail-hidden {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -5866,4 +5866,250 @@ p.aw-code-step-thought {
   color: var(--aw-success);
   font-size: 11.5px;
   font-weight: 500;
+}
+
+/* 阶段行上的节点名与耗时。
+ *
+ * 节点名用等宽，因为它是日志里的标识符，不是一个词；耗时用表格数字，否则
+ * 「6 s」和「3 分 41 秒」会让右侧的时间列左右跳。两者都比标题轻一档：读者先
+ * 找的是「这一段是干什么的」，节点名和耗时是他确认之后才会去看的东西。 */
+.aw-stream-nodes {
+  flex: none;
+  color: var(--aw-text-muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10.5px;
+}
+
+.aw-stream-duration {
+  flex: none;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- 知识库统计卡 -------------------------------------------------------
+ *
+ * 数字在上、标签在下，四张并排。此前是一行里数字和词交替出现，读者得先两两配
+ * 对才读得到「1 个索引失败」。 */
+.aw-kb-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.aw-kb-stat {
+  padding: 14px 16px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel);
+}
+
+.aw-kb-stat strong {
+  display: block;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-kb-stat span {
+  display: block;
+  margin-top: 4px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+.aw-kb-stat.is-success {
+  border-color: var(--aw-success-border);
+  background: var(--aw-success-soft);
+  color: var(--aw-success);
+}
+
+.aw-kb-stat.is-warning {
+  border-color: var(--aw-warning-border);
+  background: var(--aw-warning-soft);
+  color: var(--aw-warning);
+}
+
+.aw-kb-stat.is-danger {
+  border-color: var(--aw-danger-border);
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+}
+
+.aw-kb-stat.is-success span,
+.aw-kb-stat.is-warning span,
+.aw-kb-stat.is-danger span {
+  color: inherit;
+  opacity: 0.86;
+}
+
+.aw-kb-updated {
+  margin: 8px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+/* 版本列。等宽，因为它是一个会被拿去比对的标识符，不是一个量。 */
+.aw-document-revision {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+
+.aw-document-revision code {
+  color: var(--aw-text-soft);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11.5px;
+}
+
+/* 「索引落后」不是错误，是一个时间差——所以是 warning 不是 danger。 */
+.aw-document-revision small {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--aw-warning-soft);
+  color: var(--aw-warning);
+  font-size: 10.5px;
+}
+
+@media (width <= 720px) {
+  .aw-kb-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* --- 提交新任务 ---------------------------------------------------------
+ *
+ * 实心橙按钮，因为它是这一栏唯一的动作；下面全是列表。 */
+.aw-create-task-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 38px;
+  margin-bottom: 12px;
+  border: 1px solid var(--aw-accent);
+  border-radius: 9px;
+  background: var(--aw-accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.aw-create-task-toggle:hover {
+  border-color: var(--aw-accent-hover);
+  background: var(--aw-accent-hover);
+}
+
+/* display:none 而不是高度动画：这里面有 textarea、select 和上传控件，折叠动画
+   要么裁掉焦点环，要么在展开时抖一下。收起来的表单不参与 tab 顺序，也不该参与。 */
+.aw-create-task.is-collapsed {
+  display: none;
+}
+
+/* 右上角的身份。浮在内容之上而不是占一行：它每一页都在，但没有一页是关于它的。 */
+.aw-identity-pill {
+  position: fixed;
+  z-index: 30;
+  top: 10px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  box-shadow: var(--aw-shadow-sm);
+}
+
+.aw-identity-pill:hover {
+  border-color: var(--aw-border-strong);
+  color: var(--aw-text);
+}
+
+.aw-identity-pill > span[aria-hidden] {
+  color: var(--aw-text-muted);
+}
+
+/* 窄屏让位给移动导航与页头，那里空间本来就紧。 */
+@media (width <= 900px) {
+  .aw-identity-pill {
+    display: none;
+  }
+}
+
+/* --- 对话的「过程」折叠行 -----------------------------------------------
+ *
+ * 三个阶段名并排在折叠行上：不展开也看得到它做了哪三件事，出问题的那一件带着
+ * 自己的颜色。 */
+.aw-turn-process > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+}
+
+.aw-turn-process > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-turn-process[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-turn-process-label {
+  color: var(--aw-text-soft);
+  font-weight: 500;
+}
+
+.aw-turn-process-count {
+  margin-left: auto;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+/* 走通的阶段是中性的——和授权珠串同一条规则：一列绿色对勾会让唯一那次失败更
+   难找。只有失败和等待带颜色。 */
+.aw-turn-phase {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-soft);
+  font-size: 11px;
+}
+
+.aw-turn-phase.is-active {
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+.aw-turn-phase.is-failed {
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+  font-weight: 500;
+}
+
+.aw-turn-phase.is-waiting {
+  background: var(--aw-warning-soft);
+  color: var(--aw-warning);
+}
+
+.aw-turn-phase.is-pending,
+.aw-turn-phase.is-skipped {
+  background: transparent;
+  color: var(--aw-text-muted);
+  box-shadow: inset 0 0 0 1px var(--aw-border);
 }

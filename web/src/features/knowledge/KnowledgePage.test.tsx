@@ -203,7 +203,10 @@ describe("KnowledgePage 摄取失败", () => {
     expect(
       within(row).getByText(/文件内容无法解析，请换成可读的 PDF、Word 或 Markdown 重新上传。/),
     ).toBeInTheDocument();
-    expect(screen.queryByText("正在索引")).toBeNull();
+    // 同样在行里找。概览那四张统计卡各带一个状态标签，「正在索引」是其中一张的
+    // 名字，整页断言会撞上它——而这条测试问的是这一行的状态，不是这一页有没有
+    // 出现过这四个字。
+    expect(within(row).queryByText("正在索引")).toBeNull();
   });
 
   it("还在处理的文档仍然显示正在索引", async () => {
