@@ -55,6 +55,27 @@ a {
   outline-offset: 2px;
 }
 
+/* 焦点落在**实心橙**上时，环改画在按钮里面，并且换成按钮自己的字色。
+ *
+ * 橙环贴在橙底外面读起来是"按钮胖了一圈"，不是"它被聚焦了"——两个橙之间隔着
+ * 的 2px 是画布，而画布在浅色下是暖白、深色下是暖黑，都不足以把两块橙分开。
+ * 换成 --aw-accent-on 之后，环与底的对比度就等于这颗按钮上字与底的对比度，
+ * 那个数在 tokens.css 里已经算过。
+ *
+ * 负 offset（画在里面）而不是加大正 offset：按钮外面那圈本来就是画布，橙环在
+ * 画布上从来不缺对比度；缺对比度的是紧贴橙底的那一圈。
+ *
+ * 用 outline 的两个属性做这件事、而不是补一层 box-shadow：box-shadow 会和组件
+ * 自己的投影抢同一个属性，而这套 CSS 里按钮、卡片、输入条各有各的 box-shadow，
+ * 谁覆盖谁只由声明顺序和特异性决定——那是一条每加一个组件就要重算一次的规则。 */
+.aw-logo:focus-visible,
+.aw-button.is-primary:focus-visible,
+.aw-primary-button:focus-visible,
+.aw-chat-send:focus-visible {
+  outline-color: var(--aw-accent-on);
+  outline-offset: -4px;
+}
+
 .aw-sr-only {
   position: absolute;
   width: 1px;
@@ -114,7 +135,7 @@ a {
   margin: 0 0 10px;
   border-radius: 12px;
   background: var(--aw-accent);
-  color: #fff;
+  color: var(--aw-accent-on);
   font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.04em;
@@ -163,8 +184,29 @@ a {
   flex: 1;
 }
 
-.aw-env-button {
+.aw-env-button,
+.aw-theme-button {
   padding: 0;
+}
+
+/* 主题按钮的图标在切档时转 180°，环境按钮的不转。
+ *
+ * 差别是有意的：环境按钮每次点开的是同一个对话框，图标没有"变成了别的"这件事
+ * 可说；主题按钮点一下之后，它自己的图标就换了一个——不给这个交换一点时间，
+ * 屏幕上同时发生的是「整页配色跳变」和「一个 18px 的图标瞬间变成另一个」，
+ * 后者会被读成闪烁而不是响应。 */
+.aw-theme-button svg {
+  transition: transform var(--aw-duration-base) var(--aw-ease);
+}
+
+.aw-theme-button:hover svg {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-theme-button:hover svg {
+    transform: none;
+  }
 }
 
 .aw-mobile-nav {
@@ -178,7 +220,7 @@ a {
   display: grid;
   align-items: end;
   padding: 14px;
-  background: rgb(10 11 9 / 62%);
+  background: var(--aw-scrim-strong);
   backdrop-filter: blur(4px);
 }
 
@@ -265,7 +307,7 @@ a {
 .aw-button.is-primary {
   border-color: var(--aw-accent);
   background: var(--aw-accent);
-  color: #fff;
+  color: var(--aw-accent-on);
 }
 
 .aw-button.is-primary:hover:not(:disabled) {
@@ -349,7 +391,7 @@ textarea::placeholder {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgb(14 15 13 / 48%);
+  background: var(--aw-scrim);
   backdrop-filter: blur(4px);
 }
 
@@ -2062,7 +2104,7 @@ pre {
   height: 26px;
   border-radius: 8px;
   background: var(--aw-rail);
-  color: #fff;
+  color: var(--aw-on-rail);
   font-size: 11px;
   font-weight: 600;
 }
@@ -2333,14 +2375,14 @@ pre {
   border: 1px solid var(--aw-border-strong);
   border-radius: 14px;
   background: var(--aw-panel);
-  box-shadow: 0 8px 24px rgb(34 35 32 / 8%);
+  box-shadow: var(--aw-shadow-lift);
 }
 
 .aw-chat-composer-row:focus-within {
   border-color: color-mix(in srgb, var(--aw-accent) 55%, var(--aw-border));
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--aw-accent) 10%, transparent),
-    0 8px 24px rgb(34 35 32 / 8%);
+    var(--aw-shadow-lift);
 }
 
 .aw-chat-composer-row textarea,
@@ -2488,7 +2530,7 @@ pre {
 .aw-primary-button {
   border-color: var(--aw-accent);
   background: var(--aw-accent);
-  color: #fff;
+  color: var(--aw-accent-on);
 }
 
 .aw-danger-button {
@@ -2878,7 +2920,12 @@ pre {
 
 /* The sandboxed HTML frame. White rather than the panel tint: a page that
    sets no background of its own expects paper, and the tint would read as
-   the page's own colour choice. */
+   the page's own colour choice.
+
+   深色主题下它**仍然是白的**，这是这个文件里唯一一处不跟随主题的颜色。理由和
+   浅色下是同一条，只是在深色下更硬：框里是 agent 写的一整页 HTML，它按浏览器
+   默认背景排版，字色默认是黑的。把这块底改暗，得到的不是"深色版的产物"，而是
+   一页黑底黑字。产物的主题该由产物自己声明，不由承载它的控制台替它决定。 */
 .aw-html-frame {
   background: #fff;
 }
@@ -4295,12 +4342,12 @@ pre {
 .aw-chat-live-text {
   margin: 4px 0 2px;
   padding-left: 12px;
-  border-left: 2px solid var(--aw-border-strong, rgba(0, 0, 0, 0.18));
+  border-left: 2px solid var(--aw-border-strong);
 }
 
 .aw-chat-live-text p {
   margin: 0;
-  color: var(--aw-text-muted, #5b5751);
+  color: var(--aw-text-muted);
   white-space: pre-wrap;
 }
 
@@ -4309,7 +4356,7 @@ pre {
   gap: 5px;
   align-items: center;
   margin-top: 4px;
-  color: var(--aw-text-subtle, #8a847c);
+  color: var(--aw-text-subtle);
 }
 
 /* --- Code：一次编码会话 --------------------------------------------------
@@ -4576,7 +4623,7 @@ pre {
 .aw-code-action-subject {
   overflow: hidden;
   color: var(--aw-text-muted);
-  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--aw-mono);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4591,12 +4638,12 @@ pre {
 /* 只标两种值得打断读者的结局。跑完的步骤是常态，靠不说话来说它是常态。 */
 .aw-code-action.is-failed .aw-code-action-title,
 .aw-code-action.is-failed .aw-code-action-outcome {
-  color: var(--aw-danger, #b3261e);
+  color: var(--aw-danger);
 }
 
 .aw-code-action.is-denied .aw-code-action-title,
 .aw-code-action.is-denied .aw-code-action-outcome {
-  color: var(--aw-warning, #8a5300);
+  color: var(--aw-warning);
 }
 
 /* --- 还在跑的那一步（ADR-068 / ADR-069） --- */
@@ -4618,11 +4665,11 @@ pre {
   margin: 0 0 2px;
   padding: 4px 8px;
   border-radius: 5px;
-  background: var(--aw-surface-sunken, rgb(0 0 0 / 4%));
+  background: var(--aw-surface-sunken);
   gap: 1px;
   overflow-x: auto;
   list-style: none;
-  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--aw-mono);
   line-height: 1.5;
   white-space: pre;
 }
@@ -4696,7 +4743,7 @@ pre {
 
 .aw-code-output-name {
   flex: none;
-  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--aw-mono);
   font-size: 13px;
   overflow-wrap: anywhere;
 }
@@ -4910,7 +4957,7 @@ p.aw-code-step-thought {
   flex-direction: column;
   border-left: 1px solid var(--aw-border);
   background: var(--aw-sidebar);
-  box-shadow: -18px 0 48px rgb(27 25 23 / 12%);
+  box-shadow: var(--aw-shadow-drawer-left);
   animation: aw-drawer-in 160ms ease;
 }
 
@@ -4976,7 +5023,7 @@ p.aw-code-step-thought {
   overflow: auto;
   border-radius: 10px;
   background: var(--aw-panel);
-  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--aw-mono);
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -5049,7 +5096,7 @@ p.aw-code-step-thought {
   padding: 1px 6px;
   border-radius: 5px;
   background: var(--aw-panel);
-  font-family: var(--aw-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--aw-mono);
 }
 
 /* stderr 只描边不变色：它常常装着 traceback，也常常只是一行 warning，把整块
@@ -5217,7 +5264,7 @@ p.aw-code-step-thought {
     position: fixed;
     z-index: 71;
     inset: 0 0 60px;
-    background: rgb(41 39 36 / 18%);
+    background: var(--aw-scrim-soft);
     backdrop-filter: blur(2px);
   }
 }
@@ -5240,7 +5287,7 @@ p.aw-code-step-thought {
     inset: 0 auto 60px 0;
     display: flex;
     width: min(340px, 88vw);
-    box-shadow: 18px 0 48px rgb(41 39 36 / 12%);
+    box-shadow: var(--aw-shadow-drawer-right);
   }
 
   .aw-code-sessions-backdrop {
@@ -5251,7 +5298,7 @@ p.aw-code-step-thought {
     width: 100%;
     padding: 0;
     border: 0;
-    background: rgb(41 39 36 / 18%);
+    background: var(--aw-scrim-soft);
     backdrop-filter: blur(2px);
   }
 
@@ -5284,7 +5331,7 @@ p.aw-code-step-thought {
   width: 100%;
   padding: 0;
   border: 0;
-  background: rgb(27 25 23 / 12%);
+  background: var(--aw-scrim-soft);
   cursor: default;
 }
 
@@ -5327,9 +5374,9 @@ p.aw-code-step-thought {
    underline plus a real border is the cue that survives any monitor. */
 .aw-workbench-tab[aria-current="page"] {
   border-color: var(--aw-border);
-  background: var(--aw-surface, #fff);
+  background: var(--aw-surface);
   color: var(--aw-text);
-  box-shadow: inset 0 -2px 0 var(--aw-accent), 0 1px 2px rgb(0 0 0 / 6%);
+  box-shadow: inset 0 -2px 0 var(--aw-accent), var(--aw-shadow-sm);
   font-weight: 600;
 }
 
@@ -5381,7 +5428,7 @@ p.aw-code-step-thought {
   margin: 0;
   padding: 8px;
   border-radius: 6px;
-  background: var(--aw-surface, #fff);
+  background: var(--aw-surface);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 11px;
   line-height: 1.6;
@@ -5425,7 +5472,7 @@ p.aw-code-step-thought {
 .aw-artifacts-workspace {
   margin-top: 1rem;
   padding-top: 0.75rem;
-  border-top: 1px solid var(--aw-border-subtle, var(--aw-border));
+  border-top: 1px solid var(--aw-border-subtle);
 }
 
 .aw-artifacts-workspace h3 {
@@ -5460,7 +5507,7 @@ p.aw-code-step-thought {
    Muted and monospace so it reads as an identifier rather than as a second
    title competing with the one beside it. */
 .aw-answer-filename {
-  font-family: var(--aw-font-mono, ui-monospace, monospace);
+  font-family: var(--aw-font-mono);
   font-size: 0.75rem;
   color: var(--aw-text-muted);
 }
@@ -5571,7 +5618,7 @@ p.aw-code-step-thought {
 
 .aw-gate-check.is-pivot .aw-gate-number {
   background: var(--aw-accent);
-  color: #fff;
+  color: var(--aw-accent-on);
 }
 
 .aw-gate-check strong {
@@ -5587,7 +5634,7 @@ p.aw-code-step-thought {
   padding: 1px 8px;
   border-radius: 999px;
   background: var(--aw-accent);
-  color: #fff;
+  color: var(--aw-accent-on);
   font-size: 11px;
   font-weight: 600;
 }
@@ -6090,7 +6137,7 @@ p.aw-code-step-thought {
   border: 1px solid var(--aw-accent);
   border-radius: 9px;
   background: var(--aw-accent);
-  color: #fff;
+  color: var(--aw-accent-on);
   font-size: 13px;
   font-weight: 550;
 }

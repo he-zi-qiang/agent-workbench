@@ -1,24 +1,27 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { AppShell } from "./AppShell";
 import { IdentityProvider } from "./IdentityContext";
+import { THEME_STORAGE_KEY, ThemeProvider } from "./ThemeContext";
 
 describe("AppShell mobile navigation", () => {
   it("makes every auxiliary project page reachable from More", async () => {
     const user = userEvent.setup();
     render(
-      <IdentityProvider>
-        <MemoryRouter initialEntries={["/chat"]}>
-          <Routes>
-            <Route element={<AppShell />}>
-              <Route element={<p>Chat page</p>} path="/chat" />
-              <Route element={<p>Evaluation page</p>} path="/evaluation" />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </IdentityProvider>,
+      <ThemeProvider>
+        <IdentityProvider>
+          <MemoryRouter initialEntries={["/chat"]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route element={<p>Chat page</p>} path="/chat" />
+                <Route element={<p>Evaluation page</p>} path="/evaluation" />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </IdentityProvider>
+      </ThemeProvider>,
     );
 
     await user.click(screen.getByRole("button", { name: "更多" }));
@@ -49,17 +52,19 @@ describe("AppShell mobile navigation", () => {
 describe("AppShell rail", () => {
   function mounted(at: string) {
     return render(
-      <IdentityProvider>
-        <MemoryRouter initialEntries={[at]}>
-          <Routes>
-            <Route element={<AppShell />}>
-              <Route element={<p>Chat page</p>} path="/chat" />
-              <Route element={<p>Work page</p>} path="/work" />
-              <Route element={<p>Code page</p>} path="/code" />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </IdentityProvider>,
+      <ThemeProvider>
+        <IdentityProvider>
+          <MemoryRouter initialEntries={[at]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route element={<p>Chat page</p>} path="/chat" />
+                <Route element={<p>Work page</p>} path="/work" />
+                <Route element={<p>Code page</p>} path="/code" />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </IdentityProvider>
+      </ThemeProvider>,
     );
   }
 
@@ -106,5 +111,107 @@ describe("AppShell rail", () => {
     expect(rail.queryByRole("link", { name: "Work" })).not.toBeInTheDocument();
     expect(rail.getByRole("link", { name: "工作台" })).toBeInTheDocument();
     expect(rail.getByRole("link", { name: "Code" })).toBeInTheDocument();
+  });
+});
+
+describe("AppShell theme control", () => {
+  function mounted() {
+    return render(
+      <ThemeProvider>
+        <IdentityProvider>
+          <MemoryRouter initialEntries={["/chat"]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route element={<p>Chat page</p>} path="/chat" />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </IdentityProvider>
+      </ThemeProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    document.documentElement.removeAttribute("data-theme");
+  });
+
+  it("starts on 跟随系统 and writes no data-theme for it", () => {
+    mounted();
+
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    expect(rail.getByRole("button", { name: "跟随系统" })).toBeInTheDocument();
+    // 跟随系统这一档的做法是**不写属性**，把决定权留给 CSS 的
+    // `color-scheme: light dark`。写一个 data-theme="system" 也能让按钮显示对，
+    // 但 tokens.css 那两条覆盖规则选的是 light/dark，属性会变成一个没人读的字符串
+    // ——而没人读的状态迟早会和真正生效的那个分叉。
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+  });
+
+  it("cycles system → light → dark → system, and the attribute follows", async () => {
+    const user = userEvent.setup();
+    mounted();
+
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    await user.click(rail.getByRole("button", { name: "跟随系统" }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+
+    await user.click(rail.getByRole("button", { name: "浅色" }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+
+    // 回到 system 时属性要被**移除**，不是留一个旧值。留着的话，用户选回
+    // 「跟随系统」之后系统再切深浅，界面不会跟着动。
+    await user.click(rail.getByRole("button", { name: "深色" }));
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+  });
+
+  it("survives a reload", async () => {
+    const user = userEvent.setup();
+    const first = mounted();
+
+    await user.click(
+      within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", {
+        name: "跟随系统",
+      }),
+    );
+    first.unmount();
+    document.documentElement.removeAttribute("data-theme");
+
+    mounted();
+    expect(
+      within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", {
+        name: "浅色",
+      }),
+    ).toBeInTheDocument();
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+  });
+
+  it("ignores a stored value that is no longer one of the three", () => {
+    // 手写进 localStorage 的旧值/脏值。落回第一档，而不是把它当成属性写到
+    // <html> 上——后者会得到一个 CSS 里没有对应规则的主题，界面按浅色渲染而
+    // 按钮显示着那个不存在的名字。
+    localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify("solarized"));
+    mounted();
+
+    expect(
+      within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", {
+        name: "跟随系统",
+      }),
+    ).toBeInTheDocument();
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+  });
+
+  it("reaches the theme from mobile, where the rail is hidden", async () => {
+    const user = userEvent.setup();
+    mounted();
+
+    await user.click(screen.getByRole("button", { name: "更多" }));
+    const more = within(screen.getByRole("dialog", { name: "更多页面" }));
+    await user.click(more.getByRole("button", { name: "主题：跟随系统" }));
+
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    // 面板不关：连点三下看三档，比每点一次都要重新打开「更多」合理。
+    expect(screen.getByRole("dialog", { name: "更多页面" })).toBeInTheDocument();
+    expect(more.getByRole("button", { name: "主题：浅色" })).toBeInTheDocument();
   });
 });

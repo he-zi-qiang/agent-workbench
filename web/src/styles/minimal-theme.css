@@ -47,7 +47,7 @@ body {
   border: 0;
   border-radius: 12px;
   background: var(--aw-accent);
-  color: #fff;
+  color: var(--aw-accent-on);
   box-shadow: none;
 }
 
@@ -297,7 +297,7 @@ select {
     var(--aw-text-muted) 0%,
     var(--aw-text-muted) 35%,
     var(--aw-accent) 47%,
-    #efaa93 52%,
+    color-mix(in srgb, var(--aw-accent) 62%, var(--aw-text)) 52%,
     var(--aw-text) 59%,
     var(--aw-text-muted) 72%,
     var(--aw-text-muted) 100%
@@ -399,7 +399,7 @@ select {
   padding: 11px 15px;
   border: 0;
   border-radius: 18px 18px 5px 18px;
-  background: #f2f1ed;
+  background: var(--aw-panel-strong);
 }
 
 .aw-chat-assistant-mark {
@@ -436,14 +436,14 @@ select {
   padding: 7px;
   border: 1px solid var(--aw-border-strong);
   border-radius: 24px;
-  box-shadow: 0 6px 22px rgb(41 39 36 / 7%);
+  box-shadow: var(--aw-shadow-lift);
 }
 
 .aw-chat-composer-row:focus-within {
   border-color: color-mix(in srgb, var(--aw-accent) 48%, var(--aw-border));
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--aw-accent) 9%, transparent),
-    0 8px 24px rgb(41 39 36 / 8%);
+    var(--aw-shadow-lift);
 }
 
 .aw-chat-send {
@@ -699,7 +699,7 @@ select {
   }
 
   .aw-mobile-nav {
-    background: rgb(255 255 255 / 96%);
+    background: color-mix(in srgb, var(--aw-panel) 96%, transparent);
   }
 
   .aw-chat-sessions,
@@ -717,7 +717,7 @@ select {
     border-right: 1px solid var(--aw-border);
     border-bottom: 0;
     background: var(--aw-sidebar);
-    box-shadow: 18px 0 48px rgb(41 39 36 / 12%);
+    box-shadow: var(--aw-shadow-drawer-right);
   }
 
   .aw-chat-sessions-backdrop {
@@ -728,7 +728,7 @@ select {
     width: 100%;
     padding: 0;
     border: 0;
-    background: rgb(41 39 36 / 18%);
+    background: var(--aw-scrim-soft);
     backdrop-filter: blur(2px);
   }
 
@@ -849,4 +849,60 @@ select {
     -webkit-text-fill-color: currentColor;
     animation: none;
   }
+}
+
+/* 深浅两个主题共有的收尾
+ * ======================
+ *
+ * 放在这一层而不是 app.css：它们都属于"看起来怎样"，不改任何一处布局或行为。
+ */
+
+/* 数字等宽。
+ *
+ * 这个控制台屏幕上有大量会**原地变化**的数字：任务列表的时间戳、token 计数
+ * (8 / 4096)、耗时、进度。比例字体里 1 比 0 窄一截，于是每跳一次数字，它后面
+ * 的东西就横向抖一下——在一个每秒刷新的流式界面上，那是持续的抖动。
+ *
+ * 只给等宽栈和显式标了"元信息"的地方开，不全局开：正文里的中文与拉丁字混排
+ * 用 tabular-nums 会让阿拉伯数字之间显得松。 */
+:is(code, kbd, samp, pre, .aw-meta, .aw-timestamp, .aw-count, .aw-token-count) {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* 深色下给"抬起"的面加一道顶部高光。
+ *
+ * 浅色下 --aw-raise 是 transparent，所以这条规则在浅色主题里等于没写——不需要
+ * 用媒体查询把它圈起来，token 自己就是那个开关。
+ *
+ * 用 inset box-shadow 而不是 border-top：边框会占 1px 布局，把这些面的内容整体
+ * 往下推 1px，而这一层的规矩是不碰布局。 */
+.aw-dialog,
+.aw-mobile-more-sheet {
+  box-shadow:
+    inset 0 1px 0 var(--aw-raise),
+    var(--aw-shadow-md);
+}
+
+/* 输入条要写三遍：静止、聚焦、以及聚焦时的低动效版本，因为
+   `.aw-chat-composer-row:focus-within` 的特异性高于类选择器，只写静止那条会在
+   聚焦时把高光整条丢掉——而聚焦恰好是这块面最该看得出厚度的时候。 */
+.aw-chat-composer-row {
+  box-shadow:
+    inset 0 1px 0 var(--aw-raise),
+    var(--aw-shadow-lift);
+}
+
+.aw-chat-composer-row:focus-within {
+  box-shadow:
+    inset 0 1px 0 var(--aw-raise),
+    0 0 0 3px color-mix(in srgb, var(--aw-accent) 9%, transparent),
+    var(--aw-shadow-lift);
+}
+
+/* 选中文字的底色在深色下要重新给：--aw-accent-soft 在深色是 #2e1f18，
+   落在 #221f1d 的卡片上几乎分不出来，选中于是看不见选了哪儿。 */
+::selection {
+  background: color-mix(in srgb, var(--aw-accent) 30%, transparent);
+  color: var(--aw-text);
 }

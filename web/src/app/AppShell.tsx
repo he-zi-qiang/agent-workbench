@@ -3,16 +3,20 @@ import {
   Code2,
   FlaskConical,
   Library,
+  MonitorCog,
   MonitorSmartphone,
+  Moon,
   MoreHorizontal,
   MessageSquare,
   Settings2,
+  Sun,
   X,
 } from "lucide-react";
 import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { EnvironmentDialog } from "./EnvironmentDialog";
 import { useIdentity } from "./IdentityContext";
+import { NEXT_MODE, type ThemeMode, useTheme } from "./ThemeContext";
 
 const NAVIGATION = [
   // One entry for two routes. `covers` is what marks it current on `/work`
@@ -68,8 +72,43 @@ const NAVIGATION = [
  */
 const FIRST_SECONDARY_INDEX = NAVIGATION.findIndex((item) => !item.primary);
 
+/**
+ * 主题按钮显示的是**当前这一档**，不是"点了会变成什么"。
+ *
+ * 两种写法都常见，但只有一种在三档下不会说谎：显示"下一档"的按钮在 system 档上
+ * 必须画一个太阳（下一档是浅色），而此刻屏幕可能正是深的——图标于是和眼前的
+ * 界面相反。显示当前档就没有这个问题，代价是要有 title 说清点下去会怎样。
+ */
+const THEME_LABEL: Record<ThemeMode, { icon: typeof Sun; text: string }> = {
+  system: { icon: MonitorCog, text: "跟随系统" },
+  light: { icon: Sun, text: "浅色" },
+  dark: { icon: Moon, text: "深色" },
+};
+
+function ThemeControl() {
+  const { mode, resolved, cycleMode } = useTheme();
+  const { icon: Icon, text } = THEME_LABEL[mode];
+  // `system` 档下补一句当前解析成了什么。这一档的按钮文字说的是"跟随"，而跟随
+  // 的结果是屏幕现在的样子——不说出来的话，唯一能回答"现在到底是深还是浅"的
+  // 东西就是眼睛，而这正是有人来点这个按钮的原因。
+  const current = mode === "system" ? `（当前${resolved === "dark" ? "深色" : "浅色"}）` : "";
+  return (
+    <button
+      className="aw-global-link aw-theme-button"
+      onClick={cycleMode}
+      title={`主题：${text}${current} · 点击切换到${THEME_LABEL[NEXT_MODE[mode]].text}`}
+      type="button"
+    >
+      <Icon aria-hidden="true" size={18} />
+      <span>{text}</span>
+    </button>
+  );
+}
+
 export function AppShell() {
   const { identity, setEditorOpen } = useIdentity();
+  const { mode: themeMode, cycleMode: cycleTheme } = useTheme();
+  const ThemeIcon = THEME_LABEL[themeMode].icon;
   const location = useLocation();
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   // Everything that is not a primary flow and not already on the mobile bar.
@@ -118,6 +157,7 @@ export function AppShell() {
           );
         })}
         <div className="aw-rail-spacer" />
+        <ThemeControl />
         <button
           className="aw-global-link aw-env-button"
           onClick={() => setEditorOpen(true)}
@@ -219,6 +259,18 @@ export function AppShell() {
                   </NavLink>
                 );
               })}
+              {/* 主题也在这里出现一次：rail 在 760px 以下是隐藏的，而它是
+                  主题按钮唯一的入口，只放在 rail 上等于移动端没有主题开关。
+                  这一项不关闭面板——连点三下看三档，比每点一次都要重新打开
+                  「更多」要合理。 */}
+              <button
+                className="aw-mobile-more-link"
+                onClick={cycleTheme}
+                type="button"
+              >
+                <ThemeIcon aria-hidden="true" size={19} />
+                <span>主题：{THEME_LABEL[themeMode].text}</span>
+              </button>
               <button
                 className="aw-mobile-more-link"
                 onClick={() => {
