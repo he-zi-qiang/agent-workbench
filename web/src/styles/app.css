@@ -4460,11 +4460,16 @@ pre {
 /* 一行，多的用省略号。会话是用第一句指令命名的（ADR-047），而指令是一整句话
  * —— 折叠在转录顶上时列表很矮、换行无所谓，常驻成一条窄栏之后，一句 40 字的
  * 指令会把一行撑成七行，三个会话就吃掉整屏。完整标题在 title 里，悬停可见。 */
+/* 两行：标题在上，时间在下。
+ *
+ * `display: block` 加行内的 ellipsis 只对一行成立；现在有第二行，所以裁切
+ * 下移到标题那一层，容器自己不再管溢出——否则时间会被算进同一行的省略号里，
+ * 表现为标题长的会话看不见时间。 */
 .aw-code-recent-link {
-  display: block;
+  display: grid;
   width: 100%;
-  padding: 8px 10px;
-  overflow: hidden;
+  padding: 7px 10px;
+  gap: 1px;
   border: 0;
   border-radius: 9px;
   background: transparent;
@@ -4472,14 +4477,28 @@ pre {
   font: inherit;
   font-size: 13px;
   text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   cursor: pointer;
 }
 
 .aw-code-recent-link:hover {
   background: var(--aw-panel-soft);
 }
+
+.aw-code-recent-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 稿子上这一行是「3 轮 · 9 个文件 · 14:02」；接口只给得出最后一段，
+   所以这里只有时间。等宽是因为它是个会原地变化的数字，比例字体下每跳一次
+   后面的东西就横向抖一下。 */
+.aw-code-recent-when {
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+}
+
 
 .aw-code-recent-link[aria-current="page"] {
   background: var(--aw-panel-strong);
@@ -4610,17 +4629,28 @@ pre {
   overflow-wrap: anywhere;
 }
 
+/* 这一行是步骤列表的主干。
+ *
+ * 13px 而不是 12px，是为了兑现下面那条思考行注释里已经写着的话——「比动作行
+ * 小一号」。此前两行都是 12px：注释承诺了一个层级，代码没有实现它，于是一段
+ * 思考和它促成的动作在页面上等重（实测行高 25px 对 27px），眼睛找不到这一列
+ * 的主干是哪一行。一轮四段思考三个动作，读起来就是七行等重的碎屑。
+ *
+ * 差一号就够，不需要更多：思考已经是斜体加淡色，再拉开字号只会让动作行显得
+ * 像标题——它不是标题，它是一行记录。 */
 .aw-code-action {
   display: flex;
   align-items: baseline;
   padding: 4px 8px;
   gap: 8px;
   border-radius: 7px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
+/* 动词承重，所以它比这一行的其余部分重一档。 */
 .aw-code-action-title {
   flex: none;
+  font-weight: 500;
 }
 
 /* 主语——文件名、查询——先于动词让位。 */
@@ -4628,7 +4658,7 @@ pre {
   overflow: hidden;
   color: var(--aw-text-muted);
   font-family: var(--aw-mono);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5347,11 +5377,26 @@ p.aw-code-step-thought {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+/* 屏名与标签是一行，外边距归这一行管——此前它挂在标签条自己身上，加了屏名
+   之后那个 margin 会把两者推成上下两块。 */
+.aw-workbench-head {
+  display: flex;
+  align-items: center;
+  align-self: start;
+  margin: 12px 0 0 18px;
+  gap: 12px;
+}
+
+.aw-workbench-name {
+  font-family: var(--aw-display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
 .aw-workbench-tabs {
   display: inline-flex;
   gap: 2px;
-  align-self: start;
-  margin: 12px 0 0 18px;
   padding: 3px;
   border: 1px solid var(--aw-border);
   border-radius: 9px;
@@ -5385,8 +5430,9 @@ p.aw-code-step-thought {
 }
 
 @media (width <= 900px) {
-  .aw-workbench-tabs {
+  .aw-workbench-head {
     margin: 8px 0 0 12px;
+    gap: 10px;
   }
 }
 
@@ -6186,6 +6232,11 @@ p.aw-code-step-thought {
   color: var(--aw-text-muted);
 }
 
+/* 授权条数比身份本身淡一档：它是那句话的补语，不是主语。 */
+.aw-identity-scopes {
+  color: var(--aw-text-muted);
+}
+
 /* 窄屏让位给移动导航与页头，那里空间本来就紧。 */
 @media (width <= 900px) {
   .aw-identity-pill {
@@ -6258,4 +6309,35 @@ p.aw-code-step-thought {
   background: transparent;
   color: var(--aw-text-muted);
   box-shadow: inset 0 0 0 1px var(--aw-border);
+}
+
+/* 开一段新的：会话列里唯一不是「回到某一段」的动作。
+ *
+ * 整行描边，不是标题右边的图标按钮。图标按钮在视觉上从属于标题，而且它没有
+ * 名字——只有把指针停上去才知道它是什么，触屏上则永远不知道。整行按钮把这个
+ * 动作放回它该在的层级：和下面的列表并列。
+ *
+ * 描边而不是填充：填充是动作色，这一栏里没有任何东西该抢过正在读的那段对话。 */
+.aw-new-session {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 12px 10px;
+  padding: 8px 12px;
+  gap: 6px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 10px;
+  background: var(--aw-panel);
+  color: var(--aw-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--aw-transition), border-color var(--aw-transition);
+}
+
+.aw-new-session:hover {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent-hover);
 }

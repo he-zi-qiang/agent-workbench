@@ -21,9 +21,14 @@
  * a duplicate id the moment two of them can be on screen.
  */
 
-import { Plus, Trash2, X } from "lucide-react";
+import { Trash2, X } from "lucide-react";
 import type { CodeSessionView } from "../../api/types";
-import { IconButton, shortId } from "../../components/ui";
+import {
+  formatDateTime,
+  IconButton,
+  NewSessionButton,
+  shortId,
+} from "../../components/ui";
 
 export function CodeSessionRail({
   known,
@@ -67,12 +72,6 @@ export function CodeSessionRail({
             没有。 */}
         <small>服务端列表 · 名字来自第一句指令 · 双击改名</small>
         <div className="aw-code-sessions-actions">
-          {/* Goes to the start page rather than POSTing an empty session: the
-              first sentence is what names a session (ADR-047), and one created
-              by a bare click sits unnamed in this list forever. */}
-          <IconButton label="新建会话" onClick={onNew}>
-            <Plus aria-hidden size={17} />
-          </IconButton>
           <IconButton
             className="aw-code-sessions-close"
             label="关闭会话列表"
@@ -82,6 +81,10 @@ export function CodeSessionRail({
           </IconButton>
         </div>
       </header>
+      {/* Goes to the start page rather than POSTing an empty session: the
+          first sentence is what names a session (ADR-047), and one created
+          by a bare click sits unnamed in this list forever. */}
+      <NewSessionButton label="新建会话" onClick={onNew} />
 
       <div className="aw-code-session-list">
         {known.length === 0 ? (
@@ -153,7 +156,24 @@ export function CodeSessionRail({
                       title={`${held.title ?? held.session_id}\n双击改名`}
                       type="button"
                     >
-                      {held.title ?? shortId(held.session_id)}
+                      <span className="aw-code-recent-title">
+                        {held.title ?? shortId(held.session_id)}
+                      </span>
+                      {/* 副行只说时间。
+                          稿子上这里是「3 轮 · 9 个文件 · 14:02」，前两段这个
+                          接口给不出来——`CodeSessionView` 只有 session_id、
+                          title、last_activity_at 三个字段。编一个轮数比空着
+                          更糟：它会被当成真的读。
+                          没有 last_activity_at 的会话（开了没用过）不留占位，
+                          一行空的副行只是让每张卡都变高。 */}
+                      {held.last_activity_at === null ? null : (
+                        <time
+                          className="aw-code-recent-when"
+                          dateTime={held.last_activity_at}
+                        >
+                          {formatDateTime(held.last_activity_at)}
+                        </time>
+                      )}
                     </button>
                     {/* Always rendered, not revealed on hover: a control that
                         only exists under a pointer is one a keyboard cannot
