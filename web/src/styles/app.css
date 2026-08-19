@@ -5651,12 +5651,20 @@ p.aw-code-step-thought {
  * 「本地」是徽章，下面这行是它的代价。Chat 没有服务端会话列表，这一列就是
  * 这台浏览器记下来的东西——别处开的会话仍然在、仍然属于这个人，只是这里没有
  * 它的行。少了这句，空列表会被读成「你没有会话」。 */
+/* 这一格本来是 nowrap 的两项（标题 + 徽章）。加进来的说明是第三项，不换行就
+   只能和前两项抢那 178px——「会话」被挤成了竖排的两个字。让它换行，说明独占
+   第二行，标题与徽章回到它们原来的样子。 */
+.aw-chat-sessions-header > div {
+  flex-wrap: wrap;
+}
+
 .aw-chat-sessions-header > div > small {
   display: block;
   flex-basis: 100%;
   margin-top: 3px;
   color: var(--aw-text-muted);
   font-size: 11px;
+  line-height: 1.5;
 }
 
 .aw-chat-session-head {
