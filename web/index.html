@@ -3,7 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f7f6f2" />
+    <!-- 两条，按 prefers-color-scheme 分。一条的写法在深色系统上会让地址栏是
+         浅的而页面是深的，接缝正好在屏幕顶边最显眼的地方。显式选了主题的用户
+         由 ThemeContext 把这两条改成同一个值。 -->
+    <meta
+      name="theme-color"
+      content="#f2f0eb"
+      media="(prefers-color-scheme: light)"
+    />
+    <meta
+      name="theme-color"
+      content="#171614"
+      media="(prefers-color-scheme: dark)"
+    />
+    <!-- 在第一次绘制之前把 data-theme 放上去。
+         没有这段的话，一个选了"深色"而系统是浅色的用户会先看到一帧浅色——CSS
+         默认跟随系统，属性要等 React 挂载后的 effect 才写上去。内联而不是打包
+         成模块，是因为模块最快也要等一次网络往返，那一帧就已经画出去了。
+         读的是 useStoredState 写进去的 JSON，所以值带引号；解析失败就什么都不
+         做，让 CSS 回到跟随系统——那是这里唯一安全的失败方式。 -->
+    <script>
+      try {
+        var m = JSON.parse(localStorage.getItem("aw.theme.v1"));
+        if (m === "light" || m === "dark")
+          document.documentElement.setAttribute("data-theme", m);
+      } catch (_) {}
+    </script>
     <meta
       name="description"
       content="Agent Workbench：Chat + RAG 与可恢复 Multi-Agent Task 的工程演示台"

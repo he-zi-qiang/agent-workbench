@@ -1,10 +1,125 @@
+/*
+ * 一份 token，两个主题
+ * ====================
+ *
+ * 深浅两套皮肤在这里是**同一条声明的两个值**，不是两份色表。写法是
+ * `light-dark(浅, 深)`——它由 `:root` 上的 `color-scheme` 决定取哪一个，所以
+ * 这个文件里每个 token 仍然只出现一次，浅色和深色永远不会漂移成两套。
+ *
+ * 被拒绝的写法是 `@media (prefers-color-scheme: dark) { :root { … } }` 再加一份
+ * `:root[data-theme="dark"] { … }`：手动切换必须能压过系统偏好，而 CSS 里没有
+ * 「选择器的变量」，于是那条路要把整张深色表抄两遍。抄两遍的表在第三次改色时
+ * 一定会分叉——这是那种改完看起来是对的、只在某一个主题下错的分叉。
+ *
+ * 用 light-dark 之后，切换主题这件事只剩一行：
+ *
+ *     :root                      → color-scheme: light dark   跟随系统
+ *     :root[data-theme="light"]  → color-scheme: light        钉死浅色
+ *     :root[data-theme="dark"]   → color-scheme: dark         钉死深色
+ *
+ * 附带拿到的东西：滚动条、原生下拉、日期选择器、表单控件的默认外观都跟着
+ * `color-scheme` 走，不需要为它们单独写规则——在此之前深色页面上弹出的原生
+ * 控件会是一块白的。
+ */
+
+/*
+ * 两套字，随包发布
+ * ================
+ *
+ * 交接稿指定标题用 Space Grotesk、id 与文件名用 IBM Plex Mono。在这之前这两个
+ * 名字在仓库里一次都没出现过，而 `font-family` 的第一顺位写的是 Inter——一个
+ * 同样没有随包发布、开发机上也没装的名字。于是三个名字全部静默回落到系统字体：
+ * 实测 `Inter` / `Space Grotesk` / `IBM Plex Mono` 渲染同一串字得到的宽度与
+ * `serif` 基线一字不差（759.43px），也就是说没有一个曾经生效。版面的尺寸与
+ * 颜色都照稿子做了，字形没有——这是最容易被读成「整份稿子没落地」的那一处，
+ * 因为字形是一眼就能看出不同、却说不上来哪里不同的东西。
+ *
+ * 随包发布，而不是照稿子那样 `<link>` 到 fonts.googleapis.com：
+ *
+ *   * 那个域名在国内基本连不上，而 CDN 拉不动的结果不是报错，是静默回落——
+ *     和上面那个「写了名字但没生效」的状态一模一样，只是这次连改哪里都看不见；
+ *   * 前端的 CI 门是离线跑的。一个需要联网才成立的外观，没有办法在门里被断言，
+ *     也就没有办法阻止它第二次悄悄消失。
+ *
+ * 只带拉丁子集：Google 分片里的 `latin` 一片，三个文件合计 42 KB。汉字不在这
+ * 两个 `@font-face` 的 `unicode-range` 里，所以浏览器根本不会为一个汉字去试它们，
+ * 直接落到栈里的苹方——稿子上的中文是 Noto Sans SC，与苹方同属一类无衬线，
+ * 那点差别小于为它多背一兆中文子集的代价。
+ *
+ * Space Grotesk 取可变字重，300–700 一个文件；IBM Plex Mono 没有可变版本，
+ * 稿子只用到 400 与 500，就只带这两个静态字重。
+ *
+ * 两者都是 SIL OFL 1.1，出处与版本记在 fonts/README.md。
+ */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("./fonts/space-grotesk-latin-var.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/ibm-plex-mono-latin-500.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
-  color-scheme: light;
-  font-family:
-    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  /* 三个状态，不是两个：跟随系统是默认值，也是没有 JS 时唯一成立的那个。
+     `light dark` 的顺序有意义——它同时声明了「两个都支持」和「没有系统偏好
+     时按浅色算」。 */
+  color-scheme: light dark;
+
+  /* 正文是系统栈，稿子就是这么写的（「正文系统栈 14.5–15px / 1.75」）。
+     此前第一顺位是 Inter，而 Inter 既没随包发布也不在 macOS 上——一个只在
+     装了 Inter 的机器上才成立的正文字体，等于三种不同的正文。删掉它之后
+     这一行说的是实话：这里用的就是每台机器自己的界面字。 */
+  font-family: var(--aw-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+
+  /* 三支字体栈，三个 token，全仓只在这里定义一次。
+   *
+   * 等宽栈原先只管住了六条规则，另外十六条把 `"SFMono-Regular", Consolas,
+   * monospace` 一类的栈直接抄在规则里——于是「等宽字体是什么」写在十六个地方，
+   * 谁也不是定义，往栈首加一个字体要改十六次而且漏一次看不出来。现在全部
+   * 二十二条都读这一个 token。
+   *
+   * 每支栈里 webfont 都排第一、系统字排后面：拉丁字符命中随包的那份，汉字不在
+   * 它的 unicode-range 里、自动走到后面的苹方。一支栈同时管两种文字，不需要在
+   * 规则里按语言分叉。 */
+  --aw-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+
+  /* 标题字。稿子的原话是「标题 Space Grotesk（600，letter-spacing: -0.01em）」，
+     字重与字距跟在文件末尾那条标题规则上，这里只定义「是哪支字」。 */
+  --aw-display: "Space Grotesk", var(--aw-sans);
+
+  --aw-mono:
+    "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  --aw-font-mono: var(--aw-mono);
 
   /* --- 底色 -------------------------------------------------------------
    *
@@ -13,19 +128,33 @@
    * 一条 1px 的线去承载它，在任何缩放或截图压缩之后都是第一个消失的东西。
    *
    * 暖中性而不是灰：橙色动作色 #d97757 落在中性灰上会显脏（灰的蓝味与橙互补，
-   * 相邻时互相拉低饱和），落在同色温的暖底上才是它被选中的样子。 */
-  --aw-canvas: #f2f0eb;
-  --aw-window: #f2f0eb;
-  --aw-sidebar: #f7f5f1;
-  --aw-panel: #ffffff;
+   * 相邻时互相拉低饱和），落在同色温的暖底上才是它被选中的样子。
+   *
+   * 深色一侧沿用同一条关系，方向不变而不是取反：**卡片比画布亮一档**。深色界面
+   * 里「抬起」仍然由更亮表达（光从上方来），把卡片做得比画布更暗会让每张卡读成
+   * 一个凹槽。深色的中性也保持暖偏——#17 16 14 的红绿蓝是递减的，和浅色一侧
+   * 的 #f2 f0 eb 同一个方向，橙色落上去才不发脏。 */
+  --aw-canvas: light-dark(#f2f0eb, #171614);
+  --aw-window: light-dark(#f2f0eb, #171614);
+  --aw-sidebar: light-dark(#f7f5f1, #1c1a18);
+  --aw-panel: light-dark(#ffffff, #221f1d);
 
   /* The raised-chip surface. Referenced by the workbench tabs since they
      shipped, but never defined until now -- the var() fallback quietly
      resolved to #fff on a #f7f7f5 container, which is why the active tab
      was indistinguishable from its neighbours. */
-  --aw-surface: #ffffff;
-  --aw-panel-soft: #f2f0eb;
-  --aw-panel-strong: #eceae4;
+  --aw-surface: light-dark(#ffffff, #221f1d);
+  --aw-panel-soft: light-dark(#f2f0eb, #1c1a18);
+  --aw-panel-strong: light-dark(#eceae4, #2a2724);
+
+  /* 凹面：代码块、被引的原文这类「陷进去」的底。同样此前只以 fallback 存在，
+     而那个 fallback 是 `rgb(0 0 0 / 4%)`——一个在深色底上等于什么都没画的值。 */
+  --aw-surface-sunken: light-dark(#f4f2ee, #131211);
+
+  /* 深色下给面加一道 1px 的顶部高光。浅色下是透明的：那边「抬起」由投影表达，
+     而投影在深色里几乎不可见（黑影落在黑底上），高光才是深色界面里唯一还能
+     读出厚度的手段。 */
+  --aw-raise: light-dark(transparent, rgb(255 255 255 / 5%));
 
   /* --- 窄导航 -----------------------------------------------------------
    *
@@ -36,32 +165,64 @@
    *
    * active 用 #2e2925（比 rail 亮一档）而不是橙色填充：橙色是动作色，导航项
    * 不是动作，它是位置。位置用亮度说，动作用色相说——图标的 #e08a66 是唯一
-   * 的例外，它只有 19px，够指出"就是这一项"，不够被误读成一个按钮。 */
-  --aw-rail: #1b1917;
-  --aw-rail-hover: #262320;
-  --aw-rail-active: #2e2925;
-  --aw-rail-text: #9a938a;
-  --aw-rail-text-active: #f3e7e0;
-  --aw-rail-icon-active: #e08a66;
-  --aw-rail-divider: #302c28;
+   * 的例外，它只有 19px，够指出"就是这一项"，不够被误读成一个按钮。
+   *
+   * 深色主题下 rail 不反转，它继续是**整个界面最暗的面**（#0f0e0d 比画布的
+   * #171614 还暗一档）。这不是偷懒：rail 表达的从来不是「深」，而是「框」——
+   * 内容浮在框上面。把它做成深色里最亮的一块会让导航压过正文，那正是浅色一侧
+   * 花了一次改动去消除的问题。 */
+  --aw-rail: light-dark(#1b1917, #0f0e0d);
+  --aw-rail-hover: light-dark(#262320, #1b1917);
+  --aw-rail-active: light-dark(#2e2925, #2b2723);
+  --aw-rail-text: light-dark(#9a938a, #948d84);
+  --aw-rail-text-active: light-dark(#f3e7e0, #f3e7e0);
+  --aw-rail-icon-active: light-dark(#e08a66, #e08a66);
+  --aw-rail-divider: light-dark(#302c28, #262320);
 
-  --aw-text: #1b1917;
-  --aw-text-soft: #6b665f;
-  --aw-text-muted: #8b857c;
-  --aw-border: #eceae4;
-  --aw-border-strong: #d8d3cb;
-  --aw-accent: #d97757;
-  --aw-accent-hover: #c96545;
-  --aw-accent-soft: #fbf0ea;
-  --aw-success: #2f7a54;
-  --aw-success-soft: #edf5f0;
-  --aw-success-border: #cfe3d7;
-  --aw-warning: #9a6724;
-  --aw-warning-soft: #faf2e4;
-  --aw-warning-border: #e6dcc6;
-  --aw-danger: #b44f4b;
-  --aw-danger-soft: #fbeceb;
-  --aw-danger-border: #eed6d4;
+  /* rail 上的文字/图标恒为浅色——两个主题里它都是深面。此前这处直接写 #fff，
+     于是「什么颜色落在 rail 上」这件事在 app.css 里没有名字。 */
+  --aw-on-rail: #ffffff;
+
+  --aw-text: light-dark(#1b1917, #ece7e1);
+  --aw-text-soft: light-dark(#6b665f, #a79f95);
+  --aw-text-muted: light-dark(#8b857c, #857e74);
+
+  /* 第四档文字，比 muted 再弱一级：时间戳、id 后缀这类「在那里但不必读」的字。
+     此前只以 fallback 形式存在于一条规则里。 */
+  --aw-text-subtle: light-dark(#a09a90, #6d675e);
+
+  --aw-border: light-dark(#eceae4, #2c2926);
+  --aw-border-strong: light-dark(#d8d3cb, #3d3934);
+
+  /* 比 border 再淡一档：同一块面内部的分隔，而不是两块面之间的边界。 */
+  --aw-border-subtle: light-dark(#f2f0eb, #232120);
+
+  --aw-accent: light-dark(#d97757, #e08a66);
+  --aw-accent-hover: light-dark(#c96545, #ec9c7c);
+  --aw-accent-soft: light-dark(#fbf0ea, #2e1f18);
+
+  /* 落在实心橙上的字色，两个主题里不是同一个方向。
+   *
+   * 浅色沿用白字：这是产品身份，橙底白字是这套界面从第一版起就是的样子。
+   * 深色不能照抄——深色里的橙必须提亮到 #e08a66 才不至于糊在暗底上，而白字
+   * 落在 #e08a66 上只有 2.6:1，是这个界面里唯一一处会真正读不出来的字。所以
+   * 深色反过来用近黑的 #1d1411，对比度 9:1。
+   *
+   * 需要说清的是浅色这一侧并不达标：白字落在 #d97757 上是 3.5:1，低于正文的
+   * 4.5:1 线。它是被知情保留的，不是被漏掉的——把它改达标要么让浅色主按钮变成
+   * 橙底黑字（不是这个产品的样子），要么把动作色整体压暗（那是换一个身份色）。
+   * 记在这里，是为了下一次有人碰它时知道这是一个决定。 */
+  --aw-accent-on: light-dark(#ffffff, #1d1411);
+
+  --aw-success: light-dark(#2f7a54, #6cba8b);
+  --aw-success-soft: light-dark(#edf5f0, #14241b);
+  --aw-success-border: light-dark(#cfe3d7, #24402f);
+  --aw-warning: light-dark(#9a6724, #d6a45c);
+  --aw-warning-soft: light-dark(#faf2e4, #26200f);
+  --aw-warning-border: light-dark(#e6dcc6, #453820);
+  --aw-danger: light-dark(#b44f4b, #e58e88);
+  --aw-danger-soft: light-dark(#fbeceb, #2a1716);
+  --aw-danger-border: light-dark(#eed6d4, #4a2b29);
 
   /* --- 证据 / 边界 ------------------------------------------------------
    *
@@ -74,25 +235,71 @@
    *
    * 色相几乎没变（#486b7a → #3f6472，同一支青灰），所以这是一次重命名而不是
    * 重新配色；--aw-info 保留为别名，让还没迁移的规则继续成立。 */
-  --aw-evidence: #3f6472;
-  --aw-evidence-soft: #eef3f5;
-  --aw-evidence-border: #dbe4e7;
+  --aw-evidence: light-dark(#3f6472, #8fb7c6);
+  --aw-evidence-soft: light-dark(#eef3f5, #16232a);
+  --aw-evidence-border: light-dark(#dbe4e7, #2a3c45);
 
   /* 引文底，比 --aw-evidence-soft 再淡一档。
    *
    * 两个面，不是一个：引用卡的表头用 soft，被引的原文用这一档。原文块嵌在那张
    * 卡里，两者同色的话卡就是一块平的青，而这里要说的恰恰是「这一段和外面那些
    * 不是一回事」——它是从别处读来的。 */
-  --aw-evidence-quote: #f6f9fa;
+  --aw-evidence-quote: light-dark(#f6f9fa, #121c21);
   --aw-info: var(--aw-evidence);
   --aw-info-soft: var(--aw-evidence-soft);
 
-  --aw-shadow-sm: 0 1px 2px rgb(27 25 23 / 5%);
-  --aw-shadow-md: 0 18px 48px rgb(27 25 23 / 11%);
+  /* --- 投影 -------------------------------------------------------------
+   *
+   * 投影的**颜色**是 token，投影的形状不是。深色下黑影落在黑底上等于没画，
+   * 所以两个主题差的不是形状而是不透明度：5%/11% → 46%/62%。写成两个颜色
+   * token 再由下面两条规则组合，是为了让 `light-dark()` 能参与——它返回颜色，
+   * 不返回整条 box-shadow。 */
+  --aw-shadow-tint-weak: light-dark(rgb(27 25 23 / 5%), rgb(0 0 0 / 46%));
+  --aw-shadow-tint-strong: light-dark(rgb(27 25 23 / 11%), rgb(0 0 0 / 62%));
+  --aw-shadow-tint-lift: light-dark(rgb(34 35 32 / 8%), rgb(0 0 0 / 52%));
+  --aw-shadow-sm: 0 1px 2px var(--aw-shadow-tint-weak);
+  --aw-shadow-md: 0 18px 48px var(--aw-shadow-tint-strong);
+
+  /* 输入区/悬浮条那一档：投影向下且更远，用来说「这一条浮在正文之上」。
+     此前它以 `0 8px 24px rgb(34 35 32 / 8%)` 的形式写死在 app.css 的两条规则
+     里——两条，值相同而互不知情。 */
+  --aw-shadow-lift: 0 8px 24px var(--aw-shadow-tint-lift);
+
+  /* 抽屉从侧面推进来时的投影，方向由使用处给（左推是负、右推是正）。 */
+  --aw-shadow-drawer-left: -18px 0 48px var(--aw-shadow-tint-strong);
+  --aw-shadow-drawer-right: 18px 0 48px var(--aw-shadow-tint-strong);
+
+  /* --- 遮罩 -------------------------------------------------------------
+   *
+   * 三档，按「被它挡住的东西还要不要看得见」分：
+   *
+   *   scrim-strong  移动端弹出的整页面板——底下的东西此刻不该被读
+   *   scrim         对话框——底下是上下文，看得见但明显退后
+   *   scrim-soft    点一下就消失的那层（Code 的预览/会话抽屉）——它几乎不是
+   *                 遮罩，只是一块「这里可以点掉」的可点区域
+   *
+   * 深色一侧全部加重而不是减轻：浅色下 48% 的黑落在白底上已经很暗，深色下同样
+   * 的 48% 落在 #171614 上几乎看不出有东西挡着，遮罩就失去了它唯一的作用。 */
+  --aw-scrim-strong: light-dark(rgb(10 11 9 / 62%), rgb(0 0 0 / 76%));
+  --aw-scrim: light-dark(rgb(14 15 13 / 48%), rgb(0 0 0 / 66%));
+  --aw-scrim-soft: light-dark(rgb(41 39 36 / 18%), rgb(0 0 0 / 42%));
+
   --aw-radius-sm: 8px;
   --aw-radius-md: 12px;
   --aw-radius-lg: 16px;
   --aw-radius-xl: 20px;
+
+  /* --- 动效 -------------------------------------------------------------
+   *
+   * `--aw-transition` 是既有的那条（150ms ease），几十条规则在用，不动。
+   *
+   * 下面三档是给新写的过渡用的，缓动统一成 cubic-bezier(0.32, 0.72, 0, 1)：
+   * 起步快、收尾长的那种曲线。`ease` 的问题是它两头都慢，在 150ms 这个量级上
+   * 读起来像"卡了一下再动"；而界面动效要的是「立刻响应、慢慢落位」。 */
+  --aw-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --aw-duration-fast: 120ms;
+  --aw-duration-base: 200ms;
+  --aw-duration-slow: 320ms;
   --aw-transition: 150ms ease;
 
   /* --- 产物预览的尺寸 ---------------------------------------------------
@@ -120,4 +327,40 @@
    * 得到的是「响应式退化后的样子」，不是它本来的样子。给它 1024 再整体缩小，
    * 看到的才是它被设计成的那个版面。 */
   --aw-preview-logical-width: 1024;
+}
+
+/* 显式选择压过系统偏好。
+ *
+ * 两条规则各自只有一行，因为上面每个 token 都已经把两个值都带上了——这里要做的
+ * 只是告诉浏览器 `light-dark()` 该取哪一个。这也是这套写法真正的好处：新增一个
+ * 颜色 token 不需要回到这里补任何东西。 */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* 标题字，一条规则管全站。
+ *
+ * 按元素而不是按类：稿子里凡是标题都是 Space Grotesk，而这套界面的标题一律
+ * 是 h1/h2/h3——`app.css` 里有二十多条 `.aw-xxx h1` 只管字号与字重，没有一条
+ * 管字体。要是改成给每个 `.aw-` 类补一句 `font-family`，那就是二十多个各自
+ * 可以漏掉的地方；下一个新页面的标题会不会是 Space Grotesk，取决于写它的人
+ * 记不记得抄这一句。按元素写，新页面不用做任何事就是对的。
+ *
+ * 字距 -0.01em 是稿子给的值，它只对拉丁字形成立——Space Grotesk 的字面本来
+ * 就宽，稿上的 "Agent Workbench" 靠这 1% 才收得住。汉字命中的是苹方，方块字
+ * 收 1% 字距看不出来，也不会挤。
+ *
+ * 不写 `font-weight`：字重是各条 `.aw-` 规则自己的事（15px 的卡片标题和 31px
+ * 的页标题不该是同一个重量），这里统一写死会把那些区别抹平。可变字体带的是
+ * 300–700 的连续字重，各处原本写的值直接就能命中。 */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--aw-display);
+  letter-spacing: -0.01em;
 }
