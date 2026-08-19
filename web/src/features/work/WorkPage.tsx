@@ -203,12 +203,26 @@ export function WorkPage() {
   const { identity } = useIdentity();
   const identityKey = workIdentityQueryKey(identity);
 
+  const [taskFilter, setTaskFilter] = useState<TaskFilterId>("all");
+  const filterStatuses = TASK_FILTERS.find(
+    (entry) => entry.id === taskFilter,
+  )?.statuses;
+
   const tasksQuery = useInfiniteQuery({
-    queryKey: ["work", "tasks", ...identityKey],
+    // The filter is part of the key: without it the three views share one
+    // cache entry and switching filters shows the previous one's pages until
+    // the refetch lands.
+    queryKey: ["work", "tasks", taskFilter, ...identityKey],
     initialPageParam: "",
     queryFn: ({ pageParam }) =>
       listTasks(identity, {
         limit: 25,
+        // Sent to the server rather than applied to `tasks` below. A client
+        // filter only ever sees the pages already loaded, so "失败" on a
+        // long history would answer "none" while naming a page it never
+        // fetched -- and the emptier the filter, the more pages it would
+        // have to be wrong about.
+        ...(filterStatuses === undefined ? {} : { statuses: [...filterStatuses] }),
         ...(pageParam === "" ? {} : { cursor: pageParam }),
       }),
     getNextPageParam: (lastPage) => lastPage.cursor ?? undefined,
@@ -887,6 +901,21 @@ export function WorkPage() {
           ) : null}
         </form>
 
+        <div className="aw-task-filters" role="tablist" aria-label="任务筛选">
+          {TASK_FILTERS.map((entry) => (
+            <button
+              aria-selected={taskFilter === entry.id}
+              className={taskFilter === entry.id ? "is-active" : ""}
+              key={entry.id}
+              onClick={() => setTaskFilter(entry.id)}
+              role="tab"
+              type="button"
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+
         <nav className="aw-task-list" aria-label="任务">
           {tasksQuery.isPending ? <LoadingLine label="正在加载任务" /> : null}
           {tasksQuery.isError ? (
@@ -945,7 +974,22 @@ export function WorkPage() {
               message={errorMessage(deleteMutation.error, "删除任务失败")}
             />
           ) : null}
-          {!tasksQuery.isPending && !tasksQuery.isError && tasks.length === 0 ? (
+          {!tasksQuery.isPending && !tasksQuery.isError && tasks.length === 0 && taskFilter !== "all" ? (
+            // A filtered empty list is not an empty account. Saying "还没有任务"
+            // here would contradict the list the reader was looking at one
+            // click ago.
+            <p className="aw-page-note">
+              这个筛选下没有任务。
+              <button
+                className="aw-link-button"
+                onClick={() => setTaskFilter("all")}
+                type="button"
+              >
+                看全部
+              </button>
+            </p>
+          ) : null}
+          {!tasksQuery.isPending && !tasksQuery.isError && tasks.length === 0 && taskFilter === "all" ? (
             <p className="aw-muted">还没有任务。</p>
           ) : null}
           {tasksQuery.hasNextPage ? (
@@ -2217,6 +2261,36 @@ function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim() !== "") return error.message;
   return fallback;
 }
+
+/**
+ * The three views of the task list, and which statuses each one asks for.
+ *
+ * `在跑` is every status that has not settled -- including the two waiting
+ * ones. A reader scanning for "what is still going" needs the Task parked for
+ * migration and the one holding for an approval in that list: both are
+ * unfinished and both may need them, and a "running-only" filter that hid
+ * them would be a filter that loses work.
+ *
+ * `失败` deliberately excludes `cancelled`. A cancellation is somebody's
+ * decision that was carried out correctly; filing it under failures would put
+ * the reader's own action in the list of things that went wrong.
+ */
+const TASK_FILTERS = [
+  { id: "all", label: "全部", statuses: undefined },
+  {
+    id: "running",
+    label: "在跑",
+    statuses: [
+      "queued",
+      "running",
+      "waiting_approval",
+      "waiting_migration",
+    ] as const,
+  },
+  { id: "failed", label: "失败", statuses: ["failed", "dead_letter"] as const },
+] as const;
+
+type TaskFilterId = (typeof TASK_FILTERS)[number]["id"];
 
 function isSettledStatus(status: TaskStatus | undefined): boolean {
   return status !== undefined && SETTLED_STATUSES.has(status);

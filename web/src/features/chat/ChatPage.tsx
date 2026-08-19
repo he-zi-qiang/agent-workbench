@@ -249,6 +249,13 @@ export function ChatPage() {
           <div>
             <strong>会话</strong>
             <span className="aw-local-badge">本地</span>
+            {/* The badge says "本地"; this says what that costs. Chat has no
+                server-side session list, so this column is whatever *this
+                browser* wrote down -- a session opened elsewhere is still
+                there and still owned, it simply has no entry here. Without
+                the sentence, an empty column reads as "you have no
+                sessions". */}
+            <small>存在这台浏览器里 · 服务端暂无列表</small>
           </div>
           <div className="aw-chat-session-actions">
             <IconButton
@@ -288,7 +295,24 @@ export function ChatPage() {
                     type="button"
                   >
                     <span className="aw-chat-session-copy">
-                      <strong>{session.title}</strong>
+                      <span className="aw-chat-session-head">
+                        <strong>{session.title}</strong>
+                        {/* The session's answer mode, which is stored per
+                            session and therefore true for every row without
+                            reading a single history. The sketch tags rows
+                            带引用 / 未接地 instead -- both are facts about how
+                            an answer turned out, and this list holds no turns
+                            for any session but the open one. Tagging by a
+                            fact the column cannot check would put "未接地" on
+                            rows nothing had looked at. */}
+                        <span
+                          className={`aw-chat-session-tag is-${
+                            session.answerMode === "rag" ? "evidence" : "plain"
+                          }`}
+                        >
+                          {session.answerMode === "rag" ? "知识库" : "自由回答"}
+                        </span>
+                      </span>
                       <small>
                         本地 · {formatTime(session.updatedAt)} ·{" "}
                         {shortId(session.sessionId)}
@@ -840,15 +864,25 @@ function Citations({
   }
   return (
     <div className="aw-chat-citations" aria-label="引用">
-      {citations.map((citation) => (
-        <CitationChip
+      {citations.map((citation, index) => (
+        <CitationRow
           citation={citation}
           identity={identity}
           key={`${citation.chunk_id}:${citation.document_version}`}
+          ordinal={index + 1}
           sessionId={sessionId}
           {...(turnId === undefined ? {} : { turnId })}
         />
       ))}
+      {/* The design sketch shows a document *title* on each row. There is no
+          route that turns a document_id into one, and inventing a readable
+          name from the id would be this page asserting something no endpoint
+          established -- so the row shows the id, and this line says why that
+          is what it shows. */}
+      <p className="aw-chat-citation-gap">
+        <span>需新接口</span>
+        文档标题需要一个按 document_id 取名的读接口；当前只有 id 与 version 可信。
+      </p>
     </div>
   );
 }
@@ -873,14 +907,17 @@ function Citations({
  * re-polling it would spend reads to eventually contradict what the reader is
  * looking at, with no action available to them either way.
  */
-function CitationChip({
+function CitationRow({
   citation,
   identity,
+  ordinal,
   sessionId,
   turnId,
 }: {
   citation: Citation;
   identity: PrincipalIdentity;
+  /** 1-based, and positional: it indexes this answer's list, not the corpus. */
+  ordinal: number;
   sessionId: string;
   turnId?: string;
 }) {
@@ -898,42 +935,57 @@ function CitationChip({
   });
 
   return (
-    <span className="aw-chat-citation-holder">
-      <button
-        aria-expanded={open}
-        className="aw-chat-citation"
-        // A turn this page never bound an id to cannot address the route, so
-        // the chip stays inert rather than offering a click that 404s for a
-        // reason that has nothing to do with the reader's permissions.
-        disabled={turnId === undefined}
-        onClick={() => {
-          setOpen((was) => !was);
-        }}
-        title={`${citation.chunk_id}\n${citation.document_id} · ${citation.document_version}`}
-        type="button"
-      >
-        [{shortId(citation.chunk_id, 16)}]
-        {locator === null ? null : (
-          <small className="aw-chat-citation-locator">{locator}</small>
-        )}
-      </button>
-      {!open ? null : (
-        <div className="aw-chat-citation-passage">
-          {passage.isPending ? (
-            <LoadingLine label="正在读取被引用的原文" />
-          ) : passage.isError ? (
-            // Never "引用坏了". The commonest cause is that this reader may no
-            // longer read the document, which is a decision somebody made
-            // rather than a fault in the transcript.
-            <p className="aw-page-note">
-              读不到这段原文了：可能是这份文档的权限变了，或者它已经被重新导入过。
-            </p>
-          ) : (
-            <p>{passage.data.text}</p>
+    <div className="aw-chat-citation-row">
+      <span aria-hidden="true" className="aw-chat-citation-ordinal">
+        {ordinal}
+      </span>
+      <div className="aw-chat-citation-body">
+        <button
+          aria-expanded={open}
+          className="aw-chat-citation"
+          // A turn this page never bound an id to cannot address the route, so
+          // the row stays inert rather than offering a click that 404s for a
+          // reason that has nothing to do with the reader's permissions.
+          disabled={turnId === undefined}
+          onClick={() => {
+            setOpen((was) => !was);
+          }}
+          title={`${citation.chunk_id}\n${citation.document_id} · ${citation.document_version}`}
+          type="button"
+        >
+          <strong>{shortId(citation.document_id, 22)}</strong>
+          <span className="aw-chat-citation-version">
+            {citation.document_version}
+          </span>
+          {locator === null ? null : (
+            <small className="aw-chat-citation-locator">{locator}</small>
           )}
-        </div>
-      )}
-    </span>
+        </button>
+        {/* The sketch prints the quote on the row. `Citation.quote` is never
+            assigned anywhere in this repository, so the only text that exists
+            is behind the passage route -- and that route is a fresh read that
+            may correctly refuse (ADR-067). Fetching all of them on render
+            would spend one read per citation to sometimes produce a column of
+            "读不到", so the row carries what is already true and the text
+            stays one click away. */}
+        {!open ? null : (
+          <div className="aw-chat-citation-passage">
+            {passage.isPending ? (
+              <LoadingLine label="正在读取被引用的原文" />
+            ) : passage.isError ? (
+              // Never "引用坏了". The commonest cause is that this reader may no
+              // longer read the document, which is a decision somebody made
+              // rather than a fault in the transcript.
+              <p className="aw-page-note">
+                读不到这段原文了：可能是这份文档的权限变了，或者它已经被重新导入过。
+              </p>
+            ) : (
+              <p>{passage.data.text}</p>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
