@@ -5152,7 +5152,6 @@ p.aw-code-step-thought {
  * 只留抽屉那一个。 */
 @media (width <= 760px) {
   .aw-code-page,
-  .aw-code-page.has-preview,
   .aw-code-page.is-rail-hidden {
     grid-template-columns: minmax(0, 1fr);
   }

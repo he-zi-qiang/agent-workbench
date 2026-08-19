@@ -330,9 +330,8 @@ select {
   grid-template-columns: 252px minmax(0, 1fr);
 }
 
-.aw-code-page.has-preview {
-  grid-template-columns: 252px minmax(0, 1fr) clamp(320px, 34%, 560px);
-}
+/* 预览不再是一列，所以 has-preview 不再动列宽——这一层此前还留着三列那一版，
+   而它比 app.css 后加载，于是抽屉都画出来了，下面的对话仍然被收窄。 */
 
 .aw-chat-sessions {
   border-right-color: var(--aw-border);
