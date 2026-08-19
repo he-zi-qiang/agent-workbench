@@ -4253,24 +4253,25 @@ pre {
  * 无关；这一段复用它来排数字与摘要，正是因为它就是「把一串机器写的字排整齐」。
  */
 
+/* 预览是浮在对话上的抽屉，不是第三栏。
+ *
+ * 原来它是一列，于是「打开预览」这个动作要收走对话的三分之一——读者为了看一眼
+ * 产物，得让正在读的那段话变窄、重排。抽屉不动下面那一层：关掉之后，对话还在
+ * 原来的位置和原来的行里。
+ *
+ * `position: relative` 是给它定位用的：抽屉贴的是这一页，不是视口——全局窄导航
+ * 在这一页之外，不该被一个属于 Code 的浮层盖住。 */
 .aw-code-page {
+  position: relative;
   display: grid;
   height: 100%;
   min-height: 0;
   grid-template-columns: 244px minmax(0, 1fr);
 }
 
-.aw-code-page.has-preview {
-  grid-template-columns: 244px minmax(0, 1fr) clamp(320px, 34%, 560px);
-}
-
 /* 折叠成「对话 | 展示」两栏。 */
 .aw-code-page.is-rail-hidden {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.aw-code-page.is-rail-hidden.has-preview {
-  grid-template-columns: minmax(0, 1fr) clamp(320px, 34%, 560px);
 }
 
 .aw-code-page.is-rail-hidden > .aw-code-sessions {
@@ -4825,12 +4826,33 @@ p.aw-code-step-thought {
 /* --- 右：预览 --- */
 
 .aw-code-preview {
+  position: absolute;
+  z-index: 5;
+  inset: 0 0 0 auto;
   display: flex;
+  width: min(420px, 94vw);
   min-width: 0;
   min-height: 0;
   flex-direction: column;
   border-left: 1px solid var(--aw-border);
   background: var(--aw-sidebar);
+  box-shadow: -18px 0 48px rgb(27 25 23 / 12%);
+  animation: aw-drawer-in 160ms ease;
+}
+
+@keyframes aw-drawer-in {
+  from {
+    transform: translateX(18px);
+    opacity: 0;
+  }
+}
+
+/* 动效只是让「它是滑出来的」这件事看得出来；关掉动效的人不需要为此损失任何
+   信息，所以直接取消。 */
+@media (prefers-reduced-motion: reduce) {
+  .aw-code-preview {
+    animation: none;
+  }
 }
 
 .aw-code-preview-header {
@@ -5107,29 +5129,20 @@ p.aw-code-step-thought {
 
 /* --- 窄屏 --- */
 
-/* ≤900px：预览不占列，改成右侧浮层。60px 是 .aw-mobile-nav 的高度。 */
+/* ≤900px：抽屉本身已经是默认形态，这里只补窄屏独有的两件事——躲开 60px 高的
+   .aw-mobile-nav，以及在小屏上占得更宽一点。 */
 @media (width <= 900px) {
-  .aw-code-page,
-  .aw-code-page.has-preview {
-    grid-template-columns: 244px minmax(0, 1fr);
-  }
-
   .aw-code-preview {
     position: fixed;
     z-index: 72;
     inset: 0 0 60px auto;
     width: min(560px, 94vw);
-    box-shadow: -18px 0 48px rgb(41 39 36 / 12%);
   }
 
   .aw-code-preview-backdrop {
     position: fixed;
     z-index: 71;
     inset: 0 0 60px;
-    display: block;
-    width: 100%;
-    padding: 0;
-    border: 0;
     background: rgb(41 39 36 / 18%);
     backdrop-filter: blur(2px);
   }
@@ -5188,8 +5201,18 @@ p.aw-code-step-thought {
 .aw-code-sessions-close,
 .aw-code-mobile-sessions,
 .aw-code-sessions-backdrop,
+/* 点空白处关掉抽屉。始终渲染，不再只在窄屏出现——抽屉现在每个宽度上都是抽屉，
+   而一个盖住内容的浮层必须有一个不用找按钮的退出方式。 */
 .aw-code-preview-backdrop {
-  display: none;
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: rgb(27 25 23 / 12%);
+  cursor: default;
 }
 
 /* The workbench: a tab strip over whichever flow is showing. */
@@ -5764,4 +5787,44 @@ p.aw-code-step-thought {
   color: var(--aw-text-muted);
   font-size: 11px;
   line-height: 1.5;
+}
+
+/* --- 身份三行 -----------------------------------------------------------
+ *
+ * 只读的事实，所以排成定义列表而不是表单行：没有边框、没有输入框的形状，一眼
+ * 看得出这里不能改。改的入口是下面那个按钮。 */
+.aw-identity-facts {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel-soft);
+}
+
+.aw-identity-facts > div {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+
+.aw-identity-facts dt {
+  color: var(--aw-text-muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.aw-identity-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--aw-text);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12.5px;
+}
+
+.aw-identity-empty {
+  color: var(--aw-text-muted);
+  font-style: italic;
 }
