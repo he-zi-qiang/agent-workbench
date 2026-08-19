@@ -2140,25 +2140,108 @@ pre {
   color: var(--aw-accent);
 }
 
+/* --- 引用：证据行，不是芯片 -------------------------------------------
+ *
+ * 一行引用要回答三个问题：哪份文档、哪一版、在文档的什么位置。三个都是短
+ * 字符串，横着挤成一枚 10px 的芯片就只剩下第一个——而第二个（版本）恰恰是
+ * 「撤权之后这条还成立吗」唯一能对上的东西。
+ *
+ * 稿子把原文也印在行里。这份仓库的 `Citation.quote` 从未被赋值，唯一存在的
+ * 原文在 ADR-067 的读取路径后面，而那是一次会正当失败的新读——所以行上放
+ * 已经为真的三项，原文留在一次点击之后。 */
 .aw-chat-citations {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  gap: 0;
   margin-top: 12px;
-  gap: 6px;
+  overflow: hidden;
+  border: 1px solid var(--aw-evidence-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel);
 }
 
-/* 引用是这一档语义的原型：它不说这句话对不对，只说它的依据在哪。所以底色也
-   换成证据色的淡底——此前只有文字是这个色，芯片本身与旁边任何一个中性标签
-   同底，于是"有依据"这件事全靠 10px 的字色去说。 */
-.aw-chat-citation {
-  padding: 3px 7px;
-  border: 1px solid var(--aw-evidence-border);
+.aw-chat-citation-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 12px;
+  padding: 11px 14px;
+}
+
+.aw-chat-citation-row + .aw-chat-citation-row {
+  border-top: 1px solid var(--aw-panel-soft);
+}
+
+.aw-chat-citation-ordinal {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   border-radius: 6px;
   background: var(--aw-evidence-soft);
   color: var(--aw-evidence);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aw-chat-citation-body {
+  min-width: 0;
+}
+
+.aw-chat-citation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text);
+  text-align: left;
+}
+
+.aw-chat-citation:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.aw-chat-citation strong {
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 10px;
-  cursor: help;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.aw-chat-citation:hover:not(:disabled) strong {
+  color: var(--aw-evidence);
+}
+
+.aw-chat-citation-version {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-soft);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
+/* 这一行说明的是缺一个接口，不是缺一段内容——所以它排得比引用轻，也不用
+   警告色：没有人做错什么。 */
+.aw-chat-citation-gap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 14px;
+  border-top: 1px solid var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-chat-citation-gap > span {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--aw-evidence-border);
+  border-radius: 999px;
+  color: var(--aw-evidence);
+  font-size: 11px;
 }
 
 /* Where the cited chunk sits, inside the same chip as its id rather than beside
@@ -5285,30 +5368,10 @@ p.aw-code-step-thought {
 }
 
 /* A citation chip that opens (ADR-067).
-   Styled as the inert span it replaced, because it is still first of all a
-   marker in running text -- the affordance is the cursor and the expanded
-   passage, not a button chrome that would break the line it sits in. */
-.aw-chat-citation-holder {
-  display: inline-block;
-}
-
-button.aw-chat-citation {
-  font: inherit;
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  color: inherit;
-}
-
-button.aw-chat-citation:disabled {
-  cursor: default;
-}
-
-button.aw-chat-citation:hover:not(:disabled) {
-  text-decoration: underline;
-}
-
+   The row is no longer a marker inside running text -- it is a row in an
+   evidence table -- so the inline-block holder and the button-stripping rules
+   that went with it are gone. What survives is the passage: still the same
+   fresh read, still the same wording when it refuses. */
 .aw-chat-citation-passage {
   margin: 0.375rem 0 0.5rem;
   padding: 0.5rem 0.75rem;
@@ -5579,4 +5642,100 @@ button.aw-chat-citation:hover:not(:disabled) {
 .aw-card.is-evidence .aw-card-header h3,
 .aw-card.is-evidence .aw-card-header svg {
   color: var(--aw-evidence);
+}
+
+/* --- 会话列表：这一列是本机的 ------------------------------------------
+ *
+ * 「本地」是徽章，下面这行是它的代价。Chat 没有服务端会话列表，这一列就是
+ * 这台浏览器记下来的东西——别处开的会话仍然在、仍然属于这个人，只是这里没有
+ * 它的行。少了这句，空列表会被读成「你没有会话」。 */
+.aw-chat-sessions-header > div > small {
+  display: block;
+  flex-basis: 100%;
+  margin-top: 3px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-chat-session-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.aw-chat-session-head > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 标签说的是这个会话按哪种方式作答，不是它答出了什么。所以「知识库」用证据
+   色（它会去找依据），「自由回答」用中性色——后者不是错误，不该是警告色。 */
+.aw-chat-session-tag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.aw-chat-session-tag.is-evidence {
+  background: var(--aw-evidence-soft);
+  color: var(--aw-evidence);
+}
+
+.aw-chat-session-tag.is-plain {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+}
+
+/* --- 任务筛选 -----------------------------------------------------------
+ *
+ * 三段控件，状态发给服务端而不是在本地过滤——理由写在 WorkPage 的查询里。
+ * 用滑块式的段控件而不是三个独立按钮：它们互斥，而三个并排的按钮读起来像
+ * 三个可以各自开关的东西。 */
+.aw-task-filters {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 8px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--aw-panel-strong);
+}
+
+.aw-task-filters > button {
+  flex: 1;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--aw-text-soft);
+  font-size: 12.5px;
+}
+
+.aw-task-filters > button:hover:not(.is-active) {
+  color: var(--aw-text);
+}
+
+.aw-task-filters > button.is-active {
+  background: var(--aw-surface);
+  color: var(--aw-text);
+  font-weight: 500;
+  box-shadow: var(--aw-shadow-sm);
+}
+
+/* 一句说明里的行动词。做成按钮而不是链接，是因为它不导航——它把筛选拨回去。 */
+.aw-link-button {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-accent);
+  font: inherit;
+  text-decoration: underline;
+}
+
+.aw-link-button:hover {
+  color: var(--aw-accent-hover);
 }

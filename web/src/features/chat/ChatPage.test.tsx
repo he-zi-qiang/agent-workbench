@@ -303,11 +303,15 @@ describe("Opening the passage behind a citation", () => {
     });
 
     renderChatRoute("/chat/ses_answered");
-    // Nothing is fetched until asked: the chip is a marker in running text,
-    // and a page of them would otherwise be a page of reads.
+    // Nothing is fetched until asked. This is the property that decides the
+    // row's shape: the text behind a citation is a fresh read that may refuse
+    // (ADR-067), so a page of citations must not be a page of reads.
     expect(vi.mocked(getCitedPassage)).not.toHaveBeenCalled();
 
-    await user.click(await screen.findByRole("button", { name: /chunk_first/ }));
+    // Found by the document, not the chunk: the row leads with what a reader
+    // checking a claim actually needs to recognise. The chunk id is still on
+    // the element's title, and still what goes to the clipboard.
+    await user.click(await screen.findByRole("button", { name: /doc_handbook/ }));
 
     expect(await screen.findByText("手册第三页说的那句话。")).toBeInTheDocument();
     // Addressed through the turn, which is what supplies the document and
@@ -333,7 +337,7 @@ describe("Opening the passage behind a citation", () => {
 
     renderChatRoute("/chat/ses_answered");
     await user.click(
-      await screen.findByRole("button", { name: /chunk_first/i }),
+      await screen.findByRole("button", { name: /doc_handbook/i }),
     );
 
     expect(await screen.findByText(/读不到这段原文了/)).toBeInTheDocument();
