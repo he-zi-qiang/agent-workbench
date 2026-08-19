@@ -1165,6 +1165,46 @@ describe("CodePage", () => {
     expect(within(recent).getByRole("button", { current: "page" })).toBeInTheDocument();
   });
 
+  it("lets Esc out of a rename nobody meant to start", async () => {
+    // The field opens on a double-click, which is easy to hit by accident and
+    // impossible to reach from a keyboard. Before this, the only way out was
+    // clicking elsewhere -- the mouse's exit, offered to the one user who did
+    // not arrive by mouse. Esc leaves the name alone and sends nothing.
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+      ],
+    });
+
+    mounted();
+
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.dblClick(within(recent).getByRole("button", { name: "第一句指令" }));
+    await user.type(within(recent).getByLabelText("会话名字"), "改了一半{Escape}");
+
+    expect(within(recent).queryByLabelText("会话名字")).not.toBeInTheDocument();
+    expect(
+      within(recent).getByRole("button", { name: "第一句指令" }),
+    ).toBeInTheDocument();
+    expect(vi.mocked(renameCodeSession)).not.toHaveBeenCalled();
+  });
+
+  it("says how to rename, because a double-click announces nothing", async () => {
+    // The gesture worked long before anything on screen mentioned it, which
+    // made it a feature only its author could find.
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+      ],
+    });
+
+    mounted();
+
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    expect(within(recent).getByText(/双击改名/)).toBeInTheDocument();
+  });
+
   it("renames a session to what a person called it", async () => {
     const user = userEvent.setup();
     // The server's answer changes after the rename, so the sidebar can only

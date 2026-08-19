@@ -57,6 +57,15 @@ export function CodeSessionRail({
     >
       <header className="aw-code-sessions-header">
         <strong>会话</strong>
+        {/* 三件事，每件都在别处问过一次。
+            「服务端列表」是与 Chat 那一列的对照：那边是这台浏览器记下来的，
+            这边不是，换台机器还在。
+            「名字来自第一句指令」解释了为什么这里没有"重命名"按钮也没有输入框
+            ——名字是 ADR-047 从第一句话取的，不是谁填的。
+            「双击改名」是这一行真正的理由：改名功能一直在（onDoubleClick 就在
+            下面），但界面上没有任何东西说过它存在。一个没人找得到的功能等于
+            没有。 */}
+        <small>服务端列表 · 名字来自第一句指令 · 双击改名</small>
         <div className="aw-code-sessions-actions">
           {/* Goes to the start page rather than POSTing an empty session: the
               first sentence is what names a session (ADR-047), and one created
@@ -107,6 +116,17 @@ export function CodeSessionRail({
                       defaultValue={held.title ?? ""}
                       id={`aw-code-rename-${held.session_id}`}
                       name="title"
+                      // Esc gets out without saving. Clicking away already
+                      // did (onBlur below), but that is the mouse's exit and
+                      // this field is opened by a gesture -- a double-click --
+                      // that is easy to trigger by accident and impossible to
+                      // trigger from a keyboard. Leaving the only way out on
+                      // the pointer strands whoever arrived here without one.
+                      onKeyDown={(event) => {
+                        if (event.key !== "Escape") return;
+                        event.preventDefault();
+                        setRenaming(null);
+                      }}
                       onBlur={() => {
                         setRenaming(null);
                       }}
@@ -127,8 +147,10 @@ export function CodeSessionRail({
                       }}
                       // Named after the first instruction, so most rows have
                       // one. The id is the fallback for a session opened and
-                      // never used.
-                      title={held.title ?? held.session_id}
+                      // never used. The rename hint rides along: the header
+                      // says it once for the column, this says it on the row
+                      // the pointer is actually over.
+                      title={`${held.title ?? held.session_id}\n双击改名`}
                       type="button"
                     >
                       {held.title ?? shortId(held.session_id)}

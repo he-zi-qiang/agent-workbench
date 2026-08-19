@@ -281,7 +281,12 @@ export class ChatRuntime {
         if (!result.accepted) return "rejected";
         return result.duplicate ? "duplicate" : "accepted";
       },
-      onCursor: (cursor) => saveChatCursor(this.identity, sessionId, cursor),
+      onCursor: (cursor) => {
+        saveChatCursor(this.identity, sessionId, cursor);
+        // Also into state: the saved copy is what a reload resumes from, and
+        // the console shows where the *live* stream is.
+        this.dispatch({ type: "cursorAdvanced", sessionId, cursor });
+      },
       onConnectionChange: (connection, error) => {
         this.dispatch({
           type: "connectionChanged",

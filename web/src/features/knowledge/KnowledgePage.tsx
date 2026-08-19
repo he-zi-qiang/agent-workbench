@@ -390,7 +390,10 @@ function KnowledgeBaseDetail({
         <div className="aw-card-header">
           <div>
             <h3 id="document-list-title">文档</h3>
-            <p>只有“可以检索”的文档会参与知识库回答。</p>
+            <p>
+              按 revision 管理；上传完成不等于已索引，只有“可以检索”的文档会参与
+              知识库回答。
+            </p>
           </div>
           <button
             aria-label="刷新文档状态"
@@ -527,7 +530,20 @@ function SearchResults({ result }: { result: SearchResponse | null }) {
           在 dense 和 hybrid+rerank 下含义不同，所以名字本身值得摆出来。 */}
       <p className="aw-muted">由 {result.retriever} 检索栈应答</p>
       {result.hits.length === 0 ? (
-        <p className="aw-muted">本次没有返回可读的匹配片段。</p>
+        <>
+          <p className="aw-muted">本次没有返回可读的匹配片段。</p>
+          {/* 空结果是三件事共用的一个样子，这里说清楚是哪三件。
+              授权过滤跑在检索之后（application/retrieval.py 的
+              `authorized_revisions`），所以被过滤掉的片段和从来不存在的片段
+              在这条响应里长得完全一样；还在索引中的文档同样什么都不返回。
+              合并的后果是：这个入口回答不了「有没有一份我读不到的文档命中了」
+              ——而那正是一个枚举权限的问题。 */}
+          <p className="aw-muted">
+            空结果不区分三件事：没有匹配、还没索引完、以及你无权读。授权过滤发生
+            在检索之后，被过滤掉的片段和不存在的片段在这里长得一样——所以这个入口
+            也回答不了“是不是有我读不到的东西命中了”。
+          </p>
+        </>
       ) : (
         <div className="aw-result-list">
           {result.hits.map((hit, index) => (

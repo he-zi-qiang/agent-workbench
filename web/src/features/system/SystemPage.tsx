@@ -15,7 +15,7 @@ import {
 } from "../../components/ui";
 
 export function SystemPage() {
-  const { setEditorOpen } = useIdentity();
+  const { identity, setEditorOpen } = useIdentity();
   const health = useQuery({
     queryKey: ["system-health"],
     queryFn: async () => {
@@ -98,13 +98,40 @@ export function SystemPage() {
         </p>
       )}
 
-      {/* One button, not a fold.
+      {/* 身份回到了这一页，但只作为事实，不作为表单。
+       *
+       * 它此前被删过，理由是「复述 EnvironmentDialog」——那条理由对的是当时那个
+       * 版本：一个装在 `<details>` 里、带编辑入口的块，确实是把下面那个按钮又画
+       * 了一遍。
+       *
+       * 现在这三行是只读的。这一页回答的问题是「此刻什么是真的」，而"这些数字是
+       * 以谁的身份取到的"正是其中一条：同一个 /health/ready 对任何身份都一样，
+       * 但下面那些页面的内容不是。看见和修改是两件事，修改仍然只有一个入口，就
+       * 在这三行下面。 */}
+      {/* dl，不是 section：dt/dd 只有在定义列表里才是合法的，而这三行正是
+          「名字 → 值」。 */}
+      <dl className="aw-identity-facts" aria-label="当前本地身份">
+        <div>
+          <dt>tenant</dt>
+          <dd>{identity.tenantId}</dd>
+        </div>
+        <div>
+          <dt>principal</dt>
+          <dd>{identity.principalId}</dd>
+        </div>
+        <div>
+          <dt>scopes</dt>
+          <dd>
+            {identity.scopes.length === 0 ? (
+              // 空不是「全部」，也不是「没设」。写成 — 会让读者自己去猜是哪一种。
+              <span className="aw-identity-empty">没有任何 scope</span>
+            ) : (
+              [...identity.scopes].sort().join(" · ")
+            )}
+          </dd>
+        </div>
+      </dl>
 
-          What was here was a `<details>` holding two sections, and both were
-          duplicates: the identity block restates `EnvironmentDialog`, which the
-          button below opens, and "why are some states unknown" restated in three
-          bullets the warning directly above it. A page whose live content is two
-          booleans should not be mostly prose about the two booleans. */}
       <button
         className="aw-button is-ghost"
         onClick={() => {

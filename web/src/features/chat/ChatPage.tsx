@@ -11,6 +11,7 @@ import {
   RotateCcw,
   Send,
   ShieldAlert,
+  ShieldCheck,
   Trash2,
   Wifi,
   WifiOff,
@@ -65,6 +66,7 @@ import {
   type LiveTextState,
 } from "./model";
 import { deriveTurnStages, isTurnMetaActivity } from "./turnStages";
+import type { StoredChatCursor } from "./storage";
 import { useChatRuntime } from "./useChatRuntime";
 
 export function ChatPage() {
@@ -430,6 +432,7 @@ export function ChatPage() {
               rows={1}
               value={question}
             />
+
             <button
               aria-label="发送问题"
               className="aw-button is-primary aw-chat-send"
@@ -464,6 +467,15 @@ export function ChatPage() {
                     : answerMode === "direct"
                       ? "自由回答不会检索项目资料"
                       : "回答会检索资料并标注引用"}
+            </span>
+            {/* 4096 这个上限一直在（textarea 上的 maxLength），只是看不见：打到
+                头的人得到的是一个不再接受输入的输入框，没有任何东西说明为什么。
+                放在这一行而不是压在输入框上：它是关于这次输入的说明，和左边那句
+                「回答会检索资料并标注引用」是同一类东西。 */}
+            <span
+              className={`aw-chat-counter ${question.length >= 4096 ? "is-full" : ""}`}
+            >
+              {question.length} / 4096
             </span>
           </div>
         </form>
@@ -508,6 +520,7 @@ function ChatHeader({
       {session === undefined ? null : (
         <ConnectionBadge
           connection={session.connection}
+          {...(session.cursor === undefined ? {} : { cursor: session.cursor })}
           {...(onReconnect === undefined ? {} : { onReconnect })}
         />
       )}
@@ -517,9 +530,12 @@ function ChatHeader({
 
 function ConnectionBadge({
   connection,
+  cursor,
   onReconnect,
 }: {
   connection: ChatConnectionState;
+  /** Absent until the stream has delivered a frame. */
+  cursor?: StoredChatCursor;
   onReconnect?: () => void;
 }) {
   const connected = connection === "connected";
@@ -541,6 +557,12 @@ function ConnectionBadge({
     >
       {connected ? <Wifi aria-hidden="true" size={15} /> : <WifiOff aria-hidden="true" size={15} />}
       {label}
+      {/* 流走到哪了。这条流是可断点续传的，「已连接」只说明这一刻通着，说不出
+          重连之后会从哪一条接上——游标说得出。没有游标时整段不画，而不是画一个
+          占位符：一条还没送来任何帧的流没有位置，写 #0 是在报一个不存在的位置。 */}
+      {cursor === undefined ? null : (
+        <span className="aw-chat-cursor">游标 #{cursor.id}</span>
+      )}
     </button>
   );
 }
@@ -862,8 +884,14 @@ function Citations({
       </p>
     );
   }
+  // 到这里为止，withheld / 未接地 / 无引用 三种情况都已经各自返回了。剩下的这
+  // 一种此前没有任何标记——三条否定各有说法，唯一的肯定反而是沉默的。
   return (
     <div className="aw-chat-citations" aria-label="引用">
+      <p className="aw-chat-grounded">
+        <ShieldCheck aria-hidden="true" size={13} />
+        已接地 · {citations.length} 条引用
+      </p>
       {citations.map((citation, index) => (
         <CitationRow
           citation={citation}
