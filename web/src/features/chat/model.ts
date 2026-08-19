@@ -1,4 +1,5 @@
 import type { StreamConnectionState } from "../../api/sse";
+import type { StoredChatCursor } from "./storage";
 import type {
   AskResponse,
   ChatAnswerMode,
@@ -114,6 +115,15 @@ export interface ChatSessionState extends LocalChatSession {
   history: "idle" | "loading" | "loaded" | "failed";
   connectionError?: string;
   historyError?: string;
+  /**
+   * Where this session's stream has got to, when it has got anywhere.
+   *
+   * Held in state rather than read back from storage at render time: the
+   * stored copy is what a *reload* would resume from, and reading it here
+   * would show whatever was last flushed rather than where the open stream
+   * actually is. Absent until the first frame advances it.
+   */
+  cursor?: StoredChatCursor;
 }
 
 export interface SafeRunEvent {
@@ -182,7 +192,8 @@ export type ChatAction =
   | { type: "turnRetrying"; localId: string }
   | { type: "runBound"; localId: string; runId: string; turnId?: string }
   | { type: "askResolved"; localId: string; response: AskResponse }
-  | { type: "askRejected"; localId: string; error: string; runId?: string };
+  | { type: "askRejected"; localId: string; error: string; runId?: string }
+  | { type: "cursorAdvanced"; sessionId: string; cursor: StoredChatCursor };
 
 export interface FrameReduction {
   state: ChatState;
@@ -273,6 +284,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           },
         },
       });
+    }
+    case "cursorAdvanced": {
+      const held = state.sessions[action.sessionId];
+      if (held === undefined) return state;
+      return {
+        ...state,
+        sessions: {
+          ...state.sessions,
+          [action.sessionId]: { ...held, cursor: action.cursor },
+        },
+      };
     }
     case "connectionChanged": {
       const current = state.sessions[action.sessionId];
