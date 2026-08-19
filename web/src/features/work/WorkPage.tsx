@@ -204,6 +204,8 @@ export function WorkPage() {
   const identityKey = workIdentityQueryKey(identity);
 
   const [taskFilter, setTaskFilter] = useState<TaskFilterId>("all");
+  // 见下面 aw-create-task-toggle 那段注释：没有选中任务时这一页只有提交可做。
+  const [formOpen, setFormOpen] = useState(selectedTaskId === undefined);
   const filterStatuses = TASK_FILTERS.find(
     (entry) => entry.id === taskFilter,
   )?.statuses;
@@ -736,10 +738,30 @@ export function WorkPage() {
           </button>
         </header>
 
-        <form className="aw-create-task" onSubmit={handleCreate}>
-          <h2>
-            <Plus aria-hidden="true" size={16} /> 新建任务
-          </h2>
+        {/* 表单收在按钮后面。
+         *
+         * 它此前整个摊在侧栏里，于是任务列表被推到第一屏之外——而打开这一页最
+         * 常见的目的是看某个任务跑得怎么样，不是提交新的。
+         *
+         * 默认展开的条件是"还没有选中任何任务"：那种情况下这一页除了提交没有别
+         * 的可做，收起来就是给主流程平白加一次点击。选中了任务再进来，表单让位
+         * 给列表。 */}
+        <button
+          aria-controls="aw-create-task-form"
+          aria-expanded={formOpen}
+          className="aw-create-task-toggle"
+          onClick={() => setFormOpen((was) => !was)}
+          type="button"
+        >
+          <Plus aria-hidden="true" size={16} />
+          提交新任务
+        </button>
+
+        <form
+          className={`aw-create-task ${formOpen ? "" : "is-collapsed"}`}
+          id="aw-create-task-form"
+          onSubmit={handleCreate}
+        >
           <label htmlFor="work-objective">目标</label>
           <textarea
             id="work-objective"

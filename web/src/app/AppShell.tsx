@@ -128,6 +128,19 @@ export function AppShell() {
           <span>环境</span>
         </button>
       </nav>
+      {/* 右上角常驻的身份。此前只有一句 sr-only 和「环境」按钮后面的对话框，
+          于是屏幕上任何一个数字都答不出"这是以谁的身份取到的"——而这个控制台的
+          每一页内容都取决于它。点它就是打开那个对话框，不另开一个入口。 */}
+      <button
+        className="aw-identity-pill"
+        onClick={() => setEditorOpen(true)}
+        title="点击编辑本地身份"
+        type="button"
+      >
+        <span>{identity.tenantId}</span>
+        <span aria-hidden="true">/</span>
+        <span>{identity.principalId}</span>
+      </button>
       <section className="aw-app-content">
         {/* Remount every routed surface at an identity boundary so an old
             principal's authorized projection cannot remain on screen. */}

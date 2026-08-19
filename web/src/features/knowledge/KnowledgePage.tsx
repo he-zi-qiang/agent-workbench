@@ -301,15 +301,35 @@ function KnowledgeBaseDetail({
         </div>
       </header>
 
-      <div className="aw-knowledge-summary">
-        <span><strong>{documents.data?.documents.length ?? knowledgeBase.document_count}</strong>文档</span>
-        <span><strong>{ready ?? knowledgeBase.ready_document_count}</strong>可以检索</span>
-        <span><strong>{processing ?? knowledgeBase.processing_document_count}</strong>处理中</span>
-        {(failed ?? knowledgeBase.failed_document_count) > 0 ? (
-          <span><strong>{failed ?? knowledgeBase.failed_document_count}</strong>索引失败</span>
-        ) : null}
-        <span><strong>{formatDateTime(knowledgeBase.updated_at)}</strong>最近更新</span>
+      {/* 四张卡，四种状态各占一张，数字排在标签之上。
+       *
+       * 此前是一条挤在一行里的统计条，四个数字和四个词交替出现，读者要先把它们
+       * 两两配对才能读到「1 个索引失败」。分开之后，索引失败那一张自己带红底：
+       * 一个知识库里有多少东西是回答不了问题的，是打开这一页最该先看见的事。
+       *
+       * 「索引失败」为 0 时照样画，不再隐藏。隐藏它省下的是一张卡，代价是读者
+       * 分不清「没有失败」和「这一版根本不报失败」。 */}
+      <div className="aw-kb-stats">
+        <div className="aw-kb-stat">
+          <strong>{documents.data?.documents.length ?? knowledgeBase.document_count}</strong>
+          <span>文档</span>
+        </div>
+        <div className="aw-kb-stat is-success">
+          <strong>{ready ?? knowledgeBase.ready_document_count}</strong>
+          <span>可以检索</span>
+        </div>
+        <div className="aw-kb-stat is-warning">
+          <strong>{processing ?? knowledgeBase.processing_document_count}</strong>
+          <span>正在索引</span>
+        </div>
+        <div className="aw-kb-stat is-danger">
+          <strong>{failed ?? knowledgeBase.failed_document_count}</strong>
+          <span>索引失败</span>
+        </div>
       </div>
+      <p className="aw-kb-updated">
+        最近更新 {formatDateTime(knowledgeBase.updated_at)}
+      </p>
 
       {knowledgeBase.can_write ? (
         <section className="aw-card aw-knowledge-upload" aria-labelledby="knowledge-upload-title">
@@ -426,6 +446,19 @@ function KnowledgeBaseDetail({
                       ? failureReason(document.failure_code)
                       : `${document.media_type} · ${formatBytes(document.size_bytes)}`}
                   </small>
+                </span>
+                {/* 版本。稿子把它列成一栏是对的：撤权与重新导入都体现在这个
+                    数字上，而「这条引用还成立吗」比对的正是它。
+                    `last_applied_revision` 落后于 `source_revision` 时另说一句
+                    ——那是"传完了但索引还是旧的"，两个数字都在接口上，只有它们
+                    之间的差说得出这件事。 */}
+                <span className="aw-document-revision">
+                  <code>rev {document.source_revision}</code>
+                  {document.last_applied_revision < document.source_revision ? (
+                    <small title={`索引停在 rev ${String(document.last_applied_revision)}`}>
+                      索引落后
+                    </small>
+                  ) : null}
                 </span>
                 <span className={`aw-document-status is-${document.status}`}>
                   {DOCUMENT_STATUS_LABELS[document.status]}
