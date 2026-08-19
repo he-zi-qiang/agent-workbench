@@ -22,23 +22,103 @@
  * 控件会是一块白的。
  */
 
+/*
+ * 两套字，随包发布
+ * ================
+ *
+ * 交接稿指定标题用 Space Grotesk、id 与文件名用 IBM Plex Mono。在这之前这两个
+ * 名字在仓库里一次都没出现过，而 `font-family` 的第一顺位写的是 Inter——一个
+ * 同样没有随包发布、开发机上也没装的名字。于是三个名字全部静默回落到系统字体：
+ * 实测 `Inter` / `Space Grotesk` / `IBM Plex Mono` 渲染同一串字得到的宽度与
+ * `serif` 基线一字不差（759.43px），也就是说没有一个曾经生效。版面的尺寸与
+ * 颜色都照稿子做了，字形没有——这是最容易被读成「整份稿子没落地」的那一处，
+ * 因为字形是一眼就能看出不同、却说不上来哪里不同的东西。
+ *
+ * 随包发布，而不是照稿子那样 `<link>` 到 fonts.googleapis.com：
+ *
+ *   * 那个域名在国内基本连不上，而 CDN 拉不动的结果不是报错，是静默回落——
+ *     和上面那个「写了名字但没生效」的状态一模一样，只是这次连改哪里都看不见；
+ *   * 前端的 CI 门是离线跑的。一个需要联网才成立的外观，没有办法在门里被断言，
+ *     也就没有办法阻止它第二次悄悄消失。
+ *
+ * 只带拉丁子集：Google 分片里的 `latin` 一片，三个文件合计 42 KB。汉字不在这
+ * 两个 `@font-face` 的 `unicode-range` 里，所以浏览器根本不会为一个汉字去试它们，
+ * 直接落到栈里的苹方——稿子上的中文是 Noto Sans SC，与苹方同属一类无衬线，
+ * 那点差别小于为它多背一兆中文子集的代价。
+ *
+ * Space Grotesk 取可变字重，300–700 一个文件；IBM Plex Mono 没有可变版本，
+ * 稿子只用到 400 与 500，就只带这两个静态字重。
+ *
+ * 两者都是 SIL OFL 1.1，出处与版本记在 fonts/README.md。
+ */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("./fonts/space-grotesk-latin-var.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/ibm-plex-mono-latin-500.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
   /* 三个状态，不是两个：跟随系统是默认值，也是没有 JS 时唯一成立的那个。
      `light dark` 的顺序有意义——它同时声明了「两个都支持」和「没有系统偏好
      时按浅色算」。 */
   color-scheme: light dark;
 
-  font-family:
-    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  /* 正文是系统栈，稿子就是这么写的（「正文系统栈 14.5–15px / 1.75」）。
+     此前第一顺位是 Inter，而 Inter 既没随包发布也不在 macOS 上——一个只在
+     装了 Inter 的机器上才成立的正文字体，等于三种不同的正文。删掉它之后
+     这一行说的是实话：这里用的就是每台机器自己的界面字。 */
+  font-family: var(--aw-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  /* 等宽栈。此前它不存在——app.css 里五处 `var(--aw-mono, …)` 全靠 fallback
-     生效，于是「等宽字体是什么」这件事写在五个地方，谁也不是定义。 */
+  /* 三支字体栈，三个 token，全仓只在这里定义一次。
+   *
+   * 等宽栈原先只管住了六条规则，另外十六条把 `"SFMono-Regular", Consolas,
+   * monospace` 一类的栈直接抄在规则里——于是「等宽字体是什么」写在十六个地方，
+   * 谁也不是定义，往栈首加一个字体要改十六次而且漏一次看不出来。现在全部
+   * 二十二条都读这一个 token。
+   *
+   * 每支栈里 webfont 都排第一、系统字排后面：拉丁字符命中随包的那份，汉字不在
+   * 它的 unicode-range 里、自动走到后面的苹方。一支栈同时管两种文字，不需要在
+   * 规则里按语言分叉。 */
+  --aw-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+
+  /* 标题字。稿子的原话是「标题 Space Grotesk（600，letter-spacing: -0.01em）」，
+     字重与字距跟在文件末尾那条标题规则上，这里只定义「是哪支字」。 */
+  --aw-display: "Space Grotesk", var(--aw-sans);
+
   --aw-mono:
-    ui-monospace, SFMono-Regular, "SF Mono", Menlo, "JetBrains Mono",
-    "Cascadia Code", Consolas, monospace;
+    "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+    "JetBrains Mono", "Cascadia Code", Consolas, monospace;
   --aw-font-mono: var(--aw-mono);
 
   /* --- 底色 -------------------------------------------------------------
@@ -260,4 +340,27 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
+}
+
+/* 标题字，一条规则管全站。
+ *
+ * 按元素而不是按类：稿子里凡是标题都是 Space Grotesk，而这套界面的标题一律
+ * 是 h1/h2/h3——`app.css` 里有二十多条 `.aw-xxx h1` 只管字号与字重，没有一条
+ * 管字体。要是改成给每个 `.aw-` 类补一句 `font-family`，那就是二十多个各自
+ * 可以漏掉的地方；下一个新页面的标题会不会是 Space Grotesk，取决于写它的人
+ * 记不记得抄这一句。按元素写，新页面不用做任何事就是对的。
+ *
+ * 字距 -0.01em 是稿子给的值，它只对拉丁字形成立——Space Grotesk 的字面本来
+ * 就宽，稿上的 "Agent Workbench" 靠这 1% 才收得住。汉字命中的是苹方，方块字
+ * 收 1% 字距看不出来，也不会挤。
+ *
+ * 不写 `font-weight`：字重是各条 `.aw-` 规则自己的事（15px 的卡片标题和 31px
+ * 的页标题不该是同一个重量），这里统一写死会把那些区别抹平。可变字体带的是
+ * 300–700 的连续字重，各处原本写的值直接就能命中。 */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--aw-display);
+  letter-spacing: -0.01em;
 }

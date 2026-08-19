@@ -136,6 +136,10 @@ a {
   border-radius: 12px;
   background: var(--aw-accent);
   color: var(--aw-accent-on);
+  /* 唯一一个不是标题、却要用标题字的地方。它是一个孤立的拉丁字母，字形就是
+     它的全部内容——已经在用的 -0.04em 字距只有在 Space Grotesk 上才是稿子上
+     那个样子，落在系统字上会把字母挤进右边的边框。 */
+  font-family: var(--aw-display);
   font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.04em;
@@ -838,7 +842,7 @@ textarea::placeholder {
 .aw-code-value,
 code,
 pre {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: var(--aw-mono);
 }
 
 .aw-code-value {
@@ -2258,7 +2262,7 @@ pre {
 }
 
 .aw-chat-citation strong {
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 12.5px;
   font-weight: 500;
 }
@@ -2272,7 +2276,7 @@ pre {
   border-radius: 999px;
   background: var(--aw-panel-soft);
   color: var(--aw-text-soft);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 11px;
 }
 
@@ -2341,7 +2345,7 @@ pre {
   border-radius: 999px;
   background: var(--aw-panel-soft);
   color: var(--aw-text-muted);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 10px;
   cursor: help;
 }
@@ -2815,7 +2819,7 @@ pre {
 }
 
 .aw-timeline-gaps li {
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 11px;
   line-height: 1.8;
   /* A tool name can be one long unbreakable token, and the step titles here
@@ -5429,7 +5433,7 @@ p.aw-code-step-thought {
   padding: 8px;
   border-radius: 6px;
   background: var(--aw-surface);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 11px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -5691,7 +5695,7 @@ p.aw-code-step-thought {
   padding: 0 9px;
   border: 1px solid;
   border-radius: 999px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--aw-mono);
   font-size: 11.5px;
   font-weight: 500;
 }
@@ -5735,7 +5739,7 @@ p.aw-code-step-thought {
 .aw-refusal-head code {
   margin-left: auto;
   flex: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--aw-mono);
   font-size: 11.5px;
 }
 
@@ -5747,7 +5751,7 @@ p.aw-code-step-thought {
   border: 1px solid var(--aw-border);
   border-radius: var(--aw-radius-sm);
   background: var(--aw-panel-soft);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--aw-mono);
   font-size: 12px;
   line-height: 1.7;
   white-space: pre-wrap;
@@ -5954,7 +5958,7 @@ p.aw-code-step-thought {
 
 .aw-identity-facts dt {
   color: var(--aw-text-muted);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 11.5px;
 }
 
@@ -5962,7 +5966,7 @@ p.aw-code-step-thought {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--aw-text);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 12.5px;
 }
 
@@ -5976,7 +5980,7 @@ p.aw-code-step-thought {
 .aw-chat-cursor {
   margin-left: 7px;
   color: var(--aw-text-muted);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 10.5px;
 }
 
@@ -5986,7 +5990,7 @@ p.aw-code-step-thought {
   margin-left: auto;
   flex: none;
   color: var(--aw-text-muted);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
 }
@@ -6018,7 +6022,7 @@ p.aw-code-step-thought {
 .aw-stream-nodes {
   flex: none;
   color: var(--aw-text-muted);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 10.5px;
 }
 
@@ -6104,7 +6108,7 @@ p.aw-code-step-thought {
 
 .aw-document-revision code {
   color: var(--aw-text-soft);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 11.5px;
 }
 
@@ -6168,7 +6172,7 @@ p.aw-code-step-thought {
   border-radius: 999px;
   background: var(--aw-panel);
   color: var(--aw-text-soft);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--aw-mono);
   font-size: 11px;
   box-shadow: var(--aw-shadow-sm);
 }
