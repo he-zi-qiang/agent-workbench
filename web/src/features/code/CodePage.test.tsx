@@ -1356,7 +1356,14 @@ describe("CodePage", () => {
     mounted();
 
     const turns = await screen.findByRole("region", { name: "编码会话" });
-    expect(within(turns).getByText("dump.txt")).toBeInTheDocument();
+    // Scoped to the card, because the name is now on screen twice on purpose:
+    // the step row above it says 写入工作区 · dump.txt, which is what makes a
+    // write say what it wrote. A bare getByText matches both and throws.
+    expect(
+      within(turns).getByText("dump.txt", {
+        selector: ".aw-code-output-name",
+      }),
+    ).toBeInTheDocument();
     expect(vi.mocked(getCodeWorkspaceFileText)).not.toHaveBeenCalled();
 
     // The ceiling is on the *unrequested* fetch only. Asking still works, and
