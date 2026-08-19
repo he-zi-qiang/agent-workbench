@@ -925,7 +925,13 @@ describe("CodePage", () => {
     // From the server, so it survives a cleared browser and a different
     // machine. The row with no title is one opened and never spoken in.
     await user.click(
-      within(recent).getByRole("button", { name: "把 notes.md 整理成清单" }),
+      // 正则而不是全等：这一行现在带着最后活动时间的副行（稿子上那条
+      // 「… · 14:02」），控件的可及名字于是是「标题 + 时间」。名字里有
+      // 时间是对的——它是这一行真正承载的两件事之一——所以收窄的是断言，
+      // 不是标记。
+      // `^` 不能省：同一行上的删除按钮叫「删除会话 把 notes.md …」，
+      // 不锚定开头的话两个都匹配得上。
+      within(recent).getByRole("button", { name: /^把 notes\.md 整理成清单/ }),
     );
 
     await waitFor(() => {

@@ -52,17 +52,29 @@ export function WorkbenchTabs({ chatTo, workTo }: WorkbenchTabsProps) {
   const { pathname } = useLocation();
   const destinations: Record<string, string> = { "/chat": chatTo, "/work": workTo };
   return (
-    <nav aria-label="工作台" className="aw-workbench-tabs">
-      {TABS.map(({ prefix, label }) => (
-        <Link
-          aria-current={pathname.startsWith(prefix) ? "page" : undefined}
-          className="aw-workbench-tab"
-          key={prefix}
-          to={destinations[prefix] ?? prefix}
-        >
-          {label}
-        </Link>
-      ))}
-    </nav>
+    <div className="aw-workbench-head">
+      {/* 屏名，写出来。
+          此前它只存在于 `aria-label` 里：读屏软件听得到「工作台」，看得见的
+          人只看到两个没有归属的标签。而这两个标签和左边窄栏上的六个图标是
+          两层导航——不说出上一层叫什么，「对话」和「Code」在视觉上就是平级的
+          东西，尽管一个是工作台的两半、另一个是另一个工作台。
+          `aria-hidden`：nav 已经以同一个词命名，读出来会是「工作台 工作台
+          导航」。 */}
+      <span aria-hidden="true" className="aw-workbench-name">
+        工作台
+      </span>
+      <nav aria-label="工作台" className="aw-workbench-tabs">
+        {TABS.map(({ prefix, label }) => (
+          <Link
+            aria-current={pathname.startsWith(prefix) ? "page" : undefined}
+            className="aw-workbench-tab"
+            key={prefix}
+            to={destinations[prefix] ?? prefix}
+          >
+            {label}
+          </Link>
+        ))}
+      </nav>
+    </div>
   );
 }

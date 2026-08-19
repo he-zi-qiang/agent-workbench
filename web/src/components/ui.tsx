@@ -1,4 +1,4 @@
-import { AlertTriangle, LoaderCircle } from "lucide-react";
+import { AlertTriangle, LoaderCircle, Plus } from "lucide-react";
 import type { PropsWithChildren, ReactNode } from "react";
 import type { ApprovalStatus, TaskStatus } from "../api/types";
 
@@ -121,6 +121,33 @@ export function KeyValue({ label, value }: { label: string; value: ReactNode }) 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${String(bytes)} B`;
   return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+/**
+ * 「开一段新的」这个动作，在会话列这一栏里。
+ *
+ * 此前是标题右边一个 20px 的 `+` 图标。稿子把它画成整行描边按钮，理由在这一栏
+ * 的用途里：一列会话回答的是「回到哪一段」，而开新的一段是这里唯一的另一件事
+ * ——它和列表并列，不从属于列表的标题。一个图标按钮在视觉上是标题的附件，
+ * 而且它没有名字，只有把指针停上去才知道它是什么。
+ *
+ * 两栏共用一个组件而不是各写一遍：Chat 与 Code 的会话列在稿子上是同一个形状，
+ * 分开写的两份第二次改样式时会分叉，而它们分叉了没有人看得出来——两栏不会同时
+ * 出现在一块屏幕上。
+ */
+export function NewSessionButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button className="aw-new-session" onClick={onClick} type="button">
+      <Plus aria-hidden="true" size={15} />
+      <span>{label}</span>
+    </button>
+  );
 }
 
 export function shortId(value: string, length = 12): string {

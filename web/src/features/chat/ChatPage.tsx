@@ -6,7 +6,6 @@ import {
   Copy,
   MessageSquare,
   PanelLeft,
-  Plus,
   RefreshCw,
   RotateCcw,
   Send,
@@ -52,6 +51,7 @@ import {
   EmptyState,
   ErrorNotice,
   IconButton,
+  NewSessionButton,
   LoadingLine,
   formatTime,
   shortId,
@@ -261,15 +261,6 @@ export function ChatPage() {
           </div>
           <div className="aw-chat-session-actions">
             <IconButton
-              label="新建本地会话"
-              onClick={() => {
-                setMobileSessionsOpen(false);
-                void navigate("/chat");
-              }}
-            >
-              <Plus aria-hidden="true" size={17} />
-            </IconButton>
-            <IconButton
               className="aw-chat-sessions-close"
               label="关闭会话列表"
               onClick={() => setMobileSessionsOpen(false)}
@@ -278,6 +269,13 @@ export function ChatPage() {
             </IconButton>
           </div>
         </header>
+        <NewSessionButton
+          label="新建本地会话"
+          onClick={() => {
+            setMobileSessionsOpen(false);
+            void navigate("/chat");
+          }}
+        />
         <div className="aw-chat-session-list">
           {state.sessionOrder.length === 0 ? (
             <p className="aw-chat-local-note">发送消息后，会话会保存在当前浏览器。</p>

@@ -174,12 +174,25 @@ export function AppShell() {
       <button
         className="aw-identity-pill"
         onClick={() => setEditorOpen(true)}
-        title="点击编辑本地身份"
+        title={`点击编辑本地身份\n授权：${identity.scopes.join("、")}`}
         type="button"
       >
         <span>{identity.tenantId}</span>
         <span aria-hidden="true">/</span>
         <span>{identity.principalId}</span>
+        {/* 带几条授权，稿子上写作「· 3 scope」。
+            这不是装饰：这一栏回答的是「屏幕上的东西是以谁的身份取到的」，
+            而"谁"在这套系统里从来不只是一个 principal——同一个 principal 带
+            两条 scope 和带五条，看到的知识库、能提交的任务都不是一回事。
+            此前 scope 只活在那个要点开才看得见的对话框里。
+            只给数字不给名字：五条 scope 的名字排开是 60 个字符，而这一栏在
+            每一屏的右上角常驻。名字放进 title，指针停上去就有。
+            稿子上数字前面还有一颗点，这里没有做——那颗点在稿子上不承载任何
+            命题，而这个界面里的每一个色点都在说一件可以为假的事。 */}
+        <span aria-hidden="true">·</span>
+        <span className="aw-identity-scopes">
+          {identity.scopes.length} scope
+        </span>
       </button>
       <section className="aw-app-content">
         {/* Remount every routed surface at an identity boundary so an old
