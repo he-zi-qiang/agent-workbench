@@ -2166,7 +2166,7 @@ pre {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
   gap: 12px;
-  padding: 11px 14px;
+  padding: 12px 14px;
 }
 
 .aw-chat-citation-row + .aw-chat-citation-row {
@@ -2185,8 +2185,17 @@ pre {
   font-weight: 600;
 }
 
+/* 读不到的那一条：号码退成中性。青色是「依据在这里」，一条取不回原文的引用
+   没有依据可指——留着它会让一列号码里唯一失败的那条看起来和其它三条一样。 */
+.aw-chat-citation-ordinal.is-unread {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+}
+
 .aw-chat-citation-body {
+  display: grid;
   min-width: 0;
+  gap: 7px;
 }
 
 .aw-chat-citation {
@@ -2225,20 +2234,35 @@ pre {
   font-size: 11px;
 }
 
-/* 这一行说明的是缺一个接口，不是缺一段内容——所以它排得比引用轻，也不用
-   警告色：没有人做错什么。 */
+/* 「点开取原文」/「刚刚重新读了一次」——同一个位置的两句话，因为它们回答的是
+   同一个问题：这一行现在是什么状态。推到最右而不是跟在定位符后面，是为了让
+   一列引用里「哪些已经取过」竖着扫一眼就能看完。 */
+.aw-chat-citation-hint {
+  margin-left: auto;
+  color: var(--aw-evidence);
+  font-size: 11.5px;
+}
+
+/* 表尾的两句话说明的是机制与缺口，不是缺一段内容——所以它们排得比引用轻，也
+   不用警告色：没有人做错什么。 */
 .aw-chat-citation-gap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
+  display: grid;
+  gap: 4px;
   padding: 9px 14px;
   border-top: 1px solid var(--aw-panel-soft);
   color: var(--aw-text-muted);
   font-size: 12px;
+  line-height: 1.6;
 }
 
-.aw-chat-citation-gap > span {
+.aw-chat-citation-gap > p {
+  display: flex;
+  align-items: baseline;
+  margin: 0;
+  gap: 8px;
+}
+
+.aw-chat-citation-gap > p > span {
   flex: none;
   padding: 1px 7px;
   border: 1px solid var(--aw-evidence-border);
@@ -3013,32 +3037,81 @@ pre {
   display: none;
 }
 
+/* 空心点是「还没跑」，实心点是「跑过了」，所以边框就是这一档的全部信息载体。
+   它此前用 --aw-border（#eceae4）画在同色系的画布上，两者只差三个色阶——一个
+   等待中的阶段因此几乎看不出有点，而下面那条图例正要指着它说话。 */
 .aw-stream-dot {
   position: absolute;
   top: 9px;
   left: 1px;
   width: 9px;
   height: 9px;
-  border: 1px solid var(--aw-border);
+  border: 1px solid var(--aw-border-strong);
   border-radius: 50%;
   background: var(--aw-window);
 }
 
-.aw-stream-steps > li.is-done .aw-stream-dot {
+/* 状态色挂在 `.aw-stream-state` 这一层，而不是挂在「时间线里的 li」上：下面
+   那条图例用的是同一个 `.aw-stream-dot` 元素、同一批 `is-*` 类名，于是钥匙
+   和它开的锁不可能各改各的。脉动仍然只属于时间线——脉动的意思是「盯着它，
+   它要变了」，而一把钥匙不会变。 */
+.aw-stream-state.is-done .aw-stream-dot {
   border-color: var(--aw-success);
   background: var(--aw-success);
 }
 
-.aw-stream-steps > li.is-failed .aw-stream-dot {
+.aw-stream-state.is-failed .aw-stream-dot {
   border-color: var(--aw-danger);
   background: var(--aw-danger);
 }
 
-.aw-stream-steps > li.is-active .aw-stream-dot,
-.aw-stream-steps > li.is-waiting .aw-stream-dot {
+.aw-stream-state.is-active .aw-stream-dot,
+.aw-stream-state.is-waiting .aw-stream-dot {
   border-color: var(--aw-accent);
   background: var(--aw-accent);
+}
+
+.aw-stream-steps > li.is-active .aw-stream-dot,
+.aw-stream-steps > li.is-waiting .aw-stream-dot {
   animation: aw-pulse 1.4s ease-in-out infinite;
+}
+
+/* 被图路过的那一段，画成虚线。
+ *
+ * 它此前和 pending 用同一颗空心点，于是一个终态任务上没跑过的阶段看起来像
+ * 「还没轮到它」——读者会等一件永远不会发生的事。两者的区别不是程度而是
+ * 方向：pending 的阶段在前面，skipped 的阶段已经在后面了。虚线是这个界面里
+ * 唯一没被用掉的边框语汇，而且它不需要再要一档颜色。 */
+.aw-stream-state.is-skipped .aw-stream-dot {
+  border-style: dashed;
+  border-color: var(--aw-border-strong);
+  background: var(--aw-sidebar);
+}
+
+/* 这一列点各是什么意思。每行右端已经写了自己的状态，所以这里回答的不是
+   「这一行怎么了」，而是「整列扫下来哪些跑过」——后者要读六遍注解才能答，
+   而它本该是一眼的事。缩进对齐到点所在的那一列。 */
+.aw-stream-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0 0 10px;
+  padding-left: 1px;
+  gap: 12px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-stream-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.aw-stream-legend .aw-stream-dot {
+  position: static;
+  width: 7px;
+  height: 7px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -5396,15 +5469,37 @@ p.aw-code-step-thought {
    The row is no longer a marker inside running text -- it is a row in an
    evidence table -- so the inline-block holder and the button-stripping rules
    that went with it are gone. What survives is the passage: still the same
-   fresh read, still the same wording when it refuses. */
+   fresh read, still the same wording when it refuses.
+
+   证据色的引文块，不是灰色的备注块。它此前和页面上任何一句次要说明同色，于是
+   「这段字是从别处读来的」这件事没有任何视觉承载——而这正是引用存在的理由。
+   左边那条 2px 的线是边界：线右边的话不是这个答案写的。 */
 .aw-chat-citation-passage {
-  margin: 0.375rem 0 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-left: 2px solid var(--aw-border);
-  font-size: 0.8125rem;
-  line-height: 1.6;
-  color: var(--aw-text-muted);
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--aw-evidence) 45%, var(--aw-panel));
+  border-radius: 0 var(--aw-radius-sm) var(--aw-radius-sm) 0;
+  background: var(--aw-evidence-quote);
+  /* 正文色，不是青色调过的正文色。稿子上这里是一支冷下来的深绿灰，但这套 token
+     里「正文」只有两个值、都不带色相偏移——引文要被读完，边界由左边那条线和底色
+     说，不必再由字色说一遍。 */
+  color: var(--aw-text);
+  font-size: 13px;
+  line-height: 1.7;
   white-space: pre-wrap;
+}
+
+/* 取不回原文的那一条。用警示色而不是危险色：一次正当的拒绝不是故障，它是
+   ADR-067 描述的那条路径正常工作的样子。 */
+.aw-chat-citation-unread {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--aw-warning-border);
+  border-radius: 0 var(--aw-radius-sm) var(--aw-radius-sm) 0;
+  background: var(--aw-warning-soft);
+  color: var(--aw-warning);
+  font-size: 12.5px;
+  line-height: 1.7;
 }
 
 /* --- 计算机控制 ---------------------------------------------------------

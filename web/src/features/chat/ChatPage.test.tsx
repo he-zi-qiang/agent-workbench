@@ -342,6 +342,53 @@ describe("Opening the passage behind a citation", () => {
 
     expect(await screen.findByText(/读不到这段原文了/)).toBeInTheDocument();
     expect(screen.queryByText(/引用坏了/)).not.toBeInTheDocument();
+    // 不说是哪一种。三个原因都会落到这里，点名任何一个要么泄漏别人的授权状态，
+    // 要么把读者支去自己的数据里找一个不存在的错。
+    expect(screen.getByText(/这一次没有区分/)).toBeInTheDocument();
+  });
+
+  it("says a row can be opened before anybody opens it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCitedPassage).mockResolvedValue({
+      chunk_id: "chunk_first",
+      document_id: "doc_handbook",
+      document_version: "rev_1",
+      text: "手册第三页说的那句话。",
+      ordinal: 7,
+      page: 3,
+    });
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: stateWithCitations([citation("chunk_first", {})]),
+    });
+
+    renderChatRoute("/chat/ses_answered");
+
+    // 未读的行和「原文恰好是空的」在此之前长得一模一样，于是 ADR-067 的那次
+    // 点击无处可被发现。
+    expect(await screen.findByText("点开取原文")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /doc_handbook/ }));
+    await screen.findByText("手册第三页说的那句话。");
+
+    // 取到之后换成另一句：同一个位置回答同一个问题——这一行现在是什么状态。
+    expect(screen.queryByText("点开取原文")).not.toBeInTheDocument();
+    expect(screen.getByText("刚刚重新读了一次")).toBeInTheDocument();
+  });
+
+  it("offers no such hint on a row that cannot address the route", async () => {
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: stateWithCitations([citation("chunk_first", {})], { bound: false }),
+    });
+
+    renderChatRoute("/chat/ses_answered");
+    await screen.findByRole("button", { name: /doc_handbook/ });
+
+    // 一个刷新之后的历史轮次没有 turn id，那次点击必然 404，而原因与读者的权限
+    // 无关。对着一个不会打开的芯片写「点开取原文」，比原来的沉默更糟。
+    expect(screen.queryByText("点开取原文")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /doc_handbook/ })).toBeDisabled();
   });
 });
 
@@ -527,7 +574,10 @@ function citation(chunkId: string, locator: SourceLocator): Citation {
 
 // A committed, grounded turn: the one state that renders the citation row at
 // all, and so the only one these cases can be asked about.
-function stateWithCitations(citations: Citation[]) {
+function stateWithCitations(
+  citations: Citation[],
+  options: { bound?: boolean } = {},
+) {
   const base = initialChatState([
     {
       sessionId: "ses_answered",
@@ -556,7 +606,7 @@ function stateWithCitations(citations: Citation[]) {
         historical: false,
         // Bound, because opening a citation is addressed through the turn --
         // a state without one renders inert chips, which is its own case.
-        turnId: "turn_answered",
+        ...(options.bound === false ? {} : { turnId: "turn_answered" }),
         answer: "根据资料的回答。",
         grounded: true,
       },

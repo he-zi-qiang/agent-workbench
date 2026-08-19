@@ -1553,6 +1553,81 @@ describe("WorkPage 停住的任务与已用预算", () => {
   });
 });
 
+describe("WorkPage 时间线上没跑过的那几段", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(getArtifactJson).mockReset();
+    vi.mocked(getTask).mockReset();
+    vi.mocked(getTaskTimeline).mockReset();
+    vi.mocked(listKnowledgeBases).mockReset();
+    vi.mocked(listTasks).mockReset();
+    vi.mocked(newIdempotencyKey).mockReset();
+    vi.mocked(triageTask).mockReset();
+    vi.mocked(newIdempotencyKey).mockReturnValue("task:intent_1");
+    vi.mocked(triageTask).mockResolvedValue(TRIAGE_DEFAULT);
+    vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
+    vi.mocked(getArtifactJson).mockResolvedValue(taskInput(false));
+    vi.mocked(getTaskTimeline).mockResolvedValue(parkedTimeline());
+    vi.mocked(getTask).mockResolvedValue(cancelledTask());
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("draws a stage the graph went past as skipped, not as one still ahead", async () => {
+    // 同一份「只进了第一段就停住」的时间线，挂在一个终态任务上。剩下五段不是
+    // 排在前面等着轮到它们，它们已经不会发生了——这两件事此前共用一颗空心点，
+    // 于是读者会等一件不会来的事。
+    const view = renderWorkPage("/work/task_parked");
+    await screen.findByRole("region", { name: "执行过程" });
+    const steps = view.container.querySelector(".aw-stream-steps");
+
+    expect(steps?.querySelectorAll(":scope > li.is-skipped")).toHaveLength(5);
+    expect(steps?.querySelectorAll(":scope > li.is-pending")).toHaveLength(0);
+    // 查的是步骤列表而不是整个区域：图例上也写着「等待中」，而那一格正是本条
+    // 断言要留住的东西。
+    expect(within(steps as HTMLElement).queryByText("等待中")).toBeNull();
+    expect(within(steps as HTMLElement).getAllByText("未执行")).toHaveLength(5);
+  });
+
+  it("keys every dot it can draw, including the one nothing else explains", async () => {
+    const view = renderWorkPage("/work/task_parked");
+    await screen.findByRole("region", { name: "执行过程" });
+    const legend = view.container.querySelector(".aw-stream-legend");
+
+    expect(legend).not.toBeNull();
+    // 图例上的每一格用的都是行上那一套 `is-*` 类名与同一个 `.aw-stream-dot`
+    // 元素，所以钥匙和锁不可能各改各的。
+    expect(
+      [...(legend?.querySelectorAll("span[class*='is-']") ?? [])].map((item) => [
+        item.className,
+        item.textContent,
+      ]),
+    ).toEqual([
+      ["aw-stream-state is-done", "已完成"],
+      ["aw-stream-state is-active", "进行中 / 等待"],
+      ["aw-stream-state is-pending", "等待中"],
+      ["aw-stream-state is-skipped", "未执行"],
+    ]);
+  });
+});
+
+/** The same stopped run, but on a Task that will not be resumed. */
+function cancelledTask() {
+  return {
+    task_id: "task_parked",
+    status: "cancelled" as const,
+    status_detail: "cancelled elsewhere",
+    objective_preview: "整理这批资料，比较三个方案",
+    agent_invocation_count: 0,
+    created_at: "2026-08-02T12:00:00Z",
+    updated_at: "2026-08-02T12:00:30Z",
+  };
+}
+
 /** A Task the Registry stopped because this deployment cannot run its graph. */
 function parkedTask(overrides: { agent_invocation_count?: number } = {}) {
   return {

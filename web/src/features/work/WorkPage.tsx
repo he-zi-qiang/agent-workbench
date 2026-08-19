@@ -1363,11 +1363,53 @@ function TaskStepStream({
       ariaLabel="执行过程"
       eventTitle={eventTitle}
       isKnownEvent={(event) => isKnownEventType(event.event_type)}
+      legend={<TimelineLegend />}
       meta={{ title: "任务生命周期", events: taskEvents }}
       onOpenArtifact={onOpenArtifact}
       running={!isSettledStatus(status)}
       stages={stages}
     />
+  );
+}
+
+/**
+ * What the dots down the left of the timeline mean.
+ *
+ * Every row already prints its own state at the right end, so this is not the
+ * only place the answer exists -- it is the place that answers it for the
+ * whole column at once. "Did this run do the reviewing step" is a question
+ * about one dot among six, and reading six notes to answer it is the work the
+ * key removes.
+ *
+ * 「未执行」是它存在的理由。终态任务上没跑过的阶段与一个还排在后面的阶段此前
+ * 是同一颗空心点，读者因此会等一件不会发生的事；给它一条虚线之后，界面上多了
+ * 一个没有解释的符号，而这就是那句解释。
+ *
+ * The swatches carry the same `is-*` classes the rows do and the same
+ * `.aw-stream-dot` element, so the key cannot drift from what it keys: one
+ * change to a state's colour moves both.
+ */
+function TimelineLegend() {
+  return (
+    <p className="aw-stream-legend">
+      {/* 屏幕阅读器上这四个词是四个没有主语的短语——每一行本来就念得出自己的
+          状态，所以这条图例对听的人是纯冗余。补一句只有它听得见的引子，让这
+          冗余至少是有标签的。 */}
+      <span className="aw-sr-only">这一列点的含义：</span>
+      {(
+        [
+          ["done", "已完成"],
+          ["active", "进行中 / 等待"],
+          ["pending", "等待中"],
+          ["skipped", "未执行"],
+        ] as const
+      ).map(([state, label]) => (
+        <span className={`aw-stream-state is-${state}`} key={state}>
+          <span aria-hidden="true" className="aw-stream-dot" />
+          {label}
+        </span>
+      ))}
+    </p>
   );
 }
 
