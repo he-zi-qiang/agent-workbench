@@ -5750,3 +5750,18 @@ p.aw-code-step-thought {
   color: var(--aw-accent-hover);
 }
 
+
+/* 会话列表表头的第二行。与 Chat 那一列同一处理：标题说这是什么，下面这行说
+   它的来历与用法——那两件事都不是点一下就能发现的。 */
+.aw-code-sessions-header {
+  flex-wrap: wrap;
+}
+
+.aw-code-sessions-header > small {
+  flex-basis: 100%;
+  order: 3;
+  margin-top: 3px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
