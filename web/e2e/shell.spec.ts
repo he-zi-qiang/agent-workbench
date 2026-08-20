@@ -54,7 +54,7 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   await page.goto("/ui/");
 
   await expect(page).toHaveURL(/#\/chat$/);
-  await expect(page.getByRole("heading", { name: "新会话" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "新对话" })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "有什么可以帮你？" }),
   ).toBeVisible();
@@ -79,10 +79,10 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   await expect(inactiveNavigation).toBeHidden();
 
   if (isMobile) {
-    await page.getByRole("button", { name: "打开会话列表" }).click();
-    const sessions = page.getByRole("complementary", { name: "Chat 会话" });
+    await page.getByRole("button", { name: "打开对话列表" }).click();
+    const sessions = page.getByRole("complementary", { name: "最近对话" });
     await expect(sessions).toBeVisible();
-    await sessions.getByRole("button", { name: "关闭会话列表" }).click();
+    await sessions.getByRole("button", { name: "关闭对话列表" }).click();
     await expect(sessions).toBeHidden();
   }
 

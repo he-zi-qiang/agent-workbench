@@ -26,7 +26,7 @@ function ChatContextProbe() {
   const sidebar = useWorkspaceSidebar();
   return (
     <>
-      <button onClick={sidebar.open} type="button">打开会话列表</button>
+      <button onClick={sidebar.open} type="button">打开对话列表</button>
       <WorkspaceSidebarPortal>
         <aside aria-label="最近对话">
           <button
@@ -34,7 +34,7 @@ function ChatContextProbe() {
             onClick={sidebar.close}
             type="button"
           >
-            关闭会话列表
+            关闭对话列表
           </button>
           <a href="#session-a">会话 A</a>
         </aside>
@@ -253,7 +253,7 @@ describe("AppShell rail", () => {
       rail.getByRole("link", { name: "会话 A" }),
     );
 
-    const trigger = screen.getByRole("button", { name: "打开会话列表" });
+    const trigger = screen.getByRole("button", { name: "打开对话列表" });
     await user.click(trigger);
     expect(screen.getByRole("dialog", { name: "主导航" })).toBe(railElement);
     expect(screen.getByText("Chat page").closest(".aw-app-content")).toHaveAttribute(
@@ -261,7 +261,7 @@ describe("AppShell rail", () => {
     );
     expect(document.querySelector(".aw-mobile-nav")).toHaveAttribute("inert");
     await waitFor(() =>
-      expect(rail.getByRole("button", { name: "关闭会话列表" })).toHaveFocus(),
+      expect(rail.getByRole("button", { name: "关闭对话列表" })).toHaveFocus(),
     );
     await user.keyboard("{Escape}");
     await waitFor(() => expect(trigger).toHaveFocus());

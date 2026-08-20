@@ -212,7 +212,7 @@ export function ChatPage() {
 
   const removeSession = useCallback(
     async (target: string) => {
-      if (!window.confirm("删除这个会话？它的问答记录会一起消失。")) return;
+      if (!window.confirm("删除这个对话？它的问答记录会一起消失。")) return;
       const submittedRuntime = runtime;
       try {
         await runtime.removeSession(target);
@@ -276,7 +276,7 @@ export function ChatPage() {
       try {
         const accepted = await renameChatSession(identity, target, trimmed);
         if (accepted.title === null) {
-          throw new Error("服务端没有返回会话名字");
+          throw new Error("服务端没有返回这个对话的名字");
         }
         // The server is authoritative over normalization (including trimming),
         // so the local projection must use the accepted value rather than the
@@ -490,14 +490,16 @@ export function ChatPage() {
       <WorkspaceSidebarPortal>
         <aside
           className={`aw-chat-sessions ${workspaceSidebar.drawerOpen ? "is-mobile-open" : ""}`}
-          aria-label="Chat 会话"
+          // 这个区域可见的名字是「最近对话」，读屏软件此前听到的却是
+          // 「Chat 会话」——同一块地方两个名字，还夹着一个英文产品名。
+          aria-label="最近对话"
         >
         <header className="aw-chat-sessions-header">
           <strong>最近对话</strong>
           <div className="aw-chat-session-actions">
             <IconButton
               className="aw-chat-sessions-close"
-              label="关闭会话列表"
+              label="关闭对话列表"
               onClick={workspaceSidebar.close}
             >
               <X aria-hidden="true" size={17} />
@@ -515,9 +517,9 @@ export function ChatPage() {
           <div className="aw-chat-session-search">
             <Search aria-hidden="true" size={14} />
             <input
-              aria-label="搜索会话"
+              aria-label="搜索对话"
               onChange={(event) => setSessionQuery(event.target.value)}
-              placeholder="搜索会话"
+              placeholder="搜索对话"
               type="search"
               value={sessionQuery}
             />
@@ -525,9 +527,9 @@ export function ChatPage() {
         ) : null}
         <div className="aw-chat-session-list">
           {state.sessionOrder.length === 0 ? (
-            <p className="aw-chat-local-note">发送第一条消息后，会话会出现在这里。</p>
+            <p className="aw-chat-local-note">发送第一条消息后，对话会出现在这里。</p>
           ) : visibleSessionIds.length === 0 ? (
-            <p className="aw-chat-local-note">没有匹配的会话。</p>
+            <p className="aw-chat-local-note">没有匹配的对话。</p>
           ) : (
             visibleSessionIds.map((id) => {
               const session = state.sessions[id];
@@ -553,7 +555,7 @@ export function ChatPage() {
                           className="aw-sr-only"
                           htmlFor={`aw-chat-rename-${session.sessionId}`}
                         >
-                          会话名字
+                          对话名字
                         </label>
                         <input
                           aria-describedby={
@@ -618,7 +620,7 @@ export function ChatPage() {
                       </Link>
                       <span className="aw-session-row-actions">
                         <button
-                          aria-label={`重命名会话 ${session.title}`}
+                          aria-label={`重命名对话 ${session.title}`}
                           className="aw-chat-session-rename"
                           onClick={() => beginRename(session.sessionId)}
                           ref={(node) => {
@@ -634,7 +636,7 @@ export function ChatPage() {
                           <Pencil aria-hidden size={12} />
                         </button>
                         <button
-                          aria-label={`删除会话 ${session.title}`}
+                          aria-label={`删除对话 ${session.title}`}
                           className="aw-chat-session-delete"
                           onClick={() => void removeSession(session.sessionId)}
                           title="删除"
@@ -679,18 +681,18 @@ export function ChatPage() {
           {sessionId !== undefined &&
           selected === undefined &&
           (selectedServerSession.isPending || selectedServerSession.data !== undefined) ? (
-            <LoadingLine label="正在确认会话" />
+            <LoadingLine label="正在确认这个对话" />
           ) : null}
           {sessionId !== undefined &&
           selected === undefined &&
           selectedSessionNotFound ? (
             <EmptyState
               icon={<ShieldAlert aria-hidden="true" size={24} />}
-              title="这个会话不属于当前身份"
+              title="这个对话不属于当前身份"
               description="可能是换过身份，也可能这个链接本来就不是给你的——用当前身份查不到它。"
               action={
                 <button className="aw-button is-primary" onClick={() => navigate("/chat")} type="button">
-                  开始新会话
+                  开始新对话
                 </button>
               }
             />
@@ -699,7 +701,7 @@ export function ChatPage() {
             selectedServerSession.isError ? (
             <EmptyState
               icon={<AlertTriangle aria-hidden="true" size={24} />}
-              title="暂时无法确认这个会话"
+              title="暂时无法确认这个对话"
               description={
                 selectedServerSession.error instanceof Error
                   ? selectedServerSession.error.message
@@ -723,10 +725,10 @@ export function ChatPage() {
               }}
             />
           ) : selected.history === "loading" && turns.length === 0 ? (
-            <LoadingLine label="正在读取安全会话历史" />
+            <LoadingLine label="正在读取历史消息" />
           ) : selected.history === "failed" && turns.length === 0 ? (
             <div className="aw-chat-centered-notice">
-              <ErrorNotice message={selected.historyError ?? "无法读取会话历史"} />
+              <ErrorNotice message={selected.historyError ?? "读不到这个对话的历史消息"} />
               <button className="aw-button is-ghost" onClick={() => void runtime.ensureHistory(selected.sessionId)} type="button">
                 重试读取
               </button>
@@ -734,7 +736,7 @@ export function ChatPage() {
           ) : turns.length === 0 ? (
             <EmptyState
               icon={<BookOpen aria-hidden="true" size={25} />}
-              title="这个会话还是空的"
+              title="这个对话还是空的"
               description="可以直接提问，也可以选择知识库后获得带引用的回答。Enter 发送，Shift + Enter 换行。"
             />
           ) : (
@@ -866,13 +868,13 @@ function ChatHeader({
         className="aw-chat-mobile-sessions"
         controls="workspace-sidebar-context"
         expanded={sidebarOpen}
-        label="打开会话列表"
+        label="打开对话列表"
         onClick={onOpenSessions}
       >
         <PanelLeft aria-hidden="true" size={18} />
       </IconButton>
       <div>
-        <h1>{session?.title ?? "新会话"}</h1>
+        <h1>{session?.title ?? "新对话"}</h1>
         {session !== undefined && answerMode === "rag" ? (
           <p>{sourceLabel ?? "知识库"}</p>
         ) : null}

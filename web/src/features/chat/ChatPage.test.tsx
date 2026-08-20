@@ -235,7 +235,7 @@ describe("Chat identity boundary", () => {
     const user = userEvent.setup();
 
     renderChatRoute("/chat/ses_direct");
-    const remove = await screen.findByRole("button", { name: "删除会话 同一个会话" });
+    const remove = await screen.findByRole("button", { name: "删除对话 同一个会话" });
 
     // Declined first. Chat's list is the browser's, so a delete that ran
     // without asking would lose a transcript nothing else holds.
@@ -275,9 +275,9 @@ describe("Chat identity boundary", () => {
 
     renderChatRoute("/chat/ses_direct");
     await user.click(
-      await screen.findByRole("button", { name: "重命名会话 旧名字" }),
+      await screen.findByRole("button", { name: "重命名对话 旧名字" }),
     );
-    const field = screen.getByLabelText("会话名字");
+    const field = screen.getByLabelText("对话名字");
     await user.clear(field);
     await user.type(field, "新名字{Enter}");
 
@@ -289,7 +289,7 @@ describe("Chat identity boundary", () => {
     });
     expect(localRename).toHaveBeenCalledWith("ses_direct", "服务端规范名");
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "重命名会话 旧名字" })).toHaveFocus();
+      expect(screen.getByRole("button", { name: "重命名对话 旧名字" })).toHaveFocus();
     });
   });
 
@@ -310,14 +310,14 @@ describe("Chat identity boundary", () => {
     const user = userEvent.setup();
 
     renderChatRoute("/chat/ses_direct");
-    const action = await screen.findByRole("button", { name: "重命名会话 旧名字" });
+    const action = await screen.findByRole("button", { name: "重命名对话 旧名字" });
     await user.click(action);
-    await user.type(screen.getByLabelText("会话名字"), "改了一半{Escape}");
+    await user.type(screen.getByLabelText("对话名字"), "改了一半{Escape}");
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "重命名会话 旧名字" })).toHaveFocus();
+      expect(screen.getByRole("button", { name: "重命名对话 旧名字" })).toHaveFocus();
     });
-    expect(screen.queryByLabelText("会话名字")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("对话名字")).not.toBeInTheDocument();
     expect(renameChatSession).not.toHaveBeenCalled();
   });
 
@@ -340,8 +340,8 @@ describe("Chat identity boundary", () => {
     const user = userEvent.setup();
 
     renderChatRoute("/chat/ses_direct");
-    await user.click(await screen.findByRole("button", { name: "重命名会话 旧名字" }));
-    const field = screen.getByLabelText("会话名字");
+    await user.click(await screen.findByRole("button", { name: "重命名对话 旧名字" }));
+    const field = screen.getByLabelText("对话名字");
     await user.clear(field);
     await user.type(field, "第一次{Enter}");
 
@@ -354,7 +354,7 @@ describe("Chat identity boundary", () => {
     await waitFor(() => {
       expect(renameChatSession).toHaveBeenCalledTimes(2);
       expect(localRename).toHaveBeenCalledWith("ses_direct", "新名字");
-      expect(screen.getByRole("button", { name: "重命名会话 旧名字" })).toHaveFocus();
+      expect(screen.getByRole("button", { name: "重命名对话 旧名字" })).toHaveFocus();
     });
   });
 
@@ -382,8 +382,8 @@ describe("Chat identity boundary", () => {
     const user = userEvent.setup();
 
     renderChatRoute("/chat/ses_direct");
-    await user.click(await screen.findByRole("button", { name: "重命名会话 旧名字" }));
-    const field = screen.getByLabelText("会话名字");
+    await user.click(await screen.findByRole("button", { name: "重命名对话 旧名字" }));
+    const field = screen.getByLabelText("对话名字");
     await user.clear(field);
     await user.type(field, "新名字{Enter}");
     await waitFor(() => expect(renameChatSession).toHaveBeenCalledTimes(1));
@@ -413,7 +413,7 @@ describe("Chat identity boundary", () => {
     // against the detail route it was submitted under and return early, which
     // left `renamePending` set and the field `readOnly` until a reload.
     await waitFor(() => {
-      expect(screen.queryByLabelText("会话名字")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("对话名字")).not.toBeInTheDocument();
     });
     // And focus stayed where the reader put it, rather than being pulled back
     // to a row they had already left.
@@ -438,8 +438,8 @@ describe("Chat identity boundary", () => {
     const user = userEvent.setup();
 
     renderChatRoute("/chat/ses_direct");
-    await user.click(await screen.findByRole("button", { name: "重命名会话 旧名字" }));
-    const field = screen.getByLabelText("会话名字");
+    await user.click(await screen.findByRole("button", { name: "重命名对话 旧名字" }));
+    const field = screen.getByLabelText("对话名字");
     await user.clear(field);
     await user.type(field, "新名字{Enter}");
     await waitFor(() => expect(renameChatSession).toHaveBeenCalledTimes(1));
@@ -456,7 +456,7 @@ describe("Chat identity boundary", () => {
 
     // The row is where the failure belongs, and the row is still on screen.
     expect(await screen.findByRole("alert")).toHaveTextContent("名字没有保存");
-    expect(screen.getByLabelText("会话名字")).not.toHaveAttribute("readonly");
+    expect(screen.getByLabelText("对话名字")).not.toHaveAttribute("readonly");
     // Retryable in place, without the caret being taken off what the reader
     // moved to.
     await nextFrame();
@@ -491,7 +491,7 @@ describe("Chat identity boundary", () => {
     await user.dblClick(await screen.findByRole("link", { name: /另一个会话/ }));
 
     expect(await screen.findByRole("heading", { name: "另一个会话" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("会话名字")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("对话名字")).not.toBeInTheDocument();
     expect(renameChatSession).not.toHaveBeenCalled();
   });
 
