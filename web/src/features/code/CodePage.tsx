@@ -155,7 +155,24 @@ export function CodePage() {
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
   const instructionRef = useRef<HTMLTextAreaElement>(null);
-  const [running, setRunning] = useState(false);
+  //: Which sessions have a turn open — a set, not a boolean, and scoped for
+  //: the same reason `loadedFor`, `fault.scope`, `pending.sessionId` and
+  //: `viewing.sessionId` are. A page-wide flag meant that while a turn ran in
+  //: A and the reader was in B: B's composer was disabled and wore A's
+  //: spinner, so they could not send anything; B's approvals rendered as
+  //: though B were running; and `buildTurnBlocks` marked B's newest run live
+  //: even when it had no terminal event — `turnBlocks.ts` states plainly that
+  //: the dead-run exclusion holds only while `running` is false, so a session
+  //: holding a crashed run span forever whenever an unrelated turn was open.
+  //:
+  //: `null` is the key for the one instant before a session exists. The turn
+  //: that opens a session navigates mid-request, so that key is moved to the
+  //: real id the moment the server hands one over — otherwise `running` would
+  //: go false under the reader for the whole of the turn that created
+  //: everything they are watching.
+  const [runningIn, setRunningIn] = useState<ReadonlySet<string | null>>(
+    () => new Set(),
+  );
   //: The instruction whose request is still open, held here rather than
   //: appended to `loadedMessages`. Appending optimistically and then re-reading
   //: the server's transcript is how the same sentence ends up on screen twice;
@@ -231,6 +248,7 @@ export function CodePage() {
   // already carries the session it belongs to, and the approvals are only
   // meaningful while a turn runs, so both questions are answerable here.
   const viewing = opened?.sessionId === sessionId ? opened : null;
+  const running = runningIn.has(sessionId ?? null);
   const pendingApprovals = running ? approvals : [];
   const messages = loadedFor === sessionId ? loadedMessages : [];
   // The sentence to draw a block for, or null because the server's transcript
@@ -442,7 +460,8 @@ export function CodePage() {
     // work. The route's optional param is what lets `running` survive the
     // navigation below -- see App.tsx.
     let target = sessionId;
-    setRunning(true);
+    const startedIn = sessionId ?? null;
+    setRunningIn((held) => new Set(held).add(startedIn));
     setFault(null);
     setPending({ sessionId: sessionId ?? null, text });
     setInstruction("");
@@ -455,6 +474,14 @@ export function CodePage() {
         const opened = created.session_id;
         target = opened;
         setPending({ sessionId: opened, text });
+        // Rekeyed from `null` to the session that now exists, before the
+        // navigation below moves the route onto it.
+        setRunningIn((held) => {
+          const next = new Set(held);
+          next.delete(null);
+          next.add(opened);
+          return next;
+        });
         // Into the list now, not when the turn comes back. The invalidation in
         // `finally` is the only thing that used to put a new session in the
         // rail, and a coding turn holds its request open for minutes -- so for
@@ -498,7 +525,11 @@ export function CodePage() {
       // `target`: the turn that opened the session reports where it now shows.
       setFault({ scope: target ?? null, text: describe(cause) });
     } finally {
-      setRunning(false);
+      setRunningIn((held) => {
+        const next = new Set(held);
+        next.delete(target ?? startedIn);
+        return next;
+      });
       // Both, and on every path. Re-reading rather than trusting the
       // optimistic append is what keeps this transcript from disagreeing with
       // the server's; and a refused turn may still have written files, because

@@ -53,6 +53,31 @@ export interface OpenedFile {
 }
 
 /**
+ * One file body's cache key, and the identity is not optional in it.
+ *
+ * These caches are `staleTime: Infinity`, and the `QueryClient` is created
+ * once for the app (`Providers.tsx`) rather than per identity -- so the
+ * `Outlet key={identityKey}` remount that protects every routed surface does
+ * not touch them. Without the principal in the key, narrowing your own scopes
+ * in the identity dialog leaves a file you had already read rendering straight
+ * from cache, with no second trip past the server's authorization.
+ */
+function fileKey(
+  prefix: string,
+  identity: PrincipalIdentity,
+  file: Pick<OpenedFile, "sessionId" | "name">,
+): readonly unknown[] {
+  return [
+    prefix,
+    identity.tenantId,
+    identity.principalId,
+    [...identity.scopes].sort(),
+    file.sessionId,
+    file.name,
+  ];
+}
+
+/**
  * How large a file a run just wrote may be and still paint itself unasked.
  *
  * Smaller than a turn card's 64 KB, and for a different reason: this one only
@@ -100,7 +125,7 @@ export function FilePreview({
         load={() =>
           getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name)
         }
-        queryKey={["code-file-text", viewing.sessionId, viewing.name]}
+        queryKey={fileKey("code-file-text", identity, viewing)}
       />
     );
     return (
@@ -129,7 +154,10 @@ export function FilePreview({
               "code-file-blob",
             ]) {
               void queries.invalidateQueries({
-                queryKey: [prefix, viewing.sessionId, written],
+                queryKey: fileKey(prefix, identity, {
+                  ...viewing,
+                  name: written,
+                }),
               });
             }
           }
@@ -164,7 +192,7 @@ export function FilePreview({
           getCodeWorkspaceFileBlob(identity, viewing.sessionId, viewing.name)
         }
         name={viewing.name}
-        queryKey={["code-file-blob", viewing.sessionId, viewing.name]}
+        queryKey={fileKey("code-file-blob", identity, viewing)}
         sizeBytes={viewing.sizeBytes}
       />
     );
@@ -178,7 +206,7 @@ export function FilePreview({
           getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name)
         }
         name={viewing.name}
-        queryKey={["code-file-html", viewing.sessionId, viewing.name]}
+        queryKey={fileKey("code-file-html", identity, viewing)}
         sizeBytes={viewing.sizeBytes}
       />
     );
@@ -189,7 +217,7 @@ export function FilePreview({
         load={() =>
           getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name)
         }
-        queryKey={["code-file-text", viewing.sessionId, viewing.name]}
+        queryKey={fileKey("code-file-text", identity, viewing)}
       />
     );
   }

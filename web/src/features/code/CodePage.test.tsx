@@ -1409,6 +1409,41 @@ describe("CodePage", () => {
     expect(screen.queryByText("这个会话还是空的")).not.toBeInTheDocument();
   });
 
+  it("leaves the other session usable while a turn runs in this one", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: "ses_code_older",
+          title: "把 notes.md 整理成清单",
+          last_activity_at: null,
+        },
+      ],
+    });
+    vi.mocked(askCode).mockReturnValue(new Promise(() => undefined));
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "跑一下");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(askCode).toHaveBeenCalledTimes(1));
+    // The session it was typed into is busy, and says so.
+    expect(screen.getByRole("button", { name: "正在处理" })).toBeDisabled();
+
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.click(
+      within(recent).getByRole("button", { name: "把 notes.md 整理成清单" }),
+    );
+
+    // The other one is not. A page-wide `running` flag disabled this composer
+    // and hung the first session's spinner on it, so a reader who switched
+    // sessions mid-turn could not send anything anywhere.
+    const send = await screen.findByRole("button", { name: "发送" });
+    await user.type(screen.getByLabelText("要做的事"), "另一件事");
+    expect(send).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "正在处理" })).not.toBeInTheDocument();
+  });
+
   it("marks the session being viewed, even when it has no name yet", async () => {
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [{ session_id: SESSION, title: null, last_activity_at: null }],

@@ -1632,7 +1632,16 @@ function TaskResult({
   const readable = kind === "text";
   const isDocument = kind === "docx";
   const preview = useQuery({
-    queryKey: ["work", "artifact-text", artifact?.artifact_id ?? ""],
+    // 带上身份。这一族键此前是这个页面上唯一不带身份的，而它们都是
+    // `staleTime: Infinity`——QueryClient 是应用级的，切身份不会重建它，
+    // 于是同一个 principal 收窄 scope 之后，先前读过的产物内容会直接从
+    // 缓存里渲染出来，不再经过一次授权。
+    queryKey: [
+      "work",
+      "artifact-text",
+      ...workIdentityQueryKey(identity),
+      artifact?.artifact_id ?? "",
+    ],
     enabled: readable,
     staleTime: Number.POSITIVE_INFINITY,
     queryFn: () => {
@@ -1645,7 +1654,12 @@ function TaskResult({
   // fail because a *stored file* will not parse. Sharing a key would also share
   // a cache entry between two unrelated payloads.
   const document = useQuery({
-    queryKey: ["work", "artifact-document", artifact?.artifact_id ?? ""],
+    queryKey: [
+      "work",
+      "artifact-document",
+      ...workIdentityQueryKey(identity),
+      artifact?.artifact_id ?? "",
+    ],
     enabled: isDocument,
     staleTime: Number.POSITIVE_INFINITY,
     queryFn: () => {
@@ -1679,7 +1693,12 @@ function TaskResult({
   // deployment has no converter", which is a fact about the server rather than
   // about the document -- and the reason it resolves rather than throws.
   const layout = useQuery({
-    queryKey: ["work", "artifact-layout", artifact?.artifact_id ?? ""],
+    queryKey: [
+      "work",
+      "artifact-layout",
+      ...workIdentityQueryKey(identity),
+      artifact?.artifact_id ?? "",
+    ],
     enabled: wantsLayout,
     staleTime: Number.POSITIVE_INFINITY,
     queryFn: () => {
@@ -2034,7 +2053,12 @@ function TaskResult({
           kind={kind}
           load={() => getArtifactBlob(identity, artifact.artifact_id)}
           name={artifact.filename ?? artifact.kind}
-          queryKey={["work", "artifact-blob", artifact.artifact_id]}
+          queryKey={[
+            "work",
+            "artifact-blob",
+            ...workIdentityQueryKey(identity),
+            artifact.artifact_id,
+          ]}
           sizeBytes={artifact.size_bytes}
         />
       ) : kind === "html" ? (
@@ -2044,7 +2068,12 @@ function TaskResult({
         <HtmlPreview
           load={() => getArtifactText(identity, artifact.artifact_id)}
           name={artifact.filename ?? artifact.kind}
-          queryKey={["work", "artifact-html", artifact.artifact_id]}
+          queryKey={[
+            "work",
+            "artifact-html",
+            ...workIdentityQueryKey(identity),
+            artifact.artifact_id,
+          ]}
           sizeBytes={artifact.size_bytes}
         />
       ) : !readable ? (

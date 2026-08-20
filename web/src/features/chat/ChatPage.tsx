@@ -1320,7 +1320,18 @@ function CitationRow({
   const [open, setOpen] = useState(false);
   const locator = citationLocator(citation.locator);
   const passage = useQuery({
-    queryKey: ["chat", "citation", sessionId, turnId ?? "", citation.chunk_id],
+    // 身份进键，理由同 Work 的产物缓存：QueryClient 是应用级的，切身份不会
+    // 重建它，而被引原文是按 staleTime 缓着的。
+    queryKey: [
+      "chat",
+      "citation",
+      identity.tenantId,
+      identity.principalId,
+      [...identity.scopes].sort(),
+      sessionId,
+      turnId ?? "",
+      citation.chunk_id,
+    ],
     enabled: open && turnId !== undefined,
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
