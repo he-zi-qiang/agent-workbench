@@ -535,13 +535,13 @@ describe("Chat identity boundary", () => {
   it.each([
     {
       answerMode: "direct" as const,
-      expected: /未检索知识库/,
+      expected: /没有查资料/,
       forbidden: /已检索所选知识库/,
     },
     {
       answerMode: "rag" as const,
       expected: /已检索所选知识库，但没有找到足够相关的内容/,
-      forbidden: /未检索知识库/,
+      forbidden: /没有查资料/,
     },
   ])(
     "says why an ungrounded $answerMode answer has no citations",

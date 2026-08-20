@@ -575,7 +575,7 @@ describe("WorkPage task submission", () => {
 
     // The file is in the rail, named for what it is, without hunting for the
     // step that wrote it.
-    const rail = screen.getByRole("complementary", { name: "附件" });
+    const rail = screen.getByRole("complementary", { name: "产出文件" });
     expect(within(rail).getByText("检索到的证据")).toBeInTheDocument();
   });
 
@@ -653,7 +653,7 @@ describe("WorkPage task submission", () => {
     // Under the steps, in the reading column -- not in the file rail.
     expect(output.closest(".aw-work-run")).not.toBeNull();
     expect(
-      within(screen.getByRole("complementary", { name: "附件" })).queryByText(
+      within(screen.getByRole("complementary", { name: "产出文件" })).queryByText(
         "report.md",
       ),
     ).not.toBeInTheDocument();
@@ -709,7 +709,7 @@ describe("WorkPage task submission", () => {
     });
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     expect(within(rail).getByText("draft.md")).toBeInTheDocument();
     expect(within(rail).getByText("chart.png")).toBeInTheDocument();
     // Names, not controls. An affordance here would invite exactly the click
@@ -794,7 +794,7 @@ describe("WorkPage task submission", () => {
 
   it("keeps the text view one click away, honest about what it drops", async () => {
     // The old default's guarantees do not lapse with the default: a .docx must
-    // not fall through to "这个类型只能下载查看", and its text view still
+    // not fall through to "这个类型只能下载后查看", and its text view still
     // counts what it dropped instead of posing as the document.
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
@@ -854,7 +854,7 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /季度总结\.docx/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -907,7 +907,7 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /报告文件|report\.md/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -977,7 +977,7 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /图表\.png/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -1021,7 +1021,7 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /chart\.html/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -1058,12 +1058,12 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /数据包\.zip/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
     expect(
-      await within(output).findByText(/这个类型只能下载查看/),
+      await within(output).findByText(/这个类型只能下载后查看/),
     ).toBeInTheDocument();
     expect(vi.mocked(downloadArtifact)).not.toHaveBeenCalled();
     expect(vi.mocked(getArtifactBlob)).not.toHaveBeenCalled();

@@ -2721,7 +2721,7 @@ pre {
   backdrop-filter: blur(10px);
 }
 
-.aw-pane-header h1 {
+.aw-pane-header strong {
   margin: 0;
   font-size: 16px;
   font-weight: 600;

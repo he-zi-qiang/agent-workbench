@@ -781,7 +781,7 @@ describe("CodePage", () => {
     // Once now, not twice. The digest existed to tell a reader what was inside
     // a closed fold; there is no fold, so the row speaks for itself.
     expect(within(turns).getAllByText("写入工作区")).toHaveLength(1);
-    const diagnostic = within(turns).getByText("诊断");
+    const diagnostic = within(turns).getByText("原始事件");
     const raw = turns.querySelector(".aw-code-raw pre");
     expect(raw).not.toBeVisible();
     await user.click(diagnostic);

@@ -56,6 +56,7 @@ import {
 } from "../../app/WorkspaceSidebar";
 import {
   browserShowsPdfInline,
+  mediaLabel,
   previewKind,
 } from "../../components/media";
 import { BlobPreview } from "../../components/BlobPreview";
@@ -293,7 +294,11 @@ export function WorkPage() {
       if (taskInputRef === null) throw new Error("时间线中没有任务输入引用");
       const value = await getArtifactJson<unknown>(identity, taskInputRef);
       const parsed = parseTaskInputArtifact(value);
-      if (parsed === null) throw new Error("任务输入 artifact 不符合 TaskInput 契约");
+      // 这一句会走到界面上：`errorMessage` 优先用 message 而不是兜底文案，
+      // 所以它必须是说给读者听的，不是说给写这段代码的人听的。
+      if (parsed === null) {
+        throw new Error("读不到这个任务的提交内容，格式和这个版本对不上。");
+      }
       return parsed;
     },
   });
@@ -914,7 +919,7 @@ export function WorkPage() {
         <aside className="aw-work-sidebar" aria-label="任务列表与新建任务">
         <header className="aw-pane-header">
           <div>
-            <h1>任务</h1>
+            <strong>最近任务</strong>
           </div>
           <div className="aw-pane-header-actions">
             <button
@@ -1046,7 +1051,7 @@ export function WorkPage() {
             </p>
           ) : null}
           {!tasksQuery.isPending && !tasksQuery.isError && tasks.length === 0 && taskFilter === "all" ? (
-            <p className="aw-muted">还没有任务。</p>
+            <p className="aw-muted">还没有任务。说一件要做的事，就能开一个。</p>
           ) : null}
           {tasksQuery.hasNextPage ? (
             <button
@@ -1205,7 +1210,7 @@ export function WorkPage() {
             />
             <TimelineGapNotice gaps={timelineGaps} />
             {timeline.error !== null ? (
-              <ErrorNotice message={errorMessage(timeline.error, "读取时间线失败")} />
+              <ErrorNotice message={errorMessage(timeline.error, "读取执行过程失败")} />
             ) : null}
 
             <details className="aw-work-fold">
@@ -1396,7 +1401,7 @@ function TaskStepStream({
       ariaLabel="执行过程"
       eventTitle={eventTitle}
       isKnownEvent={(event) => isKnownEventType(event.event_type)}
-      meta={{ title: "任务生命周期", events: taskEvents }}
+      meta={{ title: "运行记录", events: taskEvents }}
       onOpenArtifact={onOpenArtifact}
       running={!isSettledStatus(status)}
       stages={stages}
@@ -1478,10 +1483,10 @@ function ArtifactRail({
   workspaceWrites: WorkspaceWriteGroup[];
 }) {
   return (
-    <aside className="aw-artifacts" aria-label="附件">
+    <aside className="aw-artifacts" aria-label="产出文件">
       <div className="aw-artifacts-head">
         <Paperclip aria-hidden="true" size={14} />
-        <span>附件</span>
+        <span>产出文件</span>
         {artifacts.length === 0 ? null : <em>{artifacts.length}</em>}
       </div>
       {artifacts.length === 0 ? (
@@ -1491,7 +1496,7 @@ function ArtifactRail({
         <p className="aw-artifacts-empty">
           {workspaceWrites.length === 0
             ? "这个任务还没有产生文件。"
-            : "这个任务没有产生可以下载的产物。"}
+            : "这个任务没有产生可以下载的文件。"}
         </p>
       ) : (
         <ul>
@@ -1530,9 +1535,9 @@ function ArtifactRail({
           is strictly more than the silence it replaces. */}
       {workspaceWrites.length === 0 ? null : (
         <div className="aw-artifacts-workspace">
-          <h3>任务工作集里的文件</h3>
+          <h3>任务工作区里的文件</h3>
           <p className="aw-artifacts-note">
-            这些文件在任务自己的工作集里，不是可下载的产物，控制台打不开它们。
+            这些文件在任务自己的工作区里，不是可下载的产物，控制台打不开它们。
           </p>
           {workspaceWrites.map((group) => (
             <div key={group.graphNodeId ?? "任务"}>
@@ -2020,7 +2025,8 @@ function TaskResult({
         />
       ) : !readable ? (
         <p className="aw-page-note">
-          {artifact.media_type} · {artifact.size_bytes} 字节，这个类型只能下载查看。
+          {mediaLabel(artifact.media_type)} · {formatBytes(artifact.size_bytes)}
+          ，这个类型只能下载后查看。
         </p>
       ) : preview.isPending ? (
         <LoadingLine label="正在读取产出内容" />
@@ -2313,7 +2319,7 @@ function ApprovalSection({
 function decidedByLabel(decidedBy: TaskIntent["graph_decided_by"]): string {
   if (decidedBy === "user") return "用户指定";
   if (decidedBy === "model") return "模型判定";
-  return "部署默认";
+  return "系统默认";
 }
 
 function errorMessage(error: unknown, fallback: string): string {

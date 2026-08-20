@@ -200,9 +200,9 @@ export function CodeTurn({
 
       {block.events.length === 0 ? null : (
         <details className="aw-code-raw">
-          <summary title="查看诊断事件">
+          <summary title="查看这一轮的原始事件">
             <MoreHorizontal aria-hidden="true" size={14} />
-            <span>诊断</span>
+            <span>原始事件</span>
           </summary>
           <pre>{JSON.stringify(block.events, null, 2)}</pre>
         </details>

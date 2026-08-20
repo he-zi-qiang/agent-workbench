@@ -58,7 +58,11 @@ export function formatStatus(status: string): string {
       succeeded: "已完成",
       failed: "失败",
       cancelled: "已取消",
-      dead_letter: "死信",
+      // 不是「死信」。这个词是队列的，而它出现在两个地方：任务详情的状态
+      // 药丸，以及 `任务{formatStatus(status)}` 拼出来的那句话——后者会
+      // 拼成「任务死信」，不是一句中文。读者要知道的只有一件事：这一条
+      // 结束了，没有人会再替他重试。
+      dead_letter: "已放弃重试",
       pending: "待处理",
       approved: "已批准",
       rejected: "已拒绝",

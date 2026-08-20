@@ -77,7 +77,7 @@ export function StepDisclosure({
           <p className="aw-muted">这个事件没有额外内容，只记录它发生过。</p>
         )}
         <details className="aw-step-raw">
-          <summary>原始事件 JSON</summary>
+          <summary>原始事件</summary>
           <div className="aw-timeline-event-meta">
             <code>{event.event_type}</code>
             <span title={event.run_id}>run {shortId(event.run_id)}</span>

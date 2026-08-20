@@ -154,7 +154,10 @@ test("知识库能进入 Chat，辅助页面在移动端也可到达", async ({
 
   await navigation.getByRole("link", { name: "知识库", exact: true }).click();
   await expect(page.getByRole("heading", { name: "校招项目资料" })).toBeVisible();
-  await page.getByRole("link", { name: "在 Chat 中使用" }).click();
+  // 名字里不再出现 Chat：导航把这个产品叫「对话」，这颗按钮此前叫的是别的。
+  // 不加 exact 也行——「在对话中使用」是唯一含这一串的可及名字，导航里那个
+  // 「对话」比它短，子串匹配只会从长的一侧命中。
+  await page.getByRole("link", { name: "在对话中使用" }).click();
   await expect(page).toHaveURL(/#\/chat\?kb=kb_portfolio$/);
   await expect(page.getByLabel("回答资料")).toHaveValue("kb_portfolio");
 

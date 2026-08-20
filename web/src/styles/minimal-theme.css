@@ -169,7 +169,7 @@ select {
 
 .aw-chat-sessions-header strong,
 .aw-code-sessions-header strong,
-.aw-pane-header h1,
+.aw-pane-header strong,
 .aw-code-header h1 {
   font-size: 13px;
   font-weight: 600;
@@ -1853,7 +1853,7 @@ select {
 .aw-sidebar-context-slot :is(
   .aw-chat-sessions-header strong,
   .aw-code-sessions-header strong,
-  .aw-pane-header h1,
+  .aw-pane-header strong,
   .aw-knowledge-sidebar-header strong
 ) {
   color: var(--aw-text-muted);

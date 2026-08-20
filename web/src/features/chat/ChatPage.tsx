@@ -76,7 +76,6 @@ import {
 } from "./model";
 import { deriveTurnStages, isTurnMetaActivity } from "./turnStages";
 import type { ChatRuntime } from "./runtime";
-import type { StoredChatCursor } from "./storage";
 import { useChatRuntime } from "./useChatRuntime";
 
 const STARTER_PROMPTS = [
@@ -679,8 +678,8 @@ export function ChatPage() {
           selectedSessionNotFound ? (
             <EmptyState
               icon={<ShieldAlert aria-hidden="true" size={24} />}
-              title="这不是当前身份的会话"
-              description="会话 ID 不是凭证。服务端已按当前租户、身份和 Chat 类型核验，但没有找到可读取的会话。"
+              title="这个会话不属于当前身份"
+              description="可能是换过身份，也可能这个链接本来就不是给你的——用当前身份查不到它。"
               action={
                 <button className="aw-button is-primary" onClick={() => navigate("/chat")} type="button">
                   开始新会话
@@ -873,7 +872,6 @@ function ChatHeader({
       {session === undefined || ["idle", "connected"].includes(session.connection) ? null : (
         <ConnectionBadge
           connection={session.connection}
-          {...(session.cursor === undefined ? {} : { cursor: session.cursor })}
           {...(onReconnect === undefined ? {} : { onReconnect })}
         />
       )}
@@ -883,12 +881,9 @@ function ChatHeader({
 
 function ConnectionBadge({
   connection,
-  cursor,
   onReconnect,
 }: {
   connection: ChatConnectionState;
-  /** Absent until the stream has delivered a frame. */
-  cursor?: StoredChatCursor;
   onReconnect?: () => void;
 }) {
   const connected = connection === "connected";
@@ -910,7 +905,6 @@ function ConnectionBadge({
     >
       {connected ? <Wifi aria-hidden="true" size={15} /> : <WifiOff aria-hidden="true" size={15} />}
       {label}
-      {cursor === undefined ? null : <span className="aw-sr-only">位置 {cursor.id}</span>}
     </button>
   );
 }
@@ -944,7 +938,7 @@ function ChatTurn({
           <div className="aw-notice is-warning">
             <AlertTriangle aria-hidden="true" size={16} />
             <span>
-              最终来源复核未通过；下面仅显示服务端发布的安全替代文本，不含候选答案。
+              写这条回答用到的资料，你现在已经没有权限看了，所以它没有发出来。
             </span>
           </div>
         ) : null}
@@ -962,7 +956,7 @@ function ChatTurn({
           />
         ) : null}
         {turn.historical && turn.answer === undefined ? (
-          <p className="aw-chat-no-citations">历史仅包含用户消息；服务端没有发布 assistant 消息。</p>
+          <p className="aw-chat-no-citations">这一轮只留下了你的问题，没有留下回答。</p>
         ) : null}
         {turn.historical && turn.answer !== undefined ? (
           // The history endpoint returns role and text and nothing else, so a
@@ -1200,7 +1194,7 @@ function Citations({
         <ShieldAlert aria-hidden="true" size={14} />
         {answerMode === "rag"
           ? "已检索所选知识库，但没有找到足够相关的内容；这条回答由模型直接作答，没有引用"
-          : "未经证据核实：本条回答由模型直接作答，未检索知识库，因此没有引用"}
+          : "这条回答没有查资料，是模型直接作答的，所以没有引用"}
       </p>
     );
   }
@@ -1218,7 +1212,7 @@ function Citations({
     <div className="aw-chat-citations" aria-label="引用">
       <p className="aw-chat-grounded">
         <ShieldCheck aria-hidden="true" size={13} />
-        已接地 · {citations.length} 条引用
+        已核对来源 · {citations.length} 条引用
       </p>
       {citations.map((citation, index) => (
         <CitationRow
@@ -1230,32 +1224,25 @@ function Citations({
           {...(turnId === undefined ? {} : { turnId })}
         />
       ))}
-      {/* Two notes, and they answer different questions.
+      {/* One note, and it answers the question a reader actually arrives
+          with once the rows start refusing: why is the text not simply
+          *here*, next to the claim it supports. Saying it under the rows
+          rather than in an ADR nobody on this page has open is what makes a
+          later 读不到 read as the design working rather than the console
+          breaking.
 
-          The first is the one a reader arrives with once the rows start
-          refusing: why is the text not simply *here*, next to the claim it
-          supports. Saying it under the rows rather than in an ADR nobody on
-          this page has open is what makes a later 读不到 read as the design
-          working rather than the console breaking.
-
-          The second is the sketch's document *title*. There is no route that
-          turns a document_id into one, and inventing a readable name from the
-          id would be this page asserting something no endpoint established --
-          so the row shows the id, and this line says why that is what it
-          shows. It also carries the other reason a row can be inert, because
-          a disabled chip with no explanation is indistinguishable from a
-          broken one. */}
+          There used to be a second paragraph here, and it was written to the
+          maintainer rather than to the reader: 三段寻址, chunk, revision,
+          document_id, turn id, 读接口 -- six internal words in two sentences,
+          under every grounded answer, addressed to somebody who came to check
+          whether an answer is true. Both facts it carried have better homes.
+          That a row can be inert now says so on the row itself (the chip's
+          own `title`); that a document has no readable name needs no sentence
+          at all, because the row simply shows what it has. */}
       <div className="aw-chat-citation-gap">
         <p>
-          <span>一次一条</span>
-          原文不随答案一起发布：每次点开是一条 (会话 · 轮次 · chunk)
-          三段寻址的新读取，授权与 revision
-          当场重做一遍——所以一条昨天的引用今天可以正确地读不到。
-        </p>
-        <p>
-          <span>需新接口</span>
-          文档标题需要一个按 document_id 取名的读接口；当前只有 id 与 version
-          可信。刷新之后的历史轮次没有 turn id，引用不可点。
+          原文不跟答案一起存下来：每次点开都重新去读一次，权限也重新核一遍——
+          所以昨天能看的引用，今天可能正确地打不开。
         </p>
       </div>
     </div>
@@ -1341,12 +1328,19 @@ function CitationRow({
           className="aw-chat-citation"
           // A turn this page never bound an id to cannot address the route, so
           // the row stays inert rather than offering a click that 404s for a
-          // reason that has nothing to do with the reader's permissions.
+          // reason that has nothing to do with the reader's permissions. The
+          // `title` says which of the two it is: a disabled chip with no
+          // explanation is indistinguishable from a broken one, and this used
+          // to be explained in a paragraph under the whole list instead.
           disabled={turnId === undefined}
           onClick={() => {
             setOpen((was) => !was);
           }}
-          title={`${citation.chunk_id}\n${citation.document_id} · ${citation.document_version}`}
+          title={
+            turnId === undefined
+              ? "刷新过页面之后，这一轮的引用打不开了"
+              : `${citation.chunk_id}\n${citation.document_id} · ${citation.document_version}`
+          }
           type="button"
         >
           <strong>{shortId(citation.document_id, 22)}</strong>
