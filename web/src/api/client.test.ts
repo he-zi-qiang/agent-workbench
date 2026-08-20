@@ -6,8 +6,11 @@ import {
   createTask,
   declaredMediaType,
   downloadArtifact,
+  getChatSession,
   getDocumentPdf,
   identityHeaders,
+  listChatSessions,
+  renameChatSession,
   uploadDocument,
 } from "./client";
 import type { ArtifactDownloadTarget, PrincipalIdentity } from "./types";
@@ -111,6 +114,44 @@ describe("apiRequest", () => {
         "task:stable-attempt",
       );
     }
+  });
+
+  it("lists, resolves and renames Chat sessions through the owner-scoped endpoints", async () => {
+    const listed = {
+      sessions: [
+        {
+          session_id: "ses_chat_1",
+          title: "旧名字",
+          last_activity_at: "2026-08-20T10:00:00Z",
+        },
+      ],
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(listed), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(listed.sessions[0]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ ...listed.sessions[0], title: "新名字" }),
+          { status: 200 },
+        ),
+      );
+
+    await listChatSessions(identity);
+    await getChatSession(identity, "ses_chat_1");
+    await renameChatSession(identity, "ses_chat_1", "新名字");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/v1/chat/sessions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/v1/chat/sessions/ses_chat_1");
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("GET");
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/v1/chat/sessions/ses_chat_1");
+    const renameInit = fetchMock.mock.calls[2]?.[1];
+    expect(renameInit?.method).toBe("PATCH");
+    expect(renameInit?.body).toBe(JSON.stringify({ title: "新名字" }));
   });
 });
 

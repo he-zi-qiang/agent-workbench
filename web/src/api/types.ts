@@ -26,6 +26,21 @@ export interface CreateSessionResponse {
   title: string | null;
 }
 
+export interface CreateChatSessionResponse {
+  session_id: Identifier;
+}
+
+/** A server-owned Chat session visible to its tenant + principal owner. */
+export interface ChatSessionView {
+  session_id: Identifier;
+  title: string | null;
+  last_activity_at: string | null;
+}
+
+export interface ChatSessionListResponse {
+  sessions: ChatSessionView[];
+}
+
 /**
  * One coding session, as the server lists it.
  *

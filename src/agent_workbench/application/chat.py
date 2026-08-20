@@ -55,6 +55,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnLeaseExpiredError,
     ChatTurnResult,
     ChatTurnStore,
+    ConversationSession,
     StoredChatTurn,
 )
 from agent_workbench.ports.event_log import EventSink
@@ -419,6 +420,54 @@ class ChatService:
         )
         return tuple(record.message for record in stored)
 
+    async def sessions(
+        self, *, tenant_id: str, principal_id: str, limit: int = 50
+    ) -> tuple[ConversationSession, ...]:
+        """This principal's chat sessions, most recently active first.
+
+        The store holds Chat and Code in one table, so the mode is fixed here
+        rather than accepted from the route. A caller asking the Chat service
+        for a list can never widen that list into another product's sessions.
+        """
+
+        return await self.conversations.list_sessions(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="chat",
+            limit=limit,
+        )
+
+    async def session(
+        self, *, session_id: str, tenant_id: str, principal_id: str
+    ) -> ConversationSession:
+        """One owner-visible Chat session, including older deep links.
+
+        The recent-session list is deliberately bounded. Resolving a selected
+        session through the same three-axis store gate keeps an older valid
+        deep link usable without widening the sidebar query or trusting the
+        identifier as authorization.
+        """
+
+        return await self.conversations.session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            mode="chat",
+        )
+
+    async def rename(
+        self, *, session_id: str, tenant_id: str, principal_id: str, title: str
+    ) -> ConversationSession:
+        """Replace the user-facing name of this principal's chat session."""
+
+        return await self.conversations.rename_session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            title=title,
+            mode="chat",
+        )
+
     async def delete(
         self, *, session_id: str, tenant_id: str, principal_id: str
     ) -> None:
@@ -427,13 +476,6 @@ class ChatService:
         ``mode="chat"`` is fixed for the same reason ``history`` fixes it: a
         caller able to hand this one a code session id would be deleting a
         conversation this service never ran.
-
-        Note what this does *not* fix. The console's session list is still
-        `localStorage` (known gap D-02 / F-06), so deleting here removes the
-        server's record while the browser keeps its own row until it removes
-        that too. This is the half that can be fixed without first deciding
-        whether `answerMode` belongs to a session; the other half still needs
-        that decision.
         """
 
         await self.conversations.delete_session(

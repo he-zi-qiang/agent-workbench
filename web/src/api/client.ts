@@ -3,9 +3,12 @@ import type {
   ApprovalView,
   ArtifactDownloadTarget,
   AskResponse,
+  ChatSessionListResponse,
+  ChatSessionView,
   CodeAskResponse,
   CodeSessionListResponse,
   CodeSessionView,
+  CreateChatSessionResponse,
   CreateSessionResponse,
   CreateUploadResponse,
   DocumentPreview,
@@ -122,10 +125,40 @@ export function newIdempotencyKey(prefix: string): string {
 export async function createChatSession(
   identity: PrincipalIdentity,
   title?: string,
-): Promise<CreateSessionResponse> {
+): Promise<CreateChatSessionResponse> {
   return apiRequest(identity, "/v1/chat/sessions", {
     method: "POST",
     body: { title: title || null },
+  });
+}
+
+export async function listChatSessions(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<ChatSessionListResponse> {
+  return apiRequest(identity, "/v1/chat/sessions", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function getChatSession(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ChatSessionView> {
+  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function renameChatSession(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  title: string,
+): Promise<ChatSessionView> {
+  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    body: { title },
   });
 }
 
