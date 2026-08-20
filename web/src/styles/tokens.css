@@ -156,32 +156,14 @@
      读出厚度的手段。 */
   --aw-raise: light-dark(transparent, rgb(255 255 255 / 5%));
 
-  /* --- 窄导航 -----------------------------------------------------------
-   *
-   * rail 是深色的，而且是这个界面里唯一的深色面。它不参与阅读——上面没有一句
-   * 需要读完的话——所以它可以承担对比度的重量，把"你在哪一层"这件事一眼说清。
-   * 此前 rail 是 #f7f7f5，与 #ffffff 的画布差 3 个色阶，导航与正文因此是同一
-   * 张纸上的两块区域，而不是框与被框住的东西。
-   *
-   * active 用 #2e2925（比 rail 亮一档）而不是橙色填充：橙色是动作色，导航项
-   * 不是动作，它是位置。位置用亮度说，动作用色相说——图标的 #e08a66 是唯一
-   * 的例外，它只有 19px，够指出"就是这一项"，不够被误读成一个按钮。
-   *
-   * 深色主题下 rail 不反转，它继续是**整个界面最暗的面**（#0f0e0d 比画布的
-   * #171614 还暗一档）。这不是偷懒：rail 表达的从来不是「深」，而是「框」——
-   * 内容浮在框上面。把它做成深色里最亮的一块会让导航压过正文，那正是浅色一侧
-   * 花了一次改动去消除的问题。 */
-  --aw-rail: light-dark(#1b1917, #0f0e0d);
-  --aw-rail-hover: light-dark(#262320, #1b1917);
-  --aw-rail-active: light-dark(#2e2925, #2b2723);
-  --aw-rail-text: light-dark(#9a938a, #948d84);
-  --aw-rail-text-active: light-dark(#f3e7e0, #f3e7e0);
-  --aw-rail-icon-active: light-dark(#e08a66, #e08a66);
-  --aw-rail-divider: light-dark(#302c28, #262320);
+  /* 这里曾经是 --aw-rail 一族：八个 token，外加十五行说明，讲的是「rail 是
+     这个界面里唯一的深色面」和它为什么在深色主题下不反转。那个 rail 已经不
+     存在了——工作空间侧栏读的是 --aw-sidebar，实测浅色 #f5f5f2、深色 #1f1f1d，
+     从来不是 #1b1917。八个 token 里 --aw-rail-divider 零引用，另外七个只被
+     后面被覆盖掉的规则读到，那些声明和这一族一起删了。
+     留着的坏处不是八行变量，是那十五行说明：这个仓库的约定是注释承载决定，
+     而它承载的是一个已经被推翻的决定，读起来却像还在生效。 */
 
-  /* rail 上的文字/图标恒为浅色——两个主题里它都是深面。此前这处直接写 #fff，
-     于是「什么颜色落在 rail 上」这件事在 app.css 里没有名字。 */
-  --aw-on-rail: #ffffff;
 
   --aw-text: light-dark(#242421, #efefeb);
   --aw-text-soft: light-dark(#62625c, #aaa9a2);
@@ -266,14 +248,9 @@
    * 不返回整条 box-shadow。 */
   --aw-shadow-tint-weak: light-dark(rgb(24 24 21 / 4%), rgb(0 0 0 / 42%));
   --aw-shadow-tint-strong: light-dark(rgb(24 24 21 / 9%), rgb(0 0 0 / 58%));
-  --aw-shadow-tint-lift: light-dark(rgb(24 24 21 / 6%), rgb(0 0 0 / 46%));
   --aw-shadow-sm: 0 1px 2px var(--aw-shadow-tint-weak);
   --aw-shadow-md: 0 18px 48px var(--aw-shadow-tint-strong);
 
-  /* 输入区/悬浮条那一档：投影向下且更远，用来说「这一条浮在正文之上」。
-     此前它以 `0 8px 24px rgb(34 35 32 / 8%)` 的形式写死在 app.css 的两条规则
-     里——两条，值相同而互不知情。 */
-  --aw-shadow-lift: 0 4px 16px var(--aw-shadow-tint-lift);
 
   /* 抽屉从侧面推进来时的投影，方向由使用处给（左推是负、右推是正）。 */
   --aw-shadow-drawer-left: -18px 0 48px var(--aw-shadow-tint-strong);
@@ -297,7 +274,6 @@
   --aw-radius-sm: 8px;
   --aw-radius-md: 12px;
   --aw-radius-lg: 16px;
-  --aw-radius-xl: 16px;
 
   /* 桌面壳层只有两档：Codex 式紧凑模式栏，以及需要识别全部功能时的展开态。
      页面自己的会话栏仍在，所以展开宽度刻意封在 188px，中等屏幕会强制收起。 */

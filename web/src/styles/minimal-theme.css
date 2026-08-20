@@ -25,17 +25,10 @@ body {
   box-shadow: none;
 }
 
-/* 这一层曾经把 rail 刷成浅色：`background: var(--aw-rail)` 当时解析出 #f7f7f5，
-   文字用 --aw-text-muted，于是导航和正文是同一张纸上的两块区域。app.css 那边
-   一直是按深色写的（文字 #d9d9d3、白色 10% 的分隔线），两层叠起来的结果是基础
-   皮肤的意图被后加载的这层覆盖掉了。
-   现在两层都读同一组 --aw-rail-* token，深浅只由 tokens.css 一处决定。 */
 .aw-global-rail {
   padding: 14px 8px 10px;
   border-right: 0;
   border-radius: 0;
-  background: var(--aw-rail);
-  color: var(--aw-rail-text);
 }
 
 /* 实心橙方块，不是描边的浅色块：--aw-accent-soft 是 #fbf0ea，在深色 rail 上
@@ -54,67 +47,41 @@ body {
 .aw-global-link {
   width: 56px;
   min-height: 52px;
-  color: var(--aw-rail-text);
-}
-
-.aw-global-link:hover {
-  background: var(--aw-rail-hover);
-  color: var(--aw-rail-text-active);
-}
-
-/* Same split as the base skin: active is a chip one step lighter than the
-   rail, hover a darker one, so the current page stays marked when the
-   pointer leaves. */
-.aw-global-link.active {
-  background: var(--aw-rail-active);
-  color: var(--aw-rail-text-active);
-}
-
-.aw-global-link.active svg {
-  color: var(--aw-rail-icon-active);
 }
 
 /* Controls -------------------------------------------------------------- */
 
 .aw-button,
-.aw-icon-button,
-.aw-primary-button,
-.aw-secondary-button,
-.aw-danger-button {
+.aw-icon-button{
   box-shadow: none;
 }
 
 .aw-button,
-.aw-icon-button,
-.aw-secondary-button {
+.aw-icon-button{
   border-color: transparent;
   background: transparent;
 }
 
 .aw-button:hover:not(:disabled),
-.aw-icon-button:hover:not(:disabled),
-.aw-secondary-button:hover:not(:disabled) {
+.aw-icon-button:hover:not(:disabled){
   border-color: transparent;
   background: var(--aw-panel-soft);
 }
 
-.aw-button.is-primary,
-.aw-primary-button {
+.aw-button.is-primary{
   border-color: var(--aw-text);
   background: var(--aw-text);
   color: var(--aw-window);
   box-shadow: none;
 }
 
-.aw-button.is-primary:hover:not(:disabled),
-.aw-primary-button:hover:not(:disabled) {
+.aw-button.is-primary:hover:not(:disabled){
   border-color: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
   background: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
   color: var(--aw-window);
 }
 
 .aw-button.is-primary:focus-visible,
-.aw-primary-button:focus-visible,
 .aw-chat-send:focus-visible {
   outline-color: var(--aw-window);
   outline-offset: -4px;
@@ -135,16 +102,11 @@ select {
 }
 
 /* Shared page hierarchy ------------------------------------------------- */
-
-.aw-context-sidebar,
 .aw-chat-sessions,
 .aw-code-sessions,
 .aw-work-sidebar {
   background: var(--aw-sidebar);
 }
-
-.aw-context-header,
-.aw-feature-header,
 .aw-chat-sessions-header,
 .aw-code-sessions-header,
 .aw-code-preview-header,
@@ -174,18 +136,11 @@ select {
   font-size: 13px;
   font-weight: 600;
 }
-
-.aw-context-item,
-.aw-list-row,
 .aw-chat-session,
 .aw-task-list-item,
 .aw-knowledge-row {
   border: 0;
 }
-
-.aw-context-item:hover,
-.aw-context-item.is-active,
-.aw-list-row:hover,
 .aw-chat-session:hover,
 .aw-chat-session.is-active,
 .aw-task-list-item:hover,
@@ -196,8 +151,6 @@ select {
   background: var(--aw-panel-strong);
   box-shadow: none;
 }
-
-.aw-context-item.is-active,
 .aw-chat-session.is-active,
 .aw-task-list-item.is-active,
 .aw-knowledge-row.is-active {
@@ -231,8 +184,7 @@ select {
   line-height: 1.65;
 }
 
-.aw-eyebrow,
-.aw-context-kicker {
+.aw-eyebrow{
   color: var(--aw-accent);
 }
 
@@ -373,8 +325,7 @@ select {
 }
 
 .aw-chat-sessions-close,
-.aw-chat-mobile-sessions,
-.aw-chat-sessions-backdrop {
+.aw-chat-mobile-sessions{
   display: none;
 }
 
@@ -443,12 +394,6 @@ select {
   margin-top: 9px;
   font-size: 14.5px;
   line-height: 1.78;
-}
-
-.aw-chat-activity {
-  padding: 8px 0 4px;
-  border-top: 1px solid var(--aw-border);
-  border-bottom: 1px solid var(--aw-border);
 }
 
 /* 引用从芯片变成证据行之后，这一层不再给它画药丸底：一行三段（文档 / 版本 /
@@ -635,14 +580,6 @@ select {
 
 /* Knowledge ------------------------------------------------------------- */
 
-.aw-knowledge-layout {
-  grid-template-columns: 270px minmax(0, 1fr);
-  border: 0;
-  border-top: 1px solid var(--aw-border);
-  border-radius: 0;
-  box-shadow: none;
-}
-
 .aw-knowledge-list {
   border-right-color: var(--aw-border);
 }
@@ -657,20 +594,6 @@ select {
 
 .aw-knowledge-detail {
   padding: 30px 34px;
-}
-
-.aw-knowledge-summary {
-  margin: 24px 0 8px;
-  border: 0;
-  border-top: 1px solid var(--aw-border);
-  border-bottom: 1px solid var(--aw-border);
-  border-radius: 0;
-  background: transparent;
-}
-
-.aw-knowledge-summary > span {
-  padding: 14px 12px;
-  border-color: var(--aw-border);
 }
 
 .aw-knowledge-upload,
@@ -734,9 +657,6 @@ select {
 }
 
 @media (max-width: 900px) {
-  .aw-knowledge-layout {
-    grid-template-columns: 1fr;
-  }
 
   .aw-knowledge-list {
     display: flex;
@@ -747,18 +667,6 @@ select {
 
   .aw-knowledge-row {
     min-width: 220px;
-  }
-
-  .aw-knowledge-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .aw-knowledge-summary > span:nth-child(2) {
-    border-right: 0;
-  }
-
-  .aw-knowledge-summary > span:nth-child(-n + 2) {
-    border-bottom: 1px solid var(--aw-border);
   }
 }
 
@@ -787,18 +695,6 @@ select {
     border-bottom: 0;
     background: var(--aw-sidebar);
     box-shadow: var(--aw-shadow-drawer-right);
-  }
-
-  .aw-chat-sessions-backdrop {
-    position: fixed;
-    z-index: 71;
-    inset: 0 0 60px;
-    display: block;
-    width: 100%;
-    padding: 0;
-    border: 0;
-    background: var(--aw-scrim-soft);
-    backdrop-filter: blur(2px);
   }
 
   .aw-chat-sessions-close,
@@ -886,10 +782,6 @@ select {
     border-bottom: 0;
   }
 
-  .aw-knowledge-layout {
-    border-top: 0;
-  }
-
   .aw-knowledge-list {
     padding: 8px 0 12px;
     border-bottom-color: var(--aw-border);
@@ -930,10 +822,6 @@ select {
  *
  * 只给等宽栈和显式标了"元信息"的地方开，不全局开：正文里的中文与拉丁字混排
  * 用 tabular-nums 会让阿拉伯数字之间显得松。 */
-:is(code, kbd, samp, pre, .aw-meta, .aw-timestamp, .aw-count, .aw-token-count) {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
-}
 
 /* 深色下给"抬起"的面加一道顶部高光。
  *
@@ -1430,110 +1318,22 @@ select {
   display: none;
 }
 
-@media (min-width: 761px) {
-  .aw-work-page:not(.has-selection) {
-    position: relative;
-    grid-template-columns: 280px minmax(0, 1fr);
-    grid-template-rows: 54px minmax(0, 1fr);
-    background:
-      linear-gradient(var(--aw-sidebar), var(--aw-sidebar)) 0 0 / 280px 100%
-        no-repeat,
-      var(--aw-window);
-  }
+/* Work 的「开始」页曾经在这里排成两列：280px 的侧栏 + 主区，外加一条
+   `::after` 画的分隔线。整块已经不成立，而且是两个各自独立的原因——两个都
+   在浏览器里量过：
 
-  .aw-work-page:not(.has-selection)::after {
-    position: absolute;
-    z-index: 4;
-    top: 0;
-    bottom: 0;
-    left: 279px;
-    width: 1px;
-    background: var(--aw-border);
-    content: "";
-    pointer-events: none;
-  }
+   一、选择器不再命中。`.aw-work-page:not(.has-selection) .aw-work-sidebar`
+   一类的后代选择器全部命中 0 个元素：那个 `<aside>` 现在被 `WorkspaceSidebarPortal`
+   portal 进了 `.aw-global-rail`，不再是 `.aw-work-page` 的后代。
+   `.aw-pane-header` / `.aw-create-task-toggle` / `.aw-task-filters` /
+   `.aw-task-list` 同理，实测全是 0。
 
-  .aw-work-page:not(.has-selection) .aw-work-sidebar {
-    display: contents;
-  }
+   二、还能命中的那几条被后面的规则压掉了。实测 1280px：页面算出来是单列
+   1092px（不是 `280px minmax(0,1fr)`），行是 860px（不是 `54px minmax(0,1fr)`），
+   底色是 window（不是那道侧栏渐变），`::after` 是 `display: none`，
+   `.aw-work-detail` 可见且在第 1 行第 1 列。
 
-  .aw-work-page:not(.has-selection) .aw-pane-header {
-    grid-row: 1;
-    grid-column: 1;
-    border-bottom: 1px solid var(--aw-border);
-    background: var(--aw-sidebar);
-  }
-
-  .aw-work-page:not(.has-selection) .aw-create-task-toggle {
-    z-index: 1;
-    grid-row: 2;
-    grid-column: 1;
-    align-self: start;
-    width: calc(100% - 24px);
-    margin: 12px 12px 0;
-  }
-
-  .aw-work-page:not(.has-selection) .aw-task-filters {
-    z-index: 1;
-    grid-row: 2;
-    grid-column: 1;
-    align-self: start;
-    margin: 63px 10px 0;
-  }
-
-  .aw-work-page:not(.has-selection) .aw-task-list {
-    grid-row: 2;
-    grid-column: 1;
-    min-height: 0;
-    align-self: stretch;
-    margin-top: 104px;
-    padding-bottom: 14px;
-    overflow-y: auto;
-    background: var(--aw-sidebar);
-  }
-
-  .aw-work-page:not(.has-selection) .aw-create-task {
-    z-index: 2;
-    grid-row: 1 / 3;
-    grid-column: 2;
-    width: min(720px, calc(100% - 56px));
-    max-height: calc(100% - 56px);
-    align-self: center;
-    justify-self: center;
-    margin: 0;
-    padding: clamp(18px, 3vw, 28px) 0;
-    overflow-y: auto;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-  }
-
-  .aw-work-page:not(.has-selection) .aw-create-task textarea {
-    min-height: 132px;
-    padding: 14px 15px;
-    border-color: var(--aw-border);
-    border-radius: 12px;
-    font-size: 14.5px;
-    line-height: 1.6;
-  }
-
-  .aw-work-page:not(.has-selection) .aw-create-task > .aw-button.is-primary {
-    min-width: 132px;
-    justify-self: end;
-  }
-
-  .aw-work-page:not(.has-selection) .aw-work-detail {
-    grid-row: 1 / 3;
-    grid-column: 2;
-    visibility: hidden;
-  }
-
-  .aw-work-page:not(.has-selection):has(.aw-create-task.is-collapsed)
-    .aw-work-detail {
-    visibility: visible;
-  }
-}
+   留着的坏处不是它占地方，是它读起来像一个还在生效的两列版式。 */
 
 .aw-task-filters button {
   min-height: 30px;
