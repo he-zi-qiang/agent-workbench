@@ -189,7 +189,12 @@
 
   /* 第四档文字，比 muted 再弱一级：时间戳、id 后缀这类「在那里但不必读」的字。
      此前只以 fallback 形式存在于一条规则里。 */
-  --aw-text-subtle: light-dark(#aaa9a1, #6c6b65);
+  /* 浅色一侧比深色一侧暗一档，是量出来的：#aaa9a1 落在 --aw-sidebar 上只有
+     2.16:1，而深色一侧的 #6c6b65 是 3.09:1。这一档承担的是 10px 的
+     `.aw-sidebar-section-label`（工作空间 / 资源）和搜索框的 placeholder——
+     浅色下它们几乎读不出来，两套皮肤于是不是同一个设计的两个值，而是一个
+     能看见、一个看不见。#8f8e86 在同一块底上是 3.05:1，和深色一侧齐平。 */
+  --aw-text-subtle: light-dark(#8f8e86, #6c6b65);
 
   --aw-border: light-dark(#e9e8e3, #30302d);
   --aw-border-strong: light-dark(#d8d6cf, #41413c);

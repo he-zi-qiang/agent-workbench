@@ -2610,7 +2610,7 @@ pre {
 .aw-chat-citation-locator {
   margin-left: 5px;
   color: var(--aw-text-muted);
-  font-size: 9px;
+  font-size: 10.5px;
 }
 
 .aw-chat-no-citations {
@@ -6138,7 +6138,7 @@ p.aw-code-step-thought {
   background: var(--aw-surface);
   color: var(--aw-text);
   font-weight: 500;
-  box-shadow: var(--aw-shadow-sm);
+  box-shadow: none;
 }
 
 /* 一句说明里的行动词。做成按钮而不是链接，是因为它不导航——它把筛选拨回去。 */

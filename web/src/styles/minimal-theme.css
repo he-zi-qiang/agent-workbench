@@ -454,7 +454,7 @@ select {
 /* 引用从芯片变成证据行之后，这一层不再给它画药丸底：一行三段（文档 / 版本 /
    位置）各自有自己的容器，再套一层底色会读成「一整块都是一个标签」。 */
 .aw-chat-citation-locator {
-  color: color-mix(in srgb, var(--aw-text-muted) 78%, transparent);
+  color: var(--aw-text-subtle);
 }
 
 .aw-chat-composer {
@@ -486,7 +486,7 @@ select {
 }
 
 .aw-chat-composer > p {
-  color: color-mix(in srgb, var(--aw-text-muted) 78%, transparent);
+  color: var(--aw-text-subtle);
 }
 
 .aw-empty-icon {
@@ -644,7 +644,6 @@ select {
 }
 
 .aw-knowledge-list {
-  padding: 12px 10px;
   border-right-color: var(--aw-border);
 }
 
