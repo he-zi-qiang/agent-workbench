@@ -56,7 +56,7 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   await expect(page).toHaveURL(/#\/chat$/);
   await expect(page.getByRole("heading", { name: "新会话" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "今天想聊什么？" }),
+    page.getByRole("heading", { name: "有什么可以帮你？" }),
   ).toBeVisible();
   // The name is the button's aria-label, which says where the file goes rather
   // than what it attaches to: uploads land in a knowledge base and stay there.
@@ -80,7 +80,7 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
 
   if (isMobile) {
     await page.getByRole("button", { name: "打开会话列表" }).click();
-    const sessions = page.getByRole("complementary", { name: "本地 Chat 会话" });
+    const sessions = page.getByRole("complementary", { name: "Chat 会话" });
     await expect(sessions).toBeVisible();
     await sessions.getByRole("button", { name: "关闭会话列表" }).click();
     await expect(sessions).toBeHidden();
@@ -92,13 +92,29 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   await expect(
     activeNavigation.getByRole("link", { name: "任务" }),
   ).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
-  // 提交入口现在是按钮不是标题：表单收在它后面，没有选中任务时默认展开——所以
-  // 下面那两条对表单控件的断言仍然成立。断言按钮而不是只断言表单，是因为表单
-  // 一旦默认收起，只看控件的测试会连"入口还在不在"都答不出来。
-  await expect(
-    page.getByRole("button", { name: "提交新任务" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "想完成什么？" })).toBeVisible();
+  // 「新任务」是侧栏里的一行，和 Chat 的「新对话」同一个位置——桌面上一直在，
+  // 手机上要先拉开抽屉。断言入口而不是只断言表单，是因为表单一旦默认收起，
+  // 只看控件的测试会连"入口还在不在"都答不出来。
+  //
+  // `exact` 是必需的，而且是这条断言唯一一次真正失败的原因：Playwright 的
+  // `name` 默认按子串匹配，而「刷新任务列表」的无障碍名里正好含有「新任务」
+  // 三个字，于是同一个选择器同时命中刷新按钮，报 strict mode violation。
+  if (isMobile) {
+    await page.getByRole("button", { name: "打开任务列表" }).click();
+    const tasks = page.getByRole("complementary", {
+      name: "任务列表与新建任务",
+    });
+    await expect(
+      tasks.getByRole("button", { name: "新任务", exact: true }),
+    ).toBeVisible();
+    await tasks.getByRole("button", { name: "关闭任务列表" }).click();
+    await expect(tasks).toBeHidden();
+  } else {
+    await expect(
+      page.getByRole("button", { name: "新任务", exact: true }),
+    ).toBeVisible();
+  }
   await expect(
     page.getByRole("button", { name: "上传文件到知识库" }),
   ).toBeVisible();
@@ -110,7 +126,7 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   await activeNavigation.getByRole("link", { name: "Code", exact: true }).click();
 
   await expect(page).toHaveURL(/#\/code$/);
-  await expect(page.getByRole("heading", { name: "开始一段编码" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "开始编码" })).toBeVisible();
   // The composer, on a page with no session yet, is the assertion. This used to
   // wait for a 「新建编码会话」 button, which was a full-screen door whose only
   // effect was a POST the first instruction can carry itself -- so a coding
@@ -137,20 +153,15 @@ test("知识库能进入 Chat，辅助页面在移动端也可到达", async ({
   });
 
   await navigation.getByRole("link", { name: "知识库", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "知识库", exact: true })).toBeVisible();
-  await expect(page.getByText("校招项目资料", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "校招项目资料" })).toBeVisible();
   await page.getByRole("link", { name: "在 Chat 中使用" }).click();
   await expect(page).toHaveURL(/#\/chat\?kb=kb_portfolio$/);
   await expect(page.getByLabel("回答资料")).toHaveValue("kb_portfolio");
 
-  if (isMobile) {
-    await navigation.getByRole("button", { name: "更多" }).click();
-    const more = page.getByRole("dialog", { name: "更多页面" });
-    await expect(more.getByRole("link", { name: "运行状态" })).toBeVisible();
-    await more.getByRole("link", { name: "效果评测" }).click();
-  } else {
-    await navigation.getByRole("link", { name: "效果评测" }).click();
-  }
+  await navigation.getByRole("button", { name: "更多" }).click();
+  const more = page.getByRole("dialog", { name: "更多页面" });
+  await expect(more.getByRole("link", { name: "运行状态" })).toBeVisible();
+  await more.getByRole("link", { name: "效果评测" }).click();
   // The page's heading is the question it answers; "效果评测" is the eyebrow
   // above it and the nav label, not a heading. Asserting the heading keeps this
   // checking that navigation landed on the right page rather than that some
@@ -185,6 +196,6 @@ test("快速跳转能按用途找到精确页面", async ({ page }, testInfo) =>
   await page.keyboard.press("Enter");
 
   await expect(page).toHaveURL(/#\/work$/);
-  await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "想完成什么？" })).toBeVisible();
   await expect(switcher).toBeHidden();
 });
