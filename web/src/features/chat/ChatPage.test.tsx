@@ -138,6 +138,55 @@ describe("Chat identity boundary", () => {
     expect(bobStartAsk).not.toHaveBeenCalled();
   });
 
+  it("still asks the question when the reader opens another session mid-create", async () => {
+    let settleCreate: ((response: { session_id: string }) => void) | undefined;
+    vi.mocked(createChatSession).mockReturnValue(
+      new Promise((resolve) => {
+        settleCreate = resolve;
+      }),
+    );
+    const startAsk = vi.fn();
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), startAsk),
+      state: initialChatState([localSession("ses_other", "另一个会话")]),
+    });
+    const user = userEvent.setup();
+
+    renderChatRoute("/chat");
+    await user.type(screen.getByLabelText("问题"), "这句话去哪了？");
+    await user.click(screen.getByRole("button", { name: "发送问题" }));
+    await waitFor(() => expect(createChatSession).toHaveBeenCalledTimes(1));
+
+    // The sidebar is right there for the whole of the round trip.
+    const other = await screen.findByRole("link", { name: /另一个会话/ });
+    await user.click(other);
+    expect(
+      await screen.findByRole("heading", { name: "另一个会话" }),
+    ).toBeInTheDocument();
+
+    const finish = settleCreate;
+    if (finish === undefined) throw new Error("Chat create mock did not start");
+    await act(async () => {
+      finish({ session_id: "ses_created" });
+      await Promise.resolve();
+    });
+
+    // An Ask is addressed to the session the POST just created, not to the
+    // address bar. Comparing against the submitted route dropped the question
+    // outright: an empty orphan session in the list, the sentence still in the
+    // composer, and nothing to say the send had done nothing.
+    await waitFor(() => {
+      expect(startAsk).toHaveBeenCalledTimes(1);
+    });
+    expect(startAsk.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: "ses_created",
+      question: "这句话去哪了？",
+    });
+    // The navigation, unlike the Ask, does belong to the route: a reader who
+    // has already moved is not moved again.
+    expect(screen.getByRole("heading", { name: "另一个会话" })).toBeInTheDocument();
+  });
+
   it("shows a source only when this turn actually uses one", async () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({
       knowledge_bases: [knowledgeBase("kb_resume", "校招资料")],

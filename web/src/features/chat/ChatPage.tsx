@@ -411,12 +411,16 @@ export function ChatPage() {
     if (!trimmedQuestion || composerDisabled || attachments.hasBlockingItems) return;
     setSubmitError(null);
 
+    // Captured before anything is awaited: both continuations below ask what
+    // has changed since the reader pressed send, and neither can ask a closure
+    // that was created after the change.
+    const submittedRuntime = runtime;
+    const submittedSessionId = sessionId;
+
     try {
       let target = selected;
       if (target === undefined) {
         setCreatingSession(true);
-        const submittedRuntime = runtime;
-        const submittedSessionId = sessionId;
         const opened = await createChatSession(identity, trimmedQuestion.slice(0, 200));
         const now = new Date().toISOString();
         target = {
@@ -432,14 +436,20 @@ export function ChatPage() {
         runtime.addLocalSession(localSession(target));
         void queries.invalidateQueries({ queryKey: ["chat-sessions", identity] });
         const latest = latestSubmissionContext.current;
-        if (
-          !mounted.current ||
-          latest.runtime !== submittedRuntime ||
-          latest.sessionId !== submittedSessionId
-        ) {
+        if (!mounted.current || latest.runtime !== submittedRuntime) {
           // The Session already exists, so retain its local handle under the
           // identity that created it. Starting an Ask after the user switched
-          // identity or route would execute a new side effect in stale context.
+          // identity would execute a new side effect in stale context.
+          //
+          // The *route* is deliberately not asked about, and this is the third
+          // place that mattered. An Ask is addressed to `target.sessionId` --
+          // the session this POST just created -- not to whatever the address
+          // bar says. Comparing against the submitted route meant that opening
+          // an existing session while the create was in flight dropped the
+          // question entirely: the reader was left with a new empty session in
+          // their list, their sentence still in the composer, and nothing to
+          // say the send had done nothing. Pressing send again then asked it
+          // in a different session from the one the first press had made.
           return;
         }
       }
@@ -452,7 +462,13 @@ export function ChatPage() {
       });
       setQuestion("");
       attachments.clear();
-      if (selected === undefined && mounted.current) {
+      // The navigation, unlike the Ask, *is* the route's business: it may only
+      // move a reader who has not already moved themselves.
+      if (
+        selected === undefined &&
+        mounted.current &&
+        latestSubmissionContext.current.sessionId === submittedSessionId
+      ) {
         void navigate(`/chat/${encodeURIComponent(target.sessionId)}`);
       }
     } catch (error) {

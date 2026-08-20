@@ -255,6 +255,22 @@ export function CodePage() {
     (id: string, signal?: AbortSignal) =>
       Promise.all([
         getCodeHistory(identity, id, signal).then((history) => {
+          //: Only into the session the page is showing. The route effect below
+          //: aborts its own fetch when the session changes, but the reload at
+          //: the end of a turn has no signal and no route to check -- it is
+          //: addressed to the session the instruction was typed into, which
+          //: may be minutes old by the time a coding turn comes back.
+          //:
+          //: Writing `loadedFor` unconditionally there did not show A's
+          //: transcript under B. It showed *nothing*: `messages` is derived as
+          //: `loadedFor === sessionId ? loadedMessages : []`, so landing A's
+          //: id while the route says B collapsed the pane to
+          //: 这个会话还是空的 over a session with a full history, and took the
+          //: 工作区 count and the preview directory with it. Nothing recovered
+          //: it either -- the route effect's deps had not changed and the
+          //: orphan-reload effect returns early on exactly this mismatch, so
+          //: the session stayed blank until the reader navigated away and back.
+          if (shown.current.sessionId !== id) return;
           // These land in one React batch, which is the point: the server's
           // copy of the instruction appears in the same commit that drops the
           // pending one, so the sentence never flickers as two.
@@ -284,6 +300,7 @@ export function CodePage() {
           );
         }),
         getCodeWorkspace(identity, id, signal).then((workspace) => {
+          if (shown.current.sessionId !== id) return;
           setFiles(displayable(workspace.files));
           setLoadedFor(id);
         }),
@@ -500,6 +517,10 @@ export function CodePage() {
     const target = sessionId;
     getCodeWorkspace(identity, target)
       .then((workspace) => {
+        // Same question as `reload`: a script that writes a file can finish
+        // after the reader has moved on, and landing this session's id then
+        // empties whichever session they are looking at now.
+        if (shown.current.sessionId !== target) return;
         setFiles(displayable(workspace.files));
         setLoadedFor(target);
       })
@@ -590,6 +611,7 @@ export function CodePage() {
         // uploads in flight would race and the loser would be refused.
         for (const file of Array.from(chosen)) {
           const listing = await putCodeWorkspaceFile(identity, sessionId, file);
+          if (shown.current.sessionId !== sessionId) return;
           setFiles(displayable(listing.files));
           setLoadedFor(sessionId);
         }

@@ -1345,6 +1345,70 @@ describe("CodePage", () => {
     expect(screen.queryByText("这个会话删不掉")).not.toBeInTheDocument();
   });
 
+  it("does not blank the session the reader opened while a turn was still running", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: "ses_code_older",
+          title: "把 notes.md 整理成清单",
+          last_activity_at: null,
+        },
+      ],
+    });
+    vi.mocked(getCodeHistory).mockImplementation((_identity, id) =>
+      Promise.resolve({
+        messages:
+          id === "ses_code_older"
+            ? [{ role: "user" as const, text: "另一个会话里说过的话" }]
+            : [{ role: "user" as const, text: "这个会话里说过的话" }],
+      }),
+    );
+    let settleAsk: ((answer: Awaited<ReturnType<typeof askCode>>) => void) | undefined;
+    vi.mocked(askCode).mockReturnValue(
+      new Promise((resolve) => {
+        settleAsk = resolve;
+      }),
+    );
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "跑一下");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(askCode).toHaveBeenCalledTimes(1));
+
+    // A coding turn holds its request open for minutes, and the rail stays
+    // clickable for all of it -- which is what the rail is for.
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.click(
+      await within(recent).findByRole("button", { name: "把 notes.md 整理成清单" }),
+    );
+    expect(await screen.findByText("另一个会话里说过的话")).toBeVisible();
+
+    const finish = settleAsk;
+    if (finish === undefined) throw new Error("Code ask mock did not start");
+    await act(async () => {
+      finish({
+        report: "写完了。",
+        workspace_version: "art_1",
+        run_id: "run_1",
+        status: "completed",
+        stop_reason: "completed",
+      });
+      await Promise.resolve();
+    });
+    await nextFrame();
+
+    // This is the regression. The reload at the end of a turn wrote
+    // `loadedFor` unconditionally, and `messages` is derived as
+    // `loadedFor === sessionId ? loadedMessages : []` -- so landing the first
+    // session's id while the route said the second collapsed the pane to
+    // 这个会话还是空的 over a session with a full history, and nothing on the
+    // page ever put it back.
+    expect(screen.getByText("另一个会话里说过的话")).toBeVisible();
+    expect(screen.queryByText("这个会话还是空的")).not.toBeInTheDocument();
+  });
+
   it("marks the session being viewed, even when it has no name yet", async () => {
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [{ session_id: SESSION, title: null, last_activity_at: null }],

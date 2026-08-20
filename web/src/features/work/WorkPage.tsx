@@ -464,7 +464,20 @@ export function WorkPage() {
       cancelTask(identity, taskId, reason),
     onSuccess: (task) => {
       setCancelDraft({ taskId: task.task_id, reason: "" });
-      queryClient.setQueryData(taskQueryKey, task);
+      // Keyed off the response, not off `taskQueryKey`. A pending mutation
+      // takes the *latest* render's options -- `MutationObserver.setOptions`
+      // pushes them in, and `Mutation.execute` reads `onSuccess` only after
+      // the request resolves -- so a reader who opens another task while the
+      // cancel is in flight makes this callback close over that task's key.
+      // The write then filed A's TaskView under B, and /work/B rendered A's
+      // objective, A's id and a 已取消 pill over B's own timeline. It stuck,
+      // too: the poll stops on a settled status, and the timeline repair
+      // effect is gated on the status not being settled. The response already
+      // carries the only id this write is entitled to use.
+      queryClient.setQueryData(
+        ["work", "task", ...identityKey, task.task_id],
+        task,
+      );
       void queryClient.invalidateQueries({
         queryKey: ["work", "tasks", ...identityKey],
       });
@@ -538,7 +551,16 @@ export function WorkPage() {
       return decideApproval(identity, approval, decision);
     },
     onSuccess: (approval, intent) => {
-      queryClient.setQueryData(approvalQueryKey, approval);
+      // Same reason as the cancel above: the response's own id, not the key
+      // this render happens to hold. Filed under another task's approval key
+      // the render-time `matchesTask` guard did catch it -- by showing that
+      // task a spurious 对不上 notice and hiding its decision buttons, while
+      // the poll stopped because the poisoned record was no longer pending.
+      // A caught poisoning that leaves the gate undecidable is still a bug.
+      queryClient.setQueryData(
+        ["work", "approval", ...identityKey, approval.approval_id],
+        approval,
+      );
       setApprovalNotice({
         approvalId: approval.approval_id,
         message:

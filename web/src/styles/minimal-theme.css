@@ -1244,59 +1244,20 @@ select {
   font-size: 11px;
 }
 
-@media (max-width: 1320px) and (min-width: 761px) {
-  .aw-app-shell {
-    grid-template-columns: var(--aw-nav-width-collapsed) minmax(0, 1fr);
-  }
-
-  .aw-app-shell .aw-global-rail {
-    width: var(--aw-nav-width-collapsed);
-    align-items: center;
-    padding-right: 6px;
-    padding-left: 6px;
-    border-right-color: transparent;
-    box-shadow: none;
-  }
-
-  .aw-app-shell .aw-rail-brand-row {
-    min-height: auto;
-    flex-direction: column;
-    margin-bottom: 10px;
-    gap: 5px;
-  }
-
-  .aw-app-shell .aw-rail-collapse {
-    display: none;
-  }
-
-  .aw-app-shell .aw-logo {
-    width: 40px;
-    justify-content: center;
-  }
-
-  .aw-app-shell :is(
-    .aw-logo-copy,
-    .aw-global-link-copy,
-    .aw-rail-identity-copy
-  ) {
-    display: none;
-  }
-
-  .aw-app-shell .aw-global-link,
-  .aw-app-shell .aw-rail-identity {
-    width: 40px;
-    justify-content: center;
-    padding: 0;
-  }
-
-  .aw-app-shell .aw-global-link {
-    min-height: 40px;
-  }
-
-  .aw-app-shell .aw-rail-identity {
-    min-height: 40px;
-  }
-}
+/* The 761-1320px band used to force the rail into its collapsed shape, back
+   when "narrow desktop" meant "no room for labels". The workspace-first block
+   below supersedes all of it -- at 1280px the shell measures 272px + 1008px,
+   the rail is 272px wide with its labels showing, and the ≤1279px narrowing
+   that actually ships is the 248px `--aw-nav-width` further down.
+   Every declaration in that block was therefore dead except one, and that one
+   was a trap: `.aw-app-shell .aw-rail-collapse { display: none }` beat the
+   base rule, and the only thing that could beat *it* was
+   `.aw-app-shell:not(.is-rail-collapsed) .aw-rail-collapse` -- which stops
+   matching the moment the rail collapses. So on any 761-1320px window (every
+   1280px laptop) one click on 收起导航 removed the only control that reopens
+   it, took the session list with it, and persisted that to localStorage.
+   There is no keyboard path to it and no second toggle: the way back was to
+   widen the window past 1320px or clear site data. */
 
 @media (max-width: 760px) {
   .aw-mobile-nav {

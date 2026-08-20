@@ -96,10 +96,23 @@ export function AppShell() {
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSidebarDrawerLocationKey(location.key);
   }, [location.key]);
-  const closeSidebar = useCallback(() => {
-    setSidebarDrawerLocationKey(null);
-    window.requestAnimationFrame(() => focusBeforeSidebar.current?.focus());
+  // `isConnected`, not just a null check: these three all close over the
+  // element that had focus when the surface opened, and by the time the rAF
+  // runs that element may have been unmounted -- the quick switcher navigates
+  // *before* it closes, so the control it came from is routinely gone.
+  // `focus()` on a detached node is a silent no-op, which drops focus to
+  // <body> and loses a keyboard reader's place after every jump. Knowledge's
+  // own dialog already guards this way.
+  const restoreFocusTo = useCallback((target: HTMLElement | null) => {
+    window.requestAnimationFrame(() => {
+      if (target?.isConnected) target.focus();
+    });
   }, []);
+  const closeSidebar = useCallback(() => {
+    const returnTarget = focusBeforeSidebar.current;
+    setSidebarDrawerLocationKey(null);
+    restoreFocusTo(returnTarget);
+  }, [restoreFocusTo]);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const moreDialogRef = useRef<HTMLElement | null>(null);
   const focusBeforeMore = useRef<HTMLElement | null>(null);
@@ -122,9 +135,10 @@ export function AppShell() {
     setQuickSwitcherOpen(true);
   }, []);
   const closeQuickSwitcher = useCallback(() => {
+    const returnTarget = focusBeforeQuickSwitcher.current;
     setQuickSwitcherOpen(false);
-    window.requestAnimationFrame(() => focusBeforeQuickSwitcher.current?.focus());
-  }, []);
+    restoreFocusTo(returnTarget);
+  }, [restoreFocusTo]);
   const openQuickSwitcherFromMore = useCallback(() => {
     restoreMoreFocus.current = false;
     focusBeforeQuickSwitcher.current = focusBeforeMore.current;
@@ -146,9 +160,9 @@ export function AppShell() {
     moreDialogRef.current?.querySelector<HTMLElement>(".aw-mobile-more-link")?.focus();
     return () => {
       if (!restoreMoreFocus.current) return;
-      window.requestAnimationFrame(() => returnTarget?.focus());
+      restoreFocusTo(returnTarget);
     };
-  }, [mobileMoreOpen]);
+  }, [mobileMoreOpen, restoreFocusTo]);
   useEffect(() => {
     if (!sidebarDrawerOpen) return;
     window.requestAnimationFrame(() => {
@@ -345,12 +359,21 @@ export function AppShell() {
     const desktop = window.matchMedia("(min-width: 761px)");
     const closeDrawerAtDesktop = () => {
       if (!desktop.matches) return;
-      setSidebarDrawerLocationKey(null);
-      focusBeforeSidebar.current = null;
-      window.requestAnimationFrame(() => {
-        sidebarRef.current
-          ?.querySelector<HTMLElement>('.aw-global-link[aria-current="page"]')
-          ?.focus();
+      // Only when a drawer was actually open. This used to fire on every
+      // crossing of 761px, drawer or no drawer, and its only effect on a
+      // desktop reader was to take focus out of whatever they were typing in
+      // and put it on the nav rail -- a maximise or un-maximise mid-sentence
+      // moved the caret. Moving focus is right *after* closing a modal the
+      // reader was inside; it is never right on its own.
+      setSidebarDrawerLocationKey((current) => {
+        if (current === null) return current;
+        focusBeforeSidebar.current = null;
+        window.requestAnimationFrame(() => {
+          sidebarRef.current
+            ?.querySelector<HTMLElement>('.aw-global-link[aria-current="page"]')
+            ?.focus();
+        });
+        return null;
       });
     };
     desktop.addEventListener("change", closeDrawerAtDesktop);
