@@ -1602,6 +1602,9 @@ pre {
 .aw-knowledge-debug > summary,
 .aw-work-advanced > summary{
   display: flex;
+  /* 24px 是 WCAG 2.2 AA 的目标地板，而这个展开控件实测只有 18px 高——
+     字号小不等于可点区域也要小。 */
+  min-height: 24px;
   align-items: center;
   gap: 6px;
   color: var(--aw-text-muted);

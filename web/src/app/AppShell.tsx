@@ -466,8 +466,11 @@ export function AppShell() {
                 <span className="aw-global-link-copy">{item.label}</span>
               </Link>
               {current ? (
+                // 不带 aria-label：`aria-label` 在没有 role 的 <div> 上
+                // 是被禁止的，辅助技术会直接丢掉它（在无障碍树里确认过
+                // 它不在）。里面每个 feature 自己的 <aside>/<nav> 都带着
+                // 真名字，一个读不出来的标签只会让人以为这里有名字。
                 <div
-                  aria-label={`${item.label}上下文`}
                   className="aw-sidebar-context-slot"
                   id="workspace-sidebar-context"
                   ref={setSidebarHost}
@@ -499,7 +502,6 @@ export function AppShell() {
             </Link>
             {knowledgeCurrent ? (
               <div
-                aria-label="知识库上下文"
                 className="aw-sidebar-context-slot"
                 id="workspace-sidebar-context"
                 ref={setSidebarHost}
