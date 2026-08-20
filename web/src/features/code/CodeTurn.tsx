@@ -3,9 +3,9 @@
  *
  * In order, and the order is the whole argument: the instruction, then a
  * timeline of steps -- **each thought sitting directly above the action it
- * caused** -- then the files it produced, the report, and the raw events folded
- * away. Nothing between the reader and "what did it do, and why" is behind a
- * disclosure.
+ * caused** -- then the files it produced and the report. Raw protocol data is
+ * kept in one quiet diagnostic disclosure rather than mixed into that reading
+ * order.
  *
  * ## Why the thought is on the step and not in a list of its own
  *
@@ -51,6 +51,7 @@
  * question a reader has while watching.
  */
 
+import { MoreHorizontal } from "lucide-react";
 import { useState } from "react";
 import type { PrincipalIdentity, WorkspaceEntryView } from "../../api/types";
 import { MarkdownContent } from "../../components/MarkdownContent";
@@ -186,26 +187,26 @@ export function CodeTurn({
           of it and then pasted the finished text in whole.
 
           Plain text while streaming, Markdown once settled: half a fenced
-          block renders as garbage, and the report reliably contains fences. */}
+      block renders as garbage, and the report reliably contains fences. */}
       {block.report !== null ? (
-        <div className="aw-code-report">
-          <h3>报告</h3>
+        <section aria-label="回答" className="aw-code-report">
           <MarkdownContent text={block.report} />
-        </div>
+        </section>
       ) : liveAnswer === "" ? null : (
-        <div className="aw-code-report is-streaming">
-          <h3>报告</h3>
+        <section aria-label="正在回答" className="aw-code-report is-streaming">
           <p>{liveAnswer}</p>
-        </div>
+        </section>
       )}
 
       {block.events.length === 0 ? null : (
         <details className="aw-code-raw">
-          <summary>原始事件（{block.events.length}）</summary>
+          <summary title="查看诊断事件">
+            <MoreHorizontal aria-hidden="true" size={14} />
+            <span>诊断</span>
+          </summary>
           <pre>{JSON.stringify(block.events, null, 2)}</pre>
         </details>
       )}
-
     </li>
   );
 }

@@ -1,5 +1,4 @@
 import { ChevronRight } from "lucide-react";
-import type { ReactNode } from "react";
 import type { ArtifactRef, EventEnvelope } from "../api/types";
 import { StepDisclosure } from "./StepDisclosure";
 import {
@@ -100,7 +99,6 @@ export function StepStream({
   ariaLabel,
   eventTitle,
   isKnownEvent,
-  legend,
   meta,
   onOpenArtifact,
   running,
@@ -110,17 +108,6 @@ export function StepStream({
   eventTitle: (event: EventEnvelope) => string;
   /** Unknown event types stay visible, dimmed, rather than being dropped. */
   isKnownEvent?: (event: EventEnvelope) => boolean;
-  /**
-   * A key for the dots, drawn above the first stage.
-   *
-   * Optional because only one caller has anything to key. Work renders a
-   * *declared* list -- stages that have not run are on screen from the first
-   * frame -- so the column of dots carries states the events themselves never
-   * mention. A Chat turn's stages are derived from events that did happen, so
-   * there is no unreached dot there and a key would explain a symbol the page
-   * never draws.
-   */
-  legend?: ReactNode;
   /** Run- or task-level bookkeeping, folded away under the stages. */
   meta?: StreamMeta;
   onOpenArtifact?: (artifact: ArtifactRef) => void;
@@ -185,7 +172,6 @@ export function StepStream({
 
   return (
     <section className="aw-stream" aria-label={ariaLabel}>
-      {legend}
       <ol className="aw-stream-steps">
         {stages.map((stage) => {
           const groups = groupsOf(stage.events);

@@ -8,12 +8,19 @@ import {
   Library,
   Lock,
   MessageSquare,
+  PanelLeft,
   Plus,
   RefreshCw,
   Search,
   X,
 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   createKnowledgeBase,
@@ -28,12 +35,17 @@ import type {
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
+  useWorkspaceSidebar,
+  WorkspaceSidebarPortal,
+} from "../../app/WorkspaceSidebar";
+import {
   knowledgeBaseQueryKey,
   useKnowledgeBases,
 } from "../../components/KnowledgeSourcePicker";
 import {
   EmptyState,
   ErrorNotice,
+  IconButton,
   LoadingLine,
   formatDateTime,
   shortId,
@@ -48,6 +60,9 @@ export function KnowledgePage() {
     searchParams.get("kb"),
   );
   const [createOpen, setCreateOpen] = useState(false);
+  const focusBeforeCreate = useRef<HTMLElement | null>(null);
+  const mobileSidebarTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const workspaceSidebar = useWorkspaceSidebar();
   const availableKnowledgeBases = knowledgeBases.data?.knowledge_bases ?? [];
   const selectedId =
     availableKnowledgeBases.some(
@@ -62,65 +77,61 @@ export function KnowledgePage() {
   const selectKnowledgeBase = (id: string) => {
     setSelectedId(id);
     setSearchParams({ kb: id }, { replace: true });
+    workspaceSidebar.close();
+  };
+  const openCreate = () => {
+    focusBeforeCreate.current =
+      workspaceSidebar.drawerOpen
+        ? mobileSidebarTriggerRef.current
+        : document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+    // On mobile the create trigger lives inside the workspace drawer. Close it
+    // before mounting a second modal surface; the dialog takes focus below.
+    workspaceSidebar.close();
+    setCreateOpen(true);
+  };
+  const closeCreate = () => {
+    const returnTarget = focusBeforeCreate.current;
+    setCreateOpen(false);
+    window.requestAnimationFrame(() => {
+      if (returnTarget?.isConnected) returnTarget.focus();
+      if (focusBeforeCreate.current === returnTarget) focusBeforeCreate.current = null;
+    });
   };
 
   return (
-    <main className="aw-utility-page aw-knowledge-page">
-      <header className="aw-page-header">
-        <div>
-          <span className="aw-eyebrow">Knowledge</span>
-          <h1>知识库</h1>
-          <p>集中查看已经创建的资料库、文档处理状态，并把它们带到 Chat 或 Work 中使用。</p>
-        </div>
-        <div className="aw-page-actions">
+    <div className="aw-knowledge-page">
+      <WorkspaceSidebarPortal>
+        <aside className="aw-knowledge-list aw-knowledge-sidebar" aria-label="知识库列表">
+          <header className="aw-knowledge-sidebar-header">
+            <strong>知识库</strong>
+            <div>
+              <IconButton
+                label="刷新知识库"
+                disabled={knowledgeBases.isFetching}
+                onClick={() => void knowledgeBases.refetch()}
+              >
+                <RefreshCw aria-hidden="true" size={15} />
+              </IconButton>
+              <IconButton
+                className="aw-knowledge-sessions-close"
+                label="关闭知识库列表"
+                onClick={workspaceSidebar.close}
+              >
+                <X aria-hidden="true" size={17} />
+              </IconButton>
+            </div>
+          </header>
           <button
-            className="aw-button is-ghost"
-            disabled={knowledgeBases.isFetching}
-            onClick={() => void knowledgeBases.refetch()}
+            className="aw-new-session aw-new-knowledge"
+            onClick={openCreate}
             type="button"
           >
-            <RefreshCw aria-hidden="true" size={15} />
-            刷新
+            <Plus aria-hidden="true" size={15} />
+            <span>新建知识库</span>
           </button>
-          <button
-            className="aw-button is-primary"
-            onClick={() => setCreateOpen(true)}
-            type="button"
-          >
-            <Plus aria-hidden="true" size={16} />
-            新建知识库
-          </button>
-        </div>
-      </header>
-
-      {knowledgeBases.isPending ? <LoadingLine label="正在读取知识库" /> : null}
-      {knowledgeBases.error === null ? null : (
-        <ErrorNotice message={errorMessage(knowledgeBases.error)} />
-      )}
-
-      {!knowledgeBases.isPending &&
-      knowledgeBases.error === null &&
-      knowledgeBases.data?.knowledge_bases.length === 0 ? (
-        <EmptyState
-          action={
-            <button
-              className="aw-button is-primary"
-              onClick={() => setCreateOpen(true)}
-              type="button"
-            >
-              <Plus aria-hidden="true" size={16} />
-              创建第一个知识库
-            </button>
-          }
-          description="创建知识库后上传 PDF、Word 或 Markdown；文档完成索引后即可在 Chat 和 Work 中选择。"
-          icon={<Library aria-hidden="true" size={24} />}
-          title="还没有知识库"
-        />
-      ) : null}
-
-      {(knowledgeBases.data?.knowledge_bases.length ?? 0) > 0 ? (
-        <div className="aw-knowledge-layout">
-          <aside className="aw-knowledge-list" aria-label="知识库列表">
+          <div className="aw-knowledge-sidebar-list">
             {knowledgeBases.data?.knowledge_bases.map((knowledgeBase) => (
               <KnowledgeBaseRow
                 active={knowledgeBase.knowledge_base_id === selectedId}
@@ -129,48 +140,85 @@ export function KnowledgePage() {
                 onClick={() => selectKnowledgeBase(knowledgeBase.knowledge_base_id)}
               />
             ))}
-          </aside>
-          {selected === undefined ? (
-            <EmptyState
-              description="从左侧选择一个知识库查看文档。"
-              icon={<BookOpen aria-hidden="true" size={22} />}
-              title="选择知识库"
-            />
-          ) : (
-            // Keyed by the knowledge base, so switching remounts rather than
-            // re-renders. The panel holds a chosen file, an upload notice, a
-            // query and its results, and every one of those is about one
-            // knowledge base: without the key, a file picked in A uploads into
-            // B -- the mutation reads the id when it fires, not when the file
-            // was chosen -- and A's search results sit under B's heading.
-            <KnowledgeBaseDetail
-              identity={identity}
-              key={selected.knowledge_base_id}
-              knowledgeBase={selected}
-              onChanged={async () => {
-                await queryClient.invalidateQueries({
-                  queryKey: knowledgeBaseQueryKey(identity),
-                });
-              }}
-            />
-          )}
-        </div>
-      ) : null}
+          </div>
+        </aside>
+      </WorkspaceSidebarPortal>
+
+      <main className="aw-knowledge-main">
+        <button
+          aria-controls="workspace-sidebar-context"
+          aria-expanded={workspaceSidebar.drawerOpen}
+          aria-label="打开知识库列表"
+          className="aw-icon-button aw-knowledge-mobile-sidebar"
+          onClick={workspaceSidebar.open}
+          ref={mobileSidebarTriggerRef}
+          type="button"
+        >
+          <PanelLeft aria-hidden="true" size={18} />
+        </button>
+        {knowledgeBases.isPending ? <LoadingLine label="正在读取知识库" /> : null}
+        {knowledgeBases.error === null ? null : (
+          <ErrorNotice message={errorMessage(knowledgeBases.error)} />
+        )}
+
+        {!knowledgeBases.isPending &&
+        knowledgeBases.error === null &&
+        knowledgeBases.data?.knowledge_bases.length === 0 ? (
+          <EmptyState
+            action={
+              <button
+                className="aw-button is-primary"
+                onClick={openCreate}
+                type="button"
+              >
+                <Plus aria-hidden="true" size={16} />
+                创建第一个知识库
+              </button>
+            }
+            description="创建后上传 PDF、Word 或 Markdown；索引完成即可在对话和任务中使用。"
+            icon={<Library aria-hidden="true" size={24} />}
+            title="还没有知识库"
+          />
+        ) : null}
+
+        {selected === undefined && (knowledgeBases.data?.knowledge_bases.length ?? 0) > 0 ? (
+          <EmptyState
+            description="从侧边栏选择一个知识库查看文档。"
+            icon={<BookOpen aria-hidden="true" size={22} />}
+            title="选择知识库"
+          />
+        ) : null}
+        {selected === undefined ? null : (
+          <KnowledgeBaseDetail
+            identity={identity}
+            key={selected.knowledge_base_id}
+            knowledgeBase={selected}
+            onChanged={async () => {
+              await queryClient.invalidateQueries({
+                queryKey: knowledgeBaseQueryKey(identity),
+              });
+            }}
+          />
+        )}
+      </main>
 
       {createOpen ? (
         <CreateKnowledgeBaseDialog
           identity={identity}
-          onClose={() => setCreateOpen(false)}
+          onClose={closeCreate}
           onCreated={(knowledgeBase) => {
-            setCreateOpen(false);
             void queryClient.invalidateQueries({
               queryKey: knowledgeBaseQueryKey(identity),
             });
             selectKnowledgeBase(knowledgeBase.knowledge_base_id);
+            // `selectKnowledgeBase` also closes the workspace drawer. Schedule
+            // the dialog's return focus afterwards so that close cannot steal
+            // focus back to an older drawer opener.
+            closeCreate();
           }}
         />
       ) : null}
-    </main>
+    </div>
   );
 }
 
@@ -509,19 +557,66 @@ function CreateKnowledgeBaseDialog({
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const dialogRef = useRef<HTMLElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
   const create = useMutation({
     mutationFn: () => createKnowledgeBase(identity, { name: name.trim(), description }),
     onSuccess: onCreated,
   });
+  useEffect(() => {
+    // AppShell closes the mobile workspace drawer with its own focus-restoring
+    // animation frame. Queue the dialog focus after mount so it wins that handoff.
+    const frame = window.requestAnimationFrame(() => nameRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+    if (event.key !== "Tab" || dialogRef.current === null) return;
+    const focusable = Array.from(
+      dialogRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (first === undefined || last === undefined) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
   return (
     <div className="aw-dialog-backdrop" role="presentation">
-      <section aria-modal="true" className="aw-dialog" role="dialog">
+      <section
+        aria-describedby="aw-create-knowledge-description"
+        aria-labelledby="aw-create-knowledge-title"
+        aria-modal="true"
+        className="aw-dialog"
+        onKeyDown={handleKeyDown}
+        ref={dialogRef}
+        role="dialog"
+      >
         <header>
           <div>
-            <h2>新建知识库</h2>
-            <p>给资料起一个人能看懂的名字；ID 由系统生成。</p>
+            <h2 id="aw-create-knowledge-title">新建知识库</h2>
+            <p id="aw-create-knowledge-description">
+              给资料起一个人能看懂的名字；ID 由系统生成。
+            </p>
           </div>
-          <button aria-label="关闭" className="aw-icon-button" onClick={onClose} type="button">
+          <button
+            aria-label="关闭新建知识库"
+            className="aw-icon-button"
+            onClick={onClose}
+            type="button"
+          >
             <X aria-hidden="true" size={17} />
           </button>
         </header>
@@ -534,7 +629,15 @@ function CreateKnowledgeBaseDialog({
         >
           <label className="aw-field">
             <span>名称</span>
-            <input autoFocus maxLength={120} onChange={(event) => setName(event.target.value)} placeholder="例如：校招项目资料" required value={name} />
+            <input
+              autoFocus
+              maxLength={120}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="例如：校招项目资料"
+              ref={nameRef}
+              required
+              value={name}
+            />
           </label>
           <label className="aw-field">
             <span>说明（可选）</span>

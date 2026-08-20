@@ -272,6 +272,37 @@ describe("WorkPage task submission", () => {
     expect(input?.intent?.graph_decided_by).toBe("user");
   });
 
+  it("shows a triage failure and lets the same intent retry without an unhandled rejection", async () => {
+    vi.mocked(createTask).mockReset();
+    vi.mocked(createTask).mockResolvedValue({
+      task_id: "task_created",
+      status: "queued",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: null,
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:00:00Z",
+    });
+    vi.mocked(triageTask)
+      .mockRejectedValueOnce(new Error("判定服务暂时不可用"))
+      .mockResolvedValueOnce(TRIAGE_DEFAULT);
+    const user = userEvent.setup();
+    renderWorkPage();
+
+    await user.type(screen.getByLabelText("目标"), "整理这批项目资料");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "判定服务暂时不可用",
+    );
+    expect(createTask).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "创建任务" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(triageTask).toHaveBeenCalledTimes(2);
+  });
+
   it("skips triage entirely for an explicit override, which outranks any guess", async () => {
     vi.mocked(createTask).mockReset();
     vi.mocked(createTask).mockResolvedValue({
@@ -476,6 +507,29 @@ describe("WorkPage task submission", () => {
     // Falls back to the id rather than rendering an unclickable blank row.
     expect(await screen.findByText(/task_969398ec/)).toBeInTheDocument();
   });
+
+  it.each(["pending", "error"] as const)(
+    "keeps the task-list opener reachable while a deep link is %s",
+    async (state) => {
+      if (state === "pending") {
+        vi.mocked(getTask).mockImplementation(
+          () => new Promise(() => undefined),
+        );
+      } else {
+        vi.mocked(getTask).mockRejectedValue(new Error("任务详情不可用"));
+      }
+
+      renderWorkPage("/work/task_unavailable");
+
+      if (state === "error") {
+        await screen.findByRole("alert");
+      }
+      const opener = screen.getByRole("button", { name: "打开任务列表" });
+      expect(opener).toBeInTheDocument();
+      expect(opener).toHaveAttribute("aria-controls", "workspace-sidebar-context");
+      expect(opener).toHaveAttribute("aria-expanded", "false");
+    },
+  );
 
   it("shows each stage's real steps under it, and its files in the rail", async () => {
     vi.mocked(getTask).mockResolvedValue({
@@ -1541,7 +1595,8 @@ describe("WorkPage 停住的任务与已用预算", () => {
     vi.mocked(getTask).mockResolvedValue(parkedTask({ agent_invocation_count: 7 }));
     renderWorkPage("/work/task_parked");
 
-    expect(await screen.findByText(/已调用智能体\s*7\s*次/)).toBeInTheDocument();
+    const invocationLabel = await screen.findByText("智能体调用");
+    expect(invocationLabel.parentElement).toHaveTextContent("7 次");
   });
 
   it("says nothing about invocations a task never made", async () => {
@@ -1549,7 +1604,7 @@ describe("WorkPage 停住的任务与已用预算", () => {
     renderWorkPage("/work/task_parked");
 
     await screen.findByRole("heading", { name: "整理这批资料，比较三个方案" });
-    expect(screen.queryByText(/已调用智能体/)).toBeNull();
+    expect(screen.queryByText(/智能体调用/)).toBeNull();
   });
 });
 
@@ -1593,25 +1648,12 @@ describe("WorkPage 时间线上没跑过的那几段", () => {
     expect(within(steps as HTMLElement).getAllByText("未执行")).toHaveLength(5);
   });
 
-  it("keys every dot it can draw, including the one nothing else explains", async () => {
+  it("does not repeat a legend when every row already names its state", async () => {
     const view = renderWorkPage("/work/task_parked");
     await screen.findByRole("region", { name: "执行过程" });
     const legend = view.container.querySelector(".aw-stream-legend");
 
-    expect(legend).not.toBeNull();
-    // 图例上的每一格用的都是行上那一套 `is-*` 类名与同一个 `.aw-stream-dot`
-    // 元素，所以钥匙和锁不可能各改各的。
-    expect(
-      [...(legend?.querySelectorAll("span[class*='is-']") ?? [])].map((item) => [
-        item.className,
-        item.textContent,
-      ]),
-    ).toEqual([
-      ["aw-stream-state is-done", "已完成"],
-      ["aw-stream-state is-active", "进行中 / 等待"],
-      ["aw-stream-state is-pending", "等待中"],
-      ["aw-stream-state is-skipped", "未执行"],
-    ]);
+    expect(legend).toBeNull();
   });
 });
 
