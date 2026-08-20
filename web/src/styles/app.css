@@ -189,7 +189,8 @@ a {
 }
 
 .aw-env-button,
-.aw-theme-button {
+.aw-theme-button,
+.aw-quick-switcher-trigger {
   padding: 0;
 }
 
@@ -273,6 +274,310 @@ a {
   border-color: color-mix(in srgb, var(--aw-accent) 45%, var(--aw-border));
   background: var(--aw-accent-soft);
   color: var(--aw-accent);
+}
+
+.aw-mobile-more-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.aw-mobile-more-copy strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.aw-mobile-more-copy small {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- 全局快速跳转 -------------------------------------------------------
+ *
+ * rail 告诉人「这里有哪些大区」，这个面板回答另一个问题：「我知道要去哪，怎样
+ * 少走一步」。所以工作台在 rail 上仍是一项，在这里拆成对话与任务两个精确目的地。
+ * 搜索只发生在浏览器内的七条静态页面定义上，不读历史、不把用户输入发给后端。 */
+.aw-command-backdrop {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  padding: min(14vh, 132px) 20px 20px;
+  align-items: start;
+  justify-items: center;
+  background: var(--aw-scrim-strong);
+  backdrop-filter: blur(6px);
+  animation: aw-command-fade var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-command-dialog {
+  width: min(620px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 16px;
+  background: var(--aw-panel);
+  box-shadow: var(--aw-shadow-md);
+  animation: aw-command-enter var(--aw-duration-base) var(--aw-ease);
+}
+
+.aw-command-search {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto 30px;
+  min-height: 58px;
+  padding: 0 12px 0 17px;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--aw-border);
+  color: var(--aw-text-muted);
+}
+
+.aw-command-search input {
+  min-height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--aw-text);
+  font-size: 15px;
+}
+
+.aw-command-search input:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+/* The global focus ring around only the input is clipped by the dialog's
+   overflow at the top edge, leaving a three-sided orange bracket. The whole
+   search row is one control, so let the row carry a visible bottom edge and
+   keep the text field itself ringless. */
+.aw-command-search:focus-within {
+  color: var(--aw-accent);
+  box-shadow: inset 0 -2px 0 var(--aw-accent);
+}
+
+.aw-command-search input:focus-visible {
+  outline: none;
+}
+
+.aw-command-search > kbd,
+.aw-command-footer kbd {
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 5px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10px;
+  line-height: 1;
+  box-shadow: 0 1px 0 var(--aw-border-strong);
+}
+
+.aw-command-search > kbd {
+  padding: 4px 6px;
+}
+
+.aw-command-close {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  place-items: center;
+  background: transparent;
+  color: var(--aw-text-muted);
+}
+
+.aw-command-close:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+.aw-command-results {
+  display: grid;
+  max-height: min(440px, 56vh);
+  padding: 8px;
+  gap: 3px;
+  overflow-y: auto;
+}
+
+.aw-command-item {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  width: 100%;
+  min-height: 58px;
+  padding: 8px 11px;
+  align-items: center;
+  gap: 11px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--aw-text);
+  text-align: left;
+}
+
+.aw-command-item.is-active {
+  border-color: var(--aw-border);
+  background: var(--aw-panel-soft);
+}
+
+.aw-command-item > svg {
+  color: var(--aw-text-muted);
+}
+
+.aw-command-item.is-active > svg {
+  color: var(--aw-accent);
+  transform: translateX(2px);
+}
+
+.aw-command-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  place-items: center;
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+  box-shadow: var(--aw-shadow-sm);
+}
+
+.aw-command-item.is-active .aw-command-icon {
+  border-color: color-mix(in srgb, var(--aw-accent) 34%, var(--aw-border));
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+.aw-command-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.aw-command-copy > span:first-child {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.aw-command-copy strong {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.aw-command-copy small {
+  color: var(--aw-text-subtle);
+  font-size: 10.5px;
+}
+
+.aw-command-copy > span:last-child {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-command-current {
+  padding: 2px 7px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-command-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  color: var(--aw-text-muted);
+  text-align: center;
+}
+
+.aw-command-empty strong {
+  margin-top: 4px;
+  color: var(--aw-text);
+  font-size: 13px;
+}
+
+.aw-command-empty span {
+  font-size: 11.5px;
+}
+
+.aw-command-footer {
+  display: flex;
+  min-height: 36px;
+  padding: 0 14px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  border-top: 1px solid var(--aw-border);
+  color: var(--aw-text-subtle);
+  font-size: 10.5px;
+}
+
+.aw-command-footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.aw-command-footer kbd {
+  min-width: 18px;
+  padding: 3px 4px;
+  text-align: center;
+}
+
+@keyframes aw-command-fade {
+  from { opacity: 0; }
+}
+
+@keyframes aw-command-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.985);
+  }
+}
+
+@media (width <= 600px) {
+  .aw-command-backdrop {
+    padding: 10px;
+  }
+
+  .aw-command-dialog {
+    border-radius: 14px;
+  }
+
+  .aw-command-search {
+    grid-template-columns: 21px minmax(0, 1fr) 30px;
+    min-height: 54px;
+    padding-left: 13px;
+  }
+
+  .aw-command-search input {
+    min-height: 52px;
+    font-size: 16px;
+  }
+
+  .aw-command-search > kbd,
+  .aw-command-footer {
+    display: none;
+  }
+
+  .aw-command-results {
+    max-height: calc(100dvh - 86px);
+  }
+
+  .aw-command-item {
+    min-height: 62px;
+  }
 }
 
 .aw-button,

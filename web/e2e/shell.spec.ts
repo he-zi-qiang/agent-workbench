@@ -163,3 +163,28 @@ test("知识库能进入 Chat，辅助页面在移动端也可到达", async ({
     page.getByRole("heading", { name: "找资料，找得准吗？" }),
   ).toBeVisible();
 });
+
+test("快速跳转能按用途找到精确页面", async ({ page }, testInfo) => {
+  await page.goto("/ui/");
+  const isMobile = testInfo.project.name === "mobile";
+
+  if (isMobile) {
+    await page.getByRole("button", { name: "更多" }).click();
+    const more = page.getByRole("dialog", { name: "更多页面" });
+    // “计算机”单看名字像一个实时控制台，说明在点击之前就把它的真实用途说清楚。
+    await expect(more.getByText("了解屏幕控制的安全边界")).toBeVisible();
+    await more.getByRole("button", { name: "快速跳转" }).click();
+  } else {
+    await page.keyboard.press("Control+K");
+  }
+
+  const switcher = page.getByRole("dialog", { name: "快速跳转" });
+  await expect(switcher).toBeVisible();
+  await switcher.getByRole("combobox", { name: "搜索页面" }).fill("可恢复 工作流");
+  await expect(switcher.getByRole("option")).toHaveCount(1);
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(/#\/work$/);
+  await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
+  await expect(switcher).toBeHidden();
+});

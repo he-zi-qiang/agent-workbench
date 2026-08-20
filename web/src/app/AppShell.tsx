@@ -1,64 +1,19 @@
 import {
-  Activity,
-  Code2,
-  FlaskConical,
-  Library,
   MonitorCog,
-  MonitorSmartphone,
   Moon,
   MoreHorizontal,
-  MessageSquare,
+  Search,
   Settings2,
   Sun,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { EnvironmentDialog } from "./EnvironmentDialog";
 import { useIdentity } from "./IdentityContext";
+import { NAVIGATION } from "./navigation";
+import { QuickSwitcher } from "./QuickSwitcher";
 import { NEXT_MODE, type ThemeMode, useTheme } from "./ThemeContext";
-
-const NAVIGATION = [
-  // One entry for two routes. `covers` is what marks it current on `/work`
-  // too -- a `NavLink to="/chat"` is not, and a rail item that goes dark the
-  // moment you open the 任务 tab is a rail that disagrees with the page.
-  {
-    to: "/chat",
-    label: "工作台",
-    icon: MessageSquare,
-    primary: true,
-    covers: ["/chat", "/work"],
-  },
-  { to: "/code", label: "Code", icon: Code2, primary: true, covers: ["/code"] },
-  {
-    to: "/knowledge",
-    label: "知识库",
-    icon: Library,
-    primary: false,
-    covers: ["/knowledge"],
-  },
-  {
-    to: "/evaluation",
-    label: "效果评测",
-    icon: FlaskConical,
-    primary: false,
-    covers: ["/evaluation"],
-  },
-  {
-    to: "/computer",
-    label: "计算机",
-    icon: MonitorSmartphone,
-    primary: false,
-    covers: ["/computer"],
-  },
-  {
-    to: "/system",
-    label: "运行状态",
-    icon: Activity,
-    primary: false,
-    covers: ["/system"],
-  },
-] as const;
 
 /**
  * Where the rail's one dividing line goes: before the first entry that is not
@@ -111,6 +66,43 @@ export function AppShell() {
   const ThemeIcon = THEME_LABEL[themeMode].icon;
   const location = useLocation();
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
+  const focusBeforeQuickSwitcher = useRef<HTMLElement | null>(null);
+  const openQuickSwitcher = useCallback(() => {
+    focusBeforeQuickSwitcher.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setQuickSwitcherOpen(true);
+  }, []);
+  const closeQuickSwitcher = useCallback(() => {
+    setQuickSwitcherOpen(false);
+    window.requestAnimationFrame(() => focusBeforeQuickSwitcher.current?.focus());
+  }, []);
+  useEffect(() => {
+    const handleGlobalKey = (event: KeyboardEvent) => {
+      if (
+        event.key.toLocaleLowerCase() === "k" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey
+      ) {
+        // A command palette over a form dialog creates two aria-modal surfaces
+        // and can discard an unseen draft when the upper one starts handling
+        // Escape. The mobile More sheet is navigation rather than a draft, so
+        // it is the one dialog we intentionally replace in place.
+        const anotherDialogOpen =
+          document.querySelector('[role="dialog"]') !== null &&
+          !mobileMoreOpen &&
+          !quickSwitcherOpen;
+        if (anotherDialogOpen) return;
+        event.preventDefault();
+        setMobileMoreOpen(false);
+        openQuickSwitcher();
+      } else if (event.key === "Escape" && mobileMoreOpen) {
+        setMobileMoreOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKey);
+    return () => window.removeEventListener("keydown", handleGlobalKey);
+  }, [mobileMoreOpen, openQuickSwitcher, quickSwitcherOpen]);
   // Everything that is not a primary flow and not already on the mobile bar.
   // Derived rather than an explicit pair of paths: the hardcoded version left
   // a newly added secondary page reachable on desktop and nowhere on mobile.
@@ -147,7 +139,7 @@ export function AppShell() {
               <Link
                 aria-current={current ? "page" : undefined}
                 className={`aw-global-link ${current ? "active" : ""}`}
-                title={item.label}
+                title={`${item.label} · ${item.description}`}
                 to={item.to}
               >
                 <Icon aria-hidden="true" size={18} />
@@ -157,6 +149,16 @@ export function AppShell() {
           );
         })}
         <div className="aw-rail-spacer" />
+        <button
+          aria-label="快速跳转"
+          className="aw-global-link aw-quick-switcher-trigger"
+          onClick={openQuickSwitcher}
+          title="快速跳转 · ⌘K / Ctrl K"
+          type="button"
+        >
+          <Search aria-hidden="true" size={18} />
+          <span>跳转</span>
+        </button>
         <ThemeControl />
         <button
           className="aw-global-link aw-env-button"
@@ -262,16 +264,35 @@ export function AppShell() {
                 const Icon = item.icon;
                 return (
                   <NavLink
+                    aria-label={item.label}
                     className="aw-mobile-more-link"
                     key={item.to}
                     onClick={() => setMobileMoreOpen(false)}
                     to={item.to}
                   >
                     <Icon aria-hidden="true" size={19} />
-                    <span>{item.label}</span>
+                    <span className="aw-mobile-more-copy">
+                      <strong>{item.label}</strong>
+                      <small>{item.description}</small>
+                    </span>
                   </NavLink>
                 );
               })}
+              <button
+                aria-label="快速跳转"
+                className="aw-mobile-more-link"
+                onClick={() => {
+                  setMobileMoreOpen(false);
+                  openQuickSwitcher();
+                }}
+                type="button"
+              >
+                <Search aria-hidden="true" size={19} />
+                <span className="aw-mobile-more-copy">
+                  <strong>快速跳转</strong>
+                  <small>按名称或用途查找所有页面</small>
+                </span>
+              </button>
               {/* 主题也在这里出现一次：rail 在 760px 以下是隐藏的，而它是
                   主题按钮唯一的入口，只放在 rail 上等于移动端没有主题开关。
                   这一项不关闭面板——连点三下看三档，比每点一次都要重新打开
@@ -302,6 +323,12 @@ export function AppShell() {
       <span className="aw-sr-only">
         当前本地身份：{identity.tenantId} / {identity.principalId}
       </span>
+      {quickSwitcherOpen ? (
+        <QuickSwitcher
+          currentPath={location.pathname}
+          onClose={closeQuickSwitcher}
+        />
+      ) : null}
       <EnvironmentDialog />
     </div>
   );

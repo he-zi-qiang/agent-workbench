@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -111,6 +111,82 @@ describe("AppShell rail", () => {
     expect(rail.queryByRole("link", { name: "Work" })).not.toBeInTheDocument();
     expect(rail.getByRole("link", { name: "工作台" })).toBeInTheDocument();
     expect(rail.getByRole("link", { name: "Code" })).toBeInTheDocument();
+  });
+});
+
+describe("AppShell quick switcher", () => {
+  function mounted(at = "/chat") {
+    return render(
+      <ThemeProvider>
+        <IdentityProvider>
+          <MemoryRouter initialEntries={[at]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route element={<p>Chat page</p>} path="/chat" />
+                <Route element={<p>Work page</p>} path="/work" />
+                <Route element={<p>Code page</p>} path="/code" />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </IdentityProvider>
+      </ThemeProvider>,
+    );
+  }
+
+  it("opens from the keyboard and goes to an exact Workbench destination", async () => {
+    const user = userEvent.setup();
+    mounted();
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const dialog = screen.getByRole("dialog", { name: "快速跳转" });
+    const search = within(dialog).getByRole("combobox", { name: "搜索页面" });
+
+    await user.type(search, "任务");
+    expect(within(dialog).getAllByRole("option")).toHaveLength(1);
+    expect(within(dialog).getByRole("option", { name: /任务/ })).toBeInTheDocument();
+
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("Work page")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "快速跳转" })).not.toBeInTheDocument();
+  });
+
+  it("gives mobile auxiliary pages a purpose before opening the switcher", async () => {
+    const user = userEvent.setup();
+    mounted();
+
+    await user.click(screen.getByRole("button", { name: "更多" }));
+    const more = within(screen.getByRole("dialog", { name: "更多页面" }));
+    expect(more.getByText("了解屏幕控制的安全边界")).toBeInTheDocument();
+    expect(more.getByText("检查 API、数据库与本地身份")).toBeInTheDocument();
+
+    await user.click(more.getByRole("button", { name: /快速跳转/ }));
+    expect(screen.queryByRole("dialog", { name: "更多页面" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "快速跳转" })).toBeInTheDocument();
+  });
+
+  it("closes with Escape without changing the page", async () => {
+    const user = userEvent.setup();
+    mounted("/code");
+
+    await user.click(screen.getByRole("button", { name: "快速跳转" }));
+    expect(screen.getByRole("dialog", { name: "快速跳转" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog", { name: "快速跳转" })).not.toBeInTheDocument();
+    expect(screen.getByText("Code page")).toBeInTheDocument();
+  });
+
+  it("does not stack over a dialog that may contain an unsaved draft", async () => {
+    const user = userEvent.setup();
+    mounted();
+
+    await user.click(screen.getByRole("button", { name: "环境" }));
+    expect(
+      screen.getByRole("dialog", { name: "本地身份模拟器" }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+
+    expect(screen.queryByRole("dialog", { name: "快速跳转" })).not.toBeInTheDocument();
   });
 });
 
