@@ -77,6 +77,50 @@ function quarantine(
 }
 
 describe("chat state machine", () => {
+  it("merges the server's recent Chat index without inventing source settings", () => {
+    const state = chatReducer(initialChatState([SESSION]), {
+      type: "sessionsReconciled",
+      sessions: [
+        {
+          session_id: "ses_remote",
+          title: "跨设备会话",
+          last_activity_at: "2026-08-20T12:00:00Z",
+        },
+        {
+          session_id: SESSION.sessionId,
+          title: "服务端标题",
+          last_activity_at: "2026-08-19T12:00:00Z",
+        },
+      ],
+    });
+
+    expect(state.sessionOrder.slice(0, 2)).toEqual(["ses_remote", SESSION.sessionId]);
+    expect(state.sessions.ses_remote).toMatchObject({
+      title: "跨设备会话",
+      answerMode: "direct",
+      knowledgeBaseId: null,
+      history: "idle",
+    });
+    expect(state.sessions[SESSION.sessionId]).toMatchObject({
+      title: "服务端标题",
+      // A list response carries no per-turn source semantics, so an existing
+      // session keeps the source choice this device actually knows.
+      answerMode: "rag",
+      knowledgeBaseId: "kb_main",
+    });
+  });
+
+  it("renames only the local index projection", () => {
+    const state = chatReducer(initialChatState([SESSION]), {
+      type: "sessionRenamed",
+      sessionId: SESSION.sessionId,
+      title: "新的标题",
+    });
+
+    expect(state.sessions[SESSION.sessionId]?.title).toBe("新的标题");
+    expect(state.sessions[SESSION.sessionId]?.updatedAt).toBe(SESSION.updatedAt);
+  });
+
   it("holds an early RunStarted until the HTTP response authoritatively binds its run", () => {
     const result = reduceChatFrame(submitted(), SESSION.sessionId, frame("RunStarted", 1));
 

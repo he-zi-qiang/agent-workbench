@@ -12,7 +12,10 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import {
   createChatSession,
   getCitedPassage,
+  getChatSession,
+  listChatSessions,
   listKnowledgeBases,
+  renameChatSession,
 } from "../../api/client";
 import type { Citation, PrincipalIdentity, SourceLocator } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
@@ -23,9 +26,15 @@ import type { ChatRuntime } from "./runtime";
 import { useChatRuntime } from "./useChatRuntime";
 
 vi.mock("../../api/client", () => ({
+  ApiError: class MockApiError extends Error {
+    readonly status = 404;
+  },
   createChatSession: vi.fn(),
   getCitedPassage: vi.fn(),
+  getChatSession: vi.fn(() => Promise.reject(new Error("not found"))),
+  listChatSessions: vi.fn(() => Promise.resolve({ sessions: [] })),
   listKnowledgeBases: vi.fn(() => Promise.resolve({ knowledge_bases: [] })),
+  renameChatSession: vi.fn(),
 }));
 
 vi.mock("../../app/IdentityContext", () => ({
@@ -74,6 +83,13 @@ beforeEach(() => {
     state: initialChatState(),
   }));
   vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
+  vi.mocked(listChatSessions).mockResolvedValue({ sessions: [] });
+  vi.mocked(getChatSession).mockRejectedValue(new Error("not found"));
+  vi.mocked(renameChatSession).mockResolvedValue({
+    session_id: "ses_direct",
+    title: "新名字",
+    last_activity_at: "2026-08-03T00:00:00Z",
+  });
 });
 
 afterEach(() => cleanup());
@@ -81,7 +97,7 @@ afterEach(() => cleanup());
 describe("Chat identity boundary", () => {
   it("does not start an Ask in the old identity after Session creation resolves", async () => {
     let resolveCreate:
-      | ((response: { session_id: string; title: string | null }) => void)
+      | ((response: { session_id: string }) => void)
       | undefined;
     vi.mocked(createChatSession).mockReturnValue(
       new Promise((resolve) => {
@@ -112,7 +128,7 @@ describe("Chat identity boundary", () => {
     const finishCreate = resolveCreate;
     if (finishCreate === undefined) throw new Error("Session create mock did not start");
     act(() => {
-      finishCreate({ session_id: "ses_created_as_alice", title: null });
+      finishCreate({ session_id: "ses_created_as_alice" });
     });
     await waitFor(() =>
       expect(aliceAddLocalSession).toHaveBeenCalledTimes(1),
@@ -122,7 +138,7 @@ describe("Chat identity boundary", () => {
     expect(bobStartAsk).not.toHaveBeenCalled();
   });
 
-  it("shows the current per-turn source instead of the Session creation mode", async () => {
+  it("shows a source only when this turn actually uses one", async () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({
       knowledge_bases: [knowledgeBase("kb_resume", "校招资料")],
     });
@@ -143,13 +159,12 @@ describe("Chat identity boundary", () => {
     const user = userEvent.setup();
 
     renderChatRoute("/chat/ses_direct");
-    expect(
-      await screen.findByText("当前：自由回答 · 可随时切换知识库"),
-    ).toBeInTheDocument();
-
     await screen.findByRole("option", { name: "校招资料 · 2/2 可用" });
+    expect(screen.queryByText("校招资料", { exact: true })).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("回答资料"), "kb_resume");
-    expect(await screen.findByText("当前资料：校招资料")).toBeInTheDocument();
+    expect(
+      await screen.findByText("校招资料", { exact: true }),
+    ).toBeInTheDocument();
   });
 
   it("asks before deleting a session, and hands the id to the runtime", async () => {
@@ -182,6 +197,289 @@ describe("Chat identity boundary", () => {
     await user.click(remove);
     await waitFor(() => {
       expect(removeSession).toHaveBeenCalledWith("ses_direct");
+    });
+  });
+
+  it("renames a Chat session inline and persists the title on the server", async () => {
+    const localRename = vi.fn();
+    vi.mocked(renameChatSession).mockResolvedValue({
+      session_id: "ses_direct",
+      // Deliberately differs from the request: the server owns normalization,
+      // and this is the value the browser-local projection must accept.
+      title: "服务端规范名",
+      last_activity_at: "2026-08-03T00:00:00Z",
+    });
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn(), undefined, localRename),
+      state: initialChatState([
+        {
+          sessionId: "ses_direct",
+          title: "旧名字",
+          answerMode: "direct",
+          knowledgeBaseId: null,
+          createdAt: "2026-08-03T00:00:00Z",
+          updatedAt: "2026-08-03T00:00:00Z",
+        },
+      ]),
+    });
+    const user = userEvent.setup();
+
+    renderChatRoute("/chat/ses_direct");
+    await user.click(
+      await screen.findByRole("button", { name: "重命名会话 旧名字" }),
+    );
+    const field = screen.getByLabelText("会话名字");
+    await user.clear(field);
+    await user.type(field, "新名字{Enter}");
+
+    await waitFor(() => {
+      expect(vi.mocked(renameChatSession).mock.calls[0]?.slice(1)).toEqual([
+        "ses_direct",
+        "新名字",
+      ]);
+    });
+    expect(localRename).toHaveBeenCalledWith("ses_direct", "服务端规范名");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "重命名会话 旧名字" })).toHaveFocus();
+    });
+  });
+
+  it("returns focus to the Chat rename action when Escape cancels editing", async () => {
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: initialChatState([
+        {
+          sessionId: "ses_direct",
+          title: "旧名字",
+          answerMode: "direct",
+          knowledgeBaseId: null,
+          createdAt: "2026-08-03T00:00:00Z",
+          updatedAt: "2026-08-03T00:00:00Z",
+        },
+      ]),
+    });
+    const user = userEvent.setup();
+
+    renderChatRoute("/chat/ses_direct");
+    const action = await screen.findByRole("button", { name: "重命名会话 旧名字" });
+    await user.click(action);
+    await user.type(screen.getByLabelText("会话名字"), "改了一半{Escape}");
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "重命名会话 旧名字" })).toHaveFocus();
+    });
+    expect(screen.queryByLabelText("会话名字")).not.toBeInTheDocument();
+    expect(renameChatSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed Chat rename inline, focused, and retryable", async () => {
+    const localRename = vi.fn();
+    vi.mocked(renameChatSession).mockRejectedValueOnce(new Error("名字没有保存"));
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn(), undefined, localRename),
+      state: initialChatState([
+        {
+          sessionId: "ses_direct",
+          title: "旧名字",
+          answerMode: "direct",
+          knowledgeBaseId: null,
+          createdAt: "2026-08-03T00:00:00Z",
+          updatedAt: "2026-08-03T00:00:00Z",
+        },
+      ]),
+    });
+    const user = userEvent.setup();
+
+    renderChatRoute("/chat/ses_direct");
+    await user.click(await screen.findByRole("button", { name: "重命名会话 旧名字" }));
+    const field = screen.getByLabelText("会话名字");
+    await user.clear(field);
+    await user.type(field, "第一次{Enter}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("名字没有保存");
+    expect(field).toHaveFocus();
+    expect(field).not.toHaveAttribute("readonly");
+
+    await user.clear(field);
+    await user.type(field, "第二次{Enter}");
+    await waitFor(() => {
+      expect(renameChatSession).toHaveBeenCalledTimes(2);
+      expect(localRename).toHaveBeenCalledWith("ses_direct", "新名字");
+      expect(screen.getByRole("button", { name: "重命名会话 旧名字" })).toHaveFocus();
+    });
+  });
+
+  it("finishes a Chat rename the reader walked away from, rather than locking the row", async () => {
+    let settleRename:
+      | ((accepted: {
+          session_id: string;
+          title: string;
+          last_activity_at: string;
+        }) => void)
+      | undefined;
+    vi.mocked(renameChatSession).mockReturnValue(
+      new Promise((resolve) => {
+        settleRename = resolve;
+      }),
+    );
+    const localRename = vi.fn();
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn(), undefined, localRename),
+      state: initialChatState([
+        localSession("ses_direct", "旧名字"),
+        localSession("ses_other", "另一个会话", "2026-08-04T00:00:00Z"),
+      ]),
+    });
+    const user = userEvent.setup();
+
+    renderChatRoute("/chat/ses_direct");
+    await user.click(await screen.findByRole("button", { name: "重命名会话 旧名字" }));
+    const field = screen.getByLabelText("会话名字");
+    await user.clear(field);
+    await user.type(field, "新名字{Enter}");
+    await waitFor(() => expect(renameChatSession).toHaveBeenCalledTimes(1));
+
+    // The PATCH is still open, and the reader opens a different session. The
+    // row being renamed is in the sidebar, which /chat/ses_direct and
+    // /chat/ses_other show alike -- so the route moving is not news to it.
+    const other = screen.getByRole("link", { name: /另一个会话/ });
+    await user.click(other);
+    expect(
+      await screen.findByRole("heading", { name: "另一个会话" }),
+    ).toBeInTheDocument();
+
+    const finish = settleRename;
+    if (finish === undefined) throw new Error("Chat rename mock did not start");
+    await act(async () => {
+      finish({
+        session_id: "ses_direct",
+        title: "服务端规范名",
+        last_activity_at: "2026-08-03T00:00:00Z",
+      });
+      await Promise.resolve();
+    });
+
+    expect(localRename).toHaveBeenCalledWith("ses_direct", "服务端规范名");
+    // A row again. This is the regression: the continuation used to compare
+    // against the detail route it was submitted under and return early, which
+    // left `renamePending` set and the field `readOnly` until a reload.
+    await waitFor(() => {
+      expect(screen.queryByLabelText("会话名字")).not.toBeInTheDocument();
+    });
+    // And focus stayed where the reader put it, rather than being pulled back
+    // to a row they had already left.
+    await nextFrame();
+    expect(other).toHaveFocus();
+  });
+
+  it("still reports a failed Chat rename after the reader opened another session", async () => {
+    let failRename: ((cause: Error) => void) | undefined;
+    vi.mocked(renameChatSession).mockReturnValue(
+      new Promise((_resolve, reject) => {
+        failRename = reject;
+      }),
+    );
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: initialChatState([
+        localSession("ses_direct", "旧名字"),
+        localSession("ses_other", "另一个会话", "2026-08-04T00:00:00Z"),
+      ]),
+    });
+    const user = userEvent.setup();
+
+    renderChatRoute("/chat/ses_direct");
+    await user.click(await screen.findByRole("button", { name: "重命名会话 旧名字" }));
+    const field = screen.getByLabelText("会话名字");
+    await user.clear(field);
+    await user.type(field, "新名字{Enter}");
+    await waitFor(() => expect(renameChatSession).toHaveBeenCalledTimes(1));
+
+    const other = screen.getByRole("link", { name: /另一个会话/ });
+    await user.click(other);
+
+    const fail = failRename;
+    if (fail === undefined) throw new Error("Chat rename mock did not start");
+    await act(async () => {
+      fail(new Error("名字没有保存"));
+      await Promise.resolve();
+    });
+
+    // The row is where the failure belongs, and the row is still on screen.
+    expect(await screen.findByRole("alert")).toHaveTextContent("名字没有保存");
+    expect(screen.getByLabelText("会话名字")).not.toHaveAttribute("readonly");
+    // Retryable in place, without the caret being taken off what the reader
+    // moved to.
+    await nextFrame();
+    expect(other).toHaveFocus();
+  });
+
+  it("uses double-click only to open another Chat session, not to rename it", async () => {
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: initialChatState([
+        {
+          sessionId: "ses_direct",
+          title: "当前会话",
+          answerMode: "direct",
+          knowledgeBaseId: null,
+          createdAt: "2026-08-03T00:00:00Z",
+          updatedAt: "2026-08-03T00:00:00Z",
+        },
+        {
+          sessionId: "ses_other",
+          title: "另一个会话",
+          answerMode: "direct",
+          knowledgeBaseId: null,
+          createdAt: "2026-08-04T00:00:00Z",
+          updatedAt: "2026-08-04T00:00:00Z",
+        },
+      ]),
+    });
+    const user = userEvent.setup();
+
+    renderChatRoute("/chat/ses_direct");
+    await user.dblClick(await screen.findByRole("link", { name: /另一个会话/ }));
+
+    expect(await screen.findByRole("heading", { name: "另一个会话" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("会话名字")).not.toBeInTheDocument();
+    expect(renameChatSession).not.toHaveBeenCalled();
+  });
+
+  it("resolves a selected session outside the bounded recent list", async () => {
+    const reconcileServerSessions = vi.fn();
+    const runtime = fakeRuntime(
+      vi.fn(),
+      vi.fn(),
+      undefined,
+      undefined,
+      reconcileServerSessions,
+    );
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime,
+      state: initialChatState(),
+    });
+    vi.mocked(getChatSession).mockResolvedValue({
+      session_id: "ses_older",
+      title: "更早的会话",
+      last_activity_at: "2026-07-01T00:00:00Z",
+    });
+
+    renderChatRoute("/chat/ses_older");
+
+    await waitFor(() => {
+      expect(getChatSession).toHaveBeenCalledWith(
+        ALICE,
+        "ses_older",
+        expect.any(AbortSignal),
+      );
+      expect(reconcileServerSessions).toHaveBeenCalledWith([
+        {
+          session_id: "ses_older",
+          title: "更早的会话",
+          last_activity_at: "2026-07-01T00:00:00Z",
+        },
+      ]);
     });
   });
 
@@ -236,7 +534,7 @@ describe("Chat identity boundary", () => {
 
   it("falls back to a direct Ask when a linked knowledge base no longer exists", async () => {
     vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
-    vi.mocked(createChatSession).mockResolvedValue({ session_id: "ses_direct", title: null });
+    vi.mocked(createChatSession).mockResolvedValue({ session_id: "ses_direct" });
     const user = userEvent.setup();
 
     renderChatRoute("/chat?kb=kb_deleted");
@@ -498,15 +796,51 @@ function fakeRuntime(
   addLocalSession: () => void,
   startAsk: () => void,
   removeSession: () => Promise<void> = () => Promise.resolve(),
+  renameSession: (sessionId: string, title: string) => void = vi.fn(),
+  reconcileServerSessions: (sessions: unknown[]) => void = vi.fn(),
 ): ChatRuntime {
   return {
     addLocalSession,
     ensureHistory: vi.fn(),
+    reconcileServerSessions,
     reconnectSessionStream: vi.fn(),
     retainSessionStream: vi.fn(() => () => undefined),
     removeSession,
+    renameSession,
     startAsk,
   } as unknown as ChatRuntime;
+}
+
+/**
+ * Let one animation frame pass.
+ *
+ * Focus is handed back from inside `requestAnimationFrame`, so an assertion
+ * that focus was *not* taken proves nothing until a frame has run -- the
+ * unguarded version of that code passes such a test simply by being late.
+ */
+async function nextFrame() {
+  await act(async () => {
+    await new Promise((resolve) => {
+      window.requestAnimationFrame(() => {
+        resolve(undefined);
+      });
+    });
+  });
+}
+
+function localSession(
+  sessionId: string,
+  title: string,
+  updatedAt = "2026-08-03T00:00:00Z",
+) {
+  return {
+    sessionId,
+    title,
+    answerMode: "direct" as const,
+    knowledgeBaseId: null,
+    createdAt: "2026-08-03T00:00:00Z",
+    updatedAt,
+  };
 }
 
 function renderChatRoute(initialEntry: string) {

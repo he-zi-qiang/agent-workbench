@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -80,6 +80,12 @@ const ALICE: PrincipalIdentity = {
   scopes: ["workspace:write"],
 };
 
+const BOB: PrincipalIdentity = {
+  tenantId: "tenant_a",
+  principalId: "bob",
+  scopes: ["workspace:write"],
+};
+
 const SESSION = "ses_code_1";
 
 function mounted(entry: string = `/code/${SESSION}`) {
@@ -101,6 +107,23 @@ function mounted(entry: string = `/code/${SESSION}`) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+/**
+ * Let one animation frame pass.
+ *
+ * Focus is handed back from inside `requestAnimationFrame`, so an assertion
+ * that focus was *not* taken proves nothing until a frame has run -- the
+ * unguarded version of that code passes such a test simply by being late.
+ */
+async function nextFrame() {
+  await act(async () => {
+    await new Promise((resolve) => {
+      window.requestAnimationFrame(() => {
+        resolve(undefined);
+      });
+    });
+  });
 }
 
 /**
@@ -758,6 +781,12 @@ describe("CodePage", () => {
     // Once now, not twice. The digest existed to tell a reader what was inside
     // a closed fold; there is no fold, so the row speaks for itself.
     expect(within(turns).getAllByText("写入工作区")).toHaveLength(1);
+    const diagnostic = within(turns).getByText("诊断");
+    const raw = turns.querySelector(".aw-code-raw pre");
+    expect(raw).not.toBeVisible();
+    await user.click(diagnostic);
+    expect(raw).toBeVisible();
+    expect(raw).toHaveTextContent("ToolCompleted");
     // The file it produced is a card in the conversation, not a row in a pane
     // on the far side of the screen.
     const card = within(turns).getByRole("button", { name: /notes\.md/ });
@@ -931,7 +960,9 @@ describe("CodePage", () => {
       // 不是标记。
       // `^` 不能省：同一行上的删除按钮叫「删除会话 把 notes.md …」，
       // 不锚定开头的话两个都匹配得上。
-      within(recent).getByRole("button", { name: /^把 notes\.md 整理成清单/ }),
+      await within(recent).findByRole("button", {
+        name: /^把 notes\.md 整理成清单/,
+      }),
     );
 
     await waitFor(() => {
@@ -990,7 +1021,7 @@ describe("CodePage", () => {
     mounted("/code");
 
     expect(
-      await screen.findByRole("heading", { name: "开始一段编码" }),
+      await screen.findByRole("heading", { name: "开始编码" }),
     ).toBeInTheDocument();
     // The recent list is unfolded here -- "where was I" is the likeliest
     // question a person with no session open is asking.
@@ -998,7 +1029,7 @@ describe("CodePage", () => {
       name: "最近的编码会话",
     });
     expect(
-      within(recent).getByRole("button", { name: "把 notes.md 整理成清单" }),
+      await within(recent).findByRole("button", { name: "把 notes.md 整理成清单" }),
     ).toBeInTheDocument();
     // No panes about a session that does not exist.
     expect(
@@ -1007,9 +1038,9 @@ describe("CodePage", () => {
     expect(
       screen.queryByRole("region", { name: "编码会话" }),
     ).not.toBeInTheDocument();
-    // Upload waits for the first sentence; the session it would go into does
-    // not exist yet.
-    expect(screen.getByLabelText(/上传/)).toBeDisabled();
+    // Upload only appears after the first sentence creates a workspace. A
+    // disabled paperclip on the start page was a control with no useful action.
+    expect(screen.queryByLabelText(/上传/)).not.toBeInTheDocument();
   });
 
   it("opens the session on the first sentence and runs the turn in it", async () => {
@@ -1036,6 +1067,18 @@ describe("CodePage", () => {
       expect(vi.mocked(askCode).mock.calls[0]?.[1]).toBe(SESSION);
     });
     expect(vi.mocked(createCodeSession)).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows visible progress while the first session is being created", async () => {
+    const user = userEvent.setup();
+    vi.mocked(createCodeSession).mockReturnValue(new Promise(() => undefined));
+
+    mounted("/code");
+    await user.type(screen.getByLabelText("要做的事"), "write notes.md");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const pending = screen.getByRole("button", { name: "正在处理" });
+    expect(pending.querySelector(".aw-spin")).toBeInTheDocument();
   });
 
   it("keeps the sentence on screen for the whole of the turn that opened the session", async () => {
@@ -1144,7 +1187,7 @@ describe("CodePage", () => {
 
     mounted();
     const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
-    const remove = within(recent).getByRole("button", {
+    const remove = await within(recent).findByRole("button", {
       name: "删除会话 把 notes.md 整理成清单",
     });
 
@@ -1160,6 +1203,148 @@ describe("CodePage", () => {
     });
   });
 
+  it("sends the reader to the start page when the session they are viewing is deleted", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [{ session_id: SESSION, title: "第一句指令", last_activity_at: null }],
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    mounted();
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.click(
+      await within(recent).findByRole("button", { name: "删除会话 第一句指令" }),
+    );
+
+    // The control for the case below: a delete that lands while its own
+    // session is on screen still has to move the reader off it.
+    expect(
+      await screen.findByRole("heading", { name: "开始编码" }),
+    ).toBeInTheDocument();
+  });
+
+  it("leaves the reader in the session they opened while a delete was in flight", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: "ses_code_older",
+          title: "把 notes.md 整理成清单",
+          last_activity_at: null,
+        },
+      ],
+    });
+    let settleDelete: ((deleted: { session_id: string }) => void) | undefined;
+    vi.mocked(deleteCodeSession).mockReturnValue(
+      new Promise((resolve) => {
+        settleDelete = resolve;
+      }),
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    mounted();
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.click(
+      await within(recent).findByRole("button", { name: "删除会话 第一句指令" }),
+    );
+    await waitFor(() => expect(deleteCodeSession).toHaveBeenCalledTimes(1));
+
+    // A DELETE and the list refresh behind it are two round trips, and the
+    // rail stays clickable for both.
+    await user.click(
+      within(recent).getByRole("button", { name: "把 notes.md 整理成清单" }),
+    );
+    await waitFor(() => {
+      expect(
+        within(recent).getByRole("button", {
+          current: "page",
+          name: "把 notes.md 整理成清单",
+        }),
+      ).toBeInTheDocument();
+    });
+
+    const finish = settleDelete;
+    if (finish === undefined) throw new Error("Code delete mock did not start");
+    await act(async () => {
+      finish({ session_id: SESSION });
+      await Promise.resolve();
+    });
+    // A frame, so that "did not navigate" is a fact rather than a head start:
+    // the DELETE's continuation runs behind a list refresh.
+    await nextFrame();
+
+    // This is the regression. The callback closed over the session that was
+    // open when the trash was clicked, so `target === sessionId` was still
+    // true a second later and the reader was sent to /code for nothing.
+    expect(
+      within(recent).getByRole("button", {
+        current: "page",
+        name: "把 notes.md 整理成清单",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "开始编码" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not report a delete that failed under one principal on the next one's page", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [{ session_id: SESSION, title: "第一句指令", last_activity_at: null }],
+    });
+    let failDelete: ((cause: Error) => void) | undefined;
+    vi.mocked(deleteCodeSession).mockReturnValue(
+      new Promise((_resolve, reject) => {
+        failDelete = reject;
+      }),
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    // Rendered by hand rather than through `mounted()`: the identity has to
+    // change *without* remounting the page, which is what the identity editor
+    // actually does to a console left open on a session.
+    const queries = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const tree = () => (
+      <QueryClientProvider client={queries}>
+        <MemoryRouter initialEntries={[`/code/${SESSION}`]}>
+          <Routes>
+            <Route element={<CodePage />} path="/code/:sessionId?" />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const view = render(tree());
+
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.click(
+      await within(recent).findByRole("button", { name: "删除会话 第一句指令" }),
+    );
+    await waitFor(() => expect(deleteCodeSession).toHaveBeenCalledTimes(1));
+
+    vi.mocked(useIdentity).mockReturnValue({
+      identity: BOB,
+      setIdentity: vi.fn(),
+      editorOpen: false,
+      setEditorOpen: vi.fn(),
+    } as unknown as ReturnType<typeof useIdentity>);
+    view.rerender(tree());
+
+    const fail = failDelete;
+    if (fail === undefined) throw new Error("Code delete mock did not start");
+    await act(async () => {
+      fail(new Error("这个会话删不掉"));
+      await Promise.resolve();
+    });
+    await nextFrame();
+
+    // Alice's refusal is not Bob's news, and the page he is looking at is not
+    // where it could be acted on.
+    expect(screen.queryByText("这个会话删不掉")).not.toBeInTheDocument();
+  });
+
   it("marks the session being viewed, even when it has no name yet", async () => {
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [{ session_id: SESSION, title: null, last_activity_at: null }],
@@ -1168,14 +1353,12 @@ describe("CodePage", () => {
     mounted();
 
     const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
-    expect(within(recent).getByRole("button", { current: "page" })).toBeInTheDocument();
+    expect(
+      await within(recent).findByRole("button", { current: "page" }),
+    ).toBeInTheDocument();
   });
 
-  it("lets Esc out of a rename nobody meant to start", async () => {
-    // The field opens on a double-click, which is easy to hit by accident and
-    // impossible to reach from a keyboard. Before this, the only way out was
-    // clicking elsewhere -- the mouse's exit, offered to the one user who did
-    // not arrive by mouse. Esc leaves the name alone and sends nothing.
+  it("returns focus to the Code rename action when Escape cancels editing", async () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
@@ -1186,19 +1369,25 @@ describe("CodePage", () => {
     mounted();
 
     const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
-    await user.dblClick(within(recent).getByRole("button", { name: "第一句指令" }));
+    await user.click(
+      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+    );
     await user.type(within(recent).getByLabelText("会话名字"), "改了一半{Escape}");
 
     expect(within(recent).queryByLabelText("会话名字")).not.toBeInTheDocument();
     expect(
       within(recent).getByRole("button", { name: "第一句指令" }),
     ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        within(recent).getByRole("button", { name: "重命名会话 第一句指令" }),
+      ).toHaveFocus();
+    });
     expect(vi.mocked(renameCodeSession)).not.toHaveBeenCalled();
   });
 
-  it("says how to rename, because a double-click announces nothing", async () => {
-    // The gesture worked long before anything on screen mentioned it, which
-    // made it a feature only its author could find.
+  it("offers an explicit keyboard-accessible rename action", async () => {
+    const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
         { session_id: SESSION, title: "第一句指令", last_activity_at: null },
@@ -1208,7 +1397,10 @@ describe("CodePage", () => {
     mounted();
 
     const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
-    expect(within(recent).getByText(/双击改名/)).toBeInTheDocument();
+    await user.click(
+      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+    );
+    expect(within(recent).getByLabelText("会话名字")).toBeInTheDocument();
   });
 
   it("renames a session to what a person called it", async () => {
@@ -1230,7 +1422,9 @@ describe("CodePage", () => {
     mounted();
 
     const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
-    await user.dblClick(within(recent).getByRole("button", { name: "第一句指令" }));
+    await user.click(
+      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+    );
     const field = within(recent).getByLabelText("会话名字");
     await user.clear(field);
     await user.type(field, "重构工作区{Enter}");
@@ -1248,6 +1442,123 @@ describe("CodePage", () => {
     expect(
       await within(recent).findByRole("button", { name: "重构工作区" }),
     ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        within(recent).getByRole("button", { name: "重命名会话 重构工作区" }),
+      ).toHaveFocus();
+    });
+  });
+
+  it("keeps a failed Code rename inline, focused, and retryable", async () => {
+    const user = userEvent.setup();
+    vi.mocked(renameCodeSession).mockRejectedValueOnce(new Error("名字没有保存"));
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+      ],
+    });
+
+    mounted();
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.click(
+      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+    );
+    const field = within(recent).getByLabelText("会话名字");
+    await user.clear(field);
+    await user.type(field, "第一次{Enter}");
+
+    expect(await within(recent).findByRole("alert")).toHaveTextContent("名字没有保存");
+    expect(field).toHaveFocus();
+    expect(field).not.toHaveAttribute("readonly");
+
+    await user.clear(field);
+    await user.type(field, "第二次{Escape}");
+    await waitFor(() => {
+      expect(
+        within(recent).getByRole("button", { name: "重命名会话 第一句指令" }),
+      ).toHaveFocus();
+    });
+  });
+
+  it("does not pull focus back to a Code row the reader left mid-rename", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: "ses_code_older",
+          title: "把 notes.md 整理成清单",
+          last_activity_at: null,
+        },
+      ],
+    });
+    let settleRename:
+      | ((accepted: {
+          session_id: string;
+          title: string | null;
+          last_activity_at: string | null;
+        }) => void)
+      | undefined;
+    vi.mocked(renameCodeSession).mockReturnValue(
+      new Promise((resolve) => {
+        settleRename = resolve;
+      }),
+    );
+
+    mounted();
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.click(
+      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+    );
+    const field = within(recent).getByLabelText("会话名字");
+    await user.clear(field);
+    await user.type(field, "重构工作区{Enter}");
+    await waitFor(() => expect(renameCodeSession).toHaveBeenCalledTimes(1));
+
+    // `onBlur` declines to cancel while a rename is pending -- deliberately,
+    // so the request keeps its row -- which is exactly why the round trip can
+    // end somewhere the reader no longer is.
+    const other = within(recent).getByRole("button", {
+      name: "把 notes.md 整理成清单",
+    });
+    await user.click(other);
+
+    const finish = settleRename;
+    if (finish === undefined) throw new Error("Code rename mock did not start");
+    await act(async () => {
+      finish({
+        session_id: SESSION,
+        title: "重构工作区",
+        last_activity_at: null,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(within(recent).queryByLabelText("会话名字")).not.toBeInTheDocument();
+    });
+    await nextFrame();
+    expect(other).toHaveFocus();
+  });
+
+  it("uses double-click only to open another Code session, not to rename it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        { session_id: SESSION, title: "当前会话", last_activity_at: null },
+        { session_id: "ses_code_2", title: "另一个会话", last_activity_at: null },
+      ],
+    });
+
+    mounted();
+    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    await user.dblClick(
+      await within(recent).findByRole("button", { name: "另一个会话" }),
+    );
+
+    expect(await screen.findByRole("heading", { name: "另一个会话" })).toBeInTheDocument();
+    expect(within(recent).queryByLabelText("会话名字")).not.toBeInTheDocument();
+    expect(renameCodeSession).not.toHaveBeenCalled();
   });
 
   it("shows a produced code file's contents in the conversation, unasked", async () => {
