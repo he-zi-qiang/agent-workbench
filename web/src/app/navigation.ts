@@ -27,17 +27,27 @@ export interface QuickDestination {
   icon: LucideIcon;
 }
 
+/** Match a route root or one of its descendants, never a lookalike prefix. */
+export function isPathWithin(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
 export const NAVIGATION = [
-  // One entry for two routes. `covers` is what marks it current on `/work`
-  // too -- a `NavLink to="/chat"` is not, and a rail item that goes dark the
-  // moment you open the 任务 tab is a rail that disagrees with the page.
   {
     to: "/chat",
-    label: "工作台",
-    description: "对话与可恢复任务",
+    label: "对话",
+    description: "直接提问，或依据知识库回答",
     icon: MessageSquare,
     primary: true,
-    covers: ["/chat", "/work"],
+    covers: ["/chat"],
+  },
+  {
+    to: "/work",
+    label: "任务",
+    description: "提交并追踪可恢复的自动化工作流",
+    icon: ListTodo,
+    primary: true,
+    covers: ["/work"],
   },
   {
     to: "/code",
@@ -81,41 +91,26 @@ export const NAVIGATION = [
   },
 ] as const satisfies readonly NavigationItem[];
 
-/* The rail deliberately presents Chat and Work as one product area. The quick
- * switcher has a different job: get a person to an exact destination without
- * making them take that second navigation step, so its list splits the pair. */
 export const QUICK_DESTINATIONS = [
-  {
-    to: "/chat",
-    label: "对话",
-    group: "工作台",
-    description: "直接提问，或带知识库依据回答",
-    keywords: "chat 聊天 问答 会话",
-    icon: MessageSquare,
-  },
-  {
-    to: "/work",
-    label: "任务",
-    group: "工作台",
-    description: "提交并追踪可恢复的自动化工作流",
-    keywords: "work task 工作流 任务 时间线",
-    icon: ListTodo,
-  },
-  ...NAVIGATION.slice(1).map((item) => ({
+  ...NAVIGATION.map((item) => ({
     to: item.to,
     label: item.label,
-    group: item.primary ? "工作" : "项目工具",
+    group: item.primary ? "工作" : "资源与工具",
     description: item.description,
     keywords:
-      item.to === "/code"
-        ? "coding 编码 文件 工作区"
-        : item.to === "/knowledge"
-          ? "knowledge rag 文档 资料 上传"
-          : item.to === "/evaluation"
-            ? "eval benchmark 评测 报告"
-            : item.to === "/computer"
-              ? "computer screen 屏幕 权限 安全"
-              : "system health status 健康 服务 身份",
+      item.to === "/chat"
+        ? "chat 聊天 问答 会话"
+        : item.to === "/work"
+          ? "work task 工作流 任务 时间线"
+          : item.to === "/code"
+            ? "coding 编码 文件 工作区"
+            : item.to === "/knowledge"
+              ? "knowledge rag 文档 资料 上传"
+              : item.to === "/evaluation"
+                ? "eval benchmark 评测 报告"
+                : item.to === "/computer"
+                  ? "computer screen 屏幕 权限 安全"
+                  : "system health status 健康 服务 身份",
     icon: item.icon,
   })),
 ] as const satisfies readonly QuickDestination[];

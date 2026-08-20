@@ -134,9 +134,9 @@
    * 里「抬起」仍然由更亮表达（光从上方来），把卡片做得比画布更暗会让每张卡读成
    * 一个凹槽。深色的中性也保持暖偏——#17 16 14 的红绿蓝是递减的，和浅色一侧
    * 的 #f2 f0 eb 同一个方向，橙色落上去才不发脏。 */
-  --aw-canvas: light-dark(#f2f0eb, #171614);
-  --aw-window: light-dark(#f2f0eb, #171614);
-  --aw-sidebar: light-dark(#f7f5f1, #1c1a18);
+  --aw-canvas: light-dark(#f0ede7, #171614);
+  --aw-window: light-dark(#fbfaf8, #171614);
+  --aw-sidebar: light-dark(#f5f2ec, #1c1a18);
   --aw-panel: light-dark(#ffffff, #221f1d);
 
   /* The raised-chip surface. Referenced by the workbench tabs since they
@@ -144,8 +144,8 @@
      resolved to #fff on a #f7f7f5 container, which is why the active tab
      was indistinguishable from its neighbours. */
   --aw-surface: light-dark(#ffffff, #221f1d);
-  --aw-panel-soft: light-dark(#f2f0eb, #1c1a18);
-  --aw-panel-strong: light-dark(#eceae4, #2a2724);
+  --aw-panel-soft: light-dark(#f4f1eb, #1c1a18);
+  --aw-panel-strong: light-dark(#eae6df, #2a2724);
 
   /* 凹面：代码块、被引的原文这类「陷进去」的底。同样此前只以 fallback 存在，
      而那个 fallback 是 `rgb(0 0 0 / 4%)`——一个在深色底上等于什么都没画的值。 */
@@ -201,18 +201,10 @@
   --aw-accent-hover: light-dark(#c96545, #ec9c7c);
   --aw-accent-soft: light-dark(#fbf0ea, #2e1f18);
 
-  /* 落在实心橙上的字色，两个主题里不是同一个方向。
-   *
-   * 浅色沿用白字：这是产品身份，橙底白字是这套界面从第一版起就是的样子。
-   * 深色不能照抄——深色里的橙必须提亮到 #e08a66 才不至于糊在暗底上，而白字
-   * 落在 #e08a66 上只有 2.6:1，是这个界面里唯一一处会真正读不出来的字。所以
-   * 深色反过来用近黑的 #1d1411，对比度 9:1。
-   *
-   * 需要说清的是浅色这一侧并不达标：白字落在 #d97757 上是 3.5:1，低于正文的
-   * 4.5:1 线。它是被知情保留的，不是被漏掉的——把它改达标要么让浅色主按钮变成
-   * 橙底黑字（不是这个产品的样子），要么把动作色整体压暗（那是换一个身份色）。
-   * 记在这里，是为了下一次有人碰它时知道这是一个决定。 */
-  --aw-accent-on: light-dark(#ffffff, #1d1411);
+  /* 动作色保持 Claude-like 的暖橙，但两套主题都用近黑文字。白字落在浅色橙上
+     只有 3.5:1，不能承载普通按钮文本；近黑字既保留动作色，也让主按钮、Logo
+     与焦点环共享一套可读前景。 */
+  --aw-accent-on: light-dark(#2b1710, #1d1411);
 
   --aw-success: light-dark(#2f7a54, #6cba8b);
   --aw-success-soft: light-dark(#edf5f0, #14241b);
@@ -288,6 +280,11 @@
   --aw-radius-md: 12px;
   --aw-radius-lg: 16px;
   --aw-radius-xl: 20px;
+
+  /* 桌面壳层只有两档：Codex 式紧凑模式栏，以及需要识别全部功能时的展开态。
+     页面自己的会话栏仍在，所以展开宽度刻意封在 208px，避免双侧栏吞掉阅读列。 */
+  --aw-nav-width: 208px;
+  --aw-nav-width-collapsed: 64px;
 
   /* --- 动效 -------------------------------------------------------------
    *

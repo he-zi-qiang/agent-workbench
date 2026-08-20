@@ -371,10 +371,10 @@ describe("WorkPage task submission", () => {
     vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
 
     renderWorkPage();
-    await screen.findByRole("tab", { name: "全部" });
+    await screen.findByRole("button", { name: "全部" });
     vi.mocked(listTasks).mockClear();
 
-    await user.click(screen.getByRole("tab", { name: "失败" }));
+    await user.click(screen.getByRole("button", { name: "失败" }));
 
     await waitFor(() => {
       expect(vi.mocked(listTasks)).toHaveBeenCalled();
@@ -395,10 +395,10 @@ describe("WorkPage task submission", () => {
     vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
 
     renderWorkPage();
-    await screen.findByRole("tab", { name: "在跑" });
+    await screen.findByRole("button", { name: "在跑" });
     vi.mocked(listTasks).mockClear();
 
-    await user.click(screen.getByRole("tab", { name: "在跑" }));
+    await user.click(screen.getByRole("button", { name: "在跑" }));
 
     await waitFor(() => {
       expect(vi.mocked(listTasks)).toHaveBeenCalled();

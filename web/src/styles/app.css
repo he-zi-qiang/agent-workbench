@@ -299,7 +299,7 @@ a {
 /* --- 全局快速跳转 -------------------------------------------------------
  *
  * rail 告诉人「这里有哪些大区」，这个面板回答另一个问题：「我知道要去哪，怎样
- * 少走一步」。所以工作台在 rail 上仍是一项，在这里拆成对话与任务两个精确目的地。
+ * 少走一步」。对话、任务与 Code 都是精确目的地，这里再按名称与用途搜索它们。
  * 搜索只发生在浏览器内的七条静态页面定义上，不读历史、不把用户输入发给后端。 */
 .aw-command-backdrop {
   position: fixed;
@@ -5672,73 +5672,6 @@ p.aw-code-step-thought {
   border: 0;
   background: var(--aw-scrim-soft);
   cursor: default;
-}
-
-/* The workbench: a tab strip over whichever flow is showing. */
-.aw-workbench {
-  display: grid;
-  min-height: 0;
-  height: 100%;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-/* 屏名与标签是一行，外边距归这一行管——此前它挂在标签条自己身上，加了屏名
-   之后那个 margin 会把两者推成上下两块。 */
-.aw-workbench-head {
-  display: flex;
-  align-items: center;
-  align-self: start;
-  margin: 12px 0 0 18px;
-  gap: 12px;
-}
-
-.aw-workbench-name {
-  font-family: var(--aw-display);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.aw-workbench-tabs {
-  display: inline-flex;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--aw-border);
-  border-radius: 9px;
-  background: var(--aw-panel-soft);
-}
-
-.aw-workbench-tab {
-  /* The transparent border reserves the active state's box, so switching
-     tabs never nudges the strip by 1px. */
-  padding: 5px 16px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  color: var(--aw-text-soft);
-  font-size: 13px;
-  text-decoration: none;
-}
-
-.aw-workbench-tab:hover {
-  color: var(--aw-text);
-}
-
-/* A white pill on a #f7f7f5 container is a 3/255 delta -- nobody can see
-   it, and "对话 or 任务?" was answered only by font weight. The accent
-   underline plus a real border is the cue that survives any monitor. */
-.aw-workbench-tab[aria-current="page"] {
-  border-color: var(--aw-border);
-  background: var(--aw-surface);
-  color: var(--aw-text);
-  box-shadow: inset 0 -2px 0 var(--aw-accent), var(--aw-shadow-sm);
-  font-weight: 600;
-}
-
-@media (width <= 900px) {
-  .aw-workbench-head {
-    margin: 8px 0 0 12px;
-    gap: 10px;
-  }
 }
 
 /* Starting an evaluation, and watching the one that is running. */

@@ -6,7 +6,7 @@ export function IconButton({
   label,
   children,
   onClick,
-  active = false,
+  active,
   disabled = false,
   className = "",
 }: PropsWithChildren<{

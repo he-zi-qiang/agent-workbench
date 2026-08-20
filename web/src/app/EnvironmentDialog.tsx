@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import type { PrincipalIdentity } from "../api/types";
 import { IconButton } from "../components/ui";
@@ -30,6 +30,43 @@ function EnvironmentDialogContent({
   onSave: (identity: PrincipalIdentity) => void;
 }) {
   const [draft, setDraft] = useState(identity);
+  const dialogRef = useRef<HTMLElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
+
+  useEffect(() => {
+    const focusTarget = returnFocus.current;
+    const firstField = dialogRef.current?.querySelector<HTMLElement>("input");
+    firstField?.focus();
+    return () => {
+      window.requestAnimationFrame(() => focusTarget?.focus());
+    };
+  }, []);
+
+  const handleDialogKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== "Tab" || dialogRef.current === null) return;
+    const focusable = Array.from(
+      dialogRef.current.querySelectorAll<HTMLElement>(
+        'input:not([disabled]), button:not([disabled])',
+      ),
+    );
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (first === undefined || last === undefined) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   const save = () => {
     onSave({
@@ -45,7 +82,9 @@ function EnvironmentDialogContent({
         aria-labelledby="environment-title"
         aria-modal="true"
         className="aw-dialog"
+        onKeyDown={handleDialogKeyDown}
         onMouseDown={(event) => event.stopPropagation()}
+        ref={dialogRef}
         role="dialog"
       >
         <header>

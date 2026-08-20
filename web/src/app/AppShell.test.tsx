@@ -1,10 +1,42 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import {
+  Link,
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 import { AppShell } from "./AppShell";
 import { IdentityProvider } from "./IdentityContext";
 import { THEME_STORAGE_KEY, ThemeProvider } from "./ThemeContext";
+
+beforeEach(() => {
+  localStorage.removeItem("aw.identity.v4");
+});
+
+function PathProbe({ chatLink = false }: { chatLink?: boolean }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <output aria-label="当前路径">{location.pathname}</output>
+      {chatLink ? <Link to="/chat/session-b">打开 B 会话</Link> : null}
+      <button onClick={() => void navigate(-1)} type="button">浏览器后退</button>
+    </>
+  );
+}
+
+function SystemProbe() {
+  return (
+    <>
+      <p>System page</p>
+      <PathProbe />
+    </>
+  );
+}
 
 describe("AppShell mobile navigation", () => {
   it("makes every auxiliary project page reachable from More", async () => {
@@ -57,9 +89,20 @@ describe("AppShell rail", () => {
           <MemoryRouter initialEntries={[at]}>
             <Routes>
               <Route element={<AppShell />}>
-                <Route element={<p>Chat page</p>} path="/chat" />
-                <Route element={<p>Work page</p>} path="/work" />
-                <Route element={<p>Code page</p>} path="/code" />
+                <Route
+                  element={<><p>Chat page</p><PathProbe chatLink /></>}
+                  path="/chat/:sessionId?"
+                />
+                <Route
+                  element={<><p>Work page</p><PathProbe /><Link to="/work/task-a">打开 A 任务</Link></>}
+                  path="/work/:taskId?"
+                />
+                <Route
+                  element={<><p>Code page</p><PathProbe /></>}
+                  path="/code/:sessionId?"
+                />
+                <Route element={<SystemProbe />} path="/system" />
+                <Route element={<><p>Fallback page</p><PathProbe /></>} path="*" />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -68,49 +111,183 @@ describe("AppShell rail", () => {
     );
   }
 
-  it("marks 工作台 as current on the task half too", () => {
+  it("marks 任务 as its own current primary flow", () => {
     mounted("/work");
 
-    // One rail entry stands for two routes now. Its `to` is `/chat`, so the
-    // default link matching leaves it dark the moment somebody opens the 任务
-    // tab -- a rail that disagrees with the page it is showing.
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    expect(rail.getByRole("link", { name: "工作台" })).toHaveAttribute(
+    expect(rail.getByRole("link", { name: "任务" })).toHaveAttribute(
       "aria-current",
       "page",
+    );
+    expect(rail.getByRole("link", { name: "对话" })).not.toHaveAttribute(
+      "aria-current",
     );
     expect(rail.getByRole("link", { name: "Code" })).not.toHaveAttribute(
       "aria-current",
     );
   });
 
-  it("groups 工作台 and Code above the rail's dividing line", () => {
+  it("groups the three primary flows above the rail's dividing line", () => {
     mounted("/chat");
 
-    // The two primary flows are one group, and the line belongs under them
-    // rather than between them. It used to be pinned to `index === 1`, which
-    // drew it above Code and separated the pair it was meant to join.
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
     const wrapperOf = (name: string) =>
       rail.getByRole("link", { name }).parentElement;
 
-    expect(wrapperOf("工作台")).not.toHaveClass("aw-nav-divider");
+    expect(wrapperOf("对话")).not.toHaveClass("aw-nav-divider");
+    expect(wrapperOf("任务")).not.toHaveClass("aw-nav-divider");
     expect(wrapperOf("Code")).not.toHaveClass("aw-nav-divider");
     // The first entry that is not a primary flow is where the group ends.
     expect(wrapperOf("知识库")).toHaveClass("aw-nav-divider");
   });
 
-  it("offers two top-level flows, not three", () => {
+  it("offers Chat, Task and Code as three top-level flows", () => {
     mounted("/chat");
 
-    // The control for the item above: with 工作台 covering two routes, a rail
-    // that still listed Chat and Work separately would satisfy the current
-    // marking and contradict the tab strip.
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
     expect(rail.queryByRole("link", { name: "Chat" })).not.toBeInTheDocument();
     expect(rail.queryByRole("link", { name: "Work" })).not.toBeInTheDocument();
-    expect(rail.getByRole("link", { name: "工作台" })).toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "对话" })).toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "任务" })).toBeInTheDocument();
     expect(rail.getByRole("link", { name: "Code" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["/chat/session-42", "任务", "对话"],
+    ["/work/task-42", "Code", "任务"],
+    ["/code/session-42", "对话", "Code"],
+  ])("returns from %s to the last open item", async (start, away, back) => {
+    const user = userEvent.setup();
+    mounted(start);
+
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    await user.click(rail.getByRole("link", { name: away }));
+
+    expect(rail.getByRole("link", { name: back })).toHaveAttribute(
+      "href",
+      start,
+    );
+    await user.click(rail.getByRole("link", { name: back }));
+    expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(start);
+  });
+
+  it.each([
+    ["/workflow", "任务", "/work"],
+    ["/code-review", "Code", "/code"],
+  ])("does not treat the lookalike path %s as a flow", (start, label, root) => {
+    mounted(start);
+
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    expect(rail.getByRole("link", { name: label })).not.toHaveAttribute(
+      "aria-current",
+    );
+    expect(rail.getByRole("link", { name: label })).toHaveAttribute("href", root);
+  });
+
+  it("keeps primary history isolated when identities change", async () => {
+    const user = userEvent.setup();
+    mounted("/chat/session-a");
+
+    const switchPrincipal = async (principal: string) => {
+      await user.click(screen.getByRole("button", { name: "环境" }));
+      const dialog = within(screen.getByRole("dialog", { name: "本地身份模拟器" }));
+      const principalField = dialog.getByLabelText("Principal");
+      await user.clear(principalField);
+      await user.type(principalField, principal);
+      await user.click(dialog.getByRole("button", { name: "应用身份" }));
+    };
+
+    await switchPrincipal("user_b");
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+        "/chat",
+      ),
+    );
+    await user.click(screen.getByRole("link", { name: "打开 B 会话" }));
+    expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+      "/chat/session-b",
+    );
+
+    await switchPrincipal("user_local");
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+        "/chat/session-a",
+      ),
+    );
+    await switchPrincipal("user_b");
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+        "/chat/session-b",
+      ),
+    );
+  });
+
+  it("does not adopt an old primary URL after switching identity on a utility page", async () => {
+    const user = userEvent.setup();
+    mounted("/chat/session-a");
+
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    await user.click(rail.getByRole("link", { name: "运行状态" }));
+    expect(screen.getByText("System page")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "环境" }));
+    const dialog = within(screen.getByRole("dialog", { name: "本地身份模拟器" }));
+    const principalField = dialog.getByLabelText("Principal");
+    await user.clear(principalField);
+    await user.type(principalField, "user_b");
+    await user.click(dialog.getByRole("button", { name: "应用身份" }));
+
+    await user.click(screen.getByRole("button", { name: "浏览器后退" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+        "/chat",
+      ),
+    );
+    expect(rail.getByRole("link", { name: "对话" })).toHaveAttribute(
+      "href",
+      "/chat",
+    );
+  });
+
+  it("rejects repeated POP entries owned by the previous identity", async () => {
+    const user = userEvent.setup();
+    mounted("/chat/session-a");
+
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    await user.click(rail.getByRole("link", { name: "任务" }));
+    await user.click(screen.getByRole("link", { name: "打开 A 任务" }));
+    expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+      "/work/task-a",
+    );
+
+    await user.click(screen.getByRole("button", { name: "环境" }));
+    const dialog = within(screen.getByRole("dialog", { name: "本地身份模拟器" }));
+    const principalField = dialog.getByLabelText("Principal");
+    await user.clear(principalField);
+    await user.type(principalField, "user_b");
+    await user.click(dialog.getByRole("button", { name: "应用身份" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+        "/work",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "浏览器后退" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+        "/work",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "浏览器后退" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+        "/chat",
+      ),
+    );
+    expect(rail.getByRole("link", { name: "对话" })).toHaveAttribute(
+      "href",
+      "/chat",
+    );
   });
 });
 

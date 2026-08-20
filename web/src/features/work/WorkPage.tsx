@@ -17,7 +17,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   cancelTask,
@@ -762,6 +762,11 @@ export function WorkPage() {
           id="aw-create-task-form"
           onSubmit={handleCreate}
         >
+          <header className="aw-create-task-head">
+            <span className="aw-eyebrow">NEW TASK</span>
+            <h2>把一段复杂工作交给 Agent</h2>
+            <p>描述结果，而不是操作步骤。任务会保留进度，并在需要时等待你的决定。</p>
+          </header>
           <label htmlFor="work-objective">目标</label>
           <textarea
             id="work-objective"
@@ -923,14 +928,13 @@ export function WorkPage() {
           ) : null}
         </form>
 
-        <div className="aw-task-filters" role="tablist" aria-label="任务筛选">
+        <div className="aw-task-filters" role="group" aria-label="任务筛选">
           {TASK_FILTERS.map((entry) => (
             <button
-              aria-selected={taskFilter === entry.id}
+              aria-pressed={taskFilter === entry.id}
               className={taskFilter === entry.id ? "is-active" : ""}
               key={entry.id}
               onClick={() => setTaskFilter(entry.id)}
-              role="tab"
               type="button"
             >
               {entry.label}
@@ -945,15 +949,12 @@ export function WorkPage() {
           ) : null}
           {tasks.map((task) => (
             <div className="aw-task-list-row" key={task.task_id}>
-              <button
+              <Link
                 aria-current={task.task_id === selectedTaskId ? "page" : undefined}
                 className={`aw-task-list-item ${
                   task.task_id === selectedTaskId ? "is-active" : ""
                 }`}
-                onClick={() =>
-                  void navigate(`/work/${encodeURIComponent(task.task_id)}`)
-                }
-                type="button"
+                to={`/work/${encodeURIComponent(task.task_id)}`}
               >
                 <span>
                   {/* The objective when the server recorded one, because a list
@@ -971,7 +972,7 @@ export function WorkPage() {
                   </small>
                 </span>
                 <StatusPill status={task.status} />
-              </button>
+              </Link>
               {/* Offered only on a settled Task, because the server refuses
                   anything else with a 409 -- and a button whose only outcome is
                   an error teaches the reader the wrong rule. Cancelling is how

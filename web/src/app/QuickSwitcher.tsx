@@ -6,7 +6,11 @@ import {
   useState,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { QUICK_DESTINATIONS, type QuickDestination } from "./navigation";
+import {
+  isPathWithin,
+  QUICK_DESTINATIONS,
+  type QuickDestination,
+} from "./navigation";
 
 interface QuickSwitcherProps {
   currentPath: string;
@@ -127,7 +131,7 @@ export function QuickSwitcher({ currentPath, onClose }: QuickSwitcherProps) {
           ) : (
             destinations.map((destination, index) => {
               const Icon = destination.icon;
-              const current = currentPath.startsWith(destination.to);
+              const current = isPathWithin(currentPath, destination.to);
               return (
                 <button
                   aria-selected={index === activeIndex}

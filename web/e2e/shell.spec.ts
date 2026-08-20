@@ -48,7 +48,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("工作台的两个标签与 Code 在桌面和移动布局中均可使用", async ({
+test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   page,
 }, testInfo) => {
   await page.goto("/ui/");
@@ -86,15 +86,11 @@ test("工作台的两个标签与 Code 在桌面和移动布局中均可使用",
     await expect(sessions).toBeHidden();
   }
 
-  // The 任务 half is a tab inside the workbench now, not a rail entry. The rail
-  // still marks 工作台 as current on it, which is the thing that ships broken if
-  // nobody looks: the entry's href is /chat and the page is /work.
-  const tabs = page.getByRole("navigation", { name: "工作台" });
-  await tabs.getByRole("link", { name: "任务" }).click();
+  await activeNavigation.getByRole("link", { name: "任务" }).click();
 
   await expect(page).toHaveURL(/#\/work$/);
   await expect(
-    activeNavigation.getByRole("link", { name: "工作台" }),
+    activeNavigation.getByRole("link", { name: "任务" }),
   ).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "任务", exact: true })).toBeVisible();
   // 提交入口现在是按钮不是标题：表单收在它后面，没有选中任务时默认展开——所以
@@ -127,7 +123,7 @@ test("工作台的两个标签与 Code 在桌面和移动布局中均可使用",
   // A tab strip added above a `100dvh` grid pushes it out by exactly its own
   // height, and `toBeVisible()` reports an element that has been pushed off the
   // bottom as visible -- so this is the assertion that catches a botched row.
-  await activeNavigation.getByRole("link", { name: "工作台" }).click();
+  await activeNavigation.getByRole("link", { name: "对话" }).click();
   await expect(page.getByLabel("问题", { exact: true })).toBeInViewport();
 });
 
@@ -175,6 +171,10 @@ test("快速跳转能按用途找到精确页面", async ({ page }, testInfo) =>
     await expect(more.getByText("了解屏幕控制的安全边界")).toBeVisible();
     await more.getByRole("button", { name: "快速跳转" }).click();
   } else {
+    // Wait for React to hydrate the shell and register the global shortcut.
+    // Pressing immediately after page.goto races the AppShell effect on a
+    // cold Vite load even though the static document is already available.
+    await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
     await page.keyboard.press("Control+K");
   }
 

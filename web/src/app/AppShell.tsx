@@ -2,16 +2,27 @@ import {
   MonitorCog,
   Moon,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Settings2,
   Sun,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import {
+  Link,
+  NavigationType,
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useNavigationType,
+} from "react-router-dom";
+import { useStoredState } from "../hooks/useStoredState";
 import { EnvironmentDialog } from "./EnvironmentDialog";
 import { useIdentity } from "./IdentityContext";
-import { NAVIGATION } from "./navigation";
+import { isPathWithin, NAVIGATION } from "./navigation";
 import { QuickSwitcher } from "./QuickSwitcher";
 import { NEXT_MODE, type ThemeMode, useTheme } from "./ThemeContext";
 
@@ -19,13 +30,23 @@ import { NEXT_MODE, type ThemeMode, useTheme } from "./ThemeContext";
  * Where the rail's one dividing line goes: before the first entry that is not
  * a primary flow.
  *
- * Derived rather than written as an index. It used to be `index === 1`, which
- * put the line above Code and so drew 工作台 and Code as two separate groups --
- * the opposite of what they are. Deriving it from `primary` also removes the
- * failure mode that made the hardcoded version fragile: reordering NAVIGATION
- * moved the entries and left the line where it was.
+ * Derived rather than written as an index. 对话、任务与 Code are primary
+ * flows; everything after them is a resource or diagnostic surface. Deriving
+ * the boundary from `primary` keeps that grouping true when navigation moves.
  */
 const FIRST_SECONDARY_INDEX = NAVIGATION.findIndex((item) => !item.primary);
+
+const PRIMARY_FLOW_ROOTS = Object.fromEntries(
+  NAVIGATION.filter((item) => item.primary).map((item) => [item.to, item.to]),
+) as Record<string, string>;
+
+interface PrimaryNavigationMemory {
+  activeIdentityKey: string;
+  historyByIdentity: Record<string, Record<string, string>>;
+  ownerByLocationKey: Record<string, string>;
+  pendingIdentityPath: string | null;
+  identityBoundaryActive: boolean;
+}
 
 /**
  * 主题按钮显示的是**当前这一档**，不是"点了会变成什么"。
@@ -49,13 +70,14 @@ function ThemeControl() {
   const current = mode === "system" ? `（当前${resolved === "dark" ? "深色" : "浅色"}）` : "";
   return (
     <button
+      aria-label={text}
       className="aw-global-link aw-theme-button"
       onClick={cycleMode}
       title={`主题：${text}${current} · 点击切换到${THEME_LABEL[NEXT_MODE[mode]].text}`}
       type="button"
     >
       <Icon aria-hidden="true" size={18} />
-      <span>{text}</span>
+      <span className="aw-global-link-copy">{text}</span>
     </button>
   );
 }
@@ -65,6 +87,31 @@ export function AppShell() {
   const { mode: themeMode, cycleMode: cycleTheme } = useTheme();
   const ThemeIcon = THEME_LABEL[themeMode].icon;
   const location = useLocation();
+  const navigate = useNavigate();
+  const navigationType = useNavigationType();
+  const identityKey = JSON.stringify([
+    identity.tenantId,
+    identity.principalId,
+    [...identity.scopes].sort(),
+  ]);
+  const currentPrimaryFlow = NAVIGATION.find(
+    (item) =>
+      item.primary &&
+      item.covers.some((prefix) => isPathWithin(location.pathname, prefix)),
+  );
+  const currentPrimaryPath = `${location.pathname}${location.search}${location.hash}`;
+  const [primaryNavigation, setPrimaryNavigation] =
+    useState<PrimaryNavigationMemory>(() => ({
+      activeIdentityKey: identityKey,
+      historyByIdentity: {},
+      ownerByLocationKey: {},
+      pendingIdentityPath: null,
+      identityBoundaryActive: false,
+    }));
+  const [railCollapsed, setRailCollapsed] = useStoredState(
+    "agent-workbench:rail-collapsed",
+    true,
+  );
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
   const focusBeforeQuickSwitcher = useRef<HTMLElement | null>(null);
@@ -103,6 +150,89 @@ export function AppShell() {
     window.addEventListener("keydown", handleGlobalKey);
     return () => window.removeEventListener("keydown", handleGlobalKey);
   }, [mobileMoreOpen, openQuickSwitcher, quickSwitcherOpen]);
+  // Adjust this tiny navigation snapshot during render so a deep link's first
+  // committed frame already points back to itself. Identity changes are a
+  // special transition: the URL still belongs to the previous principal, so
+  // do not record it. Redirect to the incoming identity's own remembered item
+  // (or the flow root) before accepting another path into its history.
+  let primaryHistory =
+    primaryNavigation.historyByIdentity[identityKey] ?? PRIMARY_FLOW_ROOTS;
+  if (primaryNavigation.activeIdentityKey !== identityKey) {
+    setPrimaryNavigation({
+      ...primaryNavigation,
+      activeIdentityKey: identityKey,
+      pendingIdentityPath:
+        currentPrimaryFlow === undefined
+          ? null
+          : (primaryHistory[currentPrimaryFlow.to] ?? currentPrimaryFlow.to),
+      // Every earlier POP is now suspect until its location key proves it was
+      // created under this identity. This remains active across repeated Back
+      // operations rather than guarding only the first old history entry.
+      identityBoundaryActive: true,
+    });
+  } else if (primaryNavigation.pendingIdentityPath !== null) {
+    if (currentPrimaryPath === primaryNavigation.pendingIdentityPath) {
+      setPrimaryNavigation({
+        ...primaryNavigation,
+        ownerByLocationKey: {
+          ...primaryNavigation.ownerByLocationKey,
+          [location.key]: identityKey,
+        },
+        pendingIdentityPath: null,
+      });
+    }
+  } else if (
+    currentPrimaryFlow !== undefined &&
+    navigationType === NavigationType.Pop &&
+    primaryNavigation.identityBoundaryActive &&
+    primaryNavigation.ownerByLocationKey[location.key] !== identityKey
+  ) {
+    setPrimaryNavigation({
+      ...primaryNavigation,
+      pendingIdentityPath:
+        primaryHistory[currentPrimaryFlow.to] ?? currentPrimaryFlow.to,
+    });
+  } else if (currentPrimaryFlow !== undefined) {
+    const pathChanged =
+      primaryHistory[currentPrimaryFlow.to] !== currentPrimaryPath;
+    if (pathChanged) {
+      primaryHistory = {
+        ...primaryHistory,
+        [currentPrimaryFlow.to]: currentPrimaryPath,
+      };
+    }
+    const ownerChanged =
+      primaryNavigation.ownerByLocationKey[location.key] !== identityKey;
+    if (pathChanged || ownerChanged) {
+      setPrimaryNavigation({
+        ...primaryNavigation,
+        historyByIdentity: pathChanged
+          ? {
+              ...primaryNavigation.historyByIdentity,
+              [identityKey]: primaryHistory,
+            }
+          : primaryNavigation.historyByIdentity,
+        ownerByLocationKey: ownerChanged
+          ? {
+              ...primaryNavigation.ownerByLocationKey,
+              [location.key]: identityKey,
+            }
+          : primaryNavigation.ownerByLocationKey,
+      });
+    }
+  }
+  useEffect(() => {
+    const pendingPath = primaryNavigation.pendingIdentityPath;
+    if (pendingPath !== null && currentPrimaryPath !== pendingPath) {
+      void navigate(pendingPath, { replace: true });
+    }
+  }, [currentPrimaryPath, navigate, primaryNavigation.pendingIdentityPath]);
+  const destinationFor = (item: (typeof NAVIGATION)[number]) =>
+    item.primary
+      ? currentPrimaryFlow?.to === item.to
+        ? currentPrimaryPath
+        : (primaryHistory[item.to] ?? item.to)
+      : item.to;
   // Everything that is not a primary flow and not already on the mobile bar.
   // Derived rather than an explicit pair of paths: the hardcoded version left
   // a newly added secondary page reachable on desktop and nowhere on mobile.
@@ -110,40 +240,65 @@ export function AppShell() {
     (item) => !item.primary && item.to !== "/knowledge",
   );
   const secondaryActive = secondaryNavigation.some((item) =>
-    location.pathname.startsWith(item.to),
+    isPathWithin(location.pathname, item.to),
   );
-  const identityKey = JSON.stringify([
-    identity.tenantId,
-    identity.principalId,
-    [...identity.scopes].sort(),
-  ]);
   return (
-    <div className="aw-app-shell">
+    <div className={`aw-app-shell ${railCollapsed ? "is-rail-collapsed" : ""}`}>
       <nav className="aw-global-rail" aria-label="主导航">
-        <NavLink aria-label="Agent Workbench" className="aw-logo" to="/chat">
-          A
-        </NavLink>
+        <div className="aw-rail-brand-row">
+          <NavLink
+            aria-label="Agent Workbench"
+            className="aw-logo"
+            to={primaryHistory["/chat"] ?? "/chat"}
+          >
+            <span className="aw-logo-mark" aria-hidden="true">A</span>
+            <span className="aw-logo-copy">
+              <strong>Agent</strong>
+              <small>Workbench</small>
+            </span>
+          </NavLink>
+          <button
+            aria-label={railCollapsed ? "展开导航" : "收起导航"}
+            className="aw-rail-collapse"
+            onClick={() => setRailCollapsed((current) => !current)}
+            title={railCollapsed ? "展开导航" : "收起导航"}
+            type="button"
+          >
+            {railCollapsed ? (
+              <PanelLeftOpen aria-hidden="true" size={17} />
+            ) : (
+              <PanelLeftClose aria-hidden="true" size={17} />
+            )}
+          </button>
+        </div>
+        <span className="aw-nav-group-label">工作</span>
         {NAVIGATION.map((item, index) => {
           const Icon = item.icon;
           const current = item.covers.some((prefix) =>
-            location.pathname.startsWith(prefix),
+            isPathWithin(location.pathname, prefix),
           );
           return (
             <div
               className={index === FIRST_SECONDARY_INDEX ? "aw-nav-divider" : ""}
               key={item.to}
             >
+              {index === FIRST_SECONDARY_INDEX ? (
+                <span className="aw-nav-group-label">资源与工具</span>
+              ) : null}
               {/* `Link`, not `NavLink`: this entry stands for a set of
                   prefixes, and `NavLink` overwrites `aria-current` with its own
                   single-path match -- which reads "not here" on /work. */}
               <Link
+                aria-label={item.label}
                 aria-current={current ? "page" : undefined}
                 className={`aw-global-link ${current ? "active" : ""}`}
                 title={`${item.label} · ${item.description}`}
-                to={item.to}
+                to={destinationFor(item)}
               >
-                <Icon aria-hidden="true" size={18} />
-                <span>{item.label}</span>
+                <span className="aw-global-link-icon">
+                  <Icon aria-hidden="true" size={18} />
+                </span>
+                <span className="aw-global-link-copy">{item.label}</span>
               </Link>
             </div>
           );
@@ -156,46 +311,41 @@ export function AppShell() {
           title="快速跳转 · ⌘K / Ctrl K"
           type="button"
         >
-          <Search aria-hidden="true" size={18} />
-          <span>跳转</span>
+          <span className="aw-global-link-icon">
+            <Search aria-hidden="true" size={18} />
+          </span>
+          <span className="aw-global-link-copy">快速跳转</span>
+          <kbd>⌘K</kbd>
         </button>
         <ThemeControl />
         <button
+          aria-label="环境"
           className="aw-global-link aw-env-button"
           onClick={() => setEditorOpen(true)}
           title="本地环境"
           type="button"
         >
-          <Settings2 aria-hidden="true" size={18} />
-          <span>环境</span>
+          <span className="aw-global-link-icon">
+            <Settings2 aria-hidden="true" size={18} />
+          </span>
+          <span className="aw-global-link-copy">环境与权限</span>
+        </button>
+        <button
+          aria-label={`本地身份：${identity.tenantId} / ${identity.principalId}`}
+          className="aw-rail-identity"
+          onClick={() => setEditorOpen(true)}
+          title={`点击编辑本地身份\n授权：${identity.scopes.join("、")}`}
+          type="button"
+        >
+          <span className="aw-rail-avatar" aria-hidden="true">
+            {identity.principalId.slice(0, 1).toLocaleUpperCase()}
+          </span>
+          <span className="aw-rail-identity-copy">
+            <strong>{identity.principalId}</strong>
+            <small>{identity.tenantId} · {identity.scopes.length} scope</small>
+          </span>
         </button>
       </nav>
-      {/* 右上角常驻的身份。此前只有一句 sr-only 和「环境」按钮后面的对话框，
-          于是屏幕上任何一个数字都答不出"这是以谁的身份取到的"——而这个控制台的
-          每一页内容都取决于它。点它就是打开那个对话框，不另开一个入口。 */}
-      <button
-        className="aw-identity-pill"
-        onClick={() => setEditorOpen(true)}
-        title={`点击编辑本地身份\n授权：${identity.scopes.join("、")}`}
-        type="button"
-      >
-        <span>{identity.tenantId}</span>
-        <span aria-hidden="true">/</span>
-        <span>{identity.principalId}</span>
-        {/* 带几条授权，稿子上写作「· 3 scope」。
-            这不是装饰：这一栏回答的是「屏幕上的东西是以谁的身份取到的」，
-            而"谁"在这套系统里从来不只是一个 principal——同一个 principal 带
-            两条 scope 和带五条，看到的知识库、能提交的任务都不是一回事。
-            此前 scope 只活在那个要点开才看得见的对话框里。
-            只给数字不给名字：五条 scope 的名字排开是 60 个字符，而这一栏在
-            每一屏的右上角常驻。名字放进 title，指针停上去就有。
-            稿子上数字前面还有一颗点，这里没有做——那颗点在稿子上不承载任何
-            命题，而这个界面里的每一个色点都在说一件可以为假的事。 */}
-        <span aria-hidden="true">·</span>
-        <span className="aw-identity-scopes">
-          {identity.scopes.length} scope
-        </span>
-      </button>
       <section className="aw-app-content">
         {/* Remount every routed surface at an identity boundary so an old
             principal's authorized projection cannot remain on screen. */}
@@ -206,14 +356,14 @@ export function AppShell() {
           (item) => {
             const Icon = item.icon;
             const current = item.covers.some((prefix) =>
-              location.pathname.startsWith(prefix),
+              isPathWithin(location.pathname, prefix),
             );
             return (
               <Link
                 aria-current={current ? "page" : undefined}
                 className={`aw-mobile-link ${current ? "active" : ""}`}
                 key={item.to}
-                to={item.to}
+                to={destinationFor(item)}
               >
                 <Icon aria-hidden="true" size={19} />
                 <span>{item.label}</span>

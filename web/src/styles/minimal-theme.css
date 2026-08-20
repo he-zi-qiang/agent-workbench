@@ -480,8 +480,20 @@ select {
 }
 
 .aw-work-detail {
+  container-name: aw-work-detail;
+  container-type: inline-size;
   padding-right: clamp(20px, 5vw, 72px);
   padding-left: clamp(20px, 5vw, 72px);
+}
+
+/* The viewport is not the usable reading width when both navigation and the
+   task list are present. At 1280px an expanded mode rail leaves this container
+   around 624px wide, so stack the artifact rail based on the space it actually
+   receives instead of waiting for a 1040px viewport breakpoint. */
+@container aw-work-detail (max-width: 720px) {
+  .aw-work-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .aw-work-detail-header {
@@ -905,4 +917,830 @@ select {
 ::selection {
   background: color-mix(in srgb, var(--aw-accent) 30%, transparent);
   color: var(--aw-text);
+}
+
+/* Desktop workspace shell -------------------------------------------------
+ *
+ * Codex contributes the compact mode rail; Claude Desktop contributes the
+ * warm, quiet navigation surface and account card. The rail expands only on
+ * demand because Chat, Work and Code already own a contextual list beside it.
+ */
+
+.aw-app-shell {
+  grid-template-columns: var(--aw-nav-width) minmax(0, 1fr);
+  background: var(--aw-sidebar);
+  transition: grid-template-columns var(--aw-duration-slow) var(--aw-ease);
+}
+
+.aw-app-shell.is-rail-collapsed {
+  grid-template-columns: var(--aw-nav-width-collapsed) minmax(0, 1fr);
+}
+
+.aw-app-content {
+  position: relative;
+  background: var(--aw-window);
+}
+
+.aw-global-rail {
+  align-items: stretch;
+  padding: 10px 8px 9px;
+  gap: 2px;
+  overflow-x: hidden;
+  border-right: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+  color: var(--aw-text-soft);
+}
+
+.aw-rail-brand-row {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 6px;
+}
+
+.aw-logo {
+  display: flex;
+  width: auto;
+  min-width: 0;
+  height: 40px;
+  margin: 0;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--aw-text);
+}
+
+.aw-logo-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--aw-accent);
+  color: var(--aw-accent-on);
+  font-family: var(--aw-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.aw-logo-copy,
+.aw-rail-identity-copy {
+  display: grid;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.aw-logo-copy strong {
+  font-family: var(--aw-display);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.aw-logo-copy small {
+  color: var(--aw-text-muted);
+  font-family: var(--aw-display);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.aw-rail-collapse {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aw-text-muted);
+}
+
+.aw-rail-collapse:hover {
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+}
+
+.aw-nav-group-label {
+  display: block;
+  margin: 2px 9px 5px;
+  overflow: hidden;
+  color: var(--aw-text-subtle);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.aw-nav-divider {
+  position: relative;
+  margin-top: 9px;
+  padding-top: 28px;
+  border-top-color: var(--aw-border);
+}
+
+.aw-nav-divider > .aw-nav-group-label {
+  position: absolute;
+  top: 7px;
+  right: 0;
+  left: 0;
+  margin: 0 9px;
+}
+
+.aw-global-link {
+  position: relative;
+  flex-direction: row;
+  width: 100%;
+  min-height: 39px;
+  justify-content: flex-start;
+  padding: 0 8px;
+  gap: 9px;
+  border-radius: 9px;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.aw-global-link:hover {
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+}
+
+.aw-global-link.active {
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+  font-weight: 600;
+}
+
+.aw-global-link.active::before {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 2px;
+  width: 3px;
+  border-radius: 99px;
+  background: var(--aw-accent);
+  content: "";
+}
+
+.aw-global-link.active svg {
+  color: var(--aw-accent);
+}
+
+.aw-global-link-icon {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+}
+
+.aw-global-link-copy {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aw-global-link > kbd {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--aw-panel) 68%, transparent);
+  color: var(--aw-text-muted);
+  font-family: var(--aw-sans);
+  font-size: 10px;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.aw-theme-button svg {
+  width: 22px;
+  flex: 0 0 22px;
+}
+
+.aw-rail-identity {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  margin-top: 5px;
+  padding: 5px 7px;
+  gap: 9px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--aw-text);
+  text-align: left;
+}
+
+.aw-rail-identity:hover {
+  border-color: var(--aw-border);
+  background: color-mix(in srgb, var(--aw-panel) 58%, transparent);
+}
+
+.aw-rail-avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 9px;
+  background: var(--aw-panel);
+  color: var(--aw-text);
+  font-family: var(--aw-display);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.aw-rail-identity-copy strong,
+.aw-rail-identity-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-rail-identity-copy strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aw-rail-identity-copy small {
+  margin-top: 3px;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-global-rail {
+  align-items: center;
+  padding-right: 6px;
+  padding-left: 6px;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-rail-brand-row {
+  min-height: auto;
+  flex-direction: column;
+  margin-bottom: 10px;
+  gap: 5px;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-logo {
+  width: 44px;
+  justify-content: center;
+}
+
+.aw-app-shell.is-rail-collapsed :is(
+  .aw-logo-copy,
+  .aw-nav-group-label,
+  .aw-global-link-copy,
+  .aw-global-link > kbd,
+  .aw-rail-identity-copy
+) {
+  display: none;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-nav-divider {
+  width: 44px;
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-global-link {
+  width: 44px;
+  min-height: 42px;
+  justify-content: center;
+  padding: 0;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-theme-button svg {
+  width: auto;
+  flex: none;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-rail-identity {
+  width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  padding: 0;
+}
+
+/* High-frequency reading text never drops to the 9px diagnostics size used
+   by the old console skin. Metadata stays quiet without becoming illegible. */
+.aw-chat-session-copy small,
+.aw-chat-local-note,
+.aw-chat-header p,
+.aw-chat-connection,
+.aw-chat-composer-tools > span,
+.aw-local-badge {
+  font-size: 11px;
+}
+
+@media (max-width: 1180px) and (min-width: 761px) {
+  .aw-app-shell {
+    grid-template-columns: var(--aw-nav-width-collapsed) minmax(0, 1fr);
+  }
+
+  .aw-app-shell .aw-global-rail {
+    align-items: center;
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+
+  .aw-app-shell .aw-rail-brand-row {
+    min-height: auto;
+    flex-direction: column;
+    margin-bottom: 10px;
+    gap: 5px;
+  }
+
+  .aw-app-shell .aw-rail-collapse {
+    display: none;
+  }
+
+  .aw-app-shell .aw-logo {
+    width: 44px;
+    justify-content: center;
+  }
+
+  .aw-app-shell :is(
+    .aw-logo-copy,
+    .aw-nav-group-label,
+    .aw-global-link-copy,
+    .aw-global-link > kbd,
+    .aw-rail-identity-copy
+  ) {
+    display: none;
+  }
+
+  .aw-app-shell .aw-nav-divider {
+    width: 44px;
+    margin-top: 8px;
+    padding-top: 8px;
+  }
+
+  .aw-app-shell .aw-global-link,
+  .aw-app-shell .aw-rail-identity {
+    width: 44px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .aw-app-shell .aw-global-link {
+    min-height: 42px;
+  }
+
+  .aw-app-shell .aw-rail-identity {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 760px) {
+  .aw-mobile-nav {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@media (pointer: coarse) {
+  :is(
+    .aw-chat-session-delete,
+    .aw-task-list-delete,
+    .aw-code-recent-delete
+  ) {
+    min-width: 36px;
+    min-height: 36px;
+    opacity: 1;
+  }
+}
+
+/* Conversation start ----------------------------------------------------- */
+
+.aw-chat-session-search {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  min-height: 34px;
+  align-items: center;
+  margin: 0 10px 2px;
+  padding: 0 9px;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--aw-panel) 55%, transparent);
+  color: var(--aw-text-muted);
+}
+
+.aw-chat-session-search:focus-within {
+  border-color: var(--aw-border-strong);
+  background: var(--aw-panel);
+}
+
+.aw-chat-session-search input {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.aw-chat-session-search input::placeholder {
+  color: var(--aw-text-subtle);
+}
+
+.aw-chat-page.is-new .aw-chat-transcript {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 22px;
+}
+
+.aw-chat-page.is-new .aw-chat-composer {
+  margin-bottom: clamp(44px, 9vh, 96px);
+}
+
+.aw-chat-welcome {
+  display: grid;
+  width: min(780px, 100%);
+  justify-items: center;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.aw-chat-welcome-mark {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 16px;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--aw-accent);
+  color: var(--aw-accent-on);
+  font-family: var(--aw-display);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.aw-chat-welcome h2 {
+  margin: 0;
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 620;
+  letter-spacing: -0.035em;
+}
+
+.aw-chat-welcome > p {
+  max-width: 520px;
+  margin: 8px 0 22px;
+  color: var(--aw-text-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.aw-chat-starters {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.aw-chat-starters > button {
+  display: flex;
+  min-width: 0;
+  min-height: 74px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 12px 13px;
+  gap: 10px;
+  border: 1px solid var(--aw-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--aw-panel) 72%, transparent);
+  color: var(--aw-text);
+  text-align: left;
+  transition:
+    border-color var(--aw-duration-fast) var(--aw-ease),
+    background var(--aw-duration-fast) var(--aw-ease),
+    transform var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-chat-starters > button:hover {
+  border-color: var(--aw-border-strong);
+  background: var(--aw-panel);
+  transform: translateY(-1px);
+}
+
+.aw-chat-starters > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.aw-chat-starters strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.aw-chat-starters small {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.aw-chat-starters svg {
+  flex: 0 0 auto;
+  color: var(--aw-text-subtle);
+}
+
+@media (max-width: 900px) {
+  .aw-chat-starters {
+    grid-template-columns: 1fr;
+    width: min(520px, 100%);
+  }
+
+  .aw-chat-starters > button {
+    min-height: 58px;
+  }
+}
+
+@media (max-width: 760px) {
+  .aw-chat-page.is-new .aw-chat-transcript {
+    align-items: center;
+    padding: 24px 16px 14px;
+  }
+
+  .aw-chat-page.is-new .aw-chat-composer {
+    margin-bottom: 0;
+  }
+
+  .aw-chat-welcome-mark {
+    width: 40px;
+    height: 40px;
+    margin-bottom: 12px;
+  }
+
+  .aw-chat-welcome > p {
+    margin-bottom: 14px;
+  }
+
+  .aw-chat-starters {
+    display: none;
+  }
+}
+
+/* Task start -------------------------------------------------------------
+ * On a blank Work route, history stays in the contextual rail while the full
+ * task brief uses the reading area. Once a task is selected the same form can
+ * still fold back into the rail, preserving the existing fast-create path.
+ */
+
+.aw-create-task-head {
+  display: grid;
+  margin-bottom: 4px;
+  gap: 5px;
+}
+
+.aw-create-task-head h2,
+.aw-create-task-head p {
+  margin: 0;
+}
+
+.aw-create-task-head h2 {
+  font-size: clamp(22px, 3vw, 30px);
+  font-weight: 620;
+  letter-spacing: -0.03em;
+}
+
+.aw-create-task-head p {
+  max-width: 58ch;
+  color: var(--aw-text-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.aw-work-page.has-selection .aw-create-task-head {
+  display: none;
+}
+
+@media (min-width: 761px) {
+  .aw-work-page:not(.has-selection) {
+    position: relative;
+    grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-rows: 64px minmax(0, 1fr);
+    background:
+      linear-gradient(var(--aw-sidebar), var(--aw-sidebar)) 0 0 / 280px 100%
+        no-repeat,
+      var(--aw-window);
+  }
+
+  .aw-work-page:not(.has-selection)::after {
+    position: absolute;
+    z-index: 4;
+    top: 0;
+    bottom: 0;
+    left: 279px;
+    width: 1px;
+    background: var(--aw-border);
+    content: "";
+    pointer-events: none;
+  }
+
+  .aw-work-page:not(.has-selection) .aw-work-sidebar {
+    display: contents;
+  }
+
+  .aw-work-page:not(.has-selection) .aw-pane-header {
+    grid-row: 1;
+    grid-column: 1;
+    border-bottom: 1px solid var(--aw-border);
+    background: var(--aw-sidebar);
+  }
+
+  .aw-work-page:not(.has-selection) .aw-create-task-toggle {
+    z-index: 1;
+    grid-row: 2;
+    grid-column: 1;
+    align-self: start;
+    width: calc(100% - 24px);
+    margin: 12px 12px 0;
+  }
+
+  .aw-work-page:not(.has-selection) .aw-task-filters {
+    z-index: 1;
+    grid-row: 2;
+    grid-column: 1;
+    align-self: start;
+    margin: 63px 10px 0;
+  }
+
+  .aw-work-page:not(.has-selection) .aw-task-list {
+    grid-row: 2;
+    grid-column: 1;
+    min-height: 0;
+    align-self: stretch;
+    margin-top: 104px;
+    padding-bottom: 14px;
+    overflow-y: auto;
+    background: var(--aw-sidebar);
+  }
+
+  .aw-work-page:not(.has-selection) .aw-create-task {
+    z-index: 2;
+    grid-row: 1 / 3;
+    grid-column: 2;
+    width: min(760px, calc(100% - 48px));
+    max-height: calc(100% - 48px);
+    align-self: center;
+    justify-self: center;
+    margin: 0;
+    padding: clamp(22px, 3.5vw, 34px);
+    overflow-y: auto;
+    border: 1px solid var(--aw-border);
+    border-radius: 18px;
+    background: var(--aw-panel);
+    box-shadow: var(--aw-shadow-lift);
+  }
+
+  .aw-work-page:not(.has-selection) .aw-create-task textarea {
+    min-height: 132px;
+    padding: 13px 14px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .aw-work-page:not(.has-selection) .aw-create-task > .aw-button.is-primary {
+    min-width: 132px;
+    justify-self: end;
+  }
+
+  .aw-work-page:not(.has-selection) .aw-work-detail {
+    grid-row: 1 / 3;
+    grid-column: 2;
+    visibility: hidden;
+  }
+
+  .aw-work-page:not(.has-selection):has(.aw-create-task.is-collapsed)
+    .aw-work-detail {
+    visibility: visible;
+  }
+}
+
+.aw-task-filters button {
+  min-height: 30px;
+  font-size: 11.5px;
+}
+
+@media (max-width: 760px) {
+  .aw-create-task-head h2 {
+    font-size: 22px;
+  }
+}
+
+/* Code start ------------------------------------------------------------- */
+
+.aw-code-start-inner {
+  width: min(760px, 100%);
+  gap: 16px;
+}
+
+.aw-code-start-head svg {
+  box-sizing: content-box;
+  width: 22px;
+  height: 22px;
+  padding: 11px;
+  border-radius: 13px;
+  background: var(--aw-accent);
+  color: var(--aw-accent-on);
+}
+
+.aw-code-start-head h1 {
+  font-size: clamp(25px, 3vw, 32px);
+  font-weight: 620;
+  letter-spacing: -0.035em;
+}
+
+.aw-code-start-head p {
+  max-width: 58ch;
+  color: var(--aw-text-muted);
+}
+
+.aw-code-starters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.aw-code-starters > button {
+  display: flex;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 11px;
+  gap: 8px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--aw-panel) 68%, transparent);
+  color: var(--aw-text-soft);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.aw-code-starters > button:hover {
+  border-color: var(--aw-border-strong);
+  background: var(--aw-panel);
+  color: var(--aw-text);
+}
+
+.aw-code-starters svg {
+  flex: 0 0 auto;
+  color: var(--aw-text-subtle);
+}
+
+.aw-code-composer-row {
+  padding: 7px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 17px;
+  background: var(--aw-panel);
+  box-shadow: var(--aw-shadow-lift);
+}
+
+.aw-code-composer-row:focus-within {
+  border-color: color-mix(in srgb, var(--aw-accent) 48%, var(--aw-border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--aw-accent) 9%, transparent),
+    var(--aw-shadow-lift);
+}
+
+.aw-code-composer textarea {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.aw-code-attach {
+  border-color: transparent;
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-composer-row > .aw-button.is-primary {
+  min-height: 38px;
+  border-radius: 10px;
+}
+
+@media (max-width: 760px) {
+  .aw-code-starters {
+    display: none;
+  }
 }

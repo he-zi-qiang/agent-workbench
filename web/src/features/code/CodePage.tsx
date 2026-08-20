@@ -38,7 +38,7 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Code2, PanelLeft, Paperclip } from "lucide-react";
+import { ArrowUpRight, Code2, PanelLeft, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
@@ -75,6 +75,21 @@ import { useCodeStream } from "./useCodeStream";
 /** How often to ask what the agent is stopped on, while it is working. */
 const APPROVAL_POLL_MS = 1000;
 
+const CODE_STARTERS = [
+  {
+    title: "理解并整理代码",
+    prompt: "阅读当前项目，先说明结构和关键模块，再整理一份可执行的改进清单。",
+  },
+  {
+    title: "定位并修复问题",
+    prompt: "帮我定位这个问题的根因，修复后运行相关检查，并说明改动影响。",
+  },
+  {
+    title: "实现一个小功能",
+    prompt: "在保持现有架构和风格的前提下，实现下面这个功能，并补齐必要验证：",
+  },
+] as const;
+
 /**
  * How long a run with no instruction is given to explain itself.
  *
@@ -108,6 +123,7 @@ export function CodePage() {
   //: for the whole of the next session's fetch.
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
+  const instructionRef = useRef<HTMLTextAreaElement>(null);
   const [running, setRunning] = useState(false);
   //: The instruction whose request is still open, held here rather than
   //: appended to `loadedMessages`. Appending optimistically and then re-reading
@@ -661,6 +677,7 @@ export function CodePage() {
             setInstruction(event.target.value);
           }}
           placeholder="描述你要做的事"
+          ref={instructionRef}
           rows={3}
           value={instruction}
         />
@@ -695,6 +712,22 @@ export function CodePage() {
                   第一句话会开出一个会话，并成为它的名字；之后就可以在输入框旁上传文件。
                 </p>
               </header>
+              <div className="aw-code-starters" aria-label="编码任务起点">
+                {CODE_STARTERS.map((starter) => (
+                  <button
+                    aria-label={starter.title}
+                    key={starter.title}
+                    onClick={() => {
+                      setInstruction(starter.prompt);
+                      window.requestAnimationFrame(() => instructionRef.current?.focus());
+                    }}
+                    type="button"
+                  >
+                    <span>{starter.title}</span>
+                    <ArrowUpRight aria-hidden="true" size={15} />
+                  </button>
+                ))}
+              </div>
               {error === null ? null : <ErrorNotice message={error} />}
               {composer}
             </div>

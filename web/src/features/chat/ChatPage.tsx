@@ -1,13 +1,14 @@
 import {
   AlertTriangle,
+  ArrowUpRight,
   BookOpen,
   ChevronRight,
   CircleDot,
   Copy,
-  MessageSquare,
   PanelLeft,
   RefreshCw,
   RotateCcw,
+  Search,
   Send,
   ShieldAlert,
   ShieldCheck,
@@ -27,7 +28,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { createChatSession, getCitedPassage } from "../../api/client";
 import type {
   Citation,
@@ -69,6 +70,24 @@ import { deriveTurnStages, isTurnMetaActivity } from "./turnStages";
 import type { StoredChatCursor } from "./storage";
 import { useChatRuntime } from "./useChatRuntime";
 
+const STARTER_PROMPTS = [
+  {
+    title: "梳理项目资料",
+    description: "从知识库提炼结论、分歧和下一步",
+    prompt: "请梳理所选项目资料，提炼关键结论、主要分歧和下一步建议。",
+  },
+  {
+    title: "拆解复杂问题",
+    description: "先给出清晰框架，再逐步分析",
+    prompt: "请先把这个问题拆成几个关键部分，再说明每一部分应该如何分析。",
+  },
+  {
+    title: "准备一份方案",
+    description: "比较选项，并明确取舍依据",
+    prompt: "请帮我比较几个可行方案，列出各自的收益、风险与推荐选择。",
+  },
+] as const;
+
 export function ChatPage() {
   const { identity } = useIdentity();
   const { runtime, state } = useChatRuntime(identity);
@@ -77,11 +96,13 @@ export function ChatPage() {
   const navigate = useNavigate();
   const selected = sessionId === undefined ? undefined : state.sessions[sessionId];
   const [question, setQuestion] = useState("");
+  const [sessionQuery, setSessionQuery] = useState("");
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, string | null>>({});
   const [creatingSession, setCreatingSession] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
   const mounted = useRef(true);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const latestSubmissionContext = useRef({ runtime, sessionId });
 
   useLayoutEffect(() => {
@@ -153,6 +174,13 @@ export function ChatPage() {
     sourceResolving ||
     unfinished ||
     selected?.history === "loading";
+  const visibleSessionIds = state.sessionOrder.filter((id) => {
+    const session = state.sessions[id];
+    if (session === undefined) return false;
+    const query = sessionQuery.trim().toLocaleLowerCase();
+    if (query === "") return true;
+    return `${session.title} ${session.sessionId}`.toLocaleLowerCase().includes(query);
+  });
 
   const changeSource = (nextId: string | null) => {
     if (nextId === knowledgeBaseId) return;
@@ -234,7 +262,7 @@ export function ChatPage() {
   };
 
   return (
-    <div className="aw-chat-page">
+    <div className={`aw-chat-page ${sessionId === undefined ? "is-new" : ""}`}>
       {mobileSessionsOpen ? (
         <button
           aria-label="关闭会话列表"
@@ -276,23 +304,34 @@ export function ChatPage() {
             void navigate("/chat");
           }}
         />
+        <div className="aw-chat-session-search">
+          <Search aria-hidden="true" size={14} />
+          <input
+            aria-label="搜索本地会话"
+            onChange={(event) => setSessionQuery(event.target.value)}
+            placeholder="搜索会话"
+            type="search"
+            value={sessionQuery}
+          />
+        </div>
         <div className="aw-chat-session-list">
           {state.sessionOrder.length === 0 ? (
             <p className="aw-chat-local-note">发送消息后，会话会保存在当前浏览器。</p>
+          ) : visibleSessionIds.length === 0 ? (
+            <p className="aw-chat-local-note">没有匹配的本地会话。</p>
           ) : (
-            state.sessionOrder.map((id) => {
+            visibleSessionIds.map((id) => {
               const session = state.sessions[id];
               if (session === undefined) return null;
               return (
                 <div className="aw-chat-session-row" key={session.sessionId}>
-                  <button
+                  <Link
                     aria-current={session.sessionId === sessionId ? "page" : undefined}
                     className={`aw-chat-session ${session.sessionId === sessionId ? "is-active" : ""}`}
                     onClick={() => {
                       setMobileSessionsOpen(false);
-                      void navigate(`/chat/${encodeURIComponent(session.sessionId)}`);
                     }}
-                    type="button"
+                    to={`/chat/${encodeURIComponent(session.sessionId)}`}
                   >
                     <span className="aw-chat-session-copy">
                       <span className="aw-chat-session-head">
@@ -319,7 +358,7 @@ export function ChatPage() {
                       </small>
                     </span>
                     <ChevronRight aria-hidden="true" size={15} />
-                  </button>
+                  </Link>
                   <button
                     aria-label={`删除会话 ${session.title}`}
                     className="aw-chat-session-delete"
@@ -362,10 +401,11 @@ export function ChatPage() {
               }
             />
           ) : selected === undefined ? (
-            <EmptyState
-              icon={<MessageSquare aria-hidden="true" size={26} />}
-              title="今天想聊什么？"
-              description="默认直接对话；需要依据项目资料时，再从输入框下方选择一个知识库。"
+            <ChatWelcome
+              onChoose={(prompt) => {
+                setQuestion(prompt);
+                window.requestAnimationFrame(() => composerRef.current?.focus());
+              }}
             />
           ) : selected.history === "loading" && turns.length === 0 ? (
             <LoadingLine label="正在读取安全会话历史" />
@@ -428,6 +468,7 @@ export function ChatPage() {
                     : `询问 ${selectedKnowledgeBase?.name ?? "所选知识库"}…`
               }
               rows={1}
+              ref={composerRef}
               value={question}
             />
 
@@ -470,14 +511,42 @@ export function ChatPage() {
                 头的人得到的是一个不再接受输入的输入框，没有任何东西说明为什么。
                 放在这一行而不是压在输入框上：它是关于这次输入的说明，和左边那句
                 「回答会检索资料并标注引用」是同一类东西。 */}
-            <span
-              className={`aw-chat-counter ${question.length >= 4096 ? "is-full" : ""}`}
-            >
-              {question.length} / 4096
-            </span>
+            {question.length < 3500 ? null : (
+              <span
+                className={`aw-chat-counter ${question.length >= 4096 ? "is-full" : ""}`}
+              >
+                {question.length} / 4096
+              </span>
+            )}
           </div>
         </form>
       </main>
+    </div>
+  );
+}
+
+function ChatWelcome({ onChoose }: { onChoose: (prompt: string) => void }) {
+  return (
+    <div className="aw-chat-welcome">
+      <span className="aw-chat-welcome-mark" aria-hidden="true">A</span>
+      <h2>今天想聊什么？</h2>
+      <p>直接开始，或选一个起点。需要引用时，可以在输入区选择知识库。</p>
+      <div className="aw-chat-starters" aria-label="对话起点">
+        {STARTER_PROMPTS.map((starter) => (
+          <button
+            aria-label={starter.title}
+            key={starter.title}
+            onClick={() => onChoose(starter.prompt)}
+            type="button"
+          >
+            <span>
+              <strong>{starter.title}</strong>
+              <small>{starter.description}</small>
+            </span>
+            <ArrowUpRight aria-hidden="true" size={15} />
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
