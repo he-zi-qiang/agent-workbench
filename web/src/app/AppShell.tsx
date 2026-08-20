@@ -55,7 +55,7 @@ const THEME_LABEL: Record<ThemeMode, { icon: typeof Sun; text: string }> = {
 };
 
 export function AppShell() {
-  const { identity, setEditorOpen } = useIdentity();
+  const { identity, editorOpen, setEditorOpen } = useIdentity();
   const { mode: themeMode, cycleMode: cycleTheme } = useTheme();
   const ThemeIcon = THEME_LABEL[themeMode].icon;
   const location = useLocation();
@@ -379,6 +379,19 @@ export function AppShell() {
     desktop.addEventListener("change", closeDrawerAtDesktop);
     return () => desktop.removeEventListener("change", closeDrawerAtDesktop);
   }, []);
+  // Four surfaces on this page are modal, and only one of them was making the
+  // rest of the page unreachable. The drawer set `inert` on the content and the
+  // mobile nav; the 更多 sheet, the quick switcher and the identity dialog all
+  // relied on `aria-modal="true"` plus a Tab wrap bound to their own
+  // `onKeyDown` -- which only fires once focus is already inside them. So the
+  // page behind stayed hit-testable, findable by the browser's own find, and
+  // reachable by a screen reader's virtual cursor.
+  //
+  // The rail is deliberately absent from the first list: on mobile the drawer
+  // *is* the rail, so making it inert while it is open would disable the modal
+  // itself.
+  const railInert = mobileMoreOpen || quickSwitcherOpen || editorOpen;
+  const behindModal = railInert || sidebarDrawerOpen;
   const sidebarContext: WorkspaceSidebarContextValue = {
     managed: true,
     host: sidebarHost,
@@ -393,9 +406,11 @@ export function AppShell() {
       } ${contextSidebarAvailable ? "" : "is-context-free"}`}
     >
       <nav
+        aria-hidden={railInert ? "true" : undefined}
         aria-modal={sidebarDrawerOpen ? "true" : undefined}
         className="aw-global-rail"
         aria-label="主导航"
+        inert={railInert ? true : undefined}
         ref={sidebarRef}
         role={sidebarDrawerOpen ? "dialog" : undefined}
       >
@@ -527,9 +542,9 @@ export function AppShell() {
         </button>
       </nav>
       <section
-        aria-hidden={sidebarDrawerOpen ? "true" : undefined}
+        aria-hidden={behindModal ? "true" : undefined}
         className="aw-app-content"
-        inert={sidebarDrawerOpen ? true : undefined}
+        inert={behindModal ? true : undefined}
       >
         {/* Remount every routed surface at an identity boundary so an old
             principal's authorized projection cannot remain on screen. */}
@@ -544,10 +559,10 @@ export function AppShell() {
         />
       ) : null}
       <nav
-        aria-hidden={sidebarDrawerOpen ? "true" : undefined}
+        aria-hidden={behindModal ? "true" : undefined}
         aria-label="移动端导航"
         className="aw-mobile-nav"
-        inert={sidebarDrawerOpen ? true : undefined}
+        inert={behindModal ? true : undefined}
       >
         {NAVIGATION.filter((item) => item.primary || item.to === "/knowledge").map(
           (item) => {

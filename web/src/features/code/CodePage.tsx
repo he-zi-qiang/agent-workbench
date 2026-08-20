@@ -121,6 +121,26 @@ const DECISIONS: { decision: ApprovalDecision; label: string }[] = [
 /** Risks whose second occurrence deserves the same question as their first. */
 const UNREPEATABLE = new Set(["external", "destructive"]);
 
+/**
+ * What a risk means, said to the person being asked.
+ *
+ * `risk` has been on the wire since approvals existed (`api/types.ts:119`) and
+ * this console used it for exactly one thing: deciding whether to *remove* the
+ * 本次会话都允许 button. So the reader was asked to approve a tool call with no
+ * indication of what kind of call it was, and -- when the third button was
+ * missing -- no explanation of why the choice they had last time was gone.
+ * That is not "conveyed by colour alone"; it is not conveyed at all.
+ *
+ * Unknown values fall through to the raw string rather than to silence: a risk
+ * this console has not been taught is still a fact the reader should see.
+ */
+const RISK_LABELS: Readonly<Record<string, string>> = {
+  read: "只读取",
+  write: "会写入",
+  external: "会连到外部",
+  destructive: "不可撤销",
+};
+
 export function CodePage() {
   const { identity } = useIdentity();
   const navigate = useNavigate();
@@ -836,7 +856,11 @@ export function CodePage() {
           )}
         </header>
 
-        <section aria-label="编码会话" aria-live="polite" className="aw-code-transcript">
+        {/* Same as Chat's transcript: not a live region. Announcing every
+            step, file card and disclosure in a coding turn is a torrent,
+            and a torrent is indistinguishable from silence. The approval
+            section above says the one thing worth interrupting for. */}
+        <section aria-label="编码会话" className="aw-code-transcript">
           {blocks.length === 0 ? (
             <EmptyState
               icon={<Code2 aria-hidden />}
@@ -891,10 +915,36 @@ export function CodePage() {
             needs is the reader's eyes on it now. A turn block scrolls. */}
         {pendingApprovals.length === 0 ? null : (
           <section aria-label="待批准的调用" className="aw-code-approvals">
+            {/* Announced, because this section is a sibling of the
+                transcript rather than inside it: a turn that stops to ask
+                permission produced no sound at all before this line. One
+                sentence, not the questions themselves -- the questions
+                are right here to read once the reader knows to look. */}
+            <p aria-atomic="true" className="aw-sr-only" role="status">
+              有 {pendingApprovals.length} 个调用等待你批准
+            </p>
             {pendingApprovals.map((held) => (
               <article className="aw-code-approval" key={held.approval_id}>
-                <h3>{held.tool_name} 需要你批准</h3>
+                <h3>
+                  {held.tool_name} 需要你批准
+                  {held.risk === null ? null : (
+                    <span
+                      className="aw-code-approval-risk"
+                      data-risk={held.risk}
+                    >
+                      {RISK_LABELS[held.risk] ?? held.risk}
+                    </span>
+                  )}
+                </h3>
                 <p className="aw-code-value">{held.argument_digest}</p>
+                {held.risk !== null && UNREPEATABLE.has(held.risk) ? (
+                  // The missing third button, explained where it is missing.
+                  // Without this the reader sees two buttons where they saw
+                  // three a moment ago and has to guess why.
+                  <p className="aw-code-approval-note">
+                    这一类调用每次都要单独问，不能一次答应整个会话。
+                  </p>
+                ) : null}
                 <div className="aw-code-approval-actions">
                   {DECISIONS.filter(
                     // A standing yes to an irreversible effect is the one that

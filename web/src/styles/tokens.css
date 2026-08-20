@@ -185,16 +185,29 @@
 
   --aw-text: light-dark(#242421, #efefeb);
   --aw-text-soft: light-dark(#62625c, #aaa9a2);
-  --aw-text-muted: light-dark(#8b8a83, #85847d);
+  /* 第三档，也是最弱的一档。#8b8a83 时它落在浅色 window 上只有 3.38:1——
+     而它承担的不是装饰：`.aw-chat-live-text p` 是**正在生成的那段回答本身**
+     （14.5px），`.aw-task-list-item small` 是任务的时间，`.aw-chat-connection`
+     是「连接中断」。这些都是要读的字，WCAG 对 18px 以下的正文要求 4.5:1，没有
+     「次要文字」的豁免。#71706b 在 window 上是 4.62:1，在 panel-strong（悬停/
+     选中的行）上是 4.06:1；深色一侧 #96958e 是 6.4:1。 */
+  --aw-text-muted: light-dark(#71706b, #96958e);
 
-  /* 第四档文字，比 muted 再弱一级：时间戳、id 后缀这类「在那里但不必读」的字。
-     此前只以 fallback 形式存在于一条规则里。 */
-  /* 浅色一侧比深色一侧暗一档，是量出来的：#aaa9a1 落在 --aw-sidebar 上只有
-     2.16:1，而深色一侧的 #6c6b65 是 3.09:1。这一档承担的是 10px 的
-     `.aw-sidebar-section-label`（工作空间 / 资源）和搜索框的 placeholder——
-     浅色下它们几乎读不出来，两套皮肤于是不是同一个设计的两个值，而是一个
-     能看见、一个看不见。#8f8e86 在同一块底上是 3.05:1，和深色一侧齐平。 */
-  --aw-text-subtle: light-dark(#8f8e86, #6c6b65);
+  /* 第四档没有自己的值了，它是 muted 的别名。
+   *
+   * 这不是偷懒，是算出来的：soft 在浅色下是 6.2:1，AA 的地板是 4.5:1，而
+   * muted 已经贴着地板（4.62:1）。两者之间放不下第三个能被看见的台阶——
+   * 任何比 muted 再弱一档的值都在地板底下。它此前的三个值都验证了这一点：
+   * #aaa9a1 是 2.16:1，#8f8e86 是 3.05:1，都不合格。
+   *
+   * 而这一档挂的全是要读的字：`.aw-sidebar-section-label`（工作空间 / 资源）、
+   * 快速跳转的键盘提示（↑↓选择 / ↵前往 / Esc关闭）、`.aw-code-raw` 的展开控件。
+   * 没有一处是「在那里但不必读」——那句话是这个 token 当初的理由，而它描述的
+   * 内容一处也没有。
+   *
+   * 保留名字而不是改掉十条规则：和 --aw-info → --aw-evidence 同一个处理，
+   * 让还在用它的规则继续成立，也让「浅色下有几档文字」这件事只有一个答案。 */
+  --aw-text-subtle: var(--aw-text-muted);
 
   --aw-border: light-dark(#e9e8e3, #30302d);
   --aw-border-strong: light-dark(#d8d6cf, #41413c);

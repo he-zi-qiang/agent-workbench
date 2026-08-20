@@ -667,7 +667,15 @@ export function ChatPage() {
           onOpenSessions={workspaceSidebar.open}
         />
 
-        <section className="aw-chat-transcript" aria-live="polite">
+        {/* Not a live region, deliberately. This used to carry
+            `aria-live="polite"` over the whole subtree: every turn, every
+            step line, every citation chip and every disclosure toggle.
+            A region that announces all of it announces nothing usable --
+            the reader cannot tell which sentence is the new one, and the
+            token stream inside re-fires it several times a second.
+            The transcript is readable content; what deserves announcing
+            is the phase, and each turn says that for itself below. */}
+        <section className="aw-chat-transcript">
           {sessionId !== undefined &&
           selected === undefined &&
           (selectedServerSession.isPending || selectedServerSession.data !== undefined) ? (
@@ -896,10 +904,20 @@ function ConnectionBadge({
       unavailable: "连接中断",
     }[connection] ?? connection;
   return (
+    // `role="status"` because this badge sits in the header, *outside*
+    // the transcript, and losing the connection mid-answer was announced
+    // to nobody at all. The polite live region carries the label, which
+    // is why the label is also what changes -- 正在重连 / 连接中断 are
+    // the two sentences worth interrupting a reader for.
+    //
+    // The `title` says what to do about it; it cannot say what happened,
+    // because a title is not read until it is hovered.
     <button
+      aria-live="polite"
       className={`aw-chat-connection ${connected ? "is-connected" : ""}`}
       disabled={onReconnect === undefined || connected || connection === "connecting"}
       onClick={onReconnect}
+      role="status"
       title={connected ? undefined : "点击重新连接"}
       type="button"
     >
@@ -955,6 +973,19 @@ function ChatTurn({
             }
           />
         ) : null}
+        {/* The settled outcome, once, in one sentence. `LoadingLine`
+            above is itself a `role="status"`, so the running phases are
+            announced; without this the *end* -- the answer arriving --
+            was the one thing that stayed silent. */}
+        {turn.historical || turn.phase === "submitting" || turn.phase === "running" ? null : (
+          <p aria-atomic="true" className="aw-sr-only" role="status">
+            {turn.phase === "withheld"
+              ? "回答没有发出来"
+              : turn.answer === undefined
+                ? "这一轮没有回答"
+                : `回答已生成，${String(turn.citations.length)} 条引用`}
+          </p>
+        )}
         {turn.historical && turn.answer === undefined ? (
           <p className="aw-chat-no-citations">这一轮只留下了你的问题，没有留下回答。</p>
         ) : null}
@@ -1033,7 +1064,10 @@ function ChatTurn({
 function LiveText({ stream }: { stream: LiveTextState }) {
   if (stream.redacted || stream.text === "") return null;
   return (
-    <div aria-live="polite" className="aw-chat-live-text">
+    // No `aria-live`: this <p> is rewritten on every delta, so announcing
+    // it means re-reading the whole partial answer several times a
+    // second. The turn's own status line says 正在生成 once.
+    <div className="aw-chat-live-text">
       <p>{stream.text}</p>
       <small>
         <CircleDot aria-hidden="true" size={12} />

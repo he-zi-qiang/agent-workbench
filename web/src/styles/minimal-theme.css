@@ -2185,33 +2185,59 @@ select {
   opacity: 1;
 }
 
-.aw-task-list-row:hover :is(.aw-status-pill, .aw-task-status-dot),
-.aw-task-list-row:focus-within :is(.aw-status-pill, .aw-task-status-dot) {
+/* 悬停时让位给删除按钮——指针就在这一行上，读者一秒前才看过状态。
+   键盘聚焦时不让位：那样一来，读者正停在的那一行，恰好是唯一看不到状态的
+   一行。删除按钮是绝对定位在右端的，所以这里是把点挪开，不是把它藏起来。
+   用独立的 `translate` 属性而不是 `transform`，是为了不和下面表示形状的
+   `rotate` 打架——两个属性各写各的，不需要合成一条。 */
+.aw-task-list-row:hover :is(.aw-status-pill, .aw-task-status-dot) {
   opacity: 0;
 }
 
+.aw-task-list-row:focus-within :is(.aw-status-pill, .aw-task-status-dot) {
+  translate: -30px 0;
+}
+
+/* 形状和颜色各说一遍。
+ *
+ * 此前状态只由色相表达：running 是青、waiting 是橙、succeeded 是绿、失败是
+ * 红——四个 8px 的圆点，对红绿色觉障碍的读者来说是四个一样的点。灰度打印或
+ * 截图压缩之后，对所有人都是。
+ *
+ * 两个轴，四种组合，不用记：**空心=还没完，实心=完了；圆=正常，菱形=要人管。**
+ *
+ *   空心圆    在跑 / 排队        它自己会走完
+ *   空心菱形  等批准 / 等迁移    停下来了，在等你
+ *   实心圆    已完成             走完了
+ *   实心菱形  失败 / 取消 / 放弃 结束了，但不是好的那种
+ */
 .aw-task-status-dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border: 1.5px solid var(--aw-text-muted);
   border-radius: 50%;
-  background: var(--aw-text-subtle);
+  background: transparent;
   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 8%, transparent);
+  transition: translate var(--aw-duration-fast) var(--aw-ease);
 }
 
 .aw-task-status-dot[data-status="running"],
 .aw-task-status-dot[data-status="queued"] {
-  background: var(--aw-info);
+  border-color: var(--aw-info);
   color: var(--aw-info);
 }
 
 .aw-task-status-dot[data-status="waiting_approval"],
 .aw-task-status-dot[data-status="waiting_migration"] {
-  background: var(--aw-warning);
+  border-color: var(--aw-warning);
+  border-radius: 1px;
   color: var(--aw-warning);
+  rotate: 45deg;
 }
 
 .aw-task-status-dot[data-status="succeeded"] {
+  border-color: var(--aw-success);
   background: var(--aw-success);
   color: var(--aw-success);
 }
@@ -2221,8 +2247,11 @@ select {
   [data-status="cancelled"],
   [data-status="dead_letter"]
 ) {
+  border-color: var(--aw-danger);
+  border-radius: 1px;
   background: var(--aw-danger);
   color: var(--aw-danger);
+  rotate: 45deg;
 }
 
 .aw-session-inline-rename {

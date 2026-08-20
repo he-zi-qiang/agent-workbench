@@ -292,7 +292,21 @@ function Progress({ progress }: { progress: ToolProgressView }) {
             // key at all. No eslint suppression: the rule that would object is
             // not configured in this project, and a disable comment naming a
             // rule that does not exist is itself an error here.
-            <li key={index}>{line}</li>
+            // The live region is the LAST line and nothing else. Index keys
+            // make that node stable while its text changes, which is exactly
+            // what a polite region wants: the newest line is the only thing
+            // that is news. A duplicate sr-only copy would have worked too,
+            // and was wrong for a duller reason -- the same sentence would
+            // then be on the page twice, which is a thing tests and readers
+            // both trip over.
+            <li
+              aria-live={
+                index === progress.lines.length - 1 ? "polite" : undefined
+              }
+              key={index}
+            >
+              {line}
+            </li>
           ))}
         </ol>
       )}

@@ -97,9 +97,11 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   // 手机上要先拉开抽屉。断言入口而不是只断言表单，是因为表单一旦默认收起，
   // 只看控件的测试会连"入口还在不在"都答不出来。
   //
-  // `exact` 是必需的，而且是这条断言唯一一次真正失败的原因：Playwright 的
-  // `name` 默认按子串匹配，而「刷新任务列表」的无障碍名里正好含有「新任务」
-  // 三个字，于是同一个选择器同时命中刷新按钮，报 strict mode violation。
+  // `exact` 留着，而它当初是这条断言唯一一次真正失败的原因：Playwright 的
+  // `name` 默认按子串匹配，而刷新按钮当时叫「刷新任务列表」，无障碍名里正好
+  // 含着「新任务」三个字，于是同一个选择器同时命中它，报 strict mode
+  // violation。那个按钮现在叫「重新加载列表」——名字改掉了歧义的来源，`exact`
+  // 则挡住下一个不小心以「新任务」开头的名字。
   if (isMobile) {
     await page.getByRole("button", { name: "打开任务列表" }).click();
     const tasks = page.getByRole("complementary", {

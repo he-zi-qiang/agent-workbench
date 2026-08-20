@@ -4246,12 +4246,15 @@ pre {
     max-width: 52vw;
   }
 
+  /* 窄屏上这里曾经是 `max-width: 42px; font-size: 0`——一个只剩断线图标
+     的按钮。图标说得出「有情况」，说不出是哪种情况，而这一档恰恰只有两
+     种：还在重连，和已经断了。把字留下、让标题让位，比把字删掉更省地方
+     的说法是不成立的：标题旁边本来就有 `max-width: 52vw` 的余量。 */
   .aw-chat-connection {
-    max-width: 42px;
     min-height: 36px;
-    overflow: hidden;
-    padding: 8px 12px;
-    font-size: 0;
+    padding: 8px 10px;
+    font-size: 11px;
+    white-space: nowrap;
   }
 
   .aw-chat-transcript {
@@ -4395,12 +4398,15 @@ pre {
     display: block;
   }
 
+  /* `width: fit-content` 曾经写在这里，而它排在 `.aw-icon-button` 的
+     `width: 44px` 后面、特指度相同——于是宽度塌回图标本身的 18px，实测 20×44。
+     这是手机上唯一一条通往任务列表的路，20px 在 WCAG 2.2 AA 的 24×24 地板
+     以下。宽度交回给按钮自己的规则。 */
   .aw-work-mobile-back {
     display: inline-flex;
-    width: fit-content;
     min-height: 32px;
     margin-bottom: 3px;
-    padding: 2px 0;
+    padding: 2px 6px;
   }
 
   .aw-work-detail-header {
@@ -5174,8 +5180,38 @@ p.aw-code-step-thought {
 }
 
 .aw-code-approval h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   margin: 0 0 4px;
+  gap: 8px;
   font-size: 13px;
+}
+
+/* 风险等级。文字先于颜色——四个等级里有两个是「答应了就撤不回来」那一类，
+   而它们此前在界面上没有任何表示。边框而不是填充：这是一句限定语，不是一个
+   动作，填一块色会让它读成可以点。 */
+.aw-code-approval-risk {
+  padding: 1px 7px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 999px;
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.aw-code-approval-risk[data-risk="external"],
+.aw-code-approval-risk[data-risk="destructive"] {
+  border-color: var(--aw-warning-border);
+  color: var(--aw-warning);
+}
+
+.aw-code-approval-note {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.65;
 }
 
 .aw-code-approval-actions {

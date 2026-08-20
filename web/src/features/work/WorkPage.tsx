@@ -923,7 +923,10 @@ export function WorkPage() {
           </div>
           <div className="aw-pane-header-actions">
             <button
-              aria-label="刷新任务列表"
+              // 不叫「刷新任务列表」：那个名字里整整齐齐含着「新任务」，
+              // 而「新任务」是它上面两行的另一个按钮。两个控件的无障碍名
+              // 互为子串，对按名字找控件的人和工具都是一次歧义。
+              aria-label="重新加载列表"
               className="aw-icon-button"
               disabled={tasksQuery.isFetching}
               onClick={() => void tasksQuery.refetch()}
@@ -1120,6 +1123,27 @@ export function WorkPage() {
               </div>
               <StatusPill status={selectedTask.status} />
             </header>
+
+            {/* The one thing this page says out loud, and it is one
+                sentence rather than the run.
+
+                Nothing on this page was announced before: the pill above
+                flips 运行中 → 等待批准 → 已完成 in silence, and the
+                approval gate below mounts in silence. A reader using a
+                screen reader submitted a task and then heard nothing
+                again -- including the moment the run stopped and asked
+                them a question, which is the moment the whole Task shape
+                exists for. That is not an awkward page; it is a task that
+                cannot be finished.
+
+                Deliberately the *status*, not the trace. The timeline
+                below streams dozens of events per run and announcing
+                them is the same as announcing nothing -- see the live
+                regions on the two transcripts. `aria-atomic` because the
+                sentence only means anything whole. */}
+            <p aria-atomic="true" className="aw-sr-only" role="status">
+              任务{formatStatus(selectedTask.status)}
+            </p>
 
             {/* Lead with the outcome. The execution trace remains directly
                 below it for inspection, while the side rail appears only when
