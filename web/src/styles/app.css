@@ -178,40 +178,8 @@ a {
   color: var(--aw-rail-icon-active);
 }
 
-.aw-nav-divider {
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 1px solid var(--aw-rail-divider);
-}
-
 .aw-rail-spacer {
   flex: 1;
-}
-
-.aw-env-button,
-.aw-theme-button,
-.aw-quick-switcher-trigger {
-  padding: 0;
-}
-
-/* 主题按钮的图标在切档时转 180°，环境按钮的不转。
- *
- * 差别是有意的：环境按钮每次点开的是同一个对话框，图标没有"变成了别的"这件事
- * 可说；主题按钮点一下之后，它自己的图标就换了一个——不给这个交换一点时间，
- * 屏幕上同时发生的是「整页配色跳变」和「一个 18px 的图标瞬间变成另一个」，
- * 后者会被读成闪烁而不是响应。 */
-.aw-theme-button svg {
-  transition: transform var(--aw-duration-base) var(--aw-ease);
-}
-
-.aw-theme-button:hover svg {
-  transform: rotate(180deg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .aw-theme-button:hover svg {
-    transform: none;
-  }
 }
 
 .aw-mobile-nav {
@@ -2174,6 +2142,7 @@ pre {
 
 .aw-chat-session-delete,
 .aw-task-list-delete,
+.aw-code-recent-rename,
 .aw-code-recent-delete {
   display: inline-flex;
   align-items: center;
@@ -2190,11 +2159,23 @@ pre {
 
 .aw-chat-session-row:hover .aw-chat-session-delete,
 .aw-task-list-row:hover .aw-task-list-delete,
+.aw-code-recent-row:hover .aw-code-recent-rename,
 .aw-code-recent-row:hover .aw-code-recent-delete,
 .aw-chat-session-delete:focus-visible,
 .aw-task-list-delete:focus-visible,
+.aw-code-recent-rename:focus-visible,
 .aw-code-recent-delete:focus-visible {
   opacity: 1;
+}
+
+.aw-code-recent-actions {
+  display: flex;
+  align-items: center;
+}
+
+.aw-code-recent-rename:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
 }
 
 .aw-chat-session-delete:hover,
@@ -2632,34 +2613,6 @@ pre {
   font-size: 9px;
 }
 
-/* What the turn could reach, above the steps that show what it did with them.
-   Muted by default and lit only for the tools actually called, so the row reads
-   as capability first and activity second. */
-.aw-turn-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  margin: 0 0 8px;
-  gap: 5px;
-  color: var(--aw-text-muted);
-}
-
-.aw-turn-tool {
-  padding: 2px 7px;
-  border: 1px solid var(--aw-border);
-  border-radius: 999px;
-  background: var(--aw-panel-soft);
-  color: var(--aw-text-muted);
-  font-family: var(--aw-mono);
-  font-size: 10px;
-  cursor: help;
-}
-
-.aw-turn-tool.is-called {
-  border-color: color-mix(in srgb, var(--aw-evidence) 45%, var(--aw-border));
-  color: var(--aw-evidence);
-}
-
 .aw-chat-no-citations {
   display: flex;
   align-items: center;
@@ -3089,6 +3042,10 @@ pre {
   gap: 18px;
   /* The reading column takes the width, because the run and the answer both
      live in it. The rail only lists files, so it is sized for filenames. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.aw-work-body.has-output {
   grid-template-columns: minmax(0, 1fr) clamp(200px, 24%, 260px);
 }
 
@@ -3442,32 +3399,6 @@ pre {
   border-style: dashed;
   border-color: var(--aw-border-strong);
   background: var(--aw-sidebar);
-}
-
-/* 这一列点各是什么意思。每行右端已经写了自己的状态，所以这里回答的不是
-   「这一行怎么了」，而是「整列扫下来哪些跑过」——后者要读六遍注解才能答，
-   而它本该是一眼的事。缩进对齐到点所在的那一列。 */
-.aw-stream-legend {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  margin: 0 0 10px;
-  padding-left: 1px;
-  gap: 12px;
-  color: var(--aw-text-muted);
-  font-size: 11px;
-}
-
-.aw-stream-legend > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.aw-stream-legend .aw-stream-dot {
-  position: static;
-  width: 7px;
-  height: 7px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -5656,10 +5587,13 @@ p.aw-code-step-thought {
   }
 }
 
-/* 桌面端默认：这四个只在窄屏出现。 */
+/* 会话抽屉控件只在窄屏出现。 */
 .aw-code-sessions-close,
 .aw-code-mobile-sessions,
-.aw-code-sessions-backdrop,
+.aw-code-sessions-backdrop {
+  display: none;
+}
+
 /* 点空白处关掉抽屉。始终渲染，不再只在窄屏出现——抽屉现在每个宽度上都是抽屉，
    而一个盖住内容的浮层必须有一个不用找按钮的退出方式。 */
 .aw-code-preview-backdrop {
@@ -5672,6 +5606,25 @@ p.aw-code-step-thought {
   border: 0;
   background: var(--aw-scrim-soft);
   cursor: default;
+}
+
+@media (width <= 760px) {
+  .aw-code-sessions-close,
+  .aw-code-mobile-sessions {
+    display: inline-flex;
+  }
+
+  .aw-code-sessions-backdrop {
+    position: fixed;
+    z-index: 71;
+    inset: 0 0 60px;
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: var(--aw-scrim-soft);
+    backdrop-filter: blur(2px);
+  }
 }
 
 /* Starting an evaluation, and watching the one that is running. */
@@ -6508,12 +6461,6 @@ p.aw-code-step-thought {
 .aw-turn-process-label {
   color: var(--aw-text-soft);
   font-weight: 500;
-}
-
-.aw-turn-process-count {
-  margin-left: auto;
-  color: var(--aw-text-muted);
-  font-size: 11px;
 }
 
 /* 走通的阶段是中性的——和授权珠串同一条规则：一列绿色对勾会让唯一那次失败更

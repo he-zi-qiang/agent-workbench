@@ -134,22 +134,22 @@
    * 里「抬起」仍然由更亮表达（光从上方来），把卡片做得比画布更暗会让每张卡读成
    * 一个凹槽。深色的中性也保持暖偏——#17 16 14 的红绿蓝是递减的，和浅色一侧
    * 的 #f2 f0 eb 同一个方向，橙色落上去才不发脏。 */
-  --aw-canvas: light-dark(#f0ede7, #171614);
-  --aw-window: light-dark(#fbfaf8, #171614);
-  --aw-sidebar: light-dark(#f5f2ec, #1c1a18);
-  --aw-panel: light-dark(#ffffff, #221f1d);
+  --aw-canvas: light-dark(#f7f7f5, #171716);
+  --aw-window: light-dark(#fcfcfb, #191918);
+  --aw-sidebar: light-dark(#f5f5f2, #1f1f1d);
+  --aw-panel: light-dark(#ffffff, #242422);
 
   /* The raised-chip surface. Referenced by the workbench tabs since they
      shipped, but never defined until now -- the var() fallback quietly
      resolved to #fff on a #f7f7f5 container, which is why the active tab
      was indistinguishable from its neighbours. */
-  --aw-surface: light-dark(#ffffff, #221f1d);
-  --aw-panel-soft: light-dark(#f4f1eb, #1c1a18);
-  --aw-panel-strong: light-dark(#eae6df, #2a2724);
+  --aw-surface: light-dark(#ffffff, #242422);
+  --aw-panel-soft: light-dark(#f7f7f4, #20201e);
+  --aw-panel-strong: light-dark(#ecece8, #2b2b28);
 
   /* 凹面：代码块、被引的原文这类「陷进去」的底。同样此前只以 fallback 存在，
      而那个 fallback 是 `rgb(0 0 0 / 4%)`——一个在深色底上等于什么都没画的值。 */
-  --aw-surface-sunken: light-dark(#f4f2ee, #131211);
+  --aw-surface-sunken: light-dark(#f5f5f2, #141413);
 
   /* 深色下给面加一道 1px 的顶部高光。浅色下是透明的：那边「抬起」由投影表达，
      而投影在深色里几乎不可见（黑影落在黑底上），高光才是深色界面里唯一还能
@@ -183,23 +183,23 @@
      于是「什么颜色落在 rail 上」这件事在 app.css 里没有名字。 */
   --aw-on-rail: #ffffff;
 
-  --aw-text: light-dark(#1b1917, #ece7e1);
-  --aw-text-soft: light-dark(#6b665f, #a79f95);
-  --aw-text-muted: light-dark(#8b857c, #857e74);
+  --aw-text: light-dark(#242421, #efefeb);
+  --aw-text-soft: light-dark(#62625c, #aaa9a2);
+  --aw-text-muted: light-dark(#8b8a83, #85847d);
 
   /* 第四档文字，比 muted 再弱一级：时间戳、id 后缀这类「在那里但不必读」的字。
      此前只以 fallback 形式存在于一条规则里。 */
-  --aw-text-subtle: light-dark(#a09a90, #6d675e);
+  --aw-text-subtle: light-dark(#aaa9a1, #6c6b65);
 
-  --aw-border: light-dark(#eceae4, #2c2926);
-  --aw-border-strong: light-dark(#d8d3cb, #3d3934);
+  --aw-border: light-dark(#e9e8e3, #30302d);
+  --aw-border-strong: light-dark(#d8d6cf, #41413c);
 
   /* 比 border 再淡一档：同一块面内部的分隔，而不是两块面之间的边界。 */
-  --aw-border-subtle: light-dark(#f2f0eb, #232120);
+  --aw-border-subtle: light-dark(#f1f0ec, #272725);
 
-  --aw-accent: light-dark(#d97757, #e08a66);
-  --aw-accent-hover: light-dark(#c96545, #ec9c7c);
-  --aw-accent-soft: light-dark(#fbf0ea, #2e1f18);
+  --aw-accent: light-dark(#b95f43, #d98265);
+  --aw-accent-hover: light-dark(#a95036, #e49376);
+  --aw-accent-soft: light-dark(#f8eee9, #2d201b);
 
   /* 动作色保持 Claude-like 的暖橙，但两套主题都用近黑文字。白字落在浅色橙上
      只有 3.5:1，不能承载普通按钮文本；近黑字既保留动作色，也让主按钮、Logo
@@ -246,16 +246,16 @@
    * 所以两个主题差的不是形状而是不透明度：5%/11% → 46%/62%。写成两个颜色
    * token 再由下面两条规则组合，是为了让 `light-dark()` 能参与——它返回颜色，
    * 不返回整条 box-shadow。 */
-  --aw-shadow-tint-weak: light-dark(rgb(27 25 23 / 5%), rgb(0 0 0 / 46%));
-  --aw-shadow-tint-strong: light-dark(rgb(27 25 23 / 11%), rgb(0 0 0 / 62%));
-  --aw-shadow-tint-lift: light-dark(rgb(34 35 32 / 8%), rgb(0 0 0 / 52%));
+  --aw-shadow-tint-weak: light-dark(rgb(24 24 21 / 4%), rgb(0 0 0 / 42%));
+  --aw-shadow-tint-strong: light-dark(rgb(24 24 21 / 9%), rgb(0 0 0 / 58%));
+  --aw-shadow-tint-lift: light-dark(rgb(24 24 21 / 6%), rgb(0 0 0 / 46%));
   --aw-shadow-sm: 0 1px 2px var(--aw-shadow-tint-weak);
   --aw-shadow-md: 0 18px 48px var(--aw-shadow-tint-strong);
 
   /* 输入区/悬浮条那一档：投影向下且更远，用来说「这一条浮在正文之上」。
      此前它以 `0 8px 24px rgb(34 35 32 / 8%)` 的形式写死在 app.css 的两条规则
      里——两条，值相同而互不知情。 */
-  --aw-shadow-lift: 0 8px 24px var(--aw-shadow-tint-lift);
+  --aw-shadow-lift: 0 4px 16px var(--aw-shadow-tint-lift);
 
   /* 抽屉从侧面推进来时的投影，方向由使用处给（左推是负、右推是正）。 */
   --aw-shadow-drawer-left: -18px 0 48px var(--aw-shadow-tint-strong);
@@ -279,12 +279,12 @@
   --aw-radius-sm: 8px;
   --aw-radius-md: 12px;
   --aw-radius-lg: 16px;
-  --aw-radius-xl: 20px;
+  --aw-radius-xl: 16px;
 
   /* 桌面壳层只有两档：Codex 式紧凑模式栏，以及需要识别全部功能时的展开态。
-     页面自己的会话栏仍在，所以展开宽度刻意封在 208px，避免双侧栏吞掉阅读列。 */
-  --aw-nav-width: 208px;
-  --aw-nav-width-collapsed: 64px;
+     页面自己的会话栏仍在，所以展开宽度刻意封在 188px，中等屏幕会强制收起。 */
+  --aw-nav-width: 188px;
+  --aw-nav-width-collapsed: 52px;
 
   /* --- 动效 -------------------------------------------------------------
    *
@@ -296,7 +296,7 @@
   --aw-ease: cubic-bezier(0.32, 0.72, 0, 1);
   --aw-duration-fast: 120ms;
   --aw-duration-base: 200ms;
-  --aw-duration-slow: 320ms;
+  --aw-duration-slow: 240ms;
   --aw-transition: 150ms ease;
 
   /* --- 产物预览的尺寸 ---------------------------------------------------
@@ -358,6 +358,6 @@ h1,
 h2,
 h3,
 h4 {
-  font-family: var(--aw-display);
-  letter-spacing: -0.01em;
+  font-family: var(--aw-sans);
+  letter-spacing: -0.012em;
 }

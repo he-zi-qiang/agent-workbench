@@ -7,17 +7,23 @@ export function IconButton({
   children,
   onClick,
   active,
+  controls,
   disabled = false,
+  expanded,
   className = "",
 }: PropsWithChildren<{
   label: string;
   onClick?: () => void;
   active?: boolean;
+  controls?: string;
   disabled?: boolean;
+  expanded?: boolean;
   className?: string;
 }>) {
   return (
     <button
+      aria-controls={controls}
+      aria-expanded={expanded}
       aria-label={label}
       aria-pressed={active}
       className={`aw-icon-button ${className}`}

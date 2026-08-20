@@ -9,7 +9,13 @@ import {
   Sun,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Link,
   NavigationType,
@@ -24,17 +30,11 @@ import { EnvironmentDialog } from "./EnvironmentDialog";
 import { useIdentity } from "./IdentityContext";
 import { isPathWithin, NAVIGATION } from "./navigation";
 import { QuickSwitcher } from "./QuickSwitcher";
-import { NEXT_MODE, type ThemeMode, useTheme } from "./ThemeContext";
+import { type ThemeMode, useTheme } from "./ThemeContext";
+import type { WorkspaceSidebarContextValue } from "./WorkspaceSidebar";
 
-/**
- * Where the rail's one dividing line goes: before the first entry that is not
- * a primary flow.
- *
- * Derived rather than written as an index. 对话、任务与 Code are primary
- * flows; everything after them is a resource or diagnostic surface. Deriving
- * the boundary from `primary` keeps that grouping true when navigation moves.
- */
-const FIRST_SECONDARY_INDEX = NAVIGATION.findIndex((item) => !item.primary);
+const PRIMARY_NAVIGATION = NAVIGATION.filter((item) => item.primary);
+const KNOWLEDGE_NAVIGATION = NAVIGATION.find((item) => item.to === "/knowledge");
 
 const PRIMARY_FLOW_ROOTS = Object.fromEntries(
   NAVIGATION.filter((item) => item.primary).map((item) => [item.to, item.to]),
@@ -48,39 +48,11 @@ interface PrimaryNavigationMemory {
   identityBoundaryActive: boolean;
 }
 
-/**
- * 主题按钮显示的是**当前这一档**，不是"点了会变成什么"。
- *
- * 两种写法都常见，但只有一种在三档下不会说谎：显示"下一档"的按钮在 system 档上
- * 必须画一个太阳（下一档是浅色），而此刻屏幕可能正是深的——图标于是和眼前的
- * 界面相反。显示当前档就没有这个问题，代价是要有 title 说清点下去会怎样。
- */
 const THEME_LABEL: Record<ThemeMode, { icon: typeof Sun; text: string }> = {
   system: { icon: MonitorCog, text: "跟随系统" },
   light: { icon: Sun, text: "浅色" },
   dark: { icon: Moon, text: "深色" },
 };
-
-function ThemeControl() {
-  const { mode, resolved, cycleMode } = useTheme();
-  const { icon: Icon, text } = THEME_LABEL[mode];
-  // `system` 档下补一句当前解析成了什么。这一档的按钮文字说的是"跟随"，而跟随
-  // 的结果是屏幕现在的样子——不说出来的话，唯一能回答"现在到底是深还是浅"的
-  // 东西就是眼睛，而这正是有人来点这个按钮的原因。
-  const current = mode === "system" ? `（当前${resolved === "dark" ? "深色" : "浅色"}）` : "";
-  return (
-    <button
-      aria-label={text}
-      className="aw-global-link aw-theme-button"
-      onClick={cycleMode}
-      title={`主题：${text}${current} · 点击切换到${THEME_LABEL[NEXT_MODE[mode]].text}`}
-      type="button"
-    >
-      <Icon aria-hidden="true" size={18} />
-      <span className="aw-global-link-copy">{text}</span>
-    </button>
-  );
-}
 
 export function AppShell() {
   const { identity, setEditorOpen } = useIdentity();
@@ -109,10 +81,39 @@ export function AppShell() {
       identityBoundaryActive: false,
     }));
   const [railCollapsed, setRailCollapsed] = useStoredState(
-    "agent-workbench:rail-collapsed",
-    true,
+    "agent-workbench:workspace-sidebar-collapsed-v2",
+    false,
   );
+  const [sidebarHost, setSidebarHost] = useState<HTMLDivElement | null>(null);
+  const [sidebarDrawerLocationKey, setSidebarDrawerLocationKey] = useState<
+    string | null
+  >(null);
+  const sidebarDrawerOpen = sidebarDrawerLocationKey === location.key;
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const focusBeforeSidebar = useRef<HTMLElement | null>(null);
+  const openSidebar = useCallback(() => {
+    focusBeforeSidebar.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSidebarDrawerLocationKey(location.key);
+  }, [location.key]);
+  const closeSidebar = useCallback(() => {
+    setSidebarDrawerLocationKey(null);
+    window.requestAnimationFrame(() => focusBeforeSidebar.current?.focus());
+  }, []);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const moreDialogRef = useRef<HTMLElement | null>(null);
+  const focusBeforeMore = useRef<HTMLElement | null>(null);
+  const restoreMoreFocus = useRef(true);
+  const openMore = useCallback(() => {
+    focusBeforeMore.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    restoreMoreFocus.current = true;
+    setMobileMoreOpen(true);
+  }, []);
+  const closeMore = useCallback((restoreFocus = true) => {
+    restoreMoreFocus.current = restoreFocus;
+    setMobileMoreOpen(false);
+  }, []);
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
   const focusBeforeQuickSwitcher = useRef<HTMLElement | null>(null);
   const openQuickSwitcher = useCallback(() => {
@@ -124,6 +125,40 @@ export function AppShell() {
     setQuickSwitcherOpen(false);
     window.requestAnimationFrame(() => focusBeforeQuickSwitcher.current?.focus());
   }, []);
+  const openQuickSwitcherFromMore = useCallback(() => {
+    restoreMoreFocus.current = false;
+    focusBeforeQuickSwitcher.current = focusBeforeMore.current;
+    setMobileMoreOpen(false);
+    setQuickSwitcherOpen(true);
+  }, []);
+  const openEnvironmentFromMore = useCallback(() => {
+    // Let EnvironmentDialog capture a trigger that remains mounted after the
+    // More sheet disappears, so closing the nested dialog restores focus to a
+    // real control rather than to the removed sheet item.
+    focusBeforeMore.current?.focus();
+    restoreMoreFocus.current = false;
+    setMobileMoreOpen(false);
+    setEditorOpen(true);
+  }, [setEditorOpen]);
+  useEffect(() => {
+    if (!mobileMoreOpen) return;
+    const returnTarget = focusBeforeMore.current;
+    moreDialogRef.current?.querySelector<HTMLElement>(".aw-mobile-more-link")?.focus();
+    return () => {
+      if (!restoreMoreFocus.current) return;
+      window.requestAnimationFrame(() => returnTarget?.focus());
+    };
+  }, [mobileMoreOpen]);
+  useEffect(() => {
+    if (!sidebarDrawerOpen) return;
+    window.requestAnimationFrame(() => {
+      sidebarRef.current
+        ?.querySelector<HTMLElement>(
+          ".aw-chat-sessions-close, .aw-code-sessions-close, .aw-work-sessions-close, .aw-knowledge-sessions-close",
+        )
+        ?.focus();
+    });
+  }, [sidebarDrawerOpen]);
   useEffect(() => {
     const handleGlobalKey = (event: KeyboardEvent) => {
       if (
@@ -141,15 +176,21 @@ export function AppShell() {
           !quickSwitcherOpen;
         if (anotherDialogOpen) return;
         event.preventDefault();
-        setMobileMoreOpen(false);
-        openQuickSwitcher();
-      } else if (event.key === "Escape" && mobileMoreOpen) {
-        setMobileMoreOpen(false);
+        if (mobileMoreOpen) {
+          openQuickSwitcherFromMore();
+        } else {
+          openQuickSwitcher();
+        }
       }
     };
     window.addEventListener("keydown", handleGlobalKey);
     return () => window.removeEventListener("keydown", handleGlobalKey);
-  }, [mobileMoreOpen, openQuickSwitcher, quickSwitcherOpen]);
+  }, [
+    mobileMoreOpen,
+    openQuickSwitcher,
+    openQuickSwitcherFromMore,
+    quickSwitcherOpen,
+  ]);
   // Adjust this tiny navigation snapshot during render so a deep link's first
   // committed frame already points back to itself. Identity changes are a
   // special transition: the URL still belongs to the previous principal, so
@@ -242,9 +283,99 @@ export function AppShell() {
   const secondaryActive = secondaryNavigation.some((item) =>
     isPathWithin(location.pathname, item.to),
   );
+  const knowledgeCurrent =
+    KNOWLEDGE_NAVIGATION?.covers.some((prefix) =>
+      isPathWithin(location.pathname, prefix),
+    ) ?? false;
+  const contextSidebarAvailable =
+    currentPrimaryFlow !== undefined || knowledgeCurrent;
+  const handleMoreKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMore();
+      return;
+    }
+    if (event.key !== "Tab" || moreDialogRef.current === null) return;
+    const focusable = Array.from(
+      moreDialogRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled])',
+      ),
+    );
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (first === undefined || last === undefined) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  useEffect(() => {
+    if (!sidebarDrawerOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSidebar();
+        return;
+      }
+      if (event.key !== "Tab" || sidebarRef.current === null) return;
+      const focusable = Array.from(
+        sidebarRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled])',
+        ),
+      ).filter((element) => element.offsetParent !== null);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (first === undefined || last === undefined) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [closeSidebar, sidebarDrawerOpen]);
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 761px)");
+    const closeDrawerAtDesktop = () => {
+      if (!desktop.matches) return;
+      setSidebarDrawerLocationKey(null);
+      focusBeforeSidebar.current = null;
+      window.requestAnimationFrame(() => {
+        sidebarRef.current
+          ?.querySelector<HTMLElement>('.aw-global-link[aria-current="page"]')
+          ?.focus();
+      });
+    };
+    desktop.addEventListener("change", closeDrawerAtDesktop);
+    return () => desktop.removeEventListener("change", closeDrawerAtDesktop);
+  }, []);
+  const sidebarContext: WorkspaceSidebarContextValue = {
+    managed: true,
+    host: sidebarHost,
+    drawerOpen: sidebarDrawerOpen,
+    open: openSidebar,
+    close: closeSidebar,
+  };
   return (
-    <div className={`aw-app-shell ${railCollapsed ? "is-rail-collapsed" : ""}`}>
-      <nav className="aw-global-rail" aria-label="主导航">
+    <div
+      className={`aw-app-shell ${railCollapsed ? "is-rail-collapsed" : ""} ${
+        sidebarDrawerOpen ? "is-sidebar-drawer-open" : ""
+      } ${contextSidebarAvailable ? "" : "is-context-free"}`}
+    >
+      <nav
+        aria-modal={sidebarDrawerOpen ? "true" : undefined}
+        className="aw-global-rail"
+        aria-label="主导航"
+        ref={sidebarRef}
+        role={sidebarDrawerOpen ? "dialog" : undefined}
+      >
         <div className="aw-rail-brand-row">
           <NavLink
             aria-label="Agent Workbench"
@@ -253,8 +384,7 @@ export function AppShell() {
           >
             <span className="aw-logo-mark" aria-hidden="true">A</span>
             <span className="aw-logo-copy">
-              <strong>Agent</strong>
-              <small>Workbench</small>
+              <strong>Agent Workbench</strong>
             </span>
           </NavLink>
           <button
@@ -271,20 +401,17 @@ export function AppShell() {
             )}
           </button>
         </div>
-        <span className="aw-nav-group-label">工作</span>
-        {NAVIGATION.map((item, index) => {
+        <span className="aw-sidebar-section-label">工作空间</span>
+        {PRIMARY_NAVIGATION.map((item) => {
           const Icon = item.icon;
           const current = item.covers.some((prefix) =>
             isPathWithin(location.pathname, prefix),
           );
           return (
             <div
-              className={index === FIRST_SECONDARY_INDEX ? "aw-nav-divider" : ""}
+              className={`aw-sidebar-workspace ${current ? "is-active" : ""}`}
               key={item.to}
             >
-              {index === FIRST_SECONDARY_INDEX ? (
-                <span className="aw-nav-group-label">资源与工具</span>
-              ) : null}
               {/* `Link`, not `NavLink`: this entry stands for a set of
                   prefixes, and `NavLink` overwrites `aria-current` with its own
                   single-path match -- which reads "not here" on /work. */}
@@ -300,38 +427,68 @@ export function AppShell() {
                 </span>
                 <span className="aw-global-link-copy">{item.label}</span>
               </Link>
+              {current ? (
+                <div
+                  aria-label={`${item.label}上下文`}
+                  className="aw-sidebar-context-slot"
+                  id="workspace-sidebar-context"
+                  ref={setSidebarHost}
+                />
+              ) : null}
             </div>
           );
         })}
-        <div className="aw-rail-spacer" />
+        <span className="aw-sidebar-section-label">资源</span>
+        {KNOWLEDGE_NAVIGATION === undefined ? null : (
+          <div
+            className={`aw-sidebar-workspace aw-sidebar-knowledge ${
+              knowledgeCurrent ? "is-active" : ""
+            }`}
+          >
+            <Link
+              aria-label={KNOWLEDGE_NAVIGATION.label}
+              aria-current={knowledgeCurrent ? "page" : undefined}
+              className={`aw-global-link ${knowledgeCurrent ? "active" : ""}`}
+              title={`${KNOWLEDGE_NAVIGATION.label} · ${KNOWLEDGE_NAVIGATION.description}`}
+              to={KNOWLEDGE_NAVIGATION.to}
+            >
+              <span className="aw-global-link-icon">
+                <KNOWLEDGE_NAVIGATION.icon aria-hidden="true" size={18} />
+              </span>
+              <span className="aw-global-link-copy">
+                {KNOWLEDGE_NAVIGATION.label}
+              </span>
+            </Link>
+            {knowledgeCurrent ? (
+              <div
+                aria-label="知识库上下文"
+                className="aw-sidebar-context-slot"
+                id="workspace-sidebar-context"
+                ref={setSidebarHost}
+              />
+            ) : null}
+          </div>
+        )}
+        {currentPrimaryFlow === undefined && !knowledgeCurrent ? (
+          <div className="aw-rail-spacer" />
+        ) : null}
+        <div className="aw-sidebar-footer-nav">
+          <button
+            aria-label="更多"
+            aria-expanded={mobileMoreOpen}
+            aria-haspopup="dialog"
+            className={`aw-global-link aw-more-trigger ${secondaryActive ? "active" : ""}`}
+            onClick={openMore}
+            type="button"
+          >
+            <span className="aw-global-link-icon">
+              <MoreHorizontal aria-hidden="true" size={18} />
+            </span>
+            <span className="aw-global-link-copy">更多</span>
+          </button>
+        </div>
         <button
-          aria-label="快速跳转"
-          className="aw-global-link aw-quick-switcher-trigger"
-          onClick={openQuickSwitcher}
-          title="快速跳转 · ⌘K / Ctrl K"
-          type="button"
-        >
-          <span className="aw-global-link-icon">
-            <Search aria-hidden="true" size={18} />
-          </span>
-          <span className="aw-global-link-copy">快速跳转</span>
-          <kbd>⌘K</kbd>
-        </button>
-        <ThemeControl />
-        <button
-          aria-label="环境"
-          className="aw-global-link aw-env-button"
-          onClick={() => setEditorOpen(true)}
-          title="本地环境"
-          type="button"
-        >
-          <span className="aw-global-link-icon">
-            <Settings2 aria-hidden="true" size={18} />
-          </span>
-          <span className="aw-global-link-copy">环境与权限</span>
-        </button>
-        <button
-          aria-label={`本地身份：${identity.tenantId} / ${identity.principalId}`}
+          aria-label={`环境与身份：${identity.tenantId} / ${identity.principalId}`}
           className="aw-rail-identity"
           onClick={() => setEditorOpen(true)}
           title={`点击编辑本地身份\n授权：${identity.scopes.join("、")}`}
@@ -342,16 +499,33 @@ export function AppShell() {
           </span>
           <span className="aw-rail-identity-copy">
             <strong>{identity.principalId}</strong>
-            <small>{identity.tenantId} · {identity.scopes.length} scope</small>
+            <small>{identity.tenantId} · {identity.scopes.length} 项权限</small>
           </span>
         </button>
       </nav>
-      <section className="aw-app-content">
+      <section
+        aria-hidden={sidebarDrawerOpen ? "true" : undefined}
+        className="aw-app-content"
+        inert={sidebarDrawerOpen ? true : undefined}
+      >
         {/* Remount every routed surface at an identity boundary so an old
             principal's authorized projection cannot remain on screen. */}
-        <Outlet key={identityKey} />
+        <Outlet context={sidebarContext} key={identityKey} />
       </section>
-      <nav className="aw-mobile-nav" aria-label="移动端导航">
+      {sidebarDrawerOpen ? (
+        <button
+          aria-label="关闭侧边栏"
+          className="aw-workspace-sidebar-backdrop"
+          onClick={closeSidebar}
+          type="button"
+        />
+      ) : null}
+      <nav
+        aria-hidden={sidebarDrawerOpen ? "true" : undefined}
+        aria-label="移动端导航"
+        className="aw-mobile-nav"
+        inert={sidebarDrawerOpen ? true : undefined}
+      >
         {NAVIGATION.filter((item) => item.primary || item.to === "/knowledge").map(
           (item) => {
             const Icon = item.icon;
@@ -375,7 +549,7 @@ export function AppShell() {
           aria-expanded={mobileMoreOpen}
           aria-haspopup="dialog"
           className={`aw-mobile-link ${secondaryActive ? "active" : ""}`}
-          onClick={() => setMobileMoreOpen(true)}
+          onClick={openMore}
           type="button"
         >
           <MoreHorizontal aria-hidden="true" size={19} />
@@ -385,7 +559,7 @@ export function AppShell() {
       {mobileMoreOpen ? (
         <div
           className="aw-mobile-more-backdrop"
-          onClick={() => setMobileMoreOpen(false)}
+          onClick={() => closeMore()}
           role="presentation"
         >
           <section
@@ -393,17 +567,16 @@ export function AppShell() {
             aria-modal="true"
             className="aw-mobile-more-sheet"
             onClick={(event) => event.stopPropagation()}
+            onKeyDown={handleMoreKeyDown}
+            ref={moreDialogRef}
             role="dialog"
           >
             <header>
-              <div>
-                <span className="aw-eyebrow">更多</span>
-                <h2>项目工具</h2>
-              </div>
+              <h2>更多</h2>
               <button
                 aria-label="关闭更多页面"
                 className="aw-icon-button"
-                onClick={() => setMobileMoreOpen(false)}
+                onClick={() => closeMore()}
                 type="button"
               >
                 <X aria-hidden="true" size={18} />
@@ -417,7 +590,7 @@ export function AppShell() {
                     aria-label={item.label}
                     className="aw-mobile-more-link"
                     key={item.to}
-                    onClick={() => setMobileMoreOpen(false)}
+                    onClick={() => closeMore()}
                     to={item.to}
                   >
                     <Icon aria-hidden="true" size={19} />
@@ -431,10 +604,7 @@ export function AppShell() {
               <button
                 aria-label="快速跳转"
                 className="aw-mobile-more-link"
-                onClick={() => {
-                  setMobileMoreOpen(false);
-                  openQuickSwitcher();
-                }}
+                onClick={openQuickSwitcherFromMore}
                 type="button"
               >
                 <Search aria-hidden="true" size={19} />
@@ -457,10 +627,7 @@ export function AppShell() {
               </button>
               <button
                 className="aw-mobile-more-link"
-                onClick={() => {
-                  setMobileMoreOpen(false);
-                  setEditorOpen(true);
-                }}
+                onClick={openEnvironmentFromMore}
                 type="button"
               >
                 <Settings2 aria-hidden="true" size={19} />
