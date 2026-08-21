@@ -19,6 +19,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Identity,
     Index,
     Integer,
@@ -52,6 +53,9 @@ FILENAME_LENGTH = 255
 # be constructed; this bounds what may be stored, and a test asserts they agree
 # so a widened preview cannot start silently failing inserts.
 OBJECTIVE_PREVIEW_LENGTH = 200
+#: A project's name. Same order as a knowledge base's, for the same reason: it
+#: is a phrase on one row, not a paragraph.
+PROJECT_NAME_LENGTH = 200
 
 conversation_sessions = Table(
     "conversation_sessions",
@@ -103,6 +107,39 @@ conversation_sessions = Table(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    ),
+    # Which project this was done for, or no project at all (ADR-071 2.1).
+    #
+    # Nullable, and NULL is the normal state: no migration invents a project and
+    # sweeps somebody's history into it. Such a group would lie twice over --
+    # claiming these things belong to one piece of work, and claiming that was
+    # the user's judgement.
+    #
+    # ON DELETE SET NULL, not CASCADE: a project is a label, and deleting a
+    # label must not delete what it labelled. Letting "tidy up my project list"
+    # take three months of work with it turns a tidying action into a
+    # destructive one (ADR-071 2.2).
+    Column(
+        "project_id",
+        String(IDENTIFIER_LENGTH),
+        nullable=True,
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "tenant_id"],
+        ["projects.project_id", "projects.tenant_id"],
+        # SET NULL names the column, and that is not decoration: a composite
+        # foreign key nulls *every* column it covers, so a bare SET NULL would
+        # try to blank tenant_id too -- which is NOT NULL, so deleting a project
+        # raised a not-null violation instead of releasing its members. Caught
+        # by the contract suite against real PostgreSQL; the in-memory double
+        # could not have shown it. Needs PostgreSQL 15 or newer.
+        ondelete="SET NULL (project_id)",
+        name="fk_conversation_sessions_project",
+    ),
+    Index(
+        "ix_conversation_sessions_tenant_id_project_id",
+        "tenant_id",
+        "project_id",
     ),
     # Every query carries the tenant, so the tenant leads the index.
     Index("ix_conversation_sessions_tenant_id_session_id", "tenant_id", "session_id"),
@@ -269,6 +306,88 @@ artifacts = Table(
         server_default=func.now(),
     ),
     Index("ix_artifacts_tenant_id_artifact_id", "tenant_id", "artifact_id"),
+)
+
+# One piece of work, with a name, belonging to one person (ADR-071).
+#
+# A membership, not a container: everything under it keeps its own table and its
+# own lifecycle, and this row records only that they were done for the same
+# thing. Which is why the table is small -- and why it carries no permission
+# column at all. Membership does not affect visibility, in either direction.
+projects = Table(
+    "projects",
+    metadata,
+    # The same composite key as knowledge_bases, for the same reason: every
+    # lookup is structurally tenant-scoped rather than relying on UUID
+    # improbability as an authorization boundary.
+    Column("project_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("tenant_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("owner_id", String(IDENTIFIER_LENGTH), nullable=False),
+    Column("name", String(PROJECT_NAME_LENGTH), nullable=False),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # Archiving is not a soft delete: an archived project leaves the sidebar
+    # but stays readable, its deep link still opens, and everything under it
+    # keeps its project_id. Deleting is what releases membership (ADR-071 2.5).
+    Column("archived_at", DateTime(timezone=True), nullable=True),
+    # The sidebar query's exact shape: one owner's projects, unarchived first,
+    # most recently touched first.
+    Index(
+        "ix_projects_tenant_id_owner_id_archived_at",
+        "tenant_id",
+        "owner_id",
+        "archived_at",
+        text("updated_at DESC"),
+    ),
+)
+
+# Knowledge bases join through a link table while sessions and tasks carry a
+# foreign key, and the asymmetry is deliberate: one handbook is used by the
+# quarterly review, by hiring and by support at the same time. A project_id
+# column on it would force a person to pick one of the three, or to upload the
+# same file three times (ADR-071 2.3).
+project_knowledge_bases = Table(
+    "project_knowledge_bases",
+    metadata,
+    Column("tenant_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("project_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("knowledge_base_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column(
+        "linked_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    # Composite foreign keys, tenant on both sides: single-column ones would
+    # admit a row linking tenant A's project to tenant B's knowledge base --
+    # well-typed, and meaningless in this system.
+    ForeignKeyConstraint(
+        ["project_id", "tenant_id"],
+        ["projects.project_id", "projects.tenant_id"],
+        ondelete="CASCADE",
+        name="fk_project_knowledge_bases_project",
+    ),
+    ForeignKeyConstraint(
+        ["knowledge_base_id", "tenant_id"],
+        ["knowledge_bases.knowledge_base_id", "knowledge_bases.tenant_id"],
+        ondelete="CASCADE",
+        name="fk_project_knowledge_bases_knowledge_base",
+    ),
+    Index(
+        "ix_project_knowledge_bases_tenant_id_knowledge_base_id",
+        "tenant_id",
+        "knowledge_base_id",
+    ),
 )
 
 knowledge_bases = Table(
@@ -1162,5 +1281,22 @@ task_runs = Table(
         "task_id",
         postgresql_where=text("status = 'running'"),
     ),
+    # Which project this Task was submitted for, or none. Nullable and
+    # ON DELETE SET NULL for exactly the reasons given on
+    # conversation_sessions.project_id (ADR-071 2.1, 2.2).
+    Column("project_id", String(IDENTIFIER_LENGTH), nullable=True),
+    ForeignKeyConstraint(
+        ["project_id", "tenant_id"],
+        ["projects.project_id", "projects.tenant_id"],
+        # SET NULL names the column, and that is not decoration: a composite
+        # foreign key nulls *every* column it covers, so a bare SET NULL would
+        # try to blank tenant_id too -- which is NOT NULL, so deleting a project
+        # raised a not-null violation instead of releasing its members. Caught
+        # by the contract suite against real PostgreSQL; the in-memory double
+        # could not have shown it. Needs PostgreSQL 15 or newer.
+        ondelete="SET NULL (project_id)",
+        name="fk_task_runs_project",
+    ),
+    Index("ix_task_runs_tenant_id_project_id", "tenant_id", "project_id"),
     Index("ix_task_runs_tenant_id_task_id", "tenant_id", "task_id"),
 )

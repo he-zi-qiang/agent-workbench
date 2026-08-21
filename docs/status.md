@@ -22,6 +22,67 @@
 
 ---
 
+## 2026-08-20（未合并，第七批）：Project —— 一层归属，不是一个容器
+
+侧栏此前按**产品**分组，而人不按产品想事情：同一个季度复盘会同时有三段对话、
+两个任务和一个编码会话，而把它们联系起来的那件事在界面上没有任何表示。这一批
+把它做成一个真实的领域对象（[ADR-071](./adr/0071-a-project-is-a-membership-not-a-container.md)），
+不是前端的 localStorage 分组。
+
+**门禁**：`ruff format --check` / `ruff check` / `pyright` 全过；后端
+`pytest --ignore=tests/e2e` **3293 passed / 12 skipped**（本批 +27：13 个契约 ×
+2 个实现、8 个 API，加 3 个 port 序列化样本）。`tests/e2e` 的三条 worker 崩溃
+恢复用例在本机既有失败，与本批无关——在 `ce74730` 的 worktree 上同样复现，而那
+个提交的 CI 是绿的。前端
+`eslint --max-warnings 0` **0**、`tsc -b` **0**、`vitest` **533 passed / 32
+files**（本批 +7）、`vite build` 通过；`playwright` **6/6**。
+
+### 一、数据模型：归属住在被归属的那一行上
+
+`projects` 与 `project_knowledge_bases` 两张新表，外加
+`conversation_sessions.project_id` 与 `task_runs.project_id` 两列可空外键
+（迁移 `0030_projects`）。**迁移不写一行数据**：加完列之后每一行历史数据的
+`project_id` 都是 NULL。
+
+不对称是故意的：对话和任务各自属于一件事，而同一份《产品手册》会被复盘、招聘和
+客服同时用到——给它一个 `project_id` 列等于逼人在三件事里选一件。
+
+### 二、契约测试对着真 PostgreSQL 抓到一个只在那边存在的 bug
+
+`ON DELETE SET NULL` 加在**复合**外键上时，PostgreSQL 会把外键覆盖的**每一列**
+都置空，包括 `tenant_id`——而它是 NOT NULL。于是删除项目不是「放开归属」，而是
+一个 not-null 违例。
+
+in-memory 那一侧永远不会暴露这件事：它没有外键。改成 PG 15+ 的
+`ON DELETE SET NULL (project_id)` 之后 13 个契约在两个实现上都通过。
+
+### 三、`{"project_id": null}` 与「不传这个字段」必须分得开
+
+`null` 是**取消归属**，`{}` 是「什么也没说」。pydantic 解析出来是同一个值，所以
+路由问的是 `model_fields_set`。不分开的话，一个空 body 会成为这套 API 里最具
+破坏性的请求。
+
+### 四、全量测试抓到的第二件事
+
+`TaskRun` 和 `ConversationSession` 是 `extra="forbid"` 的模型，而加了列之后行里
+多出一个 `project_id`——**224 个测试**因此变红，全部在我只跑定向测试时是绿的。
+两个模型各加一个可空字段就修好了，但这条记在这里：加一列会波及每一个把整行喂给
+模型的读路径。
+
+### 五、界面：项目不是第五个产品
+
+`/projects` 的侧栏列项目，主区列这个项目底下的东西，每一行点开都跳回它自己的
+产品页。三件和数据模型一一对应的事：空状态不催人建项目；删除确认照实说「里面的
+东西都会留下」；归档给的是「取消归档」而不是第二个删除。
+
+### 还没做的
+
+把一件东西**归到**项目里，目前只有接口没有界面入口——`PATCH
+/v1/chat/sessions/{id}/project` 和 `/v1/tasks/{id}/project` 都在线上且有测试，
+但对话页和任务页还没有那个控件。下一批做。
+
+---
+
 ## 2026-08-19（未合并，第六批）：第二版稿子只改了两件事，两件都是「说不出来」
 
 收到重构稿的第二版（`docs/design/agent-workbench-refactor-2026-08-19.dc.html`，

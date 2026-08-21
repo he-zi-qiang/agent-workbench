@@ -39,6 +39,11 @@ from agent_workbench.ports.knowledge_bases import (
 )
 from agent_workbench.ports.model import ModelRequest
 from agent_workbench.ports.outbox import OutboxEvent
+from agent_workbench.ports.projects import (
+    ProjectContents,
+    ProjectItem,
+    ProjectRecord,
+)
 
 SAMPLE_TIMESTAMP = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
 
@@ -77,6 +82,33 @@ STORED_TURN = StoredChatTurn(
 )
 
 SAMPLES: dict[str, VersionedModel] = {
+    "ProjectRecord": ProjectRecord(
+        project_id="prj_0000000000000000000000000000001",
+        tenant_id="tenant_demo",
+        owner_id="user_demo",
+        name="Quarterly review",
+        created_at=SAMPLE_TIMESTAMP,
+        updated_at=SAMPLE_TIMESTAMP,
+    ),
+    "ProjectItem": ProjectItem(
+        kind="chat",
+        item_id="ses_0000000000000000000000000000001",
+        # Left None deliberately: a session nobody has spoken in has no name,
+        # and this sample is what pins that the field may be absent.
+        title=None,
+        ordered_at=SAMPLE_TIMESTAMP,
+    ),
+    "ProjectContents": ProjectContents(
+        project_id="prj_0000000000000000000000000000001",
+        items=(
+            ProjectItem(
+                kind="task",
+                item_id="task_000000000000000000000000000001",
+                title="Export a report",
+                ordered_at=SAMPLE_TIMESTAMP,
+            ),
+        ),
+    ),
     "KnowledgeBaseRecord": KnowledgeBaseRecord(
         knowledge_base_id="kb_0000000000000000000000000000001",
         tenant_id="tenant_demo",

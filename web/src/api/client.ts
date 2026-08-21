@@ -36,6 +36,9 @@ import type {
   UploadContentResponse,
   RunFileResponse,
   WorkspaceResponse,
+  ProjectContentsResponse,
+  ProjectListResponse,
+  ProjectView,
 } from "./types";
 
 const WORD_DOCUMENT_MEDIA_TYPE =
@@ -179,6 +182,105 @@ export async function renameChatSession(
   return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: { title },
+  });
+}
+
+/**
+ * 项目：一层归属，不是容器（ADR-071）。
+ *
+ * 这一组里唯一需要当心的是 `setSessionProject` / `setTaskProject` 的 `null`：
+ * 它表示**拿出来**，和「不传这个字段」是两回事。服务端会拒绝一个什么也没说的
+ * PATCH，所以这里永远显式带上 `project_id`。
+ */
+export async function listProjects(
+  identity: PrincipalIdentity,
+  options: { includeArchived?: boolean; signal?: AbortSignal } = {},
+): Promise<ProjectListResponse> {
+  const query = options.includeArchived === true ? "?include_archived=true" : "";
+  return apiRequest(identity, `/v1/projects${query}`, {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+}
+
+export async function createProject(
+  identity: PrincipalIdentity,
+  name: string,
+): Promise<ProjectView> {
+  return apiRequest(identity, "/v1/projects", { method: "POST", body: { name } });
+}
+
+export async function getProject(
+  identity: PrincipalIdentity,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProjectView> {
+  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function renameProject(
+  identity: PrincipalIdentity,
+  projectId: string,
+  name: string,
+): Promise<ProjectView> {
+  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: { name },
+  });
+}
+
+export async function setProjectArchived(
+  identity: PrincipalIdentity,
+  projectId: string,
+  archived: boolean,
+): Promise<ProjectView> {
+  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: { archived },
+  });
+}
+
+/** 删除项目本身。底下的东西一个都不会消失，只是不再属于任何项目。 */
+export async function deleteProject(
+  identity: PrincipalIdentity,
+  projectId: string,
+): Promise<void> {
+  await apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getProjectItems(
+  identity: PrincipalIdentity,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProjectContentsResponse> {
+  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}/items`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function setSessionProject(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  projectId: string | null,
+): Promise<void> {
+  await apiRequest(
+    identity,
+    `/v1/chat/sessions/${encodeURIComponent(sessionId)}/project`,
+    { method: "PATCH", body: { project_id: projectId } },
+  );
+}
+
+export async function setTaskProject(
+  identity: PrincipalIdentity,
+  taskId: string,
+  projectId: string | null,
+): Promise<void> {
+  await apiRequest(identity, `/v1/tasks/${encodeURIComponent(taskId)}/project`, {
+    method: "PATCH",
+    body: { project_id: projectId },
   });
 }
 

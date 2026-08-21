@@ -18,6 +18,7 @@ from agent_workbench.adapters.memory.conversation_store import (
     InMemoryConversationStore,
 )
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
+from agent_workbench.adapters.memory.projects import InMemoryProjectStore
 
 __all__ = [
     "InMemoryArtifactStore",
@@ -25,4 +26,5 @@ __all__ = [
     "InMemoryChatReleaseCoordinator",
     "InMemoryConversationStore",
     "InMemoryEventLog",
+    "InMemoryProjectStore",
 ]

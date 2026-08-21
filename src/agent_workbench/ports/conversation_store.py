@@ -128,6 +128,9 @@ class ConversationSession(VersionedModel):
     #: that have no reason to carry it. Where it does matter -- the list -- the
     #: store fills it, and the column behind it is NOT NULL.
     last_activity_at: AwareDatetime | None = None
+    #: Which project this session was opened for, or none (ADR-071). A label,
+    #: not an authorization fact, and ``None`` is the normal state.
+    project_id: Identifier | None = None
 
 
 class StoredMessage(VersionedModel):

@@ -33,10 +33,12 @@ from agent_workbench.adapters.memory import (
     InMemoryArtifactStore,
     InMemoryConversationStore,
     InMemoryEventLog,
+    InMemoryProjectStore,
 )
 from agent_workbench.adapters.persistence import (
     PostgresConversationStore,
     PostgresEventLog,
+    PostgresProjectStore,
     create_query_engine,
 )
 from agent_workbench.ports.artifact_store import ArtifactStore
@@ -226,3 +228,237 @@ def artifacts(request: pytest.FixtureRequest, tmp_path: Path) -> StoreHarness:
     if request.param == "memory":
         return StoreHarness(name="memory", factory=_memory_artifacts)
     return StoreHarness(name="local", factory=_local_artifacts(tmp_path / "artifacts"))
+
+
+# --- projects -------------------------------------------------------------
+#
+# Both implementations get the same three seams, because the contract needs rows
+# this store does not own: a conversation, a Task and a knowledge base. Over
+# PostgreSQL they are real inserts, so ON DELETE SET NULL and the composite
+# foreign keys are the things actually under test; in memory they are the
+# double's ``remember_*`` calls. Named ``_for_test`` for the reason the chat-turn
+# seams above are: the production port must not grow a way to invent a Task.
+
+
+class _SeededMemoryProjectStore(InMemoryProjectStore):
+    """The double, plus the seams the contract seeds through."""
+
+    async def seed_session_for_test(
+        self,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        session_id: str,
+        mode: str = "chat",
+        title: str | None = None,
+        last_activity_at: datetime | None = None,
+    ) -> None:
+        self.remember_session(
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            session_id=session_id,
+            mode=mode,  # type: ignore[arg-type]
+            title=title,
+            last_activity_at=last_activity_at,
+        )
+
+    async def seed_task_for_test(
+        self,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        task_id: str,
+        objective_preview: str | None = None,
+        created_at: datetime | None = None,
+    ) -> None:
+        self.remember_task(
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            task_id=task_id,
+            objective_preview=objective_preview,
+            created_at=created_at,
+        )
+
+    async def seed_knowledge_base_for_test(
+        self, *, tenant_id: str, owner_id: str, knowledge_base_id: str, name: str
+    ) -> None:
+        self.remember_knowledge_base(
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            knowledge_base_id=knowledge_base_id,
+            name=name,
+        )
+
+    async def session_ids_for_test(self, *, tenant_id: str) -> list[str]:
+        return sorted(
+            item_id
+            for (held_tenant, item_id), member in self._members.items()
+            if held_tenant == tenant_id and member.kind in {"chat", "code"}
+        )
+
+    async def knowledge_base_exists_for_test(
+        self, *, tenant_id: str, knowledge_base_id: str
+    ) -> bool:
+        return (tenant_id, knowledge_base_id) in self._bases
+
+
+class _SeededPostgresProjectStore(PostgresProjectStore):
+    """The real store, plus inserts for the rows it does not own."""
+
+    def __init__(self, engine: Any) -> None:
+        super().__init__(engine)
+        self._loop_engine = engine
+
+    async def _execute_for_test(
+        self, statement: Any, parameters: dict[str, Any]
+    ) -> None:
+        async with self._loop_engine.begin() as connection:
+            await connection.execute(statement, parameters)
+
+    async def _fetch_for_test(
+        self, statement: Any, parameters: dict[str, Any]
+    ) -> list[Any]:
+        async with self._loop_engine.connect() as connection:
+            return list((await connection.execute(statement, parameters)).all())
+
+    async def seed_session_for_test(
+        self,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        session_id: str,
+        mode: str = "chat",
+        title: str | None = None,
+        last_activity_at: datetime | None = None,
+    ) -> None:
+        await self._execute_for_test(
+            text(
+                "INSERT INTO conversation_sessions "
+                "(session_id, tenant_id, owner_id, mode, title, last_activity_at) "
+                "VALUES (:session_id, :tenant_id, :owner_id, :mode, :title, "
+                "COALESCE(:last_activity_at, now()))"
+            ),
+            {
+                "session_id": session_id,
+                "tenant_id": tenant_id,
+                "owner_id": owner_id,
+                "mode": mode,
+                "title": title,
+                "last_activity_at": last_activity_at,
+            },
+        )
+
+    async def seed_task_for_test(
+        self,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        task_id: str,
+        objective_preview: str | None = None,
+        created_at: datetime | None = None,
+    ) -> None:
+        await self._execute_for_test(
+            text(
+                "INSERT INTO task_runs (task_id, tenant_id, owner_id, thread_id, "
+                "graph_version, input_ref, input_fingerprint, "
+                "submission_dedup_key, run_semantics_snapshot, "
+                "run_semantics_revision, submitted_policy_revision, "
+                "submitted_policy_fingerprint, submitted_authorization_envelope, "
+                "submitted_principal_scopes, status, created_at) "
+                "VALUES (:task_id, :tenant_id, :owner_id, :thread_id, 'v1', "
+                "'art_1', 'fp', :task_id, '{}'::jsonb, 'rev', 'rev', 'fp', "
+                "'{}'::jsonb, '[]'::jsonb, 'queued', COALESCE(:created_at, now()))"
+            ),
+            {
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "owner_id": owner_id,
+                "thread_id": f"thread_{task_id}",
+                "created_at": created_at,
+            },
+        )
+        # `objective_preview` separately, so a NULL one is expressible.
+        if objective_preview is not None:
+            await self._execute_for_test(
+                text(
+                    "UPDATE task_runs SET objective_preview = :preview "
+                    "WHERE task_id = :task_id"
+                ),
+                {"preview": objective_preview, "task_id": task_id},
+            )
+
+    async def seed_knowledge_base_for_test(
+        self, *, tenant_id: str, owner_id: str, knowledge_base_id: str, name: str
+    ) -> None:
+        await self._execute_for_test(
+            text(
+                "INSERT INTO knowledge_bases "
+                "(knowledge_base_id, tenant_id, owner_id, name) "
+                "VALUES (:knowledge_base_id, :tenant_id, :owner_id, :name)"
+            ),
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "tenant_id": tenant_id,
+                "owner_id": owner_id,
+                "name": name,
+            },
+        )
+
+    async def session_ids_for_test(self, *, tenant_id: str) -> list[str]:
+        rows = await self._fetch_for_test(
+            text(
+                "SELECT session_id FROM conversation_sessions "
+                "WHERE tenant_id = :tenant_id ORDER BY session_id"
+            ),
+            {"tenant_id": tenant_id},
+        )
+        return [row[0] for row in rows]
+
+    async def knowledge_base_exists_for_test(
+        self, *, tenant_id: str, knowledge_base_id: str
+    ) -> bool:
+        rows = await self._fetch_for_test(
+            text(
+                "SELECT 1 FROM knowledge_bases WHERE tenant_id = :tenant_id "
+                "AND knowledge_base_id = :knowledge_base_id"
+            ),
+            {"tenant_id": tenant_id, "knowledge_base_id": knowledge_base_id},
+        )
+        return bool(rows)
+
+
+@asynccontextmanager
+async def _memory_projects() -> AsyncIterator[Any]:
+    yield _SeededMemoryProjectStore()
+
+
+def _postgres_projects(dsn: str) -> Callable[[], Any]:
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[Any]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "TRUNCATE projects, project_knowledge_bases, task_runs, "
+                        "knowledge_bases, conversation_sessions CASCADE"
+                    )
+                )
+            yield _SeededPostgresProjectStore(engine)
+        finally:
+            await engine.dispose()
+
+    return factory
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def projects(request: pytest.FixtureRequest) -> StoreHarness:
+    """One membership contract, both stores."""
+
+    if request.param == "memory":
+        return StoreHarness(name="memory", factory=_memory_projects)
+
+    dsn = _test_dsn()
+    if dsn is None:
+        pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
+    return StoreHarness(name="postgres", factory=_postgres_projects(dsn))

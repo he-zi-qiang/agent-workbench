@@ -1,4 +1,5 @@
 import {
+  FolderOpen,
   Activity,
   Code2,
   FlaskConical,
@@ -63,6 +64,19 @@ export const NAVIGATION = [
     covers: ["/code"],
   },
   {
+    // 项目和三个产品是两个维度：产品回答「这是什么工具」，项目回答「这是为哪件
+    // 事做的」。所以它在工作空间里，和对话/任务/编码并列，而不是它们的上一层
+    // ——上一层意味着「先建项目才能提问」，而归属是可空的（ADR-071）。
+    to: "/projects",
+    label: "项目",
+    // 描述里不出现「对话」「任务」这两个词：快速跳转按描述也匹配，而这两个
+    // 词各自是另一个目的地的名字——写进来会让搜「任务」同时命中两项。
+    description: "同一件事做过的东西，收在一处",
+    icon: FolderOpen,
+    primary: true,
+    covers: ["/projects"],
+  },
+  {
     to: "/knowledge",
     label: "知识库",
     description: "管理资料、索引状态与上传",
@@ -109,7 +123,9 @@ export const QUICK_DESTINATIONS = [
           ? "work task 工作流 任务 时间线"
           : item.to === "/code"
             ? "coding 编码 文件 工作区"
-            : item.to === "/knowledge"
+            : item.to === "/projects"
+              ? "project 项目 归属 分组"
+              : item.to === "/knowledge"
               ? "knowledge rag 文档 资料 上传"
               : item.to === "/evaluation"
                 ? "eval benchmark 评测 报告"

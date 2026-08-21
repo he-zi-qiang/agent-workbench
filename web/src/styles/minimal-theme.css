@@ -325,6 +325,7 @@ select {
 }
 
 .aw-chat-sessions-close,
+.aw-projects-close,
 .aw-chat-mobile-sessions{
   display: none;
 }
@@ -2184,7 +2185,8 @@ select {
     .aw-chat-sessions-close,
     .aw-code-sessions-close,
     .aw-work-sessions-close,
-    .aw-knowledge-sessions-close
+    .aw-knowledge-sessions-close,
+    .aw-projects-close
   ) {
     display: inline-flex;
   }
@@ -2230,4 +2232,170 @@ select {
     min-width: 36px;
     min-height: 36px;
   }
+}
+
+/* 项目页 -------------------------------------------------------------------
+ *
+ * 复用侧栏既有的行词汇（行高、圆角、悬停才出现的行动作），而不是另起一套：
+ * 项目行和会话行在读者眼里是同一种东西——一列可以点开、可以改名、可以删掉的
+ * 条目。新写一套只会让第三次改动时两边分叉。 */
+
+.aw-projects-page {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  background: var(--aw-window);
+}
+
+.aw-projects-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 28px clamp(20px, 5vw, 56px) 40px;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.aw-projects-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.aw-projects-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.aw-projects-header small {
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+.aw-project-list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding: 2px 0 8px;
+  gap: 1px;
+  overflow-y: auto;
+}
+
+.aw-project-row {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.aw-project-link {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  padding: 0 9px;
+  gap: 8px;
+  border-radius: 7px;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.aw-project-link:hover,
+.aw-project-link.is-active {
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+}
+
+.aw-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-project-link small {
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+}
+
+/* 三个行动作，和会话行同一套：默认不可见，悬停或键盘聚焦才出现，触屏永远在。
+   `.aw-session-row-actions` 已经写了那套显隐规则，这里只补位置。 */
+.aw-project-row .aw-session-row-actions {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+}
+
+.aw-project-rename,
+.aw-project-archive,
+.aw-project-delete {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+}
+
+.aw-project-rename:hover,
+.aw-project-archive:hover {
+  background: var(--aw-panel);
+  color: var(--aw-text);
+}
+
+.aw-project-delete:hover {
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+}
+
+.aw-project-items {
+  display: flex;
+  width: min(720px, 100%);
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  gap: 1px;
+  list-style: none;
+}
+
+.aw-project-item {
+  display: grid;
+  align-items: baseline;
+  padding: 11px 4px;
+  gap: 12px;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  border-bottom: 1px solid var(--aw-border-subtle);
+  color: var(--aw-text);
+  font-size: 13.5px;
+  text-decoration: none;
+}
+
+.aw-project-item:hover {
+  background: var(--aw-panel-soft);
+}
+
+/* 类型是限定语，不是标签：边框都不给，只降一档字重和颜色。 */
+.aw-project-item-kind {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-project-item-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-project-item time {
+  color: var(--aw-text-muted);
+  font-size: 11px;
 }
