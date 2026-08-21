@@ -85,11 +85,13 @@ describe("chat state machine", () => {
           session_id: "ses_remote",
           title: "跨设备会话",
           last_activity_at: "2026-08-20T12:00:00Z",
+          project_id: null,
         },
         {
           session_id: SESSION.sessionId,
           title: "服务端标题",
           last_activity_at: "2026-08-19T12:00:00Z",
+          project_id: null,
         },
       ],
     });

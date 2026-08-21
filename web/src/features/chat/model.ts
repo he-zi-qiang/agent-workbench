@@ -289,6 +289,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 knowledgeBaseId: null,
                 createdAt: activity,
                 updatedAt: activity,
+                projectId: listed.project_id,
                 connection: "idle",
                 history: "idle",
               }
@@ -296,6 +297,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 ...current,
                 title: listed.title ?? current.title,
                 updatedAt: activity,
+                // 服务端是归属的权威。本地那份可能来自这个字段存在之前，所以
+                // 这里是覆盖，不是「有就保留」。
+                projectId: listed.project_id,
               };
       }
       const listed = new Set(listedOrder);

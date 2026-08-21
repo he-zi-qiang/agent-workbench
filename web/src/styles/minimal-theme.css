@@ -2399,3 +2399,40 @@ select {
   color: var(--aw-text-muted);
   font-size: 11px;
 }
+
+/* 归属选择器 ---------------------------------------------------------------
+ *
+ * 长在它自己那一段的头部，读起来是标题下面的一句限定语，不是一个动作。所以它
+ * 没有边框、没有底色，只有一个下拉箭头——安静到读者不去看它的时候它不存在。 */
+
+.aw-project-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.aw-project-picker select {
+  max-width: 200px;
+  padding: 1px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.aw-project-picker select:hover,
+.aw-project-picker select:focus-visible {
+  color: var(--aw-text);
+}
+
+.aw-project-picker select:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.aw-project-picker small {
+  color: var(--aw-danger);
+  font-size: 11px;
+}

@@ -70,6 +70,8 @@ export interface ChatSessionView {
   session_id: Identifier;
   title: string | null;
   last_activity_at: string | null;
+  /** 这段对话是为哪个项目开的，`null` 表示不属于任何项目（ADR-071）。 */
+  project_id: Identifier | null;
 }
 
 export interface ChatSessionListResponse {
@@ -526,6 +528,14 @@ export interface LocalChatSession {
   knowledgeBaseId: Identifier | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * 这段对话属于哪个项目，`null` 表示不属于任何项目（ADR-071）。
+   *
+   * 可选而不是必填：这个本地投影早于服务端的归属存在，一段还没和服务端对过账的
+   * 会话对这个问题**没有答案**——而 `null` 说的是「不属于任何项目」，是一个答案。
+   * 两者不该混为一谈。
+   */
+  projectId?: Identifier | null;
 }
 
 export interface LocalTaskMetadata {

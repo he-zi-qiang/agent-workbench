@@ -129,7 +129,16 @@ def test_the_list_is_recent_bounded_and_scoped_on_tenant_principal_and_mode() ->
         )
         assert listed.status_code == bounded.status_code == 200
         rows = listed.json()["sessions"]
-        assert set(rows[0]) == {"session_id", "title", "last_activity_at"}
+        # The exact set, not "contains at least": the whole job of this
+        # assertion is that adding a field to this projection has to be a
+        # deliberate act. `project_id` is the membership layer from ADR-071,
+        # which an interface reads to show what this conversation was for.
+        assert set(rows[0]) == {
+            "session_id",
+            "title",
+            "last_activity_at",
+            "project_id",
+        }
         assert all(row["last_activity_at"] is not None for row in rows)
         return (
             [row["session_id"] for row in rows],

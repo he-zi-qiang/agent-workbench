@@ -68,6 +68,10 @@ class SessionView(BaseModel):
     session_id: Identifier
     title: str | None
     last_activity_at: AwareDatetime | None
+    # Which project this session was opened for, or none (ADR-071). Reported so
+    # an interface can show the membership it is about to change; it is not an
+    # authorization fact, and None is the normal state.
+    project_id: Identifier | None = None
 
 
 class SessionListResponse(BaseModel):
@@ -207,6 +211,7 @@ async def list_sessions(
                 session_id=session.session_id,
                 title=session.title,
                 last_activity_at=session.last_activity_at,
+                project_id=session.project_id,
             )
             for session in sessions
         )
@@ -227,6 +232,7 @@ async def get_session(session_id: str, request: Request) -> SessionView:
         session_id=session.session_id,
         title=session.title,
         last_activity_at=session.last_activity_at,
+        project_id=session.project_id,
     )
 
 
@@ -247,6 +253,7 @@ async def rename_session(
         session_id=session.session_id,
         title=session.title,
         last_activity_at=session.last_activity_at,
+        project_id=session.project_id,
     )
 
 

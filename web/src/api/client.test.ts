@@ -123,6 +123,7 @@ describe("apiRequest", () => {
           session_id: "ses_chat_1",
           title: "旧名字",
           last_activity_at: "2026-08-20T10:00:00Z",
+          project_id: null,
         },
       ],
     };

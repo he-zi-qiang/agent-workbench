@@ -15,7 +15,9 @@ import {
   getChatSession,
   listChatSessions,
   listKnowledgeBases,
+  listProjects,
   renameChatSession,
+  setSessionProject,
 } from "../../api/client";
 import type { Citation, PrincipalIdentity, SourceLocator } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
@@ -34,7 +36,9 @@ vi.mock("../../api/client", () => ({
   getChatSession: vi.fn(() => Promise.reject(new Error("not found"))),
   listChatSessions: vi.fn(() => Promise.resolve({ sessions: [] })),
   listKnowledgeBases: vi.fn(() => Promise.resolve({ knowledge_bases: [] })),
+  listProjects: vi.fn(() => Promise.resolve({ projects: [] })),
   renameChatSession: vi.fn(),
+  setSessionProject: vi.fn(),
 }));
 
 vi.mock("../../app/IdentityContext", () => ({
@@ -89,6 +93,7 @@ beforeEach(() => {
     session_id: "ses_direct",
     title: "新名字",
     last_activity_at: "2026-08-03T00:00:00Z",
+    project_id: null,
   });
 });
 
@@ -257,6 +262,7 @@ describe("Chat identity boundary", () => {
       // and this is the value the browser-local projection must accept.
       title: "服务端规范名",
       last_activity_at: "2026-08-03T00:00:00Z",
+      project_id: null,
     });
     vi.mocked(useChatRuntime).mockReturnValue({
       runtime: fakeRuntime(vi.fn(), vi.fn(), undefined, localRename),
@@ -364,6 +370,7 @@ describe("Chat identity boundary", () => {
           session_id: string;
           title: string;
           last_activity_at: string;
+          project_id: string | null;
         }) => void)
       | undefined;
     vi.mocked(renameChatSession).mockReturnValue(
@@ -404,6 +411,7 @@ describe("Chat identity boundary", () => {
         session_id: "ses_direct",
         title: "服务端规范名",
         last_activity_at: "2026-08-03T00:00:00Z",
+        project_id: null,
       });
       await Promise.resolve();
     });
@@ -463,6 +471,56 @@ describe("Chat identity boundary", () => {
     expect(other).toHaveFocus();
   });
 
+  it("offers a project only when there is one, and files the conversation into it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listProjects).mockResolvedValue({
+      projects: [
+        {
+          project_id: "prj_1",
+          name: "季度复盘",
+          created_at: "2026-08-20T00:00:00Z",
+          updated_at: "2026-08-20T00:00:00Z",
+          archived_at: null,
+        },
+      ],
+    });
+    vi.mocked(setSessionProject).mockResolvedValue(undefined);
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: initialChatState([localSession("ses_direct", "当前会话")]),
+    });
+
+    renderChatRoute("/chat/ses_direct");
+    const picker = await screen.findByLabelText("这段对话属于哪个项目");
+    // 第一项是「不属于任何项目」，而且它是默认选中的那一项：归属可空，空是
+    // 正常状态，不是一个需要被清除的异常。
+    expect(picker).toHaveValue("");
+    await user.selectOptions(picker, "prj_1");
+
+    await waitFor(() => {
+      expect(vi.mocked(setSessionProject).mock.calls[0]?.slice(1)).toEqual([
+        "ses_direct",
+        "prj_1",
+      ]);
+    });
+  });
+
+  it("does not show a picker that can only say no", async () => {
+    vi.mocked(listProjects).mockResolvedValue({ projects: [] });
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: initialChatState([localSession("ses_direct", "当前会话")]),
+    });
+
+    renderChatRoute("/chat/ses_direct");
+    await screen.findByRole("heading", { name: "当前会话" });
+
+    // 一个只能选「无」的下拉框，是在提醒读者他缺了一个东西，而归属本来可选。
+    expect(
+      screen.queryByLabelText("这段对话属于哪个项目"),
+    ).not.toBeInTheDocument();
+  });
+
   it("uses double-click only to open another Chat session, not to rename it", async () => {
     vi.mocked(useChatRuntime).mockReturnValue({
       runtime: fakeRuntime(vi.fn(), vi.fn()),
@@ -512,6 +570,7 @@ describe("Chat identity boundary", () => {
       session_id: "ses_older",
       title: "更早的会话",
       last_activity_at: "2026-07-01T00:00:00Z",
+      project_id: null,
     });
 
     renderChatRoute("/chat/ses_older");
@@ -527,6 +586,7 @@ describe("Chat identity boundary", () => {
           session_id: "ses_older",
           title: "更早的会话",
           last_activity_at: "2026-07-01T00:00:00Z",
+          project_id: null,
         },
       ]);
     });
