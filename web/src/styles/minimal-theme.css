@@ -19,10 +19,18 @@ body {
   padding: 0;
 }
 
+/* 正文区从贴边的一整片改成嵌在窗框里的一块面：8px 的窗框留出来，圆角 12px。
+   这一步是「会话栏与正文区是两块面」在色阶之外的另一半——色阶给了 5.2 L* 的
+   台阶，这里给它一个真实的边界形状。
+   投影只在浅色一侧有（--aw-shadow-pane 深色是 none）：浅色下这块面是最白的
+   一档、四周更暗，读作纸浮在桌上；深色下它是最深的一档、四周更亮，读作一口
+   井，而给凹陷的东西打投影是自相矛盾的。 */
 .aw-app-content {
+  overflow: hidden;
   border: 0;
-  border-radius: 0;
-  box-shadow: none;
+  margin: 8px;
+  border-radius: 12px;
+  box-shadow: var(--aw-shadow-pane);
 }
 
 .aw-global-rail {
@@ -52,30 +60,30 @@ body {
 /* Controls -------------------------------------------------------------- */
 
 .aw-button,
-.aw-icon-button{
+.aw-icon-button {
   box-shadow: none;
 }
 
 .aw-button,
-.aw-icon-button{
+.aw-icon-button {
   border-color: transparent;
   background: transparent;
 }
 
 .aw-button:hover:not(:disabled),
-.aw-icon-button:hover:not(:disabled){
+.aw-icon-button:hover:not(:disabled) {
   border-color: transparent;
   background: var(--aw-panel-soft);
 }
 
-.aw-button.is-primary{
+.aw-button.is-primary {
   border-color: var(--aw-text);
   background: var(--aw-text);
   color: var(--aw-window);
   box-shadow: none;
 }
 
-.aw-button.is-primary:hover:not(:disabled){
+.aw-button.is-primary:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
   background: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
   color: var(--aw-window);
@@ -115,7 +123,9 @@ select {
 .aw-code-header,
 .aw-work-detail-header {
   border-bottom-color: var(--aw-border-subtle);
-  background: color-mix(in srgb, var(--aw-window) 97%, transparent);
+  background: var(--aw-glass);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
   box-shadow: none;
 }
 
@@ -124,7 +134,7 @@ select {
 .aw-pane-header,
 .aw-chat-header,
 .aw-code-header {
-  min-height: 54px;
+  min-height: 48px;
   padding-top: 8px;
   padding-bottom: 8px;
 }
@@ -141,14 +151,22 @@ select {
 .aw-knowledge-row {
   border: 0;
 }
+/* 覆盖层而不是固定色值：这几行落在侧栏上，而侧栏的底色在深浅两个主题里
+   方向相反。--aw-veil 两边都是「离开底色」，同一条规则两个主题都成立。
+   悬停与选中此前共用 --aw-panel-strong——两个状态同色，等于只有一个状态。 */
 .aw-chat-session:hover,
-.aw-chat-session.is-active,
 .aw-task-list-item:hover,
+.aw-knowledge-row:hover {
+  border: 0;
+  background: var(--aw-veil);
+  box-shadow: none;
+}
+
+.aw-chat-session.is-active,
 .aw-task-list-item.is-active,
-.aw-knowledge-row:hover,
 .aw-knowledge-row.is-active {
   border: 0;
-  background: var(--aw-panel-strong);
+  background: var(--aw-veil-strong);
   box-shadow: none;
 }
 .aw-chat-session.is-active,
@@ -184,7 +202,7 @@ select {
   line-height: 1.65;
 }
 
-.aw-eyebrow{
+.aw-eyebrow {
   color: var(--aw-accent);
 }
 
@@ -326,7 +344,7 @@ select {
 
 .aw-chat-sessions-close,
 .aw-projects-close,
-.aw-chat-mobile-sessions{
+.aw-chat-mobile-sessions {
   display: none;
 }
 
@@ -335,23 +353,74 @@ select {
   gap: 2px;
 }
 
+/* 单行，不是两行。此前每行 55px（标题一行、时间另起一行），八条就吃掉
+   440px——侧栏剩不下高度给它下面的导航，于是列表被压扁再裁掉，而且没有滚动条。
+   时间移到行尾，静止时隐去：它是「这条是哪一天的」，不是每一行都要读的东西。 */
 .aw-chat-session {
-  padding: 9px 10px;
+  padding: 0 10px;
+  min-height: 32px;
   border-radius: 8px;
+}
+
+.aw-chat-session-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.aw-chat-session-copy strong {
+  min-width: 0;
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 400;
+}
+
+.aw-chat-session-copy small {
+  flex: none;
+  opacity: 0;
+  font-size: 12px;
+  transition: opacity var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-chat-session:hover .aw-chat-session-copy small,
+.aw-chat-session.is-active .aw-chat-session-copy small {
+  opacity: 1;
+}
+
+.aw-chat-session.is-active .aw-chat-session-copy strong {
+  font-weight: 500;
 }
 
 .aw-chat-main {
   background: var(--aw-window);
 }
 
+/* 内容从标题栏底下溶出去，而不是被切一刀。
+   此前这条是 97% 不透明——那个值高到读不出是半透明的，滚上来的文字在它的下
+   边缘硬断。配一道 24px 的渐隐才是「溶进去」，也才用得上上面那层毛玻璃。 */
 .aw-chat-header {
-  min-height: 54px;
+  position: relative;
+  min-height: 48px;
+  border-bottom: 0;
   padding-right: clamp(18px, 4vw, 42px);
   padding-left: clamp(18px, 4vw, 42px);
 }
 
+.aw-chat-header::after {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: 24px;
+  background: linear-gradient(to bottom, var(--aw-glass), transparent);
+  content: "";
+  pointer-events: none;
+}
+
 .aw-chat-header h1 {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
@@ -369,8 +438,12 @@ select {
   padding-top: clamp(28px, 6vh, 64px);
 }
 
+/* 阅读栏和输入卡同宽同轴：此前是 760 对 720，两者居中后差 20px，
+   正文的左缘和输入框的左缘对不上——一屏之内有两条竖线，眼睛会一直在找哪条
+   才是真的。 */
 .aw-chat-turn-list {
-  width: min(760px, 100%);
+  width: min(720px, calc(100% - 32px));
+  padding: 0 16px;
 }
 
 .aw-chat-turn {
@@ -379,22 +452,28 @@ select {
 
 .aw-chat-user-message p {
   padding: 11px 15px;
-  border: 0;
-  border-radius: 18px 18px 5px 18px;
-  background: var(--aw-panel-strong);
-}
-
-.aw-chat-assistant-mark {
   border: 1px solid var(--aw-border-subtle);
-  border-radius: 50%;
-  background: var(--aw-panel-strong);
-  color: var(--aw-text-soft);
+  border-radius: 16px 16px 5px 16px;
+  background: var(--aw-panel);
+  font-size: 15.5px;
+  line-height: 1.7;
 }
 
+/* 「历史消息」现在是这条回答上唯一可能出现的标记，所以它可以安静：
+   没有头像和「Agent」两个常量陪着，它出现即有意义。 */
+.aw-chat-turn-tag {
+  margin: 0 0 10px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+/* 回答是一份要读的文档，按中文长文给行距：方块字撑满 em 框，没有 x-height
+   留出的喘息，1.6 在这个字号上是挤的。tokens.css 的交接稿原话就是
+   「正文 14.5–15px / 1.75」——这一条此前没有落到回答上。 */
 .aw-chat-assistant-message > .aw-markdown {
-  margin-top: 9px;
-  font-size: 14.5px;
-  line-height: 1.78;
+  margin-top: 0;
+  font-size: 15.5px;
+  line-height: 1.8;
 }
 
 /* 引用从芯片变成证据行之后，这一层不再给它画药丸底：一行三段（文档 / 版本 /
@@ -408,27 +487,16 @@ select {
   padding-bottom: 16px;
 }
 
-.aw-chat-composer-row {
-  padding: 6px;
-  border: 1px solid var(--aw-border);
-  border-radius: 12px;
-  box-shadow: var(--aw-shadow-sm);
+.aw-chat-composer-card {
+  border-color: var(--aw-border);
+  box-shadow: var(--aw-shadow-float);
 }
 
-.aw-chat-composer-row:focus-within {
+.aw-chat-composer-card:focus-within {
   border-color: color-mix(in srgb, var(--aw-accent) 48%, var(--aw-border));
   box-shadow:
     0 0 0 2px color-mix(in srgb, var(--aw-accent) 7%, transparent),
-    var(--aw-shadow-sm);
-}
-
-.aw-chat-send {
-  border-radius: 50%;
-}
-
-.aw-chat-composer-tools {
-  margin-top: 7px;
-  padding: 0 7px;
+    var(--aw-shadow-float);
 }
 
 .aw-chat-composer > p {
@@ -658,7 +726,6 @@ select {
 }
 
 @media (max-width: 900px) {
-
   .aw-knowledge-list {
     display: flex;
     overflow-x: auto;
@@ -838,20 +905,20 @@ select {
     var(--aw-shadow-md);
 }
 
-/* 输入条要写三遍：静止、聚焦、以及聚焦时的低动效版本，因为
-   `.aw-chat-composer-row:focus-within` 的特异性高于类选择器，只写静止那条会在
-   聚焦时把高光整条丢掉——而聚焦恰好是这块面最该看得出厚度的时候。 */
-.aw-chat-composer-row {
+/* 输入卡要写两遍：静止与聚焦，因为 `:focus-within` 的特异性高于类选择器，
+   只写静止那条会在聚焦时把顶部高光整条丢掉——而聚焦恰好是这块面最该看得出
+   厚度的时候。 */
+.aw-chat-composer-card {
   box-shadow:
     inset 0 1px 0 var(--aw-raise),
-    var(--aw-shadow-sm);
+    var(--aw-shadow-float);
 }
 
-.aw-chat-composer-row:focus-within {
+.aw-chat-composer-card:focus-within {
   box-shadow:
     inset 0 1px 0 var(--aw-raise),
     0 0 0 2px color-mix(in srgb, var(--aw-accent) 7%, transparent),
-    var(--aw-shadow-sm);
+    var(--aw-shadow-float);
 }
 
 /* 选中文字的底色在深色下要重新给：--aw-accent-soft 在深色是 #2e1f18，
@@ -1099,11 +1166,8 @@ select {
   justify-content: center;
 }
 
-.aw-app-shell.is-rail-collapsed :is(
-  .aw-logo-copy,
-  .aw-global-link-copy,
-  .aw-rail-identity-copy
-) {
+.aw-app-shell.is-rail-collapsed
+  :is(.aw-logo-copy, .aw-global-link-copy, .aw-rail-identity-copy) {
   display: none;
 }
 
@@ -1234,39 +1298,42 @@ select {
   letter-spacing: -0.025em;
 }
 
+/* 起点是三颗药丸，不是三行带下划线的链接。
+   此前它们是一列 42px 高、靠 border-bottom 分隔的满宽行——那个形状读作
+   「一个列表」，而它们其实是三个并列的、可以不选的建议。药丸把「并列」和
+   「可选」都说清楚了，也让空态的标题、输入卡、建议三段收成一个居中的块。 */
 .aw-chat-starters {
-  display: grid;
-  width: min(520px, 100%);
-  grid-template-columns: 1fr;
-  gap: 0;
-  border-top: 1px solid var(--aw-border-subtle);
+  display: flex;
+  width: min(720px, 100%);
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  border-top: 0;
 }
 
 .aw-chat-starters > button {
-  display: flex;
+  display: inline-flex;
   min-width: 0;
-  min-height: 42px;
+  min-height: 36px;
   align-items: center;
-  padding: 9px 4px;
-  border: 0;
-  border-bottom: 1px solid var(--aw-border-subtle);
-  border-radius: 0;
+  padding: 0 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
   background: transparent;
   color: var(--aw-text-soft);
   text-align: left;
   transition:
     color var(--aw-duration-fast) var(--aw-ease),
-    padding var(--aw-duration-fast) var(--aw-ease);
+    background var(--aw-duration-fast) var(--aw-ease);
 }
 
 .aw-chat-starters > button:hover {
-  padding-left: 8px;
-  background: transparent;
+  background: var(--aw-veil);
   color: var(--aw-text);
 }
 
 .aw-chat-starters strong {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 500;
 }
 
@@ -1538,11 +1605,8 @@ select {
   justify-content: flex-start;
 }
 
-.aw-app-shell:not(.is-rail-collapsed) :is(
-  .aw-logo-copy,
-  .aw-global-link-copy,
-  .aw-rail-identity-copy
-) {
+.aw-app-shell:not(.is-rail-collapsed)
+  :is(.aw-logo-copy, .aw-global-link-copy, .aw-rail-identity-copy) {
   display: grid;
 }
 
@@ -1550,10 +1614,7 @@ select {
   display: grid;
 }
 
-.aw-app-shell:not(.is-rail-collapsed) :is(
-  .aw-global-link,
-  .aw-rail-identity
-) {
+.aw-app-shell:not(.is-rail-collapsed) :is(.aw-global-link, .aw-rail-identity) {
   width: 100%;
   justify-content: flex-start;
   padding-right: 8px;
@@ -1609,12 +1670,13 @@ select {
   border-left: 1px solid var(--aw-border-subtle);
 }
 
-.aw-sidebar-context-slot > :is(
-  .aw-chat-sessions,
-  .aw-code-sessions,
-  .aw-work-sidebar,
-  .aw-knowledge-sidebar
-) {
+.aw-sidebar-context-slot
+  > :is(
+    .aw-chat-sessions,
+    .aw-code-sessions,
+    .aw-work-sidebar,
+    .aw-knowledge-sidebar
+  ) {
   position: static;
   display: flex;
   width: 100%;
@@ -1637,12 +1699,13 @@ select {
   box-shadow: none;
 }
 
-.aw-sidebar-context-slot :is(
-  .aw-chat-sessions-header,
-  .aw-code-sessions-header,
-  .aw-pane-header,
-  .aw-knowledge-sidebar-header
-) {
+.aw-sidebar-context-slot
+  :is(
+    .aw-chat-sessions-header,
+    .aw-code-sessions-header,
+    .aw-pane-header,
+    .aw-knowledge-sidebar-header
+  ) {
   position: static;
   min-height: 34px;
   padding: 3px 4px 5px;
@@ -1651,12 +1714,13 @@ select {
   backdrop-filter: none;
 }
 
-.aw-sidebar-context-slot :is(
-  .aw-chat-sessions-header strong,
-  .aw-code-sessions-header strong,
-  .aw-pane-header strong,
-  .aw-knowledge-sidebar-header strong
-) {
+.aw-sidebar-context-slot
+  :is(
+    .aw-chat-sessions-header strong,
+    .aw-code-sessions-header strong,
+    .aw-pane-header strong,
+    .aw-knowledge-sidebar-header strong
+  ) {
   color: var(--aw-text-muted);
   font-size: 11px;
   font-weight: 600;
@@ -1687,12 +1751,13 @@ select {
   color: var(--aw-accent);
 }
 
-.aw-sidebar-context-slot :is(
-  .aw-chat-session-list,
-  .aw-code-session-list,
-  .aw-task-list,
-  .aw-knowledge-sidebar-list
-) {
+.aw-sidebar-context-slot
+  :is(
+    .aw-chat-session-list,
+    .aw-code-session-list,
+    .aw-task-list,
+    .aw-knowledge-sidebar-list
+  ) {
   min-height: 0;
   flex: 1 1 auto;
   align-content: start;
@@ -1739,10 +1804,8 @@ select {
   font-size: 12px;
 }
 
-.aw-app-shell.is-rail-collapsed :is(
-  .aw-sidebar-section-label,
-  .aw-sidebar-context-slot
-) {
+.aw-app-shell.is-rail-collapsed
+  :is(.aw-sidebar-section-label, .aw-sidebar-context-slot) {
   display: none;
 }
 
@@ -2135,14 +2198,15 @@ select {
     transition-delay: 0s;
   }
 
-  .aw-global-rail :is(
-    .aw-rail-brand-row,
-    .aw-sidebar-section-label,
-    .aw-sidebar-workspace:not(.is-active),
-    .aw-sidebar-workspace.is-active > .aw-global-link,
-    .aw-sidebar-footer-nav,
-    .aw-rail-identity
-  ) {
+  .aw-global-rail
+    :is(
+      .aw-rail-brand-row,
+      .aw-sidebar-section-label,
+      .aw-sidebar-workspace:not(.is-active),
+      .aw-sidebar-workspace.is-active > .aw-global-link,
+      .aw-sidebar-footer-nav,
+      .aw-rail-identity
+    ) {
     display: none;
   }
 
@@ -2160,12 +2224,13 @@ select {
     border: 0;
   }
 
-  .aw-sidebar-context-slot > :is(
-    .aw-chat-sessions,
-    .aw-code-sessions,
-    .aw-work-sidebar,
-    .aw-knowledge-sidebar
-  ) {
+  .aw-sidebar-context-slot
+    > :is(
+      .aw-chat-sessions,
+      .aw-code-sessions,
+      .aw-work-sidebar,
+      .aw-knowledge-sidebar
+    ) {
     display: flex;
   }
 
@@ -2181,13 +2246,14 @@ select {
     backdrop-filter: blur(2px);
   }
 
-  .aw-sidebar-context-slot :is(
-    .aw-chat-sessions-close,
-    .aw-code-sessions-close,
-    .aw-work-sessions-close,
-    .aw-knowledge-sessions-close,
-    .aw-projects-close
-  ) {
+  .aw-sidebar-context-slot
+    :is(
+      .aw-chat-sessions-close,
+      .aw-code-sessions-close,
+      .aw-work-sessions-close,
+      .aw-knowledge-sessions-close,
+      .aw-projects-close
+    ) {
     display: inline-flex;
   }
 
