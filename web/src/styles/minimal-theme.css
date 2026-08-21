@@ -629,11 +629,6 @@ select {
   background: var(--aw-panel-soft);
 }
 
-.aw-code-output-inline-body,
-.aw-code-output-inline > summary {
-  border-top-color: var(--aw-border);
-}
-
 /* The composer is the same control Chat's is, and on this theme Chat's has no
    hard edge against the page. */
 .aw-code-composer {

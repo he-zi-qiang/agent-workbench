@@ -117,7 +117,9 @@ export function PreviewPanel({
             {files.map((file) => (
               <li key={file.name}>
                 <button
-                  aria-current={file.name === viewing?.name ? "true" : undefined}
+                  aria-current={
+                    file.name === viewing?.name ? "true" : undefined
+                  }
                   className="aw-code-file-open"
                   onClick={() => {
                     onOpen(file);

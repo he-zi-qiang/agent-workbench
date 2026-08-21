@@ -2786,7 +2786,6 @@ pre {
      the first two screens. */
   :root {
     --aw-preview-height: min(60vh, 520px);
-    --aw-preview-height-inline: min(46vh, 420px);
   }
 }
 
@@ -4306,49 +4305,6 @@ pre {
   white-space: nowrap;
 }
 
-.aw-code-output-inline > summary {
-  padding: 6px 12px;
-  border-top: 1px solid var(--aw-border);
-  color: var(--aw-text-soft);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.aw-code-output-inline > summary:hover {
-  background: var(--aw-panel-soft);
-}
-
-/* 封顶，因为它在对话流里：一个整屏高的 iframe 会把它下面的报告推出视野，而
- * 报告才是这一轮的结论。要看大的就点开右边那一列。 */
-.aw-code-output-inline-body {
-  max-height: 360px;
-  padding: 10px 12px;
-  overflow: auto;
-  border-top: 1px solid var(--aw-border);
-}
-
-/* 预览组件自己的高度是按"独占一列"定的。在对话里它是一张卡片的一部分，用那个
- * 高度的结果是：容器滚动条把画面从中间切断——实测一个 18vw 字号的时钟，看到的
- * 是数字的上半截。所以这里矮一档。组件不知道自己被放在哪里，所以这条语境覆盖
- * 只能写在这边。
- *
- * 矮一档不等于矮到没用。这里曾经是 min(30vh, 260px)，而 260px 装不下任何一个
- * 整页产物：贪吃蛇的画布是 min(92vw, 480px)，480 的正方形进 258 的框，看到的
- * 是压扁的一条加两侧黑边。现在读 token，和右栏那份共一个来源。 */
-.aw-code-output-inline-body .aw-preview-frame {
-  height: var(--aw-preview-height-inline);
-}
-
-.aw-code-output-inline-body .aw-preview-image {
-  max-height: var(--aw-preview-height-inline);
-}
-
-/* 沙箱说明在卡片里要更轻：它在右栏是一段独立的注意事项，在这里是一行脚注。 */
-.aw-code-output-inline-body .aw-page-note {
-  margin-bottom: 0;
-  font-size: 11px;
-}
-
 /* --- 一轮的时间线 --- */
 
 /* 一步一行，推理在它促成的动作正上方。这不是折叠块：转录的默认状态是「看得见」，
@@ -4609,11 +4565,6 @@ p.aw-code-step-thought {
 
 /* 卡片里的那份少一层内边距和底色：它已经坐在一张卡片上，再套一个面板色会变成
  * 盒中盒。 */
-.aw-code-output-inline-body .aw-code-file-body {
-  padding: 0;
-  background: transparent;
-}
-
 /* 跑一遍这个 .py（ADR-065）。「再运行一次」不在分段控件的两格之内：那两格是
  * 「看哪一半」，这个是「做一件事」，混在一起会让切回源码看起来也会启动容器。 */
 .aw-code-run-again {

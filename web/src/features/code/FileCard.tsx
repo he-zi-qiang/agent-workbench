@@ -20,8 +20,6 @@
  */
 
 import { FileCode2, FileText, Image as ImageIcon } from "lucide-react";
-import type { ReactNode } from "react";
-import { useState } from "react";
 import type { WorkspaceEntryView } from "../../api/types";
 import {
   type CheckCost,
@@ -38,12 +36,10 @@ export const CODE_ABILITIES = { canRun: true, canConvert: false } as const;
 
 export function FileCard({
   abilities = CODE_ABILITIES,
-  autoPreview,
   entry,
   file,
   onOpen,
   opened,
-  renderPreview,
 }: {
   /**
    * What the surface holding this card can do, defaulting to a full coding
@@ -54,40 +50,12 @@ export function FileCard({
    * the last one makes "how many did I start" unanswerable.
    */
   abilities?: SurfaceAbilities;
-  autoPreview: boolean;
   /** Undefined when the name is no longer in the workspace listing. */
   entry: WorkspaceEntryView | undefined;
   file: ProducedFile;
   onOpen: (name: string) => void;
   opened: boolean;
-  /** The viewer for this file, built by the caller and mounted only when the
-      fold is open -- a turn with six cards must not be six fetches. */
-  renderPreview: () => ReactNode;
 }) {
-  const [inlineOpen, setInlineOpen] = useState(autoPreview);
-  // Followed rather than only seeded. `useState(autoPreview)` reads its
-  // argument once, so a card mounted before the turn's last previewable file
-  // existed kept whatever answer was true then: a file that *became* the
-  // auto-preview choice after its card had mounted never opened -- which on a
-  // streaming console is the ordinary case, because the card for a file
-  // appears the moment its `ToolCompleted` lands and the turn keeps going.
-  //
-  // Adjusted during render against a remembered previous value rather than in
-  // an effect. The effect version is what this was first written as, and the
-  // lint rule that rejected it is right: it renders once with the stale fold,
-  // then again with the right one, and on a card holding an iframe that is a
-  // visible flash. This is React's documented "adjusting state when a prop
-  // changes" shape and settles before anything paints.
-  //
-  // One-directional on purpose: it opens a fold, never closes one. `autoPreview`
-  // turning false means some *other* file became the turn's last previewable
-  // one, which is no reason to shut a preview the reader may be mid-sentence in.
-  const [autoPreviewWas, setAutoPreviewWas] = useState(autoPreview);
-  if (autoPreview !== autoPreviewWas) {
-    setAutoPreviewWas(autoPreview);
-    if (autoPreview) setInlineOpen(true);
-  }
-
   const kind = entry === undefined ? "none" : previewKind(entry.media_type);
   const cost: CheckCost =
     entry === undefined
@@ -112,36 +80,13 @@ export function FileCard({
         <span className="aw-code-output-meta">{metaOf(file, entry, cost)}</span>
       </button>
 
-      {/* Text is in this list, and leaving it out was the bug this fixes: a
-          coding session's product is usually a `.py` or a `.ts`, and a card
-          that showed only its name meant the code the agent had just written
-          was the one thing not in the conversation. It is also the cheapest
-          kind here -- a `<pre>`, against an iframe or a decoded blob -- so the
-          cost argument that justified the image/html gate never applied to it.
-
-          PDF and .docx stay out. Both are paged documents whose viewer wants
-          the height the panel gives it; in a 360px box they are a postage
-          stamp, and the card's click already routes there.
-
-          Mounted only when open, so a turn with six cards is not six fetches.
-          Each preview component keeps its own size ceiling, judged from the
-          listing's byte count before any transfer. */}
-      {entry !== undefined &&
-      (kind === "text" || kind === "image" || kind === "html") ? (
-        <details
-          className="aw-code-output-inline"
-          onToggle={(event) => {
-            setInlineOpen(event.currentTarget.open);
-          }}
-          open={inlineOpen}
-        >
-          <summary>就地预览</summary>
-          {inlineOpen ? (
-            <div className="aw-code-output-inline-body">{renderPreview()}</div>
-          ) : null}
-        </details>
-      ) : null}
-
+      {/* 卡片底下此前有一个「就地预览」折叠，它带着一段为自己辩护的注释：
+          「一次编码会话的产物通常就是那个 .py，一张只显示文件名的卡片，意味着
+          agent 刚写出来的代码是这段对话里唯一看不到的东西」。那句话仍然成立，
+          只是答案换了地方——所有预览统一走右侧那块面，卡片一点就开。
+          留着两个入口的代价不是多一个折叠：同一个文件会同时活在一个 360px 的
+          小框和一块 420px 的面里，两处各有自己的滚动位置、各有自己的缩放，
+          而它们看起来是同一个东西。 */}
       {/* Said, rather than left as an absence, and said differently for the
           two situations that used to share one silence. A card for a .xlsx
           used to end at its name -- no fold, no sentence, nothing telling
@@ -217,10 +162,16 @@ function metaOf(
           ? "覆盖"
           : "写入";
   if (entry === undefined) return `${verb} · 已不在工作区`;
-  const parts = [verb, formatSize(entry.size_bytes), mediaLabel(entry.media_type)];
+  const parts = [
+    verb,
+    formatSize(entry.size_bytes),
+    mediaLabel(entry.media_type),
+  ];
   if (cost === "one-action") parts.push("点开可以运行");
   if (file.supersededByTurn !== null) {
-    parts.push(`第 ${String(file.supersededByTurn)} 轮又改过，预览的是最新内容`);
+    parts.push(
+      `第 ${String(file.supersededByTurn)} 轮又改过，预览的是最新内容`,
+    );
   }
   return parts.join(" · ");
 }

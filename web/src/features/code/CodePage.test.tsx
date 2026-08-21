@@ -51,13 +51,19 @@ vi.mock("../../api/client", async () => ({
     Promise.resolve({ text: "", truncated: false }),
   ),
   getCodeWorkspaceFileBlob: vi.fn(() =>
-    Promise.resolve(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" })),
+    Promise.resolve(
+      new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }),
+    ),
   ),
   downloadCodeWorkspaceFile: vi.fn(() => Promise.resolve()),
   listCodeSessions: vi.fn(() => Promise.resolve({ sessions: [] })),
   putCodeWorkspaceFile: vi.fn(() => Promise.resolve({ files: [] })),
   renameCodeSession: vi.fn(() =>
-    Promise.resolve({ session_id: "ses_code_1", title: "x", last_activity_at: null }),
+    Promise.resolve({
+      session_id: "ses_code_1",
+      title: "x",
+      last_activity_at: null,
+    }),
   ),
   runCodeWorkspaceFile: vi.fn(),
   newIdempotencyKey: vi.fn(() => "code-1"),
@@ -67,7 +73,13 @@ vi.mock("../../api/client", async () => ({
 // asserted through this seam instead, because a page test that waited on a
 // network read would be testing the transport a second time.
 vi.mock("./useCodeStream", () => ({
-  useCodeStream: vi.fn(() => ({ steps: [], thinking: "", thinkingCallId: "", answer: "", progress: new Map() })),
+  useCodeStream: vi.fn(() => ({
+    steps: [],
+    thinking: "",
+    thinkingCallId: "",
+    answer: "",
+    progress: new Map(),
+  })),
 }));
 
 vi.mock("../../app/IdentityContext", () => ({
@@ -165,7 +177,12 @@ beforeEach(() => {
   vi.mocked(downloadCodeWorkspaceFile).mockResolvedValue(undefined);
   vi.mocked(listCodeSessions).mockResolvedValue({ sessions: [] });
   vi.mocked(useCodeStream).mockReturnValue({
-      progress: new Map(), steps: [], thinking: "", thinkingCallId: "", answer: "" });
+    progress: new Map(),
+    steps: [],
+    thinking: "",
+    thinkingCallId: "",
+    answer: "",
+  });
 });
 
 describe("CodePage", () => {
@@ -389,7 +406,10 @@ describe("CodePage", () => {
     // is what gates it.
     vi.mocked(useCodeStream).mockReturnValue({
       progress: new Map([
-        ["call_1", { lines: ["processing chunk 0"], elapsedMs: 72_000, percent: null }],
+        [
+          "call_1",
+          { lines: ["processing chunk 0"], elapsedMs: 72_000, percent: null },
+        ],
       ]),
       thinking: "",
       thinkingCallId: "",
@@ -534,11 +554,15 @@ describe("CodePage", () => {
 
     const held = await screen.findByRole("region", { name: "待批准的调用" });
     const cards = within(held).getAllByRole("article");
-    expect(within(cards[0] as HTMLElement).getAllByRole("button")).toHaveLength(3);
+    expect(within(cards[0] as HTMLElement).getAllByRole("button")).toHaveLength(
+      3,
+    );
     // A standing yes to an irreversible effect is refused by the server, so it
     // is not offered here either -- a button whose only outcome is a 422 is a
     // button that teaches the reader the wrong rule.
-    expect(within(cards[1] as HTMLElement).getAllByRole("button")).toHaveLength(2);
+    expect(within(cards[1] as HTMLElement).getAllByRole("button")).toHaveLength(
+      2,
+    );
     expect(
       within(cards[1] as HTMLElement).queryByRole("button", {
         name: "本会话都允许",
@@ -649,7 +673,9 @@ describe("CodePage", () => {
     // and the cost was permanent: from the first turn onward the column took
     // up to 560px whether or not anybody had asked to see anything.
     const entry = await screen.findByRole("button", { name: "工作区 1" });
-    expect(screen.queryByRole("complementary", { name: "预览" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", { name: "预览" }),
+    ).not.toBeInTheDocument();
 
     await user.click(entry);
 
@@ -856,7 +882,9 @@ describe("CodePage", () => {
     // And it says what the call did without claiming what the file is: this
     // stream never saw an earlier write, but the workspace has a history older
     // than the event window, so "新建" would be a guess.
-    expect(within(outputs).getByText(/写入 · 1\.1 KB · HTML/)).toBeInTheDocument();
+    expect(
+      within(outputs).getByText(/写入 · 1\.1 KB · HTML/),
+    ).toBeInTheDocument();
   });
 
   it("keeps a finished turn's steps on screen", async () => {
@@ -950,7 +978,9 @@ describe("CodePage", () => {
 
     mounted();
 
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     // From the server, so it survives a cleared browser and a different
     // machine. The row with no title is one opened and never spoken in.
     await user.click(
@@ -966,7 +996,9 @@ describe("CodePage", () => {
     );
 
     await waitFor(() => {
-      expect(vi.mocked(getCodeHistory).mock.calls.at(-1)?.[1]).toBe("ses_code_older");
+      expect(vi.mocked(getCodeHistory).mock.calls.at(-1)?.[1]).toBe(
+        "ses_code_older",
+      );
     });
   });
 
@@ -1029,7 +1061,9 @@ describe("CodePage", () => {
       name: "最近的编码会话",
     });
     expect(
-      await within(recent).findByRole("button", { name: "把 notes.md 整理成清单" }),
+      await within(recent).findByRole("button", {
+        name: "把 notes.md 整理成清单",
+      }),
     ).toBeInTheDocument();
     // No panes about a session that does not exist.
     expect(
@@ -1108,16 +1142,16 @@ describe("CodePage", () => {
     await user.click(screen.getByRole("button", { name: "发送" }));
 
     const transcript = await screen.findByRole("region", { name: "编码会话" });
-    expect(await within(transcript).findByText("写一个 sq.py")).toBeInTheDocument();
+    expect(
+      await within(transcript).findByText("写一个 sq.py"),
+    ).toBeInTheDocument();
     // And the block is the live one, so the thought in flight has somewhere to
     // land. This is the whole point of keeping the sentence: a block is what a
     // turn's steps, reasoning and report are drawn inside.
     expect(
       within(transcript).getByText("先看看工作区里有什么"),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText("这个会话还是空的"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("这个会话还是空的")).not.toBeInTheDocument();
   });
 
   it("drops the pending copy once the server's transcript carries it", async () => {
@@ -1186,7 +1220,9 @@ describe("CodePage", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
 
     mounted();
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     const remove = await within(recent).findByRole("button", {
       name: "删除会话 把 notes.md 整理成清单",
     });
@@ -1199,21 +1235,29 @@ describe("CodePage", () => {
     confirm.mockReturnValue(true);
     await user.click(remove);
     await waitFor(() => {
-      expect(vi.mocked(deleteCodeSession).mock.calls[0]?.[1]).toBe("ses_code_older");
+      expect(vi.mocked(deleteCodeSession).mock.calls[0]?.[1]).toBe(
+        "ses_code_older",
+      );
     });
   });
 
   it("sends the reader to the start page when the session they are viewing is deleted", async () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
-      sessions: [{ session_id: SESSION, title: "第一句指令", last_activity_at: null }],
+      sessions: [
+        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+      ],
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
     mounted();
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
-      await within(recent).findByRole("button", { name: "删除会话 第一句指令" }),
+      await within(recent).findByRole("button", {
+        name: "删除会话 第一句指令",
+      }),
     );
 
     // The control for the case below: a delete that lands while its own
@@ -1244,9 +1288,13 @@ describe("CodePage", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
     mounted();
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
-      await within(recent).findByRole("button", { name: "删除会话 第一句指令" }),
+      await within(recent).findByRole("button", {
+        name: "删除会话 第一句指令",
+      }),
     );
     await waitFor(() => expect(deleteCodeSession).toHaveBeenCalledTimes(1));
 
@@ -1291,7 +1339,9 @@ describe("CodePage", () => {
   it("does not report a delete that failed under one principal on the next one's page", async () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
-      sessions: [{ session_id: SESSION, title: "第一句指令", last_activity_at: null }],
+      sessions: [
+        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+      ],
     });
     let failDelete: ((cause: Error) => void) | undefined;
     vi.mocked(deleteCodeSession).mockReturnValue(
@@ -1318,9 +1368,13 @@ describe("CodePage", () => {
     );
     const view = render(tree());
 
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
-      await within(recent).findByRole("button", { name: "删除会话 第一句指令" }),
+      await within(recent).findByRole("button", {
+        name: "删除会话 第一句指令",
+      }),
     );
     await waitFor(() => expect(deleteCodeSession).toHaveBeenCalledTimes(1));
 
@@ -1365,7 +1419,8 @@ describe("CodePage", () => {
             : [{ role: "user" as const, text: "这个会话里说过的话" }],
       }),
     );
-    let settleAsk: ((answer: Awaited<ReturnType<typeof askCode>>) => void) | undefined;
+    let settleAsk:
+      ((answer: Awaited<ReturnType<typeof askCode>>) => void) | undefined;
     vi.mocked(askCode).mockReturnValue(
       new Promise((resolve) => {
         settleAsk = resolve;
@@ -1379,9 +1434,13 @@ describe("CodePage", () => {
 
     // A coding turn holds its request open for minutes, and the rail stays
     // clickable for all of it -- which is what the rail is for.
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
-      await within(recent).findByRole("button", { name: "把 notes.md 整理成清单" }),
+      await within(recent).findByRole("button", {
+        name: "把 notes.md 整理成清单",
+      }),
     );
     expect(await screen.findByText("另一个会话里说过的话")).toBeVisible();
 
@@ -1430,7 +1489,9 @@ describe("CodePage", () => {
     // The session it was typed into is busy, and says so.
     expect(screen.getByRole("button", { name: "正在处理" })).toBeDisabled();
 
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
       within(recent).getByRole("button", { name: "把 notes.md 整理成清单" }),
     );
@@ -1441,7 +1502,9 @@ describe("CodePage", () => {
     const send = await screen.findByRole("button", { name: "发送" });
     await user.type(screen.getByLabelText("要做的事"), "另一件事");
     expect(send).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "正在处理" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "正在处理" }),
+    ).not.toBeInTheDocument();
   });
 
   it("marks the session being viewed, even when it has no name yet", async () => {
@@ -1451,7 +1514,9 @@ describe("CodePage", () => {
 
     mounted();
 
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     expect(
       await within(recent).findByRole("button", { current: "page" }),
     ).toBeInTheDocument();
@@ -1467,11 +1532,18 @@ describe("CodePage", () => {
 
     mounted();
 
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
-      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+      await within(recent).findByRole("button", {
+        name: "重命名会话 第一句指令",
+      }),
     );
-    await user.type(within(recent).getByLabelText("会话名字"), "改了一半{Escape}");
+    await user.type(
+      within(recent).getByLabelText("会话名字"),
+      "改了一半{Escape}",
+    );
 
     expect(within(recent).queryByLabelText("会话名字")).not.toBeInTheDocument();
     expect(
@@ -1495,9 +1567,13 @@ describe("CodePage", () => {
 
     mounted();
 
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
-      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+      await within(recent).findByRole("button", {
+        name: "重命名会话 第一句指令",
+      }),
     );
     expect(within(recent).getByLabelText("会话名字")).toBeInTheDocument();
   });
@@ -1520,9 +1596,13 @@ describe("CodePage", () => {
 
     mounted();
 
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
-      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+      await within(recent).findByRole("button", {
+        name: "重命名会话 第一句指令",
+      }),
     );
     const field = within(recent).getByLabelText("会话名字");
     await user.clear(field);
@@ -1550,7 +1630,9 @@ describe("CodePage", () => {
 
   it("keeps a failed Code rename inline, focused, and retryable", async () => {
     const user = userEvent.setup();
-    vi.mocked(renameCodeSession).mockRejectedValueOnce(new Error("名字没有保存"));
+    vi.mocked(renameCodeSession).mockRejectedValueOnce(
+      new Error("名字没有保存"),
+    );
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
         { session_id: SESSION, title: "第一句指令", last_activity_at: null },
@@ -1558,15 +1640,21 @@ describe("CodePage", () => {
     });
 
     mounted();
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
-      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+      await within(recent).findByRole("button", {
+        name: "重命名会话 第一句指令",
+      }),
     );
     const field = within(recent).getByLabelText("会话名字");
     await user.clear(field);
     await user.type(field, "第一次{Enter}");
 
-    expect(await within(recent).findByRole("alert")).toHaveTextContent("名字没有保存");
+    expect(await within(recent).findByRole("alert")).toHaveTextContent(
+      "名字没有保存",
+    );
     expect(field).toHaveFocus();
     expect(field).not.toHaveAttribute("readonly");
 
@@ -1605,9 +1693,13 @@ describe("CodePage", () => {
     );
 
     mounted();
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.click(
-      await within(recent).findByRole("button", { name: "重命名会话 第一句指令" }),
+      await within(recent).findByRole("button", {
+        name: "重命名会话 第一句指令",
+      }),
     );
     const field = within(recent).getByLabelText("会话名字");
     await user.clear(field);
@@ -1634,7 +1726,9 @@ describe("CodePage", () => {
     });
 
     await waitFor(() => {
-      expect(within(recent).queryByLabelText("会话名字")).not.toBeInTheDocument();
+      expect(
+        within(recent).queryByLabelText("会话名字"),
+      ).not.toBeInTheDocument();
     });
     await nextFrame();
     expect(other).toHaveFocus();
@@ -1645,22 +1739,30 @@ describe("CodePage", () => {
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
         { session_id: SESSION, title: "当前会话", last_activity_at: null },
-        { session_id: "ses_code_2", title: "另一个会话", last_activity_at: null },
+        {
+          session_id: "ses_code_2",
+          title: "另一个会话",
+          last_activity_at: null,
+        },
       ],
     });
 
     mounted();
-    const recent = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const recent = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     await user.dblClick(
       await within(recent).findByRole("button", { name: "另一个会话" }),
     );
 
-    expect(await screen.findByRole("heading", { name: "另一个会话" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "另一个会话" }),
+    ).toBeInTheDocument();
     expect(within(recent).queryByLabelText("会话名字")).not.toBeInTheDocument();
     expect(renameCodeSession).not.toHaveBeenCalled();
   });
 
-  it("shows a produced code file's contents in the conversation, unasked", async () => {
+  it("routes a produced code file to the panel instead of unfolding it in place", async () => {
     vi.mocked(getCodeWorkspace).mockResolvedValue({
       files: [
         { name: "collatz.py", size_bytes: 554, media_type: "text/plain" },
@@ -1711,23 +1813,37 @@ describe("CodePage", () => {
 
     mounted();
 
-    // The regression this pins: inline preview was gated to image and html on
-    // a cost argument about iframes, which text never incurred -- so on a
-    // *coding* console the one artifact that matters most, the code, was the
-    // one thing the conversation showed only the name of. No click here: a
-    // small produced file opens on its own.
+    // 卡片底下曾经有一个「就地预览」折叠，小文件还会自己展开。它没了：
+    // 所有预览统一走右侧那块面，卡片是去那里的入口。
+    //
+    // 这条钉住的是删除本身的两半——不擅自取（下面这句断言），以及点一下
+    // 仍然能看到（再下面那句）。只钉前半句的话，一个把卡片也做哑了的改动
+    // 会照样通过。
+    const user = userEvent.setup();
     const turns = await screen.findByRole("region", { name: "编码会话" });
+    const card = await within(turns).findByRole("button", {
+      name: /collatz\.py/,
+    });
+    expect(within(turns).queryByText(/def collatz_steps/)).toBeNull();
+    expect(vi.mocked(getCodeWorkspaceFileText)).not.toHaveBeenCalled();
+
+    await user.click(card);
     expect(
-      await within(turns).findByText(/def collatz_steps/),
+      await within(
+        await screen.findByRole("complementary", { name: "预览" }),
+      ).findByText(/def collatz_steps/),
     ).toBeInTheDocument();
   });
 
   it("does not fetch a large produced file nobody asked to see", async () => {
     const user = userEvent.setup();
     vi.mocked(getCodeWorkspace).mockResolvedValue({
-      // Past AUTO_PREVIEW_MAX_BYTES: far more than the inline box could show,
-      // so an unrequested transfer would be spent on bytes nobody reads.
-      files: [{ name: "dump.txt", size_bytes: 900_000, media_type: "text/plain" }],
+      // 大文件。此前它证明的是「超过自动预览上限就不取」；折叠没了之后
+      // 任何大小都不会被擅自取，所以这条改成证明「点开仍然给得出头部，
+      // 并且照实说被截断了」——那才是这个尺寸还剩下的独有行为。
+      files: [
+        { name: "dump.txt", size_bytes: 900_000, media_type: "text/plain" },
+      ],
     });
     vi.mocked(getCodeHistory).mockResolvedValue({
       messages: [{ role: "user", text: "导出全部" }],
@@ -1782,20 +1898,20 @@ describe("CodePage", () => {
     ).toBeInTheDocument();
     expect(vi.mocked(getCodeWorkspaceFileText)).not.toHaveBeenCalled();
 
-    // The ceiling is on the *unrequested* fetch only. Asking still works, and
-    // still shows the head with the cut named -- declining that would take
-    // away a view that works.
-    await user.click(within(turns).getByText("就地预览"));
-    expect(await within(turns).findByText("head of it")).toBeInTheDocument();
+    await user.click(within(turns).getByRole("button", { name: /dump\.txt/ }));
+    const panel = await screen.findByRole("complementary", { name: "预览" });
+    expect(await within(panel).findByText("head of it")).toBeInTheDocument();
     expect(
-      within(turns).getByText("只显示了开头一部分，完整内容请下载。"),
+      within(panel).getByText("只显示了开头一部分，完整内容请下载。"),
     ).toBeInTheDocument();
   });
 
   it("keeps sessions and files in separate landmarks", async () => {
     const user = userEvent.setup();
     vi.mocked(getCodeWorkspace).mockResolvedValue({
-      files: [{ name: "notes.md", size_bytes: 12, media_type: "text/markdown" }],
+      files: [
+        { name: "notes.md", size_bytes: 12, media_type: "text/markdown" },
+      ],
     });
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
@@ -1813,7 +1929,9 @@ describe("CodePage", () => {
     // rows were rows of the region labelled 工作区文件 -- so anything reading
     // that region by its label, a screen reader first among them, read out
     // session ids as files. They are now two landmarks on opposite sides.
-    const rail = await screen.findByRole("navigation", { name: "最近的编码会话" });
+    const rail = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
     expect(within(rail).getByText("上一个会话")).toBeInTheDocument();
     expect(within(rail).queryByText("notes.md")).not.toBeInTheDocument();
 
@@ -1889,7 +2007,9 @@ describe("CodePage", () => {
     // two places; it is now one row per call that settles in place -- a call
     // with a live thought has no ModelCompleted yet, so it cannot also be
     // supplying a durable excerpt.
-    expect(within(turns).getAllByText("先建一个空的 clock.html")).toHaveLength(1);
+    expect(within(turns).getAllByText("先建一个空的 clock.html")).toHaveLength(
+      1,
+    );
     expect(
       within(turns).getAllByText("现在该把文件读回来核对一遍"),
     ).toHaveLength(1);
@@ -2039,7 +2159,9 @@ describe("CodePage", () => {
   it("shows what a text file holds, without spending a turn to ask", async () => {
     const user = userEvent.setup();
     vi.mocked(getCodeWorkspace).mockResolvedValue({
-      files: [{ name: "notes.md", size_bytes: 12, media_type: "text/markdown" }],
+      files: [
+        { name: "notes.md", size_bytes: 12, media_type: "text/markdown" },
+      ],
     });
     vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
       text: "- ship it",
@@ -2053,10 +2175,9 @@ describe("CodePage", () => {
     // Before this the only way to see a file was to ask the agent to read it
     // back -- a model call to answer a question the store already knows.
     expect(await screen.findByText("- ship it")).toBeInTheDocument();
-    expect(vi.mocked(getCodeWorkspaceFileText).mock.calls[0]?.slice(1)).toEqual([
-      SESSION,
-      "notes.md",
-    ]);
+    expect(vi.mocked(getCodeWorkspaceFileText).mock.calls[0]?.slice(1)).toEqual(
+      [SESSION, "notes.md"],
+    );
   });
 
   it("runs a .py from the panel, and never shows one file's output under another's name", async () => {
@@ -2105,15 +2226,20 @@ describe("CodePage", () => {
     expect(vi.mocked(runCodeWorkspaceFile)).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the picture a run drew, without a second click", async () => {
+  it("names the picture a run drew, and routes it to the panel", async () => {
     const user = userEvent.setup();
-    // The scenario ADR-066 was written for: a script that draws a chart. Before
-    // this, the run answered "写回工作区：plot.png" in grey text and the picture
-    // was two clicks away -- open the folded 工作区全部文件 list, find the name.
-    // Two clicks to see the output of the click you just made.
+    // ADR-066 写的那个场景：一个画图的脚本。在它之前，运行只用灰字答一句
+    // 「写回工作区：plot.png」，图要两次点击才看得到——展开折叠的工作区列表，
+    // 再找那个名字。
+    //
+    // ADR-066 的解法是让图自己展开；「就地预览」折叠删掉之后解法换成一次
+    // 点击，但这条测试要守的东西没变：运行写出的东西要以卡片出现在它自己的
+    // 列表里，而不是退化成一行灰字。
     vi.mocked(getCodeWorkspace)
       .mockResolvedValueOnce({
-        files: [{ name: "plot.py", size_bytes: 200, media_type: "text/x-python" }],
+        files: [
+          { name: "plot.py", size_bytes: 200, media_type: "text/x-python" },
+        ],
       })
       .mockResolvedValue({
         files: [
@@ -2145,9 +2271,8 @@ describe("CodePage", () => {
     expect(
       within(produced).getByRole("button", { name: /plot\.png/ }),
     ).toBeInTheDocument();
-    await waitFor(() => {
-      expect(vi.mocked(getCodeWorkspaceFileBlob)).toHaveBeenCalled();
-    });
+    // 不再擅自取字节：卡片先只画名字和大小，点了才去拿。
+    expect(vi.mocked(getCodeWorkspaceFileBlob)).not.toHaveBeenCalled();
 
     // And the panel refuses to call a zero exit code a success. stdout says
     // 已生成; only the picture says whether the labels rendered.
@@ -2163,7 +2288,9 @@ describe("CodePage", () => {
     // now answers with the working set it left behind, so the card is drawable
     // immediately (known-gaps F-15).
     vi.mocked(getCodeWorkspace).mockResolvedValue({
-      files: [{ name: "plot.py", size_bytes: 200, media_type: "text/x-python" }],
+      files: [
+        { name: "plot.py", size_bytes: 200, media_type: "text/x-python" },
+      ],
     });
     vi.mocked(runCodeWorkspaceFile).mockResolvedValue({
       exit_code: 0,
@@ -2197,7 +2324,9 @@ describe("CodePage", () => {
     // caught up. All-or-nothing: a card here would open nothing and report
     // 已不在工作区 about a file written a second ago.
     vi.mocked(getCodeWorkspace).mockResolvedValue({
-      files: [{ name: "plot.py", size_bytes: 200, media_type: "text/x-python" }],
+      files: [
+        { name: "plot.py", size_bytes: 200, media_type: "text/x-python" },
+      ],
     });
     vi.mocked(runCodeWorkspaceFile).mockResolvedValue({
       exit_code: 0,
@@ -2222,12 +2351,16 @@ describe("CodePage", () => {
   it("offers a download for a type it cannot show, and does not fetch it", async () => {
     const user = userEvent.setup();
     vi.mocked(getCodeWorkspace).mockResolvedValue({
-      files: [{ name: "report.docx", size_bytes: 4096, media_type: DOCX_MEDIA_TYPE }],
+      files: [
+        { name: "report.docx", size_bytes: 4096, media_type: DOCX_MEDIA_TYPE },
+      ],
     });
 
     mounted();
     await openWorkspace(user, 1);
-    await user.click(await screen.findByRole("button", { name: /report\.docx/ }));
+    await user.click(
+      await screen.findByRole("button", { name: /report\.docx/ }),
+    );
 
     // A .docx is told where its viewer *is*, not that none exists: the layout
     // endpoints address an artifact id and a workspace file has none (F-11).
@@ -2240,10 +2373,9 @@ describe("CodePage", () => {
     expect(vi.mocked(getCodeWorkspaceFileText)).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "下载" }));
-    expect(vi.mocked(downloadCodeWorkspaceFile).mock.calls[0]?.slice(1)).toEqual([
-      SESSION,
-      "report.docx",
-    ]);
+    expect(
+      vi.mocked(downloadCodeWorkspaceFile).mock.calls[0]?.slice(1),
+    ).toEqual([SESSION, "report.docx"]);
   });
 
   it("runs an html file in a sandboxed frame instead of showing its source", async () => {
@@ -2272,7 +2404,9 @@ describe("CodePage", () => {
   it("says a long file was cut rather than implying that is all of it", async () => {
     const user = userEvent.setup();
     vi.mocked(getCodeWorkspace).mockResolvedValue({
-      files: [{ name: "big.txt", size_bytes: 999_999, media_type: "text/plain" }],
+      files: [
+        { name: "big.txt", size_bytes: 999_999, media_type: "text/plain" },
+      ],
     });
     vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
       text: "head of it",

@@ -77,18 +77,6 @@ function fileKey(
   ];
 }
 
-/**
- * How large a file a run just wrote may be and still paint itself unasked.
- *
- * Smaller than a turn card's 64 KB, and for a different reason: this one only
- * ever admits images, and an image is decoded whole before anything appears.
- * 4 MB is far above any chart a script draws (a matplotlib PNG is tens of KB)
- * and far below the point where decoding it stalls the panel the reader is
- * reading. Past it the card is still there, still one click, still says its
- * size -- what it stops is spending a multi-megabyte decode nobody asked for.
- */
-const AUTO_PREVIEW_WRITTEN_MAX_BYTES = 4 * 1024 * 1024;
-
 export function FilePreview({
   files,
   identity,
@@ -170,10 +158,8 @@ export function FilePreview({
             // is still one refresh behind (known-gaps F-15). The fallback is
             // not dead code: a server older than the field sends no listing.
             files: listing ?? files,
-            identity,
             names,
             onOpen,
-            onWrote,
             sessionId: viewing.sessionId,
           })
         }
@@ -255,17 +241,13 @@ export function FilePreview({
  */
 function producedCards({
   files,
-  identity,
   names,
   onOpen,
-  onWrote,
   sessionId,
 }: {
   files: readonly WorkspaceEntryView[] | undefined;
-  identity: PrincipalIdentity;
   names: readonly string[];
   onOpen: ((name: string) => void) | undefined;
-  onWrote: ((names: string[]) => void) | undefined;
   sessionId: string;
 }): React.ReactNode {
   if (files === undefined || onOpen === undefined) return null;
@@ -283,14 +265,6 @@ function producedCards({
           // wrote gets no 运行 button inside the output of the run that wrote
           // it. It is still one click away in the panel.
           abilities={{ canRun: false, canConvert: false }}
-          // `free` opens itself, which is the entire reader-facing win here:
-          // the chart a script drew is on screen without a click. `reader` and
-          // the rest stay folded, same ceiling logic as a turn's cards.
-          autoPreview={
-            entry !== undefined &&
-            previewKind(entry.media_type) === "image" &&
-            entry.size_bytes <= AUTO_PREVIEW_WRITTEN_MAX_BYTES
-          }
           entry={entry}
           file={{
             name,
@@ -308,20 +282,6 @@ function producedCards({
           key={name}
           onOpen={onOpen}
           opened={false}
-          renderPreview={() => (
-            <FilePreview
-              // Deliberately without `files`/`onOpen`: a nested viewer must not
-              // grow cards of its own. One level is a preview; two is a tree.
-              identity={identity}
-              {...(onWrote === undefined ? {} : { onWrote })}
-              viewing={{
-                sessionId,
-                name,
-                mediaType: entry?.media_type ?? "application/octet-stream",
-                sizeBytes: entry?.size_bytes ?? 0,
-              }}
-            />
-          )}
         />
       ))}
     </ul>
