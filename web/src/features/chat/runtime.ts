@@ -367,7 +367,10 @@ export function chatRuntimeFor(identity: PrincipalIdentity): ChatRuntime {
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
-    if (error.status === 404) return "此部署未提供 Chat，或该会话不属于当前本地身份。";
+    // 两种可能，读者能分辨的那一种放前面。
+    if (error.status === 404) {
+      return "打不开这个对话：可能它不属于你，也可能这套部署没开对话功能。";
+    }
     return `${error.message}（HTTP ${error.status}）`;
   }
   return error instanceof Error ? error.message : "请求失败";

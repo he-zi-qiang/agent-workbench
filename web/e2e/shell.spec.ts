@@ -125,7 +125,7 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   // The other primary flow, and the one that is still its own rail entry.
   // Asserted by name and by the empty state rather than by a count: a count
   // would pass for a rail with two of the wrong things on it.
-  await activeNavigation.getByRole("link", { name: "Code", exact: true }).click();
+  await activeNavigation.getByRole("link", { name: "编码", exact: true }).click();
 
   await expect(page).toHaveURL(/#\/code$/);
   await expect(page.getByRole("heading", { name: "开始编码" })).toBeVisible();

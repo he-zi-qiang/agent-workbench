@@ -200,7 +200,7 @@ describe("AppShell rail", () => {
     expect(rail.getByRole("link", { name: "对话" })).not.toHaveAttribute(
       "aria-current",
     );
-    expect(rail.getByRole("link", { name: "Code" })).not.toHaveAttribute(
+    expect(rail.getByRole("link", { name: "编码" })).not.toHaveAttribute(
       "aria-current",
     );
   });
@@ -228,7 +228,7 @@ describe("AppShell rail", () => {
     expect(rail.queryByRole("link", { name: "Work" })).not.toBeInTheDocument();
     expect(rail.getByRole("link", { name: "对话" })).toBeInTheDocument();
     expect(rail.getByRole("link", { name: "任务" })).toBeInTheDocument();
-    expect(rail.getByRole("link", { name: "Code" })).toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "编码" })).toBeInTheDocument();
   });
 
   it("nests the active feature's real work items in the one shell sidebar", async () => {
@@ -273,8 +273,8 @@ describe("AppShell rail", () => {
 
   it.each([
     ["/chat/session-42", "任务", "对话"],
-    ["/work/task-42", "Code", "任务"],
-    ["/code/session-42", "对话", "Code"],
+    ["/work/task-42", "编码", "任务"],
+    ["/code/session-42", "对话", "编码"],
   ])("returns from %s to the last open item", async (start, away, back) => {
     const user = userEvent.setup();
     mounted(start);
@@ -292,7 +292,7 @@ describe("AppShell rail", () => {
 
   it.each([
     ["/workflow", "任务", "/work"],
-    ["/code-review", "Code", "/code"],
+    ["/code-review", "编码", "/code"],
   ])("does not treat the lookalike path %s as a flow", (start, label, root) => {
     mounted(start);
 

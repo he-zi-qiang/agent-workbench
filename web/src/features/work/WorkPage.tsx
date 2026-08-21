@@ -16,7 +16,15 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError,
@@ -437,6 +445,17 @@ export function WorkPage() {
     knowledgeBaseDraftId !== null && knowledgeBases.isPending;
   const attachments = useKnowledgeAttachments(identity, knowledgeBaseId);
   const [submissionKey, setSubmissionKey] = useState(() => newIdempotencyKey("task"));
+
+  // Which task the page is showing *now*. Creating one is not a single round
+  // trip: triage may think for up to `TRIAGE_TIMEOUT_MS` before the POST even
+  // goes out, and the form is only rendered while no task is selected -- so a
+  // continuation started from the start page can land after the reader has
+  // opened something else.
+  const shownTask = useRef(selectedTaskId);
+  useLayoutEffect(() => {
+    shownTask.current = selectedTaskId;
+  }, [selectedTaskId]);
+
   const createMutation = useMutation({
     mutationFn: ({ idempotencyKey, ...input }: CreateTaskIntent) =>
       createTask(identity, input, idempotencyKey),
@@ -451,7 +470,13 @@ export function WorkPage() {
       void queryClient.invalidateQueries({
         queryKey: ["work", "tasks", ...identityKey],
       });
-      void navigate(`/work/${encodeURIComponent(task.task_id)}`);
+      // Only a reader who is still on the start page. Pressing 创建任务 asks
+      // for a task; it does not ask to be moved off whatever was opened while
+      // the request was out. The new task is at the top of the list either
+      // way, so nothing is lost by leaving them where they are.
+      if (shownTask.current === undefined) {
+        void navigate(`/work/${encodeURIComponent(task.task_id)}`);
+      }
     },
   });
   const markTaskIntentEdited = () => {
@@ -570,8 +595,8 @@ export function WorkPage() {
         approvalId: approval.approval_id,
         message:
           approval.status === intent.decision
-            ? "服务端已记录此决定。"
-            : `本次“${formatStatus(intent.decision)}”未被应用；同一决定版本的服务端权威状态为“${formatStatus(approval.status)}”。`,
+            ? "已经记下了。"
+            : `你的“${formatStatus(intent.decision)}”没有生效，这条现在是“${formatStatus(approval.status)}”。`,
       });
       void taskQuery.refetch();
       void timeline.refresh();
@@ -663,6 +688,13 @@ export function WorkPage() {
       if (verdict.status === "ask") {
         // No Task yet, and none until the reader answers -- uncertainty is a
         // question here, never a status (ADR-036 §2.1).
+        //
+        // Left set even when the reader has opened a task in the meantime:
+        // the form that renders this question only exists on the start page,
+        // so it waits there for them. That is a real gap -- they pressed
+        // 创建任务, no task was created, and nothing where they now are says
+        // so -- and closing it properly needs a notice surface this page does
+        // not have. Recorded rather than papered over.
         setPendingAsk({
           question:
             verdict.question ??
@@ -746,7 +778,7 @@ export function WorkPage() {
     if (nextId === knowledgeBaseId) return;
     if (
       attachments.items.length > 0 &&
-      !window.confirm("切换资料会清空当前任务的待上传附件，是否继续？")
+      !window.confirm("切换知识库会清空当前任务的待上传附件，是否继续？")
     ) {
       return;
     }
@@ -2332,7 +2364,7 @@ function ApprovalSection({
         <ErrorNotice message={errorMessage(error, "读取审批记录失败")} />
       ) : null}
       {approval !== undefined && !matchesTask ? (
-        <ErrorNotice message="审批记录与当前任务不匹配，无法提交决定。" />
+        <ErrorNotice message="这条确认对不上当前任务，先刷新页面。" />
       ) : null}
       {decidable ? (
         <div className="aw-approve-actions">
@@ -2455,10 +2487,10 @@ function approvalConflictMessage(
   task: TaskView | undefined,
 ): string {
   if (task !== undefined && task.status !== "waiting_approval") {
-    return `任务服务端状态已是“${formatStatus(task.status)}”，审批不再可决定；已刷新权威记录。`;
+    return `任务已经是“${formatStatus(task.status)}”了，这个确认不用做了。`;
   }
   if (approval !== undefined && approval.status !== "pending") {
-    return `审批服务端状态已是“${formatStatus(approval.status)}”；已刷新权威记录。`;
+    return `这条确认已经是“${formatStatus(approval.status)}”了，不用再做一次。`;
   }
-  return "服务端拒绝当前版本的决定；已刷新权威记录，请重新确认。";
+  return "这个决定没有生效：期间有人改过它。已经取回最新状态，请再确认一次。";
 }

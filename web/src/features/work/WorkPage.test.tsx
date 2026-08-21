@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,6 +139,90 @@ describe("WorkPage task submission", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it("does not pull the reader off a task they opened while a create was in flight", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listTasks).mockResolvedValue({
+      tasks: [
+        {
+          task_id: "task_open",
+          status: "running",
+          status_detail: null,
+          agent_invocation_count: 1,
+          objective_preview: "先看着的那个任务",
+          created_at: "2026-08-02T11:00:00Z",
+          updated_at: "2026-08-02T11:30:00Z",
+        },
+      ],
+      cursor: null,
+    });
+    // 按 id 应答，不是对任何 id 都给同一份 —— 否则「有没有被导航走」这件事
+    // 在断言里根本看不出来：两个任务会显示成同一个标题。
+    vi.mocked(getTask).mockImplementation((_identity, taskId) =>
+      Promise.resolve({
+        task_id: taskId,
+        status: "running" as const,
+        status_detail: null,
+        agent_invocation_count: 1,
+        objective_preview:
+          taskId === "task_open" ? "先看着的那个任务" : "刚刚新建的那个",
+        created_at: "2026-08-02T11:00:00Z",
+        updated_at: "2026-08-02T11:30:00Z",
+      }),
+    );
+    vi.mocked(getTaskTimeline).mockImplementation((_identity, taskId) =>
+      Promise.resolve({
+        task_id: taskId,
+        events: [],
+        cursor: null,
+        skipped_sequences: [],
+      }),
+    );
+    let settleCreate:
+      | ((task: Awaited<ReturnType<typeof createTask>>) => void)
+      | undefined;
+    vi.mocked(createTask).mockReset();
+    vi.mocked(createTask).mockReturnValue(
+      new Promise((resolve) => {
+        settleCreate = resolve;
+      }),
+    );
+
+    renderWorkPage();
+    await user.type(screen.getByLabelText("目标"), "新开一件事");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+
+    // 分诊最多可以想 10 秒，POST 还在它后面 —— 这段时间里侧栏一直可以点。
+    await user.click(await screen.findByRole("link", { name: /先看着的那个任务/ }));
+    expect(
+      await screen.findByRole("heading", { name: "先看着的那个任务" }),
+    ).toBeInTheDocument();
+
+    const finish = settleCreate;
+    if (finish === undefined) throw new Error("createTask mock did not start");
+    await act(async () => {
+      finish({
+        task_id: "task_created",
+        status: "queued",
+        status_detail: null,
+        agent_invocation_count: 0,
+        objective_preview: "新开一件事",
+        created_at: "2026-08-02T12:00:00Z",
+        updated_at: "2026-08-02T12:00:00Z",
+      });
+      await Promise.resolve();
+    });
+
+    // 按「创建任务」要的是一个任务，不是被从刚打开的东西上挪走。新任务在列表
+    // 顶上，什么也没丢。
+    expect(
+      screen.getByRole("heading", { name: "先看着的那个任务" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "刚刚新建的那个" }),
+    ).not.toBeInTheDocument();
   });
 
   it("reuses the intent key on explicit retry and rotates it after editing and success", async () => {
@@ -1497,7 +1588,7 @@ describe("WorkPage task submission", () => {
 
     expect(
       await screen.findByText(
-        "本次“已拒绝”未被应用；同一决定版本的服务端权威状态为“已批准”。",
+        "你的“已拒绝”没有生效，这条现在是“已批准”。",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("已批准")).toBeInTheDocument();
@@ -1518,7 +1609,7 @@ describe("WorkPage task submission", () => {
 
     expect(
       await screen.findByText(
-        "任务服务端状态已是“已取消”，审批不再可决定；已刷新权威记录。",
+        "任务已经是“已取消”了，这个确认不用做了。",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "生成报告" })).not.toBeInTheDocument();

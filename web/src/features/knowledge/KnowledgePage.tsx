@@ -725,7 +725,7 @@ function failureReason(code: string | null): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "请求失败，请稍后重试。";
+  return error instanceof Error ? error.message : "没能完成这次请求，稍后再试。";
 }
 
 function formatBytes(bytes: number): string {

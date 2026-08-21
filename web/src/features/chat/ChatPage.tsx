@@ -393,7 +393,7 @@ export function ChatPage() {
     if (nextId === knowledgeBaseId) return;
     if (
       attachments.items.length > 0 &&
-      !window.confirm("切换资料会清空当前待发送的附件，是否继续？")
+      !window.confirm("切换知识库会清空当前待发送的附件，是否继续？")
     ) {
       return;
     }
