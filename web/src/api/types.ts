@@ -33,7 +33,7 @@ export interface CreateChatSessionResponse {
 /**
  * 一件事，有名字，属于一个人（ADR-071）。
  *
- * 它是一层归属标注，不是容器：底下的对话、任务和知识库各自有自己的接口和自己的
+ * 它是一层归属标注，不是容器：底下的对话、任务、编码会话和知识库各自有自己的接口和自己的
  * 生命周期，项目只记「它们是为同一件事做的」。所以这里没有任何权限字段——归属
  * 不影响可见性。
  */
@@ -90,6 +90,8 @@ export interface CodeSessionView {
   session_id: Identifier;
   title: string | null;
   last_activity_at: string | null;
+  /** 归在哪个项目下，或者没有（ADR-071）。 */
+  project_id: Identifier | null;
 }
 
 export interface CodeSessionListResponse {

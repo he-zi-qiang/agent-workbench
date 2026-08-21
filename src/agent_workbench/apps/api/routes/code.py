@@ -95,6 +95,12 @@ class SessionView(BaseModel):
     session_id: Identifier
     title: str | None
     last_activity_at: AwareDatetime | None
+    #: Which project this session was filed into, or none (ADR-071). A coding
+    #: session *is* a `conversation_sessions` row -- `CodeSession.open` writes
+    #: it with mode="code" -- so the column has been there since the projects
+    #: migration. Only this view was not reporting it, which left the interface
+    #: unable to show the membership it was already allowed to set.
+    project_id: Identifier | None = None
 
 
 class SessionListResponse(BaseModel):
@@ -213,6 +219,7 @@ async def list_sessions(
                 session_id=session.session_id,
                 title=session.title,
                 last_activity_at=session.last_activity_at,
+                project_id=session.project_id,
             )
             for session in sessions
         )
@@ -241,6 +248,7 @@ async def rename_session(
         session_id=session.session_id,
         title=session.title,
         last_activity_at=session.last_activity_at,
+        project_id=session.project_id,
     )
 
 

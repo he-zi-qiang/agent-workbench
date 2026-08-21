@@ -205,6 +205,36 @@ async def set_session_project(
 
 
 @membership_router.patch(
+    "/v1/code/sessions/{session_id}/project", status_code=status.HTTP_204_NO_CONTENT
+)
+async def set_code_session_project(
+    session_id: str, body: AssignProjectRequest, request: Request
+) -> Response:
+    """File a coding session into a project, or take it out.
+
+    Same application call as the chat one directly above, because a coding
+    session *is* a `conversation_sessions` row -- `CodeSession.open` creates it
+    with ``mode="code"`` and both features read the one store. So membership
+    needed no column, no migration and no second code path.
+
+    It still gets its own path rather than reusing ``/v1/chat/sessions/...``.
+    The URL is what a reader of the API sees, and telling somebody to PATCH a
+    *chat* session in order to file a *coding* one is asking them to know an
+    implementation detail that the rest of this surface is careful to hide:
+    every other coding route lives under ``/v1/code``.
+    """
+
+    _require_stated(body)
+    dependencies = dependencies_of(request)
+    await dependencies.projects.assign_session(
+        dependencies.principals.resolve(request),
+        session_id,
+        project_id=body.project_id,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@membership_router.patch(
     "/v1/tasks/{task_id}/project", status_code=status.HTTP_204_NO_CONTENT
 )
 async def set_task_project(

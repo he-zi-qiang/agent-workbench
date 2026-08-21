@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,7 +40,11 @@ const ALICE: PrincipalIdentity = {
   scopes: [],
 };
 
-function project(projectId: string, name: string, archivedAt: string | null = null) {
+function project(
+  projectId: string,
+  name: string,
+  archivedAt: string | null = null,
+) {
   return {
     project_id: projectId,
     name,
@@ -84,7 +94,7 @@ describe("ProjectsPage", () => {
     // 归属是可空的，空是正常状态。空状态说的是「可以这么用」，不是「你还缺一个
     // 项目」——后者会把一个可选的组织方式说成必须先过的一道门。
     expect(
-      await screen.findByText(/把同一件事的对话、任务和资料放到一起/),
+      await screen.findByText(/把同一件事的对话、任务、编码会话和资料放到一起/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/还没有项目/)).not.toBeInTheDocument();
   });
@@ -98,7 +108,9 @@ describe("ProjectsPage", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
 
     renderProjects();
-    await user.click(await screen.findByRole("button", { name: "删除项目 季度复盘" }));
+    await user.click(
+      await screen.findByRole("button", { name: "删除项目 季度复盘" }),
+    );
 
     // 「删除项目」这四个字本身会让人以为里面的东西也没了，而 ON DELETE SET NULL
     // 说的恰恰相反。确认框必须把这件事说出来，否则它在替读者做一个他没做的判断。
@@ -143,10 +155,9 @@ describe("ProjectsPage", () => {
     renderProjects("/projects/prj_1");
 
     // 项目不替任何产品页回答问题：每一行都跳回它自己的地方。
-    expect(await screen.findByRole("link", { name: /问过的问题/ })).toHaveAttribute(
-      "href",
-      "/chat/ses_1",
-    );
+    expect(
+      await screen.findByRole("link", { name: /问过的问题/ }),
+    ).toHaveAttribute("href", "/chat/ses_1");
     expect(screen.getByRole("link", { name: /导出一份报告/ })).toHaveAttribute(
       "href",
       "/work/task_1",
@@ -189,7 +200,9 @@ describe("ProjectsPage", () => {
     vi.mocked(renameProject).mockResolvedValue(project("prj_1", "新名字"));
 
     renderProjects();
-    await user.click(await screen.findByRole("button", { name: "重命名项目 旧名字" }));
+    await user.click(
+      await screen.findByRole("button", { name: "重命名项目 旧名字" }),
+    );
     const field = screen.getByLabelText("项目名字");
     await user.clear(field);
     await user.type(field, "新名字{Enter}");
@@ -207,12 +220,16 @@ describe("ProjectsPage", () => {
     vi.mocked(listProjects).mockResolvedValue({
       projects: [project("prj_1", "季度复盘", "2026-08-20T12:00:00Z")],
     });
-    vi.mocked(setProjectArchived).mockResolvedValue(project("prj_1", "季度复盘"));
+    vi.mocked(setProjectArchived).mockResolvedValue(
+      project("prj_1", "季度复盘"),
+    );
 
     renderProjects();
 
     // 归档是可逆的，所以这一行给的是「取消归档」，不是第二个删除。
-    const restore = await screen.findByRole("button", { name: "取消归档 季度复盘" });
+    const restore = await screen.findByRole("button", {
+      name: "取消归档 季度复盘",
+    });
     await user.click(restore);
     await waitFor(() => {
       expect(vi.mocked(setProjectArchived).mock.calls[0]?.slice(1)).toEqual([
@@ -225,7 +242,9 @@ describe("ProjectsPage", () => {
 
   it("creates a project and opens it", async () => {
     const user = userEvent.setup();
-    vi.mocked(createProject).mockResolvedValue(project("prj_new", "新的一件事"));
+    vi.mocked(createProject).mockResolvedValue(
+      project("prj_new", "新的一件事"),
+    );
 
     renderProjects();
     await user.click(await screen.findByRole("button", { name: "新建项目" }));
@@ -236,6 +255,8 @@ describe("ProjectsPage", () => {
       expect(vi.mocked(createProject).mock.calls[0]?.[1]).toBe("新的一件事");
     });
     const sidebar = screen.getByRole("complementary", { name: "项目列表" });
-    expect(within(sidebar).queryByLabelText("项目名字")).not.toBeInTheDocument();
+    expect(
+      within(sidebar).queryByLabelText("项目名字"),
+    ).not.toBeInTheDocument();
   });
 });

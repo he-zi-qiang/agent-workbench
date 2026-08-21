@@ -169,9 +169,13 @@ export async function getChatSession(
   sessionId: string,
   signal?: AbortSignal,
 ): Promise<ChatSessionView> {
-  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return apiRequest(
+    identity,
+    `/v1/chat/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
 }
 
 export async function renameChatSession(
@@ -179,10 +183,14 @@ export async function renameChatSession(
   sessionId: string,
   title: string,
 ): Promise<ChatSessionView> {
-  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "PATCH",
-    body: { title },
-  });
+  return apiRequest(
+    identity,
+    `/v1/chat/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: "PATCH",
+      body: { title },
+    },
+  );
 }
 
 /**
@@ -196,7 +204,8 @@ export async function listProjects(
   identity: PrincipalIdentity,
   options: { includeArchived?: boolean; signal?: AbortSignal } = {},
 ): Promise<ProjectListResponse> {
-  const query = options.includeArchived === true ? "?include_archived=true" : "";
+  const query =
+    options.includeArchived === true ? "?include_archived=true" : "";
   return apiRequest(identity, `/v1/projects${query}`, {
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
@@ -206,7 +215,10 @@ export async function createProject(
   identity: PrincipalIdentity,
   name: string,
 ): Promise<ProjectView> {
-  return apiRequest(identity, "/v1/projects", { method: "POST", body: { name } });
+  return apiRequest(identity, "/v1/projects", {
+    method: "POST",
+    body: { name },
+  });
 }
 
 export async function getProject(
@@ -256,9 +268,13 @@ export async function getProjectItems(
   projectId: string,
   signal?: AbortSignal,
 ): Promise<ProjectContentsResponse> {
-  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}/items`, {
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return apiRequest(
+    identity,
+    `/v1/projects/${encodeURIComponent(projectId)}/items`,
+    {
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
 }
 
 export async function setSessionProject(
@@ -273,15 +289,40 @@ export async function setSessionProject(
   );
 }
 
+/**
+ * 把一段编码会话归到项目下，或者取出来。
+ *
+ * 和上面那条 `setSessionProject` 打的是同一个应用层调用——一段编码会话就是
+ * `conversation_sessions` 里 mode="code" 的一行。但路径是 `/v1/code/...`
+ * 而不是复用 chat 那条：URL 是读 API 的人看到的东西，让人 PATCH 一个「chat
+ * 会话」来归档一段「编码会话」，是要求他知道一个这套接口其余地方都在小心
+ * 隐藏的实现细节。
+ */
+export async function setCodeSessionProject(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  projectId: string | null,
+): Promise<void> {
+  await apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/project`,
+    { method: "PATCH", body: { project_id: projectId } },
+  );
+}
+
 export async function setTaskProject(
   identity: PrincipalIdentity,
   taskId: string,
   projectId: string | null,
 ): Promise<void> {
-  await apiRequest(identity, `/v1/tasks/${encodeURIComponent(taskId)}/project`, {
-    method: "PATCH",
-    body: { project_id: projectId },
-  });
+  await apiRequest(
+    identity,
+    `/v1/tasks/${encodeURIComponent(taskId)}/project`,
+    {
+      method: "PATCH",
+      body: { project_id: projectId },
+    },
+  );
 }
 
 export async function getChatHistory(
@@ -289,9 +330,13 @@ export async function getChatHistory(
   sessionId: string,
   signal?: AbortSignal,
 ): Promise<HistoryResponse> {
-  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return apiRequest(
+    identity,
+    `/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+    {
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
 }
 
 /**
@@ -325,17 +370,21 @@ export async function askChat(
   idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<AskResponse> {
-  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
-    method: "POST",
-    headers: { "Idempotency-Key": idempotencyKey },
-    body: {
-      question: input.question,
-      answer_mode: input.answerMode,
-      knowledge_base_id: input.knowledgeBaseId,
-      top_k: input.topK ?? 8,
+  return apiRequest(
+    identity,
+    `/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: {
+        question: input.question,
+        answer_mode: input.answerMode,
+        knowledge_base_id: input.knowledgeBaseId,
+        top_k: input.topK ?? 8,
+      },
+      ...(signal === undefined ? {} : { signal }),
     },
-    ...(signal === undefined ? {} : { signal }),
-  });
+  );
 }
 
 export async function createCodeSession(
@@ -353,9 +402,13 @@ export async function getCodeHistory(
   sessionId: string,
   signal?: AbortSignal,
 ): Promise<HistoryResponse> {
-  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}/messages`, {
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/messages`,
+    {
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
 }
 
 export async function askCode(
@@ -365,12 +418,16 @@ export async function askCode(
   idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<CodeAskResponse> {
-  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}/messages`, {
-    method: "POST",
-    headers: { "Idempotency-Key": idempotencyKey },
-    body: { instruction },
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/messages`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: { instruction },
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
 }
 
 export async function getCodeWorkspace(
@@ -525,7 +582,8 @@ export async function triageTask(
       body: {
         objective: input.objective,
         knowledge_base_selected: input.knowledgeBaseSelected,
-        ...(input.attachmentNames === undefined || input.attachmentNames.length === 0
+        ...(input.attachmentNames === undefined ||
+        input.attachmentNames.length === 0
           ? {}
           : { attachment_names: input.attachmentNames }),
       },
@@ -548,10 +606,14 @@ export async function cancelTask(
   taskId: string,
   reason: string,
 ): Promise<TaskView> {
-  return apiRequest(identity, `/v1/tasks/${encodeURIComponent(taskId)}/cancel`, {
-    method: "POST",
-    body: { reason },
-  });
+  return apiRequest(
+    identity,
+    `/v1/tasks/${encodeURIComponent(taskId)}/cancel`,
+    {
+      method: "POST",
+      body: { reason },
+    },
+  );
 }
 
 export async function getTaskTimeline(
@@ -571,7 +633,10 @@ export async function getApproval(
   identity: PrincipalIdentity,
   approvalId: string,
 ): Promise<ApprovalView> {
-  return apiRequest(identity, `/v1/approvals/${encodeURIComponent(approvalId)}`);
+  return apiRequest(
+    identity,
+    `/v1/approvals/${encodeURIComponent(approvalId)}`,
+  );
 }
 
 export async function decideApproval(
@@ -625,7 +690,10 @@ const MEDIA_TYPE_BY_EXTENSION: readonly (readonly [string, string])[] = [
   [".md", "text/markdown"],
   [".markdown", "text/markdown"],
   [".pdf", "application/pdf"],
-  [".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  [
+    ".docx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ],
   // `text/plain` is in the set above, so a browser that types a .txt correctly
   // never reaches this table. The entry is for the browsers that do not -- the
   // same ones that hand back `""` for a .md -- and it is the fourth of the four
@@ -653,12 +721,17 @@ const MEDIA_TYPE_BY_EXTENSION: readonly (readonly [string, string])[] = [
  * reason the CLI does (`apps/cli/upload.py`): the server decides what it can
  * parse, and guessing past the name would be asserting something we never read.
  */
-export function declaredMediaType(file: { name: string; type: string }): string {
+export function declaredMediaType(file: {
+  name: string;
+  type: string;
+}): string {
   const declared = file.type.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   if (SERVER_READABLE_MEDIA_TYPES.has(declared)) return declared;
 
   const name = file.name.toLowerCase();
-  const matched = MEDIA_TYPE_BY_EXTENSION.find(([extension]) => name.endsWith(extension));
+  const matched = MEDIA_TYPE_BY_EXTENSION.find(([extension]) =>
+    name.endsWith(extension),
+  );
   return matched?.[1] ?? "application/octet-stream";
 }
 
@@ -691,16 +764,20 @@ export async function uploadDocument(
   // intent's type rather than the PUT's header, but two call sites deriving it
   // separately is how a declaration and its bytes start disagreeing.
   const mediaType = declaredMediaType(input.file);
-  const intent = await apiRequest<CreateUploadResponse>(identity, "/v1/uploads", {
-    method: "POST",
-    body: {
-      declared_size_bytes: input.file.size,
-      declared_sha256: declaredSha256,
-      media_type: mediaType,
-      filename: input.file.name,
+  const intent = await apiRequest<CreateUploadResponse>(
+    identity,
+    "/v1/uploads",
+    {
+      method: "POST",
+      body: {
+        declared_size_bytes: input.file.size,
+        declared_sha256: declaredSha256,
+        media_type: mediaType,
+        filename: input.file.name,
+      },
+      ...(signal === undefined ? {} : { signal }),
     },
-    ...(signal === undefined ? {} : { signal }),
-  });
+  );
 
   const transferred = await uploadBytes(
     identity,
@@ -709,16 +786,20 @@ export async function uploadDocument(
     mediaType,
     signal,
   );
-  return apiRequest(identity, `/v1/uploads/${encodeURIComponent(intent.upload_id)}/complete`, {
-    method: "POST",
-    body: {
-      artifact_id: transferred.artifact_id,
-      document_id: input.documentId,
-      knowledge_base_id: input.knowledgeBaseId,
-      granted_principals: input.grantedPrincipals,
+  return apiRequest(
+    identity,
+    `/v1/uploads/${encodeURIComponent(intent.upload_id)}/complete`,
+    {
+      method: "POST",
+      body: {
+        artifact_id: transferred.artifact_id,
+        document_id: input.documentId,
+        knowledge_base_id: input.knowledgeBaseId,
+        granted_principals: input.grantedPrincipals,
+      },
+      ...(signal === undefined ? {} : { signal }),
     },
-    ...(signal === undefined ? {} : { signal }),
-  });
+  );
 }
 
 async function uploadBytes(
@@ -743,14 +824,19 @@ async function uploadBytes(
 }
 
 async function sha256(file: File): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    await file.arrayBuffer(),
+  );
   return Array.from(new Uint8Array(digest), (value) =>
     value.toString(16).padStart(2, "0"),
   ).join("");
 }
 
 export async function checkHealth(path: "/health/live" | "/health/ready") {
-  const response = await fetch(path, { headers: { accept: "application/json" } });
+  const response = await fetch(path, {
+    headers: { accept: "application/json" },
+  });
   const payload = (await response.json()) as HealthResponse;
   return { ok: response.ok, status: payload.status };
 }
@@ -760,14 +846,21 @@ export async function downloadArtifact(
   target: string | ArtifactDownloadTarget,
 ): Promise<void> {
   const artifactId = typeof target === "string" ? target : target.artifact_id;
-  const response = await fetch(`/v1/artifacts/${encodeURIComponent(artifactId)}`, {
-    headers: identityHeaders(identity),
-  });
+  const response = await fetch(
+    `/v1/artifacts/${encodeURIComponent(artifactId)}`,
+    {
+      headers: identityHeaders(identity),
+    },
+  );
   if (!response.ok) throw await parseError(response);
   saveBlob(
     await response.blob(),
-    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
-      (typeof target === "string" ? null : safeDownloadFilename(target.filename)) ??
+    filenameFromContentDisposition(
+      response.headers.get("content-disposition"),
+    ) ??
+      (typeof target === "string"
+        ? null
+        : safeDownloadFilename(target.filename)) ??
       defaultArtifactFilename(response.headers.get("content-type")),
   );
 }
@@ -795,7 +888,9 @@ function filenameFromContentDisposition(header: string | null): string | null {
   const extended = /(?:^|;)\s*filename\*\s*=\s*UTF-8''([^;]*)/i.exec(header);
   if (extended?.[1] !== undefined) {
     try {
-      const decoded = safeDownloadFilename(decodeURIComponent(extended[1].trim()));
+      const decoded = safeDownloadFilename(
+        decodeURIComponent(extended[1].trim()),
+      );
       if (decoded !== null) return decoded;
     } catch {
       // A malformed extended parameter may still have a valid ASCII fallback.
@@ -830,7 +925,9 @@ function safeDownloadFilename(value: string | null | undefined): string | null {
 
 function defaultArtifactFilename(contentType: string | null): string {
   const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
-  return mediaType === WORD_DOCUMENT_MEDIA_TYPE ? "mcp-result.docx" : "artifact";
+  return mediaType === WORD_DOCUMENT_MEDIA_TYPE
+    ? "mcp-result.docx"
+    : "artifact";
 }
 
 /**
@@ -848,13 +945,19 @@ export async function getArtifactText(
   identity: PrincipalIdentity,
   artifactId: string,
 ): Promise<{ text: string; truncated: boolean }> {
-  const response = await fetch(`/v1/artifacts/${encodeURIComponent(artifactId)}`, {
-    headers: identityHeaders(identity),
-  });
+  const response = await fetch(
+    `/v1/artifacts/${encodeURIComponent(artifactId)}`,
+    {
+      headers: identityHeaders(identity),
+    },
+  );
   if (!response.ok) throw await parseError(response);
   const blob = await response.blob();
   if (blob.size > MAX_PREVIEW_BYTES) {
-    return { text: await blob.slice(0, MAX_PREVIEW_BYTES).text(), truncated: true };
+    return {
+      text: await blob.slice(0, MAX_PREVIEW_BYTES).text(),
+      truncated: true,
+    };
   }
   return { text: await blob.text(), truncated: false };
 }
@@ -909,9 +1012,7 @@ export const MAX_LAYOUT_BYTES = 32 * 1024 * 1024;
  * configured for everything except this panel.
  */
 export type DocumentLayoutDecline =
-  | "converter_unavailable"
-  | "too_large"
-  | "unavailable";
+  "converter_unavailable" | "too_large" | "unavailable";
 
 /**
  * A layout view, or the reason there is none.
@@ -964,7 +1065,10 @@ export async function getDocumentPdf(
       reason: response.status === 413 ? "too_large" : "unavailable",
     };
   }
-  const declared = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+  const declared = response.headers
+    .get("content-type")
+    ?.split(";", 1)[0]
+    ?.trim();
   if (declared?.toLowerCase() !== "application/pdf") {
     // A blob: URL inherits this page's origin, so what the frame renders is
     // decided by the blob's type. Anything that is not a PDF is refused here
@@ -987,7 +1091,10 @@ export async function getDocumentPdf(
   if (bytes.byteLength > MAX_LAYOUT_BYTES) {
     return { available: false, reason: "too_large" };
   }
-  return { available: true, blob: new Blob([bytes], { type: "application/pdf" }) };
+  return {
+    available: true,
+    blob: new Blob([bytes], { type: "application/pdf" }),
+  };
 }
 
 /**
@@ -1004,9 +1111,12 @@ export async function getArtifactBlob(
   identity: PrincipalIdentity,
   artifactId: string,
 ): Promise<Blob> {
-  const response = await fetch(`/v1/artifacts/${encodeURIComponent(artifactId)}`, {
-    headers: identityHeaders(identity),
-  });
+  const response = await fetch(
+    `/v1/artifacts/${encodeURIComponent(artifactId)}`,
+    {
+      headers: identityHeaders(identity),
+    },
+  );
   if (!response.ok) throw await parseError(response);
   return response.blob();
 }
@@ -1015,9 +1125,12 @@ export async function getArtifactJson<T>(
   identity: PrincipalIdentity,
   artifactId: string,
 ): Promise<T> {
-  const response = await fetch(`/v1/artifacts/${encodeURIComponent(artifactId)}`, {
-    headers: { ...identityHeaders(identity), accept: "application/json" },
-  });
+  const response = await fetch(
+    `/v1/artifacts/${encodeURIComponent(artifactId)}`,
+    {
+      headers: { ...identityHeaders(identity), accept: "application/json" },
+    },
+  );
   if (!response.ok) throw await parseError(response);
   return (await response.json()) as T;
 }
@@ -1039,7 +1152,9 @@ export async function downloadCodeWorkspaceFile(
   const response = await fetchCodeWorkspaceFile(identity, sessionId, name);
   saveBlob(
     await response.blob(),
-    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
+    filenameFromContentDisposition(
+      response.headers.get("content-disposition"),
+    ) ??
       safeDownloadFilename(name) ??
       defaultArtifactFilename(response.headers.get("content-type")),
   );
@@ -1057,9 +1172,14 @@ export async function getCodeWorkspaceFileText(
   sessionId: string,
   name: string,
 ): Promise<{ text: string; truncated: boolean }> {
-  const blob = await (await fetchCodeWorkspaceFile(identity, sessionId, name)).blob();
+  const blob = await (
+    await fetchCodeWorkspaceFile(identity, sessionId, name)
+  ).blob();
   if (blob.size > MAX_PREVIEW_BYTES) {
-    return { text: await blob.slice(0, MAX_PREVIEW_BYTES).text(), truncated: true };
+    return {
+      text: await blob.slice(0, MAX_PREVIEW_BYTES).text(),
+      truncated: true,
+    };
   }
   return { text: await blob.text(), truncated: false };
 }
@@ -1109,10 +1229,14 @@ export async function renameCodeSession(
   sessionId: string,
   title: string,
 ): Promise<CodeSessionView> {
-  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "PATCH",
-    body: { title },
-  });
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: "PATCH",
+      body: { title },
+    },
+  );
 }
 
 /**
@@ -1128,9 +1252,13 @@ export async function deleteCodeSession(
   identity: PrincipalIdentity,
   sessionId: string,
 ): Promise<{ session_id: string }> {
-  return apiRequest(identity, `/v1/code/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "DELETE",
-  });
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 /**
@@ -1181,7 +1309,8 @@ export async function putCodeWorkspaceFile(
         // The browser's own guess, and `application/octet-stream` when it has
         // none. Sending the empty string would make the server read a header
         // that is present and meaningless.
-        "content-type": file.type === "" ? "application/octet-stream" : file.type,
+        "content-type":
+          file.type === "" ? "application/octet-stream" : file.type,
       },
       body: file,
     },
@@ -1194,9 +1323,13 @@ export async function deleteChatSession(
   identity: PrincipalIdentity,
   sessionId: string,
 ): Promise<{ session_id: string }> {
-  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "DELETE",
-  });
+  return apiRequest(
+    identity,
+    `/v1/chat/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 export async function deleteTask(

@@ -63,6 +63,7 @@ vi.mock("../../api/client", async () => ({
       session_id: "ses_code_1",
       title: "x",
       last_activity_at: null,
+      project_id: null,
     }),
   ),
   runCodeWorkspaceFile: vi.fn(),
@@ -971,8 +972,14 @@ describe("CodePage", () => {
           session_id: "ses_code_older",
           title: "把 notes.md 整理成清单",
           last_activity_at: "2026-08-14T09:00:00Z",
+          project_id: null,
         },
-        { session_id: SESSION, title: null, last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: null,
+          last_activity_at: null,
+          project_id: null,
+        },
       ],
     });
 
@@ -1046,6 +1053,7 @@ describe("CodePage", () => {
           session_id: SESSION,
           title: "把 notes.md 整理成清单",
           last_activity_at: null,
+          project_id: null,
         },
       ],
     });
@@ -1214,6 +1222,7 @@ describe("CodePage", () => {
           session_id: "ses_code_older",
           title: "把 notes.md 整理成清单",
           last_activity_at: "2026-08-14T09:00:00Z",
+          project_id: null,
         },
       ],
     });
@@ -1245,7 +1254,12 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "第一句指令",
+          last_activity_at: null,
+          project_id: null,
+        },
       ],
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -1271,11 +1285,17 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "第一句指令",
+          last_activity_at: null,
+          project_id: null,
+        },
         {
           session_id: "ses_code_older",
           title: "把 notes.md 整理成清单",
           last_activity_at: null,
+          project_id: null,
         },
       ],
     });
@@ -1340,7 +1360,12 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "第一句指令",
+          last_activity_at: null,
+          project_id: null,
+        },
       ],
     });
     let failDelete: ((cause: Error) => void) | undefined;
@@ -1403,11 +1428,17 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "第一句指令",
+          last_activity_at: null,
+          project_id: null,
+        },
         {
           session_id: "ses_code_older",
           title: "把 notes.md 整理成清单",
           last_activity_at: null,
+          project_id: null,
         },
       ],
     });
@@ -1472,11 +1503,17 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "第一句指令",
+          last_activity_at: null,
+          project_id: null,
+        },
         {
           session_id: "ses_code_older",
           title: "把 notes.md 整理成清单",
           last_activity_at: null,
+          project_id: null,
         },
       ],
     });
@@ -1509,7 +1546,14 @@ describe("CodePage", () => {
 
   it("marks the session being viewed, even when it has no name yet", async () => {
     vi.mocked(listCodeSessions).mockResolvedValue({
-      sessions: [{ session_id: SESSION, title: null, last_activity_at: null }],
+      sessions: [
+        {
+          session_id: SESSION,
+          title: null,
+          last_activity_at: null,
+          project_id: null,
+        },
+      ],
     });
 
     mounted();
@@ -1526,7 +1570,12 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "第一句指令",
+          last_activity_at: null,
+          project_id: null,
+        },
       ],
     });
 
@@ -1561,7 +1610,12 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "第一句指令",
+          last_activity_at: null,
+          project_id: null,
+        },
       ],
     });
 
@@ -1585,12 +1639,22 @@ describe("CodePage", () => {
     vi.mocked(listCodeSessions)
       .mockResolvedValueOnce({
         sessions: [
-          { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+          {
+            session_id: SESSION,
+            title: "第一句指令",
+            last_activity_at: null,
+            project_id: null,
+          },
         ],
       })
       .mockResolvedValue({
         sessions: [
-          { session_id: SESSION, title: "重构工作区", last_activity_at: null },
+          {
+            session_id: SESSION,
+            title: "重构工作区",
+            last_activity_at: null,
+            project_id: null,
+          },
         ],
       });
 
@@ -1635,7 +1699,12 @@ describe("CodePage", () => {
     );
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "第一句指令",
+          last_activity_at: null,
+          project_id: null,
+        },
       ],
     });
 
@@ -1671,11 +1740,17 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "第一句指令", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "第一句指令",
+          last_activity_at: null,
+          project_id: null,
+        },
         {
           session_id: "ses_code_older",
           title: "把 notes.md 整理成清单",
           last_activity_at: null,
+          project_id: null,
         },
       ],
     });
@@ -1684,6 +1759,7 @@ describe("CodePage", () => {
           session_id: string;
           title: string | null;
           last_activity_at: string | null;
+          project_id: string | null;
         }) => void)
       | undefined;
     vi.mocked(renameCodeSession).mockReturnValue(
@@ -1721,6 +1797,7 @@ describe("CodePage", () => {
         session_id: SESSION,
         title: "重构工作区",
         last_activity_at: null,
+        project_id: null,
       });
       await Promise.resolve();
     });
@@ -1738,11 +1815,17 @@ describe("CodePage", () => {
     const user = userEvent.setup();
     vi.mocked(listCodeSessions).mockResolvedValue({
       sessions: [
-        { session_id: SESSION, title: "当前会话", last_activity_at: null },
+        {
+          session_id: SESSION,
+          title: "当前会话",
+          last_activity_at: null,
+          project_id: null,
+        },
         {
           session_id: "ses_code_2",
           title: "另一个会话",
           last_activity_at: null,
+          project_id: null,
         },
       ],
     });
@@ -1919,6 +2002,7 @@ describe("CodePage", () => {
           session_id: "ses_code_older",
           title: "上一个会话",
           last_activity_at: "2026-08-14T09:00:00Z",
+          project_id: null,
         },
       ],
     });

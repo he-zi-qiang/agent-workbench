@@ -67,6 +67,7 @@ import {
   newIdempotencyKey,
   putCodeWorkspaceFile,
   renameCodeSession,
+  setCodeSessionProject,
 } from "../../api/client";
 import type {
   ApprovalDecision,
@@ -81,6 +82,7 @@ import {
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
 import { effectiveMediaType } from "../../components/media";
+import { ProjectPicker } from "../../components/ProjectPicker";
 import { EmptyState, ErrorNotice, IconButton } from "../../components/ui";
 import { CodeSessionRail } from "./CodeSessionRail";
 import { CodeTurn } from "./CodeTurn";
@@ -215,6 +217,13 @@ export function CodePage() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const queries = useQueryClient();
+  // 归属改完要把会话列表标脏：那份列表带着 project_id，而项目页读的是同一个
+  // 事实。不刷新的话，切回来看到的是改之前的答案。
+  const assignProject = async (projectId: string | null) => {
+    if (sessionId === undefined) return;
+    await setCodeSessionProject(identity, sessionId, projectId);
+    await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
+  };
 
   //: Where the page is *now*, for continuations that were started under
   //: something else. The state above is derived rather than reset (`loadedFor`,
@@ -515,6 +524,9 @@ export function CodePage() {
                 session_id: opened,
                 title: provisionalTitle(text),
                 last_activity_at: null,
+                // 乐观插入的这一行还没有归属，因为它是刚开的：服务端那份
+                // 会在下面那次 invalidate 之后替掉它。
+                project_id: null,
               },
               ...(held?.sessions ?? []),
             ],
@@ -878,7 +890,8 @@ export function CodePage() {
     );
   }
 
-  const title = known.find((held) => held.session_id === sessionId)?.title;
+  const held = known.find((one) => one.session_id === sessionId);
+  const title = held?.title;
 
   return (
     <div className={`aw-code-page${panelOpen ? " has-preview" : ""}`}>
@@ -897,6 +910,19 @@ export function CodePage() {
           </IconButton>
           <div className="aw-code-header-copy">
             <h1>{title ?? "新会话"}</h1>
+            {/* 归属长在这一段自己的头部，和对话页同一个位置和同一个组件。
+                一段编码会话此前是这三个工作区里唯一不能归到项目下的——
+                服务端一直允许（它就是一行 mode="code" 的会话），只是界面
+                没有给出说这句话的地方，于是「项目收着同一件事做过的东西」
+                在编码这一半是空的。 */}
+            {held === undefined ? null : (
+              <ProjectPicker
+                identity={identity}
+                label="这段编码会话属于哪个项目"
+                onAssign={assignProject}
+                projectId={held.project_id}
+              />
+            )}
           </div>
           {/* The way to the whole working set, including everything no card
               could account for. Absent entirely when there is nothing in it. */}

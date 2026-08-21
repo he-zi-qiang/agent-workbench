@@ -149,7 +149,7 @@ export function ProjectsPage() {
       // 会让人以为对话和任务也一起没了，而它们不会。
       if (
         !window.confirm(
-          `删除项目「${name}」？里面的对话、任务和知识库都会留下，只是不再属于任何项目。`,
+          `删除项目「${name}」？里面的对话、任务、编码会话和知识库都会留下，只是不再属于任何项目。`,
         )
       ) {
         return;
@@ -217,7 +217,7 @@ export function ProjectsPage() {
             ) : projects.data?.projects.length === 0 ? (
               // 空状态说下一步，不说机制，也不催人建项目。
               <p className="aw-chat-local-note">
-                把同一件事的对话、任务和资料放到一起，就从这里开始。
+                把同一件事的对话、任务、编码会话和资料放到一起，就从这里开始。
               </p>
             ) : (
               projects.data?.projects.map((project) => (
@@ -251,7 +251,7 @@ export function ProjectsPage() {
           <EmptyState
             icon={<FolderOpen aria-hidden="true" size={24} />}
             title="选一个项目"
-            description="项目把同一件事的对话、任务和资料收在一起。不属于任何项目的东西仍然在它自己的页面上。"
+            description="项目把同一件事的对话、任务、编码会话和资料收在一起。不属于任何项目的东西仍然在它自己的页面上。"
           />
         ) : (
           <>
@@ -268,7 +268,7 @@ export function ProjectsPage() {
               <EmptyState
                 icon={<FolderOpen aria-hidden="true" size={24} />}
                 title="这个项目还是空的"
-                description="在对话、任务或知识库里把一件东西归到这个项目，它就会出现在这里。"
+                description="在对话、任务、编码会话或知识库里把一件东西归到这个项目，它就会出现在这里。"
               />
             ) : (
               <ul className="aw-project-items">
