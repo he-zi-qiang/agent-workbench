@@ -1710,32 +1710,29 @@ select {
   flex: 0 1 auto;
 }
 
-.aw-workspace-fold {
-  display: grid;
-  width: 20px;
-  height: 20px;
+/* 箭头长在行里，不是行旁边的第二个控件：整行就是那个开关。
+   收起时指向右——它说的是「展开的方向」，不是「现在是什么状态」；一个朝下
+   的箭头配一个收起的区，每次都要想一下才知道点了会怎样。 */
+.aw-workspace-fold-icon {
   flex: none;
-  place-items: center;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
+  margin-left: 4px;
   color: var(--aw-text-muted);
-  cursor: pointer;
-}
-
-.aw-workspace-fold:hover {
-  background: var(--aw-veil);
-  color: var(--aw-text);
-}
-
-/* 收起时箭头指向右：它说的是「展开的方向」，不是「现在是什么状态」——
-   一个朝下的箭头配一个收起的区，每次都要想一下才知道点了会怎样。 */
-.aw-workspace-fold svg {
   transition: transform var(--aw-duration-fast) var(--aw-ease);
 }
 
-.aw-sidebar-workspace.is-collapsed .aw-workspace-fold svg {
+.aw-sidebar-workspace.is-collapsed .aw-workspace-fold-icon {
   transform: rotate(-90deg);
+}
+
+/* 当前这一行是 <button> 而不是 <a>，浏览器给按钮的默认外观（居中、边框、
+   系统字体）会把它和旁边四个链接画成两种东西。 */
+.aw-workspace-row > button.aw-global-link {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .aw-workspace-actions {
@@ -1762,20 +1759,25 @@ select {
   color: var(--aw-accent);
 }
 
-/* 拉平，不再缩进 27px 再挂一条竖线。
-   那条竖线说的是「这个列表属于上面那一项」——而在一个同一时刻只有一个工作区
-   展开的侧栏里，这件事靠相邻和它自己的「最近…」小标题已经说清楚了。
-   代价则是实的：27px 的缩进从会话标题上直接扣掉，272px 的侧栏里标题只剩
-   169px，十二个汉字就截断。拉平之后是 196px。 */
+/* 缩进 + 一条竖线，说的是「这个列表属于上面那一行」。
+ *
+ * 这一处改过两次，值得把两次都记下来。原先是 27px 缩进，我为了给会话标题
+ * 多让出宽度把它整个拉平了，理由是「同一时刻只有一个工作区展开，靠相邻就
+ * 说清楚了」——那个理由不成立：拉平之后导航项和它底下的会话行左缘相同、
+ * 行高相近，读起来是一列互不相干的东西，层级没有任何东西在表示。
+ *
+ * 宽度那笔账是真的，所以这次回来的比原来窄：19px 而不是 27px（缩进 10 +
+ * 内边距 8 + 1px 的线）。272px 的侧栏里会话标题因此是 177px，仍然比最初的
+ * 169px 宽，而层级看得见了。 */
 .aw-sidebar-context-slot {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  margin: 2px 0 5px;
-  padding-left: 0;
+  margin: 2px 0 5px 10px;
+  padding-left: 8px;
   overflow: hidden;
-  border-left: 0;
+  border-left: 1px solid var(--aw-border);
 }
 
 .aw-sidebar-context-slot

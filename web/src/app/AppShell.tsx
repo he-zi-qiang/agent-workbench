@@ -480,39 +480,58 @@ export function AppShell() {
                   「最近对话 / 最近任务 / 最近编码」——同一件事在同一栏里被
                   命名了两次，而第二次占掉一整行高度。 */}
               <div className="aw-workspace-row">
-                {/* `Link`, not `NavLink`: this entry stands for a set of
-                    prefixes, and `NavLink` overwrites `aria-current` with its
-                    own single-path match -- which reads "not here" on /work. */}
-                <Link
-                  aria-label={item.label}
-                  aria-current={current ? "page" : undefined}
-                  className={`aw-global-link ${current ? "active" : ""}`}
-                  title={`${item.label} · ${item.description}`}
-                  to={destinationFor(item)}
-                >
-                  <span className="aw-global-link-icon">
-                    <Icon aria-hidden="true" size={18} />
-                  </span>
-                  <span className="aw-global-link-copy">{item.label}</span>
-                </Link>
+                {current ? (
+                  /* 当前这一项已经在它自己的页面上了，所以这一行的工作不再
+                     是「去哪里」，而是「这一组展开不展开」——于是它是一个
+                     真的 disclosure 按钮，整行可点，不是一个链接旁边再挂
+                     一颗只有 20px 的箭头。
+                     上一版就是那样：折叠只能点箭头，而那颗箭头在一行 36px
+                     的行里是一个 20px 的靶子，还紧挨着两个别的图标。
+                     回到这一栏根部（新对话 / 新任务 / 新会话）的路没有丢，
+                     它是右边那颗 + —— 那本来就是这一栏里除了「回到哪一段」
+                     之外唯一的另一件事。 */
+                  <button
+                    aria-controls="workspace-sidebar-context"
+                    aria-current="page"
+                    aria-expanded={!collapsed}
+                    className="aw-global-link active"
+                    onClick={() => {
+                      setCollapsedWorkspaces((held) => ({
+                        ...held,
+                        [item.to]: !collapsed,
+                      }));
+                    }}
+                    title={`${collapsed ? "展开" : "收起"}${item.label}列表`}
+                    type="button"
+                  >
+                    <span className="aw-global-link-icon">
+                      <Icon aria-hidden="true" size={18} />
+                    </span>
+                    <span className="aw-global-link-copy">{item.label}</span>
+                    <ChevronDown
+                      aria-hidden="true"
+                      className="aw-workspace-fold-icon"
+                      size={13}
+                    />
+                  </button>
+                ) : (
+                  /* `Link`, not `NavLink`: this entry stands for a set of
+                     prefixes, and `NavLink` overwrites `aria-current` with its
+                     own single-path match -- which reads "not here" on /work. */
+                  <Link
+                    aria-label={item.label}
+                    className="aw-global-link"
+                    title={`${item.label} · ${item.description}`}
+                    to={destinationFor(item)}
+                  >
+                    <span className="aw-global-link-icon">
+                      <Icon aria-hidden="true" size={18} />
+                    </span>
+                    <span className="aw-global-link-copy">{item.label}</span>
+                  </Link>
+                )}
                 {current ? (
                   <>
-                    <button
-                      aria-controls="workspace-sidebar-context"
-                      aria-expanded={!collapsed}
-                      aria-label={`${collapsed ? "展开" : "收起"}${item.label}列表`}
-                      className="aw-workspace-fold"
-                      onClick={() => {
-                        setCollapsedWorkspaces((current) => ({
-                          ...current,
-                          [item.to]: !collapsed,
-                        }));
-                      }}
-                      title={`${collapsed ? "展开" : "收起"}列表`}
-                      type="button"
-                    >
-                      <ChevronDown aria-hidden="true" size={13} />
-                    </button>
                     <div
                       className="aw-workspace-actions"
                       ref={setSidebarActionsHost}

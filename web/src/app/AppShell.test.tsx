@@ -231,10 +231,11 @@ describe("AppShell rail", () => {
     mounted("/work");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    expect(rail.getByRole("link", { name: "Tasks" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    // 当前那一项不是链接：它已经在自己的页面上了，所以那一行的工作是「这一组
+    // 展开不展开」，渲染成一个 disclosure 按钮。其余几项仍然是链接。
+    const here = rail.getByRole("button", { name: "Tasks" });
+    expect(here).toHaveAttribute("aria-current", "page");
+    expect(here).toHaveAttribute("aria-expanded", "true");
     expect(rail.getByRole("link", { name: "Chat" })).not.toHaveAttribute(
       "aria-current",
     );
@@ -266,7 +267,8 @@ describe("AppShell rail", () => {
     mounted("/chat");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    expect(rail.getByRole("link", { name: "Chat" })).toBeInTheDocument();
+    // 挂载在 /chat，所以 Chat 是那个 disclosure 按钮，另外两项是链接。
+    expect(rail.getByRole("button", { name: "Chat" })).toBeInTheDocument();
     expect(rail.getByRole("link", { name: "Tasks" })).toBeInTheDocument();
     expect(rail.getByRole("link", { name: "Code" })).toBeInTheDocument();
     // 三个工作区一起改成英文，所以旧的中文名不该还留在栏里：一栏两套名字，
@@ -423,6 +425,10 @@ describe("AppShell rail", () => {
         screen.getByRole("status", { name: "当前路径" }),
       ).toHaveTextContent("/chat"),
     );
+    // Chat 此刻是当前工作区，那一行是折叠开关而不是链接，所以记忆改从「离开
+    // 再回来」这个方向验：切到 Tasks 之后 Chat 重新变成链接，它的 href 就是
+    // 这份记忆本身——要是旧身份的 session-a 还留在里面，这里会看得见。
+    await user.click(rail.getByRole("link", { name: "Tasks" }));
     expect(rail.getByRole("link", { name: "Chat" })).toHaveAttribute(
       "href",
       "/chat",
@@ -466,6 +472,8 @@ describe("AppShell rail", () => {
         screen.getByRole("status", { name: "当前路径" }),
       ).toHaveTextContent("/chat"),
     );
+    // 同上：当前那一行是折叠开关，记忆从「离开再回来」这个方向验。
+    await user.click(rail.getByRole("link", { name: "Tasks" }));
     expect(rail.getByRole("link", { name: "Chat" })).toHaveAttribute(
       "href",
       "/chat",
