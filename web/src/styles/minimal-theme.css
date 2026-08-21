@@ -76,22 +76,20 @@ body {
   background: var(--aw-panel-soft);
 }
 
+/* 主按钮填强调色，不再是「把正文色涂成一个块」。
+   此前这一层把 app.css 的强调色覆盖成 --aw-text：浅色下是近黑、深色下是近白，
+   于是整个界面里唯一的品牌色只剩 Logo 那个方块，主动作和普通文字同色。
+   之所以此前不能填，是因为浅色强调色配任何前景都过不了 4.5:1（白字 4.39、
+   近黑 3.88）。tokens.css 里把它压暗到 #b75d42 之后白字是 4.51:1，这条路
+   才通——所以这不是口味，是那次调色解锁的东西。
+   深色一侧 #1d1411 落在 #d98265 上是 6.32:1。 */
 .aw-button.is-primary {
-  border-color: var(--aw-text);
-  background: var(--aw-text);
-  color: var(--aw-window);
   box-shadow: none;
-}
-
-.aw-button.is-primary:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
-  background: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
-  color: var(--aw-window);
 }
 
 .aw-button.is-primary:focus-visible,
 .aw-chat-send:focus-visible {
-  outline-color: var(--aw-window);
+  outline-color: var(--aw-accent-on);
   outline-offset: -4px;
 }
 
@@ -1364,6 +1362,49 @@ select {
   gap: 5px;
 }
 
+/* 提交这件事收成一张卡：输入框在上，底部一行放附件、知识库与主按钮。
+   和对话页的 .aw-chat-composer-card 是同一个形状——两个页面各自发明一种
+   「输入」的样子，是这套界面此前最容易被一眼看出不统一的地方。 */
+.aw-create-task-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--aw-border);
+  border-radius: 16px;
+  background: var(--aw-panel);
+  box-shadow:
+    inset 0 1px 0 var(--aw-raise),
+    var(--aw-shadow-float);
+}
+
+.aw-create-task-card:focus-within {
+  border-color: color-mix(in srgb, var(--aw-accent) 48%, var(--aw-border));
+  box-shadow:
+    inset 0 1px 0 var(--aw-raise),
+    0 0 0 2px color-mix(in srgb, var(--aw-accent) 7%, transparent),
+    var(--aw-shadow-float);
+}
+
+.aw-create-task-bar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  padding: 4px;
+  gap: 8px;
+}
+
+.aw-create-task-spacer {
+  flex: 1;
+}
+
+.aw-create-task-hint {
+  margin: 12px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .aw-create-task-head h2,
 .aw-create-task-head p {
   margin: 0;
@@ -1659,15 +1700,20 @@ select {
   color: var(--aw-accent);
 }
 
+/* 拉平，不再缩进 27px 再挂一条竖线。
+   那条竖线说的是「这个列表属于上面那一项」——而在一个同一时刻只有一个工作区
+   展开的侧栏里，这件事靠相邻和它自己的「最近…」小标题已经说清楚了。
+   代价则是实的：27px 的缩进从会话标题上直接扣掉，272px 的侧栏里标题只剩
+   169px，十二个汉字就截断。拉平之后是 196px。 */
 .aw-sidebar-context-slot {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  margin: 2px 0 5px 19px;
-  padding-left: 7px;
+  margin: 2px 0 5px;
+  padding-left: 0;
   overflow: hidden;
-  border-left: 1px solid var(--aw-border-subtle);
+  border-left: 0;
 }
 
 .aw-sidebar-context-slot
@@ -1869,21 +1915,16 @@ select {
   box-shadow: none;
 }
 
+/* 卡内的输入框：边框和圆角由卡片承担，它自己只剩内边距。 */
 .aw-work-page:not(.has-selection) .aw-work-start .aw-create-task textarea {
-  min-height: 132px;
-  padding: 14px 15px;
-  border-color: var(--aw-border);
-  border-radius: 12px;
-  font-size: 14.5px;
-  line-height: 1.6;
-}
-
-.aw-work-page:not(.has-selection)
-  .aw-work-start
-  .aw-create-task
-  > .aw-button.is-primary {
-  min-width: 132px;
-  justify-self: end;
+  min-height: 116px;
+  padding: 12px 11px 6px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 15.5px;
+  line-height: 1.7;
+  resize: none;
 }
 
 .aw-knowledge-page {
@@ -1960,12 +2001,63 @@ select {
   min-width: 0;
 }
 
+/* 三条列表行统一成单行 32px。任务行此前是两行（目标一行、时间另起一行）
+   外加行尾一颗状态点；八条就吃掉 320px，和会话列表是同一个毛病。
+   状态点移到行首——它是这一行最先要读的东西（跑没跑成），放在行尾等于
+   要先读完标题再横扫回去找。时间移到行尾并在静止时隐去。 */
 .aw-chat-session,
 .aw-code-recent-link,
 .aw-task-list-item {
-  min-height: 40px;
-  padding: 7px 9px;
-  border-radius: 7px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+}
+
+.aw-task-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aw-task-list-item > span:first-child {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  order: 2;
+  gap: 8px;
+}
+
+.aw-task-list-item .aw-task-status-dot {
+  flex: none;
+  order: 1;
+}
+
+.aw-task-list-item strong {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-task-list-item small {
+  flex: none;
+  opacity: 0;
+  font-size: 12px;
+  transition: opacity var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-task-list-item:hover small,
+.aw-task-list-item.is-active small {
+  opacity: 1;
+}
+
+.aw-task-list-item.is-active strong {
+  font-weight: 500;
 }
 
 .aw-chat-session:hover,
