@@ -179,6 +179,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # existed. Paraphrasing it into ASCII punctuation would make the record of a
 # measurement no longer the thing that was measured.
 "src/agent_workbench/application/code_prompt.py" = ["RUF003"]
+# The two refusals this router writes are sentences a person reads: "say which
+# project, or null to take it out". Same reason as the entries above -- the rule
+# is here to catch a Cyrillic lookalike in an identifier, not a full-width comma
+# in deliberate Chinese.
+"src/agent_workbench/apps/api/routes/projects.py" = ["RUF001"]
 "tests/application/test_task_triage.py" = ["RUF001"]
 "tests/api/test_task_api.py" = ["RUF001"]
 "tests/cli/test_repl.py" = ["RUF001"]

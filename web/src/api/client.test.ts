@@ -6,8 +6,11 @@ import {
   createTask,
   declaredMediaType,
   downloadArtifact,
+  getChatSession,
   getDocumentPdf,
   identityHeaders,
+  listChatSessions,
+  renameChatSession,
   uploadDocument,
 } from "./client";
 import type { ArtifactDownloadTarget, PrincipalIdentity } from "./types";
@@ -111,6 +114,93 @@ describe("apiRequest", () => {
         "task:stable-attempt",
       );
     }
+  });
+
+  it("lists, resolves and renames Chat sessions through the owner-scoped endpoints", async () => {
+    const listed = {
+      sessions: [
+        {
+          session_id: "ses_chat_1",
+          title: "旧名字",
+          last_activity_at: "2026-08-20T10:00:00Z",
+          project_id: null,
+        },
+      ],
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(listed), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(listed.sessions[0]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ ...listed.sessions[0], title: "新名字" }),
+          { status: 200 },
+        ),
+      );
+
+    await listChatSessions(identity);
+    await getChatSession(identity, "ses_chat_1");
+    await renameChatSession(identity, "ses_chat_1", "新名字");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/v1/chat/sessions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/v1/chat/sessions/ses_chat_1");
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("GET");
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/v1/chat/sessions/ses_chat_1");
+    const renameInit = fetchMock.mock.calls[2]?.[1];
+    expect(renameInit?.method).toBe("PATCH");
+    expect(renameInit?.body).toBe(JSON.stringify({ title: "新名字" }));
+  });
+});
+
+describe("what a failure with no detail says", () => {
+  // 只有服务端一个字都没给的时候才走到这里——而从这里出去的句子会落到每个页面
+  // 的 ErrorNotice 上。此前它是「请求失败（HTTP 409）」：一个读者做不了任何事的
+  // 数字，配一句什么都没说的话。状态码恰恰是浏览器在这一刻唯一知道的东西，所以
+  // 它被花在「这是哪一类失败、你能做什么」上。
+  it.each([
+    { status: 401, says: /没有权限/ },
+    { status: 403, says: /没有权限/ },
+    { status: 404, says: /已经没有这个东西/ },
+    { status: 409, says: /状态变了/ },
+    { status: 429, says: /太密/ },
+    { status: 503, says: /服务端出错/ },
+  ])("turns $status into something the reader can act on", async ({ status, says }) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response("", { status }))),
+    );
+    await expect(apiRequest(identity, "/v1/anything")).rejects.toThrow(says);
+  });
+
+  // 兜底那一档保留数字：说不出别的的时候，数字至少能被贴进 issue 里。
+  it("keeps the number only where nothing better can be said", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response("", { status: 418 }))),
+    );
+    await expect(apiRequest(identity, "/v1/anything")).rejects.toThrow(/418/);
+  });
+
+  // 服务端给了话就用服务端的，这条没变。
+  it("prefers what the server said over any of them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ detail: "这个会话已经在跑一轮了" }), {
+            status: 409,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      ),
+    );
+    await expect(apiRequest(identity, "/v1/anything")).rejects.toThrow(
+      "这个会话已经在跑一轮了",
+    );
   });
 });
 

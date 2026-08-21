@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,6 +139,90 @@ describe("WorkPage task submission", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it("does not pull the reader off a task they opened while a create was in flight", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listTasks).mockResolvedValue({
+      tasks: [
+        {
+          task_id: "task_open",
+          status: "running",
+          status_detail: null,
+          agent_invocation_count: 1,
+          objective_preview: "先看着的那个任务",
+          created_at: "2026-08-02T11:00:00Z",
+          updated_at: "2026-08-02T11:30:00Z",
+        },
+      ],
+      cursor: null,
+    });
+    // 按 id 应答，不是对任何 id 都给同一份 —— 否则「有没有被导航走」这件事
+    // 在断言里根本看不出来：两个任务会显示成同一个标题。
+    vi.mocked(getTask).mockImplementation((_identity, taskId) =>
+      Promise.resolve({
+        task_id: taskId,
+        status: "running" as const,
+        status_detail: null,
+        agent_invocation_count: 1,
+        objective_preview:
+          taskId === "task_open" ? "先看着的那个任务" : "刚刚新建的那个",
+        created_at: "2026-08-02T11:00:00Z",
+        updated_at: "2026-08-02T11:30:00Z",
+      }),
+    );
+    vi.mocked(getTaskTimeline).mockImplementation((_identity, taskId) =>
+      Promise.resolve({
+        task_id: taskId,
+        events: [],
+        cursor: null,
+        skipped_sequences: [],
+      }),
+    );
+    let settleCreate:
+      | ((task: Awaited<ReturnType<typeof createTask>>) => void)
+      | undefined;
+    vi.mocked(createTask).mockReset();
+    vi.mocked(createTask).mockReturnValue(
+      new Promise((resolve) => {
+        settleCreate = resolve;
+      }),
+    );
+
+    renderWorkPage();
+    await user.type(screen.getByLabelText("目标"), "新开一件事");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+
+    // 分诊最多可以想 10 秒，POST 还在它后面 —— 这段时间里侧栏一直可以点。
+    await user.click(await screen.findByRole("link", { name: /先看着的那个任务/ }));
+    expect(
+      await screen.findByRole("heading", { name: "先看着的那个任务" }),
+    ).toBeInTheDocument();
+
+    const finish = settleCreate;
+    if (finish === undefined) throw new Error("createTask mock did not start");
+    await act(async () => {
+      finish({
+        task_id: "task_created",
+        status: "queued",
+        status_detail: null,
+        agent_invocation_count: 0,
+        objective_preview: "新开一件事",
+        created_at: "2026-08-02T12:00:00Z",
+        updated_at: "2026-08-02T12:00:00Z",
+      });
+      await Promise.resolve();
+    });
+
+    // 按「创建任务」要的是一个任务，不是被从刚打开的东西上挪走。新任务在列表
+    // 顶上，什么也没丢。
+    expect(
+      screen.getByRole("heading", { name: "先看着的那个任务" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "刚刚新建的那个" }),
+    ).not.toBeInTheDocument();
   });
 
   it("reuses the intent key on explicit retry and rotates it after editing and success", async () => {
@@ -270,6 +361,37 @@ describe("WorkPage task submission", () => {
     expect(input?.graph).toBe("general");
     // The chip is the reader answering, so the record says "user".
     expect(input?.intent?.graph_decided_by).toBe("user");
+  });
+
+  it("shows a triage failure and lets the same intent retry without an unhandled rejection", async () => {
+    vi.mocked(createTask).mockReset();
+    vi.mocked(createTask).mockResolvedValue({
+      task_id: "task_created",
+      status: "queued",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: null,
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:00:00Z",
+    });
+    vi.mocked(triageTask)
+      .mockRejectedValueOnce(new Error("判定服务暂时不可用"))
+      .mockResolvedValueOnce(TRIAGE_DEFAULT);
+    const user = userEvent.setup();
+    renderWorkPage();
+
+    await user.type(screen.getByLabelText("目标"), "整理这批项目资料");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "判定服务暂时不可用",
+    );
+    expect(createTask).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "创建任务" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(triageTask).toHaveBeenCalledTimes(2);
   });
 
   it("skips triage entirely for an explicit override, which outranks any guess", async () => {
@@ -477,6 +599,29 @@ describe("WorkPage task submission", () => {
     expect(await screen.findByText(/task_969398ec/)).toBeInTheDocument();
   });
 
+  it.each(["pending", "error"] as const)(
+    "keeps the task-list opener reachable while a deep link is %s",
+    async (state) => {
+      if (state === "pending") {
+        vi.mocked(getTask).mockImplementation(
+          () => new Promise(() => undefined),
+        );
+      } else {
+        vi.mocked(getTask).mockRejectedValue(new Error("任务详情不可用"));
+      }
+
+      renderWorkPage("/work/task_unavailable");
+
+      if (state === "error") {
+        await screen.findByRole("alert");
+      }
+      const opener = screen.getByRole("button", { name: "打开任务列表" });
+      expect(opener).toBeInTheDocument();
+      expect(opener).toHaveAttribute("aria-controls", "workspace-sidebar-context");
+      expect(opener).toHaveAttribute("aria-expanded", "false");
+    },
+  );
+
   it("shows each stage's real steps under it, and its files in the rail", async () => {
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
@@ -521,7 +666,7 @@ describe("WorkPage task submission", () => {
 
     // The file is in the rail, named for what it is, without hunting for the
     // step that wrote it.
-    const rail = screen.getByRole("complementary", { name: "附件" });
+    const rail = screen.getByRole("complementary", { name: "产出文件" });
     expect(within(rail).getByText("检索到的证据")).toBeInTheDocument();
   });
 
@@ -599,7 +744,7 @@ describe("WorkPage task submission", () => {
     // Under the steps, in the reading column -- not in the file rail.
     expect(output.closest(".aw-work-run")).not.toBeNull();
     expect(
-      within(screen.getByRole("complementary", { name: "附件" })).queryByText(
+      within(screen.getByRole("complementary", { name: "产出文件" })).queryByText(
         "report.md",
       ),
     ).not.toBeInTheDocument();
@@ -655,7 +800,7 @@ describe("WorkPage task submission", () => {
     });
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     expect(within(rail).getByText("draft.md")).toBeInTheDocument();
     expect(within(rail).getByText("chart.png")).toBeInTheDocument();
     // Names, not controls. An affordance here would invite exactly the click
@@ -740,7 +885,7 @@ describe("WorkPage task submission", () => {
 
   it("keeps the text view one click away, honest about what it drops", async () => {
     // The old default's guarantees do not lapse with the default: a .docx must
-    // not fall through to "这个类型只能下载查看", and its text view still
+    // not fall through to "这个类型只能下载后查看", and its text view still
     // counts what it dropped instead of posing as the document.
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
@@ -800,7 +945,7 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /季度总结\.docx/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -853,7 +998,7 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /报告文件|report\.md/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -923,7 +1068,7 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /图表\.png/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -967,7 +1112,7 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /chart\.html/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
@@ -1004,12 +1149,12 @@ describe("WorkPage task submission", () => {
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
-    const rail = await screen.findByRole("complementary", { name: "附件" });
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /数据包\.zip/ }));
 
     const output = await screen.findByRole("region", { name: "任务产出" });
     expect(
-      await within(output).findByText(/这个类型只能下载查看/),
+      await within(output).findByText(/这个类型只能下载后查看/),
     ).toBeInTheDocument();
     expect(vi.mocked(downloadArtifact)).not.toHaveBeenCalled();
     expect(vi.mocked(getArtifactBlob)).not.toHaveBeenCalled();
@@ -1443,7 +1588,7 @@ describe("WorkPage task submission", () => {
 
     expect(
       await screen.findByText(
-        "本次“已拒绝”未被应用；同一决定版本的服务端权威状态为“已批准”。",
+        "你的“已拒绝”没有生效，这条现在是“已批准”。",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("已批准")).toBeInTheDocument();
@@ -1464,7 +1609,7 @@ describe("WorkPage task submission", () => {
 
     expect(
       await screen.findByText(
-        "任务服务端状态已是“已取消”，审批不再可决定；已刷新权威记录。",
+        "任务已经是“已取消”了，这个确认不用做了。",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "生成报告" })).not.toBeInTheDocument();
@@ -1541,7 +1686,8 @@ describe("WorkPage 停住的任务与已用预算", () => {
     vi.mocked(getTask).mockResolvedValue(parkedTask({ agent_invocation_count: 7 }));
     renderWorkPage("/work/task_parked");
 
-    expect(await screen.findByText(/已调用智能体\s*7\s*次/)).toBeInTheDocument();
+    const invocationLabel = await screen.findByText("智能体调用");
+    expect(invocationLabel.parentElement).toHaveTextContent("7 次");
   });
 
   it("says nothing about invocations a task never made", async () => {
@@ -1549,7 +1695,7 @@ describe("WorkPage 停住的任务与已用预算", () => {
     renderWorkPage("/work/task_parked");
 
     await screen.findByRole("heading", { name: "整理这批资料，比较三个方案" });
-    expect(screen.queryByText(/已调用智能体/)).toBeNull();
+    expect(screen.queryByText(/智能体调用/)).toBeNull();
   });
 });
 
@@ -1593,25 +1739,12 @@ describe("WorkPage 时间线上没跑过的那几段", () => {
     expect(within(steps as HTMLElement).getAllByText("未执行")).toHaveLength(5);
   });
 
-  it("keys every dot it can draw, including the one nothing else explains", async () => {
+  it("does not repeat a legend when every row already names its state", async () => {
     const view = renderWorkPage("/work/task_parked");
     await screen.findByRole("region", { name: "执行过程" });
     const legend = view.container.querySelector(".aw-stream-legend");
 
-    expect(legend).not.toBeNull();
-    // 图例上的每一格用的都是行上那一套 `is-*` 类名与同一个 `.aw-stream-dot`
-    // 元素，所以钥匙和锁不可能各改各的。
-    expect(
-      [...(legend?.querySelectorAll("span[class*='is-']") ?? [])].map((item) => [
-        item.className,
-        item.textContent,
-      ]),
-    ).toEqual([
-      ["aw-stream-state is-done", "已完成"],
-      ["aw-stream-state is-active", "进行中 / 等待"],
-      ["aw-stream-state is-pending", "等待中"],
-      ["aw-stream-state is-skipped", "未执行"],
-    ]);
+    expect(legend).toBeNull();
   });
 });
 

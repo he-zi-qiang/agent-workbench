@@ -38,8 +38,15 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Code2, PanelLeft, Paperclip } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, Code2, LoaderCircle, PanelLeft, Paperclip } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   askCode,
@@ -63,6 +70,10 @@ import type {
   WorkspaceEntryView,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
+import {
+  useWorkspaceSidebar,
+  WorkspaceSidebarPortal,
+} from "../../app/WorkspaceSidebar";
 import { effectiveMediaType } from "../../components/media";
 import { EmptyState, ErrorNotice, IconButton } from "../../components/ui";
 import { CodeSessionRail } from "./CodeSessionRail";
@@ -77,16 +88,16 @@ const APPROVAL_POLL_MS = 1000;
 
 const CODE_STARTERS = [
   {
-    title: "理解并整理代码",
-    prompt: "阅读当前项目，先说明结构和关键模块，再整理一份可执行的改进清单。",
+    title: "规划一个实现",
+    prompt: "请先拆解这个功能的实现方案，说明关键决策、风险和验证方式：",
   },
   {
-    title: "定位并修复问题",
-    prompt: "帮我定位这个问题的根因，修复后运行相关检查，并说明改动影响。",
+    title: "生成一个文件",
+    prompt: "根据下面的要求生成一个完整文件，并检查内容是否可以直接使用：",
   },
   {
-    title: "实现一个小功能",
-    prompt: "在保持现有架构和风格的前提下，实现下面这个功能，并补齐必要验证：",
+    title: "编写测试用例",
+    prompt: "为下面的行为编写清晰的测试用例，覆盖正常路径、边界条件和失败情况：",
   },
 ] as const;
 
@@ -110,6 +121,26 @@ const DECISIONS: { decision: ApprovalDecision; label: string }[] = [
 /** Risks whose second occurrence deserves the same question as their first. */
 const UNREPEATABLE = new Set(["external", "destructive"]);
 
+/**
+ * What a risk means, said to the person being asked.
+ *
+ * `risk` has been on the wire since approvals existed (`api/types.ts:119`) and
+ * this console used it for exactly one thing: deciding whether to *remove* the
+ * 本次会话都允许 button. So the reader was asked to approve a tool call with no
+ * indication of what kind of call it was, and -- when the third button was
+ * missing -- no explanation of why the choice they had last time was gone.
+ * That is not "conveyed by colour alone"; it is not conveyed at all.
+ *
+ * Unknown values fall through to the raw string rather than to silence: a risk
+ * this console has not been taught is still a fact the reader should see.
+ */
+const RISK_LABELS: Readonly<Record<string, string>> = {
+  read: "只读取",
+  write: "会写入",
+  external: "会连到外部",
+  destructive: "不可撤销",
+};
+
 export function CodePage() {
   const { identity } = useIdentity();
   const navigate = useNavigate();
@@ -124,7 +155,24 @@ export function CodePage() {
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
   const instructionRef = useRef<HTMLTextAreaElement>(null);
-  const [running, setRunning] = useState(false);
+  //: Which sessions have a turn open — a set, not a boolean, and scoped for
+  //: the same reason `loadedFor`, `fault.scope`, `pending.sessionId` and
+  //: `viewing.sessionId` are. A page-wide flag meant that while a turn ran in
+  //: A and the reader was in B: B's composer was disabled and wore A's
+  //: spinner, so they could not send anything; B's approvals rendered as
+  //: though B were running; and `buildTurnBlocks` marked B's newest run live
+  //: even when it had no terminal event — `turnBlocks.ts` states plainly that
+  //: the dead-run exclusion holds only while `running` is false, so a session
+  //: holding a crashed run span forever whenever an unrelated turn was open.
+  //:
+  //: `null` is the key for the one instant before a session exists. The turn
+  //: that opens a session navigates mid-request, so that key is moved to the
+  //: real id the moment the server hands one over — otherwise `running` would
+  //: go false under the reader for the whole of the turn that created
+  //: everything they are watching.
+  const [runningIn, setRunningIn] = useState<ReadonlySet<string | null>>(
+    () => new Set(),
+  );
   //: The instruction whose request is still open, held here rather than
   //: appended to `loadedMessages`. Appending optimistically and then re-reading
   //: the server's transcript is how the same sentence ends up on screen twice;
@@ -154,11 +202,28 @@ export function CodePage() {
   const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
-  const [railHidden, setRailHidden] = useState(false);
+  const workspaceSidebar = useWorkspaceSidebar();
   const [panelOpen, setPanelOpen] = useState(false);
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const queries = useQueryClient();
+
+  //: Where the page is *now*, for continuations that were started under
+  //: something else. The state above is derived rather than reset (`loadedFor`,
+  //: `fault.scope`, `viewing.sessionId`) precisely because a render is too late
+  //: -- and a promise resolving is later still, so a request that outlives the
+  //: route it was made from cannot ask the closure it was created in.
+  //:
+  //: `useLayoutEffect`, not `useEffect`: it has to be true before anything a
+  //: render started can resolve against it.
+  const mounted = useRef(true);
+  const shown = useRef({ identity, sessionId });
+  useLayoutEffect(() => {
+    mounted.current = true;
+    shown.current = { identity, sessionId };
+    return () => {
+      mounted.current = false;
+    };
+  }, [identity, sessionId]);
 
   // A query rather than an effect, because two things invalidate it -- opening
   // a session and renaming one -- and both happen somewhere other than where
@@ -167,7 +232,10 @@ export function CodePage() {
     queryKey: ["code-sessions", identity],
     queryFn: () => listCodeSessions(identity),
   });
-  const known = sessions.data?.sessions ?? [];
+  const known = useMemo(
+    () => sessions.data?.sessions ?? [],
+    [sessions.data?.sessions],
+  );
 
   const { steps, thinking, thinkingCallId, answer, progress } = useCodeStream(
     identity,
@@ -180,6 +248,7 @@ export function CodePage() {
   // already carries the session it belongs to, and the approvals are only
   // meaningful while a turn runs, so both questions are answerable here.
   const viewing = opened?.sessionId === sessionId ? opened : null;
+  const running = runningIn.has(sessionId ?? null);
   const pendingApprovals = running ? approvals : [];
   const messages = loadedFor === sessionId ? loadedMessages : [];
   // The sentence to draw a block for, or null because the server's transcript
@@ -224,6 +293,22 @@ export function CodePage() {
     (id: string, signal?: AbortSignal) =>
       Promise.all([
         getCodeHistory(identity, id, signal).then((history) => {
+          //: Only into the session the page is showing. The route effect below
+          //: aborts its own fetch when the session changes, but the reload at
+          //: the end of a turn has no signal and no route to check -- it is
+          //: addressed to the session the instruction was typed into, which
+          //: may be minutes old by the time a coding turn comes back.
+          //:
+          //: Writing `loadedFor` unconditionally there did not show A's
+          //: transcript under B. It showed *nothing*: `messages` is derived as
+          //: `loadedFor === sessionId ? loadedMessages : []`, so landing A's
+          //: id while the route says B collapsed the pane to
+          //: 这个会话还是空的 over a session with a full history, and took the
+          //: 工作区 count and the preview directory with it. Nothing recovered
+          //: it either -- the route effect's deps had not changed and the
+          //: orphan-reload effect returns early on exactly this mismatch, so
+          //: the session stayed blank until the reader navigated away and back.
+          if (shown.current.sessionId !== id) return;
           // These land in one React batch, which is the point: the server's
           // copy of the instruction appears in the same commit that drops the
           // pending one, so the sentence never flickers as two.
@@ -253,6 +338,7 @@ export function CodePage() {
           );
         }),
         getCodeWorkspace(identity, id, signal).then((workspace) => {
+          if (shown.current.sessionId !== id) return;
           setFiles(displayable(workspace.files));
           setLoadedFor(id);
         }),
@@ -374,7 +460,8 @@ export function CodePage() {
     // work. The route's optional param is what lets `running` survive the
     // navigation below -- see App.tsx.
     let target = sessionId;
-    setRunning(true);
+    const startedIn = sessionId ?? null;
+    setRunningIn((held) => new Set(held).add(startedIn));
     setFault(null);
     setPending({ sessionId: sessionId ?? null, text });
     setInstruction("");
@@ -387,6 +474,14 @@ export function CodePage() {
         const opened = created.session_id;
         target = opened;
         setPending({ sessionId: opened, text });
+        // Rekeyed from `null` to the session that now exists, before the
+        // navigation below moves the route onto it.
+        setRunningIn((held) => {
+          const next = new Set(held);
+          next.delete(null);
+          next.add(opened);
+          return next;
+        });
         // Into the list now, not when the turn comes back. The invalidation in
         // `finally` is the only thing that used to put a new session in the
         // rail, and a coding turn holds its request open for minutes -- so for
@@ -430,7 +525,11 @@ export function CodePage() {
       // `target`: the turn that opened the session reports where it now shows.
       setFault({ scope: target ?? null, text: describe(cause) });
     } finally {
-      setRunning(false);
+      setRunningIn((held) => {
+        const next = new Set(held);
+        next.delete(target ?? startedIn);
+        return next;
+      });
       // Both, and on every path. Re-reading rather than trusting the
       // optimistic append is what keeps this transcript from disagreeing with
       // the server's; and a refused turn may still have written files, because
@@ -469,6 +568,10 @@ export function CodePage() {
     const target = sessionId;
     getCodeWorkspace(identity, target)
       .then((workspace) => {
+        // Same question as `reload`: a script that writes a file can finish
+        // after the reader has moved on, and landing this session's id then
+        // empties whichever session they are looking at now.
+        if (shown.current.sessionId !== target) return;
         setFiles(displayable(workspace.files));
         setLoadedFor(target);
       })
@@ -528,16 +631,12 @@ export function CodePage() {
   const rename = useCallback(
     async (target: string, title: string) => {
       const trimmed = title.trim();
-      setRenaming(null);
       if (trimmed === "") return;
-      try {
-        await renameCodeSession(identity, target, trimmed);
-        await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
-      } catch (cause: unknown) {
-        setFault({ scope: sessionId ?? null, text: describe(cause) });
-      }
+      if (known.find((held) => held.session_id === target)?.title === trimmed) return;
+      await renameCodeSession(identity, target, trimmed);
+      await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
     },
-    [identity, queries, sessionId],
+    [identity, known, queries],
   );
 
   const attach = useCallback(
@@ -546,8 +645,8 @@ export function CodePage() {
       // The session has to exist before a file can go in it, and the composer
       // is reachable before one does. Rather than open a session here -- which
       // would create one whose first act was not an instruction, leaving it
-      // unnamed in the list -- the start page says a sentence has to come
-      // first, and the input stays disabled until one has.
+      // unnamed in the list. The start page keeps upload out of the way and
+      // states this boundary beside the first instruction.
       if (sessionId === undefined) {
         setFault({
           scope: null,
@@ -563,6 +662,7 @@ export function CodePage() {
         // uploads in flight would race and the loser would be refused.
         for (const file of Array.from(chosen)) {
           const listing = await putCodeWorkspaceFile(identity, sessionId, file);
+          if (shown.current.sessionId !== sessionId) return;
           setFiles(displayable(listing.files));
           setLoadedFor(sessionId);
         }
@@ -582,52 +682,56 @@ export function CodePage() {
       // this console has no modal of its own, and inventing one here would be
       // a second thing to review.
       if (!window.confirm("删除这个编码会话？它的对话和步骤都会消失。")) return;
+      const submittedIdentity = identity;
       try {
         await deleteCodeSession(identity, target);
         await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
-        // Only when the reader was looking at it. Navigating away from a
-        // session they had not opened would move them for somebody else's sake.
-        if (target === sessionId) await navigate("/code");
+        // A DELETE and a list refresh are two round trips, and the rail that
+        // starts them is on screen the whole time -- so by the time this line
+        // runs the reader may be somewhere else entirely, or somebody else
+        // entirely. Both are refusals, not adjustments: navigating under a
+        // principal who did not ask for it, or reporting one identity's
+        // failure on another's page, is worse than the delete going quiet.
+        if (!mounted.current || shown.current.identity !== submittedIdentity) return;
+        // Only when the reader was looking at it -- asked of the route as it
+        // stands now, not of the one the click was made under. The closure's
+        // `sessionId` was the session open when the trash was clicked, and it
+        // sent readers who had since opened another session back to /code for
+        // nothing.
+        if (shown.current.sessionId === target) await navigate("/code");
       } catch (cause: unknown) {
-        setFault({ scope: sessionId ?? null, text: describe(cause) });
+        if (!mounted.current || shown.current.identity !== submittedIdentity) return;
+        // Scoped to where the reader is now for the same reason: `fault.scope`
+        // is compared against the current route at render, so a failure filed
+        // under the session they have left renders nowhere at all.
+        setFault({ scope: shown.current.sessionId ?? null, text: describe(cause) });
       }
     },
-    [identity, navigate, queries, sessionId],
+    [identity, navigate, queries],
   );
 
   const rail = (
-    <CodeSessionRail
-      known={known}
-      mobileOpen={mobileSessionsOpen}
-      onCloseMobile={() => {
-        setMobileSessionsOpen(false);
-      }}
-      onDelete={(target) => void remove(target)}
-      onNew={() => {
-        setMobileSessionsOpen(false);
-        void navigate("/code");
-      }}
-      onOpen={(target) => {
-        setMobileSessionsOpen(false);
-        void navigate(`/code/${target}`);
-      }}
-      onRename={(target, title) => void rename(target, title)}
-      renaming={renaming}
-      sessionId={sessionId}
-      setRenaming={setRenaming}
-    />
+    <WorkspaceSidebarPortal>
+      <CodeSessionRail
+        known={known}
+        mobileOpen={workspaceSidebar.drawerOpen}
+        onCloseMobile={workspaceSidebar.close}
+        onDelete={(target) => void remove(target)}
+        onNew={() => {
+          workspaceSidebar.close();
+          void navigate("/code");
+        }}
+        onOpen={(target) => {
+          workspaceSidebar.close();
+          void navigate(`/code/${target}`);
+        }}
+        onRename={rename}
+        renaming={renaming}
+        sessionId={sessionId}
+        setRenaming={setRenaming}
+      />
+    </WorkspaceSidebarPortal>
   );
-
-  const backdrop = mobileSessionsOpen ? (
-    <button
-      aria-label="关闭会话列表"
-      className="aw-code-sessions-backdrop"
-      onClick={() => {
-        setMobileSessionsOpen(false);
-      }}
-      type="button"
-    />
-  ) : null;
 
   // One composer for both shapes of the page: attaching a file is part of
   // asking, so the control sits where the asking happens. The label wraps a
@@ -642,31 +746,29 @@ export function CodePage() {
       }}
     >
       <div className="aw-code-composer-row">
-        <label
-          className={`aw-code-attach ${uploading ? "is-busy" : ""}`}
-          title={
-            sessionId === undefined
-              ? "发出第一句话后，就可以上传文件"
-              : "上传文件到工作区"
-          }
-        >
-          <Paperclip aria-hidden size={16} />
-          <span className="aw-sr-only">
-            {uploading ? "正在上传" : "上传文件"}
-          </span>
-          <input
-            disabled={uploading || sessionId === undefined}
-            multiple
-            onChange={(event) => {
-              void attach(event.target.files);
-              // Cleared so choosing the same file twice fires `change`
-              // again -- a re-upload after an edit is an ordinary thing to
-              // want, and without this the second attempt does nothing.
-              event.target.value = "";
-            }}
-            type="file"
-          />
-        </label>
+        {sessionId === undefined ? null : (
+          <label
+            className={`aw-code-attach ${uploading ? "is-busy" : ""}`}
+            title="上传文件到工作区"
+          >
+            <Paperclip aria-hidden size={16} />
+            <span className="aw-sr-only">
+              {uploading ? "正在上传" : "上传文件"}
+            </span>
+            <input
+              disabled={uploading}
+              multiple
+              onChange={(event) => {
+                void attach(event.target.files);
+                // Cleared so choosing the same file twice fires `change`
+                // again -- a re-upload after an edit is an ordinary thing to
+                // want, and without this the second attempt does nothing.
+                event.target.value = "";
+              }}
+              type="file"
+            />
+          </label>
+        )}
         <label className="aw-sr-only" htmlFor="aw-code-instruction">
           要做的事
         </label>
@@ -682,11 +784,16 @@ export function CodePage() {
           value={instruction}
         />
         <button
+          aria-label={running ? "正在处理" : "发送"}
           className="aw-button is-primary"
           disabled={running || instruction.trim() === ""}
           type="submit"
         >
-          {running ? "正在处理" : "发送"}
+          {running ? (
+            <LoaderCircle aria-hidden className="aw-spin" size={17} />
+          ) : (
+            <ArrowUp aria-hidden size={17} />
+          )}
         </button>
       </div>
     </form>
@@ -698,18 +805,24 @@ export function CodePage() {
   // re-learn. What is gone from the middle is the second copy of the list.
   if (sessionId === undefined) {
     return (
-      <div className={`aw-code-page${railHidden ? " is-rail-hidden" : ""}`}>
-        {backdrop}
+      <div className="aw-code-page">
         {rail}
         <main className="aw-code-main">
           <div className="aw-code-start">
             <div className="aw-code-start-inner">
               <header className="aw-code-start-head">
-                <Code2 aria-hidden />
-                <h1>开始一段编码</h1>
+                <IconButton
+                  className="aw-code-mobile-sessions"
+                  controls="workspace-sidebar-context"
+                  expanded={workspaceSidebar.drawerOpen}
+                  label="打开会话列表"
+                  onClick={workspaceSidebar.open}
+                >
+                  <PanelLeft aria-hidden size={18} />
+                </IconButton>
+                <h1>开始编码</h1>
                 <p>
-                  描述你要做的事，比如「把 notes.md 里的待办整理成清单」。
-                  第一句话会开出一个会话，并成为它的名字；之后就可以在输入框旁上传文件。
+                  描述目标开始。会话建立后可添加文件，Agent 会修改并验证结果。
                 </p>
               </header>
               <div className="aw-code-starters" aria-label="编码任务起点">
@@ -724,7 +837,6 @@ export function CodePage() {
                     type="button"
                   >
                     <span>{starter.title}</span>
-                    <ArrowUpRight aria-hidden="true" size={15} />
                   </button>
                 ))}
               </div>
@@ -741,35 +853,22 @@ export function CodePage() {
 
   return (
     <div
-      className={`aw-code-page${railHidden ? " is-rail-hidden" : ""}${
-        panelOpen ? " has-preview" : ""
-      }`}
+      className={`aw-code-page${panelOpen ? " has-preview" : ""}`}
     >
-      {backdrop}
       {rail}
 
       <main className="aw-code-main">
         <header className="aw-code-header">
           <IconButton
             className="aw-code-mobile-sessions"
+            controls="workspace-sidebar-context"
+            expanded={workspaceSidebar.drawerOpen}
             label="打开会话列表"
-            onClick={() => {
-              setMobileSessionsOpen(true);
-            }}
-          >
-            <PanelLeft aria-hidden size={18} />
-          </IconButton>
-          <IconButton
-            className="aw-code-rail-toggle"
-            label={railHidden ? "显示会话栏" : "隐藏会话栏"}
-            onClick={() => {
-              setRailHidden((held) => !held);
-            }}
+            onClick={workspaceSidebar.open}
           >
             <PanelLeft aria-hidden size={18} />
           </IconButton>
           <div className="aw-code-header-copy">
-            <p className="aw-eyebrow">Code</p>
             <h1>{title ?? "新会话"}</h1>
           </div>
           {/* The way to the whole working set, including everything no card
@@ -788,7 +887,11 @@ export function CodePage() {
           )}
         </header>
 
-        <section aria-label="编码会话" aria-live="polite" className="aw-code-transcript">
+        {/* Same as Chat's transcript: not a live region. Announcing every
+            step, file card and disclosure in a coding turn is a torrent,
+            and a torrent is indistinguishable from silence. The approval
+            section above says the one thing worth interrupting for. */}
+        <section aria-label="编码会话" className="aw-code-transcript">
           {blocks.length === 0 ? (
             <EmptyState
               icon={<Code2 aria-hidden />}
@@ -843,10 +946,36 @@ export function CodePage() {
             needs is the reader's eyes on it now. A turn block scrolls. */}
         {pendingApprovals.length === 0 ? null : (
           <section aria-label="待批准的调用" className="aw-code-approvals">
+            {/* Announced, because this section is a sibling of the
+                transcript rather than inside it: a turn that stops to ask
+                permission produced no sound at all before this line. One
+                sentence, not the questions themselves -- the questions
+                are right here to read once the reader knows to look. */}
+            <p aria-atomic="true" className="aw-sr-only" role="status">
+              有 {pendingApprovals.length} 个调用等待你批准
+            </p>
             {pendingApprovals.map((held) => (
               <article className="aw-code-approval" key={held.approval_id}>
-                <h3>{held.tool_name} 需要你批准</h3>
+                <h3>
+                  {held.tool_name} 需要你批准
+                  {held.risk === null ? null : (
+                    <span
+                      className="aw-code-approval-risk"
+                      data-risk={held.risk}
+                    >
+                      {RISK_LABELS[held.risk] ?? held.risk}
+                    </span>
+                  )}
+                </h3>
                 <p className="aw-code-value">{held.argument_digest}</p>
+                {held.risk !== null && UNREPEATABLE.has(held.risk) ? (
+                  // The missing third button, explained where it is missing.
+                  // Without this the reader sees two buttons where they saw
+                  // three a moment ago and has to guess why.
+                  <p className="aw-code-approval-note">
+                    这一类调用每次都要单独问，不能一次答应整个会话。
+                  </p>
+                ) : null}
                 <div className="aw-code-approval-actions">
                   {DECISIONS.filter(
                     // A standing yes to an irreversible effect is the one that

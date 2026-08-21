@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listKnowledgeBaseDocuments,
@@ -15,6 +16,7 @@ import type {
   SearchResponse,
 } from "../../api/types";
 import { IdentityProvider } from "../../app/IdentityContext";
+import type { WorkspaceSidebarContextValue } from "../../app/WorkspaceSidebar";
 import { KnowledgePage } from "./KnowledgePage";
 
 vi.mock("../../api/client", async () => {
@@ -101,7 +103,10 @@ function chooseFile(container: HTMLElement) {
   });
 }
 
-function renderPage(entry = "/knowledge") {
+function renderPage(
+  entry = "/knowledge",
+  sidebar?: WorkspaceSidebarContextValue,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -109,12 +114,82 @@ function renderPage(entry = "/knowledge") {
     <QueryClientProvider client={queryClient}>
       <IdentityProvider>
         <MemoryRouter initialEntries={[entry]}>
-          <KnowledgePage />
+          {sidebar === undefined ? (
+            <KnowledgePage />
+          ) : (
+            <Routes>
+              <Route element={<Outlet context={sidebar} />}>
+                <Route element={<KnowledgePage />} path="/knowledge" />
+              </Route>
+            </Routes>
+          )}
         </MemoryRouter>
       </IdentityProvider>
     </QueryClientProvider>,
   );
 }
+
+describe("KnowledgePage 新建知识库对话框", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
+    vi.mocked(listKnowledgeBaseDocuments).mockResolvedValue({ documents: [] });
+  });
+
+  it("关闭移动 workspace drawer，提供名称，并用 Escape 关闭后恢复焦点", async () => {
+    const user = userEvent.setup();
+    const sidebarHost = globalThis.document.createElement("div");
+    globalThis.document.body.append(sidebarHost);
+    const closeSidebar = vi.fn();
+    const sidebar: WorkspaceSidebarContextValue = {
+      managed: true,
+      host: sidebarHost,
+      drawerOpen: true,
+      open: vi.fn(),
+      close: closeSidebar,
+    };
+    const view = renderPage("/knowledge", sidebar);
+
+    const trigger = await screen.findByRole("button", { name: "新建知识库" });
+    await user.click(trigger);
+
+    expect(closeSidebar).toHaveBeenCalledTimes(1);
+    const dialog = screen.getByRole("dialog", { name: "新建知识库" });
+    expect(dialog).toHaveAccessibleDescription(
+      "给资料起一个人能看懂的名字；ID 由系统生成。",
+    );
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "名称" })).toHaveFocus());
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "新建知识库" })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "打开知识库列表" })).toHaveFocus(),
+    );
+
+    view.unmount();
+    sidebarHost.remove();
+  });
+
+  it("在第一个和最后一个可聚焦控件之间循环 Tab", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(
+      await screen.findByRole("button", { name: "创建第一个知识库" }),
+    );
+    const close = screen.getByRole("button", { name: "关闭新建知识库" });
+    const cancel = screen.getByRole("button", { name: "取消" });
+
+    cancel.focus();
+    fireEvent.keyDown(cancel, { key: "Tab" });
+    expect(close).toHaveFocus();
+
+    close.focus();
+    fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
+    expect(cancel).toHaveFocus();
+  });
+});
 
 describe("KnowledgePage selection", () => {
   beforeEach(() => {

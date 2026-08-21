@@ -3,6 +3,7 @@ import type { StoredChatCursor } from "./storage";
 import type {
   AskResponse,
   ChatAnswerMode,
+  ChatSessionView,
   Citation,
   EventEnvelope,
   LocalChatSession,
@@ -172,6 +173,8 @@ export interface SubmitTurnInput {
 export type ChatAction =
   | { type: "sessionAdded"; session: LocalChatSession }
   | { type: "sessionRemoved"; sessionId: string }
+  | { type: "sessionRenamed"; sessionId: string; title: string }
+  | { type: "sessionsReconciled"; sessions: ChatSessionView[] }
   | {
       type: "sessionUpdated";
       sessionId: string;
@@ -268,6 +271,57 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         runToTurn,
         orphanEvents: without(state.orphanEvents, action.sessionId),
         quarantinedSequences: without(state.quarantinedSequences, action.sessionId),
+      });
+    }
+    case "sessionsReconciled": {
+      const sessions = { ...state.sessions };
+      const listedOrder: string[] = [];
+      for (const listed of action.sessions) {
+        listedOrder.push(listed.session_id);
+        const current = sessions[listed.session_id];
+        const activity = listed.last_activity_at ?? current?.updatedAt ?? "";
+        sessions[listed.session_id] =
+          current === undefined
+            ? {
+                sessionId: listed.session_id,
+                title: listed.title ?? "未命名会话",
+                answerMode: "direct",
+                knowledgeBaseId: null,
+                createdAt: activity,
+                updatedAt: activity,
+                projectId: listed.project_id,
+                connection: "idle",
+                history: "idle",
+              }
+            : {
+                ...current,
+                title: listed.title ?? current.title,
+                updatedAt: activity,
+                // 服务端是归属的权威。本地那份可能来自这个字段存在之前，所以
+                // 这里是覆盖，不是「有就保留」。
+                projectId: listed.project_id,
+              };
+      }
+      const listed = new Set(listedOrder);
+      return bump(state, {
+        sessions,
+        // The server's recent order is authoritative for what it returned.
+        // Keep older device-local entries after it because the endpoint is
+        // intentionally bounded and absence from the first 50 is not deletion.
+        sessionOrder: [
+          ...listedOrder,
+          ...state.sessionOrder.filter((sessionId) => !listed.has(sessionId)),
+        ],
+      });
+    }
+    case "sessionRenamed": {
+      const current = state.sessions[action.sessionId];
+      if (current === undefined || current.title === action.title) return state;
+      return bump(state, {
+        sessions: {
+          ...state.sessions,
+          [action.sessionId]: { ...current, title: action.title },
+        },
       });
     }
     case "sessionUpdated": {

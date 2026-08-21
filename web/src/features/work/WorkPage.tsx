@@ -6,17 +6,25 @@ import {
 } from "@tanstack/react-query";
 import {
   AlertTriangle,
-  ChevronLeft,
   ChevronRight,
   ClipboardCheck,
   FileDown,
-  ListTodo,
+  PanelLeft,
   Paperclip,
   Plus,
   RefreshCw,
   Trash2,
+  X,
 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError,
@@ -51,7 +59,12 @@ import type {
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
+  useWorkspaceSidebar,
+  WorkspaceSidebarPortal,
+} from "../../app/WorkspaceSidebar";
+import {
   browserShowsPdfInline,
+  mediaLabel,
   previewKind,
 } from "../../components/media";
 import { BlobPreview } from "../../components/BlobPreview";
@@ -66,9 +79,9 @@ import {
   useKnowledgeBases,
 } from "../../components/KnowledgeSourcePicker";
 import {
-  EmptyState,
   ErrorNotice,
   InfoNotice,
+  IconButton,
   KeyValue,
   LoadingLine,
   StatusPill,
@@ -202,10 +215,9 @@ export function WorkPage() {
   const queryClient = useQueryClient();
   const { identity } = useIdentity();
   const identityKey = workIdentityQueryKey(identity);
+  const workspaceSidebar = useWorkspaceSidebar();
 
   const [taskFilter, setTaskFilter] = useState<TaskFilterId>("all");
-  // 见下面 aw-create-task-toggle 那段注释：没有选中任务时这一页只有提交可做。
-  const [formOpen, setFormOpen] = useState(selectedTaskId === undefined);
   const filterStatuses = TASK_FILTERS.find(
     (entry) => entry.id === taskFilter,
   )?.statuses;
@@ -290,7 +302,11 @@ export function WorkPage() {
       if (taskInputRef === null) throw new Error("时间线中没有任务输入引用");
       const value = await getArtifactJson<unknown>(identity, taskInputRef);
       const parsed = parseTaskInputArtifact(value);
-      if (parsed === null) throw new Error("任务输入 artifact 不符合 TaskInput 契约");
+      // 这一句会走到界面上：`errorMessage` 优先用 message 而不是兜底文案，
+      // 所以它必须是说给读者听的，不是说给写这段代码的人听的。
+      if (parsed === null) {
+        throw new Error("读不到这个任务的提交内容，格式和这个版本对不上。");
+      }
       return parsed;
     },
   });
@@ -355,6 +371,7 @@ export function WorkPage() {
     () => collectArtifacts(timeline.events),
     [timeline.events],
   );
+  const hasOutputRail = artifacts.length > 0 || workspaceWrites.length > 0;
   // What the reading column leads with: the document the Task was asked for
   // when it rendered one, and the exported report otherwise. `findFinalReport`
   // is still the thing being chosen *between* -- it is now consulted inside
@@ -412,6 +429,7 @@ export function WorkPage() {
   // wrong objective.
   const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
   const [triaging, setTriaging] = useState(false);
+  const [triageError, setTriageError] = useState<string | null>(null);
   const [knowledgeBaseDraftId, setKnowledgeBaseId] = useState<string | null>(
     searchParams.get("kb"),
   );
@@ -427,6 +445,17 @@ export function WorkPage() {
     knowledgeBaseDraftId !== null && knowledgeBases.isPending;
   const attachments = useKnowledgeAttachments(identity, knowledgeBaseId);
   const [submissionKey, setSubmissionKey] = useState(() => newIdempotencyKey("task"));
+
+  // Which task the page is showing *now*. Creating one is not a single round
+  // trip: triage may think for up to `TRIAGE_TIMEOUT_MS` before the POST even
+  // goes out, and the form is only rendered while no task is selected -- so a
+  // continuation started from the start page can land after the reader has
+  // opened something else.
+  const shownTask = useRef(selectedTaskId);
+  useLayoutEffect(() => {
+    shownTask.current = selectedTaskId;
+  }, [selectedTaskId]);
+
   const createMutation = useMutation({
     mutationFn: ({ idempotencyKey, ...input }: CreateTaskIntent) =>
       createTask(identity, input, idempotencyKey),
@@ -441,12 +470,19 @@ export function WorkPage() {
       void queryClient.invalidateQueries({
         queryKey: ["work", "tasks", ...identityKey],
       });
-      void navigate(`/work/${encodeURIComponent(task.task_id)}`);
+      // Only a reader who is still on the start page. Pressing 创建任务 asks
+      // for a task; it does not ask to be moved off whatever was opened while
+      // the request was out. The new task is at the top of the list either
+      // way, so nothing is lost by leaving them where they are.
+      if (shownTask.current === undefined) {
+        void navigate(`/work/${encodeURIComponent(task.task_id)}`);
+      }
     },
   });
   const markTaskIntentEdited = () => {
     setSubmissionKey(newIdempotencyKey("task"));
     setPendingAsk(null);
+    setTriageError(null);
     createMutation.reset();
   };
 
@@ -458,7 +494,20 @@ export function WorkPage() {
       cancelTask(identity, taskId, reason),
     onSuccess: (task) => {
       setCancelDraft({ taskId: task.task_id, reason: "" });
-      queryClient.setQueryData(taskQueryKey, task);
+      // Keyed off the response, not off `taskQueryKey`. A pending mutation
+      // takes the *latest* render's options -- `MutationObserver.setOptions`
+      // pushes them in, and `Mutation.execute` reads `onSuccess` only after
+      // the request resolves -- so a reader who opens another task while the
+      // cancel is in flight makes this callback close over that task's key.
+      // The write then filed A's TaskView under B, and /work/B rendered A's
+      // objective, A's id and a 已取消 pill over B's own timeline. It stuck,
+      // too: the poll stops on a settled status, and the timeline repair
+      // effect is gated on the status not being settled. The response already
+      // carries the only id this write is entitled to use.
+      queryClient.setQueryData(
+        ["work", "task", ...identityKey, task.task_id],
+        task,
+      );
       void queryClient.invalidateQueries({
         queryKey: ["work", "tasks", ...identityKey],
       });
@@ -532,13 +581,22 @@ export function WorkPage() {
       return decideApproval(identity, approval, decision);
     },
     onSuccess: (approval, intent) => {
-      queryClient.setQueryData(approvalQueryKey, approval);
+      // Same reason as the cancel above: the response's own id, not the key
+      // this render happens to hold. Filed under another task's approval key
+      // the render-time `matchesTask` guard did catch it -- by showing that
+      // task a spurious 对不上 notice and hiding its decision buttons, while
+      // the poll stopped because the poisoned record was no longer pending.
+      // A caught poisoning that leaves the gate undecidable is still a bug.
+      queryClient.setQueryData(
+        ["work", "approval", ...identityKey, approval.approval_id],
+        approval,
+      );
       setApprovalNotice({
         approvalId: approval.approval_id,
         message:
           approval.status === intent.decision
-            ? "服务端已记录此决定。"
-            : `本次“${formatStatus(intent.decision)}”未被应用；同一决定版本的服务端权威状态为“${formatStatus(approval.status)}”。`,
+            ? "已经记下了。"
+            : `你的“${formatStatus(intent.decision)}”没有生效，这条现在是“${formatStatus(approval.status)}”。`,
       });
       void taskQuery.refetch();
       void timeline.refresh();
@@ -616,6 +674,7 @@ export function WorkPage() {
 
   const runTriage = async (trimmedObjective: string) => {
     setTriaging(true);
+    setTriageError(null);
     try {
       const verdict = await triageTask(
         identity,
@@ -629,6 +688,13 @@ export function WorkPage() {
       if (verdict.status === "ask") {
         // No Task yet, and none until the reader answers -- uncertainty is a
         // question here, never a status (ADR-036 §2.1).
+        //
+        // Left set even when the reader has opened a task in the meantime:
+        // the form that renders this question only exists on the start page,
+        // so it waits there for them. That is a real gap -- they pressed
+        // 创建任务, no task was created, and nothing where they now are says
+        // so -- and closing it properly needs a notice surface this page does
+        // not have. Recorded rather than papered over.
         setPendingAsk({
           question:
             verdict.question ??
@@ -661,6 +727,13 @@ export function WorkPage() {
             reportOverride === "auto" ? "default" : "user",
         },
       });
+    } catch (error: unknown) {
+      // Triage happens before the Task mutation exists, so its failures do not
+      // reach `createMutation.error`. Catch them here instead of leaving a
+      // rejected promise behind a button that merely becomes enabled again.
+      setTriageError(
+        errorMessage(error, "无法判定执行方式，请稍后重试。"),
+      );
     } finally {
       setTriaging(false);
     }
@@ -705,7 +778,7 @@ export function WorkPage() {
     if (nextId === knowledgeBaseId) return;
     if (
       attachments.items.length > 0 &&
-      !window.confirm("切换资料会清空当前任务的待上传附件，是否继续？")
+      !window.confirm("切换知识库会清空当前任务的待上传附件，是否继续？")
     ) {
       return;
     }
@@ -718,215 +791,211 @@ export function WorkPage() {
   const canCancel =
     selectedTask !== undefined && CANCELLABLE_STATUSES.has(selectedTask.status);
   const createBusy = createMutation.isPending || triaging;
+  const createTaskForm = (
+    <form className="aw-create-task" id="aw-create-task-form" onSubmit={handleCreate}>
+      <header className="aw-create-task-head">
+        <h2>想完成什么？</h2>
+        <p>描述结果，Agent 会选择合适的执行方式并持续保存进度。</p>
+      </header>
+      <label className="aw-sr-only" htmlFor="work-objective">目标</label>
+      <textarea
+        id="work-objective"
+        disabled={createBusy}
+        maxLength={4096}
+        onChange={(event) => {
+          setObjective(event.target.value);
+          markTaskIntentEdited();
+        }}
+        placeholder="例如：整理项目资料，比较三个方案并输出建议报告"
+        required
+        rows={4}
+        value={objective}
+      />
+      <KnowledgeSourcePicker
+        disabled={createBusy}
+        identity={identity}
+        onChange={(knowledgeBase) =>
+          changeKnowledgeBase(knowledgeBase?.knowledge_base_id ?? null)
+        }
+        value={knowledgeBaseId}
+      />
+      <div className="aw-work-attachment-row">
+        <AttachmentButton
+          disabled={createBusy || attachments.readOnlyReason !== null}
+          {...(attachments.readOnlyReason === null
+            ? {}
+            : { disabledReason: attachments.readOnlyReason })}
+          onFiles={attachments.addFiles}
+        />
+        <span>
+          {attachments.readOnlyReason ?? (
+            <>
+              添加 PDF、Word 或 Markdown
+              {knowledgeBaseId === null
+                ? "（选择知识库后上传）"
+                : "（上传到所选知识库）"}
+            </>
+          )}
+        </span>
+      </div>
+      <AttachmentTray
+        items={attachments.items}
+        onRemove={attachments.remove}
+        onRetry={attachments.retry}
+      />
+      <details className="aw-work-advanced">
+        <summary>高级设置</summary>
+        <fieldset className="aw-graph-choice">
+          <legend>执行方式</legend>
+          {GRAPH_OVERRIDE_OPTIONS.map((option) => (
+            <label className="aw-graph-option" key={option.value}>
+              <input
+                checked={graphOverride === option.value}
+                disabled={createBusy}
+                name="work-graph"
+                onChange={() => {
+                  setGraphOverride(option.value);
+                  markTaskIntentEdited();
+                }}
+                type="radio"
+                value={option.value}
+              />
+              <span>
+                <strong>{option.label}</strong>
+                <small>{option.hint}</small>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        <label htmlFor="work-report-mode">报告文件</label>
+        <select
+          id="work-report-mode"
+          disabled={createBusy}
+          onChange={(event) => {
+            const value = event.target.value;
+            setReportOverride(value === "auto" ? "auto" : value === "yes");
+            markTaskIntentEdited();
+          }}
+          value={
+            reportOverride === "auto" ? "auto" : reportOverride ? "yes" : "no"
+          }
+        >
+          <option value="auto">自动判定（由模型决定要不要文件）</option>
+          <option value="yes">一定生成文件</option>
+          <option value="no">不生成文件</option>
+        </select>
+        <label htmlFor="work-max-revisions">最大修订次数</label>
+        <input
+          id="work-max-revisions"
+          disabled={createBusy}
+          max={20}
+          min={0}
+          onChange={(event) => {
+            setMaxRevisions(event.target.value);
+            markTaskIntentEdited();
+          }}
+          required
+          type="number"
+          value={maxRevisions}
+        />
+      </details>
+      {attachments.hasBlockingItems ? (
+        <p className="aw-create-task-hint">
+          附件正在上传或索引，完成后才能创建任务。
+        </p>
+      ) : null}
+      {pendingAsk !== null ? (
+        <div className="aw-triage-ask" role="group" aria-label="选择执行方式">
+          <p>{pendingAsk.question}</p>
+          <div className="aw-triage-ask-options">
+            {pendingAsk.options.map((option) => (
+              <button
+                className="aw-button"
+                disabled={createBusy}
+                key={option.graph}
+                onClick={() => answerAsk(option.graph)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {triageError === null ? null : <ErrorNotice message={triageError} />}
+      <button
+        className="aw-button is-primary"
+        disabled={
+          createBusy ||
+          sourceResolving ||
+          objective.trim() === "" ||
+          attachments.hasBlockingItems
+        }
+        type="submit"
+      >
+        {triaging
+          ? "正在判定…"
+          : createMutation.isPending
+            ? "正在创建…"
+            : "创建任务"}
+      </button>
+      {createMutation.isError ? (
+        <ErrorNotice message={errorMessage(createMutation.error, "创建任务失败")} />
+      ) : null}
+    </form>
+  );
 
   return (
     <div className={`aw-work-page ${selectedTaskId === undefined ? "" : "has-selection"}`}>
-      <aside className="aw-work-sidebar" aria-label="任务列表与新建任务">
+      <WorkspaceSidebarPortal>
+        <aside className="aw-work-sidebar" aria-label="任务列表与新建任务">
         <header className="aw-pane-header">
           <div>
-            <span className="aw-eyebrow">WORK</span>
-            <h1>任务</h1>
+            <strong>最近任务</strong>
           </div>
-          <button
-            aria-label="刷新任务列表"
-            className="aw-icon-button"
-            disabled={tasksQuery.isFetching}
-            onClick={() => void tasksQuery.refetch()}
-            type="button"
-          >
-            <RefreshCw aria-hidden="true" size={16} />
-          </button>
+          <div className="aw-pane-header-actions">
+            <button
+              // 不叫「刷新任务列表」：那个名字里整整齐齐含着「新任务」，
+              // 而「新任务」是它上面两行的另一个按钮。两个控件的无障碍名
+              // 互为子串，对按名字找控件的人和工具都是一次歧义。
+              aria-label="重新加载列表"
+              className="aw-icon-button"
+              disabled={tasksQuery.isFetching}
+              onClick={() => void tasksQuery.refetch()}
+              type="button"
+            >
+              <RefreshCw aria-hidden="true" size={16} />
+            </button>
+            <IconButton
+              className="aw-work-sessions-close"
+              label="关闭任务列表"
+              onClick={workspaceSidebar.close}
+            >
+              <X aria-hidden="true" size={17} />
+            </IconButton>
+          </div>
         </header>
 
-        {/* 表单收在按钮后面。
-         *
-         * 它此前整个摊在侧栏里，于是任务列表被推到第一屏之外——而打开这一页最
-         * 常见的目的是看某个任务跑得怎么样，不是提交新的。
-         *
-         * 默认展开的条件是"还没有选中任何任务"：那种情况下这一页除了提交没有别
-         * 的可做，收起来就是给主流程平白加一次点击。选中了任务再进来，表单让位
-         * 给列表。 */}
         <button
-          aria-controls="aw-create-task-form"
-          aria-expanded={formOpen}
-          className="aw-create-task-toggle"
-          onClick={() => setFormOpen((was) => !was)}
+          aria-current={selectedTaskId === undefined ? "page" : undefined}
+          className={`aw-create-task-toggle ${
+            selectedTaskId === undefined ? "is-active" : ""
+          }`}
+          onClick={() => {
+            workspaceSidebar.close();
+            if (selectedTaskId === undefined) {
+              window.requestAnimationFrame(() =>
+                document.getElementById("work-objective")?.focus(),
+              );
+            } else {
+              void navigate("/work");
+            }
+          }}
           type="button"
         >
           <Plus aria-hidden="true" size={16} />
-          提交新任务
+          新任务
         </button>
-
-        <form
-          className={`aw-create-task ${formOpen ? "" : "is-collapsed"}`}
-          id="aw-create-task-form"
-          onSubmit={handleCreate}
-        >
-          <header className="aw-create-task-head">
-            <span className="aw-eyebrow">NEW TASK</span>
-            <h2>把一段复杂工作交给 Agent</h2>
-            <p>描述结果，而不是操作步骤。任务会保留进度，并在需要时等待你的决定。</p>
-          </header>
-          <label htmlFor="work-objective">目标</label>
-          <textarea
-            id="work-objective"
-            disabled={createBusy}
-            maxLength={4096}
-            onChange={(event) => {
-              setObjective(event.target.value);
-              markTaskIntentEdited();
-            }}
-            placeholder="例如：整理这批资料，比较三个方案并输出一份建议报告"
-            required
-            rows={4}
-            value={objective}
-          />
-          <KnowledgeSourcePicker
-            disabled={createBusy}
-            identity={identity}
-            onChange={(knowledgeBase) =>
-              changeKnowledgeBase(knowledgeBase?.knowledge_base_id ?? null)
-            }
-            value={knowledgeBaseId}
-          />
-          <div className="aw-work-attachment-row">
-            <AttachmentButton
-              disabled={createBusy || attachments.readOnlyReason !== null}
-              {...(attachments.readOnlyReason === null
-                ? {}
-                : { disabledReason: attachments.readOnlyReason })}
-              onFiles={attachments.addFiles}
-            />
-            {/* The reason is in the line as well as the button's tooltip: a
-                disabled paperclip explains itself to a mouse and to nobody on
-                a touch screen or a screen reader that never hovers. */}
-            <span>
-              {attachments.readOnlyReason ?? (
-                <>
-                  添加 PDF、Word 或 Markdown
-                  {knowledgeBaseId === null
-                    ? "（选择知识库后上传）"
-                    : "（上传到所选知识库）"}
-                </>
-              )}
-            </span>
-          </div>
-          <AttachmentTray
-            items={attachments.items}
-            onRemove={attachments.remove}
-            onRetry={attachments.retry}
-          />
-          <details className="aw-work-advanced">
-            <summary>高级设置</summary>
-            {/* The explicit overrides (ADR-036). The default is 自动: triage
-                proposes, a genuinely ambiguous objective becomes a question,
-                and the answer is submitted explicitly. An explicit value here
-                skips triage and outranks it. */}
-            <fieldset className="aw-graph-choice">
-              <legend>执行方式</legend>
-              {GRAPH_OVERRIDE_OPTIONS.map((option) => (
-                <label className="aw-graph-option" key={option.value}>
-                  <input
-                    checked={graphOverride === option.value}
-                    disabled={createBusy}
-                    name="work-graph"
-                    onChange={() => {
-                      setGraphOverride(option.value);
-                      markTaskIntentEdited();
-                    }}
-                    type="radio"
-                    value={option.value}
-                  />
-                  <span>
-                    <strong>{option.label}</strong>
-                    <small>{option.hint}</small>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-            <label htmlFor="work-report-mode">报告文件</label>
-            <select
-              id="work-report-mode"
-              disabled={createBusy}
-              onChange={(event) => {
-                const value = event.target.value;
-                setReportOverride(value === "auto" ? "auto" : value === "yes");
-                markTaskIntentEdited();
-              }}
-              value={
-                reportOverride === "auto" ? "auto" : reportOverride ? "yes" : "no"
-              }
-            >
-              {/* No longer promises a confirmation step. This deployment runs
-                  with `workflow.export_requires_approval = false`, so a Task
-                  that wants a file exports it and the file waits in 附件 --
-                  there is nothing to confirm. The old wording described the
-                  gated deployment, and after v1 was taught to honour the
-                  setting it described no deployment this repository ships. */}
-              <option value="auto">自动判定（由模型决定要不要文件）</option>
-              <option value="yes">一定生成文件</option>
-              <option value="no">不生成文件</option>
-            </select>
-            <label htmlFor="work-max-revisions">最大修订次数</label>
-            <input
-              id="work-max-revisions"
-              disabled={createBusy}
-              max={20}
-              min={0}
-              onChange={(event) => {
-                setMaxRevisions(event.target.value);
-                markTaskIntentEdited();
-              }}
-              required
-              type="number"
-              value={maxRevisions}
-            />
-          </details>
-          <p className="aw-create-task-hint">
-            {attachments.hasBlockingItems
-              ? "附件正在上传或索引，完成后才能创建任务。"
-              : knowledgeBaseId === null
-                ? "不使用知识库：Agent 将只按目标执行，不做内部资料检索。"
-                : "任务会在执行期间检索所选知识库。"}
-          </p>
-          {pendingAsk !== null ? (
-            <div className="aw-triage-ask" role="group" aria-label="选择执行方式">
-              <p>{pendingAsk.question}</p>
-              <div className="aw-triage-ask-options">
-                {pendingAsk.options.map((option) => (
-                  <button
-                    className="aw-button"
-                    disabled={createBusy}
-                    key={option.graph}
-                    onClick={() => answerAsk(option.graph)}
-                    type="button"
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          <button
-            className="aw-button is-primary"
-            disabled={
-              createBusy ||
-              sourceResolving ||
-              objective.trim() === "" ||
-              attachments.hasBlockingItems
-            }
-            type="submit"
-          >
-            {triaging
-              ? "正在判定…"
-              : createMutation.isPending
-                ? "正在创建…"
-                : "创建任务"}
-          </button>
-          {createMutation.isError ? (
-            <ErrorNotice message={errorMessage(createMutation.error, "创建任务失败")} />
-          ) : null}
-        </form>
 
         <div className="aw-task-filters" role="group" aria-label="任务筛选">
           {TASK_FILTERS.map((entry) => (
@@ -954,6 +1023,7 @@ export function WorkPage() {
                 className={`aw-task-list-item ${
                   task.task_id === selectedTaskId ? "is-active" : ""
                 }`}
+                onClick={workspaceSidebar.close}
                 to={`/work/${encodeURIComponent(task.task_id)}`}
               >
                 <span>
@@ -966,12 +1036,15 @@ export function WorkPage() {
                   </strong>
                   <small>
                     {formatDateTime(task.created_at)}
-                    {task.objective_preview === null
-                      ? ""
-                      : ` · ${shortId(task.task_id, 14)}`}
                   </small>
                 </span>
-                <StatusPill status={task.status} />
+                <span
+                  aria-label={`状态：${formatStatus(task.status)}`}
+                  className="aw-task-status-dot"
+                  data-status={task.status}
+                  role="img"
+                  title={formatStatus(task.status)}
+                />
               </Link>
               {/* Offered only on a settled Task, because the server refuses
                   anything else with a 409 -- and a button whose only outcome is
@@ -1013,7 +1086,7 @@ export function WorkPage() {
             </p>
           ) : null}
           {!tasksQuery.isPending && !tasksQuery.isError && tasks.length === 0 && taskFilter === "all" ? (
-            <p className="aw-muted">还没有任务。</p>
+            <p className="aw-muted">还没有任务。说一件要做的事，就能开一个。</p>
           ) : null}
           {tasksQuery.hasNextPage ? (
             <button
@@ -1026,15 +1099,36 @@ export function WorkPage() {
             </button>
           ) : null}
         </nav>
-      </aside>
+        </aside>
+      </WorkspaceSidebarPortal>
 
       <main className="aw-work-detail">
+        {selectedTaskId !== undefined && selectedTask === undefined ? (
+          <button
+            aria-controls="workspace-sidebar-context"
+            aria-expanded={workspaceSidebar.drawerOpen}
+            aria-label="打开任务列表"
+            className="aw-icon-button aw-work-mobile-back"
+            onClick={workspaceSidebar.open}
+            type="button"
+          >
+            <PanelLeft aria-hidden="true" size={18} />
+          </button>
+        ) : null}
         {selectedTaskId === undefined ? (
-          <EmptyState
-            description="从左侧选择一项任务，或提交一个新任务。"
-            icon={<ListTodo aria-hidden="true" size={24} />}
-            title="选择任务查看执行记录"
-          />
+          <section className="aw-work-start">
+            <button
+              aria-controls="workspace-sidebar-context"
+              aria-expanded={workspaceSidebar.drawerOpen}
+              aria-label="打开任务列表"
+              className="aw-icon-button aw-work-mobile-back"
+              onClick={workspaceSidebar.open}
+              type="button"
+            >
+              <PanelLeft aria-hidden="true" size={18} />
+            </button>
+            {createTaskForm}
+          </section>
         ) : null}
         {selectedTaskId !== undefined && taskQuery.isPending ? (
           <LoadingLine label="正在加载任务详情" />
@@ -1047,81 +1141,47 @@ export function WorkPage() {
             <header className="aw-work-detail-header">
               <div>
                 <button
+                  aria-controls="workspace-sidebar-context"
+                  aria-expanded={workspaceSidebar.drawerOpen}
                   className="aw-button is-ghost aw-work-mobile-back"
-                  onClick={() => void navigate("/work")}
+                  onClick={workspaceSidebar.open}
                   type="button"
                 >
-                  <ChevronLeft aria-hidden="true" size={15} /> 任务列表
+                  <PanelLeft aria-hidden="true" size={15} /> 任务列表
                 </button>
-                <span className="aw-eyebrow">TASK</span>
                 <h1 title={selectedTask.task_id}>
                   {selectedTask.objective_preview ?? shortId(selectedTask.task_id, 28)}
                 </h1>
-                {selectedTask.objective_preview === null ? null : (
-                  <code className="aw-task-id">{shortId(selectedTask.task_id, 28)}</code>
-                )}
-                {/* What this Task has spent, where it is spent (ADR-040). In
-                    the header rather than behind 任务详情 because it is the one
-                    number that moves while the Task runs, and the point of
-                    reporting it before it is ever enforced is that somebody
-                    sees a Task climbing towards a ceiling *before* the ceiling
-                    stops it.
-
-                    Used, with no "/ 上限". The ceiling is frozen per Task in
-                    its own run_semantics_snapshot and the Task response does
-                    not carry it; the only limit this client could reach for is
-                    whatever this deployment is configured with today, which is
-                    exactly the number ADR-040 refused to bill against. A
-                    denominator that is right for most Tasks and silently wrong
-                    for the retried one is worse than no denominator.
-
-                    Hidden at zero: every research Task stays at zero, and a
-                    budget line that reads 0 on most of the page teaches readers
-                    to stop seeing it. */}
-                {selectedTask.agent_invocation_count > 0 ? (
-                  <small
-                    className="aw-task-id"
-                    title="这个任务累计消耗的智能体调用次数。重试和被重新接管都算在同一个数上；上限由提交时的运行语义决定，接口没有返回，所以这里只报已用。"
-                  >
-                    {selectedTask.objective_preview === null ? "" : " · "}
-                    已调用智能体 {selectedTask.agent_invocation_count} 次
-                  </small>
-                ) : null}
               </div>
               <StatusPill status={selectedTask.status} />
             </header>
 
-            {/* One reading column, the way Chat reads: what was asked, the
-                steps it took, then the answer directly under them. The side
-                rail holds files, which are the one output worth finding again
-                later without scrolling back through the run. */}
-            <div className="aw-work-body">
-            <div className="aw-work-run">
+            {/* The one thing this page says out loud, and it is one
+                sentence rather than the run.
 
-            <TaskStepStream
-              lifecycle={lifecycle}
-              loading={timeline.loading && timeline.events.length === 0}
-              // Previewable files open in the reading column, same as a rail
-              // click; only the kinds no viewer exists for still download.
-              // "打开产物" that saved a file it could have shown was the bug.
-              // No gate. The rail dropped its own version of this check and
-              // wrote down why ("栏位不再预判"): sending an unpreviewable file
-              // straight to a download was zero feedback for a click, and the
-              // reading column already says what it cannot show. The step
-              // stream kept the old behaviour, so the same .zip answered a
-              // sentence in one place and a silent save in the other.
-              onOpenArtifact={(artifact) => {
-                if (selectedTaskId === undefined) return;
-                setOpened({ taskId: selectedTaskId, artifact });
-              }}
-              stageEvents={stageEvents}
-              status={selectedTask.status}
-              taskEvents={taskEvents}
-            />
-            <TimelineGapNotice gaps={timelineGaps} />
-            {timeline.error !== null ? (
-              <ErrorNotice message={errorMessage(timeline.error, "读取时间线失败")} />
-            ) : null}
+                Nothing on this page was announced before: the pill above
+                flips 运行中 → 等待批准 → 已完成 in silence, and the
+                approval gate below mounts in silence. A reader using a
+                screen reader submitted a task and then heard nothing
+                again -- including the moment the run stopped and asked
+                them a question, which is the moment the whole Task shape
+                exists for. That is not an awkward page; it is a task that
+                cannot be finished.
+
+                Deliberately the *status*, not the trace. The timeline
+                below streams dozens of events per run and announcing
+                them is the same as announcing nothing -- see the live
+                regions on the two transcripts. `aria-atomic` because the
+                sentence only means anything whole. */}
+            <p aria-atomic="true" className="aw-sr-only" role="status">
+              任务{formatStatus(selectedTask.status)}
+            </p>
+
+            {/* Lead with the outcome. The execution trace remains directly
+                below it for inspection, while the side rail appears only when
+                there are additional files worth finding again later. */}
+            <div className={`aw-work-body ${hasOutputRail ? "has-output" : ""}`}>
+            <div className="aw-work-run">
 
             <TaskResult
               artifact={openedArtifact ?? deliverable}
@@ -1184,6 +1244,31 @@ export function WorkPage() {
               />
             ) : null}
 
+            <TaskStepStream
+              lifecycle={lifecycle}
+              loading={timeline.loading && timeline.events.length === 0}
+              // Previewable files open in the reading column, same as a rail
+              // click; only the kinds no viewer exists for still download.
+              // "打开产物" that saved a file it could have shown was the bug.
+              // No gate. The rail dropped its own version of this check and
+              // wrote down why ("栏位不再预判"): sending an unpreviewable file
+              // straight to a download was zero feedback for a click, and the
+              // reading column already says what it cannot show. The step
+              // stream kept the old behaviour, so the same .zip answered a
+              // sentence in one place and a silent save in the other.
+              onOpenArtifact={(artifact) => {
+                if (selectedTaskId === undefined) return;
+                setOpened({ taskId: selectedTaskId, artifact });
+              }}
+              stageEvents={stageEvents}
+              status={selectedTask.status}
+              taskEvents={taskEvents}
+            />
+            <TimelineGapNotice gaps={timelineGaps} />
+            {timeline.error !== null ? (
+              <ErrorNotice message={errorMessage(timeline.error, "读取执行过程失败")} />
+            ) : null}
+
             <details className="aw-work-fold">
               <summary>
                 <ChevronRight aria-hidden="true" className="aw-step-caret" size={14} />
@@ -1229,6 +1314,12 @@ export function WorkPage() {
                     />
                   ) : null}
                   <KeyValue label="任务 ID" value={selectedTask.task_id} />
+                  {selectedTask.agent_invocation_count > 0 ? (
+                    <KeyValue
+                      label="智能体调用"
+                      value={`${selectedTask.agent_invocation_count} 次`}
+                    />
+                  ) : null}
                   <KeyValue label="创建时间" value={formatDateTime(selectedTask.created_at)} />
                   <KeyValue label="更新时间" value={formatDateTime(selectedTask.updated_at)} />
                 </div>
@@ -1274,8 +1365,9 @@ export function WorkPage() {
             </details>
 
             </div>
-            <div className="aw-work-output">
-              <ArtifactRail
+            {hasOutputRail ? (
+              <div className="aw-work-output">
+                <ArtifactRail
                 artifacts={artifacts}
                 // Every entry opens in the reading column, whatever its type.
                 // The gate that used to be here sent "not previewable" to a
@@ -1290,8 +1382,9 @@ export function WorkPage() {
                   }
                 }}
                 workspaceWrites={workspaceWrites}
-              />
-            </div>
+                />
+              </div>
+            ) : null}
             </div>
           </>
         ) : null}
@@ -1364,53 +1457,11 @@ function TaskStepStream({
       ariaLabel="执行过程"
       eventTitle={eventTitle}
       isKnownEvent={(event) => isKnownEventType(event.event_type)}
-      legend={<TimelineLegend />}
-      meta={{ title: "任务生命周期", events: taskEvents }}
+      meta={{ title: "运行记录", events: taskEvents }}
       onOpenArtifact={onOpenArtifact}
       running={!isSettledStatus(status)}
       stages={stages}
     />
-  );
-}
-
-/**
- * What the dots down the left of the timeline mean.
- *
- * Every row already prints its own state at the right end, so this is not the
- * only place the answer exists -- it is the place that answers it for the
- * whole column at once. "Did this run do the reviewing step" is a question
- * about one dot among six, and reading six notes to answer it is the work the
- * key removes.
- *
- * 「未执行」是它存在的理由。终态任务上没跑过的阶段与一个还排在后面的阶段此前
- * 是同一颗空心点，读者因此会等一件不会发生的事；给它一条虚线之后，界面上多了
- * 一个没有解释的符号，而这就是那句解释。
- *
- * The swatches carry the same `is-*` classes the rows do and the same
- * `.aw-stream-dot` element, so the key cannot drift from what it keys: one
- * change to a state's colour moves both.
- */
-function TimelineLegend() {
-  return (
-    <p className="aw-stream-legend">
-      {/* 屏幕阅读器上这四个词是四个没有主语的短语——每一行本来就念得出自己的
-          状态，所以这条图例对听的人是纯冗余。补一句只有它听得见的引子，让这
-          冗余至少是有标签的。 */}
-      <span className="aw-sr-only">这一列点的含义：</span>
-      {(
-        [
-          ["done", "已完成"],
-          ["active", "进行中 / 等待"],
-          ["pending", "等待中"],
-          ["skipped", "未执行"],
-        ] as const
-      ).map(([state, label]) => (
-        <span className={`aw-stream-state is-${state}`} key={state}>
-          <span aria-hidden="true" className="aw-stream-dot" />
-          {label}
-        </span>
-      ))}
-    </p>
   );
 }
 
@@ -1488,10 +1539,10 @@ function ArtifactRail({
   workspaceWrites: WorkspaceWriteGroup[];
 }) {
   return (
-    <aside className="aw-artifacts" aria-label="附件">
+    <aside className="aw-artifacts" aria-label="产出文件">
       <div className="aw-artifacts-head">
         <Paperclip aria-hidden="true" size={14} />
-        <span>附件</span>
+        <span>产出文件</span>
         {artifacts.length === 0 ? null : <em>{artifacts.length}</em>}
       </div>
       {artifacts.length === 0 ? (
@@ -1501,7 +1552,7 @@ function ArtifactRail({
         <p className="aw-artifacts-empty">
           {workspaceWrites.length === 0
             ? "这个任务还没有产生文件。"
-            : "这个任务没有产生可以下载的产物。"}
+            : "这个任务没有产生可以下载的文件。"}
         </p>
       ) : (
         <ul>
@@ -1540,9 +1591,9 @@ function ArtifactRail({
           is strictly more than the silence it replaces. */}
       {workspaceWrites.length === 0 ? null : (
         <div className="aw-artifacts-workspace">
-          <h3>任务工作集里的文件</h3>
+          <h3>任务工作区里的文件</h3>
           <p className="aw-artifacts-note">
-            这些文件在任务自己的工作集里，不是可下载的产物，控制台打不开它们。
+            这些文件在任务自己的工作区里，不是可下载的产物，控制台打不开它们。
           </p>
           {workspaceWrites.map((group) => (
             <div key={group.graphNodeId ?? "任务"}>
@@ -1613,7 +1664,16 @@ function TaskResult({
   const readable = kind === "text";
   const isDocument = kind === "docx";
   const preview = useQuery({
-    queryKey: ["work", "artifact-text", artifact?.artifact_id ?? ""],
+    // 带上身份。这一族键此前是这个页面上唯一不带身份的，而它们都是
+    // `staleTime: Infinity`——QueryClient 是应用级的，切身份不会重建它，
+    // 于是同一个 principal 收窄 scope 之后，先前读过的产物内容会直接从
+    // 缓存里渲染出来，不再经过一次授权。
+    queryKey: [
+      "work",
+      "artifact-text",
+      ...workIdentityQueryKey(identity),
+      artifact?.artifact_id ?? "",
+    ],
     enabled: readable,
     staleTime: Number.POSITIVE_INFINITY,
     queryFn: () => {
@@ -1626,7 +1686,12 @@ function TaskResult({
   // fail because a *stored file* will not parse. Sharing a key would also share
   // a cache entry between two unrelated payloads.
   const document = useQuery({
-    queryKey: ["work", "artifact-document", artifact?.artifact_id ?? ""],
+    queryKey: [
+      "work",
+      "artifact-document",
+      ...workIdentityQueryKey(identity),
+      artifact?.artifact_id ?? "",
+    ],
     enabled: isDocument,
     staleTime: Number.POSITIVE_INFINITY,
     queryFn: () => {
@@ -1660,7 +1725,12 @@ function TaskResult({
   // deployment has no converter", which is a fact about the server rather than
   // about the document -- and the reason it resolves rather than throws.
   const layout = useQuery({
-    queryKey: ["work", "artifact-layout", artifact?.artifact_id ?? ""],
+    queryKey: [
+      "work",
+      "artifact-layout",
+      ...workIdentityQueryKey(identity),
+      artifact?.artifact_id ?? "",
+    ],
     enabled: wantsLayout,
     staleTime: Number.POSITIVE_INFINITY,
     queryFn: () => {
@@ -2015,7 +2085,12 @@ function TaskResult({
           kind={kind}
           load={() => getArtifactBlob(identity, artifact.artifact_id)}
           name={artifact.filename ?? artifact.kind}
-          queryKey={["work", "artifact-blob", artifact.artifact_id]}
+          queryKey={[
+            "work",
+            "artifact-blob",
+            ...workIdentityQueryKey(identity),
+            artifact.artifact_id,
+          ]}
           sizeBytes={artifact.size_bytes}
         />
       ) : kind === "html" ? (
@@ -2025,12 +2100,18 @@ function TaskResult({
         <HtmlPreview
           load={() => getArtifactText(identity, artifact.artifact_id)}
           name={artifact.filename ?? artifact.kind}
-          queryKey={["work", "artifact-html", artifact.artifact_id]}
+          queryKey={[
+            "work",
+            "artifact-html",
+            ...workIdentityQueryKey(identity),
+            artifact.artifact_id,
+          ]}
           sizeBytes={artifact.size_bytes}
         />
       ) : !readable ? (
         <p className="aw-page-note">
-          {artifact.media_type} · {artifact.size_bytes} 字节，这个类型只能下载查看。
+          {mediaLabel(artifact.media_type)} · {formatBytes(artifact.size_bytes)}
+          ，这个类型只能下载后查看。
         </p>
       ) : preview.isPending ? (
         <LoadingLine label="正在读取产出内容" />
@@ -2283,7 +2364,7 @@ function ApprovalSection({
         <ErrorNotice message={errorMessage(error, "读取审批记录失败")} />
       ) : null}
       {approval !== undefined && !matchesTask ? (
-        <ErrorNotice message="审批记录与当前任务不匹配，无法提交决定。" />
+        <ErrorNotice message="这条确认对不上当前任务，先刷新页面。" />
       ) : null}
       {decidable ? (
         <div className="aw-approve-actions">
@@ -2323,7 +2404,7 @@ function ApprovalSection({
 function decidedByLabel(decidedBy: TaskIntent["graph_decided_by"]): string {
   if (decidedBy === "user") return "用户指定";
   if (decidedBy === "model") return "模型判定";
-  return "部署默认";
+  return "系统默认";
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -2406,10 +2487,10 @@ function approvalConflictMessage(
   task: TaskView | undefined,
 ): string {
   if (task !== undefined && task.status !== "waiting_approval") {
-    return `任务服务端状态已是“${formatStatus(task.status)}”，审批不再可决定；已刷新权威记录。`;
+    return `任务已经是“${formatStatus(task.status)}”了，这个确认不用做了。`;
   }
   if (approval !== undefined && approval.status !== "pending") {
-    return `审批服务端状态已是“${formatStatus(approval.status)}”；已刷新权威记录。`;
+    return `这条确认已经是“${formatStatus(approval.status)}”了，不用再做一次。`;
   }
-  return "服务端拒绝当前版本的决定；已刷新权威记录，请重新确认。";
+  return "这个决定没有生效：期间有人改过它。已经取回最新状态，请再确认一次。";
 }

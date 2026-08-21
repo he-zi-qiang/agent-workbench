@@ -542,6 +542,44 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 （E2E 需要真后端起栈；离线评测需要 embedding extra，按分层约定 CI 不装），
 后两项是单纯的缺口。
 
+### E-06 前端样式表按领域拆分，做不成一次纯搬运
+
+**证据**：[web/src/styles/app.css](../web/src/styles/app.css)（5766 行）与
+[web/src/styles/minimal-theme.css](../web/src/styles/minimal-theme.css)（2233 行），
+后者在 [web/src/main.tsx](../web/src/main.tsx) 里后置加载、覆盖前者。
+
+**想做的事**：拆成 `shell.css` / `workspace-sidebar.css` / `components.css` /
+`features/*.css`，让一次改动落在可预测的文件里。
+
+**为什么做不成**：这两份样式表把层叠决定编码在**跨领域的源码顺序**里，而不是
+特指度里。按领域重排文件就会翻掉这些决定。实测过一次完整的拆分，用「四个路由 ×
+两套皮肤 × 两个视口，每个元素记 50 个计算属性加包围盒」的指纹逐条比对：
+
+| 布局 | 变了的元素 |
+| --- | --- |
+| 按领域拆（tokens → base → shell → sidebar → components → features/*） | 74 |
+| 先按层再按领域（`base/` + `theme/`） | 56 |
+| 再把 `theme/workspace-sidebar` 挪到该层最后 | 12 |
+| 再把两条规则改成靠特指度取胜 | 5 |
+
+四条根因，每一条都是同一个形状——一条本该赢的规则原本只靠「排在文件后面」取胜：
+
+1. `minimal-theme.css` 的 `.aw-chat-page, .aw-code-page, .aw-work-page, …
+   { grid-template-columns: minmax(0, 1fr) }` 是 workspace-first 改版追加在文件
+   末尾的整页重置。它跨四个 feature，拆分后排到了 `.aw-chat-page
+   { grid-template-columns: 236px … }` 前面——移动端因此退回桌面两列。
+2. `app.css` 的 `@media (max-width: 760px) { .aw-chat-page, .aw-work-page
+   { display: flex } }` 同理，被各页面自己的 `display: grid` 压过。
+3. `@media (max-width: 760px) { .aw-button, .aw-icon-button { min-height: 44px } }`
+   ——触屏最小可点高度，被 `.aw-chat-send { min-height: 38px }` 压过，也就是说
+   拆分会**破坏一条无障碍约束**。
+4. 把 2、3 改成 `.aw-app-content :is(…)` / `.aw-app-shell :is(…)` 能解决它们，
+   但 0-2-0 的 base 规则会跨过层边界压住 0-1-0 的 theme 规则，翻出新的两处。
+
+**结论**：这是一件要逐条决定「谁应该赢，以及凭什么赢」的工作，不是搬文件。它需要
+先把顺序依赖改写成特指度依赖，每改一条对着上面那把尺子验一次。拆分本身可以留到
+那之后，也可能到那时已经不必要了。**不排期**——排期会让它看起来像一次机械工作。
+
 ### E-04 首个 evidence manifest 尚未生成
 
 **这一条要更正一个常见误解：工具已经存在。**

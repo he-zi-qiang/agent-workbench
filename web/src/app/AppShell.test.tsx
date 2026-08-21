@@ -12,10 +12,37 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AppShell } from "./AppShell";
 import { IdentityProvider } from "./IdentityContext";
 import { THEME_STORAGE_KEY, ThemeProvider } from "./ThemeContext";
+import {
+  useWorkspaceSidebar,
+  WorkspaceSidebarPortal,
+} from "./WorkspaceSidebar";
 
 beforeEach(() => {
   localStorage.removeItem("aw.identity.v4");
+  localStorage.removeItem("agent-workbench:workspace-sidebar-collapsed-v2");
 });
+
+function ChatContextProbe() {
+  const sidebar = useWorkspaceSidebar();
+  return (
+    <>
+      <button onClick={sidebar.open} type="button">打开对话列表</button>
+      <WorkspaceSidebarPortal>
+        <aside aria-label="最近对话">
+          <button
+            className="aw-chat-sessions-close"
+            onClick={sidebar.close}
+            type="button"
+          >
+            关闭对话列表
+          </button>
+          <a href="#session-a">会话 A</a>
+        </aside>
+      </WorkspaceSidebarPortal>
+      <p>Chat page</p>
+    </>
+  );
+}
 
 function PathProbe({ chatLink = false }: { chatLink?: boolean }) {
   const location = useLocation();
@@ -56,7 +83,12 @@ describe("AppShell mobile navigation", () => {
       </ThemeProvider>,
     );
 
-    await user.click(screen.getByRole("button", { name: "更多" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "移动端导航" })).getByRole(
+        "button",
+        { name: "更多" },
+      ),
+    );
     const dialog = screen.getByRole("dialog", { name: "更多页面" });
     const more = within(dialog);
     expect(dialog).toBeInTheDocument();
@@ -78,6 +110,52 @@ describe("AppShell mobile navigation", () => {
     await user.click(more.getByRole("link", { name: "效果评测" }));
     expect(screen.getByText("Evaluation page")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "更多页面" })).not.toBeInTheDocument();
+  });
+
+  it("keeps focus inside More and restores it on close", async () => {
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider>
+        <IdentityProvider>
+          <MemoryRouter initialEntries={["/chat"]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route element={<p>Chat page</p>} path="/chat" />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </IdentityProvider>
+      </ThemeProvider>,
+    );
+
+    const railElement = screen.getByRole("navigation", { name: "主导航" });
+    const rail = within(railElement);
+    const trigger = rail.getByRole("button", { name: "更多" });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "更多页面" });
+    const more = within(dialog);
+    expect(more.getByRole("link", { name: "效果评测" })).toHaveFocus();
+
+    more.getByRole("button", { name: "本地环境与身份" }).focus();
+    await user.tab();
+    expect(more.getByRole("button", { name: "关闭更多页面" })).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+
+    await user.click(trigger);
+    await user.click(
+      within(screen.getByRole("dialog", { name: "更多页面" })).getByRole(
+        "button",
+        { name: "本地环境与身份" },
+      ),
+    );
+    const environment = within(
+      screen.getByRole("dialog", { name: "本地身份模拟器" }),
+    );
+    expect(environment.getByLabelText("Tenant")).toHaveFocus();
+    await user.click(environment.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 });
 
@@ -122,23 +200,24 @@ describe("AppShell rail", () => {
     expect(rail.getByRole("link", { name: "对话" })).not.toHaveAttribute(
       "aria-current",
     );
-    expect(rail.getByRole("link", { name: "Code" })).not.toHaveAttribute(
+    expect(rail.getByRole("link", { name: "编码" })).not.toHaveAttribute(
       "aria-current",
     );
   });
 
-  it("groups the three primary flows above the rail's dividing line", () => {
+  it("将低频工具收进更多，保持主导航安静", async () => {
+    const user = userEvent.setup();
     mounted("/chat");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    const wrapperOf = (name: string) =>
-      rail.getByRole("link", { name }).parentElement;
+    expect(rail.getByRole("link", { name: "知识库" })).toBeInTheDocument();
+    expect(rail.queryByRole("link", { name: "效果评测" })).not.toBeInTheDocument();
+    expect(rail.queryByRole("link", { name: "运行状态" })).not.toBeInTheDocument();
 
-    expect(wrapperOf("对话")).not.toHaveClass("aw-nav-divider");
-    expect(wrapperOf("任务")).not.toHaveClass("aw-nav-divider");
-    expect(wrapperOf("Code")).not.toHaveClass("aw-nav-divider");
-    // The first entry that is not a primary flow is where the group ends.
-    expect(wrapperOf("知识库")).toHaveClass("aw-nav-divider");
+    await user.click(rail.getByRole("button", { name: "更多" }));
+    const more = within(screen.getByRole("dialog", { name: "更多页面" }));
+    expect(more.getByRole("link", { name: "效果评测" })).toBeInTheDocument();
+    expect(more.getByRole("link", { name: "运行状态" })).toBeInTheDocument();
   });
 
   it("offers Chat, Task and Code as three top-level flows", () => {
@@ -149,13 +228,53 @@ describe("AppShell rail", () => {
     expect(rail.queryByRole("link", { name: "Work" })).not.toBeInTheDocument();
     expect(rail.getByRole("link", { name: "对话" })).toBeInTheDocument();
     expect(rail.getByRole("link", { name: "任务" })).toBeInTheDocument();
-    expect(rail.getByRole("link", { name: "Code" })).toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "编码" })).toBeInTheDocument();
+  });
+
+  it("nests the active feature's real work items in the one shell sidebar", async () => {
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider>
+        <IdentityProvider>
+          <MemoryRouter initialEntries={["/chat"]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route element={<ChatContextProbe />} path="/chat" />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </IdentityProvider>
+      </ThemeProvider>,
+    );
+
+    const railElement = screen.getByRole("navigation", { name: "主导航" });
+    const rail = within(railElement);
+    expect(rail.getByRole("complementary", { name: "最近对话" })).toContainElement(
+      rail.getByRole("link", { name: "会话 A" }),
+    );
+
+    const trigger = screen.getByRole("button", { name: "打开对话列表" });
+    await user.click(trigger);
+    expect(screen.getByRole("dialog", { name: "主导航" })).toBe(railElement);
+    expect(screen.getByText("Chat page").closest(".aw-app-content")).toHaveAttribute(
+      "inert",
+    );
+    expect(document.querySelector(".aw-mobile-nav")).toHaveAttribute("inert");
+    await waitFor(() =>
+      expect(rail.getByRole("button", { name: "关闭对话列表" })).toHaveFocus(),
+    );
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.getByRole("navigation", { name: "主导航" })).toBe(railElement);
+    expect(screen.getByText("Chat page").closest(".aw-app-content")).not.toHaveAttribute(
+      "inert",
+    );
   });
 
   it.each([
     ["/chat/session-42", "任务", "对话"],
-    ["/work/task-42", "Code", "任务"],
-    ["/code/session-42", "对话", "Code"],
+    ["/work/task-42", "编码", "任务"],
+    ["/code/session-42", "对话", "编码"],
   ])("returns from %s to the last open item", async (start, away, back) => {
     const user = userEvent.setup();
     mounted(start);
@@ -173,7 +292,7 @@ describe("AppShell rail", () => {
 
   it.each([
     ["/workflow", "任务", "/work"],
-    ["/code-review", "Code", "/code"],
+    ["/code-review", "编码", "/code"],
   ])("does not treat the lookalike path %s as a flow", (start, label, root) => {
     mounted(start);
 
@@ -189,7 +308,7 @@ describe("AppShell rail", () => {
     mounted("/chat/session-a");
 
     const switchPrincipal = async (principal: string) => {
-      await user.click(screen.getByRole("button", { name: "环境" }));
+      await user.click(screen.getByRole("button", { name: /环境与身份/ }));
       const dialog = within(screen.getByRole("dialog", { name: "本地身份模拟器" }));
       const principalField = dialog.getByLabelText("Principal");
       await user.clear(principalField);
@@ -227,10 +346,16 @@ describe("AppShell rail", () => {
     mounted("/chat/session-a");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    await user.click(rail.getByRole("link", { name: "运行状态" }));
+    await user.click(rail.getByRole("button", { name: "更多" }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: "更多页面" })).getByRole(
+        "link",
+        { name: "运行状态" },
+      ),
+    );
     expect(screen.getByText("System page")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "环境" }));
+    await user.click(screen.getByRole("button", { name: /环境与身份/ }));
     const dialog = within(screen.getByRole("dialog", { name: "本地身份模拟器" }));
     const principalField = dialog.getByLabelText("Principal");
     await user.clear(principalField);
@@ -260,7 +385,7 @@ describe("AppShell rail", () => {
       "/work/task-a",
     );
 
-    await user.click(screen.getByRole("button", { name: "环境" }));
+    await user.click(screen.getByRole("button", { name: /环境与身份/ }));
     const dialog = within(screen.getByRole("dialog", { name: "本地身份模拟器" }));
     const principalField = dialog.getByLabelText("Principal");
     await user.clear(principalField);
@@ -331,7 +456,10 @@ describe("AppShell quick switcher", () => {
     const user = userEvent.setup();
     mounted();
 
-    await user.click(screen.getByRole("button", { name: "更多" }));
+    const moreTrigger = within(
+      screen.getByRole("navigation", { name: "移动端导航" }),
+    ).getByRole("button", { name: "更多" });
+    await user.click(moreTrigger);
     const more = within(screen.getByRole("dialog", { name: "更多页面" }));
     expect(more.getByText("了解屏幕控制的安全边界")).toBeInTheDocument();
     expect(more.getByText("检查 API、数据库与本地身份")).toBeInTheDocument();
@@ -339,13 +467,16 @@ describe("AppShell quick switcher", () => {
     await user.click(more.getByRole("button", { name: /快速跳转/ }));
     expect(screen.queryByRole("dialog", { name: "更多页面" })).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "快速跳转" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(moreTrigger).toHaveFocus());
   });
 
   it("closes with Escape without changing the page", async () => {
     const user = userEvent.setup();
     mounted("/code");
 
-    await user.click(screen.getByRole("button", { name: "快速跳转" }));
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     expect(screen.getByRole("dialog", { name: "快速跳转" })).toBeInTheDocument();
     await user.keyboard("{Escape}");
 
@@ -357,7 +488,7 @@ describe("AppShell quick switcher", () => {
     const user = userEvent.setup();
     mounted();
 
-    await user.click(screen.getByRole("button", { name: "环境" }));
+    await user.click(screen.getByRole("button", { name: /环境与身份/ }));
     expect(
       screen.getByRole("dialog", { name: "本地身份模拟器" }),
     ).toBeInTheDocument();
@@ -389,11 +520,20 @@ describe("AppShell theme control", () => {
     document.documentElement.removeAttribute("data-theme");
   });
 
-  it("starts on 跟随系统 and writes no data-theme for it", () => {
+  async function openThemeMenu(user: ReturnType<typeof userEvent.setup>) {
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    await user.click(rail.getByRole("button", { name: "更多" }));
+    return within(screen.getByRole("dialog", { name: "更多页面" }));
+  }
+
+  it("starts on 跟随系统 and writes no data-theme for it", async () => {
+    const user = userEvent.setup();
     mounted();
 
-    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    expect(rail.getByRole("button", { name: "跟随系统" })).toBeInTheDocument();
+    const more = await openThemeMenu(user);
+    expect(
+      more.getByRole("button", { name: "主题：跟随系统" }),
+    ).toBeInTheDocument();
     // 跟随系统这一档的做法是**不写属性**，把决定权留给 CSS 的
     // `color-scheme: light dark`。写一个 data-theme="system" 也能让按钮显示对，
     // 但 tokens.css 那两条覆盖规则选的是 light/dark，属性会变成一个没人读的字符串
@@ -405,16 +545,16 @@ describe("AppShell theme control", () => {
     const user = userEvent.setup();
     mounted();
 
-    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    await user.click(rail.getByRole("button", { name: "跟随系统" }));
+    const more = await openThemeMenu(user);
+    await user.click(more.getByRole("button", { name: "主题：跟随系统" }));
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
 
-    await user.click(rail.getByRole("button", { name: "浅色" }));
+    await user.click(more.getByRole("button", { name: "主题：浅色" }));
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
 
     // 回到 system 时属性要被**移除**，不是留一个旧值。留着的话，用户选回
     // 「跟随系统」之后系统再切深浅，界面不会跟着动。
-    await user.click(rail.getByRole("button", { name: "深色" }));
+    await user.click(more.getByRole("button", { name: "主题：深色" }));
     expect(document.documentElement).not.toHaveAttribute("data-theme");
   });
 
@@ -422,34 +562,32 @@ describe("AppShell theme control", () => {
     const user = userEvent.setup();
     const first = mounted();
 
+    const firstMore = await openThemeMenu(user);
     await user.click(
-      within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", {
-        name: "跟随系统",
-      }),
+      firstMore.getByRole("button", { name: "主题：跟随系统" }),
     );
     first.unmount();
     document.documentElement.removeAttribute("data-theme");
 
     mounted();
+    const secondMore = await openThemeMenu(user);
     expect(
-      within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", {
-        name: "浅色",
-      }),
+      secondMore.getByRole("button", { name: "主题：浅色" }),
     ).toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
   });
 
-  it("ignores a stored value that is no longer one of the three", () => {
+  it("ignores a stored value that is no longer one of the three", async () => {
+    const user = userEvent.setup();
     // 手写进 localStorage 的旧值/脏值。落回第一档，而不是把它当成属性写到
     // <html> 上——后者会得到一个 CSS 里没有对应规则的主题，界面按浅色渲染而
     // 按钮显示着那个不存在的名字。
     localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify("solarized"));
     mounted();
 
+    const more = await openThemeMenu(user);
     expect(
-      within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", {
-        name: "跟随系统",
-      }),
+      more.getByRole("button", { name: "主题：跟随系统" }),
     ).toBeInTheDocument();
     expect(document.documentElement).not.toHaveAttribute("data-theme");
   });
@@ -458,7 +596,12 @@ describe("AppShell theme control", () => {
     const user = userEvent.setup();
     mounted();
 
-    await user.click(screen.getByRole("button", { name: "更多" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "移动端导航" })).getByRole(
+        "button",
+        { name: "更多" },
+      ),
+    );
     const more = within(screen.getByRole("dialog", { name: "更多页面" }));
     await user.click(more.getByRole("button", { name: "主题：跟随系统" }));
 

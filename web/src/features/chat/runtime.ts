@@ -7,6 +7,7 @@ import {
 } from "../../api/client";
 import type {
   ChatAnswerMode,
+  ChatSessionView,
   LocalChatSession,
   PrincipalIdentity,
 } from "../../api/types";
@@ -89,6 +90,22 @@ export class ChatRuntime {
     this.persistSessions();
   }
 
+  /**
+   * Apply a title the server has already accepted to this device's richer
+   * projection (source choice, stream cursor and cached history stay local).
+   */
+  renameSession(sessionId: string, title: string): void {
+    const trimmed = title.trim();
+    if (trimmed === "") return;
+    this.dispatch({ type: "sessionRenamed", sessionId, title: trimmed });
+    this.persistSessions();
+  }
+
+  reconcileServerSessions(sessions: ChatSessionView[]): void {
+    this.dispatch({ type: "sessionsReconciled", sessions });
+    this.persistSessions();
+  }
+
   retainSessionStream(sessionId: string): () => void {
     const lease = this.connectionLease(sessionId);
     lease.retainedByViews += 1;
@@ -112,28 +129,27 @@ export class ChatRuntime {
   /**
    * Forget one conversation here, and on the server.
    *
-   * Three things in a deliberate order. The stream is aborted first, because a
-   * frame that lands after the reducer has dropped the session would be
-   * applied to a session that no longer exists. The server is asked next, and
-   * its refusal is allowed to stop the whole thing -- a local list that forgot
-   * a conversation the server still holds is worse than one that failed to
-   * forget, because the second says so.
+   * The server is asked first and its refusal stops the whole thing. Keeping
+   * the stream alive until that succeeds matters: otherwise a transient
+   * DELETE failure would leave a visible session with a dead lease and no
+   * effect capable of retaining it again. Once deletion is accepted we abort
+   * the stream before dropping reducer state, so no later frame can recreate
+   * activity for a session the UI has forgotten.
    *
    * The `404` is the exception. A session recorded in this browser but never
    * created on the server -- opened, never asked -- has nothing to delete, and
    * insisting on the server's agreement would make that row undeletable.
    */
   async removeSession(sessionId: string): Promise<void> {
-    const lease = this.connections.get(sessionId);
-    lease?.controller?.abort();
-    this.connections.delete(sessionId);
-
     try {
       await deleteChatSession(this.identity, sessionId);
     } catch (error: unknown) {
       if (!(error instanceof ApiError) || error.status !== 404) throw error;
     }
 
+    const lease = this.connections.get(sessionId);
+    lease?.controller?.abort();
+    this.connections.delete(sessionId);
     forgetChatCursor(this.identity, sessionId);
     this.dispatch({ type: "sessionRemoved", sessionId });
     this.persistSessions();
@@ -351,7 +367,10 @@ export function chatRuntimeFor(identity: PrincipalIdentity): ChatRuntime {
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
-    if (error.status === 404) return "此部署未提供 Chat，或该会话不属于当前本地身份。";
+    // 两种可能，读者能分辨的那一种放前面。
+    if (error.status === 404) {
+      return "打不开这个对话：可能它不属于你，也可能这套部署没开对话功能。";
+    }
     return `${error.message}（HTTP ${error.status}）`;
   }
   return error instanceof Error ? error.message : "请求失败";

@@ -123,7 +123,10 @@ export function QuickSwitcher({ currentPath, onClose }: QuickSwitcherProps) {
         </div>
         <div className="aw-command-results" id="aw-command-results" role="listbox">
           {destinations.length === 0 ? (
-            <div className="aw-command-empty">
+            // Announced: the reader is typing into a box whose whole output is
+            // this list, and "the list is now empty" was the one result that
+            // arrived in silence.
+            <div className="aw-command-empty" role="status">
               <Search aria-hidden="true" size={20} />
               <strong>没有找到这个页面</strong>
               <span>试试“任务”“知识库”或“状态”。</span>
@@ -142,6 +145,13 @@ export function QuickSwitcher({ currentPath, onClose }: QuickSwitcherProps) {
                   onFocus={() => setActiveIndex(index)}
                   onMouseEnter={() => setActiveIndex(index)}
                   role="option"
+                  // Out of the tab order. The combobox above owns the
+                  // selection through `aria-activedescendant`, so a focusable
+                  // option is announced twice -- once as the focused button,
+                  // once as the active descendant -- and Tab duplicates what
+                  // the arrow keys already do. Verified before this: the cycle
+                  // was input → 关闭 → all seven results → input.
+                  tabIndex={-1}
                   type="button"
                 >
                   <span className="aw-command-icon">

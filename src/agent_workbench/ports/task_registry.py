@@ -169,6 +169,11 @@ class TaskRun(DomainModel):
     # that carried only an input reference. Readers show the id in that case
     # rather than inventing a label.
     objective_preview: ObjectivePreview | None = None
+    #: Which project this Task was submitted for, or none (ADR-071). A label,
+    #: not an authorization fact: filing a Task under a project changes nothing
+    #: about who may read it, and ``None`` is the normal state -- no migration
+    #: filed anything anywhere.
+    project_id: Identifier | None = None
     run_semantics_snapshot: JsonObject
     run_semantics_revision: ShortText
     submitted_policy_revision: ShortText

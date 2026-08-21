@@ -26,6 +26,58 @@ export interface CreateSessionResponse {
   title: string | null;
 }
 
+export interface CreateChatSessionResponse {
+  session_id: Identifier;
+}
+
+/**
+ * 一件事，有名字，属于一个人（ADR-071）。
+ *
+ * 它是一层归属标注，不是容器：底下的对话、任务和知识库各自有自己的接口和自己的
+ * 生命周期，项目只记「它们是为同一件事做的」。所以这里没有任何权限字段——归属
+ * 不影响可见性。
+ */
+export interface ProjectView {
+  project_id: Identifier;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  /** 归档只是从侧栏收起来，深链照样打得开。`null` 表示没归档。 */
+  archived_at: string | null;
+}
+
+export interface ProjectListResponse {
+  projects: ProjectView[];
+}
+
+export type ProjectItemKind = "chat" | "code" | "task" | "knowledge_base";
+
+export interface ProjectItemView {
+  kind: ProjectItemKind;
+  item_id: Identifier;
+  /** 会话由第一句指令命名，没说过话的会话就没有名字。不拿 id 编一个。 */
+  title: string | null;
+  ordered_at: string;
+}
+
+export interface ProjectContentsResponse {
+  project_id: Identifier;
+  items: ProjectItemView[];
+}
+
+/** A server-owned Chat session visible to its tenant + principal owner. */
+export interface ChatSessionView {
+  session_id: Identifier;
+  title: string | null;
+  last_activity_at: string | null;
+  /** 这段对话是为哪个项目开的，`null` 表示不属于任何项目（ADR-071）。 */
+  project_id: Identifier | null;
+}
+
+export interface ChatSessionListResponse {
+  sessions: ChatSessionView[];
+}
+
 /**
  * One coding session, as the server lists it.
  *
@@ -476,6 +528,14 @@ export interface LocalChatSession {
   knowledgeBaseId: Identifier | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * 这段对话属于哪个项目，`null` 表示不属于任何项目（ADR-071）。
+   *
+   * 可选而不是必填：这个本地投影早于服务端的归属存在，一段还没和服务端对过账的
+   * 会话对这个问题**没有答案**——而 `null` 说的是「不属于任何项目」，是一个答案。
+   * 两者不该混为一谈。
+   */
+  projectId?: Identifier | null;
 }
 
 export interface LocalTaskMetadata {

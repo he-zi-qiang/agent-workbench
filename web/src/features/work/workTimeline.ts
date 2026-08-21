@@ -51,7 +51,7 @@ const KNOWN_EVENT_TITLES: Readonly<Record<string, string>> = {
   TaskSubmitted: "任务已提交",
   TaskClaimed: "任务已领取",
   TaskRetryScheduled: "任务已安排重试",
-  TaskDeadLettered: "任务进入死信状态",
+  TaskDeadLettered: "重试用尽，任务已放弃",
   TaskAwaitingApproval: "任务等待批准",
   TaskApprovalRequested: "审批记录已创建",
   TaskApprovalDecided: "审批决定已记录",

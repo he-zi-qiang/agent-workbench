@@ -15,15 +15,16 @@
  * `docs/frontend-design.md` names that contrast specifically. Borrowing the
  * badge would be a lie about where the work is.
  *
- * Rename-by-double-click and delete-behind-confirm are carried over unchanged.
- * The one edit is the rename field's `id`, which was the literal
- * `aw-code-rename`: harmless while the list was folded away and mounted once,
- * a duplicate id the moment two of them can be on screen.
+ * Rename is an explicit row action for pointer, keyboard and touch users. The
+ * field id includes the session id so the list can never render duplicate
+ * labels.
  */
 
-import { Trash2, X } from "lucide-react";
+import { Pencil, Trash2, X } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 import type { CodeSessionView } from "../../api/types";
 import {
+  ErrorNotice,
   formatDateTime,
   IconButton,
   NewSessionButton,
@@ -48,29 +49,97 @@ export function CodeSessionRail({
   onDelete: (sessionId: string) => void;
   onNew: () => void;
   onOpen: (sessionId: string) => void;
-  onRename: (sessionId: string, title: string) => void;
+  onRename: (sessionId: string, title: string) => Promise<void>;
   /** Which row is being renamed, if any. */
   renaming: string | null;
   /** The session on screen, or undefined on the start page. */
   sessionId: string | undefined;
   setRenaming: (sessionId: string | null) => void;
 }) {
+  const [renamePending, setRenamePending] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<{
+    sessionId: string;
+    message: string;
+  } | null>(null);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const renameActionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const renameAttempt = useRef(0);
+
+  const focusRenameAction = useCallback((target: string) => {
+    window.requestAnimationFrame(() => {
+      renameActionRefs.current.get(target)?.focus();
+    });
+  }, []);
+
+  // Whether the reader is still sitting in the field they submitted. A rename
+  // is separated from its outcome by a round trip: on the way out the caret is
+  // in a field about to unmount and has to be handed somewhere deliberate, but
+  // on the way back the reader may have opened another session or moved to the
+  // composer, and pulling them back to a row they left is worse than leaving
+  // focus alone. `onBlur` cannot answer this -- it declines to cancel while a
+  // rename is pending, exactly so the request keeps its row.
+  const renameFieldHasFocus = () =>
+    renameInputRef.current !== null &&
+    renameInputRef.current === document.activeElement;
+
+  const beginRename = (target: string) => {
+    renameAttempt.current += 1;
+    setRenamePending(null);
+    setRenameError(null);
+    setRenaming(target);
+  };
+
+  const cancelRename = (target: string, restoreFocus = true) => {
+    renameAttempt.current += 1;
+    setRenamePending(null);
+    setRenameError(null);
+    setRenaming(null);
+    if (restoreFocus) focusRenameAction(target);
+  };
+
+  const commitRename = async (held: CodeSessionView, title: string) => {
+    const trimmed = title.trim();
+    if (trimmed === "" || trimmed === (held.title ?? "").trim()) {
+      cancelRename(held.session_id);
+      return;
+    }
+
+    const attempt = renameAttempt.current + 1;
+    renameAttempt.current = attempt;
+    setRenamePending(held.session_id);
+    setRenameError(null);
+    try {
+      await onRename(held.session_id, trimmed);
+    } catch (cause: unknown) {
+      if (renameAttempt.current !== attempt) return;
+      const keepFocus = renameFieldHasFocus();
+      setRenamePending(null);
+      setRenameError({
+        sessionId: held.session_id,
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
+      if (keepFocus) {
+        window.requestAnimationFrame(() => {
+          renameInputRef.current?.focus();
+        });
+      }
+      return;
+    }
+
+    if (renameAttempt.current !== attempt) return;
+    const keepFocus = renameFieldHasFocus();
+    setRenamePending(null);
+    setRenaming(null);
+    if (keepFocus) focusRenameAction(held.session_id);
+  };
+
   return (
     <nav
       aria-label="最近的编码会话"
       className={`aw-code-sessions ${mobileOpen ? "is-mobile-open" : ""}`}
     >
       <header className="aw-code-sessions-header">
-        <strong>会话</strong>
-        {/* 三件事，每件都在别处问过一次。
-            「服务端列表」是与 Chat 那一列的对照：那边是这台浏览器记下来的，
-            这边不是，换台机器还在。
-            「名字来自第一句指令」解释了为什么这里没有"重命名"按钮也没有输入框
-            ——名字是 ADR-047 从第一句话取的，不是谁填的。
-            「双击改名」是这一行真正的理由：改名功能一直在（onDoubleClick 就在
-            下面），但界面上没有任何东西说过它存在。一个没人找得到的功能等于
-            没有。 */}
-        <small>服务端列表 · 名字来自第一句指令 · 双击改名</small>
+        <strong>最近编码</strong>
         <div className="aw-code-sessions-actions">
           <IconButton
             className="aw-code-sessions-close"
@@ -96,45 +165,71 @@ export function CodeSessionRail({
             {known.map((held) => (
               <li key={held.session_id}>
                 {renaming === held.session_id ? (
-                  <form
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      const field = new FormData(event.currentTarget).get("title");
-                      // A FormData entry is a string *or a File*, and
-                      // `String(File)` is "[object File]" -- a name nobody typed.
-                      onRename(
-                        held.session_id,
-                        typeof field === "string" ? field : "",
-                      );
-                    }}
-                  >
-                    <label
-                      className="aw-sr-only"
-                      htmlFor={`aw-code-rename-${held.session_id}`}
-                    >
-                      会话名字
-                    </label>
-                    <input
-                      autoFocus
-                      defaultValue={held.title ?? ""}
-                      id={`aw-code-rename-${held.session_id}`}
-                      name="title"
-                      // Esc gets out without saving. Clicking away already
-                      // did (onBlur below), but that is the mouse's exit and
-                      // this field is opened by a gesture -- a double-click --
-                      // that is easy to trigger by accident and impossible to
-                      // trigger from a keyboard. Leaving the only way out on
-                      // the pointer strands whoever arrived here without one.
-                      onKeyDown={(event) => {
-                        if (event.key !== "Escape") return;
+                  <>
+                    <form
+                      aria-busy={renamePending === held.session_id}
+                      className="aw-session-inline-rename"
+                      onSubmit={(event) => {
                         event.preventDefault();
-                        setRenaming(null);
+                        if (renamePending === held.session_id) return;
+                        const field = new FormData(event.currentTarget).get("title");
+                        // A FormData entry is a string *or a File*, and
+                        // `String(File)` is "[object File]" -- a name nobody typed.
+                        void commitRename(
+                          held,
+                          typeof field === "string" ? field : "",
+                        );
                       }}
-                      onBlur={() => {
-                        setRenaming(null);
-                      }}
-                    />
-                  </form>
+                    >
+                      <label
+                        className="aw-sr-only"
+                        htmlFor={`aw-code-rename-${held.session_id}`}
+                      >
+                        会话名字
+                      </label>
+                      <input
+                        aria-describedby={
+                          renameError?.sessionId === held.session_id
+                            ? `aw-code-rename-error-${held.session_id}`
+                            : undefined
+                        }
+                        aria-invalid={
+                          renameError?.sessionId === held.session_id || undefined
+                        }
+                        autoFocus
+                        defaultValue={held.title ?? ""}
+                        id={`aw-code-rename-${held.session_id}`}
+                        name="title"
+                        onBlur={() => {
+                          if (renamePending !== held.session_id) {
+                            cancelRename(held.session_id, false);
+                          }
+                        }}
+                        onChange={() => {
+                          if (renameError?.sessionId === held.session_id) {
+                            setRenameError(null);
+                          }
+                        }}
+                        onFocus={(event) => event.currentTarget.select()}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Escape") return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          cancelRename(held.session_id);
+                        }}
+                        readOnly={renamePending === held.session_id}
+                        ref={renameInputRef}
+                      />
+                    </form>
+                    {renameError?.sessionId === held.session_id ? (
+                      <div
+                        className="aw-session-rename-error"
+                        id={`aw-code-rename-error-${held.session_id}`}
+                      >
+                        <ErrorNotice message={renameError.message} />
+                      </div>
+                    ) : null}
+                  </>
                 ) : (
                   <div className="aw-code-recent-row">
                     <button
@@ -145,15 +240,11 @@ export function CodeSessionRail({
                       onClick={() => {
                         onOpen(held.session_id);
                       }}
-                      onDoubleClick={() => {
-                        setRenaming(held.session_id);
-                      }}
                       // Named after the first instruction, so most rows have
                       // one. The id is the fallback for a session opened and
-                      // never used. The rename hint rides along: the header
-                      // says it once for the column, this says it on the row
-                      // the pointer is actually over.
-                      title={`${held.title ?? held.session_id}\n双击改名`}
+                      // never used. Rename is a separate action so opening a
+                      // different session cannot be the first half of editing it.
+                      title={held.title ?? held.session_id}
                       type="button"
                     >
                       <span className="aw-code-recent-title">
@@ -179,17 +270,37 @@ export function CodeSessionRail({
                         only exists under a pointer is one a keyboard cannot
                         reach and a touch screen never shows. CSS dims it until
                         the row is hovered or the button focused. */}
-                    <button
-                      aria-label={`删除会话 ${held.title ?? held.session_id}`}
-                      className="aw-code-recent-delete"
-                      onClick={() => {
-                        onDelete(held.session_id);
-                      }}
-                      title="删除"
-                      type="button"
-                    >
-                      <Trash2 aria-hidden size={13} />
-                    </button>
+                    <span className="aw-session-row-actions aw-code-recent-actions">
+                      <button
+                        aria-label={`重命名会话 ${held.title ?? held.session_id}`}
+                        className="aw-code-recent-rename"
+                        onClick={() => {
+                          beginRename(held.session_id);
+                        }}
+                        ref={(node) => {
+                          if (node === null) {
+                            renameActionRefs.current.delete(held.session_id);
+                          } else {
+                            renameActionRefs.current.set(held.session_id, node);
+                          }
+                        }}
+                        title="重命名"
+                        type="button"
+                      >
+                        <Pencil aria-hidden size={12} />
+                      </button>
+                      <button
+                        aria-label={`删除会话 ${held.title ?? held.session_id}`}
+                        className="aw-code-recent-delete"
+                        onClick={() => {
+                          onDelete(held.session_id);
+                        }}
+                        title="删除"
+                        type="button"
+                      >
+                        <Trash2 aria-hidden size={13} />
+                      </button>
+                    </span>
                   </div>
                 )}
               </li>

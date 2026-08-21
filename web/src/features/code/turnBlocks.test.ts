@@ -385,8 +385,9 @@ describe("buildTurnBlocks", () => {
     // One action offered, not six protocol rows.
     expect(blocks[0]?.groups).toHaveLength(1);
     expect(blocks[0]?.groups[0]?.title).toBe("写入工作区");
-    // Every event is still reachable under 原始事件 -- curation is not
-    // authority, and the reader must be able to check the line.
+    // The builder retains every durable event for grouping and provenance, so
+    // the quiet diagnostic disclosure can show them without making protocol
+    // rows the default transcript.
     expect(blocks[0]?.events).toHaveLength(events.length);
     // And the thought is ON that action, not in a list of its own. This is the
     // whole of what `groupSteps` already knew and this module used to discard.

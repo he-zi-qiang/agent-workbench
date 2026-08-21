@@ -70,7 +70,6 @@ a {
  * 谁覆盖谁只由声明顺序和特异性决定——那是一条每加一个组件就要重算一次的规则。 */
 .aw-logo:focus-visible,
 .aw-button.is-primary:focus-visible,
-.aw-primary-button:focus-visible,
 .aw-chat-send:focus-visible {
   outline-color: var(--aw-accent-on);
   outline-offset: -4px;
@@ -108,11 +107,7 @@ a {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--aw-border);
-  border-left: 0;
-  border-radius: 0 var(--aw-radius-xl) var(--aw-radius-xl) 0;
   background: var(--aw-window);
-  box-shadow: var(--aw-shadow-md);
 }
 
 .aw-global-rail {
@@ -122,9 +117,6 @@ a {
   min-height: 0;
   padding: 12px 7px 10px;
   overflow-y: auto;
-  border-radius: var(--aw-radius-xl) 0 0 var(--aw-radius-xl);
-  background: var(--aw-rail);
-  color: var(--aw-rail-text);
 }
 
 .aw-logo {
@@ -156,62 +148,12 @@ a {
   border: 0;
   border-radius: 11px;
   background: transparent;
-  color: var(--aw-rail-text);
   font-size: 10px;
   transition: color var(--aw-transition), background var(--aw-transition);
 }
 
-.aw-global-link:hover {
-  background: var(--aw-rail-hover);
-  color: var(--aw-rail-text-active);
-}
-
-/* Hover and active used to share one rule, so "the page I am on" and "the
-   icon under my mouse" looked identical. Active gets the accent-tinted
-   chip; hover stays a neutral gray that disappears when the pointer moves. */
-.aw-global-link.active {
-  background: var(--aw-rail-active);
-  color: var(--aw-rail-text-active);
-}
-
-.aw-global-link.active svg {
-  color: var(--aw-rail-icon-active);
-}
-
-.aw-nav-divider {
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 1px solid var(--aw-rail-divider);
-}
-
 .aw-rail-spacer {
   flex: 1;
-}
-
-.aw-env-button,
-.aw-theme-button,
-.aw-quick-switcher-trigger {
-  padding: 0;
-}
-
-/* 主题按钮的图标在切档时转 180°，环境按钮的不转。
- *
- * 差别是有意的：环境按钮每次点开的是同一个对话框，图标没有"变成了别的"这件事
- * 可说；主题按钮点一下之后，它自己的图标就换了一个——不给这个交换一点时间，
- * 屏幕上同时发生的是「整页配色跳变」和「一个 18px 的图标瞬间变成另一个」，
- * 后者会被读成闪烁而不是响应。 */
-.aw-theme-button svg {
-  transition: transform var(--aw-duration-base) var(--aw-ease);
-}
-
-.aw-theme-button:hover svg {
-  transform: rotate(180deg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .aw-theme-button:hover svg {
-    transform: none;
-  }
 }
 
 .aw-mobile-nav {
@@ -851,43 +793,6 @@ textarea::placeholder {
   }
 }
 
-.aw-feature-layout {
-  display: grid;
-  grid-template-columns: 242px minmax(0, 1fr);
-  min-width: 0;
-  height: 100%;
-}
-
-.aw-context-sidebar {
-  min-width: 0;
-  overflow-y: auto;
-  border-right: 1px solid var(--aw-border);
-  background: var(--aw-sidebar);
-}
-
-.aw-context-header {
-  position: sticky;
-  z-index: 2;
-  top: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 64px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--aw-border);
-  background: color-mix(in srgb, var(--aw-sidebar) 94%, transparent);
-  backdrop-filter: blur(10px);
-}
-
-.aw-context-header h1,
-.aw-context-header h2 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.aw-context-kicker,
 .aw-eyebrow {
   color: var(--aw-text-muted);
   font-size: 10px;
@@ -895,114 +800,11 @@ textarea::placeholder {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-
-.aw-context-list,
-.aw-list {
-  display: grid;
-  gap: 3px;
-  margin: 0;
-  padding: 8px;
-  list-style: none;
-}
-
-.aw-context-item,
-.aw-list-row {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  gap: 3px;
-  padding: 10px;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--aw-text-soft);
-  text-align: left;
-}
-
-.aw-context-item:hover,
-.aw-context-item.is-active,
-.aw-list-row:hover {
-  border-color: var(--aw-border);
-  background: var(--aw-panel);
-}
-
-.aw-context-item.is-active {
-  box-shadow: var(--aw-shadow-sm);
-  color: var(--aw-text);
-}
-
-.aw-context-item strong,
-.aw-list-row strong {
-  overflow: hidden;
-  font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-context-item small,
-.aw-list-row small {
-  color: var(--aw-text-muted);
-}
-
-.aw-feature-main {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  background: var(--aw-window);
-}
-
-.aw-feature-header {
-  position: sticky;
-  z-index: 4;
-  top: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 64px;
-  padding: 10px 18px;
-  gap: 12px;
-  border-bottom: 1px solid var(--aw-border);
-  background: color-mix(in srgb, var(--aw-window) 91%, transparent);
-  backdrop-filter: blur(12px);
-}
-
-.aw-feature-title {
-  min-width: 0;
-}
-
-.aw-feature-title h1,
-.aw-feature-title h2 {
-  margin: 0;
-  overflow: hidden;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-feature-title p {
-  margin: 1px 0 0;
-  color: var(--aw-text-muted);
-  font-size: 11px;
-}
-
-.aw-feature-actions,
-.aw-page-actions,
-.aw-toolbar {
+.aw-page-actions{
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.aw-scroll-region {
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
 }
 
 .aw-key-value {
@@ -1070,8 +872,7 @@ textarea::placeholder {
   padding: 17px;
 }
 
-.aw-card-header,
-.aw-section-header {
+.aw-card-header{
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1079,9 +880,7 @@ textarea::placeholder {
 }
 
 .aw-card-header h2,
-.aw-card-header h3,
-.aw-section-header h2,
-.aw-section-header h3 {
+.aw-card-header h3{
   margin: 0;
   font-size: 15px;
   font-weight: 600;
@@ -1095,12 +894,6 @@ textarea::placeholder {
 .aw-section {
   margin-top: 16px;
   padding: 18px;
-}
-
-.aw-inline-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
 }
 
 .aw-segmented {
@@ -1200,47 +993,6 @@ pre {
   font-weight: 600;
 }
 
-.aw-upload-steps {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 14px 0;
-  gap: 6px;
-}
-
-.aw-upload-steps > * {
-  display: flex;
-  align-items: flex-start;
-  padding: 8px;
-  border-radius: 8px;
-  background: var(--aw-panel-soft);
-  color: var(--aw-text-muted);
-  font-size: 11px;
-}
-
-.aw-upload-steps strong,
-.aw-upload-steps span {
-  display: block;
-}
-
-.aw-upload-steps strong {
-  color: var(--aw-text);
-  font-weight: 550;
-}
-
-.aw-upload-steps li > div > span {
-  margin-top: 2px;
-}
-
-.aw-upload-steps .is-current {
-  background: var(--aw-accent-soft);
-  color: var(--aw-accent);
-}
-
-.aw-upload-steps .is-complete {
-  background: var(--aw-success-soft);
-  color: var(--aw-success);
-}
-
 .aw-step-marker {
   display: inline-grid;
   place-items: center;
@@ -1254,8 +1006,7 @@ pre {
 }
 
 .aw-result-card > header,
-.aw-result-card > header > div,
-.aw-section-header > div {
+.aw-result-card > header > div{
   display: flex;
   min-width: 0;
 }
@@ -1265,64 +1016,13 @@ pre {
   gap: 8px;
 }
 
-.aw-result-card > header > div,
-.aw-section-header > div {
+.aw-result-card > header > div{
   flex-direction: column;
 }
 
-.aw-result-card header span,
-.aw-section-header span {
+.aw-result-card header span{
   color: var(--aw-text-muted);
   font-size: 11px;
-}
-
-.aw-list-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  padding: 13px 14px;
-  border-color: var(--aw-border);
-  background: var(--aw-panel);
-}
-
-.aw-list-row-main {
-  display: grid;
-  min-width: 0;
-  gap: 8px;
-}
-
-.aw-inline-link {
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
-  gap: 6px;
-  color: var(--aw-accent);
-  font-size: 12px;
-}
-
-.aw-inline-link:hover {
-  text-decoration: underline;
-}
-
-.aw-definition-list {
-  margin: 14px 0;
-}
-
-.aw-definition-list > div {
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--aw-border);
-}
-
-.aw-definition-list dt {
-  color: var(--aw-text-muted);
-}
-
-.aw-definition-list dd {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
 }
 
 .aw-capability-list {
@@ -1389,41 +1089,6 @@ pre {
 .aw-health-dot.is-danger {
   background: var(--aw-danger);
   box-shadow: 0 0 0 3px var(--aw-danger-soft);
-}
-
-.aw-evaluation-matrix {
-  margin-top: 14px;
-  overflow: hidden;
-  border: 1px solid var(--aw-border);
-  border-radius: 9px;
-}
-
-.aw-evaluation-row {
-  display: grid;
-  grid-template-columns: minmax(140px, 0.8fr) repeat(2, minmax(0, 1.4fr));
-  border-bottom: 1px solid var(--aw-border);
-}
-
-.aw-evaluation-row:last-child {
-  border-bottom: 0;
-}
-
-.aw-evaluation-row > * {
-  min-width: 0;
-  padding: 10px 12px;
-  border-right: 1px solid var(--aw-border);
-  overflow-wrap: anywhere;
-}
-
-.aw-evaluation-row > :last-child {
-  border-right: 0;
-}
-
-.aw-evaluation-row.is-heading {
-  background: var(--aw-panel-soft);
-  color: var(--aw-text-muted);
-  font-size: 11px;
-  font-weight: 600;
 }
 
 /* One scoreboard per gold set. Separated rather than stacked flush, because
@@ -1733,17 +1398,6 @@ pre {
   width: min(1180px, 100%);
 }
 
-.aw-knowledge-layout {
-  display: grid;
-  grid-template-columns: 270px minmax(0, 1fr);
-  min-height: 580px;
-  overflow: hidden;
-  border: 1px solid var(--aw-border);
-  border-radius: var(--aw-radius-lg);
-  background: var(--aw-panel);
-  box-shadow: var(--aw-shadow-sm);
-}
-
 .aw-knowledge-list {
   padding: 8px;
   border-right: 1px solid var(--aw-border);
@@ -1832,34 +1486,6 @@ pre {
 .aw-knowledge-detail-header p {
   margin: 3px 0 0;
   color: var(--aw-text-muted);
-}
-
-.aw-knowledge-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 18px 0 2px;
-  overflow: hidden;
-  border: 1px solid var(--aw-border);
-  border-radius: 10px;
-  background: var(--aw-panel-soft);
-}
-
-.aw-knowledge-summary > span {
-  padding: 10px 12px;
-  border-right: 1px solid var(--aw-border);
-  color: var(--aw-text-muted);
-  font-size: 10px;
-}
-
-.aw-knowledge-summary > span:last-child {
-  border-right: 0;
-}
-
-.aw-knowledge-summary strong {
-  display: block;
-  color: var(--aw-text);
-  font-size: 14px;
-  font-weight: 600;
 }
 
 .aw-knowledge-upload,
@@ -1974,9 +1600,11 @@ pre {
 }
 
 .aw-knowledge-debug > summary,
-.aw-work-advanced > summary,
-.aw-engineering-details > summary {
+.aw-work-advanced > summary{
   display: flex;
+  /* 24px 是 WCAG 2.2 AA 的目标地板，而这个展开控件实测只有 18px 高——
+     字号小不等于可点区域也要小。 */
+  min-height: 24px;
   align-items: center;
   gap: 6px;
   color: var(--aw-text-muted);
@@ -2010,32 +1638,7 @@ pre {
   font-size: 10px;
 }
 
-.aw-approval-objective {
-  margin: 10px 0;
-  padding: 10px 12px;
-  border-left: 3px solid var(--aw-warning);
-  border-radius: 0 8px 8px 0;
-  background: var(--aw-warning-soft);
-  color: var(--aw-text);
-}
-
-.aw-approval-summary {
-  display: flex;
-  align-items: center;
-  margin: 10px 0;
-  gap: 9px;
-  color: var(--aw-text-muted);
-  font-size: 11px;
-}
-
-.aw-engineering-details {
-  margin-top: 12px;
-}
-
 @media (max-width: 900px) {
-  .aw-knowledge-layout {
-    grid-template-columns: 1fr;
-  }
 
   .aw-knowledge-list {
     display: flex;
@@ -2046,18 +1649,6 @@ pre {
 
   .aw-knowledge-row {
     min-width: 220px;
-  }
-
-  .aw-knowledge-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .aw-knowledge-summary > span:nth-child(2) {
-    border-right: 0;
-  }
-
-  .aw-knowledge-summary > span:nth-child(-n + 2) {
-    border-bottom: 1px solid var(--aw-border);
   }
 }
 
@@ -2174,6 +1765,7 @@ pre {
 
 .aw-chat-session-delete,
 .aw-task-list-delete,
+.aw-code-recent-rename,
 .aw-code-recent-delete {
   display: inline-flex;
   align-items: center;
@@ -2190,11 +1782,23 @@ pre {
 
 .aw-chat-session-row:hover .aw-chat-session-delete,
 .aw-task-list-row:hover .aw-task-list-delete,
+.aw-code-recent-row:hover .aw-code-recent-rename,
 .aw-code-recent-row:hover .aw-code-recent-delete,
 .aw-chat-session-delete:focus-visible,
 .aw-task-list-delete:focus-visible,
+.aw-code-recent-rename:focus-visible,
 .aw-code-recent-delete:focus-visible {
   opacity: 1;
+}
+
+.aw-code-recent-actions {
+  display: flex;
+  align-items: center;
+}
+
+.aw-code-recent-rename:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
 }
 
 .aw-chat-session-delete:hover,
@@ -2412,8 +2016,6 @@ pre {
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: var(--aw-rail);
-  color: var(--aw-on-rail);
   font-size: 11px;
   font-weight: 600;
 }
@@ -2434,64 +2036,6 @@ pre {
   display: grid;
   justify-items: start;
   gap: 8px;
-}
-
-.aw-chat-activity {
-  display: grid;
-  margin: 8px 0 12px;
-  padding: 0;
-  list-style: none;
-}
-
-.aw-chat-activity li {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  min-height: 29px;
-  align-items: start;
-  gap: 4px;
-  color: var(--aw-text-soft);
-  font-size: 11px;
-}
-
-.aw-chat-activity li > span:nth-child(2) strong,
-.aw-chat-activity li > span:nth-child(2) small {
-  display: block;
-}
-
-.aw-chat-activity li > span:nth-child(2) strong {
-  font-weight: 500;
-}
-
-.aw-chat-activity li > span:nth-child(2) small,
-.aw-chat-activity time {
-  color: var(--aw-text-muted);
-  font-size: 10px;
-}
-
-.aw-chat-activity-state {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  margin-top: 1px;
-  border-radius: 50%;
-  background: var(--aw-panel-strong);
-  color: var(--aw-text-muted);
-}
-
-.aw-chat-activity-state.is-complete {
-  background: var(--aw-success-soft);
-  color: var(--aw-success);
-}
-
-.aw-chat-activity-state.is-failed {
-  background: var(--aw-danger-soft);
-  color: var(--aw-danger);
-}
-
-.aw-chat-activity-state.is-running {
-  background: var(--aw-accent-soft);
-  color: var(--aw-accent);
 }
 
 /* --- 引用：证据行，不是芯片 -------------------------------------------
@@ -2629,35 +2173,7 @@ pre {
 .aw-chat-citation-locator {
   margin-left: 5px;
   color: var(--aw-text-muted);
-  font-size: 9px;
-}
-
-/* What the turn could reach, above the steps that show what it did with them.
-   Muted by default and lit only for the tools actually called, so the row reads
-   as capability first and activity second. */
-.aw-turn-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  margin: 0 0 8px;
-  gap: 5px;
-  color: var(--aw-text-muted);
-}
-
-.aw-turn-tool {
-  padding: 2px 7px;
-  border: 1px solid var(--aw-border);
-  border-radius: 999px;
-  background: var(--aw-panel-soft);
-  color: var(--aw-text-muted);
-  font-family: var(--aw-mono);
-  font-size: 10px;
-  cursor: help;
-}
-
-.aw-turn-tool.is-called {
-  border-color: color-mix(in srgb, var(--aw-evidence) 45%, var(--aw-border));
-  color: var(--aw-evidence);
+  font-size: 10.5px;
 }
 
 .aw-chat-no-citations {
@@ -2684,14 +2200,11 @@ pre {
   border: 1px solid var(--aw-border-strong);
   border-radius: 14px;
   background: var(--aw-panel);
-  box-shadow: var(--aw-shadow-lift);
 }
 
 .aw-chat-composer-row:focus-within {
   border-color: color-mix(in srgb, var(--aw-accent) 55%, var(--aw-border));
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--aw-accent) 10%, transparent),
-    var(--aw-shadow-lift);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--aw-accent) 10%, transparent);
 }
 
 .aw-chat-composer-row textarea,
@@ -2705,28 +2218,6 @@ pre {
   min-height: 40px;
   max-height: 150px;
   resize: none;
-}
-
-.aw-chat-kb-field {
-  display: grid;
-  min-width: 0;
-  border-right: 1px solid var(--aw-border);
-}
-
-.aw-chat-kb-field > span {
-  padding-left: 10px;
-  color: var(--aw-text-muted);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.aw-chat-kb-field input {
-  min-height: 25px;
-  padding-top: 1px;
-  padding-bottom: 2px;
-  font-size: 11px;
 }
 
 .aw-chat-send {
@@ -2768,7 +2259,7 @@ pre {
   backdrop-filter: blur(10px);
 }
 
-.aw-pane-header h1 {
+.aw-pane-header strong {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
@@ -2781,8 +2272,7 @@ pre {
   border-bottom: 1px solid var(--aw-border);
 }
 
-.aw-create-task h2,
-.aw-work-section h2 {
+.aw-create-task h2{
   display: flex;
   align-items: center;
   margin: 0 0 5px;
@@ -2791,8 +2281,7 @@ pre {
   font-weight: 600;
 }
 
-.aw-create-task label,
-.aw-work-section > label {
+.aw-create-task label{
   color: var(--aw-text-muted);
   font-size: 10px;
   font-weight: 550;
@@ -2807,44 +2296,6 @@ pre {
 
 .aw-create-task textarea {
   min-height: 74px;
-}
-
-.aw-form-row {
-  display: grid;
-  grid-template-columns: 0.75fr 1.25fr;
-  gap: 8px;
-}
-
-.aw-form-row > div {
-  display: grid;
-  gap: 5px;
-}
-
-.aw-primary-button,
-.aw-secondary-button,
-.aw-danger-button {
-  display: inline-flex;
-  min-height: 35px;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 11px;
-  gap: 6px;
-  border: 1px solid var(--aw-border);
-  border-radius: 8px;
-  background: var(--aw-panel);
-  color: var(--aw-text);
-  font-weight: 550;
-}
-
-.aw-primary-button {
-  border-color: var(--aw-accent);
-  background: var(--aw-accent);
-  color: var(--aw-accent-on);
-}
-
-.aw-danger-button {
-  border-color: color-mix(in srgb, var(--aw-danger) 40%, var(--aw-border));
-  color: var(--aw-danger);
 }
 
 .aw-task-list {
@@ -2950,10 +2401,6 @@ pre {
 
 /* Demoted to a subtitle once the objective takes the heading, but still shown:
    it is what an operator quotes when asking about this run. */
-.aw-task-id {
-  color: var(--aw-text-muted);
-  font-size: 11px;
-}
 
 .aw-work-mobile-back {
   display: none;
@@ -3089,6 +2536,10 @@ pre {
   gap: 18px;
   /* The reading column takes the width, because the run and the answer both
      live in it. The rail only lists files, so it is sized for filenames. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.aw-work-body.has-output {
   grid-template-columns: minmax(0, 1fr) clamp(200px, 24%, 260px);
 }
 
@@ -3444,32 +2895,6 @@ pre {
   background: var(--aw-sidebar);
 }
 
-/* 这一列点各是什么意思。每行右端已经写了自己的状态，所以这里回答的不是
-   「这一行怎么了」，而是「整列扫下来哪些跑过」——后者要读六遍注解才能答，
-   而它本该是一眼的事。缩进对齐到点所在的那一列。 */
-.aw-stream-legend {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  margin: 0 0 10px;
-  padding-left: 1px;
-  gap: 12px;
-  color: var(--aw-text-muted);
-  font-size: 11px;
-}
-
-.aw-stream-legend > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.aw-stream-legend .aw-stream-dot {
-  position: static;
-  width: 7px;
-  height: 7px;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .aw-stream-steps > li.is-active .aw-stream-dot,
   .aw-stream-steps > li.is-waiting .aw-stream-dot {
@@ -3796,20 +3221,6 @@ pre {
   font-size: 12px;
 }
 
-.aw-work-section {
-  width: min(880px, 100%);
-  margin: 0 auto 12px;
-  padding: 16px;
-  border: 1px solid var(--aw-border);
-  border-radius: var(--aw-radius-md);
-  background: var(--aw-panel);
-  box-shadow: var(--aw-shadow-sm);
-}
-
-.aw-work-section > p {
-  color: var(--aw-text-soft);
-}
-
 .aw-task-objective > p {
   margin: 5px 0 13px;
   font-size: 15px;
@@ -3818,7 +3229,6 @@ pre {
 }
 
 .aw-task-objective dl,
-.aw-task-input-facts,
 .aw-task-metadata {
   margin: 0;
   padding: 9px 11px;
@@ -3844,81 +3254,12 @@ pre {
   margin-top: 11px;
   gap: 8px;
 }
-
-.aw-approval {
-  border-color: color-mix(in srgb, var(--aw-warning) 30%, var(--aw-border));
-}
-
-.aw-final-report {
-  border-color: color-mix(in srgb, var(--aw-success) 30%, var(--aw-border));
-  background: color-mix(in srgb, var(--aw-success-soft) 30%, var(--aw-panel));
-}
-
-.aw-section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.aw-timeline-group {
-  margin-top: 14px;
-}
-
-.aw-timeline-group > h3 {
-  margin: 0 0 7px;
-  color: var(--aw-text-muted);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.aw-timeline-group ol {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.aw-timeline-group li {
-  position: relative;
-  padding: 9px 8px 9px 22px;
-  border-left: 1px solid var(--aw-border);
-}
-
-.aw-timeline-group li::before {
-  position: absolute;
-  top: 15px;
-  left: -4px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--aw-accent);
-  content: "";
-}
-
-.aw-timeline-group li.is-unknown::before {
-  background: var(--aw-warning);
-}
-
-.aw-timeline-event-heading,
 .aw-timeline-event-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
 }
-
-.aw-timeline-event-heading {
-  justify-content: space-between;
-}
-
-.aw-timeline-event-heading strong {
-  font-size: 12px;
-  font-weight: 550;
-}
-
-.aw-timeline-event-heading time,
 .aw-timeline-event-meta {
   color: var(--aw-text-muted);
   font-size: 9px;
@@ -3926,27 +3267,6 @@ pre {
 
 .aw-timeline-event-meta {
   margin-top: 2px;
-}
-
-.aw-timeline-group details {
-  margin-top: 6px;
-  color: var(--aw-text-muted);
-  font-size: 10px;
-}
-
-.aw-timeline-group summary {
-  cursor: pointer;
-}
-
-.aw-timeline-group pre {
-  max-height: 280px;
-  padding: 10px;
-  overflow: auto;
-  border-radius: 7px;
-  background: var(--aw-panel-strong);
-  color: var(--aw-text-soft);
-  font-size: 10px;
-  white-space: pre-wrap;
 }
 
 /* An openable step. The whole heading is the control, so a reader does not
@@ -4158,9 +3478,6 @@ pre {
   color: var(--aw-text-soft);
 }
 
-@media (max-width: 1100px) {
-}
-
 @media (max-width: 760px) {
   body {
     overflow: hidden;
@@ -4214,25 +3531,6 @@ pre {
     color: var(--aw-accent);
   }
 
-  .aw-feature-layout,
-  .aw-context-sidebar {
-    display: none;
-  }
-
-  .aw-context-sidebar.is-open {
-    position: absolute;
-    z-index: 30;
-    inset: 0 15% 0 0;
-    display: block;
-    border-right: 1px solid var(--aw-border);
-    box-shadow: var(--aw-shadow-md);
-  }
-
-  .aw-feature-header {
-    min-height: 58px;
-    padding: 8px 12px;
-  }
-
   .aw-button,
   .aw-icon-button {
     min-height: 44px;
@@ -4256,12 +3554,7 @@ pre {
   }
 
   .aw-card-grid,
-  .aw-inline-fields,
   .aw-metric-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .aw-upload-steps {
     grid-template-columns: 1fr;
   }
 
@@ -4315,12 +3608,15 @@ pre {
     max-width: 52vw;
   }
 
+  /* 窄屏上这里曾经是 `max-width: 42px; font-size: 0`——一个只剩断线图标
+     的按钮。图标说得出「有情况」，说不出是哪种情况，而这一档恰恰只有两
+     种：还在重连，和已经断了。把字留下、让标题让位，比把字删掉更省地方
+     的说法是不成立的：标题旁边本来就有 `max-width: 52vw` 的余量。 */
   .aw-chat-connection {
-    max-width: 42px;
     min-height: 36px;
-    overflow: hidden;
-    padding: 8px 12px;
-    font-size: 0;
+    padding: 8px 10px;
+    font-size: 11px;
+    white-space: nowrap;
   }
 
   .aw-chat-transcript {
@@ -4342,16 +3638,6 @@ pre {
 
   .aw-chat-composer-row {
     grid-template-columns: 42px minmax(0, 1fr) 44px;
-  }
-
-  .aw-chat-kb-field {
-    grid-column: 1 / -1;
-    border-right: 0;
-    border-bottom: 1px solid var(--aw-border);
-  }
-
-  .aw-chat-kb-field input {
-    min-height: 23px;
   }
 
   .aw-work-sidebar {
@@ -4390,10 +3676,6 @@ pre {
     min-height: 50px;
   }
 
-  .aw-form-row {
-    grid-template-columns: 1fr;
-  }
-
   .aw-task-list {
     min-width: 190px;
     flex: 1;
@@ -4412,21 +3694,11 @@ pre {
     padding: 7px 12px;
   }
 
-  .aw-work-section {
-    padding: 13px;
-  }
-
   .aw-inline-form {
     grid-template-columns: 1fr;
   }
-
-  .aw-evaluation-matrix,
   .aw-eval-table {
     overflow-x: auto;
-  }
-
-  .aw-evaluation-row {
-    min-width: 650px;
   }
 
   .aw-eval-row {
@@ -4464,12 +3736,15 @@ pre {
     display: block;
   }
 
+  /* `width: fit-content` 曾经写在这里，而它排在 `.aw-icon-button` 的
+     `width: 44px` 后面、特指度相同——于是宽度塌回图标本身的 18px，实测 20×44。
+     这是手机上唯一一条通往任务列表的路，20px 在 WCAG 2.2 AA 的 24×24 地板
+     以下。宽度交回给按钮自己的规则。 */
   .aw-work-mobile-back {
     display: inline-flex;
-    width: fit-content;
     min-height: 32px;
     margin-bottom: 3px;
-    padding: 2px 0;
+    padding: 2px 6px;
   }
 
   .aw-work-detail-header {
@@ -4588,42 +3863,9 @@ pre {
   flex-wrap: wrap;
 }
 
-.aw-report-toggle {
-  display: flex;
-  align-items: flex-start;
-  margin-top: 4px;
-  gap: 9px;
-  cursor: pointer;
-}
-
 /* `.aw-create-task input` sizes text fields, and without this the checkbox
    inherits that 35px-tall, full-width box and squeezes its own label to
    nothing. Every dimension it sets has to be undone here. */
-.aw-report-toggle input {
-  width: 14px;
-  height: 14px;
-  min-height: 0;
-  flex: none;
-  margin-top: 2px;
-  padding: 0;
-}
-
-.aw-report-toggle > span {
-  flex: 1;
-  min-width: 0;
-}
-
-.aw-report-toggle strong {
-  display: block;
-  color: var(--aw-text);
-  font-size: 12px;
-}
-
-.aw-report-toggle small {
-  color: var(--aw-text-muted);
-  font-size: 11px;
-  line-height: 1.6;
-}
 
 .aw-result-retry {
   display: flex;
@@ -4803,7 +4045,6 @@ pre {
   font-family: var(--aw-mono);
   font-size: 11px;
 }
-
 
 .aw-code-recent-link[aria-current="page"] {
   background: var(--aw-panel-strong);
@@ -5243,8 +4484,38 @@ p.aw-code-step-thought {
 }
 
 .aw-code-approval h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   margin: 0 0 4px;
+  gap: 8px;
   font-size: 13px;
+}
+
+/* 风险等级。文字先于颜色——四个等级里有两个是「答应了就撤不回来」那一类，
+   而它们此前在界面上没有任何表示。边框而不是填充：这是一句限定语，不是一个
+   动作，填一块色会让它读成可以点。 */
+.aw-code-approval-risk {
+  padding: 1px 7px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 999px;
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.aw-code-approval-risk[data-risk="external"],
+.aw-code-approval-risk[data-risk="destructive"] {
+  border-color: var(--aw-warning-border);
+  color: var(--aw-warning);
+}
+
+.aw-code-approval-note {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.65;
 }
 
 .aw-code-approval-actions {
@@ -5629,25 +4900,9 @@ p.aw-code-step-thought {
     box-shadow: var(--aw-shadow-drawer-right);
   }
 
-  .aw-code-sessions-backdrop {
-    position: fixed;
-    z-index: 71;
-    inset: 0 0 60px;
-    display: block;
-    width: 100%;
-    padding: 0;
-    border: 0;
-    background: var(--aw-scrim-soft);
-    backdrop-filter: blur(2px);
-  }
-
   .aw-code-sessions-close,
   .aw-code-mobile-sessions {
     display: inline-flex;
-  }
-
-  .aw-code-rail-toggle {
-    display: none;
   }
 
   .aw-code-header {
@@ -5656,10 +4911,12 @@ p.aw-code-step-thought {
   }
 }
 
-/* 桌面端默认：这四个只在窄屏出现。 */
+/* 会话抽屉控件只在窄屏出现。 */
 .aw-code-sessions-close,
-.aw-code-mobile-sessions,
-.aw-code-sessions-backdrop,
+.aw-code-mobile-sessions{
+  display: none;
+}
+
 /* 点空白处关掉抽屉。始终渲染，不再只在窄屏出现——抽屉现在每个宽度上都是抽屉，
    而一个盖住内容的浮层必须有一个不用找按钮的退出方式。 */
 .aw-code-preview-backdrop {
@@ -5672,6 +4929,13 @@ p.aw-code-step-thought {
   border: 0;
   background: var(--aw-scrim-soft);
   cursor: default;
+}
+
+@media (width <= 760px) {
+  .aw-code-sessions-close,
+  .aw-code-mobile-sessions {
+    display: inline-flex;
+  }
 }
 
 /* Starting an evaluation, and watching the one that is running. */
@@ -6120,38 +5384,8 @@ p.aw-code-step-thought {
   line-height: 1.5;
 }
 
-.aw-chat-session-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-
-.aw-chat-session-head > strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* 标签说的是这个会话按哪种方式作答，不是它答出了什么。所以「知识库」用证据
    色（它会去找依据），「自由回答」用中性色——后者不是错误，不该是警告色。 */
-.aw-chat-session-tag {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 400;
-}
-
-.aw-chat-session-tag.is-evidence {
-  background: var(--aw-evidence-soft);
-  color: var(--aw-evidence);
-}
-
-.aw-chat-session-tag.is-plain {
-  background: var(--aw-panel-soft);
-  color: var(--aw-text-muted);
-}
 
 /* --- 任务筛选 -----------------------------------------------------------
  *
@@ -6185,7 +5419,7 @@ p.aw-code-step-thought {
   background: var(--aw-surface);
   color: var(--aw-text);
   font-weight: 500;
-  box-shadow: var(--aw-shadow-sm);
+  box-shadow: none;
 }
 
 /* 一句说明里的行动词。做成按钮而不是链接，是因为它不导航——它把筛选拨回去。 */
@@ -6202,7 +5436,6 @@ p.aw-code-step-thought {
 .aw-link-button:hover {
   color: var(--aw-accent-hover);
 }
-
 
 /* 会话列表表头的第二行。与 Chat 那一列同一处理：标题说这是什么，下面这行说
    它的来历与用法——那两件事都不是点一下就能发现的。 */
@@ -6261,12 +5494,6 @@ p.aw-code-step-thought {
 
 /* 流走到哪了。等宽，因为它是一个会变的数字——比例字体下位数变化会让整行左右
    跳动。 */
-.aw-chat-cursor {
-  margin-left: 7px;
-  color: var(--aw-text-muted);
-  font-family: var(--aw-mono);
-  font-size: 10.5px;
-}
 
 /* 常驻在工具行的最右端。等宽，因为位数会变——比例字体下 999 → 1000 会把整行
    往左推一格。 */
@@ -6442,44 +5669,11 @@ p.aw-code-step-thought {
 }
 
 /* 右上角的身份。浮在内容之上而不是占一行：它每一页都在，但没有一页是关于它的。 */
-.aw-identity-pill {
-  position: fixed;
-  z-index: 30;
-  top: 10px;
-  right: 16px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 11px;
-  border: 1px solid var(--aw-border);
-  border-radius: 999px;
-  background: var(--aw-panel);
-  color: var(--aw-text-soft);
-  font-family: var(--aw-mono);
-  font-size: 11px;
-  box-shadow: var(--aw-shadow-sm);
-}
-
-.aw-identity-pill:hover {
-  border-color: var(--aw-border-strong);
-  color: var(--aw-text);
-}
-
-.aw-identity-pill > span[aria-hidden] {
-  color: var(--aw-text-muted);
-}
 
 /* 授权条数比身份本身淡一档：它是那句话的补语，不是主语。 */
-.aw-identity-scopes {
-  color: var(--aw-text-muted);
-}
 
 /* 窄屏让位给移动导航与页头，那里空间本来就紧。 */
 @media (width <= 900px) {
-  .aw-identity-pill {
-    display: none;
-  }
 }
 
 /* --- 对话的「过程」折叠行 -----------------------------------------------
@@ -6508,12 +5702,6 @@ p.aw-code-step-thought {
 .aw-turn-process-label {
   color: var(--aw-text-soft);
   font-weight: 500;
-}
-
-.aw-turn-process-count {
-  margin-left: auto;
-  color: var(--aw-text-muted);
-  font-size: 11px;
 }
 
 /* 走通的阶段是中性的——和授权珠串同一条规则：一列绿色对勾会让唯一那次失败更

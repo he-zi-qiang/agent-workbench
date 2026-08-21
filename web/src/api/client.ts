@@ -3,9 +3,12 @@ import type {
   ApprovalView,
   ArtifactDownloadTarget,
   AskResponse,
+  ChatSessionListResponse,
+  ChatSessionView,
   CodeAskResponse,
   CodeSessionListResponse,
   CodeSessionView,
+  CreateChatSessionResponse,
   CreateSessionResponse,
   CreateUploadResponse,
   DocumentPreview,
@@ -33,6 +36,9 @@ import type {
   UploadContentResponse,
   RunFileResponse,
   WorkspaceResponse,
+  ProjectContentsResponse,
+  ProjectListResponse,
+  ProjectView,
 } from "./types";
 
 const WORD_DOCUMENT_MEDIA_TYPE =
@@ -68,6 +74,26 @@ function identityHeaders(identity: PrincipalIdentity): Record<string, string> {
   return headers;
 }
 
+/**
+ * What to say when the server said nothing.
+ *
+ * Reached only when a response carries no `detail` -- but from there it goes
+ * to every page's `ErrorNotice`, so it is the sentence a reader gets for a
+ * whole class of failures. It used to be `请求失败（HTTP 409）`: a number that
+ * is not actionable attached to a sentence that is empty. The status code is
+ * the one thing the browser *does* know here, so it is spent on saying which
+ * kind of failure this is and what the reader can do about it. The number is
+ * kept only in the fall-through, where nothing better can be said about it.
+ */
+function fallbackMessage(status: number): string {
+  if (status === 401 || status === 403) return "当前身份没有权限做这件事。";
+  if (status === 404) return "服务端上已经没有这个东西了。";
+  if (status === 409) return "服务端的状态变了，刷新一下再试。";
+  if (status === 429) return "请求太密了，等一下再试。";
+  if (status >= 500) return "服务端出错了，稍后再试。";
+  return `请求没有成功（${String(status)}）。`;
+}
+
 async function parseError(response: Response): Promise<ApiError> {
   let detail: unknown;
   try {
@@ -78,7 +104,7 @@ async function parseError(response: Response): Promise<ApiError> {
   const message =
     typeof detail === "object" && detail !== null && "detail" in detail
       ? String(detail.detail)
-      : `请求失败（HTTP ${response.status}）`;
+      : fallbackMessage(response.status);
   return new ApiError(response.status, message, detail);
 }
 
@@ -122,10 +148,139 @@ export function newIdempotencyKey(prefix: string): string {
 export async function createChatSession(
   identity: PrincipalIdentity,
   title?: string,
-): Promise<CreateSessionResponse> {
+): Promise<CreateChatSessionResponse> {
   return apiRequest(identity, "/v1/chat/sessions", {
     method: "POST",
     body: { title: title || null },
+  });
+}
+
+export async function listChatSessions(
+  identity: PrincipalIdentity,
+  signal?: AbortSignal,
+): Promise<ChatSessionListResponse> {
+  return apiRequest(identity, "/v1/chat/sessions", {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function getChatSession(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ChatSessionView> {
+  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function renameChatSession(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  title: string,
+): Promise<ChatSessionView> {
+  return apiRequest(identity, `/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    body: { title },
+  });
+}
+
+/**
+ * 项目：一层归属，不是容器（ADR-071）。
+ *
+ * 这一组里唯一需要当心的是 `setSessionProject` / `setTaskProject` 的 `null`：
+ * 它表示**拿出来**，和「不传这个字段」是两回事。服务端会拒绝一个什么也没说的
+ * PATCH，所以这里永远显式带上 `project_id`。
+ */
+export async function listProjects(
+  identity: PrincipalIdentity,
+  options: { includeArchived?: boolean; signal?: AbortSignal } = {},
+): Promise<ProjectListResponse> {
+  const query = options.includeArchived === true ? "?include_archived=true" : "";
+  return apiRequest(identity, `/v1/projects${query}`, {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+}
+
+export async function createProject(
+  identity: PrincipalIdentity,
+  name: string,
+): Promise<ProjectView> {
+  return apiRequest(identity, "/v1/projects", { method: "POST", body: { name } });
+}
+
+export async function getProject(
+  identity: PrincipalIdentity,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProjectView> {
+  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function renameProject(
+  identity: PrincipalIdentity,
+  projectId: string,
+  name: string,
+): Promise<ProjectView> {
+  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: { name },
+  });
+}
+
+export async function setProjectArchived(
+  identity: PrincipalIdentity,
+  projectId: string,
+  archived: boolean,
+): Promise<ProjectView> {
+  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: { archived },
+  });
+}
+
+/** 删除项目本身。底下的东西一个都不会消失，只是不再属于任何项目。 */
+export async function deleteProject(
+  identity: PrincipalIdentity,
+  projectId: string,
+): Promise<void> {
+  await apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getProjectItems(
+  identity: PrincipalIdentity,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProjectContentsResponse> {
+  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}/items`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function setSessionProject(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  projectId: string | null,
+): Promise<void> {
+  await apiRequest(
+    identity,
+    `/v1/chat/sessions/${encodeURIComponent(sessionId)}/project`,
+    { method: "PATCH", body: { project_id: projectId } },
+  );
+}
+
+export async function setTaskProject(
+  identity: PrincipalIdentity,
+  taskId: string,
+  projectId: string | null,
+): Promise<void> {
+  await apiRequest(identity, `/v1/tasks/${encodeURIComponent(taskId)}/project`, {
+    method: "PATCH",
+    body: { project_id: projectId },
   });
 }
 

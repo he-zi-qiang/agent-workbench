@@ -44,6 +44,7 @@ from agent_workbench.adapters.persistence import (
     PostgresDocumentStore,
     PostgresEventLog,
     PostgresKnowledgeBaseStore,
+    PostgresProjectStore,
     PostgresTaskRegistry,
     create_query_engine,
 )
@@ -99,6 +100,7 @@ from agent_workbench.application.code_session import (
 )
 from agent_workbench.application.evaluation import EvaluationService
 from agent_workbench.application.knowledge_bases import KnowledgeBaseService
+from agent_workbench.application.projects import ProjectService
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
 from agent_workbench.application.task_triage import TaskTriageService
@@ -248,6 +250,8 @@ class ApiDependencies:
     artifacts: ArtifactStore
     uploads: UploadService
     knowledge_bases: KnowledgeBaseService
+    #: Owner-private membership across chat, code, tasks and bases (ADR-071).
+    projects: ProjectService
     principals: HeaderPrincipalResolver
     # Absent when the optional embedding runtime is not installed. The reason
     # is kept beside it so startup can say so once, in words, instead of
@@ -505,6 +509,7 @@ def build_dependencies(
     )
     documents = PostgresDocumentStore(engine)
     knowledge_bases = KnowledgeBaseService(PostgresKnowledgeBaseStore(engine))
+    projects = ProjectService(PostgresProjectStore(engine))
     # ADR-042. One pool per process, threaded into every adapter that blocks.
     blocking = BlockingCallRunner(
         slots=config.blocking_calls.slots,
@@ -588,6 +593,7 @@ def build_dependencies(
             knowledge_bases=knowledge_bases,
         ),
         knowledge_bases=knowledge_bases,
+        projects=projects,
         principals=HeaderPrincipalResolver(),
         chat=chat,
         # Recovery is intentionally independent of the embedding/model stack.

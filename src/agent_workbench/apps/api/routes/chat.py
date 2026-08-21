@@ -22,8 +22,15 @@ import asyncio
 import hashlib
 from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from agent_workbench.application.chat import (
     ChatRequest,
@@ -53,6 +60,36 @@ class CreateSessionRequest(BaseModel):
 
 class CreateSessionResponse(BaseModel):
     session_id: Identifier
+
+
+class SessionView(BaseModel):
+    """One chat session, projected for its owner's recent-session list."""
+
+    session_id: Identifier
+    title: str | None
+    last_activity_at: AwareDatetime | None
+    # Which project this session was opened for, or none (ADR-071). Reported so
+    # an interface can show the membership it is about to change; it is not an
+    # authorization fact, and None is the normal state.
+    project_id: Identifier | None = None
+
+
+class SessionListResponse(BaseModel):
+    sessions: tuple[SessionView, ...]
+
+
+class RenameSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=TITLE_MAX_LENGTH)
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        title = value.strip()
+        if not title:
+            raise ValueError("title must contain a visible character")
+        return title
 
 
 class AskRequest(BaseModel):
@@ -148,6 +185,76 @@ async def create_session(
         title=body.title,
     )
     return CreateSessionResponse(session_id=session_id)
+
+
+@router.get("/sessions")
+async def list_sessions(
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> SessionListResponse:
+    """This principal's recent chat sessions, most recently active first.
+
+    The result is bounded rather than paged, matching Code's recent-session
+    contract. Tenant, principal and mode are all applied in the store query;
+    none is accepted from the request body or query string.
+    """
+
+    principal = dependencies_of(request).principals.resolve(request)
+    sessions = await _chat(request).sessions(
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+        limit=limit,
+    )
+    return SessionListResponse(
+        sessions=tuple(
+            SessionView(
+                session_id=session.session_id,
+                title=session.title,
+                last_activity_at=session.last_activity_at,
+                project_id=session.project_id,
+            )
+            for session in sessions
+        )
+    )
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: str, request: Request) -> SessionView:
+    """Resolve one owner-visible Chat session outside the recent-list window."""
+
+    principal = dependencies_of(request).principals.resolve(request)
+    session = await _chat(request).session(
+        session_id=session_id,
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+    )
+    return SessionView(
+        session_id=session.session_id,
+        title=session.title,
+        last_activity_at=session.last_activity_at,
+        project_id=session.project_id,
+    )
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_session(
+    session_id: str, body: RenameSessionRequest, request: Request
+) -> SessionView:
+    """Replace the name of one chat session owned by the caller."""
+
+    principal = dependencies_of(request).principals.resolve(request)
+    session = await _chat(request).rename(
+        session_id=session_id,
+        tenant_id=principal.tenant_id,
+        principal_id=principal.principal_id,
+        title=body.title,
+    )
+    return SessionView(
+        session_id=session.session_id,
+        title=session.title,
+        last_activity_at=session.last_activity_at,
+        project_id=session.project_id,
+    )
 
 
 @router.post("/sessions/{session_id}/messages")
@@ -336,9 +443,8 @@ async def delete_session(session_id: str, request: Request) -> DeletedView:
     `apiRequest` parses every successful body as JSON, so an empty one throws
     where `response.ok` guarantees nothing will catch it.
 
-    This is half of known gap D-02. The list is the other half and is still the
-    browser's, so a console that deletes here also has to forget its own row --
-    which is a decision about where a chat session lives, not about this route.
+    A client may still keep local presentation metadata for a session, and is
+    responsible for dropping that derived row after this durable delete.
     """
 
     principal = dependencies_of(request).principals.resolve(request)
@@ -385,5 +491,8 @@ __all__ = [
     "CreateSessionRequest",
     "CreateSessionResponse",
     "HistoryResponse",
+    "RenameSessionRequest",
+    "SessionListResponse",
+    "SessionView",
     "router",
 ]

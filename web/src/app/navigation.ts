@@ -1,4 +1,5 @@
 import {
+  FolderOpen,
   Activity,
   Code2,
   FlaskConical,
@@ -51,11 +52,29 @@ export const NAVIGATION = [
   },
   {
     to: "/code",
-    label: "Code",
+    // 「编码」，不是「Code」。这一项曾经是主导航里唯一的英文，夹在「对话」
+    // 和「任务」中间——而这个概念在它自己的地盘上从来就叫编码：栏头是
+    // 「最近编码」，起始页是「开始编码」，会话叫「编码会话」。一个概念
+    // 四个界面三个中文名加一个英文名，英文名是那个异类。
+    // 路由、目录和 `code` 这个关键词都没动：改的是读者看到的那个词。
+    label: "编码",
     description: "带工作区与文件预览的编码会话",
     icon: Code2,
     primary: true,
     covers: ["/code"],
+  },
+  {
+    // 项目和三个产品是两个维度：产品回答「这是什么工具」，项目回答「这是为哪件
+    // 事做的」。所以它在工作空间里，和对话/任务/编码并列，而不是它们的上一层
+    // ——上一层意味着「先建项目才能提问」，而归属是可空的（ADR-071）。
+    to: "/projects",
+    label: "项目",
+    // 描述里不出现「对话」「任务」这两个词：快速跳转按描述也匹配，而这两个
+    // 词各自是另一个目的地的名字——写进来会让搜「任务」同时命中两项。
+    description: "同一件事做过的东西，收在一处",
+    icon: FolderOpen,
+    primary: true,
+    covers: ["/projects"],
   },
   {
     to: "/knowledge",
@@ -104,7 +123,9 @@ export const QUICK_DESTINATIONS = [
           ? "work task 工作流 任务 时间线"
           : item.to === "/code"
             ? "coding 编码 文件 工作区"
-            : item.to === "/knowledge"
+            : item.to === "/projects"
+              ? "project 项目 归属 分组"
+              : item.to === "/knowledge"
               ? "knowledge rag 文档 资料 上传"
               : item.to === "/evaluation"
                 ? "eval benchmark 评测 报告"

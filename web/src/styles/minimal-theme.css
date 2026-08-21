@@ -8,8 +8,8 @@
 
 body {
   background: var(--aw-window);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 14.5px;
+  line-height: 1.6;
 }
 
 /* Application frame ----------------------------------------------------- */
@@ -25,17 +25,10 @@ body {
   box-shadow: none;
 }
 
-/* 这一层曾经把 rail 刷成浅色：`background: var(--aw-rail)` 当时解析出 #f7f7f5，
-   文字用 --aw-text-muted，于是导航和正文是同一张纸上的两块区域。app.css 那边
-   一直是按深色写的（文字 #d9d9d3、白色 10% 的分隔线），两层叠起来的结果是基础
-   皮肤的意图被后加载的这层覆盖掉了。
-   现在两层都读同一组 --aw-rail-* token，深浅只由 tokens.css 一处决定。 */
 .aw-global-rail {
   padding: 14px 8px 10px;
   border-right: 0;
   border-radius: 0;
-  background: var(--aw-rail);
-  color: var(--aw-rail-text);
 }
 
 /* 实心橙方块，不是描边的浅色块：--aw-accent-soft 是 #fbf0ea，在深色 rail 上
@@ -54,66 +47,51 @@ body {
 .aw-global-link {
   width: 56px;
   min-height: 52px;
-  color: var(--aw-rail-text);
-}
-
-.aw-global-link:hover {
-  background: var(--aw-rail-hover);
-  color: var(--aw-rail-text-active);
-}
-
-/* Same split as the base skin: active is a chip one step lighter than the
-   rail, hover a darker one, so the current page stays marked when the
-   pointer leaves. */
-.aw-global-link.active {
-  background: var(--aw-rail-active);
-  color: var(--aw-rail-text-active);
-}
-
-.aw-global-link.active svg {
-  color: var(--aw-rail-icon-active);
-}
-
-.aw-nav-divider {
-  border-color: var(--aw-rail-divider);
 }
 
 /* Controls -------------------------------------------------------------- */
 
 .aw-button,
-.aw-icon-button,
-.aw-primary-button,
-.aw-secondary-button,
-.aw-danger-button {
+.aw-icon-button{
   box-shadow: none;
 }
 
 .aw-button,
-.aw-icon-button,
-.aw-secondary-button {
+.aw-icon-button{
   border-color: transparent;
   background: transparent;
 }
 
 .aw-button:hover:not(:disabled),
-.aw-icon-button:hover:not(:disabled),
-.aw-secondary-button:hover:not(:disabled) {
+.aw-icon-button:hover:not(:disabled){
   border-color: transparent;
   background: var(--aw-panel-soft);
 }
 
-.aw-button.is-primary,
-.aw-primary-button {
-  border-color: var(--aw-accent);
-  background: var(--aw-accent);
+.aw-button.is-primary{
+  border-color: var(--aw-text);
+  background: var(--aw-text);
+  color: var(--aw-window);
   box-shadow: none;
+}
+
+.aw-button.is-primary:hover:not(:disabled){
+  border-color: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
+  background: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
+  color: var(--aw-window);
+}
+
+.aw-button.is-primary:focus-visible,
+.aw-chat-send:focus-visible {
+  outline-color: var(--aw-window);
+  outline-offset: -4px;
 }
 
 input,
 textarea,
 select {
   border-color: var(--aw-border-strong);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--aw-panel);
 }
 
@@ -124,16 +102,11 @@ select {
 }
 
 /* Shared page hierarchy ------------------------------------------------- */
-
-.aw-context-sidebar,
 .aw-chat-sessions,
 .aw-code-sessions,
 .aw-work-sidebar {
   background: var(--aw-sidebar);
 }
-
-.aw-context-header,
-.aw-feature-header,
 .aw-chat-sessions-header,
 .aw-code-sessions-header,
 .aw-code-preview-header,
@@ -141,22 +114,33 @@ select {
 .aw-chat-header,
 .aw-code-header,
 .aw-work-detail-header {
-  border-bottom-color: var(--aw-border);
-  background: color-mix(in srgb, var(--aw-window) 96%, transparent);
+  border-bottom-color: var(--aw-border-subtle);
+  background: color-mix(in srgb, var(--aw-window) 97%, transparent);
   box-shadow: none;
 }
 
-.aw-context-item,
-.aw-list-row,
+.aw-chat-sessions-header,
+.aw-code-sessions-header,
+.aw-pane-header,
+.aw-chat-header,
+.aw-code-header {
+  min-height: 54px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.aw-chat-sessions-header strong,
+.aw-code-sessions-header strong,
+.aw-pane-header strong,
+.aw-code-header h1 {
+  font-size: 13px;
+  font-weight: 600;
+}
 .aw-chat-session,
 .aw-task-list-item,
 .aw-knowledge-row {
   border: 0;
 }
-
-.aw-context-item:hover,
-.aw-context-item.is-active,
-.aw-list-row:hover,
 .aw-chat-session:hover,
 .aw-chat-session.is-active,
 .aw-task-list-item:hover,
@@ -167,8 +151,6 @@ select {
   background: var(--aw-panel-strong);
   box-shadow: none;
 }
-
-.aw-context-item.is-active,
 .aw-chat-session.is-active,
 .aw-task-list-item.is-active,
 .aw-knowledge-row.is-active {
@@ -202,8 +184,7 @@ select {
   line-height: 1.65;
 }
 
-.aw-eyebrow,
-.aw-context-kicker {
+.aw-eyebrow{
   color: var(--aw-accent);
 }
 
@@ -321,13 +302,13 @@ select {
 /* Chat ------------------------------------------------------------------ */
 
 .aw-chat-page {
-  grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-columns: 236px minmax(0, 1fr);
 }
 
 /* The same rail as Chat's, and deliberately the same number: two consoles
    whose left columns differ by 8px read as a rendering bug, not a design. */
 .aw-code-page {
-  grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-columns: 236px minmax(0, 1fr);
 }
 
 /* 预览不再是一列，所以 has-preview 不再动列宽——这一层此前还留着三列那一版，
@@ -344,8 +325,8 @@ select {
 }
 
 .aw-chat-sessions-close,
-.aw-chat-mobile-sessions,
-.aw-chat-sessions-backdrop {
+.aw-projects-close,
+.aw-chat-mobile-sessions{
   display: none;
 }
 
@@ -355,8 +336,8 @@ select {
 }
 
 .aw-chat-session {
-  padding: 11px 10px;
-  border-radius: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
 }
 
 .aw-chat-main {
@@ -364,13 +345,14 @@ select {
 }
 
 .aw-chat-header {
-  min-height: 68px;
+  min-height: 54px;
   padding-right: clamp(18px, 4vw, 42px);
   padding-left: clamp(18px, 4vw, 42px);
 }
 
 .aw-chat-header h1 {
-  font-size: 16px;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .aw-chat-connection {
@@ -403,10 +385,10 @@ select {
 }
 
 .aw-chat-assistant-mark {
-  border: 1px solid color-mix(in srgb, var(--aw-accent) 18%, var(--aw-border));
+  border: 1px solid var(--aw-border-subtle);
   border-radius: 50%;
-  background: var(--aw-accent-soft);
-  color: var(--aw-accent);
+  background: var(--aw-panel-strong);
+  color: var(--aw-text-soft);
 }
 
 .aw-chat-assistant-message > .aw-markdown {
@@ -415,35 +397,29 @@ select {
   line-height: 1.78;
 }
 
-.aw-chat-activity {
-  padding: 8px 0 4px;
-  border-top: 1px solid var(--aw-border);
-  border-bottom: 1px solid var(--aw-border);
-}
-
 /* 引用从芯片变成证据行之后，这一层不再给它画药丸底：一行三段（文档 / 版本 /
    位置）各自有自己的容器，再套一层底色会读成「一整块都是一个标签」。 */
 .aw-chat-citation-locator {
-  color: color-mix(in srgb, var(--aw-text-muted) 78%, transparent);
+  color: var(--aw-text-subtle);
 }
 
 .aw-chat-composer {
-  width: min(780px, calc(100% - 32px));
-  padding-bottom: 18px;
+  width: min(720px, calc(100% - 32px));
+  padding-bottom: 16px;
 }
 
 .aw-chat-composer-row {
-  padding: 7px;
-  border: 1px solid var(--aw-border-strong);
-  border-radius: 24px;
-  box-shadow: var(--aw-shadow-lift);
+  padding: 6px;
+  border: 1px solid var(--aw-border);
+  border-radius: 12px;
+  box-shadow: var(--aw-shadow-sm);
 }
 
 .aw-chat-composer-row:focus-within {
   border-color: color-mix(in srgb, var(--aw-accent) 48%, var(--aw-border));
   box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--aw-accent) 9%, transparent),
-    var(--aw-shadow-lift);
+    0 0 0 2px color-mix(in srgb, var(--aw-accent) 7%, transparent),
+    var(--aw-shadow-sm);
 }
 
 .aw-chat-send {
@@ -456,7 +432,7 @@ select {
 }
 
 .aw-chat-composer > p {
-  color: color-mix(in srgb, var(--aw-text-muted) 78%, transparent);
+  color: var(--aw-text-subtle);
 }
 
 .aw-empty-icon {
@@ -467,7 +443,7 @@ select {
 /* Work ------------------------------------------------------------------ */
 
 .aw-work-page {
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
 }
 
 .aw-create-task {
@@ -605,16 +581,7 @@ select {
 
 /* Knowledge ------------------------------------------------------------- */
 
-.aw-knowledge-layout {
-  grid-template-columns: 270px minmax(0, 1fr);
-  border: 0;
-  border-top: 1px solid var(--aw-border);
-  border-radius: 0;
-  box-shadow: none;
-}
-
 .aw-knowledge-list {
-  padding: 12px 10px;
   border-right-color: var(--aw-border);
 }
 
@@ -628,20 +595,6 @@ select {
 
 .aw-knowledge-detail {
   padding: 30px 34px;
-}
-
-.aw-knowledge-summary {
-  margin: 24px 0 8px;
-  border: 0;
-  border-top: 1px solid var(--aw-border);
-  border-bottom: 1px solid var(--aw-border);
-  border-radius: 0;
-  background: transparent;
-}
-
-.aw-knowledge-summary > span {
-  padding: 14px 12px;
-  border-color: var(--aw-border);
 }
 
 .aw-knowledge-upload,
@@ -676,10 +629,35 @@ select {
   background: var(--aw-panel-soft);
 }
 
-@media (max-width: 900px) {
-  .aw-knowledge-layout {
-    grid-template-columns: 1fr;
+@media (min-width: 761px) {
+  .aw-mobile-more-backdrop {
+    align-items: center;
+    justify-items: center;
+    padding: 24px;
+    background: var(--aw-scrim);
+    backdrop-filter: blur(2px);
   }
+
+  .aw-mobile-more-sheet {
+    width: min(380px, 100%);
+    margin: 0;
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  .aw-mobile-more-sheet > header {
+    margin-bottom: 6px;
+    padding: 2px 2px 5px 8px;
+  }
+
+  .aw-mobile-more-link {
+    min-height: 44px;
+    padding: 8px 10px;
+    border-radius: 8px;
+  }
+}
+
+@media (max-width: 900px) {
 
   .aw-knowledge-list {
     display: flex;
@@ -690,18 +668,6 @@ select {
 
   .aw-knowledge-row {
     min-width: 220px;
-  }
-
-  .aw-knowledge-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .aw-knowledge-summary > span:nth-child(2) {
-    border-right: 0;
-  }
-
-  .aw-knowledge-summary > span:nth-child(-n + 2) {
-    border-bottom: 1px solid var(--aw-border);
   }
 }
 
@@ -730,18 +696,6 @@ select {
     border-bottom: 0;
     background: var(--aw-sidebar);
     box-shadow: var(--aw-shadow-drawer-right);
-  }
-
-  .aw-chat-sessions-backdrop {
-    position: fixed;
-    z-index: 71;
-    inset: 0 0 60px;
-    display: block;
-    width: 100%;
-    padding: 0;
-    border: 0;
-    background: var(--aw-scrim-soft);
-    backdrop-filter: blur(2px);
   }
 
   .aw-chat-sessions-close,
@@ -783,10 +737,6 @@ select {
   .aw-chat-composer {
     width: calc(100% - 20px);
     padding-bottom: 14px;
-  }
-
-  .aw-chat-composer-row {
-    border-radius: 20px;
   }
 
   .aw-work-sidebar {
@@ -833,10 +783,6 @@ select {
     border-bottom: 0;
   }
 
-  .aw-knowledge-layout {
-    border-top: 0;
-  }
-
   .aw-knowledge-list {
     padding: 8px 0 12px;
     border-bottom-color: var(--aw-border);
@@ -877,10 +823,6 @@ select {
  *
  * 只给等宽栈和显式标了"元信息"的地方开，不全局开：正文里的中文与拉丁字混排
  * 用 tabular-nums 会让阿拉伯数字之间显得松。 */
-:is(code, kbd, samp, pre, .aw-meta, .aw-timestamp, .aw-count, .aw-token-count) {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
-}
 
 /* 深色下给"抬起"的面加一道顶部高光。
  *
@@ -902,14 +844,14 @@ select {
 .aw-chat-composer-row {
   box-shadow:
     inset 0 1px 0 var(--aw-raise),
-    var(--aw-shadow-lift);
+    var(--aw-shadow-sm);
 }
 
 .aw-chat-composer-row:focus-within {
   box-shadow:
     inset 0 1px 0 var(--aw-raise),
-    0 0 0 3px color-mix(in srgb, var(--aw-accent) 9%, transparent),
-    var(--aw-shadow-lift);
+    0 0 0 2px color-mix(in srgb, var(--aw-accent) 7%, transparent),
+    var(--aw-shadow-sm);
 }
 
 /* 选中文字的底色在深色下要重新给：--aw-accent-soft 在深色是 #2e1f18，
@@ -936,28 +878,42 @@ select {
   grid-template-columns: var(--aw-nav-width-collapsed) minmax(0, 1fr);
 }
 
+.aw-app-shell.is-context-free:not(.is-rail-collapsed) {
+  --aw-nav-width: 188px;
+}
+
 .aw-app-content {
   position: relative;
   background: var(--aw-window);
 }
 
 .aw-global-rail {
+  position: relative;
+  z-index: 20;
+  width: 100%;
   align-items: stretch;
-  padding: 10px 8px 9px;
+  padding: 8px 4px 7px;
   gap: 2px;
   overflow-x: hidden;
   border-right: 1px solid var(--aw-border);
   background: var(--aw-sidebar);
   color: var(--aw-text-soft);
+  box-shadow: none;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-global-rail {
+  width: 100%;
+  border-right-color: transparent;
+  box-shadow: none;
 }
 
 .aw-rail-brand-row {
   display: flex;
   min-width: 0;
-  min-height: 44px;
+  min-height: 40px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   gap: 6px;
 }
 
@@ -965,28 +921,28 @@ select {
   display: flex;
   width: auto;
   min-width: 0;
-  height: 40px;
+  height: 36px;
   margin: 0;
   align-items: center;
   justify-content: flex-start;
-  gap: 9px;
-  border-radius: 9px;
+  gap: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--aw-text);
 }
 
 .aw-logo-mark {
   display: grid;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
   place-items: center;
-  border-radius: 10px;
-  background: var(--aw-accent);
-  color: var(--aw-accent-on);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aw-text);
   font-family: var(--aw-display);
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 650;
   letter-spacing: -0.04em;
 }
 
@@ -1000,22 +956,15 @@ select {
 .aw-logo-copy strong {
   font-family: var(--aw-display);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.01em;
-}
-
-.aw-logo-copy small {
-  color: var(--aw-text-muted);
-  font-family: var(--aw-display);
-  font-size: 10px;
-  letter-spacing: 0.02em;
 }
 
 .aw-rail-collapse {
   display: grid;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   place-items: center;
   padding: 0;
   border: 0;
@@ -1029,42 +978,15 @@ select {
   color: var(--aw-text);
 }
 
-.aw-nav-group-label {
-  display: block;
-  margin: 2px 9px 5px;
-  overflow: hidden;
-  color: var(--aw-text-subtle);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.aw-nav-divider {
-  position: relative;
-  margin-top: 9px;
-  padding-top: 28px;
-  border-top-color: var(--aw-border);
-}
-
-.aw-nav-divider > .aw-nav-group-label {
-  position: absolute;
-  top: 7px;
-  right: 0;
-  left: 0;
-  margin: 0 9px;
-}
-
 .aw-global-link {
   position: relative;
   flex-direction: row;
   width: 100%;
-  min-height: 39px;
+  min-height: 38px;
   justify-content: flex-start;
-  padding: 0 8px;
-  gap: 9px;
-  border-radius: 9px;
+  padding: 0 7px;
+  gap: 8px;
+  border-radius: 8px;
   color: var(--aw-text-soft);
   font-size: 13px;
   font-weight: 500;
@@ -1078,24 +1000,17 @@ select {
 }
 
 .aw-global-link.active {
-  background: var(--aw-panel-strong);
+  background: color-mix(in srgb, var(--aw-panel-strong) 72%, transparent);
   color: var(--aw-text);
-  font-weight: 600;
+  font-weight: 550;
 }
 
 .aw-global-link.active::before {
-  position: absolute;
-  top: 10px;
-  bottom: 10px;
-  left: 2px;
-  width: 3px;
-  border-radius: 99px;
-  background: var(--aw-accent);
-  content: "";
+  display: none;
 }
 
 .aw-global-link.active svg {
-  color: var(--aw-accent);
+  color: currentColor;
 }
 
 .aw-global-link-icon {
@@ -1112,35 +1027,17 @@ select {
   text-overflow: ellipsis;
 }
 
-.aw-global-link > kbd {
-  margin-left: auto;
-  padding: 1px 5px;
-  border: 1px solid var(--aw-border-strong);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--aw-panel) 68%, transparent);
-  color: var(--aw-text-muted);
-  font-family: var(--aw-sans);
-  font-size: 10px;
-  font-weight: 500;
-  box-shadow: none;
-}
-
-.aw-theme-button svg {
-  width: 22px;
-  flex: 0 0 22px;
-}
-
 .aw-rail-identity {
   display: flex;
   width: 100%;
   min-width: 0;
-  min-height: 48px;
+  min-height: 42px;
   align-items: center;
   margin-top: 5px;
-  padding: 5px 7px;
-  gap: 9px;
+  padding: 4px 6px;
+  gap: 8px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   color: var(--aw-text);
   text-align: left;
@@ -1153,12 +1050,12 @@ select {
 
 .aw-rail-avatar {
   display: grid;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   place-items: center;
   border: 1px solid var(--aw-border-strong);
-  border-radius: 9px;
+  border-radius: 50%;
   background: var(--aw-panel);
   color: var(--aw-text);
   font-family: var(--aw-display);
@@ -1198,41 +1095,28 @@ select {
 }
 
 .aw-app-shell.is-rail-collapsed .aw-logo {
-  width: 44px;
+  width: 40px;
   justify-content: center;
 }
 
 .aw-app-shell.is-rail-collapsed :is(
   .aw-logo-copy,
-  .aw-nav-group-label,
   .aw-global-link-copy,
-  .aw-global-link > kbd,
   .aw-rail-identity-copy
 ) {
   display: none;
 }
 
-.aw-app-shell.is-rail-collapsed .aw-nav-divider {
-  width: 44px;
-  margin-top: 8px;
-  padding-top: 8px;
-}
-
 .aw-app-shell.is-rail-collapsed .aw-global-link {
-  width: 44px;
-  min-height: 42px;
+  width: 40px;
+  min-height: 40px;
   justify-content: center;
   padding: 0;
 }
 
-.aw-app-shell.is-rail-collapsed .aw-theme-button svg {
-  width: auto;
-  flex: none;
-}
-
 .aw-app-shell.is-rail-collapsed .aw-rail-identity {
-  width: 44px;
-  min-height: 44px;
+  width: 40px;
+  min-height: 40px;
   justify-content: center;
   padding: 0;
 }
@@ -1248,64 +1132,20 @@ select {
   font-size: 11px;
 }
 
-@media (max-width: 1180px) and (min-width: 761px) {
-  .aw-app-shell {
-    grid-template-columns: var(--aw-nav-width-collapsed) minmax(0, 1fr);
-  }
-
-  .aw-app-shell .aw-global-rail {
-    align-items: center;
-    padding-right: 6px;
-    padding-left: 6px;
-  }
-
-  .aw-app-shell .aw-rail-brand-row {
-    min-height: auto;
-    flex-direction: column;
-    margin-bottom: 10px;
-    gap: 5px;
-  }
-
-  .aw-app-shell .aw-rail-collapse {
-    display: none;
-  }
-
-  .aw-app-shell .aw-logo {
-    width: 44px;
-    justify-content: center;
-  }
-
-  .aw-app-shell :is(
-    .aw-logo-copy,
-    .aw-nav-group-label,
-    .aw-global-link-copy,
-    .aw-global-link > kbd,
-    .aw-rail-identity-copy
-  ) {
-    display: none;
-  }
-
-  .aw-app-shell .aw-nav-divider {
-    width: 44px;
-    margin-top: 8px;
-    padding-top: 8px;
-  }
-
-  .aw-app-shell .aw-global-link,
-  .aw-app-shell .aw-rail-identity {
-    width: 44px;
-    justify-content: center;
-    padding: 0;
-  }
-
-  .aw-app-shell .aw-global-link {
-    min-height: 42px;
-  }
-
-  .aw-app-shell .aw-rail-identity {
-    min-height: 44px;
-  }
-}
+/* The 761-1320px band used to force the rail into its collapsed shape, back
+   when "narrow desktop" meant "no room for labels". The workspace-first block
+   below supersedes all of it -- at 1280px the shell measures 272px + 1008px,
+   the rail is 272px wide with its labels showing, and the ≤1279px narrowing
+   that actually ships is the 248px `--aw-nav-width` further down.
+   Every declaration in that block was therefore dead except one, and that one
+   was a trap: `.aw-app-shell .aw-rail-collapse { display: none }` beat the
+   base rule, and the only thing that could beat *it* was
+   `.aw-app-shell:not(.is-rail-collapsed) .aw-rail-collapse` -- which stops
+   matching the moment the rail collapses. So on any 761-1320px window (every
+   1280px laptop) one click on 收起导航 removed the only control that reopens
+   it, took the session list with it, and persisted that to localStorage.
+   There is no keyboard path to it and no second toggle: the way back was to
+   widen the window past 1320px or clear site data. */
 
 @media (max-width: 760px) {
   .aw-mobile-nav {
@@ -1313,10 +1153,17 @@ select {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .aw-app-shell {
+    transition: none;
+  }
+}
+
 @media (pointer: coarse) {
   :is(
     .aw-chat-session-delete,
     .aw-task-list-delete,
+    .aw-code-recent-rename,
     .aw-code-recent-delete
   ) {
     min-width: 36px;
@@ -1330,7 +1177,7 @@ select {
 .aw-chat-session-search {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
-  min-height: 34px;
+  min-height: 38px;
   align-items: center;
   margin: 0 10px 2px;
   padding: 0 9px;
@@ -1374,104 +1221,53 @@ select {
 
 .aw-chat-welcome {
   display: grid;
-  width: min(780px, 100%);
+  width: min(680px, 100%);
   justify-items: center;
   margin: 0 auto;
   text-align: center;
 }
 
-.aw-chat-welcome-mark {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  margin-bottom: 16px;
-  place-items: center;
-  border-radius: 14px;
-  background: var(--aw-accent);
-  color: var(--aw-accent-on);
-  font-family: var(--aw-display);
-  font-size: 17px;
-  font-weight: 700;
-}
-
 .aw-chat-welcome h2 {
-  margin: 0;
-  font-size: clamp(24px, 3vw, 32px);
-  font-weight: 620;
-  letter-spacing: -0.035em;
-}
-
-.aw-chat-welcome > p {
-  max-width: 520px;
-  margin: 8px 0 22px;
-  color: var(--aw-text-muted);
-  font-size: 13px;
-  line-height: 1.65;
+  margin: 0 0 22px;
+  font-size: clamp(24px, 3vw, 29px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
 .aw-chat-starters {
   display: grid;
-  width: 100%;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  width: min(520px, 100%);
+  grid-template-columns: 1fr;
+  gap: 0;
+  border-top: 1px solid var(--aw-border-subtle);
 }
 
 .aw-chat-starters > button {
   display: flex;
   min-width: 0;
-  min-height: 74px;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 12px 13px;
-  gap: 10px;
-  border: 1px solid var(--aw-border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--aw-panel) 72%, transparent);
-  color: var(--aw-text);
+  min-height: 42px;
+  align-items: center;
+  padding: 9px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--aw-border-subtle);
+  border-radius: 0;
+  background: transparent;
+  color: var(--aw-text-soft);
   text-align: left;
   transition:
-    border-color var(--aw-duration-fast) var(--aw-ease),
-    background var(--aw-duration-fast) var(--aw-ease),
-    transform var(--aw-duration-fast) var(--aw-ease);
+    color var(--aw-duration-fast) var(--aw-ease),
+    padding var(--aw-duration-fast) var(--aw-ease);
 }
 
 .aw-chat-starters > button:hover {
-  border-color: var(--aw-border-strong);
-  background: var(--aw-panel);
-  transform: translateY(-1px);
-}
-
-.aw-chat-starters > button > span {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
+  padding-left: 8px;
+  background: transparent;
+  color: var(--aw-text);
 }
 
 .aw-chat-starters strong {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.aw-chat-starters small {
-  color: var(--aw-text-muted);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.aw-chat-starters svg {
-  flex: 0 0 auto;
-  color: var(--aw-text-subtle);
-}
-
-@media (max-width: 900px) {
-  .aw-chat-starters {
-    grid-template-columns: 1fr;
-    width: min(520px, 100%);
-  }
-
-  .aw-chat-starters > button {
-    min-height: 58px;
-  }
+  font-size: 13px;
+  font-weight: 500;
 }
 
 @media (max-width: 760px) {
@@ -1482,16 +1278,6 @@ select {
 
   .aw-chat-page.is-new .aw-chat-composer {
     margin-bottom: 0;
-  }
-
-  .aw-chat-welcome-mark {
-    width: 40px;
-    height: 40px;
-    margin-bottom: 12px;
-  }
-
-  .aw-chat-welcome > p {
-    margin-bottom: 14px;
   }
 
   .aw-chat-starters {
@@ -1517,9 +1303,9 @@ select {
 }
 
 .aw-create-task-head h2 {
-  font-size: clamp(22px, 3vw, 30px);
-  font-weight: 620;
-  letter-spacing: -0.03em;
+  font-size: clamp(23px, 3vw, 28px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
 .aw-create-task-head p {
@@ -1533,112 +1319,44 @@ select {
   display: none;
 }
 
-@media (min-width: 761px) {
-  .aw-work-page:not(.has-selection) {
-    position: relative;
-    grid-template-columns: 280px minmax(0, 1fr);
-    grid-template-rows: 64px minmax(0, 1fr);
-    background:
-      linear-gradient(var(--aw-sidebar), var(--aw-sidebar)) 0 0 / 280px 100%
-        no-repeat,
-      var(--aw-window);
-  }
+/* Work 的「开始」页曾经在这里排成两列：280px 的侧栏 + 主区，外加一条
+   `::after` 画的分隔线。整块已经不成立，而且是两个各自独立的原因——两个都
+   在浏览器里量过：
 
-  .aw-work-page:not(.has-selection)::after {
-    position: absolute;
-    z-index: 4;
-    top: 0;
-    bottom: 0;
-    left: 279px;
-    width: 1px;
-    background: var(--aw-border);
-    content: "";
-    pointer-events: none;
-  }
+   一、选择器不再命中。`.aw-work-page:not(.has-selection) .aw-work-sidebar`
+   一类的后代选择器全部命中 0 个元素：那个 `<aside>` 现在被 `WorkspaceSidebarPortal`
+   portal 进了 `.aw-global-rail`，不再是 `.aw-work-page` 的后代。
+   `.aw-pane-header` / `.aw-create-task-toggle` / `.aw-task-filters` /
+   `.aw-task-list` 同理，实测全是 0。
 
-  .aw-work-page:not(.has-selection) .aw-work-sidebar {
-    display: contents;
-  }
+   二、还能命中的那几条被后面的规则压掉了。实测 1280px：页面算出来是单列
+   1092px（不是 `280px minmax(0,1fr)`），行是 860px（不是 `54px minmax(0,1fr)`），
+   底色是 window（不是那道侧栏渐变），`::after` 是 `display: none`，
+   `.aw-work-detail` 可见且在第 1 行第 1 列。
 
-  .aw-work-page:not(.has-selection) .aw-pane-header {
-    grid-row: 1;
-    grid-column: 1;
-    border-bottom: 1px solid var(--aw-border);
-    background: var(--aw-sidebar);
-  }
-
-  .aw-work-page:not(.has-selection) .aw-create-task-toggle {
-    z-index: 1;
-    grid-row: 2;
-    grid-column: 1;
-    align-self: start;
-    width: calc(100% - 24px);
-    margin: 12px 12px 0;
-  }
-
-  .aw-work-page:not(.has-selection) .aw-task-filters {
-    z-index: 1;
-    grid-row: 2;
-    grid-column: 1;
-    align-self: start;
-    margin: 63px 10px 0;
-  }
-
-  .aw-work-page:not(.has-selection) .aw-task-list {
-    grid-row: 2;
-    grid-column: 1;
-    min-height: 0;
-    align-self: stretch;
-    margin-top: 104px;
-    padding-bottom: 14px;
-    overflow-y: auto;
-    background: var(--aw-sidebar);
-  }
-
-  .aw-work-page:not(.has-selection) .aw-create-task {
-    z-index: 2;
-    grid-row: 1 / 3;
-    grid-column: 2;
-    width: min(760px, calc(100% - 48px));
-    max-height: calc(100% - 48px);
-    align-self: center;
-    justify-self: center;
-    margin: 0;
-    padding: clamp(22px, 3.5vw, 34px);
-    overflow-y: auto;
-    border: 1px solid var(--aw-border);
-    border-radius: 18px;
-    background: var(--aw-panel);
-    box-shadow: var(--aw-shadow-lift);
-  }
-
-  .aw-work-page:not(.has-selection) .aw-create-task textarea {
-    min-height: 132px;
-    padding: 13px 14px;
-    font-size: 14px;
-    line-height: 1.6;
-  }
-
-  .aw-work-page:not(.has-selection) .aw-create-task > .aw-button.is-primary {
-    min-width: 132px;
-    justify-self: end;
-  }
-
-  .aw-work-page:not(.has-selection) .aw-work-detail {
-    grid-row: 1 / 3;
-    grid-column: 2;
-    visibility: hidden;
-  }
-
-  .aw-work-page:not(.has-selection):has(.aw-create-task.is-collapsed)
-    .aw-work-detail {
-    visibility: visible;
-  }
-}
+   留着的坏处不是它占地方，是它读起来像一个还在生效的两列版式。 */
 
 .aw-task-filters button {
   min-height: 30px;
   font-size: 11.5px;
+}
+
+.aw-create-task-toggle {
+  justify-content: flex-start;
+  padding: 0 10px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--aw-text-soft);
+}
+
+.aw-create-task-toggle svg {
+  color: var(--aw-accent);
+}
+
+.aw-create-task-toggle:hover {
+  border-color: transparent;
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
 }
 
 @media (max-width: 760px) {
@@ -1650,24 +1368,18 @@ select {
 /* Code start ------------------------------------------------------------- */
 
 .aw-code-start-inner {
-  width: min(760px, 100%);
-  gap: 16px;
+  width: min(720px, 100%);
+  gap: 18px;
 }
 
 .aw-code-start-head svg {
-  box-sizing: content-box;
-  width: 22px;
-  height: 22px;
-  padding: 11px;
-  border-radius: 13px;
-  background: var(--aw-accent);
-  color: var(--aw-accent-on);
+  display: none;
 }
 
 .aw-code-start-head h1 {
-  font-size: clamp(25px, 3vw, 32px);
-  font-weight: 620;
-  letter-spacing: -0.035em;
+  font-size: clamp(24px, 3vw, 29px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
 .aw-code-start-head p {
@@ -1677,50 +1389,54 @@ select {
 
 .aw-code-starters {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  width: min(520px, 100%);
+  justify-self: center;
+  grid-template-columns: 1fr;
+  gap: 0;
+  border-top: 1px solid var(--aw-border-subtle);
 }
 
 .aw-code-starters > button {
   display: flex;
   min-width: 0;
-  min-height: 42px;
+  min-height: 40px;
   align-items: center;
-  justify-content: space-between;
-  padding: 9px 11px;
-  gap: 8px;
-  border: 1px solid var(--aw-border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--aw-panel) 68%, transparent);
+  padding: 8px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--aw-border-subtle);
+  border-radius: 0;
+  background: transparent;
   color: var(--aw-text-soft);
-  font-size: 11.5px;
+  font-size: 13px;
   text-align: left;
+  transition:
+    color var(--aw-duration-fast) var(--aw-ease),
+    padding var(--aw-duration-fast) var(--aw-ease);
 }
 
 .aw-code-starters > button:hover {
-  border-color: var(--aw-border-strong);
-  background: var(--aw-panel);
+  padding-left: 8px;
+  background: transparent;
   color: var(--aw-text);
 }
 
-.aw-code-starters svg {
-  flex: 0 0 auto;
-  color: var(--aw-text-subtle);
+.aw-code-composer {
+  width: min(720px, calc(100% - 32px));
 }
 
 .aw-code-composer-row {
-  padding: 7px;
-  border: 1px solid var(--aw-border-strong);
-  border-radius: 17px;
+  padding: 6px;
+  border: 1px solid var(--aw-border);
+  border-radius: 12px;
   background: var(--aw-panel);
-  box-shadow: var(--aw-shadow-lift);
+  box-shadow: var(--aw-shadow-sm);
 }
 
 .aw-code-composer-row:focus-within {
   border-color: color-mix(in srgb, var(--aw-accent) 48%, var(--aw-border));
   box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--aw-accent) 9%, transparent),
-    var(--aw-shadow-lift);
+    0 0 0 2px color-mix(in srgb, var(--aw-accent) 7%, transparent),
+    var(--aw-shadow-sm);
 }
 
 .aw-code-composer textarea {
@@ -1735,12 +1451,988 @@ select {
 }
 
 .aw-code-composer-row > .aw-button.is-primary {
-  min-height: 38px;
-  border-radius: 10px;
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: 9px;
+}
+
+.aw-code-raw {
+  margin-top: 4px;
+  padding-left: 0;
+}
+
+.aw-code-raw > summary {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 2px 5px;
+  gap: 4px;
+  border-radius: 6px;
+  color: var(--aw-text-subtle);
+  font-size: 11px;
+  list-style: none;
+}
+
+.aw-code-raw > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-code-raw > summary:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+}
+
+.aw-code-raw pre {
+  border: 1px solid var(--aw-border-subtle);
+  background: var(--aw-surface-sunken);
+}
+
+.aw-code-start .aw-code-composer-row {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 @media (max-width: 760px) {
   .aw-code-starters {
     display: none;
   }
+}
+
+/* Workspace-first desktop shell ----------------------------------------
+ *
+ * One sidebar now owns both product navigation and the active product's real
+ * work items. Chat/Work/Code still own their data; a React portal only moves
+ * their list into this slot. The result is one hierarchy and one scroll area,
+ * rather than a mode rail bolted beside three different context rails.
+ */
+
+.aw-app-shell {
+  --aw-nav-width: 272px;
+  --aw-nav-width-collapsed: 52px;
+  grid-template-columns: var(--aw-nav-width) minmax(0, 1fr);
+}
+
+.aw-app-shell.is-rail-collapsed {
+  grid-template-columns: var(--aw-nav-width-collapsed) minmax(0, 1fr);
+}
+
+.aw-app-shell .aw-global-rail {
+  width: 100%;
+  min-width: 0;
+  align-items: stretch;
+  padding: 8px;
+  gap: 2px;
+  overflow: hidden;
+  border-right-color: var(--aw-border-subtle);
+}
+
+.aw-app-shell:not(.is-rail-collapsed) .aw-rail-brand-row {
+  min-height: 42px;
+  flex-direction: row;
+  margin-bottom: 4px;
+}
+
+.aw-app-shell:not(.is-rail-collapsed) .aw-logo {
+  width: auto;
+  justify-content: flex-start;
+}
+
+.aw-app-shell:not(.is-rail-collapsed) :is(
+  .aw-logo-copy,
+  .aw-global-link-copy,
+  .aw-rail-identity-copy
+) {
+  display: grid;
+}
+
+.aw-app-shell:not(.is-rail-collapsed) .aw-rail-collapse {
+  display: grid;
+}
+
+.aw-app-shell:not(.is-rail-collapsed) :is(
+  .aw-global-link,
+  .aw-rail-identity
+) {
+  width: 100%;
+  justify-content: flex-start;
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.aw-sidebar-section-label {
+  display: block;
+  margin: 3px 9px 4px;
+  color: var(--aw-text-subtle);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.aw-sidebar-workspace {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+}
+
+.aw-sidebar-workspace.is-active {
+  min-height: 88px;
+  flex: 1 1 auto;
+}
+
+.aw-sidebar-workspace > .aw-global-link {
+  min-height: 38px;
+  flex: 0 0 38px;
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.aw-sidebar-workspace > .aw-global-link.active {
+  background: transparent;
+  font-weight: 620;
+}
+
+.aw-sidebar-workspace > .aw-global-link.active .aw-global-link-icon {
+  color: var(--aw-accent);
+}
+
+.aw-sidebar-context-slot {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  margin: 2px 0 5px 19px;
+  padding-left: 7px;
+  overflow: hidden;
+  border-left: 1px solid var(--aw-border-subtle);
+}
+
+.aw-sidebar-context-slot > :is(
+  .aw-chat-sessions,
+  .aw-code-sessions,
+  .aw-work-sidebar,
+  .aw-knowledge-sidebar
+) {
+  position: static;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  max-height: none;
+  /* Stated here, not left to the four panes. Two of them (`.aw-chat-sessions`,
+     `.aw-code-sessions`) declare `column` in app.css and two do not, so this
+     rule turning them all into flex containers silently gave Work and
+     Knowledge the initial `row` -- the Work rail rendered its header, its 新任务
+     button and its filter group side by side in 228px, one glyph per line, and
+     every role-based test still passed because the elements were all there. A
+     column is the only direction any sidebar pane wants. */
+  flex-direction: column;
+  flex: 1 1 auto;
+  transform: none;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.aw-sidebar-context-slot :is(
+  .aw-chat-sessions-header,
+  .aw-code-sessions-header,
+  .aw-pane-header,
+  .aw-knowledge-sidebar-header
+) {
+  position: static;
+  min-height: 34px;
+  padding: 3px 4px 5px;
+  border: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.aw-sidebar-context-slot :is(
+  .aw-chat-sessions-header strong,
+  .aw-code-sessions-header strong,
+  .aw-pane-header strong,
+  .aw-knowledge-sidebar-header strong
+) {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.aw-sidebar-context-slot :is(.aw-new-session, .aw-create-task-toggle) {
+  min-height: 38px;
+  justify-content: flex-start;
+  margin: 0 1px 6px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.aw-sidebar-context-slot :is(.aw-new-session, .aw-create-task-toggle):hover,
+.aw-sidebar-context-slot .aw-create-task-toggle.is-active {
+  border: 0;
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+}
+
+.aw-sidebar-context-slot :is(.aw-new-session, .aw-create-task-toggle) svg {
+  color: var(--aw-accent);
+}
+
+.aw-sidebar-context-slot :is(
+  .aw-chat-session-list,
+  .aw-code-session-list,
+  .aw-task-list,
+  .aw-knowledge-sidebar-list
+) {
+  min-height: 0;
+  flex: 1 1 auto;
+  align-content: start;
+  padding: 2px 0 8px;
+  gap: 1px;
+  overflow-y: auto;
+}
+
+/* The one line a reader sees when a product has nothing in it yet is a
+   sentence, not a label -- it keeps the 12px floor the rest of the sidebar's
+   ordinary text does. It cannot be raised on the shared 11px rule it inherits
+   from: that rule also carries the chat header's annotation and the composer's
+   hints, which are main-content type. */
+.aw-sidebar-context-slot :is(.aw-chat-local-note, .aw-code-sessions-empty) {
+  font-size: 12px;
+}
+
+.aw-sidebar-context-slot .aw-task-filters {
+  margin: 0 2px 5px;
+  padding: 2px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--aw-panel-soft);
+}
+
+.aw-sidebar-context-slot .aw-task-filters button {
+  min-height: 28px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+.aw-sidebar-footer-nav {
+  display: grid;
+  flex: 0 0 auto;
+  margin-top: 3px;
+  padding-top: 5px;
+  gap: 2px;
+  border-top: 1px solid var(--aw-border-subtle);
+}
+
+.aw-sidebar-footer-nav .aw-global-link {
+  min-height: 38px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.aw-app-shell.is-rail-collapsed :is(
+  .aw-sidebar-section-label,
+  .aw-sidebar-context-slot
+) {
+  display: none;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-sidebar-workspace.is-active {
+  min-height: auto;
+  flex: 0 0 auto;
+}
+
+.aw-app-shell.is-rail-collapsed .aw-sidebar-footer-nav {
+  width: 100%;
+  border-top: 0;
+}
+
+.aw-chat-page,
+.aw-code-page,
+.aw-work-page,
+.aw-work-page:not(.has-selection),
+.aw-knowledge-page {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  background: var(--aw-window);
+}
+
+.aw-work-page:not(.has-selection)::after {
+  display: none;
+}
+
+.aw-work-page:not(.has-selection) .aw-work-detail {
+  grid-row: 1;
+  grid-column: 1;
+  visibility: visible;
+}
+
+.aw-work-start {
+  display: grid;
+  width: min(720px, 100%);
+  min-height: 100%;
+  align-content: center;
+  justify-self: center;
+  padding: clamp(28px, 6vh, 72px) 0;
+}
+
+.aw-work-start > .aw-work-mobile-back {
+  display: none;
+}
+
+.aw-work-page:not(.has-selection) .aw-work-start .aw-create-task {
+  z-index: auto;
+  grid-row: auto;
+  grid-column: auto;
+  width: 100%;
+  max-height: none;
+  align-self: auto;
+  justify-self: auto;
+  margin: 0;
+  padding: 0;
+  gap: 11px;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.aw-work-page:not(.has-selection) .aw-work-start .aw-create-task textarea {
+  min-height: 132px;
+  padding: 14px 15px;
+  border-color: var(--aw-border);
+  border-radius: 12px;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.aw-work-page:not(.has-selection)
+  .aw-work-start
+  .aw-create-task
+  > .aw-button.is-primary {
+  min-width: 132px;
+  justify-self: end;
+}
+
+.aw-knowledge-page {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+}
+
+.aw-knowledge-main {
+  width: 100%;
+  min-height: 0;
+  padding: clamp(24px, 5vw, 64px);
+  overflow-y: auto;
+}
+
+.aw-knowledge-main > * {
+  width: min(920px, 100%);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.aw-knowledge-sidebar {
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.aw-knowledge-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.aw-knowledge-sidebar-header > div {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.aw-knowledge-sidebar-list {
+  display: grid;
+  align-content: start;
+}
+
+.aw-sidebar-context-slot .aw-knowledge-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 42px;
+  padding: 7px 9px;
+  border-radius: 7px;
+}
+
+.aw-sidebar-context-slot .aw-knowledge-icon {
+  display: none;
+}
+
+.aw-sidebar-context-slot .aw-knowledge-row small {
+  margin-top: 2px;
+  color: var(--aw-text-subtle);
+  font-size: 10.5px;
+}
+
+.aw-knowledge-mobile-sidebar,
+.aw-knowledge-sessions-close {
+  display: none;
+}
+
+/* The row remains one visual object. Actions sit inside its trailing edge and
+   only disclose themselves on hover/focus; editing replaces the row in place. */
+.aw-chat-session-row,
+.aw-code-recent-row,
+.aw-task-list-row {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.aw-chat-session,
+.aw-code-recent-link,
+.aw-task-list-item {
+  min-height: 40px;
+  padding: 7px 9px;
+  border-radius: 7px;
+}
+
+.aw-chat-session:hover,
+.aw-chat-session.is-active,
+.aw-code-recent-link:hover,
+.aw-code-recent-link[aria-current="page"],
+.aw-task-list-item:hover,
+.aw-task-list-item.is-active {
+  background: var(--aw-panel-strong);
+  box-shadow: none;
+}
+
+.aw-session-row-actions,
+.aw-code-recent-actions {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  opacity: 0;
+  transform: translateY(-50%);
+  background: linear-gradient(90deg, transparent, var(--aw-panel-strong) 12px);
+  pointer-events: none;
+  transition: opacity var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-chat-session-row:hover .aw-session-row-actions,
+.aw-chat-session-row:focus-within .aw-session-row-actions,
+.aw-code-recent-row:hover .aw-session-row-actions,
+.aw-code-recent-row:focus-within .aw-session-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+:is(
+  .aw-chat-session-rename,
+  .aw-chat-session-delete,
+  .aw-code-recent-rename,
+  .aw-code-recent-delete,
+  .aw-task-list-delete
+) {
+  display: inline-grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  opacity: 1;
+}
+
+:is(.aw-chat-session-rename, .aw-code-recent-rename):hover {
+  background: var(--aw-panel);
+  color: var(--aw-text);
+}
+
+:is(
+  .aw-chat-session-delete,
+  .aw-code-recent-delete,
+  .aw-task-list-delete
+):hover {
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+}
+
+.aw-task-list-delete {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 5px;
+  opacity: 0;
+  transform: translateY(-50%);
+}
+
+.aw-task-list-row:hover .aw-task-list-delete,
+.aw-task-list-row:focus-within .aw-task-list-delete {
+  opacity: 1;
+}
+
+/* 悬停时让位给删除按钮——指针就在这一行上，读者一秒前才看过状态。
+   键盘聚焦时不让位：那样一来，读者正停在的那一行，恰好是唯一看不到状态的
+   一行。删除按钮是绝对定位在右端的，所以这里是把点挪开，不是把它藏起来。
+   用独立的 `translate` 属性而不是 `transform`，是为了不和下面表示形状的
+   `rotate` 打架——两个属性各写各的，不需要合成一条。 */
+.aw-task-list-row:hover :is(.aw-status-pill, .aw-task-status-dot) {
+  opacity: 0;
+}
+
+.aw-task-list-row:focus-within :is(.aw-status-pill, .aw-task-status-dot) {
+  translate: -30px 0;
+}
+
+/* 形状和颜色各说一遍。
+ *
+ * 此前状态只由色相表达：running 是青、waiting 是橙、succeeded 是绿、失败是
+ * 红——四个 8px 的圆点，对红绿色觉障碍的读者来说是四个一样的点。灰度打印或
+ * 截图压缩之后，对所有人都是。
+ *
+ * 两个轴，四种组合，不用记：**空心=还没完，实心=完了；圆=正常，菱形=要人管。**
+ *
+ *   空心圆    在跑 / 排队        它自己会走完
+ *   空心菱形  等批准 / 等迁移    停下来了，在等你
+ *   实心圆    已完成             走完了
+ *   实心菱形  失败 / 取消 / 放弃 结束了，但不是好的那种
+ */
+.aw-task-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border: 1.5px solid var(--aw-text-muted);
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 8%, transparent);
+  transition: translate var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-task-status-dot[data-status="running"],
+.aw-task-status-dot[data-status="queued"] {
+  border-color: var(--aw-info);
+  color: var(--aw-info);
+}
+
+.aw-task-status-dot[data-status="waiting_approval"],
+.aw-task-status-dot[data-status="waiting_migration"] {
+  border-color: var(--aw-warning);
+  border-radius: 1px;
+  color: var(--aw-warning);
+  rotate: 45deg;
+}
+
+.aw-task-status-dot[data-status="succeeded"] {
+  border-color: var(--aw-success);
+  background: var(--aw-success);
+  color: var(--aw-success);
+}
+
+.aw-task-status-dot:is(
+  [data-status="failed"],
+  [data-status="cancelled"],
+  [data-status="dead_letter"]
+) {
+  border-color: var(--aw-danger);
+  border-radius: 1px;
+  background: var(--aw-danger);
+  color: var(--aw-danger);
+  rotate: 45deg;
+}
+
+.aw-session-inline-rename {
+  display: flex;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+  padding: 4px;
+}
+
+.aw-session-inline-rename input {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--aw-accent) 52%, var(--aw-border));
+  border-radius: 7px;
+  background: var(--aw-panel);
+  font-size: 12px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aw-accent) 8%, transparent);
+}
+
+.aw-session-rename-error .aw-notice {
+  margin: -2px 4px 5px;
+  padding: 5px 7px;
+  gap: 5px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.aw-session-rename-error .aw-notice svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+}
+
+.aw-pane-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.aw-work-sessions-close,
+.aw-workspace-sidebar-backdrop {
+  display: none;
+}
+
+@media (min-width: 761px) and (max-width: 1279px) {
+  .aw-app-shell {
+    --aw-nav-width: 248px;
+  }
+}
+
+@media (max-width: 760px) {
+  .aw-work-page:not(.has-selection) .aw-work-detail {
+    display: block;
+  }
+
+  .aw-app-shell .aw-global-rail {
+    position: fixed;
+    z-index: 80;
+    inset: 0 auto 60px 0;
+    display: flex;
+    width: min(304px, 88vw);
+    padding: 8px;
+    transform: translateX(-102%);
+    visibility: hidden;
+    border-right: 1px solid var(--aw-border);
+    background: var(--aw-sidebar);
+    box-shadow: var(--aw-shadow-drawer-right);
+    transition:
+      transform var(--aw-duration-base) var(--aw-ease),
+      visibility 0s linear var(--aw-duration-base);
+  }
+
+  .aw-app-shell.is-sidebar-drawer-open .aw-global-rail {
+    transform: translateX(0);
+    visibility: visible;
+    transition-delay: 0s;
+  }
+
+  .aw-global-rail :is(
+    .aw-rail-brand-row,
+    .aw-sidebar-section-label,
+    .aw-sidebar-workspace:not(.is-active),
+    .aw-sidebar-workspace.is-active > .aw-global-link,
+    .aw-sidebar-footer-nav,
+    .aw-rail-identity
+  ) {
+    display: none;
+  }
+
+  .aw-global-rail .aw-sidebar-workspace.is-active {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  .aw-app-shell.is-rail-collapsed .aw-global-rail .aw-sidebar-context-slot,
+  .aw-global-rail .aw-sidebar-context-slot {
+    display: flex;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .aw-sidebar-context-slot > :is(
+    .aw-chat-sessions,
+    .aw-code-sessions,
+    .aw-work-sidebar,
+    .aw-knowledge-sidebar
+  ) {
+    display: flex;
+  }
+
+  .aw-workspace-sidebar-backdrop {
+    position: fixed;
+    z-index: 79;
+    inset: 0;
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: var(--aw-scrim-soft);
+    backdrop-filter: blur(2px);
+  }
+
+  .aw-sidebar-context-slot :is(
+    .aw-chat-sessions-close,
+    .aw-code-sessions-close,
+    .aw-work-sessions-close,
+    .aw-knowledge-sessions-close,
+    .aw-projects-close
+  ) {
+    display: inline-flex;
+  }
+
+  .aw-work-start {
+    width: 100%;
+    align-content: start;
+    padding: 18px 0 40px;
+  }
+
+  .aw-work-start > .aw-work-mobile-back {
+    display: inline-grid;
+    margin: 0 0 18px;
+  }
+
+  .aw-knowledge-main {
+    padding: 16px 14px 88px;
+  }
+
+  .aw-knowledge-mobile-sidebar {
+    display: inline-grid;
+    margin-bottom: 16px;
+  }
+}
+
+@media (pointer: coarse) {
+  .aw-session-row-actions,
+  .aw-code-recent-actions,
+  .aw-task-list-delete {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  :is(
+    .aw-chat-session-rename,
+    .aw-chat-session-delete,
+    .aw-code-recent-rename,
+    .aw-code-recent-delete,
+    .aw-task-list-delete
+  ) {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+}
+
+/* 项目页 -------------------------------------------------------------------
+ *
+ * 复用侧栏既有的行词汇（行高、圆角、悬停才出现的行动作），而不是另起一套：
+ * 项目行和会话行在读者眼里是同一种东西——一列可以点开、可以改名、可以删掉的
+ * 条目。新写一套只会让第三次改动时两边分叉。 */
+
+.aw-projects-page {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  background: var(--aw-window);
+}
+
+.aw-projects-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 28px clamp(20px, 5vw, 56px) 40px;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.aw-projects-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.aw-projects-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.aw-projects-header small {
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+.aw-project-list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding: 2px 0 8px;
+  gap: 1px;
+  overflow-y: auto;
+}
+
+.aw-project-row {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.aw-project-link {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  padding: 0 9px;
+  gap: 8px;
+  border-radius: 7px;
+  color: var(--aw-text-soft);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.aw-project-link:hover,
+.aw-project-link.is-active {
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+}
+
+.aw-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-project-link small {
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+}
+
+/* 三个行动作，和会话行同一套：默认不可见，悬停或键盘聚焦才出现，触屏永远在。
+   `.aw-session-row-actions` 已经写了那套显隐规则，这里只补位置。 */
+.aw-project-row .aw-session-row-actions {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+}
+
+.aw-project-rename,
+.aw-project-archive,
+.aw-project-delete {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+}
+
+.aw-project-rename:hover,
+.aw-project-archive:hover {
+  background: var(--aw-panel);
+  color: var(--aw-text);
+}
+
+.aw-project-delete:hover {
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+}
+
+.aw-project-items {
+  display: flex;
+  width: min(720px, 100%);
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  gap: 1px;
+  list-style: none;
+}
+
+.aw-project-item {
+  display: grid;
+  align-items: baseline;
+  padding: 11px 4px;
+  gap: 12px;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  border-bottom: 1px solid var(--aw-border-subtle);
+  color: var(--aw-text);
+  font-size: 13.5px;
+  text-decoration: none;
+}
+
+.aw-project-item:hover {
+  background: var(--aw-panel-soft);
+}
+
+/* 类型是限定语，不是标签：边框都不给，只降一档字重和颜色。 */
+.aw-project-item-kind {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-project-item-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-project-item time {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+/* 归属选择器 ---------------------------------------------------------------
+ *
+ * 长在它自己那一段的头部，读起来是标题下面的一句限定语，不是一个动作。所以它
+ * 没有边框、没有底色，只有一个下拉箭头——安静到读者不去看它的时候它不存在。 */
+
+.aw-project-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.aw-project-picker select {
+  max-width: 200px;
+  padding: 1px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.aw-project-picker select:hover,
+.aw-project-picker select:focus-visible {
+  color: var(--aw-text);
+}
+
+.aw-project-picker select:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.aw-project-picker small {
+  color: var(--aw-danger);
+  font-size: 11px;
 }
