@@ -108,6 +108,12 @@ export function LoadingLine({ label = "正在加载" }: { label?: string }) {
   );
 }
 
+export function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim() !== "")
+    return error.message;
+  return fallback;
+}
+
 export function ErrorNotice({ message }: { message: string }) {
   return (
     <div className="aw-notice is-danger" role="alert">

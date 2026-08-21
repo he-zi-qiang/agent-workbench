@@ -36,14 +36,9 @@ import {
   deleteTask,
   createTask,
   decideApproval,
-  type DocumentLayoutDecline,
   downloadArtifact,
   getApproval,
-  getArtifactBlob,
   getArtifactJson,
-  getArtifactText,
-  getDocumentPdf,
-  getDocumentPreview,
   getTask,
   listTasks,
   newIdempotencyKey,
@@ -52,7 +47,6 @@ import {
 import type {
   ApprovalView,
   ArtifactRef,
-  DocumentPreview,
   EventEnvelope,
   PrincipalIdentity,
   TaskGraphChoice,
@@ -67,13 +61,6 @@ import {
   WorkspaceSidebarActions,
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
-import {
-  browserShowsPdfInline,
-  mediaLabel,
-  previewKind,
-} from "../../components/media";
-import { BlobPreview } from "../../components/BlobPreview";
-import { HtmlPreview } from "../../components/HtmlPreview";
 import {
   AttachmentButton,
   AttachmentTray,
@@ -101,7 +88,10 @@ import { StepStream, type StreamStage } from "../../components/StepStream";
 import { explainFailure } from "./failure";
 import { deriveLifecycle, type Lifecycle, stageOfNode } from "./lifecycle";
 import { useTaskTimeline } from "./useTaskTimeline";
+import { errorMessage } from "../../components/ui";
 import { workIdentityQueryKey } from "./workQueryKeys";
+import { ArtifactPreview } from "./ArtifactPreview";
+import { formatBytes } from "./preview";
 import {
   artifactLabel,
   collectArtifacts,
@@ -1603,12 +1593,6 @@ function describeTimelineGap(gap: TimelineGap): string {
  * the file that was exported -- and hunting for the step that happened to write
  * it is not how anyone looks for a file.
  */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${String(bytes)} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function ArtifactRail({
   artifacts,
   onOpen,
@@ -1744,125 +1728,10 @@ function TaskResult({
   // One vocabulary for "what does this file get" (`components/media.ts`),
   // instead of the pair of booleans whose negation used to mean "download,
   // silently" for everything that was neither text nor a document.
-  const kind = artifact === null ? "none" : previewKind(artifact.media_type);
-  const readable = kind === "text";
-  const isDocument = kind === "docx";
-  const preview = useQuery({
-    // 带上身份。这一族键此前是这个页面上唯一不带身份的，而它们都是
-    // `staleTime: Infinity`——QueryClient 是应用级的，切身份不会重建它，
-    // 于是同一个 principal 收窄 scope 之后，先前读过的产物内容会直接从
-    // 缓存里渲染出来，不再经过一次授权。
-    queryKey: [
-      "work",
-      "artifact-text",
-      ...workIdentityQueryKey(identity),
-      artifact?.artifact_id ?? "",
-    ],
-    enabled: readable,
-    staleTime: Number.POSITIVE_INFINITY,
-    queryFn: () => {
-      if (artifact === null) throw new Error("没有可预览的产物");
-      return getArtifactText(identity, artifact.artifact_id);
-    },
-  });
-  // A separate query rather than a branch inside the one above: this one hits a
-  // different endpoint, returns a different shape, and is the only one that can
-  // fail because a *stored file* will not parse. Sharing a key would also share
-  // a cache entry between two unrelated payloads.
-  const document = useQuery({
-    queryKey: [
-      "work",
-      "artifact-document",
-      ...workIdentityQueryKey(identity),
-      artifact?.artifact_id ?? "",
-    ],
-    enabled: isDocument,
-    staleTime: Number.POSITIVE_INFINITY,
-    queryFn: () => {
-      if (artifact === null) throw new Error("没有可预览的产物");
-      return getDocumentPreview(identity, artifact.artifact_id);
-    },
-  });
-  // Which file the reader sent back to text, rather than which one they asked
-  // to lay out. The polarity is the point: a Word document opens on 版面 now,
-  // because the document is what the Task was asked for, and opening it onto
-  // extracted text read as "the task produced plain text" -- the rendered page
-  // sat behind a control nothing pointed at. Still an artifact id rather than
-  // a boolean: this component stays mounted while the reading column moves
-  // from one artifact to the next, and a 文字 chosen for one document must not
-  // decide the view for the next one. Narrowed on read, the same way the page
-  // decides which artifact is open at all.
-  const [textFor, setTextFor] = useState<string | null>(null);
-  // Asked before the conversion is, because a browser that will not paint a
-  // PDF makes the whole layout half moot: the server would start an external
-  // converter, hold a document in memory and send it, for a frame that shows
-  // the reader nothing. Declining here costs one property read.
-  const viewerShowsPdf = browserShowsPdfInline();
-  const wantsLayout =
-    isDocument &&
-    artifact !== null &&
-    textFor !== artifact.artifact_id &&
-    viewerShowsPdf;
-  // The third query on one artifact, and it earns the same answer the second
-  // one did: a different endpoint, a different shape, and a failure that means
-  // something else again. This is the only one that can come back "this
-  // deployment has no converter", which is a fact about the server rather than
-  // about the document -- and the reason it resolves rather than throws.
-  const layout = useQuery({
-    queryKey: [
-      "work",
-      "artifact-layout",
-      ...workIdentityQueryKey(identity),
-      artifact?.artifact_id ?? "",
-    ],
-    enabled: wantsLayout,
-    staleTime: Number.POSITIVE_INFINITY,
-    queryFn: () => {
-      if (artifact === null) throw new Error("没有可预览的产物");
-      return getDocumentPdf(identity, artifact.artifact_id);
-    },
-  });
-  const layoutBlob = layout.data?.available === true ? layout.data.blob : null;
-  // The first object URL on this page that has to outlive the render that made
-  // it: a frame keeps reading its source, so the revoke `downloadArtifact` does
-  // one line after the click would blank the panel here.
-  //
-  // Tied to the frame element instead of to a render, through a ref callback
-  // and React 19's ref cleanup. The URL is created when the node appears and
-  // revoked when it goes -- unmount, a switch back to the text view, a move to
-  // another artifact -- which is the leak this has to not be: one URL per
-  // preview, held for the life of the tab. Memoized on the blob because an
-  // inline callback is a new function every render, and React would detach and
-  // re-attach it each time, revoking a source the frame is still displaying.
-  const attachLayoutFrame = useCallback(
-    (frame: HTMLIFrameElement | null) => {
-      if (frame === null || layoutBlob === null) return;
-      const url = URL.createObjectURL(layoutBlob);
-      frame.src = url;
-      return () => {
-        URL.revokeObjectURL(url);
-      };
-    },
-    [layoutBlob],
-  );
-  // A decline is not an error and is deliberately not read off one. A network
-  // failure is the only thing that reaches `isError` here, and it lands on the
-  // same fallback as every declared refusal: there is no layout, the text
-  // preview is unaffected, and the reader is told which of those is true.
-  const layoutDeclined: PanelLayoutDecline | null = !viewerShowsPdf
-    ? "viewer_unavailable"
-    : layout.data?.available === false
-      ? layout.data.reason
-      : layout.isError
-        ? "unavailable"
-        : null;
-  // What the panel shows, not what was asked for. A declined layout snaps the
-  // control to 文字 rather than leaving 版面 lit over text -- the reader would
-  // have no way to tell the view named from the one they got. And because 版面
-  // is where a document now opens, this snap is also how a deployment without
-  // a converter degrades: onto the text view with the note below saying why,
-  // never silently.
-  const showingLayout = wantsLayout && layoutDeclined === null;
+  // 「这份产出长什么样」整段搬去了 `ArtifactPreview`：那一段只读 artifact 和
+  // identity，而这个组件其余部分说的是「这次任务怎么样」——运行失败、复核
+  // 提醒、下载与返回。两件事挤在一起的结果是它们只能出现在同一个地方，于是
+  // 从产出文件栏点开一个文件就得把整个阅读栏换掉。
 
   if (artifact === null) {
     // Parked, and its own thing. This Task was submitted under run semantics
@@ -2086,169 +1955,7 @@ function TaskResult({
           下载
         </button>
       </header>
-      {isDocument ? (
-        document.isPending ? (
-          <LoadingLine label="正在读取文档内容" />
-        ) : document.isError ? (
-          <>
-            <ErrorNotice
-              message={errorMessage(document.error, "无法预览这个文档")}
-            />
-            {/* The preview is the convenience; the file is the deliverable.
-                Saying so keeps a failed extraction from reading as a lost
-                document. */}
-            <p className="aw-page-note">文件本身没有问题，可以直接下载打开。</p>
-          </>
-        ) : (
-          <>
-            {/* The same control the approvals filter uses. Two views of one
-                file, so the reader picks rather than scrolls past the wrong
-                one; 版面 goes flat once this deployment has said it cannot,
-                because a button that has already refused should not keep
-                offering. */}
-            <div
-              className="aw-segmented aw-preview-views"
-              aria-label="预览方式"
-            >
-              <button
-                aria-pressed={showingLayout}
-                className={showingLayout ? "is-active" : ""}
-                disabled={layoutDeclined !== null}
-                onClick={() => setTextFor(null)}
-                type="button"
-              >
-                版面
-              </button>
-              <button
-                aria-pressed={!showingLayout}
-                className={showingLayout ? "" : "is-active"}
-                onClick={() => setTextFor(artifact.artifact_id)}
-                type="button"
-              >
-                文字
-              </button>
-            </div>
-            {/* Above the text it is explaining, and a note rather than an
-                `ErrorNotice`: nothing here failed for the reader. The text
-                below is intact and the file downloads unchanged, so painting
-                this red would report the shape of a deployment as a fault and
-                cast doubt on a preview that is fine. */}
-            {layoutDeclined === null ? null : (
-              <p className="aw-page-note">
-                {layoutDeclineNote(layoutDeclined)}
-              </p>
-            )}
-            {showingLayout ? (
-              layoutBlob === null ? (
-                <LoadingLine label="正在生成版面预览" />
-              ) : (
-                <>
-                  <div className="aw-preview-frame">
-                    {/* No `sandbox`. These bytes were typed `application/pdf`
-                        by the client before the URL existed, so the frame can
-                        only be the browser's own PDF viewer -- and a sandbox
-                        strict enough to matter also stops that viewer, which
-                        shows an empty panel with nothing saying why. */}
-                    <iframe ref={attachLayoutFrame} title="版面预览" />
-                  </div>
-                  {/* The second sentence is for the frame above having shown
-                      nothing. `browserShowsPdfInline` catches only browsers
-                      that admit they have no viewer; a Chromium web view
-                      reports one, paints its backdrop and raises nothing, so
-                      there is no state this component could have entered
-                      instead. What is left is to name the thing the reader is
-                      looking at -- a flat dark rectangle -- and point at the
-                      two ways out, rather than let it read as a broken
-                      document. */}
-                  <p className="aw-page-note">
-                    这是转换出来的版面预览，和 Word
-                    打开可能有细微差别；需要原样查看请下载。
-                    这里若是一片空白或纯黑，是这个浏览器不显示内嵌
-                    PDF——文档没问题，点「文字」看内容，或下载后用 Word 打开。
-                  </p>
-                </>
-              )
-            ) : (
-              <>
-                <MarkdownContent text={document.data.text} />
-                {/* The cut used to be a note of its own, right here. It is a
-                    row *in* the list now: an empty list is how this page says
-                    the preview is faithful, and a note standing beside that
-                    emptiness does not stop it being said. */}
-                <PreviewGaps preview={document.data} />
-                <p className="aw-page-note">
-                  这是文档的文字预览，不含排版；需要原样查看请下载。
-                </p>
-              </>
-            )}
-          </>
-        )
-      ) : kind === "image" || kind === "pdf" ? (
-        <BlobPreview
-          kind={kind}
-          load={() => getArtifactBlob(identity, artifact.artifact_id)}
-          name={artifact.filename ?? artifact.kind}
-          queryKey={[
-            "work",
-            "artifact-blob",
-            ...workIdentityQueryKey(identity),
-            artifact.artifact_id,
-          ]}
-          sizeBytes={artifact.size_bytes}
-        />
-      ) : kind === "html" ? (
-        // Rendered live in HtmlPreview's sandbox frame, not fed to the
-        // Markdown path below -- which used to happen and answered a page
-        // with its own sanitised remains: no source, no rendering, nothing.
-        <HtmlPreview
-          load={() => getArtifactText(identity, artifact.artifact_id)}
-          name={artifact.filename ?? artifact.kind}
-          queryKey={[
-            "work",
-            "artifact-html",
-            ...workIdentityQueryKey(identity),
-            artifact.artifact_id,
-          ]}
-          sizeBytes={artifact.size_bytes}
-        />
-      ) : !readable ? (
-        <p className="aw-page-note">
-          {mediaLabel(artifact.media_type)} · {formatBytes(artifact.size_bytes)}
-          ，这个类型只能下载后查看。
-        </p>
-      ) : preview.isPending ? (
-        <LoadingLine label="正在读取产出内容" />
-      ) : preview.isError ? (
-        <ErrorNotice
-          message={errorMessage(preview.error, "读取产出内容失败")}
-        />
-      ) : (
-        <>
-          {/* Markdown only for Markdown. Every `text` artifact used to go
-              through the renderer, and a Task that produced a `.py` had it
-              formatted as prose: indentation collapsed, `# 注释` promoted to a
-              heading, `*args` eaten as emphasis. The code was still downloadable
-              and the page was still calling it the deliverable, which is the
-              worst combination -- the reader is looking straight at the thing
-              and what they are looking at is wrong.
-
-              A `<pre>` for everything else, matching what the Code console
-              shows for the same bytes. That a Task cannot *run* its .py is a
-              recorded trade (ADR-065 §4: no working set here); rendering it as
-              a document was never a trade, just a default nobody had split. */}
-          {previewKind(artifact.media_type) === "text" &&
-          isMarkdown(artifact.media_type) ? (
-            <MarkdownContent text={preview.data.text} />
-          ) : (
-            <pre className="aw-code-file-body">{preview.data.text}</pre>
-          )}
-          {preview.data.truncated ? (
-            <p className="aw-page-note">
-              内容较长，这里只显示开头；完整内容请下载。
-            </p>
-          ) : null}
-        </>
-      )}
+      <ArtifactPreview artifact={artifact} identity={identity} />
     </section>
   );
 }
@@ -2306,105 +2013,6 @@ function RunFailure({
 }
 
 /**
- * Whether these bytes were written to be read as Markdown.
- *
- * Asked by name rather than by `previewKind`, because the kind deliberately
- * answers a coarser question: `text/markdown` and `text/x-python` are both
- * `text` and get the same fetch, and that is right -- what differs is only how
- * the string is painted once it arrives.
- */
-function isMarkdown(mediaType: string): boolean {
-  const base = mediaType.split(";")[0]?.trim().toLowerCase() ?? "";
-  return base === "text/markdown" || base === "text/x-markdown";
-}
-
-/**
- * What the text preview did not bring across, zeros left out.
- *
- * This replaces a sentence -- "不含排版、图片与页眉页脚；共 N 张表格" -- and the
- * sentence is why it exists. Prose can hold one number; the server reports
- * seven, and threading them into that clause produces a paragraph nobody
- * finishes reading. A list also survives the next count without being rewritten.
- *
- * Zeros are dropped rather than shown as 0. A document with no footnotes has
- * nothing missing on that axis, and a row saying so is noise competing with the
- * rows that mean something. The cost is that a count the server failed to send
- * would read as a zero and disappear, which is why the wire model requires
- * every one of them (`api/types.ts`).
- *
- * **The cut is one of the rows.** It has to be, because rendering nothing is
- * how this list says the preview is faithful, and a preview that stopped
- * partway through the document is not entitled to say that. The seven counts
- * cannot cover it: every one of them is of the whole document
- * (`adapters/documents/docx.py`), so a truncated preview reports the pictures
- * and the footnotes below the cut correctly and reports nothing whatever about
- * the prose that went with them -- and a document of plain paragraphs, cut in
- * half, scores zero on all seven. It leads the list rather than sorting into
- * it, and it is the only row without a number: what is missing is exactly the
- * part this preview did not read, which is why there is nothing to count.
- *
- * So an empty list now claims what it can carry: the text is whole and none of
- * the seven kinds was lost. Not that the document is fully represented --
- * endnotes, text boxes and tables nested inside cells go missing with no count
- * naming them, and that is a gap in the extraction rather than something this
- * list can close by staying quiet.
- *
- * Only under the text view. In 版面 the pictures and the running titles are on
- * screen, so this list would be describing losses the reader can see did not
- * happen.
- */
-function PreviewGaps({ preview }: { preview: DocumentPreview }) {
-  // Ordered by how invisible the loss is. A missing picture cannot be inferred
-  // from the prose around it; a table that came through as plain rows is at
-  // least visibly a table. Quantities carry their measure word, because "5" in
-  // a column of counts says less than "5 段" does.
-  const counted = [
-    { label: "图片没有显示", count: preview.image_count, unit: "张" },
-    { label: "脚注没有显示", count: preview.footnote_count, unit: "条" },
-    { label: "页眉没有显示", count: preview.header_count, unit: "处" },
-    { label: "页脚没有显示", count: preview.footer_count, unit: "处" },
-    { label: "表格只保留文字", count: preview.table_count, unit: "张" },
-    {
-      label: "列表序号没有生成",
-      count: preview.numbered_paragraph_count,
-      unit: "段",
-    },
-    {
-      label: "段落样式没有保留",
-      count: preview.flattened_paragraph_count,
-      unit: "段",
-    },
-  ].filter((gap) => gap.count > 0);
-  if (!preview.truncated && counted.length === 0) return null;
-  // The middle clause only when there are numbers under it to be read wrong.
-  // They are of the whole file, which under a preview that stops early is the
-  // difference between "four pictures" and "four pictures so far" -- and a
-  // reader who takes the smaller reading concludes the rest is prose.
-  const cutNote = [
-    "正文只显示到这里，后面的内容没有进入预览。",
-    counted.length === 0
-      ? ""
-      : "下面的数字是按整份文档数的，不只是显示出来的这部分。",
-    "完整内容请下载。",
-  ].join("");
-  return (
-    <ul className="aw-preview-gaps" aria-label="预览没有还原的部分">
-      {preview.truncated ? (
-        <li className="aw-preview-gap-cut">{cutNote}</li>
-      ) : null}
-      {counted.map((gap) => (
-        <li key={gap.label}>
-          <span>{gap.label}</span>
-          <strong>
-            {gap.count} {gap.unit}
-          </strong>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/**
  * The one line explaining why there is no layout view.
  *
  * The server's own detail is not echoed, and for once that is not about leaking
@@ -2413,29 +2021,6 @@ function PreviewGaps({ preview }: { preview: DocumentPreview }) {
  * document, or this document is the problem -- and each sentence ends by
  * pointing at what still works.
  */
-/**
- * Why this panel has no layout to show -- the server's reasons, plus one of
- * its own.
- *
- * The server's vocabulary stays the server's: `getDocumentPdf` answers about a
- * deployment and a document, and `viewer_unavailable` is a fact about neither.
- * They meet here because the reader is owed one sentence rather than a taxonomy
- * -- what they see either way is the text view and a note saying why.
- */
-type PanelLayoutDecline = DocumentLayoutDecline | "viewer_unavailable";
-
-function layoutDeclineNote(reason: PanelLayoutDecline): string {
-  if (reason === "converter_unavailable") {
-    return "这套部署没有版面预览：服务器上没有可用的文档转换器。下面是文字预览，需要原样查看请下载。";
-  }
-  if (reason === "too_large") {
-    return "这份文档的版面太大，页面里不展开。下面是文字预览，需要原样查看请下载。";
-  }
-  if (reason === "viewer_unavailable") {
-    return "这个浏览器不显示内嵌 PDF，所以这里给不出版面（文档本身没问题）。下面是文字预览，要看排版请下载后用 Word 打开，或换一个浏览器打开控制台。";
-  }
-  return "这套部署给不出这份文档的版面。下面是文字预览，需要原样查看请下载。";
-}
 
 /**
  * The decision, where the Task is.
@@ -2527,12 +2112,6 @@ function decidedByLabel(decidedBy: TaskIntent["graph_decided_by"]): string {
   if (decidedBy === "user") return "用户指定";
   if (decidedBy === "model") return "模型判定";
   return "系统默认";
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim() !== "")
-    return error.message;
-  return fallback;
 }
 
 /**
