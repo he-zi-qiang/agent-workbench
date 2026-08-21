@@ -222,7 +222,7 @@
 
   --aw-accent: light-dark(#b75d42, #d98265);
   --aw-accent-hover: light-dark(#ac5337, #e49376);
-  --aw-accent-soft: light-dark(#f8eee9, #2d201b);
+  --aw-accent-soft: light-dark(#f8eee9, #1e140f);
 
   /* 落在动作色上的前景。上一版这里写的是「近黑而不是白：白字落在浅色橙上只有
      3.5:1」——那个 3.5 是错的，实测白字落在 #b95f43 上是 4.39:1，近黑是
@@ -234,15 +234,22 @@
      不成立的那件事。 */
   --aw-accent-on: light-dark(#ffffff, #1d1411);
 
+  /* 深色一侧的 -soft / -border 跟着正文区一起下沉。
+     它们原先是按 window #191918（CIE L* 8.72）调的，落在上面是 +3.8 L*；
+     正文区压到 #060605（1.63）之后，同样的值变成 +10.9——一块本来只是「带点
+     颜色的底」的卡片，会突然读成一个亮色块。现在 soft 落在 +5.5、border 落在
+     +11，色相不动。
+     色度是按明度比例收的（×√(L新/L旧)）：把一个 L*12.5 的色块直接压到 7.3
+     而色度不动，得到的是一块闷色，不是一层淡色。 */
   --aw-success: light-dark(#2f7a54, #6cba8b);
-  --aw-success-soft: light-dark(#edf5f0, #14241b);
-  --aw-success-border: light-dark(#cfe3d7, #24402f);
+  --aw-success-soft: light-dark(#edf5f0, #0b1911);
+  --aw-success-border: light-dark(#cfe3d7, #0f2518);
   --aw-warning: light-dark(#9a6724, #d6a45c);
-  --aw-warning-soft: light-dark(#faf2e4, #26200f);
-  --aw-warning-border: light-dark(#e6dcc6, #453820);
+  --aw-warning-soft: light-dark(#faf2e4, #1b1607);
+  --aw-warning-border: light-dark(#e6dcc6, #2a1f0c);
   --aw-danger: light-dark(#b44f4b, #e58e88);
-  --aw-danger-soft: light-dark(#fbeceb, #2a1716);
-  --aw-danger-border: light-dark(#eed6d4, #4a2b29);
+  --aw-danger-soft: light-dark(#fbeceb, #231110);
+  --aw-danger-border: light-dark(#eed6d4, #331918);
 
   /* --- 证据 / 边界 ------------------------------------------------------
    *
@@ -256,15 +263,15 @@
    * 色相几乎没变（#486b7a → #3f6472，同一支青灰），所以这是一次重命名而不是
    * 重新配色；--aw-info 保留为别名，让还没迁移的规则继续成立。 */
   --aw-evidence: light-dark(#3f6472, #8fb7c6);
-  --aw-evidence-soft: light-dark(#eef3f5, #16232a);
-  --aw-evidence-border: light-dark(#dbe4e7, #2a3c45);
+  --aw-evidence-soft: light-dark(#eef3f5, #0c171d);
+  --aw-evidence-border: light-dark(#dbe4e7, #142329);
 
   /* 引文底，比 --aw-evidence-soft 再淡一档。
    *
    * 两个面，不是一个：引用卡的表头用 soft，被引的原文用这一档。原文块嵌在那张
    * 卡里，两者同色的话卡就是一块平的青，而这里要说的恰恰是「这一段和外面那些
    * 不是一回事」——它是从别处读来的。 */
-  --aw-evidence-quote: light-dark(#f6f9fa, #121c21);
+  --aw-evidence-quote: light-dark(#f6f9fa, #0a1216);
   --aw-info: var(--aw-evidence);
   --aw-info-soft: var(--aw-evidence-soft);
 

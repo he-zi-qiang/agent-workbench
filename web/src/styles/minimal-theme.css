@@ -1389,9 +1389,16 @@ select {
 .aw-create-task-bar {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   padding: 4px;
   gap: 8px;
+}
+
+/* 窄屏上这一行会换行，但按钮本身不该断成两行——「创建任务」竖着劈成
+   「创建 / 任务」比让它独占一行难看得多。 */
+.aw-create-task-bar > .aw-button.is-primary {
+  white-space: nowrap;
 }
 
 .aw-create-task-spacer {
@@ -1495,36 +1502,38 @@ select {
   color: var(--aw-text-muted);
 }
 
+/* 和对话页的起点同一个形状：三颗药丸，不是三行带下划线的链接。
+   两个页面对同一种东西各画一种样子，是这套界面最容易被一眼看出不统一的
+   那一类问题。 */
 .aw-code-starters {
-  display: grid;
-  width: min(520px, 100%);
+  display: flex;
+  width: min(720px, 100%);
+  flex-wrap: wrap;
+  justify-content: center;
   justify-self: center;
-  grid-template-columns: 1fr;
-  gap: 0;
-  border-top: 1px solid var(--aw-border-subtle);
+  gap: 8px;
+  border-top: 0;
 }
 
 .aw-code-starters > button {
-  display: flex;
+  display: inline-flex;
   min-width: 0;
-  min-height: 40px;
+  min-height: 36px;
   align-items: center;
-  padding: 8px 4px;
-  border: 0;
-  border-bottom: 1px solid var(--aw-border-subtle);
-  border-radius: 0;
+  padding: 0 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
   background: transparent;
   color: var(--aw-text-soft);
-  font-size: 13px;
+  font-size: 13.5px;
   text-align: left;
   transition:
     color var(--aw-duration-fast) var(--aw-ease),
-    padding var(--aw-duration-fast) var(--aw-ease);
+    background var(--aw-duration-fast) var(--aw-ease);
 }
 
 .aw-code-starters > button:hover {
-  padding-left: 8px;
-  background: transparent;
+  background: var(--aw-veil);
   color: var(--aw-text);
 }
 
@@ -2058,6 +2067,48 @@ select {
 
 .aw-task-list-item.is-active strong {
   font-weight: 500;
+}
+
+/* 编码会话行同样收成单行：标题占满，时间移到行尾、静止时隐去。
+   这一串 min-width:0 不是装饰：flex/grid 的子项默认 min-width 是 auto，
+   一条不换行的长标题会把整条链一路撑到 1610px。此前两行布局下它被上层的
+   overflow:hidden 裁掉，看起来像省略号，其实只是切断——真正的省略号要求
+   收窄的是标题自己。 */
+.aw-code-session-list ul {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.aw-code-session-list li,
+.aw-code-recent-row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.aw-code-recent-link {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.aw-code-recent-title {
+  min-width: 0;
+  flex: 1;
+  font-size: 13.5px;
+}
+
+.aw-code-recent-when {
+  flex: none;
+  opacity: 0;
+  font-size: 12px;
+  transition: opacity var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-code-recent-link:hover .aw-code-recent-when,
+.aw-code-recent-link[aria-current="page"] .aw-code-recent-when {
+  opacity: 1;
 }
 
 .aw-chat-session:hover,
