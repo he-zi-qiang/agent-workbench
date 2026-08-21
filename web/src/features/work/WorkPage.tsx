@@ -11,7 +11,6 @@ import {
   FileDown,
   PanelLeft,
   Paperclip,
-  Plus,
   RefreshCw,
   Trash2,
   X,
@@ -89,6 +88,8 @@ import {
   IconButton,
   KeyValue,
   LoadingLine,
+  NewSessionAction,
+  SidebarSection,
   StatusPill,
   formatDateTime,
   formatStatus,
@@ -991,166 +992,162 @@ export function WorkPage() {
     >
       <WorkspaceSidebarPortal>
         <aside className="aw-work-sidebar" aria-label="任务列表与新建任务">
-          <header className="aw-pane-header">
-            <div>
-              <strong>最近任务</strong>
-            </div>
-            <div className="aw-pane-header-actions">
-              <button
-                // 不叫「刷新任务列表」：那个名字里整整齐齐含着「新任务」，
-                // 而「新任务」是它上面两行的另一个按钮。两个控件的无障碍名
-                // 互为子串，对按名字找控件的人和工具都是一次歧义。
-                aria-label="重新加载列表"
-                className="aw-icon-button"
-                disabled={tasksQuery.isFetching}
-                onClick={() => void tasksQuery.refetch()}
-                type="button"
-              >
-                <RefreshCw aria-hidden="true" size={16} />
-              </button>
-              <IconButton
-                className="aw-work-sessions-close"
-                label="关闭任务列表"
-                onClick={workspaceSidebar.close}
-              >
-                <X aria-hidden="true" size={17} />
-              </IconButton>
-            </div>
-          </header>
-
-          <button
-            aria-current={selectedTaskId === undefined ? "page" : undefined}
-            className={`aw-create-task-toggle ${
-              selectedTaskId === undefined ? "is-active" : ""
-            }`}
-            onClick={() => {
-              workspaceSidebar.close();
-              if (selectedTaskId === undefined) {
-                window.requestAnimationFrame(() =>
-                  document.getElementById("work-objective")?.focus(),
-                );
-              } else {
-                void navigate("/work");
-              }
-            }}
-            type="button"
-          >
-            <Plus aria-hidden="true" size={16} />
-            新任务
-          </button>
-
-          <div className="aw-task-filters" role="group" aria-label="任务筛选">
-            {TASK_FILTERS.map((entry) => (
-              <button
-                aria-pressed={taskFilter === entry.id}
-                className={taskFilter === entry.id ? "is-active" : ""}
-                key={entry.id}
-                onClick={() => setTaskFilter(entry.id)}
-                type="button"
-              >
-                {entry.label}
-              </button>
-            ))}
-          </div>
-
-          <nav className="aw-task-list" aria-label="任务">
-            {tasksQuery.isPending ? <LoadingLine label="正在加载任务" /> : null}
-            {tasksQuery.isError ? (
-              <ErrorNotice
-                message={errorMessage(tasksQuery.error, "加载任务列表失败")}
-              />
-            ) : null}
-            {tasks.map((task) => (
-              <div className="aw-task-list-row" key={task.task_id}>
-                <Link
-                  aria-current={
-                    task.task_id === selectedTaskId ? "page" : undefined
-                  }
-                  className={`aw-task-list-item ${
-                    task.task_id === selectedTaskId ? "is-active" : ""
-                  }`}
-                  onClick={workspaceSidebar.close}
-                  to={`/work/${encodeURIComponent(task.task_id)}`}
+          <SidebarSection
+            actions={
+              <>
+                <button
+                  // 不叫「刷新任务列表」：那个名字里整整齐齐含着「新任务」，
+                  // 而「新任务」是它旁边的另一个按钮。两个控件的无障碍名
+                  // 互为子串，对按名字找控件的人和工具都是一次歧义。
+                  aria-label="重新加载列表"
+                  className="aw-side-action"
+                  disabled={tasksQuery.isFetching}
+                  onClick={() => void tasksQuery.refetch()}
+                  title="重新加载列表"
+                  type="button"
                 >
-                  <span>
-                    {/* The objective when the server recorded one, because a list
+                  <RefreshCw aria-hidden="true" size={15} />
+                </button>
+                <NewSessionAction
+                  label="新任务"
+                  onClick={() => {
+                    workspaceSidebar.close();
+                    if (selectedTaskId === undefined) {
+                      window.requestAnimationFrame(() =>
+                        document.getElementById("work-objective")?.focus(),
+                      );
+                    } else {
+                      void navigate("/work");
+                    }
+                  }}
+                />
+                <IconButton
+                  className="aw-work-sessions-close"
+                  label="关闭任务列表"
+                  onClick={workspaceSidebar.close}
+                >
+                  <X aria-hidden="true" size={17} />
+                </IconButton>
+              </>
+            }
+            storageKey="aw.side.work.v1"
+            title="最近任务"
+          >
+            <div className="aw-task-filters" role="group" aria-label="任务筛选">
+              {TASK_FILTERS.map((entry) => (
+                <button
+                  aria-pressed={taskFilter === entry.id}
+                  className={taskFilter === entry.id ? "is-active" : ""}
+                  key={entry.id}
+                  onClick={() => setTaskFilter(entry.id)}
+                  type="button"
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+
+            <nav className="aw-task-list" aria-label="任务">
+              {tasksQuery.isPending ? (
+                <LoadingLine label="正在加载任务" />
+              ) : null}
+              {tasksQuery.isError ? (
+                <ErrorNotice
+                  message={errorMessage(tasksQuery.error, "加载任务列表失败")}
+                />
+              ) : null}
+              {tasks.map((task) => (
+                <div className="aw-task-list-row" key={task.task_id}>
+                  <Link
+                    aria-current={
+                      task.task_id === selectedTaskId ? "page" : undefined
+                    }
+                    className={`aw-task-list-item ${
+                      task.task_id === selectedTaskId ? "is-active" : ""
+                    }`}
+                    onClick={workspaceSidebar.close}
+                    to={`/work/${encodeURIComponent(task.task_id)}`}
+                  >
+                    <span>
+                      {/* The objective when the server recorded one, because a list
                       of ids tells the reader nothing about which Task is which.
                       Older Tasks have no label and still have to be openable, so
                       they fall back to the id rather than to a blank row. */}
-                    <strong title={task.objective_preview ?? task.task_id}>
-                      {task.objective_preview ?? shortId(task.task_id, 18)}
-                    </strong>
-                    <small>{formatDateTime(task.created_at)}</small>
-                  </span>
-                  <span
-                    aria-label={`状态：${formatStatus(task.status)}`}
-                    className="aw-task-status-dot"
-                    data-status={task.status}
-                    role="img"
-                    title={formatStatus(task.status)}
-                  />
-                </Link>
-                {/* Offered only on a settled Task, because the server refuses
+                      <strong title={task.objective_preview ?? task.task_id}>
+                        {task.objective_preview ?? shortId(task.task_id, 18)}
+                      </strong>
+                      <small>{formatDateTime(task.created_at)}</small>
+                    </span>
+                    <span
+                      aria-label={`状态：${formatStatus(task.status)}`}
+                      className="aw-task-status-dot"
+                      data-status={task.status}
+                      role="img"
+                      title={formatStatus(task.status)}
+                    />
+                  </Link>
+                  {/* Offered only on a settled Task, because the server refuses
                   anything else with a 409 -- and a button whose only outcome is
                   an error teaches the reader the wrong rule. Cancelling is how
                   a running Task becomes deletable, and it already has its own
                   control in the detail pane. */}
-                {isSettledStatus(task.status) ? (
+                  {isSettledStatus(task.status) ? (
+                    <button
+                      aria-label={`删除任务 ${task.objective_preview ?? task.task_id}`}
+                      className="aw-task-list-delete"
+                      disabled={deleteMutation.isPending}
+                      onClick={() => void removeTask(task.task_id)}
+                      title="删除"
+                      type="button"
+                    >
+                      <Trash2 aria-hidden size={13} />
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              {deleteMutation.isError ? (
+                <ErrorNotice
+                  message={errorMessage(deleteMutation.error, "删除任务失败")}
+                />
+              ) : null}
+              {!tasksQuery.isPending &&
+              !tasksQuery.isError &&
+              tasks.length === 0 &&
+              taskFilter !== "all" ? (
+                // A filtered empty list is not an empty account. Saying "还没有任务"
+                // here would contradict the list the reader was looking at one
+                // click ago.
+                <p className="aw-page-note">
+                  这个筛选下没有任务。
                   <button
-                    aria-label={`删除任务 ${task.objective_preview ?? task.task_id}`}
-                    className="aw-task-list-delete"
-                    disabled={deleteMutation.isPending}
-                    onClick={() => void removeTask(task.task_id)}
-                    title="删除"
+                    className="aw-link-button"
+                    onClick={() => setTaskFilter("all")}
                     type="button"
                   >
-                    <Trash2 aria-hidden size={13} />
+                    看全部
                   </button>
-                ) : null}
-              </div>
-            ))}
-            {deleteMutation.isError ? (
-              <ErrorNotice
-                message={errorMessage(deleteMutation.error, "删除任务失败")}
-              />
-            ) : null}
-            {!tasksQuery.isPending &&
-            !tasksQuery.isError &&
-            tasks.length === 0 &&
-            taskFilter !== "all" ? (
-              // A filtered empty list is not an empty account. Saying "还没有任务"
-              // here would contradict the list the reader was looking at one
-              // click ago.
-              <p className="aw-page-note">
-                这个筛选下没有任务。
+                </p>
+              ) : null}
+              {!tasksQuery.isPending &&
+              !tasksQuery.isError &&
+              tasks.length === 0 &&
+              taskFilter === "all" ? (
+                <p className="aw-muted">
+                  还没有任务。说一件要做的事，就能开一个。
+                </p>
+              ) : null}
+              {tasksQuery.hasNextPage ? (
                 <button
-                  className="aw-link-button"
-                  onClick={() => setTaskFilter("all")}
+                  className="aw-button"
+                  disabled={tasksQuery.isFetchingNextPage}
+                  onClick={() => void tasksQuery.fetchNextPage()}
                   type="button"
                 >
-                  看全部
+                  {tasksQuery.isFetchingNextPage ? "正在加载…" : "加载更多"}
                 </button>
-              </p>
-            ) : null}
-            {!tasksQuery.isPending &&
-            !tasksQuery.isError &&
-            tasks.length === 0 &&
-            taskFilter === "all" ? (
-              <p className="aw-muted">
-                还没有任务。说一件要做的事，就能开一个。
-              </p>
-            ) : null}
-            {tasksQuery.hasNextPage ? (
-              <button
-                className="aw-button"
-                disabled={tasksQuery.isFetchingNextPage}
-                onClick={() => void tasksQuery.fetchNextPage()}
-                type="button"
-              >
-                {tasksQuery.isFetchingNextPage ? "正在加载…" : "加载更多"}
-              </button>
-            ) : null}
-          </nav>
+              ) : null}
+            </nav>
+          </SidebarSection>
         </aside>
       </WorkspaceSidebarPortal>
 

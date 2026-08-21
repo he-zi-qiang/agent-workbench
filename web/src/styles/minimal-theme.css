@@ -1693,6 +1693,18 @@ select {
   flex: 1 1 auto;
 }
 
+/* 分区收起之后，这一栏不该还占着那段高度——收起的意义就是把它让出去。
+   用 :has() 而不是在 React 里往上层加 class：折叠状态归 SidebarSection 自己
+   管，而它是 portal 进来的，够不到外面这两层容器。 */
+.aw-sidebar-workspace.is-active:has(.aw-side-section.is-collapsed) {
+  min-height: auto;
+  flex: 0 0 auto;
+}
+
+.aw-sidebar-context-slot:has(.aw-side-section.is-collapsed) {
+  flex: 0 0 auto;
+}
+
 .aw-sidebar-workspace > .aw-global-link {
   min-height: 38px;
   flex: 0 0 38px;
@@ -1730,7 +1742,8 @@ select {
     .aw-chat-sessions,
     .aw-code-sessions,
     .aw-work-sidebar,
-    .aw-knowledge-sidebar
+    .aw-knowledge-sidebar,
+    .aw-projects-sidebar
   ) {
   position: static;
   display: flex;
@@ -1782,7 +1795,8 @@ select {
   letter-spacing: 0.01em;
 }
 
-.aw-sidebar-context-slot :is(.aw-new-session, .aw-create-task-toggle) {
+.aw-sidebar-context-slot
+  :is(.aw-dead-new-session, .aw-dead-create-task-toggle) {
   min-height: 38px;
   justify-content: flex-start;
   margin: 0 1px 6px;
@@ -1795,14 +1809,16 @@ select {
   font-weight: 550;
 }
 
-.aw-sidebar-context-slot :is(.aw-new-session, .aw-create-task-toggle):hover,
-.aw-sidebar-context-slot .aw-create-task-toggle.is-active {
+.aw-sidebar-context-slot
+  :is(.aw-dead-new-session, .aw-dead-create-task-toggle):hover {
   border: 0;
   background: var(--aw-panel-strong);
   color: var(--aw-text);
 }
 
-.aw-sidebar-context-slot :is(.aw-new-session, .aw-create-task-toggle) svg {
+.aw-sidebar-context-slot
+  :is(.aw-dead-new-session, .aw-dead-create-task-toggle)
+  svg {
   color: var(--aw-accent);
 }
 
@@ -1844,10 +1860,13 @@ select {
   font-size: 12px;
 }
 
+/* margin-top: auto 而不是 3px：把这一族钉在栏底。
+   此前是靠上面那份会话列表撑满高度顺带把它推下去的——列表一旦收起（或者
+   本来就短），身份行就跟着浮到列表底下，侧栏看起来像没写完。 */
 .aw-sidebar-footer-nav {
   display: grid;
   flex: 0 0 auto;
-  margin-top: 3px;
+  margin-top: auto;
   padding-top: 5px;
   gap: 2px;
   border-top: 1px solid var(--aw-border-subtle);
@@ -2644,4 +2663,140 @@ select {
 .aw-project-picker small {
   color: var(--aw-danger);
   font-size: 11px;
+}
+
+/* ── 侧栏分区 ───────────────────────────────────────────────────────────
+ *
+ * 一栏侧栏此时只展开一个工作区的列表，但那个列表可以很长——十几条会话把
+ * 它下面的导航挤到看不见。分区可折叠之后，「回到哪一段」和「去哪个工作区」
+ * 这两件事不再抢同一段高度。
+ *
+ * 折叠状态按分区各自记在 localStorage（aw.side.<区>.v1）：它是这台机器上
+ * 这个人的取舍，不该在刷新之后回到默认。
+ *
+ * 标题行本身就是折叠开关，右边挂图标动作。此前「新建」是一整行描边按钮，
+ * 三栏并排时三个整行按钮会和三份列表抢同一屏——现在它退成标题右边一颗
+ * 24px 的图标，`aria-label` 与 `title` 都给了名字。
+ */
+.aw-side-section {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.aw-side-section.is-open {
+  flex: 1 1 auto;
+}
+
+.aw-side-section-head {
+  display: flex;
+  min-width: 0;
+  height: 30px;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 6px;
+}
+
+.aw-side-section-toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-side-section-toggle:hover {
+  color: var(--aw-text);
+}
+
+.aw-side-section-toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 收起时箭头指向右：它说的是「展开的方向」，不是「现在是什么状态」——
+   一个朝下的箭头配一个收起的区，每次都要想一下才知道点了会怎样。 */
+.aw-side-section-toggle svg {
+  flex: none;
+  transition: transform var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-side-section.is-collapsed .aw-side-section-toggle svg {
+  transform: rotate(-90deg);
+}
+
+.aw-side-section-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.aw-side-action {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  transition:
+    background var(--aw-duration-fast) var(--aw-ease),
+    color var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-side-action:hover:not(:disabled) {
+  background: var(--aw-veil);
+  color: var(--aw-text);
+}
+
+.aw-side-action[aria-pressed="true"] {
+  background: var(--aw-veil-strong);
+  color: var(--aw-text);
+}
+
+.aw-side-action:disabled {
+  color: var(--aw-faint);
+  cursor: default;
+}
+
+.aw-side-section-body {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 搜索：收起时一个图标，展开时才占一行。此前它是常驻的一整行输入框——
+   一栏本来就窄的侧栏里，一个大多数时候不用的控件占着一行的高度。 */
+.aw-chat-session-search {
+  height: 30px;
+  flex: none;
+  margin: 0 2px 2px;
+  padding: 0 8px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: transparent;
+}
+
+.aw-chat-session-search input {
+  font-size: 13px;
 }

@@ -1,6 +1,7 @@
-import { AlertTriangle, LoaderCircle, Plus } from "lucide-react";
+import { AlertTriangle, ChevronDown, LoaderCircle, Plus } from "lucide-react";
 import type { PropsWithChildren, ReactNode } from "react";
 import type { ApprovalStatus, TaskStatus } from "../api/types";
+import { useStoredState } from "../hooks/useStoredState";
 
 export function IconButton({
   label,
@@ -36,7 +37,11 @@ export function IconButton({
   );
 }
 
-export function StatusPill({ status }: { status: TaskStatus | ApprovalStatus }) {
+export function StatusPill({
+  status,
+}: {
+  status: TaskStatus | ApprovalStatus;
+}) {
   const className =
     status === "succeeded" || status === "approved"
       ? "is-success"
@@ -45,7 +50,11 @@ export function StatusPill({ status }: { status: TaskStatus | ApprovalStatus }) 
         : ["failed", "cancelled", "dead_letter", "rejected"].includes(status)
           ? "is-danger"
           : "is-running";
-  return <span className={`aw-status-pill ${className}`}>{formatStatus(status)}</span>;
+  return (
+    <span className={`aw-status-pill ${className}`}>
+      {formatStatus(status)}
+    </span>
+  );
 }
 
 export function formatStatus(status: string): string {
@@ -113,7 +122,13 @@ export function InfoNotice({ children }: PropsWithChildren) {
   return <div className="aw-notice">{children}</div>;
 }
 
-export function KeyValue({ label, value }: { label: string; value: ReactNode }) {
+export function KeyValue({
+  label,
+  value,
+}: {
+  label: string;
+  value: ReactNode;
+}) {
   return (
     <div className="aw-key-value">
       <span>{label}</span>
@@ -134,18 +149,95 @@ export function formatSize(bytes: number): string {
 }
 
 /**
- * 「开一段新的」这个动作，在会话列这一栏里。
+ * 侧栏里的一个可折叠分区：一行标题 + 右侧动作，底下是内容。
  *
- * 此前是标题右边一个 20px 的 `+` 图标。稿子把它画成整行描边按钮，理由在这一栏
- * 的用途里：一列会话回答的是「回到哪一段」，而开新的一段是这里唯一的另一件事
- * ——它和列表并列，不从属于列表的标题。一个图标按钮在视觉上是标题的附件，
- * 而且它没有名字，只有把指针停上去才知道它是什么。
+ * 三栏共用一个组件而不是各写一遍：对话、任务、编码的会话列是同一个形状，分开
+ * 写的三份第二次改样式时会分叉，而它们分叉了没有人看得出来——三栏不会同时出现
+ * 在一块屏幕上。
  *
- * 两栏共用一个组件而不是各写一遍：Chat 与 Code 的会话列在稿子上是同一个形状，
- * 分开写的两份第二次改样式时会分叉，而它们分叉了没有人看得出来——两栏不会同时
- * 出现在一块屏幕上。
+ * 折叠状态按 `storageKey` 各自记住。整栏收起而不是只收起列表：收起之后这一栏
+ * 只剩标题那一行，另外两栏才拿得到高度——一个同时展开三份长列表的侧栏，等于
+ * 三份都读不了。
+ *
+ * `hidden` 用条件渲染而不是 CSS：这一栏是 flex 列，`display:none` 与
+ * `flex:1 1 auto` 打架，收起之后仍然会占住 min-height 撑开的那一段。
  */
-export function NewSessionButton({
+export function SidebarSection({
+  title,
+  storageKey,
+  actions,
+  children,
+}: PropsWithChildren<{
+  title: string;
+  storageKey: string;
+  actions?: ReactNode;
+}>) {
+  const [open, setOpen] = useStoredState(storageKey, true);
+  const bodyId = `${storageKey.replace(/[^a-zA-Z0-9-]/g, "-")}-body`;
+  return (
+    <section className={`aw-side-section ${open ? "is-open" : "is-collapsed"}`}>
+      <div className="aw-side-section-head">
+        <button
+          aria-controls={bodyId}
+          aria-expanded={open}
+          className="aw-side-section-toggle"
+          onClick={() => setOpen(!open)}
+          type="button"
+        >
+          <ChevronDown aria-hidden="true" size={13} />
+          <span>{title}</span>
+        </button>
+        {actions === undefined ? null : (
+          <div className="aw-side-section-actions">{actions}</div>
+        )}
+      </div>
+      {open ? (
+        <div className="aw-side-section-body" id={bodyId}>
+          {children}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * 分区标题右边的一个图标动作（新建、搜索、刷新）。
+ *
+ * 这里此前是一个整行的描边按钮，当时的理由是「一个图标按钮在视觉上是标题的
+ * 附件，而且它没有名字，只有把指针停上去才知道它是什么」。前半句现在正是要的
+ * ——三栏并排时，三个整行按钮会和三份列表抢同一屏的高度，而「开一段新的」不该
+ * 比「回到哪一段」更响。
+ *
+ * 后半句是真问题，所以没有一起丢掉：`label` 同时进 `aria-label` 和 `title`，
+ * 读屏软件念得出来，指针停上去看得见。一个没有名字的图标按钮仍然是错的，
+ * 这里只是不再用整行的宽度去换那个名字。
+ */
+export function SidebarAction({
+  label,
+  onClick,
+  active,
+  children,
+}: PropsWithChildren<{
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+}>) {
+  return (
+    <button
+      aria-label={label}
+      aria-pressed={active}
+      className="aw-side-action"
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** 一个只画加号的新建动作，省得三处各写一遍同样的 `<Plus />`。 */
+export function NewSessionAction({
   label,
   onClick,
 }: {
@@ -153,10 +245,9 @@ export function NewSessionButton({
   onClick: () => void;
 }) {
   return (
-    <button className="aw-new-session" onClick={onClick} type="button">
-      <Plus aria-hidden="true" size={15} />
-      <span>{label}</span>
-    </button>
+    <SidebarAction label={label} onClick={onClick}>
+      <Plus aria-hidden="true" size={16} />
+    </SidebarAction>
   );
 }
 
