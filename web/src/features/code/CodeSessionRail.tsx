@@ -22,13 +22,13 @@
 
 import { Pencil, Trash2, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
+import { WorkspaceSidebarActions } from "../../app/WorkspaceSidebar";
 import type { CodeSessionView } from "../../api/types";
 import {
   ErrorNotice,
   formatDateTime,
   IconButton,
   NewSessionAction,
-  SidebarSection,
   shortId,
 } from "../../components/ui";
 
@@ -139,185 +139,175 @@ export function CodeSessionRail({
       aria-label="最近的编码会话"
       className={`aw-code-sessions ${mobileOpen ? "is-mobile-open" : ""}`}
     >
-      <SidebarSection
-        actions={
-          <>
-            {/* Goes to the start page rather than POSTing an empty session:
-                the first sentence is what names a session (ADR-047), and one
-                created by a bare click sits unnamed in this list forever. */}
-            <NewSessionAction label="新建会话" onClick={onNew} />
-            <IconButton
-              className="aw-code-sessions-close"
-              label="关闭会话列表"
-              onClick={onCloseMobile}
-            >
-              <X aria-hidden size={17} />
-            </IconButton>
-          </>
-        }
-        storageKey="aw.side.code.v1"
-        title="最近编码"
-      >
-        <div className="aw-code-session-list">
-          {known.length === 0 ? (
-            <p className="aw-code-sessions-empty">
-              还没有会话。说一句要做的事就开一个。
-            </p>
-          ) : (
-            <ul>
-              {known.map((held) => (
-                <li key={held.session_id}>
-                  {renaming === held.session_id ? (
-                    <>
-                      <form
-                        aria-busy={renamePending === held.session_id}
-                        className="aw-session-inline-rename"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          if (renamePending === held.session_id) return;
-                          const field = new FormData(event.currentTarget).get(
-                            "title",
-                          );
-                          // A FormData entry is a string *or a File*, and
-                          // `String(File)` is "[object File]" -- a name nobody typed.
-                          void commitRename(
-                            held,
-                            typeof field === "string" ? field : "",
-                          );
-                        }}
+      <WorkspaceSidebarActions>
+        {/* Goes to the start page rather than POSTing an empty session:
+            the first sentence is what names a session (ADR-047), and one
+            created by a bare click sits unnamed in this list forever. */}
+        <NewSessionAction label="新建会话" onClick={onNew} />
+        <IconButton
+          className="aw-code-sessions-close"
+          label="关闭会话列表"
+          onClick={onCloseMobile}
+        >
+          <X aria-hidden size={17} />
+        </IconButton>
+      </WorkspaceSidebarActions>
+      <div className="aw-code-session-list">
+        {known.length === 0 ? (
+          <p className="aw-code-sessions-empty">
+            还没有会话。说一句要做的事就开一个。
+          </p>
+        ) : (
+          <ul>
+            {known.map((held) => (
+              <li key={held.session_id}>
+                {renaming === held.session_id ? (
+                  <>
+                    <form
+                      aria-busy={renamePending === held.session_id}
+                      className="aw-session-inline-rename"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        if (renamePending === held.session_id) return;
+                        const field = new FormData(event.currentTarget).get(
+                          "title",
+                        );
+                        // A FormData entry is a string *or a File*, and
+                        // `String(File)` is "[object File]" -- a name nobody typed.
+                        void commitRename(
+                          held,
+                          typeof field === "string" ? field : "",
+                        );
+                      }}
+                    >
+                      <label
+                        className="aw-sr-only"
+                        htmlFor={`aw-code-rename-${held.session_id}`}
                       >
-                        <label
-                          className="aw-sr-only"
-                          htmlFor={`aw-code-rename-${held.session_id}`}
-                        >
-                          会话名字
-                        </label>
-                        <input
-                          aria-describedby={
-                            renameError?.sessionId === held.session_id
-                              ? `aw-code-rename-error-${held.session_id}`
-                              : undefined
-                          }
-                          aria-invalid={
-                            renameError?.sessionId === held.session_id ||
-                            undefined
-                          }
-                          autoFocus
-                          defaultValue={held.title ?? ""}
-                          id={`aw-code-rename-${held.session_id}`}
-                          name="title"
-                          onBlur={() => {
-                            if (renamePending !== held.session_id) {
-                              cancelRename(held.session_id, false);
-                            }
-                          }}
-                          onChange={() => {
-                            if (renameError?.sessionId === held.session_id) {
-                              setRenameError(null);
-                            }
-                          }}
-                          onFocus={(event) => event.currentTarget.select()}
-                          onKeyDown={(event) => {
-                            if (event.key !== "Escape") return;
-                            event.preventDefault();
-                            event.stopPropagation();
-                            cancelRename(held.session_id);
-                          }}
-                          readOnly={renamePending === held.session_id}
-                          ref={renameInputRef}
-                        />
-                      </form>
-                      {renameError?.sessionId === held.session_id ? (
-                        <div
-                          className="aw-session-rename-error"
-                          id={`aw-code-rename-error-${held.session_id}`}
-                        >
-                          <ErrorNotice message={renameError.message} />
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <div className="aw-code-recent-row">
-                      <button
-                        aria-current={
-                          held.session_id === sessionId ? "page" : undefined
+                        会话名字
+                      </label>
+                      <input
+                        aria-describedby={
+                          renameError?.sessionId === held.session_id
+                            ? `aw-code-rename-error-${held.session_id}`
+                            : undefined
                         }
-                        className="aw-code-recent-link"
-                        onClick={() => {
-                          onOpen(held.session_id);
+                        aria-invalid={
+                          renameError?.sessionId === held.session_id ||
+                          undefined
+                        }
+                        autoFocus
+                        defaultValue={held.title ?? ""}
+                        id={`aw-code-rename-${held.session_id}`}
+                        name="title"
+                        onBlur={() => {
+                          if (renamePending !== held.session_id) {
+                            cancelRename(held.session_id, false);
+                          }
                         }}
-                        // Named after the first instruction, so most rows have
-                        // one. The id is the fallback for a session opened and
-                        // never used. Rename is a separate action so opening a
-                        // different session cannot be the first half of editing it.
-                        title={held.title ?? held.session_id}
-                        type="button"
+                        onChange={() => {
+                          if (renameError?.sessionId === held.session_id) {
+                            setRenameError(null);
+                          }
+                        }}
+                        onFocus={(event) => event.currentTarget.select()}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Escape") return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          cancelRename(held.session_id);
+                        }}
+                        readOnly={renamePending === held.session_id}
+                        ref={renameInputRef}
+                      />
+                    </form>
+                    {renameError?.sessionId === held.session_id ? (
+                      <div
+                        className="aw-session-rename-error"
+                        id={`aw-code-rename-error-${held.session_id}`}
                       >
-                        <span className="aw-code-recent-title">
-                          {held.title ?? shortId(held.session_id)}
-                        </span>
-                        {/* 副行只说时间。
+                        <ErrorNotice message={renameError.message} />
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div className="aw-code-recent-row">
+                    <button
+                      aria-current={
+                        held.session_id === sessionId ? "page" : undefined
+                      }
+                      className="aw-code-recent-link"
+                      onClick={() => {
+                        onOpen(held.session_id);
+                      }}
+                      // Named after the first instruction, so most rows have
+                      // one. The id is the fallback for a session opened and
+                      // never used. Rename is a separate action so opening a
+                      // different session cannot be the first half of editing it.
+                      title={held.title ?? held.session_id}
+                      type="button"
+                    >
+                      <span className="aw-code-recent-title">
+                        {held.title ?? shortId(held.session_id)}
+                      </span>
+                      {/* 副行只说时间。
                           稿子上这里是「3 轮 · 9 个文件 · 14:02」，前两段这个
                           接口给不出来——`CodeSessionView` 只有 session_id、
                           title、last_activity_at 三个字段。编一个轮数比空着
                           更糟：它会被当成真的读。
                           没有 last_activity_at 的会话（开了没用过）不留占位，
                           一行空的副行只是让每张卡都变高。 */}
-                        {held.last_activity_at === null ? null : (
-                          <time
-                            className="aw-code-recent-when"
-                            dateTime={held.last_activity_at}
-                          >
-                            {formatDateTime(held.last_activity_at)}
-                          </time>
-                        )}
-                      </button>
-                      {/* Always rendered, not revealed on hover: a control that
+                      {held.last_activity_at === null ? null : (
+                        <time
+                          className="aw-code-recent-when"
+                          dateTime={held.last_activity_at}
+                        >
+                          {formatDateTime(held.last_activity_at)}
+                        </time>
+                      )}
+                    </button>
+                    {/* Always rendered, not revealed on hover: a control that
                         only exists under a pointer is one a keyboard cannot
                         reach and a touch screen never shows. CSS dims it until
                         the row is hovered or the button focused. */}
-                      <span className="aw-session-row-actions aw-code-recent-actions">
-                        <button
-                          aria-label={`重命名会话 ${held.title ?? held.session_id}`}
-                          className="aw-code-recent-rename"
-                          onClick={() => {
-                            beginRename(held.session_id);
-                          }}
-                          ref={(node) => {
-                            if (node === null) {
-                              renameActionRefs.current.delete(held.session_id);
-                            } else {
-                              renameActionRefs.current.set(
-                                held.session_id,
-                                node,
-                              );
-                            }
-                          }}
-                          title="重命名"
-                          type="button"
-                        >
-                          <Pencil aria-hidden size={12} />
-                        </button>
-                        <button
-                          aria-label={`删除会话 ${held.title ?? held.session_id}`}
-                          className="aw-code-recent-delete"
-                          onClick={() => {
-                            onDelete(held.session_id);
-                          }}
-                          title="删除"
-                          type="button"
-                        >
-                          <Trash2 aria-hidden size={13} />
-                        </button>
-                      </span>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </SidebarSection>
+                    <span className="aw-session-row-actions aw-code-recent-actions">
+                      <button
+                        aria-label={`重命名会话 ${held.title ?? held.session_id}`}
+                        className="aw-code-recent-rename"
+                        onClick={() => {
+                          beginRename(held.session_id);
+                        }}
+                        ref={(node) => {
+                          if (node === null) {
+                            renameActionRefs.current.delete(held.session_id);
+                          } else {
+                            renameActionRefs.current.set(held.session_id, node);
+                          }
+                        }}
+                        title="重命名"
+                        type="button"
+                      >
+                        <Pencil aria-hidden size={12} />
+                      </button>
+                      <button
+                        aria-label={`删除会话 ${held.title ?? held.session_id}`}
+                        className="aw-code-recent-delete"
+                        onClick={() => {
+                          onDelete(held.session_id);
+                        }}
+                        title="删除"
+                        type="button"
+                      >
+                        <Trash2 aria-hidden size={13} />
+                      </button>
+                    </span>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </nav>
   );
 }

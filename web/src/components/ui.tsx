@@ -1,7 +1,6 @@
-import { AlertTriangle, ChevronDown, LoaderCircle, Plus } from "lucide-react";
+import { AlertTriangle, LoaderCircle, Plus } from "lucide-react";
 import type { PropsWithChildren, ReactNode } from "react";
 import type { ApprovalStatus, TaskStatus } from "../api/types";
-import { useStoredState } from "../hooks/useStoredState";
 
 export function IconButton({
   label,
@@ -149,59 +148,7 @@ export function formatSize(bytes: number): string {
 }
 
 /**
- * 侧栏里的一个可折叠分区：一行标题 + 右侧动作，底下是内容。
- *
- * 三栏共用一个组件而不是各写一遍：对话、任务、编码的会话列是同一个形状，分开
- * 写的三份第二次改样式时会分叉，而它们分叉了没有人看得出来——三栏不会同时出现
- * 在一块屏幕上。
- *
- * 折叠状态按 `storageKey` 各自记住。整栏收起而不是只收起列表：收起之后这一栏
- * 只剩标题那一行，另外两栏才拿得到高度——一个同时展开三份长列表的侧栏，等于
- * 三份都读不了。
- *
- * `hidden` 用条件渲染而不是 CSS：这一栏是 flex 列，`display:none` 与
- * `flex:1 1 auto` 打架，收起之后仍然会占住 min-height 撑开的那一段。
- */
-export function SidebarSection({
-  title,
-  storageKey,
-  actions,
-  children,
-}: PropsWithChildren<{
-  title: string;
-  storageKey: string;
-  actions?: ReactNode;
-}>) {
-  const [open, setOpen] = useStoredState(storageKey, true);
-  const bodyId = `${storageKey.replace(/[^a-zA-Z0-9-]/g, "-")}-body`;
-  return (
-    <section className={`aw-side-section ${open ? "is-open" : "is-collapsed"}`}>
-      <div className="aw-side-section-head">
-        <button
-          aria-controls={bodyId}
-          aria-expanded={open}
-          className="aw-side-section-toggle"
-          onClick={() => setOpen(!open)}
-          type="button"
-        >
-          <ChevronDown aria-hidden="true" size={13} />
-          <span>{title}</span>
-        </button>
-        {actions === undefined ? null : (
-          <div className="aw-side-section-actions">{actions}</div>
-        )}
-      </div>
-      {open ? (
-        <div className="aw-side-section-body" id={bodyId}>
-          {children}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-/**
- * 分区标题右边的一个图标动作（新建、搜索、刷新）。
+ * 工作区那一行右端的一个图标动作（新建、搜索、刷新）。
  *
  * 这里此前是一个整行的描边按钮，当时的理由是「一个图标按钮在视觉上是标题的
  * 附件，而且它没有名字，只有把指针停上去才知道它是什么」。前半句现在正是要的

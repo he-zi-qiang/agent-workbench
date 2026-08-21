@@ -1693,31 +1693,77 @@ select {
   flex: 1 1 auto;
 }
 
-/* 分区收起之后，这一栏不该还占着那段高度——收起的意义就是把它让出去。
-   用 :has() 而不是在 React 里往上层加 class：折叠状态归 SidebarSection 自己
-   管，而它是 portal 进来的，够不到外面这两层容器。 */
-.aw-sidebar-workspace.is-active:has(.aw-side-section.is-collapsed) {
+/* 收起之后这一栏不该还占着那段高度——收起的意义就是把它让出去。
+   折叠状态现在归壳层管（导航项那一行就是这一组的标题），所以是一个真的
+   class，不再需要 :has() 往 portal 进来的内容里看。 */
+.aw-sidebar-workspace.is-active.is-collapsed {
   min-height: auto;
   flex: 0 0 auto;
 }
 
-.aw-sidebar-context-slot:has(.aw-side-section.is-collapsed) {
-  flex: 0 0 auto;
+/* 导航项这一行同时是这一组的标题：名字、折叠开关、以及这个工作区自己的
+   动作都在上面。展开着的那一项让名字缩到内容宽度，把余下的横向空间留给
+   右端的动作；没展开的那些仍然整行可点，它们只是导航。 */
+.aw-workspace-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
 }
 
-.aw-sidebar-workspace > .aw-global-link {
+.aw-sidebar-workspace.is-active .aw-workspace-row > .aw-global-link {
+  flex: 0 1 auto;
+}
+
+.aw-workspace-fold {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+}
+
+.aw-workspace-fold:hover {
+  background: var(--aw-veil);
+  color: var(--aw-text);
+}
+
+/* 收起时箭头指向右：它说的是「展开的方向」，不是「现在是什么状态」——
+   一个朝下的箭头配一个收起的区，每次都要想一下才知道点了会怎样。 */
+.aw-workspace-fold svg {
+  transition: transform var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-sidebar-workspace.is-collapsed .aw-workspace-fold svg {
+  transform: rotate(-90deg);
+}
+
+.aw-workspace-actions {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.aw-workspace-row > .aw-global-link {
   min-height: 38px;
   flex: 0 0 38px;
   border-radius: 7px;
   font-size: 13px;
 }
 
-.aw-sidebar-workspace > .aw-global-link.active {
+.aw-workspace-row > .aw-global-link.active {
   background: transparent;
   font-weight: 620;
 }
 
-.aw-sidebar-workspace > .aw-global-link.active .aw-global-link-icon {
+.aw-workspace-row > .aw-global-link.active .aw-global-link-icon {
   color: var(--aw-accent);
 }
 
@@ -2665,86 +2711,12 @@ select {
   font-size: 11px;
 }
 
-/* ── 侧栏分区 ───────────────────────────────────────────────────────────
+/* ── 侧栏动作 ─────────────────────────────────────────────────────────
  *
- * 一栏侧栏此时只展开一个工作区的列表，但那个列表可以很长——十几条会话把
- * 它下面的导航挤到看不见。分区可折叠之后，「回到哪一段」和「去哪个工作区」
- * 这两件事不再抢同一段高度。
- *
- * 折叠状态按分区各自记在 localStorage（aw.side.<区>.v1）：它是这台机器上
- * 这个人的取舍，不该在刷新之后回到默认。
- *
- * 标题行本身就是折叠开关，右边挂图标动作。此前「新建」是一整行描边按钮，
- * 三栏并排时三个整行按钮会和三份列表抢同一屏——现在它退成标题右边一颗
- * 24px 的图标，`aria-label` 与 `title` 都给了名字。
+ * 「新建 / 搜索 / 刷新」长在导航项那一行的右端。此前它们各自是一整行描边
+ * 按钮，夹在名字和列表中间——三栏并排时三个整行按钮会和三份列表抢同一屏
+ * 的高度，而「开一段新的」不该比「回到哪一段」更响。
  */
-.aw-side-section {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-}
-
-.aw-side-section.is-open {
-  flex: 1 1 auto;
-}
-
-.aw-side-section-head {
-  display: flex;
-  min-width: 0;
-  height: 30px;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  padding: 0 4px 0 6px;
-}
-
-.aw-side-section-toggle {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  align-items: center;
-  gap: 6px;
-  padding: 0 4px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--aw-text-muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-align: left;
-  cursor: pointer;
-}
-
-.aw-side-section-toggle:hover {
-  color: var(--aw-text);
-}
-
-.aw-side-section-toggle span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 收起时箭头指向右：它说的是「展开的方向」，不是「现在是什么状态」——
-   一个朝下的箭头配一个收起的区，每次都要想一下才知道点了会怎样。 */
-.aw-side-section-toggle svg {
-  flex: none;
-  transition: transform var(--aw-duration-fast) var(--aw-ease);
-}
-
-.aw-side-section.is-collapsed .aw-side-section-toggle svg {
-  transform: rotate(-90deg);
-}
-
-.aw-side-section-actions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 2px;
-}
-
 .aw-side-action {
   display: grid;
   width: 24px;
@@ -2774,15 +2746,6 @@ select {
 .aw-side-action:disabled {
   color: var(--aw-faint);
   cursor: default;
-}
-
-.aw-side-section-body {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 4px;
 }
 
 /* 搜索：收起时一个图标，展开时才占一行。此前它是常驻的一整行输入框——

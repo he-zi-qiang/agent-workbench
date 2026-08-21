@@ -36,7 +36,7 @@ export function isPathWithin(pathname: string, prefix: string): boolean {
 export const NAVIGATION = [
   {
     to: "/chat",
-    label: "对话",
+    label: "Chat",
     description: "直接提问，或依据知识库回答",
     icon: MessageSquare,
     primary: true,
@@ -44,7 +44,7 @@ export const NAVIGATION = [
   },
   {
     to: "/work",
-    label: "任务",
+    label: "Tasks",
     description: "提交并追踪可恢复的自动化工作流",
     icon: ListTodo,
     primary: true,
@@ -52,12 +52,14 @@ export const NAVIGATION = [
   },
   {
     to: "/code",
-    // 「编码」，不是「Code」。这一项曾经是主导航里唯一的英文，夹在「对话」
-    // 和「任务」中间——而这个概念在它自己的地盘上从来就叫编码：栏头是
-    // 「最近编码」，起始页是「开始编码」，会话叫「编码会话」。一个概念
-    // 四个界面三个中文名加一个英文名，英文名是那个异类。
-    // 路由、目录和 `code` 这个关键词都没动：改的是读者看到的那个词。
-    label: "编码",
+    // 「Code」而不是「编码」——这一条推翻了此前那次改名。当时的理由是
+    // 「主导航里唯一的英文，夹在对话和任务中间，是那个异类」，而三个工作区
+    // 现在一起改成英文，异类不再存在。它底下那个「最近编码」栏头也一起删了
+    // （导航项自己就是这一组的标题），所以那条理由列举的三个中文锚点少了
+    // 一个；剩下的「开始编码」「编码会话」在各自页面里没动——那两处不是
+    // 导航，读者是在已经进来之后才看到它们的。
+    // 路由、目录和 `code` 这个关键词一如既往没动。
+    label: "Code",
     description: "带工作区与文件预览的编码会话",
     icon: Code2,
     primary: true,
@@ -110,6 +112,13 @@ export const NAVIGATION = [
   },
 ] as const satisfies readonly NavigationItem[];
 
+/**
+ * 三个工作区改用英文名之后，中文别名只能靠 keywords 兜住。
+ *
+ * 快速跳转按 label + description + keywords 一起匹配，而 label 现在是
+ * Chat / Tasks / Code——一个习惯输入「任务」的人本来会一无所获。
+ * `/work` 和 `/code` 的别名此前就在（任务 / 编码），`/chat` 缺「对话」，补上。
+ */
 export const QUICK_DESTINATIONS = [
   ...NAVIGATION.map((item) => ({
     to: item.to,
@@ -118,7 +127,7 @@ export const QUICK_DESTINATIONS = [
     description: item.description,
     keywords:
       item.to === "/chat"
-        ? "chat 聊天 问答 会话"
+        ? "chat 对话 聊天 问答 会话"
         : item.to === "/work"
           ? "work task 工作流 任务 时间线"
           : item.to === "/code"
@@ -126,12 +135,12 @@ export const QUICK_DESTINATIONS = [
             : item.to === "/projects"
               ? "project 项目 归属 分组"
               : item.to === "/knowledge"
-              ? "knowledge rag 文档 资料 上传"
-              : item.to === "/evaluation"
-                ? "eval benchmark 评测 报告"
-                : item.to === "/computer"
-                  ? "computer screen 屏幕 权限 安全"
-                  : "system health status 健康 服务 身份",
+                ? "knowledge rag 文档 资料 上传"
+                : item.to === "/evaluation"
+                  ? "eval benchmark 评测 报告"
+                  : item.to === "/computer"
+                    ? "computer screen 屏幕 权限 安全"
+                    : "system health status 健康 服务 身份",
     icon: item.icon,
   })),
 ] as const satisfies readonly QuickDestination[];

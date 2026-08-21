@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   Link,
@@ -26,7 +32,9 @@ function ChatContextProbe() {
   const sidebar = useWorkspaceSidebar();
   return (
     <>
-      <button onClick={sidebar.open} type="button">打开对话列表</button>
+      <button onClick={sidebar.open} type="button">
+        打开对话列表
+      </button>
       <WorkspaceSidebarPortal>
         <aside aria-label="最近对话">
           <button
@@ -51,7 +59,9 @@ function PathProbe({ chatLink = false }: { chatLink?: boolean }) {
     <>
       <output aria-label="当前路径">{location.pathname}</output>
       {chatLink ? <Link to="/chat/session-b">打开 B 会话</Link> : null}
-      <button onClick={() => void navigate(-1)} type="button">浏览器后退</button>
+      <button onClick={() => void navigate(-1)} type="button">
+        浏览器后退
+      </button>
     </>
   );
 }
@@ -97,7 +107,9 @@ describe("AppShell mobile navigation", () => {
     // sheet: an entry added back to `NAVIGATION` but missing from the More
     // filter renders in the desktop rail and nowhere else, and a sheet-only
     // assertion would call that deleted.
-    expect(screen.queryByRole("link", { name: "待我确认" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "待我确认" }),
+    ).not.toBeInTheDocument();
     expect(more.getByRole("link", { name: "运行状态" })).toBeInTheDocument();
     // The page this filter was derived for. It used to name /evaluation and
     // /system literally, so 计算机 reached the desktop rail and no mobile
@@ -109,7 +121,9 @@ describe("AppShell mobile navigation", () => {
 
     await user.click(more.getByRole("link", { name: "效果评测" }));
     expect(screen.getByText("Evaluation page")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "更多页面" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "更多页面" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps focus inside More and restores it on close", async () => {
@@ -168,19 +182,43 @@ describe("AppShell rail", () => {
             <Routes>
               <Route element={<AppShell />}>
                 <Route
-                  element={<><p>Chat page</p><PathProbe chatLink /></>}
+                  element={
+                    <>
+                      <p>Chat page</p>
+                      <PathProbe chatLink />
+                    </>
+                  }
                   path="/chat/:sessionId?"
                 />
                 <Route
-                  element={<><p>Work page</p><PathProbe /><Link to="/work/task-a">打开 A 任务</Link></>}
+                  element={
+                    <>
+                      <p>Work page</p>
+                      <PathProbe />
+                      <Link to="/work/task-a">打开 A 任务</Link>
+                    </>
+                  }
                   path="/work/:taskId?"
                 />
                 <Route
-                  element={<><p>Code page</p><PathProbe /></>}
+                  element={
+                    <>
+                      <p>Code page</p>
+                      <PathProbe />
+                    </>
+                  }
                   path="/code/:sessionId?"
                 />
                 <Route element={<SystemProbe />} path="/system" />
-                <Route element={<><p>Fallback page</p><PathProbe /></>} path="*" />
+                <Route
+                  element={
+                    <>
+                      <p>Fallback page</p>
+                      <PathProbe />
+                    </>
+                  }
+                  path="*"
+                />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -193,14 +231,14 @@ describe("AppShell rail", () => {
     mounted("/work");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    expect(rail.getByRole("link", { name: "任务" })).toHaveAttribute(
+    expect(rail.getByRole("link", { name: "Tasks" })).toHaveAttribute(
       "aria-current",
       "page",
     );
-    expect(rail.getByRole("link", { name: "对话" })).not.toHaveAttribute(
+    expect(rail.getByRole("link", { name: "Chat" })).not.toHaveAttribute(
       "aria-current",
     );
-    expect(rail.getByRole("link", { name: "编码" })).not.toHaveAttribute(
+    expect(rail.getByRole("link", { name: "Code" })).not.toHaveAttribute(
       "aria-current",
     );
   });
@@ -211,8 +249,12 @@ describe("AppShell rail", () => {
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
     expect(rail.getByRole("link", { name: "知识库" })).toBeInTheDocument();
-    expect(rail.queryByRole("link", { name: "效果评测" })).not.toBeInTheDocument();
-    expect(rail.queryByRole("link", { name: "运行状态" })).not.toBeInTheDocument();
+    expect(
+      rail.queryByRole("link", { name: "效果评测" }),
+    ).not.toBeInTheDocument();
+    expect(
+      rail.queryByRole("link", { name: "运行状态" }),
+    ).not.toBeInTheDocument();
 
     await user.click(rail.getByRole("button", { name: "更多" }));
     const more = within(screen.getByRole("dialog", { name: "更多页面" }));
@@ -220,15 +262,17 @@ describe("AppShell rail", () => {
     expect(more.getByRole("link", { name: "运行状态" })).toBeInTheDocument();
   });
 
-  it("offers Chat, Task and Code as three top-level flows", () => {
+  it("offers Chat, Tasks and Code as three top-level flows", () => {
     mounted("/chat");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    expect(rail.queryByRole("link", { name: "Chat" })).not.toBeInTheDocument();
-    expect(rail.queryByRole("link", { name: "Work" })).not.toBeInTheDocument();
-    expect(rail.getByRole("link", { name: "对话" })).toBeInTheDocument();
-    expect(rail.getByRole("link", { name: "任务" })).toBeInTheDocument();
-    expect(rail.getByRole("link", { name: "编码" })).toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "Chat" })).toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "Tasks" })).toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "Code" })).toBeInTheDocument();
+    // 三个工作区一起改成英文，所以旧的中文名不该还留在栏里：一栏两套名字，
+    // 读屏念一套、搜索命中另一套。
+    expect(rail.queryByRole("link", { name: "对话" })).not.toBeInTheDocument();
+    expect(rail.queryByRole("link", { name: "编码" })).not.toBeInTheDocument();
   });
 
   it("nests the active feature's real work items in the one shell sidebar", async () => {
@@ -249,32 +293,34 @@ describe("AppShell rail", () => {
 
     const railElement = screen.getByRole("navigation", { name: "主导航" });
     const rail = within(railElement);
-    expect(rail.getByRole("complementary", { name: "最近对话" })).toContainElement(
-      rail.getByRole("link", { name: "会话 A" }),
-    );
+    expect(
+      rail.getByRole("complementary", { name: "最近对话" }),
+    ).toContainElement(rail.getByRole("link", { name: "会话 A" }));
 
     const trigger = screen.getByRole("button", { name: "打开对话列表" });
     await user.click(trigger);
     expect(screen.getByRole("dialog", { name: "主导航" })).toBe(railElement);
-    expect(screen.getByText("Chat page").closest(".aw-app-content")).toHaveAttribute(
-      "inert",
-    );
+    expect(
+      screen.getByText("Chat page").closest(".aw-app-content"),
+    ).toHaveAttribute("inert");
     expect(document.querySelector(".aw-mobile-nav")).toHaveAttribute("inert");
     await waitFor(() =>
       expect(rail.getByRole("button", { name: "关闭对话列表" })).toHaveFocus(),
     );
     await user.keyboard("{Escape}");
     await waitFor(() => expect(trigger).toHaveFocus());
-    expect(screen.getByRole("navigation", { name: "主导航" })).toBe(railElement);
-    expect(screen.getByText("Chat page").closest(".aw-app-content")).not.toHaveAttribute(
-      "inert",
+    expect(screen.getByRole("navigation", { name: "主导航" })).toBe(
+      railElement,
     );
+    expect(
+      screen.getByText("Chat page").closest(".aw-app-content"),
+    ).not.toHaveAttribute("inert");
   });
 
   it.each([
-    ["/chat/session-42", "任务", "对话"],
-    ["/work/task-42", "编码", "任务"],
-    ["/code/session-42", "对话", "编码"],
+    ["/chat/session-42", "Tasks", "Chat"],
+    ["/work/task-42", "Code", "Tasks"],
+    ["/code/session-42", "Chat", "Code"],
   ])("returns from %s to the last open item", async (start, away, back) => {
     const user = userEvent.setup();
     mounted(start);
@@ -287,12 +333,14 @@ describe("AppShell rail", () => {
       start,
     );
     await user.click(rail.getByRole("link", { name: back }));
-    expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(start);
+    expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+      start,
+    );
   });
 
   it.each([
-    ["/workflow", "任务", "/work"],
-    ["/code-review", "编码", "/code"],
+    ["/workflow", "Tasks", "/work"],
+    ["/code-review", "Code", "/code"],
   ])("does not treat the lookalike path %s as a flow", (start, label, root) => {
     mounted(start);
 
@@ -300,7 +348,10 @@ describe("AppShell rail", () => {
     expect(rail.getByRole("link", { name: label })).not.toHaveAttribute(
       "aria-current",
     );
-    expect(rail.getByRole("link", { name: label })).toHaveAttribute("href", root);
+    expect(rail.getByRole("link", { name: label })).toHaveAttribute(
+      "href",
+      root,
+    );
   });
 
   it("keeps primary history isolated when identities change", async () => {
@@ -309,7 +360,9 @@ describe("AppShell rail", () => {
 
     const switchPrincipal = async (principal: string) => {
       await user.click(screen.getByRole("button", { name: /环境与身份/ }));
-      const dialog = within(screen.getByRole("dialog", { name: "本地身份模拟器" }));
+      const dialog = within(
+        screen.getByRole("dialog", { name: "本地身份模拟器" }),
+      );
       const principalField = dialog.getByLabelText("Principal");
       await user.clear(principalField);
       await user.type(principalField, principal);
@@ -318,9 +371,9 @@ describe("AppShell rail", () => {
 
     await switchPrincipal("user_b");
     await waitFor(() =>
-      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
-        "/chat",
-      ),
+      expect(
+        screen.getByRole("status", { name: "当前路径" }),
+      ).toHaveTextContent("/chat"),
     );
     await user.click(screen.getByRole("link", { name: "打开 B 会话" }));
     expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
@@ -329,15 +382,15 @@ describe("AppShell rail", () => {
 
     await switchPrincipal("user_local");
     await waitFor(() =>
-      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
-        "/chat/session-a",
-      ),
+      expect(
+        screen.getByRole("status", { name: "当前路径" }),
+      ).toHaveTextContent("/chat/session-a"),
     );
     await switchPrincipal("user_b");
     await waitFor(() =>
-      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
-        "/chat/session-b",
-      ),
+      expect(
+        screen.getByRole("status", { name: "当前路径" }),
+      ).toHaveTextContent("/chat/session-b"),
     );
   });
 
@@ -356,7 +409,9 @@ describe("AppShell rail", () => {
     expect(screen.getByText("System page")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /环境与身份/ }));
-    const dialog = within(screen.getByRole("dialog", { name: "本地身份模拟器" }));
+    const dialog = within(
+      screen.getByRole("dialog", { name: "本地身份模拟器" }),
+    );
     const principalField = dialog.getByLabelText("Principal");
     await user.clear(principalField);
     await user.type(principalField, "user_b");
@@ -364,11 +419,11 @@ describe("AppShell rail", () => {
 
     await user.click(screen.getByRole("button", { name: "浏览器后退" }));
     await waitFor(() =>
-      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
-        "/chat",
-      ),
+      expect(
+        screen.getByRole("status", { name: "当前路径" }),
+      ).toHaveTextContent("/chat"),
     );
-    expect(rail.getByRole("link", { name: "对话" })).toHaveAttribute(
+    expect(rail.getByRole("link", { name: "Chat" })).toHaveAttribute(
       "href",
       "/chat",
     );
@@ -379,37 +434,39 @@ describe("AppShell rail", () => {
     mounted("/chat/session-a");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    await user.click(rail.getByRole("link", { name: "任务" }));
+    await user.click(rail.getByRole("link", { name: "Tasks" }));
     await user.click(screen.getByRole("link", { name: "打开 A 任务" }));
     expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
       "/work/task-a",
     );
 
     await user.click(screen.getByRole("button", { name: /环境与身份/ }));
-    const dialog = within(screen.getByRole("dialog", { name: "本地身份模拟器" }));
+    const dialog = within(
+      screen.getByRole("dialog", { name: "本地身份模拟器" }),
+    );
     const principalField = dialog.getByLabelText("Principal");
     await user.clear(principalField);
     await user.type(principalField, "user_b");
     await user.click(dialog.getByRole("button", { name: "应用身份" }));
     await waitFor(() =>
-      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
-        "/work",
-      ),
+      expect(
+        screen.getByRole("status", { name: "当前路径" }),
+      ).toHaveTextContent("/work"),
     );
 
     await user.click(screen.getByRole("button", { name: "浏览器后退" }));
     await waitFor(() =>
-      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
-        "/work",
-      ),
+      expect(
+        screen.getByRole("status", { name: "当前路径" }),
+      ).toHaveTextContent("/work"),
     );
     await user.click(screen.getByRole("button", { name: "浏览器后退" }));
     await waitFor(() =>
-      expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
-        "/chat",
-      ),
+      expect(
+        screen.getByRole("status", { name: "当前路径" }),
+      ).toHaveTextContent("/chat"),
     );
-    expect(rail.getByRole("link", { name: "对话" })).toHaveAttribute(
+    expect(rail.getByRole("link", { name: "Chat" })).toHaveAttribute(
       "href",
       "/chat",
     );
@@ -443,13 +500,18 @@ describe("AppShell quick switcher", () => {
     const dialog = screen.getByRole("dialog", { name: "快速跳转" });
     const search = within(dialog).getByRole("combobox", { name: "搜索页面" });
 
+    // 输入中文仍然要能找到它：label 现在是 Tasks，中文靠 keywords 里的别名兜。
     await user.type(search, "任务");
     expect(within(dialog).getAllByRole("option")).toHaveLength(1);
-    expect(within(dialog).getByRole("option", { name: /任务/ })).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("option", { name: /Tasks/ }),
+    ).toBeInTheDocument();
 
     await user.keyboard("{Enter}");
     expect(screen.getByText("Work page")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "快速跳转" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "快速跳转" }),
+    ).not.toBeInTheDocument();
   });
 
   it("gives mobile auxiliary pages a purpose before opening the switcher", async () => {
@@ -465,8 +527,12 @@ describe("AppShell quick switcher", () => {
     expect(more.getByText("检查 API、数据库与本地身份")).toBeInTheDocument();
 
     await user.click(more.getByRole("button", { name: /快速跳转/ }));
-    expect(screen.queryByRole("dialog", { name: "更多页面" })).not.toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "快速跳转" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "更多页面" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "快速跳转" }),
+    ).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(moreTrigger).toHaveFocus());
@@ -477,10 +543,14 @@ describe("AppShell quick switcher", () => {
     mounted("/code");
 
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
-    expect(screen.getByRole("dialog", { name: "快速跳转" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "快速跳转" }),
+    ).toBeInTheDocument();
     await user.keyboard("{Escape}");
 
-    expect(screen.queryByRole("dialog", { name: "快速跳转" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "快速跳转" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("Code page")).toBeInTheDocument();
   });
 
@@ -494,7 +564,9 @@ describe("AppShell quick switcher", () => {
     ).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "k", metaKey: true });
 
-    expect(screen.queryByRole("dialog", { name: "快速跳转" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "快速跳转" }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -563,9 +635,7 @@ describe("AppShell theme control", () => {
     const first = mounted();
 
     const firstMore = await openThemeMenu(user);
-    await user.click(
-      firstMore.getByRole("button", { name: "主题：跟随系统" }),
-    );
+    await user.click(firstMore.getByRole("button", { name: "主题：跟随系统" }));
     first.unmount();
     document.documentElement.removeAttribute("data-theme");
 
@@ -607,7 +677,11 @@ describe("AppShell theme control", () => {
 
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     // 面板不关：连点三下看三档，比每点一次都要重新打开「更多」合理。
-    expect(screen.getByRole("dialog", { name: "更多页面" })).toBeInTheDocument();
-    expect(more.getByRole("button", { name: "主题：浅色" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "更多页面" }),
+    ).toBeInTheDocument();
+    expect(
+      more.getByRole("button", { name: "主题：浅色" }),
+    ).toBeInTheDocument();
   });
 });

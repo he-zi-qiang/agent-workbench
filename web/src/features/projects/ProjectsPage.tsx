@@ -37,6 +37,7 @@ import type { ProjectItemView, ProjectView } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
   useWorkspaceSidebar,
+  WorkspaceSidebarActions,
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
 import {
@@ -45,7 +46,6 @@ import {
   IconButton,
   LoadingLine,
   NewSessionAction,
-  SidebarSection,
   formatTime,
 } from "../../components/ui";
 
@@ -172,88 +172,76 @@ export function ProjectsPage() {
 
   return (
     <div className="aw-projects-page">
+      <WorkspaceSidebarActions>
+        <NewSessionAction label="新建项目" onClick={() => setCreating(true)} />
+        <IconButton
+          className="aw-projects-close"
+          label="关闭项目列表"
+          onClick={workspaceSidebar.close}
+        >
+          <X aria-hidden="true" size={17} />
+        </IconButton>
+      </WorkspaceSidebarActions>
       <WorkspaceSidebarPortal>
         <aside className="aw-projects-sidebar" aria-label="项目列表">
-          <SidebarSection
-            actions={
-              <>
-                <NewSessionAction
-                  label="新建项目"
-                  onClick={() => setCreating(true)}
-                />
-                <IconButton
-                  className="aw-projects-close"
-                  label="关闭项目列表"
-                  onClick={workspaceSidebar.close}
-                >
-                  <X aria-hidden="true" size={17} />
-                </IconButton>
-              </>
-            }
-            storageKey="aw.side.projects.v1"
-            title="全部项目"
-          >
-            {creating ? (
-              <form
-                className="aw-session-inline-rename"
-                onSubmit={(event) => {
+          {creating ? (
+            <form
+              className="aw-session-inline-rename"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const field = new FormData(event.currentTarget).get("name");
+                void create(typeof field === "string" ? field : "");
+              }}
+            >
+              <label className="aw-sr-only" htmlFor="aw-project-new">
+                项目名字
+              </label>
+              <input
+                autoFocus
+                id="aw-project-new"
+                name="name"
+                onBlur={() => setCreating(false)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
                   event.preventDefault();
-                  const field = new FormData(event.currentTarget).get("name");
-                  void create(typeof field === "string" ? field : "");
+                  setCreating(false);
                 }}
-              >
-                <label className="aw-sr-only" htmlFor="aw-project-new">
-                  项目名字
-                </label>
-                <input
-                  autoFocus
-                  id="aw-project-new"
-                  name="name"
-                  onBlur={() => setCreating(false)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
-                    event.preventDefault();
-                    setCreating(false);
-                  }}
-                  placeholder="这件事叫什么"
-                />
-              </form>
-            ) : null}
+                placeholder="这件事叫什么"
+              />
+            </form>
+          ) : null}
 
-            <div className="aw-project-list">
-              {projects.isPending ? (
-                <LoadingLine label="正在读取项目" />
-              ) : projects.data?.projects.length === 0 ? (
-                // 空状态说下一步，不说机制，也不催人建项目。
-                <p className="aw-chat-local-note">
-                  把同一件事的对话、任务和资料放到一起，就从这里开始。
-                </p>
-              ) : (
-                projects.data?.projects.map((project) => (
-                  <ProjectRow
-                    key={project.project_id}
-                    project={project}
-                    current={project.project_id === projectId}
-                    renaming={renaming === project.project_id}
-                    onBeginRename={() => setRenaming(project.project_id)}
-                    onCancelRename={() => setRenaming(null)}
-                    onRename={(name) => void rename(project.project_id, name)}
-                    onArchive={() =>
-                      void archive(
-                        project.project_id,
-                        project.archived_at === null,
-                      )
-                    }
-                    onDelete={() =>
-                      void remove(project.project_id, project.name)
-                    }
-                    onOpen={workspaceSidebar.close}
-                    inputRef={renameInputRef}
-                  />
-                ))
-              )}
-            </div>
-          </SidebarSection>
+          <div className="aw-project-list">
+            {projects.isPending ? (
+              <LoadingLine label="正在读取项目" />
+            ) : projects.data?.projects.length === 0 ? (
+              // 空状态说下一步，不说机制，也不催人建项目。
+              <p className="aw-chat-local-note">
+                把同一件事的对话、任务和资料放到一起，就从这里开始。
+              </p>
+            ) : (
+              projects.data?.projects.map((project) => (
+                <ProjectRow
+                  key={project.project_id}
+                  project={project}
+                  current={project.project_id === projectId}
+                  renaming={renaming === project.project_id}
+                  onBeginRename={() => setRenaming(project.project_id)}
+                  onCancelRename={() => setRenaming(null)}
+                  onRename={(name) => void rename(project.project_id, name)}
+                  onArchive={() =>
+                    void archive(
+                      project.project_id,
+                      project.archived_at === null,
+                    )
+                  }
+                  onDelete={() => void remove(project.project_id, project.name)}
+                  onOpen={workspaceSidebar.close}
+                  inputRef={renameInputRef}
+                />
+              ))
+            )}
+          </div>
         </aside>
       </WorkspaceSidebarPortal>
 

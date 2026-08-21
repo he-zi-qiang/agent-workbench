@@ -51,6 +51,7 @@ import type {
 import { useIdentity } from "../../app/IdentityContext";
 import {
   useWorkspaceSidebar,
+  WorkspaceSidebarActions,
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
 import {
@@ -71,7 +72,6 @@ import {
   IconButton,
   NewSessionAction,
   SidebarAction,
-  SidebarSection,
   LoadingLine,
   formatTime,
   shortId,
@@ -545,6 +545,36 @@ export function ChatPage() {
 
   return (
     <div className={`aw-chat-page ${sessionId === undefined ? "is-new" : ""}`}>
+      <WorkspaceSidebarActions>
+        {state.sessionOrder.length >= 5 || sessionQuery !== "" ? (
+          <SidebarAction
+            active={searchOpen}
+            label="搜索对话"
+            onClick={() => {
+              setSearchOpen((open) => {
+                if (open) setSessionQuery("");
+                return !open;
+              });
+            }}
+          >
+            <Search aria-hidden="true" size={15} />
+          </SidebarAction>
+        ) : null}
+        <NewSessionAction
+          label="新对话"
+          onClick={() => {
+            workspaceSidebar.close();
+            void navigate("/chat");
+          }}
+        />
+        <IconButton
+          className="aw-chat-sessions-close"
+          label="关闭对话列表"
+          onClick={workspaceSidebar.close}
+        >
+          <X aria-hidden="true" size={17} />
+        </IconButton>
+      </WorkspaceSidebarActions>
       <WorkspaceSidebarPortal>
         <aside
           className={`aw-chat-sessions ${workspaceSidebar.drawerOpen ? "is-mobile-open" : ""}`}
@@ -552,209 +582,167 @@ export function ChatPage() {
           // 「Chat 会话」——同一块地方两个名字，还夹着一个英文产品名。
           aria-label="最近对话"
         >
-          <SidebarSection
-            actions={
-              <>
-                {state.sessionOrder.length >= 5 || sessionQuery !== "" ? (
-                  <SidebarAction
-                    active={searchOpen}
-                    label="搜索对话"
-                    onClick={() => {
-                      setSearchOpen((open) => {
-                        if (open) setSessionQuery("");
-                        return !open;
-                      });
-                    }}
-                  >
-                    <Search aria-hidden="true" size={15} />
-                  </SidebarAction>
-                ) : null}
-                <NewSessionAction
-                  label="新对话"
-                  onClick={() => {
-                    workspaceSidebar.close();
-                    void navigate("/chat");
-                  }}
-                />
-                <IconButton
-                  className="aw-chat-sessions-close"
-                  label="关闭对话列表"
-                  onClick={workspaceSidebar.close}
-                >
-                  <X aria-hidden="true" size={17} />
-                </IconButton>
-              </>
-            }
-            storageKey="aw.side.chat.v1"
-            title="最近对话"
-          >
-            {searchOpen ? (
-              <div className="aw-chat-session-search">
-                <Search aria-hidden="true" size={14} />
-                <input
-                  aria-label="搜索对话"
-                  autoFocus
-                  onChange={(event) => setSessionQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Escape") return;
-                    setSessionQuery("");
-                    setSearchOpen(false);
-                  }}
-                  placeholder="搜索对话"
-                  type="search"
-                  value={sessionQuery}
-                />
-              </div>
-            ) : null}
-            <div className="aw-chat-session-list">
-              {state.sessionOrder.length === 0 ? (
-                <p className="aw-chat-local-note">
-                  发送第一条消息后，对话会出现在这里。
-                </p>
-              ) : visibleSessionIds.length === 0 ? (
-                <p className="aw-chat-local-note">没有匹配的对话。</p>
-              ) : (
-                visibleSessionIds.map((id) => {
-                  const session = state.sessions[id];
-                  if (session === undefined) return null;
-                  return (
-                    <div
-                      className="aw-chat-session-row"
-                      key={session.sessionId}
-                    >
-                      {editingSessionId === session.sessionId ? (
-                        <>
-                          <form
-                            aria-busy={renamePending === session.sessionId}
-                            className="aw-session-inline-rename"
-                            onSubmit={(event) => {
-                              event.preventDefault();
-                              if (renamePending === session.sessionId) return;
-                              const field = new FormData(
-                                event.currentTarget,
-                              ).get("title");
-                              void renameSession(
-                                session.sessionId,
-                                typeof field === "string" ? field : "",
-                              );
-                            }}
+          {searchOpen ? (
+            <div className="aw-chat-session-search">
+              <Search aria-hidden="true" size={14} />
+              <input
+                aria-label="搜索对话"
+                autoFocus
+                onChange={(event) => setSessionQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  setSessionQuery("");
+                  setSearchOpen(false);
+                }}
+                placeholder="搜索对话"
+                type="search"
+                value={sessionQuery}
+              />
+            </div>
+          ) : null}
+          <div className="aw-chat-session-list">
+            {state.sessionOrder.length === 0 ? (
+              <p className="aw-chat-local-note">
+                发送第一条消息后，对话会出现在这里。
+              </p>
+            ) : visibleSessionIds.length === 0 ? (
+              <p className="aw-chat-local-note">没有匹配的对话。</p>
+            ) : (
+              visibleSessionIds.map((id) => {
+                const session = state.sessions[id];
+                if (session === undefined) return null;
+                return (
+                  <div className="aw-chat-session-row" key={session.sessionId}>
+                    {editingSessionId === session.sessionId ? (
+                      <>
+                        <form
+                          aria-busy={renamePending === session.sessionId}
+                          className="aw-session-inline-rename"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            if (renamePending === session.sessionId) return;
+                            const field = new FormData(event.currentTarget).get(
+                              "title",
+                            );
+                            void renameSession(
+                              session.sessionId,
+                              typeof field === "string" ? field : "",
+                            );
+                          }}
+                        >
+                          <label
+                            className="aw-sr-only"
+                            htmlFor={`aw-chat-rename-${session.sessionId}`}
                           >
-                            <label
-                              className="aw-sr-only"
-                              htmlFor={`aw-chat-rename-${session.sessionId}`}
-                            >
-                              对话名字
-                            </label>
-                            <input
-                              aria-describedby={
-                                renameError?.sessionId === session.sessionId
-                                  ? `aw-chat-rename-error-${session.sessionId}`
-                                  : undefined
-                              }
-                              aria-invalid={
-                                renameError?.sessionId === session.sessionId ||
-                                undefined
-                              }
-                              autoFocus
-                              defaultValue={session.title}
-                              id={`aw-chat-rename-${session.sessionId}`}
-                              name="title"
-                              onBlur={() => {
-                                if (renamePending !== session.sessionId) {
-                                  cancelRename(session.sessionId, false);
-                                }
-                              }}
-                              onChange={() => {
-                                if (
-                                  renameError?.sessionId === session.sessionId
-                                ) {
-                                  setRenameError(null);
-                                }
-                              }}
-                              onFocus={(event) => event.currentTarget.select()}
-                              onKeyDown={(event) => {
-                                if (event.key !== "Escape") return;
-                                event.preventDefault();
-                                event.stopPropagation();
-                                cancelRename(session.sessionId);
-                              }}
-                              readOnly={renamePending === session.sessionId}
-                              ref={renameInputRef}
-                            />
-                          </form>
-                          {renameError?.sessionId === session.sessionId ? (
-                            <div
-                              className="aw-session-rename-error"
-                              id={`aw-chat-rename-error-${session.sessionId}`}
-                            >
-                              <ErrorNotice message={renameError.message} />
-                            </div>
-                          ) : null}
-                        </>
-                      ) : (
-                        <>
-                          <Link
-                            aria-current={
-                              session.sessionId === sessionId
-                                ? "page"
+                            对话名字
+                          </label>
+                          <input
+                            aria-describedby={
+                              renameError?.sessionId === session.sessionId
+                                ? `aw-chat-rename-error-${session.sessionId}`
                                 : undefined
                             }
-                            className={`aw-chat-session ${session.sessionId === sessionId ? "is-active" : ""}`}
-                            onClick={workspaceSidebar.close}
-                            onKeyDown={(event) => {
-                              if (event.key !== "F2") return;
-                              event.preventDefault();
-                              beginRename(session.sessionId);
-                            }}
-                            to={`/chat/${encodeURIComponent(session.sessionId)}`}
-                          >
-                            <span className="aw-chat-session-copy">
-                              <strong>{session.title}</strong>
-                              <small>{formatTime(session.updatedAt)}</small>
-                            </span>
-                          </Link>
-                          <span className="aw-session-row-actions">
-                            <button
-                              aria-label={`重命名对话 ${session.title}`}
-                              className="aw-chat-session-rename"
-                              onClick={() => beginRename(session.sessionId)}
-                              ref={(node) => {
-                                if (node === null) {
-                                  renameActionRefs.current.delete(
-                                    session.sessionId,
-                                  );
-                                } else {
-                                  renameActionRefs.current.set(
-                                    session.sessionId,
-                                    node,
-                                  );
-                                }
-                              }}
-                              title="重命名"
-                              type="button"
-                            >
-                              <Pencil aria-hidden size={12} />
-                            </button>
-                            <button
-                              aria-label={`删除对话 ${session.title}`}
-                              className="aw-chat-session-delete"
-                              onClick={() =>
-                                void removeSession(session.sessionId)
+                            aria-invalid={
+                              renameError?.sessionId === session.sessionId ||
+                              undefined
+                            }
+                            autoFocus
+                            defaultValue={session.title}
+                            id={`aw-chat-rename-${session.sessionId}`}
+                            name="title"
+                            onBlur={() => {
+                              if (renamePending !== session.sessionId) {
+                                cancelRename(session.sessionId, false);
                               }
-                              title="删除"
-                              type="button"
-                            >
-                              <Trash2 aria-hidden size={13} />
-                            </button>
+                            }}
+                            onChange={() => {
+                              if (
+                                renameError?.sessionId === session.sessionId
+                              ) {
+                                setRenameError(null);
+                              }
+                            }}
+                            onFocus={(event) => event.currentTarget.select()}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Escape") return;
+                              event.preventDefault();
+                              event.stopPropagation();
+                              cancelRename(session.sessionId);
+                            }}
+                            readOnly={renamePending === session.sessionId}
+                            ref={renameInputRef}
+                          />
+                        </form>
+                        {renameError?.sessionId === session.sessionId ? (
+                          <div
+                            className="aw-session-rename-error"
+                            id={`aw-chat-rename-error-${session.sessionId}`}
+                          >
+                            <ErrorNotice message={renameError.message} />
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <Link
+                          aria-current={
+                            session.sessionId === sessionId ? "page" : undefined
+                          }
+                          className={`aw-chat-session ${session.sessionId === sessionId ? "is-active" : ""}`}
+                          onClick={workspaceSidebar.close}
+                          onKeyDown={(event) => {
+                            if (event.key !== "F2") return;
+                            event.preventDefault();
+                            beginRename(session.sessionId);
+                          }}
+                          to={`/chat/${encodeURIComponent(session.sessionId)}`}
+                        >
+                          <span className="aw-chat-session-copy">
+                            <strong>{session.title}</strong>
+                            <small>{formatTime(session.updatedAt)}</small>
                           </span>
-                        </>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </SidebarSection>
+                        </Link>
+                        <span className="aw-session-row-actions">
+                          <button
+                            aria-label={`重命名对话 ${session.title}`}
+                            className="aw-chat-session-rename"
+                            onClick={() => beginRename(session.sessionId)}
+                            ref={(node) => {
+                              if (node === null) {
+                                renameActionRefs.current.delete(
+                                  session.sessionId,
+                                );
+                              } else {
+                                renameActionRefs.current.set(
+                                  session.sessionId,
+                                  node,
+                                );
+                              }
+                            }}
+                            title="重命名"
+                            type="button"
+                          >
+                            <Pencil aria-hidden size={12} />
+                          </button>
+                          <button
+                            aria-label={`删除对话 ${session.title}`}
+                            className="aw-chat-session-delete"
+                            onClick={() =>
+                              void removeSession(session.sessionId)
+                            }
+                            title="删除"
+                            type="button"
+                          >
+                            <Trash2 aria-hidden size={13} />
+                          </button>
+                        </span>
+                      </>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
         </aside>
       </WorkspaceSidebarPortal>
 
