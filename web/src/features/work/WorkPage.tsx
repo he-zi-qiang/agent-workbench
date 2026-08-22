@@ -90,6 +90,7 @@ import { deriveLifecycle, type Lifecycle, stageOfNode } from "./lifecycle";
 import { useTaskTimeline } from "./useTaskTimeline";
 import { errorMessage } from "../../components/ui";
 import { workIdentityQueryKey } from "./workQueryKeys";
+import { useDismissOnEscape } from "../../hooks/useDismissOnEscape";
 import { ArtifactPreview } from "./ArtifactPreview";
 import { formatBytes } from "./preview";
 import {
@@ -574,9 +575,22 @@ export function WorkPage() {
     artifact: ArtifactRef;
   } | null>(null);
   const openedArtifact =
-    opened !== null && opened.taskId === selectedTaskId
+    opened !== null &&
+    opened.taskId === selectedTaskId &&
+    // 点到产物本身不开抽屉：它已经在阅读栏里了。开了的话同一份文件会同时活
+    // 在两块面上，各有各的滚动位置、各自再取一次字节——而对读者来说它们看
+    // 起来是同一个东西。
+    //
+    // 这条推理不是新的：旧代码在同一个条件下压掉过那颗「返回任务结果」，
+    // 理由是「返回到你正在看的那个文件的按钮，是一颗什么也不做的按钮」。
+    // 按钮没了，条件留下。
+    opened.artifact.artifact_id !== deliverable?.artifact_id
       ? opened.artifact
       : null;
+  const closePreview = useCallback(() => {
+    setOpened(null);
+  }, [setOpened]);
+  useDismissOnEscape(openedArtifact !== null, closePreview);
 
   const [approvalNotice, setApprovalNotice] = useState<ApprovalNotice | null>(
     null,
@@ -1218,19 +1232,11 @@ export function WorkPage() {
             >
               <div className="aw-work-run">
                 <TaskResult
-                  artifact={openedArtifact ?? deliverable}
+                  // 永远是这次任务自己的产物。从文件栏点开的那个现在长在
+                  // 右侧抽屉里，不再顶掉这一栏。
+                  artifact={deliverable}
                   draftText={draftText}
                   identity={identity}
-                  {
-                    // Only when closing would actually show something else.
-                    // Opening the deliverable from the rail lands on what the
-                    // column was already showing, and a "返回任务结果" that returns
-                    // to the file you are looking at is a button that does nothing.
-                    ...(openedArtifact === null ||
-                    openedArtifact.artifact_id === deliverable?.artifact_id
-                      ? {}
-                      : { onClose: () => setOpened(null) })
-                  }
                   onDownload={(artifact) => downloadMutation.mutate(artifact)}
                   onRetry={
                     retryInput === null ? undefined : () => resubmit(retryInput)
@@ -1458,8 +1464,57 @@ export function WorkPage() {
           </>
         ) : null}
       </main>
+
+      {/* 产出文件栏里点开的文件长在右侧抽屉里，而不是把阅读栏换掉。
+          此前点一个文件就把「这次任务怎么样」整段顶走——而那一段正是读者
+          用来判断这个文件值不值得看的东西。抽屉之后两边同时在。
+          放在 `.aw-work-detail` 外面、`.aw-work-page` 里面：前者有
+          container-type: inline-size，那等于 layout containment，窄屏那份
+          position: fixed 会被它锚住。 */}
+      {openedArtifact === null ? null : (
+        <>
+          <button
+            aria-label="关闭预览"
+            className="aw-drawer-backdrop"
+            onClick={closePreview}
+            type="button"
+          />
+          <aside aria-label="预览" className="aw-drawer">
+            <header className="aw-drawer-header">
+              <h2>{artifactName(openedArtifact)}</h2>
+              <div className="aw-drawer-actions">
+                <button
+                  className="aw-button"
+                  onClick={() => downloadMutation.mutate(openedArtifact)}
+                  type="button"
+                >
+                  下载
+                </button>
+                <button
+                  className="aw-button"
+                  onClick={closePreview}
+                  type="button"
+                >
+                  关闭
+                </button>
+              </div>
+            </header>
+            <section
+              aria-label={`文件 ${artifactName(openedArtifact)}`}
+              className="aw-drawer-body"
+            >
+              <ArtifactPreview artifact={openedArtifact} identity={identity} />
+            </section>
+          </aside>
+        </>
+      )}
     </div>
   );
+}
+
+/** 产出的显示名。没有文件名的产出用它的 kind——不拿 id 编一个。 */
+function artifactName(artifact: ArtifactRef): string {
+  return artifact.filename ?? artifact.kind;
 }
 
 /**
@@ -1706,7 +1761,6 @@ function TaskResult({
   artifact,
   draftText,
   identity,
-  onClose,
   onDownload,
   onRetry,
   status,
@@ -1716,8 +1770,6 @@ function TaskResult({
   artifact: ArtifactRef | null;
   draftText: string | null;
   identity: PrincipalIdentity;
-  /** Set only while showing a file the reader opened from the rail. */
-  onClose?: (() => void) | undefined;
   onDownload: (artifact: ArtifactRef) => void;
   onRetry?: (() => void) | undefined;
   status: TaskStatus;
@@ -1933,15 +1985,10 @@ function TaskResult({
         <span className="aw-answer-size">
           {formatBytes(artifact.size_bytes)}
         </span>
-        {onClose === undefined ? null : (
-          <button
-            className="aw-button is-ghost is-small"
-            onClick={onClose}
-            type="button"
-          >
-            返回任务结果
-          </button>
-        )}
+        {/* 这里此前有一颗「返回任务结果」：从文件栏点开一个文件会把阅读栏
+            换掉，那颗按钮是唯一的回头路，没有它读者会被困在一份证据包里。
+            现在阅读栏根本不会离开——文件长在右侧抽屉里——所以那条回头路
+            由结构本身给出，不再需要一个按钮。 */}
         {/* A labelled button, not the bare icon it replaced. That icon sat at
             the end of a header row and was routinely missed -- the file is the
             thing the reader came for, and the way to keep it has to look like

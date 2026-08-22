@@ -749,6 +749,12 @@ describe("WorkPage task submission", () => {
       ),
     ).not.toBeInTheDocument();
 
+    // 抽屉在没人点之前不挂载。这是它整个存在的理由的另一半：一块常驻的
+    // 420px 面板会无条件吃掉阅读宽度，而「你点了什么」才是它该出现的时机。
+    expect(
+      screen.queryByRole("complementary", { name: "预览" }),
+    ).not.toBeInTheDocument();
+
     // One control, and it is labelled. It used to be a bare icon on the theory
     // that the filename beside it said enough; in use it sat at the end of a
     // header row and was routinely missed. The file is what the reader came
@@ -971,12 +977,55 @@ describe("WorkPage task submission", () => {
     expect(await within(rail).findByText(/report\.md|报告文件/)).toBeInTheDocument();
   });
 
-  it("returns to the deliverable from a rail file that is not it", async () => {
+  it("closes the preview with Escape", async () => {
+    // 抽屉此前只有两个关法：点背景、点它自己的「关闭」，两个都要用鼠标。
+    // 一个盖住半屏内容的东西不该只有鼠标能收起来——键盘用户唯一的办法是
+    // Tab 到那颗按钮上，而它在抽屉的另一头。
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "打包结果数据",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(
+      railFileTimeline({
+        artifact_id: "art_zip",
+        media_type: "application/zip",
+        filename: "数据包.zip",
+        size_bytes: 10240,
+      }),
+    );
+    vi.mocked(getArtifactText).mockResolvedValue({
+      text: "# 报告",
+      truncated: false,
+    });
+    const user = userEvent.setup();
+    renderWorkPage("/work/task_run");
+
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
+    await user.click(within(rail).getByRole("button", { name: /数据包\.zip/ }));
+    expect(
+      await screen.findByRole("complementary", { name: "预览" }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("complementary", { name: "预览" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the task result on screen while a rail file is open", async () => {
     /**
-     * The control for suppressing that button. It is hidden only when closing
-     * would land on the very file already open; every other rail entry still
-     * has a way back, and losing that would strand a reader on the evidence
-     * bundle.
+     * 这条测试原先叫「从一个不是产物的文件返回任务结果」，守的是那颗
+     * 「返回任务结果」按钮——因为点开一个文件会把阅读栏换掉，没有那条回头路
+     * 读者会被困在一份证据包里。
+     *
+     * 现在阅读栏根本不会离开：文件长在右侧抽屉里。要守的东西没变（不能把读者
+     * 困住），但它由结构给出而不是由一颗按钮给出，所以断言换成：点开之后
+     * 任务产出仍然在，**不需要点任何东西**，而且那颗按钮不该再存在。
      */
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
@@ -1001,14 +1050,24 @@ describe("WorkPage task submission", () => {
     const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /报告文件|report\.md/ }));
 
-    const output = await screen.findByRole("region", { name: "任务产出" });
-    await user.click(within(output).getByRole("button", { name: "返回任务结果" }));
+    const pane = await screen.findByRole("complementary", { name: "预览" });
+    expect(within(pane).getByRole("heading", { level: 2 })).toHaveTextContent(
+      /报告文件|report\.md/,
+    );
 
+    // 没有点任何东西：任务自己的产物还在阅读栏里。
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(await within(output).findByText(/季度总结\.docx/)).toBeInTheDocument();
     expect(
-      await within(await screen.findByRole("region", { name: "任务产出" })).findByText(
-        /季度总结\.docx/,
-      ),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "返回任务结果" }),
+    ).not.toBeInTheDocument();
+
+    // 抽屉自己能收起来，收起来之后阅读栏一如既往。
+    await user.click(within(pane).getByRole("button", { name: "关闭" }));
+    expect(
+      screen.queryByRole("complementary", { name: "预览" }),
+    ).not.toBeInTheDocument();
+    expect(within(output).getByText(/季度总结\.docx/)).toBeInTheDocument();
   });
 
   it("says when a success shipped with the reviewer still unsatisfied", async () => {
@@ -1042,9 +1101,8 @@ describe("WorkPage task submission", () => {
   it("opens a picture from the rail as a picture, not a download", async () => {
     // A produced .png used to download on click with no feedback and show
     // nothing -- the rail pre-judged "not previewable" and its list was stale
-    // the moment the column learned a new kind. Now the click opens, the
-    // column shows the picture, and the one download button stays the only
-    // way bytes leave the page.
+    // the moment the column learned a new kind. Now the click opens it in the
+    // right-hand drawer, beside a reading column that never left.
     vi.mocked(getTask).mockResolvedValue({
       task_id: "task_run",
       status: "succeeded",
@@ -1065,22 +1123,40 @@ describe("WorkPage task submission", () => {
     vi.mocked(getArtifactBlob).mockResolvedValue(
       new Blob(["png-bytes"], { type: "image/png" }),
     );
+    // 阅读栏里的产物（report.md）现在和抽屉同时活着，所以它自己的取数也要喂。
+    // 不喂的话这条测试会红在一个和它无关的原因上：react-query 收到 undefined
+    // 会 reject，阅读栏渲染出一条错误提示。
+    vi.mocked(getArtifactText).mockResolvedValue({
+      text: "# 报告",
+      truncated: false,
+    });
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
     const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /图表\.png/ }));
 
-    const output = await screen.findByRole("region", { name: "任务产出" });
-    const image = await within(output).findByRole("img", { name: "图表.png" });
+    const pane = await screen.findByRole("complementary", { name: "预览" });
+    const image = await within(pane).findByRole("img", { name: "图表.png" });
     expect(image.getAttribute("src")).toMatch(/^blob:/);
     expect(vi.mocked(getArtifactBlob)).toHaveBeenCalledWith(
       expect.anything(),
       "art_plot",
     );
     expect(vi.mocked(downloadArtifact)).not.toHaveBeenCalled();
-    // Still exactly one labelled download control on the page.
-    expect(screen.getAllByRole("button", { name: /^下载/ })).toHaveLength(1);
+
+    // 这次改动存在的理由：任务结果没有被顶走。
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(within(output).getByText("report.md")).toBeInTheDocument();
+
+    // 「一份文件一个带标签的保存入口」——此前它写作「整页只有一颗下载键」，
+    // 而那只是因为一个界面上只可能有一份文件。现在有两份，所以按面各算一次。
+    expect(
+      within(output).getAllByRole("button", { name: /^下载/ }),
+    ).toHaveLength(1);
+    expect(within(pane).getAllByRole("button", { name: /^下载/ })).toHaveLength(
+      1,
+    );
   });
 
   it("runs an html artifact in a sandboxed frame rather than digesting it as markdown", async () => {
@@ -1105,28 +1181,40 @@ describe("WorkPage task submission", () => {
         size_bytes: 256,
       }),
     );
-    vi.mocked(getArtifactText).mockResolvedValue({
-      text: "<html><body><h1>图</h1></body></html>",
-      truncated: false,
-    });
+    // 按 id 分发，不是一个 mockResolvedValue 喂两处：阅读栏读的是 report.md，
+    // 抽屉读的是 chart.html，两个面各自断言的是它自己要来的字节。
+    vi.mocked(getArtifactText).mockImplementation((_identity, artifactId) =>
+      Promise.resolve(
+        artifactId === "art_page"
+          ? { text: "<html><body><h1>图</h1></body></html>", truncated: false }
+          : { text: "# 报告", truncated: false },
+      ),
+    );
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
     const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /chart\.html/ }));
 
+    // 这份 html 就是这次任务的产物——`text/html` 在 DOCUMENT_MEDIA_TYPES 里，
+    // 所以它自己赢下了「最后一份文档」。点它不开抽屉：同一份文件不该同时活在
+    // 两块面上，各取一次字节、各有一个滚动位置，而看起来是同一个东西。
     const output = await screen.findByRole("region", { name: "任务产出" });
     const frame = await within(output).findByTitle("chart.html 预览");
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     expect(
       within(output).getByRole("button", { name: "源码" }),
     ).toBeInTheDocument();
-    // Still exactly one labelled download control on the page.
-    expect(screen.getAllByRole("button", { name: /^下载/ })).toHaveLength(1);
+    expect(
+      screen.queryByRole("complementary", { name: "预览" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(output).getAllByRole("button", { name: /^下载/ }),
+    ).toHaveLength(1);
   });
 
-  it("opens an unshowable type in the reading column instead of silently downloading", async () => {
-    // The honest leaf: no viewer exists for a zip, and the column says so.
+  it("opens an unshowable type beside the task result instead of silently downloading", async () => {
+    // The honest leaf: no viewer exists for a zip, and the drawer says so.
     // What must not happen is the old behaviour -- bytes saved to disk as the
     // response to a click that asked to look.
     vi.mocked(getTask).mockResolvedValue({
@@ -1146,18 +1234,25 @@ describe("WorkPage task submission", () => {
         size_bytes: 10240,
       }),
     );
+    vi.mocked(getArtifactText).mockResolvedValue({
+      text: "# 报告",
+      truncated: false,
+    });
     const user = userEvent.setup();
     renderWorkPage("/work/task_run");
 
     const rail = await screen.findByRole("complementary", { name: "产出文件" });
     await user.click(within(rail).getByRole("button", { name: /数据包\.zip/ }));
 
-    const output = await screen.findByRole("region", { name: "任务产出" });
+    const pane = await screen.findByRole("complementary", { name: "预览" });
     expect(
-      await within(output).findByText(/这个类型只能下载后查看/),
+      await within(pane).findByText(/这个类型只能下载后查看/),
     ).toBeInTheDocument();
     expect(vi.mocked(downloadArtifact)).not.toHaveBeenCalled();
     expect(vi.mocked(getArtifactBlob)).not.toHaveBeenCalled();
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    expect(within(output).getByText("report.md")).toBeInTheDocument();
   });
 
   it("keeps the document downloadable when its text cannot be extracted", async () => {

@@ -82,6 +82,7 @@ import {
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
 import { effectiveMediaType } from "../../components/media";
+import { useDismissOnEscape } from "../../hooks/useDismissOnEscape";
 import { ProjectPicker } from "../../components/ProjectPicker";
 import { EmptyState, ErrorNotice, IconButton } from "../../components/ui";
 import { CodeSessionRail } from "./CodeSessionRail";
@@ -215,6 +216,12 @@ export function CodePage() {
   const [uploading, setUploading] = useState(false);
   const workspaceSidebar = useWorkspaceSidebar();
   const [panelOpen, setPanelOpen] = useState(false);
+  // 和任务页共用一个 hook：这个抽屉此前也只有点背景和点「关闭」两个关法，
+  // 两个都要用鼠标。
+  const closePanel = useCallback(() => {
+    setPanelOpen(false);
+  }, [setPanelOpen]);
+  useDismissOnEscape(panelOpen, closePanel);
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const queries = useQueryClient();
   // 归属改完要把会话列表标脏：那份列表带着 project_id，而项目页读的是同一个
@@ -894,7 +901,11 @@ export function CodePage() {
   const title = held?.title;
 
   return (
-    <div className={`aw-code-page${panelOpen ? " has-preview" : ""}`}>
+    // `has-preview` 删了：全仓没有一条规则读它。minimal-theme.css:330 那块
+    // 墓碑注释记着它为什么会变成死类——预览从第三栏改成抽屉时，app.css 里的
+    // 列宽规则删了，minimal-theme 里那份没删，而它加载得更晚，于是抽屉画出来
+    // 了、下面的对话仍然被收窄。规则最后被删掉，类名却一直发到 DOM 上。
+    <div className="aw-code-page">
       {rail}
 
       <main className="aw-code-main">
@@ -1061,7 +1072,7 @@ export function CodePage() {
         <>
           <button
             aria-label="关闭预览"
-            className="aw-code-preview-backdrop"
+            className="aw-drawer-backdrop"
             onClick={() => {
               setPanelOpen(false);
             }}

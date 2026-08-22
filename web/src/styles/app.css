@@ -2213,7 +2213,14 @@ pre {
 
 /* Work ------------------------------------------------------------------- */
 
+/* `position: relative` 是给右侧那块预览抽屉的定位锚。没有它，抽屉的包含块
+   会落到 `.aw-app-content`——今天那恰好是同一个盒子，于是它看起来是对的，
+   而对的理由是错的：那个巧合会在壳层下一次改布局时无声地断掉。
+   锚在这一层而不是 `.aw-work-detail`：后者有 container-type: inline-size，
+   那等于 layout containment，会把 position: fixed 也一起锚过去——窄屏那份
+   fixed 抽屉会因此贴到一个会滚动的盒子上。 */
 .aw-work-page {
+  position: relative;
   display: grid;
   grid-template-columns: 310px minmax(0, 1fr);
   height: 100%;
@@ -4479,7 +4486,7 @@ p.aw-code-step-thought {
 
 /* --- 右：预览 --- */
 
-.aw-code-preview {
+.aw-drawer {
   position: absolute;
   z-index: 5;
   inset: 0 0 0 auto;
@@ -4504,12 +4511,12 @@ p.aw-code-step-thought {
 /* 动效只是让「它是滑出来的」这件事看得出来；关掉动效的人不需要为此损失任何
    信息，所以直接取消。 */
 @media (prefers-reduced-motion: reduce) {
-  .aw-code-preview {
+  .aw-drawer {
     animation: none;
   }
 }
 
-.aw-code-preview-header {
+.aw-drawer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4518,20 +4525,20 @@ p.aw-code-step-thought {
   border-bottom: 1px solid var(--aw-border);
 }
 
-.aw-code-preview-header h2 {
+.aw-drawer-header h2 {
   overflow: hidden;
   margin: 0;
   font-size: 13px;
   overflow-wrap: anywhere;
 }
 
-.aw-code-preview-actions {
+.aw-drawer-actions {
   display: flex;
   flex: none;
   gap: 6px;
 }
 
-.aw-code-file-view {
+.aw-drawer-body {
   display: flex;
   min-height: 0;
   flex: 1;
@@ -4542,7 +4549,7 @@ p.aw-code-step-thought {
 
 /* 文件正文，两处共用：右栏的预览面，和对话里卡片的就地预览。
  *
- * 以前这条规则写成 `.aw-code-file-view pre`，也就是只在面板语境里生效。文本
+ * 以前这条规则写成 `.aw-drawer-body pre`，也就是只在面板语境里生效。文本
  * 预览搬进卡片之后，同一个 <pre> 在对话里就是**没有任何样式**的——默认等宽、
  * 不换行，右边被容器直接裁掉，一行 docstring 看不到结尾。选择器跟着元素走，
  * 而不是跟着它当时碰巧待的那个盒子走。
@@ -4782,14 +4789,14 @@ p.aw-code-step-thought {
 /* ≤900px：抽屉本身已经是默认形态，这里只补窄屏独有的两件事——躲开 60px 高的
    .aw-mobile-nav，以及在小屏上占得更宽一点。 */
 @media (width <= 900px) {
-  .aw-code-preview {
+  .aw-drawer {
     position: fixed;
     z-index: 72;
     inset: 0 0 60px auto;
     width: min(560px, 94vw);
   }
 
-  .aw-code-preview-backdrop {
+  .aw-drawer-backdrop {
     position: fixed;
     z-index: 71;
     inset: 0 0 60px;
@@ -4838,7 +4845,7 @@ p.aw-code-step-thought {
 
 /* 点空白处关掉抽屉。始终渲染，不再只在窄屏出现——抽屉现在每个宽度上都是抽屉，
    而一个盖住内容的浮层必须有一个不用找按钮的退出方式。 */
-.aw-code-preview-backdrop {
+.aw-drawer-backdrop {
   position: absolute;
   z-index: 4;
   inset: 0;

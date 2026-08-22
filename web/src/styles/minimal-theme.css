@@ -115,7 +115,7 @@ select {
 }
 .aw-chat-sessions-header,
 .aw-code-sessions-header,
-.aw-code-preview-header,
+.aw-drawer-header,
 .aw-pane-header,
 .aw-chat-header,
 .aw-code-header,
@@ -589,7 +589,7 @@ select {
  * its place, and the one surface that should read as paper.
  */
 
-.aw-code-preview {
+.aw-drawer {
   border-left-color: var(--aw-border);
 }
 
@@ -600,7 +600,7 @@ select {
   padding-left: clamp(20px, 5vw, 72px);
 }
 
-.aw-code-file-view {
+.aw-drawer-body {
   border-color: var(--aw-border);
   background: var(--aw-panel);
 }
