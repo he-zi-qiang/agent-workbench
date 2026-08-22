@@ -85,6 +85,11 @@ import { effectiveMediaType } from "../../components/media";
 import { useDismissOnEscape } from "../../hooks/useDismissOnEscape";
 import { ProjectPicker } from "../../components/ProjectPicker";
 import { EmptyState, ErrorNotice, IconButton } from "../../components/ui";
+import {
+  ModeStarterPrompts,
+  ModeStartHeader,
+  submitTextareaOnEnter,
+} from "../../components/ModeStart";
 import { CodeSessionRail } from "./CodeSessionRail";
 import { CodeTurn } from "./CodeTurn";
 import type { OpenedFile } from "./FilePreview";
@@ -785,13 +790,14 @@ export function CodePage() {
   // control shape a keyboard and a screen reader both already understand.
   const composer = (
     <form
+      aria-busy={running}
       className="aw-code-composer"
       onSubmit={(event) => {
         event.preventDefault();
         void send();
       }}
     >
-      <div className="aw-code-composer-row">
+      <div className="aw-code-composer-row aw-mode-composer-card">
         {sessionId === undefined ? null : (
           <label
             className={`aw-code-attach ${uploading ? "is-busy" : ""}`}
@@ -819,11 +825,15 @@ export function CodePage() {
           要做的事
         </label>
         <textarea
+          aria-keyshortcuts="Enter"
           disabled={running}
+          enterKeyHint="send"
           id="aw-code-instruction"
+          maxLength={8192}
           onChange={(event) => {
             setInstruction(event.target.value);
           }}
+          onKeyDown={submitTextareaOnEnter}
           placeholder="描述你要做的事"
           ref={instructionRef}
           rows={3}
@@ -831,7 +841,7 @@ export function CodePage() {
         />
         <button
           aria-label={running ? "正在处理" : "发送"}
-          className="aw-button is-primary"
+          className="aw-button is-primary aw-mode-send"
           disabled={running || instruction.trim() === ""}
           type="submit"
         >
@@ -853,43 +863,37 @@ export function CodePage() {
     return (
       <div className="aw-code-page">
         {rail}
-        <main className="aw-code-main">
-          <div className="aw-code-start">
+        <main className="aw-code-main is-start">
+          <div className="aw-code-start aw-mode-start">
             <div className="aw-code-start-inner">
-              <header className="aw-code-start-head">
-                <IconButton
-                  className="aw-code-mobile-sessions"
-                  controls="workspace-sidebar-context"
-                  expanded={workspaceSidebar.drawerOpen}
-                  label="打开会话列表"
-                  onClick={workspaceSidebar.open}
-                >
-                  <PanelLeft aria-hidden size={18} />
-                </IconButton>
-                <h1>开始编码</h1>
-                <p>
-                  描述目标开始。会话建立后可添加文件，Agent 会修改并验证结果。
-                </p>
-              </header>
-              <div className="aw-code-starters" aria-label="编码任务起点">
-                {CODE_STARTERS.map((starter) => (
-                  <button
-                    aria-label={starter.title}
-                    key={starter.title}
-                    onClick={() => {
-                      setInstruction(starter.prompt);
-                      window.requestAnimationFrame(() =>
-                        instructionRef.current?.focus(),
-                      );
-                    }}
-                    type="button"
+              <ModeStartHeader
+                action={
+                  <IconButton
+                    className="aw-code-mobile-sessions"
+                    controls="workspace-sidebar-context"
+                    expanded={workspaceSidebar.drawerOpen}
+                    label="打开会话列表"
+                    onClick={workspaceSidebar.open}
                   >
-                    <span>{starter.title}</span>
-                  </button>
-                ))}
-              </div>
+                    <PanelLeft aria-hidden size={18} />
+                  </IconButton>
+                }
+                description="描述目标开始。会话建立后可添加文件，Agent 会修改并验证结果。"
+                title="开始编码"
+              />
               {error === null ? null : <ErrorNotice message={error} />}
               {composer}
+              <ModeStarterPrompts
+                disabled={running}
+                items={CODE_STARTERS}
+                label="编码任务起点"
+                onChoose={(prompt) => {
+                  setInstruction(prompt);
+                  window.requestAnimationFrame(() =>
+                    instructionRef.current?.focus(),
+                  );
+                }}
+              />
             </div>
           </div>
         </main>

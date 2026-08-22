@@ -54,7 +54,13 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   await page.goto("/ui/");
 
   await expect(page).toHaveURL(/#\/chat$/);
-  await expect(page.getByRole("heading", { name: "新对话" })).toBeVisible();
+  // 起始屏上没有会话头。这里此前断言的是它**在**——那时 ChatHeader 在还没有
+  // 会话时也渲染，屏幕上于是叠着两个标题，上面那个「新对话」说的是"你还没开始"，
+  // 下面那个「有什么可以帮你？」说的是同一件事。
+  //
+  // 断言"不在"而不是删掉这一行：ChatHeader 并没有被删，它在会话建立之后照常
+  // 回来。少了这条断言，把它改回无条件渲染不会有任何测试反对。
+  await expect(page.getByRole("heading", { name: "新对话" })).toBeHidden();
   await expect(
     page.getByRole("heading", { name: "有什么可以帮你？" }),
   ).toBeVisible();
@@ -162,7 +168,18 @@ test("知识库能进入 Chat，辅助页面在移动端也可到达", async ({
     name: isMobile ? "移动端导航" : "主导航",
   });
 
-  await navigation.getByRole("link", { name: "知识库", exact: true }).click();
+  // 知识库在两种布局里住在不同的地方：桌面侧栏有它自己的一行，移动端底栏只留
+  // 三个主要流程，它和其余辅助页一起收进「更多」。所以这里分叉的是**入口**，
+  // 不是断言——两条路都必须走到同一个知识库页，这条用例的名字说的就是这件事。
+  if (isMobile) {
+    await navigation.getByRole("button", { name: "更多" }).click();
+    await page
+      .getByRole("dialog", { name: "更多页面" })
+      .getByRole("link", { name: "知识库", exact: true })
+      .click();
+  } else {
+    await navigation.getByRole("link", { name: "知识库", exact: true }).click();
+  }
   await expect(page.getByRole("heading", { name: "校招项目资料" })).toBeVisible();
   // 名字里不再出现 Chat：导航把这个产品叫「对话」，这颗按钮此前叫的是别的。
   // 不加 exact 也行——「在对话中使用」是唯一含这一串的可及名字，导航里那个

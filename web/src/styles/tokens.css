@@ -22,46 +22,9 @@
  * 控件会是一块白的。
  */
 
-/*
- * 两套字，随包发布
- * ================
- *
- * 交接稿指定标题用 Space Grotesk、id 与文件名用 IBM Plex Mono。在这之前这两个
- * 名字在仓库里一次都没出现过，而 `font-family` 的第一顺位写的是 Inter——一个
- * 同样没有随包发布、开发机上也没装的名字。于是三个名字全部静默回落到系统字体：
- * 实测 `Inter` / `Space Grotesk` / `IBM Plex Mono` 渲染同一串字得到的宽度与
- * `serif` 基线一字不差（759.43px），也就是说没有一个曾经生效。版面的尺寸与
- * 颜色都照稿子做了，字形没有——这是最容易被读成「整份稿子没落地」的那一处，
- * 因为字形是一眼就能看出不同、却说不上来哪里不同的东西。
- *
- * 随包发布，而不是照稿子那样 `<link>` 到 fonts.googleapis.com：
- *
- *   * 那个域名在国内基本连不上，而 CDN 拉不动的结果不是报错，是静默回落——
- *     和上面那个「写了名字但没生效」的状态一模一样，只是这次连改哪里都看不见；
- *   * 前端的 CI 门是离线跑的。一个需要联网才成立的外观，没有办法在门里被断言，
- *     也就没有办法阻止它第二次悄悄消失。
- *
- * 只带拉丁子集：Google 分片里的 `latin` 一片，三个文件合计 42 KB。汉字不在这
- * 两个 `@font-face` 的 `unicode-range` 里，所以浏览器根本不会为一个汉字去试它们，
- * 直接落到栈里的苹方——稿子上的中文是 Noto Sans SC，与苹方同属一类无衬线，
- * 那点差别小于为它多背一兆中文子集的代价。
- *
- * Space Grotesk 取可变字重，300–700 一个文件；IBM Plex Mono 没有可变版本，
- * 稿子只用到 400 与 500，就只带这两个静态字重。
- *
- * 两者都是 SIL OFL 1.1，出处与版本记在 fonts/README.md。
- */
-@font-face {
-  font-family: "Space Grotesk";
-  font-style: normal;
-  font-weight: 300 700;
-  font-display: swap;
-  src: url("./fonts/space-grotesk-latin-var.woff2") format("woff2");
-  unicode-range:
-    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
-    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
-    U+2215, U+FEFF, U+FFFD;
-}
+/* 界面与标题统一使用系统 UI 字体，避免中文落到苹方、拉丁标题却切成另一套几何
+ * 字形。只有 id、文件名和会变化的诊断数字使用随包发布的 IBM Plex Mono；这样
+ * 离线构建仍稳定，也不为普通界面文字额外下载字体。 */
 
 @font-face {
   font-family: "IBM Plex Mono";
@@ -101,23 +64,14 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  /* 三支字体栈，三个 token，全仓只在这里定义一次。
-   *
-   * 等宽栈原先只管住了六条规则，另外十六条把 `"SFMono-Regular", Consolas,
-   * monospace` 一类的栈直接抄在规则里——于是「等宽字体是什么」写在十六个地方，
-   * 谁也不是定义，往栈首加一个字体要改十六次而且漏一次看不出来。现在全部
-   * 二十二条都读这一个 token。
-   *
-   * 每支栈里 webfont 都排第一、系统字排后面：拉丁字符命中随包的那份，汉字不在
-   * 它的 unicode-range 里、自动走到后面的苹方。一支栈同时管两种文字，不需要在
-   * 规则里按语言分叉。 */
+  /* 系统 UI 栈与随包等宽栈都只在这里定义；组件不再各自复制字体列表。 */
   --aw-sans:
     ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 
-  /* 标题字。稿子的原话是「标题 Space Grotesk（600，letter-spacing: -0.01em）」，
-     字重与字距跟在文件末尾那条标题规则上，这里只定义「是哪支字」。 */
-  --aw-display: "Space Grotesk", var(--aw-sans);
+  /* 桌面产品的标题沿用系统界面字。中英混排时，拉丁标题不再突然切到另一套
+     几何字形；层级交给字重、字距和留白，而不是靠一支更响的 display font。 */
+  --aw-display: var(--aw-sans);
 
   --aw-mono:
     "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
@@ -125,56 +79,30 @@
   --aw-font-mono: var(--aw-mono);
 
   /* --- 底色 -------------------------------------------------------------
-   *
-   * 两条规则，全部的面都从它们推出来。数值不是挑的，是解出来的——生成与校验
-   * 的脚本见 PR 描述，下面每个比值都实测过。
-   *
-   * 规则一：**阅读面取极值，窗框往中灰走。**
-   *   深色下 window（正文所在的那块）是最深的一档，sidebar/canvas 往上提；
-   *   浅色下 window 是最白的一档，sidebar/canvas 往下压。两个主题同一条。
-   *   此前这两个主题是**互相矛盾**的：深色下 sidebar #1f1f1d（CIE L* 11.69）比
-   *   window #191918（8.72）**亮** 2.97，浅色下 #f5f5f2（96.46）比 #fcfcfb
-   *   （98.94）**暗** 2.48——同一个侧栏，深色下读作凸起的面板，浅色下读作凹陷的
-   *   窗框。现在两边都是 5.2 L*，方向一致。
-   *
-   *   顺带：2.5–3 L* 的台阶在屏幕上基本看不见，所以此前「侧栏和正文区是两块面」
-   *   这件事实际只有那条 1px 描边在扛。
-   *
-   * 规则二：**面积越大，色度越低。**
-   *   window、sidebar、canvas 这几块大面做成真中性（RGB 三通道跨度 1），
-   *   暖色只走小面积的抬起面、chip 与描边（OKLCH 色相 ≈68）。
-   *
-   *   这一条是踩坑踩出来的。原意图（上一版这段注释写的「暖中性而不是灰，橙色
-   *   落在中性灰上会显脏」）是对的，但实现时灰漂到了 OKLCH 色相 106.7——那是
-   *   黄绿/橄榄，离橙色动作色（39.2）足足 67.5°，交接稿的画布 #f2f0eb 本来是
-   *   88.6。而把大面直接调暖也不行：一块 720px 宽的暖灰在深色下读作「土」，
-   *   在浅色下才读作「米白」。真中性没有色相，也就不会和橙冲突。
-   *
-   * 深色一侧的绝对深度按「接近纯黑」定：window L* 1.63。低于 L* 8 之后
-   * 「凹陷」这个概念不再成立（纯黑之下没有空间），所以 surface-sunken 现在
-   * 落在 window **之上** 3.4 L*——代码块靠比正文区亮来表达「另一块料」，
-   * 而不是靠更暗。 */
-  --aw-canvas: light-dark(#f0eeeb, #161515);
-  --aw-window: light-dark(#fefdfd, #060605);
-  --aw-sidebar: light-dark(#f0eeeb, #161515);
-  --aw-panel: light-dark(#f7f5f4, #1b1a18);
+   * 大面积 chrome 使用低色度中性灰。浅色正文略亮于侧栏，深色正文略亮于窗框；
+   * 两种主题都靠很小的明度台阶分层，不再把深色正文压成纯黑。暖色只承担动作，
+   * 不进入 sidebar / window / panel 这些大面积表面。 */
+  --aw-canvas: light-dark(#f4f4f2, #151514);
+  --aw-window: light-dark(#fcfcfb, #1c1c1b);
+  --aw-sidebar: light-dark(#f4f4f2, #171716);
+  --aw-panel: light-dark(#f7f7f5, #232321);
 
   /* The raised-chip surface. Referenced by the workbench tabs since they
      shipped, but never defined until now -- the var() fallback quietly
      resolved to #fff on a #f7f7f5 container, which is why the active tab
      was indistinguishable from its neighbours. */
-  --aw-surface: light-dark(#f7f5f4, #1b1a18);
-  --aw-panel-soft: light-dark(#eae6e3, #201e1d);
-  --aw-panel-strong: light-dark(#e1dcd7, #2b2826);
+  --aw-surface: light-dark(#f7f7f5, #232321);
+  --aw-panel-soft: light-dark(#eeeeeb, #292927);
+  --aw-panel-strong: light-dark(#e7e7e3, #30302d);
 
   /* 抬起一档，介于 panel 与 panel-strong 之间：chip、hover 出来的圆钮、禁用态的
      发送键。此前这一档不存在，那些地方各自借了 panel-strong 或直接写死 rgba，
      于是「悬停」和「选中」落在同一个值上——两个状态同色，等于只有一个状态。 */
-  --aw-raised: light-dark(#ece8e5, #282623);
+  --aw-raised: light-dark(#ecece8, #2c2c29);
 
   /* 凹面：代码块、被引的原文这类「陷进去」的底。同样此前只以 fallback 存在，
      而那个 fallback 是 `rgb(0 0 0 / 4%)`——一个在深色底上等于什么都没画的值。 */
-  --aw-surface-sunken: light-dark(#f3f2f2, #111110);
+  --aw-surface-sunken: light-dark(#f2f2ef, #161615);
 
   /* 深色下给面加一道 1px 的顶部高光。浅色下是透明的：那边「抬起」由投影表达，
      而投影在深色里几乎不可见（黑影落在黑底上），高光才是深色界面里唯一还能
@@ -189,8 +117,8 @@
      留着的坏处不是八行变量，是那十五行说明：这个仓库的约定是注释承载决定，
      而它承载的是一个已经被推翻的决定，读起来却像还在生效。 */
 
-  --aw-text: light-dark(#2d2a28, #d8d3cf);
-  --aw-text-soft: light-dark(#585451, #a9a5a0);
+  --aw-text: light-dark(#282825, #ecece8);
+  --aw-text-soft: light-dark(#595954, #b5b5ae);
   /* 第三档：元信息、时间、正在生成的那段回答。仍然是**要读的字**，所以仍然按
      4.5:1 的地板定，没有「次要文字」的豁免。
      求解时用的不是 window 而是**它可能落到的最亮/最不利的那块面**——深色是
@@ -198,7 +126,7 @@
      求解会得到一个在悬停行上不合格的值，那正是上一版的毛病。
      用法上有一条配套规则：悬停/选中的行与 chip 上的文字要升到 soft，muted 只
      落在静止的面上。 */
-  --aw-text-muted: light-dark(#6a6662, #8d8984);
+  --aw-text-muted: light-dark(#6d6d67, #9c9c95);
 
   /* 第四档没有自己的值，它是 muted 的别名——这一条没变，理由也没变：
      soft 与 muted 之间放不下第三个既能被看见、又在 4.5:1 之上的台阶。
@@ -212,13 +140,27 @@
      它在浅色 window 上是 3.90:1、深色 3.95:1，够 WCAG 对图形的 3:1，不够文字的
      4.5:1——这不是缺陷，是这一档的定义。任何一处用它画字都是用错了，上面四档
      里挑一个。 */
-  --aw-faint: light-dark(#847f7b, #716d68);
+  --aw-faint: light-dark(#85857e, #777770);
 
-  --aw-border: light-dark(#e7e3e0, #302d2a);
-  --aw-border-strong: light-dark(#d5cfc9, #3c3935);
+  --aw-border: light-dark(#e5e5e1, #32322f);
+  --aw-border-strong: light-dark(#d6d6d0, #41413c);
 
   /* 比 border 再淡一档：同一块面内部的分隔，而不是两块面之间的边界。 */
-  --aw-border-subtle: light-dark(#f2efed, #232220);
+  --aw-border-subtle: light-dark(#f0f0ed, #292927);
+
+  /* 导航是独立的桌面 chrome，不复用内容卡片的暖灰状态。大面积中性色、单色
+     图标和两档透明覆盖，让 hover / active 在深浅主题里保持同一种语法。 */
+  --aw-nav-bg: light-dark(#f5f5f3, #191918);
+  --aw-nav-text: light-dark(#30302d, #e4e4df);
+  --aw-nav-muted: light-dark(#696963, #a2a29b);
+  --aw-nav-faint: light-dark(#85857e, #7d7d76);
+  --aw-nav-hover: light-dark(rgb(20 20 18 / 4%), rgb(255 255 255 / 5%));
+  --aw-nav-active: light-dark(rgb(20 20 18 / 7%), rgb(255 255 255 / 8%));
+  --aw-nav-rule: light-dark(rgb(20 20 18 / 9%), rgb(255 255 255 / 9%));
+
+  /* 三个模式共用的输入面。它比正文只抬起半档，避免每个输入框都像一张卡片。 */
+  --aw-composer-bg: light-dark(#fbfbfa, #1e1e1c);
+  --aw-composer-border: light-dark(#deded9, #383834);
 
   --aw-accent: light-dark(#b75d42, #d98265);
   --aw-accent-hover: light-dark(#ac5337, #e49376);
@@ -234,13 +176,7 @@
      不成立的那件事。 */
   --aw-accent-on: light-dark(#ffffff, #1d1411);
 
-  /* 深色一侧的 -soft / -border 跟着正文区一起下沉。
-     它们原先是按 window #191918（CIE L* 8.72）调的，落在上面是 +3.8 L*；
-     正文区压到 #060605（1.63）之后，同样的值变成 +10.9——一块本来只是「带点
-     颜色的底」的卡片，会突然读成一个亮色块。现在 soft 落在 +5.5、border 落在
-     +11，色相不动。
-     色度是按明度比例收的（×√(L新/L旧)）：把一个 L*12.5 的色块直接压到 7.3
-     而色度不动，得到的是一块闷色，不是一层淡色。 */
+  /* 语义色只用于确实需要读出状态的局部，不参与普通导航选中态。 */
   --aw-success: light-dark(#2f7a54, #6cba8b);
   --aw-success-soft: light-dark(#edf5f0, #0b1911);
   --aw-success-border: light-dark(#cfe3d7, #0f2518);
@@ -284,17 +220,12 @@
   --aw-shadow-tint-weak: light-dark(rgb(24 24 21 / 4%), rgb(0 0 0 / 42%));
   --aw-shadow-tint-strong: light-dark(rgb(24 24 21 / 9%), rgb(0 0 0 / 58%));
   --aw-shadow-sm: 0 1px 2px var(--aw-shadow-tint-weak);
+  --aw-shadow-float: 0 1px 2px var(--aw-shadow-tint-weak);
   --aw-shadow-md: 0 18px 48px var(--aw-shadow-tint-strong);
 
-  /* 正文区那块面的投影，**只有浅色一侧有**。
-     浅色下 window 是最白的一档、四周是更暗的 canvas，它读作「纸浮在桌面上」，
-     投影是对的；深色下 window 是最深的一档、四周是更亮的 canvas，它读作一口
-     「井」，而给凹陷的东西打投影是自相矛盾的——上一版就是这么画的，同时还
-     镶了一条比窗框还亮的描边。
-     深色一侧把 tint 设成 transparent 而不是把整条 box-shadow 删掉，是因为
-     light-dark() 只返回颜色、不返回整条阴影（这一条上面已经踩过一次）。 */
-  --aw-shadow-pane-tint: light-dark(rgb(46 42 36 / 9%), transparent);
-  --aw-shadow-pane: 0 18px 40px var(--aw-shadow-pane-tint);
+  /* 正文区只在浅色主题留一道很浅的边缘投影；深色靠色阶分层，避免黑影发脏。 */
+  --aw-shadow-pane-tint: light-dark(rgb(24 24 21 / 5%), transparent);
+  --aw-shadow-pane: 0 1px 2px var(--aw-shadow-pane-tint);
 
   /* 抽屉从侧面推进来时的投影，方向由使用处给（左推是负、右推是正）。 */
   --aw-shadow-drawer-left: -18px 0 48px var(--aw-shadow-tint-strong);
@@ -334,8 +265,8 @@
    * 的文字在它的下边缘被硬切一刀；配合一道渐隐才是「溶进去」。
    * 其余地方一律用实色：在浅色主题下，一层 88% 的白盖在白底上等于什么都没画，
    * 输入框会从一张卡退化成一个只剩描边的框。 */
-  --aw-glass: light-dark(rgb(254 254 253 / 78%), rgb(6 6 5 / 74%));
-  --aw-glass-strong: light-dark(rgb(254 254 253 / 90%), rgb(27 26 24 / 88%));
+  --aw-glass: light-dark(rgb(252 252 251 / 78%), rgb(28 28 27 / 78%));
+  --aw-glass-strong: light-dark(rgb(252 252 251 / 92%), rgb(35 35 33 / 90%));
 
   --aw-radius-sm: 8px;
   --aw-radius-md: 12px;
@@ -396,21 +327,7 @@
   color-scheme: dark;
 }
 
-/* 标题字，一条规则管全站。
- *
- * 按元素而不是按类：稿子里凡是标题都是 Space Grotesk，而这套界面的标题一律
- * 是 h1/h2/h3——`app.css` 里有二十多条 `.aw-xxx h1` 只管字号与字重，没有一条
- * 管字体。要是改成给每个 `.aw-` 类补一句 `font-family`，那就是二十多个各自
- * 可以漏掉的地方；下一个新页面的标题会不会是 Space Grotesk，取决于写它的人
- * 记不记得抄这一句。按元素写，新页面不用做任何事就是对的。
- *
- * 字距 -0.01em 是稿子给的值，它只对拉丁字形成立——Space Grotesk 的字面本来
- * 就宽，稿上的 "Agent Workbench" 靠这 1% 才收得住。汉字命中的是苹方，方块字
- * 收 1% 字距看不出来，也不会挤。
- *
- * 不写 `font-weight`：字重是各条 `.aw-` 规则自己的事（15px 的卡片标题和 31px
- * 的页标题不该是同一个重量），这里统一写死会把那些区别抹平。可变字体带的是
- * 300–700 的连续字重，各处原本写的值直接就能命中。 */
+/* 标题统一继承系统 UI 字体；字号和字重仍由各页面自己的层级规则决定。 */
 h1,
 h2,
 h3,

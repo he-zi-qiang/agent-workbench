@@ -313,6 +313,7 @@ export function AppShell() {
   const secondaryNavigation = NAVIGATION.filter(
     (item) => !item.primary && item.to !== "/knowledge",
   );
+  const mobileMoreNavigation = NAVIGATION.filter((item) => !item.primary);
   const secondaryActive = secondaryNavigation.some((item) =>
     isPathWithin(location.pathname, item.to),
   );
@@ -320,6 +321,7 @@ export function AppShell() {
     KNOWLEDGE_NAVIGATION?.covers.some((prefix) =>
       isPathWithin(location.pathname, prefix),
     ) ?? false;
+  const mobileMoreActive = secondaryActive || knowledgeCurrent;
   const contextSidebarAvailable =
     currentPrimaryFlow !== undefined || knowledgeCurrent;
   const handleMoreKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -539,7 +541,7 @@ export function AppShell() {
                   </>
                 ) : null}
               </div>
-              {current && !collapsed ? (
+              {current ? (
                 // 不带 aria-label：`aria-label` 在没有 role 的 <div> 上
                 // 是被禁止的，辅助技术会直接丢掉它（在无障碍树里确认过
                 // 它不在）。里面每个 feature 自己的 <aside>/<nav> 都带着
@@ -613,9 +615,6 @@ export function AppShell() {
           </span>
           <span className="aw-rail-identity-copy">
             <strong>{identity.principalId}</strong>
-            <small>
-              {identity.tenantId} · {identity.scopes.length} 项权限
-            </small>
           </span>
         </button>
       </nav>
@@ -642,9 +641,7 @@ export function AppShell() {
         className="aw-mobile-nav"
         inert={behindModal ? true : undefined}
       >
-        {NAVIGATION.filter(
-          (item) => item.primary || item.to === "/knowledge",
-        ).map((item) => {
+        {NAVIGATION.filter((item) => item.primary).map((item) => {
           const Icon = item.icon;
           const current = item.covers.some((prefix) =>
             isPathWithin(location.pathname, prefix),
@@ -664,7 +661,7 @@ export function AppShell() {
         <button
           aria-expanded={mobileMoreOpen}
           aria-haspopup="dialog"
-          className={`aw-mobile-link ${secondaryActive ? "active" : ""}`}
+          className={`aw-mobile-link ${mobileMoreActive ? "active" : ""}`}
           onClick={openMore}
           type="button"
         >
@@ -699,7 +696,7 @@ export function AppShell() {
               </button>
             </header>
             <nav aria-label="更多项目页面" className="aw-mobile-more-list">
-              {secondaryNavigation.map((item) => {
+              {mobileMoreNavigation.map((item) => {
                 const Icon = item.icon;
                 return (
                   <NavLink

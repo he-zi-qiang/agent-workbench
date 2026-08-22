@@ -68,7 +68,6 @@ a {
  * 用 outline 的两个属性做这件事、而不是补一层 box-shadow：box-shadow 会和组件
  * 自己的投影抢同一个属性，而这套 CSS 里按钮、卡片、输入条各有各的 box-shadow，
  * 谁覆盖谁只由声明顺序和特异性决定——那是一条每加一个组件就要重算一次的规则。 */
-.aw-logo:focus-visible,
 .aw-button.is-primary:focus-visible,
 .aw-chat-send:focus-visible {
   outline-color: var(--aw-accent-on);
@@ -128,9 +127,7 @@ a {
   border-radius: 12px;
   background: var(--aw-accent);
   color: var(--aw-accent-on);
-  /* 唯一一个不是标题、却要用标题字的地方。它是一个孤立的拉丁字母，字形就是
-     它的全部内容——已经在用的 -0.04em 字距只有在 Space Grotesk 上才是稿子上
-     那个样子，落在系统字上会把字母挤进右边的边框。 */
+  /* 品牌字母和界面标题使用同一套系统字形。 */
   font-family: var(--aw-display);
   font-size: 17px;
   font-weight: 600;
@@ -175,8 +172,11 @@ a {
 
 .aw-mobile-more-sheet {
   width: min(480px, 100%);
+  max-height: calc(100dvh - 28px);
   margin: 0 auto;
   padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--aw-border);
   border-radius: 18px;
   background: var(--aw-panel);
@@ -4751,32 +4751,6 @@ p.aw-code-step-thought {
   display: grid;
   width: min(720px, 100%);
   gap: 14px;
-}
-
-.aw-code-start-head {
-  display: grid;
-  gap: 8px;
-  justify-items: center;
-  text-align: center;
-}
-
-.aw-code-start-head svg {
-  width: 26px;
-  height: 26px;
-  color: var(--aw-accent);
-}
-
-.aw-code-start-head h1 {
-  margin: 0;
-  font-size: 22px;
-}
-
-.aw-code-start-head p {
-  max-width: 46ch;
-  margin: 0;
-  color: var(--aw-text-soft);
-  font-size: 13px;
-  line-height: 1.7;
 }
 
 .aw-code-start .aw-code-composer {

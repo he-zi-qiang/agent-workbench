@@ -518,8 +518,10 @@ describe("CodePage", () => {
       });
 
     mounted();
-    await user.type(screen.getByLabelText("要做的事"), "write notes.md");
-    await user.click(screen.getByRole("button", { name: "发送" }));
+    await user.type(
+      screen.getByLabelText("要做的事"),
+      "write notes.md{Enter}",
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Wrote notes.md.")).toBeInTheDocument();

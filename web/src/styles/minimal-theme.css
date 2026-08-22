@@ -19,12 +19,8 @@ body {
   padding: 0;
 }
 
-/* 正文区从贴边的一整片改成嵌在窗框里的一块面：8px 的窗框留出来，圆角 12px。
-   这一步是「会话栏与正文区是两块面」在色阶之外的另一半——色阶给了 5.2 L* 的
-   台阶，这里给它一个真实的边界形状。
-   投影只在浅色一侧有（--aw-shadow-pane 深色是 none）：浅色下这块面是最白的
-   一档、四周更暗，读作纸浮在桌上；深色下它是最深的一档、四周更亮，读作一口
-   井，而给凹陷的东西打投影是自相矛盾的。 */
+/* 正文区从贴边的一整片改成嵌在窗框里的一块面：8px 窗框和 12px 圆角建立边界，
+   浅色只留一道很浅的边缘投影，深色完全靠中性色阶分层。 */
 .aw-app-content {
   overflow: hidden;
   border: 0;
@@ -371,7 +367,7 @@ select {
 .aw-chat-session-copy strong {
   min-width: 0;
   flex: 1;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 400;
 }
 
@@ -732,6 +728,13 @@ select {
 }
 
 @media (max-width: 760px) {
+  .aw-app-content {
+    height: calc(100dvh - 60px);
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
   .aw-app-shell {
     display: block;
   }
@@ -924,13 +927,13 @@ select {
 /* Desktop workspace shell -------------------------------------------------
  *
  * Codex contributes the compact mode rail; Claude Desktop contributes the
- * warm, quiet navigation surface and account card. The rail expands only on
+ * quiet navigation surface and account card. The rail expands only on
  * demand because Chat, Work and Code already own a contextual list beside it.
  */
 
 .aw-app-shell {
   grid-template-columns: var(--aw-nav-width) minmax(0, 1fr);
-  background: var(--aw-sidebar);
+  background: var(--aw-nav-bg);
   transition: grid-template-columns var(--aw-duration-slow) var(--aw-ease);
 }
 
@@ -955,9 +958,9 @@ select {
   padding: 8px 4px 7px;
   gap: 2px;
   overflow-x: hidden;
-  border-right: 1px solid var(--aw-border);
-  background: var(--aw-sidebar);
-  color: var(--aw-text-soft);
+  border-right: 1px solid var(--aw-nav-rule);
+  background: var(--aw-nav-bg);
+  color: var(--aw-nav-muted);
   box-shadow: none;
 }
 
@@ -988,21 +991,21 @@ select {
   gap: 7px;
   border-radius: 8px;
   background: transparent;
-  color: var(--aw-text);
+  color: var(--aw-nav-text);
 }
 
 .aw-logo-mark {
   display: grid;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   place-items: center;
   border-radius: 8px;
-  background: transparent;
-  color: var(--aw-text);
+  background: var(--aw-nav-text);
+  color: var(--aw-nav-bg);
   font-family: var(--aw-display);
-  font-size: 16px;
-  font-weight: 650;
+  font-size: 14px;
+  font-weight: 600;
   letter-spacing: -0.04em;
 }
 
@@ -1015,8 +1018,9 @@ select {
 
 .aw-logo-copy strong {
   font-family: var(--aw-display);
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--aw-nav-text);
+  font-size: 13.5px;
+  font-weight: 550;
   letter-spacing: -0.01em;
 }
 
@@ -1030,12 +1034,12 @@ select {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: var(--aw-text-muted);
+  color: var(--aw-nav-muted);
 }
 
 .aw-rail-collapse:hover {
-  background: var(--aw-panel-strong);
-  color: var(--aw-text);
+  background: var(--aw-nav-hover);
+  color: var(--aw-nav-text);
 }
 
 .aw-global-link {
@@ -1047,21 +1051,21 @@ select {
   padding: 0 7px;
   gap: 8px;
   border-radius: 8px;
-  color: var(--aw-text-soft);
-  font-size: 13px;
+  color: var(--aw-nav-muted);
+  font-size: 13.5px;
   font-weight: 500;
   text-align: left;
   white-space: nowrap;
 }
 
 .aw-global-link:hover {
-  background: var(--aw-panel-strong);
-  color: var(--aw-text);
+  background: var(--aw-nav-hover);
+  color: var(--aw-nav-text);
 }
 
 .aw-global-link.active {
-  background: color-mix(in srgb, var(--aw-panel-strong) 72%, transparent);
-  color: var(--aw-text);
+  background: var(--aw-nav-active);
+  color: var(--aw-nav-text);
   font-weight: 550;
 }
 
@@ -1079,6 +1083,17 @@ select {
   height: 22px;
   flex: 0 0 22px;
   place-items: center;
+  color: var(--aw-nav-muted);
+}
+
+.aw-global-link-icon svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 1.7;
+}
+
+.aw-global-link:is(:hover, .active) .aw-global-link-icon {
+  color: var(--aw-nav-text);
 }
 
 .aw-global-link-copy {
@@ -1099,13 +1114,13 @@ select {
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: var(--aw-text);
+  color: var(--aw-nav-text);
   text-align: left;
 }
 
 .aw-rail-identity:hover {
-  border-color: var(--aw-border);
-  background: color-mix(in srgb, var(--aw-panel) 58%, transparent);
+  border-color: var(--aw-nav-rule);
+  background: var(--aw-nav-hover);
 }
 
 .aw-rail-avatar {
@@ -1114,10 +1129,10 @@ select {
   height: 28px;
   flex: 0 0 28px;
   place-items: center;
-  border: 1px solid var(--aw-border-strong);
+  border: 1px solid var(--aw-nav-rule);
   border-radius: 50%;
-  background: var(--aw-panel);
-  color: var(--aw-text);
+  background: var(--aw-nav-active);
+  color: var(--aw-nav-text);
   font-family: var(--aw-display);
   font-size: 12px;
   font-weight: 650;
@@ -1137,7 +1152,7 @@ select {
 
 .aw-rail-identity-copy small {
   margin-top: 3px;
-  color: var(--aw-text-muted);
+  color: var(--aw-nav-muted);
   font-size: 10px;
 }
 
@@ -1265,84 +1280,12 @@ select {
   color: var(--aw-text-subtle);
 }
 
-.aw-chat-page.is-new .aw-chat-transcript {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding-bottom: 22px;
-}
-
-.aw-chat-page.is-new .aw-chat-composer {
-  margin-bottom: clamp(44px, 9vh, 96px);
-}
-
 .aw-chat-welcome {
   display: grid;
-  width: min(680px, 100%);
+  width: min(720px, 100%);
   justify-items: center;
   margin: 0 auto;
   text-align: center;
-}
-
-.aw-chat-welcome h2 {
-  margin: 0 0 22px;
-  font-size: clamp(24px, 3vw, 29px);
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-/* 起点是三颗药丸，不是三行带下划线的链接。
-   此前它们是一列 42px 高、靠 border-bottom 分隔的满宽行——那个形状读作
-   「一个列表」，而它们其实是三个并列的、可以不选的建议。药丸把「并列」和
-   「可选」都说清楚了，也让空态的标题、输入卡、建议三段收成一个居中的块。 */
-.aw-chat-starters {
-  display: flex;
-  width: min(720px, 100%);
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  border-top: 0;
-}
-
-.aw-chat-starters > button {
-  display: inline-flex;
-  min-width: 0;
-  min-height: 36px;
-  align-items: center;
-  padding: 0 14px;
-  border: 1px solid var(--aw-border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--aw-text-soft);
-  text-align: left;
-  transition:
-    color var(--aw-duration-fast) var(--aw-ease),
-    background var(--aw-duration-fast) var(--aw-ease);
-}
-
-.aw-chat-starters > button:hover {
-  background: var(--aw-veil);
-  color: var(--aw-text);
-}
-
-.aw-chat-starters strong {
-  font-size: 13.5px;
-  font-weight: 500;
-}
-
-@media (max-width: 760px) {
-  .aw-chat-page.is-new .aw-chat-transcript {
-    align-items: center;
-    padding: 24px 16px 14px;
-  }
-
-  .aw-chat-page.is-new .aw-chat-composer {
-    margin-bottom: 0;
-  }
-
-  .aw-chat-starters {
-    display: none;
-  }
 }
 
 /* Task start -------------------------------------------------------------
@@ -1407,24 +1350,6 @@ select {
   line-height: 1.6;
 }
 
-.aw-create-task-head h2,
-.aw-create-task-head p {
-  margin: 0;
-}
-
-.aw-create-task-head h2 {
-  font-size: clamp(23px, 3vw, 28px);
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-.aw-create-task-head p {
-  max-width: 58ch;
-  color: var(--aw-text-muted);
-  font-size: 13px;
-  line-height: 1.65;
-}
-
 .aw-work-page.has-selection .aw-create-task-head {
   display: none;
 }
@@ -1469,67 +1394,11 @@ select {
   color: var(--aw-text);
 }
 
-@media (max-width: 760px) {
-  .aw-create-task-head h2 {
-    font-size: 22px;
-  }
-}
-
 /* Code start ------------------------------------------------------------- */
 
 .aw-code-start-inner {
   width: min(720px, 100%);
   gap: 18px;
-}
-
-.aw-code-start-head svg {
-  display: none;
-}
-
-.aw-code-start-head h1 {
-  font-size: clamp(24px, 3vw, 29px);
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-.aw-code-start-head p {
-  max-width: 58ch;
-  color: var(--aw-text-muted);
-}
-
-/* 和对话页的起点同一个形状：三颗药丸，不是三行带下划线的链接。
-   两个页面对同一种东西各画一种样子，是这套界面最容易被一眼看出不统一的
-   那一类问题。 */
-.aw-code-starters {
-  display: flex;
-  width: min(720px, 100%);
-  flex-wrap: wrap;
-  justify-content: center;
-  justify-self: center;
-  gap: 8px;
-  border-top: 0;
-}
-
-.aw-code-starters > button {
-  display: inline-flex;
-  min-width: 0;
-  min-height: 36px;
-  align-items: center;
-  padding: 0 14px;
-  border: 1px solid var(--aw-border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--aw-text-soft);
-  font-size: 13.5px;
-  text-align: left;
-  transition:
-    color var(--aw-duration-fast) var(--aw-ease),
-    background var(--aw-duration-fast) var(--aw-ease);
-}
-
-.aw-code-starters > button:hover {
-  background: var(--aw-veil);
-  color: var(--aw-text);
 }
 
 .aw-code-composer {
@@ -1601,13 +1470,248 @@ select {
   background: var(--aw-surface-sunken);
 }
 
-.aw-code-start .aw-code-composer-row {
-  grid-template-columns: minmax(0, 1fr) auto;
+/* Unified mode starts ----------------------------------------------------
+ * Chat, Tasks and Code keep their own submission logic, but their empty
+ * routes share one visual grammar: a single heading, one quiet input surface,
+ * then optional starter prompts. This is the stable desktop-app chrome; the
+ * feature-specific controls remain slots inside each form.
+ */
+
+.aw-mode-start-head {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  text-align: center;
+}
+
+.aw-mode-start-head h1,
+.aw-mode-start-head p {
+  margin: 0;
+}
+
+.aw-mode-start-head h1 {
+  color: var(--aw-text);
+  font-family: var(--aw-display);
+  font-size: clamp(25px, 3vw, 29px);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.028em;
+}
+
+.aw-mode-start-head p {
+  max-width: 54ch;
+  color: var(--aw-text-muted);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.aw-mode-starters {
+  display: flex;
+  width: min(720px, 100%);
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.aw-mode-starters > button {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  padding: 0 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--aw-text-soft);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--aw-duration-fast) var(--aw-ease),
+    background var(--aw-duration-fast) var(--aw-ease),
+    color var(--aw-duration-fast) var(--aw-ease),
+    transform var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-mode-starters > button:hover:not(:disabled) {
+  border-color: var(--aw-border-strong);
+  background: var(--aw-veil);
+  color: var(--aw-text);
+  transform: translateY(-1px);
+}
+
+.aw-mode-starters > button:disabled {
+  color: var(--aw-text-muted);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.aw-mode-composer-card {
+  border-color: var(--aw-composer-border);
+  border-radius: 16px;
+  background: var(--aw-composer-bg);
+  box-shadow: var(--aw-shadow-float);
+}
+
+.aw-mode-composer-card textarea {
+  field-sizing: content;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.aw-mode-composer-card:focus-within {
+  border-color: color-mix(
+    in srgb,
+    var(--aw-accent) 44%,
+    var(--aw-composer-border)
+  );
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--aw-accent) 8%, transparent),
+    var(--aw-shadow-float);
+}
+
+.aw-mode-composer-card .aw-mode-send {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.aw-chat-page.is-new .aw-chat-main {
+  grid-template-rows: auto auto;
+  align-content: center;
+  overflow-y: auto;
+}
+
+.aw-chat-page.is-new .aw-chat-transcript {
+  min-height: auto;
+  align-items: initial;
+  padding: 0 16px 18px;
+  overflow: visible;
+}
+
+.aw-chat-page.is-new .aw-chat-composer {
+  display: grid;
+  width: min(720px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 0;
+  gap: 12px;
+}
+
+.aw-chat-page.is-new .aw-chat-composer-card textarea,
+.aw-code-main.is-start .aw-code-composer textarea {
+  min-height: 96px;
+  padding: 12px 11px 7px;
+  font-size: 15.5px;
+  line-height: 1.65;
+}
+
+.aw-work-page:not(.has-selection) .aw-create-task-head {
+  margin: 0 0 7px;
+}
+
+.aw-work-page:not(.has-selection) .aw-work-advanced {
+  padding: 4px 0 0;
+  border-top: 0;
+}
+
+.aw-code-main.is-start {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.aw-code-main.is-start .aw-code-start-inner {
+  gap: 12px;
+}
+
+.aw-code-main.is-start .aw-code-composer {
+  width: 100%;
+  padding: 0;
+}
+
+.aw-code-main.is-start .aw-code-composer-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 4px;
+  gap: 4px 8px;
+  border-radius: 16px;
+}
+
+.aw-code-main.is-start .aw-code-composer textarea {
+  grid-row: 1;
+  grid-column: 1 / -1;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.aw-code-main.is-start .aw-code-attach {
+  grid-row: 2;
+  grid-column: 1;
+}
+
+.aw-code-main.is-start .aw-code-composer-row > .aw-button.is-primary {
+  grid-row: 2;
+  grid-column: 3;
+  border-radius: 50%;
 }
 
 @media (max-width: 760px) {
-  .aw-code-starters {
+  .aw-mode-start-head {
+    padding-right: 42px;
+    padding-left: 42px;
+  }
+
+  .aw-mode-start-head
+    > :is(
+      .aw-chat-mobile-sessions,
+      .aw-work-mobile-back,
+      .aw-code-mobile-sessions
+    ) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: inline-grid;
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    place-items: center;
+    padding: 0;
+  }
+
+  .aw-chat-page.is-new .aw-chat-main,
+  .aw-work-start,
+  .aw-code-start {
+    align-content: start;
+    padding-top: clamp(36px, 8vh, 72px);
+  }
+
+  .aw-chat-page.is-new .aw-chat-transcript {
+    padding: 0 16px 16px;
+  }
+
+  .aw-chat-page.is-new .aw-chat-composer {
+    padding-bottom: 28px;
+  }
+
+  .aw-mode-starters {
+    width: 100%;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    padding: 1px 0 5px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .aw-mode-starters::-webkit-scrollbar {
     display: none;
+  }
+
+  .aw-mode-starters > button {
+    min-height: 42px;
+    flex: 0 0 auto;
   }
 }
 
@@ -1636,7 +1740,7 @@ select {
   padding: 8px;
   gap: 2px;
   overflow: hidden;
-  border-right-color: var(--aw-border-subtle);
+  border-right-color: var(--aw-nav-rule);
 }
 
 .aw-app-shell:not(.is-rail-collapsed) .aw-rail-brand-row {
@@ -1669,10 +1773,10 @@ select {
 .aw-sidebar-section-label {
   display: block;
   margin: 3px 9px 4px;
-  color: var(--aw-text-subtle);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.055em;
+  color: var(--aw-nav-faint);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.025em;
   text-transform: uppercase;
 }
 
@@ -1710,13 +1814,18 @@ select {
   flex: 0 1 auto;
 }
 
+.aw-sidebar-workspace.is-active .aw-workspace-row {
+  border-radius: 7px;
+  background: var(--aw-nav-active);
+}
+
 /* 箭头长在行里，不是行旁边的第二个控件：整行就是那个开关。
    收起时指向右——它说的是「展开的方向」，不是「现在是什么状态」；一个朝下
    的箭头配一个收起的区，每次都要想一下才知道点了会怎样。 */
 .aw-workspace-fold-icon {
   flex: none;
   margin-left: 4px;
-  color: var(--aw-text-muted);
+  color: var(--aw-nav-muted);
   transition: transform var(--aw-duration-fast) var(--aw-ease);
 }
 
@@ -1729,8 +1838,7 @@ select {
 .aw-workspace-row > button.aw-global-link {
   width: 100%;
   border: 0;
-  background: transparent;
-  font: inherit;
+  font-family: inherit;
   text-align: left;
   cursor: pointer;
 }
@@ -1745,18 +1853,24 @@ select {
 
 .aw-workspace-row > .aw-global-link {
   min-height: 38px;
-  flex: 0 0 38px;
+  flex: 1 1 auto;
   border-radius: 7px;
   font-size: 13px;
 }
 
 .aw-workspace-row > .aw-global-link.active {
   background: transparent;
-  font-weight: 620;
+  font-weight: 550;
+}
+
+.aw-sidebar-workspace.is-active
+  .aw-workspace-row
+  > button.aw-global-link:hover {
+  background: transparent;
 }
 
 .aw-workspace-row > .aw-global-link.active .aw-global-link-icon {
-  color: var(--aw-accent);
+  color: var(--aw-nav-text);
 }
 
 /* 缩进 + 一条竖线，说的是「这个列表属于上面那一行」。
@@ -1774,10 +1888,14 @@ select {
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  margin: 2px 0 5px 10px;
-  padding-left: 8px;
+  margin: 2px 0 5px 30px;
+  padding-left: 0;
   overflow: hidden;
-  border-left: 1px solid var(--aw-border);
+  border-left: 0;
+}
+
+.aw-sidebar-workspace.is-collapsed .aw-sidebar-context-slot {
+  display: none;
 }
 
 .aw-sidebar-context-slot
@@ -1832,9 +1950,9 @@ select {
     .aw-pane-header strong,
     .aw-knowledge-sidebar-header strong
   ) {
-  color: var(--aw-text-muted);
+  color: var(--aw-nav-faint);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: 0.01em;
 }
 
@@ -1847,7 +1965,7 @@ select {
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: var(--aw-text-soft);
+  color: var(--aw-nav-muted);
   font-size: 12px;
   font-weight: 550;
 }
@@ -1855,14 +1973,14 @@ select {
 .aw-sidebar-context-slot
   :is(.aw-dead-new-session, .aw-dead-create-task-toggle):hover {
   border: 0;
-  background: var(--aw-panel-strong);
-  color: var(--aw-text);
+  background: var(--aw-nav-hover);
+  color: var(--aw-nav-text);
 }
 
 .aw-sidebar-context-slot
   :is(.aw-dead-new-session, .aw-dead-create-task-toggle)
   svg {
-  color: var(--aw-accent);
+  color: var(--aw-nav-muted);
 }
 
 .aw-sidebar-context-slot
@@ -1894,7 +2012,7 @@ select {
   padding: 2px;
   border: 0;
   border-radius: 7px;
-  background: var(--aw-panel-soft);
+  background: var(--aw-nav-hover);
 }
 
 .aw-sidebar-context-slot .aw-task-filters button {
@@ -1912,7 +2030,7 @@ select {
   margin-top: auto;
   padding-top: 5px;
   gap: 2px;
-  border-top: 1px solid var(--aw-border-subtle);
+  border-top: 1px solid var(--aw-nav-rule);
 }
 
 .aw-sidebar-footer-nav .aw-global-link {
@@ -1988,7 +2106,7 @@ select {
 
 /* 卡内的输入框：边框和圆角由卡片承担，它自己只剩内边距。 */
 .aw-work-page:not(.has-selection) .aw-work-start .aw-create-task textarea {
-  min-height: 116px;
+  min-height: 96px;
   padding: 12px 11px 6px;
   border: 0;
   background: transparent;
@@ -2082,6 +2200,7 @@ select {
   min-height: 32px;
   padding: 0 10px;
   border-radius: 8px;
+  color: var(--aw-nav-muted);
 }
 
 .aw-task-list-item {
@@ -2109,7 +2228,7 @@ select {
   overflow: hidden;
   min-width: 0;
   flex: 1;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2158,7 +2277,7 @@ select {
 .aw-code-recent-title {
   min-width: 0;
   flex: 1;
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
 .aw-code-recent-when {
@@ -2174,12 +2293,18 @@ select {
 }
 
 .aw-chat-session:hover,
-.aw-chat-session.is-active,
 .aw-code-recent-link:hover,
+.aw-task-list-item:hover {
+  background: var(--aw-nav-hover);
+  color: var(--aw-nav-text);
+  box-shadow: none;
+}
+
+.aw-chat-session.is-active,
 .aw-code-recent-link[aria-current="page"],
-.aw-task-list-item:hover,
 .aw-task-list-item.is-active {
-  background: var(--aw-panel-strong);
+  background: var(--aw-nav-active);
+  color: var(--aw-nav-text);
   box-shadow: none;
 }
 
@@ -2194,7 +2319,11 @@ select {
   padding-left: 12px;
   opacity: 0;
   transform: translateY(-50%);
-  background: linear-gradient(90deg, transparent, var(--aw-panel-strong) 12px);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--aw-nav-bg) 90%, transparent) 12px
+  );
   pointer-events: none;
   transition: opacity var(--aw-duration-fast) var(--aw-ease);
 }
@@ -2222,13 +2351,13 @@ select {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--aw-text-muted);
+  color: var(--aw-nav-muted);
   opacity: 1;
 }
 
 :is(.aw-chat-session-rename, .aw-code-recent-rename):hover {
-  background: var(--aw-panel);
-  color: var(--aw-text);
+  background: var(--aw-nav-hover);
+  color: var(--aw-nav-text);
 }
 
 :is(
@@ -2287,7 +2416,7 @@ select {
   border: 1.5px solid var(--aw-text-muted);
   border-radius: 50%;
   background: transparent;
-  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 8%, transparent);
+  box-shadow: none;
   transition: translate var(--aw-duration-fast) var(--aw-ease);
 }
 
@@ -2306,9 +2435,9 @@ select {
 }
 
 .aw-task-status-dot[data-status="succeeded"] {
-  border-color: var(--aw-success);
-  background: var(--aw-success);
-  color: var(--aw-success);
+  border-color: var(--aw-nav-muted);
+  background: var(--aw-nav-muted);
+  color: var(--aw-nav-muted);
 }
 
 .aw-task-status-dot:is(
@@ -2389,8 +2518,8 @@ select {
     padding: 8px;
     transform: translateX(-102%);
     visibility: hidden;
-    border-right: 1px solid var(--aw-border);
-    background: var(--aw-sidebar);
+    border-right: 1px solid var(--aw-nav-rule);
+    background: var(--aw-nav-bg);
     box-shadow: var(--aw-shadow-drawer-right);
     transition:
       transform var(--aw-duration-base) var(--aw-ease),
@@ -2415,6 +2544,25 @@ select {
     display: none;
   }
 
+  .aw-global-rail
+    .aw-sidebar-workspace.is-active
+    > .aw-workspace-row
+    > .aw-global-link {
+    display: none;
+  }
+
+  .aw-global-rail
+    .aw-sidebar-workspace.is-active
+    > .aw-workspace-row:has(.aw-workspace-actions:empty) {
+    display: none;
+  }
+
+  .aw-global-rail .aw-sidebar-workspace.is-active > .aw-workspace-row {
+    min-height: 32px;
+    justify-content: flex-end;
+    background: transparent;
+  }
+
   .aw-global-rail .aw-sidebar-workspace.is-active {
     display: flex;
     min-height: 0;
@@ -2422,6 +2570,9 @@ select {
   }
 
   .aw-app-shell.is-rail-collapsed .aw-global-rail .aw-sidebar-context-slot,
+  .aw-global-rail
+    .aw-sidebar-workspace.is-collapsed
+    .aw-sidebar-context-slot,
   .aw-global-rail .aw-sidebar-context-slot {
     display: flex;
     margin: 0;
@@ -2465,10 +2616,10 @@ select {
   .aw-work-start {
     width: 100%;
     align-content: start;
-    padding: 18px 0 40px;
+    padding: clamp(36px, 8vh, 72px) 0 40px;
   }
 
-  .aw-work-start > .aw-work-mobile-back {
+  .aw-work-start .aw-work-mobile-back {
     display: inline-grid;
     margin: 0 0 18px;
   }
@@ -2723,7 +2874,7 @@ select {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--aw-text-muted);
+  color: var(--aw-nav-muted);
   cursor: pointer;
   transition:
     background var(--aw-duration-fast) var(--aw-ease),
@@ -2731,17 +2882,17 @@ select {
 }
 
 .aw-side-action:hover:not(:disabled) {
-  background: var(--aw-veil);
-  color: var(--aw-text);
+  background: var(--aw-nav-hover);
+  color: var(--aw-nav-text);
 }
 
 .aw-side-action[aria-pressed="true"] {
-  background: var(--aw-veil-strong);
-  color: var(--aw-text);
+  background: var(--aw-nav-active);
+  color: var(--aw-nav-text);
 }
 
 .aw-side-action:disabled {
-  color: var(--aw-faint);
+  color: var(--aw-nav-faint);
   cursor: default;
 }
 
@@ -2752,11 +2903,26 @@ select {
   flex: none;
   margin: 0 2px 2px;
   padding: 0 8px;
-  border: 1px solid var(--aw-border);
+  border: 1px solid var(--aw-nav-rule);
   border-radius: 8px;
   background: transparent;
 }
 
 .aw-chat-session-search input {
+  color: var(--aw-nav-text);
   font-size: 13px;
+}
+
+.aw-global-rail .aw-chat-session-search:focus-within {
+  border-color: var(--aw-nav-muted);
+  background: var(--aw-nav-hover);
+}
+
+.aw-global-rail .aw-chat-session-search input::placeholder {
+  color: var(--aw-nav-faint);
+}
+
+.aw-global-rail :focus-visible {
+  outline-color: var(--aw-accent);
+  outline-offset: -2px;
 }
