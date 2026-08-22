@@ -567,13 +567,6 @@ export function ChatPage() {
             void navigate("/chat");
           }}
         />
-        <IconButton
-          className="aw-chat-sessions-close"
-          label="关闭对话列表"
-          onClick={workspaceSidebar.close}
-        >
-          <X aria-hidden="true" size={17} />
-        </IconButton>
       </WorkspaceSidebarActions>
       <WorkspaceSidebarPortal>
         <aside
@@ -582,6 +575,14 @@ export function ChatPage() {
           // 「Chat 会话」——同一块地方两个名字，还夹着一个英文产品名。
           aria-label="最近对话"
         >
+          <IconButton
+            className="aw-chat-sessions-close"
+            label="关闭对话列表"
+            onClick={workspaceSidebar.close}
+          >
+            <X aria-hidden="true" size={17} />
+          </IconButton>
+
           {searchOpen ? (
             <div className="aw-chat-session-search">
               <Search aria-hidden="true" size={14} />

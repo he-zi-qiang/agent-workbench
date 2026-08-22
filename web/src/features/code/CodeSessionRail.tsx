@@ -139,18 +139,19 @@ export function CodeSessionRail({
       aria-label="最近的编码会话"
       className={`aw-code-sessions ${mobileOpen ? "is-mobile-open" : ""}`}
     >
+      <IconButton
+        className="aw-code-sessions-close"
+        label="关闭会话列表"
+        onClick={onCloseMobile}
+      >
+        <X aria-hidden size={17} />
+      </IconButton>
+
       <WorkspaceSidebarActions>
         {/* Goes to the start page rather than POSTing an empty session:
             the first sentence is what names a session (ADR-047), and one
             created by a bare click sits unnamed in this list forever. */}
         <NewSessionAction label="新建会话" onClick={onNew} />
-        <IconButton
-          className="aw-code-sessions-close"
-          label="关闭会话列表"
-          onClick={onCloseMobile}
-        >
-          <X aria-hidden size={17} />
-        </IconButton>
       </WorkspaceSidebarActions>
       <div className="aw-code-session-list">
         {known.length === 0 ? (

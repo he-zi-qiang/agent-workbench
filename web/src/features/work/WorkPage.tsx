@@ -1021,16 +1021,17 @@ export function WorkPage() {
             }
           }}
         />
-        <IconButton
-          className="aw-work-sessions-close"
-          label="关闭任务列表"
-          onClick={workspaceSidebar.close}
-        >
-          <X aria-hidden="true" size={17} />
-        </IconButton>
       </WorkspaceSidebarActions>
       <WorkspaceSidebarPortal>
         <aside className="aw-work-sidebar" aria-label="任务列表与新建任务">
+          <IconButton
+          className="aw-work-sessions-close"
+          label="关闭任务列表"
+          onClick={workspaceSidebar.close}
+          >
+          <X aria-hidden="true" size={17} />
+          </IconButton>
+
           <div className="aw-task-filters" role="group" aria-label="任务筛选">
             {TASK_FILTERS.map((entry) => (
               <button

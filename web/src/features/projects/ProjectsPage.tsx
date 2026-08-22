@@ -174,16 +174,17 @@ export function ProjectsPage() {
     <div className="aw-projects-page">
       <WorkspaceSidebarActions>
         <NewSessionAction label="新建项目" onClick={() => setCreating(true)} />
-        <IconButton
-          className="aw-projects-close"
-          label="关闭项目列表"
-          onClick={workspaceSidebar.close}
-        >
-          <X aria-hidden="true" size={17} />
-        </IconButton>
       </WorkspaceSidebarActions>
       <WorkspaceSidebarPortal>
         <aside className="aw-projects-sidebar" aria-label="项目列表">
+          <IconButton
+          className="aw-projects-close"
+          label="关闭项目列表"
+          onClick={workspaceSidebar.close}
+          >
+          <X aria-hidden="true" size={17} />
+          </IconButton>
+
           {creating ? (
             <form
               className="aw-session-inline-rename"
