@@ -190,8 +190,7 @@ describe("WorkPage task submission", () => {
     );
 
     renderWorkPage();
-    await user.type(screen.getByLabelText("目标"), "新开一件事");
-    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    await user.type(screen.getByLabelText("目标"), "新开一件事{Enter}");
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
 
     // 分诊最多可以想 10 秒，POST 还在它后面 —— 这段时间里侧栏一直可以点。

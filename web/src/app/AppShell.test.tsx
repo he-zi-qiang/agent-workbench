@@ -148,7 +148,7 @@ describe("AppShell mobile navigation", () => {
     await user.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "更多页面" });
     const more = within(dialog);
-    expect(more.getByRole("link", { name: "效果评测" })).toHaveFocus();
+    expect(more.getByRole("link", { name: "知识库" })).toHaveFocus();
 
     more.getByRole("button", { name: "本地环境与身份" }).focus();
     await user.tab();
@@ -317,6 +317,31 @@ describe("AppShell rail", () => {
     expect(
       screen.getByText("Chat page").closest(".aw-app-content"),
     ).not.toHaveAttribute("inert");
+  });
+
+  it("keeps a collapsed workspace context mounted for the mobile drawer", async () => {
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider>
+        <IdentityProvider>
+          <MemoryRouter initialEntries={["/chat"]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route element={<ChatContextProbe />} path="/chat" />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </IdentityProvider>
+      </ThemeProvider>,
+    );
+
+    const disclosure = screen.getByRole("button", { name: "Chat" });
+    await user.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+
+    const host = document.getElementById("workspace-sidebar-context");
+    expect(host).not.toBeNull();
+    expect(host?.querySelector('[aria-label="最近对话"]')).not.toBeNull();
   });
 
   it.each([

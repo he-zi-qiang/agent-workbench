@@ -6,9 +6,11 @@ import {
 } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowUp,
   ChevronRight,
   ClipboardCheck,
   FileDown,
+  LoaderCircle,
   PanelLeft,
   Paperclip,
   RefreshCw,
@@ -84,6 +86,11 @@ import {
   shortId,
 } from "../../components/ui";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import {
+  ModeStarterPrompts,
+  ModeStartHeader,
+  submitTextareaOnEnter,
+} from "../../components/ModeStart";
 import { StepStream, type StreamStage } from "../../components/StepStream";
 import { explainFailure } from "./failure";
 import { deriveLifecycle, type Lifecycle, stageOfNode } from "./lifecycle";
@@ -117,6 +124,21 @@ const CANCELLABLE_STATUSES = new Set<TaskStatus>([
   "running",
   "waiting_approval",
 ]);
+
+const WORK_STARTERS = [
+  {
+    title: "梳理资料并给出结论",
+    prompt: "整理所选资料，提炼关键结论、待确认事项和下一步建议。",
+  },
+  {
+    title: "比较方案并生成报告",
+    prompt: "比较几个可行方案的收益、成本和风险，并生成一份推荐报告。",
+  },
+  {
+    title: "拆解并执行复杂任务",
+    prompt: "把这个目标拆成可执行步骤，逐步完成并保留过程与最终产物。",
+  },
+] as const;
 /**
  * Statuses nothing will move on its own.
  *
@@ -783,7 +805,7 @@ export function WorkPage() {
 
   const handleCreate = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (triaging || createMutation.isPending) return;
+    if (triaging || createMutation.isPending || pendingAsk !== null) return;
     const valid = validatedIntent();
     if (valid === null) return;
     setPendingAsk(null);
@@ -823,22 +845,38 @@ export function WorkPage() {
   const createBusy = createMutation.isPending || triaging;
   const createTaskForm = (
     <form
+      aria-busy={createBusy}
       className="aw-create-task"
       id="aw-create-task-form"
       onSubmit={handleCreate}
     >
-      <header className="aw-create-task-head">
-        <h2>想完成什么？</h2>
-        <p>描述结果，Agent 会选择合适的执行方式并持续保存进度。</p>
-      </header>
+      <div className="aw-create-task-head">
+        <ModeStartHeader
+          action={
+            <IconButton
+              className="aw-work-mobile-back"
+              controls="workspace-sidebar-context"
+              expanded={workspaceSidebar.drawerOpen}
+              label="打开任务列表"
+              onClick={workspaceSidebar.open}
+            >
+              <PanelLeft aria-hidden="true" size={18} />
+            </IconButton>
+          }
+          description="描述结果，Agent 会选择合适的执行方式并持续保存进度。"
+          title="想完成什么？"
+        />
+      </div>
       <label className="aw-sr-only" htmlFor="work-objective">
         目标
       </label>
       {/* 一张卡，和对话页的输入框是同一个形状。此前这里是四个平铺的兄弟节点
           （输入框、知识库选择、附件行、提交键），提交键还被 `高级设置` 和几段
           条件文案隔在最下面——「提交这件事」在版面上散成了四块。 */}
-      <div className="aw-create-task-card">
+      <div className="aw-create-task-card aw-mode-composer-card">
         <textarea
+          aria-keyshortcuts="Enter"
+          enterKeyHint="send"
           id="work-objective"
           disabled={createBusy}
           maxLength={4096}
@@ -846,6 +884,7 @@ export function WorkPage() {
             setObjective(event.target.value);
             markTaskIntentEdited();
           }}
+          onKeyDown={submitTextareaOnEnter}
           placeholder="例如：整理项目资料，比较三个方案并输出建议报告"
           required
           rows={4}
@@ -875,33 +914,42 @@ export function WorkPage() {
           />
           <span className="aw-create-task-spacer" />
           <button
-            className="aw-button is-primary"
+            aria-label="创建任务"
+            className="aw-button is-primary aw-mode-send"
             disabled={
               createBusy ||
+              pendingAsk !== null ||
               sourceResolving ||
               objective.trim() === "" ||
               attachments.hasBlockingItems
             }
             type="submit"
           >
-            {triaging
-              ? "正在判定…"
-              : createMutation.isPending
-                ? "正在创建…"
-                : "创建任务"}
+            {createBusy ? (
+              <LoaderCircle aria-hidden className="aw-spin" size={17} />
+            ) : (
+              <ArrowUp aria-hidden size={17} />
+            )}
           </button>
         </div>
       </div>
-      <p className="aw-create-task-hint">
-        {attachments.readOnlyReason ?? (
-          <>
-            添加 PDF、Word 或 Markdown
-            {knowledgeBaseId === null
-              ? "（选择知识库后上传）"
-              : "（上传到所选知识库）"}
-          </>
-        )}
-      </p>
+      <ModeStarterPrompts
+        disabled={createBusy}
+        items={WORK_STARTERS}
+        label="任务起点"
+        onChoose={(prompt) => {
+          setObjective(prompt);
+          markTaskIntentEdited();
+          window.requestAnimationFrame(() =>
+            document.getElementById("work-objective")?.focus(),
+          );
+        }}
+      />
+      {attachments.readOnlyReason === null ? null : (
+        <p className="aw-create-task-hint">
+          {attachments.readOnlyReason}
+        </p>
+      )}
       <details className="aw-work-advanced">
         <summary>高级设置</summary>
         <fieldset className="aw-graph-choice">
@@ -964,7 +1012,12 @@ export function WorkPage() {
         </p>
       ) : null}
       {pendingAsk !== null ? (
-        <div className="aw-triage-ask" role="group" aria-label="选择执行方式">
+        <div
+          aria-label="选择执行方式"
+          aria-live="polite"
+          className="aw-triage-ask"
+          role="group"
+        >
           <p>{pendingAsk.question}</p>
           <div className="aw-triage-ask-options">
             {pendingAsk.options.map((option) => (
@@ -1161,17 +1214,7 @@ export function WorkPage() {
           </button>
         ) : null}
         {selectedTaskId === undefined ? (
-          <section className="aw-work-start">
-            <button
-              aria-controls="workspace-sidebar-context"
-              aria-expanded={workspaceSidebar.drawerOpen}
-              aria-label="打开任务列表"
-              className="aw-icon-button aw-work-mobile-back"
-              onClick={workspaceSidebar.open}
-              type="button"
-            >
-              <PanelLeft aria-hidden="true" size={18} />
-            </button>
+          <section className="aw-work-start aw-mode-start">
             {createTaskForm}
           </section>
         ) : null}

@@ -648,8 +648,7 @@ describe("Chat identity boundary", () => {
 
     renderChatRoute("/chat?kb=kb_deleted");
     await waitFor(() => expect(screen.getByLabelText("问题")).not.toBeDisabled());
-    await user.type(screen.getByLabelText("问题"), "正常自由回答");
-    await user.click(screen.getByRole("button", { name: "发送问题" }));
+    await user.type(screen.getByLabelText("问题"), "正常自由回答{Enter}");
 
     await waitFor(() =>
       expect(aliceStartAsk).toHaveBeenCalledWith(

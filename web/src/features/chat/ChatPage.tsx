@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ArrowUp,
   BookOpen,
   ChevronRight,
   CircleDot,
@@ -9,7 +10,6 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  Send,
   ShieldAlert,
   ShieldCheck,
   Trash2,
@@ -20,7 +20,6 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type FormEvent,
-  type KeyboardEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -64,6 +63,11 @@ import {
   useKnowledgeBases,
 } from "../../components/KnowledgeSourcePicker";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import {
+  ModeStarterPrompts,
+  ModeStartHeader,
+  submitTextareaOnEnter,
+} from "../../components/ModeStart";
 import { ProjectPicker } from "../../components/ProjectPicker";
 import { StepStream } from "../../components/StepStream";
 import {
@@ -532,15 +536,9 @@ export function ChatPage() {
     }
   };
 
-  const submitOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (
-      event.key !== "Enter" ||
-      event.shiftKey ||
-      event.nativeEvent.isComposing
-    )
-      return;
-    event.preventDefault();
-    event.currentTarget.form?.requestSubmit();
+  const chooseStarter = (prompt: string) => {
+    setQuestion(prompt);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
   };
 
   return (
@@ -747,26 +745,30 @@ export function ChatPage() {
         </aside>
       </WorkspaceSidebarPortal>
 
-      <main className="aw-chat-main">
-        <ChatHeader
-          answerMode={answerMode}
-          identity={identity}
-          session={selected}
-          sidebarOpen={workspaceSidebar.drawerOpen}
-          {...(selectedKnowledgeBase === undefined
-            ? {}
-            : { sourceLabel: selectedKnowledgeBase.name })}
-          {...(selected === undefined
-            ? {}
-            : {
-                onReconnect: () =>
-                  runtime.reconnectSessionStream(selected.sessionId),
-              })}
-          {...(selected === undefined
-            ? {}
-            : { onAssignProject: assignProject })}
-          onOpenSessions={workspaceSidebar.open}
-        />
+      <main
+        className={`aw-chat-main ${sessionId === undefined ? "aw-mode-start" : ""}`}
+      >
+        {sessionId === undefined ? null : (
+          <ChatHeader
+            answerMode={answerMode}
+            identity={identity}
+            session={selected}
+            sidebarOpen={workspaceSidebar.drawerOpen}
+            {...(selectedKnowledgeBase === undefined
+              ? {}
+              : { sourceLabel: selectedKnowledgeBase.name })}
+            {...(selected === undefined
+              ? {}
+              : {
+                  onReconnect: () =>
+                    runtime.reconnectSessionStream(selected.sessionId),
+                })}
+            {...(selected === undefined
+              ? {}
+              : { onAssignProject: assignProject })}
+            onOpenSessions={workspaceSidebar.open}
+          />
+        )}
 
         {/* Not a live region, deliberately. This used to carry
             `aria-live="polite"` over the whole subtree: every turn, every
@@ -823,12 +825,8 @@ export function ChatPage() {
             />
           ) : selected === undefined ? (
             <ChatWelcome
-              onChoose={(prompt) => {
-                setQuestion(prompt);
-                window.requestAnimationFrame(() =>
-                  composerRef.current?.focus(),
-                );
-              }}
+              onOpenSessions={workspaceSidebar.open}
+              sidebarOpen={workspaceSidebar.drawerOpen}
             />
           ) : selected.history === "loading" && turns.length === 0 ? (
             <LoadingLine label="正在读取历史消息" />
@@ -870,14 +868,18 @@ export function ChatPage() {
           <SessionGapNotice sequences={quarantined} />
         </section>
 
-        <form className="aw-chat-composer" onSubmit={submit}>
+        <form
+          aria-busy={creatingSession || unfinished}
+          className="aw-chat-composer"
+          onSubmit={submit}
+        >
           {submitError === null ? null : <ErrorNotice message={submitError} />}
           {/* 一张卡，不是两截。此前工具行（知识库选择、字数）在圆角卡片**外面**
               另起一行，于是「输入这件事」在版面上被切成两个互不相干的块，读起来
               像一个搜索框底下挂了一条说明。现在卡片自己包住三段：附件、正文、
               底部的工具行，发送键在卡内右下角——和这个界面里其他几处输入
               （编码页的会话输入框）是同一个形状。 */}
-          <div className="aw-chat-composer-card">
+          <div className="aw-chat-composer-card aw-mode-composer-card">
             <AttachmentTray
               items={attachments.items}
               onRemove={attachments.remove}
@@ -885,10 +887,12 @@ export function ChatPage() {
             />
             <textarea
               aria-label="问题"
+              aria-keyshortcuts="Enter"
               disabled={composerDisabled}
+              enterKeyHint="send"
               maxLength={4096}
               onChange={(event) => setQuestion(event.target.value)}
-              onKeyDown={submitOnEnter}
+              onKeyDown={submitTextareaOnEnter}
               placeholder={
                 unfinished
                   ? "请等待当前回答完成…"
@@ -935,7 +939,7 @@ export function ChatPage() {
               )}
               <button
                 aria-label="发送问题"
-                className="aw-button is-primary aw-chat-send"
+                className="aw-button is-primary aw-chat-send aw-mode-send"
                 disabled={
                   composerDisabled ||
                   !question.trim() ||
@@ -946,33 +950,49 @@ export function ChatPage() {
                 {creatingSession ? (
                   <RefreshCw aria-hidden="true" className="aw-spin" size={17} />
                 ) : (
-                  <Send aria-hidden="true" size={17} />
+                  <ArrowUp aria-hidden="true" size={17} />
                 )}
               </button>
             </div>
           </div>
+          {sessionId === undefined ? (
+            <ModeStarterPrompts
+              disabled={composerDisabled}
+              items={STARTER_PROMPTS}
+              label="对话起点"
+              onChoose={chooseStarter}
+            />
+          ) : null}
         </form>
       </main>
     </div>
   );
 }
 
-function ChatWelcome({ onChoose }: { onChoose: (prompt: string) => void }) {
+function ChatWelcome({
+  onOpenSessions,
+  sidebarOpen,
+}: {
+  onOpenSessions: () => void;
+  sidebarOpen: boolean;
+}) {
   return (
     <div className="aw-chat-welcome">
-      <h2>有什么可以帮你？</h2>
-      <div className="aw-chat-starters" aria-label="对话起点">
-        {STARTER_PROMPTS.map((starter) => (
-          <button
-            aria-label={starter.title}
-            key={starter.title}
-            onClick={() => onChoose(starter.prompt)}
-            type="button"
+      <ModeStartHeader
+        action={
+          <IconButton
+            className="aw-chat-mobile-sessions"
+            controls="workspace-sidebar-context"
+            expanded={sidebarOpen}
+            label="打开对话列表"
+            onClick={onOpenSessions}
           >
-            <strong>{starter.title}</strong>
-          </button>
-        ))}
-      </div>
+            <PanelLeft aria-hidden="true" size={18} />
+          </IconButton>
+        }
+        description="直接提问，或选择知识库获得带引用的回答。"
+        title="有什么可以帮你？"
+      />
     </div>
   );
 }
