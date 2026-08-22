@@ -34,6 +34,9 @@ from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.evaluation import SubprocessEvaluationLauncher
 from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
+from agent_workbench.adapters.filesystem.project_files import (
+    FilesystemProjectFileStoreFactory,
+)
 from agent_workbench.adapters.mcp.client import connect_mcp_client
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
@@ -55,6 +58,12 @@ from agent_workbench.adapters.tools.knowledge_search import (
     TOOL_NAME as KNOWLEDGE_SEARCH,
 )
 from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
+from agent_workbench.adapters.tools.project_files import (
+    ProjectEditTool,
+    ProjectListTool,
+    ProjectReadTool,
+    ProjectWriteTool,
+)
 from agent_workbench.adapters.tools.sandbox import SandboxRunTool, WorkspaceSandbox
 from agent_workbench.adapters.tools.web_search import (
     TOOL_NAME as WEB_SEARCH_TOOL_NAME,
@@ -94,12 +103,15 @@ from agent_workbench.application.code_approvals import (
     CodeApprovalRegistry,
 )
 from agent_workbench.application.code_session import (
+    CODE_PROJECT_TOOLS,
+    CODE_PROJECT_TOOLS_WITH_SANDBOX,
     CODE_TOOLS,
     CODE_TOOLS_WITH_SANDBOX,
     CodeSessionService,
 )
 from agent_workbench.application.evaluation import EvaluationService
 from agent_workbench.application.knowledge_bases import KnowledgeBaseService
+from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.application.projects import ProjectService
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
@@ -509,11 +521,17 @@ def build_dependencies(
     )
     documents = PostgresDocumentStore(engine)
     knowledge_bases = KnowledgeBaseService(PostgresKnowledgeBaseStore(engine))
-    projects = ProjectService(PostgresProjectStore(engine))
     # ADR-042. One pool per process, threaded into every adapter that blocks.
     blocking = BlockingCallRunner(
         slots=config.blocking_calls.slots,
         queue_timeout_seconds=config.blocking_calls.queue_timeout_seconds,
+    )
+    # ADR-072. Moved below `blocking` because it takes it: project file reads
+    # and writes are filesystem calls and belong in the same bounded pool as
+    # every other blocking adapter, not in the interpreter's shared one.
+    projects = ProjectService(
+        PostgresProjectStore(engine),
+        files=FilesystemProjectFileStoreFactory(runner=blocking),
     )
     artifacts = LocalArtifactStore(Path(config.artifacts.local_root), runner=blocking)
     conversations = PostgresConversationStore(engine)
@@ -558,6 +576,10 @@ def build_dependencies(
             artifacts=artifacts,
             blocking=blocking,
             conversations=conversations,
+            # Passed in rather than rebuilt: a second `ProjectService` here
+            # would hold a second store over the same engine, and "which
+            # directory is this project" would have two objects able to answer.
+            projects=projects,
             releaser=releaser,
             telemetry=telemetry.telemetry,
         )
@@ -714,6 +736,7 @@ def _assemble_chat(
     artifacts: ArtifactStore,
     blocking: BlockingCallRunner,
     conversations: PostgresConversationStore,
+    projects: ProjectService,
     releaser: PostgresChatReleaseCoordinator,
     telemetry: Telemetry,
 ) -> _AssembledChat:
@@ -1107,13 +1130,24 @@ def _assemble_chat(
         else None
     )
     code_scope = WorkspaceScope()
+    code_project_scope = ProjectFileScope()
     code_approvals = CodeApprovalRegistry()
+    # Both sets are *registered*; only one is ever *offered* (ADR-073). The
+    # registry is built once at process start and never changes -- that is what
+    # keeps "what tools existed" answerable for an event stream already written
+    # -- so exclusivity is enforced by the envelope's `allowed_tools`, per turn,
+    # and by which scope that turn enters. A tool whose scope was not entered
+    # refuses even if something put its name in an envelope.
     code_workspace_bindings = [
         WorkspaceListTool(code_scope).binding(),
         WorkspaceReadTool(code_scope).binding(),
         WorkspaceWriteTool(code_scope).binding(),
         WorkspaceEditTool(code_scope).binding(),
         WorkspaceGrepTool(code_scope).binding(),
+        ProjectListTool(code_project_scope).binding(),
+        ProjectReadTool(code_project_scope).binding(),
+        ProjectWriteTool(code_project_scope).binding(),
+        ProjectEditTool(code_project_scope).binding(),
     ]
     # The one thing about a coding session that cannot be decided here.
     # Everything else this process needs is built synchronously, and the
@@ -1174,6 +1208,17 @@ def _assemble_chat(
             # disagree.
             tool_names=(
                 CODE_TOOLS_WITH_SANDBOX if config.code.sandbox_enabled else CODE_TOOLS
+            ),
+            # ADR-073. The disjoint half, selected per turn from whether the
+            # session's project has a directory. Both lists are fixed here for
+            # the same reason the one above is -- what differs between turns is
+            # which of them applies, never what is in either.
+            project_scope=code_project_scope,
+            projects=projects,
+            project_tool_names=(
+                CODE_PROJECT_TOOLS_WITH_SANDBOX
+                if config.code.sandbox_enabled
+                else CODE_PROJECT_TOOLS
             ),
             sandbox_requires_approval=config.code.sandbox_requires_approval,
         )

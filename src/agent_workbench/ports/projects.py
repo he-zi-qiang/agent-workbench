@@ -58,6 +58,21 @@ class ProjectRecord(VersionedModel):
     #: stays readable, its deep link still opens, and its members keep their
     #: ``project_id`` (ADR-071 2.5).
     archived_at: datetime | None = None
+    #: The directory this project *is*, on the machine the API runs on
+    #: (ADR-072). ``None`` is the normal state and always was: a project without
+    #: one behaves exactly as every project did before the column existed.
+    #:
+    #: Stored as the caller registered it, not resolved. Resolution is what
+    #: ``ProjectSandbox`` does at construction, and doing it here would put a
+    #: second, staler answer in the database -- the symlink a path went through
+    #: can be repointed, and a resolved copy in a row would then disagree with
+    #: the disk while looking authoritative.
+    #:
+    #: Not validated by this type either. A ``StringConstraints`` pattern could
+    #: only check spelling, and spelling is the half of the rules that does not
+    #: keep anybody safe; the half that does needs the filesystem. A constraint
+    #: here would read as a guarantee it cannot give.
+    root_path: str | None = None
 
 
 class ProjectItem(VersionedModel):
@@ -126,6 +141,35 @@ class ProjectStore(Protocol):
         archived: bool,
     ) -> ProjectRecord | None:
         """Archive or unarchive, returning the record as it now stands."""
+
+        ...
+
+    async def set_root_path(
+        self,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        project_id: str,
+        root_path: str | None,
+    ) -> ProjectRecord | None:
+        """Register the directory this project is, or (``None``) unregister it.
+
+        ``None`` means *no directory*, and it is a distinct thing from *the
+        field was not sent* -- the same distinction ``assign_session`` draws and
+        for the same reason: without it, "stop pointing this project at that
+        folder" has no way of being said (ADR-071 §4).
+
+        Unregistering removes the project's access to the tree and touches not
+        one file in it. That asymmetry is deliberate and matches ``delete``:
+        this store manages labels and pointers, and nothing it offers deletes
+        somebody's work.
+
+        Whether the path is a directory an agent may be handed is **not** decided
+        here. This method records what it was told; the check that the path
+        exists and resolves inside itself happens where a sandbox is built over
+        it, because that is the only place holding the filesystem it is a claim
+        about.
+        """
 
         ...
 

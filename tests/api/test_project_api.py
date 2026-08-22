@@ -17,6 +17,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from itertools import count
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -24,6 +25,9 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from agent_workbench.adapters.filesystem.project_files import (
+    FilesystemProjectFileStoreFactory,
+)
 from agent_workbench.adapters.memory import InMemoryProjectStore
 from agent_workbench.application.projects import ProjectService
 from agent_workbench.apps.api.identity import HeaderPrincipalResolver
@@ -41,12 +45,21 @@ def _headers(tenant_id: str = TENANT, principal_id: str = OWNER) -> dict[str, st
 
 
 class _World:
-    def __init__(self) -> None:
+    def __init__(self, root: Path | None = None) -> None:
         epoch = datetime(2026, 8, 20, tzinfo=UTC)
         ticks = count()
         self.clock = lambda: epoch + timedelta(seconds=next(ticks))
         self.store = InMemoryProjectStore(clock=self.clock)
-        self.service = ProjectService(store=self.store, clock=self.clock)
+        self.root = root
+        # The *real* factory over a `tmp_path`, not a double. What these routes
+        # have to get right is the refusal -- a mistyped root, a path leaving
+        # the project -- and a double would have to reimplement the sandbox to
+        # produce it, at which point the tests would be checking the double.
+        self.service = ProjectService(
+            store=self.store,
+            clock=self.clock,
+            files=FilesystemProjectFileStoreFactory(),
+        )
         self.app = FastAPI()
         self.app.include_router(projects_route.router)
         self.app.include_router(projects_route.membership_router)
@@ -342,3 +355,229 @@ def test_taking_a_coding_session_out_of_a_project_needs_an_explicit_null() -> No
         )
 
     assert _run(world, scenario) == (["ses_code_1"], 400, [])
+
+
+# --- the directory a project is (ADR-072) ------------------------------------
+
+
+def _new_project(client: httpx.AsyncClient) -> Awaitable[httpx.Response]:
+    return client.post("/v1/projects", json={"name": "alpha"}, headers=_headers())
+
+
+def test_a_project_reports_no_directory_until_one_is_registered(
+    tmp_path: Path,
+) -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        created = await _new_project(client)
+        return created.json()["root_path"]
+
+    # Present and null, not omitted: a client has to be able to tell "no
+    # directory registered" from "this build does not do directories".
+    assert _run(world, scenario) is None
+
+
+def test_registering_a_directory_then_listing_it(tmp_path: Path) -> None:
+    world = _World()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('hi')\n")
+    (tmp_path / "README.md").write_text("# alpha\n")
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, Any, Any]:
+        project_id = (await _new_project(client)).json()["project_id"]
+        patched = await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path)},
+            headers=_headers(),
+        )
+        listed = await client.get(
+            f"/v1/projects/{project_id}/files", headers=_headers()
+        )
+        body = listed.json()
+        return (
+            patched.json()["root_path"],
+            [entry["path"] for entry in body["entries"]],
+            body["truncated"],
+        )
+
+    assert _run(world, scenario) == (str(tmp_path), ["src", "README.md"], False)
+
+
+def test_a_mistyped_directory_is_refused_at_registration(tmp_path: Path) -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, Any]:
+        project_id = (await _new_project(client)).json()["project_id"]
+        refused = await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path / "typo")},
+            headers=_headers(),
+        )
+        stored = await client.get(f"/v1/projects/{project_id}", headers=_headers())
+        return refused.status_code, stored.json()["root_path"]
+
+    # 400 at the moment somebody typed it, and *nothing stored*. Accepting it and
+    # failing on first use would make an agent's error the first report of a
+    # typo made days earlier.
+    assert _run(world, scenario) == (400, None)
+
+
+def test_a_path_leaving_the_project_is_refused(tmp_path: Path) -> None:
+    world = _World()
+    (tmp_path / "inside.txt").write_text("ok\n")
+
+    async def scenario(client: httpx.AsyncClient) -> list[int]:
+        project_id = (await _new_project(client)).json()["project_id"]
+        await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path)},
+            headers=_headers(),
+        )
+        return [
+            (
+                await client.get(
+                    f"/v1/projects/{project_id}/file",
+                    params={"path": path},
+                    headers=_headers(),
+                )
+            ).status_code
+            for path in ("../../etc/passwd", "/etc/passwd", "a\x00b")
+        ]
+
+    # 400, not 404: the request is malformed, and a 404 would additionally be a
+    # statement about whether that file exists.
+    assert _run(world, scenario) == [400, 400, 400]
+
+
+def test_writing_reading_and_deleting_a_file(tmp_path: Path) -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, Any, Any, Any]:
+        project_id = (await _new_project(client)).json()["project_id"]
+        await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path)},
+            headers=_headers(),
+        )
+        written = await client.put(
+            f"/v1/projects/{project_id}/file",
+            json={"path": "docs/adr/0072.md", "content": "# ADR-072\n"},
+            headers=_headers(),
+        )
+        read = await client.get(
+            f"/v1/projects/{project_id}/file",
+            params={"path": "docs/adr/0072.md"},
+            headers=_headers(),
+        )
+        removed = await client.delete(
+            f"/v1/projects/{project_id}/file",
+            params={"path": "docs/adr/0072.md"},
+            headers=_headers(),
+        )
+        again = await client.delete(
+            f"/v1/projects/{project_id}/file",
+            params={"path": "docs/adr/0072.md"},
+            headers=_headers(),
+        )
+        return (
+            written.json()["path"],
+            read.json()["text"],
+            removed.status_code,
+            again.status_code,
+        )
+
+    # The second DELETE is 204 too: DELETE is idempotent, and a 404 for "already
+    # gone" makes a retry after a dropped response look like a failure.
+    assert _run(world, scenario) == ("docs/adr/0072.md", "# ADR-072\n", 204, 204)
+
+
+def test_a_neighbour_cannot_read_the_files(tmp_path: Path) -> None:
+    world = _World()
+    (tmp_path / "secret.md").write_text("mine\n")
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, int]:
+        project_id = (await _new_project(client)).json()["project_id"]
+        await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path)},
+            headers=_headers(),
+        )
+        listed = await client.get(
+            f"/v1/projects/{project_id}/files",
+            headers=_headers(principal_id=NEIGHBOUR),
+        )
+        read = await client.get(
+            f"/v1/projects/{project_id}/file",
+            params={"path": "secret.md"},
+            headers=_headers(principal_id=NEIGHBOUR),
+        )
+        return listed.status_code, read.status_code
+
+    # The root path comes out of a row the store refuses to hand to anybody
+    # else. A version that took the path from the request would be an open
+    # directory-read endpoint with a project id decorating it.
+    assert _run(world, scenario) == (404, 404)
+
+
+def test_a_neighbour_cannot_point_your_project_at_their_directory(
+    tmp_path: Path,
+) -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, Any]:
+        project_id = (await _new_project(client)).json()["project_id"]
+        refused = await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path)},
+            headers=_headers(principal_id=NEIGHBOUR),
+        )
+        stored = await client.get(f"/v1/projects/{project_id}", headers=_headers())
+        return refused.status_code, stored.json()["root_path"]
+
+    # The sharpest form of the cross-owner write: it aims somebody else's agent
+    # at a directory you chose.
+    assert _run(world, scenario) == (404, None)
+
+
+def test_files_before_a_directory_is_registered_are_not_found(tmp_path: Path) -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        project_id = (await _new_project(client)).json()["project_id"]
+        listed = await client.get(
+            f"/v1/projects/{project_id}/files", headers=_headers()
+        )
+        return listed.status_code
+
+    assert _run(world, scenario) == 404
+
+
+def test_null_unregisters_and_an_absent_field_leaves_it_alone(tmp_path: Path) -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, Any, Any]:
+        project_id = (await _new_project(client)).json()["project_id"]
+        await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path)},
+            headers=_headers(),
+        )
+        renamed = await client.patch(
+            f"/v1/projects/{project_id}", json={"name": "beta"}, headers=_headers()
+        )
+        cleared = await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": None},
+            headers=_headers(),
+        )
+        return (
+            renamed.json()["root_path"],
+            cleared.json()["root_path"],
+            cleared.json()["name"],
+        )
+
+    # The distinction the whole PATCH shape exists for, now on a second field:
+    # renaming must not silently unregister the directory, and `null` must be
+    # able to say "stop pointing at it".
+    assert _run(world, scenario) == (str(tmp_path), None, "beta")

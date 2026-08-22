@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -49,6 +50,8 @@ from agent_workbench.application.code_prompt import (
     CODER_SYSTEM_PROMPT_WITH_SANDBOX,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
 )
+from agent_workbench.application.project_file_scope import ProjectFileScope
+from agent_workbench.application.projects import ProjectService
 from agent_workbench.application.session_titles import title_from_instruction
 from agent_workbench.application.session_workspace import SessionWorkspace
 from agent_workbench.application.workspace import (
@@ -58,6 +61,7 @@ from agent_workbench.application.workspace import (
 )
 from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.artifacts import ArtifactRef
+from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.messages import Message, assistant_message, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
@@ -76,6 +80,7 @@ from agent_workbench.ports.conversation_store import (
     ConversationSession,
     ConversationStore,
 )
+from agent_workbench.ports.project_files import ProjectFileStore
 
 #: What a coding session is allowed to reach with the sandbox off: read tools
 #: plus the two writes, and nothing external. A deployment that leaves
@@ -90,6 +95,26 @@ CODE_TOOLS: tuple[ToolName, ...] = (
     "workspace_write",
 )
 
+#: What a coding session reaches when its project **is a directory** (ADR-073).
+#:
+#: Disjoint from `CODE_TOOLS`, and that is the invariant rather than a naming
+#: choice. A model holding both sets has two "write a file" tools whose
+#: descriptions differ only in a word it cannot verify, and the failure that
+#: follows does not raise: `project_write("draft.md", …)` succeeds and puts a
+#: scratch file in somebody's repository root.
+#:
+#: There is no grep here yet. `workspace_grep` searches a manifest this project
+#: holds in memory; searching a real tree is a different implementation, and
+#: shipping the name without it would be worse than its absence -- a model told
+#: it can grep stops listing and reading, which is how it concludes a file is
+#: not there.
+CODE_PROJECT_TOOLS: tuple[ToolName, ...] = (
+    "project_edit",
+    "project_list",
+    "project_read",
+    "project_write",
+)
+
 #: The same list plus the one external tool a coding session may be granted
 #: (ADR-057). Spelled out as its own tuple rather than assembled at the call
 #: site, so "what may a coding session reach" has two answers to read rather
@@ -101,6 +126,14 @@ CODE_TOOLS: tuple[ToolName, ...] = (
 #: about, and it is why the gate was armed before anything could trigger it.
 CODE_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
     *CODE_TOOLS,
+    SANDBOX_RUN_TOOL,
+)
+
+#: The project-directory set plus the sandbox, spelled out for the reason its
+#: sibling above is: "what may a coding session reach" should have answers to
+#: read, not an answer and two appends to apply in your head.
+CODE_PROJECT_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
+    *CODE_PROJECT_TOOLS,
     SANDBOX_RUN_TOOL,
 )
 
@@ -193,6 +226,13 @@ class CodeSessionService:
     max_concurrent_turns: int
     clock: Callable[[], datetime]
     tool_names: tuple[ToolName, ...] = CODE_TOOLS
+    #: The other half of ADR-073's exclusivity. Read only when the session's
+    #: project has a directory; a deployment that leaves either of these `None`
+    #: never offers `project_*` at all, which is the correct behaviour for a
+    #: build without the capability rather than a degraded one.
+    project_scope: ProjectFileScope | None = None
+    projects: ProjectService | None = None
+    project_tool_names: tuple[ToolName, ...] = CODE_PROJECT_TOOLS
     #: Whether each ``sandbox_run`` call stops for a human (ADR-058). Defaults
     #: to the settings default rather than contradicting it; the assembly in
     #: `apps/api/dependencies.py` always passes the configured value.
@@ -582,9 +622,30 @@ class CodeSessionService:
                 principal_id=principal.principal_id,
             )
         )
-        with self.scope.using(workspace):
+        # Which file language this turn speaks, decided here and frozen for the
+        # turn (ADR-073 §5.2). Deciding it per tool call would let somebody
+        # registering a directory mid-turn change what the running model is
+        # holding, and the envelope was already signed with the other list.
+        project_files = await self._project_files_for(
+            principal=principal, project_id=session.project_id
+        )
+        tool_names = (
+            self.tool_names if project_files is None else self.project_tool_names
+        )
+        with ExitStack() as scopes:
+            if project_files is None:
+                scopes.enter_context(self.scope.using(workspace))
+            else:
+                # Only one is entered. Entering both would leave the other set's
+                # tools live in this turn's context -- and the tools find their
+                # backing through the ContextVar, not through the envelope, so
+                # an envelope that forgot to exclude one would become reachable.
+                assert self.project_scope is not None
+                scopes.enter_context(self.project_scope.using(project_files))
             outcome = await executor.run(
-                self._request_for(request, history=history, asked=asked),
+                self._request_for(
+                    request, history=history, asked=asked, tool_names=tool_names
+                ),
                 sink,
                 cancellation,
             )
@@ -609,12 +670,35 @@ class CodeSessionService:
             outcome=outcome,
         )
 
+    async def _project_files_for(
+        self, *, principal: PrincipalContext, project_id: str | None
+    ) -> ProjectFileStore | None:
+        """This session's project directory, or ``None`` for the flat workspace.
+
+        ``None`` on every path that is not unambiguously "this session belongs
+        to a project that has a registered directory": no project, no directory,
+        or a deployment without the capability. The fallback is the flat
+        workspace, which always works -- so a misconfiguration costs the
+        directory, never the turn.
+        """
+
+        if project_id is None or self.projects is None or self.project_scope is None:
+            return None
+        try:
+            return await self.projects.open_files(principal, project_id)
+        except NotFoundError:
+            # The project has no directory registered, or is not this
+            # principal's. Both mean "use the workspace", and neither is worth
+            # failing a turn over.
+            return None
+
     def _request_for(
         self,
         request: CodeRequest,
         *,
         history: tuple[Message, ...],
         asked: Message,
+        tool_names: tuple[ToolName, ...],
     ) -> AgentRunRequest:
         return AgentRunRequest(
             trace=TraceContext(agent_run_id=request.run_id),
@@ -624,7 +708,7 @@ class CodeSessionService:
             stream_id=request.session_id,
             principal=request.principal,
             envelope=AuthorizationEnvelope(
-                allowed_tools=self.tool_names,
+                allowed_tools=tool_names,
                 # Derived from the tool list rather than configured beside it.
                 # The ceiling exists to admit exactly one tool -- `sandbox_run`
                 # is the only `external` thing a coding session may be given --
@@ -635,7 +719,7 @@ class CodeSessionService:
                 # which costs a wasted turn ending in
                 # `outside_submitted_envelope`.
                 max_tool_risk=(
-                    "external" if SANDBOX_RUN_TOOL in self.tool_names else "write"
+                    "external" if SANDBOX_RUN_TOOL in tool_names else "write"
                 ),
                 # `destructive` is armed unconditionally -- nothing grants such
                 # a tool today, and the day something does, the gate must
@@ -667,13 +751,13 @@ class CodeSessionService:
                     if self.sandbox_requires_approval
                     else CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED
                 )
-                if SANDBOX_RUN_TOOL in self.tool_names
+                if SANDBOX_RUN_TOOL in tool_names
                 else CODER_SYSTEM_PROMPT
             ),
             messages=(*history, asked),
             # Both, and they are not the same thing: the envelope says what
             # policy would permit, `tool_names` is what the model is offered.
-            tool_names=self.tool_names,
+            tool_names=tool_names,
         )
 
     async def drain_cleanup(self, *, timeout_seconds: float) -> None:

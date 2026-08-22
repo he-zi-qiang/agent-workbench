@@ -39,6 +39,11 @@ from agent_workbench.ports.knowledge_bases import (
 )
 from agent_workbench.ports.model import ModelRequest
 from agent_workbench.ports.outbox import OutboxEvent
+from agent_workbench.ports.project_files import (
+    ProjectFileContent,
+    ProjectFileEntry,
+    ProjectListing,
+)
 from agent_workbench.ports.projects import (
     ProjectContents,
     ProjectItem,
@@ -82,6 +87,36 @@ STORED_TURN = StoredChatTurn(
 )
 
 SAMPLES: dict[str, VersionedModel] = {
+    # ADR-072. A project-relative path, never absolute: the sample is where
+    # "what shape does this field carry" is pinned, and an absolute one here
+    # would make the machine's directory layout look like a normal payload.
+    "ProjectFileEntry": ProjectFileEntry(
+        path="src/agent_workbench/domain/project_files.py",
+        kind="file",
+        size_bytes=8192,
+        modified_at=SAMPLE_TIMESTAMP,
+    ),
+    "ProjectListing": ProjectListing(
+        path="src",
+        entries=(
+            # A directory, to pin that `size_bytes` may be absent -- a folder
+            # does not have a size of zero, it does not have a size.
+            ProjectFileEntry(
+                path="src/agent_workbench",
+                kind="directory",
+                size_bytes=None,
+                modified_at=SAMPLE_TIMESTAMP,
+            ),
+        ),
+        truncated=False,
+    ),
+    "ProjectFileContent": ProjectFileContent(
+        path="README.md",
+        text="# Project\n",
+        size_bytes=10,
+        is_text=True,
+        modified_at=SAMPLE_TIMESTAMP,
+    ),
     "ProjectRecord": ProjectRecord(
         project_id="prj_0000000000000000000000000000001",
         tenant_id="tenant_demo",

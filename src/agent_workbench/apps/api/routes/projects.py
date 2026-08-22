@@ -21,6 +21,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.identifiers import Identifier
+from agent_workbench.domain.project_files import ProjectPathError
+from agent_workbench.ports.project_files import (
+    ProjectEntryKind,
+    ProjectFileContent,
+    ProjectListing,
+)
 from agent_workbench.ports.projects import (
     ProjectContents,
     ProjectItemKind,
@@ -37,12 +43,19 @@ class CreateProjectRequest(BaseModel):
 
 
 class UpdateProjectRequest(BaseModel):
-    """Rename, archive, or both. Absent fields are left alone."""
+    """Rename, archive, register a directory, or any combination.
+
+    ``root_path`` needs the same ``null`` / absent distinction that
+    ``AssignProjectRequest`` documents, and for the same reason: ``null`` is how
+    "stop pointing this project at that folder" is said, and an absent field has
+    to keep meaning "leave it alone". The route asks ``model_fields_set``.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     archived: bool | None = None
+    root_path: str | None = Field(default=None, max_length=2048)
 
 
 class AssignProjectRequest(BaseModel):
@@ -61,6 +74,46 @@ class ProjectView(BaseModel):
     #: Present and null for a live project rather than omitted, so a client can
     #: tell "not archived" from "this build does not report archiving".
     archived_at: datetime | None
+    #: The directory this project is (ADR-072), or null. Present-and-null for
+    #: the same reason as ``archived_at``: a client has to be able to tell "no
+    #: directory registered" from "this build does not do directories", and an
+    #: omitted field says neither.
+    root_path: str | None
+
+
+class ProjectFileEntryView(BaseModel):
+    path: str
+    kind: ProjectEntryKind
+    size_bytes: int | None
+    modified_at: datetime
+
+
+class ProjectListingResponse(BaseModel):
+    path: str
+    entries: tuple[ProjectFileEntryView, ...]
+    #: Whether the ceiling cut this listing short. A client that ignores it
+    #: renders a partial tree as a whole one, which reads to a person as *this
+    #: project has 500 files*.
+    truncated: bool
+
+
+class ProjectFileContentResponse(BaseModel):
+    path: str
+    text: str | None
+    size_bytes: int
+    is_text: bool
+    modified_at: datetime
+
+
+class WriteProjectFileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=1024)
+    #: Text only, over this interface. Bytes would have to arrive base64-encoded
+    #: and the first thing a browser would do with the result is decode it as
+    #: text anyway; a binary upload is a different endpoint with a different
+    #: content type, not a flag on this one.
+    content: str
 
 
 class ProjectListResponse(BaseModel):
@@ -118,7 +171,11 @@ async def get(project_id: str, request: Request) -> ProjectView:
 async def update(
     project_id: str, body: UpdateProjectRequest, request: Request
 ) -> ProjectView:
-    if body.name is None and body.archived is None:
+    # `root_path` is asked of `model_fields_set`, not of the value: `null` is a
+    # request to unregister and absent is a request to leave it alone, and the
+    # parsed value is `None` for both.
+    sets_root = "root_path" in body.model_fields_set
+    if body.name is None and body.archived is None and not sets_root:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="这个请求什么也没要求改。",
@@ -134,6 +191,20 @@ async def update(
         record = await dependencies.projects.set_archived(
             principal, project_id, archived=body.archived
         )
+    if sets_root:
+        try:
+            record = await dependencies.projects.set_root_path(
+                principal, project_id, root_path=body.root_path
+            )
+        except ProjectPathError as error:
+            # 400, not 500: a path that is not absolute, not there, or not a
+            # directory is a bad request, and the person who typed it is the one
+            # who can fix it. The message is the sandbox's own -- it names which
+            # of those it was, and flattening that to "invalid path" would make
+            # the one useful thing about the refusal disappear.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+            ) from error
     assert record is not None
     return _view(record)
 
@@ -154,6 +225,88 @@ async def items(project_id: str, request: Request) -> ProjectContentsResponse:
         dependencies.principals.resolve(request), project_id
     )
     return _contents_view(found)
+
+
+# --- the directory a project is (ADR-072) -----------------------------------
+#
+# The path is a query parameter, not a path segment. A project-relative path
+# contains `/`, and a path segment holding one either needs a `:path` converter
+# -- which then also swallows the trailing segments of any route added after it
+# -- or arrives percent-encoded and gets decoded twice somewhere. A query
+# parameter has one unambiguous encoding and no interaction with routing.
+
+
+@router.get("/{project_id}/files", response_model=ProjectListingResponse)
+async def list_files(
+    project_id: str, request: Request, path: str = "", recursive: bool = False
+) -> ProjectListingResponse:
+    dependencies = dependencies_of(request)
+    store = await dependencies.projects.open_files(
+        dependencies.principals.resolve(request), project_id
+    )
+    try:
+        listing = await (store.walk(path) if recursive else store.list_directory(path))
+    except ProjectPathError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+        ) from error
+    return _listing_view(listing)
+
+
+@router.get("/{project_id}/file", response_model=ProjectFileContentResponse)
+async def read_file(
+    project_id: str, request: Request, path: str
+) -> ProjectFileContentResponse:
+    dependencies = dependencies_of(request)
+    store = await dependencies.projects.open_files(
+        dependencies.principals.resolve(request), project_id
+    )
+    try:
+        return _content_view(await store.read(path))
+    except ProjectPathError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+        ) from error
+
+
+@router.put("/{project_id}/file", response_model=ProjectFileEntryView)
+async def write_file(
+    project_id: str, body: WriteProjectFileRequest, request: Request
+) -> ProjectFileEntryView:
+    dependencies = dependencies_of(request)
+    store = await dependencies.projects.open_files(
+        dependencies.principals.resolve(request), project_id
+    )
+    try:
+        entry = await store.write(body.path, body.content)
+    except ProjectPathError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+        ) from error
+    return ProjectFileEntryView(
+        path=entry.path,
+        kind=entry.kind,
+        size_bytes=entry.size_bytes,
+        modified_at=entry.modified_at,
+    )
+
+
+@router.delete("/{project_id}/file", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_file(project_id: str, request: Request, path: str) -> Response:
+    dependencies = dependencies_of(request)
+    store = await dependencies.projects.open_files(
+        dependencies.principals.resolve(request), project_id
+    )
+    try:
+        await store.delete(path)
+    except ProjectPathError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+        ) from error
+    # 204 whether or not it was there. The store reports the difference and this
+    # route drops it on purpose: DELETE is idempotent, and a 404 for "already
+    # gone" makes a retry after a dropped response look like a failure.
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.put(
@@ -270,6 +423,33 @@ def _view(record: ProjectRecord) -> ProjectView:
         created_at=record.created_at,
         updated_at=record.updated_at,
         archived_at=record.archived_at,
+        root_path=record.root_path,
+    )
+
+
+def _listing_view(listing: ProjectListing) -> ProjectListingResponse:
+    return ProjectListingResponse(
+        path=listing.path,
+        entries=tuple(
+            ProjectFileEntryView(
+                path=entry.path,
+                kind=entry.kind,
+                size_bytes=entry.size_bytes,
+                modified_at=entry.modified_at,
+            )
+            for entry in listing.entries
+        ),
+        truncated=listing.truncated,
+    )
+
+
+def _content_view(content: ProjectFileContent) -> ProjectFileContentResponse:
+    return ProjectFileContentResponse(
+        path=content.path,
+        text=content.text,
+        size_bytes=content.size_bytes,
+        is_text=content.is_text,
+        modified_at=content.modified_at,
     )
 
 
