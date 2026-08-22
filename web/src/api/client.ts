@@ -5,12 +5,14 @@ import type {
   AskResponse,
   ChatSessionListResponse,
   ChatSessionView,
+  CitedPassageView,
   CodeAskResponse,
   CodeSessionListResponse,
   CodeSessionView,
   CreateChatSessionResponse,
   CreateSessionResponse,
   CreateUploadResponse,
+  DirectoryListingResponse,
   DocumentPreview,
   DocumentVersion,
   EvaluationCurrentRunResponse,
@@ -18,13 +20,19 @@ import type {
   EvaluationRunView,
   EvaluationSuite,
   HealthResponse,
-  CitedPassageView,
   HistoryResponse,
   KnowledgeBaseListResponse,
   KnowledgeBaseView,
   KnowledgeDocumentListResponse,
   PendingApprovalsResponse,
   PrincipalIdentity,
+  ProjectContentsResponse,
+  ProjectFileContentResponse,
+  ProjectFileEntryView,
+  ProjectListResponse,
+  ProjectListingResponse,
+  ProjectView,
+  RunFileResponse,
   SearchResponse,
   TaskGraphChoice,
   TaskIntent,
@@ -34,14 +42,7 @@ import type {
   TaskView,
   TriageResponse,
   UploadContentResponse,
-  RunFileResponse,
   WorkspaceResponse,
-  ProjectContentsResponse,
-  ProjectFileContentResponse,
-  ProjectFileEntryView,
-  ProjectListingResponse,
-  ProjectListResponse,
-  ProjectView,
 } from "./types";
 
 const WORD_DOCUMENT_MEDIA_TYPE =
@@ -221,6 +222,46 @@ export async function createProject(
   return apiRequest(identity, "/v1/projects", {
     method: "POST",
     body: { name },
+  });
+}
+
+/**
+ * 建一个项目并把它指向一个目录，两步（ADR-074 §7.2）。
+ *
+ * 服务端没有「一步建好带目录的项目」的端点，而这里不替它造一个：建项目和登记
+ * 目录是两个决定，各自有自己的拒绝理由——名字为空是一种，路径不存在是另一种，
+ * 合成一个请求会让调用方拿到一个说不清是哪一半错了的失败。
+ *
+ * 代价是中途失败会留下一个没有目录的项目。这里选择**把它删掉**再抛错，因为
+ * ADR-074 §7.2 说「没有先建了以后再说的项目」——留一个半成品正是那种项目。
+ */
+export async function createProjectAtDirectory(
+  identity: PrincipalIdentity,
+  name: string,
+  rootPath: string,
+): Promise<ProjectView> {
+  const created = await createProject(identity, name);
+  try {
+    return await setProjectRootPath(identity, created.project_id, rootPath);
+  } catch (error) {
+    await deleteProject(identity, created.project_id).catch(() => {
+      // 删不掉就算了：原本那个错误才是调用方要看的，用清理失败去覆盖它，
+      // 等于把「路径不对」报成「删除失败」。
+    });
+    throw error;
+  }
+}
+
+export async function browseDirectories(
+  identity: PrincipalIdentity,
+  options: { path?: string | null; signal?: AbortSignal } = {},
+): Promise<DirectoryListingResponse> {
+  const query =
+    options.path == null
+      ? ""
+      : `?path=${encodeURIComponent(options.path)}`;
+  return apiRequest(identity, `/v1/projects/directories${query}`, {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
 }
 

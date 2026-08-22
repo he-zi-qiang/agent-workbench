@@ -39,7 +39,6 @@ import {
   getChatSession,
   listChatSessions,
   renameChatSession,
-  setSessionProject,
 } from "../../api/client";
 import type {
   Citation,
@@ -68,7 +67,6 @@ import {
   ModeStartHeader,
   submitTextareaOnEnter,
 } from "../../components/ModeStart";
-import { ProjectPicker } from "../../components/ProjectPicker";
 import { StepStream } from "../../components/StepStream";
 import {
   EmptyState,
@@ -267,19 +265,6 @@ export function ChatPage() {
     [identity, navigate, queries, runtime, workspaceSidebar],
   );
 
-  const assignProject = useCallback(
-    async (nextProjectId: string | null) => {
-      if (sessionId === undefined) return;
-      await setSessionProject(identity, sessionId, nextProjectId);
-      // 两处都要刷：这段对话自己的归属，以及项目页那一列。归属是它们共有的
-      // 一个事实，不是两份各自维护的状态。
-      await queries.invalidateQueries({
-        queryKey: ["chat-sessions", identity],
-      });
-      await queries.invalidateQueries({ queryKey: ["chat-session", identity] });
-    },
-    [identity, queries, sessionId],
-  );
 
   const renameSession = useCallback(
     async (target: string, title: string) => {
@@ -751,7 +736,6 @@ export function ChatPage() {
         {sessionId === undefined ? null : (
           <ChatHeader
             answerMode={answerMode}
-            identity={identity}
             session={selected}
             sidebarOpen={workspaceSidebar.drawerOpen}
             {...(selectedKnowledgeBase === undefined
@@ -763,9 +747,6 @@ export function ChatPage() {
                   onReconnect: () =>
                     runtime.reconnectSessionStream(selected.sessionId),
                 })}
-            {...(selected === undefined
-              ? {}
-              : { onAssignProject: assignProject })}
             onOpenSessions={workspaceSidebar.open}
           />
         )}
@@ -999,19 +980,15 @@ function ChatWelcome({
 
 function ChatHeader({
   answerMode,
-  identity,
   session,
   sourceLabel,
-  onAssignProject,
   onReconnect,
   onOpenSessions,
   sidebarOpen,
 }: {
   answerMode: "direct" | "rag";
-  identity: PrincipalIdentity;
   session: ChatSessionState | undefined;
   sourceLabel?: string;
-  onAssignProject?: (projectId: string | null) => Promise<void>;
   onReconnect?: () => void;
   onOpenSessions: () => void;
   sidebarOpen: boolean;
@@ -1032,16 +1009,10 @@ function ChatHeader({
         {session !== undefined && answerMode === "rag" ? (
           <p>{sourceLabel ?? "知识库"}</p>
         ) : null}
-        {/* 归属长在这一段自己的头部，不长成侧栏每一行的第三个图标：行动作已经
-            有改名和删除，第三个会把一列本来很安静的行挤成一排按钮。 */}
-        {session === undefined || onAssignProject === undefined ? null : (
-          <ProjectPicker
-            identity={identity}
-            label="这段对话属于哪个项目"
-            onAssign={onAssignProject}
-            projectId={session.projectId ?? null}
-          />
-        )}
+        {/* 这里曾经有一个归属选择器。ADR-074 把 Project 收进了 Code——它现在是
+            编码工作区，一个目录，而一段对话住不进目录里。
+            服务端那一列和那个端点都还在（ADR-074 §6：下线一个端点和删一列数据是
+            同一种破坏的两种形式），只是界面不再写它。 */}
       </div>
       {session === undefined ||
       ["idle", "connected"].includes(session.connection) ? null : (

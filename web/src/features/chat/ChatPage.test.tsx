@@ -471,8 +471,13 @@ describe("Chat identity boundary", () => {
     expect(other).toHaveFocus();
   });
 
-  it("offers a project only when there is one, and files the conversation into it", async () => {
-    const user = userEvent.setup();
+  it("no longer offers to file a conversation into a project", async () => {
+    // ADR-074 把 Project 收进了 Code：它现在是编码工作区，一个目录，而一段对话
+    // 住不进目录里。
+    //
+    // 断言「即使有项目也不出现」，而不是删掉原来那条用例：原来还有一条断言
+    // 「没有项目时不显示」，在功能被删之后它会照常通过——通过的理由却完全变了。
+    // 一条在功能存在与不存在时都绿的测试，守不住任何东西。
     vi.mocked(listProjects).mockResolvedValue({
       projects: [
         {
@@ -481,33 +486,10 @@ describe("Chat identity boundary", () => {
           created_at: "2026-08-20T00:00:00Z",
           updated_at: "2026-08-20T00:00:00Z",
           archived_at: null,
-          root_path: null,
+          root_path: "/srv/alpha",
         },
       ],
     });
-    vi.mocked(setSessionProject).mockResolvedValue(undefined);
-    vi.mocked(useChatRuntime).mockReturnValue({
-      runtime: fakeRuntime(vi.fn(), vi.fn()),
-      state: initialChatState([localSession("ses_direct", "当前会话")]),
-    });
-
-    renderChatRoute("/chat/ses_direct");
-    const picker = await screen.findByLabelText("这段对话属于哪个项目");
-    // 第一项是「不属于任何项目」，而且它是默认选中的那一项：归属可空，空是
-    // 正常状态，不是一个需要被清除的异常。
-    expect(picker).toHaveValue("");
-    await user.selectOptions(picker, "prj_1");
-
-    await waitFor(() => {
-      expect(vi.mocked(setSessionProject).mock.calls[0]?.slice(1)).toEqual([
-        "ses_direct",
-        "prj_1",
-      ]);
-    });
-  });
-
-  it("does not show a picker that can only say no", async () => {
-    vi.mocked(listProjects).mockResolvedValue({ projects: [] });
     vi.mocked(useChatRuntime).mockReturnValue({
       runtime: fakeRuntime(vi.fn(), vi.fn()),
       state: initialChatState([localSession("ses_direct", "当前会话")]),
@@ -516,10 +498,12 @@ describe("Chat identity boundary", () => {
     renderChatRoute("/chat/ses_direct");
     await screen.findByRole("heading", { name: "当前会话" });
 
-    // 一个只能选「无」的下拉框，是在提醒读者他缺了一个东西，而归属本来可选。
     expect(
       screen.queryByLabelText("这段对话属于哪个项目"),
     ).not.toBeInTheDocument();
+    // 而且没有任何一次归属写入：控件不见了但代码还在别处调用它，是这种下线最
+    // 容易留下的尾巴。
+    expect(vi.mocked(setSessionProject)).not.toHaveBeenCalled();
   });
 
   it("uses double-click only to open another Chat session, not to rename it", async () => {

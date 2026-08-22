@@ -25,6 +25,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from agent_workbench.adapters.filesystem.browser import FilesystemDirectoryBrowser
 from agent_workbench.adapters.filesystem.project_files import (
     FilesystemProjectFileStoreFactory,
 )
@@ -59,6 +60,7 @@ class _World:
             store=self.store,
             clock=self.clock,
             files=FilesystemProjectFileStoreFactory(),
+            directories=FilesystemDirectoryBrowser(),
         )
         self.app = FastAPI()
         self.app.include_router(projects_route.router)
@@ -581,3 +583,107 @@ def test_null_unregisters_and_an_absent_field_leaves_it_alone(tmp_path: Path) ->
     # renaming must not silently unregister the directory, and `null` must be
     # able to say "stop pointing at it".
     assert _run(world, scenario) == (str(tmp_path), None, "beta")
+
+
+# --- choosing which directory (ADR-074) --------------------------------------
+
+
+def test_browsing_lists_subdirectories_and_the_way_back_up(tmp_path: Path) -> None:
+    world = _World()
+    (tmp_path / "alpha").mkdir()
+    (tmp_path / "beta").mkdir()
+    (tmp_path / "a-file.txt").write_text("x")
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, Any, Any]:
+        listed = await client.get(
+            "/v1/projects/directories",
+            params={"path": str(tmp_path)},
+            headers=_headers(),
+        )
+        body = listed.json()
+        return (
+            [entry["name"] for entry in body["entries"]],
+            body["parent"],
+            body["path"],
+        )
+
+    names, parent, path = _run(world, scenario)
+    # Directories only. A picker that also listed files would be a filesystem
+    # read endpoint wearing a picker's clothes -- reachable before any root has
+    # been registered, which is the moment nothing has been authorised yet.
+    assert names == ["alpha", "beta"]
+    # The parent is *sent*, not derived, so the client never does path
+    # arithmetic of its own.
+    assert parent == str(tmp_path.parent)
+    assert path == str(tmp_path.resolve())
+
+
+def test_browsing_defaults_to_home_when_no_path_is_given() -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        listed = await client.get("/v1/projects/directories", headers=_headers())
+        return listed.status_code, listed.json()["path"]
+
+    code, path = _run(world, scenario)
+    assert code == 200
+    assert path == str(Path.home().resolve())
+
+
+def test_a_relative_path_is_refused_with_the_reason() -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, str]:
+        refused = await client.get(
+            "/v1/projects/directories",
+            params={"path": "some/relative/dir"},
+            headers=_headers(),
+        )
+        return refused.status_code, refused.json()["detail"]
+
+    # A relative path would resolve against the *server's* working directory,
+    # which is not a place the person browsing has any model of.
+    code, detail = _run(world, scenario)
+    assert code == 400
+    assert "absolute" in detail
+
+
+def test_browsing_something_that_is_not_a_directory_is_refused(
+    tmp_path: Path,
+) -> None:
+    world = _World()
+    (tmp_path / "a-file.txt").write_text("x")
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        refused = await client.get(
+            "/v1/projects/directories",
+            params={"path": str(tmp_path / "a-file.txt")},
+            headers=_headers(),
+        )
+        return refused.status_code
+
+    assert _run(world, scenario) == 400
+
+
+def test_the_browse_route_is_not_swallowed_by_the_project_id_route() -> None:
+    """FastAPI matches in declaration order, and this pair is order-sensitive.
+
+    `/v1/projects/directories` and `/v1/projects/{project_id}` both match the
+    same URL. Declared the other way round, browsing arrives at `get()` as a
+    project id of "directories" and 404s -- with nothing anywhere saying why,
+    because both routes exist and both look right.
+
+    Asserted through the response *shape* rather than the status: a 404 would
+    also be a plausible answer for "no such project", so the test has to check
+    that the answer is a listing.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, list[str]]:
+        listed = await client.get("/v1/projects/directories", headers=_headers())
+        return listed.status_code, sorted(listed.json().keys())
+
+    code, keys = _run(world, scenario)
+    assert code == 200
+    assert keys == ["entries", "parent", "path", "truncated"]

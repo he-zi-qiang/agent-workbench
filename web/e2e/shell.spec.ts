@@ -34,6 +34,36 @@ test.beforeEach(async ({ page }) => {
     });
   });
 
+  // ADR-074：Code 现在有一道门，起始屏之前先要选文件夹。给它一个已经有目录的
+  // 项目，好让这条用例断言的仍然是「Code 在两种布局下都到得了」，而不是顺带把
+  // 那道门再测一遍——门有它自己的用例。
+  await page.route(/\/v1\/projects(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        projects: [
+          {
+            project_id: "prj_demo",
+            name: "demo",
+            created_at: "2026-08-22T00:00:00Z",
+            updated_at: "2026-08-22T00:00:00Z",
+            archived_at: null,
+            root_path: "/Users/someone/demo",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(/\/v1\/projects\/prj_demo\/files(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ path: "", entries: [], truncated: false }),
+    });
+  });
+
   await page.route(/\/v1\/tasks(?:\?.*)?$/, async (route) => {
     if (route.request().method() !== "GET") {
       await route.fallback();
@@ -142,6 +172,13 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   await activeNavigation.getByRole("link", { name: "Code", exact: true }).click();
 
   await expect(page).toHaveURL(/#\/code$/);
+  // 门先来（ADR-074）：没选文件夹就没有起始屏。这一步不是可跳过的设置，是
+  // 「产物存哪」这个问题在编码开始之前必须有答案。
+  await expect(
+    page.getByRole("heading", { name: "在哪个文件夹里编码？" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /demo/ }).click();
+
   await expect(page.getByRole("heading", { name: "开始编码" })).toBeVisible();
   // The composer, on a page with no session yet, is the assertion. This used to
   // wait for a 「新建编码会话」 button, which was a full-screen door whose only

@@ -75,6 +75,7 @@ import type {
   CodeSessionListResponse,
   MessageView,
   PendingApprovalView,
+  ProjectView,
   WorkspaceEntryView,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
@@ -92,6 +93,7 @@ import {
   submitTextareaOnEnter,
 } from "../../components/ModeStart";
 import { CodeSessionRail } from "./CodeSessionRail";
+import { ProjectChooser } from "./ProjectChooser";
 import { ProjectFileTree, ProjectFileViewer } from "./ProjectFileTree";
 import { CodeTurn } from "./CodeTurn";
 import type { OpenedFile } from "./FilePreview";
@@ -234,6 +236,9 @@ export function CodePage() {
   // 哪个项目文件正被查看。只在这一层保存：它是「我在看哪个文件」，属于这次浏览，
   // 不属于会话——换个会话再回来，从头开始看是对的。
   const [openProjectFile, setOpenProjectFile] = useState<string | null>(null);
+  // 起始屏选中的项目（ADR-074）。只在「还没有会话」时用得上——会话一旦存在，
+  // 归属就在会话行上，读它比读这个 state 可靠：刷新页面之后 state 没了，行还在。
+  const [startingIn, setStartingIn] = useState<ProjectView | null>(null);
   // 归属改完要把会话列表标脏：那份列表带着 project_id，而项目页读的是同一个
   // 事实。不刷新的话，切回来看到的是改之前的答案。
   const assignProject = async (projectId: string | null) => {
@@ -506,6 +511,16 @@ export function CodePage() {
     try {
       if (target === undefined) {
         const created = await createCodeSession(identity);
+        // 立刻归到选中的项目下，而不是等一次单独的保存动作。ADR-074 §7.1 那条
+        // 不变量是「每个编码会话都属于一个有目录的项目」——中间存在一个还没归属
+        // 的瞬间，就等于这条不变量只是通常成立。
+        if (startingIn !== null) {
+          await setCodeSessionProject(
+            identity,
+            created.session_id,
+            startingIn.project_id,
+          );
+        }
         // A `const` beside the `let`, because the callback below closes over it
         // and a reassignable binding is `string | undefined` in there however
         // obviously it was just assigned.
@@ -600,7 +615,19 @@ export function CodePage() {
         ]);
       }
     }
-  }, [identity, instruction, navigate, queries, reload, running, sessionId]);
+    // `startingIn` 在依赖里，而不是被省掉：这个回调**读**它（新会话就是靠它归到
+    // 项目下的），漏掉依赖会让它捕获一个旧的 `null`——选完文件夹立刻发送，会话
+    // 就不会被归属，而 ADR-074 §7.1 那条不变量只是通常成立。lint 报的正是这个。
+  }, [
+    identity,
+    instruction,
+    navigate,
+    queries,
+    reload,
+    running,
+    sessionId,
+    startingIn,
+  ]);
 
   // What a run started from a preview changes out here. Only the listing: the
   // per-file bodies are react-query caches and `FilePreview` invalidates the
@@ -891,6 +918,18 @@ export function CodePage() {
   // same page with different middles, rather than two layouts a reader has to
   // re-learn. What is gone from the middle is the second copy of the list.
   if (sessionId === undefined) {
+    // 没选文件夹就没有起始屏。这是 Code 的门而不是一个可跳过的设置项：允许
+    // 「先开始、回头再选」会让「产物存哪了」重新有两个答案。
+    if (startingIn === null) {
+      return (
+        <div className="aw-code-page">
+          {rail}
+          <main className="aw-code-main is-start">
+            <ProjectChooser onChoose={setStartingIn} />
+          </main>
+        </div>
+      );
+    }
     return (
       <div className="aw-code-page">
         {rail}
@@ -909,7 +948,7 @@ export function CodePage() {
                     <PanelLeft aria-hidden size={18} />
                   </IconButton>
                 }
-                description="描述目标开始。会话建立后可添加文件，Agent 会修改并验证结果。"
+                description={`在 ${startingIn.root_path ?? startingIn.name} 里编码。Agent 读写的是这个文件夹里的真实文件。`}
                 title="开始编码"
               />
               {error === null ? null : <ErrorNotice message={error} />}

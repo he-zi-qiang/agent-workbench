@@ -7,9 +7,10 @@ models, and keeping them in one package is how the artifact store's "there is
 no way to offer a caller-chosen path" would eventually acquire one.
 """
 
+from agent_workbench.adapters.filesystem.browser import FilesystemDirectoryBrowser
 from agent_workbench.adapters.filesystem.sandbox import (
     ProjectSandbox,
     ProjectSandboxError,
 )
 
-__all__ = ["ProjectSandbox", "ProjectSandboxError"]
+__all__ = ["FilesystemDirectoryBrowser", "ProjectSandbox", "ProjectSandboxError"]

@@ -23,6 +23,7 @@ from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.project_files import ProjectPathError
 from agent_workbench.ports.project_files import (
+    DirectoryListing,
     ProjectEntryKind,
     ProjectFileContent,
     ProjectListing,
@@ -105,6 +106,20 @@ class ProjectFileContentResponse(BaseModel):
     modified_at: datetime
 
 
+class DirectoryEntryView(BaseModel):
+    name: str
+    path: str
+
+
+class DirectoryListingResponse(BaseModel):
+    path: str
+    #: Null at the filesystem root. Sent rather than derived so the client never
+    #: does path arithmetic of its own.
+    parent: str | None
+    entries: tuple[DirectoryEntryView, ...]
+    truncated: bool
+
+
 class WriteProjectFileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -155,6 +170,29 @@ async def list_projects(
         dependencies.principals.resolve(request), include_archived=include_archived
     )
     return ProjectListResponse(projects=tuple(_view(record) for record in records))
+
+
+# --- choosing which directory (ADR-074) -------------------------------------
+#
+# Above `/{project_id}` in the file deliberately: FastAPI matches in declaration
+# order, and `/v1/projects/directories` would otherwise be swallowed by
+# `/v1/projects/{project_id}` and arrive as a project id of "directories".
+
+
+@router.get("/directories", response_model=DirectoryListingResponse)
+async def browse_directories(
+    request: Request, path: str | None = None
+) -> DirectoryListingResponse:
+    dependencies = dependencies_of(request)
+    try:
+        listing = await dependencies.projects.browse_directories(
+            dependencies.principals.resolve(request), path=path
+        )
+    except ProjectPathError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+        ) from error
+    return _directory_view(listing)
 
 
 @router.get("/{project_id}", response_model=ProjectView)
@@ -424,6 +462,18 @@ def _view(record: ProjectRecord) -> ProjectView:
         updated_at=record.updated_at,
         archived_at=record.archived_at,
         root_path=record.root_path,
+    )
+
+
+def _directory_view(listing: DirectoryListing) -> DirectoryListingResponse:
+    return DirectoryListingResponse(
+        path=listing.path,
+        parent=listing.parent,
+        entries=tuple(
+            DirectoryEntryView(name=entry.name, path=entry.path)
+            for entry in listing.entries
+        ),
+        truncated=listing.truncated,
     )
 
 

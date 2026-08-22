@@ -654,6 +654,27 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 | F-17 | 工具进度的预览有损：单条 2 KB、整次 64 KB，到顶静默停止 | 已知代价 |
 | F-18 | computer use 的截图不排除未批准的窗口，且抓屏是遮盖不是合成器过滤 | **未实现** |
 | F-19 | computer use 的批准是进程级的，不是 MCP 会话级的 | 已知代价 |
+| F-20 | 跨产品归属的三处数据没人再读写（ADR-074 之后） | 已知代价 |
+
+### F-20 跨产品归属的三处数据没人再读写 —— 已知代价
+
+**证据**：[models.py](../src/agent_workbench/adapters/persistence/models.py) 里
+`conversation_sessions.project_id`、`task_runs.project_id` 与
+`project_knowledge_bases` 三处仍在；
+[routes/projects.py](../src/agent_workbench/apps/api/routes/projects.py) 的
+`PATCH /v1/chat/sessions/{id}/project` 与 `PATCH /v1/tasks/{id}/project` 仍在。
+但 [ADR-074](./adr/0074-a-project-is-where-code-happens.md) 之后没有任何界面读写
+它们——Chat 头部那个归属选择器已经下线，独立的项目页已删除。
+
+**为什么保留**：那些行里存着人做过的判断。ADR-071 §2.2 立下的规矩是「删掉标注不该
+删掉被标注的东西」，而一次产品形状的改变顺手删一列数据，是同一种破坏换了个名义。
+下线一个端点和删一列数据，也是同一种破坏的两种形式。
+
+**代价**：库里有一些没有任何界面在用的列，读 schema 的人会以为它们还在起作用。
+这就是它写在这里而不是假装不存在的原因。
+
+**做完了算什么样**：要么有一次明确的、单独确认过的数据迁移把它们清掉，要么有一个
+新的产品形状重新用起它们。两者都需要先写 ADR，不是顺手做掉的事。
 
 ### F-01 一轮不可恢复 —— 拒绝
 

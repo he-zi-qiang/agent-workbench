@@ -40,6 +40,8 @@ from agent_workbench.ports.knowledge_bases import (
 from agent_workbench.ports.model import ModelRequest
 from agent_workbench.ports.outbox import OutboxEvent
 from agent_workbench.ports.project_files import (
+    DirectoryEntry,
+    DirectoryListing,
     ProjectFileContent,
     ProjectFileEntry,
     ProjectListing,
@@ -87,6 +89,24 @@ STORED_TURN = StoredChatTurn(
 )
 
 SAMPLES: dict[str, VersionedModel] = {
+    # ADR-074. Absolute, and the only place in this API that is: the caller's
+    # next request *is* this path, so a picker returning relative names would
+    # push path arithmetic onto the client.
+    "DirectoryEntry": DirectoryEntry(
+        name="agent-workbench",
+        path="/Users/someone/agent-workbench",
+    ),
+    "DirectoryListing": DirectoryListing(
+        path="/Users/someone",
+        # Sent rather than derived, so the client never computes a parent path.
+        parent="/Users",
+        entries=(
+            DirectoryEntry(
+                name="agent-workbench", path="/Users/someone/agent-workbench"
+            ),
+        ),
+        truncated=False,
+    ),
     # ADR-072. A project-relative path, never absolute: the sample is where
     # "what shape does this field carry" is pinned, and an absolute one here
     # would make the machine's directory layout look like a normal payload.

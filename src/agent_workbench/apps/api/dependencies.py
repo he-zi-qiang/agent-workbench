@@ -34,6 +34,7 @@ from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.evaluation import SubprocessEvaluationLauncher
 from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
+from agent_workbench.adapters.filesystem.browser import FilesystemDirectoryBrowser
 from agent_workbench.adapters.filesystem.project_files import (
     FilesystemProjectFileStoreFactory,
 )
@@ -532,6 +533,7 @@ def build_dependencies(
     projects = ProjectService(
         PostgresProjectStore(engine),
         files=FilesystemProjectFileStoreFactory(runner=blocking),
+        directories=FilesystemDirectoryBrowser(runner=blocking),
     )
     artifacts = LocalArtifactStore(Path(config.artifacts.local_root), runner=blocking)
     conversations = PostgresConversationStore(engine)

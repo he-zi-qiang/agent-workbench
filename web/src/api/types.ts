@@ -57,6 +57,25 @@ export interface ProjectListResponse {
   projects: ProjectView[];
 }
 
+/** 一个可以被选中的目录（ADR-074）。 */
+export interface DirectoryEntryView {
+  name: string;
+  /**
+   * 绝对路径。这是整个 API 里唯一返回绝对路径的地方，而且必须是——下一次请求
+   * 用的就是这条路径，返回相对名字等于把路径拼接推给客户端，而那正是 ADR-072
+   * 要消除的东西。
+   */
+  path: string;
+}
+
+export interface DirectoryListingResponse {
+  path: string;
+  /** 到了文件系统根就是 `null`。由服务端给出，客户端不自己算上一级。 */
+  parent: string | null;
+  entries: DirectoryEntryView[];
+  truncated: boolean;
+}
+
 export type ProjectItemKind = "chat" | "code" | "task" | "knowledge_base";
 
 export interface ProjectItemView {

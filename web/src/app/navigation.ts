@@ -1,5 +1,4 @@
 import {
-  FolderOpen,
   Activity,
   Code2,
   FlaskConical,
@@ -65,19 +64,12 @@ export const NAVIGATION = [
     primary: true,
     covers: ["/code"],
   },
-  {
-    // 项目和三个产品是两个维度：产品回答「这是什么工具」，项目回答「这是为哪件
-    // 事做的」。所以它在工作空间里，和对话/任务/编码并列，而不是它们的上一层
-    // ——上一层意味着「先建项目才能提问」，而归属是可空的（ADR-071）。
-    to: "/projects",
-    label: "项目",
-    // 描述里不出现「对话」「任务」这两个词：快速跳转按描述也匹配，而这两个
-    // 词各自是另一个目的地的名字——写进来会让搜「任务」同时命中两项。
-    description: "同一件事做过的东西，收在一处",
-    icon: FolderOpen,
-    primary: true,
-    covers: ["/projects"],
-  },
+  // 这里曾经是「项目」。它被 ADR-074 收进了 Code：Project 不再是横跨对话/任务/
+  // 知识库的一层归属，而就是编码工作区——一个有名字的目录，在 Code 里创建和切换。
+  //
+  // 上面那条注释（「项目回答这是为哪件事做的」）当时是对的，而它没有兑现：那层
+  // 归属除了在两个下拉框里被设置，从未被任何界面用来把三样东西放到一起看。一个
+  // 只能被设置、不能被使用的维度，不是维度。
   {
     to: "/knowledge",
     label: "知识库",
@@ -132,9 +124,7 @@ export const QUICK_DESTINATIONS = [
           ? "work task 工作流 任务 时间线"
           : item.to === "/code"
             ? "coding 编码 文件 工作区"
-            : item.to === "/projects"
-              ? "project 项目 归属 分组"
-              : item.to === "/knowledge"
+            : item.to === "/knowledge"
                 ? "knowledge rag 文档 资料 上传"
                 : item.to === "/evaluation"
                   ? "eval benchmark 评测 报告"
