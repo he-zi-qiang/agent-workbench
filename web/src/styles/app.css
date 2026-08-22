@@ -149,7 +149,9 @@ a {
   border-radius: 11px;
   background: transparent;
   font-size: 10px;
-  transition: color var(--aw-transition), background var(--aw-transition);
+  transition:
+    color var(--aw-transition),
+    background var(--aw-transition);
 }
 
 .aw-rail-spacer {
@@ -478,7 +480,9 @@ a {
 }
 
 @keyframes aw-command-fade {
-  from { opacity: 0; }
+  from {
+    opacity: 0;
+  }
 }
 
 @keyframes aw-command-enter {
@@ -615,7 +619,9 @@ select {
   outline: none;
   background: var(--aw-panel);
   color: var(--aw-text);
-  transition: border-color var(--aw-transition), box-shadow var(--aw-transition);
+  transition:
+    border-color var(--aw-transition),
+    box-shadow var(--aw-transition);
 }
 
 textarea {
@@ -800,7 +806,7 @@ textarea::placeholder {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.aw-page-actions{
+.aw-page-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -872,7 +878,7 @@ textarea::placeholder {
   padding: 17px;
 }
 
-.aw-card-header{
+.aw-card-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -880,7 +886,7 @@ textarea::placeholder {
 }
 
 .aw-card-header h2,
-.aw-card-header h3{
+.aw-card-header h3 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
@@ -1006,7 +1012,7 @@ pre {
 }
 
 .aw-result-card > header,
-.aw-result-card > header > div{
+.aw-result-card > header > div {
   display: flex;
   min-width: 0;
 }
@@ -1016,11 +1022,11 @@ pre {
   gap: 8px;
 }
 
-.aw-result-card > header > div{
+.aw-result-card > header > div {
   flex-direction: column;
 }
 
-.aw-result-card header span{
+.aw-result-card header span {
   color: var(--aw-text-muted);
   font-size: 11px;
 }
@@ -1271,13 +1277,15 @@ pre {
   font-size: 10px;
 }
 
+/* 32 而不是 38：它和发送键在输入卡底部是同一行，此前一个 38 一个 32，
+   两个控件在同一条基线上高矮不齐。控件高度全站收到 28 / 32 / 36 三档。 */
 .aw-attachment-button {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   border: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   background: transparent;
   color: var(--aw-text-muted);
 }
@@ -1285,8 +1293,8 @@ pre {
 .aw-attachment-control {
   position: relative;
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   place-items: center;
 }
@@ -1373,22 +1381,18 @@ pre {
   color: var(--aw-text);
 }
 
-.aw-chat-composer-row {
-  grid-template-columns: 42px minmax(0, 1fr) 42px;
-}
-
 .aw-chat-composer-tools {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   min-width: 0;
-  margin: 4px 3px 0;
-  gap: 10px;
+  margin: 0;
+  padding: 4px;
+  gap: 8px;
 }
 
 .aw-chat-composer-tools > span {
   color: var(--aw-text-muted);
-  font-size: 10px;
+  font-size: 12px;
   text-align: right;
 }
 
@@ -1600,7 +1604,7 @@ pre {
 }
 
 .aw-knowledge-debug > summary,
-.aw-work-advanced > summary{
+.aw-work-advanced > summary {
   display: flex;
   /* 24px 是 WCAG 2.2 AA 的目标地板，而这个展开控件实测只有 18px 高——
      字号小不等于可点区域也要小。 */
@@ -1639,7 +1643,6 @@ pre {
 }
 
 @media (max-width: 900px) {
-
   .aw-knowledge-list {
     display: flex;
     overflow-x: auto;
@@ -1653,14 +1656,6 @@ pre {
 }
 
 @media (max-width: 760px) {
-  .aw-chat-composer-row {
-    grid-template-columns: 42px minmax(0, 1fr) 44px;
-  }
-
-  .aw-chat-composer-tools {
-    display: grid;
-  }
-
   .aw-chat-composer-tools > span {
     text-align: left;
   }
@@ -1777,7 +1772,10 @@ pre {
   color: var(--aw-text-muted);
   opacity: 0;
   cursor: pointer;
-  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease,
+    background 120ms ease;
 }
 
 .aw-chat-session-row:hover .aw-chat-session-delete,
@@ -1986,44 +1984,17 @@ pre {
   white-space: pre-wrap;
 }
 
+/* 左边不再留 34px 的头像槽：那一列是给「(A) Agent」那行用的，而那行已经
+   不存在了。回答现在从阅读栏的左边缘开始，和输入框、以及回答下面的操作按钮
+   落在同一条竖线上。 */
 .aw-chat-assistant-message {
   min-width: 0;
-  padding-left: 34px;
-}
-
-.aw-chat-assistant-message > header {
-  position: relative;
-  display: flex;
-  min-height: 24px;
-  align-items: center;
-  margin-left: -34px;
-  gap: 7px;
-}
-
-.aw-chat-assistant-message > header strong {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.aw-chat-assistant-message > header small {
-  color: var(--aw-text-muted);
-  font-size: 10px;
-}
-
-.aw-chat-assistant-mark {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  font-size: 11px;
-  font-weight: 600;
 }
 
 .aw-chat-assistant-message > .aw-markdown {
-  margin-top: 10px;
-  font-size: 14px;
-  line-height: 1.7;
+  margin-top: 0;
+  font-size: 15.5px;
+  line-height: 1.8;
 }
 
 .aw-chat-assistant-message > .aw-loading-line,
@@ -2191,40 +2162,46 @@ pre {
   padding: 8px 0 13px;
 }
 
-.aw-chat-composer-row {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) 42px;
-  align-items: end;
-  padding: 5px;
-  gap: 5px;
-  border: 1px solid var(--aw-border-strong);
-  border-radius: 14px;
+.aw-chat-composer-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--aw-border);
+  border-radius: 16px;
   background: var(--aw-panel);
 }
 
-.aw-chat-composer-row:focus-within {
+.aw-chat-composer-card:focus-within {
   border-color: color-mix(in srgb, var(--aw-accent) 55%, var(--aw-border));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--aw-accent) 10%, transparent);
 }
 
-.aw-chat-composer-row textarea,
-.aw-chat-composer-row input {
+.aw-chat-composer-card textarea,
+.aw-chat-composer-card input {
   border: 0;
   background: transparent;
   box-shadow: none;
 }
 
-.aw-chat-composer-row textarea {
-  min-height: 40px;
-  max-height: 150px;
+.aw-chat-composer-card textarea {
+  min-height: 52px;
+  max-height: 168px;
+  /* 11 = 16 − 1(卡片描边) − 4(卡片内边距)：正文、输入框文字、底部工具行的
+     图标，三条左缘都落在阅读栏的 +16 上。 */
+  padding: 10px 11px 6px;
   resize: none;
 }
 
 .aw-chat-send {
-  width: 38px;
-  min-height: 38px;
+  width: 32px;
+  min-height: 32px;
   padding: 0;
-  border-radius: 10px;
+  border-radius: 50%;
+}
+
+.aw-chat-composer-spacer {
+  flex: 1;
 }
 
 .aw-chat-composer > p {
@@ -2236,7 +2213,14 @@ pre {
 
 /* Work ------------------------------------------------------------------- */
 
+/* `position: relative` 是给右侧那块预览抽屉的定位锚。没有它，抽屉的包含块
+   会落到 `.aw-app-content`——今天那恰好是同一个盒子，于是它看起来是对的，
+   而对的理由是错的：那个巧合会在壳层下一次改布局时无声地断掉。
+   锚在这一层而不是 `.aw-work-detail`：后者有 container-type: inline-size，
+   那等于 layout containment，会把 position: fixed 也一起锚过去——窄屏那份
+   fixed 抽屉会因此贴到一个会滚动的盒子上。 */
 .aw-work-page {
+  position: relative;
   display: grid;
   grid-template-columns: 310px minmax(0, 1fr);
   height: 100%;
@@ -2272,7 +2256,7 @@ pre {
   border-bottom: 1px solid var(--aw-border);
 }
 
-.aw-create-task h2{
+.aw-create-task h2 {
   display: flex;
   align-items: center;
   margin: 0 0 5px;
@@ -2281,7 +2265,7 @@ pre {
   font-weight: 600;
 }
 
-.aw-create-task label{
+.aw-create-task label {
   color: var(--aw-text-muted);
   font-size: 10px;
   font-weight: 550;
@@ -2809,7 +2793,6 @@ pre {
      the first two screens. */
   :root {
     --aw-preview-height: min(60vh, 520px);
-    --aw-preview-height-inline: min(46vh, 420px);
   }
 }
 
@@ -3172,7 +3155,9 @@ pre {
   background: none;
   cursor: pointer;
   text-align: left;
-  transition: background var(--aw-transition), border-color var(--aw-transition);
+  transition:
+    background var(--aw-transition),
+    border-color var(--aw-transition);
 }
 
 .aw-artifacts button:hover {
@@ -3623,21 +3608,9 @@ pre {
     padding: 17px 12px 10px;
   }
 
-  .aw-chat-assistant-message {
-    padding-left: 31px;
-  }
-
-  .aw-chat-assistant-message > header {
-    margin-left: -31px;
-  }
-
   .aw-chat-composer {
     width: calc(100% - 16px);
     padding-bottom: 8px;
-  }
-
-  .aw-chat-composer-row {
-    grid-template-columns: 42px minmax(0, 1fr) 44px;
   }
 
   .aw-work-sidebar {
@@ -4339,49 +4312,6 @@ pre {
   white-space: nowrap;
 }
 
-.aw-code-output-inline > summary {
-  padding: 6px 12px;
-  border-top: 1px solid var(--aw-border);
-  color: var(--aw-text-soft);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.aw-code-output-inline > summary:hover {
-  background: var(--aw-panel-soft);
-}
-
-/* 封顶，因为它在对话流里：一个整屏高的 iframe 会把它下面的报告推出视野，而
- * 报告才是这一轮的结论。要看大的就点开右边那一列。 */
-.aw-code-output-inline-body {
-  max-height: 360px;
-  padding: 10px 12px;
-  overflow: auto;
-  border-top: 1px solid var(--aw-border);
-}
-
-/* 预览组件自己的高度是按"独占一列"定的。在对话里它是一张卡片的一部分，用那个
- * 高度的结果是：容器滚动条把画面从中间切断——实测一个 18vw 字号的时钟，看到的
- * 是数字的上半截。所以这里矮一档。组件不知道自己被放在哪里，所以这条语境覆盖
- * 只能写在这边。
- *
- * 矮一档不等于矮到没用。这里曾经是 min(30vh, 260px)，而 260px 装不下任何一个
- * 整页产物：贪吃蛇的画布是 min(92vw, 480px)，480 的正方形进 258 的框，看到的
- * 是压扁的一条加两侧黑边。现在读 token，和右栏那份共一个来源。 */
-.aw-code-output-inline-body .aw-preview-frame {
-  height: var(--aw-preview-height-inline);
-}
-
-.aw-code-output-inline-body .aw-preview-image {
-  max-height: var(--aw-preview-height-inline);
-}
-
-/* 沙箱说明在卡片里要更轻：它在右栏是一段独立的注意事项，在这里是一行脚注。 */
-.aw-code-output-inline-body .aw-page-note {
-  margin-bottom: 0;
-  font-size: 11px;
-}
-
 /* --- 一轮的时间线 --- */
 
 /* 一步一行，推理在它促成的动作正上方。这不是折叠块：转录的默认状态是「看得见」，
@@ -4556,7 +4486,7 @@ p.aw-code-step-thought {
 
 /* --- 右：预览 --- */
 
-.aw-code-preview {
+.aw-drawer {
   position: absolute;
   z-index: 5;
   inset: 0 0 0 auto;
@@ -4581,12 +4511,12 @@ p.aw-code-step-thought {
 /* 动效只是让「它是滑出来的」这件事看得出来；关掉动效的人不需要为此损失任何
    信息，所以直接取消。 */
 @media (prefers-reduced-motion: reduce) {
-  .aw-code-preview {
+  .aw-drawer {
     animation: none;
   }
 }
 
-.aw-code-preview-header {
+.aw-drawer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4595,20 +4525,20 @@ p.aw-code-step-thought {
   border-bottom: 1px solid var(--aw-border);
 }
 
-.aw-code-preview-header h2 {
+.aw-drawer-header h2 {
   overflow: hidden;
   margin: 0;
   font-size: 13px;
   overflow-wrap: anywhere;
 }
 
-.aw-code-preview-actions {
+.aw-drawer-actions {
   display: flex;
   flex: none;
   gap: 6px;
 }
 
-.aw-code-file-view {
+.aw-drawer-body {
   display: flex;
   min-height: 0;
   flex: 1;
@@ -4619,7 +4549,7 @@ p.aw-code-step-thought {
 
 /* 文件正文，两处共用：右栏的预览面，和对话里卡片的就地预览。
  *
- * 以前这条规则写成 `.aw-code-file-view pre`，也就是只在面板语境里生效。文本
+ * 以前这条规则写成 `.aw-drawer-body pre`，也就是只在面板语境里生效。文本
  * 预览搬进卡片之后，同一个 <pre> 在对话里就是**没有任何样式**的——默认等宽、
  * 不换行，右边被容器直接裁掉，一行 docstring 看不到结尾。选择器跟着元素走，
  * 而不是跟着它当时碰巧待的那个盒子走。
@@ -4642,11 +4572,6 @@ p.aw-code-step-thought {
 
 /* 卡片里的那份少一层内边距和底色：它已经坐在一张卡片上，再套一个面板色会变成
  * 盒中盒。 */
-.aw-code-output-inline-body .aw-code-file-body {
-  padding: 0;
-  background: transparent;
-}
-
 /* 跑一遍这个 .py（ADR-065）。「再运行一次」不在分段控件的两格之内：那两格是
  * 「看哪一半」，这个是「做一件事」，混在一起会让切回源码看起来也会启动容器。 */
 .aw-code-run-again {
@@ -4712,7 +4637,8 @@ p.aw-code-step-thought {
 /* stderr 只描边不变色：它常常装着 traceback，也常常只是一行 warning，把整块
  * 涂红会让后者读起来像出事了。 */
 .aw-code-file-body.is-stderr {
-  border-left: 2px solid color-mix(in srgb, var(--aw-danger) 55%, var(--aw-border));
+  border-left: 2px solid
+    color-mix(in srgb, var(--aw-danger) 55%, var(--aw-border));
 }
 
 /* 全量目录。标题写全量口径而不是「其他文件」：卡片覆盖不到四类文件——上传进来
@@ -4863,14 +4789,14 @@ p.aw-code-step-thought {
 /* ≤900px：抽屉本身已经是默认形态，这里只补窄屏独有的两件事——躲开 60px 高的
    .aw-mobile-nav，以及在小屏上占得更宽一点。 */
 @media (width <= 900px) {
-  .aw-code-preview {
+  .aw-drawer {
     position: fixed;
     z-index: 72;
     inset: 0 0 60px auto;
     width: min(560px, 94vw);
   }
 
-  .aw-code-preview-backdrop {
+  .aw-drawer-backdrop {
     position: fixed;
     z-index: 71;
     inset: 0 0 60px;
@@ -4913,13 +4839,13 @@ p.aw-code-step-thought {
 
 /* 会话抽屉控件只在窄屏出现。 */
 .aw-code-sessions-close,
-.aw-code-mobile-sessions{
+.aw-code-mobile-sessions {
   display: none;
 }
 
 /* 点空白处关掉抽屉。始终渲染，不再只在窄屏出现——抽屉现在每个宽度上都是抽屉，
    而一个盖住内容的浮层必须有一个不用找按钮的退出方式。 */
-.aw-code-preview-backdrop {
+.aw-drawer-backdrop {
   position: absolute;
   z-index: 4;
   inset: 0;
@@ -5076,7 +5002,8 @@ p.aw-code-step-thought {
 .aw-chat-citation-passage {
   margin: 0;
   padding: 10px 12px;
-  border-left: 2px solid color-mix(in srgb, var(--aw-evidence) 45%, var(--aw-panel));
+  border-left: 2px solid
+    color-mix(in srgb, var(--aw-evidence) 45%, var(--aw-panel));
   border-radius: 0 var(--aw-radius-sm) var(--aw-radius-sm) 0;
   background: var(--aw-evidence-quote);
   /* 正文色，不是青色调过的正文色。稿子上这里是一支冷下来的深绿灰，但这套 token
@@ -5759,7 +5686,9 @@ p.aw-code-step-thought {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background var(--aw-transition), border-color var(--aw-transition);
+  transition:
+    background var(--aw-transition),
+    border-color var(--aw-transition);
 }
 
 .aw-new-session:hover {

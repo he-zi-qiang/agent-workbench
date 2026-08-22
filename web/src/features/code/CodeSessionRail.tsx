@@ -22,12 +22,13 @@
 
 import { Pencil, Trash2, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
+import { WorkspaceSidebarActions } from "../../app/WorkspaceSidebar";
 import type { CodeSessionView } from "../../api/types";
 import {
   ErrorNotice,
   formatDateTime,
   IconButton,
-  NewSessionButton,
+  NewSessionAction,
   shortId,
 } from "../../components/ui";
 
@@ -138,23 +139,20 @@ export function CodeSessionRail({
       aria-label="最近的编码会话"
       className={`aw-code-sessions ${mobileOpen ? "is-mobile-open" : ""}`}
     >
-      <header className="aw-code-sessions-header">
-        <strong>最近编码</strong>
-        <div className="aw-code-sessions-actions">
-          <IconButton
-            className="aw-code-sessions-close"
-            label="关闭会话列表"
-            onClick={onCloseMobile}
-          >
-            <X aria-hidden size={17} />
-          </IconButton>
-        </div>
-      </header>
-      {/* Goes to the start page rather than POSTing an empty session: the
-          first sentence is what names a session (ADR-047), and one created
-          by a bare click sits unnamed in this list forever. */}
-      <NewSessionButton label="新建会话" onClick={onNew} />
+      <IconButton
+        className="aw-code-sessions-close"
+        label="关闭会话列表"
+        onClick={onCloseMobile}
+      >
+        <X aria-hidden size={17} />
+      </IconButton>
 
+      <WorkspaceSidebarActions>
+        {/* Goes to the start page rather than POSTing an empty session:
+            the first sentence is what names a session (ADR-047), and one
+            created by a bare click sits unnamed in this list forever. */}
+        <NewSessionAction label="新建会话" onClick={onNew} />
+      </WorkspaceSidebarActions>
       <div className="aw-code-session-list">
         {known.length === 0 ? (
           <p className="aw-code-sessions-empty">
@@ -172,7 +170,9 @@ export function CodeSessionRail({
                       onSubmit={(event) => {
                         event.preventDefault();
                         if (renamePending === held.session_id) return;
-                        const field = new FormData(event.currentTarget).get("title");
+                        const field = new FormData(event.currentTarget).get(
+                          "title",
+                        );
                         // A FormData entry is a string *or a File*, and
                         // `String(File)` is "[object File]" -- a name nobody typed.
                         void commitRename(
@@ -194,7 +194,8 @@ export function CodeSessionRail({
                             : undefined
                         }
                         aria-invalid={
-                          renameError?.sessionId === held.session_id || undefined
+                          renameError?.sessionId === held.session_id ||
+                          undefined
                         }
                         autoFocus
                         defaultValue={held.title ?? ""}

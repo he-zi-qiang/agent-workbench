@@ -54,10 +54,10 @@ export function PreviewPanel({
   viewing: OpenedFile | null;
 }) {
   return (
-    <aside aria-label="预览" className="aw-code-preview">
-      <header className="aw-code-preview-header">
+    <aside aria-label="预览" className="aw-drawer">
+      <header className="aw-drawer-header">
         <h2>{viewing?.name ?? "工作区"}</h2>
-        <div className="aw-code-preview-actions">
+        <div className="aw-drawer-actions">
           {viewing === null ? null : (
             <button className="aw-button" onClick={onDownload} type="button">
               下载
@@ -72,7 +72,7 @@ export function PreviewPanel({
       {viewing === null ? null : (
         <section
           aria-label={`文件 ${viewing.name}`}
-          className="aw-code-file-view"
+          className="aw-drawer-body"
         >
           <FilePreview
             files={files}
@@ -117,7 +117,9 @@ export function PreviewPanel({
             {files.map((file) => (
               <li key={file.name}>
                 <button
-                  aria-current={file.name === viewing?.name ? "true" : undefined}
+                  aria-current={
+                    file.name === viewing?.name ? "true" : undefined
+                  }
                   className="aw-code-file-open"
                   onClick={() => {
                     onOpen(file);

@@ -19,10 +19,18 @@ body {
   padding: 0;
 }
 
+/* 正文区从贴边的一整片改成嵌在窗框里的一块面：8px 的窗框留出来，圆角 12px。
+   这一步是「会话栏与正文区是两块面」在色阶之外的另一半——色阶给了 5.2 L* 的
+   台阶，这里给它一个真实的边界形状。
+   投影只在浅色一侧有（--aw-shadow-pane 深色是 none）：浅色下这块面是最白的
+   一档、四周更暗，读作纸浮在桌上；深色下它是最深的一档、四周更亮，读作一口
+   井，而给凹陷的东西打投影是自相矛盾的。 */
 .aw-app-content {
+  overflow: hidden;
   border: 0;
-  border-radius: 0;
-  box-shadow: none;
+  margin: 8px;
+  border-radius: 12px;
+  box-shadow: var(--aw-shadow-pane);
 }
 
 .aw-global-rail {
@@ -52,38 +60,36 @@ body {
 /* Controls -------------------------------------------------------------- */
 
 .aw-button,
-.aw-icon-button{
+.aw-icon-button {
   box-shadow: none;
 }
 
 .aw-button,
-.aw-icon-button{
+.aw-icon-button {
   border-color: transparent;
   background: transparent;
 }
 
 .aw-button:hover:not(:disabled),
-.aw-icon-button:hover:not(:disabled){
+.aw-icon-button:hover:not(:disabled) {
   border-color: transparent;
   background: var(--aw-panel-soft);
 }
 
-.aw-button.is-primary{
-  border-color: var(--aw-text);
-  background: var(--aw-text);
-  color: var(--aw-window);
+/* 主按钮填强调色，不再是「把正文色涂成一个块」。
+   此前这一层把 app.css 的强调色覆盖成 --aw-text：浅色下是近黑、深色下是近白，
+   于是整个界面里唯一的品牌色只剩 Logo 那个方块，主动作和普通文字同色。
+   之所以此前不能填，是因为浅色强调色配任何前景都过不了 4.5:1（白字 4.39、
+   近黑 3.88）。tokens.css 里把它压暗到 #b75d42 之后白字是 4.51:1，这条路
+   才通——所以这不是口味，是那次调色解锁的东西。
+   深色一侧 #1d1411 落在 #d98265 上是 6.32:1。 */
+.aw-button.is-primary {
   box-shadow: none;
-}
-
-.aw-button.is-primary:hover:not(:disabled){
-  border-color: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
-  background: color-mix(in srgb, var(--aw-text) 88%, var(--aw-window));
-  color: var(--aw-window);
 }
 
 .aw-button.is-primary:focus-visible,
 .aw-chat-send:focus-visible {
-  outline-color: var(--aw-window);
+  outline-color: var(--aw-accent-on);
   outline-offset: -4px;
 }
 
@@ -109,13 +115,15 @@ select {
 }
 .aw-chat-sessions-header,
 .aw-code-sessions-header,
-.aw-code-preview-header,
+.aw-drawer-header,
 .aw-pane-header,
 .aw-chat-header,
 .aw-code-header,
 .aw-work-detail-header {
   border-bottom-color: var(--aw-border-subtle);
-  background: color-mix(in srgb, var(--aw-window) 97%, transparent);
+  background: var(--aw-glass);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
   box-shadow: none;
 }
 
@@ -124,7 +132,7 @@ select {
 .aw-pane-header,
 .aw-chat-header,
 .aw-code-header {
-  min-height: 54px;
+  min-height: 48px;
   padding-top: 8px;
   padding-bottom: 8px;
 }
@@ -141,14 +149,22 @@ select {
 .aw-knowledge-row {
   border: 0;
 }
+/* 覆盖层而不是固定色值：这几行落在侧栏上，而侧栏的底色在深浅两个主题里
+   方向相反。--aw-veil 两边都是「离开底色」，同一条规则两个主题都成立。
+   悬停与选中此前共用 --aw-panel-strong——两个状态同色，等于只有一个状态。 */
 .aw-chat-session:hover,
-.aw-chat-session.is-active,
 .aw-task-list-item:hover,
+.aw-knowledge-row:hover {
+  border: 0;
+  background: var(--aw-veil);
+  box-shadow: none;
+}
+
+.aw-chat-session.is-active,
 .aw-task-list-item.is-active,
-.aw-knowledge-row:hover,
 .aw-knowledge-row.is-active {
   border: 0;
-  background: var(--aw-panel-strong);
+  background: var(--aw-veil-strong);
   box-shadow: none;
 }
 .aw-chat-session.is-active,
@@ -184,7 +200,7 @@ select {
   line-height: 1.65;
 }
 
-.aw-eyebrow{
+.aw-eyebrow {
   color: var(--aw-accent);
 }
 
@@ -326,7 +342,7 @@ select {
 
 .aw-chat-sessions-close,
 .aw-projects-close,
-.aw-chat-mobile-sessions{
+.aw-chat-mobile-sessions {
   display: none;
 }
 
@@ -335,23 +351,74 @@ select {
   gap: 2px;
 }
 
+/* 单行，不是两行。此前每行 55px（标题一行、时间另起一行），八条就吃掉
+   440px——侧栏剩不下高度给它下面的导航，于是列表被压扁再裁掉，而且没有滚动条。
+   时间移到行尾，静止时隐去：它是「这条是哪一天的」，不是每一行都要读的东西。 */
 .aw-chat-session {
-  padding: 9px 10px;
+  padding: 0 10px;
+  min-height: 32px;
   border-radius: 8px;
+}
+
+.aw-chat-session-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.aw-chat-session-copy strong {
+  min-width: 0;
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 400;
+}
+
+.aw-chat-session-copy small {
+  flex: none;
+  opacity: 0;
+  font-size: 12px;
+  transition: opacity var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-chat-session:hover .aw-chat-session-copy small,
+.aw-chat-session.is-active .aw-chat-session-copy small {
+  opacity: 1;
+}
+
+.aw-chat-session.is-active .aw-chat-session-copy strong {
+  font-weight: 500;
 }
 
 .aw-chat-main {
   background: var(--aw-window);
 }
 
+/* 内容从标题栏底下溶出去，而不是被切一刀。
+   此前这条是 97% 不透明——那个值高到读不出是半透明的，滚上来的文字在它的下
+   边缘硬断。配一道 24px 的渐隐才是「溶进去」，也才用得上上面那层毛玻璃。 */
 .aw-chat-header {
-  min-height: 54px;
+  position: relative;
+  min-height: 48px;
+  border-bottom: 0;
   padding-right: clamp(18px, 4vw, 42px);
   padding-left: clamp(18px, 4vw, 42px);
 }
 
+.aw-chat-header::after {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: 24px;
+  background: linear-gradient(to bottom, var(--aw-glass), transparent);
+  content: "";
+  pointer-events: none;
+}
+
 .aw-chat-header h1 {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
@@ -369,8 +436,12 @@ select {
   padding-top: clamp(28px, 6vh, 64px);
 }
 
+/* 阅读栏和输入卡同宽同轴：此前是 760 对 720，两者居中后差 20px，
+   正文的左缘和输入框的左缘对不上——一屏之内有两条竖线，眼睛会一直在找哪条
+   才是真的。 */
 .aw-chat-turn-list {
-  width: min(760px, 100%);
+  width: min(720px, calc(100% - 32px));
+  padding: 0 16px;
 }
 
 .aw-chat-turn {
@@ -379,22 +450,28 @@ select {
 
 .aw-chat-user-message p {
   padding: 11px 15px;
-  border: 0;
-  border-radius: 18px 18px 5px 18px;
-  background: var(--aw-panel-strong);
-}
-
-.aw-chat-assistant-mark {
   border: 1px solid var(--aw-border-subtle);
-  border-radius: 50%;
-  background: var(--aw-panel-strong);
-  color: var(--aw-text-soft);
+  border-radius: 16px 16px 5px 16px;
+  background: var(--aw-panel);
+  font-size: 15.5px;
+  line-height: 1.7;
 }
 
+/* 「历史消息」现在是这条回答上唯一可能出现的标记，所以它可以安静：
+   没有头像和「Agent」两个常量陪着，它出现即有意义。 */
+.aw-chat-turn-tag {
+  margin: 0 0 10px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+/* 回答是一份要读的文档，按中文长文给行距：方块字撑满 em 框，没有 x-height
+   留出的喘息，1.6 在这个字号上是挤的。tokens.css 的交接稿原话就是
+   「正文 14.5–15px / 1.75」——这一条此前没有落到回答上。 */
 .aw-chat-assistant-message > .aw-markdown {
-  margin-top: 9px;
-  font-size: 14.5px;
-  line-height: 1.78;
+  margin-top: 0;
+  font-size: 15.5px;
+  line-height: 1.8;
 }
 
 /* 引用从芯片变成证据行之后，这一层不再给它画药丸底：一行三段（文档 / 版本 /
@@ -408,27 +485,16 @@ select {
   padding-bottom: 16px;
 }
 
-.aw-chat-composer-row {
-  padding: 6px;
-  border: 1px solid var(--aw-border);
-  border-radius: 12px;
-  box-shadow: var(--aw-shadow-sm);
+.aw-chat-composer-card {
+  border-color: var(--aw-border);
+  box-shadow: var(--aw-shadow-float);
 }
 
-.aw-chat-composer-row:focus-within {
+.aw-chat-composer-card:focus-within {
   border-color: color-mix(in srgb, var(--aw-accent) 48%, var(--aw-border));
   box-shadow:
     0 0 0 2px color-mix(in srgb, var(--aw-accent) 7%, transparent),
-    var(--aw-shadow-sm);
-}
-
-.aw-chat-send {
-  border-radius: 50%;
-}
-
-.aw-chat-composer-tools {
-  margin-top: 7px;
-  padding: 0 7px;
+    var(--aw-shadow-float);
 }
 
 .aw-chat-composer > p {
@@ -523,7 +589,7 @@ select {
  * its place, and the one surface that should read as paper.
  */
 
-.aw-code-preview {
+.aw-drawer {
   border-left-color: var(--aw-border);
 }
 
@@ -534,7 +600,7 @@ select {
   padding-left: clamp(20px, 5vw, 72px);
 }
 
-.aw-code-file-view {
+.aw-drawer-body {
   border-color: var(--aw-border);
   background: var(--aw-panel);
 }
@@ -561,11 +627,6 @@ select {
 .aw-code-output {
   border-color: var(--aw-border);
   background: var(--aw-panel-soft);
-}
-
-.aw-code-output-inline-body,
-.aw-code-output-inline > summary {
-  border-top-color: var(--aw-border);
 }
 
 /* The composer is the same control Chat's is, and on this theme Chat's has no
@@ -658,7 +719,6 @@ select {
 }
 
 @media (max-width: 900px) {
-
   .aw-knowledge-list {
     display: flex;
     overflow-x: auto;
@@ -838,20 +898,20 @@ select {
     var(--aw-shadow-md);
 }
 
-/* 输入条要写三遍：静止、聚焦、以及聚焦时的低动效版本，因为
-   `.aw-chat-composer-row:focus-within` 的特异性高于类选择器，只写静止那条会在
-   聚焦时把高光整条丢掉——而聚焦恰好是这块面最该看得出厚度的时候。 */
-.aw-chat-composer-row {
+/* 输入卡要写两遍：静止与聚焦，因为 `:focus-within` 的特异性高于类选择器，
+   只写静止那条会在聚焦时把顶部高光整条丢掉——而聚焦恰好是这块面最该看得出
+   厚度的时候。 */
+.aw-chat-composer-card {
   box-shadow:
     inset 0 1px 0 var(--aw-raise),
-    var(--aw-shadow-sm);
+    var(--aw-shadow-float);
 }
 
-.aw-chat-composer-row:focus-within {
+.aw-chat-composer-card:focus-within {
   box-shadow:
     inset 0 1px 0 var(--aw-raise),
     0 0 0 2px color-mix(in srgb, var(--aw-accent) 7%, transparent),
-    var(--aw-shadow-sm);
+    var(--aw-shadow-float);
 }
 
 /* 选中文字的底色在深色下要重新给：--aw-accent-soft 在深色是 #2e1f18，
@@ -1099,11 +1159,8 @@ select {
   justify-content: center;
 }
 
-.aw-app-shell.is-rail-collapsed :is(
-  .aw-logo-copy,
-  .aw-global-link-copy,
-  .aw-rail-identity-copy
-) {
+.aw-app-shell.is-rail-collapsed
+  :is(.aw-logo-copy, .aw-global-link-copy, .aw-rail-identity-copy) {
   display: none;
 }
 
@@ -1234,39 +1291,42 @@ select {
   letter-spacing: -0.025em;
 }
 
+/* 起点是三颗药丸，不是三行带下划线的链接。
+   此前它们是一列 42px 高、靠 border-bottom 分隔的满宽行——那个形状读作
+   「一个列表」，而它们其实是三个并列的、可以不选的建议。药丸把「并列」和
+   「可选」都说清楚了，也让空态的标题、输入卡、建议三段收成一个居中的块。 */
 .aw-chat-starters {
-  display: grid;
-  width: min(520px, 100%);
-  grid-template-columns: 1fr;
-  gap: 0;
-  border-top: 1px solid var(--aw-border-subtle);
+  display: flex;
+  width: min(720px, 100%);
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  border-top: 0;
 }
 
 .aw-chat-starters > button {
-  display: flex;
+  display: inline-flex;
   min-width: 0;
-  min-height: 42px;
+  min-height: 36px;
   align-items: center;
-  padding: 9px 4px;
-  border: 0;
-  border-bottom: 1px solid var(--aw-border-subtle);
-  border-radius: 0;
+  padding: 0 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
   background: transparent;
   color: var(--aw-text-soft);
   text-align: left;
   transition:
     color var(--aw-duration-fast) var(--aw-ease),
-    padding var(--aw-duration-fast) var(--aw-ease);
+    background var(--aw-duration-fast) var(--aw-ease);
 }
 
 .aw-chat-starters > button:hover {
-  padding-left: 8px;
-  background: transparent;
+  background: var(--aw-veil);
   color: var(--aw-text);
 }
 
 .aw-chat-starters strong {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 500;
 }
 
@@ -1295,6 +1355,56 @@ select {
   display: grid;
   margin-bottom: 4px;
   gap: 5px;
+}
+
+/* 提交这件事收成一张卡：输入框在上，底部一行放附件、知识库与主按钮。
+   和对话页的 .aw-chat-composer-card 是同一个形状——两个页面各自发明一种
+   「输入」的样子，是这套界面此前最容易被一眼看出不统一的地方。 */
+.aw-create-task-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--aw-border);
+  border-radius: 16px;
+  background: var(--aw-panel);
+  box-shadow:
+    inset 0 1px 0 var(--aw-raise),
+    var(--aw-shadow-float);
+}
+
+.aw-create-task-card:focus-within {
+  border-color: color-mix(in srgb, var(--aw-accent) 48%, var(--aw-border));
+  box-shadow:
+    inset 0 1px 0 var(--aw-raise),
+    0 0 0 2px color-mix(in srgb, var(--aw-accent) 7%, transparent),
+    var(--aw-shadow-float);
+}
+
+.aw-create-task-bar {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 4px;
+  gap: 8px;
+}
+
+/* 窄屏上这一行会换行，但按钮本身不该断成两行——「创建任务」竖着劈成
+   「创建 / 任务」比让它独占一行难看得多。 */
+.aw-create-task-bar > .aw-button.is-primary {
+  white-space: nowrap;
+}
+
+.aw-create-task-spacer {
+  flex: 1;
+}
+
+.aw-create-task-hint {
+  margin: 12px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .aw-create-task-head h2,
@@ -1387,36 +1497,38 @@ select {
   color: var(--aw-text-muted);
 }
 
+/* 和对话页的起点同一个形状：三颗药丸，不是三行带下划线的链接。
+   两个页面对同一种东西各画一种样子，是这套界面最容易被一眼看出不统一的
+   那一类问题。 */
 .aw-code-starters {
-  display: grid;
-  width: min(520px, 100%);
+  display: flex;
+  width: min(720px, 100%);
+  flex-wrap: wrap;
+  justify-content: center;
   justify-self: center;
-  grid-template-columns: 1fr;
-  gap: 0;
-  border-top: 1px solid var(--aw-border-subtle);
+  gap: 8px;
+  border-top: 0;
 }
 
 .aw-code-starters > button {
-  display: flex;
+  display: inline-flex;
   min-width: 0;
-  min-height: 40px;
+  min-height: 36px;
   align-items: center;
-  padding: 8px 4px;
-  border: 0;
-  border-bottom: 1px solid var(--aw-border-subtle);
-  border-radius: 0;
+  padding: 0 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
   background: transparent;
   color: var(--aw-text-soft);
-  font-size: 13px;
+  font-size: 13.5px;
   text-align: left;
   transition:
     color var(--aw-duration-fast) var(--aw-ease),
-    padding var(--aw-duration-fast) var(--aw-ease);
+    background var(--aw-duration-fast) var(--aw-ease);
 }
 
 .aw-code-starters > button:hover {
-  padding-left: 8px;
-  background: transparent;
+  background: var(--aw-veil);
   color: var(--aw-text);
 }
 
@@ -1538,11 +1650,8 @@ select {
   justify-content: flex-start;
 }
 
-.aw-app-shell:not(.is-rail-collapsed) :is(
-  .aw-logo-copy,
-  .aw-global-link-copy,
-  .aw-rail-identity-copy
-) {
+.aw-app-shell:not(.is-rail-collapsed)
+  :is(.aw-logo-copy, .aw-global-link-copy, .aw-rail-identity-copy) {
   display: grid;
 }
 
@@ -1550,10 +1659,7 @@ select {
   display: grid;
 }
 
-.aw-app-shell:not(.is-rail-collapsed) :is(
-  .aw-global-link,
-  .aw-rail-identity
-) {
+.aw-app-shell:not(.is-rail-collapsed) :is(.aw-global-link, .aw-rail-identity) {
   width: 100%;
   justify-content: flex-start;
   padding-right: 8px;
@@ -1582,39 +1688,106 @@ select {
   flex: 1 1 auto;
 }
 
-.aw-sidebar-workspace > .aw-global-link {
+/* 收起之后这一栏不该还占着那段高度——收起的意义就是把它让出去。
+   折叠状态现在归壳层管（导航项那一行就是这一组的标题），所以是一个真的
+   class，不再需要 :has() 往 portal 进来的内容里看。 */
+.aw-sidebar-workspace.is-active.is-collapsed {
+  min-height: auto;
+  flex: 0 0 auto;
+}
+
+/* 导航项这一行同时是这一组的标题：名字、折叠开关、以及这个工作区自己的
+   动作都在上面。展开着的那一项让名字缩到内容宽度，把余下的横向空间留给
+   右端的动作；没展开的那些仍然整行可点，它们只是导航。 */
+.aw-workspace-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.aw-sidebar-workspace.is-active .aw-workspace-row > .aw-global-link {
+  flex: 0 1 auto;
+}
+
+/* 箭头长在行里，不是行旁边的第二个控件：整行就是那个开关。
+   收起时指向右——它说的是「展开的方向」，不是「现在是什么状态」；一个朝下
+   的箭头配一个收起的区，每次都要想一下才知道点了会怎样。 */
+.aw-workspace-fold-icon {
+  flex: none;
+  margin-left: 4px;
+  color: var(--aw-text-muted);
+  transition: transform var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-sidebar-workspace.is-collapsed .aw-workspace-fold-icon {
+  transform: rotate(-90deg);
+}
+
+/* 当前这一行是 <button> 而不是 <a>，浏览器给按钮的默认外观（居中、边框、
+   系统字体）会把它和旁边四个链接画成两种东西。 */
+.aw-workspace-row > button.aw-global-link {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-workspace-actions {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.aw-workspace-row > .aw-global-link {
   min-height: 38px;
   flex: 0 0 38px;
   border-radius: 7px;
   font-size: 13px;
 }
 
-.aw-sidebar-workspace > .aw-global-link.active {
+.aw-workspace-row > .aw-global-link.active {
   background: transparent;
   font-weight: 620;
 }
 
-.aw-sidebar-workspace > .aw-global-link.active .aw-global-link-icon {
+.aw-workspace-row > .aw-global-link.active .aw-global-link-icon {
   color: var(--aw-accent);
 }
 
+/* 缩进 + 一条竖线，说的是「这个列表属于上面那一行」。
+ *
+ * 这一处改过两次，值得把两次都记下来。原先是 27px 缩进，我为了给会话标题
+ * 多让出宽度把它整个拉平了，理由是「同一时刻只有一个工作区展开，靠相邻就
+ * 说清楚了」——那个理由不成立：拉平之后导航项和它底下的会话行左缘相同、
+ * 行高相近，读起来是一列互不相干的东西，层级没有任何东西在表示。
+ *
+ * 宽度那笔账是真的，所以这次回来的比原来窄：19px 而不是 27px（缩进 10 +
+ * 内边距 8 + 1px 的线）。272px 的侧栏里会话标题因此是 177px，仍然比最初的
+ * 169px 宽，而层级看得见了。 */
 .aw-sidebar-context-slot {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  margin: 2px 0 5px 19px;
-  padding-left: 7px;
+  margin: 2px 0 5px 10px;
+  padding-left: 8px;
   overflow: hidden;
-  border-left: 1px solid var(--aw-border-subtle);
+  border-left: 1px solid var(--aw-border);
 }
 
-.aw-sidebar-context-slot > :is(
-  .aw-chat-sessions,
-  .aw-code-sessions,
-  .aw-work-sidebar,
-  .aw-knowledge-sidebar
-) {
+.aw-sidebar-context-slot
+  > :is(
+    .aw-chat-sessions,
+    .aw-code-sessions,
+    .aw-work-sidebar,
+    .aw-knowledge-sidebar,
+    .aw-projects-sidebar
+  ) {
   position: static;
   display: flex;
   width: 100%;
@@ -1637,12 +1810,13 @@ select {
   box-shadow: none;
 }
 
-.aw-sidebar-context-slot :is(
-  .aw-chat-sessions-header,
-  .aw-code-sessions-header,
-  .aw-pane-header,
-  .aw-knowledge-sidebar-header
-) {
+.aw-sidebar-context-slot
+  :is(
+    .aw-chat-sessions-header,
+    .aw-code-sessions-header,
+    .aw-pane-header,
+    .aw-knowledge-sidebar-header
+  ) {
   position: static;
   min-height: 34px;
   padding: 3px 4px 5px;
@@ -1651,19 +1825,21 @@ select {
   backdrop-filter: none;
 }
 
-.aw-sidebar-context-slot :is(
-  .aw-chat-sessions-header strong,
-  .aw-code-sessions-header strong,
-  .aw-pane-header strong,
-  .aw-knowledge-sidebar-header strong
-) {
+.aw-sidebar-context-slot
+  :is(
+    .aw-chat-sessions-header strong,
+    .aw-code-sessions-header strong,
+    .aw-pane-header strong,
+    .aw-knowledge-sidebar-header strong
+  ) {
   color: var(--aw-text-muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.01em;
 }
 
-.aw-sidebar-context-slot :is(.aw-new-session, .aw-create-task-toggle) {
+.aw-sidebar-context-slot
+  :is(.aw-dead-new-session, .aw-dead-create-task-toggle) {
   min-height: 38px;
   justify-content: flex-start;
   margin: 0 1px 6px;
@@ -1676,23 +1852,26 @@ select {
   font-weight: 550;
 }
 
-.aw-sidebar-context-slot :is(.aw-new-session, .aw-create-task-toggle):hover,
-.aw-sidebar-context-slot .aw-create-task-toggle.is-active {
+.aw-sidebar-context-slot
+  :is(.aw-dead-new-session, .aw-dead-create-task-toggle):hover {
   border: 0;
   background: var(--aw-panel-strong);
   color: var(--aw-text);
 }
 
-.aw-sidebar-context-slot :is(.aw-new-session, .aw-create-task-toggle) svg {
+.aw-sidebar-context-slot
+  :is(.aw-dead-new-session, .aw-dead-create-task-toggle)
+  svg {
   color: var(--aw-accent);
 }
 
-.aw-sidebar-context-slot :is(
-  .aw-chat-session-list,
-  .aw-code-session-list,
-  .aw-task-list,
-  .aw-knowledge-sidebar-list
-) {
+.aw-sidebar-context-slot
+  :is(
+    .aw-chat-session-list,
+    .aw-code-session-list,
+    .aw-task-list,
+    .aw-knowledge-sidebar-list
+  ) {
   min-height: 0;
   flex: 1 1 auto;
   align-content: start;
@@ -1724,10 +1903,13 @@ select {
   font-size: 12px;
 }
 
+/* margin-top: auto 而不是 3px：把这一族钉在栏底。
+   此前是靠上面那份会话列表撑满高度顺带把它推下去的——列表一旦收起（或者
+   本来就短），身份行就跟着浮到列表底下，侧栏看起来像没写完。 */
 .aw-sidebar-footer-nav {
   display: grid;
   flex: 0 0 auto;
-  margin-top: 3px;
+  margin-top: auto;
   padding-top: 5px;
   gap: 2px;
   border-top: 1px solid var(--aw-border-subtle);
@@ -1739,10 +1921,8 @@ select {
   font-size: 12px;
 }
 
-.aw-app-shell.is-rail-collapsed :is(
-  .aw-sidebar-section-label,
-  .aw-sidebar-context-slot
-) {
+.aw-app-shell.is-rail-collapsed
+  :is(.aw-sidebar-section-label, .aw-sidebar-context-slot) {
   display: none;
 }
 
@@ -1806,21 +1986,16 @@ select {
   box-shadow: none;
 }
 
+/* 卡内的输入框：边框和圆角由卡片承担，它自己只剩内边距。 */
 .aw-work-page:not(.has-selection) .aw-work-start .aw-create-task textarea {
-  min-height: 132px;
-  padding: 14px 15px;
-  border-color: var(--aw-border);
-  border-radius: 12px;
-  font-size: 14.5px;
-  line-height: 1.6;
-}
-
-.aw-work-page:not(.has-selection)
-  .aw-work-start
-  .aw-create-task
-  > .aw-button.is-primary {
-  min-width: 132px;
-  justify-self: end;
+  min-height: 116px;
+  padding: 12px 11px 6px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 15.5px;
+  line-height: 1.7;
+  resize: none;
 }
 
 .aw-knowledge-page {
@@ -1897,12 +2072,105 @@ select {
   min-width: 0;
 }
 
+/* 三条列表行统一成单行 32px。任务行此前是两行（目标一行、时间另起一行）
+   外加行尾一颗状态点；八条就吃掉 320px，和会话列表是同一个毛病。
+   状态点移到行首——它是这一行最先要读的东西（跑没跑成），放在行尾等于
+   要先读完标题再横扫回去找。时间移到行尾并在静止时隐去。 */
 .aw-chat-session,
 .aw-code-recent-link,
 .aw-task-list-item {
-  min-height: 40px;
-  padding: 7px 9px;
-  border-radius: 7px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+}
+
+.aw-task-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aw-task-list-item > span:first-child {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  order: 2;
+  gap: 8px;
+}
+
+.aw-task-list-item .aw-task-status-dot {
+  flex: none;
+  order: 1;
+}
+
+.aw-task-list-item strong {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-task-list-item small {
+  flex: none;
+  opacity: 0;
+  font-size: 12px;
+  transition: opacity var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-task-list-item:hover small,
+.aw-task-list-item.is-active small {
+  opacity: 1;
+}
+
+.aw-task-list-item.is-active strong {
+  font-weight: 500;
+}
+
+/* 编码会话行同样收成单行：标题占满，时间移到行尾、静止时隐去。
+   这一串 min-width:0 不是装饰：flex/grid 的子项默认 min-width 是 auto，
+   一条不换行的长标题会把整条链一路撑到 1610px。此前两行布局下它被上层的
+   overflow:hidden 裁掉，看起来像省略号，其实只是切断——真正的省略号要求
+   收窄的是标题自己。 */
+.aw-code-session-list ul {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.aw-code-session-list li,
+.aw-code-recent-row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.aw-code-recent-link {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.aw-code-recent-title {
+  min-width: 0;
+  flex: 1;
+  font-size: 13.5px;
+}
+
+.aw-code-recent-when {
+  flex: none;
+  opacity: 0;
+  font-size: 12px;
+  transition: opacity var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-code-recent-link:hover .aw-code-recent-when,
+.aw-code-recent-link[aria-current="page"] .aw-code-recent-when {
+  opacity: 1;
 }
 
 .aw-chat-session:hover,
@@ -2135,14 +2403,15 @@ select {
     transition-delay: 0s;
   }
 
-  .aw-global-rail :is(
-    .aw-rail-brand-row,
-    .aw-sidebar-section-label,
-    .aw-sidebar-workspace:not(.is-active),
-    .aw-sidebar-workspace.is-active > .aw-global-link,
-    .aw-sidebar-footer-nav,
-    .aw-rail-identity
-  ) {
+  .aw-global-rail
+    :is(
+      .aw-rail-brand-row,
+      .aw-sidebar-section-label,
+      .aw-sidebar-workspace:not(.is-active),
+      .aw-sidebar-workspace.is-active > .aw-global-link,
+      .aw-sidebar-footer-nav,
+      .aw-rail-identity
+    ) {
     display: none;
   }
 
@@ -2160,12 +2429,13 @@ select {
     border: 0;
   }
 
-  .aw-sidebar-context-slot > :is(
-    .aw-chat-sessions,
-    .aw-code-sessions,
-    .aw-work-sidebar,
-    .aw-knowledge-sidebar
-  ) {
+  .aw-sidebar-context-slot
+    > :is(
+      .aw-chat-sessions,
+      .aw-code-sessions,
+      .aw-work-sidebar,
+      .aw-knowledge-sidebar
+    ) {
     display: flex;
   }
 
@@ -2181,13 +2451,14 @@ select {
     backdrop-filter: blur(2px);
   }
 
-  .aw-sidebar-context-slot :is(
-    .aw-chat-sessions-close,
-    .aw-code-sessions-close,
-    .aw-work-sessions-close,
-    .aw-knowledge-sessions-close,
-    .aw-projects-close
-  ) {
+  .aw-sidebar-context-slot
+    :is(
+      .aw-chat-sessions-close,
+      .aw-code-sessions-close,
+      .aw-work-sessions-close,
+      .aw-knowledge-sessions-close,
+      .aw-projects-close
+    ) {
     display: inline-flex;
   }
 
@@ -2435,4 +2706,57 @@ select {
 .aw-project-picker small {
   color: var(--aw-danger);
   font-size: 11px;
+}
+
+/* ── 侧栏动作 ─────────────────────────────────────────────────────────
+ *
+ * 「新建 / 搜索 / 刷新」长在导航项那一行的右端。此前它们各自是一整行描边
+ * 按钮，夹在名字和列表中间——三栏并排时三个整行按钮会和三份列表抢同一屏
+ * 的高度，而「开一段新的」不该比「回到哪一段」更响。
+ */
+.aw-side-action {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  transition:
+    background var(--aw-duration-fast) var(--aw-ease),
+    color var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-side-action:hover:not(:disabled) {
+  background: var(--aw-veil);
+  color: var(--aw-text);
+}
+
+.aw-side-action[aria-pressed="true"] {
+  background: var(--aw-veil-strong);
+  color: var(--aw-text);
+}
+
+.aw-side-action:disabled {
+  color: var(--aw-faint);
+  cursor: default;
+}
+
+/* 搜索：收起时一个图标，展开时才占一行。此前它是常驻的一整行输入框——
+   一栏本来就窄的侧栏里，一个大多数时候不用的控件占着一行的高度。 */
+.aw-chat-session-search {
+  height: 30px;
+  flex: none;
+  margin: 0 2px 2px;
+  padding: 0 8px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: transparent;
+}
+
+.aw-chat-session-search input {
+  font-size: 13px;
 }

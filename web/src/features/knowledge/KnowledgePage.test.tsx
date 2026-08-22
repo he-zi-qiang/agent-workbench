@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,7 +83,9 @@ function documentVersion(): DocumentVersion {
   };
 }
 
-function searchResponse(overrides: Partial<SearchResponse> = {}): SearchResponse {
+function searchResponse(
+  overrides: Partial<SearchResponse> = {},
+): SearchResponse {
   return {
     hits: [
       {
@@ -144,6 +152,7 @@ describe("KnowledgePage 新建知识库对话框", () => {
     const closeSidebar = vi.fn();
     const sidebar: WorkspaceSidebarContextValue = {
       managed: true,
+      actionsHost: null,
       host: sidebarHost,
       drawerOpen: true,
       open: vi.fn(),
@@ -159,12 +168,18 @@ describe("KnowledgePage 新建知识库对话框", () => {
     expect(dialog).toHaveAccessibleDescription(
       "给资料起一个人能看懂的名字；ID 由系统生成。",
     );
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "名称" })).toHaveFocus());
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "名称" })).toHaveFocus(),
+    );
 
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog", { name: "新建知识库" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "新建知识库" }),
+    ).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "打开知识库列表" })).toHaveFocus(),
+      expect(
+        screen.getByRole("button", { name: "打开知识库列表" }),
+      ).toHaveFocus(),
     );
 
     view.unmount();
@@ -203,7 +218,9 @@ describe("KnowledgePage selection", () => {
   it("falls back to the first readable knowledge base for a stale URL", async () => {
     renderPage("/knowledge?kb=kb_deleted");
 
-    expect(await screen.findByRole("heading", { name: "校招资料" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "校招资料" }),
+    ).toBeInTheDocument();
     await waitFor(() =>
       expect(listKnowledgeBaseDocuments).toHaveBeenCalledWith(
         expect.any(Object),
@@ -276,7 +293,9 @@ describe("KnowledgePage 摄取失败", () => {
     const row = await screen.findByRole("article");
     expect(within(row).getByText("索引失败")).toBeInTheDocument();
     expect(
-      within(row).getByText(/文件内容无法解析，请换成可读的 PDF、Word 或 Markdown 重新上传。/),
+      within(row).getByText(
+        /文件内容无法解析，请换成可读的 PDF、Word 或 Markdown 重新上传。/,
+      ),
     ).toBeInTheDocument();
     // 同样在行里找。概览那四张统计卡各带一个状态标签，「正在索引」是其中一张的
     // 名字，整页断言会撞上它——而这条测试问的是这一行的状态，不是这一页有没有
@@ -411,6 +430,8 @@ describe("KnowledgePage 检索调试", () => {
     await runSearch();
 
     expect(await screen.findByText("由 dense 检索栈应答")).toBeInTheDocument();
-    expect(screen.getByText("本次没有返回可读的匹配片段。")).toBeInTheDocument();
+    expect(
+      screen.getByText("本次没有返回可读的匹配片段。"),
+    ).toBeInTheDocument();
   });
 });

@@ -27,7 +27,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import {
   ApiError,
   createChatSession,
@@ -46,6 +51,7 @@ import type {
 import { useIdentity } from "../../app/IdentityContext";
 import {
   useWorkspaceSidebar,
+  WorkspaceSidebarActions,
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
 import {
@@ -64,7 +70,8 @@ import {
   EmptyState,
   ErrorNotice,
   IconButton,
-  NewSessionButton,
+  NewSessionAction,
+  SidebarAction,
   LoadingLine,
   formatTime,
   shortId,
@@ -106,18 +113,25 @@ export function ChatPage() {
   const { sessionId } = useParams<{ sessionId?: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const selected = sessionId === undefined ? undefined : state.sessions[sessionId];
+  const selected =
+    sessionId === undefined ? undefined : state.sessions[sessionId];
   const selectedServerSession = useQuery({
     queryKey: ["chat-session", identity, sessionId],
     enabled: sessionId !== undefined && selected === undefined,
     queryFn: ({ signal }) => {
-      if (sessionId === undefined) throw new Error("Chat session id is required");
+      if (sessionId === undefined)
+        throw new Error("Chat session id is required");
       return getChatSession(identity, sessionId, signal);
     },
   });
   const [question, setQuestion] = useState("");
   const [sessionQuery, setSessionQuery] = useState("");
-  const [sourceDrafts, setSourceDrafts] = useState<Record<string, string | null>>({});
+  // 搜索折叠在标题右边那颗图标后面。展开时才占一行，收起时把查询也清掉——
+  // 一个看不见却仍在过滤的搜索框，会让人以为会话丢了。
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [sourceDrafts, setSourceDrafts] = useState<
+    Record<string, string | null>
+  >({});
   const [creatingSession, setCreatingSession] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // Carries the runtime that opened it, and is read back through
@@ -218,7 +232,9 @@ export function ChatPage() {
       const submittedRuntime = runtime;
       try {
         await runtime.removeSession(target);
-        await queries.invalidateQueries({ queryKey: ["chat-sessions", identity] });
+        await queries.invalidateQueries({
+          queryKey: ["chat-sessions", identity],
+        });
         const latest = latestSubmissionContext.current;
         if (!mounted.current || latest.runtime !== submittedRuntime) return;
         workspaceSidebar.close();
@@ -238,7 +254,9 @@ export function ChatPage() {
           // Reported where the composer's own failures are reported. A delete
           // that the server refused has to say so: the row is still there, and
           // silence would read as a click that did nothing.
-          setSubmitError(cause instanceof Error ? cause.message : String(cause));
+          setSubmitError(
+            cause instanceof Error ? cause.message : String(cause),
+          );
         }
       }
     },
@@ -251,7 +269,9 @@ export function ChatPage() {
       await setSessionProject(identity, sessionId, nextProjectId);
       // 两处都要刷：这段对话自己的归属，以及项目页那一列。归属是它们共有的
       // 一个事实，不是两份各自维护的状态。
-      await queries.invalidateQueries({ queryKey: ["chat-sessions", identity] });
+      await queries.invalidateQueries({
+        queryKey: ["chat-sessions", identity],
+      });
       await queries.invalidateQueries({ queryKey: ["chat-session", identity] });
     },
     [identity, queries, sessionId],
@@ -298,7 +318,9 @@ export function ChatPage() {
         // under, not to whichever one is current -- that is the one holding
         // the session this title belongs to.
         submittedRuntime.renameSession(target, accepted.title);
-        await queries.invalidateQueries({ queryKey: ["chat-sessions", identity] });
+        await queries.invalidateQueries({
+          queryKey: ["chat-sessions", identity],
+        });
       } catch (cause: unknown) {
         if (renameAttempt.current !== attempt || !mounted.current) return;
         if (latestSubmissionContext.current.runtime !== submittedRuntime) {
@@ -353,10 +375,12 @@ export function ChatPage() {
 
   const knowledgeBaseDraftKey = selectedSessionId ?? "new";
   const requestedKnowledgeBase = searchParams.get("kb");
-  const requestedKnowledgeBaseId =
-    Object.prototype.hasOwnProperty.call(sourceDrafts, knowledgeBaseDraftKey)
-      ? sourceDrafts[knowledgeBaseDraftKey] ?? null
-      : selected?.knowledgeBaseId ?? requestedKnowledgeBase;
+  const requestedKnowledgeBaseId = Object.prototype.hasOwnProperty.call(
+    sourceDrafts,
+    knowledgeBaseDraftKey,
+  )
+    ? (sourceDrafts[knowledgeBaseDraftKey] ?? null)
+    : (selected?.knowledgeBaseId ?? requestedKnowledgeBase);
   const knowledgeBases = useKnowledgeBases(identity);
   const knowledgeBaseId =
     requestedKnowledgeBaseId !== null &&
@@ -375,13 +399,20 @@ export function ChatPage() {
   const turns =
     selected === undefined
       ? []
-      : (state.turnOrderBySession[selected.sessionId] ?? []).flatMap((turnId) => {
-          const turn = state.turns[turnId];
-          return turn === undefined ? [] : [turn];
-        });
+      : (state.turnOrderBySession[selected.sessionId] ?? []).flatMap(
+          (turnId) => {
+            const turn = state.turns[turnId];
+            return turn === undefined ? [] : [turn];
+          },
+        );
   const quarantined =
-    selected === undefined ? [] : state.quarantinedSequences[selected.sessionId] ?? [];
-  const unfinished = selected === undefined ? false : hasUnfinishedTurn(state, selected.sessionId);
+    selected === undefined
+      ? []
+      : (state.quarantinedSequences[selected.sessionId] ?? []);
+  const unfinished =
+    selected === undefined
+      ? false
+      : hasUnfinishedTurn(state, selected.sessionId);
   const composerDisabled =
     creatingSession ||
     sourceResolving ||
@@ -392,7 +423,9 @@ export function ChatPage() {
     if (session === undefined) return false;
     const query = sessionQuery.trim().toLocaleLowerCase();
     if (query === "") return true;
-    return `${session.title} ${session.sessionId}`.toLocaleLowerCase().includes(query);
+    return `${session.title} ${session.sessionId}`
+      .toLocaleLowerCase()
+      .includes(query);
   });
   const composerNotice =
     attachments.readOnlyReason !== null
@@ -421,7 +454,8 @@ export function ChatPage() {
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedQuestion = question.trim();
-    if (!trimmedQuestion || composerDisabled || attachments.hasBlockingItems) return;
+    if (!trimmedQuestion || composerDisabled || attachments.hasBlockingItems)
+      return;
     setSubmitError(null);
 
     // Captured before anything is awaited: both continuations below ask what
@@ -434,7 +468,10 @@ export function ChatPage() {
       let target = selected;
       if (target === undefined) {
         setCreatingSession(true);
-        const opened = await createChatSession(identity, trimmedQuestion.slice(0, 200));
+        const opened = await createChatSession(
+          identity,
+          trimmedQuestion.slice(0, 200),
+        );
         const now = new Date().toISOString();
         target = {
           sessionId: opened.session_id,
@@ -447,7 +484,9 @@ export function ChatPage() {
           history: "loaded",
         };
         runtime.addLocalSession(localSession(target));
-        void queries.invalidateQueries({ queryKey: ["chat-sessions", identity] });
+        void queries.invalidateQueries({
+          queryKey: ["chat-sessions", identity],
+        });
         const latest = latestSubmissionContext.current;
         if (!mounted.current || latest.runtime !== submittedRuntime) {
           // The Session already exists, so retain its local handle under the
@@ -494,13 +533,41 @@ export function ChatPage() {
   };
 
   const submitOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    if (
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing
+    )
+      return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
   };
 
   return (
     <div className={`aw-chat-page ${sessionId === undefined ? "is-new" : ""}`}>
+      <WorkspaceSidebarActions>
+        {state.sessionOrder.length >= 5 || sessionQuery !== "" ? (
+          <SidebarAction
+            active={searchOpen}
+            label="搜索对话"
+            onClick={() => {
+              setSearchOpen((open) => {
+                if (open) setSessionQuery("");
+                return !open;
+              });
+            }}
+          >
+            <Search aria-hidden="true" size={15} />
+          </SidebarAction>
+        ) : null}
+        <NewSessionAction
+          label="新对话"
+          onClick={() => {
+            workspaceSidebar.close();
+            void navigate("/chat");
+          }}
+        />
+      </WorkspaceSidebarActions>
       <WorkspaceSidebarPortal>
         <aside
           className={`aw-chat-sessions ${workspaceSidebar.drawerOpen ? "is-mobile-open" : ""}`}
@@ -508,164 +575,175 @@ export function ChatPage() {
           // 「Chat 会话」——同一块地方两个名字，还夹着一个英文产品名。
           aria-label="最近对话"
         >
-        <header className="aw-chat-sessions-header">
-          <strong>最近对话</strong>
-          <div className="aw-chat-session-actions">
-            <IconButton
-              className="aw-chat-sessions-close"
-              label="关闭对话列表"
-              onClick={workspaceSidebar.close}
-            >
-              <X aria-hidden="true" size={17} />
-            </IconButton>
-          </div>
-        </header>
-        <NewSessionButton
-          label="新对话"
-          onClick={() => {
-            workspaceSidebar.close();
-            void navigate("/chat");
-          }}
-        />
-        {state.sessionOrder.length >= 5 || sessionQuery !== "" ? (
-          <div className="aw-chat-session-search">
-            <Search aria-hidden="true" size={14} />
-            <input
-              aria-label="搜索对话"
-              onChange={(event) => setSessionQuery(event.target.value)}
-              placeholder="搜索对话"
-              type="search"
-              value={sessionQuery}
-            />
-          </div>
-        ) : null}
-        <div className="aw-chat-session-list">
-          {state.sessionOrder.length === 0 ? (
-            <p className="aw-chat-local-note">发送第一条消息后，对话会出现在这里。</p>
-          ) : visibleSessionIds.length === 0 ? (
-            <p className="aw-chat-local-note">没有匹配的对话。</p>
-          ) : (
-            visibleSessionIds.map((id) => {
-              const session = state.sessions[id];
-              if (session === undefined) return null;
-              return (
-                <div className="aw-chat-session-row" key={session.sessionId}>
-                  {editingSessionId === session.sessionId ? (
-                    <>
-                      <form
-                        aria-busy={renamePending === session.sessionId}
-                        className="aw-session-inline-rename"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          if (renamePending === session.sessionId) return;
-                          const field = new FormData(event.currentTarget).get("title");
-                          void renameSession(
-                            session.sessionId,
-                            typeof field === "string" ? field : "",
-                          );
-                        }}
-                      >
-                        <label
-                          className="aw-sr-only"
-                          htmlFor={`aw-chat-rename-${session.sessionId}`}
-                        >
-                          对话名字
-                        </label>
-                        <input
-                          aria-describedby={
-                            renameError?.sessionId === session.sessionId
-                              ? `aw-chat-rename-error-${session.sessionId}`
-                              : undefined
-                          }
-                          aria-invalid={
-                            renameError?.sessionId === session.sessionId || undefined
-                          }
-                          autoFocus
-                          defaultValue={session.title}
-                          id={`aw-chat-rename-${session.sessionId}`}
-                          name="title"
-                          onBlur={() => {
-                            if (renamePending !== session.sessionId) {
-                              cancelRename(session.sessionId, false);
-                            }
-                          }}
-                          onChange={() => {
-                            if (renameError?.sessionId === session.sessionId) {
-                              setRenameError(null);
-                            }
-                          }}
-                          onFocus={(event) => event.currentTarget.select()}
-                          onKeyDown={(event) => {
-                            if (event.key !== "Escape") return;
+          <IconButton
+            className="aw-chat-sessions-close"
+            label="关闭对话列表"
+            onClick={workspaceSidebar.close}
+          >
+            <X aria-hidden="true" size={17} />
+          </IconButton>
+
+          {searchOpen ? (
+            <div className="aw-chat-session-search">
+              <Search aria-hidden="true" size={14} />
+              <input
+                aria-label="搜索对话"
+                autoFocus
+                onChange={(event) => setSessionQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  setSessionQuery("");
+                  setSearchOpen(false);
+                }}
+                placeholder="搜索对话"
+                type="search"
+                value={sessionQuery}
+              />
+            </div>
+          ) : null}
+          <div className="aw-chat-session-list">
+            {state.sessionOrder.length === 0 ? (
+              <p className="aw-chat-local-note">
+                发送第一条消息后，对话会出现在这里。
+              </p>
+            ) : visibleSessionIds.length === 0 ? (
+              <p className="aw-chat-local-note">没有匹配的对话。</p>
+            ) : (
+              visibleSessionIds.map((id) => {
+                const session = state.sessions[id];
+                if (session === undefined) return null;
+                return (
+                  <div className="aw-chat-session-row" key={session.sessionId}>
+                    {editingSessionId === session.sessionId ? (
+                      <>
+                        <form
+                          aria-busy={renamePending === session.sessionId}
+                          className="aw-session-inline-rename"
+                          onSubmit={(event) => {
                             event.preventDefault();
-                            event.stopPropagation();
-                            cancelRename(session.sessionId);
+                            if (renamePending === session.sessionId) return;
+                            const field = new FormData(event.currentTarget).get(
+                              "title",
+                            );
+                            void renameSession(
+                              session.sessionId,
+                              typeof field === "string" ? field : "",
+                            );
                           }}
-                          readOnly={renamePending === session.sessionId}
-                          ref={renameInputRef}
-                        />
-                      </form>
-                      {renameError?.sessionId === session.sessionId ? (
-                        <div
-                          className="aw-session-rename-error"
-                          id={`aw-chat-rename-error-${session.sessionId}`}
                         >
-                          <ErrorNotice message={renameError.message} />
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <Link
-                        aria-current={session.sessionId === sessionId ? "page" : undefined}
-                        className={`aw-chat-session ${session.sessionId === sessionId ? "is-active" : ""}`}
-                        onClick={workspaceSidebar.close}
-                        onKeyDown={(event) => {
-                          if (event.key !== "F2") return;
-                          event.preventDefault();
-                          beginRename(session.sessionId);
-                        }}
-                        to={`/chat/${encodeURIComponent(session.sessionId)}`}
-                      >
-                        <span className="aw-chat-session-copy">
-                          <strong>{session.title}</strong>
-                          <small>{formatTime(session.updatedAt)}</small>
-                        </span>
-                      </Link>
-                      <span className="aw-session-row-actions">
-                        <button
-                          aria-label={`重命名对话 ${session.title}`}
-                          className="aw-chat-session-rename"
-                          onClick={() => beginRename(session.sessionId)}
-                          ref={(node) => {
-                            if (node === null) {
-                              renameActionRefs.current.delete(session.sessionId);
-                            } else {
-                              renameActionRefs.current.set(session.sessionId, node);
+                          <label
+                            className="aw-sr-only"
+                            htmlFor={`aw-chat-rename-${session.sessionId}`}
+                          >
+                            对话名字
+                          </label>
+                          <input
+                            aria-describedby={
+                              renameError?.sessionId === session.sessionId
+                                ? `aw-chat-rename-error-${session.sessionId}`
+                                : undefined
                             }
+                            aria-invalid={
+                              renameError?.sessionId === session.sessionId ||
+                              undefined
+                            }
+                            autoFocus
+                            defaultValue={session.title}
+                            id={`aw-chat-rename-${session.sessionId}`}
+                            name="title"
+                            onBlur={() => {
+                              if (renamePending !== session.sessionId) {
+                                cancelRename(session.sessionId, false);
+                              }
+                            }}
+                            onChange={() => {
+                              if (
+                                renameError?.sessionId === session.sessionId
+                              ) {
+                                setRenameError(null);
+                              }
+                            }}
+                            onFocus={(event) => event.currentTarget.select()}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Escape") return;
+                              event.preventDefault();
+                              event.stopPropagation();
+                              cancelRename(session.sessionId);
+                            }}
+                            readOnly={renamePending === session.sessionId}
+                            ref={renameInputRef}
+                          />
+                        </form>
+                        {renameError?.sessionId === session.sessionId ? (
+                          <div
+                            className="aw-session-rename-error"
+                            id={`aw-chat-rename-error-${session.sessionId}`}
+                          >
+                            <ErrorNotice message={renameError.message} />
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <Link
+                          aria-current={
+                            session.sessionId === sessionId ? "page" : undefined
+                          }
+                          className={`aw-chat-session ${session.sessionId === sessionId ? "is-active" : ""}`}
+                          onClick={workspaceSidebar.close}
+                          onKeyDown={(event) => {
+                            if (event.key !== "F2") return;
+                            event.preventDefault();
+                            beginRename(session.sessionId);
                           }}
-                          title="重命名"
-                          type="button"
+                          to={`/chat/${encodeURIComponent(session.sessionId)}`}
                         >
-                          <Pencil aria-hidden size={12} />
-                        </button>
-                        <button
-                          aria-label={`删除对话 ${session.title}`}
-                          className="aw-chat-session-delete"
-                          onClick={() => void removeSession(session.sessionId)}
-                          title="删除"
-                          type="button"
-                        >
-                          <Trash2 aria-hidden size={13} />
-                        </button>
-                      </span>
-                    </>
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
+                          <span className="aw-chat-session-copy">
+                            <strong>{session.title}</strong>
+                            <small>{formatTime(session.updatedAt)}</small>
+                          </span>
+                        </Link>
+                        <span className="aw-session-row-actions">
+                          <button
+                            aria-label={`重命名对话 ${session.title}`}
+                            className="aw-chat-session-rename"
+                            onClick={() => beginRename(session.sessionId)}
+                            ref={(node) => {
+                              if (node === null) {
+                                renameActionRefs.current.delete(
+                                  session.sessionId,
+                                );
+                              } else {
+                                renameActionRefs.current.set(
+                                  session.sessionId,
+                                  node,
+                                );
+                              }
+                            }}
+                            title="重命名"
+                            type="button"
+                          >
+                            <Pencil aria-hidden size={12} />
+                          </button>
+                          <button
+                            aria-label={`删除对话 ${session.title}`}
+                            className="aw-chat-session-delete"
+                            onClick={() =>
+                              void removeSession(session.sessionId)
+                            }
+                            title="删除"
+                            type="button"
+                          >
+                            <Trash2 aria-hidden size={13} />
+                          </button>
+                        </span>
+                      </>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
         </aside>
       </WorkspaceSidebarPortal>
 
@@ -680,7 +758,10 @@ export function ChatPage() {
             : { sourceLabel: selectedKnowledgeBase.name })}
           {...(selected === undefined
             ? {}
-            : { onReconnect: () => runtime.reconnectSessionStream(selected.sessionId) })}
+            : {
+                onReconnect: () =>
+                  runtime.reconnectSessionStream(selected.sessionId),
+              })}
           {...(selected === undefined
             ? {}
             : { onAssignProject: assignProject })}
@@ -698,7 +779,8 @@ export function ChatPage() {
         <section className="aw-chat-transcript">
           {sessionId !== undefined &&
           selected === undefined &&
-          (selectedServerSession.isPending || selectedServerSession.data !== undefined) ? (
+          (selectedServerSession.isPending ||
+            selectedServerSession.data !== undefined) ? (
             <LoadingLine label="正在确认这个对话" />
           ) : null}
           {sessionId !== undefined &&
@@ -709,7 +791,11 @@ export function ChatPage() {
               title="这个对话不属于当前身份"
               description="可能是换过身份，也可能这个链接本来就不是给你的——用当前身份查不到它。"
               action={
-                <button className="aw-button is-primary" onClick={() => navigate("/chat")} type="button">
+                <button
+                  className="aw-button is-primary"
+                  onClick={() => navigate("/chat")}
+                  type="button"
+                >
                   开始新对话
                 </button>
               }
@@ -739,15 +825,23 @@ export function ChatPage() {
             <ChatWelcome
               onChoose={(prompt) => {
                 setQuestion(prompt);
-                window.requestAnimationFrame(() => composerRef.current?.focus());
+                window.requestAnimationFrame(() =>
+                  composerRef.current?.focus(),
+                );
               }}
             />
           ) : selected.history === "loading" && turns.length === 0 ? (
             <LoadingLine label="正在读取历史消息" />
           ) : selected.history === "failed" && turns.length === 0 ? (
             <div className="aw-chat-centered-notice">
-              <ErrorNotice message={selected.historyError ?? "读不到这个对话的历史消息"} />
-              <button className="aw-button is-ghost" onClick={() => void runtime.ensureHistory(selected.sessionId)} type="button">
+              <ErrorNotice
+                message={selected.historyError ?? "读不到这个对话的历史消息"}
+              />
+              <button
+                className="aw-button is-ghost"
+                onClick={() => void runtime.ensureHistory(selected.sessionId)}
+                type="button"
+              >
                 重试读取
               </button>
             </div>
@@ -764,7 +858,9 @@ export function ChatPage() {
                   identity={identity}
                   key={turn.localId}
                   turn={turn}
-                  {...(turn.historical ? {} : { onRetry: () => runtime.retryAsk(turn.localId) })}
+                  {...(turn.historical
+                    ? {}
+                    : { onRetry: () => runtime.retryAsk(turn.localId) })}
                 />
               ))}
             </div>
@@ -776,18 +872,16 @@ export function ChatPage() {
 
         <form className="aw-chat-composer" onSubmit={submit}>
           {submitError === null ? null : <ErrorNotice message={submitError} />}
-          <AttachmentTray
-            items={attachments.items}
-            onRemove={attachments.remove}
-            onRetry={attachments.retry}
-          />
-          <div className="aw-chat-composer-row">
-            <AttachmentButton
-              disabled={composerDisabled || attachments.readOnlyReason !== null}
-              {...(attachments.readOnlyReason === null
-                ? {}
-                : { disabledReason: attachments.readOnlyReason })}
-              onFiles={attachments.addFiles}
+          {/* 一张卡，不是两截。此前工具行（知识库选择、字数）在圆角卡片**外面**
+              另起一行，于是「输入这件事」在版面上被切成两个互不相干的块，读起来
+              像一个搜索框底下挂了一条说明。现在卡片自己包住三段：附件、正文、
+              底部的工具行，发送键在卡内右下角——和这个界面里其他几处输入
+              （编码页的会话输入框）是同一个形状。 */}
+          <div className="aw-chat-composer-card">
+            <AttachmentTray
+              items={attachments.items}
+              onRemove={attachments.remove}
+              onRetry={attachments.retry}
             />
             <textarea
               aria-label="问题"
@@ -807,37 +901,55 @@ export function ChatPage() {
               value={question}
             />
 
-            <button
-              aria-label="发送问题"
-              className="aw-button is-primary aw-chat-send"
-              disabled={composerDisabled || !question.trim() || attachments.hasBlockingItems}
-              type="submit"
-            >
-              {creatingSession ? <RefreshCw aria-hidden="true" className="aw-spin" size={17} /> : <Send aria-hidden="true" size={17} />}
-            </button>
-          </div>
-          <div className="aw-chat-composer-tools">
-            <KnowledgeSourcePicker
-              compact
-              disabled={composerDisabled}
-              identity={identity}
-              onChange={(knowledgeBase) =>
-                changeSource(knowledgeBase?.knowledge_base_id ?? null)
-              }
-              value={knowledgeBaseId}
-            />
-            {composerNotice === null ? null : <span>{composerNotice}</span>}
-            {/* 4096 这个上限一直在（textarea 上的 maxLength），只是看不见：打到
+            <div className="aw-chat-composer-tools">
+              <AttachmentButton
+                disabled={
+                  composerDisabled || attachments.readOnlyReason !== null
+                }
+                {...(attachments.readOnlyReason === null
+                  ? {}
+                  : { disabledReason: attachments.readOnlyReason })}
+                onFiles={attachments.addFiles}
+              />
+              <KnowledgeSourcePicker
+                compact
+                disabled={composerDisabled}
+                identity={identity}
+                onChange={(knowledgeBase) =>
+                  changeSource(knowledgeBase?.knowledge_base_id ?? null)
+                }
+                value={knowledgeBaseId}
+              />
+              {composerNotice === null ? null : <span>{composerNotice}</span>}
+              <span className="aw-chat-composer-spacer" />
+              {/* 4096 这个上限一直在（textarea 上的 maxLength），只是看不见：打到
                 头的人得到的是一个不再接受输入的输入框，没有任何东西说明为什么。
                 放在这一行而不是压在输入框上：它是关于这次输入的说明，和左边那句
                 「回答会检索资料并标注引用」是同一类东西。 */}
-            {question.length < 3500 ? null : (
-              <span
-                className={`aw-chat-counter ${question.length >= 4096 ? "is-full" : ""}`}
+              {question.length < 3500 ? null : (
+                <span
+                  className={`aw-chat-counter ${question.length >= 4096 ? "is-full" : ""}`}
+                >
+                  {question.length} / 4096
+                </span>
+              )}
+              <button
+                aria-label="发送问题"
+                className="aw-button is-primary aw-chat-send"
+                disabled={
+                  composerDisabled ||
+                  !question.trim() ||
+                  attachments.hasBlockingItems
+                }
+                type="submit"
               >
-                {question.length} / 4096
-              </span>
-            )}
+                {creatingSession ? (
+                  <RefreshCw aria-hidden="true" className="aw-spin" size={17} />
+                ) : (
+                  <Send aria-hidden="true" size={17} />
+                )}
+              </button>
+            </div>
           </div>
         </form>
       </main>
@@ -911,7 +1023,8 @@ function ChatHeader({
           />
         )}
       </div>
-      {session === undefined || ["idle", "connected"].includes(session.connection) ? null : (
+      {session === undefined ||
+      ["idle", "connected"].includes(session.connection) ? null : (
         <ConnectionBadge
           connection={session.connection}
           {...(onReconnect === undefined ? {} : { onReconnect })}
@@ -949,13 +1062,19 @@ function ConnectionBadge({
     <button
       aria-live="polite"
       className={`aw-chat-connection ${connected ? "is-connected" : ""}`}
-      disabled={onReconnect === undefined || connected || connection === "connecting"}
+      disabled={
+        onReconnect === undefined || connected || connection === "connecting"
+      }
       onClick={onReconnect}
       role="status"
       title={connected ? undefined : "点击重新连接"}
       type="button"
     >
-      {connected ? <Wifi aria-hidden="true" size={15} /> : <WifiOff aria-hidden="true" size={15} />}
+      {connected ? (
+        <Wifi aria-hidden="true" size={15} />
+      ) : (
+        <WifiOff aria-hidden="true" size={15} />
+      )}
       {label}
     </button>
   );
@@ -978,13 +1097,12 @@ function ChatTurn({
         <p>{turn.question}</p>
       </div>
       <div className="aw-chat-assistant-message">
-        <header>
-          <span className="aw-chat-assistant-mark" aria-hidden="true">A</span>
-          <strong>Agent</strong>
-          {turn.historical ? (
-            <small>历史</small>
-          ) : null}
-        </header>
+        {/* 此前每一条回答上面都顶着一行「(A) Agent [历史]」。三个元素里两个
+            是常量——一个圆头像和一个永远写着 Agent 的名字，在只有两个说话人
+            且用户消息靠右成气泡的版面里，它们不携带任何信息，只是把回答从
+            一份文档降级成一条聊天记录。
+            「历史」不是常量，所以它留着：现在它没有陪衬，出现即有意义。 */}
+        {turn.historical ? <p className="aw-chat-turn-tag">历史消息</p> : null}
         {turn.activities.length === 0 ? null : <TurnStepStream turn={turn} />}
         {turn.phase === "withheld" ? (
           <div className="aw-notice is-warning">
@@ -994,9 +1112,12 @@ function ChatTurn({
             </span>
           </div>
         ) : null}
-        {turn.answer === undefined ? null : <MarkdownContent text={turn.answer} />}
+        {turn.answer === undefined ? null : (
+          <MarkdownContent text={turn.answer} />
+        )}
         {turn.stream === undefined ? null : <LiveText stream={turn.stream} />}
-        {!turn.historical && (turn.phase === "submitting" || turn.phase === "running") ? (
+        {!turn.historical &&
+        (turn.phase === "submitting" || turn.phase === "running") ? (
           <LoadingLine
             label={
               turn.phase === "submitting"
@@ -1011,7 +1132,9 @@ function ChatTurn({
             above is itself a `role="status"`, so the running phases are
             announced; without this the *end* -- the answer arriving --
             was the one thing that stayed silent. */}
-        {turn.historical || turn.phase === "submitting" || turn.phase === "running" ? null : (
+        {turn.historical ||
+        turn.phase === "submitting" ||
+        turn.phase === "running" ? null : (
           <p aria-atomic="true" className="aw-sr-only" role="status">
             {turn.phase === "withheld"
               ? "回答没有发出来"
@@ -1021,7 +1144,9 @@ function ChatTurn({
           </p>
         )}
         {turn.historical && turn.answer === undefined ? (
-          <p className="aw-chat-no-citations">这一轮只留下了你的问题，没有留下回答。</p>
+          <p className="aw-chat-no-citations">
+            这一轮只留下了你的问题，没有留下回答。
+          </p>
         ) : null}
         {turn.historical && turn.answer !== undefined ? (
           // The history endpoint returns role and text and nothing else, so a
@@ -1038,14 +1163,19 @@ function ChatTurn({
           <div className="aw-chat-turn-error">
             <ErrorNotice message={turn.error ?? "这次回答未能完成"} />
             {onRetry === undefined ? null : (
-              <button className="aw-button is-ghost" onClick={onRetry} type="button">
+              <button
+                className="aw-button is-ghost"
+                onClick={onRetry}
+                type="button"
+              >
                 <RotateCcw aria-hidden="true" size={15} />
                 重试
               </button>
             )}
           </div>
         ) : null}
-        {!turn.historical && (turn.phase === "committed" || turn.phase === "withheld") ? (
+        {!turn.historical &&
+        (turn.phase === "committed" || turn.phase === "withheld") ? (
           <>
             <Citations
               answerMode={turn.answerMode}
@@ -1106,7 +1236,9 @@ function LiveText({ stream }: { stream: LiveTextState }) {
       <small>
         <CircleDot aria-hidden="true" size={12} />
         正在生成，内容可能继续调整
-        {stream.dropped > 0 ? `（有 ${String(stream.dropped)} 段未能送达）` : ""}
+        {stream.dropped > 0
+          ? `（有 ${String(stream.dropped)} 段未能送达）`
+          : ""}
       </small>
     </div>
   );
@@ -1129,7 +1261,11 @@ function TurnStepStream({ turn }: { turn: ChatTurnState }) {
        * 层收起来的壳，等于把实时进度藏了。 */}
       <details className="aw-turn-process" open={running}>
         <summary>
-          <ChevronRight aria-hidden="true" className="aw-step-caret" size={13} />
+          <ChevronRight
+            aria-hidden="true"
+            className="aw-step-caret"
+            size={13}
+          />
           <span className="aw-turn-process-label">过程</span>
           {stages.map((stage) => (
             <span className={`aw-turn-phase is-${stage.state}`} key={stage.id}>
@@ -1137,19 +1273,22 @@ function TurnStepStream({ turn }: { turn: ChatTurnState }) {
             </span>
           ))}
         </summary>
-      <StepStream
-        ariaLabel="回答过程"
-        // The label the turn already computed. It carries what the event meant
-        // in Chat's own vocabulary -- "答案已发布（未经证据核实）" is a distinction
-        // Work's generic titles do not draw.
-        eventTitle={(event) =>
-          turn.activities.find((activity) => activity.envelope === event)?.label ??
-          event.event_type
-        }
-        meta={{ title: "运行记录", events: meta.map((activity) => activity.envelope) }}
-        running={running}
-        stages={stages}
-      />
+        <StepStream
+          ariaLabel="回答过程"
+          // The label the turn already computed. It carries what the event meant
+          // in Chat's own vocabulary -- "答案已发布（未经证据核实）" is a distinction
+          // Work's generic titles do not draw.
+          eventTitle={(event) =>
+            turn.activities.find((activity) => activity.envelope === event)
+              ?.label ?? event.event_type
+          }
+          meta={{
+            title: "运行记录",
+            events: meta.map((activity) => activity.envelope),
+          }}
+          running={running}
+          stages={stages}
+        />
       </details>
     </>
   );
@@ -1397,7 +1536,11 @@ function CitationRow({
           the column of ordinals rather than only in the sentence beside it. */}
       <span
         aria-hidden="true"
-        className={failed ? "aw-chat-citation-ordinal is-unread" : "aw-chat-citation-ordinal"}
+        className={
+          failed
+            ? "aw-chat-citation-ordinal is-unread"
+            : "aw-chat-citation-ordinal"
+        }
       >
         {ordinal}
       </span>
@@ -1519,10 +1662,12 @@ function SessionGapNotice({ sequences }: { sequences: readonly number[] }) {
               resumes past the hole and this notice disappears while the hole
               stays. Saying "这个会话" would make a per-connection count read as
               a total, which is the shape of claim this notice exists to stop. */}
-          <strong>这次连接里有 {sequences.length} 个位置没能交给这个页面。</strong>
+          <strong>
+            这次连接里有 {sequences.length} 个位置没能交给这个页面。
+          </strong>
           <small>
-            这些事件仍在日志里，只是这次没能解码、没有交给这个页面。通知本身不带 run，
-            所以这里只标出位置，说不出它落在哪一轮的哪两步之间。
+            这些事件仍在日志里，只是这次没能解码、没有交给这个页面。通知本身不带
+            run， 所以这里只标出位置，说不出它落在哪一轮的哪两步之间。
           </small>
           <ul>
             {sequences.map((sequence) => (

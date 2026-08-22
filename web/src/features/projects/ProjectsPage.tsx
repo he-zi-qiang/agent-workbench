@@ -37,6 +37,7 @@ import type { ProjectItemView, ProjectView } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
   useWorkspaceSidebar,
+  WorkspaceSidebarActions,
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
 import {
@@ -44,7 +45,7 @@ import {
   ErrorNotice,
   IconButton,
   LoadingLine,
-  NewSessionButton,
+  NewSessionAction,
   formatTime,
 } from "../../components/ui";
 
@@ -148,7 +149,7 @@ export function ProjectsPage() {
       // 会让人以为对话和任务也一起没了，而它们不会。
       if (
         !window.confirm(
-          `删除项目「${name}」？里面的对话、任务和知识库都会留下，只是不再属于任何项目。`,
+          `删除项目「${name}」？里面的对话、任务、编码会话和知识库都会留下，只是不再属于任何项目。`,
         )
       ) {
         return;
@@ -171,20 +172,18 @@ export function ProjectsPage() {
 
   return (
     <div className="aw-projects-page">
+      <WorkspaceSidebarActions>
+        <NewSessionAction label="新建项目" onClick={() => setCreating(true)} />
+      </WorkspaceSidebarActions>
       <WorkspaceSidebarPortal>
         <aside className="aw-projects-sidebar" aria-label="项目列表">
-          <header className="aw-pane-header">
-            <div>
-              <strong>全部项目</strong>
-            </div>
-            <IconButton
-              className="aw-projects-close"
-              label="关闭项目列表"
-              onClick={workspaceSidebar.close}
-            >
-              <X aria-hidden="true" size={17} />
-            </IconButton>
-          </header>
+          <IconButton
+          className="aw-projects-close"
+          label="关闭项目列表"
+          onClick={workspaceSidebar.close}
+          >
+          <X aria-hidden="true" size={17} />
+          </IconButton>
 
           {creating ? (
             <form
@@ -211,9 +210,7 @@ export function ProjectsPage() {
                 placeholder="这件事叫什么"
               />
             </form>
-          ) : (
-            <NewSessionButton label="新建项目" onClick={() => setCreating(true)} />
-          )}
+          ) : null}
 
           <div className="aw-project-list">
             {projects.isPending ? (
@@ -221,7 +218,7 @@ export function ProjectsPage() {
             ) : projects.data?.projects.length === 0 ? (
               // 空状态说下一步，不说机制，也不催人建项目。
               <p className="aw-chat-local-note">
-                把同一件事的对话、任务和资料放到一起，就从这里开始。
+                把同一件事的对话、任务、编码会话和资料放到一起，就从这里开始。
               </p>
             ) : (
               projects.data?.projects.map((project) => (
@@ -234,7 +231,10 @@ export function ProjectsPage() {
                   onCancelRename={() => setRenaming(null)}
                   onRename={(name) => void rename(project.project_id, name)}
                   onArchive={() =>
-                    void archive(project.project_id, project.archived_at === null)
+                    void archive(
+                      project.project_id,
+                      project.archived_at === null,
+                    )
                   }
                   onDelete={() => void remove(project.project_id, project.name)}
                   onOpen={workspaceSidebar.close}
@@ -252,13 +252,14 @@ export function ProjectsPage() {
           <EmptyState
             icon={<FolderOpen aria-hidden="true" size={24} />}
             title="选一个项目"
-            description="项目把同一件事的对话、任务和资料收在一起。不属于任何项目的东西仍然在它自己的页面上。"
+            description="项目把同一件事的对话、任务、编码会话和资料收在一起。不属于任何项目的东西仍然在它自己的页面上。"
           />
         ) : (
           <>
             <header className="aw-projects-header">
               <h1>{selected?.name ?? "项目"}</h1>
-              {selected?.archived_at === null || selected === undefined ? null : (
+              {selected?.archived_at === null ||
+              selected === undefined ? null : (
                 <small>已归档</small>
               )}
             </header>
@@ -268,7 +269,7 @@ export function ProjectsPage() {
               <EmptyState
                 icon={<FolderOpen aria-hidden="true" size={24} />}
                 title="这个项目还是空的"
-                description="在对话、任务或知识库里把一件东西归到这个项目，它就会出现在这里。"
+                description="在对话、任务、编码会话或知识库里把一件东西归到这个项目，它就会出现在这里。"
               />
             ) : (
               <ul className="aw-project-items">

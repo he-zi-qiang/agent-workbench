@@ -1,4 +1,5 @@
 import {
+  ChevronDown,
   MonitorCog,
   Moon,
   MoreHorizontal,
@@ -34,7 +35,9 @@ import { type ThemeMode, useTheme } from "./ThemeContext";
 import type { WorkspaceSidebarContextValue } from "./WorkspaceSidebar";
 
 const PRIMARY_NAVIGATION = NAVIGATION.filter((item) => item.primary);
-const KNOWLEDGE_NAVIGATION = NAVIGATION.find((item) => item.to === "/knowledge");
+const KNOWLEDGE_NAVIGATION = NAVIGATION.find(
+  (item) => item.to === "/knowledge",
+);
 
 const PRIMARY_FLOW_ROOTS = Object.fromEntries(
   NAVIGATION.filter((item) => item.primary).map((item) => [item.to, item.to]),
@@ -85,6 +88,14 @@ export function AppShell() {
     false,
   );
   const [sidebarHost, setSidebarHost] = useState<HTMLDivElement | null>(null);
+  const [sidebarActionsHost, setSidebarActionsHost] =
+    useState<HTMLDivElement | null>(null);
+  // 折叠归壳层管，不归 feature：折叠的是「这一栏在导航里占不占高度」，而那
+  // 是导航项自己的事——feature 是 portal 进来的，够不到包着它的两层容器。
+  // 一份 map 而不是四个 key：新增一个工作区不该顺带要记得加一行 state。
+  const [collapsedWorkspaces, setCollapsedWorkspaces] = useStoredState<
+    Record<string, boolean>
+  >("aw.sidebar.collapsed.v1", {});
   const [sidebarDrawerLocationKey, setSidebarDrawerLocationKey] = useState<
     string | null
   >(null);
@@ -93,7 +104,9 @@ export function AppShell() {
   const focusBeforeSidebar = useRef<HTMLElement | null>(null);
   const openSidebar = useCallback(() => {
     focusBeforeSidebar.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     setSidebarDrawerLocationKey(location.key);
   }, [location.key]);
   // `isConnected`, not just a null check: these three all close over the
@@ -119,7 +132,9 @@ export function AppShell() {
   const restoreMoreFocus = useRef(true);
   const openMore = useCallback(() => {
     focusBeforeMore.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     restoreMoreFocus.current = true;
     setMobileMoreOpen(true);
   }, []);
@@ -131,7 +146,9 @@ export function AppShell() {
   const focusBeforeQuickSwitcher = useRef<HTMLElement | null>(null);
   const openQuickSwitcher = useCallback(() => {
     focusBeforeQuickSwitcher.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     setQuickSwitcherOpen(true);
   }, []);
   const closeQuickSwitcher = useCallback(() => {
@@ -157,7 +174,9 @@ export function AppShell() {
   useEffect(() => {
     if (!mobileMoreOpen) return;
     const returnTarget = focusBeforeMore.current;
-    moreDialogRef.current?.querySelector<HTMLElement>(".aw-mobile-more-link")?.focus();
+    moreDialogRef.current
+      ?.querySelector<HTMLElement>(".aw-mobile-more-link")
+      ?.focus();
     return () => {
       if (!restoreMoreFocus.current) return;
       restoreFocusTo(returnTarget);
@@ -313,7 +332,7 @@ export function AppShell() {
     if (event.key !== "Tab" || moreDialogRef.current === null) return;
     const focusable = Array.from(
       moreDialogRef.current.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled])',
+        "a[href], button:not([disabled])",
       ),
     );
     const first = focusable[0];
@@ -338,7 +357,7 @@ export function AppShell() {
       if (event.key !== "Tab" || sidebarRef.current === null) return;
       const focusable = Array.from(
         sidebarRef.current.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled])',
+          "a[href], button:not([disabled]), input:not([disabled])",
         ),
       ).filter((element) => element.offsetParent !== null);
       const first = focusable[0];
@@ -395,6 +414,7 @@ export function AppShell() {
   const sidebarContext: WorkspaceSidebarContextValue = {
     managed: true,
     host: sidebarHost,
+    actionsHost: sidebarActionsHost,
     drawerOpen: sidebarDrawerOpen,
     open: openSidebar,
     close: closeSidebar,
@@ -420,7 +440,9 @@ export function AppShell() {
             className="aw-logo"
             to={primaryHistory["/chat"] ?? "/chat"}
           >
-            <span className="aw-logo-mark" aria-hidden="true">A</span>
+            <span className="aw-logo-mark" aria-hidden="true">
+              A
+            </span>
             <span className="aw-logo-copy">
               <strong>Agent Workbench</strong>
             </span>
@@ -445,27 +467,79 @@ export function AppShell() {
           const current = item.covers.some((prefix) =>
             isPathWithin(location.pathname, prefix),
           );
+          const collapsed = collapsedWorkspaces[item.to] === true;
           return (
             <div
-              className={`aw-sidebar-workspace ${current ? "is-active" : ""}`}
+              className={`aw-sidebar-workspace ${current ? "is-active" : ""} ${
+                current && collapsed ? "is-collapsed" : ""
+              }`}
               key={item.to}
             >
-              {/* `Link`, not `NavLink`: this entry stands for a set of
-                  prefixes, and `NavLink` overwrites `aria-current` with its own
-                  single-path match -- which reads "not here" on /work. */}
-              <Link
-                aria-label={item.label}
-                aria-current={current ? "page" : undefined}
-                className={`aw-global-link ${current ? "active" : ""}`}
-                title={`${item.label} · ${item.description}`}
-                to={destinationFor(item)}
-              >
-                <span className="aw-global-link-icon">
-                  <Icon aria-hidden="true" size={18} />
-                </span>
-                <span className="aw-global-link-copy">{item.label}</span>
-              </Link>
-              {current ? (
+              {/* 导航项这一行**就是**这一组的标题：名字、折叠开关和这个
+                  工作区自己的动作都在它上面。此前名字下面还另起一行
+                  「最近对话 / 最近任务 / 最近编码」——同一件事在同一栏里被
+                  命名了两次，而第二次占掉一整行高度。 */}
+              <div className="aw-workspace-row">
+                {current ? (
+                  /* 当前这一项已经在它自己的页面上了，所以这一行的工作不再
+                     是「去哪里」，而是「这一组展开不展开」——于是它是一个
+                     真的 disclosure 按钮，整行可点，不是一个链接旁边再挂
+                     一颗只有 20px 的箭头。
+                     上一版就是那样：折叠只能点箭头，而那颗箭头在一行 36px
+                     的行里是一个 20px 的靶子，还紧挨着两个别的图标。
+                     回到这一栏根部（新对话 / 新任务 / 新会话）的路没有丢，
+                     它是右边那颗 + —— 那本来就是这一栏里除了「回到哪一段」
+                     之外唯一的另一件事。 */
+                  <button
+                    aria-controls="workspace-sidebar-context"
+                    aria-current="page"
+                    aria-expanded={!collapsed}
+                    className="aw-global-link active"
+                    onClick={() => {
+                      setCollapsedWorkspaces((held) => ({
+                        ...held,
+                        [item.to]: !collapsed,
+                      }));
+                    }}
+                    title={`${collapsed ? "展开" : "收起"}${item.label}列表`}
+                    type="button"
+                  >
+                    <span className="aw-global-link-icon">
+                      <Icon aria-hidden="true" size={18} />
+                    </span>
+                    <span className="aw-global-link-copy">{item.label}</span>
+                    <ChevronDown
+                      aria-hidden="true"
+                      className="aw-workspace-fold-icon"
+                      size={13}
+                    />
+                  </button>
+                ) : (
+                  /* `Link`, not `NavLink`: this entry stands for a set of
+                     prefixes, and `NavLink` overwrites `aria-current` with its
+                     own single-path match -- which reads "not here" on /work. */
+                  <Link
+                    aria-label={item.label}
+                    className="aw-global-link"
+                    title={`${item.label} · ${item.description}`}
+                    to={destinationFor(item)}
+                  >
+                    <span className="aw-global-link-icon">
+                      <Icon aria-hidden="true" size={18} />
+                    </span>
+                    <span className="aw-global-link-copy">{item.label}</span>
+                  </Link>
+                )}
+                {current ? (
+                  <>
+                    <div
+                      className="aw-workspace-actions"
+                      ref={setSidebarActionsHost}
+                    />
+                  </>
+                ) : null}
+              </div>
+              {current && !collapsed ? (
                 // 不带 aria-label：`aria-label` 在没有 role 的 <div> 上
                 // 是被禁止的，辅助技术会直接丢掉它（在无障碍树里确认过
                 // 它不在）。里面每个 feature 自己的 <aside>/<nav> 都带着
@@ -539,7 +613,9 @@ export function AppShell() {
           </span>
           <span className="aw-rail-identity-copy">
             <strong>{identity.principalId}</strong>
-            <small>{identity.tenantId} · {identity.scopes.length} 项权限</small>
+            <small>
+              {identity.tenantId} · {identity.scopes.length} 项权限
+            </small>
           </span>
         </button>
       </nav>
@@ -566,25 +642,25 @@ export function AppShell() {
         className="aw-mobile-nav"
         inert={behindModal ? true : undefined}
       >
-        {NAVIGATION.filter((item) => item.primary || item.to === "/knowledge").map(
-          (item) => {
-            const Icon = item.icon;
-            const current = item.covers.some((prefix) =>
-              isPathWithin(location.pathname, prefix),
-            );
-            return (
-              <Link
-                aria-current={current ? "page" : undefined}
-                className={`aw-mobile-link ${current ? "active" : ""}`}
-                key={item.to}
-                to={destinationFor(item)}
-              >
-                <Icon aria-hidden="true" size={19} />
-                <span>{item.label}</span>
-              </Link>
-            );
-          },
-        )}
+        {NAVIGATION.filter(
+          (item) => item.primary || item.to === "/knowledge",
+        ).map((item) => {
+          const Icon = item.icon;
+          const current = item.covers.some((prefix) =>
+            isPathWithin(location.pathname, prefix),
+          );
+          return (
+            <Link
+              aria-current={current ? "page" : undefined}
+              className={`aw-mobile-link ${current ? "active" : ""}`}
+              key={item.to}
+              to={destinationFor(item)}
+            >
+              <Icon aria-hidden="true" size={19} />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
         <button
           aria-expanded={mobileMoreOpen}
           aria-haspopup="dialog"

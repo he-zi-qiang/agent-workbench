@@ -38,7 +38,13 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Code2, LoaderCircle, PanelLeft, Paperclip } from "lucide-react";
+import {
+  ArrowUp,
+  Code2,
+  LoaderCircle,
+  PanelLeft,
+  Paperclip,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -61,6 +67,7 @@ import {
   newIdempotencyKey,
   putCodeWorkspaceFile,
   renameCodeSession,
+  setCodeSessionProject,
 } from "../../api/client";
 import type {
   ApprovalDecision,
@@ -75,6 +82,8 @@ import {
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
 import { effectiveMediaType } from "../../components/media";
+import { useDismissOnEscape } from "../../hooks/useDismissOnEscape";
+import { ProjectPicker } from "../../components/ProjectPicker";
 import { EmptyState, ErrorNotice, IconButton } from "../../components/ui";
 import { CodeSessionRail } from "./CodeSessionRail";
 import { CodeTurn } from "./CodeTurn";
@@ -97,7 +106,8 @@ const CODE_STARTERS = [
   },
   {
     title: "编写测试用例",
-    prompt: "为下面的行为编写清晰的测试用例，覆盖正常路径、边界条件和失败情况：",
+    prompt:
+      "为下面的行为编写清晰的测试用例，覆盖正常路径、边界条件和失败情况：",
   },
 ] as const;
 
@@ -194,18 +204,33 @@ export function CodePage() {
   //: an error from one session lingering over the next -- "artifact not
   //: found" hanging above a healthy workspace -- is the same one-render-late
   //: bug the `loadedFor` trick above exists for, solved the same way.
-  const [fault, setFault] = useState<{ scope: string | null; text: string } | null>(
-    null,
-  );
-  const error = fault !== null && fault.scope === (sessionId ?? null) ? fault.text : null;
+  const [fault, setFault] = useState<{
+    scope: string | null;
+    text: string;
+  } | null>(null);
+  const error =
+    fault !== null && fault.scope === (sessionId ?? null) ? fault.text : null;
   const [approvals, setApprovals] = useState<PendingApprovalView[]>([]);
   const [opened, setOpened] = useState<OpenedFile | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const workspaceSidebar = useWorkspaceSidebar();
   const [panelOpen, setPanelOpen] = useState(false);
+  // 和任务页共用一个 hook：这个抽屉此前也只有点背景和点「关闭」两个关法，
+  // 两个都要用鼠标。
+  const closePanel = useCallback(() => {
+    setPanelOpen(false);
+  }, [setPanelOpen]);
+  useDismissOnEscape(panelOpen, closePanel);
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const queries = useQueryClient();
+  // 归属改完要把会话列表标脏：那份列表带着 project_id，而项目页读的是同一个
+  // 事实。不刷新的话，切回来看到的是改之前的答案。
+  const assignProject = async (projectId: string | null) => {
+    if (sessionId === undefined) return;
+    await setCodeSessionProject(identity, sessionId, projectId);
+    await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
+  };
 
   //: Where the page is *now*, for continuations that were started under
   //: something else. The state above is derived rather than reset (`loadedFor`,
@@ -254,7 +279,9 @@ export function CodePage() {
   // The sentence to draw a block for, or null because the server's transcript
   // already carries it -- or because it was typed into a different session.
   const pendingInstruction =
-    running && pending !== null && (pending.sessionId ?? sessionId) === sessionId
+    running &&
+    pending !== null &&
+    (pending.sessionId ?? sessionId) === sessionId
       ? pending.text
       : null;
   // Memoised, unlike the three above, only because `openByName` closes over it:
@@ -331,7 +358,8 @@ export function CodePage() {
           setPending((held) =>
             held !== null &&
             history.messages.some(
-              (message) => message.role === "user" && message.text === held.text,
+              (message) =>
+                message.role === "user" && message.text === held.text,
             )
               ? null
               : held,
@@ -503,6 +531,9 @@ export function CodePage() {
                 session_id: opened,
                 title: provisionalTitle(text),
                 last_activity_at: null,
+                // 乐观插入的这一行还没有归属，因为它是刚开的：服务端那份
+                // 会在下面那次 invalidate 之后替掉它。
+                project_id: null,
               },
               ...(held?.sessions ?? []),
             ],
@@ -513,7 +544,12 @@ export function CodePage() {
         // finishes is a URL nobody can send while the work is worth watching.
         await navigate(`/code/${target}`);
       }
-      const answer = await askCode(identity, target, text, newIdempotencyKey("code"));
+      const answer = await askCode(
+        identity,
+        target,
+        text,
+        newIdempotencyKey("code"),
+      );
       // A turn that dies on its budget appends no assistant message at all
       // (the server declines to invent one), so without this the transcript
       // shows the instruction and then silence -- which reads as "it cannot
@@ -632,9 +668,12 @@ export function CodePage() {
     async (target: string, title: string) => {
       const trimmed = title.trim();
       if (trimmed === "") return;
-      if (known.find((held) => held.session_id === target)?.title === trimmed) return;
+      if (known.find((held) => held.session_id === target)?.title === trimmed)
+        return;
       await renameCodeSession(identity, target, trimmed);
-      await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
+      await queries.invalidateQueries({
+        queryKey: ["code-sessions", identity],
+      });
     },
     [identity, known, queries],
   );
@@ -685,14 +724,17 @@ export function CodePage() {
       const submittedIdentity = identity;
       try {
         await deleteCodeSession(identity, target);
-        await queries.invalidateQueries({ queryKey: ["code-sessions", identity] });
+        await queries.invalidateQueries({
+          queryKey: ["code-sessions", identity],
+        });
         // A DELETE and a list refresh are two round trips, and the rail that
         // starts them is on screen the whole time -- so by the time this line
         // runs the reader may be somewhere else entirely, or somebody else
         // entirely. Both are refusals, not adjustments: navigating under a
         // principal who did not ask for it, or reporting one identity's
         // failure on another's page, is worse than the delete going quiet.
-        if (!mounted.current || shown.current.identity !== submittedIdentity) return;
+        if (!mounted.current || shown.current.identity !== submittedIdentity)
+          return;
         // Only when the reader was looking at it -- asked of the route as it
         // stands now, not of the one the click was made under. The closure's
         // `sessionId` was the session open when the trash was clicked, and it
@@ -700,11 +742,15 @@ export function CodePage() {
         // nothing.
         if (shown.current.sessionId === target) await navigate("/code");
       } catch (cause: unknown) {
-        if (!mounted.current || shown.current.identity !== submittedIdentity) return;
+        if (!mounted.current || shown.current.identity !== submittedIdentity)
+          return;
         // Scoped to where the reader is now for the same reason: `fault.scope`
         // is compared against the current route at render, so a failure filed
         // under the session they have left renders nowhere at all.
-        setFault({ scope: shown.current.sessionId ?? null, text: describe(cause) });
+        setFault({
+          scope: shown.current.sessionId ?? null,
+          text: describe(cause),
+        });
       }
     },
     [identity, navigate, queries],
@@ -832,7 +878,9 @@ export function CodePage() {
                     key={starter.title}
                     onClick={() => {
                       setInstruction(starter.prompt);
-                      window.requestAnimationFrame(() => instructionRef.current?.focus());
+                      window.requestAnimationFrame(() =>
+                        instructionRef.current?.focus(),
+                      );
                     }}
                     type="button"
                   >
@@ -849,12 +897,15 @@ export function CodePage() {
     );
   }
 
-  const title = known.find((held) => held.session_id === sessionId)?.title;
+  const held = known.find((one) => one.session_id === sessionId);
+  const title = held?.title;
 
   return (
-    <div
-      className={`aw-code-page${panelOpen ? " has-preview" : ""}`}
-    >
+    // `has-preview` 删了：全仓没有一条规则读它。minimal-theme.css:330 那块
+    // 墓碑注释记着它为什么会变成死类——预览从第三栏改成抽屉时，app.css 里的
+    // 列宽规则删了，minimal-theme 里那份没删，而它加载得更晚，于是抽屉画出来
+    // 了、下面的对话仍然被收窄。规则最后被删掉，类名却一直发到 DOM 上。
+    <div className="aw-code-page">
       {rail}
 
       <main className="aw-code-main">
@@ -870,6 +921,19 @@ export function CodePage() {
           </IconButton>
           <div className="aw-code-header-copy">
             <h1>{title ?? "新会话"}</h1>
+            {/* 归属长在这一段自己的头部，和对话页同一个位置和同一个组件。
+                一段编码会话此前是这三个工作区里唯一不能归到项目下的——
+                服务端一直允许（它就是一行 mode="code" 的会话），只是界面
+                没有给出说这句话的地方，于是「项目收着同一件事做过的东西」
+                在编码这一半是空的。 */}
+            {held === undefined ? null : (
+              <ProjectPicker
+                identity={identity}
+                label="这段编码会话属于哪个项目"
+                onAssign={assignProject}
+                projectId={held.project_id}
+              />
+            )}
           </div>
           {/* The way to the whole working set, including everything no card
               could account for. Absent entirely when there is nothing in it. */}
@@ -904,15 +968,12 @@ export function CodePage() {
                 <CodeTurn
                   block={block}
                   files={files}
-                  identity={identity}
                   key={block.key}
                   liveThinking={block.live ? thinking : ""}
                   liveThinkingCallId={block.live ? thinkingCallId : ""}
                   liveAnswer={block.live ? answer : ""}
                   onOpen={openByName}
-                  onWrote={refreshWorkspace}
                   openedName={viewing?.name ?? null}
-                  sessionId={sessionId}
                   // NOT gated on `live`, unlike the three above it, and the
                   // difference is what `live` actually means: `buildTurnBlocks`
                   // sets it from `running`, which is whether *this tab's own*
@@ -1011,7 +1072,7 @@ export function CodePage() {
         <>
           <button
             aria-label="关闭预览"
-            className="aw-code-preview-backdrop"
+            className="aw-drawer-backdrop"
             onClick={() => {
               setPanelOpen(false);
             }}

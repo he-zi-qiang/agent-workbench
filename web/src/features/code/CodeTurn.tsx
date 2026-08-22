@@ -53,26 +53,12 @@
 
 import { MoreHorizontal } from "lucide-react";
 import { useState } from "react";
-import type { PrincipalIdentity, WorkspaceEntryView } from "../../api/types";
+import type { WorkspaceEntryView } from "../../api/types";
 import { MarkdownContent } from "../../components/MarkdownContent";
-import { previewKind } from "../../components/media";
 import type { StepGroup } from "../../components/stepGroups";
 import type { ToolProgressView } from "./useCodeStream";
 import { FileCard } from "./FileCard";
-import { FilePreview } from "./FilePreview";
-import type { CodeTurnBlock, ProducedFile, TurnStep } from "./turnBlocks";
-
-/**
- * How large a produced file may be and still be previewed *without being asked*.
- *
- * The click has no ceiling -- `TextPreview` will show the head of a 5 MB file
- * and say it was cut, which is a view worth having. This bounds the other
- * case: a preview the reader did not ask for, whose fetch they did not choose
- * to spend. 64 KB is about 1,500 lines of source, already many times what the
- * 360px inline box shows, so anything past it was being transferred for bytes
- * nobody was going to read.
- */
-const AUTO_PREVIEW_MAX_BYTES = 64 * 1024;
+import type { CodeTurnBlock, TurnStep } from "./turnBlocks";
 
 /** Success is the unmarked case: a reader scans for the one that did not. */
 const OUTCOME_LABELS: Readonly<Record<StepGroup["outcome"], string>> = {
@@ -85,20 +71,16 @@ const OUTCOME_LABELS: Readonly<Record<StepGroup["outcome"], string>> = {
 export function CodeTurn({
   block,
   files,
-  identity,
   liveAnswer,
   liveThinking,
   liveThinkingCallId,
   onOpen,
   toolProgress,
-  onWrote,
   openedName,
-  sessionId,
 }: {
   block: CodeTurnBlock;
   /** The current listing, for sizes, media types, and whether a name still exists. */
   files: WorkspaceEntryView[];
-  identity: PrincipalIdentity;
   /** The report as it is being written. Non-empty only on the live block. */
   liveAnswer: string;
   /** Non-empty only on the live block, and only while a call is reasoning. */
@@ -106,20 +88,10 @@ export function CodeTurn({
   /** Which model call that live text belongs to, so it lands on its own step. */
   liveThinkingCallId: string;
   onOpen: (name: string) => void;
-  /** A run started from a card in here can write files. */
-  onWrote: (names: string[]) => void;
   openedName: string | null;
-  sessionId: string;
   /** Live tool progress by `tool_call_id`. Empty except on the live block. */
   toolProgress: ReadonlyMap<string, ToolProgressView>;
 }) {
-  // One auto-opened inline preview per turn: the last previewable thing it
-  // produced. Not gated on `live` -- a reader scrolling back to a turn is
-  // asking what it made, and answering with a filename they have to click is
-  // answering a different question. One per turn keeps a five-file turn from
-  // becoming five stacked frames.
-  const autoPreview = lastPreviewable(block.produced, files);
-
   return (
     <li className="aw-code-turn">
       <div className="aw-code-said">
@@ -137,7 +109,10 @@ export function CodeTurn({
               // the group would remount at exactly that moment and reset the
               // disclosure the reader is mid-sentence in.
               key={step.modelCallId ?? step.key}
-              live={step.modelCallId !== "" && step.modelCallId === liveThinkingCallId}
+              live={
+                step.modelCallId !== "" &&
+                step.modelCallId === liveThinkingCallId
+              }
               liveThinking={liveThinking}
               step={step}
               toolProgress={toolProgress}
@@ -152,28 +127,11 @@ export function CodeTurn({
             const entry = files.find((held) => held.name === file.name);
             return (
               <FileCard
-                autoPreview={file.name === autoPreview}
                 entry={entry}
                 file={file}
                 key={file.toolCallId + file.name}
                 onOpen={onOpen}
                 opened={file.name === openedName}
-                renderPreview={() =>
-                  entry === undefined ? null : (
-                    <FilePreview
-                      files={files}
-                      identity={identity}
-                      onOpen={onOpen}
-                      onWrote={onWrote}
-                      viewing={{
-                        sessionId,
-                        name: file.name,
-                        mediaType: entry.media_type,
-                        sizeBytes: entry.size_bytes,
-                      }}
-                    />
-                  )
-                }
               />
             );
           })}
@@ -418,41 +376,11 @@ function splitThought(text: string): { head: string; body: string } {
   // No ellipsis when it is cut hard: the disclosure triangle already says
   // there is more underneath.
   if (end === -1) {
-    end = trimmed.length <= THOUGHT_HEAD_MAX ? trimmed.length : THOUGHT_HEAD_MAX;
+    end =
+      trimmed.length <= THOUGHT_HEAD_MAX ? trimmed.length : THOUGHT_HEAD_MAX;
   }
-  return { head: trimmed.slice(0, end).trim(), body: trimmed.slice(end).trim() };
-}
-
-/**
- * The last file this turn produced that can be shown in the conversation.
- *
- * "Last" rather than "first": a turn that writes a file and then rewrites it
- * ends on the version it meant, and a turn that writes a script and then a
- * report ends on the thing it was building toward.
- *
- * **Judged by `previewKind` and size, deliberately not by `checkCost`.** The
- * fold answers "is showing this cheap", which is a question about the viewer
- * and the transfer; the cost vocabulary answers "does showing it settle
- * anything", which is a different question and must not silently close a fold.
- * Routing this through cost was tried on paper and is wrong twice over: a
- * `.py` is `one-action`, so the console would stop auto-showing the source of
- * the file a coding session most often produces -- undoing "代码也是产出，它该
- * 在对话里" one release after it landed -- and dropping the ceiling for `free`
- * would auto-fetch an 8 MB page because painting it is notionally cheap.
- */
-function lastPreviewable(
-  produced: ProducedFile[],
-  files: WorkspaceEntryView[],
-): string | null {
-  let found: string | null = null;
-  for (const file of produced) {
-    const entry = files.find((held) => held.name === file.name);
-    if (entry === undefined) continue;
-    if (entry.size_bytes > AUTO_PREVIEW_MAX_BYTES) continue;
-    const kind = previewKind(entry.media_type);
-    if (kind === "text" || kind === "html" || kind === "image") {
-      found = file.name;
-    }
-  }
-  return found;
+  return {
+    head: trimmed.slice(0, end).trim(),
+    body: trimmed.slice(end).trim(),
+  };
 }

@@ -256,3 +256,89 @@ def test_items_of_a_project_that_does_not_exist_is_a_404_not_an_empty_list() -> 
         return response.status_code
 
     assert _run(world, scenario) == 404
+
+
+def test_a_coding_session_files_into_a_project_under_its_own_path() -> None:
+    """The code half of "a project collects one piece of work".
+
+    A coding session *is* a ``conversation_sessions`` row -- ``CodeSession.open``
+    writes it with ``mode="code"`` -- so membership needed no column and no
+    second application call. It gets its own path anyway, because the URL is
+    what a reader of the API sees and telling them to PATCH a *chat* session in
+    order to file a *coding* one is asking them to know an implementation
+    detail every other ``/v1/code`` route is careful to hide.
+
+    The kind is the point of the assertion. ``contents`` labels each row with
+    the session's ``mode``, so a coding session filed here comes back as
+    ``code`` -- which is what lets the project page route it to /code rather
+    than to /chat.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, list[tuple[str, str]]]:
+        world.store.remember_session(
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            session_id="ses_code_1",
+            mode="code",
+            title="编写贪吃蛇",
+        )
+        created = await client.post(
+            "/v1/projects", json={"name": "贪吃蛇复盘"}, headers=_headers()
+        )
+        project_id = created.json()["project_id"]
+        filed = await client.patch(
+            "/v1/code/sessions/ses_code_1/project",
+            json={"project_id": project_id},
+            headers=_headers(),
+        )
+        listed = await client.get(
+            f"/v1/projects/{project_id}/items", headers=_headers()
+        )
+        return (
+            filed.status_code,
+            [(item["kind"], item["item_id"]) for item in listed.json()["items"]],
+        )
+
+    assert _run(world, scenario) == (204, [("code", "ses_code_1")])
+
+
+def test_taking_a_coding_session_out_of_a_project_needs_an_explicit_null() -> None:
+    """Same contract as the chat path, asserted separately because it is a
+    separate route: an empty body must not be the most destructive request."""
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[list[str], int, list[str]]:
+        world.store.remember_session(
+            tenant_id=TENANT, owner_id=OWNER, session_id="ses_code_1", mode="code"
+        )
+        created = await client.post(
+            "/v1/projects", json={"name": "贪吃蛇复盘"}, headers=_headers()
+        )
+        project_id = created.json()["project_id"]
+        await client.patch(
+            "/v1/code/sessions/ses_code_1/project",
+            json={"project_id": project_id},
+            headers=_headers(),
+        )
+        silent = await client.patch(
+            "/v1/code/sessions/ses_code_1/project", json={}, headers=_headers()
+        )
+        still_there = await client.get(
+            f"/v1/projects/{project_id}/items", headers=_headers()
+        )
+        await client.patch(
+            "/v1/code/sessions/ses_code_1/project",
+            json={"project_id": None},
+            headers=_headers(),
+        )
+        after = await client.get(f"/v1/projects/{project_id}/items", headers=_headers())
+        return (
+            [item["item_id"] for item in still_there.json()["items"]],
+            silent.status_code,
+            [item["item_id"] for item in after.json()["items"]],
+        )
+
+    assert _run(world, scenario) == (["ses_code_1"], 400, [])

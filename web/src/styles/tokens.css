@@ -57,9 +57,10 @@
   font-weight: 300 700;
   font-display: swap;
   src: url("./fonts/space-grotesk-latin-var.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
-    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
-    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
@@ -68,9 +69,10 @@
   font-weight: 400;
   font-display: swap;
   src: url("./fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
-    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
-    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
@@ -79,9 +81,10 @@
   font-weight: 500;
   font-display: swap;
   src: url("./fonts/ibm-plex-mono-latin-500.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
-    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
-    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
 }
 
 :root {
@@ -123,33 +126,55 @@
 
   /* --- 底色 -------------------------------------------------------------
    *
-   * 画布是暖中性的 #f2f0eb，卡片才是白的。此前两者都是 #ffffff，于是"一张卡片"
-   * 这件事只能靠边框说——边框是 1px，而卡片与背景的关系是整个版面的骨架，用
-   * 一条 1px 的线去承载它，在任何缩放或截图压缩之后都是第一个消失的东西。
+   * 两条规则，全部的面都从它们推出来。数值不是挑的，是解出来的——生成与校验
+   * 的脚本见 PR 描述，下面每个比值都实测过。
    *
-   * 暖中性而不是灰：橙色动作色 #d97757 落在中性灰上会显脏（灰的蓝味与橙互补，
-   * 相邻时互相拉低饱和），落在同色温的暖底上才是它被选中的样子。
+   * 规则一：**阅读面取极值，窗框往中灰走。**
+   *   深色下 window（正文所在的那块）是最深的一档，sidebar/canvas 往上提；
+   *   浅色下 window 是最白的一档，sidebar/canvas 往下压。两个主题同一条。
+   *   此前这两个主题是**互相矛盾**的：深色下 sidebar #1f1f1d（CIE L* 11.69）比
+   *   window #191918（8.72）**亮** 2.97，浅色下 #f5f5f2（96.46）比 #fcfcfb
+   *   （98.94）**暗** 2.48——同一个侧栏，深色下读作凸起的面板，浅色下读作凹陷的
+   *   窗框。现在两边都是 5.2 L*，方向一致。
    *
-   * 深色一侧沿用同一条关系，方向不变而不是取反：**卡片比画布亮一档**。深色界面
-   * 里「抬起」仍然由更亮表达（光从上方来），把卡片做得比画布更暗会让每张卡读成
-   * 一个凹槽。深色的中性也保持暖偏——#17 16 14 的红绿蓝是递减的，和浅色一侧
-   * 的 #f2 f0 eb 同一个方向，橙色落上去才不发脏。 */
-  --aw-canvas: light-dark(#f7f7f5, #171716);
-  --aw-window: light-dark(#fcfcfb, #191918);
-  --aw-sidebar: light-dark(#f5f5f2, #1f1f1d);
-  --aw-panel: light-dark(#ffffff, #242422);
+   *   顺带：2.5–3 L* 的台阶在屏幕上基本看不见，所以此前「侧栏和正文区是两块面」
+   *   这件事实际只有那条 1px 描边在扛。
+   *
+   * 规则二：**面积越大，色度越低。**
+   *   window、sidebar、canvas 这几块大面做成真中性（RGB 三通道跨度 1），
+   *   暖色只走小面积的抬起面、chip 与描边（OKLCH 色相 ≈68）。
+   *
+   *   这一条是踩坑踩出来的。原意图（上一版这段注释写的「暖中性而不是灰，橙色
+   *   落在中性灰上会显脏」）是对的，但实现时灰漂到了 OKLCH 色相 106.7——那是
+   *   黄绿/橄榄，离橙色动作色（39.2）足足 67.5°，交接稿的画布 #f2f0eb 本来是
+   *   88.6。而把大面直接调暖也不行：一块 720px 宽的暖灰在深色下读作「土」，
+   *   在浅色下才读作「米白」。真中性没有色相，也就不会和橙冲突。
+   *
+   * 深色一侧的绝对深度按「接近纯黑」定：window L* 1.63。低于 L* 8 之后
+   * 「凹陷」这个概念不再成立（纯黑之下没有空间），所以 surface-sunken 现在
+   * 落在 window **之上** 3.4 L*——代码块靠比正文区亮来表达「另一块料」，
+   * 而不是靠更暗。 */
+  --aw-canvas: light-dark(#f0eeeb, #161515);
+  --aw-window: light-dark(#fefdfd, #060605);
+  --aw-sidebar: light-dark(#f0eeeb, #161515);
+  --aw-panel: light-dark(#f7f5f4, #1b1a18);
 
   /* The raised-chip surface. Referenced by the workbench tabs since they
      shipped, but never defined until now -- the var() fallback quietly
      resolved to #fff on a #f7f7f5 container, which is why the active tab
      was indistinguishable from its neighbours. */
-  --aw-surface: light-dark(#ffffff, #242422);
-  --aw-panel-soft: light-dark(#f7f7f4, #20201e);
-  --aw-panel-strong: light-dark(#ecece8, #2b2b28);
+  --aw-surface: light-dark(#f7f5f4, #1b1a18);
+  --aw-panel-soft: light-dark(#eae6e3, #201e1d);
+  --aw-panel-strong: light-dark(#e1dcd7, #2b2826);
+
+  /* 抬起一档，介于 panel 与 panel-strong 之间：chip、hover 出来的圆钮、禁用态的
+     发送键。此前这一档不存在，那些地方各自借了 panel-strong 或直接写死 rgba，
+     于是「悬停」和「选中」落在同一个值上——两个状态同色，等于只有一个状态。 */
+  --aw-raised: light-dark(#ece8e5, #282623);
 
   /* 凹面：代码块、被引的原文这类「陷进去」的底。同样此前只以 fallback 存在，
      而那个 fallback 是 `rgb(0 0 0 / 4%)`——一个在深色底上等于什么都没画的值。 */
-  --aw-surface-sunken: light-dark(#f5f5f2, #141413);
+  --aw-surface-sunken: light-dark(#f3f2f2, #111110);
 
   /* 深色下给面加一道 1px 的顶部高光。浅色下是透明的：那边「抬起」由投影表达，
      而投影在深色里几乎不可见（黑影落在黑底上），高光才是深色界面里唯一还能
@@ -164,61 +189,67 @@
      留着的坏处不是八行变量，是那十五行说明：这个仓库的约定是注释承载决定，
      而它承载的是一个已经被推翻的决定，读起来却像还在生效。 */
 
+  --aw-text: light-dark(#2d2a28, #d8d3cf);
+  --aw-text-soft: light-dark(#585451, #a9a5a0);
+  /* 第三档：元信息、时间、正在生成的那段回答。仍然是**要读的字**，所以仍然按
+     4.5:1 的地板定，没有「次要文字」的豁免。
+     求解时用的不是 window 而是**它可能落到的最亮/最不利的那块面**——深色是
+     panel（4.62:1），浅色是 chrome-soft（悬停中的侧栏行，4.60:1）。按 window
+     求解会得到一个在悬停行上不合格的值，那正是上一版的毛病。
+     用法上有一条配套规则：悬停/选中的行与 chip 上的文字要升到 soft，muted 只
+     落在静止的面上。 */
+  --aw-text-muted: light-dark(#6a6662, #8d8984);
 
-  --aw-text: light-dark(#242421, #efefeb);
-  --aw-text-soft: light-dark(#62625c, #aaa9a2);
-  /* 第三档，也是最弱的一档。#8b8a83 时它落在浅色 window 上只有 3.38:1——
-     而它承担的不是装饰：`.aw-chat-live-text p` 是**正在生成的那段回答本身**
-     （14.5px），`.aw-task-list-item small` 是任务的时间，`.aw-chat-connection`
-     是「连接中断」。这些都是要读的字，WCAG 对 18px 以下的正文要求 4.5:1，没有
-     「次要文字」的豁免。#71706b 在 window 上是 4.62:1，在 panel-strong（悬停/
-     选中的行）上是 4.06:1；深色一侧 #96958e 是 6.4:1。 */
-  --aw-text-muted: light-dark(#71706b, #96958e);
-
-  /* 第四档没有自己的值了，它是 muted 的别名。
-   *
-   * 这不是偷懒，是算出来的：soft 在浅色下是 6.2:1，AA 的地板是 4.5:1，而
-   * muted 已经贴着地板（4.62:1）。两者之间放不下第三个能被看见的台阶——
-   * 任何比 muted 再弱一档的值都在地板底下。它此前的三个值都验证了这一点：
-   * #aaa9a1 是 2.16:1，#8f8e86 是 3.05:1，都不合格。
-   *
-   * 而这一档挂的全是要读的字：`.aw-sidebar-section-label`（工作空间 / 资源）、
-   * 快速跳转的键盘提示（↑↓选择 / ↵前往 / Esc关闭）、`.aw-code-raw` 的展开控件。
-   * 没有一处是「在那里但不必读」——那句话是这个 token 当初的理由，而它描述的
-   * 内容一处也没有。
-   *
-   * 保留名字而不是改掉十条规则：和 --aw-info → --aw-evidence 同一个处理，
-   * 让还在用它的规则继续成立，也让「浅色下有几档文字」这件事只有一个答案。 */
+  /* 第四档没有自己的值，它是 muted 的别名——这一条没变，理由也没变：
+     soft 与 muted 之间放不下第三个既能被看见、又在 4.5:1 之上的台阶。
+     而挂在这个名字下的全是要读的字（`.aw-sidebar-section-label`、快速跳转的
+     键盘提示、`.aw-code-raw` 的展开控件），没有一处是「在那里但不必读」。
+     保留名字而不是改掉十条规则，也让「有几档文字」这件事只有一个答案。
+     真正「不必读」的那一档现在叫 --aw-faint，见下。 */
   --aw-text-subtle: var(--aw-text-muted);
 
-  --aw-border: light-dark(#e9e8e3, #30302d);
-  --aw-border-strong: light-dark(#d8d6cf, #41413c);
+  /* 第五档，**不承载要读的字**：列表标记、分隔线、禁用态的图标描边。
+     它在浅色 window 上是 3.90:1、深色 3.95:1，够 WCAG 对图形的 3:1，不够文字的
+     4.5:1——这不是缺陷，是这一档的定义。任何一处用它画字都是用错了，上面四档
+     里挑一个。 */
+  --aw-faint: light-dark(#847f7b, #716d68);
+
+  --aw-border: light-dark(#e7e3e0, #302d2a);
+  --aw-border-strong: light-dark(#d5cfc9, #3c3935);
 
   /* 比 border 再淡一档：同一块面内部的分隔，而不是两块面之间的边界。 */
-  --aw-border-subtle: light-dark(#f1f0ec, #272725);
+  --aw-border-subtle: light-dark(#f2efed, #232220);
 
-  --aw-accent: light-dark(#b95f43, #d98265);
-  --aw-accent-hover: light-dark(#a95036, #e49376);
-  --aw-accent-soft: light-dark(#f8eee9, #2d201b);
+  --aw-accent: light-dark(#b75d42, #d98265);
+  --aw-accent-hover: light-dark(#ac5337, #e49376);
+  --aw-accent-soft: light-dark(#f8eee9, #1e140f);
 
-  /* 落在动作色上的前景。近黑而不是白：白字落在浅色橙上只有 3.5:1，承载不了
-     按钮文本。
-     实测一句：近黑落在 --aw-accent 上是 3.88:1，落在 --aw-accent-hover 上是
-     3.15:1——两个都在 4.5:1 以下。今天没有一个按钮这么用（`.is-primary` 读的
-     是 --aw-text / --aw-window，15.16:1 / 15.26:1），它只剩 Logo 那个方块，
-     那是图形不是文本。写在这里是为了下一个想把主按钮填成橙色的人：那样做会
-     发出一个不合格的按钮，得先换前景。 */
-  --aw-accent-on: light-dark(#2b1710, #1d1411);
+  /* 落在动作色上的前景。上一版这里写的是「近黑而不是白：白字落在浅色橙上只有
+     3.5:1」——那个 3.5 是错的，实测白字落在 #b95f43 上是 4.39:1，近黑是
+     3.88:1。**白的那一档更高**，只是两个都差一点点过不了 4.5:1。
+     所以这次改的是底色不是前景：浅色动作色从 #b95f43 压暗两格到 #b75d42
+     （CIE L* 49.8，色相不变），白字 4.51:1，刚过 AA，肉眼与原色无差。
+     深色一侧 #1d1411 落在 #d98265 上是 6.32:1，本来就够。
+     现在带文字的主按钮可以填强调色了——这正是上一版注释警告过、而当时确实
+     不成立的那件事。 */
+  --aw-accent-on: light-dark(#ffffff, #1d1411);
 
+  /* 深色一侧的 -soft / -border 跟着正文区一起下沉。
+     它们原先是按 window #191918（CIE L* 8.72）调的，落在上面是 +3.8 L*；
+     正文区压到 #060605（1.63）之后，同样的值变成 +10.9——一块本来只是「带点
+     颜色的底」的卡片，会突然读成一个亮色块。现在 soft 落在 +5.5、border 落在
+     +11，色相不动。
+     色度是按明度比例收的（×√(L新/L旧)）：把一个 L*12.5 的色块直接压到 7.3
+     而色度不动，得到的是一块闷色，不是一层淡色。 */
   --aw-success: light-dark(#2f7a54, #6cba8b);
-  --aw-success-soft: light-dark(#edf5f0, #14241b);
-  --aw-success-border: light-dark(#cfe3d7, #24402f);
+  --aw-success-soft: light-dark(#edf5f0, #0b1911);
+  --aw-success-border: light-dark(#cfe3d7, #0f2518);
   --aw-warning: light-dark(#9a6724, #d6a45c);
-  --aw-warning-soft: light-dark(#faf2e4, #26200f);
-  --aw-warning-border: light-dark(#e6dcc6, #453820);
+  --aw-warning-soft: light-dark(#faf2e4, #1b1607);
+  --aw-warning-border: light-dark(#e6dcc6, #2a1f0c);
   --aw-danger: light-dark(#b44f4b, #e58e88);
-  --aw-danger-soft: light-dark(#fbeceb, #2a1716);
-  --aw-danger-border: light-dark(#eed6d4, #4a2b29);
+  --aw-danger-soft: light-dark(#fbeceb, #231110);
+  --aw-danger-border: light-dark(#eed6d4, #331918);
 
   /* --- 证据 / 边界 ------------------------------------------------------
    *
@@ -232,15 +263,15 @@
    * 色相几乎没变（#486b7a → #3f6472，同一支青灰），所以这是一次重命名而不是
    * 重新配色；--aw-info 保留为别名，让还没迁移的规则继续成立。 */
   --aw-evidence: light-dark(#3f6472, #8fb7c6);
-  --aw-evidence-soft: light-dark(#eef3f5, #16232a);
-  --aw-evidence-border: light-dark(#dbe4e7, #2a3c45);
+  --aw-evidence-soft: light-dark(#eef3f5, #0c171d);
+  --aw-evidence-border: light-dark(#dbe4e7, #142329);
 
   /* 引文底，比 --aw-evidence-soft 再淡一档。
    *
    * 两个面，不是一个：引用卡的表头用 soft，被引的原文用这一档。原文块嵌在那张
    * 卡里，两者同色的话卡就是一块平的青，而这里要说的恰恰是「这一段和外面那些
    * 不是一回事」——它是从别处读来的。 */
-  --aw-evidence-quote: light-dark(#f6f9fa, #121c21);
+  --aw-evidence-quote: light-dark(#f6f9fa, #0a1216);
   --aw-info: var(--aw-evidence);
   --aw-info-soft: var(--aw-evidence-soft);
 
@@ -255,6 +286,15 @@
   --aw-shadow-sm: 0 1px 2px var(--aw-shadow-tint-weak);
   --aw-shadow-md: 0 18px 48px var(--aw-shadow-tint-strong);
 
+  /* 正文区那块面的投影，**只有浅色一侧有**。
+     浅色下 window 是最白的一档、四周是更暗的 canvas，它读作「纸浮在桌面上」，
+     投影是对的；深色下 window 是最深的一档、四周是更亮的 canvas，它读作一口
+     「井」，而给凹陷的东西打投影是自相矛盾的——上一版就是这么画的，同时还
+     镶了一条比窗框还亮的描边。
+     深色一侧把 tint 设成 transparent 而不是把整条 box-shadow 删掉，是因为
+     light-dark() 只返回颜色、不返回整条阴影（这一条上面已经踩过一次）。 */
+  --aw-shadow-pane-tint: light-dark(rgb(46 42 36 / 9%), transparent);
+  --aw-shadow-pane: 0 18px 40px var(--aw-shadow-pane-tint);
 
   /* 抽屉从侧面推进来时的投影，方向由使用处给（左推是负、右推是正）。 */
   --aw-shadow-drawer-left: -18px 0 48px var(--aw-shadow-tint-strong);
@@ -274,6 +314,28 @@
   --aw-scrim-strong: light-dark(rgb(10 11 9 / 62%), rgb(0 0 0 / 76%));
   --aw-scrim: light-dark(rgb(14 15 13 / 48%), rgb(0 0 0 / 66%));
   --aw-scrim-soft: light-dark(rgb(41 39 36 / 18%), rgb(0 0 0 / 42%));
+
+  /* --- 覆盖层 -----------------------------------------------------------
+   *
+   * hover 与 selected 用**半透明的覆盖**而不是固定色值：它们要跟着底下那块面
+   * 走，而底下那块面在侧栏、正文区、卡片里各不相同。写死一个 hex 的结果是同一
+   * 个 hover 在三个地方深浅不一，其中至少一处会和「选中」撞到同一个值——两个
+   * 状态同色，等于只有一个状态。
+   *
+   * 方向按主题反：深色下往白里加，浅色下往墨里加。两边都是「离开底色」，
+   * 所以同一条规则在两个主题里都成立。 */
+  --aw-veil: light-dark(rgb(46 42 36 / 4%), rgb(255 255 255 / 4%));
+  --aw-veil-strong: light-dark(rgb(46 42 36 / 7%), rgb(255 255 255 / 7.5%));
+
+  /* --- 毛玻璃 -----------------------------------------------------------
+   *
+   * 只给**真的会有内容从底下穿过去**的两个地方：会话页的标题栏，和悬在对话流
+   * 上的输入框。此前标题栏是 0.97 不透明——那个值高到读不出是半透明的，滚动
+   * 的文字在它的下边缘被硬切一刀；配合一道渐隐才是「溶进去」。
+   * 其余地方一律用实色：在浅色主题下，一层 88% 的白盖在白底上等于什么都没画，
+   * 输入框会从一张卡退化成一个只剩描边的框。 */
+  --aw-glass: light-dark(rgb(254 254 253 / 78%), rgb(6 6 5 / 74%));
+  --aw-glass-strong: light-dark(rgb(254 254 253 / 90%), rgb(27 26 24 / 88%));
 
   --aw-radius-sm: 8px;
   --aw-radius-md: 12px;
@@ -299,21 +361,18 @@
 
   /* --- 产物预览的尺寸 ---------------------------------------------------
    *
-   * 一处定义，三个界面共用。在此之前这几个数字散在 app.css 的四条规则里，
-   * 于是「对话卡片里的预览」和「右栏的预览」是两套互不知情的高度，改一个
-   * 不会带动另一个。
+   * 一处定义，多个界面共用。在此之前这几个数字散在 app.css 的四条规则里，
+   * 于是两处预览是两套互不知情的高度，改一个不会带动另一个。
    *
-   * `--aw-preview-height` 是独占一列时的高度；`--aw-preview-height-inline`
-   * 是它嵌在对话卡片里时的高度——后者更矮是对的，一张卡片不该吃掉整屏，
-   * 但它此前是 min(30vh, 260px)，而 260px 装不下任何一个整页产物：实测一个
-   * agent 写的贪吃蛇，页面自己 `height:100%` 且画布是 min(92vw, 480px)，
-   * 480px 的正方形塞进 258px 的框里，看到的是被压扁的一条。
+   * 这里曾经是两个值：一个给独占一列的预览，一个给嵌在对话卡片里的
+   * `--aw-preview-height-inline`。后者随「就地预览」折叠一起退场了——所有
+   * 预览现在只有右侧那一块面这一个去处，也就只需要一个高度。
    *
-   * 现在的值按「一个整页产物最小需要多少」定：480 的画布 + 标题 + 操作说明
-   * ≈ 620，取 min(52vh, 560px) 让它在常见窗口上完整、在矮窗口上让位给对话。
+   * 值按「一个整页产物最小需要多少」定：agent 写的整页产物普遍是
+   * `height:100%` 加一块 min(92vw, 480px) 的画布，480 的画布加标题和操作说明
+   * 约 620px，所以 min(72vh, 760px) 让它在常见窗口上完整。
    */
   --aw-preview-height: min(72vh, 760px);
-  --aw-preview-height-inline: min(52vh, 560px);
 
   /* 适应宽度模式下，页面以为自己拥有的视口宽度。
    *

@@ -86,11 +86,17 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
     await expect(sessions).toBeHidden();
   }
 
-  await activeNavigation.getByRole("link", { name: "任务" }).click();
+  await activeNavigation.getByRole("link", { name: "Tasks" }).click();
 
   await expect(page).toHaveURL(/#\/work$/);
+  // 桌面侧栏里，当前那一项不是链接：它已经在自己的页面上了，所以那一行的
+  // 工作是「这一组展开不展开」，渲染成一个 disclosure 按钮。移动端那条栏没有
+  // 折叠，五项一直都是链接。
   await expect(
-    activeNavigation.getByRole("link", { name: "任务" }),
+    activeNavigation.getByRole(isMobile ? "link" : "button", {
+      name: "Tasks",
+      exact: true,
+    }),
   ).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "想完成什么？" })).toBeVisible();
   // 「新任务」是侧栏里的一行，和 Chat 的「新对话」同一个位置——桌面上一直在，
@@ -107,8 +113,10 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
     const tasks = page.getByRole("complementary", {
       name: "任务列表与新建任务",
     });
+    // 「新任务」现在长在工作区那一行上，不在这个 aside 里面——它是这一组的
+    // 标题动作，不是列表的一部分。所以按页面找；`exact` 的理由见上。
     await expect(
-      tasks.getByRole("button", { name: "新任务", exact: true }),
+      page.getByRole("button", { name: "新任务", exact: true }),
     ).toBeVisible();
     await tasks.getByRole("button", { name: "关闭任务列表" }).click();
     await expect(tasks).toBeHidden();
@@ -125,7 +133,7 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   // The other primary flow, and the one that is still its own rail entry.
   // Asserted by name and by the empty state rather than by a count: a count
   // would pass for a rail with two of the wrong things on it.
-  await activeNavigation.getByRole("link", { name: "编码", exact: true }).click();
+  await activeNavigation.getByRole("link", { name: "Code", exact: true }).click();
 
   await expect(page).toHaveURL(/#\/code$/);
   await expect(page.getByRole("heading", { name: "开始编码" })).toBeVisible();
@@ -141,7 +149,7 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   // A tab strip added above a `100dvh` grid pushes it out by exactly its own
   // height, and `toBeVisible()` reports an element that has been pushed off the
   // bottom as visible -- so this is the assertion that catches a botched row.
-  await activeNavigation.getByRole("link", { name: "对话" }).click();
+  await activeNavigation.getByRole("link", { name: "Chat" }).click();
   await expect(page.getByLabel("问题", { exact: true })).toBeInViewport();
 });
 
