@@ -44,6 +44,13 @@ export interface ProjectView {
   updated_at: string;
   /** 归档只是从侧栏收起来，深链照样打得开。`null` 表示没归档。 */
   archived_at: string | null;
+  /**
+   * 这个项目所在的本机目录（ADR-072），`null` 表示没登记过。
+   *
+   * 出现且为 `null`，而不是不出现：客户端必须能区分「没登记目录」和「这个后端
+   * 不支持目录」，而一个缺席的字段两者都说不了。
+   */
+  root_path: string | null;
 }
 
 export interface ProjectListResponse {
@@ -63,6 +70,40 @@ export interface ProjectItemView {
 export interface ProjectContentsResponse {
   project_id: Identifier;
   items: ProjectItemView[];
+}
+
+export type ProjectEntryKind = "file" | "directory";
+
+export interface ProjectFileEntryView {
+  /** 永远是项目内的相对路径，永远不是绝对路径——绝对路径是服务端的事。 */
+  path: string;
+  kind: ProjectEntryKind;
+  /** 目录是 `null`，不是 `0`：目录没有大小，不是大小为零。 */
+  size_bytes: number | null;
+  modified_at: string;
+}
+
+export interface ProjectListingResponse {
+  path: string;
+  entries: ProjectFileEntryView[];
+  /**
+   * 这次列举有没有被上限截断。忽略它的客户端会把半棵树画成整棵，而那在人看来
+   * 就是「这个项目只有 500 个文件」。
+   */
+  truncated: boolean;
+}
+
+export interface ProjectFileContentResponse {
+  path: string;
+  /** 不是 UTF-8 时为 `null`。 */
+  text: string | null;
+  size_bytes: number;
+  /**
+   * 单独一个字段，不能由 `text === null` 推：一个合法的空文件 `text` 是 `""`，
+   * 而它确实是文本。
+   */
+  is_text: boolean;
+  modified_at: string;
 }
 
 /** A server-owned Chat session visible to its tenant + principal owner. */

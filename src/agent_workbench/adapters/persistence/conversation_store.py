@@ -192,6 +192,15 @@ class PostgresConversationStore:
                         conversation_sessions.c.mode,
                         conversation_sessions.c.workspace_version,
                         conversation_sessions.c.last_activity_at,
+                        # Missing until ADR-072 needed it, and missing in the
+                        # way a hand-written projection goes wrong: the column
+                        # existed, the model had the field, and
+                        # `model_validate` filled it from the *default*. So
+                        # every session list answered "belongs to no project"
+                        # -- not as an error, as a confident None. The sidebar
+                        # showed 不属于任何项目 for a session the database had
+                        # filed correctly.
+                        conversation_sessions.c.project_id,
                     )
                     .where(conversation_sessions.c.tenant_id == tenant_id)
                     .where(conversation_sessions.c.owner_id == principal_id)

@@ -37,6 +37,9 @@ import type {
   RunFileResponse,
   WorkspaceResponse,
   ProjectContentsResponse,
+  ProjectFileContentResponse,
+  ProjectFileEntryView,
+  ProjectListingResponse,
   ProjectListResponse,
   ProjectView,
 } from "./types";
@@ -274,6 +277,92 @@ export async function getProjectItems(
     {
       ...(signal === undefined ? {} : { signal }),
     },
+  );
+}
+
+/**
+ * 登记这个项目所在的本机目录，`null` 取消登记（ADR-072）。
+ *
+ * 显式带上 `root_path` 这个键——包括它是 `null` 的时候。服务端用
+ * `model_fields_set` 区分「传了 null」和「没传」，前者是取消登记，后者是别动它；
+ * 一个 `undefined` 在 JSON.stringify 时会整个消失，于是「取消登记」就说不出来了。
+ * 这和 `setSessionProject` 是同一条约定。
+ */
+export async function setProjectRootPath(
+  identity: PrincipalIdentity,
+  projectId: string,
+  rootPath: string | null,
+): Promise<ProjectView> {
+  return apiRequest(identity, `/v1/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: { root_path: rootPath },
+  });
+}
+
+/**
+ * 列出项目目录的一层，`recursive` 时是整棵子树（有上限）。
+ *
+ * 调用方必须看 `truncated`：忽略它就是把半棵树画成整棵，而那在人看来就是
+ * 「这个项目只有这些文件」。
+ */
+export async function listProjectFiles(
+  identity: PrincipalIdentity,
+  projectId: string,
+  options: { path?: string; recursive?: boolean; signal?: AbortSignal } = {},
+): Promise<ProjectListingResponse> {
+  const query = new URLSearchParams();
+  if (options.path !== undefined && options.path !== "") {
+    query.set("path", options.path);
+  }
+  if (options.recursive === true) query.set("recursive", "true");
+  const suffix = query.size === 0 ? "" : `?${query.toString()}`;
+  return apiRequest(
+    identity,
+    `/v1/projects/${encodeURIComponent(projectId)}/files${suffix}`,
+    { ...(options.signal === undefined ? {} : { signal: options.signal }) },
+  );
+}
+
+export async function readProjectFile(
+  identity: PrincipalIdentity,
+  projectId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<ProjectFileContentResponse> {
+  // `URLSearchParams` 而不是手拼 `?path=${encodeURIComponent(...)}`：项目内路径
+  // 带 `/`，而这两种写法对 `/` 的处理不同——手拼那版在某些路径上会把一段编码成
+  // `%2F`，服务端解出来是另一个文件名。
+  const query = new URLSearchParams({ path });
+  return apiRequest(
+    identity,
+    `/v1/projects/${encodeURIComponent(projectId)}/file?${query.toString()}`,
+    { ...(signal === undefined ? {} : { signal }) },
+  );
+}
+
+export async function writeProjectFile(
+  identity: PrincipalIdentity,
+  projectId: string,
+  path: string,
+  content: string,
+): Promise<ProjectFileEntryView> {
+  return apiRequest(
+    identity,
+    `/v1/projects/${encodeURIComponent(projectId)}/file`,
+    { method: "PUT", body: { path, content } },
+  );
+}
+
+export async function deleteProjectFile(
+  identity: PrincipalIdentity,
+  projectId: string,
+  path: string,
+): Promise<void> {
+  const query = new URLSearchParams({ path });
+  await apiRequest(
+    identity,
+    `/v1/projects/${encodeURIComponent(projectId)}/file?${query.toString()}`,
+    { method: "DELETE" },
   );
 }
 

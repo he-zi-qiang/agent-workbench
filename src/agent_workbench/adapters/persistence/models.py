@@ -56,6 +56,11 @@ OBJECTIVE_PREVIEW_LENGTH = 200
 #: A project's name. Same order as a knowledge base's, for the same reason: it
 #: is a phrase on one row, not a paragraph.
 PROJECT_NAME_LENGTH = 200
+#: An absolute path to a project's directory (ADR-072). `PATH_MAX` is 4096 on
+#: Linux and 1024 on macOS; 2048 clears the smaller platform with room, and a
+#: root longer than the platform allows could never be opened anyway -- storing
+#: it would only move the failure later.
+PROJECT_ROOT_PATH_LENGTH = 2048
 
 conversation_sessions = Table(
     "conversation_sessions",
@@ -340,6 +345,21 @@ projects = Table(
     # but stays readable, its deep link still opens, and everything under it
     # keeps its project_id. Deleting is what releases membership (ADR-071 2.5).
     Column("archived_at", DateTime(timezone=True), nullable=True),
+    # The directory this project is, on the machine the API runs on (ADR-072).
+    # Nullable and normally NULL: a project without one behaves exactly as every
+    # project did before this column existed.
+    #
+    # Not UNIQUE. Two projects may point at one directory -- "the migration" and
+    # "the RAG evaluation" can be two pieces of work in one checkout, and they
+    # are two projects by every measure this system has. A unique constraint
+    # would encode "a directory is a project", which is the container model
+    # ADR-071 rejected and ADR-072 did not restore.
+    #
+    # No CHECK on its shape either: what makes a path safe is relative to a root
+    # resolved on the machine holding it, and none of that is expressible in
+    # SQL. A constraint here could only check spelling, and would read as a
+    # guarantee it does not provide.
+    Column("root_path", String(PROJECT_ROOT_PATH_LENGTH), nullable=True),
     # The sidebar query's exact shape: one owner's projects, unarchived first,
     # most recently touched first.
     Index(

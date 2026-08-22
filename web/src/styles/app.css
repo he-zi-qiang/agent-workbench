@@ -5670,3 +5670,167 @@ p.aw-code-step-thought {
   background: var(--aw-accent-soft);
   color: var(--aw-accent-hover);
 }
+
+/* 项目文件树（ADR-072）
+ * ====================
+ *
+ * 长在工作区侧栏里，会话列表之上。位置是有意的：一段编码会话的上下文是「这个项目
+ * 有哪些文件」，而不是「我还有哪些别的会话」——后者是切换用的，前者是工作时一直
+ * 要看的。
+ */
+
+.aw-project-files {
+  display: flex;
+  min-height: 0;
+  max-height: 46%;
+  /* `flex-shrink: 0`, and it is load-bearing rather than tidy. The sibling
+     session list is `flex: 1 1 auto`, so with the default shrink of 1 it grows
+     and squeezes this section down to its header: measured at 61px tall with a
+     list area of 8px, while the seven rows inside it were laid out and had a
+     `scrollHeight` of 190. Nothing was missing -- it was drawn and then
+     crushed. */
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-project-files > header {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 8px;
+  gap: 2px;
+}
+
+/* 路径会很长，而侧栏很窄。省略在**开头**而不是结尾：一条路径的尾巴
+   （`…/agent工作台/web`）能认出是哪个项目，开头（`/Users/heziqiang/…`）不能。
+   `direction: rtl` 配 `text-overflow: ellipsis` 是让省略号落在左边的办法，
+   里面的 `dir="ltr"` 把字符顺序摆回来。 */
+.aw-project-files > header code {
+  overflow: hidden;
+  direction: rtl;
+  font-family: var(--aw-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--aw-text-muted);
+}
+
+.aw-project-file-list {
+  /* `min-height: 0` *and* an explicit `flex` basis. A flex item defaults to
+     `min-height: auto`, which for a scroll container resolves to its
+     `min-content` -- zero. So this needs both: the min-height to be allowed to
+     be shorter than its content, and `flex: 1 1 auto` to actually claim the
+     space the section has left after its header. */
+  min-height: 0;
+  flex: 1 1 auto;
+  padding-bottom: 8px;
+  overflow-y: auto;
+}
+
+.aw-project-file-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  padding: 3px 10px 3px 8px;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-soft);
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.aw-project-file-row:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+.aw-project-file-row.is-selected {
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+/* 和折叠箭头等宽。没有它，文件名会比同层的目录名左移一个箭头的宽度，读起来
+   像浅了一层。 */
+.aw-project-file-gutter {
+  width: 13px;
+  flex: none;
+}
+
+.aw-project-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-project-file-note {
+  margin: 4px 12px;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+/* 打开的文件，和产出预览同一个位置与同一套投影。 */
+.aw-project-file-view {
+  position: absolute;
+  z-index: 5;
+  inset: 0 0 0 auto;
+  display: flex;
+  width: min(720px, 92%);
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--aw-border);
+  background: var(--aw-panel);
+  box-shadow: var(--aw-shadow-drawer-left);
+}
+
+.aw-project-file-view > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  gap: 12px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-project-file-view > header code {
+  overflow: hidden;
+  font-family: var(--aw-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-project-file-view > header button {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: var(--aw-radius-sm);
+  background: transparent;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+.aw-project-file-view pre {
+  min-height: 0;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  background: var(--aw-surface-sunken);
+  font-family: var(--aw-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* 文件树与会话列表纵向叠放。
+ *
+ * 需要这一层，是因为工作区 portal 的容器是 `flex-direction: row`：没有它，
+ * 两块会被并排塞进一条 260px 的侧栏，而先来的那块把后来的整个挤出可视区。
+ * `min-height: 0` 是让里面两块各自的 `overflow-y: auto` 真的生效——flex 子项
+ * 的默认 `min-height: auto` 会让它们撑到内容高度，滚动条于是永远不出现。 */
+.aw-code-sidebar-stack {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}

@@ -63,6 +63,7 @@ import {
   getCodeApprovals,
   getCodeHistory,
   getCodeWorkspace,
+  getProject,
   listCodeSessions,
   newIdempotencyKey,
   putCodeWorkspaceFile,
@@ -91,6 +92,7 @@ import {
   submitTextareaOnEnter,
 } from "../../components/ModeStart";
 import { CodeSessionRail } from "./CodeSessionRail";
+import { ProjectFileTree, ProjectFileViewer } from "./ProjectFileTree";
 import { CodeTurn } from "./CodeTurn";
 import type { OpenedFile } from "./FilePreview";
 import { PreviewPanel } from "./PreviewPanel";
@@ -229,6 +231,9 @@ export function CodePage() {
   useDismissOnEscape(panelOpen, closePanel);
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const queries = useQueryClient();
+  // 哪个项目文件正被查看。只在这一层保存：它是「我在看哪个文件」，属于这次浏览，
+  // 不属于会话——换个会话再回来，从头开始看是对的。
+  const [openProjectFile, setOpenProjectFile] = useState<string | null>(null);
   // 归属改完要把会话列表标脏：那份列表带着 project_id，而项目页读的是同一个
   // 事实。不刷新的话，切回来看到的是改之前的答案。
   const assignProject = async (projectId: string | null) => {
@@ -761,9 +766,34 @@ export function CodePage() {
     [identity, navigate, queries],
   );
 
+  // 这段会话所属项目的目录，没有就是 null。ADR-072 的 `root_path` 可空，而空是
+  // 正常状态——绝大多数会话没有目录，树整块不出现，而不是出现一个空的树。
+  const heldProjectId = known.find(
+    (one) => one.session_id === sessionId,
+  )?.project_id;
+  const project = useQuery({
+    queryKey: ["project", identity, heldProjectId],
+    queryFn: ({ signal }) =>
+      getProject(identity, heldProjectId as string, signal),
+    enabled: heldProjectId != null,
+  });
+  const projectRoot = project.data?.root_path ?? null;
+
   const rail = (
     <WorkspaceSidebarPortal>
-      <CodeSessionRail
+      {/* 一个纵向的壳，而不是把两块直接丢进 portal。portal 的容器是
+          `flex-direction: row`——第一版没有这层，于是文件树和会话列表被并排
+          放进一条 260px 宽的侧栏里，列表整个被挤出了可视区。 */}
+      <div className="aw-code-sidebar-stack">
+        {heldProjectId != null && projectRoot !== null ? (
+          <ProjectFileTree
+            onOpenFile={(path) => setOpenProjectFile(path)}
+            projectId={heldProjectId}
+            rootPath={projectRoot}
+            selectedPath={openProjectFile}
+          />
+        ) : null}
+        <CodeSessionRail
         known={known}
         mobileOpen={workspaceSidebar.drawerOpen}
         onCloseMobile={workspaceSidebar.close}
@@ -778,9 +808,10 @@ export function CodePage() {
         }}
         onRename={rename}
         renaming={renaming}
-        sessionId={sessionId}
-        setRenaming={setRenaming}
-      />
+          sessionId={sessionId}
+          setRenaming={setRenaming}
+        />
+      </div>
     </WorkspaceSidebarPortal>
   );
 
@@ -911,6 +942,16 @@ export function CodePage() {
     // 了、下面的对话仍然被收窄。规则最后被删掉，类名却一直发到 DOM 上。
     <div className="aw-code-page">
       {rail}
+
+      {/* 打开的项目文件浮在对话之上，和产出预览同一个位置——两者都是「先看一眼
+          再回到对话」，共用一个位置就不会互相盖住。 */}
+      {heldProjectId != null && openProjectFile !== null ? (
+        <ProjectFileViewer
+          onClose={() => setOpenProjectFile(null)}
+          path={openProjectFile}
+          projectId={heldProjectId}
+        />
+      ) : null}
 
       <main className="aw-code-main">
         <header className="aw-code-header">

@@ -63,6 +63,12 @@ class PostgresProjectStore:
                     created_at=record.created_at,
                     updated_at=record.updated_at,
                     archived_at=record.archived_at,
+                    # Listed explicitly like every other column rather than
+                    # spread from `model_dump()`: an insert that enumerates its
+                    # columns fails loudly when a field is added and forgotten,
+                    # and one that spreads silently starts writing whatever the
+                    # model grew next.
+                    root_path=record.root_path,
                 )
             )
         return record
@@ -130,6 +136,24 @@ class PostgresProjectStore:
             owner_id=owner_id,
             project_id=project_id,
             values={"archived_at": datetime.now(UTC) if archived else None},
+        )
+
+    async def set_root_path(
+        self,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        project_id: str,
+        root_path: str | None,
+    ) -> ProjectRecord | None:
+        # `None` reaches the column as SQL NULL, which is the whole point: it is
+        # how "stop pointing this project at that folder" is said. `_update`
+        # writes the dict as given, so nothing here has to special-case it.
+        return await self._update(
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            project_id=project_id,
+            values={"root_path": root_path},
         )
 
     async def _update(

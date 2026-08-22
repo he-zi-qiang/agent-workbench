@@ -481,6 +481,7 @@ describe("Chat identity boundary", () => {
           created_at: "2026-08-20T00:00:00Z",
           updated_at: "2026-08-20T00:00:00Z",
           archived_at: null,
+          root_path: null,
         },
       ],
     });

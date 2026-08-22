@@ -51,6 +51,9 @@ function project(
     created_at: "2026-08-20T00:00:00Z",
     updated_at: "2026-08-20T00:00:00Z",
     archived_at: archivedAt,
+    // ADR-072. `null` 而不是省略：这个字段在 ProjectView 上是必填的，而
+    // 「没登记目录」和「这个后端不支持目录」必须能被区分开。
+    root_path: null,
   };
 }
 

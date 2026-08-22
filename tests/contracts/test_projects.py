@@ -359,3 +359,148 @@ def test_renaming_returns_the_record_as_it_now_stands(projects: StoreHarness) ->
         return (None if renamed is None else renamed.name), missing
 
     assert projects.run(scenario) == ("改过的名字", None)
+
+
+# --- ADR-072: the directory a project may be ---------------------------------
+#
+# `root_path` is the one column added since ADR-071, and the questions it raises
+# are the ones this suite already answers for membership: is it owner-scoped, is
+# NULL a real state, and does clearing it destroy anything.
+
+
+def test_a_project_starts_with_no_directory(projects: StoreHarness) -> None:
+    async def scenario(store: object) -> object:
+        await store.create(_record())
+        stored = await store.get(tenant_id=TENANT, owner_id=OWNER, project_id=PROJECT)
+        return None if stored is None else stored.root_path
+
+    # NULL is the normal state, not a migration artefact (ADR-072 §5.5). A
+    # project created without one behaves exactly as every project did before
+    # the column existed.
+    assert projects.run(scenario) is None
+
+
+def test_registering_a_directory_round_trips(projects: StoreHarness) -> None:
+    async def scenario(store: object) -> object:
+        await store.create(_record())
+        await store.set_root_path(
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            project_id=PROJECT,
+            root_path="/srv/projects/alpha",
+        )
+        stored = await store.get(tenant_id=TENANT, owner_id=OWNER, project_id=PROJECT)
+        return None if stored is None else stored.root_path
+
+    assert projects.run(scenario) == "/srv/projects/alpha"
+
+
+def test_the_path_is_stored_as_given_not_resolved(projects: StoreHarness) -> None:
+    async def scenario(store: object) -> object:
+        await store.create(_record())
+        await store.set_root_path(
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            project_id=PROJECT,
+            root_path="/srv/link/../projects/alpha",
+        )
+        stored = await store.get(tenant_id=TENANT, owner_id=OWNER, project_id=PROJECT)
+        return None if stored is None else stored.root_path
+
+    # Deliberately unresolved. Resolution happens where a sandbox is built, on
+    # the machine holding the disk; a resolved copy in a row would be a second,
+    # staler answer that looks authoritative -- the link it went through can be
+    # repointed, and the row would not notice.
+    assert projects.run(scenario) == "/srv/link/../projects/alpha"
+
+
+def test_clearing_the_directory_is_expressible(projects: StoreHarness) -> None:
+    async def scenario(store: object) -> tuple[object, object]:
+        await store.create(_record())
+        await store.set_root_path(
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            project_id=PROJECT,
+            root_path="/srv/projects/alpha",
+        )
+        cleared = await store.set_root_path(
+            tenant_id=TENANT, owner_id=OWNER, project_id=PROJECT, root_path=None
+        )
+        stored = await store.get(tenant_id=TENANT, owner_id=OWNER, project_id=PROJECT)
+        return (
+            None if cleared is None else cleared.root_path,
+            None if stored is None else stored.root_path,
+        )
+
+    # `None` means *no directory*, which has to be distinguishable from *the
+    # field was not sent* -- otherwise "stop pointing this at that folder" has
+    # no way of being said (ADR-071 §4, ADR-072 §5).
+    assert projects.run(scenario) == (None, None)
+
+
+def test_a_neighbour_cannot_register_a_directory(projects: StoreHarness) -> None:
+    async def scenario(store: object) -> tuple[object, object]:
+        await store.create(_record())
+        refused = await store.set_root_path(
+            tenant_id=TENANT,
+            owner_id=NEIGHBOUR,
+            project_id=PROJECT,
+            root_path="/srv/projects/theirs",
+        )
+        stored = await store.get(tenant_id=TENANT, owner_id=OWNER, project_id=PROJECT)
+        return refused, (None if stored is None else stored.root_path)
+
+    # Pointing somebody else's project at a directory you chose would be the
+    # sharpest form of the cross-owner write this suite already forbids: it
+    # aims their agent at your disk.
+    assert projects.run(scenario) == (None, None)
+
+
+def test_two_projects_may_share_one_directory(projects: StoreHarness) -> None:
+    async def scenario(store: object) -> tuple[object, object]:
+        await store.create(_record())
+        await store.create(_record("prj_rag", name="RAG 评测"))
+        for project_id in (PROJECT, "prj_rag"):
+            await store.set_root_path(
+                tenant_id=TENANT,
+                owner_id=OWNER,
+                project_id=project_id,
+                root_path="/srv/projects/alpha",
+            )
+        first = await store.get(tenant_id=TENANT, owner_id=OWNER, project_id=PROJECT)
+        second = await store.get(tenant_id=TENANT, owner_id=OWNER, project_id="prj_rag")
+        return (
+            None if first is None else first.root_path,
+            None if second is None else second.root_path,
+        )
+
+    # No UNIQUE on the column: "the migration" and "the RAG evaluation" can be
+    # two pieces of work in one checkout. Uniqueness would encode "a directory
+    # is a project", which is the container model ADR-071 rejected.
+    assert projects.run(scenario) == (
+        "/srv/projects/alpha",
+        "/srv/projects/alpha",
+    )
+
+
+def test_deleting_a_project_does_not_touch_its_directory(
+    projects: StoreHarness,
+) -> None:
+    async def scenario(store: object) -> tuple[object, object]:
+        await store.create(_record())
+        await store.set_root_path(
+            tenant_id=TENANT,
+            owner_id=OWNER,
+            project_id=PROJECT,
+            root_path="/srv/projects/alpha",
+        )
+        removed = await store.delete(
+            tenant_id=TENANT, owner_id=OWNER, project_id=PROJECT
+        )
+        gone = await store.get(tenant_id=TENANT, owner_id=OWNER, project_id=PROJECT)
+        return removed, gone
+
+    # The row goes; the directory is not this store's to remove and no code
+    # path here can. Same shape as ADR-071 §2.2 -- deleting a label never
+    # deletes what it labelled, and here what it labelled is somebody's disk.
+    assert projects.run(scenario) == (True, None)

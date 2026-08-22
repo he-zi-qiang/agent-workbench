@@ -174,6 +174,24 @@ class InMemoryProjectStore:
             change=lambda record: record.model_copy(update={"archived_at": stamp}),
         )
 
+    async def set_root_path(
+        self,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        project_id: str,
+        root_path: str | None,
+    ) -> ProjectRecord | None:
+        # Recorded as given. Whether the path exists, resolves inside itself, or
+        # is a directory anybody should be handed is decided where a sandbox is
+        # built over it -- this store has no filesystem to ask.
+        return await self._update(
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            project_id=project_id,
+            change=lambda record: record.model_copy(update={"root_path": root_path}),
+        )
+
     async def _update(
         self,
         *,
