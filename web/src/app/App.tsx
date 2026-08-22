@@ -13,11 +13,6 @@ const WorkPage = lazy(() =>
 const CodePage = lazy(() =>
   import("../features/code/CodePage").then(({ CodePage }) => ({ default: CodePage })),
 );
-const ProjectsPage = lazy(() =>
-  import("../features/projects/ProjectsPage").then((module) => ({
-    default: module.ProjectsPage,
-  })),
-);
 const KnowledgePage = lazy(() =>
   import("../features/knowledge/KnowledgePage").then(({ KnowledgePage }) => ({
     default: KnowledgePage,
@@ -62,9 +57,6 @@ export function App() {
                 `running` flag exactly while the first turn runs, so the
                 composer re-enabled against an open request. */}
             <Route path="code/:sessionId?" element={<CodePage />} />
-            {/* 项目是一层归属，可空：`/projects` 是「还没选」，不是「没有项目」。 */}
-            <Route path="projects" element={<ProjectsPage />} />
-            <Route path="projects/:projectId" element={<ProjectsPage />} />
             <Route path="knowledge" element={<KnowledgePage />} />
             <Route path="evaluation" element={<EvaluationPage />} />
             <Route path="computer" element={<ComputerPage />} />

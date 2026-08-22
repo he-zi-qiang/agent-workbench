@@ -207,10 +207,70 @@ class ProjectFileStoreFactory(Protocol):
         ...
 
 
+#: How many subdirectories one browse step may return.
+#:
+#: Smaller than the file ceiling, because this feeds a picker somebody scrolls
+#: rather than a listing a model reads. A directory with more than this many
+#: subdirectories is one nobody picks from by eye anyway -- they type or narrow.
+MAX_BROWSE_ENTRIES: Final[int] = 500
+
+
+class DirectoryEntry(VersionedModel):
+    """One directory a person could choose."""
+
+    name: str
+    #: Absolute. This is the one place in this API that returns an absolute
+    #: path, and it has to: the caller's next request *is* this path, and a
+    #: picker that returned relative names would make the client join them --
+    #: which is the client-side path arithmetic ADR-072 exists to avoid.
+    path: str
+
+
+class DirectoryListing(VersionedModel):
+    """One level of the machine's directory tree, for choosing a project root."""
+
+    path: str
+    #: ``None`` at the filesystem root, where there is nowhere further up. Sent
+    #: rather than derived so the client never computes a parent path itself.
+    parent: str | None = None
+    entries: tuple[DirectoryEntry, ...] = ()
+    truncated: bool = False
+
+
+@runtime_checkable
+class DirectoryBrowser(Protocol):
+    """Enumerate directories so somebody can choose one (ADR-074).
+
+    Deliberately **directories only**, and deliberately no file contents. This
+    exists to answer "which folder", and a browser that also listed files would
+    be a filesystem read endpoint wearing a picker's clothes -- reachable before
+    any root has been registered, which is precisely the moment nothing has been
+    authorised yet.
+    """
+
+    async def browse(self, path: str | None = None) -> DirectoryListing:
+        """Subdirectories of ``path``, or of the user's home when ``None``.
+
+        Raises ``ProjectPathError`` for a relative path -- the same refusal, and
+        the same wording, that Claude Desktop gives for the equivalent input.
+        """
+
+        ...
+
+    def home(self) -> str:
+        """Where a picker opens when it has nowhere better."""
+
+        ...
+
+
 __all__ = [
     "ALWAYS_SKIPPED_DIRECTORIES",
+    "MAX_BROWSE_ENTRIES",
     "MAX_LISTING_ENTRIES",
     "MAX_READ_BYTES",
+    "DirectoryBrowser",
+    "DirectoryEntry",
+    "DirectoryListing",
     "ProjectEntryKind",
     "ProjectFileContent",
     "ProjectFileEntry",

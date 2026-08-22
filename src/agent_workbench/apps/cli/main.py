@@ -40,6 +40,7 @@ from agent_workbench.apps.cli.http import (
     HttpClientFactory,
     render_error,
 )
+from agent_workbench.apps.cli.project import run_project
 from agent_workbench.apps.cli.rendering import JsonRenderer, Renderer, TextRenderer
 from agent_workbench.apps.cli.task import run_task
 from agent_workbench.apps.cli.upload import run_upload
@@ -54,6 +55,7 @@ HTTP_COMMANDS: dict[str, Callable[..., int]] = {
     "repl": run_repl,
     "approval": run_approval,
     "artifact": run_artifact,
+    "project": run_project,
 }
 
 EXIT_COMPLETED = 0
@@ -241,6 +243,62 @@ def build_parser() -> argparse.ArgumentParser:
         "--media-type", help="Override the type guessed from the filename."
     )
     upload.add_argument("--json", action="store_true", help="Emit one JSON object.")
+
+    project = subcommands.add_parser(
+        "project",
+        help="Point a project at a directory on this machine.",
+        description=(
+            "A project may hold a real directory (ADR-072), and this is the "
+            "door a terminal uses to say which one. The console has a picker "
+            "because a browser page cannot learn an absolute path; a shell is "
+            "already standing in the directory, so the default is the current "
+            "one and there is nothing to choose."
+        ),
+    )
+    project_commands = project.add_subparsers(dest="project_command", required=True)
+
+    project_use = project_commands.add_parser(
+        "use",
+        help="Register a directory as a project's, creating the project by default.",
+    )
+    _add_endpoint(project_use)
+    project_use.add_argument(
+        "path",
+        nargs="?",
+        help="The directory. Defaults to the current one.",
+    )
+    project_use.add_argument(
+        "--project",
+        help=(
+            "Point an existing project at it instead of creating one. Without "
+            "this a new project is created, named after the directory."
+        ),
+    )
+    project_use.add_argument(
+        "--name",
+        help="Name the new project something other than the directory's name.",
+    )
+    project_use.add_argument(
+        "--json", action="store_true", help="Emit one JSON object."
+    )
+
+    project_list = project_commands.add_parser(
+        "list", help="Your projects and the directory each one holds."
+    )
+    _add_endpoint(project_list)
+    project_list.add_argument(
+        "--json", action="store_true", help="Emit one JSON object."
+    )
+
+    project_forget = project_commands.add_parser(
+        "forget",
+        help="Stop pointing a project at its directory. Deletes nothing on disk.",
+    )
+    _add_endpoint(project_forget)
+    project_forget.add_argument("--project", required=True)
+    project_forget.add_argument(
+        "--json", action="store_true", help="Emit one JSON object."
+    )
 
     search = subcommands.add_parser(
         "search",

@@ -68,7 +68,42 @@ vi.mock("../../api/client", async () => ({
   ),
   runCodeWorkspaceFile: vi.fn(),
   newIdempotencyKey: vi.fn(() => "code-1"),
+  // ADR-074. Code 现在有一道门：没选文件夹就没有起始屏。这些是那道门读的东西，
+  // 默认给一个已经有目录的项目，好让绝大多数用例只需要多点一下就回到原来的形状。
+  listProjects: vi.fn(() => Promise.resolve({ projects: [PROJECT] })),
+  getProject: vi.fn(() => Promise.resolve(PROJECT)),
+  createProjectAtDirectory: vi.fn(() => Promise.resolve(PROJECT)),
+  browseDirectories: vi.fn(() =>
+    Promise.resolve({
+      path: "/Users/alice",
+      parent: "/Users",
+      entries: [{ name: "demo", path: "/Users/alice/demo" }],
+      truncated: false,
+    }),
+  ),
+  setCodeSessionProject: vi.fn(() => Promise.resolve()),
+  listProjectFiles: vi.fn(() =>
+    Promise.resolve({ path: "", entries: [], truncated: false }),
+  ),
+  readProjectFile: vi.fn(() =>
+    Promise.resolve({
+      path: "a.txt",
+      text: "",
+      size_bytes: 0,
+      is_text: true,
+      modified_at: "2026-08-22T00:00:00Z",
+    }),
+  ),
 }));
+
+const PROJECT = {
+  project_id: "prj_1",
+  name: "demo",
+  created_at: "2026-08-22T00:00:00Z",
+  updated_at: "2026-08-22T00:00:00Z",
+  archived_at: null,
+  root_path: "/Users/alice/demo",
+};
 
 // The stream opens a real `fetch` against an SSE endpoint. What it delivers is
 // asserted through this seam instead, because a page test that waited on a
@@ -100,6 +135,17 @@ const BOB: PrincipalIdentity = {
 };
 
 const SESSION = "ses_code_1";
+
+/**
+ * 走过 ADR-074 那道门。
+ *
+ * 每个从 `/code`（没有会话）开始的用例都要先选一个文件夹，因为在那之前根本没有
+ * 输入框。写成辅助函数而不是在每个用例里点一遍，是为了让这些用例断言的仍然是
+ * 它们各自那件事——而不是每一条都顺带再测一遍这道门。门本身由它自己的用例测。
+ */
+async function chooseFolder(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: /demo/ }));
+}
 
 function mounted(entry: string = `/code/${SESSION}`) {
   // A client per render, with retries off: a shared one would carry one test's
@@ -1060,7 +1106,9 @@ describe("CodePage", () => {
       ],
     });
 
+    const user = userEvent.setup();
     mounted("/code");
+    await chooseFolder(user);
 
     expect(
       await screen.findByRole("heading", { name: "开始编码" }),
@@ -1102,6 +1150,7 @@ describe("CodePage", () => {
     });
 
     mounted("/code");
+    await chooseFolder(user);
     await user.type(screen.getByLabelText("要做的事"), "write notes.md");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
@@ -1118,6 +1167,7 @@ describe("CodePage", () => {
     vi.mocked(createCodeSession).mockReturnValue(new Promise(() => undefined));
 
     mounted("/code");
+    await chooseFolder(user);
     await user.type(screen.getByLabelText("要做的事"), "write notes.md");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
@@ -1148,6 +1198,7 @@ describe("CodePage", () => {
     });
 
     mounted("/code");
+    await chooseFolder(user);
     await user.type(screen.getByLabelText("要做的事"), "写一个 sq.py");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
@@ -1179,6 +1230,7 @@ describe("CodePage", () => {
     });
 
     mounted("/code");
+    await chooseFolder(user);
     await user.type(screen.getByLabelText("要做的事"), "写一个 sq.py");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
@@ -1197,6 +1249,7 @@ describe("CodePage", () => {
     vi.mocked(askCode).mockReturnValue(new Promise(() => undefined));
 
     mounted("/code");
+    await chooseFolder(user);
     await user.type(
       screen.getByLabelText("要做的事"),
       "写一个 sq.py\n再加上注释",
@@ -1278,8 +1331,10 @@ describe("CodePage", () => {
 
     // The control for the case below: a delete that lands while its own
     // session is on screen still has to move the reader off it.
+    // 起始页现在是那道门本身（ADR-074）：删掉最后一段会话之后回到的地方，
+    // 是「在哪个文件夹里编码」，不是一个已经可以打字的输入框。
     expect(
-      await screen.findByRole("heading", { name: "开始编码" }),
+      await screen.findByRole("heading", { name: "在哪个文件夹里编码？" }),
     ).toBeInTheDocument();
   });
 

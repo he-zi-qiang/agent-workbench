@@ -20,6 +20,8 @@ from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.project_files import (
+    DirectoryBrowser,
+    DirectoryListing,
     ProjectFileStore,
     ProjectFileStoreFactory,
 )
@@ -44,6 +46,12 @@ class ProjectService:
     #: nothing with it, which is the failure shape `--web-dir` and
     #: `--without-chat` are both written to avoid.
     files: ProjectFileStoreFactory | None = None
+    #: Absent where the deployment serves no project directories, same as
+    #: ``files``. Kept as a separate slot rather than folded into the factory:
+    #: browsing answers "which folder could this be" and the factory answers
+    #: "open this one" -- a deployment could reasonably offer the second and not
+    #: the first, and collapsing them would make that unsayable.
+    directories: DirectoryBrowser | None = None
 
     async def create(
         self,
@@ -133,6 +141,24 @@ class ProjectService:
         if record is None:
             raise NotFoundError(f"project {project_id!r} is not readable")
         return record
+
+    async def browse_directories(
+        self, principal: PrincipalContext, *, path: str | None = None
+    ) -> DirectoryListing:
+        """Directories the person could choose a project root from (ADR-074).
+
+        Takes a principal it does not use for scoping, and that is worth being
+        explicit about rather than dropping the parameter: there is nothing to
+        scope *by*. The process runs as one user on one machine (ADR-044), so
+        every principal browsing here sees the same filesystem. The parameter
+        stays because the day this grows a notion of who may browse, the call
+        sites should already be passing the thing that answers it.
+        """
+
+        del principal
+        if self.directories is None:
+            raise NotFoundError("this deployment does not serve project directories")
+        return await self.directories.browse(path)
 
     async def open_files(
         self, principal: PrincipalContext, project_id: str
