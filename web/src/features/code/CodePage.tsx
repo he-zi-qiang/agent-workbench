@@ -43,6 +43,7 @@ import {
   Code2,
   LoaderCircle,
   PanelLeft,
+  PanelRightOpen,
   Paperclip,
 } from "lucide-react";
 import {
@@ -84,7 +85,7 @@ import {
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
 import { effectiveMediaType } from "../../components/media";
-import { useDismissOnEscape } from "../../hooks/useDismissOnEscape";
+import { useStoredState } from "../../hooks/useStoredState";
 import { ProjectPicker } from "../../components/ProjectPicker";
 import { EmptyState, ErrorNotice, IconButton } from "../../components/ui";
 import {
@@ -94,7 +95,7 @@ import {
 } from "../../components/ModeStart";
 import { CodeSessionRail } from "./CodeSessionRail";
 import { ProjectChooser } from "./ProjectChooser";
-import { ProjectFileTree, ProjectFileViewer } from "./ProjectFileTree";
+import { ProjectFileTree } from "./ProjectFileTree";
 import { CodeTurn } from "./CodeTurn";
 import type { OpenedFile } from "./FilePreview";
 import { PreviewPanel } from "./PreviewPanel";
@@ -224,18 +225,29 @@ export function CodePage() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const workspaceSidebar = useWorkspaceSidebar();
-  const [panelOpen, setPanelOpen] = useState(false);
-  // 和任务页共用一个 hook：这个抽屉此前也只有点背景和点「关闭」两个关法，
-  // 两个都要用鼠标。
-  const closePanel = useCallback(() => {
-    setPanelOpen(false);
-  }, [setPanelOpen]);
-  useDismissOnEscape(panelOpen, closePanel);
+  // 展开还是收起，记在这台机器上。
+  //
+  // 和左边那条导航同一个道理：折叠是一次表态，不是每开一个会话都要重做一遍的
+  // 动作。此前这是一个 `useState(false)` 的抽屉——每次进来都是关着的，而一个
+  // 「我就是要一边读一边看文件」的人，每换一个会话就得再点一次。
+  //
+  // 也因此不再有 Escape 关闭：那是给盖住内容的浮层用的退路，而这一栏不盖任何
+  // 东西。留着它的坏处是很具体的——在下面那个输入框里按 Escape（不少输入法和
+  // 补全都用这个键）会把这一栏收起来，而且**记住**这次收起。
+  const [panelOpen, setPanelOpen] = useStoredState("aw.code.panel.v1", false);
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const queries = useQueryClient();
   // 哪个项目文件正被查看。只在这一层保存：它是「我在看哪个文件」，属于这次浏览，
   // 不属于会话——换个会话再回来，从头开始看是对的。
   const [openProjectFile, setOpenProjectFile] = useState<string | null>(null);
+  // 点开项目目录里的一个文件：它和会话产出共用右边那一栏，所以另一个要让位。
+  // 两个都留着的话，那一栏得决定谁在上面，而读者刚点的那个显然应该在上面——
+  // 与其在渲染时判断先后，不如在这里就只留一个。
+  const openProjectFileAt = useCallback((path: string) => {
+    setOpenProjectFile(path);
+    setOpened(null);
+    setPanelOpen(true);
+  }, [setPanelOpen]);
   // 起始屏选中的项目（ADR-074）。只在「还没有会话」时用得上——会话一旦存在，
   // 归属就在会话行上，读它比读这个 state 可靠：刷新页面之后 state 没了，行还在。
   const [startingIn, setStartingIn] = useState<ProjectView | null>(null);
@@ -556,9 +568,13 @@ export function CodePage() {
                 session_id: opened,
                 title: provisionalTitle(text),
                 last_activity_at: null,
-                // 乐观插入的这一行还没有归属，因为它是刚开的：服务端那份
-                // 会在下面那次 invalidate 之后替掉它。
-                project_id: null,
+                // 归属写在这一行上，不留 null。上面那次 `setCodeSessionProject`
+                // 刚把它归到这个文件夹下，服务端那份会在下面那次 invalidate 之后
+                // 替掉这一行——中间这段时间，侧栏是按文件夹收窄的，一行 project_id
+                // 是 null 的会话会被它自己刚开的那个文件夹过滤掉。也就是说：不写
+                // 这一句，这个乐观插入就白做了，而它存在的全部理由正是「一轮编码
+                // 要跑几分钟，那几分钟里读者看着的会话不该是列表里唯一没有的那个」。
+                project_id: startingIn?.project_id ?? null,
               },
               ...(held?.sessions ?? []),
             ],
@@ -664,6 +680,8 @@ export function CodePage() {
     (file: WorkspaceEntryView) => {
       if (sessionId === undefined) return;
       setPanelOpen(true);
+      // 让位给它，理由同 `openProjectFileAt`：一栏，一个文件。
+      setOpenProjectFile(null);
       setOpened({
         sessionId,
         name: file.name,
@@ -671,7 +689,7 @@ export function CodePage() {
         sizeBytes: file.size_bytes,
       });
     },
-    [sessionId],
+    [sessionId, setPanelOpen],
   );
 
   // What a card in the conversation clicks. A card knows the name a tool
@@ -806,6 +824,35 @@ export function CodePage() {
   });
   const projectRoot = project.data?.root_path ?? null;
 
+  // 读者此刻在哪个文件夹里。
+  //
+  // 会话上写着的那个优先，起始屏刚选的那个次之——顺序不能反过来：`startingIn`
+  // 是这个标签页里选过的最后一个文件夹，它不会因为读者打开了另一个文件夹下的
+  // 会话就消失，所以让它压过会话自己的归属，会让侧栏把 B 的会话列在 A 的名下。
+  const currentProjectId = heldProjectId ?? startingIn?.project_id ?? null;
+
+  // 会话列表按文件夹收窄（ADR-074：文件夹就是项目）。
+  //
+  // 收窄之前，这一栏列的是这个人**所有**的编码会话，而屏幕上其余的一切——目录树、
+  // 起始屏那句「在 … 里编码」、agent 实际读写的文件——说的都是一个文件夹。一栏
+  // 里两种范围，读者要自己在每一行上判断「这条是不是这儿的」。
+  //
+  // 在本地过滤，而不是给 `/v1/code/sessions` 加一个 project_id 参数：那个接口
+  // 一次给的是这个人最近的若干段会话（服务端上限 200），列表本来就是「最近」
+  // 而不是「全部」，在这上面再加一个服务端过滤，只会让「最近」变成两个意思。
+  // 代价说在下面那行字里——过滤掉了几条，就说几条。
+  const [scopedToProject, setScopedToProject] = useState(true);
+  const scoping = currentProjectId !== null && scopedToProject;
+  const inThisProject = useMemo(
+    () =>
+      currentProjectId === null
+        ? known
+        : known.filter((held) => held.project_id === currentProjectId),
+    [currentProjectId, known],
+  );
+  const visibleSessions = scoping ? inThisProject : known;
+  const outsideCount = known.length - inThisProject.length;
+
   const rail = (
     <WorkspaceSidebarPortal>
       {/* 一个纵向的壳，而不是把两块直接丢进 portal。portal 的容器是
@@ -814,27 +861,32 @@ export function CodePage() {
       <div className="aw-code-sidebar-stack">
         {heldProjectId != null && projectRoot !== null ? (
           <ProjectFileTree
-            onOpenFile={(path) => setOpenProjectFile(path)}
+            onOpenFile={openProjectFileAt}
             projectId={heldProjectId}
             rootPath={projectRoot}
             selectedPath={openProjectFile}
           />
         ) : null}
         <CodeSessionRail
-        known={known}
-        mobileOpen={workspaceSidebar.drawerOpen}
-        onCloseMobile={workspaceSidebar.close}
-        onDelete={(target) => void remove(target)}
-        onNew={() => {
-          workspaceSidebar.close();
-          void navigate("/code");
-        }}
-        onOpen={(target) => {
-          workspaceSidebar.close();
-          void navigate(`/code/${target}`);
-        }}
-        onRename={rename}
-        renaming={renaming}
+          known={visibleSessions}
+          mobileOpen={workspaceSidebar.drawerOpen}
+          onCloseMobile={workspaceSidebar.close}
+          onDelete={(target) => void remove(target)}
+          onNew={() => {
+            workspaceSidebar.close();
+            void navigate("/code");
+          }}
+          onOpen={(target) => {
+            workspaceSidebar.close();
+            void navigate(`/code/${target}`);
+          }}
+          onRename={rename}
+          onToggleScope={() => {
+            setScopedToProject((held) => !held);
+          }}
+          outsideCount={outsideCount}
+          renaming={renaming}
+          scoped={scoping}
           sessionId={sessionId}
           setRenaming={setRenaming}
         />
@@ -974,23 +1026,30 @@ export function CodePage() {
   const held = known.find((one) => one.session_id === sessionId);
   const title = held?.title;
 
+  // 右边那一栏此刻在显示什么。项目文件优先，理由写在 `openProjectFileAt`：
+  // 两个来源共用一栏，后点开的那个说了算，而页面在打开任一个时清掉另一个。
+  const panelProjectFile =
+    heldProjectId != null && openProjectFile !== null
+      ? { projectId: heldProjectId, path: openProjectFile }
+      : null;
+  // 两个条件：读者要它展开，而且这一栏有东西可显示。
+  //
+  // 后一个不是保险，是这一栏「记得住」带来的必然情形：展开状态跨会话保留，而
+  // 大多数会话在第一轮之前一个文件都没有。少了它，每开一段新会话都会先看到
+  // 一条 440px 宽、只写着「工作区全部文件（0）」的空栏——那是一句真话，但它
+  // 占的宽度和一屏代码一样多。有东西可显示的那一刻它自己回来，读者不用再表态
+  // 一次。
+  const panelShown =
+    panelOpen && (files.length > 0 || panelProjectFile !== null);
+
   return (
-    // `has-preview` 删了：全仓没有一条规则读它。minimal-theme.css:330 那块
-    // 墓碑注释记着它为什么会变成死类——预览从第三栏改成抽屉时，app.css 里的
-    // 列宽规则删了，minimal-theme 里那份没删，而它加载得更晚，于是抽屉画出来
-    // 了、下面的对话仍然被收窄。规则最后被删掉，类名却一直发到 DOM 上。
+    // 没有 `has-panel` 之类的类名，这一点是刻意的。预览栏展开时多出来的那一列
+    // 是一条隐式网格轨道，宽度由 `.aw-code-panel` 自己的 width 定——收起时它整个
+    // 不渲染，轨道跟着消失。写一个类名让 CSS 去改 `grid-template-columns`，就要
+    // 求两层样式加两个断点一共四处都记得多写一条轨道；`has-preview` 当年正是这么
+    // 变成死类的（app.css 那半改了，minimal-theme 那半没改，而它加载得更晚）。
     <div className="aw-code-page">
       {rail}
-
-      {/* 打开的项目文件浮在对话之上，和产出预览同一个位置——两者都是「先看一眼
-          再回到对话」，共用一个位置就不会互相盖住。 */}
-      {heldProjectId != null && openProjectFile !== null ? (
-        <ProjectFileViewer
-          onClose={() => setOpenProjectFile(null)}
-          path={openProjectFile}
-          projectId={heldProjectId}
-        />
-      ) : null}
 
       <main className="aw-code-main">
         <header className="aw-code-header">
@@ -1020,16 +1079,29 @@ export function CodePage() {
             )}
           </div>
           {/* The way to the whole working set, including everything no card
-              could account for. Absent entirely when there is nothing in it. */}
+              could account for. Absent entirely when there is nothing in it.
+
+              收起来之后，这颗按钮就是把那一栏叫回来的地方——所以它是一个
+              带 `aria-expanded` 的开关，不是一个只会打开的按钮。展开着的时候
+              再点一下是收起：一个点开了就再也不管用的控件，读者会以为它坏了。 */}
           {files.length === 0 ? null : (
             <button
-              className="aw-button aw-code-workspace-entry"
+              aria-controls="aw-code-panel"
+              aria-expanded={panelShown}
+              className={`aw-button aw-code-workspace-entry ${
+                panelShown ? "is-open" : ""
+              }`}
               onClick={() => {
+                if (panelShown) {
+                  setPanelOpen(false);
+                  return;
+                }
                 setPanelOpen(true);
                 setDirectoryOpen(true);
               }}
               type="button"
             >
+              <PanelRightOpen aria-hidden size={15} />
               工作区 {files.length}
             </button>
           )}
@@ -1152,10 +1224,14 @@ export function CodePage() {
         {composer}
       </main>
 
-      {panelOpen ? (
+      {panelShown ? (
         <>
+          {/* 只在窄屏看得见：宽屏由 `@media (width >= 901px)` 把它关掉。
+              宽屏上这一栏是一条真的列，谁也没盖住，一层点了就收起的透明遮罩
+              只会让人误点；窄屏上三列排不下，它退回浮层，那时候「点旁边关掉」
+              又是必须有的。 */}
           <button
-            aria-label="关闭预览"
+            aria-label="收起预览栏"
             className="aw-drawer-backdrop"
             onClick={() => {
               setPanelOpen(false);
@@ -1166,7 +1242,7 @@ export function CodePage() {
             directoryOpen={directoryOpen}
             files={files}
             identity={identity}
-            onClose={() => {
+            onCollapse={() => {
               setPanelOpen(false);
             }}
             onDownload={() => {
@@ -1182,6 +1258,7 @@ export function CodePage() {
             onOpen={open}
             onWrote={refreshWorkspace}
             orphanRuns={orphanRuns}
+            projectFile={panelProjectFile}
             setDirectoryOpen={setDirectoryOpen}
             viewing={viewing}
           />

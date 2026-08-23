@@ -151,6 +151,20 @@ const WORK_STARTERS = [
  * a question whose answer cannot change, and the spinner over it claims work is
  * happening that is not.
  */
+/**
+ * 还没走完的状态：跑着的，和停下来等人的。
+ *
+ * 和 `SETTLED_STATUSES` 不是互补的两半，这一点是故意的：那一个回答的是
+ * 「还要不要接着轮询」，而 waiting_migration 的答案是「不用，它停在那儿等人
+ * 来搬」。这一个回答的是「这一行还需要读者惦记吗」，同一个状态的答案是「需要」。
+ */
+const UNFINISHED_STATUSES = new Set<TaskStatus>([
+  "queued",
+  "running",
+  "waiting_approval",
+  "waiting_migration",
+]);
+
 const SETTLED_STATUSES = new Set<TaskStatus>([
   "succeeded",
   "failed",
@@ -236,28 +250,12 @@ export function WorkPage() {
   const identityKey = workIdentityQueryKey(identity);
   const workspaceSidebar = useWorkspaceSidebar();
 
-  const [taskFilter, setTaskFilter] = useState<TaskFilterId>("all");
-  const filterStatuses = TASK_FILTERS.find(
-    (entry) => entry.id === taskFilter,
-  )?.statuses;
-
   const tasksQuery = useInfiniteQuery({
-    // The filter is part of the key: without it the three views share one
-    // cache entry and switching filters shows the previous one's pages until
-    // the refetch lands.
-    queryKey: ["work", "tasks", taskFilter, ...identityKey],
+    queryKey: ["work", "tasks", ...identityKey],
     initialPageParam: "",
     queryFn: ({ pageParam }) =>
       listTasks(identity, {
         limit: 25,
-        // Sent to the server rather than applied to `tasks` below. A client
-        // filter only ever sees the pages already loaded, so "失败" on a
-        // long history would answer "none" while naming a page it never
-        // fetched -- and the emptier the filter, the more pages it would
-        // have to be wrong about.
-        ...(filterStatuses === undefined
-          ? {}
-          : { statuses: [...filterStatuses] }),
         ...(pageParam === "" ? {} : { cursor: pageParam }),
       }),
     getNextPageParam: (lastPage) => lastPage.cursor ?? undefined,
@@ -1085,20 +1083,6 @@ export function WorkPage() {
           <X aria-hidden="true" size={17} />
           </IconButton>
 
-          <div className="aw-task-filters" role="group" aria-label="任务筛选">
-            {TASK_FILTERS.map((entry) => (
-              <button
-                aria-pressed={taskFilter === entry.id}
-                className={taskFilter === entry.id ? "is-active" : ""}
-                key={entry.id}
-                onClick={() => setTaskFilter(entry.id)}
-                type="button"
-              >
-                {entry.label}
-              </button>
-            ))}
-          </div>
-
           <nav className="aw-task-list" aria-label="任务">
             {tasksQuery.isPending ? <LoadingLine label="正在加载任务" /> : null}
             {tasksQuery.isError ? (
@@ -1128,13 +1112,22 @@ export function WorkPage() {
                     </strong>
                     <small>{formatDateTime(task.created_at)}</small>
                   </span>
-                  <span
-                    aria-label={`状态：${formatStatus(task.status)}`}
-                    className="aw-task-status-dot"
-                    data-status={task.status}
-                    role="img"
-                    title={formatStatus(task.status)}
-                  />
+                  {/* 只有还没走完的任务带这颗点。结束了的（成功、失败、取消）
+                      不带——见文件末尾那段注释：一条最近列表不需要用红色把
+                      每一次失败再说一遍，而「还没完」是扫一眼看不出来的。
+
+                      问的是 `UNFINISHED_STATUSES` 而不是 `isSettledStatus`：
+                      后者把 waiting_migration 算作已结束，因为轮询它没有意义
+                      （它停在那儿等人搬）——但那恰恰是最该带点的一行。 */}
+                  {UNFINISHED_STATUSES.has(task.status) ? (
+                    <span
+                      aria-label={`状态：${formatStatus(task.status)}`}
+                      className="aw-task-status-dot"
+                      data-status={task.status}
+                      role="img"
+                      title={formatStatus(task.status)}
+                    />
+                  ) : null}
                 </Link>
                 {/* Offered only on a settled Task, because the server refuses
                   anything else with a 409 -- and a button whose only outcome is
@@ -1162,26 +1155,7 @@ export function WorkPage() {
             ) : null}
             {!tasksQuery.isPending &&
             !tasksQuery.isError &&
-            tasks.length === 0 &&
-            taskFilter !== "all" ? (
-              // A filtered empty list is not an empty account. Saying "还没有任务"
-              // here would contradict the list the reader was looking at one
-              // click ago.
-              <p className="aw-page-note">
-                这个筛选下没有任务。
-                <button
-                  className="aw-link-button"
-                  onClick={() => setTaskFilter("all")}
-                  type="button"
-                >
-                  看全部
-                </button>
-              </p>
-            ) : null}
-            {!tasksQuery.isPending &&
-            !tasksQuery.isError &&
-            tasks.length === 0 &&
-            taskFilter === "all" ? (
+            tasks.length === 0 ? (
               <p className="aw-muted">
                 还没有任务。说一件要做的事，就能开一个。
               </p>
@@ -2205,35 +2179,21 @@ function decidedByLabel(decidedBy: TaskIntent["graph_decided_by"]): string {
   return "系统默认";
 }
 
-/**
- * The three views of the task list, and which statuses each one asks for.
+/* 侧栏此前在列表上方还有一条「全部 / 在跑 / 失败」筛选，它连着一个服务端
+ * status 过滤。删掉的理由不是它不好用，是它回答的问题在这条侧栏里问不出来：
+ * 这一栏是「我最近在做的几件事」，一次列 25 条，而按状态筛一份 25 条的列表，
+ * 眼睛比按钮快。代价是「失败」这一类不再能一键聚起来——真要按状态找，那属于
+ * 一个任务检索界面，不属于导航栏里的最近列表。
  *
- * `在跑` is every status that has not settled -- including the two waiting
- * ones. A reader scanning for "what is still going" needs the Task parked for
- * migration and the one holding for an approval in that list: both are
- * unfinished and both may need them, and a "running-only" filter that hid
- * them would be a filter that loses work.
+ * 同时删掉的还有已结束任务行首那颗状态点。它此前用形状+颜色说四种状态，
+ * 而结束了的任务里，那颗点唯一在说的是「这件事失败了」——一条列表用红色
+ * 复述每一次失败，就是在让人反复读自己最不想读的那一行。原因没有丢：点开
+ * 任务，详情页第一句仍然写着它为什么停下来。
  *
- * `失败` deliberately excludes `cancelled`. A cancellation is somebody's
- * decision that was carried out correctly; filing it under failures would put
- * the reader's own action in the list of things that went wrong.
+ * 没结束的那两类（在跑 / 等你）留着，见 `aw-task-status-dot` 那段注释：
+ * 它们说的不是好坏，是「这件事还没完，可能在等你」，而那是一条最近列表
+ * 唯一没法用眼睛扫出来的信息。
  */
-const TASK_FILTERS = [
-  { id: "all", label: "全部", statuses: undefined },
-  {
-    id: "running",
-    label: "在跑",
-    statuses: [
-      "queued",
-      "running",
-      "waiting_approval",
-      "waiting_migration",
-    ] as const,
-  },
-  { id: "failed", label: "失败", statuses: ["failed", "dead_letter"] as const },
-] as const;
-
-type TaskFilterId = (typeof TASK_FILTERS)[number]["id"];
 
 /**
  * How long a stage took, once both ends are known.

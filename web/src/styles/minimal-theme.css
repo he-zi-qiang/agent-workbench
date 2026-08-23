@@ -323,8 +323,10 @@ select {
   grid-template-columns: 236px minmax(0, 1fr);
 }
 
-/* 预览不再是一列，所以 has-preview 不再动列宽——这一层此前还留着三列那一版，
-   而它比 app.css 后加载，于是抽屉都画出来了，下面的对话仍然被收窄。 */
+/* 预览栏那一条轨道不在任何一层的 `grid-template-columns` 里，它是一条隐式
+   轨道，宽度由 `.aw-code-panel` 自己的 width 定（见 app.css 那段注释）。
+   这一页的列数在两层样式加两个断点里一共写过四遍，让它去改列定义，就是四处
+   都得记得多写一条——而漏掉任何一处的表现，正是这块注释此前记着的那个 bug。 */
 
 .aw-chat-sessions {
   border-right-color: var(--aw-border);
@@ -1361,8 +1363,8 @@ select {
    一、选择器不再命中。`.aw-work-page:not(.has-selection) .aw-work-sidebar`
    一类的后代选择器全部命中 0 个元素：那个 `<aside>` 现在被 `WorkspaceSidebarPortal`
    portal 进了 `.aw-global-rail`，不再是 `.aw-work-page` 的后代。
-   `.aw-pane-header` / `.aw-create-task-toggle` / `.aw-task-filters` /
-   `.aw-task-list` 同理，实测全是 0。
+   `.aw-pane-header` / `.aw-create-task-toggle` / `.aw-task-list` 同理，
+   实测全是 0。
 
    二、还能命中的那几条被后面的规则压掉了。实测 1280px：页面算出来是单列
    1092px（不是 `280px minmax(0,1fr)`），行是 860px（不是 `54px minmax(0,1fr)`），
@@ -1370,11 +1372,6 @@ select {
    `.aw-work-detail` 可见且在第 1 行第 1 列。
 
    留着的坏处不是它占地方，是它读起来像一个还在生效的两列版式。 */
-
-.aw-task-filters button {
-  min-height: 30px;
-  font-size: 11.5px;
-}
 
 .aw-create-task-toggle {
   justify-content: flex-start;
@@ -2007,20 +2004,6 @@ select {
   font-size: 12px;
 }
 
-.aw-sidebar-context-slot .aw-task-filters {
-  margin: 0 2px 5px;
-  padding: 2px;
-  border: 0;
-  border-radius: 7px;
-  background: var(--aw-nav-hover);
-}
-
-.aw-sidebar-context-slot .aw-task-filters button {
-  min-height: 28px;
-  padding: 0 6px;
-  font-size: 12px;
-}
-
 /* margin-top: auto 而不是 3px：把这一族钉在栏底。
    此前是靠上面那份会话列表撑满高度顺带把它推下去的——列表一旦收起（或者
    本来就短），身份行就跟着浮到列表底下，侧栏看起来像没写完。 */
@@ -2402,12 +2385,15 @@ select {
  * 红——四个 8px 的圆点，对红绿色觉障碍的读者来说是四个一样的点。灰度打印或
  * 截图压缩之后，对所有人都是。
  *
- * 两个轴，四种组合，不用记：**空心=还没完，实心=完了；圆=正常，菱形=要人管。**
+ * 现在这颗点只画在**还没走完**的任务上（WorkPage 里的 `UNFINISHED_STATUSES`），
+ * 所以只剩两种组合：**圆=它自己会走完，菱形=停下来在等你。**
  *
  *   空心圆    在跑 / 排队        它自己会走完
  *   空心菱形  等批准 / 等迁移    停下来了，在等你
- *   实心圆    已完成             走完了
- *   实心菱形  失败 / 取消 / 放弃 结束了，但不是好的那种
+ *
+ * 已完成和失败那两条规则跟着删了。它们此前是实心圆和红色实心菱形，而一条
+ * 「最近在做什么」的列表里，那颗红菱形做的唯一一件事就是把每一次失败再说
+ * 一遍。原因没有丢，它在任务详情页的第一句。
  */
 .aw-task-status-dot {
   width: 8px;
@@ -2431,24 +2417,6 @@ select {
   border-color: var(--aw-warning);
   border-radius: 1px;
   color: var(--aw-warning);
-  rotate: 45deg;
-}
-
-.aw-task-status-dot[data-status="succeeded"] {
-  border-color: var(--aw-nav-muted);
-  background: var(--aw-nav-muted);
-  color: var(--aw-nav-muted);
-}
-
-.aw-task-status-dot:is(
-  [data-status="failed"],
-  [data-status="cancelled"],
-  [data-status="dead_letter"]
-) {
-  border-color: var(--aw-danger);
-  border-radius: 1px;
-  background: var(--aw-danger);
-  color: var(--aw-danger);
   rotate: 45deg;
 }
 

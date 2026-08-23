@@ -15,7 +15,9 @@ import {
   getCodeWorkspaceFileBlob,
   getCodeWorkspaceFileText,
   listCodeSessions,
+  listProjectFiles,
   putCodeWorkspaceFile,
+  readProjectFile,
   renameCodeSession,
   runCodeWorkspaceFile,
 } from "../../api/client";
@@ -204,6 +206,10 @@ async function openWorkspace(
 }
 
 beforeEach(() => {
+  // 预览栏的展开状态存在 localStorage 里（`aw.code.panel.v1`），而 localStorage
+  // 是整个文件共用的一份。不清掉的话，一个用例点开预览栏，下一个用例一进来它
+  // 就是开着的——于是那句 `点「工作区 N」`，做的事从「打开」变成了「收起」。
+  localStorage.clear();
   // Call counts are what two of these tests assert on, and a mock is shared by
   // the whole file: without this, "was never called" means "was not called
   // since the last test that happened to reset it".
@@ -1101,7 +1107,9 @@ describe("CodePage", () => {
           session_id: SESSION,
           title: "把 notes.md 整理成清单",
           last_activity_at: null,
-          project_id: null,
+          // 归在刚选的那个文件夹下：起始屏的列表按文件夹收窄，而这条用例问的
+          // 是「这一栏在起始屏上展开着吗」，不是收窄本身——收窄有它自己的用例。
+          project_id: PROJECT.project_id,
         },
       ],
     });
@@ -2562,6 +2570,122 @@ describe("CodePage", () => {
     // the reader would go looking for content that is in the file but not here.
     expect(
       await screen.findByText("只显示了开头一部分，完整内容请下载。"),
+    ).toBeInTheDocument();
+  });
+
+  it("lists the sessions of the folder you are in, and says how many it left out", async () => {
+    // 收窄之前，这一栏列的是这个人所有的编码会话，而屏幕上其余的一切——目录树、
+    // 起始屏那句「在 … 里编码」、agent 实际读写的文件——说的都是一个文件夹。
+    // 一栏里两种范围，读者要自己在每一行上判断「这条是不是这儿的」。
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        {
+          session_id: SESSION,
+          title: "这个文件夹里的",
+          last_activity_at: "2026-08-22T09:00:00Z",
+          project_id: PROJECT.project_id,
+        },
+        {
+          session_id: "ses_code_elsewhere",
+          title: "另一个文件夹里的",
+          last_activity_at: "2026-08-21T09:00:00Z",
+          project_id: "prj_2",
+        },
+      ],
+    });
+
+    mounted();
+    const rail = await screen.findByRole("navigation", {
+      name: "最近的编码会话",
+    });
+    expect(await within(rail).findByText("这个文件夹里的")).toBeInTheDocument();
+    expect(within(rail).queryByText("另一个文件夹里的")).not.toBeInTheDocument();
+
+    // 数出来，而不是安静地少列几行：一个不说数量的「全部显示」是在让读者猜
+    // 自己有没有漏掉东西。
+    await user.click(
+      within(rail).getByRole("button", { name: /另外 1 段在别的文件夹/ }),
+    );
+    expect(
+      await within(rail).findByText("另一个文件夹里的"),
+    ).toBeInTheDocument();
+  });
+
+  it("folds the preview column away and remembers that, instead of popping it over the conversation", async () => {
+    // 它是一栏，不是浮层：所以「关闭」变成了「收起」，而收起是一次表态——
+    // 此前每开一个会话都是关着的，一个想一边读一边看文件的人得每次重点一遍。
+    const user = userEvent.setup();
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [
+        { name: "notes.md", size_bytes: 12, media_type: "text/markdown" },
+      ],
+    });
+
+    const first = mounted();
+    await openWorkspace(user, 1);
+    expect(
+      await screen.findByRole("complementary", { name: "预览" }),
+    ).toBeInTheDocument();
+
+    // 重新挂载一次就是「换一个会话 / 刷新一次页面」：展开状态要活过它。
+    first.unmount();
+    mounted();
+    expect(
+      await screen.findByRole("complementary", { name: "预览" }),
+    ).toBeInTheDocument();
+
+    // 同一颗按钮收起它。一个点开了就再也不管用的开关，读者会以为它坏了。
+    await user.click(await screen.findByRole("button", { name: "工作区 1" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("complementary", { name: "预览" }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("opens a project file in that same column, not in a second layer of its own", async () => {
+    // 两个来源（会话产出、项目目录）此前各有各的浮层，宽度还不一样，而且能
+    // 互相盖住——同一个动作在屏幕上有两种样子。
+    const user = userEvent.setup();
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        {
+          session_id: SESSION,
+          title: "这个文件夹里的",
+          last_activity_at: "2026-08-22T09:00:00Z",
+          project_id: PROJECT.project_id,
+        },
+      ],
+    });
+    vi.mocked(listProjectFiles).mockResolvedValue({
+      path: "",
+      entries: [
+        {
+          path: "main.py",
+          kind: "file",
+          size_bytes: 20,
+          modified_at: "2026-08-22T00:00:00Z",
+        },
+      ],
+      truncated: false,
+    });
+    vi.mocked(readProjectFile).mockResolvedValue({
+      path: "main.py",
+      text: "print('hi')",
+      size_bytes: 20,
+      is_text: true,
+      modified_at: "2026-08-22T00:00:00Z",
+    });
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /main\.py/ }));
+
+    const pane = await screen.findByRole("complementary", { name: "预览" });
+    expect(within(pane).getByText("print('hi')")).toBeInTheDocument();
+    // 一栏，一个页眉。名字长在那一栏的头上，而不是这一块自己再画一个。
+    expect(
+      within(pane).getByRole("heading", { name: "main.py" }),
     ).toBeInTheDocument();
   });
 });

@@ -191,18 +191,25 @@ export function ProjectFileTree({
 }
 
 /**
- * 被点开的那个项目文件。
+ * 被点开的那个项目文件的正文。
  *
  * 单独一个组件而不是塞进树里：树的职责是「有哪些文件」，读一个文件是另一次请求、
  * 另一种失败（太大、不是文本），把两者放在一起会让树的加载态和文件的加载态互相
  * 顶掉。
+ *
+ * 只有正文，没有自己的头部和关闭键。它此前是一个自带页眉、浮在对话上、宽
+ * 720px 的独立浮层，而右边那块预览栏是另一个宽 420px 的浮层——同一个动作
+ * （「让我看看这个文件」）在屏幕上有两种样子，还能互相盖住。现在它是
+ * `PreviewPanel` 里的一块正文，文件名和收起键归那一栏的页眉管，两个来源
+ * 因此长得一模一样。
+ *
+ * `aria-label` 留着：这一块在那一栏里仍然是一个有名字的区域，而名字里带着
+ * 完整相对路径——页眉只放得下最后一段。
  */
-export function ProjectFileViewer({
-  onClose,
+export function ProjectFileBody({
   path,
   projectId,
 }: {
-  onClose: () => void;
   path: string;
   projectId: string;
 }) {
@@ -214,12 +221,6 @@ export function ProjectFileViewer({
 
   return (
     <section aria-label={`文件 ${path}`} className="aw-project-file-view">
-      <header>
-        <code dir="ltr">{path}</code>
-        <button onClick={onClose} type="button">
-          关闭
-        </button>
-      </header>
       {file.isPending ? <LoadingLine label="正在读取文件" /> : null}
       {file.isError ? (
         <p className="aw-project-file-note">读不到这个文件：{String(file.error)}</p>
