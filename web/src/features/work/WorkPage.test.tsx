@@ -482,52 +482,41 @@ describe("WorkPage task submission", () => {
     ).toBeInTheDocument();
   });
 
-  it("asks the server for the filtered statuses instead of filtering what it loaded", async () => {
-    // The property that decides whether this filter can be trusted. The list
-    // is paginated, so a client-side filter only ever sees the pages already
-    // fetched -- "失败" on a long history would answer "none" while the
-    // failures sat on a page it never asked for. Server-side, the emptiness
-    // is the server's answer about the whole set.
-    const user = userEvent.setup();
-    vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
+  it("marks a task that is still going and leaves a settled one plain", async () => {
+    // 侧栏的这颗点现在只说一件事：这一行还没完。此前它还用红色菱形复述每一次
+    // 失败，而一条「最近在做什么」的列表不需要那样——失败的原因在详情页里，
+    // 完整的一句话，不是一颗要人认形状的点。
+    vi.mocked(listTasks).mockResolvedValue({
+      tasks: [
+        {
+          task_id: "task_still_going",
+          status: "waiting_approval",
+          status_detail: null,
+          agent_invocation_count: 1,
+          objective_preview: "等我确认的那件事",
+          created_at: "2026-08-02T12:00:00Z",
+          updated_at: "2026-08-02T12:00:00Z",
+        },
+        {
+          task_id: "task_over",
+          status: "failed",
+          status_detail: null,
+          agent_invocation_count: 1,
+          objective_preview: "没跑成的那件事",
+          created_at: "2026-08-02T11:00:00Z",
+          updated_at: "2026-08-02T11:30:00Z",
+        },
+      ],
+      cursor: null,
+    });
 
     renderWorkPage();
-    await screen.findByRole("button", { name: "全部" });
-    vi.mocked(listTasks).mockClear();
 
-    await user.click(screen.getByRole("button", { name: "失败" }));
-
-    await waitFor(() => {
-      expect(vi.mocked(listTasks)).toHaveBeenCalled();
-    });
-    expect(vi.mocked(listTasks).mock.calls[0]?.[1]?.statuses).toEqual([
-      "failed",
-      "dead_letter",
-    ]);
-  });
-
-  it("keeps 取消 out of 失败, and the waiting states inside 在跑", async () => {
-    // Two judgements the status list encodes. A cancellation was carried out
-    // correctly at somebody's request -- filing it under failures would put
-    // the reader's own action in the list of things that went wrong. And a
-    // Task waiting for an approval or a migration is unfinished work the
-    // reader may need to act on, so "在跑" has to carry it.
-    const user = userEvent.setup();
-    vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
-
-    renderWorkPage();
-    await screen.findByRole("button", { name: "在跑" });
-    vi.mocked(listTasks).mockClear();
-
-    await user.click(screen.getByRole("button", { name: "在跑" }));
-
-    await waitFor(() => {
-      expect(vi.mocked(listTasks)).toHaveBeenCalled();
-    });
-    const asked = vi.mocked(listTasks).mock.calls[0]?.[1]?.statuses ?? [];
-    expect(asked).toContain("waiting_approval");
-    expect(asked).toContain("waiting_migration");
-    expect(asked).not.toContain("cancelled");
+    await screen.findByText("没跑成的那件事");
+    expect(
+      screen.getByRole("img", { name: "状态：等待批准" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: /^状态：/ })).toHaveLength(1);
   });
 
   it("offers delete on a settled task and withholds it from a running one", async () => {

@@ -40,7 +40,10 @@ export function CodeSessionRail({
   onNew,
   onOpen,
   onRename,
+  onToggleScope,
+  outsideCount,
   renaming,
+  scoped,
   sessionId,
   setRenaming,
 }: {
@@ -51,8 +54,14 @@ export function CodeSessionRail({
   onNew: () => void;
   onOpen: (sessionId: string) => void;
   onRename: (sessionId: string, title: string) => Promise<void>;
+  /** 在「只看这个文件夹」和「全部」之间切换。 */
+  onToggleScope: () => void;
+  /** 有多少段会话不在当前这个文件夹里。0 表示没有可切换的东西。 */
+  outsideCount: number;
   /** Which row is being renamed, if any. */
   renaming: string | null;
+  /** 这份列表此刻是不是只列了当前文件夹里的会话。 */
+  scoped: boolean;
   /** The session on screen, or undefined on the start page. */
   sessionId: string | undefined;
   setRenaming: (sessionId: string | null) => void;
@@ -155,8 +164,13 @@ export function CodeSessionRail({
       </WorkspaceSidebarActions>
       <div className="aw-code-session-list">
         {known.length === 0 ? (
+          // 收窄之后的空列表不是「一段会话都没有」。说错了这句，读者会以为
+          // 自己上周做的那些不见了——它们在别的文件夹里，而下面那行字正是
+          // 去那里的路。
           <p className="aw-code-sessions-empty">
-            还没有会话。说一句要做的事就开一个。
+            {scoped
+              ? "这个文件夹里还没有会话。说一句要做的事就开一个。"
+              : "还没有会话。说一句要做的事就开一个。"}
           </p>
         ) : (
           <ul>
@@ -309,6 +323,28 @@ export function CodeSessionRail({
           </ul>
         )}
       </div>
+
+      {/* 被这次收窄挡在外面的会话，数出来。
+          一个不说数量的「显示全部」是在让读者猜自己有没有漏东西；数量为 0 时
+          整行不出现——那时候「全部」和「这个文件夹」是同一份列表，多一个切不出
+          区别的开关只是噪音。
+
+          长在滚动区**外面**，钉在这一栏的底。放在列表末尾试过，量出来的问题是
+          它只在收窄状态下够得着：一按「全部显示」，列表从 2 条变成 50 条，而那
+          行「只看这个文件夹」跟着沉到了 50 条底下——把人送进一个只能靠滚动才
+          退得出来的状态，比不给这个开关更糟。 */}
+      {outsideCount === 0 ? null : (
+        <button
+          aria-pressed={scoped}
+          className="aw-code-sessions-scope"
+          onClick={onToggleScope}
+          type="button"
+        >
+          {scoped
+            ? `另外 ${String(outsideCount)} 段在别的文件夹 · 全部显示`
+            : "只看这个文件夹"}
+        </button>
+      )}
     </nav>
   );
 }

@@ -3898,19 +3898,39 @@ pre {
  * 无关；这一段复用它来排数字与摘要，正是因为它就是「把一串机器写的字排整齐」。
  */
 
-/* 预览是浮在对话上的抽屉，不是第三栏。
+/* 预览是可以折叠的第三栏，不是浮在对话上的抽屉。
  *
- * 原来它是一列，于是「打开预览」这个动作要收走对话的三分之一——读者为了看一眼
- * 产物，得让正在读的那段话变窄、重排。抽屉不动下面那一层：关掉之后，对话还在
- * 原来的位置和原来的行里。
+ * 这条规则改过两次，两次的账都记在这儿。
  *
- * `position: relative` 是给它定位用的：抽屉贴的是这一页，不是视口——全局窄导航
- * 在这一页之外，不该被一个属于 Code 的浮层盖住。 */
+ * 一开始它是常驻的第三栏：只要会话里有文件，它就占住 `clamp(320px, 40%, 560px)`，
+ * 不管有没有人想看。那一版的毛病是**没得选**，不是「它是一栏」。
+ *
+ * 于是第二版改成抽屉：点开才有，浮在对话上，带一层压暗的背景。它治好了「没人
+ * 要看的时候不该占地方」，代价是治错了地方——它盖住的正是读者点开它的理由：
+ * 想一边读那段话一边看它写出来的文件，做不到，中间隔着一层灰。
+ *
+ * 现在是第三版：还是一栏，但能折叠，而且记得住（`aw.code.panel.v1`）。展开时
+ * 对话确实变窄——中间那条轨道是 `minmax(0, 1fr)`，窄但不会被挤没；不想让它变窄
+ * 的人收起来就是了，收起来之后这条轨道整根不存在，一分宽度不占。
+ *
+ * `position: relative` 留着：窄屏上这一栏退回浮层，而它贴的是这一页，不是视口
+ * ——全局那条窄导航在这一页之外，不该被一个属于 Code 的浮层盖住。 */
 .aw-code-page {
   position: relative;
   display: grid;
   height: 100%;
   min-height: 0;
+  /* 多出来的那个元素往**右边**放，不是往下面。
+   *
+   * 两次都量过，两次都是同一件事：预览栏展开时，它在屏幕上出现在对话**下方**，
+   * 挤成一条 90px 高的横条。默认的 `row` 在填满这一行的列之后只能另起一行，而
+   * minimal-theme 那一层把这一页压成了单列（会话栏 portal 进全局导航之后，这一页
+   * 自己只剩一列），于是「填满这一行」在那里意味着「放完对话」。
+   *
+   * 试过给预览栏写 `grid-row: 1` 让它留在第一行——更糟：带确定行号的元素**先**
+   * 放置，它占住了第 1 行第 1 列，然后自动布局把对话也放进同一格，两块直接叠在
+   * 一起。所以定的是流向，不是某一个元素的位置。 */
+  grid-auto-flow: column;
   grid-template-columns: 244px minmax(0, 1fr);
 }
 
@@ -4075,7 +4095,43 @@ pre {
 }
 
 .aw-code-workspace-entry {
+  display: inline-flex;
+  align-items: center;
   flex: none;
+  gap: 6px;
+}
+
+/* 展开着的时候，这颗按钮说的是「这一栏开着，再点就收」。给它一个按下去的样子
+   而不是换文案：文案里的「工作区 N」是它另一半职责（那里有几个文件），换掉
+   就没地方说了。 */
+.aw-code-workspace-entry.is-open {
+  border-color: var(--aw-border-strong);
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+}
+
+/* 被文件夹收窄挡在外面的那些会话，和切回全部的路。
+ *
+ * 长在列表底下而不是顶上：它是一句关于这份列表的脚注（「还有几条没列出来」），
+ * 不是一个筛选器。放在顶上会变成第二个「这一栏是什么」的标题，而那个位置已经
+ * 被导航项本身占着了。 */
+.aw-code-sessions-scope {
+  width: 100%;
+  flex: none;
+  padding: 7px 10px;
+  border-top: 1px solid var(--aw-border);
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  background: transparent;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.aw-code-sessions-scope:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-soft);
 }
 
 .aw-code-transcript {
@@ -4486,6 +4542,42 @@ p.aw-code-step-thought {
 
 /* --- 右：预览 --- */
 
+/* 这一栏就长在网格的第三条轨道上：不定位、不投影、不动画。
+ *
+ * 上面那三个「没有」是这一版的全部区别。它此前是 `.aw-drawer`——绝对定位、
+ * 一层阴影、160ms 滑入——而那三样都是在说「我是浮上来的，下面那层还在原处」。
+ * 它现在不是浮上来的，说反了会让人以为点旁边能关掉它（关不掉，旁边是对话）。
+ *
+ * 窄屏（≤900px）另说，见文件末尾：那里排不下三列，它退回浮层，阴影和遮罩
+ * 一起回来。 */
+.aw-code-panel {
+  /* 宽度写在它自己身上，不写进 `grid-template-columns`。
+   *
+   * 它落在一条隐式的 `auto` 轨道上，而 `auto` 轨道的宽度就是里面这个元素的
+   * 宽度——所以这一条 `width` 同时定下了轨道。这么写不是为了少写一行，是为了
+   * 只有一处需要知道这件事：这一页的列数在两层样式里各写过一遍（app.css 是
+   * 「会话栏 + 对话」，minimal-theme 把会话栏 portal 走之后改成单列），再加上
+   * 两个窄屏断点，一共四处。让展开与否去改 `grid-template-columns`，等于要求
+   * 那四处都记得多写一条轨道，而漏掉任何一处的表现都是同一种：一条 244px 的
+   * 空白，或者一条被文件名撑到 700px 的轨道。收起时这个元素整个不渲染，隐式
+   * 轨道跟着消失，一分不占；窄屏上它 `position: fixed`，脱离流，同样不占。
+   *
+   * 上限 440px 而不是当年那个 560px：这一栏现在是常驻形态，收窄对话的代价是
+   * 一直付的，而 440px 足够读一屏代码（等宽 12.5px 约 60 列）。下限 300px 是
+   * 「一个文件名加一个下载键」放得下的最小宽度。用 vw 而不是 %：% 要拿轨道
+   * 宽度当基准，而轨道宽度正由它自己决定，浏览器会把它当 auto 处理。
+   *
+   * 它落在哪条轨道上由 `.aw-code-page` 的 `grid-auto-flow: column` 决定，那一句
+   * 在这里是必需的，见那边的注释。 */
+  display: flex;
+  width: clamp(300px, 30vw, 440px);
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+}
+
 .aw-drawer {
   position: absolute;
   z-index: 5;
@@ -4760,9 +4852,22 @@ p.aw-code-step-thought {
 
 /* --- 窄屏 --- */
 
-/* ≤900px：抽屉本身已经是默认形态，这里只补窄屏独有的两件事——躲开 60px 高的
-   .aw-mobile-nav，以及在小屏上占得更宽一点。 */
+/* ≤900px：三列排不下，预览栏退回浮层。
+ *
+ * 「退回」不是权宜之计：宽屏上收窄对话还剩得下 600px 以上，窄屏上收窄等于把
+ * 对话挤成一条缝。浮层在这个宽度上是对的形态，所以遮罩、阴影和「点旁边收起」
+ * 在这里一起回来——它们在宽屏上被关掉，不是被删掉。
+ *
+ * 同时躲开 60px 高的 .aw-mobile-nav。 */
 @media (width <= 900px) {
+  .aw-code-panel {
+    position: fixed;
+    z-index: 72;
+    inset: 0 0 60px auto;
+    width: min(560px, 94vw);
+    box-shadow: var(--aw-shadow-drawer-left);
+  }
+
   .aw-drawer {
     position: fixed;
     z-index: 72;
@@ -4829,6 +4934,21 @@ p.aw-code-step-thought {
   border: 0;
   background: var(--aw-scrim-soft);
   cursor: default;
+}
+
+/* 宽屏上 Code 那一页没有遮罩：预览是一条真的列，什么也没盖住，而一层「点了就
+   收起」的透明层只会让人误点——它正好压在对话上。窄屏上预览退回浮层，遮罩
+   跟着回来，这时候「点旁边关掉」又是必须有的。任务页那个产出抽屉在每个宽度上
+   都是浮层，所以这条只收 Code 这一页，不动全局那一份。
+
+   写成 `>= 901px` 而不是在上面那个 `<= 900px` 块里加一条 `display: block`：
+   两条规则的特指度一样（都是两个类），媒体查询不加特指度，胜负只看谁写在后面
+   ——而「关掉」那条必须写在共用规则之后，于是它会连窄屏一起关掉。第一版就是
+   这么写的，量出来窄屏遮罩是 `display: none`。 */
+@media (width >= 901px) {
+  .aw-code-page > .aw-drawer-backdrop {
+    display: none;
+  }
 }
 
 @media (width <= 760px) {
@@ -5288,55 +5408,10 @@ p.aw-code-step-thought {
 /* 标签说的是这个会话按哪种方式作答，不是它答出了什么。所以「知识库」用证据
    色（它会去找依据），「自由回答」用中性色——后者不是错误，不该是警告色。 */
 
-/* --- 任务筛选 -----------------------------------------------------------
- *
- * 三段控件，状态发给服务端而不是在本地过滤——理由写在 WorkPage 的查询里。
- * 用滑块式的段控件而不是三个独立按钮：它们互斥，而三个并排的按钮读起来像
- * 三个可以各自开关的东西。 */
-.aw-task-filters {
-  display: flex;
-  gap: 2px;
-  margin: 0 0 8px;
-  padding: 3px;
-  border-radius: 9px;
-  background: var(--aw-panel-strong);
-}
-
-.aw-task-filters > button {
-  flex: 1;
-  padding: 5px 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--aw-text-soft);
-  font-size: 12.5px;
-}
-
-.aw-task-filters > button:hover:not(.is-active) {
-  color: var(--aw-text);
-}
-
-.aw-task-filters > button.is-active {
-  background: var(--aw-surface);
-  color: var(--aw-text);
-  font-weight: 500;
-  box-shadow: none;
-}
-
-/* 一句说明里的行动词。做成按钮而不是链接，是因为它不导航——它把筛选拨回去。 */
-.aw-link-button {
-  margin-left: 6px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--aw-accent);
-  font: inherit;
-  text-decoration: underline;
-}
-
-.aw-link-button:hover {
-  color: var(--aw-accent-hover);
-}
+/* 任务列表上方那条「全部 / 在跑 / 失败」段控件（`.aw-task-filters`）和它
+ * 空态里那颗「看全部」（`.aw-link-button`）一起删掉了，理由写在 WorkPage
+ * 末尾：一条一次列 25 条的最近列表，按状态筛比用眼睛扫更慢。留着样式的坏处
+ * 不是几十行 CSS，是下一个读这块的人会以为侧栏顶上还有一排筛选。 */
 
 /* 会话列表表头的第二行。与 Chat 那一列同一处理：标题说这是什么，下面这行说
    它的来历与用法——那两件事都不是点一下就能发现的。 */
@@ -5769,45 +5844,17 @@ p.aw-code-step-thought {
   font-size: 11.5px;
 }
 
-/* 打开的文件，和产出预览同一个位置与同一套投影。 */
+/* 打开的项目文件，作为预览栏里的一块正文。
+ *
+ * 它此前是一个自带页眉、绝对定位、宽 720px 的独立浮层，和产出预览那个宽 420px
+ * 的浮层并排存在——同一个动作（「让我看看这个文件」）在屏幕上有两种宽度、两个
+ * 页眉、两套投影，而且能互相盖住。现在文件名和收起键归 `.aw-code-panel` 的页眉
+ * 管，这里只剩正文：不定位、不投影、没有自己的头。 */
 .aw-project-file-view {
-  position: absolute;
-  z-index: 5;
-  inset: 0 0 0 auto;
   display: flex;
-  width: min(720px, 92%);
   min-height: 0;
+  flex: 1;
   flex-direction: column;
-  border-left: 1px solid var(--aw-border);
-  background: var(--aw-panel);
-  box-shadow: var(--aw-shadow-drawer-left);
-}
-
-.aw-project-file-view > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  gap: 12px;
-  border-bottom: 1px solid var(--aw-border);
-}
-
-.aw-project-file-view > header code {
-  overflow: hidden;
-  font-family: var(--aw-mono);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.aw-project-file-view > header button {
-  flex: none;
-  padding: 4px 10px;
-  border: 1px solid var(--aw-border-strong);
-  border-radius: var(--aw-radius-sm);
-  background: transparent;
-  color: var(--aw-text-soft);
-  font-size: 12px;
 }
 
 .aw-project-file-view pre {

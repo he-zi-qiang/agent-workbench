@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listProjectFiles, readProjectFile } from "../../api/client";
 import { IdentityProvider } from "../../app/IdentityContext";
-import { ProjectFileTree, ProjectFileViewer } from "./ProjectFileTree";
+import { ProjectFileBody, ProjectFileTree } from "./ProjectFileTree";
 
 vi.mock("../../api/client", () => ({
   listProjectFiles: vi.fn(),
@@ -160,7 +160,7 @@ describe("ProjectFileTree", () => {
   });
 });
 
-describe("ProjectFileViewer", () => {
+describe("ProjectFileBody", () => {
   it("shows text", async () => {
     vi.mocked(readProjectFile).mockResolvedValue({
       path: "a.txt",
@@ -171,7 +171,7 @@ describe("ProjectFileViewer", () => {
     });
 
     mount(
-      <ProjectFileViewer onClose={() => {}} path="a.txt" projectId="prj_1" />,
+      <ProjectFileBody path="a.txt" projectId="prj_1" />,
     );
 
     expect(await screen.findByText("hello")).toBeInTheDocument();
@@ -187,7 +187,7 @@ describe("ProjectFileViewer", () => {
     });
 
     mount(
-      <ProjectFileViewer onClose={() => {}} path="logo.png" projectId="prj_1" />,
+      <ProjectFileBody path="logo.png" projectId="prj_1" />,
     );
 
     // Decoded with replacement it would be a screenful of U+FFFD, which reads
@@ -201,7 +201,7 @@ describe("ProjectFileViewer", () => {
     );
 
     mount(
-      <ProjectFileViewer onClose={() => {}} path="../etc/passwd" projectId="prj_1" />,
+      <ProjectFileBody path="../etc/passwd" projectId="prj_1" />,
     );
 
     const view = await screen.findByRole("region", { name: /\.\.\/etc\/passwd/ });
