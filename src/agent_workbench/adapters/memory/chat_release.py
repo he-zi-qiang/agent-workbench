@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent_workbench.domain.events import AnswerCommitted, AnswerWithheld
+from agent_workbench.domain.events import (
+    AnswerCommitted,
+    AnswerWithheld,
+    UngroundedAnswerCommitted,
+)
 from agent_workbench.ports.chat_release import EvidenceRevisionGuard
 from agent_workbench.ports.conversation_store import (
     ChatTurnConflictError,
@@ -60,19 +64,25 @@ class InMemoryChatReleaseCoordinator:
             result = withheld_result
 
         event_key = chat_turn_terminal_event_key(turn.turn_id)
+        # The same three-way choice PostgreSQL makes, read from the same fact.
+        # This adapter is test-only, which is exactly why the branch has to be
+        # here: a double that answered `AnswerCommitted` for every non-withheld
+        # turn leaves every suite built on it unable to fail when a coordinator
+        # collapses the two events, and ADR-018's distinction between a
+        # verified answer and an unverified one would then be pinned only by
+        # the service-backed suites -- the ones that run when a database
+        # happens to be up.
+        payload: AnswerCommitted | UngroundedAnswerCommitted | AnswerWithheld
         if result.withheld:
-            await sink.emit(
-                AnswerWithheld(text=result.answer),
-                event_key=event_key,
+            payload = AnswerWithheld(text=result.answer)
+        elif result.grounded:
+            payload = AnswerCommitted(
+                text=result.answer,
+                citations=result.citations,
             )
         else:
-            await sink.emit(
-                AnswerCommitted(
-                    text=result.answer,
-                    citations=result.citations,
-                ),
-                event_key=event_key,
-            )
+            payload = UngroundedAnswerCommitted(text=result.answer)
+        await sink.emit(payload, event_key=event_key)
         return await self.conversations.mark_released(
             session_id=turn.session_id,
             tenant_id=tenant_id,
@@ -91,6 +101,19 @@ def _withheld(result: ChatTurnResult, refusal_text: str) -> ChatTurnResult:
         authorized_revisions=(),
         citations=(),
         withheld=True,
+        # Carried, not defaulted, though nothing can observe the difference
+        # yet. No ungrounded candidate reaches this function today: an
+        # ungrounded result is forbidden to hold authorized revisions, and a
+        # revision guard short-circuits to True on an empty tuple, so the one
+        # withhold trigger that exists cannot fire for one.
+        #
+        # The keyword is here because the default is `True` and this value
+        # outlives the refusal -- `mark_released` stores the replacement and
+        # the API reads `turn.grounded` straight off it. The first withhold
+        # trigger that does not depend on revisions would relabel an unverified
+        # answer as a verified one at the moment the system refused to publish
+        # it, which is the worst direction to be wrong in at the worst moment.
+        grounded=result.grounded,
     )
 
 
