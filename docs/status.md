@@ -28,6 +28,176 @@
 
 ---
 
+## 2026-08-23（未合并，工作树在 `main` 上，第十三批）：工具循环终于说得出自己的纪元，「给过哪些工具」开始算数
+
+三件事，一份新 ADR
+（[ADR-075](./adr/0075-a-ledgered-effect-is-issued-not-proposed.md)）。两件是**真缺陷**——
+不是「可以更好」，是两条本该拦住的线从来没拦住过；第三件是把一次**意外的**拒绝改写成
+一个有名字的决定，配一道护栏和 11 条钉子。
+
+**这一批还没有合并**，下面的数字属于这条工作分支上的这棵树，不是主线的当前值。
+
+**门禁**：后端 `ruff format --check` + `ruff check` 全过；`pyright` **0 errors**；
+`pytest` **2778 passed / 764 skipped**，全部落在 CI 那条离线 `quality` 作业里，不需要
+任何服务。改动前这棵树是 **2746 条 / 2745 passed**——差的那一条是 `TraceContext` 加了
+字段之后红掉的 golden 载荷，重新生成过（只多一行 `"lease_epoch": null`，逐字段比对过
+没有别的动静）。所以**本批新增 32 条**，不是 2778−2745 那个 33：那个数把修好的 golden
+也算成了新增。`agent-config-check --profile development`
+**status: ok**，`config_schema_version` 仍是 **1.17**——配置文件能问出来的事一件没多，
+`retryable_effects` 保持原义，也没有获得默认值。
+**前端没跑**：这一批一行 TS 都没改，报前端数字就是抄上一批的，而抄来的数字不是证据。
+
+### 一、纪元没有传下去，副作用账本因此从工具循环里够不着
+
+`TraceContext` 新增 `lease_epoch`（`domain/runs.py:328`），并多一条层级规则：纪元只存在
+于一个 Task 内部，没有 `task_id` 就在这里报错（`runs.py:340`）。**卡在 trace 而不是
+卡在账本**——同一个错误在账本那头到达时的样子是「一次被拒的工具调用」，而拼错上下文的
+地方在好几层之外。
+
+`_context_for` 改成收 `ExecutionLease`，写 `lease_epoch=lease.epoch`
+（`task_handlers.py:1280`），**不是** `task.lease_epoch`。这里两者相等（调用方刚比过，
+不等就抛 `TaskLeaseLostError`），但只有一个一直对：Registry 那一行说的是**现在**归谁，
+一个在节点跑到一半丢了租约的 Worker 会从行里读到**它接替者的**纪元，然后拿着它通过
+下游每一道 fence。
+
+**真缺陷在这里**：`ClaudeLikeAgentRuntime._execution_context` 此前给每一次模型提议的
+工具调用建上下文时**不带纪元**（现在 `agent_runtime.py:547` 转发它），而
+`ToolGateway._invoke_ledgered`（`tool_gateway.py:835`）拒绝任何说不出纪元的上下文。
+也就是说，副作用账本——`docs/configuration.md:351` 写死的常开不变量，「Tool ledger 和
+外部副作用提交仍须校验 `lease_owner + lease_epoch`」——**从工具循环里根本够不着**。
+没有人发现，因为这个仓库唯一一个上账本的工具（`export_artifact`）由一个确定性节点发出，
+那条路自己建上下文、自己带了纪元。
+
+### 二、「这次运行被给了哪些工具」此前不具约束力
+
+`_run_tool_batch` 现在拒绝任何 `tool_name` 不在 `frozenset(request.tool_names)` 里的
+调用，`code="policy_denied"`，话是「… was not offered to this run. Use one of the tools
+you were given.」
+
+**第二个真缺陷。** `permitted_tools` 早就用 Task 的授权信封收窄过 profile，所以子 agent
+永远不可能比它所属的 Task 权限更大——但那次求交**从来不具约束力**：
+`EnvelopePolicyEngine.decide`（`adapters/policy/envelope.py:38` 起）拿提议的名字去
+**整个注册表**里解析，再问 **Task 级**的信封准不准。一个同时注册了两类受众工具的
+Worker，researcher 的节点去调 writer 的工具，两道检查都会报告自己满意——因为信封是
+Task 的，名单是节点的，**没有人把两者对过**。
+
+拒绝而不是抛：名字是模型提的，欠它一句能照着改的话。
+
+**这一道比它看上去更承重。** 上一节把纪元传下去之后，一个被模型凭空说出口的
+`export_artifact` 就是可派发的了——挡住它的正是这道 offered 校验，不是下一节那道
+`advertise` 护栏（`advertise` 只看 profile 写下的名字，看不见模型现编的）。两道
+各管一头才闭合：一道管**给出去的**，一道管**收回来的**。
+
+### 三、把一条意外的护栏换成一个决定（ADR-075）
+
+`ToolGateway.advertise` 现在对任何 `operation_key` 非 None 的绑定抛 `PolicyDeniedError`：
+「这个工具记录一次外部副作用，由图节点发出，从不摆到模型面前」。不是
+`UnknownToolError`——进程没注册的名字才是那个码，注册了但不给模型的名字是
+`policy_denied`；报错，来查的人会去找一个不存在的「漏注册」。
+
+**[ADR-025](./adr/0025-mcp-adapter.md) §2.7 给自己写的重开条件不成立。** 它当时写的是：
+真正的 exactly-once MCP 需要远端幂等键，或者一个能持久化并重放完整 `ToolResult` 的账本，
+另开工作包做。查下来**卡住的是键，不是负载**：
+
+* `ToolBinding.operation_key` 是一个 `(ToolCall, ExecutionContext) -> str` 的可调用，
+  账本按 `(task_id, operation_key)` 找行。
+* 一次运行随身带的东西里**没有一样能把「同一个意图被重放」和「一个碰巧长得一样的新意图」
+  分开**。可用的全部宇宙是 `ToolCall{tool_call_id, tool_name, arguments, model_call_id}`
+  与 `ExecutionContext{principal, envelope, agent_run_id, policy_identity, task_id,
+  workflow_thread_id, graph_node_id, lease_epoch}`：`graph_node_id` 每节点一个、节点内
+  每次调用共用；`agent_run_id` 每次恢复重铸；`lease_epoch` 每次重夺就变；`tool_call_id`
+  每轮重铸。而 [ADR-015](./adr/0015-export-authorization.md) 早就禁止把会变的内容写进键。
+* **按参数派生**的键会把合法的第二次相同点击折叠成第一次的存档结果——
+  `agent_runtime.py:249` 的 `MAX_IDENTICAL_CALLS = 3` 是**故意**允许一次运行里出现三次
+  相同调用的。
+* **按位置派生**（节点内第 n 次上账本的调用）设计出来又按正确性否掉了：它毁掉账本的
+  重试同一性。一次在位置 5 记成 `intended`、Worker 随即死掉的点击，被重放的模型在位置 6
+  再提一遍，拿到一个**新键**，于是被执行第二次——正好是账本存在的理由。
+
+**还有一条独立成立的理由，连只读的那一半也不收。** 模型没有视觉通路：
+`domain/messages.py:83` 的 `ContentBlock` 是 `TextBlock | ToolUseBlock | ToolResultBlock`，
+没有图像成员，`map_remote_result` 把每个 `RemoteBinaryBlock` 都送进产物。真放进来的
+`screenshot` 交给模型的会是一句分辨率字符串——agent 闭着眼睛开 GUI。
+
+**以及任何账本都修不了的那件事**（`config/config.computer-local.toml` 里早写着）：重放的
+点击落在**此刻**光标下面的那个东西上。exactly-once 去掉的是重复，它没让重放的坐标重新
+有意义。
+
+**替代的重开条件**（ADR-075 用它换掉 ADR-025 §2.7 那条）：一个不可重试的 MCP 工具进入
+Task 的唯一方式，是**由一个自己发出这次调用的确定性节点**带进来——
+`adapters/tools/task_export.py` 就是这个样子——而不是由模型提议；要让模型也能用，还额外
+需要一条今天不存在的视觉通路。房规是**收窄**而不是取代：ADR-025 被收窄，没有被废止。
+
+护栏有**两道，管的不是一件事**。`advertise` 那道每次 run 生效：它抛的
+`PolicyDeniedError` 被运行时接住变成一次**失败的 run**，而不是一个起不来的进程——单靠
+它，一个把上账本的工具写进 profile 的部署会起得来、只是某个节点每个 Task 都挂。所以
+装配期另有一道：`apps/task_worker/composition.py` 的
+`_assert_no_profile_offers_a_ledgered_tool`，在 registry 和 roster 都到手之后跑，命中
+就不让进程起来，形状和 `ToolGateway.__init__` 拦「有上账本的工具却没给账本」一致。
+gateway 自己做不了是因为装配它时没人把 profile 交给它；组装根两半都看得见。装配期这道
+读的是**加宽之后**的 profile（含本次组装拿到的 dynamic 目录），并且走每一份 roster，
+不只走这台机器会注册的那些。证据：
+[test_task_worker_ledgered_profile_guard.py](../tests/apps/test_task_worker_ledgered_profile_guard.py)
+5 条钉住判断本身，
+[test_task_worker_entrypoint.py](../tests/apps/test_task_worker_entrypoint.py)
+的 `test_a_ledgered_tool_in_a_profile_stops_the_process_starting` 钉住它拦在进程起来
+之前（删掉组装根那一行调用，该条即红）。
+
+它还**到货即空转**：没有任何 profile 写着一个上账本的工具，所以它今天一件事都没
+拒绝过。这正是要的形状——它替掉的是一条**意外的**护栏。在纪元传不下去的年代，模型提议
+的上账本工具都会在更深处因为没有 fence 被拒，那看着像决定，其实是遗漏；上一节把遗漏
+修好了，护栏就得有人明写。`export_artifact` 不受影响：它从不走 `advertise`，直接驱动
+`propose/prepare/authorize/invoke`。
+
+### 四、两条 dev.sh arm，和 11 条钉住「没做」的测试
+
+`scripts/dev.sh` 加了 `computer-server` 与 `computer-check`（本机跑通）。**故意没有**
+`computer-api` / `computer-worker` 这一对，理由写在 `computer-server` 那段注释里，带着
+量出来的数字：**2026-08-23 实测，跑那个 profile 的 Worker 起来时手里的 MCP 工具是 0 个**
+——`configured_mcp_tool_names` 把它的工具挡在每一个授权信封外面，Worker 记一行
+`mcp_server_skipped_nonretryable` 然后一个都不注册。
+
+新增 `tests/config/test_local_computer_profile.py`，11 条，钉的全是「没做成什么」：
+profile 声明了这台服务器；**没有任何屏幕工具进得了 Task 授权信封**；风险上限停在 `write`
+而不是被抬到 `external`；Worker 那份投影里仍然留着这台服务器，好让运维那行日志说得出话；
+端口和 `apps.computer_mcp.main.DEFAULT_PORT` 对得上；`local` 与 `demo-local` 从没听说过
+屏幕；两条 dev.sh arm 都在；以及**没有** `computer-api`/`computer-worker` arm。
+
+其余新增测试分在四处：`tests/domain/test_runs.py`（纪元只在 Task 内部；没人租过的运行
+不带纪元）、`tests/workflows/test_task_handlers.py`（节点跑在它被 claim 时那个纪元下）、
+`tests/runtime/test_agent_runtime.py`（纪元端到端到达一次工具调用；chat 运行说不出任何
+claim；没给过的工具被拒、拒绝话术可照着改、给过的照跑）、
+`tests/runtime/test_tool_gateway_ledger.py`（上账本的工具从不被提供；护栏点名是哪一个，
+否则运维读到「有个上账本的工具被提供了」不知道该改哪个 profile；不上账本的照常提供）。
+
+**两条是自审时补的，各自堵一个真漏。** 第一条：offered 校验最初写在重复计数**上面**，
+于是一个模型反复提的、从没给过的名字永远进不了 `call_counts`，也就永远触发不了那个
+断路器——`MAX_IDENTICAL_CALLS`/`MAX_REPEAT_REFUSALS` 对它失效，run 会一路烧到步数上限
+然后报 `completed`。改成先计数再判，并加了
+`test_a_tool_that_was_never_offered_still_trips_the_repeat_breaker`：四次相同调用得到
+三条 `policy_denied` 加一条 `invalid_tool_input`。同一处还顺手保住了错误码的分工——
+`ToolGateway.knows()` 让「进程根本没这个工具」继续是 `unknown_tool`，否则模型现编的名字
+会被这道新校验改判成 `policy_denied`。
+
+第二条：拒绝的**另一端**此前没有任何测试。`composition.py` 那个 `continue` 删掉不会红。
+新增 `tests/apps/test_task_worker_mcp_bindings.py`，断言的不是「结果为空」——连不上的
+服务器结果也是空——而是**连都没去连**：把 `connect_mcp_client` 换成一个被调用就失败的
+桩，再拿一台声明 `retryable_effects = true` 的同款服务器做对照组。验过它真的能红：把那个
+`if` 改成 `if False`，这条立刻失败。
+
+### 尚未做的
+
+**没有任何屏幕工具在 Task 里跑过**，这一批也没让它能跑。它做的是把「跑不了」从一次副作用
+改写成一个写下来的决定，外加一条**成立的**重开条件。能力阶梯**不动**：computer use 在
+`docs/architecture-baseline.md` §17 里今天没有行，这一批也不给它加一行。
+
+账本这条路**只被测试钉住，没有被一次真实运行走过**。仓库里上账本的工具仍然只有
+`export_artifact` 一个，而它不经过工具循环——所以「账本现在从工具循环里够得着了」的证据
+是 `tests/runtime/`，不是一次演示。同理，`advertise` 那道护栏今天没有任何 profile 会触发，
+它是一颗钉子，不是一份战果。
+
+---
+
 ## 2026-08-23（已合并 1dfa2ae，第十二批）：预览是一条能折叠的栏，会话列表跟着文件夹走
 
 三处界面改动，都来自同一句话——「像左侧导航栏那样可以折叠，而不是点击弹出来」。

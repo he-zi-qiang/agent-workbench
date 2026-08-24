@@ -2266,3 +2266,261 @@ def test_argument_key_order_does_not_hide_a_repeat() -> None:
     _execute(model, bindings=[recorder.binding])
 
     assert len(recorder.calls) == 3, "key order must not buy extra attempts"
+
+
+def test_a_tool_the_task_allows_but_this_run_was_not_offered_is_refused() -> None:
+    """The profile ceiling binds at acceptance, not only at the offer.
+
+    `permitted_tools` narrows a profile by the Task's envelope, so a node is
+    offered an intersection. What that intersection was not, before this, is
+    binding: the Policy Gateway resolves a proposed name against the whole
+    registry and then asks the *Task's* envelope. A Worker that registered two
+    audiences' tools would let the researcher's node run the writer's tool, and
+    both checks would report themselves satisfied -- the envelope because the
+    Task really does allow it, the offer because nobody asked it.
+    """
+
+    offered = _Recorder("read_document")
+    withheld = _Recorder("text_statistics")
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Working.",
+                tool_calls=(
+                    ToolCall(tool_call_id="toolu_1", tool_name="text_statistics"),
+                ),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ],
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            tool_names=("read_document",),
+            # The Task really does allow both. Only the offer is narrower.
+            allowed_tools=("read_document", "text_statistics"),
+        ),
+        bindings=[offered.binding, withheld.binding],
+    )
+
+    assert withheld.calls == []
+    assert run.durable_types.count("ToolProposed") == 1
+    assert run.durable_types.count("ToolFailed") == 1
+
+
+def test_the_refusal_tells_the_model_to_use_what_it_was_given() -> None:
+    """A refused call is a result the model reads, not an exception.
+
+    It has to be actionable: "not offered" with no direction is an invitation
+    to try the same name spelled differently.
+    """
+
+    withheld = _Recorder("text_statistics")
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Working.",
+                tool_calls=(
+                    ToolCall(tool_call_id="toolu_1", tool_name="text_statistics"),
+                ),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ],
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            tool_names=("read_document",),
+            allowed_tools=("read_document", "text_statistics"),
+        ),
+        bindings=[_Recorder("read_document").binding, withheld.binding],
+    )
+
+    failures = [
+        event for event in run.live if type(event.payload).__name__ == "ToolFailed"
+    ]
+    assert len(failures) == 1
+    assert failures[0].payload.error.code == "policy_denied"
+    assert "was not offered to this run" in failures[0].payload.error.message
+
+
+def test_an_offered_tool_still_runs() -> None:
+    """The control group: the guard must not refuse the ordinary case."""
+
+    offered = _Recorder("read_document")
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Working.",
+                tool_calls=(
+                    ToolCall(tool_call_id="toolu_1", tool_name="read_document"),
+                ),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ],
+    )
+
+    run = _execute(
+        model,
+        request=_request(tool_names=("read_document",)),
+        bindings=[offered.binding],
+    )
+
+    assert len(offered.calls) == 1
+    assert run.outcome.status == "completed"
+
+
+def test_a_tool_call_can_name_the_claim_its_run_holds() -> None:
+    """End of the wire the side-effect ledger fences on.
+
+    The Task path has always put the epoch in the context it builds for the
+    node's *own* deterministic calls. What it did not do until 2026-08-23 is
+    forward it to the context the tool loop builds, so a call the model made
+    reached the gateway unable to say which claim it ran under -- and
+    `_invoke_ledgered` refuses exactly that. Nothing noticed, because the one
+    ledgered tool in this repository is issued by a node rather than proposed.
+    """
+
+    seen: list[int | None] = []
+
+    async def handler(invocation: ToolInvocation) -> ToolResult:
+        seen.append(invocation.context.lease_epoch)
+        return ToolResult.succeeded(invocation.call, content="ok")
+
+    binding = ToolBinding(spec=_spec("read_document", risk="read"), handler=handler)
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Working.",
+                tool_calls=(
+                    ToolCall(tool_call_id="toolu_1", tool_name="read_document"),
+                ),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ],
+    )
+    request = _request().model_copy(
+        update={
+            "trace": TraceContext(
+                agent_run_id="run_1",
+                task_id="task_1",
+                workflow_thread_id="thread_1",
+                graph_node_id="work",
+                lease_epoch=7,
+            )
+        }
+    )
+
+    _execute(model, request=request, bindings=[binding])
+
+    assert seen == [7]
+
+
+def test_a_chat_run_names_no_claim() -> None:
+    """A run nobody leased must not arrive holding a number that passes a fence."""
+
+    seen: list[int | None] = []
+
+    async def handler(invocation: ToolInvocation) -> ToolResult:
+        seen.append(invocation.context.lease_epoch)
+        return ToolResult.succeeded(invocation.call, content="ok")
+
+    binding = ToolBinding(spec=_spec("read_document", risk="read"), handler=handler)
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Working.",
+                tool_calls=(
+                    ToolCall(tool_call_id="toolu_1", tool_name="read_document"),
+                ),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ],
+    )
+
+    _execute(model, request=_request(), bindings=[binding])
+
+    assert seen == [None]
+
+
+def test_a_tool_that_was_never_offered_still_trips_the_repeat_breaker() -> None:
+    """The refusal is cheap per call and ruinous per run.
+
+    A refused call costs no dispatch and almost no tokens, so a model that
+    keeps proposing the same withheld name pays nothing each time and burns
+    the run's steps. The circuit breaker only works if the bookkeeping happens
+    before any check can skip the rest of the loop -- which is why the count is
+    taken first and the refusals come after it.
+    """
+
+    withheld = _Recorder("text_statistics")
+    calls = tuple(
+        ToolCall(tool_call_id=f"toolu_{index}", tool_name="text_statistics")
+        for index in range(1, 5)
+    )
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Working.", tool_calls=calls, usage=USAGE),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ],
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            tool_names=("read_document",),
+            allowed_tools=("read_document", "text_statistics"),
+        ),
+        bindings=[_Recorder("read_document").binding, withheld.binding],
+    )
+
+    codes = [
+        event.payload.error.code
+        for event in run.live
+        if type(event.payload).__name__ == "ToolFailed"
+    ]
+    # Three refusals name the real reason; the fourth is the breaker, which is
+    # the whole point -- without it the model can keep asking forever.
+    assert codes == ["policy_denied"] * 3 + ["invalid_tool_input"]
+    assert withheld.calls == []
+
+
+def test_a_name_this_process_never_registered_is_still_an_unknown_tool() -> None:
+    """Two failures, two codes.
+
+    A hallucinated name and a withheld one look identical from the offered set
+    alone, and they send whoever is debugging to two different places: one to
+    the model, the other to the profile that should have carried the tool.
+    """
+
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Working.",
+                tool_calls=(
+                    ToolCall(tool_call_id="toolu_1", tool_name="no_such_tool"),
+                ),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ],
+    )
+
+    run = _execute(
+        model,
+        request=_request(tool_names=("read_document",)),
+        bindings=[_Recorder("read_document").binding],
+    )
+
+    failures = [
+        event for event in run.live if type(event.payload).__name__ == "ToolFailed"
+    ]
+    assert len(failures) == 1
+    assert failures[0].payload.error.code == "unknown_tool"

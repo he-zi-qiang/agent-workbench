@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -97,12 +97,15 @@ from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.research import ExternalSearchPort
 from agent_workbench.ports.task_workflow import GraphVersion
-from agent_workbench.ports.tools import ToolBinding
+from agent_workbench.ports.tools import ToolBinding, ToolRegistry
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor, ToolGateway
 from agent_workbench.workers.task import TaskWorker
 from agent_workbench.workflows.agent_profiles import (
+    AGENT_ROSTERS,
+    AgentProfile,
     DynamicToolSource,
     assert_within_static_limit,
+    profile_with_dynamic_tools,
 )
 from agent_workbench.workflows.approval import TaskApprovalGate
 from agent_workbench.workflows.demo_handlers import build_demo_handlers
@@ -120,6 +123,16 @@ from agent_workbench.workflows.task_handlers import (
 
 class RealTaskHandlersUnavailableError(RuntimeError):
     """Raised rather than running synthetic output in a production worker."""
+
+
+class LedgeredToolInAgentProfileError(RuntimeError):
+    """A profile names a tool whose effects are recorded in the ledger.
+
+    Raised at assembly, and for the same reason ``AgentProfileLimitError`` is:
+    the offending fact is a statement about this deployment's wiring, not about
+    any one Task, so the process that carries it should not start. See
+    ``_assert_no_profile_offers_a_ledgered_tool``.
+    """
 
 
 logger = logging.getLogger(__name__)
@@ -648,6 +661,10 @@ async def _build_real_handlers(
             *sandbox_bindings,
         )
     )
+    # The one place both halves of the question are in scope (ADR-075 §4).
+    _assert_no_profile_offers_a_ledgered_tool(
+        tool_registry, dynamic_tools=dynamic_tools, rosters=AGENT_ROSTERS
+    )
     gateway = ToolGateway(
         registry=tool_registry,
         policy=EnvelopePolicyEngine(registry=tool_registry),
@@ -765,6 +782,79 @@ async def _build_real_handlers(
         graphs=graphs,
         grounding_unavailable=grounding_unavailable,
     )
+
+
+def _assert_no_profile_offers_a_ledgered_tool(
+    registry: ToolRegistry,
+    *,
+    dynamic_tools: Mapping[DynamicToolSource, Sequence[ToolName]],
+    rosters: Sequence[tuple[str, tuple[AgentProfile, ...]]],
+) -> None:
+    """Refuse to start a Worker that would offer a ledgered tool to a model.
+
+    ADR-075 §2 is a rule about *position*: a ledgered effect is issued by a
+    node that meant it -- the way ``export_artifact`` is -- and is never put in
+    front of a model as a choice, because nothing in a run distinguishes "the
+    same intent, replayed" from "a new intent that happens to look identical",
+    which is what the ledger's key would have to answer for.
+
+    ``ToolGateway.advertise`` already refuses such a tool, and keeps doing so:
+    it is the check that closes the path, and it sees names this one cannot
+    (a profile widened by something other than assembly, a caller that builds
+    its own request). But it runs once per agent run, and what it raises the
+    runtime turns into a failed run. That is the wrong shape for a *wiring*
+    mistake: the deployment stays up and fails one node forever, which reads
+    like a broken tool rather than a profile that should never have been
+    written. The precedent for the right shape is one file over, in
+    ``ToolGateway.__init__``, which refuses to assemble around a ledgered tool
+    with no ledger to record it in -- a process that cannot honour the protocol
+    should not start.
+
+    The gateway could not make this check for want of one of its two halves:
+    profiles live in ``workflows/agent_profiles.py`` and nothing hands them to
+    it. This function is here because here is the first place both the
+    assembled registry and the rosters are in scope.
+
+    Two details that are not incidental:
+
+    * the profiles are the **widened** ones, not the declarations. A profile's
+      static ``tool_names`` is only half of what a run is offered; the other
+      half arrives from the dynamic catalogs this Worker just assembled, and
+      that half is the one a future MCP server could quietly change. Checking
+      the declarations alone would pass a Worker that then advertised a
+      ledgered MCP tool to its writer;
+    * every roster is walked, not only the graphs this Worker will register.
+      ``graphs`` narrows to v2 when nothing can ground v1, and that narrowing
+      turns on whether an embedding runtime loaded on this machine -- so a
+      check that followed it would let the same wiring mistake start on one
+      box and stop on the next. ``rosters`` is a required argument rather than
+      a bound default for that reason: which rosters this refuses over is the
+      caller's statement, and a default evaluated at import would also be one
+      no test could replace.
+
+    Nothing in this repository trips it today, and that is by construction, not
+    luck: ADR-025 §2.6 pins every MCP binding to ``idempotency="safe"``, which
+    ``ToolBinding`` refuses to combine with an operation key, and the only
+    ledgered tool in the repository is issued by ``export`` and named in no
+    profile.
+    A guardrail that fires on nothing is what it looks like to have arrived
+    before the mistake did.
+    """
+
+    offenders = sorted(
+        f"{version}/{profile.name} -> {name}"
+        for version, profiles in rosters
+        for profile in profiles
+        for name in profile_with_dynamic_tools(profile, dynamic_tools).tool_names
+        if (binding := registry.get(name)) is not None
+        and binding.operation_key is not None
+    )
+    if offenders:
+        raise LedgeredToolInAgentProfileError(
+            "these agent profiles name tools that record external effects, "
+            "which are issued by a graph node and never offered to a model: "
+            + ", ".join(offenders)
+        )
 
 
 async def _build_sandbox_binding(

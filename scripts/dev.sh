@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
 # Run the workbench on this machine, against services on localhost.
 #
-#   scripts/dev.sh services     # start PostgreSQL and Qdrant
-#   scripts/dev.sh migrate      # bring the schema to head
-#   scripts/dev.sh api          # HTTP control plane (add --without-chat to skip
-#                               # the embedding runtime entirely)
-#   scripts/dev.sh ingest       # ingestion worker (also bootstraps the index)
-#   scripts/dev.sh worker       # Task worker, demo graph
-#   scripts/dev.sh word-server  # loopback Word document MCP server
-#   scripts/dev.sh word-check   # health + tools/list probe
-#   scripts/dev.sh word-api     # API with explicit Word MCP profile
-#   scripts/dev.sh word-worker  # real Worker; requires a model provider key
-#   scripts/dev.sh web-server   # loopback read-only web MCP server
-#   scripts/dev.sh web-check    # health + tools/list probe
-#   scripts/dev.sh web-api      # API with explicit web MCP profile
-#   scripts/dev.sh web-worker   # real Worker; requires a model provider key
-#   scripts/dev.sh code-api     # API with Code sessions on; requires a key
-#   scripts/dev.sh demo-check   # probe both MCP servers at once
-#   scripts/dev.sh demo-api     # API with Word *and* web *and* Code: the console
-#   scripts/dev.sh demo-worker  # real Worker for that profile; needs both servers
-#   scripts/dev.sh smoke        # drive the whole thing and print what happened
+#   scripts/dev.sh services         # start PostgreSQL and Qdrant
+#   scripts/dev.sh migrate          # bring the schema to head
+#   scripts/dev.sh api              # HTTP control plane (add --without-chat to skip
+#                                   # the embedding runtime entirely)
+#   scripts/dev.sh ingest           # ingestion worker (also bootstraps the index)
+#   scripts/dev.sh worker           # Task worker, demo graph
+#   scripts/dev.sh word-server      # loopback Word document MCP server
+#   scripts/dev.sh word-check       # health + tools/list probe
+#   scripts/dev.sh word-api         # API with explicit Word MCP profile
+#   scripts/dev.sh word-worker      # real Worker; requires a model provider key
+#   scripts/dev.sh web-server       # loopback read-only web MCP server
+#   scripts/dev.sh web-check        # health + tools/list probe
+#   scripts/dev.sh web-api          # API with explicit web MCP profile
+#   scripts/dev.sh web-worker       # real Worker; requires a model provider key
+#   scripts/dev.sh computer-server  # loopback screen-control MCP server (macOS only)
+#   scripts/dev.sh computer-check   # health + tools/list probe
+#   scripts/dev.sh code-api         # API with Code sessions on; requires a key
+#   scripts/dev.sh demo-check       # probe both MCP servers at once
+#   scripts/dev.sh demo-api         # API with Word *and* web *and* Code: the console
+#   scripts/dev.sh demo-worker      # real Worker for that profile; needs both servers
+#   scripts/dev.sh smoke            # drive the whole thing and print what happened
 #
 # This is the one place that knows the local environment. The three DSNs live
 # here rather than in the committed TOML because settings forbids connection
@@ -138,7 +140,7 @@ TENANT="${TENANT:-tenant_local}"
 PRINCIPAL="${PRINCIPAL:-user_local}"
 API_URL="${API_URL:-http://127.0.0.1:8000}"
 
-usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Whether every host port a container publishes is bound to loopback.
 #
@@ -348,6 +350,56 @@ web-worker)
     --expect-tool download_document >&2
   echo "web profile + model provider configured: real graph" >&2
   exec "$PYTHON" -m agent_workbench.apps.task_worker.main
+  ;;
+
+computer-server)
+  # The one server here whose reach is the machine rather than this process's
+  # own workspace: it moves the cursor and presses keys on whatever is in
+  # front of you. That is why it is absent from demo-local and why the extra
+  # it needs is not installed by default (ADR-070).
+  #
+  # It exits at startup rather than serving when the `computer-use` extra is
+  # missing or Screen Recording is not granted, naming whichever one it is. A
+  # server that starts and refuses every call is one you diagnose by reading
+  # logs; macOS is worse than that, and hands a process without the grant a
+  # picture of the wallpaper with every window gone.
+  #
+  # There is deliberately no `computer-api`/`computer-worker` pair to go with
+  # this, and ADR-075 is where the reason is argued rather than here. The
+  # short of it: `config.computer-local.toml` declares
+  # `retryable_effects = false` -- a click is not a GET, and a replayed one
+  # lands on whatever is under the cursor *now* -- and the Task path declines
+  # such a server at both ends, keeping its tools out of every authorization
+  # envelope and registering no binding for them. Measured 2026-08-23: a
+  # Worker on that profile comes up holding zero MCP tools.
+  #
+  # That refusal is now a decision with a test rather than a consequence
+  # nobody owned (tests/config/test_local_computer_profile.py). A command that
+  # started this profile's API and Worker would therefore be a promise the
+  # platform does not keep: it would cost the console its Word, web and Code
+  # tools and buy a Worker with no screen tools in exchange.
+  #
+  # So the screen tools are reached by speaking MCP to this server --
+  # `computer-check` below is a working example -- and not through a Task.
+  exec "$PYTHON" -m agent_workbench.apps.computer_mcp.main
+  ;;
+
+computer-check)
+  # All six named rather than trusting a count. Not because they end up in an
+  # envelope -- on this profile they deliberately do not -- but because the
+  # profile's `tools` list is the contract this server is supposed to satisfy,
+  # and a server that came up with five of them is a different deployment
+  # wearing the same alias. Counting would call it healthy.
+  exec "$PYTHON" scripts/smoke_mcp_server.py \
+    --label computer \
+    --endpoint "http://127.0.0.1:8768/mcp" \
+    --health-url "http://127.0.0.1:8768/health" \
+    --expect-tool request_access \
+    --expect-tool screenshot \
+    --expect-tool left_click \
+    --expect-tool type \
+    --expect-tool key \
+    --expect-tool scroll
   ;;
 
 code-api)

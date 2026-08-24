@@ -272,6 +272,40 @@ def test_a_graph_node_only_exists_inside_a_task_thread() -> None:
     assert nested.parent_agent_run_id is None
 
 
+def test_a_lease_epoch_only_exists_inside_a_task() -> None:
+    """An epoch is a claim on a Task, so one without a Task names nothing.
+
+    Caught at the trace rather than at the side-effect ledger, where the same
+    mistake would arrive much later and in a much worse disguise: a refused
+    tool call, in a node whose context was mis-assembled several layers up.
+    """
+
+    with pytest.raises(ValidationError, match="only inside a task"):
+        TraceContext(agent_run_id="run_1", lease_epoch=1)
+
+    with pytest.raises(ValidationError):
+        TraceContext(agent_run_id="run_1", task_id="task_1", lease_epoch=0)
+
+    claimed = TraceContext(
+        agent_run_id="run_1",
+        task_id="task_1",
+        workflow_thread_id="thread_1",
+        graph_node_id="work",
+        lease_epoch=3,
+    )
+    assert claimed.lease_epoch == 3
+
+
+def test_a_run_nobody_leased_carries_no_epoch() -> None:
+    """Absent is a real state, and it reads as "may record no external effect".
+
+    Every chat run is in it, and so is any task run assembled outside a claim.
+    A default of 1 would be a lease over nothing that still passes a fence.
+    """
+
+    assert TraceContext(agent_run_id="run_1").lease_epoch is None
+
+
 def test_system_content_has_exactly_one_home() -> None:
     """Two sources would make the effective instructions adapter-dependent."""
 

@@ -32,7 +32,11 @@ from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.domain.artifacts import ArtifactRef
-from agent_workbench.domain.errors import ErrorInfo, OperationCancelledError
+from agent_workbench.domain.errors import (
+    ErrorInfo,
+    OperationCancelledError,
+    PolicyDeniedError,
+)
 from agent_workbench.domain.policies import (
     AuthorizationEnvelope,
     ExecutionContext,
@@ -631,3 +635,76 @@ def test_an_effect_that_produced_nothing_records_no_detail() -> None:
     asyncio.run(_invoke(gateway, handler))
 
     assert ledger.details == [None]
+
+
+def test_a_ledgered_tool_is_never_offered_to_a_model() -> None:
+    """A ledgered effect is issued by a node that meant it, never proposed.
+
+    The ledger's protection is one effect per ``operation_key``, so it is only
+    as good as the key -- and a key is derivable for a call a deterministic node
+    issued and is not derivable for one a model invented. Nothing a run carries
+    separates "the same intent, replayed" from "a new intent that happens to
+    look identical": the ordinal that would separate them does not survive a
+    replay, because the node re-runs and the model is called again and may
+    propose a different list (ADR-075).
+
+    Refused at ``advertise`` rather than at dispatch, because a tool the model
+    was shown and then refused is a tool it will try to reach another way.
+    """
+
+    handler = _Handler()
+    gateway = _gateway(_Ledger(), handler)
+
+    with pytest.raises(PolicyDeniedError, match="issued by a graph node"):
+        gateway.advertise(["export_report"])
+
+
+def test_the_guard_names_the_tool_it_refused() -> None:
+    """Two ledgered tools in one registry, and the message must say which.
+
+    An operator reading "a ledgered tool was offered" learns nothing about
+    which profile to fix.
+    """
+
+    handler = _Handler()
+    other = ToolBinding(
+        spec=WRITE_SPEC.model_copy(update={"name": "publish_report"}),
+        handler=handler,
+        operation_key=_operation_key,
+    )
+    gateway = ToolGateway(
+        registry=StaticToolRegistry(
+            [
+                ToolBinding(
+                    spec=WRITE_SPEC, handler=handler, operation_key=_operation_key
+                ),
+                other,
+            ]
+        ),
+        policy=_Policy(),  # type: ignore[arg-type]
+        ledger=_Ledger(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(PolicyDeniedError, match="publish_report"):
+        gateway.advertise(["publish_report"])
+
+
+def test_an_unledgered_tool_is_still_offered() -> None:
+    """The guard keys on the operation key, not on risk or on being external.
+
+    Every MCP tool this repository registers is `external` and unledgered, and
+    all of them must keep reaching the model.
+    """
+
+    plain = ToolBinding(
+        spec=WRITE_SPEC.model_copy(
+            update={"name": "fetch_page", "idempotency": "safe"}
+        ),
+        handler=_Handler(),
+    )
+    gateway = ToolGateway(
+        registry=StaticToolRegistry([plain]),
+        policy=_Policy(),  # type: ignore[arg-type]
+    )
+
+    assert gateway.advertise(["fetch_page"])[0].name == "fetch_page"

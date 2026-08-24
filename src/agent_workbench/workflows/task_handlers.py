@@ -305,6 +305,7 @@ class TaskNodeInvocationProvider:
             node=node,
             budget=self._budget_for_this_attempt(),
             principal=self.principal_for(task),
+            lease=lease,
         )
         return TaskNodeInvocation(
             context=context,
@@ -1262,6 +1263,7 @@ def _context_for(
     node: TaskNodeId,
     budget: RunBudget,
     principal: PrincipalContext,
+    lease: ExecutionLease,
 ) -> TaskRunContext:
     return TaskRunContext(
         trace=TraceContext(
@@ -1269,6 +1271,13 @@ def _context_for(
             task_id=task.task_id,
             workflow_thread_id=task.thread_id,
             graph_node_id=node,
+            # The lease this node was invoked under, not `task.lease_epoch`.
+            # The two agree here -- the caller has just compared them and
+            # raised TaskLeaseLostError if they differed -- but only one of
+            # them stays right: the row is what the Registry says *now*, and a
+            # Worker that lost its claim mid-node would read its replacement's
+            # epoch out of it and pass every fence downstream using it.
+            lease_epoch=lease.epoch,
         ),
         stream_id=task.thread_id,
         principal=principal,

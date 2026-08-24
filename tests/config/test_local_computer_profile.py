@@ -1,0 +1,250 @@
+"""The checked-in local profile for the computer-use MCP server (ADR-070).
+
+The other profile tests in this directory pin what a profile *enables*. This
+one mostly pins what it does not, and the asymmetry is the point: a resolved
+tool name is normally frozen into the authorization envelope of every Task
+submitted under that profile, and these six can move the cursor and press keys
+on the machine the Worker is running on. So the assertions below are that they
+are *not* resolved -- neither into an envelope nor into a Worker binding.
+
+That refusal was, until 2026-08-23, entirely incidental -- a consequence of
+`retryable_effects = false` meeting two `continue` statements, asserted nowhere
+that runs on this profile. Deleting either statement would have widened every
+Task submitted under this profile by six screen-control tools and broken no
+test. ADR-075 makes the refusal a decision; this file is what makes it a
+regression when somebody undoes it.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from agent_workbench.bootstrap.projections import project_task, project_task_worker
+from agent_workbench.bootstrap.settings import Settings, load_settings
+
+ROOT = Path(__file__).resolve().parents[2]
+LOCAL_CONFIG = ROOT / "config/config.local.toml"
+COMPUTER_CONFIG = ROOT / "config/config.computer-local.toml"
+POSTGRES_DSN = (
+    "postgresql+asyncpg://agent:local-profile-test@127.0.0.1:5433/agent_workbench_local"
+)
+
+#: The six the profile freezes, by name rather than by count. A server that came
+#: up with five of them is a different deployment wearing the same alias.
+SCREEN_TOOLS = (
+    "request_access",
+    "screenshot",
+    "left_click",
+    "type",
+    "key",
+    "scroll",
+)
+LOCAL_NAMES = tuple(f"mcp_computer_{remote}" for remote in SCREEN_TOOLS)
+
+
+def _load_profile(monkeypatch: pytest.MonkeyPatch, path: Path) -> Settings:
+    for name in tuple(os.environ):
+        if name.upper().startswith("AW_"):
+            monkeypatch.delenv(name, raising=False)
+    for suffix in ("DSN", "GUARD_DSN", "LISTEN_DSN"):
+        monkeypatch.setenv(f"AW_DATABASE__{suffix}", POSTGRES_DSN)
+    return load_settings(config_file=path)
+
+
+def test_the_computer_profile_declares_the_server_it_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _load_profile(monkeypatch, COMPUTER_CONFIG)
+
+    assert settings.optional_labs.mcp_adapter is True
+    assert len(settings.mcp.servers) == 1
+    server = settings.mcp.servers[0]
+    assert server.alias == "computer"
+    assert server.transport == "http"
+    assert server.endpoint == "http://127.0.0.1:8768/mcp"
+    assert server.tools == SCREEN_TOOLS
+    # The declaration ADR-025 requires and ADR-075 keeps: a click is not a GET,
+    # and a replayed one lands on whatever is under the cursor now.
+    assert server.retryable_effects is False
+    assert settings.model.main.tool_calling_required is False
+
+
+def test_no_screen_tool_reaches_a_task_authorization_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The load-bearing assertion of this file.
+
+    Asserted against the base envelope as well, so that a change which widened
+    the envelope by six names *and* widened the baseline could not satisfy it.
+    """
+
+    settings = _load_profile(monkeypatch, COMPUTER_CONFIG)
+    baseline = _load_profile(monkeypatch, LOCAL_CONFIG)
+
+    allowed = project_task(settings).default_authorization_envelope.allowed_tools
+    for name in LOCAL_NAMES:
+        assert name not in allowed
+    base = project_task(baseline).default_authorization_envelope
+    assert allowed == base.allowed_tools
+
+
+def test_the_screen_tools_do_not_raise_the_deployments_risk_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second widening that would otherwise come for free with the first.
+
+    Any non-empty MCP name list forces `max_tool_risk="external"` on the whole
+    envelope. So a change admitting these six would not only add six tools; it
+    would raise the ceiling for every Task submitted under this profile,
+    including the ones that never touch a screen.
+    """
+
+    settings = _load_profile(monkeypatch, COMPUTER_CONFIG)
+    envelope = project_task(settings).default_authorization_envelope
+
+    assert envelope.max_tool_risk == "write"
+
+
+def test_the_worker_still_learns_about_the_server_it_must_not_bind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The projection carries it through; the refusal happens later, once.
+
+    Worth pinning in this direction: a "fix" that dropped the server from the
+    Worker projection would also pass the envelope assertions above, and would
+    take with it the log line that tells an operator why their screen tools are
+    not there.
+    """
+
+    worker = project_task_worker(_load_profile(monkeypatch, COMPUTER_CONFIG))
+
+    assert worker.mcp is not None
+    assert [server.alias for server in worker.mcp.servers] == ["computer"]
+    assert worker.mcp.servers[0].retryable_effects is False
+
+
+def test_the_profile_points_at_the_port_the_server_actually_serves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_workbench.apps.computer_mcp.main import DEFAULT_PORT
+
+    worker = project_task_worker(_load_profile(monkeypatch, COMPUTER_CONFIG))
+
+    assert worker.mcp is not None
+    assert worker.mcp.servers[0].endpoint == f"http://127.0.0.1:{DEFAULT_PORT}/mcp"
+
+
+def test_the_ordinary_local_profile_has_never_heard_of_a_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _load_profile(monkeypatch, LOCAL_CONFIG)
+
+    assert settings.mcp.servers == ()
+    allowed = project_task(settings).default_authorization_envelope.allowed_tools
+    for name in LOCAL_NAMES:
+        assert name not in allowed
+
+
+def test_the_console_profile_does_not_quietly_include_the_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`demo-local` is the union profile the console runs.
+
+    It is the one a person reaches without choosing it -- somebody typing a
+    request into Work is not selecting a profile -- which is exactly why the
+    screen server must not be folded into it (ADR-070 §1).
+    """
+
+    console = _load_profile(monkeypatch, ROOT / "config/config.demo-local.toml")
+
+    assert "computer" not in [server.alias for server in console.mcp.servers]
+
+
+def _dev(
+    command: str, environment: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "scripts/dev.sh", command],
+        cwd=ROOT,
+        env={**os.environ, "PYTHON": "/bin/echo", **(environment or {})},
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+
+def test_dev_script_starts_the_project_owned_computer_mcp_module() -> None:
+    result = _dev("computer-server")
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "-m agent_workbench.apps.computer_mcp.main"
+
+
+def test_dev_script_probes_all_six_tools_by_name() -> None:
+    """Counting them would call a five-tool server healthy.
+
+    The profile's `tools` list is the contract this server must satisfy, so a
+    server that came up with five of them is a different deployment wearing the
+    same alias -- whether or not the names go anywhere afterwards.
+    """
+
+    result = _dev("computer-check")
+
+    assert result.returncode == 0
+    assert result.stdout.split() == [
+        "scripts/smoke_mcp_server.py",
+        "--label",
+        "computer",
+        "--endpoint",
+        "http://127.0.0.1:8768/mcp",
+        "--health-url",
+        "http://127.0.0.1:8768/health",
+        *[
+            argument
+            for remote in SCREEN_TOOLS
+            for argument in ("--expect-tool", remote)
+        ],
+    ]
+
+
+def test_there_is_no_computer_api_or_worker_arm_to_start() -> None:
+    """Their absence is the decision, so it is asserted rather than assumed.
+
+    A `computer-api` would freeze six screen tools into every Task it submitted
+    -- except that it would not, because the Task path refuses them at both
+    ends, which makes the command a promise the platform does not keep. The
+    honest shape is that the command does not exist (ADR-075).
+    """
+
+    for command in ("computer-api", "computer-worker"):
+        result = _dev(command)
+        assert result.returncode != 0
+
+    script = (ROOT / "scripts/dev.sh").read_text(encoding="utf-8")
+    assert "computer-api)" not in script
+    assert "computer-worker)" not in script
+
+
+def test_the_usage_banner_documents_both_computer_commands() -> None:
+    """The banner is a `sed` range over the script's own header.
+
+    Adding an arm without extending the range leaves it undocumented, and a
+    line-number range is exactly the thing nobody notices by hand.
+    """
+
+    script = (ROOT / "scripts/dev.sh").read_text(encoding="utf-8")
+    documented = {
+        line.split()[2]
+        for line in script.splitlines()
+        if line.startswith("#   scripts/dev.sh ")
+    }
+    banner = _dev("")
+
+    for command in ("computer-server", "computer-check"):
+        assert command in documented
+        assert command in banner.stdout

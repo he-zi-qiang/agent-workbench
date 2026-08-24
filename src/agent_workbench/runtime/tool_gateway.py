@@ -61,6 +61,7 @@ from agent_workbench.domain.errors import (
     AgentWorkbenchError,
     ErrorCode,
     ErrorInfo,
+    PolicyDeniedError,
     ToolInputInvalidError,
     UnknownToolError,
 )
@@ -260,11 +261,49 @@ class ToolGateway:
         self._approvals = approvals
         self._approval_timeout_seconds = approval_timeout_seconds
 
+    def knows(self, name: str) -> bool:
+        """Whether this process registers a tool by that name.
+
+        Exists so a caller can tell "no such tool" from "not this run's tool"
+        without reaching into the registry. The two are different answers and
+        deserve different error codes: the first is a name the model invented,
+        the second is a profile that does not carry something it needed.
+        """
+
+        return self._registry.get(name) is not None
+
     def advertise(self, names: Sequence[str]) -> tuple[ToolSpec, ...]:
         """Specifications for the tools a run may use.
 
         Raises when a run asks for a tool this process does not register: the
         model must never be shown a tool the gateway would refuse to resolve.
+
+        And raises when a run asks for a *ledgered* one. A ledgered tool is an
+        external effect that cannot be undone, and the ledger's protection --
+        one effect per ``operation_key`` -- is only as good as the key, which
+        the tool derives from the arguments and the context it is handed. That
+        derivation is answerable for a call a deterministic node issued; it has
+        nothing to be answerable with for a call a model invented, because
+        nothing in a run distinguishes "the same intent, replayed" from "a new
+        intent that happens to look identical" (ADR-075). So the rule is
+        positional rather than a judgement: a ledgered effect is *issued* by a
+        node that meant it, the way ``export_artifact`` is, and is never put in
+        front of a model as a choice.
+
+        Nothing in this repository is refused by this today -- no profile names
+        a ledgered tool -- and that is the intended shape. It replaces a
+        guardrail that used to exist by accident: until the trace carried a
+        lease epoch, every ledgered tool a model proposed was refused deeper
+        down for want of a fence, which looked like a decision and was an
+        omission.
+
+        Two different refusals, and they keep two different codes on purpose.
+        A name this process does not register is `unknown_tool` -- the model,
+        or the profile, asked for something that is not here. A name it does
+        register but may not offer is `policy_denied`: the tool exists, the
+        deployment built it, and a rule says it is not the model's to call.
+        Reading `unknown_tool` for the second one would send whoever is
+        debugging it to look for a missing registration.
         """
 
         specs: list[ToolSpec] = []
@@ -273,6 +312,11 @@ class ToolGateway:
             if binding is None:
                 raise UnknownToolError(
                     f"the run requested a tool this process does not register: {name}"
+                )
+            if binding.operation_key is not None:
+                raise PolicyDeniedError(
+                    "this tool records an external effect and is issued by a "
+                    f"graph node, never offered to a model: {name}"
                 )
             specs.append(binding.spec)
         return tuple(specs)

@@ -13,7 +13,7 @@
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 为 `1.15`；两者是不同版本轴，架构基线不随
+当前架构基线为 `1.3`，配置 schema 为 `1.17`；两者是不同版本轴，架构基线不随
 配置 schema 走。schema 每一次抬升都对应一条 ADR：
 
 | schema | 原因 | 依据 |
@@ -642,7 +642,7 @@ timeout_seconds = 30
 | `endpoint` | HTTPS，或本机 loopback HTTP；禁止 userinfo/query/fragment | 只由 Task Worker 建立连接 |
 | `tools` | 非空显式 remote-name allowlist；归一化后不得碰撞 | API 据此冻结具体授权名，Worker 与启动目录取交集 |
 | `audience` | `research` 或 `synthesis`，默认 `synthesis` | 这个 server 的工具进哪个 Agent：`research` → `researcher_external`，`synthesis` → `writer` |
-| `retryable_effects` | 必填；无默认 | `true` 表示全部 allowlisted tool 在整个节点重放时都可再次调用；`false` 不进入 Task 可调用路径 |
+| `retryable_effects` | 必填；无默认 | `true`：全部 allowlisted tool 在整个节点重放时都可再次调用。`false` 是**一条拒绝，不是待接的缺口**（[ADR-075](./adr/0075-a-ledgered-effect-is-issued-not-proposed.md)）：名字不进 Task 授权信封（`projections.configured_mcp_tool_names`），Worker 也不为该 server 建绑定、只留一行结构化日志（`task_worker.composition`），两端各拒一次；信封这一端连同「风险上限不因此抬到 `external`」由 `tests/config/test_local_computer_profile.py` 钉住 |
 | `timeout_seconds` | `1..600` | 同时约束启动发现与单次工具调用 |
 
 `audience` 的默认值是**防回归**的，不是随手选的：这个字段出现之前写的每一份配置都意味着
