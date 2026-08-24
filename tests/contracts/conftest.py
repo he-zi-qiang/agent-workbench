@@ -25,24 +25,30 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from harness import StoreHarness
+from harness import ChatReleaseHarness, StoreHarness
 from sqlalchemy import text
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.memory import (
     InMemoryArtifactStore,
+    InMemoryChatReleaseCoordinator,
     InMemoryConversationStore,
     InMemoryEventLog,
     InMemoryProjectStore,
 )
 from agent_workbench.adapters.persistence import (
+    PostgresChatReleaseCoordinator,
     PostgresConversationStore,
     PostgresEventLog,
     PostgresProjectStore,
     create_query_engine,
 )
 from agent_workbench.ports.artifact_store import ArtifactStore
-from agent_workbench.ports.conversation_store import ChatTurnStore, ConversationStore
+from agent_workbench.ports.conversation_store import (
+    AuthorizedRevision,
+    ChatTurnStore,
+    ConversationStore,
+)
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 REQUIRED_TEST_DATABASE_SUFFIX = "_test"
@@ -171,6 +177,82 @@ def chat_turn_conversations(request: pytest.FixtureRequest) -> StoreHarness:
     if dsn is None:
         pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
     return StoreHarness(name="postgres", factory=_postgres_chat_turns(dsn))
+
+
+# --- chat release ---------------------------------------------------------
+
+
+class _UnchangedRevisions:
+    """A revision guard that never withholds.
+
+    The release contract below is about which terminal event a publishable
+    answer produces. Withholding is a different question with its own suites,
+    and a guard that could say no here would only add a way for those two
+    failures to be confused for one another.
+    """
+
+    async def revisions_unchanged(
+        self,
+        revisions: tuple[AuthorizedRevision, ...],
+        *,
+        tenant_id: str,
+        principal_id: str,
+    ) -> bool:
+        del revisions, tenant_id, principal_id
+        return True
+
+
+@asynccontextmanager
+async def _memory_chat_release() -> AsyncIterator[ChatReleaseHarness]:
+    conversations = InMemoryConversationStore()
+    yield ChatReleaseHarness(
+        conversations=conversations,
+        coordinator=InMemoryChatReleaseCoordinator(
+            conversations=conversations,
+            revisions=_UnchangedRevisions(),
+        ),
+        events=InMemoryEventLog(),
+    )
+
+
+def _postgres_chat_release(dsn: str) -> Callable[[], Any]:
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[ChatReleaseHarness]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "TRUNCATE chat_turns, messages, conversation_sessions, "
+                        "events, event_streams CASCADE"
+                    )
+                )
+            yield ChatReleaseHarness(
+                conversations=PostgresConversationStore(engine),
+                coordinator=PostgresChatReleaseCoordinator(engine),
+                events=PostgresEventLog(engine),
+            )
+        finally:
+            await engine.dispose()
+
+    return factory
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def chat_release(request: pytest.FixtureRequest) -> StoreHarness:
+    """Both release coordinators, answering the same publication questions.
+
+    The in-memory one is what most Chat suites run through, so a divergence
+    here is a divergence in what those suites are able to catch.
+    """
+
+    if request.param == "memory":
+        return StoreHarness(name="memory", factory=_memory_chat_release)
+
+    dsn = _test_dsn()
+    if dsn is None:
+        pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
+    return StoreHarness(name="postgres", factory=_postgres_chat_release(dsn))
 
 
 @asynccontextmanager

@@ -217,6 +217,20 @@ class PostgresChatReleaseCoordinator:
             authorized_revisions=(),
             citations=(),
             withheld=True,
+            # Carried, not defaulted, though nothing can observe the difference
+            # yet. No ungrounded candidate reaches this method today: an
+            # ungrounded result is forbidden to hold authorized revisions, and
+            # `_revisions_unchanged` returns True on an empty tuple, so the one
+            # withhold trigger that exists cannot fire for one.
+            #
+            # The keyword is here because the default is `True` and this value
+            # outlives the refusal -- it is written back by
+            # `mark_released_in_transaction` and the API reads `turn.grounded`
+            # straight off the stored result. The first withhold trigger that
+            # does not depend on revisions would relabel an unverified answer
+            # as a verified one at the moment the system refused to publish it,
+            # which is the worst direction to be wrong in at the worst moment.
+            grounded=pending.grounded,
         )
 
     @staticmethod

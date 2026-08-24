@@ -13,6 +13,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from agent_workbench.adapters.events import ScopedEventSink
+from agent_workbench.ports.chat_release import ChatReleaseCoordinator
+from agent_workbench.ports.conversation_store import ChatTurnStore
+from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
+
 
 @dataclass(frozen=True, slots=True)
 class StoreHarness:
@@ -29,4 +34,31 @@ class StoreHarness:
         return asyncio.run(execute())
 
 
-__all__ = ["StoreHarness"]
+@dataclass(frozen=True, slots=True)
+class ChatReleaseHarness:
+    """One release coordinator with the Turn ledger and log it publishes into.
+
+    A release contract cannot be stated against the coordinator alone: the
+    candidate has to be prepared in a Turn ledger and the terminal answer read
+    back out of an event log, and both must be the ones this coordinator
+    actually writes through. Bundling the three is what lets the identical
+    scenario run against the deterministic double and against PostgreSQL.
+    """
+
+    conversations: ChatTurnStore
+    coordinator: ChatReleaseCoordinator
+    events: EventLogPort
+
+    def sink(self, scope: EventScope) -> EventSink:
+        """The sink a single-process coordinator publishes its answer through.
+
+        The PostgreSQL coordinator ignores it and appends inside the same
+        transaction as the authorization fence -- emitting here would open a
+        second transaction and reopen the race. It is still part of the port,
+        so the contract supplies one either way.
+        """
+
+        return ScopedEventSink(log=self.events, scope=scope)
+
+
+__all__ = ["ChatReleaseHarness", "StoreHarness"]
