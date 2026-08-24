@@ -35,6 +35,10 @@ from agent_workbench.domain.computer import (
 )
 from agent_workbench.ports.screen import Capture, ScreenPort
 
+#: How a person is asked. Named here rather than spelled out at each use so the
+#: server and the gate cannot drift into two slightly different callables.
+ConsentAsker = Callable[..., Awaitable[bool]]
+
 
 class ScreenRefusedError(RuntimeError):
     """The gate said no. Carries the whole message the model should read.
@@ -65,7 +69,7 @@ class ScreenGate:
     #: better to ask than a macOS alert can supply it. The default is the
     #: macOS one, because a server that quietly granted itself access when
     #: nobody wired an approver is exactly the state this replaced.
-    consent: Callable[..., Awaitable[bool]] = ask_a_person
+    consent: ConsentAsker = ask_a_person
     #: Keyed by bundle id, which is the identity an application cannot rename
     #: its way out of. An empty allowlist is the starting state and refuses
     #: everything -- there is no "allow by default" here to turn off.

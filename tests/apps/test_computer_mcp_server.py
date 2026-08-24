@@ -20,11 +20,34 @@ NOTES = ApplicationIdentity(bundle_id="com.apple.Notes", name="Notes")
 TERMINAL = ApplicationIdentity(bundle_id="com.apple.Terminal", name="Terminal")
 
 
-def _session(screen: FakeScreen, calls: list[tuple[str, dict[str, Any]]]) -> list[Any]:
+async def _approves(*_: object, **__: object) -> bool:
+    """A person who says yes, without a dialog.
+
+    Every server in this file is built with an explicit answerer. Reaching the
+    real one would open a modal window on whoever is running the suite and hold
+    the run until they noticed -- and on a machine with no `osascript` it fails
+    outright, which is how CI caught this being missing.
+    """
+
+    return True
+
+
+async def _refuses(*_: object, **__: object) -> bool:
+    return False
+
+
+def _session(
+    screen: FakeScreen,
+    calls: list[tuple[str, dict[str, Any]]],
+    *,
+    consent: object = None,
+) -> list[Any]:
     async def scenario() -> list[Any]:
         results: list[Any] = []
         async with Client(
-            create_server(screen), cache=None, raise_exceptions=True
+            create_server(screen, consent=consent or _approves),  # type: ignore[arg-type]
+            cache=None,
+            raise_exceptions=True,
         ) as client:
             for name, arguments in calls:
                 results.append(await client.call_tool(name, arguments))
@@ -36,7 +59,9 @@ def _session(screen: FakeScreen, calls: list[tuple[str, dict[str, Any]]]) -> lis
 def test_the_tools_are_the_six_this_server_declares() -> None:
     async def scenario() -> Any:
         async with Client(
-            create_server(FakeScreen()), cache=None, raise_exceptions=True
+            create_server(FakeScreen(), consent=_approves),
+            cache=None,
+            raise_exceptions=True,
         ) as client:
             return await client.list_tools()
 
@@ -145,7 +170,7 @@ def test_an_ungranted_screen_refuses_before_it_touches_anything() -> None:
 
 
 def test_health_reports_what_this_process_can_actually_do() -> None:
-    app = create_app(host="testserver", screen=FakeScreen())
+    app = create_app(host="testserver", screen=FakeScreen(), consent=_approves)
     with TestClient(app) as client:  # pyright: ignore[reportArgumentType]
         body = client.get(HEALTH_PATH).json()
 
@@ -155,3 +180,57 @@ def test_health_reports_what_this_process_can_actually_do() -> None:
     # composed" and "the window was painted over afterwards" are different
     # promises, and a caller that needs the first has to be able to ask.
     assert body["capabilities"] == ["exclude_native"]
+
+
+def test_a_person_saying_no_is_an_error_result_the_model_can_read() -> None:
+    """A refused grant is an answer, not a transport failure.
+
+    The model asked for something and is owed a sentence it can act on. A
+    protocol error would surface as a broken tool call instead, which reads
+    like the server is malfunctioning rather than like a person declining.
+    """
+
+    screen = FakeScreen(focus=NOTES)
+    results = _session(
+        screen,
+        [
+            (
+                "request_access",
+                {
+                    "applications": [
+                        {"bundle_id": NOTES.bundle_id, "name": NOTES.name}
+                    ],
+                    "reason": "整理今天的会议纪要",
+                },
+            )
+        ],
+        consent=_refuses,
+    )
+
+    assert results[0].is_error is True
+    assert "did not approve" in results[0].content[0].text
+
+
+def test_nothing_is_touched_after_a_refusal() -> None:
+    """The refusal is not advice about how to try harder.
+
+    Asserted on the screen rather than on the message, because the message is
+    what a model reads and this is what a person's machine experiences.
+    """
+
+    screen = FakeScreen(focus=NOTES)
+    results = _session(
+        screen,
+        [
+            (
+                "request_access",
+                {"applications": [{"bundle_id": NOTES.bundle_id, "name": NOTES.name}]},
+            ),
+            ("left_click", {"x": 10, "y": 10}),
+            ("screenshot", {}),
+        ],
+        consent=_refuses,
+    )
+
+    assert all(result.is_error for result in results)
+    assert screen.actions == []

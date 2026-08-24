@@ -38,7 +38,7 @@
 **这一批还没有合并**，下面的数字属于这条工作分支上的这棵树，不是主线的当前值。
 
 **门禁**：`ruff format --check` + `ruff check` 全过；`pyright` **0 errors**；
-`pytest` **2796 passed / 764 skipped**。改动前这棵树是 **2778**，所以**本批新增 18 条**：
+`pytest` **2798 passed / 764 skipped**。改动前这棵树是 **2778**，所以**本批新增 20 条**：
 11 条在新增的 `tests/apps/test_computer_consent.py`，7 条在
 `tests/apps/test_computer_gate.py`。`consent.py` 按仓库既有约定加了一条写明理由的
 `RUF001` per-file-ignore（那个文件里的中文是故意写的）。
