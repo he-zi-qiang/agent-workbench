@@ -2148,7 +2148,7 @@ describe("CodePage", () => {
     const turns = await screen.findByRole("region", { name: "编码会话" });
     // The guard for the complaint that started this. Before it, one call's
     // excerpt could be on screen three times at once: streaming at the top of
-    // the page, formatted as a 思考过程 body inside its step, and verbatim
+    // the page, formatted as a 思考摘要 body inside its step, and verbatim
     // again inside that step's raw JSON payload dump.
     //
     // Once each, and never the same call twice. The invariant is unchanged;

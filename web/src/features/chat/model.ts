@@ -507,6 +507,35 @@ function reduceLiveFrame(
   if (envelope.stream_id !== sessionId) {
     return { state, accepted: false, duplicate: false };
   }
+  if (envelope.event_type === "ToolProgress") {
+    const callId = stringField(envelope.payload, "tool_call_id");
+    if (callId === null || callId === "") {
+      return { state, accepted: false, duplicate: false };
+    }
+
+    const localId = state.runToTurn[envelope.run_id];
+    if (localId === undefined) return { state, accepted: true, duplicate: false };
+    const turn = state.turns[localId];
+    if (turn === undefined || TERMINAL_TURN_PHASES.has(turn.phase)) {
+      return { state, accepted: true, duplicate: false };
+    }
+
+    const activity = activityFromEnvelope(envelope);
+    const activityIndex = turn.activities.findIndex((item) => item.key === activity.key);
+    const activities = [...turn.activities];
+    if (activityIndex < 0) activities.push(activity);
+    else activities[activityIndex] = carryForward(activities[activityIndex], activity);
+
+    return {
+      state: replaceTurn(bump(state, {}), {
+        ...turn,
+        activities,
+        phase: turn.phase === "submitting" ? "running" : turn.phase,
+      }),
+      accepted: true,
+      duplicate: false,
+    };
+  }
   if (envelope.event_type !== "ModelDelta") {
     // Live, and not something this view renders. Accepted so the stream does
     // not treat it as a rejection, and dropped so an unknown transient type
@@ -1022,6 +1051,24 @@ function activityFromEnvelope(envelope: EventEnvelope): ChatActivity {
       detail: "执行中",
     };
   }
+  if (kind === "ToolProgress") {
+    const callId = stringField(payload, "tool_call_id") ?? envelope.event_id;
+    const message = stringField(payload, "message");
+    const percent = numberField(payload, "percent");
+    const elapsed = numberField(payload, "elapsed_ms");
+    const detail = [
+      message,
+      percent === null ? null : `${Math.round(Math.max(0, Math.min(100, percent)))}%`,
+      elapsed === null ? null : formatElapsed(elapsed),
+    ].filter((part): part is string => part !== null && part !== "");
+    return {
+      ...base,
+      key: `tool:${callId}`,
+      label: stringField(payload, "tool_name") ?? "工具调用",
+      state: "running",
+      detail: detail.join(" · ") || "执行中",
+    };
+  }
   if (kind === "PermissionResolved") {
     const callId = stringField(payload, "tool_call_id") ?? envelope.event_id;
     const denied = stringField(payload, "effect") === "deny";
@@ -1311,6 +1358,14 @@ function stringField(object: Record<string, unknown>, field: string): string | n
 function numberField(object: Record<string, unknown>, field: string): number | null {
   const value = object[field];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function formatElapsed(milliseconds: number): string {
+  if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`;
+  if (milliseconds < 60_000) return `${Math.round(milliseconds / 1_000)} 秒`;
+  const minutes = Math.floor(milliseconds / 60_000);
+  const seconds = Math.round((milliseconds % 60_000) / 1_000);
+  return seconds === 0 ? `${minutes} 分钟` : `${minutes} 分 ${seconds} 秒`;
 }
 
 function objectField(

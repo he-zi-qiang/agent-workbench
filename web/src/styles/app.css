@@ -6076,3 +6076,518 @@ p.aw-code-step-thought {
   color: var(--aw-text-soft);
   font-size: 13px;
 }
+
+/* ── Agent activity -------------------------------------------------------
+ *
+ * Chat, Task and Code keep different execution models, but a moving step
+ * should look and read the same on all three surfaces. This is the compact
+ * present-tense sentence above each timeline; settled records remain below it
+ * and do not keep animating after the work is over. */
+.aw-live-activity {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  padding: 8px 10px;
+  gap: 2px 10px;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  border: 1px solid var(--aw-border);
+  border-radius: 11px;
+  background: var(--aw-panel-soft);
+  overflow: hidden;
+}
+
+.aw-live-activity-mark {
+  position: relative;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  grid-row: 1;
+  place-items: center;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 9px;
+  background: var(--aw-window);
+  color: var(--aw-text-soft);
+}
+
+.aw-live-activity.is-thinking .aw-live-activity-mark,
+.aw-live-activity.is-answer .aw-live-activity-mark {
+  border-color: color-mix(in srgb, var(--aw-accent) 28%, var(--aw-border));
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+.aw-live-activity-spinner {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  padding: 2px;
+  border-radius: 50%;
+  background: var(--aw-window);
+  color: var(--aw-accent);
+  animation: aw-spin 900ms linear infinite;
+}
+
+.aw-live-activity-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.aw-live-activity-copy strong {
+  overflow: hidden;
+  color: var(--aw-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-live-activity-copy small {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-live-activity-meta {
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A recorded command is a terminal transcript, not another generic details
+   row. Its first line stays scannable; the exact command and recorded output
+   are one click below it. */
+.aw-command-trace {
+  margin: 5px 4px 6px 21px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-surface-sunken);
+  overflow: hidden;
+}
+
+.aw-command-trace > summary {
+  display: grid;
+  min-height: 32px;
+  align-items: center;
+  padding: 5px 8px;
+  gap: 7px;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.aw-command-trace > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-command-trace > summary:hover {
+  background: color-mix(in srgb, var(--aw-panel-soft) 72%, transparent);
+}
+
+.aw-command-trace[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-command-trace code {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--aw-text-soft);
+  font-family: var(--aw-mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-command-trace code > span {
+  color: var(--aw-accent);
+  user-select: none;
+}
+
+.aw-command-trace > summary small {
+  color: var(--aw-text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.aw-command-trace.is-running {
+  border-color: color-mix(in srgb, var(--aw-accent) 34%, var(--aw-border));
+}
+
+.aw-command-trace-body {
+  display: grid;
+  border-top: 1px solid var(--aw-border);
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+}
+
+.aw-command-trace-body figure {
+  min-width: 0;
+  margin: 0;
+}
+
+.aw-command-trace-body figure + figure {
+  border-left: 1px solid var(--aw-border);
+}
+
+.aw-command-trace-body figcaption {
+  padding: 5px 9px;
+  color: var(--aw-text-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.aw-command-trace-body pre {
+  max-height: 240px;
+  margin: 0;
+  padding: 8px 10px 10px;
+  overflow: auto;
+  color: var(--aw-text-soft);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.aw-activity-reasoning {
+  display: grid;
+  margin: 5px 4px 4px 21px;
+  padding: 6px 8px;
+  align-items: start;
+  gap: 7px;
+  grid-template-columns: auto minmax(0, 1fr);
+  border-left: 2px solid var(--aw-border-strong);
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.aw-activity-reasoning > svg {
+  margin-top: 2px;
+  color: var(--aw-accent);
+}
+
+.aw-activity-reasoning > span {
+  min-width: 0;
+}
+
+.aw-activity-reasoning small {
+  display: block;
+  margin-bottom: 1px;
+  color: var(--aw-text-soft);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* Task keeps the process above potentially multi-page output. This makes the
+   current work visible without taking the document preview away. */
+.aw-work-process {
+  display: grid;
+  padding: 10px 12px 12px;
+  gap: 8px;
+  border: 1px solid var(--aw-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--aw-panel) 72%, transparent);
+}
+
+.aw-work-process-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.aw-work-process-header > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.aw-work-process-header strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.aw-work-process-header small {
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+}
+
+.aw-work-process-pulse {
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 50%;
+  background: var(--aw-window);
+}
+
+.aw-work-process.is-live .aw-work-process-pulse {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent);
+  animation: aw-pulse 1.4s ease-in-out infinite;
+}
+
+/* Timeline markers contain state icons now, so the same rail can be read
+   without relying on colour alone. Waiting is deliberately still: approval is
+   a user decision, not work that is secretly progressing. */
+.aw-stream-dot {
+  top: 5px;
+  left: -2px;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  color: var(--aw-text-muted);
+}
+
+.aw-stream-state.is-done .aw-stream-dot,
+.aw-stream-state.is-failed .aw-stream-dot,
+.aw-stream-state.is-active .aw-stream-dot {
+  color: var(--aw-accent-on);
+}
+
+.aw-stream-state.is-waiting .aw-stream-dot {
+  border-color: var(--aw-warning);
+  background: var(--aw-warning-soft);
+  color: var(--aw-warning);
+}
+
+.aw-stream-state.is-skipped .aw-stream-dot {
+  color: var(--aw-text-muted);
+}
+
+.aw-stream-steps > li.is-waiting .aw-stream-dot {
+  animation: none;
+}
+
+/* Code reads as one causally ordered rail: thought, action, command, output.
+   The action is the visual anchor; the thought remains quieter above it. */
+.aw-code-steps {
+  padding-left: 0;
+  gap: 9px;
+}
+
+.aw-code-step {
+  position: relative;
+  padding-left: 26px;
+  gap: 5px;
+}
+
+.aw-code-step::before {
+  position: absolute;
+  top: 13px;
+  bottom: -14px;
+  left: 7px;
+  width: 1px;
+  background: var(--aw-border);
+  content: "";
+}
+
+.aw-code-step::after {
+  position: absolute;
+  top: 9px;
+  left: 3px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--aw-window);
+  border-radius: 50%;
+  background: var(--aw-border-strong);
+  box-shadow: 0 0 0 1px var(--aw-border);
+  content: "";
+}
+
+.aw-code-step:last-child::before {
+  display: none;
+}
+
+.aw-code-step.is-running::after,
+.aw-code-step.is-live::after {
+  background: var(--aw-accent);
+  box-shadow: 0 0 0 1px var(--aw-accent);
+  animation: aw-pulse 1.4s ease-in-out infinite;
+}
+
+.aw-code-action {
+  display: grid;
+  min-height: 36px;
+  padding: 6px 9px;
+  align-items: center;
+  gap: 8px;
+  grid-template-columns: 22px auto minmax(0, 1fr) auto;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel);
+}
+
+.aw-code-action-icon {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+}
+
+.aw-code-action.is-running {
+  border-color: color-mix(in srgb, var(--aw-accent) 36%, var(--aw-border));
+  background: color-mix(in srgb, var(--aw-accent-soft) 42%, var(--aw-panel));
+}
+
+.aw-code-action.is-running .aw-code-action-icon {
+  color: var(--aw-accent);
+}
+
+.aw-code-action.is-failed,
+.aw-code-action.is-denied {
+  border-color: var(--aw-danger-border);
+}
+
+.aw-code-step > .aw-command-trace {
+  margin: 0;
+}
+
+.aw-code-step-thought > summary,
+p.aw-code-step-thought {
+  display: grid;
+  padding: 3px 4px;
+  align-items: start;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.aw-code-thought-label {
+  display: inline-flex;
+  min-width: 62px;
+  align-items: center;
+  gap: 4px;
+  color: var(--aw-text-soft);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.aw-code-step-thought-body {
+  margin-left: 70px;
+}
+
+.aw-code-action-progress {
+  position: relative;
+  margin: 0;
+  padding: 7px 8px 4px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-surface-sunken);
+  overflow: hidden;
+}
+
+.aw-code-action-progress::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 32%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--aw-accent), transparent);
+  content: "";
+  animation: aw-progress-travel 1.8s ease-in-out infinite;
+}
+
+.aw-code-action-progress-lines {
+  padding: 2px 4px;
+  background: transparent;
+}
+
+.aw-code-action-progress-lines .is-latest {
+  color: var(--aw-text-soft);
+  animation: aw-progress-line-enter var(--aw-duration-base) var(--aw-ease);
+}
+
+@keyframes aw-progress-travel {
+  from {
+    transform: translateX(-120%);
+  }
+
+  to {
+    transform: translateX(410%);
+  }
+}
+
+@keyframes aw-progress-line-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.aw-code-report.is-streaming > p::after {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 3px;
+  background: var(--aw-accent);
+  content: "";
+  vertical-align: -0.12em;
+  animation: aw-stream-caret 1s steps(1, end) infinite;
+}
+
+@keyframes aw-stream-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .aw-live-activity {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .aw-live-activity-meta {
+    grid-column: 2;
+  }
+
+  .aw-command-trace > summary small {
+    display: none;
+  }
+
+  .aw-command-trace-body figure + figure {
+    border-top: 1px solid var(--aw-border);
+    border-left: 0;
+  }
+
+  .aw-code-action {
+    grid-template-columns: 22px auto minmax(0, 1fr);
+  }
+
+  .aw-code-action-outcome {
+    grid-column: 2 / -1;
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-live-activity-spinner,
+  .aw-work-process.is-live .aw-work-process-pulse,
+  .aw-code-step.is-running::after,
+  .aw-code-step.is-live::after,
+  .aw-code-action-progress::before,
+  .aw-code-action-progress-lines .is-latest,
+  .aw-code-report.is-streaming > p::after {
+    animation: none;
+  }
+}
