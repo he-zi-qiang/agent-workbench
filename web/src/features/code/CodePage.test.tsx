@@ -592,12 +592,14 @@ describe("CodePage", () => {
           approval_id: "apr_write",
           tool_name: "workspace_write",
           argument_digest: "a".repeat(64),
+          approval_preview: '{"content":"# notes","path":"notes.md"}',
           risk: "write",
         },
         {
           approval_id: "apr_shell",
           tool_name: "sandbox_run",
           argument_digest: "b".repeat(64),
+          approval_preview: '{"script":"print(1)"}',
           risk: "external",
         },
       ],
@@ -625,6 +627,34 @@ describe("CodePage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows what the call would do, not only its digest", async () => {
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    vi.mocked(getCodeApprovals).mockResolvedValue({
+      approvals: [
+        {
+          approval_id: "apr_run",
+          tool_name: "project_run",
+          argument_digest: "c".repeat(64),
+          approval_preview: '{"command":"rm -rf build"}',
+          risk: "destructive",
+        },
+      ],
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "clean the build");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const held = await screen.findByRole("region", { name: "待批准的调用" });
+    // The reason this test exists. Until the card carried a preview it showed
+    // 64 hex characters and nothing else, which asked the same question of
+    // `rm -rf build` and of `ls` -- and the person answering had no way to
+    // tell which of the two they had just approved.
+    expect(within(held).getByText(/rm -rf build/)).toBeInTheDocument();
+    expect(within(held).getByText("不可撤销")).toBeInTheDocument();
+  });
+
   it("sends the decision the button says, and stops showing the question", async () => {
     const user = userEvent.setup();
     vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
@@ -635,6 +665,7 @@ describe("CodePage", () => {
           approval_id: "apr_write",
           tool_name: "workspace_write",
           argument_digest: "a".repeat(64),
+          approval_preview: '{"content":"# notes","path":"notes.md"}',
           risk: "write",
         },
       ],

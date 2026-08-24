@@ -488,6 +488,47 @@ def test_the_gate_arms_what_the_deployment_chose() -> None:
     assert gated.system_prompt == CODER_SYSTEM_PROMPT_WITH_SANDBOX
 
 
+def test_a_turn_holding_the_run_tool_is_not_told_there_is_no_shell() -> None:
+    """ADR-077, and the same lesson the sandbox prompt was written from.
+
+    A model told "There is no shell" while holding `project_run` behaves
+    correctly for a deployment it is not in: `CODER_SYSTEM_PROMPT_WITH_SANDBOX`
+    records the measured version of that -- a turn wrote a correct `fib.py` and
+    then reported it could not run it. The claim has to go, and the tool has to
+    be named, on every base the turn might have started from.
+    """
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS_WITH_RUN,
+        CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN,
+    )
+
+    def observed(tool_names: Any) -> Any:
+        harness = _Harness(_writes("notes.md", "hello", "Done."))
+        recording = _Recording()
+        harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.tool_names = tool_names  # pyright: ignore[reportAttributeAccessIssue]
+
+        async def scenario() -> Any:
+            session_id = await harness.opened()
+            await harness.ask(session_id, "run the tests")
+            return recording.requests[0]
+
+        return _run(scenario)
+
+    for names in (CODE_PROJECT_TOOLS_WITH_RUN, CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN):
+        request = observed(names)
+        assert "There is no shell" not in request.system_prompt
+        assert "project_run" in request.system_prompt
+        # The ceiling has to move with it or the model is offered a tool its own
+        # envelope denies, which costs a turn ending in
+        # `outside_submitted_envelope`.
+        assert request.envelope.max_tool_risk == "destructive"
+        # And `destructive` is armed whatever the sandbox gate says, which is
+        # the whole reason the tool is not `external`.
+        assert "destructive" in request.envelope.approval_required_risks
+
+
 def test_cancelling_a_turn_keeps_the_files_it_had_already_written() -> None:
     """The inversion of the Task rule, and the reason the pointer writes through.
 

@@ -79,7 +79,7 @@ describe("stored identity", () => {
     // on the next reload. The stale sets had to stop being read; reading stored
     // identity did not.
     localStorage.setItem(
-      "aw.identity.v4",
+      "aw.identity.v5",
       JSON.stringify({
         tenantId: "tenant_other",
         principalId: "user_other",

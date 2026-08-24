@@ -161,7 +161,7 @@ class TestRead:
     ) -> None:
         # The failure this prevents: a PNG decoded with `errors="replace"` is a
         # string of U+FFFD that a model reads as text and tries to edit.
-        (store.root / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe")
+        (store.working_directory / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe")
         content = await store.read("logo.png")
         assert content.is_text is False
         assert content.text is None
@@ -172,7 +172,7 @@ class TestRead:
     ) -> None:
         # The case that makes `is_text` necessary rather than derivable: `text`
         # is falsy here and the file is perfectly readable.
-        (store.root / "empty.txt").write_bytes(b"")
+        (store.working_directory / "empty.txt").write_bytes(b"")
         content = await store.read("empty.txt")
         assert content.is_text is True
         assert content.text == ""
@@ -194,7 +194,7 @@ class TestRead:
     ) -> None:
         # Truncating would hand back a source file missing its last half, which
         # to a model is indistinguishable from a file that ends there.
-        (store.root / "big.bin").write_bytes(b"x" * (MAX_READ_BYTES + 1))
+        (store.working_directory / "big.bin").write_bytes(b"x" * (MAX_READ_BYTES + 1))
         with pytest.raises(OutputTooLargeError):
             await store.read("big.bin")
 
@@ -206,7 +206,9 @@ class TestWrite:
         entry = await store.write("docs/adr/0072.md", "# ADR-072\n")
         assert entry.path == "docs/adr/0072.md"
         assert entry.kind == "file"
-        assert (store.root / "docs" / "adr" / "0072.md").read_text() == "# ADR-072\n"
+        assert (
+            store.working_directory / "docs" / "adr" / "0072.md"
+        ).read_text() == "# ADR-072\n"
 
     async def test_writing_replaces_whole_contents(
         self, store: FilesystemProjectFileStore
@@ -216,7 +218,7 @@ class TestWrite:
 
     async def test_bytes_round_trip(self, store: FilesystemProjectFileStore) -> None:
         await store.write("logo.png", b"\x89PNG\xff")
-        assert (store.root / "logo.png").read_bytes() == b"\x89PNG\xff"
+        assert (store.working_directory / "logo.png").read_bytes() == b"\x89PNG\xff"
 
     async def test_no_partial_file_is_left_when_the_write_is_refused(
         self, store: FilesystemProjectFileStore
@@ -233,7 +235,9 @@ class TestWrite:
         # The temp is consumed by `os.replace` on the success path. A leftover
         # would show up in every listing of the directory it was written to.
         await store.write("src/main.py", "print('bye')\n")
-        assert [item.name for item in (store.root / "src").iterdir()] == ["main.py"]
+        assert [item.name for item in (store.working_directory / "src").iterdir()] == [
+            "main.py"
+        ]
 
     async def test_an_oversized_write_is_refused(
         self, store: FilesystemProjectFileStore
@@ -258,7 +262,7 @@ class TestDelete:
         # directory somebody meant to remove one file from.
         with pytest.raises(NotFoundError):
             await store.delete("src")
-        assert (store.root / "src" / "main.py").exists()
+        assert (store.working_directory / "src" / "main.py").exists()
 
 
 class TestTheSandboxIsTheOnlyWayIn:
@@ -284,7 +288,7 @@ class TestTheSandboxIsTheOnlyWayIn:
     ) -> None:
         secret = tmp_path / "secret.txt"
         secret.write_text("PRIVATE\n")
-        (store.root / "link.txt").symlink_to(secret)
+        (store.working_directory / "link.txt").symlink_to(secret)
         with pytest.raises(ProjectSandboxError):
             await store.read("link.txt")
 
@@ -295,7 +299,7 @@ class TestTheSandboxIsTheOnlyWayIn:
         # a file is there that is not.
         secret = tmp_path / "secret.txt"
         secret.write_text("PRIVATE CONTENTS THAT ARE LONG\n")
-        (store.root / "link.txt").symlink_to(secret)
+        (store.working_directory / "link.txt").symlink_to(secret)
         entry = next(
             e for e in (await store.list_directory()).entries if e.path == "link.txt"
         )

@@ -52,6 +52,19 @@ const DEFAULT_IDENTITY: PrincipalIdentity = {
     // grant the tool -- the envelope is widened from what the process managed
     // to register, so an unused scope authorises nothing that exists.
     "sandbox:run",
+    // `project_run` (ADR-077), and its own scope rather than `sandbox:run`
+    // precisely so that asking for it is a separate act. It costs nothing
+    // where it was not granted, same as the line above:
+    // `policy.shell_tools_enabled` is false in every profile but `code-local`,
+    // and where it is false this name authorises a tool no turn is offered.
+    // Where it is true, what stands between the scope and a command running is
+    // still a person reading that command.
+    //
+    // No straight double quotes in this comment, and that is not style: the
+    // scope list is parsed out of this file by
+    // `tests/config/test_smoke_walkthrough.py`, which reads every quoted string
+    // between the brackets. A quoted phrase in a comment becomes a scope.
+    "project:run",
   ],
 };
 
@@ -74,11 +87,12 @@ export function IdentityProvider({ children }: PropsWithChildren) {
   // identity editor, which is the opposite of what that editor is for.
   //
   // `v1` predates `external:search`; `v2` predates the workspace and MCP
-  // scopes above; `v3` predates `sandbox:run`. All left unread rather than
-  // migrated: an identity is six short strings, and re-deriving it costs a
-  // reader less than a merge rule that can resurrect a scope they removed.
+  // scopes above; `v3` predates `sandbox:run`; `v4` predates `project:run`.
+  // All left unread rather than migrated: an identity is seven short strings,
+  // and re-deriving it costs a reader less than a merge rule that can
+  // resurrect a scope they removed.
   const [identity, setIdentity] = useStoredState(
-    "aw.identity.v4",
+    "aw.identity.v5",
     DEFAULT_IDENTITY,
   );
   const [editorOpen, setEditorOpen] = useState(false);

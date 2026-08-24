@@ -49,6 +49,7 @@ from agent_workbench.application.code_prompt import (
     CODER_SYSTEM_PROMPT,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+    with_host_commands,
 )
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.application.projects import ProjectService
@@ -65,6 +66,7 @@ from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.messages import Message, assistant_message, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
+from agent_workbench.domain.project_files import PROJECT_RUN_TOOL
 from agent_workbench.domain.runs import (
     AgentOutcome,
     AgentRunRequest,
@@ -72,7 +74,7 @@ from agent_workbench.domain.runs import (
     TraceContext,
 )
 from agent_workbench.domain.sandbox import SANDBOX_RUN_TOOL
-from agent_workbench.domain.tools import ToolName
+from agent_workbench.domain.tools import ToolName, ToolRisk
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import CancellationToken
@@ -103,13 +105,19 @@ CODE_TOOLS: tuple[ToolName, ...] = (
 #: follows does not raise: `project_write("draft.md", …)` succeeds and puts a
 #: scratch file in somebody's repository root.
 #:
-#: There is no grep here yet. `workspace_grep` searches a manifest this project
-#: holds in memory; searching a real tree is a different implementation, and
-#: shipping the name without it would be worse than its absence -- a model told
-#: it can grep stops listing and reading, which is how it concludes a file is
-#: not there.
+#: There is a grep here now, and what withheld it is what shapes it. The
+#: objection was never the matching -- `grep_workspace` was already a pure
+#: function over `(name, text)` pairs -- it was that a real tree has four ways
+#: to come back incomplete that a manifest held in memory does not: the walk
+#: stops at `MAX_LISTING_ENTRIES`, the read budget runs out, a file is not
+#: UTF-8, a file is over `MAX_READ_BYTES`. A model told it can grep stops
+#: listing and reading, so any one of those going unsaid is how it concludes a
+#: file is not there. `ProjectGrepTool` therefore names every file it did not
+#: search, on every reply including "No matches" -- that sentence is the
+#: feature, and the matching is the part that was already written.
 CODE_PROJECT_TOOLS: tuple[ToolName, ...] = (
     "project_edit",
+    "project_grep",
     "project_list",
     "project_read",
     "project_write",
@@ -136,6 +144,88 @@ CODE_PROJECT_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
     *CODE_PROJECT_TOOLS,
     SANDBOX_RUN_TOOL,
 )
+
+#: The same two, plus the tool that runs a command on this machine (ADR-077).
+#:
+#: Project-only, and that is a property of the tool rather than a choice made
+#: here: `project_run` runs *somewhere*, and the only working directory a
+#: coding session has is the project's. A flat-workspace turn has no directory
+#: to be in, so there is no `CODE_TOOLS_WITH_RUN` to pair with these -- the
+#: absence is the answer, not an omission.
+#:
+#: Written out rather than composed at the call site, like the four above. Two
+#: optional tools is where that stops scaling: a third would be eight tuples,
+#: and the honest move at that point is a function, not a seventh name.
+CODE_PROJECT_TOOLS_WITH_RUN: tuple[ToolName, ...] = (
+    *CODE_PROJECT_TOOLS,
+    PROJECT_RUN_TOOL,
+)
+
+CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN: tuple[ToolName, ...] = (
+    *CODE_PROJECT_TOOLS_WITH_SANDBOX,
+    PROJECT_RUN_TOOL,
+)
+
+
+def _system_prompt_for(
+    tool_names: tuple[ToolName, ...], *, sandbox_requires_approval: bool
+) -> str:
+    """What this turn is told about the world it is in.
+
+    Selected from the same facts the envelope reads, so the model is never told
+    it cannot do something it has been granted -- nor that it will wait for a
+    human who is not going to be asked (ADR-058: the gated text says "expect to
+    wait, do not spend one", which under no gate is an instruction to avoid the
+    tool the deployment just freed).
+
+    The two axes compose rather than multiply. `project_run` is independent of
+    the sandbox and of its gate, so it is applied on top of whichever base the
+    first branch chose instead of being spelled out as three more prompts.
+    """
+
+    base = (
+        (
+            CODER_SYSTEM_PROMPT_WITH_SANDBOX
+            if sandbox_requires_approval
+            else CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED
+        )
+        if SANDBOX_RUN_TOOL in tool_names
+        else CODER_SYSTEM_PROMPT
+    )
+    if PROJECT_RUN_TOOL not in tool_names:
+        return base
+    return with_host_commands(base)
+
+
+def code_risk_ceiling(tool_names: tuple[ToolName, ...]) -> ToolRisk:
+    """The lowest ceiling that admits everything in ``tool_names``.
+
+    Still derived from the tool list rather than configured beside it, for the
+    reason it always was: two switches are two ways to describe one decision,
+    and the interesting bug is the pair disagreeing. A deployment that granted
+    a tool and left the ceiling below it would offer the model a tool its own
+    envelope denies, costing a turn that ends in `outside_submitted_envelope`.
+
+    What changed with ADR-077 is only that "the ceiling exists to admit exactly
+    one tool" stopped being true. It now admits two, and they are not the same
+    height: `sandbox_run` is `external` because its content leaves this process
+    for a network-less container, while `project_run` is `destructive` because
+    it runs on the machine and there is no undo. The gap matters --
+    `code_approvals.UNREPEATABLE_RISKS` refuses a standing session-wide
+    approval for both, but only `destructive` is armed in every Code envelope
+    regardless of `code.sandbox_requires_approval`, which defaults to False.
+    Calling `project_run` `external` would have let it run ungated by default.
+
+    A chain rather than a name-to-risk table: a table would be a second place a
+    tool's risk is written down, and the first place -- the tool's own
+    `ToolSpec` -- is the one the policy engine actually reads.
+    """
+
+    if PROJECT_RUN_TOOL in tool_names:
+        return "destructive"
+    if SANDBOX_RUN_TOOL in tool_names:
+        return "external"
+    return "write"
 
 
 class CodeTurnBusyError(RuntimeError):
@@ -718,9 +808,7 @@ class CodeSessionService:
                 # `write` would offer the model a tool its own envelope denies,
                 # which costs a wasted turn ending in
                 # `outside_submitted_envelope`.
-                max_tool_risk=(
-                    "external" if SANDBOX_RUN_TOOL in tool_names else "write"
-                ),
+                max_tool_risk=code_risk_ceiling(tool_names),
                 # `destructive` is armed unconditionally -- nothing grants such
                 # a tool today, and the day something does, the gate must
                 # already be there. Whether `external` joins it is ADR-058's
@@ -745,14 +833,8 @@ class CodeSessionService:
             # it will wait for a human who is not going to be asked (ADR-058:
             # the gated text says "expect to wait, do not spend one", which is
             # an instruction to avoid the tool this deployment just freed).
-            system_prompt=(
-                (
-                    CODER_SYSTEM_PROMPT_WITH_SANDBOX
-                    if self.sandbox_requires_approval
-                    else CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED
-                )
-                if SANDBOX_RUN_TOOL in tool_names
-                else CODER_SYSTEM_PROMPT
+            system_prompt=_system_prompt_for(
+                tool_names, sandbox_requires_approval=self.sandbox_requires_approval
             ),
             messages=(*history, asked),
             # Both, and they are not the same thing: the envelope says what

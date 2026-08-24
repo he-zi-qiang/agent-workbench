@@ -61,8 +61,10 @@ from agent_workbench.adapters.tools.knowledge_search import (
 from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
 from agent_workbench.adapters.tools.project_files import (
     ProjectEditTool,
+    ProjectGrepTool,
     ProjectListTool,
     ProjectReadTool,
+    ProjectRunTool,
     ProjectWriteTool,
 )
 from agent_workbench.adapters.tools.sandbox import SandboxRunTool, WorkspaceSandbox
@@ -105,7 +107,9 @@ from agent_workbench.application.code_approvals import (
 )
 from agent_workbench.application.code_session import (
     CODE_PROJECT_TOOLS,
+    CODE_PROJECT_TOOLS_WITH_RUN,
     CODE_PROJECT_TOOLS_WITH_SANDBOX,
+    CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN,
     CODE_TOOLS,
     CODE_TOOLS_WITH_SANDBOX,
     CodeSessionService,
@@ -122,6 +126,7 @@ from agent_workbench.application.uploads import UploadService
 from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.apps.api.identity import HeaderPrincipalResolver
 from agent_workbench.apps.api.sse import LiveEventChannel
+from agent_workbench.bootstrap.child_environment import command_environment
 from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
@@ -153,6 +158,7 @@ from agent_workbench.bootstrap.telemetry_factory import (
 )
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
+from agent_workbench.domain.tools import ToolName
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.documents import DocumentStore
@@ -474,6 +480,32 @@ class ApiDependencies:
         # Paid here, that is a slower boot; paid on the first request, it is an
         # agentic turn failing on `knowledge_search exceeded its 30s timeout`.
         await warm_encoders(*self.encoders)
+
+
+def _code_project_tools(*, sandbox: bool, host_commands: bool) -> tuple[ToolName, ...]:
+    """Which project-side tuple a turn is offered, from two independent flags.
+
+    A function rather than a nested conditional at the call site, and the four
+    arms are spelled out rather than composed, because the tuples themselves
+    are: `application/code_session.py` writes each one down so that "what may a
+    coding session reach" has an answer to read. Assembling them here with a
+    `*` and an `if` would move that answer back into somebody's head at exactly
+    the point where there are now four of them.
+
+    The two flags come from different planes on purpose. `code.sandbox_enabled`
+    is a surface question -- may this session call the container. `policy.
+    shell_tools_enabled` is a deployment question, lives in the section
+    `policy_fingerprint` hashes, and therefore shows up in the `policy_identity`
+    every run records (ADR-077).
+    """
+
+    if host_commands:
+        return (
+            CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN
+            if sandbox
+            else CODE_PROJECT_TOOLS_WITH_RUN
+        )
+    return CODE_PROJECT_TOOLS_WITH_SANDBOX if sandbox else CODE_PROJECT_TOOLS
 
 
 def build_dependencies(
@@ -1150,6 +1182,15 @@ def _assemble_chat(
         ProjectReadTool(code_project_scope).binding(),
         ProjectWriteTool(code_project_scope).binding(),
         ProjectEditTool(code_project_scope).binding(),
+        ProjectGrepTool(code_project_scope).binding(),
+        # Registered whatever the policy says, like every other binding here.
+        # What `policy.shell_tools_enabled` decides is whether the name reaches
+        # a turn's `allowed_tools`; registration only says this process knows
+        # how to run it. Keeping those apart is what lets the registry stay
+        # frozen at process start -- which is what keeps "what tools existed"
+        # answerable for an event stream already written -- while "what was
+        # this turn allowed to do" stays a per-turn answer.
+        ProjectRunTool(code_project_scope, environment=command_environment()).binding(),
     ]
     # The one thing about a coding session that cannot be decided here.
     # Everything else this process needs is built synchronously, and the
@@ -1217,10 +1258,13 @@ def _assemble_chat(
             # which of them applies, never what is in either.
             project_scope=code_project_scope,
             projects=projects,
-            project_tool_names=(
-                CODE_PROJECT_TOOLS_WITH_SANDBOX
-                if config.code.sandbox_enabled
-                else CODE_PROJECT_TOOLS
+            # ADR-077 adds the second axis. `project_run` is offered only when
+            # this deployment's policy says the machine may be driven at all,
+            # and only on the project side -- a flat-workspace turn has no
+            # directory for a command to be run in.
+            project_tool_names=_code_project_tools(
+                sandbox=config.code.sandbox_enabled,
+                host_commands=config.code.host_commands_enabled,
             ),
             sandbox_requires_approval=config.code.sandbox_requires_approval,
         )

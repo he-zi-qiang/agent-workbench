@@ -590,6 +590,12 @@ class ToolGateway:
 
         approval_id = new_approval_id()
         canonical = canonical_arguments(call.arguments)
+        # Computed once and used twice -- on the event below and in the
+        # question handed to the gate. Deriving it separately at each site
+        # would let the record of what was asked and the thing a person read
+        # drift apart under any future change to the bound or the marker, and
+        # the whole point of the field is that those two are the same string.
+        preview = _approval_preview(canonical)
         await sink.emit(
             PermissionRequested(
                 tool_call_id=call.tool_call_id,
@@ -600,7 +606,7 @@ class ToolGateway:
                 # arguments are what they would be consenting to. The
                 # canonical form, so what is shown is the string the digest
                 # was taken over rather than a re-serialization of it.
-                approval_preview=_approval_preview(canonical),
+                approval_preview=preview,
             )
         )
         await sink.emit(RunPaused(reason="approval", approval_id=approval_id))
@@ -618,6 +624,7 @@ class ToolGateway:
             binding,
             call,
             approval_id=approval_id,
+            preview=preview,
             bound=bound,
             cancellation=cancellation,
         )
@@ -646,6 +653,7 @@ class ToolGateway:
         call: ToolCall,
         *,
         approval_id: str,
+        preview: str,
         bound: float,
         cancellation: CancellationToken,
     ) -> tuple[ApprovalDecision, ApprovalDecidedBy, str]:
@@ -666,6 +674,7 @@ class ToolGateway:
                 tool_call_id=call.tool_call_id,
                 tool_name=call.tool_name,
                 argument_digest=argument_digest(call.arguments),
+                approval_preview=preview,
                 risk=binding.spec.risk,
                 required_scopes=binding.spec.permission_scopes,
                 timeout_seconds=bound,

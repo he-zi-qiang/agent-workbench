@@ -62,7 +62,10 @@ class FilesystemProjectFileStore:
         self._runner = runner
 
     @property
-    def root(self) -> Path:
+    def working_directory(self) -> Path:
+        # Renamed from `root` when the port grew this member (ADR-077). Nothing
+        # was calling it, and the new name is the one the port argues for: a
+        # directory to be in, not a base to join paths onto.
         return self._sandbox.root
 
     def _target(self, path: str) -> Path:

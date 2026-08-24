@@ -32,7 +32,11 @@ import asyncio
 from dataclasses import dataclass, field
 
 from agent_workbench.domain.errors import NotFoundError
-from agent_workbench.domain.events import ApprovalDecidedBy, ApprovalDecision
+from agent_workbench.domain.events import (
+    ApprovalDecidedBy,
+    ApprovalDecision,
+    ApprovalPreview,
+)
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.tools import PermissionScope, ProposedToolName, ToolRisk
 
@@ -64,6 +68,7 @@ class _Pending:
     scope: ApprovalScope
     tool_name: ProposedToolName
     argument_digest: str
+    approval_preview: ApprovalPreview
     risk: ToolRisk | None
     answer: asyncio.Future[tuple[ApprovalDecision, ApprovalDecidedBy]]
 
@@ -75,6 +80,16 @@ class PendingApproval:
     approval_id: Identifier
     tool_name: ProposedToolName
     argument_digest: str
+    #: What the arguments actually say, bounded and marked where it was cut.
+    #:
+    #: Carried beside the digest rather than instead of it, because the two
+    #: answer different questions and only one of them can be read. The digest
+    #: is the identity a standing rule is keyed by; this is the sentence a
+    #: person consents to. A card that showed only the digest asked the same
+    #: question of `rm -rf .` and of `ls`, which is survivable while the only
+    #: gated tool is a network-less container and is not survivable for a tool
+    #: whose arguments are the effect.
+    approval_preview: ApprovalPreview
     risk: ToolRisk | None
 
 
@@ -107,6 +122,7 @@ class CodeApprovalRegistry:
                 approval_id=approval_id,
                 tool_name=held.tool_name,
                 argument_digest=held.argument_digest,
+                approval_preview=held.approval_preview,
                 risk=held.risk,
             )
             for approval_id, held in self._pending.items()
@@ -184,6 +200,7 @@ class SessionApprovalGate:
         tool_call_id: Identifier,
         tool_name: ProposedToolName,
         argument_digest: str,
+        approval_preview: ApprovalPreview,
         risk: ToolRisk | None,
         required_scopes: tuple[PermissionScope, ...],
         timeout_seconds: float,
@@ -212,6 +229,7 @@ class SessionApprovalGate:
                 scope=self.scope,
                 tool_name=tool_name,
                 argument_digest=argument_digest,
+                approval_preview=approval_preview,
                 risk=risk,
                 answer=answer,
             ),

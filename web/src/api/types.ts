@@ -215,6 +215,16 @@ export interface PendingApprovalView {
   approval_id: Identifier;
   tool_name: string;
   argument_digest: string;
+  /**
+   * The arguments as far as they fit, with `...[truncated]` where they were
+   * cut. Bounded server-side at 2048 characters, so it is safe to render
+   * verbatim.
+   *
+   * Beside the digest, not instead of it: the digest is the identity a
+   * standing session rule is keyed by, and this is the only part a person can
+   * actually read before answering.
+   */
+  approval_preview: string;
   risk: string | null;
 }
 
