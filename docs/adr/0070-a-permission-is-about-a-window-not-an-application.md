@@ -110,6 +110,14 @@ adapters/memory/screen.py  可编程假实现——能让前台应用在两次�
 adapters/screen/darwin.py  Quartz / CGEvent，全仓唯一一个 pyright 抑制的文件
 ```
 
+块里 `darwin.py` 那行写的是 Quartz——
+[ADR-076](./0076-a-window-nobody-approved-is-not-in-the-picture.md) 之后只有输入合成
+还是 Quartz/CGEvent，抓屏换成了 ScreenCaptureKit：`SCContentFilter` 在**合成器**这一层
+就把没批准的窗口挡在帧外，而写本 ADR 那一批落地的是「抓完整帧、再按另读一份的窗口
+几何涂黑矩形」——那种图里未批准的像素**存在过**，而那份几何可能在快门之前就旧了。
+代价是一次抓屏从 22 ms 变成约 70 ms（列窗口 46 ms + 过滤成帧 43 ms）。分层一个字
+没改，改的是这个薄模块调的是哪套 API。
+
 **测试用不着屏幕，这件事本身就是设计在起作用。** 焦点复查这条规则之所以测得了，
 正是因为假实现能做一件真屏幕没法配合的事：在 `type_text` 前后返回不同的前台应用。
 
@@ -140,6 +148,12 @@ px_per_token = 28    max_edge_px = 1568    max_tokens = 1568
 
 **实测**（本机，真适配器）：1470×956 点 → 1375×894，正好 1568 token。
 
+预算这一节的算法没变，兑现它的位置变了：写本 ADR 时这两个数字是「抓完整帧、再缩一次」
+得到的，[ADR-076](./0076-a-window-nobody-approved-is-not-in-the-picture.md) 之后它们
+直接进 `SCStreamConfiguration` 的 width/height——那两个字段就是像素、且被原样兑现，
+于是预算算出来的尺寸就是合成器渲染出来的尺寸，中间再没有第二次缩放能和它不一致。
+§3.1 那句「截图又会被预算缩小一次」照旧成立，只是缩小发生在成帧的时候，不在成帧之后。
+
 ## 4. 被拒绝的替代方案
 
 **把门禁放进 MCP 工具处理函数里。** 一个在处理函数里做的检查，是下一个处理函数会
@@ -151,6 +165,16 @@ px_per_token = 28    max_edge_px = 1568    max_tokens = 1568
 **用 `screencapture` + `osascript` 而不是 pyobjc。** 零新依赖，但每个动作 fork 一个
 进程（几十到上百毫秒），拿不到 `SCContentFilter` 那种合成器级的窗口排除，按键合成也
 更粗糙。使用者明确选了 pyobjc。
+
+写本 ADR 时这条理由只兑现了一半：pyobjc 选了，`SCContentFilter` 没用上，当时记下的
+理由是「pyobjc 对 ScreenCaptureKit 的覆盖不完整」（写在那一批留下的 known-gap F-18
+里，随 ADR-076 关闭）。那句当时为真、**现在为假**：官方绑定
+`pyobjc-framework-ScreenCaptureKit` 发布在 12.2.2，和这个 extra 已经钉住的 pyobjc-core
+与 Cocoa 是同一个版本，`uv lock` 除它之外只多带一个 `pyobjc-framework-coremedia`，
+不需要手写一行 Objective-C 元数据。
+[ADR-076](./0076-a-window-nobody-approved-is-not-in-the-picture.md) 据此把抓屏换成了
+合成器过滤，于是本条拒绝的理由比当初更硬：`screencapture` 拿不到的那个东西，现在是
+**正在用的机制**，不再是一句假设。
 
 **默认装 pyobjc。** 它是 macOS-only，而 CI 在 Linux 上跑。放进 `computer-use`
 extra，和 `embedding` 同样的处理；缺它时适配器在**启动时**抛错，而不是注册一批

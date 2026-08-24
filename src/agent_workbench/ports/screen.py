@@ -91,17 +91,29 @@ class ScreenPort(Protocol):
         *,
         width: int,
         height: int,
-        exclude_bundle_ids: tuple[str, ...] = (),
+        include_bundle_ids: tuple[str, ...] = (),
     ) -> Capture:
-        """A screenshot of one display, scaled to ``width`` x ``height``.
+        """A screenshot of one display, scaled to ``width`` x ``height``,
+        containing the named applications and nothing else.
 
-        ``exclude_bundle_ids`` names applications that must not appear. An
-        implementation that can filter at the compositor -- so an unapproved
-        window is never rendered into the frame at all -- must do that. One
-        that can only paint over the region afterwards must say so through
-        :meth:`capabilities`, because the two are different promises: the first
-        means the pixels never existed, the second means they existed and were
-        covered.
+        ``include_bundle_ids`` is an **allowlist**, and the direction is the
+        security decision rather than a matter of taste. Phrased as an exclude
+        list, the caller has to name everything that must not appear -- which
+        means knowing everything that is running, and being wrong in the
+        direction that leaks. It is also unwriteable: a window owned by
+        WindowServer reports an empty bundle id and cannot be named at all,
+        while it is on screen the whole time. An allowlist has to name only
+        what the person approved, and anything it fails to name is left out.
+
+        Resolving those ids to windows belongs to the implementation. A caller
+        that had to do it would need the list of running applications, which is
+        a strictly more interesting capability than the one it is being handed.
+
+        An implementation must filter before the frame is composed, so an
+        unapproved window is never rendered. One that can only paint over
+        regions afterwards must not claim ``exclude_native``: the two are
+        different promises, and only the first survives a window moving
+        between the geometry read and the shutter.
         """
         ...
 
@@ -109,9 +121,11 @@ class ScreenPort(Protocol):
         """What this implementation can actually do.
 
         ``"exclude_native"`` -- unapproved windows are filtered before the
-        frame is composed. ``"exclude_mask"`` -- they are painted over
-        afterwards. Neither means the gate must refuse a capture rather than
-        return a frame it cannot vouch for.
+        frame is composed, so their pixels never existed. ``"exclude_mask"`` --
+        they are painted over afterwards, so their pixels existed and were
+        covered. The gate accepts only the first and refuses a capture
+        otherwise; the second is kept in this vocabulary so an implementation
+        can say which of the two it is rather than having to lie by omission.
         """
         ...
 

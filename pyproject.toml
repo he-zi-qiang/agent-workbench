@@ -109,6 +109,14 @@ embedding = [
 computer-use = [
   "pyobjc-framework-Quartz>=10,<13; sys_platform == 'darwin'",
   "pyobjc-framework-Cocoa>=10,<13; sys_platform == 'darwin'",
+  # ScreenCaptureKit, and it is the difference between "the model did not see
+  # that window" and "the model saw it and we painted over it". Known-gap F-18
+  # recorded that pyobjc's coverage of this framework was incomplete, which is
+  # why the first implementation masked instead of filtering; that was true
+  # when it was written and is not now -- the official binding publishes at the
+  # same version as the two pins above and needs no hand-written Objective-C
+  # metadata (ADR-076).
+  "pyobjc-framework-ScreenCaptureKit>=10,<13; sys_platform == 'darwin'",
 ]
 
 [project.scripts]
@@ -179,6 +187,13 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # existed. Paraphrasing it into ASCII punctuation would make the record of a
 # measurement no longer the thing that was measured.
 "src/agent_workbench/application/code_prompt.py" = ["RUF003"]
+# The approval dialog is the one string in this repository a person reads
+# *before* deciding whether to hand a program their screen. It is Chinese
+# because the person at this machine is, and its punctuation is full-width for
+# the same reason. Rewording it into ASCII commas to satisfy a rule that exists
+# to catch a Cyrillic lookalike in an identifier would make the sentence worse
+# at the only job it has.
+"src/agent_workbench/apps/computer_mcp/consent.py" = ["RUF001"]
 # The two refusals this router writes are sentences a person reads: "say which
 # project, or null to take it out". Same reason as the entries above -- the rule
 # is here to catch a Cyrillic lookalike in an identifier, not a full-width comma

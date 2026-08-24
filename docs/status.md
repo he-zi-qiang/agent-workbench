@@ -28,6 +28,159 @@
 
 ---
 
+## 2026-08-24（未合并，工作树在 `main` 上，第十四批）：批准第一次真的问了人，截图第一次只画批准过的东西
+
+一份新 ADR（[ADR-076](./adr/0076-a-window-nobody-approved-is-not-in-the-picture.md)），
+连带关掉一条已知缺口（**F-18**）。起因是产品侧的一句话——「Claude Desktop 的 computer use
+是怎么做的，照着做一个」——但照下来先撞见的不是可以做得更好的地方，是**两条本该拦住的线
+从来没拦住过**。第一条严重到不该只记成缺口：**批准是模型发给自己的。**
+
+**这一批还没有合并**，下面的数字属于这条工作分支上的这棵树，不是主线的当前值。
+
+**门禁**：`ruff format --check` + `ruff check` 全过；`pyright` **0 errors**；
+`pytest` **2798 passed / 764 skipped**。改动前这棵树是 **2778**，所以**本批新增 20 条**：
+11 条在新增的 `tests/apps/test_computer_consent.py`，7 条在
+`tests/apps/test_computer_gate.py`。`consent.py` 按仓库既有约定加了一条写明理由的
+`RUF001` per-file-ignore（那个文件里的中文是故意写的）。
+**前端没跑**：这一批一行 TS 都没改。
+**下面所有毫秒数和字节数都是本机实测**（macOS 26.5.2、build 25F84、arm64），按房规明说
+它不是 CI 证据：`tests/apps/test_computer_darwin.py` 在没有 `computer-use` extra 的机器上
+整份跳过，而 CI 这个 extra 和屏幕两样都没有。
+
+### 一、没有人被问过：模型自己给自己发批准
+
+`ScreenGate.grant` 此前接过**模型自己报的**那份应用名单，写进 allowlist，回一句
+「Approved for this session」。ADR-070 §2 写的是「一个人把整份名单批准一次」——
+这句话在仓库里**没有任何一行实现**。
+
+难看的地方在于其余的门禁全是真的：tier 表是真的（`domain/computer.py:197`，浏览器与交易
+应用封到 `read`、终端与 shell 封到 `click`）、每次动作前重读最前面那个应用是真的、
+allowlist 从空开始也是真的。它们**全都在守一份没有人给过的同意**。一个能给自己发批准的
+模型，手里的 allowlist 只有一条内容：它刚刚想要的那个。
+
+新增 `src/agent_workbench/apps/computer_mcp/consent.py`，一个真的会弹出来的对话框。
+决定都不在语法上：
+
+* **用 `osascript` 子进程，不用 `NSAlert`。** NSAlert 要一个 NSApplication 和主线程上的
+  run loop，而主线程归 uvicorn；在那里开一个模态窗口，服务器在人按下按钮之前什么请求都
+  不回答。子进程可以卡住、可以被杀掉，都不会连着服务器一起。
+* **模型的文本一个字都进不了脚本。** 应用名是模型给的，把它拼进 AppleScript 源码就是一条
+  代码注入通路。脚本是常量，每一个变量走 `argv`。2026-08-24 拿一个名字里带
+  `do shell script` 载荷的应用验过：它当作文字显示在对话框里，没有执行。
+* **每一条岔路都朝拒绝倒**：超时（`gave up:true`）、按 Escape（非零退出）、输出对不上
+  格式，全是拒绝。机器上没有 `osascript` 抛的是 `ConsentUnavailableError`，**故意和拒绝
+  分成两件事**——「问不了」和「问过了，人不给」在运维那头要走两条不同的路，混成一件，
+  一台缺 osascript 的机器看起来就像是有人在一直拒绝。真正让它通过的只有那个按钮。
+* 默认按钮是 Deny：一次条件反射的回车是拒绝，不是同意。
+* 对话框逐个应用写出**它会拿到哪一档 tier**。批准 Terminal 和批准 Notes 给出去的东西
+  根本不是一回事，一个把这件事藏起来的对话框，收上来的同意是关于别的事的。
+
+`gate.py` 那头，`grant` 改成 `async`，先问再写，被拒时抛 `ScreenRefusedError` 且
+**一个字都不写**——对话框问的是一整份名单，人按下的是一次决定，挑几个存下来等于替他做了
+一个他没做过的决定。问的人是注入的（`consent: Callable[..., Awaitable[bool]]`，默认那个
+macOS 的），测试自带一个，所以整份 suite 跑起来从不弹窗；默认值给成 macOS 那个而不是
+`None`，是因为「没人接上审批器就默默放行」正是这一批要换掉的状态。`request_access` 的
+入参多了一个 `reason`：人在按之前读的那一句，写任务，不写机制。
+
+### 二、空名单不是「没得看」，是「整块桌面」
+
+改动前实测：一个**零条批准**的 gate 调 `screenshot`，拿回的是一张 1375x894 的完整截图，
+屏幕上有什么就是什么。而 `gate.py` 自己的 docstring 当时写着「没批准的东西不进画面」
+——`_to_exclude()` 恒返回 `()` 让这句话是假的。这是 F-18 **活着的那一半**：输入侧
+（没批准的应用点不了、打不了字）一直是完整的，输出侧从来不是。
+
+现在空名单的含义是它字面上的意思：**没有任何东西是你被允许看的**。`capture` 直接拒绝，
+并告诉模型去 `request_access` 等人批。
+
+### 三、F-18 关掉：allowlist 形状的合成器过滤
+
+`ScreenPort.capture` 的 `exclude_bundle_ids` 换成 `include_bundle_ids`，
+`ScreenGate._to_exclude`（恒空）换成 `_to_include`（排过序的已批准 bundle id）。
+**方向本身就是那个安全决定**：
+
+* 排除式是 fail-open 的。要正确使用它，调用方必须说出**所有**不该出现的东西，也就是必须
+  知道当前跑着什么——那份能力端口没有暴露，也不该暴露；漏掉一个，漏的方向是泄露。
+* 排除式**有些窗口根本点不出名字**。本机验过：一个属于 WindowServer、标题是 `underbelly`
+  的窗口，在屏幕上待着的整段时间里，报出来的 bundle id 是**空的**。
+* 反过来问，这个问题就没了：allowlist 只需要说出人批准过的那些，而那正是 gate 唯一知道的
+  东西；把 id 解析成窗口的活留在适配器内部，模型因此也不会顺带知道屏幕上还有别的什么
+  ——那本来就是当年反对「先枚举再排除」的理由。
+
+`adapters/screen/darwin.py` 里，`CGDisplayCreateImage` 加黑矩形换成 `SCShareableContent`
+→ `SCContentFilter.initWithDisplay_includingWindows_` →
+`SCScreenshotManager.captureImageWithFilter_configuration_completionHandler_`；
+`capabilities()` 从 `{"exclude_mask"}` 变成 `{"exclude_native"}`，而 **gate 现在只认
+`exclude_native`**。认 `exclude_mask` 正是 F-18 另一半（「抓屏是遮盖不是合成器过滤」）
+一直开着的原因：遮盖是先把整帧画出来，再照着另外读来的几何去涂——像素存在过，而那份几何
+可以在快门之前就已经过期。两个 completion handler 都从工作线程用 `threading.Event().wait()`
+等，SCK 在它自己的 dispatch queue 上回答，所以不需要 NSApplication，也不需要 run loop。
+`SCStreamConfiguration` 的宽高是像素并且被原样执行，ADR-070 §3.2 那份量出来的预算可以直接
+塞进去，不用再缩第二次。
+
+**实测**（同上，本机）：
+
+* `getShareableContent` 46 ms，过滤后抓一帧 43 ms，整条路 ~70 ms；被它换掉的 CoreGraphics
+  抓屏是 22 ms。**慢了三倍，换到的是「没批准的像素从来没有被画出来过」。**
+* 过滤是真发生了，不是装饰：同一块屏、同样的 400x260 请求，整桌面 PNG **96,147 字节**，
+  只放一个应用进来 **34,957 字节**。
+* 走真适配器、按 ADR-070 的预算（1470x956 点的显示器 → 1375x894）：只有 Finder
+  **102,903 字节**，五个应用 **175,547 字节**。
+* 端到端、真的弹了对话框：任何批准之前的 `screenshot` 被**拒绝**；一个人批准 Finder 与
+  Terminal 之后，tier 出来是 `full` 与 `click`（**推导出来的，不是请求里报的**），
+  这时的 `screenshot` 是 **102,920 字节**。
+
+依赖：`pyproject.toml` 的 `computer-use` extra 加 `pyobjc-framework-ScreenCaptureKit>=10,<13`，
+`uv lock` 恰好只多它和 `pyobjc-framework-coremedia`，都是 12.2.2，和已经钉住的
+pyobjc-core／Cocoa 对得上。**ADR-070 在「已否决方案」里写的「pyobjc 对 ScreenCaptureKit
+的覆盖不完整」当年是真的，今天是假的**，那一行随这一批改掉——留着它，下一个人会照着它把
+这条已经走通的路再否决一次。
+
+**F-18 的条目从[已知缺口](./known-gaps.md)里删掉了**，没有留成一行「已完成」：那份文档的
+规矩是它只列**现在还缺什么**，一条关掉的缺口继续躺在里面，读者就得逐行判断哪些还算数。
+关掉这件事记在这里——这里才是证据日志。
+
+### 四、照抄了什么，什么是看过之后故意不抄的
+
+对照的是装在本机的 Claude Desktop（1.34493.1）。它的 computer use 是一个 Swift 原生 addon，
+`@ant/claude-swift/build/Release/computer_use.node`，链着 AppKit、ApplicationServices、
+CoreFoundation、CoreGraphics、Foundation、QuartzCore 和 **ScreenCaptureKit**；MCP 那一面是
+从它活着的工具 schema 读出来的。三个设计决定都判过，**只抄了一个**：
+
+* **ScreenCaptureKit 的合成器过滤——抄了。** 就是上一节。
+* **把 `computer_batch` 当成唯一的交互原语——没抄。** 它把授权的单位从**一次动作**折叠成
+  **一个数组**：Policy Gateway 看见的是一次提议，而每一次点击各自的判断全都搬进了
+  ScreenGate 内部，那里没有任何策略规则够得着。它买到的延迟，是拿一个这个系统不拥有的
+  循环付的。
+* **视觉通路（让模型看见截图）——暂时没抄。** 卡住它的不是领域层（那边只有 4 个调用点），
+  是 provider：`provider: Literal["deepseek", "fake"]` 是
+  [配置文档](./configuration.md) §3 的不变量，DeepSeek 适配器把每个角色的 content 都
+  序列化成一个纯字符串、没有 image part，而运行时没有上下文窗口管理——十来张截图就把
+  128K 吃光。要改，得先有它自己的 ADR。
+
+写下这一节是因为**看过之后否掉**和**根本没看见**在成品上长得一模一样。这两条是前者。
+
+### 尚未做的
+
+**模型仍然看不见屏幕。** 视觉通路这一批没有做，所以
+[ADR-075](./adr/0075-a-ledgered-effect-is-issued-not-proposed.md) 那条拒绝**原样成立**：
+这个系统里的屏幕工具**仍然不能由模型驱动**，F-21 那一行一个字没动。这一批做的是让一张
+截图**值得信**——它没有给任何人装上眼睛。
+
+**`computer_batch` 没有做，而且不是待办。** 上一节那条理由成立多久，它就该缺席多久；把它
+写在这里，是为了它别以哪天「顺手加上」的名义回来。
+
+**F-19 一动没动。** 批准仍然是**进程级**的：它记在这个进程的 `ScreenGate` 里，不是记在
+某一次 MCP 会话上，所以同一个进程里的下一次会话继承的是上一个人按下的那些按钮。这一批把
+「谁按的」修好了，没有碰「按下之后算到哪儿为止」——它仍然是[已知缺口](./known-gaps.md)里
+F-19 那一行。
+
+**证据的边界。** 上面那些毫秒和字节出自一台 macOS 26.5.2 的机器，CI 不装 `computer-use`
+extra，也没有屏幕。能在 CI 里跑的那部分（`test_computer_consent.py` 全份、
+`test_computer_gate.py` 的 gate 判断）**不包含任何一次真的抓屏或真的弹窗**：它们钉住的是
+判断，不是那张图。
+
+---
+
 ## 2026-08-23（未合并，工作树在 `main` 上，第十三批）：工具循环终于说得出自己的纪元，「给过哪些工具」开始算数
 
 三件事，一份新 ADR

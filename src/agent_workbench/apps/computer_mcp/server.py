@@ -24,7 +24,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from agent_workbench.apps.computer_mcp.gate import ScreenGate, ScreenRefusedError
+from agent_workbench.apps.computer_mcp.gate import (
+    ConsentAsker,
+    ScreenGate,
+    ScreenRefusedError,
+)
 from agent_workbench.domain.computer import ApplicationIdentity
 from agent_workbench.ports.screen import ScreenPort, ScreenUnavailableError
 
@@ -49,13 +53,24 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
         title="Ask for access to applications",
         description=(
             "Name every application this task needs before touching any of "
-            "them. The person approves the whole list once. " + _TIER_NOTE
+            "them. A dialog opens on the person's screen and this call does "
+            "not return until they answer it or it times out; a refusal means "
+            "none of the list is available and asking again with the same "
+            "list will show them the same dialog. " + _TIER_NOTE
         ),
         input_schema={
             "type": "object",
             "additionalProperties": False,
             "required": ["applications"],
             "properties": {
+                "reason": {
+                    "type": "string",
+                    "maxLength": 400,
+                    "description": (
+                        "One sentence the person reads while deciding. "
+                        "Describe the task, not the mechanism."
+                    ),
+                },
                 "applications": {
                     "type": "array",
                     "minItems": 1,
@@ -69,7 +84,7 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
                             "name": {"type": "string", "maxLength": 256},
                         },
                     },
-                }
+                },
             },
         },
     ),
@@ -161,10 +176,27 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
 )
 
 
-def create_server(screen: ScreenPort) -> Server[LifespanState]:
-    """Build a server over one screen. The gate's grants live for its life."""
+def create_server(
+    screen: ScreenPort,
+    *,
+    consent: ConsentAsker | None = None,
+) -> Server[LifespanState]:
+    """Build a server over one screen. The gate's grants live for its life.
 
-    gate = ScreenGate(screen=screen)
+    ``consent`` is how a person is asked, and it is a parameter so that a test
+    can answer without a dialog. A test that reached the real one would open a
+    modal window on whoever is running the suite and hold the run until they
+    noticed it -- and on a machine with no ``osascript`` it fails outright,
+    which is how CI found this. Left unset it is the macOS dialog, because a
+    server that granted itself access when nobody wired an approver is exactly
+    what ADR-076 replaced.
+    """
+
+    gate = (
+        ScreenGate(screen=screen)
+        if consent is None
+        else ScreenGate(screen=screen, consent=consent)
+    )
 
     async def list_tools(
         context: ServerRequestContext[LifespanState],
@@ -215,13 +247,13 @@ async def _dispatch(
             )
             for held in arguments["applications"]
         )
-        given = gate.grant(wanted)
+        given = await gate.grant(wanted, reason=str(arguments.get("reason", "")))
         lines = [
             f"{held.application.name} ({held.application.bundle_id}): tier {held.tier}"
             for held in given
         ]
         return _text(
-            "Approved for this session:\n"
+            "A person approved these for this session:\n"
             + "\n".join(lines)
             + "\n\nThis does not include permission to record the screen; the "
             "operating system asks for that separately, once."
@@ -285,7 +317,10 @@ async def _dispatch(
 
 
 def create_app(
-    *, host: str = "127.0.0.1", screen: ScreenPort | None = None
+    *,
+    host: str = "127.0.0.1",
+    screen: ScreenPort | None = None,
+    consent: ConsentAsker | None = None,
 ) -> Starlette:
     """The loopback app. Builds the platform adapter unless one is supplied."""
 
@@ -308,7 +343,7 @@ def create_app(
             }
         )
 
-    return create_server(resolved).streamable_http_app(
+    return create_server(resolved, consent=consent).streamable_http_app(
         streamable_http_path=MCP_PATH,
         json_response=True,
         stateless_http=False,

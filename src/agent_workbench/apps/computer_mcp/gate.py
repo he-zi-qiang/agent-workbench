@@ -19,9 +19,11 @@ screen is as it is.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import cast
 
+from agent_workbench.apps.computer_mcp.consent import ask as ask_a_person
 from agent_workbench.domain.computer import (
     ApplicationIdentity,
     ScreenshotBudget,
@@ -32,6 +34,10 @@ from agent_workbench.domain.computer import (
     tier_for,
 )
 from agent_workbench.ports.screen import Capture, ScreenPort
+
+#: How a person is asked. Named here rather than spelled out at each use so the
+#: server and the gate cannot drift into two slightly different callables.
+ConsentAsker = Callable[..., Awaitable[bool]]
 
 
 class ScreenRefusedError(RuntimeError):
@@ -58,6 +64,12 @@ class ScreenGate:
 
     screen: ScreenPort
     budget: ScreenshotBudget = field(default_factory=ScreenshotBudget)
+    #: How a person is asked. Injected rather than called directly so a test
+    #: can answer without a dialog, and so a deployment that has somewhere
+    #: better to ask than a macOS alert can supply it. The default is the
+    #: macOS one, because a server that quietly granted itself access when
+    #: nobody wired an approver is exactly the state this replaced.
+    consent: ConsentAsker = ask_a_person
     #: Keyed by bundle id, which is the identity an application cannot rename
     #: its way out of. An empty allowlist is the starting state and refuses
     #: everything -- there is no "allow by default" here to turn off.
@@ -67,15 +79,40 @@ class ScreenGate:
 
     # --- granting --------------------------------------------------------
 
-    def grant(self, applications: tuple[ApplicationIdentity, ...]) -> tuple[Grant, ...]:
-        """Record what the person approved, and at which tier.
+    async def grant(
+        self, applications: tuple[ApplicationIdentity, ...], *, reason: str = ""
+    ) -> tuple[Grant, ...]:
+        """Ask a person, and record what they approved.
+
+        The asking is the point, and until 2026-08-24 it was the one part of
+        ADR-070 §2 that did not exist: this method took the model's own list,
+        wrote it into the allowlist, and answered "approved for this session".
+        Every other check was real -- the tier table, the frontmost re-check,
+        the allowlist starting empty -- and all of them were guarding a consent
+        nobody had given. A model that can grant itself access has an allowlist
+        with one entry: whatever it just asked for.
 
         The tier is derived here rather than accepted from the caller. A
         request that could name its own tier is a request that can ask for
         "full" on a browser, and the person approving a list of application
         names is not reading a tier column.
+
+        Denial writes nothing. Not even the applications the person might have
+        been willing to approve individually -- the dialog is one decision
+        about one set, so a partial grant would be a decision nobody made.
         """
 
+        approved = await self.consent(applications, reason=reason)
+        if not approved:
+            raise ScreenRefusedError(
+                "the person did not approve these applications, so none of "
+                "them is available in this session.\n"
+                "Do not ask again for the same list without a reason that "
+                "answers why it was refused, and do not attempt to reach "
+                "these applications another way -- never use AppleScript, "
+                "System Events, shell commands, or any other method to send "
+                "input to an application."
+            )
         given = tuple(
             Grant(application=held, tier=tier_for(held)) for held in applications
         )
@@ -115,11 +152,25 @@ class ScreenGate:
     # --- acting ----------------------------------------------------------
 
     async def screenshot(self, display_id: int | None = None) -> Capture:
-        """A capture of one display, inside the token budget.
+        """A capture of one display, inside the token budget, of the approved
+        applications and nothing else.
 
-        Not gated on the tier: seeing is what a grant is *for*, and every tier
-        including "read" permits it. It is gated on the allowlist in a
-        different way -- everything **not** granted is excluded from the frame.
+        Not gated on the *tier*: seeing is what a grant is for, and every tier
+        including "read" permits it. It is gated on the allowlist, and the
+        gating is the frame itself -- an application nobody approved is not
+        drawn into the picture.
+
+        Until 2026-08-24 that last sentence was false in the direction that
+        matters. The filter was phrased as "which applications to exclude",
+        which needs the list of everything *running*; the port does not expose
+        that, so the exclusion list was always empty and a capture with an
+        empty allowlist returned the whole desktop (F-18).
+
+        Inverting the question dissolves it. The gate does not need to know
+        what is running -- it needs to say what is *approved*, which is the one
+        thing it does know, and the adapter resolves that to windows inside
+        itself. The model never learns what else was on screen, which was the
+        objection to enumerating in the first place.
         """
 
         displays = self.screen.displays()
@@ -129,39 +180,47 @@ class ScreenGate:
             (held for held in displays if held.display_id == display_id),
             displays[0],
         )
-        width, height = self.budget.fit(chosen.width, chosen.height)
-        excluded = self._to_exclude()
-        if excluded and not self.screen.capabilities() & {
-            "exclude_native",
-            "exclude_mask",
-        }:
-            # Refused rather than returned unfiltered. A frame that silently
-            # contains a window the person did not approve is the one failure
-            # this whole design exists to prevent, and "we could not exclude
-            # it" is not a reason to include it.
+        included = self._to_include()
+        if not included:
+            # An empty allowlist is not "show everything", which is what it
+            # used to mean here. It is "there is nothing you have been allowed
+            # to look at".
             raise ScreenRefusedError(
-                "there are running applications outside this session's "
-                "approved list, and this platform cannot keep them out of a "
-                "capture. No screenshot was taken."
+                "no application has been approved in this session, so there "
+                "is nothing to capture.\n"
+                "Call request_access with the applications you need and wait "
+                "for the person to approve them."
             )
+        if "exclude_native" not in self.screen.capabilities():
+            # `exclude_native` only, and the narrowing is the point. This check
+            # used to accept `exclude_mask` as well -- draw the whole frame,
+            # then paint over the rectangles -- which satisfies the letter of
+            # "the model did not see it" only until a window moves between the
+            # geometry read and the capture, or a rectangle is reported wrong,
+            # or the mask is composited under something. The pixels existed.
+            # A compositor filter means they never did (F-18's second half).
+            raise ScreenRefusedError(
+                "this platform cannot keep unapproved windows out of a capture "
+                "at the compositor, and painting over them afterwards is not "
+                "the same promise. No screenshot was taken."
+            )
+        width, height = self.budget.fit(chosen.width, chosen.height)
         return await self.screen.capture(
             chosen.display_id,
             width=width,
             height=height,
-            exclude_bundle_ids=excluded,
+            include_bundle_ids=included,
         )
 
-    def _to_exclude(self) -> tuple[str, ...]:
-        """Nothing, today, and the reason is worth writing down.
+    def _to_include(self) -> tuple[str, ...]:
+        """The approved bundle ids, which is exactly the allowlist.
 
-        Excluding by bundle id needs the list of what is *running*, which this
-        port does not expose -- and adding "enumerate every running
-        application" to it would hand a model a far more interesting
-        capability than the one it is being denied. The masking that does
-        happen is in the adapter, from the grant list; see F-18.
+        Sorted so two captures of the same session produce the same filter
+        argument, which is what makes a difference between two frames mean
+        something changed on screen rather than in a dict's iteration order.
         """
 
-        return ()
+        return tuple(sorted(self._granted))
 
     async def click(
         self, x: int, y: int, *, button: str = "left", count: int = 1
