@@ -43,6 +43,24 @@ deployment_scope = "local"
 # The concrete v4 id, not the alias: this profile declares a thinking stance,
 # and the stance was probed against this model (ADR-061).
 model_id = "deepseek-v4-flash"
+# The override every other local profile carries, and the only one whose
+# absence stops a turn rather than shaping it. `config.default.toml` sets this
+# true for `[model.main]`; combined with `thinking` below, the adapter sends
+# `tool_choice: "required"` alongside `thinking: {"type": "enabled"}` and the
+# provider refuses the pair outright:
+#
+#   HTTP 400  "Thinking mode does not support this tool_choice"
+#
+# So this profile could not complete a single turn -- every one of them ended
+# `provider_error`, which reads as a broken key or a retired model id and is
+# neither. Measured 2026-08-24 by rebuilding the adapter's own payload and
+# posting it; the adapter scrubs provider messages on purpose (they have
+# carried a DSN), so the sentence above never reaches a log.
+#
+# `false` rather than dropping `thinking`: the reasoning is the thing this
+# profile is for, and forcing an opening tool call was never what made a coding
+# turn reach for its tools -- the prompt is.
+tool_calling_required = false
 # Code turns stream their reasoning into the console's 思考 block. `low`
 # keeps the write-run-fix loop responsive; depth is a knob, not a promise.
 thinking = "enabled"
@@ -50,6 +68,24 @@ reasoning_effort = "low"
 
 [model.compact]
 model_id = "deepseek-chat"
+
+[qdrant]
+# `docker run -p 6333:6333`, not the Compose service name -- the same override
+# every other `*-local` profile carries, and this one was the only one without
+# it. The consequence was that `scripts/dev.sh code-api` could not start on a
+# host machine at all: the inherited `http://qdrant:6333` names a hostname that
+# resolves only inside the Compose network, so on a machine with a system proxy
+# the request went there instead and came back from `verify_qdrant_startup` as
+# `ResponseHandlingException: Server disconnected without sending a response`
+# -- a message that names neither the hostname nor the proxy. Measured
+# 2026-08-24 on this machine, where it took a `[qdrant]`-section diff against
+# the five sibling profiles to see it.
+url = "http://localhost:6333"
+# Same reason as `config.local.toml`: with no collection and no alias, startup
+# creates the write collection rather than refusing. A coding session never
+# retrieves, but startup verifies the index either way, so a first run against
+# a clean Qdrant has to be able to get past it.
+allow_local_bootstrap = true
 
 # ADR-077. The one profile in `config/` that turns this on, and the reason is
 # what the profile already is: `code-local` is the local-development profile,
