@@ -49,13 +49,24 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
         title="Ask for access to applications",
         description=(
             "Name every application this task needs before touching any of "
-            "them. The person approves the whole list once. " + _TIER_NOTE
+            "them. A dialog opens on the person's screen and this call does "
+            "not return until they answer it or it times out; a refusal means "
+            "none of the list is available and asking again with the same "
+            "list will show them the same dialog. " + _TIER_NOTE
         ),
         input_schema={
             "type": "object",
             "additionalProperties": False,
             "required": ["applications"],
             "properties": {
+                "reason": {
+                    "type": "string",
+                    "maxLength": 400,
+                    "description": (
+                        "One sentence the person reads while deciding. "
+                        "Describe the task, not the mechanism."
+                    ),
+                },
                 "applications": {
                     "type": "array",
                     "minItems": 1,
@@ -69,7 +80,7 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
                             "name": {"type": "string", "maxLength": 256},
                         },
                     },
-                }
+                },
             },
         },
     ),
@@ -215,13 +226,13 @@ async def _dispatch(
             )
             for held in arguments["applications"]
         )
-        given = gate.grant(wanted)
+        given = await gate.grant(wanted, reason=str(arguments.get("reason", "")))
         lines = [
             f"{held.application.name} ({held.application.bundle_id}): tier {held.tier}"
             for held in given
         ]
         return _text(
-            "Approved for this session:\n"
+            "A person approved these for this session:\n"
             + "\n".join(lines)
             + "\n\nThis does not include permission to record the screen; the "
             "operating system asks for that separately, once."

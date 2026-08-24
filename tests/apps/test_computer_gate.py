@@ -20,10 +20,30 @@ TERMINAL = ApplicationIdentity(bundle_id="com.apple.Terminal", name="Terminal")
 CHROME = ApplicationIdentity(bundle_id="com.google.Chrome", name="Google Chrome")
 
 
-def _gate(screen: FakeScreen, *granted: ApplicationIdentity) -> ScreenGate:
-    gate = ScreenGate(screen=screen)
+async def _always(*_: object, **__: object) -> bool:
+    """A person who says yes, without a dialog.
+
+    Every gate in this file is built with an explicit answerer, and none of
+    them is the real one. A test that reached `consent.ask` would open a modal
+    dialog on whoever is running the suite and then block for two minutes
+    waiting for them to notice.
+    """
+
+    return True
+
+
+async def _never(*_: object, **__: object) -> bool:
+    return False
+
+
+def _gate(
+    screen: FakeScreen,
+    *granted: ApplicationIdentity,
+    answers: object = None,
+) -> ScreenGate:
+    gate = ScreenGate(screen=screen, consent=answers or _always)  # type: ignore[arg-type]
     if granted:
-        gate.grant(granted)
+        asyncio.run(gate.grant(granted))
     return gate
 
 
@@ -45,7 +65,7 @@ def test_the_tier_is_derived_at_grant_time_not_asked_for() -> None:
     and the person approving a list of names is not reading a tier column."""
 
     gate = _gate(FakeScreen(focus=NOTES))
-    given = gate.grant((NOTES, TERMINAL, CHROME))
+    given = asyncio.run(gate.grant((NOTES, TERMINAL, CHROME)))
 
     assert {held.application.name: held.tier for held in given} == {
         "Notes": "full",
@@ -160,17 +180,140 @@ def test_a_screenshot_is_fitted_to_the_budget_before_it_is_taken() -> None:
 
 
 def test_a_platform_that_cannot_exclude_is_refused_rather_than_trusted() -> None:
-    """Only reachable when there is something to exclude.
+    """There is always something to exclude, so this branch always applies.
 
-    Today the gate excludes nothing (see `_to_exclude`), so this asserts the
-    branch is wired rather than that it fires -- and it is written now because
-    the failure it guards against, a frame quietly containing an unapproved
-    window, is the one this whole design exists to prevent.
+    It used to be unreachable: the gate asked "which applications should be
+    kept out", which needs the list of everything running, so the answer was
+    always none and the check never fired. Asking instead "which are approved"
+    makes every unapproved window something to keep out, and a platform that
+    cannot do it has nothing safe to return (ADR-076).
     """
 
     screen = FakeScreen(focus=NOTES, supports=frozenset())
     gate = _gate(screen, NOTES)
 
-    # No exclusions requested, so the capture proceeds even though the platform
-    # could not have honoured one.
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.screenshot())
+
+    assert "at the compositor" in str(refused.value)
+    assert screen.actions == []
+
+
+def test_painting_over_a_window_is_not_accepted_as_keeping_it_out() -> None:
+    """`exclude_mask` used to satisfy this check. It is a weaker promise.
+
+    Masking draws the frame and then covers rectangles read from a separate
+    window list: the pixels were in the buffer, and the geometry can be stale
+    by the time the shutter falls. Accepting it here is what left the second
+    half of F-18 open -- 「抓屏是遮盖不是合成器过滤」 -- while the first half
+    looked closed.
+    """
+
+    screen = FakeScreen(focus=NOTES, supports=frozenset({"exclude_mask"}))
+    gate = _gate(screen, NOTES)
+
+    with pytest.raises(ScreenRefusedError):
+        asyncio.run(gate.screenshot())
+
+
+def test_a_capture_shows_the_approved_applications_and_says_which() -> None:
+    """The allowlist reaches the port, sorted, so two captures agree."""
+
+    screen = FakeScreen(focus=NOTES)
+    gate = _gate(screen, TERMINAL, NOTES)
+
     assert asyncio.run(gate.screenshot()).content
+    captures = [call for call in screen.actions if call[0] == "capture"]
+    assert len(captures) == 1
+    assert captures[0][1][3] == ("com.apple.Notes", "com.apple.Terminal")
+
+
+def test_a_session_that_approved_nothing_cannot_look_at_anything() -> None:
+    """An empty allowlist used to mean "show the whole desktop".
+
+    Measured 2026-08-24 before the change: a gate with no grants returned a
+    full 1375x894 capture of everything on screen. Nothing in the gate stopped
+    it, and its own docstring said the opposite was happening.
+    """
+
+    screen = FakeScreen(focus=NOTES)
+    gate = _gate(screen)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.screenshot())
+
+    assert "no application has been approved" in str(refused.value)
+    assert screen.actions == []
+
+
+def test_a_model_cannot_grant_itself_access() -> None:
+    """The check that did not exist until 2026-08-24.
+
+    `grant` used to take the model's own list, write it into the allowlist, and
+    answer "approved for this session". Every other check in this file was
+    real; all of them were guarding a consent nobody had given. An allowlist a
+    model can write has exactly one entry -- whatever it just asked for.
+    """
+
+    screen = FakeScreen(focus=NOTES)
+    gate = _gate(screen, answers=_never)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.grant((NOTES,)))
+
+    assert "did not approve" in str(refused.value)
+    assert gate.grants() == ()
+    # And the refusal is not advice about how to try harder.
+    assert "never use AppleScript" in str(refused.value)
+
+
+def test_a_refused_list_grants_none_of_it_rather_than_some() -> None:
+    """One decision about one set.
+
+    Approving three applications and keeping the two the person might not have
+    minded would be a grant nobody made -- the dialog asked one question.
+    """
+
+    gate = _gate(FakeScreen(focus=NOTES), answers=_never)
+
+    with pytest.raises(ScreenRefusedError):
+        asyncio.run(gate.grant((NOTES, TERMINAL, CHROME)))
+
+    assert gate.grants() == ()
+
+
+def test_the_reason_reaches_the_person_deciding() -> None:
+    """A dialog listing three applications and no reason is a dialog that gets
+    approved out of impatience."""
+
+    seen: list[object] = []
+
+    async def recording(applications: object, *, reason: str = "") -> bool:
+        seen.append((applications, reason))
+        return True
+
+    gate = ScreenGate(screen=FakeScreen(focus=NOTES), consent=recording)
+    asyncio.run(gate.grant((NOTES,), reason="整理今天的会议纪要"))
+
+    assert seen == [((NOTES,), "整理今天的会议纪要")]
+
+
+def test_a_second_request_asks_again_rather_than_topping_up() -> None:
+    """Granted applications stay granted; a new list is a new decision.
+
+    The failure this prevents is a model widening its own reach one refused
+    application at a time, where each individual ask looks reasonable.
+    """
+
+    answers = iter([True, False])
+
+    async def scripted(*_: object, **__: object) -> bool:
+        return next(answers)
+
+    gate = ScreenGate(screen=FakeScreen(focus=NOTES), consent=scripted)
+    asyncio.run(gate.grant((NOTES,)))
+
+    with pytest.raises(ScreenRefusedError):
+        asyncio.run(gate.grant((TERMINAL,)))
+
+    assert [held.application.name for held in gate.grants()] == ["Notes"]

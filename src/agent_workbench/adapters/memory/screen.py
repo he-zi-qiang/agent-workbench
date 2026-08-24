@@ -60,10 +60,10 @@ class FakeScreen:
         *,
         width: int,
         height: int,
-        exclude_bundle_ids: tuple[str, ...] = (),
+        include_bundle_ids: tuple[str, ...] = (),
     ) -> Capture:
         self.actions.append(
-            ("capture", (display_id, width, height, exclude_bundle_ids))
+            ("capture", (display_id, width, height, include_bundle_ids))
         )
         display = next(
             (held for held in self.screens if held.display_id == display_id),
