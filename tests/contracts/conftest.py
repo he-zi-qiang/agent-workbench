@@ -25,24 +25,31 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from harness import StoreHarness
+from harness import ChatReleaseHarness, StoreHarness
 from sqlalchemy import text
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.memory import (
     InMemoryArtifactStore,
+    InMemoryChatReleaseCoordinator,
     InMemoryConversationStore,
     InMemoryEventLog,
     InMemoryProjectStore,
 )
 from agent_workbench.adapters.persistence import (
+    PostgresChatReleaseCoordinator,
     PostgresConversationStore,
     PostgresEventLog,
     PostgresProjectStore,
     create_query_engine,
 )
 from agent_workbench.ports.artifact_store import ArtifactStore
-from agent_workbench.ports.conversation_store import ChatTurnStore, ConversationStore
+from agent_workbench.ports.conversation_store import (
+    AuthorizedRevision,
+    ChatTurnStore,
+    ConversationStore,
+)
+from agent_workbench.ports.projects import ProjectRecord
 
 TEST_DSN_ENV_VAR = "AGENT_WORKBENCH_TEST_DSN"
 REQUIRED_TEST_DATABASE_SUFFIX = "_test"
@@ -61,9 +68,101 @@ def _test_dsn() -> str | None:
     return dsn
 
 
+# --- filing a session under a project -------------------------------------
+#
+# `project_id` is written by `ProjectStore.assign_session` and read back through
+# three of `ConversationStore`'s own projections, so the contract has to seed it
+# the way production writes it: through the project store each implementation is
+# actually paired with, over the same backing. Reaching into a dict or issuing a
+# hand-written UPDATE here would seed a value production never puts there, and
+# the assertion would stop being about the two stores agreeing.
+
+
+def _project_for_test(
+    *, tenant_id: str, owner_id: str, project_id: str
+) -> ProjectRecord:
+    stamp = datetime(2026, 8, 24, tzinfo=UTC)
+    return ProjectRecord(
+        project_id=project_id,
+        tenant_id=tenant_id,
+        owner_id=owner_id,
+        name="季度复盘",
+        created_at=stamp,
+        updated_at=stamp,
+    )
+
+
+async def _file_under_project(
+    projects: Any,
+    *,
+    tenant_id: str,
+    owner_id: str,
+    session_id: str,
+    project_id: str,
+) -> None:
+    if (
+        await projects.get(
+            tenant_id=tenant_id, owner_id=owner_id, project_id=project_id
+        )
+    ) is None:
+        await projects.create(
+            _project_for_test(
+                tenant_id=tenant_id, owner_id=owner_id, project_id=project_id
+            )
+        )
+    assigned = await projects.assign_session(
+        tenant_id=tenant_id,
+        owner_id=owner_id,
+        session_id=session_id,
+        project_id=project_id,
+    )
+    # Asserted in the seam, because a refused assignment and a dropped column
+    # produce the same `project_id=None` downstream -- and only one of them is
+    # the thing under test.
+    assert assigned, f"seeding failed: {session_id} was not filed under {project_id}"
+
+
+class _ProjectFilingMemoryConversationStore(InMemoryConversationStore):
+    """The double, wired to the project store whose session rows it holds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._projects_for_test = InMemoryProjectStore(sessions=self)
+
+    async def file_under_project_for_test(
+        self, *, tenant_id: str, owner_id: str, session_id: str, project_id: str
+    ) -> None:
+        await _file_under_project(
+            self._projects_for_test,
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            session_id=session_id,
+            project_id=project_id,
+        )
+
+
+class _ProjectFilingPostgresConversationStore(PostgresConversationStore):
+    """The real store, filed through the real project store over one engine."""
+
+    def __init__(self, engine: Any) -> None:
+        super().__init__(engine)
+        self._projects_for_test = PostgresProjectStore(engine)
+
+    async def file_under_project_for_test(
+        self, *, tenant_id: str, owner_id: str, session_id: str, project_id: str
+    ) -> None:
+        await _file_under_project(
+            self._projects_for_test,
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            session_id=session_id,
+            project_id=project_id,
+        )
+
+
 @asynccontextmanager
 async def _memory_conversations() -> AsyncIterator[ConversationStore]:
-    yield InMemoryConversationStore()
+    yield _ProjectFilingMemoryConversationStore()
 
 
 def _postgres_conversations(dsn: str) -> Callable[[], Any]:
@@ -72,10 +171,14 @@ def _postgres_conversations(dsn: str) -> Callable[[], Any]:
         engine = create_query_engine(dsn, application_name="agent-workbench-tests")
         try:
             async with engine.begin() as connection:
+                # `projects` joins the truncation because the filing seam
+                # creates one and `conversation_sessions.project_id` references
+                # it. Left behind, the next scenario's seed would fail on a
+                # duplicate key rather than on anything it was asserting.
                 await connection.execute(
-                    text("TRUNCATE conversation_sessions, messages CASCADE")
+                    text("TRUNCATE conversation_sessions, messages, projects CASCADE")
                 )
-            yield PostgresConversationStore(engine)
+            yield _ProjectFilingPostgresConversationStore(engine)
         finally:
             await engine.dispose()
 
@@ -171,6 +274,82 @@ def chat_turn_conversations(request: pytest.FixtureRequest) -> StoreHarness:
     if dsn is None:
         pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
     return StoreHarness(name="postgres", factory=_postgres_chat_turns(dsn))
+
+
+# --- chat release ---------------------------------------------------------
+
+
+class _UnchangedRevisions:
+    """A revision guard that never withholds.
+
+    The release contract below is about which terminal event a publishable
+    answer produces. Withholding is a different question with its own suites,
+    and a guard that could say no here would only add a way for those two
+    failures to be confused for one another.
+    """
+
+    async def revisions_unchanged(
+        self,
+        revisions: tuple[AuthorizedRevision, ...],
+        *,
+        tenant_id: str,
+        principal_id: str,
+    ) -> bool:
+        del revisions, tenant_id, principal_id
+        return True
+
+
+@asynccontextmanager
+async def _memory_chat_release() -> AsyncIterator[ChatReleaseHarness]:
+    conversations = InMemoryConversationStore()
+    yield ChatReleaseHarness(
+        conversations=conversations,
+        coordinator=InMemoryChatReleaseCoordinator(
+            conversations=conversations,
+            revisions=_UnchangedRevisions(),
+        ),
+        events=InMemoryEventLog(),
+    )
+
+
+def _postgres_chat_release(dsn: str) -> Callable[[], Any]:
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[ChatReleaseHarness]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "TRUNCATE chat_turns, messages, conversation_sessions, "
+                        "events, event_streams CASCADE"
+                    )
+                )
+            yield ChatReleaseHarness(
+                conversations=PostgresConversationStore(engine),
+                coordinator=PostgresChatReleaseCoordinator(engine),
+                events=PostgresEventLog(engine),
+            )
+        finally:
+            await engine.dispose()
+
+    return factory
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def chat_release(request: pytest.FixtureRequest) -> StoreHarness:
+    """Both release coordinators, answering the same publication questions.
+
+    The in-memory one is what most Chat suites run through, so a divergence
+    here is a divergence in what those suites are able to catch.
+    """
+
+    if request.param == "memory":
+        return StoreHarness(name="memory", factory=_memory_chat_release)
+
+    dsn = _test_dsn()
+    if dsn is None:
+        pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
+    return StoreHarness(name="postgres", factory=_postgres_chat_release(dsn))
 
 
 @asynccontextmanager

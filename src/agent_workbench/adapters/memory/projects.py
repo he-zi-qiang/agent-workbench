@@ -11,6 +11,21 @@ Everything the contract asks about is then answered the same way by both: an
 assignment against an item nobody knows returns ``False``; deleting a project
 releases its members instead of removing them; a project belonging to somebody
 else is not readable, assignable or deletable.
+
+**Where a session's membership lives.** On the session, when there is a session
+to put it on. Pass an ``InMemoryConversationStore`` as ``sessions=`` and this
+store stops holding chat and code membership itself: existence, owner, title,
+ordering and ``project_id`` all come from that store's row, exactly as they
+come from ``conversation_sessions`` over PostgreSQL. ``_Member`` then covers
+only what has no store in this package -- Tasks -- and the unwired double.
+
+The rule is one fact held by whichever store owns the row, never a copy in
+each. The copy-in-each version is what shipped, and it is why the PostgreSQL
+projection bug was uncatchable by contract: a session filed through
+``assign_session`` had its project recorded in ``_members`` here and *not* on
+the ``ConversationSession``, so the double answered ``project_id=None`` from
+the field default -- agreeing, by construction, with the projection that had
+dropped the column.
 """
 
 from __future__ import annotations
@@ -19,13 +34,42 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Protocol
 
+from agent_workbench.ports.conversation_store import ConversationSession
 from agent_workbench.ports.projects import (
     ProjectContents,
     ProjectItem,
     ProjectItemKind,
     ProjectRecord,
 )
+
+#: The kinds whose row is a ``conversation_sessions`` row (ADR-047).
+_SESSION_KINDS: frozenset[ProjectItemKind] = frozenset({"chat", "code"})
+
+
+class SessionRows(Protocol):
+    """The session rows this store files under projects but does not own.
+
+    Two methods, one per thing ``ProjectStore`` does to that table: read the
+    rows filed under a project, and write the column. Structural rather than an
+    import of ``InMemoryConversationStore`` so the dependency between two
+    doubles is a stated contract instead of a direct reach into a sibling
+    adapter.
+    """
+
+    async def sessions_in_project(
+        self, *, tenant_id: str, owner_id: str, project_id: str
+    ) -> tuple[ConversationSession, ...]: ...
+
+    async def file_under_project(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        owner_id: str,
+        project_id: str | None,
+    ) -> bool: ...
 
 
 @dataclass(slots=True)
@@ -36,6 +80,10 @@ class _Member:
     kind: ProjectItemKind
     title: str | None
     ordered_at: datetime
+    #: Read and written only for members whose row lives nowhere else -- Tasks
+    #: always, sessions only while no ``sessions=`` store was given. When one
+    #: was, the session object holds the membership and this field is dead for
+    #: chat and code kinds: not a stale copy of it, no copy at all.
     project_id: str | None = None
 
 
@@ -58,8 +106,12 @@ class InMemoryProjectStore:
     """Projects and their membership, held in process memory."""
 
     def __init__(
-        self, *, clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+        self,
+        *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        sessions: SessionRows | None = None,
     ) -> None:
+        self._sessions = sessions
         self._projects: dict[tuple[str, str], ProjectRecord] = {}
         self._members: dict[tuple[str, str], _Member] = {}
         self._bases: dict[tuple[str, str], _Base] = {}
@@ -79,6 +131,13 @@ class InMemoryProjectStore:
         title: str | None = None,
         last_activity_at: datetime | None = None,
     ) -> None:
+        """Stand in for a session row, for a store given no ``sessions=``.
+
+        With one, this is not the way to make a session known: that store's
+        ``create_session`` is, and a session remembered here is invisible to
+        every session path below.
+        """
+
         self._members[(tenant_id, session_id)] = _Member(
             owner_id=owner_id,
             kind=mode,
@@ -116,6 +175,9 @@ class InMemoryProjectStore:
         SELECT against a table this store does not own. Here it is the only way
         to assert what ON DELETE SET NULL guarantees: the member outlives the
         project it was filed under.
+
+        Answers for the rows *this* store stands in for. A wired store's
+        sessions are the conversation store's, and outlive a deletion there.
         """
 
         return (tenant_id, item_id) in self._members
@@ -215,7 +277,19 @@ class InMemoryProjectStore:
                 return False
             del self._projects[(tenant_id, project_id)]
             # What ON DELETE SET NULL does over there: the members stay, their
-            # membership goes.
+            # membership goes. Wired, the sessions are rows in another store
+            # and are released there -- one release per fact, wherever the
+            # fact is kept.
+            if self._sessions is not None:
+                for session in await self._sessions.sessions_in_project(
+                    tenant_id=tenant_id, owner_id=owner_id, project_id=project_id
+                ):
+                    await self._sessions.file_under_project(
+                        session_id=session.session_id,
+                        tenant_id=tenant_id,
+                        owner_id=owner_id,
+                        project_id=None,
+                    )
             for (held_tenant, _), member in self._members.items():
                 if held_tenant == tenant_id and member.project_id == project_id:
                     member.project_id = None
@@ -236,7 +310,28 @@ class InMemoryProjectStore:
             if held_tenant == tenant_id
             and member.owner_id == owner_id
             and member.project_id == project_id
+            # Wired, a session remembered here is not a member -- the row that
+            # decides that is in the other store, and this arm would answer
+            # from a `project_id` nothing writes.
+            and not (self._sessions is not None and member.kind in _SESSION_KINDS)
         ]
+        if self._sessions is not None:
+            for session in await self._sessions.sessions_in_project(
+                tenant_id=tenant_id, owner_id=owner_id, project_id=project_id
+            ):
+                if session.last_activity_at is None:  # pragma: no cover - stamped
+                    continue
+                items.append(
+                    ProjectItem(
+                        # `mode` *is* the kind: chat and code are two products
+                        # to a reader sharing one table (ADR-047), which is the
+                        # same union the SQL builds from `mode` as a label.
+                        kind=session.mode,
+                        item_id=session.session_id,
+                        title=session.title,
+                        ordered_at=session.last_activity_at,
+                    )
+                )
         for link in self._links.get(f"{tenant_id}/{project_id}", []):
             base = self._bases.get((tenant_id, link.knowledge_base_id))
             if base is None:
@@ -261,12 +356,33 @@ class InMemoryProjectStore:
         session_id: str,
         project_id: str | None,
     ) -> bool:
-        return await self._assign(
+        if self._sessions is None:
+            return await self._assign(
+                tenant_id=tenant_id,
+                owner_id=owner_id,
+                item_id=session_id,
+                project_id=project_id,
+                kinds=("chat", "code"),
+            )
+        # Same two steps as the SQL, in the same order: establish the project is
+        # this person's -- the foreign key over there constrains tenant and
+        # knows nothing about owner -- then one write carrying the same three
+        # predicates, whose miss is `False` rather than an exception.
+        if (
+            project_id is not None
+            and (
+                await self.get(
+                    tenant_id=tenant_id, owner_id=owner_id, project_id=project_id
+                )
+            )
+            is None
+        ):
+            return False
+        return await self._sessions.file_under_project(
+            session_id=session_id,
             tenant_id=tenant_id,
             owner_id=owner_id,
-            item_id=session_id,
             project_id=project_id,
-            kinds=("chat", "code"),
         )
 
     async def assign_task(
@@ -361,4 +477,4 @@ class InMemoryProjectStore:
             return len(remaining) != len(links)
 
 
-__all__ = ["InMemoryProjectStore"]
+__all__ = ["InMemoryProjectStore", "SessionRows"]
