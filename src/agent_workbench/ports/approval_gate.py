@@ -24,7 +24,11 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from agent_workbench.domain.events import ApprovalDecidedBy, ApprovalDecision
+from agent_workbench.domain.events import (
+    ApprovalDecidedBy,
+    ApprovalDecision,
+    ApprovalPreview,
+)
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.tools import PermissionScope, ProposedToolName, ToolRisk
 
@@ -40,6 +44,7 @@ class InteractiveApprovalGate(Protocol):
         tool_call_id: Identifier,
         tool_name: ProposedToolName,
         argument_digest: str,
+        approval_preview: ApprovalPreview,
         risk: ToolRisk | None,
         required_scopes: tuple[PermissionScope, ...],
         timeout_seconds: float,
@@ -54,6 +59,24 @@ class InteractiveApprovalGate(Protocol):
         call of that tool. A rule remembered by this gate must be keyed by the
         arguments as well -- the digest is that identity, and it is the same
         one ``ToolProposed`` published for this call.
+
+        ``approval_preview`` is the opposite half of that pair and exists for
+        the opposite reason: it is the only thing here a person can actually
+        read. A digest is an identity, and consenting to an identity is not
+        consenting -- ADR-058 recorded that the gate armed for `sandbox_run`
+        bought latency rather than consent for exactly this reason, and the
+        argument held because the sandbox is a container whose blast radius the
+        digest was not needed to describe. It stops holding the moment a tool's
+        arguments *are* the effect: `rm -rf .` and `ls` are the same question
+        asked of a hash. The gateway already writes this string onto
+        ``PermissionRequested``; it is passed here as the same string rather
+        than re-derived, so what a person sees and what the event recorded
+        cannot drift apart.
+
+        It is bounded at ``APPROVAL_PREVIEW_LIMIT`` and marks its own cut, so an
+        implementation may show it verbatim. It must **never** be used to match
+        a standing rule -- two different calls can share a preview once either
+        is truncated, and ``argument_digest`` is the field that cannot.
 
         ``timeout_seconds`` is the bound the caller has already committed to:
         it is the smaller of the caller's own approval allowance and whatever

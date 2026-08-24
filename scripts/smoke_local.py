@@ -80,6 +80,12 @@ CONSOLE_SCOPES: tuple[str, ...] = (
     # the console, because the parity test between the two is the thing that
     # noticed the last time they drifted.
     "sandbox:run",
+    # `project_run` (ADR-077), same commit as the console for the same reason.
+    # It buys this script nothing today -- the walkthrough drives Tasks, and
+    # `project_run` never enters a Task envelope -- and it is here anyway,
+    # because the parity test compares the two lists rather than asking which
+    # entries either side uses.
+    "project:run",
 )
 
 

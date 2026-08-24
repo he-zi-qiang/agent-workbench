@@ -148,6 +148,14 @@ class PendingApprovalView(BaseModel):
     approval_id: Identifier
     tool_name: str
     argument_digest: str
+    #: The arguments as far as they fit, marked where they were cut.
+    #:
+    #: The field that makes the card answerable. `argument_digest` stays
+    #: because it is what a standing rule is keyed by and what `ToolProposed`
+    #: published, but nobody can consent to a hash -- and once a Code session
+    #: can run a command on the machine, the arguments are no longer a detail
+    #: of the effect, they *are* it.
+    approval_preview: str
     risk: str | None
 
 
@@ -812,6 +820,7 @@ async def pending_approvals(
                 approval_id=held.approval_id,
                 tool_name=held.tool_name,
                 argument_digest=held.argument_digest,
+                approval_preview=held.approval_preview,
                 risk=held.risk,
             )
             for held in registry.pending(scope)

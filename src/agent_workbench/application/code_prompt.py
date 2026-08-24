@@ -165,8 +165,66 @@ CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED: Final[str] = _rewrite(
 )
 
 
+#: The claim `project_run` makes false, in the two spellings the base prompts
+#: use. Both start "There is no shell", and a turn holding the tool must not be
+#: told that -- `CODER_SYSTEM_PROMPT_WITH_SANDBOX`'s own comment records what
+#: happens when the prompt describes a different deployment than the one the
+#: turn is in: the model wrote correct code and then reported that it could not
+#: run it, which was true of the world it had been described as being in.
+_NO_SHELL_CLAIMS: Final[tuple[str, ...]] = (
+    "There is no shell, no network and no path outside it: a name\n"
+    "is a name, not a path, and nothing you write escapes this session.",
+    "There is no shell and no network, and no path outside the workspace: a "
+    "name is\na name, not a path, and nothing you write escapes this session.",
+)
+
+_HAS_SHELL = """\
+You are working in a real directory on this machine, and `project_run` runs a
+shell command in it. There is no sandbox around it and no undo: it is the
+user's own machine, their files, their installed tools. Every call stops and
+asks them before it runs, and they see the command you wrote."""
+
+_HOST_COMMANDS_GUIDANCE = """\
+
+Because every command is read by a person before it runs, write commands they
+can check at a glance. Prefer one command that does one thing over a chain
+whose middle step is the interesting one. Say what you expect it to print,
+before you run it, in the same message -- a person deciding whether to allow
+`rm -rf build` is deciding about your reason for it, not about the string.
+
+Run the project's own tools rather than reimplementing them: its test command,
+its formatter, its build. Read the output. A claim about behaviour you could
+have checked and did not is the same error as inventing one, and here you can
+check almost anything."""
+
+
+def with_host_commands(prompt: str) -> str:
+    """Correct a prompt for a turn that holds ``project_run`` (ADR-077).
+
+    Composed onto whichever of the three base prompts a turn was given rather
+    than spelled as three more constants: `project_run` is independent of the
+    sandbox and of its gate, so writing them out would be six texts kept in
+    step by hand, and the coupling `_rewrite` exists to catch would have six
+    places to drift instead of two.
+
+    The substitution is attempted against both spellings of the no-shell claim
+    and exactly one must match, so a future edit to either base prompt fails
+    here at import rather than shipping a turn that holds a shell and has been
+    told it does not have one.
+    """
+
+    matched = [claim for claim in _NO_SHELL_CLAIMS if claim in prompt]
+    if len(matched) != 1:
+        raise ValueError(
+            "the host-command prompt could not find exactly one no-shell claim "
+            f"to correct (found {len(matched)}); the base prompt has drifted"
+        )
+    return _rewrite(prompt, matched[0], _HAS_SHELL) + _HOST_COMMANDS_GUIDANCE
+
+
 __all__ = [
     "CODER_SYSTEM_PROMPT",
     "CODER_SYSTEM_PROMPT_WITH_SANDBOX",
     "CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED",
+    "with_host_commands",
 ]

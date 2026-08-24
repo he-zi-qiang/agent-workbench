@@ -409,6 +409,16 @@ class CodeConfig:
     #: because it decides the envelope's armed risks and which prompt variant
     #: a turn is given -- both downstream branches.
     sandbox_requires_approval: bool
+    #: Whether this session may call ``project_run`` (ADR-077).
+    #:
+    #: Projected from ``policy.shell_tools_enabled``, which is in ``[policy]``
+    #: and not in ``[code]`` -- ``policy_fingerprint`` hashes that section, so
+    #: flipping it changes the ``policy_identity`` every run records. It is
+    #: renamed on the way through because a projection is named for what the
+    #: consumer branches on: downstream the question is "does this session get
+    #: the tool", and "shell tools" is the deployment's word for it, not the
+    #: session's.
+    host_commands_enabled: bool
     turn_timeout_seconds: int
     approval_timeout_seconds: int
     max_steps: int
@@ -1118,6 +1128,11 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             # process that starts and then cannot honour what it offered.
             sandbox_enabled=settings.code.sandbox_enabled and settings.sandbox.enabled,
             sandbox_requires_approval=settings.code.sandbox_requires_approval,
+            # Only the policy flag, with no `code` twin to and it with. The
+            # sandbox needs two because a server has to be running somewhere;
+            # a command needs nothing but a directory, and the directory is the
+            # session's project. One switch, in the plane that fingerprints it.
+            host_commands_enabled=settings.policy.shell_tools_enabled,
             turn_timeout_seconds=settings.code.turn_timeout_seconds,
             approval_timeout_seconds=settings.code.approval_timeout_seconds,
             max_steps=settings.code.max_steps,

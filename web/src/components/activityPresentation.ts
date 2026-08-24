@@ -26,6 +26,10 @@ export interface CommandPresentation {
 
 const COMMAND_TOOLS = new Set([
   "sandbox_run",
+  // ADR-077. The only name in this set this repository actually registers
+  // besides `sandbox_run`; the rest are the conventional spellings, kept so a
+  // deployment that adds one gets the command rendering without editing here.
+  "project_run",
   "exec_command",
   "run_command",
   "shell",

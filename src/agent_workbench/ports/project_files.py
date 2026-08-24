@@ -30,6 +30,7 @@ codebase refuses everywhere else it stores anything.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Final, Literal, Protocol, runtime_checkable
 
 from agent_workbench.domain.schema import VersionedModel
@@ -124,6 +125,30 @@ class ProjectFileStore(Protocol):
     believing it was in another -- with every path check passing, because the
     checks are relative to whichever root was handed in.
     """
+
+    @property
+    def working_directory(self) -> Path:
+        """The directory this store is bound to, for a caller that must *be* in it.
+
+        Named for the one legitimate use rather than for what it is. ADR-077's
+        ``project_run`` has to hand a real cwd to a real process, and there is
+        no relative spelling of "here" -- every other method on this port takes
+        a project-relative path precisely so that no caller ever holds an
+        absolute one.
+
+        So the name is the constraint: this is a directory to enter, never a
+        base to join a path onto. Joining is ``resolve``'s job and the sandbox's,
+        and the moment a caller writes ``store.working_directory / path`` the
+        lexical and physical checks in ``domain/project_files.py`` and
+        ``adapters/filesystem/sandbox.py`` both stop being the single place
+        those rules live -- which is the failure the module docstring of
+        ``adapters/tools/project_files.py`` was written to prevent.
+
+        It does not go to a browser. ``ProjectFileEntry.path`` says why: a
+        client that received an absolute path would eventually send one back.
+        """
+
+        ...
 
     async def list_directory(self, path: str = "") -> ProjectListing:
         """One directory's immediate children, directories first then by name.

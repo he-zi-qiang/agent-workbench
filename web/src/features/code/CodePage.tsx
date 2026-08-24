@@ -1184,6 +1184,14 @@ export function CodePage() {
                     </span>
                   )}
                 </h3>
+                {/* 先给要批准的东西，再给它的身份。顺序就是理由：人同意的是
+                    这次调用的参数，而摘要是给事后对着事件流核对的人用的。
+                    在这一行之前，卡片上只有那 64 个十六进制字符——它把
+                    `rm -rf .` 和 `ls` 问成了同一个问题，而 Code 会话一旦能在
+                    本机跑命令，参数就不再是效果的细节，它本身就是效果。 */}
+                <pre className="aw-code-approval-preview">
+                  {held.approval_preview}
+                </pre>
                 <p className="aw-code-value">{held.argument_digest}</p>
                 {held.risk !== null && UNREPEATABLE.has(held.risk) ? (
                   // The missing third button, explained where it is missing.

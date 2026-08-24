@@ -51,6 +51,27 @@ reasoning_effort = "low"
 [model.compact]
 model_id = "deepseek-chat"
 
+# ADR-077. The one profile in `config/` that turns this on, and the reason is
+# what the profile already is: `code-local` is the local-development profile,
+# bound to loopback, run by the person whose machine it is, against a project
+# directory that same person chose. That is the only arrangement where "run a
+# command on this machine" is a thing the operator is asking for rather than a
+# thing happening to them -- `demo-local` is the console profile and stays off,
+# and so does everything else.
+#
+# It lives in `[policy]` rather than `[code]`, so `policy_fingerprint` covers
+# it: this profile's `policy_identity` differs from every other profile's, and
+# every run recorded under it says so. That is deliberate and is most of the
+# point of putting the switch here.
+#
+# What it grants: `project_run`, `destructive` risk, one command per call in
+# the project root, stdin closed, killed at 120 seconds, and **every call stops
+# and asks a human who is shown the command**. It grants nothing to Task, which
+# has no gate to ask through, and nothing to a session whose project is not a
+# directory.
+[policy]
+shell_tools_enabled = true
+
 [code]
 enabled = true
 

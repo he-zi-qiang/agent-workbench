@@ -151,7 +151,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.17"] = "1.17"
+    config_schema_version: Literal["1.18"] = "1.18"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -926,7 +926,37 @@ class PolicySettings(StrictModel):
     default_effect: Literal["deny"] = "deny"
     write_tools_require_approval: Literal[True] = True
     network_tools_require_allowlist: Literal[True] = True
-    shell_tools_enabled: Literal[False] = False
+    #: Whether this deployment permits a tool that runs a command on the
+    #: machine the process is running on (ADR-077).
+    #:
+    #: Unfrozen from ``Literal[False]``, and the unfreezing is the decision --
+    #: the field is nine schema versions old and had, until now, **no consumer
+    #: anywhere in ``src/``**. It was a sentence the configuration said about
+    #: itself and nothing checked, which is the most expensive kind of
+    #: invariant: it reads as a guarantee and is a comment. Now it gates
+    #: ``project_run`` and the sentence is true either way it is set.
+    #:
+    #: The precedent is exact. ADR-057 unfroze ``code.shell_enabled`` at schema
+    #: 1.15 -> 1.16 and renamed it ``code.sandbox_enabled``, because the field
+    #: equated "give it a shell" with "grant ``sandbox_run``" and ADR-029's
+    #: sandbox is a pure function -- one network-less container per call,
+    #: destroyed after. That rename left a real gap behind: the name ``shell``
+    #: was retired from the surface that was not one, and nothing ever filled
+    #: the surface that would be. This is that surface, and it is deliberately
+    #: **not** in ``[code]`` beside its sibling. Two reasons:
+    #:
+    #: * ``policy`` is the plane that answers "what may this deployment do at
+    #:   all", and ``policy_fingerprint`` hashes every field in it. Flipping
+    #:   this changes ``policy_identity``, so every run recorded afterwards
+    #:   says which answer it ran under. ``code.sandbox_enabled`` is not in
+    #:   that fingerprint and a sandbox does not need to be.
+    #: * One switch, not two. A ``[code]`` twin would be a second way to
+    #:   describe one decision, and the interesting bug is the pair
+    #:   disagreeing.
+    #:
+    #: Default ``False``, and every profile in ``config/`` except
+    #: ``code-local`` leaves it there.
+    shell_tools_enabled: bool = False
     path_sandbox_enabled: Literal[True] = True
     tenant_filter_required: Literal[True] = True
     max_tool_argument_bytes: int = Field(default=65_536, ge=1024)

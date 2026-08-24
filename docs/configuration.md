@@ -13,7 +13,7 @@
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 为 `1.17`；两者是不同版本轴，架构基线不随
+当前架构基线为 `1.3`，配置 schema 为 `1.18`；两者是不同版本轴，架构基线不随
 配置 schema 走。schema 每一次抬升都对应一条 ADR：
 
 | schema | 原因 | 依据 |
@@ -34,6 +34,7 @@
 | `1.14` → `1.15` | `[code]` 段到了：一个跑在 API 进程里的编码会话面。加性、默认关，形状与 `1.11 → 1.12` 相同——一份打开它的配置是在要求这个进程开会话、持有回合、停下来等人批准，而 1.14 的二进制一件都做不到。它另带三个冻结 `Literal`（`execution_locality`、`coordination`、`shell_enabled`），存在的意义就是"放宽它们"不能悄悄发生。既有段下**新增带默认值的叶子**仍然不抬版，那是 ADR-038 与 ADR-042 的先例，与本条不是一回事 | ADR-036 的先例 |
 | `1.15` → `1.16` | **又一次方向相反的**：`code.shell_enabled` 改名为 `code.sandbox_enabled` 并从冻结 `Literal[False]` 解冻成 `bool`。停止加载的是 1.15 那份文件——设置拒绝未知的 `AW_*` 与未知键，所以写着 `shell_enabled` 的配置在 1.16 下不再加载。改名不是措辞问题：那个字段的注释把「给一个 shell」和「授予 `sandbox_run`」当成同一件事，而 ADR-029 的沙箱是一次调用建一个断网容器、文件进文件出、调用之间无状态的纯函数。解冻的理由是原冻结理由（"设了也拿不到东西"）已被接线消除。`execution_locality` 与 `coordination` **继续冻结** | [ADR-057](./adr/0057-a-pure-function-is-not-a-shell.md) |
 | `1.16` → `1.17` | **删除死配置**：`workflow.node_retry_max_attempts` 与 `node_timeout_seconds` 被校验、从未被消费——LangGraph 适配器没有 RetryPolicy 也没有每节点时钟，读到它们的人以为节点会重试而它们不会。停止加载的是写着这两个键的 1.16 文件（严格设置拒绝未知键）。重试从此住在 Task 层：`coordination.max_attempts` 同时管租约回收与可重试的执行失败。同一版把两处实测过的预算写回默认（`runtime.max_steps` 12→40、`multi_agent.max_tokens_per_agent_invocation` 16000→120000）——加性改动本不抬版，搭删除的车 | [ADR-059](./adr/0059-a-retryable-failure-is-released-not-settled.md) |
+| `1.17` → `1.18` | **方向和 `1.15` → `1.16` 相同，补的是那次留下的洞**：`policy.shell_tools_enabled` 从冻结 `Literal[False]` 解冻成 `bool`。ADR-057 当年把 `code.shell_enabled` 改名成 `code.sandbox_enabled`，理由是那个字段把「给一个 shell」和「授予 `sandbox_run`」当成了同一件事——而ADR-029 的沙箱是纯函数。改名退掉了**不是** shell 的那个面的名字，却始终没有人去做**是** shell 的那个面。`project_run` 是它，而这个字段是它的闸门。解冻的理由和上次同构：原冻结理由是「设了也拿不到东西」，它有九个 schema 版本之久**在 `src/` 里没有任何消费者**，是配置对自己说的一句没人校验的话。它落在 `[policy]` 而不是 `[code]`，因为 `policy_fingerprint` 会哈希这一段的每个字段：翻动它就改变 `policy_identity`，此后每一次运行都记着自己跑在哪个答案下。默认仍是 `false`，`config/` 里只有 `code-local` 打开它 | [ADR-077](./adr/0077-a-command-on-this-machine-is-shown-before-it-is-run.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。
@@ -248,10 +249,15 @@ claim_batch_size <= min(worker_concurrency, guard_connection_budget)
 - 模型增量只有一个所有者：
   `event_stream.model_delta_mode="ephemeral_sse_coalesced"`；delta 只实时
   发送，不写 `run_events`；
-- Shell Tool、写工具和导出到 telemetry 的正文默认关闭：
-  `observability.record_prompt_body` 与 `observability.record_tool_result_body`
-  是单值 `Literal[False]`，因为 OTel span 会离开这个系统、去到一个没有租户边界的
-  collector。
+- 导出到 telemetry 的正文默认关闭：`observability.record_prompt_body` 与
+  `observability.record_tool_result_body` 是单值 `Literal[False]`，因为 OTel
+  span 会离开这个系统、去到一个没有租户边界的 collector；
+- **Shell Tool 不再在这张表里。** `policy.shell_tools_enabled` 从 schema
+  `1.18` 起是一个真正的布尔开关（ADR-077），默认 `false`。它此前是单值
+  `Literal[False]`，但那是这张表里唯一一条**没有任何代码消费**的：它读起来
+  像一条保证，实际是一句注释。现在它闸住 `project_run`，代价是它不再是不可
+  覆盖的——换来的是它开着还是关着，这句话都是真的。它在 `[policy]` 段里，
+  所以 `policy_identity` 跟着它变。
 
 这比“默认值写成 false”更强：错误的环境覆盖会让进程启动失败，而不是
 悄悄改变运行语义。

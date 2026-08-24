@@ -46,6 +46,35 @@ from typing import Annotated, Final
 
 from pydantic import StringConstraints
 
+#: The tool that runs a command on this machine, in the project's directory.
+#:
+#: Spelled here rather than beside the adapter because two things outside that
+#: adapter have to name it and neither may import it: ``CODE_PROJECT_TOOLS``
+#: in ``application/code_session.py``, which decides what a turn is offered,
+#: and the risk-ceiling derivation next to it. Its four file-shaped siblings
+#: are still bare literals in both places -- they are named in exactly one
+#: list each, and moving them is a separate change to make deliberately rather
+#: than as a side effect of this one.
+#:
+#: ``project_`` and not ``shell`` or ``bash``, for the reason ADR-073 gave the
+#: file tools their prefix: the name is frozen into an authorization envelope
+#: and is what answers "what was this run allowed to do" afterwards. `project_`
+#: says the answer, which is *in this session's project directory, on the
+#: machine the API is running on* -- and it keeps the name from reading as a
+#: sibling of ``sandbox_run``, which ADR-057 spent a whole decision separating
+#: from exactly this.
+PROJECT_RUN_TOOL: Final[str] = "project_run"
+
+#: What a principal must hold before ``project_run`` may be dispatched.
+#:
+#: Its own scope rather than ``sandbox:run``. The two grants are not the same
+#: grant and ADR-057 spent a whole decision saying so: one is a network-less
+#: container destroyed after the call, the other is this machine. A principal
+#: that was given the sandbox has not been given the machine, and reusing the
+#: name would make that upgrade happen silently, to every principal that
+#: already held it, on the day the tool shipped.
+PROJECT_RUN_SCOPE: Final[str] = "project:run"
+
 #: Depth ceiling for a project-relative path.
 #:
 #: A constant rather than configuration, for the reason the workspace caps are:
@@ -242,6 +271,8 @@ __all__ = [
     "MAX_PATH_SEGMENTS",
     "MAX_RELATIVE_PATH_BYTES",
     "MAX_SEGMENT_BYTES",
+    "PROJECT_RUN_SCOPE",
+    "PROJECT_RUN_TOOL",
     "ProjectPathError",
     "ProjectPathSegment",
     "is_within",

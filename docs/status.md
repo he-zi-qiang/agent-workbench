@@ -28,7 +28,144 @@
 
 ---
 
-## 2026-08-24（未合并，工作树在 `main` 上，第十四批）：批准第一次真的问了人，截图第一次只画批准过的东西
+## 2026-08-24（未合并，分支 `code/a-command-on-this-machine-is-shown-before-it-is-run`，第十五批）：Code 会话能搜真实目录了，也能在里面跑命令了——而跑之前那条命令第一次真的被人看见
+
+起因是产品侧的一句话：「我想要 codex 和 Claude Code 那种」。照着查下来，第一件事是这句话
+**不是**指屏幕控制——Codex 和 Claude Code 从来不碰鼠标，它们读写真实文件、在目录里搜索、
+跑命令。而这三件里，Project 已经是本机的一个真实目录（ADR-072、ADR-074），缺的是后两件。
+
+一份新 ADR（[ADR-077](./adr/0077-a-command-on-this-machine-is-shown-before-it-is-run.md)），
+连带开一条新的已知缺口（**F-23**）。`project_grep` 不需要 ADR：它不动事实源、控制面、
+运行时归属或恢复语义，是既有工具集里多一个 `read` 工具。
+
+**这一批还没有合并**，下面的数字属于这条工作分支上的这棵树，不是主线的当前值。
+
+**门禁**：`ruff format --check`（582 文件）+ `ruff check` 全过；`pyright` **0 errors**；
+`pytest` **2833 passed / 764 skipped**；`agent-config-check --profile development` ok。
+第十四批那棵树是 **2798**，所以**本批新增 35 条**：13 条在
+`tests/adapters/test_project_tools.py::TestSearchingTheTree`，22 条分布在同一文件的
+`TestRunningACommand`／`TestExclusivity`、新增的 `tests/bootstrap/test_child_environment.py`、
+`tests/application/test_code_session.py` 与 `web` 的批准卡片。
+**前端也跑了**：`eslint --max-warnings 0` 全过、`tsc -b` 干净、`vitest` **556 passed / 35 files**、
+`vite build` 成功。
+**下面的秒数是本机实测**（macOS 26.5.2、arm64），按房规明说它不是 CI 证据。
+
+### 一、`project_grep`：难的不是搜索，是「没找到」必须可信
+
+`CODE_PROJECT_TOOLS` 里此前没有 grep，而且那不是遗漏——`code_session.py` 有一段注释专门
+说明为什么故意不做：
+
+> shipping the name without it would be worse than its absence — a model told it can grep
+> stops listing and reading, which is how it concludes a file is not there.
+
+这条反对意见指向的从来不是匹配。`grep_workspace` 早就是一个 IO-free 的纯函数，收
+`(name, text)` 序列，连时间预算和回溯上限都齐了——直接复用，不写第二个扫描器。真正的差别
+是**一棵真实的树有四种内存里的清单没有的不完整方式**：walk 停在 `MAX_LISTING_ENTRIES`
+(2000)、读取预算 8 MiB 耗尽、文件不是 UTF-8、文件超过 `MAX_READ_BYTES` (2 MiB)。
+
+所以 `ProjectGrepTool` 的功能不是搜索，是**把这四种全部具名，并且在 "No matches" 那条
+回复里也一条不少地带上**。`_unsearched()` 把它们拼在一处，两个渲染分支共用——最需要它们的
+恰恰是那个什么都没有的分支。
+
+顺带补了一个 `grep_workspace` 管不到的洞：一个**合法 UTF-8 但含 NUL** 的文件（`.mo`、
+某些 `.pack`）会被 store 判为 `is_text=True`，而带 NUL 的匹配行会进模型提示词、进
+`ModelStarted` 事件，然后被 PostgreSQL 顶回来
+（`UntranslatableCharacterError`）——`adapters/tools/workspace.py` 的 `_looks_binary`
+注释记着这次事故。工作区那边只嗅前 8 KiB，因为它面对的是 64 MB 的工作集；这里读取预算
+已经把文本限在 8 MiB 且都在内存里，所以做的是精确判断而不是嗅探。
+
+**实测**（本仓库 `src` 树，305 个文件 2.8 MB）：命中封顶 **0.09s**，完全不命中（因此读遍
+每个文件）**0.11s**。`timeout_seconds` 仍是 30——和 `project_read`／`project_list` 一致，
+两个数量级的余量。它在这次实测里真的把 `.DS_Store` 报成了「不是文本，未搜索」。
+
+### 二、真正卡住 shell 的不是子进程，是「人凭什么答应」
+
+`policy.shell_tools_enabled` 在配置里躺了九个 schema 版本，写着 `Literal[False]`，
+`docs/configuration.md` §3 把它列为不可环境覆盖的不变量之一。实测：它在 `src/` 里的
+消费者数量是**零**。它是配置对自己说的一句没人校验的话。
+
+但解冻它之前撞见一件更要紧的事。ADR-058 把 `sandbox_run` 的逐次批准默认关掉，论证是
+「摘要不能被同意」——批准卡片显示的是工具名加参数摘要。这个论证对沙箱成立：一个断网、
+只读、用完即毁的容器，爆炸半径不看参数就能说清，**参数是效果的细节**。
+
+对一条在你机器上跑的命令，这句话反过来：`rm -rf build` 和 `ls` 的爆炸半径完全由参数决定，
+**参数就是效果**。所以要修的是卡片，不是闸门。
+
+查下来的事实一半好一半坏：`ToolGateway` **早就**无条件构造了预览
+（`tool_gateway.py:603`，上限 2048、截断标 `...[truncated]`，文档字符串甚至点名了
+「那个重定向、那个第二路径、那个 `--force`」）——但它到不了任何人眼前。Code 的批准走
+`CodeApprovalRegistry`，而 `PendingApproval` 只带 `argument_digest`；实测 `web/src/` 里
+`approval_preview` 命中数为 **0**。
+
+本批把这条已经存在的信息接到端点：`InteractiveApprovalGate.request` 加参数、`_Pending` 与
+`PendingApproval` 带上、API 的 `PendingApprovalView` 带上、卡片渲染它。摘要留着并降到
+下面——两者回答不同的问题，摘要是 standing rule 的键，预览是人要同意的那句话，而预览
+**永远不得**用于匹配（截断后两次不同的调用可能共享一个预览）。
+
+### 三、`project_run`：为什么是 `destructive` 而不是 `external`
+
+不是措辞。`code.sandbox_requires_approval` 自 ADR-058 起默认 `False`，而
+`approval_required_risks` 只在它为真时才装 `external`——也就是说，把这个工具声明成
+`external` 的实际含义是「一条在你机器上跑的命令，默认不问你」。`destructive` 是仓库里
+唯一无条件武装的一档，也是 `UNREPEATABLE_RISKS` 拒绝给长效批准的一档。这两条性质此前
+一个使用者都没有。
+
+其余的决定与它们的理由都在 ADR 里，这里只记三条实测：
+
+- **闸门在 `[policy]` 而不是 `[code]`**，因为 `policy_fingerprint` 哈希那一段的每个字段。
+  实测：`config.code-local` 的 `policy_identity` 是 `policy-v1:b8d1414911cc29e7`，
+  `default`／`local`／`demo-local` 全是 `policy-v1:0e67f8dd84919551`。「这次运行跑在一个
+  允许驱动本机的部署上」因此是事后可查的，而不用去翻当时的配置文件。
+- **架构测试拦住了第一版实现。** `os.environ` 只允许出现在 `bootstrap/`，而我把环境擦洗
+  写在了适配器里。这条规则是对的，挪过去之后反而更清楚：决定一个子进程能看见什么本身
+  就是一次配置决定。`bootstrap/child_environment.py` 摘掉整个 `AW_*` 命名空间——是命名
+  空间而不是清单，因为清单要在每次新增设置时被一个正在想那个设置的人记起来。
+- **Task 拿不到它，理由不是 ADR-075。** ADR-075 那套重放论证在 Code 上一个字都不适用
+  （`code_session.py` 明写 a turn is not recoverable，没有租约、没有纪元、没有检查点）。
+  Task 侧的理由更简单：运行在 Worker 里、决定在 API 进程里，那条路上**没有闸门可问**。
+  一个必须每次问人的工具，放进一个问不到人的进程，只能变成每次都被拒绝或者假装问过。
+
+### 四、整链实测：给人看的那句话，和真正跑的那句话，是同一句
+
+单元测试覆盖到每一段，但没有一条看得到**接起来之后**的那件事。把真的 `ToolGateway`、
+真的 `EnvelopePolicyEngine`、真的 `CodeApprovalRegistry` 和一个真的临时目录接在一起，
+走完 `propose → prepare → authorize → invoke`：
+
+```
+risk ceiling derived from the tool list : destructive
+held at the gate                        : project_run
+risk shown on the card                  : destructive
+digest shown on the card                : 3c4f25321818598e…
+COMMAND shown on the card               : {"command":"ls && echo '--' && cat src/main.py"}
+standing approval refused               : project_run is destructive: it may be
+                                          approved once, not for the session
+--- what the command actually returned ---
+exit code: 0
+README.md
+src
+--
+print('hi')
+```
+
+四件事同时成立：上限推导出 `destructive`；调用**停住了**；卡片上是命令本身而不只是
+那 64 个十六进制字符；`approve_for_session` 被服务端拒绝，只有 `approve_once` 放行。
+输出里没有任何 `AW_` 开头的东西。
+
+按能力阶梯这是 **Demonstrated** 的证据，但**限定在本机**：走的是进程内的四个阶段，
+不是浏览器点的那一下。控制台那一侧只到 **Tested**（`CodePage.test.tsx` 断言卡片渲染
+了命令与「不可撤销」）。
+
+### 五、开出去的那条缺口：提示词还在描述另一个世界
+
+`code_prompt.py` 全文 "project" 出现 **0 次**。一个项目目录的回合今天被告知「你的工作集
+不是文件系统」「每次成功写入产生整套的新版本」——两句对它都是假的。这是 ADR-072／073
+留下的既有缺口，记为 **F-23**。
+
+本批只修与本工具相关的那一句：一个握着 shell 却被告知「没有 shell」的模型，会拒绝使用
+自己手里的工具——`CODER_SYSTEM_PROMPT_WITH_SANDBOX` 的注释里就记着这个失败的实测版本。
+`with_host_commands()` 因此是一次组合而不是三个新常量，并且要求恰好命中一条「没有
+shell」断言，所以将来任何一份基底提示词被改动都会在 import 时炸掉。剩下两句留在 F-23：
+错的方向是**保守**的，模型被告知的世界比它实际所在的更受限，所以不会误伤。
 
 一份新 ADR（[ADR-076](./adr/0076-a-window-nobody-approved-is-not-in-the-picture.md)），
 连带关掉一条已知缺口（**F-18**）。起因是产品侧的一句话——「Claude Desktop 的 computer use

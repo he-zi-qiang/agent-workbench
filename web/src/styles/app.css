@@ -4497,6 +4497,22 @@ p.aw-code-step-thought {
   color: var(--aw-warning);
 }
 
+/* 要批准的那句话本身。等宽、可换行、不横向滚动——一条命令的尾巴（重定向、
+   第二个路径、那个 --force）正是最需要被读到的部分，而横向滚动条是让它读不到
+   的最省事的办法。服务端已经把它截到 2048 字并标了 `...[truncated]`，所以这里
+   不再截；界面上再截一次会截掉标记本身。 */
+.aw-code-approval-preview {
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+  border-radius: 8px;
+  background: var(--aw-surface-sunken);
+  color: var(--aw-text);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .aw-code-approval-note {
   margin: 0;
   color: var(--aw-text-muted);
