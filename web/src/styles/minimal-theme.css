@@ -289,8 +289,8 @@ select {
     105deg,
     var(--aw-text-muted) 0%,
     var(--aw-text-muted) 35%,
-    var(--aw-accent) 47%,
-    color-mix(in srgb, var(--aw-accent) 62%, var(--aw-text)) 52%,
+    light-dark(#b6b6af, #ffffff) 48%,
+    color-mix(in srgb, white 76%, var(--aw-text)) 53%,
     var(--aw-text) 59%,
     var(--aw-text-muted) 72%,
     var(--aw-text-muted) 100%
@@ -2893,4 +2893,75 @@ select {
 .aw-global-rail :focus-visible {
   outline-color: var(--aw-accent);
   outline-offset: -2px;
+}
+
+/* Agent activity shimmer -------------------------------------------------
+ * A narrow white sweep, shared by Chat, Task and Code. It only exists on
+ * present-tense UI; settled steps and approval waits stay still. */
+@keyframes aw-agent-surface-sweep {
+  from {
+    transform: translateX(-190%) skewX(-18deg);
+  }
+
+  to {
+    transform: translateX(430%) skewX(-18deg);
+  }
+}
+
+.aw-live-activity::after {
+  position: absolute;
+  top: -45%;
+  bottom: -45%;
+  left: 0;
+  width: 18%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    light-dark(rgb(255 255 255 / 76%), rgb(255 255 255 / 13%)),
+    transparent
+  );
+  content: "";
+  pointer-events: none;
+  transform: translateX(-190%) skewX(-18deg);
+  animation: aw-agent-surface-sweep 2.6s ease-in-out infinite;
+}
+
+.aw-live-sweep,
+.aw-code-step.is-live .aw-code-step-thought > summary,
+.aw-code-step.is-live > p.aw-code-step-thought,
+.aw-code-action.is-running .aw-code-action-title,
+.aw-command-trace.is-running code {
+  color: var(--aw-text-soft);
+  background-image: linear-gradient(
+    105deg,
+    var(--aw-text-muted) 0%,
+    var(--aw-text-muted) 38%,
+    light-dark(#a8a8a1, #ffffff) 50%,
+    var(--aw-text) 57%,
+    var(--aw-text-muted) 70%,
+    var(--aw-text-muted) 100%
+  );
+  background-position: 130% 50%;
+  background-size: 260% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: aw-live-text-sweep 2.15s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aw-live-activity::after {
+    display: none;
+  }
+
+  .aw-live-sweep,
+  .aw-code-step.is-live .aw-code-step-thought > summary,
+  .aw-code-step.is-live > p.aw-code-step-thought,
+  .aw-code-action.is-running .aw-code-action-title,
+  .aw-command-trace.is-running code {
+    background-image: none;
+    color: var(--aw-text-soft);
+    -webkit-text-fill-color: currentcolor;
+    animation: none;
+  }
 }

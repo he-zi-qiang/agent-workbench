@@ -483,8 +483,14 @@ export function WorkPage() {
   // continuation started from the start page can land after the reader has
   // opened something else.
   const shownTask = useRef(selectedTaskId);
+  const detailPane = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     shownTask.current = selectedTaskId;
+    // The pane survives route changes, so its old scroll offset survives too.
+    // A task opened after reading another one's document otherwise lands in
+    // the middle of the new preview and hides the execution process we now
+    // lead with.
+    if (detailPane.current !== null) detailPane.current.scrollTop = 0;
   }, [selectedTaskId]);
 
   const createMutation = useMutation({
@@ -1174,7 +1180,7 @@ export function WorkPage() {
         </aside>
       </WorkspaceSidebarPortal>
 
-      <main className="aw-work-detail">
+      <main className="aw-work-detail" ref={detailPane}>
         {selectedTaskId !== undefined && selectedTask === undefined ? (
           <button
             aria-controls="workspace-sidebar-context"
@@ -1242,13 +1248,57 @@ export function WorkPage() {
               任务{formatStatus(selectedTask.status)}
             </p>
 
-            {/* Lead with the outcome. The execution trace remains directly
-                below it for inspection, while the side rail appears only when
-                there are additional files worth finding again later. */}
+            {/* The live process comes first while the task is unfolding. A
+                large document preview used to push the only explanation of
+                what the agent did several screens below the fold. */}
             <div
               className={`aw-work-body ${hasOutputRail ? "has-output" : ""}`}
             >
               <div className="aw-work-run">
+                <div
+                  className={`aw-work-process${
+                    isSettledStatus(selectedTask.status) ? "" : " is-live"
+                  }`}
+                >
+                  <header className="aw-work-process-header">
+                    <div>
+                      <span aria-hidden="true" className="aw-work-process-pulse" />
+                      <strong>执行过程</strong>
+                    </div>
+                    <small>
+                      {isSettledStatus(selectedTask.status)
+                        ? "完整记录"
+                        : "按任务事件持续同步"}
+                    </small>
+                  </header>
+                  <TaskStepStream
+                    lifecycle={lifecycle}
+                    loading={timeline.loading && timeline.events.length === 0}
+                    // Previewable files open in the reading column, same as a rail
+                    // click; only the kinds no viewer exists for still download.
+                    // "打开产物" that saved a file it could have shown was the bug.
+                    // No gate. The rail dropped its own version of this check and
+                    // wrote down why ("栏位不再预判"): sending an unpreviewable file
+                    // straight to a download was zero feedback for a click, and the
+                    // reading column already says what it cannot show. The step
+                    // stream kept the old behaviour, so the same .zip answered a
+                    // sentence in one place and a silent save in the other.
+                    onOpenArtifact={(artifact) => {
+                      if (selectedTaskId === undefined) return;
+                      setOpened({ taskId: selectedTaskId, artifact });
+                    }}
+                    stageEvents={stageEvents}
+                    status={selectedTask.status}
+                    taskEvents={taskEvents}
+                  />
+                  <TimelineGapNotice gaps={timelineGaps} />
+                  {timeline.error !== null ? (
+                    <ErrorNotice
+                      message={errorMessage(timeline.error, "读取执行过程失败")}
+                    />
+                  ) : null}
+                </div>
+
                 <TaskResult
                   // 永远是这次任务自己的产物。从文件栏点开的那个现在长在
                   // 右侧抽屉里，不再顶掉这一栏。
@@ -1306,33 +1356,6 @@ export function WorkPage() {
                       approvalMutation.error,
                       "提交审批决定失败",
                     )}
-                  />
-                ) : null}
-
-                <TaskStepStream
-                  lifecycle={lifecycle}
-                  loading={timeline.loading && timeline.events.length === 0}
-                  // Previewable files open in the reading column, same as a rail
-                  // click; only the kinds no viewer exists for still download.
-                  // "打开产物" that saved a file it could have shown was the bug.
-                  // No gate. The rail dropped its own version of this check and
-                  // wrote down why ("栏位不再预判"): sending an unpreviewable file
-                  // straight to a download was zero feedback for a click, and the
-                  // reading column already says what it cannot show. The step
-                  // stream kept the old behaviour, so the same .zip answered a
-                  // sentence in one place and a silent save in the other.
-                  onOpenArtifact={(artifact) => {
-                    if (selectedTaskId === undefined) return;
-                    setOpened({ taskId: selectedTaskId, artifact });
-                  }}
-                  stageEvents={stageEvents}
-                  status={selectedTask.status}
-                  taskEvents={taskEvents}
-                />
-                <TimelineGapNotice gaps={timelineGaps} />
-                {timeline.error !== null ? (
-                  <ErrorNotice
-                    message={errorMessage(timeline.error, "读取执行过程失败")}
                   />
                 ) : null}
 

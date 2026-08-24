@@ -1620,7 +1620,7 @@ describe("WorkPage task submission", () => {
     const step = screen.getAllByText("模型调用已完成")[0] as HTMLElement;
     await user.click(step);
 
-    expect(await screen.findByText("思考过程")).toBeInTheDocument();
+    expect(await screen.findByText("思考摘要")).toBeInTheDocument();
     expect(
       screen.getByText("先确认日期，再读取气象数据。"),
     ).toBeInTheDocument();

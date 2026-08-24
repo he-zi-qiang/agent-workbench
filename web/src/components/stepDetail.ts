@@ -134,7 +134,7 @@ export function describeEvent(event: EventEnvelope): StepDetail {
       // blanked by the publication fence on any shape whose answer could still
       // be withheld.
       const reasoning = text(payload.thinking_preview);
-      if (reasoning !== "—") detail.bodies.push(bodyOf("思考过程", reasoning));
+      if (reasoning !== "—") detail.bodies.push(bodyOf("思考摘要", reasoning));
       // The model's own words. Absent when the turn only proposed tool calls,
       // and absent in Chat, where an unpublished candidate never reaches state.
       if (output !== "—") detail.bodies.push(bodyOf("模型输出", output));
@@ -184,6 +184,17 @@ export function describeEvent(event: EventEnvelope): StepDetail {
       detail.summary = text(payload.tool_name);
       detail.facts = [fact("工具", text(payload.tool_name))];
       return detail;
+
+    case "ToolProgress": {
+      const elapsed = numberOf(payload.elapsed_ms);
+      const percent = numberOf(payload.percent);
+      detail.summary = summarize(text(payload.message));
+      detail.facts = [
+        ...(percent === null ? [] : [fact("进度", `${Math.round(percent)}%`)]),
+        ...(elapsed === null ? [] : [fact("已用时", `${elapsed} ms`)]),
+      ];
+      return detail;
+    }
 
     case "ToolCompleted": {
       const duration = numberOf(payload.duration_ms);

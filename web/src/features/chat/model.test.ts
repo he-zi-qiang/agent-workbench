@@ -1,5 +1,5 @@
 import type { EventEnvelope, LocalChatSession } from "../../api/types";
-import type { SseFrame, SseQuarantineFrame } from "../../api/sse";
+import type { SseFrame, SseLiveFrame, SseQuarantineFrame } from "../../api/sse";
 import { describe, expect, it } from "vitest";
 import {
   calledToolNames,
@@ -56,6 +56,31 @@ function frame(
     parent_event_id: null,
   };
   return { id: `cursor_${sequence}`, event: kind, envelope };
+}
+
+function liveFrame(
+  kind: string,
+  payload: Record<string, unknown> = {},
+  runId = "run_1",
+): SseLiveFrame {
+  return {
+    id: null,
+    event: kind,
+    envelope: {
+      schema_version: 1,
+      event_id: `evt_live_${kind}`,
+      stream_id: SESSION.sessionId,
+      run_id: runId,
+      event_type: kind,
+      durability: "transient",
+      timestamp: "2026-08-02T12:00:30Z",
+      payload: { kind, ...payload },
+      sequence: null,
+      task_id: null,
+      graph_node_id: null,
+      parent_event_id: null,
+    },
+  };
 }
 
 function quarantine(
@@ -451,6 +476,44 @@ describe("a tool call as one readable line", () => {
     expect(toolRows).toHaveLength(1);
     // And the query survives the overwrite, since only the proposal carried it.
     expect(toolRows[0]?.envelope.payload.argument_preview).toContain("北京今天天气");
+  });
+
+  it("shows transient tool progress on the existing row, then lets completion replace it", () => {
+    let state = bound(
+      frame("ToolProposed", 1, {
+        tool_call_id: "call_1",
+        tool_name: "web_search",
+        argument_preview: JSON.stringify({ query: "北京今天天气" }),
+      }),
+    );
+    state = reduceChatFrame(
+      state,
+      SESSION.sessionId,
+      liveFrame("ToolProgress", {
+        tool_call_id: "call_1",
+        message: "读取第 3 个来源",
+        percent: 50,
+        elapsed_ms: 12_000,
+      }),
+    ).state;
+
+    let activity = activityFor(state, "tool:call_1");
+    expect(activity?.label).toBe("web_search");
+    expect(activity?.detail).toBe("读取第 3 个来源 · 50% · 12 秒");
+    expect(activity?.envelope.payload.argument_preview).toContain("北京今天天气");
+
+    state = reduceChatFrame(
+      state,
+      SESSION.sessionId,
+      frame("ToolCompleted", 2, {
+        tool_call_id: "call_1",
+        duration_ms: 12_481,
+      }),
+    ).state;
+    activity = activityFor(state, "tool:call_1");
+    expect(activity?.kind).toBe("ToolCompleted");
+    expect(activity?.label).toBe("web_search");
+    expect(activity?.detail).toBe("12481 ms");
   });
 
   it("keeps the tool's name on the row after it finishes", () => {

@@ -51,10 +51,24 @@
  * question a reader has while watching.
  */
 
-import { MoreHorizontal } from "lucide-react";
+import {
+  Check,
+  FilePenLine,
+  FileSearch,
+  FolderOpen,
+  MoreHorizontal,
+  Search,
+  Sparkles,
+  TerminalSquare,
+  Wrench,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 import type { WorkspaceEntryView } from "../../api/types";
+import { CommandTrace } from "../../components/CommandTrace";
+import { LiveActivity, type LiveActivityKind } from "../../components/LiveActivity";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { presentActivity } from "../../components/activityPresentation";
 import type { StepGroup } from "../../components/stepGroups";
 import type { ToolProgressView } from "./useCodeStream";
 import { FileCard } from "./FileCard";
@@ -92,12 +106,40 @@ export function CodeTurn({
   /** Live tool progress by `tool_call_id`. Empty except on the live block. */
   toolProgress: ReadonlyMap<string, ToolProgressView>;
 }) {
+  const activeStep = [...block.steps]
+    .reverse()
+    .find(
+      (step) =>
+        step.modelCallId === liveThinkingCallId ||
+        (step.group !== null && step.group.outcome === "running"),
+    );
+  const activeProgress =
+    activeStep?.group === null || activeStep?.group === undefined
+      ? undefined
+      : toolProgress.get(toolCallIdOf(activeStep.group));
+  const liveStatus = codeLiveStatus({
+    activeProgress,
+    activeStep,
+    answer: liveAnswer,
+    blockLive: block.live,
+    thinking: liveThinking,
+  });
+
   return (
     <li className="aw-code-turn">
       <div className="aw-code-said">
         <h3>你</h3>
         <p>{block.instruction}</p>
       </div>
+
+      {liveStatus === null ? null : (
+        <LiveActivity
+          detail={liveStatus.detail}
+          kind={liveStatus.kind}
+          {...(liveStatus.meta === null ? {} : { meta: liveStatus.meta })}
+          title={liveStatus.title}
+        />
+      )}
 
       {block.steps.length === 0 ? null : (
         <ol aria-label="这一轮做了什么" className="aw-code-steps">
@@ -203,12 +245,22 @@ function TurnStepRow({
     step.group !== null && step.group.outcome === "running"
       ? toolProgress.get(toolCallIdOf(step.group))
       : undefined;
+  const presentation = step.group === null ? null : presentActivity(step.group);
 
   return (
-    <li className={`aw-code-step${live ? " is-live" : ""}`}>
+    <li
+      aria-current={step.group?.outcome === "running" ? "step" : undefined}
+      className={`aw-code-step${live ? " is-live" : ""}${
+        step.group?.outcome === "running" ? " is-running" : ""
+      }`}
+    >
       {text === "" ? null : <Thought live={live} text={text} />}
       {step.group === null ? null : (
         <div className={`aw-code-action is-${step.group.outcome}`}>
+          <ActionIcon
+            outcome={step.group.outcome}
+            toolName={presentation?.toolName ?? null}
+          />
           <span className="aw-code-action-title">{step.group.title}</span>
           {step.group.subject === null ? null : (
             <span className="aw-code-action-subject" title={step.group.subject}>
@@ -220,8 +272,44 @@ function TurnStepRow({
           </span>
         </div>
       )}
+      {presentation?.command === null || presentation?.command === undefined ? null : (
+        <CommandTrace
+          command={presentation.command}
+          running={step.group?.outcome === "running"}
+        />
+      )}
       {progress === undefined ? null : <Progress progress={progress} />}
     </li>
+  );
+}
+
+function ActionIcon({
+  outcome,
+  toolName,
+}: {
+  outcome: StepGroup["outcome"];
+  toolName: string | null;
+}) {
+  const Icon =
+    outcome === "failed" || outcome === "denied"
+      ? X
+      : outcome === "ok"
+        ? Check
+        : toolName === "sandbox_run"
+          ? TerminalSquare
+          : toolName === "workspace_read"
+            ? FileSearch
+            : toolName === "workspace_list"
+              ? FolderOpen
+              : toolName === "workspace_grep"
+                ? Search
+                : toolName === "workspace_write" || toolName === "workspace_edit"
+                  ? FilePenLine
+                  : Wrench;
+  return (
+    <span className="aw-code-action-icon" aria-hidden="true">
+      <Icon size={13} />
+    </span>
   );
 }
 
@@ -261,6 +349,7 @@ function Progress({ progress }: { progress: ToolProgressView }) {
               aria-live={
                 index === progress.lines.length - 1 ? "polite" : undefined
               }
+              className={index === progress.lines.length - 1 ? "is-latest" : undefined}
               key={index}
             >
               {line}
@@ -335,7 +424,14 @@ function Thought({ live, text }: { live: boolean; text: string }) {
     ? "aw-code-step-thought is-live"
     : "aw-code-step-thought";
 
-  if (body === "") return <p className={className}>{head}</p>;
+  if (body === "") {
+    return (
+      <p className={className}>
+        <ThoughtLabel live={live} />
+        {head}
+      </p>
+    );
+  }
   return (
     <details
       className={className}
@@ -344,10 +440,71 @@ function Thought({ live, text }: { live: boolean; text: string }) {
       }}
       open={open}
     >
-      <summary>{head}</summary>
+      <summary>
+        <ThoughtLabel live={live} />
+        {head}
+      </summary>
       <p className="aw-code-step-thought-body">{body}</p>
     </details>
   );
+}
+
+function ThoughtLabel({ live }: { live: boolean }) {
+  return (
+    <span className="aw-code-thought-label">
+      <Sparkles aria-hidden="true" size={12} />
+      {live ? "正在思考" : "思考摘要"}
+    </span>
+  );
+}
+
+function codeLiveStatus({
+  activeProgress,
+  activeStep,
+  answer,
+  blockLive,
+  thinking,
+}: {
+  activeProgress: ToolProgressView | undefined;
+  activeStep: TurnStep | undefined;
+  answer: string;
+  blockLive: boolean;
+  thinking: string;
+}): { title: string; detail: string; kind: LiveActivityKind; meta: string | null } | null {
+  if (!blockLive && activeProgress === undefined) return null;
+  if (thinking !== "") {
+    return {
+      title: "正在思考下一步",
+      detail: "分析目标并选择接下来的动作",
+      kind: "thinking",
+      meta: null,
+    };
+  }
+  if (activeStep?.group !== null && activeStep?.group !== undefined) {
+    return {
+      title: activeStep.group.title,
+      // The terminal block directly below owns stdout/stderr and elapsed time.
+      // Repeating its newest line here makes one piece of output look like two
+      // events and causes screen readers to announce it twice.
+      detail: activeStep.group.subject ?? "命令正在执行",
+      kind: "tool",
+      meta: null,
+    };
+  }
+  if (answer !== "") {
+    return {
+      title: "正在整理结果",
+      detail: "回答正在逐字生成",
+      kind: "answer",
+      meta: null,
+    };
+  }
+  return {
+    title: "正在处理任务",
+    detail: "等待下一条执行记录",
+    kind: "workflow",
+    meta: null,
+  };
 }
 
 /**

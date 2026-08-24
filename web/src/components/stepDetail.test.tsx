@@ -158,7 +158,7 @@ describe("describeEvent：结束事件的 token 用量", () => {
   });
 });
 
-describe("describeEvent：ModelCompleted 的思考过程", () => {
+describe("describeEvent：ModelCompleted 的思考摘要", () => {
   function completed(payload: Record<string, unknown>): EventEnvelope {
     return event("ModelCompleted", {
       model_call_id: "mc_1",
@@ -174,7 +174,7 @@ describe("describeEvent：ModelCompleted 的思考过程", () => {
     );
     const labels = detail.bodies.map((body) => body.label);
 
-    expect(labels).toEqual(["思考过程", "模型输出"]);
+    expect(labels).toEqual(["思考摘要", "模型输出"]);
     expect(detail.bodies[0]?.text).toBe("先看资料再回答。");
   });
 

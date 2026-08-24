@@ -1,6 +1,18 @@
-import { ChevronRight } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  Circle,
+  Clock3,
+  LoaderCircle,
+  Minus,
+  Sparkles,
+  X,
+} from "lucide-react";
 import type { ArtifactRef, EventEnvelope } from "../api/types";
+import { CommandTrace } from "./CommandTrace";
+import { LiveActivity } from "./LiveActivity";
 import { StepDisclosure } from "./StepDisclosure";
+import { presentActivity } from "./activityPresentation";
 import {
   groupSteps,
   summariseGroups,
@@ -65,6 +77,34 @@ const OUTCOME_LABELS: Readonly<Record<StepOutcome, string>> = {
   denied: "被拒绝",
   running: "进行中",
 };
+
+function StreamMarker({ state }: { state: StreamStageState }) {
+  const Icon =
+    state === "done"
+      ? Check
+      : state === "failed"
+        ? X
+        : state === "active"
+          ? LoaderCircle
+          : state === "waiting"
+            ? Clock3
+            : state === "skipped"
+              ? Minus
+              : Circle;
+  return (
+    <span className="aw-stream-dot" aria-hidden="true">
+      <Icon className={state === "active" ? "aw-spin" : undefined} size={10} />
+    </span>
+  );
+}
+
+/** One sentence on the primary timeline; the complete preview stays below. */
+function reasoningSummary(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  const sentence = /^.{1,176}?[。！？.!?](?:\s|$)/u.exec(collapsed)?.[0];
+  if (sentence !== undefined) return sentence.trim();
+  return collapsed.length <= 176 ? collapsed : `${collapsed.slice(0, 175)}…`;
+}
 
 /**
  * A tool call's authorization sequence, on the collapsed line.
@@ -138,11 +178,52 @@ export function StepStream({
    */
   const groupStep = (group: StepGroup) => {
     const only = group.events.length === 1 ? group.events[0] : undefined;
-    if (only !== undefined) return step(only);
+    const presentation = presentActivity(group);
+    const reasoning =
+      presentation.reasoning === null ? null : (
+        <p className="aw-activity-reasoning">
+          <Sparkles aria-hidden="true" size={13} />
+          <span>{`思路摘要 · ${reasoningSummary(presentation.reasoning)}`}</span>
+        </p>
+      );
+    const command =
+      presentation.command === null ? null : (
+        <CommandTrace
+          command={presentation.command}
+          running={group.outcome === "running"}
+        />
+      );
+
+    // A single durable event still gets the readable command/thought
+    // projection. Chat deliberately keeps one activity per logical call, so a
+    // live ToolProgress or its completion often is the whole group; returning
+    // the raw disclosure here would hide exactly the progress we just kept.
+    if (only !== undefined) {
+      return (
+        <li
+          className={
+            isKnownEvent === undefined || isKnownEvent(only) ? "" : "is-unknown"
+          }
+          key={group.key}
+        >
+          {reasoning}
+          <StepDisclosure
+            event={only}
+            title={eventTitle(only)}
+            {...(onOpenArtifact === undefined ? {} : { onOpenArtifact })}
+          />
+          {command}
+        </li>
+      );
+    }
 
     return (
       <li key={group.key}>
-        <details className={`aw-step-group is-${group.outcome}`}>
+        {reasoning}
+        <details
+          className={`aw-step-group is-${group.outcome}`}
+          open={group.outcome === "running" ? true : undefined}
+        >
           <summary className="aw-step-group-head">
             <ChevronRight
               aria-hidden="true"
@@ -160,6 +241,7 @@ export function StepStream({
             </span>
             <GateBeads steps={group.gate} />
           </summary>
+          {command}
           <ol className="aw-stream-events">{group.events.map(step)}</ol>
         </details>
       </li>
@@ -169,15 +251,43 @@ export function StepStream({
   // The same vocabulary the rows use, so a digest cannot read half-translated:
   // without this a stage summarised as "RunStarted · 模型作答 · RunCompleted".
   const groupsOf = (events: EventEnvelope[]) => groupSteps(events, eventTitle);
+  const activeStage = stages.find((stage) => stage.state === "active");
+  const activeGroups = activeStage === undefined ? [] : groupsOf(activeStage.events);
+  const activeGroup =
+    activeGroups.find((group) => group.outcome === "running") ?? activeGroups.at(-1);
+  const activePresentation =
+    activeGroup === undefined ? null : presentActivity(activeGroup);
+  const activeKind =
+    activePresentation?.toolName !== null && activePresentation?.toolName !== undefined
+      ? "tool"
+      : activePresentation?.reasoning !== null &&
+          activePresentation?.reasoning !== undefined
+        ? "thinking"
+        : "workflow";
+  const completedStages = stages.filter(
+    (stage) => stage.state === "done" || stage.state === "skipped",
+  ).length;
 
   return (
     <section className="aw-stream" aria-label={ariaLabel}>
+      {!running || activeStage === undefined ? null : (
+        <LiveActivity
+          detail={
+            activeGroup?.subject === null || activeGroup?.subject === undefined
+              ? activeStage.title
+              : `${activeStage.title} · ${activeGroup.subject}`
+          }
+          kind={activeKind}
+          meta={`${String(completedStages)} / ${String(stages.length)} 阶段`}
+          title={activeGroup?.title ?? activeStage.title}
+        />
+      )}
       <ol className="aw-stream-steps">
         {stages.map((stage) => {
           const groups = groupsOf(stage.events);
           return (
           <li className={`aw-stream-state is-${stage.state}`} key={stage.id}>
-            <span className="aw-stream-dot" aria-hidden="true" />
+            <StreamMarker state={stage.state} />
             {stage.events.length === 0 ? (
               <div className="aw-stream-head is-empty">
                 <span className="aw-stream-title">{stage.title}</span>

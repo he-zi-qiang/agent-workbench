@@ -32,6 +32,7 @@ const STAGES: ReadonlyArray<{
       "ToolProposed",
       "PermissionResolved",
       "ToolStarted",
+      "ToolProgress",
       "ToolCompleted",
       "ToolFailed",
     ],
