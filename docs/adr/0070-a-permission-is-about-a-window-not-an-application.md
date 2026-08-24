@@ -16,8 +16,11 @@
   `agent-computer-mcp` 入口）
 - 依赖：[ADR-044](./0044-no-remote-no-production-identity.md)（先有远端部署才谈得上
   生产身份——本 ADR 的 loopback 绑定比它更硬：一个监听非回环的端口就是一台远程输入
-  设备）、[ADR-025](./0025-mcp-is-an-outer-adapter.md)（MCP 只是外层适配器——
-  `retryable_effects = false` 那条声明由它要求）、
+  设备）、[ADR-025](./0025-mcp-adapter.md)（MCP 只是外层适配器——
+  `retryable_effects = false` 那条声明由它的 §2.7 要求。写本 ADR 时，这六个工具
+  够不着 Task 只是那条声明的副作用；[ADR-075](./0075-a-ledgered-effect-is-issued-not-proposed.md)
+  收窄了 §2.7 的重开条件，把这个副作用本身立成决策：非可重放的 MCP 工具只能由
+  自己发起调用的确定性节点带进 Task，不由模型提案）、
   [ADR-029](./0029-ephemeral-sandbox.md)（一次性沙箱——tier `click` 的拒绝文案把
   模型推回的正门就是它）
 

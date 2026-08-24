@@ -30,6 +30,7 @@ from agent_workbench.adapters.persistence.notifications import (
     TaskReadyListener,
 )
 from agent_workbench.apps.task_worker.composition import (
+    LedgeredToolInAgentProfileError,
     RealTaskHandlersUnavailableError,
     build_task_worker_dependencies,
 )
@@ -57,6 +58,7 @@ from agent_workbench.domain.schema import JsonObject
 from agent_workbench.ports.model import ModelPort
 from agent_workbench.workflows.agent_profiles import (
     V1_AGENT_PROFILES,
+    AgentProfile,
     permitted_tools,
     profile_for,
     profile_with_dynamic_tools,
@@ -369,6 +371,54 @@ def test_a_real_worker_registers_every_tool_its_agents_can_ask_for(
     # bare subset check if the profiles happened to request nothing either.
     assert "workspace_write" in requested
     assert set(requested) <= set(registered), sorted(set(requested) - set(registered))
+
+
+def test_a_ledgered_tool_in_a_profile_stops_the_process_starting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-075 §4, from the end that has to be a process and not a run.
+
+    ``ToolGateway.advertise`` also refuses this, and still does -- but per
+    agent run, and what it raises the runtime turns into a failed run. So the
+    deployment described here would come up healthy and fail one node on every
+    Task, which reads like a broken tool rather than a profile that should
+    never have been written. This is the assertion that it does not come up.
+
+    The roster is substituted rather than a real profile edited, because the
+    situation cannot occur on its own: ADR-025 §2.6 pins every MCP binding to
+    ``idempotency="safe"``, ``ToolBinding`` refuses to pair that with an
+    operation key, and ``export_artifact`` is issued by the ``export`` node and
+    named in no profile. The test above -- the same assembly, unsubstituted,
+    reaching a live Worker -- is what says the guard is not simply raising.
+    """
+
+    import agent_workbench.apps.task_worker.composition as composition
+
+    _patch_real_runtime(monkeypatch)
+    monkeypatch.setattr(
+        composition,
+        "AGENT_ROSTERS",
+        (
+            (
+                "v1",
+                (
+                    AgentProfile(
+                        name="writer",
+                        node="synthesize",
+                        system_prompt="",
+                        admits=frozenset({"objective"}),
+                        # The one ledgered tool this Worker really does
+                        # register, so the guard is reading an assembled
+                        # binding rather than a name nothing backs.
+                        tool_names=("export_artifact",),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(LedgeredToolInAgentProfileError, match="export_artifact"):
+        asyncio.run(build_task_worker_dependencies(_projected_config()))
 
 
 def _sandbox_config(**overrides: object) -> TaskWorkerRuntimeConfig:

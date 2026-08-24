@@ -530,6 +530,21 @@ class ClaudeLikeAgentRuntime:
             task_id=request.trace.task_id,
             workflow_thread_id=request.trace.workflow_thread_id,
             graph_node_id=request.trace.graph_node_id,
+            # Forwarded rather than left None, which is what it was until
+            # 2026-08-23. The omission read as a deliberate narrowing and was
+            # not one: it silently made the side-effect ledger unreachable from
+            # the tool loop, because `_invoke_ledgered` refuses a call whose
+            # context cannot name an epoch. Nothing noticed, because the only
+            # ledgered tool in the repository is issued by a deterministic node
+            # that builds its own context (`_tool_execution_context`) and
+            # supplies the epoch there.
+            #
+            # Restoring it also removes an accidental guardrail: with an epoch
+            # present, a ledgered tool placed in a profile would now dispatch on
+            # nothing but a model's say-so. `ToolGateway.advertise` refuses to
+            # offer one, which is the guardrail on purpose rather than by
+            # omission (ADR-075).
+            lease_epoch=request.trace.lease_epoch,
         )
 
     async def _stream_model(
@@ -876,6 +891,19 @@ class ClaudeLikeAgentRuntime:
                 )
             )
 
+        # What this run was offered, compared against what it took.
+        #
+        # The offer is already an intersection -- `permitted_tools` narrows the
+        # profile by the Task's envelope, so a sub-agent can never hold more
+        # authority than the Task it belongs to. What it was not, until now, is
+        # binding: the Policy Gateway resolves a proposed name against the whole
+        # registry and then asks the *Task-wide* envelope whether it permits the
+        # binding. A name the Task allows but this node was never offered --
+        # another audience's tool, in a Worker that registered both -- passed
+        # that check, because the envelope is the Task's and the offer is the
+        # node's, and nothing compared the two.
+        offered = frozenset(request.tool_names)
+
         # A call the run has already made is refused before it is prepared, for
         # the same reason a repeated id is: nothing downstream can tell the two
         # apart, and running it again spends budget to re-learn what the run
@@ -886,9 +914,40 @@ class ClaudeLikeAgentRuntime:
         # context.
         repeatable: list[ToolCall] = []
         for call in admitted:
+            # Counted before anything else can skip the rest of the loop, and
+            # that ordering is the whole guard. A refusal is cheap in tokens
+            # and free in effects, so a model that keeps proposing the same
+            # refused call costs nothing per call and everything per run: it
+            # burns turns until the step ceiling. The circuit breaker only
+            # works if every admitted call reaches it, including the ones the
+            # checks below are about to turn away.
             signature = _call_signature(call)
             seen_before = ledger.call_counts.get(signature, 0)
             ledger.call_counts[signature] = seen_before + 1
+            if seen_before < MAX_IDENTICAL_CALLS and (
+                call.tool_name not in offered and self._gateway.knows(call.tool_name)
+            ):
+                # `knows` and not just the offer, so the two failures keep their
+                # own names. A tool this process never registered is still an
+                # `unknown_tool`, answered further down by the gateway that owns
+                # that vocabulary; only a tool that exists and was withheld from
+                # *this* run is a policy refusal, and the difference is what an
+                # operator reads to tell a hallucinated name from a profile that
+                # is missing something it needs.
+                results.append(
+                    await self._gateway.refuse(
+                        call,
+                        ErrorInfo(
+                            code="policy_denied",
+                            message=(
+                                f"{call.tool_name} was not offered to this run. "
+                                "Use one of the tools you were given."
+                            ),
+                        ),
+                        sink=sink,
+                    )
+                )
+                continue
             if seen_before >= MAX_IDENTICAL_CALLS:
                 ledger.repeat_refusals += 1
                 results.append(

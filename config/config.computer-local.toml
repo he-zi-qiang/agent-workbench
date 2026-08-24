@@ -13,15 +13,23 @@
 # Three things must already be true before this profile does anything:
 #
 #   uv sync --extra computer-use      # pyobjc; macOS only, not installed by default
-#   agent-computer-mcp                # the server, on 127.0.0.1:8768
+#   scripts/dev.sh computer-server    # the server (`agent-computer-mcp`), on
+#                                     # 127.0.0.1:8768
 #   System Settings > Privacy & Security > Screen Recording, and
 #   > Accessibility, both granted to whatever runs that server
 #
 # If any of them is missing the server exits at startup with a message naming
-# the one that is missing, and the Worker registers no screen tool at all --
-# rather than registering tools that post events nothing receives, which is
-# what macOS does to a process without the Accessibility grant: `CGEventPost`
-# returns success having done nothing.
+# the one that is missing, and an MCP client is handed no screen tool at all --
+# rather than tools that post events nothing receives, which is what macOS does
+# to a process without the Accessibility grant: `CGEventPost` returns success
+# having done nothing.
+#
+# Satisfying all three does not put these tools into a Task, and nothing here
+# ever will: `retryable_effects = false` below keeps them out of every Task
+# authorization envelope and out of the Worker's registry, at both ends. They
+# are reached by speaking MCP to this server -- `scripts/dev.sh computer-check`
+# is a working example -- which is also why there is deliberately no
+# `computer-api` / `computer-worker` pair to start.
 #
 # What this profile does NOT do is decide which applications may be touched.
 # That is a per-session decision the person makes through `request_access`, and
@@ -65,6 +73,25 @@ tools = ["request_access", "screenshot", "left_click", "type", "key", "scroll"]
 # calls. It may not: a click is not a GET. Replaying `left_click` presses the
 # button a second time, and the second press lands on whatever is under the
 # cursor *now*, which is not what was there when the first one was authorized.
+#
+# What it *causes* is a refusal at both ends of the Task path:
+# `configured_mcp_tool_names` (bootstrap/projections.py:144) skips a
+# non-retryable server, so no name declared above ever enters a Task
+# authorization envelope; and the Worker logs `mcp_server_skipped_nonretryable`
+# (apps/task_worker/composition.py:871) and binds none of them. Measured
+# 2026-08-23: a Worker on this profile comes up holding zero MCP tools.
+#
+# Until 2026-08-23 that pair of refusals was incidental -- two `continue`
+# statements, asserted by no test that reads this profile, so deleting either
+# one would have widened every Task submitted here by six screen-control tools
+# and broken nothing. ADR-075 makes it the decision instead:
+# a non-retryable MCP tool reaches a Task only through a deterministic node
+# that issues the call itself, never by model proposal.
+# `tests/config/test_local_computer_profile.py` is what turns undoing it into
+# a failing test -- no screen name in the envelope, and the risk ceiling stays
+# `write` rather than being raised to `external`, which any non-empty MCP name
+# list would do to every Task here, including the ones that never touch a
+# screen.
 retryable_effects = false
 # `synthesis`, not `research`. Reading the outside world is research and
 # goes to `researcher_external`; driving an application is doing the work,

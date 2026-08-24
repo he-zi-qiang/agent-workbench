@@ -2,7 +2,10 @@
 
 - 决策点：第三方 MCP 工具如何进入自研 Agent Runtime，而不绕过 Tool Gateway、Task
   授权信封、重放边界与 artifact 所有权
-- 状态：**接受（2026-08-09 实现修订）**
+- 状态：**接受（2026-08-09 实现修订）**，§2.7 与 §5 的重开条件已被
+  [ADR-075](./0075-a-ledgered-effect-is-issued-not-proposed.md) 收窄：那句「需要远端
+  幂等键，或一个能重放完整 `ToolResult` 的账本」兑现了也解不开锁，因为卡住的是
+  **键**而不是载荷。§2.7 把非可重放 server 挡在 Task 外的**决定本身不变**
 - 日期：2026-08-09
 - 影响：新增 `adapters/mcp/`；配置 schema `1.6 → 1.7 → 1.8`；Task Worker
   组合根改为异步启动；`writer/synthesize` 获得受信封收窄的动态 MCP 工具源；

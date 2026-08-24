@@ -655,6 +655,7 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 | F-18 | computer use 的截图不排除未批准的窗口，且抓屏是遮盖不是合成器过滤 | **未实现** |
 | F-19 | computer use 的批准是进程级的，不是 MCP 会话级的 | 已知代价 |
 | F-20 | 跨产品归属的三处数据没人再读写（ADR-074 之后） | 已知代价 |
+| F-21 | 不可重试的 MCP 工具（点击、截图）进不了 Task | **拒绝** |
 
 ### F-20 跨产品归属的三处数据没人再读写 —— 已知代价
 
@@ -1080,6 +1081,64 @@ exclude_is_refused_rather_than_trusted`），今天走不到——因为要排�
 
 **真要修**：把 grant 挂到 MCP 会话上（`stateless_http=False` 已经开着，会话是存在
 的），代价是 `create_server` 要从「一个 gate」变成「按会话取 gate」。
+
+### F-21 不可重试的 MCP 工具进不了 Task —— 拒绝
+
+**证据**：[config.computer-local.toml:95](../config/config.computer-local.toml:95)
+`retryable_effects = false`；两处拒绝各自独立生效——
+[projections.py:155](../src/agent_workbench/bootstrap/projections.py:155)
+把这类服务器的工具名排除在新 Task 的授权信封之外，
+[composition.py:871](../src/agent_workbench/apps/task_worker/composition.py:871)
+连绑定都不建，只留一行 `mcp_server_skipped_nonretryable`。
+
+**`false` 的含义没变，变的是它的身份。** 此前它只是一句配置注释加两处 `continue`：
+后果散在两个文件里，没有 ADR，也没有测试。本次把它记成决定（ADR-075），补了护栏，
+补了测试。
+
+**ADR-025 §2.7 给自己留的重开条件不成立。** 它写的是「真正的 exactly-once MCP 需要
+远端幂等键，或让账本持久化并回放完整 ToolResult，另开工作包实现」——那两样补齐了也
+不解锁任何东西，因为**挡路的是键，不是载荷**。`ToolBinding.operation_key` 是
+`(ToolCall, ExecutionContext) -> str`，账本按 `(task_id, operation_key)` 找行；而一次
+运行里没有任何东西能把「同一个意图被重放」和「一个新意图恰好长得一样」分开：
+`graph_node_id` 被节点内所有调用共用，`agent_run_id` 每次恢复重铸，`lease_epoch` 每次
+回收改变，`tool_call_id` 每轮重铸——仓库里唯一那把上账键为此写明自己**不能**由
+`tool_call_id` 派生（[export_artifact.py:104](../src/agent_workbench/adapters/tools/export_artifact.py:104)）。
+两种派生法各有反例：
+
+1. **按参数派生**会把合法的第二次相同点击折叠进第一次的存档结果，而
+   [agent_runtime.py:249](../src/agent_workbench/runtime/agent_runtime.py:249)
+   的 `MAX_IDENTICAL_CALLS = 3` 是**故意**允许一次运行里出现三次相同调用的。
+2. **按位置派生**（节点内第 n 次上账的调用）设计过，因正确性被否：它毁掉账本的重试
+   身份。一次在位置 5 记为 `intended` 的点击，其 Worker 死掉后由重放的模型在位置 6
+   重新提出，拿到**新键**，于是被做第二遍——正是账本存在的理由。
+
+**只读的那一半也不成立，理由与幂等无关**：模型没有视觉通路。
+[messages.py:83](../src/agent_workbench/domain/messages.py:83) 的 `ContentBlock` 是
+`TextBlock | ToolUseBlock | ToolResultBlock`，没有图像成员，而 `map_remote_result` 把
+每个 `RemoteBinaryBlock` 都送去 artifact。放进来的 `screenshot` 交到模型手里的只是一句
+分辨率——那是让 Agent 蒙着眼睛开界面。
+
+**本次落地的护栏**：[tool_gateway.py:296](../src/agent_workbench/runtime/tool_gateway.py:296)
+的 `advertise` 对任何带 `operation_key` 的绑定抛 `PolicyDeniedError`——「这个工具记录
+外部副作用，由图节点发起，永远不摆到模型面前」（`unknown_tool` 留给进程根本没注册的
+名字，两个码分得清「没有这个工具」和「有但不给模型」）。同一条规则在装配期还有一道：
+[composition.py](../src/agent_workbench/apps/task_worker/composition.py) 的
+`_assert_no_profile_offers_a_ledgered_tool` 让一个把上账工具写进 profile 的部署起不来，
+而不是每个 Task 挂一次。它今天**拒不到任何东西**（没有 profile
+声明上账工具），而这正是预期形状：它替下的是一条**意外**的护栏——在 trace 带上 lease
+epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更深处被拒，看起来像决定，其实
+是遗漏。`export_artifact` 不受影响，它从不过 `advertise`。测试在
+[test_tool_gateway_ledger.py:640](../tests/runtime/test_tool_gateway_ledger.py:640)
+三条，以及
+[test_local_computer_profile.py:75](../tests/config/test_local_computer_profile.py:75)
+的「没有任何屏幕工具进得了 Task 授权信封」。
+
+**替代的重开条件**（ADR-075 用它换掉 ADR-025 §2.7 那条）：一个不可重试的 MCP 工具
+进入 Task 的唯一方式，是**由一个确定性节点自己发起这次调用**，像
+[task_export.py](../src/agent_workbench/adapters/tools/task_export.py) 那样，而不是由
+模型提出。要把它摆到模型面前，还额外需要一条今天不存在的视觉通路。
+
+**做完的判据**：不适用。要改，先改 ADR-075。
 
 ## 优先级建议
 

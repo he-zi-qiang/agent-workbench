@@ -50,6 +50,12 @@
 | [ADR-051 实时帧没有位置，所以它不许有 id](./0051-a-live-frame-has-no-position.md) | 进程内的 transient 事件该不该到达浏览器；它和"只有 durable 事件有游标"怎么共存；慢读者拖住实时通道时是断开还是别的 | 接受，收窄基线里"溢出即断开"一句 |
 | [ADR-052 撤不回的答案才可以边写边给人看](./0052-only-an-unwithdrawable-answer-may-be-shown-early.md) | `AnswerReleaseSink` 是否对每个 Chat 形态都抹掉 `ModelDelta.text`；判据是什么、由谁给出 | 接受，澄清基线 §5 里 answer release gate 的作用域 |
 | [ADR-054 摘要没法被同意](./0054-a-digest-cannot-be-consented-to.md) | 停在审批上的调用，参数正文要不要进事件流；靠 `record_step_inputs` 还是别的判据 | 接受，对「事件只描述不复现」开一个有范围的例外 |
+| [ADR-075 账本记的是被发起的效果，不是被提议的效果](./0075-a-ledgered-effect-is-issued-not-proposed.md) | `retryable_effects = false` 的 MCP server 该不该经由账本进 Task；ADR-025 §2.7 给自己留的那句重开条件兑现了能不能解锁 | 接受，保留拒绝并收窄 ADR-025 §2.7／§5 的重开条件——卡住的是键，不是载荷 |
+
+> **这张表在 ADR-054 之后就断了：0055–0074 没有行**（上面那条 ADR-075 是本批
+> 顺手补的，不代表表已经跟上）。那二十份 ADR 都在同一个目录里，`ls docs/adr/`
+> 就能看见。在补齐之前，**目录本身才是权威清单**，这张表只是一份停在过去某一天
+> 的摘要——按它来判断「有没有这条决策」会漏。
 
 
 ## 号段预留 0047–0059

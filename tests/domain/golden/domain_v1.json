@@ -91,6 +91,7 @@
     "trace": {
       "agent_run_id": "run_0000000000000000000000000000001",
       "graph_node_id": null,
+      "lease_epoch": null,
       "parent_agent_run_id": null,
       "task_id": null,
       "workflow_thread_id": null

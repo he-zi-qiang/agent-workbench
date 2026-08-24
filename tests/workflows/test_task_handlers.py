@@ -893,6 +893,26 @@ def test_an_invocation_carries_no_deadline_unless_one_was_configured() -> None:
     assert invocation.context.budget.deadline is None
 
 
+def test_the_node_runs_under_the_epoch_it_was_claimed_with() -> None:
+    """The trace carries the claim, and it carries the *lease's* copy of it.
+
+    The Registry row agrees at this instant -- `resolve` has just compared them
+    and raised if they differed -- so the two are indistinguishable here and
+    would be indistinguishable in any test that only read one of them. They
+    stop agreeing at exactly the moment that matters: a Worker whose lease
+    expired mid-node, whose row now names its replacement's epoch. Reading the
+    row there would hand the fence the number it is fencing against.
+    """
+
+    registry = _Registry(_task())
+
+    with SCOPE.executing(LEASE):
+        invocation = asyncio.run(_provider(registry).resolve(_state(), "plan"))
+
+    assert invocation.context.trace.lease_epoch == LEASE.epoch
+    assert invocation.lease.epoch == LEASE.epoch
+
+
 def test_a_configured_wall_clock_becomes_a_deadline_on_this_attempt() -> None:
     """Stamped from the clock at resolve time, not from process start."""
 

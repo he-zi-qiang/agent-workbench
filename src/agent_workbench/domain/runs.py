@@ -311,6 +311,21 @@ class TraceContext(DomainModel):
     workflow_thread_id: Identifier | None = None
     graph_node_id: Identifier | None = None
     parent_agent_run_id: Identifier | None = None
+    #: The claim this run executes under, and the only reason a trace carries a
+    #: number that is not an id: the side-effect ledger fences on it, and a run
+    #: that cannot state its epoch cannot record an external effect at all --
+    #: ``_invoke_ledgered`` refuses rather than dispatching one unfenced.
+    #:
+    #: It is the epoch the Worker was handed **at claim time** and published
+    #: through the invocation's lease, never a fresh read of the Registry. A
+    #: node that re-asked would be told its successor's epoch and would sail
+    #: past the very fence this exists to present to it.
+    #:
+    #: ``None`` on every chat run, and on a task run assembled outside a claim
+    #: -- a test harness, a replayed snapshot. Absent is a real state and reads
+    #: as "this run may not record an external effect", which is the honest
+    #: answer for a run nobody leased.
+    lease_epoch: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def validate_hierarchy(self) -> TraceContext:
@@ -318,6 +333,12 @@ class TraceContext(DomainModel):
             self.workflow_thread_id is None or self.task_id is None
         ):
             raise ValueError("a graph node exists only inside a task workflow thread")
+        # Same shape as the rule above, one level out: an epoch is a claim on a
+        # Task, so an epoch without one names a lease over nothing. Caught here
+        # rather than at the ledger, where the failure would arrive as a
+        # refused tool call long after the context that mis-assembled it.
+        if self.lease_epoch is not None and self.task_id is None:
+            raise ValueError("a lease epoch exists only inside a task")
         return self
 
 
