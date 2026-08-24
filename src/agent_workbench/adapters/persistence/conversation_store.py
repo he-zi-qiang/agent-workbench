@@ -89,6 +89,16 @@ class PostgresConversationStore:
                                 conversation_sessions.c.mode,
                                 conversation_sessions.c.workspace_version,
                                 conversation_sessions.c.last_activity_at,
+                                # Always NULL here -- a session is created
+                                # before anything attaches a project -- and
+                                # selected anyway. Every projection in this
+                                # file that builds a `ConversationSession`
+                                # names every column the model has, so that
+                                # "the field was filled from its default"
+                                # is never the reason a value is right.
+                                # It was the reason one was wrong; see
+                                # `session` above.
+                                conversation_sessions.c.project_id,
                             )
                         )
                     )
@@ -161,6 +171,23 @@ class PostgresConversationStore:
                     conversation_sessions.c.mode,
                     conversation_sessions.c.workspace_version,
                     conversation_sessions.c.last_activity_at,
+                    # The same omission `list_sessions` below documents, in the
+                    # one place it cost more than a label. That method reads
+                    # this column so the sidebar can say which project a
+                    # session belongs to; **this** method is what a Code turn
+                    # reads to decide which file language it speaks
+                    # (`code_session.py::_project_files_for`), and without the
+                    # column every turn got a confident `None`, fell back to
+                    # the flat workspace, and was handed `CODE_TOOLS`.
+                    #
+                    # So the project tools of ADR-072/073/074 -- and every tool
+                    # added to that set since -- had never once reached a model
+                    # through the console. Nothing failed: the console showed
+                    # the directory, the file tree rendered, the turn ran, and
+                    # the model answered about a versioned workspace it was
+                    # never in. Found 2026-08-24 by reading `RunStarted`'s
+                    # `tool_names` on a session whose project was attached.
+                    conversation_sessions.c.project_id,
                 )
                 .where(conversation_sessions.c.session_id == session_id)
                 .where(conversation_sessions.c.tenant_id == tenant_id)
@@ -269,6 +296,12 @@ class PostgresConversationStore:
                     conversation_sessions.c.mode,
                     conversation_sessions.c.workspace_version,
                     conversation_sessions.c.last_activity_at,
+                    # Unlike the insert above, this one can be non-NULL, and
+                    # unlike `session` above this method hands its result
+                    # straight back to the caller: renaming a coding session
+                    # answered with a session that belonged to no project.
+                    # Third instance of one mistake in one file.
+                    conversation_sessions.c.project_id,
                 )
             )
             if mode is not None:

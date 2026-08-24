@@ -1,4 +1,10 @@
-"""A session's project membership has to survive the *list*, not only the row.
+"""A session's project membership has to survive every projection that names it.
+
+Three of them do, and each was written by hand: `list_sessions`, `session`, and
+`set_title_if_unset`'s `RETURNING`. All three omitted `project_id` at some
+point, and none of them raised when they did -- a pydantic field with a default
+absorbs a missing column and answers with the default, confidently.
+
 
 Written after the console showed 不属于任何项目 for a coding session PostgreSQL
 had filed correctly. `list_sessions` projects its columns by hand, and
@@ -98,10 +104,91 @@ def test_a_filed_session_still_says_so_when_it_is_listed() -> None:
         )
         return tuple(session.project_id for session in listed)
 
-    # Through the *listing*. `get_session` selects the whole row and was right
-    # all along, so a test that read the row back would have passed against the
-    # bug this exists for.
     assert _run(scenario) == (PROJECT,)
+
+
+def test_a_filed_session_still_says_so_when_one_turn_reads_it() -> None:
+    """The other projection, and the one that decided which tools a turn got.
+
+    This file used to carry a sentence saying the single-session read "selects
+    the whole row and was right all along". There is no such method: the read is
+    `ConversationStore.session`, it projects seven columns by hand exactly the
+    way `list_sessions` did, and `project_id` was not among them either. The
+    sentence was the reason nobody looked.
+
+    What it cost is larger than the sidebar label the listing bug cost.
+    `code_session.py::_project_files_for` reads this method to decide which file
+    language a turn speaks, so every Code turn was told its session belonged to
+    no project, fell back to the flat workspace, and was handed `CODE_TOOLS`.
+    The project tools of ADR-072/073/074 -- and `project_grep`/`project_run`
+    from ADR-077 after them -- had never once been offered to a model through
+    the console. Nothing failed: the console listed the directory, the file tree
+    rendered, the turn ran, and the model answered about a versioned workspace
+    it was not in. Found 2026-08-24 by reading `RunStarted.tool_names` on a
+    session whose project was attached.
+    """
+
+    async def scenario(
+        conversations: PostgresConversationStore, projects: PostgresProjectStore
+    ) -> str | None:
+        await conversations.create_session(
+            session_id=SESSION, tenant_id=TENANT, owner_id=OWNER, mode="code"
+        )
+        await projects.create(_project())
+        assert await projects.assign_session(
+            tenant_id=TENANT, owner_id=OWNER, session_id=SESSION, project_id=PROJECT
+        )
+        session = await conversations.session(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER, mode="code"
+        )
+        return session.project_id
+
+    assert _run(scenario) == PROJECT
+
+
+def test_an_unfiled_session_reads_as_unfiled() -> None:
+    # The control for the read, for the reason the listing has one: without it a
+    # projection that hardcoded the column would pass.
+    async def scenario(
+        conversations: PostgresConversationStore, _projects: PostgresProjectStore
+    ) -> str | None:
+        await conversations.create_session(
+            session_id=SESSION, tenant_id=TENANT, owner_id=OWNER, mode="code"
+        )
+        session = await conversations.session(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER, mode="code"
+        )
+        return session.project_id
+
+    assert _run(scenario) is None
+
+
+def test_renaming_a_session_does_not_unfile_it() -> None:
+    """The third projection, and the one that hands its result to a caller.
+
+    `rename_session` builds a `ConversationSession` from its own `RETURNING`
+    list, and that list omitted `project_id` as well -- so renaming a coding
+    session answered with a session that belonged to no project. Three
+    instances of one mistake in one file, which is what a hand-written
+    projection beside a model with defaults produces.
+    """
+
+    async def scenario(
+        conversations: PostgresConversationStore, projects: PostgresProjectStore
+    ) -> str | None:
+        await conversations.create_session(
+            session_id=SESSION, tenant_id=TENANT, owner_id=OWNER, mode="code"
+        )
+        await projects.create(_project())
+        assert await projects.assign_session(
+            tenant_id=TENANT, owner_id=OWNER, session_id=SESSION, project_id=PROJECT
+        )
+        renamed = await conversations.rename_session(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER, title="复盘"
+        )
+        return renamed.project_id
+
+    assert _run(scenario) == PROJECT
 
 
 def test_an_unfiled_session_lists_as_unfiled() -> None:
