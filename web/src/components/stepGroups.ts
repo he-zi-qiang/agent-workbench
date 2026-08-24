@@ -116,6 +116,25 @@ const TOOL_VERBS: Readonly<Record<string, string>> = {
   workspace_read: "读取工作区",
   workspace_list: "查看工作区",
   workspace_grep: "搜索工作区",
+  // The project set (ADR-073), which is not the workspace tools with another
+  // backend behind them: these reach a real directory on the reader's machine
+  // (ADR-072). ADR-073 keeps the two sets mutually exclusive within a run, so
+  // one list never mixes them -- but the reader scanning a list does not know
+  // which set this session got, and 写入项目目录 has to be tellable from
+  // 写入工作区 at a glance. Hence 目录 in every phrase rather than 项目 swapped
+  // in for 工作区: 项目 alone cannot carry it, because ADR-071 leaves a Project
+  // a nullable label that also tags conversations and tasks, so 项目文件 would
+  // name something that exists with no directory behind it.
+  //
+  // Four, not five. There is no `project_grep` -- `CODE_PROJECT_TOOLS` in
+  // `application/code_session.py` has four entries, because searching a real
+  // tree is not the implementation that searches the in-memory manifest. A
+  // phrase here for a tool that cannot be called would dress up a capability
+  // nobody built.
+  project_read: "读取项目目录",
+  project_write: "写入项目目录",
+  project_edit: "修改项目目录文件",
+  project_list: "查看项目目录",
   export_artifact: "导出报告",
   sandbox_run: "运行代码",
 };
