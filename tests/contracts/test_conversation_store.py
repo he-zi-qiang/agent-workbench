@@ -8,6 +8,7 @@ assignment under concurrency, and what a wrong tenant is allowed to learn.
 from __future__ import annotations
 
 import asyncio
+from typing import Protocol, runtime_checkable
 
 import pytest
 from harness import StoreHarness
@@ -26,6 +27,38 @@ TENANT = "tenant_a"
 OTHER_TENANT = "tenant_b"
 OWNER = "user_1"
 NEIGHBOUR = "user_2"
+PROJECT = "prj_review"
+
+
+@runtime_checkable
+class _ProjectFiling(Protocol):
+    """Filing a session under a project, done by each store's own ProjectStore.
+
+    Not part of `ConversationStore`: this store never writes `project_id`, it
+    only carries it back out. The seam is in `conftest`, and it goes through
+    `ProjectStore.assign_session` on both sides.
+    """
+
+    async def file_under_project_for_test(
+        self, *, tenant_id: str, owner_id: str, session_id: str, project_id: str
+    ) -> None: ...
+
+
+async def _filed_code_session(store: ConversationStore) -> None:
+    await store.create_session(
+        session_id=CODE_SESSION,
+        tenant_id=TENANT,
+        owner_id=OWNER,
+        title="草稿",
+        mode="code",
+    )
+    assert isinstance(store, _ProjectFiling)
+    await store.file_under_project_for_test(
+        tenant_id=TENANT,
+        owner_id=OWNER,
+        session_id=CODE_SESSION,
+        project_id=PROJECT,
+    )
 
 
 async def _with_session(store: ConversationStore) -> ConversationStore:
@@ -938,3 +971,105 @@ def test_deleting_across_modes_is_not_found(conversations: StoreHarness) -> None
         return refused, owned.title
 
     assert conversations.run(scenario) == (True, "mine")
+
+
+# --- a session's project survives every projection that returns one ---------
+#
+# Three reads hand a caller a `ConversationSession`, and all three built it from
+# a hand-written column list that omitted `project_id`. Nothing raised: the
+# field has a default, so `model_validate` filled it and every answer said the
+# session belonged to no project -- confidently. `session()` is the expensive
+# one: `code_session.py::_project_files_for` reads it to decide what a Code turn
+# is looking at, so every turn fell back to the flat workspace and was handed
+# `CODE_TOOLS`, and the project tools of ADR-072/073/074 had never once reached
+# a model.
+#
+# These live in the contract rather than only in `tests/persistence` because the
+# in-memory double can now hold the fact: `InMemoryProjectStore` wired to an
+# `InMemoryConversationStore` writes `project_id` onto the session object, the
+# way `assign_session` writes the column. Before that it kept membership in its
+# own `_members` dict, so the double answered `None` from the default too -- it
+# agreed with the bug by construction, and a test parameterised over both would
+# have passed against the implementation that had it.
+
+
+def test_a_filed_session_still_says_so_when_one_turn_reads_it(
+    conversations: StoreHarness,
+) -> None:
+    async def scenario(store: ConversationStore) -> str | None:
+        await _filed_code_session(store)
+        session = await store.session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            mode="code",
+        )
+        return session.project_id
+
+    assert conversations.run(scenario) == PROJECT
+
+
+def test_a_filed_session_still_says_so_when_it_is_listed(
+    conversations: StoreHarness,
+) -> None:
+    async def scenario(store: ConversationStore) -> tuple[str | None, ...]:
+        await _filed_code_session(store)
+        listed = await store.list_sessions(
+            tenant_id=TENANT, principal_id=OWNER, mode="code"
+        )
+        return tuple(session.project_id for session in listed)
+
+    assert conversations.run(scenario) == (PROJECT,)
+
+
+def test_renaming_a_filed_session_does_not_unfile_it(
+    conversations: StoreHarness,
+) -> None:
+    """The renamed session is handed straight back to the caller.
+
+    So an omission here is not a stale read that the next request corrects: it
+    is the answer to the request that just changed the row.
+    """
+
+    async def scenario(store: ConversationStore) -> tuple[str | None, str | None]:
+        await _filed_code_session(store)
+        renamed = await store.rename_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            title="复盘",
+        )
+        return renamed.title, renamed.project_id
+
+    assert conversations.run(scenario) == ("复盘", PROJECT)
+
+
+def test_an_unfiled_session_reads_as_unfiled_everywhere(
+    conversations: StoreHarness,
+) -> None:
+    """The control, and it is not a formality.
+
+    Without it a projection that hardcoded the column to a constant would pass
+    all three tests above -- and no project is the *normal* state here (ADR-071
+    §5.3), so it has to be reported as itself rather than as anything else.
+    """
+
+    async def scenario(store: ConversationStore) -> tuple[str | None, ...]:
+        await store.create_session(
+            session_id=CODE_SESSION, tenant_id=TENANT, owner_id=OWNER, mode="code"
+        )
+        read = await store.session(
+            session_id=CODE_SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+        listed = await store.list_sessions(
+            tenant_id=TENANT, principal_id=OWNER, mode="code"
+        )
+        renamed = await store.rename_session(
+            session_id=CODE_SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            title="复盘",
+        )
+        return read.project_id, listed[0].project_id, renamed.project_id
+
+    assert conversations.run(scenario) == (None, None, None)

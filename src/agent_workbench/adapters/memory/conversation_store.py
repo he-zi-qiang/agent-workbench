@@ -260,6 +260,67 @@ class InMemoryConversationStore:
                 update={"workspace_version": next_version}
             )
 
+    # -- the one column on this row another store writes ------------------
+    #
+    # Membership lives on the row that *is* a member: ``project_id`` is a
+    # column on ``conversation_sessions``, and ``ProjectStore.assign_session``
+    # is one UPDATE against a table it does not own (ADR-071 2.3). These two
+    # methods are that seam in memory, and they are production methods rather
+    # than test seams -- ``InMemoryProjectStore`` is wired through them, so the
+    # two doubles hold *one* fact between them instead of a copy each.
+    #
+    # They exist because the copy-each version was what shipped: the in-memory
+    # pair kept a session's project in the project store's own ``_members``
+    # dict and never on the session, so the double answered ``project_id=None``
+    # from the field default -- the exact value the PostgreSQL projection bug
+    # produced. A contract test could not have caught that bug, because there
+    # was no way to tell this store a session belonged to a project.
+
+    async def file_under_project(
+        self,
+        *,
+        session_id: str,
+        tenant_id: str,
+        owner_id: str,
+        project_id: str | None,
+    ) -> bool:
+        """File this session under a project, or (with ``None``) release it."""
+
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            # A miss answers ``False`` rather than raising, because over there
+            # it is an UPDATE carrying these same three predicates and the
+            # caller reads ``rowcount``. Raising would make the in-memory
+            # ``assign_session`` throw where PostgreSQL's returns ``False``.
+            if (
+                session is None
+                or session.tenant_id != tenant_id
+                or session.owner_id != owner_id
+            ):
+                return False
+            self._sessions[session_id] = session.model_copy(
+                update={"project_id": project_id}
+            )
+            return True
+
+    async def sessions_in_project(
+        self,
+        *,
+        tenant_id: str,
+        owner_id: str,
+        project_id: str,
+    ) -> tuple[ConversationSession, ...]:
+        """Every session of this principal's filed under that project."""
+
+        async with self._lock:
+            return tuple(
+                session
+                for session in self._sessions.values()
+                if session.tenant_id == tenant_id
+                and session.owner_id == owner_id
+                and session.project_id == project_id
+            )
+
     async def claim_turn(
         self,
         *,
