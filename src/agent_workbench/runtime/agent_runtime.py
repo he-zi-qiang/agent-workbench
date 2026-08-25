@@ -65,6 +65,7 @@ from agent_workbench.domain.runs import (
     BudgetUsage,
     StopReason,
     TokenUsage,
+    context_reason_for,
 )
 from agent_workbench.domain.schema import (
     ANSWER_TEXT_LIMIT,
@@ -188,6 +189,16 @@ class _ModelTurn:
     thinking: str = ""
 
 
+#: How much of a declared context window a run may fill, when nobody said.
+#:
+#: Mirrors `runtime.context_soft_limit_ratio`, which is the value every
+#: assembly actually passes. It is a default rather than a required argument
+#: because this constructor has a dozen call sites in tests that care about the
+#: loop and not about context, and 0.75 is the shipped setting -- a test that
+#: wanted a different one would say so.
+DEFAULT_CONTEXT_SOFT_LIMIT_RATIO: Final[float] = 0.75
+
+
 @dataclass(slots=True)
 class _RunLedger:
     """Everything that accumulates across turns of one run."""
@@ -201,6 +212,12 @@ class _RunLedger:
     call_counts: dict[str, int] = field(default_factory=dict[str, int])
     #: How many calls this run has had refused for repeating themselves.
     repeat_refusals: int = 0
+    #: The provider's count for the *last* prompt this run sent, which is the
+    #: best evidence of how large the next one will be. Deliberately not
+    #: derived from `usage.tokens`: that is cumulative across turns and every
+    #: turn re-sends the whole conversation, so it grows roughly with the
+    #: square of the turn count and says nothing about one request's size.
+    last_input_tokens: int = 0
 
 
 @runtime_checkable
@@ -282,6 +299,8 @@ class ClaudeLikeAgentRuntime:
         telemetry: Telemetry | None = None,
         record_step_inputs: bool = False,
         prices: ModelPrices | None = None,
+        context_window_tokens: int | None = None,
+        context_soft_limit_ratio: float = DEFAULT_CONTEXT_SOFT_LIMIT_RATIO,
     ) -> None:
         self._model = model
         # Tools are reached only through the gateway: resolving, validating,
@@ -303,6 +322,14 @@ class ClaudeLikeAgentRuntime:
         # deployment asked for it. Independent of `telemetry`, which never
         # carries a body.
         self._record_step_inputs = record_step_inputs
+        # What this deployment's model can hold, and how much of it a run may
+        # fill (ADR-0080). `None` is a real state and not "unlimited": it is a
+        # process that cannot tell a long turn from a short one, and whose
+        # over-long turns die as `provider_error: HTTP 400` -- a message that
+        # sends whoever is reading the transcript to the model adapter, which
+        # is the one place the problem is not.
+        self._context_window_tokens = context_window_tokens
+        self._context_soft_limit_ratio = context_soft_limit_ratio
         # Defaults to recording nothing. A deployment without a collector is
         # not a deployment that behaves differently, so this is the absence of
         # one rather than a degraded mode.
@@ -465,6 +492,44 @@ class ClaudeLikeAgentRuntime:
                     ledger,
                 )
 
+            # The one ceiling that is not the submitter's (ADR-0080). Asked
+            # here, in the same breath as the budget, because it answers the
+            # same question -- may this run take another turn -- from the other
+            # side: not "has it spent what it was given" but "will what it is
+            # about to send fit".
+            #
+            # The numbers go in the message. Without them the operator reading
+            # a stopped run has a stop reason and no way to tell a model that
+            # needs a bigger window from a run that read too many files, and
+            # the previous answer to this situation -- `provider_error: HTTP
+            # 400` from the adapter, whose body is deliberately never read --
+            # sent them to the one component that was working correctly.
+            over_context = context_reason_for(
+                ledger.last_input_tokens,
+                window_tokens=self._context_window_tokens,
+                soft_limit_ratio=self._context_soft_limit_ratio,
+            )
+            if over_context is not None:
+                assert self._context_window_tokens is not None
+                return await self._failed(
+                    request,
+                    sink,
+                    machine,
+                    over_context,
+                    ErrorInfo(
+                        code="budget_exceeded",
+                        message=(
+                            "the run stopped before its next request would "
+                            "have outgrown the model's context: the last "
+                            f"prompt was {ledger.last_input_tokens} tokens of "
+                            f"a {self._context_window_tokens}-token window, "
+                            f"past the {self._context_soft_limit_ratio} soft "
+                            "limit"
+                        ),
+                    ),
+                    ledger,
+                )
+
             # Recomputed each turn, because what the model may reach changes
             # within a run. Once the allowance is gone the tools come off the
             # request entirely rather than staying on it to be refused: a model
@@ -494,6 +559,10 @@ class ClaudeLikeAgentRuntime:
                     cost_micro_usd=self._priced(turn.usage),
                 )
             )
+            # Carried beside the merge rather than derived from it, for the
+            # reason the field's own comment gives: the merged figure is a sum
+            # over turns and this is one turn's prompt.
+            ledger.last_input_tokens = turn.usage.input_tokens
 
             terminal = await self._terminal_for_turn(
                 request,

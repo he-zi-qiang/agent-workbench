@@ -217,6 +217,11 @@ class ModelProfileConfig:
     #: the runtime refuses one rather than accepting a ceiling it will never
     #: reach.
     prices: ModelPrices | None
+    #: How many tokens one request to this model may hold, when the deployment
+    #: said (ADR-0080). ``None`` is not "unlimited": it is a process that
+    #: cannot tell a long turn from a short one, and whose over-long turns die
+    #: as a provider 400 with nothing naming the cause.
+    context_window_tokens: int | None = None
 
 
 def _project_prices(pricing: ModelPricingSettings | None) -> ModelPrices | None:
@@ -489,6 +494,11 @@ class AgentRuntimeConfig:
     # ADR-019. Projected rather than read from settings inside the runtime,
     # because the runtime is framework-neutral and does not import settings.
     record_step_inputs: bool = False
+    #: How much of a declared context window one run may fill before it stops
+    #: itself (ADR-0080). Only meaningful beside a profile that declared
+    #: `context_window_tokens`; with no window there is nothing to take a
+    #: fraction of, and no ceiling.
+    context_soft_limit_ratio: float = 0.75
     #: Deployment-wide ceiling on one tool call, or None for "only what each
     #: tool declares". May shorten a call, never lengthen it.
     tool_timeout_seconds: float | None = None
@@ -718,6 +728,12 @@ class ApiRuntimeConfig:
     # `chat`, because it is one setting governing every runtime this deployment
     # builds, and two names for it would drift.
     record_step_inputs: bool = False
+    #: ADR-0080. Flat here for the reason `record_step_inputs` is: it governs
+    #: every runtime this process builds -- chat, the two no-tool shapes, code
+    #: -- and two names for one setting drift. What it is a fraction *of* comes
+    #: from `model.<profile>.context_window_tokens`, so on a deployment that
+    #: declared no window this value decides nothing at all.
+    context_soft_limit_ratio: float = 0.75
     # ADR-021. The same provider the Task Worker researches with, reached from
     # the API because chat's fallback may search too. `None` is the shipped
     # default and means the chat model is offered no web tool at all -- not a
@@ -822,6 +838,7 @@ def project_task_worker(
                     thinking=profile.thinking,
                     reasoning_effort=profile.reasoning_effort,
                     prices=_project_prices(profile.pricing),
+                    context_window_tokens=profile.context_window_tokens,
                 )
                 for name, profile in (
                     ("main", settings.model.main),
@@ -843,6 +860,7 @@ def project_task_worker(
             model_timeout_seconds=float(settings.runtime.model_timeout_seconds),
             max_parallel_read_tools=settings.runtime.max_parallel_read_tools,
             record_step_inputs=settings.runtime.record_step_inputs,
+            context_soft_limit_ratio=settings.runtime.context_soft_limit_ratio,
             tool_timeout_seconds=(
                 None
                 if settings.runtime.tool_timeout_seconds is None
@@ -978,6 +996,7 @@ def project_ingestion_worker(
                         thinking=profile.thinking,
                         reasoning_effort=profile.reasoning_effort,
                         prices=_project_prices(profile.pricing),
+                        context_window_tokens=profile.context_window_tokens,
                     )
                     for name, profile in (
                         ("main", settings.model.main),
@@ -1044,6 +1063,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         sse_heartbeat_seconds=settings.api.sse_heartbeat_seconds,
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
         record_step_inputs=settings.runtime.record_step_inputs,
+        context_soft_limit_ratio=settings.runtime.context_soft_limit_ratio,
         research=_project_research(settings),
         database=DatabaseConfig(
             dsn=settings.database.dsn,
@@ -1072,6 +1092,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
                     thinking=profile.thinking,
                     reasoning_effort=profile.reasoning_effort,
                     prices=_project_prices(profile.pricing),
+                    context_window_tokens=profile.context_window_tokens,
                 )
                 for name, profile in (
                     ("main", settings.model.main),

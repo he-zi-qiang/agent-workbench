@@ -234,6 +234,8 @@ def _execute(
     prices: ModelPrices | None = None,
     approvals: object | None = None,
     approval_timeout_seconds: float = 100.0,
+    context_window_tokens: int | None = None,
+    context_soft_limit_ratio: float = 0.75,
 ) -> _Execution:
     registry = StaticToolRegistry(
         bindings if bindings is not None else [read_document_tool(CORPUS)]
@@ -263,6 +265,8 @@ def _execute(
             model_call_ids=_ids("mc"),
             record_step_inputs=record_step_inputs,
             prices=prices,
+            context_window_tokens=context_window_tokens,
+            context_soft_limit_ratio=context_soft_limit_ratio,
         )
         outcome = await runtime.run(
             request if request is not None else _request(),
@@ -2524,3 +2528,106 @@ def test_a_name_this_process_never_registered_is_still_an_unknown_tool() -> None
     ]
     assert len(failures) == 1
     assert failures[0].payload.error.code == "unknown_tool"
+
+
+class TestARunKnowsHowLargeItsNextRequestIs:
+    """ADR-0080, at the loop rather than at the predicate.
+
+    Three things have to be true together for this to be worth having: the run
+    stops itself, it stops *before* spending the call that would have failed,
+    and the reason it gives names the numbers. Without the third the operator
+    reading a stopped run cannot tell a model that needs a bigger window from a
+    turn that read too many files -- and the answer this replaces,
+    `provider_error: the provider rejected the request with HTTP 400`, sent
+    them to the model adapter, which is the one component that was correct.
+    """
+
+    @staticmethod
+    def _big_first_turn() -> FakeModel:
+        # A tool round, so there is a second turn to be stopped before. The
+        # first turn's prompt comes back over the soft limit.
+        return FakeModel(
+            (
+                ScriptedTurn(
+                    tool_calls=(
+                        ToolCall(
+                            tool_call_id="toolu_" + "0" * 20,
+                            tool_name="read_document",
+                            arguments={"document_id": "doc_alpha"},
+                        ),
+                    ),
+                    usage=TokenUsage(input_tokens=50_000),
+                ),
+                ScriptedTurn(text="never reached", usage=TokenUsage(input_tokens=10)),
+            )
+        )
+
+    def test_a_run_over_the_soft_limit_stops_itself(self) -> None:
+        run = _execute(self._big_first_turn(), context_window_tokens=64_000)
+
+        assert run.outcome.status == "failed"
+        assert run.outcome.stop_reason == "context_limit"
+        # Stopped *before* the second call, not after it failed: the whole
+        # point is not to spend a request that cannot succeed.
+        assert run.outcome.usage.steps == 1
+
+    def test_the_reason_carries_the_numbers_that_explain_it(self) -> None:
+        run = _execute(self._big_first_turn(), context_window_tokens=64_000)
+
+        said = run.outcome.error.message if run.outcome.error is not None else ""
+        assert "50000" in said
+        assert "64000" in said
+        assert "0.75" in said
+        # And it does not blame the provider, which is what the old answer did.
+        assert "provider" not in said
+
+    def test_a_deployment_that_declared_no_window_behaves_as_it_always_did(
+        self,
+    ) -> None:
+        # No guessed number, so no ceiling: the run takes its second turn and
+        # finishes. Over-long turns on such a deployment still die as a
+        # provider 400, which is the cost of not saying, stated.
+        run = _execute(self._big_first_turn(), context_window_tokens=None)
+
+        assert run.outcome.status == "completed"
+        assert run.outcome.usage.steps == 2
+
+    def test_a_prompt_under_the_limit_is_not_stopped(self) -> None:
+        model = FakeModel(
+            (
+                ScriptedTurn(
+                    tool_calls=(
+                        ToolCall(
+                            tool_call_id="toolu_" + "0" * 20,
+                            tool_name="read_document",
+                            arguments={"document_id": "doc_alpha"},
+                        ),
+                    ),
+                    usage=TokenUsage(input_tokens=1_000),
+                ),
+                ScriptedTurn(text="Qdrant owns fusion.", usage=TokenUsage()),
+            )
+        )
+
+        run = _execute(model, context_window_tokens=64_000)
+
+        assert run.outcome.status == "completed"
+        assert run.outcome.usage.steps == 2
+
+    def test_the_ratio_is_what_decides_where_the_line_is(self) -> None:
+        # Same run, same window, two deployments. The knob has to be the thing
+        # that moves the answer, or it is a number in a config file that
+        # decides nothing -- the shape this repository keeps deleting.
+        strict = _execute(
+            self._big_first_turn(),
+            context_window_tokens=64_000,
+            context_soft_limit_ratio=0.5,
+        )
+        loose = _execute(
+            self._big_first_turn(),
+            context_window_tokens=64_000,
+            context_soft_limit_ratio=0.9,
+        )
+
+        assert strict.outcome.stop_reason == "context_limit"
+        assert loose.outcome.status == "completed"

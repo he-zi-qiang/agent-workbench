@@ -28,6 +28,82 @@
 
 ---
 
+## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十九批）：一次运行知道自己下一个请求有多大（ADR-080）
+
+一段长对话越过模型窗口时，此前留下的全部证据是
+`provider_error: the provider rejected the request with HTTP 400`。三处都没说实话：
+`stop_reason: error` 说不出撞到了什么；消息把责任归给供应商，而供应商是对的；里面
+一个数字都没有，运维分不清"模型窗口太小"和"这一轮读了太多文件"。适配器**故意不读**
+error body（chat completion 的错误会把 prompt 回显出来），所以那条消息不可能变具体
+——**该变具体的地方不在适配器里**。
+
+决策记在 [ADR-080](./adr/0080-a-run-knows-how-large-its-next-request-is.md)。
+
+### 1. 分母是可选的，因为这个仓库不知道它
+
+`ModelProfileSettings.context_window_tokens`，与 `pricing` 完全同构：
+`config.default.toml` 的 `model_id` 是 `not-configured-deepseek-main`，占位符的窗口只能
+是编出来的；而 `base_url` 可以指向一个把窗口改短了的网关，所以也不能从名字推。
+
+**不配它就没有这道天花板**，过长的回合仍然死成 provider 400。这是不说的代价，写进了
+`docs/configuration.md` 而不是留白。
+
+**没有交叉校验**，这与 `max_cost_micro_usd` 的先例不矛盾：成本上限有"要了却给不了"的
+状态（设了上限、没配价格），这里没有——`context_soft_limit_ratio` 永远有值，只是没有
+东西可以取分数。
+
+### 2. 两条反例，都写进了测试
+
+**不能读累计。** `BudgetUsage.tokens` 跨轮累加，而每轮都重发整段对话——累计输入随轮数
+近似平方增长。十轮稳定 6,000 token 的 prompt 累计 60,000，对 64,000 的窗口已经"越界"，
+而其中没有一个请求接近过它。
+
+**不能读 `total`。** 它是一轮里流动的一切：prompt 加补全加 cache write，其中两样从来
+没在发出去的请求里。一个 prompt 40,000、补全 9,000、cache write 2,000 的回合，`total`
+是 51,000 会被掐掉，而实际发出去的那个请求离窗口还差四分之一。
+
+用的是供应商报的 `input_tokens`——"我上次发出去的东西有多大"，测出来的，不是拼出来的。
+
+### 3. 它是滞后的、是软的、第一轮不受保护——三条都写在 ADR 里
+
+下一个 prompt 比被比较的数大（多了补全和工具结果），ratio 的余量覆盖这个。检查在两轮
+之间，一次 `project_read` 能在检查通过之后再追加 48,000 字符。检查读的是"上一次请求"
+的大小，所以开局就超窗的 prompt 仍然死在 provider 400。
+
+一个试图预测下一个 prompt 的复合数，是"穿着测量精度的估计"，而且仍然会漏掉还没人要的
+那些工具结果。
+
+### 4. ratio 必须真的是决定线在哪的那个旋钮
+
+有一条测试专门钉这个：同一次运行、同一个窗口，`0.5` 停、`0.9` 过。否则它就是配置里
+一个什么都不决定的数——正是这个仓库反复删掉的形状（ADR-059）。
+
+顺带纠正一句上一批写下的话：`runtime.context_soft_limit_ratio` **不是**"无人读取"，它
+被 `run_semantics_snapshot()` 整块投影进 Task 的运行语义快照，改动它会改
+`run_semantics_revision`。本批让它在运行时也真的有了消费者。
+
+### 5. 不动配置契约
+
+`config_schema_version` 保持 `1.18`。既有段下新增带默认值的叶子不抬版——
+`docs/configuration.md` 的版本表自己写着这条规则，`[model.main.pricing]` 就是先例，
+它也没抬过版。
+
+### 门禁
+
+`agent-config-check --profile development` ok；`ruff` 全过；`pyright` **0 errors**；
+`pytest` **2905 passed / 774 skipped**。`web`：`tsc -b` 0 errors，`eslint` 干净。
+
+**本批新增 11 条后端测试**：`tests/runtime/test_budgets.py` 6 条（含两条反例）、
+`tests/runtime/test_agent_runtime.py` 5 条（含 ratio 真的决定线在哪那条）。
+`tests/architecture/test_config_ownership.py` 在本次改动中**先红后绿**——新叶子必须
+有主，守卫在工作。
+
+能力梯子停在 **Implemented + Tested**，且要连着这句一起读：**出厂 profile 里没有一个
+声明了窗口**，所以这道天花板在任何默认部署上都不生效——和成本上限一模一样，那里也一个
+价格都没配。打开它是一行配置。
+
+---
+
 ## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十八批）：一个不能写的回合是另一种回合（ADR-079）
 
 上一批让写入变得不会静默覆盖。这一批加上「先说你要做什么」——因为在此之前，Code 的

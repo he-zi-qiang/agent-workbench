@@ -535,6 +535,18 @@ class ModelProfileSettings(StrictModel):
     # Only consulted when thinking is enabled; the provider's own default.
     reasoning_effort: Literal["low", "high", "max"] = "high"
     pricing: ModelPricingSettings | None = None
+    # How many tokens this profile's model can hold in one request (ADR-0080).
+    # Optional and absent by default, on the same reasoning as `pricing`: what
+    # a `model_id` can hold is a fact about a provider, and `config.default`
+    # ships `not-configured-deepseek-main` -- a placeholder whose window this
+    # repository could only invent. It is also not derivable from the name in
+    # general, because `base_url` may point at a gateway that shortens it.
+    #
+    # What absence costs is stated rather than silent: with no window there is
+    # no context ceiling, and an over-long turn dies the way it always did, as
+    # `provider_error: HTTP 400` from the adapter. `runtime.context_soft_limit_
+    # ratio` is what decides how much of a declared window a run may fill.
+    context_window_tokens: int | None = Field(default=None, ge=1)
 
 
 class ModelSettings(StrictModel):

@@ -693,6 +693,11 @@ async def _build_real_handlers(
             max_parallel_read_tools=config.runtime.max_parallel_read_tools,
             record_step_inputs=config.runtime.record_step_inputs,
             prices=main_profile.prices,
+            # ADR-0080. From the main profile, because that is the profile this
+            # runtime's calls are made under -- the same reason `prices` and
+            # `model_label` come from it.
+            context_window_tokens=main_profile.context_window_tokens,
+            context_soft_limit_ratio=config.runtime.context_soft_limit_ratio,
         ),
         max_parallel=config.multi_agent.max_parallel_agent_invocations,
     )

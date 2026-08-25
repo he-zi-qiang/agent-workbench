@@ -941,6 +941,14 @@ def _assemble_chat(
     # when the deployment configured no prices, which leaves every chat spend
     # at zero and every chat cost ceiling refused -- see ClaudeLikeAgentRuntime.
     model_prices = main_profile.prices if main_profile is not None else None
+    # ADR-0080. From the same profile, and absent for the same reason: a
+    # process that does not know what its model can hold cannot tell a long
+    # turn from a short one, and its over-long turns die as a provider 400
+    # whose message points at the model adapter -- the one component that was
+    # working correctly.
+    model_context_window = (
+        main_profile.context_window_tokens if main_profile is not None else None
+    )
 
     # Both no-tool shapes get the same deny-shaped runtime the fixed shape uses.
     # Written out rather than shared with a helper because the registry and the
@@ -988,6 +996,8 @@ def _assemble_chat(
             model_label=model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
+            context_window_tokens=model_context_window,
+            context_soft_limit_ratio=config.context_soft_limit_ratio,
         )
 
     def _toolless_runtime() -> ClaudeLikeAgentRuntime:
@@ -1003,6 +1013,8 @@ def _assemble_chat(
             model_label=model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
+            context_window_tokens=model_context_window,
+            context_soft_limit_ratio=config.context_soft_limit_ratio,
         )
 
     # One tool, one journal, one runtime, shared by both evidence-free turns
@@ -1129,6 +1141,8 @@ def _assemble_chat(
                 model_label=model_label,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
+                context_window_tokens=model_context_window,
+                context_soft_limit_ratio=config.context_soft_limit_ratio,
             ),
             journal=journal,
             budget=RunBudget(
@@ -1154,6 +1168,8 @@ def _assemble_chat(
                 model_label=model_label,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
+                context_window_tokens=model_context_window,
+                context_soft_limit_ratio=config.context_soft_limit_ratio,
             ),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
         )
@@ -1258,6 +1274,8 @@ def _assemble_chat(
             model_label=model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
+            context_window_tokens=model_context_window,
+            context_soft_limit_ratio=config.context_soft_limit_ratio,
         )
 
     code = (

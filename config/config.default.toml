@@ -202,6 +202,10 @@ max_retries = 2
 # adapter keeps tools available but returns tool_choice to auto.
 tool_calling_required = true
 prompt_cache_enabled = true
+# context_window_tokens: how much one request to this model may hold (ADR-0080).
+# Not shipped, because `model_id` above is a placeholder and a window is a fact
+# about a real provider -- see docs/configuration.md. Without it there is no
+# context ceiling and an over-long turn dies as a provider 400.
 
 [model.compact]
 model_id = "not-configured-deepseek-compact"

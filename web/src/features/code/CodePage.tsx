@@ -1380,6 +1380,12 @@ function stopNote(reason: string): string {
   if (reason === "token_budget" || reason === "cost_budget") {
     return "这一轮把预算用完了。已完成的改动都在工作区里，直接说下一步就能继续。";
   }
+  if (reason === "context_limit") {
+    // ADR-0080。这一条和上面几条不一样：它不是"额度用完了"，而是"这段对话本身
+    // 长到装不下了"，所以「直接说下一步就能继续」在这里是错的建议——同一个会话
+    // 的下一轮会带着同样长的历史再撞一次。
+    return "这一轮的对话长到模型装不下了。已完成的改动都在工作区里；开一个新会话继续，或者把要做的事拆小一点。";
+  }
   if (reason === "cancelled") {
     return "这一轮被取消了。已完成的改动都在工作区里。";
   }
