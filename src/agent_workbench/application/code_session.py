@@ -47,6 +47,7 @@ from agent_workbench.application.answer_release import ProcessOnlySink
 from agent_workbench.application.code_approvals import ApprovalScope
 from agent_workbench.application.code_prompt import (
     CODER_SYSTEM_PROMPT,
+    CODER_SYSTEM_PROMPT_PROJECT,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
     with_host_commands,
@@ -137,15 +138,8 @@ CODE_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
     SANDBOX_RUN_TOOL,
 )
 
-#: The project-directory set plus the sandbox, spelled out for the reason its
-#: sibling above is: "what may a coding session reach" should have answers to
-#: read, not an answer and two appends to apply in your head.
-CODE_PROJECT_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
-    *CODE_PROJECT_TOOLS,
-    SANDBOX_RUN_TOOL,
-)
-
-#: The same two, plus the tool that runs a command on this machine (ADR-077).
+#: The project-directory set plus the tool that runs a command on this machine
+#: (ADR-077).
 #:
 #: Project-only, and that is a property of the tool rather than a choice made
 #: here: `project_run` runs *somewhere*, and the only working directory a
@@ -153,18 +147,58 @@ CODE_PROJECT_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
 #: to be in, so there is no `CODE_TOOLS_WITH_RUN` to pair with these -- the
 #: absence is the answer, not an omission.
 #:
-#: Written out rather than composed at the call site, like the four above. Two
-#: optional tools is where that stops scaling: a third would be eight tuples,
-#: and the honest move at that point is a function, not a seventh name.
+#: There is no sandbox arm here, and there was one. `CODE_PROJECT_TOOLS_WITH_
+#: SANDBOX` and `..._WITH_SANDBOX_AND_RUN` offered `sandbox_run` to a turn that
+#: could never call it: the tool holds a `WorkspaceScope` and reads its session
+#: out of a ContextVar (`adapters/tools/sandbox.py` `_session`), and `run()`
+#: enters exactly one scope -- for a project turn, `ProjectFileScope`. So every
+#: call raised `SandboxUnavailableError` before reaching the sandbox at all,
+#: and under `config.demo-local.toml`, where every session has a project, that
+#: was every call. Widening the sandbox to *see* a project directory is a
+#: capability change against ADR-029's isolation flags and wants its own ADR;
+#: until then the honest offer is not to offer it.
 CODE_PROJECT_TOOLS_WITH_RUN: tuple[ToolName, ...] = (
     *CODE_PROJECT_TOOLS,
     PROJECT_RUN_TOOL,
 )
 
-CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN: tuple[ToolName, ...] = (
-    *CODE_PROJECT_TOOLS_WITH_SANDBOX,
-    PROJECT_RUN_TOOL,
+#: The project side as a set, for the two questions asked about it below:
+#: "is this a project turn" and "did a flat-scoped tool leak into one".
+_PROJECT_TOOLS: frozenset[ToolName] = frozenset(CODE_PROJECT_TOOLS)
+
+#: Everything that finds its backing through the flat `WorkspaceScope`.
+#:
+#: Named so the check below can be written as a claim about scopes rather than
+#: as a list of names somebody has to keep in step: what makes `sandbox_run`
+#: wrong for a project turn is not that it is external, it is that it reads a
+#: ContextVar that a project turn does not set.
+_WORKSPACE_SCOPED_TOOLS: frozenset[ToolName] = frozenset(
+    (*CODE_TOOLS, SANDBOX_RUN_TOOL)
 )
+
+
+def _assert_project_tuples_enter_their_own_scope() -> None:
+    """A turn may not be offered a tool whose scope it does not enter.
+
+    At import, because the tuples are literals and there is nothing to wait
+    for: the cost of getting this wrong is not an exception, it is a model
+    holding a tool that answers `unhandled SandboxUnavailableError`, obeying
+    discipline 3 by not retrying, and reporting that it could not run the code
+    -- a turn spent on a refusal nobody chose. The shape is ADR-075's
+    `_assert_no_profile_offers_a_ledgered_tool`, moved to import time because
+    these tuples are not built from configuration.
+    """
+
+    for offered in (CODE_PROJECT_TOOLS, CODE_PROJECT_TOOLS_WITH_RUN):
+        leaked = _WORKSPACE_SCOPED_TOOLS & frozenset(offered)
+        if leaked:
+            raise ValueError(
+                "a project turn enters only ProjectFileScope, but these tools "
+                f"read the flat workspace scope: {sorted(leaked)}"
+            )
+
+
+_assert_project_tuples_enter_their_own_scope()
 
 
 def _system_prompt_for(
@@ -178,20 +212,30 @@ def _system_prompt_for(
     wait, do not spend one", which under no gate is an instruction to avoid the
     tool the deployment just freed).
 
-    The two axes compose rather than multiply. `project_run` is independent of
-    the sandbox and of its gate, so it is applied on top of whichever base the
-    first branch chose instead of being spelled out as three more prompts.
+    Three axes now, and they still compose rather than multiply: the file
+    language picks the base, the sandbox gate picks between the two flat bases,
+    and `project_run` is applied on top of whichever was chosen. The project
+    side has no sandbox arm because a project turn is no longer offered
+    `sandbox_run` at all -- see `CODE_PROJECT_TOOLS_WITH_RUN`.
+
+    The file language is read off `tool_names` rather than passed in beside it,
+    for the reason `code_risk_ceiling` derives the ceiling the same way: two
+    switches are two ways to describe one decision, and the interesting bug is
+    the pair disagreeing. Here that bug has a measured shape -- a turn holding
+    `project_write` and told that its writes produce a new version of a set
+    that does not exist (`docs/known-gaps.md` F-23).
     """
 
-    base = (
-        (
+    if _PROJECT_TOOLS & frozenset(tool_names):
+        base = CODER_SYSTEM_PROMPT_PROJECT
+    elif SANDBOX_RUN_TOOL in tool_names:
+        base = (
             CODER_SYSTEM_PROMPT_WITH_SANDBOX
             if sandbox_requires_approval
             else CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED
         )
-        if SANDBOX_RUN_TOOL in tool_names
-        else CODER_SYSTEM_PROMPT
-    )
+    else:
+        base = CODER_SYSTEM_PROMPT
     if PROJECT_RUN_TOOL not in tool_names:
         return base
     return with_host_commands(base)
@@ -859,6 +903,8 @@ class CodeSessionService:
 
 
 __all__ = [
+    "CODE_PROJECT_TOOLS",
+    "CODE_PROJECT_TOOLS_WITH_RUN",
     "CODE_TOOLS",
     "CODE_TOOLS_WITH_SANDBOX",
     "CodeCapacityError",

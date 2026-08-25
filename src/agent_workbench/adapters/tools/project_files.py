@@ -33,11 +33,17 @@ from typing import Final
 
 from pydantic import JsonValue
 
+from agent_workbench.adapters.tools.reading import (
+    LIMIT_SCHEMA,
+    OFFSET_SCHEMA,
+    windowed_result,
+)
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.domain.errors import (
     ErrorInfo,
     NotFoundError,
     OutputTooLargeError,
+    ToolFailedError,
 )
 from agent_workbench.domain.project_files import (
     MAX_RELATIVE_PATH_BYTES,
@@ -76,11 +82,6 @@ WRITE_TOOL_NAME = "project_write"
 EDIT_TOOL_NAME = "project_edit"
 GREP_TOOL_NAME = "project_grep"
 
-#: What a read may put into the model's context in one go, matching the
-#: workspace tools' ceiling rather than inventing a second one. The bytes are
-#: still on disk -- this is about the context budget, not about the file.
-MAX_INLINE_READ_CHARS: Final[int] = 48_000
-
 #: What one write may accept inline. Same value and same reason as the
 #: workspace tool's: a model that needs to produce more than this is producing
 #: something it should be building in pieces.
@@ -97,8 +98,17 @@ _PATH_SCHEMA: dict[str, JsonValue] = {
 }
 
 
-class ProjectFilesUnavailableError(RuntimeError):
-    """A project tool ran outside a turn that entered a store."""
+class ProjectFilesUnavailableError(ToolFailedError):
+    """A project tool ran outside a turn that entered a store.
+
+    Derives from `ToolFailedError` rather than `RuntimeError` so that the
+    sentence survives. `ErrorInfo.from_exception` passes a message through only
+    for `AgentWorkbenchError`; everything else becomes `unhandled <ClassName>`,
+    on the reasoning that a third-party message is untrusted content of unknown
+    provenance. That reasoning does not cover a string written on the line
+    below, and the model is the reader here: handed the class name, it has
+    nothing to put in its report but the class name.
+    """
 
 
 def _store(scope: ProjectFileScope) -> ProjectFileStore:
@@ -224,13 +234,19 @@ class ProjectReadTool:
             name=READ_TOOL_NAME,
             description=(
                 "Read one text file from this project's directory by its path "
-                "relative to the project root."
+                "relative to the project root. A long file comes back one "
+                "window at a time; the reply says which lines it gave you and "
+                "which offset continues from there."
             ),
             input_schema={
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["path"],
-                "properties": {"path": _PATH_SCHEMA},
+                "properties": {
+                    "path": _PATH_SCHEMA,
+                    "offset": OFFSET_SCHEMA,
+                    "limit": LIMIT_SCHEMA,
+                },
             },
             concurrency="parallel",
             risk="read",
@@ -239,7 +255,8 @@ class ProjectReadTool:
         )
 
     async def handle(self, invocation: ToolInvocation) -> ToolResult:
-        path = str(invocation.call.arguments.get("path", ""))
+        arguments = invocation.call.arguments
+        path = str(arguments.get("path", ""))
         store = _store(self.scope)
         try:
             content = await store.read(path)
@@ -257,16 +274,15 @@ class ProjectReadTool:
                 ),
             )
         text = content.text or ""
-        if len(text) > MAX_INLINE_READ_CHARS:
-            return ToolResult.succeeded(
-                invocation.call,
-                content=(
-                    f"{path} is {content.size_bytes} bytes, too long to show in "
-                    f"full. First {MAX_INLINE_READ_CHARS} characters:\n\n"
-                    + text[:MAX_INLINE_READ_CHARS]
-                ),
-            )
-        return ToolResult.succeeded(invocation.call, content=text)
+        if not text:
+            # Said, not returned empty. An empty tool message reads to a model
+            # as a call that was ignored, so it sends the same one again --
+            # and `MAX_IDENTICAL_CALLS` ends the turn on the third. `project_
+            # list` and `project_grep` both already had this branch; read did
+            # not, and a zero-byte `__init__.py` is not an unusual thing to
+            # open in a Python project.
+            return ToolResult.succeeded(invocation.call, content=f"{path} is empty.")
+        return windowed_result(invocation, label=path, text=text, arguments=arguments)
 
 
 @dataclass(frozen=True, slots=True)

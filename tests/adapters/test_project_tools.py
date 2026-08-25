@@ -33,8 +33,6 @@ from agent_workbench.adapters.tools.project_files import (
 from agent_workbench.application.code_session import (
     CODE_PROJECT_TOOLS,
     CODE_PROJECT_TOOLS_WITH_RUN,
-    CODE_PROJECT_TOOLS_WITH_SANDBOX,
-    CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN,
     CODE_TOOLS,
     CODE_TOOLS_WITH_SANDBOX,
     CodeSessionService,
@@ -104,13 +102,17 @@ class TestExclusivity:
         # puts a scratch file in somebody's repository root.
         assert set(CODE_TOOLS).isdisjoint(CODE_PROJECT_TOOLS)
 
-    def test_the_sandbox_variants_stay_disjoint_apart_from_the_sandbox(self) -> None:
-        # The one name both may carry is `sandbox_run`, which is neither set's
-        # file language. Asserted rather than assumed: the two tuples are
-        # written out by hand, and the way that breaks is somebody appending to
-        # the wrong one.
-        shared = set(CODE_TOOLS_WITH_SANDBOX) & set(CODE_PROJECT_TOOLS_WITH_SANDBOX)
-        assert shared == {"sandbox_run"}
+    def test_no_project_tuple_offers_a_tool_bound_to_the_flat_workspace(self) -> None:
+        # `sandbox_run` used to be the one name both sides could carry, on the
+        # reasoning that it is neither set's file language. It is not a file
+        # language question: the tool reads its session out of `WorkspaceScope`
+        # and `CodeSessionService.run` enters exactly one scope, so on a project
+        # turn every call raised `SandboxUnavailableError` and the model was
+        # handed `unhandled SandboxUnavailableError`. Under `demo-local`, where
+        # every session has a project, that was every call.
+        flat = set(CODE_TOOLS_WITH_SANDBOX)
+        for offered in (CODE_PROJECT_TOOLS, CODE_PROJECT_TOOLS_WITH_RUN):
+            assert flat.isdisjoint(offered)
 
     def test_each_project_tool_is_named_in_the_project_set(self) -> None:
         # The registry and the tuple are written in different files, and a tool
@@ -132,9 +134,7 @@ class TestExclusivity:
         # nowhere is dead weight -- it just applies to a different tuple.
         name = ProjectRunTool(ProjectFileScope(), environment={}).spec().name
         assert name not in CODE_PROJECT_TOOLS
-        assert name not in CODE_PROJECT_TOOLS_WITH_SANDBOX
         assert name in CODE_PROJECT_TOOLS_WITH_RUN
-        assert name in CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN
 
     def test_no_flat_workspace_tuple_ever_carries_the_run_tool(self) -> None:
         # A command needs a directory to run in, and a flat-workspace turn has
@@ -149,11 +149,7 @@ class TestExclusivity:
         # interesting bug is the pair disagreeing: a turn granted a tool its own
         # envelope denies burns a whole turn on `outside_submitted_envelope`.
         assert code_risk_ceiling(CODE_PROJECT_TOOLS) == "write"
-        assert code_risk_ceiling(CODE_PROJECT_TOOLS_WITH_SANDBOX) == "external"
         assert code_risk_ceiling(CODE_PROJECT_TOOLS_WITH_RUN) == "destructive"
-        assert (
-            code_risk_ceiling(CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN) == "destructive"
-        )
 
     def test_every_offered_tool_is_within_the_ceiling_it_derives(self) -> None:
         # The property the derivation exists for, checked against the specs
@@ -279,6 +275,90 @@ class TestInsideAScope:
         )
         assert result.error is not None
         assert "0 times" in result.error.message
+
+
+class TestReadingAFileTheModelCannotHoldAtOnce:
+    """What a read says when the file does not fit, and when there is nothing.
+
+    Both used to be answered in a way the model could not act on: an empty file
+    came back as an empty tool message, and a long one came back as a
+    *success* carrying its first 48,000 characters with no argument that could
+    ever reach the rest.
+    """
+
+    @pytest.fixture
+    def entered(self, project: Path, scope: ProjectFileScope):
+        store = FilesystemProjectFileStore(ProjectSandbox(project))
+        with scope.using(store):
+            yield scope
+
+    async def test_an_empty_file_says_so_instead_of_returning_nothing(
+        self, entered: ProjectFileScope, project: Path
+    ) -> None:
+        # An empty tool message reads as a call that was ignored, so the model
+        # sends the same one again and `MAX_IDENTICAL_CALLS` ends the turn on
+        # the third. A zero-byte `__init__.py` is not an unusual thing to open.
+        (project / "src" / "__init__.py").write_text("")
+        result = await ProjectReadTool(entered).handle(
+            _invocation("project_read", path="src/__init__.py")
+        )
+        assert result.error is None
+        assert result.content == "src/__init__.py is empty."
+
+    async def test_the_tail_of_a_long_file_is_reachable(
+        self, entered: ProjectFileScope, project: Path
+    ) -> None:
+        # The defect this closes: the head came back and nothing could ask for
+        # the rest. On a project turn there is no second route to it either --
+        # `sandbox_run` cannot see the directory at all.
+        (project / "long.txt").write_text("".join(f"line {n}\n" for n in range(9_000)))
+        head = await ProjectReadTool(entered).handle(
+            _invocation("project_read", path="long.txt")
+        )
+        assert head.content is not None
+        assert "pass offset=" in head.content
+        resume = int(head.content.split("pass offset=")[1].split(" ")[0].rstrip("."))
+
+        tail = await ProjectReadTool(entered).handle(
+            _invocation("project_read", path="long.txt", offset=resume)
+        )
+        assert tail.content is not None
+        assert "line 8999" in tail.content
+
+    async def test_a_window_says_which_lines_it_gave(
+        self, entered: ProjectFileScope, project: Path
+    ) -> None:
+        (project / "long.txt").write_text("".join(f"{n}\n" for n in range(1, 51)))
+        result = await ProjectReadTool(entered).handle(
+            _invocation("project_read", path="long.txt", offset=10, limit=5)
+        )
+        assert result.content is not None
+        assert result.content.startswith("long.txt: lines 10-14 of 50;")
+        assert result.content.endswith("10\n11\n12\n13\n14\n")
+
+    async def test_an_offset_past_the_end_is_a_refusal_not_the_last_line(
+        self, entered: ProjectFileScope
+    ) -> None:
+        result = await ProjectReadTool(entered).handle(
+            _invocation("project_read", path="src/main.py", offset=900)
+        )
+        assert result.error is not None
+        assert "past the end" in result.error.message
+
+    async def test_a_file_too_large_to_read_is_not_offered_an_offset(
+        self, entered: ProjectFileScope, project: Path
+    ) -> None:
+        # `MAX_READ_BYTES` is a refusal, not a truncation: there is no window
+        # of this file that any offset reaches. Telling the model to "pass
+        # offset" here would buy a sequence of calls that all refuse the same
+        # way, against a bounded tool allowance.
+        (project / "huge.bin").write_bytes(b"a" * (2 * 1024 * 1024 + 1))
+        result = await ProjectReadTool(entered).handle(
+            _invocation("project_read", path="huge.bin")
+        )
+        assert result.error is not None
+        assert result.error.code == "output_too_large"
+        assert "offset" not in result.error.message
 
 
 class TestTheToolsDoNotBypassTheSandbox:

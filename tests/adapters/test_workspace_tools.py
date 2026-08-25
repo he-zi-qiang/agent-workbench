@@ -217,6 +217,58 @@ def test_read_returns_what_write_put_there() -> None:
         assert "hello" in result.content
 
 
+def test_reading_an_empty_file_says_so_rather_than_returning_nothing() -> None:
+    # An empty tool message reads to a model as a call that was ignored, so it
+    # sends the same one again -- and `MAX_IDENTICAL_CALLS` ends the turn on the
+    # third. `workspace_list` has said "The workspace is empty." since it was
+    # written; read had no equivalent branch.
+    with entered() as scope:
+        invoke(WorkspaceWriteTool(scope), name="empty.md", content="")
+
+        result = invoke(WorkspaceReadTool(scope), name="empty.md")
+
+        assert result.status == "ok"
+        assert result.content == "empty.md is empty."
+
+
+def test_a_file_past_the_context_ceiling_can_be_read_to_its_end() -> None:
+    # Above the ceiling the read used to succeed carrying the first 48,000
+    # characters, and no argument existed that could reach the rest -- so a
+    # model summarising a long file summarised its head and said nothing about
+    # having done so.
+    with entered() as scope:
+        body = "".join(f"line {n}\n" for n in range(9_000))
+        invoke(WorkspaceWriteTool(scope), name="long.txt", content=body)
+
+        head = invoke(WorkspaceReadTool(scope), name="long.txt")
+
+        assert head.status == "ok"
+        assert "stopped at the 48000-character ceiling" in head.content
+        resume = int(head.content.split("pass offset=")[1].split(" ")[0].rstrip("."))
+
+        tail = invoke(WorkspaceReadTool(scope), name="long.txt", offset=resume)
+
+        assert "line 8999" in tail.content
+
+
+def test_both_file_languages_report_a_window_in_the_same_words() -> None:
+    # The reason the window lives in `domain/workspace.py`: a model that learns
+    # "pass offset=N" from one of these tools and meets a different sentence in
+    # the other has to work out whether it is even the same situation.
+    with entered() as scope:
+        invoke(
+            WorkspaceWriteTool(scope),
+            name="numbers.txt",
+            content="".join(f"{n}\n" for n in range(1, 51)),
+        )
+
+        result = invoke(
+            WorkspaceReadTool(scope), name="numbers.txt", offset=10, limit=5
+        )
+
+        assert result.content.startswith("numbers.txt: lines 10-14 of 50;")
+
+
 def test_reading_a_rendered_document_describes_it_instead_of_decoding_it() -> None:
     # The bug this closes killed a whole Task, and not at this tool. Decoding a
     # .docx with errors="replace" yields mojibake containing \u0000; that text

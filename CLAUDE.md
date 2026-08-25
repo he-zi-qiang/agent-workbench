@@ -103,7 +103,7 @@ Two graphs, chosen and frozen at submission: the fixed research graph (`understa
 
 ### Configuration is a contract, not a bag of values
 
-Single schema (currently `1.17`), cross-domain validation at startup: a capability the config claims but the code does not have **fails at config load**. `docs/configuration.md` §3 lists the invariants written as single-valued `Literal`s in `bootstrap/settings.py` — PostgreSQL as the fact source, `FOR UPDATE SKIP LOCKED`, fusion owned by the application, the self-built runtime as the only tool loop, telemetry body recording off, and more. **Changing one of those requires an ADR first**, not an environment override.
+Single schema (currently `1.18`), cross-domain validation at startup: a capability the config claims but the code does not have **fails at config load**. `docs/configuration.md` §3 lists the invariants written as single-valued `Literal`s in `bootstrap/settings.py` — PostgreSQL as the fact source, `FOR UPDATE SKIP LOCKED`, fusion owned by the application, the self-built runtime as the only tool loop, telemetry body recording off, and more. **Changing one of those requires an ADR first**, not an environment override.
 
 ### Where things live
 

@@ -60,6 +60,17 @@ WORKSPACE_WRITE_TOOL: Final[str] = "workspace_write"
 WORKSPACE_EDIT_TOOL: Final[str] = "workspace_edit"
 WORKSPACE_GREP_TOOL: Final[str] = "workspace_grep"
 
+#: What one read may put into the model's context in one go. Above this the
+#: bytes are still there -- neither store is lossy -- but the model is handed a
+#: window and told where it stopped, because a single read should not be able
+#: to spend the whole context budget.
+#:
+#: Here rather than beside either handler because it was beside *both*: the
+#: flat workspace and the project directory each declared their own 48,000 and
+#: each wrote its own sentence about hitting it, so the same event was reported
+#: to the model in two wordings that a reader would have to diff to compare.
+MAX_INLINE_READ_CHARS: Final[int] = 48_000
+
 #: What one grep may report, and how much it may read to get there (ADR-030
 #: §2.4). Constants rather than configuration, like the workspace ceilings
 #: above and for the same reason: they bound what reaches a model's context,
@@ -169,6 +180,167 @@ class GrepOutcome:
     matches: tuple[GrepMatch, ...]
     more_matches: bool
     unscanned_files: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReadWindow:
+    """One slice of a text file, and every way it is not the whole file.
+
+    Four separate facts rather than a ``truncated`` boolean, because the caller
+    that matters is a model deciding what to do next, and the four call for
+    different next moves. ``last_line < total_lines`` means ask again from
+    ``next_offset``. ``stopped_at_char_ceiling`` means the window ended because
+    of the context budget rather than because of anything about the file, so a
+    smaller ``limit`` is not the fix. ``line_cut`` means the last line itself
+    came back shortened, and it is the only one of the four that loses bytes:
+    continuing from ``next_offset`` skips the tail of that line, which is a
+    thing that has to be said out loud rather than left for the model to infer
+    from a line number that does not add up. ``withheld_chars`` is how many
+    that is -- a number, because "some of it is missing" and "the last 300
+    characters are missing" call for different next moves, and because when the
+    cut line is also the last line, no offset reaches them at all.
+    """
+
+    text: str
+    first_line: int
+    last_line: int
+    total_lines: int
+    stopped_at_char_ceiling: bool
+    line_cut: bool
+    withheld_chars: int = 0
+
+    @property
+    def next_offset(self) -> int | None:
+        """Where a following read continues, or ``None`` at the end."""
+
+        return self.last_line + 1 if self.last_line < self.total_lines else None
+
+    @property
+    def is_whole_file(self) -> bool:
+        return self.first_line == 1 and self.next_offset is None and not self.line_cut
+
+
+def read_window(text: str, *, offset: int = 1, limit: int | None = None) -> ReadWindow:
+    """The lines of ``text`` from ``offset``, bounded by ``limit`` and the ceiling.
+
+    Whichever bites first wins, and the result says which. Slicing by line
+    alone would let a `limit` of 5000 on a generated file spend the whole
+    context budget in one call; slicing by characters alone gives back a window
+    whose edges are not lines, and a model cannot ask for "the rest" of that.
+
+    ``offset`` past the end is not clamped. A caller that asked for line 900 of
+    a 40-line file has made a mistake worth hearing about, and returning the
+    last line instead would answer a question nobody asked.
+    """
+
+    lines = text.splitlines(keepends=True)
+    total = len(lines)
+    start = max(1, offset)
+    if start > total:
+        return ReadWindow(
+            text="",
+            first_line=start,
+            last_line=start - 1,
+            total_lines=total,
+            stopped_at_char_ceiling=False,
+            line_cut=False,
+        )
+
+    taken: list[str] = []
+    budget = MAX_INLINE_READ_CHARS
+    stopped_at_ceiling = False
+    line_cut = False
+    withheld = 0
+    last = start - 1
+    for index in range(start - 1, total):
+        if limit is not None and len(taken) >= limit:
+            break
+        line = lines[index]
+        if len(line) <= budget:
+            taken.append(line)
+            budget -= len(line)
+            last = index + 1
+            continue
+        stopped_at_ceiling = True
+        if taken:
+            break
+        # Nothing taken yet, so this one line decides whether the file is
+        # readable at all. Its terminator is allowed over the ceiling: a line
+        # whose text fits and whose "\n" does not would otherwise come back
+        # cut, reporting one withheld character and costing a whole extra call
+        # to fetch a newline.
+        body = line.rstrip("\r\n")
+        last = index + 1
+        if len(body) <= budget:
+            taken.append(line)
+            break
+        # A minified bundle, a single-line JSON document. Handing back nothing
+        # would make the file unreadable at any offset; handing back the
+        # ceiling's worth of it loses the tail, which `line_cut` announces.
+        taken.append(line[:budget])
+        withheld = len(line) - budget
+        line_cut = True
+        break
+
+    return ReadWindow(
+        text="".join(taken),
+        first_line=start,
+        last_line=last,
+        total_lines=total,
+        stopped_at_char_ceiling=stopped_at_ceiling,
+        line_cut=line_cut,
+        withheld_chars=withheld,
+    )
+
+
+def describe_read_window(label: str, window: ReadWindow) -> str | None:
+    """The one line that precedes a partial read, or ``None`` for a whole file.
+
+    Built here rather than at each handler so the two file languages report the
+    same event in the same words. A model that learns "stopped at the ceiling,
+    pass offset=N" from the workspace and then meets a different sentence in a
+    project directory has to work out whether it is the same situation.
+    """
+
+    if window.is_whole_file:
+        return None
+    if not window.text:
+        return (
+            f"{label} has {window.total_lines} lines; "
+            f"offset {window.first_line} is past the end."
+        )
+    where = (
+        f"{label}: lines {window.first_line}-{window.last_line} of {window.total_lines}"
+    )
+    if window.line_cut:
+        cut = (
+            f"{where}, and line {window.last_line} is longer than the "
+            f"{MAX_INLINE_READ_CHARS}-character ceiling on its own, so it is "
+            f"shown cut: {window.withheld_chars} characters of it are not here"
+        )
+        if window.next_offset is None:
+            # The one place this mechanism cannot reach: the tail of a cut line
+            # that is also the last line -- a minified bundle, a one-line JSON
+            # document, which are the two cases the cut exists for. `offset`
+            # addresses lines and there is no line after this one to ask for.
+            # Said plainly and pointed somewhere that works, because the
+            # sentence this replaces interpolated `next_offset` unconditionally
+            # and told the model to `pass offset=None` -- a value the schema
+            # rejects, whose likely sequel is the identical read again and
+            # `MAX_IDENTICAL_CALLS` ending the turn on the third.
+            return (
+                f"{cut}, and no offset reaches them: this is the file's last "
+                "line. Search the file rather than reading it."
+            )
+        return f"{cut}. offset={window.next_offset} continues after that line."
+    if window.stopped_at_char_ceiling:
+        return (
+            f"{where}, stopped at the {MAX_INLINE_READ_CHARS}-character "
+            f"ceiling; pass offset={window.next_offset} to continue."
+        )
+    if window.next_offset is not None:
+        return f"{where}; pass offset={window.next_offset} to continue."
+    return f"{where}."
 
 
 def grep_workspace(
@@ -316,6 +488,7 @@ __all__ = [
     "MAX_GREP_LINE_CHARS",
     "MAX_GREP_MATCHES",
     "MAX_GREP_SCANNED_BYTES",
+    "MAX_INLINE_READ_CHARS",
     "MAX_WORKSPACE_ENTRIES",
     "MAX_WORKSPACE_TOTAL_BYTES",
     "WORKSPACE_EDIT_TOOL",
@@ -326,12 +499,15 @@ __all__ = [
     "WORKSPACE_WRITE_TOOL",
     "GrepMatch",
     "GrepOutcome",
+    "ReadWindow",
     "WorkspaceEditMatchError",
     "WorkspaceManifest",
     "WorkspaceName",
     "WorkspaceOverflowError",
     "WorkspacePatternError",
     "WorkspaceScanTimeoutError",
+    "describe_read_window",
     "grep_workspace",
+    "read_window",
     "replace_exactly_once",
 ]

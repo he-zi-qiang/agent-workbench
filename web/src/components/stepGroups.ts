@@ -126,17 +126,24 @@ const TOOL_VERBS: Readonly<Record<string, string>> = {
   // a nullable label that also tags conversations and tasks, so 项目文件 would
   // name something that exists with no directory behind it.
   //
-  // Four, not five. There is no `project_grep` -- `CODE_PROJECT_TOOLS` in
-  // `application/code_session.py` has four entries, because searching a real
-  // tree is not the implementation that searches the in-memory manifest. A
-  // phrase here for a tool that cannot be called would dress up a capability
-  // nobody built.
+  // Five now, not four. The comment here used to say there is no
+  // `project_grep`, and that stopped being true when one was written --
+  // `CODE_PROJECT_TOOLS` has five entries. A stale absence claim is worse than
+  // a missing phrase: it tells the next reader not to look.
   project_read: "读取项目目录",
   project_write: "写入项目目录",
   project_edit: "修改项目目录文件",
   project_list: "查看项目目录",
+  project_grep: "搜索项目目录",
   export_artifact: "导出报告",
   sandbox_run: "运行代码",
+  // Not 运行代码, which is `sandbox_run`'s phrase and describes a throwaway
+  // container with no network. This one runs on the reader's own machine, in
+  // their own directory, with no sandbox and no undo (ADR-077) -- and it is
+  // the row they are looking at while deciding whether to approve it. The two
+  // have to be tellable apart at a glance, so the phrase names the machine
+  // rather than the act.
+  project_run: "在本机执行命令",
 };
 
 /** The keys that carry a call's subject, in the order they are preferred. */

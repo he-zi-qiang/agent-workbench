@@ -1,8 +1,9 @@
 # 已知缺口
 
-截至 **2026-08-24**，配置 schema `1.17`，Alembic 迁移 31 个
-（head `0031_project_root_path`）——这三项本次重测；上一版写的 `1.15` / 28 个 /
-`0027_session_workspace_version` 三项都已过期，正是 E-05 说的那种复发。
+截至 **2026-08-25**，配置 schema `1.18`，Alembic 迁移 31 个
+（head `0031_project_root_path`）——这三项本次重测；上一版写的 `1.17` 已过期
+（`settings.py:154` 与 `config.default.toml:15` 都是 `1.18`），正是 E-05 说的那种
+复发，而且这一次复发在的正是那句自称"本次重测"的话里。
 本文档各条的**代码位置**仍核对于 `main@921dda5`，未随之重核——分开写，是因为
 合成一句会让「今天量过的数字」替一份没重核的清单背书。
 门禁数字不在本文档维护，见 [十分钟版本的门禁与规模一节](./HIGHLIGHTS.md#2-门禁与规模)。
@@ -659,7 +660,14 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 | F-20 | 跨产品归属的三处数据没人再读写（ADR-074 之后） | 已知代价 |
 | F-21 | 不可重试的 MCP 工具（点击、截图）进不了 Task | **拒绝** |
 | F-22 | 截图按显示器给坐标，点击按全局坐标发事件 | **未实现** |
-| F-23 | 项目目录的回合，提示词说的是扁平工作区 | 已知代价 |
+| F-24 | 项目目录的回合没有容器可用 | **拒绝** |
+
+> 编号一经退休不再复用。F-23（项目目录的回合被告知自己在一个扁平的、有版本的工作区
+> 里）已于 2026-08-25 关闭，按本文档维护规则从正文删除，落地记录在
+> [status.md](./status.md) §1：`CODER_SYSTEM_PROMPT_PROJECT` 由具名替换从基底派生，
+> 由 `_system_prompt_for` 按本回合被提供的工具选中，锚点缺失时在 import 时抛错。
+> `src/` 与 `tests/` 里若干注释仍以过去时引用这个编号——它们讲的是这段散文为什么是
+> 现在这个样子，读者顺着编号找到的应该是这里。
 
 ### F-20 跨产品归属的三处数据没人再读写 —— 已知代价
 
@@ -1180,35 +1188,27 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
 显示器上各点一次，落点都对得上。今天这台机器只有一块屏，所以这条**在这台机器上验不了**
 ，需要外接一块才能测。
 
-### F-23 项目目录的回合，提示词说的是扁平工作区 —— 已知代价
+### F-24 项目目录的回合没有容器可用 —— 拒绝
 
-**证据**：[code_prompt.py](../src/agent_workbench/application/code_prompt.py)
-（全文 "project" 出现 **0 次**）、
-[code_session.py](../src/agent_workbench/application/code_session.py)
-（`_system_prompt_for` 只按 `sandbox_run` 与 `project_run` 分支，不按工作区／项目
-分支）
+**证据**：[code_session.py](../src/agent_workbench/application/code_session.py)
+`CODE_PROJECT_TOOLS_WITH_RUN` 是项目侧唯一带可选工具的元组，里面没有
+`sandbox_run`；[dependencies.py](../src/agent_workbench/apps/api/dependencies.py)
+`_code_project_tools` 不再读 `code.sandbox_enabled`；不变量由
+`_assert_project_tuples_enter_their_own_scope`（import 时）与
+`tests/adapters/test_project_tools.py::TestExclusivity::test_no_project_tuple_offers_a_tool_bound_to_the_flat_workspace`
+两处钉住。
 
-ADR-072 让 Project 成为本机的一个真实目录，ADR-074 把 Code 会话搬到它上面。提示词
-没跟上：一个项目目录的回合今天被告知
+**为什么**：在此之前项目回合是**被提供**了 `sandbox_run` 的，而它一次也不可能成功。
+`SandboxRunTool` 持有的是扁平的 `WorkspaceScope`，从 ContextVar 里取会话；而
+`CodeSessionService.run` 的 `ExitStack` 只进入一个 scope，项目回合进的是
+`ProjectFileScope`（ADR-073「只进入一个」）。所以每一次调用都在碰到沙箱之前就抛
+`SandboxUnavailableError`，模型收到的是 `unhandled SandboxUnavailableError`。在
+`config.demo-local.toml` 下每个会话都有项目，也就是**每一次**调用。
 
-> Your working set is not a filesystem. It is a set of named entries reached only
-> through the workspace tools, and each successful write produces a new version of
-> the whole set.
+删掉这个提供，是把"不能用"从一次浪费掉的回合改成一句在装配期就成立的话。让容器真正
+看得见项目目录是另一件事：它要动 [ADR-029](./adr/0029-ephemeral-sandbox.md) 逐行论证过的
+`ISOLATION_FLAGS`，那是能力变更，要自己的 ADR 和自己的证据。
 
-而它握着的是 `project_read`／`project_write`／`project_edit`／`project_list`／
-`project_grep`，作用在一棵真实的目录树上，写进去就是写进去，没有版本。三句话里
-「不是文件系统」「每次写产生整套的新版本」两句对它是假的。
-
-**为什么算已知代价**：错的方向是**保守**的。模型被告知的世界比它实际所在的世界更
-受限，所以它不会去做提示词说做不到的事——它会多问一次、多列一次目录，而不会误伤。
-工具的 schema 才是边界，提示词从来不是（`code_prompt.py` 的模块注释自己写着：
-「Everything here is enforced somewhere else too, or it is not stated」）。
-
-[ADR-077](./adr/0077-a-command-on-this-machine-is-shown-before-it-is-run.md) §2.4 修
-了其中一句——一个握着 `project_run` 却被告知「没有 shell」的回合会拒绝使用自己手里
-的工具，那是**不**保守的方向，所以必须修。剩下两句留在这里。
-
-**做完的判据**：一个项目变体的基底提示词，说清「这是磁盘上的真实目录、写入立即
-生效、没有版本可回退」，并由 `_system_prompt_for` 按回合是否进入了项目目录来选。
-和现有三个变体一样用 `_rewrite` 的具名替换派生，这样基底一改就在 import 时炸掉，
-而不是发出一个描述错世界的回合。
+**做完的判据**：一份 ADR 回答「容器挂载用户真实目录之后，`--network=none` 之外还剩
+哪些隔离保证」，并给出一次真实运行的证据。在那之前，项目回合就是没有容器——
+`code.sandbox_enabled` 只对扁平工作区的会话有意义。

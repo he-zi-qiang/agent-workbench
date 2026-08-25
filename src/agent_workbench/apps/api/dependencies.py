@@ -108,8 +108,6 @@ from agent_workbench.application.code_approvals import (
 from agent_workbench.application.code_session import (
     CODE_PROJECT_TOOLS,
     CODE_PROJECT_TOOLS_WITH_RUN,
-    CODE_PROJECT_TOOLS_WITH_SANDBOX,
-    CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN,
     CODE_TOOLS,
     CODE_TOOLS_WITH_SANDBOX,
     CodeSessionService,
@@ -482,30 +480,28 @@ class ApiDependencies:
         await warm_encoders(*self.encoders)
 
 
-def _code_project_tools(*, sandbox: bool, host_commands: bool) -> tuple[ToolName, ...]:
-    """Which project-side tuple a turn is offered, from two independent flags.
+def _code_project_tools(*, host_commands: bool) -> tuple[ToolName, ...]:
+    """Which project-side tuple a turn is offered.
 
-    A function rather than a nested conditional at the call site, and the four
-    arms are spelled out rather than composed, because the tuples themselves
-    are: `application/code_session.py` writes each one down so that "what may a
-    coding session reach" has an answer to read. Assembling them here with a
-    `*` and an `if` would move that answer back into somebody's head at exactly
-    the point where there are now four of them.
+    A function rather than a conditional at the call site, and the arms are
+    spelled out rather than composed, because the tuples themselves are:
+    `application/code_session.py` writes each one down so that "what may a
+    coding session reach" has an answer to read.
 
-    The two flags come from different planes on purpose. `code.sandbox_enabled`
-    is a surface question -- may this session call the container. `policy.
-    shell_tools_enabled` is a deployment question, lives in the section
-    `policy_fingerprint` hashes, and therefore shows up in the `policy_identity`
-    every run records (ADR-077).
+    `code.sandbox_enabled` used to be the second flag here and is not read on
+    this side any more. It was a surface question -- may this session call the
+    container -- asked of a turn that has no container to call: `sandbox_run`
+    binds to the flat `WorkspaceScope` and a project turn enters only
+    `ProjectFileScope`, so every arm that included it offered a tool that could
+    only answer with a refusal. The flag still decides the flat-workspace
+    tuple at the call site, which is the only place it ever meant anything.
+
+    What remains, `policy.shell_tools_enabled`, is a deployment question: it
+    lives in the section `policy_fingerprint` hashes, and therefore shows up in
+    the `policy_identity` every run records (ADR-077).
     """
 
-    if host_commands:
-        return (
-            CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN
-            if sandbox
-            else CODE_PROJECT_TOOLS_WITH_RUN
-        )
-    return CODE_PROJECT_TOOLS_WITH_SANDBOX if sandbox else CODE_PROJECT_TOOLS
+    return CODE_PROJECT_TOOLS_WITH_RUN if host_commands else CODE_PROJECT_TOOLS
 
 
 def build_dependencies(
@@ -1263,7 +1259,6 @@ def _assemble_chat(
             # and only on the project side -- a flat-workspace turn has no
             # directory for a command to be run in.
             project_tool_names=_code_project_tools(
-                sandbox=config.code.sandbox_enabled,
                 host_commands=config.code.host_commands_enabled,
             ),
             sandbox_requires_approval=config.code.sandbox_requires_approval,
