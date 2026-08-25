@@ -115,6 +115,25 @@ class ProjectFileContent(VersionedModel):
     modified_at: datetime
 
 
+class ProjectFileVersion(VersionedModel):
+    """A file as some caller last saw it, offered back as a write precondition.
+
+    Both fields, not just the timestamp. An mtime alone is a good check on a
+    filesystem that keeps nanoseconds and a poor one on a filesystem that keeps
+    whole seconds, where a user's edit inside the same second as the agent's
+    read is invisible. The size costs nothing to carry and closes the common
+    half of that: an edit that changes a file's length is caught even when the
+    clock cannot tell the two apart.
+
+    What neither field catches is a change that preserves both -- a same-length
+    rewrite with the mtime restored. That is `touch -r` territory, deliberate,
+    and named here rather than defended against.
+    """
+
+    size_bytes: int
+    modified_at: datetime
+
+
 @runtime_checkable
 class ProjectFileStore(Protocol):
     """The file tree of one project, with the root already fixed.
@@ -181,11 +200,35 @@ class ProjectFileStore(Protocol):
 
         ...
 
-    async def write(self, path: str, content: str | bytes) -> ProjectFileEntry:
+    async def write(
+        self,
+        path: str,
+        content: str | bytes,
+        *,
+        if_unchanged: ProjectFileVersion | None = None,
+        create_only: bool = False,
+    ) -> ProjectFileEntry:
         """Create or replace one file, making parent directories as needed.
 
         Whole-file. Returns the entry as it now stands so a caller does not have
         to read back to learn the size and mtime it just caused.
+
+        ``if_unchanged`` makes the write conditional: the file must still be
+        the one that version describes, or ``ProjectFileChangedError`` is
+        raised and nothing is written. It defaults to ``None`` -- an
+        unconditional write -- because the console's own `PUT` is a person
+        acting on their own files and has nobody to be raced by.
+
+        ``create_only`` is the other mood: nothing may be at the path, or
+        ``ProjectFileExistsError`` is raised. The two are contradictory and
+        setting both is a ``ValueError`` rather than a precedence rule.
+
+        The checks belong here rather than in the caller, and that is the only
+        reason these parameters exist. A caller that stats the file and then
+        writes has a window between the two in which the user's editor can
+        save; a store that checks inside the same offloaded call does not
+        (ADR-0078). It is not a lock: two *processes* can still interleave, and
+        this one closes the window that this process opens.
         """
 
         ...

@@ -42,9 +42,11 @@ from __future__ import annotations
 
 import unicodedata
 from pathlib import PurePosixPath
-from typing import Annotated, Final
+from typing import Annotated, ClassVar, Final
 
 from pydantic import StringConstraints
+
+from agent_workbench.domain.errors import AgentWorkbenchError, ErrorCode
 
 #: The tool that runs a command on this machine, in the project's directory.
 #:
@@ -121,6 +123,43 @@ ProjectPathSegment = Annotated[
     str,
     StringConstraints(pattern=r"^[^/\\\x00-\x1f]+$", min_length=1, max_length=255),
 ]
+
+
+class ProjectFileChangedError(AgentWorkbenchError):
+    """A conditional write found the file no longer as the caller last saw it.
+
+    ``invalid_tool_input`` rather than a code of its own, and the choice is not
+    incidental. `ProjectEditTool` already answers `invalid_tool_input` when the
+    file does not match the model's belief about it ("the snippet appears 0
+    times"), and this is the same event on the other write path -- so it gets
+    the same code, and a reader who learns what one means has learned both.
+    Adding a fifteenth `ErrorCode` would also have meant a new arm in
+    `web/src/features/work/failure.ts`, a vocabulary change for a distinction
+    the message already carries.
+
+    The message is the part that has to work. `invalid_tool_input` is normally
+    terminal for a route -- discipline 3 tells the model that retrying a call
+    that was refused cannot succeed -- and here retrying *is* the answer, after
+    a re-read. So every caller raising this says what to do next, in the
+    sentence, rather than leaving the model to infer that this refusal is the
+    one that is worth another attempt.
+    """
+
+    code: ClassVar[ErrorCode] = "invalid_tool_input"
+
+
+class ProjectFileExistsError(AgentWorkbenchError):
+    """A create-only write found something already at the path.
+
+    The sibling of :class:`ProjectFileChangedError`, and a separate class
+    because the next move differs. That one means "you read this and it moved";
+    this one means "this appeared while you were deciding, and nothing in this
+    turn has ever seen it" -- so its message asks for a read rather than a
+    re-read, and the two must not be merged into one sentence that names the
+    wrong one half the time.
+    """
+
+    code: ClassVar[ErrorCode] = "invalid_tool_input"
 
 
 class ProjectPathError(ValueError):
@@ -273,6 +312,8 @@ __all__ = [
     "MAX_SEGMENT_BYTES",
     "PROJECT_RUN_SCOPE",
     "PROJECT_RUN_TOOL",
+    "ProjectFileChangedError",
+    "ProjectFileExistsError",
     "ProjectPathError",
     "ProjectPathSegment",
     "is_within",

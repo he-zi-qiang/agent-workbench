@@ -25,12 +25,17 @@ from agent_workbench.adapters.concurrency.call_runner import (
 )
 from agent_workbench.adapters.filesystem.sandbox import ProjectSandbox
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
+from agent_workbench.domain.project_files import (
+    ProjectFileChangedError,
+    ProjectFileExistsError,
+)
 from agent_workbench.ports.project_files import (
     ALWAYS_SKIPPED_DIRECTORIES,
     MAX_LISTING_ENTRIES,
     MAX_READ_BYTES,
     ProjectFileContent,
     ProjectFileEntry,
+    ProjectFileVersion,
     ProjectListing,
 )
 
@@ -194,9 +199,54 @@ class FilesystemProjectFileStore:
 
         return await offload(self._runner, work, name="project_files.read")
 
-    async def write(self, path: str, content: str | bytes) -> ProjectFileEntry:
+    async def write(
+        self,
+        path: str,
+        content: str | bytes,
+        *,
+        if_unchanged: ProjectFileVersion | None = None,
+        create_only: bool = False,
+    ) -> ProjectFileEntry:
+        if create_only and if_unchanged is not None:
+            # Contradictory moods, refused rather than silently ordered. One
+            # says "nothing may be here", the other "exactly this must be here".
+            raise ValueError("create_only and if_unchanged cannot both be set")
+
         def work() -> ProjectFileEntry:
             payload = content.encode("utf-8") if isinstance(content, str) else content
+            if create_only:
+                target = self._sandbox.resolve(path)
+                # `lexists` semantics, matching `exists()`: a dangling symlink
+                # is something at this path. Diverging here would let the tool
+                # layer refuse what the store accepts, or the reverse.
+                if target.is_symlink() or target.exists():
+                    raise ProjectFileExistsError(f"{path} already exists")
+            # Checked inside `work`, which is the only reason this is here and
+            # not in the caller: everything from the stat to the last byte
+            # written happens in one hop onto the executor, so nothing this
+            # process runs can save the file in between. Another process still
+            # can -- this is a precondition, not a lock, and ADR-0078 says so
+            # in those words.
+            if if_unchanged is not None:
+                target = self._sandbox.resolve(path)
+                if not target.exists():
+                    raise ProjectFileChangedError(
+                        f"{path} is gone; it existed when you read it. "
+                        "List the directory before writing it again."
+                    )
+                status = target.lstat()
+                now = _modified_at(status)
+                if (
+                    now != if_unchanged.modified_at
+                    or status.st_size != if_unchanged.size_bytes
+                ):
+                    raise ProjectFileChangedError(
+                        f"{path} changed after you read it "
+                        f"({if_unchanged.size_bytes} bytes at "
+                        f"{if_unchanged.modified_at.isoformat()}, now "
+                        f"{status.st_size} bytes at {now.isoformat()}). "
+                        "Read it again before writing it."
+                    )
             if len(payload) > MAX_READ_BYTES:
                 # The same ceiling as reads, on purpose: a store that accepts
                 # what it will later refuse to read back is one where an agent

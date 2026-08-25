@@ -4844,6 +4844,60 @@ p.aw-code-step-thought {
   opacity: 0.55;
 }
 
+/* 计划模式（ADR-0079）。开关做成 checkbox 而不是第二个发送按钮：一轮只有一种
+   模式，两个按钮会让「刚才那一轮是哪种」变成一个要回想的问题；而一个 checked
+   状态在发送之后仍然摆在那里，说的正是下一轮也是这个模式。 */
+
+.aw-code-plan-toggle {
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 11px;
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.aw-code-plan-toggle:hover {
+  color: var(--aw-text);
+}
+
+.aw-code-plan-toggle input {
+  display: none;
+}
+
+.aw-code-plan-toggle.is-on {
+  border-color: var(--aw-accent);
+  color: var(--aw-accent);
+}
+
+.aw-code-plan-toggle:has(input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* 「按这个计划执行」。摆在 composer 上沿而不是贴在那条报告下面：报告会滚走，而
+   这个提议要在读者读完之后仍然够得着。 */
+
+.aw-code-plan-offer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--aw-border);
+  border-radius: 11px;
+  background: var(--aw-panel-soft, var(--aw-panel));
+  color: var(--aw-text-soft);
+  font-size: 13px;
+}
+
 /* --- 开始页 --- */
 
 .aw-code-start {

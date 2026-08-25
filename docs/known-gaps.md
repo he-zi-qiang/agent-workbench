@@ -661,6 +661,8 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 | F-21 | 不可重试的 MCP 工具（点击、截图）进不了 Task | **拒绝** |
 | F-22 | 截图按显示器给坐标，点击按全局坐标发事件 | **未实现** |
 | F-24 | 项目目录的回合没有容器可用 | **拒绝** |
+| F-25 | 读写回执喂不满：三条路径绕过工具改动目录 | 已知代价 |
+| F-26 | `policy.write_tools_require_approval` 读起来像保证，src/ 里没有读者 | **口径不实** |
 
 > 编号一经退休不再复用。F-23（项目目录的回合被告知自己在一个扁平的、有版本的工作区
 > 里）已于 2026-08-25 关闭，按本文档维护规则从正文删除，落地记录在
@@ -1212,3 +1214,48 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
 **做完的判据**：一份 ADR 回答「容器挂载用户真实目录之后，`--network=none` 之外还剩
 哪些隔离保证」，并给出一次真实运行的证据。在那之前，项目回合就是没有容器——
 `code.sandbox_enabled` 只对扁平工作区的会话有意义。
+
+### F-25 读写回执喂不满 —— 已知代价
+
+**证据**：[ADR-078](./adr/0078-a-file-you-have-not-read-is-not-yours-to-overwrite.md)
+§3。[file_read_receipts.py](../src/agent_workbench/application/file_read_receipts.py)
+只在 `ProjectReadTool`／两个写工具里被写入，而目录有三条不经过这些工具的写入路径：
+`PUT /v1/projects/{project_id}/file`（[projects.py](../src/agent_workbench/apps/api/routes/projects.py)，
+走同一个 `store.write` 且**不带**前置条件）、用户自己的编辑器与 `git`、以及
+`project_run`（能改根下任何东西）。
+
+**为什么不修**：三条里只有 `project_run` 是可归因的，它已经被
+`ReadReceipts.note_command_ran()` 记下并换一句拒绝措辞。另外两条是**用户在动自己的
+文件**——给控制台的 `PUT` 加前置条件是让用户跟自己赛跑，没有意义。
+
+后果是回执会看见它没造成的合法 mtime 移动：模型被拒一次、重读一次、再写。
+**这是选定的代价**，不是没做完。多一次读换掉一次静默的数据丢失；反过来的错误——闸
+放行了一次真该拦的写——没有第二次机会，因为被覆盖的字节没有版本可退。
+
+**这一条不会有"做完"的一天。** 它不是待办：任何声称"回执覆盖了所有写入路径"的说法
+都是假的，除非目录变成一个只能经由本进程写入的东西——那是另一个产品。
+
+### F-26 `policy.write_tools_require_approval` 无人读取 —— 口径不实
+
+**证据**：[settings.py:927](../src/agent_workbench/bootstrap/settings.py) 是
+`write_tools_require_approval: Literal[True] = True`，
+[config.default.toml:407](../config/config.default.toml) 写着 `true`，而
+`rg write_tools_require_approval src/` 在这两处之外**零命中**。同时
+[code_session.py](../src/agent_workbench/application/code_session.py) 的
+`approval_required_risks` 只有 `("destructive",)`，`project_write` 与
+`workspace_write` 都是 `write` 风险——**按构造，写工具不停在任何人面前**。
+
+**为什么算口径不实而不是未实现**：这个名字是一句读起来像保证的话。一个读配置的人
+会得出"写文件要人批准"，而事实相反。这正是
+[ADR-077](./adr/0077-a-command-on-this-machine-is-shown-before-it-is-run.md) 的
+settings 注释点名的"最贵的一种不变量：读起来是保证，实际是注释"，也是
+[ADR-059](./adr/) 删掉 `node_retry_max_attempts` 的同一种形状。
+
+**为什么 ADR-079 没有顺手接上它**：plan mode 不是"写入停在人面前"，它是"这一轮没有
+写工具"。把这个字段接到 plan mode 上，只是让一个名字在新位置上继续承诺一件它不做的
+事。见 [ADR-079](./adr/0079-a-plan-is-not-an-authorization.md) §6。
+
+**做完的判据**：二选一，都要一次决定。要么接上一道真的 `write` 审批闸——那要回答
+"每一次写都停下来的回合还能不能干完活"，以及它与 ADR-078 的读写回执如何分工；要么
+像 ADR-059 那样把字段删掉，那是一次 `config_schema_version` 变更，应当与下一次
+schema 变更合并，不单独 bump。

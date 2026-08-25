@@ -17,7 +17,7 @@ is the part that has to know about tool results.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from pydantic import JsonValue
 
@@ -66,6 +66,7 @@ def windowed_result(
     label: str,
     text: str,
     arguments: Mapping[str, JsonValue],
+    note_read: Callable[[bool], None] | None = None,
 ) -> ToolResult:
     """One read's answer: the window, and the sentence that places it.
 
@@ -74,6 +75,15 @@ def windowed_result(
     is worth the two lines it costs there: without it the model cannot tell a
     file that ends at line 400 from one that was cut at line 400, and it has
     been observed to write the second one as though it were the first.
+
+    ``note_read`` is called on a successful read with whether the window was
+    the whole file, and never on a refusal. It exists because that answer is
+    computed here and needed by `ProjectWriteTool` (ADR-0078), and the only
+    other way for a caller to learn it is to window the text a second time --
+    two windowings that must agree, where the interesting bug is them
+    disagreeing and licensing an overwrite of bytes nobody read. The flat
+    workspace passes nothing: it versions every write, so "did you read this
+    first" is a question about a file that can be recovered either way.
     """
 
     offset = _line_number(arguments.get("offset")) or 1
@@ -94,6 +104,11 @@ def windowed_result(
                 retryable=False,
             ),
         )
+    if note_read is not None:
+        # `described is None` is exactly "this window was the whole file" --
+        # the same condition that decides whether a header is worth printing,
+        # asked once and used for both.
+        note_read(described is None)
     if described is None:
         return ToolResult.succeeded(invocation.call, content=window.text)
     return ToolResult.succeeded(

@@ -28,6 +28,196 @@
 
 ---
 
+## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十八批）：一个不能写的回合是另一种回合（ADR-079）
+
+上一批让写入变得不会静默覆盖。这一批加上「先说你要做什么」——因为在此之前，Code 的
+**每一个**回合从第一次工具调用起就武装着写进用户的真实仓库：`AskRequest` 只有
+`instruction` 一个字段，所有工具元组都含 `*_write`／`*_edit`，而 `write` 风险不在任何
+`approval_required_risks` 里。
+
+决策记在 [ADR-079](./adr/0079-a-plan-is-not-an-authorization.md)。**不动配置契约**。
+
+### 1. 先纠正一句话
+
+不能说「Code 面上没有任何只读开关」。执行侧的一半早就在：`project_write`／
+`project_edit` 带 `permission_scopes=("workspace:write",)`，缺 scope 会被
+`EnvelopePolicyEngine` 拒。它不是 plan mode 的理由有三条，都写进了 ADR：它是全局而非
+按回合的、与 Work 页 v2 的 `work` 节点共用（去掉就断 Task 导出）、且**对模型不可见**
+——模型照旧被提供写工具，中途才发现被拒。
+
+### 2. 三件事一起动，否则模型又为一个它不在的世界正确地行动
+
+**工具清单**按各自 `ToolSpec` 的 risk 收窄，**不按 `*_write`／`*_edit` 后缀**。后缀
+过滤是"风险写在第二个地方"，而且带通配符：第一个不守命名约定的工具（将来的
+`project_move`、任何 MCP 绑定）都会溜进一个已被告知"改不了任何东西"的回合。
+
+**信封的天花板**跟着落到 `read`，而且没人为它写分支——`code_risk_ceiling` 从命名两个
+工具的 if 链改成读被提供工具自己的 specs，`read` 就自然落出来了。旧写法对问题的判断
+是对的（不要第二张风险表），但它自己就是那张表，只有两行。
+
+**提示词**说明这一轮改不了任何东西，并且改掉两处已经不成立的话：纪律 2（"优先用 edit
+而不是 write"）在两者都没有的回合里是关于一个不存在的选择的建议；纪律 6 的"Name the
+files you touched"是在要一份它做不到的报告。
+
+### 3. 又一个被测试当场抓住的错
+
+`tools` 起初做成可选、缺失时回退到旧的 `write` 天花板。
+`test_a_turn_holding_the_run_tool_is_not_told_there_is_no_shell` 立刻红：一个被提供
+`project_run` 而天花板是 `write` 的回合，是信封否定自己所授工具的回合，结局是
+`outside_submitted_envelope`。改成在 `__post_init__` 里强制。
+
+API 侧的 registry 是每次调用重建的（`sandbox_run` 由 `startup` 事后填进
+`SandboxSlot`），所以服务拿到的是 `_LiveToolRegistry`。在装配期拍快照，会在恰恰授予了
+沙箱的部署上少掉那条 spec。
+
+### 4. 计划不授权任何东西
+
+「按这个计划执行」重发的是**同一条指令**、换成 act 模式，不是把计划正文发过去。理由
+写进 ADR §3：一个能授权 act 回合的计划就是审批，而本仓把审批留给 `destructive` 且要求
+把命令原样展示给人看（ADR-077 不变量 2）。一份几百字的计划不满足那个形状——人批准的是
+他们读到的散文，跑的是模型随后自己决定的一串调用。
+
+同样写下来的是它**没买到**什么：没有 git，没有 diff，计划是散文，随后那一轮不受它约束。
+
+### 5. 顺手了结不掉的一件事
+
+`policy.write_tools_require_approval` 是 `Literal[True]`、配置里写着 `true`、
+**`src/` 里零读者**，而写工具按构造不停在任何人面前。本 ADR **不接它**：plan mode 不是
+"写入停在人面前"，接上去只是让一个名字在新位置继续承诺它不做的事。记为
+`docs/known-gaps.md` **F-26（口径不实）**，两条出路都要自己的决定。
+
+### 门禁
+
+`agent-config-check` 两个 profile 均 ok；`ruff format --check`（586 文件）+
+`ruff check` 全过；`pyright` **0 errors**；`pytest` **2894 passed / 774 skipped**。
+`web`：`eslint --max-warnings 0` 干净，`tsc -b` 0 errors，`vitest run`
+**560 passed（35 文件）**，`vite build` 通过。
+
+**本批新增 4 条后端测试 + 4 条前端测试**：plan 回合被收窄且被告知、计划不授权后续
+回合、`read_only` 只收窄且保序、没有 spec 的名字抛异常。天花板的第四个取值与"每个被
+提供工具都在派生出的天花板之内"是加进既有那两条里的，半接线装配那条是把 ADR-078 的
+同名测试扩成两道闸——都不是新增的函数，所以不计。前端四条钉住"开关真的改变发出去的
+那一轮而不是只改样子"。
+
+能力梯子停在 **Implemented + Tested**。Code 的提示词从未对真实模型跑过，所以"模型在
+plan 回合里真的只做计划"是**未经证实的**——被证实的是它手里没有写工具，且信封会拒绝
+它提出的任何写。
+
+---
+
+## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十七批）：没读过的文件，不归你覆盖（ADR-078）
+
+上一批把 Code 的提示词修对了，包括第一条纪律「Read before you write」。这一批把那句
+散文变成前置条件——因为 `code_prompt.py` 自己写着规矩：没有别处执行的散文不该写进
+提示词，而这一条此前**在任何地方都没有被执行**。
+
+要关的是一次**安静的损失**：用户在编辑器里改了文件，模型拿三次调用之前读到的那份
+（或者根本没读过）整文件覆盖回去，工具返回 `ok`，步骤行写「写入项目文件」，报告写得
+很漂亮。这条转录与一次正常回合**逐字相同**，用户下次打开文件才会知道。
+
+决策记在 [ADR-078](./adr/0078-a-file-you-have-not-read-is-not-yours-to-overwrite.md)，
+ADR-072 §5 相应增加第六条不变量。**不动配置契约**，`config_schema_version` 保持 1.18。
+
+### 1. 两层，因为要挡的是两件事
+
+**工具层**：`application/file_read_receipts.py`，ContextVar 包着的每回合台账
+`path -> (size_bytes, modified_at, covers_whole_file)`。`project_write` 只在**替换
+已存在的路径**时查它——新建文件不销毁任何东西，要求先读一个不存在的路径是在用一句
+无法执行的话拒绝编码智能体最常做的事。
+
+`covers_whole_file` 是让这件事诚实的那个字段。一次窗口读（`offset`/`limit`）或一次
+非文本读都是**成功**的读，且都没有把文件交出去；把它们记成"读过"，就是给一次覆盖
+未读字节的写发绿灯——正是第一条纪律要挡的失败，现在还带着闸门的批准。它由
+`windowed_result` 的新回调 `note_read` 回传，而那正是它用来决定要不要打印窗口抬头的
+同一个判断：问一次用两处，而不是让调用方再切一次窗口然后指望两次结果一致。
+
+**store 层**：`ProjectFileStore.write` 新增 `if_unchanged: ProjectFileVersion | None`。
+工具层判断与字节落盘之间还有窗口——`store.read` 与 `store.write` 是两次独立的 `await`
+——用户的编辑器保存正好落在那种窗口里。stat 与写入放进**同一个 offload 闭包**，那个
+窗口就没了。这不是锁：另一个进程仍然可以插进来，它关掉的是本进程自己开的那个。
+
+`ProjectFileVersion` 带尺寸和时间戳两个字段。mtime 在保留纳秒的文件系统上是好检查，
+在只保留整秒的文件系统上是差检查——那里用户在读之后同一秒内的保存不可见。这条有它
+自己的测试（`test_a_same_mtime_different_size_still_refuses`，用 `os.utime` 还原
+时间戳来逼出粗时钟的行为）。
+
+### 2. 第一版把整道闸打开了，两次调用就能绕过
+
+值得单写，因为它是这批最贵的一个教训。两条写路径的"写完刷新回执"最初写成了同一句，
+实测两次调用即可洗白一个从没读过的文件：
+
+```
+project_edit(path="big.py", find="MARKER", replace="MARKED")   # 30 KB，从没读过
+  -> 记下 covers_whole_file=True
+project_write(path="big.py", content="# gone\n")               # 通过，30 KB 没了
+```
+
+原因是 `project_edit` 拿到的是片段：**读文件的是 store，不是模型**。现在 edit 只
+**沿用**编辑之前那条回执的覆盖范围，编辑之前没有回执、编辑之后也不记；只有
+`project_write` 产生全量回执，因为模型交出了每一个字节。
+
+这个洞不是想出来的，是拿真工具跑出来的——三条测试钉住它，包括那条 30 KB 的实测样本。
+
+### 3. `project_edit` 不查回执，但必须传前置条件
+
+它自己在一句话之前读过文件，且 `count(find) == 1` 已经挡掉大部分错记，所以它**不**
+需要回执——把安全的那个工具也拦住，只会把模型推向危险的那个。但它必须把自己那次读的
+版本传下去：不传的话，新参数只保护了两条写路径里较弱的那一条。
+
+这条竞态是真的测出来的，不是设想的：`_SavesWhileYouRead` 是一个只包了 `read` 的
+store，在 read 与 write 之间让"用户"保存一次。用包装而不是 monkeypatch，因为
+`FilesystemProjectFileStore` 有 `__slots__`，属性替换不了。
+
+### 4. 拒绝分四种句子，因为下一步不同
+
+没有回执 → 读了再写；回执是窗口 → 补读，或者改用 `project_edit`；文件动过且本回合
+跑过命令 → 可能是你自己的 `black .`，重读；文件动过且本回合没跑命令 → 别人在动这个
+文件，重读**并且在报告里说**。
+
+最后两条是同一个事件的两句话。把格式化器动过的 mtime 说成"用户编辑了它"，模型会停下
+来报告；把用户的编辑说成"你自己的命令干的"，模型会闷头重写。措辞写成猜测
+（"may have done it"），因为这里没有任何东西能真正归因一次改动。
+
+`ProjectFileChangedError` 用 `invalid_tool_input` 而不是新增第十五个 `ErrorCode`：
+`project_edit` 早就用这个码回答"你以为在那儿的片段不在那儿"，这是同一个事件的另一条
+写路径。**但**这个码在别处是终局的（提示词第 3 条纪律说"重试同样的调用不可能成功"），
+而这里重试恰恰是对的——所以每一句消息都点名那次让重试变得不同的读。
+
+### 5. 一个不接线就炸的闸
+
+`ReadReceipts` 的每个方法在未进入回合时**抛异常**，`CodeSessionService.__post_init__`
+拒绝"给了 `project_scope` 却没给 `read_receipts`"的装配。另外两种形状都更糟，且都在
+转录里显得正常：临时造一个空台账，会对每一次写回答"你没读过"——一个什么都拒绝的闸看
+起来像在工作，实际没接线；返回一个私有台账，会把每次读记进没人查的表——一个没接线的
+闸看起来像在工作。
+
+### 6. 这道闸喂不满，这写进了 ADR
+
+`PUT /v1/projects/{id}/file`、用户的编辑器、`git`、`project_run`，都能绕过工具改动
+目录。回执会因此看见它没造成的合法 mtime 移动，模型被拒一次、重读一次、再写。
+**这是代价不是缺陷**：多一次读，换掉一次静默的数据丢失；反过来的错误没有第二次机会。
+
+同样写进 ADR 的：这**不**降低 `project_write` 的风险等级。`approval_required_risks`
+仍然只有 `("destructive",)`，`project_write` 仍然是 `write`，按构造不停在人面前。这道
+闸挡的是"覆盖你没看过的东西"，不是"未经批准就写"。
+
+### 门禁
+
+`agent-config-check --profile development` ok；`ruff format --check`（586 文件）+
+`ruff check` 全过；`pyright` **0 errors**；`pytest` **2886 passed / 774 skipped**。
+
+**本批新增 32 条后端测试**：`tests/adapters/test_project_tools.py::TestAFileYouHaveNotReadIsNotYoursToOverwrite`
+17 条、`tests/adapters/test_project_file_store.py::TestAConditionalWrite` 5 条、
+`tests/application/test_file_read_receipts.py` 9 条、
+`tests/application/test_code_session.py::test_a_project_capable_session_without_receipts_is_refused_at_assembly`
+1 条。`ProjectFileVersion` 进 `tests/contracts/test_port_contracts.py` 的样本表。
+
+能力梯子停在 **Implemented + Tested**。这条路径从未对真实模型跑过，所以"模型被这样
+拒绝之后会去重读"是**未经证实的**——被证实的是它拿到了一句指名下一步的话，以及那次
+写没有落盘。
+
+---
+
 ## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十六批）：Code 的提示词第一次描述它真正所在的世界，长文件的尾巴第一次够得着
 
 起因是一句「参考 Claude Desktop 的实现完善 harness」。照着自己的 harness 逐项对下来，

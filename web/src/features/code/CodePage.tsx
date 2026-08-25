@@ -40,6 +40,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
+  ClipboardList,
   Code2,
   LoaderCircle,
   PanelLeft,
@@ -74,6 +75,7 @@ import {
 import type {
   ApprovalDecision,
   CodeSessionListResponse,
+  CodeTurnMode,
   MessageView,
   PendingApprovalView,
   ProjectView,
@@ -174,6 +176,16 @@ export function CodePage() {
   //: for the whole of the next session's fetch.
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
+  //: 计划模式（ADR-0079）。留在组件里而不是写进 URL 或 localStorage：它是**一轮**
+  //: 的属性，回合起始就被冻进信封，一个跨会话记住的开关会让"这一轮到底能不能写"
+  //: 变成一个读者要去别处查的问题。默认执行，因为绝大多数请求就是要它去做。
+  const [mode, setMode] = useState<CodeTurnMode>("act");
+  //: 最近一轮计划的指令原文，用来支持「按这个计划执行」。存指令而不是存计划正文：
+  //: 重发的是**同一个请求**，只是换成 act 模式——计划本身是散文，它不授权任何东西
+  //: （ADR-0079 不变量 3），所以后面那一轮不该被它约束，也不该假装被它约束。
+  const [planned, setPlanned] = useState<{ session: string; text: string } | null>(
+    null,
+  );
   const instructionRef = useRef<HTMLTextAreaElement>(null);
   //: Which sessions have a turn open — a set, not a boolean, and scoped for
   //: the same reason `loadedFor`, `fault.scope`, `pending.sessionId` and
@@ -505,9 +517,10 @@ export function CodePage() {
     };
   }, [identity, pollingSession]);
 
-  const send = useCallback(async () => {
-    const text = instruction.trim();
-    if (text === "" || running) return;
+  const send = useCallback(
+    async (turnMode: CodeTurnMode = mode, override?: string) => {
+      const text = (override ?? instruction).trim();
+      if (text === "" || running) return;
 
     // The session is opened here when there is not one yet: nobody arrives at
     // a coding tool wanting "a session", they arrive wanting a thing done, so
@@ -590,6 +603,17 @@ export function CodePage() {
         target,
         text,
         newIdempotencyKey("code"),
+        turnMode,
+      );
+      // Remembered only on the way out of a plan turn that produced something.
+      // A plan turn that failed has nothing to run, and an act turn clears it:
+      // the button is an offer to run *the plan just made*, and leaving it up
+      // after ordinary work would offer to re-run something older than what
+      // the reader is looking at.
+      setPlanned(
+        turnMode === "plan" && answer.status === "completed"
+          ? { session: target, text }
+          : null,
       );
       // A turn that dies on its budget appends no assistant message at all
       // (the server declines to invent one), so without this the transcript
@@ -634,16 +658,19 @@ export function CodePage() {
     // `startingIn` 在依赖里，而不是被省掉：这个回调**读**它（新会话就是靠它归到
     // 项目下的），漏掉依赖会让它捕获一个旧的 `null`——选完文件夹立刻发送，会话
     // 就不会被归属，而 ADR-074 §7.1 那条不变量只是通常成立。lint 报的正是这个。
-  }, [
-    identity,
-    instruction,
-    navigate,
-    queries,
-    reload,
-    running,
-    sessionId,
-    startingIn,
-  ]);
+    },
+    [
+      identity,
+      instruction,
+      mode,
+      navigate,
+      queries,
+      reload,
+      running,
+      sessionId,
+      startingIn,
+    ],
+  );
 
   // What a run started from a preview changes out here. Only the listing: the
   // per-file bodies are react-query caches and `FilePreview` invalidates the
@@ -907,7 +934,44 @@ export function CodePage() {
         void send();
       }}
     >
+      {planned === null || planned.session !== sessionId ? null : (
+        <div className="aw-code-plan-offer">
+          <span>上面是一份计划，还没有动过任何文件。</span>
+          <button
+            className="aw-button"
+            disabled={running}
+            onClick={() => {
+              // 同一条指令重发一次，模式换成 act。**不是**把计划正文发过去：
+              // 计划是散文，它不授权任何东西（ADR-0079 不变量 3），后面这一轮
+              // 拿到的是它自己的信封，和没有先计划过时一模一样。
+              void send("act", planned.text);
+            }}
+            type="button"
+          >
+            按这个计划执行
+          </button>
+        </div>
+      )}
       <div className="aw-code-composer-row aw-mode-composer-card">
+        <label
+          className={`aw-code-plan-toggle ${mode === "plan" ? "is-on" : ""}`}
+          title={
+            mode === "plan"
+              ? "计划模式：这一轮只会读，不会改任何文件"
+              : "执行模式：这一轮可以改文件"
+          }
+        >
+          <input
+            checked={mode === "plan"}
+            disabled={running}
+            onChange={(event) => {
+              setMode(event.target.checked ? "plan" : "act");
+            }}
+            type="checkbox"
+          />
+          <ClipboardList aria-hidden size={15} />
+          <span>只做计划</span>
+        </label>
         {sessionId === undefined ? null : (
           <label
             className={`aw-code-attach ${uploading ? "is-busy" : ""}`}

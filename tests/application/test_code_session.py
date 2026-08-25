@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -25,6 +25,15 @@ from agent_workbench.adapters.memory import (
 from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
 from agent_workbench.adapters.policy import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
+from agent_workbench.adapters.tools.project_files import (
+    ProjectEditTool,
+    ProjectGrepTool,
+    ProjectListTool,
+    ProjectReadTool,
+    ProjectRunTool,
+    ProjectWriteTool,
+)
+from agent_workbench.adapters.tools.sandbox import SandboxRunTool
 from agent_workbench.adapters.tools.workspace import (
     WorkspaceEditTool,
     WorkspaceGrepTool,
@@ -40,6 +49,8 @@ from agent_workbench.application.code_session import (
     CodeTurn,
     CodeTurnBusyError,
 )
+from agent_workbench.application.file_read_receipts import ReadReceipts
+from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.events import UngroundedAnswerCommitted
@@ -85,6 +96,15 @@ class _Harness:
         max_concurrent_turns: int = 4,
     ) -> None:
         self.scope = WorkspaceScope()
+        self.project_scope = ProjectFileScope()
+        self.receipts = ReadReceipts()
+        # Every tool a coding turn can be offered, not only the five this
+        # harness's model actually calls. The service reads risks out of the
+        # specs now (ADR-0079), so a test that widens `tool_names` to include
+        # `sandbox_run` or `project_run` needs those specs to be findable --
+        # otherwise the ceiling derivation refuses a turn offered a tool this
+        # process has no spec for, which is the check doing its job on the
+        # harness rather than on the code.
         registry = StaticToolRegistry(
             [
                 WorkspaceListTool(self.scope).binding(),
@@ -92,6 +112,15 @@ class _Harness:
                 WorkspaceWriteTool(self.scope).binding(),
                 WorkspaceEditTool(self.scope).binding(),
                 WorkspaceGrepTool(self.scope).binding(),
+                SandboxRunTool(self.scope, client=cast(Any, None)).binding(),
+                ProjectListTool(self.project_scope).binding(),
+                ProjectReadTool(self.project_scope, self.receipts).binding(),
+                ProjectWriteTool(self.project_scope, self.receipts).binding(),
+                ProjectEditTool(self.project_scope, self.receipts).binding(),
+                ProjectGrepTool(self.project_scope).binding(),
+                ProjectRunTool(
+                    self.project_scope, self.receipts, environment={}
+                ).binding(),
             ]
         )
         self.conversations = InMemoryConversationStore()
@@ -115,6 +144,7 @@ class _Harness:
             turn_timeout_seconds=TURN_TIMEOUT,
             max_concurrent_turns=max_concurrent_turns,
             clock=lambda: NOW,
+            tools=registry,
         )
 
     def sink(self, session_id: str, run_id: str) -> ProcessOnlySink:
@@ -785,3 +815,157 @@ def test_a_missed_prompt_anchor_is_an_import_error_not_a_silent_no_op() -> None:
 
     with pytest.raises(ValueError, match="prompt anchor not found"):
         _rewrite("some prompt", "an anchor that drifted", "replacement")
+
+
+def test_a_half_wired_coding_session_is_refused_at_assembly() -> None:
+    """Two gates that cannot be seen once they are open, both closed at build.
+
+    A deployment that passed a `project_scope` and forgot the ledger would
+    boot, serve, and offer `project_write` on the user's real files with a
+    read-before-overwrite check that checks nothing (ADR-0078) -- and the
+    transcript of the turn that overwrote somebody's work would be
+    indistinguishable from one that did not. A deployment with no tool registry
+    would have to guess every tool's risk from its name, which is the ceiling
+    and the plan-mode narrowing both (ADR-0079).
+
+    Refused where the mistake is made rather than at the first turn that tries
+    to write. The receipts check is one-directional: a ledger without a scope
+    offers no `project_*` tool at all, so nothing records and nothing asks.
+    """
+
+    from agent_workbench.application.file_read_receipts import ReadReceipts
+    from agent_workbench.application.project_file_scope import ProjectFileScope
+
+    registry = StaticToolRegistry([])
+
+    def build(**extra: object) -> CodeSessionService:
+        return CodeSessionService(
+            conversations=InMemoryConversationStore(),
+            artifacts=InMemoryArtifactStore(),
+            executor_for=lambda _scope: cast(Any, None),
+            scope=WorkspaceScope(),
+            budget=RunBudget(max_steps=2, max_tool_calls=2),
+            turn_timeout_seconds=TURN_TIMEOUT,
+            max_concurrent_turns=1,
+            clock=lambda: NOW,
+            **cast(Any, extra),
+        )
+
+    with pytest.raises(ValueError, match="read receipts"):
+        build(tools=registry, project_scope=ProjectFileScope())
+
+    with pytest.raises(ValueError, match="tool registry"):
+        build()
+
+    # Both, and the harmless direction, are fine.
+    build(
+        tools=registry,
+        project_scope=ProjectFileScope(),
+        read_receipts=ReadReceipts(),
+    )
+    build(tools=registry, read_receipts=ReadReceipts())
+
+
+def test_a_plan_turn_is_narrowed_to_reading_and_told_so() -> None:
+    """ADR-0079. Plan mode is a different turn, not a differently-worded one.
+
+    Three things have to move together or the model behaves correctly for a
+    world it is not in -- the lesson `CODER_SYSTEM_PROMPT_WITH_SANDBOX`'s
+    comment records. The tool list loses everything that is not `read`; the
+    envelope's ceiling follows it down, because the ceiling is derived from
+    what the offered tools say about themselves; and the prompt says the turn
+    cannot change anything, so the model spends its calls on reading rather
+    than on discovering a refusal.
+    """
+
+    from agent_workbench.application.code_session import CODE_PROJECT_TOOLS_WITH_RUN
+
+    def observed(mode: Any) -> Any:
+        harness = _Harness(_writes("notes.md", "hello", "Done."))
+        recording = _Recording()
+        harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.tool_names = CODE_PROJECT_TOOLS_WITH_RUN  # pyright: ignore[reportAttributeAccessIssue]
+
+        async def scenario() -> Any:
+            session_id = await harness.opened()
+            await harness.service.ask(
+                CodeRequest(
+                    session_id=session_id,
+                    instruction="add a feature",
+                    principal=WRITER,
+                    run_id="run_1",
+                    mode=mode,
+                ),
+                harness.sink(session_id, "run_1"),
+                NullCancellationToken(),
+            )
+            return recording.requests[0]
+
+        return _run(scenario)
+
+    acting = observed("act")
+    planning = observed("plan")
+
+    # Narrowed, and only narrowed: a plan turn's list is a subsequence of the
+    # act turn's, which is what makes "plan can never add a tool" readable.
+    assert set(planning.tool_names) < set(acting.tool_names)
+    assert list(planning.tool_names) == [
+        name for name in acting.tool_names if name in set(planning.tool_names)
+    ]
+    assert "project_write" not in planning.tool_names
+    assert "project_edit" not in planning.tool_names
+    assert "project_run" not in planning.tool_names
+    assert "project_read" in planning.tool_names
+
+    # The ceiling follows, because it is derived rather than configured. Nobody
+    # wrote a `read` branch; the reading tools say `read` about themselves.
+    assert acting.envelope.max_tool_risk == "destructive"
+    assert planning.envelope.max_tool_risk == "read"
+
+    # And the prompt says so, on the base this turn actually started from.
+    assert "This turn cannot change anything" in planning.system_prompt
+    assert "This turn cannot change anything" not in acting.system_prompt
+    # It must not still be recommending the write tool it no longer holds.
+    assert "project_write" not in planning.system_prompt
+    assert "project_edit" not in planning.system_prompt
+    # Nor asking for a report of changes it cannot make.
+    assert "you touched" not in planning.system_prompt
+
+
+def test_a_plan_does_not_authorise_the_turn_that_follows() -> None:
+    """ADR-0079's third invariant, and the reason plan mode is not an approval.
+
+    "Run this plan" is a new turn with its own envelope, built from the mode
+    that request carried. Nothing about having planned first widens it, and
+    nothing about it narrows: the plan is prose, and the act turn that follows
+    is exactly the act turn that would have run without one.
+    """
+
+    from agent_workbench.application.code_session import CODE_PROJECT_TOOLS_WITH_RUN
+
+    harness = _Harness(_writes("notes.md", "hello", "Done."))
+    recording = _Recording()
+    harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+    harness.service.tool_names = CODE_PROJECT_TOOLS_WITH_RUN  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def scenario() -> None:
+        session_id = await harness.opened()
+        for index, mode in enumerate(("plan", "act")):
+            await harness.service.ask(
+                CodeRequest(
+                    session_id=session_id,
+                    instruction="add a feature",
+                    principal=WRITER,
+                    run_id=f"run_{index}",
+                    mode=cast(Any, mode),
+                ),
+                harness.sink(session_id, f"run_{index}"),
+                NullCancellationToken(),
+            )
+
+    _run(scenario)
+    planned, acted = recording.requests
+
+    assert planned.envelope.max_tool_risk == "read"
+    assert acted.envelope.max_tool_risk == "destructive"
+    assert set(acted.tool_names) == set(CODE_PROJECT_TOOLS_WITH_RUN)

@@ -38,6 +38,7 @@ from agent_workbench.adapters.tools.reading import (
     OFFSET_SCHEMA,
     windowed_result,
 )
+from agent_workbench.application.file_read_receipts import ReadReceipts
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.domain.errors import (
     ErrorInfo,
@@ -49,6 +50,8 @@ from agent_workbench.domain.project_files import (
     MAX_RELATIVE_PATH_BYTES,
     PROJECT_RUN_SCOPE,
     PROJECT_RUN_TOOL,
+    ProjectFileChangedError,
+    ProjectFileExistsError,
     ProjectPathError,
 )
 from agent_workbench.domain.tools import ToolResult, ToolSpec
@@ -73,6 +76,7 @@ from agent_workbench.ports.project_files import (
     MAX_LISTING_ENTRIES,
     ProjectFileEntry,
     ProjectFileStore,
+    ProjectFileVersion,
 )
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 
@@ -126,6 +130,56 @@ def _store(scope: ProjectFileScope) -> ProjectFileStore:
             "no project directory is entered for this turn"
         )
     return store
+
+
+def _record_written(
+    receipts: ReadReceipts, entry: ProjectFileEntry, *, covers_whole_file: bool
+) -> None:
+    """Note the file as this turn now sees it, having just written it.
+
+    Without this, the second write to a file the model wrote itself is refused
+    by its own gate: the receipt still describes the file as it was read, and
+    the write it just made moved both the size and the mtime. The values come
+    from the entry the store returned rather than from a read-back, which is
+    what `ProjectFileStore.write` returns an entry *for*.
+
+    ``covers_whole_file`` is a parameter and not a constant because the two
+    write paths differ, and getting that wrong opened the gate completely.
+    `project_write` was handed the entire content, so the model has seen the
+    whole file by construction. `project_edit` was handed a snippet: the store
+    read the file, not the model. Minting a whole-file receipt there let two
+    calls launder an overwrite -- edit one unique string in a 30 KB file nobody
+    read, then `project_write` over all of it, with the gate's approval. So an
+    edit *carries forward* whatever coverage the model already had and never
+    manufactures more (see `_coverage_after_edit`).
+    """
+
+    receipts.record(
+        entry.path,
+        # A file always has a size. The `None` arm of `ProjectFileEntry.
+        # size_bytes` is the directory case, and `write` cannot produce one.
+        size_bytes=entry.size_bytes if entry.size_bytes is not None else 0,
+        modified_at=entry.modified_at,
+        covers_whole_file=covers_whole_file,
+    )
+
+
+def _stale(invocation: ToolInvocation, message: str) -> ToolResult:
+    """Refuse a write because the model's picture of the file is not current.
+
+    `invalid_tool_input`, the same code `project_edit` already answers when the
+    snippet it was told to replace is not there -- one event, one code. What
+    makes this refusal unusual is that retrying *is* the answer, after a read,
+    and discipline 3 of the coding prompt says the opposite about refusals in
+    general ("retrying the same call with the same arguments cannot succeed").
+    That is true here too -- the same call *would* fail again -- so every
+    message this carries has to name the read that makes the retry different.
+    """
+
+    return ToolResult.failed(
+        invocation.call,
+        ErrorInfo(code="invalid_tool_input", message=message, retryable=False),
+    )
 
 
 def _refusal(invocation: ToolInvocation, error: Exception) -> ToolResult:
@@ -225,6 +279,11 @@ class ProjectReadTool:
     """One file out of the project directory."""
 
     scope: ProjectFileScope
+    #: Where this tool leaves the record `ProjectWriteTool` reads (ADR-0078).
+    #: A required field with no default, because a tool holding a private
+    #: ledger nobody consults would record every read into nothing and let
+    #: every overwrite through, while the transcript showed a gate.
+    receipts: ReadReceipts
 
     def binding(self) -> ToolBinding:
         return ToolBinding(spec=self.spec(), handler=self.handle)
@@ -273,6 +332,21 @@ class ProjectReadTool:
                     "Its contents are not shown."
                 ),
             )
+        # What the model had already seen of this file, before this read. A
+        # narrower read of an unchanged file must not *lower* the coverage a
+        # wider one earned: re-reading a region before rewriting it is the most
+        # ordinary check a coding agent makes, and downgrading the receipt for
+        # it refuses a model that is strictly better informed than the one that
+        # was allowed through. Guarded on the file not having moved -- if size
+        # or mtime differ, the earlier read describes a file that is gone and
+        # this window's coverage is the true one.
+        carried = self.receipts.seen(path)
+        already_whole = (
+            carried is not None
+            and carried.covers_whole_file
+            and carried.size_bytes == content.size_bytes
+            and carried.modified_at == content.modified_at
+        )
         text = content.text or ""
         if not text:
             # Said, not returned empty. An empty tool message reads to a model
@@ -281,8 +355,29 @@ class ProjectReadTool:
             # list` and `project_grep` both already had this branch; read did
             # not, and a zero-byte `__init__.py` is not an unusual thing to
             # open in a Python project.
+            #
+            # A receipt, and a whole-file one: there is nothing in this file
+            # the model has not seen. Withholding one would fire the write gate
+            # on the single case where the model is provably up to date.
+            self.receipts.record(
+                path,
+                size_bytes=content.size_bytes,
+                modified_at=content.modified_at,
+                covers_whole_file=True,
+            )
             return ToolResult.succeeded(invocation.call, content=f"{path} is empty.")
-        return windowed_result(invocation, label=path, text=text, arguments=arguments)
+        return windowed_result(
+            invocation,
+            label=path,
+            text=text,
+            arguments=arguments,
+            note_read=lambda whole: self.receipts.record(
+                path,
+                size_bytes=content.size_bytes,
+                modified_at=content.modified_at,
+                covers_whole_file=whole or already_whole,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +385,10 @@ class ProjectWriteTool:
     """Create or replace one file in the project directory."""
 
     scope: ProjectFileScope
+    #: The record `ProjectReadTool` leaves (ADR-0078). Required, not defaulted:
+    #: a private ledger would make this gate pass every time while looking in
+    #: the transcript exactly like a gate that checked.
+    receipts: ReadReceipts
 
     def binding(self) -> ToolBinding:
         return ToolBinding(spec=self.spec(), handler=self.handle)
@@ -330,13 +429,93 @@ class ProjectWriteTool:
         content = str(arguments.get("content", ""))
         store = _store(self.scope)
         try:
-            entry = await store.write(path, content)
+            replacing = await store.exists(path)
+        except ProjectPathError as error:
+            return _refusal(invocation, error)
+        # Only a replacement is gated. Creating a file destroys nothing, and
+        # requiring a read of a path that is not there would refuse the most
+        # ordinary thing a coding agent does -- with a sentence ("read it
+        # first") that names an impossible action.
+        precondition: ProjectFileVersion | None = None
+        if replacing:
+            receipt = self.receipts.seen(path)
+            if receipt is None:
+                return _stale(
+                    invocation,
+                    f"{path} already exists and you have not read it in this "
+                    "turn. This call would replace all of it. Read it first, "
+                    "then write.",
+                )
+            if not receipt.covers_whole_file:
+                # "Read the rest, the read told you which offset continues" is
+                # what this said first, and it is the one move that never
+                # works: coverage comes from a window that starts at line 1 and
+                # reaches the end, so following the offset replaces a head
+                # receipt with a tail receipt and the same refusal comes back.
+                # Above `MAX_INLINE_READ_CHARS` no single read can be whole at
+                # all -- a file that long cannot be replaced wholesale by this
+                # tool, which is the gate working rather than failing, so the
+                # sentence names the tool that does not need a full read.
+                return _stale(
+                    invocation,
+                    f"you have seen only part of {path}, and this call would "
+                    "replace all of it. Read it again with no offset and no "
+                    "limit to see it whole; if it is too long to arrive in one "
+                    "read, use project_edit, which changes only the snippet "
+                    "you name and needs no full read.",
+                )
+            precondition = ProjectFileVersion(
+                size_bytes=receipt.size_bytes, modified_at=receipt.modified_at
+            )
+        try:
+            entry = await store.write(
+                path,
+                content,
+                if_unchanged=precondition,
+                # The `exists` above is a hop older than this write, and the
+                # user's editor saves into windows like that -- the same
+                # argument that put `if_unchanged` inside the store rather than
+                # here. Without this, a file that appeared in between is
+                # replaced unconditionally, having never been read.
+                create_only=not replacing,
+            )
+        except ProjectFileExistsError as error:
+            return _stale(
+                invocation,
+                f"{error} It was not there when this call started, so nothing "
+                "in this turn has seen it. Read it before writing it.",
+            )
+        except ProjectFileChangedError as error:
+            return _stale(invocation, f"{error} {self._who_changed_it()}")
         except (ProjectPathError, NotFoundError, OutputTooLargeError) as error:
             return _refusal(invocation, error)
+        # The model supplied every byte of this file, so it has seen all of it.
+        _record_written(self.receipts, entry, covers_whole_file=True)
         return ToolResult.succeeded(
             invocation.call,
             content=f"Wrote {entry.path} ({entry.size_bytes} bytes).",
         )
+
+    def _who_changed_it(self) -> str:
+        """The half of the refusal that says whose change it probably was.
+
+        Two sentences rather than one, because they call for different next
+        moves. A formatter this turn started with `project_run` moving an mtime
+        is the model's own doing and wants a re-read; an edit from outside the
+        turn is somebody else at work on the same file, and a model told *that*
+        should say so in its report rather than quietly writing again.
+
+        It is a guess, and it is worded as one. Nothing here can attribute a
+        change: the console's own `PUT /v1/projects/{id}/file` and the user's
+        editor both land on the same disk without passing a tool.
+        """
+
+        if self.receipts.commands_ran():
+            return (
+                "A command you ran in this turn may have done it. Read it "
+                "again before writing."
+            )
+        return "Something outside this turn changed it, so read it again."
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +523,11 @@ class ProjectEditTool:
     """Replace one exact occurrence in one file."""
 
     scope: ProjectFileScope
+    #: Not consulted before editing -- this tool reads the file itself, one
+    #: statement earlier, so it can never be working from a stale copy. It is
+    #: written to afterwards, so a `project_write` later in the same turn is
+    #: not refused by a receipt this edit has just made obsolete.
+    receipts: ReadReceipts
 
     def binding(self) -> ToolBinding:
         return ToolBinding(spec=self.spec(), handler=self.handle)
@@ -380,6 +564,11 @@ class ProjectEditTool:
         find = str(arguments.get("find", ""))
         replace = str(arguments.get("replace", ""))
         store = _store(self.scope)
+        # Read before the edit, because the edit is about to invalidate it. A
+        # file the model never read has no receipt here and gets none after,
+        # which is what keeps the next `project_write` refused with the
+        # accurate sentence rather than with "you have seen only part of it".
+        carried = self.receipts.seen(path)
         try:
             current = await store.read(path)
         except (ProjectPathError, NotFoundError, OutputTooLargeError) as error:
@@ -413,9 +602,32 @@ class ProjectEditTool:
                 ),
             )
         try:
-            entry = await store.write(path, text.replace(find, replace, 1))
+            entry = await store.write(
+                path,
+                text.replace(find, replace, 1),
+                # From this tool's own read, three statements up. That read is
+                # what makes an edit safe where a write needs a receipt -- but
+                # it leaves a window of its own, and the user's editor saves
+                # into windows like that. `read` and `write` are two separate
+                # hops onto the executor; this closes the gap between them.
+                if_unchanged=ProjectFileVersion(
+                    size_bytes=current.size_bytes,
+                    modified_at=current.modified_at,
+                ),
+            )
+        except ProjectFileChangedError as error:
+            return _stale(invocation, str(error))
         except (ProjectPathError, NotFoundError, OutputTooLargeError) as error:
             return _refusal(invocation, error)
+        # Refreshed, not minted. The edit moved the size and the mtime, so a
+        # receipt the model had earned still has to be brought up to date or
+        # its own next write is refused -- but the coverage it carries is the
+        # coverage the model already had, because what the model supplied here
+        # was a snippet and what it has seen has not grown.
+        if carried is not None:
+            _record_written(
+                self.receipts, entry, covers_whole_file=carried.covers_whole_file
+            )
         return ToolResult.succeeded(
             invocation.call,
             content=f"Edited {entry.path} ({entry.size_bytes} bytes).",
@@ -779,6 +991,14 @@ class ProjectRunTool:
     """One command, run in the project's directory, on this machine (ADR-077)."""
 
     scope: ProjectFileScope
+    #: Told that a command ran, and nothing more (ADR-0078). A command's
+    #: effects are not knowable from here -- `black .` rewrites files nobody
+    #: named -- so this cannot invalidate the receipts it actually invalidated.
+    #: What it buys is one sentence: when a later write finds a file moved, the
+    #: model is told its own command may have done it and to re-read, rather
+    #: than that somebody else is editing the file, which would have it stop
+    #: and report instead.
+    receipts: ReadReceipts
     #: What the command inherits, decided in `bootstrap/child_environment.py`
     #: and handed here already made. Not read from `os.environ` in this module:
     #: `tests/architecture/test_dependency_boundaries.py` allows that in
@@ -842,6 +1062,11 @@ class ProjectRunTool:
     async def handle(self, invocation: ToolInvocation) -> ToolResult:
         command = str(invocation.call.arguments.get("command", ""))
         store = _store(self.scope)
+        # Noted before the command runs, not after. A command killed by the
+        # clock, or one that failed halfway, has already had whatever effect it
+        # had on the directory; recording only successes would leave exactly
+        # the interrupted cases silently claiming nothing moved.
+        self.receipts.note_command_ran()
         await invocation.progress("running the command")
 
         process = await asyncio.create_subprocess_shell(

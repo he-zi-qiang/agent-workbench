@@ -41,6 +41,7 @@ from agent_workbench.application.code_approvals import (
     CodeApprovalRegistry,
 )
 from agent_workbench.application.code_session import (
+    CodeMode,
     CodeRequest,
     CodeRunNotPermittedError,
     CodeRunRefusedError,
@@ -117,6 +118,12 @@ class AskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     instruction: str = Field(min_length=1, max_length=INSTRUCTION_MAX_LENGTH)
+    #: ``"plan"`` narrows this turn to the tools that only read (ADR-0079).
+    #: Defaulted rather than required, so every client written before plan mode
+    #: existed keeps meaning what it meant. A named value rather than a
+    #: `plan: bool`, because `plan=false` reads as an absence in a request body
+    #: while `"act"` reads as a choice somebody made.
+    mode: CodeMode = "act"
 
 
 class AskResponse(BaseModel):
@@ -325,6 +332,11 @@ async def ask(
                 instruction=body.instruction,
                 principal=principal,
                 run_id=run_id,
+                # Frozen for the turn here, in the same statement that builds
+                # the request the envelope is signed from. A mode that could
+                # change mid-turn would change what a running model is holding
+                # after its envelope had been signed with the other list.
+                mode=body.mode,
             ),
             # One stream per session, one run per turn, and a fence that has no
             # publish methods at all: this run produces files and a report, and
