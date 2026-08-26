@@ -767,6 +767,37 @@ docker pull python:3.12-slim
 agent-sandbox-mcp
 ```
 
+### 沙箱镜像：脚本能 `import` 什么，是部署选的
+
+`DEFAULT_SANDBOX_IMAGE` 是 `python:3.12-slim`，脚本因此**只有标准库**。这在
+`apps/sandbox_mcp/executor.py` 的注释里是刻意的：沙箱需要一个解释器，别的都不需要。
+
+代价是：一次编码回合被要求"生成一份 PDF"时，它做不到，而且**在转录里看不出这是镜像
+的事**——2026-08-26 用户就是这么报上来的（模型答"不能生成 PDF"）。
+
+`agent-sandbox-mcp --image` 从 ADR-029 起就是参数。仓库带了一份可选镜像定义
+`docker/sandbox-pdf.Dockerfile`（digest 钉死的 `python:3.12-slim` + `reportlab` +
+`fonts-wqy-zenhei`，约 69 MB）：
+
+```bash
+scripts/dev.sh sandbox-image     # 构建 agent-workbench-sandbox-pdf:local
+scripts/dev.sh sandbox-server    # 探到就用它，探不到就用 stock 并说出来
+```
+
+`sandbox-server` **不静默回退**：用了哪个镜像会打在 stderr 上，因为静默回退正是上面那
+个 bug 的形状。
+
+两条口径值得单独记：
+
+* **`--network=none` 是前提不是设置**，所以脚本里 `pip install` 永远不会成功。能 import
+  什么，在调用开始之前就定死了。
+* **字体不是可选项**。ADR-045 §4.3 记过那个失败：缺 CJK 字体时退出码 0、PDF 合法、每个
+  汉字是空心方块、测试全绿。所以镜像里装了字体，而不是留给运维者。另外 reportlab
+  **拒绝 PostScript/CFF 轮廓**——`fonts-noto-cjk` 直接抛
+  `TTFError: postscript outlines are not supported`（2026-08-26 实测），所以选的是
+  TrueType 轮廓的 wqy-zenhei。
+
+
 Worker 启动时做一次探测，而且是**真发一次 `run_python`**——能连上的 socket 既不证明有
 容器运行时，也不证明容器能起来。探测失败（连不上，或连上了但运行时不可用）会记
 `sandbox_probe_failed` / `sandbox_runtime_unavailable`，**不注册这个工具，进程照常启动**

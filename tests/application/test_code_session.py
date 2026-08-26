@@ -592,6 +592,43 @@ def test_a_turn_holding_the_run_tool_is_not_left_guessing_about_the_network() ->
     assert "offline" in prompt
 
 
+def test_a_sandbox_turn_is_told_to_probe_before_declaring_a_format_out_of_reach() -> (
+    None
+):
+    """A prompt that is silent about a capability is read as denying it.
+
+    Reported by a user: a Code session answered that it could not produce a
+    PDF. That was true of the stock `python:3.12-slim` image and false the
+    moment `docker/sandbox-pdf.Dockerfile` is the one running -- and nothing
+    in the transcript told those two deployments apart.
+
+    Asserted against both sandbox bases, gated and ungated, because a
+    deployment picks one of them and the advice is equally true of each. What
+    is *not* asserted is any library name: what is in the image is `--image` at
+    the server's command line, and a list written into the prompt would be a
+    claim this module cannot keep.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+    )
+
+    for prompt in (
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+    ):
+        assert "import" in prompt
+        assert "image" in prompt
+        # The half that keeps the advice honest: probing is the answer because
+        # installing is not available, and a turn that reads only the first
+        # half would try `pip install` and spend a call on a refusal.
+        assert "nothing can be installed during" in prompt
+        # No library names. The image is a deployment's choice, not this
+        # module's, and the moment one is listed here it can be wrong.
+        assert "reportlab" not in prompt
+
+
 def test_cancelling_a_turn_keeps_the_files_it_had_already_written() -> None:
     """The inversion of the Task rule, and the reason the pointer writes through.
 
