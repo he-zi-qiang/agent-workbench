@@ -28,6 +28,93 @@
 
 ---
 
+## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第二十三批）：把它真的跑起来，然后修跑出来的两个问题
+
+前两批的证据全是测试。这一批是**对着真实模型的一次端到端运行**，以及它当场暴露的两个
+缺陷——两个都不是测试能发现的那种。
+
+### 1. 跑了什么
+
+```
+scripts/dev.sh services && scripts/dev.sh migrate     # 0032 上到本地库
+AW_MULTI_AGENT__DELEGATION_ENABLED=true scripts/dev.sh api --without-chat
+AW_MULTI_AGENT__DELEGATION_ENABLED=true scripts/dev.sh worker
+POST /v1/tasks  {"graph":"general", ...}              # v2 图，真实 DeepSeek
+```
+
+objective 要求模型先自己列风险，再就最不确定的一条委派一个子代理独立评估，并注明哪些
+结论来自子代理。**它照做了**：自列 8 条 → 选中「权限与安全边界」→ 委派 `analyst` →
+拿回独立评估 → 并入第 4 条并写明「第 4 条结论来自子代理独立评估」。
+
+事件顺序与 ADR-082 §2.3 写的一字不差：
+
+```
+#21 ToolStarted     delegate_agent          run_2e769ec…  work
+#22 AgentDelegated  -> analyst              run_2e769ec…  work
+#23 RunStarted                              run_9d8ac05…  work   ← 子运行
+#24 ModelStarted                            run_9d8ac05…  work
+#25 ModelCompleted                          run_9d8ac05…  work
+#26 RunCompleted                            run_9d8ac05…  work
+#27 AgentCompleted  status=completed        run_2e769ec…  work
+#28 ToolCompleted   delegate_agent          run_2e769ec…  work
+```
+
+子运行的事件带着 `graph_node_id=work`——继承父作用域（`sink_for_child`），所以它落在
+UI 正确的阶段里。窄口读 `?run_id=run_9d8ac05…` 返回的正是那 4 条，位置是 **23–26**：
+游标是流里的位置，不是过滤后的下标（ADR-083 不变量 2，这次是真库真索引验的）。
+
+前端也确认了：`子代理 analyst：运行已开始` / `…模型调用已开始` / `…模型调用已完成` /
+`…运行已完成` 四行带前缀，而父运行自己的「子代理已委派」「子代理已完成」不带。
+
+### 2. 跑出来的第一个问题：委派挂错了节点
+
+`researcher_internal` 声明了 `dynamic_tool_sources={"delegation"}`——**在真实 Worker 里
+等于没挂**。`task_handlers.research_internal` 在部署接了检索时根本不跑 agent，直接调
+`research.internal.gather()` 就返回。那个 profile 读起来完全像一个会用工具的节点，而它
+不是。
+
+移到 **v2 的 `work` 节点**：那是真正会调模型、且被交一个目标自己决定怎么做的循环——
+一个模型有理由去问第二个模型的唯一位置。新增
+`test_a_v1_research_node_is_not_where_this_belongs` 把这条钉住，因为这个错误从 profile
+本身看不出来。
+
+### 3. 跑出来的第二个问题：树里长了个幽灵
+
+第一次调 `GET /v1/tasks/{id}/runs` 返回 **5 个根**，其中一个是：
+
+```
+task_ab930a52d2814b9bb1451   unknown   —   in=0  out=0  seq=None
+```
+
+`TaskSubmitted` / `TaskClaimed` / `TaskSucceeded` 是写在 **task id** 名下的，
+`build_run_tree` 于是给每个 Task 都造了一个永远 `unknown`、花费永远为零的根。树声称展示
+的是"运行"，而那不是一个运行。
+
+加了一条**佐证**规则：一个 id 进树，必须有东西说过它是运行——它自己的 run 生命周期事件，
+或者一次委派（作为发起方或被指名方）。Task 生命周期事件三者皆非。
+
+反方向也钉了一条：`test_a_run_that_only_delegated_is_still_a_run`——一个页起始于
+`RunStarted` 之后的运行仍然是运行，它写下的那次委派就是证据。所以佐证不能简单写成
+"见过 RunStarted"。
+
+### 4. 门禁
+
+```
+uv run pytest                  # 3026 passed, 782 skipped
+uv run pyright                 # 0 errors
+```
+
+### 5. 能力梯子
+
+委派路径可以记为 **Demonstrated**：有一次真实模型下的完整运行，事件流、树端点、窄口读
+与前端标注都是对着它验的。**但这是一次本地运行，不是基准**——没有测过多轮、没有测过
+扇出、没有测过子运行失败时父运行怎么写报告。这三件事仍然只有测试证据。
+
+顺带一提，这次运行里 `写入工作区` 连续被 `policy_denied: missing_permission_scope` 拒了
+四次。那是本地 principal 的 scope 配置缺口，**与委派无关**，本批未动。
+
+---
+
 ## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第二十二批）：一棵运行树要能按运行读出来（ADR-083）
 
 上一批让一次运行可以派生另一次运行，写进同一个 stream、用自己的 `run_id`。这一批是读的

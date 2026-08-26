@@ -105,6 +105,15 @@ class _Accumulator:
     usage: BudgetUsage = field(default_factory=BudgetUsage)
     sequence: int | None = None
     children: list[str] = field(default_factory=list["str"])
+    #: Whether anything in this page actually said this id names a *run*.
+    #:
+    #: Not every ``run_id`` in a stream belongs to one. A Task's own lifecycle
+    #: events -- ``TaskSubmitted``, ``TaskClaimed``, ``TaskSucceeded`` -- are
+    #: written under the *task* id, so without this every Task grows a phantom
+    #: root whose status is ``unknown`` forever and whose usage is zero. Found
+    #: by running it: the first real delegation produced a five-root tree of
+    #: which one root was the Task pretending to be a run.
+    attested: bool = False
 
 
 def build_run_tree(
@@ -141,12 +150,19 @@ def build_run_tree(
             child = accumulator(payload.child_agent_run_id)
             child.parent_run_id = envelope.run_id
             child.definition_name = payload.profile_name
+            child.attested = True
+            # Emitting a delegation attests the emitter too. A page that begins
+            # after a run's ``RunStarted`` still holds a run, and the delegation
+            # it wrote is the proof.
+            own.attested = True
             if child.sequence is None:
                 child.sequence = envelope.sequence
             if payload.child_agent_run_id not in own.children:
                 own.children.append(payload.child_agent_run_id)
         elif isinstance(payload, AgentCompleted):
             child = accumulator(payload.child_agent_run_id)
+            child.attested = True
+            own.attested = True
             # Only where the child did not report for itself. Its own terminal
             # event is the first-hand account; this one exists for the page
             # that holds the parent and not the child.
@@ -155,16 +171,20 @@ def build_run_tree(
             if child.usage == BudgetUsage():
                 child.usage = payload.usage
         elif isinstance(payload, RunStarted):
+            own.attested = True
             own.status = "running"
             if own.sequence is None:
                 own.sequence = envelope.sequence
         elif isinstance(payload, RunCompleted):
+            own.attested = True
             own.status = "completed"
             own.usage = payload.usage
         elif isinstance(payload, RunFailed):
+            own.attested = True
             own.status = "failed"
             own.usage = payload.usage
         elif isinstance(payload, RunCancelled):
+            own.attested = True
             own.status = "cancelled"
             own.usage = payload.usage
 
@@ -203,7 +223,7 @@ def _shape(
         children = tuple(
             node(child_id, seen | {run_id})
             for child_id in held.children
-            if child_id in runs and child_id not in seen
+            if child_id in runs and child_id not in seen and runs[child_id].attested
         )
         return RunNode(
             run_id=held.run_id,
@@ -218,7 +238,10 @@ def _shape(
     return tuple(
         node(run_id, frozenset())
         for run_id in order
-        if runs[run_id].parent_run_id is None or runs[run_id].parent_run_id not in runs
+        if runs[run_id].attested
+        and (
+            runs[run_id].parent_run_id is None or runs[run_id].parent_run_id not in runs
+        )
     )
 
 

@@ -25,6 +25,8 @@ from agent_workbench.domain.events import (
     RunCompleted,
     RunFailed,
     RunStarted,
+    TaskSubmitted,
+    TaskSucceeded,
 )
 from agent_workbench.domain.runs import BudgetUsage, TokenUsage
 
@@ -251,6 +253,59 @@ class TestNothingIsDroppedWhenTheRecordIsIncomplete:
         child = tree.roots[0].children[0]
         assert child.status == "cancelled"
         assert child.usage.tokens.input_tokens == 70
+
+
+class TestNotEveryRunIdInAStreamIsARun:
+    def test_a_tasks_own_lifecycle_events_do_not_become_a_run(self) -> None:
+        """Found by running it against a real Task.
+
+        ``TaskSubmitted`` / ``TaskClaimed`` / ``TaskSucceeded`` are written
+        under the *task* id, so before this rule every Task grew a phantom root
+        that was `unknown` forever and had spent nothing. The tree claims to
+        show runs, and those are not one.
+        """
+
+        tree = build_run_tree(
+            STREAM,
+            [
+                _envelope(
+                    "task_1",
+                    TaskSubmitted(graph_version="v2_general", input_ref="input_1"),
+                    1,
+                ),
+                _started(PARENT, 2),
+                _envelope(
+                    PARENT, RunCompleted(stop_reason="completed", usage=_usage(10)), 3
+                ),
+                _envelope(
+                    "task_1",
+                    TaskSucceeded(task_id="task_1", epoch=1, attempt=1),
+                    4,
+                ),
+            ],
+        )
+
+        assert [root.run_id for root in tree.roots] == [PARENT]
+
+    def test_a_run_that_only_delegated_is_still_a_run(self) -> None:
+        """The other direction, and the reason attestation is not simply
+        "saw a RunStarted": a page that begins after a run started still holds
+        that run, and the delegation it wrote is the proof.
+        """
+
+        tree = build_run_tree(
+            STREAM,
+            [
+                _envelope(
+                    PARENT,
+                    AgentDelegated(child_agent_run_id=CHILD, profile_name="analyst"),
+                    9,
+                ),
+            ],
+        )
+
+        assert [root.run_id for root in tree.roots] == [PARENT]
+        assert [child.run_id for child in tree.roots[0].children] == [CHILD]
 
 
 class TestAFanOutKeepsTheOrderItHappenedIn:

@@ -113,7 +113,7 @@ class TestAProfileGetsTheToolOnlyFromTheProcessThatHasIt:
         profile untouched, not merely refuse the call later.
         """
 
-        profile = profile_for("research_internal")
+        profile = profile_for("work")
 
         assert DELEGATE_TOOL not in profile.tool_names
         assert profile_with_dynamic_tools(profile, {}) is profile
@@ -121,7 +121,7 @@ class TestAProfileGetsTheToolOnlyFromTheProcessThatHasIt:
     def test_a_process_that_registered_it_hands_it_to_the_declaring_profile(
         self,
     ) -> None:
-        profile = profile_for("research_internal")
+        profile = profile_for("work")
 
         granted = profile_with_dynamic_tools(profile, {"delegation": (DELEGATE_TOOL,)})
 
@@ -142,3 +142,18 @@ class TestAProfileGetsTheToolOnlyFromTheProcessThatHasIt:
         granted = profile_with_dynamic_tools(writer, {"delegation": (DELEGATE_TOOL,)})
 
         assert DELEGATE_TOOL not in granted.tool_names
+
+    def test_a_v1_research_node_is_not_where_this_belongs(self) -> None:
+        """Where a deployment wired retrieval, that node never runs an agent.
+
+        ``task_handlers.research_internal`` calls ``research.internal.gather()``
+        and returns -- no model, no tool loop. A delegation source declared
+        there would be offered to nobody, and the switch would look on while
+        nothing could reach it. Pinned as a test because the mistake is
+        invisible from the profile itself: it reads exactly like a node that
+        would use the tool.
+        """
+
+        researcher = profile_for("research_internal")
+
+        assert "delegation" not in researcher.dynamic_tool_sources

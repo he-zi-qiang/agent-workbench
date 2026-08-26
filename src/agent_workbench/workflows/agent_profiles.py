@@ -272,12 +272,6 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
         # Not `evidence`: this agent produces it. Admitting it would let one
         # branch read the other's findings.
         admits=frozenset({"objective", "plan"}),
-        # The first profile allowed to delegate (ADR-082), and the one where it
-        # is worth least to get wrong: this agent produces evidence rather than
-        # the deliverable, so a sub-agent that answers badly costs a branch
-        # rather than the report. Where a deployment has delegation off the
-        # catalog is empty and this reduces to the profile it was before.
-        dynamic_tool_sources=frozenset({"delegation"}),
     ),
     AgentProfile(
         name="researcher_external",
@@ -399,7 +393,18 @@ V2_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
         # means by "a full tool set" -- and deliberately not the export, which
         # is the Task's one externally visible write and lives behind the
         # human gate on the other side of `review` (ADR-027, ADR-031 §2.4).
-        dynamic_tool_sources=frozenset({"research", "synthesis", "sandbox"}),
+        #
+        # `delegation` is the fourth (ADR-082), and this is the profile it
+        # belongs to rather than either researcher. A v1 research node does not
+        # run an agent at all where the deployment wired retrieval --
+        # `task_handlers.research_internal` calls `research.internal.gather()`
+        # and returns -- so a delegation source declared there would be offered
+        # to nobody. This node is the open-ended loop: it is handed an objective
+        # and decides for itself what the work is, which is the only place a
+        # model has anything to gain from asking a second one.
+        dynamic_tool_sources=frozenset(
+            {"research", "synthesis", "sandbox", "delegation"}
+        ),
     ),
     AgentProfile(
         name="reviewer",
