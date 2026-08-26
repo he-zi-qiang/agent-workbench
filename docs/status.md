@@ -44,10 +44,19 @@
 - 每个会话都有项目 → 走项目态 → `CODE_PROJECT_TOOLS`，五个 `project_*` 文件工具；
 - `shell_tools_enabled` 未声明 → 继承 `config.default.toml:425` 的 `false` → 没有
   `project_run`；
-- `sandbox_enabled = true` **对 Code 会话是死配置**：`sandbox_run` 绑在扁平的
+- `sandbox_enabled = true` 对**项目**回合无效：`sandbox_run` 绑在扁平的
   `WorkspaceScope` 上、从 ContextVar 读会话，而项目回合只进 `ProjectFileScope`，
   所以 `CODE_PROJECT_TOOLS_WITH_SANDBOX` 那两条臂早已被删（`code_session.py:158-167`
   写着原因）。
+
+> **本节合入后被自己的实测订正过一次。** 上一版这里写的是"`sandbox_enabled` 对
+> **Code 会话**是死配置"，那是把 `code_session.py` 里"under config.demo-local.toml,
+> where every session has a project"当成了全称——它说的是控制台的用法，不是 API 的
+> 约束。对着这个 profile 起的进程打了一次真实回合：**不挂项目**建出来的会话在 act
+> 模式下持有六个工具（五个 `workspace_*` 加 `sandbox_run`），模型自己逐个列了出来。
+> 两条路是互补的：扁平会话有沙箱、**没有网**（`--network=none`）；项目会话有
+> `project_run`、**有网**、每次要人批。生成 PDF 走得通的是**扁平**那条，卡点只是
+> 默认镜像里没有 PDF 库。
 
 没有 shell、没有沙箱、没有联网工具、没有文档渲染。**"不能出 PDF"和"不联网"都不是
 模型的问题，是这个部署没给它任何一条够得到的路。**
