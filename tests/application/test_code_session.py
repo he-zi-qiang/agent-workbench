@@ -556,6 +556,42 @@ def test_a_turn_holding_the_run_tool_is_not_told_there_is_no_shell() -> None:
         assert "destructive" in request.envelope.approval_required_risks
 
 
+def test_a_turn_holding_the_run_tool_is_not_left_guessing_about_the_network() -> None:
+    """The other half of the sentence the test above deletes.
+
+    The four base prompts say "There is no shell **and no network**", and
+    `with_host_commands` replaces exactly one of those claims. Until 2026-08-26
+    what it replaced them with talked only about the shell -- so a turn holding
+    `project_run` was told half of one sentence was wrong and left to guess
+    about the rest, and it guessed the way the sentence it had just lost said.
+
+    Reported by a user, on a session that had the tool: the model answered that
+    it had no shell and no network and therefore could not go and look anything
+    up. `bootstrap/child_environment.py` is the authority that makes that
+    false -- only `AW_*` is scrubbed, and its docstring says a project command
+    "is meant to see their `PATH`, their toolchain, their `SSH_AUTH_SOCK` and
+    their own credentials".
+
+    Asserted as an absence plus a mention rather than against the exact
+    wording: what must hold is that the prompt stops being silent, not that it
+    keeps a sentence somebody may reword.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_PROJECT,
+        with_host_commands,
+    )
+
+    prompt = with_host_commands(CODER_SYSTEM_PROMPT_PROJECT)
+
+    assert "no network" not in prompt
+    assert "network" in prompt
+    # A description of where the command runs, never a promise that the network
+    # answers. An offline machine has to stay a possibility the prompt allows,
+    # or this paragraph becomes the next thing a transcript contradicts.
+    assert "offline" in prompt
+
+
 def test_cancelling_a_turn_keeps_the_files_it_had_already_written() -> None:
     """The inversion of the Task rule, and the reason the pointer writes through.
 
