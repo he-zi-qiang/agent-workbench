@@ -2568,6 +2568,167 @@ pre {
   overflow-wrap: anywhere;
 }
 
+/* Who is working on this Task, and how far each has got (ADR-082/083).
+   A tree rather than a list: the nesting *is* the fact this panel exists to
+   show, and a "parent" column would make the reader match ids to recover it. */
+.aw-run-panel {
+  margin: 0 0 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-surface);
+  overflow: hidden;
+}
+
+.aw-run-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-run-panel-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.aw-run-count {
+  margin-left: 8px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.aw-run-total {
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.aw-run-list {
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+}
+
+.aw-run-row-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  /* The indent is the tree. Driven by a custom property so the depth is set
+     where the depth is known, rather than by a class per level. */
+  padding: 6px 12px 6px calc(12px + var(--aw-run-depth, 0) * 20px);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-run-row-button:hover {
+  background: var(--aw-surface-hover, rgb(255 255 255 / 4%));
+}
+
+.aw-run-row.is-selected .aw-run-row-button {
+  background: var(--aw-surface-hover, rgb(255 255 255 / 6%));
+}
+
+.aw-run-status {
+  display: inline-flex;
+  flex: none;
+  color: var(--aw-text-muted);
+}
+
+.aw-run-row.is-running .aw-run-status {
+  color: var(--aw-accent);
+}
+
+.aw-run-row.is-failed .aw-run-status {
+  color: var(--aw-danger);
+}
+
+.aw-run-row.is-completed .aw-run-status {
+  color: var(--aw-success, var(--aw-text-muted));
+}
+
+.aw-run-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.aw-run-badge {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--aw-accent-soft, rgb(255 255 255 / 8%));
+  color: var(--aw-accent);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.aw-run-meta {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* What it is doing *now*. Deliberately the only live field: a run does not
+   know how many steps it will take, so a progress bar here could only be a
+   fraction over an invented denominator. */
+.aw-run-activity {
+  color: var(--aw-accent);
+}
+
+.aw-run-events {
+  opacity: 0.7;
+}
+
+.aw-run-chevron {
+  flex: none;
+  color: var(--aw-text-muted);
+  opacity: 0.5;
+}
+
+.aw-run-hint {
+  margin: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--aw-border);
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.aw-run-clear {
+  margin-left: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--aw-accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (width <= 720px) {
+  /* The numbers are the first thing to go: on a narrow screen the name and the
+     status are what a person is scanning for, and the spend is still one tap
+     away in the run's own stream. */
+  .aw-run-meta {
+    display: none;
+  }
+}
+
 /* The answer, continuing from the steps rather than sitting beside them.
    Indented to the same 34px as Chat's assistant message, so the mark hangs in
    the margin and the text lines up under the run above it. */

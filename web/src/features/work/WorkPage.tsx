@@ -123,6 +123,8 @@ import {
   titleWithDelegation,
   type DelegationFacts,
 } from "./delegations";
+import { RunPanel } from "./RunPanel";
+import { buildRunTree, type RunNode } from "./runTree";
 
 const CANCELLABLE_STATUSES = new Set<TaskStatus>([
   "queued",
@@ -361,11 +363,25 @@ export function WorkPage() {
       query.state.data?.status === "pending" ? 3_000 : false,
   });
 
+  // Which run the reader has singled out in the panel, or `null` for all of
+  // them. Held here rather than in the panel because it narrows the stream
+  // below it, and a selection that only the panel knew about could not.
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  // The narrowing is applied *here*, once, rather than in each derivation
+  // below: two filters would be two chances for the stage list and the task
+  // events to disagree about which run is on screen.
+  const shownEvents = useMemo(
+    () =>
+      selectedRunId === null
+        ? timeline.events
+        : timeline.events.filter((event) => event.run_id === selectedRunId),
+    [timeline.events, selectedRunId],
+  );
   // Events keyed by the lifecycle stage that owns them, so a stage in the
   // stream can show its own work instead of pointing at a separate log.
   const stageEvents = useMemo(() => {
     const byStage = new Map<string, EventEnvelope[]>();
-    for (const event of timeline.events) {
+    for (const event of shownEvents) {
       if (event.graph_node_id === null) continue;
       const id = stageOfNode(event.graph_node_id);
       const existing = byStage.get(id);
@@ -373,10 +389,10 @@ export function WorkPage() {
       else existing.push(event);
     }
     return byStage;
-  }, [timeline.events]);
+  }, [shownEvents]);
   const taskEvents = useMemo(
-    () => timeline.events.filter((event) => event.graph_node_id === null),
-    [timeline.events],
+    () => shownEvents.filter((event) => event.graph_node_id === null),
+    [shownEvents],
   );
   // Read once per page rather than per row: every row would otherwise rescan
   // the whole timeline for the delegation that names its run.
@@ -384,6 +400,10 @@ export function WorkPage() {
     () => readDelegations(timeline.events),
     [timeline.events],
   );
+  // Always over the *whole* timeline, never over the narrowed view: a panel
+  // that lost its other rows the moment you picked one would take away the
+  // only thing you could use to pick a different one.
+  const runTree = useMemo(() => buildRunTree(timeline.events), [timeline.events]);
   // The stream above shows what arrived; this is what the server said did not.
   // An empty `skippedSequences` is its claim that the pages were complete, so
   // silence here is not neutral -- it is the one way this page can present a
@@ -1299,6 +1319,9 @@ export function WorkPage() {
                       setOpened({ taskId: selectedTaskId, artifact });
                     }}
                     delegations={delegations}
+                    onSelectRun={setSelectedRunId}
+                    runTree={runTree}
+                    selectedRunId={selectedRunId}
                     stageEvents={stageEvents}
                     status={selectedTask.status}
                     taskEvents={taskEvents}
@@ -1590,6 +1613,9 @@ function TaskStepStream({
   stageEvents,
   taskEvents,
   delegations,
+  runTree,
+  selectedRunId,
+  onSelectRun,
 }: {
   lifecycle: Lifecycle;
   loading: boolean;
@@ -1607,6 +1633,10 @@ function TaskStepStream({
   // right stage already -- what they lack is any sign that a different agent
   // produced them.
   delegations: ReadonlyMap<string, DelegationFacts>;
+  //: Every run this Task holds, nested under whoever started it.
+  runTree: RunNode[];
+  selectedRunId: string | null;
+  onSelectRun: (runId: string | null) => void;
 }) {
   if (loading) return <LoadingLine label="正在读取执行过程" />;
 
@@ -1638,17 +1668,24 @@ function TaskStepStream({
   }));
 
   return (
-    <StepStream
-      ariaLabel="执行过程"
+    <>
+      <RunPanel
+        onSelect={onSelectRun}
+        roots={runTree}
+        selectedRunId={selectedRunId}
+      />
+      <StepStream
+        ariaLabel="执行过程"
       eventTitle={(event) =>
         titleWithDelegation(eventTitle(event), event, delegations)
       }
-      isKnownEvent={(event) => isKnownEventType(event.event_type)}
-      meta={{ title: "运行记录", events: taskEvents }}
-      onOpenArtifact={onOpenArtifact}
-      running={!isSettledStatus(status)}
-      stages={stages}
-    />
+        isKnownEvent={(event) => isKnownEventType(event.event_type)}
+        meta={{ title: "运行记录", events: taskEvents }}
+        onOpenArtifact={onOpenArtifact}
+        running={!isSettledStatus(status)}
+        stages={stages}
+      />
+    </>
   );
 }
 
