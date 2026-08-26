@@ -67,7 +67,11 @@ from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.bootstrap import Settings
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
-from agent_workbench.domain.errors import NotFoundError, ToolInputInvalidError
+from agent_workbench.domain.errors import (
+    ErrorInfo,
+    NotFoundError,
+    ToolInputInvalidError,
+)
 from agent_workbench.domain.events import UngroundedAnswerCommitted
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import AgentOutcome, RunBudget
@@ -156,6 +160,27 @@ class _Executor:
             status="completed",
             stop_reason="completed",
             output_text="Wrote notes.md.",
+        )
+
+
+class _Refused:
+    """An executor whose turn died on something outside this deployment.
+
+    The shape a provider failure actually has: `status: "failed"`, a stop
+    reason of `"error"` -- which is the *only* stop reason any provider
+    failure has -- and the whole of what distinguishes one from another
+    sitting in the `ErrorInfo` beside it.
+    """
+
+    def __init__(self, error: ErrorInfo) -> None:
+        self.error = error
+
+    async def run(self, request: Any, emit: Any, cancellation: Any) -> AgentOutcome:
+        return AgentOutcome(
+            agent_run_id=request.trace.agent_run_id,
+            status="failed",
+            stop_reason="error",
+            error=self.error,
         )
 
 
@@ -354,6 +379,78 @@ def test_a_session_takes_an_instruction_and_answers_with_a_report() -> None:
     assert status == 200
     assert report == "Wrote notes.md."
     assert roles == ["user", "assistant"]
+
+
+def test_a_failed_turn_carries_why_and_not_just_that_it_stopped() -> None:
+    """ADR-0082. `stop_reason` alone cannot describe a provider failure.
+
+    Every one of them is `"error"`, so an exhausted account, a rejected key, a
+    retired model id and a 500 all reached the console as the same sentence,
+    while those are four different things to go and do. The outcome has
+    carried an `ErrorInfo` since it was written; this response was dropping it
+    on the floor.
+    """
+
+    world = _World(
+        executor=cast(
+            Any,
+            _Refused(
+                ErrorInfo(
+                    code="provider_account_rejected",
+                    message=(
+                        "the provider refused the request with HTTP 402: this "
+                        "deployment's provider account is out of credit. "
+                        "Retrying will not help until that is fixed."
+                    ),
+                    retryable=False,
+                )
+            ),
+        )
+    )
+
+    async def scenario(client: httpx.AsyncClient) -> dict[str, Any]:
+        created = await _opened(client)
+        answered = await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        return cast(dict[str, Any], answered.json())
+
+    body = _run(world, scenario)
+
+    assert body["status"] == "failed"
+    assert body["stop_reason"] == "error"
+    assert body["error_code"] == "provider_account_rejected"
+    assert "402" in body["error_message"]
+
+
+def test_a_turn_that_finished_says_nothing_about_errors() -> None:
+    """The other half of the same field: absence has to mean something.
+
+    A `error_code` that were "" or "none" on a completed turn would make the
+    console branch on a value instead of on its presence, and the first
+    unrecognised spelling of "nothing went wrong" would render as a fault.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> dict[str, Any]:
+        created = await _opened(client)
+        answered = await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        return cast(dict[str, Any], answered.json())
+
+    body = _run(world, scenario)
+
+    assert body["status"] == "completed"
+    assert body["error_code"] is None
+    assert body["error_message"] is None
 
 
 def test_a_second_turn_on_a_busy_session_is_a_conflict() -> None:

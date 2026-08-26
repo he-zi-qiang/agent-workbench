@@ -35,6 +35,27 @@ ErrorCode = Literal[
     "incompatible_schema",
     "provider_error",
     "provider_unavailable",
+    # The provider understood the request and refused the *account* behind it:
+    # no balance left, or a key it will not accept. A word of its own in a
+    # closed vocabulary is a cost, and `web_search` was refused one on exactly
+    # this argument -- one adapter's network fault does not earn a code, the
+    # message says which fault it was. This one earns it because it is not a
+    # fault at all. `provider_error` means "that call went wrong, and the run
+    # may be worth another shot"; this means "no call from this deployment can
+    # succeed until a person tops up or replaces the key", which no retry, no
+    # smaller prompt and no code change will reach. A reader who cannot tell
+    # the two apart goes looking for the bug instead of the invoice.
+    #
+    # 2026-08-26, on this checkout. Reported: runs dying mid-answer. Measured
+    # against the provider's own balance endpoint: CNY 1.08 left, USD 0.00.
+    # Read from the code and now pinned by a test: nothing downstream could
+    # have said so -- `stopNote` had no branch a provider failure could reach,
+    # so every one of them rendered as the bare stop reason. See ADR-0082.
+    #
+    # One code for 401/402/403 rather than three: what the *system* does is the
+    # same (stop, never retry), and which of the three happened only changes
+    # the sentence, which is what `message` is for.
+    "provider_account_rejected",
     "internal_error",
 ]
 

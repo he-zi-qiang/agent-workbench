@@ -620,7 +620,14 @@ export function CodePage() {
       // shows the instruction and then silence -- which reads as "it cannot
       // do anything any more", not as "that turn ran out".
       if (answer.status !== "completed") {
-        setFault({ scope: target, text: stopNote(answer.stop_reason) });
+        setFault({
+          scope: target,
+          text: stopNote(
+            answer.stop_reason,
+            answer.error_code,
+            answer.error_message,
+          ),
+        });
       }
     } catch (cause: unknown) {
       // `target`: the turn that opened the session reports where it now shows.
@@ -1369,8 +1376,26 @@ function displayable(files: WorkspaceEntryView[]): WorkspaceEntryView[] {
  * is the same two things -- the work so far is safe (writes land per write,
  * not at the end), and the way forward is to just keep talking. A stopped
  * turn used to render as nothing at all, which read as a broken session.
+ *
+ * `StopReason` alone turned out not to be enough vocabulary (ADR-0082). Every
+ * provider failure arrives here as `"error"`, so the last branch was rendering
+ * `这一轮没有跑完（error）` for an exhausted account, a rejected key, a retired
+ * model id and a 500 alike -- four different things to go do. The failure's
+ * own code and message are now passed alongside, and read first.
  */
-function stopNote(reason: string): string {
+function stopNote(
+  reason: string,
+  errorCode?: string | null,
+  errorMessage?: string | null,
+): string {
+  if (errorCode === "provider_account_rejected") {
+    // Ahead of the `reason` branches because this one contradicts them. The
+    // other notes end with 「直接说下一步就能继续」, and that advice is wrong
+    // here for the same reason it was wrong for `context_limit`: the next turn
+    // in this session calls the same account and fails the same way. Nothing
+    // inside this console can fix it.
+    return "模型服务拒绝了这个部署的账号：余额用尽，或者密钥失效。已完成的改动都在工作区里；重试没有用，要先去模型服务商那边充值或者换一把密钥。";
+  }
   if (reason === "deadline") {
     return "这一轮到时间停下了。已完成的改动都在工作区里，直接说下一步就能继续。";
   }
@@ -1389,7 +1414,15 @@ function stopNote(reason: string): string {
   if (reason === "cancelled") {
     return "这一轮被取消了。已完成的改动都在工作区里。";
   }
-  return `这一轮没有跑完（${reason}）。已完成的改动都在工作区里，直接说下一步就能继续。`;
+  // The message, then the code, then the bare stop reason. `explainFailure`
+  // settled this rule for Task details and it holds here: a string this
+  // function has no words for is still the most specific thing anyone has,
+  // and `error` is the least specific thing there is. The message is the
+  // server's English -- shown rather than dropped, because a reader chasing a
+  // provider fault would otherwise have to go read the event log to learn
+  // which one it was.
+  const detail = errorMessage ?? errorCode ?? reason;
+  return `这一轮没有跑完（${detail}）。已完成的改动都在工作区里，直接说下一步就能继续。`;
 }
 
 /** How much of an instruction fits in a sidebar row. `DEFAULT_TITLE_LIMIT`. */
