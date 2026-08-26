@@ -28,6 +28,90 @@
 
 ---
 
+## 2026-08-26（未合并，工作区，第二十三批）：一个被工具饿着的模型，看起来和一个不聪明的模型一样
+
+起因是一份用户报告：Code 模式「不能生成 PDF」「看不到多 agent 面板」「也不智能」「连
+联网搜索都不主动」，而模型在会话里自陈「本环境没有多 agent 编排工具，也没有 shell 与
+网络」。
+
+一轮 46 个 agent 的并行审计（五条调查线，每条断言单独找人反驳）得出的第一结论是：
+**模型没有偷懒，它在如实汇报自己的工具目录。**
+
+### 1. 控制台下的 Code 会话，此前手上只有五个工具
+
+`config.demo-local.toml` 是控制台实际跑的 profile。在它下面：
+
+- 每个会话都有项目 → 走项目态 → `CODE_PROJECT_TOOLS`，五个 `project_*` 文件工具；
+- `shell_tools_enabled` 未声明 → 继承 `config.default.toml:425` 的 `false` → 没有
+  `project_run`；
+- `sandbox_enabled = true` **对 Code 会话是死配置**：`sandbox_run` 绑在扁平的
+  `WorkspaceScope` 上、从 ContextVar 读会话，而项目回合只进 `ProjectFileScope`，
+  所以 `CODE_PROJECT_TOOLS_WITH_SANDBOX` 那两条臂早已被删（`code_session.py:158-167`
+  写着原因）。
+
+没有 shell、没有沙箱、没有联网工具、没有文档渲染。**"不能出 PDF"和"不联网"都不是
+模型的问题，是这个部署没给它任何一条够得到的路。**
+
+本批经用户明确批准后，在这个 profile 打开 `[policy] shell_tools_enabled = true`
+（ADR-077 早已预留的开关，`config.code-local.toml` 一直开着，因此不是边界变更、
+不需要新 ADR）。代价照旧并且是设计出来的：`project_run` 是 `destructive` 风险，
+**每一次调用都停下来把命令原文给人看**，而 `approve_for_session` 对这一档是硬拒的。
+
+### 2. 提示词里一句只被改掉一半的话
+
+四个基底提示词都写着 `There is no shell **and no network**`；`with_host_commands`
+只把其中一条替换成 `_HAS_SHELL`，而那段文本**对网络一个字都不提**。于是一个拿着
+`project_run` 的回合被告知"半句话错了"，然后自己去猜剩下半句——它按刚被删掉的那句猜。
+
+而 `bootstrap/child_environment.py` 的 docstring 恰是相反的权威：只擦 `AW_*`，
+"a command run inside somebody's project is meant to see their `PATH`, their
+toolchain, their `SSH_AUTH_SOCK` and their own credentials"。
+
+`_HAS_SHELL` 补了一段**描述而非承诺**的文字（离线机器跑出来就是离线的），并新增
+`test_a_turn_holding_the_run_tool_is_not_left_guessing_about_the_network` 钉住它。
+
+### 3. 「不智能」里可配置的那一半
+
+| 键 | 从 | 到 | 依据 |
+|---|---|---|---|
+| `model.main.reasoning_effort` | `low` | `high` | 出厂默认就是 `high`（`settings.py`），这个部署主动调到了全档最低 |
+| `model.main.max_output_tokens` | 未声明（吃 8192） | `16384` | **实测**：`max_tokens=16384` 下真吐 11000 token，`finish_reason: "stop"` |
+| `code.turn_timeout_seconds` | `360` | `600` | 360 是按 `low` 的回合长度定的；不一起提就是把"想得更深"兑换成"更容易超时"，而超时回合 `output_text` 为空、报告不入对话 |
+
+两个 profile（`code-local`、`demo-local`）同批改。原来那两处 `low` 都是**有意选的**，
+理由（响应快、控制台"可观看"）保留在注释里，只把选择点移了——这不是笔误修正。
+
+`max_output_tokens` 那条特别记一笔口径：探测时 `max_tokens` 一路给到 200000
+provider 都回 200，**说明它静默截断而不是校验**，所以"它接受"不能当上限证据。
+16384 是量出来的那个数，别往上填没量过的。
+
+### 证据（2026-08-26，这棵树上）
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check` / `ruff check` | 588 files / All checks passed |
+| `pyright`（裸跑） | 0 errors |
+| `pytest`（离线） | **2937 passed, 774 skipped** |
+| 两个 profile 的 `load_settings()` | 均通过；`demo-local` 项目回合工具集实测为 `(project_edit, project_grep, project_list, project_read, project_write, project_run)` |
+
+### 明确没做，以及为什么
+
+- **`context_window_tokens` 不猜**。今天两个 profile 都没声明它，于是 ADR-080 的上下文
+  天花板与 ADR-081 的压缩**全都不生效**——长会话不是"质量下降"，是直接死在 provider
+  400。要填，得有 provider 文档上的真实窗口值；理由与 `ModelPricingSettings` 拒绝出厂
+  价格是同一条。
+- **不给 Code 加 `web_search`**。它是 `external` 风险，会把扁平回合的天花板从 `write`
+  抬到 `external`，**推翻** `code_session.py:96-100` 写下的"沙箱关闭时永不触及审批门"
+  这条性质。这是边界变更，要先有 ADR。
+- **不改沙箱镜像去做 PDF**。那条路在 `demo-local` 下根本不通：沙箱给不了项目回合。
+- **不做多 agent 面板**。`AgentDelegated`／`AgentCompleted` 事件协议齐备但 `src/` 里
+  零发射点，而 `docs/architecture-baseline.md` 明写 v1 不做递归子 agent。这正是并行的
+  ADR-082／083 那条线在做的事，本批不重复造。
+- 不绕审批门；不引 LGPL/AGPL 的 PDF 库（CI 有精确字符串 allowlist）；不手搓 PDF 字节
+  ——那正是 `workspace_write` 拒绝 `.pdf` 要挡的事。
+
+---
+
 ## 2026-08-26（未合并，工作区，第二十二批）：账号的问题不是这次调用的问题
 
 > **编号更正**：这批的 ADR 以 082 合入（PR #174，`a2af3ba`），随后改为 **084**。

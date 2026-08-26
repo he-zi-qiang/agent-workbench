@@ -306,6 +306,24 @@ _NO_SHELL_CLAIMS: Final[tuple[str, ...]] = (
     "There is no shell and no network here.",
 )
 
+#: The second paragraph is 2026-08-26, and it closes a gap rather than adding
+#: colour. Four base prompts say "There is no shell and no network"
+#: (`_NO_SHELL_CLAIMS`), and `with_host_commands` replaces exactly one of them
+#: with this text -- which, until now, said nothing about the network at all.
+#: So a turn holding `project_run` was told the shell claim was wrong and left
+#: to guess about the other half of the same sentence, and it guessed the way
+#: the sentence it had just lost said: a user reported the model answering that
+#: it had "no shell and no network" while holding a tool that runs on their
+#: machine with their `PATH` and their `SSH_AUTH_SOCK`.
+#:
+#: It is a description, not a promise, and that is what makes it sayable under
+#: this module's own rule. What enforces it is `bootstrap/child_environment.py`,
+#: whose docstring is the authority: only `AW_*` is scrubbed, and "a command run
+#: inside somebody's project is meant to see their `PATH`, their toolchain,
+#: their `SSH_AUTH_SOCK` and their own credentials". Nothing here claims the
+#: network answers -- only that nothing in this system is standing between the
+#: command and it.
+#:
 #: ADR-077's text, minus the clause that used to introduce the directory.
 #: It said "You are working in a real directory on this machine" because under
 #: the flat base nothing else did -- that was ADR-077 §2.4 fixing the one
@@ -318,7 +336,16 @@ _HAS_SHELL = """\
 `project_run` runs a shell command in the project directory. There is no
 sandbox around it and no undo: it is the user's own machine, their files, their
 installed tools. Every call stops and asks them before it runs, and they see
-the command you wrote."""
+the command you wrote.
+
+The command inherits that machine's own environment -- its PATH, its toolchain,
+its credentials -- so whatever the machine itself can reach, a command can
+reach, the network included. That is a description of where the command runs,
+not a capability this session is promising you: an offline machine runs an
+offline command, and the way to find out is to propose one and read what it
+says. Do not tell the user you have no way to reach the network or to produce a
+file format you have no tool for; say which command would do it, and let them
+decide whether to allow it."""
 
 _HOST_COMMANDS_GUIDANCE = """\
 
