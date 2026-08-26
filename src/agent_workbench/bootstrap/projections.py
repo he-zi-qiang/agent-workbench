@@ -521,16 +521,18 @@ class AgentRuntimeConfig:
 class MultiAgentConfig:
     """The ceilings on this deployment's agents, graph-declared and delegated.
 
-    One field of the section is deliberately still missing.
-    ``max_agent_invocation_attempts_per_task`` counts attempts *across* retries
-    and reclaims, so it needs a durable per-Task counter rather than a number
-    passed into a process; projecting it here would put it one import away from
-    looking enforced. It stays in settings, unprojected, until the repository
-    that can honour it exists.
+    One field of the section is deliberately still missing, and the reason has
+    changed since it was first left out. ``max_agent_invocation_attempts_per_task``
+    *is* enforced now: ``reserve_agent_invocation`` compares and increments under
+    one row lock and raises ``AgentInvocationBudgetExhaustedError``. But it reads
+    the ceiling out of the Task row's own ``run_semantics_snapshot`` -- the number
+    that Task was **submitted** under -- rather than out of any process's
+    configuration. Projecting it here would put a second, disagreeing source of
+    the same number one import away from the code that enforces it.
 
-    The three delegation fields are projected precisely because they are not
-    like it: depth and child count are answered inside one run, in one process,
-    by a scope that lives exactly as long as the run does.
+    The delegation fields are projected precisely because they are not like it:
+    depth, child count and the child pool's size are answered inside one run, in
+    one process, by a scope that lives exactly as long as the run does.
     """
 
     #: How many agent nodes the compiled graph may declare. Checked at assembly:

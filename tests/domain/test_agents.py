@@ -24,6 +24,7 @@ from agent_workbench.domain.agents import (
     permitted_child_tools,
 )
 from agent_workbench.domain.policies import AuthorizationEnvelope
+from agent_workbench.workflows.agent_profiles import profile_for
 
 RESEARCHER = SubAgentDefinition(
     name="researcher",
@@ -124,6 +125,47 @@ class TestDepthIsWrittenIntoTheToolbox:
                 assert may_delegate is (depth < ceiling), (
                     f"depth={depth} ceiling={ceiling} granted={granted}"
                 )
+
+
+class TestAWorkingSetIsNotSomethingAChildMayHold:
+    def test_a_definition_naming_a_working_set_tool_cannot_be_written(self) -> None:
+        """Refused at definition time, because both failures are silent.
+
+        Whether an invocation opens a ``WorkspaceSession`` is decided from its
+        node's *static* profile. A child holding these inside a node that did
+        not open one is advertised them and then fails every call with
+        ``WorkspaceUnavailableError`` -- while its run reports success.
+        """
+
+        with pytest.raises(ValueError, match="working-set tools"):
+            SubAgentDefinition(
+                name="reader",
+                description="reads the working set",
+                system_prompt="read",
+                tool_names=("workspace_read",),
+            )
+
+    def test_the_read_only_working_set_tools_are_refused_too(self) -> None:
+        """The reason this is its own rule rather than a consequence of the
+        risk ceiling: three of the five declare ``risk="read"``, so
+        ``child_envelope`` would hand them straight over."""
+
+        for name in ("workspace_list", "workspace_read", "workspace_grep"):
+            with pytest.raises(ValueError, match="working-set tools"):
+                SubAgentDefinition(
+                    name="reader",
+                    description="reads",
+                    system_prompt="read",
+                    tool_names=(name,),
+                )
+
+    def test_a_graph_node_may_still_hold_them(self) -> None:
+        """The control, and the distinction the rule turns on. A node's own
+        profile enters the session first, and it is one invocation."""
+
+        writer = profile_for("synthesize")
+
+        assert any(name.startswith("workspace_") for name in writer.tool_names)
 
 
 class TestTheEnvelopeOnlyDescends:

@@ -248,11 +248,19 @@ researcher，把它摆在模型面前只会让模型花掉一次委派来被告�
 - **不是可写的子 agent。** 不变量 2。
 - **不是并发的深度。** 默认 `max_delegation_depth = 1`：一个人要求的运行可以委派，它委派
   出去的不能再委派。
-- **不是 C-01 的关闭。** 深度与广度的启动期校验，校验的对手是
-  `max_agent_invocation_attempts_per_task`，而那个上限本身至今**只记不拒**
-  （known-gaps C-01）。这份 ADR 让每个子运行都经过 `BudgetedAgentExecutor` 记一笔——于是
-  那个数的语义从"这张图有几个节点"变成了"含子代理的总调用数"——但它依然不会拒绝任何东西。
-  **这条要在 C-01 关闭之前一直读作一个近似。**
+- **不是子运行**之间**的合并上限。** 每个子运行拿到的是父预算除以 `max_children`
+  的一份，`max_children` 又限制了份数，所以总量由**构造**就有界了——这里没有再加一道
+  聚合闸，因为它买不到任何新东西。`DelegationContext.spent()` 是审计数字，不是天花板，
+  它的 docstring 就是这么写的。
+
+  写下这条时顺手纠正了一处口径：`docs/known-gaps.md` 的 C-01 当时仍写着这条上限"只有
+  配置，没有账本"，而
+  `adapters/persistence/task_registry.py:398` 早已在同一条 UPDATE 里比较并自增、超额抛
+  `AgentInvocationBudgetExhaustedError`，`workers/task.py` 判 `dead_letter`，
+  `tests/persistence/test_agent_invocation_budget.py` 12 条打真实 PostgreSQL。计数落在
+  `task_runs` 行上，所以"跨 retry 与 reclaim"是行本身的性质。这份 ADR 让这个数**更**
+  要紧：每个子运行都经过 `BudgetedAgentExecutor` 记一笔，语义从"这张图有几个节点"变成
+  "含子代理的总调用数"。C-01 已改判为关闭。
 - **不是对着真模型验证过的。** CI 的 `quality` job 离线，本仓没有任何测试打到真实
   DeepSeek。能力梯子停在 **Implemented + Tested**：`delegate_agent` 的工具描述能不能让模
   型在该委派的时候委派、`analyst` 的提示词写出来的第二意见有没有价值，在有一份实测转录之

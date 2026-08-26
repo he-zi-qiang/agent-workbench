@@ -343,28 +343,49 @@ streamable HTTP session 可能已过期，工具目录也是进程启动时冻�
 
 | 编号 | 缺口 | 分类 |
 |---|---|:---:|
-| C-01 | 调用次数上限只有配置，无持久账本 | 未接线 |
-| C-02 | 跨 retry 预算、partial failure、父子取消 | 未实现 |
+| C-01 | 调用次数上限只有配置，无持久账本 | ~~未接线~~ **已关闭** |
+| C-02 | 跨 retry 预算、partial failure、父子取消 | 部分实现（仅 partial failure 未做） |
 | C-03 | 动态 supervisor / spawn / mailbox | 部分实现（spawn 有了，另两项未实现） |
 | C-04 | CrewAI Adapter 与对比 benchmark | 未实现 |
 | C-05 | `critic` 的合法结构化输出被判成"没有可用产出" | 未实现 |
 
-### C-01 `max_agent_invocation_attempts_per_task` 只有配置，没有账本
+### C-01 `max_agent_invocation_attempts_per_task` 只有配置，没有账本 —— **已关闭**
 
-**证据**：[projections.py:424](../src/agent_workbench/bootstrap/projections.py:424)
-`MultiAgentConfig` 的 docstring 直接说明了这件事——"Three fields, and
-deliberately not the fourth"，因为该上限要跨 retry 与 reclaim 计数，需要一个
-持久的 per-Task 计数器，"projecting it here would put it one import away from
-looking enforced"。
+**这一条曾经在关闭之后仍写着"未接线"，是本文档自己定义的"口径不实"。** 记在这里而
+不是直接删掉：读到旧版本的人需要知道它错在哪一段。旧文说这条上限"需要一张能跨
+retry/reclaim 累计的持久计数表"，而实际的做法比那更好——**根本不需要新表**。
 
-**这条注释本身就是正确做法**：宁可让配置项停在 settings 里不投影，也不要让它
-在投影层出现、看起来像被执行了。
+**当前证据**：
+[`adapters/persistence/task_registry.py:398`](../src/agent_workbench/adapters/persistence/task_registry.py:398)
+的 `reserve_agent_invocation` 在**同一条 UPDATE** 里完成 `+1` 与比较，两者在一把行锁
+之下，所以两个 Worker 不可能各自读到最后一个名额。上限读自那一行**自己的**
+`run_semantics_snapshot`——是这个 Task **提交时**的数，不是这个进程今天碰巧配成的数
+（与 `wants_report`、`export_requires_approval` 同一条规则）。超额抛
+`AgentInvocationBudgetExhaustedError`，[`workers/task.py:312`](../src/agent_workbench/workers/task.py:312)
+把它判成 `dead_letter` 而不是重试——因为下一次认领会读到同一个满的计数器，再试一次
+不会有帮助。
 
-**做完的判据**：一张能跨 retry/reclaim 累计的持久计数表，投影随之补上第四个字段。
+计数落在 `task_runs` 行上，所以"跨 retry 与 reclaim 累计"是**行本身**的性质，不需要
+第二张表。[`tests/persistence/test_agent_invocation_budget.py`](../tests/persistence/test_agent_invocation_budget.py)
+12 条，打真实 PostgreSQL。
+
+**投影层为什么仍然只有那几个字段**：不是因为"还没有能执行它的仓储"，而是因为执行它
+的地方**不读投影**——它读 Task 自己的快照。把这个数投影进进程配置，反而会让人以为进
+程配置是它的来源。`bootstrap/projections.py` 的 docstring 已相应改写。
+
+**ADR-082 让这条更要紧了**：每个委派出去的子运行都经过 `BudgetedAgentExecutor` 记一
+笔，所以这个数的语义从"这张图有几个节点"变成了"**含子代理的**总调用数"。它现在既是
+计数也是闸。
 
 ### C-02 跨 retry/reclaim 的总预算、显式 partial failure、父任务到子调用的取消
 
-**分类**：未实现。三者与 C-01 同源——都需要一个比"单次进程内计数"更持久的账本。
+**分类**：部分实现。三件事要分开判。
+
+| 子项 | 判定 | 依据 |
+|---|---|---|
+| **跨 retry/reclaim 的总预算** | **已实现** | 与 C-01 同一处：计数在 `task_runs` 行上，reclaim 换 epoch 不清零 |
+| **父任务到子调用的取消** | **已实现**（ADR-082） | 子运行收下的是父运行**同一个** `CancellationToken`（`adapters/tools/delegate.py`），不存在传播机制可以出错。反向——单独掐一个子运行而让父继续——**明确不做**：在只读子 agent 上没有价值，且会破坏"只有一个 token"这条简洁性 |
+| **显式 partial failure** | **未实现** | 一个回合里并行派出的几个子运行，若一个失败，父运行拿到的是各自独立的 `ToolResult`（失败那个是 `status="error"` 且带上它写到一半的文字）。缺的是**节点层**把"三个里成功了两个"表达成一种状态，而不是让模型从三条工具结果里自己拼 |
 
 ### C-03 动态 supervisor 与 mailbox 未实现；spawn 已实现（ADR-082）
 

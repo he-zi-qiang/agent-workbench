@@ -49,6 +49,29 @@ from agent_workbench.domain.policies import (
 )
 from agent_workbench.domain.runs import ModelProfileName
 from agent_workbench.domain.tools import ToolName, ToolRisk
+from agent_workbench.domain.workspace import (
+    WORKSPACE_EDIT_TOOL,
+    WORKSPACE_GREP_TOOL,
+    WORKSPACE_LIST_TOOL,
+    WORKSPACE_READ_TOOL,
+    WORKSPACE_WRITE_TOOL,
+)
+
+#: The working-set tools, which a sub-agent definition may not name.
+#:
+#: All five, not only the two that write. Three of them declare ``risk="read"``,
+#: so the envelope's risk ceiling does not exclude them and the intersection
+#: would hand them over -- which is precisely why this has to be its own rule
+#: rather than a consequence of one.
+WORKSPACE_TOOL_NAMES: Final[frozenset[ToolName]] = frozenset(
+    {
+        WORKSPACE_EDIT_TOOL,
+        WORKSPACE_GREP_TOOL,
+        WORKSPACE_LIST_TOOL,
+        WORKSPACE_READ_TOOL,
+        WORKSPACE_WRITE_TOOL,
+    }
+)
 
 #: The tool a run calls to start another run.
 #:
@@ -116,6 +139,36 @@ class SubAgentDefinition:
     #: same reason: a definition must not be able to select an unreviewed model.
     model_profile: ModelProfileName = "main"
     max_report_chars: int = DEFAULT_MAX_REPORT_CHARS
+
+    def __post_init__(self) -> None:
+        # Refused at definition time, because the two ways it goes wrong are
+        # both silent.
+        #
+        # A working set is a session pinned to the version *one invocation*
+        # read (ADR-028), and whether an invocation opens one is decided from
+        # its node's **static** profile (`task_handlers._uses_workspace`). A
+        # child holding these tools inside a node whose profile does not name
+        # them would be advertised them and then fail every call with
+        # `WorkspaceUnavailableError` -- while its run reported success. That
+        # is ADR-028 §3.2's failure mode exactly, and a delegated run is the
+        # first thing able to reach it.
+        #
+        # And where the node *did* open one, two children started in the same
+        # turn would share it: both writing against a version neither of them
+        # read. The version pinning that makes a replay produce another version
+        # rather than a second effect is per-invocation, and a delegation is a
+        # different invocation.
+        #
+        # Reachable another way and deliberately left so: nothing stops a
+        # *node's own* profile from holding these. That path enters the session
+        # first, and it is one invocation.
+        forbidden = sorted(set(self.tool_names) & WORKSPACE_TOOL_NAMES)
+        if forbidden:
+            raise ValueError(
+                f"sub-agent {self.name!r} names working-set tools "
+                f"({', '.join(forbidden)}); a delegated run shares its "
+                "parent's session rather than opening one of its own"
+            )
 
 
 @dataclass(frozen=True, slots=True)

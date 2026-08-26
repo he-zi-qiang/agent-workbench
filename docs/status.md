@@ -47,7 +47,7 @@
 uv run ruff format --check .   # 通过
 uv run ruff check .            # 通过
 uv run pyright                 # 0 errors, 0 warnings, 0 informations
-uv run pytest                  # 2996 passed, 774 skipped
+uv run pytest                  # 2999 passed, 774 skipped
 AW_DATABASE__DSN=… uv run agent-config-check --profile development
                                # status ok, config_schema_version 1.18
 ```
@@ -95,14 +95,34 @@ AGENT_WORKBENCH_TEST_DSN=… AGENT_WORKBENCH_TEST_QDRANT_URL=… \
 `suppress(CancelledError)`，是写那条测试时当场暴露的——它会让一个被取消的 handler
 正常返回一个 `ToolResult`，取消就此丢失。
 
-### 4. 没做成的
+### 4. 顺手纠正的一处口径
+
+`docs/known-gaps.md` 的 **C-01** 写着"调用次数上限只有配置，无持久账本／未接线"，并引用
+`MultiAgentConfig` 的 docstring "Three fields, and deliberately not the fourth" 作为证据。
+**两者都已过期。** `adapters/persistence/task_registry.py:398` 的
+`reserve_agent_invocation` 在同一条 UPDATE 里比较并自增（一把行锁，两个 Worker 不可能
+各自读到最后一个名额），上限读自那一行**自己的** `run_semantics_snapshot`，超额抛
+`AgentInvocationBudgetExhaustedError`，`workers/task.py:312` 判 `dead_letter`。
+`tests/persistence/test_agent_invocation_budget.py` **12 条打真实 PostgreSQL，全过**。
+
+计数落在 `task_runs` 行上，所以"跨 retry 与 reclaim 累计"是**行本身**的性质——旧文说的
+"需要一张新的持久计数表"从来不必要。C-01 改判**关闭**，C-02 缩窄为"仅 partial failure
+未做"（跨 retry 预算与父子取消都已实现），`MultiAgentConfig` 的 docstring 改写成它现在
+真正的理由：执行它的地方不读投影，读 Task 自己的快照。
+
+这批之所以要动它，是因为 ADR-082 让这个数**更**要紧：每个子运行都经过
+`BudgetedAgentExecutor` 记一笔，语义从"这张图有几个节点"变成"含子代理的总调用数"。
+
+### 5. 没做成的
 
 - **父运行的 token / 成本上限看不见子运行的任何花费。** `_RunLedger` 是 runtime 私有
   的，`ToolResult` 不带 usage。一次运行的花费上界是"父预算 + 各子运行整除份额之和"，
   ADR-082 §5 写成了一句可证伪的话。
-- **known-gaps C-01 没有关闭。** 每个子运行确实经过 `BudgetedAgentExecutor` 记一笔，
-  于是 `max_agent_invocation_attempts_per_task` 的语义从"这张图有几个节点"变成"含子
-  代理的总调用数"——但那一层至今**只记不拒**。
+- **Task 路径上目前只有一个可用的子 agent。** `SubAgentCatalogue.narrowed_to` 会把
+  `researcher` 整个丢掉，因为 `knowledge_search` 不注册在 Task Worker 里——这是**设计
+  如此**（一个搜不了东西的 researcher 摆在模型面前只会浪费一次委派），但也说明委派在
+  Chat 路径上才完整。那条路要单独一份 ADR：它与答案发布围栏（`RetrievalJournal` +
+  引用核验）相交。
 - **没有对着真模型跑过。** 能力梯子停在 **Implemented + Tested**。
 
 ---
