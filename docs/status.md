@@ -28,6 +28,95 @@
 
 ---
 
+## 2026-08-26（未合并，工作区，第二十二批）：账号的问题不是这次调用的问题
+
+起因是一句用户报告：「多 agent 一个回答都跑不完，提示额度不足」。查下来**两件事都不是
+它看起来的样子**，记在这里，因为跑错方向的那半小时才是这批的价值。
+
+### 1. 现象查出来的是余额，不是预算
+
+查这份 checkout 用的 DeepSeek 账户（`GET /user/balance`，HTTP 200）：
+
+```
+USD  total_balance 0.00
+CNY  total_balance 1.08   （granted 0.00，topped_up 1.08）
+is_available: true
+```
+
+余额还在零以上，所以请求没被一次性拒掉——它是跑到一半见底，然后断在半路。
+
+同时确认了两件**代码这边的事实**，它们把"是不是预算把运行掐了"这个方向彻底排除：
+
+- Chat 与 Code 的 `RunBudget` **都没有设** `max_total_tokens`。`settings.py` 的默认是
+  `None`，九个 config profile 里没有一个写过它。`token_budget` / `cost_budget` 这两个
+  stop reason **在任何现有部署里都不会触发**。
+- 没有任何 profile 写过 `[model.*.pricing]`，`_project_prices` 返回 `None`，
+  `cost_micro_usd` 恒为 0。**这套平台自己不知道自己花了多少钱。**
+
+多 agent 只是死得更快而不是死因：`[multi_agent]` 每次 invocation 上限 120000 token、
+一个 Task 最多 12 次，单 Task 天花板约 144 万 token。不用多 agent 一样会耗尽，因为
+单轮 token 本来就没有上限。
+
+### 2. 真正的缺陷：它没把自己知道的事说出来
+
+余额到 0 后 provider 返 402。适配器把 4xx 一律折成 `provider_error`，运行以
+`stop_reason: "error"` 结束——而 `stopNote` 里**没有任何一条分支是 provider 失败能走到
+的**，它们全部落到最后那句模板里，括号里是光秃秃的 `error`。这句话和"模型 id 已下线"、
+"请求体不合法"、"上游 500 重试耗尽"完全同形，而这四件事要人去做的动作各不相同。
+
+（口径：余额那三行是**量的**；上面这段渲染路径是**从代码读出来的**，本批之前没有
+任何测试钉住它——现在有了。真实的 402 响应**没有**在这批里对着 provider 打过，把
+账上仅剩的余额花光才能复现它，代价与收益不成比例。）
+
+**信息是在路由丢的，不是在适配器丢的**：适配器一直说着 `HTTP 402`，
+`AgentOutcome.error` 一直带着它，是 `apps/api/routes/code.py` 的 `AskResponse` 只抄了
+`status` 和 `stop_reason`，把 `error` 留在了服务端。
+
+改动（ADR-082）：
+
+- `domain/errors.py` 的 `ErrorCode` 新增 `provider_account_rejected`（401/402/403 合一）
+- `adapters/models/deepseek.py` 新增 `_ACCOUNT_STATUSES` 与 `_rejection()`
+- `apps/api/routes/code.py` 的 `AskResponse` 补 `error_code` / `error_message`
+- `web` 三处文案：`CodePage.stopNote` 两条分支（含"没有认出来的码就显示服务端原话"
+  的兜底）、`failure.ts` 的 `CODE_LABELS` 一行与新增的 `CODE_REMEDIES`
+- `tests/architecture/test_error_codes_are_declared.py` 的扫描范围加进这个适配器：
+  它现在有两个码要在调用点上二选一，而"会挑"的地方才是能挑出一个没人声明过的词的地方
+
+**明确没做**：不新增 `StopReason`（`"error"` 说的是循环怎么停的，没说错；为什么停在
+`ErrorInfo` 上，而两者本来就都在 `AgentOutcome` 上）；不拆成三个码；**不往仓库配置里
+写 provider 价格**——`ModelPricingSettings` 的注释自己写着，价格是 provider 与某个部署
+之间合同上的事实，本仓库不知道它。余额告急不构成把猜来的单价写进版本库的理由。
+
+### 证据（2026-08-26，这棵树上）
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check .` | 588 files already formatted |
+| `ruff check .` | All checks passed |
+| `pyright`（裸跑） | 0 errors, 0 warnings, 0 informations |
+| `pytest`（离线） | **2936 passed, 774 skipped**, 64.7s |
+| `pytest tests/contracts tests/persistence tests/api tests/vector`（接 aw-postgres / aw-qdrant） | 1291 passed, 2 skipped, **6 failed**，见下 |
+| `eslint . --max-warnings 0` | 干净 |
+| `tsc -b` | 干净 |
+| `vitest run` | **35 files / 563 tests 全绿** |
+| `vite build` | 成功 |
+
+新增用例：`test_a_refused_account_is_not_reported_as_a_provider_error`、
+`test_a_refused_account_is_never_retried`（`max_retries=3` 下只发一次请求）、
+`test_a_failed_turn_carries_why_and_not_just_that_it_stopped`、
+`test_a_turn_that_finished_says_nothing_about_errors`、以及前端三条。
+
+**那 6 条失败不是这批引入的**，也不该记成这批的缺口：
+`tests/persistence/test_migrations.py` 全部报
+`alembic.util.exc.CommandError: Can't locate revision identified by
+'0032_events_stream_run_sequence'`。这个 revision **不在本 checkout 里**，只存在于
+`.claude/worktrees/` 下的一个工作树——共享的 `agent_workbench_test` 库被那边的分支
+stamp 到了 0032，而这棵树的头是 0031。本批改动没有碰 `migrations/` 或 `persistence/`
+下的任何文件。解法是重建那个测试库，或等那条分支合入；两者都不属于这批。
+
+
+---
+
 ## 2026-08-26（未合并，分支 `fix/compaction-must-prove-it-helped`，第二十一批）：压缩必须证明它起了作用
 
 上一批合进 `main` 之后，一轮对抗性复查对着那次提交跑了四个 lens，**13 条存活、9 条被

@@ -218,6 +218,20 @@ export interface CodeAskResponse {
   run_id: Identifier;
   status: string;
   stop_reason: string;
+  /**
+   * Why the turn failed, when it did (ADR-0082). Both null on a turn that
+   * completed.
+   *
+   * `stop_reason` alone is not enough to say anything useful about a failure:
+   * every provider problem arrives as `"error"`, so an account with no credit
+   * left and a model id that no longer exists produced the same sentence. The
+   * code is what the page writes Chinese from; the message is the fallback for
+   * a code it has not learned, on the same rule `explainFailure` uses.
+   *
+   * Optional because a server older than this field still answers turns.
+   */
+  error_code?: string | null;
+  error_message?: string | null;
 }
 
 export interface PendingApprovalView {

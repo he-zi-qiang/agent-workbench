@@ -805,6 +805,62 @@ describe("CodePage", () => {
     });
   });
 
+  it("names the account when the provider refused it", async () => {
+    // ADR-0082. Every provider failure arrives as `stop_reason: "error"`, so
+    // before the code came with it this rendered `这一轮没有跑完（error）` --
+    // and the reader, whose account had simply run out of credit, had nothing
+    // to distinguish that from a retired model id.
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "failed",
+      stop_reason: "error",
+      error_code: "provider_account_rejected",
+      error_message:
+        "the provider refused the request with HTTP 402: this deployment's " +
+        "provider account is out of credit. Retrying will not help until " +
+        "that is fixed.",
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "write notes.md");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/余额用尽/)).toBeInTheDocument();
+    });
+    // The advice every other stopped-turn note ends on, withheld here for the
+    // same reason `context_limit` withholds it: the next turn in this session
+    // calls the same account and fails the same way.
+    expect(screen.queryByText(/直接说下一步就能继续/)).not.toBeInTheDocument();
+  });
+
+  it("shows the server's own words for a failure it has no phrase for", async () => {
+    // The fallback that replaced `（error）`. An unrecognised code is still
+    // the most specific thing anyone has, and the message is more specific
+    // than the code -- the same rule `explainFailure` applies to Task details.
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "failed",
+      stop_reason: "error",
+      error_code: "provider_error",
+      error_message: "the provider rejected the request with HTTP 503",
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "write notes.md");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/HTTP 503/)).toBeInTheDocument();
+    });
+  });
+
   it("says what went wrong instead of losing the turn", async () => {
     const user = userEvent.setup();
     vi.mocked(askCode).mockRejectedValue(new Error("这个会话已经在跑一轮了"));
