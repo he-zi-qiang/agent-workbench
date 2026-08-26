@@ -55,6 +55,37 @@ tool_calling_required = false
 # 别往上填没量过的数字：适配器会擦掉 provider 的错误正文（那里出现过 prompt 回显），
 # 一个供应商不收的值最后只会变成转录里一句 HTTP 400，指向唯一没出问题的组件。
 max_output_tokens = 16384
+#
+# 同一份文档把这个模型的 Max Output 记作 384K。**没有取它**，而且这是个选择不是
+# 遗漏：`max_output_tokens` 除了给长回答留空间，也是跑飞的那一轮唯一的刹车，而
+# 一次编码回合要写的文件很少超过 16384 token（约 60KB 文本）。要更大就往上调，
+# 只是别忘了它同时是账单的上限。
+
+# 这个部署的模型物理上能装多少（ADR-080）。**查来的 + 量过的，不是猜的。**
+#
+# 在这之前九个 profile 一个都没有声明它，于是 `domain/runs.py` 的
+# `context_reason_for` 直接返回 `None`——ADR-080 的上下文天花板与 ADR-081 的压缩
+# **两个都不生效**。后果不是"长会话质量下降"，是这一轮直接死在 provider 的 400 上，
+# 而适配器会擦掉 provider 的错误正文，转录里只剩一句 HTTP 400。
+#
+# 1000000 来自 DeepSeek 自己的 Models & Pricing 页（2026-08-26 读取）：
+# `deepseek-v4-flash` 的 Context Length 记作 1M tokens、Max Output 记作 384K。
+#
+# 为什么不直接照抄文档就完事：这个仓库自己记过一个对不上的数。docs/status.md 第
+# 二十一批（ADR-081 复查）写着实测"三次在 70,000 token 打 64,000 的窗口"，终局
+# HTTP 400。所以 2026-08-26 直接对 provider 打了两次大输入验证，用的就是这里这个
+# model_id：
+#
+#     900,000 字符 → prompt_tokens = 200089 → HTTP 200
+#     400,000 字符 → prompt_tokens =  88977 → HTTP 200
+#
+# 也就是说那个 64,000 是旧模型时代的数字，对 `deepseek-v4-flash` 不再成立。量到
+# 200k 没问题，文档说 1M——两个数都写在这里，因为它们证明的不是同一件事：量到的那个
+# 证明旧数字已死，文档那个才是这里填的依据。
+#
+# 万一以后又在低于这个数的地方吃到 400：**这个数就是错的**，改它，并且把新的测量
+# 写在这里。上面这两行是它当时的全部依据，不是一个不能质疑的常数。
+context_window_tokens = 1000000
 # Task nodes and Code turns think and show it (ADR-061); chat shapes pin
 # thinking off per request.
 #

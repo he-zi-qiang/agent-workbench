@@ -28,6 +28,60 @@
 
 ---
 
+## 2026-08-26（未合并，工作区，第二十四批）：这个部署第一次说得出自己的窗口有多大
+
+第二十三批留下的第一条缺口：九个 profile 没有一个声明 `model.main.context_window_tokens`，
+于是 `domain/runs.py` 的 `context_reason_for` 对任何输入都返回 `None`——**ADR-080 的
+上下文天花板与 ADR-081 的压缩两个都不生效**。后果不是"长会话质量下降"，是这一轮直接
+死在 provider 的 400 上，而适配器会擦掉 provider 的错误正文，转录里只剩一句 HTTP 400。
+
+那一批没有填它，理由写在当时：不猜。这一批把它查出来并量过了。
+
+### 查来的
+
+DeepSeek Models & Pricing（2026-08-26 读取）：`deepseek-v4-flash`——两个 profile 的
+`[model.main]` 用的都是它——Context Length 记作 **1M tokens**，Max Output 记作 384K。
+
+### 为什么没有直接照抄
+
+本文档第二十一批（ADR-081 复查）自己记着一个对不上的实测："三次在 70,000 token 打
+**64,000** 的窗口"，终局 HTTP 400。两个数字差了十六倍，照抄任何一个都是赌。
+
+所以直接对 provider 打了两次大输入，用的就是这个 `model_id`：
+
+```
+900,000 字符 → prompt_tokens = 200089 → HTTP 200
+400,000 字符 → prompt_tokens =  88977 → HTTP 200
+```
+
+**那个 64,000 是旧模型时代的数字，对 `deepseek-v4-flash` 不再成立。** 量到 200k 没问题，
+文档说 1M；两个数都写进了配置注释，因为它们证明的不是同一件事——量到的那个证明旧数字
+已死，文档那个才是填进去的依据。
+
+### 落地与验证
+
+`context_window_tokens = 1000000` 写进两个 profile。`runtime.context_soft_limit_ratio`
+维持出厂的 0.75，于是软上限 750,000。实测 `context_reason_for` 的行为：
+
+| 上一轮输入 | 改之前 | 改之后 |
+|---|---|---|
+| 70,000 | `None`（不生效） | 继续 |
+| 700,000 | `None` | 继续 |
+| 800,000 | `None` | **`context_limit`** |
+
+**没有**顺手打开 `runtime.context_compaction_enabled`：ADR-081 把它默认关是有理由的
+（有损、最多三次、概括失败时什么都不删），而窗口是 1M 之后它更不急。
+
+`max_output_tokens` 维持第二十三批量出来的 16384，没有取文档给的 384K——那是选择不是
+遗漏：它同时是跑飞那一轮唯一的刹车，也是账单的上限，而一次编码回合要写的文件很少超过
+16384 token（约 60KB 文本）。理由记在配置注释里。
+
+### 证据
+
+`ruff` / `pyright` 干净；`pytest` 2937 passed, 774 skipped；两个 profile 的
+`load_settings()` 均通过，上表是对着真实 `context_reason_for` 跑出来的。
+
+
 ## 2026-08-26（未合并，工作区，第二十三批）：一个被工具饿着的模型，看起来和一个不聪明的模型一样
 
 起因是一份用户报告：Code 模式「不能生成 PDF」「看不到多 agent 面板」「也不智能」「连
