@@ -97,7 +97,13 @@ ProjectionInput = Literal["objective", "plan", "draft", "evidence", "review"]
 #: for the same reason `ProjectionInput` does: a free-form value would make
 #: "which agent may reach this tool" a question about whichever config file was
 #: written last.
-DynamicToolSource = Literal["research", "synthesis", "sandbox"]
+#:
+#: ``delegation`` is a fourth audience and a deployment fact in exactly the same
+#: sense (ADR-082): ``delegate_agent`` is registered only where
+#: ``multi_agent.delegation_enabled`` is on, so a profile that named it
+#: statically would ask ``advertise`` for a tool most deployments do not have --
+#: and that raises, turning an off switch into a node that fails every Task.
+DynamicToolSource = Literal["research", "synthesis", "sandbox", "delegation"]
 
 
 class AgentContextViolationError(RuntimeError):
@@ -266,6 +272,12 @@ V1_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
         # Not `evidence`: this agent produces it. Admitting it would let one
         # branch read the other's findings.
         admits=frozenset({"objective", "plan"}),
+        # The first profile allowed to delegate (ADR-082), and the one where it
+        # is worth least to get wrong: this agent produces evidence rather than
+        # the deliverable, so a sub-agent that answers badly costs a branch
+        # rather than the report. Where a deployment has delegation off the
+        # catalog is empty and this reduces to the profile it was before.
+        dynamic_tool_sources=frozenset({"delegation"}),
     ),
     AgentProfile(
         name="researcher_external",

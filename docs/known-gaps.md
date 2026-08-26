@@ -345,7 +345,7 @@ streamable HTTP session 可能已过期，工具目录也是进程启动时冻�
 |---|---|:---:|
 | C-01 | 调用次数上限只有配置，无持久账本 | 未接线 |
 | C-02 | 跨 retry 预算、partial failure、父子取消 | 未实现 |
-| C-03 | 动态 supervisor / spawn / mailbox | 未实现 |
+| C-03 | 动态 supervisor / spawn / mailbox | 部分实现（spawn 有了，另两项未实现） |
 | C-04 | CrewAI Adapter 与对比 benchmark | 未实现 |
 | C-05 | `critic` 的合法结构化输出被判成"没有可用产出" | 未实现 |
 
@@ -366,10 +366,23 @@ looking enforced"。
 
 **分类**：未实现。三者与 C-01 同源——都需要一个比"单次进程内计数"更持久的账本。
 
-### C-03 动态 supervisor、spawn、mailbox 未实现
+### C-03 动态 supervisor 与 mailbox 未实现；spawn 已实现（ADR-082）
 
-**当前事实**：Multi-Agent 是**固定图**——v1 与 `v2_general` 两张，提交时选图并冻结。
-动态编排（运行期决定拉起哪些 agent、agent 之间投递消息）不存在。
+**当前事实**：编排的**骨架**仍然是固定图——v1 与 `v2_general` 两张，提交时选图并冻结。
+三件事要分开判：
+
+| 子项 | 判定 | 依据 |
+|---|---|---|
+| **spawn**（运行期从一次运行里派生另一次运行） | **已实现，默认关** | `multi_agent.delegation_enabled`。`adapters/tools/delegate.py` 的 `delegate_agent` 调用同一个 `AgentExecutor`，产出新 `agent_run_id`、同 `stream_id` 的子运行，父运行发 `AgentDelegated`/`AgentCompleted`。见 [ADR-082](./adr/0082-a-delegation-is-a-run-not-a-new-loop.md) |
+| **动态 supervisor**（运行期决定拉起哪几个图节点） | **未实现** | `multi_agent.topology` 仍钉死 `Literal["fixed_langgraph"]`。委派不改变图，它在一个节点的运行**内部**发生 |
+| **mailbox / agent 间投递** | **拒绝** | ADR-082 §5。父子之间已有一条更强的通道——同步、有序、有事务边界的 `ToolResult`；为一棵有共同根的树装一套异步邮局，买到的是 ack 状态机和看门狗，付出的是"消息可能没送到"这个全新的失败模式 |
+
+**spawn 这一项做完的判据**（已满足）：同一个 `stream_id` 下出现两个 `run_id`，父运行的
+`AgentDelegated.child_agent_run_id` 指向子运行，且宣布过的子运行**一定**有
+`AgentCompleted`——包括被取消的路径。
+
+**仍然要注意的口径**：这一项的默认值是**关**，且关着的时候工具不注册、信封不含它、
+profile 原样不变。所以"这个部署有没有 spawn"是一个配置问题，不是一个版本问题。
 
 ### C-04 CrewAI Adapter 与对比 benchmark 未实现
 

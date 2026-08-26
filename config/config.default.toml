@@ -305,6 +305,25 @@ max_agent_invocation_attempts_per_task = 12
 # upward is mis-sized, and the protection (a hard per-invocation stop) does
 # not depend on the number being uncomfortable.
 max_tokens_per_agent_invocation = 120000
+# ADR-082. Off, and off is the honest default rather than a cautious one: every
+# ceiling above describes the compiled graph, whose shape is known when the Task
+# is submitted, and a delegated run is the one thing here decided by a model
+# mid-loop. Turning it on is a deployment saying it has looked at what its agents
+# do with the graph they have.
+delegation_enabled = false
+# 1 = the run a person asked for may delegate; what it delegates to may not.
+max_delegation_depth = 1
+# Over the whole life of one run, not at once. The number of delegations in
+# flight simultaneously is `runtime.max_parallel_read_tools`, which is a
+# different question. Raising either without raising
+# `max_agent_invocation_attempts_per_task` fails at startup.
+max_children_per_run = 4
+# A second pool, not a share of the first. A parent holds its concurrency slot
+# for as long as its child runs, so one pool deadlocks the moment the graph's
+# own fan-out fills it. The cost is stated rather than hidden: a delegating
+# deployment runs up to max_parallel_agent_invocations + this many model loops
+# at once.
+max_parallel_child_invocations = 2
 
 [rag.llama_index]
 # Off until the equivalence evidence ADR-017 step 3 requires actually exists.

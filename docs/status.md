@@ -28,6 +28,85 @@
 
 ---
 
+## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第二十一批）：一次委派是一次运行，不是一个新的循环（ADR-082）
+
+这一批把 `TraceContext.parent_agent_run_id`、`AgentDelegated`/`AgentCompleted`、
+`BudgetUsage.merged` 的 docstring、前端 `workTimeline.ts` 的中文标签——四个**写好了
+但一个写入者都没有**的槽——同时填上。做法是一个 `risk="read"` 的
+`delegate_agent` 工具，它的 handler 调用**同一个** `AgentExecutor`，产生一次新
+`agent_run_id`、同 `stream_id` 的子运行。默认关。
+
+理由与被否掉的做法见
+[ADR-082](./adr/0082-a-delegation-is-a-run-not-a-new-loop.md)。`docs/known-gaps.md`
+**C-03** 从"未实现"改判为**部分实现**（spawn 有了；动态 supervisor 与 mailbox 仍然
+没有，且 §5 明确拒绝）。
+
+### 1. 门禁
+
+```
+uv run ruff format --check .   # 通过
+uv run ruff check .            # 通过
+uv run pyright                 # 0 errors, 0 warnings, 0 informations
+uv run pytest                  # 2996 passed, 774 skipped
+AW_DATABASE__DSN=… uv run agent-config-check --profile development
+                               # status ok, config_schema_version 1.18
+```
+
+服务态套件（`scripts/dev.sh services` 已在跑）：
+
+```
+AGENT_WORKBENCH_TEST_DSN=… AGENT_WORKBENCH_TEST_QDRANT_URL=… \
+  uv run pytest tests/contracts tests/persistence tests/api
+                               # 1176 passed, 1 skipped
+```
+
+`config_schema_version` 保持 `1.18`：四个新叶子都挂在既有 `[multi_agent]` 段下并带
+默认值。
+
+开关本身也验了两次：
+
+| 做什么 | 结果 |
+|---|---|
+| `AW_MULTI_AGENT__DELEGATION_ENABLED=true` | `status: ok`，且 `run_semantics_template_revision` 从 `1.18:1.3:83fa368e…` 变成 `1.18:1.3:adef9bd0…`——信封变了，于是这批 Task 的运行语义快照如实记下了它 |
+| 再加 `MAX_DELEGATION_DEPTH=3` `MAX_CHILDREN_PER_RUN=8` | 启动**失败**：`the deepest delegation tree this configuration permits (8 children to depth 3 = 512 runs) exceeds max_agent_invocation_attempts_per_task (12)` |
+
+### 2. 显然的做法，和为什么否掉
+
+| 显然的做法 | 为什么否掉 |
+|---|---|
+| handler 自己跑一遍"调模型 → 解析工具 → 再调模型" | 这才是第二个 tool loop。ADR-082 §2.1 把这条不变量写成了一条**会红的测试**，不再只是散文 |
+| 复用 `workflows.AgentProfile` 当子 agent 的定义类型 | `adapters/` 不许 import `workflows/`，架构测试当场红；且 `AgentProfile.node` 对派生运行没有真值 |
+| 把 `EventSink` 塞进 `ToolInvocation` 让 handler 自己发事件 | 等于把整个事件词表交给每一个 handler。ADR-068 拒绝过一次，理由没变 |
+| `delegated()` / `completed()` 两个动词 | 超时把 `CancelledError` 抛在等待子运行那一行，第二个动词永远走不到——事件流留下一条"宣布了没有然后"的记录 |
+| 检查 `len(spawned)` 决定还能不能派 | 工具是 `parallel` 的，同一批在一个 `gather` 里，每个都读到 0 |
+| 父子共用一个 `BoundedParallelExecutor` | **死锁**，而且没有错误消息：父握着槽等子，子排队等只有父返回才能释放的槽 |
+| 在 `AgentProfile.tool_names` 里静态写死 `delegate_agent` | `advertise` 对没注册的工具抛异常——把一个关掉的开关变成每个 Task 都失败的节点 |
+
+### 3. 测试是不是装饰的，当场验了三次
+
+| 删掉什么 | 结果 |
+|---|---|
+| `permitted_child_tools` 的委派剔除 + `child_envelope` 的风险钳制 + `AgentDelegated` 发射 | **5 failed, 43 passed** |
+| `reserve()` 的 `outstanding += 1` | **7 failed** |
+| `await asyncio.shield(emitting)` → `await emitting` | 慢写入那条**单独**红；再把 `await` 整个去掉，另外 **3 条**红 |
+
+第三条是这批里最值得记下的一次：两个机制（`ensure_future` 脱钩、`shield` 防级联）
+守的是**两个不同的时刻**，各自单独可证伪。第一版还在 shield 外面套了
+`suppress(CancelledError)`，是写那条测试时当场暴露的——它会让一个被取消的 handler
+正常返回一个 `ToolResult`，取消就此丢失。
+
+### 4. 没做成的
+
+- **父运行的 token / 成本上限看不见子运行的任何花费。** `_RunLedger` 是 runtime 私有
+  的，`ToolResult` 不带 usage。一次运行的花费上界是"父预算 + 各子运行整除份额之和"，
+  ADR-082 §5 写成了一句可证伪的话。
+- **known-gaps C-01 没有关闭。** 每个子运行确实经过 `BudgetedAgentExecutor` 记一笔，
+  于是 `max_agent_invocation_attempts_per_task` 的语义从"这张图有几个节点"变成"含子
+  代理的总调用数"——但那一层至今**只记不拒**。
+- **没有对着真模型跑过。** 能力梯子停在 **Implemented + Tested**。
+
+---
+
 ## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第二十批）：被缩短过的对话要自己说出来（ADR-081）
 
 上一批（ADR-080）让一次超窗的运行停下来并说出撞的是哪条天花板。这一批是另一半：
