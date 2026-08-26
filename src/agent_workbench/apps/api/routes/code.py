@@ -145,7 +145,7 @@ class AskResponse(BaseModel):
     #: this response dropped them, which left the console holding one word --
     #: ``stop_reason`` -- for every way a turn can end badly. Six different
     #: provider failure reached the page as the bare stop reason, so an
-    #: exhausted account read exactly like a retired model id (ADR-0082).
+    #: exhausted account read exactly like a retired model id (ADR-0084).
     #:
     #: Both, not one. The code is what the console writes a sentence from; the
     #: message is what it falls back to for a code it has no words for yet,

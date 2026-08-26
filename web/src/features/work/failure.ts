@@ -74,7 +74,7 @@ const REVIEW_EXHAUSTED = /^review still requires changes after (\d+) revisions/;
  * Codes whose remedy is neither of the two this file otherwise offers.
  *
  * The default pair splits on `retryable`: try again, or change the task. Both
- * are wrong for `provider_account_rejected` (ADR-0082) -- it is not retryable,
+ * are wrong for `provider_account_rejected` (ADR-0084) -- it is not retryable,
  * and nothing about the task or this deployment's config is what is broken.
  * Sending a reader to re-read their own YAML when their account has no credit
  * left is the same misdirection the code was split out of `provider_error` to

@@ -26,7 +26,7 @@ describe("explainFailure", () => {
   });
 
   it("sends a refused account to the provider, not back to the config", () => {
-    // ADR-0082. The default sentence for anything non-retryable is 「需要先改动
+    // ADR-0084. The default sentence for anything non-retryable is 「需要先改动
     // 任务或配置」, and for this one both halves of that are wrong: the task is
     // fine and so is the config. Sending a reader to re-read their own YAML
     // when their account has no credit left is exactly the misdirection this

@@ -50,7 +50,7 @@ ErrorCode = Literal[
     # against the provider's own balance endpoint: CNY 1.08 left, USD 0.00.
     # Read from the code and now pinned by a test: nothing downstream could
     # have said so -- `stopNote` had no branch a provider failure could reach,
-    # so every one of them rendered as the bare stop reason. See ADR-0082.
+    # so every one of them rendered as the bare stop reason. See ADR-0084.
     #
     # One code for 401/402/403 rather than three: what the *system* does is the
     # same (stop, never retry), and which of the three happened only changes

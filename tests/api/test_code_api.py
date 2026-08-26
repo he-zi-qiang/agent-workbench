@@ -382,7 +382,7 @@ def test_a_session_takes_an_instruction_and_answers_with_a_report() -> None:
 
 
 def test_a_failed_turn_carries_why_and_not_just_that_it_stopped() -> None:
-    """ADR-0082. `stop_reason` alone cannot describe a provider failure.
+    """ADR-0084. `stop_reason` alone cannot describe a provider failure.
 
     Every one of them is `"error"`, so an exhausted account, a rejected key, a
     retired model id and a 500 all reached the console as the same sentence,
