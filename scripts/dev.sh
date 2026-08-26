@@ -15,6 +15,7 @@
 #   scripts/dev.sh web-check        # health + tools/list probe
 #   scripts/dev.sh web-api          # API with explicit web MCP profile
 #   scripts/dev.sh web-worker       # real Worker; requires a model provider key
+#   scripts/dev.sh sandbox-image    # build the sandbox image that can draw a PDF
 #   scripts/dev.sh computer-server  # loopback screen-control MCP server (macOS only)
 #   scripts/dev.sh computer-check   # health + tools/list probe
 #   scripts/dev.sh code-api         # API with Code sessions on; requires a key
@@ -64,6 +65,13 @@ cd "$(dirname "$0")/.."
 PYTHON="${PYTHON:-.venv/bin/python}"
 PG_PORT="${PG_PORT:-5433}"
 QDRANT_PORT="${QDRANT_PORT:-6333}"
+# The locally built sandbox image, and the reason it is local rather than a
+# name on a registry: `docker/sandbox-pdf.Dockerfile` is two packages on a
+# digest-pinned base, and publishing it would create a supply-chain artifact
+# this project would then owe somebody maintenance on. `sandbox-server` uses it
+# only when `docker image inspect` finds it, so an unbuilt one costs a line of
+# output rather than a broken call.
+SANDBOX_PDF_IMAGE="${SANDBOX_PDF_IMAGE:-agent-workbench-sandbox-pdf:local}"
 # A database of its own, never the test one. Sharing them means the suite
 # truncates your local data, and -- the way this was actually found -- your
 # Worker claims a Task the suite left behind and dies on an artifact that
@@ -306,12 +314,38 @@ web-check)
     --expect-tool download_document
   ;;
 
+sandbox-image)
+  # Build the image that lets `sandbox_run` produce a PDF instead of only text.
+  #
+  # Separate from `sandbox-server` because it is slow, needs the network, and
+  # is a thing somebody chooses -- the same reason `services` is its own verb.
+  # Roughly 70 MB on top of the 41 MB base; about a minute cold.
+  exec docker build -t "$SANDBOX_PDF_IMAGE" -f docker/sandbox-pdf.Dockerfile docker
+  ;;
+
 sandbox-server)
   # One container per call, created and destroyed inside the call (ADR-029).
   # It owns no path, no tenant and no workspace: files in, files out. What it
   # needs is a container runtime; without one it starts and every call answers
   # an error, which is why the check below runs a real script rather than
   # reading /health.
+  #
+  # The image is chosen here rather than defaulted in the code, and `--image`
+  # has been a parameter of `apps.sandbox_mcp.main` since ADR-029. What decides
+  # it is whether the richer one has actually been built: a server started
+  # against an image that is not on this machine answers every call with a
+  # pull failure, and `--network=none` means it cannot fetch one mid-call.
+  #
+  # So this probes, and says which of the two it got. Silently falling back
+  # would reproduce the bug this whole batch is about -- a model that cannot
+  # produce a PDF, with nothing anywhere saying why.
+  if docker image inspect "$SANDBOX_PDF_IMAGE" >/dev/null 2>&1; then
+    echo "sandbox image: $SANDBOX_PDF_IMAGE (reportlab + CJK font available)" >&2
+    exec "$PYTHON" -m agent_workbench.apps.sandbox_mcp.main --image "$SANDBOX_PDF_IMAGE"
+  fi
+  echo "sandbox image: the stock default -- scripts are limited to the standard library." >&2
+  echo "  no PDF, no charts, no spreadsheets; \`--network=none\` means a script cannot install one." >&2
+  echo "  to change that: scripts/dev.sh sandbox-image" >&2
   exec "$PYTHON" -m agent_workbench.apps.sandbox_mcp.main
   ;;
 

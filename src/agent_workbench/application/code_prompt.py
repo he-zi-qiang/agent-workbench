@@ -112,7 +112,17 @@ timeout, every time. When the thing being asked for is interactive or animated
 -- a game, a visualization, anything with a frame loop -- write it as one
 self-contained `.html` file with the script and styles inline. The console
 renders that in a sandboxed frame where a person can actually use it, which a
-terminal program in this container can never be."""
+terminal program in this container can never be.
+
+What is installed in that container is a property of this deployment's image,
+not of this prompt, and it is not always only the standard library. So before
+telling somebody a format is beyond you -- a PDF, a chart, a spreadsheet --
+spend one call on `import x` and read what comes back. An import is the
+cheapest question you can ask here, and "I cannot produce that" is wrong the
+moment the image carries the library. It is also the kind of wrong nobody goes
+back and checks. What is fixed is the network: nothing can be installed during
+a call, so the answer is whatever the image already has, and one import tells
+you which."""
 
 _CANNOT_RUN = """\
 4. Do not guess at what you cannot see. If a task depends on a file that is not
@@ -143,8 +153,29 @@ timeout, every time. When the thing being asked for is interactive or animated
 -- a game, a visualization, anything with a frame loop -- write it as one
 self-contained `.html` file with the script and styles inline. The console
 renders that in a sandboxed frame where a person can actually use it, which a
-terminal program in this container can never be."""
+terminal program in this container can never be.
 
+What is installed in that container is a property of this deployment's image,
+not of this prompt, and it is not always only the standard library. So before
+telling somebody a format is beyond you -- a PDF, a chart, a spreadsheet --
+spend one call on `import x` and read what comes back. An import is the
+cheapest question you can ask here, and "I cannot produce that" is wrong the
+moment the image carries the library. It is also the kind of wrong nobody goes
+back and checks. What is fixed is the network: nothing can be installed during
+a call, so the answer is whatever the image already has, and one import tells
+you which."""
+
+#: The closing paragraph about imports is 2026-08-26, and it is here because a
+#: prompt that is silent about a capability is read as denying it. A user asked
+#: for a PDF and was told the session could not make one -- which was true of
+#: the stock `python:3.12-slim` image and false the moment
+#: `docker/sandbox-pdf.Dockerfile` is the one running, and nothing in the
+#: transcript distinguished those two deployments. The paragraph deliberately
+#: does not name a library: what is in the image is `--image` at the server's
+#: command line, so any list written here would be a claim this module cannot
+#: keep. What it can say, and what is true of every image, is that one import
+#: settles it and that the network will not be there to change the answer.
+#:
 #: The same prompt for a deployment that granted ``sandbox_run`` (ADR-057).
 #:
 #: Derived rather than written twice, and derived by *named* substitution

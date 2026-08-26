@@ -28,6 +28,68 @@
 
 ---
 
+## 2026-08-26（未合并，工作区，第二十五批）：沙箱第一次画得出一页中文
+
+第二十三批留下的第二条缺口：Code 模式生成不了 PDF。当时的判定是"扁平会话的
+`sandbox_run` 那条路是通的，卡点只是默认镜像里没有 PDF 库"。这一批把它做成了，并且
+**看过了产物**。
+
+### 为什么是换镜像而不是别的
+
+`DEFAULT_SANDBOX_IMAGE` 是 `python:3.12-slim`，`executor.py` 的注释说明了原因——沙箱
+需要一个解释器，别的都不需要，而一个项目自建镜像会把本仓库的代码放进它最不该够得到
+的地方。这条**没有被推翻**：新镜像不 COPY 本仓库任何东西，而且**没有改默认值**，
+`DEFAULT_SANDBOX_IMAGE` 原样不动。
+
+`--network=none` 是 ADR-029 整个隔离论证的前提而不是一个设置，所以脚本里 `pip install`
+永远不该成功——能 import 什么必须在调用开始之前就定死。这就是"只能是镜像"的原因。
+
+### 字体是这一批里最难的那半个小时
+
+ADR-045 §4.3 记着那个失败：缺 CJK 字体时**退出码 0、PDF 合法、每个汉字是空心方块、
+测试全绿**。所以字体必须进镜像，不能留给运维者。
+
+而显然的那个字体不行。实测 2026-08-26：`fonts-noto-cjk` 的 `NotoSansCJK-*.ttc` 是
+OTC/CFF 轮廓，reportlab 直接抛
+
+```
+TTFError: TTC file ".../NotoSansCJK-Bold.ttc": postscript outlines are not supported
+```
+
+换成 TrueType 轮廓的 `fonts-wqy-zenhei`：能用，而且 28 MB 对 88 MB。整镜像 69 MB
+（基础镜像 41 MB）。
+
+### 落地
+
+* `docker/sandbox-pdf.Dockerfile`——digest 钉死的 `python:3.12-slim` +
+  `fonts-wqy-zenhei` + `reportlab==4.2.5`（BSD；`fpdf2` 是 LGPL、`PyMuPDF` 是 AGPL，
+  CI 的 `pip-licenses` 门禁**看不到容器内容**，所以这条是自觉遵守而不是被强制的）。
+* `scripts/dev.sh sandbox-image` 构建它；`sandbox-server` 用 `docker image inspect`
+  探一次，**探到就用、探不到就用 stock 并在 stderr 说出来**。不静默回退——静默回退
+  正是这个 bug 本身的形状。
+* `code_prompt.py` 两个沙箱基底各加一段：容器里装了什么是**部署的镜像**的属性、不是
+  这份提示词的属性，所以在断言某个格式做不到之前，先花一次调用 `import` 一下。
+  **刻意不点名任何库**——镜像是 `--image` 决定的，写进提示词的清单是这个模块保不住的
+  承诺。新增 `test_a_sandbox_turn_is_told_to_probe_before_declaring_a_format_out_of_reach`
+  钉住这两条（含"不许出现 reportlab 字样"）。
+
+### 证据：不是退出码，是看过
+
+经**真实 `SandboxExecutor`**（不是手搓 docker run）、带整套 `ISOLATION_FLAGS` 跑：
+
+```
+runtime 可用: True
+exit_code  : 0
+stdout     : wrote report.pdf
+回写文件   : report.pdf  16842 bytes
+```
+
+然后把它 `pdftoppm` 成 PNG **看了一眼**：标题、正文、中英混排、标点全部正常，
+**不是方块**。这一步是这一节的关键——ADR-045 §4.3 的教训就是退出码 0 什么都不证明。
+
+门禁：`ruff` / `pyright` 干净；`pytest` **2938 passed, 774 skipped**（新增 1 条）。
+
+
 ## 2026-08-26（未合并，工作区，第二十四批）：这个部署第一次说得出自己的窗口有多大
 
 第二十三批留下的第一条缺口：九个 profile 没有一个声明 `model.main.context_window_tokens`，
