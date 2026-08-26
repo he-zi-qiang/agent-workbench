@@ -14,6 +14,8 @@ from datetime import UTC, datetime, timedelta
 from itertools import count
 from typing import Any
 
+import pytest
+
 from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
 from agent_workbench.adapters.memory import InMemoryEventLog
 from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
@@ -34,6 +36,7 @@ from agent_workbench.domain.runs import (
     AgentOutcome,
     AgentRunRequest,
     RunBudget,
+    RunState,
     TokenUsage,
     TraceContext,
 )
@@ -58,6 +61,7 @@ from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor, ToolGateway
 from agent_workbench.runtime.agent_runtime import render_prompt
 from agent_workbench.runtime.compaction import SUMMARY_MARKER
+from agent_workbench.runtime.state import RunStateMachine
 from agent_workbench.runtime.tool_gateway import PreparedCall
 
 CLOCK = datetime(2026, 7, 25, 3, 14, 15, tzinfo=UTC)
@@ -2792,18 +2796,132 @@ class TestAConversationThatWasShortenedSaysSo:
         # Metered anyway: the call was made and the provider charged for it.
         assert run.outcome.usage.tokens.input_tokens == 54_900
 
-    def test_the_run_state_machine_actually_enters_compacting(self) -> None:
+    def test_the_run_state_machine_actually_enters_compacting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The edge `runtime/state.py` has carried since the baseline.
 
         Its comment said "``compacting`` is reachable and unused", and that
         the runtime never entered it. This is the line that stops being true,
         and the comment was corrected in the same change.
+
+        The machine is the only witness there is, so this test watches it.
+        Asserting on the run's outcome and its `ContextCompacted` -- which is
+        what this test did when it was written -- observes nothing about the
+        phase: `recording_results -> model_streaming` is a legal edge on its
+        own, so deleting the `compacting` transition left the test green. It
+        was the one claim in the batch that most needed a mutation check and
+        was the one that did not get one.
         """
 
-        model = self._long_run()
+        seen: list[str] = []
+        original = RunStateMachine.to
+
+        def record(machine: RunStateMachine, state: RunState) -> None:
+            seen.append(state)
+            original(machine, state)
+
+        monkeypatch.setattr(RunStateMachine, "to", record)
+        run = self._execute_long(self._long_run(), compaction_enabled=True)
+
+        assert run.outcome.status == "completed"
+        assert "compacting" in seen
+        # And legally: out of `recording_results`, back into `model_streaming`.
+        entered = seen.index("compacting")
+        assert seen[entered - 1] == "recording_results"
+        assert seen[entered + 1] == "model_streaming"
+
+    def test_a_compaction_that_did_not_help_does_not_disarm_the_ceiling(
+        self,
+    ) -> None:
+        """The failure that made this batch worth reviewing.
+
+        `plan_compaction` cuts on message *count*. So the span it removes can
+        be four short turns while the tail it keeps holds the enormous tool
+        result that is the actual problem -- and reporting success there
+        cleared ADR-080's ceiling for a conversation that had not got smaller.
+
+        Measured before the fix: three compactions, each recording a saving of
+        about 0.03%, three requests sent at 70,000 tokens against a
+        64,000-token window, and the run ending on the HTTP 400 that ADR-080
+        exists to stop transcribing. The honest outcome is the one below.
+        """
+
+        blob = "z" * 60_000
+        rounds = [
+            ScriptedTurn(
+                text="Reading." if n < 4 else blob,
+                tool_calls=(
+                    ToolCall(
+                        tool_call_id=f"toolu_{n:020d}",
+                        tool_name="read_document",
+                        arguments={"document_id": "doc_1", "note": f"pass {n}"},
+                    ),
+                ),
+                usage=TokenUsage(input_tokens=1_000 if n < 4 else 50_000),
+            )
+            for n in range(5)
+        ]
+        model = FakeModel(
+            (
+                *rounds,
+                # The summariser answers, and the answer does not help: the
+                # 60,000-character turn is in the kept tail, not the removed
+                # span.
+                ScriptedTurn(
+                    text="Read some files.", usage=TokenUsage(input_tokens=900)
+                ),
+                ScriptedTurn(text="unreachable", usage=TokenUsage(input_tokens=10)),
+            )
+        )
         run = self._execute_long(model, compaction_enabled=True)
 
-        # Reached without the run failing, which is the only way the edge out
-        # of `recording_results` can have been taken legally.
-        assert run.outcome.status == "completed"
-        assert [e for e in run.durable if e.payload.kind == "ContextCompacted"]
+        assert run.outcome.status == "failed"
+        assert run.outcome.stop_reason == "context_limit"
+        # Nothing was removed, so nothing claims to have been.
+        assert not [e for e in run.durable if e.payload.kind == "ContextCompacted"]
+        # The summariser call was still made and is still metered: refusing
+        # afterwards costs that call, which is cheaper than the two over-window
+        # requests the alternative sends.
+        assert run.outcome.usage.tokens.input_tokens == 54_900
+
+    def test_a_run_cancelled_during_the_summary_is_reported_as_cancelled(
+        self,
+    ) -> None:
+        """The one model call whose result skips `_terminal_for_turn`.
+
+        A cancelled turn comes back with empty text and no error -- the same
+        shape as a summariser that answered with nothing -- so `_compacted`
+        reported "could not shorten", and the run was then filed under
+        `context_limit`. Somebody pressed Stop and was told the model's
+        context window was to blame, which is exactly the misattribution
+        ADR-080 was written to end.
+        """
+
+        source = CancellationSource()
+
+        class _CancelWhileSummarising:
+            def __init__(self, inner: FakeModel) -> None:
+                self._inner = inner
+
+            @property
+            def requests(self) -> tuple[ModelRequest, ...]:
+                return self._inner.requests
+
+            async def stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+                if request.model_profile == "compact":
+                    source.cancel("user_pressed_stop")
+                async for event in self._inner.stream(request):
+                    yield event
+
+        run = _execute(
+            _CancelWhileSummarising(self._long_run()),  # pyright: ignore[reportArgumentType]
+            request=_request(budget=RunBudget(max_steps=12, max_tool_calls=24)),
+            context_window_tokens=64_000,
+            compaction_enabled=True,
+            cancellation=source,
+        )
+
+        assert run.outcome.status == "cancelled"
+        assert run.outcome.stop_reason != "context_limit"
+        assert [e for e in run.durable if e.payload.kind == "RunCancelled"]

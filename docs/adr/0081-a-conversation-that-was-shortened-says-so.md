@@ -65,10 +65,24 @@ adapter。**否掉**。概括是一次模型调用，而这个运行时已经握
 路径要么重新实现这五件事，要么就是五个悄悄的洞。
 
 **顺带逼出一个待决问题**（记在这里而不是留给以后的人现场发现）：
-`apps/task_worker/composition.py` 传给运行时的是 `prices=main_profile.prices`，所以一次
-main-profile 运行里的 compact 调用**按 main 的价格计费**。在 `[model.main]` 与
-`[model.compact]` 的 `model_id` 都是 `deepseek-chat` 期间这不产生误差；哪一天它们分开，
-要么给运行时一份按 profile 的价格表，要么这一行就变成一个悄悄的记账错误。
+`apps/task_worker/composition.py` 与 `apps/api/dependencies.py`（五处运行时）传给运行时
+的都是 `prices=main_profile.prices`，所以一次 main-profile 运行里的 compact 调用
+**按 main 的价格计费**。
+
+今天这不产生误差，但**不是因为两个 profile 指着同一个模型**——`config.code-local.toml`
+与 `config.demo-local.toml` 的 `[model.main]` 已经是 `deepseek-v4-flash` 而
+`[model.compact]` 仍是 `deepseek-chat`，而这两份正是 `scripts/dev.sh code-api` /
+`demo-worker` 跑的 profile；`config.default.toml` 的两个占位 id 也不相同。真正的前提是
+**没有任何一份配置声明过价格**：`grep micro_usd_per_mtok config/*.toml` 为空，`_priced()`
+于是恒返回 0。
+
+所以：**任何部署在开压缩的同时打开价格之前，必须先给运行时一份按 profile 的价格表**，
+否则那一刻这一行就变成一个悄悄的记账错误。
+
+同一个 profile 分歧还有第二个后果，这个已经修了：`ModelStarted.model_id` 过去写的是
+构造时定死的 main 标签，而适配器是按 `ModelRequest.model_profile` 分派的——一次 compact
+调用因此被记在一个它没有到达过的模型名下。`ClaudeLikeAgentRuntime` 现在多收一个
+`compact_model_label`，`_label_for()` 按 profile 选。
 
 ### 2.2 不铸造 `ArtifactRef`
 
@@ -148,9 +162,23 @@ while cut < len(messages) and messages[cut].role == "tool":
 5. **一次运行最多压缩 `MAX_COMPACTIONS_PER_RUN = 3` 次。** 这是兜底不是策略：每次压缩都
    删掉中间，对话会变短，`plan_compaction` 自己最终会拒绝。但一个已经缩过三次还在线上的
    运行不会被第四次救回来，那时候诚实的答案是它一直在撞的那条天花板。
-6. **压缩之后 `last_input_tokens` 清零。** 触发这次压缩的那个测量描述的是一段**已经不
-   存在**的对话。清零不是"假装没超"，而是"现在没有测量值"——和一个还没发出过任何请求
-   的运行处在同一个状态，下一轮会产生一个真的。
+6. **压缩必须证明它起了作用，才算成功。** `tokens_after` 不只是发出去给人看的，它要
+   先过 `context_reason_for` 那一关：估算值仍在软上限之上，这次压缩就**不算数**，运行
+   按 ADR-080 停下。这条是补的——第一版只要"删掉了几条 + 概括非空"就返回成功，而
+   `plan_compaction` 是按**消息条数**切的，所以被删的可以是四条短消息，而留下的尾巴里
+   正躺着那个 60 KB 的工具结果。实测：三次压缩各自记录省下 0.03%，三个 70,000 token 的
+   请求打在 64,000 的窗口上，最后死在 ADR-080 存在的意义所在的那个 HTTP 400。
+   拒绝的代价是那次已经发生的概括调用；不拒绝的代价是它**加上**后面两个请求，外加一个
+   没人归得了因的终局。
+
+7. **压缩之后 `last_input_tokens` 带的是估算值，不是零。** 第一版清零，理由是"触发这次
+   压缩的测量描述的是一段已经不存在的对话"——这话对，而它顺手把 ADR-080 的天花板给下一
+   个请求解除了武装。带着估算值走，下一轮仍然被判断。
+
+8. **概括调用途中被取消，运行报"已取消"。** 这是本循环里唯一一次结果不经过
+   `_terminal_for_turn` 的模型调用，而一个被取消的回合返回的是"空文本、无错误"——和
+   "概括器什么也没说"同形。第一版因此把它读成"没能缩短"，然后运行被归到
+   `context_limit` 名下：有人按了停止，却被告知是模型窗口的错。
 
 ## 4. 这买到了什么，没买到什么
 

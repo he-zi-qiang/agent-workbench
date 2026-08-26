@@ -683,12 +683,23 @@ async def _build_real_handlers(
     policy_identity = (
         f"{config.task.policy_revision}:{config.task.policy_fingerprint[:16]}"
     )
+    # ADR-081 makes one call per run under `[model.compact]`, and the adapter
+    # dispatches on the profile name -- so that call is recorded under the
+    # model it actually reached, not under this process's main label. The two
+    # differ in every profile that matters: `config.code-local.toml` and
+    # `config.demo-local.toml` both run `deepseek-v4-flash` as main against
+    # `deepseek-chat` as compact.
+    compact_profile = config.model.profiles.get("compact")
+    compact_model_label = (
+        compact_profile.model_id if compact_profile is not None else None
+    )
     executor = BoundedParallelExecutor(
         ClaudeLikeAgentRuntime(
             model=model,
             gateway=gateway,
             policy_identity=policy_identity,
             model_label=main_profile.model_id,
+            compact_model_label=compact_model_label,
             model_timeout_seconds=config.runtime.model_timeout_seconds,
             max_parallel_read_tools=config.runtime.max_parallel_read_tools,
             record_step_inputs=config.runtime.record_step_inputs,

@@ -40,11 +40,16 @@ history with a hole in it, and neither it nor the reader could tell.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from agent_workbench.domain.messages import Message, assistant_message
+from agent_workbench.domain.messages import (
+    Message,
+    ToolUseBlock,
+    assistant_message,
+)
 
 #: How many recent messages survive verbatim.
 #:
@@ -131,9 +136,16 @@ def plan_compaction(
     # past the head, producing a plan that removes nothing while claiming to.
     while cut < len(messages) and messages[cut].role == "tool":
         cut += 1
-    if cut <= 1 or cut >= len(messages):
-        # Everything after the head is one unbreakable span, or the boundary
-        # walked off the end. Either way there is nothing safe to remove.
+    if cut <= 2 or cut >= len(messages):
+        # `cut <= 2`, not `<= 1`. The rebuilt list is `len(messages) - cut + 2`
+        # long, so a cut at 2 trades one message for one summary: the same
+        # number of messages, and -- with the marker and the model's prose on
+        # it -- more characters than it replaced. That is this function's
+        # docstring promise broken in the one shape it was written to refuse,
+        # and `cut` is never below 2 anyway, so the old bound could not fire.
+        #
+        # Above that: everything after the head is one unbreakable span, or the
+        # boundary walked off the end. Either way there is nothing to remove.
         return None
 
     return CompactionPlan(
@@ -217,18 +229,37 @@ def scaled_tokens_after(
 def conversation_chars(messages: Sequence[Message]) -> int:
     """How long a message list is, for the scaling above.
 
-    Counts the text a model reads -- prose, tool names, tool result bodies --
-    rather than the serialized JSON, because the ratio is meant to track what
-    the model is charged for and not what the wire format costs to frame.
+    Every block counted exactly once, and a tool call counted including its
+    arguments. Both halves of that were wrong when this shipped, in opposite
+    directions and in the same expression: prose was added twice (once through
+    `Message.text()`, once through the `getattr(block, "text", "")` loop, which
+    a `TextBlock` also answers), while a `ToolUseBlock` has no `.text` and so
+    contributed only the length of its own name.
+
+    That second half is the one that mattered. In a coding conversation the
+    largest single thing is a tool call's arguments -- `workspace_write` carries
+    a whole file in `arguments["content"]`, up to `MAX_INLINE_WRITE_CHARS` --
+    and this valued it at fifteen characters. Measured: a three-message
+    conversation of ~16,600 characters counted as 111. Since this is both the
+    numerator and the denominator of the only ratio `ContextCompacted`
+    publishes, the event reported `tokens_after == tokens_before` after
+    removing four messages, which reads as "compaction saved nothing" and was
+    really "the count cannot see what was removed".
+
+    `json.dumps(..., ensure_ascii=False)` rather than `str()`: it is what the
+    model adapter serializes arguments with, so the count tracks the same
+    characters the request is billed for.
     """
 
     total = 0
     for message in messages:
-        total += len(message.text())
-        for call in message.tool_calls():
-            total += len(call.tool_name)
         for block in message.content:
-            total += len(str(getattr(block, "text", "")))
+            if isinstance(block, ToolUseBlock):
+                total += len(block.tool_name) + len(
+                    json.dumps(block.arguments, ensure_ascii=False)
+                )
+            else:
+                total += len(block.text)
     return total
 
 

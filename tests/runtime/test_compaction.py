@@ -49,6 +49,25 @@ def _pair(index: int) -> tuple[Message, Message]:
     )
 
 
+def _conversation_after_a_failed_turn(pairs: int) -> list[Message]:
+    """History whose third message is not a ``tool`` message.
+
+    Not contrived: `code_session` appends the user's message before the run and
+    the assistant's report only when there is one, so a turn that failed leaves
+    an orphan `user` in history and the next turn opens with two of them. Every
+    other fixture here puts a `tool` at index 2, which makes the boundary walk
+    forward and hides the case where it does not.
+    """
+
+    messages: list[Message] = [
+        user_message("Find out who owns fusion."),
+        user_message("And who owns the ingest path."),
+    ]
+    for index in range(pairs):
+        messages.extend(_pair(index))
+    return messages
+
+
 def _conversation(pairs: int) -> list[Message]:
     messages: list[Message] = [user_message("Find out who owns fusion.")]
     for index in range(pairs):
@@ -125,6 +144,26 @@ class TestWhatIsRemoved:
 
         assert plan_compaction(messages) is None
 
+    def test_a_plan_that_could_not_shorten_the_list_is_refused(self) -> None:
+        """The shape the boundary guard was written for and could not see.
+
+        At exactly ``keep_last + 2`` the cut lands at index 2, so one message
+        is traded for one summary: the same number of messages, and -- with
+        the marker and the model's prose on it -- more characters than it
+        replaced. The guard read ``cut <= 1``, which is a value ``cut`` can
+        never take, so it never fired.
+
+        End to end this was not merely wasteful: the run spent a summariser
+        call, emitted a durable "compacted" record claiming a reduction, and
+        sent a *larger* prompt than the one that tripped the ceiling.
+        """
+
+        messages = _conversation_after_a_failed_turn(pairs=3)
+        assert len(messages) == KEEP_LAST_MESSAGES + 2
+        assert messages[2].role != "tool", "fixture no longer covers the case"
+
+        assert plan_compaction(messages) is None
+
     def test_keep_last_must_keep_something(self) -> None:
         with pytest.raises(ValueError, match="keep_last"):
             plan_compaction(_conversation(pairs=8), keep_last=0)
@@ -140,17 +179,24 @@ class TestTheCutIsLegal:
         400 with nothing in it about compaction.
         """
 
-        for pairs in range(1, 12):
-            messages = _conversation(pairs)
+        shapes = [
+            *(_conversation(pairs) for pairs in range(1, 12)),
+            # The boundary lands differently when index 2 is not a `tool`.
+            *(_conversation_after_a_failed_turn(pairs) for pairs in range(1, 12)),
+        ]
+        for messages in shapes:
+            pairs = len(messages)
             assert _pairing_is_legal(messages), f"fixture is broken at {pairs}"
-            for keep_last in range(1, 2 * pairs + 2):
+            for keep_last in range(1, len(messages) + 2):
                 plan = plan_compaction(messages, keep_last=keep_last)
                 if plan is None:
                     continue
                 rebuilt = plan.rebuilt("did some reading")
                 assert _pairing_is_legal(rebuilt), (
-                    f"pairs={pairs} keep_last={keep_last} left an unanswered call"
+                    f"len={pairs} keep_last={keep_last} left an unanswered call"
                 )
+                # A plan that does not shorten the list is a plan that should
+                # have been refused; this is what the `cut <= 2` bound buys.
                 assert len(rebuilt) < len(messages)
 
     def test_the_kept_tail_never_opens_with_a_tool_message(self) -> None:
@@ -226,6 +272,62 @@ class TestTheNumbersInTheEvent:
         assert scaled_tokens_after(1000, chars_before=100, chars_after=999) == 1000
         assert scaled_tokens_after(1000, chars_before=0, chars_after=10) == 0
         assert scaled_tokens_after(0, chars_before=100, chars_after=50) == 0
+
+    def test_every_block_is_counted_exactly_once(self) -> None:
+        # Prose used to be added twice -- once through `Message.text()`, once
+        # through a loop over `getattr(block, "text", "")`, which a `TextBlock`
+        # also answers.
+        assert conversation_chars([user_message("hello")]) == 5
+
+    def test_a_tool_calls_arguments_are_counted(self) -> None:
+        """The largest thing in a coding conversation, once valued at 15.
+
+        `ToolUseBlock` has no `.text`, so the old count saw only the tool's
+        name -- while `workspace_write` carries an entire file in
+        `arguments["content"]`. Since this is both the numerator and the
+        denominator of the only ratio `ContextCompacted` publishes, the event
+        reported `tokens_after == tokens_before` after removing four messages:
+        "compaction saved nothing", when the truth was "the count cannot see
+        what was removed".
+        """
+
+        body = "x" * 15_000
+        call = ToolCall(
+            tool_call_id="toolu_" + "0" * 20,
+            tool_name="workspace_write",
+            arguments={"name": "big.py", "content": body},
+        )
+        heavy = assistant_message(text="Writing it.", tool_calls=(call,))
+
+        assert conversation_chars([heavy]) > 15_000
+
+    def test_removing_a_heavy_tool_call_is_visible_in_the_estimate(self) -> None:
+        # The end-to-end shape of the bug above: a conversation whose bulk is
+        # one tool call's arguments, compacted away. Before the fix the ratio
+        # could not see the difference and `scaled_tokens_after` hit its
+        # `min(scaled, tokens_before)` clamp -- an event saying nothing was
+        # saved, published by a run that had just halved its own prompt.
+        call = ToolCall(
+            tool_call_id="toolu_" + "9" * 20,
+            tool_name="workspace_write",
+            arguments={"name": "big.py", "content": "y" * 40_000},
+        )
+        messages = [
+            user_message("Write the module."),
+            assistant_message(text="Writing.", tool_calls=(call,)),
+            tool_message((ToolResult.succeeded(call, content="written"),)),
+            *_conversation(pairs=3)[1:],
+        ]
+        plan = plan_compaction(messages)
+        assert plan is not None
+
+        before = conversation_chars(messages)
+        after = conversation_chars(plan.rebuilt("wrote big.py"))
+
+        assert after < before // 2
+        assert (
+            scaled_tokens_after(50_000, chars_before=before, chars_after=after) < 25_000
+        )
 
     def test_shortening_a_conversation_shortens_its_character_count(self) -> None:
         messages = _conversation(pairs=8)

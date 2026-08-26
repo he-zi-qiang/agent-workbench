@@ -345,6 +345,7 @@ class ClaudeLikeAgentRuntime:
         context_window_tokens: int | None = None,
         context_soft_limit_ratio: float = DEFAULT_CONTEXT_SOFT_LIMIT_RATIO,
         compaction_enabled: bool = False,
+        compact_model_label: str | None = None,
     ) -> None:
         self._model = model
         # Tools are reached only through the gateway: resolving, validating,
@@ -380,6 +381,18 @@ class ClaudeLikeAgentRuntime:
         # `context_limit` has nothing to tune this against -- honest failure
         # first, remedy second.
         self._compaction_enabled = compaction_enabled
+        # The `[model.compact]` profile's `model_id`, because ADR-081 makes one
+        # call per run under a profile that is not this runtime's own, and the
+        # adapter dispatches on `ModelRequest.model_profile`. Recording that
+        # call under the main label would be an event that names a model the
+        # request never reached -- the failure the comment beside `model_label`
+        # in `apps/api/dependencies.py` calls the one thing an event log may
+        # not do. `None` falls back to the main label: the honest state for a
+        # deployment that never enabled compaction, not a claim that the two
+        # profiles point at the same model. They frequently do not --
+        # `config.code-local.toml` and `config.demo-local.toml` both run
+        # `deepseek-v4-flash` as main against `deepseek-chat` as compact.
+        self._compact_model_label = compact_model_label
         # Defaults to recording nothing. A deployment without a collector is
         # not a deployment that behaves differently, so this is the absence of
         # one rather than a degraded mode.
@@ -559,17 +572,32 @@ class ClaudeLikeAgentRuntime:
                 window_tokens=self._context_window_tokens,
                 soft_limit_ratio=self._context_soft_limit_ratio,
             )
-            if over_context is not None and await self._compacted(
-                request, sink, machine, ledger, cancellation
-            ):
-                # Shortened instead of stopped (ADR-081). The measurement that
-                # triggered this described a conversation that no longer
-                # exists, so it is cleared rather than carried: the next turn
-                # produces a real one, and until then the predicate has
-                # nothing to judge -- which is exactly what it answers for a
-                # run that has not sent anything yet.
-                ledger.last_input_tokens = 0
-                over_context = None
+            if over_context is not None:
+                shortened = await self._compacted(
+                    request, sink, machine, ledger, cancellation
+                )
+                if shortened is not None:
+                    # Shortened instead of stopped (ADR-081). The estimate is
+                    # carried forward rather than cleared: this used to set 0,
+                    # on the reasoning that the measurement describing the old
+                    # conversation no longer applied to the new one. True, and
+                    # it disarmed ADR-080's ceiling for the next request --
+                    # measured, a run whose kept tail held the 60 KB tool
+                    # result then compacted three times, reported saving 0.03%
+                    # each time, and sent three requests at 70,000 tokens
+                    # against a 64,000-token window, ending in the HTTP 400
+                    # ADR-080 exists to stop transcribing.
+                    ledger.last_input_tokens = shortened
+                    over_context = None
+            if cancellation.cancelled:
+                # The compaction call is the one model call in this loop whose
+                # result does not pass through `_terminal_for_turn`, whose
+                # first question is whether the run was cancelled. A cancelled
+                # summariser returns empty text and no error, which
+                # `_compacted` reports as "could not shorten" -- and the run
+                # would then be filed under `context_limit`, blaming the
+                # model's window for a stop somebody asked for.
+                return await self._cancelled(request, sink, machine, ledger)
             if over_context is not None:
                 assert self._context_window_tokens is not None
                 return await self._failed(
@@ -706,7 +734,7 @@ class ClaudeLikeAgentRuntime:
             ModelStarted(
                 model_call_id=model_call_id,
                 model_profile=request.model_profile,
-                model_id=self._model_label,
+                model_id=self._label_for(request.model_profile),
                 prompt_preview=(
                     render_prompt(request.system_prompt, ledger.messages)
                     if self._record_step_inputs
@@ -1254,6 +1282,17 @@ class ClaudeLikeAgentRuntime:
             ]
         )
 
+    def _label_for(self, profile: str) -> str:
+        """Which model this call actually reaches.
+
+        `ModelStarted.model_id` names the model that answered, not the one this
+        process was configured around.
+        """
+
+        if profile == "compact" and self._compact_model_label is not None:
+            return self._compact_model_label
+        return self._model_label
+
     async def _compacted(
         self,
         request: AgentRunRequest,
@@ -1261,10 +1300,14 @@ class ClaudeLikeAgentRuntime:
         machine: RunStateMachine,
         ledger: _RunLedger,
         cancellation: CancellationToken,
-    ) -> bool:
+    ) -> int | None:
         """Shorten this run's conversation, or answer that it could not be.
 
-        ``False`` on every path that did not produce a shorter conversation
+        Answers the estimated size of the shortened conversation, in the units
+        the ceiling is expressed in, so the caller can carry a real number into
+        the next turn instead of clearing the one that stopped it.
+
+        ``None`` on every path that did not produce a shorter conversation
         *with* an account of what was removed, and the caller then stops the
         run the way ADR-080 stopped it before this existed. There is no middle
         outcome on purpose: dropping messages without a summary would leave the
@@ -1279,17 +1322,17 @@ class ClaudeLikeAgentRuntime:
         """
 
         if not self._compaction_enabled:
-            return False
+            return None
         if ledger.compactions >= MAX_COMPACTIONS_PER_RUN:
             # A backstop, not a policy. Each compaction removes the middle, so
             # the conversation shrinks and `plan_compaction` eventually refuses
             # -- but a run that has shortened itself three times and is still
             # over the line is not going to be rescued by a fourth, and the
             # honest answer is the ceiling it keeps hitting.
-            return False
+            return None
         plan = plan_compaction(ledger.messages)
         if plan is None:
-            return False
+            return None
 
         machine.to("compacting")
         before_chars = conversation_chars(ledger.messages)
@@ -1332,19 +1375,43 @@ class ClaudeLikeAgentRuntime:
         )
         summary = turn.text.strip()
         if turn.error is not None or not summary:
-            return False
+            return None
 
-        ledger.messages = plan.rebuilt(summary)
+        shortened = plan.rebuilt(summary)
+        tokens_after = scaled_tokens_after(
+            tokens_before,
+            chars_before=before_chars,
+            chars_after=conversation_chars(shortened),
+        )
+        # The number that says whether this worked, checked instead of merely
+        # published. `plan_compaction` cuts on message *count*, so the span it
+        # removed can be four short turns while the tail it kept holds the
+        # 60 KB tool result that is the actual problem. Returning success there
+        # cleared the caller's ceiling for a conversation that had not got
+        # smaller -- measured, three compactions reporting 0.03% saved, three
+        # requests sent at 70,000 tokens against a 64,000-token window, and the
+        # HTTP 400 ADR-080 exists to stop transcribing.
+        #
+        # Refusing here costs the summariser call that was already made. That
+        # is the right trade: the alternative spends it *and* the two requests
+        # after it, and ends somewhere nobody can attribute.
+        if (
+            context_reason_for(
+                tokens_after,
+                window_tokens=self._context_window_tokens,
+                soft_limit_ratio=self._context_soft_limit_ratio,
+            )
+            is not None
+        ):
+            return None
+
+        ledger.messages = shortened
         ledger.compactions += 1
         await sink.emit(
             ContextCompacted(
                 removed_message_count=len(plan.removed),
                 tokens_before=tokens_before,
-                tokens_after=scaled_tokens_after(
-                    tokens_before,
-                    chars_before=before_chars,
-                    chars_after=conversation_chars(ledger.messages),
-                ),
+                tokens_after=tokens_after,
                 # No artifact. `ArtifactRef` carries a tenant and a content
                 # digest and is minted only by the artifact store under
                 # `tenant_filter_required`; this runtime holds no store and no
@@ -1352,7 +1419,7 @@ class ClaudeLikeAgentRuntime:
                 summary_ref=None,
             )
         )
-        return True
+        return tokens_after
 
     async def _failed(
         self,
