@@ -550,6 +550,34 @@ Word 文档读取与编辑，能力表里也不得混为一谈。
 | E-03 | CI 不跑 E2E / 离线评测 / Compose / 恢复矩阵 | 未实现 |
 | E-04 | 首个 evidence manifest 未生成 | 未接线 |
 | E-05 | 文档中的数字过时 | **口径不实** |
+| E-06 | 崩溃恢复 e2e 三条红，且 CI 看不见 | **失败中** |
+
+### E-06 `test_worker_process_crash_recovery.py` 三条红，而 CI 不跑它
+
+**分类**：失败中。不是"未实现"，也不是"口径不实"——测试写对了，被测的东西答错了。
+
+**症状**：v1 图的 `approval` 节点一次都没跑（`approval ran 0 times`），而 Task 仍然
+`succeeded`。三条都断在同一个位置：
+
+- `test_recovery_re_runs_only_the_node_that_died`
+- `test_the_two_processes_split_the_graph_at_the_node_that_died`
+- `test_the_same_task_completes_in_one_process_when_nothing_kills_it`
+
+提交用的 `run_semantics_snapshot` 是 `{"model": {"provider": "fake"}}`——里面既没有
+`workflow` 段也没有 `multi_agent` 段，所以 Worker 对"要不要审批"的判断落在它自己的
+配置上而不是 Task 的快照上。这是查这条时的第一个可疑点，尚未证实。
+
+**不是哪一批引入的（有对照）**：在未经改动的基线 `414f37c` 上另开一个 worktree、
+用同一个 `.venv`、同一条命令跑同样三条，**一样红**。所以它先于
+`feat/multi-agent-orchestration` 存在。
+
+**为什么没人被通知**：CI 的服务型 job 只跑
+`tests/contracts`/`tests/persistence`/`tests/api`/`tests/vector`（见
+`CLAUDE.md` 与 `.github/workflows/`），**`tests/e2e` 不在其中**。这与 E-03 是同一
+个洞的两面：E-03 说 CI 不跑 E2E，这一条是"于是它红了也没人知道"的实例。
+
+**做完的判据**：三条转绿，且 `tests/e2e` 进入某个每 PR 都跑的 job——否则修好之后
+下一次变红仍然不会有人知道。
 
 ### E-01 Playwright 的四次执行全部 mock 后端
 

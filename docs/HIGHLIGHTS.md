@@ -56,19 +56,29 @@ Agent**、**导出必须由人批准**、**跨进程恢复**。被拒的那次�
 的英文镜像表。
 
 四行来自四种环境，**只能分别引用，不能相加**——两个后端环境的跳过集互相覆盖。
-后端两行实测于 `main@921dda5`（2026-08-12），这个 hash 记的是"测量时那棵树"，
-不是"当前基线"。
+后端三行实测于 `worktree-feat+multi-agent-orchestration@13ed6c2`（2026-08-26，
+基线 `main@414f37c`），这个 hash 记的是"测量时那棵树"，不是"当前基线"。
 
 | 环境 | 结果 |
 |---|---|
-| 后端，真实 PostgreSQL + Qdrant（本机） | `2758 passed / 11 skipped` |
-| 后端，不起任何外部服务（本机） | `2065 passed / 704 skipped` |
-| 后端，CI 那组服务型目录（`contracts`/`persistence`/`api`/`vector`） | `1012 passed / 2 skipped` |
-| 前端 Vitest（CI，22 个文件）／ Playwright（桌面+移动，CI） | `171 passed` ／ `4 passed` |
+| 后端，真实 PostgreSQL + Qdrant（本机） | `3793 passed / 12 skipped / 3 failed` |
+| 后端，不起任何外部服务（本机） | `3026 passed / 782 skipped` |
+| 后端，CI 那组服务型目录（`contracts`/`persistence`/`api`/`vector`） | `1190 passed / 1 skipped` |
+| 前端 Vitest（本机 37 个文件） | `580 passed` |
 
-跳过的构成是核对过的：真实服务那 11 项 = 10 项需要 `embedding` extra 与本地 BGE
-权重 + 1 项只在 PostgreSQL 上成立的契约；不起服务时多出的 693 项 = 634 项因
-`AGENT_WORKBENCH_TEST_DSN` 未设 + 59 项因 `AGENT_WORKBENCH_TEST_QDRANT_URL` 未设。
+**第一行那 3 项失败要说清楚，因为一张全绿的表最容易骗人。** 三条都在
+`tests/e2e/test_worker_process_crash_recovery.py`，症状是 v1 图的 `approval`
+节点一次都没跑（`approval ran 0 times`）而 Task 仍然成功。它们**不是**本批引入的：
+在未经改动的基线 `414f37c` 上另开一个 worktree 跑同样三条，一样红——这是对照，不是
+推断。CI 的服务型 job 只跑 `contracts`/`persistence`/`api`/`vector` 四个目录，
+`tests/e2e` **不在其中**，所以这三条能红着而没有人被通知。已记为待查。
+
+**第四行的口径变了，要一并说明。** 旧表里前端那一行写的是 CI 数字，理由是本机装不到
+`engines` 钉死的 node `24.14.0`。这次的 580 是**本机**跑出来的：系统 node 已是
+`26.7.0`，配 `NODE_OPTIONS=--no-experimental-webstorage` 全套通过（26.x 会把
+`localStorage` 定义成一个求值为 `undefined` 的全局 getter，jsdom 只在该全局**缺席**
+时才装自己的那份）。所以它是一个**本机**数字，不能当 CI 数字引用；Playwright 这次
+没跑，旧的 `4 passed` 已从表里去掉而不是留着充数。
 
 **第三行值得单独一提**：它在本机和 CI 上**逐位相同**——这是"CI 与本机跑的是同一条
 命令、同一组环境闸门"能拿出的最直接证据。CI 的
@@ -81,13 +91,13 @@ Provider 的路径。
 用例在进入被测代码前就抛错。那是工具链的事，不是代码的事，但结论是本机跑的前端
 数字不可引用。
 
-静态门禁全绿：`ruff format --check .`（493 files）、`ruff check src tests`、
+静态门禁全绿：`ruff format --check .`（605 files）、`ruff check .`、
 Pyright strict `0 errors / 0 warnings / 0 informations`、ESLint `--max-warnings 0`、
-`tsc -b`、production build。配置 schema `1.15`，Alembic 单一 head
-`0025_agent_invocation_count`（25 个迁移）。
+`tsc -b`、production build。配置 schema `1.18`，Alembic 单一 head
+`0032_events_stream_run_sequence`（32 个迁移）。
 
-**规模**：Python 源码 55114 行、测试 68952 行、前端 TypeScript 15271 行
-（只数 git 跟踪的文件）；45 份 ADR（基线内 11 份 + 实施期 34 份，编号 0012–0045 连续）。
+**规模**：Python 源码 76210 行、测试 92532 行、前端 TypeScript 38928 行
+（只数 git 跟踪的文件）；81 份 ADR（基线内 11 份 + 实施期 70 份，编号 0012–0083 连续）。
 
 **测试行数多于源码行数是有意的。** 本项目的规矩是**测试先证明是红的再变绿，且没有
 对照组的测试不算数**——只断言"这个被拒绝"的测试，分不出一个正常工作的校验器和一个
