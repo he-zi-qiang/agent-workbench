@@ -58,6 +58,7 @@ StopReason = Literal[
     "max_tool_calls",
     "token_budget",
     "cost_budget",
+    "context_limit",
     "deadline",
     "cancelled",
     "error",
@@ -482,6 +483,61 @@ def stale_execution_outcome(run_id: str) -> AgentOutcome:
     )
 
 
+def context_reason_for(
+    last_input_tokens: int,
+    *,
+    window_tokens: int | None,
+    soft_limit_ratio: float,
+) -> StopReason | None:
+    """Whether the next request would be too large for the model (ADR-0080).
+
+    A free function rather than a method on :class:`RunBudget`, because the two
+    numbers it needs are not the submitter's to choose. A budget is what
+    somebody asked this run to cost; a context window is what this deployment's
+    model can physically hold, and the soft-limit ratio is how much of it the
+    operator is willing to fill. Folding them into `RunBudget` would put a fact
+    about the provider into the record of what a person authorised.
+
+    **``last_input_tokens``, not ``usage.tokens``.** `BudgetUsage.tokens` is
+    cumulative across turns (`agent_runtime` merges each turn's usage), and
+    every turn re-sends the whole conversation -- so cumulative input grows
+    roughly with the square of the turn count, and a predicate reading it would
+    stop healthy runs that were nowhere near the window. What matters is the
+    size of *one* prompt, and the best evidence of the next one's size is the
+    last one's.
+
+    **``input_tokens``, not ``total``.** `TokenUsage.total` is everything one
+    turn moved -- the prompt *plus* the completion *plus* the cache write --
+    and two of those three were never in the request that went over the wire.
+    `input_tokens` is the one figure that is exactly "how large was the thing I
+    last sent", measured by the provider rather than assembled here.
+
+    That makes this deliberately a *lagging* measure: the next prompt is this
+    one plus the completion plus whatever the tools returned, so it is larger
+    than what is being compared. The ratio's margin is what covers that, and
+    saying so is the point -- a composite that tried to predict the next
+    prompt would be an estimate wearing the precision of a measurement, and
+    would still be wrong by the size of the tool results nobody has asked for
+    yet.
+
+    **A soft limit, and it says so.** The check happens between turns, and one
+    tool result can add `MAX_INLINE_READ_CHARS` worth of text after it passes.
+    The ratio's margin is what absorbs that; it is not a guarantee that the
+    next request fits, it is a guarantee that the run stops saying so itself
+    rather than relaying an unattributable provider 400.
+
+    ``window_tokens`` of ``None`` means this deployment did not declare what
+    its model can hold, and the answer is then honestly "no opinion" rather
+    than a guessed number.
+    """
+
+    if window_tokens is None or last_input_tokens <= 0:
+        return None
+    if last_input_tokens >= int(window_tokens * soft_limit_ratio):
+        return "context_limit"
+    return None
+
+
 __all__ = [
     "TERMINAL_RUN_STATES",
     "AgentOutcome",
@@ -496,5 +552,6 @@ __all__ = [
     "SystemPrompt",
     "TokenUsage",
     "TraceContext",
+    "context_reason_for",
     "stale_execution_outcome",
 ]

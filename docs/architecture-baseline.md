@@ -1577,9 +1577,11 @@ CI 的算数**——本机装不到 `web/package.json` 的 `engines` 钉死的 n
   是可核查的；但它**从未对真实模型跑过**，全部测试用的是 FakeModel 或桩，所以
   `application/code_prompt.py` 里那六条纪律是否真的被遵守，仓库里没有任何证据，
   这也是它不进 Demonstrated 的原因。审批闸门同理：闸门、registry、决定端点与它们的
-  测试都在，但**今天没有任何被授予的工具会触发它**——Code 只拿到五个工作区工具
-  （risk 是 read/write），而信封只对 `external`/`destructive` 要求审批。见
-  [known-gaps](./known-gaps.md) F 组。
+  测试都在，而且**已经被真实工具触发了**——这句原本写着"今天没有任何被授予的工具会
+  触发它——Code 只拿到五个工作区工具"，ADR-057 接上 `sandbox_run`（`external`）、
+  ADR-077 加了 `project_run`（`destructive`）之后它就不成立了，F-05 也早已关闭。
+  仍然为真的是闸门的形状：信封只对 `external`/`destructive` 要求审批，`write` 不在
+  其中，所以写文件按构造不停在人身上。见 [known-gaps](./known-gaps.md) F 组。
 
 - **知识库管理**：目前只能创建与上传。重命名、删除、重建索引与 ACL 管理都没有 API，
   控制台上也没有入口。

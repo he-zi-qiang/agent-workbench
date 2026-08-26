@@ -35,7 +35,15 @@ from agent_workbench.adapters.memory import (
     InMemoryConversationStore,
     InMemoryEventLog,
 )
+from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.tools.sandbox import WorkspaceSandbox
+from agent_workbench.adapters.tools.workspace import (
+    WorkspaceEditTool,
+    WorkspaceGrepTool,
+    WorkspaceListTool,
+    WorkspaceReadTool,
+    WorkspaceWriteTool,
+)
 from agent_workbench.application.code_approvals import (
     ApprovalNotPendingError,
     ApprovalScope,
@@ -219,6 +227,19 @@ class _World:
             turn_timeout_seconds=60,
             max_concurrent_turns=max_concurrent_turns,
             clock=lambda: datetime.now(UTC),
+            # The five workspace tools, which is what this harness's fake
+            # executor stands in for. Read for the envelope's ceiling and for
+            # plan mode's narrowing (ADR-0079), both of which come from the
+            # specs rather than from the names.
+            tools=StaticToolRegistry(
+                [
+                    WorkspaceListTool(self.scope).binding(),
+                    WorkspaceReadTool(self.scope).binding(),
+                    WorkspaceWriteTool(self.scope).binding(),
+                    WorkspaceEditTool(self.scope).binding(),
+                    WorkspaceGrepTool(self.scope).binding(),
+                ]
+            ),
         )
         self.log = InMemoryEventLog()
         self.app = FastAPI()

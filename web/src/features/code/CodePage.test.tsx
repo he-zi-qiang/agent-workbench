@@ -238,6 +238,103 @@ beforeEach(() => {
   });
 });
 
+describe("CodePage 的计划模式", () => {
+  // ADR-0079。开关要真的改变**发出去的那一轮**，不是只改一个图标：模式在回合起始
+  // 被冻进信封，所以「界面显示计划中」和「服务端跑的是计划」必须是同一件事。
+  it("把开关的状态发给服务端，而不是只改自己的样子", async () => {
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "我会改三个文件。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted();
+    await user.click(screen.getByText("只做计划"));
+    await user.type(screen.getByLabelText("要做的事"), "加个功能");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalled();
+    });
+    expect(vi.mocked(askCode).mock.calls[0]?.[4]).toBe("plan");
+  });
+
+  it("默认是执行模式，并且把它明写在请求里", async () => {
+    // 显式发 `"act"` 而不是省掉这个字段：服务端有默认值，但一个省略了字段的请求
+    // 会让「这一轮是哪种模式」只能靠知道服务端默认值来回答——而要回答它的时候，
+    // 手上往往只有那一条请求日志。
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "改好了。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "加个功能");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalled();
+    });
+    expect(vi.mocked(askCode).mock.calls[0]?.[4]).toBe("act");
+  });
+
+  it("计划跑完之后给一个按钮，按下去是新的一轮 act", async () => {
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "我会改三个文件。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted();
+    await user.click(screen.getByText("只做计划"));
+    await user.type(screen.getByLabelText("要做的事"), "加个功能");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const offer = await screen.findByRole("button", { name: "按这个计划执行" });
+    await user.click(offer);
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode).mock.calls).toHaveLength(2);
+    });
+    // 同一条指令，模式换成 act——重发的是请求，不是计划正文。计划是散文，它不
+    // 授权任何东西，后面这一轮拿到的是它自己的信封。
+    expect(vi.mocked(askCode).mock.calls[1]?.[2]).toBe("加个功能");
+    expect(vi.mocked(askCode).mock.calls[1]?.[4]).toBe("act");
+  });
+
+  it("一轮 act 之后不再提议执行计划", async () => {
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "改好了。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "加个功能");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalled();
+    });
+    expect(
+      screen.queryByRole("button", { name: "按这个计划执行" }),
+    ).toBeNull();
+  });
+});
+
 describe("CodePage", () => {
   it("shows what the model is thinking while the turn is still running", async () => {
     const user = userEvent.setup();

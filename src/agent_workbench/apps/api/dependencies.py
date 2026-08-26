@@ -20,6 +20,7 @@ application registers no chat route rather than one that cannot answer.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -108,13 +109,12 @@ from agent_workbench.application.code_approvals import (
 from agent_workbench.application.code_session import (
     CODE_PROJECT_TOOLS,
     CODE_PROJECT_TOOLS_WITH_RUN,
-    CODE_PROJECT_TOOLS_WITH_SANDBOX,
-    CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN,
     CODE_TOOLS,
     CODE_TOOLS_WITH_SANDBOX,
     CodeSessionService,
 )
 from agent_workbench.application.evaluation import EvaluationService
+from agent_workbench.application.file_read_receipts import ReadReceipts
 from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.application.projects import ProjectService
@@ -158,13 +158,13 @@ from agent_workbench.bootstrap.telemetry_factory import (
 )
 from agent_workbench.domain.runs import RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
-from agent_workbench.domain.tools import ToolName
+from agent_workbench.domain.tools import ToolName, ToolSpec
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 from agent_workbench.ports.telemetry import Telemetry
-from agent_workbench.ports.tools import ToolBinding
+from agent_workbench.ports.tools import ToolBinding, ToolRegistry
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 
 
@@ -174,6 +174,30 @@ class InsecureDeploymentError(RuntimeError):
 
 class SandboxUnavailableError(RuntimeError):
     """Code was configured to run code, and the sandbox did not answer."""
+
+
+@dataclass(frozen=True, slots=True)
+class _LiveToolRegistry:
+    """A registry that resolves through a factory on every call (ADR-0079).
+
+    `CodeSessionService` needs to read tool risks out of the specs, and it is
+    built before `startup` fills `SandboxSlot`. A snapshot taken at assembly
+    would therefore be missing `sandbox_run` on exactly the deployments that
+    grant it, and the ceiling derivation would refuse a turn that had been
+    offered a tool it could find no spec for.
+
+    Two lines rather than making the slot itself a registry: the slot's job is
+    "hold the bindings `startup` produces", and a slot that also answered
+    `get`/`specs` would be answering for the workspace tools it does not hold.
+    """
+
+    build: Callable[[], ToolRegistry]
+
+    def get(self, name: str) -> ToolBinding | None:
+        return self.build().get(name)
+
+    def specs(self) -> tuple[ToolSpec, ...]:
+        return self.build().specs()
 
 
 @dataclass(slots=True)
@@ -482,30 +506,28 @@ class ApiDependencies:
         await warm_encoders(*self.encoders)
 
 
-def _code_project_tools(*, sandbox: bool, host_commands: bool) -> tuple[ToolName, ...]:
-    """Which project-side tuple a turn is offered, from two independent flags.
+def _code_project_tools(*, host_commands: bool) -> tuple[ToolName, ...]:
+    """Which project-side tuple a turn is offered.
 
-    A function rather than a nested conditional at the call site, and the four
-    arms are spelled out rather than composed, because the tuples themselves
-    are: `application/code_session.py` writes each one down so that "what may a
-    coding session reach" has an answer to read. Assembling them here with a
-    `*` and an `if` would move that answer back into somebody's head at exactly
-    the point where there are now four of them.
+    A function rather than a conditional at the call site, and the arms are
+    spelled out rather than composed, because the tuples themselves are:
+    `application/code_session.py` writes each one down so that "what may a
+    coding session reach" has an answer to read.
 
-    The two flags come from different planes on purpose. `code.sandbox_enabled`
-    is a surface question -- may this session call the container. `policy.
-    shell_tools_enabled` is a deployment question, lives in the section
-    `policy_fingerprint` hashes, and therefore shows up in the `policy_identity`
-    every run records (ADR-077).
+    `code.sandbox_enabled` used to be the second flag here and is not read on
+    this side any more. It was a surface question -- may this session call the
+    container -- asked of a turn that has no container to call: `sandbox_run`
+    binds to the flat `WorkspaceScope` and a project turn enters only
+    `ProjectFileScope`, so every arm that included it offered a tool that could
+    only answer with a refusal. The flag still decides the flat-workspace
+    tuple at the call site, which is the only place it ever meant anything.
+
+    What remains, `policy.shell_tools_enabled`, is a deployment question: it
+    lives in the section `policy_fingerprint` hashes, and therefore shows up in
+    the `policy_identity` every run records (ADR-077).
     """
 
-    if host_commands:
-        return (
-            CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN
-            if sandbox
-            else CODE_PROJECT_TOOLS_WITH_RUN
-        )
-    return CODE_PROJECT_TOOLS_WITH_SANDBOX if sandbox else CODE_PROJECT_TOOLS
+    return CODE_PROJECT_TOOLS_WITH_RUN if host_commands else CODE_PROJECT_TOOLS
 
 
 def build_dependencies(
@@ -919,6 +941,14 @@ def _assemble_chat(
     # when the deployment configured no prices, which leaves every chat spend
     # at zero and every chat cost ceiling refused -- see ClaudeLikeAgentRuntime.
     model_prices = main_profile.prices if main_profile is not None else None
+    # ADR-0080. From the same profile, and absent for the same reason: a
+    # process that does not know what its model can hold cannot tell a long
+    # turn from a short one, and its over-long turns die as a provider 400
+    # whose message points at the model adapter -- the one component that was
+    # working correctly.
+    model_context_window = (
+        main_profile.context_window_tokens if main_profile is not None else None
+    )
 
     # Both no-tool shapes get the same deny-shaped runtime the fixed shape uses.
     # Written out rather than shared with a helper because the registry and the
@@ -966,6 +996,9 @@ def _assemble_chat(
             model_label=model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
+            context_window_tokens=model_context_window,
+            context_soft_limit_ratio=config.context_soft_limit_ratio,
+            compaction_enabled=config.context_compaction_enabled,
         )
 
     def _toolless_runtime() -> ClaudeLikeAgentRuntime:
@@ -981,6 +1014,9 @@ def _assemble_chat(
             model_label=model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
+            context_window_tokens=model_context_window,
+            context_soft_limit_ratio=config.context_soft_limit_ratio,
+            compaction_enabled=config.context_compaction_enabled,
         )
 
     # One tool, one journal, one runtime, shared by both evidence-free turns
@@ -1107,6 +1143,9 @@ def _assemble_chat(
                 model_label=model_label,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
+                context_window_tokens=model_context_window,
+                context_soft_limit_ratio=config.context_soft_limit_ratio,
+                compaction_enabled=config.context_compaction_enabled,
             ),
             journal=journal,
             budget=RunBudget(
@@ -1132,6 +1171,9 @@ def _assemble_chat(
                 model_label=model_label,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
+                context_window_tokens=model_context_window,
+                context_soft_limit_ratio=config.context_soft_limit_ratio,
+                compaction_enabled=config.context_compaction_enabled,
             ),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
         )
@@ -1165,6 +1207,10 @@ def _assemble_chat(
     )
     code_scope = WorkspaceScope()
     code_project_scope = ProjectFileScope()
+    # One ledger for the process, entered per turn (ADR-0078). The same shape
+    # as the two scopes above and for the same reason: the registry is frozen
+    # at process start, while what a tool operates on belongs to one turn.
+    code_read_receipts = ReadReceipts()
     code_approvals = CodeApprovalRegistry()
     # Both sets are *registered*; only one is ever *offered* (ADR-073). The
     # registry is built once at process start and never changes -- that is what
@@ -1179,9 +1225,9 @@ def _assemble_chat(
         WorkspaceEditTool(code_scope).binding(),
         WorkspaceGrepTool(code_scope).binding(),
         ProjectListTool(code_project_scope).binding(),
-        ProjectReadTool(code_project_scope).binding(),
-        ProjectWriteTool(code_project_scope).binding(),
-        ProjectEditTool(code_project_scope).binding(),
+        ProjectReadTool(code_project_scope, code_read_receipts).binding(),
+        ProjectWriteTool(code_project_scope, code_read_receipts).binding(),
+        ProjectEditTool(code_project_scope, code_read_receipts).binding(),
         ProjectGrepTool(code_project_scope).binding(),
         # Registered whatever the policy says, like every other binding here.
         # What `policy.shell_tools_enabled` decides is whether the name reaches
@@ -1190,7 +1236,11 @@ def _assemble_chat(
         # frozen at process start -- which is what keeps "what tools existed"
         # answerable for an event stream already written -- while "what was
         # this turn allowed to do" stays a per-turn answer.
-        ProjectRunTool(code_project_scope, environment=command_environment()).binding(),
+        ProjectRunTool(
+            code_project_scope,
+            code_read_receipts,
+            environment=command_environment(),
+        ).binding(),
     ]
     # The one thing about a coding session that cannot be decided here.
     # Everything else this process needs is built synchronously, and the
@@ -1200,14 +1250,15 @@ def _assemble_chat(
     # runs before the first request.
     code_sandbox = SandboxSlot(config=config.sandbox)
 
+    def _code_registry() -> StaticToolRegistry:
+        # Built per call from the slot rather than once from a fixed list,
+        # which is what lets `startup` add the sandbox after these closures
+        # were created. A turn already pays for a fresh gateway; a registry
+        # over six bindings is the same order of nothing.
+        return StaticToolRegistry([*code_workspace_bindings, *code_sandbox.bindings])
+
     def _code_runtime(scope: ApprovalScope) -> ClaudeLikeAgentRuntime:
-        # Built per turn from the slot rather than once from a fixed list,
-        # which is what lets `startup` add the sandbox after this closure was
-        # created. A turn already pays for a fresh gateway; a registry over six
-        # bindings is the same order of nothing.
-        code_registry = StaticToolRegistry(
-            [*code_workspace_bindings, *code_sandbox.bindings]
-        )
+        code_registry = _code_registry()
         return ClaudeLikeAgentRuntime(
             model=model,
             gateway=ToolGateway(
@@ -1227,6 +1278,9 @@ def _assemble_chat(
             model_label=model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
+            context_window_tokens=model_context_window,
+            context_soft_limit_ratio=config.context_soft_limit_ratio,
+            compaction_enabled=config.context_compaction_enabled,
         )
 
     code = (
@@ -1257,13 +1311,19 @@ def _assemble_chat(
             # the same reason the one above is -- what differs between turns is
             # which of them applies, never what is in either.
             project_scope=code_project_scope,
+            read_receipts=code_read_receipts,
+            # The same registry the runtime builds, resolved the same way.
+            # A snapshot taken here would be missing `sandbox_run` on a
+            # deployment that grants it -- the slot is filled by `startup`,
+            # after this -- and `code_risk_ceiling` would then refuse to derive
+            # a ceiling for a turn that had been offered it.
+            tools=_LiveToolRegistry(_code_registry),
             projects=projects,
             # ADR-077 adds the second axis. `project_run` is offered only when
             # this deployment's policy says the machine may be driven at all,
             # and only on the project side -- a flat-workspace turn has no
             # directory for a command to be run in.
             project_tool_names=_code_project_tools(
-                sandbox=config.code.sandbox_enabled,
                 host_commands=config.code.host_commands_enabled,
             ),
             sandbox_requires_approval=config.code.sandbox_requires_approval,

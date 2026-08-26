@@ -1,9 +1,14 @@
-"""Deadline arithmetic: the shortest bound wins, and it says which one it was."""
+"""Deadline arithmetic, and the ceiling on how large one request may be."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from agent_workbench.domain.runs import (
+    BudgetUsage,
+    TokenUsage,
+    context_reason_for,
+)
 from agent_workbench.runtime.budgets import (
     ModelCallDeadline,
     effective_model_deadline,
@@ -161,3 +166,111 @@ def test_the_shortest_of_the_three_bounds_wins() -> None:
         effective_tool_timeout(90, run_budget_seconds=45, deployment_ceiling_seconds=60)
         == 45
     )
+
+
+class TestARunKnowsHowLargeItsNextRequestIs:
+    """ADR-0080. The one ceiling that is not the submitter's.
+
+    `RunBudget` counts steps, tool calls, cumulative tokens, money and time --
+    and none of those is the size of the next request. Over the window, the
+    turn died as `provider_error: the provider rejected the request with HTTP
+    400`, from an adapter that deliberately never reads the error body, so the
+    only thing a transcript said pointed at the one component that was working.
+    """
+
+    def test_no_declared_window_means_no_opinion(self) -> None:
+        # A deployment that did not say what its model holds gets the behaviour
+        # it always had. Guessing a number here would put an authoritative-
+        # looking invention into every run's stop reason.
+        assert (
+            context_reason_for(1_000_000, window_tokens=None, soft_limit_ratio=0.75)
+            is None
+        )
+
+    def test_a_prompt_under_the_soft_limit_takes_another_turn(self) -> None:
+        assert (
+            context_reason_for(47_999, window_tokens=64_000, soft_limit_ratio=0.75)
+            is None
+        )
+
+    def test_a_prompt_at_the_soft_limit_stops_the_run(self) -> None:
+        assert (
+            context_reason_for(48_000, window_tokens=64_000, soft_limit_ratio=0.75)
+            == "context_limit"
+        )
+
+    def test_a_run_that_has_not_sent_anything_yet_is_not_judged(self) -> None:
+        # Before the first turn there is no prompt whose size is known. The
+        # check reads the *last* request's count, so turn one is unguarded --
+        # a stated limit of this shape, not an oversight: a first prompt that is
+        # already over the window still dies as a provider 400.
+        assert (
+            context_reason_for(0, window_tokens=64_000, soft_limit_ratio=0.75) is None
+        )
+
+    def test_the_predicate_reads_one_prompt_and_never_the_running_total(self) -> None:
+        """The counterexample, written out because the mistake is so natural.
+
+        `BudgetUsage.tokens` is cumulative and every turn re-sends the whole
+        conversation, so cumulative input grows roughly with the square of the
+        turn count. A predicate hung beside `halt_reason_for` and fed
+        `usage.tokens.input_tokens` would stop a perfectly healthy run: ten
+        turns of a steady 6,000-token prompt is 60,000 cumulative against a
+        64,000-token window, and not one of those requests was close to it.
+        """
+
+        steady_prompt = 6_000
+        cumulative = BudgetUsage()
+        for _ in range(10):
+            cumulative = cumulative.merged(
+                BudgetUsage(steps=1, tokens=TokenUsage(input_tokens=steady_prompt))
+            )
+
+        # What the wrong reading would have seen, and what it would have done.
+        assert cumulative.tokens.input_tokens == 60_000
+        assert (
+            context_reason_for(
+                cumulative.tokens.input_tokens,
+                window_tokens=64_000,
+                soft_limit_ratio=0.75,
+            )
+            == "context_limit"
+        )
+        # What the predicate is actually given, and what that means.
+        assert (
+            context_reason_for(
+                steady_prompt, window_tokens=64_000, soft_limit_ratio=0.75
+            )
+            is None
+        )
+
+    def test_the_carried_figure_is_the_request_and_not_the_whole_turn(self) -> None:
+        """Why `input_tokens` and not `total`.
+
+        `TokenUsage.total` is everything one turn moved: the prompt, the
+        completion, and the cache write. Two of those three were never in the
+        request that went over the wire, so `total` answers a question about
+        the turn's size and not about the request's -- and it stops a run whose
+        actual prompt had a quarter of the window still free.
+        """
+
+        turn = TokenUsage(
+            input_tokens=40_000,
+            output_tokens=9_000,
+            cache_read_tokens=30_000,
+            cache_write_tokens=2_000,
+        )
+
+        # What the wrong reading would see, and what it would do.
+        assert turn.total == 51_000
+        assert (
+            context_reason_for(turn.total, window_tokens=64_000, soft_limit_ratio=0.75)
+            == "context_limit"
+        )
+        # What actually went over the wire, and what that means.
+        assert (
+            context_reason_for(
+                turn.input_tokens, window_tokens=64_000, soft_limit_ratio=0.75
+            )
+            is None
+        )

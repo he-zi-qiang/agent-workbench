@@ -9,6 +9,7 @@ fixture or to check what the store actually did to the disk.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -21,10 +22,12 @@ from agent_workbench.adapters.filesystem.sandbox import (
     ProjectSandboxError,
 )
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
+from agent_workbench.domain.project_files import ProjectFileChangedError
 from agent_workbench.ports.project_files import (
     MAX_LISTING_ENTRIES,
     MAX_READ_BYTES,
     ProjectFileStore,
+    ProjectFileVersion,
 )
 
 pytestmark = pytest.mark.anyio
@@ -246,6 +249,112 @@ class TestWrite:
         # read back lets an agent write a file it can never see again.
         with pytest.raises(OutputTooLargeError):
             await store.write("big.txt", "x" * (MAX_READ_BYTES + 1))
+
+
+class TestAConditionalWrite:
+    """``if_unchanged``, the half of ADR-0078 that lives below the tools.
+
+    The tool layer decides *whether* a write is allowed; this decides that
+    nothing slipped in between that decision and the bytes landing. It is a
+    precondition, not a lock: another process can still interleave, and what it
+    closes is the window this process opens by stat-ing and then writing.
+    """
+
+    async def test_it_writes_when_the_file_is_as_described(
+        self, store: FilesystemProjectFileStore, tmp_path: Path
+    ) -> None:
+        seen = await store.read("README.md")
+
+        entry = await store.write(
+            "README.md",
+            "# changed\n",
+            if_unchanged=ProjectFileVersion(
+                size_bytes=seen.size_bytes, modified_at=seen.modified_at
+            ),
+        )
+
+        assert entry.size_bytes == len("# changed\n")
+        assert (tmp_path / "project" / "README.md").read_text() == "# changed\n"
+
+    async def test_a_changed_mtime_refuses_and_writes_nothing(
+        self, store: FilesystemProjectFileStore, tmp_path: Path
+    ) -> None:
+        seen = await store.read("README.md")
+        target = tmp_path / "project" / "README.md"
+        target.write_text("# somebody else got here first\n")
+
+        with pytest.raises(ProjectFileChangedError) as refused:
+            await store.write(
+                "README.md",
+                "# mine\n",
+                if_unchanged=ProjectFileVersion(
+                    size_bytes=seen.size_bytes, modified_at=seen.modified_at
+                ),
+            )
+
+        # Nothing written is the assertion that matters; the message is what
+        # the model reads, so both sizes and both timestamps are in it.
+        assert target.read_text() == "# somebody else got here first\n"
+        assert "changed after you read it" in str(refused.value)
+        assert "Read it again" in str(refused.value)
+
+    async def test_a_same_mtime_different_size_still_refuses(
+        self, store: FilesystemProjectFileStore, tmp_path: Path
+    ) -> None:
+        """Why the precondition carries a size and not only a timestamp.
+
+        An mtime is a good check on a filesystem that keeps nanoseconds and a
+        poor one where it keeps whole seconds -- there, a user's save inside the
+        same second as the read is invisible. Forced here by restoring the
+        timestamp, which is what a coarse clock does for free.
+        """
+
+        seen = await store.read("README.md")
+        target = tmp_path / "project" / "README.md"
+        before = target.stat()
+        target.write_text("# a different length entirely\n")
+        os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+        with pytest.raises(ProjectFileChangedError):
+            await store.write(
+                "README.md",
+                "# mine\n",
+                if_unchanged=ProjectFileVersion(
+                    size_bytes=seen.size_bytes, modified_at=seen.modified_at
+                ),
+            )
+
+        assert target.read_text() == "# a different length entirely\n"
+
+    async def test_a_file_that_vanished_refuses_rather_than_recreating_it(
+        self, store: FilesystemProjectFileStore, tmp_path: Path
+    ) -> None:
+        # An unconditional write would make the file again, which reads as
+        # success and is a resurrection nobody asked for -- the caller's whole
+        # claim was "replace the thing I read", and there is nothing to replace.
+        seen = await store.read("README.md")
+        (tmp_path / "project" / "README.md").unlink()
+
+        with pytest.raises(ProjectFileChangedError) as refused:
+            await store.write(
+                "README.md",
+                "# mine\n",
+                if_unchanged=ProjectFileVersion(
+                    size_bytes=seen.size_bytes, modified_at=seen.modified_at
+                ),
+            )
+
+        assert "is gone" in str(refused.value)
+        assert not (tmp_path / "project" / "README.md").exists()
+
+    async def test_no_precondition_still_writes_unconditionally(
+        self, store: FilesystemProjectFileStore, tmp_path: Path
+    ) -> None:
+        # The console's own `PUT` is a person acting on their own files and has
+        # nobody to be raced by, so the default stays what it always was.
+        await store.write("README.md", "# unconditional\n")
+
+        assert (tmp_path / "project" / "README.md").read_text() == "# unconditional\n"
 
 
 class TestDelete:

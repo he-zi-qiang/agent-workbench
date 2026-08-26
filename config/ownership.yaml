@@ -316,6 +316,7 @@
         "model.main.pricing.output_micro_usd_per_mtok",
         "model.main.pricing.cache_read_micro_usd_per_mtok",
         "model.main.pricing.cache_write_micro_usd_per_mtok",
+        "model.main.context_window_tokens",
         "model.compact.model_id",
         "model.compact.temperature",
         "model.compact.max_output_tokens",
@@ -328,7 +329,8 @@
         "model.compact.pricing.input_micro_usd_per_mtok",
         "model.compact.pricing.output_micro_usd_per_mtok",
         "model.compact.pricing.cache_read_micro_usd_per_mtok",
-        "model.compact.pricing.cache_write_micro_usd_per_mtok"
+        "model.compact.pricing.cache_write_micro_usd_per_mtok",
+        "model.compact.context_window_tokens"
       ]
     },
     {
@@ -343,6 +345,7 @@
         "runtime.model_timeout_seconds",
         "runtime.tool_timeout_seconds",
         "runtime.cancellation_poll_seconds",
+        "runtime.context_compaction_enabled",
         "runtime.context_soft_limit_ratio",
         "runtime.tool_result_artifact_threshold_bytes",
         "runtime.write_tools_default_enabled",

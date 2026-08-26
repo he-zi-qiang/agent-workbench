@@ -535,6 +535,18 @@ class ModelProfileSettings(StrictModel):
     # Only consulted when thinking is enabled; the provider's own default.
     reasoning_effort: Literal["low", "high", "max"] = "high"
     pricing: ModelPricingSettings | None = None
+    # How many tokens this profile's model can hold in one request (ADR-0080).
+    # Optional and absent by default, on the same reasoning as `pricing`: what
+    # a `model_id` can hold is a fact about a provider, and `config.default`
+    # ships `not-configured-deepseek-main` -- a placeholder whose window this
+    # repository could only invent. It is also not derivable from the name in
+    # general, because `base_url` may point at a gateway that shortens it.
+    #
+    # What absence costs is stated rather than silent: with no window there is
+    # no context ceiling, and an over-long turn dies the way it always did, as
+    # `provider_error: HTTP 400` from the adapter. `runtime.context_soft_limit_
+    # ratio` is what decides how much of a declared window a run may fill.
+    context_window_tokens: int | None = Field(default=None, ge=1)
 
 
 class ModelSettings(StrictModel):
@@ -579,6 +591,17 @@ class RuntimeSettings(StrictModel):
     tool_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
     cancellation_poll_seconds: int = Field(default=1, ge=1, le=30)
     context_soft_limit_ratio: float = Field(default=0.75, gt=0.0, lt=1.0)
+    # Whether a run that reaches the ratio above shortens itself instead of
+    # stopping (ADR-081). Off by default, and the staging is deliberate:
+    # ADR-080 made an over-long run stop and say so, and a deployment that has
+    # not yet seen a real `context_limit` has nothing to tune this against.
+    # Turning it on costs one extra model call per compaction, under the
+    # `[model.compact]` profile, metered on the run that made it.
+    #
+    # It only ever fires beside a profile that declared `context_window_tokens`
+    # -- with no window there is nothing to be over -- so on a deployment that
+    # declared none this decides nothing at all.
+    context_compaction_enabled: bool = False
     tool_result_artifact_threshold_bytes: int = Field(default=65_536, ge=1024)
     write_tools_default_enabled: Literal[False] = False
     # ADR-019. Records the prompt and the proposed tool arguments on the run's

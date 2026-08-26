@@ -203,6 +203,15 @@ export interface HistoryResponse {
 // crossed a publication fence, because a Code run has none. The files are the
 // product, and `workspace_version` names the set of them the turn left behind.
 
+/**
+ * Whether a coding turn may change anything (ADR-0079).
+ *
+ * `"plan"` narrows the turn to the tools that only read, and says so in the
+ * prompt. A named pair rather than a boolean, for the reason the API body uses
+ * one: `plan: false` reads as an absence where `"act"` reads as a choice.
+ */
+export type CodeTurnMode = "act" | "plan";
+
 export interface CodeAskResponse {
   report: string;
   workspace_version: Identifier | null;

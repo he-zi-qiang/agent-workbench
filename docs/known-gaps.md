@@ -1,8 +1,9 @@
 # 已知缺口
 
-截至 **2026-08-24**，配置 schema `1.17`，Alembic 迁移 31 个
-（head `0031_project_root_path`）——这三项本次重测；上一版写的 `1.15` / 28 个 /
-`0027_session_workspace_version` 三项都已过期，正是 E-05 说的那种复发。
+截至 **2026-08-25**，配置 schema `1.18`，Alembic 迁移 31 个
+（head `0031_project_root_path`）——这三项本次重测；上一版写的 `1.17` 已过期
+（`settings.py:154` 与 `config.default.toml:15` 都是 `1.18`），正是 E-05 说的那种
+复发，而且这一次复发在的正是那句自称"本次重测"的话里。
 本文档各条的**代码位置**仍核对于 `main@921dda5`，未随之重核——分开写，是因为
 合成一句会让「今天量过的数字」替一份没重核的清单背书。
 门禁数字不在本文档维护，见 [十分钟版本的门禁与规模一节](./HIGHLIGHTS.md#2-门禁与规模)。
@@ -436,7 +437,13 @@ contract and are deliberately not in this module yet"。缺的正是这份解码
 | D-03 | 知识库重命名 / 删除 / 文档删除 / ACL UI | 未实现 |
 | D-04 | Word 读取与不可变编辑 | 未实现 |
 | D-05 | Langfuse、生产身份认证、S3 Artifact、远程部署 | 未实现 |
-| D-06 | Chat 历史 compaction | 未接线 |
+
+> 编号一经退休不再复用。D-06（Chat 历史 compaction，词表齐备而没有任何发射点）已于
+> 2026-08-25 关闭，按本文档维护规则从正文删除，落地记录在 [status.md](./status.md)：
+> `runtime/compaction.py` 决定切点、`ClaudeLikeAgentRuntime._compacted()` 用同一个
+> `ModelPort` 取概括并发射 `ContextCompacted`，`runtime.context_compaction_enabled`
+> 默认关。理由见 [ADR-081](./adr/0081-a-conversation-that-was-shortened-says-so.md)。
+> 该条目当年说"事件类型的存在不构成能力"——现在构成能力的是那一批测试，不是这份记录。
 
 ### D-01 真正的 Chat 轮次级附件与 Task 输入 Artifact 附件
 
@@ -497,16 +504,6 @@ Word 文档读取与编辑，能力表里也不得混为一谈。
 
 **当前事实**：可观测走 OTel（已落地）；Artifact 存本地文件系统；身份认证在生产
 意义上不存在；部署只有本机 Compose。这四项在架构基线里一直是 Planned。
-
-### D-06 Chat 历史 compaction
-
-**证据**：领域侧**已经定义**——
-[events.py:428](../src/agent_workbench/domain/events.py:428) 的
-`ContextCompacted`（"Compaction derives a shorter context; it never edits the
-record."），以及 run 状态里的 `compacting`。**但没有任何代码发射这个事件。**
-
-这是典型的"未接线"：协议先于实现落地是对的，但在实现出现之前，事件类型的存在
-不构成能力。
 
 ---
 
@@ -659,7 +656,16 @@ record."），以及 run 状态里的 `compacting`。**但没有任何代码发�
 | F-20 | 跨产品归属的三处数据没人再读写（ADR-074 之后） | 已知代价 |
 | F-21 | 不可重试的 MCP 工具（点击、截图）进不了 Task | **拒绝** |
 | F-22 | 截图按显示器给坐标，点击按全局坐标发事件 | **未实现** |
-| F-23 | 项目目录的回合，提示词说的是扁平工作区 | 已知代价 |
+| F-24 | 项目目录的回合没有容器可用 | **拒绝** |
+| F-25 | 读写回执喂不满：三条路径绕过工具改动目录 | 已知代价 |
+| F-26 | `policy.write_tools_require_approval` 读起来像保证，src/ 里没有读者 | **口径不实** |
+
+> 编号一经退休不再复用。F-23（项目目录的回合被告知自己在一个扁平的、有版本的工作区
+> 里）已于 2026-08-25 关闭，按本文档维护规则从正文删除，落地记录在
+> [status.md](./status.md) §1：`CODER_SYSTEM_PROMPT_PROJECT` 由具名替换从基底派生，
+> 由 `_system_prompt_for` 按本回合被提供的工具选中，锚点缺失时在 import 时抛错。
+> `src/` 与 `tests/` 里若干注释仍以过去时引用这个编号——它们讲的是这段散文为什么是
+> 现在这个样子，读者顺着编号找到的应该是这里。
 
 ### F-20 跨产品归属的三处数据没人再读写 —— 已知代价
 
@@ -1180,35 +1186,72 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
 显示器上各点一次，落点都对得上。今天这台机器只有一块屏，所以这条**在这台机器上验不了**
 ，需要外接一块才能测。
 
-### F-23 项目目录的回合，提示词说的是扁平工作区 —— 已知代价
+### F-24 项目目录的回合没有容器可用 —— 拒绝
 
-**证据**：[code_prompt.py](../src/agent_workbench/application/code_prompt.py)
-（全文 "project" 出现 **0 次**）、
-[code_session.py](../src/agent_workbench/application/code_session.py)
-（`_system_prompt_for` 只按 `sandbox_run` 与 `project_run` 分支，不按工作区／项目
-分支）
+**证据**：[code_session.py](../src/agent_workbench/application/code_session.py)
+`CODE_PROJECT_TOOLS_WITH_RUN` 是项目侧唯一带可选工具的元组，里面没有
+`sandbox_run`；[dependencies.py](../src/agent_workbench/apps/api/dependencies.py)
+`_code_project_tools` 不再读 `code.sandbox_enabled`；不变量由
+`_assert_project_tuples_enter_their_own_scope`（import 时）与
+`tests/adapters/test_project_tools.py::TestExclusivity::test_no_project_tuple_offers_a_tool_bound_to_the_flat_workspace`
+两处钉住。
 
-ADR-072 让 Project 成为本机的一个真实目录，ADR-074 把 Code 会话搬到它上面。提示词
-没跟上：一个项目目录的回合今天被告知
+**为什么**：在此之前项目回合是**被提供**了 `sandbox_run` 的，而它一次也不可能成功。
+`SandboxRunTool` 持有的是扁平的 `WorkspaceScope`，从 ContextVar 里取会话；而
+`CodeSessionService.run` 的 `ExitStack` 只进入一个 scope，项目回合进的是
+`ProjectFileScope`（ADR-073「只进入一个」）。所以每一次调用都在碰到沙箱之前就抛
+`SandboxUnavailableError`，模型收到的是 `unhandled SandboxUnavailableError`。在
+`config.demo-local.toml` 下每个会话都有项目，也就是**每一次**调用。
 
-> Your working set is not a filesystem. It is a set of named entries reached only
-> through the workspace tools, and each successful write produces a new version of
-> the whole set.
+删掉这个提供，是把"不能用"从一次浪费掉的回合改成一句在装配期就成立的话。让容器真正
+看得见项目目录是另一件事：它要动 [ADR-029](./adr/0029-ephemeral-sandbox.md) 逐行论证过的
+`ISOLATION_FLAGS`，那是能力变更，要自己的 ADR 和自己的证据。
 
-而它握着的是 `project_read`／`project_write`／`project_edit`／`project_list`／
-`project_grep`，作用在一棵真实的目录树上，写进去就是写进去，没有版本。三句话里
-「不是文件系统」「每次写产生整套的新版本」两句对它是假的。
+**做完的判据**：一份 ADR 回答「容器挂载用户真实目录之后，`--network=none` 之外还剩
+哪些隔离保证」，并给出一次真实运行的证据。在那之前，项目回合就是没有容器——
+`code.sandbox_enabled` 只对扁平工作区的会话有意义。
 
-**为什么算已知代价**：错的方向是**保守**的。模型被告知的世界比它实际所在的世界更
-受限，所以它不会去做提示词说做不到的事——它会多问一次、多列一次目录，而不会误伤。
-工具的 schema 才是边界，提示词从来不是（`code_prompt.py` 的模块注释自己写着：
-「Everything here is enforced somewhere else too, or it is not stated」）。
+### F-25 读写回执喂不满 —— 已知代价
 
-[ADR-077](./adr/0077-a-command-on-this-machine-is-shown-before-it-is-run.md) §2.4 修
-了其中一句——一个握着 `project_run` 却被告知「没有 shell」的回合会拒绝使用自己手里
-的工具，那是**不**保守的方向，所以必须修。剩下两句留在这里。
+**证据**：[ADR-078](./adr/0078-a-file-you-have-not-read-is-not-yours-to-overwrite.md)
+§3。[file_read_receipts.py](../src/agent_workbench/application/file_read_receipts.py)
+只在 `ProjectReadTool`／两个写工具里被写入，而目录有三条不经过这些工具的写入路径：
+`PUT /v1/projects/{project_id}/file`（[projects.py](../src/agent_workbench/apps/api/routes/projects.py)，
+走同一个 `store.write` 且**不带**前置条件）、用户自己的编辑器与 `git`、以及
+`project_run`（能改根下任何东西）。
 
-**做完的判据**：一个项目变体的基底提示词，说清「这是磁盘上的真实目录、写入立即
-生效、没有版本可回退」，并由 `_system_prompt_for` 按回合是否进入了项目目录来选。
-和现有三个变体一样用 `_rewrite` 的具名替换派生，这样基底一改就在 import 时炸掉，
-而不是发出一个描述错世界的回合。
+**为什么不修**：三条里只有 `project_run` 是可归因的，它已经被
+`ReadReceipts.note_command_ran()` 记下并换一句拒绝措辞。另外两条是**用户在动自己的
+文件**——给控制台的 `PUT` 加前置条件是让用户跟自己赛跑，没有意义。
+
+后果是回执会看见它没造成的合法 mtime 移动：模型被拒一次、重读一次、再写。
+**这是选定的代价**，不是没做完。多一次读换掉一次静默的数据丢失；反过来的错误——闸
+放行了一次真该拦的写——没有第二次机会，因为被覆盖的字节没有版本可退。
+
+**这一条不会有"做完"的一天。** 它不是待办：任何声称"回执覆盖了所有写入路径"的说法
+都是假的，除非目录变成一个只能经由本进程写入的东西——那是另一个产品。
+
+### F-26 `policy.write_tools_require_approval` 无人读取 —— 口径不实
+
+**证据**：[settings.py:927](../src/agent_workbench/bootstrap/settings.py) 是
+`write_tools_require_approval: Literal[True] = True`，
+[config.default.toml:407](../config/config.default.toml) 写着 `true`，而
+`rg write_tools_require_approval src/` 在这两处之外**零命中**。同时
+[code_session.py](../src/agent_workbench/application/code_session.py) 的
+`approval_required_risks` 只有 `("destructive",)`，`project_write` 与
+`workspace_write` 都是 `write` 风险——**按构造，写工具不停在任何人面前**。
+
+**为什么算口径不实而不是未实现**：这个名字是一句读起来像保证的话。一个读配置的人
+会得出"写文件要人批准"，而事实相反。这正是
+[ADR-077](./adr/0077-a-command-on-this-machine-is-shown-before-it-is-run.md) 的
+settings 注释点名的"最贵的一种不变量：读起来是保证，实际是注释"，也是
+[ADR-059](./adr/) 删掉 `node_retry_max_attempts` 的同一种形状。
+
+**为什么 ADR-079 没有顺手接上它**：plan mode 不是"写入停在人面前"，它是"这一轮没有
+写工具"。把这个字段接到 plan mode 上，只是让一个名字在新位置上继续承诺一件它不做的
+事。见 [ADR-079](./adr/0079-a-plan-is-not-an-authorization.md) §6。
+
+**做完的判据**：二选一，都要一次决定。要么接上一道真的 `write` 审批闸——那要回答
+"每一次写都停下来的回合还能不能干完活"，以及它与 ADR-078 的读写回执如何分工；要么
+像 ADR-059 那样把字段删掉，那是一次 `config_schema_version` 变更，应当与下一次
+schema 变更合并，不单独 bump。

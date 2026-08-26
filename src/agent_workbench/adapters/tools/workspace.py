@@ -25,12 +25,17 @@ from typing import Final
 from pydantic import JsonValue
 
 from agent_workbench.adapters.tools.media_guess import media_type_for
+from agent_workbench.adapters.tools.reading import (
+    LIMIT_SCHEMA,
+    OFFSET_SCHEMA,
+    windowed_result,
+)
 from agent_workbench.application.workspace import (
     WorkspaceEntryNotFoundError,
     WorkspaceSession,
 )
 from agent_workbench.application.workspace_scope import WorkspaceScope
-from agent_workbench.domain.errors import ErrorInfo
+from agent_workbench.domain.errors import ErrorInfo, ToolFailedError
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.domain.workspace import (
     GREP_TIMEOUT_SECONDS,
@@ -49,12 +54,6 @@ READ_TOOL_NAME = "workspace_read"
 WRITE_TOOL_NAME = "workspace_write"
 EDIT_TOOL_NAME = "workspace_edit"
 GREP_TOOL_NAME = "workspace_grep"
-
-#: What a read may put into the model's context in one go. Above this the bytes
-#: are still stored -- the workspace is not lossy -- but the model is told the
-#: size instead of being handed it, because a single read should not be able to
-#: spend the whole context budget.
-MAX_INLINE_READ_CHARS = 48_000
 
 #: What one write may accept inline. Larger content arrives by another route
 #: (a download, an MCP result) and is bound with `write_ref`, so this ceiling
@@ -87,8 +86,17 @@ _NAME_SCHEMA: dict[str, JsonValue] = {
 }
 
 
-class WorkspaceUnavailableError(RuntimeError):
-    """A workspace tool ran outside a node that entered a session."""
+class WorkspaceUnavailableError(ToolFailedError):
+    """A workspace tool ran outside a node that entered a session.
+
+    Derives from `ToolFailedError` rather than `RuntimeError` so that the
+    sentence survives. `ErrorInfo.from_exception` passes a message through only
+    for `AgentWorkbenchError`; everything else becomes `unhandled <ClassName>`,
+    on the reasoning that a third-party message is untrusted content of unknown
+    provenance. That reasoning does not cover a string written on the line
+    below, and the model is the reader here: handed the class name, it has
+    nothing to put in its report but the class name.
+    """
 
 
 def _session(scope: WorkspaceScope) -> WorkspaceSession:
@@ -158,13 +166,19 @@ class WorkspaceReadTool:
             name=READ_TOOL_NAME,
             description=(
                 "Read one file from this task's workspace by name. Use "
-                "workspace_list first if you do not know the name."
+                "workspace_list first if you do not know the name. A long file "
+                "comes back one window at a time; the reply says which lines "
+                "it gave you and which offset continues from there."
             ),
             input_schema={
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["name"],
-                "properties": {"name": _NAME_SCHEMA},
+                "properties": {
+                    "name": _NAME_SCHEMA,
+                    "offset": OFFSET_SCHEMA,
+                    "limit": LIMIT_SCHEMA,
+                },
             },
             concurrency="parallel",
             risk="read",
@@ -173,7 +187,8 @@ class WorkspaceReadTool:
         )
 
     async def handle(self, invocation: ToolInvocation) -> ToolResult:
-        name = str(invocation.call.arguments.get("name", ""))
+        arguments = invocation.call.arguments
+        name = str(arguments.get("name", ""))
         session = _session(self.scope)
         try:
             content = await session.workspace.read(session.version, name)
@@ -194,16 +209,13 @@ class WorkspaceReadTool:
                 invocation.call, content=_binary_note(name, content)
             )
         text = content.decode("utf-8", errors="replace")
-        if len(text) > MAX_INLINE_READ_CHARS:
-            return ToolResult.succeeded(
-                invocation.call,
-                content=(
-                    f"{name} holds {len(content)} bytes, which is too large to "
-                    f"show in full. First {MAX_INLINE_READ_CHARS} characters:\n"
-                    + text[:MAX_INLINE_READ_CHARS]
-                ),
-            )
-        return ToolResult.succeeded(invocation.call, content=text)
+        if not text:
+            # Said, not returned empty. An empty tool message reads to a model
+            # as a call that was ignored, so it sends the same one again --
+            # and `MAX_IDENTICAL_CALLS` ends the turn on the third. Every other
+            # tool in this module already has this branch; read did not.
+            return ToolResult.succeeded(invocation.call, content=f"{name} is empty.")
+        return windowed_result(invocation, label=name, text=text, arguments=arguments)
 
 
 @dataclass(frozen=True, slots=True)
@@ -769,7 +781,6 @@ __all__ = [
     "EDIT_TOOL_NAME",
     "GREP_TOOL_NAME",
     "LIST_TOOL_NAME",
-    "MAX_INLINE_READ_CHARS",
     "MAX_INLINE_WRITE_CHARS",
     "READ_TOOL_NAME",
     "WRITE_TOOL_NAME",

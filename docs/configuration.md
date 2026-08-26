@@ -614,6 +614,63 @@ cache_read_micro_usd_per_mtok = 27000    # $0.027 / Mtok
 先把缓存部分从输入里减掉再按输入价计，否则同一批 token 会被按两种费率各收一次——后果是
 **缓存过的 prompt 比没缓存的更贵**，成本上限恰好会在那些开了缓存来省钱的部署上最早触发。
 
+### 上下文窗口 `[model.main].context_window_tokens` / `[model.compact]`
+
+可选，默认不配，理由与价格同构：一个 `model_id` 能装多少是供应商的事实，而
+`config.default.toml` 出厂写的是 `not-configured-deepseek-main`——一个占位符的窗口只能
+是编出来的。它也不能一般地从名字推出来：`base_url` 可以指向一个把窗口改短了的网关。
+
+```toml
+[model.main]
+context_window_tokens = 65536    # 这个 model_id 一次请求能装多少
+```
+
+配了它，`runtime.context_soft_limit_ratio`（默认 `0.75`）才有东西可以取分数。此时一次
+运行在**每一轮之前**检查上一次 prompt 的大小（供应商报的 `input_tokens`），越过
+`窗口 × ratio` 就以 `context_limit` 停下，并把三个数字写进停止原因。
+
+不配它就没有这道天花板，过长的回合仍然像以前一样死在
+`provider_error: the provider rejected the request with HTTP 400`——那条消息把读转录的人
+指向模型适配器，而那里恰恰是唯一没出问题的地方。**这是不说的代价，写在这里而不是留白。**
+
+三件要知道的事：
+
+- **这是软上限。** 检查在两轮之间，而一次 `project_read` 能在检查通过之后再追加
+  48,000 字符。ratio 留下的余量就是用来吸收这个的；它保证的不是"下一个请求一定装得下"，
+  而是"运行自己说出撞到了什么"。
+- **它看的是上一次 prompt，不是累计。** `BudgetUsage.tokens` 是跨轮累加的，而每一轮都
+  重发整段对话——累计输入随轮数近似平方增长，拿它做判断会掐死健康的运行。
+- **第一轮不受保护。** 检查读的是"上一次请求"的大小，所以回合一之前没有可读的数字。
+  一个开局就超窗的 prompt 仍然死在 provider 400。
+
+### 压缩 `[runtime].context_compaction_enabled`
+
+默认 `false`。打开之后，一次撞到上面那条软上限的运行**不再停下**，而是把对话的中间
+交给一次概括调用，用带标记的一条 `assistant` 消息换掉它，然后继续
+（[ADR-081](./adr/0081-a-conversation-that-was-shortened-says-so.md)）。
+
+```toml
+[runtime]
+context_soft_limit_ratio = 0.75
+context_compaction_enabled = true    # 需要上面那个 context_window_tokens 才有意义
+```
+
+默认关，而且顺序是有意的：ADR-080 先让超窗的运行**诚实地停下并说出撞的是哪条天花板**，
+一个还没见过真实 `context_limit` 的部署没有任何东西可以用来判断压缩值不值得。
+
+要知道的四件事：
+
+- **它只在声明了 `context_window_tokens` 的 profile 旁边才可能生效。** 没有窗口就没有
+  "超出"可言，所以在没声明窗口的部署上这个开关什么也不决定。
+- **它花一次额外的模型调用**，用 `[model.compact]` 这个 profile，并且**记在发起它的那次
+  运行的账上**——token 和成本都进 `BudgetUsage`。但它**不计一步**：`runtime.max_steps`
+  数的是 agent 循环走了几轮，而压缩没有推进循环。
+- **概括失败就什么都不删。** 调用出错或返回空文本时，消息原样留着，运行按 ADR-080 的
+  老样子停在 `context_limit`。没有"删了但没有摘要"这个中间状态。
+- **一次运行最多压三次。** 兜底而非策略：缩过三次还在线上的运行不会被第四次救回来。
+
+被删掉的是原文，留下的是概括——这是有损的，写在这里而不是留白。
+
 默认 TOML 中所有实验项均关闭。v1 production profile 只要发现任一
 Optional Lab 为 true 就拒绝启动。
 

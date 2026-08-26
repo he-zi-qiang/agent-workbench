@@ -44,6 +44,7 @@ from agent_workbench.ports.project_files import (
     DirectoryListing,
     ProjectFileContent,
     ProjectFileEntry,
+    ProjectFileVersion,
     ProjectListing,
 )
 from agent_workbench.ports.projects import (
@@ -113,6 +114,13 @@ SAMPLES: dict[str, VersionedModel] = {
     "ProjectFileEntry": ProjectFileEntry(
         path="src/agent_workbench/domain/project_files.py",
         kind="file",
+        size_bytes=8192,
+        modified_at=SAMPLE_TIMESTAMP,
+    ),
+    # ADR-0078. Both fields, because an mtime alone is a poor check on a
+    # filesystem that keeps whole seconds and this sample is where "what does a
+    # write precondition carry" is pinned.
+    "ProjectFileVersion": ProjectFileVersion(
         size_bytes=8192,
         modified_at=SAMPLE_TIMESTAMP,
     ),

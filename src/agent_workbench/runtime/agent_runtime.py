@@ -36,6 +36,7 @@ from agent_workbench.domain.errors import (
 )
 from agent_workbench.domain.events import (
     ContextBuilt,
+    ContextCompacted,
     ModelCompleted,
     ModelDelta,
     ModelStarted,
@@ -56,6 +57,7 @@ from agent_workbench.domain.messages import (
     Message,
     assistant_message,
     tool_message,
+    user_message,
 )
 from agent_workbench.domain.policies import ExecutionContext
 from agent_workbench.domain.pricing import ModelPrices
@@ -65,6 +67,7 @@ from agent_workbench.domain.runs import (
     BudgetUsage,
     StopReason,
     TokenUsage,
+    context_reason_for,
 )
 from agent_workbench.domain.schema import (
     ANSWER_TEXT_LIMIT,
@@ -100,6 +103,12 @@ from agent_workbench.ports.telemetry import (
 from agent_workbench.runtime.budgets import (
     effective_model_deadline,
     remaining_run_seconds,
+)
+from agent_workbench.runtime.compaction import (
+    conversation_chars,
+    plan_compaction,
+    render_for_summary,
+    scaled_tokens_after,
 )
 from agent_workbench.runtime.state import RunStateMachine
 from agent_workbench.runtime.tool_gateway import PreparedCall, ToolGateway
@@ -188,6 +197,16 @@ class _ModelTurn:
     thinking: str = ""
 
 
+#: How much of a declared context window a run may fill, when nobody said.
+#:
+#: Mirrors `runtime.context_soft_limit_ratio`, which is the value every
+#: assembly actually passes. It is a default rather than a required argument
+#: because this constructor has a dozen call sites in tests that care about the
+#: loop and not about context, and 0.75 is the shipped setting -- a test that
+#: wanted a different one would say so.
+DEFAULT_CONTEXT_SOFT_LIMIT_RATIO: Final[float] = 0.75
+
+
 @dataclass(slots=True)
 class _RunLedger:
     """Everything that accumulates across turns of one run."""
@@ -201,6 +220,14 @@ class _RunLedger:
     call_counts: dict[str, int] = field(default_factory=dict[str, int])
     #: How many calls this run has had refused for repeating themselves.
     repeat_refusals: int = 0
+    #: How many times this run has shortened its own conversation.
+    compactions: int = 0
+    #: The provider's count for the *last* prompt this run sent, which is the
+    #: best evidence of how large the next one will be. Deliberately not
+    #: derived from `usage.tokens`: that is cumulative across turns and every
+    #: turn re-sends the whole conversation, so it grows roughly with the
+    #: square of the turn count and says nothing about one request's size.
+    last_input_tokens: int = 0
 
 
 @runtime_checkable
@@ -248,6 +275,39 @@ def _repeated_call_ids(calls: Sequence[ToolCall]) -> tuple[str, ...]:
 #: the pathology it exists to cut.
 MAX_IDENTICAL_CALLS: Final[int] = 3
 
+#: How many times one run may shorten its own conversation (ADR-081).
+#:
+#: A backstop rather than a policy. Each compaction removes the middle, so the
+#: conversation shrinks and `plan_compaction` eventually refuses on its own --
+#: but a run that has done this three times and is still over the line is not
+#: going to be rescued by a fourth, and the honest answer at that point is the
+#: ceiling it keeps hitting.
+MAX_COMPACTIONS_PER_RUN: Final[int] = 3
+
+#: What the summariser is told it is doing.
+#:
+#: Short, and about fidelity rather than brevity: the failure mode that matters
+#: is a summary that reads complete while having dropped the decision the next
+#: turn depends on. It says the reader is the same agent because that is true
+#: -- the text comes back into this run's own conversation as an assistant
+#: message -- and a summariser writing for a stranger writes an abstract.
+COMPACTION_PROMPT: Final[str] = """\
+You are compacting the earlier part of a coding run so it fits in a smaller
+context. What you write goes back to the agent that did this work, as its own
+record of what it already did.
+
+Keep: what was asked, what was decided and why, which files were read or
+changed and what is now in them, what failed and what the failure said, and
+anything the next step depends on. Keep exact names -- paths, identifiers,
+error strings -- because they are what the next tool call will be built from.
+
+Drop: repetition, the full text of files, and anything already superseded.
+
+Write it as a plain account in the past tense. Do not add advice, do not
+speculate about what to do next, and do not describe anything the transcript
+does not show.\
+"""
+
 #: How many times a run may be told it is repeating itself before the run is
 #: stopped. A model that asks once more after being told has misread the answer;
 #: one that asks a third time is not going to stop on its own.
@@ -282,6 +342,9 @@ class ClaudeLikeAgentRuntime:
         telemetry: Telemetry | None = None,
         record_step_inputs: bool = False,
         prices: ModelPrices | None = None,
+        context_window_tokens: int | None = None,
+        context_soft_limit_ratio: float = DEFAULT_CONTEXT_SOFT_LIMIT_RATIO,
+        compaction_enabled: bool = False,
     ) -> None:
         self._model = model
         # Tools are reached only through the gateway: resolving, validating,
@@ -303,6 +366,20 @@ class ClaudeLikeAgentRuntime:
         # deployment asked for it. Independent of `telemetry`, which never
         # carries a body.
         self._record_step_inputs = record_step_inputs
+        # What this deployment's model can hold, and how much of it a run may
+        # fill (ADR-0080). `None` is a real state and not "unlimited": it is a
+        # process that cannot tell a long turn from a short one, and whose
+        # over-long turns die as `provider_error: HTTP 400` -- a message that
+        # sends whoever is reading the transcript to the model adapter, which
+        # is the one place the problem is not.
+        self._context_window_tokens = context_window_tokens
+        self._context_soft_limit_ratio = context_soft_limit_ratio
+        # ADR-081. Off by default, and the staging is the point: ADR-080 made
+        # an over-long run stop and say so, and this decides whether it tries
+        # to survive instead. A deployment that has not yet seen a real
+        # `context_limit` has nothing to tune this against -- honest failure
+        # first, remedy second.
+        self._compaction_enabled = compaction_enabled
         # Defaults to recording nothing. A deployment without a collector is
         # not a deployment that behaves differently, so this is the absence of
         # one rather than a degraded mode.
@@ -465,6 +542,55 @@ class ClaudeLikeAgentRuntime:
                     ledger,
                 )
 
+            # The one ceiling that is not the submitter's (ADR-0080). Asked
+            # here, in the same breath as the budget, because it answers the
+            # same question -- may this run take another turn -- from the other
+            # side: not "has it spent what it was given" but "will what it is
+            # about to send fit".
+            #
+            # The numbers go in the message. Without them the operator reading
+            # a stopped run has a stop reason and no way to tell a model that
+            # needs a bigger window from a run that read too many files, and
+            # the previous answer to this situation -- `provider_error: HTTP
+            # 400` from the adapter, whose body is deliberately never read --
+            # sent them to the one component that was working correctly.
+            over_context = context_reason_for(
+                ledger.last_input_tokens,
+                window_tokens=self._context_window_tokens,
+                soft_limit_ratio=self._context_soft_limit_ratio,
+            )
+            if over_context is not None and await self._compacted(
+                request, sink, machine, ledger, cancellation
+            ):
+                # Shortened instead of stopped (ADR-081). The measurement that
+                # triggered this described a conversation that no longer
+                # exists, so it is cleared rather than carried: the next turn
+                # produces a real one, and until then the predicate has
+                # nothing to judge -- which is exactly what it answers for a
+                # run that has not sent anything yet.
+                ledger.last_input_tokens = 0
+                over_context = None
+            if over_context is not None:
+                assert self._context_window_tokens is not None
+                return await self._failed(
+                    request,
+                    sink,
+                    machine,
+                    over_context,
+                    ErrorInfo(
+                        code="budget_exceeded",
+                        message=(
+                            "the run stopped before its next request would "
+                            "have outgrown the model's context: the last "
+                            f"prompt was {ledger.last_input_tokens} tokens of "
+                            f"a {self._context_window_tokens}-token window, "
+                            f"past the {self._context_soft_limit_ratio} soft "
+                            "limit"
+                        ),
+                    ),
+                    ledger,
+                )
+
             # Recomputed each turn, because what the model may reach changes
             # within a run. Once the allowance is gone the tools come off the
             # request entirely rather than staying on it to be refused: a model
@@ -494,6 +620,10 @@ class ClaudeLikeAgentRuntime:
                     cost_micro_usd=self._priced(turn.usage),
                 )
             )
+            # Carried beside the merge rather than derived from it, for the
+            # reason the field's own comment gives: the merged figure is a sum
+            # over turns and this is one turn's prompt.
+            ledger.last_input_tokens = turn.usage.input_tokens
 
             terminal = await self._terminal_for_turn(
                 request,
@@ -1123,6 +1253,106 @@ class ClaudeLikeAgentRuntime:
                 for prepared in group
             ]
         )
+
+    async def _compacted(
+        self,
+        request: AgentRunRequest,
+        sink: EventSink,
+        machine: RunStateMachine,
+        ledger: _RunLedger,
+        cancellation: CancellationToken,
+    ) -> bool:
+        """Shorten this run's conversation, or answer that it could not be.
+
+        ``False`` on every path that did not produce a shorter conversation
+        *with* an account of what was removed, and the caller then stops the
+        run the way ADR-080 stopped it before this existed. There is no middle
+        outcome on purpose: dropping messages without a summary would leave the
+        model continuing from a history with a hole in it that neither it nor
+        the reader could see.
+
+        The summary is produced by an ordinary model call -- same `ModelPort`,
+        same deadline, same cancellation, same `ModelStarted`/`ModelCompleted`
+        pair -- because a private "just call the provider" helper would put a
+        request outside this run's own accounting, and the recorded cost would
+        stop matching the bill.
+        """
+
+        if not self._compaction_enabled:
+            return False
+        if ledger.compactions >= MAX_COMPACTIONS_PER_RUN:
+            # A backstop, not a policy. Each compaction removes the middle, so
+            # the conversation shrinks and `plan_compaction` eventually refuses
+            # -- but a run that has shortened itself three times and is still
+            # over the line is not going to be rescued by a fourth, and the
+            # honest answer is the ceiling it keeps hitting.
+            return False
+        plan = plan_compaction(ledger.messages)
+        if plan is None:
+            return False
+
+        machine.to("compacting")
+        before_chars = conversation_chars(ledger.messages)
+        tokens_before = ledger.last_input_tokens
+        # A separate ledger, so the transcript being summarised cannot be
+        # confused with the conversation being repaired: `_stream_model` reads
+        # its messages from whichever ledger it is handed.
+        asking = _RunLedger(messages=[user_message(render_for_summary(plan.removed))])
+        turn = await self._stream_model(
+            request.model_copy(
+                update={
+                    # The profile that exists for exactly this (ADR-081 §2.1);
+                    # `[model.compact]` has been configurable since the schema
+                    # had a `[model]` section.
+                    "model_profile": "compact",
+                    "system_prompt": COMPACTION_PROMPT,
+                    # A summariser has nothing to reason about, and a run that
+                    # pinned thinking off for its own turns did not ask to pay
+                    # for it here.
+                    "thinking": False,
+                }
+            ),
+            sink,
+            asking,
+            (),
+            cancellation,
+        )
+        # Metered even when it fails: the call was made and the provider
+        # charged for it, and a run whose recorded spend omits its failed
+        # compaction is a run whose cost ceiling is wrong by that much.
+        #
+        # `steps` stays at zero. A step is a turn of the agent loop, and the
+        # loop did not advance -- counting this would let a run near its step
+        # ceiling be halted by the thing that was trying to save it.
+        ledger.usage = ledger.usage.merged(
+            BudgetUsage(
+                tokens=turn.usage,
+                cost_micro_usd=self._priced(turn.usage),
+            )
+        )
+        summary = turn.text.strip()
+        if turn.error is not None or not summary:
+            return False
+
+        ledger.messages = plan.rebuilt(summary)
+        ledger.compactions += 1
+        await sink.emit(
+            ContextCompacted(
+                removed_message_count=len(plan.removed),
+                tokens_before=tokens_before,
+                tokens_after=scaled_tokens_after(
+                    tokens_before,
+                    chars_before=before_chars,
+                    chars_after=conversation_chars(ledger.messages),
+                ),
+                # No artifact. `ArtifactRef` carries a tenant and a content
+                # digest and is minted only by the artifact store under
+                # `tenant_filter_required`; this runtime holds no store and no
+                # principal, so a ref built here would be a fabricated one.
+                summary_ref=None,
+            )
+        )
+        return True
 
     async def _failed(
         self,

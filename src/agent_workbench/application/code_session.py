@@ -38,19 +38,23 @@ minutes-long turn is a queue nobody can reason about the length of.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Literal
 
 from agent_workbench.application.answer_release import ProcessOnlySink
 from agent_workbench.application.code_approvals import ApprovalScope
 from agent_workbench.application.code_prompt import (
     CODER_SYSTEM_PROMPT,
+    CODER_SYSTEM_PROMPT_PROJECT,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
     with_host_commands,
+    with_plan_only,
 )
+from agent_workbench.application.file_read_receipts import ReadReceipts
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.application.projects import ProjectService
 from agent_workbench.application.session_titles import title_from_instruction
@@ -65,7 +69,11 @@ from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.identifiers import Identifier, new_id
 from agent_workbench.domain.messages import Message, assistant_message, user_message
-from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
+from agent_workbench.domain.policies import (
+    AuthorizationEnvelope,
+    PrincipalContext,
+    risk_within,
+)
 from agent_workbench.domain.project_files import PROJECT_RUN_TOOL
 from agent_workbench.domain.runs import (
     AgentOutcome,
@@ -83,6 +91,7 @@ from agent_workbench.ports.conversation_store import (
     ConversationStore,
 )
 from agent_workbench.ports.project_files import ProjectFileStore
+from agent_workbench.ports.tools import ToolRegistry
 
 #: What a coding session is allowed to reach with the sandbox off: read tools
 #: plus the two writes, and nothing external. A deployment that leaves
@@ -137,15 +146,8 @@ CODE_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
     SANDBOX_RUN_TOOL,
 )
 
-#: The project-directory set plus the sandbox, spelled out for the reason its
-#: sibling above is: "what may a coding session reach" should have answers to
-#: read, not an answer and two appends to apply in your head.
-CODE_PROJECT_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
-    *CODE_PROJECT_TOOLS,
-    SANDBOX_RUN_TOOL,
-)
-
-#: The same two, plus the tool that runs a command on this machine (ADR-077).
+#: The project-directory set plus the tool that runs a command on this machine
+#: (ADR-077).
 #:
 #: Project-only, and that is a property of the tool rather than a choice made
 #: here: `project_run` runs *somewhere*, and the only working directory a
@@ -153,22 +155,65 @@ CODE_PROJECT_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
 #: to be in, so there is no `CODE_TOOLS_WITH_RUN` to pair with these -- the
 #: absence is the answer, not an omission.
 #:
-#: Written out rather than composed at the call site, like the four above. Two
-#: optional tools is where that stops scaling: a third would be eight tuples,
-#: and the honest move at that point is a function, not a seventh name.
+#: There is no sandbox arm here, and there was one. `CODE_PROJECT_TOOLS_WITH_
+#: SANDBOX` and `..._WITH_SANDBOX_AND_RUN` offered `sandbox_run` to a turn that
+#: could never call it: the tool holds a `WorkspaceScope` and reads its session
+#: out of a ContextVar (`adapters/tools/sandbox.py` `_session`), and `run()`
+#: enters exactly one scope -- for a project turn, `ProjectFileScope`. So every
+#: call raised `SandboxUnavailableError` before reaching the sandbox at all,
+#: and under `config.demo-local.toml`, where every session has a project, that
+#: was every call. Widening the sandbox to *see* a project directory is a
+#: capability change against ADR-029's isolation flags and wants its own ADR;
+#: until then the honest offer is not to offer it.
 CODE_PROJECT_TOOLS_WITH_RUN: tuple[ToolName, ...] = (
     *CODE_PROJECT_TOOLS,
     PROJECT_RUN_TOOL,
 )
 
-CODE_PROJECT_TOOLS_WITH_SANDBOX_AND_RUN: tuple[ToolName, ...] = (
-    *CODE_PROJECT_TOOLS_WITH_SANDBOX,
-    PROJECT_RUN_TOOL,
+#: The project side as a set, for the two questions asked about it below:
+#: "is this a project turn" and "did a flat-scoped tool leak into one".
+_PROJECT_TOOLS: frozenset[ToolName] = frozenset(CODE_PROJECT_TOOLS)
+
+#: Everything that finds its backing through the flat `WorkspaceScope`.
+#:
+#: Named so the check below can be written as a claim about scopes rather than
+#: as a list of names somebody has to keep in step: what makes `sandbox_run`
+#: wrong for a project turn is not that it is external, it is that it reads a
+#: ContextVar that a project turn does not set.
+_WORKSPACE_SCOPED_TOOLS: frozenset[ToolName] = frozenset(
+    (*CODE_TOOLS, SANDBOX_RUN_TOOL)
 )
 
 
+def _assert_project_tuples_enter_their_own_scope() -> None:
+    """A turn may not be offered a tool whose scope it does not enter.
+
+    At import, because the tuples are literals and there is nothing to wait
+    for: the cost of getting this wrong is not an exception, it is a model
+    holding a tool that answers `unhandled SandboxUnavailableError`, obeying
+    discipline 3 by not retrying, and reporting that it could not run the code
+    -- a turn spent on a refusal nobody chose. The shape is ADR-075's
+    `_assert_no_profile_offers_a_ledgered_tool`, moved to import time because
+    these tuples are not built from configuration.
+    """
+
+    for offered in (CODE_PROJECT_TOOLS, CODE_PROJECT_TOOLS_WITH_RUN):
+        leaked = _WORKSPACE_SCOPED_TOOLS & frozenset(offered)
+        if leaked:
+            raise ValueError(
+                "a project turn enters only ProjectFileScope, but these tools "
+                f"read the flat workspace scope: {sorted(leaked)}"
+            )
+
+
+_assert_project_tuples_enter_their_own_scope()
+
+
 def _system_prompt_for(
-    tool_names: tuple[ToolName, ...], *, sandbox_requires_approval: bool
+    tool_names: tuple[ToolName, ...],
+    *,
+    sandbox_requires_approval: bool,
+    plan_only: bool = False,
 ) -> str:
     """What this turn is told about the world it is in.
 
@@ -178,26 +223,66 @@ def _system_prompt_for(
     wait, do not spend one", which under no gate is an instruction to avoid the
     tool the deployment just freed).
 
-    The two axes compose rather than multiply. `project_run` is independent of
-    the sandbox and of its gate, so it is applied on top of whichever base the
-    first branch chose instead of being spelled out as three more prompts.
+    Three axes now, and they still compose rather than multiply: the file
+    language picks the base, the sandbox gate picks between the two flat bases,
+    and `project_run` is applied on top of whichever was chosen. The project
+    side has no sandbox arm because a project turn is no longer offered
+    `sandbox_run` at all -- see `CODE_PROJECT_TOOLS_WITH_RUN`.
+
+    `plan_only` is the one fact that is *not* read off `tool_names`, and the
+    asymmetry is deliberate: a narrowed list and a list that simply never held
+    a write tool are indistinguishable by inspection, and only one of them
+    should be told that writing was taken away from it (ADR-0079).
+
+    The file language is read off `tool_names` rather than passed in beside it,
+    for the reason `code_risk_ceiling` derives the ceiling the same way: two
+    switches are two ways to describe one decision, and the interesting bug is
+    the pair disagreeing. Here that bug has a measured shape -- a turn holding
+    `project_write` and told that its writes produce a new version of a set
+    that does not exist (`docs/known-gaps.md` F-23).
     """
 
-    base = (
-        (
+    if _PROJECT_TOOLS & frozenset(tool_names):
+        base = CODER_SYSTEM_PROMPT_PROJECT
+    elif SANDBOX_RUN_TOOL in tool_names:
+        base = (
             CODER_SYSTEM_PROMPT_WITH_SANDBOX
             if sandbox_requires_approval
             else CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED
         )
-        if SANDBOX_RUN_TOOL in tool_names
-        else CODER_SYSTEM_PROMPT
-    )
-    if PROJECT_RUN_TOOL not in tool_names:
-        return base
-    return with_host_commands(base)
+    else:
+        base = CODER_SYSTEM_PROMPT
+    if PROJECT_RUN_TOOL in tool_names:
+        base = with_host_commands(base)
+    if plan_only:
+        base = with_plan_only(base)
+    return base
 
 
-def code_risk_ceiling(tool_names: tuple[ToolName, ...]) -> ToolRisk:
+def read_only(
+    tool_names: tuple[ToolName, ...], *, risks: Mapping[ToolName, ToolRisk]
+) -> tuple[ToolName, ...]:
+    """The offered tools that only read, by their own ``ToolSpec`` (ADR-0079).
+
+    Narrowed by risk rather than by name, and that distinction is the whole
+    reason this is a function instead of a filter on `*_write`/`*_edit`
+    spelled at the call site. A name-suffix filter is a second place a tool's
+    risk is written down, with a wildcard in it: the first tool that does not
+    follow the convention -- a future `project_move`, anything bound from MCP
+    -- would slip into a turn that has been told, in its prompt and in its
+    envelope, that it cannot change anything.
+
+    Order is preserved so the envelope of a plan turn is a subsequence of the
+    act turn's, which is what makes "plan only ever narrows" checkable by
+    reading the two lists rather than by trusting this function.
+    """
+
+    return tuple(name for name in tool_names if risks.get(name) == "read")
+
+
+def code_risk_ceiling(
+    tool_names: tuple[ToolName, ...], *, risks: Mapping[ToolName, ToolRisk]
+) -> ToolRisk:
     """The lowest ceiling that admits everything in ``tool_names``.
 
     Still derived from the tool list rather than configured beside it, for the
@@ -206,26 +291,32 @@ def code_risk_ceiling(tool_names: tuple[ToolName, ...]) -> ToolRisk:
     a tool and left the ceiling below it would offer the model a tool its own
     envelope denies, costing a turn that ends in `outside_submitted_envelope`.
 
-    What changed with ADR-077 is only that "the ceiling exists to admit exactly
-    one tool" stopped being true. It now admits two, and they are not the same
-    height: `sandbox_run` is `external` because its content leaves this process
-    for a network-less container, while `project_run` is `destructive` because
-    it runs on the machine and there is no undo. The gap matters --
-    `code_approvals.UNREPEATABLE_RISKS` refuses a standing session-wide
-    approval for both, but only `destructive` is armed in every Code envelope
-    regardless of `code.sandbox_requires_approval`, which defaults to False.
-    Calling `project_run` `external` would have let it run ungated by default.
+    It used to be a chain naming `project_run` and `sandbox_run`, on the
+    grounds that a name-to-risk table would be a second place a tool's risk is
+    written down -- while the first place, the tool's own `ToolSpec`, is what
+    the policy engine actually reads. That was right about the problem and
+    settled for second best: the chain *was* the table, with two rows. Reading
+    the specs is the version with no rows at all, and it is what lets ADR-0079
+    produce a `read` ceiling without anybody adding a third branch for it.
 
-    A chain rather than a name-to-risk table: a table would be a second place a
-    tool's risk is written down, and the first place -- the tool's own
-    `ToolSpec` -- is the one the policy engine actually reads.
+    An offered name with no registered spec raises rather than defaulting. The
+    two available defaults are both wrong in a way nothing downstream would
+    report: `read` builds an envelope that denies a tool the turn was given,
+    and `destructive` quietly raises the ceiling of every turn that contains a
+    typo.
     """
 
-    if PROJECT_RUN_TOOL in tool_names:
-        return "destructive"
-    if SANDBOX_RUN_TOOL in tool_names:
-        return "external"
-    return "write"
+    ceiling: ToolRisk = "read"
+    for name in tool_names:
+        risk = risks.get(name)
+        if risk is None:
+            raise ValueError(
+                f"{name!r} is offered to a coding turn but this process has no "
+                "spec for it, so its risk cannot be read"
+            )
+        if not risk_within(risk, ceiling):
+            ceiling = risk
+    return ceiling
 
 
 class CodeTurnBusyError(RuntimeError):
@@ -273,6 +364,13 @@ def new_code_session_id() -> str:
     return new_id("ses")
 
 
+#: What a turn is allowed to be. Two values, not a flag, because the name is
+#: what appears in the API body, in the envelope's story and in the console's
+#: composer -- and `plan=false` reads as an absence where `"act"` reads as a
+#: choice somebody made.
+CodeMode = Literal["act", "plan"]
+
+
 @dataclass(frozen=True, slots=True)
 class CodeRequest:
     """One thing a user asked a coding session to do."""
@@ -281,6 +379,11 @@ class CodeRequest:
     instruction: str
     principal: PrincipalContext
     run_id: Identifier
+    #: Whether this turn may change anything (ADR-0079). ``"plan"`` narrows the
+    #: offered tools to the ones whose own `ToolSpec` says they only read, and
+    #: says so in the prompt. Defaults to `"act"`, which is what every caller
+    #: written before plan mode existed meant.
+    mode: CodeMode = "act"
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +424,26 @@ class CodeSessionService:
     #: never offers `project_*` at all, which is the correct behaviour for a
     #: build without the capability rather than a degraded one.
     project_scope: ProjectFileScope | None = None
+    #: Where the project read tools leave what they handed the model, so the
+    #: write tools can refuse to replace a file this turn has not seen
+    #: (ADR-0078). Travels with `project_scope`: both are `None` on a build
+    #: without the project capability, and the assertion beside the scope entry
+    #: is the one that says so, because a deployment that wired one and not the
+    #: other would be offering a write gate that never checks anything.
+    read_receipts: ReadReceipts | None = None
+    #: Where a tool's risk is written down: its own `ToolSpec`. Read for two
+    #: decisions that used to be made from names -- the envelope's ceiling, and
+    #: which tools survive into a plan turn (ADR-0079).
+    #:
+    #: Typed optional because it follows fields that have defaults, and refused
+    #: in `__post_init__` because there is no safe value for its absence. The
+    #: first draft fell back to the ceiling the name-based chain used to
+    #: return, `write`; `test_a_turn_holding_the_run_tool_is_not_told_there_is_
+    #: no_shell` caught it immediately -- a turn offered `project_run` under a
+    #: `write` ceiling is a turn whose envelope denies the tool it was given,
+    #: which ends in `outside_submitted_envelope`. Every assembly has a
+    #: registry; the executor is built from one.
+    tools: ToolRegistry | None = None
     projects: ProjectService | None = None
     project_tool_names: tuple[ToolName, ...] = CODE_PROJECT_TOOLS
     #: Whether each ``sandbox_run`` call stops for a human (ADR-058). Defaults
@@ -329,6 +452,34 @@ class CodeSessionService:
     sandbox_requires_approval: bool = False
     _running: set[str] = field(default_factory=set[str], init=False)
     _turns: int = field(default=0, init=False)
+
+    def __post_init__(self) -> None:
+        """Refuse an assembly that wired the project side half-way (ADR-0078).
+
+        Checked here rather than only at the scope entry, because this is where
+        the mistake is made and turn time is where it would be found. A
+        deployment that passed a `project_scope` and no ledger would boot,
+        serve, and offer `project_write` on the user's real files with a gate
+        that never checks anything -- and the transcript of the turn that
+        overwrote their work would look exactly like the transcript of one that
+        did not.
+
+        One-directional on purpose. A ledger without a scope is harmless: no
+        `project_*` tool is offered, so nothing records and nothing asks.
+        """
+
+        if self.project_scope is not None and self.read_receipts is None:
+            raise ValueError(
+                "a project-capable coding session needs read receipts: "
+                "project_scope was given without read_receipts, which would "
+                "offer project_write with no read-before-overwrite check"
+            )
+        if self.tools is None:
+            raise ValueError(
+                "a coding session needs the tool registry: without it the "
+                "envelope's risk ceiling and plan mode's narrowing both have "
+                "to be guessed from tool names"
+            )
 
     async def open(
         self,
@@ -722,6 +873,13 @@ class CodeSessionService:
         tool_names = (
             self.tool_names if project_files is None else self.project_tool_names
         )
+        # Frozen here, beside the file-language decision ADR-073 §5.2 freezes
+        # in the same statement and for the same reason: deciding it per tool
+        # call would let something change what the running model is holding
+        # after the envelope had been signed with the other list.
+        risks = self._risks()
+        if request.mode == "plan":
+            tool_names = read_only(tool_names, risks=risks)
         with ExitStack() as scopes:
             if project_files is None:
                 scopes.enter_context(self.scope.using(workspace))
@@ -732,9 +890,23 @@ class CodeSessionService:
                 # an envelope that forgot to exclude one would become reachable.
                 assert self.project_scope is not None
                 scopes.enter_context(self.project_scope.using(project_files))
+                # A fresh, empty ledger per turn (ADR-0078). Entered here
+                # rather than around the session, because a receipt is a claim
+                # that the model has *just* seen a file: carried into the next
+                # turn it would be a claim about a file as it stood minutes ago
+                # and would licence exactly the overwrite this gate exists to
+                # refuse. Project side only -- the flat workspace versions
+                # every write, so "did you read it first" is a question about
+                # something that can be recovered either way.
+                assert self.read_receipts is not None
+                scopes.enter_context(self.read_receipts.using())
             outcome = await executor.run(
                 self._request_for(
-                    request, history=history, asked=asked, tool_names=tool_names
+                    request,
+                    history=history,
+                    asked=asked,
+                    tool_names=tool_names,
+                    risks=risks,
                 ),
                 sink,
                 cancellation,
@@ -759,6 +931,18 @@ class CodeSessionService:
             workspace_version=workspace.version,
             outcome=outcome,
         )
+
+    def _risks(self) -> Mapping[ToolName, ToolRisk]:
+        """Every registered tool's risk, from the specs themselves.
+
+        Read per turn rather than cached, and that costs nothing worth saving:
+        the registry is frozen at process start, so this is a dict comprehension
+        over a tuple that never changes. Caching it would add a second place the
+        answer lives, for a saving smaller than one schema validation.
+        """
+
+        assert self.tools is not None  # refused in `__post_init__`
+        return {spec.name: spec.risk for spec in self.tools.specs()}
 
     async def _project_files_for(
         self, *, principal: PrincipalContext, project_id: str | None
@@ -789,6 +973,7 @@ class CodeSessionService:
         history: tuple[Message, ...],
         asked: Message,
         tool_names: tuple[ToolName, ...],
+        risks: Mapping[ToolName, ToolRisk],
     ) -> AgentRunRequest:
         return AgentRunRequest(
             trace=TraceContext(agent_run_id=request.run_id),
@@ -799,19 +984,22 @@ class CodeSessionService:
             principal=request.principal,
             envelope=AuthorizationEnvelope(
                 allowed_tools=tool_names,
-                # Derived from the tool list rather than configured beside it.
-                # The ceiling exists to admit exactly one tool -- `sandbox_run`
-                # is the only `external` thing a coding session may be given --
-                # so two separate switches would be two ways to describe one
-                # decision, and the interesting bug is the pair disagreeing: a
-                # deployment that granted the tool and left the ceiling at
-                # `write` would offer the model a tool its own envelope denies,
-                # which costs a wasted turn ending in
-                # `outside_submitted_envelope`.
-                max_tool_risk=code_risk_ceiling(tool_names),
-                # `destructive` is armed unconditionally -- nothing grants such
-                # a tool today, and the day something does, the gate must
-                # already be there. Whether `external` joins it is ADR-058's
+                # Derived from what the offered tools say about themselves,
+                # rather than configured beside them: two switches are two ways
+                # to describe one decision, and the interesting bug is the pair
+                # disagreeing -- a deployment that granted a tool and left the
+                # ceiling below it offers the model a tool its own envelope
+                # denies, costing a turn that ends in
+                # `outside_submitted_envelope`. It admits `read` for a plan
+                # turn, `write` for an ordinary one, `external` where the
+                # sandbox is granted and `destructive` where `project_run` is,
+                # and none of those four is a branch anybody wrote here.
+                max_tool_risk=code_risk_ceiling(tool_names, risks=risks),
+                # `destructive` is armed unconditionally. It was armed before
+                # anything could trigger it, and ADR-077 then granted something
+                # that does: `project_run` runs a command on the user's own
+                # machine, and every call stops at a human. Whether `external`
+                # joins it is ADR-058's
                 # question: the gate F-05 armed early turned out to buy latency
                 # rather than consent (the card shows a digest, ADR-054), and
                 # the Task path has always run the same `sandbox_run` ungated,
@@ -834,7 +1022,9 @@ class CodeSessionService:
             # the gated text says "expect to wait, do not spend one", which is
             # an instruction to avoid the tool this deployment just freed).
             system_prompt=_system_prompt_for(
-                tool_names, sandbox_requires_approval=self.sandbox_requires_approval
+                tool_names,
+                sandbox_requires_approval=self.sandbox_requires_approval,
+                plan_only=request.mode == "plan",
             ),
             messages=(*history, asked),
             # Both, and they are not the same thing: the envelope says what
@@ -859,9 +1049,12 @@ class CodeSessionService:
 
 
 __all__ = [
+    "CODE_PROJECT_TOOLS",
+    "CODE_PROJECT_TOOLS_WITH_RUN",
     "CODE_TOOLS",
     "CODE_TOOLS_WITH_SANDBOX",
     "CodeCapacityError",
+    "CodeMode",
     "CodeRequest",
     "CodeRunNotPermittedError",
     "CodeRunRefusedError",
@@ -869,5 +1062,7 @@ __all__ = [
     "CodeSessionService",
     "CodeTurn",
     "CodeTurnBusyError",
+    "code_risk_ceiling",
     "new_code_session_id",
+    "read_only",
 ]

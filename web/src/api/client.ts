@@ -7,6 +7,7 @@ import type {
   ChatSessionView,
   CitedPassageView,
   CodeAskResponse,
+  CodeTurnMode,
   CodeSessionListResponse,
   CodeSessionView,
   CreateChatSessionResponse,
@@ -546,6 +547,7 @@ export async function askCode(
   sessionId: string,
   instruction: string,
   idempotencyKey: string,
+  mode: CodeTurnMode = "act",
   signal?: AbortSignal,
 ): Promise<CodeAskResponse> {
   return apiRequest(
@@ -554,7 +556,11 @@ export async function askCode(
     {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: { instruction },
+      // Always sent, including `"act"`. The server defaults it, but a body
+      // that omits the field leaves "which mode was this turn" answerable only
+      // by knowing the server's default -- and the answer is in the request
+      // log of the one turn somebody is trying to explain (ADR-0079).
+      body: { instruction, mode },
       ...(signal === undefined ? {} : { signal }),
     },
   );

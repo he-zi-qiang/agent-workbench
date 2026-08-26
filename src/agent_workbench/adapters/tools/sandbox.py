@@ -32,7 +32,7 @@ from agent_workbench.application.workspace import (
     WorkspaceSession,
 )
 from agent_workbench.application.workspace_scope import WorkspaceScope
-from agent_workbench.domain.errors import ErrorInfo
+from agent_workbench.domain.errors import ErrorInfo, ToolFailedError
 from agent_workbench.domain.sandbox import (
     SANDBOX_REMOTE_TOOL,
     SANDBOX_RUN_SCOPE,
@@ -80,8 +80,17 @@ _NAME_SCHEMA: dict[str, JsonValue] = {
 }
 
 
-class SandboxUnavailableError(RuntimeError):
-    """A sandbox tool ran outside a node that entered a workspace session."""
+class SandboxUnavailableError(ToolFailedError):
+    """A sandbox tool ran outside a node that entered a workspace session.
+
+    Derives from `ToolFailedError` rather than `RuntimeError` so that the
+    sentence survives. `ErrorInfo.from_exception` passes a message through only
+    for `AgentWorkbenchError`; everything else becomes `unhandled <ClassName>`,
+    on the reasoning that a third-party message is untrusted content of unknown
+    provenance. That reasoning does not cover a string written on the line
+    below, and the model is the reader here: handed the class name, it has
+    nothing to put in its report but the class name.
+    """
 
 
 class SandboxRefusedError(RuntimeError):

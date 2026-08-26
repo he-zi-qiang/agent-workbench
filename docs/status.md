@@ -28,6 +28,514 @@
 
 ---
 
+## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第二十批）：被缩短过的对话要自己说出来（ADR-081）
+
+上一批（ADR-080）让一次超窗的运行停下来并说出撞的是哪条天花板。这一批是另一半：
+撞到天花板的运行**把对话的中间概括掉然后继续**——前提是它**说出来**。
+
+理由与被否掉的做法见
+[ADR-081](./adr/0081-a-conversation-that-was-shortened-says-so.md)。关闭
+`docs/known-gaps.md` **D-06**。
+
+### 1. 一套完整的词表，一个都没有的发射点
+
+`ContextCompacted` 是 durable 事件、`recording_results → compacting → model_streaming`
+在转移表里是合法边、`ArtifactKind` 里有 `compaction_summary`——全都在，全都没人发射。
+D-06 把这记为**未接线**并且说得很准：「协议先于实现落地是对的，但在实现出现之前，
+事件类型的存在不构成能力。」
+
+顺带修掉一句**自己就是口径不实**的注释。`runtime/state.py` 的模块注释写着
+「`compacting` 可达且未用……**并且有一个测试断言当前运行时从不进入它**」——
+`grep -rn compacting tests/` 只有 `test_run_state_machine.py` 的一次合法性检查，
+**那个测试不存在**。这句话活得比它描述的东西还久。
+
+### 2. 五个决定，每一个都是先否掉了显然的做法
+
+| 显然的做法 | 为什么否掉 |
+|---|---|
+| 新建 `ports/context_compaction.py` + adapter | 会把一次真实的 provider 调用放到运行自己的核算之外：`ledger.usage`／`_priced`、`overrun_reason_for`、`ModelStarted`/`ModelCompleted`、`model_timeout_seconds`，以及 port 里刻意写成"取消消费流的 task"的取消契约，五件事全绕开 |
+| 从模型适配器返回 `ArtifactRef` | 它带 `tenant_id` 和内容 sha256，只由 artifact store 铸造；运行时既没有 store 也没有 principal，拼一个就是伪造签名。第一版 `summary_ref` 留 `None` |
+| 插一条 `user` 消息说"以下是摘要" | 把话塞进用户嘴里，审计记录会说一个人说过没人说过的话。也不是 `system`（那是回合开始时冻结的世界描述）。留下的是 `assistant`——因为它**是真的**，再加一行标记 |
+| `keep_last` 直接切 | 大约一半的时候会切在 assistant 的 `tool_use` 和回答它的 `tool` 消息之间，产出一个 provider 用 400 拒绝的列表——**正是 ADR-080 刚刚不再转述的那个症状** |
+| 头部一起删 | 第一条消息是这次运行"是关于什么"的那条，也是几家 provider 要求对话必须以之开头的那条 |
+
+### 3. 测试是不是装饰的，当场验了一次
+
+`tests/runtime/test_compaction.py::TestTheCutIsLegal::
+test_the_shortened_conversation_still_pairs_every_call` 把 1..12 对、每个 `keep_last`
+扫一遍，断言重建后每个 call 仍恰有一条 result。把那两行前向推进删掉再跑：
+
+```
+3 failed, 10 passed
+```
+
+三条一起红。**跑过这一步再说"有测试"**——不然它只是一段和实现同时写出来、
+因而必然同意实现的代码。
+
+### 4. 数字里唯一测量过的那个，不许被估计值挤掉
+
+`ContextCompacted.tokens_before` 是 provider 给出的、那次过大请求的 `input_tokens`
+——**测量值**。`tokens_after` 没有对应的测量（下一个请求还没发出去），所以它是
+`before` 按两份消息列表的字符比缩放而来。
+
+两个都估会把唯一一个测量值扔掉，并让这条事件和它旁边的 `ModelCompleted` 打架。
+
+### 5. 计花费，不计步数
+
+压缩调用的 token 和成本进 `BudgetUsage`——那是真实支出，**失败的那次也要记**，
+否则运行记录的花费和账单差着那一次。但它**不计一步**：`steps` 数的是 agent 循环走了
+几轮，压缩没有推进循环，计成一步会让一个逼近步数上限的运行被那个正在救它的东西掐死。
+
+### 6. 一个待决问题，写下来而不是留给以后的人现场发现
+
+`apps/task_worker/composition.py` 传的是 `prices=main_profile.prices`，所以一次
+main-profile 运行里的 compact 调用**按 main 的价格计费**。`[model.main]` 与
+`[model.compact]` 的 `model_id` 都是 `deepseek-chat` 期间这不产生误差；哪天它们分开，
+这一行就变成一个悄悄的记账错误。记在 ADR-081 §2.1。
+
+### 7. 差点抬错的一次版本号
+
+先把 `config_schema_version` 从 `1.18` 抬到了 `1.19`，然后被仓库自己的文档拦下：
+`docs/configuration.md` §2 版本表的 `1.14 → 1.15` 那一行写着「既有段下**新增带默认值的
+叶子**仍然不抬版」，而 ADR-080 的 `context_window_tokens` 就是同一批里的同一类先例。
+**已回退**，本批不动配置契约。
+
+### 门禁
+
+`agent-config-check --profile development` 与 `--profile test` 均 ok（需要三个
+`AW_DATABASE__*` DSN 从环境来）；`ruff format --check` + `ruff check` 全过；
+`pyright` **0 errors**；`pytest` **2925 passed / 774 skipped**。
+
+**本批新增 20 条后端测试**：`tests/runtime/test_compaction.py` 13 条（切点合法性、
+头部存活、概括器看到什么、事件里的数字）、`tests/runtime/test_agent_runtime.py::
+TestAConversationThatWasShortenedSaysSo` 7 条（缩短而非停止、关掉开关仍按 ADR-080 停、
+事件落盘、模型被告知、概括调用是一次普通的计量调用、概括没到就什么都不删、
+状态机真的进了 `compacting`）。
+
+能力梯子停在 **Implemented + Tested**。`COMPACTION_PROMPT` 写出来的概括质量没有对着
+真实模型验证过——本仓没有任何测试打到真实 DeepSeek，CI `quality` 离线——在有一份实测
+转录之前不得描述成 Demonstrated。
+
+---
+
+## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十九批）：一次运行知道自己下一个请求有多大（ADR-080）
+
+一段长对话越过模型窗口时，此前留下的全部证据是
+`provider_error: the provider rejected the request with HTTP 400`。三处都没说实话：
+`stop_reason: error` 说不出撞到了什么；消息把责任归给供应商，而供应商是对的；里面
+一个数字都没有，运维分不清"模型窗口太小"和"这一轮读了太多文件"。适配器**故意不读**
+error body（chat completion 的错误会把 prompt 回显出来），所以那条消息不可能变具体
+——**该变具体的地方不在适配器里**。
+
+决策记在 [ADR-080](./adr/0080-a-run-knows-how-large-its-next-request-is.md)。
+
+### 1. 分母是可选的，因为这个仓库不知道它
+
+`ModelProfileSettings.context_window_tokens`，与 `pricing` 完全同构：
+`config.default.toml` 的 `model_id` 是 `not-configured-deepseek-main`，占位符的窗口只能
+是编出来的；而 `base_url` 可以指向一个把窗口改短了的网关，所以也不能从名字推。
+
+**不配它就没有这道天花板**，过长的回合仍然死成 provider 400。这是不说的代价，写进了
+`docs/configuration.md` 而不是留白。
+
+**没有交叉校验**，这与 `max_cost_micro_usd` 的先例不矛盾：成本上限有"要了却给不了"的
+状态（设了上限、没配价格），这里没有——`context_soft_limit_ratio` 永远有值，只是没有
+东西可以取分数。
+
+### 2. 两条反例，都写进了测试
+
+**不能读累计。** `BudgetUsage.tokens` 跨轮累加，而每轮都重发整段对话——累计输入随轮数
+近似平方增长。十轮稳定 6,000 token 的 prompt 累计 60,000，对 64,000 的窗口已经"越界"，
+而其中没有一个请求接近过它。
+
+**不能读 `total`。** 它是一轮里流动的一切：prompt 加补全加 cache write，其中两样从来
+没在发出去的请求里。一个 prompt 40,000、补全 9,000、cache write 2,000 的回合，`total`
+是 51,000 会被掐掉，而实际发出去的那个请求离窗口还差四分之一。
+
+用的是供应商报的 `input_tokens`——"我上次发出去的东西有多大"，测出来的，不是拼出来的。
+
+### 3. 它是滞后的、是软的、第一轮不受保护——三条都写在 ADR 里
+
+下一个 prompt 比被比较的数大（多了补全和工具结果），ratio 的余量覆盖这个。检查在两轮
+之间，一次 `project_read` 能在检查通过之后再追加 48,000 字符。检查读的是"上一次请求"
+的大小，所以开局就超窗的 prompt 仍然死在 provider 400。
+
+一个试图预测下一个 prompt 的复合数，是"穿着测量精度的估计"，而且仍然会漏掉还没人要的
+那些工具结果。
+
+### 4. ratio 必须真的是决定线在哪的那个旋钮
+
+有一条测试专门钉这个：同一次运行、同一个窗口，`0.5` 停、`0.9` 过。否则它就是配置里
+一个什么都不决定的数——正是这个仓库反复删掉的形状（ADR-059）。
+
+顺带纠正一句上一批写下的话：`runtime.context_soft_limit_ratio` **不是**"无人读取"，它
+被 `run_semantics_snapshot()` 整块投影进 Task 的运行语义快照，改动它会改
+`run_semantics_revision`。本批让它在运行时也真的有了消费者。
+
+### 5. 不动配置契约
+
+`config_schema_version` 保持 `1.18`。既有段下新增带默认值的叶子不抬版——
+`docs/configuration.md` 的版本表自己写着这条规则，`[model.main.pricing]` 就是先例，
+它也没抬过版。
+
+### 门禁
+
+`agent-config-check --profile development` ok；`ruff` 全过；`pyright` **0 errors**；
+`pytest` **2905 passed / 774 skipped**。`web`：`tsc -b` 0 errors，`eslint` 干净。
+
+**本批新增 11 条后端测试**：`tests/runtime/test_budgets.py` 6 条（含两条反例）、
+`tests/runtime/test_agent_runtime.py` 5 条（含 ratio 真的决定线在哪那条）。
+`tests/architecture/test_config_ownership.py` 在本次改动中**先红后绿**——新叶子必须
+有主，守卫在工作。
+
+能力梯子停在 **Implemented + Tested**，且要连着这句一起读：**出厂 profile 里没有一个
+声明了窗口**，所以这道天花板在任何默认部署上都不生效——和成本上限一模一样，那里也一个
+价格都没配。打开它是一行配置。
+
+---
+
+## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十八批）：一个不能写的回合是另一种回合（ADR-079）
+
+上一批让写入变得不会静默覆盖。这一批加上「先说你要做什么」——因为在此之前，Code 的
+**每一个**回合从第一次工具调用起就武装着写进用户的真实仓库：`AskRequest` 只有
+`instruction` 一个字段，所有工具元组都含 `*_write`／`*_edit`，而 `write` 风险不在任何
+`approval_required_risks` 里。
+
+决策记在 [ADR-079](./adr/0079-a-plan-is-not-an-authorization.md)。**不动配置契约**。
+
+### 1. 先纠正一句话
+
+不能说「Code 面上没有任何只读开关」。执行侧的一半早就在：`project_write`／
+`project_edit` 带 `permission_scopes=("workspace:write",)`，缺 scope 会被
+`EnvelopePolicyEngine` 拒。它不是 plan mode 的理由有三条，都写进了 ADR：它是全局而非
+按回合的、与 Work 页 v2 的 `work` 节点共用（去掉就断 Task 导出）、且**对模型不可见**
+——模型照旧被提供写工具，中途才发现被拒。
+
+### 2. 三件事一起动，否则模型又为一个它不在的世界正确地行动
+
+**工具清单**按各自 `ToolSpec` 的 risk 收窄，**不按 `*_write`／`*_edit` 后缀**。后缀
+过滤是"风险写在第二个地方"，而且带通配符：第一个不守命名约定的工具（将来的
+`project_move`、任何 MCP 绑定）都会溜进一个已被告知"改不了任何东西"的回合。
+
+**信封的天花板**跟着落到 `read`，而且没人为它写分支——`code_risk_ceiling` 从命名两个
+工具的 if 链改成读被提供工具自己的 specs，`read` 就自然落出来了。旧写法对问题的判断
+是对的（不要第二张风险表），但它自己就是那张表，只有两行。
+
+**提示词**说明这一轮改不了任何东西，并且改掉两处已经不成立的话：纪律 2（"优先用 edit
+而不是 write"）在两者都没有的回合里是关于一个不存在的选择的建议；纪律 6 的"Name the
+files you touched"是在要一份它做不到的报告。
+
+### 3. 又一个被测试当场抓住的错
+
+`tools` 起初做成可选、缺失时回退到旧的 `write` 天花板。
+`test_a_turn_holding_the_run_tool_is_not_told_there_is_no_shell` 立刻红：一个被提供
+`project_run` 而天花板是 `write` 的回合，是信封否定自己所授工具的回合，结局是
+`outside_submitted_envelope`。改成在 `__post_init__` 里强制。
+
+API 侧的 registry 是每次调用重建的（`sandbox_run` 由 `startup` 事后填进
+`SandboxSlot`），所以服务拿到的是 `_LiveToolRegistry`。在装配期拍快照，会在恰恰授予了
+沙箱的部署上少掉那条 spec。
+
+### 4. 计划不授权任何东西
+
+「按这个计划执行」重发的是**同一条指令**、换成 act 模式，不是把计划正文发过去。理由
+写进 ADR §3：一个能授权 act 回合的计划就是审批，而本仓把审批留给 `destructive` 且要求
+把命令原样展示给人看（ADR-077 不变量 2）。一份几百字的计划不满足那个形状——人批准的是
+他们读到的散文，跑的是模型随后自己决定的一串调用。
+
+同样写下来的是它**没买到**什么：没有 git，没有 diff，计划是散文，随后那一轮不受它约束。
+
+### 5. 顺手了结不掉的一件事
+
+`policy.write_tools_require_approval` 是 `Literal[True]`、配置里写着 `true`、
+**`src/` 里零读者**，而写工具按构造不停在任何人面前。本 ADR **不接它**：plan mode 不是
+"写入停在人面前"，接上去只是让一个名字在新位置继续承诺它不做的事。记为
+`docs/known-gaps.md` **F-26（口径不实）**，两条出路都要自己的决定。
+
+### 门禁
+
+`agent-config-check` 两个 profile 均 ok；`ruff format --check`（586 文件）+
+`ruff check` 全过；`pyright` **0 errors**；`pytest` **2894 passed / 774 skipped**。
+`web`：`eslint --max-warnings 0` 干净，`tsc -b` 0 errors，`vitest run`
+**560 passed（35 文件）**，`vite build` 通过。
+
+**本批新增 4 条后端测试 + 4 条前端测试**：plan 回合被收窄且被告知、计划不授权后续
+回合、`read_only` 只收窄且保序、没有 spec 的名字抛异常。天花板的第四个取值与"每个被
+提供工具都在派生出的天花板之内"是加进既有那两条里的，半接线装配那条是把 ADR-078 的
+同名测试扩成两道闸——都不是新增的函数，所以不计。前端四条钉住"开关真的改变发出去的
+那一轮而不是只改样子"。
+
+能力梯子停在 **Implemented + Tested**。Code 的提示词从未对真实模型跑过，所以"模型在
+plan 回合里真的只做计划"是**未经证实的**——被证实的是它手里没有写工具，且信封会拒绝
+它提出的任何写。
+
+---
+
+## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十七批）：没读过的文件，不归你覆盖（ADR-078）
+
+上一批把 Code 的提示词修对了，包括第一条纪律「Read before you write」。这一批把那句
+散文变成前置条件——因为 `code_prompt.py` 自己写着规矩：没有别处执行的散文不该写进
+提示词，而这一条此前**在任何地方都没有被执行**。
+
+要关的是一次**安静的损失**：用户在编辑器里改了文件，模型拿三次调用之前读到的那份
+（或者根本没读过）整文件覆盖回去，工具返回 `ok`，步骤行写「写入项目文件」，报告写得
+很漂亮。这条转录与一次正常回合**逐字相同**，用户下次打开文件才会知道。
+
+决策记在 [ADR-078](./adr/0078-a-file-you-have-not-read-is-not-yours-to-overwrite.md)，
+ADR-072 §5 相应增加第六条不变量。**不动配置契约**，`config_schema_version` 保持 1.18。
+
+### 1. 两层，因为要挡的是两件事
+
+**工具层**：`application/file_read_receipts.py`，ContextVar 包着的每回合台账
+`path -> (size_bytes, modified_at, covers_whole_file)`。`project_write` 只在**替换
+已存在的路径**时查它——新建文件不销毁任何东西，要求先读一个不存在的路径是在用一句
+无法执行的话拒绝编码智能体最常做的事。
+
+`covers_whole_file` 是让这件事诚实的那个字段。一次窗口读（`offset`/`limit`）或一次
+非文本读都是**成功**的读，且都没有把文件交出去；把它们记成"读过"，就是给一次覆盖
+未读字节的写发绿灯——正是第一条纪律要挡的失败，现在还带着闸门的批准。它由
+`windowed_result` 的新回调 `note_read` 回传，而那正是它用来决定要不要打印窗口抬头的
+同一个判断：问一次用两处，而不是让调用方再切一次窗口然后指望两次结果一致。
+
+**store 层**：`ProjectFileStore.write` 新增 `if_unchanged: ProjectFileVersion | None`。
+工具层判断与字节落盘之间还有窗口——`store.read` 与 `store.write` 是两次独立的 `await`
+——用户的编辑器保存正好落在那种窗口里。stat 与写入放进**同一个 offload 闭包**，那个
+窗口就没了。这不是锁：另一个进程仍然可以插进来，它关掉的是本进程自己开的那个。
+
+`ProjectFileVersion` 带尺寸和时间戳两个字段。mtime 在保留纳秒的文件系统上是好检查，
+在只保留整秒的文件系统上是差检查——那里用户在读之后同一秒内的保存不可见。这条有它
+自己的测试（`test_a_same_mtime_different_size_still_refuses`，用 `os.utime` 还原
+时间戳来逼出粗时钟的行为）。
+
+### 2. 第一版把整道闸打开了，两次调用就能绕过
+
+值得单写，因为它是这批最贵的一个教训。两条写路径的"写完刷新回执"最初写成了同一句，
+实测两次调用即可洗白一个从没读过的文件：
+
+```
+project_edit(path="big.py", find="MARKER", replace="MARKED")   # 30 KB，从没读过
+  -> 记下 covers_whole_file=True
+project_write(path="big.py", content="# gone\n")               # 通过，30 KB 没了
+```
+
+原因是 `project_edit` 拿到的是片段：**读文件的是 store，不是模型**。现在 edit 只
+**沿用**编辑之前那条回执的覆盖范围，编辑之前没有回执、编辑之后也不记；只有
+`project_write` 产生全量回执，因为模型交出了每一个字节。
+
+这个洞不是想出来的，是拿真工具跑出来的——三条测试钉住它，包括那条 30 KB 的实测样本。
+
+### 3. `project_edit` 不查回执，但必须传前置条件
+
+它自己在一句话之前读过文件，且 `count(find) == 1` 已经挡掉大部分错记，所以它**不**
+需要回执——把安全的那个工具也拦住，只会把模型推向危险的那个。但它必须把自己那次读的
+版本传下去：不传的话，新参数只保护了两条写路径里较弱的那一条。
+
+这条竞态是真的测出来的，不是设想的：`_SavesWhileYouRead` 是一个只包了 `read` 的
+store，在 read 与 write 之间让"用户"保存一次。用包装而不是 monkeypatch，因为
+`FilesystemProjectFileStore` 有 `__slots__`，属性替换不了。
+
+### 4. 拒绝分四种句子，因为下一步不同
+
+没有回执 → 读了再写；回执是窗口 → 补读，或者改用 `project_edit`；文件动过且本回合
+跑过命令 → 可能是你自己的 `black .`，重读；文件动过且本回合没跑命令 → 别人在动这个
+文件，重读**并且在报告里说**。
+
+最后两条是同一个事件的两句话。把格式化器动过的 mtime 说成"用户编辑了它"，模型会停下
+来报告；把用户的编辑说成"你自己的命令干的"，模型会闷头重写。措辞写成猜测
+（"may have done it"），因为这里没有任何东西能真正归因一次改动。
+
+`ProjectFileChangedError` 用 `invalid_tool_input` 而不是新增第十五个 `ErrorCode`：
+`project_edit` 早就用这个码回答"你以为在那儿的片段不在那儿"，这是同一个事件的另一条
+写路径。**但**这个码在别处是终局的（提示词第 3 条纪律说"重试同样的调用不可能成功"），
+而这里重试恰恰是对的——所以每一句消息都点名那次让重试变得不同的读。
+
+### 5. 一个不接线就炸的闸
+
+`ReadReceipts` 的每个方法在未进入回合时**抛异常**，`CodeSessionService.__post_init__`
+拒绝"给了 `project_scope` 却没给 `read_receipts`"的装配。另外两种形状都更糟，且都在
+转录里显得正常：临时造一个空台账，会对每一次写回答"你没读过"——一个什么都拒绝的闸看
+起来像在工作，实际没接线；返回一个私有台账，会把每次读记进没人查的表——一个没接线的
+闸看起来像在工作。
+
+### 6. 这道闸喂不满，这写进了 ADR
+
+`PUT /v1/projects/{id}/file`、用户的编辑器、`git`、`project_run`，都能绕过工具改动
+目录。回执会因此看见它没造成的合法 mtime 移动，模型被拒一次、重读一次、再写。
+**这是代价不是缺陷**：多一次读，换掉一次静默的数据丢失；反过来的错误没有第二次机会。
+
+同样写进 ADR 的：这**不**降低 `project_write` 的风险等级。`approval_required_risks`
+仍然只有 `("destructive",)`，`project_write` 仍然是 `write`，按构造不停在人面前。这道
+闸挡的是"覆盖你没看过的东西"，不是"未经批准就写"。
+
+### 门禁
+
+`agent-config-check --profile development` ok；`ruff format --check`（586 文件）+
+`ruff check` 全过；`pyright` **0 errors**；`pytest` **2886 passed / 774 skipped**。
+
+**本批新增 32 条后端测试**：`tests/adapters/test_project_tools.py::TestAFileYouHaveNotReadIsNotYoursToOverwrite`
+17 条、`tests/adapters/test_project_file_store.py::TestAConditionalWrite` 5 条、
+`tests/application/test_file_read_receipts.py` 9 条、
+`tests/application/test_code_session.py::test_a_project_capable_session_without_receipts_is_refused_at_assembly`
+1 条。`ProjectFileVersion` 进 `tests/contracts/test_port_contracts.py` 的样本表。
+
+能力梯子停在 **Implemented + Tested**。这条路径从未对真实模型跑过，所以"模型被这样
+拒绝之后会去重读"是**未经证实的**——被证实的是它拿到了一句指名下一步的话，以及那次
+写没有落盘。
+
+---
+
+## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十六批）：Code 的提示词第一次描述它真正所在的世界，长文件的尾巴第一次够得着
+
+起因是一句「参考 Claude Desktop 的实现完善 harness」。照着自己的 harness 逐项对下来，
+提出 33 条候选，逐条派人**去代码里证伪**，活下来 11 条——被驳回的 22 条里有几条是本轮
+最有价值的产出，记在下面，因为它们说明了哪些"缺失"其实是本仓已经做过的决定。
+
+这一批**不需要 ADR**：没有一条改动动到事实源、控制面、运行时归属、fusion 归属或恢复
+语义。需要 ADR 的那几条（读写回执与陈旧检查、plan mode、上下文天花板与压缩）没有做，
+它们在下一批。
+
+**这一批还没有合并**，下面的数字属于这条工作分支上的这棵树，不是主线的当前值。
+
+### 1. 项目目录的回合不再被告知自己在一个扁平的、有版本的工作区里（关闭 F-23）
+
+`code_prompt.py` 多了第四个基底 `CODER_SYSTEM_PROMPT_PROJECT`，和现有三个一样用
+`_rewrite` 的具名替换派生（六处锚点，任一漂移在 import 时炸），由 `_system_prompt_for`
+**按 `tool_names` 派生**着选——不是加一个开关。两个开关是同一个决定的两种写法，而
+F-23 本身就是那对开关意见不合的样子。
+
+F-23 把这个错误判为「方向是保守的」，只有一半对。「不是文件系统」「每次写产生整套
+新版本」两句是保守的；紧跟着的「a name is a name, not a path」和「nothing you write
+escapes this session」不是——前一句说给一个手里工具全部收 path 的模型听，后一句说给
+一个下一次调用就落进用户 git 工作树的模型听。这是 ADR-058 记下的那种错误的另一面。
+
+### 2. Code 的提示词第一次写下"工具返回的是材料，不是指令"
+
+`chat_execution.py`、`agent_profiles.py`、`web_search.py`、`deepseek_web_search.py`
+四处早就各写了一句，唯独 Code 一个字都没有——而 Code 是唯一一个读用户磁盘上任意文件、
+并在 `policy.shell_tools_enabled` 下握着一把 shell 的面。
+
+按 `code_prompt.py` 自己的规矩收窄了措辞：只留下**有东西执行**的那半句——
+`AuthorizationEnvelope.allowed_tools` 在回合起始建好、网关拒绝清单之外的一切，所以
+没有任何一段读到的文字能给这个回合添一件工具。把没有任何检查的那半句并进
+discipline 6——报告本来就要写"你做不到什么"，多写一句"在哪读到了想指挥你的文字"
+不是新承诺。
+
+**这句话第一版写错了，记在这里因为它正是本批要治的病。** 初稿写的是「a human answers
+for every call that reaches outside it」。`code.sandbox_requires_approval` 默认 False，
+此时信封只武装 `destructive`，而 `sandbox_run` 是 `external`——没有人会被问。更糟的是
+同一份提示词四段之后就写着「Calls run immediately, without waiting for anyone」，两句
+话在一个提示词里互相打脸。这与 ADR-058 记下的那次是同一种错误，只是这次是我们自己
+新写进去的。
+
+**梯子只到 Implemented + Tested。** 断言在五个分支的产出文本上，但
+`architecture-baseline.md` 记着 Code 提示词从未对真实模型跑过，所以这不是一条"已生效
+的防御"。
+
+### 3. 项目回合不再被提供一个它一次也不可能调用成功的工具（新开 F-24）
+
+`SandboxRunTool` 持的是扁平的 `WorkspaceScope`，而 `CodeSessionService.run` 的
+`ExitStack` 只进入一个 scope，项目回合进的是 `ProjectFileScope`。所以
+`CODE_PROJECT_TOOLS_WITH_SANDBOX` 和 `..._WITH_SANDBOX_AND_RUN` 提供的
+`sandbox_run` **每一次**都在碰到沙箱之前抛 `SandboxUnavailableError`；模型收到的是
+`unhandled SandboxUnavailableError`，照 discipline 3 不再重试，然后报告它跑不了代码。
+在 `config.demo-local.toml` 下每个会话都有项目，也就是每一次。
+
+两个元组退场，`_code_project_tools` 不再读 `code.sandbox_enabled`，
+`_assert_project_tuples_enter_their_own_scope()` 在 import 时把不变量钉住（形状照
+ADR-075 的 `_assert_no_profile_offers_a_ledgered_tool`，只是这些元组不是从配置搭出来
+的，所以检查提前到 import）。让容器真正看见项目目录是能力变更，要动 ADR-029 的
+`ISOLATION_FLAGS`，记为 **F-24 拒绝**。
+
+顺带让句子活下来：`domain/errors.py` 里的 `ToolFailedError` 在 `src/` 里**零消费者**，
+三个 `*UnavailableError` 改从它派生即可——`ErrorInfo.from_exception` 只对
+`AgentWorkbenchError` 放行 message，别的一律压成 `unhandled <ClassName>`。那条理由
+（第三方 message 是来路不明的不可信内容）盖不住一个写在上一行的字符串。
+
+### 4. 空文件的读取会说话；长文件的尾巴够得着了
+
+读一个零字节文件返回的是空 tool message，模型读作"这次调用被忽略"，于是重发——
+`MAX_IDENTICAL_CALLS = 3` 之后整轮 `tool_failed`。同模块的 `project_list`、
+`workspace_list`、`project_grep` 全都有空分支，只有 read 没有。
+
+更重的一条：超过 48,000 字符的文本以 **success** 返回头部，而**没有任何读调用**能到达
+尾部。项目回合尤其无处可去——它既没有 `project_run`（除非部署打开
+`policy.shell_tools_enabled`），第 3 节之后也明确没有容器。
+
+`read_window` / `describe_read_window` 是 `domain/workspace.py` 里的纯函数，
+`MAX_INLINE_READ_CHARS` 一并搬过去（此前在两个 adapter 里各定义一次，各写一句话）。
+行窗口与字符上限**哪个先咬合用哪个**，并且返回是谁停的：一个 `limit` 咬合意味着"下次
+多要几行"，一个天花板咬合意味着正相反。单行长过整个天花板（压缩过的 bundle、一行的
+JSON）是唯一会丢字节的情况，所以它是独立的 `line_cut` 标志、独立的一句话和一个确切的
+字符数，而不是混进截断里。
+
+真正管用的那条测试是**照着模型会走的链走一遍**：读、取 `next_offset`、再读，最后断言
+拼回来的字节和原文逐字相等。两个缺陷只有它抓得住，别的测试一个都抓不到：一是一行正文
+塞得进天花板、而它的 `\n` 塞不进，于是整行被切、报告"少了 1 个字符"、还多花一次调用；
+二是窗口停在被切的那一行时，报出的 offset 会跳过这一行剩下的部分——而当这一行就是最后
+一行时，那句话里印的是字面量 `offset=None`，一个 schema 会拒绝的值。
+
+`> MAX_READ_BYTES`（2 MiB）那条**是拒绝不是截断**，它的消息不带 offset 尾巴——那个文件
+没有任何 offset 到得了，写上去只会买来一串同样失败的调用。
+
+### 5. 两句关于怎么用工具的话
+
+`_HOST_COMMANDS_GUIDANCE` 此前只把模型往 shell 推。现在多一段：读文件、列目录、找
+模式各自有工具，它们立刻返回、不用等人；一次花在这些事上的 `sed`／`cat`／`grep` 花掉的
+是一个人的注意力和这一轮的时钟——`config.code-local.toml` 把 `approval_timeout_seconds`
+砍到 120、`turn_timeout_seconds` 砍到 360，三次这种调用就能耗尽一轮。
+
+另一句进了共享基底：互不依赖的读与搜索可以在同一条消息里一起提出。`plan_tool_batches`
+本来就会成组跑它们，提示词从没说过。**不引任何并行度数字**——`dependencies.py` 建
+`ClaudeLikeAgentRuntime` 时没有传 `max_parallel_read_tools`，Code 实际吃的是
+`DEFAULT_MAX_PARALLEL_READS`，写死一个配置里的数字就是 ADR-077 §2.4 要治的那种假话。
+
+### 6. 三处口径不实（发现即修，不排期）
+
+- `docs/known-gaps.md` 头部写 `配置 schema 1.17`，`settings.py:154` 与
+  `config.default.toml:15` 都是 `1.18`；`CLAUDE.md` 同。复发的位置正是那句自称"本次
+  重测"的话里。
+- `architecture-baseline.md` §17「今天没有任何被授予的工具会触发它——Code 只拿到五个
+  工作区工具」：ADR-057 接上 `sandbox_run`、ADR-077 加了 `project_run` 之后就不成立
+  了，F-05 早已关闭。仍然为真的是闸门的形状（`write` 不在 `approval_required_risks`
+  里），改成只说那一句。
+- `web/src/components/stepGroups.ts` 的 `TOOL_VERBS` 缺 `project_grep` 与
+  `project_run`，注释还断言前者不存在。于是全产品里最危险的那个工具在步骤行上渲染成
+  裸标识符 `project_run`——正是用户看着决定要不要批准的那一行。补两条，且
+  `project_run` 不叫「运行代码」（那是 `sandbox_run` 的容器），叫「在本机执行命令」。
+
+### 被驳回的候选里，值得记下的三条
+
+- **给 read 加 `cat -n` 行号**：会开一条无人看守的损坏路径。两个 write 工具整文件替换
+  它们收到的文本，而 discipline 1／2 教的正是"读完再整文件写"——模型读到 `1\tdef f():`
+  再写回去，行号就进了文件，落在用户真实磁盘上、没有版本、没有 undo。
+- **读写回执（"读过才准写"）**：提案的检查会在 discipline 1 警告的那些情况下**通过**。
+  `ProjectReadTool` 有三种 success，其中两种并没有把文件交给模型（非文本、48,000 截断），
+  而 `MAX_INLINE_WRITE_CHARS = 96_000`——48k 到 96k 之间的文件因此可以整份写、只能读到
+  一半。这一条不是不做，是要做对，它需要 ADR（下一批）。
+- **`runtime.context_soft_limit_ratio` 无人读取**：`rg` 只找到三处声明，但它是被
+  `run_semantics_snapshot()` 整块投影进 Task 的运行语义快照的，`ownership.yaml` 标着
+  `lifecycle: task_snapshot` 且有架构测试守着。改动它会改 `run_semantics_revision`。
+
+### 门禁
+
+`agent-config-check --profile development` 与 `--profile test` 均 ok；
+`ruff format --check`（584 文件）+ `ruff check` 全过；`pyright` **0 errors**；
+`pytest` **2855 passed / 774 skipped**。`web`：`eslint --max-warnings 0` 干净，
+`tsc -b` 0 errors，`vitest run` **556 passed（35 文件）**，`vite build` 通过。
+
+（`tsc -b` 而不是 `tsc --noEmit -p tsconfig.json`：后者跳过测试文件，改了共享类型之后
+会假绿。`agent-config-check` 需要三个 `AW_DATABASE__*` DSN 从环境来，缺了会报
+`database.listen_dsn Field required`——那是设计如此，不是配置缺失。）
+
+**本批新增 22 条后端测试**：`tests/domain/test_workspace.py::TestReadWindow` 9 条、
+`tests/adapters/test_project_tools.py::TestReadingAFileTheModelCannotHoldAtOnce` 5 条、
+`tests/adapters/test_workspace_tools.py` 3 条、`tests/application/test_code_session.py`
+5 条（提示词选择的七种组合、不可信内容边界在五个分支上、锚点漂移在 import 时炸）。
+`TestExclusivity` 里那条沙箱共享名的断言被换成了反过来的那条，净增 0。
+
+**没有一条改动可以被描述成 Demonstrated**：这一批全部是散文与工具输出的形状，而
+`architecture-baseline.md` 记着 Code 从未对真实模型跑过。
+
 ## 2026-08-24（未合并，分支 `code/a-command-on-this-machine-is-shown-before-it-is-run`，第十五批）：Code 会话能搜真实目录了，也能在里面跑命令了——而跑之前那条命令第一次真的被人看见
 
 起因是产品侧的一句话：「我想要 codex 和 Claude Code 那种」。照着查下来，第一件事是这句话

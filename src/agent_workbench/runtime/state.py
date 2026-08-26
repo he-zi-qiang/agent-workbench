@@ -11,9 +11,12 @@ cancelled from any non-terminal phase -- a budget is checked before a turn
 starts, and cancellation is observed between tool calls. Those edges are listed
 explicitly rather than left implicit.
 
-``compacting`` is reachable and unused. The vocabulary is frozen by the
-baseline, context compaction itself belongs to a later work package, and a test
-asserts the current runtime never enters it.
+``compacting`` is entered by ``ClaudeLikeAgentRuntime`` when a run is over its
+context soft limit and ``runtime.context_compaction_enabled`` is on (ADR-0081).
+It was reachable and unused from the baseline until 2026-08-25; the sentence
+here used to add that "a test asserts the current runtime never enters it",
+which was not true of any test in the repository -- the claim outlived whatever
+had once checked it.
 """
 
 from __future__ import annotations
