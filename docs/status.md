@@ -28,6 +28,97 @@
 
 ---
 
+## 2026-08-26（未合并，分支 `fix/compaction-must-prove-it-helped`，第二十一批）：压缩必须证明它起了作用
+
+上一批合进 `main` 之后，一轮对抗性复查对着那次提交跑了四个 lens，**13 条存活、9 条被
+驳回**。存活里有一条是 critical，而且它把上一批想修的东西修回去了一半。这一节记录**被
+自己的复查抓住的错**，因为这批的价值几乎全在这里。
+
+### 1. critical：压缩从来没有检查过自己有没有让对话变小
+
+`_compacted()` 过去只要"`plan_compaction` 找到了可删的消息 + 概括器返回了非空文本"就
+返回成功，然后调用方**无条件**把 `last_input_tokens` 清零、把 ADR-080 的天花板解除武装。
+唯一能发现问题的那个数字——`scaled_tokens_after(...)`——算出来只是为了写进事件，**从未
+和任何东西比较过**。
+
+而 `plan_compaction` 是按**消息条数**切的。所以被删的可以是四条短消息，而留下的尾巴里
+正躺着那个 60 KB 的工具结果。复查跑出来的实测：
+
+```
+三条 ContextCompacted：removed=4/3/3，50000->50000、70000->69976、70000->69984
+                        （运行自己的记录说：省下 0.0% ~ 0.03%）
+模型实际收到的对话：     83 -> 60154 -> 120152 -> 180150 字符，单调增长
+十一次 provider 调用：   三次在 70,000 token 打 64,000 的窗口
+终局：                   provider_error 'HTTP 400'
+```
+
+**正是 ADR-080 存在的意义所在的那个症状，被 ADR-081 亲手放了回来。** 关掉压缩的同一个
+运行干净地停在 `context_limit` 并带着数字。
+
+修法：`tokens_after` 先过 `context_reason_for` 那一关，仍在软上限之上就不算成功；并且
+成功时带估算值走而不是清零。
+
+### 2. `conversation_chars` 同时在两个方向上是错的
+
+同一个表达式里：`message.text()` 加一遍散文，紧接着的 `getattr(block, "text", "")` 循环
+**又加一遍**（`TextBlock` 也应答 `.text`）；而 `ToolUseBlock` 没有 `.text`，于是一次工具
+调用只贡献了**它自己名字的长度**。
+
+在这个仓库里，一段编码对话里最大的单个东西就是工具调用的参数——`workspace_write` 把整个
+文件装在 `arguments["content"]` 里，上限 `MAX_INLINE_WRITE_CHARS`。它被估值为 15 个字符。
+实测：一段约 16,600 字符的三消息对话，数出来是 **111**。
+
+这是 `ContextCompacted` 唯一发布的那个比值的**分子和分母**，所以事件在删掉四条消息之后
+报告 `tokens_after == tokens_before`——读起来是"压缩什么也没省下"，真相是"这个计数看不见
+被删掉的东西"。
+
+### 3. 概括途中被取消，运行报的是 `context_limit`
+
+这是循环里唯一一次结果不经过 `_terminal_for_turn` 的模型调用。被取消的回合返回"空文本、
+无错误"，与"概括器什么也没说"同形，于是被读成"没能缩短"，运行归到 `context_limit`。
+**有人按了停止，却被告知是模型窗口的错**——ADR-080 要终结的那种归因错误。
+
+### 4. 一条测试是装饰品，而且正是最需要不是装饰品的那一条
+
+`test_the_run_state_machine_actually_enters_compacting` 只断言了运行完成 + 有
+`ContextCompacted` 事件。两者都不依赖 `machine.to("compacting")`——`recording_results →
+model_streaming` 本来就是合法边。**把那行删掉，测试照绿。**
+
+上一批为切点边界跑了变异检查（3 failed, 10 passed），却**没有**给这一条跑——而它恰恰是
+同一次提交里改写 `state.py` 注释的全部依据。现在它监视状态机本身，并断言进出的边。
+
+### 5. `ModelStarted` 记的是一个这次调用没到达过的模型
+
+`_stream_model` 写的是构造时定死的 main 标签，而适配器按 `ModelRequest.model_profile`
+分派。`dependencies.py` 里 `model_label` 上方的注释自己写着这条规则："an event log that
+disagrees with what happened, which is the one thing it may not do."
+
+而两个 profile 在真实配置里**已经**不同：`config.code-local.toml` 与
+`config.demo-local.toml` 的 main 是 `deepseek-v4-flash`、compact 是 `deepseek-chat`。
+ADR-081 §2.1 和上一节 §6 都把这个分歧写成了"将来的事"，这也一并改了——今天不产生记账
+误差的真实前提是**没有一份配置声明过价格**。
+
+### 6. 这次每一条修复都跑了变异检查
+
+上一节声称的纪律，这次逐条执行：
+
+| 把修复改回去 | 变红的测试 |
+|---|---|
+| `cut <= 2` → `cut <= 1` | 2 条 |
+| 删掉 `machine.to("compacting")` | 1 条 |
+| 删掉压缩后的取消检查 | 1 条 |
+| 删掉"证明它起了作用"那一关 | 1 条 |
+| `conversation_chars` 改回旧版 | 3 条 |
+
+八条测试，没有一条是和实现同时写出来、因而必然同意实现的。
+
+### 门禁
+
+`ruff format --check` + `ruff check` 全过；`pyright` **0 errors**；
+`pytest` **2931 passed / 774 skipped**（本批新增 6 条）。
+
+---
+
 ## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第二十批）：被缩短过的对话要自己说出来（ADR-081）
 
 上一批（ADR-080）让一次超窗的运行停下来并说出撞的是哪条天花板。这一批是另一半：
@@ -88,10 +179,13 @@ test_the_shortened_conversation_still_pairs_every_call` 把 1..12 对、每个 `
 
 ### 6. 一个待决问题，写下来而不是留给以后的人现场发现
 
-`apps/task_worker/composition.py` 传的是 `prices=main_profile.prices`，所以一次
-main-profile 运行里的 compact 调用**按 main 的价格计费**。`[model.main]` 与
-`[model.compact]` 的 `model_id` 都是 `deepseek-chat` 期间这不产生误差；哪天它们分开，
-这一行就变成一个悄悄的记账错误。记在 ADR-081 §2.1。
+`apps/task_worker/composition.py` 与 `apps/api/dependencies.py` 传的都是
+`prices=main_profile.prices`，一次 main-profile 运行里的 compact 调用**按 main 的价格
+计费**。今天无误差的真实前提是**没有一份配置声明价格**（`grep micro_usd_per_mtok
+config/*.toml` 为空，`_priced()` 恒返回 0）——**不是**两个 profile 指着同一个模型：
+`config.code-local.toml` 与 `config.demo-local.toml` 的 main 已经是 `deepseek-v4-flash`
+而 compact 仍是 `deepseek-chat`，而这两份正是 `dev.sh code-api` / `demo-worker` 跑的。
+开压缩的同时打开价格之前，必须先给运行时一份按 profile 的价格表。记在 ADR-081 §2.1。
 
 ### 7. 差点抬错的一次版本号
 

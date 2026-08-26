@@ -937,6 +937,16 @@ def _assemble_chat(
     model_label = (
         main_profile.model_id if main_profile is not None else config.model.provider
     )
+    # ADR-081 makes one call per run under `[model.compact]`, and the adapter
+    # dispatches on the profile name -- so that call has to be recorded under
+    # the model it actually reached. Not the same string as `model_label` in
+    # any shipped profile that matters: `config.code-local.toml` and
+    # `config.demo-local.toml` both run `deepseek-v4-flash` as main against
+    # `deepseek-chat` as compact.
+    compact_profile = config.model.profiles.get("compact")
+    compact_model_label = (
+        compact_profile.model_id if compact_profile is not None else None
+    )
     # Chat runs are priced by the same profile they are labelled with. Absent
     # when the deployment configured no prices, which leaves every chat spend
     # at zero and every chat cost ceiling refused -- see ClaudeLikeAgentRuntime.
@@ -994,6 +1004,7 @@ def _assemble_chat(
             ),
             policy_identity=policy_identity,
             model_label=model_label,
+            compact_model_label=compact_model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
             context_window_tokens=model_context_window,
@@ -1012,6 +1023,7 @@ def _assemble_chat(
             ),
             policy_identity=policy_identity,
             model_label=model_label,
+            compact_model_label=compact_model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
             context_window_tokens=model_context_window,
@@ -1141,6 +1153,7 @@ def _assemble_chat(
                 ),
                 policy_identity=policy_identity,
                 model_label=model_label,
+                compact_model_label=compact_model_label,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
                 context_window_tokens=model_context_window,
@@ -1169,6 +1182,7 @@ def _assemble_chat(
                 ),
                 policy_identity=policy_identity,
                 model_label=model_label,
+                compact_model_label=compact_model_label,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
                 context_window_tokens=model_context_window,
@@ -1276,6 +1290,7 @@ def _assemble_chat(
             # coding session rather than to "the API".
             policy_identity=f"{policy_identity}-code",
             model_label=model_label,
+            compact_model_label=compact_model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
             context_window_tokens=model_context_window,
