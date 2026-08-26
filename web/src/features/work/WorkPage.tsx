@@ -118,6 +118,11 @@ import {
   type WorkspaceWriteGroup,
   type TimelineGap,
 } from "./workTimeline";
+import {
+  readDelegations,
+  titleWithDelegation,
+  type DelegationFacts,
+} from "./delegations";
 
 const CANCELLABLE_STATUSES = new Set<TaskStatus>([
   "queued",
@@ -371,6 +376,12 @@ export function WorkPage() {
   }, [timeline.events]);
   const taskEvents = useMemo(
     () => timeline.events.filter((event) => event.graph_node_id === null),
+    [timeline.events],
+  );
+  // Read once per page rather than per row: every row would otherwise rescan
+  // the whole timeline for the delegation that names its run.
+  const delegations = useMemo(
+    () => readDelegations(timeline.events),
     [timeline.events],
   );
   // The stream above shows what arrived; this is what the server said did not.
@@ -1287,6 +1298,7 @@ export function WorkPage() {
                       if (selectedTaskId === undefined) return;
                       setOpened({ taskId: selectedTaskId, artifact });
                     }}
+                    delegations={delegations}
                     stageEvents={stageEvents}
                     status={selectedTask.status}
                     taskEvents={taskEvents}
@@ -1577,6 +1589,7 @@ function TaskStepStream({
   status,
   stageEvents,
   taskEvents,
+  delegations,
 }: {
   lifecycle: Lifecycle;
   loading: boolean;
@@ -1589,6 +1602,11 @@ function TaskStepStream({
   status: TaskStatus;
   stageEvents: Map<string, EventEnvelope[]>;
   taskEvents: EventEnvelope[];
+  // Which runs in this stream were started by another one (ADR-082). A
+  // delegated run's events land on its parent's node, so they arrive in the
+  // right stage already -- what they lack is any sign that a different agent
+  // produced them.
+  delegations: ReadonlyMap<string, DelegationFacts>;
 }) {
   if (loading) return <LoadingLine label="正在读取执行过程" />;
 
@@ -1622,7 +1640,9 @@ function TaskStepStream({
   return (
     <StepStream
       ariaLabel="执行过程"
-      eventTitle={eventTitle}
+      eventTitle={(event) =>
+        titleWithDelegation(eventTitle(event), event, delegations)
+      }
       isKnownEvent={(event) => isKnownEventType(event.event_type)}
       meta={{ title: "运行记录", events: taskEvents }}
       onOpenArtifact={onOpenArtifact}

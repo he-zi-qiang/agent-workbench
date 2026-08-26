@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Header, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_workbench.application.run_tree import RunNode
 from agent_workbench.application.tasks import (
     DEFAULT_PAGE_LIMIT,
     MAX_PAGE_LIMIT,
@@ -36,6 +37,12 @@ from agent_workbench.ports.task_registry import TaskRun
 TASKS_PREFIX = "/v1/tasks"
 MAX_CURSOR_LENGTH = 148
 MAX_CANCEL_REASON_LENGTH = 1024
+#: Bound on the ``run_id`` a client may send to narrow a timeline.
+#:
+#: Generous next to any id this system mints, and bounded anyway because it is
+#: transport input: an unbounded query parameter is a way to make the server
+#: build an arbitrarily long SQL parameter for a row that cannot exist.
+MAX_RUN_ID_LENGTH = 128
 
 
 class InvalidTaskCursorError(ValueError):
@@ -144,6 +151,26 @@ class TaskTimelineResponse(BaseModel):
     events: tuple[EventEnvelope, ...]
     cursor: str | None = None
     skipped_sequences: tuple[int, ...] = ()
+
+
+class TaskRunTreeResponse(BaseModel):
+    """Which runs this Task holds, and which of them started which (ADR-083).
+
+    The navigation half. A client renders this to know what is in the stream and
+    then asks ``/timeline?run_id=...`` for whichever run somebody opened -- two
+    requests with very different costs, which is why they are two endpoints
+    rather than one that always did both.
+
+    ``complete`` is ``False`` when the read stopped at the event ceiling. It is
+    the same kind of claim ``skipped_sequences`` makes one model up: a tree built
+    from part of a stream can be missing whole branches, and without the flag a
+    truncated answer looks exactly like a Task that delegated less.
+    """
+
+    task_id: Identifier
+    stream_id: Identifier
+    roots: tuple[RunNode, ...] = ()
+    complete: bool = True
 
 
 class CancelTaskRequest(BaseModel):
@@ -311,6 +338,7 @@ async def timeline(
     request: Request,
     cursor: Annotated[str | None, Query(max_length=MAX_CURSOR_LENGTH)] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    run_id: Annotated[str | None, Query(max_length=MAX_RUN_ID_LENGTH)] = None,
 ) -> TaskTimelineResponse:
     dependencies = dependencies_of(request)
     after = _decode_cursor(cursor)
@@ -319,6 +347,11 @@ async def timeline(
         task_id,
         after=after,
         limit=limit,
+        # Narrowing only. It selects among events this principal is already
+        # entitled to -- the Task read above is what decides that -- so an
+        # unknown or someone else's run id answers with an empty page rather
+        # than with anything about whether that run exists.
+        run_id=run_id,
     )
     return TaskTimelineResponse(
         task_id=recorded.task_id,
@@ -330,6 +363,21 @@ async def timeline(
         # above, and nothing in this module can tell that from the end of the
         # stream.
         skipped_sequences=recorded.skipped_sequences,
+    )
+
+
+@router.get("/{task_id}/runs", response_model=TaskRunTreeResponse)
+async def runs(task_id: str, request: Request) -> TaskRunTreeResponse:
+    dependencies = dependencies_of(request)
+    tree = await dependencies.task_service.run_tree(
+        dependencies.principals.resolve(request),
+        task_id,
+    )
+    return TaskRunTreeResponse(
+        task_id=tree.task_id,
+        stream_id=tree.stream_id,
+        roots=tree.roots,
+        complete=tree.complete,
     )
 
 

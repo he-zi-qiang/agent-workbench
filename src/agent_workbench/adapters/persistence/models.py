@@ -800,6 +800,11 @@ events = Table(
     UniqueConstraint("stream_id", "sequence", name="uq_events_stream_sequence"),
     # The replay query: one stream, everything after a cursor, in order.
     Index("ix_events_stream_sequence", "stream_id", "sequence"),
+    # The narrowed replay (ADR-083): one run inside one stream, still ordered
+    # and cursored by sequence. `sequence` is on the end rather than omitted
+    # because the read orders by it -- without it the planner finds the rows
+    # and then sorts the stream to put twelve of them in order.
+    Index("ix_events_stream_run_sequence", "stream_id", "run_id", "sequence"),
     Index(
         "uq_events_stream_event_key",
         "stream_id",

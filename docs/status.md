@@ -28,6 +28,80 @@
 
 ---
 
+## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第二十二批）：一棵运行树要能按运行读出来（ADR-083）
+
+上一批让一次运行可以派生另一次运行，写进同一个 stream、用自己的 `run_id`。这一批是读的
+那一半：`EventLogPort.read` 加可选 `run_id`（两种实现都跟）、`events` 加一条
+`(stream_id, run_id, sequence)` 索引、`TaskService` 加 `run_tree()`、API 加
+`GET /v1/tasks/{id}/runs`，前端给委派出去的行标上它们自己的 agent 名。
+
+理由与被否掉的做法见
+[ADR-083](./adr/0083-a-tree-of-runs-is-read-as-a-tree.md)。
+
+### 1. 门禁
+
+```
+uv run ruff format --check .   # 通过
+uv run ruff check .            # 通过
+uv run pyright                 # 0 errors
+uv run pytest                  # 3023 passed, 782 skipped
+```
+
+服务态套件（含新的 migration 与 EXPLAIN 断言）：
+
+```
+AGENT_WORKBENCH_TEST_DSN=… uv run pytest tests/contracts tests/persistence tests/api
+                               # 1190 passed, 1 skipped
+```
+
+前端（这台机器上用系统 node 26 加 `NODE_OPTIONS=--no-experimental-webstorage`，
+`pnpm` 不在 PATH，直接调 `web/node_modules/.bin`）：
+
+```
+eslint . --max-warnings 0      # 通过
+tsc -b --pretty false          # 通过
+vitest run                     # 36 files, 568 passed
+vite build                     # ✓ built in 321ms
+```
+
+`config_schema_version` 保持 `1.18`——这一批一个配置叶子都没加。
+
+### 2. 显然的做法，和为什么否掉
+
+| 显然的做法 | 为什么否掉 |
+|---|---|
+| 在客户端过滤已拉到的页 | 答的是另一个问题："这个运行的事件里恰好落在前 500 条中的那些"。长 Task 末尾跑的子代理于是**不可见**而不是空 |
+| 新建一张持久的 `run_tree` 表 | 第二份真相。事件已经 durable、有序、有事务边界 |
+| `read_by_run()` 作为第二个方法 | 会长出第二套游标解释，以及第二份"这个 principal 能不能读这个 Task"的答案 |
+| 索引只建 `(stream_id, run_id)` | 读是按 `sequence` 排序的：规划器能找到行但拿不到顺序，于是为返回十二条去排整条流 |
+| 让 `run_tree()` 无上限读完整条流 | 一次请求就能让服务器把任意长的 Task 装进内存 |
+| 前端为了标名字再发一个 `/runs` 请求 | 用第二个请求学第一个请求已经带回来的东西 |
+
+### 3. 索引不是装饰的，当场验了一次
+
+`DROP INDEX ix_events_stream_run_sequence` 后重跑 `tests/persistence/test_run_tree_index.py`，
+两条计划断言都红：
+
+```
+Sort  (cost=154.40..154.43 rows=12 width=1241)
+  Sort Key: sequence
+  ->  Seq Scan on events  (cost=0.00..154.18 rows=12 width=1241)
+        Filter: (((stream_id)::text = 'str_index_a') AND ((run_id)::text = 'run_index_child'))
+```
+
+建回去即绿。这条测试断言的是 `EXPLAIN` 的**计划**，因为一条索引的全部价值恰恰是正确性
+测试看不见的——加不加它，返回的行一模一样。
+
+### 4. 没做成的
+
+- **不是可折叠的时间线。** 分组渲染要改每个阶段都在用的共享步骤流组件，那是单独一次
+  改动。这次只做了一行上的名字。
+- **不是跨 Task 的树。** 一棵树在一个 stream 之内；委派不开新 Task。
+- **没有对着真模型跑过。** 树的形状是对着构造出来的事件页验证的，不是对着一次真实的、
+  由模型自己决定派生的运行。能力梯子停在 **Implemented + Tested**。
+
+---
+
 ## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第二十一批）：一次委派是一次运行，不是一个新的循环（ADR-082）
 
 这一批把 `TraceContext.parent_agent_run_id`、`AgentDelegated`/`AgentCompleted`、

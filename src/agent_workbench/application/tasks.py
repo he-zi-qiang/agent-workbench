@@ -29,6 +29,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, runtime_checkable
 
+from agent_workbench.application.run_tree import RunNode, build_run_tree
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.events import EventEnvelope
 from agent_workbench.domain.identifiers import Identifier, new_id
@@ -363,8 +364,16 @@ class TaskService:
         *,
         after: EventCursor | None = None,
         limit: int = DEFAULT_TIMELINE_LIMIT,
+        run_id: Identifier | None = None,
     ) -> TaskTimeline:
         """This Task's events, in order, from ``after`` onwards.
+
+        ``run_id`` narrows to one run inside the Task's stream (ADR-083) --
+        which since delegation includes runs a model started mid-loop. It is a
+        parameter here rather than a second endpoint because the authorization
+        is the same authorization and the cursor is the same cursor: narrowing
+        must not become a path with its own answer to "may this principal read
+        this Task".
 
         The authorization check is the same one ``get`` performs, and it runs
         *first*: a timeline read that answered differently for another owner's
@@ -399,7 +408,14 @@ class TaskService:
         # second path that forgot it would be the way around the first.
         bounded = min(limit, MAX_TIMELINE_LIMIT)
 
-        if isinstance(log, IsolatingEventLog):
+        if isinstance(log, IsolatingEventLog) and run_id is None:
+            # The isolating read has no narrowed form, and giving it one would
+            # mean deciding what `skipped_sequences` means for a page that was
+            # filtered: a row this process cannot decode has no readable
+            # `run_id`, so it belongs to neither the narrowed page nor the rest.
+            # A narrowed read is a navigation aid rather than the Task's
+            # history, so it takes the strict path and stops at such a row --
+            # the unnarrowed timeline beside it is what stays readable.
             page = await log.read_isolating(
                 stream_id, after_sequence=after_sequence, limit=bounded
             )
@@ -414,12 +430,94 @@ class TaskService:
             stream_id,
             after_sequence=after_sequence,
             limit=bounded,
+            run_id=run_id,
         )
         return TaskTimeline(
             task_id=task.task_id,
             events=recorded,
             cursor=_cursor_after(stream_id, recorded, after),
         )
+
+    async def run_tree(
+        self,
+        principal: PrincipalContext,
+        task_id: Identifier,
+    ) -> TaskRunTree:
+        """Which runs this Task holds, and which of them started which.
+
+        The navigation half of ADR-083: this answers "what is in here", and
+        ``timeline(..., run_id=...)`` answers "show me that one". Split that way
+        because they have very different costs -- the tree walks the stream once
+        and is small, the narrowed read is an index lookup and can be asked for
+        repeatedly as somebody clicks around.
+
+        Paged internally rather than read in one statement, because the page
+        size is the store's protection and this method has no business
+        suspending it. What it does instead is stop, and say that it stopped.
+        """
+
+        log = self.events
+        if log is None:
+            raise TimelineUnavailableError(
+                "this task service was assembled without an event log"
+            )
+
+        task = await self.get(principal, task_id)
+        stream_id = task_stream_id(task)
+
+        collected: list[EventEnvelope] = []
+        after_sequence: int | None = None
+        complete = True
+        while True:
+            page = await log.read(
+                stream_id,
+                after_sequence=after_sequence,
+                limit=MAX_TIMELINE_LIMIT,
+            )
+            if not page:
+                break
+            collected.extend(page)
+            last = page[-1].sequence
+            if last is None:  # pragma: no cover - durable rows always carry one
+                break
+            after_sequence = last
+            if len(collected) >= MAX_TREE_EVENTS:
+                complete = False
+                break
+
+        tree = build_run_tree(stream_id, collected)
+        return TaskRunTree(
+            task_id=task.task_id,
+            stream_id=stream_id,
+            roots=tree.roots,
+            complete=complete,
+        )
+
+
+#: How many events one tree read may examine before it stops looking.
+#:
+#: The tree needs the whole stream, because the delegation that names a child
+#: can sit anywhere in it -- there is no page whose absence is safe. Reading
+#: without a bound would make one request able to pull an arbitrarily long Task
+#: into memory, which is what every other read here is capped to prevent.
+#:
+#: A Task that reaches this is one whose timeline the UI is already paging, and
+#: the answer says so (``complete=False``) rather than presenting a partial tree
+#: as a whole one -- the same rule ``skipped_sequences`` follows one method up.
+MAX_TREE_EVENTS: Final[int] = 10_000
+
+
+class TaskRunTree(DomainModel):
+    """The runs one Task's stream holds, and whether that is all of them."""
+
+    task_id: Identifier
+    stream_id: Identifier
+    roots: tuple[RunNode, ...] = ()
+    #: ``False`` when the read stopped at :data:`MAX_TREE_EVENTS`. A tree built
+    #: from part of a stream can be missing whole branches, so the flag is not
+    #: decoration: without it a truncated answer is indistinguishable from a
+    #: Task that simply delegated less.
+    complete: bool = True
 
 
 class TimelineUnavailableError(RuntimeError):

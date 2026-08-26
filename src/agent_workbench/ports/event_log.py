@@ -124,8 +124,23 @@ class EventLogPort(Protocol):
         *,
         after_sequence: int | None = None,
         limit: int = 500,
+        run_id: str | None = None,
     ) -> tuple[EventEnvelope, ...]:
-        """Replay durable events of one stream in sequence order."""
+        """Replay durable events of one stream in sequence order.
+
+        ``run_id`` narrows the page to one run inside that stream. It is an
+        optional narrowing rather than a second method because the cursor
+        semantics have to be identical either way: ``after_sequence`` is a
+        position in the *stream*, not an index into the filtered result, so a
+        client can hold one cursor and change its mind about the filter.
+
+        Several runs per stream is not new -- a Chat stream is a session and
+        each turn is a run -- but until delegation there was never a reason to
+        ask for one of them. Now there is: a delegated run writes into its
+        parent's stream (ADR-082), so "show me only what this sub-agent did" is
+        a question with an answer, and answering it by filtering a page the
+        client already pulled misses everything past the page.
+        """
         ...
 
 

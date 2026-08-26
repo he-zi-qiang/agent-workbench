@@ -154,6 +154,7 @@ class _StrictOnlyLog:
         *,
         after_sequence: int | None = None,
         limit: int = 500,
+        run_id: str | None = None,
     ) -> tuple[EventEnvelope, ...]:
         self.limits.append(limit)
         return self._recorded
