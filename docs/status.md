@@ -28,6 +28,96 @@
 
 ---
 
+## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第二十批）：被缩短过的对话要自己说出来（ADR-081）
+
+上一批（ADR-080）让一次超窗的运行停下来并说出撞的是哪条天花板。这一批是另一半：
+撞到天花板的运行**把对话的中间概括掉然后继续**——前提是它**说出来**。
+
+理由与被否掉的做法见
+[ADR-081](./adr/0081-a-conversation-that-was-shortened-says-so.md)。关闭
+`docs/known-gaps.md` **D-06**。
+
+### 1. 一套完整的词表，一个都没有的发射点
+
+`ContextCompacted` 是 durable 事件、`recording_results → compacting → model_streaming`
+在转移表里是合法边、`ArtifactKind` 里有 `compaction_summary`——全都在，全都没人发射。
+D-06 把这记为**未接线**并且说得很准：「协议先于实现落地是对的，但在实现出现之前，
+事件类型的存在不构成能力。」
+
+顺带修掉一句**自己就是口径不实**的注释。`runtime/state.py` 的模块注释写着
+「`compacting` 可达且未用……**并且有一个测试断言当前运行时从不进入它**」——
+`grep -rn compacting tests/` 只有 `test_run_state_machine.py` 的一次合法性检查，
+**那个测试不存在**。这句话活得比它描述的东西还久。
+
+### 2. 五个决定，每一个都是先否掉了显然的做法
+
+| 显然的做法 | 为什么否掉 |
+|---|---|
+| 新建 `ports/context_compaction.py` + adapter | 会把一次真实的 provider 调用放到运行自己的核算之外：`ledger.usage`／`_priced`、`overrun_reason_for`、`ModelStarted`/`ModelCompleted`、`model_timeout_seconds`，以及 port 里刻意写成"取消消费流的 task"的取消契约，五件事全绕开 |
+| 从模型适配器返回 `ArtifactRef` | 它带 `tenant_id` 和内容 sha256，只由 artifact store 铸造；运行时既没有 store 也没有 principal，拼一个就是伪造签名。第一版 `summary_ref` 留 `None` |
+| 插一条 `user` 消息说"以下是摘要" | 把话塞进用户嘴里，审计记录会说一个人说过没人说过的话。也不是 `system`（那是回合开始时冻结的世界描述）。留下的是 `assistant`——因为它**是真的**，再加一行标记 |
+| `keep_last` 直接切 | 大约一半的时候会切在 assistant 的 `tool_use` 和回答它的 `tool` 消息之间，产出一个 provider 用 400 拒绝的列表——**正是 ADR-080 刚刚不再转述的那个症状** |
+| 头部一起删 | 第一条消息是这次运行"是关于什么"的那条，也是几家 provider 要求对话必须以之开头的那条 |
+
+### 3. 测试是不是装饰的，当场验了一次
+
+`tests/runtime/test_compaction.py::TestTheCutIsLegal::
+test_the_shortened_conversation_still_pairs_every_call` 把 1..12 对、每个 `keep_last`
+扫一遍，断言重建后每个 call 仍恰有一条 result。把那两行前向推进删掉再跑：
+
+```
+3 failed, 10 passed
+```
+
+三条一起红。**跑过这一步再说"有测试"**——不然它只是一段和实现同时写出来、
+因而必然同意实现的代码。
+
+### 4. 数字里唯一测量过的那个，不许被估计值挤掉
+
+`ContextCompacted.tokens_before` 是 provider 给出的、那次过大请求的 `input_tokens`
+——**测量值**。`tokens_after` 没有对应的测量（下一个请求还没发出去），所以它是
+`before` 按两份消息列表的字符比缩放而来。
+
+两个都估会把唯一一个测量值扔掉，并让这条事件和它旁边的 `ModelCompleted` 打架。
+
+### 5. 计花费，不计步数
+
+压缩调用的 token 和成本进 `BudgetUsage`——那是真实支出，**失败的那次也要记**，
+否则运行记录的花费和账单差着那一次。但它**不计一步**：`steps` 数的是 agent 循环走了
+几轮，压缩没有推进循环，计成一步会让一个逼近步数上限的运行被那个正在救它的东西掐死。
+
+### 6. 一个待决问题，写下来而不是留给以后的人现场发现
+
+`apps/task_worker/composition.py` 传的是 `prices=main_profile.prices`，所以一次
+main-profile 运行里的 compact 调用**按 main 的价格计费**。`[model.main]` 与
+`[model.compact]` 的 `model_id` 都是 `deepseek-chat` 期间这不产生误差；哪天它们分开，
+这一行就变成一个悄悄的记账错误。记在 ADR-081 §2.1。
+
+### 7. 差点抬错的一次版本号
+
+先把 `config_schema_version` 从 `1.18` 抬到了 `1.19`，然后被仓库自己的文档拦下：
+`docs/configuration.md` §2 版本表的 `1.14 → 1.15` 那一行写着「既有段下**新增带默认值的
+叶子**仍然不抬版」，而 ADR-080 的 `context_window_tokens` 就是同一批里的同一类先例。
+**已回退**，本批不动配置契约。
+
+### 门禁
+
+`agent-config-check --profile development` 与 `--profile test` 均 ok（需要三个
+`AW_DATABASE__*` DSN 从环境来）；`ruff format --check` + `ruff check` 全过；
+`pyright` **0 errors**；`pytest` **2925 passed / 774 skipped**。
+
+**本批新增 20 条后端测试**：`tests/runtime/test_compaction.py` 13 条（切点合法性、
+头部存活、概括器看到什么、事件里的数字）、`tests/runtime/test_agent_runtime.py::
+TestAConversationThatWasShortenedSaysSo` 7 条（缩短而非停止、关掉开关仍按 ADR-080 停、
+事件落盘、模型被告知、概括调用是一次普通的计量调用、概括没到就什么都不删、
+状态机真的进了 `compacting`）。
+
+能力梯子停在 **Implemented + Tested**。`COMPACTION_PROMPT` 写出来的概括质量没有对着
+真实模型验证过——本仓没有任何测试打到真实 DeepSeek，CI `quality` 离线——在有一份实测
+转录之前不得描述成 Demonstrated。
+
+---
+
 ## 2026-08-25（未合并，分支 `feat/code-harness-tier1`，第十九批）：一次运行知道自己下一个请求有多大（ADR-080）
 
 一段长对话越过模型窗口时，此前留下的全部证据是

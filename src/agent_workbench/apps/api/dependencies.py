@@ -998,6 +998,7 @@ def _assemble_chat(
             prices=model_prices,
             context_window_tokens=model_context_window,
             context_soft_limit_ratio=config.context_soft_limit_ratio,
+            compaction_enabled=config.context_compaction_enabled,
         )
 
     def _toolless_runtime() -> ClaudeLikeAgentRuntime:
@@ -1015,6 +1016,7 @@ def _assemble_chat(
             prices=model_prices,
             context_window_tokens=model_context_window,
             context_soft_limit_ratio=config.context_soft_limit_ratio,
+            compaction_enabled=config.context_compaction_enabled,
         )
 
     # One tool, one journal, one runtime, shared by both evidence-free turns
@@ -1143,6 +1145,7 @@ def _assemble_chat(
                 prices=model_prices,
                 context_window_tokens=model_context_window,
                 context_soft_limit_ratio=config.context_soft_limit_ratio,
+                compaction_enabled=config.context_compaction_enabled,
             ),
             journal=journal,
             budget=RunBudget(
@@ -1170,6 +1173,7 @@ def _assemble_chat(
                 prices=model_prices,
                 context_window_tokens=model_context_window,
                 context_soft_limit_ratio=config.context_soft_limit_ratio,
+                compaction_enabled=config.context_compaction_enabled,
             ),
             budget=RunBudget(max_steps=1, max_tool_calls=1),
         )
@@ -1276,6 +1280,7 @@ def _assemble_chat(
             prices=model_prices,
             context_window_tokens=model_context_window,
             context_soft_limit_ratio=config.context_soft_limit_ratio,
+            compaction_enabled=config.context_compaction_enabled,
         )
 
     code = (

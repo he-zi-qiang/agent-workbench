@@ -345,6 +345,7 @@
         "runtime.model_timeout_seconds",
         "runtime.tool_timeout_seconds",
         "runtime.cancellation_poll_seconds",
+        "runtime.context_compaction_enabled",
         "runtime.context_soft_limit_ratio",
         "runtime.tool_result_artifact_threshold_bytes",
         "runtime.write_tools_default_enabled",

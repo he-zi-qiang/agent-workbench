@@ -698,6 +698,7 @@ async def _build_real_handlers(
             # `model_label` come from it.
             context_window_tokens=main_profile.context_window_tokens,
             context_soft_limit_ratio=config.runtime.context_soft_limit_ratio,
+            compaction_enabled=config.runtime.context_compaction_enabled,
         ),
         max_parallel=config.multi_agent.max_parallel_agent_invocations,
     )

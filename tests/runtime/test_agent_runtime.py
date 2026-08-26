@@ -57,6 +57,7 @@ from agent_workbench.ports.model import ModelTextDelta as TextDelta
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolExecutor, ToolGateway
 from agent_workbench.runtime.agent_runtime import render_prompt
+from agent_workbench.runtime.compaction import SUMMARY_MARKER
 from agent_workbench.runtime.tool_gateway import PreparedCall
 
 CLOCK = datetime(2026, 7, 25, 3, 14, 15, tzinfo=UTC)
@@ -236,6 +237,7 @@ def _execute(
     approval_timeout_seconds: float = 100.0,
     context_window_tokens: int | None = None,
     context_soft_limit_ratio: float = 0.75,
+    compaction_enabled: bool = False,
 ) -> _Execution:
     registry = StaticToolRegistry(
         bindings if bindings is not None else [read_document_tool(CORPUS)]
@@ -267,6 +269,7 @@ def _execute(
             prices=prices,
             context_window_tokens=context_window_tokens,
             context_soft_limit_ratio=context_soft_limit_ratio,
+            compaction_enabled=compaction_enabled,
         )
         outcome = await runtime.run(
             request if request is not None else _request(),
@@ -2631,3 +2634,176 @@ class TestARunKnowsHowLargeItsNextRequestIs:
 
         assert strict.outcome.stop_reason == "context_limit"
         assert loose.outcome.status == "completed"
+
+
+class TestAConversationThatWasShortenedSaysSo:
+    """ADR-0081, at the loop.
+
+    ADR-0080 gave this run a ceiling and an honest way to stop at it. This is
+    the other half: a run that reaches the ceiling shortens itself instead,
+    and the thing that makes that safe rather than merely shorter is that it
+    is *said* -- a durable `ContextCompacted` carrying what went and what it
+    cost, and a marked message in the conversation itself so the model knows
+    the middle of its own history is an account rather than a transcript.
+
+    The failure this must never have is the quiet one: a conversation with a
+    hole in it that neither the model nor the reader can see.
+    """
+
+    @staticmethod
+    def _long_run(*, summary: str = "Read four files; none named fusion.") -> FakeModel:
+        # Four cheap tool rounds build a conversation long enough to have a
+        # middle (nine messages), then one expensive turn puts the *next*
+        # request over the soft limit. The turn after that is the summary the
+        # compaction call consumes; the last one is the real answer.
+        rounds = [
+            ScriptedTurn(
+                text=f"Looking at {n}.",
+                tool_calls=(
+                    ToolCall(
+                        tool_call_id=f"toolu_{n:020d}",
+                        tool_name="read_document",
+                        # Distinct arguments per round: identical ones would be
+                        # refused by `MAX_IDENTICAL_CALLS` from the third on,
+                        # and this conversation is meant to grow, not to be
+                        # stopped by a different guard.
+                        arguments={"document_id": "doc_1", "note": f"pass {n}"},
+                    ),
+                ),
+                usage=TokenUsage(input_tokens=1_000 if n < 4 else 50_000),
+            )
+            for n in range(5)
+        ]
+        return FakeModel(
+            (
+                *rounds,
+                ScriptedTurn(text=summary, usage=TokenUsage(input_tokens=900)),
+                ScriptedTurn(
+                    text="Qdrant owns fusion.", usage=TokenUsage(input_tokens=20)
+                ),
+            )
+        )
+
+    @staticmethod
+    def _execute_long(model: FakeModel, **kwargs: Any) -> _Execution:
+        return _execute(
+            model,
+            request=_request(budget=RunBudget(max_steps=12, max_tool_calls=24)),
+            context_window_tokens=64_000,
+            **kwargs,
+        )
+
+    def test_a_run_at_the_ceiling_shortens_itself_instead_of_stopping(self) -> None:
+        run = self._execute_long(self._long_run(), compaction_enabled=True)
+
+        assert run.outcome.status == "completed"
+        assert run.outcome.stop_reason != "context_limit"
+        assert run.outcome.output_text == "Qdrant owns fusion."
+
+    def test_the_same_run_without_the_flag_still_stops_the_way_adr_080_left_it(
+        self,
+    ) -> None:
+        # The flag is the whole difference. Off, this is ADR-0080 unchanged --
+        # which is what makes turning it on a decision an operator can reverse
+        # without getting a different failure mode back.
+        run = self._execute_long(self._long_run())
+
+        assert run.outcome.status == "failed"
+        assert run.outcome.stop_reason == "context_limit"
+
+    def test_what_was_removed_is_recorded_durably(self) -> None:
+        run = self._execute_long(self._long_run(), compaction_enabled=True)
+
+        compacted = [e for e in run.durable if e.payload.kind == "ContextCompacted"]
+        assert len(compacted) == 1
+        payload = compacted[0].payload
+        assert payload.removed_message_count > 0
+        # `before` is the provider's own count for the request that was too
+        # large; `after` is that number scaled by the character ratio, so it
+        # is smaller and in the same units. Publishing two estimates would
+        # have thrown away the one figure that was measured.
+        assert payload.tokens_before == 50_000
+        assert 0 < payload.tokens_after < payload.tokens_before
+        # No artifact: `ArtifactRef` carries a tenant and a content digest and
+        # is minted only by the artifact store. The runtime holds neither.
+        assert payload.summary_ref is None
+
+    def test_the_model_is_told_its_history_was_shortened(self) -> None:
+        """The half that is easy to leave out, and useless to leave out.
+
+        A shortened conversation the model cannot see was shortened is one it
+        will answer from as though the missing turns never happened.
+        """
+
+        model = self._long_run()
+        self._execute_long(model, compaction_enabled=True)
+
+        final = model.requests[-1]
+        assert any(SUMMARY_MARKER in message.text() for message in final.messages), (
+            "the rebuilt conversation carries no marker"
+        )
+        assert any("none named fusion" in message.text() for message in final.messages)
+        # Shorter than what provoked it, and still opening on the user's own
+        # question -- the message the run is *about*.
+        assert len(final.messages) < len(model.requests[4].messages)
+        assert final.messages[0] == model.requests[0].messages[0]
+        # And not by inventing a user turn. The summary is the agent's own
+        # account; a `user` message would make the transcript say a person
+        # said something nobody said.
+        assert [m.role for m in final.messages].count("user") == 1
+
+    def test_the_summary_call_is_an_ordinary_metered_model_call(self) -> None:
+        """Same port, same ledger, its own profile.
+
+        A private "just call the provider" helper would have put a request
+        outside this run's accounting -- no `ModelStarted`, no usage, no
+        price -- and the run's recorded cost would stop matching its bill.
+        """
+
+        model = self._long_run()
+        run = self._execute_long(model, compaction_enabled=True)
+
+        summarising = model.requests[5]
+        assert summarising.model_profile == "compact"
+        assert "compacting the earlier part" in summarising.system_prompt.lower()
+        # The transcript is handed over as text to be described, not as a
+        # conversation to be continued, so the summariser cannot propose a tool.
+        assert not summarising.tools
+
+        # Its tokens are on the run. 4 * 1_000 + 50_000 + 900 (the summary) + 20.
+        assert run.outcome.usage.tokens.input_tokens == 54_920
+        starts = [e for e in run.durable if e.payload.kind == "ModelStarted"]
+        assert len(starts) == len(model.requests)
+
+    def test_a_summary_that_did_not_arrive_drops_nothing(self) -> None:
+        """The one outcome worse than stopping is a silent hole.
+
+        An empty summary is the shape that would produce one: the plan is
+        already computed, the messages are already chosen, and rebuilding
+        around an empty string would leave a marker with nothing under it.
+        """
+
+        model = self._long_run(summary="   ")
+        run = self._execute_long(model, compaction_enabled=True)
+
+        assert run.outcome.status == "failed"
+        assert run.outcome.stop_reason == "context_limit"
+        assert not [e for e in run.durable if e.payload.kind == "ContextCompacted"]
+        # Metered anyway: the call was made and the provider charged for it.
+        assert run.outcome.usage.tokens.input_tokens == 54_900
+
+    def test_the_run_state_machine_actually_enters_compacting(self) -> None:
+        """The edge `runtime/state.py` has carried since the baseline.
+
+        Its comment said "``compacting`` is reachable and unused", and that
+        the runtime never entered it. This is the line that stops being true,
+        and the comment was corrected in the same change.
+        """
+
+        model = self._long_run()
+        run = self._execute_long(model, compaction_enabled=True)
+
+        # Reached without the run failing, which is the only way the edge out
+        # of `recording_results` can have been taken legally.
+        assert run.outcome.status == "completed"
+        assert [e for e in run.durable if e.payload.kind == "ContextCompacted"]

@@ -437,7 +437,13 @@ contract and are deliberately not in this module yet"。缺的正是这份解码
 | D-03 | 知识库重命名 / 删除 / 文档删除 / ACL UI | 未实现 |
 | D-04 | Word 读取与不可变编辑 | 未实现 |
 | D-05 | Langfuse、生产身份认证、S3 Artifact、远程部署 | 未实现 |
-| D-06 | Chat 历史 compaction | 未接线 |
+
+> 编号一经退休不再复用。D-06（Chat 历史 compaction，词表齐备而没有任何发射点）已于
+> 2026-08-25 关闭，按本文档维护规则从正文删除，落地记录在 [status.md](./status.md)：
+> `runtime/compaction.py` 决定切点、`ClaudeLikeAgentRuntime._compacted()` 用同一个
+> `ModelPort` 取概括并发射 `ContextCompacted`，`runtime.context_compaction_enabled`
+> 默认关。理由见 [ADR-081](./adr/0081-a-conversation-that-was-shortened-says-so.md)。
+> 该条目当年说"事件类型的存在不构成能力"——现在构成能力的是那一批测试，不是这份记录。
 
 ### D-01 真正的 Chat 轮次级附件与 Task 输入 Artifact 附件
 
@@ -498,16 +504,6 @@ Word 文档读取与编辑，能力表里也不得混为一谈。
 
 **当前事实**：可观测走 OTel（已落地）；Artifact 存本地文件系统；身份认证在生产
 意义上不存在；部署只有本机 Compose。这四项在架构基线里一直是 Planned。
-
-### D-06 Chat 历史 compaction
-
-**证据**：领域侧**已经定义**——
-[events.py:428](../src/agent_workbench/domain/events.py:428) 的
-`ContextCompacted`（"Compaction derives a shorter context; it never edits the
-record."），以及 run 状态里的 `compacting`。**但没有任何代码发射这个事件。**
-
-这是典型的"未接线"：协议先于实现落地是对的，但在实现出现之前，事件类型的存在
-不构成能力。
 
 ---
 

@@ -241,6 +241,18 @@ model_timeout_seconds = 120
 # tool_timeout_seconds = 60
 cancellation_poll_seconds = 1
 context_soft_limit_ratio = 0.75
+# Whether a run that reaches that ratio shortens its own conversation instead
+# of stopping at it (ADR-0081). Off by default, and the order matters: ADR-0080
+# made an over-long run stop and say which ceiling it hit, and a deployment
+# that has not yet seen a real `context_limit` has nothing to tune this
+# against. Honest failure first, remedy second.
+#
+# Turning it on costs one extra model call per compaction, billed under the
+# [model.compact] profile and metered on the run that made it. It only ever
+# fires beside a profile that declared `context_window_tokens` -- with no
+# window there is nothing to be over -- so on a deployment that declared none
+# this decides nothing at all.
+context_compaction_enabled = false
 tool_result_artifact_threshold_bytes = 65536
 write_tools_default_enabled = false
 # ADR-019. Puts the prompt and the proposed tool arguments on the run's event
