@@ -806,7 +806,7 @@ describe("CodePage", () => {
   });
 
   it("names the account when the provider refused it", async () => {
-    // ADR-0082. Every provider failure arrives as `stop_reason: "error"`, so
+    // ADR-0084. Every provider failure arrives as `stop_reason: "error"`, so
     // before the code came with it this rendered `这一轮没有跑完（error）` --
     // and the reader, whose account had simply run out of credit, had nothing
     // to distinguish that from a retired model id.

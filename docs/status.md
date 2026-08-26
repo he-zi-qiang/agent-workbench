@@ -30,6 +30,10 @@
 
 ## 2026-08-26（未合并，工作区，第二十二批）：账号的问题不是这次调用的问题
 
+> **编号更正**：这批的 ADR 以 082 合入（PR #174，`a2af3ba`），随后改为 **084**。
+> `0082`／`0083` 已被并行的多 agent 委派那条线认领并在其代码中引用，本份后到、
+> 本份让号。认领 ADR 号要看的不只是 `ls docs/adr/`，还有 `.claude/worktrees/`。
+
 起因是一句用户报告：「多 agent 一个回答都跑不完，提示额度不足」。查下来**两件事都不是
 它看起来的样子**，记在这里，因为跑错方向的那半小时才是这批的价值。
 
@@ -72,7 +76,7 @@ is_available: true
 `AgentOutcome.error` 一直带着它，是 `apps/api/routes/code.py` 的 `AskResponse` 只抄了
 `status` 和 `stop_reason`，把 `error` 留在了服务端。
 
-改动（ADR-082）：
+改动（ADR-084）：
 
 - `domain/errors.py` 的 `ErrorCode` 新增 `provider_account_rejected`（401/402/403 合一）
 - `adapters/models/deepseek.py` 新增 `_ACCOUNT_STATUSES` 与 `_rejection()`

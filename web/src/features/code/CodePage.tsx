@@ -1377,7 +1377,7 @@ function displayable(files: WorkspaceEntryView[]): WorkspaceEntryView[] {
  * not at the end), and the way forward is to just keep talking. A stopped
  * turn used to render as nothing at all, which read as a broken session.
  *
- * `StopReason` alone turned out not to be enough vocabulary (ADR-0082). Every
+ * `StopReason` alone turned out not to be enough vocabulary (ADR-0084). Every
  * provider failure arrives here as `"error"`, so the last branch was rendering
  * `这一轮没有跑完（error）` for an exhausted account, a rejected key, a retired
  * model id and a 500 alike -- four different things to go do. The failure's

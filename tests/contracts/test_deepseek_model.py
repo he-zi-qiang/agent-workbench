@@ -484,7 +484,7 @@ def test_an_http_error_reports_its_status_and_nothing_else() -> None:
 
     assert completion.finish_reason == "error"
     assert completion.error is not None
-    # ADR-0082 moved 401 out of `provider_error`; what this test is about is
+    # ADR-0084 moved 401 out of `provider_error`; what this test is about is
     # unchanged and is the reason the status stayed 401 rather than moving to
     # one that is still generic -- a rejected key is the status whose body most
     # plausibly quotes the key, and it is the body that must not survive.
@@ -505,7 +505,7 @@ def test_server_errors_and_rate_limits_are_retryable() -> None:
 
 
 def test_a_refused_account_is_not_reported_as_a_provider_error() -> None:
-    """ADR-0082. The account is a different fact from the request.
+    """ADR-0084. The account is a different fact from the request.
 
     402 is DeepSeek's "Insufficient Balance", and before this split it reached
     the console as `provider_error` with `stop_reason: "error"` -- the same

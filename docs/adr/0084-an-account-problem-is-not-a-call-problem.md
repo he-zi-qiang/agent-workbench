@@ -1,4 +1,4 @@
-# ADR-082：账号的问题不是这次调用的问题
+# ADR-084：账号的问题不是这次调用的问题
 
 - 决策点：DeepSeek 余额耗尽时返回 HTTP 402。适配器把 4xx 一律折成
   `provider_error`，运行以 `stop_reason: "error"` 结束，Code 控制台渲染出
@@ -12,6 +12,11 @@
   Code 控制台与 Task 失败文案各加一条分支。**明确不做**：不新增 `StopReason`、
   不新增异常类、不拆成三个码、不往仓库配置里写 provider 价格
 - 日期：2026-08-26
+- 编号：**本 ADR 以 082 合入（PR #174，`a2af3ba`），随即改为 084。** `0082`／`0083`
+  已被并行的多 agent 委派那条线认领，并且已经被它自己的代码与迁移注释引用；本份是
+  后到的，所以本份让号。`docs/adr/README.md` 末尾的「号段预留」一节写的正是这种情况
+  ——认领一个号之前要看的不只是 `ls docs/adr/`，还有 `.claude/worktrees/` 下并行的
+  工作树。合并提交的标题里仍然写着 ADR-082，那条无法追改，这一行就是它的线索
 - 影响：`domain/errors.py` 的 `ErrorCode` 增一项；
   `adapters/models/deepseek.py` 新增 `_ACCOUNT_STATUSES` 与 `_rejection()`，
   `_attempt()` 里的构造改为调用它；`apps/api/routes/code.py` 的 `AskResponse`

@@ -85,7 +85,7 @@ DEFAULT_MAX_ARGUMENT_CHARS: Final[int] = 262_144
 # rate limited harder.
 RETRY_BACKOFF_SECONDS: Final[float] = 0.5
 
-#: Statuses that say the account is the problem, not the request (ADR-0082).
+#: Statuses that say the account is the problem, not the request (ADR-0084).
 #: 402 is DeepSeek's "Insufficient Balance"; 401 and 403 are a key it will not
 #: accept. They are grouped because the *handling* is identical -- stop, never
 #: retry, and tell a person -- and split apart only in the sentence, which is

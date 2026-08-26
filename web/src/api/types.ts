@@ -219,7 +219,7 @@ export interface CodeAskResponse {
   status: string;
   stop_reason: string;
   /**
-   * Why the turn failed, when it did (ADR-0082). Both null on a turn that
+   * Why the turn failed, when it did (ADR-0084). Both null on a turn that
    * completed.
    *
    * `stop_reason` alone is not enough to say anything useful about a failure:
