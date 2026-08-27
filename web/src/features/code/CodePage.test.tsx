@@ -146,7 +146,13 @@ const SESSION = "ses_code_1";
  * 它们各自那件事——而不是每一条都顺带再测一遍这道门。门本身由它自己的用例测。
  */
 async function chooseFolder(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole("button", { name: /demo/ }));
+  // 限定在选择器那一列里。一个裸的 `/demo/` 会同时匹配到侧栏的会话行——它现在
+  // 在「全部会话」那一档下也说自己属于哪个文件夹，而起始屏正是那一档（还没有
+  // 打开的会话，就没有 `currentProjectId` 去收窄）。
+  const chooser = (await screen.findByRole("heading", {
+    name: "在哪个文件夹里编码？",
+  })).closest("div.aw-code-chooser") as HTMLElement;
+  await user.click(await within(chooser).findByRole("button", { name: /demo/ }));
 }
 
 function mounted(entry: string = `/code/${SESSION}`) {
@@ -252,7 +258,7 @@ describe("CodePage 的计划模式", () => {
     });
 
     mounted();
-    await user.click(screen.getByText("只做计划"));
+    await user.click(screen.getByRole("button", { name: "只做计划" }));
     await user.type(screen.getByLabelText("要做的事"), "加个功能");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
@@ -260,6 +266,9 @@ describe("CodePage 的计划模式", () => {
       expect(vi.mocked(askCode)).toHaveBeenCalled();
     });
     expect(vi.mocked(askCode).mock.calls[0]?.[4]).toBe("plan");
+    // 计划档不加写入闸：这一轮根本没有写工具，给它一道「写入前问我」是在描述
+    // 一个它不在的世界（`code_session.py` 的 `_system_prompt_for`）。
+    expect(vi.mocked(askCode).mock.calls[0]?.[5]).toBe("standard");
   });
 
   it("默认是执行模式，并且把它明写在请求里", async () => {
@@ -283,6 +292,32 @@ describe("CodePage 的计划模式", () => {
       expect(vi.mocked(askCode)).toHaveBeenCalled();
     });
     expect(vi.mocked(askCode).mock.calls[0]?.[4]).toBe("act");
+    expect(vi.mocked(askCode).mock.calls[0]?.[5]).toBe("standard");
+  });
+
+  it("选「改前问我」时，把写入闸随这一轮一起发出去", async () => {
+    // 这一档是 ADR-087 的全部内容：同一批工具，换一个「谁来拍板」。所以断言
+    // 的是两个字段一起——只看 approvals 会漏掉「它顺手把工具也收窄了」这种
+    // 回归，而那会让这一档变成第二个计划模式。
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "改好了。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted();
+    await user.click(screen.getByRole("button", { name: "改前问我" }));
+    await user.type(screen.getByLabelText("要做的事"), "加个功能");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalled();
+    });
+    expect(vi.mocked(askCode).mock.calls[0]?.[4]).toBe("act");
+    expect(vi.mocked(askCode).mock.calls[0]?.[5]).toBe("before_write");
   });
 
   it("计划跑完之后给一个按钮，按下去是新的一轮 act", async () => {
@@ -296,7 +331,7 @@ describe("CodePage 的计划模式", () => {
     });
 
     mounted();
-    await user.click(screen.getByText("只做计划"));
+    await user.click(screen.getByRole("button", { name: "只做计划" }));
     await user.type(screen.getByLabelText("要做的事"), "加个功能");
     await user.click(screen.getByRole("button", { name: "发送" }));
 
@@ -364,6 +399,14 @@ describe("CodePage", () => {
     // is happening, above a block of thinking, was saying it twice.
     const live = await screen.findByText("先看 notes.md 里有什么。");
     expect(live.closest("li.aw-code-step")?.className).toContain("is-live");
+
+    // 反向断言，而这一条是补回来的：上面那句话原本只有正向的一半，于是横幅在
+    // `codeLiveStatus` 里悄悄回来时没有任何东西报警（ADR-064 的回归）。一条只
+    // 说「新形状在」的测试，管不住「旧形状也还在」。
+    expect(screen.queryByText("正在思考下一步")).toBeNull();
+    expect(screen.queryByText("分析目标并选择接下来的动作")).toBeNull();
+    // 也不能落到那句更空的通用旁白上——它同样是压在一段具体的思考上面。
+    expect(screen.queryByText("等待下一条执行记录")).toBeNull();
   });
 
   it("writes the report out as it arrives, not all at once at the end", async () => {
@@ -1456,9 +1499,15 @@ describe("CodePage", () => {
     const recent = await screen.findByRole("navigation", {
       name: "最近的编码会话",
     });
-    expect(
-      await within(recent).findByRole("button", { name: "写一个 sq.py" }),
-    ).toBeInTheDocument();
+    // `^`，因为这一行现在有两个按钮叫得出这个名字：打开它的那个，和它旁边
+    // 「重命名会话 写一个 sq.py」。而名字本身不再是精确匹配——正在跑的那一行
+    // 把「（正在运行）」读给屏幕阅读器（见 `CodeSessionRail`），而这一轮正在
+    // 跑，所以这里顺带也钉住了那个标记确实出现。
+    const row = await within(recent).findByRole("button", {
+      name: /^写一个 sq\.py/,
+    });
+    expect(row).toBeInTheDocument();
+    expect(row.textContent).toContain("（正在运行）");
   });
 
   it("deletes a session only after the reader confirms", async () => {
@@ -2479,8 +2528,10 @@ describe("CodePage", () => {
     const turns = await screen.findByRole("region", { name: "编码会话" });
     // Folded to its first sentence, not truncated: truncation throws away the
     // half the reader came for, folding puts it behind one click.
-    const summary = within(turns).getByText(head);
-    expect(summary.tagName.toLowerCase()).toBe("summary");
+    // 首句现在包在一个 span 里，因为它要能被 CSS 钳到两行——`THOUGHT_HEAD_MAX`
+    // 管字符数，钳位管行数，而读者扫的是行。所以从文本往上找那个 `<summary>`。
+    const summary = within(turns).getByText(head).closest("summary");
+    if (summary === null) throw new Error("首句不在一个 <summary> 里");
     const fold = summary.closest("details");
     expect((fold as HTMLDetailsElement).open).toBe(false);
 
@@ -2794,6 +2845,36 @@ describe("CodePage", () => {
     expect(
       await within(rail).findByText("另一个文件夹里的"),
     ).toBeInTheDocument();
+
+    // 到了「全部」这一档，每一行才说得出它属于哪个文件夹。
+    //
+    // 这是切换器存在的**理由**的另一半：读者按它就是为了看到别处的会话，而在
+    // 这一行之前，来自不同文件夹的行长得一模一样——两段同名的会话（同一句话在
+    // 两个文件夹里各说过一次，是很常见的事）在这一列里不可分辨。
+    //
+    // 名字来自一份**已经被取着**的项目列表（`["projects", identity]`，
+    // `ProjectChooser` 和 `ProjectPicker` 都在订阅它），所以这是一次 join，不是
+    // 每行一次查询——后者正是 ADR-047 §4 拒绝在这一行上放轮数和文件数的理由。
+    const elsewhere = within(rail)
+      .getByText("另一个文件夹里的")
+      .closest("button");
+    expect(elsewhere?.textContent).toContain("别的文件夹");
+    const here = within(rail).getByText("这个文件夹里的").closest("button");
+    expect(here?.textContent).toContain(PROJECT.name);
+
+    // 收窄回去，标记就该消失：整份列表都在同一个文件夹里的时候，在每一行上重复
+    // 那个名字，是把一个不区分任何东西的字段印 N 遍。
+    await user.click(
+      within(rail).getByRole("button", { name: /只看这个文件夹/ }),
+    );
+    await waitFor(() => {
+      expect(
+        within(rail).queryByText("另一个文件夹里的"),
+      ).not.toBeInTheDocument();
+    });
+    expect(
+      within(rail).getByText("这个文件夹里的").closest("button")?.textContent,
+    ).not.toContain(PROJECT.name);
   });
 
   it("folds the preview column away and remembers that, instead of popping it over the conversation", async () => {

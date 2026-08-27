@@ -28,6 +28,78 @@
 
 ---
 
+## 2026-08-27（未合并，分支 `feat/code-console-five-gaps`，第二十九批）：产物不该为它落在哪一侧负责
+
+一次用户反馈，对 Code 控制台提了五件事。**其中三件在代码里是同一件**——项目目录那一侧
+是二等公民：它没有查看器、没有结构化的写入事实、因而在树上也不会动。而 ADR-072／074
+之后，`config.demo-local.toml` 下**每一段会话都有项目目录**，所以那正好是默认那一侧。
+
+两份 ADR：[ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
+（项目侧的补齐）与
+[ADR-087](./adr/0087-a-session-may-be-stricter-than-its-deployment.md)（权限轴）。
+拆两号是因为它们收紧的是信封的两半，是两条边界。
+
+### 五件事，各自的状态
+
+| 反馈 | 做了什么 | 能力等级 |
+|---|---|---|
+| 产物生成后没有直接预览 | `ProjectFileBody` 改用与工作区同一张 `previewKind` 分派表和同一批查看器；`.html` 因此在项目侧也进沙箱 iframe | **Demonstrated** |
+| 没有「模型自己决定／人来决定」 | 新增 `CodeApprovals` 轴 + `with_write_gate` 提示；界面是三档 `只做计划 / 改前问我 / 自动改动` | **Demonstrated** |
+| 思考过程又乱又长 | 落定即收（除非读者真碰过）、落定后不再重复「思考摘要」四个字、摘要钳到两行、删掉重复的「正在思考下一步」横幅 | **Demonstrated** |
+| 产物没在文件夹里体现 | `ToolResult`／`ToolCompleted` 新增 `project_writes`；控制台据此按前缀失效目录树 | **Demonstrated** |
+| 文件夹导航栏没有会话标志 | 会话列表有了抬头；正在跑的行有呼吸点；「全部会话」那一档每行说出它属于哪个文件夹 | **Implemented** |
+
+### 那次真跑（Demonstrated 的证据）
+
+`scripts/dev.sh demo-api` + Vite，项目 `agent 工作台测试`，权限档选 **改前问我**：
+
+> 在 docs/ 目录下新建一个 hello.html，内容是一个带标题和一段话的简单页面。只做这一件事。
+
+1. **闸真的拦住了。** 屏幕上出现 `project_write 需要你批准`，风险标着「会写入」，卡片
+   上是规范化后的真实参数与摘要，三个按钮（允许一次／本会话都允许／拒绝）。
+   **在这次改动之前，`project_write` 是 `write` 风险，而 Code 的
+   `approval_required_risks` 只有 `("destructive",)`——按构造，它不停在任何人面前。**
+2. **批准之后，树自己动了。** 侧栏出现 `docs/`，**自动展开**露出 `hello.html`，两行行尾
+   各有一个 accent 点（「这段会话写过它」）。磁盘上
+   `/Users/heziqiang/agent 工作台测试/docs/hello.html` 176 字节，时间对得上。
+3. **第二轮验证收折。** 「把 docs/hello.html 里那段话改成两句话。」跑完之后整轮是
+   两行单行推理 + 两行动作 + 一段报告；改动之前同一形状是二十行摊开的斜体。
+4. **预览。** 项目目录里既有的 `deepseek-report.html` 点开后是渲染好的《DeepSeek 调研
+   报告》，带渲染／源码切换与全屏；改动之前它只有 `<pre>` 里的源码。
+
+### 一处被这次工作揪出来的回归
+
+`codeLiveStatus` 在 `thinking !== ""` 时会画一条「正在思考下一步／分析目标并选择接下来
+的动作」的横幅，**就压在那段正在流的思考正上方**——这正是 ADR-064 当初删掉的东西。
+它能回来，是因为 `CodePage.test.tsx` 那条测试只做了正向断言（「思考是一行」），没有反向
+钉住「上面没有横幅」。这次删掉横幅，并把反向断言补上。
+
+### 门禁
+
+```
+uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest
+pnpm --dir web check   （本机走 var/toolchain/node + NODE_OPTIONS=--no-experimental-webstorage）
+```
+
+数字见提交信息；本节写下时的树上，后端 5 个新用例（`code_approval_risks` 的只加不减、
+写入闸不动工具清单、plan 回合不被告知闸、`project_writes` 的两个），前端 4 个新用例
+（三档发出去的参数、树上的标记与自动展开、收起后不弹回、横幅不回来）。
+
+### 没做完的，写在缺口里
+
+- **F-27**：项目侧取不到字节，所以图片／PDF 仍然看不了。**理由不是「agent 放不进
+  二进制」**——ADR-077 之后 `project_run` 能写任何东西；理由是排期。
+- **F-28**：两侧都不渲染 Markdown（`.md` 落进 `<pre>`）。正确形状是渲染／源码切换，
+  不是加第六个 `PreviewKind`。
+- **F-26 收窄但不关**：闸接上了，`policy.write_tools_require_approval` 这个**字段**
+  仍然没有读者。
+- **F-25 补了一句**：目录树跟的是记账过的写入，`project_run`／控制台 `PUT`／用户自己的
+  编辑器都绕过它。所以界面说的是「这段会话写过它」，不是「这是目录当前的样子」。
+- 会话行的运行标记只活在这个标签页里：`SessionView` 没有 status 字段，刷新之后就没有
+  了。这是投影缺口，不是机制缺口——两个事实都在进程里按 session id 记着。
+
+---
+
 ## 2026-08-27（未合并，第二十八批）：一次真的搜出来的回合
 
 第二十七批修好两根断线之后，重启 `demo-api` 用**真实模型**跑了一轮 Code 会话。这一节

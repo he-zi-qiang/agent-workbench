@@ -1231,6 +1231,13 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
 **这一条不会有"做完"的一天。** 它不是待办：任何声称"回执覆盖了所有写入路径"的说法
 都是假的，除非目录变成一个只能经由本进程写入的东西——那是另一个产品。
 
+**2026-08-27：同一条边界现在还管着目录树。**
+[ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
+让 `project_write`／`project_edit` 发布 `project_writes`，控制台据此让文件树在回合中
+自己刷新、并把这段会话写过的行标出来。它跟的是**记账过的**写入，所以上面那三条路径
+同样不在其中。界面上的措辞因此是"这段会话写过它"——一句它答得出的话——而不是"这是目录
+当前的样子"。**不要**把这个标记或这次刷新说成"树是活的"。
+
 ### F-26 `policy.write_tools_require_approval` 无人读取 —— 口径不实
 
 **证据**：[settings.py:927](../src/agent_workbench/bootstrap/settings.py) 是
@@ -1255,3 +1262,63 @@ settings 注释点名的"最贵的一种不变量：读起来是保证，实际�
 "每一次写都停下来的回合还能不能干完活"，以及它与 ADR-078 的读写回执如何分工；要么
 像 ADR-059 那样把字段删掉，那是一次 `config_schema_version` 变更，应当与下一次
 schema 变更合并，不单独 bump。
+
+**2026-08-27 更新，收窄但不关闭。**
+[ADR-087](./adr/0087-a-session-may-be-stricter-than-its-deployment.md) 把闸接上了：
+`CodeApprovals = "before_write"` 让这一轮的每一次写入停在人面前，`code_approval_risks`
+只加不减，界面上是发送框旁边三档里的中间那一档。上面那个悬而未决的问题——"每一次写
+都停下来还能不能干完活"——的答案是**不该由部署替所有人回答**，它是一次一回合的选择。
+
+**但这一条不关。** 缺口是这个**字段没有读者**，而 ADR-087 加的是一条**请求体上的**
+轴。`policy.write_tools_require_approval` 读起来仍然是"这个部署要求写入审批"，而它仍然
+不影响任何一次调用。收窄后的判据只剩一件事：把它接成 `code_approval_risks` 的**地板**
+（`base` 在它为真时含 `"write"`，会话仍然只能在其上加），这需要值域从
+`Literal[True]` 变成 `bool`——一次 `config_schema_version` 变更，仍然应当与下一次
+schema 变更合并。
+
+### F-27 项目目录一侧只看得了文本 —— 已知代价
+
+**证据**：`GET /v1/projects/{project_id}/file`
+（[projects.py](../src/agent_workbench/apps/api/routes/projects.py)）返回的是
+`ProjectFileContent`：`{path, text|null, size_bytes, is_text, modified_at}`
+（[ports/project_files.py](../src/agent_workbench/ports/project_files.py)）。整个
+projects 路由里没有 `StreamingResponse`，也没有 media type——**项目目录里的文件取不到
+字节**。所以
+[ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
+让项目侧用上了工作区那套查看器之后，`html` 与文本能看，`image` 与 `pdf` 仍然停在
+「这是一个二进制文件（N 字节），不显示内容。」
+
+**不要把理由写成"agent 放不进二进制"**。那句话看起来成立——`project_write` 的入参是
+`str`——但 ADR-077 之后回合还握着 `project_run`，一条命令能在项目目录里写出任何东西，
+而两个 local profile 都打开了 `policy.shell_tools_enabled`。**项目侧的二进制可以是
+产物。**
+
+**为什么这次不做**：补一条取字节的路由要给 `ProjectFileStore` 这个 Protocol 加方法、
+改它的实现、并过一遍 `tests/contracts/` 的参数化套件。而文本产物（`.md`／`.html`／
+源码）是绝大多数，它们一行后端代码都不用改就能看。这是一次排期，不是一次判定。
+
+**做完的判据**：`GET /v1/projects/{project_id}/file/bytes`，`StreamingResponse` +
+`content-length` + `x-content-type-options: nosniff` + 永久 `attachment`（沿用
+[downloads.py](../src/agent_workbench/apps/api/downloads.py)），**服务端不猜 media
+type**（返回 `application/octet-stream`，显示用的类型由客户端 `effectiveMediaType`
+决定），前端把它喂给已有的 `BlobPreview`。注意 `BlobPreview` 取字节做 object URL 而
+**不是**把 URL 当 iframe src，所以这不会重开 ADR-062 §3 拒绝的那条服务端预览端点。
+
+### F-28 Code 的文件预览不渲染 Markdown —— 已知代价
+
+**证据**：`text/markdown` 以 `text/` 开头 → `isReadableMedia` 为真 → `previewKind`
+返回 `"text"` → `FilePreview` 落进 `TextPreview` 的 `<pre>`
+（[media.ts](../web/src/components/media.ts)、
+[FilePreview.tsx](../web/src/features/code/FilePreview.tsx)）。而
+`MarkdownContent` 是存在的，chat、Code 的**报告**、Work 的产物面板都在用它——唯独没有
+接进文件预览。项目侧走同一张分派表，所以两侧一致地都不渲染。
+
+**为什么算已知代价而不是 bug**：一份 `.md` 的源码常常正是读者想看的东西，所以正确的
+形状不是"改成渲染"，而是像 `HtmlPreview` 那样给一个渲染／源码切换——那是一次有取舍的
+改动，不是补一行分派。
+
+**做完的判据**：**不要加第六个 `PreviewKind`**——ADR-065 §4 与 ADR-066 §2.3 把这张五值
+词汇表当契约钉住了，而每一个显示产物的界面都读它。做法是在 `kind === "text"` 这一支
+**内部**分叉：判 `effectiveMediaType(...) === "text/markdown"`，渲染 `MarkdownContent`
+并配一个与 `HtmlPreview` 同形的 `aw-segmented` 切换。两侧一起改，否则同一个文件在两处
+长得不一样——那正是 ADR-086 §1 修掉的那种分叉。

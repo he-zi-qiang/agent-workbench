@@ -1045,6 +1045,120 @@ def test_a_plan_turn_is_narrowed_to_reading_and_told_so() -> None:
     assert "you touched" not in planning.system_prompt
 
 
+def test_the_write_gate_adds_a_risk_and_can_subtract_none() -> None:
+    """ADR-087. The session may be stricter than the deployment, never looser.
+
+    Asserted over the whole cross product rather than on one arm, because the
+    property is about the *shape* of the answer and not about one case: the
+    deployment's own set has to be a subsequence of every return, so there is
+    no combination in which asking for the write gate quietly drops the gate
+    that was already armed.
+
+    `destructive` is the one that matters. It is `project_run` -- a command on
+    the user's own machine, which ADR-077 says is shown before it is run -- and
+    a permission control that could remove it would be a dropdown overturning
+    an ADR.
+    """
+
+    from agent_workbench.application.code_session import code_approval_risks
+
+    for gated in (False, True):
+        standard = code_approval_risks("standard", external_requires_approval=gated)
+        before_write = code_approval_risks(
+            "before_write", external_requires_approval=gated
+        )
+        assert "destructive" in standard
+        assert set(standard) <= set(before_write)
+        assert set(before_write) - set(standard) == {"write"}
+        # The deployment's own question, not this axis's: a session that asked
+        # for the write gate has said nothing about the network.
+        assert ("external" in before_write) is gated
+
+
+def test_a_write_gated_turn_holds_its_tools_and_only_changes_who_decides() -> None:
+    """ADR-087, and the half a risk-set assertion cannot reach.
+
+    The failure this exists for is the plausible one: a "stop before writing"
+    that was implemented by taking the write tools away. That would be a second
+    plan mode wearing another name -- and the reader who picked it would get a
+    turn that cannot do the thing they said yes to, having been asked nothing.
+
+    So the tool list must be *identical* to the ungated turn's, and only the
+    envelope's approval set and the prompt may differ.
+    """
+
+    from agent_workbench.application.code_session import CODE_PROJECT_TOOLS_WITH_RUN
+
+    def observed(approvals: Any) -> Any:
+        harness = _Harness(_writes("notes.md", "hello", "Done."))
+        recording = _Recording()
+        harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.tool_names = CODE_PROJECT_TOOLS_WITH_RUN  # pyright: ignore[reportAttributeAccessIssue]
+
+        async def scenario() -> Any:
+            session_id = await harness.opened()
+            await harness.service.ask(
+                CodeRequest(
+                    session_id=session_id,
+                    instruction="add a feature",
+                    principal=WRITER,
+                    run_id="run_1",
+                    approvals=approvals,
+                ),
+                harness.sink(session_id, "run_1"),
+                NullCancellationToken(),
+            )
+            return recording.requests[0]
+
+        return _run(scenario)
+
+    standard = observed("standard")
+    gated = observed("before_write")
+
+    # Same tools, same ceiling: this axis is about who decides, not about what
+    # is on offer.
+    assert list(gated.tool_names) == list(standard.tool_names)
+    assert gated.envelope.max_tool_risk == standard.envelope.max_tool_risk
+
+    assert "write" not in standard.envelope.approval_required_risks
+    assert "write" in gated.envelope.approval_required_risks
+    assert "destructive" in gated.envelope.approval_required_risks
+
+    # And the model is told, for the reason ADR-058's comment records: it
+    # behaves correctly for the world it was described as being in, and an
+    # undescribed gate buys twelve interruptions instead of three.
+    assert "stops at a person" in gated.system_prompt
+    assert "stops at a person" not in standard.system_prompt
+    # What it must not have been told is to write less. Pricing a tool too high
+    # buys silence rather than care, and the reader asked to be asked.
+    assert "write less" not in gated.system_prompt.replace(
+        "This\ndoes not mean write less.", ""
+    )
+
+
+def test_a_plan_turn_is_never_told_about_a_write_gate() -> None:
+    """ADR-087 §7. A plan turn holds no write tool, so it has no gate.
+
+    The two are one control on screen and two fields on the wire, so nothing
+    stops a client sending `mode="plan"` with `approvals="before_write"` --
+    and the prompt selector, not the client, is where that has to be harmless.
+    """
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS_WITH_RUN,
+        _system_prompt_for,
+    )
+
+    prompt = _system_prompt_for(
+        CODE_PROJECT_TOOLS_WITH_RUN,
+        external_requires_approval=False,
+        plan_only=True,
+        write_gate=True,
+    )
+    assert "This turn cannot change anything" in prompt
+    assert "stops at a person" not in prompt
+
+
 def test_a_plan_does_not_authorise_the_turn_that_follows() -> None:
     """ADR-0079's third invariant, and the reason plan mode is not an approval.
 

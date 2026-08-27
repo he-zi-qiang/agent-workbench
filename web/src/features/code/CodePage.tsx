@@ -46,6 +46,8 @@ import {
   PanelLeft,
   PanelRightOpen,
   Paperclip,
+  UserCheck,
+  Zap,
 } from "lucide-react";
 import {
   useCallback,
@@ -67,6 +69,7 @@ import {
   getCodeWorkspace,
   getProject,
   listCodeSessions,
+  listProjects,
   newIdempotencyKey,
   putCodeWorkspaceFile,
   renameCodeSession,
@@ -75,9 +78,11 @@ import {
 import type {
   ApprovalDecision,
   CodeSessionListResponse,
+  CodeTurnApprovals,
   CodeTurnMode,
   MessageView,
   PendingApprovalView,
+  ProjectFileEntryView,
   ProjectView,
   WorkspaceEntryView,
 } from "../../api/types";
@@ -101,7 +106,7 @@ import { ProjectFileTree } from "./ProjectFileTree";
 import { CodeTurn } from "./CodeTurn";
 import type { OpenedFile } from "./FilePreview";
 import { PreviewPanel } from "./PreviewPanel";
-import { buildTurnBlocks } from "./turnBlocks";
+import { buildTurnBlocks, projectWritesIn } from "./turnBlocks";
 import { useCodeStream } from "./useCodeStream";
 
 /** How often to ask what the agent is stopped on, while it is working. */
@@ -132,6 +137,60 @@ const CODE_STARTERS = [
  * staring at 这个会话还是空的 while steps stream past underneath.
  */
 const ORPHAN_RELOAD_DELAY_MS = 600;
+
+/**
+ * 这一轮的权限，作为一条梯子上的三个位置。
+ *
+ * 界面上是一个控件，信封里是两半：`mode` 收紧的是工具清单（ADR-0079），
+ * `approvals` 收紧的是「哪些风险要停在人面前」（ADR-087）。合成一个控件，是
+ * 因为读者问的是一个问题——「这一轮能干到什么程度」——而这三档确实是有序的：
+ * 不能改 < 改之前问我 < 直接改。Claude Code 的模式循环是同一个形状。
+ *
+ * 分成两个字段发出去，是因为服务端那两半各自有各自的不变量，而把它们并成一个
+ * 四值枚举，只会让唯一读它的那个地方再拆一次。这张表是那次合并唯一存在的位置。
+ *
+ * 没有第四档。「什么都别问我」要拿掉的是 `destructive`——在这台机器上跑一条
+ * 命令，而 ADR-077 说它跑之前要给人看见。这个控件只会往上收紧，收不松：一个
+ * 想要比部署配置更少提问的人，要去改部署，不是改这一轮。
+ */
+type CodePermission = "plan" | "ask" | "act";
+
+const TURN_OF: Readonly<
+  Record<CodePermission, { mode: CodeTurnMode; approvals: CodeTurnApprovals }>
+> = {
+  plan: { mode: "plan", approvals: "standard" },
+  ask: { mode: "act", approvals: "before_write" },
+  act: { mode: "act", approvals: "standard" },
+};
+
+/**
+ * 每一档说给读者的话。
+ *
+ * 三条都用同一个主语句式（「这一轮……」），因为它们是同一个问题的三个答案，
+ * 而不是三件不同的事。副标题说的是**后果**，不是设置名——「只读」是设置名，
+ * 「不会动任何文件」是读者要的那句。
+ */
+const PERMISSIONS: ReadonlyArray<{
+  value: CodePermission;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: "plan",
+    label: "只做计划",
+    hint: "这一轮只会读，不会动任何文件",
+  },
+  {
+    value: "ask",
+    label: "改前问我",
+    hint: "这一轮可以改文件，但每次写入都会停下来等你允许",
+  },
+  {
+    value: "act",
+    label: "自动改动",
+    hint: "这一轮可以直接改文件；只有不可撤销的操作才会停下来问你",
+  },
+];
 
 /** The three answers, and the one that is not always offered. */
 const DECISIONS: { decision: ApprovalDecision; label: string }[] = [
@@ -176,10 +235,11 @@ export function CodePage() {
   //: for the whole of the next session's fetch.
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
-  //: 计划模式（ADR-0079）。留在组件里而不是写进 URL 或 localStorage：它是**一轮**
-  //: 的属性，回合起始就被冻进信封，一个跨会话记住的开关会让"这一轮到底能不能写"
-  //: 变成一个读者要去别处查的问题。默认执行，因为绝大多数请求就是要它去做。
-  const [mode, setMode] = useState<CodeTurnMode>("act");
+  //: 这一轮的权限（ADR-0079 + ADR-087）。留在组件里而不是写进 URL 或
+  //: localStorage：它是**一轮**的属性，回合起始就被冻进信封，一个跨会话记住
+  //: 的开关会让「这一轮到底能不能写」变成一个读者要去别处查的问题。默认
+  //: `act`，因为绝大多数请求就是要它去做。
+  const [permission, setPermission] = useState<CodePermission>("act");
   //: 最近一轮计划的指令原文，用来支持「按这个计划执行」。存指令而不是存计划正文：
   //: 重发的是**同一个请求**，只是换成 act 模式——计划本身是散文，它不授权任何东西
   //: （ADR-0079 不变量 3），所以后面那一轮不该被它约束，也不该假装被它约束。
@@ -251,12 +311,16 @@ export function CodePage() {
   const queries = useQueryClient();
   // 哪个项目文件正被查看。只在这一层保存：它是「我在看哪个文件」，属于这次浏览，
   // 不属于会话——换个会话再回来，从头开始看是对的。
-  const [openProjectFile, setOpenProjectFile] = useState<string | null>(null);
+  //
+  // 存的是整行而不是路径：预览要在取正文之前知道字节数才能拒绝一个太大的
+  // 文件，而目录列表那一行本来就带着它（见 `ProjectFileTree` 的 `onOpenFile`）。
+  const [openProjectFile, setOpenProjectFile] =
+    useState<ProjectFileEntryView | null>(null);
   // 点开项目目录里的一个文件：它和会话产出共用右边那一栏，所以另一个要让位。
   // 两个都留着的话，那一栏得决定谁在上面，而读者刚点的那个显然应该在上面——
   // 与其在渲染时判断先后，不如在这里就只留一个。
-  const openProjectFileAt = useCallback((path: string) => {
-    setOpenProjectFile(path);
+  const openProjectFileAt = useCallback((entry: ProjectFileEntryView) => {
+    setOpenProjectFile(entry);
     setOpened(null);
     setPanelOpen(true);
   }, [setPanelOpen]);
@@ -330,6 +394,9 @@ export function CodePage() {
     () => (loadedFor === sessionId ? loadedFiles : []),
     [loadedFiles, loadedFor, sessionId],
   );
+
+  // 这条流里被写过的项目文件（ADR-086）。派生的，和上面几个同一个理由。
+  const projectWrites = useMemo(() => projectWritesIn(steps), [steps]);
 
   // Which run is live is derived inside `buildTurnBlocks`, from the run
   // bookkeeping in the events themselves rather than from anything this
@@ -518,7 +585,9 @@ export function CodePage() {
   }, [identity, pollingSession]);
 
   const send = useCallback(
-    async (turnMode: CodeTurnMode = mode, override?: string) => {
+    async (turnPermission: CodePermission = permission, override?: string) => {
+      const { mode: turnMode, approvals: turnApprovals } =
+        TURN_OF[turnPermission];
       const text = (override ?? instruction).trim();
       if (text === "" || running) return;
 
@@ -604,6 +673,7 @@ export function CodePage() {
         text,
         newIdempotencyKey("code"),
         turnMode,
+        turnApprovals,
       );
       // Remembered only on the way out of a plan turn that produced something.
       // A plan turn that failed has nothing to run, and an act turn clears it:
@@ -669,8 +739,8 @@ export function CodePage() {
     [
       identity,
       instruction,
-      mode,
       navigate,
+      permission,
       queries,
       reload,
       running,
@@ -858,6 +928,31 @@ export function CodePage() {
   });
   const projectRoot = project.data?.root_path ?? null;
 
+  // 目录树跟着写入走。
+  //
+  // 树是按层取的，每一层一个 `["project-files", identity, projectId, path]`
+  // 查询，`staleTime` 默认，但没有人去碰它——所以在这一行之前，agent 刚写出
+  // 来的文件要等到读者手动折叠再展开那一层才会出现。屏幕上的样子是「产物没有
+  // 落到文件夹里」，而实际上文件在磁盘上，只有那一份缓存不知道。
+  //
+  // 按前缀失效，不按具体那一层：写入的是 `docs/a/b.md` 时该刷新的是 `docs/a`，
+  // 而算出那个前缀等于在客户端做路径算术——`ProjectFileTree` 的注释里为另一
+  // 件事拒绝过同一种做法。整棵树的层数是读者展开过的那几层，重取它们便宜得
+  // 多，也不会漏掉「这次写入新建了一个目录」这种连父层都变了的情况。
+  //
+  // 触发条件是这个集合**变了**，不是「有事件到了」：事件在一轮里以每秒几十条
+  // 的速度来，而写入一轮通常只有几次。`joined` 是比较用的那个值，不是渲染用的。
+  const joinedWrites = projectWrites.join("\n");
+  const refreshedFor = useRef("");
+  useEffect(() => {
+    if (heldProjectId == null || joinedWrites === refreshedFor.current) return;
+    refreshedFor.current = joinedWrites;
+    void queries.invalidateQueries({
+      queryKey: ["project-files", identity, heldProjectId],
+    });
+  }, [heldProjectId, identity, joinedWrites, queries]);
+
+
   // 读者此刻在哪个文件夹里。
   //
   // 会话上写着的那个优先，起始屏刚选的那个次之——顺序不能反过来：`startingIn`
@@ -887,6 +982,28 @@ export function CodePage() {
   const visibleSessions = scoping ? inThisProject : known;
   const outsideCount = known.length - inThisProject.length;
 
+  // 文件夹名，只为「全部会话」那一档准备。
+  //
+  // 取的是同一个 `["projects", identity]`——`ProjectChooser` 和 `ProjectPicker`
+  // 已经在取它，所以这是第三个**订阅者**而不是第三次请求：react-query 认的是
+  // 键。`enabled` 挂在那一档上，因为收窄状态下没有人会读这张表，而一份没人读
+  // 的列表不值得在每次打开会话时都去取一次。
+  const projectList = useQuery({
+    enabled: !scoping,
+    queryKey: ["projects", identity],
+    queryFn: ({ signal }) => listProjects(identity, { signal }),
+  });
+  const projectNames = useMemo(
+    () =>
+      new Map(
+        (projectList.data?.projects ?? []).map((one) => [
+          one.project_id,
+          one.name,
+        ]),
+      ),
+    [projectList.data],
+  );
+
   const rail = (
     <WorkspaceSidebarPortal>
       {/* 一个纵向的壳，而不是把两块直接丢进 portal。portal 的容器是
@@ -898,7 +1015,8 @@ export function CodePage() {
             onOpenFile={openProjectFileAt}
             projectId={heldProjectId}
             rootPath={projectRoot}
-            selectedPath={openProjectFile}
+            selectedPath={openProjectFile?.path ?? null}
+            writtenPaths={projectWrites}
           />
         ) : null}
         <CodeSessionRail
@@ -919,7 +1037,9 @@ export function CodePage() {
             setScopedToProject((held) => !held);
           }}
           outsideCount={outsideCount}
+          projectNames={projectNames}
           renaming={renaming}
+          runningIds={runningIn}
           scoped={scoping}
           sessionId={sessionId}
           setRenaming={setRenaming}
@@ -960,25 +1080,39 @@ export function CodePage() {
         </div>
       )}
       <div className="aw-code-composer-row aw-mode-composer-card">
-        <label
-          className={`aw-code-plan-toggle ${mode === "plan" ? "is-on" : ""}`}
-          title={
-            mode === "plan"
-              ? "计划模式：这一轮只会读，不会改任何文件"
-              : "执行模式：这一轮可以改文件"
-          }
+        {/* 一个三档的选择器，不是一个「只做计划」的复选框。
+            复选框只答得出一个是非题，而读者要问的是三档里的哪一档——它把
+            「谁来拍板一次写入」整个留在了界面之外：没有这个控件的时候，
+            那件事由部署配置决定，而屏幕上没有任何地方说得出它是什么。
+            `aw-segmented` 是这份代码里已有的那个形状（`HtmlPreview` 的
+            渲染／源码用的是同一个类），因为这三个也是「同一件事的几种看法，
+            选一个」，不是三个各自独立的开关。 */}
+        <div
+          aria-label="这一轮的权限"
+          className="aw-segmented aw-code-permission"
+          role="group"
         >
-          <input
-            checked={mode === "plan"}
-            disabled={running}
-            onChange={(event) => {
-              setMode(event.target.checked ? "plan" : "act");
-            }}
-            type="checkbox"
-          />
-          <ClipboardList aria-hidden size={15} />
-          <span>只做计划</span>
-        </label>
+          {PERMISSIONS.map((choice) => (
+            <button
+              aria-pressed={permission === choice.value}
+              className={permission === choice.value ? "is-active" : ""}
+              disabled={running}
+              key={choice.value}
+              onClick={() => {
+                setPermission(choice.value);
+              }}
+              title={choice.hint}
+              type="button"
+            >
+              {choice.value === "plan" ? (
+                <ClipboardList aria-hidden size={13} />
+              ) : null}
+              {choice.value === "ask" ? <UserCheck aria-hidden size={13} /> : null}
+              {choice.value === "act" ? <Zap aria-hidden size={13} /> : null}
+              {choice.label}
+            </button>
+          ))}
+        </div>
         {sessionId === undefined ? null : (
           <label
             className={`aw-code-attach ${uploading ? "is-busy" : ""}`}
@@ -1101,7 +1235,15 @@ export function CodePage() {
   // 两个来源共用一栏，后点开的那个说了算，而页面在打开任一个时清掉另一个。
   const panelProjectFile =
     heldProjectId != null && openProjectFile !== null
-      ? { projectId: heldProjectId, path: openProjectFile }
+      ? {
+          projectId: heldProjectId,
+          path: openProjectFile.path,
+          // `?? 0` 到不了：`size_bytes` 只在目录上是 null（`ports/project_files.py`
+          // 说的是「目录没有大小，不是大小为零」），而目录点开是展开，不是打开。
+          // 写成兜底而不是断言，是因为这里没有值得为它抛异常的事——真到了那一
+          // 步，0 会让预览照常打开，而服务端 2 MiB 的读上限仍然在。
+          sizeBytes: openProjectFile.size_bytes ?? 0,
+        }
       : null;
   // 两个条件：读者要它展开，而且这一栏有东西可显示。
   //

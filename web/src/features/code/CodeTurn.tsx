@@ -63,7 +63,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { WorkspaceEntryView } from "../../api/types";
 import { CommandTrace } from "../../components/CommandTrace";
 import { LiveActivity, type LiveActivityKind } from "../../components/LiveActivity";
@@ -413,13 +413,41 @@ function formatElapsed(ms: number): string {
  *
  * A thought short enough to have no body is a plain `<p>`, not a `<details>`
  * with nothing in it: a caret that opens onto emptiness is worse than no caret.
+ *
+ * ## 为什么它在落定的那一刻收回去
+ *
+ * 上一版是 `useState(live)`，注释写的是「读者在它流的时候打开过，落定之后就
+ * 让它开着」——理由本身是对的，认错的是**谁打开的**。没有人打开它：它是因为
+ * 正在流才展开的，而 `live` 从来不是一次表态。于是一轮十步走完，屏幕上留下
+ * 十段全文展开的推理，中间夹着十行动作——这正是「思考过程太乱、还长」说的
+ * 那件事，而且它随轮次变长而变差。
+ *
+ * 现在两件事分开记：`open` 仍然由 `live` 起头，但多一个 `touched`，只有
+ * `onToggle` 会把它置真。落定时，碰过的保持原样，没碰过的收回摘要。读者的
+ * 表态因此仍然被尊重——只是「它自己展开过」不再算作表态。
+ *
+ * 这也是 Codex 的 scrollback 与 Claude Code 的记录采取的形状：推理默认是一
+ * 行暗色的摘要，展开是读者要来的，不是它自己留下的。
  */
 function Thought({ live, text }: { live: boolean; text: string }) {
   const { head, body } = splitThought(text);
-  // Initialised from `live` and never synced back. A thought the reader opened
-  // while it streamed stays open when the turn settles -- the same reason
-  // `FileCard`'s `inlineOpen` is state and not a controlled prop.
   const [open, setOpen] = useState(live);
+  // 记的是「有人动过这一段」，不是「这一段现在是开的」。两者在流式展开的那一
+  // 刻看起来一样，在落定的那一刻才分开，而分开的那一刻正是下面唯一要判断的。
+  //
+  // 挂在 `<summary>` 的 click 上，不是挂在 `<details>` 的 toggle 上，而这不是
+  // 口味问题——第一版挂在 toggle 上，于是这整段代码什么也没做。React 是先建出
+  // `<details>` 再把 `open` 设成 true 的，而设这个属性本身就会派发一次
+  // `toggle`：每一段流式推理在挂载的那一刻都「被人动过」了，落定时便一段也不
+  // 收。click 没有这个问题，因为没有人合成它——鼠标点摘要是 click，键盘在摘要
+  // 上按 Enter／空格也是 click，而 React 同步 DOM 属性不是。
+  const touched = useRef(false);
+  // 落定即收，除非碰过。`live` 从真变假是这个 effect 唯一的触发条件——
+  // 它不该在读者每次开合时再跑一遍，那会把刚打开的那一段立刻关掉。
+  useEffect(() => {
+    if (live || touched.current) return;
+    setOpen(false);
+  }, [live]);
   const className = live
     ? "aw-code-step-thought is-live"
     : "aw-code-step-thought";
@@ -428,7 +456,7 @@ function Thought({ live, text }: { live: boolean; text: string }) {
     return (
       <p className={className}>
         <ThoughtLabel live={live} />
-        {head}
+        <span className="aw-code-thought-head">{head}</span>
       </p>
     );
   }
@@ -440,20 +468,43 @@ function Thought({ live, text }: { live: boolean; text: string }) {
       }}
       open={open}
     >
-      <summary>
+      <summary
+        onClick={() => {
+          touched.current = true;
+        }}
+      >
         <ThoughtLabel live={live} />
-        {head}
+        {/* 一个 span，因为它要能被钳住。`THOUGHT_HEAD_MAX` 是 120 个**字符**，
+            而屏幕关心的是**行**：120 个汉字在一栏 820px 的正文里是两到三行，
+            一轮四步就是八到十二行灰斜体——**在全部收起的状态下**。折叠解决了
+            「正文有多长」，没解决「摘要有多长」，而后者才是读者扫这一列时看
+            见的东西。 */}
+        <span className="aw-code-thought-head">{head}</span>
       </summary>
       <p className="aw-code-step-thought-body">{body}</p>
     </details>
   );
 }
 
+/**
+ * 谁在说这一行。
+ *
+ * 落定之后不再写「思考摘要」四个字，只留那颗星。一轮里有几步就有几段推理，
+ * 而每一段都顶着同一个词，屏幕上就多出一列重复的标签——它对第一段是说明，
+ * 对后面每一段都只是噪声。图标已经把「这是推理，不是动作」说清楚了，而且是
+ * 在不占一行文字的前提下说的。
+ *
+ * 「正在思考」留着，因为它不是标签是状态：它回答的是「它此刻在干什么」，
+ * 而那个问题只在一个地方成立，也只有一段会顶着它。
+ *
+ * 落定那一段的 `aria-label` 补在 sr-only 里，不靠图标。图标是 `aria-hidden`，
+ * 去掉可见文字之后，屏幕阅读器听到的会是一段没有出处的话。
+ */
 function ThoughtLabel({ live }: { live: boolean }) {
   return (
     <span className="aw-code-thought-label">
       <Sparkles aria-hidden="true" size={12} />
-      {live ? "正在思考" : "思考摘要"}
+      {live ? "正在思考" : <span className="aw-sr-only">思考摘要</span>}
     </span>
   );
 }
@@ -472,14 +523,19 @@ function codeLiveStatus({
   thinking: string;
 }): { title: string; detail: string; kind: LiveActivityKind; meta: string | null } | null {
   if (!blockLive && activeProgress === undefined) return null;
-  if (thinking !== "") {
-    return {
-      title: "正在思考下一步",
-      detail: "分析目标并选择接下来的动作",
-      kind: "thinking",
-      meta: null,
-    };
-  }
+  // 有思考在流的时候，这里什么也不说。
+  //
+  // ADR-064 把「正在思考」搬到了它促成的那一步上：那一行**就是**指示灯，它带
+  // 着模型此刻写出来的字。这里曾经在它正上方再画一条「正在思考下一步 / 分析目
+  // 标并选择接下来的动作」——同一件事说两遍，而且第二遍是一句通用的旁白，压在
+  // 一句具体的话上面。ADR-064 删掉过它，它又回来了：`CodePage.test.tsx` 里那条
+  // 测试只正向断言「思考是一行」，没有反向钉住「上面没有那条横幅」，于是回归
+  // 时无人报警。这一次连反向断言一起补上。
+  //
+  // `return null` 而不是往下落：往下会落到 `activeStep.group` 那一支（第一次
+  // 工具调用之前它是 null），最后落到「正在处理任务 / 等待下一条执行记录」——
+  // 一句比它替掉的那句更空的话，压在同一段思考上面。
+  if (thinking !== "") return null;
   if (activeStep?.group !== null && activeStep?.group !== undefined) {
     return {
       title: activeStep.group.title,

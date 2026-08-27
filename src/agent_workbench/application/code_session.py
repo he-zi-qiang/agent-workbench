@@ -53,6 +53,7 @@ from agent_workbench.application.code_prompt import (
     CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
     with_host_commands,
     with_plan_only,
+    with_write_gate,
 )
 from agent_workbench.application.file_read_receipts import ReadReceipts
 from agent_workbench.application.project_file_scope import ProjectFileScope
@@ -293,6 +294,7 @@ def _system_prompt_for(
     *,
     external_requires_approval: bool,
     plan_only: bool = False,
+    write_gate: bool = False,
 ) -> str:
     """What this turn is told about the world it is in.
 
@@ -335,6 +337,14 @@ def _system_prompt_for(
         base = with_host_commands(base)
     if plan_only:
         base = with_plan_only(base)
+    # After `with_plan_only`, and only ever without it: a plan turn holds no
+    # write tool at all, so telling it that its writes will stop at a person is
+    # describing a world it is not in -- the exact failure this whole selection
+    # exists to avoid. The two are mutually exclusive at the call site as well,
+    # because the ladder has one position per turn; the `and` here is what
+    # makes that true of this function on its own.
+    if write_gate and not plan_only:
+        base = with_write_gate(base)
     return base
 
 
@@ -357,6 +367,39 @@ def read_only(
     """
 
     return tuple(name for name in tool_names if risks.get(name) == "read")
+
+
+def code_approval_risks(
+    approvals: CodeApprovals, *, external_requires_approval: bool
+) -> tuple[ToolRisk, ...]:
+    """Which risks stop at a person for this turn (ADR-087).
+
+    The deployment's own set is computed first and is always in the answer;
+    the session's choice can only add to it. That is the whole safety argument
+    of this axis written as code rather than as a sentence: there is no branch
+    in which `"destructive"` is absent, so a console cannot ask for a turn that
+    runs `project_run` without anybody being asked -- which is the thing
+    ADR-077 exists to prevent, and which a `Literal` with a third position
+    would have made one enum value away.
+
+    It is the same shape as `read_only` one function up, for the same reason.
+    Plan mode's invariant -- "plan only ever narrows" -- is checkable by
+    reading two lists rather than by trusting the function that produced them.
+    Here it is checkable by reading one expression: `base` is a subsequence of
+    every return.
+
+    ``external`` is not this axis's business either way. Whether a search or a
+    container stops at a human is ADR-058's and ADR-0085's question and the
+    deployment answers it; a session that wanted the write gate has said
+    nothing about the network.
+    """
+
+    base: tuple[ToolRisk, ...] = (
+        ("external", "destructive") if external_requires_approval else ("destructive",)
+    )
+    if approvals == "standard":
+        return base
+    return ("write", *base)
 
 
 def code_risk_ceiling(
@@ -449,6 +492,27 @@ def new_code_session_id() -> str:
 #: choice somebody made.
 CodeMode = Literal["act", "plan"]
 
+#: Who decides that a write happens: the model, or the person watching
+#: (ADR-087).
+#:
+#: A second axis on the same ladder as `CodeMode`, deliberately not folded into
+#: it. Flattened into one four-position control the two read as one ordering --
+#: plan < ask-me < don't-ask -- and Claude Code's mode cycle does exactly that
+#: flattening. It is the wrong shape *here* because the two are answered by
+#: different halves of the envelope: `plan` narrows `allowed_tools`, and this
+#: narrows `approval_required_risks`. A single `Literal` would have to be taken
+#: apart again at the one place it is used, and the two halves would then be
+#: derived from one value that names neither of them.
+#:
+#: There is no third position, and the missing one is the interesting one.
+#: "Ask me about nothing" would have to drop `destructive`, and `destructive`
+#: is `project_run` -- a command on the user's own machine, which ADR-077 says
+#: is shown before it is run. So this axis may only **add** to what the
+#: deployment already gates, never subtract, exactly as plan mode may only
+#: narrow the tool list. A person who wants fewer questions than the ceiling
+#: allows is asking the deployment, not the session.
+CodeApprovals = Literal["standard", "before_write"]
+
 
 @dataclass(frozen=True, slots=True)
 class CodeRequest:
@@ -463,6 +527,10 @@ class CodeRequest:
     #: says so in the prompt. Defaults to `"act"`, which is what every caller
     #: written before plan mode existed meant.
     mode: CodeMode = "act"
+    #: Whether every write of this turn stops at a person (ADR-087).
+    #: ``"standard"`` is what every caller written before this existed meant --
+    #: the deployment's own gate and nothing added.
+    approvals: CodeApprovals = "standard"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1116,10 +1184,15 @@ class CodeSessionService:
                 # rather than consent (the card shows a digest, ADR-054), and
                 # the Task path has always run the same `sandbox_run` ungated,
                 # so the deployment now says which arrangement it wants.
-                approval_required_risks=(
-                    ("external", "destructive")
-                    if self.external_requires_approval
-                    else ("destructive",)
+                # Both paragraphs still hold; what is new is that this line
+                # now also reads a fact about the turn itself --
+                # `request.approvals` (ADR-087). It can only *add* `write` to
+                # this set and can subtract nothing, and the shape of
+                # `code_approval_risks` is that invariant rather than a
+                # sentence about it.
+                approval_required_risks=code_approval_risks(
+                    request.approvals,
+                    external_requires_approval=self.external_requires_approval,
                 ),
             ),
             budget=self.budget.model_copy(
@@ -1137,6 +1210,7 @@ class CodeSessionService:
                 tool_names,
                 external_requires_approval=self.external_requires_approval,
                 plan_only=request.mode == "plan",
+                write_gate=request.approvals == "before_write",
             ),
             messages=(*history, asked),
             # Both, and they are not the same thing: the envelope says what
@@ -1170,6 +1244,7 @@ __all__ = [
     "CODE_PROJECT_TOOLS_WITH_RUN",
     "CODE_TOOLS",
     "CODE_TOOLS_WITH_SANDBOX",
+    "CodeApprovals",
     "CodeCapacityError",
     "CodeMode",
     "CodeRequest",
@@ -1179,6 +1254,7 @@ __all__ = [
     "CodeSessionService",
     "CodeTurn",
     "CodeTurnBusyError",
+    "code_approval_risks",
     "code_risk_ceiling",
     "new_code_session_id",
     "read_only",
