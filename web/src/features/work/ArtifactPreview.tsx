@@ -12,6 +12,7 @@ import { HtmlPreview } from "../../components/HtmlPreview";
 import { MarkdownContent } from "../../components/MarkdownContent";
 import {
   browserShowsPdfInline,
+  isMarkdown,
   mediaLabel,
   previewKind,
 } from "../../components/media";
@@ -19,7 +20,6 @@ import { ErrorNotice, LoadingLine, errorMessage } from "../../components/ui";
 import { workIdentityQueryKey } from "./workQueryKeys";
 import {
   formatBytes,
-  isMarkdown,
   layoutDeclineNote,
   PreviewGaps,
   type PanelLayoutDecline,
@@ -306,7 +306,16 @@ export function ArtifactPreview({
               A `<pre>` for everything else, matching what the Code console
               shows for the same bytes. That a Task cannot *run* its .py is a
               recorded trade (ADR-065 §4: no working set here); rendering it as
-              a document was never a trade, just a default nobody had split. */}
+              a document was never a trade, just a default nobody had split.
+
+              The Markdown half of that sentence was one-sided until F-28 was
+              closed: this panel rendered a `.md` and the Code console handed
+              back `<pre>` for the same bytes. `isMarkdown` now lives in
+              `components/media.ts` and both sides ask it. What Code has on top
+              is a 源码 toggle, and that asymmetry is the same one §4 records
+              for the run button: a *coding* console is where a `.md` is as
+              often a file being edited as a document being read. Here there is
+              nothing to edit, so there is nothing to switch to. */}
           {previewKind(artifact.media_type) === "text" &&
           isMarkdown(artifact.media_type) ? (
             <MarkdownContent text={preview.data.text} />

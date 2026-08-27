@@ -2558,10 +2558,24 @@ describe("CodePage", () => {
 
     // Before this the only way to see a file was to ask the agent to read it
     // back -- a model call to answer a question the store already knows.
-    expect(await screen.findByText("- ship it")).toBeInTheDocument();
+    //
+    // A `.md` arrives as the document it was written to be (F-28): `- ship it`
+    // is a list item, so the text node is the item and the dash is the markup
+    // that produced it. Asserting the `<li>` rather than the string is the
+    // point -- a `<pre>` holding the source would satisfy `findByText("ship
+    // it")` too if the query were loose enough.
+    const item = await screen.findByText("ship it");
+    expect(item.closest("li")).not.toBeNull();
     expect(vi.mocked(getCodeWorkspaceFileText).mock.calls[0]?.slice(1)).toEqual(
       [SESSION, "notes.md"],
     );
+
+    // 源码 gives the bytes back, and gives them back **without a second
+    // fetch**: both views are served from one cache entry, which is why the
+    // markdown arm reuses the plain arm's `load` and key.
+    await user.click(screen.getByRole("button", { name: "源码" }));
+    expect(screen.getByText("- ship it")).toBeInTheDocument();
+    expect(vi.mocked(getCodeWorkspaceFileText).mock.calls).toHaveLength(1);
   });
 
   it("runs a .py from the panel, and never shows one file's output under another's name", async () => {

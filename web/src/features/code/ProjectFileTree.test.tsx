@@ -275,6 +275,69 @@ describe("ProjectFileBody", () => {
     expect(await screen.findByText("hello")).toBeInTheDocument();
   });
 
+  it("renders a project .md as the document it was written to be", async () => {
+    // 项目目录那一侧和工作区那一侧走同一个查看器（F-28）。分派表共用之后还留下
+    // 这一处不共用，就会变成：agent 写出的 `report.md` 在工作区里是一份排好版
+    // 的文档，在项目目录里是一屏 `##`——同一份字节，两种待遇。
+    const user = userEvent.setup();
+    vi.mocked(readProjectFile).mockResolvedValue({
+      path: "docs/report.md",
+      text: "# 标题\n\n- ship it\n",
+      size_bytes: 24,
+      is_text: true,
+      modified_at: "2026-08-22T00:00:00Z",
+    });
+
+    mount(
+      <ProjectFileBody path="docs/report.md" projectId="prj_1" sizeBytes={24} />,
+    );
+
+    expect((await screen.findByText("标题")).tagName.toLowerCase()).toBe("h1");
+    await user.click(screen.getByRole("button", { name: "源码" }));
+    expect(screen.getByText(/# 标题/)).toBeInTheDocument();
+  });
+
+  it("leaves another text file as source, Markdown renderer untouched", async () => {
+    // 这一条挑的是一个**确实落进 text 臂**的文件（`.py` → `text/x-python`），
+    // 不是一个没有后缀的。第一版用的是 `Makefile`，而它 `effectiveMediaType`
+    // 猜不出类型、`previewKind` 因此给 `none`——那条用例根本到不了这个分支，
+    // 把判断整个删掉它也照样通过。
+    //
+    // 而这正是要防的那次事故：Work 的产物面板记着，一个 `.py` 被当成 Markdown
+    // 画出来是缩进被折掉、`# 注释` 被提成标题、`*args` 被吃成强调。
+    vi.mocked(readProjectFile).mockResolvedValue({
+      path: "src/main.py",
+      text: "# 入口\ndef main(*args):\n    return args\n",
+      size_bytes: 44,
+      is_text: true,
+      modified_at: "2026-08-22T00:00:00Z",
+    });
+
+    mount(
+      <ProjectFileBody path="src/main.py" projectId="prj_1" sizeBytes={44} />,
+    );
+
+    expect(await screen.findByText(/# 入口/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "源码" })).toBeNull();
+  });
+
+  it("shows an extensionless text file as text, not as unviewable", async () => {
+    // 项目目录里到处是没有后缀的文本文件（`Makefile`、`LICENSE`、`.gitignore`）。
+    // 「用哪个查看器」只能按名字猜，而「它到底是不是文本」不猜——服务端解码过了。
+    // 把猜不出类型的一律拒掉，是拿一个已经答得出的问题去换一次猜测。
+    vi.mocked(readProjectFile).mockResolvedValue({
+      path: "Makefile",
+      text: "build:\n\tgo build ./...\n",
+      size_bytes: 26,
+      is_text: true,
+      modified_at: "2026-08-22T00:00:00Z",
+    });
+
+    mount(<ProjectFileBody path="Makefile" projectId="prj_1" sizeBytes={26} />);
+
+    expect(await screen.findByText(/go build/)).toBeInTheDocument();
+  });
+
   it("describes a binary file rather than drawing it", async () => {
     vi.mocked(readProjectFile).mockResolvedValue({
       path: "logo.png",

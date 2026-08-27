@@ -9,7 +9,8 @@ import {
 import type { ProjectFileEntryView } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { HtmlPreview } from "../../components/HtmlPreview";
-import { effectiveMediaType, previewKind } from "../../components/media";
+import { MarkdownPreview } from "../../components/MarkdownPreview";
+import { effectiveMediaType, isMarkdown, previewKind } from "../../components/media";
 import { LoadingLine } from "../../components/ui";
 
 /**
@@ -360,7 +361,8 @@ export function ProjectFileBody({
   // 项目文件在服务端没有 media type——它就是磁盘上的一个文件，没人给它标过。
   // 所以按名字猜，猜法用的是全站同一张表：`effectiveMediaType` 本来就是为
   // 「存的类型什么也没说」这一种情况写的。
-  const kind = previewKind(effectiveMediaType("", name));
+  const guessed = effectiveMediaType("", name);
+  const kind = previewKind(guessed);
   // 服务端另有一条 2 MiB 的读上限（`ports/project_files.py` MAX_READ_BYTES），
   // 它答的是别的问题——「这次读能不能做」。这里答的是「这一屏要不要展开」，
   // 两个数不一样，也不该合并。
@@ -423,7 +425,26 @@ export function ProjectFileBody({
           sizeBytes={sizeBytes}
         />
       ) : null}
-      {body?.is_text === true && kind !== "html" ? (
+      {body?.is_text === true && kind === "text" && isMarkdown(guessed) ? (
+        // 和工作区那一侧同一个查看器、同一条判断（`FilePreview` 的 text 臂）。
+        // 分派表共用之后还留下这一处不共用，就会变成：agent 写出的 `report.md`
+        // 在工作区里是一份排好版的文档，在项目目录里是一屏 `##`——而这正是这
+        // 整块改动要消灭的那种「同一份字节，两种待遇」。
+        //
+        // `load` 立即 resolve，正文已经在手上；键里带 `modified_at`，理由同上
+        // 面那个 `HtmlPreview`。
+        <MarkdownPreview
+          load={() => Promise.resolve({ text: body.text ?? "", truncated: false })}
+          queryKey={[
+            "project-file-markdown",
+            identity,
+            projectId,
+            path,
+            body.modified_at,
+          ]}
+        />
+      ) : null}
+      {body?.is_text === true && kind !== "html" && !(kind === "text" && isMarkdown(guessed)) ? (
         <pre>
           <code>{body.text}</code>
         </pre>

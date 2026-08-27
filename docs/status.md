@@ -28,6 +28,52 @@
 
 ---
 
+## 2026-08-27（未合并，同分支，第二十九批之二）：一份 `.md` 在哪儿都该是同一份 `.md`
+
+第二十九批把项目侧接上工作区那套查看器时，记下了 F-28：两侧**一致地**都不渲染
+Markdown——`text/markdown` 以 `text/` 开头，`previewKind` 给 `"text"`，于是落进
+`TextPreview` 的 `<pre>`。而 `MarkdownContent` 一直都在，chat、Code 的报告、Work 的
+产物面板都在用它，唯独没有接进文件预览。
+
+**这一条不是「Code 少了个功能」，是三个界面对同一份字节给了两种答案**：Work 的产物
+面板渲染 `.md`，Code 的两侧都不渲染。而 Work 那段代码的注释里还写着「其余一律 `<pre>`，
+与 Code 控制台对同一批字节的显示一致」——那句话此前只有一半成立。
+
+### 做了什么
+
+- 新增 `components/MarkdownPreview.tsx`，props 与 `TextPreview` 逐字相同
+  （`load` + `queryKey`），所以两个调用方都是一行替换，两个查看器也不可能在取数和
+  缓存上分叉。默认渲染，源码在一个与 `HtmlPreview` 同形的切换后面；被截断的文件不
+  渲染，并说出为什么那个控件是灰的。
+- `isMarkdown` 从 `features/work/preview.tsx` 提到 `components/media.ts`，紧挨着
+  `isRunnablePython`。一份谓词，因为答案不该取决于是哪一页在问。
+- Code 的两侧（`FilePreview` 的 text 臂、`ProjectFileBody`）各接一处，共用同一个
+  `load` 和同一个缓存键——一次传输服务渲染与源码两个视图。
+- 改掉 Work 那段已经只对一半的注释。
+
+### 没有加第六个 `PreviewKind`
+
+ADR-065 §4 为 `python` 拒绝过这个形状，理由在这里一字不改地成立：`previewKind` 是
+**每一个**展示文件的界面共用的词表（Work 的产物面板也读它），而「怎么画」是只有其中
+一部分能回答的问题。所以 Markdown 是 text 臂里的第二问，和 `isRunnablePython` 并排。
+
+因此这一批**没有 ADR**：它没有改任何边界，反而是按一份既有 ADR 的判决去做的。
+
+### 一个被自己的测试抓住的错
+
+第一版给项目侧写的反向用例挑了 `Makefile`，想证明「不是 Markdown 的文本仍按源码画」。
+把判断整个删掉，那条用例照样通过——因为 `Makefile` 没有后缀，`effectiveMediaType`
+猜不出类型，`previewKind` 给的是 `none`，它**根本到不了那个分支**。改用 `.py`
+（`text/x-python`，确实落进 text 臂）之后，同一个变异立刻把它打红。原来那条断言另拆
+成一条用例留着，因为「没有后缀的文本文件仍然看得见」本身值得钉住。
+
+### 门禁
+
+前端 `566 → 573`（新增 4 条 `MarkdownPreview` 用例、2 条项目侧用例，1 条既有用例改成
+同时断言渲染与源码）。后端未触及。
+
+---
+
 ## 2026-08-27（未合并，分支 `feat/code-console-five-gaps`，第二十九批）：产物不该为它落在哪一侧负责
 
 一次用户反馈，对 Code 控制台提了五件事。**其中三件在代码里是同一件**——项目目录那一侧
@@ -89,8 +135,7 @@ pnpm --dir web check   （本机走 var/toolchain/node + NODE_OPTIONS=--no-exper
 
 - **F-27**：项目侧取不到字节，所以图片／PDF 仍然看不了。**理由不是「agent 放不进
   二进制」**——ADR-077 之后 `project_run` 能写任何东西；理由是排期。
-- **F-28**：两侧都不渲染 Markdown（`.md` 落进 `<pre>`）。正确形状是渲染／源码切换，
-  不是加第六个 `PreviewKind`。
+- ~~**F-28**：两侧都不渲染 Markdown~~ —— **同批已关闭**，见下一节。
 - **F-26 收窄但不关**：闸接上了，`policy.write_tools_require_approval` 这个**字段**
   仍然没有读者。
 - **F-25 补了一句**：目录树跟的是记账过的写入，`project_run`／控制台 `PUT`／用户自己的

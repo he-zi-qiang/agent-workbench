@@ -1304,21 +1304,28 @@ type**（返回 `application/octet-stream`，显示用的类型由客户端 `eff
 决定），前端把它喂给已有的 `BlobPreview`。注意 `BlobPreview` 取字节做 object URL 而
 **不是**把 URL 当 iframe src，所以这不会重开 ADR-062 §3 拒绝的那条服务端预览端点。
 
-### F-28 Code 的文件预览不渲染 Markdown —— 已知代价
+### F-28 Code 的文件预览不渲染 Markdown —— **已关闭**（2026-08-27，同批）
 
-**证据**：`text/markdown` 以 `text/` 开头 → `isReadableMedia` 为真 → `previewKind`
-返回 `"text"` → `FilePreview` 落进 `TextPreview` 的 `<pre>`
-（[media.ts](../web/src/components/media.ts)、
-[FilePreview.tsx](../web/src/features/code/FilePreview.tsx)）。而
+**曾经的证据**：`text/markdown` 以 `text/` 开头 → `isReadableMedia` 为真 →
+`previewKind` 返回 `"text"` → `FilePreview` 落进 `TextPreview` 的 `<pre>`。而
 `MarkdownContent` 是存在的，chat、Code 的**报告**、Work 的产物面板都在用它——唯独没有
 接进文件预览。项目侧走同一张分派表，所以两侧一致地都不渲染。
 
-**为什么算已知代价而不是 bug**：一份 `.md` 的源码常常正是读者想看的东西，所以正确的
-形状不是"改成渲染"，而是像 `HtmlPreview` 那样给一个渲染／源码切换——那是一次有取舍的
-改动，不是补一行分派。
+**做完的样子**：新增 [MarkdownPreview](../web/src/components/MarkdownPreview.tsx)，
+props 与 `TextPreview` 完全相同（`load` + `queryKey`），所以两个调用方都是一行替换，
+两个查看器也不可能在取数和缓存上分叉。默认渲染，源码在一个与 `HtmlPreview` 同形的
+`aw-segmented` 切换后面；被截断的文件不渲染（理由同 `HtmlPreview`：半份文档画出来是
+它从来不是的样子，却被当成产物）。
 
-**做完的判据**：**不要加第六个 `PreviewKind`**——ADR-065 §4 与 ADR-066 §2.3 把这张五值
-词汇表当契约钉住了，而每一个显示产物的界面都读它。做法是在 `kind === "text"` 这一支
-**内部**分叉：判 `effectiveMediaType(...) === "text/markdown"`，渲染 `MarkdownContent`
-并配一个与 `HtmlPreview` 同形的 `aw-segmented` 切换。两侧一起改，否则同一个文件在两处
-长得不一样——那正是 ADR-086 §1 修掉的那种分叉。
+**没有加第六个 `PreviewKind`**，这是 ADR-065 §4 拒绝过的形状：`previewKind` 是每一个
+展示文件的界面共用的词表，而「怎么画」是只有其中一部分能回答的问题。Markdown 因此是
+text 臂里的第二问——`isMarkdown(...)`，紧挨着 `isRunnablePython(...)`，同一个形状同一
+个理由。`isMarkdown` 从 `features/work/preview.tsx` 提到了
+[components/media.ts](../web/src/components/media.ts)：一份谓词，因为答案不该取决于
+是哪一页在问。
+
+**Work 那一侧保持只渲染、不给切换**，而这不是漏做。Code 多出来的那个 源码 档，与
+ADR-065 §4 记下的「运行按钮只在 Code 有」是同一种不对称：**编码**控制台里一份 `.md`
+既可能是要读的文档、也可能是刚被写出来正要被检查的文件；Task 的产物面板里没有要编辑
+的东西，也就没有要切过去的东西。
+
