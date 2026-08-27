@@ -28,6 +28,59 @@
 
 ---
 
+## 2026-08-27（未合并，第二十七批）：那件工具被造出来了，只是没有人把它接上
+
+第二十六批（PR #180）合进 `main` 之后，用真实模型跑了一轮 Code 会话去验证联网。
+**它没能搜。** 模型的原话是「本部署没有联网搜索工具」，然后转去用 `sandbox_run` 抓网页，
+被 `--network=none` 正确地拒掉。
+
+也就是说：**上一批合并了一个不工作的能力**，而它的 PR 说明里写着「Implemented」。
+这一节记录那个缺陷、它为什么能穿过全部门禁，以及补的那条测试。
+
+### 缺陷：两根线
+
+| 层 | 状态 |
+|---|---|
+| `bootstrap/projections.py` 算出 `code.web_search_enabled` | ✅ 有 |
+| `application/code_session.py` 的字段与那一处 append | ✅ 有 |
+| 四个元组、`code_risk_ceiling`、提示词锚点 | ✅ 有 |
+| **`apps/api/dependencies.py` 把开关传给 `CodeSessionService`** | ❌ **一处都没有** |
+| **`_code_registry()` 里的 web 绑定** | ❌ **没有** |
+
+字段默认 `False`，所以 append 从不发生；名字从不被 offer，所以 `code_risk_ceiling`
+也从不抛错。**没有任何东西会响**——一个安静地什么都不做的能力。
+
+### 它为什么穿过了全部门禁
+
+因为每一层单独看都是对的。投影有测试、service 有测试、元组有测试、提示词有 import 期
+断言——**而这两根线的断点，从它们各自所在的文件里都看不见**。
+`ruff` / `pyright` / 2940 条测试 / CI 四项，一个都不会红。
+
+这正是本仓「能力声明只能凭可链接的证据往上走」那条规矩要防的东西。上一批把口径写成
+Implemented 并注明「还没有一条可链接的真实回合」——**那句注明是对的，而它本该被当成
+一个待办，不是一句免责**。真去跑那一轮，缺陷五分钟就出来了。
+
+### 补的测试，以及它确实会红
+
+`tests/api/test_code_api.py::test_a_granted_search_reaches_the_turn_and_the_registry`
+从**装配好的应用**同时断言两件事：service 被告知可以 offer 这个名字，且它将被要求解析
+这个名字的 registry 里真的有它。任一单独成立就是已经发布过的那个状态，而那个状态什么
+都不做。
+
+验证过它是实的：把那两行临时拆掉 → `assert False is True` 失败；装回 → 通过。
+
+它落在需要 `AGENT_WORKBENCH_TEST_DSN` 的「真实装配」一节，所以 CI 的
+「Migrations, PostgreSQL and Qdrant-backed stores」那一档会跑到它。
+
+### 证据
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check` / `ruff check` / `pyright` | 干净 / All checks passed / 0 errors |
+| `pytest`（离线） | **2940 passed, 774 skipped** |
+| `pytest`（接库，仅该条） | 1 passed；拆线复现为 1 failed |
+
+
 ## 2026-08-27（未合并，分支 `feat/a-search-is-also-a-leaving`，第二十六批）：一次搜索也是一次离开
 
 第二十三批留下的第三条缺口：Code 会话没有任何联网工具，`web_search` 的 binding 在同一个

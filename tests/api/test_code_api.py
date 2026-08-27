@@ -811,6 +811,69 @@ def _booted(
     "AGENT_WORKBENCH_TEST_DSN" not in os.environ,
     reason="the real assembly needs a database",
 )
+def test_a_granted_search_reaches_the_turn_and_the_registry(tmp_path: Path) -> None:
+    """ADR-085's wiring, asserted where it actually broke.
+
+    The projection computed `code.web_search_enabled`, the service had the
+    field and the append, the four tuples were correct, and every unit test
+    passed -- and a real turn still had no search tool, because *assembly*
+    never passed the flag and never put the binding in the registry. Two wires,
+    each invisible from the file the other lives in.
+
+    So this asserts the pair together, from the assembled application: the
+    service is told it may offer the name, and the registry it will be asked to
+    resolve that name against actually holds it. Either one alone is what
+    shipped, and what shipped did nothing.
+
+    The `and` matters as much as the flag. `web_search_enabled` is projected as
+    "the policy flag **and** a provider is configured", so the second half is
+    exercised too -- a name offered against a registry with no spec is a
+    `ValueError` out of `code_risk_ceiling`, and that ends the turn rather than
+    degrading it.
+    """
+
+    from agent_workbench.domain.research import WEB_SEARCH_TOOL
+
+    async def execute() -> tuple[bool, bool, tuple[str, ...]]:
+        payload_settings = _assembled_settings(tmp_path, code_enabled=True)
+        granted = payload_settings.model_copy(
+            update={
+                "policy": payload_settings.policy.model_copy(
+                    update={"search_tools_enabled": True}
+                ),
+                "research": payload_settings.research.model_copy(
+                    update={"enabled": True}
+                ),
+            }
+        )
+        dependencies = build_dependencies(project_api(granted))
+        try:
+            code = dependencies.code
+            assert code is not None, "this deployment was asked for Code"
+            registry = code.tools
+            return (
+                code.web_search_enabled,
+                registry.get(WEB_SEARCH_TOOL) is not None,
+                tuple(code.tool_names),
+            )
+        finally:
+            await dependencies.dispose()
+
+    offered, resolvable, names = asyncio.run(execute())
+
+    assert offered is True
+    # The half that was missing. A registry without it turns the append above
+    # into a per-turn ValueError instead of a search.
+    assert resolvable is True
+    # The tuples themselves are unchanged -- search is appended per turn, not
+    # baked into a fifth tuple (ADR-085 §3).
+    assert WEB_SEARCH_TOOL not in names
+
+
+@pytest.mark.skipif(
+    "AGENT_WORKBENCH_TEST_DSN" not in os.environ,
+    reason="the real assembly needs a database",
+)
 def test_a_deployment_that_asks_for_code_gets_the_routes(tmp_path: Path) -> None:
     """Boots the actual application, from the shipped config plus one flag.
 
