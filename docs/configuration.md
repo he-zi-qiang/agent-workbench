@@ -13,7 +13,7 @@
 - `pyproject.toml` 与 `uv.lock`：运行时和测试依赖的唯一声明与解析结果。
 
 正式项目锁定 Python `>=3.12,<3.13`。
-当前架构基线为 `1.3`，配置 schema 为 `1.18`；两者是不同版本轴，架构基线不随
+当前架构基线为 `1.3`，配置 schema 为 `1.19`；两者是不同版本轴，架构基线不随
 配置 schema 走。schema 每一次抬升都对应一条 ADR：
 
 | schema | 原因 | 依据 |
@@ -35,6 +35,7 @@
 | `1.15` → `1.16` | **又一次方向相反的**：`code.shell_enabled` 改名为 `code.sandbox_enabled` 并从冻结 `Literal[False]` 解冻成 `bool`。停止加载的是 1.15 那份文件——设置拒绝未知的 `AW_*` 与未知键，所以写着 `shell_enabled` 的配置在 1.16 下不再加载。改名不是措辞问题：那个字段的注释把「给一个 shell」和「授予 `sandbox_run`」当成同一件事，而 ADR-029 的沙箱是一次调用建一个断网容器、文件进文件出、调用之间无状态的纯函数。解冻的理由是原冻结理由（"设了也拿不到东西"）已被接线消除。`execution_locality` 与 `coordination` **继续冻结** | [ADR-057](./adr/0057-a-pure-function-is-not-a-shell.md) |
 | `1.16` → `1.17` | **删除死配置**：`workflow.node_retry_max_attempts` 与 `node_timeout_seconds` 被校验、从未被消费——LangGraph 适配器没有 RetryPolicy 也没有每节点时钟，读到它们的人以为节点会重试而它们不会。停止加载的是写着这两个键的 1.16 文件（严格设置拒绝未知键）。重试从此住在 Task 层：`coordination.max_attempts` 同时管租约回收与可重试的执行失败。同一版把两处实测过的预算写回默认（`runtime.max_steps` 12→40、`multi_agent.max_tokens_per_agent_invocation` 16000→120000）——加性改动本不抬版，搭删除的车 | [ADR-059](./adr/0059-a-retryable-failure-is-released-not-settled.md) |
 | `1.17` → `1.18` | **方向和 `1.15` → `1.16` 相同，补的是那次留下的洞**：`policy.shell_tools_enabled` 从冻结 `Literal[False]` 解冻成 `bool`。ADR-057 当年把 `code.shell_enabled` 改名成 `code.sandbox_enabled`，理由是那个字段把「给一个 shell」和「授予 `sandbox_run`」当成了同一件事——而ADR-029 的沙箱是纯函数。改名退掉了**不是** shell 的那个面的名字，却始终没有人去做**是** shell 的那个面。`project_run` 是它，而这个字段是它的闸门。解冻的理由和上次同构：原冻结理由是「设了也拿不到东西」，它有九个 schema 版本之久**在 `src/` 里没有任何消费者**，是配置对自己说的一句没人校验的话。它落在 `[policy]` 而不是 `[code]`，因为 `policy_fingerprint` 会哈希这一段的每个字段：翻动它就改变 `policy_identity`，此后每一次运行都记着自己跑在哪个答案下。默认仍是 `false`，`config/` 里只有 `code-local` 打开它 | [ADR-077](./adr/0077-a-command-on-this-machine-is-shown-before-it-is-run.md) |
+| `1.18` → `1.19` | **一次改名，因为旧名字承诺了类型做不到的事**：`code.sandbox_requires_approval` → `code.external_requires_approval`。这个字段实际产出的是 `approval_required_risks`，而那个元组是**按风险档**取值的、不是按工具——ADR-0085 给编码会话加了第二件 `external` 工具（`web_search`）之后，一个信封无法武装其中一件而放过另一件，旧名字就成了一句办不到的承诺。停止加载的是写着旧键的 1.18 文件（严格设置拒绝未知键）；`config/` 里没有任何 profile 显式设过它，所以本仓自身零改动。同一版新增 `policy.search_tools_enabled`（既有段下带默认值的新叶子，本不抬版，搭改名的车）。默认值 `false` 的论证同时被重写：原先第一条理由（ADR-054「哈希没法被同意」）已被 ADR-077 推翻——`tool_gateway` 现在无条件把规范化后的**真实参数**写进 `PermissionRequested.approval_preview` | [ADR-0085](./adr/0085-a-search-is-also-a-leaving.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。

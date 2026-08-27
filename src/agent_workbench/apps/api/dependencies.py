@@ -160,7 +160,6 @@ from agent_workbench.domain.runs import RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
 from agent_workbench.domain.tools import ToolName, ToolSpec
 from agent_workbench.ports.artifact_store import ArtifactStore
-from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 from agent_workbench.ports.telemetry import Telemetry
@@ -985,10 +984,12 @@ def _assemble_chat(
                 base_url=research.base_url,
                 max_uses=research.max_uses,
             ),
-            # Chat has no per-run cancellation token to hand a tool here; the
-            # gateway enforces the tool's own timeout, and the request dies with
-            # the connection either way.
-            cancellation=NullCancellationToken(),
+            # No cancellation argument any more, and its absence is the fix.
+            # This used to pass `NullCancellationToken()` with the note "chat
+            # has no per-run cancellation token to hand a tool here" -- true of
+            # this call site, and the wrong place to be looking: the executor
+            # fills a live token into every `ToolInvocation`, which is where
+            # every other tool reads it from (ADR-0085).
             journal=journal,
         ).binding()
 
@@ -1341,7 +1342,7 @@ def _assemble_chat(
             project_tool_names=_code_project_tools(
                 host_commands=config.code.host_commands_enabled,
             ),
-            sandbox_requires_approval=config.code.sandbox_requires_approval,
+            external_requires_approval=config.code.external_requires_approval,
         )
         if config.code.enabled
         else None

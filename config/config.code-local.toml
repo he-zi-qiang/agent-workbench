@@ -157,6 +157,23 @@ allow_local_bootstrap = true
 [policy]
 shell_tools_enabled = true
 
+# 一等的联网搜索（ADR-085）。**这一行是被人明确批准后才写下的**，不是默认打开。
+#
+# 这个 profile 下面有 `[research] enabled = true`，所以 `bootstrap/projections.py`
+# 里那个「旗子为真**且** research 配了」的与直接成立，`web_search` 会真的出现在每个
+# Code 回合的工具目录里。
+#
+# 净变化不是天花板也不是审批门，是**有没有人在场**——ADR-085 §1 有实测表：这个
+# profile 走 `CODE_PROJECT_TOOLS_WITH_RUN`，天花板本来就是 `destructive`，加 search
+# 一格不动。变的是：在这一行之前，Code 要够到网络必须写一条 `curl` 走 `project_run`，
+# 而那是 `destructive`、无条件上膛、卡片上是规范化后的真实命令；在这一行之后，
+# 够到网络**不再需要任何人在场**，而不可信的网页文本会落进一个握着 `project_write`／
+# `project_edit`（`write` 风险，永不上膛）的回合。
+#
+# 要收回它就改这一行。别去找批量批准的旁路——`approve_for_session` 对 external／
+# destructive 是硬拒的，那条拒绝是设计。
+search_tools_enabled = true
+
 [code]
 enabled = true
 
