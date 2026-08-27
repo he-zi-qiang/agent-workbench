@@ -28,6 +28,78 @@
 
 ---
 
+## 2026-08-27（未合并，分支 `feat/a-search-is-also-a-leaving`，第二十六批）：一次搜索也是一次离开
+
+第二十三批留下的第三条缺口：Code 会话没有任何联网工具，`web_search` 的 binding 在同一个
+API 进程里被造出来了，却只进了 chat 的 registry。
+
+### 这一节先说一件关于过程的事
+
+**这批的大部分代码不是本次写的。** 接手时这个共享 checkout 已经在
+`feat/a-search-is-also-a-leaving` 分支上，带着 327 行未提交改动与一个未跟踪的
+`domain/research.py`，最后修改时间是 22 小时前。它 `ruff`／`pyright` 干净、
+`pytest` 2939 全绿——但：
+
+- **`docs/adr/0085-*.md` 不存在，而代码里有 19 处引用 ADR-0085。** 悬空引用，
+  且违反"动边界先写 ADR"。
+- `docs/status.md` 没有条目。
+- `policy.search_tools_enabled` 只以默认 `false` 存在于 `settings.py`，**两个 profile
+  一个都没打开**——能力建好了但处于关闭状态，用户仍然搜不了。
+- 设计里那条把"回合期 500"变成"import 期失败"的组合断言**没写**。
+
+本批做的是：补 ADR、补断言与测试、补这一节，并且**核实**已有实现而不是重写它。
+
+### 核实纠正了设计里的一处断言
+
+三方案对抗式设计的结论里有一句"加 search 既不抬天花板也不多一次审批"。对着真实 spec
+跑 `code_risk_ceiling`（2026-08-27）：
+
+| 元组 | 无 search | 加 search | |
+|---|---|---|---|
+| `CODE_TOOLS` | `write` | **`external`** | 抬高 |
+| `CODE_TOOLS_WITH_SANDBOX` | `external` | `external` | 不变 |
+| `CODE_PROJECT_TOOLS` | `write` | **`external`** | 抬高 |
+| `CODE_PROJECT_TOOLS_WITH_RUN` | `destructive` | `destructive` | 不变 |
+
+那句话**只对已经握着 external 或更高工具的两条臂成立**。控制台今天走 `WITH_RUN`
+（ADR-077 的开关上一批打开了），所以那一格确实不变——但不能写成普遍断言，ADR §1
+按实测写。
+
+### 真正的净变化（ADR-085 的头条）
+
+不是天花板，也不是审批门：
+
+> 今天 Code 够到网络必须花掉一次人类审批（`curl` 走 `project_run`，`destructive`，
+> 无条件上膛，卡片上是真实命令）。加了 `web_search` 之后，够到网络**不再需要任何人
+> 在场**，而不可信网页文本落进一个握着 `project_write`／`project_edit`
+> （`write`，永不上膛）的回合。
+
+### 本批新增的那条守卫
+
+`with_host_commands` 与 `with_web_search` 都靠"恰好匹配一条否则 raise"工作，而它们的
+锚点集是**耦合**的：前者把整句 no-shell 换成 `_HAS_SHELL`，而 `_HAS_SHELL` 描述网络是
+可达的（第二十三批补的），所以它跑完之后三条 no-shell 拼写一条都不在、第四个锚点才在。
+
+锚点集若只有前三条，`with_web_search` 会匹配到 0 并 raise，**触发条件是
+`config.code-local.toml` 的默认组合，即每一个项目态回合 500**——不在 import、不在测试，
+是生产里每回合一次，而模块类型检查通过。
+
+新增 `_assert_every_prompt_combination_resolves()`：4 元组 × gated/ungated × plan/act
+共 32 次求值，模块 import 时跑。实测确认它是实的：锚点数 4，无锚点输入时 raise。
+
+### 证据
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check` / `ruff check` / `pyright` | 干净 / All checks passed / 0 errors |
+| `pytest`（离线） | **2940 passed, 774 skipped** |
+| import 期组合断言 | 32 组合全解析；`_NETWORK_CLAIMS` 4 锚点；0 锚点输入 raise |
+
+**能力口径停在 Implemented，不是 Demonstrated**：两个 profile 都还没打开这个旗子，
+所以还没有一次真实模型跑出来的联网 Code 回合可链接。CI 的 `quality` job 断言
+`embedding` extra 未安装，也跑不到这条路——真实证据只能来自本地，并且必须标明。
+
+
 ## 2026-08-26（未合并，工作区，第二十五批）：沙箱第一次画得出一页中文
 
 第二十三批留下的第二条缺口：Code 模式生成不了 PDF。当时的判定是"扁平会话的

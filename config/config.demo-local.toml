@@ -160,7 +160,7 @@ max_concurrent_turns = 1
 #     `scripts/dev.sh demo-api` probes it first and says so with the command
 #     that fixes it, so the refusal should arrive before the process does.
 #   * Calls run without a per-call approval (ADR-058): the default
-#     `code.sandbox_requires_approval = false` applies here. The container is
+#     `code.external_requires_approval = false` applies here. The container is
 #     the safety story; a deployment that wants the old per-call gate sets
 #     that key to true.
 sandbox_enabled = true

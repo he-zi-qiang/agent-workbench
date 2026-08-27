@@ -1411,7 +1411,7 @@ class TestRunningACommand:
 
     def test_it_is_destructive_and_says_which_scope_it_needs(self) -> None:
         # `destructive` rather than `external`, and the gap is the whole point:
-        # `code.sandbox_requires_approval` defaults to False, so an `external`
+        # `code.external_requires_approval` defaults to False, so an `external`
         # tool would run ungated by default. `destructive` is armed in every
         # Code envelope regardless.
         spec = ProjectRunTool(ProjectFileScope(), ReadReceipts(), environment={}).spec()

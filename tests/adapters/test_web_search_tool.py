@@ -36,11 +36,16 @@ class _Search:
         self._hits = hits
         self._error = error
         self.queries: list[str] = []
+        self.tokens: list[Any] = []
 
+    #: Every token this fake was handed, in order. The point of recording them
+    #: rather than ignoring the argument: what a search is cancelled by is not
+    #: visible from its result, so it has to be asserted on the way in.
     async def search(
         self, *, query: str, limit: int, cancellation: Any
     ) -> tuple[ExternalSearchHit, ...]:
         self.queries.append(query)
+        self.tokens.append(cancellation)
         if self._error is not None:
             raise self._error
         return self._hits[:limit]
@@ -50,12 +55,18 @@ def _hit(url: str, text: str = "what the page said") -> ExternalSearchHit:
     return ExternalSearchHit(url=url, title=f"title of {url}", text=text)
 
 
-def _run(search: _Search, journal: WebSearchJournal, **arguments: Any) -> Any:
+def _run(
+    search: _Search,
+    journal: WebSearchJournal,
+    *,
+    cancellation: Any = None,
+    **arguments: Any,
+) -> Any:
     tool = WebSearchTool(
         search=search,  # pyright: ignore[reportArgumentType]
-        cancellation=NullCancellationToken(),
         journal=journal,
     )
+    turn_token = NullCancellationToken() if cancellation is None else cancellation
     invocation = ToolInvocation(
         call=ToolCall(
             tool_call_id="tc_1",
@@ -68,10 +79,35 @@ def _run(search: _Search, journal: WebSearchJournal, **arguments: Any) -> Any:
             agent_run_id=RUN,
             policy_identity="test",
         ),
-        cancellation=NullCancellationToken(),
+        cancellation=turn_token,
         timeout_seconds=SPEC.timeout_seconds,
     )
     return asyncio.run(tool.handle(invocation))
+
+
+def test_the_search_is_cancelled_with_the_turn_not_with_the_process() -> None:
+    """ADR-0085. The token has to be the one the executor filled in per call.
+
+    Until this test the tool held a `cancellation` field set at construction,
+    and the registry is built once at process start -- so the only token it
+    could ever hold belonged to no turn. The API assembled it as
+    `NullCancellationToken()` with the note "chat has no per-run cancellation
+    token to hand a tool here", which was true of that call site and was the
+    wrong place to be looking: `ToolInvocation.cancellation` is filled by
+    `runtime/tool_executor.py` on every call, and every other tool in this
+    package already reads it from there.
+
+    The failure it caused was quiet rather than loud -- a cancelled turn left
+    its search running to completion and waited for it -- which is why it needs
+    a test that looks at what the port was handed rather than at a result.
+    """
+
+    search = _Search(_hit("https://example.com/a"))
+    turn_token = NullCancellationToken()
+
+    _run(search, WebSearchJournal(), cancellation=turn_token)
+
+    assert search.tokens == [turn_token]
 
 
 def test_the_tool_needs_the_external_search_scope() -> None:

@@ -75,6 +75,7 @@ from agent_workbench.domain.policies import (
     risk_within,
 )
 from agent_workbench.domain.project_files import PROJECT_RUN_TOOL
+from agent_workbench.domain.research import WEB_SEARCH_TOOL
 from agent_workbench.domain.runs import (
     AgentOutcome,
     AgentRunRequest,
@@ -93,11 +94,25 @@ from agent_workbench.ports.conversation_store import (
 from agent_workbench.ports.project_files import ProjectFileStore
 from agent_workbench.ports.tools import ToolRegistry
 
-#: What a coding session is allowed to reach with the sandbox off: read tools
-#: plus the two writes, and nothing external. A deployment that leaves
+#: What a coding session reaches on the flat side when nothing wider was
+#: granted: read tools plus the two writes.
+#:
+#: The sentence that used to follow -- "a deployment that leaves
 #: `code.sandbox_enabled` false gets exactly this, and therefore never reaches
-#: the approval gate -- the envelope requires one only for external and
-#: destructive risks.
+#: the approval gate" -- was deleted in two goes, and both halves are worth
+#: recording because a property comment that has quietly stopped being true is
+#: worse than none.
+#:
+#: The first half went with ADR-073: `code.sandbox_enabled` decides the *flat*
+#: tuple only, and the project side does not read it at all
+#: (`apps/api/dependencies.py`, "is not read on this side any more").
+#:
+#: The second half went with ADR-0085, which gave a session a second `external`
+#: tool that is not the sandbox. "Never reaches the approval gate" is now a
+#: claim about a specific tuple rather than about a deployment, and it is
+#: `test_the_flat_tuple_holds_nothing_that_reaches_the_gate` that keeps it --
+#: asserted against the registered `ToolSpec`s, so a tool whose risk changes
+#: fails the test rather than the comment.
 CODE_TOOLS: tuple[ToolName, ...] = (
     "workspace_edit",
     "workspace_grep",
@@ -132,15 +147,25 @@ CODE_PROJECT_TOOLS: tuple[ToolName, ...] = (
     "project_write",
 )
 
-#: The same list plus the one external tool a coding session may be granted
+#: The same list plus the one external tool that belongs to *this side*
 #: (ADR-057). Spelled out as its own tuple rather than assembled at the call
 #: site, so "what may a coding session reach" has two answers to read rather
 #: than one answer and an append.
 #:
-#: `sandbox_run` is `external` risk, which is what makes every call stop at the
-#: approval gate. That is the intended cost of granting it, not a side effect:
-#: running code on somebody's machine is the kind of thing worth being asked
-#: about, and it is why the gate was armed before anything could trigger it.
+#: That argument has a premise, and ADR-0085 is where it was worth stating:
+#: spelling combinations out beats appending only while there are fewer names
+#: than combinations. `sandbox_run` and `project_run` each belong to one side
+#: because of what they are -- one reads a ContextVar the other side never
+#: sets, the other needs a directory -- so they add tuples, not dimensions.
+#: `web_search` is true of both sides and adds a dimension; written this way it
+#: would double the four literals and bring back the `_AND_` names ADR-077 had
+#: just deleted. It is therefore a flag on the service and one append, and this
+#: sentence is why the two are not treated the same.
+#:
+#: `sandbox_run` is `external` risk. Whether that stops at a human is
+#: `code.external_requires_approval`, which defaults to `false` (ADR-058) --
+#: the container is the safety story, not the gate. `destructive` stays armed
+#: regardless, which is what `project_run` sits behind.
 CODE_TOOLS_WITH_SANDBOX: tuple[ToolName, ...] = (
     *CODE_TOOLS,
     SANDBOX_RUN_TOOL,
@@ -209,10 +234,64 @@ def _assert_project_tuples_enter_their_own_scope() -> None:
 _assert_project_tuples_enter_their_own_scope()
 
 
+def _assert_every_prompt_combination_resolves() -> None:
+    """Every world a turn can start in has exactly one prompt (ADR-0085).
+
+    `with_host_commands` and `with_web_search` both work by finding **exactly
+    one** claim to correct and raising when they find zero or two. That is the
+    right discipline -- a base prompt that drifted would otherwise ship a turn
+    holding a tool it has been told it does not have -- but it makes the two
+    rewriters' anchor sets a coupled pair, and the coupling is invisible from
+    either file.
+
+    It is invisible in a specific and expensive way. `with_host_commands`
+    replaces a whole no-shell sentence with `_HAS_SHELL`, and `_HAS_SHELL`
+    describes the network as reachable rather than absent -- so after it runs,
+    none of the three no-shell spellings is in the prompt any more and the
+    fourth anchor is. A `with_web_search` whose anchors were only the first
+    three would find zero matches and raise **on every project turn of a
+    deployment that granted both**, which is `config.code-local.toml`'s default
+    pair. Not at import, not in one test: a 500 per turn, in production, from a
+    module that type-checks.
+
+    So the combinations are enumerated here and evaluated at import, where a
+    drift costs a failed process start instead of a failed conversation. Four
+    tuples x gated/ungated x search/no-search x plan/act is 32 evaluations of a
+    pure function over string constants; it costs nothing and it is the only
+    place the pair is checked together.
+
+    Deliberately **not** folded into `_assert_project_tuples_enter_their_own_
+    scope` above. That one asks whether a tuple leaks a tool into a scope it
+    does not enter, and `web_search` enters no scope at all -- it would be
+    trivially true there for ever, which is the same as not being checked.
+    """
+
+    from agent_workbench.application.code_prompt import with_web_search
+
+    tuples = (
+        CODE_TOOLS,
+        CODE_TOOLS_WITH_SANDBOX,
+        CODE_PROJECT_TOOLS,
+        CODE_PROJECT_TOOLS_WITH_RUN,
+    )
+    for names in tuples:
+        for gated in (False, True):
+            for plan_only in (False, True):
+                base = _system_prompt_for(
+                    names,
+                    external_requires_approval=gated,
+                    plan_only=plan_only,
+                )
+                # The search arm is applied to the same base the service
+                # applies it to, so a rewriter that cannot find its anchor
+                # raises here rather than on somebody's turn.
+                with_web_search(base)
+
+
 def _system_prompt_for(
     tool_names: tuple[ToolName, ...],
     *,
-    sandbox_requires_approval: bool,
+    external_requires_approval: bool,
     plan_only: bool = False,
 ) -> str:
     """What this turn is told about the world it is in.
@@ -247,7 +326,7 @@ def _system_prompt_for(
     elif SANDBOX_RUN_TOOL in tool_names:
         base = (
             CODER_SYSTEM_PROMPT_WITH_SANDBOX
-            if sandbox_requires_approval
+            if external_requires_approval
             else CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED
         )
     else:
@@ -449,7 +528,21 @@ class CodeSessionService:
     #: Whether each ``sandbox_run`` call stops for a human (ADR-058). Defaults
     #: to the settings default rather than contradicting it; the assembly in
     #: `apps/api/dependencies.py` always passes the configured value.
-    sandbox_requires_approval: bool = False
+    external_requires_approval: bool = False
+    #: Whether this session may search the live web (ADR-0085).
+    #:
+    #: A flag rather than a fifth tuple, and that is the decision rather than a
+    #: shortcut. `sandbox_run` belongs only to the flat side and `project_run`
+    #: only to the project side because of what those tools *are* -- one reads
+    #: a ContextVar the other side never sets, the other needs a directory.
+    #: `web_search` enters no scope and is equally true of both, so it is the
+    #: first axis here that is genuinely orthogonal. Written as tuples it would
+    #: take the four literals to eight, two of them spelled `_AND_` -- the
+    #: shape ADR-077 had just finished deleting (see `CODE_PROJECT_TOOLS_WITH_
+    #: RUN`). And the argument for spelling them out at all, below, is that
+    #: there are fewer names than combinations; a Cartesian product retires
+    #: that argument by itself.
+    web_search_enabled: bool = False
     _running: set[str] = field(default_factory=set[str], init=False)
     _turns: int = field(default=0, init=False)
 
@@ -873,6 +966,25 @@ class CodeSessionService:
         tool_names = (
             self.tool_names if project_files is None else self.project_tool_names
         )
+        # The one append, in the statement that already freezes the file
+        # language, so a turn has one moment where "what am I holding" is
+        # answered rather than two.
+        #
+        # Before `read_only` below, and the consequence is that a **plan turn
+        # loses it**: `read_only` keeps `risk == "read"` and `web_search` is
+        # `external`. That is the right outcome from the wrong-looking rule, so
+        # it is worth saying which. Plan mode narrows by risk on purpose
+        # (ADR-0079) -- a name-suffix filter would be a second place a tool's
+        # risk is written down -- and the risk is `external` for the reason
+        # `domain/research.py` gives: the question leaves this process. A plan
+        # turn that could put the user's question on the open web would be
+        # doing something a turn "that cannot change anything" should not.
+        #
+        # It is still a gap for the reader who wanted to research before
+        # planning, and it is recorded as one (F-27) rather than papered over
+        # with an exception here.
+        if self.web_search_enabled:
+            tool_names = (*tool_names, WEB_SEARCH_TOOL)
         # Frozen here, beside the file-language decision ADR-073 §5.2 freezes
         # in the same statement and for the same reason: deciding it per tool
         # call would let something change what the running model is holding
@@ -1006,7 +1118,7 @@ class CodeSessionService:
                 # so the deployment now says which arrangement it wants.
                 approval_required_risks=(
                     ("external", "destructive")
-                    if self.sandbox_requires_approval
+                    if self.external_requires_approval
                     else ("destructive",)
                 ),
             ),
@@ -1023,7 +1135,7 @@ class CodeSessionService:
             # an instruction to avoid the tool this deployment just freed).
             system_prompt=_system_prompt_for(
                 tool_names,
-                sandbox_requires_approval=self.sandbox_requires_approval,
+                external_requires_approval=self.external_requires_approval,
                 plan_only=request.mode == "plan",
             ),
             messages=(*history, asked),
@@ -1047,6 +1159,11 @@ class CodeSessionService:
         while self._turns and self.clock() < deadline:
             await asyncio.sleep(0.05)
 
+
+# Called here rather than beside its definition: it evaluates
+# `_system_prompt_for`, which is defined further down this module. Import
+# order is the only reason for the distance.
+_assert_every_prompt_combination_resolves()
 
 __all__ = [
     "CODE_PROJECT_TOOLS",

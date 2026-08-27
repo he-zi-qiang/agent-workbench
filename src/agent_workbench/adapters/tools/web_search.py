@@ -31,12 +31,15 @@ from pydantic import JsonValue
 from agent_workbench.application.chat_execution import WebSearchJournal
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.evidence import ExternalSearchHit
+from agent_workbench.domain.research import WEB_SEARCH_SCOPE, WEB_SEARCH_TOOL
 from agent_workbench.domain.tools import ToolResult, ToolSpec
-from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.research import ExternalSearchPort, SourcesUnreadableError
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 
-TOOL_NAME: Final[str] = "web_search"
+#: Re-exported rather than redefined: `domain/research.py` owns it now, and
+#: the name has to be sayable from `application/` (ADR-0085). Kept as a
+#: module attribute so every existing importer of this module still works.
+TOOL_NAME: Final[str] = WEB_SEARCH_TOOL
 MAX_QUERY_LENGTH: Final[int] = 4096
 MAX_LIMIT: Final[int] = 8
 DEFAULT_LIMIT: Final[int] = 5
@@ -72,7 +75,7 @@ SPEC: Final[ToolSpec] = ToolSpec(
     # Longer than the Task tool's 30s: this fetches the pages it found, and a
     # search that reads five sites is slower than one that reports five links.
     timeout_seconds=120,
-    permission_scopes=("external:search",),
+    permission_scopes=(WEB_SEARCH_SCOPE,),
 )
 
 
@@ -85,7 +88,6 @@ class WebSearchTool:
     """``web_search``, over whatever ``ExternalSearchPort`` is configured."""
 
     search: ExternalSearchPort
-    cancellation: CancellationToken
     journal: WebSearchJournal
     limit: int = DEFAULT_LIMIT
 
@@ -110,7 +112,17 @@ class WebSearchTool:
         self.journal.record(invocation.context.agent_run_id)
         try:
             hits = await self.search.search(
-                query=query, limit=limit, cancellation=self.cancellation
+                # `invocation.cancellation`, not a token stored at construction.
+                # The registry is built once at process start, so a field here
+                # can only ever hold a token that belongs to no turn -- this
+                # module was the last one still doing it, and every other tool
+                # (`external_search.py`, `sandbox.py`, `export_artifact.py`)
+                # already reads the live one the executor fills in per call.
+                # The bug it caused was quiet: cancelling a turn left its search
+                # running to completion, and the turn waited for it (ADR-0085).
+                query=query,
+                limit=limit,
+                cancellation=invocation.cancellation,
             )
         except SourcesUnreadableError as error:
             # Search worked. The pages it found could not be opened from this

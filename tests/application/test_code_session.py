@@ -500,7 +500,7 @@ def test_the_gate_arms_what_the_deployment_chose() -> None:
         recording = _Recording()
         harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
         harness.service.tool_names = CODE_TOOLS_WITH_SANDBOX  # pyright: ignore[reportAttributeAccessIssue]
-        harness.service.sandbox_requires_approval = requires_approval  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.external_requires_approval = requires_approval  # pyright: ignore[reportAttributeAccessIssue]
 
         async def scenario() -> Any:
             session_id = await harness.opened()
@@ -629,6 +629,46 @@ def test_a_sandbox_turn_is_told_to_probe_before_declaring_a_format_out_of_reach(
         assert "reportlab" not in prompt
 
 
+def test_every_prompt_combination_resolves_at_import() -> None:
+    """The guard that turns a per-turn 500 into a failed process start.
+
+    `with_host_commands` and `with_web_search` each demand exactly one anchor
+    and raise otherwise. Their anchor sets are coupled and the coupling is
+    invisible from either file: `with_host_commands` replaces the whole
+    no-shell sentence with `_HAS_SHELL`, which describes the network as
+    reachable rather than absent, so afterwards none of the no-shell spellings
+    is present and only the fourth anchor is.
+
+    A `with_web_search` whose anchors were only the no-shell three would
+    therefore match zero and raise on **every project turn of a deployment
+    that granted both** -- which is `config.code-local.toml`'s default pair.
+    Not at import, not in one test: a 500 per turn, from a module that
+    type-checks.
+
+    This test asserts the guard exists and is load-bearing. Importing the
+    module already runs it; what is added here is the second half -- that a
+    prompt with no anchor at all is refused rather than passed through, so a
+    guard that had been narrowed to nothing would fail here.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        _NETWORK_CLAIMS,
+        with_web_search,
+    )
+    from agent_workbench.application.code_session import (
+        _assert_every_prompt_combination_resolves,
+    )
+
+    # Runs 32 evaluations; raises if any combination has drifted.
+    _assert_every_prompt_combination_resolves()
+
+    # Four, not three: the fourth is the sentence `_HAS_SHELL` leaves behind.
+    assert len(_NETWORK_CLAIMS) == 4
+
+    with pytest.raises(ValueError, match="exactly one network claim"):
+        with_web_search("a prompt that says nothing about the network")
+
+
 def test_cancelling_a_turn_keeps_the_files_it_had_already_written() -> None:
     """The inversion of the Task rule, and the reason the pointer writes through.
 
@@ -750,7 +790,7 @@ def test_a_project_turn_is_not_told_it_is_in_a_flat_versioned_workspace() -> Non
         _system_prompt_for,
     )
 
-    prompt = _system_prompt_for(CODE_PROJECT_TOOLS, sandbox_requires_approval=False)
+    prompt = _system_prompt_for(CODE_PROJECT_TOOLS, external_requires_approval=False)
 
     assert prompt == CODER_SYSTEM_PROMPT_PROJECT
     # The two claims F-23 measured false.
@@ -777,7 +817,7 @@ def test_the_flat_turn_keeps_the_prompt_it_always_had() -> None:
     from agent_workbench.application.code_prompt import CODER_SYSTEM_PROMPT
     from agent_workbench.application.code_session import CODE_TOOLS, _system_prompt_for
 
-    prompt = _system_prompt_for(CODE_TOOLS, sandbox_requires_approval=False)
+    prompt = _system_prompt_for(CODE_TOOLS, external_requires_approval=False)
 
     assert prompt == CODER_SYSTEM_PROMPT
     assert "not a filesystem" in prompt
@@ -823,7 +863,7 @@ def test_the_file_language_is_read_off_the_tool_list_not_configured_beside_it() 
     )
     for tool_names, gated, expected in cases:
         assert (
-            _system_prompt_for(tool_names, sandbox_requires_approval=gated) == expected
+            _system_prompt_for(tool_names, external_requires_approval=gated) == expected
         ), tool_names
 
 
@@ -864,7 +904,7 @@ def test_every_coding_prompt_says_that_what_a_tool_returns_is_not_an_instruction
         # turn a capability -- which is the property that matters against
         # injected text. The clause here used to promise more than that ("a
         # human answers for every call that reaches outside it"), and under
-        # `sandbox_requires_approval = False` that was false: the envelope arms
+        # `external_requires_approval = False` that was false: the envelope arms
         # only `destructive`, `sandbox_run` is `external`, and the same prompt
         # goes on to say "Calls run immediately, without waiting for anyone".
         assert "This turn's tools were fixed before it started" in prompt
