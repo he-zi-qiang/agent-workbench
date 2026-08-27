@@ -95,9 +95,26 @@ API 进程里被造出来了，却只进了 chat 的 registry。
 | `pytest`（离线） | **2940 passed, 774 skipped** |
 | import 期组合断言 | 32 组合全解析；`_NETWORK_CLAIMS` 4 锚点；0 锚点输入 raise |
 
-**能力口径停在 Implemented，不是 Demonstrated**：两个 profile 都还没打开这个旗子，
-所以还没有一次真实模型跑出来的联网 Code 回合可链接。CI 的 `quality` job 断言
-`embedding` extra 未安装，也跑不到这条路——真实证据只能来自本地，并且必须标明。
+### 经用户明确批准，两个 profile 都打开了
+
+`policy.search_tools_enabled = true` 写进 `config.code-local.toml` 与
+`config.demo-local.toml`。投影那个"与"的行为是**实测过的**，不是断言：
+
+| profile | 不设 `AW_RESEARCH__ENABLED` | 设了 |
+|---|---|---|
+| `code-local`（文件里有 `[research] enabled = true`） | `web_search_enabled=True` | `True` |
+| `demo-local`（**没有** `[research]` 段） | **`False`** | `True` |
+
+下面那一格正是这个与存在的理由：半配的部署得到**没有这件工具的那套安排**，而不是一个
+起得来、却在每个回合 `code_risk_ceiling` 抛 `ValueError` 的进程。这句话也写进了
+`demo-local` 的注释里，而不是留给下一个人去发现。
+
+`agent-config-check --profile development` → `"status": "ok"`，
+`startup_config_revision` 已带 `1.19:`。
+
+**能力口径：Implemented，还不是 Demonstrated。** 开关开了、投影验证了，但这一节还没有
+一条可链接的"真实模型跑出来的联网 Code 回合"。CI 的 `quality` job 断言 `embedding`
+extra 未安装，也跑不到这条路——真实证据只能来自本地，并且必须标明是本地的。
 
 
 ## 2026-08-26（未合并，工作区，第二十五批）：沙箱第一次画得出一页中文

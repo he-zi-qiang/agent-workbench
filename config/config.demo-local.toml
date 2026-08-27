@@ -215,6 +215,24 @@ sandbox_enabled = true
 [policy]
 shell_tools_enabled = true
 
+# 一等的联网搜索（ADR-085）。**这一行是被人明确批准后才写下的**，不是默认打开。
+#
+# **这个文件没有 `[research]` 段**，而投影是一个与（`bootstrap/projections.py`）：
+# `policy.search_tools_enabled and research is not None`。所以只有当进程是被
+# `scripts/dev.sh demo-api` 起来的——那里 `export AW_RESEARCH__ENABLED=true`，理由写在
+# 那个脚本里：`research.enabled` 配在这个被跟踪的文件里会让每一个没有 key 的 checkout
+# 启动失败——这件工具才存在。直接 `AW_CONFIG_FILE=... python -m ...main` 起的进程，
+# 这个与解析为 false，得到的是**没有这件工具的那套安排**，而不是一个起得来却兑现不了
+# 自己 offer 的进程。这句话写在这里，而不是留给下一个人去发现。
+#
+# 净变化不是天花板也不是审批门，是**有没有人在场**——ADR-085 §1 有实测表：这个
+# profile 走 `CODE_PROJECT_TOOLS_WITH_RUN`，天花板本来就是 `destructive`，加 search
+# 一格不动。变的是：在这一行之前，Code 要够到网络必须写一条 `curl` 走 `project_run`，
+# 而那是 `destructive`、无条件上膛、卡片上是规范化后的真实命令；在这一行之后，
+# 够到网络**不再需要任何人在场**，而不可信的网页文本会落进一个握着 `project_write`／
+# `project_edit`（`write` 风险，永不上膛）的回合。
+search_tools_enabled = true
+
 [sandbox]
 # Where `dev.sh sandbox-server` listens. The endpoint is here rather than in
 # `[code]` because the sandbox is a process, not a coding-session setting --
