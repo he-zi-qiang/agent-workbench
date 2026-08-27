@@ -22,6 +22,7 @@ from pydantic import Field, StringConstraints, field_validator, model_validator
 from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import ErrorInfo, ToolPairingError
 from agent_workbench.domain.identifiers import Identifier
+from agent_workbench.domain.project_files import ProjectRelativePath
 from agent_workbench.domain.schema import (
     JsonObject,
     ToolOutputText,
@@ -140,6 +141,22 @@ class ToolResult(VersionedModel):
     #: tool returns before ``session.version`` advances, so there is no name to
     #: forget to clear.
     workspace_writes: tuple[WorkspaceName, ...] = ()
+    #: The same fact for the other file-shaped side (ADR-086).
+    #:
+    #: A separate field rather than a wider ``workspace_writes``, and the type
+    #: is the reason rather than the taste: ``WorkspaceName`` forbids ``/`` on
+    #: purpose (``domain/workspace.py``), so a project path cannot be spelled
+    #: in it at all. Widening that type to admit one would remove the property
+    #: the flat side buys by refusing paths -- for every caller, to serve a
+    #: side that does not need it.
+    #:
+    #: Two fields also keep a reader honest about which store a name is in.
+    #: ``report.html`` in a workspace and ``docs/report.html`` in a project are
+    #: reached by different endpoints and shown by different components; a
+    #: single list would have made "which one is this" a guess from the
+    #: presence of a separator, and a project file written at the root has no
+    #: separator either.
+    project_writes: tuple[ProjectRelativePath, ...] = ()
     error: ErrorInfo | None = None
     duration_ms: int | None = Field(default=None, ge=0)
 
@@ -159,6 +176,7 @@ class ToolResult(VersionedModel):
         content: str = "",
         artifact: ArtifactRef | None = None,
         workspace_writes: tuple[WorkspaceName, ...] = (),
+        project_writes: tuple[ProjectRelativePath, ...] = (),
         duration_ms: int | None = None,
     ) -> ToolResult:
         return cls(
@@ -168,6 +186,7 @@ class ToolResult(VersionedModel):
             content=content,
             artifact=artifact,
             workspace_writes=workspace_writes,
+            project_writes=project_writes,
             duration_ms=duration_ms,
         )
 

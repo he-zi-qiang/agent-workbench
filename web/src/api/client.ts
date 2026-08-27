@@ -7,6 +7,7 @@ import type {
   ChatSessionView,
   CitedPassageView,
   CodeAskResponse,
+  CodeTurnApprovals,
   CodeTurnMode,
   CodeSessionListResponse,
   CodeSessionView,
@@ -382,6 +383,32 @@ export async function readProjectFile(
   );
 }
 
+/**
+ * 项目目录里一个文件的字节，给页内查看器用（图片、PDF 框）。
+ *
+ * 和 `readProjectFile` 是两件事而不是两种格式：那个解码 UTF-8、报 `is_text`，
+ * 那些性质全都是关于「放进模型上下文」的，对一张 PNG 一条都不成立。
+ *
+ * 用 `fetch` 而不是 `apiRequest`：后者按 JSON 解析响应。身份头照样带——这正是
+ * 这个函数存在的理由，`<img src>` 和 `<iframe src>` 带不上任何头，所以字节要在
+ * 这里取回来、在页内变成 object URL（`getArtifactBlob` 的注释里是同一段话）。
+ */
+export async function getProjectFileBlob(
+  identity: PrincipalIdentity,
+  projectId: string,
+  path: string,
+): Promise<Blob> {
+  // `URLSearchParams`，理由同 `readProjectFile`：项目内路径带 `/`，手拼那版在
+  // 某些路径上会把一段编码成 `%2F`，服务端解出来是另一个文件名。
+  const query = new URLSearchParams({ path });
+  const response = await fetch(
+    `/v1/projects/${encodeURIComponent(projectId)}/file/bytes?${query.toString()}`,
+    { headers: identityHeaders(identity) },
+  );
+  if (!response.ok) throw await parseError(response);
+  return response.blob();
+}
+
 export async function writeProjectFile(
   identity: PrincipalIdentity,
   projectId: string,
@@ -548,6 +575,7 @@ export async function askCode(
   instruction: string,
   idempotencyKey: string,
   mode: CodeTurnMode = "act",
+  approvals: CodeTurnApprovals = "standard",
   signal?: AbortSignal,
 ): Promise<CodeAskResponse> {
   return apiRequest(
@@ -556,11 +584,12 @@ export async function askCode(
     {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      // Always sent, including `"act"`. The server defaults it, but a body
-      // that omits the field leaves "which mode was this turn" answerable only
-      // by knowing the server's default -- and the answer is in the request
-      // log of the one turn somebody is trying to explain (ADR-0079).
-      body: { instruction, mode },
+      // Always sent, including `"act"` and `"standard"`. The server defaults
+      // both, but a body that omits them leaves "what was this turn allowed to
+      // do" answerable only by knowing the server's defaults -- and the answer
+      // is wanted in the request log of the one turn somebody is trying to
+      // explain (ADR-0079, ADR-087).
+      body: { instruction, mode, approvals },
       ...(signal === undefined ? {} : { signal }),
     },
   );

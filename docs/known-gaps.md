@@ -1231,6 +1231,13 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
 **这一条不会有"做完"的一天。** 它不是待办：任何声称"回执覆盖了所有写入路径"的说法
 都是假的，除非目录变成一个只能经由本进程写入的东西——那是另一个产品。
 
+**2026-08-27：同一条边界现在还管着目录树。**
+[ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
+让 `project_write`／`project_edit` 发布 `project_writes`，控制台据此让文件树在回合中
+自己刷新、并把这段会话写过的行标出来。它跟的是**记账过的**写入，所以上面那三条路径
+同样不在其中。界面上的措辞因此是"这段会话写过它"——一句它答得出的话——而不是"这是目录
+当前的样子"。**不要**把这个标记或这次刷新说成"树是活的"。
+
 ### F-26 `policy.write_tools_require_approval` 无人读取 —— 口径不实
 
 **证据**：[settings.py:927](../src/agent_workbench/bootstrap/settings.py) 是
@@ -1255,3 +1262,88 @@ settings 注释点名的"最贵的一种不变量：读起来是保证，实际�
 "每一次写都停下来的回合还能不能干完活"，以及它与 ADR-078 的读写回执如何分工；要么
 像 ADR-059 那样把字段删掉，那是一次 `config_schema_version` 变更，应当与下一次
 schema 变更合并，不单独 bump。
+
+**2026-08-27 更新，收窄但不关闭。**
+[ADR-087](./adr/0087-a-session-may-be-stricter-than-its-deployment.md) 把闸接上了：
+`CodeApprovals = "before_write"` 让这一轮的每一次写入停在人面前，`code_approval_risks`
+只加不减，界面上是发送框旁边三档里的中间那一档。上面那个悬而未决的问题——"每一次写
+都停下来还能不能干完活"——的答案是**不该由部署替所有人回答**，它是一次一回合的选择。
+
+**但这一条不关。** 缺口是这个**字段没有读者**，而 ADR-087 加的是一条**请求体上的**
+轴。`policy.write_tools_require_approval` 读起来仍然是"这个部署要求写入审批"，而它仍然
+不影响任何一次调用。收窄后的判据只剩一件事：把它接成 `code_approval_risks` 的**地板**
+（`base` 在它为真时含 `"write"`，会话仍然只能在其上加），这需要值域从
+`Literal[True]` 变成 `bool`——一次 `config_schema_version` 变更，仍然应当与下一次
+schema 变更合并。
+
+### F-27 项目目录一侧只看得了文本 —— **已关闭**（2026-08-27，同批）
+
+**曾经的证据**：`GET /v1/projects/{project_id}/file`
+（[projects.py](../src/agent_workbench/apps/api/routes/projects.py)）返回的是
+`ProjectFileContent`：`{path, text|null, size_bytes, is_text, modified_at}`
+（[ports/project_files.py](../src/agent_workbench/ports/project_files.py)）。整个
+projects 路由里没有 `StreamingResponse`——**项目目录里的文件取不到字节**。所以
+[ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
+让项目侧用上了工作区那套查看器之后，`html` 与文本能看，`image` 与 `pdf` 仍然停在
+「这是一个二进制文件（N 字节），不显示内容。」
+
+**做完的样子**：`ProjectFileStore.open_bytes(path)` 返回 `(entry, AsyncIterator)`，
+新路由 `GET /v1/projects/{project_id}/file/bytes` 把它接成 `StreamingResponse`，
+前端 `getProjectFileBlob` 喂给已有的 `BlobPreview`。
+
+三件值得单独记下的：
+
+1. **流式，因此没有上限**。整份读进内存就得有一个数，而任何为它挑的数在别人真实的
+   目录上都是错的。流式不需要：字节从不同时全部存在。控制台确实会在请求之前拒绝大
+   文件（`BlobPreview` 按目录列表里的字节数判断），但那是一次交互上的客气，**不是**
+   边界——一个只因为客户端有礼貌才活着的服务端根本没有边界。
+2. **`open_bytes` 不是 `async def`**，和 `ArtifactStore.iter_chunks` 一样。所有拒绝
+   （路径检查、符号链接叶子、文件不存在、是个目录）必须在**调用时**发生，那时路由还
+   能改状态码；只在第一个 chunk 才失败的写法是一个中途停下的 200，客户端分不清它和
+   断线。
+3. **分岔发生在读之前**。图片按名字直接走字节那条路线，不先走一遍文本读——后者会把整
+   份字节读进来解 UTF-8，对一张 PNG 只为了得到 `is_text: false`，而超过
+   `MAX_READ_BYTES` 的图片会直接撞成一条错误。
+
+**没有重开 ADR-062 §3**。那条被拒的是一个**当 `iframe src` 用**的服务端预览端点，
+沉掉它的是鉴权：嵌入元素不发身份头，所以要另开一次性 token 或同源 cookie——为一层纵深
+新增一条进入这个 API 的路。这条路由由 `BlobPreview` 用普通方式取，带着其它调用一样的
+身份头，字节在页内变成 object URL。没有新鉴权通道，授权和其它项目路由完全相同；
+`attachment` + `nosniff` 无条件带上（ADR-062 §4）。
+
+**服务端不猜 media type**，一律 `application/octet-stream`。项目文件就是磁盘上的一个
+文件，没人给它标过类型，这里编一个是这套 API 站不住的断言——而在 `nosniff` 之下，它
+恰好也是浏览器唯一不会再质疑的那个断言。显示成什么由控制台按名字决定
+（`effectiveMediaType`），那是一个显示决定，没有任何授权读它。
+
+**一处此前写错的成本估计**：这条缺口原先写着「要过一遍 `tests/contracts/` 的参数化
+套件」。不对——`tests/contracts/test_projects.py` 是 `ProjectStore`（归属与成员关系）
+的，`ProjectFileStore` 只有一个实现，测试在 `tests/adapters/test_project_file_store.py`。
+真实成本比原先记的小，[ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
+§4 里同一句话也一并更正。
+
+### F-28 Code 的文件预览不渲染 Markdown —— **已关闭**（2026-08-27，同批）
+
+**曾经的证据**：`text/markdown` 以 `text/` 开头 → `isReadableMedia` 为真 →
+`previewKind` 返回 `"text"` → `FilePreview` 落进 `TextPreview` 的 `<pre>`。而
+`MarkdownContent` 是存在的，chat、Code 的**报告**、Work 的产物面板都在用它——唯独没有
+接进文件预览。项目侧走同一张分派表，所以两侧一致地都不渲染。
+
+**做完的样子**：新增 [MarkdownPreview](../web/src/components/MarkdownPreview.tsx)，
+props 与 `TextPreview` 完全相同（`load` + `queryKey`），所以两个调用方都是一行替换，
+两个查看器也不可能在取数和缓存上分叉。默认渲染，源码在一个与 `HtmlPreview` 同形的
+`aw-segmented` 切换后面；被截断的文件不渲染（理由同 `HtmlPreview`：半份文档画出来是
+它从来不是的样子，却被当成产物）。
+
+**没有加第六个 `PreviewKind`**，这是 ADR-065 §4 拒绝过的形状：`previewKind` 是每一个
+展示文件的界面共用的词表，而「怎么画」是只有其中一部分能回答的问题。Markdown 因此是
+text 臂里的第二问——`isMarkdown(...)`，紧挨着 `isRunnablePython(...)`，同一个形状同一
+个理由。`isMarkdown` 从 `features/work/preview.tsx` 提到了
+[components/media.ts](../web/src/components/media.ts)：一份谓词，因为答案不该取决于
+是哪一页在问。
+
+**Work 那一侧保持只渲染、不给切换**，而这不是漏做。Code 多出来的那个 源码 档，与
+ADR-065 §4 记下的「运行按钮只在 Code 有」是同一种不对称：**编码**控制台里一份 `.md`
+既可能是要读的文档、也可能是刚被写出来正要被检查的文件；Task 的产物面板里没有要编辑
+的东西，也就没有要切过去的东西。
+

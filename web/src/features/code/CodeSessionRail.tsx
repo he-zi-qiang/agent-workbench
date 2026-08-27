@@ -42,7 +42,9 @@ export function CodeSessionRail({
   onRename,
   onToggleScope,
   outsideCount,
+  projectNames,
   renaming,
+  runningIds,
   scoped,
   sessionId,
   setRenaming,
@@ -58,6 +60,23 @@ export function CodeSessionRail({
   onToggleScope: () => void;
   /** 有多少段会话不在当前这个文件夹里。0 表示没有可切换的东西。 */
   outsideCount: number;
+  /**
+   * 此刻有回合开着的会话。
+   *
+   * 这个标签页知道的那些——`CodePage` 的 `runningIn` 是它自己发出去的请求的
+   * 集合，不是服务端的账。另一个标签页里跑着的回合在这里是看不见的，而这一点
+   * 和副行不肯编一个轮数出来是同一条规矩：这一栏只说它真的知道的事。
+   */
+  runningIds: ReadonlySet<string | null>;
+  /**
+   * `project_id` → 文件夹名，给「全部会话」那一档用。
+   *
+   * 传一张表进来而不是在这里取：`["projects", identity]` 已经被
+   * `ProjectChooser` 和 `ProjectPicker` 取着，第三个取用方只会让同一份答案在
+   * 三处各有各的加载态。空表就是「还没取到」，那一档下不画标记——**少标一个
+   * 是漏说，标错一个是撒谎**，和树上那个点是同一条规矩。
+   */
+  projectNames: ReadonlyMap<string, string>;
   /** Which row is being renamed, if any. */
   renaming: string | null;
   /** 这份列表此刻是不是只列了当前文件夹里的会话。 */
@@ -162,6 +181,15 @@ export function CodeSessionRail({
             created by a bare click sits unnamed in this list forever. */}
         <NewSessionAction label="新建会话" onClick={onNew} />
       </WorkspaceSidebarActions>
+      {/* 这一栏里有两块东西，此前只有一块有名字。
+          上面是 `ProjectFileTree` 的「项目目录」加一条绝对路径，下面紧接着就
+          是一列标题——读者看到的是「文件、文件、文件、然后几行不知道是什么的
+          字」，而那几行字恰好也长得像文件名。给它一个抬头，两块东西才各自成
+          立；`aw-eyebrow` 是上面那块用的同一个类，因为它们是并列的两节，不是
+          一节和它的附注。 */}
+      <span className="aw-eyebrow aw-code-sessions-eyebrow">
+        {scoped ? "这个文件夹里的会话" : "全部会话"}
+      </span>
       <div className="aw-code-session-list">
         {known.length === 0 ? (
           // 收窄之后的空列表不是「一段会话都没有」。说错了这句，读者会以为
@@ -263,15 +291,42 @@ export function CodeSessionRail({
                       type="button"
                     >
                       <span className="aw-code-recent-title">
+                        {/* 有回合开着的那一行自己说出来。副行只有时间，而
+                            「上次活动 14:02」和「此刻正在跑」在一列里长得一
+                            模一样——读者要靠自己记得刚才在哪一行按了发送。
+                            点在标题前面而不是行尾：行尾归重命名和删除，把一个
+                            只读的状态放进一排可点的东西里，是在邀请人点它。 */}
+                        {runningIds.has(held.session_id) ? (
+                          <span
+                            aria-hidden="true"
+                            className="aw-code-recent-running"
+                          />
+                        ) : null}
                         {held.title ?? shortId(held.session_id)}
+                        {runningIds.has(held.session_id) ? (
+                          <span className="aw-sr-only">（正在运行）</span>
+                        ) : null}
                       </span>
-                      {/* 副行只说时间。
-                          稿子上这里是「3 轮 · 9 个文件 · 14:02」，前两段这个
-                          接口给不出来——`CodeSessionView` 只有 session_id、
-                          title、last_activity_at 三个字段。编一个轮数比空着
-                          更糟：它会被当成真的读。
+                      {/* 副行说时间，以及——只在「全部会话」那一档——它属于哪个
+                          文件夹。
+                          稿子上这里是「3 轮 · 9 个文件 · 14:02」，轮数和文件数
+                          这个接口仍然给不出来，而且**是被明确拒绝的**：
+                          `SessionView` 的 docstring 与 ADR-047 §4 说，任何一个
+                          都会把列表行从一次查询变成每行一次查询，正确的未来机
+                          制是投影表。编一个数比空着更糟：它会被当成真的读。
+                          文件夹名不属于那一类。`project_id` 本来就在每一行上，
+                          名字来自一份**已经被取着**的项目列表，所以它是一次
+                          join，不是第 N 次查询。
+                          收窄那一档不画它：整份列表都在同一个文件夹里的时候，
+                          在每一行上重复那个名字，是把一个不区分任何东西的字段
+                          印 N 遍。
                           没有 last_activity_at 的会话（开了没用过）不留占位，
                           一行空的副行只是让每张卡都变高。 */}
+                      {scoped || held.project_id == null ? null : (
+                        <span className="aw-code-recent-project">
+                          {projectNames.get(held.project_id) ?? "别的文件夹"}
+                        </span>
+                      )}
                       {held.last_activity_at === null ? null : (
                         <time
                           className="aw-code-recent-when"

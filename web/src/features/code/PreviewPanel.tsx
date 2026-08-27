@@ -36,6 +36,8 @@ import { ProjectFileBody } from "./ProjectFileTree";
 export interface OpenedProjectFile {
   projectId: string;
   path: string;
+  /** 目录列表那一行给的字节数——预览要在取正文之前拿它拒绝太大的文件。 */
+  sizeBytes: number;
 }
 
 export function PreviewPanel({
@@ -107,6 +109,7 @@ export function PreviewPanel({
           <ProjectFileBody
             path={projectFile.path}
             projectId={projectFile.projectId}
+            sizeBytes={projectFile.sizeBytes}
           />
         </div>
       ) : viewing === null ? null : (

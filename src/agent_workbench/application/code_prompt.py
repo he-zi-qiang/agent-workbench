@@ -591,6 +591,46 @@ def with_web_search(prompt: str) -> str:
     return _rewrite(prompt, old, new) + _WEB_SEARCH
 
 
+#: What a turn is told when every write of its stops at a human (ADR-087).
+#:
+#: A plain append, unlike its three siblings, and the difference is not laziness
+#: -- there is no claim in any base prompt for it to correct. The prompts say
+#: what the turn *can* do; none of them says who decides, so nothing has to be
+#: unsaid before this can be said.
+#:
+#: It is worth saying at all for the reason ADR-058's comment gives from the
+#: other direction: the model behaves correctly for the world it was described
+#: as being in. Told nothing, a model under this gate writes the way it always
+#: does -- a dozen small edits, each a separate question for the person
+#: watching, most of them arriving after they have stopped watching. Told, it
+#: does the reading first and writes whole files, which is the same work in
+#: three interruptions instead of twelve.
+#:
+#: What it deliberately does *not* say is "so avoid writing". That is the
+#: mistake `CODER_SYSTEM_PROMPT_WITH_SANDBOX` records having made about the
+#: sandbox: a prompt that prices a tool too high buys silence, not care, and a
+#: person who turned this on asked to be asked, not to be answered with less.
+_WRITE_GATE = """
+
+Every write you make stops at a person and waits for them to allow it. This
+does not mean write less. It means write in whole units: work out what a file
+should contain before you start changing it, and make the change in one call
+rather than in six. Say in your report which writes you are about to ask for,
+so the person answering knows what is coming.
+"""
+
+
+def with_write_gate(prompt: str) -> str:
+    """Correct a prompt for a turn whose writes stop at a person (ADR-087).
+
+    An append with no anchor, so it cannot drift and it is not enumerated in
+    `_assert_every_prompt_combination_resolves` for the same reason: there is
+    nothing here that a base prompt could stop containing.
+    """
+
+    return prompt + _WRITE_GATE
+
+
 __all__ = [
     "CODER_SYSTEM_PROMPT",
     "CODER_SYSTEM_PROMPT_PROJECT",
@@ -599,4 +639,5 @@ __all__ = [
     "with_host_commands",
     "with_plan_only",
     "with_web_search",
+    "with_write_gate",
 ]

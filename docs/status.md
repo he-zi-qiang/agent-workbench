@@ -28,6 +28,191 @@
 
 ---
 
+## 2026-08-27（未合并，同分支，第二十九批之三）：字节没有编码可解
+
+第二十九批把项目侧接上工作区那套查看器时，`html` 与文本能看了，图片和 PDF 仍然停在
+「这是一个二进制文件（N 字节），不显示内容。」——记作 F-27。原因不是查看器缺，
+`BlobPreview` 一直都在；是**项目目录里的文件取不到字节**：整个 projects 路由只有
+`GET .../file`，而它解 UTF-8、报 `is_text`，那些性质全都是关于「放进模型上下文」的，
+对一张 PNG 一条都不成立。
+
+### 做了什么
+
+- `ProjectFileStore.open_bytes(path) -> (entry, AsyncIterator[bytes])`，
+  `ProjectSandbox.open_for_read` 从既有的 `read_bytes` 里拆出来（同一套符号链接检查，
+  少了最后那次 `.read()`，把句柄的所有权交给调用方）。
+- `GET /v1/projects/{project_id}/file/bytes`，`StreamingResponse` +
+  `content-length` + `attachment` + `nosniff`，media type 一律
+  `application/octet-stream`。
+- 前端 `getProjectFileBlob`，`ProjectFileBody` 在 `image` / `pdf` 两种 kind 上提前
+  分岔到 `BlobPreview`；文本那条路线整个搬进 `ProjectTextBody`（hooks 不能在提前
+  return 之后再调用）。
+
+### 三个值得单独写下的决定
+
+1. **流式，因此没有上限。** 整份读进内存就得有一个数，而任何为它挑的数在别人真实的
+   目录上都是错的。流式不需要：字节从不同时全部存在。控制台确实会在请求之前拒绝大
+   文件，但那是一次交互上的客气，**不是**边界——一个只因为客户端有礼貌才活着的服务端
+   根本没有边界。
+2. **`open_bytes` 不是 `async def`**，和 `ArtifactStore.iter_chunks` 一样：所有拒绝
+   必须在**调用时**发生，那时路由还能改状态码。只在第一个 chunk 才失败的写法是一个
+   中途停下的 200，客户端分不清它和断线。
+3. **分岔在读之前。** 图片按名字直接走字节路线，不先走一遍文本读——那次读会把整份字节
+   读进来解 UTF-8，只为了得到 `is_text: false`，而超过 `MAX_READ_BYTES` 的图片会直接
+   撞成一条错误。
+
+### 没有重开 ADR-062 §3
+
+那条被拒的是一个**当 `iframe src` 用**的服务端预览端点，沉掉它的是鉴权：嵌入元素不发
+身份头，所以要另开一次性 token 或同源 cookie。这条路由由 `BlobPreview` 用普通方式取，
+带着其它调用一样的身份头，字节在页内变成 object URL——没有新鉴权通道。因此**这一批
+也没有 ADR**。
+
+### 一处此前写错的成本估计
+
+F-27 原先写着「补一条要过一遍 `tests/contracts/` 的参数化套件」，ADR-086 §4 里同一句
+话也在。**不对**：`tests/contracts/test_projects.py` 是 `ProjectStore`（归属与成员
+关系）的，`ProjectFileStore` 只有一个实现。这条缺口是按一个比真实成本高的估计排期的，
+两处都已更正，且原句留在原地——「当时凭什么这么判断」和「后来发现判断依据不对」是两件
+都该看得见的事。
+
+### 实跑证据
+
+`curl` 打 `deepseek-report.pdf`（159,828 字节）：`200`，`content-length` 一致，
+`content-type: application/octet-stream`，`x-content-type-options: nosniff`，
+`content-disposition: attachment`，落地文件 `file(1)` 认作 *PDF document, version 1.4,
+2 pages*。
+
+浏览器里：项目目录既有的 `logo.png` 解不出来——查过了，那是一个 17 字节的假文件
+（PNG magic 后面跟着 `binary` 几个字），**不是路由的问题**。临时写了一张真的 8×8 PNG
+进去，`<img>` 的 `naturalWidth/Height` 是 8×8，`src` 是 `blob:`；验完即删。
+PDF 那一格在应用内浏览器里是空白，而 `BlobPreview` 自己那句话正是为这种情况写的
+（「这个浏览器不显示内嵌 PDF——文件没问题」）——那是这个 pane 的既有行为，工作区侧的
+PDF 一样如此。
+
+### 门禁
+
+后端 `2945 → 2955`（`open_bytes` 8 条：整份字节、超过读上限仍可流、四种拒绝的时机、
+两条句柄关闭；路由 2 条：头部与拒绝、邻居读不到）。前端 `573 → 574`。
+
+---
+
+## 2026-08-27（未合并，同分支，第二十九批之二）：一份 `.md` 在哪儿都该是同一份 `.md`
+
+第二十九批把项目侧接上工作区那套查看器时，记下了 F-28：两侧**一致地**都不渲染
+Markdown——`text/markdown` 以 `text/` 开头，`previewKind` 给 `"text"`，于是落进
+`TextPreview` 的 `<pre>`。而 `MarkdownContent` 一直都在，chat、Code 的报告、Work 的
+产物面板都在用它，唯独没有接进文件预览。
+
+**这一条不是「Code 少了个功能」，是三个界面对同一份字节给了两种答案**：Work 的产物
+面板渲染 `.md`，Code 的两侧都不渲染。而 Work 那段代码的注释里还写着「其余一律 `<pre>`，
+与 Code 控制台对同一批字节的显示一致」——那句话此前只有一半成立。
+
+### 做了什么
+
+- 新增 `components/MarkdownPreview.tsx`，props 与 `TextPreview` 逐字相同
+  （`load` + `queryKey`），所以两个调用方都是一行替换，两个查看器也不可能在取数和
+  缓存上分叉。默认渲染，源码在一个与 `HtmlPreview` 同形的切换后面；被截断的文件不
+  渲染，并说出为什么那个控件是灰的。
+- `isMarkdown` 从 `features/work/preview.tsx` 提到 `components/media.ts`，紧挨着
+  `isRunnablePython`。一份谓词，因为答案不该取决于是哪一页在问。
+- Code 的两侧（`FilePreview` 的 text 臂、`ProjectFileBody`）各接一处，共用同一个
+  `load` 和同一个缓存键——一次传输服务渲染与源码两个视图。
+- 改掉 Work 那段已经只对一半的注释。
+
+### 没有加第六个 `PreviewKind`
+
+ADR-065 §4 为 `python` 拒绝过这个形状，理由在这里一字不改地成立：`previewKind` 是
+**每一个**展示文件的界面共用的词表（Work 的产物面板也读它），而「怎么画」是只有其中
+一部分能回答的问题。所以 Markdown 是 text 臂里的第二问，和 `isRunnablePython` 并排。
+
+因此这一批**没有 ADR**：它没有改任何边界，反而是按一份既有 ADR 的判决去做的。
+
+### 一个被自己的测试抓住的错
+
+第一版给项目侧写的反向用例挑了 `Makefile`，想证明「不是 Markdown 的文本仍按源码画」。
+把判断整个删掉，那条用例照样通过——因为 `Makefile` 没有后缀，`effectiveMediaType`
+猜不出类型，`previewKind` 给的是 `none`，它**根本到不了那个分支**。改用 `.py`
+（`text/x-python`，确实落进 text 臂）之后，同一个变异立刻把它打红。原来那条断言另拆
+成一条用例留着，因为「没有后缀的文本文件仍然看得见」本身值得钉住。
+
+### 门禁
+
+前端 `566 → 573`（新增 4 条 `MarkdownPreview` 用例、2 条项目侧用例，1 条既有用例改成
+同时断言渲染与源码）。后端未触及。
+
+---
+
+## 2026-08-27（未合并，分支 `feat/code-console-five-gaps`，第二十九批）：产物不该为它落在哪一侧负责
+
+一次用户反馈，对 Code 控制台提了五件事。**其中三件在代码里是同一件**——项目目录那一侧
+是二等公民：它没有查看器、没有结构化的写入事实、因而在树上也不会动。而 ADR-072／074
+之后，`config.demo-local.toml` 下**每一段会话都有项目目录**，所以那正好是默认那一侧。
+
+两份 ADR：[ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
+（项目侧的补齐）与
+[ADR-087](./adr/0087-a-session-may-be-stricter-than-its-deployment.md)（权限轴）。
+拆两号是因为它们收紧的是信封的两半，是两条边界。
+
+### 五件事，各自的状态
+
+| 反馈 | 做了什么 | 能力等级 |
+|---|---|---|
+| 产物生成后没有直接预览 | `ProjectFileBody` 改用与工作区同一张 `previewKind` 分派表和同一批查看器；`.html` 因此在项目侧也进沙箱 iframe | **Demonstrated** |
+| 没有「模型自己决定／人来决定」 | 新增 `CodeApprovals` 轴 + `with_write_gate` 提示；界面是三档 `只做计划 / 改前问我 / 自动改动` | **Demonstrated** |
+| 思考过程又乱又长 | 落定即收（除非读者真碰过）、落定后不再重复「思考摘要」四个字、摘要钳到两行、删掉重复的「正在思考下一步」横幅 | **Demonstrated** |
+| 产物没在文件夹里体现 | `ToolResult`／`ToolCompleted` 新增 `project_writes`；控制台据此按前缀失效目录树 | **Demonstrated** |
+| 文件夹导航栏没有会话标志 | 会话列表有了抬头；正在跑的行有呼吸点；「全部会话」那一档每行说出它属于哪个文件夹 | **Implemented** |
+
+### 那次真跑（Demonstrated 的证据）
+
+`scripts/dev.sh demo-api` + Vite，项目 `agent 工作台测试`，权限档选 **改前问我**：
+
+> 在 docs/ 目录下新建一个 hello.html，内容是一个带标题和一段话的简单页面。只做这一件事。
+
+1. **闸真的拦住了。** 屏幕上出现 `project_write 需要你批准`，风险标着「会写入」，卡片
+   上是规范化后的真实参数与摘要，三个按钮（允许一次／本会话都允许／拒绝）。
+   **在这次改动之前，`project_write` 是 `write` 风险，而 Code 的
+   `approval_required_risks` 只有 `("destructive",)`——按构造，它不停在任何人面前。**
+2. **批准之后，树自己动了。** 侧栏出现 `docs/`，**自动展开**露出 `hello.html`，两行行尾
+   各有一个 accent 点（「这段会话写过它」）。磁盘上
+   `/Users/heziqiang/agent 工作台测试/docs/hello.html` 176 字节，时间对得上。
+3. **第二轮验证收折。** 「把 docs/hello.html 里那段话改成两句话。」跑完之后整轮是
+   两行单行推理 + 两行动作 + 一段报告；改动之前同一形状是二十行摊开的斜体。
+4. **预览。** 项目目录里既有的 `deepseek-report.html` 点开后是渲染好的《DeepSeek 调研
+   报告》，带渲染／源码切换与全屏；改动之前它只有 `<pre>` 里的源码。
+
+### 一处被这次工作揪出来的回归
+
+`codeLiveStatus` 在 `thinking !== ""` 时会画一条「正在思考下一步／分析目标并选择接下来
+的动作」的横幅，**就压在那段正在流的思考正上方**——这正是 ADR-064 当初删掉的东西。
+它能回来，是因为 `CodePage.test.tsx` 那条测试只做了正向断言（「思考是一行」），没有反向
+钉住「上面没有横幅」。这次删掉横幅，并把反向断言补上。
+
+### 门禁
+
+```
+uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest
+pnpm --dir web check   （本机走 var/toolchain/node + NODE_OPTIONS=--no-experimental-webstorage）
+```
+
+数字见提交信息；本节写下时的树上，后端 5 个新用例（`code_approval_risks` 的只加不减、
+写入闸不动工具清单、plan 回合不被告知闸、`project_writes` 的两个），前端 4 个新用例
+（三档发出去的参数、树上的标记与自动展开、收起后不弹回、横幅不回来）。
+
+### 没做完的，写在缺口里
+
+- ~~**F-27**：项目侧取不到字节，图片／PDF 看不了~~ —— **同批已关闭**，见下一节。
+- ~~**F-28**：两侧都不渲染 Markdown~~ —— **同批已关闭**，见下一节。
+- **F-26 收窄但不关**：闸接上了，`policy.write_tools_require_approval` 这个**字段**
+  仍然没有读者。
+- **F-25 补了一句**：目录树跟的是记账过的写入，`project_run`／控制台 `PUT`／用户自己的
+  编辑器都绕过它。所以界面说的是「这段会话写过它」，不是「这是目录当前的样子」。
+- 会话行的运行标记只活在这个标签页里：`SessionView` 没有 status 字段，刷新之后就没有
+  了。这是投影缺口，不是机制缺口——两个事实都在进程里按 session id 记着。
+
+---
+
 ## 2026-08-27（未合并，第二十八批）：一次真的搜出来的回合
 
 第二十七批修好两根断线之后，重启 `demo-api` 用**真实模型**跑了一轮 Code 会话。这一节

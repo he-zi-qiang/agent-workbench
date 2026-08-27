@@ -41,6 +41,7 @@ from agent_workbench.application.code_approvals import (
     CodeApprovalRegistry,
 )
 from agent_workbench.application.code_session import (
+    CodeApprovals,
     CodeMode,
     CodeRequest,
     CodeRunNotPermittedError,
@@ -124,6 +125,17 @@ class AskRequest(BaseModel):
     #: `plan: bool`, because `plan=false` reads as an absence in a request body
     #: while `"act"` reads as a choice somebody made.
     mode: CodeMode = "act"
+    #: ``"before_write"`` makes every write of this turn stop at a person
+    #: (ADR-087). Defaulted for the same reason as ``mode``, and named for the
+    #: same reason: `approvals=false` would read as an absence, and the thing
+    #: it would be absent from is a safety property.
+    #:
+    #: It is not `mode`'s third value. The two narrow different halves of the
+    #: envelope -- `mode` the tool list, this the risks that stop -- and a
+    #: single field would have to be taken apart again at the one place both
+    #: are read. `application/code_session.py`'s `CodeApprovals` carries the
+    #: rest of that argument, including why there is no "ask me about nothing".
+    approvals: CodeApprovals = "standard"
 
 
 class AskResponse(BaseModel):
@@ -354,6 +366,11 @@ async def ask(
                 # change mid-turn would change what a running model is holding
                 # after its envelope had been signed with the other list.
                 mode=body.mode,
+                # Frozen in the same statement, for the same reason: the
+                # envelope this signs is the one the gateway checks every call
+                # against, and a gate that could be lowered mid-turn is not a
+                # gate (ADR-087).
+                approvals=body.approvals,
             ),
             # One stream per session, one run per turn, and a fence that has no
             # publish methods at all: this run produces files and a report, and

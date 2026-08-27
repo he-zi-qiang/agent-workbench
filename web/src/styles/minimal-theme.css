@@ -2259,8 +2259,48 @@ select {
 
 .aw-code-recent-title {
   min-width: 0;
-  flex: 1;
+  /* `1 1 50%`，不是 `1`。
+     `flex: 1` 是 `1 1 0%`：基准 0，所以在收缩的时候标题先让、基准是内容宽度
+     的兄弟节点后让。这一行里那两个兄弟节点是文件夹名和时间，而时间是
+     `flex: none`——在这条 224px 的行里，它无条件吃掉 79px，哪怕它在静止状态
+     下 `opacity: 0`。实测：标题 23px，文件夹 86px，时间 79px。23px 是「在…」。
+     基准给到 50%，收缩就按两边的基准分摊，标题因此拿得回大半。它仍然是第一个
+     被截的——文件夹名和时间都比它短，而这一行终究要放得下三样东西。 */
+  flex: 1 1 50%;
   font-size: 13px;
+}
+
+/* 文件夹名让位给标题：标题是读者用来认出这一行的东西，文件夹名只是消歧。
+   上限按行宽给，所以它在宽侧栏里说得完整、在窄侧栏里先截自己。 */
+.aw-code-recent-project {
+  max-width: 38%;
+  flex: 0 1 auto;
+}
+
+/* 静止说文件夹，指上去说时间。
+   这一行是 224px，时间无条件占 79px（`flex: none`），再塞一个文件夹名之后实测
+   标题只剩 58px——三样各截一半，读者一样也认不出来。**它放不下三件东西**，所以
+   这里不是调宽度，是选一件。
+   选文件夹作为静止态，因为两件附注回答的是两个不同时刻的问题：扫一列的时候问
+   的是「这是哪儿的」，停在某一行上的时候问的才是「什么时候」。而这个主题本来
+   就已经把时间设成静止 `opacity: 0`——它此前静止时既不显示、又占着 79px，这一
+   条只是把那块地方交给一个静止时真的在说话的东西。
+   `:has()` 把整条规则限定在**有文件夹名的那一档**：收窄状态下每一行都没有这个
+   元素，时间的行为一格不变。 */
+.aw-code-recent-link:has(.aw-code-recent-project) .aw-code-recent-when {
+  display: none;
+}
+
+.aw-code-recent-link:has(.aw-code-recent-project):hover .aw-code-recent-project,
+.aw-code-recent-link[aria-current="page"]:has(.aw-code-recent-project)
+  .aw-code-recent-project {
+  display: none;
+}
+
+.aw-code-recent-link:has(.aw-code-recent-project):hover .aw-code-recent-when,
+.aw-code-recent-link[aria-current="page"]:has(.aw-code-recent-project)
+  .aw-code-recent-when {
+  display: inline;
 }
 
 .aw-code-recent-when {
