@@ -3,7 +3,11 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as ApiClient from "../../api/client";
-import { listProjectFiles, readProjectFile } from "../../api/client";
+import {
+  getProjectFileBlob,
+  listProjectFiles,
+  readProjectFile,
+} from "../../api/client";
 import { IdentityProvider } from "../../app/IdentityContext";
 import { ProjectFileBody, ProjectFileTree } from "./ProjectFileTree";
 
@@ -13,7 +17,12 @@ import { ProjectFileBody, ProjectFileTree } from "./ProjectFileTree";
 // 永远不触发，而生产里它是触发的。替身只替该替的那两个。
 vi.mock("../../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiClient>();
-  return { ...actual, listProjectFiles: vi.fn(), readProjectFile: vi.fn() };
+  return {
+    ...actual,
+    getProjectFileBlob: vi.fn(),
+    listProjectFiles: vi.fn(),
+    readProjectFile: vi.fn(),
+  };
 });
 
 const ROOT = "/Users/someone/agent工作台";
@@ -338,9 +347,35 @@ describe("ProjectFileBody", () => {
     expect(await screen.findByText(/go build/)).toBeInTheDocument();
   });
 
-  it("describes a binary file rather than drawing it", async () => {
+  it("shows an image, and never asks the text endpoint for it", async () => {
+    // F-27。分岔在**读之前**：`GET .../file` 会把整份字节读进来解 UTF-8，对一张
+    // PNG 只为了得到 `is_text: false`——一次白花的传输，而且超过 `MAX_READ_BYTES`
+    // 的图片会直接撞成一条错误，读者看到的是「读不到这个文件」。
+    vi.mocked(getProjectFileBlob).mockResolvedValue(
+      new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+        type: "image/png",
+      }),
+    );
+
+    mount(
+      <ProjectFileBody path="logo.png" projectId="prj_1" sizeBytes={2048} />,
+    );
+
+    expect(await screen.findByRole("img", { name: /logo\.png/ })).toBeInTheDocument();
+    expect(vi.mocked(getProjectFileBlob)).toHaveBeenCalledWith(
+      expect.anything(),
+      "prj_1",
+      "logo.png",
+    );
+    expect(vi.mocked(readProjectFile)).not.toHaveBeenCalled();
+  });
+
+  it("describes a file whose name did not say it was binary", async () => {
+    // 名字说不出自己是二进制、内容却是的那些：一个 `.txt` 其实是 zip，一个没有
+    // 后缀的可执行文件。它们到不了上面那条按名字分出去的路线，而对它们「说它是
+    // 什么」仍然是唯一诚实的答案——没有名字可依据，就没有查看器可选。
     vi.mocked(readProjectFile).mockResolvedValue({
-      path: "logo.png",
+      path: "notes.txt",
       text: null,
       size_bytes: 2048,
       is_text: false,
@@ -348,7 +383,7 @@ describe("ProjectFileBody", () => {
     });
 
     mount(
-      <ProjectFileBody path="logo.png" projectId="prj_1" sizeBytes={2048} />,
+      <ProjectFileBody path="notes.txt" projectId="prj_1" sizeBytes={2048} />,
     );
 
     // Decoded with replacement it would be a screenful of U+FFFD, which reads

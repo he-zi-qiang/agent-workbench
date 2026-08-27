@@ -383,6 +383,32 @@ export async function readProjectFile(
   );
 }
 
+/**
+ * 项目目录里一个文件的字节，给页内查看器用（图片、PDF 框）。
+ *
+ * 和 `readProjectFile` 是两件事而不是两种格式：那个解码 UTF-8、报 `is_text`，
+ * 那些性质全都是关于「放进模型上下文」的，对一张 PNG 一条都不成立。
+ *
+ * 用 `fetch` 而不是 `apiRequest`：后者按 JSON 解析响应。身份头照样带——这正是
+ * 这个函数存在的理由，`<img src>` 和 `<iframe src>` 带不上任何头，所以字节要在
+ * 这里取回来、在页内变成 object URL（`getArtifactBlob` 的注释里是同一段话）。
+ */
+export async function getProjectFileBlob(
+  identity: PrincipalIdentity,
+  projectId: string,
+  path: string,
+): Promise<Blob> {
+  // `URLSearchParams`，理由同 `readProjectFile`：项目内路径带 `/`，手拼那版在
+  // 某些路径上会把一段编码成 `%2F`，服务端解出来是另一个文件名。
+  const query = new URLSearchParams({ path });
+  const response = await fetch(
+    `/v1/projects/${encodeURIComponent(projectId)}/file/bytes?${query.toString()}`,
+    { headers: identityHeaders(identity) },
+  );
+  if (!response.ok) throw await parseError(response);
+  return response.blob();
+}
+
 export async function writeProjectFile(
   identity: PrincipalIdentity,
   projectId: string,

@@ -29,6 +29,7 @@ codebase refuses everywhere else it stores anything.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal, Protocol, runtime_checkable
@@ -196,6 +197,42 @@ class ProjectFileStore(Protocol):
         Raises ``NotFoundError`` when it is not there, and ``OutputTooLargeError``
         above ``MAX_READ_BYTES`` -- refused rather than truncated, because a
         truncated source file is indistinguishable from a short one.
+        """
+
+        ...
+
+    def open_bytes(self, path: str) -> tuple[ProjectFileEntry, AsyncIterator[bytes]]:
+        """Describe one file and yield its bytes, for serving it onward.
+
+        The other half of ``read``, and the two are not redundant. ``read``
+        decodes, refuses above ``MAX_READ_BYTES`` and answers "is this text" --
+        it exists to put a file in front of a *model*, and every one of those
+        properties is about a context window. This one exists to put a file in
+        front of a *browser*, where none of them apply: a PNG has no encoding
+        to succeed at, and 2 MiB is an ordinary size for a photograph somebody
+        keeps in their repository.
+
+        **No ceiling here, and that is deliberate.** A whole-file read would
+        need one, and any number picked for it would be wrong for somebody's
+        real directory. Streaming needs none: the bytes never all exist at
+        once, so the file's size stops being this process's problem. The
+        console declines large files before it asks (`BlobPreview` judges from
+        the listing's own count), but that is an interaction courtesy and
+        never the bound -- a server that only survives because the client was
+        polite is not bounded at all.
+
+        Deliberately **not** ``async def``, the same way ``ArtifactStore.
+        iter_chunks`` is not. Everything that can refuse -- the path check, the
+        symlinked leaf, the missing file, the directory -- has to refuse when
+        this is *called*, while the caller can still turn it into a 404. A
+        coroutine that only failed on the first chunk would hand back a 200
+        that stops partway, which a client cannot tell from a dropped
+        connection.
+
+        The entry comes back beside the iterator rather than being fetched
+        separately for the same reason ``routes/code.py`` takes both from one
+        call: headers described from a second stat could disagree with the
+        bytes that follow them.
         """
 
         ...

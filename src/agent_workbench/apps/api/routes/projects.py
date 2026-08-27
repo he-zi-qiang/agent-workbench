@@ -17,8 +17,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_workbench.apps.api.downloads import content_disposition
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.project_files import ProjectPathError
@@ -305,6 +307,72 @@ async def read_file(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
         ) from error
+
+
+@router.get("/{project_id}/file/bytes")
+async def read_file_bytes(
+    project_id: str, request: Request, path: str
+) -> StreamingResponse:
+    """One project file's bytes, for a client that has to show it rather than read it.
+
+    ``GET .../file`` next door answers a different question and cannot answer
+    this one: it decodes UTF-8 and reports ``is_text``, which is exactly right
+    for putting a file in front of a model and useless for a PNG. Before this
+    route, the console's project pane could only say "这是一个二进制文件" about
+    an image the agent had just produced (known-gaps F-27).
+
+    **This is not the preview endpoint ADR-062 §3 turned down.** That one was a
+    URL to be used as an ``iframe src``, and what sank it was authentication:
+    an embedded element sends no identity headers, so it would have needed a
+    one-time token or a same-origin cookie -- a second way into this API, for
+    one layer of defence in depth. This route is fetched by ``BlobPreview`` the
+    ordinary way, with the identity headers every other call carries, and the
+    bytes become an object URL in the page. No new authentication channel, and
+    the same authorization as every other project route.
+
+    ``attachment`` and ``nosniff`` unconditionally, which is ADR-062 §4's
+    position and costs this route nothing: the object URL the console builds
+    carries neither header, so the disposition governs only the case where
+    somebody opens this URL directly -- and there, saving the file is the right
+    outcome and executing it never is. There is no ``?disposition=`` beside it
+    for the reason ``routes/code.py`` gives about its own: one path, one
+    behaviour, one thing to authorize.
+
+    ``application/octet-stream`` for everything, and the server declining to
+    guess is the point rather than a gap. A project file is a file on a disk;
+    nobody recorded a media type for it, and a type invented here would be a
+    claim this API cannot stand behind -- served under ``nosniff``, it is also
+    the one claim a browser will not second-guess. The console decides what to
+    *display* it as from the name (``effectiveMediaType``), which is a display
+    decision no authorization reads.
+    """
+
+    dependencies = dependencies_of(request)
+    store = await dependencies.projects.open_files(
+        dependencies.principals.resolve(request), project_id
+    )
+    try:
+        entry, chunks = store.open_bytes(path)
+    except ProjectPathError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+        ) from error
+
+    # Every store call has already happened. `open_bytes` is deliberately not a
+    # coroutine so that its refusals land here, while the status code can still
+    # change -- a refusal discovered mid-body is a 200 that stops, which a
+    # client cannot tell from a dropped connection.
+    return StreamingResponse(
+        chunks,
+        media_type="application/octet-stream",
+        headers={
+            "content-disposition": content_disposition(
+                entry.path.split("/")[-1] or entry.path
+            ),
+            "content-length": str(entry.size_bytes),
+            "x-content-type-options": "nosniff",
+        },
+    )
 
 
 @router.put("/{project_id}/file", response_model=ProjectFileEntryView)

@@ -3,14 +3,21 @@ import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   MAX_PREVIEW_BYTES,
+  getProjectFileBlob,
   listProjectFiles,
   readProjectFile,
 } from "../../api/client";
-import type { ProjectFileEntryView } from "../../api/types";
+import type { PrincipalIdentity, ProjectFileEntryView } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import { HtmlPreview } from "../../components/HtmlPreview";
+import { BlobPreview } from "../../components/BlobPreview";
 import { MarkdownPreview } from "../../components/MarkdownPreview";
-import { effectiveMediaType, isMarkdown, previewKind } from "../../components/media";
+import {
+  type PreviewKind,
+  effectiveMediaType,
+  isMarkdown,
+  previewKind,
+} from "../../components/media";
 import { LoadingLine } from "../../components/ui";
 
 /**
@@ -339,6 +346,16 @@ export function ProjectFileTree({
  * is_text` 是服务端解码的结果，而项目目录里到处是没有后缀的文本文件
  * （`Makefile`、`.gitignore`、`LICENSE`）——把它们按「未知类型」拒掉，是拿
  * 一个已经答得出的问题去换一次猜测。
+ *
+ * ## 两条取数路线，按名字分，在读之前
+ *
+ * 图片和 PDF 走 `GET .../file/bytes`（F-27），其余走 `GET .../file`。分岔必须
+ * 发生在**读之前**：后者会把整份字节读进来解 UTF-8，对一张 PNG 只为了得到
+ * `is_text: false`——一次白花的传输，而且超过 `MAX_READ_BYTES` 的图片会直接撞
+ * 成一条错误，读者看到的是「读不到这个文件」。
+ *
+ * 这也是这个组件里唯一一处提前 return：hooks 不能在它之后再调用，所以文本那
+ * 条路线整个搬进了 `ProjectTextBody`。
  */
 export function ProjectFileBody({
   path,
@@ -350,7 +367,7 @@ export function ProjectFileBody({
   /**
    * 从目录列表那一行拿的，不是读回来之后才知道的。
    *
-   * 顺序就是理由：下面这条上限要挡的是「整份正文进内存」，读完再说太大等于
+   * 顺序就是理由：下面几条上限要挡的都是「整份正文进内存」，读完再说太大等于
    * 已经付过一次了。会话工作区那一侧用清单里的字节数做同一件事
    * （`FilePreview` / `BlobPreview`），这里用目录列表里的。
    */
@@ -358,11 +375,75 @@ export function ProjectFileBody({
 }) {
   const { identity } = useIdentity();
   const name = path.split("/").pop() ?? path;
-  // 项目文件在服务端没有 media type——它就是磁盘上的一个文件，没人给它标过。
+  // 项目文件在服务端没有 media type——它就是磁盘上的一个文件，没人给它标过，
+  // 而那条取字节的路由也**故意**不猜（它一律答 `application/octet-stream`）。
   // 所以按名字猜，猜法用的是全站同一张表：`effectiveMediaType` 本来就是为
-  // 「存的类型什么也没说」这一种情况写的。
+  // 「存的类型什么也没说」这一种情况写的，而且这只是一个显示决定，没有任何
+  // 授权读它。
   const guessed = effectiveMediaType("", name);
   const kind = previewKind(guessed);
+
+  // 图片和 PDF 在读之前就分出去，不是在读回来之后（F-27）。
+  //
+  // 顺序是有代价的：下面那次读走 `GET .../file`，而那个端点会把整份字节读进来
+  // 解 UTF-8，对一张 PNG 只为了得到 `is_text: false`——一次白花的传输，而且超过
+  // 2 MiB 的图片会直接撞上 `MAX_READ_BYTES` 变成一条错误。走字节那条路的文件
+  // 从来不该经过它。
+  //
+  // `BlobPreview` 取字节做 object URL，**不是**把 URL 当 iframe src——所以这里
+  // 没有重开 ADR-062 §3 拒绝的那条服务端预览端点：那条被拒是因为嵌入元素带不上
+  // 身份头、要另开一条鉴权通道，而这一条走的是和其它调用一样的身份头。
+  if (kind === "image" || kind === "pdf") {
+    return (
+      <section aria-label={`文件 ${path}`} className="aw-project-file-view">
+        <BlobPreview
+          kind={kind}
+          load={() => getProjectFileBlob(identity, projectId, path)}
+          name={name}
+          queryKey={["project-file-blob", identity, projectId, path]}
+          sizeBytes={sizeBytes}
+        />
+      </section>
+    );
+  }
+
+  return (
+    <ProjectTextBody
+      guessed={guessed}
+      identity={identity}
+      kind={kind}
+      name={name}
+      path={path}
+      projectId={projectId}
+      sizeBytes={sizeBytes}
+    />
+  );
+}
+
+/**
+ * 项目文件里能当文本取回来的那些，按它们各自该有的样子画。
+ *
+ * 拆出来是因为上面那一支**必须在读之前**决定，而 hooks 不能在提前 return 之后
+ * 再调用。把这一段留在同一个函数里，就得让图片也先走一遍那次文本读——正是这次
+ * 要修掉的那次白花的传输。
+ */
+function ProjectTextBody({
+  guessed,
+  identity,
+  kind,
+  name,
+  path,
+  projectId,
+  sizeBytes,
+}: {
+  guessed: string;
+  identity: PrincipalIdentity;
+  kind: PreviewKind;
+  name: string;
+  path: string;
+  projectId: string;
+  sizeBytes: number;
+}) {
   // 服务端另有一条 2 MiB 的读上限（`ports/project_files.py` MAX_READ_BYTES），
   // 它答的是别的问题——「这次读能不能做」。这里答的是「这一屏要不要展开」，
   // 两个数不一样，也不该合并。
@@ -374,6 +455,7 @@ export function ProjectFileBody({
   });
 
   const body = file.data;
+  const markdown = kind === "text" && isMarkdown(guessed);
   return (
     <section aria-label={`文件 ${path}`} className="aw-project-file-view">
       {oversized ? (
@@ -389,17 +471,10 @@ export function ProjectFileBody({
         // 说它是什么，不把它当文本画出来。二进制用替换字符解出来是一屏 U+FFFD，
         // 而那看起来像是文件坏了——坏的是显示方式。
         //
-        // 图片和 PDF 也停在这句话上，而这不是忘了接。取字节的路由不存在：
-        // `GET /v1/projects/{id}/file` 给的是解码后的文本
-        // （`ports/project_files.py` 的 `ProjectFileContent`），补一条要动
-        // `ProjectFileStore` 这个 Protocol、它的实现和 `tests/contracts/` 的
-        // 参数化套件（ADR-086 §4，缺口记在 known-gaps）。
-        //
-        // 这里**不要**写成「agent 往项目目录里放不进二进制」。那句话看起来成
-        // 立——`project_write` 的入参确实是 `str`——但 ADR-077 之后回合还握着
-        // `project_run`，一条命令能在项目目录里写出任何东西，两个 local
-        // profile 都打开了 `policy.shell_tools_enabled`。所以这一侧的二进制
-        // 可以是产物，只是接它的成本落在别处。
+        // 图片和 PDF 到不了这里（上面按名字分走了），所以剩下的是**名字没说自己
+        // 是二进制、内容却是**的那些：一个 `.txt` 其实是 zip，一个没有后缀的
+        // 可执行文件。对这些，「说它是什么」仍然是唯一诚实的答案——没有名字可依
+        // 据，就没有查看器可选。
         <p className="aw-project-file-note">
           这是一个二进制文件（{body.size_bytes} 字节），不显示内容。
         </p>
@@ -413,7 +488,9 @@ export function ProjectFileBody({
         // 文件改过之后外层重新读到的新正文进不了内层那份缓存，读者看到的还是
         // 上一版渲染结果。
         <HtmlPreview
-          load={() => Promise.resolve({ text: body.text ?? "", truncated: false })}
+          load={() =>
+            Promise.resolve({ text: body.text ?? "", truncated: false })
+          }
           name={name}
           queryKey={[
             "project-file-html",
@@ -425,7 +502,7 @@ export function ProjectFileBody({
           sizeBytes={sizeBytes}
         />
       ) : null}
-      {body?.is_text === true && kind === "text" && isMarkdown(guessed) ? (
+      {body?.is_text === true && markdown ? (
         // 和工作区那一侧同一个查看器、同一条判断（`FilePreview` 的 text 臂）。
         // 分派表共用之后还留下这一处不共用，就会变成：agent 写出的 `report.md`
         // 在工作区里是一份排好版的文档，在项目目录里是一屏 `##`——而这正是这
@@ -434,7 +511,9 @@ export function ProjectFileBody({
         // `load` 立即 resolve，正文已经在手上；键里带 `modified_at`，理由同上
         // 面那个 `HtmlPreview`。
         <MarkdownPreview
-          load={() => Promise.resolve({ text: body.text ?? "", truncated: false })}
+          load={() =>
+            Promise.resolve({ text: body.text ?? "", truncated: false })
+          }
           queryKey={[
             "project-file-markdown",
             identity,
@@ -444,7 +523,7 @@ export function ProjectFileBody({
           ]}
         />
       ) : null}
-      {body?.is_text === true && kind !== "html" && !(kind === "text" && isMarkdown(guessed)) ? (
+      {body?.is_text === true && kind !== "html" && !markdown ? (
         <pre>
           <code>{body.text}</code>
         </pre>

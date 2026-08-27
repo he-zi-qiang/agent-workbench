@@ -28,6 +28,75 @@
 
 ---
 
+## 2026-08-27（未合并，同分支，第二十九批之三）：字节没有编码可解
+
+第二十九批把项目侧接上工作区那套查看器时，`html` 与文本能看了，图片和 PDF 仍然停在
+「这是一个二进制文件（N 字节），不显示内容。」——记作 F-27。原因不是查看器缺，
+`BlobPreview` 一直都在；是**项目目录里的文件取不到字节**：整个 projects 路由只有
+`GET .../file`，而它解 UTF-8、报 `is_text`，那些性质全都是关于「放进模型上下文」的，
+对一张 PNG 一条都不成立。
+
+### 做了什么
+
+- `ProjectFileStore.open_bytes(path) -> (entry, AsyncIterator[bytes])`，
+  `ProjectSandbox.open_for_read` 从既有的 `read_bytes` 里拆出来（同一套符号链接检查，
+  少了最后那次 `.read()`，把句柄的所有权交给调用方）。
+- `GET /v1/projects/{project_id}/file/bytes`，`StreamingResponse` +
+  `content-length` + `attachment` + `nosniff`，media type 一律
+  `application/octet-stream`。
+- 前端 `getProjectFileBlob`，`ProjectFileBody` 在 `image` / `pdf` 两种 kind 上提前
+  分岔到 `BlobPreview`；文本那条路线整个搬进 `ProjectTextBody`（hooks 不能在提前
+  return 之后再调用）。
+
+### 三个值得单独写下的决定
+
+1. **流式，因此没有上限。** 整份读进内存就得有一个数，而任何为它挑的数在别人真实的
+   目录上都是错的。流式不需要：字节从不同时全部存在。控制台确实会在请求之前拒绝大
+   文件，但那是一次交互上的客气，**不是**边界——一个只因为客户端有礼貌才活着的服务端
+   根本没有边界。
+2. **`open_bytes` 不是 `async def`**，和 `ArtifactStore.iter_chunks` 一样：所有拒绝
+   必须在**调用时**发生，那时路由还能改状态码。只在第一个 chunk 才失败的写法是一个
+   中途停下的 200，客户端分不清它和断线。
+3. **分岔在读之前。** 图片按名字直接走字节路线，不先走一遍文本读——那次读会把整份字节
+   读进来解 UTF-8，只为了得到 `is_text: false`，而超过 `MAX_READ_BYTES` 的图片会直接
+   撞成一条错误。
+
+### 没有重开 ADR-062 §3
+
+那条被拒的是一个**当 `iframe src` 用**的服务端预览端点，沉掉它的是鉴权：嵌入元素不发
+身份头，所以要另开一次性 token 或同源 cookie。这条路由由 `BlobPreview` 用普通方式取，
+带着其它调用一样的身份头，字节在页内变成 object URL——没有新鉴权通道。因此**这一批
+也没有 ADR**。
+
+### 一处此前写错的成本估计
+
+F-27 原先写着「补一条要过一遍 `tests/contracts/` 的参数化套件」，ADR-086 §4 里同一句
+话也在。**不对**：`tests/contracts/test_projects.py` 是 `ProjectStore`（归属与成员
+关系）的，`ProjectFileStore` 只有一个实现。这条缺口是按一个比真实成本高的估计排期的，
+两处都已更正，且原句留在原地——「当时凭什么这么判断」和「后来发现判断依据不对」是两件
+都该看得见的事。
+
+### 实跑证据
+
+`curl` 打 `deepseek-report.pdf`（159,828 字节）：`200`，`content-length` 一致，
+`content-type: application/octet-stream`，`x-content-type-options: nosniff`，
+`content-disposition: attachment`，落地文件 `file(1)` 认作 *PDF document, version 1.4,
+2 pages*。
+
+浏览器里：项目目录既有的 `logo.png` 解不出来——查过了，那是一个 17 字节的假文件
+（PNG magic 后面跟着 `binary` 几个字），**不是路由的问题**。临时写了一张真的 8×8 PNG
+进去，`<img>` 的 `naturalWidth/Height` 是 8×8，`src` 是 `blob:`；验完即删。
+PDF 那一格在应用内浏览器里是空白，而 `BlobPreview` 自己那句话正是为这种情况写的
+（「这个浏览器不显示内嵌 PDF——文件没问题」）——那是这个 pane 的既有行为，工作区侧的
+PDF 一样如此。
+
+### 门禁
+
+后端 `2945 → 2955`（`open_bytes` 8 条：整份字节、超过读上限仍可流、四种拒绝的时机、
+两条句柄关闭；路由 2 条：头部与拒绝、邻居读不到）。前端 `573 → 574`。
+
+---
+
 ## 2026-08-27（未合并，同分支，第二十九批之二）：一份 `.md` 在哪儿都该是同一份 `.md`
 
 第二十九批把项目侧接上工作区那套查看器时，记下了 F-28：两侧**一致地**都不渲染
@@ -133,8 +202,7 @@ pnpm --dir web check   （本机走 var/toolchain/node + NODE_OPTIONS=--no-exper
 
 ### 没做完的，写在缺口里
 
-- **F-27**：项目侧取不到字节，所以图片／PDF 仍然看不了。**理由不是「agent 放不进
-  二进制」**——ADR-077 之后 `project_run` 能写任何东西；理由是排期。
+- ~~**F-27**：项目侧取不到字节，图片／PDF 看不了~~ —— **同批已关闭**，见下一节。
 - ~~**F-28**：两侧都不渲染 Markdown~~ —— **同批已关闭**，见下一节。
 - **F-26 收窄但不关**：闸接上了，`policy.write_tools_require_approval` 这个**字段**
   仍然没有读者。

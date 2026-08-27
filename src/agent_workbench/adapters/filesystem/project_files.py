@@ -16,6 +16,7 @@ on the loop or block it.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from agent_workbench.domain.project_files import (
     ProjectFileChangedError,
     ProjectFileExistsError,
 )
+from agent_workbench.ports.artifact_store import DEFAULT_CHUNK_BYTES
 from agent_workbench.ports.project_files import (
     ALWAYS_SKIPPED_DIRECTORIES,
     MAX_LISTING_ENTRIES,
@@ -198,6 +200,54 @@ class FilesystemProjectFileStore:
             )
 
         return await offload(self._runner, work, name="project_files.read")
+
+    def open_bytes(self, path: str) -> tuple[ProjectFileEntry, AsyncIterator[bytes]]:
+        # Not `async def`, and every refusal happens before the return -- see
+        # the port for why that is the contract and not a style. The stat and
+        # the open are the whole refusal surface, and both are syscalls on a
+        # local file rather than IO waits, so they run here. Only the *reading*
+        # is offloaded, which is the part whose duration the file decides.
+        target = self._sandbox.resolve(path)
+        if not target.is_file():
+            # One message for "not there" and "not a file", because the caller
+            # turns both into the same 404 and a distinguishable refusal here
+            # would answer a question the route declines to answer.
+            raise NotFoundError(f"no such file: {path!r}")
+        status = target.lstat()
+        # After the stat, and the order is the reason `open_for_read` exists:
+        # `resolve` has already followed every link, so a symlinked leaf is
+        # still standing at this point and only the `O_NOFOLLOW` open refuses
+        # it. Statting first costs a syscall on a file that is about to be
+        # rejected; opening first would mean holding a descriptor while
+        # deciding whether to.
+        handle = self._sandbox.open_for_read(path)
+
+        async def chunks() -> AsyncIterator[bytes]:
+            # The handle is this generator's to close, on every exit including
+            # the one that matters: a client that disconnects mid-transfer
+            # leaves the generator suspended, and the `finally` runs when the
+            # server closes it. Without it, a browser cancelling a preview
+            # leaks one descriptor per cancelled request.
+            try:
+                while True:
+                    piece = await offload(
+                        self._runner,
+                        lambda: handle.read(DEFAULT_CHUNK_BYTES),
+                        name="project_files.open_bytes",
+                    )
+                    if not piece:
+                        return
+                    yield piece
+            finally:
+                handle.close()
+
+        entry = ProjectFileEntry(
+            path=path,
+            kind="file",
+            size_bytes=status.st_size,
+            modified_at=_modified_at(status),
+        )
+        return entry, chunks()
 
     async def write(
         self,

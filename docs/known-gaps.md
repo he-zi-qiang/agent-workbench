@@ -1276,33 +1276,51 @@ schema 变更合并，不单独 bump。
 `Literal[True]` 变成 `bool`——一次 `config_schema_version` 变更，仍然应当与下一次
 schema 变更合并。
 
-### F-27 项目目录一侧只看得了文本 —— 已知代价
+### F-27 项目目录一侧只看得了文本 —— **已关闭**（2026-08-27，同批）
 
-**证据**：`GET /v1/projects/{project_id}/file`
+**曾经的证据**：`GET /v1/projects/{project_id}/file`
 （[projects.py](../src/agent_workbench/apps/api/routes/projects.py)）返回的是
 `ProjectFileContent`：`{path, text|null, size_bytes, is_text, modified_at}`
 （[ports/project_files.py](../src/agent_workbench/ports/project_files.py)）。整个
-projects 路由里没有 `StreamingResponse`，也没有 media type——**项目目录里的文件取不到
-字节**。所以
+projects 路由里没有 `StreamingResponse`——**项目目录里的文件取不到字节**。所以
 [ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
 让项目侧用上了工作区那套查看器之后，`html` 与文本能看，`image` 与 `pdf` 仍然停在
 「这是一个二进制文件（N 字节），不显示内容。」
 
-**不要把理由写成"agent 放不进二进制"**。那句话看起来成立——`project_write` 的入参是
-`str`——但 ADR-077 之后回合还握着 `project_run`，一条命令能在项目目录里写出任何东西，
-而两个 local profile 都打开了 `policy.shell_tools_enabled`。**项目侧的二进制可以是
-产物。**
+**做完的样子**：`ProjectFileStore.open_bytes(path)` 返回 `(entry, AsyncIterator)`，
+新路由 `GET /v1/projects/{project_id}/file/bytes` 把它接成 `StreamingResponse`，
+前端 `getProjectFileBlob` 喂给已有的 `BlobPreview`。
 
-**为什么这次不做**：补一条取字节的路由要给 `ProjectFileStore` 这个 Protocol 加方法、
-改它的实现、并过一遍 `tests/contracts/` 的参数化套件。而文本产物（`.md`／`.html`／
-源码）是绝大多数，它们一行后端代码都不用改就能看。这是一次排期，不是一次判定。
+三件值得单独记下的：
 
-**做完的判据**：`GET /v1/projects/{project_id}/file/bytes`，`StreamingResponse` +
-`content-length` + `x-content-type-options: nosniff` + 永久 `attachment`（沿用
-[downloads.py](../src/agent_workbench/apps/api/downloads.py)），**服务端不猜 media
-type**（返回 `application/octet-stream`，显示用的类型由客户端 `effectiveMediaType`
-决定），前端把它喂给已有的 `BlobPreview`。注意 `BlobPreview` 取字节做 object URL 而
-**不是**把 URL 当 iframe src，所以这不会重开 ADR-062 §3 拒绝的那条服务端预览端点。
+1. **流式，因此没有上限**。整份读进内存就得有一个数，而任何为它挑的数在别人真实的
+   目录上都是错的。流式不需要：字节从不同时全部存在。控制台确实会在请求之前拒绝大
+   文件（`BlobPreview` 按目录列表里的字节数判断），但那是一次交互上的客气，**不是**
+   边界——一个只因为客户端有礼貌才活着的服务端根本没有边界。
+2. **`open_bytes` 不是 `async def`**，和 `ArtifactStore.iter_chunks` 一样。所有拒绝
+   （路径检查、符号链接叶子、文件不存在、是个目录）必须在**调用时**发生，那时路由还
+   能改状态码；只在第一个 chunk 才失败的写法是一个中途停下的 200，客户端分不清它和
+   断线。
+3. **分岔发生在读之前**。图片按名字直接走字节那条路线，不先走一遍文本读——后者会把整
+   份字节读进来解 UTF-8，对一张 PNG 只为了得到 `is_text: false`，而超过
+   `MAX_READ_BYTES` 的图片会直接撞成一条错误。
+
+**没有重开 ADR-062 §3**。那条被拒的是一个**当 `iframe src` 用**的服务端预览端点，
+沉掉它的是鉴权：嵌入元素不发身份头，所以要另开一次性 token 或同源 cookie——为一层纵深
+新增一条进入这个 API 的路。这条路由由 `BlobPreview` 用普通方式取，带着其它调用一样的
+身份头，字节在页内变成 object URL。没有新鉴权通道，授权和其它项目路由完全相同；
+`attachment` + `nosniff` 无条件带上（ADR-062 §4）。
+
+**服务端不猜 media type**，一律 `application/octet-stream`。项目文件就是磁盘上的一个
+文件，没人给它标过类型，这里编一个是这套 API 站不住的断言——而在 `nosniff` 之下，它
+恰好也是浏览器唯一不会再质疑的那个断言。显示成什么由控制台按名字决定
+（`effectiveMediaType`），那是一个显示决定，没有任何授权读它。
+
+**一处此前写错的成本估计**：这条缺口原先写着「要过一遍 `tests/contracts/` 的参数化
+套件」。不对——`tests/contracts/test_projects.py` 是 `ProjectStore`（归属与成员关系）
+的，`ProjectFileStore` 只有一个实现，测试在 `tests/adapters/test_project_file_store.py`。
+真实成本比原先记的小，[ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
+§4 里同一句话也一并更正。
 
 ### F-28 Code 的文件预览不渲染 Markdown —— **已关闭**（2026-08-27，同批）
 

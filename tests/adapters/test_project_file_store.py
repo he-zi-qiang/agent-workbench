@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import BinaryIO
 
 import pytest
 
@@ -22,7 +23,10 @@ from agent_workbench.adapters.filesystem.sandbox import (
     ProjectSandboxError,
 )
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
-from agent_workbench.domain.project_files import ProjectFileChangedError
+from agent_workbench.domain.project_files import (
+    ProjectFileChangedError,
+    ProjectPathError,
+)
 from agent_workbench.ports.project_files import (
     MAX_LISTING_ENTRIES,
     MAX_READ_BYTES,
@@ -150,6 +154,139 @@ class TestWalk:
         # from the paths, and returning both makes the ceiling count things the
         # caller did not ask about.
         assert all(entry.kind == "file" for entry in (await store.walk()).entries)
+
+
+def _watching(
+    root: Path,
+) -> tuple[list[BinaryIO], FilesystemProjectFileStore]:
+    """A store over the same root whose opened handles are observable.
+
+    A subclass rather than a patched attribute: `ProjectSandbox` declares
+    `__slots__`, so there is nothing to assign over -- and the subclass is the
+    better test anyway, because it goes through the real `open_for_read`
+    instead of standing in for it.
+    """
+
+    opened: list[BinaryIO] = []
+
+    class Watching(ProjectSandbox):
+        def open_for_read(self, relative: str) -> BinaryIO:
+            handle = super().open_for_read(relative)
+            opened.append(handle)
+            return handle
+
+    return opened, FilesystemProjectFileStore(Watching(root))
+
+
+class TestOpenBytes:
+    """The half of reading that exists for a browser rather than for a model.
+
+    `read` decodes, caps at `MAX_READ_BYTES` and answers "is this text". Every
+    one of those is a fact about a context window, and none of them is true of
+    a PNG on its way to an `<img>`. What this one has to get right instead is
+    the two things a stream can get wrong: refusing at the right *moment*, and
+    letting go of the descriptor.
+    """
+
+    async def test_bytes_come_back_whole_and_undecoded(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        payload = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 40
+        (store.working_directory / "logo.png").write_bytes(payload)
+
+        entry, chunks = store.open_bytes("logo.png")
+        assert entry.size_bytes == len(payload)
+        assert entry.kind == "file"
+        assert b"".join([piece async for piece in chunks]) == payload
+
+    async def test_a_file_larger_than_the_read_ceiling_still_streams(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        # `read` refuses this file and is right to: 2 MiB of anything is not
+        # something to put in a context window. A browser showing a photograph
+        # is a different question, and this route answers that one -- which is
+        # the whole reason it is a second method rather than a flag on the
+        # first.
+        payload = b"\xff" * (MAX_READ_BYTES + 4096)
+        (store.working_directory / "photo.jpg").write_bytes(payload)
+
+        with pytest.raises(OutputTooLargeError):
+            await store.read("photo.jpg")
+
+        entry, chunks = store.open_bytes("photo.jpg")
+        assert entry.size_bytes == len(payload)
+        assert sum([len(piece) async for piece in chunks]) == len(payload)
+
+    def test_a_missing_file_refuses_when_called_not_when_read(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        # The contract, and the reason `open_bytes` is not a coroutine: the
+        # route turns this into a 404 while the status code can still change.
+        # A refusal that waited for the first chunk would be a 200 that stops,
+        # which a client cannot tell from a dropped connection.
+        with pytest.raises(NotFoundError):
+            store.open_bytes("nope.png")
+
+    def test_a_directory_is_not_a_file_to_stream(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        with pytest.raises(NotFoundError):
+            store.open_bytes("src")
+
+    def test_a_path_leaving_the_project_is_refused(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        with pytest.raises(ProjectPathError):
+            store.open_bytes("../outside.png")
+
+    def test_a_symlinked_leaf_is_refused_before_a_byte_is_read(
+        self, store: FilesystemProjectFileStore, tmp_path: Path
+    ) -> None:
+        # The same escape `read_bytes` refuses, on the streaming path. A read
+        # through a link is how a project's contents get to include
+        # `~/.ssh/id_ed25519` without any path ever having said so -- and this
+        # route hands whatever it reads straight to a browser.
+        secret = tmp_path / "secret.png"
+        secret.write_bytes(b"PRIVATE")
+        (store.working_directory / "link.png").symlink_to(secret)
+
+        with pytest.raises(ProjectSandboxError):
+            store.open_bytes("link.png")
+        assert secret.read_bytes() == b"PRIVATE"
+
+    async def test_the_descriptor_is_closed_when_a_reader_gives_up(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        # A browser that cancels a preview leaves the generator suspended, and
+        # the `finally` is what runs when the server closes it. Without it this
+        # route leaks one descriptor per cancelled request -- invisible until a
+        # long-lived process runs out of them.
+        #
+        # Observed on the real handle rather than inferred from a second open
+        # succeeding: a leaked descriptor does not stop the next open, so that
+        # weaker assertion passes with the `finally` deleted.
+        (store.working_directory / "big.bin").write_bytes(b"x" * (1024 * 256))
+        opened, watched = _watching(store.working_directory)
+
+        _, chunks = watched.open_bytes("big.bin")
+        assert len(await chunks.__anext__()) > 0
+        assert opened[0].closed is False
+
+        await chunks.aclose()
+        assert opened[0].closed is True
+
+    async def test_the_descriptor_is_closed_after_the_last_chunk(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        # The ordinary exit, which the `finally` also has to cover: a reader
+        # that drains the stream never calls `aclose`, and the generator
+        # returns from inside the `try`.
+        (store.working_directory / "small.bin").write_bytes(b"x" * 32)
+        opened, watched = _watching(store.working_directory)
+
+        _, chunks = watched.open_bytes("small.bin")
+        assert b"".join([piece async for piece in chunks]) == b"x" * 32
+        assert opened[0].closed is True
 
 
 class TestRead:

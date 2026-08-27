@@ -71,16 +71,25 @@ system*。扁平侧买到的那条性质，是靠「路径根本拼不出来」�
 
 ## 4. 明确不做
 
-- **不给项目文件加取字节的路由。** 因而图片和 PDF 在项目侧仍然只有一句话。补一条要
-  动 `ProjectFileStore` 这个 Protocol、它的实现和 `tests/contracts/` 的参数化套件，
-  本次不做。
+- **不给项目文件加取字节的路由。** 因而图片和 PDF 在项目侧仍然只有一句话，记进
+  `known-gaps.md` F-27。
   **不做的理由不是「agent 放不进二进制」。** 这一句在初稿里写过，它是错的：
   `project_write` 的入参确实是 `str`，但 ADR-077 之后回合还握着 `project_run`，
   而一条命令能在项目目录里写出任何东西——两个 local profile 都打开了
   `policy.shell_tools_enabled`。所以项目侧的二进制**可以**是产物。真实的理由只是
   次序：文本产物（`.md` / `.html` / 源码）是绝大多数，它们一行后端代码都不用改就能
-  看，而二进制那条要动一个 Protocol 和一套参数化契约测试。这是一次排期，记进
-  `known-gaps.md`，不是一次判定。
+  看。这是一次排期，不是一次判定。
+
+  > **2026-08-27 补记，两处更正。** 这一条**已在同一批里做掉**（F-27 已关闭）：
+  > `ProjectFileStore.open_bytes` + `GET /v1/projects/{id}/file/bytes` +
+  > 前端接 `BlobPreview`。
+  >
+  > 而上面这段原本还写着「要动 `tests/contracts/` 的参数化套件」——那也是错的。
+  > `tests/contracts/test_projects.py` 是 `ProjectStore`（归属与成员关系）的套件；
+  > `ProjectFileStore` 只有一个实现，测试在
+  > `tests/adapters/test_project_file_store.py`。**这条排期是按一个比真实成本高的
+  > 估计做的**，两句话都留在这里而不是改掉，因为「当时凭什么这么判断」和「后来发现
+  > 判断依据不对」是两件都该看得见的事。
 - **不给项目写入做产物卡片。** `FileCard` 的每一个能力都绑在 `WorkspaceEntryView`
   上（media type、大小、能不能运行），项目侧没有这个对象，而伪造一个只有名字的会让
   卡片上一半的东西说不出来。树上现在会动、会标记、点得开，这条路是完整的；卡片是
