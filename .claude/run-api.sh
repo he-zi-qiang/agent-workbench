@@ -27,6 +27,16 @@
 # could only ever come back as Markdown -- which is exactly what it did. The API
 # needs no MCP server running to freeze the names; the Worker is what needs them
 # up, which is why `demo-worker` probes both before it starts.
+#
+# launch.json 里还有一条 `agent-api-delegating`，与这条的唯一差别是带上
+# `AW_MULTI_AGENT__DELEGATION_ENABLED=true`。它没有自己的脚本（`runtimeExecutable`
+# 直接用 `/usr/bin/env` 把变量套在这个脚本外面），因为一个正文只有一行 export 的
+# 包装脚本，是第三个需要和这里保持同步的文件。
+#
+# 为什么需要那条：`delegation_enabled` 出厂是关的（`config.default.toml`，ADR-082
+# 有意如此——关着的时候工具不注册、信封不含它），而控制台的「参与的 Agent」面板
+# **只在真的发生过委派时渲染**。所以在这条路径下起的控制台，那块面板永远是空的，
+# 而空面板和「这个部署没有多 agent」看起来完全一样。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
