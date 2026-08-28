@@ -289,6 +289,55 @@ describe("summariseGroups", () => {
   it("says nothing about a stage that has done nothing", () => {
     expect(summariseGroups([])).toBe("");
   });
+
+  it("把失败的那一类排到最前，哪怕它只发生过一次", () => {
+    // 读者打开一个阶段，找的就是没成的那一步。按出现次数排，它会被最常见的
+    // 那一类挤到 `等 N 项` 里去——而最常见的那一类几乎总是模型调用。
+    const failed: StepGroup = { ...group("写入工作区", "boom"), outcome: "failed" };
+    expect(
+      summariseGroups([...groups(...Array<string>(9).fill("读取网页")), failed]),
+    ).toBe("写入工作区 · 读取网页 ×9");
+  });
+
+  it("被拒绝和失败同级——两者都是读者在找的东西", () => {
+    const denied: StepGroup = { ...group("在本机执行命令", "d"), outcome: "denied" };
+    expect(
+      summariseGroups([...groups("读取网页", "读取网页"), denied]),
+    ).toBe("在本机执行命令 · 读取网页 ×2");
+  });
+
+  it("模型作答永远不打头：它是机器的动静，不是这一段做了什么", () => {
+    // 实测的那一行：一个委派任务的 `work` 阶段摘要成
+    // 「模型作答 ×9 · delegate_agent ×6 · 子代理已委派 ×4 · 等 8 项」——
+    // 信息量最低的那类排第一，而结束这个阶段的那次失败被挤进了「等 8 项」。
+    expect(
+      summariseGroups(
+        groups(
+          ...Array<string>(9).fill("模型作答"),
+          ...Array<string>(4).fill("子代理已委派"),
+        ),
+      ),
+    ).toBe("子代理已委派 ×4 · 模型作答 ×9");
+  });
+
+  it("委派子代理有自己的中文说法——它是多 agent 任务里最要紧的那个动作", () => {
+    // 实测那一行：`delegate_agent ×6`，在一整行中文里露出一个原始标识符。
+    expect(summariseGroups(groups("委派子代理", "委派子代理"))).toBe("委派子代理 ×2");
+  });
+
+  it("一个阶段只有模型作答时仍然说得出这件事", () => {
+    // 降级不是删除：没有别的可说时，机器的动静就是全部能说的。
+    expect(summariseGroups(groups("模型作答", "模型作答"))).toBe("模型作答 ×2");
+  });
+
+  it("同一类里有一次失败，整类就算未了结", () => {
+    // 六次里错一次，「读取网页 ×6」里值得浮出来的正是那一半。
+    const ok = groups(...Array<string>(5).fill("读取网页"));
+    const bad: StepGroup = { ...group("读取网页", "bad"), outcome: "failed" };
+    expect(summariseGroups([...ok, bad, ...groups("搜索网络", "搜索网络")])).toBe(
+      "读取网页 ×6 · 搜索网络 ×2",
+    );
+  });
 });
 
 describe("一行步骤说得出它对哪个文件动的手", () => {
