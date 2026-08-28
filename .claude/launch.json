@@ -12,6 +12,18 @@
       "url": "http://127.0.0.1:8000"
     },
     {
+      "name": "agent-api-delegating",
+      "runtimeExecutable": "/usr/bin/env",
+      "runtimeArgs": [
+        "AW_MULTI_AGENT__DELEGATION_ENABLED=true",
+        "/bin/bash",
+        "/Users/heziqiang/agent工作台/.claude/run-api.sh"
+      ],
+      "port": 8000,
+      "autoPort": false,
+      "url": "http://127.0.0.1:8000"
+    },
+    {
       "name": "agent-api-attach",
       "port": 8000,
       "autoPort": false,

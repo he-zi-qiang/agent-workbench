@@ -96,6 +96,19 @@ context_window_tokens = 1000000
 # 代价没变，仍然是延迟；`turn_timeout_seconds` 同批从 360 提到 600 接住它。
 thinking = "enabled"
 reasoning_effort = "high"
+# 2026-08-27 实测把这个数推翻了。控制台上一次真实运行（v2_general，`work` 节点
+# 一次派出三个 analyst 子代理），13 次模型调用里 **5 次死在正好 120.0 秒**，
+# 而活下来的最长一次是 **107.0 秒**——已经贴着天花板。同一个库里 `high` 落地
+# （2026-08-26）之前的历史是 max 45~77 秒，所以搬动分布的正是 `reasoning_effort`。
+#
+# **真实的尾巴量不出来**，因为它被这个上限自己截断了：107 是"活下来的最长一次"，
+# 不是 p99。所以下面这个数不是分位数，是留给一条看不见的尾巴的余量。
+#
+# 240 的依据：约 2.2 倍于实测最长成功调用（107.0s），且仍然只有
+# `code.turn_timeout_seconds = 600` 的一半——一次卡住的调用吃不掉整个回合，
+# 回合超时仍然是外层那道停。
+timeout_seconds = 240
+
 
 [model.compact]
 model_id = "deepseek-chat"
@@ -106,6 +119,16 @@ allow_local_bootstrap = true
 
 [runtime]
 record_step_inputs = true
+# **这个数和 `[model.main] timeout_seconds` 是一对，只提一个等于没提。**
+# `runtime/agent_runtime.py:122` 写着两者的关系：运行时这层是任何单次模型调用的
+# 信封，适配器仍会在它**里面**套上 model profile 自己的超时，**短的那个先响**。
+# 出厂两个都是 120，所以此前谁先响是一场平局；今天的报错原文
+# 「the model call exceeded the runtime's 120.0s envelope」说明响的是这一层。
+#
+# 300 而不是也写 240：让**更具体**的那个（适配器的）先响，这一层退回它本来的角色
+# ——兜底。300 同时是这个部署已经允许的最长单次操作（`sandbox` 工具自报 300）。
+model_timeout_seconds = 300
+
 # `max_steps = 40` used to be repeated here (measured on the Word profile:
 # a short report hit `budget_exceeded: max_steps` at the then-shipped 12).
 # The shipped default now carries that measured value, so restating it would

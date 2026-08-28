@@ -27,6 +27,153 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-28（未合并，分支 `fix/the-inner-timeout-was-not-raised-with-the-effort`，第三十五批）：内层那道超时没有跟着一起提
+
+第三十三批那个面板落地后第一次真跑，屏幕上一眼看见的不是面板的问题，是**部署配置的**
+问题：13 次模型调用里 5 次死在同一句话上。这一批修它。
+
+### 1. 量出来的
+
+对着这个部署自己的事件流（`agent_workbench_local`，1937 条 `ModelStarted`）配对
+`ModelStarted → ModelCompleted`：
+
+| 日期 | 调用数 | p50 | p95 | 最长 |
+|---|---:|---:|---:|---:|
+| 2026-08-28（本次，`high`） | 8 成功 | 22.4s | 94.6s | **107.0s** |
+| 2026-08-27 | 25 | 4.7s | 19.3s | 29.5s |
+| 2026-08-26（`high` 当天落地） | 66 | 3.6s | 66.5s | 76.6s |
+| 2026-08-24 | 79 | 4.7s | 25.9s | 45.6s |
+
+本次那一跑的全部 13 次，逐条：
+
+```
+RunFailed      120.0  the model call exceeded the runtime's 120.0s envelope
+RunFailed      120.0  （同上）
+RunFailed      120.0  （同上）
+RunFailed      119.7  （同上）
+RunFailed      119.7  （同上）
+ModelCompleted 107.0
+ModelCompleted  71.7   62.5   23.7   21.1   20.9   7.9   3.0
+```
+
+**5/13 死在墙上，活下来的最长一次是 107.0 秒——89% 的天花板。**
+
+一个必须写下的口径：**真实的尾巴量不出来**，因为它被这个上限自己截断了。107 是"活
+下来的最长一次"，不是 p99。所以新值不是一个分位数，是留给一条看不见的尾巴的余量。
+
+### 2. 真正的缺陷：这是**两个** 120，不是一个
+
+`runtime/agent_runtime.py:122` 写着两者的关系——运行时那层是任何单次模型调用的信封，
+适配器仍会在它**里面**套上 model profile 自己的超时，**短的那个先响**：
+
+| 层 | 键 | 出厂 | 谁在用 |
+|---|---|---:|---|
+| 运行时信封 | `[runtime] model_timeout_seconds` | 120 | `agent_runtime.py:717` |
+| 适配器 | `[model.<profile>] timeout_seconds` | 120 | `adapters/models/deepseek.py:306` |
+
+两个都是 120，两个 profile 一个都没覆盖。所以：
+
+- 谁先响是一场**平局**（今天的报错原文说是运行时那层赢了）；
+- **只提其中一个，墙一寸都不会挪**——这才是这条缺陷会重复发生的原因。
+
+这条耦合此前**没有写在任何一侧**。一个把 `model_timeout_seconds` 从 120 提到 300、
+然后发现调用仍然死在 180 的运维，从配置里读不到任何解释。
+
+### 3. 这是第二十三批那次调整漏掉的一半
+
+`config.demo-local.toml` 与 `config.code-local.toml` 的注释里，那次把
+`reasoning_effort` 从 `low` 提到 `high` 时**自己写下过这条推理**：
+
+> 不一起提，就是把"想得更深"直接兑换成"更容易超时"
+
+——然后提了 `turn_timeout_seconds`（360 → 600），**没有提这两个**。回合那层接住了，
+单次调用那层没有。今天屏幕上的五条红就是那半步的账。
+
+### 4. 改了什么
+
+两个把 `reasoning_effort` 设成 `high` 的 profile（`demo-local`、`code-local`）：
+
+| 键 | 从 | 到 | 依据 |
+|---|---:|---:|---|
+| `[model.main] timeout_seconds` | 120 | **240** | ≈2.2× 实测最长成功调用（107.0s）；仍只有 `turn_timeout_seconds = 600` 的一半，一次卡住的调用吃不掉整个回合 |
+| `[runtime] model_timeout_seconds` | 120 | **300** | 高于上面那个，让**更具体**的（适配器的）先响、这层退回兜底；300 也是这个部署已允许的最长单次操作（`sandbox` 自报 300） |
+
+### 5. 明确没做，以及为什么
+
+- **不动出厂默认**。`config.default.toml` 两处仍是 120——不是因为 120 对，而是因为
+  **这里没有可依据的测量**：出厂 `model_id` 是占位符 `not-configured-deepseek-main`，
+  一个占位模型的调用时长这个仓库编不出来。与 `pricing`、`context_window_tokens` 拒绝
+  出厂值同一条规则。上面那些数是 DeepSeek `deepseek-v4-flash` 在这台机器上的数，不是
+  普遍事实。
+  > 但留了一条警告在那儿：`reasoning_effort` 的**出厂默认已经是 `high`**
+  > （`settings.py:560`），而 120 是在它还是别的档位时定的。所以任何一个不覆盖这两处
+  > 的部署，拿到的是"出厂就想得深、出厂就来不及"这个组合。要改它，得先有另一个
+  > provider 上的测量。
+- **不加跨字段校验**（"`model_timeout_seconds` 必须大于 profile 的"）。那会让现存的
+  部署在启动时直接失败，而它们今天是能跑的——只是慢调用会被砍。这是一条值得**测**、
+  但不值得**拒绝启动**的关系。
+- **不改 `max_retries`**。超时被砍掉的调用重试仍然会再花一次同样的时间；这里缺的是
+  时间，不是次数。
+
+### 6. 改完之后又跑了一次，以及它证明了什么
+
+同一条 objective、同一个 profile，重启 Worker 后重跑（`task_4c9bc26a…`）：
+
+```
+ModelCompleted 172.0      ← 旧上限下必死
+ModelCompleted 155.6      ← 旧上限下必死
+ModelCompleted 131.2      ← 旧上限下必死
+ModelCompleted  83.2  78.6  66.6  48.0  22.7  14.9
+```
+
+**10 次调用，0 次超时**（此前 13 次里 5 次）。而且最要紧的是那三条：**172.0 / 155.6 /
+131.2 秒——它们全都在旧的 120 秒之外。** 之前判断"真实的尾巴量不出来"是对的，尾巴确实
+在那儿，只是被上限截断了看不见。172.0 是新的 240 上限的 72%。
+
+**但这一跑仍然失败了，而且必须把这件事写清楚：这个修复把失败挪了位置，没有把它去掉。**
+
+```
+RunFailed   budget_exceeded  the model stopped at its output token ceiling
+ToolFailed  tool_failed      sub-agent analyst ended as failed (token_budget)
+ToolFailed  budget_exceeded  this run has started 3 sub-agents and has 1 still running,
+                             against an allowance of 4
+RunFailed   budget_exceeded  the run passed its ceiling: token_budget
+```
+
+逐个运行的用量说明了发生了什么：
+
+| 运行 | in | out | 结局 |
+|---|---:|---:|---|
+| 三个 analyst | 223 / 947 / 1029 | 13642 / 13891 / 9166 | 都完成了 |
+| 第四个 analyst | 861 | **16384** | `token_budget` |
+| 父运行 `work` | **107736** | 29247 | `token_budget` |
+
+16384 正是 `max_output_tokens`；父运行合计 136,983 越过了
+`[multi_agent] max_tokens_per_agent_invocation = 120000`。
+
+**因果关系要说准**：调用之前死在 120 秒，就没机会跑到把 token 花完。现在它们跑完了，
+于是撞上了下一道墙。这不是这次改动引入的缺陷，是它**让一直存在的下一道墙第一次露出来**
+——但同样也不能说"修好了"。登记为 C-08。
+
+### 证据（2026-08-28，这棵树上）
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check .` / `ruff check .` | 606 files / All checks passed |
+| `pyright`（裸跑） | 0 errors |
+| `pytest`（离线） | **3059 passed, 783 skipped**（上一批 3056） |
+| `agent-config-check --profile development` | status ok |
+
+新增 3 条（`tests/config/test_local_console_profile.py`）：
+`test_a_profile_that_thinks_hard_gives_the_call_time_to_finish`（demo / code 两参数）
+与 `test_the_shipped_default_still_documents_the_pair_it_does_not_raise`。
+
+**反向验证**：把两个 profile 的这两个数改回 120 重跑，前者 **2 条转红**。钉住的不只是
+"数字变大了"，还有**成对**这件事——`model_timeout_seconds > timeout_seconds` 是单独一
+条断言，因为两个相等正是出厂时那个平局。
+
+---
+
 ## 2026-08-27（未合并，分支 `feat/multi-agent-orchestration`，第三十四批）：一块握着唯一出口的面板，不能在没什么可画时消失
 
 上一批把 C-06 与 C-07 登记成缺口。这一批把它们做掉，**并且订正其中一条登记时估错的

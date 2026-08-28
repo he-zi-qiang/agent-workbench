@@ -196,6 +196,18 @@ base_url = "https://api.deepseek.com"
 model_id = "not-configured-deepseek-main"
 temperature = 0.0
 max_output_tokens = 8192
+# 适配器给单次请求的超时（`adapters/models/deepseek.py:306`）。它与
+# `[runtime] model_timeout_seconds` 是**一对**，两个出厂都是 120，**只提一个
+# 等于没提**——短的那个先响。这条耦合此前没有写在任何一侧，代价实测过一次：
+# 见 `config.demo-local.toml` 的 `[model.main]`。
+#
+# 这里仍然留 120，不是因为 120 是对的，而是因为**这里没有可依据的测量**：出厂
+# `model_id` 是占位符 `not-configured-deepseek-main`，一个占位模型的调用时长这
+# 个仓库编不出来。与 `pricing`、`context_window_tokens` 拒绝出厂值同一条规则。
+#
+# 但有一件事值得警惕：`reasoning_effort` 的**出厂默认已经是 `high`**
+# （`settings.py:560`），而 120 这个数是在它还是别的档位时定的。所以任何一个
+# 不覆盖这两处的部署，拿到的就是"出厂就想得深、出厂就来不及"这个组合。
 timeout_seconds = 120
 max_retries = 2
 # Require a tool on the opening provider turn only. After its ToolResult the
@@ -229,6 +241,9 @@ max_steps = 40
 max_tool_calls = 32
 max_parallel_read_tools = 4
 max_parallel_write_tools = 1
+# 运行时给任何单次模型调用的信封。**与 `[model.<profile>] timeout_seconds` 成对，
+# 短的那个先响**（`runtime/agent_runtime.py:122`）；出厂两个都是 120，于是谁先响
+# 是一场平局，而只改其中一个不会把墙挪开一寸。
 model_timeout_seconds = 120
 # A deployment-wide ceiling on any single tool call. Unset, and each tool is
 # bound only by the timeout it declares for itself, which is the sizing that
