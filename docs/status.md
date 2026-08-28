@@ -115,6 +115,46 @@ ModelCompleted  71.7   62.5   23.7   21.1   20.9   7.9   3.0
 - **不改 `max_retries`**。超时被砍掉的调用重试仍然会再花一次同样的时间；这里缺的是
   时间，不是次数。
 
+### 6. 改完之后又跑了一次，以及它证明了什么
+
+同一条 objective、同一个 profile，重启 Worker 后重跑（`task_4c9bc26a…`）：
+
+```
+ModelCompleted 172.0      ← 旧上限下必死
+ModelCompleted 155.6      ← 旧上限下必死
+ModelCompleted 131.2      ← 旧上限下必死
+ModelCompleted  83.2  78.6  66.6  48.0  22.7  14.9
+```
+
+**10 次调用，0 次超时**（此前 13 次里 5 次）。而且最要紧的是那三条：**172.0 / 155.6 /
+131.2 秒——它们全都在旧的 120 秒之外。** 之前判断"真实的尾巴量不出来"是对的，尾巴确实
+在那儿，只是被上限截断了看不见。172.0 是新的 240 上限的 72%。
+
+**但这一跑仍然失败了，而且必须把这件事写清楚：这个修复把失败挪了位置，没有把它去掉。**
+
+```
+RunFailed   budget_exceeded  the model stopped at its output token ceiling
+ToolFailed  tool_failed      sub-agent analyst ended as failed (token_budget)
+ToolFailed  budget_exceeded  this run has started 3 sub-agents and has 1 still running,
+                             against an allowance of 4
+RunFailed   budget_exceeded  the run passed its ceiling: token_budget
+```
+
+逐个运行的用量说明了发生了什么：
+
+| 运行 | in | out | 结局 |
+|---|---:|---:|---|
+| 三个 analyst | 223 / 947 / 1029 | 13642 / 13891 / 9166 | 都完成了 |
+| 第四个 analyst | 861 | **16384** | `token_budget` |
+| 父运行 `work` | **107736** | 29247 | `token_budget` |
+
+16384 正是 `max_output_tokens`；父运行合计 136,983 越过了
+`[multi_agent] max_tokens_per_agent_invocation = 120000`。
+
+**因果关系要说准**：调用之前死在 120 秒，就没机会跑到把 token 花完。现在它们跑完了，
+于是撞上了下一道墙。这不是这次改动引入的缺陷，是它**让一直存在的下一道墙第一次露出来**
+——但同样也不能说"修好了"。登记为 C-08。
+
 ### 证据（2026-08-28，这棵树上）
 
 | 门禁 | 结果 |
