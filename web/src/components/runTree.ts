@@ -29,7 +29,7 @@
  * parity test at the bottom of `runTree.test.ts` is where that is enforced.
  */
 
-import type { EventEnvelope } from "../../api/types";
+import type { EventEnvelope } from "../api/types";
 
 export type RunStatus =
   | "running"

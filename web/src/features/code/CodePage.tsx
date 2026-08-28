@@ -103,6 +103,8 @@ import {
 import { CodeSessionRail } from "./CodeSessionRail";
 import { ProjectChooser } from "./ProjectChooser";
 import { ProjectFileTree } from "./ProjectFileTree";
+import { RunPanel } from "../../components/RunPanel";
+import { buildRunTree } from "../../components/runTree";
 import { CodeTurn } from "./CodeTurn";
 import type { OpenedFile } from "./FilePreview";
 import { PreviewPanel } from "./PreviewPanel";
@@ -398,12 +400,40 @@ export function CodePage() {
   // 这条流里被写过的项目文件（ADR-086）。派生的，和上面几个同一个理由。
   const projectWrites = useMemo(() => projectWritesIn(steps), [steps]);
 
+  // 这个会话里跑过哪些运行，按谁派生谁（ADR-089）。
+  //
+  // 与 Work 页共用 `buildRunTree` 与 `RunPanel`——两边问的是同一个问题，而
+  // 委派之后两边的步骤流都会交织两个 agent 的调用。从这里再发一个请求去问服务端
+  // 是用第二个请求学第一个请求已经带回来的东西：`steps` 就是这条流的持久事件。
+  //
+  // 注意它读的是 `steps` 而不是收窄之后的那份：一个只剩被选中那一行的面板，
+  // 会把「换一个运行去看」这件事本身拿掉。
+  const runTree = useMemo(() => buildRunTree(steps), [steps]);
+  // 选中哪个运行，`null` 表示全部。带着 sessionId，在渲染时比较而不是用 effect
+  // 事后清除——与 Work 页那条同一个形状、同一个理由：一个 run id 属于一条流，
+  // 带过去只会把下一个会话过滤成空的。
+  const [runSelection, setRunSelection] = useState<{
+    sessionId: string;
+    runId: string;
+  } | null>(null);
+  const selectedRunId =
+    runSelection !== null && runSelection.sessionId === sessionId
+      ? runSelection.runId
+      : null;
+  const shownSteps = useMemo(
+    () =>
+      selectedRunId === null
+        ? steps
+        : steps.filter((event) => event.run_id === selectedRunId),
+    [steps, selectedRunId],
+  );
+
   // Which run is live is derived inside `buildTurnBlocks`, from the run
   // bookkeeping in the events themselves rather than from anything this
   // component remembers about the moment it pressed send.
   const { blocks, orphanRuns, orphanRunIds } = buildTurnBlocks({
     messages,
-    events: steps,
+    events: shownSteps,
     running,
     pendingInstruction,
     liveCallId: thinkingCallId,
@@ -1325,6 +1355,19 @@ export function CodePage() {
             and a torrent is indistinguishable from silence. The approval
             section above says the one thing worth interrupting for. */}
         <section aria-label="编码会话" className="aw-code-transcript">
+          {/* 只在真的发生过委派时出现，与 Work 页同一条规则：没派生过的会话里
+              每个运行都是这一回合本身，再来一块面板只是家具。 */}
+          <RunPanel
+            onSelect={(runId) => {
+              setRunSelection(
+                runId === null || sessionId === undefined
+                  ? null
+                  : { sessionId, runId },
+              );
+            }}
+            roots={runTree}
+            selectedRunId={selectedRunId}
+          />
           {blocks.length === 0 ? (
             <EmptyState
               icon={<Code2 aria-hidden />}

@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { EventEnvelope } from "../../api/types";
+import type { EventEnvelope } from "../api/types";
 import {
   buildRunTree,
   flattenRuns,

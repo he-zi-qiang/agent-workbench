@@ -18,7 +18,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { EventEnvelope } from "../../api/types";
+import type { EventEnvelope } from "../api/types";
 import { RunPanel } from "./RunPanel";
 import { buildRunTree } from "./runTree";
 

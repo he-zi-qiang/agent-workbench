@@ -370,6 +370,99 @@ describe("CodePage 的计划模式", () => {
   });
 });
 
+describe("CodePage 的多 agent 面板（ADR-089）", () => {
+  function event(
+    runId: string,
+    eventType: string,
+    sequence: number,
+    payload: Record<string, unknown> = {},
+  ) {
+    return {
+      schema_version: 1,
+      event_id: `evt_${String(sequence)}`,
+      stream_id: "ses_1",
+      run_id: runId,
+      event_type: eventType,
+      durability: "durable" as const,
+      timestamp: "2026-08-28T10:00:00Z",
+      payload: { kind: eventType, ...payload },
+      sequence,
+      task_id: null,
+      graph_node_id: null,
+      parent_event_id: null,
+    };
+  }
+
+  const delegated = [
+    event("run_parent", "RunStarted", 1, {
+      run_kind: "code",
+      model_profile: "main",
+      tool_names: ["project_read"],
+      budget: {
+        max_steps: 40,
+        max_tool_calls: 32,
+        max_total_tokens: null,
+        max_cost_micro_usd: null,
+        deadline: null,
+      },
+    }),
+    event("run_parent", "AgentDelegated", 2, {
+      child_agent_run_id: "run_child",
+      profile_name: "explorer",
+    }),
+    event("run_child", "RunStarted", 3, {
+      run_kind: "code",
+      model_profile: "main",
+      tool_names: ["project_read"],
+      budget: {
+        max_steps: 40,
+        max_tool_calls: 32,
+        max_total_tokens: null,
+        max_cost_micro_usd: null,
+        deadline: null,
+      },
+    }),
+  ];
+
+  it("一个会话真的委派过时，Code 页也画得出参与的 Agent", async () => {
+    // 这条钉的正是用户反馈的那句「还是没有 agent 面板」：委派在 Code 里跑起来了，
+    // 而面板只做在 Work 页，于是屏幕上什么都没有。
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      steps: delegated,
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+    });
+
+    mounted();
+
+    const panel = await screen.findByRole("region", {
+      name: "参与这次任务的 Agent",
+    });
+    expect(within(panel).getByText("explorer")).toBeInTheDocument();
+    expect(within(panel).getByText(/1 个是子代理/)).toBeInTheDocument();
+  });
+
+  it("没委派过的会话里不画这块面板", async () => {
+    // 与 Work 页同一条规则：每个运行都是这一回合本身时，面板只是家具。
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      steps: [delegated[0]!],
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+    });
+
+    mounted();
+    await screen.findByLabelText("要做的事");
+
+    expect(
+      screen.queryByRole("region", { name: "参与这次任务的 Agent" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("CodePage", () => {
   it("shows what the model is thinking while the turn is still running", async () => {
     const user = userEvent.setup();

@@ -10,8 +10,8 @@ import {
   X,
 } from "lucide-react";
 
-import { shortId } from "../../components/ui";
-import { errorCodeLabel, explainRunFailure } from "./failure";
+import { shortId } from "./ui";
+import { errorCodeLabel, explainRunFailure } from "./errorVocabulary";
 import {
   flattenRuns,
   totalSpend,
