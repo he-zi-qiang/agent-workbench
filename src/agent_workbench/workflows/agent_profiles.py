@@ -246,7 +246,18 @@ _FRAMER: Final[AgentProfile] = AgentProfile(
     node="understand",
     system_prompt=(
         "Restate the objective as the concrete question to answer. "
-        "Record what would count as an answer and what is out of scope."
+        "Record what would count as an answer and what is out of scope. "
+        # Bounded for the same reason `_REVIEW_CONTRACT` bounds its summary,
+        # and after the same kind of failure. Measured 2026-08-28 on
+        # `config.demo-local.toml`: asked to frame a three-way comparison, this
+        # node spent one turn writing past `max_output_tokens` (16,384) and
+        # died on `budget_exceeded` -- it had started answering the question
+        # instead of stating it. Across that database, seven of the fourteen
+        # run failures since `reasoning_effort` moved to `high` are that same
+        # ceiling. A step whose product is a question does not need a thousand
+        # words, and the ceiling is not the place to discover that.
+        "This is framing, not answering: do not solve the objective here, and "
+        "keep the whole restatement under 400 words."
     ),
     admits=frozenset({"objective"}),
 )
@@ -338,7 +349,28 @@ _WORK_CONTRACT: Final[str] = (
     "Your final message is a report for the reviewer, not the deliverable: "
     "state what you did, name the files you wrote, and state plainly anything "
     "you could not do. A claim the working set does not support is worse than "
-    "an admitted gap."
+    "an admitted gap. "
+    # The two sentences below are one lesson, learned twice in the same week.
+    #
+    # `max_total_tokens` counts each turn's *whole prompt*, so a long passage
+    # left in the transcript costs its length once for every turn still to
+    # come. Measured 2026-08-28: this node produced ~34,000 characters of its
+    # own across four turns -- one of them 17,857 -- against the ~32,000 its
+    # four sub-agents were bounded to return, and died on `token_budget`
+    # holding a context that was mostly its own earlier prose.
+    #
+    # What it had written was the work restated: told to delegate three
+    # analyses, it opened with "I will act as coordinator" and wrote all three
+    # out under headings like `# Analyst A returned:` before calling the tool
+    # for real. `delegate_agent`'s own description now forbids that; this says
+    # the general form of it, because narrating instead of doing is not
+    # specific to delegation.
+    "Work in your turns rather than writing about the work: do not restate a "
+    "plan you are about to execute, do not draft content you are about to put "
+    "in a file, and do not write out a result a tool is about to return. "
+    "Keep the final report under 800 words -- the deliverable is in the "
+    "working set, and everything you write here is re-read by every turn that "
+    "follows."
 )
 
 #: The reviewer's contract, JSON for the same reason the critic's is: what this
