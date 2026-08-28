@@ -27,6 +27,81 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-28（未合并，分支 `fix/a-console-that-advertises-spawn-should-have-it`，第三十八批）：模型没说错，是这个部署在让它替配置圆场
+
+起因是一句用户反馈——控制台里一个 Task 在报告末尾如实写道：
+
+> 「多 Agent」是模拟的：我是一个 agent，无法真正并行拉起多个独立 Agent；本次是将调研
+> 拆成 A/B/C/D 四个角色的分工并由汇总环节成稿，报告末尾的「调研说明」如实标注了这一点。
+
+### 1. 查下来：模型是对的
+
+| 事实 | 出处 |
+|---|---|
+| `delegation_enabled` 出厂是 `false` | `config.default.toml:328` |
+| **没有任何 profile 覆盖过它** | `grep -rn delegation_enabled config/*.toml` 只有那一行 |
+| 关着时 `delegate_agent` 不注册、不进任何 Task 的授权信封 | ADR-082 |
+
+所以按文档正常起的控制台（`scripts/dev.sh demo-api`），那个回合手上**根本没有那件工具**。
+它如实汇报了自己的工具目录，然后退而模拟——**并且在报告里标注了自己在模拟**。
+
+前面几批之所以看得见多 agent，是因为我启动 API 时手动带了
+`AW_MULTI_AGENT__DELEGATION_ENABLED=true`。那是一条**只有我知道**的路径。
+
+**一个宣称有 spawn 的部署，把 spawn 关着，就是让模型替这个配置去圆场。**
+
+### 2. 改了什么
+
+`config.demo-local.toml` 新增 `[multi_agent] delegation_enabled = true`。
+
+这不是边界变更：ADR-082 把这件事明写成**配置问题而不是版本问题**，打开它正是那个机制
+被设计出来要做的动作。代价是真的并且是设计出来的——信封里多一件 `delegate_agent`，
+每个 Task 因此变宽；上限由出厂值兜着（一次运行最多 4 个子代理、深度 1、每次调用
+120000 token、一个 Task 最多 12 次），启动时校验器算最坏情况的树装不装得进 Task 预算
+（`4^1 = 4 ≤ 12`）。
+
+**只开控制台这一个 profile**，出厂默认仍然关着：这个仓库不替别人的部署决定要不要 spawn。
+
+**顺带删掉 `agent-api-delegating`。** 那条启动项是上一批我为了看见面板加的，它补的正是
+这个 profile 自己该表态的事。现在它表了态，留着那条就是给同一个控制台留两条路径、其中
+一条悄悄比另一条能力更强——而「这个部署有没有多 agent」应该看 profile，不该看你用哪一行
+命令起的它。测试直接钉住 `launch.json` 里不许再出现那个变量名。
+
+### 3. 一件必须一起说的：Code 模式没有委派
+
+`grep` 过 `apps/api/composition.py` 与 `application/code_session.py`：**零命中**。委派整个
+挂在 `task_worker/composition.py` 上。**多 agent 是 Task 侧的能力，Code 会话里怎么配都不
+会有。** 如果那句反馈来自 Code 模式，这一批不解决它，那是另一条缺口。
+
+### 证据（2026-08-28）
+
+把 API 与 Worker 都按**文档里的命令**重起（不带任何环境变量），提交一个 Task：
+
+```
+run_semantics_snapshot -> multi_agent -> delegation_enabled = true
+```
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check` / `ruff check` | 606 files / All checks passed |
+| `pytest`（离线） | **3071 passed, 783 skipped**（上一批 3068） |
+| `demo-local` 的 `load_settings()` | 通过；`delegation_enabled=True`、`max_children_per_run=4` |
+
+新增 3 条：控制台真的能委派、最宽的树装得进 Task 预算、只有一条启动路径。
+
+### 顺带：C-09 复跑
+
+同一条 objective 重跑（`task_593a20bc…`）：**截断标记 0 条**（此前三份报告全被截）。
+子代理这次没写到 8000 字符就说完了，所以结论没丢。
+
+**口径要准**：这证明的是**症状没复现**，不是「先写结论」这条机制被验证了——报告根本没触
+到那个上限，所以裁剪那条路没走到。真正被验证的只有"这一跑没丢结论"。
+
+那一跑仍然失败，撞的是另一处：模型想派 8 个子代理，而 `max_children_per_run = 4`，四次
+被拒之后父运行 `token_budget` 用尽。这是既有上限按设计工作，不是新缺陷。
+
+---
+
 ## 2026-08-28（未合并，分支 `feat/a-working-set-entry-is-already-an-artifact`，第三十七批）：那条不该造的路，和那条本来就在的路（ADR-088，关闭 F-14、C-09）
 
 用户说「产物没有预览」。第三十六批已经查明产物面板本身是好的——真正打不开的是**工作集
