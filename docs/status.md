@@ -27,6 +27,108 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-28（未合并，分支 `feat/code-may-delegate`，第三十九批）：Code 可以委派，而不必加入协调面（ADR-089）
+
+用户：「我希望 code 模式也可以使用（多 agent），而且我把 code 作为最通用的 agent，是权限
+和功能最全面和强大的。」
+
+这句话在代码里只错了一半。Code 确实拿着这台机器上最宽的工具面——项目目录读写、
+`project_run`、沙箱、网页检索——但它是唯一**不能把活分出去**的那一个：委派整条挂在
+Task Worker 上，API 进程里一行都没有。
+
+### 1. 那两个架构测试挡的不是委派
+
+`test_code_has_no_coordination_plane.py` 的禁止清单是 task_registry / execution_guard /
+approvals / langgraph。**委派一个都不在里面**，而且不是疏忽——把委派那五个模块逐个查过
+依赖，它们只用 `domain/`、`ports/agent_executor`、`ports/cancellation`、
+`ports/event_log`、`adapters/events`，全是 Code 本来就在用的。
+
+原因在 ADR-082 的形状里：**一次委派是一次运行，不是一个新的循环。** 子运行同步跑在父
+运行那次工具调用**里面**，不排队、不落检查点、不拿租约，随进程一起死——而那正是 Code
+自己那段 docstring 逐条列出来的前提。那段话说，每个协调面部件都是「一件在崩溃之后必须
+能**释放**某样东西的设施」。**委派不释放任何东西，因为它不持有任何东西。**
+
+### 2. 真正的危险，藏在一个不会被 review 看见的地方
+
+`CodeSessionService` 的签名里写着 `sink: ProcessOnlySink`——写在**签名**里而不是注释里，
+就是为了让「递一个普通 sink 进来」类型检查不过。它挡三个「答案已发布」事件。
+
+而 `EventDelegationChannel.sink_for_child` 返回的是**一个裸的 `ScopedEventSink`**。
+
+于是在 Code 会话里：**父运行发不出答案事件，子运行可以**——而那个为了「不可能被忘记」
+而存在的类型，从头到尾没有被咨询过一次。
+
+`FencedDelegationChannel` 就是为这一条存在的：**子运行继承父运行的栅栏**，一行，放在
+委派执行器唯一拿得到的那个东西上，所以没有第二条路可以忘记。实测它是**抛**而不是静默
+丢弃——比我预期的更强，也更对：静默会留下一个自以为已经发布的运行。
+
+### 3. 子代理：`explorer` 只读，而只读是性质不是起点
+
+| 子代理 | 工具 |
+|---|---|
+| `explorer` | `project_read` / `project_grep` / `project_list` |
+| `analyst` | 无 |
+
+两条理由，都不是胆小：**ADR-0078 让一次读成为一张回执**，而回执归做了那次读的运行——
+子代理读过的文件，父运行仍然写不了，可模型看起来像读过了；以及**两个子代理同写一个目录
+没有版本可以串行化**——工作集那侧直接禁掉（`WORKSPACE_TOOL_NAMES`），项目这侧没有
+manifest 可拒绝，所以拒绝只能是工具箱本身。
+
+### 4. 两个设计决定，都不是风格
+
+**接线全在 `dependencies.py`**：架构测试扫的是 `application/code_*.py`。把委派 import
+写进那几个文件，即使今天不违规，也是把组装细节搬进了被扫描的那片地方。`executor_for`
+是一个 `Callable`，交给它一个**已经包好**的执行器，Code 那侧一个字不用改。
+
+**每回合组装一次**：Task Worker 的委派对象是进程级的，因为它的子栈对每个 Task 都一样；
+Code 的不一样——子运行走的 gateway 带着某**一个会话**的审批门。一个进程级
+`DeferredExecutor` 只能绑到某一回合的门上然后被其余每回合使用，而 `bind()` 拒绝第二次
+调用正是为了让这件事变响。
+
+**两个注册表、一个名字**：`CodeSessionService` 拿 registry 只做
+`{spec.name: spec.risk for spec in tools.specs()}`——只读 spec、从不经它执行。所以进程级
+那个绑定只供推导天花板，能跑东西的那个被限定在一回合里。反过来才会坏：信封里有名字、
+registry 里没有 spec，`code_risk_ceiling` 会拒绝推导，回合在开始前就死。
+
+### 证据（2026-08-28，真跑）
+
+控制台起 `demo-api`（不带任何环境变量），新建 Code 会话问它手上有什么：
+
+```
+7. delegate_agent — 委派工作给子代理（explorer / analyst）
+```
+
+然后让它真派两个 analyst 并行做两件互不相关的事，拿回结论合成一个文件：
+
+```
+status: completed
+AgentDelegated   2      RunStarted    3
+AgentCompleted   2      RunCompleted  3
+profile_name = analyst  ×2
+```
+
+模型自己的报告：「并行派出两个 analyst 子代理（同一消息块内两个独立 delegate_agent
+调用）……合成为一个文件 two-risks.md 写入工作区」。
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff check` / `format --check` | All checks passed / 607 files |
+| `pyright`（裸跑） | 0 errors |
+| `pytest`（离线） | **3078 passed, 783 skipped**（上一批 3071） |
+| `tests/architecture` | 37 passed —— **Code 拿到了委派而没有加入协调面** |
+
+### 明确没做，以及为什么
+
+- **不给 Code 任何协调面**：无租约、无 reaper、无检查点、无 task registry。因此也
+  **没有 `BudgetedAgentExecutor`**——那要一个 task registry，而那是禁止清单的第一行。
+  兜住一次 Code 委派的是 `max_children_per_run` 与 `max_delegation_depth`，在内存里数，
+  随进程消失。
+- **不让子代理写**（见 §3）。
+- **不复用 Task Worker 的 channel**——它把普通 sink 递给子运行，就是 §2 那个洞。
+- **不动 `config_schema_version`**：`ApiRuntimeConfig` 多一个可选字段不改配置契约。
+
+---
+
 ## 2026-08-28（未合并，分支 `fix/a-console-that-advertises-spawn-should-have-it`，第三十八批）：模型没说错，是这个部署在让它替配置圆场
 
 起因是一句用户反馈——控制台里一个 Task 在报告末尾如实写道：

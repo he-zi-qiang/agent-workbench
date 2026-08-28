@@ -37,8 +37,8 @@ fails alone.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 
 from agent_workbench.adapters.events import ScopedEventSink
@@ -152,4 +152,52 @@ class EventDelegationChannel:
         )
 
 
-__all__ = ["EventDelegationChannel"]
+@dataclass(frozen=True, slots=True)
+class FencedDelegationChannel:
+    """A delegation channel whose children inherit the parent's sink fence.
+
+    Delegation was built for the Task Worker, where a run's sink is an ordinary
+    one and a child's being ordinary too is correct. Code is the case that
+    breaks: its service takes a ``ProcessOnlySink`` **in its signature** rather
+    than in a comment, precisely so that handing it an ordinary sink does not
+    type-check -- and `EventDelegationChannel.sink_for_child` hands out exactly
+    that, a bare ``ScopedEventSink`` built straight from the log.
+
+    So a delegated run inside a Code session would have been able to emit the
+    three answer-published events into a Code stream: a hole in a fence whose
+    whole design is that it cannot be forgotten. The parent could not, the
+    child could, and nothing in between would have said so.
+
+    **A delegated run inherits its parent's fence.** That is the invariant, and
+    it is one line here rather than a rule somebody has to remember at every
+    composition site: a channel that wraps children is the only thing a
+    delegating executor is given, so there is no second path to forget.
+
+    Announcements are forwarded unchanged. ``AgentDelegated`` and
+    ``AgentCompleted`` are not answer events and land on the *parent's* run,
+    which already passed whatever fence the parent has.
+    """
+
+    inner: EventDelegationChannel
+    #: What to wrap a child's sink in. Injected rather than hard-coded to
+    #: ``ProcessOnlySink`` so this module keeps depending on ports and domain
+    #: only -- the fence is an application-layer type, and naming it here would
+    #: point an adapter at the layer above it for the sake of one constructor.
+    fence: Callable[[EventSink], EventSink]
+
+    def delegating(
+        self,
+        *,
+        child_agent_run_id: str,
+        definition_name: str,
+    ) -> AbstractAsyncContextManager[RecordOutcome]:
+        return self.inner.delegating(
+            child_agent_run_id=child_agent_run_id,
+            definition_name=definition_name,
+        )
+
+    def sink_for_child(self, child_agent_run_id: str) -> EventSink:
+        return self.fence(self.inner.sink_for_child(child_agent_run_id))
+
+
+__all__ = ["EventDelegationChannel", "FencedDelegationChannel"]

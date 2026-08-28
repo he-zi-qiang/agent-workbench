@@ -99,7 +99,62 @@ ANALYST: Final = SubAgentDefinition(
     ),
 )
 
+#: Reads a project directory to answer one question about it, and writes nothing.
+#:
+#: The sub-agent a *coding* session actually needs (ADR-089). "Where is this
+#: handled, and what does it touch" is the question a large codebase makes
+#: expensive, it is answerable from reading alone, and it is the one shape that
+#: genuinely wants fanning out: three independent questions about three parts
+#: of a tree have no reason to take turns.
+#:
+#: **Read-only, and that is a property rather than a starting point.** Two
+#: reasons, and neither is timidity:
+#:
+#: * ADR-0078 makes a read a *receipt* -- a file you have not read is not yours
+#:   to overwrite -- and a receipt is held by the run that did the reading. A
+#:   child that read a file would leave its parent still unable to write it,
+#:   while looking to the model as though the read had happened.
+#: * Two children writing into one directory in the same turn have no version
+#:   to serialise on. The working-set side refuses this outright
+#:   (``WORKSPACE_TOOL_NAMES``); the project side has no manifest to refuse
+#:   with, so the refusal has to be the toolbox.
+EXPLORER: Final = SubAgentDefinition(
+    name="explorer",
+    description=(
+        "Answers one focused question about the project directory by reading "
+        "it. Give it the question and any context it needs; it returns what it "
+        "found and the paths it found it in. It cannot change anything."
+    ),
+    system_prompt=(
+        "Open with your answer in a few sentences, before any detail: your "
+        "report is cut off at a length you cannot see, and anything you leave "
+        "until the end is what gets lost. "
+        "Then give the evidence: name the files and, where it helps, quote the "
+        "few lines that decide the matter. Read as widely as the question "
+        "needs. "
+        "You can only read. Do not propose an edit as though you had made it, "
+        "and do not describe a file you did not open -- the run that sent you "
+        "is going to act on your answer and cannot tell a read line from a "
+        "remembered one. If the directory does not answer the question, say "
+        "which part is unanswered."
+    ),
+    tool_names=("project_read", "project_grep", "project_list"),
+)
+
 #: What a process delegates to when nothing narrower was assembled.
 DEFAULT_SUB_AGENTS: Final = SubAgentCatalogue((RESEARCHER, ANALYST))
 
-__all__ = ["ANALYST", "DEFAULT_SUB_AGENTS", "RESEARCHER"]
+#: What a Code session delegates to (ADR-089).
+#:
+#: `RESEARCHER` is absent because `knowledge_search` is not a Code tool, and a
+#: catalogue is narrowed at assembly to what the process registered -- listing
+#: it here would only make that narrowing do the deleting.
+CODE_SUB_AGENTS: Final = SubAgentCatalogue((EXPLORER, ANALYST))
+
+__all__ = [
+    "ANALYST",
+    "CODE_SUB_AGENTS",
+    "DEFAULT_SUB_AGENTS",
+    "EXPLORER",
+    "RESEARCHER",
+]

@@ -267,6 +267,21 @@ enabled = true
 # event stream, the way every other local profile does. Without it
 # `argument_preview` is empty, and the step list shows three rows of
 # 「写入工作区」with no way to tell which file each one wrote.
+[multi_agent]
+# 2026-08-28 打开（ADR-089）。这个 profile 是「Code 是这台机器上权限最全的那个
+# agent」这句话的落点：它已经拿着项目目录的读写、`project_run`、沙箱与网页检索，
+# 而在此之前它是唯一**不能把活分出去**的那一个——委派整条挂在 Task Worker 上，
+# API 进程里一行都没有。
+#
+# ADR-089 把它接进来，并且没有让 Code 加入协调面：委派是同步的、跑在父运行的工具
+# 调用里、随进程一起死，正是 Code 已有的前提。子代理是 `explorer`（只读项目目录）
+# 与 `analyst`（无工具）——`WORKSPACE_TOOL_NAMES` 那条禁令仍然生效，工作集工具不
+# 归子代理持有。
+#
+# 这里没有 Task 注册表可以记账（也不许有），所以兜着它的是内存里的
+# `max_children_per_run` 与 `max_delegation_depth`，随进程消失。
+delegation_enabled = true
+
 [runtime]
 record_step_inputs = true
 # **这个数和 `[model.main] timeout_seconds` 是一对，只提一个等于没提。**
