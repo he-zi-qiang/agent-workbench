@@ -759,6 +759,14 @@ class ApiRuntimeConfig:
     evaluation: EvaluationRunsConfig
     task: TaskConfig
     observability: ObservabilityConfig
+    #: ADR-089. The API process runs Code turns, and a Code turn may now
+    #: delegate -- so this process needs the same three numbers the Task Worker
+    #: gets. Projected in full rather than as the one boolean, because a
+    #: deployment that turns delegation on and then cannot say how wide or how
+    #: deep is a deployment whose ceiling is wherever the code happens to
+    #: default; `max_delegation_depth` and `max_children_per_run` are what
+    #: bound a Code delegation, there being no Task registry here to charge.
+    multi_agent: MultiAgentConfig | None = None
     # ADR-019. The API runs the chat loop, so it needs the same switch the Task
     # Worker gets through AgentRuntimeConfig. Flat rather than nested under
     # `chat`, because it is one setting governing every runtime this deployment
@@ -1113,6 +1121,27 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         context_soft_limit_ratio=settings.runtime.context_soft_limit_ratio,
         context_compaction_enabled=settings.runtime.context_compaction_enabled,
         research=_project_research(settings),
+        multi_agent=MultiAgentConfig(
+            static_agent_node_limit=settings.multi_agent.static_agent_node_limit,
+            max_parallel_agent_invocations=(
+                settings.multi_agent.max_parallel_agent_invocations
+            ),
+            max_tokens_per_agent_invocation=(
+                settings.multi_agent.max_tokens_per_agent_invocation
+            ),
+            max_cost_micro_usd_per_agent_invocation=(
+                settings.multi_agent.max_cost_micro_usd_per_agent_invocation
+            ),
+            max_seconds_per_agent_invocation=(
+                settings.multi_agent.max_seconds_per_agent_invocation
+            ),
+            delegation_enabled=settings.multi_agent.delegation_enabled,
+            max_delegation_depth=settings.multi_agent.max_delegation_depth,
+            max_children_per_run=settings.multi_agent.max_children_per_run,
+            max_parallel_child_invocations=(
+                settings.multi_agent.max_parallel_child_invocations
+            ),
+        ),
         database=DatabaseConfig(
             dsn=settings.database.dsn,
             application_name=settings.database.application_name,

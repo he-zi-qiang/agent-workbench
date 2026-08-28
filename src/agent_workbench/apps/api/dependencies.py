@@ -20,7 +20,7 @@ application registers no chat route rather than one that cannot answer.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -33,6 +33,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
+from agent_workbench.adapters.delegation import (
+    EventDelegationChannel,
+    FencedDelegationChannel,
+)
 from agent_workbench.adapters.evaluation import SubprocessEvaluationLauncher
 from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
 from agent_workbench.adapters.filesystem.browser import FilesystemDirectoryBrowser
@@ -56,6 +60,7 @@ from agent_workbench.adapters.persistence import (
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.research import DeepSeekWebSearch
 from agent_workbench.adapters.tools import StaticToolRegistry
+from agent_workbench.adapters.tools.delegate import DelegateTool
 from agent_workbench.adapters.tools.knowledge_search import (
     TOOL_NAME as KNOWLEDGE_SEARCH,
 )
@@ -83,6 +88,7 @@ from agent_workbench.adapters.tools.workspace import (
     WorkspaceWriteTool,
 )
 from agent_workbench.adapters.vector import QdrantVectorIndex
+from agent_workbench.application.answer_release import ProcessOnlySink
 from agent_workbench.application.approvals import ApprovalService
 from agent_workbench.application.chat import REFUSAL, ChatService
 from agent_workbench.application.chat_execution import (
@@ -113,12 +119,18 @@ from agent_workbench.application.code_session import (
     CODE_TOOLS_WITH_SANDBOX,
     CodeSessionService,
 )
+from agent_workbench.application.delegation import (
+    DeferredExecutor,
+    DelegationScope,
+    DelegationScopingExecutor,
+)
 from agent_workbench.application.evaluation import EvaluationService
 from agent_workbench.application.file_read_receipts import ReadReceipts
 from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.application.projects import ProjectService
 from agent_workbench.application.retrieval import RetrievalService
+from agent_workbench.application.sub_agents import CODE_SUB_AGENTS
 from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
 from agent_workbench.application.task_triage import TaskTriageService
 from agent_workbench.application.tasks import SubmittedSemantics, TaskService
@@ -156,15 +168,19 @@ from agent_workbench.bootstrap.telemetry_factory import (
     AssembledTelemetry,
     build_telemetry,
 )
-from agent_workbench.domain.runs import RunBudget
+from agent_workbench.domain.agents import DELEGATE_TOOL
+from agent_workbench.domain.runs import AgentRunRequest, RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
 from agent_workbench.domain.tools import ToolName, ToolSpec
+from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.artifact_store import ArtifactStore
+from agent_workbench.ports.delegation import DelegationChannel
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 from agent_workbench.ports.telemetry import Telemetry
 from agent_workbench.ports.tools import ToolBinding, ToolRegistry
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
+from agent_workbench.workflows.task_handlers import BoundedParallelExecutor
 
 
 class InsecureDeploymentError(RuntimeError):
@@ -631,6 +647,7 @@ def build_dependencies(
             artifacts=artifacts,
             blocking=blocking,
             conversations=conversations,
+            events=events,
             # Passed in rather than rebuilt: a second `ProjectService` here
             # would hold a second store over the same engine, and "which
             # directory is this project" would have two objects able to answer.
@@ -791,6 +808,10 @@ def _assemble_chat(
     artifacts: ArtifactStore,
     blocking: BlockingCallRunner,
     conversations: PostgresConversationStore,
+    # Code's delegation announcements land here (ADR-089). Passed in rather
+    # than rebuilt, because two `PostgresEventLog` objects over one engine
+    # would be two writers with no reason to be.
+    events: EventLogPort,
     projects: ProjectService,
     releaser: PostgresChatReleaseCoordinator,
     telemetry: Telemetry,
@@ -1280,7 +1301,35 @@ def _assemble_chat(
     code_web_journal = WebSearchJournal()
     code_web_tool = _web_search_tool(config.research, code_web_journal)
 
-    def _code_registry() -> StaticToolRegistry:
+    # The delegation tool's *spec*, for the registry `CodeSessionService` reads
+    # to derive a turn's risk ceiling (ADR-089).
+    #
+    # Separate from the per-turn binding below, and only ever asked for its
+    # spec: `code_session.py` uses this registry as `{spec.name: spec.risk for
+    # spec in tools.specs()}` and never executes through it. Execution goes
+    # through the registry `_code_runtime` builds, whose delegate binding holds
+    # that turn's own child stack. Two bindings, one name, and the one that can
+    # run anything is the one scoped to a turn.
+    #
+    # `delegate_agent` is declared `read`, so its presence raises no ceiling --
+    # what it would have broken is the opposite case: a name in the envelope
+    # with no spec in this registry makes `code_risk_ceiling` refuse to derive
+    # a ceiling at all, and the turn dies before it starts.
+    _code_delegate_spec_binding = (
+        (
+            DelegateTool(
+                executor=DeferredExecutor(),
+                catalogue=CODE_SUB_AGENTS,
+                scope=DelegationScope(),
+            ).binding(),
+        )
+        if config.multi_agent is not None and config.multi_agent.delegation_enabled
+        else ()
+    )
+
+    def _code_registry(
+        delegate_bindings: Sequence[ToolBinding] = (),
+    ) -> StaticToolRegistry:
         # Built per call from the slot rather than once from a fixed list,
         # which is what lets `startup` add the sandbox after these closures
         # were created. A turn already pays for a fresh gateway; a registry
@@ -1290,12 +1339,95 @@ def _assemble_chat(
                 *code_workspace_bindings,
                 *code_sandbox.bindings,
                 *(() if code_web_tool is None else (code_web_tool,)),
+                *delegate_bindings,
             ]
         )
 
-    def _code_runtime(scope: ApprovalScope) -> ClaudeLikeAgentRuntime:
-        code_registry = _code_registry()
-        return ClaudeLikeAgentRuntime(
+    def _code_delegation_channel(request: AgentRunRequest) -> DelegationChannel:
+        """Where a Code run announces the children it starts (ADR-089).
+
+        Fenced, and that wrapper is the whole reason this is not the Task
+        Worker's factory reused. `CodeSessionService` takes a
+        ``ProcessOnlySink`` in its signature so that handing it an ordinary
+        sink does not type-check -- and `EventDelegationChannel.sink_for_child`
+        hands out an ordinary one, built straight from the log. Without the
+        fence a delegated run could emit the three answer-published events into
+        a Code stream: the parent could not, the child could, and the type that
+        exists to make that impossible would never have been consulted.
+        """
+
+        return FencedDelegationChannel(
+            inner=EventDelegationChannel(
+                log=events,
+                parent_scope=EventScope(
+                    stream_id=request.stream_id,
+                    run_id=request.trace.agent_run_id,
+                ),
+            ),
+            fence=lambda sink: ProcessOnlySink(inner=sink),
+        )
+
+    def _code_runtime(scope: ApprovalScope) -> AgentExecutor:
+        """One turn's executor, and -- when delegation is on -- its child stack.
+
+        **Assembled per turn rather than once at composition (ADR-089).** The
+        Task Worker builds its delegation objects once because its child stack
+        is the same for every Task. Code's is not: the gateway a child runs
+        through carries `code_approvals.gate_for(scope)`, and that scope is one
+        session's. A process-wide `DeferredExecutor` would have to be bound to
+        one turn's approval gate and then used by every other turn -- which is
+        the shape `bind()` refuses a second call in order to make loud.
+
+        Per turn is also what Code already is. Nothing here outlives the turn,
+        which is the same sentence as "no lease, no reaper, no checkpoint".
+        """
+
+        # `None` is a projection that predates ADR-089 rather than a
+        # deployment that said no, and the two have to behave the same way:
+        # a process whose config cannot say whether delegation is on does not
+        # get to guess that it is.
+        multi_agent = config.multi_agent
+        delegating = multi_agent is not None and multi_agent.delegation_enabled
+        # Read out here rather than inside the closures below: `multi_agent` is
+        # optional, and a nested function is where a type checker stops being
+        # able to see that `delegating` already settled it.
+        max_depth = 1 if multi_agent is None else multi_agent.max_delegation_depth
+        max_children = 1 if multi_agent is None else multi_agent.max_children_per_run
+        max_parallel_children = (
+            1 if multi_agent is None else multi_agent.max_parallel_child_invocations
+        )
+        # The knot ADR-082 describes: the tool needs an executor, the executor
+        # needs a gateway holding the tool. Fresh per turn, bound once below.
+        delegation_scope = DelegationScope()
+        delegation_executor = DeferredExecutor()
+        sub_agents = CODE_SUB_AGENTS.narrowed_to(
+            [binding.spec.name for binding in code_workspace_bindings]
+        )
+        delegate_bindings = (
+            (
+                DelegateTool(
+                    executor=delegation_executor,
+                    catalogue=sub_agents,
+                    scope=delegation_scope,
+                ).binding(),
+            )
+            if delegating
+            else ()
+        )
+        code_registry = _code_registry(delegate_bindings)
+
+        def _scoped(inner: AgentExecutor) -> AgentExecutor:
+            if not delegating:
+                return inner
+            return DelegationScopingExecutor(
+                inner,
+                scope=delegation_scope,
+                channel_for=_code_delegation_channel,
+                max_depth=max_depth,
+                max_children=max_children,
+            )
+
+        runtime = ClaudeLikeAgentRuntime(
             model=model,
             gateway=ToolGateway(
                 registry=code_registry,
@@ -1319,6 +1451,34 @@ def _assemble_chat(
             context_soft_limit_ratio=config.context_soft_limit_ratio,
             compaction_enabled=config.context_compaction_enabled,
         )
+        if not delegating:
+            return runtime
+        # The child stack. **Its own semaphore**, for the reason the Task
+        # Worker states: `BoundedParallelExecutor` holds a slot for the whole
+        # invocation, so a parent waiting inside a tool call holds one until
+        # its child finishes -- and a child queued for a slot only the parent's
+        # return can free is a deadlock.
+        #
+        # No `BudgetedAgentExecutor` here, and its absence is the premise
+        # rather than an omission: that wrapper charges a Task registry, and
+        # Code has none and must not acquire one
+        # (`test_code_has_no_coordination_plane.py`). What bounds a Code
+        # delegation is `max_children_per_run` and `max_depth`, counted in
+        # memory by the executor below and gone when the process is.
+        delegation_executor.bind(
+            _scoped(
+                BoundedParallelExecutor(
+                    runtime,
+                    max_parallel=max_parallel_children,
+                )
+            )
+        )
+        # Wrapped here rather than inside `CodeSessionService`, which is what
+        # keeps every `application/code_*.py` module free of any delegation
+        # import at all -- the scan in
+        # `test_code_has_no_coordination_plane.py` reads those globs, and a
+        # composition detail has no business appearing in them.
+        return _scoped(runtime)
 
     code = (
         CodeSessionService(
@@ -1341,7 +1501,17 @@ def _assemble_chat(
             # at run time; this process cannot get into the state where they
             # disagree.
             tool_names=(
-                CODE_TOOLS_WITH_SANDBOX if config.code.sandbox_enabled else CODE_TOOLS
+                *(
+                    CODE_TOOLS_WITH_SANDBOX
+                    if config.code.sandbox_enabled
+                    else CODE_TOOLS
+                ),
+                # ADR-089. Appended rather than written into the tuples in
+                # `code_session.py`, because those spell out what a coding
+                # session reaches *by construction* and this one is a
+                # deployment's answer to a configuration question -- the same
+                # separation `project_run` keeps one field down.
+                *((DELEGATE_TOOL,) if _code_delegate_spec_binding else ()),
             ),
             # ADR-073. The disjoint half, selected per turn from whether the
             # session's project has a directory. Both lists are fixed here for
@@ -1354,14 +1524,24 @@ def _assemble_chat(
             # deployment that grants it -- the slot is filled by `startup`,
             # after this -- and `code_risk_ceiling` would then refuse to derive
             # a ceiling for a turn that had been offered it.
-            tools=_LiveToolRegistry(_code_registry),
+            tools=_LiveToolRegistry(
+                lambda: _code_registry(_code_delegate_spec_binding)
+            ),
             projects=projects,
             # ADR-077 adds the second axis. `project_run` is offered only when
             # this deployment's policy says the machine may be driven at all,
             # and only on the project side -- a flat-workspace turn has no
             # directory for a command to be run in.
-            project_tool_names=_code_project_tools(
-                host_commands=config.code.host_commands_enabled,
+            project_tool_names=(
+                *_code_project_tools(
+                    host_commands=config.code.host_commands_enabled,
+                ),
+                # Both sides, and the project side is the one that matters:
+                # `explorer` reads a project directory, so a flat-workspace
+                # turn can delegate only to `analyst`. Offering the name on
+                # both keeps "can this session delegate" a property of the
+                # deployment rather than of which half the session is in.
+                *((DELEGATE_TOOL,) if _code_delegate_spec_binding else ()),
             ),
             external_requires_approval=config.code.external_requires_approval,
             # ADR-085. Projected as "the flag is on **and** a provider is

@@ -22,12 +22,18 @@ from pathlib import Path
 
 import pytest
 
-from agent_workbench.bootstrap.projections import project_task, project_task_worker
+from agent_workbench.application.sub_agents import CODE_SUB_AGENTS
+from agent_workbench.bootstrap.projections import (
+    project_api,
+    project_task,
+    project_task_worker,
+)
 from agent_workbench.bootstrap.settings import (
     Settings,
     WorkflowSettings,
     load_settings,
 )
+from agent_workbench.domain.agents import WORKSPACE_TOOL_NAMES
 
 ROOT = Path(__file__).resolve().parents[2]
 DEMO_CONFIG = ROOT / "config/config.demo-local.toml"
@@ -594,3 +600,51 @@ def test_there_is_one_console_launch_path_not_two(
     text = launch.read_text(encoding="utf-8")
 
     assert "AW_MULTI_AGENT__DELEGATION_ENABLED" not in text
+
+
+@pytest.mark.parametrize("path", [DEMO_CONFIG, CODE_CONFIG], ids=["demo", "code"])
+def test_a_code_session_may_delegate(
+    monkeypatch: pytest.MonkeyPatch, path: Path
+) -> None:
+    """Code is the broadest agent this machine has, and until ADR-089 it was
+    the only one that could not hand work off.
+
+    Asserted on the projection rather than on the API's assembly because that
+    is where the omission actually was: `ApiRuntimeConfig` had no
+    `multi_agent` at all, so the process running Code turns could not have
+    answered the question even if somebody had asked it.
+    """
+
+    for name in tuple(os.environ):
+        if name.upper().startswith("AW_"):
+            monkeypatch.delenv(name, raising=False)
+    for suffix in ("DSN", "GUARD_DSN", "LISTEN_DSN"):
+        monkeypatch.setenv(f"AW_DATABASE__{suffix}", POSTGRES_DSN)
+    monkeypatch.setenv("AW_SECRETS__DEEPSEEK_API_KEY", "contract-only-not-a-real-key")
+
+    api = project_api(load_settings(config_file=path))
+
+    assert api.multi_agent is not None
+    assert api.multi_agent.delegation_enabled is True
+    # The two numbers that bound a Code delegation, there being no Task
+    # registry here to charge and none permitted.
+    assert api.multi_agent.max_children_per_run >= 1
+    assert api.multi_agent.max_delegation_depth >= 1
+
+
+def test_a_code_sub_agent_never_holds_a_working_set_tool() -> None:
+    """`WORKSPACE_TOOL_NAMES` is refused at definition time, and ADR-089 does
+    not soften it: a delegated run shares its parent's session rather than
+    opening one of its own, so the version pinning that makes a replay produce
+    another version instead of a second effect does not hold for it.
+
+    The project-side read tools are a different matter and are how `explorer`
+    is useful at all -- but it holds only the *read* three (ADR-0078: a read is
+    a receipt, and a receipt belongs to the run that did the reading)."""
+
+    for definition in CODE_SUB_AGENTS.definitions:
+        assert not set(definition.tool_names) & WORKSPACE_TOOL_NAMES
+        assert not any(
+            name in {"project_write", "project_edit", "project_run"}
+            for name in definition.tool_names
+        )
