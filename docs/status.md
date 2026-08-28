@@ -27,6 +27,68 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-28（未合并，分支 `fix/the-panel-did-not-follow-the-capability`，第四十批）：面板没跟着能力走
+
+用户一句话：「还是没有 agent 面板。」
+
+上一批让 Code 真的能委派了，也在浏览器里跑通了三个 explorer 并行——**但屏幕上什么都
+没有**。`RunPanel` 一直只做在 `features/work/` 里，Code 昨天刚拿到委派，面板没跟过去。
+能委派、看不见。
+
+### 1. 它本来就该在 components/
+
+`StepStream` 在 `web/src/components/`，因为 Work、Chat、Code 三处都用它。`RunPanel` 从
+落地那天起就只有一个使用者，所以待在 `features/work/` 里没露出问题——直到有了第二个。
+
+搬家：`RunPanel.tsx` / `runTree.ts`（连同两份测试）进 `components/`。
+
+搬的时候撞出一个方向问题：面板要用错误词表，而词表在 `features/work/failure.ts` 里——
+**一个共享组件反向伸进某个 feature**。抽成 `components/errorVocabulary.ts`，
+`failure.ts` 从那儿取。仍然是**一张表**，那正是它当初被共享出来的理由：两张表的症状不是
+报错，是一个界面说「超出预算」而它旁边那个说 `budget_exceeded`。
+
+### 2. 接进 CodePage
+
+`useCodeStream` 返回的 `steps` 就是这条流的持久事件，所以 `buildRunTree(steps)` 直接可用
+——不必为此再发一个请求去问服务端它刚刚已经带回来的东西。
+
+收窄也接了，形状与 Work 页那条**一模一样**：选择带着 `sessionId`、在渲染时比较而不是用
+effect 事后清除。理由同样一模一样——一个 run id 属于一条流，带过去只会把下一个会话过滤
+成空的。
+
+树读的是 `steps` 而不是收窄后的那份：一个只剩被选中那一行的面板，会把「换一个运行去看」
+这件事本身拿掉。
+
+### 证据（2026-08-28，浏览器里）
+
+上一批那个真跑过的会话，刷新之后 Code 页顶部：
+
+```
+参与的 Agent   4 个运行 · 其中 3 个是子代理        合计 34.7k↓ 4.6k↑
+  ⌄ 运行 run_…c116  main        3/40 步  4/120 次工具  16.8k  30 条事件
+      子代理 explorer  main     1/40 步  6/120 次工具   2.4k  30 条事件
+      子代理 explorer  main     3/40 步  4/120 次工具   7.0k  34 条事件
+      子代理 explorer  main     2/40 步  2/120 次工具   4.3k  16 条事件
+```
+
+| 门禁 | 结果 |
+|---|---|
+| `eslint . --max-warnings 0` / `tsc -b` / `vite build` | 干净 |
+| `vitest run` | **654 passed**（上一批 652） |
+| `pytest`（离线，未触及） | 3078 passed, 783 skipped |
+
+新增 2 条：「一个会话真的委派过时 Code 页也画得出参与的 Agent」，以及「没委派过的会话里
+不画这块面板」——第二条是防止把第一条修成「面板永远都在」。
+
+### 明确没做，以及为什么
+
+- **不给 Code 的面板加深链**。Work 那条用的是 `?run=`，而 Code 的路由是
+  `#/code/:sessionId`；两处都能做，但那是第二件事，不该混在一次搬家里。
+- **不把 `StepStream` 的分组也搬过来**（ADR-083 §2.4 推迟的那件，第三十四批的注记里
+  说过它仍然没做）。
+
+---
+
 ## 2026-08-28（未合并，分支 `feat/code-may-delegate`，第三十九批）：Code 可以委派，而不必加入协调面（ADR-089）
 
 用户：「我希望 code 模式也可以使用（多 agent），而且我把 code 作为最通用的 agent，是权限

@@ -123,8 +123,8 @@ import {
   titleWithDelegation,
   type DelegationFacts,
 } from "./delegations";
-import { RunPanel } from "./RunPanel";
-import { buildRunTree, type RunNode } from "./runTree";
+import { RunPanel } from "../../components/RunPanel";
+import { buildRunTree, type RunNode } from "../../components/runTree";
 
 const CANCELLABLE_STATUSES = new Set<TaskStatus>([
   "queued",
