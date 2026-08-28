@@ -108,6 +108,7 @@ class InMemoryEventLog:
         *,
         after_sequence: int | None = None,
         limit: int = 500,
+        run_id: str | None = None,
     ) -> tuple[EventEnvelope, ...]:
         if limit < 1:
             raise ValueError("limit must be positive")
@@ -121,6 +122,13 @@ class InMemoryEventLog:
                 for envelope in stored
                 if envelope.sequence is not None and envelope.sequence > after_sequence
             )
+        # Narrowed *before* the limit, which is the whole reason this belongs
+        # in the store rather than in a caller. Filtering a page the caller
+        # already holds returns "the events of this run that happened to be in
+        # the first 500 of the stream", and a delegated run near the end of a
+        # long Task is then invisible rather than empty.
+        if run_id is not None:
+            stored = tuple(envelope for envelope in stored if envelope.run_id == run_id)
         return stored[:limit]
 
 

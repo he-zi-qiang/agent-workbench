@@ -343,33 +343,131 @@ streamable HTTP session 可能已过期，工具目录也是进程启动时冻�
 
 | 编号 | 缺口 | 分类 |
 |---|---|:---:|
-| C-01 | 调用次数上限只有配置，无持久账本 | 未接线 |
-| C-02 | 跨 retry 预算、partial failure、父子取消 | 未实现 |
-| C-03 | 动态 supervisor / spawn / mailbox | 未实现 |
+| C-01 | 调用次数上限只有配置，无持久账本 | ~~未接线~~ **已关闭** |
+| C-02 | 跨 retry 预算、partial failure、父子取消 | 部分实现（仅 partial failure 未做） |
+| C-03 | 动态 supervisor / spawn / mailbox | 部分实现（spawn 有了，另两项未实现） |
 | C-04 | CrewAI Adapter 与对比 benchmark | 未实现 |
 | C-05 | `critic` 的合法结构化输出被判成"没有可用产出" | 未实现 |
+| C-06 | 面板只认页面握着的事件：深链、刷新保持、"这棵树完不完整" | 部分实现（前两项已关闭） |
+| C-07 | 收窄到一个子运行时，阶段列表仍报全任务的进度 | ~~未实现~~ **已关闭** |
 
-### C-01 `max_agent_invocation_attempts_per_task` 只有配置，没有账本
+### C-01 `max_agent_invocation_attempts_per_task` 只有配置，没有账本 —— **已关闭**
 
-**证据**：[projections.py:424](../src/agent_workbench/bootstrap/projections.py:424)
-`MultiAgentConfig` 的 docstring 直接说明了这件事——"Three fields, and
-deliberately not the fourth"，因为该上限要跨 retry 与 reclaim 计数，需要一个
-持久的 per-Task 计数器，"projecting it here would put it one import away from
-looking enforced"。
+**这一条曾经在关闭之后仍写着"未接线"，是本文档自己定义的"口径不实"。** 记在这里而
+不是直接删掉：读到旧版本的人需要知道它错在哪一段。旧文说这条上限"需要一张能跨
+retry/reclaim 累计的持久计数表"，而实际的做法比那更好——**根本不需要新表**。
 
-**这条注释本身就是正确做法**：宁可让配置项停在 settings 里不投影，也不要让它
-在投影层出现、看起来像被执行了。
+**当前证据**：
+[`adapters/persistence/task_registry.py:398`](../src/agent_workbench/adapters/persistence/task_registry.py:398)
+的 `reserve_agent_invocation` 在**同一条 UPDATE** 里完成 `+1` 与比较，两者在一把行锁
+之下，所以两个 Worker 不可能各自读到最后一个名额。上限读自那一行**自己的**
+`run_semantics_snapshot`——是这个 Task **提交时**的数，不是这个进程今天碰巧配成的数
+（与 `wants_report`、`export_requires_approval` 同一条规则）。超额抛
+`AgentInvocationBudgetExhaustedError`，[`workers/task.py:312`](../src/agent_workbench/workers/task.py:312)
+把它判成 `dead_letter` 而不是重试——因为下一次认领会读到同一个满的计数器，再试一次
+不会有帮助。
 
-**做完的判据**：一张能跨 retry/reclaim 累计的持久计数表，投影随之补上第四个字段。
+计数落在 `task_runs` 行上，所以"跨 retry 与 reclaim 累计"是**行本身**的性质，不需要
+第二张表。[`tests/persistence/test_agent_invocation_budget.py`](../tests/persistence/test_agent_invocation_budget.py)
+12 条，打真实 PostgreSQL。
+
+**投影层为什么仍然只有那几个字段**：不是因为"还没有能执行它的仓储"，而是因为执行它
+的地方**不读投影**——它读 Task 自己的快照。把这个数投影进进程配置，反而会让人以为进
+程配置是它的来源。`bootstrap/projections.py` 的 docstring 已相应改写。
+
+**ADR-082 让这条更要紧了**：每个委派出去的子运行都经过 `BudgetedAgentExecutor` 记一
+笔，所以这个数的语义从"这张图有几个节点"变成了"**含子代理的**总调用数"。它现在既是
+计数也是闸。
 
 ### C-02 跨 retry/reclaim 的总预算、显式 partial failure、父任务到子调用的取消
 
-**分类**：未实现。三者与 C-01 同源——都需要一个比"单次进程内计数"更持久的账本。
+**分类**：部分实现。三件事要分开判。
 
-### C-03 动态 supervisor、spawn、mailbox 未实现
+| 子项 | 判定 | 依据 |
+|---|---|---|
+| **跨 retry/reclaim 的总预算** | **已实现** | 与 C-01 同一处：计数在 `task_runs` 行上，reclaim 换 epoch 不清零 |
+| **父任务到子调用的取消** | **已实现**（ADR-082） | 子运行收下的是父运行**同一个** `CancellationToken`（`adapters/tools/delegate.py`），不存在传播机制可以出错。反向——单独掐一个子运行而让父继续——**明确不做**：在只读子 agent 上没有价值，且会破坏"只有一个 token"这条简洁性 |
+| **显式 partial failure** | **未实现** | 一个回合里并行派出的几个子运行，若一个失败，父运行拿到的是各自独立的 `ToolResult`（失败那个是 `status="error"` 且带上它写到一半的文字）。缺的是**节点层**把"三个里成功了两个"表达成一种状态，而不是让模型从三条工具结果里自己拼 |
 
-**当前事实**：Multi-Agent 是**固定图**——v1 与 `v2_general` 两张，提交时选图并冻结。
-动态编排（运行期决定拉起哪些 agent、agent 之间投递消息）不存在。
+### C-03 动态 supervisor 与 mailbox 未实现；spawn 已实现（ADR-082）
+
+**当前事实**：编排的**骨架**仍然是固定图——v1 与 `v2_general` 两张，提交时选图并冻结。
+三件事要分开判：
+
+| 子项 | 判定 | 依据 |
+|---|---|---|
+| **spawn**（运行期从一次运行里派生另一次运行） | **已实现，默认关** | `multi_agent.delegation_enabled`。`adapters/tools/delegate.py` 的 `delegate_agent` 调用同一个 `AgentExecutor`，产出新 `agent_run_id`、同 `stream_id` 的子运行，父运行发 `AgentDelegated`/`AgentCompleted`。见 [ADR-082](./adr/0082-a-delegation-is-a-run-not-a-new-loop.md) |
+| **动态 supervisor**（运行期决定拉起哪几个图节点） | **未实现** | `multi_agent.topology` 仍钉死 `Literal["fixed_langgraph"]`。委派不改变图，它在一个节点的运行**内部**发生 |
+| **mailbox / agent 间投递** | **拒绝** | ADR-082 §5。父子之间已有一条更强的通道——同步、有序、有事务边界的 `ToolResult`；为一棵有共同根的树装一套异步邮局，买到的是 ack 状态机和看门狗，付出的是"消息可能没送到"这个全新的失败模式 |
+
+**spawn 这一项做完的判据**（已满足）：同一个 `stream_id` 下出现两个 `run_id`，父运行的
+`AgentDelegated.child_agent_run_id` 指向子运行，且宣布过的子运行**一定**有
+`AgentCompleted`——包括被取消的路径。
+
+**仍然要注意的口径**：这一项的默认值是**关**，且关着的时候工具不注册、信封不含它、
+profile 原样不变。所以"这个部署有没有 spawn"是一个配置问题，不是一个版本问题。
+
+### C-06 面板只认页面握着的事件：深链、刷新保持、完整性三件都缺
+
+**分类**：未实现。三件事同源——客户端那棵树没有服务端那棵树的两样东西。
+
+`web/src/features/work/runTree.ts` 从页面已持有的事件重建运行树，那个选择本身是对的，
+理由写在它的文件头（再发一个 `/runs` 请求是用第二个请求学第一个请求带回来的东西，而且
+它只在有人问时才刷新，会让一个号称实时的面板落后于旁边的时间线）。缺的是这个选择**换不到**
+的三件：
+
+| 子项 | 现状 | 缺什么 |
+|---|---|---|
+| **深链进某个子运行** | 选中的 run id 只活在 React state 里 | 它不进 URL，所以刷新即丢、也发不出去。服务端为这件事造了两个口子——`GET /v1/tasks/{id}/runs` 与 `timeline?run_id=`——[前端零调用](../web/src/api/client.ts) |
+| **"这棵树是不是全的"** | 面板不表态 | ADR-083 不变量 5「一棵不完整的树说自己不完整」只做了服务端那一半：响应里的 `complete` 在客户端没有对应物。而同一个页面自己已经有 `timelineGaps`（`locateTimelineGaps`），它知道哪几页没送到 |
+| **一页缺失就整块消失** | 面板在 `delegated.length === 0` 时返回 `null` | 一条被跳过的 `AgentDelegated` 足以让整个面板不渲染，而读者看到的是"这个任务没派过子代理"——与"有，只是那一页没送到"完全同形 |
+
+**做完的判据**：选中的运行进 URL 且刷新后仍在；页面能说出"你看到的是这条流的一部分"，
+并且这句话是从 `skippedSequences` 推出来的而不是猜的。
+
+**前两项已关闭**（见 status.md 第三十四批）。收窄搬进 `?run=` 查询参数——顺带把"切换任务
+后收窄仍生效"一并解决掉了，因为任务 id 在路径里，换任务就是换 URL。完整性那句话从
+`timeline.skippedSequences` 推出来，不是猜的。
+
+**没有走 `/runs`，也没有需要走**：深链进的是**本页**的某个运行，而这一页无论如何都要把
+时间线拉下来。真正需要那个端点的是"深链进一个大到本页不会全量加载的流"，那件事今天不
+存在——`useTaskTimeline` 一直翻到 `cursor` 为空为止。
+
+**第三项仍然开着，且是有意停在这里的**：委派落在被跳过的那一页时，面板画不出那条分支。
+现在有两处补偿——收窄活着时面板一定渲染（它握着唯一的退路），以及流有缺口时面板明说
+这棵树可能不全。**没有**做的是"流一有缺口就把面板顶出来"：那会让每一个有缺口的任务都长
+出一块写着"可能不全"的面板，而其中绝大多数**真的**没派过子代理。页面已经有
+`TimelineGapNotice` 在说这条流有洞，让第二个组件把同一件事再喊一遍，换来的是一条几乎
+总在误报的横幅。
+
+### C-07 收窄到一个子运行时，阶段列表仍报全任务的进度
+
+**分类**：已关闭（status.md 第三十四批）。
+
+> **本条登记时写错了一句，留在这里而不是删掉。** 旧文的"做完的判据"说这要改
+> `StepStream` 这个每个阶段共用的组件，因此"是一次会波及 Chat 与 Code 的改动"。
+> **不是。** `StreamStage` 本来就有一个 `note` 字段——右侧那行"现在是什么状态"的文字——
+> 而它由调用方 `WorkPage` 填。收窄开着且某个阶段一条步骤都没有时，把 `note` 换成
+> 「不含所选运行」即可，`StepStream` 一个字不动，Chat 与 Code 一点没碰到。
+>
+> 登记一条缺口时顺手估的规模，和真去找过接缝之后的规模，是两个数。写错的是前一个。
+
+[`WorkPage.tsx:465`](../web/src/features/work/WorkPage.tsx:465) 的 `deriveLifecycle`
+读的是 `timeline.events`——**整条流**——而它下面每个阶段的步骤读的是 `shownEvents`，
+也就是收窄之后的那份。于是选中一个子运行时，八个阶段照旧写着「已完成 12:03」，
+底下一条步骤也没有。
+
+**这不完全是缺陷**：阶段是**任务**的骨架，不因为读者在看其中一个运行就该被改写——按
+运行重算阶段，等于让"这个任务走到哪了"随着一次点击变来变去。真正缺的是**在空出现的
+地方说出收窄正开着**：现在唯一说这件事的那句话长在面板里，而面板不吸顶，长任务里一滚
+过去，读者就在看一条被过滤的流而不自知。
+
+**做完的判据**（已满足）：被收窄掉的阶段自己说得出"这一段里没有这个运行的步骤"，而不是
+显示成一个做完了却什么都没做的阶段。
+
+**阶段的状态仍然读整条流，这是有意的**：阶段是**任务**的骨架，不因为读者在看其中一个运行
+就该被改写——按运行重算阶段，等于让"这个任务走到哪了"随一次点击变来变去。改的只是那句
+右侧文字。
 
 ### C-04 CrewAI Adapter 与对比 benchmark 未实现
 
@@ -516,6 +614,38 @@ Word 文档读取与编辑，能力表里也不得混为一谈。
 | E-03 | CI 不跑 E2E / 离线评测 / Compose / 恢复矩阵 | 未实现 |
 | E-04 | 首个 evidence manifest 未生成 | 未接线 |
 | E-05 | 文档中的数字过时 | **口径不实** |
+| E-07 | 崩溃恢复 e2e 三条红，且 CI 看不见 | **失败中** |
+
+### E-07 `test_worker_process_crash_recovery.py` 三条红，而 CI 不跑它
+
+> **本条原编号 E-06，与既有的「前端样式表按领域拆分」撞号，本批让号改为 E-07。**
+> 撞号是这条分支引入的：写它的时候只数了表格里的最后一行，而那一节的编号排到 E-06
+> 却没有进表。认领编号要看的是**全文**，不是表格。
+
+**分类**：失败中。不是"未实现"，也不是"口径不实"——测试写对了，被测的东西答错了。
+
+**症状**：v1 图的 `approval` 节点一次都没跑（`approval ran 0 times`），而 Task 仍然
+`succeeded`。三条都断在同一个位置：
+
+- `test_recovery_re_runs_only_the_node_that_died`
+- `test_the_two_processes_split_the_graph_at_the_node_that_died`
+- `test_the_same_task_completes_in_one_process_when_nothing_kills_it`
+
+提交用的 `run_semantics_snapshot` 是 `{"model": {"provider": "fake"}}`——里面既没有
+`workflow` 段也没有 `multi_agent` 段，所以 Worker 对"要不要审批"的判断落在它自己的
+配置上而不是 Task 的快照上。这是查这条时的第一个可疑点，尚未证实。
+
+**不是哪一批引入的（有对照）**：在未经改动的基线 `414f37c` 上另开一个 worktree、
+用同一个 `.venv`、同一条命令跑同样三条，**一样红**。所以它先于
+`feat/multi-agent-orchestration` 存在。
+
+**为什么没人被通知**：CI 的服务型 job 只跑
+`tests/contracts`/`tests/persistence`/`tests/api`/`tests/vector`（见
+`CLAUDE.md` 与 `.github/workflows/`），**`tests/e2e` 不在其中**。这与 E-03 是同一
+个洞的两面：E-03 说 CI 不跑 E2E，这一条是"于是它红了也没人知道"的实例。
+
+**做完的判据**：三条转绿，且 `tests/e2e` 进入某个每 PR 都跑的 job——否则修好之后
+下一次变红仍然不会有人知道。
 
 ### E-01 Playwright 的四次执行全部 mock 后端
 

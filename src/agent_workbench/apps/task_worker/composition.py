@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
+from agent_workbench.adapters.delegation import EventDelegationChannel
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.langgraph import (
     LangGraphTaskWorkflow,
@@ -52,6 +53,7 @@ from agent_workbench.adapters.tools import (
     StaticToolRegistry,
     UnavailableExternalSearch,
 )
+from agent_workbench.adapters.tools.delegate import DelegateTool
 from agent_workbench.adapters.tools.mcp_workspace import bind_results_into_workspace
 from agent_workbench.adapters.tools.sandbox import SandboxRunTool
 from agent_workbench.adapters.tools.task_export import GatewayReportExport
@@ -66,7 +68,13 @@ from agent_workbench.adapters.tools.workspace import (
     WorkspaceWriteTool,
 )
 from agent_workbench.adapters.vector import QdrantVectorIndex
+from agent_workbench.application.delegation import (
+    DeferredExecutor,
+    DelegationScope,
+    DelegationScopingExecutor,
+)
 from agent_workbench.application.retrieval import RetrievalService
+from agent_workbench.application.sub_agents import DEFAULT_SUB_AGENTS
 from agent_workbench.application.task_inputs import TaskInputStore
 from agent_workbench.application.task_research import (
     EvidenceStore,
@@ -89,11 +97,13 @@ from agent_workbench.bootstrap.sparse_factory import (
     SparseEncodingUnavailable,
     build_sparse_encoder,
 )
-from agent_workbench.domain.runs import RunBudget
+from agent_workbench.domain.runs import AgentRunRequest, RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
 from agent_workbench.domain.tasks import TaskNodeId
 from agent_workbench.domain.tools import ToolName
+from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.cancellation import NullCancellationToken
+from agent_workbench.ports.delegation import DelegationChannel
 from agent_workbench.ports.event_log import EventScope
 from agent_workbench.ports.research import ExternalSearchPort
 from agent_workbench.ports.task_workflow import GraphVersion
@@ -652,6 +662,48 @@ async def _build_real_handlers(
         dynamic_tools["sandbox"] = tuple(
             binding.spec.name for binding in sandbox_bindings
         )
+    # ADR-082. Assembled before the registry and bound after the runtime,
+    # because the cycle is real: the tool that starts a run has to be in the
+    # registry the run's gateway reads, and the runtime it calls is built from
+    # that gateway. `DeferredExecutor` is the one place that knot is tied, and
+    # it fails loudly rather than silently if a process forgets to tie it.
+    delegation_scope = DelegationScope()
+    delegation_executor = DeferredExecutor()
+    # Narrowed to what this Worker registered, never to what the deployment
+    # configured. `permitted_child_tools` intersects with the Task's envelope,
+    # and an envelope is frozen from configuration -- so it can name a tool this
+    # process failed to assemble, and `advertise` raises for those. Same rule as
+    # `profile_with_dynamic_tools`, one layer down.
+    sub_agents = (
+        DEFAULT_SUB_AGENTS.narrowed_to(
+            [
+                external_tool.binding().spec.name,
+                *(binding.spec.name for binding in workspace_bindings),
+                *(binding.spec.name for binding in mcp_bindings),
+                *(binding.spec.name for binding in sandbox_bindings),
+            ]
+        )
+        if config.multi_agent.delegation_enabled
+        else DEFAULT_SUB_AGENTS
+    )
+    delegate_bindings = (
+        (
+            DelegateTool(
+                executor=delegation_executor,
+                catalogue=sub_agents,
+                scope=delegation_scope,
+            ).binding(),
+        )
+        if config.multi_agent.delegation_enabled
+        else ()
+    )
+    if delegate_bindings:
+        # A fourth audience on the same footing (ADR-082). Declared here rather
+        # than on a profile's static tool list so that a deployment with
+        # delegation off leaves every profile exactly as it was.
+        dynamic_tools["delegation"] = tuple(
+            binding.spec.name for binding in delegate_bindings
+        )
     tool_registry = StaticToolRegistry(
         (
             external_tool.binding(),
@@ -659,6 +711,7 @@ async def _build_real_handlers(
             *workspace_bindings,
             *mcp_bindings,
             *sandbox_bindings,
+            *delegate_bindings,
         )
     )
     # The one place both halves of the question are in scope (ADR-075 §4).
@@ -693,30 +746,100 @@ async def _build_real_handlers(
     compact_model_label = (
         compact_profile.model_id if compact_profile is not None else None
     )
+    # Named, because two stacks are built around the same loop (ADR-082): the
+    # one the graph's nodes run through and the one delegated runs run through.
+    # One runtime, two pools -- a second runtime would be a second set of
+    # prices, a second context window and a second thing to keep in step.
+    #
+    # And therefore one compact label as well. A delegated run compacts through
+    # the same `[model.compact]` profile its parent does, so recording it under
+    # a different label would put two names on one model's calls.
+    runtime = ClaudeLikeAgentRuntime(
+        model=model,
+        gateway=gateway,
+        policy_identity=policy_identity,
+        model_label=main_profile.model_id,
+        compact_model_label=compact_model_label,
+        model_timeout_seconds=config.runtime.model_timeout_seconds,
+        max_parallel_read_tools=config.runtime.max_parallel_read_tools,
+        record_step_inputs=config.runtime.record_step_inputs,
+        prices=main_profile.prices,
+        # ADR-0080. From the main profile, because that is the profile this
+        # runtime's calls are made under -- the same reason `prices` and
+        # `model_label` come from it.
+        context_window_tokens=main_profile.context_window_tokens,
+        context_soft_limit_ratio=config.runtime.context_soft_limit_ratio,
+        compaction_enabled=config.runtime.context_compaction_enabled,
+    )
+
+    def _delegation_channel(request: AgentRunRequest) -> DelegationChannel:
+        """Where a run announces the children it starts: on its own scope."""
+
+        return EventDelegationChannel(
+            log=events,
+            parent_scope=EventScope(
+                stream_id=request.stream_id,
+                run_id=request.trace.agent_run_id,
+                task_id=request.trace.task_id,
+                graph_node_id=request.trace.graph_node_id,
+            ),
+        )
+
+    # Read out of the projection here rather than inside `_scoped`: the guard
+    # that proves `config.multi_agent` is present is at the top of this
+    # function, and it does not narrow inside a nested one.
+    delegation_on = config.multi_agent.delegation_enabled
+    delegation_depth = config.multi_agent.max_delegation_depth
+    delegation_children = config.multi_agent.max_children_per_run
+
+    def _scoped(inner: AgentExecutor) -> AgentExecutor:
+        """Wrap an executor so every run it performs may delegate.
+
+        Applied to both stacks. On the parent stack it gives a graph node a
+        context to delegate from; on the child stack it is what makes a
+        delegated run's own depth one greater than its parent's, since the
+        ContextVar still holds the parent's context at that moment.
+        """
+
+        if not delegation_on:
+            return inner
+        return DelegationScopingExecutor(
+            inner,
+            scope=delegation_scope,
+            channel_for=_delegation_channel,
+            max_depth=delegation_depth,
+            max_children=delegation_children,
+        )
+
     executor = BoundedParallelExecutor(
-        ClaudeLikeAgentRuntime(
-            model=model,
-            gateway=gateway,
-            policy_identity=policy_identity,
-            model_label=main_profile.model_id,
-            compact_model_label=compact_model_label,
-            model_timeout_seconds=config.runtime.model_timeout_seconds,
-            max_parallel_read_tools=config.runtime.max_parallel_read_tools,
-            record_step_inputs=config.runtime.record_step_inputs,
-            prices=main_profile.prices,
-            # ADR-0080. From the main profile, because that is the profile this
-            # runtime's calls are made under -- the same reason `prices` and
-            # `model_label` come from it.
-            context_window_tokens=main_profile.context_window_tokens,
-            context_soft_limit_ratio=config.runtime.context_soft_limit_ratio,
-            compaction_enabled=config.runtime.context_compaction_enabled,
-        ),
+        runtime,
         max_parallel=config.multi_agent.max_parallel_agent_invocations,
     )
     # ADR-040. Outside the parallelism bound on purpose: the Registry round trip
     # that charges the Task happens before a concurrency slot is taken, rather
     # than while one is held. Records only -- nothing refuses on the count yet.
     executor = BudgetedAgentExecutor(executor, registry=registry, scope=scope)
+    executor = _scoped(executor)
+    if config.multi_agent.delegation_enabled:
+        # The child stack. Same runtime, same charging, **its own semaphore**.
+        # Sharing the parent's pool deadlocks: `BoundedParallelExecutor` holds
+        # its slot for the whole invocation, so a parent waiting inside a tool
+        # call holds one until its child finishes, and the child is queued for a
+        # slot that only the parent's return can free.
+        delegation_executor.bind(
+            _scoped(
+                BudgetedAgentExecutor(
+                    BoundedParallelExecutor(
+                        runtime,
+                        max_parallel=(
+                            config.multi_agent.max_parallel_child_invocations
+                        ),
+                    ),
+                    registry=registry,
+                    scope=scope,
+                )
+            )
+        )
     invocations = TaskNodeInvocationProvider(
         registry=registry,
         budget=RunBudget(

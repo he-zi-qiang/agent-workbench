@@ -149,7 +149,12 @@ class _RecordingLog:
         raise AssertionError("the timeline never appends")
 
     async def read(
-        self, stream_id: str, *, after_sequence: int | None = None, limit: int = 500
+        self,
+        stream_id: str,
+        *,
+        after_sequence: int | None = None,
+        limit: int = 500,
+        run_id: str | None = None,
     ) -> tuple[Any, ...]:
         self.limits.append(limit)
         return ()

@@ -27,7 +27,481 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-27（未合并，分支 `feat/multi-agent-orchestration`，第三十四批）：一块握着唯一出口的面板，不能在没什么可画时消失
 
+上一批把 C-06 与 C-07 登记成缺口。这一批把它们做掉，**并且订正其中一条登记时估错的
+规模**——顺带撞见一个只有把收窄搬进 URL 之后才会出现的洞。
+
+### 1. 收窄进 URL，一次买到三样东西
+
+`selectedRunId` 原来是组件状态。改成 `?run=<runId>`：
+
+| 买到 | 此前 |
+|---|---|
+| **可深链、可分享** | `/runs` 与 `timeline?run_id=` 是服务端**专为深链**造的两个口子，而在此之前没有任何客户端产出过一条这样的链接 |
+| **刷新后还在** | 刷新即丢 |
+| **收窄跟着任务走** | 上一批用 `{taskId, runId}` 配对解决的，现在**免费**——任务 id 在路径里，换任务就是换 URL |
+
+`replace` 而不是压一条历史：这是一个筛选器，不是一个目的地。每点一次压一条，会让浏览器
+的返回键在读者点过几次之后才轮到"离开这个任务"，而面板本来就有一颗显式的「显示全部」。
+
+**没有去调 `/runs`**，理由和 `runTree.ts` 文件头写的一样、且这次更强：深链进的是**本页**
+的某个运行，而这一页无论如何都要把时间线拉下来（`useTaskTimeline` 一直翻到 `cursor` 为空）。
+真正需要那个端点的是"深链进一个大到本页不会全量加载的流"，那件事今天不存在。
+
+### 2. 搬进 URL 之后才露出来的洞
+
+`?run=` 可以指向一个这个任务里**根本没有**的运行——一条发错的链接，或者一次落在被跳过
+那一页里的委派。而面板在"没发生过委派"时直接 `return null`。
+
+于是读者拿到的是：一条空的执行过程，没有任何解释，**也没有任何能点回去的东西**——因为
+撤销收窄的那颗按钮长在这块不渲染的面板上。
+
+**"没什么可画"和"什么都不渲染"不是同一条指令。** 面板握着唯一的出口，所以只要收窄活着
+它就必须在。收窄指向的运行不在树里时，它照实说这一句，而不是画一条空流让读者自己猜。
+
+### 3. 一棵可能不全的树要自己说出来
+
+ADR-083 不变量 5「一棵不完整的树说自己不完整」此前只做了服务端那一半：响应里有
+`complete`，客户端没有对应物。而客户端这棵树**更需要它**——它是从页面握着的事件重建的，
+一页没送到、里面又刚好有一次 `AgentDelegated`，整条分支就不在树里，而且什么痕迹都不留。
+沉默会把这件事说成"没有派过子代理"，用的是一模一样的措辞。
+
+现在流有缺口时面板明说。**没有**做的是"流一有缺口就把面板顶出来"：那会让每一个有缺口的
+任务都长出一块写着「可能不全」的面板，而其中绝大多数**真的**没派过子代理——页面已经有
+`TimelineGapNotice` 在说这条流有洞，让第二个组件把同一件事再喊一遍，换来的是一条几乎总在
+误报的横幅。这条残留写进了 C-06。
+
+### 4. 订正：C-07 的规模估错了
+
+登记 C-07 时写的"做完的判据"说它要改 `StepStream`——那个每个阶段共用的组件——"因此是一次
+会波及 Chat 与 Code 的改动"。**不是。**
+
+`StreamStage` 本来就有一个 `note` 字段（右侧那行"现在是什么状态"的文字），由调用方
+`WorkPage` 填。收窄开着且某个阶段一条步骤都没有时，把 `note` 换成「不含所选运行」即可，
+`StepStream` 一个字不动。
+
+阶段的**状态**仍然读整条流，这是有意留着的：阶段是**任务**的骨架，不因为读者在看其中
+一个运行就该被改写——按运行重算阶段，等于让"这个任务走到哪了"随一次点击变来变去。
+
+> 记在这里是因为这条错误有复发性：**登记缺口时顺手估的规模，和真去找过接缝之后的规模，
+> 是两个数。** 一条被估贵了的缺口和一条被估便宜了的缺口，代价不对称——前者会让一件
+> 二十行的事在缺口表里躺很久。
+
+### 证据（2026-08-27，这棵树上，已合入 main 之后）
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check .` / `ruff check .` | 606 files / All checks passed |
+| `pyright`（裸跑） | 0 errors |
+| `pytest`（离线） | **3056 passed, 783 skipped** |
+| `agent-config-check --profile development` | status ok（schema 1.19） |
+| `eslint . --max-warnings 0` / `tsc -b` / `vite build` | 干净 |
+| `vitest run` | **39 files / 633 tests 全绿**（上一批 627） |
+
+新增 6 条，全在 `RunPanel.test.tsx`（该文件由 18 条增至 24 条）：完整性那句话的有无各一条、
+"没派过子代理但收窄活着时面板仍渲染并给出退路"、"收窄指向树里真有的运行时说另一句话"、
+"收窄指向树里没有的运行、即使有子代理也照实说"、以及"既没有子代理也没有收窄时面板仍然
+不出现"——最后一条是防止把上面那条修成"面板永远都在"。
+
+### 明确没做，以及为什么
+
+- **不让缺口把面板顶出来**（见 §3）。
+- **不调 `/runs`**（见 §1）。
+- **不按运行重算阶段状态**（见 §4）。
+- **不给 `?run=` 压历史条目**（见 §1）。
+
+---
+
+## 2026-08-27（未合并，分支 `feat/multi-agent-orchestration`，第三十三批）：面板画的是它自己重建的树，而那棵树有一处解不开
+
+> **批次号已重排**：这条分支写下时编到第二十一～二十四批，而主线同期把这四个号各自
+> 用掉了（已排到第二十九批）。合入主线的这次合并里，四节顺序不变、整体后移为
+> 第三十～三十三批。上一版这里写的是"预警"；现在它是一条已办事项，留着是因为读到旧
+> 提交的人会在那四节里看到旧号。
+
+上一批把面板做出来了，但那次提交是这条分支上**唯一一次写了代码却没留证据**的改动：
+`13ed6c2` 一行 `docs/status.md` 都没写，而面板本身**一条测试也没有**——被测的是它下面
+的 `runTree.ts`（12 条），不是面板。这一批补上证据，并修掉补测试时露出来的东西。
+
+### 1. 两份读模型在它们发誓不分家的那条路径上分家了
+
+`AgentCompleted.status` 是一个 `RunStatus`——`completed` / `failed` / `cancelled`
+（[`domain/runs.py:35`](../src/agent_workbench/domain/runs.py:35)）。前端把它拿去查了
+一张按**事件名**（`RunCompleted` / `RunFailed` / `RunCancelled`）建的表：
+
+```ts
+const TERMINAL_STATUS = { RunCompleted: "completed", RunFailed: "failed", ... };
+// ...
+child.status = TERMINAL_STATUS[payload.status] ?? "unknown";   // 三个键一个都对不上
+```
+
+三个键**一个都对不上**，于是每次都落到 `unknown`。`AgentCompleted` 存在的全部理由——
+让只握着父运行那一页的读者知道孩子后来怎么样了——整条路径静默失效，行上永远写着
+「等待中」，包括父运行明明已经记下它**失败**的时候。
+
+服务端那一份没有这个问题，而且它的注释正好写着为什么：`_STATUS_FOR_RUN_STATUS`
+"written as a mapping rather than a cast so that a status added to the domain has to
+be considered here rather than silently becoming `unknown`"。前端等于用错了那张表。
+
+**为什么原有的测试没抓到**：`runTree.test.ts` 里那条「父运行的转述只在孩子自己没报告时
+才采用」，测的是孩子**说过话**的那一支——恰好是两边行为相同、也是坏掉的分支根本走不到
+的那一支。而末尾那条自称「与服务端读模型的一致性」的测试，手抄的场景同样是两边一致的
+那条路径。**一条声称钉住一致性的测试，钉住的是两边本来就不会分歧的地方。**
+
+同一处还查出第二条分歧：被宣告、尚未开口的子运行，服务端把它的 `sequence` 填成**宣告
+它的那次委派**，前端要等孩子自己写下第一个事件才给位置——而那正是这个字段唯一有意义
+的那个状态。两条都补了测试，且都**先对着旧代码验证它们会红**（5 条）。
+
+### 2. 面板一个字都没说的、流里早就写着的事
+
+`RunStarted` 带着 `run_kind` / `model_profile` / `tool_names` / `budget`
+（[`domain/events.py:273`](../src/agent_workbench/domain/events.py:273)），`RunFailed`
+带着 `error: ErrorInfo`，`RunPaused` 带着 `reason`。这些事件**这个页面本来就握在手里**，
+面板一个都没读。
+
+其中最要紧的是 `budget`。面板的注释写着"不画进度条，因为一个运行不知道自己要走几步，
+任何进度条都是拿一个编出来的分母做分数"——**这句话对了一半**。"还要走几步"确实不知道；
+"**允许**走几步"是这次运行自己在 `RunStarted` 里写下的。而委派出去的子运行拿到的
+`max_total_tokens` 就是 `multi_agent.max_tokens_per_agent_invocation`
+（[`composition.py:830`](../src/agent_workbench/apps/task_worker/composition.py:830)），
+也就是**真正会把它掐死的那个数**。
+
+这一批把两件事分开：完成度的分母仍然是编的，仍然不画；**预算**的分母是第一手的，画。
+一个死在"额度不足"上的子代理，读者需要看见的正是这条。
+
+| 补上的 | 从哪来 | 面板怎么呈现 |
+|---|---|---|
+| 每次运行自己的上限 | `RunStarted.budget` | `32.0k/120.0k`、`4/40 步`；**只在声明过的时候**画，没声明就只显示花费 |
+| 失败原因 | `RunFailed.error` | 行下面一句 `工具执行超时：web_search exceeded 30s`，词表复用 `failure.ts` 的 `CODE_LABELS` |
+| 为什么停 | `stop_reason` | 只显示会改变读者下一步动作的那几个（`token_budget` 等）；正常答完的 `stop` 不显示 |
+| 在等人 | `RunPaused.reason` | 图标从转圈换成暂停，文字写「已暂停，等待你确认」——**等待不是在工作**，而转圈说的正是相反的话 |
+| 哪个模型 | `RunStarted.model_profile` | 名字后面一个灰色小字 |
+
+`token` 花费同时改成与运行时判预算的**同一条算式**（`TokenUsage.total`，含
+`cache_write_tokens`、不含已在 `input` 里的 `cache_read_tokens`）。用另一套算法去画
+花费与上限，会把运行画得比运行时认为的更远离它的天花板。
+
+### 3. 这个面板的全部意义在缩进里，而缩进只是样式
+
+DOM 是一个**平的** `<ul>`，深度是一个 CSS 自定义属性。屏幕阅读器读到的是一列兄弟——
+"这个 agent 是**被那个**派出来的"，也就是这个面板存在的唯一理由，一个字都没传达到。
+
+改成真的 `<ul>` 嵌套，并给有孩子的行一个带 `aria-expanded` 的折叠按钮。**没有**用
+`role="tree"`：那个 role 承诺方向键在条目之间导航，而对一个按了方向键发现没反应的人
+来说，"这是一棵树"这句宣告比嵌套列表更糟——嵌套列表浏览器本来就会连层级一起念出来。
+折叠状态记的是**被合上的那些**而不是被展开的那些，所以运行中新到的委派会出现，而不是
+继承一份默认隐藏。
+
+顺带两条：
+- `@media (width <= 720px)` 原来整块隐藏 `.aw-run-meta`，把「它现在在做什么」——注释里
+  自称的唯一实时字段——一起隐藏了。而手机恰恰是有人在确认"这个任务还在动吗"的地方。
+  改成只隐藏计数，留下活动与停止原因。
+- 折叠按钮给到 30px 高度并单独成键：它是这里唯一一个拇指必须精确命中的控件。
+
+### 4. 收窄跟着任务走
+
+`selectedRunId` 是一个裸 `useState`，不带它所属的 `taskId`。切到另一个任务，收窄仍然
+生效、过滤的却是一个不在这条流里的 run id：每个阶段空、执行过程空，而唯一能撤销它的
+按钮已经**随面板一起消失**了——面板只在发生过委派时渲染。
+
+改成与同文件里 `opened`（产物抽屉）同一个形状：状态带着 `taskId`，**在渲染时比较**而不是
+用 effect 事后清除。那段注释里的理由原样适用——"deriving that during render is what keeps
+a stale value from ever being displayed, which an effect that clears it afterwards
+cannot promise"。
+
+### 证据（2026-08-27，这棵树上）
+
+| 门禁 | 结果 |
+|---|---|
+| `eslint . --max-warnings 0` | 干净 |
+| `tsc -b` | 干净 |
+| `vitest run` | **38 files / 613 tests 全绿**（上一批 37 / 580） |
+| `vite build` | 成功 |
+
+新增 **33 条**：`RunPanel.test.tsx` 18 条（此前该文件不存在），`runTree.test.ts` 15 条。
+
+**反向验证**：把 `STATUS_FOR_RUN_STATUS` 与 `firstSequence` 两处改回旧写法重跑，新测试
+**5 条转红**（二手 `completed`、二手 `cancelled`、二手 `stop_reason`、两条 `firstSequence`）。
+不这么验一次，"补了测试"和"补了会跟着代码一起错的测试"是分不开的。
+
+### 明确没做，以及为什么
+
+- **不改服务端的 `RunNode`**。面板新读的四类事实（上限、失败原因、停止原因、暂停）
+  都只加在**前端**的节点上，不动"有哪些节点、它们是什么状态"——那三个问题才是两份读模型
+  不许分歧的地方。给服务端的 `RunNodeStatus` 加一个 `paused`，是改一个 HTTP 响应的枚举，
+  那要先有 ADR。
+- **不调 `/v1/tasks/{id}/runs`**。理由与 `runTree.ts` 文件头写的一样，没有变：那是用
+  第二个请求去学第一个请求已经带回来的东西，而且它只在有人问它时才刷新，会让一个号称
+  实时的面板落后于旁边的时间线。深链进某个子运行是另一回事，见下面的缺口登记。
+- **不显示 `cost_micro_usd`**。九个 profile 没有一个写过 `[model.*.pricing]`，这个数恒为
+  0（第二十二批查过）。画一个恒零的花费，比不画更误导。
+- **不画 `role="tree"`**。理由见上：半套键盘语义比不宣告更糟。
+- **不合并 `runTree.ts` 与 `delegations.ts`**。两者确实都在扫 `AgentDelegated`，但一个
+  产出树、一个产出时间线行首的名字，合并会把"这一行是谁写的"塞回树的重建里。登记为缺口
+  而不是顺手合掉。
+- **不重排本分支已有的三节批次号**。撞号是真的（见开头预警），但主线还在动，现在排完
+  合并时还要再排一次。
+
+---
+
+## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第三十二批）：把它真的跑起来，然后修跑出来的两个问题
+
+前两批的证据全是测试。这一批是**对着真实模型的一次端到端运行**，以及它当场暴露的两个
+缺陷——两个都不是测试能发现的那种。
+
+### 1. 跑了什么
+
+```
+scripts/dev.sh services && scripts/dev.sh migrate     # 0032 上到本地库
+AW_MULTI_AGENT__DELEGATION_ENABLED=true scripts/dev.sh api --without-chat
+AW_MULTI_AGENT__DELEGATION_ENABLED=true scripts/dev.sh worker
+POST /v1/tasks  {"graph":"general", ...}              # v2 图，真实 DeepSeek
+```
+
+objective 要求模型先自己列风险，再就最不确定的一条委派一个子代理独立评估，并注明哪些
+结论来自子代理。**它照做了**：自列 8 条 → 选中「权限与安全边界」→ 委派 `analyst` →
+拿回独立评估 → 并入第 4 条并写明「第 4 条结论来自子代理独立评估」。
+
+事件顺序与 ADR-082 §2.3 写的一字不差：
+
+```
+#21 ToolStarted     delegate_agent          run_2e769ec…  work
+#22 AgentDelegated  -> analyst              run_2e769ec…  work
+#23 RunStarted                              run_9d8ac05…  work   ← 子运行
+#24 ModelStarted                            run_9d8ac05…  work
+#25 ModelCompleted                          run_9d8ac05…  work
+#26 RunCompleted                            run_9d8ac05…  work
+#27 AgentCompleted  status=completed        run_2e769ec…  work
+#28 ToolCompleted   delegate_agent          run_2e769ec…  work
+```
+
+子运行的事件带着 `graph_node_id=work`——继承父作用域（`sink_for_child`），所以它落在
+UI 正确的阶段里。窄口读 `?run_id=run_9d8ac05…` 返回的正是那 4 条，位置是 **23–26**：
+游标是流里的位置，不是过滤后的下标（ADR-083 不变量 2，这次是真库真索引验的）。
+
+前端也确认了：`子代理 analyst：运行已开始` / `…模型调用已开始` / `…模型调用已完成` /
+`…运行已完成` 四行带前缀，而父运行自己的「子代理已委派」「子代理已完成」不带。
+
+### 2. 跑出来的第一个问题：委派挂错了节点
+
+`researcher_internal` 声明了 `dynamic_tool_sources={"delegation"}`——**在真实 Worker 里
+等于没挂**。`task_handlers.research_internal` 在部署接了检索时根本不跑 agent，直接调
+`research.internal.gather()` 就返回。那个 profile 读起来完全像一个会用工具的节点，而它
+不是。
+
+移到 **v2 的 `work` 节点**：那是真正会调模型、且被交一个目标自己决定怎么做的循环——
+一个模型有理由去问第二个模型的唯一位置。新增
+`test_a_v1_research_node_is_not_where_this_belongs` 把这条钉住，因为这个错误从 profile
+本身看不出来。
+
+### 3. 跑出来的第二个问题：树里长了个幽灵
+
+第一次调 `GET /v1/tasks/{id}/runs` 返回 **5 个根**，其中一个是：
+
+```
+task_ab930a52d2814b9bb1451   unknown   —   in=0  out=0  seq=None
+```
+
+`TaskSubmitted` / `TaskClaimed` / `TaskSucceeded` 是写在 **task id** 名下的，
+`build_run_tree` 于是给每个 Task 都造了一个永远 `unknown`、花费永远为零的根。树声称展示
+的是"运行"，而那不是一个运行。
+
+加了一条**佐证**规则：一个 id 进树，必须有东西说过它是运行——它自己的 run 生命周期事件，
+或者一次委派（作为发起方或被指名方）。Task 生命周期事件三者皆非。
+
+反方向也钉了一条：`test_a_run_that_only_delegated_is_still_a_run`——一个页起始于
+`RunStarted` 之后的运行仍然是运行，它写下的那次委派就是证据。所以佐证不能简单写成
+"见过 RunStarted"。
+
+### 4. 门禁
+
+```
+uv run pytest                  # 3026 passed, 782 skipped
+uv run pyright                 # 0 errors
+```
+
+### 5. 能力梯子
+
+委派路径可以记为 **Demonstrated**：有一次真实模型下的完整运行，事件流、树端点、窄口读
+与前端标注都是对着它验的。**但这是一次本地运行，不是基准**——没有测过多轮、没有测过
+扇出、没有测过子运行失败时父运行怎么写报告。这三件事仍然只有测试证据。
+
+顺带一提，这次运行里 `写入工作区` 连续被 `policy_denied: missing_permission_scope` 拒了
+四次。那是本地 principal 的 scope 配置缺口，**与委派无关**，本批未动。
+
+---
+
+## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第三十一批）：一棵运行树要能按运行读出来（ADR-083）
+
+上一批让一次运行可以派生另一次运行，写进同一个 stream、用自己的 `run_id`。这一批是读的
+那一半：`EventLogPort.read` 加可选 `run_id`（两种实现都跟）、`events` 加一条
+`(stream_id, run_id, sequence)` 索引、`TaskService` 加 `run_tree()`、API 加
+`GET /v1/tasks/{id}/runs`，前端给委派出去的行标上它们自己的 agent 名。
+
+理由与被否掉的做法见
+[ADR-083](./adr/0083-a-tree-of-runs-is-read-as-a-tree.md)。
+
+### 1. 门禁
+
+```
+uv run ruff format --check .   # 通过
+uv run ruff check .            # 通过
+uv run pyright                 # 0 errors
+uv run pytest                  # 3023 passed, 782 skipped
+```
+
+服务态套件（含新的 migration 与 EXPLAIN 断言）：
+
+```
+AGENT_WORKBENCH_TEST_DSN=… uv run pytest tests/contracts tests/persistence tests/api
+                               # 1190 passed, 1 skipped
+```
+
+前端（这台机器上用系统 node 26 加 `NODE_OPTIONS=--no-experimental-webstorage`，
+`pnpm` 不在 PATH，直接调 `web/node_modules/.bin`）：
+
+```
+eslint . --max-warnings 0      # 通过
+tsc -b --pretty false          # 通过
+vitest run                     # 36 files, 568 passed
+vite build                     # ✓ built in 321ms
+```
+
+`config_schema_version` 保持 `1.18`——这一批一个配置叶子都没加。
+
+### 2. 显然的做法，和为什么否掉
+
+| 显然的做法 | 为什么否掉 |
+|---|---|
+| 在客户端过滤已拉到的页 | 答的是另一个问题："这个运行的事件里恰好落在前 500 条中的那些"。长 Task 末尾跑的子代理于是**不可见**而不是空 |
+| 新建一张持久的 `run_tree` 表 | 第二份真相。事件已经 durable、有序、有事务边界 |
+| `read_by_run()` 作为第二个方法 | 会长出第二套游标解释，以及第二份"这个 principal 能不能读这个 Task"的答案 |
+| 索引只建 `(stream_id, run_id)` | 读是按 `sequence` 排序的：规划器能找到行但拿不到顺序，于是为返回十二条去排整条流 |
+| 让 `run_tree()` 无上限读完整条流 | 一次请求就能让服务器把任意长的 Task 装进内存 |
+| 前端为了标名字再发一个 `/runs` 请求 | 用第二个请求学第一个请求已经带回来的东西 |
+
+### 3. 索引不是装饰的，当场验了一次
+
+`DROP INDEX ix_events_stream_run_sequence` 后重跑 `tests/persistence/test_run_tree_index.py`，
+两条计划断言都红：
+
+```
+Sort  (cost=154.40..154.43 rows=12 width=1241)
+  Sort Key: sequence
+  ->  Seq Scan on events  (cost=0.00..154.18 rows=12 width=1241)
+        Filter: (((stream_id)::text = 'str_index_a') AND ((run_id)::text = 'run_index_child'))
+```
+
+建回去即绿。这条测试断言的是 `EXPLAIN` 的**计划**，因为一条索引的全部价值恰恰是正确性
+测试看不见的——加不加它，返回的行一模一样。
+
+### 4. 没做成的
+
+- **不是可折叠的时间线。** 分组渲染要改每个阶段都在用的共享步骤流组件，那是单独一次
+  改动。这次只做了一行上的名字。
+- **不是跨 Task 的树。** 一棵树在一个 stream 之内；委派不开新 Task。
+- **没有对着真模型跑过。** 树的形状是对着构造出来的事件页验证的，不是对着一次真实的、
+  由模型自己决定派生的运行。能力梯子停在 **Implemented + Tested**。
+
+---
+
+## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第三十批）：一次委派是一次运行，不是一个新的循环（ADR-082）
+
+这一批把 `TraceContext.parent_agent_run_id`、`AgentDelegated`/`AgentCompleted`、
+`BudgetUsage.merged` 的 docstring、前端 `workTimeline.ts` 的中文标签——四个**写好了
+但一个写入者都没有**的槽——同时填上。做法是一个 `risk="read"` 的
+`delegate_agent` 工具，它的 handler 调用**同一个** `AgentExecutor`，产生一次新
+`agent_run_id`、同 `stream_id` 的子运行。默认关。
+
+理由与被否掉的做法见
+[ADR-082](./adr/0082-a-delegation-is-a-run-not-a-new-loop.md)。`docs/known-gaps.md`
+**C-03** 从"未实现"改判为**部分实现**（spawn 有了；动态 supervisor 与 mailbox 仍然
+没有，且 §5 明确拒绝）。
+
+### 1. 门禁
+
+```
+uv run ruff format --check .   # 通过
+uv run ruff check .            # 通过
+uv run pyright                 # 0 errors, 0 warnings, 0 informations
+uv run pytest                  # 2999 passed, 774 skipped
+AW_DATABASE__DSN=… uv run agent-config-check --profile development
+                               # status ok, config_schema_version 1.18
+```
+
+服务态套件（`scripts/dev.sh services` 已在跑）：
+
+```
+AGENT_WORKBENCH_TEST_DSN=… AGENT_WORKBENCH_TEST_QDRANT_URL=… \
+  uv run pytest tests/contracts tests/persistence tests/api
+                               # 1176 passed, 1 skipped
+```
+
+`config_schema_version` 保持 `1.18`：四个新叶子都挂在既有 `[multi_agent]` 段下并带
+默认值。
+
+开关本身也验了两次：
+
+| 做什么 | 结果 |
+|---|---|
+| `AW_MULTI_AGENT__DELEGATION_ENABLED=true` | `status: ok`，且 `run_semantics_template_revision` 从 `1.18:1.3:83fa368e…` 变成 `1.18:1.3:adef9bd0…`——信封变了，于是这批 Task 的运行语义快照如实记下了它 |
+| 再加 `MAX_DELEGATION_DEPTH=3` `MAX_CHILDREN_PER_RUN=8` | 启动**失败**：`the deepest delegation tree this configuration permits (8 children to depth 3 = 512 runs) exceeds max_agent_invocation_attempts_per_task (12)` |
+
+### 2. 显然的做法，和为什么否掉
+
+| 显然的做法 | 为什么否掉 |
+|---|---|
+| handler 自己跑一遍"调模型 → 解析工具 → 再调模型" | 这才是第二个 tool loop。ADR-082 §2.1 把这条不变量写成了一条**会红的测试**，不再只是散文 |
+| 复用 `workflows.AgentProfile` 当子 agent 的定义类型 | `adapters/` 不许 import `workflows/`，架构测试当场红；且 `AgentProfile.node` 对派生运行没有真值 |
+| 把 `EventSink` 塞进 `ToolInvocation` 让 handler 自己发事件 | 等于把整个事件词表交给每一个 handler。ADR-068 拒绝过一次，理由没变 |
+| `delegated()` / `completed()` 两个动词 | 超时把 `CancelledError` 抛在等待子运行那一行，第二个动词永远走不到——事件流留下一条"宣布了没有然后"的记录 |
+| 检查 `len(spawned)` 决定还能不能派 | 工具是 `parallel` 的，同一批在一个 `gather` 里，每个都读到 0 |
+| 父子共用一个 `BoundedParallelExecutor` | **死锁**，而且没有错误消息：父握着槽等子，子排队等只有父返回才能释放的槽 |
+| 在 `AgentProfile.tool_names` 里静态写死 `delegate_agent` | `advertise` 对没注册的工具抛异常——把一个关掉的开关变成每个 Task 都失败的节点 |
+
+### 3. 测试是不是装饰的，当场验了三次
+
+| 删掉什么 | 结果 |
+|---|---|
+| `permitted_child_tools` 的委派剔除 + `child_envelope` 的风险钳制 + `AgentDelegated` 发射 | **5 failed, 43 passed** |
+| `reserve()` 的 `outstanding += 1` | **7 failed** |
+| `await asyncio.shield(emitting)` → `await emitting` | 慢写入那条**单独**红；再把 `await` 整个去掉，另外 **3 条**红 |
+
+第三条是这批里最值得记下的一次：两个机制（`ensure_future` 脱钩、`shield` 防级联）
+守的是**两个不同的时刻**，各自单独可证伪。第一版还在 shield 外面套了
+`suppress(CancelledError)`，是写那条测试时当场暴露的——它会让一个被取消的 handler
+正常返回一个 `ToolResult`，取消就此丢失。
+
+### 4. 顺手纠正的一处口径
+
+`docs/known-gaps.md` 的 **C-01** 写着"调用次数上限只有配置，无持久账本／未接线"，并引用
+`MultiAgentConfig` 的 docstring "Three fields, and deliberately not the fourth" 作为证据。
+**两者都已过期。** `adapters/persistence/task_registry.py:398` 的
+`reserve_agent_invocation` 在同一条 UPDATE 里比较并自增（一把行锁，两个 Worker 不可能
+各自读到最后一个名额），上限读自那一行**自己的** `run_semantics_snapshot`，超额抛
+`AgentInvocationBudgetExhaustedError`，`workers/task.py:312` 判 `dead_letter`。
+`tests/persistence/test_agent_invocation_budget.py` **12 条打真实 PostgreSQL，全过**。
+
+计数落在 `task_runs` 行上，所以"跨 retry 与 reclaim 累计"是**行本身**的性质——旧文说的
+"需要一张新的持久计数表"从来不必要。C-01 改判**关闭**，C-02 缩窄为"仅 partial failure
+未做"（跨 retry 预算与父子取消都已实现），`MultiAgentConfig` 的 docstring 改写成它现在
+真正的理由：执行它的地方不读投影，读 Task 自己的快照。
+
+这批之所以要动它，是因为 ADR-082 让这个数**更**要紧：每个子运行都经过
+`BudgetedAgentExecutor` 记一笔，语义从"这张图有几个节点"变成"含子代理的总调用数"。
+
+### 5. 没做成的
+
+- **父运行的 token / 成本上限看不见子运行的任何花费。** `_RunLedger` 是 runtime 私有
+  的，`ToolResult` 不带 usage。一次运行的花费上界是"父预算 + 各子运行整除份额之和"，
+  ADR-082 §5 写成了一句可证伪的话。
+- **Task 路径上目前只有一个可用的子 agent。** `SubAgentCatalogue.narrowed_to` 会把
+  `researcher` 整个丢掉，因为 `knowledge_search` 不注册在 Task Worker 里——这是**设计
+  如此**（一个搜不了东西的 researcher 摆在模型面前只会浪费一次委派），但也说明委派在
+  Chat 路径上才完整。那条路要单独一份 ADR：它与答案发布围栏（`RetrievalJournal` +
+  引用核验）相交。
+- **没有对着真模型跑过。** 能力梯子停在 **Implemented + Tested**。
 ## 2026-08-27（未合并，同分支，第二十九批之三）：字节没有编码可解
 
 第二十九批把项目侧接上工作区那套查看器时，`html` 与文本能看了，图片和 PDF 仍然停在

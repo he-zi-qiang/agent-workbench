@@ -610,9 +610,11 @@ def test_the_worker_holds_the_working_set_and_every_read_or_render_audience() ->
 
     assert worker.tool_names == WORKSPACE_TOOLS
     # Everything ADR-031 §2.1 means by "a full tool set": read outward, render
-    # a document, run code. All three are read-or-inward audiences.
+    # a document, run code. All three are read-or-inward audiences -- and so is
+    # the fourth: `delegation` starts another run under this one's own envelope
+    # and cannot reach past it (ADR-082).
     assert worker.dynamic_tool_sources == frozenset(
-        {"research", "synthesis", "sandbox"}
+        {"research", "synthesis", "sandbox", "delegation"}
     )
 
 

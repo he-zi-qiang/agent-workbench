@@ -392,6 +392,16 @@
       ]
     },
     {
+      "owner": "application.delegation",
+      "lifecycle": "task_snapshot",
+      "fields": [
+        "multi_agent.delegation_enabled",
+        "multi_agent.max_delegation_depth",
+        "multi_agent.max_children_per_run",
+        "multi_agent.max_parallel_child_invocations"
+      ]
+    },
+    {
       "owner": "application.multi_agent.attempt_ledger",
       "lifecycle": "task_snapshot",
       "fields": [

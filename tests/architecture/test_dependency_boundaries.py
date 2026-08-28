@@ -544,3 +544,151 @@ def test_a_tool_binding_does_not_reach_into_the_workflow_layer() -> None:
         "workflow layer; move what it needs into application/ instead:\n"
         f"{_format_import_violations(violations)}"
     )
+
+
+# The project's single architectural claim, written as something that can fail.
+#
+# `ports/agent_executor.py` states it in prose -- "Exactly one component owns a
+# model-tool loop, and in this project it is the custom runtime" -- and several
+# single-valued `Literal`s in settings.py say the same thing about which
+# executor a deployment configures. None of them can catch the way it actually
+# gets broken: not by registering a second executor behind the port, but by some
+# module quietly growing its own `model -> tool -> result -> model` loop.
+#
+# ADR-082 makes that a live risk for the first time. A delegation handler that
+# holds an `AgentExecutor` and calls it is the whole design; a delegation
+# handler that consumed the model stream itself would be the second loop, and in
+# review the two look almost identical.
+
+#: Modules permitted to name the streaming model interface at all.
+#:
+#: An allowlist rather than a rule, for the reason `FORBIDDEN_CORE_IMPORTS` is
+#: one: adding a module here has to be a decision somebody made rather than a
+#: thing that happened.
+MODEL_STREAM_OWNERS = frozenset(
+    {
+        # Defines the contract.
+        "ports/model.py",
+        "ports/__init__.py",
+        # Implement it. An adapter *produces* ModelEvents; it does not consume
+        # a loop of them.
+        "adapters/models/deepseek.py",
+        "adapters/models/fake.py",
+        # Builds one and returns it without ever calling it.
+        "bootstrap/model_factory.py",
+        # Carries one as a field of an assembled test stack.
+        "adapters/testing/stack.py",
+        # Owns the loop. The whole point.
+        "runtime/agent_runtime.py",
+    }
+)
+
+#: The module every one of those names lives in. Whole-module rather than
+#: per-name because `ports/model.py` contains nothing that is not part of
+#: streaming a model call: importing anything from it is naming the interface.
+MODEL_STREAM_MODULE = "agent_workbench.ports.model"
+
+
+def _relative_module_path(file: Path) -> str:
+    return file.relative_to(PACKAGE_ROOT).as_posix()
+
+
+def _is_stream_call(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "stream"
+    )
+
+
+def _async_for_over_a_stream_call(file: Path) -> bool:
+    """Whether this module iterates the result of a ``.stream(...)`` call.
+
+    The first line of any tool loop, and the one part of it that cannot be
+    written some other way: something has to consume the async iterator the
+    model port hands back.
+
+    Bound names are followed, because the runtime does not iterate the call
+    expression directly -- it keeps the iterator in a variable so that a failure
+    part-way through can close it. A check that only looked at the loop header
+    would find nothing in the one file it must find something in, and would then
+    report an empty scan as a clean one.
+    """
+
+    tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
+    bound: set[str] = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and _is_stream_call(node.value)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFor):
+            continue
+        iterator = node.iter
+        if _is_stream_call(iterator):
+            return True
+        if isinstance(iterator, ast.Name) and iterator.id in bound:
+            return True
+    return False
+
+
+def test_the_model_tool_loop_has_exactly_one_owner() -> None:
+    """ADR-082's load-bearing distinction, made structural.
+
+    "One tool loop" bounds how many *implementations* of the loop exist, not how
+    many levels deep it may be entered. A delegated run re-enters the same loop,
+    which is why ADR-082 does not have to supersede that invariant; a handler
+    that iterated a model stream itself would be a second implementation, which
+    is why it would.
+
+    Two halves, and they cover different tree shapes on purpose.
+
+    The first is by **shape**, over framework-neutral code only. `async for`
+    over a `.stream(...)` is what a loop looks like, but the phrase means
+    something else at the outer boundary -- an HTTP upload body is streamed in
+    `apps/api/routes/uploads.py`, and the model adapter itself iterates a
+    provider's SSE response to *produce* the events. Neither is a tool loop, and
+    core is exactly the region where the phrase has only one meaning.
+
+    The second is by **vocabulary**, over the whole tree, which is what reaches
+    the adapters the first half steps around. It also catches a loop written
+    with a `while` and a manual `__anext__`, which the first half would miss
+    entirely.
+    """
+
+    iterating = {
+        _relative_module_path(file)
+        for file in _core_python_files()
+        if _async_for_over_a_stream_call(file)
+    }
+
+    assert iterating == {"runtime/agent_runtime.py"}, (
+        "a module other than the custom runtime consumes a model stream, which "
+        "is a second model-tool loop however it is spelled; hold the "
+        "AgentExecutor port and call it instead:\n" + "\n".join(sorted(iterating))
+    )
+
+    naming = {
+        _relative_module_path(file)
+        for file in _product_python_files()
+        if file.is_relative_to(PACKAGE_ROOT)
+        for reference in _import_references(file)
+        if reference.module == MODEL_STREAM_MODULE
+    }
+
+    # The control: without it a change that broke import extraction would leave
+    # this half asserting nothing at all.
+    assert "runtime/agent_runtime.py" in naming, (
+        "the guard must observe the runtime's own model-port imports; "
+        "otherwise the check below proves nothing"
+    )
+
+    unexpected = naming - MODEL_STREAM_OWNERS
+    assert not unexpected, (
+        "a module outside the model-stream allowlist imports the streaming "
+        "interface; if it needs to run an agent it should hold an "
+        "AgentExecutor, and if it genuinely owns a new provider it belongs in "
+        "MODEL_STREAM_OWNERS with an ADR behind it:\n" + "\n".join(sorted(unexpected))
+    )

@@ -390,11 +390,13 @@ class PostgresEventLog:
         *,
         after_sequence: int | None = None,
         limit: int = 500,
+        run_id: str | None = None,
     ) -> tuple[EventEnvelope, ...]:
         rows = await self._replay_rows(
             stream_id,
             after_sequence=after_sequence,
             limit=limit,
+            run_id=run_id,
         )
         # Validated back through the same model that wrote it, so a row from a
         # contract this process does not know fails closed at the boundary
@@ -473,6 +475,7 @@ class PostgresEventLog:
         *,
         after_sequence: int | None,
         limit: int,
+        run_id: str | None = None,
     ) -> Sequence[RowMapping]:
         if limit < 1:
             raise ValueError("limit must be positive")
@@ -489,6 +492,12 @@ class PostgresEventLog:
         )
         if after_sequence is not None:
             query = query.where(events.c.sequence > after_sequence)
+        if run_id is not None:
+            # Ordered and cursored by `sequence` either way, which is why
+            # `ix_events_stream_run_sequence` carries all three columns in that
+            # order: without the sequence on the end the planner has the rows
+            # but not the order, and sorts a stream to return twelve events.
+            query = query.where(events.c.run_id == run_id)
 
         async with self._engine.connect() as connection:
             return (await connection.execute(query)).mappings().all()

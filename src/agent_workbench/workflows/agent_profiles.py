@@ -97,7 +97,13 @@ ProjectionInput = Literal["objective", "plan", "draft", "evidence", "review"]
 #: for the same reason `ProjectionInput` does: a free-form value would make
 #: "which agent may reach this tool" a question about whichever config file was
 #: written last.
-DynamicToolSource = Literal["research", "synthesis", "sandbox"]
+#:
+#: ``delegation`` is a fourth audience and a deployment fact in exactly the same
+#: sense (ADR-082): ``delegate_agent`` is registered only where
+#: ``multi_agent.delegation_enabled`` is on, so a profile that named it
+#: statically would ask ``advertise`` for a tool most deployments do not have --
+#: and that raises, turning an off switch into a node that fails every Task.
+DynamicToolSource = Literal["research", "synthesis", "sandbox", "delegation"]
 
 
 class AgentContextViolationError(RuntimeError):
@@ -387,7 +393,18 @@ V2_AGENT_PROFILES: Final[tuple[AgentProfile, ...]] = (
         # means by "a full tool set" -- and deliberately not the export, which
         # is the Task's one externally visible write and lives behind the
         # human gate on the other side of `review` (ADR-027, ADR-031 §2.4).
-        dynamic_tool_sources=frozenset({"research", "synthesis", "sandbox"}),
+        #
+        # `delegation` is the fourth (ADR-082), and this is the profile it
+        # belongs to rather than either researcher. A v1 research node does not
+        # run an agent at all where the deployment wired retrieval --
+        # `task_handlers.research_internal` calls `research.internal.gather()`
+        # and returns -- so a delegation source declared there would be offered
+        # to nobody. This node is the open-ended loop: it is handed an objective
+        # and decides for itself what the work is, which is the only place a
+        # model has anything to gain from asking a second one.
+        dynamic_tool_sources=frozenset(
+            {"research", "synthesis", "sandbox", "delegation"}
+        ),
     ),
     AgentProfile(
         name="reviewer",

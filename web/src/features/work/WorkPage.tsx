@@ -118,6 +118,13 @@ import {
   type WorkspaceWriteGroup,
   type TimelineGap,
 } from "./workTimeline";
+import {
+  readDelegations,
+  titleWithDelegation,
+  type DelegationFacts,
+} from "./delegations";
+import { RunPanel } from "./RunPanel";
+import { buildRunTree, type RunNode } from "./runTree";
 
 const CANCELLABLE_STATUSES = new Set<TaskStatus>([
   "queued",
@@ -243,7 +250,7 @@ interface ApprovalNotice {
 
 export function WorkPage() {
   const { taskId: selectedTaskId } = useParams<{ taskId: string }>();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { identity } = useIdentity();
@@ -356,11 +363,56 @@ export function WorkPage() {
       query.state.data?.status === "pending" ? 3_000 : false,
   });
 
+  // Which run the reader has singled out in the panel, or `null` for all of
+  // them. Held here rather than in the panel because it narrows the stream
+  // below it, and a selection that only the panel knew about could not.
+  //
+  // **In the URL rather than in `useState`,** which buys three things at once
+  // and costs a line. It makes the narrowing shareable and survivable across a
+  // reload -- the reason `/runs` and `timeline?run_id=` exist server-side is
+  // exactly this deep link, and until now no client produced one. It also
+  // scopes the selection to its Task for free: the task id is in the path, so
+  // opening another Task builds a different URL and the query goes with it.
+  // Held as state, the id travelled across and left the next Task filtered to
+  // a run that is not in it -- every stage empty, the stream empty, and the one
+  // control that undoes it gone with the panel, because a panel that renders
+  // only where a delegation happened does not render on a Task that has not
+  // delegated yet.
+  //
+  // `replace` rather than a new history entry: this is a filter, not a
+  // destination. Pushing one per click would make the back button mean "undo
+  // the last narrowing" for as many clicks as the reader made before it meant
+  // "leave this Task", and the panel already carries an explicit 显示全部.
+  const selectedRunId = searchParams.get("run");
+  const setSelectedRunId = useCallback(
+    (runId: string | null) => {
+      setSearchParams(
+        (held) => {
+          const next = new URLSearchParams(held);
+          if (runId === null) next.delete("run");
+          else next.set("run", runId);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  // The narrowing is applied *here*, once, rather than in each derivation
+  // below: two filters would be two chances for the stage list and the task
+  // events to disagree about which run is on screen.
+  const shownEvents = useMemo(
+    () =>
+      selectedRunId === null
+        ? timeline.events
+        : timeline.events.filter((event) => event.run_id === selectedRunId),
+    [timeline.events, selectedRunId],
+  );
   // Events keyed by the lifecycle stage that owns them, so a stage in the
   // stream can show its own work instead of pointing at a separate log.
   const stageEvents = useMemo(() => {
     const byStage = new Map<string, EventEnvelope[]>();
-    for (const event of timeline.events) {
+    for (const event of shownEvents) {
       if (event.graph_node_id === null) continue;
       const id = stageOfNode(event.graph_node_id);
       const existing = byStage.get(id);
@@ -368,11 +420,21 @@ export function WorkPage() {
       else existing.push(event);
     }
     return byStage;
-  }, [timeline.events]);
+  }, [shownEvents]);
   const taskEvents = useMemo(
-    () => timeline.events.filter((event) => event.graph_node_id === null),
+    () => shownEvents.filter((event) => event.graph_node_id === null),
+    [shownEvents],
+  );
+  // Read once per page rather than per row: every row would otherwise rescan
+  // the whole timeline for the delegation that names its run.
+  const delegations = useMemo(
+    () => readDelegations(timeline.events),
     [timeline.events],
   );
+  // Always over the *whole* timeline, never over the narrowed view: a panel
+  // that lost its other rows the moment you picked one would take away the
+  // only thing you could use to pick a different one.
+  const runTree = useMemo(() => buildRunTree(timeline.events), [timeline.events]);
   // The stream above shows what arrived; this is what the server said did not.
   // An empty `skippedSequences` is its claim that the pages were complete, so
   // silence here is not neutral -- it is the one way this page can present a
@@ -1287,6 +1349,11 @@ export function WorkPage() {
                       if (selectedTaskId === undefined) return;
                       setOpened({ taskId: selectedTaskId, artifact });
                     }}
+                    delegations={delegations}
+                    onSelectRun={setSelectedRunId}
+                    runTree={runTree}
+                    streamIncomplete={timeline.skippedSequences.length > 0}
+                    selectedRunId={selectedRunId}
                     stageEvents={stageEvents}
                     status={selectedTask.status}
                     taskEvents={taskEvents}
@@ -1577,6 +1644,11 @@ function TaskStepStream({
   status,
   stageEvents,
   taskEvents,
+  delegations,
+  runTree,
+  selectedRunId,
+  onSelectRun,
+  streamIncomplete,
 }: {
   lifecycle: Lifecycle;
   loading: boolean;
@@ -1589,46 +1661,85 @@ function TaskStepStream({
   status: TaskStatus;
   stageEvents: Map<string, EventEnvelope[]>;
   taskEvents: EventEnvelope[];
+  // Which runs in this stream were started by another one (ADR-082). A
+  // delegated run's events land on its parent's node, so they arrive in the
+  // right stage already -- what they lack is any sign that a different agent
+  // produced them.
+  delegations: ReadonlyMap<string, DelegationFacts>;
+  //: Every run this Task holds, nested under whoever started it.
+  runTree: RunNode[];
+  // Whether this page was told it did not receive part of the stream. The
+  // panel needs it for the same reason `TimelineGapNotice` below does, and for
+  // a sharper one: a hole in the steps is visible as a hole, while a hole that
+  // swallowed an `AgentDelegated` removes a branch from the tree with nothing
+  // left behind to look wrong.
+  streamIncomplete: boolean;
+  selectedRunId: string | null;
+  onSelectRun: (runId: string | null) => void;
 }) {
   if (loading) return <LoadingLine label="正在读取执行过程" />;
 
-  const stages: StreamStage[] = lifecycle.stages.map((stage) => ({
-    id: stage.id,
-    title: stage.title,
-    state: stage.state,
-    // 一段可能对应两个节点（plan · route、approval · export），所以是连起来的
-    // 一串而不是一个。表里没有的节点不画：那种情况下标题本身就是节点 id。
-    ...(stage.nodes.length === 0 ? {} : { nodes: stage.nodes.join(" · ") }),
-    ...(stageDuration(stage) === null
-      ? {}
-      : { duration: stageDuration(stage) as string }),
-    note:
-      stage.state === "skipped"
-        ? "未执行"
-        : stage.state === "pending"
-          ? "等待中"
-          : stage.state === "waiting"
-            ? status === "waiting_migration"
-              ? "等待迁移"
-              : "等待你确认"
-            : stage.state === "active"
-              ? "进行中"
-              : stage.endedAt === null
-                ? ""
-                : formatTime(stage.endedAt),
-    events: stageEvents.get(stage.id) ?? [],
-  }));
+  const stages: StreamStage[] = lifecycle.stages.map((stage) => {
+    const events = stageEvents.get(stage.id) ?? [];
+    return {
+      id: stage.id,
+      title: stage.title,
+      state: stage.state,
+      // 一段可能对应两个节点（plan · route、approval · export），所以是连起来的
+      // 一串而不是一个。表里没有的节点不画：那种情况下标题本身就是节点 id。
+      ...(stage.nodes.length === 0 ? {} : { nodes: stage.nodes.join(" · ") }),
+      ...(stageDuration(stage) === null
+        ? {}
+        : { duration: stageDuration(stage) as string }),
+      // 阶段的状态读的是**整条流**（`deriveLifecycle(timeline.events, …)`），
+      // 它下面的步骤读的是收窄之后的那份。两者本该如此——阶段是**任务**的骨架，
+      // 不因为读者在看其中一个运行就该被改写；按运行重算阶段，等于让"这个任务
+      // 走到哪了"随一次点击变来变去。
+      //
+      // 但收窄开着时，一个写着「已完成 12:03」却一条步骤都没有的阶段，说出来的
+      // 是"这一段什么也没做"，而真相是"这一段做的事不属于你选的那个运行"。
+      // `note` 正是这句话该待的地方：它本来就是右侧那行"现在是什么状态"的文字，
+      // 所以这条改动**不动 `StepStream`**，也就不波及同样用它的 Chat 与 Code。
+      note:
+        selectedRunId !== null && events.length === 0
+          ? "不含所选运行"
+          : stage.state === "skipped"
+            ? "未执行"
+            : stage.state === "pending"
+              ? "等待中"
+              : stage.state === "waiting"
+                ? status === "waiting_migration"
+                  ? "等待迁移"
+                  : "等待你确认"
+                : stage.state === "active"
+                  ? "进行中"
+                  : stage.endedAt === null
+                    ? ""
+                    : formatTime(stage.endedAt),
+      events,
+    };
+  });
 
   return (
-    <StepStream
-      ariaLabel="执行过程"
-      eventTitle={eventTitle}
-      isKnownEvent={(event) => isKnownEventType(event.event_type)}
-      meta={{ title: "运行记录", events: taskEvents }}
-      onOpenArtifact={onOpenArtifact}
-      running={!isSettledStatus(status)}
-      stages={stages}
-    />
+    <>
+      <RunPanel
+        incomplete={streamIncomplete}
+        onSelect={onSelectRun}
+        roots={runTree}
+        selectedRunId={selectedRunId}
+      />
+      <StepStream
+        ariaLabel="执行过程"
+      eventTitle={(event) =>
+        titleWithDelegation(eventTitle(event), event, delegations)
+      }
+        isKnownEvent={(event) => isKnownEventType(event.event_type)}
+        meta={{ title: "运行记录", events: taskEvents }}
+        onOpenArtifact={onOpenArtifact}
+        running={!isSettledStatus(status)}
+        stages={stages}
+      />
+    </>
   );
 }
 

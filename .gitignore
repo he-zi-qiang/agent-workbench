@@ -31,6 +31,11 @@ dist/
 htmlcov/
 .coverage
 web/node_modules/
+# Without the second, slash-less form a *symlink* named web/node_modules is not
+# matched -- the trailing slash means "directory only". A worktree has no
+# node_modules of its own, so linking one in from the main checkout is the
+# normal way to run the web gate here, and that link was committed once.
+web/node_modules
 web/dist/
 web/coverage/
 web/playwright-report/

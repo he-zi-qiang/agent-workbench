@@ -30,6 +30,7 @@ from agent_workbench.adapters.tools.external_search import (
     TOOL_NAME as EXTERNAL_SEARCH_TOOL,
 )
 from agent_workbench.bootstrap.settings import ModelPricingSettings, Settings
+from agent_workbench.domain.agents import DELEGATE_TOOL
 from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import AuthorizationEnvelope
 from agent_workbench.domain.pricing import ModelPrices
@@ -104,6 +105,7 @@ def task_authorization_envelope(
     external_search: bool,
     mcp_tools: tuple[ToolName, ...] = (),
     sandbox: bool = False,
+    delegation: bool = False,
 ) -> AuthorizationEnvelope:
     """Pick the ceiling this deployment submits Tasks under.
 
@@ -115,9 +117,15 @@ def task_authorization_envelope(
     does. ``sandbox_run`` declares ``risk="external"`` (ADR-029 §3.5), and
     ``risk_within`` ranks external above write, so an envelope that allowlisted
     the name without raising the ceiling would still refuse the call.
+
+    ``delegation`` is the one widening that touches a single axis (ADR-082).
+    ``delegate_agent`` declares ``risk="read"``, which is below every ceiling
+    any of these variants sets, so adding the name is the whole change --
+    there is no second half to forget. What the delegated run may then do is
+    bounded by ``child_envelope``, which cannot raise this ceiling either.
     """
 
-    if not mcp_tools and not sandbox:
+    if not mcp_tools and not sandbox and not delegation:
         return (
             TASK_V1_AUTHORIZATION_ENVELOPE_WITH_SEARCH
             if external_search
@@ -134,6 +142,8 @@ def task_authorization_envelope(
     )
     if sandbox:
         tools = (*tools, SANDBOX_RUN_TOOL)
+    if delegation:
+        tools = (*tools, DELEGATE_TOOL)
     return AuthorizationEnvelope(
         allowed_tools=tools,
         max_tool_risk="external",
@@ -517,14 +527,20 @@ class AgentRuntimeConfig:
 
 @dataclass(frozen=True, slots=True)
 class MultiAgentConfig:
-    """The ceilings on the fixed graph's agents.
+    """The ceilings on this deployment's agents, graph-declared and delegated.
 
-    Three fields, and deliberately not the fourth.
-    ``max_agent_invocation_attempts_per_task`` counts attempts *across* retries
-    and reclaims, so it needs a durable per-Task counter rather than a number
-    passed into a process; projecting it here would put it one import away from
-    looking enforced. It stays in settings, unprojected, until the repository
-    that can honour it exists.
+    One field of the section is deliberately still missing, and the reason has
+    changed since it was first left out. ``max_agent_invocation_attempts_per_task``
+    *is* enforced now: ``reserve_agent_invocation`` compares and increments under
+    one row lock and raises ``AgentInvocationBudgetExhaustedError``. But it reads
+    the ceiling out of the Task row's own ``run_semantics_snapshot`` -- the number
+    that Task was **submitted** under -- rather than out of any process's
+    configuration. Projecting it here would put a second, disagreeing source of
+    the same number one import away from the code that enforces it.
+
+    The delegation fields are projected precisely because they are not like it:
+    depth, child count and the child pool's size are answered inside one run, in
+    one process, by a scope that lives exactly as long as the run does.
     """
 
     #: How many agent nodes the compiled graph may declare. Checked at assembly:
@@ -538,6 +554,15 @@ class MultiAgentConfig:
     max_tokens_per_agent_invocation: int
     max_cost_micro_usd_per_agent_invocation: int | None
     max_seconds_per_agent_invocation: int | None
+    #: Whether a run may start another run from inside its tool loop (ADR-082),
+    #: and the two ceilings on the tree if it may. Projected -- unlike the
+    #: attempt counter above -- because all three are answered inside one
+    #: process: the depth and the child count are properties of a single run,
+    #: not of a Task across reclaims.
+    delegation_enabled: bool
+    max_delegation_depth: int
+    max_children_per_run: int
+    max_parallel_child_invocations: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -795,6 +820,7 @@ def project_task(settings: Settings) -> TaskConfig:
             external_search=settings.research.enabled,
             mcp_tools=configured_mcp_tool_names(settings),
             sandbox=settings.sandbox.enabled,
+            delegation=settings.multi_agent.delegation_enabled,
         ),
         export_requires_approval=settings.workflow.export_requires_approval,
     )
@@ -895,6 +921,12 @@ def project_task_worker(
             ),
             max_seconds_per_agent_invocation=(
                 settings.multi_agent.max_seconds_per_agent_invocation
+            ),
+            delegation_enabled=settings.multi_agent.delegation_enabled,
+            max_delegation_depth=settings.multi_agent.max_delegation_depth,
+            max_children_per_run=settings.multi_agent.max_children_per_run,
+            max_parallel_child_invocations=(
+                settings.multi_agent.max_parallel_child_invocations
             ),
         ),
         research=_project_research(settings),

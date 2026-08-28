@@ -721,6 +721,39 @@ class MultiAgentSettings(StrictModel):
     #: allowance again: the alternative is a deadline stored with the Task,
     #: which would make a node that waited out an outage unrunnable forever.
     max_seconds_per_agent_invocation: int | None = Field(default=None, ge=1, le=86_400)
+    #: Whether a run may start another run from inside its own tool loop
+    #: (ADR-082). Off by default, and the staging is the point: every ceiling
+    #: above describes the *compiled graph*, whose shape is known at assembly,
+    #: while a delegated run is decided by a model mid-loop. A deployment that
+    #: has not looked at what its agents do with the graph they have is not one
+    #: that can judge what they would do with the ability to start more.
+    delegation_enabled: bool = False
+    #: The deepest a delegated run may sit. ``1`` means a run a person asked
+    #: for may delegate, and what it delegates to may not.
+    #:
+    #: Not merely a counter: ``permitted_child_tools`` removes the delegation
+    #: tools from the last generation's toolbox, so this bounds the tree by
+    #: making the deeper call unwritable rather than by refusing it afterwards.
+    max_delegation_depth: int = Field(default=1, ge=1, le=4)
+    #: How many sub-agents one run may start over its whole life. Distinct from
+    #: `runtime.max_parallel_read_tools`, which bounds how many tool calls are
+    #: in flight at once -- a different question with a different answer.
+    max_children_per_run: int = Field(default=4, ge=1, le=32)
+    #: The delegated runs' **own** concurrency pool, and it is separate from
+    #: `max_parallel_agent_invocations` because sharing one would deadlock.
+    #:
+    #: `BoundedParallelExecutor`'s semaphore is held for the whole invocation. A
+    #: parent waiting inside a tool call holds its slot the entire time its
+    #: child is running, so a child drawing from the same pool waits for a slot
+    #: that cannot be released until the child finishes. At
+    #: `max_parallel_agent_invocations = 3` the graph's own fan-out fills the
+    #: pool and the first delegation hangs until the run's deadline.
+    #:
+    #: The cost of the second pool is stated rather than hidden: a delegating
+    #: deployment runs up to `max_parallel_agent_invocations +
+    #: max_parallel_child_invocations` model loops at once. Defaulted low for
+    #: that reason.
+    max_parallel_child_invocations: int = Field(default=2, ge=1, le=32)
 
     @model_validator(mode="after")
     def validate_agent_budget(self) -> MultiAgentSettings:
@@ -732,6 +765,21 @@ class MultiAgentSettings(StrictModel):
                 "max_parallel_agent_invocations must be <= "
                 "max_agent_invocation_attempts_per_task"
             )
+        if self.delegation_enabled:
+            # The worst case is exponential in the depth, and it is computable
+            # from two numbers an operator typed. Working it out here means a
+            # deployment whose declared tree cannot fit its Task budget fails to
+            # start, rather than discovering halfway through a run that the bill
+            # was never bounded by the number that claimed to bound it.
+            widest = self.max_children_per_run**self.max_delegation_depth
+            if widest > self.max_agent_invocation_attempts_per_task:
+                raise ValueError(
+                    "the deepest delegation tree this configuration permits "
+                    f"({self.max_children_per_run} children to depth "
+                    f"{self.max_delegation_depth} = {widest} runs) exceeds "
+                    "max_agent_invocation_attempts_per_task "
+                    f"({self.max_agent_invocation_attempts_per_task})"
+                )
         return self
 
 
