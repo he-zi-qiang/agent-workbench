@@ -464,3 +464,44 @@ class TestAClippedReportSaysSo:
 
         assert clipped is True
         assert len(text) == 100
+
+
+class TestAReportIsClippedFromTheEnd:
+    """So a sub-agent must put its conclusion at the start.
+
+    `clip_report` keeps `text[:limit]`. Whatever a sub-agent leaves for last is
+    therefore what the parent never receives, and a sub-agent cannot see the
+    limit it is being cut at.
+
+    Measured 2026-08-28 on a real delegating Task: three analysts each returned
+    a complete enumeration of failure modes and each was cut at 8,000
+    characters exactly where its conclusion section began. The parent said so
+    itself in its report -- then spent three more delegations asking for the
+    conclusions alone, and ran into `max_children_per_run`. One truncation
+    turned one round of delegation into two and then blocked the second.
+    """
+
+    def test_the_clip_takes_the_tail_not_the_head(self) -> None:
+        report, clipped = clip_report("ABCDEFGH", 3)
+
+        assert report == "ABC"
+        assert clipped is True
+
+    def test_analyst_is_told_to_lead_with_its_conclusion(self) -> None:
+        prompt = ANALYST.system_prompt
+
+        assert "Open with your conclusion" in prompt
+        # And why, because a bare instruction is what gets reworded away by
+        # whoever next tidies this prompt.
+        assert "cut off at a length you cannot see" in prompt
+
+    def test_researcher_is_told_the_same_thing(self) -> None:
+        """The other definition is clipped by exactly the same function."""
+
+        assert "Lead with the answer itself" in RESEARCHER.system_prompt
+
+    def test_a_short_report_is_untouched_and_says_so(self) -> None:
+        report, clipped = clip_report("short", 100)
+
+        assert report == "short"
+        assert clipped is False

@@ -376,6 +376,7 @@
     "status": "ok",
     "tool_call_id": "toolu_01demo",
     "tool_name": "knowledge_search",
+    "workspace_write_refs": [],
     "workspace_writes": []
   },
   "ToolSpec": {

@@ -1807,7 +1807,14 @@ function ArtifactRail({
 }: {
   artifacts: TaskArtifact[];
   onOpen: (artifact: ArtifactRef) => void;
-  /** Files in the Task's working set: named here, openable nowhere (F-14). */
+  /**
+   * Files in the Task's working set.
+   *
+   * Openable since ADR-088, through the same `onOpen` the artifacts above use
+   * and the same `/v1/artifacts/{id}` behind it -- a working-set entry is an
+   * artifact, so there is one viewer and one authorization check, not two. A
+   * row whose reference did not arrive is still listed and still inert.
+   */
   workspaceWrites: WorkspaceWriteGroup[];
 }) {
   return (
@@ -1849,26 +1856,32 @@ function ArtifactRail({
         </ul>
       )}
 
-      {/* The second group, and it is deliberately not buttons. These names come
-          from `ToolCompleted.workspace_writes`, which ADR-063 publishes
+      {/* The second group. These names come from
+          `ToolCompleted.workspace_writes`, which ADR-063 publishes
           unconditionally -- outside the `record_step_inputs` gate, so they
-          survive a default deployment -- and which this page read none of until
-          now: a Task that rendered three files into its working set showed the
-          reader nothing, not even a count.
+          survive a default deployment -- and which this page read none of
+          before: a Task that rendered three files into its working set showed
+          the reader nothing, not even a count.
 
-          They cannot be opened from here and the heading says so rather than
-          leaving the reader to discover it by clicking. A working-set file is
-          addressed by name inside a session, and the only routes that read one
-          are mounted under `/v1/code/sessions` behind a `mode="code"` check;
-          giving Task its own would be a second authorization surface and a
-          second addressing scheme, which is a boundary change with its own ADR
-          (known-gaps F-14). Naming them is what can be done without one, and it
-          is strictly more than the silence it replaces. */}
+          **They open now (ADR-088), and the reason they could not is worth
+          keeping.** The old note here said opening one would need a Task
+          workspace read surface, which would be a second authorization surface
+          and a second addressing scheme. That was true of a route serving
+          *bytes by name* -- and it stays true, which is why no such route
+          exists. But a working-set entry is stored *as an artifact*
+          (`WorkspaceManifest` binds each name to an `ArtifactRef`), and
+          `/v1/artifacts/{id}` already serves those bytes under the owner check
+          the write recorded. Nothing was missing except the binding, and the
+          write now publishes it.
+
+          A name still opens only when its reference arrived. Events written
+          before ADR-088 carry none, so those rows stay exactly as they were --
+          listed, not openable -- rather than becoming buttons that 404. */}
       {workspaceWrites.length === 0 ? null : (
         <div className="aw-artifacts-workspace">
           <h3>任务工作区里的文件</h3>
           <p className="aw-artifacts-note">
-            这些文件在任务自己的工作区里，不是可下载的产物，控制台打不开它们。
+            这些文件在任务自己的工作区里，不是导出的产物。带链接的可以直接打开。
           </p>
           {workspaceWrites.map((group) => (
             <div key={group.graphNodeId ?? "任务"}>
@@ -1878,9 +1891,30 @@ function ArtifactRail({
                   : workflowStageTitle(group.graphNodeId)}
               </h4>
               <ul className="aw-artifacts-names">
-                {group.names.map((name) => (
-                  <li key={name}>{name}</li>
-                ))}
+                {group.names.map((name) => {
+                  const ref = group.refs.get(name);
+                  return (
+                    <li key={name}>
+                      {ref === undefined ? (
+                        // No reference, so no claim that it can be opened. This
+                        // is what every row looked like before ADR-088, and it
+                        // is what a Task that ran under an older Worker still
+                        // looks like.
+                        name
+                      ) : (
+                        <button
+                          className="aw-artifacts-name-button"
+                          onClick={() => {
+                            onOpen(ref);
+                          }}
+                          type="button"
+                        >
+                          {name}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ))}

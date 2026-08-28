@@ -141,6 +141,26 @@ class ToolResult(VersionedModel):
     #: tool returns before ``session.version`` advances, so there is no name to
     #: forget to clear.
     workspace_writes: tuple[WorkspaceName, ...] = ()
+    #: What each of those names resolved to, at the moment it was written
+    #: (ADR-088).
+    #:
+    #: A workspace entry is stored *as an artifact* -- `WorkspaceManifest`
+    #: binds every name to an `ArtifactRef` -- and `/v1/artifacts/{id}` already
+    #: serves those bytes under the owner check the write itself recorded. So
+    #: the console needs no workspace read route to open one; it needs only to
+    #: know which artifact the name meant. That is this field, and it is the
+    #: whole of what ADR-088 adds.
+    #:
+    #: Parallel to `workspace_writes` rather than folded into it, for the
+    #: reason `project_writes` is parallel too: widening the element type would
+    #: make every existing consumer test which of two shapes it received.
+    #: Pairing is by `ArtifactRef.filename`, never by index -- a producer that
+    #: emitted these in a different order, or emitted one fewer, would
+    #: otherwise mislabel a file rather than simply omit it.
+    #:
+    #: Empty on failure by the same construction that empties `workspace_writes`
+    #: on failure: both are produced only after `session.version` advances.
+    workspace_write_refs: tuple[ArtifactRef, ...] = ()
     #: The same fact for the other file-shaped side (ADR-086).
     #:
     #: A separate field rather than a wider ``workspace_writes``, and the type
@@ -176,6 +196,7 @@ class ToolResult(VersionedModel):
         content: str = "",
         artifact: ArtifactRef | None = None,
         workspace_writes: tuple[WorkspaceName, ...] = (),
+        workspace_write_refs: tuple[ArtifactRef, ...] = (),
         project_writes: tuple[ProjectRelativePath, ...] = (),
         duration_ms: int | None = None,
     ) -> ToolResult:
@@ -186,6 +207,7 @@ class ToolResult(VersionedModel):
             content=content,
             artifact=artifact,
             workspace_writes=workspace_writes,
+            workspace_write_refs=workspace_write_refs,
             project_writes=project_writes,
             duration_ms=duration_ms,
         )
