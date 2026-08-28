@@ -216,6 +216,10 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # that was measured.
 "src/agent_workbench/adapters/tools/delegate.py" = ["RUF002"]
 "tests/adapters/test_delegate_tool.py" = ["RUF002"]
+# 同一条理由，第三处：这条测试的 docstring 里引的是一个 Task 在报告末尾写下的原话
+# （「多 Agent 是模拟的……」），它是这个 profile 为什么必须打开委派的全部证据。把它的
+# 标点规整成 ASCII，留下的就是一份不再是被引之物的引用。
+"tests/config/test_local_console_profile.py" = ["RUF002"]
 
 [tool.pyright]
 pythonVersion = "3.12"

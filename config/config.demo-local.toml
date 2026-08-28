@@ -331,6 +331,31 @@ export_requires_approval = false
 # here (measured failing at the then-shipped 16000 on both narrow profiles).
 # The shipped default now carries the measured value; see config.default.toml.
 
+[multi_agent]
+# 2026-08-28 打开。出厂是关的（`config.default.toml`），而 ADR-082 把这件事明写成
+# **配置问题而不是版本问题**：关着的时候 `delegate_agent` 不注册、不进任何 Task 的
+# 授权信封，profile 原样不变。
+#
+# 这条改的起因是一句用户反馈——控制台里一个 Task 在报告末尾如实写道：
+#
+#   「多 Agent 是模拟的：我是一个 agent，无法真正并行拉起多个独立 Agent；本次是将
+#     调研拆成 A/B/C/D 四个角色的分工并由汇总环节成稿。」
+#
+# **模型没有说错，它在如实汇报自己的工具目录。** 说错的是这个部署：它是控制台实际
+# 跑的那个 profile，文档把多 agent 当作既有能力介绍，而这里从来没打开过它——于是
+# 一个被问到「派几个子代理」的回合，手上根本没有那件工具，只能扮演。
+#
+# 一个宣称有 spawn 的部署，把 spawn 关着，就是让模型替这个配置去圆场。
+#
+# 代价是真的并且是设计出来的：信封里多一件 `delegate_agent`，每个 Task 都因此变宽；
+# 上限由下面几个出厂值兜着（一次运行最多 4 个子代理、深度 1、每次调用 120000 token、
+# 一个 Task 最多 12 次调用）。校验器在启动时算最坏情况的树能不能装进 Task 预算
+# （`4^1 = 4 ≤ 12`，`settings.py`），装不下就起不来，而不是跑到一半才发现。
+#
+# **只开控制台这一个 profile。** 出厂默认仍然关着，理由不变：这个仓库不替别人的部署
+# 决定要不要 spawn。
+delegation_enabled = true
+
 [optional_labs]
 mcp_adapter = true
 

@@ -529,3 +529,68 @@ def test_the_shipped_default_still_documents_the_pair_it_does_not_raise(
     # reading the runtime source.
     assert text.count("model_timeout_seconds") >= 2
     assert "timeout_seconds`" in text
+
+
+def test_the_console_can_actually_delegate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The console profile has to answer the question its docs answer for it.
+
+    `delegation_enabled` ships `false` and ADR-082 states why: with it off the
+    tool is not registered and enters no Task's envelope, so "does this
+    deployment have spawn" is a configuration question rather than a version
+    question. This profile is the one the console actually runs, and until
+    2026-08-28 it never answered that question -- while README described
+    multi-agent as a capability.
+
+    What that cost is on record, in a Task's own words:
+
+        多 Agent 是模拟的：我是一个 agent，无法真正并行拉起多个独立 Agent；
+        本次是将调研拆成 A/B/C/D 四个角色的分工并由汇总环节成稿。
+
+    The model was not wrong. It was reporting its tool catalogue accurately,
+    and a deployment that advertises spawn while shipping it off is one that
+    makes the model cover for the configuration.
+    """
+
+    settings = _load_profile(monkeypatch, DEMO_CONFIG)
+
+    assert settings.multi_agent.delegation_enabled is True
+    # And the shipped default stays off, because this repository does not
+    # decide for somebody else's deployment.
+    assert (
+        _load_profile(monkeypatch, DEFAULT_CONFIG).multi_agent.delegation_enabled
+        is False
+    )
+
+
+def test_the_widest_tree_this_profile_permits_fits_its_task_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Asserted here as well as in the validator, because turning delegation on
+    is what makes that validator's arithmetic reachable at all -- and the two
+    numbers it multiplies are both editable in this file."""
+
+    multi = _load_profile(monkeypatch, DEMO_CONFIG).multi_agent
+    widest = multi.max_children_per_run**multi.max_delegation_depth
+
+    assert widest <= multi.max_agent_invocation_attempts_per_task
+
+
+def test_there_is_one_console_launch_path_not_two(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No launch configuration may hand the console a capability the profile
+    withholds.
+
+    A second entry that exported `AW_MULTI_AGENT__DELEGATION_ENABLED=true`
+    existed while the profile said nothing, and it was deleted when the profile
+    spoke. Keeping both would make "does this console do multi-agent" a
+    question about which command you typed rather than about the deployment.
+    """
+
+    launch = ROOT / ".claude/launch.json"
+    if not launch.exists():  # pragma: no cover - the file is developer-local
+        pytest.skip(".claude/launch.json is not present in this checkout")
+
+    text = launch.read_text(encoding="utf-8")
+
+    assert "AW_MULTI_AGENT__DELEGATION_ENABLED" not in text
