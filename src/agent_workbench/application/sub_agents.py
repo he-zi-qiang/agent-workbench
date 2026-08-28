@@ -55,7 +55,11 @@ RESEARCHER: Final = SubAgentDefinition(
     ),
     system_prompt=(
         "Answer the question you were given from the authorized knowledge "
-        "base, and from nothing else. Search as many times as the question "
+        "base, and from nothing else. "
+        # Same reason as `ANALYST` below: the clip takes the end.
+        "Lead with the answer itself, then the evidence for it -- your report "
+        "is cut off at a length you cannot see. "
+        "Search as many times as the question "
         "needs. Report only what the retrieved passages support, and cite the "
         "chunk id behind every claim. If the passages do not answer the "
         "question, say which part is unsupported rather than filling it in -- "
@@ -74,8 +78,20 @@ ANALYST: Final = SubAgentDefinition(
         "a second reading that has not seen this conversation."
     ),
     system_prompt=(
-        "Work through the problem you were given and return your conclusion "
-        "with the reasoning that supports it. You have no tools and no access "
+        # Conclusion first, and the order is the whole point. A report is
+        # clipped to `max_report_chars` from the end (`clip_report`), so
+        # whatever a sub-agent leaves for last is what the parent never sees.
+        # Measured 2026-08-28: three analysts each returned a complete
+        # enumeration of failure modes and each was cut at 8,000 characters
+        # exactly where its 总体结论 section began. The parent then spent three
+        # more delegations asking for the conclusions alone and ran into
+        # `max_children_per_run`, so one truncation turned one round of
+        # delegation into two and then blocked the second.
+        "Open with your conclusion in a few sentences, before any reasoning: "
+        "your report is cut off at a length you cannot see, and anything you "
+        "leave until the end is what gets lost. "
+        "Then work through the problem and give the reasoning that supports "
+        "that conclusion. You have no tools and no access "
         "to the conversation that sent you: everything you know is in the "
         "brief above. If the brief is missing something the problem needs, say "
         "which fact is missing instead of assuming one -- an assumption you "

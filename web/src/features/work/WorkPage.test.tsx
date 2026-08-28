@@ -797,12 +797,72 @@ describe("WorkPage task submission", () => {
     const rail = await screen.findByRole("complementary", { name: "产出文件" });
     expect(within(rail).getByText("draft.md")).toBeInTheDocument();
     expect(within(rail).getByText("chart.png")).toBeInTheDocument();
-    // Names, not controls. An affordance here would invite exactly the click
-    // the heading above it has just said is unavailable.
+    // Names, not controls -- because this event carries no
+    // `workspace_write_refs`. ADR-088 makes these openable *when the reference
+    // arrived*; an event written before it did, or one whose manifest lookup
+    // failed, has to stay exactly as it was rather than becoming a button that
+    // opens nothing. That backward case is what this asserts.
     expect(
       within(rail).queryByRole("button", { name: /draft\.md/ }),
     ).not.toBeInTheDocument();
-    expect(within(rail).getByText(/控制台打不开它们/)).toBeInTheDocument();
+    expect(within(rail).getByText(/带链接的可以直接打开/)).toBeInTheDocument();
+  });
+
+  it("工作集文件带着引用回来时，可以直接点开（ADR-088）", async () => {
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "写一份报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    const timeline = reportTimeline();
+    vi.mocked(getTaskTimeline).mockResolvedValue({
+      ...timeline,
+      events: [
+        ...timeline.events,
+        {
+          schema_version: 1,
+          stream_id: "stream_run",
+          run_id: "run_run",
+          durability: "durable" as const,
+          task_id: "task_run",
+          parent_event_id: null,
+          graph_node_id: "work",
+          event_id: "event_ws2",
+          event_type: "ToolCompleted",
+          timestamp: "2026-08-02T12:00:30Z",
+          payload: {
+            kind: "ToolCompleted",
+            tool_call_id: "tc_ws2",
+            workspace_writes: ["draft.md"],
+            workspace_write_refs: [
+              {
+                schema_version: 1,
+                artifact_id: "art_draft",
+                tenant_id: "tenant_local",
+                kind: "workspace_entry",
+                media_type: "text/markdown",
+                size_bytes: 12,
+                sha256: "c".repeat(64),
+                filename: "draft.md",
+              },
+            ],
+          },
+          sequence: 9,
+        },
+      ],
+    });
+    renderWorkPage("/work/task_run");
+
+    const rail = await screen.findByRole("complementary", { name: "产出文件" });
+    // 一个真的按钮，走的是产物那一栏同一个 onOpen、同一条
+    // `/v1/artifacts/{id}`——一个查看器、一次鉴权，不是两套。
+    expect(
+      within(rail).getByRole("button", { name: /draft\.md/ }),
+    ).toBeInTheDocument();
   });
 
   it("says a run failed even when it managed to produce a file", async () => {

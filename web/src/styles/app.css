@@ -5479,6 +5479,28 @@ p.aw-code-step-thought {
   word-break: break-all;
 }
 
+/* A working-set file that came back with its reference (ADR-088). Underlined
+   rather than button-shaped: it sits in a bulleted list beside rows that are
+   *not* openable -- the ones whose events predate that ADR -- and the two have
+   to be tellable apart at a glance. A shape difference does that; a colour
+   difference alone would not survive the muted palette this list is drawn in. */
+.aw-artifacts-name-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+  cursor: pointer;
+}
+
+.aw-artifacts-name-button:hover {
+  text-decoration-thickness: 2px;
+}
+
 /* The artifact heading's subtitle: the filename, under the kind that names it.
    Muted and monospace so it reads as an identifier rather than as a second
    title competing with the one beside it. */

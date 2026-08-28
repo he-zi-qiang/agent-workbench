@@ -35,6 +35,7 @@ from agent_workbench.application.workspace import (
     WorkspaceSession,
 )
 from agent_workbench.application.workspace_scope import WorkspaceScope
+from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import ErrorInfo, ToolFailedError
 from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.domain.workspace import (
@@ -113,6 +114,33 @@ def _session(scope: WorkspaceScope) -> WorkspaceSession:
             "no workspace session is entered for this node invocation"
         )
     return session
+
+
+async def _resolve(session: WorkspaceSession, name: str) -> tuple[ArtifactRef, ...]:
+    """What ``name`` binds at the version this write just produced (ADR-088).
+
+    One manifest read per write, on the *writing* side so that the reading side
+    needs no request at all. The manifest holds references and never content --
+    it is small by construction -- and it was produced by the write a line
+    above, so this is the hottest read in the process.
+
+    Failure to resolve is not failure to write. The bytes are stored and the
+    version has advanced; all that is missing is the console's shortcut to
+    them, and turning a successful write into a failed tool call over that
+    would be the tail wagging the dog. An empty tuple degrades to exactly the
+    behaviour before this field existed: the name is listed and not openable.
+    """
+
+    # `load` rather than `Workspace.locate`, which does the same two steps:
+    # `load` is on the `WorkspaceLike` protocol and `locate` is not, and
+    # widening a protocol that two implementations satisfy is a larger change
+    # than the lookup it would save.
+    try:
+        manifest = await session.workspace.load(session.version)
+    except (KeyError, ValueError):
+        return ()
+    entry = manifest.entries.get(name)
+    return () if entry is None else (entry,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +360,12 @@ class WorkspaceWriteTool:
             # to report and reports none -- the field is empty by construction
             # rather than by remembering to clear it.
             workspace_writes=(name,),
+            # And what that name now binds (ADR-088), so a console can open the
+            # file without a workspace read route: the entry is already an
+            # artifact and `/v1/artifacts/{id}` already serves it. Resolved
+            # against the version this write just produced, which is the only
+            # version at which this answer is true.
+            workspace_write_refs=await _resolve(session, name),
         )
 
 
@@ -506,6 +540,8 @@ class WorkspaceEditTool:
             # new version; every refusal above -- binary, no match, overflow --
             # returns first and leaves the session's version untouched.
             workspace_writes=(name,),
+            # ADR-088, same as the write tool above.
+            workspace_write_refs=await _resolve(session, name),
         )
 
 

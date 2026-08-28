@@ -616,6 +616,11 @@ class ToolCompleted(DomainModel):
     #: Which workspace names this call bound to new bytes. Not a preview and
     #: not gated; see the note above.
     workspace_writes: tuple[WorkspaceName, ...] = ()
+    #: What those names resolved to when they were written (ADR-088). Same
+    #: standing as the names beside them, and outside the same gate: an
+    #: artifact id is a structured fact, not content, and fetching it still
+    #: passes the owner check the write recorded.
+    workspace_write_refs: tuple[ArtifactRef, ...] = ()
     #: Which project-relative paths this call wrote (ADR-086). Outside the gate
     #: for the same reason as the line above -- a path is not content, and the
     #: principal reading this event can already list the directory it names.

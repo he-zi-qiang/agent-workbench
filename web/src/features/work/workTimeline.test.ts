@@ -555,9 +555,121 @@ describe("work timeline contract selectors", () => {
     ]);
 
     expect(groups).toEqual([
-      { graphNodeId: "work", names: ["draft.md", "helper.py", "chart.png"] },
-      { graphNodeId: "export", names: ["report.md"] },
+      {
+        graphNodeId: "work",
+        names: ["draft.md", "helper.py", "chart.png"],
+        refs: new Map(),
+      },
+      { graphNodeId: "export", names: ["report.md"], refs: new Map() },
     ]);
+  });
+
+  it("把名字配到它当时绑的那件 artifact 上（ADR-088）", () => {
+    // 按 filename 配，不按下标——ADR-088 §4。少发一个引用只该让那一行打不开，
+    // 而不是让它后面每一行都指向错的文件。
+    const ref = (id: string, filename: string) => ({
+      schema_version: 1,
+      artifact_id: id,
+      tenant_id: "tenant_local",
+      kind: "workspace_entry",
+      media_type: "text/markdown",
+      size_bytes: 12,
+      sha256: "a".repeat(64),
+      filename,
+    });
+
+    const groups = collectWorkspaceWrites([
+      envelope(
+        "e1",
+        "ToolCompleted",
+        {
+          // 顺序与 refs 故意不同。
+          workspace_writes: ["a.md", "b.md"],
+          workspace_write_refs: [ref("art_b", "b.md"), ref("art_a", "a.md")],
+        },
+        "work",
+      ),
+    ]);
+
+    const only = groups[0];
+    if (only === undefined) throw new Error("expected one group");
+    expect(only.names).toEqual(["a.md", "b.md"]);
+    expect(only.refs.get("a.md")?.artifact_id).toBe("art_a");
+    expect(only.refs.get("b.md")?.artifact_id).toBe("art_b");
+  });
+
+  it("没有引用的名字照旧只是名字，不会变成一颗打不开的按钮", () => {
+    // ADR-088 之前写下的事件不带引用，那些行必须原样保留——列出来、不可点。
+    const groups = collectWorkspaceWrites([
+      envelope("e1", "ToolCompleted", { workspace_writes: ["old.md"] }, "work"),
+    ]);
+
+    const only = groups[0];
+    if (only === undefined) throw new Error("expected one group");
+    expect(only.names).toEqual(["old.md"]);
+    expect(only.refs.size).toBe(0);
+  });
+
+  it("同一个名字被写第二次时，绑的是较新的那件", () => {
+    // manifest 一个名字只绑一件 artifact，最新的那次写入就是这个名字的含义。
+    const ref = (id: string) => ({
+      schema_version: 1,
+      artifact_id: id,
+      tenant_id: "tenant_local",
+      kind: "workspace_entry",
+      media_type: "text/markdown",
+      size_bytes: 12,
+      sha256: "b".repeat(64),
+      filename: "draft.md",
+    });
+
+    const groups = collectWorkspaceWrites([
+      envelope(
+        "e1",
+        "ToolCompleted",
+        { workspace_writes: ["draft.md"], workspace_write_refs: [ref("art_v1")] },
+        "work",
+      ),
+      envelope(
+        "e2",
+        "ToolCompleted",
+        { workspace_writes: ["draft.md"], workspace_write_refs: [ref("art_v2")] },
+        "work",
+      ),
+    ]);
+
+    const only = groups[0];
+    if (only === undefined) throw new Error("expected one group");
+    expect(only.refs.get("draft.md")?.artifact_id).toBe("art_v2");
+  });
+
+  it("坏掉的引用被丢掉，而不是被送到一个下载地址上", () => {
+    const groups = collectWorkspaceWrites([
+      envelope(
+        "e1",
+        "ToolCompleted",
+        {
+          workspace_writes: ["x.md"],
+          // sha256 不合法：走的是这个页面上每个引用都要过的同一个校验器。
+          workspace_write_refs: [
+            {
+              artifact_id: "art_x",
+              kind: "workspace_entry",
+              media_type: "text/markdown",
+              size_bytes: 1,
+              sha256: "not-a-digest",
+              filename: "x.md",
+            },
+          ],
+        },
+        "work",
+      ),
+    ]);
+
+    const only = groups[0];
+    if (only === undefined) throw new Error("expected one group");
+    expect(only.names).toEqual(["x.md"]);
+    expect(only.refs.size).toBe(0);
   });
 
   it("keeps one name in two stages as two facts", () => {

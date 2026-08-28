@@ -434,6 +434,16 @@ export interface WorkspaceWriteGroup {
   graphNodeId: string | null;
   /** Names, first-write order, deduplicated within this group. */
   names: string[];
+  /**
+   * What each name bound when it was written (ADR-088), keyed by name.
+   *
+   * Partial on purpose. A name is listed whether or not a reference came with
+   * it: events written before ADR-088, and the one path where resolving the
+   * manifest failed, still produced the name. A missing entry therefore means
+   * "not openable", never "not written" -- which is exactly the state this
+   * whole rail was in before.
+   */
+  refs: Map<string, ArtifactRef>;
 }
 
 /**
@@ -478,7 +488,7 @@ export function collectWorkspaceWrites(
     const key = event.graph_node_id ?? "\u0000";
     let group = groups.get(key);
     if (group === undefined) {
-      group = { graphNodeId: event.graph_node_id, names: [] };
+      group = { graphNodeId: event.graph_node_id, names: [], refs: new Map() };
       groups.set(key, group);
     }
     for (const name of written) {
@@ -486,6 +496,23 @@ export function collectWorkspaceWrites(
       // non-string here would render as `[object Object]` in a file list.
       if (typeof name !== "string" || name === "") continue;
       if (!group.names.includes(name)) group.names.push(name);
+    }
+    // Paired by `filename`, never by position (ADR-088 §4). Index alignment
+    // would turn a producer that emitted one fewer reference into a list where
+    // every name after the gap points at the wrong file -- and a wrong file
+    // opens silently, where a missing one merely stays unopenable.
+    const refs = event.payload.workspace_write_refs;
+    if (!Array.isArray(refs)) continue;
+    for (const raw of refs) {
+      // The same validator every other reference on this page goes through, so
+      // a malformed one is dropped here rather than reaching a download URL.
+      const ref = parseArtifactRef(raw);
+      if (ref === null) continue;
+      const filename = ref.filename;
+      if (typeof filename !== "string" || filename === "") continue;
+      // A later write of the same name supersedes an earlier one: the manifest
+      // binds one artifact per name, and the newest is what that name means.
+      group.refs.set(filename, ref);
     }
   }
   return [...groups.values()].filter((group) => group.names.length > 0);

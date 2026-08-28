@@ -1155,6 +1155,10 @@ class ToolGateway:
                 # field precisely where previews are off, i.e. everywhere it is
                 # the only machine-readable answer left.
                 workspace_writes=result.workspace_writes,
+                # And what each of them resolved to (ADR-088). Same gate
+                # argument, one step further: an id discloses less than a
+                # name and still opens nothing without the owner check.
+                workspace_write_refs=result.workspace_write_refs,
                 # Same standing, same argument, other store (ADR-086).
                 project_writes=result.project_writes,
             )
