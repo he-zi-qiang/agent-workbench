@@ -84,13 +84,36 @@ def _description(catalogue: SubAgentCatalogue) -> str:
     The names alone would make the model guess; the descriptions are what let it
     choose. Kept to one line each because this text is prepended to every
     request the parent makes for the rest of its run.
+
+    **The sentence about not writing the answer yourself is load-bearing, and
+    it was added after watching a run do exactly that.** Asked to delegate three
+    analyses, the model opened with "好的，我按 coordinator 的角色执行" and then
+    wrote all three analyses out in prose -- headed `# Analyst A 返回：`, as
+    though quoting reports it had not yet requested -- *before* calling this
+    tool for real. The work was done twice: once as narration, once as six tool
+    calls. Measured on that run, the parent's own turns produced ~34,000
+    characters against the ~32,000 its four children were bounded to return,
+    and because ``max_total_tokens`` counts each turn's whole prompt, a long
+    passage left in the transcript costs its length multiplied by the number of
+    turns still to come. The run died on ``token_budget`` having spent most of
+    it re-reading its own dress rehearsal.
+
+    A tool description is the right place for it rather than a node prompt:
+    this text is what every profile holding this tool reads, and the mistake is
+    about *this tool*, not about any one graph node.
     """
 
     lines = [
         "Delegate a self-contained piece of work to a sub-agent and receive its "
         "report. The sub-agent starts from your prompt alone: it inherits none "
         "of this conversation, so state everything it needs. It runs to "
-        "completion before this call returns. Available sub-agents:"
+        "completion before this call returns. "
+        "Delegating is this call and nothing else: do not describe the "
+        "delegation, do not announce which sub-agents you are about to use, and "
+        "never write the sub-agent's findings yourself -- its report arrives as "
+        "this call's result, so anything you compose beforehand is work done "
+        "twice and stays in your context for every turn that follows. "
+        "Available sub-agents:"
     ]
     lines.extend(
         f"- {definition.name}: {definition.description}"

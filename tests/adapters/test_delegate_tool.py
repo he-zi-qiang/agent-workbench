@@ -665,6 +665,33 @@ class TestTheSpecDescribesThisDeploymentAndNotAnother:
         assert "researcher" in spec.description
         assert "analyst" in spec.description
 
+    def test_the_description_forbids_writing_the_report_the_call_returns(
+        self,
+    ) -> None:
+        """Measured 2026-08-28, and the reason this sentence exists.
+
+        A `work` node asked to delegate three analyses opened with
+        ``好的，我按 coordinator 的角色执行`` and wrote all three analyses out in
+        prose -- headed ``# Analyst A 返回：`` -- before calling this tool for
+        real. The work was done twice. Its own turns produced ~34,000 characters
+        against the ~32,000 its children were bounded to return, and since
+        ``max_total_tokens`` counts every turn's whole prompt, that passage cost
+        its length once per remaining turn. The run died on ``token_budget``.
+
+        Asserted on the description rather than on a model's behaviour because
+        that is the half this repository controls: whether the instruction is
+        present is a fact about the build, whether it is obeyed is not.
+        """
+
+        description = spec_for(CATALOGUE).description
+
+        # The instruction, not merely the word "delegate".
+        assert "do not describe the delegation" in description
+        assert "never write the sub-agent's findings yourself" in description
+        # And the reason, because a bare prohibition is the kind of line that
+        # gets trimmed by whoever next shortens this text.
+        assert "work done" in description and "twice" in description
+
     def test_delegation_is_declared_read_and_therefore_stays_parallel(self) -> None:
         """Not a stylistic claim. ``validate_risk_consistency`` forces every
         write tool to be exclusive, and an exclusive delegation tool could not

@@ -207,6 +207,15 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # the point of that file is that python-docx opens a package this project did
 # not write, so a reformatted namespace would be testing a different file.
 "tests/ingestion/test_docx_parsing.py" = ["E501"]
+# RUF002, and the same reasoning as `code_prompt.py` above one rule along: the
+# Chinese here is a *docstring* quoting, verbatim, what a model actually wrote
+# before this tool description told it not to -- `好的，我按 coordinator 的角色
+# 执行` and the `# Analyst A 返回：` heading it invented. That quote is the
+# evidence for why the sentence beneath it exists. Normalising its punctuation
+# to ASCII would leave a record of a measurement that is no longer the thing
+# that was measured.
+"src/agent_workbench/adapters/tools/delegate.py" = ["RUF002"]
+"tests/adapters/test_delegate_tool.py" = ["RUF002"]
 
 [tool.pyright]
 pythonVersion = "3.12"
