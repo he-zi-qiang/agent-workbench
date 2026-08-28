@@ -259,6 +259,48 @@ describe("停下来的运行要说清它为什么停", () => {
     ).toBeInTheDocument();
   });
 
+  it("撞输出上限的子运行说的是「一次话太长」，不是「总额用完了」", () => {
+    // 这一条钉的是一行自相矛盾的界面。实测：`token 预算用尽` 配着 `17.2k/30.0k`
+    // ——一个没满的分数——再配一句没翻译的英文。三段要读者自己去调和，而正确
+    // 的读法是：撞的根本不是这里显示的那个上限。
+    draw(
+      delegated(
+        event(CHILD, "RunStarted", 3, {
+          budget: budget({ max_total_tokens: 30_000 }),
+        }),
+        event(CHILD, "RunFailed", 4, {
+          stop_reason: "token_budget",
+          error: {
+            code: "budget_exceeded",
+            message: "the model stopped at its output token ceiling",
+          },
+          usage: usage(900, 16_384),
+        }),
+      ),
+    );
+
+    expect(screen.getByText(/单次回答/)).toBeInTheDocument();
+    // 那句没翻译的英文原话不该再出现在行上。
+    expect(screen.queryByText(/output token ceiling/)).not.toBeInTheDocument();
+  });
+
+  it("没学过的失败句子仍然原样显示服务端的原话", () => {
+    draw(
+      delegated(
+        event(CHILD, "RunStarted", 3, { budget: budget() }),
+        event(CHILD, "RunFailed", 4, {
+          stop_reason: "error",
+          error: { code: "tool_timeout", message: "web_search exceeded 30s" },
+          usage: usage(900, 100),
+        }),
+      ),
+    );
+
+    expect(
+      screen.getByText("工具执行超时：web_search exceeded 30s"),
+    ).toBeInTheDocument();
+  });
+
   it("撞上天花板停下来的运行说的是天花板，而不只是「已完成」", () => {
     draw(
       delegated(

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 
 import { shortId } from "../../components/ui";
-import { errorCodeLabel } from "./failure";
+import { errorCodeLabel, explainRunFailure } from "./failure";
 import {
   flattenRuns,
   totalSpend,
@@ -217,10 +217,17 @@ function RunRow({
   // Its own account where it has one. `AgentCompleted` carries no error, so a
   // child whose `RunFailed` is not in this page keeps 失败 with nothing after
   // it -- second-hand that it failed is not second-hand knowledge of why.
+  // The server's own sentence where this repository has not learned it yet,
+  // and a precise Chinese one where it has. The code label is the prefix only
+  // in the fallback: `超出了这次任务的步数或 token 预算` covers two different
+  // ceilings, so pairing it with a sentence that already names one just makes
+  // the reader read past it.
+  const explained = node.failure === null ? null : explainRunFailure(node.failure.message);
   const failure =
     node.failure === null
       ? null
-      : `${errorCodeLabel(node.failure.code)}：${node.failure.message}`;
+      : (explained ??
+        `${errorCodeLabel(node.failure.code)}：${node.failure.message}`);
 
   return (
     <li className={`aw-run-row${selected ? " is-selected" : ""} is-${node.status}`}>

@@ -135,6 +135,10 @@ const TOOL_VERBS: Readonly<Record<string, string>> = {
   project_edit: "修改项目目录文件",
   project_list: "查看项目目录",
   project_grep: "搜索项目目录",
+  // ADR-082. Without a phrase here the busiest row of a delegating Task read
+  // `delegate_agent ×6` -- the raw identifier, in a line whose every other
+  // entry was Chinese, naming the one action that makes the Task multi-agent.
+  delegate_agent: "委派子代理",
   export_artifact: "导出报告",
   sandbox_run: "运行代码",
   // Not 运行代码, which is `sandbox_run`'s phrase and describes a throwaway
@@ -512,21 +516,62 @@ function text(value: unknown): string | null {
  * polls and the biggest thing leads. Truncated at three kinds, because past
  * that it stops being a line and starts being the list it is standing in for.
  */
+/**
+ * Titles that describe the machinery rather than the work.
+ *
+ * A stage that called the model nine times did not do nine notable things; it
+ * did one thing nine turns long. Ranked below everything else so it never
+ * leads a summary -- measured on a real delegating Task, whose `work` stage
+ * summarised as "模型作答 ×9 · delegate_agent ×6 · 子代理已委派 ×4 · 等 8 项",
+ * a line that puts the least informative kind first and pushes the failure
+ * that ended the stage into the "等 8 项".
+ */
+const ROUTINE_TITLES: ReadonlySet<string> = new Set(["模型作答", "构建上下文"]);
+
+/**
+ * One line for what a stage did, led by what a reader is scanning for.
+ *
+ * **Significance before frequency, and that ordering is the whole point.** The
+ * first version ranked purely by count, on the reasoning that the commonest
+ * kind is the most representative. It is not: the commonest kind in almost
+ * every stage is the model turn, and the thing a reader opens a stage to find
+ * is the step that failed. Counting put those in the opposite order.
+ *
+ * Three bands, and within a band the old rule still applies (count, then first
+ * appearance, so the line does not reshuffle between polls):
+ *
+ * 1. kinds that **failed or were denied** -- the reason anybody reads this;
+ * 2. ordinary work;
+ * 3. `ROUTINE_TITLES` -- the machinery, which never leads.
+ */
 export function summariseGroups(groups: readonly StepGroup[]): string {
   const counts = new Map<string, number>();
+  // A kind is "unsettled" if any of its groups ended badly. Tracked per title
+  // rather than per group because the line names kinds, and one failed call
+  // out of six is still the half of "读取网页 ×6" worth surfacing.
+  const unsettled = new Set<string>();
   for (const group of groups) {
     counts.set(group.title, (counts.get(group.title) ?? 0) + 1);
+    if (group.outcome === "failed" || group.outcome === "denied") {
+      unsettled.add(group.title);
+    }
   }
   const kinds = [...counts.entries()];
   if (kinds.length === 0) return "";
 
+  const band = (title: string): number => {
+    if (unsettled.has(title)) return 0;
+    return ROUTINE_TITLES.has(title) ? 2 : 1;
+  };
+
   const ranked = kinds
-    .map(([title, count], index) => ({ title, count, index }))
-    .sort((left, right) =>
-      left.count === right.count
+    .map(([title, count], index) => ({ title, count, index, band: band(title) }))
+    .sort((left, right) => {
+      if (left.band !== right.band) return left.band - right.band;
+      return left.count === right.count
         ? left.index - right.index
-        : right.count - left.count,
-    );
+        : right.count - left.count;
+    });
   const shown = ranked.slice(0, 3);
   // `×1` says nothing a title does not, and a row of them reads like a table.
   const parts = shown.map(({ title, count }) =>
