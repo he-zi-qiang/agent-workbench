@@ -2614,14 +2614,58 @@ pre {
   list-style: none;
 }
 
+/* Nested lists carry the tree in the DOM, so a screen reader hears "who
+   started whom" instead of being read a flat run of siblings. They add no
+   inset of their own: the indent is `--aw-run-depth` on the row, which keeps
+   every row full-bleed and therefore hoverable and selectable across its whole
+   width, however deep it sits. */
+.aw-run-list.is-group {
+  padding: 0;
+}
+
+.aw-run-line {
+  display: flex;
+  align-items: center;
+  /* The indent is the tree. Driven by a custom property so the depth is set
+     where the depth is known, rather than by a class per level. */
+  padding-left: calc(var(--aw-run-depth, 0) * 20px);
+}
+
+/* 44px is this repository's minimum touch target, and a disclosure that only
+   fits the glyph is the one control here a thumb has to hit exactly. The width
+   stays narrow so the indent still reads as depth; the height is what a finger
+   needs. */
+.aw-run-disclosure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 22px;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+}
+
+.aw-run-disclosure:hover {
+  color: var(--aw-text);
+}
+
+/* A leaf keeps the column so its status icon lines up with its siblings'. */
+.aw-run-disclosure.is-empty {
+  cursor: default;
+}
+
 .aw-run-row-button {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  /* The indent is the tree. Driven by a custom property so the depth is set
-     where the depth is known, rather than by a class per level. */
-  padding: 6px 12px 6px calc(12px + var(--aw-run-depth, 0) * 20px);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: 6px 12px 6px 0;
   border: 0;
   background: transparent;
   color: inherit;
@@ -2630,11 +2674,11 @@ pre {
   cursor: pointer;
 }
 
-.aw-run-row-button:hover {
+.aw-run-row:hover > .aw-run-line {
   background: var(--aw-surface-hover, rgb(255 255 255 / 4%));
 }
 
-.aw-run-row.is-selected .aw-run-row-button {
+.aw-run-row.is-selected > .aw-run-line {
   background: var(--aw-surface-hover, rgb(255 255 255 / 6%));
 }
 
@@ -2644,15 +2688,15 @@ pre {
   color: var(--aw-text-muted);
 }
 
-.aw-run-row.is-running .aw-run-status {
+.aw-run-row.is-running > .aw-run-line .aw-run-status {
   color: var(--aw-accent);
 }
 
-.aw-run-row.is-failed .aw-run-status {
+.aw-run-row.is-failed > .aw-run-line .aw-run-status {
   color: var(--aw-danger);
 }
 
-.aw-run-row.is-completed .aw-run-status {
+.aw-run-row.is-completed > .aw-run-line .aw-run-status {
   color: var(--aw-success, var(--aw-text-muted));
 }
 
@@ -2676,6 +2720,16 @@ pre {
   letter-spacing: 0.04em;
 }
 
+/* Which model this run was started under. Muted, because it is the answer to
+   a question the reader only sometimes has -- but present, because a sub-agent
+   on a different profile from its parent is otherwise invisible here. */
+.aw-run-profile {
+  flex: none;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10px;
+}
+
 .aw-run-meta {
   display: flex;
   flex: none;
@@ -2686,21 +2740,61 @@ pre {
   white-space: nowrap;
 }
 
-/* What it is doing *now*. Deliberately the only live field: a run does not
-   know how many steps it will take, so a progress bar here could only be a
-   fraction over an invented denominator. */
+/* What it is doing *now*. The one live field: a run does not know how many
+   steps it will take, so nothing here can be a fraction of its completion. */
 .aw-run-activity {
   color: var(--aw-accent);
+}
+
+/* Waiting is not working, and the colour is the fastest way to say so on a
+   panel somebody is scanning rather than reading. */
+.aw-run-activity.is-paused {
+  color: var(--aw-warning);
+}
+
+.aw-run-stop {
+  color: var(--aw-warning);
 }
 
 .aw-run-events {
   opacity: 0.7;
 }
 
-.aw-run-chevron {
-  flex: none;
-  color: var(--aw-text-muted);
-  opacity: 0.5;
+/* How much of the ceiling this run declared for itself is gone. Drawn only
+   where `RunStarted.budget` named one -- this is a measured fraction of a
+   first-hand denominator, not a guess at how near the run is to finishing. */
+.aw-run-fuel {
+  height: 2px;
+  margin-left: calc(12px + var(--aw-run-depth, 0) * 20px);
+  background: var(--aw-border);
+}
+
+.aw-run-fuel > span {
+  display: block;
+  width: calc(var(--aw-run-fill, 0) * 100%);
+  height: 100%;
+  background: var(--aw-accent);
+}
+
+/* Past four fifths the bar stops being informational: the next thing that
+   happens to this run is likely to be its ceiling stopping it. The threshold
+   is a class rather than a selector matching the inline custom property --
+   `--aw-run-fill: 0.9166` is a computed number, and any string match on it is
+   a rule that silently stops applying. */
+.aw-run-fuel.is-tight > span {
+  background: var(--aw-danger);
+}
+
+/* Why it failed, under the row rather than inside it: the message is a
+   sentence and the row is a scan line, and truncating an error to fit a
+   nowrap cell is how a reader ends up back in the step stream looking for a
+   fact this panel was already holding. */
+.aw-run-failure {
+  margin: 0;
+  padding: 0 12px 6px calc(46px + var(--aw-run-depth, 0) * 20px);
+  color: var(--aw-danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .aw-run-hint {
@@ -2721,10 +2815,15 @@ pre {
 }
 
 @media (width <= 720px) {
-  /* The numbers are the first thing to go: on a narrow screen the name and the
+  /* The counts are the first thing to go: on a narrow screen the name and the
      status are what a person is scanning for, and the spend is still one tap
-     away in the run's own stream. */
-  .aw-run-meta {
+     away in the run's own stream.
+
+     `.aw-run-activity` and `.aw-run-stop` stay. An earlier version hid the
+     whole `.aw-run-meta`, which took the live field with it -- the panel's own
+     comment calls that the one thing it shows in real time, and a phone is
+     exactly where somebody is checking whether a Task is still moving. */
+  .aw-run-meta > :not(.aw-run-activity):not(.aw-run-stop) {
     display: none;
   }
 }

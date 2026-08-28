@@ -18,6 +18,7 @@ import {
   buildRunTree,
   flattenRuns,
   totalSpend,
+  totalTokens,
   type RunNode,
 } from "./runTree";
 
@@ -287,5 +288,295 @@ describe("与服务端读模型的一致性", () => {
     expect(only.status).toBe("completed");
     expect(only.spend.inputTokens).toBe(100);
     expect(root.spend.inputTokens).toBe(300);
+  });
+});
+
+describe("二手转述：父运行说的话在孩子自己没说话时必须解得开", () => {
+  /**
+   * 这一组钉的是一个真发生过的 bug。
+   *
+   * `AgentCompleted.status` 是一个 `RunStatus`——`completed`/`failed`/
+   * `cancelled`（`domain/runs.py:35`）——而第一版把它拿去查了那张按**事件名**
+   * （`RunCompleted`/`RunFailed`/`RunCancelled`）建的表。三个键一个都对不上，
+   * 于是每次都落到 `unknown`：`AgentCompleted` 存在的唯一理由——让只握着父运行
+   * 那一页的读者知道孩子怎么样了——整条路径静默失效，行上永远写着「等待中」。
+   *
+   * 原来那条「父运行的转述只在孩子自己没报告时才采用」测的是孩子**说过话**的
+   * 那一支，恰好是两边行为相同、也是坏掉的分支走不到的那一支。
+   */
+  it("孩子没留下自己的终结事件时，采用父运行说的 completed", () => {
+    const tree = buildRunTree([
+      event(PARENT, "RunStarted", 1),
+      event(PARENT, "AgentDelegated", 2, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+      event(PARENT, "AgentCompleted", 3, {
+        child_agent_run_id: CHILD,
+        status: "completed",
+        stop_reason: "stop",
+        usage: usage(120, 30),
+      }),
+    ]);
+
+    const child = at(at(tree, 0).children, 0);
+    expect(child.status).toBe("completed");
+    expect(child.spend.inputTokens).toBe(120);
+  });
+
+  it("被硬取消的子运行不会一直显示成等待中", () => {
+    const tree = buildRunTree([
+      event(PARENT, "AgentDelegated", 1, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+      event(PARENT, "AgentCompleted", 2, {
+        child_agent_run_id: CHILD,
+        status: "cancelled",
+        stop_reason: "cancelled",
+        usage: usage(0, 0, 0),
+      }),
+    ]);
+
+    expect(at(at(tree, 0).children, 0).status).toBe("cancelled");
+  });
+
+  it("转述里的 stop_reason 也一并收下", () => {
+    const tree = buildRunTree([
+      event(PARENT, "AgentDelegated", 1, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+      event(PARENT, "AgentCompleted", 2, {
+        child_agent_run_id: CHILD,
+        status: "failed",
+        stop_reason: "token_budget",
+        usage: usage(120_000, 0),
+      }),
+    ]);
+
+    const child = at(at(tree, 0).children, 0);
+    expect(child.status).toBe("failed");
+    expect(child.stopReason).toBe("token_budget");
+    // AgentCompleted 不带 error：二手知道它失败了，不等于二手知道它为什么失败。
+    expect(child.failure).toBeNull();
+  });
+
+  it("认不出来的状态仍然落到 unknown，而不是被硬塞成某一种", () => {
+    const tree = buildRunTree([
+      event(PARENT, "AgentDelegated", 1, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+      event(PARENT, "AgentCompleted", 2, {
+        child_agent_run_id: CHILD,
+        status: "evaporated",
+        usage: usage(0, 0, 0),
+      }),
+    ]);
+
+    expect(at(at(tree, 0).children, 0).status).toBe("unknown");
+  });
+});
+
+describe("每个运行自己声明的上限", () => {
+  it("RunStarted 带来的是这次运行自己的天花板，不是配置里今天的值", () => {
+    const tree = buildRunTree([
+      event(PARENT, "RunStarted", 1, {
+        run_kind: "task",
+        model_profile: "main",
+        tool_names: ["project_read", "delegate_agent"],
+        budget: {
+          max_steps: 40,
+          max_tool_calls: 20,
+          max_total_tokens: null,
+          max_cost_micro_usd: null,
+          deadline: null,
+        },
+      }),
+      event(PARENT, "AgentDelegated", 2, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+      event(CHILD, "RunStarted", 3, {
+        run_kind: "task",
+        model_profile: "sub",
+        tool_names: ["web_search"],
+        budget: {
+          max_steps: 12,
+          max_tool_calls: 8,
+          max_total_tokens: 120_000,
+          max_cost_micro_usd: null,
+          deadline: null,
+        },
+      }),
+    ]);
+
+    const parent = at(tree, 0);
+    expect(parent.ceiling.maxTotalTokens).toBeNull();
+    expect(parent.modelProfile).toBe("main");
+    expect(parent.toolCount).toBe(2);
+
+    const child = at(parent.children, 0);
+    expect(child.ceiling).toEqual({
+      maxSteps: 12,
+      maxToolCalls: 8,
+      maxTotalTokens: 120_000,
+    });
+    expect(child.modelProfile).toBe("sub");
+    expect(child.toolCount).toBe(1);
+  });
+
+  it("没有 RunStarted 在视野里的运行不会凭空得到一个上限", () => {
+    const tree = buildRunTree([
+      event(PARENT, "AgentDelegated", 1, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+    ]);
+
+    expect(at(at(tree, 0).children, 0).ceiling).toEqual({
+      maxSteps: null,
+      maxToolCalls: null,
+      maxTotalTokens: null,
+    });
+  });
+});
+
+describe("为什么停下来", () => {
+  it("RunFailed 的 error 被读出来，行才说得出失败原因", () => {
+    const tree = buildRunTree([
+      event(PARENT, "RunStarted", 1),
+      event(PARENT, "RunFailed", 2, {
+        stop_reason: "error",
+        error: {
+          code: "tool_timeout",
+          message: "web_search exceeded 30s",
+          retryable: true,
+        },
+        usage: usage(900, 100),
+      }),
+    ]);
+
+    expect(at(tree, 0).failure).toEqual({
+      code: "tool_timeout",
+      message: "web_search exceeded 30s",
+    });
+    expect(at(tree, 0).stopReason).toBe("error");
+  });
+
+  it("RunCancelled 是一个终结事件，不是一个没人认识的事件", () => {
+    const tree = buildRunTree([
+      event(PARENT, "RunStarted", 1),
+      event(PARENT, "RunCancelled", 2, {
+        reason_code: "cancel_requested",
+        usage: usage(40, 10),
+      }),
+    ]);
+
+    expect(at(tree, 0).status).toBe("cancelled");
+    expect(at(tree, 0).spend.inputTokens).toBe(40);
+  });
+});
+
+describe("暂停", () => {
+  it("停在审批门上的运行记下它在等什么", () => {
+    const tree = buildRunTree([
+      event(PARENT, "RunStarted", 1),
+      event(PARENT, "RunPaused", 2, { reason: "approval" }),
+    ]);
+
+    expect(at(tree, 0).pausedFor).toBe("approval");
+    expect(at(tree, 0).status).toBe("running");
+  });
+
+  it("下一个事件到了就不再是等待", () => {
+    const tree = buildRunTree([
+      event(PARENT, "RunStarted", 1),
+      event(PARENT, "RunPaused", 2, { reason: "approval" }),
+      event(PARENT, "ToolStarted", 3),
+    ]);
+
+    expect(at(tree, 0).pausedFor).toBeNull();
+  });
+
+  it("只写过一次 RunPaused 的 id 也算一个运行", () => {
+    const tree = buildRunTree([
+      event(PARENT, "RunPaused", 1, { reason: "migration" }),
+    ]);
+
+    expect(tree.map((node) => node.runId)).toEqual([PARENT]);
+  });
+});
+
+describe("token 总数与运行时判定预算的算法一致", () => {
+  it("cache_write 计入总数，cache_read 不计——它已经在 input 里了", () => {
+    const spend = {
+      steps: 1,
+      toolCalls: 0,
+      inputTokens: 1_000,
+      outputTokens: 200,
+      cacheWriteTokens: 300,
+    };
+
+    // 与 domain/runs.py::TokenUsage.total 同一条算式。判 max_total_tokens 的
+    // 是含 cache_write 的那个数，面板拿另一套算法去画就会把运行画得比运行时
+    // 认为的更远离它的天花板。
+    expect(totalTokens(spend)).toBe(1_500);
+  });
+
+  it("合计把子运行的 cache_write 也带上", () => {
+    const tree = buildRunTree([
+      event(PARENT, "RunStarted", 1),
+      event(PARENT, "AgentDelegated", 2, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+      event(CHILD, "RunCompleted", 3, {
+        usage: {
+          steps: 2,
+          tool_calls: 1,
+          tokens: {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_tokens: 20,
+            cache_write_tokens: 70,
+          },
+          cost_micro_usd: 0,
+        },
+      }),
+      event(PARENT, "RunCompleted", 4, { usage: usage(300, 100) }),
+    ]);
+
+    expect(totalSpend(tree).cacheWriteTokens).toBe(70);
+  });
+});
+
+describe("位置：被宣告、还没开口的孩子也有一个可以滚过去的地方", () => {
+  it("孩子的 firstSequence 是宣告它的那次委派，与服务端 sequence 同源", () => {
+    // 服务端 `application/run_tree.py` 的 AgentDelegated 分支正是这么填的。
+    // 这条之前两侧相反：前端要等孩子自己写下第一个事件才给它位置，而那正是
+    // 这个字段唯一存在意义的那个状态——孩子还没写任何东西。
+    const tree = buildRunTree([
+      event(PARENT, "RunStarted", 10),
+      event(PARENT, "AgentDelegated", 11, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+    ]);
+
+    expect(at(at(tree, 0).children, 0).firstSequence).toBe(11);
+  });
+
+  it("孩子自己开口之后，位置仍然是那次委派而不是它的第一个事件", () => {
+    const tree = buildRunTree([
+      event(PARENT, "AgentDelegated", 11, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+      event(CHILD, "RunStarted", 12),
+    ]);
+
+    expect(at(at(tree, 0).children, 0).firstSequence).toBe(11);
   });
 });

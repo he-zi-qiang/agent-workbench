@@ -28,6 +28,137 @@
 
 ---
 
+## 2026-08-27（未合并，分支 `feat/multi-agent-orchestration`，第二十四批）：面板画的是它自己重建的树，而那棵树有一处解不开
+
+> **批次号预警**：这条分支的第二十一～二十四批与主线的同号批次**撞号**——主线已经
+> 排到第二十九批，二十一～二十四各自被别的改动占着。合并这条分支时四节都要重排，
+> 这里先记下来，因为发现它的成本远低于合并后在文档里读到两个"第二十二批"。
+
+上一批把面板做出来了，但那次提交是这条分支上**唯一一次写了代码却没留证据**的改动：
+`13ed6c2` 一行 `docs/status.md` 都没写，而面板本身**一条测试也没有**——被测的是它下面
+的 `runTree.ts`（12 条），不是面板。这一批补上证据，并修掉补测试时露出来的东西。
+
+### 1. 两份读模型在它们发誓不分家的那条路径上分家了
+
+`AgentCompleted.status` 是一个 `RunStatus`——`completed` / `failed` / `cancelled`
+（[`domain/runs.py:35`](../src/agent_workbench/domain/runs.py:35)）。前端把它拿去查了
+一张按**事件名**（`RunCompleted` / `RunFailed` / `RunCancelled`）建的表：
+
+```ts
+const TERMINAL_STATUS = { RunCompleted: "completed", RunFailed: "failed", ... };
+// ...
+child.status = TERMINAL_STATUS[payload.status] ?? "unknown";   // 三个键一个都对不上
+```
+
+三个键**一个都对不上**，于是每次都落到 `unknown`。`AgentCompleted` 存在的全部理由——
+让只握着父运行那一页的读者知道孩子后来怎么样了——整条路径静默失效，行上永远写着
+「等待中」，包括父运行明明已经记下它**失败**的时候。
+
+服务端那一份没有这个问题，而且它的注释正好写着为什么：`_STATUS_FOR_RUN_STATUS`
+"written as a mapping rather than a cast so that a status added to the domain has to
+be considered here rather than silently becoming `unknown`"。前端等于用错了那张表。
+
+**为什么原有的测试没抓到**：`runTree.test.ts` 里那条「父运行的转述只在孩子自己没报告时
+才采用」，测的是孩子**说过话**的那一支——恰好是两边行为相同、也是坏掉的分支根本走不到
+的那一支。而末尾那条自称「与服务端读模型的一致性」的测试，手抄的场景同样是两边一致的
+那条路径。**一条声称钉住一致性的测试，钉住的是两边本来就不会分歧的地方。**
+
+同一处还查出第二条分歧：被宣告、尚未开口的子运行，服务端把它的 `sequence` 填成**宣告
+它的那次委派**，前端要等孩子自己写下第一个事件才给位置——而那正是这个字段唯一有意义
+的那个状态。两条都补了测试，且都**先对着旧代码验证它们会红**（5 条）。
+
+### 2. 面板一个字都没说的、流里早就写着的事
+
+`RunStarted` 带着 `run_kind` / `model_profile` / `tool_names` / `budget`
+（[`domain/events.py:273`](../src/agent_workbench/domain/events.py:273)），`RunFailed`
+带着 `error: ErrorInfo`，`RunPaused` 带着 `reason`。这些事件**这个页面本来就握在手里**，
+面板一个都没读。
+
+其中最要紧的是 `budget`。面板的注释写着"不画进度条，因为一个运行不知道自己要走几步，
+任何进度条都是拿一个编出来的分母做分数"——**这句话对了一半**。"还要走几步"确实不知道；
+"**允许**走几步"是这次运行自己在 `RunStarted` 里写下的。而委派出去的子运行拿到的
+`max_total_tokens` 就是 `multi_agent.max_tokens_per_agent_invocation`
+（[`composition.py:830`](../src/agent_workbench/apps/task_worker/composition.py:830)），
+也就是**真正会把它掐死的那个数**。
+
+这一批把两件事分开：完成度的分母仍然是编的，仍然不画；**预算**的分母是第一手的，画。
+一个死在"额度不足"上的子代理，读者需要看见的正是这条。
+
+| 补上的 | 从哪来 | 面板怎么呈现 |
+|---|---|---|
+| 每次运行自己的上限 | `RunStarted.budget` | `32.0k/120.0k`、`4/40 步`；**只在声明过的时候**画，没声明就只显示花费 |
+| 失败原因 | `RunFailed.error` | 行下面一句 `工具执行超时：web_search exceeded 30s`，词表复用 `failure.ts` 的 `CODE_LABELS` |
+| 为什么停 | `stop_reason` | 只显示会改变读者下一步动作的那几个（`token_budget` 等）；正常答完的 `stop` 不显示 |
+| 在等人 | `RunPaused.reason` | 图标从转圈换成暂停，文字写「已暂停，等待你确认」——**等待不是在工作**，而转圈说的正是相反的话 |
+| 哪个模型 | `RunStarted.model_profile` | 名字后面一个灰色小字 |
+
+`token` 花费同时改成与运行时判预算的**同一条算式**（`TokenUsage.total`，含
+`cache_write_tokens`、不含已在 `input` 里的 `cache_read_tokens`）。用另一套算法去画
+花费与上限，会把运行画得比运行时认为的更远离它的天花板。
+
+### 3. 这个面板的全部意义在缩进里，而缩进只是样式
+
+DOM 是一个**平的** `<ul>`，深度是一个 CSS 自定义属性。屏幕阅读器读到的是一列兄弟——
+"这个 agent 是**被那个**派出来的"，也就是这个面板存在的唯一理由，一个字都没传达到。
+
+改成真的 `<ul>` 嵌套，并给有孩子的行一个带 `aria-expanded` 的折叠按钮。**没有**用
+`role="tree"`：那个 role 承诺方向键在条目之间导航，而对一个按了方向键发现没反应的人
+来说，"这是一棵树"这句宣告比嵌套列表更糟——嵌套列表浏览器本来就会连层级一起念出来。
+折叠状态记的是**被合上的那些**而不是被展开的那些，所以运行中新到的委派会出现，而不是
+继承一份默认隐藏。
+
+顺带两条：
+- `@media (width <= 720px)` 原来整块隐藏 `.aw-run-meta`，把「它现在在做什么」——注释里
+  自称的唯一实时字段——一起隐藏了。而手机恰恰是有人在确认"这个任务还在动吗"的地方。
+  改成只隐藏计数，留下活动与停止原因。
+- 折叠按钮给到 30px 高度并单独成键：它是这里唯一一个拇指必须精确命中的控件。
+
+### 4. 收窄跟着任务走
+
+`selectedRunId` 是一个裸 `useState`，不带它所属的 `taskId`。切到另一个任务，收窄仍然
+生效、过滤的却是一个不在这条流里的 run id：每个阶段空、执行过程空，而唯一能撤销它的
+按钮已经**随面板一起消失**了——面板只在发生过委派时渲染。
+
+改成与同文件里 `opened`（产物抽屉）同一个形状：状态带着 `taskId`，**在渲染时比较**而不是
+用 effect 事后清除。那段注释里的理由原样适用——"deriving that during render is what keeps
+a stale value from ever being displayed, which an effect that clears it afterwards
+cannot promise"。
+
+### 证据（2026-08-27，这棵树上）
+
+| 门禁 | 结果 |
+|---|---|
+| `eslint . --max-warnings 0` | 干净 |
+| `tsc -b` | 干净 |
+| `vitest run` | **38 files / 613 tests 全绿**（上一批 37 / 580） |
+| `vite build` | 成功 |
+
+新增 **33 条**：`RunPanel.test.tsx` 18 条（此前该文件不存在），`runTree.test.ts` 15 条。
+
+**反向验证**：把 `STATUS_FOR_RUN_STATUS` 与 `firstSequence` 两处改回旧写法重跑，新测试
+**5 条转红**（二手 `completed`、二手 `cancelled`、二手 `stop_reason`、两条 `firstSequence`）。
+不这么验一次，"补了测试"和"补了会跟着代码一起错的测试"是分不开的。
+
+### 明确没做，以及为什么
+
+- **不改服务端的 `RunNode`**。面板新读的四类事实（上限、失败原因、停止原因、暂停）
+  都只加在**前端**的节点上，不动"有哪些节点、它们是什么状态"——那三个问题才是两份读模型
+  不许分歧的地方。给服务端的 `RunNodeStatus` 加一个 `paused`，是改一个 HTTP 响应的枚举，
+  那要先有 ADR。
+- **不调 `/v1/tasks/{id}/runs`**。理由与 `runTree.ts` 文件头写的一样，没有变：那是用
+  第二个请求去学第一个请求已经带回来的东西，而且它只在有人问它时才刷新，会让一个号称
+  实时的面板落后于旁边的时间线。深链进某个子运行是另一回事，见下面的缺口登记。
+- **不显示 `cost_micro_usd`**。九个 profile 没有一个写过 `[model.*.pricing]`，这个数恒为
+  0（第二十二批查过）。画一个恒零的花费，比不画更误导。
+- **不画 `role="tree"`**。理由见上：半套键盘语义比不宣告更糟。
+- **不合并 `runTree.ts` 与 `delegations.ts`**。两者确实都在扫 `AgentDelegated`，但一个
+  产出树、一个产出时间线行首的名字，合并会把"这一行是谁写的"塞回树的重建里。登记为缺口
+  而不是顺手合掉。
+- **不重排本分支已有的三节批次号**。撞号是真的（见开头预警），但主线还在动，现在排完
+  合并时还要再排一次。
+
+---
+
 ## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第二十三批）：把它真的跑起来，然后修跑出来的两个问题
 
 前两批的证据全是测试。这一批是**对着真实模型的一次端到端运行**，以及它当场暴露的两个

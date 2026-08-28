@@ -11,6 +11,15 @@
  * table has not learned yet is still the most specific thing anyone has.
  */
 
+/**
+ * The closed error vocabulary, in words.
+ *
+ * Shared rather than copied. A failed Task and a failed *run* inside it draw
+ * their codes from the same `domain/errors.py::ErrorCode`, so a second table
+ * would be a second place to forget a code -- and the symptom of forgetting is
+ * not an error, it is one surface saying 超出预算 while the one beside it says
+ * `budget_exceeded`.
+ */
 const CODE_LABELS: Readonly<Record<string, string>> = {
   provider_error: "调用模型服务失败",
   provider_unavailable: "模型服务暂时不可用",
@@ -68,6 +77,18 @@ const WHOLE_DETAIL_LABELS: Readonly<Record<string, string>> = {
 
 /** `review still requires changes after <n> revisions of the work node` */
 const REVIEW_EXHAUSTED = /^review still requires changes after (\d+) revisions/;
+
+/**
+ * One `ErrorCode` in words, or the code itself.
+ *
+ * Returned verbatim when unrecognised, on the same reasoning as
+ * `explainFailure`: a code this table has not learned yet is still the most
+ * specific thing anybody has, and replacing it with 未知原因 would throw away
+ * the one token an operator could grep the log for.
+ */
+export function errorCodeLabel(code: string): string {
+  return CODE_LABELS[code] ?? code;
+}
 
 export interface FailureExplanation {
   text: string;

@@ -366,7 +366,32 @@ export function WorkPage() {
   // Which run the reader has singled out in the panel, or `null` for all of
   // them. Held here rather than in the panel because it narrows the stream
   // below it, and a selection that only the panel knew about could not.
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  //
+  // Carries the Task it was made in, and is compared during render rather than
+  // cleared by an effect -- the same shape and the same reasoning as `opened`
+  // below. A run id belongs to one Task's stream, so carrying it across leaves
+  // the next Task filtered to a run that is not in it: every stage empty, the
+  // stream empty, and the one control that undoes it gone with the panel,
+  // because a panel that renders only where a delegation happened does not
+  // render on a Task that has not delegated yet.
+  const [runSelection, setRunSelection] = useState<{
+    taskId: string;
+    runId: string;
+  } | null>(null);
+  const selectedRunId =
+    runSelection !== null && runSelection.taskId === selectedTaskId
+      ? runSelection.runId
+      : null;
+  const setSelectedRunId = useCallback(
+    (runId: string | null) => {
+      setRunSelection(
+        runId === null || selectedTaskId === undefined
+          ? null
+          : { taskId: selectedTaskId, runId },
+      );
+    },
+    [selectedTaskId],
+  );
   // The narrowing is applied *here*, once, rather than in each derivation
   // below: two filters would be two chances for the stage list and the task
   // events to disagree about which run is on screen.
