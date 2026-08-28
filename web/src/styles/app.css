@@ -2805,6 +2805,21 @@ pre {
   font-size: 12px;
 }
 
+/* 「这棵树可能不全」是关于这块面板本身的话，不是它的一行，所以它待在列表
+   外面并且自己带着颜色——一条被跳过的分页里如果有一次委派，整条分支就不在
+   这里，而沉默会把那件事说成「没有派过子代理」。 */
+.aw-run-hint.is-incomplete {
+  border-top: 0;
+  border-bottom: 1px solid var(--aw-border);
+  color: var(--aw-warning);
+}
+
+/* 收窄活着、却没有树可画的那种情况：面板此时只剩这一句话和那个出口，
+   上边框会画出一条什么也没分隔的线。 */
+.aw-run-hint.is-lonely {
+  border-top: 0;
+}
+
 .aw-run-clear {
   margin-left: 6px;
   border: 0;

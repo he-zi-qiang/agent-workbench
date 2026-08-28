@@ -3,10 +3,15 @@
  *
  * `runTree.test.ts` covers the shape the events describe; this file covers
  * what a reader is actually shown. The two were not the same thing: the tree
- * builder shipped with thirteen tests and the panel with none, and everything
- * pinned here -- a ceiling drawn only where a run declared one, a paused run
+ * builder shipped with twelve tests and the panel with none, and most of what
+ * is pinned here -- a ceiling drawn only where a run declared one, a paused run
  * that says so instead of spinning, a failure that names itself -- is a fact
  * the tree already held and the panel silently dropped.
+ *
+ * The last two blocks are about a different failure: not what the panel omits,
+ * but what it owes a reader who cannot see anything. It holds the only control
+ * that undoes a narrowing, so "there is nothing worth drawing" and "render
+ * nothing" are not the same instruction.
  */
 
 import { render, screen, within } from "@testing-library/react";
@@ -81,10 +86,15 @@ function delegated(...extra: EventEnvelope[]): EventEnvelope[] {
   ];
 }
 
-function draw(events: EventEnvelope[], selectedRunId: string | null = null) {
+function draw(
+  events: EventEnvelope[],
+  selectedRunId: string | null = null,
+  incomplete = false,
+) {
   const onSelect = vi.fn();
   const view = render(
     <RunPanel
+      incomplete={incomplete}
       onSelect={onSelect}
       roots={buildRunTree(events)}
       selectedRunId={selectedRunId}
@@ -352,5 +362,79 @@ describe("选中一行会把下面的执行过程收窄到那一个运行", () =
     await user.click(screen.getByRole("button", { name: /折叠 work/ }));
 
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("一棵可能不全的树要自己说出来", () => {
+  /**
+   * ADR-083 不变量 5「一棵不完整的树说自己不完整」此前只做了服务端那一半——
+   * 响应里有 `complete`，客户端没有对应物。而客户端这棵树恰恰更需要它：它是从
+   * 页面握着的事件重建的，一页没送到、里面又刚好有一次 `AgentDelegated`，
+   * 整条分支就不在树里，而且**什么痕迹都不留**。
+   */
+  it("流有缺口时面板说这棵树可能不全", () => {
+    draw(
+      delegated(event(CHILD, "RunStarted", 3, { budget: budget() })),
+      null,
+      true,
+    );
+
+    expect(screen.getByText(/可能不全/)).toBeInTheDocument();
+  });
+
+  it("流完整时不说这句话——沉默在这里必须是有意义的", () => {
+    draw(delegated(event(CHILD, "RunStarted", 3, { budget: budget() })));
+
+    expect(screen.queryByText(/可能不全/)).not.toBeInTheDocument();
+  });
+});
+
+describe("面板握着退出收窄的唯一出口，所以收窄活着时它必须在", () => {
+  /**
+   * 这一组钉的是把收窄搬进 URL 之后暴露的那个陷阱。`?run=` 可以指向一个这个
+   * 任务里根本没有的运行——一条发错的链接，或者一次落在缺口里的委派。而面板
+   * 原来在「没发生过委派」时直接 return null，于是读者拿到的是一条空的执行
+   * 过程、没有任何解释，也没有任何能点回去的东西。
+   */
+  it("任务没派过子代理、但收窄开着时，面板仍然渲染并给出退路", async () => {
+    const user = userEvent.setup();
+    const { onSelect } = draw(
+      [
+        event(PARENT, "RunStarted", 1, { budget: budget() }),
+        event(PARENT, "RunCompleted", 2, { usage: usage(10, 10) }),
+      ],
+      "run_not_here",
+    );
+
+    expect(screen.getByText(/不在这条流里的运行/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "显示全部" }));
+    expect(onSelect).toHaveBeenCalledWith(null);
+  });
+
+  it("收窄指向树里真有的运行时，说的是另一句话", () => {
+    draw(delegated(event(CHILD, "RunStarted", 3, { budget: budget() })), CHILD);
+
+    expect(screen.getByText(/只显示这一个运行/)).toBeInTheDocument();
+    expect(screen.queryByText(/不在这条流里/)).not.toBeInTheDocument();
+  });
+
+  it("收窄到一个树里没有的运行，即使有子代理也照实说", () => {
+    draw(
+      delegated(event(CHILD, "RunStarted", 3, { budget: budget() })),
+      "run_not_here",
+    );
+
+    expect(screen.getByText(/不在这条流里的运行/)).toBeInTheDocument();
+    // 树还在，读者可以直接点另一行换过去。
+    expect(screen.getByText("analyst")).toBeInTheDocument();
+  });
+
+  it("既没有子代理也没有收窄时，面板仍然不出现", () => {
+    const { container } = draw([
+      event(PARENT, "RunStarted", 1, { budget: budget() }),
+      event(PARENT, "RunCompleted", 2, { usage: usage(10, 10) }),
+    ]);
+
+    expect(container).toBeEmptyDOMElement();
   });
 });

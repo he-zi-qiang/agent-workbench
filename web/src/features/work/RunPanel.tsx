@@ -366,11 +366,24 @@ export function RunPanel({
   roots,
   selectedRunId,
   onSelect,
+  incomplete = false,
 }: {
   roots: RunNode[];
   /** Which run the step stream is currently narrowed to, if any. */
   selectedRunId: string | null;
   onSelect: (runId: string | null) => void;
+  /**
+   * Whether the stream this tree was built from is known to have holes.
+   *
+   * ADR-083 invariant 5 -- "a tree that is not complete says so" -- was only
+   * ever kept on the server, whose response carries `complete`. This is the
+   * client's half of it, and it is not decoration: this tree is rebuilt from
+   * whatever the page holds, so one skipped page containing an
+   * `AgentDelegated` removes a whole branch, and the panel's silence would
+   * report "nobody delegated" in exactly the same words as "the page that said
+   * so never arrived".
+   */
+  incomplete?: boolean;
 }) {
   // Which subtrees the reader has folded away. Held as the *closed* set rather
   // than the open one so that a child arriving mid-run appears: a delegation
@@ -385,7 +398,39 @@ export function RunPanel({
   // already says all of this -- a second panel repeating it would be furniture.
   const all = flattenRuns(roots);
   const delegated = all.filter((node) => node.parentRunId !== null);
-  if (delegated.length === 0) return null;
+  // ...with one exception, and it is a trap the first version walked into.
+  // **This panel owns the only control that undoes a narrowing.** So on any
+  // Task where a narrowing is live, it has to render whether or not it has a
+  // tree worth drawing -- otherwise a link carrying `?run=` to a Task with no
+  // delegations, or a page whose delegation fell in a skipped stretch, shows
+  // an empty stream with no way back and nothing saying why it is empty.
+  const narrowedToMissingRun =
+    selectedRunId !== null &&
+    !all.some((node) => node.runId === selectedRunId);
+  if (delegated.length === 0 && selectedRunId === null) return null;
+
+  if (delegated.length === 0) {
+    // 收窄活着，但没有树可画。摆一个写着「0 个是子代理」的表头是在回答没人问的
+    // 问题；这里需要的只有那句话和那个出口。
+    return (
+      <section aria-label="参与这次任务的 Agent" className="aw-run-panel">
+        <p className="aw-run-hint is-lonely">
+          {narrowedToMissingRun
+            ? "下面的执行过程被收窄到了一个不在这条流里的运行，所以它是空的。"
+            : "下面的执行过程只显示这一个运行。"}
+          <button
+            className="aw-run-clear"
+            onClick={() => {
+              onSelect(null);
+            }}
+            type="button"
+          >
+            显示全部
+          </button>
+        </p>
+      </section>
+    );
+  }
 
   const total = totalSpend(roots);
   const running = all.filter((node) => node.status === "running").length;
@@ -424,9 +469,17 @@ export function RunPanel({
           />
         ))}
       </ul>
+      {incomplete && (
+        <p className="aw-run-hint is-incomplete">
+          这条流有没有送达的分页，所以这棵树<strong>可能不全</strong>
+          ——一次落在缺口里的委派，在这里和「没有派过子代理」长得一模一样。
+        </p>
+      )}
       {selectedRunId !== null && (
         <p className="aw-run-hint">
-          下面的执行过程只显示这一个运行。
+          {narrowedToMissingRun
+            ? "下面的执行过程被收窄到了一个不在这条流里的运行，所以它是空的。"
+            : "下面的执行过程只显示这一个运行。"}
           <button
             className="aw-run-clear"
             onClick={() => {
