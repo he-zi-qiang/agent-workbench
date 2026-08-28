@@ -447,3 +447,75 @@ def test_the_usage_banner_lists_every_demo_command() -> None:
     for command in ("demo-check", "demo-api", "demo-worker"):
         assert command in documented
         assert command in banner.stdout
+
+
+CODE_CONFIG = ROOT / "config/config.code-local.toml"
+
+
+@pytest.mark.parametrize("path", [DEMO_CONFIG, CODE_CONFIG], ids=["demo", "code"])
+def test_a_profile_that_thinks_hard_gives_the_call_time_to_finish(
+    monkeypatch: pytest.MonkeyPatch, path: Path
+) -> None:
+    """A profile on `reasoning_effort = high` must not keep the shipped 120s.
+
+    Measured 2026-08-27 on this machine, against the real provider: of 13 model
+    calls in one console run, **5 died at exactly 120.0s** and the longest
+    survivor was 107.0s. Before `high` landed the same event log tops out at
+    45-77s, so what moved the distribution is the effort setting -- and raising
+    it without raising these two is the trade the profile comments themselves
+    warn against, one layer further in than the layer they fixed.
+
+    The pairing is the half worth pinning. `runtime/agent_runtime.py:122`: the
+    runtime's envelope wraps the adapter's own per-request timeout and **the
+    shorter of the two fires first**, so a profile that raises one and not the
+    other has moved nothing. Both shipped at 120, which made that a tie.
+    """
+
+    for name in tuple(os.environ):
+        if name.upper().startswith("AW_"):
+            monkeypatch.delenv(name, raising=False)
+    for suffix in ("DSN", "GUARD_DSN", "LISTEN_DSN"):
+        monkeypatch.setenv(f"AW_DATABASE__{suffix}", POSTGRES_DSN)
+    # `config.code-local.toml` turns `research.enabled` on, which refuses to
+    # assemble against a placeholder key. Nothing here makes a call; the value
+    # exists only so the profile loads. Set after the AW_* sweep above, which
+    # is why this does not go through `_load_profile`.
+    monkeypatch.setenv("AW_SECRETS__DEEPSEEK_API_KEY", "contract-only-not-a-real-key")
+    settings = load_settings(config_file=path)
+    main = settings.model.main
+
+    assert main.reasoning_effort == "high"
+    assert main.timeout_seconds > 120
+    assert settings.runtime.model_timeout_seconds > 120
+    # The specific one fires first; the runtime's is the backstop. Equal values
+    # make which one reports the failure a coin toss, and they answer to
+    # different operators -- one is "this provider was slow", the other is
+    # "this runtime gave up".
+    assert settings.runtime.model_timeout_seconds > main.timeout_seconds
+    # And both stay inside the turn, so one stuck call cannot eat the whole of
+    # it -- the turn timeout has to remain the outer stop.
+    assert main.timeout_seconds < settings.code.turn_timeout_seconds
+
+
+def test_the_shipped_default_still_documents_the_pair_it_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`config.default.toml` keeps 120 on both, and that is deliberate.
+
+    It ships `not-configured-deepseek-main`, a placeholder whose call durations
+    this repository cannot measure -- the same reason it refuses to ship
+    `pricing` or `context_window_tokens`. What it must not do is leave the
+    coupling undocumented, because an operator who raises one of the two and
+    sees no change has been told nothing about why.
+    """
+
+    shipped = _load_profile(monkeypatch, DEFAULT_CONFIG)
+    assert shipped.model.main.timeout_seconds == 120
+    assert shipped.runtime.model_timeout_seconds == 120
+
+    text = DEFAULT_CONFIG.read_text(encoding="utf-8")
+    assert "model_timeout_seconds" in text
+    # Each site has to name the other, or the pair is only discoverable by
+    # reading the runtime source.
+    assert text.count("model_timeout_seconds") >= 2
+    assert "timeout_seconds`" in text
