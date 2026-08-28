@@ -732,3 +732,59 @@ def test_the_external_contract_asks_for_no_more_than_an_answer_can_carry() -> No
     contract = profile_for("research_external").system_prompt
     assert str(MAX_EXTERNAL_PASSAGE_CHARS) in contract
     assert str(MAX_EVIDENCE_ITEMS) in contract
+
+
+class TestAProfileSaysHowMuchToWrite:
+    """Both prompts that died on an output ceiling now bound their own length.
+
+    Not a style preference. `max_output_tokens` ended `understand` outright,
+    and `max_total_tokens` ended `work` -- and the second is the worse shape,
+    because it counts each turn's whole prompt, so a long passage costs its
+    length once per remaining turn rather than once. Measured 2026-08-28 on
+    `config.demo-local.toml`: seven of fourteen run failures since
+    `reasoning_effort` moved to `high` were the output ceiling, and the `work`
+    node produced ~34,000 characters of its own against the ~32,000 its four
+    sub-agents were bounded to return.
+
+    `_REVIEW_CONTRACT` already carried this lesson -- it bounds its summary at
+    4000 characters after the same failure -- which is why these assertions are
+    written the same way: on the contract, not on a model's behaviour.
+    """
+
+    def _prompt_for(self, node: str) -> str:
+        for profile in V2_AGENT_PROFILES:
+            if profile.node == node:
+                return profile.system_prompt
+        raise AssertionError(f"no v2 profile on {node}")
+
+    def test_framing_says_it_is_not_answering(self) -> None:
+        prompt = self._prompt_for("understand")
+
+        assert "do not solve the objective here" in prompt
+        assert "400 words" in prompt
+
+    def test_work_is_told_to_work_rather_than_narrate_the_work(self) -> None:
+        prompt = self._prompt_for("work")
+
+        # The three shapes the narration actually took, each named.
+        assert "do not restate a plan you are about to execute" in prompt
+        assert "do not draft content you are about to put in a file" in prompt
+        assert "do not write out a result a tool is about to return" in prompt
+
+    def test_work_bounds_its_report_and_says_why(self) -> None:
+        prompt = self._prompt_for("work")
+
+        assert "800 words" in prompt
+        # The reason travels with the limit, so that shortening this text later
+        # does not quietly drop the half that makes the number defensible.
+        assert "re-read by every turn that follows" in prompt
+
+    def test_understand_is_the_same_object_in_both_graphs(self) -> None:
+        """The bound has to reach v1 too, and it does because there is one
+        profile object rather than two declarations (ADR-031 2.1)."""
+
+        v1 = [p for p in V1_AGENT_PROFILES if p.node == "understand"]
+        v2 = [p for p in V2_AGENT_PROFILES if p.node == "understand"]
+
+        assert len(v1) == 1 and len(v2) == 1
+        assert v1[0] is v2[0]

@@ -487,6 +487,16 @@ def test_a_profile_that_thinks_hard_gives_the_call_time_to_finish(
     assert main.reasoning_effort == "high"
     assert main.timeout_seconds > 120
     assert settings.runtime.model_timeout_seconds > 120
+    # The third number `high` invalidated, and the one no prompt can work
+    # around. `max_output_tokens` bounds **thinking plus answer**, so a profile
+    # that turns reasoning up has to raise it or nodes die mid-thought.
+    # Measured 2026-08-28: an `understand` turn ended at `output_tokens =
+    # 16382` against the shipped 16384 while emitting 2,127 characters of
+    # text -- roughly 14,900 tokens of reasoning for a step whose product is a
+    # restatement. Tightening that node's prompt in the same batch cut its text
+    # from 17,857 characters to 2,127 and the run still died, which is what
+    # makes this a number rather than a wording problem.
+    assert main.max_output_tokens > 16_384
     # The specific one fires first; the runtime's is the backstop. Equal values
     # make which one reports the failure a coin toss, and they answer to
     # different operators -- one is "this provider was slow", the other is
