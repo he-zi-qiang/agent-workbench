@@ -23,6 +23,7 @@
 const CODE_LABELS: Readonly<Record<string, string>> = {
   provider_error: "调用模型服务失败",
   provider_unavailable: "模型服务暂时不可用",
+  provider_account_rejected: "模型服务拒绝了这个部署的账号",
   budget_exceeded: "超出了这次任务的步数或 token 预算",
   tool_timeout: "工具执行超时",
   tool_failed: "工具执行失败",
@@ -79,6 +80,21 @@ const WHOLE_DETAIL_LABELS: Readonly<Record<string, string>> = {
 const REVIEW_EXHAUSTED = /^review still requires changes after (\d+) revisions/;
 
 /**
+ * Codes whose remedy is neither of the two this file otherwise offers.
+ *
+ * The default pair splits on `retryable`: try again, or change the task. Both
+ * are wrong for `provider_account_rejected` (ADR-0084) -- it is not retryable,
+ * and nothing about the task or this deployment's config is what is broken.
+ * Sending a reader to re-read their own YAML when their account has no credit
+ * left is the same misdirection the code was split out of `provider_error` to
+ * end, so the sentence has to move with it.
+ */
+const CODE_REMEDIES: Readonly<Record<string, string>> = {
+  provider_account_rejected:
+    "重试没有用，要先去模型服务商那边充值或者换一把密钥。",
+};
+
+/**
  * One `ErrorCode` in words, or the code itself.
  *
  * Returned verbatim when unrecognised, on the same reasoning as
@@ -116,10 +132,13 @@ export function explainFailure(detail: string | null): FailureExplanation | null
     const stepLabel = STEP_LABELS[step ?? ""] ?? step ?? "某一步";
     const codeLabel = CODE_LABELS[code ?? ""] ?? code ?? "未知原因";
     const isRetryable = retryable === "retryable";
+    const remedy =
+      CODE_REMEDIES[code ?? ""] ??
+      (isRetryable
+        ? "这类问题通常是暂时的，重新提交一次多半就好了。"
+        : "重试大概率还是同样的结果，需要先改动任务或配置。");
     return {
-      text: isRetryable
-        ? `在“${stepLabel}”这一步${codeLabel}。这类问题通常是暂时的，重新提交一次多半就好了。`
-        : `在“${stepLabel}”这一步${codeLabel}。重试大概率还是同样的结果，需要先改动任务或配置。`,
+      text: `在“${stepLabel}”这一步${codeLabel}。${remedy}`,
       retryable: isRetryable,
     };
   }

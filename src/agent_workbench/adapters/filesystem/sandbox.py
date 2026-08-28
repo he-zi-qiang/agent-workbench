@@ -56,6 +56,7 @@ import errno
 import os
 import tempfile
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO
 
 from agent_workbench.domain.project_files import (
     ProjectPathError,
@@ -245,11 +246,18 @@ class ProjectSandbox:
                 os.unlink(temporary)
             raise
 
-    def read_bytes(self, relative: str) -> bytes:
-        """Read a file, refusing a symlinked leaf for the same reason writes do.
+    def open_for_read(self, relative: str) -> BinaryIO:
+        """A handle on a file, with the leaf link refused before it is opened.
 
-        A read through a link is how a project's contents get to include
-        ``~/.ssh/id_ed25519`` without any path ever having said so.
+        The checks are `read_bytes`'s -- this is that method with the final
+        ``.read()`` taken off, and the caller taking ownership of the handle.
+        Split out for the one caller that must **not** hold the whole file: a
+        project directory is somebody's real repository and can contain a video,
+        so the route that serves those bytes to a browser streams them.
+
+        Ownership is the whole reason this is separate rather than a flag. A
+        `bytes` return has no lifetime to get wrong; a handle does, and the
+        caller closing it is a thing the type says out loud.
         """
 
         literal, _ = self._checked(relative)
@@ -262,12 +270,21 @@ class ProjectSandbox:
                 ) from error
             raise
         try:
-            with os.fdopen(descriptor, "rb") as handle:
-                return handle.read()
+            return os.fdopen(descriptor, "rb")
         except BaseException:
             # `fdopen` takes ownership on success; if it raised, nothing did.
             os.close(descriptor)
             raise
+
+    def read_bytes(self, relative: str) -> bytes:
+        """Read a file, refusing a symlinked leaf for the same reason writes do.
+
+        A read through a link is how a project's contents get to include
+        ``~/.ssh/id_ed25519`` without any path ever having said so.
+        """
+
+        with self.open_for_read(relative) as handle:
+            return handle.read()
 
 
 __all__ = ["ProjectSandbox", "ProjectSandboxError"]

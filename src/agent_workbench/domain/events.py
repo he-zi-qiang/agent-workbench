@@ -40,6 +40,7 @@ from agent_workbench.domain.context import Citation
 from agent_workbench.domain.errors import ErrorInfo
 from agent_workbench.domain.identifiers import Identifier, new_event_id
 from agent_workbench.domain.policies import PolicyEffect
+from agent_workbench.domain.project_files import ProjectRelativePath
 from agent_workbench.domain.runs import (
     BudgetUsage,
     ModelProfileName,
@@ -615,6 +616,18 @@ class ToolCompleted(DomainModel):
     #: Which workspace names this call bound to new bytes. Not a preview and
     #: not gated; see the note above.
     workspace_writes: tuple[WorkspaceName, ...] = ()
+    #: Which project-relative paths this call wrote (ADR-086). Outside the gate
+    #: for the same reason as the line above -- a path is not content, and the
+    #: principal reading this event can already list the directory it names.
+    #:
+    #: This existed only as prose until ADR-086: ``ProjectWriteTool`` answered
+    #: ``"Wrote docs/report.md (812 bytes)."`` and nothing else, so a console
+    #: watching a project session had no machine-readable route to "what did
+    #: that instruction make". The consequence was visible rather than
+    #: theoretical -- a turn that wrote into the project directory produced no
+    #: file card at all, while the same turn against a flat workspace produced
+    #: one, and the reader was given no reason for the difference.
+    project_writes: tuple[ProjectRelativePath, ...] = ()
     #: Bounded like every other preview in this module. `output_bytes` above
     #: stays the truth about size, and `truncated` about the tool's own
     #: clipping; this may be shortened again on its way here, which is why the

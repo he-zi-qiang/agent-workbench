@@ -494,6 +494,100 @@ def test_writing_reading_and_deleting_a_file(tmp_path: Path) -> None:
     assert _run(world, scenario) == ("docs/adr/0072.md", "# ADR-072\n", 204, 204)
 
 
+def test_reading_a_file_as_bytes_serves_it_undecoded_and_undownloadable(
+    tmp_path: Path,
+) -> None:
+    """The route that lets the console show a produced image (F-27).
+
+    `GET .../file` next door decodes UTF-8 and reports `is_text`, which is the
+    right answer for a model and no answer at all for a PNG. What this asserts
+    is the pair of headers that make serving raw bytes safe to do at all:
+    `attachment` so a direct visit saves rather than renders, and `nosniff` so
+    the honest `application/octet-stream` cannot be promoted by a browser into
+    something executable (ADR-062 §4).
+    """
+
+    world = _World()
+    payload = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
+    (tmp_path / "logo.png").write_bytes(payload)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, ...]:
+        project_id = (await _new_project(client)).json()["project_id"]
+        await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path)},
+            headers=_headers(),
+        )
+        got = await client.get(
+            f"/v1/projects/{project_id}/file/bytes",
+            params={"path": "logo.png"},
+            headers=_headers(),
+        )
+        missing = await client.get(
+            f"/v1/projects/{project_id}/file/bytes",
+            params={"path": "nope.png"},
+            headers=_headers(),
+        )
+        escaping = await client.get(
+            f"/v1/projects/{project_id}/file/bytes",
+            params={"path": "../outside.png"},
+            headers=_headers(),
+        )
+        return (
+            got.status_code,
+            got.content,
+            got.headers["content-type"],
+            got.headers["x-content-type-options"],
+            got.headers["content-disposition"],
+            got.headers["content-length"],
+            missing.status_code,
+            escaping.status_code,
+        )
+
+    # The type is deliberately not guessed. A project file is a file on a disk
+    # and nobody recorded a type for it; the console decides what to display it
+    # as from the name, which is a display decision no authorization reads.
+    assert _run(world, scenario) == (
+        200,
+        payload,
+        "application/octet-stream",
+        "nosniff",
+        "attachment; filename=\"logo.png\"; filename*=UTF-8''logo.png",
+        str(len(payload)),
+        404,
+        400,
+    )
+
+
+def test_a_neighbour_cannot_read_the_bytes_either(tmp_path: Path) -> None:
+    """The new route is not a second door with a weaker lock.
+
+    Worth its own case rather than trusting that it went through the same
+    `open_files`: the whole reason the sibling test exists is that a version
+    taking the root from the request would be an open directory-read endpoint
+    with a project id decorating it -- and this route hands back raw bytes.
+    """
+
+    world = _World()
+    (tmp_path / "secret.png").write_bytes(b"\x89PNG mine")
+
+    async def scenario(client: httpx.AsyncClient) -> int:
+        project_id = (await _new_project(client)).json()["project_id"]
+        await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path)},
+            headers=_headers(),
+        )
+        read = await client.get(
+            f"/v1/projects/{project_id}/file/bytes",
+            params={"path": "secret.png"},
+            headers=_headers(principal_id=NEIGHBOUR),
+        )
+        return read.status_code
+
+    assert _run(world, scenario) == 404
+
+
 def test_a_neighbour_cannot_read_the_files(tmp_path: Path) -> None:
     world = _World()
     (tmp_path / "secret.md").write_text("mine\n")

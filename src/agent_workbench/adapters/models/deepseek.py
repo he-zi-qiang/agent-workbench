@@ -85,6 +85,58 @@ DEFAULT_MAX_ARGUMENT_CHARS: Final[int] = 262_144
 # rate limited harder.
 RETRY_BACKOFF_SECONDS: Final[float] = 0.5
 
+#: Statuses that say the account is the problem, not the request (ADR-0084).
+#: 402 is DeepSeek's "Insufficient Balance"; 401 and 403 are a key it will not
+#: accept. They are grouped because the *handling* is identical -- stop, never
+#: retry, and tell a person -- and split apart only in the sentence, which is
+#: the one thing a reader acts on.
+_ACCOUNT_STATUSES: Final[Mapping[int, str]] = {
+    401: "this deployment's API key was rejected",
+    402: "this deployment's provider account is out of credit",
+    403: "this deployment's API key is not allowed to make this call",
+}
+
+
+def _rejection(status_code: int) -> ErrorInfo:
+    """Classify an HTTP error status without reading the body.
+
+    The body is not read and not quoted, for the reason the module docstring
+    gives: a chat completion error echoes the prompt that was sent. The status
+    line is the whole of what crosses this boundary, and it is enough --
+    `_ACCOUNT_STATUSES` is the part of it that a person, rather than a retry,
+    has to answer.
+
+    Before this split every one of these was `provider_error`, non-retryable,
+    "the provider rejected the request with HTTP 402". Nothing about that is
+    false; what it cost is that one code covers an exhausted account, a
+    retired model id, a malformed request and a 5xx that ran out of retries,
+    so no reader downstream can tell a top-up from a config change. Traced
+    2026-08-26 from a report of runs dying mid-answer on this checkout, whose
+    provider balance measured CNY 1.08.
+    """
+
+    account = _ACCOUNT_STATUSES.get(status_code)
+    if account is not None:
+        return ErrorInfo(
+            code="provider_account_rejected",
+            # Named so the reader knows where to go, and so an operator reading
+            # the event log a week later still has the status. Retrying is
+            # ruled out in the sentence because this is the one failure whose
+            # remedy is not in this process.
+            message=(
+                f"the provider refused the request with HTTP {status_code}: "
+                f"{account}. Retrying will not help until that is fixed."
+            ),
+            retryable=False,
+        )
+    return ErrorInfo(
+        code="provider_error",
+        message=f"the provider rejected the request with HTTP {status_code}",
+        # 429 and 5xx are the provider having a moment; everything else is this
+        # deployment having sent something it will send again the same way.
+        retryable=status_code >= 500 or status_code == 429,
+    )
+
 
 class _RetryableFailure:
     """A failure from before anything was emitted, so retrying it is safe."""
@@ -255,16 +307,9 @@ class DeepSeekModel:
             ) as response:
                 if response.status_code >= 400:
                     # The body is not read and not quoted: a chat completion
-                    # error can echo the prompt back.
-                    rejected = ErrorInfo(
-                        code="provider_error",
-                        message=(
-                            "the provider rejected the request with HTTP "
-                            f"{response.status_code}"
-                        ),
-                        retryable=response.status_code >= 500
-                        or response.status_code == 429,
-                    )
+                    # error can echo the prompt back. `_rejection` decides from
+                    # the status alone.
+                    rejected = _rejection(response.status_code)
                     if rejected.retryable:
                         yield _RetryableFailure(rejected)
                     else:

@@ -118,6 +118,33 @@ export function effectiveMediaType(mediaType: string, name: string): string {
 }
 
 /**
+ * Whether these bytes were written to be read as Markdown.
+ *
+ * Asked by media type rather than by `previewKind`, and that is the same shape
+ * as `isRunnablePython` below rather than a coincidence: the kind answers
+ * "which fetch and which viewer family", and `text/markdown`, `text/x-python`
+ * and `text/plain` all want the same fetch. What differs is only how the
+ * string is painted once it has arrived, and a sixth `PreviewKind` for that
+ * would force every surface that shows a file -- Work's artifact panel
+ * included -- to answer a question about painting (ADR-065 §4).
+ *
+ * Lifted here from `features/work/preview.tsx`, where it was the only copy,
+ * when Code needed the same question. One predicate, because the answer must
+ * not depend on which page is asking: a `.md` that renders in Work and comes
+ * out as `<pre>` in Code is the same file looking like two different things.
+ *
+ * No name fallback, unlike `isRunnablePython`. That one asks the name as well
+ * because an *uploaded* script carries whatever the browser guessed and is
+ * exactly as runnable as a written one. Here the guess has already happened:
+ * every caller passes `effectiveMediaType(...)`, which is the table that turns
+ * a bare `.md` into `text/markdown` in the first place.
+ */
+export function isMarkdown(mediaType: string): boolean {
+  const base = mediaType.split(";")[0]?.trim().toLowerCase() ?? "";
+  return base === "text/markdown" || base === "text/x-markdown";
+}
+
+/**
  * What a `.py` is called on the wire, and why the name is asked as well.
  *
  * `WorkspaceWriteTool` and the sandbox's own output labeller both type a `.py`

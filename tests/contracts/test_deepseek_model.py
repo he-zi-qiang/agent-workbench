@@ -484,9 +484,14 @@ def test_an_http_error_reports_its_status_and_nothing_else() -> None:
 
     assert completion.finish_reason == "error"
     assert completion.error is not None
-    assert completion.error.code == "provider_error"
+    # ADR-0084 moved 401 out of `provider_error`; what this test is about is
+    # unchanged and is the reason the status stayed 401 rather than moving to
+    # one that is still generic -- a rejected key is the status whose body most
+    # plausibly quotes the key, and it is the body that must not survive.
+    assert completion.error.code == "provider_account_rejected"
     assert "401" in completion.error.message
     assert "canary" not in completion.error.message
+    assert "sk-deepseek" not in completion.error.message
     assert completion.error.retryable is False
 
 
@@ -497,6 +502,54 @@ def test_server_errors_and_rate_limits_are_retryable() -> None:
 
         assert completion.error is not None
         assert completion.error.retryable is retryable
+
+
+def test_a_refused_account_is_not_reported_as_a_provider_error() -> None:
+    """ADR-0084. The account is a different fact from the request.
+
+    402 is DeepSeek's "Insufficient Balance", and before this split it reached
+    the console as `provider_error` with `stop_reason: "error"` -- the same
+    pair a retired model id produces, and a top-up and a config edit are not
+    the same errand. Measured on this checkout 2026-08-26, with the account
+    down to CNY 1.08 and runs dying mid-answer.
+    """
+
+    for status in (401, 402, 403):
+        completion = _completion(_run(_serve(b"{}", status=status))[0])
+
+        assert completion.error is not None, status
+        assert completion.error.code == "provider_account_rejected", status
+        assert completion.error.retryable is False, status
+        # The status survives for whoever reads the event log later; the
+        # sentence carries which of the three it was, because the code
+        # deliberately does not.
+        assert str(status) in completion.error.message, status
+
+    # The contrast that makes the split worth having: a request this
+    # deployment got wrong stays exactly where it was.
+    bad_request = _completion(_run(_serve(b"{}", status=400))[0])
+    assert bad_request.error is not None
+    assert bad_request.error.code == "provider_error"
+
+
+def test_a_refused_account_is_never_retried() -> None:
+    """Retrying spends the same nothing, three times, before saying so."""
+
+    attempts: list[int] = []
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        return httpx.Response(402, content=b"")
+
+    events, _, slept = _run_with(
+        responder, profile=DeepSeekProfile(model_id="deepseek-chat", max_retries=3)
+    )
+
+    assert len(attempts) == 1
+    assert slept == []
+    completion = _completion(events)
+    assert completion.error is not None
+    assert completion.error.code == "provider_account_rejected"
 
 
 def test_a_transport_failure_becomes_a_completion_event() -> None:

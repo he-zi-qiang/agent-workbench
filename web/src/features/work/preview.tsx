@@ -124,16 +124,3 @@ export function layoutDeclineNote(reason: PanelLayoutDecline): string {
   }
   return "这套部署给不出这份文档的版面。下面是文字预览，需要原样查看请下载。";
 }
-
-/**
- * Whether these bytes were written to be read as Markdown.
- *
- * Asked by name rather than by `previewKind`, because the kind deliberately
- * answers a coarser question: `text/markdown` and `text/x-python` are both
- * `text` and get the same fetch, and that is right -- what differs is only how
- * the string is painted once it arrives.
- */
-export function isMarkdown(mediaType: string): boolean {
-  const base = mediaType.split(";")[0]?.trim().toLowerCase() ?? "";
-  return base === "text/markdown" || base === "text/x-markdown";
-}

@@ -32,9 +32,15 @@ import {
 import type { PrincipalIdentity, WorkspaceEntryView } from "../../api/types";
 import { BlobPreview } from "../../components/BlobPreview";
 import { HtmlPreview } from "../../components/HtmlPreview";
+import { MarkdownPreview } from "../../components/MarkdownPreview";
 import { PythonPreview } from "../../components/PythonPreview";
 import { TextPreview } from "../../components/TextPreview";
-import { isRunnablePython, previewKind } from "../../components/media";
+import {
+  effectiveMediaType,
+  isMarkdown,
+  isRunnablePython,
+  previewKind,
+} from "../../components/media";
 import { FileCard } from "./FileCard";
 
 /**
@@ -198,14 +204,21 @@ export function FilePreview({
     );
   }
   if (kind === "text") {
-    return (
-      <TextPreview
-        load={() =>
-          getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name)
-        }
-        queryKey={fileKey("code-file-text", identity, viewing)}
-      />
-    );
+    // The second question this arm asks, after the Python one above and for
+    // the same reason: `text/markdown` wants the same fetch as `text/plain`
+    // and differs only in how the string is painted (ADR-065 §4 --
+    // `MarkdownPreview` carries the rest of that argument).
+    //
+    // Same `load` and the same cache key as the plain arm, so the transfer is
+    // shared: a reader who saw `notes.md` as a card inline and then opened it
+    // in the panel fetched it once, and switching to 源码 fetches nothing.
+    const load = () =>
+      getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name);
+    const key = fileKey("code-file-text", identity, viewing);
+    if (isMarkdown(effectiveMediaType(viewing.mediaType, viewing.name))) {
+      return <MarkdownPreview load={load} queryKey={key} />;
+    }
+    return <TextPreview load={load} queryKey={key} />;
   }
   // Reached by `docx` and `none`. Not fetched at all: reading a zip as text
   // renders mojibake, and transferring bytes only to decide not to show them

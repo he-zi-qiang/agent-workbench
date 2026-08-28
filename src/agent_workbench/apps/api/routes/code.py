@@ -41,6 +41,7 @@ from agent_workbench.application.code_approvals import (
     CodeApprovalRegistry,
 )
 from agent_workbench.application.code_session import (
+    CodeApprovals,
     CodeMode,
     CodeRequest,
     CodeRunNotPermittedError,
@@ -124,6 +125,17 @@ class AskRequest(BaseModel):
     #: `plan: bool`, because `plan=false` reads as an absence in a request body
     #: while `"act"` reads as a choice somebody made.
     mode: CodeMode = "act"
+    #: ``"before_write"`` makes every write of this turn stop at a person
+    #: (ADR-087). Defaulted for the same reason as ``mode``, and named for the
+    #: same reason: `approvals=false` would read as an absence, and the thing
+    #: it would be absent from is a safety property.
+    #:
+    #: It is not `mode`'s third value. The two narrow different halves of the
+    #: envelope -- `mode` the tool list, this the risks that stop -- and a
+    #: single field would have to be taken apart again at the one place both
+    #: are read. `application/code_session.py`'s `CodeApprovals` carries the
+    #: rest of that argument, including why there is no "ask me about nothing".
+    approvals: CodeApprovals = "standard"
 
 
 class AskResponse(BaseModel):
@@ -140,6 +152,23 @@ class AskResponse(BaseModel):
     run_id: Identifier
     status: str
     stop_reason: str
+    #: The failure's machine code and sentence, or ``None`` on a turn that
+    #: completed. ``AgentOutcome`` has carried both since it was written and
+    #: this response dropped them, which left the console holding one word --
+    #: ``stop_reason`` -- for every way a turn can end badly. Six different
+    #: provider failure reached the page as the bare stop reason, so an
+    #: exhausted account read exactly like a retired model id (ADR-0084).
+    #:
+    #: Both, not one. The code is what the console writes a sentence from; the
+    #: message is what it falls back to for a code it has no words for yet,
+    #: which is the same rule `failure.ts` already applies to Task details -- an
+    #: unrecognised detail is still the most specific thing anyone has.
+    #:
+    #: Safe to send. ``ErrorInfo.message`` is contractually free of secrets,
+    #: provider payloads and document text; the Task console has been rendering
+    #: these same strings since it had a failure panel.
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class MessageView(BaseModel):
@@ -337,6 +366,11 @@ async def ask(
                 # change mid-turn would change what a running model is holding
                 # after its envelope had been signed with the other list.
                 mode=body.mode,
+                # Frozen in the same statement, for the same reason: the
+                # envelope this signs is the one the gateway checks every call
+                # against, and a gate that could be lowered mid-turn is not a
+                # gate (ADR-087).
+                approvals=body.approvals,
             ),
             # One stream per session, one run per turn, and a fence that has no
             # publish methods at all: this run produces files and a report, and
@@ -354,12 +388,15 @@ async def ask(
         name=f"code-disconnect-{run_id}",
     ):
         turn = await turn_task
+    error = turn.outcome.error
     return AskResponse(
         report=turn.report,
         workspace_version=turn.workspace_version,
         run_id=turn.run_id,
         status=turn.outcome.status,
         stop_reason=turn.outcome.stop_reason,
+        error_code=None if error is None else error.code,
+        error_message=None if error is None else error.message,
     )
 
 

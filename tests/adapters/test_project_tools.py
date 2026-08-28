@@ -1051,6 +1051,78 @@ async def test_a_binary_file_is_described_not_decoded(
     assert "not a text file" in result.content
 
 
+async def test_a_project_write_names_the_path_it_wrote_as_a_fact(
+    project: Path,
+    scope: ProjectFileScope,
+    receipts: ReadReceipts,
+) -> None:
+    """ADR-086. The sentence is for the model; `project_writes` is for the rest.
+
+    Before this, `"Wrote docs/report.md (812 bytes)."` was the *only* thing a
+    caller could learn a written path from -- an untested English sentence, the
+    exact source `turnBlocks.ts` refuses to parse for the workspace side and
+    for which ADR-063 added the structured field there. The console's symptom
+    was that a project turn produced no file card and left the tree unchanged,
+    while the same turn against a flat workspace produced both.
+
+    Read off `entry.path` rather than off the argument, and the two agreeing
+    is not the reason -- it is the thing being relied on. Every spelling that
+    could disagree (`./a`, `a//b`, a trailing separator) is refused outright by
+    `validate_relative_path`, so agreement is that validator's guarantee and
+    not this call's. Publishing the store's own answer is what keeps it true if
+    that ever changes: a console takes this value straight back to the
+    directory.
+    """
+
+    store = FilesystemProjectFileStore(ProjectSandbox(project))
+    with scope.using(store):
+        written = await ProjectWriteTool(scope, receipts).handle(
+            _invocation("project_write", path="docs/report.md", content="# hello\n")
+        )
+        assert written.error is None
+        assert written.project_writes == ("docs/report.md",)
+
+        # An edit is a write for every reader of this field: the bytes under
+        # that path are new. Which kind of write it was is on `tool_name`.
+        edited = await ProjectEditTool(scope, receipts).handle(
+            _invocation(
+                "project_edit",
+                path="docs/report.md",
+                find="hello",
+                replace="goodbye",
+            )
+        )
+        assert edited.error is None
+        assert edited.project_writes == ("docs/report.md",)
+
+    # The two file-shaped sides stay separate, and the type is why: a
+    # `WorkspaceName` cannot hold a path at all, so widening that field instead
+    # of adding this one would have removed the property the flat side buys by
+    # refusing paths -- for every caller, to serve a side that does not need it.
+    assert written.workspace_writes == ()
+
+
+async def test_a_refused_project_write_names_nothing(
+    project: Path,
+    scope: ProjectFileScope,
+    receipts: ReadReceipts,
+) -> None:
+    """A path a console would refetch must never come from a write that failed.
+
+    Worth its own test rather than trusting the code path: the field is read to
+    invalidate a directory listing and to mark a row as "this session wrote
+    it", and both of those are claims about a file that exists.
+    """
+
+    store = FilesystemProjectFileStore(ProjectSandbox(project))
+    with scope.using(store):
+        result = await ProjectWriteTool(scope, receipts).handle(
+            _invocation("project_write", path="../escape.md", content="# nope\n")
+        )
+    assert result.error is not None
+    assert result.project_writes == ()
+
+
 class TestSearchingTheTree:
     """`project_grep`, and the sentence it exists to be able to say.
 
@@ -1411,7 +1483,7 @@ class TestRunningACommand:
 
     def test_it_is_destructive_and_says_which_scope_it_needs(self) -> None:
         # `destructive` rather than `external`, and the gap is the whole point:
-        # `code.sandbox_requires_approval` defaults to False, so an `external`
+        # `code.external_requires_approval` defaults to False, so an `external`
         # tool would run ungated by default. `destructive` is armed in every
         # Code envelope regardless.
         spec = ProjectRunTool(ProjectFileScope(), ReadReceipts(), environment={}).spec()

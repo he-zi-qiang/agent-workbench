@@ -61,10 +61,59 @@ model_id = "deepseek-v4-flash"
 # profile is for, and forcing an opening tool call was never what made a coding
 # turn reach for its tools -- the prompt is.
 tool_calling_required = false
-# Code turns stream their reasoning into the console's 思考 block. `low`
-# keeps the write-run-fix loop responsive; depth is a knob, not a promise.
+# 实测而非猜测：2026-08-26 直接对 provider 打了一次 `max_tokens=16384` 的请求，
+# 回来 `completion_tokens: 11000`、`finish_reason: "stop"`——自然收尾，不是被截断。
+# 也就是说 `config.default.toml` 的 8192 是**真的卡着**的，而且这个部署从来没有
+# 选过它，它只是默认值。同一批探测里 `max_tokens` 一路给到 200000 provider 都回
+# 200，所以"它接受"证明不了上限——只有生成出来的长度算数，16384 是量出来的那个数。
+#
+# 别往上填没量过的数字：适配器会擦掉 provider 的错误正文（那里出现过 prompt 回显），
+# 一个供应商不收的值最后只会变成转录里一句 HTTP 400，指向唯一没出问题的组件。
+max_output_tokens = 16384
+#
+# 同一份文档把这个模型的 Max Output 记作 384K。**没有取它**，而且这是个选择不是
+# 遗漏：`max_output_tokens` 除了给长回答留空间，也是跑飞的那一轮唯一的刹车，而
+# 一次编码回合要写的文件很少超过 16384 token（约 60KB 文本）。要更大就往上调，
+# 只是别忘了它同时是账单的上限。
+
+# 这个部署的模型物理上能装多少（ADR-080）。**查来的 + 量过的，不是猜的。**
+#
+# 在这之前九个 profile 一个都没有声明它，于是 `domain/runs.py` 的
+# `context_reason_for` 直接返回 `None`——ADR-080 的上下文天花板与 ADR-081 的压缩
+# **两个都不生效**。后果不是"长会话质量下降"，是这一轮直接死在 provider 的 400 上，
+# 而适配器会擦掉 provider 的错误正文，转录里只剩一句 HTTP 400。
+#
+# 1000000 来自 DeepSeek 自己的 Models & Pricing 页（2026-08-26 读取）：
+# `deepseek-v4-flash` 的 Context Length 记作 1M tokens、Max Output 记作 384K。
+#
+# 为什么不直接照抄文档就完事：这个仓库自己记过一个对不上的数。docs/status.md 第
+# 二十一批（ADR-081 复查）写着实测"三次在 70,000 token 打 64,000 的窗口"，终局
+# HTTP 400。所以 2026-08-26 直接对 provider 打了两次大输入验证，用的就是这里这个
+# model_id：
+#
+#     900,000 字符 → prompt_tokens = 200089 → HTTP 200
+#     400,000 字符 → prompt_tokens =  88977 → HTTP 200
+#
+# 也就是说那个 64,000 是旧模型时代的数字，对 `deepseek-v4-flash` 不再成立。量到
+# 200k 没问题，文档说 1M——两个数都写在这里，因为它们证明的不是同一件事：量到的那个
+# 证明旧数字已死，文档那个才是这里填的依据。
+#
+# 万一以后又在低于这个数的地方吃到 400：**这个数就是错的**，改它，并且把新的测量
+# 写在这里。上面这两行是它当时的全部依据，不是一个不能质疑的常数。
+context_window_tokens = 1000000
+# Code turns stream their reasoning into the console's 思考 block.
+#
+# 曾经是 `low`，注释写着「`low` keeps the write-run-fix loop responsive; depth is
+# a knob, not a promise.」——那个取舍本身没错，错在选的点。2026-08-26 用户的原话是
+# 「code 模式也不智能」，而这个 profile 把出厂默认的 `high`（`settings.py` 的
+# `reasoning_effort` 默认值）主动调低成了全档最低。一个被调到最低档的推理档位，
+# 是"不智能"最先该查的地方，而不是最后。
+#
+# 代价照旧、并且照旧写在这里：推理深度是拿响应延迟换的，控制台的「可观看」会变差。
+# 下面的 `turn_timeout_seconds` 同批从 360 提到 600，就是为了接住这份代价——那个
+# 360 是按 `low` 的回合长度定的。要换回响应优先，把这两个一起调回去，不要只调一个。
 thinking = "enabled"
-reasoning_effort = "low"
+reasoning_effort = "high"
 
 [model.compact]
 model_id = "deepseek-chat"
@@ -108,6 +157,23 @@ allow_local_bootstrap = true
 [policy]
 shell_tools_enabled = true
 
+# 一等的联网搜索（ADR-085）。**这一行是被人明确批准后才写下的**，不是默认打开。
+#
+# 这个 profile 下面有 `[research] enabled = true`，所以 `bootstrap/projections.py`
+# 里那个「旗子为真**且** research 配了」的与直接成立，`web_search` 会真的出现在每个
+# Code 回合的工具目录里。
+#
+# 净变化不是天花板也不是审批门，是**有没有人在场**——ADR-085 §1 有实测表：这个
+# profile 走 `CODE_PROJECT_TOOLS_WITH_RUN`，天花板本来就是 `destructive`，加 search
+# 一格不动。变的是：在这一行之前，Code 要够到网络必须写一条 `curl` 走 `project_run`，
+# 而那是 `destructive`、无条件上膛、卡片上是规范化后的真实命令；在这一行之后，
+# 够到网络**不再需要任何人在场**，而不可信的网页文本会落进一个握着 `project_write`／
+# `project_edit`（`write` 风险，永不上膛）的回合。
+#
+# 要收回它就改这一行。别去找批量批准的旁路——`approve_for_session` 对 external／
+# destructive 是硬拒的，那条拒绝是设计。
+search_tools_enabled = true
+
 [code]
 enabled = true
 
@@ -115,7 +181,11 @@ enabled = true
 # is better cut off in minutes than in ten. 360 rather than 240 since ADR-058:
 # a session that runs code ungated actually iterates -- write, run, read, fix,
 # run again -- and 240 was sized for turns that mostly waited on approvals.
-turn_timeout_seconds = 360
+# 2026-08-26 从 360 提到 600（与 `config.default.toml` 的出厂值一致）：同一批把
+# `reasoning_effort` 从 `low` 提到了 `high`，而 360 这个数是按 `low` 的回合长度定
+# 的。不一起提，就是把"想得更深"直接兑换成"更容易超时"——而超时的回合 `output_text`
+# 是空的，连报告都不会写进对话，读者看到的是指令后面一片空白。
+turn_timeout_seconds = 600
 approval_timeout_seconds = 120
 
 # One at a time locally: a laptop running a model loop, a database and a vector

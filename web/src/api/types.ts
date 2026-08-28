@@ -212,12 +212,38 @@ export interface HistoryResponse {
  */
 export type CodeTurnMode = "act" | "plan";
 
+/**
+ * 这一轮里，一次写入由谁拍板（ADR-087）。
+ *
+ * 和 `CodeTurnMode` 分开，因为它们收紧的是信封的两半：`mode` 收紧工具清单，
+ * 这个收紧「哪些风险要停在人面前」。合成一个四档的值，读起来更像一条梯子，
+ * 但在唯一用到它的地方还得再拆回两半。
+ *
+ * 没有第三档。「什么都别问我」要拿掉的是 `destructive`，而那是 `project_run`
+ * ——在这台机器上跑一条命令，ADR-077 说它跑之前要给人看见。这一档只加不减。
+ */
+export type CodeTurnApprovals = "standard" | "before_write";
+
 export interface CodeAskResponse {
   report: string;
   workspace_version: Identifier | null;
   run_id: Identifier;
   status: string;
   stop_reason: string;
+  /**
+   * Why the turn failed, when it did (ADR-0084). Both null on a turn that
+   * completed.
+   *
+   * `stop_reason` alone is not enough to say anything useful about a failure:
+   * every provider problem arrives as `"error"`, so an account with no credit
+   * left and a model id that no longer exists produced the same sentence. The
+   * code is what the page writes Chinese from; the message is the fallback for
+   * a code it has not learned, on the same rule `explainFailure` uses.
+   *
+   * Optional because a server older than this field still answers turns.
+   */
+  error_code?: string | null;
+  error_message?: string | null;
 }
 
 export interface PendingApprovalView {

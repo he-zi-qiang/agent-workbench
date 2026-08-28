@@ -494,6 +494,12 @@ class ProjectWriteTool:
         return ToolResult.succeeded(
             invocation.call,
             content=f"Wrote {entry.path} ({entry.size_bytes} bytes).",
+            # The sentence above is for the model; this is for everything else
+            # (ADR-086). `entry.path`, not the argument the model supplied:
+            # the store normalises what it was given, and a console that
+            # refetched the argument's spelling would ask for a file under a
+            # name the directory does not use.
+            project_writes=(entry.path,),
         )
 
     def _who_changed_it(self) -> str:
@@ -631,6 +637,10 @@ class ProjectEditTool:
         return ToolResult.succeeded(
             invocation.call,
             content=f"Edited {entry.path} ({entry.size_bytes} bytes).",
+            # An edit is a write for every reader of this field: the bytes
+            # under that path are new. What kind of write it was is already on
+            # `tool_name`, which is where a caller that cares should read it.
+            project_writes=(entry.path,),
         )
 
 

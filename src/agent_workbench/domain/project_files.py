@@ -125,6 +125,29 @@ ProjectPathSegment = Annotated[
 ]
 
 
+#: A whole project-relative path, as a value an event may carry.
+#:
+#: Deliberately weaker than ``validate_relative_path``: it bounds the length and
+#: refuses the control characters, and it does **not** re-check the segments.
+#: The strong check is a function because it has to raise a reason a person can
+#: read, and it already ran -- nothing reaches an event payload without having
+#: been through the store. A second, weaker copy of it spelled as a regex would
+#: be a rule that can drift from the one that matters, and the drift would show
+#: up as an event refused for a path the filesystem accepted.
+#:
+#: What it *is* for is the ceiling. A payload field with no ``max_length`` is a
+#: place where one oversized string becomes an event log nobody can replay, and
+#: `ToolCompleted` is written on a hot path where the only defence is the type.
+ProjectRelativePath = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^[^\x00-\x1f]+$",
+        min_length=1,
+        max_length=MAX_RELATIVE_PATH_BYTES,
+    ),
+]
+
+
 class ProjectFileChangedError(AgentWorkbenchError):
     """A conditional write found the file no longer as the caller last saw it.
 
@@ -316,6 +339,7 @@ __all__ = [
     "ProjectFileExistsError",
     "ProjectPathError",
     "ProjectPathSegment",
+    "ProjectRelativePath",
     "is_within",
     "normalize_segment",
     "validate_relative_path",

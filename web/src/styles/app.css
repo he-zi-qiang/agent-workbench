@@ -4233,6 +4233,56 @@ pre {
   gap: 2px;
 }
 
+/* 两节之间的抬头。左内边距和下面每一行的标题对齐，不和栏边对齐——它是
+   这一列的名字，不是这一栏的名字。 */
+/* 「全部会话」那一档里，一行属于哪个文件夹。
+   和时间同一行、同一号字，因为它们是同一类东西——关于这一行的附注，不是它的
+   名字。`min-width: 0` 加省略号：文件夹名可以很长，而它挤掉时间是错的方向，
+   时间是这一列本来的排序依据。 */
+.aw-code-recent-project {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-code-sessions-eyebrow {
+  display: block;
+  padding: 10px 12px 4px;
+}
+
+/* 正在跑的那一行。呼吸而不是旋转：一个转圈的东西在一列静止的标题里会一直
+   拉走视线，而这一行要说的只是「它还没结束」。 */
+.aw-code-recent-running {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--aw-accent);
+  vertical-align: middle;
+  animation: aw-code-recent-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes aw-code-recent-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* 关掉动画的人看到的是一个不闪的点，而不是没有点：状态本身不是装饰。 */
+@media (prefers-reduced-motion: reduce) {
+  .aw-code-recent-running {
+    animation: none;
+  }
+}
+
 .aw-code-session-list {
   display: grid;
   min-height: 0;
@@ -5108,37 +5158,46 @@ p.aw-code-step-thought {
    模式，两个按钮会让「刚才那一轮是哪种」变成一个要回想的问题；而一个 checked
    状态在发送之后仍然摆在那里，说的正是下一轮也是这个模式。 */
 
-.aw-code-plan-toggle {
-  display: inline-flex;
+/* 这一轮的权限。三档，共用站点上那个「同一件事的几种看法」的形状。
+   `height: 38px` 是和它右边那个上传按钮、以及 composer 那一行对齐用的——
+   `.aw-segmented` 本身只管内部间距，行高归用它的地方管。 */
+.aw-code-permission {
   height: 38px;
   align-items: center;
-  gap: 6px;
-  padding: 0 11px;
-  border: 1px solid var(--aw-border-strong);
+  border-color: var(--aw-border-strong);
   border-radius: 11px;
   background: var(--aw-panel);
-  color: var(--aw-text-soft);
-  cursor: pointer;
   font-size: 13px;
   white-space: nowrap;
 }
 
-.aw-code-plan-toggle:hover {
+.aw-code-permission button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.aw-code-permission button:hover:not(:disabled) {
   color: var(--aw-text);
 }
 
-.aw-code-plan-toggle input {
-  display: none;
-}
-
-.aw-code-plan-toggle.is-on {
-  border-color: var(--aw-accent);
+/* 选中的那一档用 accent 说话，和它替掉的那个开关一致：读者认得的是那个颜色
+   代表「这一轮不一样」，换个颜色等于让他重新学一遍。 */
+.aw-code-permission button.is-active {
   color: var(--aw-accent);
 }
 
-.aw-code-plan-toggle:has(input:disabled) {
+.aw-code-permission button:disabled {
   cursor: default;
   opacity: 0.55;
+}
+
+/* 窄屏上让位给标签文字：图标是提示，不是内容，而三档的名字是。 */
+@media (max-width: 560px) {
+  .aw-code-permission button svg {
+    display: none;
+  }
 }
 
 /* 「按这个计划执行」。摆在 composer 上沿而不是贴在那条报告下面：报告会滚走，而
@@ -6168,6 +6227,25 @@ p.aw-code-step-thought {
   white-space: nowrap;
 }
 
+/* 这段会话写过它。
+   `margin-left: auto` 把点推到行尾，而名字那一格已经 `overflow: hidden`，
+   所以长文件名让位给点而不是把它挤出可视区——反过来的话，越是深层新写的文件
+   越标不出来，而那正好是最需要被指出来的一类。
+   `flex: none` 是同一件事的另一半：不给它压缩的机会。 */
+.aw-project-file-touched {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--aw-accent);
+}
+
+/* 选中态的底色本身就是 accent，点在上面会消失。换成前景色，形状不变。 */
+.aw-project-file-row.is-selected .aw-project-file-touched {
+  background: currentcolor;
+}
+
 .aw-project-file-note {
   margin: 4px 12px;
   color: var(--aw-text-muted);
@@ -6793,6 +6871,26 @@ p.aw-code-step-thought {
   align-items: start;
   gap: 8px;
   grid-template-columns: auto minmax(0, 1fr);
+}
+
+/* 摘要钳到两行。
+   `THOUGHT_HEAD_MAX` 管的是字符数，这一条管的是行数，两者都要——只有字符上限
+   时，一段没有句号的长首句照样铺满三行，而读者扫的是行不是字。两行而不是一行：
+   推理的首句常常是一个带从句的判断，一行会把判断截在「因为」上，那比多占一行
+   更难读。三角形本身就说明了下面还有，所以这里不需要省略号之外的任何提示。 */
+.aw-code-thought-head {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* 展开之后不再钳：读者点开它就是为了看全。 */
+.aw-code-step-thought[open] > summary > .aw-code-thought-head {
+  display: block;
+  -webkit-line-clamp: none;
+  line-clamp: none;
 }
 
 .aw-code-thought-label {

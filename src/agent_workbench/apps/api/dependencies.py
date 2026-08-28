@@ -160,7 +160,6 @@ from agent_workbench.domain.runs import RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
 from agent_workbench.domain.tools import ToolName, ToolSpec
 from agent_workbench.ports.artifact_store import ArtifactStore
-from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 from agent_workbench.ports.telemetry import Telemetry
@@ -937,6 +936,16 @@ def _assemble_chat(
     model_label = (
         main_profile.model_id if main_profile is not None else config.model.provider
     )
+    # ADR-081 makes one call per run under `[model.compact]`, and the adapter
+    # dispatches on the profile name -- so that call has to be recorded under
+    # the model it actually reached. Not the same string as `model_label` in
+    # any shipped profile that matters: `config.code-local.toml` and
+    # `config.demo-local.toml` both run `deepseek-v4-flash` as main against
+    # `deepseek-chat` as compact.
+    compact_profile = config.model.profiles.get("compact")
+    compact_model_label = (
+        compact_profile.model_id if compact_profile is not None else None
+    )
     # Chat runs are priced by the same profile they are labelled with. Absent
     # when the deployment configured no prices, which leaves every chat spend
     # at zero and every chat cost ceiling refused -- see ClaudeLikeAgentRuntime.
@@ -975,10 +984,12 @@ def _assemble_chat(
                 base_url=research.base_url,
                 max_uses=research.max_uses,
             ),
-            # Chat has no per-run cancellation token to hand a tool here; the
-            # gateway enforces the tool's own timeout, and the request dies with
-            # the connection either way.
-            cancellation=NullCancellationToken(),
+            # No cancellation argument any more, and its absence is the fix.
+            # This used to pass `NullCancellationToken()` with the note "chat
+            # has no per-run cancellation token to hand a tool here" -- true of
+            # this call site, and the wrong place to be looking: the executor
+            # fills a live token into every `ToolInvocation`, which is where
+            # every other tool reads it from (ADR-0085).
             journal=journal,
         ).binding()
 
@@ -994,6 +1005,7 @@ def _assemble_chat(
             ),
             policy_identity=policy_identity,
             model_label=model_label,
+            compact_model_label=compact_model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
             context_window_tokens=model_context_window,
@@ -1012,6 +1024,7 @@ def _assemble_chat(
             ),
             policy_identity=policy_identity,
             model_label=model_label,
+            compact_model_label=compact_model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
             context_window_tokens=model_context_window,
@@ -1141,6 +1154,7 @@ def _assemble_chat(
                 ),
                 policy_identity=policy_identity,
                 model_label=model_label,
+                compact_model_label=compact_model_label,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
                 context_window_tokens=model_context_window,
@@ -1169,6 +1183,7 @@ def _assemble_chat(
                 ),
                 policy_identity=policy_identity,
                 model_label=model_label,
+                compact_model_label=compact_model_label,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
                 context_window_tokens=model_context_window,
@@ -1250,12 +1265,33 @@ def _assemble_chat(
     # runs before the first request.
     code_sandbox = SandboxSlot(config=config.sandbox)
 
+    # Code's own journal and its own binding, not the two built above for chat
+    # (ADR-085). The journal is the reason they cannot be shared: chat *drains*
+    # it -- `chat_execution` calls `take()` once per turn and reads the verdict
+    # into "was this answer web-backed" -- so a Code turn writing into the same
+    # book would both grow it without bound and change the answer chat gives
+    # about a turn Code was not part of.
+    #
+    # `None` when this deployment configured no provider, exactly as above, and
+    # that is what `code.web_search_enabled` is projected to agree with: the
+    # name is only ever offered when the binding exists, because a name offered
+    # without a spec is a `ValueError` out of `code_risk_ceiling` and takes the
+    # whole turn with it.
+    code_web_journal = WebSearchJournal()
+    code_web_tool = _web_search_tool(config.research, code_web_journal)
+
     def _code_registry() -> StaticToolRegistry:
         # Built per call from the slot rather than once from a fixed list,
         # which is what lets `startup` add the sandbox after these closures
         # were created. A turn already pays for a fresh gateway; a registry
-        # over six bindings is the same order of nothing.
-        return StaticToolRegistry([*code_workspace_bindings, *code_sandbox.bindings])
+        # over seven bindings is the same order of nothing.
+        return StaticToolRegistry(
+            [
+                *code_workspace_bindings,
+                *code_sandbox.bindings,
+                *(() if code_web_tool is None else (code_web_tool,)),
+            ]
+        )
 
     def _code_runtime(scope: ApprovalScope) -> ClaudeLikeAgentRuntime:
         code_registry = _code_registry()
@@ -1276,6 +1312,7 @@ def _assemble_chat(
             # coding session rather than to "the API".
             policy_identity=f"{policy_identity}-code",
             model_label=model_label,
+            compact_model_label=compact_model_label,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
             context_window_tokens=model_context_window,
@@ -1326,7 +1363,11 @@ def _assemble_chat(
             project_tool_names=_code_project_tools(
                 host_commands=config.code.host_commands_enabled,
             ),
-            sandbox_requires_approval=config.code.sandbox_requires_approval,
+            external_requires_approval=config.code.external_requires_approval,
+            # ADR-085. Projected as "the flag is on **and** a provider is
+            # configured" (`bootstrap/projections.py`), so this cannot offer a
+            # name the registry above has no binding for.
+            web_search_enabled=config.code.web_search_enabled,
         )
         if config.code.enabled
         else None

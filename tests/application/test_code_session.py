@@ -500,7 +500,7 @@ def test_the_gate_arms_what_the_deployment_chose() -> None:
         recording = _Recording()
         harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
         harness.service.tool_names = CODE_TOOLS_WITH_SANDBOX  # pyright: ignore[reportAttributeAccessIssue]
-        harness.service.sandbox_requires_approval = requires_approval  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.external_requires_approval = requires_approval  # pyright: ignore[reportAttributeAccessIssue]
 
         async def scenario() -> Any:
             session_id = await harness.opened()
@@ -554,6 +554,119 @@ def test_a_turn_holding_the_run_tool_is_not_told_there_is_no_shell() -> None:
         # And `destructive` is armed whatever the sandbox gate says, which is
         # the whole reason the tool is not `external`.
         assert "destructive" in request.envelope.approval_required_risks
+
+
+def test_a_turn_holding_the_run_tool_is_not_left_guessing_about_the_network() -> None:
+    """The other half of the sentence the test above deletes.
+
+    The four base prompts say "There is no shell **and no network**", and
+    `with_host_commands` replaces exactly one of those claims. Until 2026-08-26
+    what it replaced them with talked only about the shell -- so a turn holding
+    `project_run` was told half of one sentence was wrong and left to guess
+    about the rest, and it guessed the way the sentence it had just lost said.
+
+    Reported by a user, on a session that had the tool: the model answered that
+    it had no shell and no network and therefore could not go and look anything
+    up. `bootstrap/child_environment.py` is the authority that makes that
+    false -- only `AW_*` is scrubbed, and its docstring says a project command
+    "is meant to see their `PATH`, their toolchain, their `SSH_AUTH_SOCK` and
+    their own credentials".
+
+    Asserted as an absence plus a mention rather than against the exact
+    wording: what must hold is that the prompt stops being silent, not that it
+    keeps a sentence somebody may reword.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_PROJECT,
+        with_host_commands,
+    )
+
+    prompt = with_host_commands(CODER_SYSTEM_PROMPT_PROJECT)
+
+    assert "no network" not in prompt
+    assert "network" in prompt
+    # A description of where the command runs, never a promise that the network
+    # answers. An offline machine has to stay a possibility the prompt allows,
+    # or this paragraph becomes the next thing a transcript contradicts.
+    assert "offline" in prompt
+
+
+def test_a_sandbox_turn_is_told_to_probe_before_declaring_a_format_out_of_reach() -> (
+    None
+):
+    """A prompt that is silent about a capability is read as denying it.
+
+    Reported by a user: a Code session answered that it could not produce a
+    PDF. That was true of the stock `python:3.12-slim` image and false the
+    moment `docker/sandbox-pdf.Dockerfile` is the one running -- and nothing
+    in the transcript told those two deployments apart.
+
+    Asserted against both sandbox bases, gated and ungated, because a
+    deployment picks one of them and the advice is equally true of each. What
+    is *not* asserted is any library name: what is in the image is `--image` at
+    the server's command line, and a list written into the prompt would be a
+    claim this module cannot keep.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+    )
+
+    for prompt in (
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+    ):
+        assert "import" in prompt
+        assert "image" in prompt
+        # The half that keeps the advice honest: probing is the answer because
+        # installing is not available, and a turn that reads only the first
+        # half would try `pip install` and spend a call on a refusal.
+        assert "nothing can be installed during" in prompt
+        # No library names. The image is a deployment's choice, not this
+        # module's, and the moment one is listed here it can be wrong.
+        assert "reportlab" not in prompt
+
+
+def test_every_prompt_combination_resolves_at_import() -> None:
+    """The guard that turns a per-turn 500 into a failed process start.
+
+    `with_host_commands` and `with_web_search` each demand exactly one anchor
+    and raise otherwise. Their anchor sets are coupled and the coupling is
+    invisible from either file: `with_host_commands` replaces the whole
+    no-shell sentence with `_HAS_SHELL`, which describes the network as
+    reachable rather than absent, so afterwards none of the no-shell spellings
+    is present and only the fourth anchor is.
+
+    A `with_web_search` whose anchors were only the no-shell three would
+    therefore match zero and raise on **every project turn of a deployment
+    that granted both** -- which is `config.code-local.toml`'s default pair.
+    Not at import, not in one test: a 500 per turn, from a module that
+    type-checks.
+
+    This test asserts the guard exists and is load-bearing. Importing the
+    module already runs it; what is added here is the second half -- that a
+    prompt with no anchor at all is refused rather than passed through, so a
+    guard that had been narrowed to nothing would fail here.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        _NETWORK_CLAIMS,
+        with_web_search,
+    )
+    from agent_workbench.application.code_session import (
+        _assert_every_prompt_combination_resolves,
+    )
+
+    # Runs 32 evaluations; raises if any combination has drifted.
+    _assert_every_prompt_combination_resolves()
+
+    # Four, not three: the fourth is the sentence `_HAS_SHELL` leaves behind.
+    assert len(_NETWORK_CLAIMS) == 4
+
+    with pytest.raises(ValueError, match="exactly one network claim"):
+        with_web_search("a prompt that says nothing about the network")
 
 
 def test_cancelling_a_turn_keeps_the_files_it_had_already_written() -> None:
@@ -677,7 +790,7 @@ def test_a_project_turn_is_not_told_it_is_in_a_flat_versioned_workspace() -> Non
         _system_prompt_for,
     )
 
-    prompt = _system_prompt_for(CODE_PROJECT_TOOLS, sandbox_requires_approval=False)
+    prompt = _system_prompt_for(CODE_PROJECT_TOOLS, external_requires_approval=False)
 
     assert prompt == CODER_SYSTEM_PROMPT_PROJECT
     # The two claims F-23 measured false.
@@ -704,7 +817,7 @@ def test_the_flat_turn_keeps_the_prompt_it_always_had() -> None:
     from agent_workbench.application.code_prompt import CODER_SYSTEM_PROMPT
     from agent_workbench.application.code_session import CODE_TOOLS, _system_prompt_for
 
-    prompt = _system_prompt_for(CODE_TOOLS, sandbox_requires_approval=False)
+    prompt = _system_prompt_for(CODE_TOOLS, external_requires_approval=False)
 
     assert prompt == CODER_SYSTEM_PROMPT
     assert "not a filesystem" in prompt
@@ -750,7 +863,7 @@ def test_the_file_language_is_read_off_the_tool_list_not_configured_beside_it() 
     )
     for tool_names, gated, expected in cases:
         assert (
-            _system_prompt_for(tool_names, sandbox_requires_approval=gated) == expected
+            _system_prompt_for(tool_names, external_requires_approval=gated) == expected
         ), tool_names
 
 
@@ -791,7 +904,7 @@ def test_every_coding_prompt_says_that_what_a_tool_returns_is_not_an_instruction
         # turn a capability -- which is the property that matters against
         # injected text. The clause here used to promise more than that ("a
         # human answers for every call that reaches outside it"), and under
-        # `sandbox_requires_approval = False` that was false: the envelope arms
+        # `external_requires_approval = False` that was false: the envelope arms
         # only `destructive`, `sandbox_run` is `external`, and the same prompt
         # goes on to say "Calls run immediately, without waiting for anyone".
         assert "This turn's tools were fixed before it started" in prompt
@@ -930,6 +1043,120 @@ def test_a_plan_turn_is_narrowed_to_reading_and_told_so() -> None:
     assert "project_edit" not in planning.system_prompt
     # Nor asking for a report of changes it cannot make.
     assert "you touched" not in planning.system_prompt
+
+
+def test_the_write_gate_adds_a_risk_and_can_subtract_none() -> None:
+    """ADR-087. The session may be stricter than the deployment, never looser.
+
+    Asserted over the whole cross product rather than on one arm, because the
+    property is about the *shape* of the answer and not about one case: the
+    deployment's own set has to be a subsequence of every return, so there is
+    no combination in which asking for the write gate quietly drops the gate
+    that was already armed.
+
+    `destructive` is the one that matters. It is `project_run` -- a command on
+    the user's own machine, which ADR-077 says is shown before it is run -- and
+    a permission control that could remove it would be a dropdown overturning
+    an ADR.
+    """
+
+    from agent_workbench.application.code_session import code_approval_risks
+
+    for gated in (False, True):
+        standard = code_approval_risks("standard", external_requires_approval=gated)
+        before_write = code_approval_risks(
+            "before_write", external_requires_approval=gated
+        )
+        assert "destructive" in standard
+        assert set(standard) <= set(before_write)
+        assert set(before_write) - set(standard) == {"write"}
+        # The deployment's own question, not this axis's: a session that asked
+        # for the write gate has said nothing about the network.
+        assert ("external" in before_write) is gated
+
+
+def test_a_write_gated_turn_holds_its_tools_and_only_changes_who_decides() -> None:
+    """ADR-087, and the half a risk-set assertion cannot reach.
+
+    The failure this exists for is the plausible one: a "stop before writing"
+    that was implemented by taking the write tools away. That would be a second
+    plan mode wearing another name -- and the reader who picked it would get a
+    turn that cannot do the thing they said yes to, having been asked nothing.
+
+    So the tool list must be *identical* to the ungated turn's, and only the
+    envelope's approval set and the prompt may differ.
+    """
+
+    from agent_workbench.application.code_session import CODE_PROJECT_TOOLS_WITH_RUN
+
+    def observed(approvals: Any) -> Any:
+        harness = _Harness(_writes("notes.md", "hello", "Done."))
+        recording = _Recording()
+        harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.tool_names = CODE_PROJECT_TOOLS_WITH_RUN  # pyright: ignore[reportAttributeAccessIssue]
+
+        async def scenario() -> Any:
+            session_id = await harness.opened()
+            await harness.service.ask(
+                CodeRequest(
+                    session_id=session_id,
+                    instruction="add a feature",
+                    principal=WRITER,
+                    run_id="run_1",
+                    approvals=approvals,
+                ),
+                harness.sink(session_id, "run_1"),
+                NullCancellationToken(),
+            )
+            return recording.requests[0]
+
+        return _run(scenario)
+
+    standard = observed("standard")
+    gated = observed("before_write")
+
+    # Same tools, same ceiling: this axis is about who decides, not about what
+    # is on offer.
+    assert list(gated.tool_names) == list(standard.tool_names)
+    assert gated.envelope.max_tool_risk == standard.envelope.max_tool_risk
+
+    assert "write" not in standard.envelope.approval_required_risks
+    assert "write" in gated.envelope.approval_required_risks
+    assert "destructive" in gated.envelope.approval_required_risks
+
+    # And the model is told, for the reason ADR-058's comment records: it
+    # behaves correctly for the world it was described as being in, and an
+    # undescribed gate buys twelve interruptions instead of three.
+    assert "stops at a person" in gated.system_prompt
+    assert "stops at a person" not in standard.system_prompt
+    # What it must not have been told is to write less. Pricing a tool too high
+    # buys silence rather than care, and the reader asked to be asked.
+    assert "write less" not in gated.system_prompt.replace(
+        "This\ndoes not mean write less.", ""
+    )
+
+
+def test_a_plan_turn_is_never_told_about_a_write_gate() -> None:
+    """ADR-087 §7. A plan turn holds no write tool, so it has no gate.
+
+    The two are one control on screen and two fields on the wire, so nothing
+    stops a client sending `mode="plan"` with `approvals="before_write"` --
+    and the prompt selector, not the client, is where that has to be harmless.
+    """
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS_WITH_RUN,
+        _system_prompt_for,
+    )
+
+    prompt = _system_prompt_for(
+        CODE_PROJECT_TOOLS_WITH_RUN,
+        external_requires_approval=False,
+        plan_only=True,
+        write_gate=True,
+    )
+    assert "This turn cannot change anything" in prompt
+    assert "stops at a person" not in prompt
 
 
 def test_a_plan_does_not_authorise_the_turn_that_follows() -> None:

@@ -122,7 +122,7 @@
       "fields": [
         "code.enabled",
         "code.sandbox_enabled",
-        "code.sandbox_requires_approval",
+        "code.external_requires_approval",
         "code.max_steps",
         "code.max_tool_calls",
         "code.max_total_tokens",
@@ -569,6 +569,7 @@
         "policy.write_tools_require_approval",
         "policy.network_tools_require_allowlist",
         "policy.shell_tools_enabled",
+        "policy.search_tools_enabled",
         "policy.path_sandbox_enabled",
         "policy.tenant_filter_required",
         "policy.max_tool_argument_bytes",

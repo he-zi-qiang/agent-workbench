@@ -27,12 +27,12 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-27（未合并，分支 `feat/multi-agent-orchestration`，第三十三批）：面板画的是它自己重建的树，而那棵树有一处解不开
 
-## 2026-08-27（未合并，分支 `feat/multi-agent-orchestration`，第二十四批）：面板画的是它自己重建的树，而那棵树有一处解不开
-
-> **批次号预警**：这条分支的第二十一～二十四批与主线的同号批次**撞号**——主线已经
-> 排到第二十九批，二十一～二十四各自被别的改动占着。合并这条分支时四节都要重排，
-> 这里先记下来，因为发现它的成本远低于合并后在文档里读到两个"第二十二批"。
+> **批次号已重排**：这条分支写下时编到第二十一～二十四批，而主线同期把这四个号各自
+> 用掉了（已排到第二十九批）。合入主线的这次合并里，四节顺序不变、整体后移为
+> 第三十～三十三批。上一版这里写的是"预警"；现在它是一条已办事项，留着是因为读到旧
+> 提交的人会在那四节里看到旧号。
 
 上一批把面板做出来了，但那次提交是这条分支上**唯一一次写了代码却没留证据**的改动：
 `13ed6c2` 一行 `docs/status.md` 都没写，而面板本身**一条测试也没有**——被测的是它下面
@@ -159,7 +159,7 @@ cannot promise"。
 
 ---
 
-## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第二十三批）：把它真的跑起来，然后修跑出来的两个问题
+## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第三十二批）：把它真的跑起来，然后修跑出来的两个问题
 
 前两批的证据全是测试。这一批是**对着真实模型的一次端到端运行**，以及它当场暴露的两个
 缺陷——两个都不是测试能发现的那种。
@@ -246,7 +246,7 @@ uv run pyright                 # 0 errors
 
 ---
 
-## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第二十二批）：一棵运行树要能按运行读出来（ADR-083）
+## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第三十一批）：一棵运行树要能按运行读出来（ADR-083）
 
 上一批让一次运行可以派生另一次运行，写进同一个 stream、用自己的 `run_id`。这一批是读的
 那一半：`EventLogPort.read` 加可选 `run_id`（两种实现都跟）、`events` 加一条
@@ -320,7 +320,7 @@ Sort  (cost=154.40..154.43 rows=12 width=1241)
 
 ---
 
-## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第二十一批）：一次委派是一次运行，不是一个新的循环（ADR-082）
+## 2026-08-26（未合并，分支 `feat/multi-agent-orchestration`，第三十批）：一次委派是一次运行，不是一个新的循环（ADR-082）
 
 这一批把 `TraceContext.parent_agent_run_id`、`AgentDelegated`/`AgentCompleted`、
 `BudgetUsage.merged` 的 docstring、前端 `workTimeline.ts` 的中文标签——四个**写好了
@@ -416,6 +416,762 @@ AGENT_WORKBENCH_TEST_DSN=… AGENT_WORKBENCH_TEST_QDRANT_URL=… \
   Chat 路径上才完整。那条路要单独一份 ADR：它与答案发布围栏（`RetrievalJournal` +
   引用核验）相交。
 - **没有对着真模型跑过。** 能力梯子停在 **Implemented + Tested**。
+## 2026-08-27（未合并，同分支，第二十九批之三）：字节没有编码可解
+
+第二十九批把项目侧接上工作区那套查看器时，`html` 与文本能看了，图片和 PDF 仍然停在
+「这是一个二进制文件（N 字节），不显示内容。」——记作 F-27。原因不是查看器缺，
+`BlobPreview` 一直都在；是**项目目录里的文件取不到字节**：整个 projects 路由只有
+`GET .../file`，而它解 UTF-8、报 `is_text`，那些性质全都是关于「放进模型上下文」的，
+对一张 PNG 一条都不成立。
+
+### 做了什么
+
+- `ProjectFileStore.open_bytes(path) -> (entry, AsyncIterator[bytes])`，
+  `ProjectSandbox.open_for_read` 从既有的 `read_bytes` 里拆出来（同一套符号链接检查，
+  少了最后那次 `.read()`，把句柄的所有权交给调用方）。
+- `GET /v1/projects/{project_id}/file/bytes`，`StreamingResponse` +
+  `content-length` + `attachment` + `nosniff`，media type 一律
+  `application/octet-stream`。
+- 前端 `getProjectFileBlob`，`ProjectFileBody` 在 `image` / `pdf` 两种 kind 上提前
+  分岔到 `BlobPreview`；文本那条路线整个搬进 `ProjectTextBody`（hooks 不能在提前
+  return 之后再调用）。
+
+### 三个值得单独写下的决定
+
+1. **流式，因此没有上限。** 整份读进内存就得有一个数，而任何为它挑的数在别人真实的
+   目录上都是错的。流式不需要：字节从不同时全部存在。控制台确实会在请求之前拒绝大
+   文件，但那是一次交互上的客气，**不是**边界——一个只因为客户端有礼貌才活着的服务端
+   根本没有边界。
+2. **`open_bytes` 不是 `async def`**，和 `ArtifactStore.iter_chunks` 一样：所有拒绝
+   必须在**调用时**发生，那时路由还能改状态码。只在第一个 chunk 才失败的写法是一个
+   中途停下的 200，客户端分不清它和断线。
+3. **分岔在读之前。** 图片按名字直接走字节路线，不先走一遍文本读——那次读会把整份字节
+   读进来解 UTF-8，只为了得到 `is_text: false`，而超过 `MAX_READ_BYTES` 的图片会直接
+   撞成一条错误。
+
+### 没有重开 ADR-062 §3
+
+那条被拒的是一个**当 `iframe src` 用**的服务端预览端点，沉掉它的是鉴权：嵌入元素不发
+身份头，所以要另开一次性 token 或同源 cookie。这条路由由 `BlobPreview` 用普通方式取，
+带着其它调用一样的身份头，字节在页内变成 object URL——没有新鉴权通道。因此**这一批
+也没有 ADR**。
+
+### 一处此前写错的成本估计
+
+F-27 原先写着「补一条要过一遍 `tests/contracts/` 的参数化套件」，ADR-086 §4 里同一句
+话也在。**不对**：`tests/contracts/test_projects.py` 是 `ProjectStore`（归属与成员
+关系）的，`ProjectFileStore` 只有一个实现。这条缺口是按一个比真实成本高的估计排期的，
+两处都已更正，且原句留在原地——「当时凭什么这么判断」和「后来发现判断依据不对」是两件
+都该看得见的事。
+
+### 实跑证据
+
+`curl` 打 `deepseek-report.pdf`（159,828 字节）：`200`，`content-length` 一致，
+`content-type: application/octet-stream`，`x-content-type-options: nosniff`，
+`content-disposition: attachment`，落地文件 `file(1)` 认作 *PDF document, version 1.4,
+2 pages*。
+
+浏览器里：项目目录既有的 `logo.png` 解不出来——查过了，那是一个 17 字节的假文件
+（PNG magic 后面跟着 `binary` 几个字），**不是路由的问题**。临时写了一张真的 8×8 PNG
+进去，`<img>` 的 `naturalWidth/Height` 是 8×8，`src` 是 `blob:`；验完即删。
+PDF 那一格在应用内浏览器里是空白，而 `BlobPreview` 自己那句话正是为这种情况写的
+（「这个浏览器不显示内嵌 PDF——文件没问题」）——那是这个 pane 的既有行为，工作区侧的
+PDF 一样如此。
+
+### 门禁
+
+后端 `2945 → 2955`（`open_bytes` 8 条：整份字节、超过读上限仍可流、四种拒绝的时机、
+两条句柄关闭；路由 2 条：头部与拒绝、邻居读不到）。前端 `573 → 574`。
+
+---
+
+## 2026-08-27（未合并，同分支，第二十九批之二）：一份 `.md` 在哪儿都该是同一份 `.md`
+
+第二十九批把项目侧接上工作区那套查看器时，记下了 F-28：两侧**一致地**都不渲染
+Markdown——`text/markdown` 以 `text/` 开头，`previewKind` 给 `"text"`，于是落进
+`TextPreview` 的 `<pre>`。而 `MarkdownContent` 一直都在，chat、Code 的报告、Work 的
+产物面板都在用它，唯独没有接进文件预览。
+
+**这一条不是「Code 少了个功能」，是三个界面对同一份字节给了两种答案**：Work 的产物
+面板渲染 `.md`，Code 的两侧都不渲染。而 Work 那段代码的注释里还写着「其余一律 `<pre>`，
+与 Code 控制台对同一批字节的显示一致」——那句话此前只有一半成立。
+
+### 做了什么
+
+- 新增 `components/MarkdownPreview.tsx`，props 与 `TextPreview` 逐字相同
+  （`load` + `queryKey`），所以两个调用方都是一行替换，两个查看器也不可能在取数和
+  缓存上分叉。默认渲染，源码在一个与 `HtmlPreview` 同形的切换后面；被截断的文件不
+  渲染，并说出为什么那个控件是灰的。
+- `isMarkdown` 从 `features/work/preview.tsx` 提到 `components/media.ts`，紧挨着
+  `isRunnablePython`。一份谓词，因为答案不该取决于是哪一页在问。
+- Code 的两侧（`FilePreview` 的 text 臂、`ProjectFileBody`）各接一处，共用同一个
+  `load` 和同一个缓存键——一次传输服务渲染与源码两个视图。
+- 改掉 Work 那段已经只对一半的注释。
+
+### 没有加第六个 `PreviewKind`
+
+ADR-065 §4 为 `python` 拒绝过这个形状，理由在这里一字不改地成立：`previewKind` 是
+**每一个**展示文件的界面共用的词表（Work 的产物面板也读它），而「怎么画」是只有其中
+一部分能回答的问题。所以 Markdown 是 text 臂里的第二问，和 `isRunnablePython` 并排。
+
+因此这一批**没有 ADR**：它没有改任何边界，反而是按一份既有 ADR 的判决去做的。
+
+### 一个被自己的测试抓住的错
+
+第一版给项目侧写的反向用例挑了 `Makefile`，想证明「不是 Markdown 的文本仍按源码画」。
+把判断整个删掉，那条用例照样通过——因为 `Makefile` 没有后缀，`effectiveMediaType`
+猜不出类型，`previewKind` 给的是 `none`，它**根本到不了那个分支**。改用 `.py`
+（`text/x-python`，确实落进 text 臂）之后，同一个变异立刻把它打红。原来那条断言另拆
+成一条用例留着，因为「没有后缀的文本文件仍然看得见」本身值得钉住。
+
+### 门禁
+
+前端 `566 → 573`（新增 4 条 `MarkdownPreview` 用例、2 条项目侧用例，1 条既有用例改成
+同时断言渲染与源码）。后端未触及。
+
+---
+
+## 2026-08-27（未合并，分支 `feat/code-console-five-gaps`，第二十九批）：产物不该为它落在哪一侧负责
+
+一次用户反馈，对 Code 控制台提了五件事。**其中三件在代码里是同一件**——项目目录那一侧
+是二等公民：它没有查看器、没有结构化的写入事实、因而在树上也不会动。而 ADR-072／074
+之后，`config.demo-local.toml` 下**每一段会话都有项目目录**，所以那正好是默认那一侧。
+
+两份 ADR：[ADR-086](./adr/0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
+（项目侧的补齐）与
+[ADR-087](./adr/0087-a-session-may-be-stricter-than-its-deployment.md)（权限轴）。
+拆两号是因为它们收紧的是信封的两半，是两条边界。
+
+### 五件事，各自的状态
+
+| 反馈 | 做了什么 | 能力等级 |
+|---|---|---|
+| 产物生成后没有直接预览 | `ProjectFileBody` 改用与工作区同一张 `previewKind` 分派表和同一批查看器；`.html` 因此在项目侧也进沙箱 iframe | **Demonstrated** |
+| 没有「模型自己决定／人来决定」 | 新增 `CodeApprovals` 轴 + `with_write_gate` 提示；界面是三档 `只做计划 / 改前问我 / 自动改动` | **Demonstrated** |
+| 思考过程又乱又长 | 落定即收（除非读者真碰过）、落定后不再重复「思考摘要」四个字、摘要钳到两行、删掉重复的「正在思考下一步」横幅 | **Demonstrated** |
+| 产物没在文件夹里体现 | `ToolResult`／`ToolCompleted` 新增 `project_writes`；控制台据此按前缀失效目录树 | **Demonstrated** |
+| 文件夹导航栏没有会话标志 | 会话列表有了抬头；正在跑的行有呼吸点；「全部会话」那一档每行说出它属于哪个文件夹 | **Implemented** |
+
+### 那次真跑（Demonstrated 的证据）
+
+`scripts/dev.sh demo-api` + Vite，项目 `agent 工作台测试`，权限档选 **改前问我**：
+
+> 在 docs/ 目录下新建一个 hello.html，内容是一个带标题和一段话的简单页面。只做这一件事。
+
+1. **闸真的拦住了。** 屏幕上出现 `project_write 需要你批准`，风险标着「会写入」，卡片
+   上是规范化后的真实参数与摘要，三个按钮（允许一次／本会话都允许／拒绝）。
+   **在这次改动之前，`project_write` 是 `write` 风险，而 Code 的
+   `approval_required_risks` 只有 `("destructive",)`——按构造，它不停在任何人面前。**
+2. **批准之后，树自己动了。** 侧栏出现 `docs/`，**自动展开**露出 `hello.html`，两行行尾
+   各有一个 accent 点（「这段会话写过它」）。磁盘上
+   `/Users/heziqiang/agent 工作台测试/docs/hello.html` 176 字节，时间对得上。
+3. **第二轮验证收折。** 「把 docs/hello.html 里那段话改成两句话。」跑完之后整轮是
+   两行单行推理 + 两行动作 + 一段报告；改动之前同一形状是二十行摊开的斜体。
+4. **预览。** 项目目录里既有的 `deepseek-report.html` 点开后是渲染好的《DeepSeek 调研
+   报告》，带渲染／源码切换与全屏；改动之前它只有 `<pre>` 里的源码。
+
+### 一处被这次工作揪出来的回归
+
+`codeLiveStatus` 在 `thinking !== ""` 时会画一条「正在思考下一步／分析目标并选择接下来
+的动作」的横幅，**就压在那段正在流的思考正上方**——这正是 ADR-064 当初删掉的东西。
+它能回来，是因为 `CodePage.test.tsx` 那条测试只做了正向断言（「思考是一行」），没有反向
+钉住「上面没有横幅」。这次删掉横幅，并把反向断言补上。
+
+### 门禁
+
+```
+uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest
+pnpm --dir web check   （本机走 var/toolchain/node + NODE_OPTIONS=--no-experimental-webstorage）
+```
+
+数字见提交信息；本节写下时的树上，后端 5 个新用例（`code_approval_risks` 的只加不减、
+写入闸不动工具清单、plan 回合不被告知闸、`project_writes` 的两个），前端 4 个新用例
+（三档发出去的参数、树上的标记与自动展开、收起后不弹回、横幅不回来）。
+
+### 没做完的，写在缺口里
+
+- ~~**F-27**：项目侧取不到字节，图片／PDF 看不了~~ —— **同批已关闭**，见下一节。
+- ~~**F-28**：两侧都不渲染 Markdown~~ —— **同批已关闭**，见下一节。
+- **F-26 收窄但不关**：闸接上了，`policy.write_tools_require_approval` 这个**字段**
+  仍然没有读者。
+- **F-25 补了一句**：目录树跟的是记账过的写入，`project_run`／控制台 `PUT`／用户自己的
+  编辑器都绕过它。所以界面说的是「这段会话写过它」，不是「这是目录当前的样子」。
+- 会话行的运行标记只活在这个标签页里：`SessionView` 没有 status 字段，刷新之后就没有
+  了。这是投影缺口，不是机制缺口——两个事实都在进程里按 session id 记着。
+
+---
+
+## 2026-08-27（未合并，第二十八批）：一次真的搜出来的回合
+
+第二十七批修好两根断线之后，重启 `demo-api` 用**真实模型**跑了一轮 Code 会话。这一节
+是 ADR-085 从 Implemented 走到 **Demonstrated** 所需的那条可链接证据。
+
+### 指令与结果
+
+> 查一下 DeepSeek 官方文档现在给 `deepseek-v4-flash` 标的上下文长度是多少，把结果和
+> 来源写进 `finding.md`。
+
+```
+status: completed   stop_reason: completed   error_code: None
+工作区: {"files":[{"name":"finding.md","size_bytes":1351,"media_type":"text/markdown"}]}
+```
+
+`finding.md` 的结论：上下文 **1M（1,000,000 tokens）**、最大输出 **384K**，并列出两个
+官方来源（Models & Pricing 页、V4 预览版发布公告），中英文 URL 各一。
+
+### 三件让这条证据算数的事
+
+1. **它是真的去查的，不是从记忆里答的。** 同一条指令在修复之前跑过两次（第二十七批
+   记着），模型两次都如实说「本部署没有联网搜索工具」，转去用 `sandbox_run` 抓网页并
+   被 `--network=none` 拒掉，且**拒绝编一个数字**。同一个模型、同一条指令，唯一的变量
+   是那两根线。
+2. **数字与独立核实一致。** 第二十四批为了填 `context_window_tokens` 已经用另一条路径
+   （直接读官方文档 + 对 provider 打两次大输入，实测 `prompt_tokens=200089` 通过）确认
+   过 1M。两条互不相干的路径给出同一个数。
+3. **它自己指出了那个坑。** `finding.md` 里写着：社区生态中的 "128K" 只是部分工具对
+   DeepSeek 模型族的回退默认值，不是官方标注。而本仓第二十一批记的正是被那个数字误导
+   的一次实测（「三次在 70,000 token 打 64,000 的窗口」）。
+
+### 口径
+
+ADR-085 的能力声明由此升到 **Demonstrated**，并按本仓规矩标明：**本地真实模型跑出来
+的**，不是 CI 的结果——CI 的 `quality` job 断言 `embedding` extra 未安装，跑不到这条路。
+
+三件事到此全部落地：ADR-084（窗口）、沙箱出 PDF、ADR-085（联网搜索）。
+
+
+## 2026-08-27（未合并，第二十七批）：那件工具被造出来了，只是没有人把它接上
+
+第二十六批（PR #180）合进 `main` 之后，用真实模型跑了一轮 Code 会话去验证联网。
+**它没能搜。** 模型的原话是「本部署没有联网搜索工具」，然后转去用 `sandbox_run` 抓网页，
+被 `--network=none` 正确地拒掉。
+
+也就是说：**上一批合并了一个不工作的能力**，而它的 PR 说明里写着「Implemented」。
+这一节记录那个缺陷、它为什么能穿过全部门禁，以及补的那条测试。
+
+### 缺陷：两根线
+
+| 层 | 状态 |
+|---|---|
+| `bootstrap/projections.py` 算出 `code.web_search_enabled` | ✅ 有 |
+| `application/code_session.py` 的字段与那一处 append | ✅ 有 |
+| 四个元组、`code_risk_ceiling`、提示词锚点 | ✅ 有 |
+| **`apps/api/dependencies.py` 把开关传给 `CodeSessionService`** | ❌ **一处都没有** |
+| **`_code_registry()` 里的 web 绑定** | ❌ **没有** |
+
+字段默认 `False`，所以 append 从不发生；名字从不被 offer，所以 `code_risk_ceiling`
+也从不抛错。**没有任何东西会响**——一个安静地什么都不做的能力。
+
+### 它为什么穿过了全部门禁
+
+因为每一层单独看都是对的。投影有测试、service 有测试、元组有测试、提示词有 import 期
+断言——**而这两根线的断点，从它们各自所在的文件里都看不见**。
+`ruff` / `pyright` / 2940 条测试 / CI 四项，一个都不会红。
+
+这正是本仓「能力声明只能凭可链接的证据往上走」那条规矩要防的东西。上一批把口径写成
+Implemented 并注明「还没有一条可链接的真实回合」——**那句注明是对的，而它本该被当成
+一个待办，不是一句免责**。真去跑那一轮，缺陷五分钟就出来了。
+
+### 补的测试，以及它确实会红
+
+`tests/api/test_code_api.py::test_a_granted_search_reaches_the_turn_and_the_registry`
+从**装配好的应用**同时断言两件事：service 被告知可以 offer 这个名字，且它将被要求解析
+这个名字的 registry 里真的有它。任一单独成立就是已经发布过的那个状态，而那个状态什么
+都不做。
+
+验证过它是实的：把那两行临时拆掉 → `assert False is True` 失败；装回 → 通过。
+
+它落在需要 `AGENT_WORKBENCH_TEST_DSN` 的「真实装配」一节，所以 CI 的
+「Migrations, PostgreSQL and Qdrant-backed stores」那一档会跑到它。
+
+### 证据
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check` / `ruff check` / `pyright` | 干净 / All checks passed / 0 errors |
+| `pytest`（离线） | **2940 passed, 774 skipped** |
+| `pytest`（接库，仅该条） | 1 passed；拆线复现为 1 failed |
+
+
+## 2026-08-27（未合并，分支 `feat/a-search-is-also-a-leaving`，第二十六批）：一次搜索也是一次离开
+
+第二十三批留下的第三条缺口：Code 会话没有任何联网工具，`web_search` 的 binding 在同一个
+API 进程里被造出来了，却只进了 chat 的 registry。
+
+### 这一节先说一件关于过程的事
+
+**这批的大部分代码不是本次写的。** 接手时这个共享 checkout 已经在
+`feat/a-search-is-also-a-leaving` 分支上，带着 327 行未提交改动与一个未跟踪的
+`domain/research.py`，最后修改时间是 22 小时前。它 `ruff`／`pyright` 干净、
+`pytest` 2939 全绿——但：
+
+- **`docs/adr/0085-*.md` 不存在，而代码里有 19 处引用 ADR-0085。** 悬空引用，
+  且违反"动边界先写 ADR"。
+- `docs/status.md` 没有条目。
+- `policy.search_tools_enabled` 只以默认 `false` 存在于 `settings.py`，**两个 profile
+  一个都没打开**——能力建好了但处于关闭状态，用户仍然搜不了。
+- 设计里那条把"回合期 500"变成"import 期失败"的组合断言**没写**。
+
+本批做的是：补 ADR、补断言与测试、补这一节，并且**核实**已有实现而不是重写它。
+
+### 核实纠正了设计里的一处断言
+
+三方案对抗式设计的结论里有一句"加 search 既不抬天花板也不多一次审批"。对着真实 spec
+跑 `code_risk_ceiling`（2026-08-27）：
+
+| 元组 | 无 search | 加 search | |
+|---|---|---|---|
+| `CODE_TOOLS` | `write` | **`external`** | 抬高 |
+| `CODE_TOOLS_WITH_SANDBOX` | `external` | `external` | 不变 |
+| `CODE_PROJECT_TOOLS` | `write` | **`external`** | 抬高 |
+| `CODE_PROJECT_TOOLS_WITH_RUN` | `destructive` | `destructive` | 不变 |
+
+那句话**只对已经握着 external 或更高工具的两条臂成立**。控制台今天走 `WITH_RUN`
+（ADR-077 的开关上一批打开了），所以那一格确实不变——但不能写成普遍断言，ADR §1
+按实测写。
+
+### 真正的净变化（ADR-085 的头条）
+
+不是天花板，也不是审批门：
+
+> 今天 Code 够到网络必须花掉一次人类审批（`curl` 走 `project_run`，`destructive`，
+> 无条件上膛，卡片上是真实命令）。加了 `web_search` 之后，够到网络**不再需要任何人
+> 在场**，而不可信网页文本落进一个握着 `project_write`／`project_edit`
+> （`write`，永不上膛）的回合。
+
+### 本批新增的那条守卫
+
+`with_host_commands` 与 `with_web_search` 都靠"恰好匹配一条否则 raise"工作，而它们的
+锚点集是**耦合**的：前者把整句 no-shell 换成 `_HAS_SHELL`，而 `_HAS_SHELL` 描述网络是
+可达的（第二十三批补的），所以它跑完之后三条 no-shell 拼写一条都不在、第四个锚点才在。
+
+锚点集若只有前三条，`with_web_search` 会匹配到 0 并 raise，**触发条件是
+`config.code-local.toml` 的默认组合，即每一个项目态回合 500**——不在 import、不在测试，
+是生产里每回合一次，而模块类型检查通过。
+
+新增 `_assert_every_prompt_combination_resolves()`：4 元组 × gated/ungated × plan/act
+共 32 次求值，模块 import 时跑。实测确认它是实的：锚点数 4，无锚点输入时 raise。
+
+### 证据
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check` / `ruff check` / `pyright` | 干净 / All checks passed / 0 errors |
+| `pytest`（离线） | **2940 passed, 774 skipped** |
+| import 期组合断言 | 32 组合全解析；`_NETWORK_CLAIMS` 4 锚点；0 锚点输入 raise |
+
+### 经用户明确批准，两个 profile 都打开了
+
+`policy.search_tools_enabled = true` 写进 `config.code-local.toml` 与
+`config.demo-local.toml`。投影那个"与"的行为是**实测过的**，不是断言：
+
+| profile | 不设 `AW_RESEARCH__ENABLED` | 设了 |
+|---|---|---|
+| `code-local`（文件里有 `[research] enabled = true`） | `web_search_enabled=True` | `True` |
+| `demo-local`（**没有** `[research]` 段） | **`False`** | `True` |
+
+下面那一格正是这个与存在的理由：半配的部署得到**没有这件工具的那套安排**，而不是一个
+起得来、却在每个回合 `code_risk_ceiling` 抛 `ValueError` 的进程。这句话也写进了
+`demo-local` 的注释里，而不是留给下一个人去发现。
+
+`agent-config-check --profile development` → `"status": "ok"`，
+`startup_config_revision` 已带 `1.19:`。
+
+**能力口径：Implemented，还不是 Demonstrated。** 开关开了、投影验证了，但这一节还没有
+一条可链接的"真实模型跑出来的联网 Code 回合"。CI 的 `quality` job 断言 `embedding`
+extra 未安装，也跑不到这条路——真实证据只能来自本地，并且必须标明是本地的。
+
+
+## 2026-08-26（未合并，工作区，第二十五批）：沙箱第一次画得出一页中文
+
+第二十三批留下的第二条缺口：Code 模式生成不了 PDF。当时的判定是"扁平会话的
+`sandbox_run` 那条路是通的，卡点只是默认镜像里没有 PDF 库"。这一批把它做成了，并且
+**看过了产物**。
+
+### 为什么是换镜像而不是别的
+
+`DEFAULT_SANDBOX_IMAGE` 是 `python:3.12-slim`，`executor.py` 的注释说明了原因——沙箱
+需要一个解释器，别的都不需要，而一个项目自建镜像会把本仓库的代码放进它最不该够得到
+的地方。这条**没有被推翻**：新镜像不 COPY 本仓库任何东西，而且**没有改默认值**，
+`DEFAULT_SANDBOX_IMAGE` 原样不动。
+
+`--network=none` 是 ADR-029 整个隔离论证的前提而不是一个设置，所以脚本里 `pip install`
+永远不该成功——能 import 什么必须在调用开始之前就定死。这就是"只能是镜像"的原因。
+
+### 字体是这一批里最难的那半个小时
+
+ADR-045 §4.3 记着那个失败：缺 CJK 字体时**退出码 0、PDF 合法、每个汉字是空心方块、
+测试全绿**。所以字体必须进镜像，不能留给运维者。
+
+而显然的那个字体不行。实测 2026-08-26：`fonts-noto-cjk` 的 `NotoSansCJK-*.ttc` 是
+OTC/CFF 轮廓，reportlab 直接抛
+
+```
+TTFError: TTC file ".../NotoSansCJK-Bold.ttc": postscript outlines are not supported
+```
+
+换成 TrueType 轮廓的 `fonts-wqy-zenhei`：能用，而且 28 MB 对 88 MB。整镜像 69 MB
+（基础镜像 41 MB）。
+
+### 落地
+
+* `docker/sandbox-pdf.Dockerfile`——digest 钉死的 `python:3.12-slim` +
+  `fonts-wqy-zenhei` + `reportlab==4.2.5`（BSD；`fpdf2` 是 LGPL、`PyMuPDF` 是 AGPL，
+  CI 的 `pip-licenses` 门禁**看不到容器内容**，所以这条是自觉遵守而不是被强制的）。
+* `scripts/dev.sh sandbox-image` 构建它；`sandbox-server` 用 `docker image inspect`
+  探一次，**探到就用、探不到就用 stock 并在 stderr 说出来**。不静默回退——静默回退
+  正是这个 bug 本身的形状。
+* `code_prompt.py` 两个沙箱基底各加一段：容器里装了什么是**部署的镜像**的属性、不是
+  这份提示词的属性，所以在断言某个格式做不到之前，先花一次调用 `import` 一下。
+  **刻意不点名任何库**——镜像是 `--image` 决定的，写进提示词的清单是这个模块保不住的
+  承诺。新增 `test_a_sandbox_turn_is_told_to_probe_before_declaring_a_format_out_of_reach`
+  钉住这两条（含"不许出现 reportlab 字样"）。
+
+### 证据：不是退出码，是看过
+
+经**真实 `SandboxExecutor`**（不是手搓 docker run）、带整套 `ISOLATION_FLAGS` 跑：
+
+```
+runtime 可用: True
+exit_code  : 0
+stdout     : wrote report.pdf
+回写文件   : report.pdf  16842 bytes
+```
+
+然后把它 `pdftoppm` 成 PNG **看了一眼**：标题、正文、中英混排、标点全部正常，
+**不是方块**。这一步是这一节的关键——ADR-045 §4.3 的教训就是退出码 0 什么都不证明。
+
+门禁：`ruff` / `pyright` 干净；`pytest` **2938 passed, 774 skipped**（新增 1 条）。
+
+
+## 2026-08-26（未合并，工作区，第二十四批）：这个部署第一次说得出自己的窗口有多大
+
+第二十三批留下的第一条缺口：九个 profile 没有一个声明 `model.main.context_window_tokens`，
+于是 `domain/runs.py` 的 `context_reason_for` 对任何输入都返回 `None`——**ADR-080 的
+上下文天花板与 ADR-081 的压缩两个都不生效**。后果不是"长会话质量下降"，是这一轮直接
+死在 provider 的 400 上，而适配器会擦掉 provider 的错误正文，转录里只剩一句 HTTP 400。
+
+那一批没有填它，理由写在当时：不猜。这一批把它查出来并量过了。
+
+### 查来的
+
+DeepSeek Models & Pricing（2026-08-26 读取）：`deepseek-v4-flash`——两个 profile 的
+`[model.main]` 用的都是它——Context Length 记作 **1M tokens**，Max Output 记作 384K。
+
+### 为什么没有直接照抄
+
+本文档第二十一批（ADR-081 复查）自己记着一个对不上的实测："三次在 70,000 token 打
+**64,000** 的窗口"，终局 HTTP 400。两个数字差了十六倍，照抄任何一个都是赌。
+
+所以直接对 provider 打了两次大输入，用的就是这个 `model_id`：
+
+```
+900,000 字符 → prompt_tokens = 200089 → HTTP 200
+400,000 字符 → prompt_tokens =  88977 → HTTP 200
+```
+
+**那个 64,000 是旧模型时代的数字，对 `deepseek-v4-flash` 不再成立。** 量到 200k 没问题，
+文档说 1M；两个数都写进了配置注释，因为它们证明的不是同一件事——量到的那个证明旧数字
+已死，文档那个才是填进去的依据。
+
+### 落地与验证
+
+`context_window_tokens = 1000000` 写进两个 profile。`runtime.context_soft_limit_ratio`
+维持出厂的 0.75，于是软上限 750,000。实测 `context_reason_for` 的行为：
+
+| 上一轮输入 | 改之前 | 改之后 |
+|---|---|---|
+| 70,000 | `None`（不生效） | 继续 |
+| 700,000 | `None` | 继续 |
+| 800,000 | `None` | **`context_limit`** |
+
+**没有**顺手打开 `runtime.context_compaction_enabled`：ADR-081 把它默认关是有理由的
+（有损、最多三次、概括失败时什么都不删），而窗口是 1M 之后它更不急。
+
+`max_output_tokens` 维持第二十三批量出来的 16384，没有取文档给的 384K——那是选择不是
+遗漏：它同时是跑飞那一轮唯一的刹车，也是账单的上限，而一次编码回合要写的文件很少超过
+16384 token（约 60KB 文本）。理由记在配置注释里。
+
+### 证据
+
+`ruff` / `pyright` 干净；`pytest` 2937 passed, 774 skipped；两个 profile 的
+`load_settings()` 均通过，上表是对着真实 `context_reason_for` 跑出来的。
+
+
+## 2026-08-26（未合并，工作区，第二十三批）：一个被工具饿着的模型，看起来和一个不聪明的模型一样
+
+起因是一份用户报告：Code 模式「不能生成 PDF」「看不到多 agent 面板」「也不智能」「连
+联网搜索都不主动」，而模型在会话里自陈「本环境没有多 agent 编排工具，也没有 shell 与
+网络」。
+
+一轮 46 个 agent 的并行审计（五条调查线，每条断言单独找人反驳）得出的第一结论是：
+**模型没有偷懒，它在如实汇报自己的工具目录。**
+
+### 1. 控制台下的 Code 会话，此前手上只有五个工具
+
+`config.demo-local.toml` 是控制台实际跑的 profile。在它下面：
+
+- 每个会话都有项目 → 走项目态 → `CODE_PROJECT_TOOLS`，五个 `project_*` 文件工具；
+- `shell_tools_enabled` 未声明 → 继承 `config.default.toml:425` 的 `false` → 没有
+  `project_run`；
+- `sandbox_enabled = true` 对**项目**回合无效：`sandbox_run` 绑在扁平的
+  `WorkspaceScope` 上、从 ContextVar 读会话，而项目回合只进 `ProjectFileScope`，
+  所以 `CODE_PROJECT_TOOLS_WITH_SANDBOX` 那两条臂早已被删（`code_session.py:158-167`
+  写着原因）。
+
+> **本节合入后被自己的实测订正过一次。** 上一版这里写的是"`sandbox_enabled` 对
+> **Code 会话**是死配置"，那是把 `code_session.py` 里"under config.demo-local.toml,
+> where every session has a project"当成了全称——它说的是控制台的用法，不是 API 的
+> 约束。对着这个 profile 起的进程打了一次真实回合：**不挂项目**建出来的会话在 act
+> 模式下持有六个工具（五个 `workspace_*` 加 `sandbox_run`），模型自己逐个列了出来。
+> 两条路是互补的：扁平会话有沙箱、**没有网**（`--network=none`）；项目会话有
+> `project_run`、**有网**、每次要人批。生成 PDF 走得通的是**扁平**那条，卡点只是
+> 默认镜像里没有 PDF 库。
+
+没有 shell、没有沙箱、没有联网工具、没有文档渲染。**"不能出 PDF"和"不联网"都不是
+模型的问题，是这个部署没给它任何一条够得到的路。**
+
+本批经用户明确批准后，在这个 profile 打开 `[policy] shell_tools_enabled = true`
+（ADR-077 早已预留的开关，`config.code-local.toml` 一直开着，因此不是边界变更、
+不需要新 ADR）。代价照旧并且是设计出来的：`project_run` 是 `destructive` 风险，
+**每一次调用都停下来把命令原文给人看**，而 `approve_for_session` 对这一档是硬拒的。
+
+### 2. 提示词里一句只被改掉一半的话
+
+四个基底提示词都写着 `There is no shell **and no network**`；`with_host_commands`
+只把其中一条替换成 `_HAS_SHELL`，而那段文本**对网络一个字都不提**。于是一个拿着
+`project_run` 的回合被告知"半句话错了"，然后自己去猜剩下半句——它按刚被删掉的那句猜。
+
+而 `bootstrap/child_environment.py` 的 docstring 恰是相反的权威：只擦 `AW_*`，
+"a command run inside somebody's project is meant to see their `PATH`, their
+toolchain, their `SSH_AUTH_SOCK` and their own credentials"。
+
+`_HAS_SHELL` 补了一段**描述而非承诺**的文字（离线机器跑出来就是离线的），并新增
+`test_a_turn_holding_the_run_tool_is_not_left_guessing_about_the_network` 钉住它。
+
+### 3. 「不智能」里可配置的那一半
+
+| 键 | 从 | 到 | 依据 |
+|---|---|---|---|
+| `model.main.reasoning_effort` | `low` | `high` | 出厂默认就是 `high`（`settings.py`），这个部署主动调到了全档最低 |
+| `model.main.max_output_tokens` | 未声明（吃 8192） | `16384` | **实测**：`max_tokens=16384` 下真吐 11000 token，`finish_reason: "stop"` |
+| `code.turn_timeout_seconds` | `360` | `600` | 360 是按 `low` 的回合长度定的；不一起提就是把"想得更深"兑换成"更容易超时"，而超时回合 `output_text` 为空、报告不入对话 |
+
+两个 profile（`code-local`、`demo-local`）同批改。原来那两处 `low` 都是**有意选的**，
+理由（响应快、控制台"可观看"）保留在注释里，只把选择点移了——这不是笔误修正。
+
+`max_output_tokens` 那条特别记一笔口径：探测时 `max_tokens` 一路给到 200000
+provider 都回 200，**说明它静默截断而不是校验**，所以"它接受"不能当上限证据。
+16384 是量出来的那个数，别往上填没量过的。
+
+### 证据（2026-08-26，这棵树上）
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check` / `ruff check` | 588 files / All checks passed |
+| `pyright`（裸跑） | 0 errors |
+| `pytest`（离线） | **2937 passed, 774 skipped** |
+| 两个 profile 的 `load_settings()` | 均通过；`demo-local` 项目回合工具集实测为 `(project_edit, project_grep, project_list, project_read, project_write, project_run)` |
+
+### 明确没做，以及为什么
+
+- **`context_window_tokens` 不猜**。今天两个 profile 都没声明它，于是 ADR-080 的上下文
+  天花板与 ADR-081 的压缩**全都不生效**——长会话不是"质量下降"，是直接死在 provider
+  400。要填，得有 provider 文档上的真实窗口值；理由与 `ModelPricingSettings` 拒绝出厂
+  价格是同一条。
+- **不给 Code 加 `web_search`**。它是 `external` 风险，会把扁平回合的天花板从 `write`
+  抬到 `external`，**推翻** `code_session.py:96-100` 写下的"沙箱关闭时永不触及审批门"
+  这条性质。这是边界变更，要先有 ADR。
+- **不改沙箱镜像去做 PDF**。那条路在 `demo-local` 下根本不通：沙箱给不了项目回合。
+- **不做多 agent 面板**。`AgentDelegated`／`AgentCompleted` 事件协议齐备但 `src/` 里
+  零发射点，而 `docs/architecture-baseline.md` 明写 v1 不做递归子 agent。这正是并行的
+  ADR-082／083 那条线在做的事，本批不重复造。
+- 不绕审批门；不引 LGPL/AGPL 的 PDF 库（CI 有精确字符串 allowlist）；不手搓 PDF 字节
+  ——那正是 `workspace_write` 拒绝 `.pdf` 要挡的事。
+
+---
+
+## 2026-08-26（未合并，工作区，第二十二批）：账号的问题不是这次调用的问题
+
+> **编号更正**：这批的 ADR 以 082 合入（PR #174，`a2af3ba`），随后改为 **084**。
+> `0082`／`0083` 已被并行的多 agent 委派那条线认领并在其代码中引用，本份后到、
+> 本份让号。认领 ADR 号要看的不只是 `ls docs/adr/`，还有 `.claude/worktrees/`。
+
+起因是一句用户报告：「多 agent 一个回答都跑不完，提示额度不足」。查下来**两件事都不是
+它看起来的样子**，记在这里，因为跑错方向的那半小时才是这批的价值。
+
+### 1. 现象查出来的是余额，不是预算
+
+查这份 checkout 用的 DeepSeek 账户（`GET /user/balance`，HTTP 200）：
+
+```
+USD  total_balance 0.00
+CNY  total_balance 1.08   （granted 0.00，topped_up 1.08）
+is_available: true
+```
+
+余额还在零以上，所以请求没被一次性拒掉——它是跑到一半见底，然后断在半路。
+
+同时确认了两件**代码这边的事实**，它们把"是不是预算把运行掐了"这个方向彻底排除：
+
+- Chat 与 Code 的 `RunBudget` **都没有设** `max_total_tokens`。`settings.py` 的默认是
+  `None`，九个 config profile 里没有一个写过它。`token_budget` / `cost_budget` 这两个
+  stop reason **在任何现有部署里都不会触发**。
+- 没有任何 profile 写过 `[model.*.pricing]`，`_project_prices` 返回 `None`，
+  `cost_micro_usd` 恒为 0。**这套平台自己不知道自己花了多少钱。**
+
+多 agent 只是死得更快而不是死因：`[multi_agent]` 每次 invocation 上限 120000 token、
+一个 Task 最多 12 次，单 Task 天花板约 144 万 token。不用多 agent 一样会耗尽，因为
+单轮 token 本来就没有上限。
+
+### 2. 真正的缺陷：它没把自己知道的事说出来
+
+余额到 0 后 provider 返 402。适配器把 4xx 一律折成 `provider_error`，运行以
+`stop_reason: "error"` 结束——而 `stopNote` 里**没有任何一条分支是 provider 失败能走到
+的**，它们全部落到最后那句模板里，括号里是光秃秃的 `error`。这句话和"模型 id 已下线"、
+"请求体不合法"、"上游 500 重试耗尽"完全同形，而这四件事要人去做的动作各不相同。
+
+（口径：余额那三行是**量的**；上面这段渲染路径是**从代码读出来的**，本批之前没有
+任何测试钉住它——现在有了。真实的 402 响应**没有**在这批里对着 provider 打过，把
+账上仅剩的余额花光才能复现它，代价与收益不成比例。）
+
+**信息是在路由丢的，不是在适配器丢的**：适配器一直说着 `HTTP 402`，
+`AgentOutcome.error` 一直带着它，是 `apps/api/routes/code.py` 的 `AskResponse` 只抄了
+`status` 和 `stop_reason`，把 `error` 留在了服务端。
+
+改动（ADR-084）：
+
+- `domain/errors.py` 的 `ErrorCode` 新增 `provider_account_rejected`（401/402/403 合一）
+- `adapters/models/deepseek.py` 新增 `_ACCOUNT_STATUSES` 与 `_rejection()`
+- `apps/api/routes/code.py` 的 `AskResponse` 补 `error_code` / `error_message`
+- `web` 三处文案：`CodePage.stopNote` 两条分支（含"没有认出来的码就显示服务端原话"
+  的兜底）、`failure.ts` 的 `CODE_LABELS` 一行与新增的 `CODE_REMEDIES`
+- `tests/architecture/test_error_codes_are_declared.py` 的扫描范围加进这个适配器：
+  它现在有两个码要在调用点上二选一，而"会挑"的地方才是能挑出一个没人声明过的词的地方
+
+**明确没做**：不新增 `StopReason`（`"error"` 说的是循环怎么停的，没说错；为什么停在
+`ErrorInfo` 上，而两者本来就都在 `AgentOutcome` 上）；不拆成三个码；**不往仓库配置里
+写 provider 价格**——`ModelPricingSettings` 的注释自己写着，价格是 provider 与某个部署
+之间合同上的事实，本仓库不知道它。余额告急不构成把猜来的单价写进版本库的理由。
+
+### 证据（2026-08-26，这棵树上）
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff format --check .` | 588 files already formatted |
+| `ruff check .` | All checks passed |
+| `pyright`（裸跑） | 0 errors, 0 warnings, 0 informations |
+| `pytest`（离线） | **2936 passed, 774 skipped**, 64.7s |
+| `pytest tests/contracts tests/persistence tests/api tests/vector`（接 aw-postgres / aw-qdrant） | 1291 passed, 2 skipped, **6 failed**，见下 |
+| `eslint . --max-warnings 0` | 干净 |
+| `tsc -b` | 干净 |
+| `vitest run` | **35 files / 563 tests 全绿** |
+| `vite build` | 成功 |
+
+新增用例：`test_a_refused_account_is_not_reported_as_a_provider_error`、
+`test_a_refused_account_is_never_retried`（`max_retries=3` 下只发一次请求）、
+`test_a_failed_turn_carries_why_and_not_just_that_it_stopped`、
+`test_a_turn_that_finished_says_nothing_about_errors`、以及前端三条。
+
+**那 6 条失败不是这批引入的**，也不该记成这批的缺口：
+`tests/persistence/test_migrations.py` 全部报
+`alembic.util.exc.CommandError: Can't locate revision identified by
+'0032_events_stream_run_sequence'`。这个 revision **不在本 checkout 里**，只存在于
+`.claude/worktrees/` 下的一个工作树——共享的 `agent_workbench_test` 库被那边的分支
+stamp 到了 0032，而这棵树的头是 0031。本批改动没有碰 `migrations/` 或 `persistence/`
+下的任何文件。解法是重建那个测试库，或等那条分支合入；两者都不属于这批。
+
+
+---
+
+## 2026-08-26（未合并，分支 `fix/compaction-must-prove-it-helped`，第二十一批）：压缩必须证明它起了作用
+
+上一批合进 `main` 之后，一轮对抗性复查对着那次提交跑了四个 lens，**13 条存活、9 条被
+驳回**。存活里有一条是 critical，而且它把上一批想修的东西修回去了一半。这一节记录**被
+自己的复查抓住的错**，因为这批的价值几乎全在这里。
+
+### 1. critical：压缩从来没有检查过自己有没有让对话变小
+
+`_compacted()` 过去只要"`plan_compaction` 找到了可删的消息 + 概括器返回了非空文本"就
+返回成功，然后调用方**无条件**把 `last_input_tokens` 清零、把 ADR-080 的天花板解除武装。
+唯一能发现问题的那个数字——`scaled_tokens_after(...)`——算出来只是为了写进事件，**从未
+和任何东西比较过**。
+
+而 `plan_compaction` 是按**消息条数**切的。所以被删的可以是四条短消息，而留下的尾巴里
+正躺着那个 60 KB 的工具结果。复查跑出来的实测：
+
+```
+三条 ContextCompacted：removed=4/3/3，50000->50000、70000->69976、70000->69984
+                        （运行自己的记录说：省下 0.0% ~ 0.03%）
+模型实际收到的对话：     83 -> 60154 -> 120152 -> 180150 字符，单调增长
+十一次 provider 调用：   三次在 70,000 token 打 64,000 的窗口
+终局：                   provider_error 'HTTP 400'
+```
+
+**正是 ADR-080 存在的意义所在的那个症状，被 ADR-081 亲手放了回来。** 关掉压缩的同一个
+运行干净地停在 `context_limit` 并带着数字。
+
+修法：`tokens_after` 先过 `context_reason_for` 那一关，仍在软上限之上就不算成功；并且
+成功时带估算值走而不是清零。
+
+### 2. `conversation_chars` 同时在两个方向上是错的
+
+同一个表达式里：`message.text()` 加一遍散文，紧接着的 `getattr(block, "text", "")` 循环
+**又加一遍**（`TextBlock` 也应答 `.text`）；而 `ToolUseBlock` 没有 `.text`，于是一次工具
+调用只贡献了**它自己名字的长度**。
+
+在这个仓库里，一段编码对话里最大的单个东西就是工具调用的参数——`workspace_write` 把整个
+文件装在 `arguments["content"]` 里，上限 `MAX_INLINE_WRITE_CHARS`。它被估值为 15 个字符。
+实测：一段约 16,600 字符的三消息对话，数出来是 **111**。
+
+这是 `ContextCompacted` 唯一发布的那个比值的**分子和分母**，所以事件在删掉四条消息之后
+报告 `tokens_after == tokens_before`——读起来是"压缩什么也没省下"，真相是"这个计数看不见
+被删掉的东西"。
+
+### 3. 概括途中被取消，运行报的是 `context_limit`
+
+这是循环里唯一一次结果不经过 `_terminal_for_turn` 的模型调用。被取消的回合返回"空文本、
+无错误"，与"概括器什么也没说"同形，于是被读成"没能缩短"，运行归到 `context_limit`。
+**有人按了停止，却被告知是模型窗口的错**——ADR-080 要终结的那种归因错误。
+
+### 4. 一条测试是装饰品，而且正是最需要不是装饰品的那一条
+
+`test_the_run_state_machine_actually_enters_compacting` 只断言了运行完成 + 有
+`ContextCompacted` 事件。两者都不依赖 `machine.to("compacting")`——`recording_results →
+model_streaming` 本来就是合法边。**把那行删掉，测试照绿。**
+
+上一批为切点边界跑了变异检查（3 failed, 10 passed），却**没有**给这一条跑——而它恰恰是
+同一次提交里改写 `state.py` 注释的全部依据。现在它监视状态机本身，并断言进出的边。
+
+### 5. `ModelStarted` 记的是一个这次调用没到达过的模型
+
+`_stream_model` 写的是构造时定死的 main 标签，而适配器按 `ModelRequest.model_profile`
+分派。`dependencies.py` 里 `model_label` 上方的注释自己写着这条规则："an event log that
+disagrees with what happened, which is the one thing it may not do."
+
+而两个 profile 在真实配置里**已经**不同：`config.code-local.toml` 与
+`config.demo-local.toml` 的 main 是 `deepseek-v4-flash`、compact 是 `deepseek-chat`。
+ADR-081 §2.1 和上一节 §6 都把这个分歧写成了"将来的事"，这也一并改了——今天不产生记账
+误差的真实前提是**没有一份配置声明过价格**。
+
+### 6. 这次每一条修复都跑了变异检查
+
+上一节声称的纪律，这次逐条执行：
+
+| 把修复改回去 | 变红的测试 |
+|---|---|
+| `cut <= 2` → `cut <= 1` | 2 条 |
+| 删掉 `machine.to("compacting")` | 1 条 |
+| 删掉压缩后的取消检查 | 1 条 |
+| 删掉"证明它起了作用"那一关 | 1 条 |
+| `conversation_chars` 改回旧版 | 3 条 |
+
+八条测试，没有一条是和实现同时写出来、因而必然同意实现的。
+
+### 门禁
+
+`ruff format --check` + `ruff check` 全过；`pyright` **0 errors**；
+`pytest` **2931 passed / 774 skipped**（本批新增 6 条）。
 
 ---
 
@@ -479,10 +1235,13 @@ test_the_shortened_conversation_still_pairs_every_call` 把 1..12 对、每个 `
 
 ### 6. 一个待决问题，写下来而不是留给以后的人现场发现
 
-`apps/task_worker/composition.py` 传的是 `prices=main_profile.prices`，所以一次
-main-profile 运行里的 compact 调用**按 main 的价格计费**。`[model.main]` 与
-`[model.compact]` 的 `model_id` 都是 `deepseek-chat` 期间这不产生误差；哪天它们分开，
-这一行就变成一个悄悄的记账错误。记在 ADR-081 §2.1。
+`apps/task_worker/composition.py` 与 `apps/api/dependencies.py` 传的都是
+`prices=main_profile.prices`，一次 main-profile 运行里的 compact 调用**按 main 的价格
+计费**。今天无误差的真实前提是**没有一份配置声明价格**（`grep micro_usd_per_mtok
+config/*.toml` 为空，`_priced()` 恒返回 0）——**不是**两个 profile 指着同一个模型：
+`config.code-local.toml` 与 `config.demo-local.toml` 的 main 已经是 `deepseek-v4-flash`
+而 compact 仍是 `deepseek-chat`，而这两份正是 `dev.sh code-api` / `demo-worker` 跑的。
+开压缩的同时打开价格之前，必须先给运行时一份按 profile 的价格表。记在 ADR-081 §2.1。
 
 ### 7. 差点抬错的一次版本号
 

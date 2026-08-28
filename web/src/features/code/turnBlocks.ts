@@ -567,3 +567,39 @@ function str(value: unknown): string | null {
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
 }
+
+/**
+ * 这条流里被写过的项目文件，按第一次被写到的顺序。
+ *
+ * 一个纯函数而不是 `useCodeStream` 里的一块 state，理由和这个模块里其他东西
+ * 一样：它是事件的函数，而 `steps` 已经在手上。加一块 state 只会多出一个可能
+ * 和事件不一致的副本，并且要在换会话时记得清空——`CodePage` 的注释里已经把
+ * 「从 effect 里清状态晚了一帧」这件事的代价写过一遍了。
+ *
+ * **它说的是「这条流看见过」，不是「这段会话写过」。** `useCodeStream` 只留
+ * 最近 `KEPT_EVENTS` 条，所以一段很长的会话最早那几轮的写入不在里面；刷新页
+ * 面之后，重放能给回多少就是多少。差别在界面上是一个标记没有出现，而不是一
+ * 个标记出现在错的地方——少标一个是漏说，标错一个是撒谎，两者不等价，这也是
+ * 这里不去猜的原因。
+ *
+ * `ToolCompleted.project_writes` 是唯一来源（ADR-086）。没有 `argument_preview`
+ * 那条后备路线：那条路线在工作区那侧是为 ADR-063 之前的历史事件留的，而这个
+ * 字段和它的发布者是同一次改动加上的——历史事件里没有它，也没有别的东西能
+ * 冒充它。
+ */
+export function projectWritesIn(events: EventEnvelope[]): string[] {
+  const seen = new Set<string>();
+  const order: string[] = [];
+  for (const event of events) {
+    if (event.event_type !== "ToolCompleted") continue;
+    const written = event.payload.project_writes;
+    if (!Array.isArray(written)) continue;
+    for (const entry of written) {
+      const path = str(entry);
+      if (path === null || seen.has(path)) continue;
+      seen.add(path);
+      order.push(path);
+    }
+  }
+  return order;
+}

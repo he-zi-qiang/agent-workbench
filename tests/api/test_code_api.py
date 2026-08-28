@@ -67,7 +67,11 @@ from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.bootstrap import Settings
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.bootstrap.projections import project_api
-from agent_workbench.domain.errors import NotFoundError, ToolInputInvalidError
+from agent_workbench.domain.errors import (
+    ErrorInfo,
+    NotFoundError,
+    ToolInputInvalidError,
+)
 from agent_workbench.domain.events import UngroundedAnswerCommitted
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import AgentOutcome, RunBudget
@@ -156,6 +160,27 @@ class _Executor:
             status="completed",
             stop_reason="completed",
             output_text="Wrote notes.md.",
+        )
+
+
+class _Refused:
+    """An executor whose turn died on something outside this deployment.
+
+    The shape a provider failure actually has: `status: "failed"`, a stop
+    reason of `"error"` -- which is the *only* stop reason any provider
+    failure has -- and the whole of what distinguishes one from another
+    sitting in the `ErrorInfo` beside it.
+    """
+
+    def __init__(self, error: ErrorInfo) -> None:
+        self.error = error
+
+    async def run(self, request: Any, emit: Any, cancellation: Any) -> AgentOutcome:
+        return AgentOutcome(
+            agent_run_id=request.trace.agent_run_id,
+            status="failed",
+            stop_reason="error",
+            error=self.error,
         )
 
 
@@ -354,6 +379,78 @@ def test_a_session_takes_an_instruction_and_answers_with_a_report() -> None:
     assert status == 200
     assert report == "Wrote notes.md."
     assert roles == ["user", "assistant"]
+
+
+def test_a_failed_turn_carries_why_and_not_just_that_it_stopped() -> None:
+    """ADR-0084. `stop_reason` alone cannot describe a provider failure.
+
+    Every one of them is `"error"`, so an exhausted account, a rejected key, a
+    retired model id and a 500 all reached the console as the same sentence,
+    while those are four different things to go and do. The outcome has
+    carried an `ErrorInfo` since it was written; this response was dropping it
+    on the floor.
+    """
+
+    world = _World(
+        executor=cast(
+            Any,
+            _Refused(
+                ErrorInfo(
+                    code="provider_account_rejected",
+                    message=(
+                        "the provider refused the request with HTTP 402: this "
+                        "deployment's provider account is out of credit. "
+                        "Retrying will not help until that is fixed."
+                    ),
+                    retryable=False,
+                )
+            ),
+        )
+    )
+
+    async def scenario(client: httpx.AsyncClient) -> dict[str, Any]:
+        created = await _opened(client)
+        answered = await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        return cast(dict[str, Any], answered.json())
+
+    body = _run(world, scenario)
+
+    assert body["status"] == "failed"
+    assert body["stop_reason"] == "error"
+    assert body["error_code"] == "provider_account_rejected"
+    assert "402" in body["error_message"]
+
+
+def test_a_turn_that_finished_says_nothing_about_errors() -> None:
+    """The other half of the same field: absence has to mean something.
+
+    A `error_code` that were "" or "none" on a completed turn would make the
+    console branch on a value instead of on its presence, and the first
+    unrecognised spelling of "nothing went wrong" would render as a fault.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> dict[str, Any]:
+        created = await _opened(client)
+        answered = await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={"instruction": "write notes.md"},
+        )
+        return cast(dict[str, Any], answered.json())
+
+    body = _run(world, scenario)
+
+    assert body["status"] == "completed"
+    assert body["error_code"] is None
+    assert body["error_message"] is None
 
 
 def test_a_second_turn_on_a_busy_session_is_a_conflict() -> None:
@@ -708,6 +805,69 @@ def _booted(
             await dependencies.dispose()
 
     return asyncio.run(execute())
+
+
+@pytest.mark.skipif(
+    "AGENT_WORKBENCH_TEST_DSN" not in os.environ,
+    reason="the real assembly needs a database",
+)
+def test_a_granted_search_reaches_the_turn_and_the_registry(tmp_path: Path) -> None:
+    """ADR-085's wiring, asserted where it actually broke.
+
+    The projection computed `code.web_search_enabled`, the service had the
+    field and the append, the four tuples were correct, and every unit test
+    passed -- and a real turn still had no search tool, because *assembly*
+    never passed the flag and never put the binding in the registry. Two wires,
+    each invisible from the file the other lives in.
+
+    So this asserts the pair together, from the assembled application: the
+    service is told it may offer the name, and the registry it will be asked to
+    resolve that name against actually holds it. Either one alone is what
+    shipped, and what shipped did nothing.
+
+    The `and` matters as much as the flag. `web_search_enabled` is projected as
+    "the policy flag **and** a provider is configured", so the second half is
+    exercised too -- a name offered against a registry with no spec is a
+    `ValueError` out of `code_risk_ceiling`, and that ends the turn rather than
+    degrading it.
+    """
+
+    from agent_workbench.domain.research import WEB_SEARCH_TOOL
+
+    async def execute() -> tuple[bool, bool, tuple[str, ...]]:
+        payload_settings = _assembled_settings(tmp_path, code_enabled=True)
+        granted = payload_settings.model_copy(
+            update={
+                "policy": payload_settings.policy.model_copy(
+                    update={"search_tools_enabled": True}
+                ),
+                "research": payload_settings.research.model_copy(
+                    update={"enabled": True}
+                ),
+            }
+        )
+        dependencies = build_dependencies(project_api(granted))
+        try:
+            code = dependencies.code
+            assert code is not None, "this deployment was asked for Code"
+            registry = code.tools
+            return (
+                code.web_search_enabled,
+                registry.get(WEB_SEARCH_TOOL) is not None,
+                tuple(code.tool_names),
+            )
+        finally:
+            await dependencies.dispose()
+
+    offered, resolvable, names = asyncio.run(execute())
+
+    assert offered is True
+    # The half that was missing. A registry without it turns the append above
+    # into a per-turn ValueError instead of a search.
+    assert resolvable is True
+    # The tuples themselves are unchanged -- search is appended per turn, not
+    # baked into a fifth tuple (ADR-085 §3).
+    assert WEB_SEARCH_TOOL not in names
 
 
 @pytest.mark.skipif(

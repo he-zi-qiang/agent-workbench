@@ -25,6 +25,22 @@ describe("explainFailure", () => {
     expect(failure?.text).toContain("被权限策略拒绝");
   });
 
+  it("sends a refused account to the provider, not back to the config", () => {
+    // ADR-0084. The default sentence for anything non-retryable is 「需要先改动
+    // 任务或配置」, and for this one both halves of that are wrong: the task is
+    // fine and so is the config. Sending a reader to re-read their own YAML
+    // when their account has no credit left is exactly the misdirection this
+    // code was split out of `provider_error` to end.
+    const failure = explainFailure(
+      "the work step failed with provider_account_rejected (not retryable) during start",
+    );
+
+    expect(failure?.retryable).toBe(false);
+    expect(failure?.text).toContain("模型服务拒绝了这个部署的账号");
+    expect(failure?.text).toContain("充值");
+    expect(failure?.text).not.toContain("改动任务或配置");
+  });
+
   it("explains a step that produced nothing", () => {
     const failure = explainFailure(
       "the synthesize step did not produce usable output during start",

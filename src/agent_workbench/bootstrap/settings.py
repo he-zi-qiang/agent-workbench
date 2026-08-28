@@ -151,7 +151,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.18"] = "1.18"
+    config_schema_version: Literal["1.19"] = "1.19"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -310,19 +310,43 @@ class CodeSettings(StrictModel):
     #: this changes what a turn may call, not where it runs.
     sandbox_enabled: bool = False
 
-    #: Whether each ``sandbox_run`` call stops and asks a human (ADR-058).
+    #: Whether each ``external``-risk call stops and asks a human (ADR-058,
+    #: renamed by ADR-0085).
     #:
-    #: Default ``False``, which is a reversal of what shipped, argued from two
-    #: facts. ADR-054 already established that the approval card shows a tool
-    #: name and an argument digest -- a hash cannot be consented to, so the
-    #: gate never bought informed consent, only latency. And the Task path has
-    #: run the same ``external``-risk ``sandbox_run`` with
-    #: ``approval_required_risks=()`` since ADR-015: the platform's own
-    #: position is that a per-call human gate is not what makes the sandbox
-    #: safe -- the container is (one per call, ``--network=none``, destroyed
-    #: after). ``destructive`` risk stays armed regardless; this flag governs
-    #: only the ``external`` tier that ``sandbox_run`` sits in.
-    sandbox_requires_approval: bool = False
+    #: It was ``sandbox_requires_approval`` until ADR-0085 gave a coding
+    #: session a second ``external`` tool. The rename is not tidying: what this
+    #: flag actually produces is an ``approval_required_risks`` tuple, and that
+    #: tuple is keyed by *risk tier*, not by tool. One envelope cannot arm
+    #: ``web_search`` and leave ``sandbox_run`` open -- they are the same tier
+    #: -- so a name that promised per-tool control was promising something the
+    #: type could not express. ``destructive`` stays armed regardless of this
+    #: field, which is why ``project_run`` is not affected either way.
+    #:
+    #: Default ``False``, and the argument for it has changed since it was
+    #: written, so it is restated rather than inherited.
+    #:
+    #: **The reason that expired.** The original first reason was ADR-054's:
+    #: the approval card shows a tool name and an argument *digest*, a hash
+    #: cannot be consented to, so the gate bought latency and not informed
+    #: consent. ADR-077 overturned that. ``runtime/tool_gateway.py`` now
+    #: computes ``_approval_preview(canonical)`` unconditionally and puts it on
+    #: ``PermissionRequested.approval_preview`` -- the canonical arguments
+    #: themselves, truncated with a mark only when they are too long. For a
+    #: search, the card reads the query. That *can* be consented to.
+    #:
+    #: **The reason that stands.** The Task path has run the same
+    #: ``external``-risk ``sandbox_run`` with ``approval_required_risks=()``
+    #: since ADR-015: this platform's position is that a per-call human gate is
+    #: not what makes the sandbox safe -- the container is, one per call,
+    #: ``--network=none``, destroyed after.
+    #:
+    #: That second reason is about the sandbox, and it does not transfer to
+    #: ``web_search`` by itself: a search has no container, and what it puts
+    #: into the turn is text somebody else wrote. ADR-0085 accepts that and
+    #: says so in its own §, rather than letting this default quietly extend to
+    #: a tool the argument was never made about. A deployment that wants the
+    #: gate for both sets this ``true``; there is no way to want it for one.
+    external_requires_approval: bool = False
 
     @model_validator(mode="after")
     def validate_turn_outlasts_one_approval(self) -> CodeSettings:
@@ -1026,8 +1050,33 @@ class PolicySettings(StrictModel):
     #:   disagreeing.
     #:
     #: Default ``False``, and every profile in ``config/`` except
-    #: ``code-local`` leaves it there.
+    #: ``code-local`` and ``demo-local`` leaves it there.
     shell_tools_enabled: bool = False
+    #: Whether this deployment permits a coding session to search the live web
+    #: (ADR-0085).
+    #:
+    #: Here rather than in ``[code]`` for the two reasons the field above is
+    #: here, and the first one applies harder. ``policy_fingerprint`` hashes
+    #: every field in this section, so flipping this changes
+    #: ``policy_identity`` and every run recorded afterwards says which answer
+    #: it ran under. The comment above notes that ``code.sandbox_enabled`` need
+    #: not be in that fingerprint *because the sandbox cannot reach the
+    #: network*. This one is the opposite case by construction.
+    #:
+    #: What it costs, stated here because it is the whole of the decision and
+    #: not a footnote: before this, a coding session could reach the network
+    #: only through ``project_run``, which is ``destructive`` and therefore
+    #: stops at a human on every call, with the command itself on the card.
+    #: With this on, reaching the network needs nobody present -- and text
+    #: somebody else wrote lands in a turn that is holding ``project_write``
+    #: and ``project_edit``, which are ``write`` risk and never stop at
+    #: anybody. ADR-0085 §4 is that argument in full.
+    #:
+    #: Effective only where a provider is also configured: ``projections.py``
+    #: ANDs this with ``research``, so a deployment that turns it on and
+    #: configures nothing gets the tool-less arrangement rather than a process
+    #: that starts and then cannot honour what it offered.
+    search_tools_enabled: bool = False
     path_sandbox_enabled: Literal[True] = True
     tenant_filter_required: Literal[True] = True
     max_tool_argument_bytes: int = Field(default=65_536, ge=1024)

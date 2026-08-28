@@ -371,6 +371,7 @@
     "content": "3 passages retrieved",
     "duration_ms": 412,
     "error": null,
+    "project_writes": [],
     "schema_version": 1,
     "status": "ok",
     "tool_call_id": "toolu_01demo",

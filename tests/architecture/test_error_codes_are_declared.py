@@ -36,6 +36,11 @@ REFUSING_MODULES = (
     Path("runtime/tool_executor.py"),
     Path("runtime/agent_runtime.py"),
     Path("application/chat.py"),
+    # The model adapter joined this list with ADR-0084, which gave it a second
+    # code to choose between rather than one to always write. A call site that
+    # picks is a call site that can pick a word nobody declared, and this is
+    # the only such place outside `core`.
+    Path("adapters/models/deepseek.py"),
 )
 
 

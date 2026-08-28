@@ -423,7 +423,7 @@ class CodeConfig:
     #: Whether each ``sandbox_run`` call waits for a human (ADR-058). Carried
     #: because it decides the envelope's armed risks and which prompt variant
     #: a turn is given -- both downstream branches.
-    sandbox_requires_approval: bool
+    external_requires_approval: bool
     #: Whether this session may call ``project_run`` (ADR-077).
     #:
     #: Projected from ``policy.shell_tools_enabled``, which is in ``[policy]``
@@ -434,6 +434,14 @@ class CodeConfig:
     #: the tool", and "shell tools" is the deployment's word for it, not the
     #: session's.
     host_commands_enabled: bool
+    #: Whether this session may call ``web_search`` (ADR-0085).
+    #:
+    #: Already the conjunction of ``policy.search_tools_enabled`` and a
+    #: configured ``[research]`` provider; nothing downstream re-checks either
+    #: half. Renamed on the way through for the reason the field above is:
+    #: downstream the question is "does this turn get the tool", and
+    #: "search tools" is the deployment's word rather than the session's.
+    web_search_enabled: bool
     turn_timeout_seconds: int
     approval_timeout_seconds: int
     max_steps: int
@@ -1188,12 +1196,25 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             # on without the other gets the tool-less arrangement rather than a
             # process that starts and then cannot honour what it offered.
             sandbox_enabled=settings.code.sandbox_enabled and settings.sandbox.enabled,
-            sandbox_requires_approval=settings.code.sandbox_requires_approval,
+            external_requires_approval=settings.code.external_requires_approval,
             # Only the policy flag, with no `code` twin to and it with. The
             # sandbox needs two because a server has to be running somewhere;
             # a command needs nothing but a directory, and the directory is the
             # session's project. One switch, in the plane that fingerprints it.
             host_commands_enabled=settings.policy.shell_tools_enabled,
+            # And-ed with the provider for the same reason `sandbox_enabled`
+            # above is and-ed with its server: the policy flag asks for the
+            # tool and `[research]` says who answers it. A deployment that
+            # turns the flag on and configures no provider gets the tool-less
+            # arrangement, rather than a process that starts and then cannot
+            # honour what it offered -- and here the failure would be worse
+            # than a missing tool. `code_risk_ceiling` raises on a name it has
+            # no spec for, so the offered-but-unbuildable case does not degrade
+            # to a refusal, it ends every turn in a `ValueError` (ADR-0085).
+            web_search_enabled=(
+                settings.policy.search_tools_enabled
+                and _project_research(settings) is not None
+            ),
             turn_timeout_seconds=settings.code.turn_timeout_seconds,
             approval_timeout_seconds=settings.code.approval_timeout_seconds,
             max_steps=settings.code.max_steps,
