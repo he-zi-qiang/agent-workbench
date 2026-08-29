@@ -5669,6 +5669,215 @@ p.aw-code-step-thought {
   line-height: 1.7;
 }
 
+/* --- 这台机器此刻 -------------------------------------------------------
+ *
+ * 这一页第一块**读接口**的内容（ADR-095）。它排在规则前面，因为它是这一页现在唯一
+ * 会变的东西；规则一年不动，而前台那扇窗此刻正决定着一个任务走不走得下去。
+ *
+ * 三种状态各有各的样子，这是这块面板全部的设计约束：
+ *   服务器没在跑    静的、淡的。不是错误，那台服务器默认就不启动。
+ *   跑着、名单是空  同样静，但说的是另一句话。
+ *   跑着、有内容    只有这一种才画名单、前台和动作。
+ * 把前两种画成同一片空白，就是当初拒绝画假名单要防的那件事换了个形状。 */
+.aw-screen-panel {
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-panel);
+}
+
+/* 读不到的时候：只有一段话，不撑出一块空面板的骨架。 */
+.aw-screen-panel.is-quiet {
+  padding: 14px 16px;
+  color: var(--aw-text-soft);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.aw-screen-panel.is-quiet p {
+  margin: 0;
+}
+
+.aw-screen-panel.is-quiet p + p {
+  margin-top: 6px;
+}
+
+.aw-screen-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+/* 「正在应答」。这是全站唯一一处「另一个进程此刻活着」的指示，所以它用动作色，
+   和任务详情里那个「进行中」是同一档。 */
+.aw-screen-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--aw-accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.aw-screen-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--aw-accent);
+}
+
+.aw-screen-scope {
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+.aw-screen-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0;
+}
+
+.aw-screen-split > .aw-screen-block + .aw-screen-block {
+  border-left: 1px solid var(--aw-border-subtle);
+}
+
+.aw-screen-block {
+  padding: 12px 16px;
+}
+
+.aw-screen-panel > .aw-screen-block {
+  border-top: 1px solid var(--aw-border-subtle);
+}
+
+.aw-screen-block h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.aw-screen-hint {
+  margin: 6px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+/* 前台不在名单里的时候：任务此刻就停在这句话上，所以它是这块面板里唯一带警示色的
+   散文。用 warning 不用 danger，因为没有出错，是在等人。 */
+.aw-screen-hint.is-blocking {
+  color: var(--aw-warning);
+}
+
+.aw-screen-grants {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-screen-grants li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.aw-screen-grants code,
+.aw-screen-frontmost code {
+  color: var(--aw-faint);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+.aw-screen-frontmost {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 13.5px;
+}
+
+/* 动作流。倒序（最近的在上），因为读者来这一页多半是因为「刚才怎么停了」。 */
+.aw-screen-actions {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.aw-screen-actions li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.aw-screen-actions li + li {
+  border-top: 1px solid var(--aw-border-subtle);
+}
+
+.aw-screen-when {
+  flex: none;
+  color: var(--aw-faint);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+.aw-screen-refused {
+  flex: none;
+  color: var(--aw-danger);
+}
+
+.aw-screen-verb {
+  flex: none;
+  color: var(--aw-text);
+  font-family: var(--aw-mono);
+  font-size: 11.5px;
+}
+
+.aw-screen-on {
+  flex: none;
+  color: var(--aw-text-soft);
+}
+
+.aw-screen-detail {
+  flex: none;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+}
+
+/* 拒绝的原句，逐字。它占整行而不是挤在后面：这句话是英文、给模型读的，中英混排挤在
+   一行里两边都不好读，而它恰恰是这一行最该被读完的部分。 */
+.aw-screen-reason {
+  flex: 1 0 100%;
+  color: var(--aw-danger);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+@media (width <= 720px) {
+  .aw-screen-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aw-screen-split > .aw-screen-block + .aw-screen-block {
+    border-top: 1px solid var(--aw-border-subtle);
+    border-left: 0;
+  }
+}
+
 /* --- 计算机控制 ---------------------------------------------------------
  *
  * 这一页没有实时数据，全部是规则，所以版式按"读一段论证"排，不按"扫一眼仪表盘"

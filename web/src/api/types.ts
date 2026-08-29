@@ -720,3 +720,65 @@ export interface EvaluationCurrentRunResponse {
   /** `null` means this API process has not started one -- not that none exist. */
   run: EvaluationRunView | null;
 }
+
+/**
+ * 屏幕控制服务器此刻的样子，或者读不到它的理由。
+ *
+ * `reachable` 是要分支的那个字段，而它和「`session` 是空的」是两件事：那台服务器**默认
+ * 不启动**，所以「没在跑」是普通机器上的普通答案，而「跑着、但没人批准任何应用」是另一
+ * 回事。这一页从写下那天起就在小心同一件事——当初它宁可什么都不显示，也不肯画一张编出来
+ * 的名单。
+ */
+export interface ComputerSessionResponse {
+  reachable: boolean;
+  session: ComputerSession | null;
+  /** 读不到的理由，读得到时是空串。 */
+  detail: string;
+}
+
+export interface ComputerSession {
+  service: string;
+  /**
+   * `"process"`，而这个词是承重的。
+   *
+   * 门禁的 allowlist 是**进程级**的，不是 MCP 会话级（known-gap F-19）。一块写着
+   * 「这次会话」的面板会是第一个把会话级 grant 读进存在的地方，所以服务端答的是它
+   * 真正的作用域，界面照抄。
+   */
+  scope: string;
+  granted: ComputerGrant[];
+  frontmost: ComputerFrontmost;
+  actions: ComputerAction[];
+}
+
+export interface ComputerGrant {
+  bundle_id: string;
+  name: string;
+  /** `read` / `click` / `full`。由应用自己推出，不接受申请。 */
+  tier: string;
+}
+
+/**
+ * 此刻最前面的那扇窗。
+ *
+ * **它带名字，哪怕没被批准**——而模型在同一时刻收到的每一句拒绝都不带（ADR-095）。
+ * 两者是同一条规则的两个读者：这块面板的读者就坐在那扇窗前面，而他要做的判断正是
+ * 「要不要把我正在用的这个也批准进来」。
+ */
+export interface ComputerFrontmost {
+  bundle_id: string;
+  name: string;
+  granted: boolean;
+}
+
+export interface ComputerAction {
+  at: string;
+  action: string;
+  /** 当时最前面的那个应用；门禁没读到就为 null。 */
+  application: { bundle_id: string; name: string } | null;
+  allowed: boolean;
+  /** 被拒时，模型读到的那句拒绝的第一行。放行时是空串。 */
+  reason: string;
+  /** 送到几个字符、点在哪、哪块屏。没有就是空串。 */
+  detail: string;
+}

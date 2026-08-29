@@ -1,4 +1,9 @@
 import { CircleX, Keyboard, MonitorCheck, PanelsTopLeft, ScanEye } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+
+import { getComputerSession } from "../../api/client";
+import { useIdentity } from "../../app/IdentityContext";
+import { ScreenSessionPanel } from "./ScreenSessionPanel";
 
 /**
  * What the screen tools may do to this machine, and why the order of the
@@ -29,6 +34,21 @@ import { CircleX, Keyboard, MonitorCheck, PanelsTopLeft, ScanEye } from "lucide-
  * could -- `_ALLOWED` listed `mouse_move` for a gate method that did not
  * exist. The second one is the failure mode this docblock describes, arriving
  * exactly as described: a hand-copied claim outliving the thing it copied.
+ *
+ * **ADR-095 changed the first paragraph above, and it is left standing because
+ * the argument in it is why the panel below looks the way it does.** There is a
+ * route now: the gate answers `GET /session` on its own loopback port and
+ * `agent-api` forwards it, so the allowlist this page used to refuse to draw is
+ * a fact it can read. What did not change is the reason it refused: a plausible
+ * list is read as the real one. So the panel has three states rather than two --
+ * "that server is not running" is the ordinary answer on an ordinary machine and
+ * is drawn differently from "running, and nobody has approved anything".
+ *
+ * The panel also names the frontmost application whether or not anybody
+ * approved it, which every refusal a model reads deliberately withholds. Two
+ * readers, one rule: the window it names is the one this page's reader is
+ * sitting in front of, and the decision they have to make is whether to approve
+ * it.
  *
  * And it collected a third time, on this docblock itself. Until now the two
  * sentences above said the gate lived in "a stdio MCP server that a Worker
@@ -145,6 +165,24 @@ System Events, shell commands, or any other method to send input to this
 application.`;
 
 export function ComputerPage() {
+  const { identity } = useIdentity();
+  // 每 4 秒问一次。前台应用是这一页上唯一会变的东西，而它变的时候（人切了个窗口）
+  // 任务正停在那里等——所以这个数不能太大。也不能太小：每一次询问都会让那个进程读一次
+  // `NSWorkspace.frontmostApplication()`。
+  //
+  // 读不到不当错误：那台服务器默认不启动，`reachable: false` 是这条路由的正常回答，
+  // 而 react-query 的 retry 会把一个正常回答重试成三次。
+  //
+  // 轮询在标签页不可见时**不跑**（`refetchIntervalInBackground` 默认为假），这是对的
+  // 而不是漏掉的：没人在看的时候，每 4 秒去读一次别人的前台窗口没有任何人受益。
+  // 2026-08-29 排查时被它绊过一次——换回这一页时看到的是上一次的数，几秒后才更新。
+  const session = useQuery({
+    queryKey: ["computer", "session", identity.tenantId, identity.principalId],
+    queryFn: () => getComputerSession(identity),
+    refetchInterval: 4_000,
+    retry: false,
+  });
+
   return (
     <main className="aw-utility-page aw-computer-page">
       <header className="aw-page-header">
@@ -157,15 +195,21 @@ export function ComputerPage() {
         </div>
       </header>
 
-      {/* Before anything else, because everything below reads like a console
-          otherwise. A reader who assumes this page is live will read the tier
-          table as "these are the apps I granted". */}
+      {/* 面板在最上面，规则在它下面。这一页此前的顺序是反的，因为那时它只有规则。 */}
+      <section aria-labelledby="aw-screen-heading">
+        <div className="aw-section-head">
+          <h2 id="aw-screen-heading">这台机器此刻</h2>
+          <span>每 4 秒问一次那个进程</span>
+        </div>
+        <ScreenSessionPanel data={session.data} loading={session.isLoading} />
+      </section>
+
       <div className="aw-notice is-info">
         <ScanEye aria-hidden="true" size={16} />
         <div>
-          <strong>这一页说明机制，不监控运行中的会话。</strong>
+          <strong>上面是这台机器的实际状态，下面是不依赖它也成立的规则。</strong>
           <small>
-            门禁在 computer MCP 服务器进程里，agent-api 没有可以读到它的路由，因此「这次会话批准了哪些应用」在这里读不到，也就不显示——一张编出来的名单会被当成这台机器此刻的状态。下面是不依赖接口也成立的部分：规则本身。
+            门禁在 computer MCP 服务器进程里，上面那块面板经 agent-api 转发一次读到它（ADR-095）。那台服务器默认不启动，所以「没在跑」是这一页上常见的答案，而它和「跑着、但没人批准任何应用」是两回事——面板把这两种画成不一样的东西。
           </small>
         </div>
       </div>

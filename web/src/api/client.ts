@@ -38,6 +38,7 @@ import type {
   SearchResponse,
   TaskGraphChoice,
   TaskIntent,
+  ComputerSessionResponse,
   TaskCapabilitiesResponse,
   TaskListResponse,
   TaskStatus,
@@ -694,6 +695,18 @@ export async function listTasks(
  * under the section frozen into its own snapshot at submission, and showing
  * today's configuration beside it would report a number that Task never saw.
  */
+/**
+ * 屏幕控制服务器此刻的样子。
+ *
+ * 经 agent-api 转发，不直连 8768：浏览器只跟同源后端说话，同源策略就够了，而给那台
+ * 服务器加 CORS 的失败模式是配错一次就把屏幕状态交给任意网站（ADR-095 §5）。
+ */
+export async function getComputerSession(
+  identity: PrincipalIdentity,
+): Promise<ComputerSessionResponse> {
+  return apiRequest(identity, "/v1/computer/session");
+}
+
 export async function getTaskCapabilities(
   identity: PrincipalIdentity,
 ): Promise<TaskCapabilitiesResponse> {
