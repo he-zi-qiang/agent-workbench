@@ -395,6 +395,39 @@ export interface TaskListResponse {
   cursor: string | null;
 }
 
+/**
+ * What a delegating run would be allowed in *this* deployment.
+ *
+ * Read before a Task exists, and that is the whole of what it describes. The
+ * numbers below are the API process's current configuration; a Task already
+ * submitted froze the same section into its own `run_semantics_snapshot` and
+ * runs under that. So this belongs on a submission form and nowhere near a
+ * running Task -- the same distinction `TaskView.agent_invocation_count`
+ * makes one interface up, and for the same reason.
+ *
+ * Which sub-agents exist is deliberately not here. The catalogue is chosen by
+ * what a process *is* rather than by configuration, and the API process holds
+ * the Code one -- so an API that answered would be naming `explorer` to a
+ * console asking what a Task may delegate to.
+ */
+export interface DelegationCapabilities {
+  enabled: boolean;
+  /**
+   * Meaningful only when `enabled`. With delegation off the server sends 1 for
+   * the three tree ceilings and 0 for the token one, which describes a tree
+   * that is not built rather than one that has run out of room -- do not
+   * render them as limits.
+   */
+  max_delegation_depth: number;
+  max_children_per_run: number;
+  max_parallel_child_invocations: number;
+  max_tokens_per_agent_invocation: number;
+}
+
+export interface TaskCapabilitiesResponse {
+  delegation: DelegationCapabilities;
+}
+
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 
 export interface ApprovalView {

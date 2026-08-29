@@ -38,6 +38,7 @@ import type {
   SearchResponse,
   TaskGraphChoice,
   TaskIntent,
+  TaskCapabilitiesResponse,
   TaskListResponse,
   TaskStatus,
   TaskTimelineResponse,
@@ -684,6 +685,19 @@ export async function listTasks(
   options.statuses?.forEach((status) => params.append("status", status));
   if (options.cursor) params.set("cursor", options.cursor);
   return apiRequest(identity, `/v1/tasks?${params.toString()}`);
+}
+
+/**
+ * What this deployment would let the *next* Task do about delegation.
+ *
+ * Not per Task and deliberately not reachable from one: an existing Task runs
+ * under the section frozen into its own snapshot at submission, and showing
+ * today's configuration beside it would report a number that Task never saw.
+ */
+export async function getTaskCapabilities(
+  identity: PrincipalIdentity,
+): Promise<TaskCapabilitiesResponse> {
+  return apiRequest(identity, "/v1/tasks/capabilities");
 }
 
 export async function getTask(
