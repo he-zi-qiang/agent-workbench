@@ -63,7 +63,7 @@ Agent**、**导出必须由人批准**、**跨进程恢复**。被拒的那次�
 |---|---|
 | 后端，真实 PostgreSQL + Qdrant（本机） | `3935 passed / 12 skipped` |
 | 后端，不起任何外部服务（本机） | `3160 passed / 787 skipped` |
-| 后端，CI 那组服务型目录（`contracts`/`persistence`/`api`/`vector`） | `1327 passed / 2 skipped` |
+| 后端，CI 那组服务型目录（`contracts`/`persistence`/`api`/`vector`/`e2e`） | `1352 passed / 2 skipped` |
 | 前端 Vitest（本机 43 个文件） | `719 passed` |
 
 **第一行此前记着 3 项失败，现在没有了，而消失的原因值得写下来。** 那三条都在
@@ -71,13 +71,23 @@ Agent**、**导出必须由人批准**、**跨进程恢复**。被拒的那次�
 都没跑（`approval ran 0 times`）而 Task 仍然成功。2026-08-29 复测：整份文件 **11 条
 全过**。
 
-差别不在代码，在**环境变量**。这几条要 `AGENT_WORKBENCH_TEST_DSN`；当年那次记录是在
-一个没有设它的 shell 里跑的，而 `tests/e2e` 不像 `tests/contracts` 那样在缺变量时自跳过。
-设了 DSN 就是上表第一行的 11 passed，不设就整份 skipped（第二行 787 个 skip 里有它们）。
-所以此前那句"在未经改动的基线上另开 worktree 一样红"是对的——两次都少了同一个变量。
+它们是被**修好**的，不是被环境糊过去的，而修法在 2026-08-28 的
+`174f1f2`：`config/config.test.toml` 没有声明 `[workflow]` 段，`export_requires_approval`
+落回出厂的 `false`，于是这些 Worker 起在一个**没有审批门**的部署下——`approval` 一次都不会
+跑，而这个文件的每一条断言都在数它。修法是一行：给子进程环境补上
+`AW_WORKFLOW__EXPORT_REQUIRES_APPROVAL=true`。那个文件的全部主题就是 v1 图跨过它的人工门，
+所以它必须把自己要测的那个部署配出来，而不是继承一个恰好没有门的默认。
 
-CI 的服务型 job 只跑 `contracts`/`persistence`/`api`/`vector` 四个目录，`tests/e2e`
-**仍然不在其中**，这一条没变：它们能红着而没有人被通知，只是今天它们不红。
+**为什么能红着两周**：`tests/e2e` 当时不在任何一个 CI job 里，所以旧条目里那段解释既没被
+证实也没被证伪。这一条也已经修了——`014de9e`（同日）把 `tests/e2e` 加进了服务型 job，它
+现在跑五个目录，上表第三行也是按五个目录量的。
+
+**2026-08-29 补记，因为它是这份文档自己的题目。** 本节此前的这一段把原因写成了「当年那次
+是在没设 `AGENT_WORKBENCH_TEST_DSN` 的 shell 里跑的」，还写着「`tests/e2e` 仍然不在 CI 的
+服务型 job 里」。两句都是假的，而且是在真实原因已经被查实并修好的**第二天**写下的：不设
+DSN 时那些用例是 skip 而不是 fail（本节第二行 787 个 skip 里就有它们），所以它们当年是
+**带着服务**红的。写这一段的人没有去读那次修复的提交，就照着一条过期的印象补了一个听起来
+合理的机制——正是本文档反复在处理的那一类错误。
 
 **第四行是本机数字，不是 CI 数字。** 更早的表里前端那一行写的是 CI 数字，理由是本机装不到
 `engines` 钉死的 node `24.14.0`。这次的 719 是**本机**跑出来的：系统 node 已是
@@ -88,14 +98,14 @@ CI 的服务型 job 只跑 `contracts`/`persistence`/`api`/`vector` 四个目录
 
 **第三行值得单独一提**：它在本机和 CI 上**逐位相同**——这是"CI 与本机跑的是同一条
 命令、同一组环境闸门"能拿出的最直接证据。CI 的
-`Migrations, PostgreSQL and Qdrant-backed stores` job 每个 PR 都先
-`alembic upgrade head` 再跑它。它不覆盖 `tests/e2e`、Task Worker 端到端和需要模型
+`Migrations, stores and end-to-end recovery` job 每个 PR 都先
+`alembic upgrade head` 再跑它，2026-08-28 起 `tests/e2e` 也在其中。它仍然不覆盖需要模型
 Provider 的路径。
 
-静态门禁全绿：`ruff format --check .`（605 files）、`ruff check .`、
+静态门禁全绿：`ruff format --check .`（612 files）、`ruff check .`、
 Pyright strict `0 errors / 0 warnings / 0 informations`、ESLint `--max-warnings 0`、
-`tsc -b`、production build（`ruff format --check .` 覆盖 609 files）。配置 schema
-`1.19`，Alembic 单一 head `0032_events_stream_run_sequence`（32 个迁移）。
+`tsc -b`、production build。配置 schema `1.19`，Alembic 单一 head
+`0032_events_stream_run_sequence`（32 个迁移）。
 
 **规模**：Python 源码 78773 行、测试 95090 行、前端 TypeScript 43121 行
 （只数 git 跟踪的文件）；`docs/adr/` 下 82 份，编号 0012–0095——**不连续**：0050 与

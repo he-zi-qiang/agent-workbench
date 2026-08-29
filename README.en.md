@@ -445,7 +445,7 @@ measurement ran on*, not "the current baseline".
 |---|---|
 | Backend, real PostgreSQL + Qdrant (local) | `3935 passed / 12 skipped` |
 | Backend, no external services (local) | `3160 passed / 787 skipped` |
-| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`) | `1327 passed / 2 skipped` |
+| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1352 passed / 2 skipped` |
 | Frontend Vitest (local, 43 files) | `719 passed` |
 
 **The first row used to carry 3 failures; it no longer does, and why they went
@@ -454,17 +454,31 @@ is worth writing down.** All three were in
 v1 graph's `approval` node never ran (`approval ran 0 times`) while the Task
 still succeeded. Re-measured 2026-08-29: the whole file is **11 passed**.
 
-The difference is not in the code, it is an environment variable. Those tests
-need `AGENT_WORKBENCH_TEST_DSN`, and the earlier record was taken in a shell
-that did not set it — `tests/e2e` does not skip itself when it is missing the
-way `tests/contracts` does. With the DSN they are the 11 in the first row above;
-without it the whole file skips, and it is inside the 787 skips of the second
-row. So the earlier "the same three are red on the untouched baseline" was
-true — both runs were missing the same variable.
+They were **fixed**, not explained away, and the fix is `174f1f2` of
+2026-08-28: `config/config.test.toml` declares no `[workflow]` section, so
+`export_requires_approval` fell back to the factory `false` and those Workers
+started in a deployment with no approval gate — `approval` could never run, and
+every assertion in that file counts it. The fix is one line: the child
+environment now carries `AW_WORKFLOW__EXPORT_REQUIRES_APPROVAL=true`. That
+file's whole subject is the v1 graph crossing its human gate, so it has to
+configure the deployment it means to test rather than inherit one that happens
+to have no gate.
 
-CI's service-backed job still runs only the four directories named above, and
-`tests/e2e` **is not among them**: they could be red without anyone being told.
-Today they are not red.
+**Why it could stay red for two weeks**: `tests/e2e` was in no CI job at the
+time, so the explanation recorded against it was neither confirmed nor refuted.
+That is fixed too — `014de9e`, the same day, added `tests/e2e` to the
+service-backed job, which now runs five directories. The third row above is
+measured over those five.
+
+**Noted 2026-08-29, because it is this document's own subject.** This paragraph
+previously said the cause was "the earlier record was taken in a shell that did
+not set `AGENT_WORKBENCH_TEST_DSN`", and the one after it said `tests/e2e` was
+still not in CI. Both were false, and both were written the **day after** the
+real cause had been found and fixed: without the DSN those tests skip rather
+than fail (they are inside the 787 skips of the second row), so they were red
+*with* the services. Whoever wrote it did not read the commit that fixed them
+and filled in a plausible-sounding mechanism from a stale impression — which is
+the class of error this document keeps having to correct.
 
 **The fourth row is a local number, not a CI one.** An older table
 cited a CI number there, because the node `24.14.0` pinned in `engines` cannot be
@@ -476,7 +490,7 @@ is a local number and must not be cited as a CI one; Playwright was not run this
 time, and the old `4 passed` has been dropped rather than left in to pad the
 table.
 
-Static gates all pass: `ruff format --check .` (609 files), `ruff check .`,
+Static gates all pass: `ruff format --check .` (612 files), `ruff check .`,
 Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
