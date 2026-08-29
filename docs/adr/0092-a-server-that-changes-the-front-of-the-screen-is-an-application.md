@@ -14,7 +14,7 @@
 - 影响：新 `scripts/build_computer_app.sh`（产出签名 bundle）；
   `apps/computer_mcp/main.py`（uvicorn 进后台线程）；
   `adapters/screen/darwin.py`（新增 `give_main_thread_to_appkit`、`can_change_frontmost`，
-  并新增第七条 pyright 抑制 `reportUntypedBaseClass`）；`scripts/dev.sh computer-server`
+  并新增第八条 pyright 抑制 `reportUntypedBaseClass`）；`scripts/dev.sh computer-server`
   改为构建并启动 .app；`config/config.computer-local.toml` 的前置条件从三条变四条；
   `tests/config/test_local_computer_profile.py` 与 `tests/apps/test_computer_darwin.py`
 - 依赖：[ADR-091](./0091-choosing-a-window-is-choosing-within-a-set-somebody-approved.md)
@@ -23,8 +23,10 @@
   [ADR-076](./0076-a-window-nobody-approved-is-not-in-the-picture.md) §2（**被本 ADR
   推翻的那条**，见 §3）、
   [ADR-070](./0070-a-permission-is-about-a-window-not-an-application.md) §3、§4
-  （FFI 只压在一个文件里；以及「宁可启动时抛错，也不要注册一批调用成功却什么都没发生的
-  工具」——本 ADR 把这条原则又用了一次，见 §4）
+  （pyobjc 只压在一个文件里——§3 原话说的是「全仓只有这一个文件带 pyright 抑制」，
+  那句从来没成立过，2026-08-29 已在该 ADR 就地更正；本 ADR 依据的是收窄之后的那句。
+  以及「宁可启动时抛错，也不要注册一批调用成功却什么都没发生的工具」——本 ADR 把这条
+  原则又用了一次，见 §4）
 
 ## 1. 缺口：四个条件，缺一个就静默失败
 
