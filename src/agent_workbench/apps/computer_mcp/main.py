@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from collections.abc import Sequence
+from typing import Any
 
 import uvicorn
 
@@ -37,12 +39,54 @@ def main(argv: Sequence[str] | None = None) -> None:
         # message this carries names the missing extra or the missing grant.
         parser.exit(2, f"{unavailable}\n")
         return
-    uvicorn.run(
-        app,
-        host=arguments.host,
-        port=arguments.port,
-        access_log=False,
-    )
+    _serve(app, host=arguments.host, port=arguments.port)
+
+
+def _serve(app: Any, *, host: str, port: int) -> None:
+    """Run the HTTP server, and on macOS give the main thread to AppKit.
+
+    **The main thread is the feature, not an implementation detail**
+    (ADR-092). macOS lets a process change which application is frontmost only
+    when four things are true at once, and the last of them is a live
+    main-thread run loop. Measured 2026-08-29 on this machine, holding the
+    other three fixed (bundled `.app`, ad-hoc signature, Accessibility
+    granted): without `NSApplication.run()` activation succeeded **0 of 15**
+    times, every attempt timing out with the frontmost application unchanged;
+    with it, **15 of 15**, including taking focus from the application the
+    person was typing into.
+
+    So uvicorn moves to a background thread. That inverts ADR-076 §2, which
+    gave the main thread to uvicorn and rejected `NSAlert` because a modal
+    dialog there would stop the server answering anything -- including the
+    health probe an operator uses to find out why. The objection was correct
+    and is answered by the arrangement rather than by avoidance: the run loop a
+    dialog would block is no longer the one serving HTTP.
+
+    No AppKit symbol appears in this module. The run loop is one operating
+    system's requirement, so it lives with the rest of that operating system's
+    requirements in `adapters/screen/darwin.py` -- the one file in this
+    repository that carries pyright suppressions, and the reason ADR-070 §3
+    can still say "one file".
+    """
+
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False))
+    if sys.platform != "darwin":  # pragma: no cover - guarded by create_app
+        server.run()
+        return
+
+    from agent_workbench.adapters.screen.darwin import give_main_thread_to_appkit
+
+    # Daemon, because the main thread now belongs to AppKit and that is what
+    # decides when this process ends. `install_signal_handlers` no-ops off the
+    # main thread -- uvicorn's own behaviour, and the reason this needs no
+    # patching of it.
+    thread = threading.Thread(target=server.run, name="uvicorn", daemon=True)
+    thread.start()
+    try:
+        give_main_thread_to_appkit(serving=thread.is_alive)
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
 
 
 def _port(value: str) -> int:

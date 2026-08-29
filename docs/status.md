@@ -27,6 +27,270 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-29（未合并，分支 `claude/quirky-mclean-11c658`，第四十七批）：能改变屏幕最前面那扇窗的服务器，自己必须是一个应用（ADR-092，关闭 F-30）
+
+上一批查明 `activate_application` 不工作，把它记成 F-30 并列了两条出路，各自要推翻一条
+既有决定。使用者选了「我想让它有这个能力」。这一批做出来了：**端到端 15/15**。
+
+### 1. 四个条件，缺一个都是静默失败
+
+原因不在 ADR-091 的门禁，在**进程形态**。macOS 允许改变前台应用要四条同时成立，
+固定其余三条、每次去掉一条实测：
+
+| 缺哪一条 | 成功次数 |
+| --- | --- |
+| bundle 身份（经 LaunchServices 启动） | 0/20 |
+| 代码签名 | 0/10（人把开关打开了，`AXIsProcessTrusted()` 仍是 `False`） |
+| 辅助功能授权 | 0/10 |
+| **主线程活着的 run loop** | 0/15 |
+| 四条都在 | **15/15**，包括从人正在打字的窗口手里抢焦点 |
+
+**每一种失败都是静默的**：`activateWithOptions_` 返回 `true`、
+`AXUIElementSetAttributeValue(kAXFrontmostAttribute)` 返回 `0`、`kAXRaiseAction`、
+`openApplicationAtURL(activates:)`、合成点击 Dock 与后台窗口标题栏——全部「成功」而屏幕
+不动。而同一条路径上**光标确实会移动**，所以事件真的投递了，只是「谁在最前面」不归它管。
+这正是 ADR-070 §4 用一整段拒绝过的形态，只是那一段说的是 `CGEventPost`。
+
+### 2. 诊断过程里错了三次，写下来
+
+查到第四条之前提出过三个假设，**全部被数据否掉**：激活在进程退出时才落地、
+`NSApplication.sharedApplication()` 就是解药、成功与否取决于当时谁在前台。第二个一度
+看起来成立（一次 5 ms 成功），实际是**上一个进程排队的请求恰好落地**——把「焦点确实
+动了」当成了「我这次调用让它动了」。
+
+能识破靠的是**对照组**：不做任何调用观察 20 次，前台自发变化 0 次。没有它，每一次
+「成功」都会被读成证据。F-30 在关闭前先被**改软**过一次（从「就是改不了」改成「基本
+改不了，且少数成功无法复现」），因为当时的证据支持不了那么硬的结论。
+
+### 3. 改动：主线程给 AppKit，uvicorn 给后台线程
+
+```
+scripts/build_computer_app.sh   →  ~/Applications/AgentComputerMCP.app
+                                    · CFBundleIdentifier 固定 · codesign --sign -
+                                    · LSUIElement = true（Accessory，无 Dock 图标）
+main.py                          →  uvicorn 在后台线程
+darwin.py give_main_thread_to_appkit()  →  NSApplication.run() 占主线程
+darwin.py can_change_frontmost()        →  动手前先问，缺哪条说哪条
+```
+
+**`main.py` 里一个 AppKit 符号都没有。** run loop 是「某个操作系统的要求」，所以和其余
+macOS 要求一起放在 `darwin.py`——这样 ADR-070 §3 那句「全仓只有一个文件带 pyright
+抑制」仍然成立。那个文件因此多了第七条抑制（`reportUntypedBaseClass`，因为定时器目标
+要继承 `NSObject`），按该文件的惯例逐条写了理由。
+
+两条被实测撞出来、不是洁癖的约束：**bundle 不能建在 checkout 里**（worktree 在
+`.claude/` 下，LaunchServices 实测**无进程无报错**），**必须签名**（未签名时人能把开关
+打开而 `AXIsProcessTrusted()` 依然为假）。launcher 因此还写日志到
+`~/Library/Logs/AgentComputerMCP.log`——LaunchServices 启动的进程没有终端，启动即退的
+服务器会什么都不留下。第一次跑起来时缺屏幕录制的那条消息正是从这个日志里读到的。
+
+### 4. 推翻了 ADR-076 §2 的结论，没有推翻它的理由
+
+它当年拒绝 `NSAlert` 的理由是「模态框会卡住那条正在服务 HTTP 的主线程，健康探针都答
+不了」。**理由至今成立，只是不再适用**——服务 HTTP 的已经不是主线程了。实测：
+
+```
+$ curl -s http://127.0.0.1:8768/health
+{"status":"ok","service":"agent-workbench-computer","transport":"streamable-http",
+ "displays":1,"capabilities":["exclude_native"]}
+```
+
+**同意机制没有改**，`consent.py` 继续用 osascript 子进程。
+
+### 5. ADR-091 的门禁，端到端验过，一个字没改
+
+真 MCP 客户端 → 真服务器 → 真屏幕：
+
+- **§2.2 的收窄真的会拦。** 第一次端到端时 Claude Desktop 在最前面且不在名单里，
+  三次激活**全部被拒**，拒绝文案**没有点名 Claude**。把已批准的应用放到前台后，
+  同样三次全部成功。
+- **§2.3 成立。** 切到 Safari（tier `read`）后如实回报 `Safari is frontmost, at tier
+  read`，而它依然不可点击、不可打字。
+- 兑现了 §2.2 一个此前没写出来的推论：**会话里第一次切换必须由人发起。**
+
+### 证据（2026-08-29，这棵树上，装了 computer-use extra）
+
+```
+uv run pytest -q                          见下方门禁
+uv run pytest tests/apps/test_computer_darwin.py   11 passed（新增 2 条真机断言）
+端到端：8 个工具、request_access 弹真对话框、activate_application × 3 全部 ok
+健康探针在 .app 形态下照常应答
+```
+
+### 明确没做，以及为什么
+
+**没有把同意换成 `NSAlert`。** 现在变得可能了，但「可能」不是「应该」，那要它自己的
+一次决定。
+
+**`can_change_frontmost()` 判断 run loop 用的是 `NSApplication.isRunning()`**，这是一个
+够用但不精确的代理：它回答「AppKit 的 loop 起来了吗」，不是「窗口服务器认不认这个
+进程」。四条件同时成立时它是对的；将来若出现第五个条件，它不会知道。ADR-092 §6 记着。
+
+**CI 仍然什么都证明不了。** 不装 extra、没有屏幕、没有 TCC，
+`tests/apps/test_computer_darwin.py` 整份 skipped。本节所有数字都是本机的。
+
+---
+## 2026-08-29（未合并，分支 `claude/quirky-mclean-11c658`，第四十六批）：真机验证 activate —— 它不工作，且这台机器上没有能让它工作的调用
+
+上一批把 `activate_application` 的能力等级停在 **Tested**，并写明「没在真机上跑过」。
+这一批去跑了。**它不工作。**
+
+查下来是**两件独立的事**，而这份记录第一版把它们并成了一件——那是错的，先说清楚：
+
+1. 一道从 ADR-070 起就被承诺、却从来没有被实现的启动检查（辅助功能权限）。这是真缺陷，
+   已修，真机验过。**但它不是激活失败的原因。**
+2. 授权补齐之后，激活**依然**一次都不成立。这台机器上没有一个可用的调用能做到它。
+
+第一版写的是「真正的原因，`CGPreflightPostEventAccess` 一行就答完了」。授权之后重跑，
+20 次里 0 次成立——所以那句话是错的。它是一条真缺口，只是恰好挡在前面。
+
+### 1. 先说结论，再说我猜错的两次
+
+装上 `computer-use` extra 之后，那 7 条一直 skipped 的 `test_computer_darwin.py`
+**在真机上全过**。然后驱动真的 `DarwinScreen.activate`：
+
+```
+10 次 activate（Finder / LibreOffice 交替），全部超时 2s，前台一次没变
+4 种 options 组合（0 / AllWindows / IgnoringOtherApps / 两者或）全部 returned=True 而无效果
+泵 CFRunLoop 无差别；预算放宽到 10s 无差别；换成有窗口的 Safari、Chrome 无差别
+NSWorkspace.openApplicationAtURL(activates=True) 同样无效
+```
+
+**中间我猜错了两次，都写下来，因为过程本身是这条记录的一部分。** 第一次：观察到焦点
+在两个进程之间「后来变了」，据此猜「激活请求会在进程退出时才落地」——用一次显式的
+退出前后对照证伪了。第二次：`NSApplication.sharedApplication()` 之后一次 activate
+在 5 ms 内成功，我当场写了「找到了」——**那是上一个进程排队的请求恰好在那时落地**，
+同一进程里紧接着的第二次就又超时了。两次都是把「焦点确实动了」当成了「我这次调用让它
+动了」。
+
+### 2. 挡在前面的那件事：辅助功能没有授权
+
+```
+CGPreflightScreenCaptureAccess()  -> True    录屏：已授权
+CGPreflightPostEventAccess()      -> False   辅助功能：未授权
+```
+
+没有辅助功能授权，macOS 不让这个进程改变前台应用，也不让它合成事件——**而且不报错**。
+这正是 [ADR-070](./adr/0070-a-permission-is-about-a-window-not-an-application.md) §4
+点名描述过的形状：
+
+> 缺它时适配器在**启动时**抛错，而不是注册一批「调用成功、什么也没发生」的工具——
+> 这正是 macOS 对没有辅助功能授权的进程做的事：`CGEventPost` 返回成功，然后什么都不做。
+
+### 3. 那道检查从来没有被写出来 —— 口径不实，当场修
+
+`DarwinScreen.__init__` 只 preflight 了录屏。两处文档都承诺了两道：ADR-070 §4 是上面
+那段，而 `config.computer-local.toml` 写得更直白——
+
+> System Settings > Privacy & Security > Screen Recording, and > Accessibility,
+> both granted ...
+> **If any of them is missing the server exits at startup with a message naming
+> the one that is missing**, and an MCP client is handed no screen tool at all --
+> rather than tools that post events nothing receives
+
+「任何一个缺了就退出」这句话，对录屏为真，对辅助功能为假——而它点名的恰好是假的那个。
+按 known-gaps 对「口径不实」的处理：立刻修，不排期。
+
+**这条缺陷比 ADR-091 老得多。** 它影响的不只是激活：`left_click`、`type`、`key`、
+`scroll` 在这台机器上同样是静默空转的，`CGEventPost` 返回成功、屏幕上什么也不动，而
+工具会照常回一句 `Clicked in Finder.`。
+
+修法与既有那道同形：preflight → 请求一次 → 再 preflight → 抛 `ScreenUnavailableError`，
+文案**点名是哪一个**（「screen permissions」会把人送到 System Settings 的另一个面板）。
+真机验证过：
+
+```
+ScreenRecording: True  Accessibility: False
+RESULT: refused at startup, as it should:
+  this process has no Accessibility permission, so every click and keystroke it
+  synthesizes would report success and do nothing, and no application could be
+  brought to the front. ...
+```
+
+### 4. 为什么这道检查能活这么久：没有东西跑过那个构造函数
+
+`tests/apps/test_computer_darwin.py` 里每一条都用 `object.__new__(DarwinScreen)`
+绕过 `__init__`——注释写明了理由（否则在别人正在用的机器上跑测试会弹权限框）。理由
+成立，后果是**这个构造函数从来没有被任何测试执行过**。
+
+新增两条，把平台的答案 monkeypatch 掉，所以既跑得到构造函数、又不碰真权限：
+`test_a_process_without_accessibility_refuses_to_start`（并断言文案点名 Accessibility
+而**不**提 Screen Recording）与 `test_both_grants_present_is_the_only_way_through`。
+
+### 5. 授权补齐之后：激活仍然一次都不成立
+
+两道权限齐了、适配器构造得起来之后，用一份**带对照组**的脚本重跑（前两次诊断栽的就是
+没有对照组：我把「焦点确实动了」当成了「我这次调用让它动了」，并据此宣布过一次
+「找到了」）。对照组是：不做任何调用，观察 1.5–2 秒，前台**零次**变化。所以下面每一行
+的「没变」都是真的没变。
+
+| 尝试 | 结果 |
+| --- | --- |
+| `activateWithOptions_`，4 种 options 组合 | 0/20 成立 |
+| `activateFromApplication_options_`（macOS 14 起的替代 API），source = 当前前台 | 0/20 |
+| 同上，source = 自己 | 0/20 |
+| `NSWorkspace.openApplicationAtURL(activates: true)` | 不成立 |
+| 先 `NSApplication.sharedApplication()`（`activationPolicy` −1 → 2）再上述任一 | 0/20 |
+| 泵 `CFRunLoop` 等待 / 预算放宽到 10 秒 | 无差别 |
+| 目标换成确实拥有屏上窗口的 Safari、Chrome、Finder | 无差别 |
+
+**结论：在 macOS 26.5.2 上，这个形态的进程改变不了前台应用。** 它不是权限问题（两道
+TCC 都给了），不是 API 用错了（新旧两个都试了），也不是时序问题（对照组 + 10 秒预算）。
+
+剩下的路只有两条，而两条这个项目都走不了：把服务器做成真正的 GUI 应用（打包成 .app、
+`activationPolicy` 0/1、主线程 run loop）——[ADR-076](./adr/0076-a-window-nobody-approved-is-not-in-the-picture.md)
+§2 为了别的理由已经明确拒绝过这个形态；或者 AppleScript / System Events——这个项目**自己
+的拒绝文案**逐字禁止的就是它，不能一边告诉模型「永远不要用 AppleScript 绕过去」，一边
+自己用它来实现这个工具。
+
+### 6. 门禁在这件事上的表现是对的，这一点值得单独记
+
+`ScreenGate.activate` 没有谎报成功。它按 [ADR-091](./adr/0091-choosing-a-window-is-choosing-within-a-set-somebody-approved.md)
+§3.1 的设计——端口回报「之后谁在最前面」，而不是回报「成功了没有」——发现目标没到前台，
+抛出 `activation_did_not_take`，文案里写着「Nothing was clicked or typed. Take a
+screenshot...」。
+
+那条设计当时的理由是「模态表单、全屏 Space、不肯到前面来的应用」，写的时候是设想；
+现在它是这个工具在这台机器上**唯一**的行为，而它如实。**一个不能工作的能力和一个谎报
+成功的能力，差别全在这里。**
+
+同样成立的还有 §2.2 那条收窄：实测时把未批准的 Chrome 切到前台，`gate.activate` 拒绝，
+并且**没有点名 Chrome**——和设计一致。
+
+### 证据（2026-08-29，这棵树上，装了 computer-use extra）
+
+```
+uv run pytest tests/apps/test_computer_darwin.py   9 passed（此前是 1 skipped）
+uv run pytest -q          3133 passed, 782 skipped, 75s
+前端 eslint / tsc -b       通过
+vitest run                662 passed（40 files，ComputerPage 新增 1 条）
+vite build                通过
+uv run pyright            0 errors
+uv run ruff format --check . / ruff check .        通过
+agent-config-check        development 与 test 各 ok
+```
+
+CI 那边这 9 条仍然是 skipped——CI 不装这个 extra，所以本节的数字全部是本机的。
+
+### 明确没做，以及为什么
+
+**`activate_application` 没有被修好，本批也不打算在不做决定的情况下动它。** 验证的结论
+是它在这个形态下不可能工作（§5），而两条可能的出路——把服务器做成 GUI 应用、或者用
+AppleScript——一条与 ADR-076 §2 冲突，另一条与这个项目自己的拒绝文案冲突。两条都得先有
+一次决定，不是一次实现。记进 known-gap **F-30**。
+
+**能力等级从 Tested 降下来。** 上一批写的是「Tested，未 Demonstrated」，那时的意思是
+「还没人在真机上跑」。现在跑过了：门禁那一半仍然是 Tested（假实现下全部成立，且真机上
+如实拒绝），而**适配器那一半是不成立的**。F-30 记的就是这个差。
+
+**没有为「输入路径在真机上从未被演示过」新开 known-gap 条目。** 查过：
+`architecture-baseline.md` 第 17 节与 `HIGHLIGHTS.md` 都没有为 computer use 声称任何
+能力等级，所以不存在需要下调的声称。本节就是那份证据记录。
+
+**没有改 `config.computer-local.toml` 的那段注释。** 它描述的行为现在是真的了——这次
+修的是让一句已经写下的话变成事实，而不是把话改成现状。
+
+---
 ## 2026-08-28（未合并，分支 `claude/quirky-mclean-11c658`，第四十五批）：模型可以挑窗口，但只能在人批准过的那一组里挑（ADR-091，新增 F-29）
 
 > **本批的基线是 `6d1da8c`，不是它开工时的 `b162f36`。** ADR-090（第四十四批，

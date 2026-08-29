@@ -186,11 +186,44 @@ def _dev(
     )
 
 
-def test_dev_script_starts_the_project_owned_computer_mcp_module() -> None:
-    result = _dev("computer-server")
+def test_dev_script_starts_the_server_from_the_signed_bundle() -> None:
+    """Read rather than run, and the change is the reason.
 
-    assert result.returncode == 0
-    assert result.stdout.strip() == "-m agent_workbench.apps.computer_mcp.main"
+    This used to execute the arm with `PYTHON=/bin/echo` and assert the module
+    it printed. Since ADR-092 the arm builds and launches a signed `.app`, so
+    running it here would put a bundle in somebody's ~/Applications every time
+    the suite ran -- a test with a side effect on the machine it is testing.
+
+    What is asserted is what that ADR actually requires: the server is not
+    started from this shell. Launched that way it would have no bundle
+    identity, no signature and no main-thread run loop, and
+    `activate_application` would refuse every call.
+    """
+
+    script = (ROOT / "scripts/dev.sh").read_text(encoding="utf-8")
+    arm = script.split("computer-server)", 1)[1].split("\n  ;;", 1)[0]
+
+    assert "build_computer_app.sh" in arm
+    assert "open -W -a" in arm
+    # The direct invocation is what must NOT come back.
+    assert "-m agent_workbench.apps.computer_mcp.main" not in arm
+
+
+def test_the_bundle_build_is_idempotent_about_identity() -> None:
+    """Rebuilding must not cost the person another trip to System Settings.
+
+    TCC keys the Accessibility and Screen Recording grants on the bundle id
+    together with the code signature, so a build that generated either afresh
+    would silently revoke both -- and the revocation is invisible until an
+    activation quietly stops working.
+    """
+
+    build = (ROOT / "scripts/build_computer_app.sh").read_text(encoding="utf-8")
+
+    assert 'BUNDLE_ID="com.agent-workbench.computer-mcp"' in build
+    assert "codesign --force --deep --sign -" in build
+    # LSUIElement: registered with the window server, no Dock icon.
+    assert "<key>LSUIElement</key><true/>" in build
 
 
 def test_dev_script_probes_every_tool_by_name() -> None:

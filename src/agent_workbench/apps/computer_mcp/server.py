@@ -124,7 +124,15 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
             "something nobody approved is frontmost at this moment: a person "
             "is using a window that is not part of this task, and taking the "
             "screen from it is their decision rather than yours. Do not poll "
-            "for that last one to clear."
+            "for that last one to clear.\n"
+            "KNOWN NOT TO WORK ON macOS AS THIS SERVER IS DEPLOYED (F-30). "
+            "Measured 2026-08-29 on macOS 26.5.2 with both screen grants "
+            "held: no available call changes the frontmost application from a "
+            'process of this shape, so this tool refuses with "was asked to '
+            'come to the front and did not" every time. It is described in '
+            "full here rather than quietly removed because the gate around it "
+            "is real and the refusal is honest -- but do not build a plan on "
+            "it reaching a second application, and do not retry it."
         ),
         input_schema={
             "type": "object",
