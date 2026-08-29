@@ -15,6 +15,14 @@ Check 3 is the one that is easy to leave out and impossible to add later
 without rewriting everything above it. A gate that decides once and then acts
 has authorized the screen as it was, and by the time the keystroke lands the
 screen is as it is.
+
+Between check 3 and the action there is one more step, and it is deliberately
+**not** called a check: the point a model measured on a picture of one display
+is converted into the global space the event is posted into (ADR-090). It
+refuses a coordinate that is not on that display at all -- which is a mistake,
+not a permission problem, and is answered as one. It runs *after* the three
+checks rather than before them, so a session that has been granted nothing
+cannot use a coordinate refusal to measure this machine's screens.
 """
 
 from __future__ import annotations
@@ -29,11 +37,12 @@ from agent_workbench.domain.computer import (
     ScreenshotBudget,
     ScreenTier,
     focus_lost,
+    off_frame,
     permits,
     refusal,
     tier_for,
 )
-from agent_workbench.ports.screen import Capture, ScreenPort
+from agent_workbench.ports.screen import Capture, Display, ScreenPort
 
 #: How a person is asked. Named here rather than spelled out at each use so the
 #: server and the gate cannot drift into two slightly different callables.
@@ -149,6 +158,86 @@ class ScreenGate:
             raise ScreenRefusedError(refusal(action=action, application=now, tier=tier))
         return Grant(application=now, tier=tier)
 
+    def _display_for(self, display_id: int | None, *, must_name: bool) -> Display:
+        """The display a call is about.
+
+        ``must_name`` is the difference between looking and landing, and it is
+        the only difference: a screenshot has no coordinate to get wrong -- it
+        *reports* which display it took, and that report is where a later click
+        gets the id it sends back -- so requiring one there would leave no way
+        to learn the ids at all. A coordinate has everything to get wrong.
+
+        Given that, three answers, and the middle one is worth arguing about.
+
+        **One display, no id given:** the main one. A single-screen session is
+        the ordinary case and should not have to learn this vocabulary to
+        click; there is also exactly one right answer, so nothing is guessed.
+
+        **More than one display, no id given, and a coordinate rides on it:
+        refused.** This is the part that makes the rest of ADR-090 worth
+        anything. Converting correctly once told which screen a point came from
+        still leaves the failure intact when the model simply does not say: a
+        coordinate measured on the second display that happens to fall inside
+        the main one's bounds would be accepted and clicked, in the wrong
+        place, silently -- F-22 again, reached by omission rather than by
+        arithmetic. So on a machine where the two spaces actually differ,
+        saying which one is mandatory.
+
+        **An id no display answers to: refused.** Falling back to the main
+        display here would be the same bug wearing a default.
+        """
+
+        displays = self.screen.displays()
+        if not displays:
+            raise ScreenRefusedError("this machine reports no displays")
+        # Read before the count is tested rather than after: `len(...) > 1`
+        # narrows this tuple to "empty or one", and pyright then reads the
+        # index in the `return` below as out of range on the empty half.
+        main = displays[0]
+        if display_id is None:
+            if must_name and len(displays) > 1:
+                raise ScreenRefusedError(
+                    f"this machine has {len(displays)} displays, so a "
+                    "coordinate has to say which one it was measured on. "
+                    f"Attached: {self._attached(displays)}.\n"
+                    "Take a screenshot and pass back the display_id it "
+                    "reports."
+                )
+            return main
+        chosen = next(
+            (held for held in displays if held.display_id == display_id), None
+        )
+        if chosen is None:
+            raise ScreenRefusedError(
+                f"this machine has no display {display_id}. Attached: "
+                f"{self._attached(displays)}.\n"
+                "Take a screenshot and use the display_id it reports."
+            )
+        return chosen
+
+    @staticmethod
+    def _attached(displays: tuple[Display, ...]) -> str:
+        """The displays, named the way a model has to name one back."""
+
+        return ", ".join(
+            f"{held.display_id} ({held.width}x{held.height} points)"
+            for held in displays
+        )
+
+    def _landing(self, x: int, y: int, display_id: int | None) -> tuple[int, int]:
+        """Where a display-local point is, in the space events are posted in.
+
+        Called after :meth:`_require_frontmost` and never before it. A session
+        that has been granted nothing should be told that, not told how wide
+        this machine's screens are: the arrangement of somebody's monitors is a
+        fact about their desk, and a refusal is not a place to hand it out.
+        """
+
+        frame = self._display_for(display_id, must_name=True).frame()
+        if not frame.contains(x, y):
+            raise ScreenRefusedError(off_frame(x=x, y=y, frame=frame))
+        return frame.to_global(x, y)
+
     # --- acting ----------------------------------------------------------
 
     async def screenshot(self, display_id: int | None = None) -> Capture:
@@ -173,13 +262,12 @@ class ScreenGate:
         objection to enumerating in the first place.
         """
 
-        displays = self.screen.displays()
-        if not displays:
-            raise ScreenRefusedError("this machine reports no displays")
-        chosen = next(
-            (held for held in displays if held.display_id == display_id),
-            displays[0],
-        )
+        # `must_name=False`: looking at an unnamed display is the main one
+        # even on a machine with several, because this call is where the ids
+        # come from. Naming one that does not exist is still refused -- a
+        # picture of a different screen than the one asked for is the same
+        # class of silent substitution this whole change is about.
+        chosen = self._display_for(display_id, must_name=False)
         included = self._to_include()
         if not included:
             # An empty allowlist is not "show everything", which is what it
@@ -223,7 +311,13 @@ class ScreenGate:
         return tuple(sorted(self._granted))
 
     async def click(
-        self, x: int, y: int, *, button: str = "left", count: int = 1
+        self,
+        x: int,
+        y: int,
+        *,
+        button: str = "left",
+        count: int = 1,
+        display_id: int | None = None,
     ) -> Grant:
         action = {
             "left": "left_click",
@@ -235,12 +329,22 @@ class ScreenGate:
         elif count == 3:
             action = "triple_click"
         held = self._require_frontmost(action)
-        await self.screen.click(x, y, button=button, count=count)  # pyright: ignore[reportArgumentType]
+        at_x, at_y = self._landing(x, y, display_id)
+        await self.screen.click(at_x, at_y, button=button, count=count)  # pyright: ignore[reportArgumentType]
         return held
 
-    async def scroll(self, x: int, y: int, *, direction: str, amount: int) -> Grant:
+    async def scroll(
+        self,
+        x: int,
+        y: int,
+        *,
+        direction: str,
+        amount: int,
+        display_id: int | None = None,
+    ) -> Grant:
         held = self._require_frontmost("scroll")
-        await self.screen.scroll(x, y, direction=direction, amount=amount)  # pyright: ignore[reportArgumentType]
+        at_x, at_y = self._landing(x, y, display_id)
+        await self.screen.scroll(at_x, at_y, direction=direction, amount=amount)  # pyright: ignore[reportArgumentType]
         return held
 
     async def key(self, combination: str) -> Grant:

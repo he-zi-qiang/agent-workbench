@@ -11,12 +11,25 @@ import pytest
 
 from agent_workbench.domain.computer import (
     ApplicationIdentity,
+    DisplayFrame,
     ScreenshotBudget,
     focus_lost,
     kind_of,
+    off_frame,
     permits,
     refusal,
     tier_for,
+)
+
+#: The main display: its own space and the global one are the same space.
+MAIN = DisplayFrame(display_id=1, origin_x=0, origin_y=0, width=1470, height=956)
+
+#: A second display, right of the main one and 124 points higher. Both offsets
+#: are non-zero, unequal, and one is negative -- so a conversion that drops an
+#: origin, swaps the axes or gets a sign wrong fails here rather than passing by
+#: symmetry.
+SECOND = DisplayFrame(
+    display_id=2, origin_x=1470, origin_y=-124, width=1920, height=1080
 )
 
 
@@ -214,3 +227,69 @@ def test_losing_focus_mid_string_reports_how_much_landed() -> None:
     assert "NOT delivered" in message
     assert "Terminal" in message and "Notes" in message
     assert "screenshot" in message
+
+
+def test_on_the_main_display_the_conversion_is_the_identity() -> None:
+    """Which is the whole reason F-22 survived a year.
+
+    This machine has one screen. On it the display's own space and the space
+    events are posted into are the same space, so the bug was unobservable and
+    the code that had it looked right.
+    """
+
+    assert MAIN.to_global(300, 200) == (300, 200)
+
+
+def test_a_point_on_a_second_display_is_moved_by_that_display_s_origin() -> None:
+    """The regression. Before ADR-090 this coordinate was posted unchanged,
+    which named a point on the *main* screen -- and the click succeeded."""
+
+    assert SECOND.to_global(300, 200) == (1770, 76)
+
+
+def test_the_axes_are_not_swapped_and_the_sign_is_not_dropped() -> None:
+    assert SECOND.to_global(0, 0) == (1470, -124)
+    assert SECOND.to_global(1919, 1079) == (3389, 955)
+
+
+def test_a_display_holds_its_own_points_and_not_the_next_one_s() -> None:
+    """Half-open at the far edge: a 1920-wide display's last column is 1919,
+    and 1920 is already the first column of whatever is arranged beyond it."""
+
+    assert SECOND.contains(0, 0) is True
+    assert SECOND.contains(1919, 1079) is True
+    assert SECOND.contains(1920, 0) is False
+    assert SECOND.contains(0, 1080) is False
+
+
+def test_a_negative_coordinate_is_not_on_any_display() -> None:
+    """Even on a display whose own origin is negative. The two are different
+    spaces, and `contains` is asked in the display's own one."""
+
+    assert SECOND.contains(-1, 0) is False
+    assert SECOND.contains(0, -1) is False
+
+
+def test_an_off_display_coordinate_says_which_display_and_how_big_it_is() -> None:
+    message = off_frame(x=2000, y=40, frame=MAIN)
+
+    assert "(2000, 40)" in message
+    assert "display 1" in message
+    assert "1470x956" in message
+    assert "display_id" in message
+
+
+def test_a_coordinate_mistake_is_not_answered_as_a_security_event() -> None:
+    """The one part of `refusal` that is deliberately absent here.
+
+    "Never use AppleScript" belongs on a *permission* refusal, because that is
+    what invites trying another route to the same window. Being a hundred
+    points off is not that, and answering it as though it were teaches a model
+    that these warnings are noise -- which is how the ones that matter stop
+    being read.
+    """
+
+    message = off_frame(x=2000, y=40, frame=MAIN)
+
+    assert "AppleScript" not in message
+    assert "work around" not in message

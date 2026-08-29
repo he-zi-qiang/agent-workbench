@@ -8,7 +8,11 @@ from typing import Any
 from mcp import Client
 from starlette.testclient import TestClient
 
-from agent_workbench.adapters.memory.screen import FakeScreen
+from agent_workbench.adapters.memory.screen import (
+    MAIN_DISPLAY,
+    SECOND_DISPLAY,
+    FakeScreen,
+)
 from agent_workbench.apps.computer_mcp.server import (
     HEALTH_PATH,
     create_app,
@@ -233,4 +237,71 @@ def test_nothing_is_touched_after_a_refusal() -> None:
     )
 
     assert all(result.is_error for result in results)
+    assert screen.actions == []
+
+
+def test_a_click_carries_the_display_it_was_measured_on() -> None:
+    """End to end, through the wire format the model actually speaks.
+
+    The gate's own tests prove the arithmetic; this proves the id survives the
+    tool schema and the dispatch, which is where an optional field is quietly
+    dropped (ADR-090).
+    """
+
+    screen = FakeScreen(focus=NOTES, screens=(MAIN_DISPLAY, SECOND_DISPLAY))
+    _, clicked = _session(
+        screen,
+        [
+            (
+                "request_access",
+                {"applications": [{"bundle_id": NOTES.bundle_id, "name": NOTES.name}]},
+            ),
+            ("left_click", {"x": 300, "y": 200, "display_id": 2}),
+        ],
+    )
+
+    assert clicked.is_error is False
+    assert screen.actions == [("click", (1770, 76, "left", 1))]
+
+
+def test_a_screenshot_names_the_display_to_send_back_with_coordinates() -> None:
+    """Half of the discipline is arithmetic; this is the other half.
+
+    Claude Desktop states this in the tool description -- coordinates refer to
+    a named capture, never to whatever was looked at last. A conversion nothing
+    tells the model to feed is a conversion it will feed the wrong number.
+    """
+
+    screen = FakeScreen(focus=NOTES, screens=(SECOND_DISPLAY, MAIN_DISPLAY))
+    _, shot = _session(
+        screen,
+        [
+            (
+                "request_access",
+                {"applications": [{"bundle_id": NOTES.bundle_id, "name": NOTES.name}]},
+            ),
+            ("screenshot", {}),
+        ],
+    )
+
+    assert shot.is_error is False
+    assert "display_id=2" in shot.content[0].text
+    assert shot.structured_content["display_id"] == 2
+
+
+def test_a_coordinate_off_the_screen_is_an_error_result_and_no_click() -> None:
+    screen = FakeScreen(focus=NOTES)
+    _, clicked = _session(
+        screen,
+        [
+            (
+                "request_access",
+                {"applications": [{"bundle_id": NOTES.bundle_id, "name": NOTES.name}]},
+            ),
+            ("left_click", {"x": 4000, "y": 10}),
+        ],
+    )
+
+    assert clicked.is_error is True
+    assert "not a point on display 1" in clicked.content[0].text
     assert screen.actions == []

@@ -27,6 +27,73 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-28（未合并，分支 `feat/a-coordinate-carries-the-screen-it-was-measured-on`，第四十四批）：一个坐标带着它是在哪块屏上量的（关闭 F-22，ADR-090）
+
+[ADR-076](./adr/0076-a-window-nobody-approved-is-not-in-the-picture.md) 对照 Claude
+Desktop 时发现坐标参照系没钉，认定它是**活着的 bug** 而不是文档缺口，然后明确不在
+那一轮修。这一批修它。
+
+### 1. 这个 bug 没有失败面
+
+`capture` 返回**那一块显示器**的点尺寸，模型照着那张图量坐标；`click` 把坐标交给
+`CGEventCreateMouseEvent`，发的是**全局坐标空间**的事件。一块屏时两者重合，换算是
+恒等函数。接上第二块屏，照着它的截图量出来的点会落在**主屏**上——事件构造成功、
+投递成功、工具返回 `Clicked in Notes.`，落点是别人的窗口。**没有任何东西会报错。**
+
+### 2. 换算被拆成两半，才测得了
+
+F-22 自己写的判据是「两块显示器上各点一次」，并注明**这台机器只有一块屏，验不了**。
+那句话对端到端成立，对算术不成立。所以：
+
+- **「这块屏的左上角在全局空间的哪里」**——只有平台答得上，`darwin.py` 里一行
+  `CGDisplayBounds`；
+- **「已知原点，把这块屏的点换算成全局点，以及这个点在不在这块屏上」**——纯算术，
+  `domain/computer.py` 的 `DisplayFrame`，由 `SECOND_DISPLAY` 这个假显示器完整覆盖。
+
+那个假显示器的偏移是 `origin_x=1470`、`origin_y=-124`：互不相等（弄反 x／y 会失败）、
+其中一个为负（丢符号会失败）、都不是对方尺寸的倍数（碰巧对称而蒙对会失败）。
+
+### 3. 比换算更要紧的那一条
+
+只做换算，洞比补掉的大：模型截了第二块屏、量出 `(300, 200)`、**忘了带
+`display_id`**，而这个点同时落在主屏范围内——按主屏恒等换算，点击落在主屏，
+**F-22 靠「没说」原样复发**。
+
+所以多屏时省略 `display_id` 由「当作主屏」改成**拒绝**。一块屏时照旧可省。
+`screenshot` 是必要的例外：它没有坐标可以搞错，而它的报告正是模型拿到 id 的唯一来源。
+
+### 证据
+
+| 门禁 | 结果 |
+|---|---|
+| `pytest`（离线） | 3081 → **3101 passed**, 783 skipped, 69.9s |
+| computer 六个套件 | 69 → **89 passed**, 1 skipped（darwin 那条要 `computer-use` extra） |
+| `ruff format` / `ruff check` | 通过 |
+| `pyright`（裸跑） | 0 errors, 0 warnings |
+| `agent-config-check --profile development` | ok（`default` 与 `computer-local` 各跑一次；三个 DSN 由环境提供） |
+| `eslint` / `tsc -b` / `vitest` / `vite build` | 通过 / 通过 / **656 passed (39 files)** / 296 ms |
+
+新增 **20 条**测试，全部在 `tests/domain/test_computer.py`（7）、
+`tests/apps/test_computer_gate.py`（10）、`tests/apps/test_computer_mcp_server.py`（3）。
+
+新增断言里钉住的：主屏上换算是恒等；第二块屏上 `(300, 200) → (1770, 76)`；
+`contains` 在远边半开；越界坐标被拒且 `screen.actions == []`；不存在的 display id
+被拒而不是回退；多屏省略 id 被拒；**几何这一步排在三道权限检查之后**——没批准的
+会话拿越界坐标去问，得到的是「你不在名单里」，不是这台机器的显示器尺寸。
+
+### 明确没做，以及为什么
+
+- **端到端没验。** 真接两块屏各点一次，这台机器做不到。这条能力停在
+  **Tested**，不是 Demonstrated；ADR-090 §5 末段写明了这一点，F-22 的关闭说明里
+  也写了「判据只兑现了算术那一半」。
+- **没抄 `switch_display`。** 服务端记着「现在看的是哪块屏」是一份状态，而这个门禁
+  明确什么都不缓存（ADR-090 §3）。
+- **工具数量没变，还是六个。** 对照 Claude Desktop 发现的其余几处工具面缺口
+  （没有 `open_application`、没有 `list_granted_applications`、`_ALLOWED` 里许可了
+  `mouse_move` 与 `drag` 而没有任何工具能产生它们）**没有在这一批处理**，也没有
+  写进 known-gaps——它们是这次对表新发现的，该有自己的一批。
+
+---
 ## 2026-08-28（未合并，分支 `ci/a-suite-nobody-ran-is-not-a-suite`，第四十三批）：一个不在 CI 里的套件会积累没人证实过的解释（E-03 部分关闭）
 
 上一批修好了 E-07 的三条崩溃恢复断言，然后留了一句：**下次变红仍然不会有人知道**。

@@ -1,7 +1,7 @@
 """What a model may do to a screen, and how much of one it may be shown.
 
-Three questions live here, and all three are answered without touching a screen
-so that all three are testable without one (ADR-070):
+Four questions live here, and all four are answered without touching a screen
+so that all four are testable without one (ADR-070, ADR-090):
 
 * **Which tier is an application at.** Not every window is equally safe to type
   into. A browser is a place credentials get entered; a terminal is a place a
@@ -13,6 +13,11 @@ so that all three are testable without one (ADR-070):
 * **What a refusal says.** A refusal that only says "no" gets worked around;
   the model tries AppleScript next. So a refusal here carries three parts, and
   the third one is the part that matters.
+* **Where a coordinate lands.** A model measures a point off a picture of one
+  display; the event it asks for is posted into one space spanning all of them.
+  On a one-screen machine those are the same space, which is why the difference
+  survived a year unnoticed (F-22). It is arithmetic, so it lives here rather
+  than in the one module that cannot be tested.
 
 Nothing in this module knows what a CGEvent is, and that is the point: the
 platform adapter can be replaced or absent, and every rule above still holds
@@ -240,6 +245,55 @@ def permits(tier: ScreenTier, action: str) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class DisplayFrame:
+    """Where one display sits in the space a synthesized event is posted into.
+
+    Two coordinate spaces meet here, and until 2026-08-28 only one of them was
+    written down:
+
+    * the **display's own** space, top-left of *that screen* being (0, 0),
+      which is what a model can measure -- a screenshot is of one display, and
+      the picture has no way to express where that display sits;
+    * the **global** space every synthesized event is posted into, where only
+      the main display's top-left is (0, 0).
+
+    On a machine with one screen these are the same space, and the identity
+    function is a correct implementation of the conversion. That is precisely
+    why this was wrong for a year with nothing to show for it: plug in a second
+    monitor, and a coordinate read off *its* screenshot names a point on the
+    **main** one. The click then succeeds, lands somewhere nobody asked for,
+    and reports nothing -- there is no failure mode here, only a wrong place
+    (F-22).
+
+    Points, never pixels, for the reason ``ports/screen.py`` gives at length.
+    """
+
+    display_id: int
+    #: The display's top-left in global points. (0, 0) for the main display,
+    #: and negative for a screen arranged above or to the left of it -- which
+    #: is ordinary, not exotic, and is why these are signed.
+    origin_x: int
+    origin_y: int
+    width: int
+    height: int
+
+    def contains(self, x: int, y: int) -> bool:
+        """Whether a display-local point is on this display at all.
+
+        Half-open at the far edge on purpose: a 1470-point-wide display has its
+        rightmost column at 1469, and ``x == 1470`` is already the first column
+        of whatever is arranged to the right of it.
+        """
+
+        return 0 <= x < self.width and 0 <= y < self.height
+
+    def to_global(self, x: int, y: int) -> tuple[int, int]:
+        """One of this display's own points, in the space events are posted in."""
+
+        return (self.origin_x + x, self.origin_y + y)
+
+
+@dataclass(frozen=True, slots=True)
 class ScreenshotBudget:
     """How large an image of a screen may be, in the units that actually bind.
 
@@ -371,6 +425,29 @@ _DEFAULT_REMEDY: Final[str] = (
 )
 
 
+def off_frame(*, x: int, y: int, frame: DisplayFrame) -> str:
+    """What the model is told when a coordinate is not on the display it named.
+
+    Two parts, where :func:`refusal` carries three, and dropping the third is
+    the decision rather than an oversight. That third part -- "do not work
+    around this, never use AppleScript" -- exists because a *permission*
+    refusal is exactly what invites trying another route to the same window.
+    This is not a permission refusal. It is a coordinate that does not name a
+    place, and answering it with an anti-circumvention warning would teach a
+    model that being a hundred points off is a security event, which is both
+    false and the kind of noise that gets refusals ignored wholesale.
+    """
+
+    return (
+        f"({x}, {y}) is not a point on display {frame.display_id}, which is "
+        f"{frame.width}x{frame.height} points.\n"
+        "Take a screenshot of the display you mean and read the coordinates "
+        "off what it reports -- in that display's own points, and pass the "
+        "same display_id back. A point measured on one screen names a "
+        "different place on another."
+    )
+
+
 def focus_lost(
     *,
     approved: ApplicationIdentity,
@@ -405,10 +482,12 @@ __all__ = [
     "SCREENSHOT_QUALITY",
     "ApplicationIdentity",
     "ApplicationKind",
+    "DisplayFrame",
     "ScreenTier",
     "ScreenshotBudget",
     "focus_lost",
     "kind_of",
+    "off_frame",
     "permits",
     "refusal",
     "tier_for",

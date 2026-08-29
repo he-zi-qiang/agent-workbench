@@ -20,7 +20,25 @@ from typing import cast
 from agent_workbench.domain.computer import ApplicationIdentity
 from agent_workbench.ports.screen import Capture, Display, MouseButton, ScrollDirection
 
-MAIN_DISPLAY = Display(display_id=1, width=1470, height=956, scale_factor=2.0)
+MAIN_DISPLAY = Display(
+    display_id=1, width=1470, height=956, scale_factor=2.0, origin_x=0, origin_y=0
+)
+
+#: A second screen, arranged to the right of the main one and slightly higher.
+#:
+#: It exists so the one thing that cannot be observed on this project's machine
+#: can still be asserted: a display whose origin is not (0, 0) (F-22, ADR-090).
+#: Neither offset is a multiple of the other's dimensions, so a conversion that
+#: happened to be right by symmetry -- or that swapped x for y -- fails rather
+#: than passes.
+SECOND_DISPLAY = Display(
+    display_id=2,
+    width=1920,
+    height=1080,
+    scale_factor=1.0,
+    origin_x=1470,
+    origin_y=-124,
+)
 
 #: The default focused application: something at tier "full", so a test that is
 #: not about tiers does not have to set one up.
@@ -104,4 +122,4 @@ class FakeScreen:
         self.actions.append(("key", combination))
 
 
-__all__ = ["DEFAULT_FOCUS", "MAIN_DISPLAY", "FakeScreen"]
+__all__ = ["DEFAULT_FOCUS", "MAIN_DISPLAY", "SECOND_DISPLAY", "FakeScreen"]
