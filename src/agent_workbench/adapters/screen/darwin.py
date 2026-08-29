@@ -15,10 +15,16 @@
 # listed one rule at a time rather than switched to basic mode, so everything
 # strict mode *can* still say here -- an undefined name, an unreachable branch,
 # a wrong argument count against this module's own functions -- still fails the
-# gate. This is the only file in the repository with any of them, which is the
-# point of keeping the FFI in one thin module (ADR-070) -- and the reason
-# ADR-092 put the AppKit run loop in here rather than in the entry point that
-# needs it.
+# gate.
+#
+# This block used to end "This is the only file in the repository with any of
+# them", and **that was never true**. `apps/word_mcp/renderer.py` has carried
+# four file-level suppressions since 7bdde20, which landed before ADR-070 did
+# -- so the sentence was false on the day it was written, not made false
+# later. Corrected 2026-08-29; the same claim in ADR-070 §3 is corrected
+# there. What is true, and is the part worth keeping, is narrower: this is the
+# only place *pyobjc* is touched, which is why ADR-092 put the AppKit run loop
+# in here rather than in the entry point that needs it.
 #
 # `reportUntypedBaseClass` is the newest of them and the narrowest: subclassing
 # `NSObject` is how a timer target is written, and the bridge builds that base
