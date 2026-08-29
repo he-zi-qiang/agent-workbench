@@ -87,8 +87,7 @@ export function SystemPage() {
       <div className="aw-notice is-warning">
         <CircleHelp aria-hidden="true" size={16} />
         <span>
-          数据库已就绪不代表模型、Qdrant、Task Worker 或文档处理 Worker 都正常；
-          现有公开接口无法验证这些状态。
+          数据库已就绪不代表模型、Qdrant、Task Worker 或文档处理 Worker 都正常；现有公开接口无法验证这些状态。
         </span>
       </div>
 

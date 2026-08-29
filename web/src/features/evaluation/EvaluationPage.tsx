@@ -88,8 +88,7 @@ export function EvaluationPage() {
           <span className="aw-eyebrow">效果评测</span>
           <h1>找资料，找得准吗？</h1>
           <p>
-            这一页只回答一件事：给一个问题，系统能不能把正确的那份文档排在最前面。
-            下面的数字直接来自仓库里的评测报告，没有人工填写。
+            这一页只回答一件事：给一个问题，系统能不能把正确的那份文档排在最前面。下面的数字直接来自仓库里的评测报告，没有人工填写。
           </p>
         </div>
         <div className="aw-page-note">
@@ -174,9 +173,7 @@ export function EvaluationPage() {
           <Target aria-hidden="true" size={20} />
         </div>
         <p className="aw-eval-method">
-          事先准备好一批题目，每道题都标好了“正确答案应该来自哪份文档”。
-          让系统去检索，然后看正确文档有没有出现在结果里、排在第几位。
-          排得越靠前越好。
+          事先准备好一批题目，每道题都标好了“正确答案应该来自哪份文档”。让系统去检索，然后看正确文档有没有出现在结果里、排在第几位。排得越靠前越好。
           {goldSets.length === 1
             ? ` 当前这批共 ${goldSets[0]?.questionCount ?? 0} 道题。`
             : " 题库改过一次，所以下面按题库分开列，每组各有自己的题量。"}
@@ -191,29 +188,25 @@ export function EvaluationPage() {
           <div>
             <strong>第一条就找对</strong>
             <span>
-              返回的第 1 条就是正确文档，最严格的一档。分母是这一组题库的全部
-              题目，不是抽样。
+              返回的第 1 条就是正确文档，最严格的一档。分母是这一组题库的全部题目，不是抽样。
             </span>
           </div>
           <div>
             <strong>前三条内找对</strong>
             <span>
-              正确文档出现在前 3 条里。检索本身只取前三条，所以这是这套评测能
-              问的最宽的一档。
+              正确文档出现在前 3 条里。检索本身只取前三条，所以这是这套评测能问的最宽的一档。
             </span>
           </div>
           <div>
             <strong>单次检索耗时</strong>
             <span>
-              一道题检索一次的耗时中位数，不含模型写答案的时间。是中位数不是
-              平均值——一道慢题就能把均值拉走。
+              一道题检索一次的耗时中位数，不含模型写答案的时间。是中位数不是平均值——一道慢题就能把均值拉走。
             </span>
           </div>
           <div>
             <strong>题库指纹</strong>
             <span>
-              题库内容的摘要。指纹不同的两份报告问的不是同一批题，页面也不会把
-              它们排进同一张表。
+              题库内容的摘要。指纹不同的两份报告问的不是同一批题，页面也不会把它们排进同一张表。
             </span>
           </div>
         </div>
@@ -241,10 +234,7 @@ export function EvaluationPage() {
           <div className="aw-notice is-warning">
             <AlertTriangle aria-hidden="true" size={16} />
             <span>
-              这几份报告不是在同一批题目上跑出来的，所以<strong>跨组的数字不能相互比较</strong>。
-              题库换过之后只有自研检索重跑了，LlamaIndex 那条路径还停在旧题库上——
-              它看起来分数更高，是因为题目更少更旧，不是因为它更准。要横向对比，
-              得把两条路径都放到同一批题目上重跑。
+              这几份报告不是在同一批题目上跑出来的，所以<strong>跨组的数字不能相互比较</strong>。题库换过之后只有自研检索重跑了，LlamaIndex 那条路径还停在旧题库上——它看起来分数更高，是因为题目更少更旧，不是因为它更准。要横向对比，得把两条路径都放到同一批题目上重跑。
             </span>
           </div>
         )}
@@ -316,8 +306,7 @@ export function EvaluationPage() {
               <div>
                 <strong>每份报告都做到了前三条内命中绝大多数题目</strong>
                 <span>
-                  在各自的题库里，“关键词 + 语义”都比“纯语义”更稳，代价是慢一些——
-                  这个方向在两批题目上一致，是这页最扎实的一条结论。
+                  在各自的题库里，“关键词 + 语义”都比“纯语义”更稳，代价是慢一些——这个方向在两批题目上一致，是这页最扎实的一条结论。
                 </span>
               </div>
             </li>
@@ -349,8 +338,7 @@ export function EvaluationPage() {
               current reports answer. Restating a 9/38 result as 9/52 would be
               inventing a stronger measurement than the one that was made. */}
           <p className="aw-eval-method">
-            在 {SELF_DISAGREEMENT.questionCount} 题的旧题库（指纹 {SELF_DISAGREEMENT.goldDigest}）上，
-            同一条路径连着跑两遍，它自己的结果就会变：
+            在 {SELF_DISAGREEMENT.questionCount} 题的旧题库（指纹 {SELF_DISAGREEMENT.goldDigest}）上，同一条路径连着跑两遍，它自己的结果就会变：
             <strong>
               自研检索 {SELF_DISAGREEMENT.reference}/{SELF_DISAGREEMENT.questionCount} 题
             </strong>
@@ -364,8 +352,7 @@ export function EvaluationPage() {
             <AlertTriangle aria-hidden="true" size={16} />
             <span>
               在那批题目上，两条路径之间只有 {SELF_DISAGREEMENT.betweenPathsTopThree}/
-              {SELF_DISAGREEMENT.questionCount} 题的前三名不同，比它们各自的抖动还小 ——
-              所以那点差距是测量误差，不是质量差距。默认流量因此没有切换。
+              {SELF_DISAGREEMENT.questionCount} 题的前三名不同，比它们各自的抖动还小 ——所以那点差距是测量误差，不是质量差距。默认流量因此没有切换。
               {selfDisagreementCoversAShownReport(rows)
                 ? ""
                 : " 这组对照来自已经不在上表中的旧报告，仅作为背景保留。"}
@@ -405,8 +392,7 @@ export function EvaluationPage() {
               <strong>「答不上来的时候有没有编」也没有测</strong>
               <span>
                 语料里本来没有答案时，系统应当说答不上来而不是编一个。
-                `RETRIEVAL_METRICS` 里没有这一项，所以这里没有它的分数——
-                它是一个还没有做的评测，不是一个碰巧为空的列。
+                `RETRIEVAL_METRICS` 里没有这一项，所以这里没有它的分数——它是一个还没有做的评测，不是一个碰巧为空的列。
               </span>
             </div>
           </li>
@@ -436,8 +422,7 @@ export function EvaluationPage() {
           ))}
         </ul>
         <p className="aw-page-note">
-          MRR 是正确文档排名倒数的平均值：全排第 1 得 1.0，全排第 2 得 0.5。
-          自一致性数据来自 docs/status.md（2026-08-03）。
+          MRR 是正确文档排名倒数的平均值：全排第 1 得 1.0，全排第 2 得 0.5。自一致性数据来自 docs/status.md（2026-08-03）。
         </p>
       </details>
     </main>

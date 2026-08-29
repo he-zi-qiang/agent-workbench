@@ -1439,8 +1439,7 @@ function Citations({
           at all, because the row simply shows what it has. */}
       <div className="aw-chat-citation-gap">
         <p>
-          原文不跟答案一起存下来：每次点开都重新去读一次，权限也重新核一遍——
-          所以昨天能看的引用，今天可能正确地打不开。
+          原文不跟答案一起存下来：每次点开都重新去读一次，权限也重新核一遍——所以昨天能看的引用，今天可能正确地打不开。
         </p>
       </div>
     </div>

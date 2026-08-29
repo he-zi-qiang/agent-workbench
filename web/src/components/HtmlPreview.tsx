@@ -391,8 +391,7 @@ export function HtmlPreview({
               this note is worth, it is worth it before the load, and 24
               characters of text costs nothing to read on the way past. */}
           <p className="aw-page-note">
-            页面在隔离的沙箱里运行：拿不到你的登录态，也读不到平台数据。
-            它仍可能自行访问外部网络，来源不明的页面请谨慎打开。
+            页面在隔离的沙箱里运行：拿不到你的登录态，也读不到平台数据。它仍可能自行访问外部网络，来源不明的页面请谨慎打开。
           </p>
           <div
             className="aw-preview-frame aw-html-frame"
