@@ -49,6 +49,7 @@ from agent_workbench.domain.computer import (
     activation_would_take_the_screen,
     application_is_not_running,
     focus_lost,
+    frontmost_is_not_approved,
     off_frame,
     permits,
     refusal,
@@ -179,16 +180,13 @@ class ScreenGate:
         now = self.screen.frontmost()
         held = self._granted.get(now.bundle_id)
         if held is None:
-            raise ScreenRefusedError(
-                f'"{now.name or "an unidentified application"}" is not in this '
-                "session's approved list, and the frontmost application is "
-                f"what {action} would reach.\n"
-                "Call request_access with the applications you need and wait "
-                "for the person to approve them.\n"
-                "Do not attempt to work around this restriction -- never use "
-                "AppleScript, System Events, shell commands, or any other "
-                "method to send input to an application."
-            )
+            # Composed in `domain/computer.py` like the other seven, and it was
+            # the only one still spelled out here. That is not tidying: the
+            # argument for *not naming what is in front* lives in that module's
+            # docstrings, and a refusal written somewhere else is a refusal
+            # nobody checks against them -- which is exactly how this one came
+            # to be the third path where the rule did not hold (ADR-095 §1).
+            raise ScreenRefusedError(frontmost_is_not_approved(action=action))
         # Re-derived from the live identity rather than read off the stored
         # grant: an application that was granted under one name and is now
         # reporting another is exactly the case the tier table exists for.

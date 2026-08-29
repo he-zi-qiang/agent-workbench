@@ -130,6 +130,70 @@ def test_no_tool_tells_the_model_the_tool_does_not_work() -> None:
         assert "do not retry it" not in description, tool.name
 
 
+def test_no_tool_ever_names_an_unapproved_frontmost_application() -> None:
+    """ADR-095 §2's boundary, checked instead of declared.
+
+    The person may be told what is in front of them -- it is their screen, and
+    the console panel is where that goes. A model may not: naming it turns a
+    refusal into a reading of what the person is doing, which is the thing the
+    allowlist exists to prevent.
+
+    That rule held in two of its three places until ADR-095: the activation
+    refusal withheld the name and had a test, the read tool refused to
+    distinguish "something unapproved is in front" from "nothing is", and
+    `_require_frontmost` -- the path every click, keystroke and scroll takes --
+    printed it. So the whole rule was worth exactly one refused click.
+
+    This drives **every tool this server declares** against a session where the
+    person has approved Notes and then switched to Mail, and asserts the name
+    and the bundle id appear in none of the answers. Per-tool assertions would
+    have to be remembered for the ninth tool; this one fails on its own.
+    """
+
+    screen = FakeScreen(focus=MAIL, installed=(NOTES, TERMINAL, MAIL))
+    results = _session(
+        screen,
+        [
+            _ask(NOTES),
+            # Every tool the server declares, in the order it declares them.
+            # `request_access` is the first call above.
+            ("list_granted_applications", {}),
+            ("activate_application", {"bundle_id": NOTES.bundle_id}),
+            ("screenshot", {}),
+            ("left_click", {"x": 10, "y": 10}),
+            ("type", {"text": "hello"}),
+            ("key", {"key": "return"}),
+            ("scroll", {"x": 10, "y": 10, "direction": "down"}),
+        ],
+    )
+
+    spoken = "\n".join(
+        block.text
+        for result in results
+        for block in result.content
+        if getattr(block, "text", None) is not None
+    )
+    assert "Mail" not in spoken
+    assert MAIL.bundle_id not in spoken
+    # The control: this session really was in the situation the rule is about,
+    # so the assertions above are not passing because nothing was refused.
+    assert "not in this session's approved list" in spoken
+
+    # No input was synthesized -- click, type, key and scroll were all refused
+    # by check 3 before reaching the port.
+    kinds = [kind for kind, _ in screen.actions]
+    assert kinds == ["capture"]
+    # And the one action that *did* happen is the one the tier table
+    # deliberately does not gate: a screenshot is what approving is *for*. It
+    # is still narrowed by the allowlist rather than by a tier -- the capture
+    # names only the approved application, so the window the person switched to
+    # is not in the picture either (ADR-076). Asserted here because this test
+    # is about what a model can learn, and a screenshot that included Mail
+    # would answer the same question the refusals above refuse to.
+    [(_, capture_args)] = screen.actions
+    assert capture_args[-1] == (NOTES.bundle_id,)
+
+
 def test_granting_answers_with_the_tier_each_application_got() -> None:
     """The person approves names; the reply is where the model learns what
     those names bought it, before it tries something that will be refused."""

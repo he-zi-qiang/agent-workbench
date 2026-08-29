@@ -547,6 +547,60 @@ def test_an_unapproved_application_cannot_be_brought_forward() -> None:
     assert screen.frontmost() == NOTES
 
 
+def test_acting_on_an_unapproved_window_does_not_say_which_one_it_is() -> None:
+    """The third path where the no-naming rule lives, and where it did not hold.
+
+    `activation_would_take_the_screen` says naming what is frontmost turns a
+    refusal into a reading of what the person is doing -- "a strictly larger
+    capability than the one being refused" -- and the test below this one pins
+    it for the activation path. This path had the identical situation and
+    answered ``"Mail" is not in this session's approved list``, so the
+    capability that argument withholds could be had for free: attempt a click
+    that is going to be refused anyway, and read the name out of the refusal.
+    Cheaper than an activation, which at least needs an approved target.
+
+    Closed by ADR-095, which also decides where the name *does* go: the
+    console panel, whose reader is the person looking at that very window.
+
+    The remedy is asserted alongside, because a refusal that withholds the name
+    and also withholds what to do next would be a worse refusal rather than a
+    narrower one.
+    """
+
+    screen = FakeScreen(focus=MAIL, installed=(NOTES, MAIL))
+    gate = _gate(screen, NOTES)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.click(10, 10))
+
+    message = str(refused.value)
+    assert "not in this session's approved list" in message
+    assert "Mail" not in message
+    assert "com.apple.mail" not in message
+    assert "request_access" in message
+    assert screen.actions == []
+
+
+def test_a_tier_refusal_still_names_the_application_the_person_approved() -> None:
+    """The control, and the reason the change above is one branch and not two.
+
+    Typing into a terminal is refused by the *tier*, not by the allowlist --
+    that application is one this person put on the list by hand. Naming it
+    discloses nothing they did not agree to, and not naming it would make
+    "the terminal cannot be typed into" impossible to act on.
+    """
+
+    screen = FakeScreen(focus=TERMINAL, installed=(TERMINAL,))
+    gate = _gate(screen, TERMINAL)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.type_text("date"))
+
+    message = str(refused.value)
+    assert "Terminal" in message
+    assert 'tier "click"' in message
+
+
 def test_the_screen_is_not_taken_from_a_window_nobody_approved() -> None:
     """The narrowing that makes the rest of this safe to grant (ADR-091 §2.2).
 

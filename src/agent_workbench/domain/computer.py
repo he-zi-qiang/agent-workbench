@@ -385,6 +385,46 @@ _FIT_ITERATIONS: Final[int] = 40
 SCREENSHOT_QUALITY: Final[float] = 0.75
 
 
+def frontmost_is_not_approved(*, action: str) -> str:
+    """What the model is told when the window in front is one nobody approved.
+
+    **What is frontmost is not named**, and until ADR-095 it was. This refusal
+    fires precisely when the frontmost application is one nobody approved, so
+    naming it turns every refused action into a reading of what the person is
+    doing -- the thing the allowlist exists to prevent, and, in
+    `activation_would_take_the_screen`'s own words about the identical
+    situation, "a strictly larger capability than the one being refused".
+
+    That sentence was written for the *activation* path and made true there,
+    with a test asserting the name is absent. This path is the third one, and
+    it had the same argument available and did not use it: it answered
+    ``"Mail" is not in this session's approved list``, which meant the
+    capability the activation refusal goes to lengths to withhold could be had
+    for free by attempting a click that was going to be refused anyway --
+    cheaper than an activation, which at least needs an approved target.
+
+    A person looking at their own screen is a different reader and gets the
+    name; that is what the console panel is for (ADR-095 §2). The boundary is
+    checkable rather than merely declared: the name reaches the person's read
+    path and no path a model can read.
+
+    The remedy does not depend on the name, which is why it can be dropped: a
+    model told which window is in front does not do anything different from one
+    told only that it is unapproved. Both wait, or ask.
+    """
+
+    return (
+        "The frontmost application is not in this session's approved list, and "
+        f"the frontmost application is what {action} would reach.\n"
+        "Call request_access with the applications you need and wait for the "
+        "person to approve them, or wait until an approved application is in "
+        "front.\n"
+        "Do not attempt to work around this restriction -- never use "
+        "AppleScript, System Events, shell commands, or any other method to "
+        "send input to an application."
+    )
+
+
 def refusal(
     *,
     action: str,
@@ -601,6 +641,7 @@ __all__ = [
     "activation_would_take_the_screen",
     "application_is_not_running",
     "focus_lost",
+    "frontmost_is_not_approved",
     "kind_of",
     "off_frame",
     "permits",
