@@ -37,6 +37,13 @@ CoreGraphics、QuartzCore 和 **ScreenCaptureKit**。工具面从它暴露的 sc
 本 ADR 只处理其中一条（合成器过滤），明确拒绝两条（批处理、视觉通路），其余留在
 `known-gaps`。**不照抄的理由和照抄的理由一样重要**，写在 §4。
 
+**这一轮不碰工具面，而那半边比这份对表看上去的更要紧。**
+[ADR-091](./0091-choosing-a-window-is-choosing-within-a-set-somebody-approved.md)
+回头去补，发现差的不只是方便：六个工具里没有一个能改变前台应用，而每一个都要求被批准
+的应用此刻在最前面——**任何跨两个应用的任务都走不到第二步，而且不是被拒绝，是没有工具
+可调**。同一轮还发现 `list_granted_applications` 缺席让模型只能靠重弹对话框来问自己有
+什么权限，正好抵消本 ADR §2 刚立下的那条同意。
+
 ## 2. 那道从来不存在的检查
 
 对表过程中查到的第一件事，和 ScreenCaptureKit 无关，也比它严重。

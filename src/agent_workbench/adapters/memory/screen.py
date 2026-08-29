@@ -6,9 +6,12 @@ decided above the port and can therefore be asserted here, against a double
 that never touches a display. That is the whole reason the port exists
 (ADR-070).
 
-It is programmable in the one dimension that matters and that a real screen
+It is programmable in the two dimensions that matter and that a real screen
 cannot be asked for: ``frontmost`` can be made to *change between calls*, which
-is how the mid-delivery focus check is tested at all.
+is how the mid-delivery focus check is tested at all, and an activation can be
+made **not to take**, which is how a case that depends on a real window server
+declining -- a modal sheet, a full-screen space, an application that does not
+come forward -- is exercised on every run (ADR-091).
 """
 
 from __future__ import annotations
@@ -61,6 +64,16 @@ class FakeScreen:
     #: How many characters `type_text` delivers before stopping, or None for
     #: all of them. Stands in for focus moving away mid-string.
     type_limit: int | None = None
+    #: Which applications this fake machine has *running*, by identity rather
+    #: than by bundle id: `activate` has to answer with one, and a name it
+    #: invented would let a test pass while the real adapter echoed the model's
+    #: own string back at it. Empty is a machine with nothing running, which is
+    #: how "approved but not launched" is exercised.
+    installed: tuple[ApplicationIdentity, ...] = ()
+    #: Whether an activation actually reorders this fake screen. False stands
+    #: in for the case the real one cannot be asked to produce on cue: the
+    #: window server was asked, and something else is still in front.
+    activation_lands: bool = True
 
     def displays(self) -> tuple[Display, ...]:
         return self.screens
@@ -98,13 +111,21 @@ class FakeScreen:
             display=display,
         )
 
+    async def activate(self, bundle_id: str) -> ApplicationIdentity | None:
+        self.actions.append(("activate", bundle_id))
+        found = next(
+            (held for held in self.installed if held.bundle_id == bundle_id), None
+        )
+        if found is None:
+            return None
+        if self.activation_lands:
+            self.focus = found
+        return self.frontmost()
+
     async def click(
         self, x: int, y: int, *, button: MouseButton = "left", count: int = 1
     ) -> None:
         self.actions.append(("click", (x, y, button, count)))
-
-    async def move(self, x: int, y: int) -> None:
-        self.actions.append(("move", (x, y)))
 
     async def scroll(
         self, x: int, y: int, *, direction: ScrollDirection, amount: int

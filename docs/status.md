@@ -27,6 +27,167 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-28（未合并，分支 `claude/quirky-mclean-11c658`，第四十五批）：模型可以挑窗口，但只能在人批准过的那一组里挑（ADR-091，新增 F-29）
+
+> **本批的基线是 `6d1da8c`，不是它开工时的 `b162f36`。** ADR-090（第四十四批，
+> 关闭 F-22）在这批写到一半时进了主线，两批改的是同一批文件。合并在这条分支上做完
+> 了：`ports/screen.py`、`domain/computer.py`、`gate.py` 与三份文档各有一处真冲突，
+> 其余自动合上。下面 §6 记的是合并里唯一一件不是「两段都留下」的事。
+
+把两份工具面并排放出来看：Claude Desktop 的 computer use 有 10 个工具，这里有 6 个。
+差的那几个里有三处，ADR-070、ADR-076 和 `known-gaps.md` 谁都没有记过。
+
+### 1. 第一处不是短缺，是死锁
+
+`ScreenGate._require_frontmost` 的第 3 道检查要求「被批准的应用此刻在最前面」，
+而**六个工具里没有一个能改变前台应用**。唯一的现实办法是点 Dock——点 Dock 需要
+Finder 的 grant，而点它本身又要先满足第 3 道检查。于是：
+
+> 一个人批准了 Notes 和 Word，任务要从前者抄到后者。第一步能做，第二步做不了，
+> 而且**不是被拒绝**——是没有工具可调。
+
+ADR-076 §4 对表时明确写了「本轮不碰工具面」，所以这一条一直躺在那半边。
+
+### 2. 加激活，第 3 道检查的含义就变了——这才是要写 ADR 的原因
+
+| | 第 3 道回答的问题 |
+| --- | --- |
+| ADR-070 起 | 这扇窗是**人**放到前面的吗？ |
+| ADR-091 起 | 这扇窗是**人批准过的那一组里的**一扇吗？ |
+
+前一个更强：前台曾经是模型完全影响不了的事实，门禁读它像读时钟。让这个交换成立的是
+一条收窄：**当前前台应用不在 allowlist 里时，拒绝激活**。在人批准过的那一组里重排，
+是那个人委派出去的选择；把屏幕从正在被使用的那扇窗抢回来，不是。
+
+代价直白：**人一碰别的窗口，任务就停住**。这是这条规则的正面含义，不是副作用。
+
+拒绝文案**不说最前面的是谁**——这一条恰好只在「最前面的应用没被批准」时触发，会点名
+的拒绝等于把每一次被拒的激活变成一次「此刻这个人在用什么」的读数。同样的理由，
+`list_granted_applications` 只答「有没有一个名单里的在最前面」，不答没有时是谁
+（ADR-076 §3 拒绝「把枚举交给模型」的取舍，原样沿用）。
+
+### 3. 第二处：`grants()` 早在了，只是没有出口
+
+`ScreenGate.grants()` 从 ADR-070 起就存在，没有任何工具暴露它。模型想知道自己有哪些
+权限，只有一条路：**再调一次 `request_access`，而那会再弹一次对话框给人看**。
+
+这不只是不方便，它在消耗同意本身的质量：ADR-076 §2 刚把「弹一次、逐个显示 tier」立成
+决定，然后留下一个让模型有理由反复弹它的工具面。一个人被问第二次，第二次就不读了。
+
+新工具**没有任何副作用**：不显示给谁看，不开对话框，不动屏幕。
+
+### 4. 第三处：权限表比工具表宽 —— 口径不实，当场修
+
+```
+_ALLOWED["click"]  有 mouse_move   ScreenGate 无 move 方法，server 无对应工具
+_ALLOWED["full"]   有 mouse_move、drag        drag 连 ScreenPort 方法都没有
+ScreenPort.move                     唯一调用者是 DarwinScreen.scroll 调它自己
+```
+
+**它从没让任何东西出错**——一条没人执行的动作的许可，拒绝不了任何东西——所以它安静地
+活过了 ADR-070 和 ADR-076 两轮。它仍然错在两个方向上：正着读是一句声称（来查「这个
+项目能对屏幕做什么」的人会得出「它会拖拽」，与 F-26 同形）；倒着读是一次预付（下一个
+想加拖拽工具的人会发现 `full` 里**已经允许了**，于是那场讨论不会发生）。
+
+按 known-gaps 对「口径不实」的处理方式：**立刻修，不排期**。选收窄而不是实现——
+`drag` 要新增 port 方法、一份 CI 装不了的 darwin 实现和一个新工具，没人要。
+`ScreenPort.move` 一并删掉（它现在是 `DarwinScreen._move`，私有，只被 `scroll` 调用：
+CGEvent 的滚轮事件不带坐标，落在光标当前所在的位置）。
+
+两条测试从两侧钉住，缺一条都不够：
+`tests/domain/test_computer.py::test_no_tier_permits_something_this_project_cannot_do`
+钉那两个名字不再出现；
+`tests/apps/test_computer_gate.py::test_every_permitted_action_is_one_the_gate_actually_performs`
+把 `_ALLOWED` 全部名字与真正驱动 gate 的调用对成一张表并**逐个真调一遍**（对着一个
+tier `read` 的浏览器，因为 `refusal()` 会把它拒绝的动作名写进文案）。前者防往表里加
+名字，后者防 gate 那侧不再产生某个名字。
+
+### 5. 同意对话框多了一句，因为它要收的同意变了
+
+批准三个应用现在还意味着「并且它可以在这三个里挑一个放到前面」，而一份名字清单本身
+说不出这件事。那句话把边界一起带着说：**名单里的应用之间可以被切到前台；最前面的窗口
+不在名单里时，包括切换在内的一切动作都会被拒绝。** 安心和授权是同一件事实的两半，
+只给前一半的对话框收的是另一件事的同意（ADR-076 §2 的同一条理由）。
+
+### 6. 合并时冒出来的一件事，正好是 §4 那条论点的现场证据
+
+ADR-090 那一批把 `ports/screen.py` 的模块注释重写了，讲清楚了两个坐标空间。它写的是：
+
+> ``capture`` 是某一块显示器的，图是从**那块屏**的左上角量的；``click``、
+> ``move`` 和 ``scroll`` 把事件发进横跨所有显示器的**全局**空间。
+
+一句认真的、正确的、关于 **`move` 的坐标空间**的描述——而 `move` 是一个**从来没有
+任何调用者**的端口方法。写这句话的人查了它、想清楚了它属于哪个空间、把它和另外两个
+并列写进了一份新的设计文档。
+
+§4 说「一张比工具表宽的许可表，正着读是一句声称」。这就是那句声称被读到的样子，
+而且读它的不是外人，是这个仓库里下一个认真写文档的人。两批相隔几天、各自独立，
+**一批在删它，另一批在给它写规格**。
+
+合并时的处理：主线那段坐标空间的散文整段留下，只把它点名的方法改成 `click` 与
+`scroll`；`move` 保持删除。那句「没有调用者的端口方法不该存在」的段落跟着挪到它
+下面，并把上面这件事写进了它——它现在是这条规则自己的证据，不再只是一句主张。
+
+### 证据（2026-08-28，这棵树上）
+
+```
+uv run agent-config-check --profile development / --profile test   两个都过
+uv run ruff format --check .   607 files already formatted
+uv run ruff check .            All checks passed!
+uv run pyright                 0 errors, 0 warnings, 0 informations
+uv run pytest -q               3124 passed, 783 skipped, 70s（合并到 6d1da8c 之后）
+```
+
+前端（这台机器上没有 `pnpm`，直接调 `web/node_modules/.bin`，node 用 `var/toolchain/node`）：
+
+```
+eslint . --max-warnings 0      通过
+tsc -b --pretty false          通过
+vitest run                     40 files / 661 tests 全绿（新增 ComputerPage.test.tsx 5 条）
+vite build                     ✓ built in 203ms
+```
+
+浏览器里看过（Vite dev，`/ui/#/computer`）：新增的「换到另一个应用」一节排在四道检查
+与 tier 表之间，第二条带「收窄」徽标走 `is-pivot` 那套配色；tier 表 `click` 那行现在
+写的是「可以左键单击、滚动，不能打字」。console 无报错。
+
+工具面 6 → 8，三处清单同步且仍然逐个点名而不是数个数：
+
+```
+config/config.computer-local.toml   tools = [...]                    8 个
+scripts/dev.sh computer-check       --expect-tool × 8
+tests/config/test_local_computer_profile.py::SCREEN_TOOLS            8 个
+```
+
+### 明确没做，以及为什么
+
+**`activate_application` 没有在真机上跑过。** CI 不装 `computer-use` extra，**这棵树上
+也没装**——`tests/apps/test_computer_darwin.py` 在这里是 skipped。所以
+`adapters/screen/darwin.py` 里新增的 `activate`（`NSRunningApplication` +
+`NSApplicationActivateAllWindows` + 有界轮询）只有契约层面的证据。按能力阶梯，这条路
+停在 **Tested**（假实现下门禁行为全部有测试），**没有到 Demonstrated**。
+
+**因此那两个数字是没实测的**：`_ACTIVATION_TIMEOUT_SECONDS = 2.0` 与
+`_ACTIVATION_POLL_SECONDS = 0.02`，代码注释里如此标注——这是这个文件里唯一没有实测的
+数字，其余的（46 ms / 43 ms / 34,957 字节）都来自 ADR-076 那一批的真机测量。这个测量
+也不是能悄悄做的：它意味着反复把窗口拽到一个人正在看的屏幕最前面。两个数取宽松而不是
+精确，猜错了只会让一个如实的回答慢一点，不会让它变成错的回答。
+
+**不启动应用**，记进 known-gaps **F-29**（拒绝）。判据不是「实现一次启动」，是先回答
+「同意怎么给」。
+
+**批处理原语没有重开。** ADR-076 §4 拒过，理由一条没变，而新增的激活让它更硬了一点：
+批处理会把「改变前台 + 在新前台上打字」压成一次提案，而这恰恰是最需要分开授权的两件事。
+
+**ADR-075 那条拒绝原封不动。** 两个新工具同样在 `retryable_effects = false` 的 server
+上，进不了 Task 授权信封，也不进 Worker 注册表。
+
+**`ComputerPage.test.tsx` 查不了它和 Python 是否一致。** 它跑在浏览器环境里，够不着
+它镜像的那份代码——它钉的是「这一批决定这一页说的话，它还在说」，以及那句刚刚过期的
+声称（`click` 能「移动指针」）不会回来。那一页自己的 docblock 早写了这个取舍，
+ADR-091 是第一次真的向它收费。
+
+---
 ## 2026-08-28（未合并，分支 `feat/a-coordinate-carries-the-screen-it-was-measured-on`，第四十四批）：一个坐标带着它是在哪块屏上量的（关闭 F-22，ADR-090）
 
 [ADR-076](./adr/0076-a-window-nobody-approved-is-not-in-the-picture.md) 对照 Claude

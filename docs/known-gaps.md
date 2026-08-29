@@ -942,6 +942,7 @@ runner 少了哪一样，跳过行会指名道姓，不必有人去二分。
 | F-24 | 项目目录的回合没有容器可用 | **拒绝** |
 | F-25 | 读写回执喂不满：三条路径绕过工具改动目录 | 已知代价 |
 | F-26 | `policy.write_tools_require_approval` 读起来像保证，src/ 里没有读者 | **口径不实** |
+| F-29 | computer use 只能激活已经开着的应用，不能启动应用 | **拒绝** |
 
 > 编号一经退休不再复用。F-23（项目目录的回合被告知自己在一个扁平的、有版本的工作区
 > 里）已于 2026-08-25 关闭，按本文档维护规则从正文删除，落地记录在
@@ -1373,7 +1374,7 @@ ADR-069 把脚本自己 `print` 的东西接到了控制台上，但那是一份
 
 ### F-21 不可重试的 MCP 工具进不了 Task —— 拒绝
 
-**证据**：[config.computer-local.toml:95](../config/config.computer-local.toml:95)
+**证据**：[config.computer-local.toml:109](../config/config.computer-local.toml:109)
 `retryable_effects = false`；两处拒绝各自独立生效——
 [projections.py:155](../src/agent_workbench/bootstrap/projections.py:155)
 把这类服务器的工具名排除在新 Task 的授权信封之外，
@@ -1628,4 +1629,31 @@ text 臂里的第二问——`isMarkdown(...)`，紧挨着 `isRunnablePython(...
 ADR-065 §4 记下的「运行按钮只在 Code 有」是同一种不对称：**编码**控制台里一份 `.md`
 既可能是要读的文档、也可能是刚被写出来正要被检查的文件；Task 的产物面板里没有要编辑
 的东西，也就没有要切过去的东西。
+### F-29 只能激活已经开着的应用 —— **拒绝**
+
+**证据**：[screen.py](../src/agent_workbench/ports/screen.py) 的 `activate` 契约写明
+「An implementation **launches nothing**」，返回 `None` 表示「没有任何在运行的应用带这个
+bundle id」；[darwin.py](../src/agent_workbench/adapters/screen/darwin.py) 只调
+`NSRunningApplication.runningApplicationsWithBundleIdentifier_`，全仓没有
+`launchApplication` / `openApplicationAtURL` 的调用；
+[computer.py](../src/agent_workbench/domain/computer.py) 的
+`application_is_not_running` 是那条拒绝的文案，
+`tests/apps/test_computer_gate.py::test_an_approved_application_that_is_not_running_is_not_launched`
+是它的回归。
+
+**这是拒绝，不是遗漏。**
+[ADR-091](./adr/0091-choosing-a-window-is-choosing-within-a-set-somebody-approved.md) §4
+是它被论证的地方：Claude Desktop 的 `open_application` 会启动应用，这里的
+`activate_application` 不会，工具名也因此不一样。启动一个进程和把窗口重排不是一个量级
+的行为——它会执行那个应用启动时做的任何事（同步邮箱、恢复上次的文档、连服务器），而且
+撤不回；更要紧的是**人批准的那份名单不是这个意思**：对话框问的是「可以在这次会话里
+控制下列应用」，一个人看着「Notes、Word」点同意，同意的是控制它们。
+
+**代价是真的**：两个应用必须都已经开着，任务才跨得过去。开着一个、另一个没开的时候，
+模型收到的是一句「approved but not running，请人打开它」，而不是一次启动。
+
+**做完的判据**：不是「实现一次启动」，是**先回答同意怎么给**。要么对话框上多一档人能
+读懂的授权（「并允许在需要时打开它们」——那是一次 `consent.py` 的改动加一条它自己的
+ADR 段落），要么维持现状。在人没有被问过这件事之前，实现它就是拿一份为别的问题收来的
+同意去付一件更贵的事。
 

@@ -12,7 +12,10 @@ so that all four are testable without one (ADR-070, ADR-090):
   judgement call.
 * **What a refusal says.** A refusal that only says "no" gets worked around;
   the model tries AppleScript next. So a refusal here carries three parts, and
-  the third one is the part that matters.
+  the third one is the part that matters. The activation refusals added by
+  ADR-091 are the same shape with one deliberate omission: the one that fires
+  because an *unapproved* window is in front does not name it, because a
+  refusal that named it would be a way to read what the person is doing.
 * **Where a coordinate lands.** A model measures a point off a picture of one
   display; the event it asks for is posted into one space spanning all of them.
   On a one-screen machine those are the same space, which is why the difference
@@ -216,11 +219,30 @@ def tier_for(application: ApplicationIdentity) -> ScreenTier:
 
 
 #: What each tier permits, as the set of action names the gate compares against.
+#:
+#: **Every name here has a tool that can reach it, and keeping that true is
+#: part of what this table is.** Until 2026-08-28 it also listed ``mouse_move``
+#: (in ``click`` and ``full``) and ``drag`` (in ``full``), and neither had
+#: anywhere to be called from: ``ScreenGate`` has no method for either, the
+#: server declares no tool for either, and ``drag`` had no port method either.
+#: Nothing was broken by that -- a permission for an action nobody performs
+#: refuses nothing -- which is exactly why it survived two ADRs.
+#:
+#: It is still wrong in two directions. Read forwards it is a claim: somebody
+#: auditing what this project may do to a screen finds ``drag`` at ``full`` and
+#: concludes this project drags. Read backwards it is a pre-payment: the next
+#: person to add a drag tool finds it already permitted here and never makes
+#: the argument for it, because the table appears to have made it already
+#: (ADR-091 §2.4).
 _ALLOWED: Final[dict[ScreenTier, frozenset[str]]] = {
-    # Screenshots are not in any of these: seeing is what a grant is *for*, and
-    # it is checked by the allowlist rather than by the tier.
+    # Neither screenshots nor activation appears in any of these. Both are
+    # gated by the allowlist instead of by the tier, and for the same reason:
+    # seeing is what a grant is *for*, and bringing an approved window forward
+    # reaches no further than seeing it does -- it synthesizes no input, and
+    # every action that follows it is gated again, against whatever is
+    # frontmost then (ADR-091 §2.3).
     "read": frozenset(),
-    "click": frozenset({"left_click", "scroll", "mouse_move"}),
+    "click": frozenset({"left_click", "scroll"}),
     "full": frozenset(
         {
             "left_click",
@@ -229,8 +251,6 @@ _ALLOWED: Final[dict[ScreenTier, frozenset[str]]] = {
             "triple_click",
             "middle_click",
             "scroll",
-            "mouse_move",
-            "drag",
             "type",
             "key",
         }
@@ -478,6 +498,97 @@ def focus_lost(
     )
 
 
+def activation_needs_a_grant(*, bundle_id: str) -> str:
+    """What the model is told when it asks to bring forward something unapproved.
+
+    Deliberately says nothing about whether that application exists or is
+    running. The allowlist is the only thing consulted, so the only thing this
+    process knows about the id is that a person did not approve it -- and an
+    answer that distinguished "not approved" from "not installed" would make
+    this tool a way to ask which applications are on the machine.
+    """
+
+    return (
+        f'"{bundle_id}" is not in this session\'s approved list, so it cannot '
+        "be brought to the front.\n"
+        "Call request_access with the applications you need and wait for the "
+        "person to approve them.\n"
+        "Do not attempt to work around this restriction -- never use "
+        "AppleScript, System Events, shell commands, or any other method to "
+        "activate an application."
+    )
+
+
+def activation_would_take_the_screen(*, target: ApplicationIdentity) -> str:
+    """What the model is told when something unapproved is in front right now.
+
+    The narrowing ADR-091 §2.2 is about, and the message has to carry the
+    reason or it reads as a bug. What is frontmost is **not named**: this
+    refusal fires precisely when the frontmost application is one nobody
+    approved, so naming it would turn every refused activation into a reading
+    of what the person is doing -- which is the thing the allowlist exists to
+    prevent, and a strictly larger capability than the one being refused.
+
+    Nothing here suggests retrying in a loop. The remedy is a person: either
+    they come back to one of the approved windows, or they approve the one
+    they are in.
+    """
+
+    return (
+        f'"{target.name}" was not brought to the front: the application that '
+        "is frontmost right now is not in this session's approved list.\n"
+        "Somebody is using a window that is not part of this task, and taking "
+        "the screen away from it is not this tool's decision to make. Wait "
+        "until an approved application is in front, or ask the person to "
+        "approve the one they are working in.\n"
+        "Do not poll this call, and do not attempt to work around it -- never "
+        "use AppleScript, System Events, shell commands, or any other method "
+        "to activate an application."
+    )
+
+
+def application_is_not_running(*, target: ApplicationIdentity) -> str:
+    """What the model is told when the approved application is not launched.
+
+    This tool activates and never launches, and the message says so rather
+    than leaving the model to infer it from a failure. Launching is a strictly
+    larger act than reordering windows -- it starts a process on somebody's
+    machine, with whatever that application does on startup -- and it is not
+    what a person approving a list of names agreed to (ADR-091 §4).
+    """
+
+    return (
+        f'"{target.name}" is approved for this session but is not running, '
+        "and this tool brings an application forward rather than starting "
+        "one.\n"
+        "Ask the person to open it. Starting an application is not something "
+        "approving its name authorized."
+    )
+
+
+def activation_did_not_take(
+    *, target: ApplicationIdentity, now_frontmost: ApplicationIdentity
+) -> str:
+    """What the model is told when the activation was made and did not hold.
+
+    Not a policy refusal -- nothing was denied -- but the model has to hear it
+    as a failure anyway, because its next action is about to be refused by the
+    frontmost check for a reason it would otherwise have no way to see.
+    Activation is a request to a window server, not a function call: a modal
+    sheet, a full-screen space, or an application declining to come forward all
+    end here.
+    """
+
+    return (
+        f'"{target.name}" was asked to come to the front and did not: '
+        f'"{now_frontmost.name or "an unidentified application"}" is frontmost '
+        "instead.\n"
+        "Nothing was clicked or typed. Take a screenshot to see what is on "
+        "screen before trying anything that depends on the window you asked "
+        "for."
+    )
+
+
 __all__ = [
     "SCREENSHOT_QUALITY",
     "ApplicationIdentity",
@@ -485,6 +596,10 @@ __all__ = [
     "DisplayFrame",
     "ScreenTier",
     "ScreenshotBudget",
+    "activation_did_not_take",
+    "activation_needs_a_grant",
+    "activation_would_take_the_screen",
+    "application_is_not_running",
     "focus_lost",
     "kind_of",
     "off_frame",

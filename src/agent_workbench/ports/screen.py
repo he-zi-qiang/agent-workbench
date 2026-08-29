@@ -19,17 +19,28 @@ edge, and everything above works in points.
 **Points in which space** is the other half of that same question, and it went
 unstated until ADR-090 -- which is not a documentation gap, because two
 different answers were already in the code. ``capture`` is of one display and
-the image it returns is measured from *that display's* top-left; ``click``,
-``move`` and ``scroll`` post events into the **global** space spanning every
-attached display, where only the main screen's top-left is the origin. One
-monitor makes those the same space and the disagreement invisible; a second one
-makes every coordinate read off its screenshot name a point on the main screen
-instead (F-22).
+the image it returns is measured from *that display's* top-left; ``click`` and
+``scroll`` post events into the **global** space spanning every attached
+display, where only the main screen's top-left is the origin. One monitor makes
+those the same space and the disagreement invisible; a second one makes every
+coordinate read off its screenshot name a point on the main screen instead
+(F-22).
 
 So the port states the split instead of leaving each side to assume one. A
 ``Display`` carries its own origin, the gate converts a display-local point
 exactly once using it, and **everything below this line is given global points
 only**.
+
+**No method here exists that no tool reaches.** ``move`` did, from ADR-070
+until 2026-08-28: declared here, implemented on both sides, called by nothing
+above the port -- the one caller was ``DarwinScreen.scroll`` reaching its own
+implementation, which is now a private helper (ADR-091 §2.4). The paragraph
+above is the argument for this one. Written days apart and merged in the same
+week, it originally read "``click``, ``move`` and ``scroll`` post events into
+the global space" -- a careful description of the coordinate space of a method
+**nothing has ever called**. A contract is read as an inventory of what this
+project does to a screen, by the next person to document it as readily as by
+anyone else, and an entry with no caller answers that question wrongly.
 """
 
 from __future__ import annotations
@@ -170,14 +181,38 @@ class ScreenPort(Protocol):
         """
         ...
 
+    async def activate(self, bundle_id: str) -> ApplicationIdentity | None:
+        """Bring one application to the front, and say what is in front after.
+
+        Returns rather than confirming, because activation is a **request to a
+        window server, not a function call**. A modal sheet elsewhere, a
+        full-screen space, or an application that declines can all leave
+        something else frontmost, and an implementation that returned ``None``
+        for "done" would make the caller re-read focus to find out -- which is
+        the same reading, done twice, with a race in between.
+
+        ``None`` means something different and narrower: **no running
+        application has this bundle id**. It is separated from "activated, and
+        something else is in front" because the two need different sentences
+        put in front of a model -- one is answered by asking a person to open
+        the application, the other by looking at the screen.
+
+        An implementation **launches nothing.** Starting a process is a
+        strictly larger act than reordering windows, and it is not what a
+        person approving a list of application names agreed to (ADR-091 §4).
+
+        There is deliberately no way to ask *what is running*. This method
+        takes a bundle id the caller already holds a grant for and answers
+        about that one; a caller that could enumerate would hold a capability
+        larger than the one it is being given, which is the same trade
+        ADR-076 §3 refused for the capture filter.
+        """
+        ...
+
     async def click(
         self, x: int, y: int, *, button: MouseButton = "left", count: int = 1
     ) -> None:
         """Click at a **global** point. See the module note on spaces."""
-        ...
-
-    async def move(self, x: int, y: int) -> None:
-        """Move the cursor to a **global** point."""
         ...
 
     async def scroll(

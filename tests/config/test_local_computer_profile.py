@@ -3,8 +3,9 @@
 The other profile tests in this directory pin what a profile *enables*. This
 one mostly pins what it does not, and the asymmetry is the point: a resolved
 tool name is normally frozen into the authorization envelope of every Task
-submitted under that profile, and these six can move the cursor and press keys
-on the machine the Worker is running on. So the assertions below are that they
+submitted under that profile, and these eight can move the cursor, press keys
+and choose which window receives both, on the machine the Worker is running
+on. So the assertions below are that they
 are *not* resolved -- neither into an envelope nor into a Worker binding.
 
 That refusal was, until 2026-08-23, entirely incidental -- a consequence of
@@ -33,10 +34,16 @@ POSTGRES_DSN = (
     "postgresql+asyncpg://agent:local-profile-test@127.0.0.1:5433/agent_workbench_local"
 )
 
-#: The six the profile freezes, by name rather than by count. A server that came
-#: up with five of them is a different deployment wearing the same alias.
+#: The eight the profile freezes, by name rather than by count. A server that
+#: came up with seven of them is a different deployment wearing the same alias.
+#:
+#: Six until ADR-091 added the two that let a task reach a second application:
+#: reading the approved list without opening a second dialog, and bringing an
+#: approved window to the front.
 SCREEN_TOOLS = (
     "request_access",
+    "list_granted_applications",
+    "activate_application",
     "screenshot",
     "left_click",
     "type",
@@ -79,7 +86,8 @@ def test_no_screen_tool_reaches_a_task_authorization_envelope(
     """The load-bearing assertion of this file.
 
     Asserted against the base envelope as well, so that a change which widened
-    the envelope by six names *and* widened the baseline could not satisfy it.
+    the envelope by these names *and* widened the baseline could not satisfy
+    it.
     """
 
     settings = _load_profile(monkeypatch, COMPUTER_CONFIG)
@@ -98,7 +106,7 @@ def test_the_screen_tools_do_not_raise_the_deployments_risk_ceiling(
     """A second widening that would otherwise come for free with the first.
 
     Any non-empty MCP name list forces `max_tool_risk="external"` on the whole
-    envelope. So a change admitting these six would not only add six tools; it
+    envelope. So a change admitting these would not only add eight tools; it
     would raise the ceiling for every Task submitted under this profile,
     including the ones that never touch a screen.
     """
@@ -185,12 +193,12 @@ def test_dev_script_starts_the_project_owned_computer_mcp_module() -> None:
     assert result.stdout.strip() == "-m agent_workbench.apps.computer_mcp.main"
 
 
-def test_dev_script_probes_all_six_tools_by_name() -> None:
-    """Counting them would call a five-tool server healthy.
+def test_dev_script_probes_every_tool_by_name() -> None:
+    """Counting them would call a seven-tool server healthy.
 
     The profile's `tools` list is the contract this server must satisfy, so a
-    server that came up with five of them is a different deployment wearing the
-    same alias -- whether or not the names go anywhere afterwards.
+    server that came up with seven of them is a different deployment wearing
+    the same alias -- whether or not the names go anywhere afterwards.
     """
 
     result = _dev("computer-check")
@@ -215,7 +223,7 @@ def test_dev_script_probes_all_six_tools_by_name() -> None:
 def test_there_is_no_computer_api_or_worker_arm_to_start() -> None:
     """Their absence is the decision, so it is asserted rather than assumed.
 
-    A `computer-api` would freeze six screen tools into every Task it submitted
+    A `computer-api` would freeze eight screen tools into every Task it submitted
     -- except that it would not, because the Task path refuses them at both
     ends, which makes the command a promise the platform does not keep. The
     honest shape is that the command does not exist (ADR-075).

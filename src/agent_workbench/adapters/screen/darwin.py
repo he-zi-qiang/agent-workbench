@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from typing import Any, Final
 
 from agent_workbench.domain.computer import SCREENSHOT_QUALITY, ApplicationIdentity
@@ -130,6 +131,28 @@ _KEY_CODES: Final[dict[str, int]] = {
     "f11": 103,
     "f12": 111,
 }
+
+#: How long to wait for an activation to show up in `frontmost()`, and how
+#: often to look.
+#:
+#: `activateWithOptions:` posts a request and returns; the reorder is the
+#: window server's to schedule, so a `frontmost()` read taken on the next line
+#: can still report the old application.
+#:
+#: **These two numbers are not measured**, unlike every other number in this
+#: file. The `computer-use` extra is not installed in the checkout this was
+#: written in, and the measurement is not one that can be taken quietly: it
+#: means repeatedly pulling windows to the front of a screen somebody is
+#: looking at. They are therefore chosen to be generous rather than tight --
+#: two seconds is far more than a window reorder needs and far less than any
+#: client's own timeout, and 20 ms of polling costs nothing next to the
+#: ~70 ms a filtered capture takes (ADR-076 §4).
+#:
+#: Reaching the ceiling is not an error here. It means something else is
+#: frontmost, which is a fact the caller has to state either way -- so a wrong
+#: guess at these numbers produces a slower honest answer, never a wrong one.
+_ACTIVATION_TIMEOUT_SECONDS: Final[float] = 2.0
+_ACTIVATION_POLL_SECONDS: Final[float] = 0.02
 
 #: How long a synthesized press is held, and how long between characters.
 #:
@@ -245,6 +268,46 @@ class DarwinScreen:
             display=display,
         )
 
+    # --- bringing forward ------------------------------------------------
+
+    async def activate(self, bundle_id: str) -> ApplicationIdentity | None:
+        """Ask the window server to bring one running application forward.
+
+        `runningApplicationsWithBundleIdentifier:` is the whole of the lookup,
+        and it is also the whole of the launching story: it finds processes,
+        and an empty result means there is nothing to bring forward. This
+        adapter never reaches for `launchApplication` or `openApplicationAtURL`
+        (ADR-091 §4).
+
+        `NSApplicationActivateAllWindows` rather than bare activation, because
+        an application with a document window and an inspector should arrive
+        with both -- a task that brought forward one window of two would be
+        looking at a screen the person would not recognise.
+
+        The polling afterwards is not defensive padding. `activate` returns as
+        soon as the request is *posted*, and the reorder happens on the window
+        server's own schedule -- so a `frontmost()` read on the next line may
+        still report the old application, and a gate that trusted it would
+        refuse a request it had just granted. Polling turns that race into a
+        bounded wait with an honest answer at the end of it: what is frontmost,
+        whether or not it is what was asked for.
+        """
+
+        running = AppKit.NSRunningApplication.runningApplicationsWithBundleIdentifier_(
+            bundle_id
+        )
+        if not running:
+            return None
+        running[0].activateWithOptions_(AppKit.NSApplicationActivateAllWindows)
+        deadline = time.monotonic() + _ACTIVATION_TIMEOUT_SECONDS
+        while True:
+            now = self.frontmost()
+            if now.bundle_id == bundle_id or time.monotonic() >= deadline:
+                return now
+            await asyncio.sleep(_ACTIVATION_POLL_SECONDS)
+
+    # --- acting ------------------------------------------------------------
+
     async def click(
         self, x: int, y: int, *, button: MouseButton = "left", count: int = 1
     ) -> None:
@@ -264,7 +327,19 @@ class DarwinScreen:
                 Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
             await asyncio.sleep(_PRESS_SECONDS)
 
-    async def move(self, x: int, y: int) -> None:
+    async def _move(self, x: int, y: int) -> None:
+        """Put the cursor somewhere. Private, and the privacy is the point.
+
+        This was a port method until 2026-08-28 and had exactly one caller:
+        `scroll`, below, reaching its own implementation. Nothing above the
+        port ever called it, no tool exposed it, and `_ALLOWED` listed
+        `mouse_move` for a gate method that did not exist -- a capability
+        claimed at three layers and performed at none (ADR-091 §2.4).
+
+        A scroll still has to position the cursor first: CGEvent's scroll wheel
+        event carries no location, so it lands wherever the cursor is.
+        """
+
         event = Quartz.CGEventCreateMouseEvent(
             None, Quartz.kCGEventMouseMoved, Quartz.CGPointMake(float(x), float(y)), 0
         )
@@ -273,7 +348,7 @@ class DarwinScreen:
     async def scroll(
         self, x: int, y: int, *, direction: ScrollDirection, amount: int
     ) -> None:
-        await self.move(x, y)
+        await self._move(x, y)
         vertical = (
             amount if direction == "up" else -amount if direction == "down" else 0
         )

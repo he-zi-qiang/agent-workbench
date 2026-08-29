@@ -419,16 +419,23 @@ computer-server)
   ;;
 
 computer-check)
-  # All six named rather than trusting a count. Not because they end up in an
-  # envelope -- on this profile they deliberately do not -- but because the
+  # All eight named rather than trusting a count. Not because they end up in
+  # an envelope -- on this profile they deliberately do not -- but because the
   # profile's `tools` list is the contract this server is supposed to satisfy,
-  # and a server that came up with five of them is a different deployment
+  # and a server that came up with seven of them is a different deployment
   # wearing the same alias. Counting would call it healthy.
+  #
+  # Six of these until ADR-091. The two added are the ones a task needs to get
+  # past its first application: the others all act on whatever is frontmost,
+  # and until `activate_application` existed nothing could change what that
+  # was.
   exec "$PYTHON" scripts/smoke_mcp_server.py \
     --label computer \
     --endpoint "http://127.0.0.1:8768/mcp" \
     --health-url "http://127.0.0.1:8768/health" \
     --expect-tool request_access \
+    --expect-tool list_granted_applications \
+    --expect-tool activate_application \
     --expect-tool screenshot \
     --expect-tool left_click \
     --expect-tool type \
