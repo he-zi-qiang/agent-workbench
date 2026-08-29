@@ -95,7 +95,9 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
             "Capture one display, scaled to fit a vision token budget. "
             "Coordinates for every other tool are in the display's own point "
             "space, which the result reports -- never in the pixels of the "
-            "returned image, which is smaller."
+            "returned image, which is smaller. Pass the display_id this "
+            "reports back with those coordinates: a point measured here names "
+            "a different place on any other screen."
         ),
         input_schema={
             "type": "object",
@@ -107,8 +109,8 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
         name="left_click",
         title="Click",
         description=(
-            "Click at a point, in display points. Refused on a 'read' tier "
-            "application. " + _TIER_NOTE
+            "Click at a point, in the points of the display the screenshot "
+            "came from. Refused on a 'read' tier application. " + _TIER_NOTE
         ),
         input_schema={
             "type": "object",
@@ -119,6 +121,15 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
                 "y": {"type": "integer"},
                 "count": {"type": "integer", "minimum": 1, "maximum": 3},
                 "button": {"type": "string", "enum": ["left", "right", "middle"]},
+                "display_id": {
+                    "type": "integer",
+                    "description": (
+                        "The display these coordinates were measured on, as "
+                        "the screenshot reported it. Omit for the main "
+                        "display. A point that is not on the named display is "
+                        "refused rather than clicked somewhere else."
+                    ),
+                },
             },
         },
     ),
@@ -157,7 +168,10 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
     types.Tool(
         name="scroll",
         title="Scroll",
-        description="Scroll at a point. Permitted at tier 'click' and above.",
+        description=(
+            "Scroll at a point, in the points of the display the screenshot "
+            "came from. Permitted at tier 'click' and above."
+        ),
         input_schema={
             "type": "object",
             "additionalProperties": False,
@@ -170,6 +184,13 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
                     "enum": ["up", "down", "left", "right"],
                 },
                 "amount": {"type": "integer", "minimum": 1, "maximum": 100},
+                "display_id": {
+                    "type": "integer",
+                    "description": (
+                        "The display these coordinates were measured on. Omit "
+                        "for the main display."
+                    ),
+                },
             },
         },
     ),
@@ -269,7 +290,9 @@ async def _dispatch(
                         f"Display {capture.display.display_id}: "
                         f"{capture.display.width}x{capture.display.height} "
                         f"points, shown at {capture.width}x{capture.height}. "
-                        "Give coordinates in points."
+                        "Give coordinates in points, measured from the "
+                        "top-left of this display, and pass "
+                        f"display_id={capture.display.display_id} with them."
                     )
                 ),
                 types.ImageContent(
@@ -292,6 +315,7 @@ async def _dispatch(
             int(arguments["y"]),
             button=str(arguments.get("button", "left")),
             count=int(arguments.get("count", 1)),
+            display_id=_display_id(arguments),
         )
         return _text(f"Clicked in {held.application.name}.")
 
@@ -310,6 +334,7 @@ async def _dispatch(
             int(arguments["y"]),
             direction=str(arguments["direction"]),
             amount=int(arguments.get("amount", 3)),
+            display_id=_display_id(arguments),
         )
         return _text(f"Scrolled in {held.application.name}.")
 
@@ -350,6 +375,19 @@ def create_app(
         host=host,
         custom_starlette_routes=[Route(HEALTH_PATH, endpoint=health, methods=["GET"])],
     )
+
+
+def _display_id(arguments: dict[str, Any]) -> int | None:
+    """The display a coordinate claims to have been measured on, if any.
+
+    Absent means the main display, which is what a one-screen session will
+    always mean and should not have to say. Read in one place rather than at
+    each call site: two handlers that spell this differently is how a screen
+    ends up being chosen by whichever one was edited last.
+    """
+
+    given = arguments.get("display_id")
+    return None if given is None else int(given)
 
 
 def _text(message: str) -> types.CallToolResult:

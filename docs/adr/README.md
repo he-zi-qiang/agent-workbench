@@ -52,6 +52,7 @@
 | [ADR-054 摘要没法被同意](./0054-a-digest-cannot-be-consented-to.md) | 停在审批上的调用，参数正文要不要进事件流；靠 `record_step_inputs` 还是别的判据 | 接受，对「事件只描述不复现」开一个有范围的例外 |
 | [ADR-075 账本记的是被发起的效果，不是被提议的效果](./0075-a-ledgered-effect-is-issued-not-proposed.md) | `retryable_effects = false` 的 MCP server 该不该经由账本进 Task；ADR-025 §2.7 给自己留的那句重开条件兑现了能不能解锁 | 接受，保留拒绝并收窄 ADR-025 §2.7／§5 的重开条件——卡住的是键，不是载荷 |
 | [ADR-076 没人批准过的窗口，不在那张图里](./0076-a-window-nobody-approved-is-not-in-the-picture.md) | 对照 Claude Desktop 的 computer use：合成器过滤要不要抄；批处理原语与视觉通路要不要抄；以及 ADR-070「人一次性批准」为何一直没有实现 | 接受，兑现 ADR-070 §2 并关闭 F-18；拒绝批处理原语与（本轮的）视觉通路 |
+| [ADR-090 一个坐标带着它是在哪块屏上量的](./0090-a-coordinate-carries-the-screen-it-was-measured-on.md) | ADR-076 §4 记下、明确不修的那条：截图按显示器给坐标、点击按全局坐标发事件；换算放哪一层才测得了；一个没说清自己在哪块屏上量的坐标该被怎么对待 | 接受，端口下面一律全局点、`Display` 带原点、换算进 domain；并把多屏时省略 `display_id` 由「当作主屏」收窄为拒绝；关闭 F-22 |
 
 > **这张表在 ADR-054 之后就断了：0055–0074 没有行**（上面那条 ADR-075 是本批
 > 顺手补的，不代表表已经跟上）。那二十份 ADR 都在同一个目录里，`ls docs/adr/`

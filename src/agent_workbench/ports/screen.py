@@ -10,12 +10,26 @@ assertions are about the rules rather than about whether a click landed. A
 project whose screen policy could only be tested by moving a real mouse would
 have a screen policy nobody tests.
 
-Coordinates are **points in the display's own space, origin top-left**, always,
-and never the pixels of whatever scaled image was last returned. A retina
-display reports half the pixels it has; a screenshot may be scaled down again
-to fit a token budget. Two conversions, either of which silently doubles or
-halves a click. The port therefore refuses to speak pixels at all -- the
-adapter converts once, at the edge, and everything above works in points.
+Coordinates are **points, never pixels**, always. A retina display reports half
+the pixels it has; a screenshot may be scaled down again to fit a token budget.
+Two conversions, either of which silently doubles or halves a click. The port
+therefore refuses to speak pixels at all -- the adapter converts once, at the
+edge, and everything above works in points.
+
+**Points in which space** is the other half of that same question, and it went
+unstated until ADR-090 -- which is not a documentation gap, because two
+different answers were already in the code. ``capture`` is of one display and
+the image it returns is measured from *that display's* top-left; ``click``,
+``move`` and ``scroll`` post events into the **global** space spanning every
+attached display, where only the main screen's top-left is the origin. One
+monitor makes those the same space and the disagreement invisible; a second one
+makes every coordinate read off its screenshot name a point on the main screen
+instead (F-22).
+
+So the port states the split instead of leaving each side to assume one. A
+``Display`` carries its own origin, the gate converts a display-local point
+exactly once using it, and **everything below this line is given global points
+only**.
 """
 
 from __future__ import annotations
@@ -23,7 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
-from agent_workbench.domain.computer import ApplicationIdentity
+from agent_workbench.domain.computer import ApplicationIdentity, DisplayFrame
 
 MouseButton = Literal["left", "right", "middle"]
 ScrollDirection = Literal["up", "down", "left", "right"]
@@ -40,7 +54,7 @@ class ScreenUnavailableError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class Display:
-    """One screen, in points."""
+    """One screen, in points, and where it sits among the others."""
 
     display_id: int
     width: int
@@ -49,6 +63,33 @@ class Display:
     #: about how much detail a capture can actually hold, never so it can do
     #: coordinate arithmetic -- see the module note.
     scale_factor: float
+    #: This display's top-left in the global point space, which is the space
+    #: every synthesized event is posted into.
+    #:
+    #: **No default, deliberately.** (0, 0) is right for the main display and
+    #: wrong for every other one, so a default would let an implementation that
+    #: never considered the question answer it correctly on the machine it was
+    #: written on and incorrectly everywhere else. That is the exact shape F-22
+    #: had for a year.
+    origin_x: int
+    #: Signed, like ``origin_x``: a screen arranged above or to the left of the
+    #: main one has a negative origin, and that arrangement is ordinary.
+    origin_y: int
+
+    def frame(self) -> DisplayFrame:
+        """This display as the arithmetic in ``domain/computer.py`` wants it.
+
+        A method rather than a field so there is one description of this
+        display and not two that can disagree.
+        """
+
+        return DisplayFrame(
+            display_id=self.display_id,
+            origin_x=self.origin_x,
+            origin_y=self.origin_y,
+            width=self.width,
+            height=self.height,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,13 +172,19 @@ class ScreenPort(Protocol):
 
     async def click(
         self, x: int, y: int, *, button: MouseButton = "left", count: int = 1
-    ) -> None: ...
+    ) -> None:
+        """Click at a **global** point. See the module note on spaces."""
+        ...
 
-    async def move(self, x: int, y: int) -> None: ...
+    async def move(self, x: int, y: int) -> None:
+        """Move the cursor to a **global** point."""
+        ...
 
     async def scroll(
         self, x: int, y: int, *, direction: ScrollDirection, amount: int
-    ) -> None: ...
+    ) -> None:
+        """Scroll at a **global** point."""
+        ...
 
     async def type_text(self, text: str) -> int:
         """Type ``text``, returning how many characters were delivered.

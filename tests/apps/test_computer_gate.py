@@ -11,7 +11,11 @@ import asyncio
 
 import pytest
 
-from agent_workbench.adapters.memory.screen import FakeScreen
+from agent_workbench.adapters.memory.screen import (
+    MAIN_DISPLAY,
+    SECOND_DISPLAY,
+    FakeScreen,
+)
 from agent_workbench.apps.computer_mcp.gate import ScreenGate, ScreenRefusedError
 from agent_workbench.domain.computer import ApplicationIdentity
 
@@ -166,7 +170,9 @@ def test_a_screenshot_is_fitted_to_the_budget_before_it_is_taken() -> None:
 
     from agent_workbench.ports.screen import Display
 
-    big = Display(display_id=9, width=3840, height=2160, scale_factor=1.0)
+    big = Display(
+        display_id=9, width=3840, height=2160, scale_factor=1.0, origin_x=0, origin_y=0
+    )
     screen = FakeScreen(focus=NOTES, screens=(big,))
     gate = _gate(screen, NOTES)
 
@@ -317,3 +323,155 @@ def test_a_second_request_asks_again_rather_than_topping_up() -> None:
         asyncio.run(gate.grant((TERMINAL,)))
 
     assert [held.application.name for held in gate.grants()] == ["Notes"]
+
+
+# --- where a click actually lands (ADR-090, closes F-22) -------------------
+
+
+def test_a_click_on_the_main_display_is_posted_where_it_was_measured() -> None:
+    screen = FakeScreen(focus=NOTES)
+    gate = _gate(screen, NOTES)
+
+    asyncio.run(gate.click(300, 200))
+
+    assert screen.actions == [("click", (300, 200, "left", 1))]
+
+
+def test_a_click_measured_on_a_second_display_is_moved_onto_it() -> None:
+    """The bug F-22 named, in one assertion.
+
+    Before ADR-090 the gate handed (300, 200) straight to the adapter, which
+    posts into the global space -- so a coordinate read off the *second*
+    display's screenshot clicked on the **main** one. Nothing failed: the click
+    was delivered, to the wrong place, and reported success.
+    """
+
+    screen = FakeScreen(focus=NOTES, screens=(MAIN_DISPLAY, SECOND_DISPLAY))
+    gate = _gate(screen, NOTES)
+
+    asyncio.run(gate.click(300, 200, display_id=SECOND_DISPLAY.display_id))
+
+    assert screen.actions == [("click", (1770, 76, "left", 1))]
+
+
+def test_a_scroll_carries_the_same_conversion_as_a_click() -> None:
+    """Separate code path, same mistake available. The adapter moves the cursor
+    to this point before turning the wheel, so a wrong one scrolls a window
+    nobody named."""
+
+    screen = FakeScreen(focus=NOTES, screens=(MAIN_DISPLAY, SECOND_DISPLAY))
+    gate = _gate(screen, NOTES)
+
+    asyncio.run(
+        gate.scroll(
+            10, 20, direction="down", amount=3, display_id=SECOND_DISPLAY.display_id
+        )
+    )
+
+    assert screen.actions == [("scroll", (1480, -104, "down", 3))]
+
+
+def test_on_a_one_screen_machine_omitting_the_display_is_still_fine() -> None:
+    """A single-screen session never learns this vocabulary and does not have
+    to: there is exactly one right answer, so nothing is being guessed."""
+
+    screen = FakeScreen(focus=NOTES, screens=(MAIN_DISPLAY,))
+    gate = _gate(screen, NOTES)
+
+    asyncio.run(gate.click(5, 6))
+
+    assert screen.actions == [("click", (5, 6, "left", 1))]
+
+
+def test_a_point_that_is_not_on_the_named_display_is_refused_untouched() -> None:
+    screen = FakeScreen(focus=NOTES)
+    gate = _gate(screen, NOTES)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.click(1470, 100))
+
+    assert "not a point on display 1" in str(refused.value)
+    assert screen.actions == []
+
+
+def test_a_display_this_machine_does_not_have_is_refused_not_substituted() -> None:
+    """The fallback that would have been convenient here is the original bug
+    wearing a default: acting on a screen other than the one named."""
+
+    screen = FakeScreen(focus=NOTES)
+    gate = _gate(screen, NOTES)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.click(5, 5, display_id=7))
+
+    assert "no display 7" in str(refused.value)
+    assert "1 (1470x956 points)" in str(refused.value)
+    assert screen.actions == []
+
+
+def test_an_ungranted_session_is_told_about_the_grant_not_about_the_screens() -> None:
+    """Order matters, and this is what it buys.
+
+    The geometry step runs after the three permission checks, so a session that
+    has been granted nothing cannot use an out-of-range coordinate to measure
+    somebody's monitors.
+    """
+
+    screen = FakeScreen(focus=NOTES, screens=(MAIN_DISPLAY, SECOND_DISPLAY))
+    gate = ScreenGate(screen=screen, consent=_always)  # type: ignore[arg-type]
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.click(99999, 99999, display_id=SECOND_DISPLAY.display_id))
+
+    message = str(refused.value)
+    assert "not in this session's approved list" in message
+    assert "1920" not in message
+    assert screen.actions == []
+
+
+def test_two_displays_and_no_id_is_refused_rather_than_assumed() -> None:
+    """The hole the conversion alone would have left open.
+
+    (300, 200) is a point on both of these displays. Converting correctly once
+    told which one still accepts this and clicks the main screen when the model
+    meant the second -- F-22 reached by omission instead of by arithmetic.
+    """
+
+    screen = FakeScreen(focus=NOTES, screens=(MAIN_DISPLAY, SECOND_DISPLAY))
+    gate = _gate(screen, NOTES)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.click(300, 200))
+
+    assert "has 2 displays" in str(refused.value)
+    assert screen.actions == []
+
+
+def test_looking_at_a_machine_with_two_screens_needs_no_id() -> None:
+    """Otherwise there would be no way to learn the ids in the first place.
+
+    A screenshot has no coordinate to get wrong: it reports which display it
+    took, and that report is where the id a later click sends back comes from.
+    """
+
+    screen = FakeScreen(focus=NOTES, screens=(MAIN_DISPLAY, SECOND_DISPLAY))
+    gate = _gate(screen, NOTES)
+
+    capture = asyncio.run(gate.screenshot())
+
+    assert capture.display.display_id == MAIN_DISPLAY.display_id
+
+
+def test_screenshotting_a_display_this_machine_lacks_is_refused() -> None:
+    """Looking is laxer than landing about an *omitted* id, not about a wrong
+    one. Handing back a picture of a different screen than the one asked for is
+    the same silent substitution, one step earlier."""
+
+    screen = FakeScreen(focus=NOTES, screens=(MAIN_DISPLAY, SECOND_DISPLAY))
+    gate = _gate(screen, NOTES)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.screenshot(7))
+
+    assert "no display 7" in str(refused.value)
+    assert screen.actions == []

@@ -25,11 +25,12 @@ module is the part that cannot be, so it is kept as thin as it can be made.
 
 Three properties are worth stating because they are easy to lose:
 
-**Points in, pixels only inside.** The port speaks the display's own point
-space; this module converts once, at the edge. A retina panel reports 1470x956
-points over 2940x1912 pixels, and a click computed in the wrong one of those
-lands at twice or half the intended place -- silently, because a click that
-misses is still a click.
+**Points in, pixels only inside.** The port speaks points -- global ones for
+input, this display's own for a capture (ADR-090) -- and this module converts
+to pixels once, at the edge. A retina panel reports 1470x956 points over
+2940x1912 pixels, and a click computed in the wrong one of those lands at twice
+or half the intended place -- silently, because a click that misses is still a
+click.
 
 **Permission is checked, not assumed.** macOS gates screen capture and event
 synthesis behind separate TCC grants, and a process without them does not fail
@@ -175,6 +176,13 @@ class DarwinScreen:
         points_high = Quartz.CGDisplayPixelsHigh(display_id)
         mode = Quartz.CGDisplayCopyDisplayMode(display_id)
         pixels_wide = Quartz.CGDisplayModeGetPixelWidth(mode)
+        # Where this screen sits in the space `CGEventPost` reads, which is the
+        # whole of ADR-090 on this side of the port. `CGDisplayBounds` is the
+        # only source for it and reports points, same as everything else here.
+        # The conversion that uses it is arithmetic and lives in
+        # `domain/computer.py`, where it is tested against a second monitor
+        # nobody has to own.
+        bounds = Quartz.CGDisplayBounds(display_id)
         return Display(
             display_id=int(display_id),
             width=int(points_wide),
@@ -182,6 +190,8 @@ class DarwinScreen:
             # Derived rather than assumed to be 1 or 2: an external panel
             # running a scaled mode is neither.
             scale_factor=(pixels_wide / points_wide) if points_wide else 1.0,
+            origin_x=int(bounds.origin.x),
+            origin_y=int(bounds.origin.y),
         )
 
     def frontmost(self) -> ApplicationIdentity:
@@ -238,6 +248,9 @@ class DarwinScreen:
     async def click(
         self, x: int, y: int, *, button: MouseButton = "left", count: int = 1
     ) -> None:
+        # Global points, as the port promises. This module never learns which
+        # display they came from and must not try to: the one conversion
+        # happened in the gate, and a second one here would undo it.
         down, up, number = _BUTTON[button]
         point = Quartz.CGPointMake(float(x), float(y))
         for press in range(1, count + 1):
