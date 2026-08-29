@@ -1,4 +1,9 @@
 import { CircleX, Keyboard, MonitorCheck, PanelsTopLeft, ScanEye } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+
+import { getComputerSession } from "../../api/client";
+import { useIdentity } from "../../app/IdentityContext";
+import { ScreenSessionPanel } from "./ScreenSessionPanel";
 
 /**
  * What the screen tools may do to this machine, and why the order of the
@@ -6,10 +11,11 @@ import { CircleX, Keyboard, MonitorCheck, PanelsTopLeft, ScanEye } from "lucide-
  *
  * **This page explains a mechanism; it does not monitor one.** Every other
  * page here reads a live fact from an endpoint. There is no endpoint for this
- * one: the gate lives inside `agent-workbench-computer-mcp`, a stdio MCP
- * server that a Worker speaks to directly, and `apps/api` has no route that
- * can see its grants. So the session-scoped allowlist -- which applications a
- * person approved, at which tier -- is deliberately *absent* below rather than
+ * one: the gate lives inside `agent-workbench-computer-mcp`, a separate
+ * process that serves MCP over Streamable HTTP on 127.0.0.1:8768, and
+ * `apps/api` has no route that can see its grants. So the session-scoped
+ * allowlist -- which applications a person approved, at which tier -- is
+ * deliberately *absent* below rather than
  * illustrated with plausible rows. A screenshot of four apps captioned "这次
  * 会话批准的应用" would be read as this machine's current state, and the reader
  * has no way to tell it from one.
@@ -28,6 +34,33 @@ import { CircleX, Keyboard, MonitorCheck, PanelsTopLeft, ScanEye } from "lucide-
  * could -- `_ALLOWED` listed `mouse_move` for a gate method that did not
  * exist. The second one is the failure mode this docblock describes, arriving
  * exactly as described: a hand-copied claim outliving the thing it copied.
+ *
+ * **ADR-095 changed the first paragraph above, and it is left standing because
+ * the argument in it is why the panel below looks the way it does.** There is a
+ * route now: the gate answers `GET /session` on its own loopback port and
+ * `agent-api` forwards it, so the allowlist this page used to refuse to draw is
+ * a fact it can read. What did not change is the reason it refused: a plausible
+ * list is read as the real one. So the panel has three states rather than two --
+ * "that server is not running" is the ordinary answer on an ordinary machine and
+ * is drawn differently from "running, and nobody has approved anything".
+ *
+ * The panel also names the frontmost application whether or not anybody
+ * approved it, which every refusal a model reads deliberately withholds. Two
+ * readers, one rule: the window it names is the one this page's reader is
+ * sitting in front of, and the decision they have to make is whether to approve
+ * it.
+ *
+ * And it collected a third time, on this docblock itself. Until now the two
+ * sentences above said the gate lived in "a stdio MCP server that a Worker
+ * speaks to directly". Both halves were wrong and had been for as long as they
+ * had been written: the transport is Streamable HTTP on a loopback port
+ * (`computer_mcp/server.py` serves it, `settings.py` admits no other), and no
+ * Worker speaks to it at all -- `config.computer-local.toml` is the only
+ * profile that declares the server and it marks the tools
+ * `retryable_effects = false`, which keeps all eight names out of every Task's
+ * authorization envelope. So the reason this page has no live state to show is
+ * stronger than "there is no route": in the profiles this repository ships,
+ * no Task has ever held a screen tool.
  */
 
 /** The four checks, in the order `ScreenGate` applies them. */
@@ -132,6 +165,24 @@ System Events, shell commands, or any other method to send input to this
 application.`;
 
 export function ComputerPage() {
+  const { identity } = useIdentity();
+  // 每 4 秒问一次。前台应用是这一页上唯一会变的东西，而它变的时候（人切了个窗口）
+  // 任务正停在那里等——所以这个数不能太大。也不能太小：每一次询问都会让那个进程读一次
+  // `NSWorkspace.frontmostApplication()`。
+  //
+  // 读不到不当错误：那台服务器默认不启动，`reachable: false` 是这条路由的正常回答，
+  // 而 react-query 的 retry 会把一个正常回答重试成三次。
+  //
+  // 轮询在标签页不可见时**不跑**（`refetchIntervalInBackground` 默认为假），这是对的
+  // 而不是漏掉的：没人在看的时候，每 4 秒去读一次别人的前台窗口没有任何人受益。
+  // 2026-08-29 排查时被它绊过一次——换回这一页时看到的是上一次的数，几秒后才更新。
+  const session = useQuery({
+    queryKey: ["computer", "session", identity.tenantId, identity.principalId],
+    queryFn: () => getComputerSession(identity),
+    refetchInterval: 4_000,
+    retry: false,
+  });
+
   return (
     <main className="aw-utility-page aw-computer-page">
       <header className="aw-page-header">
@@ -139,24 +190,26 @@ export function ComputerPage() {
           <span className="aw-eyebrow">屏幕控制</span>
           <h1>计算机控制</h1>
           <p>
-            其它工具的作用域是这个进程自己的工作区、数据库、沙箱容器。这一个的
-            作用域是运行 Worker 的那台机器本身。
+            其它工具的作用域是这个进程自己的工作区、数据库、沙箱容器。这一个的作用域是运行 Worker 的那台机器本身。
           </p>
         </div>
       </header>
 
-      {/* Before anything else, because everything below reads like a console
-          otherwise. A reader who assumes this page is live will read the tier
-          table as "these are the apps I granted". */}
+      {/* 面板在最上面，规则在它下面。这一页此前的顺序是反的，因为那时它只有规则。 */}
+      <section aria-labelledby="aw-screen-heading">
+        <div className="aw-section-head">
+          <h2 id="aw-screen-heading">这台机器此刻</h2>
+          <span>每 4 秒问一次那个进程</span>
+        </div>
+        <ScreenSessionPanel data={session.data} loading={session.isLoading} />
+      </section>
+
       <div className="aw-notice is-info">
         <ScanEye aria-hidden="true" size={16} />
         <div>
-          <strong>这一页说明机制，不监控运行中的会话。</strong>
+          <strong>上面是这台机器的实际状态，下面是不依赖它也成立的规则。</strong>
           <small>
-            门禁在 computer MCP 服务器进程里，agent-api 没有可以读到它的路由，
-            因此「这次会话批准了哪些应用」在这里读不到，也就不显示——一张编出来
-            的名单会被当成这台机器此刻的状态。下面是不依赖接口也成立的部分：
-            规则本身。
+            门禁在 computer MCP 服务器进程里，上面那块面板经 agent-api 转发一次读到它（ADR-095）。那台服务器默认不启动，所以「没在跑」是这一页上常见的答案，而它和「跑着、但没人批准任何应用」是两回事——面板把这两种画成不一样的东西。
           </small>
         </div>
       </div>
@@ -186,17 +239,10 @@ export function ComputerPage() {
           ))}
         </ol>
         <p className="aw-gate-note">
-          第 3 道是容易漏掉、而漏掉之后无法再补上的那一道：它一旦不成立，上面
-          两道检查的都是另一块屏幕。
+          第 3 道是容易漏掉、而漏掉之后无法再补上的那一道：它一旦不成立，上面两道检查的都是另一块屏幕。
         </p>
         <p className="aw-gate-note">
-          第 3 道和真正动手之间还有一步，它<strong>不是</strong>一道检查：模型是在
-          某一块显示器的截图上量的坐标，而事件被发到一个横跨所有显示器的全局空间
-          （ADR-090）。单屏时两者是同一个空间，所以这个区别曾经一年不可见；接上
-          第二块屏，照着它的截图量出来的坐标会落在主屏上——点击成功、位置错、
-          什么都不报。因此坐标带着它是在哪块屏上量的走，不在那块屏上的坐标被拒绝，
-          而只要这台机器不止一块屏，省略这件事本身也被拒绝。这一步排在三道检查
-          之后，好让一个什么都没被批准的会话没法用它量出别人的显示器摆位。
+          第 3 道和真正动手之间还有一步，它<strong>不是</strong>一道检查：模型是在某一块显示器的截图上量的坐标，而事件被发到一个横跨所有显示器的全局空间（ADR-090）。单屏时两者是同一个空间，所以这个区别曾经一年不可见；接上第二块屏，照着它的截图量出来的坐标会落在主屏上——点击成功、位置错、什么都不报。因此坐标带着它是在哪块屏上量的走，不在那块屏上的坐标被拒绝，而只要这台机器不止一块屏，省略这件事本身也被拒绝。这一步排在三道检查之后，好让一个什么都没被批准的会话没法用它量出别人的显示器摆位。
         </p>
       </section>
 
@@ -215,10 +261,7 @@ export function ComputerPage() {
               第 3 道从「人选了这扇窗」变成「模型在人批准的集合里选了一扇」。
             </strong>
             <small>
-              在此之前，六个工具没有一个能改变前台应用，而每一个都要求被批准的应用
-              此刻在最前面——于是任何跨两个应用的任务都走不到第二步，而且不是被
-              拒绝，是没有工具可调。加上激活之后，「前台是被批准的」不再等于
-              「人此刻正看着它并选择了它」。丢掉的就是这一层信息。
+              在此之前，六个工具没有一个能改变前台应用，而每一个都要求被批准的应用此刻在最前面——于是任何跨两个应用的任务都走不到第二步，而且不是被拒绝，是没有工具可调。加上激活之后，「前台是被批准的」不再等于「人此刻正看着它并选择了它」。丢掉的就是这一层信息。
             </small>
           </div>
         </div>
@@ -242,10 +285,7 @@ export function ComputerPage() {
           ))}
         </ol>
         <p className="aw-gate-note">
-          第二条的拒绝文案<strong>不说最前面的是谁</strong>。它恰好只在「最前面的
-          应用没被批准」时触发，所以一个会点名的拒绝，等于把每一次被拒的激活变成
-          一次「此刻这个人在用什么」的读数——那正是名单要挡的东西。同样的理由，
-          读名单的那个工具只答「有没有一个名单里的在最前面」，不答没有的时候是谁。
+          第二条的拒绝文案<strong>不说最前面的是谁</strong>。它恰好只在「最前面的应用没被批准」时触发，所以一个会点名的拒绝，等于把每一次被拒的激活变成一次「此刻这个人在用什么」的读数——那正是名单要挡的东西。同样的理由，读名单的那个工具只答「有没有一个名单里的在最前面」，不答没有的时候是谁。
         </p>
         <div className="aw-notice is-info">
           <PanelsTopLeft aria-hidden="true" size={16} />
@@ -254,21 +294,17 @@ export function ComputerPage() {
               这个能力要求服务器自己是一个签名的 .app（ADR-092）。
             </strong>
             <small>
-              macOS 只在四个条件同时成立时才允许一个进程改变前台应用：bundle 身份、
-              代码签名、辅助功能授权、<strong>主线程活着的 run loop</strong>。
+              macOS 只在四个条件同时成立时才允许一个进程改变前台应用：bundle 身份、代码签名、辅助功能授权、<strong>主线程活着的 run loop</strong>。
               2026-08-29 逐条实测——固定其余三条、每次去掉一条：0/20、0/10、0/10、
               0/15;四条都在则 <strong>15/15</strong>。缺任何一条都是<strong>静默</strong>
               失败:调用返回成功而屏幕不动。所以服务器由
               <code>scripts/build_computer_app.sh</code> 打包成 .app，
-              uvicorn 挪到后台线程，主线程交给 AppKit;激活之前还会先问一次
-              「这个进程有资格吗」，缺了就当场说明是哪一条，而不是等超时。
+              uvicorn 挪到后台线程，主线程交给 AppKit;激活之前还会先问一次「这个进程有资格吗」，缺了就当场说明是哪一条，而不是等超时。
             </small>
           </div>
         </div>
         <p className="aw-gate-note">
-          激活<strong>从不启动应用</strong>。启动一个进程和把窗口重排不是一个量级
-          的行为，而且人批准的那份名单不是这个意思：对话框问的是「可以在这次会话里
-          控制下列应用」。两个应用都得已经开着，任务才跨得过去——代价记在
+          激活<strong>从不启动应用</strong>。启动一个进程和把窗口重排不是一个量级的行为，而且人批准的那份名单不是这个意思：对话框问的是「可以在这次会话里控制下列应用」。两个应用都得已经开着，任务才跨得过去——代价记在
           known-gaps F-29。
         </p>
       </section>
@@ -291,8 +327,7 @@ export function ComputerPage() {
         </div>
         <p className="aw-gate-note">
           判定先查 bundle id，再按长度从长到短查名字子串——两个都要。bundle id
-          精确但不完整，名字完整但可以伪造；只认 bundle id 的话，这个项目没听说过
-          的新浏览器反而会落到 full。子串按长度排序，是为了让「chrome remote
+          精确但不完整，名字完整但可以伪造；只认 bundle id 的话，这个项目没听说过的新浏览器反而会落到 full。子串按长度排序，是为了让「chrome remote
           desktop」不被「chrome」先接走。
         </p>
       </section>
@@ -310,9 +345,7 @@ export function ComputerPage() {
           </div>
           <pre>{REFUSAL}</pre>
           <p>
-            只说「不行」的拒绝会被绕过——模型接下来会去试 AppleScript。所以第二段
-            指出被认可的那条路，第三段把绕行明确禁掉：没有第三段，第二段读起来
-            像建议。
+            只说「不行」的拒绝会被绕过——模型接下来会去试 AppleScript。所以第二段指出被认可的那条路，第三段把绕行明确禁掉：没有第三段，第二段读起来像建议。
           </p>
         </div>
       </section>
@@ -322,14 +355,11 @@ export function ComputerPage() {
           <MonitorCheck aria-hidden="true" size={16} />
           <strong>截图的两个上限</strong>
           <p>
-            边长 1568 px 是视觉编码器自己会降采样的点，超过就是在为被丢掉的像素
-            付传输费；token 1568 是这一轮对话付得起的。宽屏上先咬的是后者：
+            边长 1568 px 是视觉编码器自己会降采样的点，超过就是在为被丢掉的像素付传输费；token 1568 是这一轮对话付得起的。宽屏上先咬的是后者：
             1568×1568 在边长之内，却要 3136 个 token，是上限的两倍。
           </p>
           <p className="aw-fact-note">
-            缩放用二分搜索而不是解析解——两个上限在不同屏幕上先后生效，而取整到
-            整像素会让算出来「刚好装得下」的尺寸进位成装不下的，那是一张编码完
-            才被拒绝的图。宽高比永远保持：截图是模型随后要在里面点击的坐标系。
+            缩放用二分搜索而不是解析解——两个上限在不同屏幕上先后生效，而取整到整像素会让算出来「刚好装得下」的尺寸进位成装不下的，那是一张编码完才被拒绝的图。宽高比永远保持：截图是模型随后要在里面点击的坐标系。
           </p>
         </section>
 
@@ -337,8 +367,7 @@ export function ComputerPage() {
           <Keyboard aria-hidden="true" size={16} />
           <strong>打字之后还要再数一次</strong>
           <p>
-            按键跟着键盘焦点走。一个窗口在字符串打到一半时抢到前台，剩下的字符
-            就跟着它走——同一串字落进两个应用，其中只有一个被批准过。
+            按键跟着键盘焦点走。一个窗口在字符串打到一半时抢到前台，剩下的字符就跟着它走——同一串字落进两个应用，其中只有一个被批准过。
           </p>
           <p className="aw-fact-note">
             所以适配器报告送达了多少个字符，门禁用这个数字回话，而不是回一句

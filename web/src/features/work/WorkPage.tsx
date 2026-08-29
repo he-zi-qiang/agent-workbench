@@ -42,6 +42,7 @@ import {
   getApproval,
   getArtifactJson,
   getTask,
+  getTaskCapabilities,
   listTasks,
   newIdempotencyKey,
   triageTask,
@@ -91,7 +92,11 @@ import {
   ModeStartHeader,
   submitTextareaOnEnter,
 } from "../../components/ModeStart";
-import { StepStream, type StreamStage } from "../../components/StepStream";
+import {
+  StepStream,
+  type StreamRunLabel,
+  type StreamStage,
+} from "../../components/StepStream";
 import { explainFailure } from "./failure";
 import { deriveLifecycle, type Lifecycle, stageOfNode } from "./lifecycle";
 import { useTaskTimeline } from "./useTaskTimeline";
@@ -118,13 +123,16 @@ import {
   type WorkspaceWriteGroup,
   type TimelineGap,
 } from "./workTimeline";
-import {
-  readDelegations,
-  titleWithDelegation,
-  type DelegationFacts,
-} from "./delegations";
+import { readDelegations, type DelegationFacts } from "./delegations";
 import { RunPanel } from "../../components/RunPanel";
-import { buildRunTree, type RunNode } from "../../components/runTree";
+import { DelegationScopeNote } from "./DelegationScope";
+import {
+  buildRunTree,
+  flattenRuns,
+  totalTokens,
+  type RunNode,
+  type RunStatus,
+} from "../../components/runTree";
 
 const CANCELLABLE_STATUSES = new Set<TaskStatus>([
   "queued",
@@ -341,6 +349,24 @@ export function WorkPage() {
       return parsed;
     },
   });
+
+  // 这一台部署会不会让下一个任务派子代理，以及派得起几个。
+  //
+  // 键里没有 taskId，因为它答的不是任何一个任务：已经提交的任务跑在它自己那份
+  // 冻结的快照上，把今天的进程配置摆在它旁边，等于报一个它从来没见过的数。所以
+  // 它只出现在提交表单里。
+  //
+  // `staleTime: Infinity` 是因为这是进程启动时投影出来的常量——它在这个 API
+  // 进程的生命周期里不会变，重投影要重启。轮询它是在问一个不会有新答案的问题。
+  const capabilitiesQuery = useQuery({
+    queryKey: ["work", "capabilities", ...identityKey],
+    queryFn: () => getTaskCapabilities(identity),
+    staleTime: Number.POSITIVE_INFINITY,
+    // 读不到就当没有：这一段是提交表单里的一块说明，它加载失败不该把整个
+    // 新建任务的表单变成一个错误页。渲染处按 undefined 处理。
+    retry: 1,
+  });
+  const delegation = capabilitiesQuery.data?.delegation;
 
   const approvalId = useMemo(
     () => findLatestApprovalId(timeline.events),
@@ -1071,6 +1097,7 @@ export function WorkPage() {
           type="number"
           value={maxRevisions}
         />
+        <DelegationScopeNote delegation={delegation} />
       </details>
       {attachments.hasBlockingItems ? (
         <p className="aw-create-task-hint">
@@ -1637,6 +1664,35 @@ function artifactName(artifact: ArtifactRef): string {
  * lines, and expanding any of them shows the prompts, tool calls and outputs
  * that produced it.
  */
+/**
+ * 运行的状态，到时间线上那一块该长什么样。
+ *
+ * 写成表而不是三元链，理由和 `runTree.ts` 里那两张表一样：`RunStatus` 加一个取值
+ * 时，这里会因为缺 key 而红，而不是悄悄落到某个 else 分支上。`cancelled` 和
+ * `failed` 归一档——对读这条流的人来说它们要做的下一件事是同一件：那段没跑完。
+ */
+const RUN_SECTION_OUTCOME: Readonly<
+  Record<RunStatus, StreamRunLabel["outcome"]>
+> = {
+  running: "running",
+  completed: "done",
+  failed: "failed",
+  cancelled: "failed",
+  unknown: "unknown",
+};
+
+/**
+ * 一个子代理块右侧那行小字：它烧掉了多少。
+ *
+ * 和 `RunPanel` 的 `formatTokens` 同形而不共用，理由与 `DelegationScope` 那一处
+ * 相同：那一份格式化的是面板上会随轮询跳动的数，这一份是折叠行上的一个注脚，两者
+ * 不为同一件事负责。合并会让改其中一个的人以为自己只改了一个。
+ */
+function formatSpentTokens(value: number): string {
+  if (value < 1000) return String(value);
+  return `${(value / 1000).toFixed(1)}k`;
+}
+
 function TaskStepStream({
   lifecycle,
   loading,
@@ -1720,6 +1776,73 @@ function TaskStepStream({
     };
   });
 
+  /**
+   * 一个不属于当前阶段的运行，读者该怎么称呼它。
+   *
+   * 只有 Work 答得出这个问题：它要读 `AgentDelegated` 才知道某个 run_id 是一次
+   * 委派、被派出去的是谁，而 Chat 的一轮里连这个事件都不会有。所以这个函数在这里
+   * 而不在 `StepStream` 里——切段是机械的，命名不是。
+   *
+   * 认不出来就返回 `null`，由组件用 `运行 xxxxxxxx` 兜底。这一半不能省：一页没送到
+   * 的 `AgentDelegated` 会让 `readDelegations` 说不出这个子运行是谁，而那时候把它的
+   * 事件画成父运行干的，是这里唯一错的答案——那正是之前「子代理 X：」前缀在缺页时
+   * 会静默退化成的样子。
+   */
+  // 按 run_id 查节点。`runTree` 是根的数组，而这里要问的是某一个 run_id 的状态与
+  // 花费——摊平一次比在渲染里递归找便宜，也比让 `runTree.ts` 再导出一张表诚实：
+  // 那棵树的形状才是它的产物，索引是使用方的事。
+  const allRuns = flattenRuns(runTree);
+  const runsById = new Map(allRuns.map((node) => [node.runId, node] as const));
+
+  // 同一个图节点跑了第几次。
+  //
+  // 只数**根**运行：被委派出去的那些有自己的名字，而且它们的 `nodeId` 沿用父运行的
+  // ——把它们一起数会让「第 2 次运行」这句话指到一个子代理身上。按 `firstSequence`
+  // 排序而不是按 Map 的插入序：后者是事件到达的顺序，而重放一页会改变它。
+  const attemptByRun = new Map<string, number>();
+  const rootsByNode = new Map<string, RunNode[]>();
+  for (const node of allRuns) {
+    if (node.parentRunId !== null || node.nodeId === null) continue;
+    const held = rootsByNode.get(node.nodeId);
+    if (held === undefined) rootsByNode.set(node.nodeId, [node]);
+    else held.push(node);
+  }
+  for (const runs of rootsByNode.values()) {
+    if (runs.length < 2) continue;
+    [...runs]
+      .sort((a, b) => (a.firstSequence ?? 0) - (b.firstSequence ?? 0))
+      .forEach((node, index) => attemptByRun.set(node.runId, index + 1));
+  }
+
+  const runLabel = (runId: string): StreamRunLabel | null => {
+    const node = runsById.get(runId);
+    const spent = node === undefined ? 0 : totalTokens(node.spend);
+    const outcome = RUN_SECTION_OUTCOME[node?.status ?? "unknown"];
+    const note = spent > 0 ? { note: formatSpentTokens(spent) } : {};
+
+    const facts = delegations.get(runId);
+    if (facts !== undefined) {
+      return {
+        title: facts.definitionName ?? `运行 ${shortId(runId, 8)}`,
+        // 只有这一支敢说「子代理」：它读到了那条 `AgentDelegated`。
+        badge: "子代理",
+        outcome,
+        ...note,
+      };
+    }
+
+    // 不是委派，但页面认得它：同一个图节点的第二、第三次运行。实测
+    // `task_75cd1e0c` 的 `review` 节点就跑了两次（20 条 + 4 条事件），此前它们在
+    // 时间线上是一列 24 行，没有任何东西说过这是两回。它不是任何人的子代理，
+    // 所以不挂徽标——装框只说「这一段来自另一次运行」这一件事。
+    const attempt = attemptByRun.get(runId);
+    if (attempt !== undefined) {
+      return { title: `第 ${String(attempt)} 次运行`, outcome, ...note };
+    }
+
+    return null;
+  };
+
   return (
     <>
       <RunPanel
@@ -1730,13 +1853,12 @@ function TaskStepStream({
       />
       <StepStream
         ariaLabel="执行过程"
-      eventTitle={(event) =>
-        titleWithDelegation(eventTitle(event), event, delegations)
-      }
+        eventTitle={eventTitle}
         isKnownEvent={(event) => isKnownEventType(event.event_type)}
         meta={{ title: "运行记录", events: taskEvents }}
         onOpenArtifact={onOpenArtifact}
         running={!isSettledStatus(status)}
+        runLabel={runLabel}
         stages={stages}
       />
     </>
@@ -1989,8 +2111,7 @@ function TaskResult({
             <span>
               <strong>任务在等待迁移，没有在执行</strong>
               <small>
-                它是按这套部署跑不了的执行版本提交的，已经停在这里：等下去不会有进展，
-                重新提交同一个任务也不会，需要管理员先处理版本迁移。
+                它是按这套部署跑不了的执行版本提交的，已经停在这里：等下去不会有进展，重新提交同一个任务也不会，需要管理员先处理版本迁移。
               </small>
               {/* The server's own sentence, verbatim. It is English and it is
                   written for whoever has to act on it -- which is not the

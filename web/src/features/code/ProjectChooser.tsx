@@ -77,8 +77,7 @@ export function ProjectChooser({
       <div className="aw-code-chooser-head">
         <h1>在哪个文件夹里编码？</h1>
         <p>
-          Agent 读写的就是这个文件夹里的真实文件，产物也留在那里。
-          在终端里可以用 <code>agent-cli project use</code> 直接把当前目录变成项目。
+          Agent 读写的就是这个文件夹里的真实文件，产物也留在那里。在终端里可以用 <code>agent-cli project use</code> 直接把当前目录变成项目。
         </p>
       </div>
 

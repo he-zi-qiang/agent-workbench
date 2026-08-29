@@ -37,6 +37,15 @@ SERVER_NAME: Final[str] = "agent-workbench-computer"
 SERVER_VERSION: Final[str] = "1.0.0"
 MCP_PATH: Final[str] = "/mcp"
 HEALTH_PATH: Final[str] = "/health"
+#: The one route on this process that discloses something about a person.
+#:
+#: `/health` says how many screens this machine has. This one says what
+#: somebody approved and what they are looking at, so it is a different kind of
+#: route and gets a different name rather than more fields on that one
+#: (ADR-095 §5). Its only intended reader is a console on this machine, reached
+#: through `agent-api`'s read-only forward -- this process grows no CORS, so a
+#: browser cannot read it from any other origin.
+SESSION_PATH: Final[str] = "/session"
 
 LifespanState = dict[str, Any]
 
@@ -125,14 +134,16 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
             "is using a window that is not part of this task, and taking the "
             "screen from it is their decision rather than yours. Do not poll "
             "for that last one to clear.\n"
-            "KNOWN NOT TO WORK ON macOS AS THIS SERVER IS DEPLOYED (F-30). "
-            "Measured 2026-08-29 on macOS 26.5.2 with both screen grants "
-            "held: no available call changes the frontmost application from a "
-            'process of this shape, so this tool refuses with "was asked to '
-            'come to the front and did not" every time. It is described in '
-            "full here rather than quietly removed because the gate around it "
-            "is real and the refusal is honest -- but do not build a plan on "
-            "it reaching a second application, and do not retry it."
+            "A fourth refusal is about this server rather than about you: "
+            "macOS only lets a process change the front of the screen when it "
+            "has a bundle identity, a code signature, accessibility "
+            "permission, and a live main-thread run loop, and a deployment "
+            "missing any one of those is told which one. That is a thing to "
+            "report, not to retry.\n"
+            "Otherwise this works: measured 15/15 on 2026-08-29 against a "
+            "signed .app holding all four, including taking focus from the "
+            "window a person was typing in (ADR-092). Plan on reaching a "
+            "second application, and read the refusal when you do not."
         ),
         input_schema={
             "type": "object",
@@ -259,10 +270,19 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
 )
 
 
+def _build_gate(screen: ScreenPort, consent: ConsentAsker | None) -> ScreenGate:
+    return (
+        ScreenGate(screen=screen)
+        if consent is None
+        else ScreenGate(screen=screen, consent=consent)
+    )
+
+
 def create_server(
     screen: ScreenPort,
     *,
     consent: ConsentAsker | None = None,
+    gate: ScreenGate | None = None,
 ) -> Server[LifespanState]:
     """Build a server over one screen. The gate's grants live for its life.
 
@@ -275,11 +295,12 @@ def create_server(
     what ADR-076 replaced.
     """
 
-    gate = (
-        ScreenGate(screen=screen)
-        if consent is None
-        else ScreenGate(screen=screen, consent=consent)
-    )
+    # Accepted rather than always built here, so `create_app` can hold the same
+    # object the tools mutate and answer `/session` from it. Two gates would be
+    # two allowlists, and the panel would describe one while the model used the
+    # other -- the exact failure the console page refused to risk by showing
+    # nothing at all.
+    gate = gate if gate is not None else _build_gate(screen, consent)
 
     async def list_tools(
         context: ServerRequestContext[LifespanState],
@@ -454,14 +475,83 @@ def create_app(
     host: str = "127.0.0.1",
     screen: ScreenPort | None = None,
     consent: ConsentAsker | None = None,
+    gate: ScreenGate | None = None,
 ) -> Starlette:
-    """The loopback app. Builds the platform adapter unless one is supplied."""
+    """The loopback app. Builds the platform adapter unless one is supplied.
+
+    ``gate`` is accepted for the same reason ``screen`` and ``consent`` are:
+    the interesting property of this function is that **one** gate serves both
+    the tools and ``/session``, and a test cannot observe that if the only
+    instance is one this function keeps to itself.
+    """
 
     if screen is None:
         from agent_workbench.adapters.screen import for_this_platform
 
         screen = for_this_platform()
     resolved = screen
+    # Built here and handed to the server, so `/session` answers from the same
+    # object the tools mutate.
+    gate = gate if gate is not None else _build_gate(resolved, consent)
+
+    async def session(request: Request) -> JSONResponse:
+        """What this process has been allowed, and what it has done with it.
+
+        **For the person, and only reachable by them.** It names the frontmost
+        application whether or not anybody approved it -- which every refusal a
+        model reads deliberately withholds (ADR-095 §2). Those two are the same
+        rule with different readers: the window this describes is the one the
+        reader is sitting in front of, and a panel that would not say which one
+        it is would go quiet at exactly the moment a person needs to decide
+        whether to approve it.
+
+        `scope` says `process` rather than `session` and the word is load
+        bearing. `ScreenGate` holds one allowlist per **process**, not per MCP
+        session (known-gap F-19), so a panel captioned "this session" would be
+        the first place somebody read a session-scoped grant into existence.
+        """
+
+        del request
+        frontmost = resolved.frontmost()
+        return JSONResponse(
+            {
+                "service": SERVER_NAME,
+                # See the docstring: this is not the MCP session's list.
+                "scope": "process",
+                "granted": [
+                    {
+                        "bundle_id": held.application.bundle_id,
+                        "name": held.application.name,
+                        "tier": held.tier,
+                    }
+                    for held in gate.grants()
+                ],
+                "frontmost": {
+                    "bundle_id": frontmost.bundle_id,
+                    "name": frontmost.name,
+                    # Not "is it approved" as a separate lookup: the gate is the
+                    # only thing that decides that, and a second answer computed
+                    # here is a second answer that can disagree with it.
+                    "granted": gate.frontmost_grant() is not None,
+                },
+                "actions": [
+                    {
+                        "at": held.at.isoformat(),
+                        "action": held.action,
+                        "application": None
+                        if held.application is None
+                        else {
+                            "bundle_id": held.application.bundle_id,
+                            "name": held.application.name,
+                        },
+                        "allowed": held.allowed,
+                        "reason": held.reason,
+                        "detail": held.detail,
+                    }
+                    for held in gate.actions()
+                ],
+            }
+        )
 
     async def health(request: Request) -> JSONResponse:
         del request
@@ -476,12 +566,18 @@ def create_app(
             }
         )
 
-    return create_server(resolved, consent=consent).streamable_http_app(
+    return create_server(resolved, consent=consent, gate=gate).streamable_http_app(
         streamable_http_path=MCP_PATH,
         json_response=True,
         stateless_http=False,
         host=host,
-        custom_starlette_routes=[Route(HEALTH_PATH, endpoint=health, methods=["GET"])],
+        custom_starlette_routes=[
+            Route(HEALTH_PATH, endpoint=health, methods=["GET"]),
+            # GET only. This route reads; there is no shape of request to it
+            # that should change anything, and spelling that out here is
+            # cheaper than trusting that nobody adds a handler later.
+            Route(SESSION_PATH, endpoint=session, methods=["GET"]),
+        ],
     )
 
 

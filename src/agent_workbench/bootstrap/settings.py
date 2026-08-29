@@ -163,6 +163,41 @@ class ApiSettings(StrictModel):
     shutdown_grace_seconds: int = Field(default=30, ge=1, le=600)
     max_control_request_body_bytes: int = Field(default=2_097_152, ge=1024)
     document_upload_transport: Literal["artifact_data_plane"] = "artifact_data_plane"
+    #: Where the screen-control server's read-only route is, for the console's
+    #: panel to be forwarded to (ADR-095 §5).
+    #:
+    #: **A leaf under an existing section rather than a `[computer]` section of
+    #: its own**, and that is a rule rather than a preference: a new section
+    #: bumps `config_schema_version`, a leaf with a default under an existing
+    #: one does not (`docs/configuration.md` §2). One URL is not worth a
+    #: version.
+    #:
+    #: It lives under `[api]` because it describes **this process**: where it
+    #: looks for that server. The server itself is declared in `[[mcp.servers]]`
+    #: by the profiles that give a Worker screen tools, and that declaration is
+    #: about a different question -- which tools enter a Task's envelope.
+    #:
+    #: Loopback by construction, checked below. A screen server on another host
+    #: would mean this process forwarding a description of somebody else's
+    #: screen, which is not a thing this route is for.
+    computer_session_url: str = "http://127.0.0.1:8768/session"
+
+    @field_validator("computer_session_url")
+    @classmethod
+    def refuse_a_screen_server_on_another_host(cls, value: str) -> str:
+        # The same argument as `host` below, from the other side. That one
+        # refuses to *serve* anywhere a caller could name themselves; this one
+        # refuses to *read* a screen that is not this machine's. A URL pointing
+        # elsewhere would make this route a description of somebody else's
+        # display, forwarded by a process whose own identity story is two
+        # request headers.
+        host = urlsplit(value).hostname
+        if host is None or not is_loopback_bind_address(host):
+            raise ValueError(
+                "api.computer_session_url must point at this machine; "
+                f"{value!r} does not"
+            )
+        return value
 
     @field_validator("host")
     @classmethod

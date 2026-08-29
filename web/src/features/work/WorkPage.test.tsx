@@ -23,6 +23,7 @@ import {
   getDocumentPdf,
   getDocumentPreview,
   getTask,
+  getTaskCapabilities,
   getTaskTimeline,
   listKnowledgeBases,
   listTasks,
@@ -48,6 +49,7 @@ vi.mock("../../api/client", async () => {
     getDocumentPdf: vi.fn(),
     getDocumentPreview: vi.fn(),
     getTask: vi.fn(),
+    getTaskCapabilities: vi.fn(),
     getTaskTimeline: vi.fn(),
     listKnowledgeBases: vi.fn(),
     listTasks: vi.fn(),
@@ -85,6 +87,7 @@ describe("WorkPage task submission", () => {
     vi.mocked(getDocumentPdf).mockReset();
     vi.mocked(getDocumentPreview).mockReset();
     vi.mocked(getTask).mockReset();
+    vi.mocked(getTaskCapabilities).mockReset();
     vi.mocked(getTaskTimeline).mockReset();
     vi.mocked(listKnowledgeBases).mockReset();
     vi.mocked(listTasks).mockReset();
@@ -97,6 +100,17 @@ describe("WorkPage task submission", () => {
     );
     vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
     vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
+    // 委派默认关，和 `config.default.toml` 一致：绝大多数用例不该因为一块
+    // 说明文字而多出一段编队的散文。开着的那一版由需要它的用例自己覆盖。
+    vi.mocked(getTaskCapabilities).mockResolvedValue({
+      delegation: {
+        enabled: false,
+        max_delegation_depth: 1,
+        max_children_per_run: 1,
+        max_parallel_child_invocations: 1,
+        max_tokens_per_agent_invocation: 0,
+      },
+    });
     vi.mocked(getApproval).mockResolvedValue(approval("pending", 0));
     vi.mocked(getArtifactJson).mockResolvedValue(taskInput(false));
     vi.mocked(getArtifactText).mockResolvedValue({
@@ -421,6 +435,66 @@ describe("WorkPage task submission", () => {
     const input = vi.mocked(createTask).mock.calls[0]?.[1];
     expect(input?.graph).toBe("general");
     expect(input?.intent?.graph_decided_by).toBe("user");
+  });
+
+  it("tells the submitter what this deployment allows a task to delegate", async () => {
+    // The numbers are per profile: `config.default.toml` ships delegation off
+    // with four children, `config.code-local.toml` and `config.demo-local.toml`
+    // ship it on with six. A form that hard-coded either would describe some
+    // other deployment on two of the three, which is why this is fetched at
+    // all rather than written into the page.
+    vi.mocked(getTaskCapabilities).mockResolvedValue({
+      delegation: {
+        enabled: true,
+        max_delegation_depth: 1,
+        max_children_per_run: 6,
+        max_parallel_child_invocations: 2,
+        max_tokens_per_agent_invocation: 120_000,
+      },
+    });
+    const user = userEvent.setup();
+    renderWorkPage();
+
+    await user.click(screen.getByText("高级设置"));
+
+    const marker = await screen.findByText(/允许委派/);
+    const scope = marker.closest(".aw-delegation-scope") as HTMLElement;
+    // The framing matters as much as the numbers: these are the ceilings on
+    // what the model may choose, not a set of knobs the submitter is filling
+    // in. A form that read as the latter would promise something the control
+    // plane cannot do -- the graph is frozen at submission and delegation
+    // happens inside one node's run.
+    expect(scope).toHaveTextContent("由模型在运行途中");
+    expect(scope).toHaveTextContent("6 个");
+    expect(scope).toHaveTextContent("2 个");
+    expect(scope).toHaveTextContent("120k");
+  });
+
+  it("says a deployment does not delegate instead of showing its empty ceilings", async () => {
+    // With delegation off the server sends 1 for the tree ceilings and 0 for
+    // the token one -- "this tree is not built", not "this tree has one slot
+    // left". Rendering them as limits would describe a deployment configured
+    // to the bone. The default mock in `beforeEach` is this shape.
+    const user = userEvent.setup();
+    renderWorkPage();
+
+    await user.click(screen.getByText("高级设置"));
+
+    expect(await screen.findByText(/没有开委派/)).toBeInTheDocument();
+    expect(screen.queryByText(/一次运行最多派/)).toBeNull();
+  });
+
+  it("says it could not read the delegation setting rather than staying silent", async () => {
+    // Silence would mean the same thing as "this deployment does not
+    // delegate", which is the ambiguity `RunPanel`'s disappearing act was
+    // criticised for. One line is cheaper than that.
+    vi.mocked(getTaskCapabilities).mockRejectedValue(new Error("network down"));
+    const user = userEvent.setup();
+    renderWorkPage();
+
+    await user.click(screen.getByText("高级设置"));
+
+    expect(await screen.findByText(/读不到这台部署的委派设置/)).toBeInTheDocument();
   });
 
   it("an explicit report choice overrides the verdict's", async () => {
@@ -1833,6 +1907,51 @@ describe("WorkPage 停住的任务与已用预算", () => {
     expect(invocationLabel.parentElement).toHaveTextContent("7 次");
   });
 
+  it("puts a sub-agent's events in one foldable block instead of prefixing every row", async () => {
+    // 之前这里是给每一行标题加「子代理 analyst：」。读者真正要问的是「那个子代理
+    // 干完了没有、烧了多少」——那是一行的问题，而前缀把它摊成了九行。
+    vi.mocked(getTask).mockResolvedValue(parkedTask());
+    vi.mocked(getTaskTimeline).mockResolvedValue(delegatedTimeline());
+    const { container } = renderWorkPage("/work/task_parked");
+
+    await screen.findByRole("heading", { name: "整理这批资料，比较三个方案" });
+    await waitFor(() => {
+      expect(container.querySelectorAll(".aw-run-section")).toHaveLength(1);
+    });
+    const block = container.querySelector(".aw-run-section") as HTMLElement;
+    expect(block.textContent).toContain("analyst");
+    // 花了多少：36.1k = 30000 + 6100，和 RunPanel 用的是同一个加法。
+    expect(block.textContent).toContain("36.1k");
+    // 前缀真的没了。
+    expect(container.textContent).not.toContain("子代理 analyst：");
+  });
+
+  it("keeps the parent's own steps outside the block", async () => {
+    vi.mocked(getTask).mockResolvedValue(parkedTask());
+    vi.mocked(getTaskTimeline).mockResolvedValue(delegatedTimeline());
+    const { container } = renderWorkPage("/work/task_parked");
+
+    await screen.findByRole("heading", { name: "整理这批资料，比较三个方案" });
+    await waitFor(() => {
+      expect(container.querySelector(".aw-run-section")).not.toBeNull();
+    });
+    const block = container.querySelector(".aw-run-section") as HTMLElement;
+    // 父运行在委派之后写的那条不在框里——按 run_id 归堆会把它挪到子运行前面去，
+    // 而这条流存在的理由就是顺序。
+    expect(block.textContent).not.toContain("综合下来是这样");
+    expect(container.textContent).toContain("综合下来是这样");
+  });
+
+  it("draws no block at all for a task that never delegated", async () => {
+    // 绝大多数任务是这一种，它们不该因为这一层多出任何东西。
+    vi.mocked(getTask).mockResolvedValue(parkedTask());
+    vi.mocked(getTaskTimeline).mockResolvedValue(parkedTimeline());
+    const { container } = renderWorkPage("/work/task_parked");
+
+    await screen.findByRole("heading", { name: "整理这批资料，比较三个方案" });
+    expect(container.querySelector(".aw-run-section")).toBeNull();
+  });
+
   it("says nothing about invocations a task never made", async () => {
     vi.mocked(getTask).mockResolvedValue(parkedTask());
     renderWorkPage("/work/task_parked");
@@ -1952,6 +2071,95 @@ function parkedTimeline() {
         payload: { kind: "ModelCompleted", text: "先看资料。" },
         sequence: 2,
         graph_node_id: "understand",
+      },
+    ],
+  };
+}
+
+/**
+ * 一个派过一次子代理的任务的时间线：父运行做事 → 委派 → 子运行做完 → 父运行收尾。
+ *
+ * 交错是刻意的：子运行的事件夹在父运行两段之间，而它们共用同一个 `graph_node_id`
+ * （`adapters/delegation.py` 造子 scope 时只换 `run_id`）。这正是一条平的流读不动
+ * 的形状，也是分段这一层存在的理由。
+ */
+function delegatedTimeline() {
+  const base = {
+    schema_version: 1,
+    stream_id: "stream_parked",
+    durability: "durable" as const,
+    task_id: "task_parked",
+    parent_event_id: null,
+    graph_node_id: "work",
+  };
+  const at = (n: number) => `2026-08-02T12:0${String(n)}:00Z`;
+  return {
+    task_id: "task_parked",
+    cursor: null,
+    skipped_sequences: [],
+    events: [
+      {
+        ...base,
+        run_id: "run_parent",
+        event_id: "e1",
+        event_type: "ContextBuilt",
+        timestamp: at(1),
+        payload: { kind: "ContextBuilt" },
+        sequence: 1,
+      },
+      {
+        ...base,
+        run_id: "run_parent",
+        event_id: "e2",
+        event_type: "AgentDelegated",
+        timestamp: at(2),
+        payload: {
+          kind: "AgentDelegated",
+          child_agent_run_id: "run_child",
+          profile_name: "analyst",
+        },
+        sequence: 2,
+      },
+      {
+        ...base,
+        run_id: "run_child",
+        event_id: "e3",
+        event_type: "RunStarted",
+        timestamp: at(3),
+        payload: { kind: "RunStarted", run_kind: "task", model_profile: "main" },
+        sequence: 3,
+      },
+      {
+        ...base,
+        run_id: "run_child",
+        event_id: "e4",
+        event_type: "RunCompleted",
+        timestamp: at(4),
+        payload: {
+          kind: "RunCompleted",
+          stop_reason: "completed",
+          usage: {
+            steps: 3,
+            tool_calls: 0,
+            tokens: {
+              input_tokens: 30_000,
+              output_tokens: 6_100,
+              cache_read_tokens: 0,
+              cache_write_tokens: 0,
+            },
+            cost_micro_usd: 0,
+          },
+        },
+        sequence: 4,
+      },
+      {
+        ...base,
+        run_id: "run_parent",
+        event_id: "e5",
+        event_type: "ModelCompleted",
+        timestamp: at(5),
+        payload: { kind: "ModelCompleted", text: "综合下来是这样。" },
+        sequence: 5,
       },
     ],
   };

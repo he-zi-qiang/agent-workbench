@@ -119,8 +119,7 @@ export function MarkdownPreview({
         // is in the file and not on screen. It also says why 渲染 is refused,
         // because a disabled control with no reason reads as a broken one.
         <p className="aw-page-note">
-          只显示了开头一部分，完整内容请下载。半份文档渲染出来会是它从来不是的
-          样子，所以这里只给源码。
+          只显示了开头一部分，完整内容请下载。半份文档渲染出来会是它从来不是的样子，所以这里只给源码。
         </p>
       ) : null}
     </>

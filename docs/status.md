@@ -27,6 +27,405 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-29（未合并，分支 `feat/delegation-visibility-and-two-dead-capabilities`，第五十一批）：人可以看自己的屏幕，模型不可以（ADR-095）——而在写这份 ADR 时发现这条规则三处只成立两处
+
+使用者定了一件事：computer use 的面板**可以**说出一个没被批准的前台应用的名字。
+为写下这个决定去核代码，查出这条规则今天并不成立。
+
+### 1. 一次被拒的点击就能把它读出来
+
+「不说出没被批准的前台应用叫什么」在代码里出现三次：
+
+| 位置 | 点名吗 |
+| --- | --- |
+| `activation_would_take_the_screen` | **不**，且有 `assert "Mail" not in message` |
+| `gate.frontmost_grant` | **不区分**「有个没批准的」和「什么都没有」 |
+| `gate._require_frontmost`（每一次点击/打字/滚动） | **点名** |
+
+实测（`FakeScreen`，已批准 Notes，人切到 Mail）：
+
+```
+[点击被拒]  "Mail" is not in this session's approved list, …
+[激活被拒]  "Notes" was not brought to the front: the application that is
+            frontmost right now is not in this session's approved list.
+[读名单]    frontmost_grant() → None
+```
+
+而激活那条的注释把不点名的理由写得很清楚：那会把每次被拒变成一次「这个人在干什么」的
+读数，是一个比被拒的那件事**严格更大**的能力。那个能力可以白拿——一次注定被拒的
+`left_click(0, 0)` 就够，而且比激活更便宜：激活至少要先有一个被批准的目标。
+
+不是有人写错了一行，是**一条规则只在被单独论证过的地方成立**。ADR-091 §2.2 论证的是
+激活那一条；`_require_frontmost` 的文案早于它，没人回头看第三条路。测试的分布也印证。
+
+修法：文案搬进 `domain/computer.py` 成为第八条纯函数 `frontmost_is_not_approved`，
+而它**只收 action、收不到 application**——不点名因此是结构上的，不是记得住的。这也解释
+了它为什么会漏：另外七条都在那个模块里、论证跟着 docstring 走，只有这一条写在 gate 里，
+没有人拿它和那些论证对过。只改「不在名单里」这一支；tier 不允许的那一支照旧点名，
+因为那个应用是这个人亲手批准的，不说反而让「终端不能打字」无法排查。
+
+回归测试两条，其中一条扫**全部八个工具**，顺带钉住了 ADR-076 的窗口过滤：那一轮唯一
+真的执行了的动作是截图，而它的 capture 只点名了被批准的那个应用。
+
+### 2. 门禁开始记得自己被要求做过什么
+
+此前整个包零日志零事件，所以「最近的动作」不是缺一个接口，是一条数据都没有。
+`ScreenGate` 上加有界内存环（默认 200），与 grant 同寿命——ADR-070 拒绝把批准持久化，
+而一份跨重启的动作日志是同一类东西换个名字。
+
+两个实现决定值得记：
+
+- **记录器包住整个公开方法**，不坐在 `_require_frontmost` 里。检查 1–3 不是一次尝试
+  唯一的结束方式（坐标可以不在它声明的那块屏上，字符串可以在放行之后只送到一半），
+  写在门禁处的记录会把这两种都叫成 allowed。
+- **`reason` 用拒绝文案自己的第一句**，不是这里发明的分类。给十五个 raise 点各打一个码，
+  会把分类摊到十五处，还会让面板的词和模型的词漂开。这一条推翻了 ADR-095 §7 表里
+  「过了哪几道」的原始说法，ADR 已就地更正。
+
+### 3. 转发，而不是 CORS
+
+浏览器要读到 8768，两条路。CORS 决定的是**哪些网页可以读这个响应**——列表配错，这个人
+打开的任意网站就能读出他批准了什么、此刻在用什么，而控制台的来源是变的。转发没有这一
+档：同源策略就够了，不需要谁记得配对什么。
+
+代价正面接住：控制平面成了一个能移动光标的进程的客户端。让它不构成放宽的是
+`tests/architecture/test_computer_forward_is_read_only.py` 四条——只声明一条路由且是
+GET、不发出 GET 以外的任何请求、八个屏幕工具的名字一个都不出现、上游地址只从配置读。
+实测把一条 `POST /click` 加进去，三条同时变红。
+
+配置放在既有 `[api]` 段下：新段抬 schema 版本，既有段下带默认值的新叶子不抬。一个 URL
+不值一个版本。`api.*` 不在 task snapshot 白名单里，`run_semantics_template_revision`
+一位没动。
+
+### 4. 这一页从「只讲规则」变成「这台机器此刻 + 规则」
+
+没变的是当初小心的那件事，它现在表现为**三种状态而不是两种**：服务器没在跑（常态，
+不是错误）、跑着但名单是空、跑着且有内容。把前两种画成同一片空白，就是当初拒绝画假
+名单要防的那件事换了个形状。
+
+`ComputerPage.test.tsx` 的开头此前写着「这一页不读任何接口，所以没有东西可以 mock、
+也不需要 provider——这是这一页的性质，不是这里的偷懒」。那句话不成立了，所以它被**引用
+而不是删除**：这是这一页上第三次有一句话活得比它描述的东西久，而这一页自己的 docblock
+讲的正是这件事。
+
+写这块面板时被上一批自己加的 `jsxChineseWrap` 门禁抓了一次，两处折行中文。那条门禁就
+是为这个存在的。
+
+### 证据（2026-08-29）
+
+```
+ruff format --check .（612 files）/ ruff check . / pyright 0 errors     通过
+agent-config-check --profile development                                ok
+uv run pytest -q                                    3160 passed, 787 skipped
+uv run pytest（带真 PostgreSQL + Qdrant）           3935 passed, 12 skipped
+uv run pytest contracts/persistence/api/vector      1327 passed, 2 skipped
+eslint / tsc -b / vite build                                            通过
+vitest run                                          719 passed（上一批 716）
+```
+
+**真机（本机，非 CI）**：一个跑在真 8768 上、但屏幕是假的服务器——不碰这台机器的真实
+屏幕与 TCC 授权。批准备忘录+终端 → 截图、点击、按键 → 往终端打字被 tier 拒 → 切到终端
+点击 → 人切到邮件后点击被第 3 道拒。面板画出 6 行、前台标着「邮件 不在名单里」、最后
+一行带着模型读到的那句英文原句；停掉 8768 之后面板变成「屏幕控制服务器没有在跑」，
+和空名单不是同一个样子。
+
+### 明确没做，以及为什么
+
+**F-19 没修，但措辞收窄了。** grant 仍然是进程级的；改动的是界面不再说「这次会话」而说
+「这个进程」——一块写着「会话」的面板会是第一个把会话级 grant 读进存在的地方。
+
+**没有碰这台机器的真实屏幕。** `scripts/dev.sh computer-server` 会构建并安装一个签名
+`.app` 到 `~/Applications` 并触发系统授权弹窗，那不是本批该擅自做的事。所以 darwin
+适配器那一段没有本批的证据——CI 也拿不到。
+
+---
+## 2026-08-29（未合并，分支 `main`，第五十批）：一个子代理干的活是一行，展开才是九行（ADR-094）——以及真数据两次改掉了我的设计
+
+上一批把这件事记成「不做」，理由是「`StepStream` 是 Work 与 Chat 共用的，而
+`components/` 下**没有** `StepStream.test.tsx`，改一个没有渲染测试的共用组件应该先有
+那张网」。网是可以自己织的——那不是不做的理由，是做之前的第一步。
+
+### 1. 先织网：这个共用组件此前一条渲染测试都没有
+
+`stepGroups`、`activityPresentation`、`runTree` 各有自己的纯函数测试，组件本身一个
+断言都没有。所以「改共用组件」在这个仓库里一直被估得很贵，而贵的原因不是它难，是
+**改完没有任何东西会告诉你它还对不对**。
+
+`StepStream.test.tsx` 先钉它**现在的**行为，11 条：阶段怎么排、跑着时只有活动阶段
+展开、停下来一个都不展开、一次工具调用折成一行、单事件组不套第二层折叠、进行中的组
+自己展开、进去几条出来还是几条、实时那一句跑着才有、`meta` 那一折有事件才画、认不出
+的事件带 `is-unknown`。分段那一层的 14 条排在后面。
+
+写这 11 条时当场纠了自己一个错：第一版断言「折起来的时候那三条事件不在文档里」。
+原生 `<details>` 的子节点一直在 DOM 里，只是不显示——那条断言在一个把 `open` 写死成
+`true` 的实现上照样通过。改成断言 `open === false`。
+
+### 2. 真数据第一次改掉设计：并发的子代理不该被切成十块
+
+`runSections.ts` 第一版是纯连续分段，`run_id` 一变就切一段，谁也不合并，论证是
+「归堆会重写发生过的顺序」。
+
+然后拿 `task_75cd1e0c` 实测——C-08 关闭时跑出来的那次，四个 `analyst`、
+`max_parallel_child_invocations = 2`：
+
+```
+work 节点的事件按运行连成的段：
+P×15 → c1×1 → c2×1 → c1×1 → c2×1 → c1×2 → c3×1 → P×1 → c3×1 → P×1 → c2×2 → P×2 → c3×2 → P×16 → c4×4 → P×11
+
+连续分段（第一版）      子代理块 10，块内事件 [1,1,1,1,2,1,1,2,2,4]
+兄弟可跨、父运行是屏障   子代理块 7
+同一阶段内合并别人的运行  子代理块 4，块内事件 [4,4,4,4]
+```
+
+四个子代理各写了四条事件，而第一版把它们摊成十个一两条的小块（浏览器里数出来 11 个）。
+**并发的两个 agent 之间没有顺序可读**——c1 的第二步排在 c2 的第一步前面是调度器的产物。
+把它画成十个交替的块，是在暗示一场并不存在的对话。
+
+所以规则收窄成：只合并**不属于这个阶段自己**的运行，父运行的段一条不动。第一版论证要
+保护的那一半（父运行委派、等、拿到结果、接着做，这中间有真正的先后）原样保住。代价照
+直说：一个子代理块代表**一段时间**而不是一个瞬间。被跨过去的父运行事件也查了，是
+`delegate_agent` 这次工具调用自己的生命周期——关于这些子代理的记账。
+
+### 3. 真数据第二次改掉设计：那第五个块是同一个节点跑了两次
+
+合并之后还剩 5 块，第五块标着 `运行 run_…bab4`。查下来是 `review` 这个图节点**跑了
+两次**（20 条 + 4 条事件），两个都是根运行，谁也没被委派。
+
+「运行 run_…bab4」是真话，但读者拿它没办法。而页面其实答得出更好的：`runTree` 里同一个
+`nodeId` 下的根运行按 `firstSequence` 排一下就是第几次。现在它标 `第 2 次运行`，且
+**不挂「子代理」徽标**——它不是任何人的子代理。
+
+顺带说出了一件以前完全看不见的事：那个阶段的 24 行此前是一列平的，没有任何东西讲过它
+其实是两回。
+
+这一条也把徽标的归属改了：从组件写死「子代理」，改成 `StreamRunLabel.badge` 由调用方
+给。徽标是一句**断言**，而组件只知道「这一段的 run_id 和上一段不一样」。
+
+### 4. 删掉了「子代理 X：」前缀，并说清它被什么取代
+
+`delegations.ts` 的文件头当年写着这是替身：「Grouping the stream into foldable
+sub-agent sections would be better, and it means changing the shared step component
+every stage renders through.」现在那件事做了，所以 `titleWithDelegation` 连同它的四条
+测试一起删掉，文件头改写成「先加前缀、然后折叠」，并留下它**没有**变的那一半：只有
+Work 能把一个 `run_id` 变成名字，因为只有 Work 有 `AgentDelegated` 可读。
+
+前缀在缺页时会静默退化成「看起来是父运行干的」，而那是这里唯一错的答案。所以叫不出
+名字的段照样装框、用 `运行 xxxxxxxx` 兜底——这是取代前缀之后唯一不能丢的那半。
+
+### 5. 每一段各自分组，而不是先分组再切段
+
+`stepGroups` 的组 key 是 `tool:${tool_call_id}`，不含 `run_id`。先分组再切段的话，父子
+产出同号 `tool_call_id` 时会被折成一个组，然后整个组只能落在某一段里——**一次调用凭空
+归给了另一个 agent**。阶段那一行的摘要也从同一批组算，否则一个阶段可以显示「3 步」而
+展开之后是 4 行。两条都有测试。
+
+### 证据（2026-08-29）
+
+```
+eslint . --max-warnings 0      通过
+tsc -b                          通过
+vitest run                      716 passed（上一批 678，本批新增 38）
+vite build                      通过
+uv run pytest -q                3136 passed, 787 skipped（后端未触及）
+```
+
+**真数据（本机，非 CI）**：`AW_API__PORT=8011 scripts/dev.sh code-api --web-dir web/dist`，
+浏览器打开 `task_75cd1e0c`（四个 analyst + `review` 跑了两次）：
+
+| | 块数 |
+| --- | --- |
+| 第一版（纯连续分段） | 11 |
+| 合并别人的运行之后 | 5 |
+| 其中 4 块是 analyst，各带自己的花费 | 19.3k / 19.2k / 19.9k / 941 |
+| 第 5 块 | `第 2 次运行`，1.5k，不挂徽标 |
+
+前缀 `子代理 analyst：` 在页面上已经查不到。
+
+### 明确没做，以及为什么
+
+**没有把 `RunPanel` 改成常驻。** 它现在「没委派且没收窄就返回 null」是被论证过的，
+known-gaps C-06 第三项也论证过为什么不因为流有缺口就强制渲染。推翻两段写下来的论证
+需要它自己的 ADR。
+
+**没有做 computer use 的实时面板。** 缺的不是接口是三个决定，其中一个（面板可不可以
+说出一个**没被批准**的前台应用的名字）不是工程问题——代码里三处用同一条理由拒绝点名，
+而「人看自己的屏幕」和「模型读别人的屏幕」的区别今天一行都没写下来。
+
+---
+## 2026-08-29（未合并，分支 `main`，第四十九批）：一个发出去就是死的能力，一个从来没有生产者的字段，一条控制台读不到的配置（ADR-093），和一个我自己虚报了 3.4 倍的数
+
+这一批的起点是一份「多 agent 派遣 / computer use」的界面重构稿，但最值钱的几件都不是
+界面：它们是在为落地那份稿子而通读这两条链路时被查出来的**既有缺陷**。其中一件（§7）
+还包括一次我自己的更正——我先用正则量了一个数，把它写进了文档，然后发现它虚报了 3.4 倍。
+
+### 1. `activate_application` 在自己的工具描述里写着「别用这个工具」
+
+`62d64d9` 是关闭 F-30 的那次提交——ADR-092 让 computer MCP 服务器变成签名的 `.app`，
+`activate_application` 实测 15/15。**同一次提交**在这个工具的 description 里留下了：
+
+> KNOWN NOT TO WORK ON macOS AS THIS SERVER IS DEPLOYED (F-30) … do not build a
+> plan on it reaching a second application, and do not retry it.
+
+工具描述是模型在动手之前**唯一**会读的地方。所以这个能力从落地那一刻起就对它唯一的
+读者不可达，而且没有任何东西会因此变红：`tests/apps/test_computer_mcp_server.py` 测的
+是名字与行为，一条都不碰描述。
+
+改法是重写那一段：三种拒绝照旧（不在名单、没开着、前台不是被批准的），第四种改成
+「服务器进程自己没资格」并说明缺哪一条会被点名，然后把 ADR-092 的 15/15 写进去。
+回归钉成**禁令而不是当前措辞**——`test_no_tool_tells_the_model_the_tool_does_not_work`
+扫全部八个工具的 description，不许出现 `KNOWN NOT TO WORK` 或 `do not retry it`。措辞
+以后可以随便改，这条断言不许再回来。
+
+### 2. `ToolCompleted.truncated` 从被写下那天起没有任何生产者
+
+`domain/events.py` 里这个字段的注释一直在描述一套机制：`output_bytes` 说大小，
+`truncated` 说「工具自己剪没剪」。全仓 `grep truncated=` 的结果里**一个赋值都没有**，
+它永远是 `false`。
+
+后果不是理论上的。`delegate_agent` 在 `max_report_chars`（8000）处剪子代理的报告，
+并把 `[report truncated at 8000 characters]` 写在正文**末尾**——给父模型读的，它读
+`content` 不读元数据。而事件日志那一份要过 `bounded()` 的 4096 上限，于是那个结尾标记
+必然第一个掉。控制台拿到的正好是那个标记被加进来要防的东西：**一段没有任何记号的
+半截报告**。
+
+更糟的一条在失败路径上：它把 `clip_report` 的第二个返回值用 `[0]` 丢掉了，所以一个
+既失败又超长的子代理，连正文里的标记都没有。
+
+改法：`ToolResult` 新增 `truncated`（成功与失败两个构造器都收），`delegate_agent`
+两条路径都置位并共用一个 `_marked()`（两处此前已经漂开了），`tool_gateway` 把它抄到
+`ToolCompleted` 上——**刻意不放在 `record_step_inputs` 之后**，理由和旁边的
+`workspace_writes` 一样：一个说「答案被剪了」的布尔不泄露那个开关要挡的任何正文，
+而它最有用的地方恰恰是预览关着、没人看得见那一刀的部署。
+
+`tests/domain/golden/domain_v1.json` 跟着加一行——那份 golden 就是为了让这种形状变化
+必须是有意的。
+
+### 3. 控制台读不到这台部署的委派范围（ADR-093）
+
+四个数在每个 profile 里都不一样（default 关/4，code-local 与 demo-local 开/6），而
+`apps/api` 的 13 个 router 里没有任何一条能读到它们。提交表单于是只有两条路：写死一份
+（在这个仓库自己的两个 console profile 上都是错的），或者什么都不说。
+
+新增 `GET /v1/tasks/capabilities`。ADR-093 记的是那条线：它答**下一个**任务会被允许
+什么，不答任何一个已经存在的任务——后者跑在自己 `run_semantics_snapshot` 里那份冻结的
+配置上（ADR-040），把今天的数摆在它旁边是在报一个它从没见过的数。同一份 ADR 里写了
+三件明确不做：不投影子代理目录（这个进程装的是 `CODE_SUB_AGENTS`，答出来会是
+`explorer`，而问的人在填一个 Task 的表单）、不投影
+`max_agent_invocation_attempts_per_task`、不做提交级覆盖。
+
+前端 `DelegationScopeNote` 挂在「高级设置」里，只读、没有输入框——派给谁、派几个是模型
+在运行途中决定的，一个能填的框会承诺一件这个控制平面做不到的事。三种状态各说各的话：
+开着列四个数、关着只说一句「没有开委派」（**不渲染**服务端在关闭时送的 1/1/1/0，那是
+「这棵树不存在」不是「只剩一格」）、读不到就说读不到。
+
+### 4. 顺带：两条读路径第一次有了 HTTP 层证据
+
+`GET /v1/tasks/{id}/runs` 与 `timeline?run_id=` 从 ADR-083 起就在，证据却只到
+`tests/application` 与 `tests/contracts`——而它们正是一条深链进子代理的链接会落到的两条
+路由。新 `tests/api/test_task_run_tree_api.py` 四例，真 PostgreSQL、真委派事件：树的嵌套、
+收窄只回那一个运行、没人写过的 run_id 回空页而不是 404（状态码不能变成一种「这个运行
+存不存在」的问法）、收窄页的 `skipped_sequences` 恒空。
+
+### 5. 顺带：`runTree` 一直没读事件自带的时间戳
+
+`EventEnvelope.timestamp` 是必填字段，而这个模块只读 `sequence` 就停了。所以「这个子
+代理跑了多久」不是缺数据，是没人问过。新增 `startedAt` / `lastEventAt` 与
+`runDurationMs`，面板上多一列跨度。被宣告、还没开口的孩子**没有**时间（它的位置来自父
+运行的 `AgentDelegated`，拿那条事件当孩子的开始时间等于把它的寿命从被点名那一刻算起）；
+只有一条事件的运行是「没有跨度」而不是「零跨度」；解不出来的时间戳当作没有，不当 NaN。
+
+同一处还接上了 `toolCount`——它被算出来过，一行都没画。只对**被委派出来**的运行判空：
+子代理的工具是「它自己的上限 ∩ 这个任务的授权信封」，交出来可能是空的，
+`application/sub_agents.py` 把这条写成有意的取舍，而它在界面上此前完全看不见（运行开始、
+一个工具都不调、报告说没找到）。图节点没有工具是正常的，所以不挂这句话。
+
+### 6. 两处口径不实，当场修
+
+- `ComputerPage.tsx` 的 docblock 写着门禁住在「a stdio MCP server that a Worker speaks
+  to directly」。**两半都不成立**：传输是回环上的 Streamable HTTP（8768），而且
+  `config.computer-local.toml` 是唯一声明这台服务器的 profile，它把工具标成
+  `retryable_effects = false`，八个名字进不了任何 Task 的授权信封——**这个仓库发布的
+  profile 里，没有任何 Task 握过屏幕工具**。这让那一页「说明机制、不监控会话」的理由
+  比原来更强，所以改完把它写进去了。
+- `known-gaps.md` C-06 引的 `web/src/features/work/runTree.ts` 不存在，实际在
+  `web/src/components/runTree.ts`（它被 Work 与 Code 共用）。
+
+### 证据（2026-08-29）
+
+```
+uv run agent-config-check --profile development     ok
+uv run ruff format --check . / ruff check .          通过（609 files）
+uv run pyright                                       0 errors
+uv run pytest -q                                     3136 passed, 787 skipped
+uv run pytest tests/contracts tests/persistence tests/api tests/vector
+  （真 PostgreSQL 5433 + Qdrant 6333）              1323 passed, 2 skipped
+eslint . --max-warnings 0                            通过
+tsc -b                                               通过
+vitest run                                           678 passed（基线 662，新增 16）
+vite build                                           通过
+```
+
+**联调（本机，非 CI）**：`AW_API__PORT=8011 scripts/dev.sh code-api --web-dir web/dist`，
+浏览器打开 `/ui/#/work` → 高级设置，读到的是 `config.code-local.toml` 的真实值
+（开、6 个、并发 2、120k、深度 1）；同一条端点在默认 profile 上答 `enabled: false`。
+CI 拿不到这一段。
+
+### 7. JSX 中文段落的折行空格：先虚报了 3.4 倍，再扫掉（F-31，当天登记当天关闭）
+
+JSX 把源码里的换行加缩进折成**一个空格**——对英文是对的，对中文是错的。
+实测 `/ui/#/computer` 的 DOM，12 段的 `textContent` 里真的多了 U+0020。
+
+**先说错的那一步。** 第一版用正则扫「行尾是汉字、下一行行首也是汉字」，报出
+**186 处、21 个文件**，并且这个数已经被我写进了 `known-gaps.md` 的 F-31 与本文档。
+它是错的，虚报 3.4 倍。改用 TypeScript 的 parser、只看 `JsxText` 节点**内部**的换行
+之后是 **54 处、11 个文件**。三类假阳性：多行中文注释（渲染不到）、模板字符串
+（换行是真换行，并起来会改变输出）、以及
+
+```tsx
+<strong>标题</strong>
+说明文字
+```
+
+这一类——那个换行落在文本节点的**开头**，JSX 会把它整段删掉，一个空格都不注入。正则
+分不出「节点内部的换行」和「节点开头的换行」，而这两者一个是缺陷、一个完全正常。按这个
+仓库的分类，一个被写进文档的错数字本身就是口径不实，所以两处都已更正。
+
+**清扫**分三批（`ComputerPage` 28 / `Evaluation`+`Knowledge` 18 / 其余 8 个文件各 1），
+每批各跑一次 eslint + tsc + vitest。codemod 由 parser 给替换位置，并校验一条不变量：
+**去掉所有空白后文件必须逐字节不变**——任何非空白的变化都说明脚本出了错。
+
+修法是把两行并成一行，不是 `{""}`：后者能达到同样效果，但会在每一段面向读者的中文里
+插一个需要解释的记号。代价是几行很长的散文行（最长 265 字符）——`eslint` 没有行宽规则，
+而一段散文占一行在 diff 里比七行各加五个字符更好读。
+
+**留了门禁**：`web/src/test/jsxChineseWrap.test.ts` 四条——全仓为零、认得出正样本、
+`</strong>` 那一类负样本、注释与模板字符串那一类负样本。后三条测的是**检测器本身**：
+只有第一条的话，一个什么都不报的实现能让它永远绿。它读源码走 vite 的
+`import.meta.glob("?raw")` 而不是 `node:fs`，因为给 app 的 tsconfig 加 node 类型等于让
+业务代码也能 `import fs`。
+
+**复验**（浏览器，构建产物挂在 `--web-dir` 上）：七个页面 chat/work/code/knowledge/
+evaluation/computer/system 逐个取 DOM，源码带来的空格 **0 处**（computer 从 12 → 0）。
+`#/chat` 与 `#/work` 各剩 2 与 4 处，全部在**用户自己输入的**会话标题与任务目标里
+（「请你操控电脑打开终端 输入date命令」），不是源码。
+
+### 明确没做，以及为什么
+
+**没有做「按运行分组的可折叠时间线」**，尽管 `delegations.ts` 自己的文件头就写着那才是
+更好的做法。它要动 Work 与 Chat 共用的 `StepStream`，而 `components/` 下**没有**
+`StepStream.test.tsx`——改一个没有渲染测试的共用组件，应该先有那张网，那是它自己的一批。
+
+**没有把 `RunPanel` 改成常驻。** 现在「没委派且没收窄就返回 null」是被论证过的
+（那时它只是在重复上面的阶段列表），C-06 第三项也论证过为什么不因为流有缺口就强制渲染。
+推翻两段写下来的论证需要它自己的 ADR，不该夹在这一批里。
+
+**没有做 computer use 的实时面板。** 它缺的不是接口而是三个决定：grant 挂在进程上还是
+MCP 会话上（F-19）、门禁通过与拒绝目前**零日志**所以「最近动作过了哪几道」没有数据源、
+以及面板可不可以说出一个**没被批准**的前台应用的名字——代码里三处用同一条理由拒绝点名，
+而「人看自己的屏幕」和「模型读别人的屏幕」的区别今天一行都没写下来。
+
+
+---
 ## 2026-08-29（未合并，分支 `claude/quirky-mclean-11c658`，第四十八批）：一句从写下那天起就是假的话（口径不实，当场修）
 
 上一批我在 ADR-092 和提交信息里都写了「ADR-070 §3 那句『全仓只有一个文件带 pyright

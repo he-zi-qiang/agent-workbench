@@ -1143,6 +1143,17 @@ class ToolGateway:
                 output_preview=(
                     bounded(result.content) if self._record_step_inputs else ""
                 ),
+                # Carried, not computed. The comment above has claimed since it
+                # was written that `truncated` describes "the tool's own
+                # clipping" while `output_bytes` describes size -- and until
+                # this line the field had no producer anywhere in the
+                # repository, so every ToolCompleted ever emitted said `false`.
+                # Deliberately *not* behind `record_step_inputs`, on the same
+                # argument as `workspace_writes` two fields down: a boolean
+                # saying an answer was cut discloses none of the text the flag
+                # exists to withhold, and it is most needed exactly where
+                # previews are off and nobody can see the cut for themselves.
+                truncated=result.truncated,
                 artifact=result.artifact,
                 # Deliberately *not* behind the flag one line above, and the
                 # asymmetry is the decision (ADR-063). That flag governs

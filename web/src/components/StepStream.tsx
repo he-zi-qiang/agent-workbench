@@ -13,6 +13,8 @@ import { CommandTrace } from "./CommandTrace";
 import { LiveActivity } from "./LiveActivity";
 import { StepDisclosure } from "./StepDisclosure";
 import { presentActivity } from "./activityPresentation";
+import { foldForeignRuns, hasForeignRun, splitByRun } from "./runSections";
+import { shortId } from "./ui";
 import {
   groupSteps,
   summariseGroups,
@@ -64,6 +66,30 @@ export interface StreamStage {
 export interface StreamMeta {
   title: string;
   events: EventEnvelope[];
+}
+
+/**
+ * 一个**不属于这个阶段自己**的运行，在读者眼里叫什么、处在什么状态。
+ *
+ * 由调用方给，不由这个组件推。切段是机械的（`event.run_id` 变了就是换人了），
+ * 命名不是：只有 Work 知道「这个 run_id 是一次委派，被派出去的是 analyst」——那要
+ * 读 `AgentDelegated`，而 Chat 连这个事件都不会有。这条分工和文件头那句
+ * 「阶段由调用方推导，这里只负责画」是同一条。
+ */
+export interface StreamRunLabel {
+  title: string;
+  /**
+   * 标题前面那枚小标签，没有就不画。
+   *
+   * 由调用方给，因为它是一句**断言**：「子代理」这三个字说的是这个运行被谁派出去
+   * 的，而组件只知道「这一段的 run_id 和上一段不一样」。同一个图节点跑第二次也
+   * 会走到这里，而它不是任何人的子代理。
+   */
+  badge?: string;
+  /** 决定这一段折不折、以及它的颜色。 */
+  outcome: "running" | "done" | "failed" | "unknown";
+  /** 右侧一行小字：花了多少、几条事件。没有就不画。 */
+  note?: string;
 }
 
 /**
@@ -142,6 +168,7 @@ export function StepStream({
   meta,
   onOpenArtifact,
   running,
+  runLabel,
   stages,
 }: {
   ariaLabel: string;
@@ -152,6 +179,17 @@ export function StepStream({
   meta?: StreamMeta;
   onOpenArtifact?: (artifact: ArtifactRef) => void;
   running: boolean;
+  /**
+   * 怎么称呼一个不属于这个阶段自己的运行，`null` 表示叫不出名字。
+   *
+   * 不给这个 prop（Chat 就不给）时，一个阶段的事件照旧一次性交给 `groupSteps`，
+   * 渲染结果与从前逐字节相同——Chat 的一轮里只有一个运行，分段对它是无意义的一层。
+   *
+   * 给了、而且这个阶段里真的出现了第二个运行时，才按段渲染。返回 `null` 的段也
+   * 照样装进框里，用 `运行 xxxxxxxx` 兜底：一页缺失的 `AgentDelegated` 会让页面
+   * 说不出这个子运行叫什么，而那时候最不该做的事是把它的事件画成父运行干的。
+   */
+  runLabel?: (runId: string) => StreamRunLabel | null;
   stages: StreamStage[];
 }) {
   const step = (event: EventEnvelope) => (
@@ -251,6 +289,89 @@ export function StepStream({
   // The same vocabulary the rows use, so a digest cannot read half-translated:
   // without this a stage summarised as "RunStarted · 模型作答 · RunCompleted".
   const groupsOf = (events: EventEnvelope[]) => groupSteps(events, eventTitle);
+
+  /**
+   * 一个阶段的内容：要么照旧一列步骤，要么按运行切成几段。
+   *
+   * 切段的两个前提都要成立：调用方给了 `runLabel`（Chat 不给），并且这个阶段里
+   * 真的出现了第二个运行。都不成立时走的是从前那一行代码，结果逐字节相同。
+   *
+   * **每段各自调 `groupSteps`，而不是先分组再按组切段。** 组的 key 是
+   * `tool:${tool_call_id}`，不含 run_id；父子两个运行如果产出同号的 tool_call_id，
+   * 先分组会把它们折成一个组，然后这个组只能落在某一段里——一次调用凭空归给了
+   * 另一个 agent。逐段分组时这件事不可能发生。
+   */
+  /**
+   * 一个阶段分完段之后的样子：要按段画的那几段，或者 `null` 表示照旧一列画。
+   *
+   * 摘要和正文都从这里取，所以那句 `summariseGroups` 数的是和正文里同一批组。
+   * 分开算的话，摘要走「父子合在一起分组」、正文走「逐段分组」，两边对 tool_call_id
+   * 撞号的处理不同，一个阶段可以显示「3 步」而展开之后是 4 行。
+   */
+  const sectionsOf = (events: EventEnvelope[]) => {
+    if (runLabel === undefined) return null;
+    const sections = splitByRun(events);
+    // 先切再并：切是机械的，并只动别人的运行。并发的两个子代理在事件层面交错，
+    // 只切不并会把四个子代理摊成十个一两条事件的小块——那是调度器的痕迹，不是
+    // 任何人做过的决定，见 `runSections.ts` 里的实测数字。
+    return hasForeignRun(sections) ? foldForeignRuns(sections) : null;
+  };
+
+  const stageBody = (
+    events: EventEnvelope[],
+    sections: ReturnType<typeof sectionsOf>,
+  ) => {
+    if (sections === null) {
+      return <ol className="aw-stream-events">{groupsOf(events).map(groupStep)}</ol>;
+    }
+    return (
+      <ol className="aw-stream-events">
+        {sections.map((section, index) => {
+          const groups = groupsOf(section.events);
+          if (section.own) {
+            return groups.map(groupStep);
+          }
+          const label = runLabel?.(section.runId) ?? null;
+          // 叫不出名字也要装进框里。这是这一层取代「子代理 X：」前缀之后唯一
+          // 不能丢的那半：`readDelegations` 读不到这一页的 `AgentDelegated` 时
+          // 说不出这个运行是谁，而把它的事件画成父运行干的是这里唯一错的答案。
+          const title = label?.title ?? `运行 ${shortId(section.runId, 8)}`;
+          const outcome = label?.outcome ?? "unknown";
+          return (
+            // key 带上序号：同一个子运行被穿插两次就是两段，而它们的 runId 相同。
+            <li key={`${section.runId}#${String(index)}`}>
+              <details
+                className={`aw-run-section is-${outcome}`}
+                open={outcome === "running" ? true : undefined}
+              >
+                <summary className="aw-run-section-head">
+                  <ChevronRight
+                    aria-hidden="true"
+                    className="aw-step-caret"
+                    size={13}
+                  />
+                  {/* 徽标是调用方给的，因为它是一句断言。叫不出名字的那一段
+                      什么都不挂：它只知道「这些事件来自另一个运行」，而那可能是
+                      一次委派，也可能是这一页没收到的别的什么。 */}
+                  {label?.badge === undefined ? null : (
+                    <span className="aw-run-section-badge">{label.badge}</span>
+                  )}
+                  <span className="aw-run-section-title">{title}</span>
+                  <span className="aw-run-section-count">
+                    {summariseGroups(groups)}
+                  </span>
+                  {label?.note === undefined ? null : (
+                    <span className="aw-run-section-note">{label.note}</span>
+                  )}
+                </summary>
+                <ol className="aw-stream-events">{groups.map(groupStep)}</ol>
+              </details>
+            </li>
+          );
+        })}
+      </ol>
+    );
+  };
   const activeStage = stages.find((stage) => stage.state === "active");
   const activeGroups = activeStage === undefined ? [] : groupsOf(activeStage.events);
   const activeGroup =
@@ -284,7 +405,11 @@ export function StepStream({
       )}
       <ol className="aw-stream-steps">
         {stages.map((stage) => {
-          const groups = groupsOf(stage.events);
+          const sections = sectionsOf(stage.events);
+          const groups =
+            sections === null
+              ? groupsOf(stage.events)
+              : sections.flatMap((section) => groupsOf(section.events));
           return (
           <li className={`aw-stream-state is-${stage.state}`} key={stage.id}>
             <StreamMarker state={stage.state} />
@@ -326,7 +451,7 @@ export function StepStream({
                   )}
                   <span className="aw-stream-note">{stage.note}</span>
                 </summary>
-                <ol className="aw-stream-events">{groups.map(groupStep)}</ol>
+                {stageBody(stage.events, sections)}
               </details>
             )}
           </li>

@@ -179,6 +179,28 @@ class ToolResult(VersionedModel):
     project_writes: tuple[ProjectRelativePath, ...] = ()
     error: ErrorInfo | None = None
     duration_ms: int | None = Field(default=None, ge=0)
+    #: Whether the tool cut its own output before handing it over.
+    #:
+    #: `ToolCompleted.truncated` has said it means exactly this since the event
+    #: was written -- "``output_bytes`` stays the truth about size, and
+    #: ``truncated`` about the tool's own clipping" -- and until now **nothing
+    #: in this repository ever set it**. The field existed, defaulted to
+    #: ``False``, and described a mechanism with no producer.
+    #:
+    #: The consequence was not theoretical. ``delegate_agent`` clips a
+    #: sub-agent's report at ``max_report_chars`` and marks the cut *in the
+    #: report's own text*, at the end, because the parent model reads the text
+    #: and not this metadata. But the event log's copy goes through
+    #: ``bounded()`` at 4096 characters, and an 8000-character report's closing
+    #: marker is the first thing that falls off -- so a console watching a
+    #: delegating Task was shown a half report with the one sign of the cut
+    #: removed, which is the precise failure the marker was added to prevent.
+    #:
+    #: A field rather than a longer ``content``: the marker in the text is for
+    #: the model, this is for anything that has to *branch* on the fact, and a
+    #: reader that had to regex English prose out of a preview to find out
+    #: would be guessing.
+    truncated: bool = False
 
     @model_validator(mode="after")
     def validate_status_and_error(self) -> ToolResult:
@@ -199,6 +221,7 @@ class ToolResult(VersionedModel):
         workspace_write_refs: tuple[ArtifactRef, ...] = (),
         project_writes: tuple[ProjectRelativePath, ...] = (),
         duration_ms: int | None = None,
+        truncated: bool = False,
     ) -> ToolResult:
         return cls(
             tool_call_id=call.tool_call_id,
@@ -210,6 +233,7 @@ class ToolResult(VersionedModel):
             workspace_write_refs=workspace_write_refs,
             project_writes=project_writes,
             duration_ms=duration_ms,
+            truncated=truncated,
         )
 
     @classmethod
@@ -220,6 +244,7 @@ class ToolResult(VersionedModel):
         *,
         content: str = "",
         duration_ms: int | None = None,
+        truncated: bool = False,
     ) -> ToolResult:
         return cls(
             tool_call_id=call.tool_call_id,
@@ -228,6 +253,7 @@ class ToolResult(VersionedModel):
             content=content,
             error=error,
             duration_ms=duration_ms,
+            truncated=truncated,
         )
 
     @classmethod

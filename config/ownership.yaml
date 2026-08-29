@@ -72,6 +72,13 @@
       ]
     },
     {
+      "owner": "apps.api.computer_panel",
+      "lifecycle": "live",
+      "fields": [
+        "api.computer_session_url"
+      ]
+    },
+    {
       "owner": "application.chat.recovery",
       "lifecycle": "live",
       "fields": [

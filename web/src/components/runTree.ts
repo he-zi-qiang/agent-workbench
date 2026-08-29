@@ -127,6 +127,28 @@ export interface RunNode {
   pausedFor: string | null;
   /** How many of this run's events this page holds. The progress denominator. */
   eventCount: number;
+  /**
+   * When this run's first event was recorded, and its most recent one.
+   *
+   * Read from `EventEnvelope.timestamp`, which has been required on every
+   * event since the envelope was written and which this module read from
+   * **nothing** until now -- it took `sequence` for position and stopped
+   * there. So "how long did that sub-agent take" was not missing data; it was
+   * data nobody had asked for.
+   *
+   * ISO strings rather than `Date`, deliberately: they arrive as strings, this
+   * is a read model, and parsing here would mean every consumer that only
+   * wants to render one re-serialises it. The one consumer that needs
+   * arithmetic does the parsing, once, in `runDurationMs` below.
+   *
+   * `null` for a run this page holds no events of -- an announced child whose
+   * own first event has not arrived. Its parent's `AgentDelegated` gives it a
+   * position (`firstSequence`) but not a time, because the delegation is the
+   * parent's event and stamping the child with it would date the child from
+   * the moment it was *named*.
+   */
+  startedAt: string | null;
+  lastEventAt: string | null;
   /** What it is doing now, or the last thing it did. */
   latestEventType: string | null;
   firstSequence: number | null;
@@ -224,6 +246,31 @@ function isEmpty(spend: RunSpend): boolean {
 }
 
 /**
+ * How long this run has been on the stream, in milliseconds.
+ *
+ * First event to last event, and that is **not** the same as how long the run
+ * took: a run that is still going has a last event that is merely the most
+ * recent one, so this grows only when the run writes. That is the honest
+ * reading available from a page that holds events and no clock, and it is the
+ * one worth showing -- a delegated run whose span stopped growing five minutes
+ * ago is the case a reader is scanning for.
+ *
+ * `null` where there is nothing to measure: a child that was announced and has
+ * written nothing, or one whose only event is its first.
+ */
+export function runDurationMs(node: RunNode): number | null {
+  if (node.startedAt === null || node.lastEventAt === null) return null;
+  const from = Date.parse(node.startedAt);
+  const to = Date.parse(node.lastEventAt);
+  // `Date.parse` answers NaN for anything it does not recognise, and NaN
+  // arithmetic propagates silently into a rendered "NaN 秒". A timestamp this
+  // page could not parse is a fact it does not have.
+  if (Number.isNaN(from) || Number.isNaN(to)) return null;
+  const span = to - from;
+  return span > 0 ? span : null;
+}
+
+/**
  * Every token a run moved, counting each of them once.
  *
  * The same arithmetic as `domain/runs.py::TokenUsage.total`, and it has to be:
@@ -267,6 +314,8 @@ export function buildRunTree(events: readonly EventEnvelope[]): RunNode[] {
         stopReason: null,
         pausedFor: null,
         eventCount: 0,
+        startedAt: null,
+        lastEventAt: null,
         latestEventType: null,
         firstSequence: null,
         attested: false,
@@ -282,6 +331,13 @@ export function buildRunTree(events: readonly EventEnvelope[]): RunNode[] {
     const own = accumulator(event.run_id);
     own.eventCount += 1;
     own.latestEventType = event.event_type;
+    // First one wins for the start, every one wins for the last. Not
+    // `Math.min`/`Math.max` over parsed dates: events arrive in `sequence`
+    // order and the log stamps them from one clock, so the order they are read
+    // in *is* the order they happened in -- comparing timestamps would only
+    // introduce a way to disagree with `sequence`.
+    if (own.startedAt === null) own.startedAt = event.timestamp;
+    own.lastEventAt = event.timestamp;
     // Whatever this run is now doing, it is no longer waiting. Cleared for
     // every event rather than only for the ones that mean "resumed": the set
     // of events that can follow a pause is open, and a stale 等待批准 on a row
@@ -411,6 +467,8 @@ export function buildRunTree(events: readonly EventEnvelope[]): RunNode[] {
       stopReason: held.stopReason,
       pausedFor: held.pausedFor,
       eventCount: held.eventCount,
+      startedAt: held.startedAt,
+      lastEventAt: held.lastEventAt,
       latestEventType: held.latestEventType,
       firstSequence: held.firstSequence,
       children,

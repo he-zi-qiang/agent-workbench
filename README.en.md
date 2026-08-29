@@ -437,31 +437,38 @@ are in [the ten-minute version](docs/HIGHLIGHTS.md).
 These mirror [the ten-minute version, §2](docs/HIGHLIGHTS.md), which is the
 source of record. Four environments; they may be cited separately and **must not
 be added together** — the two backend environments have overlapping skip sets.
-The backend rows were measured at
-`worktree-feat+multi-agent-orchestration@13ed6c2` (2026-08-26, baseline
-`main@414f37c`); that hash records *the tree the measurement ran on*, not "the
-current baseline".
+All four rows were measured on a working branch off `main`, 2026-08-29 (after the
+ADR-093, 094 and 095 batches, not yet merged); that note records *the tree the
+measurement ran on*, not "the current baseline".
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local) | `3793 passed / 12 skipped / 3 failed` |
-| Backend, no external services (local) | `3026 passed / 782 skipped` |
-| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`) | `1190 passed / 1 skipped` |
-| Frontend Vitest (local, 37 files) | `580 passed` |
+| Backend, real PostgreSQL + Qdrant (local) | `3935 passed / 12 skipped` |
+| Backend, no external services (local) | `3160 passed / 787 skipped` |
+| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`) | `1327 passed / 2 skipped` |
+| Frontend Vitest (local, 43 files) | `719 passed` |
 
-**Those 3 failures in the first row need saying, because an all-green table is
-the easiest kind to be misled by.** All three are in
-`tests/e2e/test_worker_process_crash_recovery.py`, and the symptom is that the
+**The first row used to carry 3 failures; it no longer does, and why they went
+is worth writing down.** All three were in
+`tests/e2e/test_worker_process_crash_recovery.py`, and the symptom was that the
 v1 graph's `approval` node never ran (`approval ran 0 times`) while the Task
-still succeeded. They were **not** introduced by this branch: the same three are
-red on the untouched baseline `414f37c`, checked in a separate worktree — that
-is a control, not an inference. CI's service-backed job runs only the four
-directories named above, and `tests/e2e` **is not among them**, which is how
-they can be red without anyone being told. Recorded as open.
+still succeeded. Re-measured 2026-08-29: the whole file is **11 passed**.
 
-**The fourth row changed its meaning, which also needs saying.** The old table
+The difference is not in the code, it is an environment variable. Those tests
+need `AGENT_WORKBENCH_TEST_DSN`, and the earlier record was taken in a shell
+that did not set it — `tests/e2e` does not skip itself when it is missing the
+way `tests/contracts` does. With the DSN they are the 11 in the first row above;
+without it the whole file skips, and it is inside the 787 skips of the second
+row. So the earlier "the same three are red on the untouched baseline" was
+true — both runs were missing the same variable.
+
+CI's service-backed job still runs only the four directories named above, and
+`tests/e2e` **is not among them**: they could be red without anyone being told.
+Today they are not red.
+
+**The fourth row is a local number, not a CI one.** An older table
 cited a CI number there, because the node `24.14.0` pinned in `engines` cannot be
-installed on this machine. The 580 above is a **local** run: the system node is
+installed on this machine. The 719 above is a **local** run: the system node is
 now `26.7.0`, and with `NODE_OPTIONS=--no-experimental-webstorage` the whole
 suite passes (26.x defines `localStorage` as a global getter evaluating to
 `undefined`, and jsdom installs its own only when that global is *absent*). So it
@@ -469,14 +476,16 @@ is a local number and must not be cited as a CI one; Playwright was not run this
 time, and the old `4 passed` has been dropped rather than left in to pad the
 table.
 
-Static gates all pass: `ruff format --check .` (605 files), `ruff check .`,
+Static gates all pass: `ruff format --check .` (609 files), `ruff check .`,
 Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
-`--max-warnings 0`, `tsc -b`, production build. Config schema `1.18`; single
+`--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 76,210 lines of Python, 92,532 lines of tests, 38,928 lines of frontend
-TypeScript; 81 ADRs (11 in the baseline document plus 70 written during
-implementation, numbered 0012–0083 without gaps). **More test code than source
+Scale: 78,773 lines of Python, 95,090 lines of tests, 43,121 lines of frontend
+TypeScript; 82 files under `docs/adr/`, numbered 0012–0095 — **with gaps**: 0050
+and 0053 were claimed by the block reservation of 2026-08-13 and have never been
+written (the last section of `docs/adr/README.md` records that reservation). This
+line previously read "0012–0083 without gaps"; both halves were wrong. **More test code than source
 code is deliberate** — the rule is that a test must first be shown red, and **a
 test without a control case does not count**.
 

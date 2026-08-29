@@ -45,6 +45,52 @@ MAX_CANCEL_REASON_LENGTH = 1024
 MAX_RUN_ID_LENGTH = 128
 
 
+class DelegationCapabilities(BaseModel):
+    """The ceilings a delegating run in this process would be given.
+
+    Every field is answerable here because every one of them is decided
+    *inside a single run, in a single process* -- which is the same line
+    ``bootstrap/projections.py::MultiAgentConfig`` draws when it explains why
+    ``max_agent_invocation_attempts_per_task`` is not projected: that ceiling
+    is read out of a Task row's own snapshot, and a second source of it one
+    import away from the code that enforces it is worse than not having one.
+
+    **What is deliberately absent is which sub-agents exist.** The catalogue is
+    not configuration; it is chosen in code by what a process *is*
+    (``DEFAULT_SUB_AGENTS`` for a Task Worker, ``CODE_SUB_AGENTS`` for this
+    one, then narrowed to the tools that process actually registered). So this
+    API process holds the Code answer, and returning it under a Task endpoint
+    would name ``explorer`` to a console asking what a Task may delegate to.
+    An empty field would be a lie of a different shape; the answer is that this
+    process is not the one that knows, and the console does not get to render a
+    list nobody can stand behind.
+    """
+
+    #: False also covers "this projection cannot say", and the route folds the
+    #: two on purpose -- see its docstring.
+    enabled: bool = False
+    #: 1 rather than 0 for the three ceilings below, because they describe a
+    #: tree that is *not* built rather than one with no room in it, and 0 would
+    #: read as a delegating deployment that had run out.
+    max_delegation_depth: int = 1
+    max_children_per_run: int = 1
+    max_parallel_child_invocations: int = 1
+    #: 0 only where delegation is off: there is no invocation to bound.
+    max_tokens_per_agent_invocation: int = 0
+
+
+class TaskCapabilitiesResponse(BaseModel):
+    """What this process will let a Task do, as of now.
+
+    A response object around one field, because the question "what may a Task
+    do here" is not going to stay a question about delegation alone, and a
+    console that unwrapped it would have to change shape the first time it is
+    not.
+    """
+
+    delegation: DelegationCapabilities
+
+
 class InvalidTaskCursorError(ValueError):
     """A Task timeline cursor could not be decoded safely."""
 
@@ -320,6 +366,48 @@ async def list_tasks(
     return TaskListResponse(
         tasks=tuple(_view(task) for task in page.tasks),
         cursor=None if page.cursor is None else page.cursor.encode(),
+    )
+
+
+@router.get("/capabilities", response_model=TaskCapabilitiesResponse)
+async def capabilities(request: Request) -> TaskCapabilitiesResponse:
+    """What this deployment will let the *next* Task do about delegation.
+
+    Literal path, so it is declared above ``/{task_id}`` for the same reason
+    ``/triage`` is: FastAPI matches in declaration order, and below it this
+    would be a Task whose id is the word "capabilities".
+
+    Answered from ``dependencies_of(request).config``, the projection this
+    process loaded at start, which is what makes this the *next* Task's answer
+    and not any existing one's. A Task already submitted froze the whole
+    ``[multi_agent]`` section into its own ``run_semantics_snapshot`` and runs
+    under that; a console that read this to describe a running Task would be
+    reporting today's configuration as though it were that Task's.
+    """
+
+    dependencies = dependencies_of(request)
+    # Resolved and discarded, exactly as `triage` above does. Nothing here is
+    # anybody's data -- it is this process's own configuration -- but an
+    # endpoint that skipped the identity adapter would be the one route in the
+    # module a caller could reach without one, and that is a property worth
+    # not having.
+    dependencies.principals.resolve(request)
+    multi_agent = dependencies.config.multi_agent
+    if multi_agent is None or not multi_agent.delegation_enabled:
+        # One shape for two causes, deliberately. A projection that predates
+        # ADR-089 and a deployment that turned delegation off are the same
+        # answer to the only question this endpoint is asked -- may the next
+        # Task delegate -- and a console offered a third state would have to
+        # invent what to show for it.
+        return TaskCapabilitiesResponse(delegation=DelegationCapabilities())
+    return TaskCapabilitiesResponse(
+        delegation=DelegationCapabilities(
+            enabled=True,
+            max_delegation_depth=multi_agent.max_delegation_depth,
+            max_children_per_run=multi_agent.max_children_per_run,
+            max_parallel_child_invocations=multi_agent.max_parallel_child_invocations,
+            max_tokens_per_agent_invocation=multi_agent.max_tokens_per_agent_invocation,
+        )
     )
 
 

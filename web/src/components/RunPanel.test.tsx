@@ -31,6 +31,10 @@ function event(
   eventType: string,
   sequence: number,
   payload: Record<string, unknown> = {},
+  // Optional and last, so every call written before spans were rendered keeps
+  // the single fixed instant it was written against -- and therefore keeps
+  // showing no duration at all, which is what those tests are about.
+  timestamp = "2026-08-26T12:00:00Z",
 ): EventEnvelope {
   return {
     schema_version: 1,
@@ -39,7 +43,7 @@ function event(
     run_id: runId,
     event_type: eventType,
     durability: "durable",
-    timestamp: "2026-08-26T12:00:00Z",
+    timestamp,
     payload: { kind: eventType, ...payload },
     sequence,
     task_id: "task_1",
@@ -478,5 +482,84 @@ describe("面板握着退出收窄的唯一出口，所以收窄活着时它必�
     ]);
 
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("跑了多久，和一副空工具箱", () => {
+  it("一个运行的跨度画在它自己那一行上", () => {
+    draw(
+      delegated(
+        event(CHILD, "RunStarted", 3, { budget: budget() }, "2026-08-26T12:00:00Z"),
+        event(
+          CHILD,
+          "RunCompleted",
+          4,
+          { usage: usage(10, 10), stop_reason: "completed" },
+          "2026-08-26T12:00:45Z",
+        ),
+      ),
+    );
+
+    expect(screen.getByText("45 秒")).toBeInTheDocument();
+  });
+
+  it("只有一条事件的运行不说自己跑了 0 秒", () => {
+    // 「0 秒」读起来是一个什么都没干的运行。它其实是一个还没写到第二条事件的
+    // 运行，而这两件事读者要做的下一步不一样。
+    draw(delegated(event(CHILD, "RunStarted", 3, { budget: budget() })));
+
+    expect(screen.queryByText(/秒$/)).toBeNull();
+    expect(screen.queryByText(/分钟$/)).toBeNull();
+  });
+
+  it("拿到空工具箱的子代理会说出来", () => {
+    // 子代理的工具是「它自己的上限 ∩ 这个任务的授权信封」。一个没有授权知识库
+    // 检索的任务照样派得出 researcher，只是它拿着空工具集回来说什么都查不到——
+    // `application/sub_agents.py` 把这条写成了有意的取舍，而它此前在界面上完全
+    // 看不见：运行开始、一个工具都不调、报告说没找到。
+    draw(
+      delegated(
+        event(CHILD, "RunStarted", 3, { budget: budget(), tool_names: [] }),
+      ),
+    );
+
+    expect(screen.getByText(/一件工具都没拿到/)).toBeInTheDocument();
+  });
+
+  it("拿到了工具的子代理不说这句话", () => {
+    draw(
+      delegated(
+        event(CHILD, "RunStarted", 3, {
+          budget: budget(),
+          tool_names: ["knowledge_search"],
+        }),
+      ),
+    );
+
+    expect(screen.queryByText(/一件工具都没拿到/)).toBeNull();
+  });
+
+  it("没有工具的图节点不算空工具箱", () => {
+    // `understand` 这类节点本来就只是一次模型调用。给它们挂上同一句警告，等于
+    // 在每个从没委派过的任务里给多数行加一条不该有的告警——所以这句话只对
+    // 被委派出来的运行成立。
+    // 手写而不是用 `delegated()`：那个 helper 已经替父运行发过一条 RunStarted，
+    // 再补一条同序号的会变成「同一个运行说了两次」——测试还是绿的，但绿的原因
+    // 就不再是这条规则了。
+    draw([
+      event(PARENT, "RunStarted", 1, { budget: budget(), tool_names: [] }),
+      event(PARENT, "AgentDelegated", 2, {
+        child_agent_run_id: CHILD,
+        profile_name: "analyst",
+      }),
+      event(CHILD, "RunStarted", 3, {
+        budget: budget(),
+        tool_names: ["knowledge_search"],
+      }),
+    ]);
+
+    // 父运行确实拿到了空工具箱——这一条在，上面那句断言才不是空跑。
+    expect(screen.getByText("work")).toBeInTheDocument();
+    expect(screen.queryByText(/一件工具都没拿到/)).toBeNull();
   });
 });

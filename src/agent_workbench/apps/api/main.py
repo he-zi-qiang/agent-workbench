@@ -51,6 +51,7 @@ from agent_workbench.apps.api.routes import (
     artifacts,
     chat,
     code,
+    computer,
     evaluation,
     events,
     health,
@@ -256,6 +257,13 @@ def create_app(
     app.include_router(projects.membership_router)
     app.include_router(tasks.router)
     app.include_router(approvals.router)
+    # Unconditional, like `evaluation` and for the same reason: this process can
+    # always *try*, and "that server is not running" is a real answer rather
+    # than a degraded one. Gating it on a flag would make a console that got a
+    # 404 unable to tell "this deployment does not do screens" from "the screen
+    # server is not up right now", which are the two states ADR-095 §7 says must
+    # stay distinguishable.
+    app.include_router(computer.router)
     if dependencies.serves_search:
         # Mounted without a model. Retrieval is the half of chat that needs
         # no provider, and a deployment that has indexed documents should be

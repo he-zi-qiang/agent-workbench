@@ -13,8 +13,10 @@ from agent_workbench.adapters.memory.screen import (
     SECOND_DISPLAY,
     FakeScreen,
 )
+from agent_workbench.apps.computer_mcp.gate import ScreenGate
 from agent_workbench.apps.computer_mcp.server import (
     HEALTH_PATH,
+    SESSION_PATH,
     create_app,
     create_server,
 )
@@ -97,6 +99,101 @@ def test_the_tools_are_the_eight_this_server_declares() -> None:
         "key",
         "scroll",
     ]
+
+
+def test_no_tool_tells_the_model_the_tool_does_not_work() -> None:
+    """The regression for a capability that shipped dead.
+
+    ADR-092 made ``activate_application`` work -- 15/15 on real hardware, in
+    the same commit that closed F-30. That commit left the tool's own
+    description saying "KNOWN NOT TO WORK ON macOS AS THIS SERVER IS DEPLOYED
+    (F-30) ... do not retry it". A tool description is the only thing a model
+    reads before deciding whether to call something, so for as long as that
+    paragraph stood, the capability was unreachable by the one reader it was
+    built for, and nothing anywhere failed.
+
+    Pinned as a prohibition rather than as the current wording, because the
+    wording should stay free to change and the claim must not come back. It
+    covers every tool: the next one to be fixed will have the same paragraph in
+    the same place.
+    """
+
+    async def scenario() -> Any:
+        async with Client(
+            create_server(FakeScreen(), consent=_approves),
+            cache=None,
+            raise_exceptions=True,
+        ) as client:
+            return await client.list_tools()
+
+    for tool in asyncio.run(scenario()).tools:
+        description = tool.description or ""
+        assert "KNOWN NOT TO WORK" not in description, tool.name
+        assert "do not retry it" not in description, tool.name
+
+
+def test_no_tool_ever_names_an_unapproved_frontmost_application() -> None:
+    """ADR-095 §2's boundary, checked instead of declared.
+
+    The person may be told what is in front of them -- it is their screen, and
+    the console panel is where that goes. A model may not: naming it turns a
+    refusal into a reading of what the person is doing, which is the thing the
+    allowlist exists to prevent.
+
+    That rule held in two of its three places until ADR-095: the activation
+    refusal withheld the name and had a test, the read tool refused to
+    distinguish "something unapproved is in front" from "nothing is", and
+    `_require_frontmost` -- the path every click, keystroke and scroll takes --
+    printed it. So the whole rule was worth exactly one refused click.
+
+    This drives **every tool this server declares** against a session where the
+    person has approved Notes and then switched to Mail, and asserts the name
+    and the bundle id appear in none of the answers. Per-tool assertions would
+    have to be remembered for the ninth tool; this one fails on its own.
+    """
+
+    screen = FakeScreen(focus=MAIL, installed=(NOTES, TERMINAL, MAIL))
+    results = _session(
+        screen,
+        [
+            _ask(NOTES),
+            # Every tool the server declares, in the order it declares them.
+            # `request_access` is the first call above.
+            ("list_granted_applications", {}),
+            ("activate_application", {"bundle_id": NOTES.bundle_id}),
+            ("screenshot", {}),
+            ("left_click", {"x": 10, "y": 10}),
+            ("type", {"text": "hello"}),
+            ("key", {"key": "return"}),
+            ("scroll", {"x": 10, "y": 10, "direction": "down"}),
+        ],
+    )
+
+    spoken = "\n".join(
+        block.text
+        for result in results
+        for block in result.content
+        if getattr(block, "text", None) is not None
+    )
+    assert "Mail" not in spoken
+    assert MAIL.bundle_id not in spoken
+    # The control: this session really was in the situation the rule is about,
+    # so the assertions above are not passing because nothing was refused.
+    assert "not in this session's approved list" in spoken
+
+    # No input was synthesized -- click, type, key and scroll were all refused
+    # by check 3 before reaching the port.
+    kinds = [kind for kind, _ in screen.actions]
+    assert kinds == ["capture"]
+    # And the one action that *did* happen is the one the tier table
+    # deliberately does not gate: a screenshot is what approving is *for*. It
+    # is still narrowed by the allowlist rather than by a tier -- the capture
+    # names only the approved application, so the window the person switched to
+    # is not in the picture either (ADR-076). Asserted here because this test
+    # is about what a model can learn, and a screenshot that included Mail
+    # would answer the same question the refusals above refuse to.
+    [(_, capture_args)] = screen.actions
+    assert capture_args[-1] == (NOTES.bundle_id,)
 
 
 def test_granting_answers_with_the_tier_each_application_got() -> None:
@@ -435,3 +532,149 @@ def test_activation_will_not_start_an_application_that_is_not_running() -> None:
     assert activated.is_error is True
     assert "is not running" in activated.content[0].text
     assert "Ask the person to open it" in activated.content[0].text
+
+
+# --- the one route that describes a person ----------------------------------
+
+
+def test_the_session_route_says_what_was_approved_and_what_is_in_front() -> None:
+    """The panel's whole data source (ADR-095 §5).
+
+    `/health` says how many screens this machine has; this one says what a
+    person approved and what they are looking at. Different kind of route,
+    different name.
+    """
+
+    screen = FakeScreen(focus=NOTES, installed=(NOTES, TERMINAL))
+    app = create_app(host="testserver", screen=screen, consent=_approves)
+    with TestClient(app) as client:  # pyright: ignore[reportArgumentType]
+        empty = client.get(SESSION_PATH).json()
+
+    assert empty["granted"] == []
+    # Named even before anything is approved: an empty allowlist and an
+    # unreadable machine are different states, and the console has to be able
+    # to tell them apart.
+    assert empty["frontmost"]["name"] == "Notes"
+    assert empty["frontmost"]["granted"] is False
+    assert empty["actions"] == []
+
+
+def test_the_session_route_calls_the_allowlist_the_process_and_not_the_session() -> (
+    None
+):
+    """One word, and it is load bearing.
+
+    `ScreenGate` holds one allowlist per **process**, not per MCP session
+    (known-gap F-19). A payload captioned "session" would be the first place
+    somebody read a session-scoped grant into existence, and the panel above it
+    would inherit the mistake.
+    """
+
+    app = create_app(host="testserver", screen=FakeScreen(), consent=_approves)
+    with TestClient(app) as client:  # pyright: ignore[reportArgumentType]
+        body = client.get(SESSION_PATH).json()
+
+    assert body["scope"] == "process"
+
+
+def test_the_person_is_told_which_window_the_model_was_not() -> None:
+    """ADR-095 in one test, from both sides at once.
+
+    The same session, the same moment: the person has approved Notes and has
+    switched to Mail. The model is refused with a message that does not say
+    what it switched to; the panel's route says "Mail" -- because the reader of
+    that route is the person sitting in front of that very window, and the
+    decision they have to make is whether to approve it.
+    """
+
+    screen = FakeScreen(focus=MAIL, installed=(NOTES, MAIL))
+    app = create_app(host="testserver", screen=screen, consent=_approves)
+
+    with TestClient(app) as client:  # pyright: ignore[reportArgumentType]
+        body = client.get(SESSION_PATH).json()
+
+    assert body["frontmost"]["name"] == "Mail"
+    assert body["frontmost"]["bundle_id"] == MAIL.bundle_id
+    assert body["frontmost"]["granted"] is False
+
+
+def test_the_session_route_is_read_only() -> None:
+    """Spelled out rather than trusted.
+
+    There is no shape of request to this route that should change anything, and
+    a handler added later would be the kind of change nobody reviews as one.
+    """
+
+    app = create_app(host="testserver", screen=FakeScreen(), consent=_approves)
+    with TestClient(app) as client:  # pyright: ignore[reportArgumentType]
+        for method in ("post", "put", "patch", "delete"):
+            assert getattr(client, method)(SESSION_PATH).status_code == 405
+
+
+def test_the_tools_and_the_session_route_read_one_gate() -> None:
+    """The link this whole step exists to make.
+
+    `create_app` builds one gate and hands it to both the MCP server and
+    `/session`, so the panel describes the same allowlist the model is being
+    judged against. Two gates would be two allowlists, and the console would
+    report a session that was not the one running.
+
+    Injected here rather than reached into, because that property is invisible
+    from outside when the only instance is one `create_app` keeps to itself.
+    What this does **not** cover is the default construction -- one line, whose
+    failure mode is `/session` answering empty forever, which is what the
+    browser check at the end of this work is for.
+    """
+
+    screen = FakeScreen(focus=NOTES, installed=(NOTES,))
+    gate = ScreenGate(screen=screen, consent=_approves)  # type: ignore[arg-type]
+    app = create_app(host="testserver", screen=screen, gate=gate)
+
+    async def scenario() -> None:
+        async with Client(
+            create_server(screen, gate=gate), cache=None, raise_exceptions=True
+        ) as client:
+            await client.call_tool(*_ask(NOTES))
+            await client.call_tool("left_click", {"x": 4, "y": 5})
+
+    asyncio.run(scenario())
+    with TestClient(app) as client:  # pyright: ignore[reportArgumentType]
+        body = client.get(SESSION_PATH).json()
+
+    assert [held["bundle_id"] for held in body["granted"]] == [NOTES.bundle_id]
+    # `request_access` is a person answering a dialog, not something done to the
+    # screen, so it is not an action. The click is.
+    assert [held["action"] for held in body["actions"]] == ["left_click"]
+    [action] = body["actions"]
+    assert action["allowed"] is True
+    assert action["application"]["name"] == "Notes"
+    assert "(4, 5)" in action["detail"]
+
+
+def test_a_refused_action_reaches_the_panel_with_the_window_it_was_refused_on() -> None:
+    """The row the panel exists for.
+
+    A task stops, and the reason is that the person switched to something the
+    task was never told about. The model's refusal does not say which window;
+    this row does, because the person reading it is the one sitting in it.
+    """
+
+    screen = FakeScreen(focus=MAIL, installed=(NOTES, MAIL))
+    gate = ScreenGate(screen=screen, consent=_approves)  # type: ignore[arg-type]
+    app = create_app(host="testserver", screen=screen, gate=gate)
+
+    async def scenario() -> None:
+        async with Client(
+            create_server(screen, gate=gate), cache=None, raise_exceptions=True
+        ) as client:
+            await client.call_tool(*_ask(NOTES))
+            await client.call_tool("left_click", {"x": 4, "y": 5})
+
+    asyncio.run(scenario())
+    with TestClient(app) as client:  # pyright: ignore[reportArgumentType]
+        body = client.get(SESSION_PATH).json()
+
+    [action] = body["actions"]
+    assert action["allowed"] is False
+    assert action["application"]["name"] == "Mail"
+    assert "not in this session's approved list" in action["reason"]
