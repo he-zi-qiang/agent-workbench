@@ -723,7 +723,7 @@ Word 文档读取与编辑，能力表里也不得混为一谈。
 |---|---|:---:|
 | E-01 | Playwright 只验外壳，后端全 mock | 未实现 |
 | E-02 | 缺真实 Word MCP Server 的官方 Client 闭环 | 未实现 |
-| E-03 | CI 不跑 E2E / 离线评测 / Compose / 恢复矩阵 | 未实现 |
+| E-03 | ~~CI 不跑 E2E~~ 已进 CI；离线评测 / Compose 仍不跑 | 部分实现 |
 | E-04 | 首个 evidence manifest 未生成 | 未接线 |
 | E-05 | 文档中的数字过时 | **口径不实** |
 | E-07 | ~~崩溃恢复 e2e 三条红~~ 已修；CI 仍不跑 `tests/e2e`（见 E-03） | **部分关闭** |
@@ -802,9 +802,29 @@ PostgreSQL）。
 **证据**：[.github/workflows/ci.yml](../.github/workflows/ci.yml) 四个 job——
 `frontend`、`quality`、`stateful`（真 PostgreSQL + Qdrant）、`secret-scan`。
 
-**不跑**：完整 E2E、离线 RAG 评测、Compose 启动、进程恢复矩阵。前两项各有理由
-（E2E 需要真后端起栈；离线评测需要 embedding extra，按分层约定 CI 不装），
-后两项是单纯的缺口。
+**2026-08-28：`tests/e2e` 进了 `stateful` job。** 上面那句「E2E 需要真后端起栈」把它
+说得比实际贵——那个 job 早就起着真 PostgreSQL 和 Qdrant，而 `tests/e2e` **需要的正好
+就是这些**：同一个库、同一次迁移、同样两个环境变量，不需要 provider key（这些运行是
+`provider = "fake"`）。实测同一条命令：
+
+```
+pytest -q tests/contracts tests/persistence tests/api tests/vector tests/e2e
+→ 1339 passed, 2 skipped, 122s
+```
+
+单独 `tests/e2e` 是 25 passed / 23s。job 超时从 15 分钟提到 20：它要起 Worker 子进程
+并等真实的租约过期，墙钟由协调时序决定而不是由 runner 多快决定。
+
+**为什么值得**：E-07 那三条崩溃恢复断言红了大约两周，而解释它们为什么红的那段笔记是
+一个**没人能证实的猜测**——因为没有任何东西跑过那个文件。一个不在 CI 里的套件，缺的不
+只是安全网，它会积累从未被对照过的解释。
+
+**其中两个文件在 runner 服务不了时会自己响亮地跳过**，而不是变红：沙箱那条 `image
+inspect` 不到就跳过并把 `pull` 命令写在跳过原因里，RAG 那条没有 Qdrant 就跳过。将来
+runner 少了哪一样，跳过行会指名道姓，不必有人去二分。
+
+**仍然不跑**：离线 RAG 评测（需要 embedding extra，按分层约定 CI 不装——`quality` job
+还专门断言它**没有**被装上）、Compose 启动。这两项是剩下的缺口。
 
 ### E-06 前端样式表按领域拆分，做不成一次纯搬运
 
