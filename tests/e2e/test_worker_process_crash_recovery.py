@@ -237,6 +237,24 @@ def _child_environment(*, artifact_root: Path) -> dict[str, str]:
             "AW_COORDINATION__MAX_MISSED_HEARTBEATS": "2",
             "AW_COORDINATION__CLAIM_POLL_INTERVAL_MS": "200",
             "AW_DATABASE__GUARD_HEALTHCHECK_SECONDS": "1",
+            # This file's whole subject is the v1 graph crossing its human
+            # gate: every assertion below counts `approval` among the nodes a
+            # recovered Task re-runs or does not.
+            #
+            # It is a **deployment** setting, not a submitter's one
+            # (`application/task_inputs.py` states why: the asker does not get
+            # to decide whether their own output is reviewed), and it ships
+            # `false` -- `config.test.toml` declares no `[workflow]` section,
+            # so these Workers booted without the gate and every one of those
+            # assertions read `approval ran 0 times` while the Task itself
+            # succeeded.
+            #
+            # Measured 2026-08-28: with this line the file is 11 passed; without
+            # it, three fail. The old note in `known-gaps.md` guessed at the
+            # snapshot instead -- it was the right *place* and the wrong
+            # mechanism, and guessing was possible because nothing ran this
+            # file (E-03: `tests/e2e` is in no CI job).
+            "AW_WORKFLOW__EXPORT_REQUIRES_APPROVAL": "true",
         }
     )
     return environment

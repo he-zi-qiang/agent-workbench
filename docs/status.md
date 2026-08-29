@@ -27,6 +27,78 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-28（未合并，分支 `fix/a-test-that-nobody-ran`，第四十一批）：一条没人跑过的测试，和一次猜错了机制的诊断（关闭 E-07）
+
+用户睡了，留了一句「把应该完善的都完善」。挑了两件：Code 面板的深链，和 E-07——那条
+**红着的**崩溃恢复 e2e。
+
+### 1. E-07：诊断猜对了地方，猜错了机制
+
+`known-gaps.md` 上一版写着「提交用的 `run_semantics_snapshot` 是
+`{"model": {"provider": "fake"}}`，里面没有 `workflow` 段，所以 Worker 对『要不要审批』
+的判断落在它自己的配置上而不是 Task 的快照上。**这是查这条时的第一个可疑点，尚未证实。**」
+
+**那句「尚未证实」是这条缺口真正的内容。** 查实之后：
+
+- 前半句对——那个值**确实**来自 Worker 自己的配置；
+- 后半句错——它**本来就不该**来自快照。`application/task_inputs.py` 写着为什么：
+  `export_requires_approval` 是**部署设置**而不是提交者的选择，提问的人不该决定自己的
+  产出要不要被审阅。
+
+真正的原因在更前面一步：`settings.py:683` 的出厂值是 `false`，而
+`config/config.test.toml` 没有声明 `[workflow]` 段——**这些 Worker 是在没有审批门的部署
+下起来的**，`approval` 一次都不会跑，而这个文件的每一条断言都在数它。
+
+修法是一行：`_child_environment` 补上
+`AW_WORKFLOW__EXPORT_REQUIRES_APPROVAL=true`。这个文件的全部主题就是 v1 图跨过它的人工
+门，所以它必须把自己要测的那个部署**配出来**，而不是继承一个恰好没有门的默认。
+
+**实测（真实 PostgreSQL）**：加这一行前 `3 failed, 8 passed`；加之后 **11 passed**。
+
+**为什么能猜错这么久**：没有人跑过它。`tests/e2e` 不在任何一个 CI job 里（E-03），所以
+那段推断写下来之后既没被证实也没被证伪，红了大概两周。E-07 因此只**部分**关闭——三条
+转绿了，但「进入某个每 PR 都跑的 job」那一半没有做，而那一半才是下次变红有人知道的原因。
+
+### 2. Code 面板的深链
+
+上一批把面板搬进 `components/` 时明确没做这条，理由是「那是第二件事，不该混在一次搬家
+里」。现在补上，形状与 Work 页那条 `?run=` **一模一样**——而且这一次它还**免费**退掉了
+上一批的 `{sessionId, runId}` 配对：会话 id 在路径里，换会话就是换 URL，查询串跟着走。
+
+测试断言的是**深链进来**而不是点击之后的 `window.location`：这个文件挂的是
+`MemoryRouter`，它不动 `window.location`，而一条只在真实 router 下才成立的断言，测的是
+router 不是这个页面。
+
+### 3. 顺带：你最初那个用例真的派出去了
+
+复刻你最初那个会话（项目目录 + 「使用多agent 调查东软集团」），事件流：
+
+```
+AgentDelegated 3    profile_name = analyst ×3
+```
+
+**三个子代理，真派的。** 那一跑最后失败在 `provider_error: RemoteProtocolError`——一次
+网络抖动，与这几批的改动无关，已重跑。
+
+### 证据
+
+| 门禁 | 结果 |
+|---|---|
+| `ruff check` / `format --check` | All checks passed / 607 files |
+| `pytest`（离线） | 3078 passed, 783 skipped |
+| `pytest tests/e2e/test_worker_process_crash_recovery.py`（真 PostgreSQL） | **11 passed**（此前 3 failed） |
+| `eslint` / `tsc -b` / `vite build` | 干净 |
+| `vitest run` | **656 passed**（上一批 654） |
+
+### 明确没做，以及为什么
+
+- **不把 `tests/e2e` 塞进 CI**。那是 E-03 的一半，要决定的是 CI 里起哪些服务、跑多久，
+  是一次关于流水线的改动，不该夹在一条测试的修复里。
+- **不改 `settings.workflow.export_requires_approval` 的出厂值**。测试该配出它要的部署，
+  而不是反过来让出厂默认迁就一个测试。
+
+---
+
 ## 2026-08-28（未合并，分支 `fix/the-panel-did-not-follow-the-capability`，第四十批）：面板没跟着能力走
 
 用户一句话：「还是没有 agent 面板。」

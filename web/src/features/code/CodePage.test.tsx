@@ -444,6 +444,53 @@ describe("CodePage 的多 agent 面板（ADR-089）", () => {
     expect(within(panel).getByText(/1 个是子代理/)).toBeInTheDocument();
   });
 
+  it("带着 ?run= 进来时，收窄一开始就生效——这条链接发得出去也刷得回来", async () => {
+    // 与 Work 页那条 `?run=` 同一个形状。断言的是**深链进来**而不是点击之后的
+    // `window.location`：这里挂的是 `MemoryRouter`，它不动 window.location，而
+    // 一条只在真实 router 下才成立的断言，测的是 router 不是这个页面。
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      steps: delegated,
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+    });
+
+    mounted(`/code/${SESSION}?run=run_child`);
+
+    const panel = await screen.findByRole("region", {
+      name: "参与这次任务的 Agent",
+    });
+    // 那一行是被选中的，且面板给出了退出收窄的话与出口。
+    expect(
+      within(panel).getByRole("button", { name: /explorer/ }),
+    ).toHaveAttribute("aria-current", "true");
+    expect(within(panel).getByText(/只显示这一个运行/)).toBeInTheDocument();
+  });
+
+  it("点一行会收窄，再点一次退出", async () => {
+    const user = userEvent.setup();
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      steps: delegated,
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+    });
+
+    mounted();
+    const panel = await screen.findByRole("region", {
+      name: "参与这次任务的 Agent",
+    });
+    const row = within(panel).getByRole("button", { name: /explorer/ });
+
+    await user.click(row);
+    expect(within(panel).getByText(/只显示这一个运行/)).toBeInTheDocument();
+
+    await user.click(within(panel).getByRole("button", { name: "显示全部" }));
+    expect(within(panel).queryByText(/只显示这一个运行/)).not.toBeInTheDocument();
+  });
+
   it("没委派过的会话里不画这块面板", async () => {
     // 与 Work 页同一条规则：每个运行都是这一回合本身时，面板只是家具。
     vi.mocked(useCodeStream).mockReturnValue({
