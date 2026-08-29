@@ -84,9 +84,11 @@ class _Search:
         *,
         schema: JsonObject | None = None,
         workspace_writes: tuple[str, ...] = (),
+        truncated: bool = False,
     ) -> None:
         self.calls: list[ToolCall] = []
         self._workspace_writes = workspace_writes
+        self._truncated = truncated
         spec = ToolSpec(
             name="search",
             description="Search the local corpus.",
@@ -104,6 +106,7 @@ class _Search:
             invocation.call,
             content="1 hit",
             workspace_writes=self._workspace_writes,
+            truncated=self._truncated,
         )
 
 
@@ -1029,6 +1032,42 @@ def test_a_produced_filename_survives_a_deployment_that_records_no_previews() ->
     assert _payload(stored, ToolCompleted).workspace_writes == ("report.md",)
     assert _payload(stored, ToolCompleted).output_preview == ""
     assert _payload(stored, ToolProposed).argument_preview == ""
+
+
+def test_a_tool_that_cut_its_own_answer_says_so_even_with_previews_off() -> None:
+    """The field had no producer at all until this line's counterpart shipped.
+
+    ``ToolCompleted.truncated`` documented "the tool's own clipping" from the
+    day it was written and nothing ever set it, so every event ever emitted
+    said ``false``. The tool that actually does the clipping is
+    ``delegate_agent``, and it marks the cut at the *end* of an 8000-character
+    report -- which ``bounded()`` drops at 4096. So the preview a console reads
+    is a half report with the marker gone, and this boolean is the only route
+    left to the fact.
+
+    Previews are off here on purpose, for the same reason ``workspace_writes``
+    is not gated: a boolean saying an answer was cut discloses none of the text
+    the gate withholds, and it matters most exactly where nobody can see the
+    cut for themselves.
+    """
+
+    harness = _Harness(tool=_Search(truncated=True), record_step_inputs=False)
+
+    _execute(harness, _call(query="fusion"))
+    stored = events_of(harness)
+
+    assert _payload(stored, ToolCompleted).truncated is True
+    assert _payload(stored, ToolCompleted).output_preview == ""
+
+
+def test_a_tool_that_answered_in_full_reports_no_cut() -> None:
+    """The control. A flag that is always true reports nothing."""
+
+    harness = _Harness(record_step_inputs=True)
+
+    _execute(harness, _call(query="fusion"))
+
+    assert _payload(events_of(harness), ToolCompleted).truncated is False
 
 
 def test_a_call_that_wrote_nothing_says_so_rather_than_guessing() -> None:

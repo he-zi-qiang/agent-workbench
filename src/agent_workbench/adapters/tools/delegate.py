@@ -78,6 +78,26 @@ MAX_PROMPT_CHARS = 8_000
 DELEGATION_TIMEOUT_SECONDS = 600
 
 
+def _marked(report: str, definition: SubAgentDefinition, *, clipped: bool) -> str:
+    """The report as the parent model will read it, cut said in its own text.
+
+    Said in the text and not only in ``ToolResult.truncated`` because the parent
+    is a model reading ``content``; it never sees this result's metadata. A
+    truncated final sentence with nothing marking it is read as a finished
+    thought, and the sub-agent prompts in ``application/sub_agents.py`` are
+    written around exactly that risk -- they open with the conclusion because
+    whatever is left until the end is what gets lost.
+
+    One function rather than the inline branch this replaces, because the two
+    call sites had drifted: the success path marked the cut and the failure path
+    discarded the fact entirely.
+    """
+
+    if not clipped:
+        return report
+    return f"{report}\n\n[report truncated at {definition.max_report_chars} characters]"
+
+
 def _description(catalogue: SubAgentCatalogue) -> str:
     """The tool description, listing exactly the agents this process has.
 
@@ -336,6 +356,16 @@ class DelegateTool:
             # write is still handed over, because a parent that can see how far
             # the child got can write a better second prompt than one told only
             # that something failed.
+            # Marked on the failure path too, and it was not before: this
+            # branch discarded `clip_report`'s second return value with a
+            # `[0]`, so a child that both failed *and* overran handed its
+            # parent a report cut mid-sentence with nothing saying so. The
+            # reason given below for marking it applies here unchanged -- more
+            # so, because a partial report is exactly what this branch exists
+            # to pass along.
+            partial, partial_clipped = clip_report(
+                outcome.output_text, definition.max_report_chars
+            )
             return ToolResult.failed(
                 call,
                 ErrorInfo(
@@ -345,23 +375,19 @@ class DelegateTool:
                         f"({outcome.stop_reason})"
                     ),
                 ),
-                content=clip_report(outcome.output_text, definition.max_report_chars)[
-                    0
-                ],
+                content=_marked(partial, definition, clipped=partial_clipped),
+                truncated=partial_clipped,
             )
 
         report, clipped = clip_report(outcome.output_text, definition.max_report_chars)
-        if clipped:
-            # Said in the report's own text, because the parent reads the text
-            # and not this result's metadata. A truncated final sentence with
-            # nothing marking it is read as a finished thought.
-            report = (
-                f"{report}\n\n[report truncated at "
-                f"{definition.max_report_chars} characters]"
-            )
         return ToolResult.succeeded(
             call,
-            content=report,
+            content=_marked(report, definition, clipped=clipped),
+            # The same fact as a field, for readers that cannot see the text.
+            # The marker above is bounded away before it reaches the event log
+            # (`bounded()` keeps 4096 characters and the marker is at the end
+            # of 8000), so the console's only route to "this was cut" is here.
+            truncated=clipped,
             # Whatever the executor stack already persisted, not something
             # minted here. An `ArtifactRef` carries a tenant and a content
             # hash and is signed by the artifact store; a handler that built

@@ -318,6 +318,77 @@ class TestTheReportIsBoundedByTheToolNotByTheRuntime:
 
         asyncio.run(scenario())
 
+    def test_the_cut_is_a_field_and_not_only_a_sentence_at_the_end(self) -> None:
+        """The marker in the text is for the model; this is for everyone else.
+
+        ``ToolCompleted.truncated`` has documented exactly this fact since the
+        event was written, and nothing produced it -- so the console's copy of
+        a clipped report was a half report with its one marker gone. The marker
+        is at the *end* of 8000 characters and the event log keeps 4096, so it
+        is the first thing ``bounded()`` drops. A field survives that.
+        """
+
+        big = "y" * (ANALYST.max_report_chars + 5_000)
+        tool, scope, context, _ = _delegate(_ScriptedExecutor(_completed(text=big)))
+
+        async def scenario() -> None:
+            with scope.using(context):
+                result = await tool.handle(
+                    _invocation({"subagent_type": "analyst", "prompt": "think"})
+                )
+            assert result.truncated is True
+
+        asyncio.run(scenario())
+
+    def test_a_report_inside_the_ceiling_says_it_was_not_cut(self) -> None:
+        """The other half, because a flag that is always true is not a flag."""
+
+        tool, scope, context, _ = _delegate(_ScriptedExecutor(_completed()))
+
+        async def scenario() -> None:
+            with scope.using(context):
+                result = await tool.handle(
+                    _invocation({"subagent_type": "analyst", "prompt": "think"})
+                )
+            assert result.truncated is False
+            assert "truncated" not in result.content
+
+        asyncio.run(scenario())
+
+    def test_a_failed_child_that_also_overran_says_its_partial_work_was_cut(
+        self,
+    ) -> None:
+        """The path that used to discard the fact.
+
+        This branch called ``clip_report(...)[0]`` and threw the second half
+        away, so a child that both failed *and* overran handed its parent a
+        report cut mid-sentence with nothing marking it -- while the success
+        branch three lines below marked the identical cut. The argument for
+        marking it is stronger here: passing partial work along is the whole
+        reason this branch carries text at all.
+        """
+
+        big = "y" * (ANALYST.max_report_chars + 5_000)
+        outcome = AgentOutcome(
+            agent_run_id=CHILD_RUN,
+            status="failed",
+            stop_reason="max_steps",
+            output_text=big,
+            error=ErrorInfo(code="budget_exceeded", message="stopped at a ceiling"),
+        )
+        tool, scope, context, _ = _delegate(_ScriptedExecutor(outcome))
+
+        async def scenario() -> None:
+            with scope.using(context):
+                result = await tool.handle(
+                    _invocation({"subagent_type": "analyst", "prompt": "think"})
+                )
+            assert result.status == "error"
+            assert result.truncated is True
+            assert "truncated" in result.content
+
+        asyncio.run(scenario())
+
 
 class TestTheStreamShowsATreeAndNotAFlatRun:
     def test_the_parent_says_it_delegated_and_the_child_says_it_started(
