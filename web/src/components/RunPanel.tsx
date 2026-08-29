@@ -14,6 +14,7 @@ import { shortId } from "./ui";
 import { errorCodeLabel, explainRunFailure } from "./errorVocabulary";
 import {
   flattenRuns,
+  runDurationMs,
   totalSpend,
   totalTokens,
   type RunNode,
@@ -158,6 +159,22 @@ function formatTokens(value: number): string {
 }
 
 /**
+ * A run's span, at the coarsest resolution that is still true.
+ *
+ * Seconds below a minute and whole minutes above it, with no third tier: an
+ * hour-long research Task reported as `1h03m` and one reported as `63 分钟`
+ * lead to the same next action, and the first spends a reader's attention on
+ * arithmetic. Under a second is dropped rather than rounded to `0 秒`, which
+ * would read as a run that did nothing.
+ */
+function formatDuration(ms: number): string | null {
+  if (ms < 1000) return null;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${String(seconds)} 秒`;
+  return `${String(Math.round(seconds / 60))} 分钟`;
+}
+
+/**
  * `spent/ceiling`, or just `spent` where the run declared no ceiling.
  *
  * Never `spent/0` and never a percentage of nothing: `max_total_tokens` is
@@ -212,6 +229,22 @@ function RunRow({
       : undefined;
   const spent = totalTokens(node.spend);
   const fill = fractionOf(spent, node.ceiling.maxTotalTokens);
+  const elapsed = runDurationMs(node);
+  const duration = elapsed === null ? null : formatDuration(elapsed);
+  // A delegated run whose toolbox came out empty, which is a documented way to
+  // fail quietly rather than a hypothetical. A child's tools are its
+  // definition's ceiling **intersected with the parent Task's envelope**, so a
+  // Task submitted without search authority delegates a `researcher` that can
+  // search nothing -- `application/sub_agents.py` says so in as many words and
+  // calls it better than refusing the delegation. It is better, and it is also
+  // invisible: the run starts, calls nothing, and reports that it could not
+  // find anything. `toolCount` has been computed here since the module was
+  // written and rendered nowhere, so this is the field finding its reader.
+  //
+  // Only for delegated runs. A graph node's run legitimately holds no tools --
+  // `understand` is a model call and nothing else -- and flagging those would
+  // put a warning on the majority of rows in every Task that never delegated.
+  const emptyToolbox = node.definitionName !== null && node.toolCount === 0;
   const stopped =
     node.stopReason === null ? undefined : STOP_REASON_LABEL[node.stopReason];
   // Its own account where it has one. `AgentCompleted` carries no error, so a
@@ -325,6 +358,18 @@ function RunRow({
                 )}
               </span>
             )}
+            {duration !== null && (
+              <span
+                className="aw-run-duration"
+                title={
+                  node.status === "running"
+                    ? "从它第一条事件到最近一条事件；它还在跑，所以这个数还会长"
+                    : "从它第一条事件到最后一条事件"
+                }
+              >
+                {duration}
+              </span>
+            )}
             {node.eventCount > 0 && (
               <span className="aw-run-events">{node.eventCount} 条事件</span>
             )}
@@ -341,6 +386,14 @@ function RunRow({
         >
           <span aria-hidden="true" />
         </div>
+      )}
+      {emptyToolbox && (
+        <p
+          className="aw-run-note"
+          style={{ "--aw-run-depth": depth } as React.CSSProperties}
+        >
+          这个子代理一件工具都没拿到——它能用的工具是它自己的上限与这个任务授权的交集，交出来是空的。它照样会跑完，只是查不到任何东西。
+        </p>
       )}
       {failure !== null && (
         <p

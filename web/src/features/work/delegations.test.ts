@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { EventEnvelope } from "../../api/types";
-import { readDelegations, titleWithDelegation } from "./delegations";
+import { readDelegations } from "./delegations";
 
 const PARENT = "run_parent";
 const CHILD = "run_child";
@@ -88,46 +88,5 @@ describe("readDelegations", () => {
       "run_b",
       "run_c",
     ]);
-  });
-});
-
-describe("titleWithDelegation", () => {
-  it("leaves the parent's own rows alone", () => {
-    const delegations = readDelegations([delegation()]);
-
-    expect(
-      titleWithDelegation("工具调用失败", event(PARENT, "ToolFailed", 3), delegations),
-    ).toBe("工具调用失败");
-  });
-
-  it("attributes a delegated row to its sub-agent", () => {
-    const delegations = readDelegations([delegation()]);
-
-    expect(
-      titleWithDelegation("工具调用失败", event(CHILD, "ToolFailed", 4), delegations),
-    ).toBe("子代理 analyst：工具调用失败");
-  });
-
-  it("keeps the base title findable inside the prefixed one", () => {
-    // A reader scanning for a failure has to find it whichever run produced it,
-    // which is why the prefix is a prefix rather than a replacement.
-    const delegations = readDelegations([delegation()]);
-    const titled = titleWithDelegation(
-      "工具调用失败",
-      event(CHILD, "ToolFailed", 4),
-      delegations,
-    );
-
-    expect(titled.endsWith("工具调用失败")).toBe(true);
-  });
-
-  it("still marks a delegated row whose delegation named no sub-agent", () => {
-    // Its events are somebody else's work either way, and rendering them as
-    // the parent's would be the one wrong answer available.
-    const delegations = readDelegations([delegation(42)]);
-
-    expect(
-      titleWithDelegation("运行已开始", event(CHILD, "RunStarted", 3), delegations),
-    ).toBe("子代理：运行已开始");
   });
 });

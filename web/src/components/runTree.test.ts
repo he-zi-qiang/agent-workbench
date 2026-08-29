@@ -17,6 +17,7 @@ import type { EventEnvelope } from "../api/types";
 import {
   buildRunTree,
   flattenRuns,
+  runDurationMs,
   totalSpend,
   totalTokens,
   type RunNode,
@@ -47,6 +48,11 @@ function event(
   sequence: number,
   payload: Record<string, unknown> = {},
   nodeId: string | null = "work",
+  // Last and optional so every existing call keeps the one fixed instant they
+  // were written against: the timestamps only matter to the block that tests
+  // them, and giving the rest a moving clock would make them depend on a fact
+  // they are not about.
+  timestamp = "2026-08-26T12:00:00Z",
 ): EventEnvelope {
   return {
     schema_version: 1,
@@ -55,7 +61,7 @@ function event(
     run_id: runId,
     event_type: eventType,
     durability: "durable",
-    timestamp: "2026-08-26T12:00:00Z",
+    timestamp,
     payload: { kind: eventType, ...payload },
     sequence,
     task_id: TASK,
@@ -578,5 +584,66 @@ describe("位置：被宣告、还没开口的孩子也有一个可以滚过去�
     ]);
 
     expect(at(at(tree, 0).children, 0).firstSequence).toBe(11);
+  });
+});
+
+describe("时间：事件一直带着它，这个模块一直没读", () => {
+  it("一个运行的起止时间来自它自己的第一条和最后一条事件", () => {
+    // `EventEnvelope.timestamp` 是必填字段，从信封被写下那天就在，而这个模块
+    // 在此之前只读 `sequence`。所以「这个子代理跑了多久」不是缺数据，是没人问过。
+    const roots = buildRunTree([
+      event(PARENT, "RunStarted", 1, {}, "work", "2026-08-26T12:00:00Z"),
+      event(PARENT, "ModelStarted", 2, {}, "work", "2026-08-26T12:00:07Z"),
+      event(PARENT, "RunCompleted", 3, {}, "work", "2026-08-26T12:01:30Z"),
+    ]);
+
+    const run = at(roots, 0);
+    expect(run.startedAt).toBe("2026-08-26T12:00:00Z");
+    expect(run.lastEventAt).toBe("2026-08-26T12:01:30Z");
+    expect(runDurationMs(run)).toBe(90_000);
+  });
+
+  it("被宣告、还没开口的孩子没有时间，尽管它已经有了位置", () => {
+    // 它的位置来自父运行的 `AgentDelegated`（规则二与「位置」那两块钉着这件
+    // 事）。时间不跟着来：那条事件是**父运行**的，拿它当孩子的开始时间，等于
+    // 把孩子的寿命从它被点名的那一刻算起。
+    const roots = buildRunTree([
+      event(PARENT, "RunStarted", 1, {}, "work", "2026-08-26T12:00:00Z"),
+      event(
+        PARENT,
+        "AgentDelegated",
+        2,
+        { child_agent_run_id: CHILD, profile_name: "analyst" },
+        "work",
+        "2026-08-26T12:00:05Z",
+      ),
+    ]);
+
+    const child = at(at(roots, 0).children, 0);
+    expect(child.firstSequence).toBe(2);
+    expect(child.startedAt).toBeNull();
+    expect(child.lastEventAt).toBeNull();
+    expect(runDurationMs(child)).toBeNull();
+  });
+
+  it("只有一条事件的运行没有跨度，而不是零跨度", () => {
+    // 0 会被渲染成「0 秒」，读起来是一个什么都没干的运行；实际上是一个还没跑到
+    // 第二条事件的运行。
+    const roots = buildRunTree([
+      event(PARENT, "RunStarted", 1, {}, "work", "2026-08-26T12:00:00Z"),
+    ]);
+
+    expect(runDurationMs(at(roots, 0))).toBeNull();
+  });
+
+  it("解不出来的时间戳等于没有时间，而不是 NaN", () => {
+    // `Date.parse` 对认不出的字符串答 NaN，而 NaN 会一路无声地流到界面上变成
+    // 「NaN 秒」。这个页面读不懂的时间戳，就是它没有的事实。
+    const roots = buildRunTree([
+      event(PARENT, "RunStarted", 1, {}, "work", "not-a-timestamp"),
+      event(PARENT, "RunCompleted", 2, {}, "work", "2026-08-26T12:00:10Z"),
+    ]);
+
+    expect(runDurationMs(at(roots, 0))).toBeNull();
   });
 });

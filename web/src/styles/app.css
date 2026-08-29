@@ -2797,6 +2797,25 @@ pre {
   overflow-wrap: anywhere;
 }
 
+/* 同一个位置的另一句话：这个运行没出错，但它被交出了一副空工具箱。
+   用 warning 而不是 danger——它不是失败，它会跑完；danger 会让读者去找一个
+   不存在的错误。也不用 muted：它需要被读到，而这一列上 muted 是「在那里但
+   不必读」的那一档。 */
+.aw-run-note {
+  margin: 0;
+  padding: 0 12px 6px calc(46px + var(--aw-run-depth, 0) * 20px);
+  color: var(--aw-warning);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* 跑了多久。和 meta 里其它数字同一档，因为它就是其中一个数——刻意不给它颜色：
+   这一列上带颜色的只有「正在做什么」和「为什么停了」两件事。 */
+.aw-run-duration {
+  opacity: 0.7;
+}
+
 .aw-run-hint {
   margin: 0;
   padding: 8px 14px;
@@ -3347,6 +3366,108 @@ pre {
   background: var(--aw-danger-soft);
   color: var(--aw-danger);
   font-weight: 500;
+}
+
+/* --- 时间线上的一个子运行 -----------------------------------------------
+ *
+ * 一个委派出去的运行，在它父运行的那条流里占一个可折叠的块。
+ *
+ * 这一层取代的是给每一行标题加「子代理 analyst：」前缀的做法。前缀读起来是九行
+ * 各自重复同一件事，而读者真正要问的是「那个子代理干完了没有、烧了多少」——那是
+ * 一行的问题，不是九行的。
+ *
+ * **比步骤组重一档，比阶段轻一档。** 它夹在两者中间：一个阶段是图上的一步，一个
+ * 步骤组是一次调用，而这一块是「另一个 agent 在这里工作了一会儿」。所以它有底色和
+ * 左侧色条（步骤组两样都没有），但不画自己的标记点（阶段才有）。 */
+.aw-run-section {
+  margin: 3px 0;
+  border-left: 2px solid var(--aw-border-strong);
+  border-radius: 0 8px 8px 0;
+  background: var(--aw-surface-sunken);
+}
+
+.aw-run-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+}
+
+.aw-run-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-run-section > summary:hover {
+  background: var(--aw-veil);
+}
+
+.aw-run-section[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+/* 「子代理」这三个字只画在认得出来的那一块上。叫不出名字的那一块只知道
+   「这些事件来自另一个运行」，挂上徽标就是替它做了一个断言。 */
+.aw-run-section-badge {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.aw-run-section-title {
+  flex: none;
+  color: var(--aw-text);
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+/* 折起来的时候这一块只有一行，而那一行上最值得占位置的是「它做了什么」——
+   和阶段那一行用的是同一个摘要，同一套词。 */
+.aw-run-section-count {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-run-section-note {
+  margin-left: auto;
+  flex: none;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+}
+
+/* 跑着的那一块带色条，因为它是这条流上唯一还会变的地方；失败的那一块也带，
+   因为它是唯一需要人再做点什么的地方。跑完的不带——一列都带颜色等于都不带。 */
+.aw-run-section.is-running {
+  border-left-color: var(--aw-accent);
+}
+
+.aw-run-section.is-running .aw-run-section-note {
+  color: var(--aw-accent);
+}
+
+.aw-run-section.is-failed {
+  border-left-color: var(--aw-danger);
+}
+
+.aw-run-section.is-failed .aw-run-section-title {
+  color: var(--aw-danger);
+}
+
+/* 块里那一列步骤：去掉外层列表自己的左边框与缩进，否则同一段内容会被缩进两次
+   ——一次是这个块的色条，一次是列表的轨道。 */
+.aw-run-section > .aw-stream-events {
+  margin: 0;
+  padding-left: 14px;
+  border-left: 0;
 }
 
 /* The nested list is already inside one bordered rail; a second would step the
@@ -6068,6 +6189,74 @@ p.aw-code-step-thought {
    要么裁掉焦点环，要么在展开时抖一下。收起来的表单不参与 tab 顺序，也不该参与。 */
 .aw-create-task.is-collapsed {
   display: none;
+}
+
+/* --- 委派范围 -----------------------------------------------------------
+ *
+ * 高级设置里唯一一块**只读**的内容，所以它长得不像它上面那些控件：没有边框、
+ * 没有抬起、字比标签淡一档。这是刻意的——一块画成输入框的说明，会让人去点它，
+ * 而这里没有任何东西可以被点。它说的是这台部署给的范围，改它要改配置文件。 */
+.aw-delegation-scope {
+  margin: 4px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.aw-delegation-scope strong {
+  color: var(--aw-text-soft);
+  font-weight: 600;
+}
+
+/* 读不到的时候。用 faint 而不是 warning：这不是一个错误状态，是一句「这里答不
+   上来」——把它画成黄的会让每一台没起 API 的开发机看起来像出了故障。 */
+.aw-delegation-scope.is-unknown {
+  color: var(--aw-faint);
+}
+
+.aw-delegation-scope.is-enabled > p {
+  margin: 0;
+}
+
+.aw-delegation-scope.is-enabled > ul {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 三列而不是一行文字：这四条是同一种东西的四个数，对齐之后可以竖着扫。
+   `minmax(0, 1fr)` 在最后一列，让最长的那句注解自己换行而不是把数字挤走。 */
+.aw-delegation-scope.is-enabled li {
+  display: grid;
+  grid-template-columns: 8.5em auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.aw-delegation-scope.is-enabled li > strong {
+  color: var(--aw-text);
+  font-family: var(--aw-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.aw-delegation-scope.is-enabled li > small {
+  color: var(--aw-faint);
+  font-size: 11px;
+}
+
+/* 窄屏塌成两行：三列在 380px 上会把「整个运行累计，不是同时」压成一列竖排的字。 */
+@media (width <= 560px) {
+  .aw-delegation-scope.is-enabled li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .aw-delegation-scope.is-enabled li > small {
+    grid-column: 1 / -1;
+  }
 }
 
 /* 右上角的身份。浮在内容之上而不是占一行：它每一页都在，但没有一页是关于它的。 */
