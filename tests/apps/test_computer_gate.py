@@ -756,3 +756,143 @@ def test_every_permitted_action_is_one_the_gate_actually_performs() -> None:
             asyncio.run(drive(gate))
         assert f"so {action} is not available" in str(refused.value), action
         assert screen.actions == [], action
+
+
+# --- what the person's panel reads ------------------------------------------
+
+
+class TestTheGateRemembersWhatWasAttempted:
+    """The record ADR-095 §6 adds, and the two things it must not become.
+
+    Before this the whole package kept nothing: an action returned a `Grant` or
+    raised, and both paths recorded nothing anywhere. So "最近的动作各过了哪几道"
+    had no data source at all -- not a missing endpoint, a missing fact.
+    """
+
+    def test_an_allowed_action_is_remembered_with_what_it_touched(self) -> None:
+        screen = FakeScreen(focus=NOTES)
+        gate = _gate(screen, NOTES)
+
+        asyncio.run(gate.click(10, 20))
+
+        [action] = gate.actions()
+        assert action.action == "left_click"
+        assert action.allowed is True
+        assert action.reason == ""
+        assert action.application == NOTES
+        assert "(10, 20)" in action.detail
+
+    def test_a_refusal_is_remembered_with_the_window_the_model_was_not_told(
+        self,
+    ) -> None:
+        """The whole point of §2, in one assertion pair.
+
+        The model is told only that something unapproved is in front. The
+        person is told which -- it is the window they are sitting in, and the
+        one they would have to approve to get past this.
+        """
+
+        screen = FakeScreen(focus=MAIL, installed=(NOTES, MAIL))
+        gate = _gate(screen, NOTES)
+
+        with pytest.raises(ScreenRefusedError) as refused:
+            asyncio.run(gate.click(10, 20))
+
+        assert "Mail" not in str(refused.value)
+        [action] = gate.actions()
+        assert action.allowed is False
+        assert action.application == MAIL
+        assert "not in this session's approved list" in action.reason
+
+    def test_a_refusal_after_the_gate_said_yes_is_not_recorded_as_allowed(
+        self,
+    ) -> None:
+        """Why the recorder wraps the method and not `_require_frontmost`.
+
+        Checks 1--3 pass, and then the coordinate turns out not to be on the
+        display it named. An entry written at the gate would call this allowed.
+        """
+
+        screen = FakeScreen(focus=NOTES, screens=(MAIN_DISPLAY, SECOND_DISPLAY))
+        gate = _gate(screen, NOTES)
+
+        with pytest.raises(ScreenRefusedError):
+            asyncio.run(
+                gate.click(99999, 99999, display_id=SECOND_DISPLAY.display_id)
+            )
+
+        [action] = gate.actions()
+        assert action.allowed is False
+        # And it still knows which window was in front, because check 3 read it
+        # on the way past.
+        assert action.application == NOTES
+
+    def test_typing_records_how_much_arrived_and_never_what(self) -> None:
+        """The one row that could carry a password.
+
+        The person may read this panel, but "7/23 characters" answers the
+        question the row exists for -- did all of it land -- without the string.
+        """
+
+        moved = iter([NOTES, TERMINAL, TERMINAL])
+        screen = FakeScreen(focus=lambda: next(moved), type_limit=7)
+        gate = _gate(screen, NOTES, TERMINAL)
+
+        secret = "hunter2-and-more-secret"
+        with pytest.raises(ScreenRefusedError):
+            asyncio.run(gate.type_text(secret))
+
+        [action] = gate.actions()
+        assert action.detail == f"7/{len(secret)} characters"
+        assert "hunter2" not in action.detail
+        assert "hunter2" not in action.reason
+
+    def test_the_record_is_bounded(self) -> None:
+        """It hangs on a long-lived process.
+
+        An unbounded list of actions is, on a machine left running for a day, a
+        structure that only grows and records which windows this person used
+        and when -- a different object from "the last few things the task did".
+        """
+
+        screen = FakeScreen(focus=NOTES)
+        gate = ScreenGate(screen=screen, consent=_always, history_limit=3)  # type: ignore[arg-type]
+        asyncio.run(gate.grant((NOTES,)))
+
+        for _ in range(10):
+            asyncio.run(gate.click(1, 1))
+
+        assert len(gate.actions()) == 3
+
+    def test_every_kind_of_attempt_is_remembered_not_only_the_input_ones(
+        self,
+    ) -> None:
+        """A panel that showed clicks and not screenshots would answer "what did
+        it press" while hiding "what did it look at"."""
+
+        screen = FakeScreen(focus=NOTES, installed=(NOTES,))
+        gate = _gate(screen, NOTES)
+
+        asyncio.run(gate.screenshot())
+        asyncio.run(gate.click(1, 1))
+        asyncio.run(gate.key("cmd+s"))
+        asyncio.run(gate.scroll(1, 1, direction="down", amount=3))
+        asyncio.run(gate.activate(NOTES.bundle_id))
+
+        assert [held.action for held in gate.actions()] == [
+            "screenshot",
+            "left_click",
+            "key",
+            "scroll",
+            "activate",
+        ]
+
+    def test_granting_is_not_an_attempt(self) -> None:
+        """`request_access` is a person answering a dialog, not something done
+        to the screen. Recording it would put the consent flow in a list titled
+        "what this did to your machine"."""
+
+        screen = FakeScreen(focus=NOTES)
+        gate = _gate(screen, NOTES)
+
+        assert gate.actions() == ()

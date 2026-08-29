@@ -35,8 +35,11 @@ cannot use a coordinate refusal to measure this machine's screens.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections import deque
+from collections.abc import Awaitable, Callable, Generator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import cast
 
 from agent_workbench.apps.computer_mcp.consent import ask as ask_a_person
@@ -72,12 +75,64 @@ class ScreenRefusedError(RuntimeError):
     """
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 @dataclass(frozen=True, slots=True)
 class Grant:
     """One approved application, as the person approved it."""
 
     application: ApplicationIdentity
     tier: ScreenTier
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenAction:
+    """One attempt, and what the gate decided about it.
+
+    **The person's record, not the model's.** It names the application that was
+    in front even when nobody approved it -- which is the thing every refusal a
+    model reads goes to lengths to withhold (ADR-095 §2). The two are consistent
+    because the reader is: this is reachable only through the read path a
+    console on this machine uses, and that console is being looked at by the
+    person whose screen it describes.
+
+    ``reason`` is the **first line** of the refusal the model was given, not a
+    category invented here. The refusals in ``domain/computer.py`` are written
+    in three parts whose first is "what was refused and why", so the sentence
+    already exists and is already curated. Tagging each of the fifteen raise
+    sites with a code instead would put the categorisation in fifteen places and
+    make the panel's vocabulary drift from the model's -- and the panel would
+    still be showing a worse sentence than the one already written.
+    """
+
+    at: datetime
+    action: str
+    #: What was in front when the gate decided. ``None`` only where the gate
+    #: never got as far as reading it.
+    application: ApplicationIdentity | None
+    allowed: bool
+    #: Empty when allowed.
+    reason: str
+    #: Anything the row is unreadable without -- how much of a string was
+    #: delivered, which display a point was measured on. Empty when there is
+    #: nothing to add.
+    detail: str
+
+
+@dataclass(slots=True)
+class _Note:
+    """What the body of one attempt tells the recorder about itself.
+
+    Mutable and short-lived, because the two facts worth recording are only
+    known *inside* the attempt: which application the live read found (check 3
+    reads it, and a refusal there is exactly where the panel most wants it), and
+    how much of a string got delivered.
+    """
+
+    application: ApplicationIdentity | None = None
+    detail: str = ""
 
 
 @dataclass
@@ -97,6 +152,27 @@ class ScreenGate:
     #: everything -- there is no "allow by default" here to turn off.
     _granted: dict[str, Grant] = field(
         default_factory=lambda: cast(dict[str, Grant], {}), init=False
+    )
+    #: Where "when" comes from. Injected for the same reason `consent` is: a
+    #: test that had to wait for the wall clock to move would be a slow test
+    #: about the wrong thing.
+    clock: Callable[[], datetime] = _utc_now
+    #: How many attempts are kept.
+    #:
+    #: Bounded because this hangs on a long-lived process. An unbounded list of
+    #: actions is, on a machine left running for a day, a structure that only
+    #: grows and that records which windows this person used and when -- which
+    #: is a different object from "the last few things the task did", and not
+    #: one anybody asked for.
+    history_limit: int = 200
+    #: Attempts, oldest first. Same lifetime as `_granted`, and deliberately:
+    #: ADR-070 refused to persist the grants because an authorization that
+    #: outlives the person watching the screen is a different authorization. A
+    #: log of what was done to that screen, kept across restarts, is the same
+    #: object under another name -- so it lives here, in memory, and goes when
+    #: the process does.
+    _history: deque[ScreenAction] = field(
+        default_factory=lambda: cast("deque[ScreenAction]", deque()), init=False
     )
 
     # --- granting --------------------------------------------------------
@@ -142,6 +218,65 @@ class ScreenGate:
             self._granted[held.application.bundle_id] = held
         return given
 
+    # --- recording ---------------------------------------------------------
+
+    @contextmanager
+    def _record(self, action: str) -> Generator[_Note]:
+        """Record one attempt, whatever it turns into.
+
+        Wraps the whole public method rather than sitting inside
+        ``_require_frontmost``, because checks 1--3 are not the only way an
+        attempt ends: a coordinate can be off the display it named, and a string
+        can be half delivered after the gate had already said yes. An entry
+        written at the gate would call both of those "allowed".
+
+        Re-raises unchanged. This observes; it decides nothing.
+        """
+
+        note = _Note()
+        try:
+            yield note
+        except ScreenRefusedError as refused:
+            # The refusal's own first sentence. Those messages are written in
+            # three parts whose first is "what was refused and why"; taking the
+            # first line keeps the panel's words and the model's words the same
+            # words, which a category invented here could not.
+            self._remember(
+                action, note, allowed=False, reason=str(refused).split("\n")[0]
+            )
+            raise
+        self._remember(action, note, allowed=True, reason="")
+
+    def _remember(
+        self, action: str, note: _Note, *, allowed: bool, reason: str
+    ) -> None:
+        self._history.append(
+            ScreenAction(
+                at=self.clock(),
+                action=action,
+                application=note.application,
+                allowed=allowed,
+                reason=reason,
+                detail=note.detail,
+            )
+        )
+        # Trimmed here rather than by giving the deque a maxlen, so the bound is
+        # the field a reader can see and change rather than an argument buried
+        # in a default_factory.
+        while len(self._history) > self.history_limit:
+            self._history.popleft()
+
+    def actions(self) -> tuple[ScreenAction, ...]:
+        """What has been attempted, oldest first.
+
+        Not sorted and not filtered: the order attempts were made in is the
+        order they are worth reading in, and a panel that showed only the
+        refusals would answer "did anything go wrong" while hiding "what has
+        this been doing".
+        """
+
+        return tuple(self._history)
+
     def grants(self) -> tuple[Grant, ...]:
         """Everything approved in this session, as the person approved it.
 
@@ -174,10 +309,18 @@ class ScreenGate:
 
     # --- checking --------------------------------------------------------
 
-    def _require_frontmost(self, action: str) -> Grant:
-        """Checks 1, 2 and 3, in that order, against a fresh reading."""
+    def _require_frontmost(self, action: str, note: _Note | None = None) -> Grant:
+        """Checks 1, 2 and 3, in that order, against a fresh reading.
+
+        ``note`` is how the live reading reaches the person's record. It is
+        filled *before* the checks run, so a refusal by check 1 -- the case
+        where the panel most wants the name, because that is the one where the
+        model is told nothing -- still records which window was in front.
+        """
 
         now = self.screen.frontmost()
+        if note is not None:
+            note.application = now
         held = self._granted.get(now.bundle_id)
         if held is None:
             # Composed in `domain/computer.py` like the other seven, and it was
@@ -304,7 +447,12 @@ class ScreenGate:
         # come from. Naming one that does not exist is still refused -- a
         # picture of a different screen than the one asked for is the same
         # class of silent substitution this whole change is about.
+        with self._record("screenshot") as note:
+            return await self._screenshot(display_id, note)
+
+    async def _screenshot(self, display_id: int | None, note: _Note) -> Capture:
         chosen = self._display_for(display_id, must_name=False)
+        note.detail = f"display {chosen.display_id}"
         included = self._to_include()
         if not included:
             # An empty allowlist is not "show everything", which is what it
@@ -381,22 +529,40 @@ class ScreenGate:
         after its own bounded wait, not from a second read that would race it.
         """
 
+        with self._record("activate") as note:
+            # The target, not the incumbent: this row is about the window the
+            # task asked for. Which window it was taken *from* is on the rows
+            # above it, where that reading was actually made.
+            note.detail = bundle_id
+            return await self._activate(bundle_id, note)
+
+    async def _activate(self, bundle_id: str, note: _Note) -> Grant:
         held = self._granted.get(bundle_id)
         if held is None:
             raise ScreenRefusedError(activation_needs_a_grant(bundle_id=bundle_id))
-        if self.frontmost_grant() is None:
+        incumbent = self.frontmost_grant()
+        if incumbent is None:
+            # Read for the record even though the refusal withholds it. The
+            # model is told only that something unapproved is in front; the
+            # person is told which, because it is the window they are sitting
+            # in and the one they would have to approve to get past this
+            # (ADR-095 §2). Two readers, two answers, one reading.
+            note.application = self.screen.frontmost()
             raise ScreenRefusedError(
                 activation_would_take_the_screen(target=held.application)
             )
+        note.application = incumbent.application
         after = await self.screen.activate(bundle_id)
         if after is None:
             raise ScreenRefusedError(
                 application_is_not_running(target=held.application)
             )
         if after.bundle_id != bundle_id:
+            note.application = after
             raise ScreenRefusedError(
                 activation_did_not_take(target=held.application, now_frontmost=after)
             )
+        note.application = after
         # From the live identity, like every other answer this gate gives about
         # the front of the screen: an application that was approved under one
         # name and now reports another is exactly what the tier table is for.
@@ -422,10 +588,12 @@ class ScreenGate:
             action = "double_click"
         elif count == 3:
             action = "triple_click"
-        held = self._require_frontmost(action)
-        at_x, at_y = self._landing(x, y, display_id)
-        await self.screen.click(at_x, at_y, button=button, count=count)  # pyright: ignore[reportArgumentType]
-        return held
+        with self._record(action) as note:
+            held = self._require_frontmost(action, note)
+            at_x, at_y = self._landing(x, y, display_id)
+            note.detail = f"({at_x}, {at_y})"
+            await self.screen.click(at_x, at_y, button=button, count=count)  # pyright: ignore[reportArgumentType]
+            return held
 
     async def scroll(
         self,
@@ -436,15 +604,22 @@ class ScreenGate:
         amount: int,
         display_id: int | None = None,
     ) -> Grant:
-        held = self._require_frontmost("scroll")
-        at_x, at_y = self._landing(x, y, display_id)
-        await self.screen.scroll(at_x, at_y, direction=direction, amount=amount)  # pyright: ignore[reportArgumentType]
-        return held
+        with self._record("scroll") as note:
+            held = self._require_frontmost("scroll", note)
+            at_x, at_y = self._landing(x, y, display_id)
+            note.detail = f"({at_x}, {at_y}) {direction}"
+            await self.screen.scroll(at_x, at_y, direction=direction, amount=amount)  # pyright: ignore[reportArgumentType]
+            return held
 
     async def key(self, combination: str) -> Grant:
-        held = self._require_frontmost("key")
-        await self.screen.key(combination)
-        return held
+        with self._record("key") as note:
+            held = self._require_frontmost("key", note)
+            # The combination, not the text: a chord is a command, and it is
+            # what makes this row readable. `type` deliberately records only a
+            # count -- see there.
+            note.detail = combination
+            await self.screen.key(combination)
+            return held
 
     async def type_text(self, text: str) -> Grant:
         """Type, then check that the window it was typed into is still there.
@@ -458,31 +633,37 @@ class ScreenGate:
         arrives twice.
         """
 
-        held = self._require_frontmost("type")
-        delivered = await self.screen.type_text(text)
-        after = self.screen.frontmost()
-        if after.bundle_id != held.application.bundle_id:
-            raise ScreenRefusedError(
-                focus_lost(
-                    approved=held.application,
-                    now_frontmost=after,
-                    delivered=delivered,
-                    total=len(text),
+        with self._record("type") as note:
+            held = self._require_frontmost("type", note)
+            delivered = await self.screen.type_text(text)
+            # How much, never what. The panel's reader is the person whose
+            # keyboard this is, but the string itself is the one thing on this
+            # row that could be a password -- and "7/23 characters" answers the
+            # question the row exists for without carrying it.
+            note.detail = f"{delivered}/{len(text)} characters"
+            after = self.screen.frontmost()
+            if after.bundle_id != held.application.bundle_id:
+                raise ScreenRefusedError(
+                    focus_lost(
+                        approved=held.application,
+                        now_frontmost=after,
+                        delivered=delivered,
+                        total=len(text),
+                    )
                 )
-            )
-        if delivered < len(text):
-            # Focus did not move but the adapter stopped anyway. Same message
-            # shape, because the model's problem is identical: it does not know
-            # how much is on screen.
-            raise ScreenRefusedError(
-                focus_lost(
-                    approved=held.application,
-                    now_frontmost=after,
-                    delivered=delivered,
-                    total=len(text),
+            if delivered < len(text):
+                # Focus did not move but the adapter stopped anyway. Same message
+                # shape, because the model's problem is identical: it does not know
+                # how much is on screen.
+                raise ScreenRefusedError(
+                    focus_lost(
+                        approved=held.application,
+                        now_frontmost=after,
+                        delivered=delivered,
+                        total=len(text),
+                    )
                 )
-            )
-        return held
+            return held
 
 
-__all__ = ["Grant", "ScreenGate", "ScreenRefusedError"]
+__all__ = ["Grant", "ScreenAction", "ScreenGate", "ScreenRefusedError"]
