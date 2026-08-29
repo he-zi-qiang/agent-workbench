@@ -125,14 +125,16 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
             "is using a window that is not part of this task, and taking the "
             "screen from it is their decision rather than yours. Do not poll "
             "for that last one to clear.\n"
-            "KNOWN NOT TO WORK ON macOS AS THIS SERVER IS DEPLOYED (F-30). "
-            "Measured 2026-08-29 on macOS 26.5.2 with both screen grants "
-            "held: no available call changes the frontmost application from a "
-            'process of this shape, so this tool refuses with "was asked to '
-            'come to the front and did not" every time. It is described in '
-            "full here rather than quietly removed because the gate around it "
-            "is real and the refusal is honest -- but do not build a plan on "
-            "it reaching a second application, and do not retry it."
+            "A fourth refusal is about this server rather than about you: "
+            "macOS only lets a process change the front of the screen when it "
+            "has a bundle identity, a code signature, accessibility "
+            "permission, and a live main-thread run loop, and a deployment "
+            "missing any one of those is told which one. That is a thing to "
+            "report, not to retry.\n"
+            "Otherwise this works: measured 15/15 on 2026-08-29 against a "
+            "signed .app holding all four, including taking focus from the "
+            "window a person was typing in (ADR-092). Plan on reaching a "
+            "second application, and read the refusal when you do not."
         ),
         input_schema={
             "type": "object",

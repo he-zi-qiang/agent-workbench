@@ -99,6 +99,37 @@ def test_the_tools_are_the_eight_this_server_declares() -> None:
     ]
 
 
+def test_no_tool_tells_the_model_the_tool_does_not_work() -> None:
+    """The regression for a capability that shipped dead.
+
+    ADR-092 made ``activate_application`` work -- 15/15 on real hardware, in
+    the same commit that closed F-30. That commit left the tool's own
+    description saying "KNOWN NOT TO WORK ON macOS AS THIS SERVER IS DEPLOYED
+    (F-30) ... do not retry it". A tool description is the only thing a model
+    reads before deciding whether to call something, so for as long as that
+    paragraph stood, the capability was unreachable by the one reader it was
+    built for, and nothing anywhere failed.
+
+    Pinned as a prohibition rather than as the current wording, because the
+    wording should stay free to change and the claim must not come back. It
+    covers every tool: the next one to be fixed will have the same paragraph in
+    the same place.
+    """
+
+    async def scenario() -> Any:
+        async with Client(
+            create_server(FakeScreen(), consent=_approves),
+            cache=None,
+            raise_exceptions=True,
+        ) as client:
+            return await client.list_tools()
+
+    for tool in asyncio.run(scenario()).tools:
+        description = tool.description or ""
+        assert "KNOWN NOT TO WORK" not in description, tool.name
+        assert "do not retry it" not in description, tool.name
+
+
 def test_granting_answers_with_the_tier_each_application_got() -> None:
     """The person approves names; the reply is where the model learns what
     those names bought it, before it tries something that will be refused."""
