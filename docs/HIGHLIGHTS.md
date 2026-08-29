@@ -56,15 +56,15 @@ Agent**、**导出必须由人批准**、**跨进程恢复**。被拒的那次�
 的英文镜像表。
 
 四行来自四种环境，**只能分别引用，不能相加**——两个后端环境的跳过集互相覆盖。
-四行都实测于 `main` 分支 2026-08-29 的工作副本（ADR-093 与 ADR-094 那两批之后，
-尚未提交），这个说明记的是"测量时那棵树"，不是"当前基线"。
+四行都实测于 `main` 派生的工作分支上，2026-08-29（ADR-093、094、095 三批之后，
+尚未合并），这个说明记的是"测量时那棵树"，不是"当前基线"。
 
 | 环境 | 结果 |
 |---|---|
-| 后端，真实 PostgreSQL + Qdrant（本机） | `3911 passed / 12 skipped` |
-| 后端，不起任何外部服务（本机） | `3136 passed / 787 skipped` |
-| 后端，CI 那组服务型目录（`contracts`/`persistence`/`api`/`vector`） | `1323 passed / 2 skipped` |
-| 前端 Vitest（本机 43 个文件） | `716 passed` |
+| 后端，真实 PostgreSQL + Qdrant（本机） | `3935 passed / 12 skipped` |
+| 后端，不起任何外部服务（本机） | `3160 passed / 787 skipped` |
+| 后端，CI 那组服务型目录（`contracts`/`persistence`/`api`/`vector`） | `1327 passed / 2 skipped` |
+| 前端 Vitest（本机 43 个文件） | `719 passed` |
 
 **第一行此前记着 3 项失败，现在没有了，而消失的原因值得写下来。** 那三条都在
 `tests/e2e/test_worker_process_crash_recovery.py`，症状是 v1 图的 `approval` 节点一次
@@ -80,7 +80,7 @@ CI 的服务型 job 只跑 `contracts`/`persistence`/`api`/`vector` 四个目录
 **仍然不在其中**，这一条没变：它们能红着而没有人被通知，只是今天它们不红。
 
 **第四行是本机数字，不是 CI 数字。** 更早的表里前端那一行写的是 CI 数字，理由是本机装不到
-`engines` 钉死的 node `24.14.0`。这次的 716 是**本机**跑出来的：系统 node 已是
+`engines` 钉死的 node `24.14.0`。这次的 719 是**本机**跑出来的：系统 node 已是
 `26.7.0`，配 `NODE_OPTIONS=--no-experimental-webstorage` 全套通过（26.x 会把
 `localStorage` 定义成一个求值为 `undefined` 的全局 getter，jsdom 只在该全局**缺席**
 时才装自己的那份）。所以它是一个**本机**数字，不能当 CI 数字引用；Playwright 这次
@@ -98,7 +98,7 @@ Pyright strict `0 errors / 0 warnings / 0 informations`、ESLint `--max-warnings
 `1.19`，Alembic 单一 head `0032_events_stream_run_sequence`（32 个迁移）。
 
 **规模**：Python 源码 78773 行、测试 95090 行、前端 TypeScript 43121 行
-（只数 git 跟踪的文件）；`docs/adr/` 下 81 份，编号 0012–0094——**不连续**：0050 与
+（只数 git 跟踪的文件）；`docs/adr/` 下 82 份，编号 0012–0095——**不连续**：0050 与
 0053 是 2026-08-13 那次号段预留里认领了、至今没有写下来的两个号（`docs/adr/README.md`
 末段记着那次预留）。此前这里写的是"0012–0083 连续"，两处都不实。
 

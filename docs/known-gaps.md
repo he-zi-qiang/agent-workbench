@@ -1398,6 +1398,12 @@ ADR-069 把脚本自己 `print` 的东西接到了控制台上，但那是一份
 **真要修**：把 grant 挂到 MCP 会话上（`stateless_http=False` 已经开着，会话是存在
 的），代价是 `create_server` 要从「一个 gate」变成「按会话取 gate」。
 
+**2026-08-29 收窄一档（ADR-095 §4）**：这条缺口没有被修，但它现在**在界面上被说出来
+了**。`GET /session` 答的是 `scope: "process"`，控制台那块面板照抄，写的是「批准挂在
+这个进程上，进程一关就清空」。此前这一页的散文里到处是「这次会话批准了哪些应用」——
+一块写着「会话」的面板会是第一个把会话级 grant 读进存在的地方，而那正是这条缺口还没
+做的事。
+
 ### F-21 不可重试的 MCP 工具进不了 Task —— 拒绝
 
 **证据**：[config.computer-local.toml:109](../config/config.computer-local.toml:109)

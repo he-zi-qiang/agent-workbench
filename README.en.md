@@ -437,16 +437,16 @@ are in [the ten-minute version](docs/HIGHLIGHTS.md).
 These mirror [the ten-minute version, §2](docs/HIGHLIGHTS.md), which is the
 source of record. Four environments; they may be cited separately and **must not
 be added together** — the two backend environments have overlapping skip sets.
-All four rows were measured on the `main` working copy of 2026-08-29 (after the
-ADR-093 and ADR-094 batches, not yet committed); that note records *the tree the
+All four rows were measured on a working branch off `main`, 2026-08-29 (after the
+ADR-093, 094 and 095 batches, not yet merged); that note records *the tree the
 measurement ran on*, not "the current baseline".
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local) | `3911 passed / 12 skipped` |
-| Backend, no external services (local) | `3136 passed / 787 skipped` |
-| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`) | `1323 passed / 2 skipped` |
-| Frontend Vitest (local, 43 files) | `716 passed` |
+| Backend, real PostgreSQL + Qdrant (local) | `3935 passed / 12 skipped` |
+| Backend, no external services (local) | `3160 passed / 787 skipped` |
+| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`) | `1327 passed / 2 skipped` |
+| Frontend Vitest (local, 43 files) | `719 passed` |
 
 **The first row used to carry 3 failures; it no longer does, and why they went
 is worth writing down.** All three were in
@@ -468,7 +468,7 @@ Today they are not red.
 
 **The fourth row is a local number, not a CI one.** An older table
 cited a CI number there, because the node `24.14.0` pinned in `engines` cannot be
-installed on this machine. The 716 above is a **local** run: the system node is
+installed on this machine. The 719 above is a **local** run: the system node is
 now `26.7.0`, and with `NODE_OPTIONS=--no-experimental-webstorage` the whole
 suite passes (26.x defines `localStorage` as a global getter evaluating to
 `undefined`, and jsdom installs its own only when that global is *absent*). So it
@@ -482,7 +482,7 @@ Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
 Scale: 78,773 lines of Python, 95,090 lines of tests, 43,121 lines of frontend
-TypeScript; 81 files under `docs/adr/`, numbered 0012–0094 — **with gaps**: 0050
+TypeScript; 82 files under `docs/adr/`, numbered 0012–0095 — **with gaps**: 0050
 and 0053 were claimed by the block reservation of 2026-08-13 and have never been
 written (the last section of `docs/adr/README.md` records that reservation). This
 line previously read "0012–0083 without gaps"; both halves were wrong. **More test code than source
