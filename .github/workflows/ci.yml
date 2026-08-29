@@ -171,9 +171,12 @@ jobs:
           else 'the embedding extra must not be installed in CI')"
 
   stateful:
-    name: Migrations, PostgreSQL and Qdrant-backed stores
+    name: Migrations, stores and end-to-end recovery
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 20, up from 15, and the extra five are for `tests/e2e`: it spawns Worker
+    # subprocesses and waits on real lease expiry, so its wall clock is bounded
+    # by coordination timings rather than by how fast the runner is.
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -238,7 +241,27 @@ jobs:
           AGENT_WORKBENCH_TEST_QDRANT_URL: http://localhost:6333
         run: >-
           uv run --no-sync pytest -q
-          tests/contracts tests/persistence tests/api tests/vector
+          tests/contracts tests/persistence tests/api tests/vector tests/e2e
+
+      # `tests/e2e` joined the line above on 2026-08-28, and the reason is a
+      # measurement rather than a wish for coverage: three of its crash-recovery
+      # assertions had been failing for about two weeks, and the note explaining
+      # why was a guess nobody could confirm -- because nothing ran the file.
+      # A suite outside CI does not merely lack a safety net; it accumulates
+      # explanations that were never tested against the thing they explain.
+      #
+      # It needs nothing this job did not already have: the same PostgreSQL,
+      # the same migrations, the same two variables. No provider key -- these
+      # runs are `provider = "fake"`. Measured locally at 25 passed in 23s
+      # against the same services, which is why it goes in this job rather than
+      # buying a fifth one.
+      #
+      # Two of its files skip themselves loudly rather than failing where the
+      # runner cannot serve them: the sandbox test inspects for its interpreter
+      # image and skips naming the `pull` command, and the RAG test skips
+      # without Qdrant. A runner that later loses either announces which, in
+      # the skip line, instead of going red for a reason somebody has to
+      # bisect.
 
   secret-scan:
     name: Secret scan
