@@ -57,7 +57,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   askCode,
   createCodeSession,
@@ -228,6 +228,7 @@ export function CodePage() {
   const { identity } = useIdentity();
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [loadedMessages, setMessages] = useState<MessageView[]>([]);
   const [loadedFiles, setFiles] = useState<WorkspaceEntryView[]>([]);
@@ -409,17 +410,31 @@ export function CodePage() {
   // 注意它读的是 `steps` 而不是收窄之后的那份：一个只剩被选中那一行的面板，
   // 会把「换一个运行去看」这件事本身拿掉。
   const runTree = useMemo(() => buildRunTree(steps), [steps]);
-  // 选中哪个运行，`null` 表示全部。带着 sessionId，在渲染时比较而不是用 effect
-  // 事后清除——与 Work 页那条同一个形状、同一个理由：一个 run id 属于一条流，
-  // 带过去只会把下一个会话过滤成空的。
-  const [runSelection, setRunSelection] = useState<{
-    sessionId: string;
-    runId: string;
-  } | null>(null);
-  const selectedRunId =
-    runSelection !== null && runSelection.sessionId === sessionId
-      ? runSelection.runId
-      : null;
+  // 选中哪个运行，`null` 表示全部。
+  //
+  // **在 URL 里**，与 Work 页那条 `?run=` 同一个形状、同一个理由（第三十四批）：
+  // 它让收窄可深链、可分享、刷新后还在，并且**免费**解决了「切会话要不要清掉它」
+  // ——会话 id 在路径里，换会话就是换 URL，查询串跟着走。上一批用
+  // `{sessionId, runId}` 配对做的事因此可以退掉。
+  //
+  // `replace` 而不压历史条目：这是一个筛选器，不是一个目的地。每点一次压一条，
+  // 会让返回键在读者点过几次之后才轮到「离开这个会话」，而面板本来就有显式的
+  // 「显示全部」。
+  const selectedRunId = searchParams.get("run");
+  const selectRun = useCallback(
+    (runId: string | null) => {
+      setSearchParams(
+        (held) => {
+          const next = new URLSearchParams(held);
+          if (runId === null) next.delete("run");
+          else next.set("run", runId);
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
   const shownSteps = useMemo(
     () =>
       selectedRunId === null
@@ -1358,13 +1373,7 @@ export function CodePage() {
           {/* 只在真的发生过委派时出现，与 Work 页同一条规则：没派生过的会话里
               每个运行都是这一回合本身，再来一块面板只是家具。 */}
           <RunPanel
-            onSelect={(runId) => {
-              setRunSelection(
-                runId === null || sessionId === undefined
-                  ? null
-                  : { sessionId, runId },
-              );
-            }}
+            onSelect={selectRun}
             roots={runTree}
             selectedRunId={selectedRunId}
           />
