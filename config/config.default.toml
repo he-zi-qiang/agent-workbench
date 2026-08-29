@@ -26,6 +26,12 @@ shutdown_grace_seconds = 30
 # JSON/metadata control plane only; document bytes use ArtifactStore data plane.
 max_control_request_body_bytes = 2097152
 document_upload_transport = "artifact_data_plane"
+# 屏幕控制服务器的只读出口，控制台那块面板经由 /v1/computer/session 转发到这里
+# （ADR-095 §5）。指到别的机器会被拒绝：那会让这个进程转述别人的屏幕。
+#
+# 这台服务器**默认不启动**，所以读不到是常态而不是故障——那一侧的界面把「读不到」
+# 和「读到了、名单是空的」显示成两件事。
+computer_session_url = "http://127.0.0.1:8768/session"
 
 [chat]
 # A Chat request has one fixed execution lease. Expiry terminalizes the Turn;

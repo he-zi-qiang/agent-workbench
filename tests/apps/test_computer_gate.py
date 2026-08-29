@@ -817,9 +817,7 @@ class TestTheGateRemembersWhatWasAttempted:
         gate = _gate(screen, NOTES)
 
         with pytest.raises(ScreenRefusedError):
-            asyncio.run(
-                gate.click(99999, 99999, display_id=SECOND_DISPLAY.display_id)
-            )
+            asyncio.run(gate.click(99999, 99999, display_id=SECOND_DISPLAY.display_id))
 
         [action] = gate.actions()
         assert action.allowed is False

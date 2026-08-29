@@ -743,6 +743,13 @@ class ApiRuntimeConfig:
     request_timeout_seconds: int
     shutdown_grace_seconds: int
     sse_heartbeat_seconds: int
+    #: Where the screen-control server's read-only route is (ADR-095 §5).
+    #:
+    #: Carried even though that server is usually not running: "not reachable"
+    #: is the honest common answer, and it is a different answer from "running,
+    #: and nothing has been approved". A console that could not tell those apart
+    #: is back at the problem the page refused to have by showing nothing.
+    computer_session_url: str
     max_control_request_body_bytes: int
     database: DatabaseConfig
     artifacts: ArtifactStoreConfig
@@ -1116,6 +1123,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         request_timeout_seconds=settings.api.request_timeout_seconds,
         shutdown_grace_seconds=settings.api.shutdown_grace_seconds,
         sse_heartbeat_seconds=settings.api.sse_heartbeat_seconds,
+        computer_session_url=settings.api.computer_session_url,
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
         record_step_inputs=settings.runtime.record_step_inputs,
         context_soft_limit_ratio=settings.runtime.context_soft_limit_ratio,
