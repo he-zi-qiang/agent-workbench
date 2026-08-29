@@ -33,7 +33,12 @@
 #
 # What this profile does NOT do is decide which applications may be touched.
 # That is a per-session decision the person makes through `request_access`, and
-# it starts empty every time the server restarts.
+# it starts empty every time the server restarts. Since ADR-091 the same
+# decision also settles which of the approved applications the model may bring
+# to the front -- and, just as deliberately, this file has no say in that
+# either: `activate_application` refuses whenever the window in front is one
+# nobody approved, which is a fact about this moment that no configuration file
+# can know.
 
 [app]
 environment = "development"
@@ -67,7 +72,16 @@ mcp_adapter = true
 alias = "computer"
 transport = "http"
 endpoint = "http://127.0.0.1:8768/mcp"
-tools = ["request_access", "screenshot", "left_click", "type", "key", "scroll"]
+tools = [
+  "request_access",
+  "list_granted_applications",
+  "activate_application",
+  "screenshot",
+  "left_click",
+  "type",
+  "key",
+  "scroll",
+]
 # `false`, and this is the one declaration in this file that is not a
 # convenience. ADR-025 §2.7 asks whether a graph-node replay may repeat these
 # calls. It may not: a click is not a GET. Replaying `left_click` presses the
@@ -83,7 +97,7 @@ tools = ["request_access", "screenshot", "left_click", "type", "key", "scroll"]
 #
 # Until 2026-08-23 that pair of refusals was incidental -- two `continue`
 # statements, asserted by no test that reads this profile, so deleting either
-# one would have widened every Task submitted here by six screen-control tools
+# one would have widened every Task submitted here by every screen-control tool
 # and broken nothing. ADR-075 makes it the decision instead:
 # a non-retryable MCP tool reaches a Task only through a deterministic node
 # that issues the call itself, never by model proposal.

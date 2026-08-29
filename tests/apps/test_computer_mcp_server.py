@@ -22,6 +22,20 @@ from agent_workbench.domain.computer import ApplicationIdentity
 
 NOTES = ApplicationIdentity(bundle_id="com.apple.Notes", name="Notes")
 TERMINAL = ApplicationIdentity(bundle_id="com.apple.Terminal", name="Terminal")
+#: Never granted in this file, and that is its whole job here.
+MAIL = ApplicationIdentity(bundle_id="com.apple.mail", name="Mail")
+
+
+def _ask(*applications: ApplicationIdentity) -> tuple[str, dict[str, Any]]:
+    return (
+        "request_access",
+        {
+            "applications": [
+                {"bundle_id": held.bundle_id, "name": held.name}
+                for held in applications
+            ]
+        },
+    )
 
 
 async def _approves(*_: object, **__: object) -> bool:
@@ -60,7 +74,10 @@ def _session(
     return asyncio.run(scenario())
 
 
-def test_the_tools_are_the_six_this_server_declares() -> None:
+def test_the_tools_are_the_eight_this_server_declares() -> None:
+    """Six until 2026-08-28, and the two that were missing were the two a task
+    needed to get past its first application (ADR-091)."""
+
     async def scenario() -> Any:
         async with Client(
             create_server(FakeScreen(), consent=_approves),
@@ -72,6 +89,8 @@ def test_the_tools_are_the_six_this_server_declares() -> None:
     names = [tool.name for tool in asyncio.run(scenario()).tools]
     assert names == [
         "request_access",
+        "list_granted_applications",
+        "activate_application",
         "screenshot",
         "left_click",
         "type",
@@ -305,3 +324,114 @@ def test_a_coordinate_off_the_screen_is_an_error_result_and_no_click() -> None:
     assert clicked.is_error is True
     assert "not a point on display 1" in clicked.content[0].text
     assert screen.actions == []
+
+
+def test_reading_the_approved_list_opens_no_dialog() -> None:
+    """The reason this tool exists.
+
+    Without it the only way to learn what is approved is to call
+    request_access again, which puts a second dialog in front of a person who
+    already decided once -- and a person asked twice approves the second one
+    without reading it.
+    """
+
+    asked: list[object] = []
+
+    async def counting(*args: object, **kwargs: object) -> bool:
+        asked.append((args, kwargs))
+        return True
+
+    screen = FakeScreen(focus=TERMINAL)
+    _, listed = _session(
+        screen,
+        [_ask(NOTES, TERMINAL), ("list_granted_applications", {})],
+        consent=counting,
+    )
+
+    assert listed.is_error is False
+    text = listed.content[0].text
+    assert "Notes (com.apple.Notes): tier full" in text
+    assert "Terminal (com.apple.Terminal): tier click" in text
+    assert "<- frontmost" in text
+    assert len(asked) == 1
+    assert screen.actions == []
+
+
+def test_an_empty_approved_list_is_an_answer_rather_than_an_error() -> None:
+    """ "Nothing yet" is the true answer to a legitimate question. An error
+    result reads as a broken server and sends a model looking for another
+    route."""
+
+    [listed] = _session(FakeScreen(focus=NOTES), [("list_granted_applications", {})])
+
+    assert listed.is_error is False
+    assert "No application has been approved" in listed.content[0].text
+    assert "request_access" in listed.content[0].text
+
+
+def test_the_list_does_not_name_a_window_nobody_approved() -> None:
+    """It reports *whether* an approved application is in front, never what is
+    in front when the answer is no -- that would make this a way to read what
+    the person is doing."""
+
+    _, listed = _session(
+        FakeScreen(focus=MAIL), [_ask(NOTES), ("list_granted_applications", {})]
+    )
+
+    text = listed.content[0].text
+    assert "None of them is frontmost" in text
+    assert "Mail" not in text
+    assert "<- frontmost" not in text
+
+
+def test_activation_is_how_a_task_reaches_its_second_application() -> None:
+    """Before ADR-091 this sequence had no second step: every other tool acts
+    on whatever is frontmost, and nothing could change what that was."""
+
+    screen = FakeScreen(focus=NOTES, installed=(NOTES, TERMINAL))
+    _, activated = _session(
+        screen,
+        [
+            _ask(NOTES, TERMINAL),
+            ("activate_application", {"bundle_id": TERMINAL.bundle_id}),
+        ],
+    )
+
+    assert activated.is_error is False
+    text = activated.content[0].text
+    assert "Terminal is frontmost, at tier click" in text
+    # The reminder is not decoration: every coordinate the model already holds
+    # was measured against a different window.
+    assert "Take a screenshot" in text
+
+
+def test_activation_is_refused_while_somebody_is_using_another_window() -> None:
+    screen = FakeScreen(focus=MAIL, installed=(NOTES, MAIL))
+    _, activated = _session(
+        screen,
+        [_ask(NOTES), ("activate_application", {"bundle_id": NOTES.bundle_id})],
+    )
+
+    assert activated.is_error is True
+    message = activated.content[0].text
+    assert "frontmost right now is not in this session's approved list" in message
+    assert "Mail" not in message
+    assert screen.actions == []
+
+
+def test_activation_will_not_start_an_application_that_is_not_running() -> None:
+    """A refusal rather than a launch, and it says which so the model does not
+    go looking for something on this machine that starts applications."""
+
+    screen = FakeScreen(focus=NOTES, installed=(NOTES,))
+    _, activated = _session(
+        screen,
+        [
+            _ask(NOTES, TERMINAL),
+            ("activate_application", {"bundle_id": TERMINAL.bundle_id}),
+        ],
+    )
+
+    assert activated.is_error is True
+    assert "is not running" in activated.content[0].text
+    assert "Ask the person to open it" in activated.content[0].text

@@ -91,6 +91,15 @@ def _body(applications: tuple[ApplicationIdentity, ...], reason: str) -> str:
     infer: approving Terminal grants strictly less than approving Notes, and
     an approval dialog that hid that would be asking for consent to something
     other than what happens.
+
+    Since ADR-091 the same sentence has to be said about the *set*, and for
+    the same reason. Approving three applications now also means "and it may
+    choose which of these three is in front", which is not something a list of
+    names says on its own. The line about it carries the bound with it -- that
+    an unapproved window in front stops everything, switching included --
+    because the reassurance and the permission are one fact and a dialog that
+    gave only the first half would be asking for consent to something other
+    than what happens.
     """
 
     lines = [
@@ -108,6 +117,8 @@ def _body(applications: tuple[ApplicationIdentity, ...], reason: str) -> str:
             f"理由：{reason}" if reason else "（没有给出理由）",
             "",
             "权限含义：read=只能看，click=能点不能打字，full=不受限。",
+            "名单里的应用之间可以被切到前台；最前面的窗口不在名单里时，"
+            "包括切换在内的一切动作都会被拒绝。",
             "批准只在这次会话有效，服务器一重启就清空。",
         ]
     )

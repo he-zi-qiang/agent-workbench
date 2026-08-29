@@ -3,7 +3,8 @@
 Every tool here is a thin shell over :class:`ScreenGate`. The shells are thin
 on purpose: a check performed in a tool handler is a check the next tool
 handler forgets, so all four of them live in the gate and every handler goes
-through it (ADR-070).
+through it (ADR-070). The two checks ADR-091 added for activation live there
+for the same reason, and the handler below is three lines because of it.
 
 The tool descriptions carry more prose than most in this repository, and that
 is deliberate too. They are the only place a model reads *before* it tries
@@ -85,6 +86,59 @@ _TOOLS: Final[tuple[types.Tool, ...]] = (
                         },
                     },
                 },
+            },
+        },
+    ),
+    types.Tool(
+        name="list_granted_applications",
+        title="Read this session's approved list",
+        description=(
+            "What a person has already approved in this session, and at which "
+            "tier. Reads state and changes none: nothing is shown to anybody "
+            "and no dialog opens, which is what makes it the right way to "
+            "answer 'what may I touch' -- calling request_access again to find "
+            "out would put a second dialog in front of a person who has "
+            "already decided once. Also says whether one of them is frontmost "
+            "right now, because that is the check every other tool here fails "
+            "on; it never says what is in front when the answer is something "
+            "nobody approved."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+        },
+    ),
+    types.Tool(
+        name="activate_application",
+        title="Bring an approved application to the front",
+        description=(
+            "Make one already-approved, already-running application frontmost, "
+            "which is the only way to reach a second application: every other "
+            "tool here acts on whatever is in front, and refuses when that is "
+            "not something the person approved.\n"
+            "Refused in three cases worth knowing before you call it. The "
+            "target is not in the approved list -- call request_access. The "
+            "target is approved but not running -- this brings an application "
+            "forward and never starts one, so ask the person to open it. Or "
+            "something nobody approved is frontmost at this moment: a person "
+            "is using a window that is not part of this task, and taking the "
+            "screen from it is their decision rather than yours. Do not poll "
+            "for that last one to clear."
+        ),
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["bundle_id"],
+            "properties": {
+                "bundle_id": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "description": (
+                        "The bundle id exactly as request_access or "
+                        "list_granted_applications reported it."
+                    ),
+                }
             },
         },
     ),
@@ -278,6 +332,52 @@ async def _dispatch(
             + "\n".join(lines)
             + "\n\nThis does not include permission to record the screen; the "
             "operating system asks for that separately, once."
+        )
+
+    if name == "list_granted_applications":
+        held = gate.grants()
+        if not held:
+            # Not an error result. The model asked a legitimate question and
+            # "nothing yet" is the true answer to it -- an error here would
+            # read as a broken server and send it looking for another route.
+            return _text(
+                "No application has been approved in this session yet.\n"
+                "Call request_access with the applications you need and wait "
+                "for the person to approve them."
+            )
+        front = gate.frontmost_grant()
+        lines = [
+            f"{grant.application.name} ({grant.application.bundle_id}): "
+            f"tier {grant.tier}"
+            + (
+                "  <- frontmost"
+                if front is not None
+                and front.application.bundle_id == grant.application.bundle_id
+                else ""
+            )
+            for grant in held
+        ]
+        # Both branches name what is *true of the screen*, and neither
+        # overstates it: `request_access` opens a dialog and is unaffected by
+        # what is in front, so "everything else would be refused" would be a
+        # sentence a model could catch this server being wrong about.
+        tail = (
+            "Clicking, typing, scrolling and screenshots all reach the "
+            "frontmost application, which is the marked one."
+            if front is not None
+            else "None of them is frontmost right now, so clicking, typing "
+            "and scrolling would all be refused, and so would bringing one "
+            "of these forward -- the screen currently belongs to a window "
+            "nobody approved, which is why it is not named here."
+        )
+        return _text("Approved for this session:\n" + "\n".join(lines) + "\n\n" + tail)
+
+    if name == "activate_application":
+        held = await gate.activate(str(arguments["bundle_id"]))
+        return _text(
+            f"{held.application.name} is frontmost, at tier {held.tier}. "
+            "Take a screenshot before acting on it: this changed which window "
+            "the coordinates of every other tool land in."
         )
 
     if name == "screenshot":

@@ -13,6 +13,10 @@ from agent_workbench.domain.computer import (
     ApplicationIdentity,
     DisplayFrame,
     ScreenshotBudget,
+    activation_did_not_take,
+    activation_needs_a_grant,
+    activation_would_take_the_screen,
+    application_is_not_running,
     focus_lost,
     kind_of,
     off_frame,
@@ -94,7 +98,7 @@ def test_the_bundle_id_beats_the_name() -> None:
 
 
 def test_read_permits_nothing_but_looking() -> None:
-    for action in ("left_click", "type", "key", "scroll", "drag"):
+    for action in ("left_click", "right_click", "type", "key", "scroll"):
         assert not permits("read", action)
 
 
@@ -114,8 +118,26 @@ def test_click_permits_a_click_and_refuses_a_keystroke() -> None:
 
 
 def test_full_permits_the_rest() -> None:
-    for action in ("left_click", "right_click", "type", "key", "drag"):
+    for action in ("left_click", "right_click", "middle_click", "type", "key"):
         assert permits("full", action)
+
+
+def test_no_tier_permits_something_this_project_cannot_do() -> None:
+    """The table is read as an inventory of what this project does to a screen.
+
+    `mouse_move` and `drag` sat in it until 2026-08-28 with nothing behind
+    them: no gate method, no tool, and for `drag` no port method either. That
+    broke nothing -- a permission for an action nobody performs refuses
+    nothing -- which is why it survived two ADRs. It was still a claim, and it
+    still priced the next drag tool at zero (ADR-091 §2.4).
+
+    `tests/apps/test_computer_gate.py` holds the other half of this: that every
+    name still in the table is one the gate really produces.
+    """
+
+    for action in ("mouse_move", "drag"):
+        for tier in ("read", "click", "full"):
+            assert not permits(tier, action)
 
 
 # --- the screenshot budget -------------------------------------------------
@@ -293,3 +315,67 @@ def test_a_coordinate_mistake_is_not_answered_as_a_security_event() -> None:
 
     assert "AppleScript" not in message
     assert "work around" not in message
+
+
+# --- what an activation refusal says ---------------------------------------
+
+
+def test_activating_something_unapproved_says_nothing_about_the_machine() -> None:
+    """Only the allowlist was consulted, so only the allowlist is answered.
+
+    A message that told "not approved" apart from "not installed" would turn
+    this refusal into a way to ask which applications exist on somebody's
+    machine -- a strictly larger capability than the one being refused.
+    """
+
+    message = activation_needs_a_grant(bundle_id="com.apple.Mail")
+
+    assert "com.apple.Mail" in message
+    assert "request_access" in message
+    assert "never use AppleScript" in message
+    for leak in ("running", "installed", "not found"):
+        assert leak not in message
+
+
+def test_a_refusal_for_somebody_elses_window_does_not_name_that_window() -> None:
+    """The narrowing this refusal serves is about a person, not an attacker.
+
+    It fires exactly when what is frontmost is something nobody approved --
+    so a message that named it would make every refused activation a reading
+    of what the person is doing, which is what the allowlist exists to stop.
+    """
+
+    message = activation_would_take_the_screen(target=app("com.apple.Notes", "Notes"))
+
+    assert "Notes" in message
+    assert "Mail" not in message
+    # And it does not read as a temporary condition to spin on.
+    assert "Do not poll" in message
+
+
+def test_an_approved_application_that_is_not_running_is_not_offered_a_launch() -> None:
+    """The remedy is a person, and saying so is the whole message.
+
+    A refusal that only said "not running" would send a model looking for
+    something that starts applications, and this machine has several.
+    """
+
+    message = application_is_not_running(target=app("com.apple.Notes", "Notes"))
+
+    assert "Notes" in message
+    assert "not running" in message
+    assert "Ask the person to open it" in message
+
+
+def test_an_activation_that_did_not_take_says_what_is_in_front_instead() -> None:
+    """Not a policy refusal -- nothing was denied -- but a failure the model
+    has to hear, or its next action is refused for a reason it cannot see."""
+
+    message = activation_did_not_take(
+        target=app("com.apple.Notes", "Notes"),
+        now_frontmost=app("com.apple.Terminal", "Terminal"),
+    )
+
+    assert "Notes" in message and "Terminal" in message
+    assert "Nothing was clicked or typed" in message
+    assert "screenshot" in message

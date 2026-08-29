@@ -1,4 +1,4 @@
-import { CircleX, Keyboard, MonitorCheck, ScanEye } from "lucide-react";
+import { CircleX, Keyboard, MonitorCheck, PanelsTopLeft, ScanEye } from "lucide-react";
 
 /**
  * What the screen tools may do to this machine, and why the order of the
@@ -20,6 +20,14 @@ import { CircleX, Keyboard, MonitorCheck, ScanEye } from "lucide-react";
  * a screenshot. All of it is `domain/computer.py` and `computer_mcp/gate.py`
  * restated -- if those change and this does not, this page is wrong, which is
  * the tradeoff a hand-copied explanation always carries.
+ *
+ * ADR-091 is the first change to have actually collected on that tradeoff, and
+ * in two places at once. Check 3 now answers a weaker question, because one
+ * tool changes what is frontmost instead of being judged by it; and the tier
+ * row for `click` said this project could move the cursor, which it never
+ * could -- `_ALLOWED` listed `mouse_move` for a gate method that did not
+ * exist. The second one is the failure mode this docblock describes, arriving
+ * exactly as described: a hand-copied claim outliving the thing it copied.
  */
 
 /** The four checks, in the order `ScreenGate` applies them. */
@@ -45,7 +53,9 @@ const CHECKS = [
     title: "它现在还在最前面吗？",
     detail:
       "每个动作发生前重读当前前台应用，从不缓存。一次决定完就动手的门禁，授权" +
-      "的是它读到的那一刻的屏幕；等按键落下时，屏幕已经是它现在的样子。",
+      "的是它读到的那一刻的屏幕；等按键落下时，屏幕已经是它现在的样子。" +
+      "ADR-091 之后这一道回答的问题弱了一档——见下一节，那是本页唯一一处" +
+      "「权限边界被主动放宽」的地方。",
     pivot: true,
   },
   {
@@ -72,14 +82,38 @@ const TIERS = [
     kinds: "终端 · IDE",
     tone: "warning",
     detail:
-      "可以左键单击、滚动、移动指针，不能打字。不是因为终端危险，是因为跑命令的" +
-      "正门已经存在：沙箱工具带策略门禁和审计轨迹，送进终端窗口的按键两样都没有。",
+      "可以左键单击、滚动，不能打字。不是因为终端危险，是因为跑命令的正门已经" +
+      "存在：沙箱工具带策略门禁和审计轨迹，送进终端窗口的按键两样都没有。",
   },
   {
     tier: "full",
     kinds: "其它一切",
     tone: "success",
     detail: "无限制。这是唯一一档能打字的。",
+  },
+] as const;
+
+/**
+ * What `activate_application` checks, and what each check is holding back.
+ *
+ * The one place on this page where a boundary was deliberately *widened*, so
+ * both halves are stated: what the model gained, and what it is still refused.
+ */
+const ACTIVATION = [
+  {
+    key: "target",
+    title: "目标在名单里吗？",
+    detail:
+      "同一张 allowlist，同样从空开始。激活不看 tier——它不合成任何输入，把浏览器" +
+      "切到前台买到的恰好就是「可以看它」，而看它本来就是批准它的目的。",
+  },
+  {
+    key: "incumbent",
+    title: "此刻最前面的那个也在名单里吗？",
+    detail:
+      "在人批准过的那一组里重排，是那个人委派出去的选择；把屏幕从正在被使用的那扇" +
+      "窗抢回来，不是。所以人一切到别的窗口，任务就停住——这不是副作用，是这条规则" +
+      "的正面含义。想往下走有一条正当的路：请人把那个应用也批准进来。",
   },
 ] as const;
 
@@ -163,6 +197,61 @@ export function ComputerPage() {
           什么都不报。因此坐标带着它是在哪块屏上量的走，不在那块屏上的坐标被拒绝，
           而只要这台机器不止一块屏，省略这件事本身也被拒绝。这一步排在三道检查
           之后，好让一个什么都没被批准的会话没法用它量出别人的显示器摆位。
+        </p>
+      </section>
+
+      {/* Between the four checks and the tier table on purpose: it is a
+          footnote to check 3, and reading it after the tiers would make it
+          look like a fourth tier. */}
+      <section aria-labelledby="aw-activate-heading">
+        <div className="aw-section-head">
+          <h2 id="aw-activate-heading">换到另一个应用</h2>
+          <span>ADR-091 · 第 3 道检查的含义变了</span>
+        </div>
+        <div className="aw-notice is-warning">
+          <PanelsTopLeft aria-hidden="true" size={16} />
+          <div>
+            <strong>
+              第 3 道从「人选了这扇窗」变成「模型在人批准的集合里选了一扇」。
+            </strong>
+            <small>
+              在此之前，六个工具没有一个能改变前台应用，而每一个都要求被批准的应用
+              此刻在最前面——于是任何跨两个应用的任务都走不到第二步，而且不是被
+              拒绝，是没有工具可调。加上激活之后，「前台是被批准的」不再等于
+              「人此刻正看着它并选择了它」。丢掉的就是这一层信息。
+            </small>
+          </div>
+        </div>
+        <ol className="aw-gate-list">
+          {ACTIVATION.map((check, index) => (
+            <li
+              className={`aw-gate-check ${index === 1 ? "is-pivot" : ""}`}
+              key={check.key}
+            >
+              <span aria-hidden="true" className="aw-gate-number">
+                {index + 1}
+              </span>
+              <div>
+                <strong>
+                  {check.title}
+                  {index === 1 ? <span className="aw-gate-pivot">收窄</span> : null}
+                </strong>
+                <p>{check.detail}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <p className="aw-gate-note">
+          第二条的拒绝文案<strong>不说最前面的是谁</strong>。它恰好只在「最前面的
+          应用没被批准」时触发，所以一个会点名的拒绝，等于把每一次被拒的激活变成
+          一次「此刻这个人在用什么」的读数——那正是名单要挡的东西。同样的理由，
+          读名单的那个工具只答「有没有一个名单里的在最前面」，不答没有的时候是谁。
+        </p>
+        <p className="aw-gate-note">
+          激活<strong>从不启动应用</strong>。启动一个进程和把窗口重排不是一个量级
+          的行为，而且人批准的那份名单不是这个意思：对话框问的是「可以在这次会话里
+          控制下列应用」。两个应用都得已经开着，任务才跨得过去——代价记在
+          known-gaps F-29。
         </p>
       </section>
 

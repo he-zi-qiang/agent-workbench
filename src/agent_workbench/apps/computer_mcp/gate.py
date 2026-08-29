@@ -16,6 +16,14 @@ without rewriting everything above it. A gate that decides once and then acts
 has authorized the screen as it was, and by the time the keystroke lands the
 screen is as it is.
 
+Since ADR-091 one method -- ``activate`` -- **changes** the answer to check 3
+instead of being judged by it, and that is a different kind of thing to have
+here. It is bounded by a second question nobody had to ask before: not just
+"is the target approved", but "is what is in front *right now* approved too".
+The first makes the model's choice a choice among windows a person agreed to;
+the second keeps it from taking the screen away from the window that person is
+actually using.
+
 Between check 3 and the action there is one more step, and it is deliberately
 **not** called a check: the point a model measured on a picture of one display
 is converted into the global space the event is posted into (ADR-090). It
@@ -36,6 +44,10 @@ from agent_workbench.domain.computer import (
     ApplicationIdentity,
     ScreenshotBudget,
     ScreenTier,
+    activation_did_not_take,
+    activation_needs_a_grant,
+    activation_would_take_the_screen,
+    application_is_not_running,
     focus_lost,
     off_frame,
     permits,
@@ -130,7 +142,34 @@ class ScreenGate:
         return given
 
     def grants(self) -> tuple[Grant, ...]:
+        """Everything approved in this session, as the person approved it.
+
+        Sorted by nothing: insertion order is grant order, which is the order
+        the person read them in.
+        """
+
         return tuple(self._granted.values())
+
+    def frontmost_grant(self) -> Grant | None:
+        """The approved application in front right now, or ``None``.
+
+        ``None`` covers two situations the caller is deliberately not allowed
+        to tell apart: something unapproved is frontmost, or nothing is. Both
+        mean the same thing to a model -- the next action will be refused by
+        check 3 -- and distinguishing them would require naming a window
+        nobody approved, which is the reading the allowlist exists to prevent.
+
+        Live, like every other reading of the front of the screen, so an
+        answer is about the moment it was asked and not the moment it is used.
+        """
+
+        now = self.screen.frontmost()
+        if now.bundle_id not in self._granted:
+            return None
+        # Re-derived from the live identity, for the same reason
+        # `_require_frontmost` does it: the stored grant records what a person
+        # approved, and what is on screen is what an action would reach.
+        return Grant(application=now, tier=tier_for(now))
 
     # --- checking --------------------------------------------------------
 
@@ -238,7 +277,7 @@ class ScreenGate:
             raise ScreenRefusedError(off_frame(x=x, y=y, frame=frame))
         return frame.to_global(x, y)
 
-    # --- acting ----------------------------------------------------------
+    # --- looking, and choosing what to look at ---------------------------
 
     async def screenshot(self, display_id: int | None = None) -> Capture:
         """A capture of one display, inside the token budget, of the approved
@@ -309,6 +348,63 @@ class ScreenGate:
         """
 
         return tuple(sorted(self._granted))
+
+    async def activate(self, bundle_id: str) -> Grant:
+        """Bring an approved application to the front.
+
+        The one tool that changes the answer to check 3 rather than being
+        judged by it, which is why it needed its own ADR (ADR-091). Before it
+        existed, "which window is in front" was a fact about what the person
+        had chosen and the gate only ever read it. After it, the model picks --
+        and so the question check 3 answers changes from *"did the person put
+        this window in front"* to *"is this window one of the ones the person
+        approved"*.
+
+        Two checks, and the second is the narrowing that makes the first one
+        safe to grant:
+
+        1. **The target is approved.** Same allowlist, same starting state of
+           empty. Activation is not tier-gated, for the same reason a
+           screenshot is not: it synthesizes no input, and everything that
+           happens afterwards is gated again against whatever is frontmost
+           then. Bringing a browser forward buys exactly the ability to look
+           at it.
+        2. **Whatever is frontmost right now is also approved.** Without this
+           the tool takes the screen away from somebody: a person who has
+           switched to their mail to read something would have the window
+           pulled out from under them by a task that was told about neither
+           the mail nor the switch. Rearranging *within* the set a person
+           approved is a choice they delegated; taking the screen back from
+           the window they are actually using is not.
+
+        There is no check 4 here, and the absence is deliberate. Typing needs
+        one because it can be half-delivered; an activation either took or did
+        not, and this reports which -- from the identity the port hands back
+        after its own bounded wait, not from a second read that would race it.
+        """
+
+        held = self._granted.get(bundle_id)
+        if held is None:
+            raise ScreenRefusedError(activation_needs_a_grant(bundle_id=bundle_id))
+        if self.frontmost_grant() is None:
+            raise ScreenRefusedError(
+                activation_would_take_the_screen(target=held.application)
+            )
+        after = await self.screen.activate(bundle_id)
+        if after is None:
+            raise ScreenRefusedError(
+                application_is_not_running(target=held.application)
+            )
+        if after.bundle_id != bundle_id:
+            raise ScreenRefusedError(
+                activation_did_not_take(target=held.application, now_frontmost=after)
+            )
+        # From the live identity, like every other answer this gate gives about
+        # the front of the screen: an application that was approved under one
+        # name and now reports another is exactly what the tier table is for.
+        return Grant(application=after, tier=tier_for(after))
+
+    # --- acting ----------------------------------------------------------
 
     async def click(
         self,

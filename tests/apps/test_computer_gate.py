@@ -22,6 +22,9 @@ from agent_workbench.domain.computer import ApplicationIdentity
 NOTES = ApplicationIdentity(bundle_id="com.apple.Notes", name="Notes")
 TERMINAL = ApplicationIdentity(bundle_id="com.apple.Terminal", name="Terminal")
 CHROME = ApplicationIdentity(bundle_id="com.google.Chrome", name="Google Chrome")
+#: Deliberately never granted anywhere in this file. It stands in for the
+#: window a person switched to for a reason this task was not told about.
+MAIL = ApplicationIdentity(bundle_id="com.apple.mail", name="Mail")
 
 
 async def _always(*_: object, **__: object) -> bool:
@@ -475,3 +478,227 @@ def test_screenshotting_a_display_this_machine_lacks_is_refused() -> None:
 
     assert "no display 7" in str(refused.value)
     assert screen.actions == []
+
+
+# --- bringing an application forward (ADR-091) -----------------------------
+
+
+def test_a_task_can_move_between_the_applications_a_person_approved() -> None:
+    """The capability that did not exist until ADR-091.
+
+    Every other tool acts on whatever is frontmost, and nothing could change
+    what that was -- so a task spanning two applications could not take its
+    second step, whatever the person had approved.
+    """
+
+    screen = FakeScreen(focus=NOTES, installed=(NOTES, TERMINAL))
+    gate = _gate(screen, NOTES, TERMINAL)
+
+    held = asyncio.run(gate.activate(TERMINAL.bundle_id))
+
+    assert held.application == TERMINAL
+    assert ("activate", TERMINAL.bundle_id) in screen.actions
+    # And the gate now answers about the window that is really in front.
+    assert screen.frontmost() == TERMINAL
+
+
+def test_the_tier_of_the_window_that_arrived_is_reported_not_the_one_asked_for() -> (
+    None
+):
+    """A model that brought a terminal forward has to hear "click" now, not
+    when its next keystroke is refused."""
+
+    screen = FakeScreen(focus=NOTES, installed=(NOTES, TERMINAL))
+    gate = _gate(screen, NOTES, TERMINAL)
+
+    assert asyncio.run(gate.activate(TERMINAL.bundle_id)).tier == "click"
+
+
+def test_activation_is_not_tier_gated_and_still_buys_nothing_extra() -> None:
+    """A browser may be brought forward and still not be clicked.
+
+    Activation synthesizes no input, so it is gated by the allowlist rather
+    than by the tier -- the same place a screenshot is gated, for the same
+    reason. What follows it is gated again, against what is frontmost then.
+    """
+
+    screen = FakeScreen(focus=NOTES, installed=(NOTES, CHROME))
+    gate = _gate(screen, NOTES, CHROME)
+
+    held = asyncio.run(gate.activate(CHROME.bundle_id))
+    assert held.tier == "read"
+
+    with pytest.raises(ScreenRefusedError):
+        asyncio.run(gate.click(10, 10))
+    assert not any(action == "click" for action, _ in screen.actions)
+
+
+def test_an_unapproved_application_cannot_be_brought_forward() -> None:
+    screen = FakeScreen(focus=NOTES, installed=(NOTES, MAIL))
+    gate = _gate(screen, NOTES)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.activate(MAIL.bundle_id))
+
+    assert "not in this session's approved list" in str(refused.value)
+    # Refused before the port was asked, so the allowlist is not a filter on
+    # something that already happened.
+    assert screen.actions == []
+    assert screen.frontmost() == NOTES
+
+
+def test_the_screen_is_not_taken_from_a_window_nobody_approved() -> None:
+    """The narrowing that makes the rest of this safe to grant (ADR-091 §2.2).
+
+    Notes and Terminal are both approved, so the *target* check passes. What
+    refuses is that a person has switched to something else -- and pulling the
+    screen back from the window they are using is their decision, not a task's.
+    """
+
+    screen = FakeScreen(focus=MAIL, installed=(NOTES, TERMINAL, MAIL))
+    gate = _gate(screen, NOTES, TERMINAL)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.activate(NOTES.bundle_id))
+
+    message = str(refused.value)
+    assert "frontmost right now is not in this session's approved list" in message
+    # And it does not say *what* they switched to. This refusal fires exactly
+    # when the frontmost application is unapproved, so naming it would make
+    # every refusal a reading of what the person is doing.
+    assert "Mail" not in message
+    assert screen.actions == []
+
+
+def test_an_approved_application_that_is_not_running_is_not_launched() -> None:
+    """Activation reorders windows; it does not start processes.
+
+    Approving a name is not approving a launch -- an application starting is
+    whatever that application does on startup, on somebody's machine, and it
+    is not what the dialog asked about (ADR-091 §4).
+    """
+
+    screen = FakeScreen(focus=NOTES, installed=(NOTES,))
+    gate = _gate(screen, NOTES, TERMINAL)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.activate(TERMINAL.bundle_id))
+
+    assert "is not running" in str(refused.value)
+    assert "Ask the person to open it" in str(refused.value)
+
+
+def test_an_activation_the_window_server_did_not_honour_is_reported() -> None:
+    """Activation is a request, not a function call.
+
+    `activation_lands=False` stands in for a modal sheet, a full-screen space
+    or an application that declines. Nothing was denied and nothing happened,
+    and the model has to hear the second half or its next action is refused
+    for a reason it cannot see.
+    """
+
+    screen = FakeScreen(
+        focus=NOTES, installed=(NOTES, TERMINAL), activation_lands=False
+    )
+    gate = _gate(screen, NOTES, TERMINAL)
+
+    with pytest.raises(ScreenRefusedError) as refused:
+        asyncio.run(gate.activate(TERMINAL.bundle_id))
+
+    message = str(refused.value)
+    assert "did not" in message and "Notes" in message
+    assert "Nothing was clicked or typed" in message
+
+
+# --- reading the approved list ---------------------------------------------
+
+
+def test_the_approved_list_can_be_read_without_asking_anybody_again() -> None:
+    """The only other way to learn this was to call `grant` a second time,
+    which puts a second dialog in front of a person who already decided."""
+
+    asked: list[object] = []
+
+    async def counting(*args: object, **kwargs: object) -> bool:
+        asked.append((args, kwargs))
+        return True
+
+    screen = FakeScreen(focus=NOTES)
+    gate = _gate(screen, NOTES, TERMINAL, answers=counting)
+
+    listed = gate.grants()
+
+    assert [held.application.name for held in listed] == ["Notes", "Terminal"]
+    assert [held.tier for held in listed] == ["full", "click"]
+    assert len(asked) == 1
+
+
+def test_reading_the_list_says_whether_one_of_them_is_in_front() -> None:
+    """The frontmost check is what every other tool here fails on, so the
+    answer to "may I act" is not the list alone."""
+
+    screen = FakeScreen(focus=TERMINAL)
+    gate = _gate(screen, NOTES, TERMINAL)
+
+    front = gate.frontmost_grant()
+
+    assert front is not None
+    assert front.application == TERMINAL
+    assert front.tier == "click"
+
+
+def test_reading_the_list_never_names_a_window_nobody_approved() -> None:
+    """`None` covers both "something unapproved is in front" and "nothing is",
+    and the caller is deliberately unable to tell them apart."""
+
+    granted = FakeScreen(focus=MAIL)
+    assert _gate(granted, NOTES).frontmost_grant() is None
+
+    nothing = FakeScreen(focus=ApplicationIdentity(bundle_id="", name=""))
+    assert _gate(nothing, NOTES).frontmost_grant() is None
+
+
+# --- the table and the methods behind it -----------------------------------
+
+#: Every action name in `_ALLOWED`, and the gate call that produces it.
+#:
+#: Written out rather than derived, because deriving it from the gate would
+#: make the test agree with whatever the gate does -- which is the thing being
+#: checked.
+_PERFORMED = {
+    "left_click": lambda gate: gate.click(1, 1),
+    "right_click": lambda gate: gate.click(1, 1, button="right"),
+    "middle_click": lambda gate: gate.click(1, 1, button="middle"),
+    "double_click": lambda gate: gate.click(1, 1, count=2),
+    "triple_click": lambda gate: gate.click(1, 1, count=3),
+    "scroll": lambda gate: gate.scroll(1, 1, direction="down", amount=3),
+    "type": lambda gate: gate.type_text("x"),
+    "key": lambda gate: gate.key("cmd+c"),
+}
+
+
+def test_every_permitted_action_is_one_the_gate_actually_performs() -> None:
+    """The other half of `test_no_tier_permits_something_this_project_cannot_do`.
+
+    The permission table is read as an inventory of what this project may do
+    to a screen, and until 2026-08-28 it listed two actions -- `mouse_move`
+    and `drag` -- that no gate method and no tool could reach. Nothing failed,
+    because a permission for an action nobody performs refuses nothing. It was
+    still an answer to "what does this do", and it was wrong (ADR-091 §2.4).
+
+    Driven against a browser rather than asserted against a list: `refusal()`
+    names the action it refused, so a gate path that stopped producing its own
+    action name would fail here too.
+    """
+
+    from agent_workbench.domain.computer import _ALLOWED
+
+    assert set().union(*_ALLOWED.values()) == set(_PERFORMED)
+
+    for action, drive in _PERFORMED.items():
+        screen = FakeScreen(focus=CHROME)
+        gate = _gate(screen, CHROME)
+        with pytest.raises(ScreenRefusedError) as refused:
+            asyncio.run(drive(gate))
+        assert f"so {action} is not available" in str(refused.value), action
+        assert screen.actions == [], action
