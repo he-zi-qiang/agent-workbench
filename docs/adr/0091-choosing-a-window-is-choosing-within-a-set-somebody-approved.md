@@ -276,6 +276,27 @@ ADR-076 §3 与 §6 拒绝过同一件事的另一个形态，理由原样成立
 
 **F-19 不受影响。** 批准仍然是进程级而不是 MCP 会话级的。
 
+**2026-08-29 更新：去真机上跑了，`activate` 不工作，而原因不在本 ADR。** 那台机器
+录屏已授权、**辅助功能未授权**，而 `DarwinScreen.__init__` 当时只检查前者——于是服务器
+正常启动，`activateWithOptions_` 返回 `True` 且前台一动不动（四种 options、泵不泵
+run loop、预算放到 10 秒，都一样）。这不是激活特有的：同一个缺失的授权让 `left_click`、
+`type`、`key`、`scroll` 也静默空转。ADR-070 §4 早就论证过这道启动检查该存在，它只是
+从来没有被写出来；补上之后适配器改为在启动时拒绝。**本 ADR 的门禁逻辑在这件事上是对的**
+——`ScreenGate.activate` 按 §3.1 的设计复查了前台，如实抛出 `activation_did_not_take`
+而不是谎报成功。`activate` 的能力等级**仍然停在 Tested**，现在卡在一件需要人去
+System Settings 授权的事上。详见 [status.md](../status.md) 第四十六批。
+
+**2026-08-29 再更新：它现在能工作了，而缺的那件事不在本 ADR 里。**
+[ADR-092](./0092-a-server-that-changes-the-front-of-the-screen-is-an-application.md)
+查明 macOS 要求四个条件同时成立（bundle 身份、代码签名、辅助功能授权、主线程活着的
+run loop），把服务器做成签名的 `.app`、主线程交给 `NSApplication`、uvicorn 挪到后台
+线程之后，激活实测 **15/15**。**本 ADR 的门禁逻辑一个字没改，而且端到端验证有效**：
+§2.2 那条收窄在真实会话里真的拦下了「Claude 在最前面而它不在名单里」的三次激活，
+且拒绝文案没有点名它；放一个已批准的应用到前台之后，同样三次全部成功；§2.3 也成立
+——切到 Safari 后如实回报 `tier read`，且它依然不可点击。`activate_application`
+的能力等级因此从 Tested 走到 **Demonstrated**（本机；CI 不装这个 extra）。
+顺带兑现了 §2.2 的一个此前没写出来的推论：**会话里第一次切换必须由人发起**。
+
 **这一批的证据只能是本机的，而且这一批连本机的都不完整。** CI 不装 `computer-use`
 extra，而写这一批的 checkout 里也没有装——所以 `adapters/screen/darwin.py` 里新增的
 `activate` **没有在真机上跑过**，`tests/apps/test_computer_darwin.py` 在这里是

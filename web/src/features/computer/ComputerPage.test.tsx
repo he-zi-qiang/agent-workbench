@@ -53,8 +53,31 @@ describe("ComputerPage", () => {
   it("says activation never starts an application", () => {
     render(<ComputerPage />);
 
-    expect(screen.getByText(/从不启动应用/)).toBeInTheDocument();
+    // Two nodes carry this phrase since the F-30 notice went in: the claim
+    // itself, and the notice referring back to it. Assert the claim's own
+    // element rather than uniqueness, which is a fact about the page's
+    // wording rather than about what it promises.
+    expect(
+      screen.getByText("从不启动应用", { selector: "strong" }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/known-gaps F-29/)).toBeInTheDocument();
+  });
+
+  it("states the four conditions activation actually requires", () => {
+    // The page promises to mirror the gate. Activation works as of ADR-092,
+    // but only because the server is packaged a particular way -- and a page
+    // that described the two checks without saying so would leave a reader
+    // thinking any deployment gets this.
+    const { container } = render(<ComputerPage />);
+
+    expect(
+      screen.getByText(/这个能力要求服务器自己是一个签名的 \.app（ADR-092）。/),
+    ).toBeInTheDocument();
+    const prose = container.textContent ?? "";
+    expect(prose).toContain("主线程活着的 run loop");
+    // The measured evidence, including the shape of every failure.
+    expect(prose).toContain("15/15");
+    expect(prose).toContain("失败");
   });
 
   it("does not claim a tier that can move the cursor or drag", () => {

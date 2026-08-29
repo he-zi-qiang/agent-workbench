@@ -2,6 +2,7 @@
 # pyright: reportAttributeAccessIssue=false
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
 # pyright: reportUnknownArgumentType=false, reportUnknownLambdaType=false
+# pyright: reportUntypedBaseClass=false
 #
 # pyobjc is behind the macOS-only `computer-use` extra, so on the machine CI
 # runs on it is not installed at all and the two imports below do not
@@ -15,7 +16,13 @@
 # strict mode *can* still say here -- an undefined name, an unreachable branch,
 # a wrong argument count against this module's own functions -- still fails the
 # gate. This is the only file in the repository with any of them, which is the
-# point of keeping the FFI in one thin module (ADR-070).
+# point of keeping the FFI in one thin module (ADR-070) -- and the reason
+# ADR-092 put the AppKit run loop in here rather than in the entry point that
+# needs it.
+#
+# `reportUntypedBaseClass` is the newest of them and the narrowest: subclassing
+# `NSObject` is how a timer target is written, and the bridge builds that base
+# class at runtime, so pyright has nothing to read.
 """The macOS half: Quartz for the screen, CGEvent for the cursor and keyboard.
 
 Everything here is one operating system's answer to a question asked in
@@ -45,8 +52,10 @@ whole tier model rests on that being a fresh reading (ADR-070).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
+from collections.abc import Callable
 from typing import Any, Final
 
 from agent_workbench.domain.computer import SCREENSHOT_QUALITY, ApplicationIdentity
@@ -163,6 +172,92 @@ _ACTIVATION_POLL_SECONDS: Final[float] = 0.02
 _PRESS_SECONDS: Final[float] = 0.008
 
 
+def can_change_frontmost() -> str | None:
+    """Why this process cannot bring an application forward, or ``None``.
+
+    Four things have to be true at once on this platform, and three of them
+    are properties of *how the process was started* rather than of anything a
+    caller passes in. Measured 2026-08-29 by holding the others fixed and
+    removing one at a time (ADR-092 §2):
+
+    ==========================  ==================================
+    missing                     activations that took
+    ==========================  ==================================
+    bundle identity             0/20  (a bare interpreter)
+    code signature              0/10  (grant does not attach)
+    Accessibility grant         0/10
+    main-thread run loop        0/15
+    all four present            15/15
+    ==========================  ==================================
+
+    Checked so a misconfigured deployment says *why* instead of timing out.
+    Every one of those failures is silent at the API: `activateWithOptions_`
+    returns true and the screen does not change, which is the same shape
+    ADR-070 §4 refuses for `CGEventPost`.
+
+    The run loop cannot be pre-flighted at construction the way the two grants
+    are -- it does not exist yet when the composition root builds the adapter
+    -- so this is asked at the moment of use instead.
+    """
+
+    if AppKit.NSRunningApplication.currentApplication().bundleIdentifier() is None:
+        return (
+            "this server is not running as a bundled application, so macOS "
+            "will not let it change which application is frontmost. Start it "
+            "from the .app built by `scripts/build_computer_app.sh` "
+            "(`scripts/dev.sh computer-server` does this)."
+        )
+    if not AppKit.NSApplication.sharedApplication().isRunning():
+        return (
+            "this server has no main-thread run loop, so macOS will not let "
+            "it change which application is frontmost. This is a defect "
+            "rather than a configuration mistake: the entry point is supposed "
+            "to hand the main thread to AppKit (ADR-092)."
+        )
+    return None
+
+
+def give_main_thread_to_appkit(*, serving: Callable[[], bool]) -> None:
+    """Register with the window server and run AppKit's loop until serving stops.
+
+    This is the fourth of the four conditions in :func:`can_change_frontmost`,
+    and the one that cost the most to find: with a bundle, a signature and the
+    Accessibility grant all in place, activation still failed 15 times out of
+    15 without it, and succeeded 15 out of 15 with it.
+
+    ``NSApplicationActivationPolicyAccessory``: registered with the window
+    server -- which is what activation needs -- while owning no Dock icon and
+    no menu bar. A server that put an icon in somebody's Dock would be
+    announcing itself as an application they can switch to, and it is not one.
+
+    The timer is not decoration either. ``run()`` is a C call that never
+    yields, so a Ctrl-C would set Python's flag with nothing left to check it
+    and the process would only answer SIGKILL. Waking every 250 ms gives the
+    interpreter somewhere to notice both the signal and a server thread that
+    has stopped on its own -- which is a crash rather than a shutdown, because
+    nothing else stops it.
+    """
+
+    ns_app = AppKit.NSApplication.sharedApplication()
+    ns_app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+
+    class _Ticker(AppKit.NSObject):
+        def tick_(self, timer: Any) -> None:
+            del timer
+            if not serving():
+                AppKit.NSApplication.sharedApplication().terminate_(None)
+
+    ticker = _Ticker.alloc().init()
+    AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        0.25, ticker, "tick:", None, True
+    )
+    # Ctrl-C reaches Python only because of the timer above; suppressing it
+    # here is what turns it into an ordinary shutdown instead of a traceback
+    # out of a run loop.
+    with contextlib.suppress(KeyboardInterrupt):  # pragma: no cover - needs a tty
+        ns_app.run()
+
+
 class DarwinScreen:
     """A :class:`ScreenPort` backed by Quartz."""
 
@@ -179,6 +274,44 @@ class DarwinScreen:
                 "System Settings > Privacy & Security > Screen Recording for "
                 "the terminal or application running the server, then restart "
                 "it -- macOS only re-reads the grant at launch."
+            )
+        # The second grant, and until 2026-08-29 it was not checked at all --
+        # which made this constructor enforce half of what two documents said
+        # it enforced. ADR-070 §4 argued the whole principle from this exact
+        # API ("`CGEventPost` returns success having done nothing"), and
+        # `config.computer-local.toml` promised in as many words that the
+        # server "exits at startup with a message naming the one that is
+        # missing". Screen Recording was named and checked; Accessibility was
+        # named and not.
+        #
+        # Measured on this machine 2026-08-29, with Screen Recording granted
+        # and Accessibility not: `CGPreflightScreenCaptureAccess()` True,
+        # `CGPreflightPostEventAccess()` False -- and every input path was a
+        # silent no-op. `activateWithOptions_` returned True and left the
+        # frontmost application untouched through ten attempts and a
+        # ten-second budget; a click or a keystroke would have done the same,
+        # reporting "Clicked in Finder." to a model while nothing moved. That
+        # is the precise state ADR-070 §4 said this constructor exists to
+        # prevent.
+        #
+        # Screen Recording and this one are separate TCC grants and a process
+        # can hold either without the other, so they are two checks rather
+        # than one -- and the message names which is missing, because "screen
+        # permissions" sends somebody to the wrong pane of System Settings.
+        if not Quartz.CGPreflightPostEventAccess():
+            # Asks once, like the grant above. macOS shows its own dialog and
+            # remembers the answer; it never becomes true within this process,
+            # because the grant is read at launch.
+            Quartz.CGRequestPostEventAccess()
+        if not Quartz.CGPreflightPostEventAccess():
+            raise ScreenUnavailableError(
+                "this process has no Accessibility permission, so every click "
+                "and keystroke it synthesizes would report success and do "
+                "nothing, and no application could be brought to the front. "
+                "Grant it in System Settings > Privacy & Security > "
+                "Accessibility for the terminal or application running the "
+                "server, then restart it -- macOS only re-reads the grant at "
+                "launch."
             )
 
     # --- looking ---------------------------------------------------------
@@ -293,6 +426,14 @@ class DarwinScreen:
         whether or not it is what was asked for.
         """
 
+        # Asked before anything is attempted, because every way this can be
+        # wrong fails *silently*: the call returns true and the screen does
+        # not change. A two-second timeout that says "it did not take" would
+        # be true and useless -- the caller cannot tell a stubborn window from
+        # a server nobody bundled (ADR-092 §3).
+        blocked = can_change_frontmost()
+        if blocked is not None:
+            raise ScreenUnavailableError(blocked)
         running = AppKit.NSRunningApplication.runningApplicationsWithBundleIdentifier_(
             bundle_id
         )

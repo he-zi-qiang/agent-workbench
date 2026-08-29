@@ -415,7 +415,21 @@ computer-server)
   #
   # So the screen tools are reached by speaking MCP to this server --
   # `computer-check` below is a working example -- and not through a Task.
-  exec "$PYTHON" -m agent_workbench.apps.computer_mcp.main
+  #
+  # Started from a signed .app rather than from this shell, and that is a
+  # requirement rather than packaging taste (ADR-092). macOS lets a process
+  # change which application is frontmost only when it has a bundle identity,
+  # a code signature, the Accessibility grant and a live main-thread run loop.
+  # Launched from here it would have none of the first three, and
+  # `activate_application` would refuse every call -- politely, naming the
+  # reason, but every call.
+  #
+  # The build is idempotent and keeps the bundle id and signing identity
+  # fixed, so rebuilding does not cost another trip to System Settings.
+  bash "$(dirname "${BASH_SOURCE[0]}")/build_computer_app.sh"
+  APP="${AW_COMPUTER_APP_DIR:-$HOME/Applications}/AgentComputerMCP.app"
+  echo "starting $APP (log: ~/Library/Logs/AgentComputerMCP.log)" >&2
+  exec open -W -a "$APP"
   ;;
 
 computer-check)

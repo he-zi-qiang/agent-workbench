@@ -10,13 +10,26 @@
 # This file is one overlay over config.default.toml. DSNs and the provider key
 # remain environment-only; no credential belongs here.
 #
-# Three things must already be true before this profile does anything:
+# Four things must already be true before this profile does anything:
 #
 #   uv sync --extra computer-use      # pyobjc; macOS only, not installed by default
-#   scripts/dev.sh computer-server    # the server (`agent-computer-mcp`), on
+#   scripts/build_computer_app.sh     # the signed .app the server has to run
+#                                     # inside -- see below, it is not packaging
+#                                     # taste (ADR-092)
+#   scripts/dev.sh computer-server    # builds the .app and starts it, on
 #                                     # 127.0.0.1:8768
 #   System Settings > Privacy & Security > Screen Recording, and
-#   > Accessibility, both granted to whatever runs that server
+#   > Accessibility, both granted **to that .app** -- macOS keys the grants on
+#   the bundle id and code signature, so a grant given to your terminal does
+#   not carry over to it
+#
+# The .app is the part that surprises people. macOS lets a process change which
+# application is frontmost only when four things hold at once: a bundle
+# identity, a code signature, the Accessibility grant, and a live main-thread
+# run loop. Measured 2026-08-29, removing one at a time: 0/20, 0/10, 0/10,
+# 0/15 -- and with all four, 15/15. Every one of those failures is silent, so a
+# server started any other way hands out an `activate_application` that reports
+# success and moves nothing (ADR-092).
 #
 # If any of them is missing the server exits at startup with a message naming
 # the one that is missing, and an MCP client is handed no screen tool at all --

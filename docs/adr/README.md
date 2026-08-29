@@ -54,9 +54,10 @@
 | [ADR-076 没人批准过的窗口，不在那张图里](./0076-a-window-nobody-approved-is-not-in-the-picture.md) | 对照 Claude Desktop 的 computer use：合成器过滤要不要抄；批处理原语与视觉通路要不要抄；以及 ADR-070「人一次性批准」为何一直没有实现 | 接受，兑现 ADR-070 §2 并关闭 F-18；拒绝批处理原语与（本轮的）视觉通路 |
 | [ADR-090 一个坐标带着它是在哪块屏上量的](./0090-a-coordinate-carries-the-screen-it-was-measured-on.md) | ADR-076 §4 记下、明确不修的那条：截图按显示器给坐标、点击按全局坐标发事件；换算放哪一层才测得了；一个没说清自己在哪块屏上量的坐标该被怎么对待 | 接受，端口下面一律全局点、`Display` 带原点、换算进 domain；并把多屏时省略 `display_id` 由「当作主屏」收窄为拒绝；关闭 F-22 |
 | [ADR-091 模型可以挑窗口，但只能在人批准过的那一组里挑](./0091-choosing-a-window-is-choosing-within-a-set-somebody-approved.md) | 再对一次工具面：没有任何工具能改变前台应用（于是跨应用任务走不动）；`list_granted_applications` 没有出口；`_ALLOWED` 比工具表宽 | 接受，工具面 6 → 8；第 3 道检查的含义由「人选了这扇窗」变为「模型在人批准的集合里选了一扇」，并以「前台不在名单里就拒绝激活」收窄；`_ALLOWED` 与 `ScreenPort.move` 收窄；新增 F-29（不启动应用） |
+| [ADR-092 能改变屏幕最前面那扇窗的服务器，自己必须是一个应用](./0092-a-server-that-changes-the-front-of-the-screen-is-an-application.md) | ADR-091 的 `activate_application` 真机上一次都没成功；要不要为这一个能力改变服务器的进程形态；改了之后 ADR-076 §2 拒绝 `NSApplication` 的理由还成不成立 | 接受，服务器改为签名的 `.app`、主线程交给 `NSApplication`、uvicorn 挪到后台线程；**推翻 ADR-076 §2 的结论而非它的理由**；关闭 F-30 |
 
 > **这张表在 ADR-054 之后就断了：0055–0074 与 0077–0089 都没有行。**（ADR-075、
-> 0076、0090 与 0091 各是自己那一批顺手补的，不代表表已经跟上。）那些 ADR 都在同一个
+> 0076、0090、0091 与 0092 各是自己那一批顺手补的，不代表表已经跟上。）那些 ADR 都在同一个
 > 目录里，`ls docs/adr/` 就能看见。在补齐之前，**目录本身才是权威清单**，这张表
 > 只是一份停在过去某一天的摘要——按它来判断「有没有这条决策」会漏。
 

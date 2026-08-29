@@ -247,6 +247,24 @@ export function ComputerPage() {
           一次「此刻这个人在用什么」的读数——那正是名单要挡的东西。同样的理由，
           读名单的那个工具只答「有没有一个名单里的在最前面」，不答没有的时候是谁。
         </p>
+        <div className="aw-notice is-info">
+          <PanelsTopLeft aria-hidden="true" size={16} />
+          <div>
+            <strong>
+              这个能力要求服务器自己是一个签名的 .app（ADR-092）。
+            </strong>
+            <small>
+              macOS 只在四个条件同时成立时才允许一个进程改变前台应用：bundle 身份、
+              代码签名、辅助功能授权、<strong>主线程活着的 run loop</strong>。
+              2026-08-29 逐条实测——固定其余三条、每次去掉一条：0/20、0/10、0/10、
+              0/15;四条都在则 <strong>15/15</strong>。缺任何一条都是<strong>静默</strong>
+              失败:调用返回成功而屏幕不动。所以服务器由
+              <code>scripts/build_computer_app.sh</code> 打包成 .app，
+              uvicorn 挪到后台线程，主线程交给 AppKit;激活之前还会先问一次
+              「这个进程有资格吗」，缺了就当场说明是哪一条，而不是等超时。
+            </small>
+          </div>
+        </div>
         <p className="aw-gate-note">
           激活<strong>从不启动应用</strong>。启动一个进程和把窗口重排不是一个量级
           的行为，而且人批准的那份名单不是这个意思：对话框问的是「可以在这次会话里
