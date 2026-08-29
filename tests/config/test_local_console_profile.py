@@ -632,6 +632,57 @@ def test_a_code_session_may_delegate(
     assert api.multi_agent.max_delegation_depth >= 1
 
 
+@pytest.mark.parametrize("path", [DEMO_CONFIG, CODE_CONFIG], ids=["demo", "code"])
+def test_a_fan_out_has_room_to_retry_one_failure(
+    monkeypatch: pytest.MonkeyPatch, path: Path
+) -> None:
+    """`max_children_per_run` counts children *started*, failures included.
+
+    That is deliberate (`application/delegation.py`): a run that could retry a
+    failing child without cost could retry it forever, and every attempt spends
+    real money. The consequence is that an N-way fan-out under an allowance of
+    N has **no** tolerance for a single transient failure.
+
+    Measured 2026-08-28 on this deployment: a research turn dispatched four
+    analysts in one round, three returned, the fourth died on a provider
+    `RemoteProtocolError`, and the retry was refused -- so that section of the
+    report was written by the parent instead. The turn said so itself.
+
+    Six rather than four therefore buys retries, not a wider fan-out. Asserted
+    as a *relationship* rather than as the number six, because what matters is
+    the headroom: a profile that later widens its fan-out has to widen this
+    too, and an equality would pass while the tolerance quietly went to zero.
+    """
+
+    for name in tuple(os.environ):
+        if name.upper().startswith("AW_"):
+            monkeypatch.delenv(name, raising=False)
+    for suffix in ("DSN", "GUARD_DSN", "LISTEN_DSN"):
+        monkeypatch.setenv(f"AW_DATABASE__{suffix}", POSTGRES_DSN)
+    monkeypatch.setenv("AW_SECRETS__DEEPSEEK_API_KEY", "contract-only-not-a-real-key")
+
+    multi = load_settings(config_file=path).multi_agent
+
+    # The observed fan-out width, plus room for at least two retries.
+    assert multi.max_children_per_run >= 6
+    # And the ceiling the validator enforces still holds, so raising one of
+    # these without the other fails at startup rather than at run time.
+    widest = multi.max_children_per_run**multi.max_delegation_depth
+    assert widest <= multi.max_agent_invocation_attempts_per_task
+
+
+def test_the_shipped_default_keeps_the_narrower_allowance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Four, unchanged. This repository does not decide somebody else's cost
+    ceiling -- the same rule that keeps `pricing`, `context_window_tokens` and
+    `delegation_enabled` at their shipped values."""
+
+    shipped = _load_profile(monkeypatch, DEFAULT_CONFIG)
+
+    assert shipped.multi_agent.max_children_per_run == 4
+
+
 def test_a_code_sub_agent_never_holds_a_working_set_tool() -> None:
     """`WORKSPACE_TOOL_NAMES` is refused at definition time, and ADR-089 does
     not soften it: a delegated run shares its parent's session rather than
