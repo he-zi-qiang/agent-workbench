@@ -8418,3 +8418,27 @@ p.aw-code-step-thought {
   font-size: 10.5px;
   line-height: 1.6;
 }
+
+/* 被扣下的那条回答。三句「不是什么」排成一列，因为它们要被逐条读——这个失败
+   长得像另外三个问题，而那三个的修法完全不同。 */
+.aw-chat-withheld strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.aw-chat-withheld p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.aw-chat-withheld ul {
+  display: grid;
+  margin: 8px 0 0;
+  padding: 0 0 0 17px;
+  gap: 2px;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}

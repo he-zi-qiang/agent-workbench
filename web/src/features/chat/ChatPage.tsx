@@ -1097,11 +1097,29 @@ function ChatTurn({
         {turn.historical ? <p className="aw-chat-turn-tag">历史消息</p> : null}
         {turn.activities.length === 0 ? null : <TurnStepStream turn={turn} />}
         {turn.phase === "withheld" ? (
-          <div className="aw-notice is-warning">
+          // 「不是什么」这三句是这一块最值钱的部分，理由和多 Agent 面板里那三句
+          // 一样：这个失败长得像另外三个问题，而那三个的修法完全不同。少了它们，
+          // 读者最可能做的事是把同一句话再问一遍——那不会有任何变化，因为变的
+          // 不是问题，是那几份文档的权限。
+          //
+          // 没有按钮。「换掉这几段重问」需要知道是哪几段被撤了权，而一条被扣下
+          // 的回答连引用都不发出来——那正是它被扣下的原因。画一颗按钮，等于承诺
+          // 一个这一层做不到的动作。
+          <div className="aw-notice is-warning aw-chat-withheld">
             <AlertTriangle aria-hidden="true" size={16} />
-            <span>
-              写这条回答用到的资料，你现在已经没有权限看了，所以它没有发出来。
-            </span>
+            <div>
+              <strong>
+                这条回答写完了，但没有发出来：发出去之前又查了一遍来源，这一次没通过。
+              </strong>
+              <p>
+                整条作废而不是删掉那几段再发——删几段之后剩下的句子仍然是<b>用它们推出来的</b>。这一笔 token 已经花掉了，所以它照常记在下面那行用量里。
+              </p>
+              <ul>
+                <li>不是模型出错，它已经答完了</li>
+                <li>不是检索没找到，找到了才写得出来</li>
+                <li>不是你一直没有权限——是那几份资料在这几秒里被改了权限</li>
+              </ul>
+            </div>
           </div>
         ) : null}
         {turn.answer === undefined ? null : (
