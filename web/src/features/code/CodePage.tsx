@@ -319,12 +319,14 @@ export function CodePage() {
     "aw.code.panel.v2",
     null,
   );
-  // `null` 是「读者还没表过态」，不是「收起」。
+  // 「工作区全部文件」那一节开不开。`null` 是「读者还没表过态」，不是「收起」。
   //
-  // 折起来曾经是唯一的默认，那时目录树排在一列产物文件下面，是次要的那半。可是
-  // 工作区还空着的时候它是这一栏**唯一**的内容，折起来等于把这一栏画成一个空的
-  // 手风琴。用三态而不是把默认从 false 改成 true：后者会在产物已经有一列的会话
-  // 里把目录也一起摊开，那是另一种吵。表过态之后就一直听读者的，两种情况都是。
+  // 注意它管的**不是**项目目录树——那一块现在长在这一栏的最上面，不折叠，因为
+  // 它是这个文件夹的结构，不依赖这段会话发生过什么。这里管的是会话**产出**的那
+  // 一列文件。
+  //
+  // 三态而不是把默认从 false 改成 true：工作区还空着时摊开它只会露出一句「还没
+  // 有文件」，而产物已经有一列时又该让人一眼看见。表过态之后一直听读者的。
   const [directoryChoice, setDirectoryChoice] = useState<boolean | null>(null);
   const queries = useQueryClient();
   // 哪个项目文件正被查看。只在这一层保存：它是「我在看哪个文件」，属于这次浏览，
@@ -1069,16 +1071,10 @@ export function CodePage() {
       {/* 一个纵向的壳，而不是把两块直接丢进 portal。portal 的容器是
           `flex-direction: row`——第一版没有这层，于是文件树和会话列表被并排
           放进一条 260px 宽的侧栏里，列表整个被挤出了可视区。 */}
+      {/* 只剩会话列表。项目目录树搬去了右栏（见 `directory`）：一条 260px 宽的
+          侧栏同时装「这个项目有哪些文件」和「我开过哪些会话」，两份列表互相挤，
+          而它们回答的是完全不同的两个问题。左边留给「我在哪段对话里」。 */}
       <div className="aw-code-sidebar-stack">
-        {heldProjectId != null && projectRoot !== null ? (
-          <ProjectFileTree
-            onOpenFile={openProjectFileAt}
-            projectId={heldProjectId}
-            rootPath={projectRoot}
-            selectedPath={openProjectFile?.path ?? null}
-            writtenPaths={projectWrites}
-          />
-        ) : null}
         <CodeSessionRail
           known={visibleSessions}
           mobileOpen={workspaceSidebar.drawerOpen}
@@ -1593,6 +1589,17 @@ export function CodePage() {
             type="button"
           />
           <PreviewPanel
+            directory={
+              heldProjectId != null && projectRoot !== null ? (
+                <ProjectFileTree
+                  onOpenFile={openProjectFileAt}
+                  projectId={heldProjectId}
+                  rootPath={projectRoot}
+                  selectedPath={openProjectFile?.path ?? null}
+                  writtenPaths={projectWrites}
+                />
+              ) : null
+            }
             directoryOpen={directoryChoice ?? files.length === 0}
             files={files}
             identity={identity}

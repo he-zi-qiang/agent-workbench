@@ -41,6 +41,7 @@ export interface OpenedProjectFile {
 }
 
 export function PreviewPanel({
+  directory,
   directoryOpen,
   files,
   identity,
@@ -53,6 +54,18 @@ export function PreviewPanel({
   setDirectoryOpen,
   viewing,
 }: {
+  /**
+   * 这个项目的目录树，由页面构造好传进来。
+   *
+   * 传元素而不是传 projectId/rootPath：这块面已经在管两个来源（会话产出的文件、
+   * 点开的那个文件），再让它自己去查第三个，就得知道项目、写入路径和选中项怎么
+   * 来的。它画，页面知道。
+   *
+   * 它此前长在**左**边的会话栏里。一条 260px 宽的侧栏同时装「这个项目有哪些
+   * 文件」和「我开过哪些会话」，两份列表互相挤，而它们回答的是完全不同的两个
+   * 问题。目录属于「我在改哪个文件夹」，那和右边这一栏是同一件事。
+   */
+  directory: React.ReactNode;
   directoryOpen: boolean;
   files: WorkspaceEntryView[];
   identity: PrincipalIdentity;
@@ -130,6 +143,8 @@ export function PreviewPanel({
           />
         </section>
       )}
+
+      {directory}
 
       <details
         className="aw-code-directory"
