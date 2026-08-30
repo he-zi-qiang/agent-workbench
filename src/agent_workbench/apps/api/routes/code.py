@@ -60,7 +60,6 @@ from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.errors import NotFoundError, ToolInputInvalidError
 from agent_workbench.domain.events import ApprovalDecision
 from agent_workbench.domain.identifiers import Identifier
-from agent_workbench.domain.runs import BudgetUsage
 from agent_workbench.domain.sandbox import SANDBOX_RUN_SCOPE
 from agent_workbench.ports.cancellation import (
     CancellationSource,
@@ -172,27 +171,20 @@ class AskResponse(BaseModel):
     error_message: str | None = None
 
 
-class TurnUsageView(BaseModel):
-    """Tokens and cost for the turn this message came out of.
+class MessageView(BaseModel):
+    """One line of the transcript.
 
-    Absent means the question cannot be answered here, not that the turn was
-    free: a user's own message never has one, and neither does a turn that has
-    not settled. Filling those with zeros would put a footnote under every
-    message saying something untrue.
+    No `usage` here, deliberately, and Chat's `MessageView` has one. A coding
+    turn does not write a `chat_turns` row -- that table holds Chat's turn
+    ledger and nothing else -- so a `usage` field on this response would join
+    against nothing and be null for every message ever returned. The console
+    reads a coding turn's spend off that run's own terminal event, which it
+    already replays; a field that is structurally always absent would only
+    look like a bug in the join.
     """
 
-    input_tokens: int = 0
-    output_tokens: int = 0
-    #: A subset of `input_tokens`, not an addition to it.
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
-    cost_micro_usd: int = 0
-
-
-class MessageView(BaseModel):
     role: str
     text: str
-    usage: TurnUsageView | None = None
 
 
 class HistoryResponse(BaseModel):
@@ -429,11 +421,7 @@ async def history(session_id: str, request: Request) -> HistoryResponse:
     )
     return HistoryResponse(
         messages=tuple(
-            MessageView(
-                role=record.message.role,
-                text=record.message.text(),
-                usage=_usage_view(record.usage),
-            )
+            MessageView(role=record.message.role, text=record.message.text())
             for record in messages
         )
     )
@@ -962,15 +950,3 @@ __all__ = [
     "WorkspaceResponse",
     "router",
 ]
-
-
-def _usage_view(usage: BudgetUsage | None) -> TurnUsageView | None:
-    if usage is None:
-        return None
-    return TurnUsageView(
-        input_tokens=usage.tokens.input_tokens,
-        output_tokens=usage.tokens.output_tokens,
-        cache_read_tokens=usage.tokens.cache_read_tokens,
-        cache_write_tokens=usage.tokens.cache_write_tokens,
-        cost_micro_usd=usage.cost_micro_usd,
-    )

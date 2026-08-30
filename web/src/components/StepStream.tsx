@@ -12,6 +12,7 @@ import type { ArtifactRef, EventEnvelope } from "../api/types";
 import { CommandTrace } from "./CommandTrace";
 import { LiveActivity } from "./LiveActivity";
 import { StepDisclosure } from "./StepDisclosure";
+import { TurnUsage, type PartialTurnUsage } from "./TurnUsage";
 import { presentActivity } from "./activityPresentation";
 import { foldForeignRuns, hasForeignRun, splitByRun } from "./runSections";
 import { shortId } from "./ui";
@@ -60,6 +61,14 @@ export interface StreamStage {
   nodes?: string;
   /** How long the stage took, once it is over. */
   duration?: string;
+  /**
+   * 这一段烧了多少 token，调用方算好给。
+   *
+   * 由调用方给而不是这里从 `events` 里加，和 `nodes`/`note` 是同一条分工：这个
+   * 组件负责画，不负责判断哪些事件该计进来。钱不在里面——费用随终止事件按运行
+   * 一次写下，一段步骤加不出它，见 `PartialTurnUsage`。
+   */
+  usage?: PartialTurnUsage | null;
   events: EventEnvelope[];
 }
 
@@ -446,6 +455,9 @@ export function StepStream({
                   <span className="aw-stream-count" title={`${groups.length} 步`}>
                     {summariseGroups(groups)}
                   </span>
+                  {stage.usage === undefined || stage.usage === null ? null : (
+                    <TurnUsage usage={stage.usage} />
+                  )}
                   {stage.duration === undefined ? null : (
                     <span className="aw-stream-duration">{stage.duration}</span>
                   )}

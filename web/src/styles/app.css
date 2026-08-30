@@ -8188,3 +8188,54 @@ p.aw-code-step-thought {
 .aw-turn-usage-dot {
   color: var(--aw-faint);
 }
+
+/* --- 这一轮会动哪个文件夹 -----------------------------------------------
+ *
+ * 排在输入框正上方，因为发指令的人要知道的是「我这句话会落在哪」——那句话得挨
+ * 着输入框。页头那颗按钮说的是另一件事（这一栏开着没）。
+ *
+ * 三枚里只有第三枚是按钮。前两枚是**事实**不是控件：执行发生在本机（环回绑定，
+ * ADR-044），以及这段会话属于哪个项目。做成看起来能点的样子，就是在承诺一个这
+ * 个后端没有的动作。 */
+.aw-code-picks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 0 2px 8px;
+  gap: 6px;
+}
+
+.aw-code-pick {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  gap: 6px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+  font-size: 11.5px;
+  line-height: 24px;
+}
+
+.aw-code-pick strong {
+  color: var(--aw-text);
+  font-weight: 550;
+}
+
+/* 唯一能点的那一枚。虚线边框，因为它是个入口而不是一个当前状态——实线会让它读
+   起来像第三个事实。 */
+.aw-code-pick.is-action {
+  border-style: dashed;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 24px;
+}
+
+.aw-code-pick.is-action:hover {
+  border-color: var(--aw-border-strong);
+  color: var(--aw-text);
+}

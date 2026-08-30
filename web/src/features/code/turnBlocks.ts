@@ -57,6 +57,7 @@
 import type {
   EventEnvelope,
   MessageView,
+  TokenUsage,
   TurnUsageView,
 } from "../../api/types";
 import { groupSteps, type StepGroup } from "../../components/stepGroups";
@@ -106,8 +107,15 @@ export interface CodeTurnBlock {
   instruction: string;
   report: string | null;
   /**
-   * 这一轮烧了多少。`null` 表示这里问不出答案——还在跑的那一轮没有终局。
-   * 不是零。
+   * 这一轮烧了多少，从这个运行自己的终止事件读。
+   *
+   * 不从消息上读，虽然 Chat 那边正是那么做的：一次编码 turn **不写**
+   * `chat_turns` 行——那张表是 Chat 的 turn 账本——所以走消息那条路在这里永远
+   * 是空。运行的终止事件是这一轮唯一记下过账的地方，而这一页本来就把那些事件
+   * 重放了一遍。
+   *
+   * `null` 表示这里问不出答案：还在跑的那一轮没有终局，事件窗口之外的老运行也
+   * 没有。不是零。
    */
   usage: TurnUsageView | null;
   /** Tool calls only, for the produced-file cards. */
@@ -268,8 +276,7 @@ export function buildTurnBlocks(input: {
     const next = messages[messageIndex + 1];
     const report =
       next !== undefined && next.role === "assistant" ? next.text : null;
-    const usage =
-      next !== undefined && next.role === "assistant" ? (next.usage ?? null) : null;
+    const usage = usageOf(run?.events ?? []);
     blocks.push(
       blockOf({
         key: run?.runId ?? `unpaired:${String(position)}`,
@@ -309,6 +316,44 @@ export function buildTurnBlocks(input: {
   annotateWriters(blocks);
   return { blocks, orphanRuns, orphanRunIds };
 }
+
+
+/**
+ * 一个运行的账，从它的终止事件里取。
+ *
+ * `RunCompleted` / `RunFailed` / `RunCancelled` 各带一份 `BudgetUsage`——token
+ * 和钱都在里面，而且是运行**当时**按那一刻的价目表算好写下的。一个运行只写一条
+ * 终止事件，所以这里不会重复计。
+ *
+ * 失败和取消也读：一轮跑一半死掉照样烧了钱，把它显示成没有花销，会让最该被看见
+ * 的那种花费恰好不可见。
+ */
+function usageOf(events: readonly EventEnvelope[]): TurnUsageView | null {
+  for (const event of events) {
+    if (
+      event.event_type !== "RunCompleted" &&
+      event.event_type !== "RunFailed" &&
+      event.event_type !== "RunCancelled"
+    ) {
+      continue;
+    }
+    const payload = event.payload as {
+      usage?: { tokens?: Partial<TokenUsage>; cost_micro_usd?: number };
+    };
+    const usage = payload.usage;
+    if (usage === undefined) continue;
+    const tokens = usage.tokens ?? {};
+    return {
+      input_tokens: tokens.input_tokens ?? 0,
+      output_tokens: tokens.output_tokens ?? 0,
+      cache_read_tokens: tokens.cache_read_tokens ?? 0,
+      cache_write_tokens: tokens.cache_write_tokens ?? 0,
+      cost_micro_usd: usage.cost_micro_usd ?? 0,
+    };
+  }
+  return null;
+}
+
 
 function blockOf(
   base: {

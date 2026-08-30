@@ -56,6 +56,7 @@ import type {
   TaskIntent,
   TaskStatus,
   TaskView,
+  TokenUsage,
   TriageOption,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
@@ -124,6 +125,7 @@ import {
   type TimelineGap,
 } from "./workTimeline";
 import { useStoredState } from "../../hooks/useStoredState";
+import { type PartialTurnUsage } from "../../components/TurnUsage";
 import {
   AgentEntryLine,
   AgentPanel,
@@ -1686,6 +1688,48 @@ export function WorkPage() {
 }
 
 /** 产出的显示名。没有文件名的产出用它的 kind——不拿 id 编一个。 */
+
+/**
+ * 这一段烧了多少 token。
+ *
+ * 加的是 `ModelCompleted.usage`，一次模型调用一条，一段里可能有好几条。**不加**
+ * `RunCompleted.usage`：那一条是整个运行的累计，和这一段的几次调用重叠，两个都
+ * 算等于把这一段之前的每一步再算一遍。
+ *
+ * 返回 `null` 而不是零：一段没有模型调用（`route` 常常就是）和一段调用了但没花
+ * token，在屏幕上是两回事，而后者不存在。
+ *
+ * 钱是 `null`，永远。费用随终止事件按**运行**一次写下，一段步骤加不出它——要在
+ * 读的时候重新定价才行，而重新定价的总额会随配置追溯变化，那正是用量那条路一直
+ * 拒绝走的。所以这里显示 token、不显示钱。
+ */
+function stageUsage(events: readonly EventEnvelope[]): PartialTurnUsage | null {
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let seen = false;
+  for (const event of events) {
+    if (event.event_type !== "ModelCompleted") continue;
+    const payload = event.payload as { usage?: TokenUsage };
+    const usage = payload.usage;
+    if (usage === undefined) continue;
+    seen = true;
+    input += usage.input_tokens ?? 0;
+    output += usage.output_tokens ?? 0;
+    cacheRead += usage.cache_read_tokens ?? 0;
+    cacheWrite += usage.cache_write_tokens ?? 0;
+  }
+  if (!seen) return null;
+  return {
+    input_tokens: input,
+    output_tokens: output,
+    cache_read_tokens: cacheRead,
+    cache_write_tokens: cacheWrite,
+    cost_micro_usd: null,
+  };
+}
+
 function artifactName(artifact: ArtifactRef): string {
   return artifact.filename ?? artifact.kind;
 }
@@ -1779,6 +1823,7 @@ function TaskStepStream({
 
   const stages: StreamStage[] = lifecycle.stages.map((stage) => {
     const events = stageEvents.get(stage.id) ?? [];
+    const usage = stageUsage(events);
     return {
       id: stage.id,
       title: stage.title,
@@ -1789,6 +1834,7 @@ function TaskStepStream({
       ...(stageDuration(stage) === null
         ? {}
         : { duration: stageDuration(stage) as string }),
+      ...(usage === null ? {} : { usage }),
       // 阶段的状态读的是**整条流**（`deriveLifecycle(timeline.events, …)`），
       // 它下面的步骤读的是收窄之后的那份。两者本该如此——阶段是**任务**的骨架，
       // 不因为读者在看其中一个运行就该被改写；按运行重算阶段，等于让"这个任务

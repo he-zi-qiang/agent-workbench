@@ -36,11 +36,23 @@ function tokens(value: number): string {
   return String(value);
 }
 
+/**
+ * 和 `TurnUsageView` 一样，只是钱可以是 `null`。
+ *
+ * Task 的一「步」需要这个放宽：费用是运行**当时**按价目表算好、随终止事件一次
+ * 写下的，粒度是运行不是步骤。一步能加出 token（把它那几次 `ModelCompleted`
+ * 的用量相加），但加不出钱——要在读的时候重新定价才行，而那正是这套东西一直
+ * 拒绝做的事。所以那里显示 token、不显示钱，而不是显示一个 `$0`。
+ */
+export type PartialTurnUsage = Omit<TurnUsageView, "cost_micro_usd"> & {
+  cost_micro_usd: number | null;
+};
+
 export function TurnUsage({
   usage,
   seconds,
 }: {
-  usage: TurnUsageView | null | undefined;
+  usage: PartialTurnUsage | null | undefined;
   /** 这一轮跑了多久，页面知道的时候给。不知道就不写，不写零。 */
   seconds?: number | undefined;
 }) {
@@ -65,8 +77,12 @@ export function TurnUsage({
           <span>缓存 {rate}%</span>
         </>
       ) : null}
-      <span className="aw-turn-usage-dot">·</span>
-      <strong>{money(usage.cost_micro_usd)}</strong>
+      {usage.cost_micro_usd === null ? null : (
+        <>
+          <span className="aw-turn-usage-dot">·</span>
+          <strong>{money(usage.cost_micro_usd)}</strong>
+        </>
+      )}
       {seconds === undefined ? null : (
         <>
           <span className="aw-turn-usage-dot">·</span>
