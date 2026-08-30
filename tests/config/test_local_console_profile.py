@@ -167,15 +167,31 @@ def test_the_console_profile_raises_both_budgets_a_document_run_needs(
 
     # The measured ceilings moved into the shipped default (ADR-059's cleanup:
     # a default every working profile had to raise was a trap, not a default),
-    # so the console no longer overrides -- what this now pins is that the
-    # shipped numbers ARE the measured ones, and that the console inherits
-    # rather than silently diverging again.
+    # so the console inherits `max_steps` rather than silently diverging again.
     assert shipped.runtime.max_steps == 40
     assert shipped.multi_agent.max_tokens_per_agent_invocation == 120_000
     assert demo.runtime.max_steps == shipped.runtime.max_steps
+
+    # The token ceiling is the one place the console *does* diverge, and it is
+    # not a drift -- it is arithmetic this profile is forced into by turning
+    # delegation on.
+    #
+    # `max_tokens_per_agent_invocation` is one graph node's ceiling, and
+    # `application/delegation.py` hands a child `parent // children_allowed`.
+    # With delegation on and `max_children_per_run = 6`, the shipped 120_000
+    # leaves each sub-agent 20_000 -- measured against 36 real sub-agent runs on
+    # this machine, where the largest spent 19_870 and one ended on
+    # `stop_reason = token_budget`. So the console multiplies by the fan-out to
+    # put each child back at the measured-adequate 120_000.
+    #
+    # Pinned as an equation rather than as the literal 720_000: if anybody
+    # changes `max_children_per_run` again, this fails and says why, instead of
+    # letting every sub-agent quietly get poorer the way the 4 -> 6 change did.
+    assert demo.multi_agent.delegation_enabled is True
     assert (
         demo.multi_agent.max_tokens_per_agent_invocation
         == shipped.multi_agent.max_tokens_per_agent_invocation
+        * demo.multi_agent.max_children_per_run
     )
 
 

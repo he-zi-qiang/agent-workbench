@@ -109,6 +109,7 @@ import { RunPanel } from "../../components/RunPanel";
 import { buildRunTree } from "../../components/runTree";
 import { CodeTurn } from "./CodeTurn";
 import type { OpenedFile } from "./FilePreview";
+import { TurnUsage, sumTurnUsage } from "../../components/TurnUsage";
 import { PreviewPanel } from "./PreviewPanel";
 import { buildTurnBlocks, projectWritesIn } from "./turnBlocks";
 import { useCodeStream } from "./useCodeStream";
@@ -311,7 +312,13 @@ export function CodePage() {
   // 也因此不再有 Escape 关闭：那是给盖住内容的浮层用的退路，而这一栏不盖任何
   // 东西。留着它的坏处是很具体的——在下面那个输入框里按 Escape（不少输入法和
   // 补全都用这个键）会把这一栏收起来，而且**记住**这次收起。
-  const [panelOpen, setPanelOpen] = useStoredState("aw.code.panel.v1", false);
+  // `null` = 读者还没表过态。表过之后一直听读者的；没表过时，有项目目录的会话
+  // 默认**开着**——文件夹的结构是这段会话一开始就定下的事实，不该等人先去找一个
+  // 开关。之前默认关着，于是「文件夹内容在右边」这件事对新会话等于不存在。
+  const [panelChoice, setPanelChoice] = useStoredState<boolean | null>(
+    "aw.code.panel.v2",
+    null,
+  );
   // `null` 是「读者还没表过态」，不是「收起」。
   //
   // 折起来曾经是唯一的默认，那时目录树排在一列产物文件下面，是次要的那半。可是
@@ -333,8 +340,8 @@ export function CodePage() {
   const openProjectFileAt = useCallback((entry: ProjectFileEntryView) => {
     setOpenProjectFile(entry);
     setOpened(null);
-    setPanelOpen(true);
-  }, [setPanelOpen]);
+    setPanelChoice(true);
+  }, [setPanelChoice]);
   // 起始屏选中的项目（ADR-074）。只在「还没有会话」时用得上——会话一旦存在，
   // 归属就在会话行上，读它比读这个 state 可靠：刷新页面之后 state 没了，行还在。
   const [startingIn, setStartingIn] = useState<ProjectView | null>(null);
@@ -836,7 +843,7 @@ export function CodePage() {
   const open = useCallback(
     (file: WorkspaceEntryView) => {
       if (sessionId === undefined) return;
-      setPanelOpen(true);
+      setPanelChoice(true);
       // 让位给它，理由同 `openProjectFileAt`：一栏，一个文件。
       setOpenProjectFile(null);
       setOpened({
@@ -846,7 +853,7 @@ export function CodePage() {
         sizeBytes: file.size_bytes,
       });
     },
-    [sessionId, setPanelOpen],
+    [sessionId, setPanelChoice],
   );
 
   // What a card in the conversation clicks. A card knows the name a tool
@@ -1153,15 +1160,33 @@ export function CodePage() {
           <button
             className="aw-code-pick is-action"
             onClick={() => {
-              setPanelOpen(true);
+              setPanelChoice(true);
               setDirectoryChoice(true);
             }}
             type="button"
           >
             看这个文件夹
           </button>
+          {/* 换文件夹是**开一段新会话**，不是把这一段搬走：一段会话属于一个项目
+              （ADR-074 §7.1），搬走会让「产物存哪了」重新有两个答案。所以它回到
+              起始屏，而不是就地改。 */}
+          <button
+            className="aw-code-pick is-action"
+            onClick={() => {
+              setStartingIn(null);
+              void navigate("/code");
+            }}
+            type="button"
+          >
+            换文件夹
+          </button>
         </div>
       )}
+      {/* 整段会话的合计。和 Chat 同一个位置、同一个零件。 */}
+      <TurnUsage
+        label="这段会话"
+        usage={sumTurnUsage(blocks.map((block) => block.usage))}
+      />
       <div className="aw-code-composer-row aw-mode-composer-card">
         {/* 一个三档的选择器，不是一个「只做计划」的复选框。
             复选框只答得出一个是非题，而读者要问的是三档里的哪一档——它把
@@ -1291,6 +1316,19 @@ export function CodePage() {
                 description={`在 ${startingIn.root_path ?? startingIn.name} 里编码。Agent 读写的是这个文件夹里的真实文件。`}
                 title="开始编码"
               />
+              {/* 换文件夹的入口。此前只有「一个项目都没有」时才画得出选择器，
+                  选过一次之后它就再也回不来了——屏幕上只剩一句「在 X 里编码」，
+                  而那句话是个陈述，不是一个可以点的地方。 */}
+              <button
+                className="aw-code-switch-folder"
+                onClick={() => {
+                  setStartingIn(null);
+                }}
+                type="button"
+              >
+                <FolderIcon aria-hidden="true" size={13} />
+                换一个文件夹
+              </button>
               {error === null ? null : <ErrorNotice message={error} />}
               {composer}
               <ModeStarterPrompts
@@ -1340,7 +1378,7 @@ export function CodePage() {
   // 所以有 `projectRoot` 的会话，这一栏从第一秒就有内容可显示，空栏的那个顾虑
   // 不成立；没有目录的会话（`agent-cli` 之外建的老会话）仍然按老规矩来。
   const panelShown =
-    panelOpen &&
+    (panelChoice ?? projectRoot !== null) &&
     (files.length > 0 || panelProjectFile !== null || projectRoot !== null);
 
   return (
@@ -1394,10 +1432,10 @@ export function CodePage() {
               }`}
               onClick={() => {
                 if (panelShown) {
-                  setPanelOpen(false);
+                  setPanelChoice(false);
                   return;
                 }
-                setPanelOpen(true);
+                setPanelChoice(true);
                 setDirectoryChoice(true);
               }}
               type="button"
@@ -1550,7 +1588,7 @@ export function CodePage() {
             aria-label="收起预览栏"
             className="aw-drawer-backdrop"
             onClick={() => {
-              setPanelOpen(false);
+              setPanelChoice(false);
             }}
             type="button"
           />
@@ -1559,7 +1597,7 @@ export function CodePage() {
             files={files}
             identity={identity}
             onCollapse={() => {
-              setPanelOpen(false);
+              setPanelChoice(false);
             }}
             onDownload={() => {
               if (viewing === null) return;

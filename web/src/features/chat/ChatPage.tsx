@@ -62,7 +62,7 @@ import {
   useKnowledgeBases,
 } from "../../components/KnowledgeSourcePicker";
 import { MarkdownContent } from "../../components/MarkdownContent";
-import { TurnUsage } from "../../components/TurnUsage";
+import { TurnUsage, sumTurnUsage } from "../../components/TurnUsage";
 import {
   ModeStarterPrompts,
   ModeStartHeader,
@@ -856,6 +856,12 @@ export function ChatPage() {
           onSubmit={submit}
         >
           {submitError === null ? null : <ErrorNotice message={submitError} />}
+          {/* 整段会话的合计，坐在输入框上方。每一轮下面那行答的是「这一轮」，
+              而人问「这段聊下来花了多少」的时候不会去把十行加起来。 */}
+          <TurnUsage
+            label="这段会话"
+            usage={sumTurnUsage(turns.map((turn) => turn.usage))}
+          />
           {/* 一张卡，不是两截。此前工具行（知识库选择、字数）在圆角卡片**外面**
               另起一行，于是「输入这件事」在版面上被切成两个互不相干的块，读起来
               像一个搜索框底下挂了一条说明。现在卡片自己包住三段：附件、正文、

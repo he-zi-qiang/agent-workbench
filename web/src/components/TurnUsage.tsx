@@ -51,10 +51,18 @@ export type PartialTurnUsage = Omit<TurnUsageView, "cost_micro_usd"> & {
 export function TurnUsage({
   usage,
   seconds,
+  label,
 }: {
   usage: PartialTurnUsage | null | undefined;
   /** 这一轮跑了多久，页面知道的时候给。不知道就不写，不写零。 */
   seconds?: number | undefined;
+  /**
+   * 前缀，给这一行换个主语。
+   *
+   * 同一个零件既贴在一轮下面，也贴在输入框上方当整段会话的合计——两处的数字长得
+   * 一样，不写主语的话，页脚那一行会被读成「最后一轮花了这么多」。
+   */
+  label?: string | undefined;
 }) {
   if (usage === null || usage === undefined) return null;
 
@@ -64,8 +72,9 @@ export function TurnUsage({
       : null;
 
   return (
-    <p className="aw-turn-usage">
+    <p className={`aw-turn-usage${label === undefined ? "" : " is-total"}`}>
       <Zap aria-hidden="true" size={12} />
+      {label === undefined ? null : <span className="aw-turn-usage-label">{label}</span>}
       <span>{tokens(usage.input_tokens)}</span>
       <span aria-label="到" className="aw-turn-usage-arrow">
         →
@@ -103,3 +112,30 @@ export function TurnUsage({
  * 恰好同时适合两种量级，而不是因为它们必须一致。合并会让下一个想给月度合计加上
  * 千分位分隔符的人，顺手改掉每一轮的脚注。
  */
+
+/**
+ * 把若干轮加起来，得到一段会话的合计。
+ *
+ * 只加**答得出**的那些：`null` 的轮次（还在跑、或者早于这个字段的历史）不参与，
+ * 也不因此把整个合计变成 `null`——一段会话里有一轮答不出，不该让另外九轮的账也
+ * 消失。钱只在每一轮都报得出钱时才加：混着算会得到一个「一部分轮次的费用」，
+ * 而它看起来和总额一模一样。
+ */
+export function sumTurnUsage(
+  parts: readonly (PartialTurnUsage | null | undefined)[],
+): PartialTurnUsage | null {
+  const known = parts.filter(
+    (part): part is PartialTurnUsage => part !== null && part !== undefined,
+  );
+  if (known.length === 0) return null;
+  const everyPriced = known.every((part) => part.cost_micro_usd !== null);
+  return {
+    input_tokens: known.reduce((n, part) => n + part.input_tokens, 0),
+    output_tokens: known.reduce((n, part) => n + part.output_tokens, 0),
+    cache_read_tokens: known.reduce((n, part) => n + part.cache_read_tokens, 0),
+    cache_write_tokens: known.reduce((n, part) => n + part.cache_write_tokens, 0),
+    cost_micro_usd: everyPriced
+      ? known.reduce((n, part) => n + (part.cost_micro_usd ?? 0), 0)
+      : null,
+  };
+}
