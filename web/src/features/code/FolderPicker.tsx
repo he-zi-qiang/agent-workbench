@@ -23,6 +23,14 @@ import { LoadingLine } from "../../components/ui";
  *
  * CLI 那条路没有这个问题：进程已经在目录里，绝对路径就是 cwd，`agent-cli project
  * use` 因此不需要任何选择器。
+ *
+ * **每一行自己能被选中，这是改过的。** 上一版照抄了系统文件选择框的约定：走进一个
+ * 文件夹，然后按页脚的「使用这个文件夹」。那条注释当时的理由是「点一下不该有两种
+ * 后果」——这个担心成立，但它假定了两个后果抢同一个像素。给它们各自的靶子之后就
+ * 不抢了：点名字走进去，点行尾那枚「选这个」选中它。代价是每一行多一个可聚焦的
+ * 控件，换来的是那个最常见的动作（「就是列表里这一个」）不再需要先走进去、再把视
+ * 线移到对角线另一头的页脚。当前这一层仍然选得中，按钮搬到了标题栏那个路径旁边，
+ * 挨着它描述的那个东西。
  */
 export function FolderPicker({
   busy = false,
@@ -58,6 +66,18 @@ export function FolderPicker({
         <code dir="ltr" title={current ?? undefined}>
           {current ?? "…"}
         </code>
+        {/* 「我要的就是现在站着这一层」。没有它，选中当前目录就得先退到上一级
+            再从列表里点回来——一个纯粹由控件布局逼出来的往返。 */}
+        <button
+          className="aw-folder-picker-here"
+          disabled={busy || current === null}
+          onClick={() => {
+            if (current !== null) onChoose(current);
+          }}
+          type="button"
+        >
+          {busy ? "正在打开…" : "就用这一层"}
+        </button>
       </header>
 
       <div className="aw-folder-picker-list">
@@ -83,18 +103,35 @@ export function FolderPicker({
         ) : null}
 
         {listing.data?.entries.map((entry) => (
-          <button
-            className="aw-folder-picker-row"
-            disabled={busy}
-            key={entry.path}
-            onClick={() => setPath(entry.path)}
-            title={entry.path}
-            type="button"
-          >
-            <Folder aria-hidden="true" size={14} />
-            <span className="aw-folder-picker-name">{entry.name}</span>
-            <ChevronRight aria-hidden="true" size={13} />
-          </button>
+          // 行是一个 div 而不是一个按钮：里头装着两个按钮，而按钮不能套按钮。
+          <div className="aw-folder-picker-row is-entry" key={entry.path}>
+            <button
+              className="aw-folder-picker-enter"
+              disabled={busy}
+              onClick={() => setPath(entry.path)}
+              title={entry.path}
+              type="button"
+            >
+              <Folder aria-hidden="true" size={14} />
+              <span className="aw-folder-picker-name">{entry.name}</span>
+              <ChevronRight
+                aria-hidden="true"
+                className="aw-folder-picker-into"
+                size={13}
+              />
+            </button>
+            {/* 那枚人字形（chevron）留在「走进去」这颗按钮里，而不是像稿子上
+                那样单独站在行尾：它描述的是走进去这个动作，放在选中按钮的另一
+                侧会把它读成「选中之后会发生什么」。 */}
+            <button
+              className="aw-folder-picker-select"
+              disabled={busy}
+              onClick={() => onChoose(entry.path)}
+              type="button"
+            >
+              选这个
+            </button>
+          </div>
         ))}
 
         {listing.data?.entries.length === 0 ? (
@@ -111,22 +148,12 @@ export function FolderPicker({
       </div>
 
       <footer>
+        <span className="aw-folder-picker-hint">子文件夹只列名字，不读内容</span>
         {onCancel === undefined ? null : (
           <button disabled={busy} onClick={onCancel} type="button">
             取消
           </button>
         )}
-        {/* 选中的是**当前所在的**目录，不是列表里某一行。这和系统的文件选择框
-            是同一个约定：你走进一个文件夹，然后按「选择」。列表里的行是走进去，
-            不是选中——两者用一个控件表达会让「点一下」有两种后果。 */}
-        <button
-          className="aw-primary-button"
-          disabled={busy || current === null}
-          onClick={() => current !== null && onChoose(current)}
-          type="button"
-        >
-          {busy ? "正在打开…" : "使用这个文件夹"}
-        </button>
       </footer>
     </section>
   );

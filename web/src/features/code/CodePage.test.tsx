@@ -1493,11 +1493,15 @@ describe("CodePage", () => {
     //
     // An uploaded file is exactly the case the produced-file cards cannot
     // cover -- no tool call wrote it, so no event names it -- which is why the
-    // panel's fold is titled with the full count rather than "其他文件".
+    // tab counts everything rather than being named "其他文件".
     await user.click(await screen.findByRole("button", { name: "工作区 1" }));
     const pane = await screen.findByRole("complementary", { name: "预览" });
     expect(await within(pane).findByText("notes.txt")).toBeInTheDocument();
-    expect(within(pane).getByText(/工作区全部文件（1）/)).toBeInTheDocument();
+    // 那颗「工作区 1」把右栏落在「本次会话」这一张上，而不是随便展开一栏让人
+    // 自己找——这一条守的就是那根线接着。
+    expect(
+      within(pane).getByRole("tab", { name: /本次会话/, selected: true }),
+    ).toBeInTheDocument();
   });
 
   it("opens on a centered start when there is no session", async () => {
@@ -2796,6 +2800,11 @@ describe("CodePage", () => {
     // viewer is reused unless it is keyed -- and a `useMutation`'s result
     // outlives a prop change. Observed on a real session before the key:
     // `maker.py`'s stdout, under the heading `broken.py`.
+    //
+    // 回到「本次会话」那一张才点得到第二个文件：打开一个文件会把右栏跳到「预
+    // 览」，而那一列名字住在另一张标签上。这是标签页换来的一次多余点击，写在
+    // 这里是因为它是真的——不是测试的脚手架。
+    await user.click(screen.getByRole("tab", { name: /本次会话/ }));
     await user.click(await screen.findByRole("button", { name: /broken\.py/ }));
     expect(screen.queryByText(/运行结束，退出码 0/)).not.toBeInTheDocument();
     expect(vi.mocked(runCodeWorkspaceFile)).toHaveBeenCalledTimes(1);

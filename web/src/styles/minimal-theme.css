@@ -613,7 +613,7 @@ select {
 }
 
 .aw-code-session-list,
-.aw-code-directory ul {
+.aw-code-workspace ul {
   padding: 10px 8px;
   gap: 2px;
 }

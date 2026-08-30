@@ -2523,8 +2523,10 @@ pre {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* 260 → 420。这条栏从「一列文件名」变成了几张标签页，而其中一张（子代理）每一
+   行有四段：名字、状态、用了多少、跑了多久。260px 下那四段挤成四个截断的词。 */
 .aw-work-body.has-output {
-  grid-template-columns: minmax(0, 1fr) clamp(200px, 24%, 260px);
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 32%, 420px);
 }
 
 .aw-work-run,
@@ -5059,6 +5061,7 @@ p.aw-code-step-thought {
   flex-direction: column;
   border-left: 1px solid var(--aw-border);
   background: var(--aw-sidebar);
+  overflow: hidden;
 }
 
 .aw-drawer {
@@ -5219,28 +5222,16 @@ p.aw-code-step-thought {
 /* 全量目录。标题写全量口径而不是「其他文件」：卡片覆盖不到四类文件——上传进来
  * 的、事件窗口之外的、ADR-063 之前名字被截掉的、以及尾部对齐丢掉的那些轮的
  * 产出——说「其他」会暗示卡片已经覆盖了其余。 */
-.aw-code-directory {
-  flex: none;
-  border-top: 1px solid var(--aw-border);
+/* 「本次会话」那一张里的清单。此前它是一个 `<details>`（`.aw-code-directory`），
+   收在整栏最底下——一份四类文件唯一入口的清单，藏在两屏之后。 */
+.aw-code-workspace {
+  padding: 8px;
 }
 
-.aw-code-directory > summary {
-  padding: 10px 14px;
-  color: var(--aw-text-soft);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.aw-code-directory > summary:hover {
-  background: var(--aw-panel-soft);
-}
-
-.aw-code-directory ul {
+.aw-code-workspace ul {
   display: grid;
-  max-height: min(40vh, 340px);
   margin: 0;
-  padding: 6px 8px 12px;
-  overflow-y: auto;
+  padding: 0;
   gap: 2px;
   list-style: none;
   align-content: start;
@@ -6580,19 +6571,21 @@ p.aw-code-step-thought {
  * 要看的。
  */
 
+/* 一整张标签就是它的地方，所以既不限高也不画边框——那两条是它还在挤一条侧栏
+   时留下的。它此前长在左边的会话栏里，和会话列表抢同一条 260px；那时不限高就
+   会被兄弟元素挤成一个只剩标题的 61px（下面那段注释记着实测的数）。 */
 .aw-project-files {
   display: flex;
   min-height: 0;
-  max-height: 46%;
+  height: 100%;
   /* `flex-shrink: 0`, and it is load-bearing rather than tidy. The sibling
      session list is `flex: 1 1 auto`, so with the default shrink of 1 it grows
      and squeezes this section down to its header: measured at 61px tall with a
      list area of 8px, while the seven rows inside it were laid out and had a
      `scrollHeight` of 190. Nothing was missing -- it was drawn and then
      crushed. */
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   flex-direction: column;
-  border-bottom: 1px solid var(--aw-border);
 }
 
 .aw-project-files > header {
@@ -6875,18 +6868,26 @@ p.aw-code-step-thought {
   overflow-y: auto;
 }
 
+/* 「上一级」仍然是一整颗按钮（它只有一种后果）；条目行是一个装着两颗按钮的
+   容器。两者共用同一个 `.aw-folder-picker-row` 底座，所以一列里行高一致——不
+   一致的行高会让人以为「上一级」和下面那些不是一类东西。 */
 .aw-folder-picker-row {
   display: flex;
   width: 100%;
   align-items: center;
-  padding: 7px 10px;
-  gap: 8px;
+  padding: 0 4px;
+  gap: 6px;
   border: 0;
   border-radius: var(--aw-radius-sm);
   background: transparent;
   color: var(--aw-text);
   font-size: 13px;
   text-align: left;
+}
+
+button.aw-folder-picker-row {
+  padding: 7px 10px;
+  gap: 8px;
 }
 
 .aw-folder-picker-row:hover:not(:disabled) {
@@ -6897,6 +6898,21 @@ p.aw-code-step-thought {
   color: var(--aw-text-muted);
 }
 
+.aw-folder-picker-enter {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  padding: 7px 6px;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--aw-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
 .aw-folder-picker-name {
   overflow: hidden;
   flex: 1;
@@ -6904,10 +6920,63 @@ p.aw-code-step-thought {
   white-space: nowrap;
 }
 
+.aw-folder-picker-into {
+  flex: none;
+  color: var(--aw-text-muted);
+}
+
+/* 用 `opacity` 藏，不用 `display: none`。
+   稿子上「选这个」只在悬停时出现，照抄成 `display: none` 会让它对键盘**根本
+   不存在**——Tab 走不到一个没被布局的元素上，于是「每一行都能选」这件事只对
+   鼠标成立。留在布局里、透明度归零，再在悬停和 `:focus-within` 时显出来，两
+   种输入方式拿到的是同一个控件。 */
+.aw-folder-picker-select {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: var(--aw-radius-sm);
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+
+.aw-folder-picker-row:hover .aw-folder-picker-select,
+.aw-folder-picker-row:focus-within .aw-folder-picker-select {
+  opacity: 1;
+}
+
+.aw-folder-picker-select:hover:not(:disabled) {
+  border-color: var(--aw-accent);
+  color: var(--aw-accent);
+}
+
+.aw-folder-picker-here {
+  flex: none;
+  padding: 4px 9px;
+  border: 1px solid var(--aw-accent);
+  border-radius: var(--aw-radius-sm);
+  background: transparent;
+  color: var(--aw-accent);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.aw-folder-picker-here:disabled {
+  border-color: var(--aw-border);
+  color: var(--aw-text-muted);
+}
+
+.aw-folder-picker-hint {
+  margin-right: auto;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
 .aw-folder-picker > footer {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   padding: 10px 12px;
   gap: 8px;
   border-top: 1px solid var(--aw-border);
@@ -8250,43 +8319,57 @@ p.aw-code-step-thought {
  * 每一节的形状一样：一行小标题、一块很小的图形、一句话。那句话不是装饰——四节里
  * 有三节的数字都需要一句限定才算说完（没有百分比、子代理不占额度、信封在提交时
  * 冻住）。 */
+/* 一栏，内部是标签页加一条钉在底下的用量。`max-height` 让内容区自己滚，而不是
+   把整页撑长——右栏一长，左边那段正文的滚动位置就跟着它跑。 */
 .aw-taskctx {
-  display: grid;
-  align-content: start;
-  gap: 18px;
+  display: flex;
+  max-height: calc(100vh - 180px);
+  flex-direction: column;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-lg);
+  background: var(--aw-panel);
+  overflow: hidden;
 }
 
 .aw-taskctx-block {
   display: grid;
+  padding: 12px 13px;
   gap: 7px;
 }
 
-.aw-taskctx-head {
+/* 「逐个看它们做了什么」——那一格通往 `AgentPanel` 的唯一入口。分节标题连同它
+   那条 `.is-link` 一起退休了：标签本身就是标题，标题上再挂一个跳转，等于把一个
+   动作藏在一个看起来像文字的东西上。 */
+.aw-taskctx-more {
   display: flex;
   align-items: center;
-  margin: 0;
-  gap: 7px;
-  color: var(--aw-text-soft);
-  font-size: 11.5px;
-  font-weight: 600;
-}
-
-/* 只有子代理那一节的标题是按钮——它是去副面板的入口。其余三节没有更深的地方
-   可去，做成看起来能点的样子就是在承诺一次不会发生的跳转。 */
-.aw-taskctx-head.is-link {
-  padding: 0;
-  border: 0;
+  justify-content: space-between;
+  margin-top: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-sm);
   background: transparent;
   color: var(--aw-text-soft);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: 12px;
   text-align: left;
 }
 
-.aw-taskctx-head.is-link:hover {
+.aw-taskctx-more:hover {
+  border-color: var(--aw-accent);
   color: var(--aw-accent);
+}
+
+/* 用量钉在栏底，和上面那片内容之间有一条线：它不属于任何一张标签，那条线就是
+   在说这件事。 */
+.aw-taskctx-spend {
+  flex: none;
+  padding: 9px 13px;
+  border-top: 1px solid var(--aw-border);
+  background: var(--aw-canvas);
+}
+
+.aw-taskctx-spend .aw-turn-usage {
+  margin: 0;
 }
 
 .aw-taskctx-count {
@@ -8304,13 +8387,17 @@ p.aw-code-step-thought {
   align-items: center;
 }
 
+/* 每一段是「一条连线加一个圆」，只有第一段没有连线——它前面没有东西可连。
+   所以第一段 `flex: none`（就是那个圆的宽度），其余每段均分剩下的地方，连线
+   因此等长。此前是反过来的（第一段 flex: 1、最后一段 none），在 260px 的栏里
+   看不太出来，栏宽到 420px 之后第一个圆和第二个圆之间空出一大段。 */
 .aw-taskctx-dots > span {
   display: flex;
   align-items: center;
   flex: 1;
 }
 
-.aw-taskctx-dots > span:last-child {
+.aw-taskctx-dots > span:first-child {
   flex: none;
 }
 
@@ -8830,4 +8917,98 @@ p.aw-code-step-thought {
 .aw-menu-sub.is-raised {
   top: auto;
   bottom: -5px;
+}
+
+
+/* 右栏的标签页 ------------------------------------------------------- */
+
+/* 形状抄的是浏览器的标签，不是分段控件：选中那一枚的底边和内容区连成一片，
+   靠 `top: 1px` 加一条同色的背景盖住 `border-bottom` 那条线。这一像素的重叠
+   就是「这一枚是下面那片内容的把手」这句话的全部——去掉它，一排标签会重新读
+   成一排按钮。 */
+.aw-panel-tabs {
+  display: flex;
+  align-items: flex-end;
+  padding: 0 6px;
+  gap: 2px;
+  border-bottom: 1px solid var(--aw-border);
+  background: var(--aw-canvas);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.aw-panel-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.aw-panel-tab {
+  position: relative;
+  top: 1px;
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding: 0 10px;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--aw-radius-sm) var(--aw-radius-sm) 0 0;
+  background: transparent;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+.aw-panel-tab:hover {
+  color: var(--aw-text-soft);
+}
+
+.aw-panel-tab.is-on {
+  border-color: var(--aw-border);
+  background: var(--aw-panel);
+  color: var(--aw-text);
+}
+
+.aw-panel-tab-count {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.aw-panel-tab.is-on .aw-panel-tab-count {
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+.aw-panel-tabs-trailing {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  padding-bottom: 3px;
+  padding-left: 6px;
+  gap: 4px;
+}
+
+.aw-panel-tab-body {
+  min-height: 0;
+  flex: 1;
+  background: var(--aw-panel);
+  overflow-y: auto;
+}
+
+/* 内容区是可聚焦的（否则纯文字的格子会被 Tab 跳过），而一个可聚焦的滚动容器
+   在鼠标点击时也会画出焦点环——那圈线在这里没有信息。`:focus-visible` 只在键
+   盘进入时画，正是要的那半。 */
+.aw-panel-tab-body:focus {
+  outline: none;
+}
+
+.aw-panel-tab-body:focus-visible {
+  outline: 2px solid var(--aw-accent);
+  outline-offset: -2px;
 }

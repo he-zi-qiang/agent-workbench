@@ -322,13 +322,12 @@ export function CodePage() {
   );
   // 「工作区全部文件」那一节开不开。`null` 是「读者还没表过态」，不是「收起」。
   //
-  // 注意它管的**不是**项目目录树——那一块现在长在这一栏的最上面，不折叠，因为
-  // 它是这个文件夹的结构，不依赖这段会话发生过什么。这里管的是会话**产出**的那
-  // 一列文件。
+  // 右栏停在哪一张标签。`null` = 读者还没表过态，由 `PreviewPanel` 按「有没有
+  // 打开的文件」自己落一个默认。
   //
-  // 三态而不是把默认从 false 改成 true：工作区还空着时摊开它只会露出一句「还没
-  // 有文件」，而产物已经有一列时又该让人一眼看见。表过态之后一直听读者的。
-  const [directoryChoice, setDirectoryChoice] = useState<boolean | null>(null);
+  // 三态而不是一个写死的初值：读者一旦点过任何一张，这个默认就不该再动他；而
+  // 在他点之前，「刚点开一个文件」和「什么都没开」要落在不同的地方。
+  const [panelTab, setPanelTab] = useState<string | null>(null);
   const queries = useQueryClient();
   // 哪个项目文件正被查看。只在这一层保存：它是「我在看哪个文件」，属于这次浏览，
   // 不属于会话——换个会话再回来，从头开始看是对的。
@@ -344,6 +343,11 @@ export function CodePage() {
     setOpenProjectFile(entry);
     setOpened(null);
     setPanelChoice(true);
+    // 点开一个文件就跳到「预览」那一张。写在这里而不是让面板按「有没有打开的
+    // 文件」自己推断：读者可能刚刚亲手点到「本次会话」那一张，而 `tab` 一旦有
+    // 值就压过面板的默认——不在这里说一句，点开的文件会安静地待在一张没人看的
+    // 标签后面。
+    setPanelTab("preview");
   }, [setPanelChoice]);
   // 起始屏选中的项目（ADR-074）。只在「还没有会话」时用得上——会话一旦存在，
   // 归属就在会话行上，读它比读这个 state 可靠：刷新页面之后 state 没了，行还在。
@@ -941,6 +945,7 @@ export function CodePage() {
     (file: WorkspaceEntryView) => {
       if (sessionId === undefined) return;
       setPanelChoice(true);
+      setPanelTab("preview");
       // 让位给它，理由同 `openProjectFileAt`：一栏，一个文件。
       setOpenProjectFile(null);
       setOpened({
@@ -1374,7 +1379,7 @@ export function CodePage() {
               ? null
               : () => {
                   setPanelChoice(true);
-                  setDirectoryChoice(true);
+                  setPanelTab("directory");
                 }
           }
           onSwitchFolder={() => {
@@ -1641,7 +1646,7 @@ export function CodePage() {
                   return;
                 }
                 setPanelChoice(true);
-                setDirectoryChoice(true);
+                setPanelTab("workspace");
               }}
               type="button"
             >
@@ -1662,7 +1667,7 @@ export function CodePage() {
                   ? null
                   : () => {
                       setPanelChoice(true);
-                      setDirectoryChoice(true);
+                      setPanelTab("directory");
                     }
               }
               onShowWorkspace={
@@ -1670,7 +1675,7 @@ export function CodePage() {
                   ? null
                   : () => {
                       setPanelChoice(true);
-                      setDirectoryChoice(false);
+                      setPanelTab("workspace");
                     }
               }
             />
@@ -1835,7 +1840,6 @@ export function CodePage() {
                 />
               ) : null
             }
-            directoryOpen={directoryChoice ?? files.length === 0}
             files={files}
             identity={identity}
             onCollapse={() => {
@@ -1852,10 +1856,11 @@ export function CodePage() {
               });
             }}
             onOpen={open}
+            onTab={setPanelTab}
             onWrote={refreshWorkspace}
             orphanRuns={orphanRuns}
             projectFile={panelProjectFile}
-            setDirectoryOpen={setDirectoryChoice}
+            tab={panelTab}
             viewing={viewing}
           />
         </>
