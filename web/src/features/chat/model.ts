@@ -9,6 +9,7 @@ import type {
   LocalChatSession,
   MessageView,
   SourceLocator,
+  TurnUsageView,
 } from "../../api/types";
 import {
   isDegradedFrame,
@@ -71,6 +72,11 @@ export interface ChatTurnState {
   historical: boolean;
   runId?: string;
   turnId?: string;
+  /**
+   * 这一轮烧了多少。`null` 表示这里问不出答案——还在跑的那一轮没有终局，历史
+   * 里早于这个字段的那些行也没有。不是零。
+   */
+  usage?: TurnUsageView | null;
   answer?: string;
   withheldReason?: string;
   error?: string;
@@ -1197,6 +1203,9 @@ function historyLoaded(state: ChatState, sessionId: string, messages: MessageVie
         ...current,
         phase: "committed",
         answer: message.text,
+        // `?? null` 而不是留 undefined：这一轮的花销「服务端没给」和「这一轮
+        // 没花」要走同一条渲染分支（都不画），而 `TurnUsage` 只认 null/undefined。
+        usage: message.usage ?? null,
       };
       turns[current.localId] = current;
     }

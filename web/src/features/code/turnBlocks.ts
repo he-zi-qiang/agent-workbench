@@ -54,7 +54,11 @@
  *   the wording, and nothing in the test suite would notice.
  */
 
-import type { EventEnvelope, MessageView } from "../../api/types";
+import type {
+  EventEnvelope,
+  MessageView,
+  TurnUsageView,
+} from "../../api/types";
 import { groupSteps, type StepGroup } from "../../components/stepGroups";
 
 /** What one tool call put into the workspace, as the card says it. */
@@ -101,6 +105,11 @@ export interface CodeTurnBlock {
   runId: string | null;
   instruction: string;
   report: string | null;
+  /**
+   * 这一轮烧了多少。`null` 表示这里问不出答案——还在跑的那一轮没有终局。
+   * 不是零。
+   */
+  usage: TurnUsageView | null;
   /** Tool calls only, for the produced-file cards. */
   groups: StepGroup[];
   /** What happened, in order: each thought beside the action it caused. */
@@ -259,6 +268,8 @@ export function buildTurnBlocks(input: {
     const next = messages[messageIndex + 1];
     const report =
       next !== undefined && next.role === "assistant" ? next.text : null;
+    const usage =
+      next !== undefined && next.role === "assistant" ? (next.usage ?? null) : null;
     blocks.push(
       blockOf({
         key: run?.runId ?? `unpaired:${String(position)}`,
@@ -266,6 +277,7 @@ export function buildTurnBlocks(input: {
         runId: run?.runId ?? null,
         instruction,
         report,
+        usage,
         events: run?.events ?? [],
         live: claimsLive,
         liveCallId,
@@ -285,6 +297,8 @@ export function buildTurnBlocks(input: {
         runId: liveRunId,
         instruction: pendingInstruction,
         report: null,
+        // 还在跑：终局还没写下，所以这一轮的账这里问不出来。
+        usage: null,
         events: live?.events ?? [],
         live: true,
         liveCallId,
@@ -303,6 +317,7 @@ function blockOf(
     runId: string | null;
     instruction: string;
     report: string | null;
+    usage: TurnUsageView | null;
     events: EventEnvelope[];
     live: boolean;
   } & { liveCallId: string },

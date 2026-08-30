@@ -57,6 +57,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnStore,
     ConversationSession,
     StoredChatTurn,
+    StoredMessage,
 )
 from agent_workbench.ports.event_log import EventSink
 
@@ -403,7 +404,7 @@ class ChatService:
 
     async def history(
         self, *, session_id: str, tenant_id: str, principal_id: str
-    ) -> tuple[Message, ...]:
+    ) -> tuple[StoredMessage, ...]:
         """This principal's own chat conversation, oldest first.
 
         The mode is fixed here rather than taken as an argument: this service
@@ -418,7 +419,10 @@ class ChatService:
             principal_id=principal_id,
             mode="chat",
         )
-        return tuple(record.message for record in stored)
+        # The whole `StoredMessage`, not the `Message` inside it. What the turn
+        # spent hangs off the outer record; unwrapping one layer here dropped
+        # it, and the caller's reason for asking is that number.
+        return stored
 
     async def sessions(
         self, *, tenant_id: str, principal_id: str, limit: int = 50

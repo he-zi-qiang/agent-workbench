@@ -44,6 +44,7 @@ from agent_workbench.apps.api.disconnects import watched
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.context import Citation
 from agent_workbench.domain.identifiers import Identifier
+from agent_workbench.domain.runs import BudgetUsage
 from agent_workbench.ports.cancellation import CancellationSource
 
 CHAT_PREFIX = "/v1/chat"
@@ -159,9 +160,23 @@ class AskResponse(BaseModel):
     turn_id: Identifier
 
 
+class TurnUsageView(BaseModel):
+    """这一轮烧了多少。缺席表示这里问不出答案，不表示花了零。"""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    #: `input_tokens` 的子集，不是它之外的另一笔。
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost_micro_usd: int = 0
+
+
 class MessageView(BaseModel):
     role: str
     text: str
+    #: 只有助手消息、且那一轮已经落定时才有。用户那一条永远没有——一句提问没有
+    #: 自己的花销，给它一个零会让每一轮在屏幕上多出一行说谎的脚注。
+    usage: TurnUsageView | None = None
 
 
 class HistoryResponse(BaseModel):
@@ -340,12 +355,15 @@ async def history(session_id: str, request: Request) -> HistoryResponse:
     return HistoryResponse(
         messages=tuple(
             MessageView(
-                role=message.role,
+                role=record.message.role,
                 text="".join(
-                    block.text for block in message.content if block.kind == "text"
+                    block.text
+                    for block in record.message.content
+                    if block.kind == "text"
                 ),
+                usage=_usage_view(record.usage),
             )
-            for message in messages
+            for record in messages
         )
     )
 
@@ -496,3 +514,15 @@ __all__ = [
     "SessionView",
     "router",
 ]
+
+
+def _usage_view(usage: BudgetUsage | None) -> TurnUsageView | None:
+    if usage is None:
+        return None
+    return TurnUsageView(
+        input_tokens=usage.tokens.input_tokens,
+        output_tokens=usage.tokens.output_tokens,
+        cache_read_tokens=usage.tokens.cache_read_tokens,
+        cache_write_tokens=usage.tokens.cache_write_tokens,
+        cost_micro_usd=usage.cost_micro_usd,
+    )

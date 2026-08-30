@@ -499,6 +499,11 @@ class InMemoryConversationStore:
                 session_id=session_id,
                 sequence=len(self._messages[session_id]) + 1,
                 message=assistant_message(text=result.answer),
+                # 这一份在写下这条消息的时候就知道那一轮的账，所以直接挂上去。
+                # PostgreSQL 那一份要在读的时候 LEFT JOIN 回 `chat_turns` 才拿得到
+                # 同一个数——两条路不同，契约是同一条：`history()` 返回的助手消息
+                # 带着它那一轮的花销。
+                usage=result.outcome.usage,
             )
             released = self._updated_turn(
                 turn,

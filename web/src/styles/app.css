@@ -8154,3 +8154,37 @@ p.aw-code-step-thought {
   background: var(--aw-warning-soft);
   color: var(--aw-text-soft);
 }
+
+/* --- 每一轮的脚注 -------------------------------------------------------
+ *
+ * 三个模式共用一个零件：Chat 的答案下面、Code 的报告下面、Task 每一步的右侧。
+ * 一行等宽小字，不是一块面——读者只在两种时刻要这个数：一轮特别慢或特别贵的
+ * 时候，和月底对账的时候。后者有用量页；前者要的是「就在这里，不用点开」。
+ *
+ * 颜色是 muted 不是 faint。tokens.css 那条规则写得很直白：faint 不承载要读的
+ * 字，而这一行每个数都是要读的。只有中间那几个间隔号落在 faint 上。 */
+.aw-turn-usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 6px 0 0;
+  gap: 5px;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+.aw-turn-usage svg {
+  color: var(--aw-faint);
+}
+
+.aw-turn-usage strong {
+  color: var(--aw-text-soft);
+  font-weight: 500;
+}
+
+.aw-turn-usage-arrow,
+.aw-turn-usage-dot {
+  color: var(--aw-faint);
+}

@@ -62,6 +62,7 @@ import {
   useKnowledgeBases,
 } from "../../components/KnowledgeSourcePicker";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { TurnUsage } from "../../components/TurnUsage";
 import {
   ModeStarterPrompts,
   ModeStartHeader,
@@ -1106,6 +1107,10 @@ function ChatTurn({
         {turn.answer === undefined ? null : (
           <MarkdownContent text={turn.answer} />
         )}
+        {/* 贴在答案正下方，在引用之前：读者问「这一轮怎么这么慢/这么贵」的那一
+            刻，眼睛正停在答案末尾。收进任何需要展开的地方，这个问题就问不出来
+            了，而那是唯一会当场问它的时刻。 */}
+        <TurnUsage usage={turn.usage} />
         {turn.stream === undefined ? null : <LiveText stream={turn.stream} />}
         {!turn.historical &&
         (turn.phase === "submitting" || turn.phase === "running") ? (

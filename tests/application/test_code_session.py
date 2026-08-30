@@ -250,7 +250,7 @@ def test_a_turn_writes_a_file_and_reports_what_it_did() -> None:
         return (
             turn.report,
             turn.workspace_version is not None,
-            [message.role for message in history],
+            [message.message.role for message in history],
         )
 
     report, wrote_something, roles = _run(scenario)
@@ -427,7 +427,7 @@ def test_what_the_user_said_survives_a_turn_that_failed() -> None:
         history = await harness.service.history(
             session_id=session_id, tenant_id=TENANT, principal_id=OWNER
         )
-        return [message.role for message in history], turn.outcome.status
+        return [message.message.role for message in history], turn.outcome.status
 
     roles, status = _run(scenario)
 

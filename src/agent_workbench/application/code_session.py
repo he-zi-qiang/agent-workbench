@@ -91,6 +91,7 @@ from agent_workbench.ports.cancellation import CancellationToken
 from agent_workbench.ports.conversation_store import (
     ConversationSession,
     ConversationStore,
+    StoredMessage,
 )
 from agent_workbench.ports.project_files import ProjectFileStore
 from agent_workbench.ports.tools import ToolRegistry
@@ -714,7 +715,7 @@ class CodeSessionService:
 
     async def history(
         self, *, session_id: str, tenant_id: str, principal_id: str
-    ) -> tuple[Message, ...]:
+    ) -> tuple[StoredMessage, ...]:
         """This principal's own coding conversation, oldest first.
 
         The mode is fixed here for the same reason ``ChatService.history``
@@ -729,7 +730,10 @@ class CodeSessionService:
             principal_id=principal_id,
             mode="code",
         )
-        return tuple(record.message for record in stored)
+        # The whole `StoredMessage`, not the `Message` inside it. What the turn
+        # spent hangs off the outer record; unwrapping one layer here dropped
+        # it, and the caller's reason for asking is that number.
+        return stored
 
     async def workspace(
         self, *, session_id: str, tenant_id: str, principal_id: str

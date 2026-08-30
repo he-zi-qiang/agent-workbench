@@ -30,7 +30,11 @@ from agent_workbench.adapters.persistence.models import messages as messages_tab
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.identifiers import Identifier, new_id, new_message_id
 from agent_workbench.domain.messages import Message, assistant_message
-from agent_workbench.domain.runs import AgentOutcome, stale_execution_outcome
+from agent_workbench.domain.runs import (
+    AgentOutcome,
+    BudgetUsage,
+    stale_execution_outcome,
+)
 from agent_workbench.ports.conversation_store import (
     ChatTurnBusyError,
     ChatTurnClaim,
@@ -44,6 +48,30 @@ from agent_workbench.ports.conversation_store import (
     StoredMessage,
     WorkspacePointerConflictError,
 )
+
+
+def _usage_of(turn_result: object) -> BudgetUsage | None:
+    """一轮的花销，从它存下来的 `ChatTurnResult` 里取。
+
+    `None` 有三个来源，而它们对读者是同一件事：这条消息不是某一轮的产出（用户
+    说的那句）、那一轮还没落定（`result` 还是 NULL）、或者存下来的形状里没有这
+    一段（早于 `AgentOutcome.usage` 的历史行）。三种都是「这里问不出答案」，而
+    零是个看起来像答案的答案。
+
+    整段用 `model_validate` 而不是逐键取：`BudgetUsage` 自己知道它有哪些字段、
+    哪些能缺，在这里手抄一遍等于把那份定义抄成两份。
+    """
+
+    if not isinstance(turn_result, dict):
+        return None
+    held = cast("dict[str, object]", turn_result)
+    outcome = held.get("outcome")
+    if not isinstance(outcome, dict):
+        return None
+    usage = cast("dict[str, object]", outcome).get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return BudgetUsage.model_validate(usage)
 
 
 class PostgresConversationStore:
@@ -151,7 +179,12 @@ class PostgresConversationStore:
                 principal_id,
                 mode=mode,
             )
-            return await self._history(connection, session_id=session_id, limit=limit)
+            # `with_usage` 只在这条公开路径上打开。`_history_before` 每一轮都
+            # 走一遍，而它构造的是模型上下文——那边不读这个字段，多一次 join 是
+            # 白付的。
+            return await self._history(
+                connection, session_id=session_id, limit=limit, with_usage=True
+            )
 
     async def session(
         self,
@@ -905,13 +938,26 @@ class PostgresConversationStore:
         session_id: str,
         limit: int | None = None,
         before_sequence: int | None = None,
+        with_usage: bool = False,
     ) -> tuple[StoredMessage, ...]:
-        query = (
-            select(
-                messages_table.c.message_id,
-                messages_table.c.sequence,
-                messages_table.c.payload,
+        columns: list[Any] = [
+            messages_table.c.message_id,
+            messages_table.c.sequence,
+            messages_table.c.payload,
+        ]
+        source: Any = messages_table
+        if with_usage:
+            # LEFT JOIN，不是 JOIN：用户那一条消息不属于任何一轮的产出，而一轮
+            # 还没落定时 `result` 是 NULL。内连接会把这两种消息从历史里删掉，
+            # 那是把「读不到花销」变成「这句话没说过」。
+            columns.append(chat_turns.c.result.label("turn_result"))
+            source = messages_table.outerjoin(
+                chat_turns,
+                chat_turns.c.assistant_message_id == messages_table.c.message_id,
             )
+        query = (
+            select(*columns)
+            .select_from(source)
             .where(messages_table.c.session_id == session_id)
             .order_by(messages_table.c.sequence)
         )
@@ -926,6 +972,7 @@ class PostgresConversationStore:
                 session_id=session_id,
                 sequence=cast(int, row.sequence),
                 message=Message.model_validate(row.payload),
+                usage=_usage_of(getattr(row, "turn_result", None)),
             )
             for row in rows
         )

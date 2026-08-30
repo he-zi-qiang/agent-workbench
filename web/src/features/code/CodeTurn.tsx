@@ -68,6 +68,7 @@ import type { WorkspaceEntryView } from "../../api/types";
 import { CommandTrace } from "../../components/CommandTrace";
 import { LiveActivity, type LiveActivityKind } from "../../components/LiveActivity";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { TurnUsage } from "../../components/TurnUsage";
 import { presentActivity } from "../../components/activityPresentation";
 import type { StepGroup } from "../../components/stepGroups";
 import type { ToolProgressView } from "./useCodeStream";
@@ -197,6 +198,10 @@ export function CodeTurn({
           <p>{liveAnswer}</p>
         </section>
       )}
+
+      {/* 在答案下面、原始事件上面。和 Chat 那一处同一个位置、同一个零件：三个
+          模式对同一个数说同一句话，是这个脚注唯一要守住的东西。 */}
+      <TurnUsage usage={block.usage} />
 
       {block.events.length === 0 ? null : (
         <details className="aw-code-raw">

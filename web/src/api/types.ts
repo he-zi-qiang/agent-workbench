@@ -188,9 +188,25 @@ export interface CitedPassageView {
   page: number | null;
 }
 
+/**
+ * 一轮烧了多少。**缺席表示这里问不出答案，不表示花了零。**
+ *
+ * 用户那一条永远没有（一句提问没有自己的花销），还没落定的那一轮也没有。给这两
+ * 种情况一个零，会在每一轮下面多出一行说谎的脚注。
+ */
+export interface TurnUsageView {
+  input_tokens: number;
+  output_tokens: number;
+  /** `input_tokens` 的子集，不是它之外的另一笔。 */
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_micro_usd: number;
+}
+
 export interface MessageView {
   role: string;
   text: string;
+  usage?: TurnUsageView | null;
 }
 
 export interface HistoryResponse {
