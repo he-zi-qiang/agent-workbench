@@ -1196,3 +1196,209 @@ def test_a_plan_does_not_authorise_the_turn_that_follows() -> None:
     assert planned.envelope.max_tool_risk == "read"
     assert acted.envelope.max_tool_risk == "destructive"
     assert set(acted.tool_names) == set(CODE_PROJECT_TOOLS_WITH_RUN)
+
+
+def test_a_selection_narrows_the_turn_and_can_widen_nothing() -> None:
+    """ADR-096. A third narrowing axis, with the same one-way property.
+
+    The interesting assertion is not that the two ticked tools survive -- it is
+    that a name the caller sent which the turn was never offered does *not*
+    appear. `tools` is an intersection with the offer, so there is no spelling
+    of it that adds a tool, and that is what makes it safe to expose to a
+    browser at all: the request cannot be edited into a wider envelope than the
+    one this deployment already decided to hand out.
+    """
+
+    from agent_workbench.application.code_session import CODE_PROJECT_TOOLS_WITH_RUN
+
+    harness = _Harness(_writes("notes.md", "hello", "Done."))
+    recording = _Recording()
+    harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+    harness.service.tool_names = CODE_PROJECT_TOOLS_WITH_RUN  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def scenario() -> None:
+        session_id = await harness.opened()
+        await harness.service.ask(
+            CodeRequest(
+                session_id=session_id,
+                instruction="read the file",
+                principal=WRITER,
+                run_id="run_1",
+                # Two the turn holds, and one it never had: `workspace_read`
+                # belongs to the other file language entirely.
+                tools=frozenset({"project_read", "project_list", "workspace_read"}),
+            ),
+            harness.sink(session_id, "run_1"),
+            NullCancellationToken(),
+        )
+
+    _run(scenario)
+    signed = recording.requests[0]
+
+    assert set(signed.tool_names) == {"project_read", "project_list"}
+    assert "workspace_read" not in signed.tool_names
+    # The ceiling follows the list down, because it is derived from what the
+    # remaining tools say about themselves rather than configured beside them.
+    # A turn holding two readers is a `read` turn, and nobody wrote that branch.
+    assert signed.envelope.max_tool_risk == "read"
+    # Order is the offer's, so "only ever narrows" stays checkable by reading
+    # the two lists side by side rather than by trusting the function.
+    assert list(signed.tool_names) == [
+        name for name in CODE_PROJECT_TOOLS_WITH_RUN if name in set(signed.tool_names)
+    ]
+
+
+def test_a_selection_and_plan_mode_compose_by_narrowing_twice() -> None:
+    """ADR-096 §3. Neither axis has to know about the other.
+
+    The order matters and this is what pins it: plan mode runs first, so a
+    selection that still names `project_write` -- because the catalogue was
+    read in act mode, a second before the reader flipped the control -- cannot
+    put it back. The result is the intersection of both, which is the only
+    reading of "stricter than the deployment" that composes.
+    """
+
+    from agent_workbench.application.code_session import CODE_PROJECT_TOOLS_WITH_RUN
+
+    harness = _Harness(_writes("notes.md", "hello", "Done."))
+    recording = _Recording()
+    harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+    harness.service.tool_names = CODE_PROJECT_TOOLS_WITH_RUN  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def scenario() -> None:
+        session_id = await harness.opened()
+        await harness.service.ask(
+            CodeRequest(
+                session_id=session_id,
+                instruction="have a look",
+                principal=WRITER,
+                run_id="run_1",
+                mode="plan",
+                tools=frozenset({"project_read", "project_write"}),
+            ),
+            harness.sink(session_id, "run_1"),
+            NullCancellationToken(),
+        )
+
+    _run(scenario)
+    signed = recording.requests[0]
+
+    assert set(signed.tool_names) == {"project_read"}
+    assert "project_write" not in signed.tool_names
+    assert signed.envelope.max_tool_risk == "read"
+
+
+def test_the_catalogue_is_produced_by_the_expression_the_turn_runs() -> None:
+    """ADR-096 §2. The offer a person reads is the offer the turn signs.
+
+    Asserted as an equality between two calls rather than against a literal
+    list, because the claim is not "these five names" -- it is that there is
+    one derivation. A copy of the tool selection written for the endpoint would
+    pass a literal assertion for exactly as long as nobody edited either half.
+    """
+
+    from agent_workbench.application.code_session import CODE_TOOLS
+
+    harness = _Harness(_writes("notes.md", "hello", "Done."))
+    recording = _Recording()
+    harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def scenario() -> Any:
+        session_id = await harness.opened()
+        offer = await harness.service.offer(session_id=session_id, principal=WRITER)
+        await harness.service.ask(
+            CodeRequest(
+                session_id=session_id,
+                instruction="write it",
+                principal=WRITER,
+                run_id="run_1",
+            ),
+            harness.sink(session_id, "run_1"),
+            NullCancellationToken(),
+        )
+        return offer
+
+    offer = _run(scenario)
+    signed = recording.requests[0]
+
+    assert tuple(spec.name for spec in offer.specs) == tuple(signed.tool_names)
+    assert tuple(spec.name for spec in offer.specs) == CODE_TOOLS
+    # This harness has no project service, which is the shape a session with no
+    # directory registered actually has.
+    assert offer.surface == "workspace"
+    # The deployment's floor, not this turn's total: `before_write` adds to it
+    # and can subtract nothing (ADR-087).
+    assert "destructive" in offer.approval_required_risks
+
+
+def test_the_catalogue_refuses_a_session_that_is_not_the_askers() -> None:
+    """Whether a session has a directory is a fact about that session.
+
+    So the read is authorized by the same call every other read here makes,
+    rather than by a cheaper look at a column. A neighbour who could ask this
+    would learn that a session exists and which half of the file language it
+    speaks, having been refused every other question about it.
+    """
+
+    harness = _Harness(_writes("notes.md", "hello", "Done."))
+
+    async def scenario() -> None:
+        session_id = await harness.opened()
+        with pytest.raises(NotFoundError):
+            await harness.service.offer(
+                session_id=session_id,
+                principal=PrincipalContext(tenant_id=TENANT, principal_id=NEIGHBOUR),
+            )
+
+    _run(scenario)
+
+
+def test_a_name_this_process_never_had_is_named_back() -> None:
+    """The half `kept` deliberately does not handle.
+
+    A name that is merely not offered *this* turn is dropped in silence,
+    because plan mode and the session's file language both legally shrink the
+    offer underneath a selection made a moment earlier. A name no tool in this
+    process answers to is a different thing -- a typo or a stale client -- and
+    it is reported with the name in it, all of them at once.
+    """
+
+    harness = _Harness(_writes("notes.md", "hello", "Done."))
+
+    assert harness.service.unregistered(("workspace_read",)) == frozenset()
+    assert harness.service.unregistered(
+        cast(Any, ("workspace_read", "workspace_teleport", "project_yell"))
+    ) == frozenset({"workspace_teleport", "project_yell"})
+
+
+def test_a_turn_reports_the_tools_it_was_actually_allowed() -> None:
+    """ADR-096. The only answer to "did my selection take effect".
+
+    Two of the three narrowings are not the caller's -- the deployment's offer,
+    and whether this session's project has a directory registered -- so a
+    request that named three tools and ran with two is ordinary rather than a
+    bug. Nothing else a turn returns would report it.
+    """
+
+    harness = _Harness(_writes("notes.md", "hello", "Done."))
+    recording = _Recording()
+    harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def scenario() -> CodeTurn:
+        session_id = await harness.opened()
+        return await harness.service.ask(
+            CodeRequest(
+                session_id=session_id,
+                instruction="list it",
+                principal=WRITER,
+                run_id="run_1",
+                tools=frozenset({"workspace_list", "project_list"}),
+            ),
+            harness.sink(session_id, "run_1"),
+            NullCancellationToken(),
+        )
+
+    turn = _run(scenario)
+
+    assert turn.allowed_tools == ("workspace_list",)
+    assert tuple(recording.requests[0].tool_names) == turn.allowed_tools

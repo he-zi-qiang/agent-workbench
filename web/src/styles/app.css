@@ -4390,15 +4390,27 @@ pre {
 }
 
 /* 正在跑的那一行。呼吸而不是旋转：一个转圈的东西在一列静止的标题里会一直
-   拉走视线，而这一行要说的只是「它还没结束」。 */
+   拉走视线，而这一行要说的只是「它还没结束」。
+
+   位子**永远**占着，点只在 `.is-running` 上画。此前这个 span 是条件渲染的，于是
+   一段会话开跑的瞬间，它那一行的标题会往右挪 12px——一列本来对齐的名字里有一行不
+   对齐，而那一下抖动恰好发生在读者正盯着它看的时候。
+
+   空着的时候是**透明**，不是一个空心圈：空心圈会是一句「它没在跑」，而这一栏只知道
+   这个标签页自己发出去的请求（`CodeSessionRail` 的 `runningIds`），另一个标签页里
+   跑着的回合在这里看不见。留位子不撒谎，画空心圈会。 */
 .aw-code-recent-running {
   display: inline-block;
   width: 6px;
   height: 6px;
   margin-right: 6px;
   border-radius: 50%;
-  background: var(--aw-accent);
+  background: transparent;
   vertical-align: middle;
+}
+
+.aw-code-recent-running.is-running {
+  background: var(--aw-accent);
   animation: aw-code-recent-pulse 1.6s ease-in-out infinite;
 }
 
@@ -4414,7 +4426,7 @@ pre {
 
 /* 关掉动画的人看到的是一个不闪的点，而不是没有点：状态本身不是装饰。 */
 @media (prefers-reduced-motion: reduce) {
-  .aw-code-recent-running {
+  .aw-code-recent-running.is-running {
     animation: none;
   }
 }
@@ -4983,13 +4995,22 @@ p.aw-code-step-thought {
   gap: 8px;
 }
 
-/* 附件、输入、发送在一行：上传是提问的一部分，所以控件坐在提问发生的地方。
- * 之前它在最右侧栏的头部，和它服务的动作隔着整个屏幕。 */
+/* 权限、「+」、输入、发送在一行：加东西是提问的一部分，所以控件坐在提问发生的
+ * 地方。之前上传在最右侧栏的头部，和它服务的动作隔着整个屏幕。
+ *
+ * **四条轨道，数出来的。** 这一行里在流中的元素正好四个（`.aw-sr-only` 是
+ * `position: absolute`，不占轨道），而这里此前写的是三条——那是「+」还是一颗回形针
+ * 之前的数：权限、回形针、输入，发送靠换行落到第二行左端。实测过的样子是输入框被
+ * 压到 125px、发送键单独占一行；把「+」用 JS 藏掉，三个又回到同一行，所以确实是
+ * 数量差一。
+ *
+ * `is-start` 那一档仍然是三条（minimal-theme 覆盖它），因为那里的排布是显式写死的
+ * ——输入框 `grid-column: 1 / -1` 独占第一行，第二行才是「+」和发送。 */
 .aw-code-composer-row {
   display: grid;
   align-items: end;
   gap: 8px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
 }
 
 .aw-code-composer textarea {
@@ -5261,34 +5282,15 @@ p.aw-code-step-thought {
   font-size: 12px;
 }
 
-/* --- 附件按钮 --- */
-
-.aw-code-attach {
-  display: inline-flex;
-  width: 38px;
-  height: 38px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--aw-border-strong);
-  border-radius: 11px;
-  background: var(--aw-panel);
-  color: var(--aw-text-soft);
-  cursor: pointer;
-}
-
-.aw-code-attach:hover {
-  color: var(--aw-text);
-}
-
-.aw-code-attach input {
-  display: none;
-}
-
-.aw-code-attach.is-busy,
-.aw-code-attach:has(input:disabled) {
-  cursor: default;
-  opacity: 0.55;
-}
+/* --- 附件按钮 ---
+ *
+ * 这里曾经是 `.aw-code-attach`——输入框左边那颗回形针，一个 `<label>` 包着一个
+ * 隐藏的 `<input type="file">`。它被 `.aw-composer-plus` 那颗「+」替掉了：上传
+ * 只是它收的四件事之一，而那四件事此前散成四个入口、四种形状。
+ *
+ * 规则整块删掉而不是留着：`.aw-code-attach` 在 `web/src` 里已经零命中，而一条没有
+ * 元素的规则会在下一个人读它时读起来像还生效。尺寸（38×38、11px 圆角）搬到了
+ * `.aw-composer-plus-button`，一分没变——它落在同一条网格轨道上。 */
 
 /* 计划模式（ADR-0079）。开关做成 checkbox 而不是第二个发送按钮：一轮只有一种
    模式，两个按钮会让「刚才那一轮是哪种」变成一个要回想的问题；而一个 checked
@@ -8475,4 +8477,357 @@ p.aw-code-step-thought {
   color: var(--aw-text-soft);
   font-family: var(--aw-sans);
   font-weight: 550;
+}
+
+/* --- 菜单 ------------------------------------------------------------------
+ *
+ * 一份挨着触发它的按钮长出来的清单。两处在用：输入框左边那颗「+」（往上开），
+ * 会话页头右端那颗 ⋮（往下开）。
+ *
+ * 它**不 portal**，所以位置全靠 `.aw-menu-anchor` 这一层 `position: relative`
+ * ——没有测量代码，也就没有滚动时跟不上的那一类缺陷。代价是它受祖先的 `overflow`
+ * 管：`.aw-code-composer` 和 `.aw-code-header` 都没有裁切，这是用它之前要确认的
+ * 那一件事。 */
+
+.aw-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+/* 触发按钮不带自己的外观：两处用它的地方各自给（`.aw-composer-plus-button` 是
+   38px 的方钮，`.aw-session-menu-button` 是页头上的图标钮）。写在这里的只有
+   「它是个按钮」。 */
+.aw-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.aw-menu {
+  position: absolute;
+  z-index: 40;
+  display: grid;
+  width: max-content;
+  min-width: 232px;
+  max-width: min(340px, calc(100vw - 32px));
+  padding: 5px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius-md);
+  background: var(--aw-window);
+  box-shadow: var(--aw-shadow-md);
+  gap: 1px;
+  /* 深色下靠这道顶部高光读出厚度：黑影落在黑底上几乎看不见。 */
+  background-image: linear-gradient(var(--aw-raise), transparent 2px);
+}
+
+.aw-menu.is-top {
+  /* 6px 而不是 0：贴着按钮的清单看起来是从按钮里长出来的一部分，而它是一层
+     浮起来的东西。 */
+  bottom: calc(100% + 6px);
+}
+
+.aw-menu.is-bottom {
+  top: calc(100% + 6px);
+}
+
+.aw-menu.is-start {
+  left: 0;
+}
+
+.aw-menu.is-end {
+  right: 0;
+}
+
+/* 子菜单往右开。这一栏最宽 340px，而它的锚点在输入框左端或页头右端——两处都留得
+   下；真排不下时 `max-width` 会先收窄它，而不是让它横向溢出页面。 */
+.aw-menu-nest {
+  position: relative;
+  display: grid;
+}
+
+.aw-menu-sub {
+  top: -5px;
+  bottom: auto;
+  left: calc(100% + 4px);
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+}
+
+.aw-menu-item {
+  display: grid;
+  align-items: center;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aw-text);
+  font: inherit;
+  font-size: 13px;
+  gap: 0 9px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 没有图标的项也要和有图标的对齐：一列名字里有两条各自缩进不同，读起来像两组。 */
+.aw-menu-item > .aw-menu-copy:first-child {
+  grid-column: 2;
+}
+
+.aw-menu-item:hover:not(:disabled),
+.aw-menu-item:focus-visible {
+  background: var(--aw-veil-strong);
+  outline: none;
+}
+
+.aw-menu-item:disabled {
+  color: var(--aw-text-muted);
+  cursor: default;
+}
+
+.aw-menu-item.is-danger {
+  color: var(--aw-danger);
+}
+
+.aw-menu-icon {
+  display: inline-flex;
+  width: 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--aw-text-muted);
+}
+
+.aw-menu-item.is-danger .aw-menu-icon {
+  color: inherit;
+}
+
+.aw-menu-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.aw-menu-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 第二行的小字。两行封顶：工具那一栏的 hint 是工具自己的描述，而那是给模型写的
+   一整段——不封的话一个菜单项会有八行高。 */
+.aw-menu-copy > small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.aw-menu-trailing {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.aw-menu-chevron {
+  margin-left: -4px;
+  color: var(--aw-faint);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.aw-menu-item.is-parent[aria-expanded="true"] {
+  background: var(--aw-veil);
+}
+
+/* 勾选框的勾。画在图标位上，所以打勾和不打勾的两行仍然对齐——用 `::before` 加
+   宽度的写法会让打了勾的那一行整体右移。 */
+.aw-menu-item[role="menuitemcheckbox"] .aw-menu-icon::before {
+  color: var(--aw-accent);
+  content: "✓";
+  font-size: 13px;
+  opacity: 0;
+}
+
+.aw-menu-item[aria-checked="true"] .aw-menu-icon::before {
+  opacity: 1;
+}
+
+.aw-menu-item[role="menuitemcheckbox"]:disabled .aw-menu-icon::before {
+  color: var(--aw-faint);
+}
+
+.aw-menu-rule {
+  height: 1px;
+  margin: 4px 8px;
+  border: 0;
+  background: var(--aw-border-subtle);
+}
+
+/* 一句话，不是一个用不了的开关。`role="none"` 已经把它从菜单项里摘出去了，这里
+   只是让它看起来也不像。 */
+.aw-menu-note {
+  margin: 2px 0 4px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--aw-surface-sunken);
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* --- 输入框左边那颗「+」 --------------------------------------------------
+ *
+ * 尺寸和它替掉的那颗回形针完全一样（38×38、11px 圆角），因为它落在同一条网格
+ * 轨道上——`.aw-code-composer-row` 是 `auto minmax(0, 1fr) auto`，改尺寸就要同时
+ * 改这里和 minimal-theme 那半，而这一页的列数在两层样式加两个断点里一共写过四遍。 */
+
+.aw-composer-plus {
+  display: inline-flex;
+}
+
+.aw-composer-plus input[type="file"] {
+  display: none;
+}
+
+.aw-composer-plus-button {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 11px;
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+}
+
+.aw-composer-plus-button:hover {
+  color: var(--aw-text);
+}
+
+.aw-composer-plus-button[aria-expanded="true"] {
+  border-color: var(--aw-border-strong);
+  background: var(--aw-raised);
+  color: var(--aw-text);
+}
+
+.aw-composer-plus.is-busy .aw-composer-plus-button {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* --- 会话页头右端那颗 ⋮ --------------------------------------------------- */
+
+.aw-session-menu-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--aw-text-muted);
+}
+
+.aw-session-menu-button:hover,
+.aw-session-menu-button[aria-expanded="true"] {
+  background: var(--aw-veil-strong);
+  color: var(--aw-text);
+}
+
+/* 页头上就地改名。输入框借标题自己的字号，所以按下「重命名」时这一行不跳高。 */
+.aw-code-header-rename input {
+  width: min(420px, 100%);
+  padding: 2px 8px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 8px;
+  background: var(--aw-panel);
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* --- 会话栏：搜索、分组、折叠 --------------------------------------------- */
+
+.aw-code-sessions-search {
+  display: grid;
+  align-items: center;
+  margin: 0 10px 2px;
+  padding: 0 8px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 9px;
+  background: var(--aw-panel);
+  color: var(--aw-text-muted);
+  gap: 6px;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.aw-code-sessions-search input {
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.aw-code-sessions-search input:focus {
+  outline: none;
+}
+
+.aw-code-session-group + .aw-code-session-group {
+  margin-top: 8px;
+}
+
+/* 抬头，不是标题：它比它底下那些行更小、更淡，因为要被读的是那些行。
+   `position: sticky` 让一份长列表在滚动时始终说得出「现在这一段是哪个文件夹的」
+   ——这正是分组要替掉的那句每行重复。 */
+.aw-code-session-group-name {
+  position: sticky;
+  top: -10px;
+  z-index: 1;
+  margin: 0;
+  padding: 6px 10px 3px;
+  background: var(--aw-sidebar);
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-code-sessions-more {
+  margin: 6px 10px 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aw-code-sessions-more:hover {
+  background: var(--aw-veil);
+  color: var(--aw-text-soft);
+}
+
+/* 放不下就翻到左边。`Menu` 量一次（`useLayoutEffect`，画出来之前）再挂上这个类；
+   实测在 800px 宽的窗口里，输入框那颗「+」的子菜单会被右边缘切掉约 120px。 */
+.aw-menu-sub.is-flipped {
+  right: calc(100% + 4px);
+  left: auto;
+}
+
+/* 上下也会掉出去，而且比左右更容易：工具那一栏有七项加一段说明，锚点又在一个从
+   输入框往上开的菜单里靠下的位置。翻过来是把下沿对齐到那一行、往上长。 */
+.aw-menu-sub.is-raised {
+  top: auto;
+  bottom: -5px;
 }

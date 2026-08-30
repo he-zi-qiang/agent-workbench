@@ -58,6 +58,7 @@
 | [ADR-093 控制台可以读到「下一个任务会被允许什么」](./0093-a-console-may-read-what-the-next-task-would-be-allowed.md) | 委派的四个上限每个 profile 都不一样，而前端一条读得到的路由都没有；要不要把进程配置投影成 HTTP 事实，答的是哪一份配置 | 接受，新增 `GET /v1/tasks/capabilities`，只答「下一个任务」；明确不答子代理目录、不答 `max_agent_invocation_attempts_per_task`、不做提交级覆盖 |
 | [ADR-094 一个子代理干的活是一行，展开才是九行](./0094-a-sub-agents-work-is-one-row-that-opens.md) | 委派之后子运行与父运行的事件躺在同一个阶段里，而时间线是平的；要不要改 Work 与 Chat 共用的 `StepStream`；一页缺失的 `AgentDelegated` 让页面说不出子运行叫什么时怎么办 | 接受，新增按 `run_id` 连续分段 + `StepStream` 的可选 `runLabel`；不给这个 prop 时渲染逐字节不变；删除「子代理 X：」前缀，叫不出名字的段用 `运行 xxxxxxxx` 兜底且不挂徽标 |
 | [ADR-095 人可以看自己的屏幕，模型不可以](./0095-the-person-may-see-their-own-screen-the-model-may-not.md) | 要做一块能读到「批准了哪些应用、此刻前台是谁」的面板，第一个要回答的是：面板可不可以说出一个**没被批准**的前台应用的名字；以及查出这条「不点名」规则三处只成立两处 | 接受，两个方向：人这一侧面板点名，模型这一侧把第三条路补齐（`_require_frontmost` 不再点名）；动作记录是有界内存环、不落盘；传输走 agent-api 只读反代而不给 8768 加 CORS；F-19 保持开着但界面改说「这个进程」 |
+| [ADR-096 一段会话可以只拿它被给出的工具里的一部分](./0096-a-session-may-hold-fewer-tools-than-it-was-offered.md) | 对照 Claude Desktop 输入框那颗「+」：一个 Code 回合被给出哪些工具，在浏览器里一条读得到的路由都没有；要不要投影成 HTTP 事实，人能不能据此收窄下一个回合，以及这条收窄和已有的两条（计划模式、写入前批准）怎么排序 | 接受，新增 `GET /v1/code/sessions/{id}/tools`（只答「下一个回合」）与请求体上的 `tools`（求交，只能减）；`AskResponse` 新增 `allowed_tools`；**明确不投影 `[[mcp.servers]]` 的连接器目录**——那些绑定装在 Task Worker 上，Code 回合永远拿不到（同 ADR-093 §3 的错法） |
 
 > **这张表在 ADR-054 之后就断了：0055–0074 与 0077–0089 都没有行。**（ADR-075、
 > 0076、0090、0091、0092、0093、0094 与 0095 各是自己那一批顺手补的，不代表表已经跟上。）那些 ADR 都在同一个

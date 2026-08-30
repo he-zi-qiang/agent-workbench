@@ -38,7 +38,7 @@ minutes-long turn is a queue nobody can reason about the length of.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -84,7 +84,7 @@ from agent_workbench.domain.runs import (
     TraceContext,
 )
 from agent_workbench.domain.sandbox import SANDBOX_RUN_TOOL
-from agent_workbench.domain.tools import ToolName, ToolRisk
+from agent_workbench.domain.tools import ToolName, ToolRisk, ToolSpec
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import CancellationToken
@@ -370,6 +370,40 @@ def read_only(
     return tuple(name for name in tool_names if risks.get(name) == "read")
 
 
+def kept(
+    tool_names: tuple[ToolName, ...], *, keeping: frozenset[ToolName] | None
+) -> tuple[ToolName, ...]:
+    """The offered tools this turn's caller chose to keep (ADR-096).
+
+    An intersection, written in the offer's order, so the same sentence that
+    holds for plan mode holds for this: **it only ever narrows**, and that is
+    checkable by reading the two lists rather than by trusting this function.
+    Composing the two therefore needs no argument of its own -- a subsequence
+    of a subsequence is a subsequence.
+
+    ``None`` is not an empty choice, and the two are kept apart all the way out
+    to the request body. ``None`` means nobody narrowed anything, which is what
+    every caller written before this existed meant; an empty set would mean a
+    turn holding no tools at all, and the route refuses to build one (a coding
+    turn that cannot read the project it is about can only answer from the
+    conversation, which is Chat's job and not this one's).
+
+    A name that is *not* in ``tool_names`` is dropped rather than refused, and
+    that is the interesting half. It is the ordinary case, not a client bug:
+    the console reads the catalogue in act mode and the reader then switches to
+    plan, so a selection that named `project_write` is now naming something
+    this turn was never going to hold. Refusing there would turn a legal
+    combination of two controls into an error. What must not happen quietly is
+    the *other* drop -- a name this process has no spec for at all -- and that
+    one is refused up in the route, where the registry is reachable and the
+    caller can still be told which name it was.
+    """
+
+    if keeping is None:
+        return tool_names
+    return tuple(name for name in tool_names if name in keeping)
+
+
 def code_approval_risks(
     approvals: CodeApprovals, *, external_requires_approval: bool
 ) -> tuple[ToolRisk, ...]:
@@ -532,6 +566,19 @@ class CodeRequest:
     #: ``"standard"`` is what every caller written before this existed meant --
     #: the deployment's own gate and nothing added.
     approvals: CodeApprovals = "standard"
+    #: Which of the offered tools this turn keeps, or ``None`` for all of them
+    #: (ADR-096).
+    #:
+    #: A third narrowing axis beside `mode` and `approvals`, and the same
+    #: sentence governs all three: **a session may be stricter than its
+    #: deployment, never wider**. It is applied last, after `mode` has already
+    #: taken the writes away from a plan turn, so the two compose without
+    #: either needing to know about the other.
+    #:
+    #: A `frozenset` and not a tuple, because order carries no meaning here and
+    #: a tuple would invite somebody to read one into it -- the offer's order
+    #: is what survives into the envelope, and `kept` preserves it.
+    tools: frozenset[ToolName] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +592,48 @@ class CodeTurn:
     #: nothing".
     workspace_version: Identifier | None
     outcome: AgentOutcome
+    #: What this turn was allowed to reach, after every narrowing (ADR-096).
+    #:
+    #: Reported rather than left to be inferred: three things narrowed it and
+    #: two of them are not the caller's -- the deployment's offer, and whether
+    #: this session's project has a directory registered. Defaulted to empty so
+    #: every construction written before this existed still type-checks; the
+    #: one place that builds a real turn fills it from the list the envelope
+    #: was signed with, not from a second derivation of it.
+    allowed_tools: tuple[ToolName, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CodeToolOffer:
+    """What the *next* turn in one session would be handed (ADR-096).
+
+    The tense is the whole contract, and it is ADR-093's line drawn a second
+    time. This describes a turn that does not exist yet: it is produced by the
+    same expression the next `ask` will run, so a console can show a person
+    what they are about to authorise. It says nothing about a turn that has
+    already happened -- that turn signed its own envelope, from the offer as it
+    stood then, and putting today's answer beside yesterday's run would report
+    a set it never held.
+
+    Neither half is narrowed. `mode` and the caller's own selection both apply
+    *after* this, and the console needs the unnarrowed list to render the
+    difference: a plan turn's tools are the read ones in here, and the reader
+    who unticks two of them has to be able to tick them back.
+    """
+
+    #: Which file language a turn would speak (ADR-073). The one fact here that
+    #: is about the session rather than about the process.
+    surface: Literal["workspace", "project"]
+    #: The offered tools' own specifications, in the order the envelope would
+    #: list them. Specs rather than names: risk is what the approval gate and
+    #: plan mode both read, and a name-to-risk table assembled by the caller
+    #: would be a second place a tool's risk is written down.
+    specs: tuple[ToolSpec, ...]
+    #: Which risks stop at a person before this session adds anything to the
+    #: set (ADR-087). The deployment's floor, not a turn's total: a turn that
+    #: asks for `before_write` gets `write` on top of these, and the console
+    #: computes that itself because it is the control that offers it.
+    approval_required_risks: tuple[ToolRisk, ...]
 
 
 @dataclass(slots=True)
@@ -1035,35 +1124,27 @@ class CodeSessionService:
         project_files = await self._project_files_for(
             principal=principal, project_id=session.project_id
         )
-        tool_names = (
-            self.tool_names if project_files is None else self.project_tool_names
-        )
-        # The one append, in the statement that already freezes the file
-        # language, so a turn has one moment where "what am I holding" is
-        # answered rather than two.
-        #
-        # Before `read_only` below, and the consequence is that a **plan turn
-        # loses it**: `read_only` keeps `risk == "read"` and `web_search` is
-        # `external`. That is the right outcome from the wrong-looking rule, so
-        # it is worth saying which. Plan mode narrows by risk on purpose
-        # (ADR-0079) -- a name-suffix filter would be a second place a tool's
-        # risk is written down -- and the risk is `external` for the reason
-        # `domain/research.py` gives: the question leaves this process. A plan
-        # turn that could put the user's question on the open web would be
-        # doing something a turn "that cannot change anything" should not.
-        #
-        # It is still a gap for the reader who wanted to research before
-        # planning, and it is recorded as one (F-27) rather than papered over
-        # with an exception here.
-        if self.web_search_enabled:
-            tool_names = (*tool_names, WEB_SEARCH_TOOL)
+        # One call, so this turn has one moment where "what am I holding"
+        # is answered rather than two -- and so the catalogue the console read
+        # before asking was produced by this same expression rather than by a
+        # copy of it (ADR-096 §2).
+        tool_names = self._offered(project=project_files is not None)
         # Frozen here, beside the file-language decision ADR-073 §5.2 freezes
         # in the same statement and for the same reason: deciding it per tool
         # call would let something change what the running model is holding
         # after the envelope had been signed with the other list.
         risks = self._risks()
+        # Two narrowings, in this order, and the order is the argument. Plan
+        # mode is the deployment's rule about what a turn of this kind may
+        # hold; the caller's selection is a preference expressed *within* what
+        # is left. Reversed, a selection could not make a plan turn narrower
+        # than plan mode already made it -- it would be intersecting against a
+        # set that still contained the writes -- and the reader who unticked
+        # `project_read` in plan mode would be told, correctly but uselessly,
+        # that nothing changed.
         if request.mode == "plan":
             tool_names = read_only(tool_names, risks=risks)
+        tool_names = kept(tool_names, keeping=request.tools)
         with ExitStack() as scopes:
             if project_files is None:
                 scopes.enter_context(self.scope.using(workspace))
@@ -1109,11 +1190,121 @@ class CodeSessionService:
         return CodeTurn(
             run_id=request.run_id,
             report=outcome.output_text,
+            # The same tuple the envelope above was built from, carried out
+            # rather than recomputed. A second derivation here would be a
+            # second place the three narrowings compose, and the interesting
+            # bug is the pair disagreeing.
+            allowed_tools=tool_names,
             # Read from the object the tools actually advanced, not from the
             # row: the pointer was written through per write, so this is the
             # same value and one fewer round trip.
             workspace_version=workspace.version,
             outcome=outcome,
+        )
+
+    def unregistered(self, names: Iterable[ToolName]) -> frozenset[ToolName]:
+        """The names among ``names`` this process has no tool for (ADR-096).
+
+        A set rather than the first offender: a caller holding a stale
+        catalogue is usually wrong about several at once, and being told them
+        one round trip at a time is the shape of error that gets given up on.
+
+        Deliberately not "not offered to this turn". That question has a
+        different and softer answer -- `kept` drops those, because plan mode
+        and the session's own file language both legally shrink the offer
+        underneath a selection somebody made a moment ago.
+        """
+
+        assert self.tools is not None  # refused in `__post_init__`
+        registered = {spec.name for spec in self.tools.specs()}
+        return frozenset(name for name in names if name not in registered)
+
+    def _offered(self, *, project: bool) -> tuple[ToolName, ...]:
+        """What a turn in this session is handed, before it narrows anything.
+
+        The append is here, in the same expression that picks the file
+        language, so a turn has one moment where "what am I holding" is
+        answered rather than two -- and so does the catalogue, which is the
+        reason this is a method at all rather than three lines inside `_run`.
+        A console reading a copy of this list would be showing a person a set
+        that agrees with the turn only until somebody edits one of the two.
+
+        `web_search` is appended **before** plan mode narrows, and the
+        consequence is that a plan turn loses it: `read_only` keeps
+        `risk == "read"` and `web_search` is `external`. That is the right
+        outcome from the wrong-looking rule, so it is worth saying which. Plan
+        mode narrows by risk on purpose (ADR-0079) -- a name-suffix filter
+        would be a second place a tool's risk is written down -- and the risk
+        is `external` for the reason `domain/research.py` gives: the question
+        leaves this process. A plan turn that could put the user's question on
+        the open web would be doing something a turn "that cannot change
+        anything" should not.
+
+        It is still a gap for the reader who wanted to research before
+        planning, and it is recorded as one (F-27) rather than papered over
+        with an exception here.
+        """
+
+        tool_names = self.project_tool_names if project else self.tool_names
+        if self.web_search_enabled:
+            tool_names = (*tool_names, WEB_SEARCH_TOOL)
+        return tool_names
+
+    async def offer(
+        self, *, session_id: str, principal: PrincipalContext
+    ) -> CodeToolOffer:
+        """What the next turn in this session would be handed (ADR-096).
+
+        Authorization first and by the same call every other read here makes:
+        a caller who may not address this session must not learn whether it
+        has a project directory, which is the one fact in the answer that is
+        about the session rather than about the process.
+
+        `_project_files_for` and not a cheaper look at `session.project_id`.
+        The two disagree in a case that exists: a session filed under a project
+        that has no directory registered runs on the flat workspace, and only
+        the store can say so. Answering from the column would tell a person
+        their turn holds `project_write` while the turn it describes holds
+        `workspace_write` -- wrong in exactly the way nobody checks, because it
+        is right most of the time.
+        """
+
+        session = await self.conversations.session(
+            session_id=session_id,
+            tenant_id=principal.tenant_id,
+            principal_id=principal.principal_id,
+            mode="code",
+        )
+        project_files = await self._project_files_for(
+            principal=principal, project_id=session.project_id
+        )
+        project = project_files is not None
+        assert self.tools is not None  # refused in `__post_init__`
+        registered = {spec.name: spec for spec in self.tools.specs()}
+        specs: list[ToolSpec] = []
+        for name in self._offered(project=project):
+            spec = registered.get(name)
+            # Raised, not dropped, and not defaulted. The two available
+            # silences are both wrong in a way nothing downstream would report:
+            # dropping it shows a person a shorter list than the turn will
+            # hold, and inventing a spec shows them a risk nobody declared.
+            # `code_risk_ceiling` refuses the same case with the same argument,
+            # and this is the read-only half of it -- so a deployment that
+            # would fail its first turn fails its first *catalogue*, which is
+            # the request that happens before anybody has spent a model call.
+            if spec is None:
+                raise ValueError(
+                    f"{name!r} is offered to a coding turn but this process "
+                    "has no spec for it, so it cannot be described"
+                )
+            specs.append(spec)
+        return CodeToolOffer(
+            surface="project" if project else "workspace",
+            specs=tuple(specs),
+            approval_required_risks=code_approval_risks(
+                "standard",
+                external_requires_approval=self.external_requires_approval,
+            ),
         )
 
     def _risks(self) -> Mapping[ToolName, ToolRisk]:

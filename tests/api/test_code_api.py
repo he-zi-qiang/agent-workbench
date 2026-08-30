@@ -1717,3 +1717,189 @@ def test_the_whole_working_set_goes_in_beside_the_file() -> None:
     assert names[0] == "sq.py"
     assert sorted(names) == ["data.csv", "sq.py"]
     assert writer.name == "sq.py"
+
+
+def test_the_catalogue_says_what_the_next_turn_would_be_handed() -> None:
+    """ADR-096. The offer, unnarrowed, with what a client needs to narrow it.
+
+    Unnarrowed on purpose. `mode` and the selection are two controls sitting
+    beside the menu this list is drawn in, and a reader flips between them
+    while reading it; an answer that depended on them would be a round trip per
+    flip. So `kept_in_plan` travels per tool and the client does the arithmetic
+    locally -- while the turn does it again server-side, which is the half that
+    authorises anything.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        created = await _opened(client)
+        return await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}/tools",
+            headers=HEADERS,
+        )
+
+    answered = _run(world, scenario)
+    body = answered.json()
+
+    assert answered.status_code == 200
+    # This harness registers the five flat-workspace tools and no project
+    # service, which is the shape of a session with no directory registered.
+    assert body["surface"] == "workspace"
+    assert [tool["name"] for tool in body["tools"]] == [
+        "workspace_edit",
+        "workspace_grep",
+        "workspace_list",
+        "workspace_read",
+        "workspace_write",
+    ]
+    by_name = {tool["name"]: tool for tool in body["tools"]}
+    assert by_name["workspace_read"]["risk"] == "read"
+    assert by_name["workspace_write"]["risk"] == "write"
+    # Plan mode's rule, computed by calling the function the turn calls rather
+    # than by re-testing the risk here (ADR-0079).
+    assert by_name["workspace_read"]["kept_in_plan"] is True
+    assert by_name["workspace_write"]["kept_in_plan"] is False
+    # The model's own sentence, not a friendlier second copy: a console showing
+    # one wording while the model reads another makes "why did it not use the
+    # grep" unanswerable.
+    assert by_name["workspace_grep"]["description"] != ""
+    assert "destructive" in body["approval_required_risks"]
+
+
+def test_the_catalogue_is_not_a_session_somebody_else_can_read() -> None:
+    """Which file language a session speaks is a fact about that session."""
+
+    owner_world = _World()
+
+    async def opened() -> str:
+        return await owner_world.service.open(tenant_id=TENANT, principal_id=OWNER)
+
+    session_id = asyncio.run(opened())
+    world = _World(principal=NEIGHBOUR_PRINCIPAL)
+    world.service.conversations = owner_world.conversations
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        return await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/tools",
+            headers=HEADERS,
+        )
+
+    assert _run(world, scenario).status_code == 404
+
+
+def test_a_selection_reaches_the_turn_and_is_reported_back() -> None:
+    """ADR-096, over HTTP: what was ticked, and what actually ran.
+
+    The two are not the same list and the response says so. `workspace_read`
+    was never offered a name it could not reach, but a client holding a
+    catalogue read one control-flip ago routinely sends more than the turn will
+    hold -- so the honest answer is the intersection, reported.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        created = await _opened(client)
+        return await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={
+                "instruction": "read notes.md",
+                "tools": ["workspace_read", "workspace_list"],
+            },
+        )
+
+    answered = _run(world, scenario)
+
+    assert answered.status_code == 200
+    assert answered.json()["allowed_tools"] == ["workspace_list", "workspace_read"]
+
+
+def test_a_turn_that_narrowed_nothing_still_reports_its_whole_offer() -> None:
+    """The field is not "what you asked for", it is "what this turn held".
+
+    Absent `tools`, that is the deployment's whole offer -- which is the answer
+    a console needs in order to render the menu's summary line the same way in
+    both cases, rather than having to decide that an empty response means
+    "everything".
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        created = await _opened(client)
+        return await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={"instruction": "read notes.md"},
+        )
+
+    assert _run(world, scenario).json()["allowed_tools"] == [
+        "workspace_edit",
+        "workspace_grep",
+        "workspace_list",
+        "workspace_read",
+        "workspace_write",
+    ]
+
+
+def test_a_tool_this_deployment_has_never_had_is_refused_by_name() -> None:
+    """422 with the name in it, rather than a turn that silently did less.
+
+    The distinction this pins is the one `kept` deliberately does not make. A
+    name merely absent from *this* turn's offer is dropped -- plan mode and the
+    session's file language both legally shrink the offer under a selection
+    made a second earlier. A name no tool in this process answers to is a typo
+    or a stale client, and dropping it in silence is how "the tool I ticked
+    never ran" becomes a question with no answer anywhere.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        created = await _opened(client)
+        return await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={
+                "instruction": "read notes.md",
+                "tools": ["workspace_read", "workspace_teleport"],
+            },
+        )
+
+    refused = _run(world, scenario)
+
+    assert refused.status_code == 422
+    assert "workspace_teleport" in refused.json()["detail"]
+    # And nothing ran: the refusal happens before a run id is minted, so a
+    # stale client cannot spend a model call on a selection it got wrong.
+    assert world.executor.runs == 0
+
+
+def test_an_empty_selection_is_refused_rather_than_read_as_everything() -> None:
+    """An empty array is not an absent field, and the difference matters.
+
+    A turn holding no tools cannot read the project it is about, so it could
+    only answer from the conversation -- Chat's shape, not this one's. It is
+    also exactly what a client sends while its own selection state is still
+    loading, and reading that as "all of them" would be a widening nobody
+    asked for while reading it as "none" spends a model call on nothing.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        created = await _opened(client)
+        return await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={"instruction": "read notes.md", "tools": []},
+        )
+
+    assert _run(world, scenario).status_code == 422
+    assert world.executor.runs == 0

@@ -11,6 +11,7 @@ import type {
   CodeTurnMode,
   CodeSessionListResponse,
   CodeSessionView,
+  CodeToolsResponse,
   CreateChatSessionResponse,
   CreateSessionResponse,
   CreateUploadResponse,
@@ -581,6 +582,16 @@ export async function askCode(
   mode: CodeTurnMode = "act",
   approvals: CodeTurnApprovals = "standard",
   signal?: AbortSignal,
+  /**
+   * 这一轮保留哪些工具（ADR-096）。`undefined` 是「全部」，也是这个字段存在之前
+   * 每一个调用方的意思。
+   *
+   * 和上面两个不同，这一个**在等于「全部」时不发**。理由不是省字节：一个空数组
+   * 会被服务端 422 掉（那是客户端状态还没加载完的形状），而一份「碰巧等于全部」
+   * 的名单发出去，会在部署新增一个工具的那天变成一次没有人打算做的收窄——名单是
+   * 上一次读目录时的那一份。
+   */
+  tools?: readonly string[],
 ): Promise<CodeAskResponse> {
   return apiRequest(
     identity,
@@ -593,9 +604,33 @@ export async function askCode(
       // do" answerable only by knowing the server's defaults -- and the answer
       // is wanted in the request log of the one turn somebody is trying to
       // explain (ADR-0079, ADR-087).
-      body: { instruction, mode, approvals },
+      body: {
+        instruction,
+        mode,
+        approvals,
+        ...(tools === undefined ? {} : { tools: [...tools] }),
+      },
       ...(signal === undefined ? {} : { signal }),
     },
+  );
+}
+
+/**
+ * 下一个回合会被给出哪些工具（ADR-096）。
+ *
+ * 不吃 `mode` / `approvals` 查询参数：那两个是坐在这份清单三英寸之外的控件，读者
+ * 会一边读一边来回拨；让答案依赖它们就是每拨一次一个来回。响应带的是没有收窄过的
+ * offer 加上客户端自己收窄所需要的两件事，算术在这一侧做。
+ */
+export async function getCodeTools(
+  identity: PrincipalIdentity,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<CodeToolsResponse> {
+  return apiRequest(
+    identity,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/tools`,
+    { ...(signal === undefined ? {} : { signal }) },
   );
 }
 
@@ -1492,9 +1527,17 @@ export async function putCodeWorkspaceFile(
   identity: PrincipalIdentity,
   sessionId: string,
   file: File,
+  /**
+   * 放进工作区时用的名字，默认就是文件自己的名字。
+   *
+   * 只有文件夹上传会给它：工作区是平的（`WorkspaceName` 不含 `/`），所以那一条路上
+   * 的名字是**路径压出来的**，而不是 `file.name`——同一棵树里两个 `index.ts` 用
+   * `file.name` 会互相覆盖，而覆盖不报错，只会安静地少一个文件。
+   */
+  name: string = file.name,
 ): Promise<WorkspaceResponse> {
   const response = await fetch(
-    `/v1/code/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(file.name)}`,
+    `/v1/code/sessions/${encodeURIComponent(sessionId)}/workspace/${encodeURIComponent(name)}`,
     {
       method: "PUT",
       headers: {

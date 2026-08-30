@@ -1423,7 +1423,7 @@ select {
   box-shadow: none;
 }
 
-.aw-code-attach {
+.aw-composer-plus-button {
   border-color: transparent;
   background: var(--aw-panel-soft);
 }
@@ -1643,7 +1643,7 @@ select {
   box-shadow: none;
 }
 
-.aw-code-main.is-start .aw-code-attach {
+.aw-code-main.is-start .aw-composer-plus {
   grid-row: 2;
   grid-column: 1;
 }

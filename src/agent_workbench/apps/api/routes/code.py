@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import Sequence
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Header, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -48,6 +48,7 @@ from agent_workbench.application.code_session import (
     CodeRunRefusedError,
     CodeRunUnavailableError,
     CodeSessionService,
+    read_only,
 )
 from agent_workbench.application.workspace import (
     WorkspaceEntryNotFoundError,
@@ -61,6 +62,7 @@ from agent_workbench.domain.errors import NotFoundError, ToolInputInvalidError
 from agent_workbench.domain.events import ApprovalDecision
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.sandbox import SANDBOX_RUN_SCOPE
+from agent_workbench.domain.tools import ToolName, ToolRisk
 from agent_workbench.ports.cancellation import (
     CancellationSource,
     NullCancellationToken,
@@ -136,6 +138,23 @@ class AskRequest(BaseModel):
     #: are read. `application/code_session.py`'s `CodeApprovals` carries the
     #: rest of that argument, including why there is no "ask me about nothing".
     approvals: CodeApprovals = "standard"
+    #: Which of the tools `GET .../tools` offered this turn keeps (ADR-096).
+    #: ``None`` -- the default, and what every caller written before this
+    #: existed meant -- keeps all of them.
+    #:
+    #: The third narrowing axis, defaulted and named for the same reasons as
+    #: the two above. It may only remove: a name absent from the offer is
+    #: dropped, and there is no spelling of this field that adds one.
+    #:
+    #: `min_length=1` because an empty array is not the same request as an
+    #: absent field, and the difference is worth an error rather than a guess.
+    #: A turn holding no tools at all cannot read the project it is about, so
+    #: it could only answer from the conversation -- which is Chat's shape, not
+    #: this one's -- and an empty array is also exactly what a client sends
+    #: while its own selection state is still loading. Refusing it costs a
+    #: caller who meant it one field (omit it) and saves every caller who did
+    #: not a model call that could not have done anything.
+    tools: tuple[ToolName, ...] | None = Field(default=None, min_length=1)
 
 
 class AskResponse(BaseModel):
@@ -169,6 +188,63 @@ class AskResponse(BaseModel):
     #: these same strings since it had a failure panel.
     error_code: str | None = None
     error_message: str | None = None
+    #: What this turn was actually allowed to reach, after the deployment's own
+    #: offer, `mode` and `tools` had all applied (ADR-096).
+    #:
+    #: Here because it is the only way to answer "did my selection take
+    #: effect". Two of the three narrowings are invisible to the caller -- the
+    #: offer depends on whether this session's project has a directory
+    #: registered, which the caller did not choose -- so a request that named
+    #: four tools and ran with two is an ordinary outcome rather than a bug,
+    #: and one nothing else in this response would report.
+    allowed_tools: tuple[ToolName, ...] = ()
+
+
+class CodeToolView(BaseModel):
+    """One tool the next turn in this session would be offered."""
+
+    name: ToolName
+    #: The tool's own description -- the same sentence the model is given.
+    #:
+    #: Not a second, friendlier copy written for people. A console showing one
+    #: wording while the model reads another is how "why did it not use the
+    #: grep" becomes unanswerable: the two would have to be diffed to find out
+    #: they disagree, and only one of them is the tool.
+    description: str
+    risk: ToolRisk
+    #: Whether a plan turn keeps this one (ADR-0079).
+    #:
+    #: Sent rather than left to the caller to derive, because deriving it means
+    #: writing `risk == "read"` a second time in a second language. That rule
+    #: has already moved once -- it used to be a name-suffix filter -- and the
+    #: copy that did not move would have gone on rendering a tick beside a tool
+    #: a plan turn no longer holds.
+    kept_in_plan: bool
+
+
+class CodeToolsResponse(BaseModel):
+    """What the *next* turn in this session would be allowed (ADR-096).
+
+    The tense is the contract, and it is ADR-093's line drawn a second time:
+    this describes a turn that does not exist yet. A turn already in the
+    transcript signed its own envelope from the offer as it stood then, and
+    `AskResponse.allowed_tools` is what answers for that one.
+    """
+
+    #: Which file language a turn would speak (ADR-073): the flat session
+    #: workspace, or this session's project directory. The one fact here that
+    #: is about the session rather than about the process.
+    surface: Literal["workspace", "project"]
+    #: The risks that stop at a person before this session adds anything
+    #: (ADR-087). A turn that asks for `approvals="before_write"` gets `write`
+    #: on top of these; the console computes that itself, because it is the
+    #: control that offers it.
+    approval_required_risks: tuple[ToolRisk, ...]
+    #: The offer, in the order the envelope would list it, and **unnarrowed**.
+    #: Neither `mode` nor a selection has been applied: a console needs the
+    #: whole list to render the difference between them, and a reader who
+    #: unticked two tools has to be able to tick them back.
+    tools: tuple[CodeToolView, ...]
 
 
 class MessageView(BaseModel):
@@ -331,6 +407,54 @@ async def delete_session(session_id: str, request: Request) -> DeletedView:
     return DeletedView(session_id=session_id)
 
 
+@router.get("/sessions/{session_id}/tools", response_model=CodeToolsResponse)
+async def tools(session_id: str, request: Request) -> CodeToolsResponse:
+    """What the next turn in this session would be handed (ADR-096).
+
+    Its own endpoint rather than a field on the session, for the reason
+    `workspace` one screen up gives: it answers a different question at a
+    different rate. A session row changes when somebody renames it; this
+    changes when a directory is registered under its project, and it is read
+    at the moment somebody opens the composer's menu rather than on every
+    listing.
+
+    No `mode` or `approvals` query parameter, and that absence is deliberate.
+    Both are controls sitting three inches from the menu that shows this list,
+    and a reader flips between them while reading it; making the answer depend
+    on them would mean a round trip per flip, to re-receive a set the client
+    already has enough to compute. So the response carries the unnarrowed
+    offer plus the two facts a client needs to narrow it -- `kept_in_plan` per
+    tool and `approval_required_risks` for the deployment -- and the client
+    does the arithmetic locally. The turn does it again server-side regardless;
+    this endpoint is what a person reads, never what authorises anything.
+    """
+
+    principal = dependencies_of(request).principals.resolve(request)
+    offer = await _code(request).offer(session_id=session_id, principal=principal)
+    # Called rather than re-derived, so plan mode's rule has exactly one
+    # implementation. `read_only` is the function the turn itself runs, and it
+    # narrows by the tools' own declared risk on purpose (ADR-0079).
+    in_plan = frozenset(
+        read_only(
+            tuple(spec.name for spec in offer.specs),
+            risks={spec.name: spec.risk for spec in offer.specs},
+        )
+    )
+    return CodeToolsResponse(
+        surface=offer.surface,
+        approval_required_risks=offer.approval_required_risks,
+        tools=tuple(
+            CodeToolView(
+                name=spec.name,
+                description=spec.description,
+                risk=spec.risk,
+                kept_in_plan=spec.name in in_plan,
+            )
+            for spec in offer.specs
+        ),
+    )
+
+
 @router.post("/sessions/{session_id}/messages")
 async def ask(
     session_id: str,
@@ -357,6 +481,21 @@ async def ask(
 
     dependencies = dependencies_of(request)
     principal = dependencies.principals.resolve(request)
+    service = _code(request)
+    # Refused here rather than intersected away, and the distinction is the
+    # point. `kept` drops a name the *turn* does not offer -- plan mode took
+    # the writes, or this session runs on the flat workspace -- because those
+    # are legal combinations of two controls a person is holding at once. A
+    # name this process has **no spec for at all** is none of those: it is a
+    # typo or a stale client, and dropping it silently is how "the tool I
+    # ticked never ran" becomes a question with no answer anywhere. 422 with
+    # the name in it costs one round trip and ends the search.
+    if body.tools is not None:
+        unknown = service.unregistered(body.tools)
+        if unknown:
+            raise ToolInputInvalidError(
+                "this deployment has no tool named " + ", ".join(sorted(unknown))
+            )
     run_id = _stable_run_id(
         tenant_id=principal.tenant_id,
         principal_id=principal.principal_id,
@@ -366,7 +505,7 @@ async def ask(
 
     cancellation = CancellationSource()
     turn_task = asyncio.create_task(
-        _code(request).ask(
+        service.ask(
             CodeRequest(
                 session_id=session_id,
                 instruction=body.instruction,
@@ -382,6 +521,10 @@ async def ask(
                 # against, and a gate that could be lowered mid-turn is not a
                 # gate (ADR-087).
                 approvals=body.approvals,
+                # Frozen in the same statement as the other two narrowings,
+                # for the third time and the same reason: all three are read
+                # once, into the envelope this turn is checked against.
+                tools=None if body.tools is None else frozenset(body.tools),
             ),
             # One stream per session, one run per turn, and a fence that has no
             # publish methods at all: this run produces files and a report, and
@@ -408,6 +551,7 @@ async def ask(
         stop_reason=turn.outcome.stop_reason,
         error_code=None if error is None else error.code,
         error_message=None if error is None else error.message,
+        allowed_tools=turn.allowed_tools,
     )
 
 

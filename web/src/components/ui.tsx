@@ -169,11 +169,20 @@ export function SidebarAction({
   label,
   onClick,
   active,
+  buttonRef,
   children,
 }: PropsWithChildren<{
   label: string;
   onClick: () => void;
   active?: boolean;
+  /**
+   * 拿到这颗按钮本身，给需要把焦点还回来的调用方用。
+   *
+   * 会话栏的搜索框按 Escape 收起自己，而收起的同时那个输入框就不在了——不指回来
+   * 的话焦点掉到 `<body>`，键盘读者刚做的动作（「我不搜了，回去」）把他送到了页面
+   * 开头。这一栏此前没有任何一个调用方需要它，所以它是可选的。
+   */
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }>) {
   return (
     <button
@@ -181,6 +190,7 @@ export function SidebarAction({
       aria-pressed={active}
       className="aw-side-action"
       onClick={onClick}
+      ref={buttonRef}
       title={label}
       type="button"
     >
