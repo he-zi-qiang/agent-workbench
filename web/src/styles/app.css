@@ -7891,3 +7891,266 @@ p.aw-code-step-thought {
     box-shadow: var(--aw-shadow-drawer-left);
   }
 }
+
+/* --- 用量总账 -----------------------------------------------------------
+ *
+ * 一页读的东西，不是一块仪表盘：没有图表，没有环形进度，没有同比箭头。它要回答
+ * 的是「钱花在哪了」，而那是四个可以互相加减的数——三个模式和一份按模型的表。
+ * 一张饼图会把这四个数换成四个角度，然后读者要把角度换回数。 */
+.aw-usage-page {
+  display: grid;
+  align-content: start;
+  max-width: 1040px;
+  padding: 24px clamp(16px, 4vw, 48px) 56px;
+  margin: 0 auto;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.aw-usage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.aw-usage-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.aw-usage-header p {
+  max-width: 60ch;
+  margin: 5px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.aw-usage-windows {
+  display: flex;
+  flex: none;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel);
+}
+
+.aw-usage-window {
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 24px;
+}
+
+.aw-usage-window.is-active {
+  background: var(--aw-panel-strong);
+  box-shadow: var(--aw-shadow-sm);
+  color: var(--aw-text);
+}
+
+/* 合计一行，不是一块英雄区。这个数是三张卡的和——把它做得比来源还大，读者会去
+   记它而不是去读它是怎么来的。 */
+.aw-usage-total {
+  display: grid;
+  align-items: center;
+  padding: 14px 16px;
+  gap: 4px 13px;
+  border: 1px solid var(--aw-accent-soft);
+  border-radius: 12px;
+  background: var(--aw-accent-soft);
+  grid-template-columns: 34px minmax(0, 1fr);
+}
+
+.aw-usage-total-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--aw-accent);
+  color: var(--aw-accent-on);
+  place-items: center;
+}
+
+.aw-usage-total strong {
+  display: block;
+  color: var(--aw-accent);
+  font-family: var(--aw-mono);
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+}
+
+.aw-usage-total > div > span {
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+.aw-usage-inflight {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  grid-column: 2;
+}
+
+.aw-usage-modes {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+}
+
+.aw-usage-mode {
+  display: grid;
+  padding: 14px 16px;
+  gap: 10px;
+  border: 1px solid var(--aw-border);
+  border-radius: 12px;
+  background: var(--aw-panel);
+}
+
+.aw-usage-mode-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.aw-usage-mode-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--aw-panel-strong);
+  color: var(--aw-text-soft);
+  place-items: center;
+}
+
+.aw-usage-mode-head strong {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.aw-usage-mode-runs {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-usage-mode-figures {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.aw-usage-tokens {
+  font-family: var(--aw-mono);
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.aw-usage-cost {
+  color: var(--aw-accent);
+  font-family: var(--aw-mono);
+  font-size: 14px;
+}
+
+.aw-usage-split {
+  display: grid;
+  margin: 0;
+  gap: 3px 10px;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.aw-usage-split dt {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-usage-split dd {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-family: var(--aw-mono);
+  font-size: 11.5px;
+  text-align: right;
+}
+
+.aw-usage-models h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.aw-usage-models table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.aw-usage-models th,
+.aw-usage-models td {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--aw-border-subtle);
+  text-align: right;
+}
+
+.aw-usage-models thead th {
+  border-bottom: 1px solid var(--aw-border);
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.aw-usage-models tbody th {
+  color: var(--aw-text);
+  font-size: 12.5px;
+  font-weight: 550;
+  text-align: left;
+}
+
+.aw-usage-models td {
+  color: var(--aw-text-soft);
+  font-family: var(--aw-mono);
+  font-size: 11.5px;
+}
+
+.aw-usage-note {
+  max-width: 76ch;
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.aw-usage-note strong {
+  color: var(--aw-text);
+  font-weight: 600;
+}
+
+.aw-usage-note code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--aw-surface-sunken);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+/* 「没配价目表」这一条要被看见——它是一个可以动手修的配置问题，而它长得和
+   「这个月很省」一模一样。 */
+.aw-usage-note.is-warning {
+  padding: 11px 13px;
+  border: 1px solid var(--aw-warning-border);
+  border-radius: 10px;
+  background: var(--aw-warning-soft);
+  color: var(--aw-text-soft);
+}
