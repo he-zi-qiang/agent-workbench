@@ -41,10 +41,13 @@ describe("问不出答案的时候什么都不画", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("但真的花了零的一轮要画出来，因为那是个答案", () => {
+  it("token 有数就画，但钱是 0 时不印钱", () => {
+    // 零不是一个价格。屏幕上的 `$0` 只有一个来源：这台部署没配价目表，于是
+    // 运行时把 0 写进了事件。印出来等于在每一轮下面贴一个「免费」的标签。
     const { container } = render(<TurnUsage usage={usage({ input_tokens: 12 })} />);
     expect(container).not.toBeEmptyDOMElement();
-    expect(screen.getByText("$0")).toBeInTheDocument();
+    expect(screen.getByText("12")).toBeInTheDocument();
+    expect(screen.queryByText("$0")).toBeNull();
   });
 });
 
@@ -57,6 +60,12 @@ describe("钱", () => {
   it("超过一美元收回两位", () => {
     render(<TurnUsage usage={usage({ cost_micro_usd: 1_500_000 })} />);
     expect(screen.getByText("$1.50")).toBeInTheDocument();
+  });
+
+  it("没配价目表（费用记成 0）时，钱这一段整个不出现", () => {
+    render(<TurnUsage usage={usage({ input_tokens: 900, cost_micro_usd: 0 })} />);
+    expect(screen.getByText("900")).toBeInTheDocument();
+    expect(screen.queryByText(/^\$/)).toBeNull();
   });
 });
 

@@ -86,7 +86,18 @@ export function TurnUsage({
           <span>缓存 {rate}%</span>
         </>
       ) : null}
-      {usage.cost_micro_usd === null ? null : (
+      {/* 记下来的费用是 0 时**不印**，和 `null` 走同一条分支。
+
+          零不是一个价格。在任何一份价目表下，一轮真的花掉零微美元的对话都不存
+          在——所以屏幕上的 `$0` 只有一个来源：这台部署没配 `[model.*.pricing]`，
+          于是运行时把 0 写进了事件。把它印出来，等于在每一轮下面贴一个「免费」
+          的标签，而这恰恰是用量页那条警告要拆穿的误读。
+
+          代价是一个极小的边角：一轮小到不足 1 微美元的对话（`_at()` 向下取整）
+          也不印钱。那时不印仍然比印 `$0` 诚实——它确实不足以显示。
+
+          钱这一列因此是「配了价才出现」。token 用量任何时候都在。 */}
+      {usage.cost_micro_usd === null || usage.cost_micro_usd === 0 ? null : (
         <>
           <span className="aw-turn-usage-dot">·</span>
           <strong>{money(usage.cost_micro_usd)}</strong>
