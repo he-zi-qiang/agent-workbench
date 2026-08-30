@@ -104,7 +104,7 @@ describe("ProjectChooser", () => {
 
     mount();
     await user.click(await screen.findByRole("button", { name: /选择一个文件夹/ }));
-    await user.click(await screen.findByRole("button", { name: "使用这个文件夹" }));
+    await user.click(await screen.findByRole("button", { name: "就用这一层" }));
 
     await waitFor(() => {
       // 文件夹就是项目——再问一次名字是在问一个屏幕上已有答案的问题。
@@ -113,6 +113,43 @@ describe("ProjectChooser", () => {
       );
     });
     expect(onChoose).toHaveBeenCalledWith(project());
+  });
+
+  it("takes the folder from the row that was clicked, not the level it is in", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listProjects).mockResolvedValue({ projects: [] });
+    vi.mocked(createProjectAtDirectory).mockResolvedValue(project());
+
+    mount();
+    await user.click(await screen.findByRole("button", { name: /选择一个文件夹/ }));
+    await user.click(await screen.findByRole("button", { name: "选这个" }));
+
+    await waitFor(() => {
+      // `/Users/alice/demo`，不是 `/Users/alice`。行尾那枚按钮和标题栏那枚各
+      // 自选中不同的目录，这一条守的就是它们没有接错线——接错了的样子是「点了
+      // 列表里的某一行，开出来的却是它的父目录」，一个会一路走到磁盘上的错。
+      expect(vi.mocked(createProjectAtDirectory).mock.calls[0]?.slice(1)).toEqual(
+        ["demo", "/Users/alice/demo"],
+      );
+    });
+  });
+
+  it("still lets a row be walked into rather than chosen", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listProjects).mockResolvedValue({ projects: [] });
+
+    mount();
+    await user.click(await screen.findByRole("button", { name: /选择一个文件夹/ }));
+    await user.click(await screen.findByRole("button", { name: /^demo/ }));
+
+    // 点名字是导航，不是选中：这一条守的是新加的那枚按钮没有把整行都变成
+    // 「选中」——那样的话就再也走不进任何一个子目录了。
+    await waitFor(() => {
+      expect(vi.mocked(browseDirectories).mock.calls.at(-1)?.[1]).toMatchObject({
+        path: "/Users/alice/demo",
+      });
+    });
+    expect(vi.mocked(createProjectAtDirectory)).not.toHaveBeenCalled();
   });
 
   it("offers no way past the picker when there is nothing else to choose", async () => {
@@ -150,7 +187,7 @@ describe("ProjectChooser", () => {
 
     mount();
     await user.click(await screen.findByRole("button", { name: /选择一个文件夹/ }));
-    await user.click(await screen.findByRole("button", { name: "使用这个文件夹" }));
+    await user.click(await screen.findByRole("button", { name: "就用这一层" }));
 
     await waitFor(() => {
       // 服务端自己的理由要到达屏幕：只说「失败了」的话，人会再点一次同一个

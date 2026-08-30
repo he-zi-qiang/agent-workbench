@@ -14,20 +14,25 @@
  * 一分不占。折叠状态记在 localStorage 里，所以「我不看文件」和「我一直看着
  * 文件」都只需要表态一次。
  *
- * 两个来源，一栏里：会话工作区里的产出（`viewing`），和项目目录里被点开的
- * 那个文件（`projectFile`）。它们此前各有各的浮层，宽度还不一样（420 和
- * 720），于是同一个动作——「让我看看这个文件」——在屏幕上有两种样子，而且能
- * 互相盖住。合成一栏之后，后点的那个替掉先点的那个，这也是读者本来就以为的
- * 行为。
+ * **三样东西，三张标签。** 这一栏里住着三份互不相同的清单：这个项目在磁盘上
+ * 长什么样（文件夹）、正在看的那一个（预览）、这段会话自己产出和收到的那些
+ * （本次会话）。它们此前是往下堆的——预览在上、目录在中、会话文件收在一个
+ * `<details>` 里——于是最后那一份要滚过前两份才看得见，而它是四类文件唯一的
+ * 入口。标签页把「有哪些」和「现在看哪个」分开，三份清单因此地位相同。
  *
- * 底下那个折叠的全量列表留着，它不是装饰。四类文件没有卡片，这是它们唯一的
- * 入口：上传进来而不是跑出来的、来自比事件窗口 `KEPT_EVENTS` 更早那一轮的、
- * ADR-063 之前写的（名字在参数摘要里被截断了）、以及尾锚配对丢掉的那些 run
- * 产出的。把它叫「其他文件」会暗示卡片覆盖了剩下的，而卡片没有。
+ * **「本次会话」这个名字是有意的。** 它此前叫「工作区全部文件」，而旁边就是
+ * 「项目目录」——两个名字都在说「文件」，谁也没说自己和对方差在哪，于是它们
+ * 看起来是重复的两份。差别是**来源**：一份是这段会话产出或收到的，另一份是
+ * 磁盘上本来就有的。名字说出来源，重复感就消失了，因为它本来就不是重复。
+ *
+ * 那一份留着，它不是装饰。四类文件没有卡片，这是它们唯一的入口：上传进来而
+ * 不是跑出来的、来自比事件窗口 `KEPT_EVENTS` 更早那一轮的、ADR-063 之前写的
+ * （名字在参数摘要里被截断了）、以及尾锚配对丢掉的那些 run 产出的。
  */
 
 import { PanelRightClose } from "lucide-react";
 import type { PrincipalIdentity, WorkspaceEntryView } from "../../api/types";
+import { PanelTabs } from "../../components/PanelTabs";
 import { formatSize, IconButton } from "../../components/ui";
 import { FilePreview, type OpenedFile } from "./FilePreview";
 import { ProjectFileBody } from "./ProjectFileTree";
@@ -42,7 +47,6 @@ export interface OpenedProjectFile {
 
 export function PreviewPanel({
   directory,
-  directoryOpen,
   files,
   identity,
   onCollapse,
@@ -50,8 +54,9 @@ export function PreviewPanel({
   onOpen,
   onWrote,
   orphanRuns,
+  onTab,
   projectFile,
-  setDirectoryOpen,
+  tab,
   viewing,
 }: {
   /**
@@ -66,7 +71,6 @@ export function PreviewPanel({
    * 问题。目录属于「我在改哪个文件夹」，那和右边这一栏是同一件事。
    */
   directory: React.ReactNode;
-  directoryOpen: boolean;
   files: WorkspaceEntryView[];
   identity: PrincipalIdentity;
   /** 把这一栏收起来。收起是折叠，不是关闭：它记得住。 */
@@ -77,35 +81,154 @@ export function PreviewPanel({
   onWrote: (names: string[]) => void;
   /** Runs the pairing could not attribute; surfaced rather than swallowed. */
   orphanRuns: number;
+  onTab: (id: string) => void;
   /** 项目目录里点开的文件，没有就是 null。 */
   projectFile: OpenedProjectFile | null;
-  setDirectoryOpen: (open: boolean) => void;
+  /**
+   * 现在停在哪一张，`null` 表示读者还没表过态（落到 `fallback` 上）。
+   *
+   * 由页面持有而不是这块面自己 `useState`：页面上有三个入口要求跳到指定的一张
+   * （「看这个文件夹」、「工作区 N」那颗开关、会话菜单里那两项）。这块面自己
+   * 存的话，那三个入口就得靠一个 ref 或者一个 key 去伸手改它的内部状态——两种
+   * 都是把「谁说了算」写得比现在含糊。
+   */
+  tab: string | null;
   viewing: OpenedFile | null;
 }) {
   // 项目文件优先：它是后点的那个。两个来源共用一栏，谁在上面由「谁是最后被
   // 点开的」决定，而页面在打开任一个时清掉另一个，所以这里最多只有一个非空。
+  const opened = projectFile !== null || viewing !== null;
   const heading =
     projectFile !== null
       ? (projectFile.path.split("/").pop() ?? projectFile.path)
       : (viewing?.name ?? "工作区");
 
+  // 读者还没表过态时落在哪一张。
+  //
+  // 「点开一个文件就跳到预览」不在这里——它由页面在两个打开回调里说出来
+  // （`setPanelTab("preview")`），因为那时 `tab` 通常已经有值，而有值就压过这个
+  // 默认。这里只管一件事：一栏刚展开、还没人点过任何东西时，先给他看什么。
+  const fallback =
+    opened ? "preview" : directory === null ? "workspace" : "directory";
+
   return (
     <aside aria-label="预览" className="aw-code-panel" id="aw-code-panel">
-      <header className="aw-drawer-header">
-        {/* `title` 带完整的那个：项目文件的标题只取最后一段（路径写全会把
-            一条 380px 的栏撑爆），而「它在哪个目录下」在同名文件之间是唯一
-            分得清的信息。 */}
-        <h2 title={projectFile?.path ?? viewing?.name ?? "工作区"}>
-          {heading}
-        </h2>
-        <div className="aw-drawer-actions">
-          {/* 下载只对工作区里的产出给。项目目录里的文件已经在读者自己的硬盘
-              上了，给一个「下载」等于把它复制到 ~/Downloads 再放一份。 */}
-          {viewing === null || projectFile !== null ? null : (
-            <button className="aw-button" onClick={onDownload} type="button">
-              下载
-            </button>
-          )}
+      <PanelTabs
+        active={tab ?? fallback}
+        entries={[
+          {
+            id: "directory",
+            label: "文件夹",
+            available: directory !== null,
+            body: directory,
+          },
+          {
+            id: "preview",
+            label: "预览",
+            available: opened,
+            body: (
+              <>
+                <header className="aw-drawer-header">
+                  {/* `title` 带完整的那个：项目文件的标题只取最后一段（路径写
+                      全会把这一栏撑爆），而「它在哪个目录下」在同名文件之间是
+                      唯一分得清的信息。 */}
+                  <h2 title={projectFile?.path ?? viewing?.name ?? "工作区"}>
+                    {heading}
+                  </h2>
+                  {/* 下载只对工作区里的产出给。项目目录里的文件已经在读者自己
+                      的硬盘上了，给一个「下载」等于把它复制到 ~/Downloads 再
+                      放一份。 */}
+                  {viewing === null || projectFile !== null ? null : (
+                    <button
+                      className="aw-button"
+                      onClick={onDownload}
+                      type="button"
+                    >
+                      下载
+                    </button>
+                  )}
+                </header>
+                {projectFile !== null ? (
+                  <div className="aw-drawer-body">
+                    <ProjectFileBody
+                      path={projectFile.path}
+                      projectId={projectFile.projectId}
+                      sizeBytes={projectFile.sizeBytes}
+                    />
+                  </div>
+                ) : viewing === null ? null : (
+                  <section
+                    aria-label={`文件 ${viewing.name}`}
+                    className="aw-drawer-body"
+                  >
+                    <FilePreview
+                      files={files}
+                      identity={identity}
+                      // Converted here rather than asking the page for a second
+                      // callback: this panel already holds the listing a name
+                      // has to be resolved against, and a name that is not in
+                      // it is a name this panel could not have drawn a card for.
+                      onOpen={(name) => {
+                        const entry = files.find((held) => held.name === name);
+                        if (entry !== undefined) onOpen(entry);
+                      }}
+                      onWrote={onWrote}
+                      viewing={viewing}
+                    />
+                  </section>
+                )}
+              </>
+            ),
+          },
+          {
+            id: "workspace",
+            label: "本次会话",
+            count: files.length,
+            body: (
+              <div className="aw-code-workspace">
+                {files.length === 0 ? (
+                  <p className="aw-code-workspace-empty">
+                    这段会话还没有产出或收到文件。那个文件夹里本来就有的东西在「文件夹」那一张。
+                  </p>
+                ) : (
+                  <ul>
+                    {files.map((file) => (
+                      <li key={file.name}>
+                        <button
+                          aria-current={
+                            file.name === viewing?.name ? "true" : undefined
+                          }
+                          className="aw-code-file-open"
+                          onClick={() => {
+                            onOpen(file);
+                          }}
+                          type="button"
+                        >
+                          <span className="aw-code-file-name">{file.name}</span>
+                          <span className="aw-code-value">
+                            {formatSize(file.size_bytes)}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {/* Said out loud rather than left as a silent gap. Non-zero
+                    means another tab ran turns in this session, so the stream
+                    holds runs this transcript has no instruction for and their
+                    cards were dropped rather than guessed onto the wrong turn. */}
+                {orphanRuns === 0 ? null : (
+                  <p className="aw-code-workspace-empty">
+                    有 {orphanRuns} 轮的产出没能归位。
+                  </p>
+                )}
+              </div>
+            ),
+          },
+        ]}
+        label="右栏的几张"
+        onSelect={onTab}
+        trailing={
           <IconButton
             className="aw-code-panel-collapse"
             expanded
@@ -114,83 +237,8 @@ export function PreviewPanel({
           >
             <PanelRightClose aria-hidden size={17} />
           </IconButton>
-        </div>
-      </header>
-
-      {projectFile !== null ? (
-        <div className="aw-drawer-body">
-          <ProjectFileBody
-            path={projectFile.path}
-            projectId={projectFile.projectId}
-            sizeBytes={projectFile.sizeBytes}
-          />
-        </div>
-      ) : viewing === null ? null : (
-        <section aria-label={`文件 ${viewing.name}`} className="aw-drawer-body">
-          <FilePreview
-            files={files}
-            identity={identity}
-            // Converted here rather than asking the page for a second
-            // callback: this panel already holds the listing a name has to be
-            // resolved against, and a name that is not in it is a name this
-            // panel could not have drawn a card for.
-            onOpen={(name) => {
-              const entry = files.find((held) => held.name === name);
-              if (entry !== undefined) onOpen(entry);
-            }}
-            onWrote={onWrote}
-            viewing={viewing}
-          />
-        </section>
-      )}
-
-      {directory}
-
-      <details
-        className="aw-code-directory"
-        onToggle={(event) => {
-          setDirectoryOpen(event.currentTarget.open);
-        }}
-        open={directoryOpen}
-      >
-        <summary>
-          工作区全部文件（{files.length}）
-          {/* Said out loud rather than left as a silent gap. Non-zero means
-              another tab ran turns in this session, so the stream holds runs
-              this transcript has no instruction for and their cards were
-              dropped rather than guessed onto the wrong turn. */}
-          {orphanRuns === 0 ? null : (
-            <span className="aw-code-value">
-              （有 {orphanRuns} 轮的产出没能归位）
-            </span>
-          )}
-        </summary>
-        {files.length === 0 ? (
-          <p className="aw-code-workspace-empty">还没有文件。</p>
-        ) : (
-          <ul>
-            {files.map((file) => (
-              <li key={file.name}>
-                <button
-                  aria-current={
-                    file.name === viewing?.name ? "true" : undefined
-                  }
-                  className="aw-code-file-open"
-                  onClick={() => {
-                    onOpen(file);
-                  }}
-                  type="button"
-                >
-                  <span className="aw-code-file-name">{file.name}</span>
-                  <span className="aw-code-value">
-                    {formatSize(file.size_bytes)}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </details>
+        }
+      />
     </aside>
   );
 }

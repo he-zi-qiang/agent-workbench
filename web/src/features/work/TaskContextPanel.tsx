@@ -1,16 +1,25 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Check, ChevronRight } from "lucide-react";
 
 import type { EventEnvelope } from "../../api/types";
+import { PanelTabs } from "../../components/PanelTabs";
 import { TurnUsage, type PartialTurnUsage } from "../../components/TurnUsage";
 import { flattenRuns, totalTokens, type RunNode } from "../../components/runTree";
 
 /**
- * 这个任务跑到哪了、出了什么、读过什么、花了多少——一栏之内。
+ * 这个任务跑到哪了、出了什么、读过什么、花了多少——一栏之内，分几张标签。
  *
  * **它替掉的是一条只装文件名的产物栏。** 那一栏答得很好的问题只有一个（「产出了
  * 哪些文件」），而读者盯着一个还在跑的任务时问的是另外三个：还有几步、有没有人
  * 卡住、这一趟要花多少。那三个此前的答案分别在时间线里、在事件流里、和哪儿都没有。
+ *
+ * **为什么是标签页，不是往下堆的四节。** 上一版是后者，而它在一条 260px 的栏里
+ * 撑到了四节：第四节要滚两屏才看得见，于是它等于不存在。标签页把「有哪些」和
+ * 「现在看哪个」拆开，前者一眼看完（见 `PanelTabs`）。
+ *
+ * **用量不进标签，留在页脚。** 另外四件事读者是**挑着看**的，而这一趟花了多少是
+ * 那种「一直在余光里」的数——把它收进一张要点开的标签，等于要求读者先怀疑它贵，
+ * 才看得到它有多贵。
  *
  * **每一节都只说这一页手上已经有的事实。** 没有为它加接口：进度来自
  * `deriveLifecycle` 已经算好的阶段，子代理来自 `buildRunTree`，产物就是原来那条
@@ -46,7 +55,6 @@ function ProgressDots({ stages }: { stages: readonly StageMark[] }) {
 
   return (
     <div className="aw-taskctx-block">
-      <h3 className="aw-taskctx-head">进度</h3>
       <div className="aw-taskctx-dots">
         {stages.map((stage, index) => (
           <span key={stage.id}>
@@ -104,11 +112,6 @@ function AgentPips({
 
   return (
     <div className="aw-taskctx-block">
-      <button className="aw-taskctx-head is-link" onClick={onOpen} type="button">
-        <span>子代理</span>
-        <span className="aw-taskctx-count">{agents.length}</span>
-        <ChevronRight aria-hidden="true" size={14} />
-      </button>
       <div className="aw-taskctx-pips">
         {agents.map((run) => (
           <i
@@ -123,6 +126,13 @@ function AgentPips({
         {failed > 0 ? `，${failed} 个失败` : ""}
         。它们烧掉的 {formatK(spent)} 不占这个任务的额度，两个数不相加。
       </p>
+      {/* 这一格只答「谁怎么样了」。谁读了什么、说了什么、为什么停——那些在
+          `AgentPanel` 里，而它是一整块面：塞进一条 300px 的标签页里，每一行
+          都得截断成一个认不出来的名字。 */}
+      <button className="aw-taskctx-more" onClick={onOpen} type="button">
+        <span>逐个看它们做了什么</span>
+        <ChevronRight aria-hidden="true" size={14} />
+      </button>
     </div>
   );
 }
@@ -169,7 +179,6 @@ function Touched({ events }: { events: readonly EventEnvelope[] }) {
 
   return (
     <div className="aw-taskctx-block">
-      <h3 className="aw-taskctx-head">上下文</h3>
       <p className="aw-taskctx-fact">
         调用了 <strong>{calls}</strong> 次工具
       </p>
@@ -187,6 +196,14 @@ function Touched({ events }: { events: readonly EventEnvelope[] }) {
   );
 }
 
+/**
+ * 这一趟花了多少，钉在栏底。
+ *
+ * 不进标签页：另外几格是挑着看的，这个数是余光里的。收进一张要点开的标签等于
+ * 要求读者先怀疑它贵，才看得到它有多贵。
+ *
+ * 加的是**根运行**，每一步那一笔在左边各自那一行上。
+ */
 function Spend({ roots }: { roots: readonly RunNode[] }) {
   const main = useMemo(
     () => flattenRuns(roots).filter((run) => run.parentRunId === null),
@@ -217,13 +234,9 @@ function Spend({ roots }: { roots: readonly RunNode[] }) {
   if (usage === null) return null;
 
   return (
-    <div className="aw-taskctx-block">
-      <h3 className="aw-taskctx-head">用量</h3>
-      <TurnUsage usage={usage} />
-      <p className="aw-taskctx-note">
-        每一步那一笔在左边各自那一行上；这里是这个任务主运行的合计。
-      </p>
-    </div>
+    <footer className="aw-taskctx-spend">
+      <TurnUsage label="这个任务" usage={usage} />
+    </footer>
   );
 }
 
@@ -241,12 +254,74 @@ export function TaskContextPanel({
   roots: readonly RunNode[];
   stages: readonly StageMark[];
 }) {
+  const [tab, setTab] = useState<string | null>(null);
+  const agentCount = useMemo(
+    () => flattenRuns(roots).filter((run) => run.parentRunId !== null).length,
+    [roots],
+  );
+  const touched = <Touched events={events} />;
+
+  // 没表过态时落在哪一格，随任务的状态变。
+  //
+  // 一个还在跑的任务，读者问的是「到哪了」；一个跑完的任务，问的是「出了什么」。
+  // 固定落在第一格（进度）会让后一种情况下的产物藏在一次点击后面——而那正是这
+  // 一栏此前唯一装着的东西，把它藏起来是这次改动能犯的最大的错。
+  //
+  // 只在 `tab` 还是 `null` 时生效：读者一旦点过任何一格，这个默认就再也不动，
+  // 否则任务跑完的那一刻会把他正在读的那一格换掉。
+  // 还在跑、或者已经停住了——两种情况读者问的都是「到哪了」。只有一个**跑完了**
+  // 的任务，那个问题才换成「出了什么」。
+  //
+  // 失败这一支是看着真界面加的：一个 `work` 步骤烧完额度死掉的任务，默认落在
+  // 「产物」上，而那一栏里只有一句「这个任务没有产出可下载的文件」——屏幕上最
+  // 没用的一句话，出现在最该说明情况的位置。
+  const settled = !stages.some(
+    (stage) => stage.state === "active" || stage.state === "failed",
+  );
+  const fallback =
+    outputs !== null && settled ? "outputs" : stages.length > 0 ? "progress" : null;
+
   return (
     <aside aria-label="这个任务的进度与产出" className="aw-taskctx">
-      {stages.length === 0 ? null : <ProgressDots stages={stages} />}
-      <AgentPips onOpen={onOpenAgents} roots={roots} />
-      {outputs}
-      <Touched events={events} />
+      <PanelTabs
+        active={tab ?? fallback}
+        entries={[
+          {
+            id: "progress",
+            label: "进度",
+            available: stages.length > 0,
+            body: <ProgressDots stages={stages} />,
+          },
+          {
+            id: "agents",
+            label: "子代理",
+            count: agentCount,
+            available: agentCount > 0,
+            body: <AgentPips onOpen={onOpenAgents} roots={roots} />,
+          },
+          {
+            id: "outputs",
+            label: "产物",
+            available: outputs !== null,
+            body: outputs,
+          },
+          {
+            // `Touched` 在没有工具调用时自己返回 null，而这一栏要在**画标签之前**
+            // 就知道那一格是不是空的——所以这里判的是那个元素渲染出来是不是 null，
+            // 而不是再数一遍事件。判错的样子是一枚点进去空白的标签。
+            id: "touched",
+            label: "上下文",
+            available: events.some(
+              (event) =>
+                event.event_type === "ToolCompleted" ||
+                event.event_type === "ToolFailed",
+            ),
+            body: touched,
+          },
+        ]}
+        label="这个任务的几栏"
+        onSelect={setTab}
+      />
       <Spend roots={roots} />
     </aside>
   );
