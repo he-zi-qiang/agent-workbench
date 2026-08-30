@@ -7454,3 +7454,440 @@ p.aw-code-step-thought {
     animation: none;
   }
 }
+
+/* --- 子代理副面板（ADR-082 的委派，读者这一侧） -------------------------
+ *
+ * 这一栏和 `.aw-code-panel` 是同一个做法，理由也照抄那边：**宽度写在它自己身上，
+ * 不写进 `grid-template-columns`**。它落在一条隐式的 `auto` 轨道上，而 `auto`
+ * 轨道的宽度就是里面这个元素的宽度——所以这一条 `width` 同时定下了轨道。
+ *
+ * 这么写不是为了少写一行。`.aw-work-page` 的列数在两层样式里各写过一遍
+ * （app.css 是「任务列表 + 正文」，minimal-theme 把任务列表 portal 走之后改成
+ * 单列），再加上两个窄屏断点。让展开与否去改 `grid-template-columns`，等于要求
+ * 那四处都记得多写一条轨道，漏掉任何一处的表现都是同一种：一条空白轨道，或者
+ * 一条被子代理名字撑开的轨道。收起时这个元素整个不渲染，隐式轨道跟着消失。
+ *
+ * 420px 而不是上下文栏那种 340：详情里要放一段它自己的记录加四行事实，340 放不
+ * 下。这个数不是新造的——Code 的预览栏今天就是 clamp(300px, 30vw, 440px)。 */
+.aw-agent-panel {
+  display: flex;
+  width: clamp(320px, 30vw, 420px);
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+}
+
+/* 多出来的那个元素往**右边**放，不是往下面。没有这一句，`.aw-work-page` 那条
+   单行的 `grid-template-rows` 会把副面板挤到正文**下面**去，成为一条横条——
+   Code 页踩过同一个坑，那边的注释记着两次实测。 */
+.aw-work-page {
+  grid-auto-flow: column;
+}
+
+.aw-agent-head {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  padding: 10px 14px;
+  gap: 10px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-agent-head-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.aw-agent-head-title strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* id 和耗时用等宽，和这个仓库里其他 id 一样：它们是会被抄进 bug 报告的字符串。 */
+.aw-agent-head-title code {
+  display: block;
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-agent-pill {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+  font-size: 10.5px;
+  font-weight: 550;
+  line-height: 19px;
+}
+
+.aw-agent-pill.is-running {
+  border-color: var(--aw-accent-soft);
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+.aw-agent-pill.is-failed {
+  border-color: var(--aw-danger-border);
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+}
+
+.aw-agent-pill.is-completed {
+  border-color: var(--aw-success-border);
+  background: var(--aw-success-soft);
+  color: var(--aw-success);
+}
+
+.aw-agent-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.aw-agent-group {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 11px 16px 5px;
+  gap: 7px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aw-agent-group span {
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--aw-panel-soft);
+  font-family: var(--aw-mono);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.aw-agent-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 两行：上一行是「谁，在做什么」，下一行是度量。度量单独占一行而不是挤到右边，
+   因为名字和活动都是不定长的中文，挤在一行里的结果是三段互相抢宽度，然后每一段
+   都被截断。 */
+.aw-agent-entry {
+  display: grid;
+  width: 100%;
+  padding: 8px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  gap: 2px 9px;
+  grid-template-columns: 16px minmax(0, 1fr) 13px;
+  text-align: left;
+}
+
+.aw-agent-entry:hover {
+  background: var(--aw-veil);
+}
+
+.aw-agent-status {
+  display: grid;
+  color: var(--aw-text-muted);
+  place-items: center;
+}
+
+.aw-agent-name {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 8px;
+}
+
+.aw-agent-name strong {
+  flex: none;
+  font-family: var(--aw-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.aw-agent-name span {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-agent-name span.is-bad {
+  color: var(--aw-danger);
+}
+
+.aw-agent-chevron {
+  align-self: center;
+  color: var(--aw-text-muted);
+}
+
+.aw-agent-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 2 / 4;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+/* 额度条只有在有分母时才画，见 AgentPanel 的 `Meter`。三档的分界写在那边。 */
+.aw-agent-meter {
+  display: inline-block;
+  overflow: hidden;
+  width: 30px;
+  height: 3px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--aw-panel-strong);
+}
+
+.aw-agent-meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--aw-accent);
+}
+
+.aw-agent-meter.is-warn > i {
+  background: var(--aw-warning);
+}
+
+.aw-agent-meter.is-over > i {
+  background: var(--aw-danger);
+}
+
+.aw-agent-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid var(--aw-border);
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+}
+
+.aw-agent-foot strong {
+  color: var(--aw-text);
+  font-family: var(--aw-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.aw-agent-section {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--aw-border-subtle);
+}
+
+.aw-agent-section h3 {
+  margin: 0 0 8px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aw-agent-failure {
+  padding: 11px 13px;
+  border: 1px solid var(--aw-danger-border);
+  border-radius: 10px;
+  background: var(--aw-danger-soft);
+}
+
+.aw-agent-failure p {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+/* 「不是什么」那三句。它们看着像废话，实际是这一块唯一能省下一次误修的东西：
+   这几个失败都长得像另一个问题。 */
+.aw-agent-nots {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 9px 0 10px;
+  gap: 6px;
+}
+
+.aw-agent-nots i {
+  padding: 0 8px;
+  border: 1px solid var(--aw-border);
+  border-radius: 6px;
+  background: var(--aw-window);
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  font-style: normal;
+  line-height: 20px;
+}
+
+/* 失败块里那个动作是**次要的**：读者到这里已经知道出了什么事，这颗按钮只是
+   「想再看细一点」。基础的 .aw-button 有 38px 的最小高度，在这块 11px 起跳的面
+   里它撑成一条横杠，读起来像是这张卡的主张——而这张卡的主张是上面那段话。
+   宽度也要收：`display: block` 的按钮会占满卡宽，那是主按钮才该有的分量。 */
+.aw-agent-failure .aw-button {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  line-height: 24px;
+}
+
+.aw-agent-log {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 2px;
+  list-style: none;
+}
+
+.aw-agent-log li {
+  position: relative;
+  padding-left: 20px;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+  line-height: 19px;
+}
+
+/* 那个 └ 是边框拼的，不是字符。字符会跟着字体走，中文栈里对不齐。 */
+.aw-agent-log li::before {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  width: 9px;
+  height: 11px;
+  border-bottom: 1px solid var(--aw-border-strong);
+  border-left: 1px solid var(--aw-border-strong);
+  border-bottom-left-radius: 4px;
+  content: "";
+}
+
+.aw-agent-log li.is-bad {
+  color: var(--aw-danger);
+}
+
+.aw-agent-spend {
+  margin: 0 0 6px;
+}
+
+.aw-agent-spend strong {
+  font-family: var(--aw-mono);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.aw-agent-section .aw-agent-meter {
+  width: 100%;
+  height: 4px;
+}
+
+.aw-agent-note {
+  margin: 8px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.aw-agent-empty {
+  padding: 18px 16px;
+  text-align: center;
+}
+
+.aw-agent-facts {
+  display: grid;
+  margin: 0;
+  gap: 5px 10px;
+  grid-template-columns: 68px minmax(0, 1fr);
+}
+
+.aw-agent-facts dt {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-agent-facts dd {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+/* --- 正文里那一行入口 ---------------------------------------------------- */
+
+.aw-agent-entryline {
+  display: grid;
+  width: 100%;
+  padding: 9px 12px;
+  gap: 2px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+/* 亮着表示副面板此刻显示的就是它。两块面在讲同一件事时必须看得出是同一件事，
+   否则读者会以为侧栏是另一个东西。 */
+.aw-agent-entryline.is-open {
+  border-color: var(--aw-accent-soft);
+  background: var(--aw-accent-soft);
+}
+
+.aw-agent-entryline-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.aw-agent-entryline-head strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.aw-agent-entryline-head > span {
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+.aw-agent-entryline-open {
+  margin-left: auto;
+  color: var(--aw-accent);
+  font-size: 11.5px;
+  font-weight: 550;
+}
+
+.aw-agent-entryline-sum {
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+/* 窄屏排不下三栏：副面板退回浮层，和这一页那个预览抽屉同一个断点、同一套做法。 */
+@media (max-width: 900px) {
+  .aw-agent-panel {
+    position: absolute;
+    z-index: 5;
+    inset: 0 0 0 auto;
+    width: min(420px, 94vw);
+    box-shadow: var(--aw-shadow-drawer-left);
+  }
+}

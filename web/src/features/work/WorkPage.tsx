@@ -123,8 +123,13 @@ import {
   type WorkspaceWriteGroup,
   type TimelineGap,
 } from "./workTimeline";
+import { useStoredState } from "../../hooks/useStoredState";
+import {
+  AgentEntryLine,
+  AgentPanel,
+  StreamNarrowNotice,
+} from "./AgentPanel";
 import { readDelegations, type DelegationFacts } from "./delegations";
-import { RunPanel } from "../../components/RunPanel";
 import { DelegationScopeNote } from "./DelegationScope";
 import {
   buildRunTree,
@@ -461,6 +466,17 @@ export function WorkPage() {
   // that lost its other rows the moment you picked one would take away the
   // only thing you could use to pick a different one.
   const runTree = useMemo(() => buildRunTree(timeline.events), [timeline.events]);
+  const [agentsOpen, setAgentsOpen] = useStoredState("aw.work.agents-open", false);
+  // 副面板展开的是哪一个子代理，和「步骤流被收窄到哪一个运行」是两件事，所以是
+  // 两个状态。把它们并成一个（让打开详情顺手收窄步骤流）省一个 useState，代价是
+  // 读者点开一个子代理想看看它，正文却在他没要求的情况下被换掉了——而且那一步
+  // 没有一个明显的撤销入口，撤销藏在步骤流上方那行提示里。收窄仍然可以做，但它
+  // 是详情里一个写着字的按钮，按下去才发生。
+  const [openAgentRunId, setOpenAgentRunId] = useState<string | null>(null);
+  const hasAgents = useMemo(
+    () => flattenRuns(runTree).some((run) => run.parentRunId !== null),
+    [runTree],
+  );
   // The stream above shows what arrived; this is what the server said did not.
   // An empty `skippedSequences` is its claim that the pages were complete, so
   // silence here is not neutral -- it is the one way this page can present a
@@ -1378,6 +1394,10 @@ export function WorkPage() {
                     }}
                     delegations={delegations}
                     onSelectRun={setSelectedRunId}
+                    agentsOpen={agentsOpen}
+                    onOpenAgents={() => {
+                      setAgentsOpen(true);
+                    }}
                     runTree={runTree}
                     streamIncomplete={timeline.skippedSequences.length > 0}
                     selectedRunId={selectedRunId}
@@ -1600,6 +1620,24 @@ export function WorkPage() {
         ) : null}
       </main>
 
+      {selectedTask !== undefined && agentsOpen && hasAgents ? (
+        <AgentPanel
+          events={timeline.events}
+          onClose={() => {
+            setAgentsOpen(false);
+            // 收起时把详情也退回集合：下次打开应该落在「谁怎么样了」，而不是
+            // 上一次碰巧点进去的那一个。
+            setOpenAgentRunId(null);
+          }}
+          onInspect={(runId) => {
+            setSelectedRunId(runId);
+          }}
+          onOpen={setOpenAgentRunId}
+          openRunId={openAgentRunId}
+          roots={runTree}
+        />
+      ) : null}
+
       {/* 产出文件栏里点开的文件长在右侧抽屉里，而不是把阅读栏换掉。
           此前点一个文件就把「这次任务怎么样」整段顶走——而那一段正是读者
           用来判断这个文件值不值得看的东西。抽屉之后两边同时在。
@@ -1704,6 +1742,8 @@ function TaskStepStream({
   runTree,
   selectedRunId,
   onSelectRun,
+  agentsOpen,
+  onOpenAgents,
   streamIncomplete,
 }: {
   lifecycle: Lifecycle;
@@ -1732,6 +1772,8 @@ function TaskStepStream({
   streamIncomplete: boolean;
   selectedRunId: string | null;
   onSelectRun: (runId: string | null) => void;
+  agentsOpen: boolean;
+  onOpenAgents: () => void;
 }) {
   if (loading) return <LoadingLine label="正在读取执行过程" />;
 
@@ -1845,10 +1887,20 @@ function TaskStepStream({
 
   return (
     <>
-      <RunPanel
+      <AgentEntryLine
         incomplete={streamIncomplete}
-        onSelect={onSelectRun}
+        onOpen={onOpenAgents}
+        open={agentsOpen}
         roots={runTree}
+      />
+      <StreamNarrowNotice
+        narrowedToMissingRun={
+          selectedRunId !== null &&
+          !allRuns.some((run) => run.runId === selectedRunId)
+        }
+        onClear={() => {
+          onSelectRun(null);
+        }}
         selectedRunId={selectedRunId}
       />
       <StepStream
