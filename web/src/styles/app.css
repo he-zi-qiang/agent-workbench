@@ -9204,3 +9204,66 @@ p.aw-code-step-thought {
     display: none;
   }
 }
+
+
+/* 事件流 -------------------------------------------------------------- */
+
+.aw-event-log {
+  display: grid;
+  margin: 0;
+  padding: 6px 4px 10px;
+  gap: 1px;
+  list-style: none;
+}
+
+.aw-event-log li {
+  display: grid;
+  align-items: baseline;
+  padding: 4px 9px;
+  gap: 8px;
+  border-radius: var(--aw-radius-sm);
+  color: var(--aw-text-soft);
+  font-size: 11.5px;
+  /* 时刻那一列定宽，事件类型自适应，主语吃掉剩下的并且可以被截断。三列都靠
+     左对齐的话，一列长短不一的时间戳会让类型那一列锯齿状地抖——而读者正是靠
+     那一列扫的。 */
+  grid-template-columns: 58px auto minmax(0, 1fr);
+}
+
+.aw-event-log li:nth-child(odd) {
+  background: var(--aw-panel-soft);
+}
+
+.aw-event-log time {
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+.aw-event-log-type {
+  font-family: var(--aw-mono);
+  font-size: 11px;
+}
+
+.aw-event-log-subject {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 失败和结束单独上色。这两类是读者扫这一栏时唯一在找的东西——其余都是背景。 */
+.aw-event-log li.is-bad .aw-event-log-type {
+  color: var(--aw-danger);
+}
+
+.aw-event-log li.is-good .aw-event-log-type {
+  color: var(--aw-success);
+}
+
+.aw-event-log-empty {
+  margin: 0;
+  padding: 12px 13px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}

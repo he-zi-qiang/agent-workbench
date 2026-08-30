@@ -14,11 +14,12 @@
  * 一分不占。折叠状态记在 localStorage 里，所以「我不看文件」和「我一直看着
  * 文件」都只需要表态一次。
  *
- * **三样东西，三张标签。** 这一栏里住着三份互不相同的清单：这个项目在磁盘上
+ * **四样东西，四张标签。** 这一栏里住着四份互不相同的东西：这个项目在磁盘上
  * 长什么样（文件夹）、正在看的那一个（预览）、这段会话自己产出和收到的那些
- * （本次会话）。它们此前是往下堆的——预览在上、目录在中、会话文件收在一个
- * `<details>` 里——于是最后那一份要滚过前两份才看得见，而它是四类文件唯一的
- * 入口。标签页把「有哪些」和「现在看哪个」分开，三份清单因此地位相同。
+ * （本次会话），以及底下那条没被加工过的事件流（事件）。前三份此前是往下堆
+ * 的——预览在上、目录在中、会话文件收在一个 `<details>` 里——于是最后那一份要
+ * 滚过前两份才看得见，而它是四类文件唯一的入口。标签页把「有哪些」和「现在看
+ * 哪个」分开，四份因此地位相同。
  *
  * **「本次会话」这个名字是有意的。** 它此前叫「工作区全部文件」，而旁边就是
  * 「项目目录」——两个名字都在说「文件」，谁也没说自己和对方差在哪，于是它们
@@ -31,7 +32,12 @@
  */
 
 import { PanelRightClose } from "lucide-react";
-import type { PrincipalIdentity, WorkspaceEntryView } from "../../api/types";
+import type {
+  EventEnvelope,
+  PrincipalIdentity,
+  WorkspaceEntryView,
+} from "../../api/types";
+import { EventLog } from "../../components/EventLog";
 import { PanelTabs } from "../../components/PanelTabs";
 import { formatSize, IconButton } from "../../components/ui";
 import { FilePreview, type OpenedFile } from "./FilePreview";
@@ -47,6 +53,7 @@ export interface OpenedProjectFile {
 
 export function PreviewPanel({
   directory,
+  events,
   files,
   identity,
   onCollapse,
@@ -71,6 +78,14 @@ export function PreviewPanel({
    * 问题。目录属于「我在改哪个文件夹」，那和右边这一栏是同一件事。
    */
   directory: React.ReactNode;
+  /**
+   * 这段会话留下的持久事件，原样。
+   *
+   * 传的是 `steps`——页面已经拿它画对话了，这里不再去要第二份。它是这一栏里唯一
+   * 不解释的东西：其余几张画的是「这些事件合起来意味着什么」，而它们不够用的时
+   * 刻是存在的（一次运行说成功而文件没出来、一颗工具卡住而对话上什么也没写）。
+   */
+  events: readonly EventEnvelope[];
   files: WorkspaceEntryView[];
   identity: PrincipalIdentity;
   /** 把这一栏收起来。收起是折叠，不是关闭：它记得住。 */
@@ -179,6 +194,13 @@ export function PreviewPanel({
                 )}
               </>
             ),
+          },
+          {
+            id: "events",
+            label: "事件",
+            count: events.length,
+            available: events.length > 0,
+            body: <EventLog events={events} />,
           },
           {
             id: "workspace",

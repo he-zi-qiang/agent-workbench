@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Check, ChevronRight } from "lucide-react";
 
 import type { EventEnvelope } from "../../api/types";
+import { EventLog } from "../../components/EventLog";
 import { PanelTabs } from "../../components/PanelTabs";
 import { TurnUsage, type PartialTurnUsage } from "../../components/TurnUsage";
 import { flattenRuns, totalTokens, type RunNode } from "../../components/runTree";
@@ -317,6 +318,16 @@ export function TaskContextPanel({
                 event.event_type === "ToolFailed",
             ),
             body: touched,
+          },
+          {
+            // 原料那一张。前面四张画的都是「这些事件合起来意味着什么」，而它们
+            // 不够用的时刻是存在的：一个步骤显示成功而产物没出来、一句「停在某
+            // 某」而读者想知道那之前发生了什么。那些时刻里任何一层加工都在挡路。
+            id: "events",
+            label: "事件",
+            count: events.length,
+            available: events.length > 0,
+            body: <EventLog events={events} />,
           },
         ]}
         label="这个任务的几栏"
