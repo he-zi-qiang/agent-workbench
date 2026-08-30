@@ -382,7 +382,7 @@ def test_the_question_and_the_answer_are_both_persisted() -> None:
         history = await service.history(
             session_id=harness.session_id, tenant_id=TENANT, principal_id=READER
         )
-        return [message.role for message in history]
+        return [record.message.role for record in history]
 
     assert _run(scenario) == ["user", "assistant"]
 
