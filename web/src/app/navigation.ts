@@ -6,6 +6,7 @@ import {
   ListTodo,
   MessageSquare,
   MonitorSmartphone,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 
@@ -77,6 +78,16 @@ export const NAVIGATION = [
     icon: Library,
     primary: false,
     covers: ["/knowledge"],
+  },
+  {
+    to: "/usage",
+    label: "用量",
+    // 「资源」那一组，不是第四个工作区：它不是一个能在里面干活的地方，是一份
+    // 关于另外三个地方的账。
+    description: "三个模式各花了多少 token 和钱",
+    icon: Wallet,
+    primary: false,
+    covers: ["/usage"],
   },
   {
     to: "/evaluation",

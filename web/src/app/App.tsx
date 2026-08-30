@@ -28,6 +28,11 @@ const ComputerPage = lazy(() =>
     default: ComputerPage,
   })),
 );
+const UsagePage = lazy(() =>
+  import("../features/usage/UsagePage").then(({ UsagePage }) => ({
+    default: UsagePage,
+  })),
+);
 const SystemPage = lazy(() =>
   import("../features/system/SystemPage").then(({ SystemPage }) => ({
     default: SystemPage,
@@ -60,6 +65,7 @@ export function App() {
             <Route path="knowledge" element={<KnowledgePage />} />
             <Route path="evaluation" element={<EvaluationPage />} />
             <Route path="computer" element={<ComputerPage />} />
+            <Route path="usage" element={<UsagePage />} />
             <Route path="system" element={<SystemPage />} />
             <Route path="*" element={<Navigate replace to="/chat" />} />
           </Route>

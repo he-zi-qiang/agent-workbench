@@ -244,7 +244,7 @@ def test_chat_publishes_a_success_only_after_the_release_check() -> None:
             principal_id="user_1",
         )
         return (
-            [message.role for message in history],
+            [message.message.role for message in history],
             await log.read(SCOPE.stream_id),
             retrieval.confirmed,
             turn.outcome.agent_run_id,
@@ -361,7 +361,7 @@ def test_chat_publishes_only_a_safe_refusal_when_sources_change() -> None:
             principal_id="user_1",
         )
         return (
-            [message.role for message in history],
+            [message.message.role for message in history],
             await log.read(SCOPE.stream_id),
             turn.outcome.output_text,
         )
@@ -438,7 +438,7 @@ def test_retry_heals_a_crash_after_answer_publication_without_duplication() -> N
         return (
             len(history_before_retry),
             sum(event.event_type == "AnswerCommitted" for event in events),
-            [message.role for message in history],
+            [message.message.role for message in history],
             recovered.answer,
         )
 
@@ -532,7 +532,7 @@ def test_retry_reauthorizes_a_pending_candidate_before_publication() -> None:
         return (
             recovered.answer,
             recovered.outcome.output_text,
-            [message.text() for message in history],
+            [message.message.text() for message in history],
             [event.event_type for event in events],
         )
 
@@ -575,7 +575,7 @@ def test_a_failed_model_run_is_not_saved_or_published_as_an_answer() -> None:
             principal_id="user_1",
         )
         replayed = await log.read(SCOPE.stream_id)
-        return [message.role for message in history], "\n".join(
+        return [message.message.role for message in history], "\n".join(
             event.model_dump_json() for event in replayed
         )
 

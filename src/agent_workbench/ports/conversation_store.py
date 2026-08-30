@@ -20,7 +20,7 @@ from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 from agent_workbench.domain.context import Citation
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.messages import Message
-from agent_workbench.domain.runs import AgentOutcome
+from agent_workbench.domain.runs import AgentOutcome, BudgetUsage
 from agent_workbench.domain.schema import (
     AnswerText,
     DomainModel,
@@ -140,6 +140,16 @@ class StoredMessage(VersionedModel):
     session_id: Identifier
     sequence: int = Field(ge=1)
     message: Message
+    #: 这一条助手消息所属的那一轮烧了多少，`None` 表示这个问题在这里问不出答案。
+    #:
+    #: 三种情况都是 `None`，而它们是同一个答案：用户说的那一条（一条提问没有自己
+    #: 的花销）、还没落定的那一轮（终局还没写下）、以及**调用方没有要**这个数——
+    #: `history()` 才去 join，构造模型上下文的那条内部路径不去，因为那条路每轮都
+    #: 走一遍而上下文构造器根本不读这个字段。
+    #:
+    #: 用 `None` 而不是零值 `BudgetUsage()`：一轮真的没花 token 和一轮的花销这里
+    #: 答不上来，在屏幕上必须长得不一样，而零是个看起来像答案的答案。
+    usage: BudgetUsage | None = None
 
 
 class AuthorizedRevision(DomainModel):

@@ -187,6 +187,17 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # existed. Paraphrasing it into ASCII punctuation would make the record of a
 # measurement no longer the thing that was measured.
 "src/agent_workbench/application/code_prompt.py" = ["RUF003"]
+# 这两处的中文都在**注释和 docstring 里**，讲的是同一件事的两半：一条助手消息的
+# 花销为什么可能是 `None`，以及为什么那三种「问不出答案」必须和「真的花了 0」在
+# 屏幕上长得不一样。这段推理是给下一个改这里的人看的，而它要区分的恰恰是几个中
+# 文的「零」「无」「没有」——把标点换成 ASCII 不会让它更清楚，只会让它更别扭。
+# RUF002/RUF003 而不是 RUF001：没有一个标识符受影响，全部落在散文里。
+"src/agent_workbench/ports/conversation_store.py" = ["RUF002", "RUF003"]
+"src/agent_workbench/adapters/persistence/conversation_store.py" = ["RUF002", "RUF003"]
+# 同一批改动的另外两处，同一个理由：注释里的中文解释的是「为什么这里是 `None`
+# 而不是零」，而那句话要区分的正是几个中文词之间的差别。
+"src/agent_workbench/adapters/memory/conversation_store.py" = ["RUF003"]
+"src/agent_workbench/apps/api/routes/chat.py" = ["RUF002", "RUF003"]
 # The approval dialog is the one string in this repository a person reads
 # *before* deciding whether to hand a program their screen. It is Chinese
 # because the person at this machine is, and its punctuation is full-width for

@@ -12,7 +12,12 @@ from pydantic import ValidationError
 from agent_workbench.domain.context import Citation
 from agent_workbench.domain.errors import ErrorInfo, NotFoundError
 from agent_workbench.domain.messages import assistant_message, user_message
-from agent_workbench.domain.runs import AgentOutcome, stale_execution_outcome
+from agent_workbench.domain.runs import (
+    AgentOutcome,
+    BudgetUsage,
+    TokenUsage,
+    stale_execution_outcome,
+)
 from agent_workbench.ports.conversation_store import (
     AuthorizedRevision,
     ChatTurnBusyError,
@@ -23,6 +28,7 @@ from agent_workbench.ports.conversation_store import (
     ChatTurnStore,
     PendingChatRelease,
     StoredChatTurn,
+    StoredMessage,
     chat_turn_terminal_event_key,
 )
 
@@ -115,6 +121,7 @@ def _completed(
     *,
     answer: str = "grounded answer",
     run_id: str = RUN,
+    usage: BudgetUsage | None = None,
 ) -> ChatTurnResult:
     return ChatTurnResult(
         outcome=AgentOutcome(
@@ -122,6 +129,7 @@ def _completed(
             status="completed",
             stop_reason="completed",
             output_text=answer,
+            usage=usage if usage is not None else BudgetUsage(),
         ),
         answer=answer,
         authorized_revisions=(
@@ -1338,3 +1346,112 @@ def test_a_refused_claim_appends_no_user_message(
         return len(stored)
 
     assert chat_turn_conversations.run(scenario) == 0
+
+
+# ---------------------------------------------------------------------------
+# What a turn spent, still there when the history is read back
+# ---------------------------------------------------------------------------
+
+
+def _spent(input_tokens: int, output_tokens: int, cost: int) -> BudgetUsage:
+    return BudgetUsage(
+        steps=1,
+        tokens=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
+        cost_micro_usd=cost,
+    )
+
+
+def test_a_released_turn_leaves_its_spend_on_the_assistant_message(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    """Otherwise a turn's cost exists only in the moment it happened.
+
+    The number has been written into `chat_turns.result.outcome.usage` all
+    along, but `history()` used to return a message's role and text and nothing
+    else -- so the footnote survived until the first reload and then vanished.
+    An interface that says one thing before a refresh and another after it is
+    harder to trust than one that never showed the number at all.
+    """
+
+    async def scenario(store: ChatTurnStore) -> tuple[StoredMessage, ...]:
+        await _with_session(store)
+        claim = await _claim(store)
+        await store.prepare_release(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            result=_completed(usage=_spent(1_000, 120, 42)),
+        )
+        await store.mark_released(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+        )
+        return await store.history(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+
+    history = chat_turn_conversations.run(scenario)
+    assistant = [record for record in history if record.message.role == "assistant"]
+
+    assert len(assistant) == 1
+    assert assistant[0].usage is not None
+    assert assistant[0].usage.tokens.input_tokens == 1_000
+    assert assistant[0].usage.tokens.output_tokens == 120
+    assert assistant[0].usage.cost_micro_usd == 42
+
+
+def test_the_users_own_message_carries_no_spend(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    """A question has no cost of its own.
+
+    Handing it a zero would put a footnote under every turn saying something
+    untrue. `None` and `0` have to look different on screen.
+    """
+
+    async def scenario(store: ChatTurnStore) -> tuple[StoredMessage, ...]:
+        await _with_session(store)
+        claim = await _claim(store)
+        await store.prepare_release(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+            result=_completed(usage=_spent(1_000, 120, 42)),
+        )
+        await store.mark_released(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=claim.turn.turn_id,
+        )
+        return await store.history(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+
+    history = chat_turn_conversations.run(scenario)
+    user = [record for record in history if record.message.role == "user"]
+
+    assert len(user) == 1
+    assert user[0].usage is None
+
+
+def test_a_turn_still_running_reports_no_spend_rather_than_zero(
+    chat_turn_conversations: StoreHarness,
+) -> None:
+    """Its terminal event is not written yet, so the question has no answer here
+    -- which is not the same as the answer being zero."""
+
+    async def scenario(store: ChatTurnStore) -> tuple[StoredMessage, ...]:
+        await _with_session(store)
+        await _claim(store)
+        return await store.history(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+
+    history = chat_turn_conversations.run(scenario)
+
+    assert [record.usage for record in history] == [None]

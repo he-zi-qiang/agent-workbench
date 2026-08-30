@@ -172,6 +172,17 @@ class AskResponse(BaseModel):
 
 
 class MessageView(BaseModel):
+    """One line of the transcript.
+
+    No `usage` here, deliberately, and Chat's `MessageView` has one. A coding
+    turn does not write a `chat_turns` row -- that table holds Chat's turn
+    ledger and nothing else -- so a `usage` field on this response would join
+    against nothing and be null for every message ever returned. The console
+    reads a coding turn's spend off that run's own terminal event, which it
+    already replays; a field that is structurally always absent would only
+    look like a bug in the join.
+    """
+
     role: str
     text: str
 
@@ -410,7 +421,8 @@ async def history(session_id: str, request: Request) -> HistoryResponse:
     )
     return HistoryResponse(
         messages=tuple(
-            MessageView(role=message.role, text=message.text()) for message in messages
+            MessageView(role=record.message.role, text=record.message.text())
+            for record in messages
         )
     )
 

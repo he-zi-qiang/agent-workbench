@@ -57,6 +57,7 @@ from agent_workbench.adapters.persistence import (
     PostgresTaskRegistry,
     create_query_engine,
 )
+from agent_workbench.adapters.persistence.usage import PostgresUsageReader
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.research import DeepSeekWebSearch
 from agent_workbench.adapters.tools import StaticToolRegistry
@@ -179,6 +180,7 @@ from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 from agent_workbench.ports.telemetry import Telemetry
 from agent_workbench.ports.tools import ToolBinding, ToolRegistry
+from agent_workbench.ports.usage import UsageReader
 from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
 from agent_workbench.workflows.task_handlers import BoundedParallelExecutor
 
@@ -311,6 +313,11 @@ class ApiDependencies:
     #: Owner-private membership across chat, code, tasks and bases (ADR-071).
     projects: ProjectService
     principals: HeaderPrincipalResolver
+    #: Cross-mode spend, read out of the event log (ADR-nothing: it invents no
+    #: fact source, it sums one). Not optional -- every process that serves
+    #: routes has an engine, and a usage page that sometimes is not there would
+    #: be indistinguishable from one whose tenant has spent nothing.
+    usage: UsageReader
     # Absent when the optional embedding runtime is not installed. The reason
     # is kept beside it so startup can say so once, in words, instead of
     # leaving a route to fail per request.
@@ -689,6 +696,7 @@ def build_dependencies(
         knowledge_bases=knowledge_bases,
         projects=projects,
         principals=HeaderPrincipalResolver(),
+        usage=PostgresUsageReader(engine),
         chat=chat,
         # Recovery is intentionally independent of the embedding/model stack.
         # A degraded API must still free sessions left by a previously healthy

@@ -42,7 +42,9 @@ import {
   ArrowUp,
   ClipboardList,
   Code2,
+  Folder as FolderIcon,
   LoaderCircle,
+  Monitor as MonitorIcon,
   PanelLeft,
   PanelRightOpen,
   Paperclip,
@@ -310,7 +312,13 @@ export function CodePage() {
   // 东西。留着它的坏处是很具体的——在下面那个输入框里按 Escape（不少输入法和
   // 补全都用这个键）会把这一栏收起来，而且**记住**这次收起。
   const [panelOpen, setPanelOpen] = useStoredState("aw.code.panel.v1", false);
-  const [directoryOpen, setDirectoryOpen] = useState(false);
+  // `null` 是「读者还没表过态」，不是「收起」。
+  //
+  // 折起来曾经是唯一的默认，那时目录树排在一列产物文件下面，是次要的那半。可是
+  // 工作区还空着的时候它是这一栏**唯一**的内容，折起来等于把这一栏画成一个空的
+  // 手风琴。用三态而不是把默认从 false 改成 true：后者会在产物已经有一列的会话
+  // 里把目录也一起摊开，那是另一种吵。表过态之后就一直听读者的，两种情况都是。
+  const [directoryChoice, setDirectoryChoice] = useState<boolean | null>(null);
   const queries = useQueryClient();
   // 哪个项目文件正被查看。只在这一层保存：它是「我在看哪个文件」，属于这次浏览，
   // 不属于会话——换个会话再回来，从头开始看是对的。
@@ -1124,6 +1132,36 @@ export function CodePage() {
           </button>
         </div>
       )}
+      {/* 这一轮会动哪个文件夹，写在提问的正上方。
+          此前它只在页头那颗「文件夹」按钮上，而那颗按钮说的是「这一栏开着没」
+          ——两件事。发指令的人要知道的是「我这句话会落在哪」，那句话要挨着输入框。
+
+          三枚，不是设计稿上的五枚。稿子上还画了分支和 worktree，而 `ProjectView`
+          只有 `project_id / name / root_path`：这个后端没有分支的概念，也没有
+          worktree 的概念。画出来会让人以为可以切——那和一颗点不动的重试按钮是
+          同一类错，只是更贵，因为它伪装成的是一个已经存在的功能。 */}
+      {projectRoot === null ? null : (
+        <div className="aw-code-picks">
+          <span className="aw-code-pick" title="这个进程绑在环回地址上，指令在这台机器上执行">
+            <MonitorIcon aria-hidden="true" size={13} />
+            本地
+          </span>
+          <span className="aw-code-pick" title={projectRoot}>
+            <FolderIcon aria-hidden="true" size={13} />
+            <strong>{project.data?.name ?? "项目"}</strong>
+          </span>
+          <button
+            className="aw-code-pick is-action"
+            onClick={() => {
+              setPanelOpen(true);
+              setDirectoryChoice(true);
+            }}
+            type="button"
+          >
+            看这个文件夹
+          </button>
+        </div>
+      )}
       <div className="aw-code-composer-row aw-mode-composer-card">
         {/* 一个三档的选择器，不是一个「只做计划」的复选框。
             复选框只答得出一个是非题，而读者要问的是三档里的哪一档——它把
@@ -1293,12 +1331,17 @@ export function CodePage() {
   // 两个条件：读者要它展开，而且这一栏有东西可显示。
   //
   // 后一个不是保险，是这一栏「记得住」带来的必然情形：展开状态跨会话保留，而
-  // 大多数会话在第一轮之前一个文件都没有。少了它，每开一段新会话都会先看到
-  // 一条 440px 宽、只写着「工作区全部文件（0）」的空栏——那是一句真话，但它
-  // 占的宽度和一屏代码一样多。有东西可显示的那一刻它自己回来，读者不用再表态
-  // 一次。
+  // 这条门原来只认「工作区里有文件」或「点开了某个文件」，理由是：大多数会话在
+  // 第一轮之前一个文件都没有，而一条 440px 宽、只写着「工作区全部文件（0）」的
+  // 空栏，占的宽度和一屏代码一样多。
+  //
+  // 那个理由现在只对一半。**项目目录不需要等任何事情发生就存在**——它是这段会话
+  // 一开始就选定的那个文件夹，也是读者问「我现在在哪个文件夹里」时唯一的答案。
+  // 所以有 `projectRoot` 的会话，这一栏从第一秒就有内容可显示，空栏的那个顾虑
+  // 不成立；没有目录的会话（`agent-cli` 之外建的老会话）仍然按老规矩来。
   const panelShown =
-    panelOpen && (files.length > 0 || panelProjectFile !== null);
+    panelOpen &&
+    (files.length > 0 || panelProjectFile !== null || projectRoot !== null);
 
   return (
     // 没有 `has-panel` 之类的类名，这一点是刻意的。预览栏展开时多出来的那一列
@@ -1355,7 +1398,7 @@ export function CodePage() {
                   return;
                 }
                 setPanelOpen(true);
-                setDirectoryOpen(true);
+                setDirectoryChoice(true);
               }}
               type="button"
             >
@@ -1512,7 +1555,7 @@ export function CodePage() {
             type="button"
           />
           <PreviewPanel
-            directoryOpen={directoryOpen}
+            directoryOpen={directoryChoice ?? files.length === 0}
             files={files}
             identity={identity}
             onCollapse={() => {
@@ -1532,7 +1575,7 @@ export function CodePage() {
             onWrote={refreshWorkspace}
             orphanRuns={orphanRuns}
             projectFile={panelProjectFile}
-            setDirectoryOpen={setDirectoryOpen}
+            setDirectoryOpen={setDirectoryChoice}
             viewing={viewing}
           />
         </>

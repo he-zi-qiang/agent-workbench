@@ -47,6 +47,8 @@ import type {
   TriageResponse,
   UploadContentResponse,
   WorkspaceResponse,
+  UsageResponse,
+  UsageWindow,
 } from "./types";
 
 const WORD_DOCUMENT_MEDIA_TYPE =
@@ -1567,4 +1569,21 @@ export async function cancelEvaluationRun(
   await apiRequest(identity, "/v1/evaluation/runs/current/cancel", {
     method: "POST",
   });
+}
+
+/**
+ * 这个租户花了多少，按模式和按模型。
+ *
+ * 窗口是个闭集而不是 `days=`：一个任意天数看起来更通用，实际上只会被用来问一个
+ * 没人给查询定过尺寸的窗口。
+ */
+export async function getUsage(
+  identity: PrincipalIdentity,
+  options: { window: UsageWindow; signal?: AbortSignal },
+): Promise<UsageResponse> {
+  return apiRequest(
+    identity,
+    `/v1/usage?window=${encodeURIComponent(options.window)}`,
+    { ...(options.signal === undefined ? {} : { signal: options.signal }) },
+  );
 }

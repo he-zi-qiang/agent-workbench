@@ -7454,3 +7454,991 @@ p.aw-code-step-thought {
     animation: none;
   }
 }
+
+/* --- 子代理副面板（ADR-082 的委派，读者这一侧） -------------------------
+ *
+ * 这一栏和 `.aw-code-panel` 是同一个做法，理由也照抄那边：**宽度写在它自己身上，
+ * 不写进 `grid-template-columns`**。它落在一条隐式的 `auto` 轨道上，而 `auto`
+ * 轨道的宽度就是里面这个元素的宽度——所以这一条 `width` 同时定下了轨道。
+ *
+ * 这么写不是为了少写一行。`.aw-work-page` 的列数在两层样式里各写过一遍
+ * （app.css 是「任务列表 + 正文」，minimal-theme 把任务列表 portal 走之后改成
+ * 单列），再加上两个窄屏断点。让展开与否去改 `grid-template-columns`，等于要求
+ * 那四处都记得多写一条轨道，漏掉任何一处的表现都是同一种：一条空白轨道，或者
+ * 一条被子代理名字撑开的轨道。收起时这个元素整个不渲染，隐式轨道跟着消失。
+ *
+ * 420px 而不是上下文栏那种 340：详情里要放一段它自己的记录加四行事实，340 放不
+ * 下。这个数不是新造的——Code 的预览栏今天就是 clamp(300px, 30vw, 440px)。 */
+.aw-agent-panel {
+  display: flex;
+  width: clamp(320px, 30vw, 420px);
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--aw-border);
+  background: var(--aw-sidebar);
+}
+
+/* 多出来的那个元素往**右边**放，不是往下面。没有这一句，`.aw-work-page` 那条
+   单行的 `grid-template-rows` 会把副面板挤到正文**下面**去，成为一条横条——
+   Code 页踩过同一个坑，那边的注释记着两次实测。 */
+.aw-work-page {
+  grid-auto-flow: column;
+}
+
+.aw-agent-head {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  padding: 10px 14px;
+  gap: 10px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-agent-head-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.aw-agent-head-title strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* id 和耗时用等宽，和这个仓库里其他 id 一样：它们是会被抄进 bug 报告的字符串。 */
+.aw-agent-head-title code {
+  display: block;
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-agent-pill {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--aw-border);
+  border-radius: 999px;
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+  font-size: 10.5px;
+  font-weight: 550;
+  line-height: 19px;
+}
+
+.aw-agent-pill.is-running {
+  border-color: var(--aw-accent-soft);
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+.aw-agent-pill.is-failed {
+  border-color: var(--aw-danger-border);
+  background: var(--aw-danger-soft);
+  color: var(--aw-danger);
+}
+
+.aw-agent-pill.is-completed {
+  border-color: var(--aw-success-border);
+  background: var(--aw-success-soft);
+  color: var(--aw-success);
+}
+
+.aw-agent-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.aw-agent-group {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 11px 16px 5px;
+  gap: 7px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aw-agent-group span {
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--aw-panel-soft);
+  font-family: var(--aw-mono);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.aw-agent-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 两行：上一行是「谁，在做什么」，下一行是度量。度量单独占一行而不是挤到右边，
+   因为名字和活动都是不定长的中文，挤在一行里的结果是三段互相抢宽度，然后每一段
+   都被截断。 */
+.aw-agent-entry {
+  display: grid;
+  width: 100%;
+  padding: 8px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  gap: 2px 9px;
+  grid-template-columns: 16px minmax(0, 1fr) 13px;
+  text-align: left;
+}
+
+.aw-agent-entry:hover {
+  background: var(--aw-veil);
+}
+
+.aw-agent-status {
+  display: grid;
+  color: var(--aw-text-muted);
+  place-items: center;
+}
+
+.aw-agent-name {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 8px;
+}
+
+.aw-agent-name strong {
+  flex: none;
+  font-family: var(--aw-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.aw-agent-name span {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-agent-name span.is-bad {
+  color: var(--aw-danger);
+}
+
+.aw-agent-chevron {
+  align-self: center;
+  color: var(--aw-text-muted);
+}
+
+.aw-agent-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 2 / 4;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+/* 额度条只有在有分母时才画，见 AgentPanel 的 `Meter`。三档的分界写在那边。 */
+.aw-agent-meter {
+  display: inline-block;
+  overflow: hidden;
+  width: 30px;
+  height: 3px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--aw-panel-strong);
+}
+
+.aw-agent-meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--aw-accent);
+}
+
+.aw-agent-meter.is-warn > i {
+  background: var(--aw-warning);
+}
+
+.aw-agent-meter.is-over > i {
+  background: var(--aw-danger);
+}
+
+.aw-agent-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid var(--aw-border);
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+}
+
+.aw-agent-foot strong {
+  color: var(--aw-text);
+  font-family: var(--aw-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.aw-agent-section {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--aw-border-subtle);
+}
+
+.aw-agent-section h3 {
+  margin: 0 0 8px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aw-agent-failure {
+  padding: 11px 13px;
+  border: 1px solid var(--aw-danger-border);
+  border-radius: 10px;
+  background: var(--aw-danger-soft);
+}
+
+.aw-agent-failure p {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+/* 「不是什么」那三句。它们看着像废话，实际是这一块唯一能省下一次误修的东西：
+   这几个失败都长得像另一个问题。 */
+.aw-agent-nots {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 9px 0 10px;
+  gap: 6px;
+}
+
+.aw-agent-nots i {
+  padding: 0 8px;
+  border: 1px solid var(--aw-border);
+  border-radius: 6px;
+  background: var(--aw-window);
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  font-style: normal;
+  line-height: 20px;
+}
+
+/* 失败块里那个动作是**次要的**：读者到这里已经知道出了什么事，这颗按钮只是
+   「想再看细一点」。基础的 .aw-button 有 38px 的最小高度，在这块 11px 起跳的面
+   里它撑成一条横杠，读起来像是这张卡的主张——而这张卡的主张是上面那段话。
+   宽度也要收：`display: block` 的按钮会占满卡宽，那是主按钮才该有的分量。 */
+.aw-agent-failure .aw-button {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  line-height: 24px;
+}
+
+.aw-agent-log {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 2px;
+  list-style: none;
+}
+
+.aw-agent-log li {
+  position: relative;
+  padding-left: 20px;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+  line-height: 19px;
+}
+
+/* 那个 └ 是边框拼的，不是字符。字符会跟着字体走，中文栈里对不齐。 */
+.aw-agent-log li::before {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  width: 9px;
+  height: 11px;
+  border-bottom: 1px solid var(--aw-border-strong);
+  border-left: 1px solid var(--aw-border-strong);
+  border-bottom-left-radius: 4px;
+  content: "";
+}
+
+.aw-agent-log li.is-bad {
+  color: var(--aw-danger);
+}
+
+.aw-agent-spend {
+  margin: 0 0 6px;
+}
+
+.aw-agent-spend strong {
+  font-family: var(--aw-mono);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.aw-agent-section .aw-agent-meter {
+  width: 100%;
+  height: 4px;
+}
+
+.aw-agent-note {
+  margin: 8px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.aw-agent-empty {
+  padding: 18px 16px;
+  text-align: center;
+}
+
+.aw-agent-facts {
+  display: grid;
+  margin: 0;
+  gap: 5px 10px;
+  grid-template-columns: 68px minmax(0, 1fr);
+}
+
+.aw-agent-facts dt {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-agent-facts dd {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+/* --- 正文里那一行入口 ---------------------------------------------------- */
+
+.aw-agent-entryline {
+  display: grid;
+  width: 100%;
+  padding: 9px 12px;
+  gap: 2px;
+  border: 1px solid var(--aw-border);
+  border-radius: 10px;
+  background: var(--aw-panel);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+/* 亮着表示副面板此刻显示的就是它。两块面在讲同一件事时必须看得出是同一件事，
+   否则读者会以为侧栏是另一个东西。 */
+.aw-agent-entryline.is-open {
+  border-color: var(--aw-accent-soft);
+  background: var(--aw-accent-soft);
+}
+
+.aw-agent-entryline-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.aw-agent-entryline-head strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.aw-agent-entryline-head > span {
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+.aw-agent-entryline-open {
+  margin-left: auto;
+  color: var(--aw-accent);
+  font-size: 11.5px;
+  font-weight: 550;
+}
+
+.aw-agent-entryline-sum {
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+/* 窄屏排不下三栏：副面板退回浮层，和这一页那个预览抽屉同一个断点、同一套做法。 */
+@media (max-width: 900px) {
+  .aw-agent-panel {
+    position: absolute;
+    z-index: 5;
+    inset: 0 0 0 auto;
+    width: min(420px, 94vw);
+    box-shadow: var(--aw-shadow-drawer-left);
+  }
+}
+
+/* --- 用量总账 -----------------------------------------------------------
+ *
+ * 一页读的东西，不是一块仪表盘：没有图表，没有环形进度，没有同比箭头。它要回答
+ * 的是「钱花在哪了」，而那是四个可以互相加减的数——三个模式和一份按模型的表。
+ * 一张饼图会把这四个数换成四个角度，然后读者要把角度换回数。 */
+.aw-usage-page {
+  display: grid;
+  align-content: start;
+  max-width: 1040px;
+  padding: 24px clamp(16px, 4vw, 48px) 56px;
+  margin: 0 auto;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.aw-usage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.aw-usage-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.aw-usage-header p {
+  max-width: 60ch;
+  margin: 5px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.aw-usage-windows {
+  display: flex;
+  flex: none;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--aw-border);
+  border-radius: 9px;
+  background: var(--aw-panel);
+}
+
+.aw-usage-window {
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 24px;
+}
+
+.aw-usage-window.is-active {
+  background: var(--aw-panel-strong);
+  box-shadow: var(--aw-shadow-sm);
+  color: var(--aw-text);
+}
+
+/* 合计一行，不是一块英雄区。这个数是三张卡的和——把它做得比来源还大，读者会去
+   记它而不是去读它是怎么来的。 */
+.aw-usage-total {
+  display: grid;
+  align-items: center;
+  padding: 14px 16px;
+  gap: 4px 13px;
+  border: 1px solid var(--aw-accent-soft);
+  border-radius: 12px;
+  background: var(--aw-accent-soft);
+  grid-template-columns: 34px minmax(0, 1fr);
+}
+
+.aw-usage-total-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--aw-accent);
+  color: var(--aw-accent-on);
+  place-items: center;
+}
+
+.aw-usage-total strong {
+  display: block;
+  color: var(--aw-accent);
+  font-family: var(--aw-mono);
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+}
+
+.aw-usage-total > div > span {
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+.aw-usage-inflight {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  grid-column: 2;
+}
+
+.aw-usage-modes {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+}
+
+.aw-usage-mode {
+  display: grid;
+  padding: 14px 16px;
+  gap: 10px;
+  border: 1px solid var(--aw-border);
+  border-radius: 12px;
+  background: var(--aw-panel);
+}
+
+.aw-usage-mode-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.aw-usage-mode-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--aw-panel-strong);
+  color: var(--aw-text-soft);
+  place-items: center;
+}
+
+.aw-usage-mode-head strong {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.aw-usage-mode-runs {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-usage-mode-figures {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.aw-usage-tokens {
+  font-family: var(--aw-mono);
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.aw-usage-cost {
+  color: var(--aw-accent);
+  font-family: var(--aw-mono);
+  font-size: 14px;
+}
+
+.aw-usage-split {
+  display: grid;
+  margin: 0;
+  gap: 3px 10px;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.aw-usage-split dt {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.aw-usage-split dd {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-family: var(--aw-mono);
+  font-size: 11.5px;
+  text-align: right;
+}
+
+.aw-usage-models h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.aw-usage-models table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.aw-usage-models th,
+.aw-usage-models td {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--aw-border-subtle);
+  text-align: right;
+}
+
+.aw-usage-models thead th {
+  border-bottom: 1px solid var(--aw-border);
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.aw-usage-models tbody th {
+  color: var(--aw-text);
+  font-size: 12.5px;
+  font-weight: 550;
+  text-align: left;
+}
+
+.aw-usage-models td {
+  color: var(--aw-text-soft);
+  font-family: var(--aw-mono);
+  font-size: 11.5px;
+}
+
+.aw-usage-note {
+  max-width: 76ch;
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.aw-usage-note strong {
+  color: var(--aw-text);
+  font-weight: 600;
+}
+
+.aw-usage-note code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--aw-surface-sunken);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+/* 「没配价目表」这一条要被看见——它是一个可以动手修的配置问题，而它长得和
+   「这个月很省」一模一样。 */
+.aw-usage-note.is-warning {
+  padding: 11px 13px;
+  border: 1px solid var(--aw-warning-border);
+  border-radius: 10px;
+  background: var(--aw-warning-soft);
+  color: var(--aw-text-soft);
+}
+
+/* --- 每一轮的脚注 -------------------------------------------------------
+ *
+ * 三个模式共用一个零件：Chat 的答案下面、Code 的报告下面、Task 每一步的右侧。
+ * 一行等宽小字，不是一块面——读者只在两种时刻要这个数：一轮特别慢或特别贵的
+ * 时候，和月底对账的时候。后者有用量页；前者要的是「就在这里，不用点开」。
+ *
+ * 颜色是 muted 不是 faint。tokens.css 那条规则写得很直白：faint 不承载要读的
+ * 字，而这一行每个数都是要读的。只有中间那几个间隔号落在 faint 上。 */
+.aw-turn-usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 6px 0 0;
+  gap: 5px;
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+.aw-turn-usage svg {
+  color: var(--aw-faint);
+}
+
+.aw-turn-usage strong {
+  color: var(--aw-text-soft);
+  font-weight: 500;
+}
+
+.aw-turn-usage-arrow,
+.aw-turn-usage-dot {
+  color: var(--aw-faint);
+}
+
+/* --- 这一轮会动哪个文件夹 -----------------------------------------------
+ *
+ * 排在输入框正上方，因为发指令的人要知道的是「我这句话会落在哪」——那句话得挨
+ * 着输入框。页头那颗按钮说的是另一件事（这一栏开着没）。
+ *
+ * 三枚里只有第三枚是按钮。前两枚是**事实**不是控件：执行发生在本机（环回绑定，
+ * ADR-044），以及这段会话属于哪个项目。做成看起来能点的样子，就是在承诺一个这
+ * 个后端没有的动作。 */
+.aw-code-picks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 0 2px 8px;
+  gap: 6px;
+}
+
+.aw-code-pick {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  gap: 6px;
+  border: 1px solid var(--aw-border);
+  border-radius: 8px;
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+  font-size: 11.5px;
+  line-height: 24px;
+}
+
+.aw-code-pick strong {
+  color: var(--aw-text);
+  font-weight: 550;
+}
+
+/* 唯一能点的那一枚。虚线边框，因为它是个入口而不是一个当前状态——实线会让它读
+   起来像第三个事实。 */
+.aw-code-pick.is-action {
+  border-style: dashed;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 24px;
+}
+
+.aw-code-pick.is-action:hover {
+  border-color: var(--aw-border-strong);
+  color: var(--aw-text);
+}
+
+/* --- 任务的上下文栏 -----------------------------------------------------
+ *
+ * 它替掉的是一条只装文件名的产物栏。那一栏答得很好的问题只有一个，而读者盯着一个
+ * 还在跑的任务时问的是另外三个：还有几步、有没有人卡住、这一趟要花多少。
+ *
+ * 每一节的形状一样：一行小标题、一块很小的图形、一句话。那句话不是装饰——四节里
+ * 有三节的数字都需要一句限定才算说完（没有百分比、子代理不占额度、信封在提交时
+ * 冻住）。 */
+.aw-taskctx {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.aw-taskctx-block {
+  display: grid;
+  gap: 7px;
+}
+
+.aw-taskctx-head {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  gap: 7px;
+  color: var(--aw-text-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* 只有子代理那一节的标题是按钮——它是去副面板的入口。其余三节没有更深的地方
+   可去，做成看起来能点的样子就是在承诺一次不会发生的跳转。 */
+.aw-taskctx-head.is-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.aw-taskctx-head.is-link:hover {
+  color: var(--aw-accent);
+}
+
+.aw-taskctx-count {
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.aw-taskctx-dots {
+  display: flex;
+  align-items: center;
+}
+
+.aw-taskctx-dots > span {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
+.aw-taskctx-dots > span:last-child {
+  flex: none;
+}
+
+.aw-taskctx-dots u {
+  flex: 1;
+  height: 1px;
+  background: var(--aw-border);
+  text-decoration: none;
+}
+
+.aw-taskctx-dots u.is-done {
+  background: var(--aw-success-border);
+}
+
+.aw-taskctx-dots i {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 50%;
+  color: var(--aw-faint);
+  place-items: center;
+}
+
+.aw-taskctx-dots i.is-done {
+  border-color: var(--aw-success-border);
+  background: var(--aw-success-soft);
+  color: var(--aw-success);
+}
+
+.aw-taskctx-dots i.is-active {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent-soft);
+}
+
+.aw-taskctx-dots i.is-failed {
+  border-color: var(--aw-danger-border);
+  background: var(--aw-danger-soft);
+}
+
+/* 一小簇字形，按状态着色。不是列表——这一节要答的是「有没有人卡住」，一眼
+   看出来就够了；要逐个读的时候去副面板。 */
+.aw-taskctx-pips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.aw-taskctx-pips i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--aw-faint);
+}
+
+.aw-taskctx-pips i.is-running {
+  background: var(--aw-accent);
+}
+
+.aw-taskctx-pips i.is-completed {
+  background: var(--aw-success);
+}
+
+.aw-taskctx-pips i.is-failed {
+  background: var(--aw-danger);
+}
+
+.aw-taskctx-pips i.is-unknown {
+  border: 1px solid var(--aw-faint);
+  background: transparent;
+}
+
+.aw-taskctx-fact {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+.aw-taskctx-fact strong {
+  font-family: var(--aw-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.aw-taskctx-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.aw-taskctx-chips i {
+  padding: 0 7px;
+  border: 1px solid var(--aw-border);
+  border-radius: 6px;
+  background: var(--aw-panel);
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 20px;
+}
+
+.aw-taskctx-note {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+/* 被扣下的那条回答。三句「不是什么」排成一列，因为它们要被逐条读——这个失败
+   长得像另外三个问题，而那三个的修法完全不同。 */
+.aw-chat-withheld strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.aw-chat-withheld p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.aw-chat-withheld ul {
+  display: grid;
+  margin: 8px 0 0;
+  padding: 0 0 0 17px;
+  gap: 2px;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}

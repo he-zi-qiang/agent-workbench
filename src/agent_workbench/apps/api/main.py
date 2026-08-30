@@ -60,6 +60,7 @@ from agent_workbench.apps.api.routes import (
     search,
     tasks,
     uploads,
+    usage,
 )
 from agent_workbench.apps.api.routes.approvals import InvalidApprovalCursorError
 from agent_workbench.apps.api.routes.search import SearchUnavailableError
@@ -257,6 +258,7 @@ def create_app(
     app.include_router(projects.membership_router)
     app.include_router(tasks.router)
     app.include_router(approvals.router)
+    app.include_router(usage.router)
     # Unconditional, like `evaluation` and for the same reason: this process can
     # always *try*, and "that server is not running" is a real answer rather
     # than a degraded one. Gating it on a flag would make a console that got a

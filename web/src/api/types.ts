@@ -188,9 +188,25 @@ export interface CitedPassageView {
   page: number | null;
 }
 
+/**
+ * 一轮烧了多少。**缺席表示这里问不出答案，不表示花了零。**
+ *
+ * 用户那一条永远没有（一句提问没有自己的花销），还没落定的那一轮也没有。给这两
+ * 种情况一个零，会在每一轮下面多出一行说谎的脚注。
+ */
+export interface TurnUsageView {
+  input_tokens: number;
+  output_tokens: number;
+  /** `input_tokens` 的子集，不是它之外的另一笔。 */
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_micro_usd: number;
+}
+
 export interface MessageView {
   role: string;
   text: string;
+  usage?: TurnUsageView | null;
 }
 
 export interface HistoryResponse {
@@ -781,4 +797,45 @@ export interface ComputerAction {
   reason: string;
   /** 送到几个字符、点在哪、哪块屏。没有就是空串。 */
   detail: string;
+}
+
+/**
+ * 跨模式的用量总账（`GET /v1/usage`）。
+ *
+ * 服务端把钱以 **micro-USD 整数**送出来，不做任何换算。一个人民币金额需要一个
+ * 这个进程没有、也不该编的汇率；换算是显示决定，留给显示的那一层。
+ */
+export interface UsageTokenBreakdown {
+  input_tokens: number;
+  output_tokens: number;
+  /**
+   * `input_tokens` 的**子集**，不是它之外的另一笔——服务商的口径，原样透传。
+   * 把这两个数相加会把每一次命中的提示词算两遍。
+   */
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+}
+
+export interface UsageBucket {
+  tokens: UsageTokenBreakdown;
+  cost_micro_usd: number;
+  /** 这一格里已经结束的运行数。没有它，一个 0 说不清是「没花钱」还是「没跑过」。 */
+  runs: number;
+}
+
+export type UsageWindow = "7d" | "30d" | "all";
+
+export interface UsageResponse {
+  window: UsageWindow;
+  since: string | null;
+  until: string;
+  /** 三个模式一定都在，没花过的那个是 0 而不是缺席。 */
+  by_mode: Record<string, UsageBucket>;
+  by_model: Record<string, UsageBucket>;
+  /** 在 `by_mode.task` **里面**，不是它旁边。两个数不能相加。 */
+  delegated: UsageBucket;
+  /** 已经开始、还没写下终止事件的运行。是个说明，不是一笔用量。 */
+  runs_in_flight: number;
+  /** 这一档在这个窗口里每次运行记下的费用都是 0：说「没配价目表」，不说「免费」。 */
+  unpriced_profiles: string[];
 }
