@@ -8239,3 +8239,182 @@ p.aw-code-step-thought {
   border-color: var(--aw-border-strong);
   color: var(--aw-text);
 }
+
+/* --- 任务的上下文栏 -----------------------------------------------------
+ *
+ * 它替掉的是一条只装文件名的产物栏。那一栏答得很好的问题只有一个，而读者盯着一个
+ * 还在跑的任务时问的是另外三个：还有几步、有没有人卡住、这一趟要花多少。
+ *
+ * 每一节的形状一样：一行小标题、一块很小的图形、一句话。那句话不是装饰——四节里
+ * 有三节的数字都需要一句限定才算说完（没有百分比、子代理不占额度、信封在提交时
+ * 冻住）。 */
+.aw-taskctx {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.aw-taskctx-block {
+  display: grid;
+  gap: 7px;
+}
+
+.aw-taskctx-head {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  gap: 7px;
+  color: var(--aw-text-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* 只有子代理那一节的标题是按钮——它是去副面板的入口。其余三节没有更深的地方
+   可去，做成看起来能点的样子就是在承诺一次不会发生的跳转。 */
+.aw-taskctx-head.is-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.aw-taskctx-head.is-link:hover {
+  color: var(--aw-accent);
+}
+
+.aw-taskctx-count {
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--aw-panel-soft);
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.aw-taskctx-dots {
+  display: flex;
+  align-items: center;
+}
+
+.aw-taskctx-dots > span {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
+.aw-taskctx-dots > span:last-child {
+  flex: none;
+}
+
+.aw-taskctx-dots u {
+  flex: 1;
+  height: 1px;
+  background: var(--aw-border);
+  text-decoration: none;
+}
+
+.aw-taskctx-dots u.is-done {
+  background: var(--aw-success-border);
+}
+
+.aw-taskctx-dots i {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: 50%;
+  color: var(--aw-faint);
+  place-items: center;
+}
+
+.aw-taskctx-dots i.is-done {
+  border-color: var(--aw-success-border);
+  background: var(--aw-success-soft);
+  color: var(--aw-success);
+}
+
+.aw-taskctx-dots i.is-active {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent-soft);
+}
+
+.aw-taskctx-dots i.is-failed {
+  border-color: var(--aw-danger-border);
+  background: var(--aw-danger-soft);
+}
+
+/* 一小簇字形，按状态着色。不是列表——这一节要答的是「有没有人卡住」，一眼
+   看出来就够了；要逐个读的时候去副面板。 */
+.aw-taskctx-pips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.aw-taskctx-pips i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--aw-faint);
+}
+
+.aw-taskctx-pips i.is-running {
+  background: var(--aw-accent);
+}
+
+.aw-taskctx-pips i.is-completed {
+  background: var(--aw-success);
+}
+
+.aw-taskctx-pips i.is-failed {
+  background: var(--aw-danger);
+}
+
+.aw-taskctx-pips i.is-unknown {
+  border: 1px solid var(--aw-faint);
+  background: transparent;
+}
+
+.aw-taskctx-fact {
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}
+
+.aw-taskctx-fact strong {
+  font-family: var(--aw-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.aw-taskctx-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.aw-taskctx-chips i {
+  padding: 0 7px;
+  border: 1px solid var(--aw-border);
+  border-radius: 6px;
+  background: var(--aw-panel);
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 20px;
+}
+
+.aw-taskctx-note {
+  margin: 0;
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}

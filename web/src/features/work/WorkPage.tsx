@@ -131,6 +131,7 @@ import {
   AgentPanel,
   StreamNarrowNotice,
 } from "./AgentPanel";
+import { TaskContextPanel } from "./TaskContextPanel";
 import { readDelegations, type DelegationFacts } from "./delegations";
 import { DelegationScopeNote } from "./DelegationScope";
 import {
@@ -515,6 +516,11 @@ export function WorkPage() {
     () => deriveLifecycle(timeline.events, taskQuery.data?.status),
     [timeline.events, taskQuery.data?.status],
   );
+  // 这一栏此前的门是「有没有产物」，因为它当时只装产物。现在它还装进度、子代理
+  // 和用量——那三样对每一个**已经开跑**的任务都成立，不必等到第一个文件落地。
+  // 还没有任何阶段的任务（刚提交、Worker 还没认领）仍然不画：那时四节全是空的。
+  const panelShown = hasOutputRail || lifecycle.stages.length > 0;
+  const contextStages = lifecycle.stages;
   const draftText = useMemo(
     () => findDraftText(timeline.events),
     [timeline.events],
@@ -1358,9 +1364,7 @@ export function WorkPage() {
             {/* The live process comes first while the task is unfolding. A
                 large document preview used to push the only explanation of
                 what the agent did several screens below the fold. */}
-            <div
-              className={`aw-work-body ${hasOutputRail ? "has-output" : ""}`}
-            >
+            <div className={`aw-work-body ${panelShown ? "has-output" : ""}`}>
               <div className="aw-work-run">
                 <div
                   className={`aw-work-process${
@@ -1597,9 +1601,18 @@ export function WorkPage() {
                   </div>
                 </details>
               </div>
-              {hasOutputRail ? (
+              {panelShown ? (
                 <div className="aw-work-output">
-                  <ArtifactRail
+                  <TaskContextPanel
+                    events={timeline.events}
+                    onOpenAgents={() => {
+                      setAgentsOpen(true);
+                    }}
+                    roots={runTree}
+                    stages={contextStages}
+                    outputs={
+                      hasOutputRail ? (
+                        <ArtifactRail
                     artifacts={artifacts}
                     // Every entry opens in the reading column, whatever its type.
                     // The gate that used to be here sent "not previewable" to a
@@ -1613,7 +1626,10 @@ export function WorkPage() {
                         setOpened({ taskId: selectedTaskId, artifact });
                       }
                     }}
-                    workspaceWrites={workspaceWrites}
+                          workspaceWrites={workspaceWrites}
+                        />
+                      ) : null
+                    }
                   />
                 </div>
               ) : null}
