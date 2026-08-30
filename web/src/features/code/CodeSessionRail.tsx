@@ -20,8 +20,8 @@
  * labels.
  */
 
-import { Pencil, Trash2, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { Pencil, Search, Trash2, X } from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { WorkspaceSidebarActions } from "../../app/WorkspaceSidebar";
 import type { CodeSessionView } from "../../api/types";
 import {
@@ -30,7 +30,9 @@ import {
   IconButton,
   NewSessionAction,
   shortId,
+  SidebarAction,
 } from "../../components/ui";
+import { groupSessions, VISIBLE_SESSIONS } from "./sessionGroups";
 
 export function CodeSessionRail({
   known,
@@ -85,6 +87,32 @@ export function CodeSessionRail({
   sessionId: string | undefined;
   setRenaming: (sessionId: string | null) => void;
 }) {
+  //: 搜索框开着没有，以及框里是什么。
+  //:
+  //: 藏在一颗图标后面而不是常驻：这一栏一共 260px 宽，一个永远占着一行的搜索框，
+  //: 在只有四段会话的时候是纯粹的家具。它长在工作区那一行上（和「新建」并排），
+  //: 因为那一行**就是**这一组的标题——过滤的是它底下这份列表。
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState("");
+  //: 读者按过「全部显示」。按过就不再折。
+  const [expanded, setExpanded] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchActionRef = useRef<HTMLButtonElement | null>(null);
+
+  const view = useMemo(
+    () =>
+      groupSessions(known, {
+        expanded,
+        // 收窄到一个文件夹时不分组：那时候只有一组，而它的名字已经写在上面
+        // 那行「这个文件夹里的会话」里了。
+        grouped: !scoped,
+        projectNames,
+        query,
+        sessionId,
+      }),
+    [expanded, known, projectNames, query, scoped, sessionId],
+  );
+
   const [renamePending, setRenamePending] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<{
     sessionId: string;
@@ -162,6 +190,149 @@ export function CodeSessionRail({
     if (keepFocus) focusRenameAction(held.session_id);
   };
 
+  const row = (held: CodeSessionView) =>
+    renaming === held.session_id ? (
+      <>
+        <form
+          aria-busy={renamePending === held.session_id}
+          className="aw-session-inline-rename"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (renamePending === held.session_id) return;
+            const field = new FormData(event.currentTarget).get("title");
+            // A FormData entry is a string *or a File*, and
+            // `String(File)` is "[object File]" -- a name nobody typed.
+            void commitRename(held, typeof field === "string" ? field : "");
+          }}
+        >
+          <label className="aw-sr-only" htmlFor={`aw-code-rename-${held.session_id}`}>
+            会话名字
+          </label>
+          <input
+            aria-describedby={
+              renameError?.sessionId === held.session_id
+                ? `aw-code-rename-error-${held.session_id}`
+                : undefined
+            }
+            aria-invalid={renameError?.sessionId === held.session_id || undefined}
+            autoFocus
+            defaultValue={held.title ?? ""}
+            id={`aw-code-rename-${held.session_id}`}
+            name="title"
+            onBlur={() => {
+              if (renamePending !== held.session_id) {
+                cancelRename(held.session_id, false);
+              }
+            }}
+            onChange={() => {
+              if (renameError?.sessionId === held.session_id) setRenameError(null);
+            }}
+            onFocus={(event) => event.currentTarget.select()}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              event.stopPropagation();
+              cancelRename(held.session_id);
+            }}
+            readOnly={renamePending === held.session_id}
+            ref={renameInputRef}
+          />
+        </form>
+        {renameError?.sessionId === held.session_id ? (
+          <div
+            className="aw-session-rename-error"
+            id={`aw-code-rename-error-${held.session_id}`}
+          >
+            <ErrorNotice message={renameError.message} />
+          </div>
+        ) : null}
+      </>
+    ) : (
+      <div className="aw-code-recent-row">
+        <button
+          aria-current={held.session_id === sessionId ? "page" : undefined}
+          className="aw-code-recent-link"
+          onClick={() => {
+            onOpen(held.session_id);
+          }}
+          // Named after the first instruction, so most rows have one. The id is
+          // the fallback for a session opened and never used. Rename is a
+          // separate action so opening a different session cannot be the first
+          // half of editing it.
+          title={held.title ?? held.session_id}
+          type="button"
+        >
+          <span className="aw-code-recent-title">
+            {/* 这个位子**永远**留着，点只在真的跑着的时候画。
+                此前它是条件渲染的，于是一段会话开跑的瞬间，它那一行的标题会
+                往右挪 12px——一列本来对齐的名字里有一行不对齐，而那一下抖动
+                恰好发生在读者正盯着它看的时候。
+                空着的时候不画一个空心圈：那会是一句「它没在跑」，而这一栏
+                只知道**这个标签页**发出去的请求（见 `runningIds`），另一个
+                标签页里跑着的回合在这里是看不见的。留位子不撒谎，画空心圈会。 */}
+            <span
+              aria-hidden="true"
+              className={`aw-code-recent-running ${
+                runningIds.has(held.session_id) ? "is-running" : ""
+              }`}
+            />
+            {held.title ?? shortId(held.session_id)}
+            {runningIds.has(held.session_id) ? (
+              <span className="aw-sr-only">（正在运行）</span>
+            ) : null}
+          </span>
+          {/* 副行只剩时间。
+              文件夹名搬去了组的抬头（`sessionGroups.ts`）：一份 40 条的列表里，
+              同一个名字此前会在每一行上各印一遍，而它要区分的东西只有 3 个。
+              轮数和文件数这个接口仍然给不出来，而且**是被明确拒绝的**：
+              `SessionView` 的 docstring 与 ADR-047 §4 说，任何一个都会把列表行
+              从一次查询变成每行一次查询。编一个数比空着更糟——它会被当成真的读。
+              没有 last_activity_at 的会话（开了没用过）不留占位，一行空的副行
+              只是让每张卡都变高。 */}
+          {held.last_activity_at === null ? null : (
+            <time className="aw-code-recent-when" dateTime={held.last_activity_at}>
+              {formatDateTime(held.last_activity_at)}
+            </time>
+          )}
+        </button>
+        {/* Always rendered, not revealed on hover: a control that only exists
+            under a pointer is one a keyboard cannot reach and a touch screen
+            never shows. CSS dims it until the row is hovered or the button
+            focused. */}
+        <span className="aw-session-row-actions aw-code-recent-actions">
+          <button
+            aria-label={`重命名会话 ${held.title ?? held.session_id}`}
+            className="aw-code-recent-rename"
+            onClick={() => {
+              beginRename(held.session_id);
+            }}
+            ref={(node) => {
+              if (node === null) {
+                renameActionRefs.current.delete(held.session_id);
+              } else {
+                renameActionRefs.current.set(held.session_id, node);
+              }
+            }}
+            title="重命名"
+            type="button"
+          >
+            <Pencil aria-hidden size={12} />
+          </button>
+          <button
+            aria-label={`删除会话 ${held.title ?? held.session_id}`}
+            className="aw-code-recent-delete"
+            onClick={() => {
+              onDelete(held.session_id);
+            }}
+            title="删除"
+            type="button"
+          >
+            <Trash2 aria-hidden size={13} />
+          </button>
+        </span>
+      </div>
+    );
+
   return (
     <nav
       aria-label="最近的编码会话"
@@ -176,6 +347,22 @@ export function CodeSessionRail({
       </IconButton>
 
       <WorkspaceSidebarActions>
+        {/* 两颗，和截图里那一行一样：一颗开新的，一颗找旧的。它们长在**导航项
+            自己那一行**上，因为那一行就是这一组的标题——过滤的是它底下这份列表。 */}
+        <SidebarAction
+          active={searching}
+          buttonRef={searchActionRef}
+          label={searching ? "关掉搜索" : "在会话里搜索"}
+          onClick={() => {
+            const next = !searching;
+            setSearching(next);
+            // 关掉时把搜索词一起清掉。留着的话，下次打开这一栏看到的是一份被
+            // 上一次的搜索词过滤过的列表，而那个词已经不在屏幕上了。
+            if (!next) setQuery("");
+          }}
+        >
+          <Search aria-hidden="true" size={15} />
+        </SidebarAction>
         {/* Goes to the start page rather than POSTing an empty session:
             the first sentence is what names a session (ADR-047), and one
             created by a bare click sits unnamed in this list forever. */}
@@ -190,193 +377,87 @@ export function CodeSessionRail({
       <span className="aw-eyebrow aw-code-sessions-eyebrow">
         {scoped ? "这个文件夹里的会话" : "全部会话"}
       </span>
+      {searching ? (
+        <div className="aw-code-sessions-search">
+          <Search aria-hidden="true" size={13} />
+          <label className="aw-sr-only" htmlFor="aw-code-session-search">
+            在会话里搜索
+          </label>
+          <input
+            // `autoFocus` 而不是在按钮的 onClick 里 rAF 一次再 `focus()`。
+            // 后者写过，实测焦点留在了那颗按钮上：这个输入框是 portal 进侧栏的，
+            // 而按钮在另一棵 portal 里，两次提交之间焦点回到了刚被点的那颗按钮。
+            // `autoFocus` 由 React 在挂载时做，不用去猜哪一帧。
+            autoFocus
+            id="aw-code-session-search"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              // 就地拦下，不往上冒：这个抽屉在窄屏上是模态的，而 `AppShell` 挂在
+              // window 上的那个 Escape 会把整栏一起关掉——读者只是想清掉搜索词。
+              event.preventDefault();
+              event.stopPropagation();
+              if (query !== "") {
+                setQuery("");
+                return;
+              }
+              setSearching(false);
+              searchActionRef.current?.focus();
+            }}
+            placeholder="名字、文件夹"
+            ref={searchInputRef}
+            type="search"
+            value={query}
+          />
+        </div>
+      ) : null}
       <div className="aw-code-session-list">
-        {known.length === 0 ? (
-          // 收窄之后的空列表不是「一段会话都没有」。说错了这句，读者会以为
-          // 自己上周做的那些不见了——它们在别的文件夹里，而下面那行字正是
-          // 去那里的路。
+        {view.groups.length === 0 ? (
+          // 三种空，三句话。搜不到东西时说「一段都没有」，读者会以为它们被删了。
           <p className="aw-code-sessions-empty">
-            {scoped
-              ? "这个文件夹里还没有会话。说一句要做的事就开一个。"
-              : "还没有会话。说一句要做的事就开一个。"}
+            {query.trim() !== ""
+              ? `没有匹配「${query.trim()}」的会话。`
+              : scoped
+                ? "这个文件夹里还没有会话。说一句要做的事就开一个。"
+                : "还没有会话。说一句要做的事就开一个。"}
           </p>
         ) : (
-          <ul>
-            {known.map((held) => (
-              <li key={held.session_id}>
-                {renaming === held.session_id ? (
-                  <>
-                    <form
-                      aria-busy={renamePending === held.session_id}
-                      className="aw-session-inline-rename"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        if (renamePending === held.session_id) return;
-                        const field = new FormData(event.currentTarget).get(
-                          "title",
-                        );
-                        // A FormData entry is a string *or a File*, and
-                        // `String(File)` is "[object File]" -- a name nobody typed.
-                        void commitRename(
-                          held,
-                          typeof field === "string" ? field : "",
-                        );
-                      }}
-                    >
-                      <label
-                        className="aw-sr-only"
-                        htmlFor={`aw-code-rename-${held.session_id}`}
-                      >
-                        会话名字
-                      </label>
-                      <input
-                        aria-describedby={
-                          renameError?.sessionId === held.session_id
-                            ? `aw-code-rename-error-${held.session_id}`
-                            : undefined
-                        }
-                        aria-invalid={
-                          renameError?.sessionId === held.session_id ||
-                          undefined
-                        }
-                        autoFocus
-                        defaultValue={held.title ?? ""}
-                        id={`aw-code-rename-${held.session_id}`}
-                        name="title"
-                        onBlur={() => {
-                          if (renamePending !== held.session_id) {
-                            cancelRename(held.session_id, false);
-                          }
-                        }}
-                        onChange={() => {
-                          if (renameError?.sessionId === held.session_id) {
-                            setRenameError(null);
-                          }
-                        }}
-                        onFocus={(event) => event.currentTarget.select()}
-                        onKeyDown={(event) => {
-                          if (event.key !== "Escape") return;
-                          event.preventDefault();
-                          event.stopPropagation();
-                          cancelRename(held.session_id);
-                        }}
-                        readOnly={renamePending === held.session_id}
-                        ref={renameInputRef}
-                      />
-                    </form>
-                    {renameError?.sessionId === held.session_id ? (
-                      <div
-                        className="aw-session-rename-error"
-                        id={`aw-code-rename-error-${held.session_id}`}
-                      >
-                        <ErrorNotice message={renameError.message} />
-                      </div>
-                    ) : null}
-                  </>
-                ) : (
-                  <div className="aw-code-recent-row">
-                    <button
-                      aria-current={
-                        held.session_id === sessionId ? "page" : undefined
-                      }
-                      className="aw-code-recent-link"
-                      onClick={() => {
-                        onOpen(held.session_id);
-                      }}
-                      // Named after the first instruction, so most rows have
-                      // one. The id is the fallback for a session opened and
-                      // never used. Rename is a separate action so opening a
-                      // different session cannot be the first half of editing it.
-                      title={held.title ?? held.session_id}
-                      type="button"
-                    >
-                      <span className="aw-code-recent-title">
-                        {/* 有回合开着的那一行自己说出来。副行只有时间，而
-                            「上次活动 14:02」和「此刻正在跑」在一列里长得一
-                            模一样——读者要靠自己记得刚才在哪一行按了发送。
-                            点在标题前面而不是行尾：行尾归重命名和删除，把一个
-                            只读的状态放进一排可点的东西里，是在邀请人点它。 */}
-                        {runningIds.has(held.session_id) ? (
-                          <span
-                            aria-hidden="true"
-                            className="aw-code-recent-running"
-                          />
-                        ) : null}
-                        {held.title ?? shortId(held.session_id)}
-                        {runningIds.has(held.session_id) ? (
-                          <span className="aw-sr-only">（正在运行）</span>
-                        ) : null}
-                      </span>
-                      {/* 副行说时间，以及——只在「全部会话」那一档——它属于哪个
-                          文件夹。
-                          稿子上这里是「3 轮 · 9 个文件 · 14:02」，轮数和文件数
-                          这个接口仍然给不出来，而且**是被明确拒绝的**：
-                          `SessionView` 的 docstring 与 ADR-047 §4 说，任何一个
-                          都会把列表行从一次查询变成每行一次查询，正确的未来机
-                          制是投影表。编一个数比空着更糟：它会被当成真的读。
-                          文件夹名不属于那一类。`project_id` 本来就在每一行上，
-                          名字来自一份**已经被取着**的项目列表，所以它是一次
-                          join，不是第 N 次查询。
-                          收窄那一档不画它：整份列表都在同一个文件夹里的时候，
-                          在每一行上重复那个名字，是把一个不区分任何东西的字段
-                          印 N 遍。
-                          没有 last_activity_at 的会话（开了没用过）不留占位，
-                          一行空的副行只是让每张卡都变高。 */}
-                      {scoped || held.project_id == null ? null : (
-                        <span className="aw-code-recent-project">
-                          {projectNames.get(held.project_id) ?? "别的文件夹"}
-                        </span>
-                      )}
-                      {held.last_activity_at === null ? null : (
-                        <time
-                          className="aw-code-recent-when"
-                          dateTime={held.last_activity_at}
-                        >
-                          {formatDateTime(held.last_activity_at)}
-                        </time>
-                      )}
-                    </button>
-                    {/* Always rendered, not revealed on hover: a control that
-                        only exists under a pointer is one a keyboard cannot
-                        reach and a touch screen never shows. CSS dims it until
-                        the row is hovered or the button focused. */}
-                    <span className="aw-session-row-actions aw-code-recent-actions">
-                      <button
-                        aria-label={`重命名会话 ${held.title ?? held.session_id}`}
-                        className="aw-code-recent-rename"
-                        onClick={() => {
-                          beginRename(held.session_id);
-                        }}
-                        ref={(node) => {
-                          if (node === null) {
-                            renameActionRefs.current.delete(held.session_id);
-                          } else {
-                            renameActionRefs.current.set(held.session_id, node);
-                          }
-                        }}
-                        title="重命名"
-                        type="button"
-                      >
-                        <Pencil aria-hidden size={12} />
-                      </button>
-                      <button
-                        aria-label={`删除会话 ${held.title ?? held.session_id}`}
-                        className="aw-code-recent-delete"
-                        onClick={() => {
-                          onDelete(held.session_id);
-                        }}
-                        title="删除"
-                        type="button"
-                      >
-                        <Trash2 aria-hidden size={13} />
-                      </button>
-                    </span>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
+          view.groups.map((group) => (
+            <div className="aw-code-session-group" key={group.key}>
+              {group.label === null ? null : (
+                <h3 className="aw-code-session-group-name">{group.label}</h3>
+              )}
+              <ul>
+                {group.sessions.map((held) => (
+                  <li key={held.session_id}>{row(held)}</li>
+                ))}
+              </ul>
+            </div>
+          ))
         )}
+        {/* 折起来的那些，数出来。
+            长在滚动区**里面**、列表末尾，和下面那颗「只看这个文件夹」不同：
+            它展开的东西就接在它下面，所以它该在那个位置上；而那一颗切换的是
+            整份列表的范围，一按下去列表会从 2 条变成 50 条，跟着沉到底下就
+            够不着了——所以那一颗钉在栏底。 */}
+        {view.hidden === 0 ? null : (
+          <button
+            className="aw-code-sessions-more"
+            onClick={() => setExpanded(true)}
+            type="button"
+          >
+            还有 {view.hidden} 段 · 全部显示
+          </button>
+        )}
+        {expanded && view.matched > VISIBLE_SESSIONS ? (
+          <button
+            className="aw-code-sessions-more"
+            onClick={() => setExpanded(false)}
+            type="button"
+          >
+            收起，只看最近 {VISIBLE_SESSIONS} 段
+          </button>
+        ) : null}
       </div>
 
       {/* 被这次收窄挡在外面的会话，数出来。

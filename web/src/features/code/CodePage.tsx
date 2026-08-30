@@ -47,7 +47,6 @@ import {
   Monitor as MonitorIcon,
   PanelLeft,
   PanelRightOpen,
-  Paperclip,
   UserCheck,
   Zap,
 } from "lucide-react";
@@ -68,6 +67,7 @@ import {
   downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
+  getCodeTools,
   getCodeWorkspace,
   getProject,
   listCodeSessions,
@@ -103,6 +103,14 @@ import {
   submitTextareaOnEnter,
 } from "../../components/ModeStart";
 import { CodeSessionRail } from "./CodeSessionRail";
+import { COMMANDS_SUBMENU, ComposerMenu } from "./ComposerMenu";
+import { SessionMenu } from "./SessionMenu";
+import { RISK_LABELS, UNREPEATABLE } from "./toolVocabulary";
+import {
+  describeFolderUpload,
+  MAX_WORKSPACE_ENTRIES,
+  planFolderUpload,
+} from "./workspaceNames";
 import { ProjectChooser } from "./ProjectChooser";
 import { ProjectFileTree } from "./ProjectFileTree";
 import { RunPanel } from "../../components/RunPanel";
@@ -204,28 +212,10 @@ const DECISIONS: { decision: ApprovalDecision; label: string }[] = [
   { decision: "deny", label: "拒绝" },
 ];
 
-/** Risks whose second occurrence deserves the same question as their first. */
-const UNREPEATABLE = new Set(["external", "destructive"]);
-
-/**
- * What a risk means, said to the person being asked.
- *
- * `risk` has been on the wire since approvals existed (`api/types.ts:119`) and
- * this console used it for exactly one thing: deciding whether to *remove* the
- * 本次会话都允许 button. So the reader was asked to approve a tool call with no
- * indication of what kind of call it was, and -- when the third button was
- * missing -- no explanation of why the choice they had last time was gone.
- * That is not "conveyed by colour alone"; it is not conveyed at all.
- *
- * Unknown values fall through to the raw string rather than to silence: a risk
- * this console has not been taught is still a fact the reader should see.
- */
-const RISK_LABELS: Readonly<Record<string, string>> = {
-  read: "只读取",
-  write: "会写入",
-  external: "会连到外部",
-  destructive: "不可撤销",
-};
+/* `RISK_LABELS` 与 `UNREPEATABLE` 搬去了 `toolVocabulary.ts`：待批准那张卡说的是
+   一次已经提议了的调用，输入框菜单里那份清单说的是下一轮**可能**发生的调用
+   （ADR-096），而两处说的是同一件事。抄成两份的话，第二份会在有人加一档风险的
+   那天开始和第一份不一样。 */
 
 export function CodePage() {
   const { identity } = useIdentity();
@@ -241,6 +231,17 @@ export function CodePage() {
   //: for the whole of the next session's fetch.
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
+  //: 输入框左边那颗「+」开着没有，以及开着的时候展开的是哪一栏。
+  //:
+  //: 提到这里而不是留在 `Menu` 里，是为了那条 `/`：在空输入框里打一个斜杠，开的
+  //: 是同一个菜单的同一栏，而不是第二份长得像它的清单。两份清单会分叉，而它们说的
+  //: 是同一组东西。
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuSubmenu, setMenuSubmenu] = useState<string | null>(null);
+  //: 页头的标题此刻是不是一个输入框。左栏那一行有它自己的一份（那是列表行的动作），
+  //: 而这一份归页头，因为左栏在窄屏上是抽屉、在宽屏上折得起来——一颗按下去之后什么
+  //: 都没发生的「重命名」是最坏的一种反馈。
+  const [headerRenaming, setHeaderRenaming] = useState(false);
   //: 这一轮的权限（ADR-0079 + ADR-087）。留在组件里而不是写进 URL 或
   //: localStorage：它是**一轮**的属性，回合起始就被冻进信封，一个跨会话记住
   //: 的开关会让「这一轮到底能不能写」变成一个读者要去别处查的问题。默认
@@ -384,6 +385,95 @@ export function CodePage() {
     () => sessions.data?.sessions ?? [],
     [sessions.data?.sessions],
   );
+
+  // 这段会话所属项目的目录，没有就是 null。ADR-072 的 `root_path` 可空，而空是
+  // 正常状态——绝大多数会话没有目录，树整块不出现，而不是出现一个空的树。
+  const heldProjectId = known.find(
+    (one) => one.session_id === sessionId,
+  )?.project_id;
+  const project = useQuery({
+    queryKey: ["project", identity, heldProjectId],
+    queryFn: ({ signal }) =>
+      getProject(identity, heldProjectId as string, signal),
+    enabled: heldProjectId != null,
+  });
+  const projectRoot = project.data?.root_path ?? null;
+
+  // 下一轮会被给出哪些工具（ADR-096）。
+  //
+  // 一个进程生命周期内的常量，乘上这段会话的一个属性（它的项目有没有登记目录）
+  // ——所以它不轮询，也不跟着回合失效：跑完一轮不会改变下一轮拿到什么。跟着
+  // `heldProjectId` 重取，因为改归属确实会改答案。
+  const toolOffer = useQuery({
+    queryKey: ["code-tools", identity, sessionId, heldProjectId ?? null],
+    queryFn: ({ signal }) => getCodeTools(identity, sessionId as string, signal),
+    enabled: sessionId !== undefined,
+    staleTime: Infinity,
+    // 一次就够。取不到的时候菜单里说的是「这次没取到」，而不是转圈——它不挡发送，
+    // 重试三次只会让那句话晚三秒出现。
+    retry: false,
+  });
+
+  // 被勾掉的工具，按会话记。
+  //
+  // 只存**被勾掉的**，不存被勾上的：绝大多数会话一个都没勾掉，于是这张表在绝大多数
+  // 时候是空的，而「全都要」是它的缺省而不是一份要维护的名单。反过来存的那一版会在
+  // 部署新增一个工具的那天，把它从每一段老会话里悄悄收窄掉——名单是上一次读目录时
+  // 的那一份。
+  //
+  // 写回时丢掉空集合，所以这张表的大小是「真的勾掉过东西的会话数」，不是会话数。
+  const [excludedBySession, setExcludedBySession] = useStoredState<
+    Record<string, string[]>
+  >("aw.code.tools.excluded.v1", {});
+  /**
+   * 这一轮实际生效的勾掉集合。
+   *
+   * 和存下来的那一份**求交**，理由是存的那一份会过期：offer 会变（改归属、部署改
+   * 配置），而一个名字不在 offer 里时，界面上没有任何一行代表它——把它算进「勾掉了
+   * 几个」，那个数就会指着一个屏幕上不存在的东西。
+   *
+   * 交完之后如果**每一个**都被勾掉了，整份勾选一起丢掉。那是一种只有过期能造出来
+   * 的状态（界面不让人取消最后一个），而它的两种渲染都是假的：照实画会显示「一个
+   * 工具都没有」而实际上服务端会照全部跑（空数组是被 422 的），照全部画又和那些
+   * 没打勾的方框对不上。丢掉它，屏幕上写的就是真会跑的那一份。
+   */
+  const excludedTools = useMemo(() => {
+    const stored = sessionId === undefined ? [] : (excludedBySession[sessionId] ?? []);
+    const offered = toolOffer.data?.tools;
+    if (offered === undefined) return new Set(stored);
+    const held = new Set(stored);
+    const live = offered.map((tool) => tool.name).filter((name) => held.has(name));
+    return new Set(live.length === offered.length ? [] : live);
+  }, [excludedBySession, sessionId, toolOffer.data]);
+  const setExcludedTools = useCallback(
+    (next: ReadonlySet<string>) => {
+      if (sessionId === undefined) return;
+      setExcludedBySession((held) => {
+        const copy = { ...held };
+        if (next.size === 0) delete copy[sessionId];
+        else copy[sessionId] = [...next].sort();
+        return copy;
+      });
+    },
+    [sessionId, setExcludedBySession],
+  );
+
+  /**
+   * 这一轮真正要发的保留名单，或者 `undefined`（= 全部，不发这个字段）。
+   *
+   * 交集而不是差集：`excludedTools` 可能还留着一个这一轮根本没被 offer 的名字——
+   * 目录是在 `act` 档读的，读者随后把控件拨到了「计划」。发一份含着它的名单，服务端
+   * 会照样求交（ADR-096 §3.1），但**发一份碰巧等于全部的名单**是另一回事：那会在
+   * 部署新增一个工具的那天变成一次没有人打算做的收窄。所以等于全部时不发。
+   */
+  const keptTools = useMemo(() => {
+    const offered = toolOffer.data?.tools;
+    if (offered === undefined || excludedTools.size === 0) return undefined;
+    const kept = offered
+      .map((tool) => tool.name)
+      .filter((name) => !excludedTools.has(name));
+    return kept.length === offered.length ? undefined : kept;
+  }, [excludedTools, toolOffer.data]);
 
   const { steps, thinking, thinkingCallId, answer, progress } = useCodeStream(
     identity,
@@ -736,6 +826,10 @@ export function CodePage() {
         newIdempotencyKey("code"),
         turnMode,
         turnApprovals,
+        undefined,
+        // 只在真的收窄了的时候发（ADR-096）。一份碰巧等于全部的名单，会在部署新增
+        // 一个工具的那天变成一次没有人打算做的收窄——名单是上一次读目录时的那一份。
+        keptTools,
       );
       // Remembered only on the way out of a plan turn that produced something.
       // A plan turn that failed has nothing to run, and an act turn clears it:
@@ -801,6 +895,7 @@ export function CodePage() {
     [
       identity,
       instruction,
+      keptTools,
       navigate,
       permission,
       queries,
@@ -935,6 +1030,70 @@ export function CodePage() {
     [identity, sessionId],
   );
 
+  /**
+   * 一整个文件夹，进这段会话的工作区。
+   *
+   * 三件事在真的开始传之前发生，因为它们之后就来不及说了：
+   *
+   * 1. **算一份计划**（`planFolderUpload`）。工作区是平的，所以路径会被压进名字里，
+   *    而这是一次有损变换——`src/app/main.ts` 会变成 `src-app-main.ts`。读者事后在
+   *    工作区里找不到 `main.ts` 时，会以为上传失败了。
+   * 2. **撞上限就先说**。工作区一共收 `MAX_WORKSPACE_ENTRIES` 条，而浏览器的目录
+   *    选择器给的是整棵树。传到第 256 个再被服务端拒绝，代价是前面 255 次往返。
+   * 3. **让人确认**。`window.confirm` 而不是自己的对话框，理由和删除会话那一处
+   *    一样：这个控制台没有模态组件，为这里发明一个是第二件要审的东西。
+   */
+  const attachFolder = useCallback(
+    async (chosen: FileList | null) => {
+      if (chosen === null || chosen.length === 0) return;
+      if (sessionId === undefined) {
+        setFault({
+          scope: null,
+          text: "先说一句要做的事，会话开起来之后就能上传文件夹了。",
+        });
+        return;
+      }
+      const plan = planFolderUpload(chosen);
+      if (plan.entries.length === 0) {
+        setFault({
+          scope: sessionId,
+          text: "这个文件夹里没有可以上传的文件（node_modules / .git 这些不传）。",
+        });
+        return;
+      }
+      if (plan.entries.length > MAX_WORKSPACE_ENTRIES) {
+        setFault({
+          scope: sessionId,
+          text: `这个文件夹有 ${String(plan.entries.length)} 个文件，工作区一共只收 ${String(MAX_WORKSPACE_ENTRIES)} 条。挑一个小一点的目录。`,
+        });
+        return;
+      }
+      if (!window.confirm(describeFolderUpload(plan))) return;
+      setUploading(true);
+      setFault(null);
+      try {
+        // 顺序传，和单文件那一条同一个理由：每一次写都拿它读到的版本做一次
+        // compare-and-set，两个在飞的写会撞，输的那个被拒。
+        for (const entry of plan.entries) {
+          const listing = await putCodeWorkspaceFile(
+            identity,
+            sessionId,
+            entry.file,
+            entry.name,
+          );
+          if (shown.current.sessionId !== sessionId) return;
+          setFiles(displayable(listing.files));
+          setLoadedFor(sessionId);
+        }
+      } catch (cause: unknown) {
+        setFault({ scope: sessionId, text: describe(cause) });
+      } finally {
+        setUploading(false);
+      }
+    },
+    [identity, sessionId],
+  );
+
   const remove = useCallback(
     async (target: string) => {
       // Confirmed because it cannot be undone and the row it removes is a
@@ -977,18 +1136,7 @@ export function CodePage() {
     [identity, navigate, queries],
   );
 
-  // 这段会话所属项目的目录，没有就是 null。ADR-072 的 `root_path` 可空，而空是
-  // 正常状态——绝大多数会话没有目录，树整块不出现，而不是出现一个空的树。
-  const heldProjectId = known.find(
-    (one) => one.session_id === sessionId,
-  )?.project_id;
-  const project = useQuery({
-    queryKey: ["project", identity, heldProjectId],
-    queryFn: ({ signal }) =>
-      getProject(identity, heldProjectId as string, signal),
-    enabled: heldProjectId != null,
-  });
-  const projectRoot = project.data?.root_path ?? null;
+
 
   // 目录树跟着写入走。
   //
@@ -1153,29 +1301,13 @@ export function CodePage() {
             <FolderIcon aria-hidden="true" size={13} />
             <strong>{project.data?.name ?? "项目"}</strong>
           </span>
-          <button
-            className="aw-code-pick is-action"
-            onClick={() => {
-              setPanelChoice(true);
-              setDirectoryChoice(true);
-            }}
-            type="button"
-          >
-            看这个文件夹
-          </button>
-          {/* 换文件夹是**开一段新会话**，不是把这一段搬走：一段会话属于一个项目
-              （ADR-074 §7.1），搬走会让「产物存哪了」重新有两个答案。所以它回到
-              起始屏，而不是就地改。 */}
-          <button
-            className="aw-code-pick is-action"
-            onClick={() => {
-              setStartingIn(null);
-              void navigate("/code");
-            }}
-            type="button"
-          >
-            换文件夹
-          </button>
+          {/* 「看这个文件夹」和「换文件夹」曾经就在这一行上，长成两枚会动的 chip。
+              它们搬进了输入框左边那颗「+」，而这一行退回它本来的样子：**只说这一
+              轮落在哪**，不做事。
+              两个理由。一是这一行原来同时是状态和动作——两枚灰底的 chip 里，前两枚
+              点不动、后两枚点得动，而它们长得一样。二是那两件事和「上传文件」「换
+              一个文件夹」本来就是一组：这一句话之外我还想给这一轮加点什么——而它
+              们此前散成四个入口、四种形状。 */}
         </div>
       )}
       {/* 整段会话的合计。和 Chat 同一个位置、同一个零件。 */}
@@ -1217,29 +1349,52 @@ export function CodePage() {
             </button>
           ))}
         </div>
-        {sessionId === undefined ? null : (
-          <label
-            className={`aw-code-attach ${uploading ? "is-busy" : ""}`}
-            title="上传文件到工作区"
-          >
-            <Paperclip aria-hidden size={16} />
-            <span className="aw-sr-only">
-              {uploading ? "正在上传" : "上传文件"}
-            </span>
-            <input
-              disabled={uploading}
-              multiple
-              onChange={(event) => {
-                void attach(event.target.files);
-                // Cleared so choosing the same file twice fires `change`
-                // again -- a re-upload after an edit is an ordinary thing to
-                // want, and without this the second attempt does nothing.
-                event.target.value = "";
-              }}
-              type="file"
-            />
-          </label>
-        )}
+        <ComposerMenu
+          catalogue={toolOffer.data}
+          catalogueFailed={toolOffer.isError}
+          disabled={running}
+          excluded={excludedTools}
+          onInsertPrompt={(prompt) => {
+            // 追加而不是替换：读者可能已经打了半句。前面有字就先补一个换行，
+            // 免得模板和那半句黏成一行。
+            setInstruction((held) =>
+              held.trim() === "" ? prompt : `${held.replace(/\s+$/, "")}\n${prompt}`,
+            );
+            window.requestAnimationFrame(() => instructionRef.current?.focus());
+          }}
+          onOpenChange={(next) => {
+            setMenuOpen(next);
+            if (!next) setMenuSubmenu(null);
+          }}
+          onPickFiles={(chosen) => void attach(chosen)}
+          onPickFolder={(chosen) => void attachFolder(chosen)}
+          onResetTools={() => setExcludedTools(new Set())}
+          onShowFolder={
+            projectRoot === null
+              ? null
+              : () => {
+                  setPanelChoice(true);
+                  setDirectoryChoice(true);
+                }
+          }
+          onSwitchFolder={() => {
+            setStartingIn(null);
+            void navigate("/code");
+          }}
+          onToggleTool={(name) => {
+            const next = new Set(excludedTools);
+            if (next.has(name)) next.delete(name);
+            else next.add(name);
+            setExcludedTools(next);
+          }}
+          open={menuOpen}
+          openSubmenu={menuSubmenu}
+          planning={permission === "plan"}
+          sessionId={sessionId}
+          starters={CODE_STARTERS}
+          uploading={uploading}
+          writeGate={permission === "ask"}
+        />
         <label className="aw-sr-only" htmlFor="aw-code-instruction">
           要做的事
         </label>
@@ -1252,7 +1407,24 @@ export function CodePage() {
           onChange={(event) => {
             setInstruction(event.target.value);
           }}
-          onKeyDown={submitTextareaOnEnter}
+          onKeyDown={(event) => {
+            // 空输入框里的一个 `/`，开的是「+」菜单的「快捷指令」那一栏——不是第二份
+            // 长得像它的清单。两份会分叉，而它们说的是同一组东西。
+            //
+            // 只在**空**输入框里，且不在拼音输入过程中：一个正在被输入法组合的按键
+            // 会同时报出 `isComposing`，而在一句中文中间打斜杠是完全正常的事。
+            if (
+              event.key === "/" &&
+              instruction === "" &&
+              !event.nativeEvent.isComposing
+            ) {
+              event.preventDefault();
+              setMenuSubmenu(COMMANDS_SUBMENU);
+              setMenuOpen(true);
+              return;
+            }
+            submitTextareaOnEnter(event);
+          }}
           placeholder="描述你要做的事"
           ref={instructionRef}
           rows={3}
@@ -1398,7 +1570,44 @@ export function CodePage() {
             <PanelLeft aria-hidden size={18} />
           </IconButton>
           <div className="aw-code-header-copy">
-            <h1>{title ?? "新会话"}</h1>
+            {/* 改名就地发生，不把人送去左栏那一行。
+                左栏那份 inline rename 还在（它是列表里那一行自己的动作），但页头
+                这一颗够不着它：那一栏在窄屏上是抽屉，在宽屏上可以被折起来，而
+                「重命名」按下去之后什么都没发生是最坏的一种反馈。 */}
+            {headerRenaming && sessionId !== undefined ? (
+              <form
+                className="aw-code-header-rename"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const field = new FormData(event.currentTarget).get("title");
+                  const next = typeof field === "string" ? field.trim() : "";
+                  setHeaderRenaming(false);
+                  if (next !== "" && next !== (title ?? "")) {
+                    void rename(sessionId, next);
+                  }
+                }}
+              >
+                <label className="aw-sr-only" htmlFor="aw-code-header-rename">
+                  会话名字
+                </label>
+                <input
+                  autoFocus
+                  defaultValue={title ?? ""}
+                  id="aw-code-header-rename"
+                  name="title"
+                  onBlur={() => setHeaderRenaming(false)}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape") return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setHeaderRenaming(false);
+                  }}
+                />
+              </form>
+            ) : (
+              <h1>{title ?? "新会话"}</h1>
+            )}
             {/* 归属长在这一段自己的头部，和对话页同一个位置和同一个组件。
                 一段编码会话此前是这三个工作区里唯一不能归到项目下的——
                 服务端一直允许（它就是一行 mode="code" 的会话），只是界面
@@ -1439,6 +1648,32 @@ export function CodePage() {
               <PanelRightOpen aria-hidden size={15} />
               工作区 {files.length}
             </button>
+          )}
+          {/* 「工作区 N」那颗留着，没有被这颗 ⋮ 吃掉：它是一个带 `aria-expanded`
+              的**开关**，读者需要它一眼看得见开着没有。菜单里那一项只会打开，
+              两者不是同一件事——一个说状态，一个是入口。 */}
+          {sessionId === undefined ? null : (
+            <SessionMenu
+              fileCount={files.length}
+              onDelete={() => remove(sessionId)}
+              onRename={() => setHeaderRenaming(true)}
+              onShowFolder={
+                projectRoot === null
+                  ? null
+                  : () => {
+                      setPanelChoice(true);
+                      setDirectoryChoice(true);
+                    }
+              }
+              onShowWorkspace={
+                files.length === 0
+                  ? null
+                  : () => {
+                      setPanelChoice(true);
+                      setDirectoryChoice(false);
+                    }
+              }
+            />
           )}
         </header>
 

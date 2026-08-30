@@ -260,6 +260,58 @@ export interface CodeAskResponse {
    */
   error_code?: string | null;
   error_message?: string | null;
+  /**
+   * 这一轮**实际**拿到的工具，三次收窄都落定之后（ADR-096）。
+   *
+   * 这是唯一能回答「我勾掉的那些生效了没有」的地方。三次收窄里有两次不是调用方
+   * 做的——部署自己的 offer，以及这段会话的项目有没有登记目录——所以「我发了四个
+   * 名字、跑了两个」是正常结果而不是缺陷，而这个响应里其他任何字段都报不出它。
+   *
+   * 可选，因为比这个字段旧的服务端照样答得出一个回合。
+   */
+  allowed_tools?: string[];
+}
+
+/**
+ * 一个工具的风险等级，工具自己声明的那一个。
+ *
+ * 和后端 `ToolRisk` 同一组值。审批闸门与计划模式读的都是它，所以界面上任何一处
+ * 关于「这个工具会做什么」的措辞，都要从这里推，而不是从名字前缀猜。
+ */
+export type ToolRisk = "read" | "write" | "external" | "destructive";
+
+export interface CodeToolView {
+  name: string;
+  /**
+   * 工具自己的描述——**模型读到的那一句**，不是为人另写的一句。
+   *
+   * 两套措辞会让「它为什么不用那个 grep」变成一个必须先 diff 才回答得了的问题。
+   */
+  description: string;
+  risk: ToolRisk;
+  /** 计划模式还留不留它（ADR-0079）。服务端调用同一个函数算出来的。 */
+  kept_in_plan: boolean;
+}
+
+/**
+ * **下一个**回合会被给出什么（ADR-096）。
+ *
+ * 时态就是契约。这描述的是一个还不存在的回合；转录里某一个已经跑过的回合签的是
+ * 它自己那份信封，答它的是 `CodeAskResponse.allowed_tools`。两个数长得一模一样
+ * 而含义相反，所以它们连出现的位置都不共用。
+ */
+export interface CodeToolsResponse {
+  /** 这一轮说哪一种文件语言（ADR-073）：扁平工作区，还是这段会话的项目目录。 */
+  surface: "workspace" | "project";
+  /**
+   * 在这段会话自己加码之前，哪些风险会停在人这里（ADR-087）。
+   *
+   * 选了「写入前问我」的回合会在这之上再加 `write`；那一步由界面自己算，因为它
+   * 就是提供那个控件的地方。
+   */
+  approval_required_risks: ToolRisk[];
+  /** offer 本身，**没有收窄过**：`mode` 与勾选都还没应用。 */
+  tools: CodeToolView[];
 }
 
 export interface PendingApprovalView {

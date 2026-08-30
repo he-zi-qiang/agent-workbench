@@ -11,6 +11,7 @@ import {
   downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
+  getCodeTools,
   getCodeWorkspace,
   getCodeWorkspaceFileBlob,
   getCodeWorkspaceFileText,
@@ -49,6 +50,8 @@ vi.mock("../../api/client", async () => ({
   getCodeApprovals: vi.fn(() => Promise.resolve({ approvals: [] })),
   getCodeHistory: vi.fn(() => Promise.resolve({ messages: [] })),
   getCodeWorkspace: vi.fn(() => Promise.resolve({ files: [] })),
+  // ADR-096。默认给一份项目侧的 offer，因为这些用例默认的会话就有目录。
+  getCodeTools: vi.fn(() => Promise.resolve(TOOL_OFFER)),
   getCodeWorkspaceFileText: vi.fn(() =>
     Promise.resolve({ text: "", truncated: false }),
   ),
@@ -97,6 +100,32 @@ vi.mock("../../api/client", async () => ({
     }),
   ),
 }));
+
+/** 下一轮会拿到什么（ADR-096）。名字与风险照抄真实的项目侧工具面。 */
+const TOOL_OFFER = {
+  surface: "project" as const,
+  approval_required_risks: ["destructive" as const],
+  tools: [
+    {
+      name: "project_read",
+      description: "Read a file inside the project directory.",
+      risk: "read" as const,
+      kept_in_plan: true,
+    },
+    {
+      name: "project_write",
+      description: "Write a file into the project directory.",
+      risk: "write" as const,
+      kept_in_plan: false,
+    },
+    {
+      name: "project_run",
+      description: "Run a command on this machine.",
+      risk: "destructive" as const,
+      kept_in_plan: false,
+    },
+  ],
+};
 
 const PROJECT = {
   project_id: "prj_1",
@@ -1448,8 +1477,12 @@ describe("CodePage", () => {
 
     // The control sits with the composer: attaching a file is part of asking,
     // not a property of the file pane it used to live in.
+    //
+    // 它现在是「+」菜单里的一项，而这条断言够到的是那颗菜单项按下去时点击的那个
+    // 隐藏 input。菜单项本身必须是 `role="menuitem"`，所以 `<label>` 包 input 那
+    // 个写法在这里做不成——`ComposerMenu` 的注释记着这次退让。
     const file = new File(["hello world"], "notes.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText(/上传/), file);
+    await user.upload(screen.getByLabelText("上传文件到工作区"), file);
 
     await waitFor(() => {
       expect(vi.mocked(putCodeWorkspaceFile).mock.calls[0]?.[2]).toBe(file);
@@ -1507,6 +1540,10 @@ describe("CodePage", () => {
     ).not.toBeInTheDocument();
     // Upload only appears after the first sentence creates a workspace. A
     // disabled paperclip on the start page was a control with no useful action.
+    //
+    // 「不出现」现在有两层，两层都断言：菜单里没有那两项，而且那两个隐藏的
+    // `<input type="file">` 也不在 DOM 里。它们带着 `aria-label`，留着就是留下
+    // 两个读屏软件念得出来、却没有任何入口能触发的控件。
     expect(screen.queryByLabelText(/上传/)).not.toBeInTheDocument();
   });
 
@@ -3000,21 +3037,27 @@ describe("CodePage", () => {
       await within(rail).findByText("另一个文件夹里的"),
     ).toBeInTheDocument();
 
-    // 到了「全部」这一档，每一行才说得出它属于哪个文件夹。
+    // 到了「全部」这一档，列表才说得出每一段属于哪个文件夹——而它说在**组的抬头**
+    // 上，不在每一行上。
     //
     // 这是切换器存在的**理由**的另一半：读者按它就是为了看到别处的会话，而在
-    // 这一行之前，来自不同文件夹的行长得一模一样——两段同名的会话（同一句话在
-    // 两个文件夹里各说过一次，是很常见的事）在这一列里不可分辨。
+    // 这之前，来自不同文件夹的行长得一模一样——两段同名的会话（同一句话在两个
+    // 文件夹里各说过一次，是很常见的事）在这一列里不可分辨。
+    //
+    // 分组替掉的是一句重复：此前这个名字印在每一行上，一份 40 条的列表里同一个
+    // 名字会出现 20 遍，而它要区分的东西只有 3 个。抬头说一次就够。
     //
     // 名字来自一份**已经被取着**的项目列表（`["projects", identity]`，
     // `ProjectChooser` 和 `ProjectPicker` 都在订阅它），所以这是一次 join，不是
     // 每行一次查询——后者正是 ADR-047 §4 拒绝在这一行上放轮数和文件数的理由。
     const elsewhere = within(rail)
       .getByText("另一个文件夹里的")
-      .closest("button");
-    expect(elsewhere?.textContent).toContain("别的文件夹");
-    const here = within(rail).getByText("这个文件夹里的").closest("button");
-    expect(here?.textContent).toContain(PROJECT.name);
+      .closest(".aw-code-session-group");
+    expect(elsewhere?.querySelector("h3")?.textContent).toBe("别的文件夹");
+    const here = within(rail)
+      .getByText("这个文件夹里的")
+      .closest(".aw-code-session-group");
+    expect(here?.querySelector("h3")?.textContent).toBe(PROJECT.name);
 
     // 收窄回去，标记就该消失：整份列表都在同一个文件夹里的时候，在每一行上重复
     // 那个名字，是把一个不区分任何东西的字段印 N 遍。
@@ -3026,9 +3069,14 @@ describe("CodePage", () => {
         within(rail).queryByText("另一个文件夹里的"),
       ).not.toBeInTheDocument();
     });
+    // 收窄回去，抬头就该消失：整份列表都在同一个文件夹里的时候，那个名字不区分
+    // 任何东西，而它已经写在上面那行「这个文件夹里的会话」里了。
     expect(
-      within(rail).getByText("这个文件夹里的").closest("button")?.textContent,
-    ).not.toContain(PROJECT.name);
+      within(rail)
+        .getByText("这个文件夹里的")
+        .closest(".aw-code-session-group")
+        ?.querySelector("h3"),
+    ).toBeNull();
   });
 
   it("folds the preview column away and remembers that, instead of popping it over the conversation", async () => {
@@ -3106,5 +3154,150 @@ describe("CodePage", () => {
     expect(
       within(pane).getByRole("heading", { name: "main.py" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("CodePage 的工具选取（ADR-096）", () => {
+  /** 打开「+」菜单，再展开「工具」那一栏。 */
+  async function openTools(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(
+      await screen.findByRole("button", { name: "添加文件、文件夹与工具" }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: /^工具/ }));
+  }
+
+  it("勾掉一个工具之后，发出去的那一轮就不带它", async () => {
+    // 这一条是整件事成不成立的地方。一个只改自己样子的勾选框，和一个真的收窄了
+    // 信封的勾选框，在屏幕上长得一模一样——而只有后者对得起「这一轮不会动它」。
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "看过了。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+      allowed_tools: ["project_read", "project_run"],
+    });
+
+    mounted();
+    await openTools(user);
+    await user.click(
+      await screen.findByRole("menuitemcheckbox", { name: /project_write/ }),
+    );
+    await user.keyboard("{Escape}{Escape}");
+    await user.type(screen.getByLabelText("要做的事"), "看一下这个目录");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalled();
+    });
+    // 发的是**保留**名单，不是被勾掉的那个：接口的语义是「留下这些」，而一份
+    // 「去掉这些」的名单没有任何一种写法能保证它只会变窄。
+    expect(vi.mocked(askCode).mock.calls[0]?.[7]).toEqual([
+      "project_read",
+      "project_run",
+    ]);
+  });
+
+  it("一个都没勾掉时不发这个字段，而不是发一份「碰巧等于全部」的名单", async () => {
+    // 一份等于全部的名单，会在部署新增一个工具的那天变成一次没有人打算做的收窄
+    // ——名单是上一次读目录时的那一份。
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "改好了。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted();
+    await user.type(await screen.findByLabelText("要做的事"), "加个功能");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalled();
+    });
+    expect(vi.mocked(askCode).mock.calls[0]?.[7]).toBeUndefined();
+  });
+
+  it("不让人把最后一个也勾掉", async () => {
+    // 一个工具都没有的信封会被服务端 422（空数组不是合法请求），而在读者点下去
+    // 之后才用一次失败告诉他这件事，比一开始就说勾不动要差。
+    const user = userEvent.setup();
+
+    mounted();
+    await openTools(user);
+    await user.click(
+      await screen.findByRole("menuitemcheckbox", { name: /project_write/ }),
+    );
+    await user.click(
+      await screen.findByRole("menuitemcheckbox", { name: /project_run/ }),
+    );
+
+    const last = await screen.findByRole("menuitemcheckbox", {
+      name: /project_read/,
+    });
+    expect(last).toBeDisabled();
+    expect(last).toHaveTextContent("至少留一个");
+  });
+
+  it("计划模式收走的那几个，说出自己为什么勾不动", async () => {
+    // 安静地消失会让读者以为这个部署根本没有写入工具。
+    const user = userEvent.setup();
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: "只做计划" }));
+    await openTools(user);
+
+    const write = await screen.findByRole("menuitemcheckbox", {
+      name: /project_write/,
+    });
+    expect(write).toBeDisabled();
+    expect(write).toHaveAttribute("aria-checked", "false");
+    expect(write).toHaveTextContent("计划模式已收走");
+    // 读的那个仍然勾着，仍然点得动。
+    expect(
+      await screen.findByRole("menuitemcheckbox", { name: /project_read/ }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("会停在人这里的那些工具，在勾选框上就说了", async () => {
+    // ADR-087。「改前问我」只能往部署自己那份上**加** `write`，减不掉任何东西，
+    // 所以这里是并集——`project_run` 在两档下都会先问。
+    const user = userEvent.setup();
+
+    mounted();
+    await openTools(user);
+    expect(
+      await screen.findByRole("menuitemcheckbox", { name: /project_run/ }),
+    ).toHaveTextContent("会先问你");
+    expect(
+      await screen.findByRole("menuitemcheckbox", { name: /project_write/ }),
+    ).not.toHaveTextContent("会先问你");
+
+    await user.keyboard("{Escape}{Escape}");
+    await user.click(screen.getByRole("button", { name: "改前问我" }));
+    await openTools(user);
+    expect(
+      await screen.findByRole("menuitemcheckbox", { name: /project_write/ }),
+    ).toHaveTextContent("会先问你");
+  });
+
+  it("目录取不到时说取不到，而不是画一栏空的工具", async () => {
+    // 一个空的工具栏读起来是「这一轮什么工具都没有」，而那是一句关于这个回合的
+    // 假话。发送不受影响：收窄是可选的，回合不是。
+    const user = userEvent.setup();
+    vi.mocked(getCodeTools).mockRejectedValue(new Error("boom"));
+
+    mounted();
+    await user.click(
+      await screen.findByRole("button", { name: "添加文件、文件夹与工具" }),
+    );
+
+    expect(
+      await screen.findByText(/这一轮会拿到哪些工具，这次没取到/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^工具/ })).not.toBeInTheDocument();
   });
 });
