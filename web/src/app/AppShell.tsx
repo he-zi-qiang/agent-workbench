@@ -1,13 +1,10 @@
 import {
   ChevronDown,
-  MonitorCog,
-  Moon,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
   Settings2,
-  Sun,
   X,
 } from "lucide-react";
 import {
@@ -27,11 +24,11 @@ import {
   useNavigationType,
 } from "react-router-dom";
 import { useStoredState } from "../hooks/useStoredState";
-import { EnvironmentDialog } from "./EnvironmentDialog";
+import { SettingsDialog } from "./SettingsDialog";
 import { useIdentity } from "./IdentityContext";
 import { isPathWithin, NAVIGATION } from "./navigation";
 import { QuickSwitcher } from "./QuickSwitcher";
-import { type ThemeMode, useTheme } from "./ThemeContext";
+import { THEME_LABEL, useTheme } from "./ThemeContext";
 import type { WorkspaceSidebarContextValue } from "./WorkspaceSidebar";
 
 const PRIMARY_NAVIGATION = NAVIGATION.filter((item) => item.primary);
@@ -50,12 +47,6 @@ interface PrimaryNavigationMemory {
   pendingIdentityPath: string | null;
   identityBoundaryActive: boolean;
 }
-
-const THEME_LABEL: Record<ThemeMode, { icon: typeof Sun; text: string }> = {
-  system: { icon: MonitorCog, text: "跟随系统" },
-  light: { icon: Sun, text: "浅色" },
-  dark: { icon: Moon, text: "深色" },
-};
 
 export function AppShell() {
   const { identity, editorOpen, setEditorOpen } = useIdentity();
@@ -162,8 +153,8 @@ export function AppShell() {
     setMobileMoreOpen(false);
     setQuickSwitcherOpen(true);
   }, []);
-  const openEnvironmentFromMore = useCallback(() => {
-    // Let EnvironmentDialog capture a trigger that remains mounted after the
+  const openSettingsFromMore = useCallback(() => {
+    // Let SettingsDialog capture a trigger that remains mounted after the
     // More sheet disappears, so closing the nested dialog restores focus to a
     // real control rather than to the removed sheet item.
     focusBeforeMore.current?.focus();
@@ -740,11 +731,11 @@ export function AppShell() {
               </button>
               <button
                 className="aw-mobile-more-link"
-                onClick={openEnvironmentFromMore}
+                onClick={openSettingsFromMore}
                 type="button"
               >
                 <Settings2 aria-hidden="true" size={19} />
-                <span>本地环境与身份</span>
+                <span>设置</span>
               </button>
             </nav>
           </section>
@@ -759,7 +750,7 @@ export function AppShell() {
           onClose={closeQuickSwitcher}
         />
       ) : null}
-      <EnvironmentDialog />
+      <SettingsDialog />
     </div>
   );
 }

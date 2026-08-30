@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { MonitorCog, Moon, Sun, type LucideIcon } from "lucide-react";
 import { useStoredState } from "../hooks/useStoredState";
 
 /**
@@ -21,6 +22,20 @@ import { useStoredState } from "../hooks/useStoredState";
  * 用户的复选框该显示什么，没有正确答案。
  */
 export const THEME_MODES = ["system", "light", "dark"] as const;
+
+/**
+ * 每一档在屏幕上叫什么、配哪个图标。
+ *
+ * 和 `THEME_MODES` 住在一起，因为凡是加一档的人必须同时给它一个名字——分成两个
+ * 文件的话，漏掉的那半在运行时是 `undefined.icon`，而它只在读者真的切到那一档时
+ * 才炸。
+ */
+export const THEME_LABEL: Record<ThemeMode, { icon: LucideIcon; text: string }> =
+  {
+    system: { icon: MonitorCog, text: "跟随系统" },
+    light: { icon: Sun, text: "浅色" },
+    dark: { icon: Moon, text: "深色" },
+  };
 export type ThemeMode = (typeof THEME_MODES)[number];
 
 /**
