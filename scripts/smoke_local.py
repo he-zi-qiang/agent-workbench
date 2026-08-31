@@ -42,6 +42,29 @@ import httpx
 #: and completed a minute later, which sent the reader to look at the wrong
 #: thing entirely.
 WORKER_TIMEOUT_SECONDS = 300.0
+
+#: The Task wait, kept apart from the ingestion one above because the two are
+#: measuring different work. 300s is what a demo graph costs; the console
+#: profile runs the real research graph -- understand -> plan -> route ->
+#: research -> synthesize -> critic -> quality_gate -- and the run this number
+#: was measured against settled `succeeded` after 301 seconds. One second past
+#: the shared deadline, and what that one second printed was not "slow": it was
+#: "the Task ended 'running'", under a hint asking whether the Task worker was
+#: running, about a Worker that had claimed the Task and was two nodes from
+#: finishing it. Sharing a constant made the cheaper of the two waits the
+#: ceiling for the more expensive one.
+TASK_TIMEOUT_SECONDS = 900.0
+
+#: Nothing moves these on its own. `waiting_approval` is a Worker that released
+#: its lease because a human decision is owed; `waiting_migration` is a graph
+#: this deployment cannot run, which is also a human's call. Polling either
+#: until the deadline buys nothing and spends the reader's whole wait before
+#: saying anything, so the wait ends the moment one is seen.
+PARKED_TASK_STATUSES = frozenset({"waiting_approval", "waiting_migration"})
+
+#: The Task's verdict. No Worker resumes one of these.
+SETTLED_TASK_STATUSES = frozenset({"succeeded", "failed", "cancelled", "dead_letter"})
+
 POLL_SECONDS = 2.0
 
 SAMPLE = """The application performs one dense and sparse fusion per query.
@@ -229,15 +252,21 @@ def _chat_is_served(client: httpx.Client) -> bool:
 def _await_task(
     client: httpx.Client, args: argparse.Namespace, task_id: str
 ) -> dict[str, Any]:
-    """Wait for a Worker to claim and settle the Task."""
+    """Wait until the Task settles, parks, or outlasts the wait.
 
-    deadline = time.monotonic() + WORKER_TIMEOUT_SECONDS
+    Returns whatever the last poll saw, status included. Turning that into a
+    verdict is the caller's job, and there are three answers to tell apart
+    rather than one -- see the branch that reads it.
+    """
+
+    deadline = time.monotonic() + TASK_TIMEOUT_SECONDS
+    stop = SETTLED_TASK_STATUSES | PARKED_TASK_STATUSES
     task: dict[str, Any] = {}
     while time.monotonic() < deadline:
         response = client.get(f"/v1/tasks/{task_id}", headers=_headers(args))
         response.raise_for_status()
         task = response.json()
-        if task["status"] in {"succeeded", "failed", "cancelled", "dead_letter"}:
+        if task["status"] in stop:
             return task
         time.sleep(POLL_SECONDS)
     return task
@@ -328,11 +357,36 @@ def main(argv: list[str] | None = None) -> int:
         _fact("task_id", task_id)
 
         task = _await_task(client, args, task_id)
-        _fact("status", task.get("status"))
-        if task.get("status") != "succeeded":
+        status = task.get("status")
+        _fact("status", status)
+        # Three different things used to print as one sentence -- "the Task
+        # ended 'running' rather than succeeded", under a hint pointing at the
+        # Worker. Only one of the three is about the Worker, and `running` is
+        # not even a state a Task can end in. What the reader was sent to check
+        # was, every time, the thing that was already working.
+        if status in PARKED_TASK_STATUSES:
             return _fail(
-                f"the Task ended {task.get('status')!r} rather than succeeded",
-                "scripts/dev.sh worker   (is the Task worker running?)",
+                f"the Task is parked at {status!r}; nothing is executing it",
+                f"a decision is owed, not a restart -- GET /v1/tasks/{task_id}"
+                f"/timeline for where it stopped",
+            )
+        if status not in SETTLED_TASK_STATUSES:
+            # The wait ran out while the Task was still moving, which is not a
+            # verdict at all. Which non-terminal state it is in decides who to
+            # suspect: `queued` means nothing ever claimed it, `running` means
+            # something did and is still at it.
+            return _fail(
+                f"the Task was still {status!r} after "
+                f"{TASK_TIMEOUT_SECONDS:.0f}s, which is not a failure",
+                "scripts/dev.sh worker   (nothing claimed it)"
+                if status == "queued"
+                else f"a Worker has it and has not finished; ask again: "
+                f"GET /v1/tasks/{task_id}",
+            )
+        if status != "succeeded":
+            return _fail(
+                f"the Task settled {status!r} rather than succeeded",
+                f"GET /v1/tasks/{task_id}/timeline for the event that ended it",
             )
 
         timeline = client.get(
@@ -341,7 +395,8 @@ def main(argv: list[str] | None = None) -> int:
             params={"limit": 50},
         )
         timeline.raise_for_status()
-        kinds = [event["event_type"] for event in timeline.json()["events"]]
+        events = timeline.json()["events"]
+        kinds = [event["event_type"] for event in events]
         _fact("timeline", " -> ".join(kinds))
         # A settled Task is not a working one. `succeeded` is about the graph
         # reaching its end, and a run whose every tool call was refused reaches
@@ -350,12 +405,33 @@ def main(argv: list[str] | None = None) -> int:
         # and it is what it printed before the scopes above were sent.
         refused = kinds.count("ToolFailed")
         if refused:
+            # The codes themselves, counted, rather than a sentence guessing at
+            # one of them. This used to name `missing_permission_scope` as the
+            # thing to go and check, which is the failure this guard was
+            # written for -- and on the console profile the ordinary answer is
+            # `tool_failed` from `fetch_page`, because the open web is full of
+            # pages that do not come back. Sending the reader to widen
+            # `--scopes` over a page that 403'd is the same wrong turn the
+            # Task-status branch above used to send them on.
+            codes: dict[str, int] = {}
+            for event in events:
+                if event["event_type"] != "ToolFailed":
+                    continue
+                payload = event.get("payload") or {}
+                error = payload.get("error") or {}
+                code = str(error.get("code") or "unknown")
+                codes[code] = codes.get(code, 0) + 1
             _fact("tool calls that failed", refused)
+            _fact(
+                "their error codes",
+                ", ".join(f"{code} x{count}" for code, count in sorted(codes.items())),
+            )
             return _fail(
                 f"the Task settled {task.get('status')!r} with {refused} failed "
                 "tool calls",
-                "read the timeline's ToolFailed errors; `missing_permission_scope` "
-                "means --scopes is narrower than this profile's envelope",
+                "`missing_permission_scope` means --scopes is narrower than this "
+                "profile's envelope; `tool_failed` is the tool's own refusal and "
+                "for `fetch_page` usually means the page did not come back",
             )
 
         chat_served = _chat_is_served(client)
