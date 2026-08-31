@@ -27,6 +27,79 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-31（第五十九批）：给「配置叶子有没有读者」装一个会失败的机制
+
+A-07 与 F-26 各自接了一个字段就关了，两次都靠人工读 `settings.py` 发现，
+**两次都没有留下任何会失败的机制**。第三次全仓扫描数出约 30 个同形的。
+所以这一批做的不是第三次接线，是补上那两次底下一直缺的东西。
+
+### 1. 先把数量搞清楚
+
+311 个 `Settings` 叶子里，按字段名在 `src/` 与 `scripts/` 全文搜索
+（排除 `settings.py` 自身）**零命中的有 111 个**。但 111 不是缺口数：
+
+| 类别 | 条数 | 是不是缺口 |
+|---|---:|---|
+| 单值 `Literal` 的固化不变量 | 58 | **不是**。字段本身就是断言 |
+| `test_only` / `lab` 生命周期 | 11 | **不是**。前者被测试消费，后者被 validator 钉死 |
+| **其余** | **42** | **是**，登记为 A-08 |
+
+把 111 说成缺口，和把 42 说成 0，是同一种不诚实的两个方向。
+
+### 2. 守门测试
+
+`tests/architecture/test_config_leaves_have_readers.py`，4 条：
+
+- 每个叶子要么有读者，要么落进三种豁免之一（单值 `Literal` / `test_only`、`lab` /
+  `KNOWN_UNREAD_LEAVES` 里一条**写明理由**的登记）；
+- **表里不许有已经获得读者的条目**——没有这条，豁免表只会越长越长，
+  而一张只增不减的借口清单和它要取代的那份清单没有区别；
+- 表里的名字必须是真实存在的叶子；每条豁免必须有理由。
+
+搜索故意做得很粗（字段名整词匹配，两棵树全文）。粗搜索让**假通过**可能、
+让**假失败**几乎不可能，对一个不能狼来了的门禁这是正确的方向。
+已知的一处假通过写在文件的 docstring 里：`rag.retrieval.answer_context_k` 被投影进
+`RetrievalConfig` 因而在 `projections.py` 里出现，而没有人读那个投影字段
+（ADR-097 §4.3）。要抓住它得跟踪一个值穿过 frozen dataclass 到解包处，那是另一个工具。
+
+### 3. `ownership.yaml`：41 个 owner 不是模块
+
+这是那批字段能长期隐身的**机制**：清单给每个叶子发一张 owner + lifecycle 身份证，
+读者据此认为它被消费了。而 58 个 owner 里 41 个不是可 import 的模块路径——
+改过名的包（`qdrant`／实际 `vector`、`model`／`models`、`observability`／`telemetry`、
+`reranker`／`reranking`、`langchain`／`langgraph`），以及从来不存在的包
+（`application.knowledge.*`、`application.policy.*`）。
+守门测试的五条里没有一条 import 过 owner 模块，其中三条还把不存在的模块名
+**钉成了字符串断言**——`adapters.persistence.guard_runner`、
+`adapters.persistence.event_listener`、`adapters.persistence.tool_execution_ledger`。
+
+全部改成真实模块（`execution_guard` / `notifications` / `tool_executions` …），
+合并同 owner 同 lifecycle 的组后是 **53 组 / 43 owner / 311 叶子**。
+`test_every_owner_is_an_importable_module` 钉住这一条。
+
+几组的诚实答案是 `bootstrap.settings`：一个只被配置载入消费的固化不变量，
+它的 owner 就该是配置载入本身，而不是一个听起来像适配器的名字。
+
+### 4. 顺手更正的两处文档
+
+- `docs/configuration.md` 开头「283 个配置叶子」→ **311**。
+- 同文件 §3 说 `policy.shell_tools_enabled` 曾是「这张表里唯一一条没有任何代码消费的」。
+  **错的，而且错得有方向**：那张表里每一条按定义都没有运行时消费者。
+  `projections.py` 亲口写着 `rag.llama_index` 的四个字段
+  "stay in settings unprojected on purpose"。它真正的特殊之处是**它读起来像一道闸，
+  而它要闸的工具是存在的**。混为一谈会让 A-08 那 42 条看起来也像不变量。
+
+### 5. 明确没做
+
+**42 条豁免一条都没有被消除。** 本批把 A-08 从「没有守门人」改为
+「守门人已就位，豁免表待清空」，判据是 `KNOWN_UNREAD_LEAVES` 变空，
+或每一条剩下的都转成单值 `Literal`（即承认它是不变量而不是旋钮）。
+接线本身不在这一批里：`qdrant.prefer_grpc`、两个 `*_vector_name`、
+`lease_grace_seconds` 各自要回答的问题不一样，一批做完只会做得都不认真。
+
+离线门禁 3218 passed / 800 skipped，`pyright` 0 errors。
+
+---
 ## 2026-08-31（第五十八批）：把四个部署级上限接进 API 进程
 
 一次全仓扫描查出的最贵一条，形状和上一批的 ADR-097 一模一样：**配置声明了、运行时没读**，

@@ -231,6 +231,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # （「多 Agent 是模拟的……」），它是这个 profile 为什么必须打开委派的全部证据。把它的
 # 标点规整成 ASCII，留下的就是一份不再是被引之物的引用。
 "tests/config/test_local_console_profile.py" = ["RUF002"]
+# `KNOWN_UNREAD_LEAVES` 的每个值都是一句要被人读的理由——它写明这个配置叶子为什么
+# 至今没有读者，是哪一条缺口在跟，还是「没有读者才是对的」。这张表的用处全在这些
+# 句子上，把它们规整成 ASCII 标点只会让它们更难读。RUF001 在这里要抓的是标识符里
+# 混进来的西里尔字母，不是一份刻意用中文写的豁免说明。
+"tests/architecture/test_config_leaves_have_readers.py" = ["RUF001", "RUF003"]
 
 [tool.pyright]
 pythonVersion = "3.12"

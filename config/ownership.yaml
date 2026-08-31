@@ -28,14 +28,21 @@
   ],
   "groups": [
     {
-      "owner": "bootstrap.processes",
+      "owner": "bootstrap.projections",
       "lifecycle": "startup",
       "fields": [
         "app.name",
         "app.environment",
         "app.deployment_scope",
         "app.log_level",
-        "app.debug"
+        "app.debug",
+        "secrets.deepseek_api_key",
+        "secrets.qdrant_api_key",
+        "secrets.artifact_access_key",
+        "secrets.artifact_secret_key",
+        "secrets.langfuse_public_key",
+        "secrets.langfuse_secret_key",
+        "secrets.otel_exporter_headers"
       ]
     },
     {
@@ -43,11 +50,15 @@
       "lifecycle": "task_snapshot",
       "fields": [
         "app.config_schema_version",
-        "app.architecture_baseline"
+        "app.architecture_baseline",
+        "langchain_adapter.enabled",
+        "langchain_adapter.allowed_scope",
+        "langchain_adapter.agent_executor_enabled",
+        "langchain_adapter.memory_enabled"
       ]
     },
     {
-      "owner": "apps.api.server",
+      "owner": "apps.api.main",
       "lifecycle": "startup",
       "fields": [
         "api.host",
@@ -57,7 +68,7 @@
       ]
     },
     {
-      "owner": "apps.api.request_limits",
+      "owner": "apps.api.middleware",
       "lifecycle": "live",
       "fields": [
         "api.request_timeout_seconds",
@@ -68,18 +79,22 @@
       "owner": "apps.api.sse",
       "lifecycle": "live",
       "fields": [
-        "api.sse_heartbeat_seconds"
+        "api.sse_heartbeat_seconds",
+        "event_stream.model_delta_mode",
+        "event_stream.live_delta_coalesce_ms",
+        "event_stream.subscriber_buffer_events",
+        "event_stream.max_live_subscribers_per_stream"
       ]
     },
     {
-      "owner": "apps.api.computer_panel",
+      "owner": "apps.api.routes.computer",
       "lifecycle": "live",
       "fields": [
         "api.computer_session_url"
       ]
     },
     {
-      "owner": "application.chat.recovery",
+      "owner": "application.chat_recovery",
       "lifecycle": "live",
       "fields": [
         "chat.orphan_grace_seconds",
@@ -89,21 +104,32 @@
       ]
     },
     {
-      "owner": "bootstrap.settings.chat_recovery_contract",
+      "owner": "bootstrap.settings",
       "lifecycle": "startup",
       "fields": [
         "chat.orphan_action",
-        "chat.automatic_retry"
+        "chat.automatic_retry",
+        "code.execution_locality",
+        "code.coordination",
+        "observability.langfuse_enabled",
+        "evaluation.max_concurrent_runs"
       ]
     },
     {
-      "owner": "apps.api.dependencies.chat_shape",
+      "owner": "apps.api.dependencies",
       "lifecycle": "startup",
       "fields": [
         "chat.retrieval_shape",
         "chat.max_agentic_steps",
         "chat.max_agentic_searches",
-        "chat.routed_relevance_threshold"
+        "chat.routed_relevance_threshold",
+        "code.enabled",
+        "code.sandbox_enabled",
+        "code.external_requires_approval",
+        "code.max_steps",
+        "code.max_tool_calls",
+        "code.max_total_tokens",
+        "code.max_cost_micro_usd"
       ]
     },
     {
@@ -116,27 +142,6 @@
       ]
     },
     {
-      "owner": "bootstrap.settings.code_locality_contract",
-      "lifecycle": "startup",
-      "fields": [
-        "code.execution_locality",
-        "code.coordination"
-      ]
-    },
-    {
-      "owner": "apps.api.dependencies.code_shape",
-      "lifecycle": "startup",
-      "fields": [
-        "code.enabled",
-        "code.sandbox_enabled",
-        "code.external_requires_approval",
-        "code.max_steps",
-        "code.max_tool_calls",
-        "code.max_total_tokens",
-        "code.max_cost_micro_usd"
-      ]
-    },
-    {
       "owner": "application.task_triage",
       "lifecycle": "startup",
       "fields": [
@@ -145,7 +150,7 @@
       ]
     },
     {
-      "owner": "adapters.persistence.connection_factory",
+      "owner": "adapters.persistence.engine",
       "lifecycle": "startup",
       "fields": [
         "database.dsn",
@@ -158,7 +163,7 @@
       ]
     },
     {
-      "owner": "adapters.persistence.guard_runner",
+      "owner": "adapters.persistence.execution_guard",
       "lifecycle": "startup",
       "fields": [
         "database.guard_dsn",
@@ -168,7 +173,7 @@
       ]
     },
     {
-      "owner": "adapters.persistence.guard_runner",
+      "owner": "adapters.persistence.execution_guard",
       "lifecycle": "live",
       "fields": [
         "database.guard_disconnect_action",
@@ -176,24 +181,30 @@
       ]
     },
     {
-      "owner": "adapters.persistence.event_listener",
+      "owner": "adapters.persistence.notifications",
       "lifecycle": "startup",
       "fields": [
         "database.listen_dsn",
         "database.listen_pool_mode",
         "database.listener_connections_per_process",
-        "database.listen_connection_scope"
+        "database.listen_connection_scope",
+        "event_stream.wakeup_backend",
+        "event_stream.notify_payload_mode",
+        "event_stream.notify_payload_limit_bytes",
+        "event_stream.listener_uses_dedicated_session",
+        "event_stream.task_ready_channel",
+        "event_stream.stream_ready_channel"
       ]
     },
     {
-      "owner": "adapters.persistence.event_listener",
+      "owner": "adapters.persistence.notifications",
       "lifecycle": "live",
       "fields": [
         "database.listener_healthcheck_seconds"
       ]
     },
     {
-      "owner": "workers.task.registry",
+      "owner": "adapters.persistence.task_registry",
       "lifecycle": "startup",
       "fields": [
         "coordination.registry_backend",
@@ -202,7 +213,7 @@
       ]
     },
     {
-      "owner": "workers.task.registry",
+      "owner": "adapters.persistence.task_registry",
       "lifecycle": "live",
       "fields": [
         "coordination.claim_batch_size",
@@ -213,7 +224,7 @@
       ]
     },
     {
-      "owner": "workers.task.lease_manager",
+      "owner": "workers.task",
       "lifecycle": "live",
       "fields": [
         "coordination.lease_duration_seconds",
@@ -223,11 +234,14 @@
         "coordination.recovery_poll_seconds",
         "coordination.lease_time_source",
         "coordination.fencing_token_strategy",
-        "coordination.heartbeat_execution"
+        "coordination.heartbeat_execution",
+        "coordination.max_attempts",
+        "coordination.retry_base_seconds",
+        "coordination.retry_max_seconds"
       ]
     },
     {
-      "owner": "adapters.blocking_call_runner",
+      "owner": "adapters.concurrency.call_runner",
       "lifecycle": "startup",
       "fields": [
         "coordination.blocking_call_slots",
@@ -235,16 +249,7 @@
       ]
     },
     {
-      "owner": "workers.task.retry_policy",
-      "lifecycle": "live",
-      "fields": [
-        "coordination.max_attempts",
-        "coordination.retry_base_seconds",
-        "coordination.retry_max_seconds"
-      ]
-    },
-    {
-      "owner": "adapters.persistence.fencing",
+      "owner": "adapters.langgraph.checkpointer",
       "lifecycle": "live",
       "fields": [
         "coordination.advisory_lock_enabled",
@@ -254,7 +259,7 @@
       ]
     },
     {
-      "owner": "adapters.persistence.tool_execution_ledger",
+      "owner": "adapters.persistence.tool_executions",
       "lifecycle": "live",
       "fields": [
         "coordination.tool_execution_ledger_enabled"
@@ -269,18 +274,6 @@
       ]
     },
     {
-      "owner": "adapters.persistence.event_listener",
-      "lifecycle": "startup",
-      "fields": [
-        "event_stream.wakeup_backend",
-        "event_stream.notify_payload_mode",
-        "event_stream.notify_payload_limit_bytes",
-        "event_stream.listener_uses_dedicated_session",
-        "event_stream.task_ready_channel",
-        "event_stream.stream_ready_channel"
-      ]
-    },
-    {
       "owner": "adapters.persistence.event_log",
       "lifecycle": "live",
       "fields": [
@@ -289,24 +282,14 @@
       ]
     },
     {
-      "owner": "apps.api.sse",
-      "lifecycle": "live",
-      "fields": [
-        "event_stream.model_delta_mode",
-        "event_stream.live_delta_coalesce_ms",
-        "event_stream.subscriber_buffer_events",
-        "event_stream.max_live_subscribers_per_stream"
-      ]
-    },
-    {
-      "owner": "adapters.model.deepseek",
+      "owner": "adapters.models.deepseek",
       "lifecycle": "startup",
       "fields": [
         "model.base_url"
       ]
     },
     {
-      "owner": "adapters.model.gateway",
+      "owner": "bootstrap.model_factory",
       "lifecycle": "task_snapshot",
       "fields": [
         "model.provider",
@@ -360,16 +343,6 @@
       ]
     },
     {
-      "owner": "adapters.langchain.registry",
-      "lifecycle": "task_snapshot",
-      "fields": [
-        "langchain_adapter.enabled",
-        "langchain_adapter.allowed_scope",
-        "langchain_adapter.agent_executor_enabled",
-        "langchain_adapter.memory_enabled"
-      ]
-    },
-    {
       "owner": "adapters.langgraph.workflow",
       "lifecycle": "task_snapshot",
       "fields": [
@@ -409,7 +382,7 @@
       ]
     },
     {
-      "owner": "application.multi_agent.attempt_ledger",
+      "owner": "adapters.persistence.task_registry",
       "lifecycle": "task_snapshot",
       "fields": [
         "multi_agent.max_agent_invocation_attempts_per_task"
@@ -427,7 +400,7 @@
       ]
     },
     {
-      "owner": "application.knowledge.ingestion",
+      "owner": "application.ingestion",
       "lifecycle": "task_snapshot",
       "fields": [
         "rag.ingestion.chunk_size_tokens",
@@ -442,7 +415,7 @@
       ]
     },
     {
-      "owner": "adapters.embedding.bge_m3",
+      "owner": "adapters.embedding.bge",
       "lifecycle": "task_snapshot",
       "fields": [
         "rag.embedding.model_id",
@@ -459,7 +432,7 @@
       ]
     },
     {
-      "owner": "application.knowledge.retrieval",
+      "owner": "application.retrieval",
       "lifecycle": "task_snapshot",
       "fields": [
         "rag.retrieval.fusion_owner",
@@ -475,7 +448,7 @@
       ]
     },
     {
-      "owner": "adapters.reranker.bge",
+      "owner": "adapters.reranking.bge_reranker",
       "lifecycle": "task_snapshot",
       "fields": [
         "rag.reranker.enabled",
@@ -489,7 +462,7 @@
       ]
     },
     {
-      "owner": "application.knowledge.graph",
+      "owner": "application.graph_extraction",
       "lifecycle": "task_snapshot",
       "fields": [
         "rag.graph.enabled",
@@ -502,7 +475,7 @@
       ]
     },
     {
-      "owner": "adapters.qdrant.client_factory",
+      "owner": "adapters.vector.qdrant",
       "lifecycle": "startup",
       "fields": [
         "qdrant.url",
@@ -519,22 +492,17 @@
       ]
     },
     {
-      "owner": "adapters.qdrant.alias_resolver",
+      "owner": "adapters.vector.qdrant",
       "lifecycle": "live",
       "fields": [
-        "qdrant.read_alias"
-      ]
-    },
-    {
-      "owner": "adapters.qdrant.index_manager",
-      "lifecycle": "live",
-      "fields": [
+        "qdrant.read_alias",
         "qdrant.write_collection",
-        "qdrant.derived_index"
+        "qdrant.derived_index",
+        "qdrant.payload_acl_filter_required"
       ]
     },
     {
-      "owner": "adapters.qdrant.index_manager",
+      "owner": "adapters.vector.qdrant",
       "lifecycle": "task_snapshot",
       "fields": [
         "qdrant.collection_schema_version",
@@ -542,14 +510,7 @@
       ]
     },
     {
-      "owner": "adapters.qdrant.retrieval",
-      "lifecycle": "live",
-      "fields": [
-        "qdrant.payload_acl_filter_required"
-      ]
-    },
-    {
-      "owner": "adapters.artifacts.factory",
+      "owner": "adapters.artifacts.local",
       "lifecycle": "startup",
       "fields": [
         "artifact_store.backend",
@@ -560,7 +521,7 @@
       ]
     },
     {
-      "owner": "application.artifacts.upload_service",
+      "owner": "application.uploads",
       "lifecycle": "live",
       "fields": [
         "artifact_store.max_artifact_bytes",
@@ -568,7 +529,7 @@
       ]
     },
     {
-      "owner": "application.policy.engine",
+      "owner": "adapters.policy.envelope",
       "lifecycle": "live",
       "fields": [
         "policy.revision",
@@ -620,7 +581,7 @@
       ]
     },
     {
-      "owner": "adapters.observability.otel",
+      "owner": "adapters.telemetry.otel",
       "lifecycle": "startup",
       "fields": [
         "observability.otel_enabled",
@@ -630,13 +591,6 @@
         "observability.record_prompt_body",
         "observability.record_tool_result_body",
         "observability.metrics_enabled"
-      ]
-    },
-    {
-      "owner": "adapters.observability.langfuse",
-      "lifecycle": "startup",
-      "fields": [
-        "observability.langfuse_enabled"
       ]
     },
     {
@@ -651,13 +605,7 @@
         "evaluation.task_benchmark_path",
         "evaluation.rag_metrics",
         "evaluation.task_metrics",
-        "evaluation.multi_agent_metrics"
-      ]
-    },
-    {
-      "owner": "evaluation.judge_adapter",
-      "lifecycle": "startup",
-      "fields": [
+        "evaluation.multi_agent_metrics",
         "evaluation.judge.enabled",
         "evaluation.judge.model_id",
         "evaluation.judge.model_revision",
@@ -676,7 +624,7 @@
       ]
     },
     {
-      "owner": "tests.support.concurrency",
+      "owner": "bootstrap.settings",
       "lifecycle": "test_only",
       "fields": [
         "testing.deterministic_concurrency_required",
@@ -686,7 +634,7 @@
       ]
     },
     {
-      "owner": "bootstrap.feature_registry",
+      "owner": "bootstrap.settings",
       "lifecycle": "lab",
       "fields": [
         "optional_labs.runtime_mid_loop_resume",
@@ -700,32 +648,12 @@
       ]
     },
     {
-      "owner": "bootstrap.adapter_factory",
-      "lifecycle": "startup",
-      "fields": [
-        "secrets.deepseek_api_key",
-        "secrets.qdrant_api_key",
-        "secrets.artifact_access_key",
-        "secrets.artifact_secret_key",
-        "secrets.langfuse_public_key",
-        "secrets.langfuse_secret_key",
-        "secrets.otel_exporter_headers"
-      ]
-    },
-    {
       "owner": "application.evaluation",
       "lifecycle": "live",
       "fields": [
         "evaluation.runs_enabled",
         "evaluation.run_timeout_seconds",
         "evaluation.reports_root"
-      ]
-    },
-    {
-      "owner": "bootstrap.settings.evaluation_concurrency_contract",
-      "lifecycle": "startup",
-      "fields": [
-        "evaluation.max_concurrent_runs"
       ]
     }
   ]

@@ -6,7 +6,9 @@
 - `config.test.toml`：测试环境深度合并覆盖，专门开启确定性 failpoint；
 - `config.production.toml`：无密钥的 production 合同覆盖，缺少部署注入时
   必须失败关闭；
-- `config/ownership.yaml`：283 个配置叶子字段的唯一 owner 与生命周期登记；
+- `config/ownership.yaml`：311 个配置叶子字段的唯一 owner 与生命周期登记
+  （53 组 / 43 owner）。**owner 必须是可 import 的真实模块**——它一度有 41 个
+  不是，见[已知缺口 A-08](./known-gaps.md)；
 - `.env.example`：本地开发需要注入的 DSN、模型 ID 和密钥名称；
 - `src/agent_workbench/bootstrap/settings.py`：Pydantic Settings 类型、来源优先级、脱敏快照和跨域不变量；
 - `tests/config/test_settings.py`：配置契约测试；
@@ -255,10 +257,20 @@ claim_batch_size <= min(worker_concurrency, guard_connection_budget)
   span 会离开这个系统、去到一个没有租户边界的 collector；
 - **Shell Tool 不再在这张表里。** `policy.shell_tools_enabled` 从 schema
   `1.18` 起是一个真正的布尔开关（ADR-077），默认 `false`。它此前是单值
-  `Literal[False]`，但那是这张表里唯一一条**没有任何代码消费**的：它读起来
-  像一条保证，实际是一句注释。现在它闸住 `project_run`，代价是它不再是不可
-  覆盖的——换来的是它开着还是关着，这句话都是真的。它在 `[policy]` 段里，
-  所以 `policy_identity` 跟着它变。
+  `Literal[False]`，读起来像一条保证，实际是一句注释。现在它闸住 `project_run`，
+  代价是它不再是不可覆盖的——换来的是它开着还是关着，这句话都是真的。它在
+  `[policy]` 段里，所以 `policy_identity` 跟着它变。
+
+  > **2026-08-31 更正。** 这一条原先写着它是「这张表里唯一一条没有任何代码消费」的。
+  > 那句话是错的，而且错得有方向：**这张表里的每一条按定义都没有运行时消费者**——
+  > 单值 `Literal` 的全部作用就是让声称别的配置在载入时失败，一个进程侧的检查只能
+  > 拿常量和自己比。`projections.py` 亲口写着 `rag.llama_index` 的四个字段
+  > 「stay in settings unprojected on purpose」，正是同一件事。
+  > `shell_tools_enabled` 真正的特殊之处不是「没人读」，是**它读起来像一道闸，
+  > 而它要闸的那个工具是存在的**——其余几条描述的是不存在的第二条写路径、
+  > 不存在的 AgentExecutor、不存在的二次融合。
+  > 「被固化的不变量」与「没有读者的旋钮」是两件事，混为一谈会让
+  > [A-08](./known-gaps.md) 那 42 条看起来也像不变量。
 
 这比“默认值写成 false”更强：错误的环境覆盖会让进程启动失败，而不是
 悄悄改变运行语义。
