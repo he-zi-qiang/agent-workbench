@@ -61,6 +61,7 @@
 | [ADR-096 一段会话可以只拿它被给出的工具里的一部分](./0096-a-session-may-hold-fewer-tools-than-it-was-offered.md) | 对照 Claude Desktop 输入框那颗「+」：一个 Code 回合被给出哪些工具，在浏览器里一条读得到的路由都没有；要不要投影成 HTTP 事实，人能不能据此收窄下一个回合，以及这条收窄和已有的两条（计划模式、写入前批准）怎么排序 | 接受，新增 `GET /v1/code/sessions/{id}/tools`（只答「下一个回合」）与请求体上的 `tools`（求交，只能减）；`AskResponse` 新增 `allowed_tools`；**明确不投影 `[[mcp.servers]]` 的连接器目录**——那些绑定装在 Task Worker 上，Code 回合永远拿不到（同 ADR-093 §3 的错法） |
 
 | [ADR-097 没有读者的漏斗不是漏斗](./0097-a-funnel-nobody-reads-is-not-a-funnel.md) | `[rag.retrieval]` 声明的候选漏斗五个数至今没有任何读者；接线还是删掉；接线之后「请求只能在系统上限以内下调」由谁执行 | 接受，接线：两臂上限进检索器、`fused_top_k` 成为候选池、`rerank_top_k` 成为请求的真实上限；**`CandidateRetrieverPort` 不动**；`answer_context_k` 仍无读者，A-07 只关一半；**未取得检索质量证据**，待 A-03 重跑 |
+| [ADR-098 只有一个进程读的上限，不是部署级上限](./0098-a-ceiling-that-only-one-process-reads-is-not-a-deployment-ceiling.md) | `[runtime]` 三个上限与 `policy.max_tool_argument_bytes` 只被 Task Worker 读到，API 进程五处运行时、五处网关一处没接；接线还是改口径承认 Code 会话没有部署级天花板 | 接受，接线：四个数对两个进程是同一个意思；这个进程从此只有一个 `ToolGateway` 构造点，并由 AST 守门测试钉住；配置 schema 与 Worker 侧不动 |
 
 > **这张表在 ADR-054 之后就断了：0055–0074 与 0077–0089 都没有行。**（ADR-075、
 > 0076、0090、0091、0092、0093、0094 与 0095 各是自己那一批顺手补的，不代表表已经跟上。）那些 ADR 都在同一个

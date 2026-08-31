@@ -801,6 +801,28 @@ class ApiRuntimeConfig:
     #: ADR-081, flat here for the reason above it is: it governs every runtime
     #: this process builds, and two names for one setting drift.
     context_compaction_enabled: bool = False
+    #: ADR-098. The deployment-wide ceilings the Task Worker has received since
+    #: it was written and this process never did. Their absence was not a
+    #: smaller shape -- it made one shipped configuration untrue:
+    #: `config.code-local.toml` raised `model_timeout_seconds` to 300 to settle
+    #: a real timeout incident, and Code sessions run *here*, so the envelope
+    #: stayed at the runtime's own 120.0 and that 300 never once took effect.
+    #:
+    #: Defaults mirror `config.default.toml` so the hand-built projections in
+    #: the tests keep working; the shipped configuration is still the only
+    #: thing a deployment reads.
+    model_timeout_seconds: float = 120.0
+    max_parallel_read_tools: int = 4
+    #: `None` means "only what each tool declares", which is what the shipped
+    #: configuration says. It may shorten a call and never lengthen one -- and
+    #: this is the process holding `project_run` and `sandbox_run`, the two
+    #: tools a deployment is most likely to want a ceiling over.
+    tool_timeout_seconds: float | None = None
+    #: `policy.max_tool_argument_bytes`. Its sibling `max_tool_result_bytes`
+    #: was projected from the start; this one reached `policy_fingerprint` and
+    #: nothing else, so changing it moved the fingerprint and left the
+    #: threshold at the gateway's compiled-in default.
+    max_tool_argument_bytes: int = 65_536
     # ADR-021. The same provider the Task Worker researches with, reached from
     # the API because chat's fallback may search too. `None` is the shipped
     # default and means the chat model is offered no web tool at all -- not a
@@ -1145,6 +1167,16 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         record_step_inputs=settings.runtime.record_step_inputs,
         context_soft_limit_ratio=settings.runtime.context_soft_limit_ratio,
         context_compaction_enabled=settings.runtime.context_compaction_enabled,
+        # ADR-098. Same four numbers the Worker projection reads, from the same
+        # sections -- there is no API-specific spelling of a deployment ceiling.
+        model_timeout_seconds=float(settings.runtime.model_timeout_seconds),
+        max_parallel_read_tools=settings.runtime.max_parallel_read_tools,
+        tool_timeout_seconds=(
+            None
+            if settings.runtime.tool_timeout_seconds is None
+            else float(settings.runtime.tool_timeout_seconds)
+        ),
+        max_tool_argument_bytes=settings.policy.max_tool_argument_bytes,
         research=_project_research(settings),
         multi_agent=MultiAgentConfig(
             static_agent_node_limit=settings.multi_agent.static_agent_node_limit,

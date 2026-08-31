@@ -174,6 +174,7 @@ from agent_workbench.domain.runs import AgentRunRequest, RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
 from agent_workbench.domain.tools import ToolName, ToolSpec
 from agent_workbench.ports.agent_executor import AgentExecutor
+from agent_workbench.ports.approval_gate import InteractiveApprovalGate
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.delegation import DelegationChannel
 from agent_workbench.ports.documents import DocumentStore
@@ -181,7 +182,11 @@ from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 from agent_workbench.ports.telemetry import Telemetry
 from agent_workbench.ports.tools import ToolBinding, ToolRegistry
 from agent_workbench.ports.usage import UsageReader
-from agent_workbench.runtime import ClaudeLikeAgentRuntime, ToolGateway
+from agent_workbench.runtime import (
+    ClaudeLikeAgentRuntime,
+    ToolExecutor,
+    ToolGateway,
+)
 from agent_workbench.workflows.task_handlers import BoundedParallelExecutor
 
 
@@ -550,6 +555,51 @@ def _code_project_tools(*, host_commands: bool) -> tuple[ToolName, ...]:
     """
 
     return CODE_PROJECT_TOOLS_WITH_RUN if host_commands else CODE_PROJECT_TOOLS
+
+
+def _api_gateway(
+    config: ApiRuntimeConfig,
+    registry: ToolRegistry,
+    *,
+    approvals: InteractiveApprovalGate | None = None,
+) -> ToolGateway:
+    """The only way this process builds a gateway (ADR-098).
+
+    A function rather than five call sites repeating four keywords, because the
+    failure being repaired here is exactly what five call sites do over time:
+    the Task Worker's single gateway received ``runtime.tool_timeout_seconds``
+    and every gateway on this side went on constructing a default executor,
+    which is how a deployment-wide ceiling came to bound the process that runs
+    no destructive tools and not the process that runs ``project_run``.
+
+    No ``ledger`` parameter, and its absence is a check rather than an
+    omission: a registry holding a tool that records external effects refuses
+    to assemble without one, so a ledgered tool arriving on this side stops the
+    process here instead of dispatching effects nothing accounts for.
+    """
+
+    # Without this the deployment's own tool ceiling reaches nothing: the
+    # gateway would build a default executor that knows only what each tool
+    # declares. Worded the same way in `task_worker/composition.py`, and that
+    # is deliberate -- one sentence, two processes, one meaning.
+    executor = ToolExecutor(deployment_ceiling_seconds=config.tool_timeout_seconds)
+    if approvals is None:
+        return ToolGateway(
+            registry=registry,
+            policy=EnvelopePolicyEngine(registry=registry),
+            record_step_inputs=config.record_step_inputs,
+            max_argument_bytes=config.max_tool_argument_bytes,
+            executor=executor,
+        )
+    return ToolGateway(
+        registry=registry,
+        policy=EnvelopePolicyEngine(registry=registry),
+        record_step_inputs=config.record_step_inputs,
+        max_argument_bytes=config.max_tool_argument_bytes,
+        executor=executor,
+        approvals=approvals,
+        approval_timeout_seconds=config.code.approval_timeout_seconds,
+    )
 
 
 def build_dependencies(
@@ -1034,14 +1084,12 @@ def _assemble_chat(
 
         return ClaudeLikeAgentRuntime(
             model=model,
-            gateway=ToolGateway(
-                registry=registry,
-                policy=EnvelopePolicyEngine(registry=registry),
-                record_step_inputs=config.record_step_inputs,
-            ),
+            gateway=_api_gateway(config, registry),
             policy_identity=policy_identity,
             model_label=model_label,
             compact_model_label=compact_model_label,
+            model_timeout_seconds=config.model_timeout_seconds,
+            max_parallel_read_tools=config.max_parallel_read_tools,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
             context_window_tokens=model_context_window,
@@ -1053,14 +1101,12 @@ def _assemble_chat(
         empty = StaticToolRegistry([])
         return ClaudeLikeAgentRuntime(
             model=model,
-            gateway=ToolGateway(
-                registry=empty,
-                policy=EnvelopePolicyEngine(registry=empty),
-                record_step_inputs=config.record_step_inputs,
-            ),
+            gateway=_api_gateway(config, empty),
             policy_identity=policy_identity,
             model_label=model_label,
             compact_model_label=compact_model_label,
+            model_timeout_seconds=config.model_timeout_seconds,
+            max_parallel_read_tools=config.max_parallel_read_tools,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
             context_window_tokens=model_context_window,
@@ -1183,14 +1229,12 @@ def _assemble_chat(
         rag_execution = AgenticExecution(
             executor=ClaudeLikeAgentRuntime(
                 model=model,
-                gateway=ToolGateway(
-                    registry=registry,
-                    policy=EnvelopePolicyEngine(registry=registry),
-                    record_step_inputs=config.record_step_inputs,
-                ),
+                gateway=_api_gateway(config, registry),
                 policy_identity=policy_identity,
                 model_label=model_label,
                 compact_model_label=compact_model_label,
+                model_timeout_seconds=config.model_timeout_seconds,
+                max_parallel_read_tools=config.max_parallel_read_tools,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
                 context_window_tokens=model_context_window,
@@ -1212,14 +1256,12 @@ def _assemble_chat(
             retrieval=retrieval,
             executor=ClaudeLikeAgentRuntime(
                 model=model,
-                gateway=ToolGateway(
-                    registry=StaticToolRegistry([]),
-                    policy=EnvelopePolicyEngine(registry=StaticToolRegistry([])),
-                    record_step_inputs=config.record_step_inputs,
-                ),
+                gateway=_api_gateway(config, StaticToolRegistry([])),
                 policy_identity=policy_identity,
                 model_label=model_label,
                 compact_model_label=compact_model_label,
+                model_timeout_seconds=config.model_timeout_seconds,
+                max_parallel_read_tools=config.max_parallel_read_tools,
                 record_step_inputs=config.record_step_inputs,
                 prices=model_prices,
                 context_window_tokens=model_context_window,
@@ -1444,22 +1486,21 @@ def _assemble_chat(
 
         runtime = ClaudeLikeAgentRuntime(
             model=model,
-            gateway=ToolGateway(
-                registry=code_registry,
-                policy=EnvelopePolicyEngine(registry=code_registry),
-                record_step_inputs=config.record_step_inputs,
-                # The gate Code exists to be able to supply: this run happens
-                # in the process the answering request reaches. No ledger is
-                # passed, which is also a check -- a registry holding a tool
-                # that records external effects would refuse to assemble here.
-                approvals=code_approvals.gate_for(scope),
-                approval_timeout_seconds=config.code.approval_timeout_seconds,
+            # The gate Code exists to be able to supply: this run happens in
+            # the process the answering request reaches.
+            gateway=_api_gateway(
+                config, code_registry, approvals=code_approvals.gate_for(scope)
             ),
             # Its own identity, so a tool execution can be attributed to a
             # coding session rather than to "the API".
             policy_identity=f"{policy_identity}-code",
             model_label=model_label,
             compact_model_label=compact_model_label,
+            # ADR-098. `config.code-local.toml` raises this to 300 for a
+            # measured reason, and this is the construction that decides
+            # whether that number is real.
+            model_timeout_seconds=config.model_timeout_seconds,
+            max_parallel_read_tools=config.max_parallel_read_tools,
             record_step_inputs=config.record_step_inputs,
             prices=model_prices,
             context_window_tokens=model_context_window,
