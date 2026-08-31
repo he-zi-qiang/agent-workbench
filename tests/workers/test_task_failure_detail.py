@@ -16,6 +16,7 @@ from agent_workbench.domain.runs import AgentOutcome
 from agent_workbench.domain.tasks import TaskState
 from agent_workbench.workers.task import _failure_detail
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError
+from agent_workbench.workflows.structured_output import StructuredOutputError
 from agent_workbench.workflows.task_handlers import TaskNodeRunFailedError
 
 STATE = TaskState(task_id="task_1", objective="Explain hybrid retrieval.")
@@ -164,3 +165,98 @@ def test_a_structured_node_failure_reports_its_code_not_its_class() -> None:
     assert "research_external" in detail
     assert "not retryable" in detail
     assert "TaskNodeRunFailedError" not in detail
+
+
+def _decode_failure(reason: str, cause: Exception | None) -> TaskNodeRunFailedError:
+    """A structured node whose run succeeded and whose output would not decode.
+
+    ``outcome.error`` is ``None`` on purpose and not as a shortcut: that is what
+    a decode failure *is*. The model answered, the provider raised nothing, and
+    the value it produced was not the one the node required.
+    """
+
+    error = TaskNodeRunFailedError(
+        node="critic",
+        outcome=AgentOutcome(
+            agent_run_id="run_1", status="completed", stop_reason="completed"
+        ),
+        state=STATE,
+        reason=reason,
+    )
+    if cause is not None:
+        error.__cause__ = cause
+    return error
+
+
+def test_a_decode_failure_says_which_schema_it_missed() -> None:
+    detail = _failure_detail(
+        _decode_failure("critic JSON did not satisfy the review schema", None), "start"
+    )
+
+    assert "critic" in detail
+    assert "did not satisfy the review schema" in detail
+
+
+def test_the_four_ways_a_review_fails_to_decode_do_not_collapse() -> None:
+    """The measured subject of known-gaps C-05.
+
+    The 2026-08-13 failure recorded two competing hypotheses and could not
+    choose between them, and this is why: every decode failure reached the
+    console as one sentence. A reader could not tell "the critic reviewed the
+    wrong revision" from "the critic ran before there was a draft", so the
+    record kept both and resolved neither.
+    """
+
+    details = [
+        _failure_detail(
+            _decode_failure(
+                "critic JSON did not satisfy the review schema",
+                StructuredOutputError(message),
+            ),
+            "start",
+        )
+        for message in (
+            "critic ran before synthesis produced a draft",
+            "critic output has an invalid shape",
+            "critic reviewed a different draft",
+            "critic reviewed a different revision",
+        )
+    ]
+
+    assert len(set(details)) == 4, "the four causes must not collapse into one"
+    assert "before synthesis produced a draft" in details[0]
+    assert "reviewed a different revision" in details[3]
+
+
+def test_a_decode_failure_never_quotes_what_the_model_actually_wrote() -> None:
+    """The rule this whole function exists for, at the one place it now bends.
+
+    Reading the cause is safe because a ``StructuredOutputError``'s own message
+    is repo-authored. Reading its *chain* would not be: the pydantic error
+    underneath quotes the input that failed validation, and that input is model
+    output. This pins the boundary at one link.
+    """
+
+    leaked = ValueError(
+        "1 validation error for ReviewResult\n  input_value='PROMPT FRAGMENT'"
+    )
+    cause = StructuredOutputError("critic output has an invalid shape")
+    cause.__cause__ = leaked
+
+    detail = _failure_detail(
+        _decode_failure("critic JSON did not satisfy the review schema", cause), "start"
+    )
+
+    assert "critic output has an invalid shape" in detail
+    assert "PROMPT FRAGMENT" not in detail
+    assert "validation error for ReviewResult" not in detail
+
+
+def test_a_node_with_no_reason_keeps_the_older_sentence() -> None:
+    """The control. ``AgentNodeFailedError`` carries no ``reason`` -- its empty
+    branch means no artifact was written, not a value that would not decode --
+    so a change aimed at decode failures must leave it alone."""
+
+    detail = _failure_detail(_empty_node(), "start")
+
+    assert detail == "the understand step did not produce usable output during start"

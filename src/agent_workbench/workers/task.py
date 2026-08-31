@@ -66,6 +66,7 @@ from agent_workbench.ports.task_workflow import (
 )
 from agent_workbench.workflows.agent_nodes import AgentNodeFailedError
 from agent_workbench.workflows.execution_scope import TaskExecutionScope
+from agent_workbench.workflows.structured_output import StructuredOutputError
 from agent_workbench.workflows.task_handlers import TaskNodeRunFailedError
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,37 @@ def _failure_detail(error: BaseException, action: str) -> str:
     them bought no privacy and cost the reader the whole message: a Task that
     died because a tool ran out of time, because nobody attached a knowledge
     base, and because every page 404'd all read identically.
+
+    **A structured node's failure now says which one it was, and that is the
+    whole subject of known-gaps C-05.** For ``plan``/``critic``/``review`` a
+    decode failure means the model ran *fine* -- so ``outcome.error`` is
+    ``None`` by construction, and every one of them fell through to "did not
+    produce usable output". C-05 recorded two competing hypotheses about a real
+    2026-08-13 failure and could not choose between them; the reason it could
+    not is that both, and every other decode failure in either graph, produce
+    that exact sentence. The discriminating text already existed on the
+    exception and had no reader.
+
+    Two safety arguments, because the rule above still applies:
+
+    * ``TaskNodeRunFailedError.reason`` is safe, and is what a node without a
+      decoder cause reports. All six values are string literals in
+      ``task_handlers`` ("critic JSON did not satisfy the review schema" and
+      five like it) with no interpolation at all -- a stricter guarantee than
+      the ``EvidenceUnavailableError`` precedent needed.
+    * The ``__cause__`` is read **one link and no further**. A
+      ``StructuredOutputError``'s own message is repo-authored, and the only
+      two that interpolate stay inside closed vocabularies: CPython calls
+      ``parse_constant`` with exactly ``NaN``/``Infinity``/``-Infinity``, and
+      the other interpolates a ``TaskNodeId``. But *its* ``__cause__`` is
+      typically a pydantic ``ValidationError``, which quotes the offending
+      input -- that is model output, and printing the chain would leak it.
+      ``str(exc)`` renders only that exception's own args, which is why this
+      formats the cause rather than the traceback.
+
+    ``AgentNodeFailedError`` keeps the old sentence: it carries no ``reason``,
+    because its empty-output branch means an artifact was never written rather
+    than a value that would not decode.
     """
 
     if isinstance(error, EvidenceUnavailableError):
@@ -124,7 +156,19 @@ def _failure_detail(error: BaseException, action: str) -> str:
                 f"the {error.node} step failed with {info.code} "
                 f"({retryable}) during {action}"
             )
-        return f"the {error.node} step did not produce usable output during {action}"
+        blind = f"the {error.node} step did not produce usable output during {action}"
+        if not isinstance(error, TaskNodeRunFailedError):
+            return blind
+        # The most specific safe text, and only that one. Appending both the
+        # reason and its cause produced three clauses where the first two said
+        # the same thing ("did not produce usable output: critic JSON did not
+        # satisfy the review schema: critic reviewed a different revision"),
+        # and the node is already named in the prefix -- which is the only
+        # thing `reason` adds once a cause is present.
+        cause = error.__cause__
+        if isinstance(cause, StructuredOutputError):
+            return f"{blind}: {cause}"
+        return f"{blind}: {error.reason}"
     return f"the graph raised {type(error).__name__} during {action}"
 
 

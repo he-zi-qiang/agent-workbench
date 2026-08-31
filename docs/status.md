@@ -27,6 +27,85 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-31（第五十六批）：一条失败信息说不出四种失败——C-05 的诊断那一半
+
+**做的是什么。** 上一批查清了 C-05 的根因：不是缺解码契约（它 2026-07-31 就在），而是
+**诊断构造性失明**。这一批把那一半修了，代码只动了两个文件。
+
+### 1. 服务端：`_failure_detail` 现在说得出是哪一种
+
+结构化节点（`plan`/`critic`/`review`）的解码失败，**按定义** `outcome.error is None`
+——模型跑完了、provider 没报错，只是交出来的值不满足 schema。于是它们全部落到同一句
+"did not produce usable output"。而更具体的说法一直挂在异常上，没有读者：
+`TaskNodeRunFailedError.reason`，以及 `__cause__` 上那个 `StructuredOutputError`。
+
+```
+改前  the critic step did not produce usable output during start
+改后  … during start: critic ran before synthesis produced a draft
+      … during start: critic output has an invalid shape
+      … during start: critic reviewed a different draft
+      … during start: critic reviewed a different revision
+```
+
+**两条安全性论证，因为这个函数存在的全部理由就是"不引用 provider 文本"。**
+
+- `reason` 安全：六个取值全是 `task_handlers` 里的字面量，**零插值**——比
+  `EvidenceUnavailableError` 那条先例要求的还严。
+- `__cause__` **只读一层**。`StructuredOutputError` 自己的消息是仓库写的，唯二插值的
+  两处也都在封闭集里（CPython 只用 `NaN`/`Infinity`/`-Infinity` 调 `parse_constant`；
+  另一处插 `TaskNodeId`）。但**它的** `__cause__` 通常是 pydantic `ValidationError`，
+  那里面引着未通过校验的输入——**那就是模型输出**。`str(exc)` 只渲染异常自己的 args，
+  这就是这里格式化 cause 而不是打印异常链的原因。有一条测试专门喂一个带
+  `PROMPT FRAGMENT` 的 `ValidationError` 进去，断言它不出现在结果里。
+
+`AgentNodeFailedError` 保持旧句子：它没有 `reason`，它的空分支意思是"没写出 artifact"，
+不是"值解不出来"。**这条有对照组钉着。**
+
+**文案收紧过一次。** 第一版把 `reason` 和 cause 都接在后面，得到三段话而前两段说的是
+同一件事（"没产出可用输出：critic JSON 没满足 review schema：critic 评了另一个修订"）。
+节点名在前缀里已经有了，那正是有 cause 时 `reason` 唯一多出来的信息——所以改成
+**有 cause 就只用 cause**。
+
+### 2. 前端：不许在最后一米把它丢掉
+
+`web/src/features/work/failure.ts` 的 `STEP_EMPTY` 分支**把匹配之后的东西全扔了**，
+渲染一句固定的"这一步没有产出可用内容"。也就是说服务端加的区分度进了事件日志和 API，
+**而对着 Work 页看的人什么都没多看到**——C-05 的失明会在上一层原样复现。
+
+这个文件自己的规矩就写着"Unrecognised details are shown verbatim rather than
+replaced"，所以按它自己的话改：正则捕获可选的 `: <cause>` 后缀，有就带出来。
+
+**逐字、保留英文**，理由和这个函数底部那个 fallback 一样：一个本文件还没学会翻译的
+原因，仍然是任何人手上最具体的东西；而给一句可能会变的服务端字符串编一个中文标签，
+正是两边开始各说各话的方式。
+
+正则里 `\w+` 配 `$` 锚定是**验证过的**不是碰巧：服务端 `ReconciliationAction` 是一个
+八个 snake_case 名字的封闭 `Literal`（`start`、`resume_with_approval`、
+`propagate_terminal` …），没有哪个能带上会让真实 detail 掉进逐字 fallback 的字符。
+
+### 3. 这一步不回答 C-05，它只让下一次观测有可能回答
+
+**C-05 收窄为部分关闭。** 剩下的判据是拿一次真实的 v1 运行，看它现在报的是四条里的
+哪一条。在那之前，任何关于根因的结论仍然只是猜测——**包括上一批否掉的那两个假设**。
+
+### 4. 门禁（本批，本机）
+
+| 项 | 结果 |
+|---|---|
+| `pytest`（离线） | **3205 passed / 800 skipped**（上一批 3201，+4 为本批新测试）|
+| `pytest`（真实 PostgreSQL + Qdrant） | **3993 passed / 12 skipped**（上一批 3989）|
+| 前端 Vitest | **828 passed / 52 文件**（上一批 826，+2 为本批新测试）|
+| 前端 eslint / `tsc -b` / `vite build` | 全过（`vite build` 本批实跑，因为动了 `web/`）|
+| `ruff format --check` / `ruff check` | 618 files / All checks passed |
+| `pyright` strict | 0 errors / 0 warnings / 0 informations |
+
+**CI 服务型五目录那一行没有单独重跑，理由要说清**：本批新增的 4 条在
+`tests/workers/`，**不在 `contracts`/`persistence`/`api`/`vector`/`e2e` 里**，所以那一行
+的计数是算术上不变（`1376 passed / 2 skipped`）；而它们通不通过已由上面那次全套证明
+——全套本来就包含这五个目录。**这是"我改了哪些文件"的事实，不是对行为的推断**；
+上一批那次单独重跑是因为改的是检索代码，那五个目录会实际执行到它。
+
+---
 ## 2026-08-31（分支 `docs/closing-scan-2026-08-31`，第五十五批）：一次收尾扫描，查出的东西大半是"文档说的"与"仓库是的"之间的差
 
 **起因**是一句"扫描整个项目，看看还有什么欠缺"。源码那边没什么可说的：门禁全绿，

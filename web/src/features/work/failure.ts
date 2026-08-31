@@ -31,8 +31,25 @@ const STEP_LABELS: Readonly<Record<string, string>> = {
 /** `the <step> step failed with <code> (retryable|not retryable) during <action>` */
 const STEP_FAILURE =
   /^the (\w+) step failed with (\w+) \((retryable|not retryable)\) during/;
-/** `the <step> step did not produce usable output during <action>` */
-const STEP_EMPTY = /^the (\w+) step did not produce usable output during/;
+/**
+ * `the <step> step did not produce usable output during <action>[: <cause>]`
+ *
+ * The trailing cause arrived with the C-05 fix on the server: for a structured
+ * node (`plan` / `critic` / `review`) an output that will not decode leaves
+ * `outcome.error` empty, so every one of them used to reach this sentence and
+ * stop there. The server now appends which one it was -- "critic reviewed a
+ * different revision" rather than four failures sharing one line -- and this
+ * pattern captures it so the console does not throw that away again. Dropping
+ * it here would reproduce the original gap one layer up.
+ *
+ * `\w+` for the action and the `$` anchor are safe rather than lucky: the
+ * server's `ReconciliationAction` is a closed `Literal` of eight snake_case
+ * names (`start`, `resume_with_approval`, `propagate_terminal`, ...), so none
+ * of them can carry a character that would drop a real detail through to the
+ * verbatim fallback.
+ */
+const STEP_EMPTY =
+  /^the (\w+) step did not produce usable output during \w+(?:: (.+))?$/;
 
 /**
  * Whole-sentence details, which the two regexes above cannot match because
@@ -98,8 +115,15 @@ export function explainFailure(detail: string | null): FailureExplanation | null
   const empty = STEP_EMPTY.exec(detail);
   if (empty !== null) {
     const step = empty[1] ?? "";
+    const cause = empty[2];
+    const base = `“${STEP_LABELS[step] ?? step}”这一步没有产出可用内容，任务无法继续。`;
+    // Verbatim, and in English, for the same reason the fallback at the bottom
+    // of this function is verbatim: a cause this file has not learned to
+    // translate is still the most specific thing anyone has, and inventing a
+    // Chinese label for a server string that may change is how the two drift
+    // into saying different things.
     return {
-      text: `“${STEP_LABELS[step] ?? step}”这一步没有产出可用内容，任务无法继续。`,
+      text: cause === undefined ? base : `${base}（${cause}）`,
       retryable: false,
     };
   }
