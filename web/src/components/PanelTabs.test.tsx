@@ -101,6 +101,36 @@ describe("键盘", () => {
     expect(onSelect).toHaveBeenCalledWith("b");
   });
 
+  it("按在 trailing 的控件上时不换标签，也不抢焦点", async () => {
+    // `trailing` 渲染在这条 strip 里面（预览栏把「收起预览栏」放在那儿），而方向
+    // 键的 handler 挂在外层。没有来源判断时，在那颗按钮上按左右键会冒泡上来：
+    // 换掉选中项，再把焦点从按钮抢到标签上——读者想在控件之间移动，得到的却是
+    // 右栏内容在脚下换了一张。
+    const onSelect = vi.fn();
+    const onCollapse = vi.fn();
+    render(
+      <PanelTabs
+        active="a"
+        entries={entries()}
+        label="右栏的几张"
+        onSelect={onSelect}
+        trailing={
+          <button onClick={onCollapse} type="button">
+            收起预览栏
+          </button>
+        }
+      />,
+    );
+    const collapse = screen.getByRole("button", { name: "收起预览栏" });
+    collapse.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(collapse).toHaveFocus();
+    // 而它本身还是一颗好用的按钮。
+    await userEvent.click(collapse);
+    expect(onCollapse).toHaveBeenCalledTimes(1);
+  });
+
   it("从最后一枚往右回到第一枚", async () => {
     const user = userEvent.setup();
     const onSelect = mount({ active: "c" });

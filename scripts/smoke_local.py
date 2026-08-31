@@ -42,6 +42,51 @@ import httpx
 #: and completed a minute later, which sent the reader to look at the wrong
 #: thing entirely.
 WORKER_TIMEOUT_SECONDS = 300.0
+
+#: The Task wait, kept apart from the ingestion one above because the two are
+#: measuring different work. 300s is what a demo graph costs; the console
+#: profile runs the real research graph -- understand -> plan -> route ->
+#: research -> synthesize -> critic -> quality_gate -- and the run this number
+#: was measured against settled `succeeded` after 301 seconds. One second past
+#: the shared deadline, and what that one second printed was not "slow": it was
+#: "the Task ended 'running'", under a hint asking whether the Task worker was
+#: running, about a Worker that had claimed the Task and was two nodes from
+#: finishing it. Sharing a constant made the cheaper of the two waits the
+#: ceiling for the more expensive one.
+TASK_TIMEOUT_SECONDS = 900.0
+
+#: Nothing moves these on its own. `waiting_approval` is a Worker that released
+#: its lease because a human decision is owed; `waiting_migration` is a graph
+#: this deployment cannot run, which is also a human's call. Polling either
+#: until the deadline buys nothing and spends the reader's whole wait before
+#: saying anything, so the wait ends the moment one is seen.
+PARKED_TASK_STATUSES = frozenset({"waiting_approval", "waiting_migration"})
+
+#: The Task's verdict. No Worker resumes one of these.
+SETTLED_TASK_STATUSES = frozenset({"succeeded", "failed", "cancelled", "dead_letter"})
+
+#: How many timeline events to read back before counting anything.
+#:
+#: 500 is the route's own ceiling, and the number matters because the counting
+#: below is arithmetic over this window rather than over the run. It used to
+#: ask for 50. A console-profile research run emits ~153 events, so the tally
+#: printed as "4 failed tool calls" over a run that had 7 failures and 16
+#: successes -- a truncated prefix reported in the tense of a total. Reading a
+#: prefix is fine for *printing* the shape of a run; it is not fine for
+#: deciding whether the run worked.
+TIMELINE_LIMIT = 500
+
+#: The tool failures that mean the envelope is wrong rather than the web is.
+#:
+#: These are the ones this walkthrough was written to catch: a Task whose tools
+#: were refused reaches `succeeded` anyway, by answering out of the model's own
+#: memory. One is enough to fail the run -- unlike a page that would not load,
+#: there is no benign reading of the caller holding narrower scopes than the
+#: profile's envelope.
+REFUSAL_ERROR_CODES = frozenset(
+    {"missing_permission_scope", "outside_submitted_envelope", "tool_not_permitted"}
+)
+
 POLL_SECONDS = 2.0
 
 SAMPLE = """The application performs one dense and sparse fusion per query.
@@ -229,15 +274,21 @@ def _chat_is_served(client: httpx.Client) -> bool:
 def _await_task(
     client: httpx.Client, args: argparse.Namespace, task_id: str
 ) -> dict[str, Any]:
-    """Wait for a Worker to claim and settle the Task."""
+    """Wait until the Task settles, parks, or outlasts the wait.
 
-    deadline = time.monotonic() + WORKER_TIMEOUT_SECONDS
+    Returns whatever the last poll saw, status included. Turning that into a
+    verdict is the caller's job, and there are three answers to tell apart
+    rather than one -- see the branch that reads it.
+    """
+
+    deadline = time.monotonic() + TASK_TIMEOUT_SECONDS
+    stop = SETTLED_TASK_STATUSES | PARKED_TASK_STATUSES
     task: dict[str, Any] = {}
     while time.monotonic() < deadline:
         response = client.get(f"/v1/tasks/{task_id}", headers=_headers(args))
         response.raise_for_status()
         task = response.json()
-        if task["status"] in {"succeeded", "failed", "cancelled", "dead_letter"}:
+        if task["status"] in stop:
             return task
         time.sleep(POLL_SECONDS)
     return task
@@ -328,34 +379,103 @@ def main(argv: list[str] | None = None) -> int:
         _fact("task_id", task_id)
 
         task = _await_task(client, args, task_id)
-        _fact("status", task.get("status"))
-        if task.get("status") != "succeeded":
+        status = task.get("status")
+        _fact("status", status)
+        # Three different things used to print as one sentence -- "the Task
+        # ended 'running' rather than succeeded", under a hint pointing at the
+        # Worker. Only one of the three is about the Worker, and `running` is
+        # not even a state a Task can end in. What the reader was sent to check
+        # was, every time, the thing that was already working.
+        if status in PARKED_TASK_STATUSES:
             return _fail(
-                f"the Task ended {task.get('status')!r} rather than succeeded",
-                "scripts/dev.sh worker   (is the Task worker running?)",
+                f"the Task is parked at {status!r}; nothing is executing it",
+                f"a decision is owed, not a restart -- GET /v1/tasks/{task_id}"
+                f"/timeline for where it stopped",
+            )
+        if status not in SETTLED_TASK_STATUSES:
+            # The wait ran out while the Task was still moving, which is not a
+            # verdict at all. Which non-terminal state it is in decides who to
+            # suspect: `queued` means nothing ever claimed it, `running` means
+            # something did and is still at it.
+            return _fail(
+                f"the Task was still {status!r} after "
+                f"{TASK_TIMEOUT_SECONDS:.0f}s, which is not a failure",
+                "scripts/dev.sh worker   (nothing claimed it)"
+                if status == "queued"
+                else f"a Worker has it and has not finished; ask again: "
+                f"GET /v1/tasks/{task_id}",
+            )
+        if status != "succeeded":
+            return _fail(
+                f"the Task settled {status!r} rather than succeeded",
+                f"GET /v1/tasks/{task_id}/timeline for the event that ended it",
             )
 
         timeline = client.get(
             f"/v1/tasks/{task_id}/timeline",
             headers=_headers(args),
-            params={"limit": 50},
+            params={"limit": TIMELINE_LIMIT},
         )
         timeline.raise_for_status()
-        kinds = [event["event_type"] for event in timeline.json()["events"]]
-        _fact("timeline", " -> ".join(kinds))
+        events = timeline.json()["events"]
+        kinds = [event["event_type"] for event in events]
+        # Collapsed, because the window is now the whole run. 153 arrows in
+        # one line is not a shape anybody reads; consecutive repeats carry
+        # their count instead, which is the same information at the length the
+        # truncated version accidentally had.
+        shape: list[str] = []
+        for kind in kinds:
+            if shape and shape[-1].split(" x")[0] == kind:
+                seen = shape[-1]
+                count = int(seen.split(" x")[1]) if " x" in seen else 1
+                shape[-1] = f"{kind} x{count + 1}"
+            else:
+                shape.append(kind)
+        _fact("timeline", " -> ".join(shape))
         # A settled Task is not a working one. `succeeded` is about the graph
         # reaching its end, and a run whose every tool call was refused reaches
         # it too -- by writing an answer out of the model's own memory. That is
         # the one thing this walkthrough exists to not print a green line for,
         # and it is what it printed before the scopes above were sent.
+        # The rule the comment above states, rather than the one that was
+        # written. "Every tool call was refused" is the failure this exists to
+        # catch; "some pages did not load" is Tuesday on the open web, and a
+        # check that fires on both fires on every console-profile run -- at
+        # which point it has stopped being a check. So: any refusal at all is
+        # a failure, and so is a run where nothing worked; anything else is
+        # reported and walked past.
         refused = kinds.count("ToolFailed")
+        worked = kinds.count("ToolCompleted")
+        codes: dict[str, int] = {}
+        for event in events:
+            if event["event_type"] != "ToolFailed":
+                continue
+            payload = event.get("payload") or {}
+            error = payload.get("error") or {}
+            code = str(error.get("code") or "unknown")
+            codes[code] = codes.get(code, 0) + 1
+        envelope_refusals = sum(
+            count for code, count in codes.items() if code in REFUSAL_ERROR_CODES
+        )
         if refused:
-            _fact("tool calls that failed", refused)
+            _fact("tool calls", f"{worked} ok, {refused} failed")
+            _fact(
+                "their error codes",
+                ", ".join(f"{code} x{count}" for code, count in sorted(codes.items())),
+            )
+        if envelope_refusals or (refused and worked == 0):
+            if envelope_refusals:
+                return _fail(
+                    f"{envelope_refusals} tool call(s) were refused by the "
+                    "envelope, not by the tool",
+                    "--scopes is narrower than this profile's envelope; widen it "
+                    "or submit with the scopes the console sends",
+                )
             return _fail(
-                f"the Task settled {task.get('status')!r} with {refused} failed "
-                "tool calls",
-                "read the timeline's ToolFailed errors; `missing_permission_scope` "
-                "means --scopes is narrower than this profile's envelope",
+                "every tool call in this run failed, so the answer came out of "
+                "the model's own memory rather than out of the tools",
+                f"GET /v1/tasks/{task_id}/timeline and read the ToolFailed "
+                "errors; this is the state the walkthrough exists to catch",
             )
 
         chat_served = _chat_is_served(client)

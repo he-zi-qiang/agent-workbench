@@ -48,6 +48,7 @@ from agent_workbench.application.code_session import (
     CodeRunRefusedError,
     CodeRunUnavailableError,
     CodeSessionService,
+    kept,
     read_only,
 )
 from agent_workbench.application.workspace import (
@@ -495,6 +496,41 @@ async def ask(
         if unknown:
             raise ToolInputInvalidError(
                 "this deployment has no tool named " + ", ".join(sorted(unknown))
+            )
+        # And then the same question `min_length=1` above asks, asked again of
+        # the list that actually survives -- because the field's guard reads
+        # the request and the invariant is about the envelope. The two differ
+        # in a combination the console produces on its own: a selection made
+        # in act mode may name only writes, and `mode="plan"` then takes every
+        # one of them away. Both guards pass -- the array is not empty and
+        # each name is registered -- and `kept` returns nothing, so the turn
+        # signs an envelope with no tools in it. That is the exact state the
+        # field's own comment says must not be built: a coding turn that
+        # cannot read the project it is about can only answer from the
+        # conversation, which is Chat's shape and not this one's.
+        #
+        # Here rather than beside `kept` in `_run`, and the reason is what has
+        # already happened by then: `_run` appends the reader's message to the
+        # transcript before it narrows anything, so refusing down there leaves
+        # a question standing with no answer under it and makes the retry a
+        # duplicate. Refusing here costs one `offer` -- the same read the
+        # catalogue endpoint makes -- and spends no model call.
+        #
+        # `read_only` and `kept` are the turn's own functions, called rather
+        # than restated. A second implementation of either is the bug this
+        # would be checking for.
+        offer = await service.offer(session_id=session_id, principal=principal)
+        offered = tuple(spec.name for spec in offer.specs)
+        if body.mode == "plan":
+            offered = read_only(
+                offered, risks={spec.name: spec.risk for spec in offer.specs}
+            )
+        if not kept(offered, keeping=frozenset(body.tools)):
+            raise ToolInputInvalidError(
+                "none of the selected tools is offered to this turn"
+                + (" in plan mode" if body.mode == "plan" else "")
+                + "; offered here: "
+                + (", ".join(offered) if offered else "(none)")
             )
     run_id = _stable_run_id(
         tenant_id=principal.tenant_id,

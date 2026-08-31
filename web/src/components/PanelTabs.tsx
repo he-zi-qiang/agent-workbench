@@ -69,6 +69,11 @@ export function PanelTabs({
   // 左右方向键在标签之间走，这是 tablist 的标准键盘契约；没有它，一排 `role=tab`
   // 对读屏用户是一排说了谎的按钮。
   function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    // 只认从标签上发出来的按键。`trailing` 渲染在这条 strip **里面**（预览栏把
+    // 「收起」按钮放在那儿），而这个 handler 挂在外层，所以在那颗按钮上按左右键
+    // 会冒泡到这里：preventDefault 之后换掉选中项，再把焦点从按钮上抢到标签上。
+    // 读者想做的是在控件之间移动，得到的是右栏内容在脚下换了一张、焦点也不见了。
+    if (!(event.target as HTMLElement).closest('[role="tab"]')) return;
     const step =
       event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
     if (step === 0) return;
