@@ -27,6 +27,89 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-31（第六十一批）：把入口文档里会把人带错路的那些口径改对
+
+这一批一个字的代码逻辑都没改，改的是**读者据以动手的前提**。挑选标准只有一条：
+一个照着它做事的人会做错什么。
+
+### 1. `CLAUDE.md`——每次开工都会被读的那份
+
+| 原文 | 实际 | 照着它会怎样 |
+|---|---|---|
+| 门禁命令「mirrors the CI quality job」 | CI 那个 job 还跑 `uv lock --check`、test/production 两个 profile、`agent-cli demo` 金标 diff、pip-licenses、embedding extra 缺席断言——**六步不在这条命令里** | 以为本机绿了 CI 就会绿 |
+| 没有 `cp .env.example .env` | 三条 DSN 在 `FORBIDDEN_TOML_PATHS` 里，只能来自环境。缺了，**门禁第一条命令**就报 `3 validation errors` | 干净 checkout 上第一步就失败，且看起来像仓库坏了 |
+| 服务型套件四个目录 | **五个**，少了 `tests/e2e`（2026-08-28 进 CI，杀进程恢复那几条就在里面） | 复现 CI 那一行会漏掉六个文件 |
+| 三个自有 MCP server | **四个**（多 computer） | — |
+| adapters 括号里 11 个 | **22 个目录**。漏的含大件：`research/` 1310 行、`documents/` 835、`filesystem/` 791、`screen/` 773 | 照它上手会漏掉一半适配器层 |
+| 8 个 profile | **10 个**（漏 computer-local 与 sandbox-local）。另外 `--profile` 只认三个名字，其余七个必须走 `--config` | 按它去 check 一个 profile 会发现参数不认 |
+| 「the suite is 458/458」 | 数字早已过时。这一行现在**只留指针**，指向 HIGHLIGHTS §2 | 引用一个过期两百多条的数 |
+| 「forbids method calls too」 | 方法调用那一半是**两个写死的属性名**（`as_query_engine` / `as_chat_engine`），其余守卫都只处理 import；而且 `FORBIDDEN_CORE_IMPORTS` **是黑名单** | 以为核心层的第三方依赖被守住了 |
+| computer 页「reads no endpoint」 | ADR-095 已经把路修出来了：`routes/computer.py` 的 `GET /session`、`main.py` 无条件挂载、页面 4 秒轮询 | **这条尤其要紧**——它是读者用来判断「要不要给这个页面加端点」的前提，而前提反了 |
+
+### 2. README 中英两版
+
+八个页面（漏「用量」）；HTTP API 清单补 `/v1/usage`、`/v1/computer`、`/v1/evaluation`
+——这三个字符串此前在四份文档里**一次都没出现过**；Agent 工具 11 → **17**
+（漏掉整个 `project_*` 族，含 destructive 的 `project_run`）；
+schema `1.18` → `1.19`；ADR「34 份，0012–0045」→ **85 份，0012–0098**（落后 51 份）。
+
+两处更实质的：
+
+- **`domain` 的依赖表少写了一个 `regex`。** `domain/workspace.py:34` 就是
+  `import regex`，`pyproject.toml` 声明了它。它有正当理由（带超时的匹配引擎撑起
+  `GREP_TIMEOUT_SECONDS`，标准库 `re` 没有超时）——但**「有正当理由」和「被守住」是两件事**：
+  `FORBIDDEN_CORE_IMPORTS` 是黑名单，下一个进核心层的第三方包同样不会让 CI 变红。两版都补了这段。
+- **英文版补齐两块**：「子代理派生」整条 bullet，与文档表里的「前端设计基线」整行——
+  少了后者，`docs/frontend-design.md` 在整份英文 README 里零链接。
+
+### 3. `docs/frontend-design.md`——它是「改前端」的指定入口读物
+
+§1／§2／§3 描述的是一个 2026-08-20 之后就不存在的外壳：「全局只有两个一级入口」
+「工作台一页两标签」，并让读者去读 `AppShell.tsx` 的 `FIRST_SECONDARY_INDEX`
+与 `WorkbenchLayout.tsx` 的注释——**两个符号在 `web/` 里都 grep 不到**，后者已被 ce74730 删除。
+**一个照着它动手的人会去找两个不存在的东西。**
+
+按当前 `web/src/` 重写了 §1、§2、§3 与 §5 的对应部分，每处都标出原文说了什么
+（删掉原文等于把「这里曾经错过」也一起删掉）。§4 视觉语言与 §6 门禁未动。
+§5 的目录树补上了 `usage/`。
+
+### 4. 其余各处
+
+- **`docs/configuration.md` 把导出闸门默认值说反了。** 文档写「默认 `true`」、
+  示例注释写「仓库默认仍是 true」，而 `settings.py:718` 是 `False`、
+  `config.default.toml:308` 是 `false`、ADR-048 的标题就叫「导出闸门默认关闭」。
+  **错在 §3「被固化的架构不变量」这一节里**——读者最会当真的地方，
+  且它让一个部署以为自己有人工确认。
+- **`docs/README.md`**：schema `1.14` → `1.19`；ADR 34 → 85；
+  「代码实施计划 v1.0」从**基线契约表**里移出——它自陈是历史计划快照、配置依据停在
+  schema 1.6、§4.1 目标目录与实际 `src/` 大面积对不上。**没有移进 `archive/`**，
+  因为六份 ADR 按**行号**引用它，移动会让引用全部指错；这条理由写在文档里。
+- **`docs/adr/0017` 迁移进度表**：第 2 步「已执行，未通过——测量分辨不了」改为**已通过**。
+  `b9aa057`（2026-08-11）就重跑完了：四份报告同一 `gold_digest`、同为 52 题、
+  同臂排序指标逐位相同。第 3 步的阻塞理由也随之改写——挡住它的不再是证据，是一个决定。
+- **`docs/architecture-baseline.md`**：Chat 会话服务端管理那一行从只勾 Planned
+  改到 Demonstrated；正文里「侧栏的可访问名就叫『本地 Chat 会话』」——那个串前端零命中。
+- **`docs/HIGHLIGHTS.md` §4** 三条：LlamaIndex 那条的 9-10/38 是**旧题库**的数字；
+  Chat 的 `stream.quarantined` **已经在显示**（`ChatPage.tsx` 读 `quarantinedSequences`，
+  正反两条测试）；watchdog 的 abort 是**明确拒绝**（ADR-041 §6/§7）而不是没做，
+  替代机制 `abort_lag_seconds` 在跑。
+- **`agent_runtime.py` 的模块 docstring** 写着「Execution is serial here」。
+  那个「later 才到的并行调度器」在 PR-009 就到了（`plan_tool_batches` + `asyncio.gather`）。
+  按本仓库自己的约定注释是规格的一部分，**而这是这个文件对读者的第一句解释**。
+- **`apps/api/web.py` 的挂载 docstring** 说「there are no client routes to fall back on」。
+  结论碰巧仍成立，**理由变了**：有十四条客户端路由，只是 `HashRouter` 让 `#` 后面的
+  东西根本到不了服务端。下一个换成 `BrowserRouter` 的人读原文会以为不用动挂载。
+- **`settings.py` 的 `llama_index.enabled` 注释**写着等价评测「还没重跑」——写于重跑之前。
+- **`.env.example`** 重写：DSN 从 `5432/agent_workbench` 改成
+  `5433/agent_workbench_local`（`dev.sh services` 实际建的那个；照旧值配完再跑 dev.sh
+  会连到另一台服务器）；删掉「Optional until the DeepSeek adapter is implemented」
+  ——适配器早就在用了；并写明 `replace-me-local-only` 命中 `PLACEHOLDER_PREFIXES`，
+  照抄等于没配。
+
+离线门禁 3218 passed / 800 skipped，`ruff` 全绿，`pyright` 0 errors，
+`agent-config-check --profile development` 在按新 `.env.example` 注入的环境下 `status: ok`。
+
+---
 ## 2026-08-31（第六十批）：前端两处可复现的功能缺陷
 
 两条都不是"待办"，是**页面在说假话**。

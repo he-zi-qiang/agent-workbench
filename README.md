@@ -79,9 +79,10 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 
 ### 1.4 Web 控制台
 
-React + TypeScript，七个页面：**Chat**、**Tasks**（任务时间线与生命周期）、
-**Code**（编码会话与文件预览）、**知识库**（资料与上传）、**效果评测**（评测报告）、
-**计算机**（屏幕控制的安全边界说明）、**运行状态**。
+React + TypeScript，八个页面：**Chat**、**Tasks**（任务时间线与生命周期）、
+**Code**（编码会话与文件预览）、**知识库**（资料与上传）、**用量**（三个模式各花了
+多少 token 和钱）、**效果评测**（评测报告）、**计算机**（屏幕控制的边界与会话面板）、
+**运行状态**。
 
 一次运行做了什么会折叠成阶段，展开能看到原始事件与 payload——**折叠只改称呼，不丢
 事件**。任务发生过委派时，时间线上方多出一个「参与的 Agent」面板：按谁派生谁的树列出
@@ -92,6 +93,7 @@ React + TypeScript，七个页面：**Chat**、**Tasks**（任务时间线与生
 **HTTP API**（FastAPI）：`/v1/chat`（会话、消息、SSE）、`/v1/tasks`（提交、查询、
 时间线、运行树、取消、triage）、`/v1/knowledge-bases`、`/v1/uploads`、`/v1/search`、
 `/v1/approvals`、`/v1/artifacts`（含 `/preview`）、`/v1/projects`、`/v1/code`、
+`/v1/usage`、`/v1/computer`（只读反代，ADR-095）、`/v1/evaluation`、
 `/health/live|ready`。
 
 **命令行**：`agent-cli`（演示与提交）、`agent-api`、`agent-task-worker`、
@@ -99,10 +101,13 @@ React + TypeScript，七个页面：**Chat**、**Tasks**（任务时间线与生
 server：`agent-word-mcp`、`agent-web-mcp`、`agent-sandbox-mcp`、`agent-computer-mcp`
 （全部只绑 loopback）。
 
-**Agent 可用工具**：`knowledge_search`、`web_search`、`external_search`、
-`workspace_list/read/write/edit/grep`、`sandbox_run`、`export_artifact`、
-`delegate_agent`（派生子代理，**默认关**），以及经 MCP 接入的
-`mcp_web_fetch_page`、`mcp_web_download_document`、`mcp_word_render_document`。
+**Agent 可用工具**（进程内 17 个）：`knowledge_search`、`web_search`、
+`external_search`、`workspace_list/read/write/edit/grep`、
+`project_list/read/write/edit/grep`（编码会话里的项目目录，ADR-072／074）、
+`project_run`（在宿主上跑命令，**destructive，先展示再执行**，ADR-077）、
+`sandbox_run`、`export_artifact`、`delegate_agent`（派生子代理，**默认关**）；
+另有经 MCP 接入的 `mcp_web_fetch_page`、`mcp_web_download_document`、
+`mcp_word_render_document`。
 
 哪个 server 的工具进哪个 Agent 由配置的 `audience` 声明（`research` / `synthesis` /
 `sandbox` / `delegation`），加一个读取器是改配置不是改代码。这条间接性是**必需**而非
@@ -168,19 +173,26 @@ flowchart TB
 
 | 层 | 它是什么 | 允许依赖 | 被禁止什么（括号内是强制它的守卫） |
 |---|---|---|---|
-| **domain**<br/>`domain/` | 把"什么状态根本不该存在"写进类型本身，让不变量由**构造失败**保证，而不是靠每个调用方记得检查 | 标准库、Pydantic、domain 自身 | 任何框架/SDK；任何 I/O；可变或接受未知字段（`DomainModel` 全局 `frozen=True, extra="forbid"`）；`TaskState` 不得长出消息记录或框架对象——它要能写进图 checkpoint |
+| **domain**<br/>`domain/` | 把"什么状态根本不该存在"写进类型本身，让不变量由**构造失败**保证，而不是靠每个调用方记得检查 | 标准库、Pydantic、domain 自身，**外加一个 `regex`**（`domain/workspace.py` 用它带超时的匹配引擎撑起 `GREP_TIMEOUT_SECONDS`；标准库 `re` 没有超时） | 任何框架/SDK；任何 I/O；可变或接受未知字段（`DomainModel` 全局 `frozen=True, extra="forbid"`）；`TaskState` 不得长出消息记录或框架对象——它要能写进图 checkpoint |
 | **ports**<br/>`ports/`（37 个） | 用 `typing.Protocol` 把"系统需要什么能力"和"谁来提供"分开 | 仅 domain、标准库、Pydantic | 写任何实现（这里没有 SQL、没有 HTTP、没有向量库调用）；`ports/model.py` 的导入受 `MODEL_STREAM_OWNERS` 白名单管制 |
 | **runtime**<br/>`runtime/` | 全仓唯一一份工具循环：把一次运行跑到**终态**，并在循环上装齐预算、截止、上下文、取消、重复调用五道闸 | 仅 domain + ports | import 任何框架；**任何模块（含 adapters）不得再写第二份消费模型流的循环**；把 "allow, pending approval" 当 allow 直接派发 |
 | **workflows**<br/>`workflows/` | 控制流写成能单独读、单独测的**声明**：边是数据、路由是纯函数、每个 agent 能看什么够到什么是一张写死的表 | domain、ports、application | import langgraph（图的编译只在 `adapters/langgraph/`）；画像扩权（`permitted_tools` 只做交集，没有能反转方向的参数）；节点回头向注册表要当前 epoch |
 | **application**<br/>`application/` | 把"一次问答""一个 Task""一次编码会话"的编排步骤、授权围栏与失败处理写在只依赖 domain/ports 的地方 | domain、ports、workflows | import 框架；直接读 `os.environ`；**自己长出工具循环**——要跑 agent 只能过 `ports/agent_executor` |
-| **adapters**<br/>`adapters/`（23 个） | 一个目录接一个外部世界，把各家方言在自己边界上翻成 ports 的协议 | ports、domain、第三方框架 | 除 `adapters/langgraph` 外不得 import langgraph 或 `workflows`；**LlamaIndex 的 agent / query_engine / response_synthesizer 在整棵源码树里都禁用**，连 `as_query_engine()` 这类方法调用一并禁 |
+| **adapters**<br/>`adapters/`（22 个目录 + 两个散装模块） | 一个目录接一个外部世界，把各家方言在自己边界上翻成 ports 的协议 | ports、domain、第三方框架 | 除 `adapters/langgraph` 外不得 import langgraph 或 `workflows`；**LlamaIndex 的 agent / query_engine / response_synthesizer 在整棵源码树里都禁用**，连 `as_query_engine()` 这类方法调用一并禁 |
 | **apps + bootstrap**<br/>`apps/` `bootstrap/` `workers/` | 让"一份 TOML"变成"若干个各自只拿到自己那一份、启动时就能验伪的独立进程" | core 四层 + adapters + 框架 | `os.environ` **只允许出现在 bootstrap 包内**；`Settings` 类型不得越过 `projections.py` 继续传播；TOML 里禁止写库连接串；单值 `Literal` 表达的不变量改不动——要改先写 ADR |
 | **web**<br/>`web/src/` | 把后端那套事实翻译成人能核对的界面，而不是自己再造一份执行模型 | `web/src/api/`（唯一出网处）、后端 HTTP + SSE | 直连数据库或向量库（`fetch` 只出现在两个文件里）；折叠事件时丢弃事件——原始 payload 必须仍可达 |
 
 这条边界是一条**会让 CI 变红**的测试
 （[`tests/architecture/test_dependency_boundaries.py`](tests/architecture/test_dependency_boundaries.py)），
-而且它连**方法调用**都禁——理由见
+它连**方法调用**都禁——不过那一半是**两个写死的属性名**（`as_query_engine` /
+`as_chat_engine`），因为它们挂在本项目确实会建的 `VectorStoreIndex` 上、不需要新的
+import；其余守卫都只处理 import 形态。理由见
 [十分钟版本 §3.1](docs/HIGHLIGHTS.md#31-让越权在类型上不可能而不是靠信任)。
+
+> **它是黑名单，不是白名单，这一点要说清楚。** `FORBIDDEN_CORE_IMPORTS` 列的是禁止项，
+> 所以**没人列过的第三方包进核心层不会让 CI 变红**——上面那个 `regex` 就是这样进来的，
+> 它有正当理由，而"有正当理由"和"被守住"是两件事。登记在
+> [已知缺口](docs/known-gaps.md)。
 
 ### 2.3 哪个能力落在哪一层
 
@@ -333,7 +345,7 @@ flowchart TB
 | 前端 | React + TypeScript + Vite | Chat / Tasks / Code / 知识库 / 评测 / 计算机 / 运行状态 / 用量 |
 | 可观测 | OpenTelemetry | Port + OTLP Adapter，核心层不导入 SDK |
 
-配置为**单一 schema（当前 `1.18`）**，跨域校验在启动时完成；声称的能力与代码不符
+配置为**单一 schema（当前 `1.19`）**，跨域校验在启动时完成；声称的能力与代码不符
 会**在配置加载阶段失败**，而不是躺在那里没人读。
 
 ---
@@ -400,7 +412,7 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 | [配置管理契约](docs/configuration.md) | 配置来源、密钥规则、快照语义 |
 | [本机运行手册](docs/running-locally.md) ／ [Compose 部署](docs/deployment.md) | 怎么跑起来 |
 | [前端设计基线](docs/frontend-design.md) | 前端结构、协议边界、响应式策略 |
-| [ADR 索引](docs/adr/) | 34 份实施期决策记录（0012–0045） |
+| [ADR 索引](docs/adr/) | 85 份实施期决策记录（0012–0098，0050 与 0053 预留未写） |
 | [完整文档地图](docs/README.md) | 分层索引与按角色的阅读路径 |
 
 ---

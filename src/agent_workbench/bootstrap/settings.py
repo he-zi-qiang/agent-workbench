@@ -835,9 +835,16 @@ class LlamaIndexSettings(StrictModel):
     # unstable order, it was that the fused scores were themselves unstable,
     # being built from arm-internal ranks the engine assigned arbitrarily among
     # ties. Fusing in the adapter over deterministically-ranked arms fixed it.
-    # This stays False regardless: the equivalence evaluation has not been
-    # re-run on the reproducible retriever, and a switch still needs evidence
-    # rather than an unblocked path to it.
+    # This stays False, and as of 2026-08-31 the reason has changed. The
+    # sentence here read "the equivalence evaluation has not been re-run on the
+    # reproducible retriever" -- written before b9aa057 (2026-08-11) re-ran it.
+    # All four reports now answer one 52-question gold set under one digest,
+    # and the two paths agree to the last digit on every ranking metric.
+    #
+    # What blocks the switch now is not evidence. Flipping it changes the Task
+    # run-semantics fingerprint and crosses a frozen boundary, so it is a
+    # decision for its own ADR (see known-gaps A-01). Leaving the old sentence
+    # here would have kept pointing at work that was already done.
     enabled: bool = False
     role: Literal["ingestion_and_retrieval_adapter"] = "ingestion_and_retrieval_adapter"
     agent_executor_enabled: Literal[False] = False

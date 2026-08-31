@@ -1,70 +1,96 @@
 # Agent Workbench 前端设计与实现基线
 
+> **2026-08-31 修订。** 本文档被 [`docs/README.md`](./README.md) 指定为「改前端」的入口
+> 读物，而 §1／§2／§3 描述的是一个 2026-08-20 之后就不存在的外壳：它写着「全局只有两个
+> 一级入口」「工作台一页两标签」，让读者去读 `AppShell.tsx` 的 `FIRST_SECONDARY_INDEX`
+> 与 `WorkbenchLayout.tsx` 的注释——**两个符号在 `web/` 里都 grep 不到**，后者已于
+> ce74730 删除。一个照着它动手的人会去找两个不存在的东西。
+>
+> 这一版按当前 `web/src/` 重写了 §1、§2、§3 与 §5 的对应部分，并在每处标出原文说了什么。
+> 视觉语言（§4）与验收门禁（§6）未变。
+
 ## 1. 目标
 
 这个界面服务于校招作品集，不伪装成已经商业化的 SaaS。视觉上借鉴现代 Chat/Work
 工作台的克制与连续性，信息上保留工程项目最有价值的部分：真实运行状态、协议边界、
 恢复语义、权限事实与“尚未实现”的能力。
 
-全局只有两个一级入口，它们在窄导航里**画成一组**——分隔线在这两项之下，而不是在它们
-之间：
+全局有**三个**一级入口，各自是自己的路由，**没有标签条**：
 
-- **工作台**：一页两标签。**对话**是多轮问答、知识库检索、durable SSE 执行记录与安全
-  引用；**任务**是长任务提交、LangGraph 时间线、HITL 审批、取消与最终产物。两者的
-  URL 没有变（`/chat/:sessionId`、`/work/:taskId`），合并的是外壳不是组件——标签条是
-  一个无路径 layout 路由，两个页面的内部一行未动。
-- **Code**：编码会话、工作区文件与实时步骤。
+- **Chat**（`/chat/:sessionId`）：多轮问答、知识库检索、durable SSE 执行记录与安全引用。
+- **Tasks**（`/work/:taskId`）：长任务提交、LangGraph 时间线、HITL 审批、取消与最终产物。
+- **Code**（`/code/:sessionId`）：编码会话、工作区文件与实时步骤。
 
-分组是视觉上的，不是路由上的：Code 仍然是它自己的路由，不在工作台的标签条里。分隔线
-的位置由 `primary` 推导（`AppShell.tsx` 的 `FIRST_SECONDARY_INDEX`），而不是写死一个
-下标——写死的那版把线画在了 Code **上面**，于是这两个一级入口被画成了两组。
+哪几项是一级由 `navigation.ts` 的 `primary: true` 声明，`AppShell.tsx` 用
+`NAVIGATION.filter((item) => item.primary)` 取出来；**没有 `FIRST_SECONDARY_INDEX`
+这个符号**，也没有一个把 Chat 与 Tasks 合起来的 layout 路由。
 
-Knowledge、Evaluation、Computer、System 是证据与操作辅助页，不与主流程争夺视觉
-层级。其中 **Computer 是唯一一个不读接口的页面**：屏幕门禁活在 computer MCP 服务器
-进程里，`apps/api` 没有能看到它的路由，所以这一页说明的是规则（ADR-070 的四道检查、
-tier 推导、拒绝文案、截图预算），而"这次会话批准了哪些应用"在页面上明确缺席——
-一张编出来的名单会被读成这台机器此刻的状态。这是 System 页对 Worker 状态的同一条
-处理：没有接口就说没有接口。
+> 原文写的是「全局只有两个一级入口」「工作台一页两标签」，分隔线由
+> `FIRST_SECONDARY_INDEX` 推导。那次合并已经被推翻：三个工作区各自独立，
+> 名字也一并改成了英文（`navigation.ts` 里记着这次推翻的理由）。
+
+知识库、用量、效果评测、计算机、运行状态是证据与操作辅助页，不与主流程争夺视觉层级。
+
+**Computer 页读接口**（ADR-095）：`routes/computer.py` 的 `GET /session` 经
+`apps/api` 的**只读反代**服务，`main.py` 无条件挂载，页面用 `useQuery` 每 4 秒轮询，
+画出 allowlist、当前前台应用与最近动作三态。它同时仍然说明规则（ADR-070 的四道检查、
+tier 推导、拒绝文案、截图预算）——**规则是手抄的，与 `domain/computer.py`／`gate.py`
+没有交叉校验**，这一点登记在[已知缺口](./known-gaps.md)里。
+
+> 原文写的是「Computer 是唯一一个不读接口的页面……『这次会话批准了哪些应用』在页面上
+> 明确缺席」。ADR-095 已经把那条路修出来了，而这份文档、`CLAUDE.md` 与 `README.en.md`
+> 三处都没跟上——这一条尤其要紧，因为它是读者用来判断「要不要给这个页面加端点」的前提。
+
 Approvals 那一页已随 ADR-048 移除：导出审批仍然可以回答，位置是等待中的那个 Task
-的详情，而不是一份跨任务的收件箱。
+的详情，而不是一份跨任务的收件箱。跨任务的「待我确认」收件箱后端在服务
+（`GET /v1/approvals`）而前端零调用，登记为 F-08。
 
 ## 2. 信息架构
 
 ```text
-全局窄导航
-├── 工作台（标签：对话 ｜ 任务）
-│   ├── 对话
-│   │   ├── 本机会话入口（Chat 侧服务端仍无列表 API，见 §3）
-│   │   ├── 对话正文
-│   │   ├── durable execution activity
-│   │   └── Citation / withheld 发布边界
-│   └── 任务
-│       ├── Task 列表与提交
-│       ├── TaskInput artifact
-│       ├── 节点时间线与未知事件
-│       ├── Approval 权威记录（就在等待的那个 Task 里）
-│       └── 严格关联的 export_artifact 报告
-├── Code
+全局窄导航（rail）
+├── Chat                       ← primary
+│   ├── 服务端会话列表（GET /v1/chat/sessions，可改名可删除）
+│   ├── 对话正文
+│   ├── durable execution activity
+│   └── Citation / withheld 发布边界与被隔离位次的披露
+├── Tasks                      ← primary
+│   ├── Task 列表与提交
+│   ├── TaskInput artifact
+│   ├── 节点时间线与未知事件
+│   ├── 参与的 Agent 面板（委派树，选中一行收窄下面的步骤流）
+│   ├── Approval 权威记录（就在等待的那个 Task 里）
+│   └── 严格关联的 export_artifact 报告
+├── Code                       ← primary
 │   ├── 服务端会话列表，名字来自第一句指令（ADR-047）
 │   ├── 工作区文件：点开看正文，或下载
 │   └── 本轮步骤（持久事件，延迟下限是一个轮询周期）
-├── Knowledge
+├── 知识库
 │   ├── declare → raw PUT → complete
 │   └── /v1/search 检索检查
-├── Evaluation
-└── System / 本地身份
+├── 用量
+├── 效果评测
+├── 计算机（只读会话面板 + 规则说明）
+└── 运行状态 / 本地身份
 ```
 
-标签条是链接加 `aria-current`，不是 ARIA tabs：它切的是路由，中键、复制链接、
+快速跳转（`QuickSwitcher`）按 label + group + description + keywords 匹配，关键词表
+在 `navigation.ts` 里按路由索引，**键类型是 `NAVIGATION` 的 `to` 字面量联合**——
+新增一个导航项而不给它关键词是一个类型错误。它此前是一条三元链，漏掉 `/usage`，
+于是用量页拿的是运行状态页的关键词。
+
+导航项是链接加 `aria-current`，不是 ARIA tabs：它切的是路由，中键、复制链接、
 浏览器前进后退和读屏软件的链接列表都必须成立。`.aw-segmented` 保持原样不动——
 那是同一个视图内容上的单选组（状态筛选、预览模式），是控件不是导航。
 
 桌面端采用窄全局 rail + 业务上下文栏 + 主内容的结构；移动端改为底部一级导航，Chat
 会话横向滚动，Work 将提交表单与任务列表压缩为上半区，详情保留独立滚动。
 
-切换标签会卸载另一半，因此 Chat 的 SSE 连接会断开——和今天任何一次导航一样。想把
-`useChatRuntime` 提到 layout 里"修"这件事的人请先读 `WorkbenchLayout.tsx` 的注释：
-那会让 layout 拥有 chat 状态，把这次刻意避开的组件合并重新造出来。
+离开 Chat 会卸载它，因此 SSE 连接会断开——和任何一次导航一样。
+`useChatRuntime` 属于 Chat 这棵子树，把它提到全局外壳上会让外壳拥有 chat 状态。
+
+> 原文让读者「先读 `WorkbenchLayout.tsx` 的注释」。那个文件已于 ce74730
+> （2026-08-20）随标签条一起删除，`grep -rn 'WorkbenchLayout' web/` 零命中。
 
 ## 3. 不能伪造的前端语义
 
@@ -81,9 +107,13 @@ Approvals 那一页已随 ADR-048 移除：导出审批仍然可以回答，位�
 - HTTP 与 SSE 可任意先后到达；run orphan buffer、event id 去重和幂等终态归并必须同时
   成立。
 - 离开页面不能取消 Ask HTTP，因为服务端把客户端断开解释为取消真实工作。
-- **Chat** 后端仍没有 Session list/title projection，侧栏必须标“本地列表”。Code
-  已经不是这样了（ADR-047）：它的列表来自 `GET /v1/code/sessions`，名字来自第一句
-  指令。两者的差别是真的，不要把这句话当成整个控制台的事实。
+- **Chat 的会话列表来自服务端**：`GET /v1/chat/sessions`，可 `PATCH` 改名、可
+  `DELETE`（4c40474，2026-08-20；`tests/api/test_chat_session_management.py`）。
+  仍然留在 `localStorage` 里的只有 `answerMode` / `knowledgeBaseId` 与游标——
+  那是一台机器上的偏好，不是会话本身（F-06）。
+
+  > 原文写的是「后端仍没有 Session list/title projection，侧栏必须标『本地列表』」，
+  > 并且那个可访问名「本地 Chat 会话」在前端已经 grep 不到。
 
 ### Work
 
@@ -100,8 +130,13 @@ Approvals 那一页已随 ADR-048 移除：导出审批仍然可以回答，位�
 
 - Upload complete 只表示文档版本与 outbox 已提交，不表示已经索引。
 - Search 空结果不区分“无匹配”“尚未索引”与“无可读内容”，避免权限枚举。
-- **LlamaIndex 是确定的主 RAG 框架，RAGAS 是离线评测基线；两者当前仍是 Planned。**
+- **LlamaIndex 是确定的主 RAG 框架，RAGAS 是离线评测基线。** LlamaIndex 的检索适配器
+  已建成、契约测试与 52 题等价评测都过了（`b9aa057`），但**默认仍未切换**，
+  切换是一个待写 ADR 的决定；RAGAS 整条链仍不存在（A-04）。
   页面不展示假集成状态或手抄分数。
+- **评测页渲染 API 送来的三类报告**（检索消融 / 任务分流 / 回答质量），
+  三张表分开——三套评测问的是三个不同的问题，合成一张就得发明一个共同指标。
+  页面上的每一个百分比都必须能在某一份报告里找到，这条由测试守着。
 - Health 只解释 `/health/live` 与 `/health/ready` 的实际含义，不推断模型、Worker、索引或
   Trace 状态。
 
@@ -135,8 +170,9 @@ web/src/
 │   ├── work/        # timeline reducer/hook 与 Task 页面
 │   ├── code/        # 会话、工作区文件查看器、步骤流
 │   ├── knowledge/
+│   ├── usage/       # 三个模式各花了多少 token 和钱
 │   ├── evaluation/
-│   ├── computer/    # 屏幕控制的门禁规则说明（无实时数据，见下）
+│   ├── computer/    # 只读会话面板（ADR-095）+ 手抄的门禁规则说明
 │   └── system/
 └── styles/          # token 与响应式样式
 ```

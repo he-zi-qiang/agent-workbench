@@ -75,6 +75,14 @@ produces files, pausing for human approval where required.
   only globally routable addresses are allowed, and redirects are gated hop by hop.
 - **Artifact export**: `.docx` and similar land in the ArtifactStore and can be
   read (text preview) and downloaded from the console.
+- **Sub-agent delegation** (off by default): a run may start another run from
+  inside its own loop and hand a focused sub-problem over. The child runs
+  through the **same** Runtime — what recurses is call depth, not the number of
+  loops. Three gates live in the types: a child's tools are the **intersection**
+  of the parent's; at the depth ceiling the delegation tool **disappears from
+  the tool table** (a grandchild never saw it, rather than a counter having been
+  incremented correctly); and a child envelope may only **lower** a risk ceiling,
+  with no argument that raises one.
 - **Everything leaves a trace**: each tool call records
   `ToolProposed → PermissionResolved → ToolStarted → ToolCompleted`, and **a
   refused call is recorded too** rather than vanishing.
@@ -96,10 +104,11 @@ embed, write to Qdrant) → retrievable. PDF, Word, Markdown and plain text.
 
 ### 1.4 Web console
 
-React + TypeScript, seven pages: **Chat**, **Tasks** (timeline and lifecycle),
-**Code** (coding sessions and file previews), **Knowledge**, **Evaluation**,
-**Computer** (the screen-control safety boundary, stated rather than queried)
-and **System**.
+React + TypeScript, eight pages: **Chat**, **Tasks** (timeline and lifecycle),
+**Code** (coding sessions and file previews), **Knowledge**, **Usage** (what the
+three modes spent, in tokens and money), **Evaluation**, **Computer** (the
+screen-control boundary, and a live session panel served over a read-only
+reverse proxy — ADR-095) and **System**.
 
 What a run did is folded into stages that expand to the raw events and their
 payloads — **folding renames, it never drops**. On a Task that delegated, a
@@ -112,16 +121,20 @@ narrows the step stream below to that one run.
 **HTTP API** (FastAPI): `/v1/chat` (sessions, messages, SSE), `/v1/tasks`
 (submit, query, timeline, run tree, cancel, triage), `/v1/knowledge-bases`,
 `/v1/uploads`, `/v1/search`, `/v1/approvals`, `/v1/artifacts` (including
-`/preview`), `/v1/projects`, `/v1/code`, `/health/live|ready`.
+`/preview`), `/v1/projects`, `/v1/code`, `/v1/usage`, `/v1/computer` (the
+read-only reverse proxy of ADR-095), `/v1/evaluation`, `/health/live|ready`.
 
 **CLI**: `agent-cli`, `agent-api`, `agent-task-worker`,
 `agent-ingestion-worker`, `agent-config-check`, `agent-evidence`, plus four
 project-owned MCP servers: `agent-word-mcp`, `agent-web-mcp`,
 `agent-sandbox-mcp`, `agent-computer-mcp` (all loopback-bound).
 
-**Tools available to Agents**: `knowledge_search`, `web_search`,
-`external_search`, `workspace_list/read/write/edit/grep`, `sandbox_run`,
-`export_artifact`, `delegate_agent` (spawns a sub-agent, **off by default**),
+**Tools available to Agents** (17 in-process): `knowledge_search`,
+`web_search`, `external_search`, `workspace_list/read/write/edit/grep`,
+`project_list/read/write/edit/grep` (the project directory a coding session
+works in — ADR-072/074), `project_run` (runs a command on the host;
+**destructive, shown before it is run** — ADR-077), `sandbox_run`,
+`export_artifact`, `delegate_agent` (spawns a sub-agent, **off by default**);
 and over MCP `mcp_web_fetch_page`, `mcp_web_download_document`,
 `mcp_word_render_document`.
 
@@ -195,19 +208,28 @@ flowchart TB
 
 | Layer | What it is | May depend on | Forbidden (guard in brackets) |
 |---|---|---|---|
-| **domain**<br/>`domain/` | Encodes "which states must not exist" into the types, so invariants hold by **construction failure** rather than by every caller remembering to check | stdlib, Pydantic, domain itself | Any framework or SDK; any I/O; mutability or unknown fields (`DomainModel` is globally `frozen=True, extra="forbid"`); `TaskState` may not grow message logs or framework objects — it has to fit in a graph checkpoint |
+| **domain**<br/>`domain/` | Encodes "which states must not exist" into the types, so invariants hold by **construction failure** rather than by every caller remembering to check | stdlib, Pydantic, domain itself, **plus `regex`** (`domain/workspace.py` needs a matching engine with a timeout to back `GREP_TIMEOUT_SECONDS`; the stdlib `re` has none) | Any framework or SDK; any I/O; mutability or unknown fields (`DomainModel` is globally `frozen=True, extra="forbid"`); `TaskState` may not grow message logs or framework objects — it has to fit in a graph checkpoint |
 | **ports**<br/>`ports/` (37) | Uses `typing.Protocol` to separate "what capability is needed" from "who provides it" | domain, stdlib, Pydantic only | Any implementation (no SQL, no HTTP, no vector-store calls here); importing `ports/model.py` is gated by the `MODEL_STREAM_OWNERS` allowlist |
 | **runtime**<br/>`runtime/` | The one tool loop: drives a run to a **terminal** outcome with budget, deadline, context, cancellation and repeat-call gates on it | domain + ports only | Importing any framework; **no module — adapters included — may write a second loop consuming a model stream**; treating "allow, pending approval" as allow |
 | **workflows**<br/>`workflows/` | Control flow written as a **declaration** that can be read and tested on its own: edges are data, routing is pure functions, and what each agent may see and reach is a fixed table | domain, ports, application | Importing langgraph (compilation lives in `adapters/langgraph/`); widening a profile (`permitted_tools` only intersects, and no argument reverses that); asking the registry for the current epoch mid-run |
 | **application**<br/>`application/` | Where one Q&A, one Task and one coding session have their steps, authorization fences and failure handling — depending on nothing but domain and ports | domain, ports, workflows | Importing frameworks; reading `os.environ`; **growing its own tool loop** — running an agent goes through `ports/agent_executor` |
-| **adapters**<br/>`adapters/` (23) | One directory per outside concern, translating each vendor's dialect into the ports' contracts at its own edge | ports, domain, third-party frameworks | Importing langgraph or `workflows` outside `adapters/langgraph`; **LlamaIndex's agent / query_engine / response_synthesizer are banned across the whole source tree**, method calls like `as_query_engine()` included |
+| **adapters**<br/>`adapters/` (22 directories plus two loose modules) | One directory per outside concern, translating each vendor's dialect into the ports' contracts at its own edge | ports, domain, third-party frameworks | Importing langgraph or `workflows` outside `adapters/langgraph`; **LlamaIndex's agent / query_engine / response_synthesizer are banned across the whole source tree**, method calls like `as_query_engine()` included |
 | **apps + bootstrap**<br/>`apps/` `bootstrap/` `workers/` | Turns one TOML file into several processes, each handed only its own slice and each able to be falsified at startup | all four core layers + adapters + frameworks | `os.environ` **only inside the bootstrap package**; the `Settings` type may not travel past `projections.py`; connection strings are forbidden in TOML; invariants written as single-valued `Literal`s cannot be changed — that takes an ADR first |
 | **web**<br/>`web/src/` | Translates the backend's facts into something a person can check, rather than inventing a second execution model | `web/src/api/` (the only place that goes out), backend HTTP + SSE | Talking to the database or vector store directly (`fetch` appears in exactly two files); dropping events while folding them — the raw payload must stay reachable |
 
 That boundary is a test that **turns CI red**
-([`tests/architecture/test_dependency_boundaries.py`](tests/architecture/test_dependency_boundaries.py)),
-and it forbids **method calls** as well as imports — the reasoning is in
+([`tests/architecture/test_dependency_boundaries.py`](tests/architecture/test_dependency_boundaries.py)).
+It forbids **method calls** as well as imports — though that half is two
+hard-coded attribute names (`as_query_engine` / `as_chat_engine`), because those
+hang off the `VectorStoreIndex` this project does build and so need no new
+import; every other guard is import-shaped. The reasoning is in
 [the ten-minute version §3.1](docs/HIGHLIGHTS.md).
+
+> **It is a denylist, not an allowlist.** `FORBIDDEN_CORE_IMPORTS` lists what is
+> banned, so **a third-party package nobody listed enters the core without a red
+> build** — which is how the `regex` above arrived. It has a good reason; "has a
+> good reason" and "is guarded" are different statements. Tracked in
+> [known gaps](docs/known-gaps.md).
 
 ### 2.3 Which layer holds which capability
 
@@ -363,7 +385,7 @@ A child writes into its **parent's own event stream** under its own `run_id`, so
 | Frontend | React + TypeScript + Vite | Chat / Tasks / Code / Knowledge / Evaluation / Computer / System / Usage |
 | Observability | OpenTelemetry | Port + OTLP adapter; core imports no SDK |
 
-Configuration is a **single schema (currently `1.18`)** validated across domains
+Configuration is a **single schema (currently `1.19`)** validated across domains
 at startup: a capability the config claims but the code does not have **fails at
 config load**, rather than sitting there unread.
 
@@ -536,8 +558,9 @@ test without a control case does not count**.
 | [Implementation status](docs/status.md) | Implementation and test evidence, PR by PR |
 | [Architecture baseline](docs/architecture-baseline.md) | Product boundaries, layering, reliability protocol |
 | [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics |
+| [Frontend design baseline](docs/frontend-design.md) | Console structure, protocol boundaries, responsive strategy |
 | [Running locally](docs/running-locally.md) / [Compose deployment](docs/deployment.md) | How to run it |
-| [ADR index](docs/adr/) | 34 decision records (0012–0045) |
+| [ADR index](docs/adr/) | 85 decision records (0012–0098; 0050 and 0053 reserved, never written) |
 | [Full documentation map](docs/README.md) | Layered index and reading paths by role |
 
 Most documentation is written in Chinese; this page and
