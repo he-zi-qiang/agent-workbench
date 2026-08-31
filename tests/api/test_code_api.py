@@ -1903,3 +1903,82 @@ def test_an_empty_selection_is_refused_rather_than_read_as_everything() -> None:
 
     assert _run(world, scenario).status_code == 422
     assert world.executor.runs == 0
+
+
+def test_a_selection_plan_mode_empties_is_refused_not_run_with_nothing() -> None:
+    """The empty-array guard, asked of the list that survives rather than the
+    list that was sent.
+
+    `min_length=1` reads the request body, and the invariant it is defending is
+    about the envelope -- so the one combination that reaches an empty envelope
+    goes straight past it. The console produces that combination on its own and
+    without anybody doing anything odd: the catalogue is read in act mode, the
+    reader unticks everything except the writes (the menu's own "leave one"
+    guard is satisfied -- one is still ticked), and then flips the three-position
+    control to plan. The array is not empty and every name in it is registered,
+    so both existing checks pass; `read_only` then takes the writes away and
+    `kept` intersects against what is left, which is nothing.
+
+    A turn with no tools is the exact state `min_length=1`'s own comment says
+    must not be built: it can only answer from the conversation, which is
+    Chat's shape and not this one's. Refused here rather than beside `kept`,
+    because by the time `_run` narrows, the reader's message is already in the
+    transcript and a refusal there would leave a question standing with no
+    answer under it.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        created = await _opened(client)
+        return await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={
+                "instruction": "have a look",
+                "mode": "plan",
+                # Both registered, both offered, neither survives plan mode.
+                "tools": ["workspace_write", "workspace_edit"],
+            },
+        )
+
+    refused = _run(world, scenario)
+
+    assert refused.status_code == 422
+    detail = refused.json()["detail"]
+    assert "plan mode" in detail
+    # And it says what *is* available, so the reader can act on it rather than
+    # guessing which of the two controls to move.
+    assert "workspace_read" in detail
+    # Nothing ran and nothing was written down: refused before the turn starts,
+    # so no model call is spent and no orphan question is left in the session.
+    assert world.executor.runs == 0
+
+
+def test_the_same_selection_without_plan_mode_still_runs() -> None:
+    """The other half of the pair, so the refusal above cannot be over-broad.
+
+    The selection is identical. Only the mode differs -- and in act mode the
+    writes are exactly what the turn holds, which is the ordinary reason to
+    tick them.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> Any:
+        created = await _opened(client)
+        return await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{created.json()['session_id']}"
+            "/messages",
+            headers=HEADERS,
+            json={
+                "instruction": "have a look",
+                "tools": ["workspace_write", "workspace_edit"],
+            },
+        )
+
+    answered = _run(world, scenario)
+
+    assert answered.status_code == 200
+    assert answered.json()["allowed_tools"] == ["workspace_edit", "workspace_write"]
