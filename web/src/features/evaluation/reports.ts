@@ -178,6 +178,138 @@ export function selfDisagreementCoversAShownReport(
   );
 }
 
+/**
+ * The other two suites, which this page rendered nothing of until 2026-08-31.
+ *
+ * The page offers three buttons, the API reads three directories, and
+ * `evals/chat/reports/` and `evals/triage/reports/` both have results in them.
+ * `retrievalReports` above filters to `suite === "rag"`, so running 「回答质量」
+ * or 「任务分流」 changed nothing on screen -- and the empty state said "这台
+ * 机器还没有跑过评测", which for a machine that had just run one is false.
+ *
+ * These two are deliberately *not* folded into `ReportRow`. A retrieval report
+ * answers "did the right document come back"; a triage report answers "was the
+ * objective routed to the right graph"; a chat report answers "was the answer
+ * grounded in what was cited". Three questions, three shapes -- one table over
+ * all of them would have to invent a common metric, and inventing one is how a
+ * page starts reporting a number nobody computed.
+ */
+export interface TriageReport {
+  file: string;
+  goldDigest: string;
+  modelId: string;
+  caseCount: number;
+  accuracy: number;
+  /** Per expected class, so a 0.83 that is really "one class at 0" reads as one. */
+  byClass: readonly { name: string; total: number; correct: number }[];
+  /** Cases the model could not answer and that fell back to the default graph. */
+  defaults: number;
+}
+
+export function triageReports(
+  views: readonly EvaluationReportView[],
+): readonly TriageReport[] {
+  return views
+    .filter((view) => view.suite === "triage" && isTriageReport(view.payload))
+    .map((view) => {
+      const payload = view.payload as unknown as {
+        gold_digest: string;
+        model_id: string;
+        case_count: number;
+        accuracy: number;
+        defaults?: number;
+        by_class?: Record<string, { total: number; correct: number }>;
+      };
+      return {
+        file: `${view.name}.json`,
+        goldDigest: payload.gold_digest,
+        modelId: payload.model_id,
+        caseCount: payload.case_count,
+        accuracy: payload.accuracy,
+        byClass: Object.entries(payload.by_class ?? {}).map(([name, counts]) => ({
+          name,
+          total: counts.total,
+          correct: counts.correct,
+        })),
+        defaults: payload.defaults ?? 0,
+      };
+    })
+    .sort((left, right) => left.file.localeCompare(right.file));
+}
+
+function isTriageReport(payload: Record<string, unknown>): boolean {
+  return (
+    typeof payload.gold_digest === "string" &&
+    typeof payload.case_count === "number" &&
+    typeof payload.accuracy === "number"
+  );
+}
+
+/** One answering configuration inside a chat report. */
+export interface ChatArm {
+  arm: string;
+  questions: number;
+  complete: number;
+  factRecall: number;
+  citationPrecision: number;
+  citationRecall: number;
+  /** Already a "2/2"-shaped string in the runner's output; passed through. */
+  cleanAbstentions: string;
+  fabricatedCitations: number;
+}
+
+export interface ChatReport {
+  file: string;
+  model: string;
+  retriever: string;
+  questions: number;
+  arms: readonly ChatArm[];
+}
+
+export function chatReports(
+  views: readonly EvaluationReportView[],
+): readonly ChatReport[] {
+  return views
+    .filter((view) => view.suite === "chat" && isChatReport(view.payload))
+    .map((view) => {
+      const payload = view.payload as unknown as {
+        model?: string;
+        retriever?: string;
+        questions: number;
+        arms: readonly Record<string, unknown>[];
+      };
+      return {
+        file: `${view.name}.json`,
+        model: payload.model ?? "—",
+        retriever: payload.retriever ?? "—",
+        questions: payload.questions,
+        arms: payload.arms.map((arm) => ({
+          arm: asString(arm.arm, "—"),
+          questions: asNumber(arm.questions),
+          complete: asNumber(arm.complete),
+          factRecall: asNumber(arm.fact_recall),
+          citationPrecision: asNumber(arm.citation_precision),
+          citationRecall: asNumber(arm.citation_recall),
+          cleanAbstentions: asString(arm.clean_abstentions, "—"),
+          fabricatedCitations: asNumber(arm.fabricated_citations),
+        })),
+      };
+    })
+    .sort((left, right) => left.file.localeCompare(right.file));
+}
+
+function isChatReport(payload: Record<string, unknown>): boolean {
+  return typeof payload.questions === "number" && Array.isArray(payload.arms);
+}
+
+function asNumber(value: unknown): number {
+  return typeof value === "number" ? value : 0;
+}
+
+function asString(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
 /** A rate over the gold set, restated as the count a reader can picture. */
 export function hits(rate: number, total: number): number {
   return Math.round(rate * total);

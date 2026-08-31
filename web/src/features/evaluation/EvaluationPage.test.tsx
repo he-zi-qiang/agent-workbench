@@ -6,10 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // HTTP now, but a test that made its own numbers up would let the page drift
 // from the repository -- which is exactly what the old build-time import was
 // protecting against. So they stay, as the fixture the fake API serves.
+import chatHybrid from "../../../../evals/chat/reports/chat-hybrid-180s.json";
 import denseLlamaIndex from "../../../../evals/rag/reports/dense-llama_index.json";
 import denseReference from "../../../../evals/rag/reports/dense-reference.json";
 import hybridLlamaIndex from "../../../../evals/rag/reports/hybrid-llama_index.json";
 import hybridReference from "../../../../evals/rag/reports/hybrid-reference.json";
+import triageReport from "../../../../evals/triage/reports/report.json";
 import {
   getEvaluationReports,
   getEvaluationRun,
@@ -19,9 +21,11 @@ import type { EvaluationReportView } from "../../api/types";
 import { EvaluationPage } from "./EvaluationPage";
 import {
   SELF_DISAGREEMENT,
+  chatReports,
   hits,
   percent,
   retrievalReports,
+  triageReports,
 } from "./reports";
 
 vi.mock("../../api/client", () => ({
@@ -37,12 +41,22 @@ vi.mock("../../app/IdentityContext", () => ({
   }),
 }));
 
-const VIEWS: EvaluationReportView[] = [
+const RAG_VIEWS: EvaluationReportView[] = [
   { suite: "rag", name: "hybrid-reference", payload: hybridReference },
   { suite: "rag", name: "hybrid-llama_index", payload: hybridLlamaIndex },
   { suite: "rag", name: "dense-reference", payload: denseReference },
   { suite: "rag", name: "dense-llama_index", payload: denseLlamaIndex },
 ];
+
+// The other two suites the API serves, and the page rendered nothing of until
+// 2026-08-31. Same principle as above: the committed reports are the fixture,
+// so a page that stops agreeing with the repository fails here.
+const OTHER_VIEWS: EvaluationReportView[] = [
+  { suite: "triage", name: "report", payload: triageReport },
+  { suite: "chat", name: "chat-hybrid-180s", payload: chatHybrid },
+];
+
+const VIEWS: EvaluationReportView[] = [...RAG_VIEWS, ...OTHER_VIEWS];
 
 const ROWS = retrievalReports(VIEWS);
 
@@ -99,15 +113,18 @@ describe("EvaluationPage", () => {
     // expectation with the same function the page uses made this a tautology:
     // a grouping that collapsed everything into one bucket moved both sides
     // together and the assertion stayed green. Found by sabotage.
+    // `RAG_VIEWS`, not `VIEWS`: the triage report carries a `gold_digest` of
+    // its own and is not a retrieval report, so counting it here would demand a
+    // fifth retrieval table that should not exist.
     const digests = new Set(
-      VIEWS.map((view) => String(view.payload.gold_digest)),
+      RAG_VIEWS.map((view) => String(view.payload.gold_digest)),
     );
 
     // One table per question set. Four rows under one heading read as a
     // ranking however the surrounding prose is worded -- and on these reports
     // that reading is backwards, because the path with the higher score is
     // the one still being scored on the older, smaller set.
-    const tables = screen.getAllByRole("table");
+    const tables = screen.getAllByRole("table", { name: /检索评测结果/ });
     expect(tables).toHaveLength(digests.size);
     for (const table of tables) {
       const text = table.textContent ?? "";
@@ -129,7 +146,7 @@ describe("EvaluationPage", () => {
       ),
     );
     expect(counts).toEqual(
-      new Set(VIEWS.map((view) => Number(view.payload.question_count))),
+      new Set(RAG_VIEWS.map((view) => Number(view.payload.question_count))),
     );
   });
 
@@ -197,23 +214,47 @@ describe("EvaluationPage", () => {
     );
   });
 
-  it("publishes no answer-quality score, because no runner has produced one", async () => {
+  it("prints no percentage that is not in a served report", async () => {
     const { container } = await loaded();
 
-    expect(screen.getByText("RAGAS 目前只有配置，没有结果")).toBeInTheDocument();
+    expect(screen.getByText("RAGAS 只有配置，没有依赖也没有报告")).toBeInTheDocument();
     expect(container.textContent).toContain(
       "“配置里启用了”不等于“已经跑出结果”，缺的部分不用示例数字补。",
     );
-    // Every percentage on the page has to be a retrieval recall from a report.
+    // Every percentage on the page has to come from a report the API served.
+    // Widened on 2026-08-31 along with the page: it used to allow only
+    // retrieval recalls, which is why it caught the triage and chat tables the
+    // moment they landed -- correctly, the assertion just had a narrower idea
+    // of "measured" than the page now does.
     const shown = container.textContent?.match(/\d+(?:\.\d+)?%/g) ?? [];
-    const measured = new Set(
-      ROWS.flatMap((row) => [
+    const measured = new Set([
+      ...ROWS.flatMap((row) => [
         percent(row.report.scores.recall_at_1),
         percent(row.report.scores.recall_at_3),
       ]),
-    );
+      ...triageReports(VIEWS).flatMap((report) => [
+        percent(report.accuracy),
+        ...report.byClass.map((entry) =>
+          entry.total === 0 ? "—" : percent(entry.correct / entry.total),
+        ),
+      ]),
+      ...chatReports(VIEWS).flatMap((report) =>
+        report.arms.flatMap((arm) => [
+          percent(arm.factRecall),
+          percent(arm.citationPrecision),
+          percent(arm.citationRecall),
+        ]),
+      ),
+    ]);
     expect(shown.length).toBeGreaterThan(0);
-    expect(shown.filter((value) => !measured.has(value))).toEqual([]);
+    // `textContent` runs adjacent cells together ("2/2" + "100.0%" reads as
+    // "2100.0%"), so a match is allowed to be a measured value with digits
+    // glued to its front. Nothing weaker would pass; nothing stronger can be
+    // asserted about a string with no cell boundaries in it.
+    const unmeasured = shown.filter(
+      (value) => ![...measured].some((known) => value.endsWith(known)),
+    );
+    expect(unmeasured).toEqual([]);
   });
 
   it("keeps the engineering detail collapsed", async () => {
@@ -285,5 +326,58 @@ describe("EvaluationPage", () => {
     // long these take without saying anything about the run in front of you.
     expect(live).toHaveTextContent("30–70 分钟");
     expect(screen.getByText(/measuring hybrid/)).toBeInTheDocument();
+  });
+
+  // 三个可点的 suite、后端读三个目录、仓库里躺着三类报告，而页面只渲染 rag
+  // 一种。跑完「回答质量」页面一个字都不变，且空态说的是「这台机器还没有跑过
+  // 评测」——对刚跑完的那台机器，那是假话。
+  it("renders the triage report the API served, per class as well as overall", async () => {
+    await loaded();
+
+    const table = await screen.findByRole("table", { name: /任务分流评测结果/ });
+    // 整体 0.8333 —— 而它是「两类满分、一类全错」，逐类那几行才说得出这件事。
+    expect(table).toHaveTextContent("20 / 24 题");
+    expect(table).toHaveTextContent("83.3%");
+    expect(table).toHaveTextContent("unsure");
+    expect(table).toHaveTextContent("0 / 4 题");
+  });
+
+  it("renders the chat report, including the absolute count of fabricated citations", async () => {
+    await loaded();
+
+    const table = await screen.findByRole("table", { name: /回答质量评测结果/ });
+    expect(table).toHaveTextContent("fixed");
+    expect(table).toHaveTextContent("11 / 13 题");
+    // 一条绝对计数，不是比率：一条编造的引用就够坏，把它化成百分比会让它消失。
+    expect(table).toHaveTextContent("干净拒答 2/2");
+  });
+
+  it("says which category is missing rather than that nothing was ever run", async () => {
+    vi.mocked(getEvaluationReports).mockResolvedValue({
+      reports: OTHER_VIEWS,
+      runs_enabled: false,
+      how_to_run: {},
+    });
+
+    mounted();
+
+    expect(await screen.findByText("还没有检索消融的报告")).toBeInTheDocument();
+    expect(
+      screen.queryByText("这台机器还没有跑过评测"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("still says nothing was run when the API served nothing at all", async () => {
+    vi.mocked(getEvaluationReports).mockResolvedValue({
+      reports: [],
+      runs_enabled: false,
+      how_to_run: {},
+    });
+
+    mounted();
+
+    expect(
+      await screen.findByText("这台机器还没有跑过评测"),
+    ).toBeInTheDocument();
   });
 });
