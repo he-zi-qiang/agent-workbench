@@ -122,6 +122,9 @@ describe("键盘", () => {
       />,
     );
     const collapse = screen.getByRole("button", { name: "收起预览栏" });
+    // 结构本身：ARIA 只允许 `tab` 做 tablist 的子孙。留在里面的话，读屏会把这颗
+    // 按钮当成这排标签的一员念出来，而漫游 tabindex 又不管它。
+    expect(screen.getByRole("tablist")).not.toContainElement(collapse);
     collapse.focus();
     await userEvent.keyboard("{ArrowRight}");
     expect(onSelect).not.toHaveBeenCalled();

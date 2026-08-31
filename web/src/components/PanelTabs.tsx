@@ -69,10 +69,11 @@ export function PanelTabs({
   // 左右方向键在标签之间走，这是 tablist 的标准键盘契约；没有它，一排 `role=tab`
   // 对读屏用户是一排说了谎的按钮。
   function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    // 只认从标签上发出来的按键。`trailing` 渲染在这条 strip **里面**（预览栏把
-    // 「收起」按钮放在那儿），而这个 handler 挂在外层，所以在那颗按钮上按左右键
-    // 会冒泡到这里：preventDefault 之后换掉选中项，再把焦点从按钮上抢到标签上。
-    // 读者想做的是在控件之间移动，得到的是右栏内容在脚下换了一张、焦点也不见了。
+    // 只认从标签上发出来的按键。`trailing` 已经搬到 tablist 外面去了，所以这条
+    // 现在挡的不是它——挡的是往后有人在某一枚标签里塞进一个可聚焦的东西（一颗
+    // 关闭叉、一个下拉），那时左右键会先被这里吞掉再换标签，而读者按它的意思
+    // 是在那个东西内部移动。留着它的代价是一次 `closest`，收益是这个零件不必
+    // 依赖「标签里永远只有文字」这条没人写下来的约定。
     if (!(event.target as HTMLElement).closest('[role="tab"]')) return;
     const step =
       event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
@@ -93,34 +94,44 @@ export function PanelTabs({
 
   return (
     <>
-      <div
-        aria-label={label}
-        className="aw-panel-tabs"
-        onKeyDown={onKeyDown}
-        ref={strip}
-        role="tablist"
-      >
-        {shown.map((entry) => {
-          const on = entry.id === current.id;
-          return (
-            <button
-              aria-controls={`${base}-${entry.id}-body`}
-              aria-selected={on}
-              className={`aw-panel-tab${on ? " is-on" : ""}`}
-              id={`${base}-${entry.id}`}
-              key={entry.id}
-              onClick={() => onSelect(entry.id)}
-              role="tab"
-              tabIndex={on ? 0 : -1}
-              type="button"
-            >
-              <span>{entry.label}</span>
-              {entry.count === undefined ? null : (
-                <span className="aw-panel-tab-count">{entry.count}</span>
-              )}
-            </button>
-          );
-        })}
+      <div className="aw-panel-tabs">
+        <div
+          aria-label={label}
+          className="aw-panel-tabs-strip"
+          onKeyDown={onKeyDown}
+          ref={strip}
+          role="tablist"
+        >
+          {shown.map((entry) => {
+            const on = entry.id === current.id;
+            return (
+              <button
+                aria-controls={`${base}-${entry.id}-body`}
+                aria-selected={on}
+                className={`aw-panel-tab${on ? " is-on" : ""}`}
+                id={`${base}-${entry.id}`}
+                key={entry.id}
+                onClick={() => onSelect(entry.id)}
+                role="tab"
+                tabIndex={on ? 0 : -1}
+                type="button"
+              >
+                <span>{entry.label}</span>
+                {entry.count === undefined ? null : (
+                  <span className="aw-panel-tab-count">{entry.count}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {/*
+          tablist 外面，不是里面。ARIA 只允许 `tab` 做 tablist 的子孙，而这里放的
+          是一颗真按钮（预览栏的「收起」）——留在里面，读屏会把它当成这排标签的一
+          员念出来，而漫游 tabindex 又不管它，于是它是一枚永远读不对的标签。
+
+          分成两层还顺带修掉一件本来就不对的事：横向滚动在 `-strip` 上，所以标签
+          多到溢出时，「收起」不再跟着滚走——它本来就不该滚，它不是标签。
+        */}
         {trailing === undefined ? null : (
           <div className="aw-panel-tabs-trailing">{trailing}</div>
         )}
