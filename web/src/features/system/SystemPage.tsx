@@ -14,8 +14,14 @@ import {
   formatDateTime,
 } from "../../components/ui";
 
-export function SystemPage() {
-  const { identity, setEditorOpen } = useIdentity();
+/**
+ * 健康检查那几格，抽出来给设置面板里那一格用。
+ *
+ * 抽的是「此刻这几个进程还在不在」，**不含**这一页那三行只读的身份事实：在设置
+ * 面板里，身份是隔壁一整类，把它在这里再复述一遍，等于让同一个事实在一个框里出
+ * 现两次、而其中一次还是只读的。
+ */
+export function HealthReport({ heading }: { heading?: ReactNode }) {
   const health = useQuery({
     queryKey: ["system-health"],
     queryFn: async () => {
@@ -29,11 +35,10 @@ export function SystemPage() {
   });
 
   return (
-    <main className="aw-utility-page">
+    <>
       <header className="aw-page-header">
         <div>
-          <span className="aw-eyebrow">本地运行环境</span>
-          <h1>运行状态</h1>
+          {heading}
           <p>这里只回答公开接口能够确认的事情；无法确认的组件会明确显示为“未知”。</p>
         </div>
         <button
@@ -97,9 +102,27 @@ export function SystemPage() {
         </p>
       )}
 
+    </>
+  );
+}
+
+export function SystemPage() {
+  const { identity, setEditorOpen } = useIdentity();
+
+  return (
+    <main className="aw-utility-page">
+      <HealthReport
+        heading={
+          <>
+            <span className="aw-eyebrow">本地运行环境</span>
+            <h1>运行状态</h1>
+          </>
+        }
+      />
+
       {/* 身份回到了这一页，但只作为事实，不作为表单。
        *
-       * 它此前被删过，理由是「复述 EnvironmentDialog」——那条理由对的是当时那个
+       * 它此前被删过，理由是「复述那个身份编辑框」——那条理由对的是当时那个
        * 版本：一个装在 `<details>` 里、带编辑入口的块，确实是把下面那个按钮又画
        * 了一遍。
        *
@@ -143,6 +166,7 @@ export function SystemPage() {
     </main>
   );
 }
+
 
 function HealthMetric({
   icon,

@@ -1829,6 +1829,7 @@ export function CodePage() {
             type="button"
           />
           <PreviewPanel
+            events={shownSteps}
             directory={
               heldProjectId != null && projectRoot !== null ? (
                 <ProjectFileTree

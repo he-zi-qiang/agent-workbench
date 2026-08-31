@@ -9031,3 +9031,258 @@ p.aw-code-step-thought {
   outline: 2px solid var(--aw-accent);
   outline-offset: -2px;
 }
+
+
+/* 设置 ---------------------------------------------------------------- */
+
+/* 比别的对话框宽得多，因为它里头要装下用量那张六列的表。780px 是那张表不换行
+   的最小宽度（实测），`min(..., 100%)` 让它在窄屏上退成整宽。高度按视口收，
+   内容自己滚：一个 1200px 高的对话框在 900px 的屏幕上会把「关闭」顶出去。 */
+.aw-settings {
+  display: flex;
+  width: min(880px, 100%);
+  max-height: min(680px, 88vh);
+  padding: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.aw-settings > header {
+  align-items: center;
+  margin: 0;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--aw-border);
+}
+
+.aw-settings-body {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: 208px minmax(0, 1fr);
+}
+
+/* 竖排的分类，不是标签页。右栏那两处用标签是因为它们要在一栏宽度里挤下四五
+   格；这里有 208px，放得下每一类的一句说明——而那句说明正是「这一类里有什么」
+   的答案，标签页上没有地方写它。 */
+.aw-settings-nav {
+  display: flex;
+  padding: 10px 8px;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--aw-border);
+  background: var(--aw-canvas);
+  overflow-y: auto;
+}
+
+.aw-settings-nav-item {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px 10px;
+  gap: 9px;
+  border: 0;
+  border-radius: var(--aw-radius-sm);
+  background: transparent;
+  color: var(--aw-text-soft);
+  font: inherit;
+  text-align: left;
+}
+
+.aw-settings-nav-item > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.aw-settings-nav-item strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.aw-settings-nav-item small {
+  display: block;
+  margin-top: 1px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.aw-settings-nav-item:hover {
+  background: var(--aw-panel-soft);
+}
+
+/* 选中态不能只靠一层更深的灰。实测 `--aw-panel-strong` 和 `--aw-panel-soft`
+   在深色下差 7 个色阶（rgb 48,48,45 对 41,41,39）——鼠标停在任何一项上，它就
+   和真正选中的那一项长得一样了。所以选中的那一枚多一条竖杠、图标上色、标题
+   加粗：三个信号里任何一个都比那 7 个色阶显眼。 */
+.aw-settings-nav-item.is-on {
+  position: relative;
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+}
+
+.aw-settings-nav-item.is-on::before {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--aw-accent);
+  content: "";
+}
+
+.aw-settings-nav-item.is-on > svg {
+  color: var(--aw-accent);
+}
+
+.aw-settings-nav-item.is-on strong {
+  font-weight: 600;
+}
+
+.aw-settings-pane {
+  min-width: 0;
+  padding: 18px 20px 22px;
+  overflow-y: auto;
+}
+
+.aw-settings-pane h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.aw-settings-lede {
+  margin: 0 0 16px;
+  color: var(--aw-text-soft);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.aw-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.aw-settings-choices {
+  display: flex;
+  gap: 8px;
+}
+
+.aw-settings-choice {
+  display: flex;
+  align-items: center;
+  padding: 9px 14px;
+  gap: 8px;
+  border: 1px solid var(--aw-border-strong);
+  border-radius: var(--aw-radius-sm);
+  background: transparent;
+  color: var(--aw-text-soft);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.aw-settings-choice.is-on {
+  border-color: var(--aw-accent);
+  background: var(--aw-accent-soft);
+  color: var(--aw-accent);
+}
+
+/* 用量和运行状态这两块面本来是整页的，进到对话框里要把它们的外边距收掉——
+   页面上那圈留白是页面的，不是它们的。 */
+.aw-settings-pane .aw-usage-page,
+.aw-settings-pane .aw-page-header {
+  padding: 0;
+}
+
+.aw-settings-pane .aw-usage-header,
+.aw-settings-pane .aw-page-header {
+  margin-bottom: 14px;
+}
+
+@media (max-width: 720px) {
+  /* 窄屏上分类横过来，用一条可横向滚动的行：208px 的左栏在 375px 的屏幕上会
+     把内容挤到只剩一半。 */
+  .aw-settings-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .aw-settings-nav {
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--aw-border);
+    overflow-x: auto;
+  }
+
+  .aw-settings-nav-item {
+    flex: none;
+  }
+
+  .aw-settings-nav-item small {
+    display: none;
+  }
+}
+
+
+/* 事件流 -------------------------------------------------------------- */
+
+.aw-event-log {
+  display: grid;
+  margin: 0;
+  padding: 6px 4px 10px;
+  gap: 1px;
+  list-style: none;
+}
+
+.aw-event-log li {
+  display: grid;
+  align-items: baseline;
+  padding: 4px 9px;
+  gap: 8px;
+  border-radius: var(--aw-radius-sm);
+  color: var(--aw-text-soft);
+  font-size: 11.5px;
+  /* 时刻那一列定宽，事件类型自适应，主语吃掉剩下的并且可以被截断。三列都靠
+     左对齐的话，一列长短不一的时间戳会让类型那一列锯齿状地抖——而读者正是靠
+     那一列扫的。 */
+  grid-template-columns: 58px auto minmax(0, 1fr);
+}
+
+.aw-event-log li:nth-child(odd) {
+  background: var(--aw-panel-soft);
+}
+
+.aw-event-log time {
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 10.5px;
+}
+
+.aw-event-log-type {
+  font-family: var(--aw-mono);
+  font-size: 11px;
+}
+
+.aw-event-log-subject {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 失败和结束单独上色。这两类是读者扫这一栏时唯一在找的东西——其余都是背景。 */
+.aw-event-log li.is-bad .aw-event-log-type {
+  color: var(--aw-danger);
+}
+
+.aw-event-log li.is-good .aw-event-log-type {
+  color: var(--aw-success);
+}
+
+.aw-event-log-empty {
+  margin: 0;
+  padding: 12px 13px;
+  color: var(--aw-text-soft);
+  font-size: 12px;
+}

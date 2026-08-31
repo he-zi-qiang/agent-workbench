@@ -116,7 +116,7 @@ describe("AppShell mobile navigation", () => {
     // surface at all -- the exact shape the comment above describes.
     expect(more.getByRole("link", { name: "计算机" })).toBeInTheDocument();
     expect(
-      more.getByRole("button", { name: "本地环境与身份" }),
+      more.getByRole("button", { name: "设置" }),
     ).toBeInTheDocument();
 
     await user.click(more.getByRole("link", { name: "效果评测" }));
@@ -150,7 +150,7 @@ describe("AppShell mobile navigation", () => {
     const more = within(dialog);
     expect(more.getByRole("link", { name: "知识库" })).toHaveFocus();
 
-    more.getByRole("button", { name: "本地环境与身份" }).focus();
+    more.getByRole("button", { name: "设置" }).focus();
     await user.tab();
     expect(more.getByRole("button", { name: "关闭更多页面" })).toHaveFocus();
 
@@ -161,14 +161,15 @@ describe("AppShell mobile navigation", () => {
     await user.click(
       within(screen.getByRole("dialog", { name: "更多页面" })).getByRole(
         "button",
-        { name: "本地环境与身份" },
+        { name: "设置" },
       ),
     );
-    const environment = within(
-      screen.getByRole("dialog", { name: "本地身份模拟器" }),
-    );
-    expect(environment.getByLabelText("Tenant")).toHaveFocus();
-    await user.click(environment.getByRole("button", { name: "取消" }));
+    const settings = within(screen.getByRole("dialog", { name: "设置" }));
+    expect(settings.getByLabelText("Tenant")).toHaveFocus();
+    // 关闭走那颗 X（和 Escape），不走一颗页脚的「取消」。分类式的设置面板里，
+    // 页脚那个位置看起来在为**整个面板**负责，而它只能取消当前这一类里的草稿
+    // ——另外三类根本没有待保存的东西。
+    await user.click(settings.getByRole("button", { name: "关闭" }));
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 });
@@ -388,7 +389,7 @@ describe("AppShell rail", () => {
     const switchPrincipal = async (principal: string) => {
       await user.click(screen.getByRole("button", { name: /环境与身份/ }));
       const dialog = within(
-        screen.getByRole("dialog", { name: "本地身份模拟器" }),
+        screen.getByRole("dialog", { name: "设置" }),
       );
       const principalField = dialog.getByLabelText("Principal");
       await user.clear(principalField);
@@ -437,7 +438,7 @@ describe("AppShell rail", () => {
 
     await user.click(screen.getByRole("button", { name: /环境与身份/ }));
     const dialog = within(
-      screen.getByRole("dialog", { name: "本地身份模拟器" }),
+      screen.getByRole("dialog", { name: "设置" }),
     );
     const principalField = dialog.getByLabelText("Principal");
     await user.clear(principalField);
@@ -473,7 +474,7 @@ describe("AppShell rail", () => {
 
     await user.click(screen.getByRole("button", { name: /环境与身份/ }));
     const dialog = within(
-      screen.getByRole("dialog", { name: "本地身份模拟器" }),
+      screen.getByRole("dialog", { name: "设置" }),
     );
     const principalField = dialog.getByLabelText("Principal");
     await user.clear(principalField);
@@ -593,7 +594,7 @@ describe("AppShell quick switcher", () => {
 
     await user.click(screen.getByRole("button", { name: /环境与身份/ }));
     expect(
-      screen.getByRole("dialog", { name: "本地身份模拟器" }),
+      screen.getByRole("dialog", { name: "设置" }),
     ).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "k", metaKey: true });
 

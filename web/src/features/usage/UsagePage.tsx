@@ -68,14 +68,21 @@ export function formatTokens(value: number): string {
 }
 
 /**
- * micro-USD → 美元。
+ * micro-USD → 美元，0 是「—」。
  *
  * 四位小数，不是两位：这个控制台上一次会话经常是几分之一美分，而两位小数会把
  * 一整页的真实花销显示成一列 `$0.00`——那比不显示更坏，因为它看起来是个答案。
  * 超过一美元才收回到两位，那时四位小数只是噪声。
+ *
+ * **零写成破折号，不写成 `$0`。** 在任何一份价目表下，一次真的花掉零微美元的
+ * 运行都不存在，所以这一页上的 `$0` 只有一个来源：这台部署没配
+ * `[model.*.pricing]`。把它印成一个价格，等于给整页贴一个「免费」的标签——而这
+ * 一页底下那条警告存在的意义正是拆穿这个误读，两者当场打架。`TurnUsage` 那边
+ * 早一步做了同样的处理（它是整段不画，因为脚注里没有位置放破折号）；这里画
+ * 「—」而不是留空，是因为它在一张表里，空单元格读成的是「这一行漏了」。
  */
 export function formatCost(microUsd: number): string {
-  if (microUsd === 0) return "$0";
+  if (microUsd === 0) return "—";
   const dollars = microUsd / 1_000_000;
   return dollars >= 1 ? `$${dollars.toFixed(2)}` : `$${dollars.toFixed(4)}`;
 }
@@ -136,7 +143,14 @@ function ModeCard({
   );
 }
 
-export function UsagePage() {
+/**
+ * 这一页的正文，抽出来给设置面板里那一格用。
+ *
+ * 抽的是**除了 `<h1>` 以外的全部**：一块内容在自己的路由上要有标题，在一个已经
+ * 有标题的对话框里再挂一个「用量」就是把同一个词说两遍。窗口选择器留在里面，
+ * 它是这块内容的控件而不是这一页的。
+ */
+export function UsageReport({ heading }: { heading?: React.ReactNode }) {
   const { identity } = useIdentity();
   const [window, setWindow] = useState<UsageWindow>("30d");
 
@@ -163,7 +177,7 @@ export function UsagePage() {
     <div className="aw-usage-page">
       <header className="aw-usage-header">
         <div>
-          <h1>用量</h1>
+          {heading}
           <p>
             按已经结束的运行统计。费用是每次运行当时按价目表算好写下的，这里只做加法。
           </p>
@@ -279,4 +293,9 @@ export function UsagePage() {
       )}
     </div>
   );
+}
+
+/** 路由上的那一页：正文加一个 `<h1>`。 */
+export function UsagePage() {
+  return <UsageReport heading={<h1>用量</h1>} />;
 }
