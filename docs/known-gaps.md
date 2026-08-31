@@ -787,6 +787,24 @@ return f"the {error.node} step did not produce usable output during {action}"
 改契约、改回边，或都不改。**在那之前，任何关于 C-05 根因的结论仍然只能是猜测**——
 包括本次否掉的那两个假设。这一步只是让下一次观测**有可能**回答问题，它自己不回答。
 
+**2026-08-31 的一次尝试，以及它为什么没能回答这个问题。**
+
+v1 在这台机器上跑不了，而且不是"再腾点内存"能解决的：一个会检索的进程需要约 12 GB
+（[本机部署下限](./running-locally.md)），这台是 8 GB 物理内存、当时可用约 2 GB、
+swap 已用 14.1/15.4 GB。而 v1 又不能绕过检索——
+[composition.py](../src/agent_workbench/apps/task_worker/composition.py:351) 故意在装不出
+检索时**只注册 v2**，因为 v1 的研究节点退化后会把模型自己写的东西当成"检索到的证据"。
+
+于是改跑 `v2_general`：它的 `review` 与 v1 的 `critic` **解码同一个 `ReviewResult`、
+走同一个 `_decoded`**（`_REVIEWING_NODES = {"critic", "review"}`）。任务
+`task_e915c4fb…` **成功了**：4 个 run 全部 `completed`，`status_detail` 为 `null`，
+没有走纠正轮，用量 11978 in / 2267 out。
+
+**所以这次观测的结论只有一条，要说准**：那条共用的解码路径在真实 provider 上**跑通了
+一次**。它没有触发新的诊断，因为没有任何东西失败——**"报哪一条"这个问题仍然没有答案**。
+要回答它，需要的是一台能跑 v1 的机器，或者一次**恰好失败**在评审节点上的真实运行；
+本条判据不因这次成功而放宽。
+
 **顺带记下**：同一次运行里 `critic` 给出的理由是草稿"未提供任何实际内容，仅包含
 任务指令的重复"——即 `synthesize` 那步的产出质量也有问题。这是另一件事，本条不
 覆盖。
