@@ -9,7 +9,10 @@
   migration `0028_session_last_activity`；`GET /v1/code/sessions` 与
   `PATCH /v1/code/sessions/{id}`；`CreateSessionResponse` 回带 `title`；
   删除 `web/src/features/code/storage.ts`
-- 依赖：ADR-028（工作区）、[ADR-053](./0053-a-session-belongs-to-one-api.md)（会话属于一个 API）
+- 依赖：ADR-028（工作区）、ADR-053（会话属于一个 API）——**这个号只被预留，没有写下**：
+  它在 0047–0059 那批一次性分配的号段里（见 [ADR 索引](./README.md)「号段预留」一节）。
+  此处记的是那条约束本身，不是一份读得到的文档；原先这里挂着一个指向
+  `0053-a-session-belongs-to-one-api.md` 的链接，而那个文件从未存在过。
 
 ## 1. 背景：这份列表原来只在浏览器里
 

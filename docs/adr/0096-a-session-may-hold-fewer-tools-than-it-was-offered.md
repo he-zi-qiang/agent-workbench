@@ -28,7 +28,7 @@
   `tests/application/test_code_session.py` +6 例、`tests/api/test_code_api.py` +6 例
   （**都不需要 DSN，进 CI**）。
   **不动配置契约**：没有新增任何配置叶子，`config_schema_version` 保持 `1.19`
-- 依赖：[ADR-073](./0073-a-project-that-is-a-directory-speaks-a-different-file-language.md)
+- 依赖：[ADR-073](./0073-a-run-has-one-file-language.md)
   （offer 里唯一一件关于**这段会话**而不是关于进程的事，就是它说哪一种文件语言）、
   [ADR-079](./0079-a-plan-is-not-an-authorization.md)
   （第一条收窄轴，以及「只能变窄」这条性质该怎么写才检查得了）、

@@ -393,6 +393,12 @@ answer_context_k <= rerank_top_k
 fused_top_k <= dense_top_k + sparse_top_k
 ```
 
+**这三条校验是真的会跑的，但它们校验的五个数里有四个没有读者。** 这一组里只有
+`answer_context_k` 被 `bootstrap/projections.py` 读走并生效；`dense_top_k`、
+`sparse_top_k`、`fused_top_k`、`rerank_top_k` 校验完就没人再看了，检索实际用的是
+`request.top_k * candidate_multiplier`（两者都是代码里的默认值）。详见
+[已知缺口 A-07](./known-gaps.md#a-07-ragretrieval-的候选漏斗被校验然后没有任何人读它--口径不实)。
+
 Embedding/reranker revision、dense dimension、vector field、parser、chunker
 或 index schema 变化时，创建新的 `write_collection`，完成回填与评测后
 原子切换 `read_alias`。不要向同一 collection 混写不同版本的向量。
@@ -524,8 +530,14 @@ resolver 的当前结论求交集，不能把该快照描述为实时权限。
 请求只允许在系统上限以内下调：
 
 - step、token、Tool 次数和超时预算；
-- dense/sparse/fused/rerank `top_k`；
 - 预先登记的 model profile。
+
+**`top_k` 曾经列在上面这张表里，那是不实的**（[已知缺口 A-07](./known-gaps.md#a-07-ragretrieval-的候选漏斗被校验然后没有任何人读它--口径不实)）。
+请求里确实带一个 `top_k`，但它**不受 `[rag.retrieval]` 的约束**：约束它的是两个硬编码
+字面量——`routes/chat.py` 的 `le=50` 与 `adapters/tools/knowledge_search.py` 的
+`MAX_TOP_K = 20`。`dense_top_k` / `sparse_top_k` / `fused_top_k` / `rerank_top_k`
+在启动时被互相校验之后**没有任何读者**，所以把 `rerank_top_k` 调小并不会让请求可要的
+`top_k` 变小。这一段此前把它写成一道生效的闸，而那道闸不存在。
 
 请求不能覆盖：
 

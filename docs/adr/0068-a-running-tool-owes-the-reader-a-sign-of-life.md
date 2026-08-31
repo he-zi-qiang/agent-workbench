@@ -18,7 +18,7 @@
   `elapsed_ms`、至少说一件事的校验）、`adapters/tools/sandbox.py`（三个阶段）、
   `web/src/features/code/useCodeStream.ts`（`progress` 映射）、`CodeTurn.tsx`
   （`Progress` 行、`formatElapsed`）、`CodePage.tsx`、`styles/app.css`
-- 依赖：[ADR-061](./0061-a-thought-in-flight-is-not-a-record.md)（在飞的想法不是
+- 依赖：[ADR-061](./0061-thinking-is-process-not-product.md)（在飞的想法不是
   记录——本 ADR 把同一条论证用在工具上，结论也相同：放在列表**旁边**，不放进列表）、
   [ADR-051](./0051-a-live-frame-has-no-position.md)（live 帧没有位置——所以
   `ToolProgress` 不进步骤列表）、[ADR-029](./0029-ephemeral-sandbox.md)（一次性

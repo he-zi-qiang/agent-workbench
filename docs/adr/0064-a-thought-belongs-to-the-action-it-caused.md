@@ -97,7 +97,7 @@ React key 用 `step.modelCallId`，不用 `step.key`：同一次调用活着时�
   `…… 中段省略 ……` 命名。**触顶时读者会看见这个标记**，这是被记录的行为而不是
   bug。
 
-### 版本与兼容（沿用 [ADR-035](./0035-event-schema-and-upcasters.md) §4 与 ADR-063 §6）
+### 版本与兼容（沿用 [ADR-035](./0035-an-answer-is-not-a-preview.md) §4 与 ADR-063 §6）
 
 - **不抬 `DOMAIN_SCHEMA_VERSION`**：`reject_unsupported_schema_version` 要求严格
   相等，抬它会让每条历史 payload 立刻读不出来。
