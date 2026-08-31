@@ -5,6 +5,7 @@ from agent_workbench.evaluation.runner import (
     EvaluationReport,
     GoldQuestion,
     GoldSet,
+    digest_corpus,
     evaluate_retrieval,
     load_gold_set,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "GoldQuestion",
     "GoldSet",
     "RetrievalOutcome",
+    "digest_corpus",
     "evaluate_retrieval",
     "load_gold_set",
 ]

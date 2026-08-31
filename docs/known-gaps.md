@@ -66,6 +66,7 @@ schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同
 | A-09 | 账本自己的状态没有任何守卫 | **口径不实** |
 | A-10 | Task benchmark 整条链不存在，而配置指着它 | 未实现 |
 | A-11 | 图谱检索臂从未被任何服务进程装配 | **口径不实** |
+| A-12 | ADR-081 的上下文压缩没有任何 profile 打开过 | 已知代价 |
 
 ### A-01 LlamaIndex 检索 Adapter 建成，但默认关闭
 
@@ -422,6 +423,29 @@ answer_context_k = 8
 要么 `retrieval_factory` 长出第三条分支并有一次消融证据，
 要么在 `rag.graph.enabled` 旁边写明「本开关只影响入库，检索侧尚未接入」，
 并把两个 arm limit 从 schema 里删掉。
+
+### A-12 ADR-081 的上下文压缩没有任何 profile 打开过 —— 已知代价
+
+**分类**：已知代价（2026-08-31 全仓扫描新登记）。**默认关**是一个已登记的设计决定
+（ADR-081：一个还没见过真实 `context_limit` 的部署没有东西可以据以调参）。
+这里登记的是一条**更强、且此前没人写下来的事实**。
+
+**证据**：`grep -n "context_compaction_enabled" config/*.toml` 只有一处命中——
+`config.default.toml:276` 的 `false`。**十个 profile 里没有任何一个打开过它。**
+
+而 `context_window_tokens` 只有两个 profile 声明：
+`config.code-local.toml:125` 与 `config.demo-local.toml:110`，各 1000000。
+压缩**只有在声明了窗口的 profile 旁边才有意义**（没有窗口就没有可取比例的东西）
+——也就是说，**唯二有条件压缩的两个 profile，恰好都不压缩**。
+
+**为什么写下来**：这不是"关着"和"打开"的差别，是"这条路径一次都没被走过"。
+`runtime/compaction.py` 与它的测试证明的是**机制**；
+关于**效果**——一次真的被压缩的会话读起来是什么样、`[model.compact]` 那个模型
+在这件事上够不够用——这个仓库一个字的证据都没有。
+
+**做完了算什么样**：在 `code-local` 或 `demo-local` 上打开一次、跑一段真的越过
+`context_soft_limit_ratio` 的会话，并把那次会话的事件流记进 status.md。
+在那之前，这条能力在能力阶梯上**不应高于 Tested**。
 
 ---
 
@@ -1244,9 +1268,14 @@ id；或把这一类不相等**升级成可纠正**（它今天不是 framing �
 
 ### D-01 真正的 Chat 轮次级附件与 Task 输入 Artifact 附件
 
-**当前事实**：`routes/uploads.py` 只有 `POST ""` 与 `POST /{upload_id}/complete`
-两个端点。上传能力在，但"这一轮对话带这几个文件"和"这个 Task 以这份文件为输入"
-两条产品语义没有接上。
+**当前事实**（2026-08-31 更正计数）：`routes/uploads.py` 有**三条**端点——
+`POST ""`（declare）、**`PUT /{upload_id}/content`（raw PUT）**、
+`POST /{upload_id}/complete`。上传能力在，但"这一轮对话带这几个文件"和
+"这个 Task 以这份文件为输入"两条产品语义没有接上。
+
+> 原文只列了 declare 与 complete 两条，**漏掉的正是三步流程的中间那一步**
+> ——字节实际走的那一步。一份描述上传能力的条目漏掉传字节的端点，
+> 会让读者以为这条流程比它实际的更不完整。
 
 **Code 那一条已经有了，而且走的是另一条路**（ADR-057 那次改动顺带）：
 `PUT /v1/code/sessions/{id}/workspace/{name}` 把一份人给的文件直接写进会话工作区，
@@ -1775,13 +1804,25 @@ production build 四步，**没有覆盖率那一步**。
 
 ### F-20 跨产品归属的三处数据没人再读写 —— 已知代价
 
-**证据**：[models.py](../src/agent_workbench/adapters/persistence/models.py) 里
+**证据**（2026-08-31 更正，原文说少了一条端点，也说错了"没人读写"）：
+[models.py](../src/agent_workbench/adapters/persistence/models.py) 里
 `conversation_sessions.project_id`、`task_runs.project_id` 与
 `project_knowledge_bases` 三处仍在；
-[routes/projects.py](../src/agent_workbench/apps/api/routes/projects.py) 的
-`PATCH /v1/chat/sessions/{id}/project` 与 `PATCH /v1/tasks/{id}/project` 仍在。
-但 [ADR-074](./adr/0074-a-project-is-where-code-happens.md) 之后没有任何界面读写
-它们——Chat 头部那个归属选择器已经下线，独立的项目页已删除。
+[routes/projects.py](../src/agent_workbench/apps/api/routes/projects.py) 的归属端点是
+**三条**——`PATCH /v1/chat/sessions/{id}/project`、`PATCH /v1/tasks/{id}/project`
+与 `PATCH /v1/code/sessions/{id}/project`。
+
+**第三条有界面在读写，而且是两条真实路径**：`CodePage.tsx` 调
+`setCodeSessionProject`——一次在切换项目时，一次在新建会话之后把归属写在那一行上
+（`:359` 与 `:768`）；`CodeSessionService` 还按它收窄会话列表。
+
+> 原文写的是「两个端点、没有任何界面读写」。**两处都不准**，而第二处更要紧：
+> 一条"没人读写因此可以删"的记录，实际上是产品今天正在用的那条路。
+
+**因此本条收窄为前两条**：Chat 与 Task 的归属端点仍然存在而没有界面读写它们
+——Chat 头部那个归属选择器已经下线，独立的项目页已删除。
+`conversation_sessions.project_id` 与 `task_runs.project_id` 两列同理；
+`project_knowledge_bases` 也没有界面。
 
 **为什么保留**：那些行里存着人做过的判断。ADR-071 §2.2 立下的规矩是「删掉标注不该
 删掉被标注的东西」，而一次产品形状的改变顺手删一列数据，是同一种破坏换了个名义。

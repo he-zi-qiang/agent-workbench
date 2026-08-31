@@ -222,13 +222,41 @@ def test_the_report_serialises_without_its_raw_outcomes(tmp_path: Path) -> None:
         return ["doc_a"]
 
     report = asyncio.run(
-        evaluate_retrieval(_gold(tmp_path), index_identity="x", retrieve=retrieve)
+        evaluate_retrieval(
+            _gold(tmp_path),
+            index_identity="x",
+            retrieve=retrieve,
+            corpus_digest="deadbeefdeadbeef",
+        )
     )
     rendered = json.loads(report.to_json())
 
     assert set(rendered) == {
         "index_identity",
         "gold_digest",
+        "corpus_digest",
         "question_count",
         "scores",
     }
+    assert rendered["corpus_digest"] == "deadbeefdeadbeef"
+
+
+def test_a_report_with_no_corpus_says_so_rather_than_inventing_a_digest(
+    tmp_path: Path,
+) -> None:
+    """``null``, not an empty string and not a digest of nothing.
+
+    A synthetic gold set scored against a fake retriever has no corpus to
+    fingerprint, and that is a real state -- distinguishable both from "a
+    corpus was fingerprinted" and from a report written before this key
+    existed, which has no key at all.
+    """
+
+    async def retrieve(question: str) -> Sequence[str]:
+        return ["doc_a"]
+
+    report = asyncio.run(
+        evaluate_retrieval(_gold(tmp_path), index_identity="x", retrieve=retrieve)
+    )
+
+    assert json.loads(report.to_json())["corpus_digest"] is None

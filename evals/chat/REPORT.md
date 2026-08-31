@@ -5,6 +5,19 @@
 - 题目：[`gold.jsonl`](./gold.jsonl)（13 题，**先写题后跑数**）
 - 原始数据：[`reports/chat-hybrid-180s.json`](./reports/chat-hybrid-180s.json)
 
+> **2026-08-31：这份报告答的是一份已经改过的 gold set，不要拿它和以后的跑比。**
+> 三道题（`single-fusion`、`compound-fuse-acl`、`compound-rrf-where`）的
+> `must_contain` 当时是 `"qdrant"`——而 [ADR-033](../../docs/adr/0033-fusion-ranks-are-ours.md)
+> 早已把融合搬进本进程。也就是说**这份报告里那几道题的满分，奖励的是一句关于本系统的
+> 错误陈述**：转录里模型答的原话是 "Qdrant's Query API performs the hybrid fusion"，
+> 它照着语料答对了，而语料是错的。
+>
+> 语料（`evals/rag/corpus/fusion.md`、`abbreviations.md`）与这三道题的期望
+> 已于 2026-08-31 一并更正，并新增
+> `tests/evaluation/test_corpus_agrees_with_the_system.py` 让这条漂移不会再长回来。
+> **这份报告与它的原始数据原样保留**：它记录的是一次真实测量，而一次测量不会因为
+> 被测的题目后来改了就变成假的——它只是不再和以后的跑可比。
+
 待办清单 5.4 的原话是「fixed 与 agentic 都在了，**没有任何东西测过第二条到底买到
 了什么**」。本轮把它测了，结论分三层：先是两个**此前没人发现的缺陷**，然后才是那个
 对照数字。

@@ -13,6 +13,17 @@ import type { EvaluationReportView } from "../../api/types";
 
 export interface RetrievalReport {
   gold_digest: string;
+  /**
+   * Which corpus the questions were asked against, or absent on any report
+   * written before 2026-08-31.
+   *
+   * The grouping below keys on this as well as the gold digest, and the reason
+   * is the failure it exists to stop: the corpus was edited (it described a
+   * fusion this system no longer performs), and two reports over two different
+   * corpora carried the same `gold_digest` — so the page would have laid them
+   * side by side under one heading, which reads as a ranking.
+   */
+  corpus_digest?: string | null;
   index_identity: string;
   question_count: number;
   scores: {
@@ -116,6 +127,8 @@ function isRetrievalReport(payload: Record<string, unknown>): boolean {
  */
 export interface GoldSetGroup {
   digest: string;
+  /** Absent when the group's reports predate the corpus fingerprint. */
+  corpusDigest?: string | null;
   questionCount: number;
   rows: readonly ReportRow[];
 }
@@ -130,15 +143,23 @@ export interface GoldSetGroup {
 export function reportsByGoldSet(
   reports: readonly ReportRow[],
 ): readonly GoldSetGroup[] {
+  // Keyed on both digests. A report with no `corpus_digest` groups with other
+  // reports that have none — it predates the fingerprint, and "written before
+  // we started recording this" is a coherent group, not a missing value to be
+  // guessed at.
   const groups = new Map<string, ReportRow[]>();
   for (const row of reports) {
-    const existing = groups.get(row.report.gold_digest);
-    if (existing === undefined) groups.set(row.report.gold_digest, [row]);
+    const key = `${row.report.gold_digest}\u0000${row.report.corpus_digest ?? ""}`;
+    const existing = groups.get(key);
+    if (existing === undefined) groups.set(key, [row]);
     else existing.push(row);
   }
-  return [...groups.entries()]
-    .map(([digest, rows]) => ({
-      digest,
+  return [...groups.values()]
+    .map((rows) => ({
+      // Every report in a group answered the same set against the same corpus,
+      // so any row describes the group.
+      digest: rows[0]?.report.gold_digest ?? "",
+      corpusDigest: rows[0]?.report.corpus_digest ?? null,
       // Every report carrying a digest answered the set that digest names, so
       // any row's count describes the group.
       questionCount: rows[0]?.report.question_count ?? 0,

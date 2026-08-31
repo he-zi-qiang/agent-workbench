@@ -6,9 +6,10 @@ over the same questions, so a difference between two reports is a difference in
 retrieval rather than in how it was counted.
 
 A report records what produced it -- the index identity, the gold set digest,
-the question count -- because a number without those is not comparable to
-anything. Two runs that disagree are only interesting if they were measuring
-the same thing, and that is exactly what a bare percentage cannot tell you.
+**the corpus digest** and the question count -- because a number without those
+is not comparable to anything. Two runs that disagree are only interesting if
+they were measuring the same thing, and that is exactly what a bare percentage
+cannot tell you.
 
 Nothing here judges an answer. Faithfulness and citation accuracy need a model
 in the loop and belong to a separate runner with separate evidence; mixing them
@@ -62,6 +63,24 @@ class EvaluationReport:
     gold_digest: str
     question_count: int
     scores: dict[str, float]
+    #: SHA-256 (first 16 hex) of the corpus these questions were asked against,
+    #: or ``None`` when the caller had no corpus to fingerprint.
+    #:
+    #: Added 2026-08-31, and the reason is a hole this file's own docstring
+    #: describes without covering: it says a report records "the index identity,
+    #: the gold set digest, the question count -- because a number without those
+    #: is not comparable to anything". **The corpus was not in that list.** Two
+    #: runs over an edited corpus therefore looked comparable and were not, and
+    #: the edit that exposed it was one this repository owed anyway -- the RAG
+    #: corpus still described fusion happening inside Qdrant, which ADR-033
+    #: moved into this process.
+    #:
+    #: ``None`` rather than a default digest, because "no corpus" is a real
+    #: state -- the unit tests here score synthetic gold sets against a fake
+    #: retriever and there is nothing to fingerprint. A report that carries
+    #: ``null`` says so; a report written before this field existed simply has
+    #: no key, which is also readable.
+    corpus_digest: str | None = None
     outcomes: tuple[RetrievalOutcome, ...] = field(repr=False, default=())
 
     def to_json(self) -> str:
@@ -69,6 +88,7 @@ class EvaluationReport:
             {
                 "index_identity": self.index_identity,
                 "gold_digest": self.gold_digest,
+                "corpus_digest": self.corpus_digest,
                 "question_count": self.question_count,
                 "scores": self.scores,
             },
@@ -180,11 +200,29 @@ def _gold_question(record: dict[str, object], *, source: str) -> GoldQuestion:
     return GoldQuestion(question=str(record["question"]), document_ids=expected)
 
 
+def digest_corpus(directory: Path, *, suffix: str = ".md") -> str:
+    """Fingerprint a corpus directory, name and bytes, in a stable order.
+
+    Names are included, not only contents: renaming a document changes which
+    ``document_id`` the gold set has to name, so two corpora that differ only
+    by a filename are not the same measurement.
+    """
+
+    hasher = hashlib.sha256()
+    for path in sorted(directory.glob(f"*{suffix}")):
+        hasher.update(path.name.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(path.read_bytes())
+        hasher.update(b"\0")
+    return hasher.hexdigest()[:16]
+
+
 async def evaluate_retrieval(
     gold: GoldSet,
     *,
     index_identity: str,
     retrieve: Callable[[str], Awaitable[Sequence[str]]],
+    corpus_digest: str | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> EvaluationReport:
     """Ask every question, score the answers, and say what was measured.
@@ -211,6 +249,7 @@ async def evaluate_retrieval(
     return EvaluationReport(
         index_identity=index_identity,
         gold_digest=gold.digest,
+        corpus_digest=corpus_digest,
         question_count=len(gold),
         scores={name: metric(outcomes) for name, metric in RETRIEVAL_METRICS.items()},
         outcomes=tuple(outcomes),
@@ -221,6 +260,7 @@ __all__ = [
     "EvaluationReport",
     "GoldQuestion",
     "GoldSet",
+    "digest_corpus",
     "evaluate_retrieval",
     "load_gold_set",
 ]

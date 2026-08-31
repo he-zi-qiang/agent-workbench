@@ -90,6 +90,7 @@ from agent_workbench.apps.ingestion_worker.identity import (  # noqa: E402
     restore_document_owner,
 )
 from agent_workbench.evaluation.runner import (  # noqa: E402
+    digest_corpus,
     evaluate_retrieval,
     load_gold_set,
 )
@@ -461,6 +462,7 @@ async def _measure_arms(
             gold,
             index_identity=f"{ingestion.index_identity} via {retriever.mode}",
             retrieve=retrieve,
+            corpus_digest=digest_corpus(CORPUS),
         )
         (REPORTS / f"graph-ablation-{name}.json").write_text(
             report.to_json() + "\n", encoding="utf-8"
