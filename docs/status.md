@@ -27,6 +27,77 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-31（第五十八批）：把四个部署级上限接进 API 进程
+
+一次全仓扫描查出的最贵一条，形状和上一批的 ADR-097 一模一样：**配置声明了、运行时没读**，
+而这一条同时让一份已发布的文档不实。
+
+### 1. 那个为了修事故而调大的 300，一次也没生效过
+
+`config.code-local.toml` 把 `[runtime] model_timeout_seconds` 从 120 提到 300，
+本文档 [§「两个 120」那一节](#2-真正的缺陷这是两个-120不是一个)用一整节论证了这次
+「成对」改动。**而 code-local 只被 `code-api` 加载，Code 会话跑在 `apps/api` 进程里**，
+该进程的 `ApiRuntimeConfig` 只投影三个 runtime 字段，五处 `ClaudeLikeAgentRuntime`
+构造一处都没传 `model_timeout_seconds`——信封恒为 `DEFAULT_MODEL_TIMEOUT_SECONDS = 120.0`。
+
+这条能长期隐身有一个具体原因，已就地更正：那一节的表把「谁在用」填成了
+`agent_runtime.py:717`，**那是读取点，不是注入点**。有读取点而无注入点，
+看起来和接好了完全一样。
+
+### 2. 同形的另外三个
+
+| 字段 | 此前唯一的注入点 | API 侧的实际行为 |
+|---|---|---|
+| `runtime.tool_timeout_seconds` | `task_worker/composition.py:771` | 五处网关都走 `ToolExecutor()` 默认，`deployment_ceiling_seconds=None` |
+| `runtime.max_parallel_read_tools` | 同上 | 恒为 `DEFAULT_MAX_PARALLEL_READS = 4` |
+| `policy.max_tool_argument_bytes` | **没有** | 恒为 65536；改它唯一的实际副作用是 `policy_fingerprint` 变了，**拦截阈值纹丝不动** |
+
+第一行最要紧：**Code 会话持有 `project_run` 与 `sandbox_run` 两个 destructive 工具，
+而它们恰恰跑在这个没有部署级天花板的进程里。**
+第三行的对照组说明这是逐个漏掉而非整段没接——兄弟字段 `policy.max_tool_result_bytes`
+在 `projections.py:981` 从一开始就投影了。
+
+### 3. 改了什么
+
+- `ApiRuntimeConfig` 新增四个**带默认值**的字段（默认值抄 `config.default.toml`），
+  `project_api()` 从 `settings.runtime` 与 `settings.policy` 读入。
+  **配置 schema 一个字没动**，四个 TOML 键与它们的校验原样。
+- `apps/api/dependencies.py` 新增模块级 `_api_gateway()`：**这个进程从此只有一个
+  `ToolGateway` 构造点**。五处运行时构造显式传 `model_timeout_seconds` 与
+  `max_parallel_read_tools`。
+
+第二条是本次唯一的结构性内容。被修的缺陷从来不是「有人填错了一个数」，是
+**五个构造点、以及没有任何东西会注意到第六个带着默认值出生**；五处各传四个关键字，
+等于把复发条件原封不动留在原地。
+
+### 4. 证据
+
+`tests/apps/test_api_runtime_ceilings.py`，6 条：
+
+- 投影带四个上限，且 `tool_timeout_seconds` 出厂为 `None`（"配置没说" ≠ "配置说了 0"）；
+- `model_timeout_seconds = 300` + `tool_timeout_seconds = 90` 一路到达投影——
+  即 `config.code-local.toml` 写下时想要的那个形状；
+- `_api_gateway()` 把两个上限真的交给它构造的对象（读私有字段，因为这两个值
+  此前没有任何公开读者，而"有没有被传下去"正是本次的问题）；
+- **AST 守门两条**：文件里每一个 `ToolGateway(` 都在 `_api_gateway` 函数体内；
+  每一个 `ClaudeLikeAgentRuntime(` 都显式传了那两个关键字。参数化成两条，
+  失败信息直接给出漏掉的行号。
+
+离线门禁 `tests/bootstrap tests/config tests/apps` 484 passed / 1 skipped
+（skip 是 `computer-use` extra 未装）。`pyright` 0 errors。
+
+### 5. 明确没做
+
+- **没有改 Worker，也没有合并两个进程的装配。** 它们的差异是真的（账本、MCP 绑定、
+  子代理池），本次只让四个数的含义一致。
+- **没有接 `runtime.cancellation_poll_seconds` 与 `runtime.max_parallel_write_tools`**：
+  前者仍无读者，后者的写并发由「独占工具永远是一组一个」在运行时实现而不读配置。
+  两条登记在已知缺口的「配置叶子零读者」条目里。
+- **没有拿到效果证据。** 已有测试证明的是**机制**（改配置能改变信封、每个构造点被盯住），
+  不是 300 秒是否足以覆盖那次事故的长尾。见
+  [ADR-098](./adr/0098-a-ceiling-that-only-one-process-reads-is-not-a-deployment-ceiling.md) §5。
+
+---
 ## 2026-08-31（第五十七批）：把 C-05 查出的三种真实原因钉成回归测试，并给②立号
 
 上一批用保留的事件数据答完了 C-05：评审节点的 5 次解码失败里有**三种互不相同**的原因。
@@ -2085,10 +2156,15 @@ ModelCompleted  71.7   62.5   23.7   21.1   20.9   7.9   3.0
 `runtime/agent_runtime.py:122` 写着两者的关系——运行时那层是任何单次模型调用的信封，
 适配器仍会在它**里面**套上 model profile 自己的超时，**短的那个先响**：
 
-| 层 | 键 | 出厂 | 谁在用 |
+| 层 | 键 | 出厂 | 谁**注入**它 |
 |---|---|---:|---|
-| 运行时信封 | `[runtime] model_timeout_seconds` | 120 | `agent_runtime.py:717` |
-| 适配器 | `[model.<profile>] timeout_seconds` | 120 | `adapters/models/deepseek.py:306` |
+| 运行时信封 | `[runtime] model_timeout_seconds` | 120 | `task_worker/composition.py:771`；**API 进程 2026-08-31 才补上**（ADR-098） |
+| 适配器 | `[model.<profile>] timeout_seconds` | 120 | `model_factory.py` → `adapters/models/deepseek.py:306` |
+
+> **2026-08-31 更正：这张表原本的第四列写的是「谁在用」，运行时那行填的是
+> `agent_runtime.py:717`——那是 `self._model_timeout_seconds` 的读取点，不是注入点。**
+> 一个字段有读取点而没有注入点，看起来和接好了完全一样，这正是下面 §4 那个 300
+> 在 Code 会话上从未生效、而这一节读起来毫无破绽的原因。列名已改为「谁注入它」。
 
 两个都是 120，两个 profile 一个都没覆盖。所以：
 
@@ -2116,6 +2192,16 @@ ModelCompleted  71.7   62.5   23.7   21.1   20.9   7.9   3.0
 |---|---:|---:|---|
 | `[model.main] timeout_seconds` | 120 | **240** | ≈2.2× 实测最长成功调用（107.0s）；仍只有 `turn_timeout_seconds = 600` 的一半，一次卡住的调用吃不掉整个回合 |
 | `[runtime] model_timeout_seconds` | 120 | **300** | 高于上面那个，让**更具体**的（适配器的）先响、这层退回兜底；300 也是这个部署已允许的最长单次操作（`sandbox` 自报 300） |
+
+> **2026-08-31 更正：这一行在 `code-local` 上直到今天才真的生效。**
+> `config.code-local.toml` 只被 `code-api` 加载，而 Code 会话跑在 `apps/api` 进程里；
+> 该进程的 `ApiRuntimeConfig` 当时只投影三个 runtime 字段，五处
+> `ClaudeLikeAgentRuntime` 构造一处都没传 `model_timeout_seconds`，信封恒为 120.0。
+> 于是**在 Code 会话上：300 从未生效、240 永远轮不到先响、§2 的「两个 120」照旧成立**。
+> `demo-local` 那条路径不受影响——`demo-worker` 是 Task Worker，经
+> `composition.py:771` 确实注入了 300，所以 §6 的重跑数据仍然作数。
+> [ADR-098](./adr/0098-a-ceiling-that-only-one-process-reads-is-not-a-deployment-ceiling.md)
+> 把四个部署级上限接进 API 进程，并用 AST 守门测试钉住每一个构造点。
 
 ### 5. 明确没做，以及为什么
 
