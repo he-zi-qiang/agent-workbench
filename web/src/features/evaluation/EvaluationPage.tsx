@@ -20,12 +20,14 @@ import { useIdentity } from "../../app/IdentityContext";
 import { EmptyState, ErrorNotice, LoadingLine } from "../../components/ui";
 import {
   SELF_DISAGREEMENT,
+  chatReports,
   hits,
   percent,
   reportsByGoldSet,
   reportsShareOneGoldSet,
   retrievalReports,
   selfDisagreementCoversAShownReport,
+  triageReports,
 } from "./reports";
 
 /** How often to ask, while something is running. Nothing to ask otherwise. */
@@ -55,7 +57,10 @@ export function EvaluationPage() {
       query.state.data?.run?.status === "running" ? RUN_POLL_MS : false,
   });
 
-  const rows = retrievalReports(reports.data?.reports ?? []);
+  const served = reports.data?.reports ?? [];
+  const rows = retrievalReports(served);
+  const triage = triageReports(served);
+  const chat = chatReports(served);
   const comparable = reportsShareOneGoldSet(rows);
   const goldSets = reportsByGoldSet(rows);
   const live = run.data?.run ?? null;
@@ -155,11 +160,24 @@ export function EvaluationPage() {
           </div>
         )}
 
+        {/* Two states, not one. The page used to say "这台机器还没有跑过评测"
+            whenever the *retrieval* table was empty -- which on a machine that
+            had just finished 任务分流 or 回答质量 was simply false, and it was
+            false in the one direction that matters: it told somebody their run
+            had produced nothing. */}
         {rows.length === 0 && !reports.isLoading ? (
           <EmptyState
             icon={<FlaskConical aria-hidden />}
-            title="这台机器还没有跑过评测"
-            description="报告目录里还没有可读的检索报告。跑一次，或者把报告放回 evals/ 下。"
+            title={
+              served.length === 0
+                ? "这台机器还没有跑过评测"
+                : "还没有检索消融的报告"
+            }
+            description={
+              served.length === 0
+                ? "报告目录里还没有任何可读的报告。跑一次，或者把报告放回 evals/ 下。"
+                : "下面有其它两类评测的结果；检索消融那一类还没有报告——它最贵，要重建索引。"
+            }
           />
         ) : null}
       </section>
@@ -291,6 +309,131 @@ export function EvaluationPage() {
         ))}
       </section>
 
+      {/* 任务分流与回答质量。两张表分开而不是并进上面那张：三套评测问的是三个
+          不同的问题（正确文档回来了没有 / 目标路由对了没有 / 答案有没有落在
+          它引用的东西上），合成一张表就得发明一个共同的指标，而发明指标正是
+          一个页面开始报告没人算过的数的方式。 */}
+      {triage.length === 0 ? null : (
+        <section className="aw-card aw-section" aria-labelledby="triage-title">
+          <div className="aw-card-header">
+            <div>
+              <span className="aw-eyebrow">任务分流</span>
+              <h2 id="triage-title">目标被路由到了哪张图</h2>
+            </div>
+            <Target aria-hidden="true" size={20} />
+          </div>
+          <p className="aw-eval-method">
+            每道题是一个 objective 和它应该走的那张图。总体准确率会被分类掩盖，所以逐类也列出来——一个 0.83 有可能是「三类里两类满分、一类全错」。
+          </p>
+          {triage.map((report) => (
+            <div className="aw-eval-group" key={report.file}>
+              <p className="aw-page-note">
+                {report.file} · 题库指纹 {report.goldDigest} · 共 {report.caseCount} 题 ·
+                模型 {report.modelId}
+                {report.defaults > 0
+                  ? ` · ${String(report.defaults)} 题答不出、落回默认图`
+                  : ""}
+              </p>
+              <div
+                className="aw-eval-table"
+                role="table"
+                aria-label={`任务分流评测结果（${report.file}）`}
+              >
+                <div className="aw-eval-row is-heading" role="row">
+                  <span role="columnheader">类别</span>
+                  <span role="columnheader">题量</span>
+                  <span role="columnheader">路由正确</span>
+                </div>
+                <div className="aw-eval-row" role="row">
+                  <strong role="cell">全部</strong>
+                  <span role="cell">{report.caseCount} 题</span>
+                  <span role="cell">
+                    <b>
+                      {hits(report.accuracy, report.caseCount)} / {report.caseCount} 题
+                    </b>
+                    <small>{percent(report.accuracy)}</small>
+                  </span>
+                </div>
+                {report.byClass.map((entry) => (
+                  <div className="aw-eval-row" key={entry.name} role="row">
+                    <strong role="cell">{entry.name}</strong>
+                    <span role="cell">{entry.total} 题</span>
+                    <span role="cell">
+                      <b>
+                        {entry.correct} / {entry.total} 题
+                      </b>
+                      <small>
+                        {entry.total === 0
+                          ? "—"
+                          : percent(entry.correct / entry.total)}
+                      </small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {chat.length === 0 ? null : (
+        <section className="aw-card aw-section" aria-labelledby="chat-title">
+          <div className="aw-card-header">
+            <div>
+              <span className="aw-eyebrow">回答质量</span>
+              <h2 id="chat-title">答案有没有落在它引用的东西上</h2>
+            </div>
+            <CheckCircle2 aria-hidden="true" size={20} />
+          </div>
+          <p className="aw-eval-method">
+            这一套是<strong>确定性打分，不是模型在环的评委</strong>：事实召回按题目自己列的事实点核对，引用精度／召回按引用到的 chunk 核对。「编造的引用」是一条绝对计数——它比任何比率都要紧，一条就够坏。
+          </p>
+          {chat.map((report) => (
+            <div className="aw-eval-group" key={report.file}>
+              <p className="aw-page-note">
+                {report.file} · 共 {report.questions} 题 · 模型 {report.model} ·
+                检索 {report.retriever}
+              </p>
+              <div
+                className="aw-eval-table"
+                role="table"
+                aria-label={`回答质量评测结果（${report.file}）`}
+              >
+                <div className="aw-eval-row is-heading" role="row">
+                  <span role="columnheader">回答形态</span>
+                  <span role="columnheader">答完</span>
+                  <span role="columnheader">事实召回</span>
+                  <span role="columnheader">引用精度 / 召回</span>
+                  <span role="columnheader">编造的引用</span>
+                </div>
+                {report.arms.map((arm) => (
+                  <div className="aw-eval-row" key={arm.arm} role="row">
+                    <strong role="cell">{arm.arm}</strong>
+                    <span role="cell">
+                      <b>
+                        {arm.complete} / {arm.questions} 题
+                      </b>
+                      <small>干净拒答 {arm.cleanAbstentions}</small>
+                    </span>
+                    <span role="cell">
+                      <b>{percent(arm.factRecall)}</b>
+                    </span>
+                    <span role="cell">
+                      <b>
+                        {percent(arm.citationPrecision)} / {percent(arm.citationRecall)}
+                      </b>
+                    </span>
+                    <span role="cell">
+                      <b>{arm.fabricatedCitations}</b>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
       <div className="aw-card-grid">
         <section className="aw-card aw-section" aria-labelledby="can-say-title">
           <div className="aw-card-header">
@@ -365,34 +508,42 @@ export function EvaluationPage() {
         <div className="aw-card-header">
           <div>
             <span className="aw-eyebrow">还没有测</span>
-            <h2 id="not-measured-title">写出来的答案是否忠于资料</h2>
+            <h2 id="not-measured-title">缺的是模型在环的评委</h2>
           </div>
           <CircleDashed aria-hidden="true" size={20} />
         </div>
+        {/* 这一段此前写的是「上面测的是找资料，不是写答案」「答不上来的时候有没有
+            编也没有测」。**两句都不准确**，而且是同一个方向的不准确：
+            `scripts/run_chat_eval.py` 一直在算确定性的答案分数（事实召回、引用
+            精度／召回、干净拒答、编造的引用），报告就躺在 evals/chat/reports/ 下
+            ——只是这个页面从前不渲染它，于是页面自己的「还没有测」也就跟着不真了。
+            真正缺的是**模型在环的评委**，不是答案打分。 */}
         <ul className="aw-capability-list">
           <li>
             <CircleDashed aria-hidden="true" size={16} />
             <div>
-              <strong>上面测的是“找资料”，不是“写答案”</strong>
+              <strong>答案打分是确定性的，没有评委</strong>
               <span>
-                找对了资料，模型仍然可能写出与资料不符的句子。这是另一件事，需要另一套评测。
+                上面那张「回答质量」表里的每个数都是逐字核对出来的：事实点在不在、引用到的 chunk 对不对。<strong>没有任何模型在判断“这句话是不是忠于资料”</strong>——一个确定性核对答不出改写得对不对、语气有没有越界这类问题。
               </span>
             </div>
           </li>
           <li>
             <CircleDashed aria-hidden="true" size={16} />
             <div>
-              <strong>RAGAS 目前只有配置，没有结果</strong>
-              <span>仓库里还没有 runner，也没有报告，所以这里不会出现回答质量分数。</span>
+              <strong>RAGAS 只有配置，没有依赖也没有报告</strong>
+              <span>
+                `pyproject.toml` 里没有 ragas，`ragas_enabled` 被 validator 钉死为
+                false，配置指向的 judge 校准集也不存在。所以这里不会出现 RAGAS 分数。
+              </span>
             </div>
           </li>
           <li>
             <CircleDashed aria-hidden="true" size={16} />
             <div>
-              <strong>「答不上来的时候有没有编」也没有测</strong>
+              <strong>「答不上来的时候有没有编」只测了一半</strong>
               <span>
-                语料里本来没有答案时，系统应当说答不上来而不是编一个。
-                `RETRIEVAL_METRICS` 里没有这一项，所以这里没有它的分数——它是一个还没有做的评测，不是一个碰巧为空的列。
+                回答质量那套有「干净拒答」与「编造的引用」两个确定性指标；而检索那套的 `RETRIEVAL_METRICS` 里没有这一项，所以<strong>检索表里</strong>没有它的分数——它在那张表里是一个还没有做的评测，不是一个碰巧为空的列。
               </span>
             </div>
           </li>

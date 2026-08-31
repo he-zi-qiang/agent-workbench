@@ -28,13 +28,19 @@ htmlcov/
 tests/
 docs/
 evals/
-# Except the four retrieval reports. The console imports them at build time
-# (`web/src/features/evaluation/reports.ts`) so the page cannot drift from the
-# repository -- which means excluding them does not omit them from the image,
-# it stops the image from building at all.
+# Except the reports `EvaluationPage.test.tsx` imports at build time, so the
+# page cannot drift from the repository. Excluding them does not omit them from
+# the image, it stops the image from building at all (TS2307 under `tsc -b`,
+# which compiles the tests too).
+#
+# It is the *test* that imports them, not `reports.ts` -- the page reads the
+# directory over HTTP. This comment said otherwise until 2026-08-31, which would
+# have sent whoever deleted that test looking for an import that is not there.
 !evals/rag/reports/dense-llama_index.json
 !evals/rag/reports/dense-reference.json
 !evals/rag/reports/hybrid-llama_index.json
 !evals/rag/reports/hybrid-reference.json
+!evals/chat/reports/chat-hybrid-180s.json
+!evals/triage/reports/report.json
 *.md~
 .DS_Store
