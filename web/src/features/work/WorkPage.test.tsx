@@ -730,6 +730,18 @@ describe("WorkPage task submission", () => {
     // step that wrote it.
     const rail = screen.getByRole("complementary", { name: "产出文件" });
     expect(within(rail).getByText("检索到的证据")).toBeInTheDocument();
+
+    // 「有几个」写在标签上，和「子代理 4」「事件 12」同一种写法。
+    //
+    // 此前这个数在栏里自己那条小标题的右端，而那条小标题本身又和标签重名（标签
+    // 「产物」，小标题「产出文件」）——同一件东西，两个名字、两处计数、两种长相，
+    // 读者要先确认它们说的是不是同一件事。现在标题降成两组文件里第一组的组名，
+    // 计数上到标签。
+    const outputs = screen.getByRole("tab", { name: /产物/ });
+    expect(outputs).toHaveTextContent(/^产物\d+$/);
+    expect(
+      within(rail).getByRole("heading", { name: "产出文件" }),
+    ).toBeInTheDocument();
   });
 
   it("says the history is incomplete, and which two steps the hole fell between", async () => {

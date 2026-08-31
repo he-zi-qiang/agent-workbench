@@ -2537,6 +2537,18 @@ pre {
   gap: 14px;
 }
 
+/* 这一格要和左栏一样高，哪怕里面那块面只有 120px。
+ *
+ * `.aw-work-body` 是 `align-items: start`（左栏那一列的每一块都该顶着上边，不该
+ * 被拉成一样高），而 start 对齐的网格项高度只有内容那么高——于是 `.aw-taskctx`
+ * 的 `position: sticky` 没有可走的距离：它一钉住就已经到了自己容器的底，读者往
+ * 下读第三段执行过程时右栏就整个滑走了。实测正是这个样子，而它看起来和「没写
+ * sticky」一模一样，所以值得写下来：sticky 失效不是它没生效，是它的容器只有它
+ * 自己那么高。 */
+.aw-work-body.has-output > .aw-work-output {
+  align-self: stretch;
+}
+
 /* The holes in a run's history, listed under the steps they fall between. The
    positions are numbers a reader will compare against each other and quote
    into a bug report, so they get the same tabular treatment as any other id
@@ -3090,6 +3102,16 @@ pre {
   :root {
     --aw-preview-height: min(60vh, 520px);
   }
+
+  /* 叠下来之后，钉住和限高两条都要收回。
+     钉住是「让右栏在左栏旁边不动」，而这里已经没有旁边——一条钉在正文下方、
+     自己不走的横条，只会把它下面的内容挡掉一屏。限高同理：它防的是右栏把整页
+     撑长，而在单栏里「长」正是这一节应该有的样子，留着它等于在一页纸中间挖出
+     一个小窗口，读者要在窗口里再滚一次才看得完产物清单。 */
+  .aw-taskctx {
+    position: static;
+    max-height: none;
+  }
 }
 
 .aw-stream {
@@ -3506,36 +3528,53 @@ pre {
   font-size: 11px;
 }
 
+/* 产物那一格。
+ *
+ * **它此前是一张卡片，而它住在一张卡片里。** `.aw-taskctx` 已经有边框、圆角和
+ * `--aw-panel` 的底色，这条栏又给自己加了一套边框、圆角和 `--aw-panel-soft`，于
+ * 是「产物」这一格里叠着三层底色（标签条的 canvas、这张卡的 soft、页脚用量的
+ * canvas），而另外四格只有一层。一个标签页的正文不该再给自己画一个框：那个框
+ * 说的是「这是另一个东西」，可它正是这枚标签打开的那个东西。
+ *
+ * 框去掉之后剩下的是内缩，而内缩现在读 `--aw-taskctx-pad`，和另外四格同一个值。
+ */
 .aw-artifacts {
-  padding: 12px;
-  border: 1px solid var(--aw-border);
-  border-radius: var(--aw-radius-md);
-  background: var(--aw-panel-soft);
+  padding: 12px var(--aw-taskctx-pad, 13px);
 }
 
-.aw-artifacts-head {
+/* 两组文件的小标题：可下载的产物，和任务工作区里的文件。
+ *
+ * **一样大、一样重，因为它们是并列的两组，不是一大一小。** 此前上面那条是 12px
+ * 的普通字、下面那条是 13px 的粗体 h3——从属的那一组反而比它上面的组更重，读者
+ * 先看见的是次要的那一半。 */
+.aw-artifacts-head,
+.aw-artifacts-workspace h3 {
   display: flex;
   align-items: center;
+  margin: 0;
   gap: 7px;
   color: var(--aw-text-soft);
   font-size: 12px;
-}
-
-.aw-artifacts-head em {
-  margin-left: auto;
-  color: var(--aw-text-muted);
-  font-size: 11px;
-  font-style: normal;
+  font-weight: 600;
 }
 
 .aw-artifacts-empty {
-  margin: 10px 0 2px;
+  margin: 8px 0 2px;
   color: var(--aw-text-muted);
   font-size: 12px;
 }
 
-.aw-artifacts ul {
-  margin: 10px 0 0;
+/* 直接子代，不是后代：工作区那一组的 `.aw-artifacts-names` 也是这块面里的
+   `ul`，而下面那条负外边距只对**按钮**成立（它抵的是按钮自己的内缩）。写成
+   `.aw-artifacts ul` 的话，那条特指度更高，会盖掉 `.aw-artifacts-names` 自己的
+   `margin: 0`，把一列不是按钮的文件名往左拽出 8px——实测左边界落在 6px，而这一
+   格里其余每一行都在 14px。 */
+.aw-artifacts > ul {
+  /* 负的横向外边距，让按钮里的字回到 `--aw-taskctx-pad` 那条线上。
+     按钮自己要 8px 的内缩加 1px 的透明边框（那是它 hover 时那块底色的呼吸），
+     不减掉的话文件名就比它上面那条小标题多缩 9px——一栏参差的左边界，而它是这
+     一格里唯一有很多行的地方。 */
+  margin: 8px -9px 0;
   padding: 0;
   list-style: none;
 }
@@ -3558,9 +3597,11 @@ pre {
     border-color var(--aw-transition);
 }
 
+/* 底色跟着换：这条栏原来坐在 `--aw-panel-soft` 上，hover 用 `--aw-panel` 提亮；
+   现在它坐在 `--aw-panel` 上，那一句会变成「hover 时什么也不发生」。 */
 .aw-artifacts button:hover {
   border-color: var(--aw-border);
-  background: var(--aw-panel);
+  background: var(--aw-panel-soft);
 }
 
 .aw-artifacts button strong {
@@ -5559,37 +5600,47 @@ p.aw-code-step-thought {
    Deliberately not styled like the artifact buttons above it. Those are
    controls; these are names. Giving them the same affordance would invite the
    click the heading has just said is not available. */
+/* 尺寸全部换成 px。
+   这一块是这一栏里唯一用 rem 的地方，而它旁边每一条都是 px——两套单位混在同一
+   条栏里，改一个字号要先算一次除法，而算错的样子是「大了半格」这种没人会当成
+   bug 报上来的东西。 */
 .aw-artifacts-workspace {
-  margin-top: 1rem;
-  padding-top: 0.75rem;
+  margin-top: 14px;
+  padding-top: 11px;
   border-top: 1px solid var(--aw-border-subtle);
 }
 
-.aw-artifacts-workspace h3 {
-  margin: 0 0 0.25rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-}
-
 .aw-artifacts-workspace h4 {
-  margin: 0.5rem 0 0.125rem;
-  font-size: 0.75rem;
+  margin: 8px 0 2px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
   font-weight: 500;
-  color: var(--aw-text-muted);
 }
 
+/* 限定语，和另外几格的 `.aw-taskctx-note` 同一个字号：它们在屏幕上是同一种东
+   西——一句给上面那个事实加边界的小字。此前这条是 12px 而那条是 10.5px。 */
 .aw-artifacts-note {
-  margin: 0 0 0.25rem;
-  font-size: 0.75rem;
+  margin: 4px 0 0;
   color: var(--aw-text-muted);
+  font-size: 10.5px;
+  line-height: 1.6;
 }
 
+/* **不再是项目符号列表。** 它曾经是这一整栏里唯一一处 `list-style: disc`，而那
+   个圆点当时在说一件已经不成立的事：这些名字只是名字、点不动（ADR-088 之前）。
+   现在它们一半是链接，圆点区分不了这一半和那一半——下划线才在做那件事。去掉之
+   后这一列也回到 `--aw-taskctx-pad` 那条线上。
+   等宽，因为它们是路径：这个仓库里凡是要被逐字比对、被贴进 issue 的串都走
+   `--aw-mono`。 */
 .aw-artifacts-names {
+  display: grid;
   margin: 0;
-  padding-left: 1rem;
-  list-style: disc;
-  font-size: 0.75rem;
+  padding: 0;
+  gap: 3px;
+  list-style: none;
   color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
   word-break: break-all;
 }
 
@@ -8320,10 +8371,35 @@ p.aw-code-step-thought {
  * 有三节的数字都需要一句限定才算说完（没有百分比、子代理不占额度、信封在提交时
  * 冻住）。 */
 /* 一栏，内部是标签页加一条钉在底下的用量。`max-height` 让内容区自己滚，而不是
-   把整页撑长——右栏一长，左边那段正文的滚动位置就跟着它跑。 */
+   把整页撑长——右栏一长，左边那段正文的滚动位置就跟着它跑。
+
+   **跟着钉住（sticky），因为只有 `max-height` 是半句话。** 上面那句只做到了「不
+   把整页撑长」，而它换来的东西此前一直漏着：这一栏自己会滚，可它整体又随
+   `.aw-work-detail` 一起往上走。于是读者往下读左边那段执行过程时，右栏先滑出视
+   野，再露出一条已经滚到一半的内部滚动条——一个既不跟随、又不停留的东西。钉在
+   页头下面之后，两条滚动各归各：页面滚正文，栏内滚这一格的内容。
+
+   `top` 那个 76 = 页头的 `min-height: 64px` 加 12px 的呼吸。滚动容器是
+   `.aw-work-detail`（它 `overflow-y: auto`），页头在同一个容器里 `top: 0`，所以
+   这两条 sticky 量的是同一把尺。
+
+   限高那个 112 是接着往下算的：外壳 `.aw-app-shell` 是 `100dvh` 加 10px 的内缩，
+   所以这个滚动容器的上沿在 10px、下沿在 `100dvh - 10px`；钉住之后栏顶在
+   `10 + 76 = 86`，到下沿还剩 `100dvh - 96`。取 112 是留 16px 别贴着底边。单位跟
+   外壳一样用 `dvh` 而不是 `vh`：移动端浏览器的 `vh` 不减地址栏，两处不一致的话
+   这一栏会比它的容器高出一截。
+
+   **一格内缩（`--aw-taskctx-pad`）写在这里，不写在每一格里。** 五张标签的正文
+   来自四个不同的零件（进度、子代理、产物那条栏、事件流），此前每个零件自带一
+   套横向内缩：13px、12px+1px 边框、4px。三种左边界叠在一条 300px 的栏里，读者
+   看到的是一栏对不齐的字。现在它们都读这一个值。 */
 .aw-taskctx {
+  --aw-taskctx-pad: 13px;
+
+  position: sticky;
+  top: 76px;
   display: flex;
-  max-height: calc(100vh - 180px);
+  max-height: calc(100dvh - 112px);
   flex-direction: column;
   border: 1px solid var(--aw-border);
   border-radius: var(--aw-radius-lg);
@@ -8333,7 +8409,7 @@ p.aw-code-step-thought {
 
 .aw-taskctx-block {
   display: grid;
-  padding: 12px 13px;
+  padding: 12px var(--aw-taskctx-pad);
   gap: 7px;
 }
 
@@ -8957,6 +9033,33 @@ p.aw-code-step-thought {
   display: none;
 }
 
+/* 滚出去的那一头淡掉。
+ *
+ * 滚动条是藏起来的（上面两条），所以此前「这排标签还没完」这件事屏幕上没有任何
+ * 说法：在 300px 的右栏里五枚标签实测 306px，最后那枚的计数徽章被切掉一半，读起
+ * 来像那个数字本来就长那样。
+ *
+ * 属性由 `PanelTabs` 量出来再挂上，只在真的溢出时才有——所以这三条规则在放得下
+ * 的时候一条都不命中，不需要再写一条把淡出擦掉。24px 是一枚标签左右内缩加大半
+ * 个字，足够让人看出被削的是一个还有下文的东西，又不至于把整枚标签蒙住。 */
+.aw-panel-tabs-strip[data-overflow="end"] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+
+.aw-panel-tabs-strip[data-overflow="start"] {
+  mask-image: linear-gradient(to left, #000 calc(100% - 24px), transparent);
+}
+
+.aw-panel-tabs-strip[data-overflow="both"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 24px,
+    #000 calc(100% - 24px),
+    transparent
+  );
+}
+
 .aw-panel-tab {
   position: relative;
   top: 1px;
@@ -9227,10 +9330,13 @@ p.aw-code-step-thought {
 
 /* 事件流 -------------------------------------------------------------- */
 
+/* 横向内缩 6 + 行内 7 = 13，和这一栏另外四格的 `--aw-taskctx-pad` 对齐。此前是
+   4 + 9：字对得上，斑马纹那块底色却比别的格子多探出 2px——一条只在滚动时才看得
+   出来的错位，而它正是这一格唯一会长到要滚的地方。 */
 .aw-event-log {
   display: grid;
   margin: 0;
-  padding: 6px 4px 10px;
+  padding: 6px 6px 10px;
   gap: 1px;
   list-style: none;
 }
@@ -9238,7 +9344,7 @@ p.aw-code-step-thought {
 .aw-event-log li {
   display: grid;
   align-items: baseline;
-  padding: 4px 9px;
+  padding: 4px 7px;
   gap: 8px;
   border-radius: var(--aw-radius-sm);
   color: var(--aw-text-soft);
@@ -9282,7 +9388,7 @@ p.aw-code-step-thought {
 
 .aw-event-log-empty {
   margin: 0;
-  padding: 12px 13px;
+  padding: 12px var(--aw-taskctx-pad, 13px);
   color: var(--aw-text-soft);
   font-size: 12px;
 }

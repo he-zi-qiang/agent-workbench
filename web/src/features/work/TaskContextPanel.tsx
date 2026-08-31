@@ -244,12 +244,27 @@ function Spend({ roots }: { roots: readonly RunNode[] }) {
 export function TaskContextPanel({
   events,
   onOpenAgents,
+  outputCount,
   outputs,
   roots,
   stages,
 }: {
   events: readonly EventEnvelope[];
   onOpenAgents: () => void;
+  /**
+   * 「产物」这枚标签上那个数字：**可下载的产物有几个**。
+   *
+   * 单独传一个数，而不是让这块面去数 `outputs`——那是一个 `ReactNode`，数它等于
+   * 猜里面画了几行。
+   *
+   * 数的只有产物，不含工作区里的文件：标签写着「产物」，而那一组在栏里就明说了
+   * 自己「不是导出的产物」。两组加起来放在这枚标签上，会让一个 3 个产物 2 个中
+   * 间文件的任务显示成「产物 5」。
+   *
+   * 0 个时不传（或传 0，这里会换成 `undefined`）：一枚写着 0 的徽章比没有徽章更
+   * 吵，而「一个都没有」这句话已经由栏里那一行说了。
+   */
+  outputCount?: number | undefined;
   /** 原来那条产物栏，原样嵌进来——它答的那个问题没有变。 */
   outputs: React.ReactNode;
   roots: readonly RunNode[];
@@ -303,6 +318,10 @@ export function TaskContextPanel({
           {
             id: "outputs",
             label: "产物",
+            count:
+              outputCount === undefined || outputCount === 0
+                ? undefined
+                : outputCount,
             available: outputs !== null,
             body: outputs,
           },
